@@ -307,8 +307,9 @@ Floating point identifiers are always specified in decimal.
 
 The default type of a floating point identifier is #~"f64".
 
-Floating point identifiers have the following methods, provided they can
-losslessly be stored in the resulting format:
+Floating point identifiers have the following methods, which give the
+resulting format's value nearest the literal, a tie to the even one; a value
+that rounds to an infinity, or a nonzero one that rounds to zero, is refused:
 
 #table cols="1 2 >1":
   Method | Resulting Type               | Bit size
@@ -402,20 +403,32 @@ The rules for "lossless" are:
     #~"0xffffffffffffffff + 1 - 1" coerces cleanly into a #~"u64"
     parameter, because the intermediate #~"2^64" is just a transient
     value in the constant folder, never a stored runtime value.]
-  [#*: #_*"integer literal → float target": the value must be exactly
-    representable in the float's mantissa, and lie in its range.
-    #~"16777216" (#~"2^24") fits #~"f32"; #~"16777217" does not, and
-    #~"65536" is past #~"f16"'s largest finite value, #~"65504".]
+  [#*: #_*"integer literal → float target": the value lands as the
+    target's nearest value, a tie to the even one -- floats are inexact,
+    and a value between two of them is one of the two.
+    #~"16777217" lands in an #~"f32" as #~"16777216". It must not round to
+    an infinity: #~"65536" is past #~"f16"'s largest finite value,
+    #~"65504", and is refused.]
   [#*: #_*"float literal → integer target": rejected. Float literals
     coerce only to float types. Use #~".i32" / #~".i64" / etc.
     explicitly when an integer conversion is intended.]
-  [#*: #_*"float literal → float target": the value must round-trip
-    exactly through the target's precision (e.g. #~"0.1" does not fit
-    #~"f32").]
+  [#*: #_*"float literal → float target": the value lands as the target's
+    nearest value, a tie to the even one (#~"0.1" lands in an #~"f32" as
+    the #~"f32" nearest a tenth). It must not round to an infinity
+    (#~"1e39" into an #~"f32" is refused), and a nonzero value must not
+    round to zero (#~"1e-50" into an #~"f32" is refused).]
 
 A literal that fails any of these checks produces a literal-aware
 diagnostic at compile time naming the value and the target's range — no
 runtime overflow.
+
+An untyped float folds exactly, as an untyped integer does: its value is
+the fraction its literals spell, so #~"0.1 + 0.2 == 0.3" is true while
+#~"0.1.f64 + 0.2.f64 == 0.3.f64" is false, and only the final value is
+rounded, once, where it lands. A fraction whose numerator or denominator
+passes 4096 bits gives way to the nearest 512-bit binary float, which
+#~"f128"'s range needs. A negative zero literal keeps its sign. A typed
+float constant folds in its own type, as a body computes it.
 
 An untyped value that lands where nothing gives it a type takes its default
 (see Numeric defaults) and must fit it there: #~"x: 9223372036854775808"

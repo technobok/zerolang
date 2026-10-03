@@ -30763,22 +30763,7 @@ literalFitsMessage: function {
     pn9c: ztypes.parseNumberAs numstr: lit k: nk9c.kind
     if pn9c.err.length > 0 then return pn9c.err.copy
     if (ztypes.isFloatKind k: pn9c.kind).not then return ""
-    exact9c: true
-    if (ztypes.isFloatLexeme numstr: lit) then {
-        exact9c = ztypes.floatFitsFloat value: pn9c.fval k: pn9c.kind
-    } else {
-        ivp9c: ztypes.parseNumber numstr: lit
-        ivr9c: ivp9c.ival.i64
-        match (
-            ivr9c
-        ) case ok then {
-            exact9c = ztypes.intFitsFloat value: ivr9c k: pn9c.kind
-        } case err then {
-            exact9c = false
-        }
-    }
-    if exact9c then return ""
-    return "Value \{lit} not exactly representable as \{target}"
+    return "Value \{lit} overflows \{target}: its nearest \{target} is an infinity"
 }
 
 # literalConvTarget -- the type a literal's declared conversion `nameId`
@@ -53847,17 +53832,12 @@ constLiteralValue: function {st: zenv.ZSymbolTable name: StringView} out ztypes.
     mag: name.substring from: magFrom to: name.length
     # read to the UNBOUNDED magnitude: the range that matters here is i64's,
     # and the most negative i64 has a magnitude one past it
+    if (ztypes.isFloatLexeme numstr: name) then return (constOfFloatLiteral :st lex: name)
     pv: ztypes.parseLiteralValue numstr: mag
     if pv.ok.not then {
         w: constOfWideLiteral :st lex: name
         if w.kind.ivalKind then w.bits = isBitsLexeme lex: name
         return w
-    }
-    if pv.isFloat then {
-        fv: pv.fval
-        # a product keeps the sign of `-0.0`, which `0.0 - fv` drops
-        if neg then fv = fv * (0.0 - 1.0)
-        return (ztypes.makeFloatConst fv)
     }
     # the most negative i64 cannot be read and then negated -- its magnitude
     # does not fit the type it belongs to, so it is spelled here instead
@@ -53882,6 +53862,42 @@ constLiteralValue: function {st: zenv.ZSymbolTable name: StringView} out ztypes.
     # a hex, octal or binary literal spells bits, and defaults to u64
     if c.kind.ivalKind then c.bits = isBitsLexeme lex: name
     return c
+}
+
+# constOfFloatLiteral -- a float literal, exactly: the fraction its digits and
+# exponent spell, or -- past what a fraction holds -- the nearest 512-bit binary
+# float. A fraction has no -0, so a negative zero is the binary float's, which
+# keeps its sign through the operators as IEEE 754's does. noConst for an
+# exponent past even the binary float's.
+constOfFloatLiteral: function {st: zenv.ZSymbolTable lex: StringView} out ztypes.cval is {
+    if (decimalExponentPast :lex limit: 1000).not then {
+        r: math.BigRat.parse text: lex
+        match (
+            r
+        ) case ok then {
+            if r.sign == 0 when lex.startsWith "-" then {
+                return (constOfBigFloat
+                    :st
+                    f: (math.BigFloat.zero negative: true prec: constFloatPrec)
+                )
+            }
+            return (constOfRat :st :r)
+        } case err then null
+    }
+    f: math.BigFloat.parse text: lex prec: constFloatPrec
+    match f case ok then return (constOfBigFloat :st :f) case err then null
+    return ztypes.noConst
+}
+
+# decimalExponentPast -- a float lexeme's decimal exponent lies beyond
+# +-`limit`, where its fraction would outgrow what one holds anyway
+decimalExponentPast: function {lex: StringView limit: i64} out bool is {
+    e: (lex.indexOf "e").or d: ((lex.indexOf "E").or d: lex.length)
+    if e >= lex.length then return false
+    digits: lex.substring from: e + 1 to: lex.length
+    v: digits.parseI64
+    match v case ok then return (v > limit) or (v < (0 - limit)) case err then null
+    return true
 }
 
 # constOfWideLiteral -- an integer literal outside i64, exactly, in any radix,
@@ -53941,19 +53957,26 @@ literalRadix: function {lex: StringView at: u64} out u64 is {
 # bits
 untypedIntBits: 512.u64
 
-# constInternBig -- the row of `b` in ZTyping.constBigInts: an equal value's
-# when one is there, else a new one. Scanned linearly, as constStrings is: a
-# program holds few integers outside i64.
-constInternBig: function {st: zenv.ZSymbolTable b: math.BigInt.view} out u32 is {
+# constInternRow -- the row of `item` in a constant pool whose row 0 is its
+# sentinel: an equal value's when one is there, else a new one. Scanned
+# linearly, as constStrings is: a program holds few such values
+constInternRow: function as { T: AnyRef.generic } in {
+    rows: (List T).borrow item: T.view
+} out u32 is {
     i: 1.u64
-    n: st.typing.constBigInts.length
+    n: rows.length
     for i < n loop {
-        e: st.typing.constBigInts.get :i
-        if e == b then return i.u32.orPanic
+        e: rows.get :i
+        if e == item then return i.u32.orPanic
         i = i + 1
     }
-    st.typing.constBigInts.append b.copy
+    rows.append item.copy
     return n.u32.orPanic
+}
+
+# constInternBig -- the row of `b` in ZTyping.constBigInts
+constInternBig: function {st: zenv.ZSymbolTable b: math.BigInt.view} out u32 is {
+    return (constInternRow rows: st.typing.constBigInts item: b)
 }
 
 # constOfBig -- the integer `b` as a constant: inline when it lies inside i64,
@@ -53964,6 +53987,156 @@ constOfBig: function {st: zenv.ZSymbolTable b: math.BigInt.view} out ztypes.cval
     c: ztypes.makeIntConst 0
     c.bigId = constInternBig :st :b
     return c
+}
+
+# constFracBits -- the bits a part of an untyped float's fraction may grow to;
+# past them the value gives way to a 512-bit binary float, as go/constant's do
+constFracBits: 4096.u64
+
+# constFloatPrec -- the precision of that binary float
+constFloatPrec: 512.u32
+
+# constInternRat -- the row of `r` in ZTyping.constRats
+constInternRat: function {st: zenv.ZSymbolTable r: math.BigRat.view} out u32 is {
+    return (constInternRow rows: st.typing.constRats item: r)
+}
+
+# constInternBigFloat -- the row of `f` in ZTyping.constBigFloats, a zero's sign
+# told apart, which `==` does not
+constInternBigFloat: function {st: zenv.ZSymbolTable f: math.BigFloat.view} out u32 is {
+    i: 1.u64
+    n: st.typing.constBigFloats.length
+    for i < n loop {
+        e: st.typing.constBigFloats.get :i
+        if e == f when e.negative == f.negative then return i.u32.orPanic
+        i = i + 1
+    }
+    st.typing.constBigFloats.append f.copy
+    return n.u32.orPanic
+}
+
+# constOfRat -- the untyped float `r`: its fraction, exactly, or past 4096-bit
+# parts the nearest 512-bit binary float. fval is the nearest f64
+constOfRat: function {st: zenv.ZSymbolTable r: math.BigRat.view} out ztypes.cval is {
+    if (r.num.bitLength > constFracBits) or (r.den.bitLength > constFracBits) then {
+        return (constOfBigFloat :st f: (math.BigFloat.fromRat from: r prec: constFloatPrec))
+    }
+    c: ztypes.makeFloatConst r.roundF64
+    c.ratId = constInternRat :st :r
+    return c
+}
+
+# constOfBigFloat -- the untyped float `f`, held at 512 bits
+constOfBigFloat: function {st: zenv.ZSymbolTable f: math.BigFloat.view} out ztypes.cval is {
+    c: ztypes.makeFloatConst f.roundF64
+    c.floatId = constInternBigFloat :st :f
+    return c
+}
+
+# constRatOf -- a number constant's value as a fraction, exactly: an integer, an
+# untyped float's fraction, a typed float's value. none for a value held as a
+# 512-bit float, and for an infinity
+constRatOf: function {st: zenv.ZSymbolTable.view v: ztypes.cval} out Option math.BigRat is {
+    if v.kind.ivalKind then return ((Option math.BigRat).some (math.BigRat.fromInt
+        from: (constBigOf :st :v)
+    )
+    )
+    if v.kind.fvalKind.not or (v.floatId != 0) then return (Option math.BigRat).none
+    if v.ratId != 0 then {
+        e: st.typing.constRats.get i: v.ratId
+        return ((Option math.BigRat).some e.copy)
+    }
+    return (math.BigRat.fromF64 from: v.fval)
+}
+
+# constBigFloatOf -- a number constant's value as a 512-bit binary float
+constBigFloatOf: function {st: zenv.ZSymbolTable.view v: ztypes.cval} out math.BigFloat is {
+    if v.floatId != 0 then {
+        e: st.typing.constBigFloats.get i: v.floatId
+        return e.copy
+    }
+    r: constRatOf :st :v
+    match (
+        r
+    ) case some then return (math.BigFloat.fromRat from: r prec: constFloatPrec) case none then null
+    return (math.BigFloat from: v.fval prec: constFloatPrec)
+}
+
+# constFloatBits -- the IEEE 754 bit pattern of float kind `k`'s value nearest
+# the number constant `v`, a tie to the even one: rounded once from the exact
+# value
+constFloatBits: function {
+    st: zenv.ZSymbolTable.view v: ztypes.cval k: ztypes.numkind
+} out math.BigInt is {
+    mb: (ztypes.mantissaOf :k) - 1
+    eb: ztypes.floatExpBits :k
+    r: constRatOf :st :v
+    match r case some then return (r.ieeeBits mbits: mb ebits: eb) case none then null
+    return ((constBigFloatOf :st :v).ieeeBits mbits: mb ebits: eb)
+}
+
+# constFloatLanding -- how the number `v` lands in float kind `k`: "" when its
+# nearest value there is finite and is zero only for a zero, else the report,
+# naming the value as `spelling` when it was written as a literal
+constFloatLanding: function {
+    st: zenv.ZSymbolTable.view
+    v: ztypes.cval
+    k: ztypes.numkind
+    spelling: StringView
+} out String is {
+    bits: constFloatBits :st :v :k
+    mb: (ztypes.mantissaOf :k) - 1
+    eb: ztypes.floatExpBits :k
+    one: math.BigInt from: 1
+    field: (bits >> mb) & ((one << eb) - one)
+    mag: bits & ((one << (mb + eb)) - one)
+    overflow: field == ((one << eb) - one)
+    underflow: (mag.sign == 0) and (constIsZero :st :v).not
+    if overflow.not and underflow.not then return ""
+    vt: spelling.string
+    if vt.length == 0 then vt = constNumberText :st :v
+    kn: ztypes.numkindName :k
+    if overflow then return "Value \{vt} overflows \{kn}: its nearest \{kn} is an infinity"
+    return "Value \{vt} underflows \{kn}: its nearest \{kn} is zero"
+}
+
+# constIsZero -- the number constant is zero
+constIsZero: function {st: zenv.ZSymbolTable.view v: ztypes.cval} out bool is {
+    if v.kind.ivalKind then return (v.ival == 0) and (v.bigId == 0)
+    if v.floatId != 0 then return (constBigFloatOf :st :v).sign == 0
+    r: constRatOf :st :v
+    match r case some then return r.sign == 0 case none then null
+    return false
+}
+
+# constNumberText -- a number constant's value in decimal, for a report
+constNumberText: function {st: zenv.ZSymbolTable.view v: ztypes.cval} out String is {
+    if v.kind.ivalKind then return (constIntText :st :v)
+    return (constBigFloatOf :st :v).string
+}
+
+# constFloatIn -- the f64 holding float kind `k`'s value nearest the number `v`:
+# a typed f16, f32 or f64 holds it already, and any other is rounded once.
+# `has` false for a kind wider than an f64, and for a value with none there
+constFloatIn: function {
+    st: zenv.ZSymbolTable.view v: ztypes.cval k: ztypes.numkind
+} out ffoldval is {
+    if k.f128Type then return (ffoldval has: false val: 0.0)
+    if v.kind.fvalKind when v.ratId == 0 when v.floatId == 0 then return (ffoldval
+        has: true
+        val: v.fval
+    )
+    if v.kind.ivalKind.not when v.kind.fvalKind.not then return (ffoldval has: false val: 0.0)
+    bits: constFloatBits :st :v :k
+    back: (math.BigFloat.fromIEEEBits
+        :bits
+        mbits: (ztypes.mantissaOf :k) - 1
+        ebits: (ztypes.floatExpBits :k)
+    )
+    match (
+        back
+    ) case some then return (ffoldval has: back.isInf.not val: back.roundF64) case none then null
+    return (ffoldval has: false val: 0.0)
 }
 
 # constFitsKind -- the integer constant `v` lies in integer kind `k`'s range.
@@ -54021,24 +54194,6 @@ constStringAt: function {st: zenv.ZSymbolTable.view id: u32} out String is {
     return e.copy
 }
 
-# constFloatOf -- an integer or float value as an f64, for a mixed-kind binop.
-# `has` false means the value is neither.
-constFloatOf: function {st: zenv.ZSymbolTable.view v: ztypes.cval} out ffoldval is {
-    if v.kind.fvalKind then return (ffoldval has: true val: v.fval)
-    if v.kind.ivalKind then {
-        cf: v.ival.f64
-        if v.bigId != 0 then cf = (constBigOf :st :v).f64
-        match (
-            cf
-        ) case ok then {
-            return (ffoldval has: true val: cf)
-        } case err then {
-            return (ffoldval has: false val: 0.0)
-        }
-    }
-    return (ffoldval has: false val: 0.0)
-}
-
 # a float operand of a folded binop; `has` false = not a numeric value.
 ffoldval: record {
     # whether the fold reached a value
@@ -54091,26 +54246,18 @@ constFitsKindMessage: function {
     k: ztypes.numkind
     spelling: StringView
 } out String is {
-    isFloat: ztypes.isFloatKind :k
+    if (ztypes.isFloatKind :k) then {
+        if v.kind.ivalKind or v.kind.fvalKind then return (constFloatLanding :st :v :k :spelling)
+        return ""
+    }
     if v.kind.ivalKind then {
-        if isFloat when (constIntFitsFloat :st :v :k) then return ""
-        if isFloat.not when (constFitsKind :st :v :k) then return ""
+        if (constFitsKind :st :v :k) then return ""
         vt: spelling.string
         if vt.length == 0 then vt = constIntText :st :v
-        if isFloat then {
-            kn: ztypes.numkindName :k
-            return "Value \{vt} not exactly representable as \{kn}"
-        }
         return (intRangeErr value: vt.stringView :k)
     }
     if v.kind.fvalKind.not then return ""
-    if isFloat.not then {
-        return "Numeric type specifier must be float for a float literal"
-    }
-    if (ztypes.floatFitsFloat value: v.fval :k) then return ""
-    fkn: ztypes.numkindName :k
-    if spelling.length > 0 then return "Value \{spelling} not exactly representable as \{fkn}"
-    return "Value \{v.fval} not exactly representable as \{fkn}"
+    return "Numeric type specifier must be float for a float literal"
 }
 
 # intRangeErr -- the out-of-range report for integer kind `k`, its bounds spelled
@@ -54139,17 +54286,6 @@ intRangeErr: function {value: StringView k: ztypes.numkind} out String is {
 constIntText: function {st: zenv.ZSymbolTable.view v: ztypes.cval} out String is {
     if v.bigId == 0 then return "\{v.ival}"
     return (constBigOf :st :v).string
-}
-
-# constIntFitsFloat -- the integer constant `v` is exactly a value of float kind
-# `k`: its significant bits fit the mantissa and its magnitude the range.
-constIntFitsFloat: function {
-    st: zenv.ZSymbolTable.view v: ztypes.cval k: ztypes.numkind
-} out bool is {
-    if v.bigId == 0 then return (ztypes.intFitsFloat value: v.ival :k)
-    b: constBigOf :st :v
-    if b.bitLength > (ztypes.floatMaxBits :k) then return false
-    return (b.bitLength - b.trailingZeros) <= (ztypes.mantissaOf :k)
 }
 
 # constStandsInMessage -- whether the folded number `v` may stand where a
@@ -54351,10 +54487,10 @@ constOfTypedFloatFold: function {
     ln: u32
     co: u32
 } out ztypes.cval is {
-    lf: constFloatOf :st v: lv
-    rf: constFloatOf :st v: rv
-    if lf.has.not or rf.has.not then return ztypes.noConst
     if k.f128Type then return ztypes.noConst
+    lf: constFloatIn :st v: lv :k
+    rf: constFloatIn :st v: rv :k
+    if lf.has.not or rf.has.not then return ztypes.noConst
     if (isComparisonOp name: op) then return (constCompareFloat
         :st
         :scope
@@ -54520,11 +54656,26 @@ constOfConversion: function {
     }
     c: v
     tk: (numKindOfTid :st tid: target).kind
-    if v.kind.ivalKind when (ztypes.isFloatKind k: tk) then {
-        c = ztypes.makeFloatConst (constNearestF64 :st :v)
-    }
+    if (ztypes.isFloatKind k: tk) then c = constLandedFloat :st :v k: tk
     if tk.f128Type then c.strId = f128Spelling :st :ast :v :lexemeId
     return (ztypes.typedConst :c numTid: target)
+}
+
+# constLandedFloat -- the number `v` as a constant of float kind `k`: its
+# nearest value there, held in fval for an f16, f32 or f64. An f128 is wider
+# than fval, so it keeps the exact value it lands from -- an integer as its
+# fraction -- and is rounded where it is written out
+constLandedFloat: function {
+    st: zenv.ZSymbolTable v: ztypes.cval k: ztypes.numkind
+} out ztypes.cval is {
+    if k.f128Type.not then {
+        f: constFloatIn :st :v :k
+        return (ztypes.makeFloatConst f.val)
+    }
+    if v.kind.fvalKind then return v
+    r: constRatOf :st :v
+    match r case some then return (constOfRat :st :r) case none then null
+    return ztypes.noConst
 }
 
 # f128Spelling -- the exact spelling an f128 constant carries, interned: an
@@ -54545,22 +54696,6 @@ f128Spelling: function {
     if lexemeId.isZero then return 0
     lx: zast.nameTextAt :ast ref: lexemeId
     return (constInternString :st text: lx.stringView)
-}
-
-# constNearestF64 -- the f64 nearest an integer constant: an i64 by its halves,
-# a wider one through its decimal text, which the C library rounds correctly.
-constNearestF64: function {st: zenv.ZSymbolTable.view v: ztypes.cval} out f64 is {
-    if v.bigId == 0 then return (nearestF64 i: v.ival)
-    t: constIntText :st :v
-    return (t.stringView.parseF64.or d: 0.0)
-}
-
-# nearestF64 -- the f64 nearest an i64. Each 32-bit half converts exactly, so
-# the one rounding is the sum's.
-nearestF64: function {i: i64} out f64 is {
-    hi: i / 4294967296
-    lo: i - (hi * 4294967296)
-    return hi.f64.orPanic * 4294967296.0 + lo.f64.orPanic
 }
 
 # scalarTidOf -- the system scalar type the name `nameId` spells, found as a
@@ -56440,24 +56575,92 @@ constOfBinopFold: function {
         if r.kind.ivalKind then r.bits = lv.bits
         return r
     }
-    lf: constFloatOf :st v: lv
-    rf: constFloatOf :st v: rv
-    if lf.has when rf.has then {
-        if (isComparisonOp name: op) then {
-            return (constCompareFloat :st :scope :ast :op a: lf.val b: rf.val)
-        }
-        return (constOfFloatArith
-            :st
-            :nid
-            :ln
-            :co
-            op: (arithOpOf :opnId)
-            a: lf.val
-            b: rf.val
-            typeName: "f64"
-        )
-    }
+    lNum: lv.kind.ivalKind or lv.kind.fvalKind
+    rNum: rv.kind.ivalKind or rv.kind.fvalKind
+    if lNum and rNum then return (constOfExactBinop :st :scope :ast :lv :rv :op :opnId :nid :ln :co)
     return ztypes.noConst
+}
+
+# constOfExactBinop -- an operator over two untyped numbers, a float among
+# them, folded exactly: on fractions while both have one, else on 512-bit
+# binary floats. A comparison is a bool; a division by zero has no value
+constOfExactBinop: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    lv: ztypes.cval
+    rv: ztypes.cval
+    op: StringView
+    opnId: zast.nameid
+    nid: zast.nodeid
+    ln: u32
+    co: u32
+} out ztypes.cval is {
+    aop: arithOpOf :opnId
+    cmp: isComparisonOp name: op
+    if cmp.not when (arithIsFloat op: aop).not then return ztypes.noConst
+    if aop.div when (constIsZero :st v: rv) then {
+        (constFailRecord
+            :st
+            kind: ztypes.constfailkind.divZero
+            nodeid: nid
+            lineno: ln
+            colno: co
+            width: 1
+        )
+        return ztypes.noConst
+    }
+    lr: constRatOf :st v: lv
+    rr: constRatOf :st v: rv
+    if lr.some when rr.some then {
+        a: lr.take
+        b: rr.take
+        if cmp then return (constCompareOrder :st :scope :ast :op c: (a.compare rhs: b))
+        return (constOfRat :st r: (ratArith :aop :a :b))
+    }
+    x: constBigFloatOf :st v: lv
+    y: constBigFloatOf :st v: rv
+    if cmp then return (constCompareOrder :st :scope :ast :op c: (x.compare rhs: y))
+    return (constOfBigFloat :st f: (bigFloatArith :aop :x :y))
+}
+
+# ratArith -- a + b, a - b, a * b or a / b, exactly; b is not zero for a /
+ratArith: function {aop: arithop a: math.BigRat.view b: math.BigRat.view} out math.BigRat is {
+    if aop.add then return a + b
+    if aop.sub then return a - b
+    if aop.mul then return a * b
+    return a / b
+}
+
+# bigFloatArith -- the operator at 512 bits, rounded to nearest even
+bigFloatArith: function {
+    aop: arithop x: math.BigFloat.view y: math.BigFloat.view
+} out math.BigFloat is {
+    tn: math.roundingmode.toNearestEven
+    if aop.add then return (math.BigFloat.sum :x :y prec: constFloatPrec mode: tn)
+    if aop.sub then return (math.BigFloat.difference :x :y prec: constFloatPrec mode: tn)
+    if aop.mul then return (math.BigFloat.product :x :y prec: constFloatPrec mode: tn)
+    return (math.BigFloat.quotient :x :y prec: constFloatPrec mode: tn)
+}
+
+# constCompareOrder -- a comparison operator's bool from an ordering `c`: -1, 0
+# or +1 as the left operand is below, equal to or above the right, which
+# compares with zero as the operands did
+constCompareOrder: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    op: StringView
+    c: i32
+} out ztypes.cval is {
+    return (constCompareInt
+        :st
+        :scope
+        :ast
+        :op
+        lv: ztypes.makeIntConst c
+        rv: ztypes.makeIntConst 0
+    )
 }
 
 # constOfBinop -- fold a binary operator over two constant operands. Two tags
@@ -57356,10 +57559,19 @@ stampConstAt: function {
     mono: st.typing.curMonoStamp
     st.typing.setNodeConstIn :mono :nid value: cv
     markOperandsTaken :st :ast :mono :nid
-    if cv.bigId != 0 when cv.numTid.isZero then {
+    if (cv.bigId != 0) or (constPastF64 :st v: cv) when cv.numTid.isZero then {
         st.typing.wideConstNodes.append from: nid
         st.typing.wideConstMonos.append from: mono
     }
+}
+
+# constPastF64 -- an untyped float whose nearest f64 is an infinity, or a zero
+# though it is not: one that may land only in a type wider than f64's default
+constPastF64: function {st: zenv.ZSymbolTable.view v: ztypes.cval} out bool is {
+    if v.kind.fvalKind.not or v.numTid.isZero.not then return false
+    if v.fval.isInf then return true
+    if v.fval != 0.0 then return false
+    return (constIsZero :st :v).not
 }
 
 # markOperandsTaken -- the operands of the fold at `nid` are taken: its value

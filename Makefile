@@ -2061,7 +2061,11 @@ perf: $(PERFBIN)
 # +300 a named untyped float converts as its literal does: ab.sh reads -903
 # behaviour and +306 source, this ratchet's build +300 overall; the two
 # measurements disagree on this change, and the gap is not yet explained.
-ALLOC_BASELINE := 2152796
+#
+# +65,585 untyped floats are exact: +897 behaviour, +64,672 source (the
+# compiler compiles math's BigRat and BigFloat, which its constants now use,
+# as phase 5's BigInt cost +90,931).
+ALLOC_BASELINE := 2218381
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

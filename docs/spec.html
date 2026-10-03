@@ -458,8 +458,9 @@ the floating point type specifiers. A number following the <code>e</code> specif
 floating point exponent.</p>
 <p>Floating point identifiers are always specified in decimal.</p>
 <p>The default type of a floating point identifier is <code>f64</code>.</p>
-<p>Floating point identifiers have the following methods, provided they can
-losslessly be stored in the resulting format:</p>
+<p>Floating point identifiers have the following methods, which give the
+resulting format's value nearest the literal, a tie to the even one; a value
+that rounds to an infinity, or a nonzero one that rounds to zero, is refused:</p>
 <table>
 <colgroup>
 <col style="width: 25%">
@@ -560,20 +561,31 @@ its own. The intermediate is allowed to exceed even <code>u64</code> &#x2014; e.
 <code>0xffffffffffffffff + 1 - 1</code> coerces cleanly into a <code>u64</code>
 parameter, because the intermediate <code>2^64</code> is just a transient
 value in the constant folder, never a stored runtime value.</li>
-<li><em><strong>integer literal &#x2192; float target</strong></em>: the value must be exactly
-representable in the float's mantissa, and lie in its range.
-<code>16777216</code> (<code>2^24</code>) fits <code>f32</code>; <code>16777217</code> does not, and
-<code>65536</code> is past <code>f16</code>'s largest finite value, <code>65504</code>.</li>
+<li><em><strong>integer literal &#x2192; float target</strong></em>: the value lands as the
+target's nearest value, a tie to the even one -- floats are inexact,
+and a value between two of them is one of the two.
+<code>16777217</code> lands in an <code>f32</code> as <code>16777216</code>. It must not round to
+an infinity: <code>65536</code> is past <code>f16</code>'s largest finite value,
+<code>65504</code>, and is refused.</li>
 <li><em><strong>float literal &#x2192; integer target</strong></em>: rejected. Float literals
 coerce only to float types. Use <code>.i32</code> / <code>.i64</code> / etc.
 explicitly when an integer conversion is intended.</li>
-<li><em><strong>float literal &#x2192; float target</strong></em>: the value must round-trip
-exactly through the target's precision (e.g. <code>0.1</code> does not fit
-<code>f32</code>).</li>
+<li><em><strong>float literal &#x2192; float target</strong></em>: the value lands as the target's
+nearest value, a tie to the even one (<code>0.1</code> lands in an <code>f32</code> as
+the <code>f32</code> nearest a tenth). It must not round to an infinity
+(<code>1e39</code> into an <code>f32</code> is refused), and a nonzero value must not
+round to zero (<code>1e-50</code> into an <code>f32</code> is refused).</li>
 </ul>
 <p>A literal that fails any of these checks produces a literal-aware
 diagnostic at compile time naming the value and the target's range &#x2014; no
 runtime overflow.</p>
+<p>An untyped float folds exactly, as an untyped integer does: its value is
+the fraction its literals spell, so <code>0.1 + 0.2 == 0.3</code> is true while
+<code>0.1.f64 + 0.2.f64 == 0.3.f64</code> is false, and only the final value is
+rounded, once, where it lands. A fraction whose numerator or denominator
+passes 4096 bits gives way to the nearest 512-bit binary float, which
+<code>f128</code>'s range needs. A negative zero literal keeps its sign. A typed
+float constant folds in its own type, as a body computes it.</p>
 <p>An untyped value that lands where nothing gives it a type takes its default
 (see Numeric defaults) and must fit it there: <code>x: 9223372036854775808</code>
 binds an <code>i64</code> and is refused naming <code>i64</code>, where

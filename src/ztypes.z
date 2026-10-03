@@ -24,13 +24,11 @@ public: unit {
     :noConstFail
     :constraintkind
     :cval
-    :floatFitsFloat
     :isFloatLexeme
     :absI64
     :bitsI64
     :i64Bits
-    :floatMaxBits
-    :intFitsFloat
+    :floatExpBits
     :intKindBits
     :intValueFits
     :isFloatKind
@@ -699,7 +697,8 @@ NumRange: class {
 #
 # The string payload is an index into ZTyping.constStrings (0 = none: the
 # sentinel row holds the empty text) because a valtype owns no heap, and an
-# integer outside i64 is an index into ZTyping.constBigInts for the same reason.
+# integer outside i64 is an index into ZTyping.constBigInts for the same reason,
+# and an untyped float's exact value into ZTyping.constRats or constBigFloats.
 # An arm is identified by its OWNING type plus its name-pool id, not by an
 # ordinal: the emitter's one arm-to-tag helper takes a name, and an ordinal
 # would rot the first time an arm was inserted.
@@ -716,8 +715,15 @@ cval: record {
     # an untyped integer whose left-most literal was hex, octal or binary: it
     # defaults to u64 rather than i64 where nothing gives it a type
     bits: bool
-    # the float value
+    # the float value: exactly, for a typed f16, f32 or f64; for any other float
+    # -- an untyped one, an f128 -- the nearest f64, which nothing decides by
     fval: f64
+    # an untyped float's exact value, a fraction: its 1-based row in
+    # ZTyping.constRats, 0 when it has none
+    ratId: u32
+    # an untyped float whose fraction outgrew 4096-bit parts: its 1-based row in
+    # ZTyping.constBigFloats, a 512-bit binary float; 0 when it has none
+    floatId: u32
     # the string, as a 1-based index into the constant pool so 0 means none
     strId: u32
     # the arm's OWNING type, half of an arm's identity
@@ -2113,6 +2119,8 @@ noConst: function out cval is {
         bigId: 0
         bits: false
         fval: 0.0
+        ratId: 0
+        floatId: 0
         strId: 0
         armTid: noTid
         armName: (zast.nameid.create from: 0)
@@ -2285,14 +2293,13 @@ mantissaOf: function {k: numkind} out u64 is {
     }
 }
 
-# floatMaxBits -- the bit length of the largest integer float kind `k` holds:
-# 65504 is f16's largest finite value, and each wider kind's exponent reaches
-# 2^127, 2^1023 and 2^16383. 0 for a kind that is not a float.
-floatMaxBits: function {k: numkind} out u64 is {
-    if k.f16Type then return 16
-    if k.f32Type then return 128
-    if k.f64Type then return 1024
-    if k.f128Type then return 16384
+# floatExpBits -- the width of float kind `k`'s IEEE 754 exponent field; 0 for
+# a kind that is not a float
+floatExpBits: function {k: numkind} out u64 is {
+    if k.f16Type then return 5
+    if k.f32Type then return 8
+    if k.f64Type then return 11
+    if k.f128Type then return 15
     return 0
 }
 
@@ -2430,87 +2437,6 @@ absI64: function {v: i64} out u64 is {
     return (0 - (v + 1)).u64.orPanic + 1
 }
 
-# the number of significant bits in `v` (0 for 0).
-bitLength: function {v: u64} out u64 is {
-    count: u64
-    tmp: v
-    for tmp > 0 loop {
-        tmp = tmp >> 1
-        count = count + 1
-    }
-    return count
-}
-
-# True iff `value` is exactly representable as a float of kind `k`.
-intFitsFloat: function {value: i64 k: numkind} out bool is {
-    if (isFloatKind k).not then return false
-    m: mantissaOf k
-    if value == 0 then return true
-    av: absI64 value
-    # past 65504, f16's largest finite value, the nearest f16 is an infinity;
-    # every wider kind's range holds all of i64
-    if k.f16Type when av > 65504 then return false
-    for (av & 1) == 0 loop av = av >> 1
-    bl: bitLength av
-    if bl <= m then return true
-    return false
-}
-
-# True iff f64 `value` is exactly representable as a float of kind `k`.
-# f64 always succeeds; f32 requires a bit-preserving round-trip; f128
-# is not evaluated here (punt to an explicit suffix).
-floatFitsFloat: function {value: f64 k: numkind} out bool is {
-    match (
-        k
-    ) case f64Type then {
-        return true
-    } case f128Type then {
-        return true
-    } case f32Type then {
-        r: value.f32
-        match (
-            r
-        ) case ok then {
-            return true
-        } case err then {
-            return false
-        }
-    } case f16Type then {
-        # exact binary16 representability, computed in f64 ARITHMETIC ONLY.
-        # Not because the seed cannot convert -- it can -- but because
-        # halffloat's `require:` block refuses `_Float16` under tcc and
-        # test-bootstrap builds the compiler WITH tcc, so a `.f16` in this file
-        # would make the compiler unbuildable. The f64-only arithmetic is
-        # load-bearing.
-        #
-        # Find the value's binade, derive the f16 ulp there, and require the
-        # value to be an exact multiple of it within range.
-        av: value
-        if av < 0.0 then av = 0.0 - av
-        if av == 0.0 then return true
-        if av > 65504.0 then return false
-        # f16 keeps ten stored mantissa bits, so the spacing in binade e is
-        # 2^(e-10) -- the exponent from logB, the power of two from scaleB,
-        # which is what those two exist for. Below the smallest normal the
-        # spacing stops shrinking and stays at 2^-24: the subnormal floor.
-        ulp: 1.0.scaleB n: av.logB - 10
-        minUlp: 1.0.scaleB n: 0 - 24
-        if ulp < minUlp then ulp = minUlp
-        q: av / ulp
-        # q < 2048 by construction; the checked u64 conversion errs on a
-        # fractional value, which is exactly the integerness test
-        qo: q.u64
-        match (
-            qo
-        ) case ok then {
-            return true
-        } case err then {
-            return false
-        }
-    } else {
-        return false
-    }
-}
 
 # --- numeric-literal value parsing ---
 
