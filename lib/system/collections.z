@@ -22,14 +22,25 @@ array: record is native as {
     # unsigned, like `length` -- signed, every read of an array had to convert
     # the very length it was bounded by. Out of bounds panics
     get: function {t: this.view i: u64} out t is native
-    # write the element at `i`, bounded like `get`. The one array member that
-    # writes through its receiver, so the one that is not `.view`, and the only
-    # way to write one: there is no `getMut`, because an array is a VALUE and a
-    # reference into a value's inline storage outlives nothing it can be handed
-    # to. `ListVal.getMut` exists because a list's storage is its own.
+    # write the element at `i`, bounded like `get`. There is no `getMut`: a
+    # reference to one element would outlive the checks a whole window gets.
+    # `mutView` lends the elements to be written in place instead
     set: function {:this i: u64 item: t} out t is native
     # how many elements the raw array holds
     length: function {t: this.view} out u64 is native
+    # a readonly view over the whole array, which pins it as a list's view pins
+    # the list
+    listView: function {t: this.view} outx ListViewVal t is native
+    # a readonly view over the elements in [from, to). Panics when from > to or
+    # to > length
+    slice: function {t: this.view from: u64 to: u64} outx ListViewVal t is native
+    # a writable window over the whole array: its inline storage, lent. An
+    # array is a value, so the window borrows the place it lives -- a local, or
+    # a field of one -- and while the window lives that place can be neither
+    # read nor written, though a field beside it still can
+    mutView: function {t: this.borrow} outx SpanVal t is native
+    # a writable window over the elements in [from, to), bounded like `slice`
+    mutSlice: function {t: this.borrow from: u64 to: u64} outx SpanVal t is native
     # a raw array of `to` elements, zeroed
     create: function {} out type is native
 }
@@ -182,6 +193,15 @@ ListVal: class is native as {
     # list, so it must not outlive it; `listView` is the whole-list case.
     # Panics when from > to or to > length
     slice: function {t: this.view from: i to: i} outx (ListViewVal t :i) is native
+    # a writable window over the whole ListVal: its storage, lent. The list can
+    # be neither read nor written while the window lives -- it cannot grow, which
+    # would move the storage the window points into
+    mutView: function {t: this.borrow} outx (SpanVal t :i) is native
+    # a writable window over the elements in [from, to), bounded like `slice`
+    mutSlice: function {t: this.borrow from: i to: i} outx (SpanVal t :i) is native
+    # make the ListVal `to` elements long: the new ones are zero, and the ones
+    # past `to` are dropped. The storage may move
+    resize: function {:this to: u64} is native
     # append every element of a window to the end of this ListVal. The window
     # may be one over this very list: the elements are read before the append
     # writes, so `xs.extendView from: (xs.slice ...)` is well defined. VALTYPE
@@ -298,6 +318,56 @@ ListViewVal: class is native as {
     iterateReverse: function {t: this.view} outx (ListIterVal :t) is native
     # how many elements the ListViewVal spans
     length: function {t: this.view} out u64 is native
+}
+
+# a writable window over valtype storage that a ListVal or an array lends: a
+# length and a pointer, no storage of its own. It borrows EXCLUSIVELY -- while
+# it lives its owner can be neither read nor written -- and it splits into two
+# windows over disjoint halves, both writable at once, which is what an
+# algorithm working on the parts of one buffer needs.
+SpanVal: class is native as {
+    # the VALUE element type of the window
+    t: anyval.generic
+    # the type that indexes the window, as the list's that lent it
+    i: (idkey.generic default: u64)
+
+    # the element at `i`. Out of bounds panics
+    get: function {t: this.view i: i} out t is native
+    # write the element at `i`, bounded like `get`, handing back the one it
+    # replaced
+    set: function {:this i: i item: t} out t is native
+    # how many elements the window spans
+    length: function {t: this.view} out u64 is native
+    # a narrower window over the elements in [from, to) of this one, which it
+    # borrows as this one borrows its owner. Panics when from > to or to > length
+    slice: function {t: this.borrow from: i to: i} outx type is native
+    # the two windows either side of `at`: [0, at) and [at, length). They are
+    # disjoint, so both may be written at once; this window is borrowed while
+    # the pair lives. Panics when at > length
+    split: function {t: this.borrow at: i} outx (SpanPair :t :i) is native
+    # a readonly view of the window's elements
+    listView: function {t: this.view} outx (ListViewVal t :i) is native
+    # copy `from`'s elements over the start of the window, as memmove does, so
+    # the two may overlap. Panics when `from` is longer than the window
+    copyFrom: function {:this from: (ListViewVal t :i)} is native
+    # set every element of the window to `item`
+    fill: function {:this item: t} is native
+    # set every element of the window to its type's zero
+    clear: function {:this} is native
+}
+
+# the two disjoint windows `SpanVal.split` answers. Each field is a path of its
+# own, so both may be borrowed, read and written at once.
+SpanPair: class {
+    # the elements below the split point
+    lo: (SpanVal :t :i)
+    # the elements from the split point on
+    hi: (SpanVal :t :i)
+} as {
+    # the element type of both windows
+    t: anyval.generic
+    # the type that indexes both windows
+    i: (idkey.generic default: u64)
 }
 
 # Bytes -- heap-mutable byte buffer. A typedef over `ListVal u8` so

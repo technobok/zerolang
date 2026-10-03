@@ -141,6 +141,12 @@ see #> to=./ownership.html: ownership.
   [#*: #> to=the-list-views: #b:"ListView" -- #~"class is native as { T: AnyRef.generic }"]
   [#*: #> to=the-list-views: #b:"ListViewVal" -- #~"class is native as { t: anyval.generic }"]
 
+#p: #b:"Windows"
+
+#ul:
+  [#*: #> to=windows: #b:"SpanVal" -- #~"class is native as { t: anyval.generic }", a writable window over a list's or an array's storage]
+  [#*: #> to=windows: #b:"SpanPair" -- #~"class { lo hi }", the two disjoint windows a split answers]
+
 #p: #b:"Map family"
 
 #ul:
@@ -227,6 +233,15 @@ counter.
 
 Since arrays are valtypes they are copied on assignment and when
 passed by default (TAKE) to functions.
+
+#b:"Views and windows." An array lends its elements as a list does:
+#~"listView" and #~"slice from: to:" answer a read-only
+#~"ListViewVal" over them, and #~"mutView" and #~"mutSlice from: to:" a
+writable #> to=windows: #~"SpanVal". An array is a value, so a window
+lends the PLACE it lives -- a local, a field of one, #~"this.limbs" in a
+method -- and that place is locked while the window lives; a field beside
+it is not. A copy taken before the window was lent keeps its own
+elements.
 
 #--: str
 
@@ -456,6 +471,62 @@ excludes a writer for the iterator's lifetime.
 
 #~"ByteView" is #~"(ListViewVal t: u8)" behind a typedef -- the
 standard byte-window type that #~"io" writers accept.
+
+#--: Windows
+
+
+A #~"SpanVal" is a WRITABLE window: a length and a pointer into storage
+a #~"ListVal" or an #~"array" lends, with no storage of its own.
+#~"ListVal.mutView" and #~"array.mutView" lend all of it,
+#~"mutSlice from: to:" the half-open range #~"[from, to)".
+
+#ul:
+  [#*: #~"get i:" reads an element and #~"set i: item:" writes one,
+    handing back the element it replaced; both panic past the window's
+    #~"length"]
+  [#*: #~"slice from: to:" narrows the window, and the narrower one
+    borrows this one as this one borrows its owner]
+  [#*: #~"split at:" answers a #~"SpanPair": #~"lo" over #~"[0, at)" and
+    #~"hi" over #~"[at, length)"]
+  [#*: #~"fill item:" sets every element; #~"clear" sets every element to
+    its type's zero]
+  [#*: #~"copyFrom from:" copies a #~"ListViewVal"'s elements over the
+    start of the window, as #~"memmove" does -- the two may overlap -- and
+    panics when the source is longer]
+  [#*: #~"listView" is a read-only view of the window's elements]
+
+#b:"Borrowing." A window borrows its owner EXCLUSIVELY: while it lives
+the list or array can be neither read nor written, a second window over
+it is refused, and a list cannot grow -- growing may move the storage the
+window points into. A window passed #~".view" is read-only like any
+view; #~".borrow" lends it for writing.
+
+#b:"Splitting." The halves of a split are the two fields of one
+#~"SpanPair", and two fields are two paths: both may be borrowed,
+read and written at once, which is what an algorithm working on two parts
+of one buffer needs. The window that was split is borrowed while the
+pair lives.
+
+#code language=zerolang: """
+  # add `x` into `z`, element by element
+  addInto: function {z: (SpanVal u64).borrow x: (SpanVal u64).view} is {
+      i: 0.u64
+      for i < z.length loop {
+          z.set :i item: (z.get :i) + (x.get :i)
+          i = i + 1
+      }
+  }
+
+  buf: ListVal u64
+  ...
+  w: buf.mutView
+  p: w.split at: 3
+  addInto z: p.lo x: p.hi       # both halves of one buffer, one call
+"""
+
+#b:"Resizing." #~"ListVal.resize to:" makes the list #~"to" elements long:
+the new elements are zero and the ones past #~"to" are dropped. It may
+move the storage, so no window can be live across it.
 
 #--: The Map family
 

@@ -2013,7 +2013,7 @@ perf: $(PERFBIN)
 #
 # +681 a data element may not take the name of one of the block's own members:
 # 0 behaviour, +681 source.
-ALLOC_BASELINE := 2024064
+ALLOC_BASELINE := 2037071
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -3082,7 +3082,8 @@ highlight-guard:
 # through its receiver hole cannot mutate, and one that does must not be
 # `.view`. A row with no body is compiler-built and is registered in
 # VIEW_GUARD_INLINE like any other unreadable backing, with `writes` as the
-# reason for the one that mutates (array.set); a `Type.*` entry covers every
+# reason for the ones that mutate (array.set) or lend their storage to be
+# written (array.mutView, array.mutSlice); a `Type.*` entry covers every
 # member of a type, a `*.method` entry a member every scalar declares.
 
 VIEW_GUARD_PLACEHOLDER := z_List.c.tmpl=@@NAME@@:ListRef z_Map.c.tmpl=@@NAME@@:MapRR \
@@ -3092,7 +3093,7 @@ VIEW_GUARD_PLACEHOLDER := z_List.c.tmpl=@@NAME@@:ListRef z_Map.c.tmpl=@@NAME@@:M
   z_IdMapIter.c.tmpl=@@NAME@@:IdMapR,@@IDMAPITEMITER@@:IdMapItemIterR,@@IDMAPENTRY@@:IdMapEntryR \
   z_IdMapMut.c.tmpl=@@NAME@@:IdMapR \
   z_IdSet.c.tmpl=@@NAME@@:IdSet,@@IDSETITER@@:IdSetIter
-VIEW_GUARD_EMITTED := get:ListRef.get,ListView.get getMut:ListRef.getMut \
+VIEW_GUARD_EMITTED := get:ListRef.get,ListView.get,SpanVal.get getMut:ListRef.getMut \
   slice:ListRef.slice,ListView.slice \
   contains:ListRef.contains \
   listView:ListRef.listView sort:ListRef.sort \
@@ -3110,6 +3111,10 @@ VIEW_GUARD_INTERNAL := String.cat String.print String.free String.eq String.cmp 
   IdMapR.destroy IdMapR.grow IdMapR.find IdMapR.slot IdMapR.entries_cap \
   IdSet.destroy IdSet.grow IdSet.find IdSet.slot IdSet.items_cap
 VIEW_GUARD_INLINE := Bytes.byteView:unemitted \
+  array.listView:inline array.slice:inline array.mutView:writes array.mutSlice:writes \
+  ListVal.mutView:inline ListVal.mutSlice:inline ListVal.resize:ondemand \
+  SpanVal.length:inline SpanVal.split:inline SpanVal.listView:inline SpanVal.copyFrom:inline \
+  SpanVal.set:ondemand SpanVal.slice:ondemand SpanVal.fill:ondemand SpanVal.clear:ondemand \
   ListRef.insert:ondemand ListRef.extend:ondemand \
   ListVal.copy:ondemand SetVal.copy:ondemand MapVV.copy:ondemand \
   ListVal.==:ondemand ListVal.!=:ondemand \

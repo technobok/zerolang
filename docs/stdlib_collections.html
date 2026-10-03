@@ -93,6 +93,8 @@ Table of Contents</div>
 </li>
 <li><a href="#the-list-views">The list views</a>
 </li>
+<li><a href="#windows">Windows</a>
+</li>
 <li><a href="#the-map-family">The Map family</a>
 </li>
 <li><a href="#the-set-family">The Set family</a>
@@ -204,6 +206,11 @@ see <a href="./ownership.html">ownership.</a></p>
 <li><a href="#the-list-views"><strong>ListView</strong> -- <code>class is native as { T: AnyRef.generic }</code></a></li>
 <li><a href="#the-list-views"><strong>ListViewVal</strong> -- <code>class is native as { t: anyval.generic }</code></a></li>
 </ul>
+<p><strong>Windows</strong></p>
+<ul>
+<li><a href="#windows"><strong>SpanVal</strong> -- <code>class is native as { t: anyval.generic }</code>, a writable window over a list's or an array's storage</a></li>
+<li><a href="#windows"><strong>SpanPair</strong> -- <code>class { lo hi }</code>, the two disjoint windows a split answers</a></li>
+</ul>
 <p><strong>Map family</strong></p>
 <ul>
 <li><a href="#the-map-family"><strong>MapRR</strong> (alias <code>Map</code>) -- <code>class is native as { K: RefHashable.generic  V: AnyRef.generic }</code></a></li>
@@ -274,6 +281,14 @@ compile-time constant, typed as <code>u64</code> like every container's
 counter.</p>
 <p>Since arrays are valtypes they are copied on assignment and when
 passed by default (TAKE) to functions.</p>
+<p><strong>Views and windows.</strong> An array lends its elements as a list does:
+<code>listView</code> and <code>slice from: to:</code> answer a read-only
+<code>ListViewVal</code> over them, and <code>mutView</code> and <code>mutSlice from: to:</code> a
+writable <a href="#windows"><code>SpanVal</code>. An array is a value, so a window</a>
+lends the PLACE it lives -- a local, a field of one, <code>this.limbs</code> in a
+method -- and that place is locked while the window lives; a field beside
+it is not. A copy taken before the window was lent keeps its own
+elements.</p>
 <h2 id="str"><a href="#str">4. str</a></h2>
 <p>Fixed-capacity, owned, valtype string buffer. Stack-allocated
 with compile-time capacity <code>to:</code>. Uses the smallest fixed-width
@@ -458,7 +473,54 @@ unobservable in a valid program, because the lock model already
 excludes a writer for the iterator's lifetime.</p>
 <p><code>ByteView</code> is <code>(ListViewVal t: u8)</code> behind a typedef -- the
 standard byte-window type that <code>io</code> writers accept.</p>
-<h2 id="the-map-family"><a href="#the-map-family">7. The Map family</a></h2>
+<h2 id="windows"><a href="#windows">7. Windows</a></h2>
+<p>A <code>SpanVal</code> is a WRITABLE window: a length and a pointer into storage
+a <code>ListVal</code> or an <code>array</code> lends, with no storage of its own.
+<code>ListVal.mutView</code> and <code>array.mutView</code> lend all of it,
+<code>mutSlice from: to:</code> the half-open range <code>[from, to)</code>.</p>
+<ul>
+<li><code>get i:</code> reads an element and <code>set i: item:</code> writes one,
+handing back the element it replaced; both panic past the window's
+<code>length</code></li>
+<li><code>slice from: to:</code> narrows the window, and the narrower one
+borrows this one as this one borrows its owner</li>
+<li><code>split at:</code> answers a <code>SpanPair</code>: <code>lo</code> over <code>[0, at)</code> and
+<code>hi</code> over <code>[at, length)</code></li>
+<li><code>fill item:</code> sets every element; <code>clear</code> sets every element to
+its type's zero</li>
+<li><code>copyFrom from:</code> copies a <code>ListViewVal</code>'s elements over the
+start of the window, as <code>memmove</code> does -- the two may overlap -- and
+panics when the source is longer</li>
+<li><code>listView</code> is a read-only view of the window's elements</li>
+</ul>
+<p><strong>Borrowing.</strong> A window borrows its owner EXCLUSIVELY: while it lives
+the list or array can be neither read nor written, a second window over
+it is refused, and a list cannot grow -- growing may move the storage the
+window points into. A window passed <code>.view</code> is read-only like any
+view; <code>.borrow</code> lends it for writing.</p>
+<p><strong>Splitting.</strong> The halves of a split are the two fields of one
+<code>SpanPair</code>, and two fields are two paths: both may be borrowed,
+read and written at once, which is what an algorithm working on two parts
+of one buffer needs. The window that was split is borrowed while the
+pair lives.</p>
+<pre><code class="language-zerolang">  # add `x` into `z`, element by element
+  addInto: function {z: (SpanVal u64).borrow x: (SpanVal u64).view} is {
+      i: 0.u64
+      for i &lt; z.length loop {
+          z.set :i item: (z.get :i) + (x.get :i)
+          i = i + 1
+      }
+  }
+
+  buf: ListVal u64
+  ...
+  w: buf.mutView
+  p: w.split at: 3
+  addInto z: p.lo x: p.hi       # both halves of one buffer, one call</code></pre>
+<p><strong>Resizing.</strong> <code>ListVal.resize to:</code> makes the list <code>to</code> elements long:
+the new elements are zero and the ones past <code>to</code> are dropped. It may
+move the storage, so no window can be live across it.</p>
+<h2 id="the-map-family"><a href="#the-map-family">8. The Map family</a></h2>
 <p>A hash map names the family of its key AND of its value, giving
 four forms. The key position is hashed, so its bound also
 requires <code>hash</code> and <code>==</code>:</p>
@@ -504,7 +566,7 @@ stays readable). <code>iterateItems</code> yields borrowed entries whose
 the map <code>.borrow</code> -- readonly, and with no mutable twin by
 design: a key is hashed, so writing through one in place would
 put the entry in the wrong bucket.</p>
-<h2 id="the-set-family"><a href="#the-set-family">8. The Set family</a></h2>
+<h2 id="the-set-family"><a href="#the-set-family">9. The Set family</a></h2>
 <p>A hash set of unique elements. An item IS the key here, so the
 element bound is the hashability interface of its family:
 <code>SetRef</code> (alias <code>Set</code>) holds reftypes, <code>SetVal</code> holds
@@ -518,7 +580,7 @@ changed.</p>
 <p>Like maps, sets are compact dicts: dense entries, separate index
 table, INSERTION-order iteration, and a <code>.view</code> (shared,
 readonly) <code>iterate</code> with no mutable twin by design.</p>
-<h2 id="iterators-and-entries"><a href="#iterators-and-entries">9. Iterators and entries</a></h2>
+<h2 id="iterators-and-entries"><a href="#iterators-and-entries">10. Iterators and entries</a></h2>
 <p>Each container family has its own iterator template, because the
 emitter names the cursor struct after <code>iterate</code>'s declared
 return -- and within the List family a list and a window into it
@@ -535,7 +597,7 @@ two share one layout and differ only in their bound.</p>
 creates and drives them implicitly. A
 <code>MapEntry</code> (any form) presents <code>.key</code> and <code>.value</code> as
 borrowed projections into the map's entry storage.</p>
-<h2 id="string-join"><a href="#string-join">10. string_join</a></h2>
+<h2 id="string-join"><a href="#string-join">11. string_join</a></h2>
 <p>Concatenate every string in <code>parts</code> with <code>sep</code> between each.
 Returns a fresh owned <code>String</code>. One allocation, bulk memcpy
 in sequence. <code>sep</code> is any <code>StringLike</code> -- a literal,
