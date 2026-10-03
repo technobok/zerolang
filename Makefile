@@ -2081,7 +2081,10 @@ perf: $(PERFBIN)
 #
 # +112 each re-point companion's C name carries its id: +4 behaviour, +108
 # source.
-ALLOC_BASELINE := 2221729
+#
+# +35 math's divBasic returns at once on a dividend shorter than its divisor:
+# 0 behaviour, +35 source.
+ALLOC_BASELINE := 2221764
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
