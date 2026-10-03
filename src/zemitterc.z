@@ -9157,9 +9157,9 @@ emitCollectionMethodCall: function {
     mnId: aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable)
     brid: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: call.callable)
     bt: chaseAggregateTypedef :symtab :ctx tid: brid
-    # classify by the mono's ORIGIN NAME (the graph-independent identity):
-    # a by-name-resolved origin tid can diverge from the mono's captured
-    # genericOriginId when extra units register their own List/Map shells
+    # the leg is chosen by the receiver's FAMILY, the template its mono was
+    # minted from compared by id, so a user type spelled like a container is
+    # never dispatched as one.
     # every leg below passes the receiver BY ADDRESS (colRecvRef), and a
     # receiver that is itself a call has no address: `&f(x)` is not C. Bind it
     # once here, where the mono's type is in hand, so each leg addresses a place.
@@ -9218,10 +9218,23 @@ emitCollectionMethodCall: function {
         )
         bn = bh9.copy
     }
-    originName: monoOriginName :symtab tid: bt
-    ov: originName.stringView
-    if ov == "array" then return (emitArrayMethodCall :ast :symtab :ctx :call :mnId :bn :bt :bvid)
-    isList: (ov == "ListRef") or (ov == "ListVal") or (ov == "ListView") or (ov == "ListViewVal")
+    fam: monoFamilyOf :symtab :ctx tid: bt
+    if fam == family.fixedArray then return (emitArrayMethodCall
+        :ast
+        :symtab
+        :ctx
+        :call
+        :mnId
+        :bn
+        :bt
+        :bvid
+    )
+    isList: (
+        (fam == family.list) or
+        (fam == family.listVal) or
+        (fam == family.listView) or
+        (fam == family.listViewVal)
+    )
     if isList then return (emitListMethodCall
         :ast
         :symtab
@@ -9232,13 +9245,44 @@ emitCollectionMethodCall: function {
         :bt
         :bvid
     )
-    isSet: (ov == "SetRef") or (ov == "SetVal")
-    if isSet then return (emitSetMethodCall :ast :symtab :ctx :call :mnId :bn :bt)
-    isMap: (ov == "MapRR") or (ov == "MapRV") or (ov == "MapVR") or (ov == "MapVV")
-    if isMap then return (emitMapMethodCall :ast :symtab :ctx :call :mnId :bn :bt)
-    isIdMap: (ov == "IdMapR") or (ov == "IdMapV")
-    if isIdMap then return (emitIdMapMethodCall :ast :symtab :ctx :call :mnId :bn :bt :bvid)
-    if ov == "IdSet" then return (emitIdSetMethodCall :ast :symtab :ctx :call :mnId :bn :bt :bvid)
+    if (fam == family.set) or (fam == family.setVal) then return (emitSetMethodCall
+        :ast
+        :symtab
+        :ctx
+        :call
+        :mnId
+        :bn
+        :bt
+    )
+    if (isMapOriginOf :symtab :ctx tid: bt) then return (emitMapMethodCall
+        :ast
+        :symtab
+        :ctx
+        :call
+        :mnId
+        :bn
+        :bt
+    )
+    if (fam == family.idMapR) or (fam == family.idMapV) then return (emitIdMapMethodCall
+        :ast
+        :symtab
+        :ctx
+        :call
+        :mnId
+        :bn
+        :bt
+        :bvid
+    )
+    if fam == family.idSet then return (emitIdSetMethodCall
+        :ast
+        :symtab
+        :ctx
+        :call
+        :mnId
+        :bn
+        :bt
+        :bvid
+    )
     return ""
 }
 

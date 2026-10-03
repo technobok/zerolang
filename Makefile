@@ -2013,7 +2013,7 @@ perf: $(PERFBIN)
 #
 # +681 a data element may not take the name of one of the block's own members:
 # 0 behaviour, +681 source.
-ALLOC_BASELINE := 2022211
+ALLOC_BASELINE := 2016644
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -2169,10 +2169,10 @@ emitter-guard:
 	chk "resolveTypeIdByName" "$$e3" 15; \
 	chk "userFnId" "$$e4" 21; \
 	chk "childOwnershipText" "$$e5" 0; \
-	chk "regNameOf" "$$e6" 65; \
+	chk "regNameOf" "$$e6" 64; \
 	chk "ztypes.mangleVarName (both inside varCName)" "$$e7" 2; \
 	chk "io.readText" "$$e8" 3; \
-	chk "monoOriginName" "$$e9" 7; \
+	chk "monoOriginName" "$$e9" 6; \
 	chk "ztypes.mangleMemberPrefix (inside memberCPrefix)" "$$e10" 1; \
 	if [ "$$fail" = "1" ]; then \
 	  echo "  A new name-resolution site was added to the emitter. Read the typechecker"; \
