@@ -1811,7 +1811,7 @@ literalNameTypeId: function {
         ) case some then {
             if b0 >= 48 when b0 <= 57 then isnum = true
         } case none then null
-        if nT.stringView.contains "." then hasDot = true
+        if (ztypes.isFloatLexeme numstr: nT.stringView) then hasDot = true
         isBits = isBitsLexeme lex: nT.stringView
     }
     if isnum.not then return ztypes.noTid
@@ -2911,7 +2911,7 @@ recordResolvedName: function {
                 # the literal's spelling decides its default
                 isFloat: false
                 nT: zast.nameTextAt :ast ref: nameId
-                if nT.contains "." then isFloat = true
+                if (ztypes.isFloatLexeme numstr: nT.stringView) then isFloat = true
                 if isFloat then {
                     recordNodeName :ast :st name: "f64" :nid scope: recScope
                 } else {
@@ -30764,7 +30764,7 @@ literalFitsMessage: function {
     if pn9c.err.length > 0 then return pn9c.err.copy
     if (ztypes.isFloatKind k: pn9c.kind).not then return ""
     exact9c: true
-    if lit.contains "." then {
+    if (ztypes.isFloatLexeme numstr: lit) then {
         exact9c = ztypes.floatFitsFloat value: pn9c.fval k: pn9c.kind
     } else {
         ivp9c: ztypes.parseNumber numstr: lit
@@ -30843,7 +30843,7 @@ checkNumericSuffixCast: function {
             if (isNumericTypeName name: missChild.stringView) then {
                 ltn: specWrittenName :st :ast tid: litTid
                 cm9: "'\{ltn}' has no conversion to '\{missChild}'"
-                ch9: "a literal with a decimal point is a float: convert it to a float type, or write the value without a point".string
+                ch9: "a literal with a decimal point or an exponent is a float: convert it to a float type, or write the integer's digits".string
                 cn9: String
                 (addErrorH
                     :st
@@ -32656,21 +32656,10 @@ numericParamOwnerFrom: function {
     return (ztypes.declid.create from: 0)
 }
 
-# isFloatLiteralName -- a numeric-literal atom carrying a decimal point (the
-# float default; hex/binary stay integer literals).
+# isFloatLiteralName -- a numeric-literal atom spelling a float: a decimal
+# point or a decimal exponent (hex/binary stay integer literals).
 isFloatLiteralName: function {name: StringView} out bool is {
-    i: u64
-    n: name.length
-    for i < n loop {
-        b: name.byteAt i
-        match (
-            b
-        ) case some then {
-            if b == 46 then return true
-        } case none then null
-        i = i + 1
-    }
-    return false
+    return (ztypes.isFloatLexeme numstr: name)
 }
 
 # isComparisonOp -- a binop operator whose result is bool (not the operand type).
@@ -54097,7 +54086,7 @@ constFitsKindMessage: function {
     }
     if v.kind.fvalKind.not then return ""
     if isFloat.not then {
-        return "Numeric type specifier must be float for literals with decimal points"
+        return "Numeric type specifier must be float for a float literal"
     }
     if (ztypes.floatFitsFloat value: v.fval :k) then return ""
     fkn: ztypes.numkindName :k
@@ -54484,7 +54473,7 @@ constOfConversion: function {
             :nid
             :ln
             :co
-            msg: "Numeric type specifier must be float for literals with decimal points"
+            msg: "Numeric type specifier must be float for a float literal"
         )
         return ztypes.noConst
     }

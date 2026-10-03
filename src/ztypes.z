@@ -25,6 +25,7 @@ public: unit {
     :constraintkind
     :cval
     :floatFitsFloat
+    :isFloatLexeme
     :absI64
     :bitsI64
     :i64Bits
@@ -2629,6 +2630,23 @@ lexemeRadix: function {numstr: StringView} out radixform is {
     return (radixform :base :startIdx :isChar)
 }
 
+# isFloatLexeme -- whether a numeric lexeme spells a float: it has a decimal
+# point, or it is decimal and has an `e` exponent (`1e3`, `2E-5`). A prefixed
+# lexeme's `e` is a digit, and a character literal is never a float.
+isFloatLexeme: function {numstr: StringView} out bool is {
+    if numstr.contains "." then return true
+    from: u64
+    if (numstr.startsWith "-") or (numstr.startsWith "+") then from = 1
+    return (hasDecimalExponent mag: (numstr.substring :from to: numstr.length))
+}
+
+# hasDecimalExponent -- an unsigned decimal lexeme with an `e` exponent
+hasDecimalExponent: function {mag: StringView} out bool is {
+    r: lexemeRadix numstr: mag
+    if (r.base != 10) or r.isChar then return false
+    return (mag.contains "e") or (mag.contains "E")
+}
+
 # negativeLiteralFits -- a literal written with a leading minus, against an
 # integer target. The number readers take MAGNITUDES, so the sign is peeled here
 # and the bound applied on this side: an unsigned target admits no negative at
@@ -2750,21 +2768,21 @@ digitsRadix: function {numstr: StringView startIdx: u64 coreLen: u64 base: u64} 
 # Parse a numeric literal lexeme into (kind, value, error) against an
 # optional required kind (the dot-form conversion target). The lexeme is
 # consumed in its ENTIRETY -- the language has no inline type suffixes,
-# so any non-literal tail is an invalid literal. 'e'-notation is NOT
-# recognised here -- only a decimal point selects the float path, so a
-# bare `1e3` is an invalid integer.
+# so any non-literal tail is an invalid literal. A float lexeme
+# (isFloatLexeme: a decimal point or a decimal `e` exponent) selects the
+# float path.
 parseNumberWith: function {numstr: StringView hasK: bool k: numkind} out ParsedNumber is {
     coreLen: numstr.length
     hasKind: hasK
     kind: k
-    hasDot: numstr.contains "."
+    hasDot: isFloatLexeme :numstr
     if hasDot when hasKind when (isFloatKind kind).not then {
         return (ParsedNumber
             :kind
             isFloat: false
             ival: 0
             fval: 0.0
-            err: "Numeric type specifier must be float for literals with decimal points"
+            err: "Numeric type specifier must be float for a float literal"
         )
     }
     if hasDot when hasKind.not then {
@@ -2802,7 +2820,7 @@ beyondU64Number: function {numstr: StringView kind: numkind} out ParsedNumber is
 }
 
 # Parse a numeric literal lexeme into (kind, value, error); the kind
-# comes from the literal's own shape (dot -> f64, 0c -> c32, else i64).
+# comes from the literal's own shape (float -> f64, 0c -> c32, else i64).
 parseNumber: function {numstr: StringView} out ParsedNumber is {
     return (parseNumberWith :numstr hasK: false k: numkind.i64Type)
 }

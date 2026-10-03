@@ -2055,7 +2055,9 @@ perf: $(PERFBIN)
 # companion: +18 behaviour (zc's own such re-points mint one), +97 source.
 #
 # +24 BigRat.ieeeBits: 0 behaviour, +24 source.
-ALLOC_BASELINE := 2152242
+#
+# +254 `1e3` is a float literal: 0 behaviour, +254 source.
+ALLOC_BASELINE := 2152496
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
