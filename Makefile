@@ -2013,7 +2013,7 @@ perf: $(PERFBIN)
 #
 # +681 a data element may not take the name of one of the block's own members:
 # 0 behaviour, +681 source.
-ALLOC_BASELINE := 2015116
+ALLOC_BASELINE := 2015816
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -2442,6 +2442,9 @@ zlink-rules-guard:
 # every command that parses: emit, build, run and dump. The error's location is
 # read from the tree the parser hands back; its own tree is empty by then, and a
 # lookup there aborts in the index check with a zpanic that names no unit.
+#
+# A system directory or a src root that is not a directory is refused, exit 2,
+# naming it: the source filesystem panics on such a root, so zc asks first.
 refusal-guard: bin/zc $(BUILDDIR)/tcc
 	@d=$(BUILDDIR)/refusal; rm -rf $$d; mkdir -p $$d; bad=0; \
 	bin/zc build hello --src examples --system lib/system --cc tcc --cc-mode spawn \
@@ -2517,6 +2520,13 @@ refusal-guard: bin/zc $(BUILDDIR)/tcc
 	for c in E0200 e0200 0200 200; do \
 	  if [ "$$(bin/zc explain $$c 2>&1 | head -1)" != "ownership error" ]; then \
 	    echo "refusal-guard FAIL: zc explain $$c must explain E0200"; bad=1; \
+	  fi; \
+	done; \
+	for root in "--system $$d/none" "--src $$d/none --system lib/system"; do \
+	  bin/zc emit hello --src examples $$root > $$d/r.log 2>&1; rc=$$?; \
+	  if [ $$rc -ne 2 ] || grep -q zpanic $$d/r.log || ! grep -q "$$d/none' does not exist" $$d/r.log; then \
+	    echo "refusal-guard FAIL: a missing root ($$root) must exit 2 naming it, got $$rc"; \
+	    cat $$d/r.log; bad=1; \
 	  fi; \
 	done; \
 	for cmd in emit build run dump; do \

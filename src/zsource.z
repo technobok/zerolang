@@ -141,23 +141,6 @@ typedefCasingKind: function {ast: Ast.view baseId: zast.nodeid} out zast.objectk
     return zast.objectkind.recordDef
 }
 
-# isDirPath -- whether `path` names a directory, following links.
-isDirPath: function {path: StringView} out bool is {
-    return (pathKindIs :path want: io.filekind.dir)
-}
-
-# pathKindIs -- whether `path` names an entry of the kind `want`; false when it
-# cannot be read.
-pathKindIs: function {path: StringView want: io.filekind} out bool is {
-    sr: io.stat :path
-    match (
-        sr
-    ) case ok then {
-        return sr.kind == want
-    } case err then null
-    return false
-}
-
 # sameFile -- whether two paths name one filesystem object: the same device
 # and inode, whatever the spelling. False when either cannot be read.
 sameFile: function {a: StringView b: StringView} out bool is {
@@ -3842,21 +3825,11 @@ Analysis: class {
     }
 
     # rootsReady -- whether every root the typecheck tier registers is a
-    # directory. The VFS refuses anything else by panicking, so each is asked
-    # here first and a missing one is reported as the reason the tier did not run.
+    # directory; a missing one is reported as the reason the tier did not run.
     rootsReady: function {:this srcdirs: (List String).view systemdir: StringView} out bool is {
-        if (isDirPath path: systemdir).not then {
-            ms: "the system directory '\{systemdir}' does not exist"
-            this.reportTierSkipped errv: zast.err.ioError cause: ms.stringView note: String
-            return false
-        }
-        missing: String
-        for each d: srcdirs loop {
-            if missing.length == 0 when (isDirPath path: d.stringView).not then missing = d.copy
-        }
-        if missing.length == 0 then return true
-        mr: "the src root '\{missing}' does not exist"
-        this.reportTierSkipped errv: zast.err.ioError cause: mr.stringView note: String
+        cause: zcheck.missingRootCause :systemdir :srcdirs
+        if cause.length == 0 then return true
+        this.reportTierSkipped errv: zast.err.ioError cause: cause.stringView note: String
         return false
     }
 
@@ -5670,7 +5643,7 @@ topUnitPathOf: function {path: StringView} out String is {
         ) case some then {
             if slashOpt > 0 then {
                 parentFile: "\{cur.stringView.substring from: 0 to: slashOpt}.z"
-                if (pathKindIs path: parentFile.stringView want: io.filekind.file) then {
+                if (zcheck.pathKindIs path: parentFile.stringView want: io.filekind.file) then {
                     cur = parentFile.take
                     stepping = true
                     climbed = true

@@ -18,6 +18,8 @@ public: unit {
     :exeRoot
     :fsnoFor
     :joinPath
+    :missingRootCause
+    :pathKindIs
     :pickCc
     :pickCcMode
     :foldNativePaths
@@ -29,6 +31,34 @@ public: unit {
 
 astnode: zast.astnode
 Ast: zast.Ast
+
+# pathKindIs -- whether `path` names an entry of the kind `want`, following
+# links; false when it cannot be read.
+pathKindIs: function {path: StringView want: io.filekind} out bool is {
+    sr: io.stat :path
+    match (
+        sr
+    ) case ok then {
+        return sr.kind == want
+    } case err then null
+    return false
+}
+
+# missingRootCause -- why a project's roots cannot be read: the system directory
+# or the first src root that is not a directory, named; "" when every one is.
+# The VFS refuses a root that is not a directory by panicking, so a front end
+# asks this before it registers any.
+missingRootCause: function {systemdir: StringView srcdirs: (List String).view} out String is {
+    if (pathKindIs path: systemdir want: io.filekind.dir).not then {
+        return "the system directory '\{systemdir}' does not exist"
+    }
+    for each d: srcdirs loop {
+        if (pathKindIs path: d.stringView want: io.filekind.dir).not then {
+            return "the src root '\{d}' does not exist"
+        }
+    }
+    return ""
+}
 
 # fsnoFor -- nodeid -> fsno through the snapshot: the program's carrier
 # on a successful parse, the parser's partial carrier on a parse error.
