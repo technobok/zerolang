@@ -8,12 +8,10 @@
 # with a literal-aware diagnostic ("literal value 300 cannot be
 # losslessly stored in u8 (range 0..255)") — no runtime overflow.
 #
-# Constant arithmetic is NOT unbounded: the compile-time evaluator
-# works in i64, so an expression whose operands do not fit one is not
-# folded at all — it survives as runtime arithmetic and agrees with
-# the folded answer only where the target type's own wraparound makes
-# it agree. `push_u64` below is that case. See the arbitrary-precision
-# section of Design-OPEN.pdoc.
+# Constant arithmetic is exact: an integer constant folds to 512 bits
+# of magnitude, and only the final value is checked, where it lands.
+# `push_u64` below receives an expression whose intermediate is past
+# u64 and prints the exact value it folds to.
 #
 # Explicit suffixes still work; they remain the user-facing escape
 # hatch when the surrounding context does not pin the type.
@@ -25,8 +23,8 @@ push_byte: function {b: u8} is {
 }
 
 # Call-arg coercion: u64 parameter accepts an arbitrarily wide
-# intermediate.
-push_u64: function {x: u64} is { x.drop }
+# intermediate; it prints what it receives.
+push_u64: function {x: u64} is { print "\{x}" }
 
 # Function-return coercion: the body `200 + 100 - 250` folds to 50
 # (which fits u8) — the intermediate 300 does not block the coercion
@@ -48,10 +46,8 @@ main: function is {
     # u8 but the final value fits.
     push_byte b: 200 + 100 - 250
 
-    # An intermediate wider than i64: `0xff...ff + 1` is `2^64`. The
-    # evaluator cannot hold it, so this is not folded -- it reaches C
-    # as arithmetic and lands on `u64::MAX` because the destination is
-    # unsigned and wraps. Bound to a local it would print -1.
+    # An intermediate past u64: `0xff...ff + 1` is `2^64`, held exactly,
+    # and the u64 parameter takes the folded `2^64 - 1`.
     push_u64 x: 0xffffffffffffffff + 1 - 1
 
     # Reassignment coercion: bare literal coerces to a's u8 type.

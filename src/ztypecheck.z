@@ -22,6 +22,9 @@
 # other top-level definitions are private to this unit.
 public: unit {
     :stringLitIsPlain
+    :constBigOf
+    :constIntText
+    :constLiteralBig
     :boxMemberDelegates
     :isFunctionDefWithBody
     :truthyCondArmOf
@@ -2031,36 +2034,6 @@ resolveAtomType: function {
         return named
     }
     return (resolveNamedTypeId :st :scope :ast :unitDecl :nameId :thisName :nid)
-}
-
-# parseDecimalU64 -- a decimal digit string as a u64 value; none when empty
-# or any byte is not a digit (signs, radix prefixes, suffixed forms stay on
-# the name-keyed path).
-parseDecimalU64: function {text: StringView} out optionval u64 is {
-    acc: u64
-    i: u64
-    any: false
-    run: true
-    for run loop {
-        bo: text.byteAt i
-        match (
-            bo
-        ) case some then {
-            if bo >= 48 when bo <= 57 then {
-                d: bo - 48
-                acc = acc * 10 + d
-                any = true
-            } else {
-                any = false
-                run = false
-            }
-        } case none then {
-            run = false
-        }
-        i = i + 1
-    }
-    if any then return (optionval.some acc)
-    return (optionval.none u64)
 }
 
 # aliasedContainerTwin -- the DECLARATION name behind a container alias
@@ -9303,7 +9276,7 @@ dataElemTypeName: function {
         if de.ok.not then allFloat = false
         if de.ok then {
             lx: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: de.litId))
-            cv: constLiteralValue name: lx.stringView
+            cv: constLiteralValue :st name: lx.stringView
             if cv.kind.fvalKind.not then allFloat = false
             if de.tagId.isZero.not then {
                 tgId: atomNameId :ast n: (ast.nodes.get i: de.tagId)
@@ -9457,7 +9430,7 @@ resolveData: function {
                             )
                         }
                     }
-                    cv: constLiteralValue name: lt.stringView
+                    cv: constLiteralValue :st name: lt.stringView
                     if cv.kind.ivalKind then {
                         (st.typing.setMemberConst
                             parentTypeId: did
@@ -12481,35 +12454,36 @@ refuseLiteralMember: function {st: zenv.ZSymbolTable ast: Ast.view nid: zast.nod
 
 # refuseWideDefault -- a default written as a bare integer literal is an i64, as
 # the declaration's own type is, so one outside i64 is refused where it is
-# written: past u64 no type can take it, and a decimal past i64 needs its
-# conversion written (`18446744073709551615.u64`).
+# written, as every untyped value is where it lands: a decimal past i64 needs
+# its conversion written (`18446744073709551615.u64`).
 refuseWideDefault: function {st: zenv.ZSymbolTable ast: Ast.view nid: zast.nodeid} is {
     isAtom: false
-    da: ast.nodes.get i: nid
-    isAtom = da.atomid
-    if isAtom.not then return
-    dn: ast.nodes.get i: nid
-    lex: zast.nameTextAt :ast ref: (atomNameId :ast n: dn)
-    if lex.length < 19 then return
-    k: ztypes.numkind.i64Type
-    if (ztypes.literalBeyondU64 numstr: lex.stringView) then {
-        k = ztypes.numkind.u64Type
-    } else if (isDecimalLexeme lex: lex.stringView).not then {
-        return
-    } else if (ztypes.literalBeyondI64 numstr: lex.stringView).not then {
-        return
+    {
+        da: ast.nodes.get i: nid
+        isAtom = da.atomid
     }
-    h: String
-    if k.i64Type then h = "a default written as a bare literal is an i64: write `\{lex}.u64` for a u64"
+    if isAtom.not then return
+    da: ast.nodes.get i: nid
+    lex: zast.nameTextAt :ast ref: (atomNameId :ast n: da)
+    if lex.length < 19 then return
+    v: constLiteralValue :st name: lex.stringView
+    m: String
+    if v.bigId != 0 then {
+        m = constFitsKindMessage :st :v k: ztypes.numkind.i64Type spelling: lex.stringView
+    } else if v.kind.none when (constLiteralBig lex: lex.stringView).none then {
+        # past the 512 bits a constant holds, there is no value at all
+        m = "integer literal \{lex} overflows"
+    }
+    if m.length == 0 then return
     (addErrorH
         :st
-        nodeid: (nodeId n: dn)
-        lineno: (nodeLine n: dn)
-        colno: (nodeCol n: dn)
+        nodeid: (nodeId n: da)
+        lineno: (nodeLine n: da)
+        colno: (nodeCol n: da)
         e: zast.err.typeError
-        msg: (ztypes.rangeErr value: lex.stringView :k r: (ztypes.rangeOf :k))
+        msg: m
         note: String
-        hint: h
+        hint: "a default written as a bare literal is an i64: write `\{lex}.u64` for a u64"
         width: lex.length.u32.orPanic
     )
 }
@@ -25637,13 +25611,7 @@ numericGenericArgRead: function {
     v: ztypes.noConst
     if nameId.isZero.not when (isNumericLiteralNameAt :ast ref: nameId) then {
         lt: zast.nameTextAt :ast ref: nameId
-        v = constLiteralValue name: lt.stringView
-        big: numericBigLiteral :ast :nameId :cd :v
-        match (
-            big
-        ) case some then {
-            return (numarg state: numargstate.value bits: big)
-        } case none then null
+        v = constLiteralValue :st name: lt.stringView
     } else {
         fold: numericArgFold :ast :st :unitDecl :scope :tdecl :param :argOp :nameId :inBody
         if fold.reported then return refused
@@ -25655,22 +25623,19 @@ numericGenericArgRead: function {
     if (numericArgHasInteger :ast :st :unitDecl :scope :tdecl :param :argOp :nameId :v
     ).not then return refused
     if (numericArgStandsIn :ast :st :scope :tdecl :param :argOp :cd :v).not then return refused
-    return (numarg state: numargstate.value bits: (ztypes.i64Bits v: v.ival))
+    return (numarg state: numargstate.value bits: (constBits64 :st :v))
 }
 
-# numericBigLiteral -- a u64 literal above the most positive i64, which has no
-# i64 constant: its decimal spelling is its value. none for any other literal.
-numericBigLiteral: function {
-    ast: Ast.view
-    nameId: zast.nameid
-    cd: ztypes.constraintdesc
-    # the literal's value as an i64 constant, none when it has none
-    v: ztypes.cval
-} out optionval u64 is {
-    if v.kind.none.not then return (optionval.none u64)
-    if cd.numKind.kind != ztypes.numkind.u64Type then return (optionval.none u64)
-    lt: zast.nameTextAt :ast ref: nameId
-    return (parseDecimalU64 text: lt.stringView)
+# constBits64 -- an integer constant's low 64 bits, two's complement: the bits a
+# numeric generic argument carries. A value that stood in for its bound fits
+# 64 bits, a u64 above i64 included.
+constBits64: function {st: zenv.ZSymbolTable.view v: ztypes.cval} out u64 is {
+    if v.bigId == 0 then return (ztypes.i64Bits v: v.ival)
+    b: constBigOf :st :v
+    if b.words.length == 0 then return 0
+    w: b.words.get i: 0
+    if b.negative then return w.not + 1
+    return w
 }
 
 # argfold -- a non-literal numeric generic argument evaluated: its value, or
@@ -25759,7 +25724,7 @@ numericArgStandsIn: function {
 } out bool is {
     # an untyped literal is settled by its value against the bound's kind; only
     # a typed constant needs the bound's type to ask about loss
-    if v.numTid.isZero when (ztypes.intValueFits v: v.ival k: cd.numKind.kind) then return true
+    if v.numTid.isZero when (constFitsKind :st :v k: cd.numKind.kind) then return true
     boundTid: numericBoundTid :ast :st :scope :cd
     if boundTid.isZero then return true
     sm: constStandsInMessage :ast :st :v target: boundTid
@@ -30690,16 +30655,25 @@ checkLiteralFits: function {
     lit: StringView
     target: StringView
 } is {
-    m: literalFitsMessage :lit :target
+    m: literalFitsMessage :st :lit :target
     if m.length > 0 then addError :st :nodeid :lineno :colno e: zast.err.typeError msg: m
 }
 
 # literalFitsMessage -- the answer checkLiteralFits reports: "" when `lit` fits
 # `target`, else the report.
-literalFitsMessage: function {lit: StringView target: StringView} out String is {
+literalFitsMessage: function {
+    st: zenv.ZSymbolTable lit: StringView target: StringView
+} out String is {
     if (isNumericTypeName name: target).not then return ""
     # a character literal carries no numeric lexeme to parse
     if lit.startsWith "0c" then return ""
+    # a literal with a value is settled by it, as every landing is; the lexeme
+    # path below reads what has none -- a hex, octal or binary one past i64
+    v: constLiteralValue :st name: lit
+    if v.kind.none.not then {
+        tk: ztypes.numkindByName name: target
+        return (constFitsKindMessage :st :v k: tk.kind spelling: lit)
+    }
     if lit.startsWith "-" then return (ztypes.negativeLiteralFits :lit :target)
     nk9c: ztypes.numkindByName name: target
     pn9c: ztypes.parseNumberAs numstr: lit k: nk9c.kind
@@ -30847,7 +30821,7 @@ checkUntypedConstantCast: function {
     castOpt: literalConvTarget :ast :st tid: st.reg.literalIntTid nameId: childId
     if castOpt.none then return notCast
     target: castOpt
-    fm: untypedFitsMessage :st :v :target
+    fm: constFitsType :st :v :target
     if fm.length > 0 then (addError
         :st
         nodeid: dp.nid
@@ -32273,36 +32247,24 @@ checkLiteralAtom: function {st: zenv.ZSymbolTable ast: Ast.view node: atomref} o
     return result
 }
 
-# noteWideLiteral -- an integer literal the compile-time evaluator cannot hold.
-# Past u64 no type can take it yet, and it is refused here; a DECIMAL one past
-# i64 fits only a u64 slot, which checkWideLiterals settles once the walk has
-# typed where it lands. A hex, octal or binary literal spells bits, which an
-# i64 holds whatever their pattern. Nineteen characters is the shortest lexeme
-# either question can be asked of.
+# noteWideLiteral -- an integer literal no constant can hold, refused where it
+# is written: past the 512 bits an untyped integer holds, in any radix. One
+# inside them reaches its value, which lands where checkWideConstants settles
+# it. Nineteen characters is the shortest lexeme outside i64.
 noteWideLiteral: function {st: zenv.ZSymbolTable node: atomref lex: StringView} is {
     if lex.length < 19 then return
-    if (ztypes.literalBeyondU64 numstr: lex) then {
-        (addErrorH
-            :st
-            nodeid: node.nid
-            lineno: node.lineno
-            colno: node.colno
-            e: zast.err.typeError
-            msg: (ztypes.rangeErr
-                value: lex
-                k: ztypes.numkind.u64Type
-                r: (ztypes.rangeOf k: ztypes.numkind.u64Type)
-            )
-            note: String
-            hint: "a literal is read in 64 bits"
-            width: lex.length.u32.orPanic
-        )
-        return
-    }
-    if (isDecimalLexeme :lex).not then return
-    if (ztypes.literalBeyondI64 numstr: lex).not then return
-    st.typing.wideLiteralNodes.append from: node.nid
-    st.typing.wideLiteralMonos.append from: st.typing.curMonoStamp
+    if (lex.startsWith "0c") or (constLiteralBig :lex).some then return
+    (addErrorH
+        :st
+        nodeid: node.nid
+        lineno: node.lineno
+        colno: node.colno
+        e: zast.err.typeError
+        msg: "integer literal \{lex} overflows"
+        note: String
+        hint: "an untyped integer constant holds up to 512 bits"
+        width: lex.length.u32.orPanic
+    )
 }
 
 # isDecimalLexeme -- the integer lexeme is written in decimal: no `0x`, `0o`,
@@ -32315,62 +32277,64 @@ isDecimalLexeme: function {lex: StringView} out bool is {
     return c < 65
 }
 
-# checkWideLiterals -- each decimal literal past i64 (noteWideLiteral), settled
-# against the type its walk gave it, as any literal at a typed destination is:
-# a u64 slot takes a value up to u64's maximum, and an untyped literal is an
-# i64. A literal typed by a generic parameter is its instances' to settle.
-checkWideLiterals: function {ast: Ast.view st: zenv.ZSymbolTable} is {
+# checkWideConstants -- each untyped integer outside i64 the walk evaluated (a
+# literal or a fold of them), settled where it lands once the walk has typed
+# that: in the type a destination gave it, or in i64 when none did. One an
+# untyped fold consumed lands nowhere itself, and one typed by a generic
+# parameter is its instances' to settle. A destination that already refused
+# the value reports it in the same words, which addError keeps once.
+checkWideConstants: function {ast: Ast.view st: zenv.ZSymbolTable} is {
     i: u64
-    for i < st.typing.wideLiteralNodes.length loop {
-        nid: st.typing.wideLiteralNodes.get :i
-        t: st.typing.nodeTypeIn mono: (st.typing.wideLiteralMonos.get :i) :nid
+    for i < st.typing.wideConstNodes.length loop {
+        nid: st.typing.wideConstNodes.get :i
+        mono: st.typing.wideConstMonos.get :i
         i = i + 1
-        if (st.reg.typetypeOf typeId: t) != ztypes.ztypetype.genericParam then {
-            tn: wideLiteralTarget :st :t
-            ln: ast.nodes.get i: nid
-            reportWideLiteral :st :ast n: ln target: tn.stringView
+        taken: (st.typing.wideConstTaken.get key: (ztyping.monostamp :mono node: nid)).or d: 0
+        t: st.typing.nodeTypeIn :mono :nid
+        if taken == 0 when (st.reg.typetypeOf typeId: t) != ztypes.ztypetype.genericParam then {
+            v: st.typing.nodeConstIn :mono :nid
+            tk: ztypes.numkindByName name: (wideConstTarget :st :t).stringView
+            sp: wideConstSpelling :ast :nid
+            m: constFitsKindMessage :st :v k: tk.kind spelling: sp.stringView
+            if m.length > 0 then {
+                n: ast.nodes.get i: nid
+                h: String
+                if tk.kind.i64Type then h = "an i64 cannot hold it: convert it to a wider type where one is meant"
+                (addErrorH
+                    :st
+                    nodeid: nid
+                    lineno: (nodeLine :n)
+                    colno: (nodeCol :n)
+                    e: zast.err.typeError
+                    msg: m
+                    note: String
+                    hint: h
+                    width: 1
+                )
+            }
         }
     }
 }
 
-# wideLiteralTarget -- the numeric type a literal stamped `t` lands in: its
-# typedef's base, or i64 for a literal nothing typed.
-wideLiteralTarget: function {st: zenv.ZSymbolTable.view t: ztypes.tid} out String is {
+# wideConstSpelling -- the literal a wide constant was written as, or "" when
+# it is a fold, which is named by its value.
+wideConstSpelling: function {ast: Ast.view nid: zast.nodeid} out String is {
+    n: ast.nodes.get i: nid
+    nm: atomNameId :ast :n
+    if nm.isZero then return ""
+    if (isNumericLiteralNameAt :ast ref: nm).not then return ""
+    return (zast.nameTextCopy :ast ref: nm)
+}
+
+# wideConstTarget -- the numeric type a constant stamped `t` lands in: its
+# typedef's base, or i64 for one nothing typed.
+wideConstTarget: function {st: zenv.ZSymbolTable.view t: ztypes.tid} out String is {
     if t.isZero or (t == st.reg.literalIntTid) then return "i64"
     b: t
     for (typedefBaseTidOf :st tid: b).isZero.not loop {
         b = typedefBaseTidOf :st tid: b
     }
     return (st.reg.nameOf tid: b)
-}
-
-# reportWideLiteral -- the literal at `n` against the type it lands in, reported
-# where it is written when it does not fit.
-reportWideLiteral: function {
-    st: zenv.ZSymbolTable
-    ast: Ast.view
-    n: astnode.view
-    target: StringView
-} is {
-    lex: zast.nameTextAt :ast ref: (atomNameId :ast :n)
-    m: literalFitsMessage lit: lex.stringView :target
-    if m.length == 0 then return
-    h: String
-    tk: ztypes.numkindByName name: target
-    if tk.has when tk.kind.i64Type when (lex.stringView.startsWith "-").not then {
-        h = "an i64 cannot hold it: write `\{lex}.u64` where a u64 is meant"
-    }
-    (addErrorH
-        :st
-        nodeid: (nodeId :n)
-        lineno: (nodeLine :n)
-        colno: (nodeCol :n)
-        e: zast.err.typeError
-        msg: m
-        note: String
-        hint: h
-        width: lex.length.u32.orPanic
-    )
 }
 
 # checkAtomid -- type a bare name: a scope entry (break/continue diverge),
@@ -41392,7 +41356,15 @@ checkUntypedConstFits: function {
     cf: st.typing.nodeConstIn mono: st.typing.curMonoStamp nid: valueNid
     num: cf.kind.ivalKind or cf.kind.fvalKind
     if num.not or cf.numTid.isZero.not then return false
-    fm: untypedFitsMessage :st v: cf target: dstTid
+    # A VALUE OUTSIDE I64 TAKES THE DESTINATION'S TYPE and is settled after the
+    # walk, by checkWideConstants: the i64 its operator gave it cannot hold it,
+    # and an operator's own operand is a destination only when no untyped fold
+    # consumes it -- which is decided after this, when the operator folds.
+    if cf.bigId != 0 then {
+        stampGate :st nid: valueNid tid: dstTid
+        return true
+    }
+    fm: constFitsType :st v: cf target: dstTid
     if fm.length > 0 then addError :st :nodeid :lineno :colno e: zast.err.typeError msg: fm
     return true
 }
@@ -53605,7 +53577,7 @@ renderConstFail: function {st: zenv.ZSymbolTable f: ztypes.constfail} is {
     }
     if f.kind.overflow then {
         noMethodMsg = "constant integer operation overflows"
-        hintText = "the compile-time evaluator works in i64; this result does not fit"
+        hintText = "an untyped integer constant holds up to 512 bits"
         if f.strId > 0 then {
             ovt: constStringAt :st id: f.strId
             noMethodMsg = "constant integer operation overflows \{ovt}"
@@ -53662,7 +53634,7 @@ renderConstFail: function {st: zenv.ZSymbolTable f: ztypes.constfail} is {
 # value" -- and a definition that yields no value is not a constant, so it took
 # the ALIAS chase instead and was emitted as its own type's name (`k: 0x10`
 # emitted `i64`).
-constLiteralValue: function {name: StringView} out ztypes.cval is {
+constLiteralValue: function {st: zenv.ZSymbolTable name: StringView} out ztypes.cval is {
     # the sign is the lexeme's, not the parser's: parseNumber reads a
     # MAGNITUDE, so `-1` is parsed as `1` and negated here
     neg: name.startsWith "-"
@@ -53672,7 +53644,7 @@ constLiteralValue: function {name: StringView} out ztypes.cval is {
     # read to the UNBOUNDED magnitude: the range that matters here is i64's,
     # and the most negative i64 has a magnitude one past it
     pv: ztypes.parseLiteralValue numstr: mag
-    if pv.ok.not then return ztypes.noConst
+    if pv.ok.not then return (constOfWideLiteral :st lex: name)
     if pv.isFloat then {
         fv: pv.fval
         # a product keeps the sign of `-0.0`, which `0.0 - fv` drops
@@ -53688,7 +53660,6 @@ constLiteralValue: function {name: StringView} out ztypes.cval is {
         mn = mn - 1
         return (ztypes.makeIntConst mn)
     }
-    # any other magnitude outside i64 is not a constant, never a wrapped value
     ivr: pv.ival.i64
     match (
         ivr
@@ -53696,9 +53667,118 @@ constLiteralValue: function {name: StringView} out ztypes.cval is {
         iv: ivr
         if neg then iv = 0 - iv
         return (ztypes.makeIntConst iv)
-    } case err then {
-        return ztypes.noConst
+    } case err then null
+    return (constOfWideLiteral :st lex: name)
+}
+
+# constOfWideLiteral -- an integer literal outside i64, exactly, in any radix,
+# up to the 512 bits an untyped integer holds; past them nothing is a constant.
+# A character literal is never one.
+constOfWideLiteral: function {st: zenv.ZSymbolTable lex: StringView} out ztypes.cval is {
+    if (lex.startsWith "0c") or (lex.startsWith "-0c") then return ztypes.noConst
+    b: constLiteralBig :lex
+    match b case some then return (constOfBig :st :b) case none then null
+    return ztypes.noConst
+}
+
+# constLiteralBig -- an integer literal read exactly, in any radix the lexer
+# accepts: its digits, `_` aside, through a BigInt. none past the 512 bits an
+# untyped integer holds, or for a lexeme that is not an integer literal.
+constLiteralBig: function {lex: StringView} out Option math.BigInt is {
+    neg: lex.startsWith "-"
+    i: u64
+    if neg then i = 1
+    base: literalRadix :lex at: i
+    if base != 10 then i = i + 2
+    digits: String
+    for i < lex.length loop {
+        b: (lex.byteAt :i).or d: 0
+        i = i + 1
+        # 95 is `_`, a separator that carries no value
+        if b != 95 then digits.appendByte :b
     }
+    if digits.length == 0 then return (Option math.BigInt).none
+    r: math.BigInt.parse text: digits.stringView :base
+    match (
+        r
+    ) case ok then {
+        v: r.take
+        if v.bitLength > untypedIntBits then return (Option math.BigInt).none
+        if neg then return ((Option math.BigInt).some v.neg)
+        return ((Option math.BigInt).some v)
+    } case err then {
+        return (Option math.BigInt).none
+    }
+}
+
+# literalRadix -- the base an integer lexeme's digits are in, read from the
+# prefix at `at`: `0x` 16, `0o` 8, `0b` 2, and 10 without one.
+literalRadix: function {lex: StringView at: u64} out u64 is {
+    if ((lex.byteAt i: at).or d: 0) != 48 then return 10
+    # 120 x, 111 o, 98 b: the letter after the leading 0
+    p: (lex.byteAt i: at + 1).or d: 0
+    if p == 120 then return 16
+    if p == 111 then return 8
+    if p == 98 then return 2
+    return 10
+}
+
+# untypedIntBits -- the magnitude an untyped integer constant holds, in bits:
+# Go's limit, wide enough for every intermediate of the fixed types up to 512
+# bits
+untypedIntBits: 512.u64
+
+# constInternBig -- the row of `b` in ZTyping.constBigInts: an equal value's
+# when one is there, else a new one. Scanned linearly, as constStrings is: a
+# program holds few integers outside i64.
+constInternBig: function {st: zenv.ZSymbolTable b: math.BigInt.view} out u32 is {
+    i: 1.u64
+    n: st.typing.constBigInts.length
+    for i < n loop {
+        e: st.typing.constBigInts.get :i
+        if e == b then return i.u32.orPanic
+        i = i + 1
+    }
+    st.typing.constBigInts.append b.copy
+    return n.u32.orPanic
+}
+
+# constOfBig -- the integer `b` as a constant: inline when it lies inside i64,
+# which keeps every i64 value in one spelling, else interned.
+constOfBig: function {st: zenv.ZSymbolTable b: math.BigInt.view} out ztypes.cval is {
+    iv: b.i64
+    match iv case ok then return (ztypes.makeIntConst iv) case err then null
+    c: ztypes.makeIntConst 0
+    c.bigId = constInternBig :st :b
+    return c
+}
+
+# constFitsKind -- the integer constant `v` lies in integer kind `k`'s range.
+constFitsKind: function {st: zenv.ZSymbolTable.view v: ztypes.cval k: ztypes.numkind} out bool is {
+    if v.bigId == 0 then return (ztypes.intValueFits v: v.ival :k)
+    return (bigFitsKind b: (constBigOf :st :v) :k)
+}
+
+# bigFitsKind -- `b` lies in integer kind `k`'s range: 0 to 2^w - 1 unsigned and
+# -2^(w-1) to 2^(w-1) - 1 signed, w its width. False for a kind that is not an
+# integer.
+bigFitsKind: function {b: math.BigInt.view k: ztypes.numkind} out bool is {
+    w: ztypes.intKindBits :k
+    if w == 0 then return false
+    if (ztypes.isSignedIntKind :k).not then return (b.sign >= 0) and (b.bitLength <= w)
+    if b.sign >= 0 then return b.bitLength < w
+    # below zero the bound is -2^(w-1), the one magnitude of w bits that is a
+    # power of two
+    m: b.abs
+    if m.bitLength < w then return true
+    return (m.bitLength == w) and (m.trailingZeros == (w - 1))
+}
+
+# constBigOf -- an integer constant's value as a BigInt, inline or interned.
+constBigOf: function {st: zenv.ZSymbolTable.view v: ztypes.cval} out math.BigInt is {
+    if v.bigId == 0 then return (math.BigInt from: v.ival)
+    e: st.typing.constBigInts.get i: v.bigId
+    return e.copy
 }
 
 # constInternString -- the id of `text` in ZTyping.constStrings. The scan
@@ -53730,10 +53810,11 @@ constStringAt: function {st: zenv.ZSymbolTable.view id: u32} out String is {
 
 # constFloatOf -- an integer or float value as an f64, for a mixed-kind binop.
 # `has` false means the value is neither.
-constFloatOf: function {v: ztypes.cval} out ffoldval is {
+constFloatOf: function {st: zenv.ZSymbolTable.view v: ztypes.cval} out ffoldval is {
     if v.kind.fvalKind then return (ffoldval has: true val: v.fval)
     if v.kind.ivalKind then {
         cf: v.ival.f64
+        if v.bigId != 0 then cf = (constBigOf :st :v).f64
         match (
             cf
         ) case ok then {
@@ -53773,35 +53854,89 @@ numKindOfTid: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out ztypes.s
     return (ztypes.numkindByName name: tn)
 }
 
-# untypedFitsMessage -- whether the untyped literal value `v` fits the numeric
-# type `target`, in the words a body uses for a written literal: "" when it
-# does. Asked by value: a folded value has no lexeme of its own, and the most
-# negative i64 has none a literal reader accepts.
-untypedFitsMessage: function {
+# constFitsType -- whether the untyped number `v` fits the numeric type
+# `target`, in the words a body uses for a written literal: "" when it does. The
+# one value check every landing makes -- an argument, an assignment, a return, a
+# conversion, a default -- and its message names the DESTINATION. Asked by
+# value: a folded value has no lexeme of its own, and the most negative i64 has
+# none a literal reader accepts.
+constFitsType: function {
     st: zenv.ZSymbolTable.view
     v: ztypes.cval
     target: ztypes.tid
 } out String is {
     tk: numKindOfTid :st tid: target
     if tk.has.not then return ""
-    isFloat: ztypes.isFloatKind k: tk.kind
+    return (constFitsKindMessage :st :v k: tk.kind spelling: "")
+}
+
+# constFitsKindMessage -- constFitsType against a numeric kind, naming the value
+# as `spelling` when it was written as a literal, else in decimal.
+constFitsKindMessage: function {
+    st: zenv.ZSymbolTable.view
+    v: ztypes.cval
+    k: ztypes.numkind
+    spelling: StringView
+} out String is {
+    isFloat: ztypes.isFloatKind :k
     if v.kind.ivalKind then {
-        if isFloat when (ztypes.intFitsFloat value: v.ival k: tk.kind) then return ""
+        if isFloat when (constIntFitsFloat :st :v :k) then return ""
+        if isFloat.not when (constFitsKind :st :v :k) then return ""
+        vt: spelling.string
+        if vt.length == 0 then vt = constIntText :st :v
         if isFloat then {
-            kn: ztypes.numkindName k: tk.kind
-            return "Value \{v.ival} not exactly representable as \{kn}"
+            kn: ztypes.numkindName :k
+            return "Value \{vt} not exactly representable as \{kn}"
         }
-        if (ztypes.intValueFits v: v.ival k: tk.kind) then return ""
-        vt: "\{v.ival}"
-        return (ztypes.rangeErr value: vt.stringView k: tk.kind r: (ztypes.rangeOf k: tk.kind))
+        return (intRangeErr value: vt.stringView :k)
     }
     if v.kind.fvalKind.not then return ""
     if isFloat.not then {
         return "Numeric type specifier must be float for literals with decimal points"
     }
-    if (ztypes.floatFitsFloat value: v.fval k: tk.kind) then return ""
-    fkn: ztypes.numkindName k: tk.kind
+    if (ztypes.floatFitsFloat value: v.fval :k) then return ""
+    fkn: ztypes.numkindName :k
+    if spelling.length > 0 then return "Value \{spelling} not exactly representable as \{fkn}"
     return "Value \{v.fval} not exactly representable as \{fkn}"
+}
+
+# intRangeErr -- the out-of-range report for integer kind `k`, its bounds spelled
+# out. A 128-bit kind's are computed: its high bound is past the u64 rangeOf
+# holds.
+intRangeErr: function {value: StringView k: ztypes.numkind} out String is {
+    r: ztypes.rangeOf :k
+    if r.has then return (ztypes.rangeErr :value :k :r)
+    w: ztypes.intKindBits :k
+    one: math.BigInt from: 1
+    lo: math.BigInt from: 0
+    hi: (one << w) - one
+    if (ztypes.isSignedIntKind :k) then {
+        lo = (one << (w - 1)).neg
+        hi = (one << (w - 1)) - one
+    }
+    # the bounds join with `..`, as rangeErr writes them
+    m: "Value \{value} out of range for \{ztypes.numkindName :k} (\{lo.string}"
+    m.append ".."
+    m.append hi.string
+    m.append ")"
+    return m
+}
+
+# constIntText -- an integer constant's value in decimal.
+constIntText: function {st: zenv.ZSymbolTable.view v: ztypes.cval} out String is {
+    if v.bigId == 0 then return "\{v.ival}"
+    return (constBigOf :st :v).string
+}
+
+# constIntFitsFloat -- the integer constant `v` is exactly a value of float kind
+# `k`: its significant bits fit the mantissa and its magnitude the range.
+constIntFitsFloat: function {
+    st: zenv.ZSymbolTable.view v: ztypes.cval k: ztypes.numkind
+} out bool is {
+    if v.bigId == 0 then return (ztypes.intFitsFloat value: v.ival :k)
+    b: constBigOf :st :v
+    if b.bitLength > (ztypes.floatMaxBits :k) then return false
+    return (b.bitLength - b.trailingZeros) <= (ztypes.mantissaOf :k)
 }
 
 # constStandsInMessage -- whether the folded number `v` may stand where a
@@ -53814,7 +53949,7 @@ constStandsInMessage: function {
     v: ztypes.cval
     target: ztypes.tid
 } out String is {
-    if v.numTid.isZero then return (untypedFitsMessage :st :v :target)
+    if v.numTid.isZero then return (constFitsType :st :v :target)
     tgtId: zast.nameid
     tgtName: st.reg.nameViewOf tid: target
     tgtId = zast.poolFind pool: ast.names text: tgtName
@@ -53892,21 +54027,14 @@ constOfTypedFold: function {
         )
     }
     if lv.kind.ivalKind.not or rv.kind.ivalKind.not then return ztypes.noConst
-    if (isComparisonOp name: op) then return (constCompareInt
-        :st
-        :scope
-        :ast
-        :op
-        a: lv.ival
-        b: rv.ival
-    )
+    if (isComparisonOp name: op) then return (constCompareInt :st :scope :ast :op :lv :rv)
     aop: arithOpOf :opnId
     if aop.shl or aop.shr then {
-        return (constTypedShift op: aop a: lv.ival b: rv.ival k: gk.kind numTid: gov)
+        return (constTypedShift :st op: aop :lv :rv k: gk.kind numTid: gov)
     }
-    r: constArithInt :st nodeid: nid lineno: ln colno: co op: aop a: lv.ival b: rv.ival
+    r: constArithInt :st nodeid: nid lineno: ln colno: co op: aop :lv :rv
     if r.kind.none then return r
-    if (ztypes.intValueFits v: r.ival k: gk.kind).not then {
+    if (constFitsKind :st v: r k: gk.kind).not then {
         gn: st.reg.nameOf tid: gov
         (constFailRecord
             :st
@@ -53922,30 +54050,70 @@ constOfTypedFold: function {
     return (ztypes.typedConst c: r numTid: gov)
 }
 
-# constTypedShift -- a shift of a typed integer constant, in that type's width.
-# A 128-bit shift is left to run: the evaluator holds 64 bits.
+# constTypedShift -- a shift of a typed integer constant, in that type's width:
+# a count of the width or more, or a negative one the run time reads as
+# unsigned, shifts every bit out; a left shift keeps the low bits.
 constTypedShift: function {
-    op: arithop a: i64 b: i64 k: ztypes.numkind numTid: ztypes.tid
+    st: zenv.ZSymbolTable
+    op: arithop
+    lv: ztypes.cval
+    rv: ztypes.cval
+    k: ztypes.numkind
+    numTid: ztypes.tid
 } out ztypes.cval is {
     bits: ztypes.intKindBits :k
-    if (bits == 0) or (bits > 64) then return ztypes.noConst
-    sh: constShiftInt :op :a :b :bits signed: (ztypes.isSignedIntKind :k)
-    if sh.none then return ztypes.noConst
-    return (ztypes.typedConst c: ztypes.makeIntConst sh :numTid)
+    if bits == 0 then return ztypes.noConst
+    signed: ztypes.isSignedIntKind :k
+    if lv.bigId == 0 when rv.bigId == 0 when bits <= 64 then {
+        sh: constShiftInt :op a: lv.ival b: rv.ival :bits :signed
+        match (
+            sh
+        ) case some then {
+            return (ztypes.typedConst c: ztypes.makeIntConst sh :numTid)
+        } case none then null
+    }
+    a: constBigOf :st v: lv
+    past: (rv.bigId != 0) or (rv.ival < 0) or (rv.ival >= bits.i64.orPanic)
+    r: math.BigInt from: 0
+    if past then {
+        if op.shr when signed when a.sign < 0 then r = math.BigInt from: -1
+    } else if op.shl then {
+        r = wrapBig b: a << rv.ival.u64.orPanic :bits :signed
+    } else {
+        r = a >> rv.ival.u64.orPanic
+    }
+    return (ztypes.typedConst c: (constOfBig :st b: r) :numTid)
+}
+
+# wrapBig -- `b` read as an integer of `bits` bits, signed or not: its low bits
+# kept, taking the type's sign.
+wrapBig: function {b: math.BigInt.view bits: u64 signed: bool} out math.BigInt is {
+    span: (math.BigInt from: 1) << bits
+    low: b & (span - (math.BigInt from: 1))
+    if signed when low.bitLength == bits then return low - span
+    return low
 }
 
 # constIntNot -- `not` on an integer constant: its bits inverted, in its own
-# width when it has a type and in i64 when it has none. A 128-bit one is left
-# to run.
-constIntNot: function {st: zenv.ZSymbolTable.view v: ztypes.cval} out ztypes.cval is {
-    if v.numTid.isZero then return (ztypes.makeIntConst v.ival.not)
+# width when it has a type, and -v - 1 exactly when it has none.
+constIntNot: function {st: zenv.ZSymbolTable v: ztypes.cval} out ztypes.cval is {
+    if v.numTid.isZero when v.bigId == 0 then return (ztypes.makeIntConst v.ival.not)
+    if v.numTid.isZero then return (constOfBig :st b: (constBigOf :st :v).not)
     k: numKindOfTid :st tid: v.numTid
     if k.has.not then return ztypes.noConst
     bits: ztypes.intKindBits k: k.kind
-    if (bits == 0) or (bits > 64) then return ztypes.noConst
-    w: wrapToWidth v: v.ival.not :bits signed: (ztypes.isSignedIntKind k: k.kind)
-    if w.none then return ztypes.noConst
-    return (ztypes.typedConst c: ztypes.makeIntConst w numTid: v.numTid)
+    if bits == 0 then return ztypes.noConst
+    signed: ztypes.isSignedIntKind k: k.kind
+    if v.bigId == 0 when bits <= 64 then {
+        w: wrapToWidth v: v.ival.not :bits :signed
+        match (
+            w
+        ) case some then {
+            return (ztypes.typedConst c: ztypes.makeIntConst w numTid: v.numTid)
+        } case none then null
+    }
+    r: wrapBig b: (constBigOf :st :v).not :bits :signed
+    return (ztypes.typedConst c: (constOfBig :st b: r) numTid: v.numTid)
 }
 
 # constOfTypedFloatFold -- the float half of constOfTypedFold: f64 as the
@@ -53966,8 +54134,8 @@ constOfTypedFloatFold: function {
     ln: u32
     co: u32
 } out ztypes.cval is {
-    lf: constFloatOf v: lv
-    rf: constFloatOf v: rv
+    lf: constFloatOf :st v: lv
+    rf: constFloatOf :st v: rv
     if lf.has.not or rf.has.not then return ztypes.noConst
     if k.f128Type then return ztypes.noConst
     if (isComparisonOp name: op) then return (constCompareFloat
@@ -54127,7 +54295,7 @@ constOfConversion: function {
         return ztypes.noConst
     }
     if v.numTid.isZero then {
-        fm: untypedFitsMessage :st :v :target
+        fm: constFitsType :st :v :target
         if fm.length > 0 then {
             constFailMismatch :st :nid :ln :co msg: fm.stringView
             return ztypes.noConst
@@ -54136,7 +54304,7 @@ constOfConversion: function {
     c: v
     tk: (numKindOfTid :st tid: target).kind
     if v.kind.ivalKind when (ztypes.isFloatKind k: tk) then {
-        c = ztypes.makeFloatConst (nearestF64 i: v.ival)
+        c = ztypes.makeFloatConst (constNearestF64 :st :v)
     }
     if tk.f128Type then c.strId = f128Spelling :st :ast :v :lexemeId
     return (ztypes.typedConst :c numTid: target)
@@ -54153,12 +54321,21 @@ f128Spelling: function {
     lexemeId: zast.nameid
 } out u32 is {
     if v.kind.ivalKind then {
-        digits: "\{v.ival}.0"
+        digits: constIntText :st :v
+        digits.append ".0"
         return (constInternString :st text: digits.stringView)
     }
     if lexemeId.isZero then return 0
     lx: zast.nameTextAt :ast ref: lexemeId
     return (constInternString :st text: lx.stringView)
+}
+
+# constNearestF64 -- the f64 nearest an integer constant: an i64 by its halves,
+# a wider one through its decimal text, which the C library rounds correctly.
+constNearestF64: function {st: zenv.ZSymbolTable.view v: ztypes.cval} out f64 is {
+    if v.bigId == 0 then return (nearestF64 i: v.ival)
+    t: constIntText :st :v
+    return (t.stringView.parseF64.or d: 0.0)
 }
 
 # nearestF64 -- the f64 nearest an i64. Each 32-bit half converts exactly, so
@@ -54427,12 +54604,50 @@ constShiftInt: function {op: arithop a: i64 b: i64 bits: u64 signed: bool} out o
     return (optionval.some a >> b)
 }
 
-# constArithInt -- fold an arithmetic operator over two integers. Reports the
-# two failures the spec names: division by a constant zero, and a result the
-# evaluator cannot represent. Overflow is checked against i64, the range the
-# evaluator works in -- a value carries no target type until it materialises,
-# so a narrower target's overflow is still the materialiser's business.
+# constArithInt -- fold an arithmetic operator over two integers, exactly.
+# Reports the two failures the spec names: division by a constant zero, and a
+# result past the 512 bits an untyped integer holds. Two values inside i64 take
+# the i64 path, and one that overflows it is computed again through BigInt; a
+# value carries no target type until it lands, so a narrower target's range is
+# the landing's business, and a typed operation's is constOfTypedFold's.
 constArithInt: function {
+    st: zenv.ZSymbolTable
+    nodeid: zast.nodeid
+    lineno: u32
+    colno: u32
+    op: arithop
+    lv: ztypes.cval
+    rv: ztypes.cval
+} out ztypes.cval is {
+    if lv.bigId == 0 when rv.bigId == 0 then {
+        fast: constArithI64 :st :nodeid :lineno :colno :op a: lv.ival b: rv.ival
+        if fast.done then return fast.v
+    }
+    # a shift past i64 waits for exact shifts
+    if op.shl or op.shr then return ztypes.noConst
+    return (constArithBig
+        :st
+        :nodeid
+        :lineno
+        :colno
+        :op
+        a: (constBigOf :st v: lv)
+        b: (constBigOf :st v: rv)
+    )
+}
+
+# arithfast -- what the i64 path made of an operation: its value, or not done
+# when the result lies outside i64 and the exact path must answer
+arithfast: record {
+    # the i64 path answered, a failure included
+    done: bool
+    # its answer
+    v: ztypes.cval
+}
+
+# constArithI64 -- constArithInt over two i64s, answering only where i64 holds
+# the result: an overflow is handed back undone for BigInt to compute.
+constArithI64: function {
     st: zenv.ZSymbolTable
     nodeid: zast.nodeid
     lineno: u32
@@ -54440,45 +54655,30 @@ constArithInt: function {
     op: arithop
     a: i64
     b: i64
-} out ztypes.cval is {
+} out arithfast is {
     mx: 9223372036854775807
     mn: 0 - 9223372036854775807 - 1
-    ovk: ztypes.constfailkind.overflow
+    undone: arithfast done: false v: ztypes.noConst
     if op.add then {
-        if b > 0 when a > (mx - b) then {
-            constFailRecord :st kind: ovk :nodeid :lineno :colno width: 1
-            return ztypes.noConst
-        }
-        if b < 0 when a < (mn - b) then {
-            constFailRecord :st kind: ovk :nodeid :lineno :colno width: 1
-            return ztypes.noConst
-        }
-        return (ztypes.makeIntConst a + b)
+        if b > 0 when a > (mx - b) then return undone
+        if b < 0 when a < (mn - b) then return undone
+        return (arithfast done: true v: ztypes.makeIntConst a + b)
     }
     if op.sub then {
-        if b < 0 when a > (mx + b) then {
-            constFailRecord :st kind: ovk :nodeid :lineno :colno width: 1
-            return ztypes.noConst
-        }
-        if b > 0 when a < (mn + b) then {
-            constFailRecord :st kind: ovk :nodeid :lineno :colno width: 1
-            return ztypes.noConst
-        }
-        return (ztypes.makeIntConst a - b)
+        if b < 0 when a > (mx + b) then return undone
+        if b > 0 when a < (mn + b) then return undone
+        return (arithfast done: true v: ztypes.makeIntConst a - b)
     }
     if op.mul then {
-        if a == 0 then return (ztypes.makeIntConst 0)
-        if b == 0 then return (ztypes.makeIntConst 0)
+        if a == 0 then return (arithfast done: true v: ztypes.makeIntConst 0)
+        if b == 0 then return (arithfast done: true v: ztypes.makeIntConst 0)
         # -fwrapv makes the product defined, so dividing it back is a valid
         # test; MIN * -1 wraps to itself and passes it, hence the pair below.
         bad: (a == (0 - 1)) and (b == mn) or ((b == (0 - 1)) and (a == mn))
         r: a * b
         if (r / a) != b then bad = true
-        if bad then {
-            constFailRecord :st kind: ovk :nodeid :lineno :colno width: 1
-            return ztypes.noConst
-        }
-        return (ztypes.makeIntConst r)
+        if bad then return undone
+        return (arithfast done: true v: ztypes.makeIntConst r)
     }
     if op.div then {
         if b == 0 then {
@@ -54490,13 +54690,10 @@ constArithInt: function {
                 :colno
                 width: 1
             )
-            return ztypes.noConst
+            return (arithfast done: true v: ztypes.noConst)
         }
-        if a == mn when b == (0 - 1) then {
-            constFailRecord :st kind: ovk :nodeid :lineno :colno width: 1
-            return ztypes.noConst
-        }
-        return (ztypes.makeIntConst a / b)
+        if a == mn when b == (0 - 1) then return undone
+        return (arithfast done: true v: ztypes.makeIntConst a / b)
     }
     if op.rem then {
         if b == 0 then {
@@ -54508,21 +54705,72 @@ constArithInt: function {
                 :colno
                 width: 1
             )
-            return ztypes.noConst
+            return (arithfast done: true v: ztypes.noConst)
         }
         # the remainder is 0 whatever C makes of MIN % -1
-        if b == (0 - 1) then return (ztypes.makeIntConst 0)
-        return (ztypes.makeIntConst a % b)
+        if b == (0 - 1) then return (arithfast done: true v: ztypes.makeIntConst 0)
+        return (arithfast done: true v: ztypes.makeIntConst a % b)
     }
-    if op.band then return (ztypes.makeIntConst a & b)
-    if op.bor then return (ztypes.makeIntConst a | b)
-    if op.bxor then return (ztypes.makeIntConst a ^ b)
+    if op.band then return (arithfast done: true v: ztypes.makeIntConst a & b)
+    if op.bor then return (arithfast done: true v: ztypes.makeIntConst a | b)
+    if op.bxor then return (arithfast done: true v: ztypes.makeIntConst a ^ b)
     if op.shl or op.shr then {
         sh: constShiftInt :op :a :b bits: 64 signed: true
-        if sh.none then return ztypes.noConst
-        return (ztypes.makeIntConst sh)
+        if sh.none then return (arithfast done: true v: ztypes.noConst)
+        return (arithfast done: true v: ztypes.makeIntConst sh)
     }
-    return ztypes.noConst
+    return (arithfast done: true v: ztypes.noConst)
+}
+
+# constArithBig -- constArithInt through BigInt, for an operand or a result
+# outside i64. Division truncates and the remainder takes the dividend's sign,
+# as in i64; the bitwise operators read a negative value as two's complement of
+# unbounded width, which agrees with i64's wherever i64 holds both operands.
+constArithBig: function {
+    st: zenv.ZSymbolTable
+    nodeid: zast.nodeid
+    lineno: u32
+    colno: u32
+    op: arithop
+    a: math.BigInt.view
+    b: math.BigInt.view
+} out ztypes.cval is {
+    if op.div or op.rem when b.sign == 0 then {
+        (constFailRecord
+            :st
+            kind: ztypes.constfailkind.divZero
+            :nodeid
+            :lineno
+            :colno
+            width: 1
+        )
+        return ztypes.noConst
+    }
+    r: math.BigInt from: 0
+    if op.add then {
+        r = a + b
+    } else if op.sub then {
+        r = a - b
+    } else if op.mul then {
+        r = a * b
+    } else if op.div then {
+        r = a / b
+    } else if op.rem then {
+        r = a % b
+    } else if op.band then {
+        r = a & b
+    } else if op.bor then {
+        r = a | b
+    } else if op.bxor then {
+        r = a ^ b
+    } else {
+        return ztypes.noConst
+    }
+    if r.bitLength > untypedIntBits then {
+        constFailRecord :st kind: ztypes.constfailkind.overflow :nodeid :lineno :colno width: 1
+        return ztypes.noConst
+    }
+    return (constOfBig :st b: r)
 }
 
 # constCompareInt / constCompareFloat -- the six comparisons, yielding a bool
@@ -54619,9 +54867,16 @@ constCompareInt: function {
     st: zenv.ZSymbolTable
     scope: ztypes.declid
     op: StringView
-    a: i64
-    b: i64
+    lv: ztypes.cval
+    rv: ztypes.cval
 } out ztypes.cval is {
+    a: lv.ival
+    b: rv.ival
+    # a value outside i64 compares through BigInt, as its sign against 0
+    if (lv.bigId != 0) or (rv.bigId != 0) then {
+        a = (constBigOf :st v: lv).compare rhs: (constBigOf :st v: rv)
+        b = 0
+    }
     if op == "==" then return (boolConst :st :scope :ast v: a == b)
     if op == "!=" then return (boolConst :st :scope :ast v: a != b)
     if op == "<" then return (boolConst :st :scope :ast v: a < b)
@@ -55288,7 +55543,8 @@ constArmRead: function {
 constValEq: function {st: zenv.ZSymbolTable.view a: ztypes.cval b: ztypes.cval} out ffoldval is {
     if a.kind.ivalKind when b.kind.ivalKind then {
         r: 0.0
-        if a.ival == b.ival then r = 1.0
+        # interned by value, so one value has one spelling
+        if a.ival == b.ival when a.bigId == b.bigId then r = 1.0
         return (ffoldval has: true val: r)
     }
     if a.kind.armKind when b.kind.armKind then {
@@ -55852,6 +56108,8 @@ constStringMethod: function {
         if t.kind.ivalKind.not then return ztypes.noConst
         sz: s.length.i64.orPanic
         bad: (f.ival < 0) or (t.ival < 0) or (f.ival > sz) or (t.ival > sz) or (f.ival > t.ival)
+        # an index outside i64 is past any string's end
+        if (f.bigId != 0) or (t.bigId != 0) then bad = true
         if bad then {
             (constFailRecord
                 :st
@@ -55923,21 +56181,19 @@ constOfBinopFold: function {
         return (constOfTypedFold :st :scope :ast :lv :rv :op :opnId :nid :ln :co)
     }
     if lv.kind.ivalKind when rv.kind.ivalKind then {
-        if (isComparisonOp name: op) then {
-            return (constCompareInt :st :scope :ast :op a: lv.ival b: rv.ival)
-        }
+        if (isComparisonOp name: op) then return (constCompareInt :st :scope :ast :op :lv :rv)
         return (constArithInt
             :st
             nodeid: nid
             lineno: ln
             colno: co
             op: (arithOpOf :opnId)
-            a: lv.ival
-            b: rv.ival
+            :lv
+            :rv
         )
     }
-    lf: constFloatOf v: lv
-    rf: constFloatOf v: rv
+    lf: constFloatOf :st v: lv
+    rf: constFloatOf :st v: rv
     if lf.has when rf.has then {
         if (isComparisonOp name: op) then {
             return (constCompareFloat :st :scope :ast :op a: lf.val b: rf.val)
@@ -56131,7 +56387,7 @@ constOfNumericTypedef: function {
         )
         return ztypes.noConst
     }
-    fm: untypedFitsMessage :st :v target: base
+    fm: constFitsType :st :v target: base
     if fm.length > 0 then {
         addError :st nodeid: valueId lineno: vl colno: vc e: zast.err.typeError msg: fm
         return ztypes.noConst
@@ -56259,7 +56515,7 @@ constOfNamedBase: function {
             lit: ztypes.noConst
             # the literal is parsed from its spelling, read through a borrow
             ptT: zast.nameTextAt :ast ref: ptId
-            lit = constLiteralValue name: ptT.stringView
+            lit = constLiteralValue :st name: ptT.stringView
             ptT.drop
             return (constOfConversion
                 :st
@@ -56677,7 +56933,7 @@ evalConstNode: function {
         if nv.length == 0 then noName = true
         if noName.not then {
             isLit = isNumericLiteralName name: nv.stringView
-            if isLit then litVal = constLiteralValue name: nv.stringView
+            if isLit then litVal = constLiteralValue :st name: nv.stringView
         }
         nv.drop
         if noName then return ztypes.noConst
@@ -56819,10 +57075,15 @@ callOnFoldedString: function {
 # the way is restored rather than rendered.
 #
 # Two failures are not "does not fold" but "has no value": a constant integer
-# operation that overflows, and a division by a constant zero. Their operands
-# are constants wherever they are written, so the run time has nothing to add
-# -- C would wrap the one and trap on the other. They are refused here as a
-# unit-level definition refuses them: constant folding is the same everywhere.
+# operation that overflows -- its own type, or the 512 bits an untyped integer
+# holds -- and a division by a constant zero. Their operands are constants
+# wherever they are written, so the run time has nothing to add -- C would wrap
+# the one and trap on the other. They are refused here as a unit-level
+# definition refuses them: constant folding is the same everywhere.
+#
+# AN UNTYPED INTEGER OUTSIDE I64 is recorded for checkWideConstants, and the
+# operands a fold consumed are marked taken: an untyped intermediate is exact,
+# and only where the whole expression lands is its value checked.
 stampConstAt: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
@@ -56839,29 +57100,42 @@ stampConstAt: function {
     got: st.typing.constFail
     st.typing.constFail = held
     if cv.kind.none then {
-        hasNone: got.kind.overflow and (overflowIsReal :st :ast f: got)
+        hasNone: got.kind.overflow
         if got.kind.divZero then hasNone = integerDivision :st :ast f: got
         if hasNone then renderConstFail :st f: got
         return
     }
-    st.typing.setNodeConstIn mono: st.typing.curMonoStamp :nid value: cv
+    mono: st.typing.curMonoStamp
+    st.typing.setNodeConstIn :mono :nid value: cv
+    markOperandsTaken :st :ast :mono :nid
+    if cv.bigId != 0 when cv.numTid.isZero then {
+        st.typing.wideConstNodes.append from: nid
+        st.typing.wideConstMonos.append from: mono
+    }
 }
 
-# overflowIsReal -- an overflow the evaluator recorded belongs to the operation
-# when it was checked against the operation's own type (the failure names it),
-# or when that type lies inside i64, the range the evaluator works in. A u64,
-# i128 or u128 operation the evaluator cannot hold may still fit its type --
-# `9223372036854775807.u64 + 1.u64` does -- and that is the evaluator's limit,
-# not the program's: the operation is left to run.
-overflowIsReal: function {
-    st: zenv.ZSymbolTable.view ast: Ast.view f: ztypes.constfail
-} out bool is {
-    if f.strId > 0 then return true
-    br: binRefAt :ast nid: f.nodeid
-    if br.nid.isZero then return true
-    mono: st.typing.curMonoStamp
-    if (constBeyondI64 :st v: (st.typing.nodeConstIn :mono nid: br.lhs)) then return false
-    return (constBeyondI64 :st v: (st.typing.nodeConstIn :mono nid: br.rhs)).not
+# markOperandsTaken -- the operands of the fold at `nid` are taken: its value
+# is computed from theirs, so an untyped one outside i64 lands nowhere itself.
+# The operands of an infix operator, or the base of a member read (`.not`, a
+# conversion, which checked the value against its target).
+markOperandsTaken: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    mono: ztypes.tid
+    nid: zast.nodeid
+} is {
+    br: binRefAt :ast :nid
+    if br.nid.isZero.not then {
+        st.typing.wideConstTaken.set key: (ztyping.monostamp :mono node: br.lhs) value: 1
+        st.typing.wideConstTaken.set key: (ztyping.monostamp :mono node: br.rhs) value: 1
+        return
+    }
+    n: ast.nodes.get i: nid
+    match (
+        n
+    ) case dottedpath then {
+        st.typing.wideConstTaken.set key: (ztyping.monostamp :mono node: n.parent) value: 1
+    } else null
 }
 
 # integerDivision -- the recorded division by zero divides integers. A float
@@ -56873,15 +57147,6 @@ integerDivision: function {
     if br.nid.isZero then return true
     mono: st.typing.curMonoStamp
     return (st.typing.nodeConstIn :mono nid: br.lhs).kind.ivalKind
-}
-
-# constBeyondI64 -- a folded number typed u64, i128 or u128: a type whose range
-# the evaluator's i64 does not cover.
-constBeyondI64: function {st: zenv.ZSymbolTable.view v: ztypes.cval} out bool is {
-    if v.numTid.isZero then return false
-    k: numKindOfTid :st tid: v.numTid
-    if k.has.not then return false
-    return k.kind.u64Type or k.kind.u128Type or k.kind.i128Type
 }
 
 # useSiteAsks -- whether a use site's row is worth asking the evaluator about.
@@ -57805,7 +58070,6 @@ resolveConstantMember: function {
     ) then constFailClear :st
     reportPendingConstFail :st
     if cvv.kind.none then reportMissingQualifiedMember :st :scope :ast :defnId
-    if cvv.kind.none then refuseWideConstant :st :ast :defnId
     if cvv.kind.none when (isComputedConstantDef :ast nid: defnId) then {
         (diagnoseUnfoldedConstant
             :st
@@ -57816,33 +58080,6 @@ resolveConstantMember: function {
             :defnId
         )
     }
-}
-
-# refuseWideConstant -- a unit constant written as an integer literal, bare or
-# converted (`1.u64`), whose value lies outside i64: the compile-time evaluator
-# holds an i64, so the definition has no value -- and a definition without one
-# would be spelled as its type.
-refuseWideConstant: function {st: zenv.ZSymbolTable ast: Ast.view defnId: zast.nodeid} is {
-    if defnId.isZero then return
-    litId: defnId
-    dn: ast.nodes.get i: defnId
-    if dn.dottedpath then litId = dn.parent
-    ln: ast.nodes.get i: litId
-    nm: atomNameId :ast n: ln
-    if nm.isZero then return
-    if (isNumericLiteralNameAt :ast ref: nm).not then return
-    lex: zast.nameTextAt :ast ref: nm
-    if (ztypes.literalBeyondU64 numstr: lex.stringView) then return
-    if (ztypes.literalBeyondI64 numstr: lex.stringView).not then return
-    (reportConstError
-        :st
-        nodeid: (nodeId n: ln)
-        lineno: (nodeLine n: ln)
-        colno: (nodeCol n: ln)
-        width: lex.length.u32.orPanic
-        msg: "constant \{lex} is outside i64"
-        hint: "the compile-time evaluator works in i64; a constant beyond it has no value yet"
-    )
 }
 
 # diagnoseUnfoldedConstant -- a unit-level definition built from an operator or
@@ -60982,7 +61219,7 @@ typecheck: function {
         checkSpecStandIns ast: program :st
         checkBareGenericReturns ast: program :st
         reportTypedefClashes ast: program :st
-        checkWideLiterals ast: program :st
+        checkWideConstants ast: program :st
         stampAliasValues :st ast: program
         stampGenericBounds :st ast: program
         stampGenericParams :st ast: program

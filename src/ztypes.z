@@ -28,6 +28,7 @@ public: unit {
     :absI64
     :bitsI64
     :i64Bits
+    :floatMaxBits
     :intFitsFloat
     :intKindBits
     :intValueFits
@@ -37,6 +38,7 @@ public: unit {
     :makeFloatConst
     :makeIntConst
     :makeStrConst
+    :mantissaOf
     :mangleMemberPrefix
     :mangleVarName
     :newRegistry
@@ -44,8 +46,6 @@ public: unit {
     :negativeLiteralFits
     :numkindByName
     :parseLiteralValue
-    :literalBeyondI64
-    :literalBeyondU64
     :deftarget
     :noDefTarget
     :parseNumber
@@ -697,16 +697,21 @@ NumRange: class {
 # about to write. A class here would make every read hold a lock on the map.
 #
 # The string payload is an index into ZTyping.constStrings (0 = none: the
-# sentinel row holds the empty text)
-# because a valtype owns no heap. An arm is identified by its OWNING type plus
-# its name-pool id, not by an ordinal: the emitter's one arm-to-tag helper
-# takes a name, and an ordinal would rot the first time an arm was inserted.
+# sentinel row holds the empty text) because a valtype owns no heap, and an
+# integer outside i64 is an index into ZTyping.constBigInts for the same reason.
+# An arm is identified by its OWNING type plus its name-pool id, not by an
+# ordinal: the emitter's one arm-to-tag helper takes a name, and an ordinal
+# would rot the first time an arm was inserted.
 cval: record {
     # which of the payloads below is meaningful. Read it first; the rest are
     # zero unless it names them
     kind: zconstkind
-    # the integer value
+    # the integer value, when it lies inside i64
     ival: i64
+    # an integer outside i64: its 1-based row in ZTyping.constBigInts, 0 when
+    # the value is `ival`. A value inside i64 is ALWAYS inline, so two integers
+    # are equal exactly when their ival and bigId both are
+    bigId: u32
     # the float value
     fval: f64
     # the string, as a 1-based index into the constant pool so 0 means none
@@ -2094,6 +2099,7 @@ noConst: function out cval is {
     return (cval
         kind: zconstkind.none
         ival: 0
+        bigId: 0
         fval: 0.0
         strId: 0
         armTid: noTid
@@ -2265,6 +2271,17 @@ mantissaOf: function {k: numkind} out u64 is {
     } else {
         return 0
     }
+}
+
+# floatMaxBits -- the bit length of the largest integer float kind `k` holds:
+# 65504 is f16's largest finite value, and each wider kind's exponent reaches
+# 2^127, 2^1023 and 2^16383. 0 for a kind that is not a float.
+floatMaxBits: function {k: numkind} out u64 is {
+    if k.f16Type then return 16
+    if k.f32Type then return 128
+    if k.f64Type then return 1024
+    if k.f128Type then return 16384
+    return 0
 }
 
 # the representable value range of numeric kind `k`.
@@ -2771,30 +2788,6 @@ parseNumberWith: function {numstr: StringView hasK: bool k: numkind} out ParsedN
 beyondU64Number: function {numstr: StringView kind: numkind} out ParsedNumber is {
     em: rangeErr value: numstr k: numkind.u64Type r: (rangeOf k: numkind.u64Type)
     return (ParsedNumber :kind isFloat: false ival: 0 fval: 0.0 err: em beyond: true)
-}
-
-# literalBeyondU64 -- the integer literal's magnitude (its sign aside) passes
-# u64, so no type can take it yet.
-literalBeyondU64: function {numstr: StringView} out bool is {
-    return (parseNumber numstr: (literalMagnitude :numstr)).beyond
-}
-
-# literalBeyondI64 -- the integer literal parses, and its value lies outside
-# i64: a magnitude above i64's maximum, or, negated, below its minimum. Only a
-# u64 (or wider) slot can take it; the compile-time evaluator cannot hold it.
-literalBeyondI64: function {numstr: StringView} out bool is {
-    p: parseNumber numstr: (literalMagnitude :numstr)
-    if p.err.length > 0 when (p.err.stringView.contains "out of range").not then return false
-    if p.isFloat or p.beyond then return p.beyond
-    imax: 9223372036854775807.u64
-    if numstr.startsWith "-" then return p.ival > (imax + 1)
-    return p.ival > imax
-}
-
-# literalMagnitude -- a numeric lexeme without its sign.
-literalMagnitude: function {numstr: StringView} outx StringView is {
-    if numstr.startsWith "-" then return (numstr.substring from: 1 to: numstr.length)
-    return numstr
 }
 
 # Parse a numeric literal lexeme into (kind, value, error); the kind

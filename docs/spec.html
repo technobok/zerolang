@@ -552,8 +552,8 @@ constant has that type (<code>L: 5.u8</code> makes <code>Q: L + 1</code> a <code
 <ul>
 <li><em><strong>integer literal &#x2192; integer target</strong></em>: the value must lie in the
 target's range (e.g. <code>u8</code> requires <code>0..255</code>). Constant arithmetic
-on integer literals folds at <em><strong>unbounded</strong></em> precision, and the
-<em><strong>final</strong></em> value &#x2014; not any intermediate &#x2014; is range-checked at the
+on integer literals folds <em><strong>exactly</strong></em>, to 512 bits of magnitude, and
+the <em><strong>final</strong></em> value &#x2014; not any intermediate &#x2014; is range-checked at the
 boundary. So <code>200 + 100 - 250</code> coerces cleanly into <code>u8</code> (folded
 value 50), even though the intermediate <code>300</code> would not fit on
 its own. The intermediate is allowed to exceed even <code>u64</code> &#x2014; e.g.
@@ -561,8 +561,9 @@ its own. The intermediate is allowed to exceed even <code>u64</code> &#x2014; e.
 parameter, because the intermediate <code>2^64</code> is just a transient
 value in the constant folder, never a stored runtime value.</li>
 <li><em><strong>integer literal &#x2192; float target</strong></em>: the value must be exactly
-representable in the float's mantissa. <code>16777216</code> (<code>2^24</code>) fits
-<code>f32</code>; <code>16777217</code> does not.</li>
+representable in the float's mantissa, and lie in its range.
+<code>16777216</code> (<code>2^24</code>) fits <code>f32</code>; <code>16777217</code> does not, and
+<code>65536</code> is past <code>f16</code>'s largest finite value, <code>65504</code>.</li>
 <li><em><strong>float literal &#x2192; integer target</strong></em>: rejected. Float literals
 coerce only to float types. Use <code>.i32</code> / <code>.i64</code> / etc.
 explicitly when an integer conversion is intended.</li>
@@ -573,6 +574,13 @@ exactly through the target's precision (e.g. <code>0.1</code> does not fit
 <p>A literal that fails any of these checks produces a literal-aware
 diagnostic at compile time naming the value and the target's range &#x2014; no
 runtime overflow.</p>
+<p>An untyped value that lands where nothing gives it a type takes its default
+(see Numeric defaults) and must fit it there: <code>x: 9223372036854775808</code>
+binds an <code>i64</code> and is refused naming <code>i64</code>, where
+<code>x: 9223372036854775808.u64</code> is a <code>u64</code>. The value is still exact up to
+that point -- <code>(9223372036854775808 - 1)</code> lands in <code>i64</code> as its
+maximum, and an untyped comparison such as <code>18446744073709551615 &gt; 5</code>
+folds to a <code>bool</code> without landing its operands anywhere.</p>
 <p>The inline-suffix form (<code>100u8</code> with no dot) is not accepted; use the
 dotted form (<code>100.u8</code>) instead.</p>
 <p>Examples:</p>
@@ -6217,15 +6225,18 @@ bare literal on the left takes its default (<code>i64</code> or <code>f64</code>
 right-hand operand has a type, as in a body. The right-hand operand must
 convert into that type without loss, and a literal operand must fit it, so
 with <code>L: 5.u8</code> both <code>L + 7.u16</code> and <code>L &gt; 300</code> are errors. An
-expression built only from bare literals is <em><strong>untyped</strong></em>: it folds in
-<code>i64</code> (<code>f64</code> for floats) and coerces by value wherever it lands (see
+expression built only from bare literals is <em><strong>untyped</strong></em>: an integer one
+folds exactly, to 512 bits of magnitude (<code>f64</code> for floats), and coerces by
+value wherever it lands (see
 <a href="#numeric-literal-coercion-at-typed-locations">Numeric literal
 coercion at typed locations</a>). A lossless conversion of a constant
 (<code>L.u32</code>) folds to its target type; one that can lose data (<code>L.i8</code>)
 yields a result to handle, not a value. A string constant's <code>length</code> is a
 <code>u64</code>, as the method declares.</p>
 <p>An integer result is checked against its own type: <code>250.u8 + 10</code>
-overflows <code>u8</code>, not merely <code>i64</code>. <code>f32</code> arithmetic folds in <code>f32</code>
+overflows <code>u8</code>, not merely <code>i64</code>, and
+<code>18446744073709551615.u64 + 1.u64</code> overflows <code>u64</code>. An untyped result
+past 512 bits overflows too. <code>f32</code> arithmetic folds in <code>f32</code>
 itself, so the value is the one the target computes; <code>f16</code> and <code>f128</code>
 arithmetic does not fold, since the evaluator holds an <code>f64</code>, which is
 neither.</p>
@@ -6238,10 +6249,8 @@ result that is not finite is an error too, since an infinity or a NaN has no
 literal a constant could inline; in a body it is IEEE's answer, and runs.</p>
 <p>An operation over constant operands that does not fold for another reason
 runs as the same arithmetic on variables does: an operator the evaluator does
-not support, or a <code>u64</code>, <code>i128</code> or <code>u128</code> result beyond the <code>i64</code> the
-evaluator works in (<code>9223372036854775807.u64 + 1.u64</code> fits its type and is
-computed there). An operation with a variable operand is a run-time one, and
-wraps.</p>
+not support, such as a shift of an untyped value outside <code>i64</code>. An
+operation with a variable operand is a run-time one, and wraps.</p>
 <p>Strings, <code>bool</code> values and variant arms are compile-time values too. A
 string literal folds, two compare by text, and an arm read
 (<code>platform.oskind.linux</code>) compares by arm identity -- the owning type and

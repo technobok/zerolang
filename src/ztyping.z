@@ -671,11 +671,15 @@ ZTyping: class {
     # the unit a QUALIFIED generic bound names (`io` in `io.Reader.generic`),
     # by the bound atom's node: the bound resolves in that unit and nowhere else
     genericBoundQual: (IdMapV zast.nodeid v: zast.nameid)
-    # the integer literals past i64's range, by node, and beside each the mono
-    # whose walk typed it: only a slot wide enough takes one, which is settled
-    # once the walk has typed where each lands
-    wideLiteralNodes: ListVal zast.nodeid
-    wideLiteralMonos: ListVal ztypes.tid
+    # the untyped integers outside i64 -- a literal or a fold of them -- by
+    # node, and beside each the mono whose walk evaluated it: one lands in i64
+    # unless an untyped fold consumes it or a typed destination takes it,
+    # which wideConstTaken records and checkWideConstants settles after the walk
+    wideConstNodes: ListVal zast.nodeid
+    wideConstMonos: ListVal ztypes.tid
+    # the wide untyped integers something took: 1 an untyped fold consumed it
+    # as an operand, 2 a typed destination took it
+    wideConstTaken: (MapVV monostamp v: u8)
     # the type applications, by node, that name their type rather than build a
     # value of it: the callable of a call supplying the fields (`(Box cap: 8)
     # used: "x"`) and the base of a member path (`(slot t: i64).empty`)
@@ -1061,6 +1065,9 @@ ZTyping: class {
     constEvalState: (MapVV constslot v: u8)
     # the svalKind payload pool; cval.strId indexes it 1-based (0 = none)
     constStrings: List String
+    # the integers outside i64 a constant holds; cval.bigId indexes it 1-based
+    # (0 = the value is inline), each value once
+    constBigInts: List math.BigInt
     # ifexpr nodeid -> the clause the fold selected
     foldedBranch: (IdMapV zast.nodeid v: foldedbranch)
     # the pending evaluation failure, recorded by the evaluator and rendered by
@@ -2805,7 +2812,8 @@ sumPairArmValueIs: function {
 } out bool is {
     if armName.isZero then return false
     c: ty.memberConstOf parentTypeId: dataTid nameId: armName
-    if c.kind.ivalKind then return c.ival == want
+    # a value outside i64 is never one an i64 names
+    if c.kind.ivalKind then return (c.bigId == 0) and (c.ival == want)
     return false
 }
 
@@ -3040,8 +3048,9 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         constsDiagnosed: IdSet zast.nodeid
         numericArgsRefused: IdSet zast.nodeid
         genericBoundQual: (IdMapV zast.nodeid v: zast.nameid)
-        wideLiteralNodes: ListVal zast.nodeid
-        wideLiteralMonos: ListVal ztypes.tid
+        wideConstNodes: ListVal zast.nodeid
+        wideConstMonos: ListVal ztypes.tid
+        wideConstTaken: (MapVV monostamp v: u8)
         typeAppsNamed: IdSet zast.nodeid
         monoNodeConst: (MapVV monostamp v: ztypes.cval)
         monoFoldedBranch: (MapVV monostamp v: foldedbranch)
@@ -3161,6 +3170,7 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         memberConst: (MapVV constslot v: ztypes.cval)
         constEvalState: (MapVV constslot v: u8)
         constStrings: List String
+        constBigInts: List math.BigInt
         foldedBranch: (IdMapV zast.nodeid v: foldedbranch)
         constFail: ztypes.noConstFail
         conformance: List ztypes.ZConformance
@@ -3258,6 +3268,7 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         children: (IdMapV zast.nameid v: ztypes.declid)
     )
     childTid.constStrings.append "".string
+    childTid.constBigInts.append (math.BigInt from: 0)
     # the program root, DeclId 1: the file units are parented to it, so every
     # declaration but this one has a parent. Minted with parent 0, so it takes
     # no name edge and lands in no namespace; it carries no unit-scope bit and

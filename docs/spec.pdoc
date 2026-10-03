@@ -394,8 +394,8 @@ The rules for "lossless" are:
 #ul:
   [#*: #_*"integer literal → integer target": the value must lie in the
     target's range (e.g. #~"u8" requires #~"0..255"). Constant arithmetic
-    on integer literals folds at #_*"unbounded" precision, and the
-    #_*"final" value — not any intermediate — is range-checked at the
+    on integer literals folds #_*"exactly", to 512 bits of magnitude, and
+    the #_*"final" value — not any intermediate — is range-checked at the
     boundary. So #~"200 + 100 - 250" coerces cleanly into #~"u8" (folded
     value 50), even though the intermediate #~"300" would not fit on
     its own. The intermediate is allowed to exceed even #~"u64" — e.g.
@@ -403,8 +403,9 @@ The rules for "lossless" are:
     parameter, because the intermediate #~"2^64" is just a transient
     value in the constant folder, never a stored runtime value.]
   [#*: #_*"integer literal → float target": the value must be exactly
-    representable in the float's mantissa. #~"16777216" (#~"2^24") fits
-    #~"f32"; #~"16777217" does not.]
+    representable in the float's mantissa, and lie in its range.
+    #~"16777216" (#~"2^24") fits #~"f32"; #~"16777217" does not, and
+    #~"65536" is past #~"f16"'s largest finite value, #~"65504".]
   [#*: #_*"float literal → integer target": rejected. Float literals
     coerce only to float types. Use #~".i32" / #~".i64" / etc.
     explicitly when an integer conversion is intended.]
@@ -415,6 +416,14 @@ The rules for "lossless" are:
 A literal that fails any of these checks produces a literal-aware
 diagnostic at compile time naming the value and the target's range — no
 runtime overflow.
+
+An untyped value that lands where nothing gives it a type takes its default
+(see Numeric defaults) and must fit it there: #~"x: 9223372036854775808"
+binds an #~"i64" and is refused naming #~"i64", where
+#~"x: 9223372036854775808.u64" is a #~"u64". The value is still exact up to
+that point -- #~"(9223372036854775808 - 1)" lands in #~"i64" as its
+maximum, and an untyped comparison such as #~"18446744073709551615 > 5"
+folds to a #~"bool" without landing its operands anywhere.
 
 The inline-suffix form (#~"100u8" with no dot) is not accepted; use the
 dotted form (#~"100.u8") instead.
@@ -7156,8 +7165,9 @@ bare literal on the left takes its default (#~"i64" or #~"f64") when the
 right-hand operand has a type, as in a body. The right-hand operand must
 convert into that type without loss, and a literal operand must fit it, so
 with #~"L: 5.u8" both #~"L + 7.u16" and #~"L > 300" are errors. An
-expression built only from bare literals is #_*"untyped": it folds in
-#~"i64" (#~"f64" for floats) and coerces by value wherever it lands (see
+expression built only from bare literals is #_*"untyped": an integer one
+folds exactly, to 512 bits of magnitude (#~"f64" for floats), and coerces by
+value wherever it lands (see
 [#> to=numeric-literal-coercion-at-typed-locations: Numeric literal
 coercion at typed locations]). A lossless conversion of a constant
 (#~"L.u32") folds to its target type; one that can lose data (#~"L.i8")
@@ -7165,7 +7175,9 @@ yields a result to handle, not a value. A string constant's #~"length" is a
 #~"u64", as the method declares.
 
 An integer result is checked against its own type: #~"250.u8 + 10"
-overflows #~"u8", not merely #~"i64". #~"f32" arithmetic folds in #~"f32"
+overflows #~"u8", not merely #~"i64", and
+#~"18446744073709551615.u64 + 1.u64" overflows #~"u64". An untyped result
+past 512 bits overflows too. #~"f32" arithmetic folds in #~"f32"
 itself, so the value is the one the target computes; #~"f16" and #~"f128"
 arithmetic does not fold, since the evaluator holds an #~"f64", which is
 neither.
@@ -7180,10 +7192,8 @@ literal a constant could inline; in a body it is IEEE's answer, and runs.
 
 An operation over constant operands that does not fold for another reason
 runs as the same arithmetic on variables does: an operator the evaluator does
-not support, or a #~"u64", #~"i128" or #~"u128" result beyond the #~"i64" the
-evaluator works in (#~"9223372036854775807.u64 + 1.u64" fits its type and is
-computed there). An operation with a variable operand is a run-time one, and
-wraps.
+not support, such as a shift of an untyped value outside #~"i64". An
+operation with a variable operand is a run-time one, and wraps.
 
 Strings, #~"bool" values and variant arms are compile-time values too. A
 string literal folds, two compare by text, and an arm read

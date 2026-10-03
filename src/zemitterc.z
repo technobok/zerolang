@@ -670,15 +670,22 @@ literalDefaultC: function {lex: StringView} out String is {
     return lex.string
 }
 
-# wideLiteralC -- a decimal literal past i64 as C. The checker admits one only
-# where a u64 takes it, and C reads an unsuffixed one as a signed type it does
-# not fit. "" for any other text; a name is told apart by its first byte.
+# wideLiteralC -- an integer literal outside i64 as C, from its exact value: the
+# checker admits one only where a type takes it, and C reads an unsuffixed
+# decimal as a signed type it does not fit, and has no token at all past u64
+# or in binary. "" for any other text; a name is told apart by its first byte.
 wideLiteralC: function {lex: StringView} out String is {
     if lex.length < 19 then return ""
     b0: (lex.byteAt i: 0).or d: 0
-    if (b0 < 49) or (b0 > 57) then return ""
-    if (ztypes.literalBeyondI64 numstr: lex).not then return ""
-    return "\{lex}ULL"
+    if b0 != 45 when (b0 < 48) or (b0 > 57) then return ""
+    bo: ztypecheck.constLiteralBig :lex
+    match (
+        bo
+    ) case some then {
+        if bo.i64.ok then return ""
+        return (bigValueC b: bo)
+    } case none then null
+    return ""
 }
 
 # castLitVal -- val with the unsigned C suffix appended when it is a bare decimal
@@ -12110,20 +12117,7 @@ cvalText: function {
     tid: ztypes.tid
     v: ztypes.cval
 } out String is {
-    if v.kind.ivalKind then {
-        tnN: constScalarNameForTid :ast :symtab :tid
-        iv: narrowConstToName v: v.ival name: tnN.stringView
-        # C HAS NO NEGATIVE LITERALS. A leading `-` is an operator applied to a
-        # POSITIVE constant, and the magnitude of the most negative i64 is one
-        # past what a signed constant can hold -- so `-9223372036854775808`
-        # reads as unsigned and the value arrives with the wrong type. It is
-        # the one value that cannot be written directly; C spells it by
-        # subtracting from the one below it, and so does this.
-        if iv == (0 - 9223372036854775807 - 1) then return "(-9223372036854775807LL - 1)"
-        r: "\{iv}"
-        r.append (numLitSuffix name: tnN.stringView)
-        return (int128Cast text: r.take name: tnN.stringView)
-    }
+    if v.kind.ivalKind then return (intCvalText :ast :symtab :tid :v)
     if v.kind.fvalKind then return (floatCvalText :ast :symtab :tid :v)
     if v.kind.armKind then {
         if v.armTid.isZero then return ""
@@ -12141,6 +12135,54 @@ cvalText: function {
         return "((\{vc}_t){ .tag = \{tg} })"
     }
     return ""
+}
+
+# intCvalText -- cvalText for a folded integer: inline in the type it is
+# narrowed to, or a value outside i64 spelled whole.
+intCvalText: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    tid: ztypes.tid
+    v: ztypes.cval
+} out String is {
+    if v.bigId != 0 then return (bigConstC :symtab :v)
+    tnN: constScalarNameForTid :ast :symtab :tid
+    iv: narrowConstToName v: v.ival name: tnN.stringView
+    # C HAS NO NEGATIVE LITERALS. A leading `-` is an operator applied to a
+    # POSITIVE constant, and the magnitude of the most negative i64 is one
+    # past what a signed constant can hold -- so `-9223372036854775808`
+    # reads as unsigned and the value arrives with the wrong type. It is
+    # the one value that cannot be written directly; C spells it by
+    # subtracting from the one below it, and so does this.
+    if iv == (0 - 9223372036854775807 - 1) then return "(-9223372036854775807LL - 1)"
+    r: "\{iv}"
+    r.append (numLitSuffix name: tnN.stringView)
+    return (int128Cast text: r.take name: tnN.stringView)
+}
+
+# bigConstC -- an integer constant outside i64 as C, spelled by its value: the
+# checker settled it in a type that holds it, and C converts it there.
+bigConstC: function {symtab: zenv.ZSymbolTable.view v: ztypes.cval} out String is {
+    b: ztypecheck.constBigOf st: symtab :v
+    return (bigValueC :b)
+}
+
+# bigValueC -- an integer outside i64 as C. A u64 is its digits, unsigned;
+# anything wider is built from two 64-bit halves of its 128-bit two's
+# complement form, since C has no 128-bit literal -- signed when the value is
+# negative. "" past 128 bits, which no type holds.
+bigValueC: function {b: math.BigInt.view} out String is {
+    if b.sign > 0 when b.bitLength <= 64 then return "\{b.string}ULL"
+    if b.bitLength > 128 then return ""
+    one: math.BigInt from: 1
+    bits: b.copy
+    if b.sign < 0 then bits = b + (one << 128)
+    mask: (one << 64) - one
+    hi: (bits >> 64).text base: 16
+    lo: (bits & mask).text base: 16
+    u: "(((unsigned __int128)0x\{hi}ULL << 64) | 0x\{lo}ULL)"
+    if b.sign < 0 then return "((__int128)\{u})"
+    return u
 }
 
 # floatCvalText -- cvalText for a folded float. A value wider than an f64
@@ -14769,6 +14811,13 @@ emitAtom: function {
 } out String is {
     avC: ast.names.texts.get i: n.name
     av: avC.stringView
+    # an integer literal outside i64 is spelled by its value, which the checker
+    # settled in the type it landed in: C has no token for one past u64, and
+    # none in binary or octal at all
+    if av.length >= 19 when ((av.byteAt i: 0).or d: 0) <= 57 then {
+        wc: nodeConstText :ast :symtab :ctx nid: n.nodeid
+        if wc.length > 0 then return wc
+    }
     # a `0b` / `0o` / `0c` literal has no C token behind it, so decode it here
     # (decimal, hex and float lexemes are C text as written; identifiers never
     # start with a digit)

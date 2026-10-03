@@ -2019,7 +2019,12 @@ perf: $(PERFBIN)
 # +1,299 a member used only after its owner walked is walked then: -609
 # behaviour (a method's label is composed once, not copied per member), +1,908
 # source (the deferred-member lists and the late walk).
-ALLOC_BASELINE := 2040996
+#
+# +99,208 integer constants are exact through math.BigInt: ab.sh +36 behaviour,
+# +99,147 source -- the compiler compiles math now (+90,931 for BigInt alone, measured
+# before: its methods are demanded by owner, so all of it), and the exact
+# reading, folding and landing checks.
+ALLOC_BASELINE := 2140204
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -2307,7 +2312,7 @@ case-guard:
 # reports E0601 there. A rise means a unit now rejects programs that never
 # touch it (which is what made `--cc tcc` reject the entire corpus); a fall
 # means a guard stopped firing for a program that does touch it.
-REQUIRE_TCC_BASELINE := 9
+REQUIRE_TCC_BASELINE := 10
 
 require-guard: bin/zc
 	@n=0; rep=""; \
