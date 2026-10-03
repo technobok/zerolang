@@ -2002,7 +2002,7 @@ perf: $(PERFBIN)
 #
 # +681 a data element may not take the name of one of the block's own members:
 # 0 behaviour, +681 source.
-ALLOC_BASELINE := 2018033
+ALLOC_BASELINE := 2018006
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -2426,6 +2426,11 @@ zlink-rules-guard:
 # "internal compiler error"; a zl rule code now points at `zl explain`, any
 # other non-E spelling is no error code, and E0200 / e0200 / 0200 / 200 all
 # still explain E0200.
+#
+# A unit that does not exist is reported as the parser reports it, exit 1, by
+# every command that parses: emit, build, run and dump. The error's location is
+# read from the tree the parser hands back; its own tree is empty by then, and a
+# lookup there aborts in the index check with a zpanic that names no unit.
 refusal-guard: bin/zc $(BUILDDIR)/tcc
 	@d=$(BUILDDIR)/refusal; rm -rf $$d; mkdir -p $$d; bad=0; \
 	bin/zc build hello --src examples --system lib/system --cc tcc --cc-mode spawn \
@@ -2501,6 +2506,13 @@ refusal-guard: bin/zc $(BUILDDIR)/tcc
 	for c in E0200 e0200 0200 200; do \
 	  if [ "$$(bin/zc explain $$c 2>&1 | head -1)" != "ownership error" ]; then \
 	    echo "refusal-guard FAIL: zc explain $$c must explain E0200"; bad=1; \
+	  fi; \
+	done; \
+	for cmd in emit build run dump; do \
+	  bin/zc $$cmd nosuchunit --src examples --system lib/system > $$d/u.log 2>&1; rc=$$?; \
+	  if [ $$rc -ne 1 ] || grep -q zpanic $$d/u.log || ! grep -q "Unknown reference 'nosuchunit'" $$d/u.log; then \
+	    echo "refusal-guard FAIL: zc $$cmd of a missing unit must report it and exit 1, got $$rc"; \
+	    cat $$d/u.log; bad=1; \
 	  fi; \
 	done; \
 	if [ $$bad -ne 0 ]; then \
