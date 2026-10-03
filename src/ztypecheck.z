@@ -53567,8 +53567,9 @@ constFailMismatch: function {
 # taking its default when only the right carries one -- a body's rule -- and
 # the right-hand operand must stand in for the governing type as a body
 # argument would. The result is computed in that type: an integer outside it
-# overflows, an f32 folds in f32, and f16 and f128 do not fold, since the
-# evaluator holds an f64, which is neither.
+# overflows, an f32 folds in f32, f16 arithmetic does not fold, and nothing over
+# f128 folds, a comparison included, since the evaluator holds an f64, which is
+# neither: an f128 compared through its nearest f64 can get the answer wrong.
 constOfTypedFold: function {
     st: zenv.ZSymbolTable
     scope: ztypes.declid
@@ -53687,6 +53688,7 @@ constOfTypedFloatFold: function {
     lf: constFloatOf v: lv
     rf: constFloatOf v: rv
     if lf.has.not or rf.has.not then return ztypes.noConst
+    if k.f128Type then return ztypes.noConst
     if (isComparisonOp name: op) then return (constCompareFloat
         :st
         :scope
@@ -53793,12 +53795,19 @@ constFloatFolds: function {
 # would, so its value must fit; a typed number folds only through a LOSSLESS
 # conversion, since one that can lose data yields a result to handle rather
 # than a value. noConst when `targetId` names no numeric type.
+#
+# An f128 is wider than the f64 the evaluator holds, so an f128 value also
+# carries its exact spelling in `strId`, which is what the emitter writes: the
+# literal as written (`1.1` keeps the 60 bits an f64 drops), or an integer's
+# digits (2^53 + 1 has no f64 at all). Its `fval` is then only the nearest f64.
 constOfConversion: function {
     st: zenv.ZSymbolTable
     scope: ztypes.declid
     ast: Ast
     v: ztypes.cval
     targetId: zast.nameid
+    # the literal the value was read from, zero when it is not one
+    lexemeId: zast.nameid
     nid: zast.nodeid
     ln: u32
     co: u32
@@ -53844,10 +53853,39 @@ constOfConversion: function {
         }
     }
     c: v
-    if v.kind.ivalKind when (ztypes.isFloatKind k: (numKindOfTid :st tid: target).kind) then {
-        c = ztypes.makeFloatConst (v.ival.f64.or d: 0.0)
+    tk: (numKindOfTid :st tid: target).kind
+    if v.kind.ivalKind when (ztypes.isFloatKind k: tk) then {
+        c = ztypes.makeFloatConst (nearestF64 i: v.ival)
     }
+    if tk.f128Type then c.strId = f128Spelling :st :ast :v :lexemeId
     return (ztypes.typedConst :c numTid: target)
+}
+
+# f128Spelling -- the exact spelling an f128 constant carries, interned: an
+# integer's digits as a float literal, or the float literal as written. 0 for a
+# value that came from neither, whose f64 is already its exact value or the
+# value an untyped float has.
+f128Spelling: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    v: ztypes.cval
+    lexemeId: zast.nameid
+} out u32 is {
+    if v.kind.ivalKind then {
+        digits: "\{v.ival}.0"
+        return (constInternString :st text: digits.stringView)
+    }
+    if lexemeId.isZero then return 0
+    lx: zast.nameTextAt :ast ref: lexemeId
+    return (constInternString :st text: lx.stringView)
+}
+
+# nearestF64 -- the f64 nearest an i64. Each 32-bit half converts exactly, so
+# the one rounding is the sum's.
+nearestF64: function {i: i64} out f64 is {
+    hi: i / 4294967296
+    lo: i - (hi * 4294967296)
+    return hi.f64.orPanic * 4294967296.0 + lo.f64.orPanic
 }
 
 # scalarTidOf -- the system scalar type the name `nameId` spells, found as a
@@ -55948,6 +55986,7 @@ constOfNamedBase: function {
                 :ast
                 v: lit
                 targetId: ncId
+                lexemeId: ptId
                 nid: atNid
                 ln: atLine
                 co: atCol
@@ -56028,6 +56067,7 @@ constOfNamedBase: function {
                 :ast
                 v: pcv
                 targetId: ncId
+                lexemeId: zast.nameid
                 nid: atNid
                 ln: atLine
                 co: atCol
@@ -56301,7 +56341,17 @@ evalConstDotted: function {
     }
     if pv.kind.ivalKind when ncId == zast.names.wkNot then return (constIntNot :st v: pv)
     if pv.kind.ivalKind or pv.kind.fvalKind then {
-        return (constOfConversion :st :scope :ast v: pv targetId: ncId :nid :ln :co)
+        return (constOfConversion
+            :st
+            :scope
+            :ast
+            v: pv
+            targetId: ncId
+            lexemeId: zast.nameid
+            :nid
+            :ln
+            :co
+        )
     }
     # `platform.oskind.linux` -- an arm of a type reached THROUGH its unit.
     # The parent is a dotted path of its own, so the type must be looked up

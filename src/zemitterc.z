@@ -328,11 +328,14 @@ cFloatLitSuffix: function {name: StringView} out String is {
 }
 
 # isFloatLitText -- the expression text is a bare digit-led float literal
-# (decimal point or exponent; no identifier characters).
+# (decimal point or exponent; no identifier characters). A leading minus is the
+# literal's own: `-1.1` is one lexeme.
 isFloatLitText: function {s: StringView} out bool is {
     n: s.length
     if n == 0 then return false
-    b0: s.byteAt 0
+    at: u64
+    if ((s.byteAt 0).or d: 0) == 45 then at = 1
+    b0: s.byteAt at
     match (
         b0
     ) case some then {
@@ -10669,7 +10672,13 @@ renderDefault: function {
     if dl.literal then {
         if dl.isZero then return ""
         lt: ztypecheck.rootNameOf :ast n: (ast.nodes.get i: dl)
-        return (literalDefaultC lex: lt.stringView)
+        lc: literalDefaultC lex: lt.stringView
+        # a float literal is read at the target's width, as a body literal is
+        if (isFloatLitText s: lt.stringView) then {
+            tnD: constScalarNameForTid :ast :symtab tid: targetTid
+            lc.append (cFloatLitSuffix name: tnD.stringView)
+        }
+        return lc
     }
     {
         dk: dv
@@ -11764,10 +11773,7 @@ cvalText: function {
         r.append (numLitSuffix name: tnN.stringView)
         return r
     }
-    if v.kind.fvalKind then {
-        tnF: constScalarNameForTid :ast :symtab :tid
-        return (floatConstText v: v.fval name: tnF.stringView)
-    }
+    if v.kind.fvalKind then return (floatCvalText :ast :symtab :tid :v)
     if v.kind.armKind then {
         if v.armTid.isZero then return ""
         if v.armName.isZero then return ""
@@ -11784,6 +11790,23 @@ cvalText: function {
         return "((\{vc}_t){ .tag = \{tg} })"
     }
     return ""
+}
+
+# floatCvalText -- cvalText for a folded float. A value wider than an f64
+# carries its exact spelling, and is written as that literal at its own width;
+# any other is the f64 it holds.
+floatCvalText: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    tid: ztypes.tid
+    v: ztypes.cval
+} out String is {
+    tnF: constScalarNameForTid :ast :symtab :tid
+    if v.strId == 0 then return (floatConstText v: v.fval name: tnF.stringView)
+    sp: symtab.typing.constStrings.get i: v.strId
+    r: sp.copy
+    r.append (cFloatLitSuffix name: tnF.stringView)
+    return r
 }
 
 # cvalStrText -- the C text for a folded STRING value: a `_zcsN` static minted

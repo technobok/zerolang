@@ -1,0 +1,64 @@
+# f128_constant_precision.z -- an f128 written as a literal is the same value on
+# every path that carries it: a unit constant, a field default, a parameter
+# default and a body literal. Each is compared by its bits against a reference
+# the program computes at run time, where f128 arithmetic is IEEE and rounds
+# once: 11 / 10 is the f128 nearest 1.1, and 2^53 + 1 is exact. The constant
+# evaluator holds an f64, which is neither, so an f128 must not take its value
+# from that f64 -- 1.1 would lose 60 bits, and an integer past 2^53 has no f64
+# at all. A comparison between f128 constants is likewise left to run.
+
+# a constant past every f64 digit
+K: 1.1.f128
+
+# the same value negated
+KN: -1.1.f128
+
+# an integer f128 holds exactly and f64 does not
+KI: 9007199254740993.f128
+
+# a constant naming another
+KK: K
+
+# defaults written as literals
+Holder: record {
+    # the field default
+    x: 1.1.f128
+    # a negative field default
+    y: -1.1.f128
+}
+
+# a parameter default written as a literal
+withDefault: function {v: 1.1.f128} out f128 is {
+    return v
+}
+
+# `ok` when the two values have the same bits, the name and both bit patterns
+# otherwise
+check: function {name: StringView got: f128 want: f128} is {
+    if got.bits == want.bits then {
+        print "\{name} ok"
+    } else {
+        print "\{name} MISMATCH \{got.bits} \{want.bits}"
+    }
+}
+
+main: function is {
+    ten: 10.f128
+    near11: 11.f128 / ten
+    neg11: 0.0.f128 - near11
+    big: 9007199254740992.f128 + 1.f128
+    h: Holder
+    check name: "body" got: 1.1.f128 want: near11
+    check name: "body negative" got: -1.1.f128 want: neg11
+    check name: "body integer" got: 9007199254740993.f128 want: big
+    check name: "constant" got: K want: near11
+    check name: "constant negative" got: KN want: neg11
+    check name: "constant integer" got: KI want: big
+    check name: "constant alias" got: KK want: near11
+    check name: "field default" got: h.x want: near11
+    check name: "field default negative" got: h.y want: neg11
+    check name: "parameter default" got: withDefault want: near11
+    # past 2^53, which an f64 cannot answer: it runs rather than folds
+    past: KI > 9007199254740992.f128
+    print "compare \{past}"
+}
