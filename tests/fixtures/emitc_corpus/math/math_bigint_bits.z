@@ -1,0 +1,375 @@
+# math_bigint_bits.z -- Go's int_test.go tables for BigInt's bits, every row:
+# bitwiseTests (& | ^ andNot, two's complement of unbounded width, each value
+# also put through Go's testBitset -- bit and setBit against shifts, & and
+# andNot at every index to bitLength + 10), bitsetTests, tzbTests, rshTests,
+# lshTests, notTests and bitLenTests. The expected values are Go's own
+# spellings, read with parse in base 0.
+
+# the failures, and the checks run
+Tally: class {
+    checks: u64
+    bad: u64
+}
+
+# num -- a BigInt from text the test spells correctly, in base 0
+num: function {text: StringView} out math.BigInt is {
+    r: math.BigInt.parse :text base: 0
+    match r case ok then return r.take case err then panic msg: "bad test text"
+}
+
+# same -- one check: the two values are equal
+same: function {t: Tally.borrow what: String got: math.BigInt.view want: math.BigInt.view} is {
+    t.checks = t.checks + 1
+    if got != want then {
+        t.bad = t.bad + 1
+        print "FAIL \{what}: \{got.string}, want \{want.string}"
+    }
+}
+
+# word -- one check on a word result
+word: function {t: Tally.borrow what: String got: u64 want: u64} is {
+    t.checks = t.checks + 1
+    if got != want then {
+        t.bad = t.bad + 1
+        print "FAIL \{what}: \{got}, want \{want}"
+    }
+}
+
+# bitwise -- one bitwiseTests row
+bitwise: function {
+    t: Tally.borrow
+    x: StringView
+    y: StringView
+    and: StringView
+    or: StringView
+    xor: StringView
+    andNot: StringView
+} is {
+    a: num text: x
+    b: num text: y
+    same :t what: "\{x} & \{y}" got: a & b want: (num text: and)
+    same :t what: "\{x} | \{y}" got: a | b want: (num text: or)
+    same :t what: "\{x} ^ \{y}" got: a ^ b want: (num text: xor)
+    same :t what: "\{x} andNot \{y}" got: (a.andNot y: b) want: (num text: andNot)
+    bitset :t :x
+    bitset :t x: y
+}
+
+# bitset -- Go's testBitset: at every index to bitLength + 10, bit agrees
+# with (x >> i) & 1, and setBit with x | 1 << i and x andNot 1 << i, and
+# setting each bit back to what it was leaves the value as it started
+bitset: function {t: Tally.borrow x: StringView} is {
+    v: num text: x
+    one: math.BigInt from: 1
+    n: v.bitLength + 10
+    i: u64
+    for i < n loop {
+        alt: (v >> i) & one
+        old: alt.u64.or d: 9
+        word :t what: "bit \{i} of \{x}" got: (v.bit :i) want: old
+        m: one << i
+        same :t what: "setBit \{i} 1 of \{x}" got: (v.setBit :i b: 1) want: v | m
+        same :t what: "setBit \{i} 0 of \{x}" got: (v.setBit :i b: 0) want: (v.andNot y: m)
+        same :t what: "setBit \{i} back of \{x}" got: (v.setBit :i b: old) want: v
+        i = i + 1
+    }
+}
+
+main: function is {
+    t: Tally checks: 0 bad: 0
+    bitwise :t x: "0x00" y: "0x00" and: "0x00" or: "0x00" xor: "0x00" andNot: "0x00"
+    bitwise :t x: "0x00" y: "0x01" and: "0x00" or: "0x01" xor: "0x01" andNot: "0x00"
+    bitwise :t x: "0x01" y: "0x00" and: "0x00" or: "0x01" xor: "0x01" andNot: "0x01"
+    bitwise :t x: "-0x01" y: "0x00" and: "0x00" or: "-0x01" xor: "-0x01" andNot: "-0x01"
+    bitwise :t x: "-0xaf" y: "-0x50" and: "-0xf0" or: "-0x0f" xor: "0xe1" andNot: "0x41"
+    bitwise :t x: "0x00" y: "-0x01" and: "0x00" or: "-0x01" xor: "-0x01" andNot: "0x00"
+    bitwise :t x: "0x01" y: "0x01" and: "0x01" or: "0x01" xor: "0x00" andNot: "0x00"
+    bitwise :t x: "-0x01" y: "-0x01" and: "-0x01" or: "-0x01" xor: "0x00" andNot: "0x00"
+    bitwise :t x: "0x07" y: "0x08" and: "0x00" or: "0x0f" xor: "0x0f" andNot: "0x07"
+    bitwise :t x: "0x05" y: "0x0f" and: "0x05" or: "0x0f" xor: "0x0a" andNot: "0x00"
+    bitwise :t x: "0xff" y: "-0x0a" and: "0xf6" or: "-0x01" xor: "-0xf7" andNot: "0x09"
+    (bitwise
+        :t
+        x: "0x013ff6"
+        y: "0x9a4e"
+        and: "0x1a46"
+        or: "0x01bffe"
+        xor: "0x01a5b8"
+        andNot: "0x0125b0"
+    )
+    (bitwise
+        :t
+        x: "-0x013ff6"
+        y: "0x9a4e"
+        and: "0x800a"
+        or: "-0x0125b2"
+        xor: "-0x01a5bc"
+        andNot: "-0x01c000"
+    )
+    (bitwise
+        :t
+        x: "-0x013ff6"
+        y: "-0x9a4e"
+        and: "-0x01bffe"
+        or: "-0x1a46"
+        xor: "0x01a5b8"
+        andNot: "0x8008"
+    )
+    (bitwise
+        :t
+        x: "0x1000009dc6e3d9822cba04129bcbe3401"
+        y: "0xb9bd7d543685789d57cb918e833af352559021483cdb05cc21fd"
+        and: "0x1000001186210100001000009048c2001"
+        or: "0xb9bd7d543685789d57cb918e8bfeff7fddb2ebe87dfbbdfe35fd"
+        xor: "0xb9bd7d543685789d57ca918e8ae69d6fcdb2eae87df2b97215fc"
+        andNot: "0x8c40c2d8822caa04120b8321400"
+    )
+    (bitwise
+        :t
+        x: "0x1000009dc6e3d9822cba04129bcbe3401"
+        y: "-0xb9bd7d543685789d57cb918e833af352559021483cdb05cc21fd"
+        and: "0x8c40c2d8822caa04120b8321401"
+        or: "-0xb9bd7d543685789d57ca918e82229142459020483cd2014001fd"
+        xor: "-0xb9bd7d543685789d57ca918e8ae69d6fcdb2eae87df2b97215fe"
+        andNot: "0x1000001186210100001000009048c2000"
+    )
+    (bitwise
+        :t
+        x: "-0x1000009dc6e3d9822cba04129bcbe3401"
+        y: "-0xb9bd7d543685789d57cb918e833af352559021483cdb05cc21fd"
+        and: "-0xb9bd7d543685789d57cb918e8bfeff7fddb2ebe87dfbbdfe35fd"
+        or: "-0x1000001186210100001000009048c2001"
+        xor: "0xb9bd7d543685789d57ca918e8ae69d6fcdb2eae87df2b97215fc"
+        andNot: "0xb9bd7d543685789d57ca918e82229142459020483cd2014001fc"
+    )
+    word :t what: "bit 0 of 0" got: ((num text: "0").bit i: 0) want: 0
+    word :t what: "bit 200 of 0" got: ((num text: "0").bit i: 200) want: 0
+    word :t what: "bit 0 of 1" got: ((num text: "1").bit i: 0) want: 1
+    word :t what: "bit 1 of 1" got: ((num text: "1").bit i: 1) want: 0
+    word :t what: "bit 0 of -1" got: ((num text: "-1").bit i: 0) want: 1
+    word :t what: "bit 200 of -1" got: ((num text: "-1").bit i: 200) want: 1
+    (word
+        :t
+        what: "bit 108 of 0x2000000000000000000000000000"
+        got: ((num text: "0x2000000000000000000000000000").bit i: 108)
+        want: 0
+    )
+    (word
+        :t
+        what: "bit 109 of 0x2000000000000000000000000000"
+        got: ((num text: "0x2000000000000000000000000000").bit i: 109)
+        want: 1
+    )
+    (word
+        :t
+        what: "bit 110 of 0x2000000000000000000000000000"
+        got: ((num text: "0x2000000000000000000000000000").bit i: 110)
+        want: 0
+    )
+    (word
+        :t
+        what: "bit 108 of -0x2000000000000000000000000001"
+        got: ((num text: "-0x2000000000000000000000000001").bit i: 108)
+        want: 1
+    )
+    (word
+        :t
+        what: "bit 109 of -0x2000000000000000000000000001"
+        got: ((num text: "-0x2000000000000000000000000001").bit i: 109)
+        want: 0
+    )
+    (word
+        :t
+        what: "bit 110 of -0x2000000000000000000000000001"
+        got: ((num text: "-0x2000000000000000000000000001").bit i: 110)
+        want: 1
+    )
+    word :t what: "trailingZeros 0" got: (num text: "0").trailingZeros want: 0
+    word :t what: "trailingZeros 1" got: (num text: "1").trailingZeros want: 0
+    word :t what: "trailingZeros -1" got: (num text: "-1").trailingZeros want: 0
+    word :t what: "trailingZeros 4" got: (num text: "4").trailingZeros want: 2
+    word :t what: "trailingZeros -8" got: (num text: "-8").trailingZeros want: 3
+    (word
+        :t
+        what: "trailingZeros 0x4000000000000000000"
+        got: (num text: "0x4000000000000000000").trailingZeros
+        want: 74
+    )
+    (word
+        :t
+        what: "trailingZeros -0x8000000000000000000"
+        got: (num text: "-0x8000000000000000000").trailingZeros
+        want: 75
+    )
+    same :t what: "0 >> 0" got: (num text: "0") >> 0 want: (num text: "0")
+    same :t what: "-0 >> 0" got: (num text: "-0") >> 0 want: (num text: "0")
+    same :t what: "0 >> 1" got: (num text: "0") >> 1 want: (num text: "0")
+    same :t what: "0 >> 2" got: (num text: "0") >> 2 want: (num text: "0")
+    same :t what: "1 >> 0" got: (num text: "1") >> 0 want: (num text: "1")
+    same :t what: "1 >> 1" got: (num text: "1") >> 1 want: (num text: "0")
+    same :t what: "1 >> 2" got: (num text: "1") >> 2 want: (num text: "0")
+    same :t what: "2 >> 0" got: (num text: "2") >> 0 want: (num text: "2")
+    same :t what: "2 >> 1" got: (num text: "2") >> 1 want: (num text: "1")
+    same :t what: "-1 >> 0" got: (num text: "-1") >> 0 want: (num text: "-1")
+    same :t what: "-1 >> 1" got: (num text: "-1") >> 1 want: (num text: "-1")
+    same :t what: "-1 >> 10" got: (num text: "-1") >> 10 want: (num text: "-1")
+    same :t what: "-100 >> 2" got: (num text: "-100") >> 2 want: (num text: "-25")
+    same :t what: "-100 >> 3" got: (num text: "-100") >> 3 want: (num text: "-13")
+    same :t what: "-100 >> 100" got: (num text: "-100") >> 100 want: (num text: "-1")
+    (same
+        :t
+        what: "4294967296 >> 0"
+        got: (num text: "4294967296") >> 0
+        want: (num text: "4294967296")
+    )
+    (same
+        :t
+        what: "4294967296 >> 1"
+        got: (num text: "4294967296") >> 1
+        want: (num text: "2147483648")
+    )
+    (same
+        :t
+        what: "4294967296 >> 2"
+        got: (num text: "4294967296") >> 2
+        want: (num text: "1073741824")
+    )
+    (same
+        :t
+        what: "18446744073709551616 >> 0"
+        got: (num text: "18446744073709551616") >> 0
+        want: (num text: "18446744073709551616")
+    )
+    (same
+        :t
+        what: "18446744073709551616 >> 1"
+        got: (num text: "18446744073709551616") >> 1
+        want: (num text: "9223372036854775808")
+    )
+    (same
+        :t
+        what: "18446744073709551616 >> 2"
+        got: (num text: "18446744073709551616") >> 2
+        want: (num text: "4611686018427387904")
+    )
+    (same
+        :t
+        what: "18446744073709551616 >> 64"
+        got: (num text: "18446744073709551616") >> 64
+        want: (num text: "1")
+    )
+    (same
+        :t
+        what: "340282366920938463463374607431768211456 >> 64"
+        got: (num text: "340282366920938463463374607431768211456") >> 64
+        want: (num text: "18446744073709551616")
+    )
+    (same
+        :t
+        what: "340282366920938463463374607431768211456 >> 128"
+        got: (num text: "340282366920938463463374607431768211456") >> 128
+        want: (num text: "1")
+    )
+    same :t what: "0 << 0" got: (num text: "0") << 0 want: (num text: "0")
+    same :t what: "0 << 1" got: (num text: "0") << 1 want: (num text: "0")
+    same :t what: "0 << 2" got: (num text: "0") << 2 want: (num text: "0")
+    same :t what: "1 << 0" got: (num text: "1") << 0 want: (num text: "1")
+    same :t what: "1 << 1" got: (num text: "1") << 1 want: (num text: "2")
+    same :t what: "1 << 2" got: (num text: "1") << 2 want: (num text: "4")
+    same :t what: "2 << 0" got: (num text: "2") << 0 want: (num text: "2")
+    same :t what: "2 << 1" got: (num text: "2") << 1 want: (num text: "4")
+    same :t what: "2 << 2" got: (num text: "2") << 2 want: (num text: "8")
+    same :t what: "-87 << 1" got: (num text: "-87") << 1 want: (num text: "-174")
+    (same
+        :t
+        what: "4294967296 << 0"
+        got: (num text: "4294967296") << 0
+        want: (num text: "4294967296")
+    )
+    (same
+        :t
+        what: "4294967296 << 1"
+        got: (num text: "4294967296") << 1
+        want: (num text: "8589934592")
+    )
+    (same
+        :t
+        what: "4294967296 << 2"
+        got: (num text: "4294967296") << 2
+        want: (num text: "17179869184")
+    )
+    (same
+        :t
+        what: "18446744073709551616 << 0"
+        got: (num text: "18446744073709551616") << 0
+        want: (num text: "18446744073709551616")
+    )
+    (same
+        :t
+        what: "9223372036854775808 << 1"
+        got: (num text: "9223372036854775808") << 1
+        want: (num text: "18446744073709551616")
+    )
+    (same
+        :t
+        what: "4611686018427387904 << 2"
+        got: (num text: "4611686018427387904") << 2
+        want: (num text: "18446744073709551616")
+    )
+    same :t what: "1 << 64" got: (num text: "1") << 64 want: (num text: "18446744073709551616")
+    (same
+        :t
+        what: "18446744073709551616 << 64"
+        got: (num text: "18446744073709551616") << 64
+        want: (num text: "340282366920938463463374607431768211456")
+    )
+    (same
+        :t
+        what: "1 << 128"
+        got: (num text: "1") << 128
+        want: (num text: "340282366920938463463374607431768211456")
+    )
+    same :t what: "not 0" got: (num text: "0").not want: (num text: "-1")
+    same :t what: "not 1" got: (num text: "1").not want: (num text: "-2")
+    same :t what: "not 7" got: (num text: "7").not want: (num text: "-8")
+    same :t what: "not 0" got: (num text: "0").not want: (num text: "-1")
+    same :t what: "not -81910" got: (num text: "-81910").not want: (num text: "81909")
+    (same
+        :t
+        what: "not 298472983472983471903246121093472394872319615612417471234712061"
+        got: (num text: "298472983472983471903246121093472394872319615612417471234712061").not
+        want: (num text: "-298472983472983471903246121093472394872319615612417471234712062")
+    )
+    word :t what: "bitLength -1" got: (num text: "-1").bitLength want: 1
+    word :t what: "bitLength 0" got: (num text: "0").bitLength want: 0
+    word :t what: "bitLength 1" got: (num text: "1").bitLength want: 1
+    word :t what: "bitLength 2" got: (num text: "2").bitLength want: 2
+    word :t what: "bitLength 4" got: (num text: "4").bitLength want: 3
+    word :t what: "bitLength 0xabc" got: (num text: "0xabc").bitLength want: 12
+    word :t what: "bitLength 0x8000" got: (num text: "0x8000").bitLength want: 16
+    word :t what: "bitLength 0x80000000" got: (num text: "0x80000000").bitLength want: 32
+    word :t what: "bitLength 0x800000000000" got: (num text: "0x800000000000").bitLength want: 48
+    (word
+        :t
+        what: "bitLength 0x8000000000000000"
+        got: (num text: "0x8000000000000000").bitLength
+        want: 64
+    )
+    (word
+        :t
+        what: "bitLength 0x80000000000000000000"
+        got: (num text: "0x80000000000000000000").bitLength
+        want: 80
+    )
+    (word
+        :t
+        what: "bitLength -0x4000000000000000000000"
+        got: (num text: "-0x4000000000000000000000").bitLength
+        want: 87
+    )
+    if t.bad == 0 then {
+        print "ok \{t.checks} checks"
+    } else {
+        print "\{t.bad} of \{t.checks} checks FAILED"
+    }
+}

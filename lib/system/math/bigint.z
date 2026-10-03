@@ -8,65 +8,68 @@
 # BigInt -- a signed integer of any size: a sign and a magnitude
 BigInt: class {
     # whether the value is below zero; zero is never negative
-    neg: bool
+    negative: bool
     # the magnitude, a normalized natural number: least significant word first,
     # no leading zero word, and zero the empty list
-    abs: ListVal u64
+    words: ListVal u64
 } as {
-    # the value of an i64
-    create: function {from: i64} out this is {
+    # the value of any integer of up to 128 bits: a narrower one, signed or
+    # not, widens to i128 by itself, and a u128 past i128's range is read
+    # with parse
+    create: function {from: i128} out this is {
+        neg: from < 0
+        mag: from.bits
+        if neg then mag = mag.not + 1
         a: ListVal u64
-        if from < 0 then {
-            nat.natSetWord z: a x: (from.bits.not.addCarry rhs: 1 carry: 0).value
-        } else {
-            nat.natSetWord z: a x: from.bits
-        }
-        return (meta.create neg: from < 0 abs: a.take)
+        a.append from: (mag & 18446744073709551615.u128).u64.orPanic
+        a.append from: (mag >> 64).u64.orPanic
+        nat.natNorm z: a
+        return (meta.create negative: neg words: a.take)
+    }
+
+    # fromParts -- the BigInt with this sign and magnitude
+    fromParts: function {neg: bool abs: (ListVal u64).take} out this is {
+        return (meta.create negative: neg words: abs)
+    }
+
+    # a copy, owning its own words
+    copy: function {t: this.view} out BigInt is {
+        a: ListVal u64
+        nat.natSet z: a x: t.words.listView
+        return (BigInt.fromParts neg: t.negative abs: a.take)
     }
 
     # the sum
     +: function {t: this.view rhs: BigInt.view} out BigInt is {
         r: ListVal u64
-        neg: t.neg
-        if t.neg == rhs.neg then {
-            # x + y == x + y; (-x) + (-y) == -(x + y)
-            nat.natAdd z: r x: t.abs.listView y: rhs.abs.listView
-        } else {
-            # x + (-y) == x - y == -(y - x); (-x) + y == y - x == -(x - y)
-            if (nat.natCmp x: t.abs.listView y: rhs.abs.listView) >= 0 then {
-                nat.natSub z: r x: t.abs.listView y: rhs.abs.listView
-            } else {
-                neg = neg.not
-                nat.natSub z: r x: rhs.abs.listView y: t.abs.listView
-            }
-        }
-        return (BigInt.fromParts neg: neg and (r.length > 0) abs: r.take)
+        neg: (signedSum
+            z: r
+            xNeg: t.negative
+            x: t.words.listView
+            yNeg: rhs.negative
+            y: rhs.words.listView
+        )
+        return (BigInt.fromParts :neg abs: r.take)
     }
 
     # the difference
     -: function {t: this.view rhs: BigInt.view} out BigInt is {
         r: ListVal u64
-        neg: t.neg
-        if t.neg != rhs.neg then {
-            # x - (-y) == x + y; (-x) - y == -(x + y)
-            nat.natAdd z: r x: t.abs.listView y: rhs.abs.listView
-        } else {
-            # x - y == x - y == -(y - x); (-x) - (-y) == y - x == -(x - y)
-            if (nat.natCmp x: t.abs.listView y: rhs.abs.listView) >= 0 then {
-                nat.natSub z: r x: t.abs.listView y: rhs.abs.listView
-            } else {
-                neg = neg.not
-                nat.natSub z: r x: rhs.abs.listView y: t.abs.listView
-            }
-        }
-        return (BigInt.fromParts neg: neg and (r.length > 0) abs: r.take)
+        neg: (signedSum
+            z: r
+            xNeg: t.negative
+            x: t.words.listView
+            yNeg: rhs.negative.not
+            y: rhs.words.listView
+        )
+        return (BigInt.fromParts :neg abs: r.take)
     }
 
     # the product
     *: function {t: this.view rhs: BigInt.view} out BigInt is {
         r: ListVal u64
-        natmul.natMul z: r x: t.abs.listView y: rhs.abs.listView
-        return (BigInt.fromParts neg: (t.neg != rhs.neg) and (r.length > 0) abs: r.take)
+        natmul.natMul z: r x: t.words.listView y: rhs.words.listView
+        return (BigInt.fromParts neg: (t.negative != rhs.negative) and (r.length > 0) abs: r.take)
     }
 
     # the quotient truncated toward zero, as Go's Quo: -7 / 2 is -3. Panics on a
@@ -74,8 +77,8 @@ BigInt: class {
     /: function {t: this.view rhs: BigInt.view} out BigInt is {
         q: ListVal u64
         r: ListVal u64
-        natdiv.natDiv :q :r u: t.abs.listView v: rhs.abs.listView
-        return (BigInt.fromParts neg: (t.neg != rhs.neg) and (q.length > 0) abs: q.take)
+        natdiv.natDiv :q :r u: t.words.listView v: rhs.words.listView
+        return (BigInt.fromParts neg: (t.negative != rhs.negative) and (q.length > 0) abs: q.take)
     }
 
     # the remainder of the truncated quotient, as Go's Rem: it takes the
@@ -83,8 +86,302 @@ BigInt: class {
     %: function {t: this.view rhs: BigInt.view} out BigInt is {
         q: ListVal u64
         r: ListVal u64
-        natdiv.natDiv :q :r u: t.abs.listView v: rhs.abs.listView
-        return (BigInt.fromParts neg: t.neg and (r.length > 0) abs: r.take)
+        natdiv.natDiv :q :r u: t.words.listView v: rhs.words.listView
+        return (BigInt.fromParts neg: t.negative and (r.length > 0) abs: r.take)
+    }
+
+    # the Euclidean quotient, as Go's Div: the one whose remainder is never
+    # negative, so -7 div 2 is -4. Panics on a zero divisor
+    div: function {t: this.view by: BigInt.view} out BigInt is {
+        q: ListVal u64
+        r: ListVal u64
+        signs: divideInto :q :r x: t y: by mode: (euclidMode y: by)
+        return (BigInt.fromParts neg: signs.quoNeg abs: q.take)
+    }
+
+    # the Euclidean modulus, as Go's Mod: never negative and below |by|, so
+    # -7 mod 2 is 1. Panics on a zero divisor
+    mod: function {t: this.view by: BigInt.view} out BigInt is {
+        q: ListVal u64
+        r: ListVal u64
+        signs: divideInto :q :r x: t y: by mode: (euclidMode y: by)
+        return (BigInt.fromParts neg: signs.remNeg abs: r.take)
+    }
+
+    # the quotient rounded as `mode` asks and the remainder that goes with it,
+    # quo * by + rem == this, as Go's Divide: toZero truncates (the `/` and `%`
+    # pair), toNegativeInf floors, toPositiveInf ceils and toNearestEven rounds
+    # half to even. Panics on a zero divisor, and on the two modes an integer
+    # division has no use for
+    divide: function {t: this.view by: BigInt.view mode: rounding.roundingmode} out BigDivision is {
+        q: ListVal u64
+        r: ListVal u64
+        signs: divideInto :q :r x: t y: by :mode
+        quo: BigInt.fromParts neg: signs.quoNeg abs: q.take
+        rem: BigInt.fromParts neg: signs.remNeg abs: r.take
+        return (BigDivision :quo :rem)
+    }
+
+    # the negation
+    neg: function {t: this.view} out BigInt is {
+        c: t.copy
+        c.negative = c.negative.not and (c.words.length > 0)
+        return c
+    }
+
+    # the absolute value
+    abs: function {t: this.view} out BigInt is {
+        c: t.copy
+        c.negative = false
+        return c
+    }
+
+    # -1, 0 or 1 as the value is below, at or above zero
+    sign: function {t: this.view} out i32 is {
+        if t.words.length == 0 then return 0
+        if t.negative then return -1
+        return 1
+    }
+
+    # the order of the two as -1, 0 or 1
+    compare: function {t: this.view rhs: BigInt.view} out i32 is {
+        if t.negative != rhs.negative then {
+            if t.negative then return -1
+            return 1
+        }
+        c: nat.natCmp x: t.words.listView y: rhs.words.listView
+        if t.negative then return 0 - c
+        return c
+    }
+
+    # whether the two are the same number
+    ==: function {t: this.view rhs: BigInt.view} out bool is {
+        return (t.compare :rhs) == 0
+    }
+
+    # whether the two differ
+    !=: function {t: this.view rhs: BigInt.view} out bool is {
+        return (t.compare :rhs) != 0
+    }
+
+    # whether this is below rhs
+    <: function {t: this.view rhs: BigInt.view} out bool is {
+        return (t.compare :rhs) < 0
+    }
+
+    # whether this is at most rhs
+    <=: function {t: this.view rhs: BigInt.view} out bool is {
+        return (t.compare :rhs) <= 0
+    }
+
+    # whether this is above rhs
+    >: function {t: this.view rhs: BigInt.view} out bool is {
+        return (t.compare :rhs) > 0
+    }
+
+    # whether this is at least rhs
+    >=: function {t: this.view rhs: BigInt.view} out bool is {
+        return (t.compare :rhs) >= 0
+    }
+
+    # a hash that agrees with ==: FNV-1a over the sign and the words
+    hash: function {t: this.view} out u64 is {
+        h: 14695981039346656037.u64
+        if t.negative then h = h ^ 1
+        for each w: t.words loop h = ((h ^ w).mulWide rhs: 1099511628211).lo
+        return h
+    }
+
+    # the value as an i64, outOfRange when it does not fit
+    i64: function {t: this.view} out (resultval t: i64 e: converror) is {
+        fits: t.words.length == 0
+        v: i64
+        if t.words.length == 1 then {
+            w: t.words.get i: 0
+            if t.negative.not when w <= 9223372036854775807 then {
+                fits = true
+                v = w.i64.orPanic
+            }
+            if t.negative when w <= 9223372036854775808 then {
+                fits = true
+                v = (0.i128 - w).i64.orPanic
+            }
+        }
+        if fits.not then return ((resultval t: i64 e: converror).err converror.outOfRange)
+        return ((resultval t: i64 e: converror).ok v)
+    }
+
+    # the value as a u64, outOfRange when it is negative or does not fit
+    u64: function {t: this.view} out (resultval t: u64 e: converror) is {
+        if t.words.length == 0 then return ((resultval t: u64 e: converror).ok 0)
+        if t.negative or (t.words.length > 1) then {
+            return ((resultval t: u64 e: converror).err converror.outOfRange)
+        }
+        return ((resultval t: u64 e: converror).ok (t.words.get i: 0))
+    }
+
+    # the value as an f64 when it is one exactly -- precisionLoss when it lies
+    # between two f64s, outOfRange past the largest
+    f64: function {t: this.view} out (resultval t: f64 e: converror) is {
+        n: nat.natBitLen x: t.words.listView
+        if n == 0 then return ((resultval t: f64 e: converror).ok 0.0)
+        if n > 1024 then return ((resultval t: f64 e: converror).err converror.outOfRange)
+        low: nat.natTrailingZeroBits x: t.words.listView
+        if (n - low) > 53 then {
+            return ((resultval t: f64 e: converror).err converror.precisionLoss)
+        }
+        # the significant bits, at most 53 of them, then scaled back up
+        m: ListVal u64
+        nat.natRsh z: m x: t.words.listView s: low
+        f: (m.get i: 0).f64.orPanic.scaleB n: low.i32.orPanic
+        if t.negative then f = 0.0 - f
+        return ((resultval t: f64 e: converror).ok f)
+    }
+
+    # x & y, each read as two's complement of unbounded width -- a negative
+    # value's sign bits run on forever -- as Go's And
+    &: function {t: this.view rhs: BigInt.view} out BigInt is {
+        return (bitwise x: t y: rhs op: nat.bitop.and)
+    }
+
+    # x | y, two's complement as &
+    |: function {t: this.view rhs: BigInt.view} out BigInt is {
+        return (bitwise x: t y: rhs op: nat.bitop.or)
+    }
+
+    # x ^ y, two's complement as &
+    ^: function {t: this.view rhs: BigInt.view} out BigInt is {
+        return (bitwise x: t y: rhs op: nat.bitop.xor)
+    }
+
+    # x & ^y, two's complement as &: the bits of this that y does not have
+    andNot: function {t: this.view y: BigInt.view} out BigInt is {
+        return (bitwise x: t :y op: nat.bitop.andNot)
+    }
+
+    # ^x, every bit flipped: -x - 1
+    not: function {t: this.view} out BigInt is {
+        r: ListVal u64
+        if t.negative then {
+            nat.natSubWord z: r x: t.words.listView w: 1
+            return (BigInt.fromParts neg: false abs: r.take)
+        }
+        nat.natAddWord z: r x: t.words.listView w: 1
+        return (BigInt.fromParts neg: true abs: r.take)
+    }
+
+    # this shifted left n bits: this * 2^n
+    <<: function {t: this.view rhs: u64} out BigInt is {
+        r: ListVal u64
+        nat.natLsh z: r x: t.words.listView s: rhs
+        return (BigInt.fromParts neg: t.negative abs: r.take)
+    }
+
+    # this shifted right n bits, rounding toward negative infinity as two's
+    # complement does: -7 >> 1 is -4
+    >>: function {t: this.view rhs: u64} out BigInt is {
+        r: ListVal u64
+        if t.negative then {
+            # (-x) >> s == ^(x-1) >> s == -(((x-1) >> s) + 1)
+            x1: ListVal u64
+            nat.natSubWord z: x1 x: t.words.listView w: 1
+            s1: ListVal u64
+            nat.natRsh z: s1 x: x1.listView s: rhs
+            nat.natAddWord z: r x: s1.listView w: 1
+            return (BigInt.fromParts neg: true abs: r.take)
+        }
+        nat.natRsh z: r x: t.words.listView s: rhs
+        return (BigInt.fromParts neg: false abs: r.take)
+    }
+
+    # bit i of the two's complement form, 0 or 1
+    bit: function {t: this.view i: u64} out u64 is {
+        if t.negative.not then return (nat.natBit x: t.words.listView :i)
+        # (-x) is ^(x-1): its bits are those of x-1, flipped
+        x1: ListVal u64
+        nat.natSubWord z: x1 x: t.words.listView w: 1
+        return (nat.natBit x: x1.listView :i) ^ 1
+    }
+
+    # this with bit i of its two's complement form set to b, 0 or 1. Panics on
+    # any other b
+    setBit: function {t: this.view i: u64 b: u64} out BigInt is {
+        r: ListVal u64
+        if t.negative.not then {
+            nat.natSetBit z: r x: t.words.listView :i :b
+            return (BigInt.fromParts neg: false abs: r.take)
+        }
+        # setting a bit of ^(x-1) is clearing it in x-1
+        x1: ListVal u64
+        nat.natSubWord z: x1 x: t.words.listView w: 1
+        s1: ListVal u64
+        nat.natSetBit z: s1 x: x1.listView :i b: b ^ 1
+        nat.natAddWord z: r x: s1.listView w: 1
+        return (BigInt.fromParts neg: r.length > 0 abs: r.take)
+    }
+
+    # the length of the magnitude in bits; 0 for zero
+    bitLength: function {t: this.view} out u64 is {
+        return (nat.natBitLen x: t.words.listView)
+    }
+
+    # the number of zero bits below the magnitude's lowest set bit; 0 for zero
+    trailingZeros: function {t: this.view} out u64 is {
+        return (nat.natTrailingZeroBits x: t.words.listView)
+    }
+
+    # add -- this += x, in place: the accumulator form for a loop
+    add: function {:this x: BigInt.view} is {
+        r: ListVal u64
+        neg: (signedSum
+            z: r
+            xNeg: this.negative
+            x: this.words.listView
+            yNeg: x.negative
+            y: x.words.listView
+        )
+        this.words swap r
+        this.negative = neg
+    }
+
+    # sub -- this -= x, in place
+    sub: function {:this x: BigInt.view} is {
+        r: ListVal u64
+        neg: (signedSum
+            z: r
+            xNeg: this.negative
+            x: this.words.listView
+            yNeg: x.negative.not
+            y: x.words.listView
+        )
+        this.words swap r
+        this.negative = neg
+    }
+
+    # mul -- this *= x, in place
+    mul: function {:this x: BigInt.view} is {
+        r: ListVal u64
+        natmul.natMul z: r x: this.words.listView y: x.words.listView
+        this.negative = (this.negative != x.negative) and (r.length > 0)
+        this.words swap r
+    }
+
+    # quo -- this /= x, in place, truncated as `/`
+    quo: function {:this x: BigInt.view} is {
+        q: ListVal u64
+        r: ListVal u64
+        natdiv.natDiv :q :r u: this.words.listView v: x.words.listView
+        this.negative = (this.negative != x.negative) and (q.length > 0)
+        this.words swap q
+    }
+
+    # rem -- this %= x, in place, with the dividend's sign as `%`
+    rem: function {:this x: BigInt.view} is {
+        q: ListVal u64
+        r: ListVal u64
+        natdiv.natDiv :q :r u: this.words.listView v: x.words.listView
+        this.negative = this.negative and (r.length > 0)
+        this.words swap r
     }
 
     # parse -- the BigInt a text spells: an optional sign, then digits of the
@@ -115,19 +412,11 @@ BigInt: class {
         } case badSeparator then {
             return ((ResultRV BigInt e: parseerror).err parseerror.invalidDigit)
         } case none then null
-        if sc.end != text.length then return ((ResultRV BigInt e: parseerror
-        ).err parseerror.invalidDigit
-        )
-        return ((ResultRV BigInt e: parseerror).ok (BigInt.fromParts
-            neg: neg and (a.length > 0)
-            abs: a.take
-        )
-        )
-    }
-
-    # fromParts -- the BigInt with this sign and magnitude
-    fromParts: function {neg: bool abs: (ListVal u64).take} out this is {
-        return (meta.create :neg :abs)
+        if sc.end != text.length then {
+            return ((ResultRV BigInt e: parseerror).err parseerror.invalidDigit)
+        }
+        value: BigInt.fromParts neg: neg and (a.length > 0) abs: a.take
+        return ((ResultRV BigInt e: parseerror).ok value)
     }
 
     # the value in decimal, a leading '-' when it is negative
@@ -139,10 +428,192 @@ BigInt: class {
     # 0-9, then a-z, then A-Z -- the spelling parse reads back in the same base.
     # Panics on any other base
     text: function {t: this.view base: u64} out String is {
-        d: natconv.natText x: t.abs.listView :base
-        if t.neg.not then return d
+        d: natconv.natText x: t.words.listView :base
+        if t.negative.not then return d
         r: "-".string
         r.append d
         return r
     }
+}
+
+# BigDivision -- a quotient and its remainder, as divide answers them
+BigDivision: class {
+    # the quotient
+    quo: BigInt
+    # the remainder: quo * divisor + rem is the dividend
+    rem: BigInt
+}
+
+# the signs divideInto gives its quotient and remainder
+divsigns: record {
+    # whether the quotient is negative
+    quoNeg: bool
+    # whether the remainder is negative
+    remNeg: bool
+}
+
+# euclidMode -- the rounding that makes a remainder never negative: the floor
+# for a positive divisor, the ceiling for a negative one
+euclidMode: function {y: BigInt.view} out rounding.roundingmode is {
+    if y.negative then return rounding.roundingmode.toPositiveInf
+    return rounding.roundingmode.toNegativeInf
+}
+
+# divideInto -- |q| and |r| for x / y rounded as `mode` asks, with r = x - y*q,
+# and their signs. The truncated pair first; a nonzero remainder then steps the
+# quotient one further from zero when the mode says so, the remainder becoming
+# |y| - r with the other sign. Zero is never negative
+divideInto: function {
+    q: (ListVal u64).borrow
+    r: (ListVal u64).borrow
+    x: BigInt.view
+    y: BigInt.view
+    mode: rounding.roundingmode
+} out divsigns is {
+    natdiv.natDiv :q :r u: x.words.listView v: y.words.listView
+    neg: x.negative != y.negative
+    rNeg: false
+    if r.length > 0 then {
+        away: false
+        match (
+            mode
+        ) case toZero then {
+            rNeg = x.negative
+        } case toNegativeInf then {
+            rNeg = y.negative
+            away = neg
+        } case toPositiveInf then {
+            rNeg = y.negative.not
+            away = neg.not
+        } case toNearestEven then {
+            twice: ListVal u64
+            nat.natLsh z: twice x: r.listView s: 1
+            c: nat.natCmp x: twice.listView y: y.words.listView
+            # a tie rounds away only from an odd quotient
+            tieUp: false
+            if c == 0 when q.length > 0 then tieUp = ((q.get i: 0) & 1) == 1
+            if (c > 0) or tieUp then {
+                rNeg = x.negative.not
+                away = true
+            } else {
+                rNeg = x.negative
+            }
+        } else {
+            panic msg: "unsupported rounding mode"
+        }
+        if away then {
+            c: u64
+            {
+                w: q.mutView
+                c = arith.addVWInPlace z: w y: 1
+            }
+            if c != 0 then q.append from: c
+            r1: ListVal u64
+            nat.natSub z: r1 x: y.words.listView y: r.listView
+            nat.natSet z: r x: r1.listView
+        }
+    }
+    return (divsigns quoNeg: neg and (q.length > 0) remNeg: rNeg and (r.length > 0))
+}
+
+# signedSum -- z = |x + y| for signed x and y, and whether the sum is negative:
+# operands of one sign add, of opposite signs subtract the smaller magnitude
+# from the larger and take its sign. Zero is never negative
+signedSum: function {
+    z: (ListVal u64).borrow
+    xNeg: bool
+    x: ListViewVal u64
+    yNeg: bool
+    y: ListViewVal u64
+} out bool is {
+    if xNeg == yNeg then {
+        nat.natAdd :z :x :y
+        return xNeg and (z.length > 0)
+    }
+    if (nat.natCmp :x :y) >= 0 then {
+        nat.natSub :z :x :y
+        return xNeg and (z.length > 0)
+    }
+    nat.natSub :z x: y y: x
+    return yNeg and (z.length > 0)
+}
+
+# bitwise -- x op y for signed x and y in two's complement, as Go's And, Or,
+# Xor and AndNot. A negative operand is ^(|x| - 1), so with x1 = |x| - 1 and
+# y1 = |y| - 1 every case is a natural-number operation and a sign:
+#
+#   (-x) & (-y) == -((x1 | y1) + 1)      (-x) | (-y) == -((x1 & y1) + 1)
+#   (-x) & y    == y &^ x1               (-x) | y    == -((x1 &^ y) + 1)
+#   x & (-y)    == x &^ y1               x | (-y)    == -((y1 &^ x) + 1)
+#   (-x) ^ (-y) == x1 ^ y1               x ^ (-y)    == -((x ^ y1) + 1)
+#   (-x) &^ (-y) == y1 &^ x1             (-x) &^ y   == -((x1 | y) + 1)
+#   x &^ (-y)   == x & y1
+bitwise: function {x: BigInt.view y: BigInt.view op: nat.bitop} out BigInt is {
+    x1: ListVal u64
+    y1: ListVal u64
+    if x.negative then nat.natSubWord z: x1 x: x.words.listView w: 1
+    if y.negative then nat.natSubWord z: y1 x: y.words.listView w: 1
+    r: ListVal u64
+    neg: false
+    # the magnitudes the cases read: |x| - 1 for a negative operand, |x| else
+    xv: x.words.listView
+    if x.negative then xv = x1.listView
+    yv: y.words.listView
+    if y.negative then yv = y1.listView
+    plusOne: false
+    match (
+        op
+    ) case and then {
+        if x.negative and y.negative then {
+            nat.natBitwise z: r x: xv y: yv op: nat.bitop.or
+            neg = true
+            plusOne = true
+        } else if x.negative then {
+            nat.natBitwise z: r x: yv y: xv op: nat.bitop.andNot
+        } else if y.negative then {
+            nat.natBitwise z: r x: xv y: yv op: nat.bitop.andNot
+        } else {
+            nat.natBitwise z: r x: xv y: yv op: nat.bitop.and
+        }
+    } case or then {
+        if x.negative and y.negative then {
+            nat.natBitwise z: r x: xv y: yv op: nat.bitop.and
+            neg = true
+            plusOne = true
+        } else if x.negative then {
+            nat.natBitwise z: r x: xv y: yv op: nat.bitop.andNot
+            neg = true
+            plusOne = true
+        } else if y.negative then {
+            nat.natBitwise z: r x: yv y: xv op: nat.bitop.andNot
+            neg = true
+            plusOne = true
+        } else {
+            nat.natBitwise z: r x: xv y: yv op: nat.bitop.or
+        }
+    } case xor then {
+        nat.natBitwise z: r x: xv y: yv op: nat.bitop.xor
+        if x.negative != y.negative then {
+            neg = true
+            plusOne = true
+        }
+    } case andNot then {
+        if x.negative and y.negative then {
+            nat.natBitwise z: r x: yv y: xv op: nat.bitop.andNot
+        } else if x.negative then {
+            nat.natBitwise z: r x: xv y: yv op: nat.bitop.or
+            neg = true
+            plusOne = true
+        } else if y.negative then {
+            nat.natBitwise z: r x: xv y: yv op: nat.bitop.and
+        } else {
+            nat.natBitwise z: r x: xv y: yv op: nat.bitop.andNot
+        }
+    }
+    if plusOne then {
+        r1: ListVal u64
+        nat.natAddWord z: r1 x: r.listView w: 1
+        return (BigInt.fromParts :neg abs: r1.take)
+    }
+    return (BigInt.fromParts :neg abs: r.take)
 }

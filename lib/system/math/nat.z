@@ -186,3 +186,84 @@ natRsh: function {z: (ListVal u64).borrow x: ListViewVal u64 s: u64} is {
     }
     natNorm :z
 }
+
+# a bitwise operation on two words, as natBitwise applies it
+bitop: variant {
+    # x & y
+    and: null
+    # x & ^y
+    andNot: null
+    # x | y
+    or: null
+    # x ^ y
+    xor: null
+}
+
+# natBitwise -- z = x op y word by word, a missing word read as 0 -- which is
+# what makes Go's four loops, each with its own length rule, one loop
+natBitwise: function {z: (ListVal u64).borrow x: ListViewVal u64 y: ListViewVal u64 op: bitop} is {
+    n: x.length
+    if y.length > n then n = y.length
+    z.resize to: n
+    i: u64
+    for i < n loop {
+        xi: u64
+        yi: u64
+        if i < x.length then xi = x.get :i
+        if i < y.length then yi = y.get :i
+        w: u64
+        match (
+            op
+        ) case and then {
+            w = xi & yi
+        } case andNot then {
+            w = xi & yi.not
+        } case or then {
+            w = xi | yi
+        } case xor then {
+            w = xi ^ yi
+        }
+        z.set :i val: w
+        i = i + 1
+    }
+    natNorm :z
+}
+
+# natAddWord -- x plus one word: the x + 1 and x - 1 steps that let a
+# two's complement operation work on magnitudes
+natAddWord: function {z: (ListVal u64).borrow x: ListViewVal u64 w: u64} is {
+    one: ListVal u64
+    natSetWord z: one x: w
+    natAdd :z :x y: one.listView
+}
+
+# natSubWord -- x minus one word, which must not exceed x
+natSubWord: function {z: (ListVal u64).borrow x: ListViewVal u64 w: u64} is {
+    one: ListVal u64
+    natSetWord z: one x: w
+    natSub :z :x y: one.listView
+}
+
+# natBit -- bit i of x, 0 or 1
+natBit: function {x: ListViewVal u64 i: u64} out u64 is {
+    j: i / 64
+    if j >= x.length then return 0
+    return ((x.get i: j) >> (i % 64)) & 1
+}
+
+# natSetBit -- z = x with bit i set to b, 0 or 1
+natSetBit: function {z: (ListVal u64).borrow x: ListViewVal u64 i: u64 b: u64} is {
+    j: i / 64
+    m: 1.u64 << (i % 64)
+    natSet :z :x
+    if b == 0 then {
+        if j < z.length then {
+            z.set i: j val: (z.get i: j) & m.not
+            natNorm :z
+        }
+        return
+    }
+    if b != 1 then panic msg: "set bit is not 0 or 1"
+    for z.length <= j loop z.append from: 0
+    z.set i: j val: (z.get i: j) | m
+}

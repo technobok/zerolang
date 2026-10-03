@@ -1,0 +1,236 @@
+# math_bigint_core.z -- Go's int_test.go tables for the core of BigInt: sumZZ
+# and prodZZ, divisionSignsTests (the truncated and the Euclidean pair), the
+# quoTests, and TestIntDivide itself -- every x and y from -10 to 10 at five
+# scales, the quotient each rounding mode gives checked against the f64
+# quotient's trunc, floor, ceil and roundEven, as Go checks it. Then the
+# conversions out at their edges, and comparison.
+
+# the failures, and the checks run
+Tally: class {
+    checks: u64
+    bad: u64
+}
+
+# big -- a BigInt from decimal text the test spells correctly
+big: function {text: StringView} out math.BigInt is {
+    r: math.BigInt.parse :text base: 10
+    match r case ok then return r.take case err then panic msg: "bad test text"
+}
+
+# same -- one check: the two texts agree
+same: function {t: Tally.borrow what: String got: String.view want: String.view} is {
+    t.checks = t.checks + 1
+    if got != want then {
+        t.bad = t.bad + 1
+        print "FAIL \{what}: \{got}, want \{want}"
+    }
+}
+
+# sumProd -- z == x + y == y + x, and z - x == y; then x * y == y * x == p
+sumProd: function {t: Tally.borrow x: i64 y: i64 z: i64} is {
+    a: math.BigInt from: x
+    b: math.BigInt from: y
+    c: math.BigInt from: z
+    same :t what: "x+y" got: (a + b).string want: c.string
+    same :t what: "y+x" got: (b + a).string want: c.string
+    same :t what: "z-x" got: (c - a).string want: b.string
+    same :t what: "z-y" got: (c - b).string want: a.string
+}
+
+# product -- x * y == y * x == z
+product: function {t: Tally.borrow x: i64 y: i64 z: i64} is {
+    a: math.BigInt from: x
+    b: math.BigInt from: y
+    c: math.BigInt from: z
+    same :t what: "x*y" got: (a * b).string want: c.string
+    same :t what: "y*x" got: (b * a).string want: c.string
+}
+
+# signs -- divisionSignsTests: / and % truncate, div and mod are Euclidean
+signs: function {t: Tally.borrow x: i64 y: i64 q: i64 r: i64 d: i64 m: i64} is {
+    a: math.BigInt from: x
+    b: math.BigInt from: y
+    same :t what: "\{x}/\{y}" got: (a / b).string want: "\{q}"
+    same :t what: "\{x}%\{y}" got: (a % b).string want: "\{r}"
+    same :t what: "\{x} div \{y}" got: (a.div by: b).string want: "\{d}"
+    same :t what: "\{x} mod \{y}" got: (a.mod by: b).string want: "\{m}"
+}
+
+# quo -- quoTests: q and r for long operands
+quo: function {t: Tally.borrow x: StringView y: StringView q: StringView r: StringView} is {
+    a: big text: x
+    b: big text: y
+    same :t what: "quo" got: (a / b).string want: q.string
+    same :t what: "rem" got: (a % b).string want: r.string
+}
+
+# divideAt -- TestIntDivide's check: x*f / y*f in each mode gives the f64
+# quotient's rounding of x/y, and remainder (x - y*q)*f
+divideAt: function {t: Tally.borrow x: i64 y: i64 f: math.BigInt.view} is {
+    z: x.f64.orPanic / y.f64.orPanic
+    for each k: 4.u64.times loop {
+        mode: math.roundingmode.toZero
+        want: z.trunc
+        if k == 1 then {
+            mode = math.roundingmode.toNegativeInf
+            want = z.floor
+        }
+        if k == 2 then {
+            mode = math.roundingmode.toPositiveInf
+            want = z.ceil
+        }
+        if k == 3 then {
+            mode = math.roundingmode.toNearestEven
+            want = z.roundEven
+        }
+        q: want.i64.orPanic
+        a: (math.BigInt from: x) * f
+        b: (math.BigInt from: y) * f
+        r: (math.BigInt from: x - (y * q)) * f
+        d: a.divide by: b :mode
+        same :t what: "divide \{x}/\{y} mode \{k} q" got: d.quo.string want: "\{q}"
+        same :t what: "divide \{x}/\{y} mode \{k} r" got: d.rem.string want: r.string
+    }
+}
+
+# checkI64 -- .i64 of a decimal text: its value, or "outOfRange"
+checkI64: function {t: Tally.borrow text: StringView want: StringView} is {
+    b: big :text
+    v: b.i64
+    got: "outOfRange".string
+    match v case ok then got = "\{v}" case err then null
+    same :t what: "\{text}.i64" :got want: want.string
+}
+
+# checkU64 -- .u64 of a decimal text: its value, or "outOfRange"
+checkU64: function {t: Tally.borrow text: StringView want: StringView} is {
+    b: big :text
+    v: b.u64
+    got: "outOfRange".string
+    match v case ok then got = "\{v}" case err then null
+    same :t what: "\{text}.u64" :got want: want.string
+}
+
+# checkF64 -- .f64 of a decimal text: the bits of its value, or the error
+checkF64: function {t: Tally.borrow text: StringView want: StringView} is {
+    b: big :text
+    v: b.f64
+    got: String
+    match (
+        v
+    ) case ok then {
+        got = "\{v.bits}"
+    } case err then {
+        match (
+            v
+        ) case outOfRange then got = "outOfRange" case precisionLoss then got = "precisionLoss"
+    }
+    same :t what: "\{text}.f64" :got want: want.string
+}
+
+main: function is {
+    t: Tally checks: 0 bad: 0
+    # sumZZ
+    sumProd :t x: 0 y: 0 z: 0
+    sumProd :t x: 1 y: 0 z: 1
+    sumProd :t x: 123456789 y: 987654321 z: 1111111110
+    sumProd :t x: -1 y: 0 z: -1
+    sumProd :t x: -123456789 y: 987654321 z: 864197532
+    sumProd :t x: -123456789 y: -987654321 z: -1111111110
+    # prodZZ
+    product :t x: 0 y: 0 z: 0
+    product :t x: 1 y: 0 z: 0
+    product :t x: 1 y: 1 z: 1
+    product :t x: 991 y: -991 z: -982081
+    # divisionSignsTests
+    signs :t x: 5 y: 3 q: 1 r: 2 d: 1 m: 2
+    signs :t x: -5 y: 3 q: -1 r: -2 d: -2 m: 1
+    signs :t x: 5 y: -3 q: -1 r: 2 d: -1 m: 2
+    signs :t x: -5 y: -3 q: 1 r: -2 d: 2 m: 1
+    signs :t x: 1 y: 2 q: 0 r: 1 d: 0 m: 1
+    signs :t x: 8 y: 4 q: 2 r: 0 d: 2 m: 0
+    # quoTests
+    (quo
+        :t
+        x: "476217953993950760840509444250624797097991362735329973741718102894495832294430498335824897858659711275234906400899559094370964723884706254265559534144986498357"
+        y: "9353930466774385905609975137998169297361893554149986716853295022578535724979483772383667534691121982974895531435241089241440253066816724367338287092081996"
+        q: "50911"
+        r: "1"
+    )
+    (quo
+        :t
+        x: "11510768301994997771168"
+        y: "1328165573307167369775"
+        q: "8"
+        r: "885443715537658812968"
+    )
+    # TestIntDivide
+    for each s: 5.u64.times loop {
+        f: math.BigInt from: 1
+        if s == 1 then f = math.BigInt from: 1234
+        if s == 2 then f = math.BigInt from: 99991
+        if s == 3 then f = math.BigInt from: 1234567890
+        if s == 4 then f = big text: "12345678901234567890"
+        x: -10.i64
+        for x <= 10 loop {
+            y: -10.i64
+            for y <= 10 loop {
+                if y != 0 then divideAt :t :x :y :f
+                y = y + 1
+            }
+            x = x + 1
+        }
+    }
+    # the conversions out, at their edges
+    checkI64 :t text: "9223372036854775807" want: "9223372036854775807"
+    checkI64 :t text: "9223372036854775808" want: "outOfRange"
+    checkI64 :t text: "-9223372036854775808" want: "-9223372036854775808"
+    checkI64 :t text: "-9223372036854775809" want: "outOfRange"
+    checkI64 :t text: "0" want: "0"
+    checkU64 :t text: "18446744073709551615" want: "18446744073709551615"
+    checkU64 :t text: "18446744073709551616" want: "outOfRange"
+    checkU64 :t text: "-1" want: "outOfRange"
+    checkU64 :t text: "0" want: "0"
+    checkF64 :t text: "0" want: "0"
+    checkF64 :t text: "9007199254740992" want: "4845873199050653696"
+    checkF64 :t text: "9007199254740993" want: "precisionLoss"
+    checkF64 :t text: "-9007199254740994" want: "14069245235905429505"
+    checkF64 :t text: "1180591620717411303424" want: "4922434392715952128"
+    (checkF64
+        :t
+        text: "179769313486231570814527423731704356798070567525844996598917476803157260780028538760589558632766878171540458953514382464234321326889464182768467546703537516986049910576551282076245490090389328944075868508455133942304583236903222948165808559332123348274797826204144723168738177180919299881250404026184124858368"
+        want: "9218868437227405311"
+    )
+    (checkF64
+        :t
+        text: "179769313486231590772930519078902473361797697894230657273430081157732675805500963132708477322407536021120113879871393357658789768814416622492847430639474124377767893424865485276302219601246094119453082952085005768838150682342462881473913110540827237163350510684586298239947245938479716304835356329624224137216"
+        want: "outOfRange"
+    )
+    # compare, ==, and hash agreeing with ==
+    a: big text: "2783678367462374683678456387645876387564783686583485"
+    b: big text: "2783678367462374683678456387645876387564783686583486"
+    (same
+        :t
+        what: "a<b"
+        got: "\{a < b} \{a <= b} \{a > b} \{a >= b} \{a == b} \{a != b}"
+        want: "1 1 0 0 0 1"
+    )
+    (same
+        :t
+        what: "-a>-b"
+        got: "\{a.neg > b.neg} \{a.neg.compare rhs: b.neg} \{a.compare rhs: a.copy}"
+        want: "1 1 0"
+    )
+    same :t what: "hash" got: "\{a.hash == a.copy.hash} \{a.hash == b.hash}" want: "1 0"
+    (same
+        :t
+        what: "abs, neg, sign"
+        got: "\{a.neg.abs == a} \{a.neg.sign} \{(a - a).sign} \{a.sign}"
+        want: "1 -1 0 1"
+    )
+    if t.bad == 0 then {
+        print "ok \{t.checks} checks"
+    } else {
+        print "\{t.bad} of \{t.checks} checks FAILED"
+    }
+}
