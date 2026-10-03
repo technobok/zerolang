@@ -54628,12 +54628,11 @@ constArithInt: function {
     lv: ztypes.cval
     rv: ztypes.cval
 } out ztypes.cval is {
+    if op.shl or op.shr then return (constShiftExact :st :nodeid :lineno :colno :op :lv :rv)
     if lv.bigId == 0 when rv.bigId == 0 then {
         fast: constArithI64 :st :nodeid :lineno :colno :op a: lv.ival b: rv.ival
         if fast.done then return fast.v
     }
-    # a shift past i64 waits for exact shifts
-    if op.shl or op.shr then return ztypes.noConst
     return (constArithBig
         :st
         :nodeid
@@ -54723,12 +54722,39 @@ constArithI64: function {
     if op.band then return (arithfast done: true v: ztypes.makeIntConst a & b)
     if op.bor then return (arithfast done: true v: ztypes.makeIntConst a | b)
     if op.bxor then return (arithfast done: true v: ztypes.makeIntConst a ^ b)
-    if op.shl or op.shr then {
-        sh: constShiftInt :op :a :b bits: 64 signed: true
-        if sh.none then return (arithfast done: true v: ztypes.noConst)
-        return (arithfast done: true v: ztypes.makeIntConst sh)
-    }
     return (arithfast done: true v: ztypes.noConst)
+}
+
+# constShiftExact -- an UNTYPED shift, exact like every untyped operator:
+# `1 << 63` is 2^63 and `1 << 64` is 2^64, each checked where it lands, and
+# `>>` rounds toward negative infinity as two's complement does. A negative
+# count does not fold: the run time reads it as unsigned. A left shift past the
+# 512 bits an untyped integer holds overflows, unless it shifts zero.
+constShiftExact: function {
+    st: zenv.ZSymbolTable
+    nodeid: zast.nodeid
+    lineno: u32
+    colno: u32
+    op: arithop
+    lv: ztypes.cval
+    rv: ztypes.cval
+} out ztypes.cval is {
+    a: constBigOf :st v: lv
+    if rv.bigId == 0 when rv.ival < 0 then return ztypes.noConst
+    if rv.bigId != 0 when (constBigOf :st v: rv).sign < 0 then return ztypes.noConst
+    huge: (rv.bigId != 0) or (rv.ival > untypedIntBits.i64.orPanic)
+    if op.shr then {
+        if huge.not then return (constOfBig :st b: a >> rv.ival.u64.orPanic)
+        if a.sign < 0 then return (ztypes.makeIntConst -1)
+        return (ztypes.makeIntConst 0)
+    }
+    if a.sign == 0 then return (ztypes.makeIntConst 0)
+    if huge.not then {
+        r: a << rv.ival.u64.orPanic
+        if r.bitLength <= untypedIntBits then return (constOfBig :st b: r)
+    }
+    constFailRecord :st kind: ztypes.constfailkind.overflow :nodeid :lineno :colno width: 1
+    return ztypes.noConst
 }
 
 # constArithBig -- constArithInt through BigInt, for an operand or a result

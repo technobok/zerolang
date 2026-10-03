@@ -2027,7 +2027,9 @@ perf: $(PERFBIN)
 #
 # +178 a refused constant's conversion types its stand-in: 0 behaviour, +178
 # source.
-ALLOC_BASELINE := 2140382
+#
+# +748 an untyped shift is exact: 0 behaviour, +748 source.
+ALLOC_BASELINE := 2141130
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
