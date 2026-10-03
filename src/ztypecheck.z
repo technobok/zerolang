@@ -14436,6 +14436,27 @@ bareNameDenotesType: function {
     return ecv.kind.none
 }
 
+# aliasTargetOwner -- the declaration whose unit `nestedNameId` an alias written
+# in `scopeDeclId` names: the alias's own scope, else each unit enclosing it,
+# outward to the file unit -- the chain any name written there walks. A
+# `public:` block is a scope of its own, so `Foo: impl.Foo` in one names the
+# enclosing unit's hidden subunit `impl` whether or not the block lists it.
+# `scopeDeclId` itself when no scope on the way declares that unit.
+aliasTargetOwner: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    scopeDeclId: ztypes.declid
+    nestedNameId: zast.nameid
+} out ztypes.declid is {
+    cur: scopeDeclId
+    for (cur > 0) and (cur != st.typing.programRoot) loop {
+        sub: st.typing.declFindChild parentDeclId: cur nameId: nestedNameId
+        if (declDeclaresUnit :st :ast declId: sub) then return cur
+        cur = declParentIdOf :st declId: cur
+    }
+    return scopeDeclId
+}
+
 # nestedUnitTidOf -- the type id of the nested unit `nestedNameId` names inside the
 # unit that owns `ownerDeclId`: descend one edge of the Decl tree, ask demand
 # for it, and read the id off its declaration. 0 when the name is not a child
@@ -14533,7 +14554,10 @@ aliasTargetMintedTid: function {
 } out ztypes.tid is {
     aParent: declParentIdOf :st :declId
     tgt: ztypes.declid
-    sub: st.typing.declFindChild parentDeclId: aParent nameId: nestedNameId
+    sub: (st.typing.declFindChild
+        parentDeclId: (aliasTargetOwner :st :ast scopeDeclId: aParent :nestedNameId)
+        nameId: nestedNameId
+    )
     if sub.isZero.not then tgt = st.typing.declFindChild parentDeclId: sub nameId: defName
     if tgt.isZero then tgt = (declOfUnitDefIds
         :st
@@ -15241,7 +15265,7 @@ resolveAliasKeyIn: function {
         :st
         :scope
         :ast
-        ownerDeclId: aParent
+        ownerDeclId: (aliasTargetOwner :st :ast scopeDeclId: aParent nestedNameId: altK.unitName)
         nestedNameId: altK.unitName
         defName: altK.defName
     )
@@ -15720,6 +15744,15 @@ resolveDef: function {
         :st
         declId: resolvedDecl
     )
+    # a definition that declares a unit -- an inline namespace, a hidden
+    # subunit -- resolves as the namespace it is, which the demand path does.
+    # The dispatch below has no leg for one, and its defined mark left the unit
+    # typeless for good: the demand path then skipped it as done. A constant
+    # fold reaching `impl.Foo` through the descent got here first.
+    if resolvedDecl.isZero.not when (zast.unitOpDeclaresUnit :ast opId: defnId) then {
+        resolveDemandedDecl :st :scope :ast declId: resolvedDecl
+        return
+    }
     enterUnitOnce :st :ast :unitDecl
     # a definition's BODY reaches names its signature does not: a type
     # constructed, or a sibling function called, only inside it must be demanded
