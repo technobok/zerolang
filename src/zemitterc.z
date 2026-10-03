@@ -14957,6 +14957,33 @@ stackCollectionTid: function {
     return (isIdCollectionOriginOf :symtab :ctx :tid)
 }
 
+# callBaseTemp -- the temporary a stack collection base that is a call's result
+# is bound to, "" when the base needs none. Every collection leg takes the
+# base's address, and a call's result has none: `(ls.get i: 0).listView` wrote
+# `&z_get(...)`, which C rejects. Bound as a method call's receiver is
+callBaseTemp: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    nlid: ztypes.tid
+    base: StringView
+    nstPtr: bool
+    baseNid: zast.nodeid
+} out String is {
+    if nstPtr then return ""
+    if (stackCollectionTid :symtab :ctx tid: nlid).not then return ""
+    if (svRecvAddressable recv: base) then return ""
+    return (hoistForAddress
+        :ast
+        :symtab
+        :ctx
+        av: base
+        tid: nlid
+        tag: ((symtab.typing.unnamedLocalOfNode.get key: baseNid).or d: 0)
+        argNid: baseNid
+    )
+}
+
 # emitNestedCollectionBase -- a str or collection mono reached through a FIELD.
 # Set and Map are heap pointers and pass directly; the id-keyed pair are stack
 # structs and go by address. `recvIsPtr` is whether the base expression is
@@ -15347,6 +15374,11 @@ emitDottedNestedBase: function {
         baseAtom = hoistedBorrowDeref :ast :symtab :ctx av: baseAtom.stringView tid: nlid
         bs9vid = ztypes.vid
         nstPtr = false
+    }
+    cbt: callBaseTemp :ast :symtab :ctx :nlid base: baseAtom.stringView :nstPtr baseNid: n.parent
+    if cbt.length > 0 then {
+        baseAtom = cbt.take
+        bs9vid = ztypes.vid
     }
     eCo: (emitNestedCollectionBase
         :symtab
