@@ -238,11 +238,14 @@ applies to your own source, which you may license as you choose.
 
 The compiler vendors third-party source under `vendor/`. Each directory keeps
 its upstream license alongside a `VERSION.md` recording the origin, the pinned
-commit, and exactly what was copied.
+commit, and exactly what was copied. A standard-library unit ported from another
+language keeps the upstream license beside its files instead, and each ported
+file names the source file and commit it came from.
 
 | Component | License | Linked |
 |---|---|---|
 | [mimalloc](vendor/mimalloc) | MIT | statically, into the driver binaries; `make MIMALLOC=0` builds without it |
+| [Go math/big](lib/system/math/LICENSE-GO), ported to `lib/system/math/` | BSD-3-Clause | compiled into programs that reach `math` |
 | [tinycc](vendor/tinycc) | LGPL-2.1 | never. `zc` reaches `libtcc.so` through `dlopen` only, so no binary here is a combined work; `make static-tcc-guard` fails the build if a libtcc symbol appears in one |
 
 These licenses govern those components, not the rest of the project.

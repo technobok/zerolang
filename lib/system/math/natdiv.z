@@ -1,0 +1,80 @@
+# Copyright 2009 The Go Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style
+# license that can be found in the LICENSE-GO file.
+#
+# Ported from Go's src/math/big/natdiv.go at 577b91f341 (2026-09-30) on
+# 2026-10-03: division.
+
+# divWVW -- z = (xn:x) / y over len(z) == len(x) words, returning the
+# remainder; xn must be below y
+divWVW: function {z: (SpanVal u64).borrow xn: u64 x: ListViewVal u64 y: u64} out u64 is {
+    r: xn
+    if x.length == 1 then {
+        d: r.divWide lo: (x.get i: 0) by: y
+        z.set i: 0 item: d.quo
+        return d.rem
+    }
+    rec: arith.reciprocalWord d1: y
+    i: z.length
+    for i > 0 loop {
+        i = i - 1
+        d: arith.divWW x1: r x0: (x.get :i) :y m: rec
+        z.set :i item: d.quo
+        r = d.rem
+    }
+    return r
+}
+
+# divWVWInPlace -- z = z / y, returning the remainder: divWVW with z as its own
+# x. Each word is read before it is written, from the top down
+divWVWInPlace: function {z: (SpanVal u64).borrow y: u64} out u64 is {
+    r: u64
+    if z.length == 1 then {
+        d: r.divWide lo: (z.get i: 0) by: y
+        z.set i: 0 item: d.quo
+        return d.rem
+    }
+    rec: arith.reciprocalWord d1: y
+    i: z.length
+    for i > 0 loop {
+        i = i - 1
+        d: arith.divWW x1: r x0: (z.get :i) :y m: rec
+        z.set :i item: d.quo
+        r = d.rem
+    }
+    return r
+}
+
+# natDivW -- z = x / y for a word y, returning the remainder
+natDivW: function {z: (ListVal u64).borrow x: ListViewVal u64 y: u64} out u64 is {
+    if y == 0 then panic msg: "division by zero"
+    if y == 1 then {
+        nat.natSet :z :x
+        return 0
+    }
+    if x.length == 0 then {
+        z.resize to: 0
+        return 0
+    }
+    z.resize to: x.length
+    r: u64
+    {
+        w: z.mutView
+        r = divWVW z: w xn: 0 :x :y
+    }
+    nat.natNorm :z
+    return r
+}
+
+# natDivWInPlace -- z = z / y for a word y, returning the remainder
+natDivWInPlace: function {z: (ListVal u64).borrow y: u64} out u64 is {
+    if y == 0 then panic msg: "division by zero"
+    if (y == 1) or (z.length == 0) then return 0
+    r: u64
+    {
+        w: z.mutView
+        r = divWVWInPlace z: w :y
+    }
+    nat.natNorm :z
+    return r
+}

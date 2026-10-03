@@ -99,15 +99,15 @@ NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 # under lib/system -- which is the stdlib proper (io/os/collections/system/cli/core) as
 # well as the relocated front-end, because they share that directory. What it does NOT
 # reach is examples/ and tests/fixtures/; a rule that must hold there needs its own guard.
-ZLSCOPE := src/*.z lib/system/*.z lib/system/system/*.z tests/unit/*.z
+ZLSCOPE := src/*.z lib/system/*.z lib/system/system/*.z lib/system/math/*.z tests/unit/*.z
 # The --full tier checks a file as the unit it IS: a top-level unit under its
 # roots, or a subunit (lib/system/system/ holds `system`'s) inside the parent
 # beside its folder. style-lint gives each tree its roots: tests/unit's units
 # live under tests/unit.
-ZLFULLSCOPE := src/*.z lib/system/*.z lib/system/system/*.z
+ZLFULLSCOPE := src/*.z lib/system/*.z lib/system/system/*.z lib/system/math/*.z
 # FMTSCOPE -- what the zl *formatter* checks: every unit the printer lays out, the unit
 # tests included; tests/fixtures/ stays as written, since its files are inputs.
-FMTSCOPE := src/*.z lib/system/*.z lib/system/system/*.z examples/*.z tests/unit/*.z
+FMTSCOPE := src/*.z lib/system/*.z lib/system/system/*.z lib/system/math/*.z examples/*.z tests/unit/*.z
 
 # all -- the default target: build the three tools (compiler, linter/formatter,
 # language server). `make check` / `make test` are the gates; `make build` compiles
@@ -122,7 +122,7 @@ check: style-lint-fast complexity-report
 # one per line (score, file:line, name), highest first, under $(BUILDDIR); the
 # summary line is what check and ci print. Parse tier, so no project flags. The
 # ratchet that holds the count per file is tests/fixtures/arch_baseline.txt.
-COMPLEXITY_SCOPE := src/*.z lib/system/*.z lib/system/system/*.z tests/unit/*.z examples/*.z
+COMPLEXITY_SCOPE := src/*.z lib/system/*.z lib/system/system/*.z lib/system/math/*.z tests/unit/*.z examples/*.z
 COMPLEXITY_TSV := $(BUILDDIR)/cognitive-complexity.tsv
 complexity-report: bin/zl
 	@mkdir -p $(BUILDDIR)
@@ -150,7 +150,7 @@ style-lint: bin/zl
 # out/ztestrunner -- the self-hosted corpus runner (src/ztestrunner.z), built
 # on demand; test/ci run it with --jobs so per-case pipelines fan out (heavy
 # kinds -- differential, selfhost-asan, fixpoint -- stay serial inside it).
-$(BUILDDIR)/ztestrunner: bin/zc src/ztestrunner.z $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z)
+$(BUILDDIR)/ztestrunner: bin/zc src/ztestrunner.z $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z)
 	@mkdir -p $(BUILDDIR)
 	bin/zc ztestrunner --src src --system lib/system --emit-c $(BUILDDIR)/ztestrunner.c
 	$(CC) $(CFLAGS) -o $(BUILDDIR)/ztestrunner $(BUILDDIR)/ztestrunner.c $(call ZLINKOF,$(BUILDDIR)/ztestrunner.c) -lm
@@ -376,7 +376,7 @@ $(BUILDDIR)/zc-seed: bootstrap/zc.c
 # bin/zc -- the self-hosted compiler, bootstrapped by the seed. Persistent +
 # git-ignored; rebuilt when the compiler sources change. The dev bin/zc
 # self-locates to this repo (lib/system here; runtime falls back to src/runtime).
-bin/zc.c: $(wildcard src/*.z) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z) $(ZC_DEP) $(RT_DEP)
+bin/zc.c: $(wildcard src/*.z) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z) $(ZC_DEP) $(RT_DEP)
 	@mkdir -p bin
 	$(ZC) zc --src src --system lib/system $(ZCHASH) --emit-c bin/zc.c
 
@@ -395,7 +395,7 @@ zc: bin/zc
 # front-end via the compiler. A separate binary from zc so the compiler stays
 # lean; zl links the front-end + typecheck (for --full's suffix rule), but never
 # the emitter.
-out/zl.c: $(BUILDDIR)/zc.o $(wildcard src/zl.z) $(wildcard src/zsource.z) $(wildcard src/zdiag.z) $(wildcard src/zrule.z) $(wildcard src/zfix.z) $(wildcard src/ztypecheck.z) $(wildcard src/ztypes.z) $(wildcard src/zenv.z) $(wildcard src/ztyping.z) $(wildcard src/zgenerator.z) $(wildcard src/zfmt.z) $(wildcard src/zfmtcursor.z) $(wildcard src/zdoc.z) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z) $(RT_DEP) | bin/zc
+out/zl.c: $(BUILDDIR)/zc.o $(wildcard src/zl.z) $(wildcard src/zsource.z) $(wildcard src/zdiag.z) $(wildcard src/zrule.z) $(wildcard src/zfix.z) $(wildcard src/ztypecheck.z) $(wildcard src/ztypes.z) $(wildcard src/zenv.z) $(wildcard src/ztyping.z) $(wildcard src/zgenerator.z) $(wildcard src/zfmt.z) $(wildcard src/zfmtcursor.z) $(wildcard src/zdoc.z) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z) $(RT_DEP) | bin/zc
 	@mkdir -p out
 	bin/zc zl --src src --system lib/system $(ZCHASH) --emit-c out/zl.c
 
@@ -410,7 +410,7 @@ bin/zl: $(BUILDDIR)/zl.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ)
 # stdio/--replay on the shared front-end via zcheck; no emitter. The
 # lsp test kind in ztestrunner builds its own copy; this rule is the
 # editor-facing binary.
-out/zls.c: $(BUILDDIR)/zc.o $(wildcard src/zls.z) $(wildcard src/zcheck.z) $(wildcard src/zsource.z) $(wildcard src/zdiag.z) $(wildcard src/zrule.z) $(wildcard src/zfix.z) $(wildcard src/ztypecheck.z) $(wildcard src/ztypes.z) $(wildcard src/zenv.z) $(wildcard src/ztyping.z) $(wildcard src/zgenerator.z) $(wildcard src/zfmt.z) $(wildcard src/zfmtcursor.z) $(wildcard src/zdoc.z) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z) $(RT_DEP) | bin/zc
+out/zls.c: $(BUILDDIR)/zc.o $(wildcard src/zls.z) $(wildcard src/zcheck.z) $(wildcard src/zsource.z) $(wildcard src/zdiag.z) $(wildcard src/zrule.z) $(wildcard src/zfix.z) $(wildcard src/ztypecheck.z) $(wildcard src/ztypes.z) $(wildcard src/zenv.z) $(wildcard src/ztyping.z) $(wildcard src/zgenerator.z) $(wildcard src/zfmt.z) $(wildcard src/zfmtcursor.z) $(wildcard src/zdoc.z) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z) $(RT_DEP) | bin/zc
 	@mkdir -p out
 	bin/zc zls --src src --system lib/system $(ZCHASH) --emit-c out/zls.c
 
@@ -429,12 +429,12 @@ zls: bin/zls
 
 # The dump tools behind the goldens: tests/unit/zlexer_dump.z and
 # tests/unit/zparser_dump.z, programs over the front-end units.
-out/zlexer: bin/zc tests/unit/zlexer_dump.z $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z)
+out/zlexer: bin/zc tests/unit/zlexer_dump.z $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z)
 	@mkdir -p $(BUILDDIR)
 	bin/zc zlexer_dump --src tests/unit --system lib/system --emit-c $(BUILDDIR)/zlexer.c
 	$(CC) $(CFLAGS) -o $(BUILDDIR)/zlexer $(BUILDDIR)/zlexer.c $(call ZLINKOF,$(BUILDDIR)/zlexer.c) -lm
 
-out/zparser: bin/zc tests/unit/zparser_dump.z $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z)
+out/zparser: bin/zc tests/unit/zparser_dump.z $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z)
 	@mkdir -p $(BUILDDIR)
 	bin/zc zparser_dump --src tests/unit --system lib/system --emit-c $(BUILDDIR)/zparser.c
 	$(CC) $(CFLAGS) -o $(BUILDDIR)/zparser $(BUILDDIR)/zparser.c $(call ZLINKOF,$(BUILDDIR)/zparser.c) -lm
@@ -459,7 +459,7 @@ regen-goldens: out/zlexer out/zparser
 
 # The formatter's dump tool behind the fmt goldens: tests/unit/zfmt_dump.z over
 # src/zfmt.z, src/zfmtcursor.z and src/zdoc.z.
-out/zfmt: bin/zc tests/unit/zfmt_dump.z src/zfmt.z src/zfmtcursor.z src/zdoc.z $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z)
+out/zfmt: bin/zc tests/unit/zfmt_dump.z src/zfmt.z src/zfmtcursor.z src/zdoc.z $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z)
 	@mkdir -p $(BUILDDIR)
 	bin/zc zfmt_dump --src tests/unit --src src --system lib/system --emit-c $(BUILDDIR)/zfmt.c
 	$(CC) $(CFLAGS) -o $(BUILDDIR)/zfmt $(BUILDDIR)/zfmt.c $(call ZLINKOF,$(BUILDDIR)/zfmt.c) -lm
@@ -478,7 +478,7 @@ regen-fmt-goldens: out/zfmt
 # The ownership matrix's generator: tests/unit/matrixgen.z crosses every type
 # family with every position, each cell's verdict read from
 # tests/fixtures/matrix_expect.txt.
-out/matrixgen: bin/zc tests/unit/matrixgen.z $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z)
+out/matrixgen: bin/zc tests/unit/matrixgen.z $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z)
 	@mkdir -p $(BUILDDIR)
 	bin/zc matrixgen --src tests/unit --system lib/system --emit-c $(BUILDDIR)/matrixgen.c
 	$(CC) $(CFLAGS) -o $(BUILDDIR)/matrixgen $(BUILDDIR)/matrixgen.c $(call ZLINKOF,$(BUILDDIR)/matrixgen.c) -lm
@@ -706,7 +706,7 @@ $(PERFBIN): bin/zc.c $(MIMALLOC_OBJ) $(BUILDDIR)/buildstamp.o
 
 perf: $(PERFBIN)
 	@echo "== zerolang line count (.z) =="
-	@lsrc=$$(cat src/*.z | wc -l); llib=$$(cat lib/system/*.z lib/system/system/*.z | wc -l); \
+	@lsrc=$$(cat src/*.z | wc -l); llib=$$(cat lib/system/*.z lib/system/system/*.z lib/system/math/*.z | wc -l); \
 	  printf "  src/*.z: %s    lib/system/**/*.z: %s    total: %s\n" "$$lsrc" "$$llib" "$$((lsrc + llib))"
 	@echo "== self-compile wall best-of-5 (mimalloc; drop run 1) + peak RSS =="
 	@for i in 1 2 3 4 5; do /usr/bin/time -f "  %es  %MkB" $(PERFRUN) 2>&1 | tail -1; done
@@ -2090,10 +2090,10 @@ perf-elision: bin/zc.c
 # spelling needs none, being the standard unknown-type error
 # (any_bound_retired, any_bound_position).
 any-guard:
-	@n=$$(grep -nE '^[[:space:]]*Any:|Any\.generic' lib/system/*.z lib/system/system/*.z | grep -vE ':[0-9]+: *#' | wc -l); \
+	@n=$$(grep -nE '^[[:space:]]*Any:|Any\.generic' lib/system/*.z lib/system/system/*.z lib/system/math/*.z | grep -vE ':[0-9]+: *#' | wc -l); \
 	if [ "$$n" -gt 0 ]; then \
 	  echo "any-guard FAIL: lib/system declares Any or bounds a parameter by it"; \
-	  grep -nE '^[[:space:]]*Any:|Any\.generic' lib/system/*.z lib/system/system/*.z | grep -vE ':[0-9]+: *#'; \
+	  grep -nE '^[[:space:]]*Any:|Any\.generic' lib/system/*.z lib/system/system/*.z lib/system/math/*.z | grep -vE ':[0-9]+: *#'; \
 	  echo "  A generic names the family it takes: anyval.generic or AnyRef.generic."; \
 	  exit 1; \
 	fi; \
@@ -3495,7 +3495,7 @@ view-guard:
 	@awk -v PH='$(VIEW_GUARD_PLACEHOLDER)' -v ALIAS='$(VIEW_GUARD_BACKS)' \
 	  -v INTERNAL='$(VIEW_GUARD_INTERNAL)' -v EMITTED='$(VIEW_GUARD_EMITTED)' \
 	  -v INLINE='$(VIEW_GUARD_INLINE)' \
-	  "$$VIEW_GUARD_AWK" lib/system/*.z lib/system/system/*.z src/zemitterc.z \
+	  "$$VIEW_GUARD_AWK" lib/system/*.z lib/system/system/*.z lib/system/math/*.z src/zemitterc.z \
 	  src/runtime/natives/*.inc src/runtime/*.inc src/runtime/*.c.tmpl \
 	  src/runtime/natives.tbl
 

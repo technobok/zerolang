@@ -1,0 +1,68 @@
+# Copyright 2009 The Go Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style
+# license that can be found in the LICENSE-GO file.
+#
+# Ported from Go's src/math/big/natmul.go at 577b91f341 (2026-09-30) on
+# 2026-10-03: multiplication.
+
+# natMulAddWW -- z = x*y + r for words y and r
+natMulAddWW: function {z: (ListVal u64).borrow x: ListViewVal u64 y: u64 r: u64} is {
+    m: x.length
+    if (m == 0) or (y == 0) then {
+        nat.natSetWord :z x: r
+        return
+    }
+    z.resize to: m + 1
+    c: u64
+    {
+        w: z.mutSlice from: 0 to: m
+        c = arith.mulAddVWW z: w :x :y :r
+    }
+    z.set i: m val: c
+    nat.natNorm :z
+}
+
+# natMul -- z = x*y. z must be neither operand: the product is written into it
+# while both are still read
+natMul: function {z: (ListVal u64).borrow x: ListViewVal u64 y: ListViewVal u64} is {
+    m: x.length
+    n: y.length
+    if m < n then {
+        natMul :z x: y y: x
+        return
+    }
+    if (m == 0) or (n == 0) then {
+        z.resize to: 0
+        return
+    }
+    if n == 1 then {
+        natMulAddWW :z :x y: (y.get i: 0) r: 0
+        return
+    }
+    z.resize to: m + n
+    {
+        w: z.mutView
+        basicMul z: w :x :y
+    }
+    nat.natNorm :z
+}
+
+# basicMul -- z = x*y, grade-school, z exactly len(x) + len(y) words and not
+# normalized afterwards
+basicMul: function {z: (SpanVal u64).borrow x: ListViewVal u64 y: ListViewVal u64} is {
+    m: x.length
+    z.clear
+    i: u64
+    for i < y.length loop {
+        d: y.get :i
+        if d != 0 then {
+            c: u64
+            {
+                row: z.slice from: i to: i + m
+                c = arith.addMulVVW z: row :x y: d
+            }
+            z.set i: i + m item: c
+        }
+        i = i + 1
+    }
+}

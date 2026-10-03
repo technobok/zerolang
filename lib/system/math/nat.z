@@ -1,0 +1,188 @@
+# Copyright 2009 The Go Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style
+# license that can be found in the LICENSE-GO file.
+#
+# Ported from Go's src/math/big/nat.go at 577b91f341 (2026-09-30) on
+# 2026-10-03: unsigned multi-precision integers. A natural number is a ListVal
+# of words, least significant first, NORMALIZED -- no leading zero words, and 0
+# the empty list. Go returns a fresh or reused `z`; here `z` is the list the
+# result is written into, resized as Go's `make` would size it. Go lets `z` alias
+# an operand; a list cannot be written while it is read, so a caller that wants
+# `z = z op x` writes into a second list, or calls an in-place twin.
+
+# natNorm -- z without its leading zero words
+natNorm: function {z: (ListVal u64).borrow} is {
+    n: z.length
+    for n > 0 while (z.get i: n - 1) == 0 loop n = n - 1
+    z.resize to: n
+}
+
+# natSetWord -- the one-word natural number x in z: no words at all for 0, which
+# is how a normalized number holds it
+natSetWord: function {z: (ListVal u64).borrow x: u64} is {
+    if x == 0 then {
+        z.resize to: 0
+        return
+    }
+    z.resize to: 1
+    z.set i: 0 val: x
+}
+
+# natSet -- a copy of x, z taking x's length
+natSet: function {z: (ListVal u64).borrow x: ListViewVal u64} is {
+    z.resize to: x.length
+    w: z.mutView
+    w.copyFrom from: x
+}
+
+# natAdd -- the sum in z: the shorter operand is added word for word, the carry
+# then runs on through the rest of the longer, and one word more holds the last
+# carry until normalizing drops it
+natAdd: function {z: (ListVal u64).borrow x: ListViewVal u64 y: ListViewVal u64} is {
+    m: x.length
+    n: y.length
+    if m < n then {
+        natAdd :z x: y y: x
+        return
+    }
+    if m == 0 then {
+        z.resize to: 0
+        return
+    }
+    if n == 0 then {
+        natSet :z :x
+        return
+    }
+    z.resize to: m + 1
+    c: u64
+    {
+        w: z.mutSlice from: 0 to: n
+        c = arith.addVV z: w x: (x.slice from: 0 to: n) y: (y.slice from: 0 to: n)
+    }
+    if m > n then {
+        w: z.mutSlice from: n to: m
+        c = arith.addVW z: w x: (x.slice from: n to: m) y: c
+    }
+    z.set i: m val: c
+    natNorm :z
+}
+
+# natSub -- z = x - y; panics when y > x, which a natural number cannot hold
+natSub: function {z: (ListVal u64).borrow x: ListViewVal u64 y: ListViewVal u64} is {
+    m: x.length
+    n: y.length
+    if m < n then panic msg: "underflow"
+    if m == 0 then {
+        z.resize to: 0
+        return
+    }
+    if n == 0 then {
+        natSet :z :x
+        return
+    }
+    z.resize to: m
+    c: u64
+    {
+        w: z.mutSlice from: 0 to: n
+        c = arith.subVV z: w x: (x.slice from: 0 to: n) y: (y.slice from: 0 to: n)
+    }
+    if m > n then {
+        w: z.mutSlice from: n to: m
+        c = arith.subVW z: w x: (x.slice from: n to: m) y: c
+    }
+    if c != 0 then panic msg: "underflow"
+    natNorm :z
+}
+
+# natCmp -- the order of x and y as -1, 0 or 1
+natCmp: function {x: ListViewVal u64 y: ListViewVal u64} out i32 is {
+    m: x.length
+    n: y.length
+    if (m != n) or (m == 0) then {
+        if m < n then return -1
+        if m > n then return 1
+        return 0
+    }
+    i: m - 1
+    for i > 0 while (x.get :i) == (y.get :i) loop i = i - 1
+    if (x.get :i) < (y.get :i) then return -1
+    if (x.get :i) > (y.get :i) then return 1
+    return 0
+}
+
+# addTo -- z += x where z is long enough; the result is not normalized, so z
+# keeps its length
+addTo: function {z: (SpanVal u64).borrow x: ListViewVal u64} is {
+    n: x.length
+    if n == 0 then return
+    c: u64
+    {
+        lo: z.slice from: 0 to: n
+        c = arith.addVVInPlace z: lo y: x
+    }
+    if c != 0 when n < z.length then {
+        hi: z.slice from: n to: z.length
+        arith.addVWInPlace z: hi y: c
+    }
+}
+
+# natBitLen -- the length of x in bits; works on an x that is not normalized
+natBitLen: function {x: ListViewVal u64} out u64 is {
+    if x.length == 0 then return 0
+    i: x.length - 1
+    return i * 64 + (x.get :i).bitLength
+}
+
+# natTrailingZeroBits -- the number of consecutive zero bits at the bottom of x
+natTrailingZeroBits: function {x: ListViewVal u64} out u64 is {
+    if x.length == 0 then return 0
+    i: u64
+    for (x.get :i) == 0 loop i = i + 1
+    return i * 64 + (x.get :i).trailingZeros
+}
+
+# natLsh -- x shifted up s bits into z: whole words by placement, the rest by
+# lshVU, and the vacated low words cleared
+natLsh: function {z: (ListVal u64).borrow x: ListViewVal u64 s: u64} is {
+    m: x.length
+    if m == 0 then {
+        z.resize to: 0
+        return
+    }
+    n: m + (s / 64)
+    z.resize to: n + 1
+    sw: s % 64
+    c: u64
+    {
+        w: z.mutSlice from: n - m to: n
+        if sw == 0 then w.copyFrom from: x else c = arith.lshVU z: w :x s: sw
+    }
+    z.set i: n val: c
+    {
+        lo: z.mutSlice from: 0 to: n - m
+        lo.clear
+    }
+    natNorm :z
+}
+
+# natRsh -- x shifted down s bits into z: the whole words below s dropped, the
+# rest by rshVU; zero once s reaches past x's top word
+natRsh: function {z: (ListVal u64).borrow x: ListViewVal u64 s: u64} is {
+    m: x.length
+    if (s / 64) >= m then {
+        z.resize to: 0
+        return
+    }
+    n: m - (s / 64)
+    z.resize to: n
+    sw: s % 64
+    {
+        w: z.mutView
+        if sw == 0 then {
+            w.copyFrom from: (x.slice from: m - n to: m)
+        } else {
+            arith.rshVU z: w x: (x.slice from: m - n to: m) s: sw
+        }
+    }
+    natNorm :z
+}

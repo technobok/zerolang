@@ -1,0 +1,70 @@
+# math_bigint_identities.z -- seeded random BigInts, of every length from 0 to
+# 40 words and either sign, checked against the identities that hold whatever
+# the values: (a + b) - b == a, (a - b) + b == a, a * b == b * a,
+# (a + b) * c == a * c + b * c, a - a == 0 (never "-0") and a * 1 == a. The
+# values are SplitMix64's, so every run checks the same ones.
+
+# the SplitMix64 state, and the identity failures
+Rng: class {
+    state: u64
+    bad: u64
+}
+
+# next -- the next SplitMix64 word
+next: function {r: Rng.borrow} out u64 is {
+    r.state = (r.state.addCarry rhs: 11400714819323198485 carry: 0).value
+    z: r.state
+    z = ((z ^ (z >> 30)).mulWide rhs: 13787848793156543929).lo
+    z = ((z ^ (z >> 27)).mulWide rhs: 10723151780598845931).lo
+    return z ^ (z >> 31)
+}
+
+# wordOf -- the BigInt of one word
+wordOf: function {w: u64} out math.BigInt is {
+    hi: math.BigInt from: ((w >> 32).i64.or d: 0)
+    lo: math.BigInt from: ((w & 4294967295).i64.or d: 0)
+    return hi * (math.BigInt from: 4294967296) + lo
+}
+
+# random -- a BigInt of n random words and a random sign
+random: function {r: Rng.borrow n: u64} out math.BigInt is {
+    base: (math.BigInt from: 4294967296) * (math.BigInt from: 4294967296)
+    acc: math.BigInt from: 0
+    i: u64
+    for i < n loop {
+        acc = acc * base + (wordOf w: (next :r))
+        i = i + 1
+    }
+    if ((next :r) & 1) == 1 then acc = (math.BigInt from: 0) - acc
+    return acc
+}
+
+# expect -- one identity: the two texts are equal
+expect: function {r: Rng.borrow what: StringView got: String.view want: String.view} is {
+    if got != want then {
+        r.bad = r.bad + 1
+        print "FAIL \{what}: \{got} != \{want}"
+    }
+}
+
+main: function is {
+    r: Rng state: 20261003 bad: 0
+    checks: u64
+    n: u64
+    for n <= 40 loop {
+        a: random :r :n
+        b: random :r n: (next :r) % (n + 2)
+        c: random :r n: (next :r) % 9
+        expect :r what: "(a+b)-b" got: (a + b - b).string want: a.string
+        expect :r what: "(a-b)+b" got: (a - b + b).string want: a.string
+        expect :r what: "a*b" got: (a * b).string want: (b * a).string
+        expect :r what: "(a+b)*c" got: (a + b * c).string want: (a * c + (b * c)).string
+        expect :r what: "a-a" got: (a - a).string want: "0".string
+        expect :r what: "a*1" got: (a * (math.BigInt from: 1)).string want: a.string
+        checks = checks + 6
+        n = n + 1
+    }
+    if (
+        r.bad == 0
+    ) then print "ok \{checks} identities" else print "\{r.bad} of \{checks} identities FAILED"
+}

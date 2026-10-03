@@ -1,0 +1,86 @@
+# Copyright 2015 The Go Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style
+# license that can be found in the LICENSE-GO file.
+#
+# Ported from Go's src/math/big/natconv.go at 577b91f341 (2026-09-30) on
+# 2026-10-03: conversion between natural numbers and text.
+
+# the number of decimal digits in decBase
+decDigits: 19.u64
+
+# decBase -- the largest power of ten a word holds. A function until the
+# compile-time evaluator reaches past i64
+decBase: function out u64 is {
+    return 10000000000000000000
+}
+
+# natDecimal -- x in decimal, "0" for zero
+natDecimal: function {x: ListViewVal u64} out String is {
+    if x.length == 0 then return "0"
+    q: ListVal u64
+    nat.natSet z: q :x
+    # the chunks of 19 digits, least significant first
+    chunks: ListVal u64
+    for q.length > 0 loop chunks.append (natdiv.natDivWInPlace z: q y: decBase)
+    text: String
+    i: chunks.length
+    first: true
+    for i > 0 loop {
+        i = i - 1
+        c: chunks.get :i
+        digits: "\{c}"
+        if first.not then {
+            pad: decDigits - digits.length
+            for pad > 0 loop {
+                text.append "0"
+                pad = pad - 1
+            }
+        }
+        text.append digits
+        first = false
+    }
+    return text
+}
+
+# natSetDecimal -- z = the decimal digits of text; false, z cleared, when text
+# is empty or holds anything but a digit
+natSetDecimal: function {z: (ListVal u64).borrow text: StringView} out bool is {
+    z.resize to: 0
+    if text.length == 0 then return false
+    chunk: u64
+    scale: 1.u64
+    i: u64
+    for i < text.length loop {
+        ch: (text.byteAt :i).or d: 0
+        if (ch < 48) or (ch > 57) then {
+            z.resize to: 0
+            return false
+        }
+        chunk = chunk * 10 + (ch - 48)
+        scale = scale * 10
+        if scale == decBase then {
+            mulAddInPlace :z y: scale r: chunk
+            chunk = 0
+            scale = 1
+        }
+        i = i + 1
+    }
+    if scale > 1 then mulAddInPlace :z y: scale r: chunk
+    return true
+}
+
+# mulAddInPlace -- one more chunk of digits folded in, z*y + r, z growing by a
+# word when the product spills past it
+mulAddInPlace: function {z: (ListVal u64).borrow y: u64 r: u64} is {
+    m: z.length
+    if m == 0 then {
+        nat.natSetWord :z x: r
+        return
+    }
+    c: u64
+    {
+        w: z.mutView
+        c = arith.mulAddVWWInPlace z: w :y :r
+    }
+    if c != 0 then z.append from: c
+}

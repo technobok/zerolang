@@ -1,0 +1,85 @@
+# Copyright 2009 The Go Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style
+# license that can be found in the LICENSE-GO file.
+#
+# Ported from Go's src/math/big/int.go at 577b91f341 (2026-09-30) on
+# 2026-10-03: signed integers of any size.
+
+# BigInt -- a signed integer of any size: a sign and a magnitude
+BigInt: class {
+    # whether the value is below zero; zero is never negative
+    neg: bool
+    # the magnitude, a normalized natural number: least significant word first,
+    # no leading zero word, and zero the empty list
+    abs: ListVal u64
+} as {
+    # the value of an i64
+    create: function {from: i64} out this is {
+        a: ListVal u64
+        if from < 0 then {
+            nat.natSetWord z: a x: (from.bits.not.addCarry rhs: 1 carry: 0).value
+        } else {
+            nat.natSetWord z: a x: from.bits
+        }
+        return (meta.create neg: from < 0 abs: a.take)
+    }
+
+    # the sum
+    +: function {t: this.view rhs: BigInt.view} out BigInt is {
+        r: ListVal u64
+        neg: t.neg
+        if t.neg == rhs.neg then {
+            # x + y == x + y; (-x) + (-y) == -(x + y)
+            nat.natAdd z: r x: t.abs.listView y: rhs.abs.listView
+        } else {
+            # x + (-y) == x - y == -(y - x); (-x) + y == y - x == -(x - y)
+            if (nat.natCmp x: t.abs.listView y: rhs.abs.listView) >= 0 then {
+                nat.natSub z: r x: t.abs.listView y: rhs.abs.listView
+            } else {
+                neg = neg.not
+                nat.natSub z: r x: rhs.abs.listView y: t.abs.listView
+            }
+        }
+        return (BigInt.fromParts neg: neg and (r.length > 0) abs: r.take)
+    }
+
+    # the difference
+    -: function {t: this.view rhs: BigInt.view} out BigInt is {
+        r: ListVal u64
+        neg: t.neg
+        if t.neg != rhs.neg then {
+            # x - (-y) == x + y; (-x) - y == -(x + y)
+            nat.natAdd z: r x: t.abs.listView y: rhs.abs.listView
+        } else {
+            # x - y == x - y == -(y - x); (-x) - (-y) == y - x == -(x - y)
+            if (nat.natCmp x: t.abs.listView y: rhs.abs.listView) >= 0 then {
+                nat.natSub z: r x: t.abs.listView y: rhs.abs.listView
+            } else {
+                neg = neg.not
+                nat.natSub z: r x: rhs.abs.listView y: t.abs.listView
+            }
+        }
+        return (BigInt.fromParts neg: neg and (r.length > 0) abs: r.take)
+    }
+
+    # the product
+    *: function {t: this.view rhs: BigInt.view} out BigInt is {
+        r: ListVal u64
+        natmul.natMul z: r x: t.abs.listView y: rhs.abs.listView
+        return (BigInt.fromParts neg: (t.neg != rhs.neg) and (r.length > 0) abs: r.take)
+    }
+
+    # fromParts -- the BigInt with this sign and magnitude
+    fromParts: function {neg: bool abs: (ListVal u64).take} out this is {
+        return (meta.create :neg :abs)
+    }
+
+    # the value in decimal, a leading '-' when it is negative
+    string: function {t: this.view} out String is {
+        d: natconv.natDecimal x: t.abs.listView
+        if t.neg.not then return d
+        r: "-".string
+        r.append d
+        return r
+    }
+}
