@@ -2139,7 +2139,10 @@ perf: $(PERFBIN)
 #
 # +1 the Z_WORD_PORTABLE switch in z_hash.inc, a runtime file every compile
 # reads: 0 behaviour, +1 source.
-ALLOC_BASELINE := 2215305
+#
+# +81 natMul squares equal operands: zc's own constant folding demands math,
+# so the self-compile checks the new branch: 0 behaviour, +81 source.
+ALLOC_BASELINE := 2215386
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
