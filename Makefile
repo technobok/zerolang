@@ -2044,7 +2044,10 @@ perf: $(PERFBIN)
 #
 # +143 a receiver-less member auto-called through a unit's type path: 0
 # behaviour, +143 source.
-ALLOC_BASELINE := 2147777
+#
+# +1,633 an arm default through a unit's path is a default: -3 behaviour,
+# +1,636 source.
+ALLOC_BASELINE := 2149410
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

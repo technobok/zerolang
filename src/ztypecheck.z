@@ -4934,11 +4934,7 @@ dottedTyperefShell: function {
             defName: nsChildNm
         )
         if nsTid.isZero.not then return nsTid
-        # the parent is the type only when the leaf is a marker or a member of
-        # it (an arm default); any other leaf names nothing, and is reported
-        # before the peel so the slot still types
-        reportPeeledLeaf :st :scope :ast :unitDecl :nid leafId: cId
-        return (resolveTyperefShell :st :scope :ast :unitDecl nid: parentId :thisName)
+        return (peeledTyperef :st :scope :ast :unitDecl :nid :parentId leafId: cId :thisName)
     }
 }
 
@@ -4971,6 +4967,65 @@ reportPeeledLeaf: function {
     )
 }
 
+# peeledTyperef -- the type a dotted type-ref peels to, its parent's. The
+# parent is the type only when the leaf is a marker or a member of it (an arm
+# default); any other leaf names nothing, and is reported before the peel so
+# the slot still types. A parent that is itself a path (`shade.hue.green`) is
+# resolved first, and the leaf asked of what it resolved to.
+peeledTyperef: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    nid: zast.nodeid
+    parentId: zast.nodeid
+    leafId: zast.nameid
+    thisName: StringView
+} out ztypes.tid is {
+    if (ast.nodes.get i: parentId).dottedpath then {
+        pathTid: resolveTyperefShell :st :scope :ast :unitDecl nid: parentId :thisName
+        reportPathLeaf :st :scope :ast :unitDecl :nid :leafId parentTid: pathTid
+        return pathTid
+    }
+    reportPeeledLeaf :st :scope :ast :unitDecl :nid :leafId
+    return (resolveTyperefShell :st :scope :ast :unitDecl nid: parentId :thisName)
+}
+
+# reportPathLeaf -- reportPeeledLeaf for a dotted type-ref whose parent is
+# itself a path (`shade.hue.green`): the leaf is asked of the type the parent
+# resolved to, which no root name reaches.
+reportPathLeaf: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    nid: zast.nodeid
+    leafId: zast.nameid
+    # the type the parent path resolved to, 0 when it resolved to none
+    parentTid: ztypes.tid
+} is {
+    if leafId == zast.names.wkDrop then {
+        reportPeeledLeaf :st :scope :ast :unitDecl :nid :leafId
+        return
+    }
+    if parentTid.isZero or (leafNamesNoMember :leafId) then return
+    if (st.reg.typetypeOf typeId: parentTid) == ztypes.ztypetype.unitType then return
+    if (st.typing.declChildOfId parentTypeId: parentTid nameId: leafId).none.not then return
+    n: ast.nodes.get i: nid
+    root: st.reg.nameOf tid: parentTid
+    member: zast.nameTextAt :ast ref: leafId
+    (addErrorH
+        :st
+        nodeid: nid
+        lineno: (nodeLine :n)
+        colno: (nodeCol :n)
+        e: zast.err.typeError
+        msg: "type '\{root}' has no member '\{member}'"
+        note: ""
+        hint: ""
+        width: root.length.u32.orPanic
+    )
+}
 
 # instanceTyperefMember -- the member `cId` a dotted type-ref names through a unit
 # instance, 0 when the qualifier `pId` names none. A signature can name one
@@ -6095,10 +6150,11 @@ checkReturnPins: function {
 }
 
 # recordParamArmDefault -- record a parameter's arm default, for the DOTTED
-# spelling, whose path names the sum and the arm directly. The refusal and the
-# stamp are recordArmDefault's, shared with the bare spelling and with the field
-# side, and docs/spec.pdoc states the rule once for all of them ("Defaulting to
-# an arm that carries a non-null payload is rejected").
+# spelling, whose path names the sum and the arm directly -- when it does
+# (armDefaultLeaf). The refusal and the stamp are recordArmDefault's, shared
+# with the bare spelling and with the field side, and docs/spec.pdoc states the
+# rule once for all of them ("Defaulting to an arm that carries a non-null
+# payload is rejected").
 recordParamArmDefault: function {
     # where the refusal and the default are both recorded
     st: zenv.ZSymbolTable
@@ -6112,9 +6168,11 @@ recordParamArmDefault: function {
     fid: ztypes.tid
     # the sum whose arm the default names
     cid: ztypes.tid
-    # the arm the default named
-    armNid: zast.nameid
+    # the scope the declaration was written in
+    rf: ztypes.declid
 } is {
+    armNid: armDefaultLeaf :st scope: rf :ast node: pm.operation ownerTid: fid slotTid: cid
+    if armNid.isZero then return
     pnm8: zast.nameTextCopy :ast ref: pnameId
     (recordArmDefault
         :st
@@ -6192,21 +6250,8 @@ checkParamTypeShape: function {
                     nameId: pnameId
                     value: ztyping.defaultval.literal pm.operation
                 )
-            } else if (nameDenotesUnit
-                :st
-                scope: rf
-                nameId: (nameIdOf :ast name: prn.stringView)
-            ).not when (pathNamesTypeConstant :st :ast ownerTid: fid node: pm.operation).not then {
-                pArmNid: pdcnId
-                (recordParamArmDefault
-                    :st
-                    :ast
-                    :pm
-                    :pnameId
-                    :fid
-                    :cid
-                    armNid: pArmNid
-                )
+            } else {
+                recordParamArmDefault :st :ast :pm :pnameId :fid :cid :rf
             }
         }
     }
@@ -10540,15 +10585,8 @@ attachDeclaredField: function {
             value: ztyping.defaultval.literal fm.operation
         )
     } else {
-        if dcn1Id.isZero.not when (isStripMarkerId nameId: dcn1Id).not when (nameDenotesUnit
-            :st
-            :scope
-            nameId: (nameIdOf
-                :ast
-                name: rdnr.stringView
-            )
-        ).not when (pathNamesTypeConstant :st :ast ownerTid: rid node: fm.operation).not then {
-            rArmNid: dcn1Id
+        rArmNid: armDefaultLeaf :st :scope :ast node: fm.operation ownerTid: rid slotTid: cid
+        if rArmNid.isZero.not then {
             rArmDecl: st.typing.declMemberIdOf parentTypeId: cid nameId: rArmNid
             (st.typing.declSetDefault
                 parentTypeId: rid
@@ -12523,15 +12561,8 @@ recordFieldDefault: function {
             value: ztyping.defaultval.literal fm.operation
         )
     } else {
-        if dcn0Id.isZero.not when (isStripMarkerId nameId: dcn0Id).not when (nameDenotesUnit
-            :st
-            :scope
-            nameId: (nameIdOf
-                :ast
-                name: rdnc.stringView
-            )
-        ).not when (pathNamesTypeConstant :st :ast ownerTid: cid node: fm.operation).not then {
-            cArmNid: dcn0Id
+        cArmNid: armDefaultLeaf :st :scope :ast node: fm.operation ownerTid: cid slotTid: cidf
+        if cArmNid.isZero.not then {
             cArmDecl: (st.typing.declMemberIdOf
                 parentTypeId: cidf
                 nameId: cArmNid
@@ -12847,6 +12878,37 @@ declaredByValue: function {
 } out bool is {
     if (valueDeclares :ast :node) then return true
     return (pathNamesTypeConstant :st :ast :ownerTid :node)
+}
+
+# armDefaultLeaf -- the arm a dotted member declaration defaults to, or 0 when
+# the path names a type: an ownership marker (`Bag.borrow`), a type constant,
+# or the member a unit-qualified ref names (`math.BigInt`, `shade.hue`). A path
+# from a unit is an arm only past the type, its leaf an arm of the slot's sum
+# (`math.roundingmode.toZero`).
+armDefaultLeaf: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast.view
+    # the declaration's dotted path
+    node: zast.nodeid
+    # the type, function or record the member belongs to
+    ownerTid: ztypes.tid
+    # the type the path resolved to: the sum, when the leaf is its arm
+    slotTid: ztypes.tid
+} out zast.nameid is {
+    none: zast.nameid.create from: 0
+    n: ast.nodes.get i: node
+    leaf: dottedChildNameId :ast :n
+    if leaf.isZero or (isStripMarkerId nameId: leaf) then return none
+    if (pathNamesTypeConstant :st :ast :ownerTid :node) then return none
+    if (rootNamesAnyUnit :st :scope nameId: (rootNameIdOf :ast :n)) then {
+        pathParent: zast.nodeid
+        match n case dottedpath then pathParent = n.parent else null
+        if (ast.nodes.get i: pathParent).dottedpath.not then return none
+        if (st.reg.typetypeOf typeId: slotTid).isSum.not then return none
+        if (st.typing.declMemberIdOf parentTypeId: slotTid nameId: leaf).isZero then return none
+    }
+    return leaf
 }
 
 # pathNamesTypeConstant -- a two-segment path in declaration position that names
@@ -20201,6 +20263,9 @@ paramTypeId: function {
                 d: ztypes.noTid
             )
         }
+        # a path from a unit (`shade.hue.red`) names no type at its root:
+        # bindFunctionParam takes the type its registration resolved
+        if (rootNamesAnyUnit :st scope: st.curScope nameId: bnId) then return ztypes.noTid
         return ((walkLookupTyperefById :st scope: st.curScope :ast :unitDecl baseId: bnId).or
             d: ztypes.noTid
         )
@@ -51040,6 +51105,11 @@ bindFunctionParam: function {
     }
     fpt: foldedParamTid :st :ast :fnTid :pm
     if fpt > 0 then ptid = fpt
+    if ptid.isZero when (unitRootedPath :st :ast scope: rf node: pm.operation) then {
+        # an arm default through a unit (`m: math.roundingmode.toZero`) names no
+        # type its node can give: it has the type registerValueParam recorded
+        ptid = (st.typing.declChildOfId parentTypeId: fnTid nameId: pm.name).or d: ztypes.noTid
+    }
     if ptid > 0 then {
         (refuseNullTyped
             :st
@@ -60312,6 +60382,32 @@ nameDenotesUnit: function {
     bt: declTypeIdOf :st declId: h.declId
     if bt.isZero then return false
     return (st.reg.typetypeOf typeId: bt) == ztypes.ztypetype.unitType
+}
+
+# rootNamesAnyUnit -- does `nameId` name a unit of any kind here: what
+# nameDenotesUnit answers, or a unit declaration in scope -- a subunit, a nested
+# unit -- which it leaves out on purpose. A path from one names no type at its
+# root (`shade.hue.red` beside a sibling subunit `shade`).
+rootNamesAnyUnit: function {
+    st: zenv.ZSymbolTable.view
+    scope: ztypes.declid
+    nameId: zast.nameid
+} out bool is {
+    if (nameDenotesUnit :st :scope :nameId) then return true
+    h: envLookup :st :scope :nameId
+    if h.declId.isZero then return false
+    return (st.typing.decls.get i: h.declId).kind.unitDecl
+}
+
+# unitRootedPath -- whether a declaration is a dotted path from a unit
+unitRootedPath: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    scope: ztypes.declid
+    node: zast.nodeid
+} out bool is {
+    if (ast.nodes.get i: node).dottedpath.not then return false
+    return (rootNamesAnyUnit :st :scope nameId: (rootNameIdOf :ast n: (ast.nodes.get i: node)))
 }
 
 # isUnitNameDecl -- does `nameId` name a FILE unit: a child of the program root
