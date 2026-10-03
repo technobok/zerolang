@@ -4507,12 +4507,20 @@ Analysis: class {
         mainFsno: zvfs.fsno
         # the node ranges of every instance's copy of a body, start and end in turn
         copies: (ListVal ztyping.bodycopy).view
+        # the bindings a `for` writes, which are locals as an assignment's are:
+        # each keyed by the expression it binds, which is what defines it
+        loopBinds: (IdMapV zast.nodeid v: zast.nodeid).view
         nid: zast.nodeid
         vid: u64
     } is {
         if (used.has item: vid) then return
-        if (prog.fsnoForNode nodeid: nid) != mainFsno then return
-        if (ztyping.nodeInCopies :copies :nid) then return
+        # a loop binding is defined by the expression it binds, or by the
+        # `.iterate` the checker writes over that expression for `for each`
+        srcId: loopBoundExpr :prog :loopBinds :nid
+        bindId: (loopBinds.get key: srcId).or d: zast.nodeid
+        if bindId.isZero then srcId = nid
+        if (prog.fsnoForNode nodeid: srcId) != mainFsno then return
+        if (ztyping.nodeInCopies :copies nid: srcId) then return
         nm: String
         ln: u32
         cl: u32
@@ -4525,6 +4533,17 @@ Analysis: class {
                 nm = zast.poolTextCopy pool: prog.names ref: nodeL.name
                 ln = nodeL.lineno
                 cl = nodeL.colno
+                okL = true
+            } else null
+        }
+        if bindId.isZero.not then {
+            nodeB: prog.nodes.get i: bindId
+            match (
+                nodeB
+            ) case namedoperation then {
+                nm = zast.poolTextCopy pool: prog.names ref: nodeB.name
+                ln = nodeB.lineno
+                cl = nodeB.colno
                 okL = true
             } else null
         }
@@ -4541,8 +4560,9 @@ Analysis: class {
     # reportUnusedVars -- L014 (unused parameter) + L013 (unused local). A binding whose
     # variableId never appears as a use (atomVariableId) is dead. Params are walked from the
     # main unit's function defs (precise name/position; the receiver is exempt). Locals are the
-    # assignment bindings in this file. The opt-out is to end the variable with `x.drop` on its
-    # own line (a name that owns nothing lowers to `(void)(x);`), which stamps a use.
+    # assignment bindings in this file and the bindings a `for` writes. The opt-out is to end the
+    # variable with `x.drop` on its own line (a name that owns nothing lowers to `(void)(x);`),
+    # which stamps a use.
     reportUnusedVars: function {:this prog: Ast.view lu: LintedUnit.view st: zenv.ZSymbolTable} is {
         used: usedVarSet :st wtgt: (writeTargetAtoms :prog)
         mainOp: lu.op
@@ -4552,12 +4572,14 @@ Analysis: class {
         }
         if fnOps.length == 0 then return
         mainFsno: prog.fsnoForNode nodeid: (fnOps.get i: 0)
+        loopBinds: loopBindingIds :prog
         for each dv: st.typing.defVariableId.iterateItems loop {
             (this.reportUnusedLocalAt
                 :prog
                 :used
                 :mainFsno
                 copies: st.typing.instanceCopies
+                :loopBinds
                 nid: dv.key
                 vid: dv.value
             )
@@ -4996,6 +5018,50 @@ usedVarSet: function {st: zenv.ZSymbolTable.view wtgt: (IdSet u64).view} out IdS
         if (wtgt.has item: av.key.u64).not then used.add item: av.value
     }
     return used
+}
+
+# loopBindingIds -- the binding each `for` writes (`for each x: xs`, `for x: f`):
+# a labelled condition, where an unlabelled one is a `while` test
+loopBindingIds: function {prog: Ast.view} out (IdMapV zast.nodeid v: zast.nodeid) is {
+    ids: IdMapV zast.nodeid v: zast.nodeid
+    i: zast.nodeid
+    for i.u64 < prog.nodes.length loop {
+        n: prog.nodes.get :i
+        match (
+            n
+        ) case forexpr then {
+            k: u64
+            for k < n.conditions.count loop {
+                cid: zast.kidAt kids: prog.kids span: n.conditions i: k
+                c: prog.nodes.get i: cid
+                match (
+                    c
+                ) case namedoperation then {
+                    if c.name.isZero.not then ids.set key: c.operation value: cid
+                } else null
+                k = k + 1
+            }
+        } else null
+        i = i.next
+    }
+    return ids
+}
+
+# loopBoundExpr -- the expression a `for` binds when the definition `nid` is
+# a loop binding's: `nid` itself, or the parent of the implied `.iterate`
+# dotted path the checker writes over it for `for each`. `nid` when it is
+# neither, which the caller tells apart by asking loopBinds.
+loopBoundExpr: function {
+    prog: Ast.view loopBinds: (IdMapV zast.nodeid v: zast.nodeid).view nid: zast.nodeid
+} out zast.nodeid is {
+    if (loopBinds.has key: nid) then return nid
+    n: prog.nodes.get i: nid
+    match (
+        n
+    ) case dottedpath then {
+        if (loopBinds.has key: n.parent) then return n.parent
+    } else null
+    return nid
 }
 
 # appendUserFnOp -- append `opId` when it defines a function written in a real
