@@ -3691,8 +3691,9 @@ generic-param-guard: bin/zl
 # dependency unit is shown at THAT unit's path and line, with its source line.
 # A finding in a generic body is reported once, not once per instance's copy.
 # A subunit file is linted as the subunit it is, reading its parent, and its
-# finding is at its own path and line; a subunit file its parent never names is
-# reported as unchecked.
+# finding is at its own path and line; linting the PARENT reports none of the
+# subunit's findings, which are its file's, not the parent's; a subunit file its
+# parent never names is reported as unchecked.
 ZLFULL_FIX := tests/fixtures/zl_full/tiered.z
 ZLFULL_DEP := tests/fixtures/zl_full/depunit/depmain.z
 ZLFULL_ONCE := tests/fixtures/zl_full/generic_once.z
@@ -3720,8 +3721,12 @@ zl-full-guard: bin/zl
 	  echo "zl-full-guard FAIL: a generic body's L013/L022 was not reported exactly once:"; \
 	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
 	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full $(CURDIR)/$(ZLFULL_SUB)/inner.z 2>&1); \
-	if ! printf '%s\n' "$$out" | grep -q 'L013' || ! printf '%s\n' "$$out" | grep -q 'subunit/host/inner.z:4:5' || printf '%s\n' "$$out" | grep -q 'error\['; then \
+	if ! printf '%s\n' "$$out" | grep -q 'L013' || ! printf '%s\n' "$$out" | grep -q 'subunit/host/inner.z:4:5' || ! printf '%s\n' "$$out" | grep -q 'subunit/host/inner.z:11:20' || printf '%s\n' "$$out" | grep -q 'error\['; then \
 	  echo "zl-full-guard FAIL: a subunit file was not linted as its parent's subunit, at its own path:"; \
+	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
+	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full $(CURDIR)/$(ZLFULL_SUB).z 2>&1); \
+	if printf '%s\n' "$$out" | grep -q 'L015\|L013'; then \
+	  echo "zl-full-guard FAIL: linting a unit reported its subunit's finding at the unit's own path:"; \
 	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
 	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full $(CURDIR)/$(ZLFULL_SUB)/orphan.z 2>&1); rc=$$?; \
 	if [ $$rc -eq 0 ] || ! printf '%s\n' "$$out" | grep -q "did not run: no unit the roots load for 'host' comes from this file"; then \
