@@ -257,7 +257,8 @@ readable-check: bin/zc $(BUILDDIR)/buildstamp.o
 	@mkdir -p $(BUILDDIR)/rn
 	@for c in hello:examples vector:examples records:examples fibonacci:examples \
 	          typedefs:examples shadow_unit_const:tests/fixtures/emitc_corpus \
-	          rn_sibling_shadow:tests/fixtures/emitc_corpus; do \
+	          rn_sibling_shadow:tests/fixtures/emitc_corpus \
+          rn_two_companions:tests/fixtures/emitc_corpus; do \
 	  n=$${c%%:*}; d=$$(echo $$c | sed 's/^[^:]*://'); \
 	  bin/zc $$n --src $$d --system lib/system --emit-c $(BUILDDIR)/rn/$$n-id.c || exit 1; \
 	  bin/zc $$n --src $$d --system lib/system --readable-names --emit-c $(BUILDDIR)/rn/$$n-rn.c || exit 1; \
@@ -2077,7 +2078,10 @@ perf: $(PERFBIN)
 #
 # +789 math's constants (pi, e, ln2 ...) and the float conversion docs: 0
 # behaviour, +789 source.
-ALLOC_BASELINE := 2221617
+#
+# +112 each re-point companion's C name carries its id: +4 behaviour, +108
+# source.
+ALLOC_BASELINE := 2221729
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
