@@ -32318,6 +32318,105 @@ checkWideConstants: function {ast: Ast.view st: zenv.ZSymbolTable} is {
     }
 }
 
+# noteClosedRange -- record an `upto` / `downto` call, whose two ends
+# checkClosedRangeSpans asks of once the walk has folded them.
+noteClosedRange: function {st: zenv.ZSymbolTable ast: Ast.view call: callref} is {
+    cn: dottedChildNameId :ast n: (ast.nodes.get i: call.callable)
+    if (cn == zast.names.wkUpto).not when (cn == zast.names.wkDownto).not then return
+    st.typing.closedRangeCalls.append from: call.nid
+    st.typing.closedRangeMonos.append from: st.typing.curMonoStamp
+}
+
+# checkClosedRangeSpans -- a closed range whose two ends are constants and that
+# holds 2^64 values or more is refused. Its walk counts down a u64 trip count,
+# `hi - lo + 1`, which wraps to zero at exactly 2^64: `0.u64.upto to:
+# 18446744073709551615.u64` walked nothing, silently, in the object form and in
+# the counted lowering alike.
+checkClosedRangeSpans: function {ast: Ast.view st: zenv.ZSymbolTable} is {
+    i: u64
+    for i < st.typing.closedRangeCalls.length loop {
+        nid: st.typing.closedRangeCalls.get :i
+        mono: st.typing.closedRangeMonos.get :i
+        i = i + 1
+        ends: closedRangeEnds :ast :nid
+        if ends.from.isZero.not when ends.to.isZero.not then {
+            lo: st.typing.nodeConstIn :mono nid: ends.from
+            hi: st.typing.nodeConstIn :mono nid: ends.to
+            if lo.kind.ivalKind when hi.kind.ivalKind then {
+                reportClosedRangeSpan :st :ast :nid :lo :hi down: ends.down
+            }
+        }
+    }
+}
+
+# rangeends -- the two ends of an `upto` / `downto` call, by node, and which way
+# it walks.
+rangeends: record {
+    # the receiver: where the walk starts
+    from: zast.nodeid
+    # the argument: where it ends
+    to: zast.nodeid
+    # `downto`
+    down: bool
+}
+
+# closedRangeEnds -- the receiver and the one argument of the `upto` /
+# `downto` call at `nid`; zero nodes when it is not that shape.
+closedRangeEnds: function {ast: Ast.view nid: zast.nodeid} out rangeends is {
+    r: rangeends from: zast.nodeid to: zast.nodeid down: false
+    n: ast.nodes.get i: nid
+    match (
+        n
+    ) case call then {
+        if n.arguments.count != 1 then return r
+        cl: ast.nodes.get i: n.callable
+        match (
+            cl
+        ) case dottedpath then {
+            r.from = cl.parent
+            r.down = (atomNameId :ast n: (ast.nodes.get i: cl.child)) == zast.names.wkDownto
+        } else null
+        a: zast.kidAt kids: ast.kids span: n.arguments i: 0
+        r.to = a
+        an: ast.nodes.get i: a
+        match (
+            an
+        ) case namedoperation then {
+            r.to = an.operation
+        } else null
+    } else null
+    return r
+}
+
+# reportClosedRangeSpan -- refuse the range `lo` .. `hi` when it holds more
+# values than a u64 trip count.
+reportClosedRangeSpan: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    nid: zast.nodeid
+    lo: ztypes.cval
+    hi: ztypes.cval
+    down: bool
+} is {
+    a: constBigOf :st v: lo
+    b: constBigOf :st v: hi
+    span: b - a
+    if down then span = a - b
+    if span.sign < 0 then return
+    count: span + (math.BigInt from: 1)
+    if count.bitLength <= 64 then return
+    n: ast.nodes.get i: nid
+    (reportConstError
+        :st
+        nodeid: nid
+        lineno: (nodeLine :n)
+        colno: (nodeCol :n)
+        width: 1
+        msg: "the closed range from \{a.string} to \{b.string} holds \{count.string} values, more than a trip count holds"
+        hint: "a closed range holds at most 18446744073709551615 values: split it, or walk it with a loop that tests its end"
+    )
+}
+
 # wideConstSpelling -- the literal a wide constant was written as, or "" when
 # it is a fold, which is named by its value.
 wideConstSpelling: function {ast: Ast.view nid: zast.nodeid} out String is {
@@ -46343,6 +46442,7 @@ checkCall: function {
     call: callref
 } out ztypes.tid is {
     st.typing.callKind.set key: call.nid value: zast.callkind.unknown
+    if call.infix.not then noteClosedRange :st :ast :call
     # AN OPERATOR IS AN IDENTIFIER, and a numeric literal names no method and
     # never can. This reaches the infix form from the shape a call takes when a
     # second argument is written without its name: `f 10 3` is three paths, and
@@ -61280,6 +61380,7 @@ typecheck: function {
         checkBareGenericReturns ast: program :st
         reportTypedefClashes ast: program :st
         checkWideConstants ast: program :st
+        checkClosedRangeSpans ast: program :st
         stampAliasValues :st ast: program
         stampGenericBounds :st ast: program
         stampGenericParams :st ast: program
