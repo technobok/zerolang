@@ -143,97 +143,57 @@ The constant types:
 #--: arbitrary-precision constant arithmetic
 
 The section above asks what TYPE a constant has. This asks what VALUE the
-compiler can hold while it works one out, which is a separate question with a
-separate answer -- and the one that blocks the other, because a per-value type
-lattice cannot name a value the evaluator cannot carry.
+compiler can hold while it works one out.
 
-What is true today, measured rather than assumed:
-
-#ul:
-  [#*: the compile-time value of an integer constant is an #~"i64" -- one signed
-    slot on #~"cval" -- so a magnitude above #~"2^63-1" has nowhere to live. The
-    evaluator answers "not a constant" for it. A unit constant such as
-    #~"k: 18446744073709551615" is therefore refused (below) rather than
-    defined.]
-  [#*: the limit is already admitted in a user-facing message -- the
-    #~"constant integer operation overflows" hint reads "the compile-time
-    evaluator works in i64; this result does not fit". Since 2026-09-18 a
-    constant overflow is refused wherever it is written, a body included
-    (#~"const_fold_in_body"), but only where the operation's type lies inside
-    i64 or was checked in its own width: a #~"u64", #~"i128" or #~"u128"
-    operation the evaluator cannot hold is left to run
-    (#~"9223372036854775807.u64 + 1.u64", #~"const_fold_runs"). That is the
-    place arbitrary precision would change: such an operation could then be
-    folded, or refused when it truly overflows.]
-  [#*: #~"i128" and #~"u128" are real numeric types whose literals cannot express
-    their own range: every literal is read in 64 bits, so
-    #~"340282366920938463463374607431768211455.u128" is refused.]
-  [#*: #~"examples/arbprec_constants.z" states that constant arithmetic folds at
-    unbounded precision. It does not: #~"0xffffffffffffffff + 1 - 1" is not
-    folded at all, it survives as C arithmetic text and agrees only because
-    unsigned C wraps. Bound to a local it prints #~"-1". The example passes
-    because the value is never observed.]
-
-#-----: until then: an unrepresentable literal is refused
-
-Until the evaluator is arbitrary precision, an integer literal that cannot be
-represented where it lands is an error, never a wrapped value:
+Decided 2026-10-03, and being built as the #~"math" arc: the compiler's
+constants are computed with a standard-library #~"math" unit -- a port of Go's
+#~"math/big" -- which the compiler uses as any other program would. The
+standard library is not special, so a #~"BigInt" good enough for the
+evaluator is good enough to ship.
 
 #ul:
-  [#*: a literal past u64's maximum is refused wherever it is written.]
-  [#*: a decimal literal past i64 -- above its maximum, or negated below its
-    minimum -- is accepted only where a slot wide enough takes it: a u64
-    parameter, target, comparison, return or #~".u64" conversion. An untyped
-    literal is an #~"i64", so #~"x: 18446744073709551615" is refused, and so is
-    the same literal as a field or parameter default. A hex, octal or binary
-    literal spells bits and is not asked this.]
-  [#*: a unit constant outside i64, whatever its radix or conversion, is
-    refused: "the compile-time evaluator works in i64".]
-  [#*: an accepted literal past i64 is written into the C with its #~"ULL"
-    suffix.]
+  [#*: integer constants are exact up to 512 bits of magnitude; past that is a
+    constant overflow, as in Go.]
+  [#*: untyped float constants are exact fractions. Once a numerator or a
+    denominator passes 4096 bits they fall back to a binary float with a
+    512-bit mantissa (go/constant's model, wide enough for #~"f128"'s
+    exponent range).]
+  [#*: a literal landing in a float slot -- an integer literal included --
+    rounds to nearest-even; only an overflow to an infinity and a nonzero
+    value that underflows to zero are refused.]
+  [#*: a hex, octal or binary literal defaults to #~"u64", and #~"1e3" is a
+    float literal.]
+  [#*: untyped shifts are exact like every other untyped operator:
+    #~"1 << 64" is #~"2^64", range-checked where it lands. A typed shift keeps
+    its width.]
+  [#*: a typed constant keeps folding in its own type.]
 
-Widening the slot is not the answer. #~"i128" would move the wall rather than
-remove it, and the wall has to be somewhere a constant expression can reach:
-an intermediate legitimately exceeds every concrete type when the final value
-does not, which is the ergonomic the coercion rules already promise.
+The digits live beside the string pool. #~"cval" stays a valtype -- it copies
+out of a stamp table instead of handing back a borrow -- and carries an id
+into an id-keyed table in #~"ZTyping" with the sentinel at row 0, as
+#~"strId" indexes #~"constStrings". The range check moves to ONE place, the
+coercion boundary where a value meets a concrete type, so
+#~"constant integer operation overflows" names the DESTINATION rather than
+the evaluator's limit.
 
-#-----: where the digits would live
+#-----: until then
 
-#~"cval" is a valtype on purpose -- it copies out of a stamp table instead of
-handing back a borrow, so a memoised evaluator can read one entry of a table it
-is about to write, and a class would make every read hold a lock on the map.
-So the digits cannot sit inside it.
-
-The mechanism for exactly this already exists and is used by the one payload
-that already does not fit a scalar slot. A constant string is not stored in the
-#~"cval"; it is INTERNED, and the #~"cval" carries #~"strId", a 1-based index
-into #~"ZTyping.constStrings" with the sentinel at row 0. An arbitrary-precision
-integer would be the same shape -- a #~"bigId" into a #~"ZTyping.constBigInts"
--- which keeps the valtype, keeps the id-keyed table, and stays SQL-dumpable.
-
-#-----: what would have to be built
-
-There is no bignum in #~"lib/" or #~"src/", so the arithmetic itself is the
-cost, and it is the part to decide before anything else:
+The evaluator holds an #~"i64" or an #~"f64", and a literal it cannot represent
+is refused rather than wrapped:
 
 #ul:
-  [#*: a full arbitrary-precision integer in the stdlib, which the compiler then
-    uses like any other user. The stdlib is not special, so a #~"BigInt" that is
-    good enough for the evaluator is good enough to ship -- and a compiler that
-    is its own first user is how every other stdlib type here got tested.]
-  [#*: a fixed WIDE accumulator (256 or 512 bits) private to the evaluator. Not
-    arbitrary, but it covers every concrete type the language has with room for
-    intermediates, and it is bounded work with no allocation. It moves the wall
-    far enough that nothing realistic reaches it -- while still being a wall,
-    which is the thing this section exists to stop doing.]
-  [#*: digits held as TEXT and re-read at each use. Rejected: re-deriving a value
-    from its spelling is the shape this compiler keeps removing, and it would put
-    a parse on every constant read.]
-
-Whichever is chosen, the range check moves to ONE place -- the coercion
-boundary, where a value meets a concrete type -- and the evaluator stops
-having a range of its own. That is what makes #~"constant integer operation
-overflows" a message about the DESTINATION rather than about the compiler.
+  [#*: a literal past #~"u64"'s maximum is refused wherever it is written.]
+  [#*: a decimal literal past #~"i64" is accepted only where a slot wide
+    enough takes it -- a #~"u64" parameter, target, comparison, return or
+    #~".u64" conversion -- and is written into the C with its #~"ULL" suffix.
+    A hex, octal or binary literal spells bits and is not asked this.]
+  [#*: a unit constant outside #~"i64" is refused. A #~"u64", #~"i128" or
+    #~"u128" operation the evaluator cannot hold is left to run.]
+  [#*: an #~"f128" constant carries its literal's exact spelling, which is
+    what the C is given, and no comparison of #~"f128" constants folds.]
+  [#*: #~"examples/arbprec_constants.z" does not observe the values it
+    describes: #~"0xffffffffffffffff + 1 - 1" survives as C arithmetic and
+    agrees only because unsigned C wraps.]
 
 #--: single #~"create" constructor for unions
 

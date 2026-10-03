@@ -225,10 +225,14 @@ shall be dual licensed as above, without any additional terms or conditions.
 
 ### Compiled output
 
-`zc` copies the C runtime fragments in `src/runtime/` into the C it emits, so
-they end up in the binary you build. That embedding carries no attribution or
-notice requirement: you may distribute programs built with `zc` under any terms
-you choose, and nothing in this license applies to your own source.
+`zc` compiles the parts of the C runtime (`src/runtime/`) and of the standard
+library (`lib/system/`) that a program reaches into the C it emits, so they
+end up in the binary you build -- as Rust's standard library and Go's runtime
+end up in theirs. Those portions stay under their own licenses: this
+project's, and for a standard-library unit ported from third-party source,
+that source's license as well (see the table below). Whoever distributes a
+binary includes the notices for what it carries. None of these licenses
+applies to your own source, which you may license as you choose.
 
 ## Third-party components
 
