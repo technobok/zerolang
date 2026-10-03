@@ -922,6 +922,32 @@ ieeeRound: function {
     return r.acc
 }
 
+# quotientIEEEBits -- BigRat.ieeeBits: num / den rounded once into the format.
+# The quotient is taken two bits wider than the format holds, toward zero, and
+# made odd when it is inexact -- round-to-odd -- so rounding it again to the
+# format, or to the fewer bits of a subnormal, rounds as the exact quotient
+# would have
+quotientIEEEBits: function {
+    num: bigint.BigInt.view
+    den: bigint.BigInt.view
+    mbits: u64
+    ebits: u64
+} out bigint.BigInt is {
+    a: BigFloat.fromInt from: num
+    b: BigFloat.fromInt from: den
+    q: (BigFloat.quotient
+        x: a
+        y: b
+        prec: (mbits + 3).u32.orPanic
+        mode: rounding.roundingmode.toZero
+    )
+    if q.form.finite when q.acc.exact.not then {
+        lsb: q.mant.length * 64 - q.prec
+        q.mant.set i: 0 val: (q.mant.get i: 0) | (1.u64 << lsb)
+    }
+    return (q.ieeeBits :mbits :ebits)
+}
+
 # fromIEEE -- BigFloat.fromIEEEBits
 fromIEEE: function {bits: bigint.BigInt.view mbits: u64 ebits: u64} out Option BigFloat is {
     prec: (mbits + 1).u32.orPanic

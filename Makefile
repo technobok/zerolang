@@ -2053,7 +2053,9 @@ perf: $(PERFBIN)
 #
 # +115 a view a call hands back, re-pointing a borrow, is kept in its
 # companion: +18 behaviour (zc's own such re-points mint one), +97 source.
-ALLOC_BASELINE := 2152218
+#
+# +24 BigRat.ieeeBits: 0 behaviour, +24 source.
+ALLOC_BASELINE := 2152242
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
