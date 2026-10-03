@@ -24,6 +24,8 @@ public: unit {
     :stringLitIsPlain
     :constBigOf
     :constIntText
+    :constFloatBits
+    :floatLexemeBits
     :constLiteralBig
     :isBitsLexeme
     :boxMemberDelegates
@@ -53870,23 +53872,48 @@ constLiteralValue: function {st: zenv.ZSymbolTable name: StringView} out ztypes.
 # keeps its sign through the operators as IEEE 754's does. noConst for an
 # exponent past even the binary float's.
 constOfFloatLiteral: function {st: zenv.ZSymbolTable lex: StringView} out ztypes.cval is {
-    if (decimalExponentPast :lex limit: 1000).not then {
-        r: math.BigRat.parse text: lex
-        match (
-            r
-        ) case ok then {
-            if r.sign == 0 when lex.startsWith "-" then {
-                return (constOfBigFloat
-                    :st
-                    f: (math.BigFloat.zero negative: true prec: constFloatPrec)
-                )
-            }
-            return (constOfRat :st :r)
-        } case err then null
-    }
-    f: math.BigFloat.parse text: lex prec: constFloatPrec
-    match f case ok then return (constOfBigFloat :st :f) case err then null
+    r: floatLiteralRat :lex
+    match r case some then return (constOfRat :st :r) case none then null
+    f: floatLiteralFloat :lex
+    match f case some then return (constOfBigFloat :st :f) case none then null
     return ztypes.noConst
+}
+
+# floatLexemeBits -- the IEEE 754 bits of float kind `k`'s value nearest a float
+# literal, read as constOfFloatLiteral reads it and rounded once, with nothing
+# interned: what a default written as a literal emits. 0 for a literal with no
+# value, which the checker refused
+floatLexemeBits: function {lex: StringView k: ztypes.numkind} out math.BigInt is {
+    mb: (ztypes.mantissaOf :k) - 1
+    eb: ztypes.floatExpBits :k
+    r: floatLiteralRat :lex
+    match r case some then return (r.ieeeBits mbits: mb ebits: eb) case none then null
+    f: floatLiteralFloat :lex
+    match f case some then return (f.ieeeBits mbits: mb ebits: eb) case none then null
+    return (math.BigInt from: 0)
+}
+
+# floatLiteralRat -- a float literal's value as a fraction; none past a decimal
+# exponent of 1000, where the fraction would outgrow what one holds, and for a
+# negative zero, which no fraction spells
+floatLiteralRat: function {lex: StringView} out Option math.BigRat is {
+    if (decimalExponentPast :lex limit: 1000) then return (Option math.BigRat).none
+    r: math.BigRat.parse text: lex
+    match (
+        r
+    ) case ok then {
+        if r.sign == 0 when lex.startsWith "-" then return (Option math.BigRat).none
+        return ((Option math.BigRat).some r.take)
+    } case err then null
+    return (Option math.BigRat).none
+}
+
+# floatLiteralFloat -- a float literal's value as a 512-bit binary float, its
+# zero's sign kept; none past even that float's exponent
+floatLiteralFloat: function {lex: StringView} out Option math.BigFloat is {
+    f: math.BigFloat.parse text: lex prec: constFloatPrec
+    match f case ok then return ((Option math.BigFloat).some f.take) case err then null
+    return (Option math.BigFloat).none
 }
 
 # decimalExponentPast -- a float lexeme's decimal exponent lies beyond
@@ -54035,7 +54062,8 @@ constOfBigFloat: function {st: zenv.ZSymbolTable f: math.BigFloat.view} out ztyp
 
 # constRatOf -- a number constant's value as a fraction, exactly: an integer, an
 # untyped float's fraction, a typed float's value. none for a value held as a
-# 512-bit float, and for an infinity
+# 512-bit float, for an infinity, and for a negative zero, which no fraction
+# spells
 constRatOf: function {st: zenv.ZSymbolTable.view v: ztypes.cval} out Option math.BigRat is {
     if v.kind.ivalKind then return ((Option math.BigRat).some (math.BigRat.fromInt
         from: (constBigOf :st :v)
@@ -54046,6 +54074,7 @@ constRatOf: function {st: zenv.ZSymbolTable.view v: ztypes.cval} out Option math
         e: st.typing.constRats.get i: v.ratId
         return ((Option math.BigRat).some e.copy)
     }
+    if v.fval == 0.0 when v.fval.signBit then return (Option math.BigRat).none
     return (math.BigRat.fromF64 from: v.fval)
 }
 
@@ -54104,6 +54133,7 @@ constFloatLanding: function {
 constIsZero: function {st: zenv.ZSymbolTable.view v: ztypes.cval} out bool is {
     if v.kind.ivalKind then return (v.ival == 0) and (v.bigId == 0)
     if v.floatId != 0 then return (constBigFloatOf :st :v).sign == 0
+    if v.kind.fvalKind when v.ratId == 0 then return v.fval == 0.0
     r: constRatOf :st :v
     match r case some then return r.sign == 0 case none then null
     return false
@@ -54596,20 +54626,14 @@ constFloatFolds: function {
 # `N.u8`, `L.u32`, `(A + B).f64`. An untyped literal converts as its literal
 # would, so its value must fit; a typed number folds only through a LOSSLESS
 # conversion, since one that can lose data yields a result to handle rather
-# than a value. noConst when `targetId` names no numeric type.
-#
-# An f128 is wider than the f64 the evaluator holds, so an f128 value also
-# carries its exact spelling in `strId`, which is what the emitter writes: the
-# literal as written (`1.1` keeps the 60 bits an f64 drops), or an integer's
-# digits (2^53 + 1 has no f64 at all). Its `fval` is then only the nearest f64.
+# than a value. noConst when `targetId` names no numeric type. A float target
+# takes the value it holds nearest (constLandedFloat).
 constOfConversion: function {
     st: zenv.ZSymbolTable
     scope: ztypes.declid
     ast: Ast
     v: ztypes.cval
     targetId: zast.nameid
-    # the literal the value was read from, zero when it is not one
-    lexemeId: zast.nameid
     nid: zast.nodeid
     ln: u32
     co: u32
@@ -54657,7 +54681,6 @@ constOfConversion: function {
     c: v
     tk: (numKindOfTid :st tid: target).kind
     if (ztypes.isFloatKind k: tk) then c = constLandedFloat :st :v k: tk
-    if tk.f128Type then c.strId = f128Spelling :st :ast :v :lexemeId
     return (ztypes.typedConst :c numTid: target)
 }
 
@@ -54676,26 +54699,6 @@ constLandedFloat: function {
     r: constRatOf :st :v
     match r case some then return (constOfRat :st :r) case none then null
     return ztypes.noConst
-}
-
-# f128Spelling -- the exact spelling an f128 constant carries, interned: an
-# integer's digits as a float literal, or the float literal as written. 0 for a
-# value that came from neither, whose f64 is already its exact value or the
-# value an untyped float has.
-f128Spelling: function {
-    st: zenv.ZSymbolTable
-    ast: Ast.view
-    v: ztypes.cval
-    lexemeId: zast.nameid
-} out u32 is {
-    if v.kind.ivalKind then {
-        digits: constIntText :st :v
-        digits.append ".0"
-        return (constInternString :st text: digits.stringView)
-    }
-    if lexemeId.isZero then return 0
-    lx: zast.nameTextAt :ast ref: lexemeId
-    return (constInternString :st text: lx.stringView)
 }
 
 # scalarTidOf -- the system scalar type the name `nameId` spells, found as a
@@ -56974,7 +56977,6 @@ constOfNamedBase: function {
                 :ast
                 v: lit
                 targetId: ncId
-                lexemeId: ptId
                 nid: atNid
                 ln: atLine
                 co: atCol
@@ -57055,7 +57057,6 @@ constOfNamedBase: function {
                 :ast
                 v: pcv
                 targetId: ncId
-                lexemeId: zast.nameid
                 nid: atNid
                 ln: atLine
                 co: atCol
@@ -57335,7 +57336,6 @@ evalConstDotted: function {
             :ast
             v: pv
             targetId: ncId
-            lexemeId: zast.nameid
             :nid
             :ln
             :co

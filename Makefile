@@ -2065,7 +2065,10 @@ perf: $(PERFBIN)
 # +65,585 untyped floats are exact: +897 behaviour, +64,672 source (the
 # compiler compiles math's BigRat and BigFloat, which its constants now use,
 # as phase 5's BigInt cost +90,931).
-ALLOC_BASELINE := 2218381
+#
+# +922 float constants reach C as their landed bits: +984 behaviour, -60
+# source.
+ALLOC_BASELINE := 2219303
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -2353,7 +2356,7 @@ case-guard:
 # reports E0601 there. A rise means a unit now rejects programs that never
 # touch it (which is what made `--cc tcc` reject the entire corpus); a fall
 # means a guard stopped firing for a program that does touch it.
-REQUIRE_TCC_BASELINE := 10
+REQUIRE_TCC_BASELINE := 11
 
 require-guard: bin/zc
 	@n=0; rep=""; \
@@ -2624,7 +2627,7 @@ static-tcc-guard: bin/zc bin/zl bin/zls
 # returned "quadmath" unconditionally would link fine and pass every other
 # gate. A rise means something now reaches a unit it did not; a fall means a
 # program lost a need it had.
-ZLINK_BASELINE := 6
+ZLINK_BASELINE := 7
 
 zlink-guard: bin/zc
 	@n=0; rep=""; \

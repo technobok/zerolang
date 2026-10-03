@@ -317,65 +317,6 @@ cTypeOf: function {name: StringView} out String is {
     return ""
 }
 
-# cFloatLitSuffix -- the C literal suffix that parses a float literal at
-# the named width (single rounding): f (float), f16 (_Float16), Q
-# (__float128); f64 literals stay bare (double).
-cFloatLitSuffix: function {name: StringView} out String is {
-    if name == "f32" then return "f"
-    if name == "f16" then return "f16"
-    if name == "f128" then return "Q"
-    return ""
-}
-
-# isFloatLitText -- the expression text is a bare digit-led float literal
-# (decimal point or exponent; no identifier characters). A leading minus is the
-# literal's own: `-1.1` is one lexeme.
-isFloatLitText: function {s: StringView} out bool is {
-    n: s.length
-    if n == 0 then return false
-    at: u64
-    if ((s.byteAt 0).or d: 0) == 45 then at = 1
-    b0: s.byteAt at
-    match (
-        b0
-    ) case some then {
-        if b0 < 48 then return false
-        if b0 > 57 then return false
-    } case none then {
-        return false
-    }
-    hasDotE: false
-    i: u64
-    for i < n loop {
-        bo: s.byteAt i
-        match (
-            bo
-        ) case some then {
-            ok: false
-            if bo >= 48 when bo <= 57 then ok = true
-            if bo == 46 then {
-                ok = true
-                hasDotE = true
-            }
-            if bo == 101 then {
-                ok = true
-                hasDotE = true
-            }
-            if bo == 69 then {
-                ok = true
-                hasDotE = true
-            }
-            if bo == 43 then ok = true
-            if bo == 45 then ok = true
-            if ok.not then return false
-        } case none then {
-            return false
-        }
-        i = i + 1
-    }
-    return hasDotE
-}
-
 # scalarTidIsBuiltin -- asked only where cTypeOf has already matched the NAME:
 # is this tid the runtime-backed type behind that name, or a USER type wearing
 # it? The DECLARATION answers it. The sixteen scalars are `record is native` and
@@ -1002,13 +943,6 @@ emitNumericCast: function {
     retTid: ztypes.tid
     key: StringView
 } out String is {
-    # a bare float-literal operand re-parses at the destination width
-    # via the C literal suffix (single rounding, full precision). A LITERAL
-    # concern, not a conversion one: there is no value to convert yet.
-    if (isFloatName name: dstName) when (isFloatLitText s: val) then {
-        fl: cFloatLitSuffix name: dstName
-        return "\{val}\{fl}"
-    }
     body: nativeImplOf :ctx path: key
     if body.length == 0 then {
         emitFail :ctx what: "no native implementation for '\{key}'" line: 0
@@ -11030,13 +10964,16 @@ renderDefault: function {
     if dl.literal then {
         if dl.isZero then return ""
         lt: ztypecheck.rootNameOf :ast n: (ast.nodes.get i: dl)
-        lc: literalDefaultC lex: lt.stringView
-        # a float literal is read at the target's width, as a body literal is
-        if (isFloatLitText s: lt.stringView) then {
+        # a float literal is the target type's value nearest it, as a body
+        # literal is
+        if (ztypes.isFloatLexeme numstr: lt.stringView) then {
             tnD: constScalarNameForTid :ast :symtab tid: targetTid
-            lc.append (cFloatLitSuffix name: tnD.stringView)
+            fk: ztypes.numkindByName name: tnD.stringView
+            k: ztypes.numkind.f64Type
+            if fk.has when (ztypes.isFloatKind k: fk.kind) then k = fk.kind
+            return (floatBitsC bits: (ztypecheck.floatLexemeBits lex: lt.stringView :k) :k)
         }
-        return lc
+        return (literalDefaultC lex: lt.stringView)
     }
     {
         dk: dv
@@ -12066,44 +12003,51 @@ narrowConstToName: function {v: i64 name: StringView} out i64 is {
     return v
 }
 
-# floatConstText -- the C literal a folded float renders as: a hexadecimal
-# floating constant, exact for every finite value an f64 holds, where a decimal
-# rendering would round it. A float of the `f32` type carries the `f` suffix, so
-# the arithmetic it joins stays f32. "" for a value no literal spells -- an
-# infinity or a NaN -- which the typechecker never folds.
-floatConstText: function {v: f64 name: StringView} out String is {
-    bits: v.bits
-    expo: (bits >> 52) & 2047
-    if expo == 2047 then return ""
-    r: String
-    if (bits >> 63) == 1 then r.append "-"
-    r.append (hexFloatMagnitude :expo mant: bits & 4503599627370495)
-    probe: " \{name} "
-    mf32: " f32 "
-    if (mf32.contains needle: probe) then r.append "f"
-    return r
+# floatValueC -- the C literal for float kind `k`'s value nearest the number
+# constant `v`: its IEEE 754 bits, rounded once by the checker, spelled
+# exactly in hexadecimal at the format's own width -- `f` for an f32, `Q` for
+# an f128, a cast for an f16 (whose every value a double spells), nothing for
+# an f64 -- so every C compiler reads the same value. "" for an infinity,
+# which the checker refuses before it gets here.
+floatValueC: function {
+    symtab: zenv.ZSymbolTable.view v: ztypes.cval k: ztypes.numkind
+} out String is {
+    return (floatBitsC bits: (ztypecheck.constFloatBits st: symtab :v :k) :k)
 }
 
-# hexFloatMagnitude -- `0x1.<13 hex digits>p<exponent>` for a finite f64's
-# exponent field and mantissa. A subnormal has no implicit leading one and a
-# fixed exponent.
-hexFloatMagnitude: function {expo: u64 mant: u64} out String is {
-    if expo == 0 when mant == 0 then return "0x0p+0"
+# floatBitsC -- floatValueC for the bits themselves
+floatBitsC: function {bits: math.BigInt.view k: ztypes.numkind} out String is {
+    mb: (ztypes.mantissaOf :k) - 1
+    eb: ztypes.floatExpBits :k
+    one: math.BigInt from: 1
+    field: ((bits >> mb) & ((one << eb) - one)).i64.orPanic
+    frac: bits & ((one << mb) - one)
+    if field == ((1 << eb.i64.orPanic) - 1) then return ""
+    bias: (1 << (eb - 1).i64.orPanic) - 1
+    r: String
+    if k.f16Type then r.append "((_Float16)"
+    if (bits.bit i: mb + eb) == 1 then r.append "-"
+    # the fraction's bits, padded to whole hex digits
+    pad: 4.u64 - (mb % 4) % 4
+    digits: (frac << pad).text base: 16
+    width: mb + pad / 4
     lead: "1"
-    e: expo.i64.orPanic - 1023
-    if expo == 0 then {
+    e: field - bias
+    if field == 0 then {
         lead = "0"
-        e = 0 - 1022
+        e = 1 - bias
+        if frac.sign == 0 then e = 0
     }
-    r: "0x\{lead}."
-    shift: 48.u64
-    for shift <= 48 loop {
-        nib: ((mant >> shift) & 15).u8.orPanic
-        if nib < 10 then r.appendByte b: nib + 48 else r.appendByte b: nib + 87
-        if shift == 0 then break
-        shift = shift - 4
+    r.append "0x\{lead}."
+    for each z: (width - digits.length).times loop {
+        z.drop
+        r.append "0"
     }
+    r.append digits
     r.append "p\{e}"
+    if k.f32Type then r.append "f"
+    if k.f128Type then r.append "Q"
+    if k.f16Type then r.append ")"
     return r
 }
 
@@ -12185,9 +12129,8 @@ bigValueC: function {b: math.BigInt.view} out String is {
     return u
 }
 
-# floatCvalText -- cvalText for a folded float. A value wider than an f64
-# carries its exact spelling, and is written as that literal at its own width;
-# any other is the f64 it holds.
+# floatCvalText -- cvalText for a folded float: the value the float type it is
+# written as holds nearest it, an f64 where the type is no float one.
 floatCvalText: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -12195,11 +12138,10 @@ floatCvalText: function {
     v: ztypes.cval
 } out String is {
     tnF: constScalarNameForTid :ast :symtab :tid
-    if v.strId == 0 then return (floatConstText v: v.fval name: tnF.stringView)
-    sp: symtab.typing.constStrings.get i: v.strId
-    r: sp.copy
-    r.append (cFloatLitSuffix name: tnF.stringView)
-    return r
+    fk: ztypes.numkindByName name: tnF.stringView
+    k: ztypes.numkind.f64Type
+    if fk.has when (ztypes.isFloatKind k: fk.kind) then k = fk.kind
+    return (floatValueC :symtab :v :k)
 }
 
 # cvalStrText -- the C text for a folded STRING value: a `_zcsN` static minted
@@ -12246,12 +12188,9 @@ foldedBranchOf: function {
 # nodeConstText -- the C literal for a node carrying a compile-time const
 # stamp; "" otherwise, which leaves the caller on its ordinary emit path.
 #
-# AN UNTYPED FLOAT VALUE IS REFUSED HERE. The stamp says what a node evaluates
-# to, and for an untyped float the evaluator answers in f64 while the node may
-# be f16, f32 or f128. Refusing is the whole of it -- the ordinary path emits
-# the arithmetic and the program keeps its own precision. A TYPED float holds
-# its value in its own type (an f128 its spelling), which renders exactly, as
-# the integer, string and arm domains do.
+# A FLOAT renders as the value its node's type holds nearest it, rounded once
+# from the exact value the checker folded -- the node's type being where the
+# value landed -- as the integer, string and arm domains render exactly.
 #
 # A STRING VALUE ON A `String` NODE IS REFUSED TOO. The `_zcsN` static is a
 # StringView of program memory, and a `String` node -- `"ab" + "cd"` in a body
@@ -12266,7 +12205,6 @@ nodeConstText: function {
     if nid.isZero then return ""
     g: symtab.typing.nodeConstIn mono: ctx.curThisTid :nid
     if g.kind.none then return ""
-    if g.kind.fvalKind when g.numTid.isZero then return ""
     tv: symtab.typing.nodeTypeFor :nid
     if g.kind.svalKind when (chaseStrTypedef :symtab :ctx tid: tv) == ctx.strTid then {
         return ""
