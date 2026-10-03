@@ -157,8 +157,10 @@ $(BUILDDIR)/ztestrunner: bin/zc src/ztestrunner.z $(wildcard lib/system/*.z) $(w
 
 # test -- build the compiler + the corpus runner, then run the fast corpus gate
 # (run/leak/error/dump/smoke/differential kinds, all driven via os.spawn; no
-# Python, no shell). Run before every commit.
-test: bin/zc $(BUILDDIR)/ztestrunner
+# Python, no shell). Run before every commit. The arch and docs kinds run
+# bin/zl, so every target that runs the corpus needs it built first: without it
+# those kinds count nothing and every ratchet row reads "0 findings".
+test: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --jobs $(NPROC)
 
 # ci -- the consolidated gate, runnable in one command with only a C toolchain:
@@ -171,11 +173,11 @@ ci: style-lint zl-full-guard complexity-report warn-check shadow-guard emitter-g
 	$(MAKE) --no-print-directory test-bootstrap BOOTSTRAP_CCS="$(CI_BOOTSTRAP_CCS)"
 	@echo "CI GATE GREEN: style-lint + corpus(--heavy: +selfhost-asan +fixpoint) + bootstrap"
 
-ci-corpus: bin/zc $(BUILDDIR)/ztestrunner
+ci-corpus: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --heavy --jobs $(NPROC)
 
 # what a corpus run under the vendored tcc needs built before it starts.
-TCC_RUN_DEPS := bin/zc $(BUILDDIR)/tcc $(BUILDDIR)/ztestrunner
+TCC_RUN_DEPS := bin/zc bin/zl $(BUILDDIR)/tcc $(BUILDDIR)/ztestrunner
 
 # test-tcc -- the vendored tcc compiles the corpus. --cc-forward is what makes
 # this a test of the tcc BACKEND and not merely of tcc-the-C-compiler: zc folds
