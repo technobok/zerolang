@@ -2804,46 +2804,47 @@ family: data {
     listVal: 3
     listView: 4
     listViewVal: 5
-    map: 6
-    mapRV: 7
-    mapVR: 8
-    mapVV: 9
-    set: 10
-    setVal: 11
-    idMapR: 12
-    idMapV: 13
-    idSet: 14
-    idSetIter: 15
-    idMapItemIterR: 16
-    idMapItemIterV: 17
-    idMapEntryR: 18
-    idMapEntryV: 19
-    mapEntry: 20
-    listIter: 21
-    listIterVal: 22
-    setIter: 23
-    setIterVal: 24
-    mapKeyIter: 25
-    mapItemIter: 26
-    mapKeyIterRV: 27
-    mapKeyIterVR: 28
-    mapKeyIterVV: 29
-    mapItemIterRV: 30
-    mapItemIterVR: 31
-    mapItemIterVV: 32
-    mapEntryRV: 33
-    mapEntryVR: 34
-    mapEntryVV: 35
-    option: 36
-    optionView: 37
-    result: 38
-    optionval: 39
-    resultval: 40
-    optionViewVal: 41
+    spanVal: 6
+    map: 7
+    mapRV: 8
+    mapVR: 9
+    mapVV: 10
+    set: 11
+    setVal: 12
+    idMapR: 13
+    idMapV: 14
+    idSet: 15
+    idSetIter: 16
+    idMapItemIterR: 17
+    idMapItemIterV: 18
+    idMapEntryR: 19
+    idMapEntryV: 20
+    mapEntry: 21
+    listIter: 22
+    listIterVal: 23
+    setIter: 24
+    setIterVal: 25
+    mapKeyIter: 26
+    mapItemIter: 27
+    mapKeyIterRV: 28
+    mapKeyIterVR: 29
+    mapKeyIterVV: 30
+    mapItemIterRV: 31
+    mapItemIterVR: 32
+    mapItemIterVV: 33
+    mapEntryRV: 34
+    mapEntryVR: 35
+    mapEntryVV: 36
+    option: 37
+    optionView: 38
+    result: 39
+    optionval: 40
+    resultval: 41
+    optionViewVal: 42
 
     # none -- one past the last row: both the count and the "not one of ours"
     # answer, so no real index can be mistaken for it.
-    none: 42
+    none: 43
 } out u64
 
 # dispatch -- the names the emitter DISPATCHES on -- a member selector, or the
@@ -2872,6 +2873,13 @@ dispatch: data {
     delete: 15
     keyAt: 16
     valueAt: 17
+    split: 18
+    fill: 19
+    clear: 20
+    copyFrom: 21
+    mutView: 22
+    mutSlice: 23
+    resize: 24
 } out u64
 
 # familyPut -- place one row AT its own element. Writing the index and the name
@@ -2916,6 +2924,13 @@ memberDispatchNames: function {acc: List String} is {
     dispatchPut :acc at: dispatch.delete name: "delete"
     dispatchPut :acc at: dispatch.keyAt name: "keyAt"
     dispatchPut :acc at: dispatch.valueAt name: "valueAt"
+    dispatchPut :acc at: dispatch.split name: "split"
+    dispatchPut :acc at: dispatch.fill name: "fill"
+    dispatchPut :acc at: dispatch.clear name: "clear"
+    dispatchPut :acc at: dispatch.copyFrom name: "copyFrom"
+    dispatchPut :acc at: dispatch.mutView name: "mutView"
+    dispatchPut :acc at: dispatch.mutSlice name: "mutSlice"
+    dispatchPut :acc at: dispatch.resize name: "resize"
 }
 
 # dispatchIs -- is `id` the dispatch name at index `at`? TWO zeros meet here and they
@@ -2951,6 +2966,7 @@ originBaseNames: function {acc: List String} is {
     familyPut :acc at: family.listVal name: "ListVal"
     familyPut :acc at: family.listView name: "ListView"
     familyPut :acc at: family.listViewVal name: "ListViewVal"
+    familyPut :acc at: family.spanVal name: "SpanVal"
     familyPut :acc at: family.map name: "MapRR"
     familyPut :acc at: family.mapRV name: "MapRV"
     familyPut :acc at: family.mapVR name: "MapVR"
@@ -9250,17 +9266,32 @@ emitCollectionMethodCall: function {
         )
         bn = bh9.copy
     }
+    return (emitFamilyMethodCall :ast :symtab :ctx :call :mnId :bn :bt :bvid)
+}
+
+# emitFamilyMethodCall -- a collection method call, dispatched on the receiver's
+# FAMILY: the template its mono was minted from, compared by id, so a user type
+# spelled like a container is never dispatched as one. "" when no family's leg
+# answers.
+emitFamilyMethodCall: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    call: zast.callrow.view
+    mnId: zast.nameid
+    bn: String
+    bt: ztypes.tid
+    bvid: ztypes.vid
+} out String is {
     fam: monoFamilyOf :symtab :ctx tid: bt
-    if fam == family.fixedArray then return (emitArrayMethodCall
-        :ast
-        :symtab
-        :ctx
-        :call
-        :mnId
-        :bn
-        :bt
-        :bvid
-    )
+    isArr: fam == family.fixedArray
+    if isArr then return (emitArrayMethodCall :ast :symtab :ctx :call :mnId :bn :bt :bvid)
+    isSpan: fam == family.spanVal
+    if isSpan then return (emitSpanMethodCall :ast :symtab :ctx :call :mnId :bn :bt :bvid)
+    if fam == family.listVal then {
+        lend: emitListValLendCall :ast :symtab :ctx :call :mnId :bn :bt :bvid
+        if lend.length > 0 then return lend
+    }
     isList: (
         (fam == family.list) or
         (fam == family.listVal) or
@@ -9277,15 +9308,8 @@ emitCollectionMethodCall: function {
         :bt
         :bvid
     )
-    if (fam == family.set) or (fam == family.setVal) then return (emitSetMethodCall
-        :ast
-        :symtab
-        :ctx
-        :call
-        :mnId
-        :bn
-        :bt
-    )
+    isSet: (fam == family.set) or (fam == family.setVal)
+    if isSet then return (emitSetMethodCall :ast :symtab :ctx :call :mnId :bn :bt)
     if (isMapOriginOf :symtab :ctx tid: bt) then return (emitMapMethodCall
         :ast
         :symtab
@@ -9295,27 +9319,45 @@ emitCollectionMethodCall: function {
         :bn
         :bt
     )
-    if (fam == family.idMapR) or (fam == family.idMapV) then return (emitIdMapMethodCall
-        :ast
-        :symtab
-        :ctx
-        :call
-        :mnId
-        :bn
-        :bt
-        :bvid
-    )
-    if fam == family.idSet then return (emitIdSetMethodCall
-        :ast
-        :symtab
-        :ctx
-        :call
-        :mnId
-        :bn
-        :bt
-        :bvid
-    )
+    isIdMap: (fam == family.idMapR) or (fam == family.idMapV)
+    if isIdMap then return (emitIdMapMethodCall :ast :symtab :ctx :call :mnId :bn :bt :bvid)
+    isIdSet: fam == family.idSet
+    if isIdSet then return (emitIdSetMethodCall :ast :symtab :ctx :call :mnId :bn :bt :bvid)
     return ""
+}
+
+# emitListValLendCall -- the ListVal members that lend or resize its storage:
+# `mutSlice`, a window over part of it, and `resize`. "" for any other member.
+emitListValLendCall: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    call: zast.callrow.view
+    mnId: zast.nameid
+    bn: String
+    bt: ztypes.tid
+    bvid: ztypes.vid
+} out String is {
+    isResize: dispatchIs :ctx id: mnId at: dispatch.resize
+    if isResize.not when (dispatchIs :ctx id: mnId at: dispatch.mutSlice).not then return ""
+    cb: ctxCname :ctx tid: bt
+    recvR: colRecvRef :ctx bn: bn.stringView vid: bvid
+    if isResize then {
+        vr: listArg :ast :symtab :ctx :call label: "to"
+        er: "\{cb}_resize(\{recvR}, \{vr})"
+        return er
+    }
+    recvT: "\{cb}_t*"
+    return (emitWindowSlice
+        :ast
+        :symtab
+        :ctx
+        :call
+        recvR: recvR.stringView
+        recvT: recvT.stringView
+        len: "_zw->length"
+        what: "ListVal mutSlice"
+    )
 }
 
 # narrowListIndex -- a list answers an index as its u64 position; a list
@@ -9543,7 +9585,158 @@ emitArrayMethodCall: function {
             bForm: argform.value
         )
     }
+    isSlice: (mnId == zast.names.wkSlice) or (dispatchIs :ctx id: mnId at: dispatch.mutSlice)
+    if isSlice then {
+        recvA: colRecvRef :ctx bn: bn.stringView vid: bvid
+        recvTa: "\{cb}_t*"
+        lenA: "\{cb}_length"
+        whatA: "array slice"
+        if mnId == zast.names.wkSlice then whatA = "array slice" else whatA = "array mutSlice"
+        return (emitWindowSlice
+            :ast
+            :symtab
+            :ctx
+            :call
+            recvR: recvA.stringView
+            recvT: recvTa.stringView
+            len: lenA.stringView
+            what: whatA
+        )
+    }
     return ""
+}
+
+# emitSpanMethodCall -- a window's members that take arguments. get, set and
+# slice are the mono's own functions; split and copyFrom are written here, at
+# the call, since each builds or reads another type's value.
+emitSpanMethodCall: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    call: zast.callrow.view
+    mnId: zast.nameid
+    bn: String
+    bt: ztypes.tid
+    bvid: ztypes.vid
+} out String is {
+    cb: ctxCname :ctx tid: bt
+    recvR: colRecvRef :ctx bn: bn.stringView vid: bvid
+    if mnId == zast.names.wkGet then {
+        v: listArg :ast :symtab :ctx :call label: "i"
+        e1: "\{cb}_get(\{recvR}, \{v})"
+        if (listGetIsPtr
+            :ast
+            :symtab
+            :ctx
+            monoId: bt
+        ) then return "(*\{e1})"
+        return e1
+    }
+    if mnId == zast.names.wkSet then {
+        return (emitOrderedPair
+            :ast
+            :symtab
+            :ctx
+            :call
+            cb: cb.stringView
+            m: "set"
+            lead: recvR.stringView
+            a: "i"
+            aForm: argform.value
+            b: "item"
+            bForm: argform.value
+        )
+    }
+    if mnId == zast.names.wkSlice then {
+        return (emitOrderedPair
+            :ast
+            :symtab
+            :ctx
+            :call
+            cb: cb.stringView
+            m: "slice"
+            lead: recvR.stringView
+            a: "from"
+            aForm: argform.value
+            b: "to"
+            bForm: argform.value
+        )
+    }
+    if (dispatchIs :ctx id: mnId at: dispatch.fill) then {
+        vf: listArg :ast :symtab :ctx :call label: "item"
+        ef: "\{cb}_fill(\{recvR}, \{vf})"
+        return ef
+    }
+    if (dispatchIs :ctx id: mnId at: dispatch.split) then {
+        needsAddM :ctx uname: "collections" memb: "window"
+        va: listArg :ast :symtab :ctx :call label: "at"
+        pc: (ctxCname
+            :ctx
+            tid: (chaseAggregateTypedef :symtab :ctx tid: (stampIdOf :symtab nid: call.nodeid))
+        )
+        es: String
+        es.append "({ \{cb}_t* _zs = \{recvR}; uint64_t _za = \{va}; "
+        es.append "z_coll_window_check(0, _za, _zs->length, \"SpanVal split\"); "
+        es.append "(\{pc}_t){ .lo = { .length = _za, .data = _zs->data }, "
+        es.append ".hi = { .length = _zs->length - _za, .data = _zs->data + _za } }; })"
+        return es
+    }
+    if (dispatchIs :ctx id: mnId at: dispatch.copyFrom) then {
+        vc: listArg :ast :symtab :ctx :call label: "from"
+        vn: labelArgNode :ast :call label: "from" form: argform.value
+        lc: (ctxCname
+            :ctx
+            tid: (chaseAggregateTypedef :symtab :ctx tid: (stampIdOf :symtab nid: vn))
+        )
+        ec: String
+        ec.append "({ \{cb}_t* _zd = \{recvR}; \{lc}_t _zf = \{vc}; "
+        ec.append "z_coll_window_check(0, _zf.length, _zd->length, \"SpanVal copyFrom\"); "
+        ec.append "if (_zf.length > 0) memmove(_zd->data, _zf.data, _zf.length * sizeof(*_zd->data)); })"
+        needsAddM :ctx uname: "collections" memb: "window"
+        return ec
+    }
+    return ""
+}
+
+# emitWindowSlice -- a window over [from, to) of a list's or an array's storage,
+# written at the call: the receiver's address `recvR` held as `_zw` of C type
+# `recvT`, its length as `len` spells it -- `_zw->length`, or an array's
+# constant -- and the bounds check that names `what` in its panic.
+emitWindowSlice: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    call: zast.callrow.view
+    recvR: StringView
+    recvT: StringView
+    len: StringView
+    what: StringView
+} out String is {
+    needsAddM :ctx uname: "collections" memb: "window"
+    wc: (ctxCname
+        :ctx
+        tid: (chaseAggregateTypedef :symtab :ctx tid: (stampIdOf :symtab nid: call.nodeid))
+    )
+    tmpl: String
+    tmpl.append "({ \{recvT} _zw = @@R@@; uint64_t _zf = @@A@@; uint64_t _zt = @@B@@; "
+    tmpl.append "z_coll_window_check(_zf, _zt, "
+    tmpl.append len
+    tmpl.append ", \""
+    tmpl.append what
+    tmpl.append "\"); "
+    tmpl.append "(\{wc}_t){ .length = _zt - _zf, .data = _zw->data + _zf }; })"
+    return (emitOrderedPairInto
+        :ast
+        :symtab
+        :ctx
+        :call
+        lead: recvR
+        a: "from"
+        aForm: argform.value
+        b: "to"
+        bForm: argform.value
+        tmpl: tmpl.stringView
+    )
 }
 
 # mapKeyIsString / setElemIsString -- the mono's key/element is a String, i.e.
@@ -10232,6 +10425,63 @@ emitOrderedPair: function {
     b: StringView
     bForm: argform
 } out String is {
+    ord: orderPairArgs :ast :symtab :ctx :call :a :aForm :b :bForm
+    r: orderFinish :ctx st: ord
+    opened: r.length > 0
+    r.append cb
+    r.append "_"
+    r.append m
+    r.append "("
+    r.append lead
+    r.append ", "
+    r.append (orderSlotText t: ctx st: ord slot: 0)
+    r.append ", "
+    r.append (orderSlotText t: ctx st: ord slot: 1)
+    r.append ")"
+    if opened then r.append ")"
+    orderEnd :ctx st: ord
+    return r
+}
+
+# emitOrderedPairInto -- emitOrderedPair's evaluation order for a leg whose C is
+# not a call: `tmpl` with @@R@@ the leading receiver text and @@A@@ / @@B@@ the
+# two labelled arguments in their slots.
+emitOrderedPairInto: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    call: zast.callrow.view
+    lead: StringView
+    a: StringView
+    aForm: argform
+    b: StringView
+    bForm: argform
+    tmpl: StringView
+} out String is {
+    ord: orderPairArgs :ast :symtab :ctx :call :a :aForm :b :bForm
+    r: orderFinish :ctx st: ord
+    opened: r.length > 0
+    t1: applyTmpl text: tmpl.string key: "R" val: lead
+    t2: applyTmpl text: t1 key: "A" val: (orderSlotText t: ctx st: ord slot: 0)
+    t3: applyTmpl text: t2 key: "B" val: (orderSlotText t: ctx st: ord slot: 1)
+    r.append t3
+    if opened then r.append ")"
+    orderEnd :ctx st: ord
+    return r
+}
+
+# orderPairArgs -- the two labelled arguments of a native leg, placed into slots
+# 0 and 1 in the order they are written.
+orderPairArgs: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    call: zast.callrow.view
+    a: StringView
+    aForm: argform
+    b: StringView
+    bForm: argform
+} out orderstate is {
     na: labelArgNode :ast :call label: a form: aForm
     nb: labelArgNode :ast :call label: b form: bForm
     bFirst: (
@@ -10251,21 +10501,7 @@ emitOrderedPair: function {
         slot: 1
         :ord
     )
-    r: orderFinish :ctx st: ord
-    opened: r.length > 0
-    r.append cb
-    r.append "_"
-    r.append m
-    r.append "("
-    r.append lead
-    r.append ", "
-    r.append (orderSlotText t: ctx st: ord slot: 0)
-    r.append ", "
-    r.append (orderSlotText t: ctx st: ord slot: 1)
-    r.append ")"
-    if opened then r.append ")"
-    orderEnd :ctx st: ord
-    return r
+    return ord
 }
 
 # orderLabelArg -- one labelled argument of a native leg, spelled as `form` says
@@ -13728,6 +13964,7 @@ ownerIsCollectionFamily: function {ctx: Ctx.view fam: ztypes.tid} out bool is {
         (fam == (ctx.origins.get i: family.listVal)) or
         (fam == (ctx.origins.get i: family.listView)) or
         (fam == (ctx.origins.get i: family.listViewVal)) or
+        (fam == (ctx.origins.get i: family.spanVal)) or
         (fam == (ctx.origins.get i: family.set)) or
         (fam == (ctx.origins.get i: family.setVal)) or
         (fam == (ctx.origins.get i: family.map)) or
@@ -14725,6 +14962,16 @@ emitNestedCollectionBase: function {
 } out String is {
     eCt: nestedCounterRead :symtab :ctx :mnId :nlid :baseAtom :recvIsPtr
     if eCt.length > 0 then return eCt
+    wmn: (windowMemberRead
+        :symtab
+        :ctx
+        :mnId
+        tid: nlid
+        base: baseAtom
+        :recvIsPtr
+        vid: bs9vid
+    )
+    if wmn.length > 0 then return wmn
     if (dispatchIs :ctx id: mnId at: dispatch.copy) then {
         fam: copyFamilyOf :symtab :ctx tid: nlid
         if fam > 0 then {
@@ -15615,6 +15862,52 @@ emitIdCollectionMemberRead: function {
     return ""
 }
 
+# windowMemberRead -- a no-argument member that lends a window or a view -- a
+# list's or an array's `mutView`, an array's or a window's `listView` -- written
+# as the window's {length, data}, and a window's `length` and `clear`. `base`
+# is the receiver as a value, a pointer when `recvIsPtr`, held by `vid`. ""
+# when `mnId` is none of those on `tid`.
+windowMemberRead: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    mnId: zast.nameid
+    tid: ztypes.tid
+    base: StringView
+    recvIsPtr: bool
+    vid: ztypes.vid
+} out String is {
+    fam: monoFamilyOf :symtab :ctx :tid
+    isArr: fam == family.fixedArray
+    isSpan: fam == family.spanVal
+    if (isArr or isSpan or (fam == family.listVal)).not then return ""
+    acc: "."
+    if recvIsPtr then acc = "->"
+    if isSpan when mnId == zast.names.wkLength then return "\{base}\{acc}length"
+    if isSpan when (dispatchIs :ctx id: mnId at: dispatch.clear) then {
+        sc: ctxCname :ctx :tid
+        rr: colRecvRef :ctx bn: base :vid
+        return "\{sc}_clear(\{rr})"
+    }
+    lendsView: isArr or isSpan and (mnId == zast.names.wkListView)
+    lendsWindow: (
+        isArr or (fam == family.listVal) and (dispatchIs :ctx id: mnId at: dispatch.mutView)
+    )
+    if (lendsView or lendsWindow).not then return ""
+    co: symtab.typing.declChildOfId parentTypeId: tid nameId: mnId
+    rt: ztypes.noTid
+    match (
+        co
+    ) case some then {
+        rt = fnReturnTidOf :symtab tid: co
+    } case none then null
+    if rt.isZero then return ""
+    wc: ctxCname :ctx tid: rt
+    rc: ctxCname :ctx :tid
+    len: "\{base}\{acc}length"
+    if isArr then len = "\{rc}_length"
+    return "((\{wc}_t){ .length = \{len}, .data = \{base}\{acc}data })"
+}
+
 # emitCollectionMemberRead -- a counter or no-arg method on a builtin collection
 # receiver, keyed on the template the receiver's mono came from. The id-keyed
 # pair are STACK structs, so their counters are read through `.` or `->` exactly
@@ -15642,6 +15935,16 @@ emitCollectionMemberRead: function {
     # A dict is heap-held and its local already IS the pointer the body wants;
     # a list or an id container is a stack struct, so the local's ADDRESS is.
     mnc9: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
+    wmr: (windowMemberRead
+        :symtab
+        :ctx
+        mnId: mnc9
+        tid: bstamp
+        base: bn2
+        recvIsPtr: (isPtrVid :ctx vid: bn2v)
+        vid: bn2v
+    )
+    if wmr.length > 0 then return wmr
     if (dispatchIs :ctx id: mnc9 at: dispatch.copy) then {
         fam9: copyFamilyOf :symtab :ctx tid: bstamp
         if fam9 > 0 then return (containerCopyText
@@ -32861,6 +33164,19 @@ emitListMono: function {
         holeVal: ect.stringView
         :buf
     )
+    # `resize` is declared on ListVal alone, as `.copy` is below
+    (emitColMethodOnDemand
+        :symtab
+        :ctx
+        :runtimeDir
+        :monoId
+        nameId: (ctx.mnames.get i: dispatch.resize)
+        file: "z_List_resize.c.tmpl"
+        nm: nm.stringView
+        hole: "ELEM_T"
+        holeVal: ect.stringView
+        :buf
+    )
     # `.copy` is declared on ListVal and not on ListRef, so a ListRef mono has
     # no member here for declMemberIdOf to find and nothing is written. The
     # family needs no test of its own
@@ -33422,6 +33738,114 @@ emitListViewMono: function {
         :buf
     )
     emitListIter :ctx :symtab :monoId nm: nm.stringView ect: ect.stringView :buf
+}
+
+# emitSpanMono -- a SpanVal mono: the window struct, which is a ListView's -- a
+# length and a data pointer -- and each member a use site resolved on this
+# instance, written on its own demand. split, listView and copyFrom build or
+# take another type's value, so they are written at the call instead, where
+# every struct is complete.
+emitSpanMono: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    runtimeDir: StringView
+    monoId: ztypes.tid
+    buf: String.borrow
+} is {
+    nm: cbaseNoPrefix :ctx tid: monoId
+    eid: listElemType :symtab :monoId
+    ect0: slotCType :ast :symtab :ctx tid: eid
+    ect: ctypeOrI64 s: ect0.stringView
+    p: "\{runtimeDir}/z_ListView.c.tmpl"
+    raw: readTemplateCached :ctx path: p.stringView
+    if raw.length > 0 then {
+        t1: applyTmpl text: raw key: "NAME" val: nm.stringView
+        t2: applyTmpl text: t1 key: "ELEM_T" val: ect.stringView
+        buf.append t2
+        buf.append "\n"
+    }
+    if (monoMemberUsed :symtab :monoId nameId: zast.names.wkGet) then (emitColGet
+        nm: nm.stringView
+        ect: ect.stringView
+        kind: "SpanVal"
+        ptr: (elemBorrowsByPtr :ast :symtab :ctx tid: eid)
+        mutPtr: false
+        hasGet: true
+        hasMut: false
+        :buf
+    )
+    (emitSpanMemberOnDemand
+        :symtab
+        :ctx
+        :runtimeDir
+        :monoId
+        nameId: zast.names.wkSet
+        file: "z_SpanVal_set.c.tmpl"
+        nm: nm.stringView
+        ect: ect.stringView
+        :buf
+    )
+    (emitSpanMemberOnDemand
+        :symtab
+        :ctx
+        :runtimeDir
+        :monoId
+        nameId: zast.names.wkSlice
+        file: "z_SpanVal_slice.c.tmpl"
+        nm: nm.stringView
+        ect: ect.stringView
+        :buf
+    )
+    (emitSpanMemberOnDemand
+        :symtab
+        :ctx
+        :runtimeDir
+        :monoId
+        nameId: (ctx.mnames.get i: dispatch.fill)
+        file: "z_SpanVal_fill.c.tmpl"
+        nm: nm.stringView
+        ect: ect.stringView
+        :buf
+    )
+    (emitSpanMemberOnDemand
+        :symtab
+        :ctx
+        :runtimeDir
+        :monoId
+        nameId: (ctx.mnames.get i: dispatch.clear)
+        file: "z_SpanVal_clear.c.tmpl"
+        nm: nm.stringView
+        ect: ect.stringView
+        :buf
+    )
+}
+
+# emitSpanMemberOnDemand -- emitColMethodOnDemand for a window, whose one hole
+# beyond NAME is the element type.
+emitSpanMemberOnDemand: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    runtimeDir: StringView
+    monoId: ztypes.tid
+    nameId: zast.nameid
+    file: StringView
+    nm: StringView
+    ect: StringView
+    buf: String.borrow
+} is {
+    (emitColMethodOnDemand
+        :symtab
+        :ctx
+        :runtimeDir
+        :monoId
+        :nameId
+        :file
+        :nm
+        hole: "ELEM_T"
+        holeVal: ect
+        :buf
+    )
 }
 
 # listviewMethods -- the _listView cast when a List mono carries a listView
@@ -36037,6 +36461,10 @@ emitMonoById: function {
         emitListViewMono :ast :symtab :ctx :runtimeDir :monoId :buf
         return
     }
+    if (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: family.spanVal)) then {
+        emitSpanMono :ast :symtab :ctx :runtimeDir :monoId :buf
+        return
+    }
     if (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: family.fixedArray)) then {
         emitArrayMono :ast :symtab :ctx :runtimeDir :monoId :buf
         return
@@ -36680,6 +37108,7 @@ collectLateGroup: function {
     fams.append (ctx.origins.get i: family.resultval)
     fams.append (ctx.origins.get i: family.listView)
     fams.append (ctx.origins.get i: family.listViewVal)
+    fams.append (ctx.origins.get i: family.spanVal)
     fams.append (ctx.origins.get i: family.list)
     fams.append (ctx.origins.get i: family.listVal)
     fams.append (ctx.origins.get i: family.set)
@@ -37033,6 +37462,8 @@ MonoWork: class {
     wArr: ListVal ztypes.tid
     # the list views still owed emission
     wListView: ListVal ztypes.tid
+    # the windows still owed emission
+    wSpan: ListVal ztypes.tid
     # the lists still owed emission
     wList: ListVal ztypes.tid
     # the sets still owed emission
@@ -37112,6 +37543,10 @@ classifyCollectionMono: function {
         isColKind = true
         colDst = 7
     }
+    if (originIsTid :symtab tid: tcl originTid: (ctx.origins.get i: family.spanVal)) then {
+        isColKind = true
+        colDst = 8
+    }
     if isColKind when (monoIsLate
         :ast
         :symtab
@@ -37126,6 +37561,7 @@ classifyCollectionMono: function {
         if colDst == 5 then work.wMap.append tv
         if colDst == 6 then work.wIdSet.append tv
         if colDst == 7 then work.wIdMap.append tv
+        if colDst == 8 then work.wSpan.append tv
     }
     return isColKind
 }
@@ -37359,6 +37795,14 @@ emitCollectionMonos: function {
             :buf
         )
         tid = tid.next
+    }
+    # windows next: a window is a list view's layout, and a list's mutView
+    # companion builds one by value
+    twin: u64
+    for twin < work.wSpan.length loop {
+        spId: work.wSpan.get i: twin
+        emitSpanMono :ast :symtab :ctx :runtimeDir monoId: spId :buf
+        twin = twin + 1
     }
     tid2: u64
     for tid2 < work.wList.length loop {
@@ -37610,6 +38054,7 @@ emitMonos: function {
         wOptView: ListVal ztypes.tid
         wArr: ListVal ztypes.tid
         wListView: ListVal ztypes.tid
+        wSpan: ListVal ztypes.tid
         wList: ListVal ztypes.tid
         wSet: ListVal ztypes.tid
         wMap: ListVal ztypes.tid

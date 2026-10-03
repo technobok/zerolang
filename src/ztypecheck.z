@@ -612,10 +612,13 @@ isNativeIteratorTid: function {ast: Ast st: zenv.ZSymbolTable tid: ztypes.tid} o
 }
 
 # isViewFamilyTid -- a borrowed-view type: OptionView/ListView/MapEntry monos
-# (generic-origin keyed) or the non-generic StringView/ByteView views. A view
-# result is a borrow into its parent container/string: the binding holds a
-# SHARED lock on the parent and the payload cannot be moved out.
+# (generic-origin keyed), the non-generic StringView/ByteView views, and the
+# writable windows (isMutableViewTid). A view result is a borrow into its parent
+# container/string: the binding holds the lock its call took on the parent --
+# SHARED for a readonly view, EXCLUSIVE for a window -- and the payload cannot
+# be moved out.
 isViewFamilyTid: function {ast: Ast st: zenv.ZSymbolTable tid: ztypes.tid} out bool is {
+    if (isMutableViewTid :ast :st :tid) then return true
     if tid.isZero then return false
     if tid == (builtinTidT :st scope: st.curScope :ast base: "StringView") then return true
     if tid == (builtinTidT :st scope: st.curScope :ast base: "ByteView") then return true
@@ -632,6 +635,20 @@ isViewFamilyTid: function {ast: Ast st: zenv.ZSymbolTable tid: ztypes.tid} out b
     if vog == (builtinTidT :st scope: st.curScope :ast base: "MapEntryVR") then return true
     if vog == (builtinTidT :st scope: st.curScope :ast base: "MapEntryVV") then return true
     return false
+}
+
+# isMutableViewTid -- a view that WRITES: a SpanVal window, or the SpanPair of
+# two a split answers. It borrows like every view, but the storage it reaches is
+# written through it.
+isMutableViewTid: function {ast: Ast st: zenv.ZSymbolTable tid: ztypes.tid} out bool is {
+    if tid.isZero then return false
+    vog: st.reg.genericOriginOf :tid
+    if vog.isZero then return false
+    # a program whose units never spell the window template has no window, and
+    # the lookup below is memoized only for a name the program interned
+    if (zast.poolFind pool: ast.names text: "SpanVal").isZero then return false
+    if vog == (builtinTidT :st scope: st.curScope :ast base: "SpanVal") then return true
+    return vog == (builtinTidT :st scope: st.curScope :ast base: "SpanPair")
 }
 
 # refBearingContainer -- a container that can hold a REFERENCE on at least one
@@ -6701,6 +6718,33 @@ resolveFunctionParam: function {
     }
 }
 
+# markNativeRecordClone -- a member of a sized native RECORD (array, str) whose
+# return is a partial specialisation is a clone candidate, as a member returning
+# a bare parameter is: nothing else rebuilds its instance's members, so each
+# clone respecializes the partial to the instance's arguments. A collection
+# class has its own mono slice that heals it, and a non-native method is marked
+# where it is resolved.
+markNativeRecordClone: function {
+    st: zenv.ZSymbolTable
+    fid: ztypes.tid
+    enclDecl: ztypes.declid
+    # the partial return, 0 when the return is not one
+    partial: u64
+} is {
+    if partial == 0 then return
+    if (isNativeRecordDecl :st declId: enclDecl) then st.reg.setGeneric typeId: fid value: true
+}
+
+# isNativeRecordDecl -- the declaration is a template the runtime lays out as a
+# VALUE: a `record is native`.
+isNativeRecordDecl: function {st: zenv.ZSymbolTable.view declId: ztypes.declid} out bool is {
+    if declId.isZero then return false
+    rt: declTypeIdOf :st :declId
+    if rt.isZero then return false
+    if (st.reg.typetypeOf typeId: rt) != ztypes.ztypetype.recordType then return false
+    return (st.reg.isNativeOf tid: rt)
+}
+
 # recordFunctionReturn -- record what a function returns on its type: the
 # declared return, the partial specialisation a collection template declares
 # instead, and whether the result pins (`outx`).
@@ -6762,6 +6806,7 @@ recordFunctionReturn: function {
             )
         }
         if prt4 > 0 then st.reg.setReturnType typeId: fid value: prt4
+        markNativeRecordClone :st :fid enclDecl: receiverEnclDecl partial: prt4
     }
     if (returnHasBorrowMarker :ast oId: fnode.returntype) then {
         fbk: fid
@@ -34224,8 +34269,8 @@ checkRepoint: function {
 
 # refuseRepointReadonly -- a writable borrowed target re-pointed at a readonly
 # borrow (`roV`, or a pin that may not write) would write through storage it
-# may only read. A view writes through nothing, whatever it borrows. true when
-# it refused.
+# may only read. A readonly view writes through nothing, whatever it borrows; a
+# window does. true when it refused.
 refuseRepointReadonly: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -34235,7 +34280,8 @@ refuseRepointReadonly: function {
     pins: (List ztyping.PinPath).view
     roV: bool
 } out bool is {
-    if (isViewFamilyTid :ast :st tid: lvt) then return false
+    if (isViewFamilyTid :ast :st tid: lvt) when (isMutableViewTid :ast :st tid: lvt
+    ).not then return false
     xName: varNameText :st :ast vid: xVid
     if (nameIsReadonly :st :ast name: xName.stringView) then return false
     ro: roV
