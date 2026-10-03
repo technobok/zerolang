@@ -26555,8 +26555,9 @@ createDottedBaseId: function {ast: Ast.view n: astnode.view} out optionval zast.
 # dottedBaseIsValue -- whether the base of the dotted path `n` is a VALUE rather
 # than a TYPE: the one question both a member's namespace and a call's receiver
 # are settled by, and settled by what the base NAMES, never by its shape. A call
-# result is a value unless the call is a type application (`(ListVal i64).create`);
-# a name or a path is a value unless it resolves to a type. Reading every name
+# result is a value unless the call is a type application (`(ListVal i64).create`)
+# -- a construction is a value; a name or a path is a value unless it resolves to
+# a type. Reading every name
 # the local lookup missed as a type made `(mk).plus n: 3` -- a call of `mk` --
 # demand a receiver the dot had already handed over.
 dottedBaseIsValue: function {
@@ -26575,8 +26576,39 @@ dottedBaseIsValue: function {
     if baseId.isZero then return true
     bn: ast.nodes.get i: baseId
     if bn.call then callableId = bn.callable
-    if callableId.isZero.not then return (nodeNamesType :st :ast :unitDecl nid: callableId).not
+    if callableId.isZero.not then {
+        if (nodeNamesType :st :ast :unitDecl nid: callableId).not then return true
+        return (callBuildsInstance :st :ast :unitDecl nid: baseId)
+    }
     return (nodeNamesType :st :ast :unitDecl nid: baseId).not
+}
+
+# callBuildsInstance -- the call at `nid`, whose callee names a type, builds an
+# instance rather than naming one: some argument is labelled with a name that is
+# none of the type's generic parameters -- a field, a create parameter. A
+# construction is a call like any other, so `(Cell n: 2).show` reads the
+# instance it builds; reading every call whose callee named a type as a type
+# demanded a receiver the dot had already handed over. A type given its generic
+# parameters alone -- `(ListVal i64)`, `(array t: i64 to: 4)` -- names one
+callBuildsInstance: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    nid: zast.nodeid
+} out bool is {
+    call: callRefAt :ast :nid
+    tpl: typeApplicationTemplate :st scope: st.curScope :ast :unitDecl callableNid: call.callable
+    tk: declOfTypeId :st tid: tpl
+    k: u64
+    for k < call.nargs loop {
+        arg: argRefAt :ast nid: (zast.callArgAt :ast :nid i: k)
+        k = k + 1
+        if arg.nid.isZero.not when arg.name.isZero.not when (st.reg.isGenericParamOf
+            tdecl: tk
+            name: arg.name
+        ).not then return true
+    }
+    return false
 }
 
 # nodeNamesType -- the name or path at `nid` resolves to a TYPE: a bare name no
