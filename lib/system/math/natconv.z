@@ -5,70 +5,6 @@
 # Ported from Go's src/math/big/natconv.go at 577b91f341 (2026-09-30) on
 # 2026-10-03: conversion between natural numbers and text.
 
-# the number of decimal digits in decBase
-decDigits: 19.u64
-
-# decBase -- the largest power of ten a word holds. A function until the
-# compile-time evaluator reaches past i64
-decBase: function out u64 is {
-    return 10000000000000000000
-}
-
-# natDecimal -- x in decimal, "0" for zero
-natDecimal: function {x: ListViewVal u64} out String is {
-    if x.length == 0 then return "0"
-    q: ListVal u64
-    nat.natSet z: q :x
-    # the chunks of 19 digits, least significant first
-    chunks: ListVal u64
-    for q.length > 0 loop chunks.append (natdiv.natDivWInPlace z: q y: decBase)
-    text: String
-    i: chunks.length
-    first: true
-    for i > 0 loop {
-        i = i - 1
-        c: chunks.get :i
-        digits: "\{c}"
-        if first.not then {
-            pad: decDigits - digits.length
-            for pad > 0 loop {
-                text.append "0"
-                pad = pad - 1
-            }
-        }
-        text.append digits
-        first = false
-    }
-    return text
-}
-
-# natSetDecimal -- z = the decimal digits of text; false, z cleared, when text
-# is empty or holds anything but a digit
-natSetDecimal: function {z: (ListVal u64).borrow text: StringView} out bool is {
-    z.resize to: 0
-    if text.length == 0 then return false
-    chunk: u64
-    scale: 1.u64
-    i: u64
-    for i < text.length loop {
-        ch: (text.byteAt :i).or d: 0
-        if (ch < 48) or (ch > 57) then {
-            z.resize to: 0
-            return false
-        }
-        chunk = chunk * 10 + (ch - 48)
-        scale = scale * 10
-        if scale == decBase then {
-            mulAddInPlace :z y: scale r: chunk
-            chunk = 0
-            scale = 1
-        }
-        i = i + 1
-    }
-    if scale > 1 then mulAddInPlace :z y: scale r: chunk
-    return true
-}
-
 # mulAddInPlace -- one more chunk of digits folded in, z*y + r, z growing by a
 # word when the product spills past it
 mulAddInPlace: function {z: (ListVal u64).borrow y: u64 r: u64} is {
@@ -266,4 +202,202 @@ reverseWords: function {z: (ListVal u64).borrow} is {
         i = i + 1
         j = j - 1
     }
+}
+
+# blocks of at most this many words convert by repeated word division; longer
+# ones split in two at a power of the base near their square root (Go's
+# calibrated value)
+leafSize: 8.u64
+
+# a power of the base the divide-and-conquer conversion splits a number at
+Divisor: class {
+    # the power itself
+    bbb: ListVal u64
+    # its length in bits
+    nbits: u64
+    # its length in digits of the base, less one: the digits of a block below it
+    ndigits: u64
+}
+
+# natText -- x in base 2 to 62, "0" for zero. A power-of-two base reads the
+# digits straight off the bits; any other splits the number in two at a
+# tabulated power of the base, recursively, and converts the halves -- which
+# is what makes a long conversion subquadratic. Panics on any other base
+natText: function {x: ListViewVal u64 base: u64} out String is {
+    if (base < 2) or (base > maxBase) then panic msg: "invalid base"
+    text: String
+    if x.length == 0 then {
+        text.append "0"
+        return text
+    }
+    if (base & (base - 1)) == 0 then {
+        powerOfTwoText :text :x :base
+        return text
+    }
+    nd: maxDigits b: base
+    bb: pow x: base n: nd
+    table: List Divisor
+    buildDivisors :table m: x.length b: base :nd :bb
+    q: ListVal u64
+    nat.natSet z: q :x
+    convertWords :text :q width: 0 b: base :nd :bb :table limit: table.length
+    return text
+}
+
+# digitChar -- the character for digit d: 0-9, then a-z, then A-Z
+digitChar: function {d: u64} out u8 is {
+    if d < 10 then return (d + 48).u8.orPanic
+    if d < maxBaseSmall then return (d + 87).u8.orPanic
+    return (d + 29).u8.orPanic
+}
+
+# powerOfTwoText -- the digits of a base 2^k, k bits at a time from the bottom
+# word up, a digit that straddles two words joined across them
+powerOfTwoText: function {text: String.borrow x: ListViewVal u64 base: u64} is {
+    shift: base.trailingZeros
+    mask: base - 1
+    rev: ListVal u8
+    w: x.get i: 0
+    nbits: 64.u64
+    k: 1.u64
+    for k < x.length loop {
+        for nbits >= shift loop {
+            rev.append from: (digitChar d: w & mask)
+            w = w >> shift
+            nbits = nbits - shift
+        }
+        if nbits == 0 then {
+            w = x.get i: k
+            nbits = 64
+        } else {
+            w = w | ((x.get i: k) << nbits)
+            rev.append from: (digitChar d: w & mask)
+            w = (x.get i: k) >> (shift - nbits)
+            nbits = 64.u64 - (shift - nbits)
+        }
+        k = k + 1
+    }
+    for w != 0 loop {
+        rev.append from: (digitChar d: w & mask)
+        w = w >> shift
+    }
+    appendReversed :text :rev
+}
+
+# appendReversed -- the bytes of rev, last first
+appendReversed: function {text: String.borrow rev: (ListVal u8).view} is {
+    i: rev.length
+    for i > 0 loop {
+        i = i - 1
+        text.appendByte b: (rev.get :i)
+    }
+}
+
+# buildDivisors -- the powers of the base an m-word number is split at: bb^8,
+# then each the square of the last, until one reaches about the square root of
+# the number. Each is widened while one more digit still fits its words. Go
+# caches base 10's table between conversions; this builds it per conversion
+buildDivisors: function {table: (List Divisor).borrow m: u64 b: u64 nd: u64 bb: u64} is {
+    if m <= leafSize then return
+    k: 1.u64
+    words: leafSize
+    for (words < (m >> 1)) and (k < 64) loop {
+        words = words << 1
+        k = k + 1
+    }
+    i: u64
+    for i < k loop {
+        bbb: ListVal u64
+        ndigits: u64
+        if i == 0 then {
+            nat.natSetWord z: bbb x: 1
+            j: u64
+            for j < leafSize loop {
+                mulAddInPlace z: bbb y: bb r: 0
+                j = j + 1
+            }
+            ndigits = nd * leafSize
+        } else {
+            prev: table.get i: i - 1
+            natmul.natMul z: bbb x: prev.bbb.listView y: prev.bbb.listView
+            ndigits = prev.ndigits * 2
+        }
+        # exploit the bits the block leaves spare: one more digit while b times
+        # the power still fits the same words
+        larger: ListVal u64
+        nat.natSet z: larger x: bbb.listView
+        for (spills z: larger :b).not loop {
+            nat.natSet z: bbb x: larger.listView
+            ndigits = ndigits + 1
+        }
+        table.append (Divisor nbits: (nat.natBitLen x: bbb.listView) :ndigits bbb: bbb.take)
+        i = i + 1
+    }
+}
+
+# spills -- z = z*b in place, and whether the product carried past z's words
+spills: function {z: (ListVal u64).borrow b: u64} out bool is {
+    c: u64
+    {
+        w: z.mutView
+        c = arith.mulAddVWWInPlace z: w y: b r: 0
+    }
+    return c != 0
+}
+
+# convertWords -- q's digits appended to text, exactly `width` of them with
+# leading zeros when width is not 0. A q longer than a leaf splits at the
+# largest tabulated power below table[limit] near its square root: the high
+# part converts first, then the low part to exactly the power's digit count
+convertWords: function {
+    text: String.borrow
+    q: (ListVal u64).borrow
+    width: u64
+    b: u64
+    nd: u64
+    bb: u64
+    table: (List Divisor).view
+    limit: u64
+} is {
+    if limit > 0 when q.length > leafSize then {
+        index: limit - 1
+        maxLength: nat.natBitLen x: q.listView
+        minLength: maxLength >> 1
+        for index > 0 while (table.get i: index - 1).nbits > minLength loop index = index - 1
+        {
+            d: table.get i: index
+            if d.nbits >= maxLength when (nat.natCmp x: d.bbb.listView y: q.listView) >= 0 then {
+                if index == 0 then panic msg: "internal inconsistency"
+                index = index - 1
+            }
+        }
+        hi: ListVal u64
+        lo: ListVal u64
+        dn: u64
+        {
+            d: table.get i: index
+            natdiv.natDiv q: hi r: lo u: q.listView v: d.bbb.listView
+            dn = d.ndigits
+        }
+        hiWidth: u64
+        if width > 0 then hiWidth = width - dn
+        convertWords :text q: hi width: hiWidth :b :nd :bb :table limit: index + 1
+        convertWords :text q: lo width: dn :b :nd :bb :table limit: index
+        return
+    }
+    # a leaf: nd digits per word-sized chunk, least significant first
+    rev: ListVal u8
+    for q.length > 0 loop {
+        r: natdiv.natDivWInPlace z: q y: bb
+        j: u64
+        for j < nd loop {
+            rev.append from: (digitChar d: r % b)
+            r = r / b
+            j = j + 1
+        }
+    }
+    # no leading zeros, then exactly `width` digits when one is asked for
+    for rev.length > 0 while (rev.get i: rev.length - 1) == 48 loop rev.resize to: rev.length - 1
+    for rev.length < width loop rev.append from: 48
+    appendReversed :text :rev
 }
