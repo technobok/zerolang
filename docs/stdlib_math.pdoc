@@ -1,0 +1,236 @@
+#doc.lang: en
+
+#//: Zerolang Standard Library: math
+
+#doc.title: Zerolang Standard Library -- math
+#doc.content type=main id=content
+#doc.heading.number level=4
+#doc.heading.anchor level=4
+#doc.link rel=stylesheet href=style/zerolang.css
+#doc.link rel=icon type=image/png sizes=192x192 href=style/favicon-192x192.png
+#doc.link rel=icon type=image/x-icon href=style/favicon-48x48.ico
+#doc.link rel=icon type=image/png sizes=32x32 href=style/favicon-32x32.png
+#doc.link rel=icon type=image/png sizes=16x16 href=style/favicon-16x16.png
+
+#doc.script src=style/tocbot.min.js
+#doc.script src=style/init.js
+#doc.script src=style/prism.min.js
+#doc.script src=style/prism-zerolang.js
+#doc.author: pw <p@zerolang.org>
+#doc.datecreated: 2026-10-03
+#doc.version: v0.1
+
+#doc.body class=toc-sidebar
+#nav id=nav: [#include literal=true: style/nav.html]
+
+#header:
+  #-: math
+
+#nav id=toc class=toc-sidebar:
+  #div id=tocfile: Table of Contents
+  #doc.toc
+
+
+#--: Overview
+
+The declarations themselves live in #~"lib/system/math.z" and its
+subunits under #~"lib/system/math/", which are the one place they are
+written; every definition carries its own doc comment, and #~"zls"
+surfaces each on hover. This page is the prose and the worked examples.
+
+The #~"math" unit holds numbers past the machine's own. Today that is
+#b:"BigInt", a signed integer of any size; the arbitrary-precision
+rationals and floats, the fixed-width integers and the fixed decimals
+follow on the same core.
+
+The core is a port of Go's #~"math/big" at commit #~"577b91f341"
+(BSD-3-Clause, the license beside it in #~"math/LICENSE-GO"); each ported
+file names the Go file it came from. The algorithms are Go's:
+Karatsuba multiplication and squaring, Burnikel-Ziegler division,
+divide-and-conquer conversion to text, windowed and Montgomery
+exponentiation, Lehmer's GCD, and a Baillie-PSW primality test. Where
+Go lets a result alias an operand, the port writes into a second list
+or calls an in-place twin, and the scratch Go takes from a stack is
+one list sized before the work starts and carved into windows.
+
+#code language=zerolang: """
+  main: function is {
+      a: math.BigInt from: 9223372036854775807
+      b: a * a * a
+      print "\{b.string}"
+      print "\{(b.text base: 16)}"
+      r: math.BigInt.parse text: "-0x_dead_beef" base: 0
+      match (r) case ok then print "\{r.string}" case err then print "bad"
+  }
+  """
+
+
+#--: Index
+
+#p: #b:"Types"
+
+#ul:
+  [#*: #> to=bigint: #b:"BigInt" -- #~"class { negative: bool  words: ListVal u64 }": a sign and a magnitude]
+  [#*: #> to=bigdivision: #b:"BigDivision" -- #~"class { quo: BigInt  rem: BigInt }"]
+  [#*: #> to=biggcd: #b:"BigGCD" -- #~"class { gcd: BigInt  x: BigInt  y: BigInt }"]
+  [#*: #> to=roundingmode: #b:"roundingmode" -- #~"variant { toNearestEven  toNearestAway  toZero  awayFromZero  toNegativeInf  toPositiveInf }"]
+
+#p: #b:"BigInt"
+
+#ul:
+  [#*: #> to=construction: #~"create from: i128" -- the value of any integer up to 128 bits]
+  [#*: #> to=construction: #~"parse text: base:" -- #~"(ResultRV BigInt e: parseerror)"]
+  [#*: #> to=construction: #~"string", #~"text base:" -- the value as text]
+  [#*: #> to=arithmetic: #~"+ - * / %", #~"neg", #~"abs", #~"sign"]
+  [#*: #> to=division: #~"div by:", #~"mod by:", #~"divide by: mode:"]
+  [#*: #> to=comparison: #~"== != < <= > >=", #~"compare", #~"hash", #~"copy"]
+  [#*: #> to=conversions: #~"i64", #~"u64", #~"f64" -- #~"resultval" with #~"converror"]
+  [#*: #> to=bits: #~"& | ^ andNot not << >>", #~"bit", #~"setBit", #~"bitLength", #~"trailingZeros"]
+  [#*: #> to=number-theory: #~"exp y: m:", #~"gcd y:", #~"gcdExtended y:", #~"modInverse n:", #~"sqrt", #~"jacobi y:", #~"probablyPrime n:"]
+  [#*: #> to=accumulators: #~"add", #~"sub", #~"mul", #~"quo", #~"rem" -- in place]
+
+
+#--: BigInt
+
+A #~"BigInt" is a sign and a magnitude: #~"negative", and #~"words", the
+magnitude's 64-bit words least significant first with no leading zero
+word. Zero is the empty list and is never negative. It is a class: an
+operator returns a new value, and the accumulator methods change one in
+place.
+
+
+#----: Construction
+
+#~"math.BigInt from: x" takes any integer of up to 128 bits. A narrower
+one, signed or not, widens to #~"i128" by itself, and a literal coerces,
+so #~"math.BigInt from: 5", #~"from: n" for a #~"u64" #~"n" and
+#~"from: k" for an #~"i8" #~"k" all read the same. A #~"u128" past
+#~"i128"'s range is read with #~"parse".
+
+#~"math.BigInt.parse text: base:" reads an optional sign and then digits:
+
+#ul:
+  [#*: base #b:"2" to #b:"62" reads plain digits -- #~"0-9", #~"a-z", and
+    above 36 #~"A-Z" as the digits 36 to 61; up to 36 the cases mean the same]
+  [#*: base #b:"0" reads a prefix -- #~"0b", #~"0o", #~"0x", or a bare
+    #~"0" for octal -- and is decimal without one; only base 0 lets #~"_"
+    separate digits]
+
+The whole text must be the number. A text with no digit at all answers
+#~"parseerror.empty"; anything else that is not a number in the base,
+#~"parseerror.invalidDigit". Any other base panics.
+
+#~".string" is the value in decimal and #~".text base:" in base 2 to 62,
+in the digits #~"parse" reads back, a leading #~"-" when negative.
+
+
+#----: Arithmetic
+
+#~"+", #~"-" and #~"*" are exact. #~"/" truncates toward zero and #~"%"
+takes the dividend's sign, as Go's #~"Quo" and #~"Rem" do:
+#~"-7 / 2" is #~"-3" and #~"-7 % 2" is #~"-1". Division by zero panics.
+#~"neg", #~"abs" and #~"sign" (#~"-1", #~"0" or #~"1") read as their
+names say.
+
+
+#----: Division
+
+#~"div by:" and #~"mod by:" are Euclidean, as Go's #~"Div" and #~"Mod": the
+remainder is never negative, so #~"-7 div 2" is #~"-4" and #~"-7 mod 2" is
+#~"1".
+
+#~"divide by: mode:" answers a #> to=bigdivision: #~"BigDivision", the
+quotient rounded as the #> to=roundingmode: #~"roundingmode" asks and the
+remainder with #~"quo * by + rem == this", as Go's #~"Divide":
+
+#ul:
+  [#*: #~"toZero" truncates -- the #~"/" and #~"%" pair]
+  [#*: #~"toNegativeInf" floors, #~"toPositiveInf" ceils]
+  [#*: #~"toNearestEven" rounds a half to the even quotient]
+
+The two modes an integer division has no use for panic.
+
+
+#----: Comparison
+
+The comparisons and #~"compare" (#~"-1", #~"0" or #~"1") order by value.
+#~"hash" agrees with #~"==", so a #~"BigInt" keys a map. #~"copy" is a
+value with its own words.
+
+
+#----: Conversions
+
+#~".i64" and #~".u64" answer #~"converror.outOfRange" for a value they
+cannot hold. #~".f64" answers the value when an #~"f64" holds it exactly,
+#~"precisionLoss" when it falls between two, and #~"outOfRange" past the
+largest.
+
+
+#----: Bits
+
+The bitwise operators read a value as two's complement of unbounded
+width -- a negative value's sign bits run on forever -- as Go's
+#~"And", #~"Or", #~"Xor", #~"AndNot" and #~"Not" do: #~"-1 & x" is
+#~"x", and #~"x >> n" of a negative #~"x" rounds toward negative
+infinity (#~"-7 >> 1" is #~"-4"). #~"bit i:" and #~"setBit i: b:" read
+and set a bit of that form. #~"bitLength" and #~"trailingZeros" measure
+the magnitude.
+
+
+#----: Number theory
+
+#ul:
+  [#*: #~"exp y: m:" -- #~"this^y mod |m|", in #~"[0, |m|)"; a zero #~"m"
+    is no modulus, and the plain power is 1 for #~"y <= 0". A negative
+    #~"y" with a modulus raises the inverse to #~"|y|", and panics when
+    there is none -- where Go answers nil]
+  [#*: #~"gcd y:" -- never negative; #~"gcdExtended y:" answers a
+    #> to=biggcd: #~"BigGCD" whose cofactors make
+    #~"gcd == this*x + y*y'"]
+  [#*: #~"modInverse n:" -- #~"(Option BigInt)": the inverse in
+    #~"[0, |n|)", or none when the two share a factor]
+  [#*: #~"sqrt" -- the floor of the square root; panics on a negative
+    value]
+  [#*: #~"jacobi y:" -- the Jacobi symbol for an odd #~"y"]
+  [#*: #~"probablyPrime n:" -- #~"n" rounds of Miller-Rabin and a
+    Baillie-PSW test. A prime always answers true; a composite chosen at
+    random answers true with probability at most #~"4^-n", and none below
+    #~"2^64" ever does. The Miller-Rabin bases come from a SplitMix64
+    generator seeded by the value's low word, where Go uses #~"math/rand":
+    as fixed for a given number, but not Go's. Not for a number an
+    adversary chose]
+
+
+#----: Accumulators
+
+#~"acc.add x", #~"sub", #~"mul", #~"quo" and #~"rem" change #~"acc" in
+place -- the forms for a loop that would otherwise build a new value
+each step.
+
+#code language=zerolang: """
+  sum: function {n: u64} out math.BigInt is {
+      acc: math.BigInt from: 0
+      for each i: n.times loop acc.add (math.BigInt from: i * i)
+      return acc
+  }
+  """
+
+
+#--: BigDivision
+
+A quotient and its remainder, as #~"BigInt.divide" answers them:
+#~"quo * divisor + rem" is the dividend.
+
+
+#--: BigGCD
+
+A greatest common divisor and its cofactors, as #~"BigInt.gcdExtended"
+answers them: #~"gcd == a*x + b*y", the #~"gcd" never negative.
+
+
+#--: roundingmode
+
+How a result between two representable values is chosen: the nearer
+with a tie to the even one (#~"toNearestEven") or away from zero
+(#~"toNearestAway"), toward zero, away from zero, or toward either
+infinity. Every #~"math" type that rounds takes it.
