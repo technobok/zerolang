@@ -2091,7 +2091,9 @@ perf: $(PERFBIN)
 #
 # -5,046 math's word-vector kernels are C natives, their zerolang bodies gone:
 # 0 behaviour, -5,046 source.
-ALLOC_BASELINE := 2215296
+#
+# +8 f128 is refused for a target other than x86-64: 0 behaviour, +8 source.
+ALLOC_BASELINE := 2215304
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -2526,6 +2528,11 @@ zlink-rules-guard:
 #
 # A system directory or a src root that is not a directory is refused, exit 2,
 # naming it: the source filesystem panics on such a root, so zc asks first.
+#
+# f128 for a target other than x86-64 is refused by quadfloat's require: block,
+# exit 1, before any C is written: __float128 and libquadmath are x86-64's, and
+# gcc for aarch64 would reject the emitted C over a type the program never
+# wrote.
 refusal-guard: bin/zc $(BUILDDIR)/tcc
 	@d=$(BUILDDIR)/refusal; rm -rf $$d; mkdir -p $$d; bad=0; \
 	bin/zc build hello --src examples --system lib/system --cc tcc --cc-mode spawn \
@@ -2566,6 +2573,12 @@ refusal-guard: bin/zc $(BUILDDIR)/tcc
 	elif ! grep -q "host-only linux-x86_64" $$d/f.log; then \
 	  echo "refusal-guard FAIL: the tcc cross refusal must say why tcc cannot"; \
 	  cat $$d/f.log; bad=1; \
+	fi; \
+	bin/zc emit tests/fixtures/emitc_corpus/math/math_constants_wide.z --target aarch64-linux-gnu \
+	  --system lib/system -o $$d/q.c > $$d/q.log 2>&1; rc=$$?; \
+	if [ $$rc -ne 1 ] || [ -e $$d/q.c ] || ! grep -q "x86-64's" $$d/q.log; then \
+	  echo "refusal-guard FAIL: f128 for a non-x86-64 target must be quadfloat's own refusal, exit 1 (got $$rc)"; \
+	  cat $$d/q.log; bad=1; \
 	fi; \
 	if ! bin/zc env --target x86_64-w64-mingw32 | grep -q '^ZC_CC=x86_64-w64-mingw32-gcc$$'; then \
 	  echo "refusal-guard FAIL: the documented <triple>-gcc cross path stopped resolving"; \
