@@ -39,9 +39,9 @@ written; every definition carries its own doc comment, and #~"zls"
 surfaces each on hover. This page is the prose and the worked examples.
 
 The #~"math" unit holds numbers past the machine's own. Today that is
-#b:"BigInt", a signed integer of any size, and #b:"BigRat", a rational of
-any size; the arbitrary-precision floats, the fixed-width integers and the
-fixed decimals follow on the same core.
+#b:"BigInt", a signed integer of any size, #b:"BigRat", a rational of any
+size, and #b:"BigFloat", a binary floating-point number of any precision;
+the fixed-width integers and the fixed decimals follow on the same core.
 
 The core is a port of Go's #~"math/big" at commit #~"577b91f341"
 (BSD-3-Clause, the license beside it in #~"math/LICENSE-GO"); each ported
@@ -75,7 +75,10 @@ one list sized before the work starts and carved into windows.
   [#*: #> to=biggcd: #b:"BigGCD" -- #~"class { gcd: BigInt  x: BigInt  y: BigInt }"]
   [#*: #> to=bigrat: #b:"BigRat" -- #~"class { num: BigInt  den: BigInt }": a quotient in lowest terms]
   [#*: #> to=decimalprec: #b:"decimalprec" -- #~"record { digits: u64  exact: bool }"]
+  [#*: #> to=bigfloat: #b:"BigFloat" -- #~"class { prec: u32  mode: roundingmode  acc: accuracy ... }": a binary float of any precision]
   [#*: #> to=roundingmode: #b:"roundingmode" -- #~"variant { toNearestEven  toNearestAway  toZero  awayFromZero  toNegativeInf  toPositiveInf }"]
+  [#*: #> to=accuracy: #b:"accuracy" -- #~"variant { below  exact  above }"]
+  [#*: #> to=floatformat: #b:"floatformat" -- #~"variant { exponent  exponentUpper  fixed  general  generalUpper  hex  hexFraction  binary }"]
 
 #p: #b:"BigInt"
 
@@ -100,6 +103,17 @@ one list sized before the work starts and carved into windows.
   [#*: #> to=rational-comparison: #~"== != < <= > >=", #~"compare", #~"hash", #~"copy"]
   [#*: #> to=rational-floats: #~"f64", #~"f32" -- exact, as #~"resultval"; #~"roundF64", #~"roundF32" -- nearest]
   [#*: #> to=rational-text: #~"string", #~"fraction", #~"decimal digits:", #~"decimalPrecision"]
+
+#p: #b:"BigFloat"
+
+#ul:
+  [#*: #> to=float-construction: #~"create from: f64", #~"fromI64", #~"fromU64", #~"fromInt", #~"fromRat", #~"zero", #~"inf", #~"fromIEEEBits", #~"parse" -- each with #~"prec:" and #~"mode:"]
+  [#*: #> to=float-arithmetic: #~"+ - * /", #~"sum", #~"difference", #~"product", #~"quotient", #~"add", #~"sub", #~"mul", #~"quo", #~"sqrt", #~"neg", #~"abs"]
+  [#*: #> to=float-precision: #~"withPrec", #~"withMode", #~"minPrec", #~"acc"]
+  [#*: #> to=float-parts: #~"sign", #~"isInf", #~"isInt", #~"exponent", #~"mantissa", #~"scaleB n:"]
+  [#*: #> to=float-comparison: #~"== != < <= > >=", #~"compare", #~"copy"]
+  [#*: #> to=float-conversions: #~"i64", #~"u64", #~"f64", #~"f32" -- exact; #~"roundF64", #~"roundF32", #~"truncInt", #~"rat", #~"ieeeBits"]
+  [#*: #> to=float-text: #~"string", #~"text format: digits:"]
 
 
 #--: BigInt
@@ -321,6 +335,140 @@ many digits follow the point before the expansion repeats, and whether
 that many are exact -- #~"1/4" has 2, exactly, #~"1/6" has 1, rounded.
 
 
+#--: BigFloat
+
+A #~"BigFloat" is a sign, a mantissa of up to #~"prec" bits and an
+exponent -- #~"sign * mantissa * 2^exp" with #~"0.5 <= mantissa < 1" -- or a
+signed zero, or a signed infinity. Each value carries the precision and
+the #> to=roundingmode: #~"roundingmode" its results round to, and the
+#> to=accuracy: #~"accuracy" of the operation that made it: whether that
+result lies below, at or above the exact one. The exponent is an
+#~"i32"; past it a result is an infinity, below it a zero. There are no
+NaNs: an operation whose IEEE 754 result would be one -- #~"inf - inf",
+#~"0 * inf", #~"0 / 0", the root of a negative -- panics, as Go's does.
+At 24 or 53 bits and #~"toNearestEven" the operators give what #~"f32" and
+#~"f64" arithmetic gives, for operands and results those formats hold as
+normal numbers.
+
+#code language=zerolang: """
+  main: function is {
+      two: math.BigFloat from: 2.0 prec: 200
+      print (two.sqrt.text format: math.floatformat.fixed digits: 40)
+      one: math.BigFloat.fromI64 from: 1
+      three: math.BigFloat.fromI64 from: 3
+      third: math.BigFloat.quotient x: one y: three prec: 24 mode: math.roundingmode.toZero
+      print "\{third.string} \{third.acc.below} \{third.roundF32}"
+      r: math.BigFloat.parse text: "1e-400" prec: 64
+      match (r) case ok then {
+          print "\{r.string} \{r.roundF64}"
+          print (r.text format: math.floatformat.hex digits: -1)
+      } case err then print "bad"
+  }
+  """
+
+This prints #~"1.4142135623730950488016887242096980785697",
+#~"0.3333333135 1 0.333333", #~"1e-400 0" and
+#~"0x1.2bfcfc0f923df5f4p-1329".
+
+
+#----: Float construction
+
+Every constructor takes #~"prec:" and #~"mode:"; #~"prec: 0", the default,
+picks the precision that holds the source exactly -- 53 bits for an
+#~"f64", 64 for an integer, the larger of 64 and the bit length for a
+#~"BigInt" -- and #~"mode" defaults to #~"toNearestEven". A smaller
+precision rounds by the mode. #~"math.BigFloat from: x" takes an #~"f64",
+and panics on a NaN; #~"fromI64", #~"fromU64" and #~"fromInt" take
+integers; #~"fromRat" takes a #~"BigRat", its default precision the
+larger of its parts' bit lengths and 64. #~"zero" and #~"inf" make a
+signed zero and a signed infinity. #~"fromIEEEBits bits: mbits: ebits:"
+reads an IEEE 754 interchange format of #~"mbits" stored mantissa bits and
+an #~"ebits"-bit exponent -- binary16 is 10 and 5, binary128 112 and 15 --
+exactly, and is none for a NaN.
+
+#~"math.BigFloat.parse text: base: prec: mode:" reads an optional sign,
+then a mantissa with an optional radix point and an optional exponent
+-- #~"e" for a power of 10, #~"p" for a power of 2 -- or #~"\"Inf\"" or
+#~"\"inf\"". Base 0, the default, reads a #~"0b", #~"0o" or #~"0x" prefix
+and lets #~"_" separate digits; 2, 8, 10 and 16 read plain digits in that
+base. A hexadecimal mantissa takes #~"p" alone, since #~"e" is one of its
+digits. The value rounds once to #~"prec" bits, 0 taking 64. The whole
+text must be the number: #~"parseerror.empty" when it holds no digit,
+#~"overflow" for an exponent past what a #~"BigFloat" holds,
+#~"invalidDigit" for anything else.
+
+
+#----: Float arithmetic
+
+The operators round to the larger operand precision by the left
+operand's mode. #~"sum", #~"difference", #~"product" and #~"quotient"
+take the precision and the mode their result rounds to, #~"prec: 0" again
+the larger of the operands'. #~"add", #~"sub", #~"mul" and #~"quo" write
+the result back into the value, at its own precision and mode: the
+accumulator form for a loop. #~"sqrt" rounds the root to the value's
+precision and mode, and the root of #~"-0" is #~"-0". #~"neg" and
+#~"abs" change only the sign. An exact zero sum is #~"+0" but under
+#~"toNegativeInf", where it is #~"-0", as IEEE 754 has it; a nonzero over
+a zero is an infinity.
+
+
+#----: Float precision
+
+#~"withPrec prec:" rounds a copy to that many bits by its mode -- 0 makes a
+finite value a zero of its sign -- and #~"withMode mode:" changes the mode
+a copy rounds by from then on. #~"minPrec" is the fewest bits that hold
+the value exactly. The #~"acc" field reads the accuracy of the operation
+that made the value; a conversion's accuracy is the sign of
+#~"converted.compare rhs: x".
+
+
+#----: Float parts
+
+#~"sign" is #~"-1", #~"0" or #~"1", with #~"-0" a 0; the #~"negative"
+field is the sign bit, a zero's included. #~"isInf" and #~"isInt" mean
+what they say. #~"exponent" and #~"mantissa" split a value into
+#~"mantissa * 2^exponent" with #~"0.5 <= |mantissa| < 1"; #~"scaleB n:"
+multiplies by #~"2^n" exactly unless the exponent leaves the #~"i32".
+
+
+#----: Float comparison
+
+#~"compare" and the six comparisons order by value: #~"-0" equals
+#~"0", and two values of different precisions compare as numbers. There
+is no #~"hash": equal values may differ in precision and mode, which is
+what a #~"BigFloat" carries besides its value.
+
+
+#----: Float conversions
+
+#~".i64", #~".u64", #~".f64" and #~".f32" answer the value only when it is
+the target exactly: #~"precisionLoss" for a fraction or a value between
+two floats, #~"outOfRange" past the target -- an infinity included for
+the integers. #~"roundF64" and #~"roundF32" answer the nearest float, a
+tie to the even one, with subnormals kept; a value too small is a zero
+of its sign and one too large an infinity. #~"ieeeBits mbits: ebits:" is
+the same rounding into any IEEE 754 binary interchange format, as its bit
+pattern. #~"truncInt" is the integer toward zero, none for an infinity,
+and #~"rat" the value exactly as a #~"BigRat", none for an infinity.
+
+
+#----: Float text
+
+#~".string" is the value in general format with 10 digits.
+#~"text format: digits:" spells it in a #> to=floatformat: #~"floatformat":
+#~"exponent" (#~"-d.dddde+dd"), #~"fixed" (#~"-dddd.dddd"), #~"general"
+(the exponent form for exponents below -4 or at least the digit count,
+the fixed one otherwise), their upper-case forms, #~"hex"
+(#~"-0x1.dddp+dd"), #~"hexFraction" (#~"-0x.dddp+dd") and #~"binary"
+(#~"-ddddp+dd", a decimal mantissa of #~"prec" bits). The digit count is
+the digits after the point for #~"exponent", #~"fixed" and #~"hex", and the
+digits in all for #~"general"; a negative count spells the fewest
+decimal digits that read back as this value at its precision. Decimal
+digits round to nearest even. An infinity is #~"\"+Inf\"" or
+#~"\"-Inf\"". Go's #~"Format" and #~"Scan", the #~"fmt" package's
+verbs and flags, have no counterpart here.
+
+
 #--: decimalprec
 
 The digits a rational's decimal expansion has before it repeats, and
@@ -334,3 +482,17 @@ How a result between two representable values is chosen: the nearer
 with a tie to the even one (#~"toNearestEven") or away from zero
 (#~"toNearestAway"), toward zero, away from zero, or toward either
 infinity. Every #~"math" type that rounds takes it.
+
+
+#--: accuracy
+
+How a rounded result compares to the exact value: #~"below", #~"exact"
+or #~"above", as a #~"BigFloat"'s #~"acc" reports it.
+
+
+#--: floatformat
+
+How #~"BigFloat.text" spells a value, Go's format letters by name:
+#~"exponent" #~"'e'", #~"exponentUpper" #~"'E'", #~"fixed" #~"'f'",
+#~"general" #~"'g'", #~"generalUpper" #~"'G'", #~"hex" #~"'x'",
+#~"hexFraction" #~"'p'" and #~"binary" #~"'b'".

@@ -1,0 +1,1836 @@
+# Copyright 2014 The Go Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style
+# license that can be found in the LICENSE-GO file.
+#
+# Ported from Go's src/math/big/float.go, floatconv.go, ftoa.go, decimal.go and
+# sqrt.go at 577b91f341 (2026-09-30) on 2026-10-04: binary floating-point
+# numbers of any precision.
+#
+# A finite nonzero BigFloat is sign * mantissa * 2^exp with 0.5 <= mantissa < 1:
+# `mant` holds the mantissa's bits normalized, its top word's top bit set, in
+# as many words as the precision needs -- fewer when the low bits are zero --
+# and the binary point sits just above that top bit. A zero or an infinity
+# ignores mant and exp. An operation rounds to the precision of the value it
+# writes, and a precision of 0 there takes the larger operand's.
+
+# the largest exponent a BigFloat holds; past it a result is an infinity
+maxExp: 2147483647
+
+# the smallest exponent a BigFloat holds; below it a result is a zero
+minExp: -2147483648
+
+# floatform -- which kind of value a BigFloat holds
+floatform: variant {
+    # +0 or -0
+    zero: null
+    # 0 < |x| < Inf, with a mantissa and an exponent
+    finite: null
+    # +Inf or -Inf, which ignores the mantissa and exponent
+    inf: null
+}
+
+# floatformat -- how BigFloat.text spells a value, Go's format letters
+floatformat: variant {
+    # 'e': -d.dddde+dd, a decimal exponent of at least two digits
+    exponent: null
+    # 'E': -d.ddddE+dd
+    exponentUpper: null
+    # 'f': -ddddd.dddd, no exponent
+    fixed: null
+    # 'g': like exponent for large exponents, like fixed otherwise
+    general: null
+    # 'G': like exponentUpper for large exponents, like fixed otherwise
+    generalUpper: null
+    # 'x': -0xd.dddddp+dd, a hexadecimal mantissa in [1, 2) and a decimal power
+    # of two
+    hex: null
+    # 'p': -0x.dddp+dd, a hexadecimal mantissa in [0.5, 1) and a decimal power
+    # of two; the digit count is ignored
+    hexFraction: null
+    # 'b': -ddddddp+dd, a decimal integer mantissa of `prec` bits and a decimal
+    # power of two; the digit count is ignored
+    binary: null
+}
+
+# BigFloat -- a binary floating-point number of any precision: a sign, a
+# mantissa of up to `prec` bits and an exponent, or a signed zero, or a signed
+# infinity. Each value carries the precision and rounding mode its operations
+# round to, and the accuracy of the operation that made it. An operation that
+# would give a NaN panics
+BigFloat: class {
+    # the mantissa bits a result is rounded to; 0 only for a zero or an
+    # infinity
+    prec: u32
+    # how a result is rounded to `prec` bits
+    mode: rounding.roundingmode
+    # how the operation that made the value compares to the exact result
+    acc: rounding.accuracy
+    # zero, finite or infinite
+    form: floatform
+    # the sign, a zero's and an infinity's included
+    negative: bool
+    # the normalized mantissa of a finite value, least significant word first
+    mant: ListVal u64
+    # the power of two the mantissa is scaled by
+    exp: i32
+} as {
+    # the value of an f64 exactly, at `prec` bits -- 0 takes 53, the f64's own
+    # -- rounded by `mode` when fewer. Panics on a NaN
+    create: function {from: f64 prec: 0.u32 mode: rounding.roundingmode.toNearestEven} out this is {
+        z: blank :prec :mode
+        setFloat64 :z x: from
+        return z
+    }
+
+    # fromI64 -- the value of an i64 at `prec` bits, 0 taking 64
+    fromI64: function {
+        from: i64 prec: 0.u32 mode: rounding.roundingmode.toNearestEven
+    } out BigFloat is {
+        z: blank :prec :mode
+        setBits64 :z neg: from < 0 x: (bigint.magnitude v: from)
+        return z
+    }
+
+    # fromU64 -- the value of a u64 at `prec` bits, 0 taking 64
+    fromU64: function {
+        from: u64 prec: 0.u32 mode: rounding.roundingmode.toNearestEven
+    } out BigFloat is {
+        z: blank :prec :mode
+        setBits64 :z neg: false x: from
+        return z
+    }
+
+    # fromInt -- the value of a BigInt at `prec` bits, 0 taking the larger of
+    # its bit length and 64
+    fromInt: function {
+        from: bigint.BigInt.view prec: 0.u32 mode: rounding.roundingmode.toNearestEven
+    } out BigFloat is {
+        z: blank :prec :mode
+        setInt :z x: from
+        return z
+    }
+
+    # fromRat -- the value of a BigRat at `prec` bits, 0 taking the largest of
+    # its numerator's and denominator's bit lengths and 64
+    fromRat: function {
+        from: bigrat.BigRat.view prec: 0.u32 mode: rounding.roundingmode.toNearestEven
+    } out BigFloat is {
+        if from.isInt then return (BigFloat.fromInt from: from.num :prec :mode)
+        a: BigFloat.fromInt from: from.num
+        b: BigFloat.fromInt from: from.den
+        p: prec
+        if p == 0 then p = largerPrec x: a.prec y: b.prec
+        z: blank prec: p :mode
+        quoInto :z x: a y: b
+        return z
+    }
+
+    # zero -- a zero of either sign, exactly
+    zero: function {
+        negative: false prec: 0.u32 mode: rounding.roundingmode.toNearestEven
+    } out BigFloat is {
+        m: ListVal u64
+        return (meta.create
+            :prec
+            :mode
+            acc: rounding.accuracy.exact
+            form: floatform.zero
+            :negative
+            mant: m.take
+            exp: 0
+        )
+    }
+
+    # inf -- an infinity of either sign, exactly
+    inf: function {
+        negative: bool prec: 0.u32 mode: rounding.roundingmode.toNearestEven
+    } out BigFloat is {
+        z: blank :prec :mode
+        z.form = floatform.inf
+        z.negative = negative
+        return z
+    }
+
+    # fromIEEEBits -- the value an IEEE 754 binary interchange format with
+    # `mbits` stored mantissa bits and an `ebits`-bit exponent encodes in
+    # `bits`, exactly, at mbits + 1 bits; none for a NaN
+    fromIEEEBits: function {bits: bigint.BigInt.view mbits: u64 ebits: u64} out Option BigFloat is {
+        return (fromIEEE :bits :mbits :ebits)
+    }
+
+    # parse -- read a number: an optional sign, then a mantissa of digits with
+    # an optional radix point and an optional exponent -- `e` for a power of 10,
+    # `p` for a power of 2 -- or "Inf" or "inf". Base 0 reads a 0b, 0o or 0x
+    # prefix and lets `_` separate digits; base 2, 8, 10 or 16 reads plain
+    # digits in that base. A hexadecimal mantissa takes `p` alone, since `e` is
+    # one of its digits. The value rounds to
+    # `prec` bits, 0 taking 64. The whole text must be the number: `empty`
+    # when it holds no digit, `overflow` for an exponent past what a BigFloat
+    # holds, `invalidDigit` for anything else
+    parse: function {
+        text: StringView
+        base: 0.u64
+        prec: 0.u32
+        mode: rounding.roundingmode.toNearestEven
+    } out (ResultRV BigFloat e: parseerror) is {
+        return (parseFloat :text :base :prec :mode)
+    }
+
+    # sum -- x + y rounded to `prec` bits by `mode`, 0 taking the larger
+    # operand precision. Panics on infinities of opposite signs
+    sum: function {
+        x: BigFloat.view
+        y: BigFloat.view
+        prec: u32
+        mode: rounding.roundingmode
+    } out BigFloat is {
+        return (combined :x :y :prec :mode op: floatop.add)
+    }
+
+    # difference -- x - y rounded to `prec` bits by `mode`, 0 taking the larger
+    # operand precision. Panics on infinities of one sign
+    difference: function {
+        x: BigFloat.view
+        y: BigFloat.view
+        prec: u32
+        mode: rounding.roundingmode
+    } out BigFloat is {
+        return (combined :x :y :prec :mode op: floatop.sub)
+    }
+
+    # product -- x * y rounded to `prec` bits by `mode`, 0 taking the larger
+    # operand precision. Panics on a zero times an infinity
+    product: function {
+        x: BigFloat.view
+        y: BigFloat.view
+        prec: u32
+        mode: rounding.roundingmode
+    } out BigFloat is {
+        return (combined :x :y :prec :mode op: floatop.mul)
+    }
+
+    # quotient -- x / y rounded to `prec` bits by `mode`, 0 taking the larger
+    # operand precision; a nonzero over a zero is an infinity. Panics on a zero
+    # over a zero and an infinity over an infinity
+    quotient: function {
+        x: BigFloat.view
+        y: BigFloat.view
+        prec: u32
+        mode: rounding.roundingmode
+    } out BigFloat is {
+        return (combined :x :y :prec :mode op: floatop.quo)
+    }
+
+    # a copy with the same precision, mode and accuracy
+    copy: function {t: this.view} out BigFloat is {
+        z: blank prec: t.prec mode: t.mode
+        copyInto :z x: t
+        return z
+    }
+
+    # the sum at the larger precision, rounded by this value's mode. Panics on
+    # infinities of opposite signs
+    +: function {t: this.view rhs: BigFloat.view} out BigFloat is {
+        return (BigFloat.sum x: t y: rhs prec: 0 mode: t.mode)
+    }
+
+    # the difference at the larger precision, rounded by this value's mode.
+    # Panics on infinities of one sign
+    -: function {t: this.view rhs: BigFloat.view} out BigFloat is {
+        return (BigFloat.difference x: t y: rhs prec: 0 mode: t.mode)
+    }
+
+    # the product at the larger precision, rounded by this value's mode. Panics
+    # on a zero times an infinity
+    *: function {t: this.view rhs: BigFloat.view} out BigFloat is {
+        return (BigFloat.product x: t y: rhs prec: 0 mode: t.mode)
+    }
+
+    # the quotient at the larger precision, rounded by this value's mode.
+    # Panics on a zero over a zero and an infinity over an infinity
+    /: function {t: this.view rhs: BigFloat.view} out BigFloat is {
+        return (BigFloat.quotient x: t y: rhs prec: 0 mode: t.mode)
+    }
+
+    # add -- this += x, in place, at this value's precision and mode: the
+    # accumulator form for a loop
+    add: function {:this x: BigFloat.view} is {
+        inPlace z: this :x op: floatop.add
+    }
+
+    # sub -- this -= x, in place; an exact zero difference is -0 only under
+    # toNegativeInf
+    sub: function {:this x: BigFloat.view} is {
+        inPlace z: this :x op: floatop.sub
+    }
+
+    # mul -- this *= x, in place
+    mul: function {:this x: BigFloat.view} is {
+        inPlace z: this :x op: floatop.mul
+    }
+
+    # quo -- this /= x, in place; a nonzero over a zero is an infinity
+    quo: function {:this x: BigFloat.view} is {
+        inPlace z: this :x op: floatop.quo
+    }
+
+    # the value with its sign flipped, a zero's included
+    neg: function {t: this.view} out BigFloat is {
+        z: t.copy
+        z.negative = z.negative.not
+        z.acc = rounding.accuracy.exact
+        return z
+    }
+
+    # the value without its sign
+    abs: function {t: this.view} out BigFloat is {
+        z: t.copy
+        z.negative = false
+        z.acc = rounding.accuracy.exact
+        return z
+    }
+
+    # withPrec -- the value rounded to `prec` bits by its mode; 0 makes every
+    # finite value a zero of its sign, and an infinity stays one
+    withPrec: function {t: this.view prec: u32} out BigFloat is {
+        z: t.copy
+        setPrec :z :prec
+        return z
+    }
+
+    # withMode -- the value, exactly, rounding by `mode` from here on
+    withMode: function {t: this.view mode: rounding.roundingmode} out BigFloat is {
+        z: t.copy
+        z.mode = mode
+        z.acc = rounding.accuracy.exact
+        return z
+    }
+
+    # minPrec -- the fewest bits that hold the value exactly: 0 for a zero or
+    # an infinity
+    minPrec: function {t: this.view} out u64 is {
+        if t.form.finite.not then return 0
+        return t.mant.length * 64 - (nat.natTrailingZeroBits x: t.mant.listView)
+    }
+
+    # -1, 0 or +1 as the value is below, at or above zero; -0 is 0
+    sign: function {t: this.view} out i32 is {
+        if t.form.zero then return 0
+        if t.negative then return -1
+        return 1
+    }
+
+    # whether the value is +Inf or -Inf
+    isInf: function {t: this.view} out bool is {
+        return t.form.inf
+    }
+
+    # whether the value is an integer; an infinity is not
+    isInt: function {t: this.view} out bool is {
+        if t.form.finite.not then return t.form.zero
+        if t.exp <= 0 then return false
+        e: t.exp.u64.orPanic
+        return (t.prec.u64 <= e) or (t.minPrec <= e)
+    }
+
+    # exponent -- e with the value mantissa * 2^e and 0.5 <= |mantissa| < 1; 0
+    # for a zero or an infinity
+    exponent: function {t: this.view} out i64 is {
+        if t.form.finite then return t.exp
+        return 0
+    }
+
+    # mantissa -- the value scaled into 0.5 <= |m| < 1 by the power of two
+    # `exponent` names, with this value's precision and mode; a zero or an
+    # infinity is itself
+    mantissa: function {t: this.view} out BigFloat is {
+        z: t.copy
+        if z.form.finite then z.exp = 0
+        return z
+    }
+
+    # scaleB -- the value times 2^n, at this value's precision: exact unless
+    # the exponent leaves what a BigFloat holds
+    scaleB: function {t: this.view n: i64} out BigFloat is {
+        z: t.copy
+        if z.form.finite then setExpAndRound :z exp: z.exp.i64 + n sbit: 0
+        return z
+    }
+
+    # sqrt -- the square root at this value's precision, rounded by its mode;
+    # the root of -0 is -0. Panics on a value below zero
+    sqrt: function {t: this.view} out BigFloat is {
+        return (sqrtOf x: t)
+    }
+
+    # -1, 0 or +1 as this is below, equal to or above rhs; -0 equals 0
+    compare: function {t: this.view rhs: BigFloat.view} out i32 is {
+        return (cmpFloat x: t y: rhs)
+    }
+
+    # whether the two are equal as numbers: -0 equals 0, and the precisions
+    # need not agree
+    ==: function {t: this.view rhs: BigFloat.view} out bool is {
+        return (cmpFloat x: t y: rhs) == 0
+    }
+
+    # whether the two differ
+    !=: function {t: this.view rhs: BigFloat.view} out bool is {
+        return (cmpFloat x: t y: rhs) != 0
+    }
+
+    # whether this is below rhs
+    <: function {t: this.view rhs: BigFloat.view} out bool is {
+        return (cmpFloat x: t y: rhs) < 0
+    }
+
+    # whether this is at most rhs
+    <=: function {t: this.view rhs: BigFloat.view} out bool is {
+        return (cmpFloat x: t y: rhs) <= 0
+    }
+
+    # whether this is above rhs
+    >: function {t: this.view rhs: BigFloat.view} out bool is {
+        return (cmpFloat x: t y: rhs) > 0
+    }
+
+    # whether this is at least rhs
+    >=: function {t: this.view rhs: BigFloat.view} out bool is {
+        return (cmpFloat x: t y: rhs) >= 0
+    }
+
+    # the value as an i64 when it is one exactly -- outOfRange past i64 or for
+    # an infinity, precisionLoss for a fraction
+    i64: function {t: this.view} out (resultval t: i64 e: converror) is {
+        if t.form.inf then return ((resultval t: i64 e: converror).err converror.outOfRange)
+        v: intOf x: t
+        if t.isInt then return v.i64
+        if v.i64.ok then return ((resultval t: i64 e: converror).err converror.precisionLoss)
+        return ((resultval t: i64 e: converror).err converror.outOfRange)
+    }
+
+    # the value as a u64 when it is one exactly -- outOfRange outside u64 or
+    # for an infinity, precisionLoss for a fraction
+    u64: function {t: this.view} out (resultval t: u64 e: converror) is {
+        if t.form.inf then return ((resultval t: u64 e: converror).err converror.outOfRange)
+        v: intOf x: t
+        if t.isInt then return v.u64
+        if v.u64.ok then return ((resultval t: u64 e: converror).err converror.precisionLoss)
+        return ((resultval t: u64 e: converror).err converror.outOfRange)
+    }
+
+    # truncInt -- the integer the value truncates to, toward zero; none for an
+    # infinity
+    truncInt: function {t: this.view} out Option bigint.BigInt is {
+        if t.form.inf then return (Option bigint.BigInt).none
+        return ((Option bigint.BigInt).some (intOf x: t))
+    }
+
+    # rat -- the value exactly as a BigRat; none for an infinity
+    rat: function {t: this.view} out Option bigrat.BigRat is {
+        if t.form.inf then return (Option bigrat.BigRat).none
+        return ((Option bigrat.BigRat).some (ratOf x: t))
+    }
+
+    # the value as an f64 when it is one exactly -- precisionLoss when it lies
+    # between two f64s or below the smallest, outOfRange past the largest
+    f64: function {t: this.view} out (resultval t: f64 e: converror) is {
+        bits: ListVal u64
+        acc: ieeeRound x: t mbits: 52 ebits: 11 :bits
+        v: f64OfBits bits: (lowWord x: bits.listView)
+        if acc.exact then return ((resultval t: f64 e: converror).ok v)
+        if v.isInf then return ((resultval t: f64 e: converror).err converror.outOfRange)
+        return ((resultval t: f64 e: converror).err converror.precisionLoss)
+    }
+
+    # roundF64 -- the f64 nearest the value, a tie to the even one: a zero of
+    # the value's sign below the smallest, an infinity past the largest
+    roundF64: function {t: this.view} out f64 is {
+        bits: ListVal u64
+        ieeeRound x: t mbits: 52 ebits: 11 :bits
+        return (f64OfBits bits: (lowWord x: bits.listView))
+    }
+
+    # the value as an f32 when it is one exactly -- precisionLoss when it lies
+    # between two f32s or below the smallest, outOfRange past the largest
+    f32: function {t: this.view} out (resultval t: f32 e: converror) is {
+        bits: ListVal u64
+        acc: ieeeRound x: t mbits: 23 ebits: 8 :bits
+        v: f32OfBits bits: (lowWord x: bits.listView)
+        if acc.exact then return ((resultval t: f32 e: converror).ok v)
+        if v.isInf then return ((resultval t: f32 e: converror).err converror.outOfRange)
+        return ((resultval t: f32 e: converror).err converror.precisionLoss)
+    }
+
+    # roundF32 -- the f32 nearest the value, a tie to the even one: a zero of
+    # the value's sign below the smallest, an infinity past the largest
+    roundF32: function {t: this.view} out f32 is {
+        bits: ListVal u64
+        ieeeRound x: t mbits: 23 ebits: 8 :bits
+        return (f32OfBits bits: (lowWord x: bits.listView))
+    }
+
+    # ieeeBits -- the bit pattern of the value nearest it, a tie to the even
+    # one, in the IEEE 754 binary interchange format with `mbits` stored
+    # mantissa bits and an `ebits`-bit exponent: binary16 is 10 and 5,
+    # binary128 112 and 15. Subnormals are kept; a value too small is a zero
+    # of its sign and one too large an infinity
+    ieeeBits: function {t: this.view mbits: u64 ebits: u64} out bigint.BigInt is {
+        bits: ListVal u64
+        ieeeRound x: t :mbits :ebits :bits
+        return (bigint.BigInt.fromParts neg: false abs: bits.take)
+    }
+
+    # text -- the value spelled in `format` with `digits` digits: after the
+    # point for exponent, fixed and hex, in all for general; a negative count
+    # spells the fewest decimal digits that read back as this value at its
+    # precision. An infinity is "+Inf" or "-Inf"
+    text: function {t: this.view format: floatformat digits: i64} out String is {
+        return (textOf x: t :format prec: digits)
+    }
+
+    # the value in general format with 10 digits
+    string: function {t: this.view} out String is {
+        return (textOf x: t format: floatformat.general prec: 10)
+    }
+}
+
+# blank -- +0, exactly, rounding to `prec` bits by `mode`
+blank: function {prec: u32 mode: rounding.roundingmode} out BigFloat is {
+    return (BigFloat.zero :prec :mode)
+}
+
+# floatop -- one of the four operators, for the forms that share a body
+floatop: variant {
+    # x + y
+    add: null
+    # x - y
+    sub: null
+    # x * y
+    mul: null
+    # x / y
+    quo: null
+}
+
+# combined -- x op y rounded to `prec` bits by `mode`, 0 taking the larger
+# operand precision
+combined: function {
+    x: BigFloat.view
+    y: BigFloat.view
+    prec: u32
+    mode: rounding.roundingmode
+    op: floatop
+} out BigFloat is {
+    z: blank :prec :mode
+    match (
+        op
+    ) case add then {
+        addInto :z :x :y
+    } case sub then {
+        subInto :z :x :y
+    } case mul then {
+        mulInto :z :x :y
+    } case quo then {
+        quoInto :z :x :y
+    }
+    return z
+}
+
+# inPlace -- z = z op x at z's precision and mode
+inPlace: function {z: BigFloat.borrow x: BigFloat.view op: floatop} is {
+    r: combined x: z y: x prec: z.prec mode: z.mode :op
+    moveInto dst: z src: r
+}
+
+# makeAcc -- above or below, as the rounded result lies above the exact one
+makeAcc: function {above: bool} out rounding.accuracy is {
+    if above then return rounding.accuracy.above
+    return rounding.accuracy.below
+}
+
+# largerPrec -- the larger of two precisions
+largerPrec: function {x: u32 y: u32} out u32 is {
+    if x > y then return x
+    return y
+}
+
+# moveInto -- dst takes every part of src, the mantissa moved
+moveInto: function {dst: BigFloat.borrow src: BigFloat.borrow} is {
+    dst.prec = src.prec
+    dst.mode = src.mode
+    dst.acc = src.acc
+    dst.form = src.form
+    dst.negative = src.negative
+    dst.exp = src.exp
+    dst.mant swap src.mant
+}
+
+# copyInto -- z = x with x's precision, mode and accuracy (Go's Copy)
+copyInto: function {z: BigFloat.borrow x: BigFloat.view} is {
+    z.prec = x.prec
+    z.mode = x.mode
+    z.acc = x.acc
+    z.form = x.form
+    z.negative = x.negative
+    if x.form.finite then {
+        nat.natSet z: z.mant x: x.mant.listView
+        z.exp = x.exp
+    }
+}
+
+# setFrom -- z = x rounded to z's precision, which 0 sets to x's (Go's Set)
+setFrom: function {z: BigFloat.borrow x: BigFloat.view} is {
+    z.acc = rounding.accuracy.exact
+    z.form = x.form
+    z.negative = x.negative
+    if x.form.finite then {
+        z.exp = x.exp
+        nat.natSet z: z.mant x: x.mant.listView
+    }
+    if z.prec == 0 then {
+        z.prec = x.prec
+    } else if z.prec < x.prec then {
+        roundFloat :z sbit: 0
+    }
+}
+
+# setPrec -- z rounded to `prec` bits by its mode; 0 makes a finite value a
+# zero of its sign (Go's SetPrec)
+setPrec: function {z: BigFloat.borrow prec: u32} is {
+    z.acc = rounding.accuracy.exact
+    if prec == 0 then {
+        z.prec = 0
+        if z.form.finite then {
+            z.acc = makeAcc above: z.negative
+            z.form = floatform.zero
+        }
+        return
+    }
+    old: z.prec
+    z.prec = prec
+    if z.prec < old then roundFloat :z sbit: 0
+}
+
+# sticky -- 1 when any of x's low i bits is set
+sticky: function {x: (ListViewVal u64).view i: u64} out u64 is {
+    j: i / 64
+    if j >= x.length then {
+        if x.length == 0 then return 0
+        return 1
+    }
+    k: u64
+    for k < j loop {
+        if (x.get i: k) != 0 then return 1
+        k = k + 1
+    }
+    s: i % 64
+    if s != 0 when ((x.get i: j) << (64.u64 - s)) != 0 then return 1
+    return 0
+}
+
+# roundFloat -- z rounded by its mode to its precision, its accuracy set. The
+# mantissa is normalized or empty, and the sign already the result's, which
+# toNegativeInf and toPositiveInf depend on. sbit is 1 when bits below the
+# mantissa were dropped already (Go's round)
+roundFloat: function {z: BigFloat.borrow sbit: u64} is {
+    z.acc = rounding.accuracy.exact
+    if z.form.finite.not then return
+    m: z.mant.length
+    bits: m * 64
+    prec: z.prec.u64
+    if bits <= prec then return
+    # the rounding bit sits just below the prec leading bits; the sticky bit
+    # says whether anything below it is set
+    r: bits - prec - 1
+    rbit: (nat.natBit x: z.mant.listView i: r) & 1
+    sb: sbit
+    if sb == 0 when (rbit == 0) or z.mode.toNearestEven then sb = sticky x: z.mant.listView i: r
+    sb = sb & 1
+    # keep the n top words
+    n: prec + 63 / 64
+    if m > n then {
+        k: u64
+        for k < n loop {
+            z.mant.set i: k val: (z.mant.get i: k + (m - n))
+            k = k + 1
+        }
+        z.mant.resize to: n
+    }
+    ntz: n * 64 - prec
+    lsb: 1.u64 << ntz
+    if (rbit | sb) != 0 then {
+        inc: false
+        match (
+            z.mode
+        ) case toNegativeInf then {
+            inc = z.negative
+        } case toZero then null case toNearestEven then {
+            inc = (rbit != 0) and ((sb != 0) or (((z.mant.get i: 0) & lsb) != 0))
+        } case toNearestAway then {
+            inc = rbit != 0
+        } case awayFromZero then {
+            inc = true
+        } case toPositiveInf then {
+            inc = z.negative.not
+        }
+        z.acc = makeAcc above: inc != z.negative
+        if inc then {
+            c: u64
+            {
+                w: z.mant.mutView
+                c = arith.addVWInPlace z: w y: lsb
+            }
+            if c != 0 then {
+                # a carry out of the top: halve the mantissa, raise the exponent
+                if z.exp.i64 >= maxExp then {
+                    z.form = floatform.inf
+                    return
+                }
+                z.exp = z.exp + 1
+                {
+                    w: z.mant.mutView
+                    arith.rshVUInPlace z: w s: 1
+                }
+                z.mant.set i: n - 1 val: (z.mant.get i: n - 1) | (1.u64 << 63)
+            }
+        }
+    }
+    # clear the bits below the precision
+    z.mant.set i: 0 val: (z.mant.get i: 0) & (lsb - 1).not
+}
+
+# setExpAndRound -- z's exponent set to exp and z rounded, or a zero or an
+# infinity when exp is out of range
+setExpAndRound: function {z: BigFloat.borrow exp: i64 sbit: u64} is {
+    if exp < minExp then {
+        z.acc = makeAcc above: z.negative
+        z.form = floatform.zero
+        return
+    }
+    if exp > maxExp then {
+        z.acc = makeAcc above: z.negative.not
+        z.form = floatform.inf
+        return
+    }
+    z.form = floatform.finite
+    z.exp = exp.i32.orPanic
+    roundFloat :z :sbit
+}
+
+# setBits64 -- z = the value with magnitude x and sign neg, rounded to z's
+# precision, which 0 sets to 64
+setBits64: function {z: BigFloat.borrow neg: bool x: u64} is {
+    if z.prec == 0 then z.prec = 64
+    z.acc = rounding.accuracy.exact
+    z.negative = neg
+    if x == 0 then {
+        z.form = floatform.zero
+        return
+    }
+    z.form = floatform.finite
+    s: x.leadingZeros
+    nat.natSetWord z: z.mant x: x << s
+    z.exp = (64.u64 - s).i32.orPanic
+    if z.prec < 64 then roundFloat :z sbit: 0
+}
+
+# setFloat64 -- z = x, rounded to z's precision, which 0 sets to 53. Panics on
+# a NaN
+setFloat64: function {z: BigFloat.borrow x: f64} is {
+    if z.prec == 0 then z.prec = 53
+    if x.isNaN then panic msg: "BigFloat of NaN"
+    z.acc = rounding.accuracy.exact
+    z.negative = x.signBit
+    if x == 0.0 then {
+        z.form = floatform.zero
+        return
+    }
+    if x.isInf then {
+        z.form = floatform.inf
+        return
+    }
+    z.form = floatform.finite
+    bits: x.bits
+    e: (bits >> 52) & 2047
+    m: bits & 4503599627370495
+    if e == 0 then {
+        # subnormal: m * 2^-1074, normalized
+        s: m.leadingZeros
+        nat.natSetWord z: z.mant x: m << s
+        z.exp = ((64.u64 - s).i64.orPanic - 1074).i32.orPanic
+    } else {
+        nat.natSetWord z: z.mant x: (m << 11) | (1.u64 << 63)
+        z.exp = (e.i64.orPanic - 1022).i32.orPanic
+    }
+    if z.prec < 53 then roundFloat :z sbit: 0
+}
+
+# fnorm -- m shifted up until its top word's top bit is set; the shift. m is
+# not empty
+fnorm: function {m: (ListVal u64).borrow} out i64 is {
+    s: (m.get i: m.length - 1).leadingZeros
+    if s > 0 then {
+        w: m.mutView
+        arith.lshVUInPlace z: w :s
+    }
+    return s.i64.orPanic
+}
+
+# setInt -- z = x, rounded to z's precision, which 0 sets to the larger of x's
+# bit length and 64
+setInt: function {z: BigFloat.borrow x: bigint.BigInt.view} is {
+    bits: x.bitLength
+    if z.prec == 0 then {
+        z.prec = 64
+        if bits > 64 then z.prec = bits.u32.orPanic
+    }
+    z.acc = rounding.accuracy.exact
+    z.negative = x.negative
+    if x.words.length == 0 then {
+        z.form = floatform.zero
+        return
+    }
+    nat.natSet z: z.mant x: x.words.listView
+    fnorm m: z.mant
+    setExpAndRound :z exp: bits.i64.orPanic sbit: 0
+}
+
+# msb64 -- the 64 most significant bits of a normalized mantissa
+msb64: function {x: (ListViewVal u64).view} out u64 is {
+    if x.length == 0 then return 0
+    return (x.get i: x.length - 1)
+}
+
+# lowWord -- x's least significant word, 0 for zero
+lowWord: function {x: (ListViewVal u64).view} out u64 is {
+    if x.length == 0 then return 0
+    return (x.get i: 0)
+}
+
+# topBits -- z = the k most significant bits of the mantissa m, as an integer
+topBits: function {z: (ListVal u64).borrow m: (ListViewVal u64).view k: u64} is {
+    w: m.length * 64
+    if w < k then {
+        nat.natLsh :z x: m s: k - w
+    } else if w > k then {
+        nat.natRsh :z x: m s: w - k
+    } else {
+        nat.natSet :z x: m
+    }
+}
+
+# intOf -- x truncated toward zero, x finite or zero (Go's Int)
+intOf: function {x: BigFloat.view} out bigint.BigInt is {
+    a: ListVal u64
+    if x.form.finite.not or (x.exp <= 0) then return (bigint.BigInt from: 0)
+    topBits z: a m: x.mant.listView k: x.exp.u64.orPanic
+    return (bigint.BigInt.fromParts neg: x.negative abs: a.take)
+}
+
+# ratOf -- x exactly as a fraction, x finite or zero (Go's Rat)
+ratOf: function {x: BigFloat.view} out bigrat.BigRat is {
+    if x.form.finite.not then return (bigrat.BigRat from: 0)
+    allBits: (x.mant.length * 64).i64.orPanic
+    e: x.exp.i64
+    a: ListVal u64
+    if e > allBits then {
+        nat.natLsh z: a x: x.mant.listView s: (e - allBits).u64.orPanic
+        return (bigrat.BigRat.fromInt from: (bigint.BigInt.fromParts neg: x.negative abs: a.take))
+    }
+    nat.natSet z: a x: x.mant.listView
+    num: bigint.BigInt.fromParts neg: x.negative abs: a.take
+    den: (bigint.BigInt from: 1) << (allBits - e).u64.orPanic
+    return (bigrat.BigRat.fromFraction :num :den)
+}
+
+# ieeeRound -- x rounded to nearest-even in the IEEE 754 binary format with
+# `mbits` stored mantissa bits and an `ebits`-bit exponent, its bit pattern
+# written to `bits`; how the result compares to x (Go's Float32 and Float64,
+# one body for any width)
+ieeeRound: function {
+    x: BigFloat.view
+    mbits: u64
+    ebits: u64
+    bits: (ListVal u64).borrow
+} out rounding.accuracy is {
+    bias: (1.i64 << (ebits - 1).i64.orPanic) - 1
+    emin: 1 - bias
+    mb: mbits.i64.orPanic
+    # the sign and an all-ones exponent, which an infinity is
+    signBit: ListVal u64
+    if x.negative then {
+        none: ListVal u64
+        nat.natSetBit z: signBit x: none.listView i: mbits + ebits b: 1
+    }
+    inf: ListVal u64
+    nat.natSetWord z: inf x: (1.u64 << ebits) - 1
+    infBits: ListVal u64
+    nat.natLsh z: infBits x: inf.listView s: mbits
+    nat.natAdd z: inf x: infBits.listView y: signBit.listView
+    if x.form.zero then {
+        nat.natSet z: bits x: signBit.listView
+        return rounding.accuracy.exact
+    }
+    if x.form.inf then {
+        nat.natSet z: bits x: inf.listView
+        return rounding.accuracy.exact
+    }
+    # e is the exponent for a mantissa in [1, 2); below emin the value is
+    # subnormal and has p < mbits + 1 bits of precision left
+    e: x.exp.i64 - 1
+    p: mb + 1
+    if e < emin then {
+        p = mb + 1 - emin + e
+        # p 0 is a mantissa of at least half the smallest subnormal, which
+        # rounds up unless it is exactly half; below that it is a zero
+        half: false
+        if p == 0 then half = (sticky x: x.mant.listView i: x.mant.length * 64 - 1) == 0
+        if (p < 0) or half then {
+            nat.natSet z: bits x: signBit.listView
+            return (makeAcc above: x.negative)
+        }
+        if p == 0 then {
+            nat.natAddWord z: bits x: signBit.listView w: 1
+            return (makeAcc above: x.negative.not)
+        }
+    }
+    r: blank prec: p.u32.orPanic mode: rounding.roundingmode.toNearestEven
+    setFrom z: r :x
+    e = r.exp.i64 - 1
+    if r.form.inf or (e > bias) then {
+        nat.natSet z: bits x: inf.listView
+        return (makeAcc above: x.negative.not)
+    }
+    mant: ListVal u64
+    field: ListVal u64
+    if e < emin then {
+        # still subnormal after rounding: a zero exponent field
+        p = mb + 1 - emin + e
+        topBits z: mant m: r.mant.listView k: p.u64.orPanic
+    } else {
+        # normal: the biased exponent, and the mantissa without its leading 1
+        top: ListVal u64
+        topBits z: top m: r.mant.listView k: mbits + 1
+        nat.natSetBit z: mant x: top.listView i: mbits b: 0
+        biased: ListVal u64
+        nat.natSetWord z: biased x: (e + bias).u64.orPanic
+        nat.natLsh z: field x: biased.listView s: mbits
+    }
+    t: ListVal u64
+    nat.natAdd z: t x: mant.listView y: field.listView
+    nat.natAdd z: bits x: t.listView y: signBit.listView
+    return r.acc
+}
+
+# fromIEEE -- BigFloat.fromIEEEBits
+fromIEEE: function {bits: bigint.BigInt.view mbits: u64 ebits: u64} out Option BigFloat is {
+    prec: (mbits + 1).u32.orPanic
+    one: bigint.BigInt from: 1
+    neg: (bits.bit i: mbits + ebits) == 1
+    field: ((bits >> mbits) & ((one << ebits) - one)).u64.orPanic
+    frac: bits & ((one << mbits) - one)
+    bias: (1.i64 << (ebits - 1).i64.orPanic) - 1
+    if field == ((1.u64 << ebits) - 1) then {
+        if frac.sign != 0 then return (Option BigFloat).none
+        return ((Option BigFloat).some (BigFloat.inf negative: neg :prec))
+    }
+    m: frac.copy
+    e: 1 - bias
+    if field != 0 then {
+        m = m.setBit i: mbits b: 1
+        e = field.i64.orPanic - bias
+    }
+    z: BigFloat.fromInt from: m :prec
+    z.negative = neg
+    if z.form.finite then setExpAndRound :z exp: z.exp.i64 + (e - mbits.i64.orPanic) sbit: 0
+    return ((Option BigFloat).some z.take)
+}
+
+# f64OfBits -- the f64 whose bit pattern is `bits`, built by scaling, since an
+# f64 is read from bits nowhere else
+f64OfBits: function {bits: u64} out f64 is {
+    e: (bits >> 52) & 2047
+    m: bits & 4503599627370495
+    v: f64
+    if e == 2047 then {
+        z: f64
+        v = 1.0 / z
+    } else if e == 0 then {
+        v = m.f64.orPanic.scaleB n: -1074
+    } else {
+        v = (m | 4503599627370496).f64.orPanic.scaleB n: (e.i64.orPanic - 1075).i32.orPanic
+    }
+    if (bits >> 63) == 1 then v = v.copySign y: -1.0
+    return v
+}
+
+# f32OfBits -- the f32 whose bit pattern is the low 32 bits of `bits`
+f32OfBits: function {bits: u64} out f32 is {
+    e: (bits >> 23) & 255
+    m: bits & 8388607
+    v: f32
+    if e == 255 then {
+        z: f32
+        v = 1.0 / z
+    } else if e == 0 then {
+        v = m.f32.orPanic.scaleB n: -149
+    } else {
+        v = (m | 8388608).f32.orPanic.scaleB n: (e.i64.orPanic - 150).i32.orPanic
+    }
+    if ((bits >> 31) & 1) == 1 then v = v.copySign y: -1.0
+    return v
+}
+
+# uadd -- z = |x| + |y| rounded by z's sign, x and y finite
+uadd: function {z: BigFloat.borrow x: BigFloat.view y: BigFloat.view} is {
+    # the exponents with the binary point to the right of the mantissas
+    ex: x.exp.i64 - (x.mant.length * 64).i64.orPanic
+    ey: y.exp.i64 - (y.mant.length * 64).i64.orPanic
+    r: ListVal u64
+    if ex < ey then {
+        t: ListVal u64
+        nat.natLsh z: t x: y.mant.listView s: (ey - ex).u64.orPanic
+        nat.natAdd z: r x: x.mant.listView y: t.listView
+    } else if ex > ey then {
+        t: ListVal u64
+        nat.natLsh z: t x: x.mant.listView s: (ex - ey).u64.orPanic
+        nat.natAdd z: r x: t.listView y: y.mant.listView
+        ex = ey
+    } else {
+        nat.natAdd z: r x: x.mant.listView y: y.mant.listView
+    }
+    z.mant swap r
+    s: fnorm m: z.mant
+    setExpAndRound :z exp: ex + (z.mant.length * 64).i64.orPanic - s sbit: 0
+}
+
+# usub -- z = |x| - |y| rounded by z's sign, x and y finite and |x| > |y|
+usub: function {z: BigFloat.borrow x: BigFloat.view y: BigFloat.view} is {
+    ex: x.exp.i64 - (x.mant.length * 64).i64.orPanic
+    ey: y.exp.i64 - (y.mant.length * 64).i64.orPanic
+    r: ListVal u64
+    if ex < ey then {
+        t: ListVal u64
+        nat.natLsh z: t x: y.mant.listView s: (ey - ex).u64.orPanic
+        nat.natSub z: r x: x.mant.listView y: t.listView
+    } else if ex > ey then {
+        t: ListVal u64
+        nat.natLsh z: t x: x.mant.listView s: (ex - ey).u64.orPanic
+        nat.natSub z: r x: t.listView y: y.mant.listView
+        ex = ey
+    } else {
+        nat.natSub z: r x: x.mant.listView y: y.mant.listView
+    }
+    z.mant swap r
+    # the operands may cancel out
+    if z.mant.length == 0 then {
+        z.acc = rounding.accuracy.exact
+        z.form = floatform.zero
+        z.negative = false
+        return
+    }
+    s: fnorm m: z.mant
+    setExpAndRound :z exp: ex + (z.mant.length * 64).i64.orPanic - s sbit: 0
+}
+
+# umul -- z = |x| * |y| rounded by z's sign, x and y finite
+umul: function {z: BigFloat.borrow x: BigFloat.view y: BigFloat.view} is {
+    e: x.exp.i64 + y.exp
+    r: ListVal u64
+    natmul.natMul z: r x: x.mant.listView y: y.mant.listView
+    z.mant swap r
+    s: fnorm m: z.mant
+    setExpAndRound :z exp: e - s sbit: 0
+}
+
+# uquo -- z = |x| / |y| rounded by z's sign, x and y finite: x is widened so
+# the quotient holds z's precision and one bit more for rounding, and a
+# nonzero remainder is the sticky bit
+uquo: function {z: BigFloat.borrow x: BigFloat.view y: BigFloat.view} is {
+    n: z.prec.u64 / 64 + 1
+    xadj: ListVal u64
+    d: (n + y.mant.length).i64.orPanic - x.mant.length.i64.orPanic
+    if d > 0 then {
+        for each k: d.u64.orPanic.times loop {
+            k.drop
+            xadj.append from: 0
+        }
+    }
+    xadj.extendView from: x.mant.listView
+    dd: xadj.length.i64.orPanic - y.mant.length.i64.orPanic
+    q: ListVal u64
+    r: ListVal u64
+    natdiv.natDiv :q :r u: xadj.listView v: y.mant.listView
+    e: x.exp.i64 - y.exp - (dd - q.length.i64.orPanic * 64)
+    sbit: u64
+    if r.length > 0 then sbit = 1
+    z.mant swap q
+    s: fnorm m: z.mant
+    setExpAndRound :z exp: e - s :sbit
+}
+
+# ucmp -- -1, 0 or +1 as |x| is below, equal to or above |y|, x and y finite
+ucmp: function {x: BigFloat.view y: BigFloat.view} out i32 is {
+    if x.exp < y.exp then return -1
+    if x.exp > y.exp then return 1
+    i: x.mant.length
+    j: y.mant.length
+    for (i > 0) or (j > 0) loop {
+        xm: u64
+        ym: u64
+        if i > 0 then {
+            i = i - 1
+            xm = x.mant.get :i
+        }
+        if j > 0 then {
+            j = j - 1
+            ym = y.mant.get i: j
+        }
+        if xm < ym then return -1
+        if xm > ym then return 1
+    }
+    return 0
+}
+
+# addInto -- z = x + y rounded to z's precision (Go's Add). An exact zero sum is
+# +0 but under toNegativeInf, as IEEE 754 has it
+addInto: function {z: BigFloat.borrow x: BigFloat.view y: BigFloat.view} is {
+    if z.prec == 0 then z.prec = largerPrec x: x.prec y: y.prec
+    if x.form.finite and y.form.finite then {
+        z.negative = x.negative
+        if x.negative == y.negative then {
+            uadd :z :x :y
+        } else if (ucmp :x :y) > 0 then {
+            usub :z :x :y
+        } else {
+            z.negative = z.negative.not
+            usub :z x: y y: x
+        }
+        if z.form.zero and z.mode.toNegativeInf and z.acc.exact then z.negative = true
+        return
+    }
+    if x.form.inf and y.form.inf and (x.negative != y.negative) then {
+        panic msg: "addition of infinities with opposite signs"
+    }
+    if x.form.zero and y.form.zero then {
+        z.acc = rounding.accuracy.exact
+        z.form = floatform.zero
+        z.negative = x.negative and y.negative
+        return
+    }
+    if x.form.inf or y.form.zero then {
+        setFrom :z :x
+        return
+    }
+    setFrom :z x: y
+}
+
+# subInto -- z = x - y rounded to z's precision: x + (-y), its zero signed as
+# addInto signs one
+subInto: function {z: BigFloat.borrow x: BigFloat.view y: BigFloat.view} is {
+    if z.prec == 0 then z.prec = largerPrec x: x.prec y: y.prec
+    if x.form.finite and y.form.finite then {
+        z.negative = x.negative
+        if x.negative != y.negative then {
+            uadd :z :x :y
+        } else if (ucmp :x :y) > 0 then {
+            usub :z :x :y
+        } else {
+            z.negative = z.negative.not
+            usub :z x: y y: x
+        }
+        if z.form.zero and z.mode.toNegativeInf and z.acc.exact then z.negative = true
+        return
+    }
+    if x.form.inf and y.form.inf and (x.negative == y.negative) then {
+        panic msg: "subtraction of infinities with equal signs"
+    }
+    if x.form.zero and y.form.zero then {
+        z.acc = rounding.accuracy.exact
+        z.form = floatform.zero
+        z.negative = x.negative and y.negative.not
+        return
+    }
+    if x.form.inf or y.form.zero then {
+        setFrom :z :x
+        return
+    }
+    setFrom :z x: y
+    z.negative = z.negative.not
+}
+
+# mulInto -- z = x * y rounded to z's precision; a zero times an infinity
+# panics
+mulInto: function {z: BigFloat.borrow x: BigFloat.view y: BigFloat.view} is {
+    if z.prec == 0 then z.prec = largerPrec x: x.prec y: y.prec
+    z.negative = x.negative != y.negative
+    if x.form.finite and y.form.finite then {
+        umul :z :x :y
+        return
+    }
+    z.acc = rounding.accuracy.exact
+    if x.form.zero and y.form.inf or (x.form.inf and y.form.zero) then {
+        panic msg: "multiplication of zero with infinity"
+    }
+    if x.form.inf or y.form.inf then {
+        z.form = floatform.inf
+        return
+    }
+    z.form = floatform.zero
+}
+
+# quoInto -- z = x / y rounded to z's precision; a nonzero over a zero is an
+# infinity
+quoInto: function {z: BigFloat.borrow x: BigFloat.view y: BigFloat.view} is {
+    if z.prec == 0 then z.prec = largerPrec x: x.prec y: y.prec
+    z.negative = x.negative != y.negative
+    if x.form.finite and y.form.finite then {
+        uquo :z :x :y
+        return
+    }
+    z.acc = rounding.accuracy.exact
+    if x.form.zero and y.form.zero or (x.form.inf and y.form.inf) then {
+        panic msg: "division of zero by zero or infinity by infinity"
+    }
+    if x.form.zero or y.form.inf then {
+        z.form = floatform.zero
+        return
+    }
+    z.form = floatform.inf
+}
+
+# ord -- -2 for -Inf, -1 below zero, 0 for a zero, +1 above zero, +2 for +Inf
+ord: function {x: BigFloat.view} out i32 is {
+    m: 1.i32
+    if x.form.zero then return 0
+    if x.form.inf then m = 2
+    if x.negative then return 0 - m
+    return m
+}
+
+# cmpFloat -- -1, 0 or +1 as x is below, equal to or above y (Go's Cmp)
+cmpFloat: function {x: BigFloat.view y: BigFloat.view} out i32 is {
+    mx: ord :x
+    my: ord x: y
+    if mx < my then return -1
+    if mx > my then return 1
+    if mx == -1 then return (ucmp x: y y: x)
+    if mx == 1 then return (ucmp :x :y)
+    return 0
+}
+
+# sqrtOf -- the square root of x at x's precision and mode: Newton's method
+# finds 1/sqrt of the mantissa, scaled into [0.25, 2), and x/sqrt(x) is the
+# root; the halved exponent goes back on last
+sqrtOf: function {x: BigFloat.view} out BigFloat is {
+    if x.sign == -1 then panic msg: "square root of negative operand"
+    z: x.copy
+    z.acc = rounding.accuracy.exact
+    if x.form.finite.not then return z
+    b: z.exp.i64
+    z.exp = 0
+    # sqrt(z * 2^b) is sqrt(z) * 2^(b/2) for an even b, sqrt(2z) * 2^floor(b/2)
+    # for an odd positive one and sqrt(z/2) * 2^ceil(b/2) for an odd negative
+    # one
+    r: b % 2
+    if r == 1 then z.exp = 1
+    if r == -1 then z.exp = -1
+    m: z.copy
+    sqrtInverse :z x: m
+    setExpAndRound :z exp: z.exp.i64 + (b / 2) sbit: 0
+    return z
+}
+
+# sqrtInverse -- z = sqrt(x) at z's precision: t = 1/sqrt(x) by Newton's
+# method on 1/t^2 - x = 0, t' = t(3 - xt^2)/2, from an f64 guess with the
+# precision doubling each step, then x * t
+sqrtInverse: function {z: BigFloat.borrow x: BigFloat.view} is {
+    three: BigFloat from: 3.0
+    sqi: BigFloat from: 1.0 / x.roundF64.sqrt
+    limit: z.prec.u64 + 32
+    for sqi.prec.u64 < limit loop {
+        sqi.prec = sqi.prec * 2
+        newtonStep t: sqi :x :three
+    }
+    r: blank prec: z.prec mode: z.mode
+    mulInto z: r :x y: sqi
+    moveInto dst: z src: r
+}
+
+# newtonStep -- t = t(3 - xt^2)/2 at t's precision
+newtonStep: function {t: BigFloat.borrow x: BigFloat.view three: BigFloat.view} is {
+    p: t.prec
+    t2: t.copy
+    sq: BigFloat.product x: t y: t2 prec: p mode: rounding.roundingmode.toNearestEven
+    xsq: BigFloat.product :x y: sq prec: p mode: rounding.roundingmode.toNearestEven
+    v: BigFloat.difference x: three y: xsq prec: p mode: rounding.roundingmode.toNearestEven
+    u: BigFloat.product x: t y: v prec: p mode: rounding.roundingmode.toNearestEven
+    if u.form.finite then u.exp = u.exp - 1
+    setFrom z: t x: u
+}
+
+# parseFloat -- BigFloat.parse (Go's Parse and scan)
+parseFloat: function {
+    text: StringView
+    base: u64
+    prec: u32
+    mode: rounding.roundingmode
+} out (ResultRV BigFloat e: parseerror) is {
+    # an infinity, which scanning does not read
+    pos: u64
+    neg: false
+    c0: natconv.byteAt :text i: 0
+    if (c0 == 43) or (c0 == 45) then {
+        neg = c0 == 45
+        pos = 1
+    }
+    rest: text.length - pos
+    if rest == 3 then {
+        word: text.substring from: pos to: text.length
+        if (word == "Inf") or (word == "inf") then {
+            return ((ResultRV BigFloat e: parseerror).ok (BigFloat.inf negative: neg :prec :mode))
+        }
+    }
+    p: prec
+    if p == 0 then p = 64
+    z: blank prec: p :mode
+    z.negative = neg
+    m: ListVal u64
+    sc: natconv.natScan z: m :text from: pos :base fracOk: true
+    match (
+        sc.fault
+    ) case noDigits then {
+        return ((ResultRV BigFloat e: parseerror).err parseerror.empty)
+    } case badSeparator then {
+        return ((ResultRV BigFloat e: parseerror).err parseerror.invalidDigit)
+    } case none then null
+    ex: bigrat.scanExponent :text from: sc.end base2Ok: true sepOk: base == 0
+    if ex.over then return ((ResultRV BigFloat e: parseerror).err parseerror.overflow)
+    if ex.bad or (ex.end != text.length) then {
+        return ((ResultRV BigFloat e: parseerror).err parseerror.invalidDigit)
+    }
+    if m.length == 0 then return ((ResultRV BigFloat e: parseerror).ok z.take)
+    # the mantissa normalized, then the radix point and the exponent as powers
+    # of 2 and 5: 10^k is 5^k * 2^k
+    z.mant swap m
+    s: fnorm m: z.mant
+    exp2: (z.mant.length * 64).i64.orPanic - s
+    exp5: 0
+    d: sc.frac.i64.orPanic
+    if sc.base == 10 then {
+        exp5 = 0 - d
+        exp2 = exp2 - d
+    } else if sc.base == 2 then {
+        exp2 = exp2 - d
+    } else if sc.base == 8 then {
+        exp2 = exp2 - (d * 3)
+    } else {
+        exp2 = exp2 - (d * 4)
+    }
+    if ex.base == 10 then exp5 = exp5 + ex.exp
+    exp2 = exp2 + ex.exp
+    if (exp2 < minExp) or (exp2 > maxExp) then {
+        return ((ResultRV BigFloat e: parseerror).err parseerror.overflow)
+    }
+    z.form = floatform.finite
+    z.exp = exp2.i32.orPanic
+    if exp5 == 0 then {
+        roundFloat :z sbit: 0
+        return ((ResultRV BigFloat e: parseerror).ok z.take)
+    }
+    # 5^|exp5| with 64 bits to spare, then one rounding multiply or divide
+    n: exp5
+    if n < 0 then n = 0 - n
+    f: pow5 prec: z.prec + 64 n: n.u64.orPanic
+    r: blank prec: z.prec mode: z.mode
+    if exp5 < 0 then quoInto z: r x: z y: f else mulInto z: r x: z y: f
+    return ((ResultRV BigFloat e: parseerror).ok r.take)
+}
+
+# pow5 -- 5^n at `prec` bits: exactly from a word up to 5^27, then by repeated
+# squaring of 5 at 64 bits more
+pow5: function {prec: u32 n: u64} out BigFloat is {
+    w: 1.u64
+    k: n
+    if k > 27 then k = 27
+    for each i: k.times loop {
+        i.drop
+        w = w * 5
+    }
+    z: BigFloat.fromU64 from: w :prec
+    if n <= 27 then return z
+    left: n - 27
+    f: BigFloat.fromU64 from: 5 prec: prec + 64
+    for left > 0 loop {
+        if (left & 1) != 0 then z.mul x: f
+        f1: f.copy
+        f2: BigFloat.product x: f y: f1 prec: 0 mode: f.mode
+        f = f2.take
+        left = left >> 1
+    }
+    return z
+}
+
+# FloatDecimal -- an unsigned decimal number: 0.mant * 10^exp with mant's first
+# digit not 0, as ASCII digits most significant first and no trailing 0.
+# Zero has no digits and exponent 0
+FloatDecimal: class {
+    # the digits, '0' to '9'
+    mant: ListVal u8
+    # the power of ten the mantissa is scaled by
+    exp: i64
+}
+
+# emptyDecimal -- zero
+emptyDecimal: function out FloatDecimal is {
+    m: ListVal u8
+    return (FloatDecimal mant: m.take exp: 0)
+}
+
+# maxShift -- the largest shift decimalRsh takes in one pass: (2^s - 1) * 10 +
+# 9 must fit a word
+maxShift: 60.u64
+
+# digitAt -- d's i-th digit, most significant first, '0' past either end
+digitAt: function {d: FloatDecimal.view i: i64} out u8 is {
+    if (i < 0) or (i >= d.mant.length.i64.orPanic) then return 48
+    return (d.mant.get i: i.u64.orPanic)
+}
+
+# decimalInit -- x = m * 2^shift in decimal: a left shift done in binary, a
+# right one, after dropping m's trailing zero bits, in decimal
+decimalInit: function {x: FloatDecimal.borrow m: (ListViewVal u64).view shift: i64} is {
+    x.mant.resize to: 0
+    x.exp = 0
+    if m.length == 0 then return
+    a: ListVal u64
+    nat.natSet z: a x: m
+    sh: shift
+    if sh < 0 then {
+        ntz: nat.natTrailingZeroBits x: a.listView
+        s: (0 - sh).u64.orPanic
+        if s >= ntz then s = ntz
+        t: ListVal u64
+        nat.natRsh z: t x: a.listView :s
+        a swap t
+        sh = sh + s.i64.orPanic
+    }
+    if sh > 0 then {
+        t: ListVal u64
+        nat.natLsh z: t x: a.listView s: sh.u64.orPanic
+        a swap t
+        sh = 0
+    }
+    s: natconv.natText x: a.listView base: 10
+    n: s.length
+    x.exp = n.i64.orPanic
+    # trailing zeros go: the exponent places the point
+    for n > 0 loop {
+        if (natconv.byteAt text: s.stringView i: n - 1) != 48 then break
+        n = n - 1
+    }
+    for each i: n.times loop x.mant.append from: (natconv.byteAt text: s.stringView :i)
+    if sh < 0 then {
+        for sh < (0 - maxShift.i64.orPanic) loop {
+            decimalRsh :x s: maxShift
+            sh = sh + maxShift.i64.orPanic
+        }
+        decimalRsh :x s: (0 - sh).u64.orPanic
+    }
+}
+
+# decimalRsh -- x >> s, s at most maxShift, by shift-and-subtract division by
+# 2^s: a digit read, a digit written
+decimalRsh: function {x: FloatDecimal.borrow s: u64} is {
+    r: u64
+    n: u64
+    # enough leading digits to cover the first shift
+    for (n >> s) == 0 loop {
+        if r >= x.mant.length then break
+        n = n * 10 + ((x.mant.get i: r) - 48)
+        r = r + 1
+    }
+    if n == 0 then {
+        x.mant.resize to: 0
+        return
+    }
+    for (n >> s) == 0 loop {
+        r = r + 1
+        n = n * 10
+    }
+    x.exp = x.exp + 1 - r.i64.orPanic
+    w: u64
+    mask: (1.u64 << s) - 1
+    for r < x.mant.length loop {
+        ch: (x.mant.get i: r).u64
+        r = r + 1
+        d: n >> s
+        n = n & mask
+        x.mant.set i: w val: (d + 48).u8.orPanic
+        w = w + 1
+        n = n * 10 + ch - 48
+    }
+    # the digits that still fit, then the ones that do not
+    for (n > 0) and (w < x.mant.length) loop {
+        d: n >> s
+        n = n & mask
+        x.mant.set i: w val: (d + 48).u8.orPanic
+        w = w + 1
+        n = n * 10
+    }
+    x.mant.resize to: w
+    for n > 0 loop {
+        d: n >> s
+        n = n & mask
+        x.mant.append from: (d + 48).u8.orPanic
+        n = n * 10
+    }
+    decimalTrim :x
+}
+
+# shouldRoundUp -- whether x shortened to n digits rounds up: a tie, a lone
+# trailing 5, to the even digit
+shouldRoundUp: function {x: FloatDecimal.view n: u64} out bool is {
+    if ((x.mant.get i: n) == 53) and ((n + 1) == x.mant.length) then {
+        if n == 0 then return false
+        return (((x.mant.get i: n - 1) - 48) & 1) != 0
+    }
+    return (x.mant.get i: n) >= 53
+}
+
+# decimalRound -- x rounded to at most n digits, a tie to the even one;
+# unchanged when n is negative or covers every digit
+decimalRound: function {x: FloatDecimal.borrow n: i64} is {
+    if (n < 0) or (n >= x.mant.length.i64.orPanic) then return
+    if (shouldRoundUp :x n: n.u64.orPanic) then decimalRoundUp :x :n else decimalRoundDown :x :n
+}
+
+# decimalRoundUp -- x rounded up to at most n digits
+decimalRoundUp: function {x: FloatDecimal.borrow n: i64} is {
+    if (n < 0) or (n >= x.mant.length.i64.orPanic) then return
+    k: n.u64.orPanic
+    # the first digit below 9, from the cut back
+    for k > 0 loop {
+        if (x.mant.get i: k - 1) < 57 then break
+        k = k - 1
+    }
+    if k == 0 then {
+        # all 9s: up to 1 and one more power of ten
+        x.mant.set i: 0 val: 49
+        x.mant.resize to: 1
+        x.exp = x.exp + 1
+        return
+    }
+    x.mant.set i: k - 1 val: (x.mant.get i: k - 1) + 1
+    x.mant.resize to: k
+}
+
+# decimalRoundDown -- x truncated to at most n digits
+decimalRoundDown: function {x: FloatDecimal.borrow n: i64} is {
+    if (n < 0) or (n >= x.mant.length.i64.orPanic) then return
+    x.mant.resize to: n.u64.orPanic
+    decimalTrim :x
+}
+
+# decimalTrim -- x without trailing zero digits, which say nothing
+decimalTrim: function {x: FloatDecimal.borrow} is {
+    i: x.mant.length
+    for i > 0 loop {
+        if (x.mant.get i: i - 1) != 48 then break
+        i = i - 1
+    }
+    x.mant.resize to: i
+    if i == 0 then x.exp = 0
+}
+
+# textOf -- BigFloat.text (Go's Append): the binary formats straight off the
+# mantissa; the decimal ones convert to decimal exactly, round there, and read
+# the digits out
+textOf: function {x: BigFloat.view format: floatformat prec: i64} out String is {
+    buf: String
+    if x.negative then buf.append "-"
+    if x.form.inf then {
+        if x.negative.not then buf.append "+"
+        buf.append "Inf"
+        return buf
+    }
+    match (
+        format
+    ) case binary then {
+        fmtB :buf :x
+        return buf
+    } case hexFraction then {
+        fmtP :buf :x
+        return buf
+    } case hex then {
+        fmtX :buf :x :prec
+        return buf
+    } else null
+    d: emptyDecimal
+    if x.form.finite then {
+        shift: x.exp.i64 - (nat.natBitLen x: x.mant.listView).i64.orPanic
+        decimalInit x: d m: x.mant.listView :shift
+    }
+    p: prec
+    shortest: false
+    nd: d.mant.length.i64.orPanic
+    if p < 0 then {
+        shortest = true
+        roundShortest :d :x
+        nd = d.mant.length.i64.orPanic
+        match (
+            format
+        ) case exponent then {
+            p = nd - 1
+        } case exponentUpper then {
+            p = nd - 1
+        } case fixed then {
+            p = nd - d.exp
+            if p < 0 then p = 0
+        } else {
+            p = nd
+        }
+    } else {
+        match (
+            format
+        ) case exponent then {
+            decimalRound x: d n: 1 + p
+        } case exponentUpper then {
+            decimalRound x: d n: 1 + p
+        } case fixed then {
+            decimalRound x: d n: d.exp + p
+        } else {
+            if p == 0 then p = 1
+            decimalRound x: d n: p
+        }
+        nd = d.mant.length.i64.orPanic
+    }
+    match (
+        format
+    ) case exponent then {
+        fmtE :buf upper: false prec: p :d
+    } case exponentUpper then {
+        fmtE :buf upper: true prec: p :d
+    } case fixed then {
+        fmtF :buf prec: p :d
+    } else {
+        # exponent form when the exponent is below -4 or at least the
+        # precision, 6 for the shortest; trailing fractional zeros go
+        eprec: p
+        if (eprec > nd) and (nd >= d.exp) then eprec = nd
+        if shortest then eprec = 6
+        e: d.exp - 1
+        if (e < -4) or (e >= eprec) then {
+            if p > nd then p = nd
+            fmtE :buf upper: format.generalUpper prec: p - 1 :d
+        } else {
+            if p > d.exp then p = nd
+            fp: p - d.exp
+            if fp < 0 then fp = 0
+            fmtF :buf prec: fp :d
+        }
+    }
+    return buf
+}
+
+# roundShortest -- d rounded to the fewest digits that still lie strictly
+# within half an ulp of x at x's precision -- or on the boundary when x's
+# mantissa is even, since a tie there rounds back to x
+roundShortest: function {d: FloatDecimal.borrow x: BigFloat.view} is {
+    if d.mant.length == 0 then return
+    # the mantissa with x.prec + 1 bits, its last bit half an ulp
+    mant: ListVal u64
+    nat.natSet z: mant x: x.mant.listView
+    bl: (nat.natBitLen x: mant.listView).i64.orPanic
+    exp: x.exp.i64 - bl
+    s: bl - (x.prec.i64 + 1)
+    if s < 0 then {
+        t: ListVal u64
+        nat.natLsh z: t x: mant.listView s: (0 - s).u64.orPanic
+        mant swap t
+    } else if s > 0 then {
+        t: ListVal u64
+        nat.natRsh z: t x: mant.listView s: s.u64.orPanic
+        mant swap t
+    }
+    exp = exp + s
+    lower: emptyDecimal
+    upper: emptyDecimal
+    tmp: ListVal u64
+    nat.natSubWord z: tmp x: mant.listView w: 1
+    decimalInit x: lower m: tmp.listView shift: exp
+    nat.natAddWord z: tmp x: mant.listView w: 1
+    decimalInit x: upper m: tmp.listView shift: exp
+    inclusive: ((mant.get i: 0) & 2) == 0
+    ll: lower.mant.length.i64.orPanic
+    ul: upper.mant.length.i64.orPanic
+    i: 0
+    for i < d.mant.length.i64.orPanic loop {
+        m: d.mant.get i: i.u64.orPanic
+        l: digitAt d: lower :i
+        u: digitAt d: upper :i
+        # down when lower differs here, or is inclusive and ends here; up when
+        # upper differs and either is inclusive, lies past the rounded-up
+        # digit, or has digits left -- or ended earlier, which made it larger
+        okdown: (l != m) or (inclusive and ((i + 1) == ll))
+        okup: (
+            (m != u) and (inclusive or ((m + 1) < u) or ((i + 1) < ul) or ((i >= ul) and (m < 57)))
+        )
+        if okdown and okup then {
+            decimalRound x: d n: i + 1
+            return
+        }
+        if okdown then {
+            decimalRoundDown x: d n: i + 1
+            return
+        }
+        if okup then {
+            decimalRoundUp x: d n: i + 1
+            return
+        }
+        i = i + 1
+    }
+}
+
+# appendZeros -- n '0' digits
+appendZeros: function {buf: String.borrow n: i64} is {
+    k: n
+    for k > 0 loop {
+        buf.appendByte b: 48
+        k = k - 1
+    }
+}
+
+# appendExponent -- a decimal exponent: its sign, then at least two digits
+appendExponent: function {buf: String.borrow e: i64} is {
+    v: e
+    if v < 0 then {
+        buf.appendByte b: 45
+        v = 0 - v
+    } else {
+        buf.appendByte b: 43
+    }
+    if v < 10 then buf.appendByte b: 48
+    buf.append "\{v}"
+}
+
+# fmtE -- d.dddde+dd with prec digits after the point
+fmtE: function {buf: String.borrow upper: bool prec: i64 d: FloatDecimal.view} is {
+    ch: 48.u8
+    if d.mant.length > 0 then ch = d.mant.get i: 0
+    buf.appendByte b: ch
+    if prec > 0 then {
+        buf.appendByte b: 46
+        i: 1
+        m: d.mant.length.i64.orPanic
+        if (prec + 1) < m then m = prec + 1
+        for i < m loop {
+            buf.appendByte b: (d.mant.get i: i.u64.orPanic)
+            i = i + 1
+        }
+        for i <= prec loop {
+            buf.appendByte b: 48
+            i = i + 1
+        }
+    }
+    if upper then buf.appendByte b: 69 else buf.appendByte b: 101
+    e: 0
+    if d.mant.length > 0 then e = d.exp - 1
+    appendExponent :buf :e
+}
+
+# fmtF -- ddddd.ddddd with prec digits after the point
+fmtF: function {buf: String.borrow prec: i64 d: FloatDecimal.view} is {
+    if d.exp > 0 then {
+        m: d.mant.length.i64.orPanic
+        if d.exp < m then m = d.exp
+        k: 0
+        for k < m loop {
+            buf.appendByte b: (d.mant.get i: k.u64.orPanic)
+            k = k + 1
+        }
+        appendZeros :buf n: d.exp - m
+    } else {
+        buf.appendByte b: 48
+    }
+    if prec > 0 then {
+        buf.appendByte b: 46
+        i: 0
+        for i < prec loop {
+            buf.appendByte b: (digitAt :d i: d.exp + i)
+            i = i + 1
+        }
+    }
+}
+
+# fmtB -- the mantissa as a decimal integer of exactly x.prec bits, "p", and
+# the power of two; "0" for a zero
+fmtB: function {buf: String.borrow x: BigFloat.view} is {
+    if x.form.zero then {
+        buf.append "0"
+        return
+    }
+    m: ListVal u64
+    topBits z: m m: x.mant.listView k: x.prec
+    buf.append (natconv.natText x: m.listView base: 10)
+    buf.append "p"
+    e: x.exp.i64 - x.prec
+    if e >= 0 then buf.append "+"
+    buf.append "\{e}"
+}
+
+# fmtX -- "0x1." and the hexadecimal mantissa in [1, 2), rounded by x's mode
+# to prec digits or, when prec is negative, to as few as hold it, then "p" and
+# the power of two; "0x0p+00" for a zero
+fmtX: function {buf: String.borrow x: BigFloat.view prec: i64} is {
+    if x.form.zero then {
+        buf.append "0x0"
+        if prec > 0 then {
+            buf.append "."
+            appendZeros :buf n: prec
+        }
+        buf.append "p+00"
+        return
+    }
+    n: u64
+    if prec < 0 then {
+        n = x.minPrec - 1 + 3 / 4 * 4 + 1
+    } else {
+        n = prec.u64.orPanic * 4 + 1
+    }
+    r: blank prec: n.u32.orPanic mode: x.mode
+    setFrom z: r :x
+    m: ListVal u64
+    topBits z: m m: r.mant.listView k: n
+    hm: natconv.natText x: m.listView base: 16
+    buf.append "0x1"
+    if hm.length > 1 then {
+        buf.append "."
+        buf.append (hm.stringView.substring from: 1 to: hm.length)
+    }
+    buf.append "p"
+    appendExponent :buf e: r.exp.i64 - 1
+}
+
+# fmtP -- "0x." and the hexadecimal mantissa in [0.5, 1) without trailing
+# zeros, "p", and the power of two; "0" for a zero
+fmtP: function {buf: String.borrow x: BigFloat.view} is {
+    if x.form.zero then {
+        buf.append "0"
+        return
+    }
+    # the zero low words go before conversion
+    i: u64
+    for (x.mant.get :i) == 0 loop i = i + 1
+    hm: natconv.natText x: (x.mant.slice from: i to: x.mant.length) base: 16
+    k: hm.length
+    for k > 0 loop {
+        if (natconv.byteAt text: hm.stringView i: k - 1) != 48 then break
+        k = k - 1
+    }
+    buf.append "0x."
+    buf.append (hm.stringView.substring from: 0 to: k)
+    buf.append "p"
+    if x.exp >= 0 then buf.append "+"
+    buf.append "\{x.exp}"
+}

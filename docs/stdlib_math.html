@@ -93,9 +93,15 @@ Table of Contents</div>
 </li>
 <li><a href="#bigrat">BigRat</a>
 </li>
+<li><a href="#bigfloat">BigFloat</a>
+</li>
 <li><a href="#decimalprec">decimalprec</a>
 </li>
 <li><a href="#roundingmode">roundingmode</a>
+</li>
+<li><a href="#accuracy">accuracy</a>
+</li>
+<li><a href="#floatformat">floatformat</a>
 </li>
 </ul>
 </li>
@@ -109,9 +115,9 @@ subunits under <code>lib/system/math/</code>, which are the one place they are
 written; every definition carries its own doc comment, and <code>zls</code>
 surfaces each on hover. This page is the prose and the worked examples.</p>
 <p>The <code>math</code> unit holds numbers past the machine's own. Today that is
-<strong>BigInt</strong>, a signed integer of any size, and <strong>BigRat</strong>, a rational of
-any size; the arbitrary-precision floats, the fixed-width integers and the
-fixed decimals follow on the same core.</p>
+<strong>BigInt</strong>, a signed integer of any size, <strong>BigRat</strong>, a rational of any
+size, and <strong>BigFloat</strong>, a binary floating-point number of any precision;
+the fixed-width integers and the fixed decimals follow on the same core.</p>
 <p>The core is a port of Go's <code>math/big</code> at commit <code>577b91f341</code>
 (BSD-3-Clause, the license beside it in <code>math/LICENSE-GO</code>); each ported
 file names the Go file it came from. The algorithms are Go's:
@@ -137,7 +143,10 @@ one list sized before the work starts and carved into windows.</p>
 <li><a href="#biggcd"><strong>BigGCD</strong> -- <code>class { gcd: BigInt  x: BigInt  y: BigInt }</code></a></li>
 <li><a href="#bigrat"><strong>BigRat</strong> -- <code>class { num: BigInt  den: BigInt }</code>: a quotient in lowest terms</a></li>
 <li><a href="#decimalprec"><strong>decimalprec</strong> -- <code>record { digits: u64  exact: bool }</code></a></li>
+<li><a href="#bigfloat"><strong>BigFloat</strong> -- <code>class { prec: u32  mode: roundingmode  acc: accuracy ... }</code>: a binary float of any precision</a></li>
 <li><a href="#roundingmode"><strong>roundingmode</strong> -- <code>variant { toNearestEven  toNearestAway  toZero  awayFromZero  toNegativeInf  toPositiveInf }</code></a></li>
+<li><a href="#accuracy"><strong>accuracy</strong> -- <code>variant { below  exact  above }</code></a></li>
+<li><a href="#floatformat"><strong>floatformat</strong> -- <code>variant { exponent  exponentUpper  fixed  general  generalUpper  hex  hexFraction  binary }</code></a></li>
 </ul>
 <p><strong>BigInt</strong></p>
 <ul>
@@ -160,6 +169,16 @@ one list sized before the work starts and carved into windows.</p>
 <li><a href="#rational-comparison"><code>== != &lt; &lt;= &gt; &gt;=</code>, <code>compare</code>, <code>hash</code>, <code>copy</code></a></li>
 <li><a href="#rational-floats"><code>f64</code>, <code>f32</code> -- exact, as <code>resultval</code>; <code>roundF64</code>, <code>roundF32</code> -- nearest</a></li>
 <li><a href="#rational-text"><code>string</code>, <code>fraction</code>, <code>decimal digits:</code>, <code>decimalPrecision</code></a></li>
+</ul>
+<p><strong>BigFloat</strong></p>
+<ul>
+<li><a href="#float-construction"><code>create from: f64</code>, <code>fromI64</code>, <code>fromU64</code>, <code>fromInt</code>, <code>fromRat</code>, <code>zero</code>, <code>inf</code>, <code>fromIEEEBits</code>, <code>parse</code> -- each with <code>prec:</code> and <code>mode:</code></a></li>
+<li><a href="#float-arithmetic"><code>+ - * /</code>, <code>sum</code>, <code>difference</code>, <code>product</code>, <code>quotient</code>, <code>add</code>, <code>sub</code>, <code>mul</code>, <code>quo</code>, <code>sqrt</code>, <code>neg</code>, <code>abs</code></a></li>
+<li><a href="#float-precision"><code>withPrec</code>, <code>withMode</code>, <code>minPrec</code>, <code>acc</code></a></li>
+<li><a href="#float-parts"><code>sign</code>, <code>isInf</code>, <code>isInt</code>, <code>exponent</code>, <code>mantissa</code>, <code>scaleB n:</code></a></li>
+<li><a href="#float-comparison"><code>== != &lt; &lt;= &gt; &gt;=</code>, <code>compare</code>, <code>copy</code></a></li>
+<li><a href="#float-conversions"><code>i64</code>, <code>u64</code>, <code>f64</code>, <code>f32</code> -- exact; <code>roundF64</code>, <code>roundF32</code>, <code>truncInt</code>, <code>rat</code>, <code>ieeeBits</code></a></li>
+<li><a href="#float-text"><code>string</code>, <code>text format: digits:</code></a></li>
 </ul>
 <h2 id="bigint"><a href="#bigint">3. BigInt</a></h2>
 <p>A <code>BigInt</code> is a sign and a magnitude: <code>negative</code>, and <code>words</code>, the
@@ -317,15 +336,128 @@ half away from zero (<code>-2/3</code> to 4 digits is <code>-0.6667</code>).
 <code>decimalPrecision</code> answers a <a href="#decimalprec"><code>decimalprec</code>: how</a>
 many digits follow the point before the expansion repeats, and whether
 that many are exact -- <code>1/4</code> has 2, exactly, <code>1/6</code> has 1, rounded.</p>
-<h2 id="decimalprec"><a href="#decimalprec">7. decimalprec</a></h2>
+<h2 id="bigfloat"><a href="#bigfloat">7. BigFloat</a></h2>
+<p>A <code>BigFloat</code> is a sign, a mantissa of up to <code>prec</code> bits and an
+exponent -- <code>sign * mantissa * 2^exp</code> with <code>0.5 &lt;= mantissa &lt; 1</code> -- or a
+signed zero, or a signed infinity. Each value carries the precision and
+the <a href="#roundingmode"><code>roundingmode</code> its results round to, and the</a>
+<a href="#accuracy"><code>accuracy</code> of the operation that made it: whether that</a>
+result lies below, at or above the exact one. The exponent is an
+<code>i32</code>; past it a result is an infinity, below it a zero. There are no
+NaNs: an operation whose IEEE 754 result would be one -- <code>inf - inf</code>,
+<code>0 * inf</code>, <code>0 / 0</code>, the root of a negative -- panics, as Go's does.
+At 24 or 53 bits and <code>toNearestEven</code> the operators give what <code>f32</code> and
+<code>f64</code> arithmetic gives, for operands and results those formats hold as
+normal numbers.</p>
+<pre><code class="language-zerolang">main: function is {
+    two: math.BigFloat from: 2.0 prec: 200
+    print (two.sqrt.text format: math.floatformat.fixed digits: 40)
+    one: math.BigFloat.fromI64 from: 1
+    three: math.BigFloat.fromI64 from: 3
+    third: math.BigFloat.quotient x: one y: three prec: 24 mode: math.roundingmode.toZero
+    print "\{third.string} \{third.acc.below} \{third.roundF32}"
+    r: math.BigFloat.parse text: "1e-400" prec: 64
+    match (r) case ok then {
+        print "\{r.string} \{r.roundF64}"
+        print (r.text format: math.floatformat.hex digits: -1)
+    } case err then print "bad"
+}</code></pre>
+<p>This prints <code>1.4142135623730950488016887242096980785697</code>,
+<code>0.3333333135 1 0.333333</code>, <code>1e-400 0</code> and
+<code>0x1.2bfcfc0f923df5f4p-1329</code>.</p>
+<h4 id="float-construction"><a href="#float-construction">7.0.1. Float construction</a></h4>
+<p>Every constructor takes <code>prec:</code> and <code>mode:</code>; <code>prec: 0</code>, the default,
+picks the precision that holds the source exactly -- 53 bits for an
+<code>f64</code>, 64 for an integer, the larger of 64 and the bit length for a
+<code>BigInt</code> -- and <code>mode</code> defaults to <code>toNearestEven</code>. A smaller
+precision rounds by the mode. <code>math.BigFloat from: x</code> takes an <code>f64</code>,
+and panics on a NaN; <code>fromI64</code>, <code>fromU64</code> and <code>fromInt</code> take
+integers; <code>fromRat</code> takes a <code>BigRat</code>, its default precision the
+larger of its parts' bit lengths and 64. <code>zero</code> and <code>inf</code> make a
+signed zero and a signed infinity. <code>fromIEEEBits bits: mbits: ebits:</code>
+reads an IEEE 754 interchange format of <code>mbits</code> stored mantissa bits and
+an <code>ebits</code>-bit exponent -- binary16 is 10 and 5, binary128 112 and 15 --
+exactly, and is none for a NaN.</p>
+<p><code>math.BigFloat.parse text: base: prec: mode:</code> reads an optional sign,
+then a mantissa with an optional radix point and an optional exponent
+-- <code>e</code> for a power of 10, <code>p</code> for a power of 2 -- or <code>"Inf"</code> or
+<code>"inf"</code>. Base 0, the default, reads a <code>0b</code>, <code>0o</code> or <code>0x</code> prefix
+and lets <code>_</code> separate digits; 2, 8, 10 and 16 read plain digits in that
+base. A hexadecimal mantissa takes <code>p</code> alone, since <code>e</code> is one of its
+digits. The value rounds once to <code>prec</code> bits, 0 taking 64. The whole
+text must be the number: <code>parseerror.empty</code> when it holds no digit,
+<code>overflow</code> for an exponent past what a <code>BigFloat</code> holds,
+<code>invalidDigit</code> for anything else.</p>
+<h4 id="float-arithmetic"><a href="#float-arithmetic">7.0.2. Float arithmetic</a></h4>
+<p>The operators round to the larger operand precision by the left
+operand's mode. <code>sum</code>, <code>difference</code>, <code>product</code> and <code>quotient</code>
+take the precision and the mode their result rounds to, <code>prec: 0</code> again
+the larger of the operands'. <code>add</code>, <code>sub</code>, <code>mul</code> and <code>quo</code> write
+the result back into the value, at its own precision and mode: the
+accumulator form for a loop. <code>sqrt</code> rounds the root to the value's
+precision and mode, and the root of <code>-0</code> is <code>-0</code>. <code>neg</code> and
+<code>abs</code> change only the sign. An exact zero sum is <code>+0</code> but under
+<code>toNegativeInf</code>, where it is <code>-0</code>, as IEEE 754 has it; a nonzero over
+a zero is an infinity.</p>
+<h4 id="float-precision"><a href="#float-precision">7.0.3. Float precision</a></h4>
+<p><code>withPrec prec:</code> rounds a copy to that many bits by its mode -- 0 makes a
+finite value a zero of its sign -- and <code>withMode mode:</code> changes the mode
+a copy rounds by from then on. <code>minPrec</code> is the fewest bits that hold
+the value exactly. The <code>acc</code> field reads the accuracy of the operation
+that made the value; a conversion's accuracy is the sign of
+<code>converted.compare rhs: x</code>.</p>
+<h4 id="float-parts"><a href="#float-parts">7.0.4. Float parts</a></h4>
+<p><code>sign</code> is <code>-1</code>, <code>0</code> or <code>1</code>, with <code>-0</code> a 0; the <code>negative</code>
+field is the sign bit, a zero's included. <code>isInf</code> and <code>isInt</code> mean
+what they say. <code>exponent</code> and <code>mantissa</code> split a value into
+<code>mantissa * 2^exponent</code> with <code>0.5 &lt;= |mantissa| &lt; 1</code>; <code>scaleB n:</code>
+multiplies by <code>2^n</code> exactly unless the exponent leaves the <code>i32</code>.</p>
+<h4 id="float-comparison"><a href="#float-comparison">7.0.5. Float comparison</a></h4>
+<p><code>compare</code> and the six comparisons order by value: <code>-0</code> equals
+<code>0</code>, and two values of different precisions compare as numbers. There
+is no <code>hash</code>: equal values may differ in precision and mode, which is
+what a <code>BigFloat</code> carries besides its value.</p>
+<h4 id="float-conversions"><a href="#float-conversions">7.0.6. Float conversions</a></h4>
+<p><code>.i64</code>, <code>.u64</code>, <code>.f64</code> and <code>.f32</code> answer the value only when it is
+the target exactly: <code>precisionLoss</code> for a fraction or a value between
+two floats, <code>outOfRange</code> past the target -- an infinity included for
+the integers. <code>roundF64</code> and <code>roundF32</code> answer the nearest float, a
+tie to the even one, with subnormals kept; a value too small is a zero
+of its sign and one too large an infinity. <code>ieeeBits mbits: ebits:</code> is
+the same rounding into any IEEE 754 binary interchange format, as its bit
+pattern. <code>truncInt</code> is the integer toward zero, none for an infinity,
+and <code>rat</code> the value exactly as a <code>BigRat</code>, none for an infinity.</p>
+<h4 id="float-text"><a href="#float-text">7.0.7. Float text</a></h4>
+<p><code>.string</code> is the value in general format with 10 digits.
+<code>text format: digits:</code> spells it in a <a href="#floatformat"><code>floatformat</code>:</a>
+<code>exponent</code> (<code>-d.dddde+dd</code>), <code>fixed</code> (<code>-dddd.dddd</code>), <code>general</code>
+(the exponent form for exponents below -4 or at least the digit count,
+the fixed one otherwise), their upper-case forms, <code>hex</code>
+(<code>-0x1.dddp+dd</code>), <code>hexFraction</code> (<code>-0x.dddp+dd</code>) and <code>binary</code>
+(<code>-ddddp+dd</code>, a decimal mantissa of <code>prec</code> bits). The digit count is
+the digits after the point for <code>exponent</code>, <code>fixed</code> and <code>hex</code>, and the
+digits in all for <code>general</code>; a negative count spells the fewest
+decimal digits that read back as this value at its precision. Decimal
+digits round to nearest even. An infinity is <code>"+Inf"</code> or
+<code>"-Inf"</code>. Go's <code>Format</code> and <code>Scan</code>, the <code>fmt</code> package's
+verbs and flags, have no counterpart here.</p>
+<h2 id="decimalprec"><a href="#decimalprec">8. decimalprec</a></h2>
 <p>The digits a rational's decimal expansion has before it repeats, and
 whether that many spell it exactly, as <code>BigRat.decimalPrecision</code>
 answers them.</p>
-<h2 id="roundingmode"><a href="#roundingmode">8. roundingmode</a></h2>
+<h2 id="roundingmode"><a href="#roundingmode">9. roundingmode</a></h2>
 <p>How a result between two representable values is chosen: the nearer
 with a tie to the even one (<code>toNearestEven</code>) or away from zero
 (<code>toNearestAway</code>), toward zero, away from zero, or toward either
 infinity. Every <code>math</code> type that rounds takes it.</p>
+<h2 id="accuracy"><a href="#accuracy">10. accuracy</a></h2>
+<p>How a rounded result compares to the exact value: <code>below</code>, <code>exact</code>
+or <code>above</code>, as a <code>BigFloat</code>'s <code>acc</code> reports it.</p>
+<h2 id="floatformat"><a href="#floatformat">11. floatformat</a></h2>
+<p>How <code>BigFloat.text</code> spells a value, Go's format letters by name:
+<code>exponent</code> <code>'e'</code>, <code>exponentUpper</code> <code>'E'</code>, <code>fixed</code> <code>'f'</code>,
+<code>general</code> <code>'g'</code>, <code>generalUpper</code> <code>'G'</code>, <code>hex</code> <code>'x'</code>,
+<code>hexFraction</code> <code>'p'</code> and <code>binary</code> <code>'b'</code>.</p>
 </main>
 </body>
 </html>

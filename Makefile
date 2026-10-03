@@ -2047,7 +2047,10 @@ perf: $(PERFBIN)
 #
 # +1,633 an arm default through a unit's path is a default: -3 behaviour,
 # +1,636 source.
-ALLOC_BASELINE := 2149410
+#
+# +2,693 BigFloat: 0 behaviour, +2,693 source (the compiler parses math's
+# subunits, bigfloat among them, and resolves none of it).
+ALLOC_BASELINE := 2152103
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
