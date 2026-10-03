@@ -2015,7 +2015,11 @@ perf: $(PERFBIN)
 # 0 behaviour, +681 source.
 #
 # +52 an integer past 65504 is no f16: 0 behaviour, +52 source.
-ALLOC_BASELINE := 2039697
+#
+# +1,299 a member used only after its owner walked is walked then: -609
+# behaviour (a method's label is composed once, not copied per member), +1,908
+# source (the deferred-member lists and the late walk).
+ALLOC_BASELINE := 2040996
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

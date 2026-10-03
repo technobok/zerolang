@@ -50437,12 +50437,13 @@ objectdefHasMethodBodies: function {ast: Ast.view op: astnode.view} out bool is 
 # it always has been; narrowing that is a separate question with a much wider
 # blast radius.
 #
-# `usedMemberDecl` is stamped by the reference that resolves the member, and
-# the owner's walk is driven from that same resolution, so a member the program
-# calls anywhere is walked. Verified across the 784-program corpus and by two
-# ordering probes, including one that names the owner in a signature before any
-# call. A shape that ever slipped through would show the symptom
-# stdFnUndemanded already names: a body emitted with nothing stamped.
+# `usedMemberDecl` is stamped by the reference that resolves the member. The
+# owner walks ONCE, and a use can come after it: reading another unit's typed
+# constant walks the scalars' owners early, and a dependency's namespace is
+# walked late. So a deferred member is recorded (deferBody), and one a use
+# reached after its owner's walk is walked then (walkLateUsedBodies) -- missing
+# it showed the symptom stdFnUndemanded names: a body emitted with nothing
+# stamped, here `u64.times` as its template.
 #
 # `--eager` walks everything, which is the point of it.
 bodiedMemberDeferred: function {
@@ -50507,7 +50508,6 @@ checkMethodBodies: function {
             imIsFn: false
             imOp: zast.nodeid
             imName: zast.nameid
-            mname: String
             {
                 im: argRefAt :ast nid: imId
                 if im.nid.isZero.not when (isFunctionDefWithBody
@@ -50516,14 +50516,14 @@ checkMethodBodies: function {
                     imIsFn = true
                     imOp = im.operation
                     imName = im.name
-                    mname = zast.nameTextCopy :ast ref: im.name
                 }
             }
             if imIsFn then {
                 {
-                    qn: "\{typeName}.\{mname}"
+                    qn: methodLabel :ast typeName: typeName.stringView memberId: imName
                     declId93: st.typing.declFindChild parentDeclId: ownerDecl nameId: imName
                     imSkip: bodiedMemberDeferred :st ownerTid: typeTid memberDecl: declId93
+                    if imSkip then deferBody :st :scope :unitDecl declId: declId93
                     # about to check this body, so its signature is needed:
                     # `this` binds from the resolved receiver. AFTER the gate:
                     # forcing it mints the member's return type, which is how a
@@ -50554,7 +50554,6 @@ checkMethodBodies: function {
             amIsFn: false
             amOp: zast.nodeid
             amName: zast.nameid
-            monoName: String
             {
                 am: argRefAt :ast nid: amId
                 if am.nid.isZero.not when (isFunctionDefWithBody
@@ -50563,14 +50562,14 @@ checkMethodBodies: function {
                     amIsFn = true
                     amOp = am.operation
                     amName = am.name
-                    monoName = zast.nameTextCopy :ast ref: am.name
                 }
             }
             if amIsFn then {
                 {
-                    qn2: "\{typeName}.\{monoName}"
+                    qn2: methodLabel :ast typeName: typeName.stringView memberId: amName
                     declId94: st.typing.declFindChild parentDeclId: ownerDecl nameId: amName
                     amSkip: bodiedMemberDeferred :st ownerTid: typeTid memberDecl: declId94
+                    if amSkip then deferBody :st :scope :unitDecl declId: declId94
                     if amSkip.not then forceOwnerMember :st :ast :ownerDecl memberId: amName
                     amFr: fnRefAt :ast nid: amOp
                     if amSkip.not then (checkFunctionBody
@@ -50589,6 +50588,119 @@ checkMethodBodies: function {
             }
         }
     }
+}
+
+# deferBody -- record a member checkMethodBodies left unwalked, with the scope,
+# unit and instance its owner's walk ran in, so a use that arrives after that
+# walk can still have it walked (walkLateUsedBodies).
+deferBody: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    unitDecl: ztypes.declid
+    declId: ztypes.declid
+} is {
+    if declId.isZero then return
+    st.typing.deferredDecls.append from: declId
+    st.typing.deferredScopes.append from: scope
+    st.typing.deferredUnits.append from: unitDecl
+    st.typing.deferredMonos.append from: st.typing.curMonoStamp
+}
+
+# walkLateUsedBodies -- walk each deferred member a use reached after its
+# owner's walk; true when any was walked. The owner walks once, gating each
+# bodied member on a use (bodiedMemberDeferred), and a use found later -- in a
+# namespace or subunit walked after the owner, which the walk order decides --
+# reached a member nothing walked: its template body was emitted unstamped.
+walkLateUsedBodies: function {st: zenv.ZSymbolTable ast: Ast} out bool is {
+    walked: false
+    i: u64
+    # a walk can defer more, so the length is read each round
+    for i < st.typing.deferredDecls.length loop {
+        d: st.typing.deferredDecls.get :i
+        k: d.u64
+        if (st.typing.usedMemberDecl.has item: k) when (st.typing.lateBodiesWalked.has item: k
+        ).not then {
+            st.typing.lateBodiesWalked.add item: k
+            (walkDeferredBody
+                :st
+                :ast
+                declId: d
+                scope: (st.typing.deferredScopes.get :i)
+                unitDecl: (st.typing.deferredUnits.get :i)
+                mono: (st.typing.deferredMonos.get :i)
+            )
+            walked = true
+        }
+        i = i + 1
+    }
+    return walked
+}
+
+# walkDeferredBody -- walk one deferred member as its owner's walk would have:
+# in that walk's scope, unit and instance, its signature forced first, and the
+# ambient walk state restored after. Its name, owner and definition are the
+# declaration's.
+walkDeferredBody: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    declId: ztypes.declid
+    scope: ztypes.declid
+    unitDecl: ztypes.declid
+    mono: ztypes.tid
+} is {
+    memberId: zast.nameid
+    ownerDecl: ztypes.declid
+    defNode: zast.nodeid
+    {
+        dm: st.typing.decls.get i: declId
+        memberId = zast.nameid.create from: dm.name
+        ownerDecl = dm.parent
+        defNode = dm.node
+    }
+    opId: (argRefAt :ast nid: defNode).operation
+    if opId.isZero or ownerDecl.isZero then return
+    ownerTid: declTypeIdOf :st declId: ownerDecl
+    typeName: (zast.nameTextCopy
+        :ast
+        ref: (zast.nameid.create from: (st.typing.decls.get i: ownerDecl).name)
+    )
+    prevMono: st.typing.curMonoStamp
+    prevSup: st.typing.suppressBareCtor
+    prevSupFn: st.typing.suppressFnAutoCall
+    prevL: st.typing.synthLabel.copy
+    prevU: st.typing.synthOwnerUnit
+    prevN: st.typing.synthOwnerName
+    prevThis: st.typing.currentThisTid
+    st.typing.curMonoStamp = mono
+    st.typing.suppressBareCtor = false
+    st.typing.suppressFnAutoCall = false
+    forceOwnerMember :st :ast :ownerDecl :memberId
+    qn: methodLabel :ast typeName: typeName.stringView :memberId
+    (checkFunctionBody
+        :st
+        :scope
+        :unitDecl
+        defName: qn.stringView
+        defNameId: zast.nameid
+        fn: (fnRefAt :ast nid: opId)
+        thisName: typeName.stringView
+        thisTid: ownerTid
+        :ast
+        :declId
+    )
+    st.typing.curMonoStamp = prevMono
+    st.typing.suppressBareCtor = prevSup
+    st.typing.suppressFnAutoCall = prevSupFn
+    st.typing.synthLabel = prevL.take
+    st.typing.synthOwnerUnit = prevU
+    st.typing.synthOwnerName = prevN
+    st.typing.currentThisTid = prevThis
+}
+
+# methodLabel -- the `Type.member` label a method body is walked under.
+methodLabel: function {ast: Ast.view typeName: StringView memberId: zast.nameid} out String is {
+    mn: zast.nameTextAt :ast ref: memberId
+    return "\{typeName}.\{mn}"
 }
 
 # lastStmtLineId / lastStmtLineIdAt -- the node id of a function body's last
@@ -51763,6 +51875,13 @@ checkBodies: function {st: zenv.ZSymbolTable scope: ztypes.declid program: Ast} 
         resolveDemandedDefs :st :scope ast: program
         walkOwedNamespaceBodies :st :scope ast: program
         walkLateResolvedOwners :st :scope ast: program
+        # a member used only after its owner walked is walked now; that walk
+        # can demand in turn, so the completion passes run again until none is
+        for (walkLateUsedBodies :st ast: program) loop {
+            resolveDemandedDefs :st :scope ast: program
+            walkOwedNamespaceBodies :st :scope ast: program
+            walkLateResolvedOwners :st :scope ast: program
+        }
         stampUnitMonoTemplates :st :scope :program
     }
 }
