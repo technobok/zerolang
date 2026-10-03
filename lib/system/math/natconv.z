@@ -84,3 +84,186 @@ mulAddInPlace: function {z: (ListVal u64).borrow y: u64 r: u64} is {
     }
     if c != 0 then z.append from: c
 }
+
+# the digits Go's conversions spell, in value order; bases above 36 tell the
+# letters' cases apart
+maxBase: 62
+maxBaseSmall: 36
+
+# what natScan found wrong, if anything
+scanfault: variant {
+    # the digits read cleanly
+    none: null
+    # no digit at all: an empty text, a lone sign, a bare prefix
+    noDigits: null
+    # an `_` that does not separate two digits
+    badSeparator: null
+}
+
+# what natScan read
+scanned: record {
+    # the index just past the last byte that belongs to the number
+    end: u64
+    # the base the digits were read in: a prefix's, for base 0
+    base: u64
+    # the digits read, a prefix not counted
+    count: u64
+    # what was wrong, if anything
+    fault: scanfault
+}
+
+# natScan -- z = the unsigned number spelled in text from `from` on, for as
+# long as bytes are digits of the base. Base 0 reads a prefix -- 0b, 0o, 0x,
+# or a bare 0 for octal -- and is 10 without one, and only base 0 lets `_`
+# separate digits. Base 2 to 62 otherwise; above 36 the upper case letters
+# are digits 36 to 61. Panics on any other base, as Go does
+natScan: function {z: (ListVal u64).borrow text: StringView from: u64 base: u64} out scanned is {
+    if base != 0 when (base < 2) or (base > maxBase) then panic msg: "invalid number base"
+    z.resize to: 0
+    pos: from
+    # the previous byte's kind: '_', '0' for a digit, '.' for anything else
+    prev: 46.u8
+    invalSep: false
+    count: u64
+    b: base
+    prefix: u8
+    if base == 0 then {
+        b = 10
+        if pos < text.length when (byteAt :text i: pos) == 48 then {
+            prev = 48
+            count = 1
+            pos = pos + 1
+            if pos < text.length then {
+                ch: byteAt :text i: pos
+                if (ch == 98) or (ch == 66) then {
+                    b = 2
+                    prefix = 98
+                } else if (ch == 111) or (ch == 79) then {
+                    b = 8
+                    prefix = 111
+                } else if (ch == 120) or (ch == 88) then {
+                    b = 16
+                    prefix = 120
+                } else {
+                    b = 8
+                    prefix = 48
+                }
+                count = 0
+                if prefix != 48 then pos = pos + 1
+            }
+        }
+    }
+    # digits gather n at a time in di, then join z: appended whole for the
+    # bases that pack exactly into a word (bn == 0), else as z*bn + di
+    n: u64
+    bn: u64
+    if b == 2 then {
+        n = 64
+    } else if b == 4 then {
+        n = 32
+    } else if b == 16 then {
+        n = 16
+    } else {
+        n = maxDigits :b
+        bn = pow x: b :n
+    }
+    di: u64
+    i: u64
+    for pos < text.length loop {
+        ch: byteAt :text i: pos
+        if (ch == 95) and (base == 0) then {
+            if prev != 48 then invalSep = true
+            prev = 95
+        } else {
+            d: digitValue :ch :b
+            if d >= b then break
+            prev = 48
+            count = count + 1
+            di = di * b + d
+            i = i + 1
+            if i == n then {
+                if bn == 0 then z.append from: di else mulAddInPlace :z y: bn r: di
+                di = 0
+                i = 0
+            }
+        }
+        pos = pos + 1
+    }
+    fault: scanfault.none
+    if invalSep or (prev == 95) then fault = scanfault.badSeparator
+    if count == 0 then {
+        # only the octal prefix 0, maybe followed by digits past 7: decimal 0
+        if prefix == 48 then return (scanned end: pos base: 10 count: 1 :fault)
+        fault = scanfault.noDigits
+    }
+    if bn == 0 then {
+        if i > 0 then z.append from: di * (pow x: b n: n - i)
+        reverseWords :z
+        nat.natNorm :z
+        if i > 0 then {
+            w: z.mutView
+            arith.rshVUInPlace z: w s: n - i * (64.u64 / n)
+        }
+        nat.natNorm :z
+    } else if i > 0 then {
+        mulAddInPlace :z y: (pow x: b n: i) r: di
+    }
+    return (scanned end: pos base: b :count :fault)
+}
+
+# byteAt -- the byte at i, which the caller has checked is inside text
+byteAt: function {text: StringView i: u64} out u8 is {
+    return ((text.byteAt :i).or d: 0)
+}
+
+# digitValue -- a byte's value as a digit of base b, or b itself when it is
+# none
+digitValue: function {ch: u8 b: u64} out u64 is {
+    if (ch >= 48) and (ch <= 57) then return ch - 48
+    if (ch >= 97) and (ch <= 122) then return ch - 97 + 10
+    if (ch >= 65) and (ch <= 90) then {
+        if b <= maxBaseSmall then return ch - 65 + 10
+        return ch - 65 + maxBaseSmall
+    }
+    return b
+}
+
+# maxDigits -- the most digits of base b one word holds: the n of the largest
+# power b^n that fits
+maxDigits: function {b: u64} out u64 is {
+    p: b
+    n: 1.u64
+    limit: 18446744073709551615.u64 / b
+    for p <= limit loop {
+        p = p * b
+        n = n + 1
+    }
+    return n
+}
+
+# pow -- x^n by squaring, 1 for n == 0, wrapping past a word
+pow: function {x: u64 n: u64} out u64 is {
+    p: 1.u64
+    base: x
+    e: n
+    for e > 0 loop {
+        if (e & 1) != 0 then p = (p.mulWide rhs: base).lo
+        base = (base.mulWide rhs: base).lo
+        e = e >> 1
+    }
+    return p
+}
+
+# reverseWords -- z's words in the opposite order
+reverseWords: function {z: (ListVal u64).borrow} is {
+    if z.length < 2 then return
+    i: u64
+    j: z.length - 1
+    for i < j loop {
+        t: z.get :i
+        z.set :i val: (z.get i: j)
+        z.set i: j val: t
+        i = i + 1
+        j = j - 1
+    }
+}

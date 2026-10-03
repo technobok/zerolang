@@ -1,0 +1,104 @@
+# math_bigint_parse.z -- Go's intconv stringTests, every row: a text and a
+# base that parse to the value, or that do not parse at all. Go answers only
+# whether a text parsed; here a text with no digit in it (``, `+`, `0x`, `a`)
+# is `empty` and any other refusal `invalidDigit`, and both count as refused.
+
+# the failures, and the rows run
+Tally: class {
+    rows: u64
+    bad: u64
+}
+
+# good -- a text that parses in base `base` to the decimal `want`
+good: function {t: Tally.borrow text: StringView base: u64 want: StringView} is {
+    t.rows = t.rows + 1
+    r: math.BigInt.parse :text :base
+    match (
+        r
+    ) case ok then {
+        if r.string != want then {
+            t.bad = t.bad + 1
+            print "FAIL \"\{text}\" base \{base}: \{r.string}, want \{want}"
+        }
+    } case err then {
+        t.bad = t.bad + 1
+        print "FAIL \"\{text}\" base \{base}: refused, want \{want}"
+    }
+}
+
+# refused -- a text that does not parse in base `base`
+refused: function {t: Tally.borrow text: StringView base: u64} is {
+    t.rows = t.rows + 1
+    r: math.BigInt.parse :text :base
+    if r.ok then {
+        t.bad = t.bad + 1
+        print "FAIL \"\{text}\" base \{base}: parsed, want refused"
+    }
+}
+
+main: function is {
+    t: Tally rows: 0 bad: 0
+    refused :t text: "" base: 0
+    refused :t text: "a" base: 0
+    refused :t text: "z" base: 0
+    refused :t text: "+" base: 0
+    refused :t text: "-" base: 0
+    refused :t text: "0b" base: 0
+    refused :t text: "0o" base: 0
+    refused :t text: "0x" base: 0
+    refused :t text: "0y" base: 0
+    refused :t text: "2" base: 2
+    refused :t text: "0b2" base: 0
+    refused :t text: "08" base: 0
+    refused :t text: "8" base: 8
+    refused :t text: "0xg" base: 0
+    refused :t text: "g" base: 16
+    refused :t text: "_" base: 0
+    refused :t text: "0_" base: 0
+    refused :t text: "_0" base: 0
+    refused :t text: "-1__0" base: 0
+    refused :t text: "0x10_" base: 0
+    refused :t text: "1_000" base: 10
+    refused :t text: "d_e_a_d" base: 16
+    good :t text: "0" base: 0 want: "0"
+    good :t text: "0" base: 10 want: "0"
+    good :t text: "0" base: 16 want: "0"
+    good :t text: "+0" base: 0 want: "0"
+    good :t text: "-0" base: 0 want: "0"
+    good :t text: "10" base: 0 want: "10"
+    good :t text: "10" base: 10 want: "10"
+    good :t text: "10" base: 16 want: "16"
+    good :t text: "-10" base: 16 want: "-16"
+    good :t text: "+10" base: 16 want: "16"
+    good :t text: "0b10" base: 0 want: "2"
+    good :t text: "0o10" base: 0 want: "8"
+    good :t text: "0x10" base: 0 want: "16"
+    refused :t text: "0x10" base: 16
+    good :t text: "-0x10" base: 0 want: "-16"
+    good :t text: "+0x10" base: 0 want: "16"
+    good :t text: "00" base: 0 want: "0"
+    good :t text: "0" base: 8 want: "0"
+    good :t text: "07" base: 0 want: "7"
+    good :t text: "7" base: 8 want: "7"
+    good :t text: "023" base: 0 want: "19"
+    good :t text: "23" base: 8 want: "19"
+    good :t text: "cafebabe" base: 16 want: "3405691582"
+    good :t text: "0b0" base: 0 want: "0"
+    good :t text: "-111" base: 2 want: "-7"
+    good :t text: "-0b111" base: 0 want: "-7"
+    good :t text: "0b1001010111" base: 0 want: "599"
+    good :t text: "1001010111" base: 2 want: "599"
+    good :t text: "A" base: 36 want: "10"
+    good :t text: "A" base: 37 want: "36"
+    good :t text: "ABCXYZ" base: 36 want: "623741435"
+    good :t text: "ABCXYZ" base: 62 want: "33536793425"
+    good :t text: "1_000" base: 0 want: "1000"
+    good :t text: "0b_1010" base: 0 want: "10"
+    good :t text: "+0o_660" base: 0 want: "432"
+    good :t text: "-0xF00D_1E" base: 0 want: "-15731998"
+    if t.bad == 0 then {
+        print "ok \{t.rows} rows"
+    } else {
+        print "\{t.bad} of \{t.rows} rows FAILED"
+    }
+}
