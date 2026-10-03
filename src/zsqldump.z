@@ -48,6 +48,9 @@ constValueText: function {v: ztypes.cval} out String is {
     # an integer outside i64 by its const_bigint row
     if v.kind.ivalKind when v.bigId != 0 then return "BIGI:#\{v.bigId}"
     if v.kind.ivalKind then return "IVAL:\{v.ival}"
+    # an untyped float by its const_rat or const_bigfloat row
+    if v.kind.fvalKind when v.ratId != 0 then return "RAT:#\{v.ratId}"
+    if v.kind.fvalKind when v.floatId != 0 then return "BFLT:#\{v.floatId}"
     if v.kind.fvalKind then return "FVAL:\{v.fval}"
     if v.kind.svalKind then return "SVAL:#\{v.strId}"
     if v.kind.armKind then return "ARM:\{v.armTid}#\{v.armName}"
@@ -79,6 +82,8 @@ constValueCanonText: function {
     }
     # an integer reads the same inline or interned
     if v.kind.ivalKind then return "IVAL:\{ztypecheck.constIntText :st :v}"
+    # a float reads the same whichever pool holds it
+    if v.kind.fvalKind then return "FVAL:\{ztypecheck.constFloatText :st :v}"
     return (constValueText :v)
 }
 
@@ -328,6 +333,12 @@ schemaSql: function {} out String is {
     )
     (acc.append
         s: "CREATE TABLE IF NOT EXISTS const_bigint (big_id INTEGER PRIMARY KEY, value TEXT NOT NULL);\n"
+    )
+    (acc.append
+        s: "CREATE TABLE IF NOT EXISTS const_rat (rat_id INTEGER PRIMARY KEY, value TEXT NOT NULL);\n"
+    )
+    (acc.append
+        s: "CREATE TABLE IF NOT EXISTS const_bigfloat (float_id INTEGER PRIMARY KEY, value TEXT NOT NULL);\n"
     )
     (acc.append
         s: "CREATE TABLE IF NOT EXISTS conformance (conformance_id INTEGER PRIMARY KEY, impl_type_id INTEGER NOT NULL, spec_type_id INTEGER NOT NULL, label TEXT NOT NULL, is_facet INTEGER NOT NULL);\n"
@@ -963,6 +974,32 @@ ZDumper: class {
         for i < typing.constBigInts.length loop {
             b: typing.constBigInts.get :i
             row: "INSERT OR IGNORE INTO const_bigint VALUES (\{i}, '\{b.string}');\n"
+            this.acc.append s: row
+            i = i + 1
+        }
+    }
+
+    # appendConstRats -- one row per untyped float a constant holds as a
+    # fraction, as `a/b`: the RAT:#id a const_value names.
+    appendConstRats: function {:this typing: ztyping.ZTyping.view} is {
+        i: 1.u64
+        for i < typing.constRats.length loop {
+            r: typing.constRats.get :i
+            row: "INSERT OR IGNORE INTO const_rat VALUES (\{i}, '\{r.fraction}');\n"
+            this.acc.append s: row
+            i = i + 1
+        }
+    }
+
+    # appendConstBigFloats -- one row per untyped float a constant holds at 512
+    # bits, exactly, as a hexadecimal mantissa and a power of two: the BFLT:#id a
+    # const_value names.
+    appendConstBigFloats: function {:this typing: ztyping.ZTyping.view} is {
+        i: 1.u64
+        for i < typing.constBigFloats.length loop {
+            f: typing.constBigFloats.get :i
+            hx: f.text format: math.floatformat.hexFraction digits: 0
+            row: "INSERT OR IGNORE INTO const_bigfloat VALUES (\{i}, '\{hx}');\n"
             this.acc.append s: row
             i = i + 1
         }
@@ -1634,6 +1671,8 @@ dumpSql: function {program: Ast.view vfs: zvfs.ZVfs symtab: zenv.ZSymbolTable} o
     d.appendDestroyRaw typing: symtab.typing
     d.appendMemberConst typing: symtab.typing
     d.appendConstBigInts typing: symtab.typing
+    d.appendConstRats typing: symtab.typing
+    d.appendConstBigFloats typing: symtab.typing
     d.appendConformance typing: symtab.typing
     d.appendSymbolTable ast: program st: symtab
     return d.acc.copy
