@@ -29913,6 +29913,14 @@ checkMemberNamespace: function {
         reportMemberNamespace :st :ast :dp :bt :cnId instanceMember: true functionMember: true
         return false
     }
+    baseIsAtom: (ast.nodes.get i: dp.parent).atomid
+    if isValue.not when baseIsAtom when cnId != zast.names.wkCreate when (ownsTypeParams
+        :st
+        tid: bt
+    ) then {
+        refuseBareGenericMethodBase :st :ast :dp :bt
+        return false
+    }
     if isValue.not then return (checkTypeReadSuppliesReceiver :st :ast :dp :bt :cnId :mo :coerce)
     if (memberDeclaresReceiver :st :bt :cnId :mo) then return true
     isCreate: cnId == zast.names.wkCreate
@@ -29920,6 +29928,34 @@ checkMemberNamespace: function {
     ) then return true
     reportMemberNamespace :st :ast :dp :bt :cnId instanceMember: false functionMember: true
     return false
+}
+
+# refuseBareGenericMethodBase -- a method reached through a generic type's bare
+# name (`fx.make`): the bare name is no type, so it names no instance for the
+# method to belong to. The instance is written with the type's arguments; the
+# hint spells it over the type's own parameters, which is how its own members
+# name the instance being checked.
+refuseBareGenericMethodBase: function {
+    st: zenv.ZSymbolTable ast: Ast.view dp: dpref bt: ztypes.tid
+} is {
+    tn: st.reg.nameOf tid: bt
+    app: "(\{tn}"
+    for each pn: (st.reg.genericParamNamesOf tdecl: (declOfTypeId :st tid: bt)) loop {
+        pt: zast.nameTextAt :ast ref: pn
+        app.append " \{pt}: \{pt}"
+    }
+    app.append ")"
+    (addErrorH
+        :st
+        nodeid: dp.parent
+        lineno: dp.lineno
+        colno: dp.colno
+        e: zast.err.genericError
+        msg: "'\{tn}' is a generic type: a method is reached through it written with its type arguments"
+        note: ""
+        hint: "for example \{app}, which inside its own declaration is the instance being checked"
+        width: tn.length.u32.orPanic
+    )
 }
 
 # checkDataMemberNamespace -- the two namespaces for a member that is not a
@@ -31076,6 +31112,14 @@ checkDotted: function {
 } out ztypes.tid is {
     nsc: checkNumericSuffixCast :st :ast :dp
     if nsc.handled then return nsc.tid
+    if (refuseMetaMember
+        :st
+        :ast
+        path: dp.nid
+        nodeid: dp.nid
+        lineno: dp.lineno
+        colno: dp.colno
+    ) then return ztypes.noTid
     bt: dottedBaseTid :st :unitDecl :ast :dp
     if bt.isZero then return ztypes.noTid
     return (checkDottedOn :st :unitDecl :ast :dp :bt :coerce)
@@ -43176,9 +43220,13 @@ unresolvedBareName: function {
     # subunit's -- is claimed as the unit's own is: a failed declaration is
     # reported once, at the declaration, not again as an unknown reference at
     # each use. A subunit's constant beyond i64 read both ways.
+    # A type's fields and methods are no names in its methods' scope -- they
+    # are reached through `this`, a value or the type -- so a type on the way
+    # out claims only its constants and parameters, as resolution does.
     cur: st.curScope
     for (cur > 0) and (cur != st.typing.programRoot) loop {
-        if (st.typing.declFindChild parentDeclId: cur :nameId).isZero.not then return ""
+        fc: st.typing.declFindChild parentDeclId: cur :nameId
+        if fc.isZero.not when (declIsTypeMember :st declId: fc).not then return ""
         cur = declParentIdOf :st declId: cur
     }
     ubw: walkLookupTyperefById :st scope: st.curScope :ast :unitDecl baseId: nameId
@@ -43188,6 +43236,13 @@ unresolvedBareName: function {
         return ""
     } case none then null
     return (zast.nameTextCopy :ast ref: nameId)
+}
+
+# declIsTypeMember -- a field or method of a type: reached through a value or the
+# type, never by its bare name
+declIsTypeMember: function {st: zenv.ZSymbolTable.view declId: ztypes.declid} out bool is {
+    k: (st.typing.decls.get i: declId).kind
+    return k.fieldDecl or k.methodDecl
 }
 
 # dottedRootName -- the root atom name of a dotted path ("" when the
@@ -46401,6 +46456,14 @@ checkSpecialFormCall: function {
         wres: checkWrappedCall :st :unitDecl :ast :call
         if wres.isZero.not then return (callleg handled: true tid: wres)
     }
+    if (refuseMetaMember
+        :st
+        :ast
+        path: call.callable
+        nodeid: call.nid
+        lineno: call.lineno
+        colno: call.colno
+    ) then return (callleg handled: true tid: ztypes.noTid)
     mcb: metaCreateBaseId :ast n: (ast.nodes.get i: call.callable)
     mcid: zast.nodeid
     match (
@@ -46413,6 +46476,37 @@ checkSpecialFormCall: function {
         if mcres.isZero.not then return (callleg handled: true tid: mcres)
     }
     return (callleg handled: false tid: ztypes.tid)
+}
+
+# refuseMetaMember -- a path through `meta` that names anything but `create`,
+# called or read: `meta` holds the enclosing type's raw constructor and nothing
+# else, so `meta.make` names nothing. A local named `meta` is an ordinary value.
+# True when the path was refused.
+refuseMetaMember: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    path: zast.nodeid
+    nodeid: zast.nodeid
+    lineno: u32
+    colno: u32
+} out bool is {
+    pn: ast.nodes.get i: path
+    if pn.dottedpath.not then return false
+    bId: atomNameId :ast n: (ast.nodes.get i: pn.parent)
+    if bId.isZero or (zast.nameTextEq :ast ref: bId s: "meta").not then return false
+    if (st.lookupVarId nameId: bId).some then return false
+    mId: atomNameId :ast n: (ast.nodes.get i: pn.child)
+    if mId.isZero or (zast.nameTextEq :ast ref: mId s: "create") then return false
+    mn: zast.nameTextAt :ast ref: mId
+    (addError
+        :st
+        :nodeid
+        :lineno
+        :colno
+        e: zast.err.badReference
+        msg: "'meta' has no member '\{mn}': it holds the type's constructor, meta.create"
+    )
+    return true
 }
 
 # bareCalleeKind -- resolve a bare callee NAME and say what it is. The resolved

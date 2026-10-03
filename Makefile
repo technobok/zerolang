@@ -2154,7 +2154,11 @@ perf: $(PERFBIN)
 #
 # +151 a generic instance's alias reached through its unit's path names the
 # instance: 0 behaviour, +151 source.
-ALLOC_BASELINE := 2215785
+#
+# +1,788 a name in a type's own body that names nothing is refused there --
+# `meta`'s other members, a bare field or method, a method through a generic's
+# bare name: 0 behaviour, +1,788 source.
+ALLOC_BASELINE := 2217573
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
