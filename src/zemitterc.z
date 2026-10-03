@@ -649,6 +649,17 @@ numLitSuffix: function {name: StringView} out String is {
     return ""
 }
 
+# int128Cast -- a literal of a 128-bit integer type, cast to it. C has no
+# 128-bit literal and reads the digits as a 64-bit type, so an operation on
+# two of them -- `9223372036854775807.i128 * 9223372036854775807.i128` --
+# overflowed in 64 bits before the result ever reached the 128-bit
+# destination. Any other type's text is handed back as it came.
+int128Cast: function {text: String.take name: StringView} out String is {
+    if (numBits :name) != 128 then return text
+    if (numSigned :name) then return "((__int128) \{text})"
+    return "((unsigned __int128) \{text})"
+}
+
 # literalDefaultC -- a literal default's C text: a decimal past i64 with its
 # unsigned suffix, a prefixed literal decoded, anything else as written.
 literalDefaultC: function {lex: StringView} out String is {
@@ -12111,7 +12122,7 @@ cvalText: function {
         if iv == (0 - 9223372036854775807 - 1) then return "(-9223372036854775807LL - 1)"
         r: "\{iv}"
         r.append (numLitSuffix name: tnN.stringView)
-        return r
+        return (int128Cast text: r.take name: tnN.stringView)
     }
     if v.kind.fvalKind then return (floatCvalText :ast :symtab :tid :v)
     if v.kind.armKind then {
@@ -16070,7 +16081,7 @@ dottedAtomNumericBase: function {
                 }
                 sfx1: numLitSuffix name: cTypeLk3.stringView
                 bc1.append sfx1
-                return bc1
+                return (int128Cast text: bc1.take name: mn2)
             }
         }
     } case none then null
