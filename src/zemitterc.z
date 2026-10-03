@@ -30416,35 +30416,11 @@ scanNeedsCall: function {
         baseId: cbi0
         membId: cmbId
     )
-    if (isSvArgNative name: mn0) then (needsAddM
-        :ctx
-        uname: "system"
-        memb: mn0
-    )
-    if (isSvSimpleNative name: mn0) then (needsAddM
-        :ctx
-        uname: "system"
-        memb: mn0
-    )
-    # substring emits through its own leg (recv/from/to), so the arg-native
-    # table cannot carry it; the need still must pre-register for method
-    # bodies, which emit after the runtime pass runs
-    if mn0 == "substring" then needsAddM :ctx uname: "system" memb: "substring"
-    if (isSvParseNative name: mn0) then (needsAddM
-        :ctx
-        uname: "system"
-        memb: mn0
-    )
-    if (isSvNoArgNative name: mn0) then (needsAddM
-        :ctx
-        uname: "system"
-        memb: mn0
-    )
-    # split/lines emit through the iterator fragments (Splitter/LinesIter),
-    # so the native tables cannot carry them; the sv_* needs still must
-    # pre-register for method bodies, which emit after the runtime pass runs
-    if mn0 == "split" then needsAddM :ctx uname: "sviter" memb: "sv_split"
-    if mn0 == "lines" then needsAddM :ctx uname: "sviter" memb: "sv_lines"
+    # the view natives below are members of String and StringView, and a
+    # member of the same name on any other receiver is that type's own
+    if (svReceiverOf :symtab :ctx path: (ast.nodes.get i: n.callable)) then {
+        scanSvMemberNeed :ctx m: mn0
+    }
     cjn0: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.callable))
     if cjn0.stringView == "stringJoin" then (needsAddM
         :ctx
@@ -30468,25 +30444,12 @@ scanNeedsDotted: function {
     unitName: StringView
     n: zast.dottedpathrow.view
 } is {
+    # a no-paren member read auto-calls, so the view natives with no argument
+    # arrive as a dotted read -- the same parity the call arm has
     pdm: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child))
-    if pdm.stringView == "parseF64" then needsAddM :ctx uname: "system" memb: "parseF64"
-    if pdm.stringView == "parseF16" then needsAddM :ctx uname: "system" memb: "parseF16"
-    if pdm.stringView == "parseF128" then needsAddM :ctx uname: "system" memb: "parseF128"
-    if pdm.stringView == "parseI64" then needsAddM :ctx uname: "system" memb: "parseI64"
-    if pdm.stringView == "parseU64" then needsAddM :ctx uname: "system" memb: "parseU64"
-    if (isSvNoArgNative name: pdm.stringView) then (needsAddM
-        :ctx
-        uname: "system"
-        memb: pdm.stringView
-    )
-    # a no-paren member read auto-calls, so the simple natives (trim,
-    # isEmpty, ...) arrive as dottedpath too -- same parity the call arm has
-    if (isSvSimpleNative name: pdm.stringView) then (needsAddM
-        :ctx
-        uname: "system"
-        memb: pdm.stringView
-    )
-    if pdm.stringView == "lines" then needsAddM :ctx uname: "sviter" memb: "sv_lines"
+    if (svReceiverOf :symtab :ctx path: (ast.nodes.get i: n.nodeid)) then {
+        scanSvMemberNeed :ctx m: pdm.stringView
+    }
     # a no-paren member read auto-calls, so a zero-parameter native (os.pid,
     # io.stdout) arrives here rather than at the call arm
     (scanNativeNeed
@@ -30500,6 +30463,37 @@ scanNeedsDotted: function {
     scanNeeds :ast :symtab :ctx :unitName n: (ast.nodes.get i: n.parent)
 }
 
+
+# svReceiverOf -- the dotted path `path` reads a member of a String or a
+# StringView: its receiver's stamped type is one of the two, through any typedef
+# over them (PathView).
+svReceiverOf: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    path: astnode.view
+} out bool is {
+    rn: dottedParentNodeId n: path
+    if rn.isZero then return false
+    return (isStringyTid
+        :ctx
+        tid: (chaseAggregateTypedef :symtab :ctx tid: (stampIdOf :symtab nid: rn))
+    )
+}
+
+# scanSvMemberNeed -- the runtime a view native named `m` needs, registered
+# ahead of the runtime pass. Type-method bodies emit after it, and split/lines
+# emit through the iterator fragments, whose types the passes before the
+# runtime spell; substring emits through its own leg, which the arg-native table
+# cannot carry.
+scanSvMemberNeed: function {ctx: Ctx m: StringView} is {
+    if (isSvArgNative name: m) then needsAddM :ctx uname: "system" memb: m
+    if (isSvSimpleNative name: m) then needsAddM :ctx uname: "system" memb: m
+    if (isSvParseNative name: m) then needsAddM :ctx uname: "system" memb: m
+    if (isSvNoArgNative name: m) then needsAddM :ctx uname: "system" memb: m
+    if m == "substring" then needsAddM :ctx uname: "system" memb: "substring"
+    if m == "split" then needsAddM :ctx uname: "sviter" memb: "sv_split"
+    if m == "lines" then needsAddM :ctx uname: "sviter" memb: "sv_lines"
+}
 
 # scanNeeds -- recursively register io/os native needs for every call in a
 # def/body. Structurally mirrors collectLiterals; emitFns registers free-fn
