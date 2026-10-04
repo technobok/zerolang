@@ -2164,7 +2164,10 @@ perf: $(PERFBIN)
 #
 # +145 an error is reported at the node it names, any kind: 0 behaviour, +145
 # source.
-ALLOC_BASELINE := 2217769
+#
+# +854 a public block's instance alias is resolved when a use reaches it: 0
+# behaviour, +854 source.
+ALLOC_BASELINE := 2218623
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
