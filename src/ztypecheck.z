@@ -50843,23 +50843,10 @@ walkDeclaredDef: function {
     if declId.isZero.not then rf = declId
     dd: declId
     if (st.typing.declIsWalked declId: dd) then return
-    memId: zast.nodeid
-    inNs: false
-    {
-        decl: st.typing.decls.get i: dd
-        memId = decl.node
-        # a definition inside a NAMESPACE reads its own siblings from the
-        # namespace's scope: `deep.mul` inside helper resolves against
-        # helper first. checkNamespaceBodies walks it in the namespace's
-        # scope, so a namespace member is left to that walk.
-        pr: decl.parent
-        if pr.isZero.not then {
-            uro: unitDecl
-            if uro.isZero.not when (pr == uro).not then inNs = true
-        }
-    }
+    memId: (st.typing.decls.get i: dd).node
     if memId.isZero then return
-    if inNs then return
+    # a template's member is checked per instance, from the instance's copy
+    if (declDeclaresTemplate :st :ast declId: (declParentIdOf :st declId: dd)) then return
     # The mark means BODY WALKED, so it is never set for a definition this is
     # not about to walk. Claiming one and declining is what made a free function
     # -- and then a namespace -- vanish: the unit's own walk skipped it as done.
@@ -50906,7 +50893,17 @@ walkDeclaredDef: function {
         st.typing.synthOwnerName = prevL9N
         st.typing.currentThisTid = prevT
     } else {
-        walkOwnerMethods :st scope: rf :unitDecl :ast :memId :nameId
+        # the owner's own type, which a namespace's type has and the file
+        # unit's definitions do not reach
+        (walkOwnerMethods
+            :st
+            scope: rf
+            :unitDecl
+            :ast
+            :memId
+            :nameId
+            knownTid: (declTypeIdOf :st declId: dd)
+        )
     }
     st.typing.curMonoStamp = prevMono
 }
@@ -52252,8 +52249,9 @@ checkNamespaceBodies: function {
                 # for a namespace member as it does a function
                 walkNamespaceOwner :st :ast :unitDecl :nsDecl memId: bm.nid nameId: bm.name
             } else {
-                defNameText: zast.nameTextCopy :ast ref: bm.name
                 bmDecl9: st.typing.declFindChild parentDeclId: nsDecl nameId: bm.name
+                if (bodyWalkOwed :st declId: bmDecl9).not then continue
+                defNameText: zast.nameTextCopy :ast ref: bm.name
                 cfbFr: fnRefAt :ast nid: bm.operation
                 (checkFunctionBody
                     :st
@@ -52270,6 +52268,17 @@ checkNamespaceBodies: function {
             }
         }
     }
+}
+
+# bodyWalkOwed -- a definition a unit's or a namespace's body walk still owes:
+# one a use resolved (or every one, under --eager) that no demand point has
+# walked yet. A unit of any kind is a scope, and its walk asks this one
+# question of every definition in it.
+bodyWalkOwed: function {st: zenv.ZSymbolTable.view declId: ztypes.declid} out bool is {
+    if declId.isZero then return false
+    if (st.typing.declIsWalked :declId) then return false
+    if st.typing.eagerAll then return true
+    return (st.typing.declIsDefined :declId)
 }
 
 # walkNamespaceOwner -- the method bodies of a type a namespace declares, once,
@@ -52372,17 +52381,11 @@ checkUnitBodies: function {
                 # DEMANDED them, exactly as a dependency's are. Walking every one
                 # regardless is what made the root the one unit in the program
                 # that was not demand-driven.
-                if st.typing.eagerAll.not when (defWasResolved :st :scope :unitDecl nameId: bm.name
-                ).not then continue
-                # and not again if a demand point already walked it. depWalkUnit
-                # has always asked this; the target unit never had to, because
-                # nothing else walked its bodies.
-                if (st.typing.declIsWalked declId: (declOfUnitDefIds
+                # and not again if a demand point already walked it
+                if (bodyWalkOwed
                     :st
-                    :unitDecl
-                    nameId: bm.name
-                )
-                ) then continue
+                    declId: (declOfUnitDefIds :st :unitDecl nameId: bm.name)
+                ).not then continue
                 if (zast.unitOpDeclaresUnit :ast opId: bm.operation) then {
                     (checkNamespaceBodies
                         :ast
