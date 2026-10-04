@@ -42356,21 +42356,12 @@ emitRecordMethods: function {
                 match (
                     mo
                 ) case some then {
-                    # A BODIED MEMBER OF A NATIVE TYPE IS EMITTED ONLY WHERE THE
-                    # PROGRAM CALLS IT. A native type is one the runtime owns and
-                    # that every program touches -- the scalars are -- so a member
-                    # written in zerolang on one is otherwise a dead C function,
-                    # and the types its body constructs dead structs, in every
-                    # program that so much as counts a string's bytes. A type the
-                    # author declared carries its whole surface, as it always has.
-                    skipM: false
-                    if (symtab.reg.isNativeOf :tid) then {
-                        mnId9: zast.poolFind pool: ast.names text: mname.stringView
-                        if (monoMemberUsed :symtab monoId: tid nameId: mnId9).not then {
-                            skipM = true
-                        }
-                    }
-                    if skipM.not then {
+                    if (methodBodyWalked
+                        :symtab
+                        ownerTid: tid
+                        mid: mo
+                        nameId: am2.name
+                    ) then {
                         (emitMethodOrInstances
                             :ast
                             :symtab
@@ -42420,21 +42411,45 @@ emitRecordMethods: function {
                 match (
                     imo
                 ) case some then {
-                    (emitMethodOrInstances
-                        :ast
+                    if (methodBodyWalked
                         :symtab
-                        :ctx
+                        ownerTid: tid
                         mid: imo
-                        thisTid: tid
-                        op: (ast.nodes.get i: im2.operation)
-                        :declOnly
-                        :buf
-                    )
+                        nameId: im2.name
+                    ) then {
+                        (emitMethodOrInstances
+                            :ast
+                            :symtab
+                            :ctx
+                            mid: imo
+                            thisTid: tid
+                            op: (ast.nodes.get i: im2.operation)
+                            :declOnly
+                            :buf
+                        )
+                    }
                 } case none then null
             }
             iwi = iwi + 1
         }
     }
+}
+
+# methodBodyWalked -- is this method's body emitted? A body is emitted when the
+# checker walked it: the walk is what stamps a body, and the checker walks a
+# method only where the program uses it, the members a spec names, and every
+# member under `--eager`. A method with type parameters of its own is emitted per
+# instance, and an instance exists only where a use minted it.
+methodBodyWalked: function {
+    symtab: zenv.ZSymbolTable.view
+    ownerTid: ztypes.tid
+    mid: ztypes.tid
+    nameId: zast.nameid
+} out bool is {
+    if (isGenericFnTid :symtab tid: mid) then return true
+    md: symtab.typing.declMemberIdOf parentTypeId: ownerTid :nameId
+    if md.isZero then return true
+    return (symtab.typing.declIsWalked declId: md)
 }
 
 # emitMethodOrInstances -- a method, or, for a method with type parameters of
