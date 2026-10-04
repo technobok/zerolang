@@ -2291,7 +2291,10 @@ perf: $(PERFBIN)
 # source, the self-compile minting `List String i: fsno` beside `List String`.
 #
 # +58 a zls position is a line and a column, ordered: 0 behaviour, +58 source.
-ALLOC_BASELINE := 2201891
+#
+# +495 --readable-names keys a (function, name) pair by a record: 0
+# behaviour, +494 source, the self-compile minting `SetVal fnname`.
+ALLOC_BASELINE := 2202386
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

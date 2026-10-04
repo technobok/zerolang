@@ -32383,6 +32383,15 @@ resolveRuntimeTids: function {
     return (runtimetids str: strId sv: svId cerr: cerrId)
 }
 
+# fnname -- a name within a function: the key that decides which of the
+# function's variables of one name keeps the bare spelling.
+fnname: record {
+    # the function that binds the name
+    owner: ztypes.declid
+    # the name
+    name: zast.nameid
+}
+
 # collectRnBareVids -- the variables --readable-names may spell by their source
 # name alone. Every runtime variable is a declaration row carrying its name,
 # the scope that binds it and its variable id, and scopes chain up to the
@@ -32392,25 +32401,24 @@ resolveRuntimeTids: function {
 # here and is spelled with its id too, which is what makes the scheme unique by
 # construction rather than by enumeration.
 collectRnBareVids: function {symtab: zenv.ZSymbolTable.view bare: IdSet ztypes.vid} is {
-    seenKeys: IdSet u64
+    seen: SetVal fnname
     dn: symtab.typing.decls.length
     di: u64
     for di < dn loop {
         rvid: ztypes.vid
-        rnm: u64
+        rnm: zast.nameid
         rpar: ztypes.declid
         d9r: symtab.typing.decls.get i: (ztypes.declid.create from: di)
         rvid = d9r.varId
-        rnm = d9r.name
+        rnm = zast.nameid.create from: d9r.name
         rpar = d9r.parent
         di = di + 1
-        if rvid.isZero.not when rnm > 0 then {
+        if rvid.isZero.not when rnm.isZero.not then {
             fnd: rpar
             for (symtab.typing.declIsScope declId: fnd) loop {
                 fnd = symtab.typing.declParentOf declId: fnd
             }
-            rkey: fnd.u64 * 4294967296 + rnm
-            if (seenKeys.add item: rkey) then bare.add item: rvid
+            if (seen.add item: (fnname owner: fnd name: rnm)) then bare.add item: rvid
         }
     }
 }
