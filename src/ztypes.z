@@ -58,12 +58,10 @@ public: unit {
     :zconstkindName
     :zcontrolkind
     :zcontrolkindName
-    :zlockholderkindName
     :numkind
     :numkindName
     :floatLiteralErr
     :zlockholder
-    :zlockholderkind
     :zlockscope
     :zlockstate
     :zlockstateName
@@ -220,17 +218,6 @@ zparamownership: variant {
     viewMode: null
     # `.hold` -- owned and readonly: moved in, then frozen
     holdMode: null
-} as { tag: u8.tag }
-
-# what is holding a lock -- a binding, a view, or an iterator.
-zlockholderkind: variant {
-    # a binding holds it
-    varKind: null
-    # a call holds it, for the call's duration
-    callKind: null
-    # an iterator holds it, which is why it lasts to the end of the enclosing
-    # scope
-    forKind: null
 } as { tag: u8.tag }
 
 # the payload kind of a compile-time constant. A truth value is an `armKind`
@@ -482,19 +469,6 @@ zparamownershipInt: function {t: zparamownership} out u64 is {
     }
 }
 
-# the printable name of a `zlockholderkind`.
-zlockholderkindName: function {t: zlockholderkind} out String is {
-    match (
-        t
-    ) case varKind then {
-        return "VAR"
-    } case callKind then {
-        return "CALL"
-    } case forKind then {
-        return "FOR"
-    }
-}
-
 # the printable name of a `zconstkind`.
 zconstkindName: function {t: zconstkind} out String is {
     match (
@@ -644,14 +618,13 @@ zsrcpos: record {
     colno: u32
 }
 
-# Tagged identifier for a lock holder. `id` maps into a different
-# id-space per `kind` (variable id or call nodeid; the forKind arm is
-# declared for the loop-holder shape but nothing constructs one today).
-zlockholder: record {
-    # what is holding the lock
-    kind: zlockholderkind
-    # which one: a variable id, a call id or a loop id, read according to `kind`
-    id: u64
+# what holds a lock: a binding, for as long as it lives, or a call, for its
+# duration. Each arm carries the id of its own space.
+zlockholder: variant {
+    # a binding holds it: the variable
+    var: vid
+    # a call holds it: the call's node
+    call: zast.nodeid
 }
 
 # Suffix-detection result: the kind named by an inline suffix (if any)
@@ -1280,7 +1253,7 @@ ZTypeRegistry: class {
             hasLock: false
             lockType: zlockstate.shared
             lockScope: zlockscope.target
-            lockHolder: (zlockholder kind: zlockholderkind.varKind id: 0)
+            lockHolder: zlockholder.var vid
             lockMutable: false
             lockAlias: false
             lockPath: ListVal zast.nameid

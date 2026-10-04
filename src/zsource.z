@@ -250,14 +250,14 @@ fileUnitReads: function {root: Ast.view uname: StringView into: Set String} is {
 # fileReadNames -- the dotted member reads of one parsed file, into `into`.
 fileReadNames: function {root: Ast.view into: Set String} is {
     {
-        topaths: IdSet u64
+        topaths: IdSet zast.nodeid
         ni: zast.nodeid
         ni = ni.next
         nn: root.nodes.length
         for ni.u64 < nn loop {
             nd: root.nodes.get i: ni
             if nd.reassignment then {
-                topaths.add item: nd.topath.u64
+                topaths.add item: nd.topath
             }
             ni = ni.next
         }
@@ -265,7 +265,7 @@ fileReadNames: function {root: Ast.view into: Set String} is {
         nj = nj.next
         for nj.u64 < nn loop {
             nd2: root.nodes.get i: nj
-            if nd2.dottedpath when (topaths.has item: nj.u64).not then {
+            if nd2.dottedpath when (topaths.has item: nj).not then {
                 cn: root.nodes.get i: nd2.child
                 if cn.atomid then {
                     into.add item: (zast.poolTextCopy pool: root.names ref: cn.name)
@@ -2925,7 +2925,7 @@ Analysis: class {
     walkDocsUnit: function {
         :this ast: Ast.view body: zast.kidspan docs: bool docParams: bool docFields: bool
     } is {
-        pubSet: IdSet u64
+        pubSet: IdSet zast.nameid
         hasPub: unitPublicNames :ast :body into: pubSet
         # --docs-private measures the whole unit: a unit with a `public:` block
         # has no public surface to filter BY, so every member is walked. The
@@ -3979,7 +3979,7 @@ Analysis: class {
     reportTypeErrors: function {:this st: zenv.ZSymbolTable.view prog: Ast.view} is {
         for each er: st.typing.errors loop {
             ef: er.fsno
-            if ef.u32 == 0 when er.nodeid > 0 then ef = prog.fsnoForNode nodeid: er.nodeid
+            if ef.u32 == 0 when er.nodeid.isZero.not then ef = prog.fsnoForNode nodeid: er.nodeid
             d: (zdiag.errorDiag
                 errv: er.err
                 fsno: ef
@@ -4016,7 +4016,7 @@ Analysis: class {
         {
             mainOp: lu.op
             uname: lu.name.stringView
-            namedIds: IdSet u64
+            namedIds: IdSet zast.nameid
             {
                 di: 1.u64
                 dn: st.typing.decls.length
@@ -4024,7 +4024,7 @@ Analysis: class {
                     d: st.typing.decls.get i: (ztypes.declid.create from: di)
                     isNamed: d.kind.unitDecl
                     if d.kind.typeDecl then isNamed = true
-                    if isNamed then namedIds.add item: d.name.u64
+                    if isNamed then namedIds.add item: (zast.nameid.create from: d.name)
                     di = di + 1
                 }
             }
@@ -4160,7 +4160,9 @@ Analysis: class {
     }
 
     # archWalk -- A003 at every literal compare of the unit's subtree.
-    archWalk: function {:this ast: Ast.view nId: zast.nodeid namedIds: (IdSet u64).view} is {
+    archWalk: function {
+        :this ast: Ast.view nId: zast.nodeid namedIds: (IdSet zast.nameid).view
+    } is {
         n: ast.nodes.get i: nId
         if (hiddenSubunitAt :ast :n) then return
         kids: zast.childIds :ast :n
@@ -4183,14 +4185,16 @@ Analysis: class {
 
     # a named argument whose value is a literal, which the composed-key rule
     # reads
-    archNamedLiteral: function {:this ast: Ast.view id: zast.nodeid namedIds: (IdSet u64).view} is {
+    archNamedLiteral: function {
+        :this ast: Ast.view id: zast.nodeid namedIds: (IdSet zast.nameid).view
+    } is {
         n: ast.nodes.get i: id
         txt: plainLiteralText :ast :n
         match (
             txt
         ) case some then {
             nid: ast.names.find s: txt.stringView
-            if nid.isZero.not when (namedIds.has item: nid.u64) then {
+            if nid.isZero.not when (namedIds.has item: nid) then {
                 p: zast.posOf :n
                 (this.warn
                     code: "A003"
@@ -4452,7 +4456,7 @@ Analysis: class {
         :this
         prog: Ast.view
         st: zenv.ZSymbolTable
-        used: (IdSet u64).view
+        used: (IdSet ztypes.vid).view
         fop: zast.nodeid
         site: zast.namedsite
     } is {
@@ -4510,7 +4514,7 @@ Analysis: class {
         :this
         prog: Ast.view
         st: zenv.ZSymbolTable
-        used: (IdSet u64).view
+        used: (IdSet ztypes.vid).view
         fop: zast.nodeid
     } is {
         paramIds: fnParamIds :prog :fop
@@ -4535,7 +4539,7 @@ Analysis: class {
     reportUnusedLocalAt: function {
         :this
         prog: Ast.view
-        used: (IdSet u64).view
+        used: (IdSet ztypes.vid).view
         mainFsno: zvfs.fsno
         # the node ranges of every instance's copy of a body, start and end in turn
         copies: (ListVal ztyping.bodycopy).view
@@ -4543,7 +4547,7 @@ Analysis: class {
         # each keyed by the expression it binds, which is what defines it
         loopBinds: (IdMapV zast.nodeid v: zast.nodeid).view
         nid: zast.nodeid
-        vid: u64
+        vid: ztypes.vid
     } is {
         if (used.has item: vid) then return
         # a loop binding is defined by the expression it binds, or by the
@@ -4753,7 +4757,7 @@ Analysis: class {
         prog: Ast.view
         st: zenv.ZSymbolTable
         # every variable some atom reads
-        used: (IdSet u64).view
+        used: (IdSet ztypes.vid).view
         # the binding node and its variable
         nid: zast.nodeid
         vid: ztypes.vid
@@ -4784,7 +4788,7 @@ Analysis: class {
         mainFsno: unitAnchorFsno :prog :mainOp
         zeroFs: zvfs.fsno
         if mainFsno == zeroFs then return
-        used: IdSet u64
+        used: IdSet ztypes.vid
         for each av: st.typing.atomVariableId.iterateItems loop (used.add
             item: av.value
         )
@@ -4957,19 +4961,19 @@ Analysis: class {
 
 # addPublicName -- the name one `public:` entry exports: an entry spelled as a
 # bare atom exports that atom's name, any other shape its own
-addPublicName: function {ast: Ast.view site: zast.namedsite into: IdSet u64} is {
+addPublicName: function {ast: Ast.view site: zast.namedsite into: IdSet zast.nameid} is {
     eo: ast.nodes.get i: site.operation
     match (
         eo
     ) case atomid then {
-        into.add item: eo.name.u64
+        into.add item: eo.name
     } else {
-        into.add item: site.name.u64
+        into.add item: site.name
     }
 }
 
 # addPublicNames -- every name one `public:` block spells, added to `into`
-addPublicNames: function {ast: Ast.view opId: zast.nodeid into: IdSet u64} is {
+addPublicNames: function {ast: Ast.view opId: zast.nodeid into: IdSet zast.nameid} is {
     ids: ListVal zast.nodeid
     pu: ast.nodes.get i: opId
     if pu.unitdef then ids = zast.kidIds :ast span: pu.body
@@ -4982,7 +4986,7 @@ addPublicNames: function {ast: Ast.view opId: zast.nodeid into: IdSet u64} is {
 # unitPublicNames -- the names a unit's `public:` blocks export, into `into`;
 # the result says whether the unit has such a block at all, which is what
 # decides whether there is a surface to filter by
-unitPublicNames: function {ast: Ast.view body: zast.kidspan into: IdSet u64} out bool is {
+unitPublicNames: function {ast: Ast.view body: zast.kidspan into: IdSet zast.nameid} out bool is {
     hasPub: false
     ids: zast.kidIds :ast span: body
     for each pId: ids loop {
@@ -5006,14 +5010,14 @@ unitPublicNames: function {ast: Ast.view body: zast.kidspan into: IdSet u64} out
 unitMemberIsWalkable: function {
     ast: Ast.view
     site: zast.namedsite
-    pubSet: (IdSet u64).view
+    pubSet: (IdSet zast.nameid).view
     hasPub: bool
 } out bool is {
     if site.name.isZero then return true
     if (zast.unitOpKindIs :ast opId: site.operation k: zast.unitkind.publicNs) then return false
     if (zast.unitOpKindIs :ast opId: site.operation k: zast.unitkind.requirement) then return false
     if hasPub.not then return true
-    if (pubSet.has item: site.name.u64) then return true
+    if (pubSet.has item: site.name) then return true
     return (zast.nameTextEq :ast ref: site.name s: "main")
 }
 
@@ -5025,8 +5029,8 @@ unitMemberIsWalkable: function {
 # assigned look used; these are the ones to leave out. Only a BARE atom:
 # reaching `a.b` to write it genuinely reads `a`, so a dotted target excludes
 # nothing.
-writeTargetAtoms: function {prog: Ast.view} out IdSet u64 is {
-    wtgt: IdSet u64
+writeTargetAtoms: function {prog: Ast.view} out IdSet zast.nodeid is {
+    wtgt: IdSet zast.nodeid
     ni: zast.nodeid
     nn: prog.nodes.length
     for ni.u64 < nn loop {
@@ -5035,7 +5039,7 @@ writeTargetAtoms: function {prog: Ast.view} out IdSet u64 is {
         match wn case reassignment then tp = wn.topath else null
         if tp.isZero.not then {
             tn: prog.nodes.get i: tp
-            match tn case atomid then wtgt.add item: tp.u64 else null
+            match tn case atomid then wtgt.add item: tp else null
         }
         ni = ni.next
     }
@@ -5044,10 +5048,12 @@ writeTargetAtoms: function {prog: Ast.view} out IdSet u64 is {
 
 # usedVarSet -- every variable a READ reaches: the atom stamps, less the ones
 # sitting on a reassignment target
-usedVarSet: function {st: zenv.ZSymbolTable.view wtgt: (IdSet u64).view} out IdSet u64 is {
-    used: IdSet u64
+usedVarSet: function {
+    st: zenv.ZSymbolTable.view wtgt: (IdSet zast.nodeid).view
+} out IdSet ztypes.vid is {
+    used: IdSet ztypes.vid
     for each av: st.typing.atomVariableId.iterateItems loop {
-        if (wtgt.has item: av.key.u64).not then used.add item: av.value
+        if (wtgt.has item: av.key).not then used.add item: av.value
     }
     return used
 }
@@ -5377,7 +5383,7 @@ unitAnchorFsno: function {prog: Ast.view mainOp: zast.nodeid} out zvfs.fsno is {
         mid: zast.kidAt kids: prog.kids span: bodyIds i: vx
         vx = vx + 1
         m: prog.nodes.get i: mid
-        if m.namedoperation when m.operation > 0 then {
+        if m.namedoperation when m.operation.isZero.not then {
             fs: prog.fsnoForNode nodeid: m.operation
             if (fs == zeroFs).not then return fs
         }

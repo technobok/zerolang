@@ -2283,7 +2283,10 @@ perf: $(PERFBIN)
 #
 # +190 a guard after a guard reads the arm off the payload: 0 behaviour, +190
 # source.
-ALLOC_BASELINE := 2201340
+#
+# -185 a lock holder is a variant of a variable or a call, and node, variable
+# and name ids are held as their types: 0 behaviour, -185 source.
+ALLOC_BASELINE := 2201155
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

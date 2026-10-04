@@ -80,8 +80,7 @@ pathsOverlap: function {a: ListViewVal zast.nameid b: ListViewVal zast.nameid} o
 
 # true when two lock holders are the same.
 holderEq: function {a: ztypes.zlockholder b: ztypes.zlockholder} out bool is {
-    if a.kind == b.kind when a.id == b.id then return true
-    return false
+    return a == b
 }
 
 # sameCallConflict -- a second reference to one value inside ONE call -- two
@@ -99,7 +98,7 @@ sameCallConflict: function {
     path: ListViewVal zast.nameid
 } out bool is {
     if lockScope == ztypes.zlockscope.intent then return false
-    if e.lockHolder.kind.callKind.not then return false
+    if e.lockHolder.call.not then return false
     if (holderEq a: e.lockHolder b: holder).not then return false
     if (e.lockMutable or mutable).not then return false
     ownStep: (
@@ -717,10 +716,9 @@ ZSymbolTable: class {
             # a holder minted while this scope was open dies with it -- the
             # common case, answered by its id; only an older holder is asked
             # which scope binds it
-            if e.hasLock when e.lockHolder.kind.varKind when (
-                e.lockHolder.id < fr.firstVid.u64
-            ) then {
-                hf: this.scopeOfVar vid: (ztypes.vid.create from: e.lockHolder.id)
+            h: e.lockHolder
+            if e.hasLock when h.var when h < fr.firstVid then {
+                hf: this.scopeOfVar vid: h
                 rf: this.typing.declParentOf declId: e.declId
                 if hf.isZero.not when hf != top when rf != top then {
                     le: this.reg.newEntry ztypeId: e.ztypeId
@@ -1605,11 +1603,8 @@ ZSymbolTable: class {
         i: u64
         for i < n loop {
             e: this.entries.getMut :i
-            if e.hasLock when e.lockHolder.kind.varKind when e.lockHolder.id == from.u64 then {
-                e.lockHolder = (ztypes.zlockholder
-                    kind: ztypes.zlockholderkind.varKind
-                    id: to.u64
-                )
+            if e.hasLock when e.lockHolder == (ztypes.zlockholder.var from) then {
+                e.lockHolder = ztypes.zlockholder.var to
             }
             i = i + 1
         }
@@ -1622,19 +1617,22 @@ ZSymbolTable: class {
         pool: zast.StringPool.view
         holder: ztypes.zlockholder
     } out String is {
-        k: holder.kind
         match (
-            k
-        ) case varKind then {
-            nmId: this.localNameOfVar vid: (ztypes.vid.create from: holder.id)
-            if nmId == 0 then return "<var:\{holder.id}>"
-            return (zast.poolTextCopy :pool ref: (zast.nameid.create from: nmId.u32))
-        } case callKind then {
-            return "call:\{holder.id}"
-        } case forKind then {
-            return "__for"
+            holder
+        ) case var then {
+            return (this.formatVarHolder :pool vid: holder)
+        } case call then {
+            return "call:\{holder}"
         }
-        panic msg: "unreachable lock holder kind"
+    }
+
+    # the variable holding a lock, by its local's name
+    formatVarHolder: function {
+        this: this.view pool: zast.StringPool.view vid: ztypes.vid
+    } out String is {
+        nmId: this.localNameOfVar :vid
+        if nmId == 0 then return "<var:\{vid}>"
+        return (zast.poolTextCopy :pool ref: (zast.nameid.create from: nmId.u32))
     }
 
     # render the conflict itself: what was wanted, what stands in the way, and
@@ -1646,7 +1644,7 @@ ZSymbolTable: class {
         reqType: ztypes.zlockstate
         existingType: ztypes.zlockstate
         existingPath: ListViewVal zast.nameid
-        existingHolder: ztypes.zlockholder
+        existingHolder: ztypes.vid
     } out String is {
         rootView: zast.poolTextAt :pool ref: (reqPath.get i: 0)
         reqKind: zlockstateNameLower reqType
@@ -1662,7 +1660,7 @@ ZSymbolTable: class {
             hp: formatPath :pool path: existingPath
             heldDetail = " on '\{hp}'"
         }
-        holderName: this.formatLockHolder :pool holder: existingHolder
+        holderName: this.formatVarHolder :pool vid: existingHolder
         # A binding holding a SHARED lock on ITSELF is a readonly parameter:
         # saying it "already has a lock held by" its own name explains nothing.
         # An exclusive self-lock is not that, and keeps the ordinary wording.
@@ -1681,11 +1679,11 @@ ZSymbolTable: class {
         reqPath: ListViewVal zast.nameid
         reqMutable: bool
         existingPath: ListViewVal zast.nameid
-        existingHolder: ztypes.zlockholder
+        existingHolder: ztypes.vid
     } out String is {
         rp: formatPath :pool path: reqPath
         ep: formatPath :pool path: existingPath
-        hn: this.formatLockHolder :pool holder: existingHolder
+        hn: this.formatVarHolder :pool vid: existingHolder
         if reqMutable then {
             return "Cannot take a mutable reference to '\{rp}': '\{hn}' holds a reference into '\{ep}' that a write could free"
         }
@@ -1747,7 +1745,7 @@ ZSymbolTable: class {
                     existingType: e.lockType
                     existingScope: e.lockScope
                     existingPath: e.lockPath.listView
-                    existingVarHeld: e.lockHolder.kind.varKind
+                    existingVarHeld: e.lockHolder.var
                     reqType: lockType
                     reqScope: lockScope
                     reqPath: path
@@ -1783,9 +1781,9 @@ ZSymbolTable: class {
                     eShared: e.lockType == ztypes.zlockstate.shared
                     rShared: lockType == ztypes.zlockstate.shared
                     endsFirst: (
-                        e.lockHolder.kind.varKind and (holderEq a: e.lockHolder b: holder).not
+                        e.lockHolder.var and (holderEq a: e.lockHolder b: holder).not
                     )
-                    if endsFirst when holder.kind.callKind then endsFirst = false
+                    if endsFirst when holder.call then endsFirst = false
                     if eShared when rShared when endsFirst.not then idempotent = true
                 }
             }
@@ -1794,13 +1792,12 @@ ZSymbolTable: class {
         if conflictFound then {
             cType: ztypes.zlockstate.exclusive
             cPath: ListVal zast.nameid
-            cHolder: ztypes.zlockholder kind: ztypes.zlockholderkind.varKind id: 0
+            cHolder: ztypes.zlockholder.var ztypes.vid
             ce: this.entries.get i: conflictAt
             cType = ce.lockType
             cHolder = ce.lockHolder
             for each cseg: ce.lockPath loop cPath.append cseg
-            ck: cHolder.kind
-            if ck.callKind then {
+            if cHolder.call then {
                 return (formatAliasConflict
                     :pool
                     reqPath: path
@@ -1810,7 +1807,7 @@ ZSymbolTable: class {
             }
             # a readonly self-lock keeps its own wording: the binding IS the
             # reference, and "readonly here" says why a writer is refused
-            selfHeld: ck.varKind and (cHolder.id == dv.u64)
+            selfHeld: cHolder == dv
             if conflictRef when selfHeld then {
                 roRoot: zast.poolTextAt :pool ref: (path.get i: 0)
                 return "Cannot take a mutable reference to '\{roRoot}': '\{roRoot}' is readonly here"
@@ -1953,7 +1950,7 @@ ZSymbolTable: class {
             e: this.entries.get i: j2
             if e.declId == d when e.hasLock when (
                 e.lockType == ztypes.zlockstate.exclusive
-            ) when e.lockHolder.kind.varKind then {
+            ) when e.lockHolder.var then {
                 ov: pathsOverlap a: e.lockPath.listView b: path.listView
                 if ov then return (optionval.some e.lockHolder)
             }
@@ -1979,7 +1976,7 @@ ZSymbolTable: class {
             e: this.entries.get i: j2
             if e.declId == declId when e.hasLock when (
                 e.lockType == ztypes.zlockstate.exclusive
-            ) when e.lockHolder.kind.varKind then return true
+            ) when e.lockHolder.var then return true
             j = j - 1
         }
         return false
