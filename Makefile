@@ -2258,7 +2258,7 @@ perf: $(PERFBIN)
 #
 # +20 math's fixed binary float, net of a typedef's print format read by its
 # base type's name: 0 behaviour, +20 source.
-ALLOC_BASELINE := 2199344
+ALLOC_BASELINE := 2199392
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -3948,8 +3948,9 @@ generic-param-guard: bin/zl
 # from a directory holding no project, with no flags, on a fixture outside it,
 # the pass still runs: the file's own directory is a src root and the stdlib is
 # found as zc finds it, so the fixture's L030 is reported. A --system that does
-# not exist, and a --src the unit is not under, are each reported as the reason
-# the pass did not run, and exit non-zero. An error the pass finds in a
+# not exist, a --src the unit is not under, and a runtime whose natives.tbl
+# cannot be read are each reported as the reason the pass did not run, and exit
+# non-zero. An error the pass finds in a
 # dependency unit is shown at THAT unit's path and line, with its source line.
 # A finding in a generic body is reported once, not once per instance's copy.
 # A subunit file is linted as the subunit it is, reading its parent, and its
@@ -3971,6 +3972,10 @@ zl-full-guard: bin/zl
 	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full --system $$d/none $(CURDIR)/$(ZLFULL_FIX) 2>&1); rc=$$?; \
 	if [ $$rc -eq 0 ] || ! printf '%s\n' "$$out" | grep -q 'did not run: the system directory'; then \
 	  echo "zl-full-guard FAIL: a missing --system was not reported (rc=$$rc):"; \
+	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
+	out=$$(cd $$d && ZEROLANG_RUNTIME=$$d/none $(CURDIR)/bin/zl lint --full $(CURDIR)/$(ZLFULL_FIX) 2>&1); rc=$$?; \
+	if [ $$rc -eq 0 ] || ! printf '%s\n' "$$out" | grep -q "did not run: cannot read '$$d/none/natives.tbl'"; then \
+	  echo "zl-full-guard FAIL: an unreadable runtime was not reported as the reason (rc=$$rc):"; \
 	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
 	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full --src $$d $(CURDIR)/$(ZLFULL_FIX) 2>&1); rc=$$?; \
 	if [ $$rc -eq 0 ] || ! printf '%s\n' "$$out" | grep -q "did not run: unit 'tiered' is under none"; then \

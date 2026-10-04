@@ -3788,7 +3788,12 @@ Analysis: class {
             lu: lintedUnitOf :prog :self
             if lu.op.isZero then {
                 mw: "no unit the roots load for '\{uname}' comes from this file (a subunit loads only when its parent names it)"
-                this.reportTierSkipped errv: zast.err.badReference cause: mw.stringView note: String
+                (this.reportTierSkipped
+                    errv: zast.err.badReference
+                    cause: mw.stringView
+                    note: String
+                    hint: projectHint
+                )
                 return
             }
             reg: ztypes.newRegistry
@@ -3798,7 +3803,16 @@ Analysis: class {
             # `require:` guard decides the same here as it does in a build
             foldPaths9: List String
             rtd9v: zcheck.resolveRuntimeDir flagVal: ""
-            zcheck.foldNativePaths runtimeDir: rtd9v.stringView into: foldPaths9
+            if (zcheck.foldNativePaths runtimeDir: rtd9v.stringView into: foldPaths9).not then {
+                rw: zcheck.unreadableRuntimeCause runtimeDir: rtd9v.stringView
+                (this.reportTierSkipped
+                    errv: zast.err.ioError
+                    cause: rw.stringView
+                    note: String
+                    hint: zcheck.runtimeHint
+                )
+                return
+            }
             st: (ztypecheck.typecheck
                 program: prog
                 :reg
@@ -3830,7 +3844,12 @@ Analysis: class {
     rootsReady: function {:this srcdirs: (List String).view systemdir: StringView} out bool is {
         cause: zcheck.missingRootCause :systemdir :srcdirs
         if cause.length == 0 then return true
-        this.reportTierSkipped errv: zast.err.ioError cause: cause.stringView note: String
+        (this.reportTierSkipped
+            errv: zast.err.ioError
+            cause: cause.stringView
+            note: String
+            hint: projectHint
+        )
         return false
     }
 
@@ -3857,7 +3876,12 @@ Analysis: class {
                     roots.append r
                 }
                 mu: "unit '\{uname}' is under none of the src roots (\{roots})"
-                this.reportTierSkipped errv: e.err cause: mu.stringView note: String
+                (this.reportTierSkipped
+                    errv: e.err
+                    cause: mu.stringView
+                    note: String
+                    hint: projectHint
+                )
                 return
             }
             where: String
@@ -3871,13 +3895,21 @@ Analysis: class {
                 errv: e.err
                 cause: "a unit it loads does not parse"
                 note: where.take
+                hint: projectHint
             )
         } else null
     }
 
     # reportTierSkipped -- the typecheck tier did not run for this file: an
-    # error naming why, and the flags that name the project.
-    reportTierSkipped: function {:this errv: zast.err cause: StringView note: String.take} is {
+    # error naming why, and what names the piece it could not find.
+    reportTierSkipped: function {
+        :this
+        errv: zast.err
+        cause: StringView
+        note: String.take
+        # what names the missing piece
+        hint: StringView
+    } is {
         msg: "the typecheck tier (--full) did not run: \{cause}"
         d: (zdiag.errorDiag
             :errv
@@ -3887,7 +3919,7 @@ Analysis: class {
             width: 0
             msg: msg.take
             :note
-            hint: "name the project with --src DIR and --system DIR"
+            hint: hint.string
         )
         this.diags.append d
     }
@@ -6322,6 +6354,9 @@ analyzeFileFull: function {
         return a
     }
 }
+
+# projectHint -- what names a project's roots for the typecheck tier.
+projectHint: "name the project with --src DIR and --system DIR"
 
 # analyzeFileTiered -- analyze one file at the requested tier: the fast tier by default, or
 # the full (typecheck) tier under --full (which also needs the project src/system dirs).

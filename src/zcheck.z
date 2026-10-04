@@ -26,6 +26,8 @@ public: unit {
     :resolveRuntimeDir
     :resolveSystemDir
     :resolveTccDir
+    :runtimeHint
+    :unreadableRuntimeCause
     :vendoredTcc
 }
 
@@ -88,6 +90,10 @@ CheckResult: class {
     vfs: zvfs.ZVfs
     # the parser, kept because the tree's name pool lives in it
     parser: zparser.Parser
+    # why checking did not run although the parse did, "" when it ran: the
+    # one diagnostic a broken install reports in place of a typecheck that
+    # would have answered every compile-time value wrongly
+    setupError: String
 }
 
 # check -- parse + typecheck(full) `mainUnit` against `srcdir` layered
@@ -143,6 +149,7 @@ check: function {
             st: Option.none zenv.ZSymbolTable
             :vfs
             parser: p
+            setupError: String
         )
     }
     reg: ztypes.newRegistry
@@ -151,12 +158,21 @@ check: function {
     ccPath: pickCc ccFlag: "" targetTriple: ""
     ccMode: pickCcMode modeFlag: ""
     # and the fold paths by the same default resolution. An unreadable table
-    # leaves the set empty, which is not silence: the checker answers a path
-    # only when a row names it, so every compile-time value it knows becomes
-    # an error naming itself, reported here as any other diagnostic is.
+    # is a broken install, and the checker would answer every compile-time
+    # value it names wrongly: it does not run, and the reason is the result
     foldPaths: List String
     rtd9: resolveRuntimeDir flagVal: ""
-    foldNativePaths runtimeDir: rtd9.stringView into: foldPaths
+    if (foldNativePaths runtimeDir: rtd9.stringView into: foldPaths).not then {
+        return (CheckResult
+            parseOk: true
+            errorCount: 1
+            :prog
+            st: Option.none zenv.ZSymbolTable
+            :vfs
+            parser: p
+            setupError: (unreadableRuntimeCause runtimeDir: rtd9.stringView)
+        )
+    }
     st: (ztypecheck.typecheck
         program: prog
         :reg
@@ -176,6 +192,7 @@ check: function {
         st: Option.some st
         :vfs
         parser: p
+        setupError: String
     )
 }
 
@@ -205,7 +222,27 @@ diagsOf: function {r: CheckResult.view rows: ListVal diagrow msgs: List String} 
     if r.parseOk.not then {
         appendParseError ast: r.prog n: (r.prog.nodes.get i: r.prog.root) :rows :msgs
     }
+    if r.setupError.length > 0 then appendSetupError :r :rows :msgs
     diagsOfSt :rows :msgs :r
+}
+
+# appendSetupError -- the reason checking did not run, as one row on the main
+# unit's first line: a diagnostic no file names is shown in none.
+appendSetupError: function {r: CheckResult.view rows: ListVal diagrow msgs: List String} is {
+    mainFs: zvfs.fsno
+    if r.prog.units.length > 0 then mainFs = r.prog.fsnoForNode nodeid: (r.prog.units.get i: 0)
+    rows.append (diagrow
+        lineno: 1
+        colno: 1
+        width: 0
+        code: (zast.errCode c: zast.err.ioError)
+        fsno: mainFs
+    )
+    m: r.setupError.copy
+    m.appendByte b: 10
+    m.append "hint: "
+    m.append runtimeHint
+    msgs.append m
 }
 
 # collect the embedded parse-error nodes under `n` into the diagnostic rows.
@@ -470,6 +507,16 @@ foldRowKey: function {head: StringView} out String is {
     if isFold.not then return String
     return key
 }
+
+# unreadableRuntimeCause -- why a tool did not typecheck: the runtime's
+# natives.tbl names the values the checker answers at compile time, and it could
+# not be read.
+unreadableRuntimeCause: function {runtimeDir: StringView} out String is {
+    return "cannot read '\{runtimeDir}/natives.tbl', which names the values the checker answers at compile time"
+}
+
+# runtimeHint -- where a tool looks for the runtime when no flag names it.
+runtimeHint: "set ZEROLANG_RUNTIME to the runtime directory, or ZEROLANG_ROOT to the install"
 
 # foldNativePaths -- the qualified paths natives.tbl marks `fold`: the values
 # the compiler answers itself, at compile time. The type checker needs that
