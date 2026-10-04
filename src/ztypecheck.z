@@ -1567,7 +1567,13 @@ definingSiteForId: function {
         :nameId
     )
     if hit.declId.isZero then return noDefSite
-    if hit.scope == unitDecl then {
+    # a definition of this unit, or of a namespace written inside it: both
+    # resolve in this unit, the namespace member in its namespace's scope
+    inNs: (
+        (declIsNamespace :st :ast declId: hit.scope) and
+        ((unitRootOfDecl :st declId: hit.scope) == unitDecl)
+    )
+    if (hit.scope == unitDecl) or inNs then {
         return (defsite defUnit: unitDecl aliasDecl: (ztypes.declid.create from: 0))
     }
     ru: reexportUnitOf :st :ast declId: hit.declId
@@ -16972,7 +16978,9 @@ resolveDemandedDecl: function {
     puNm = pdo.name
     pdo.drop
     defNameText: zast.nameTextCopy :ast ref: (zast.nameid.create from: dName)
-    puDecl: unitDeclOfNameOrOwn :st scope: rf nameId: (zast.nameid.create from: puNm)
+    # the file unit the definition is written in, by id: a namespace may share
+    # its name with a top-level unit, which a lookup by name would answer
+    puDecl: unitRootOfDecl :st declId: dParent
     # a TEMPLATE's member: the template's own resolution minted every method
     # (resolveInlineGenericUnit), and its constants resolve together, keyed on
     # the template and evaluated in its rf -- the parent's NAME is no
@@ -17055,6 +17063,10 @@ resolveDemandedDecl: function {
             defNameText: defNameText.stringView
             :opId
         )
+        # a namespace member resolves alone, wherever a use first names it,
+        # and is read at once: its signature's type-refs are stamped now, as
+        # a whole namespace's were when it resolved together
+        if (declIsNamespace :st :ast declId: dParent) then stampResolvedOnDemand :st :ast
     }
 }
 
@@ -17071,6 +17083,15 @@ askPendingMemberChecks: function {st: zenv.ZSymbolTable ast: Ast} is {
         unitDecl: mc.unitDecl
         op: mc.op
     )
+}
+
+# stampResolvedOnDemand -- stamp the type-refs a definition resolved outside a
+# drain recorded, as a drain stamps what it resolves: an unstamped signature
+# reads its return type as nothing at every call site. Before the type-ref pass
+# has run, and inside a drain, the stamping waits for them.
+stampResolvedOnDemand: function {st: zenv.ZSymbolTable ast: Ast} is {
+    if st.typing.typerefPassRan.not or st.typing.drainingDefs then return
+    stampPendingTyperefs :st :ast unitDecl: st.typing.mainUnitRoot
 }
 
 # resolveDemandedDefs -- resolve every demanded declaration, in discovery
@@ -17328,47 +17349,17 @@ scanCallsAt: function {
     )
 }
 
-# scanDefCalls -- scan a functiondef's body, or an objectdef's is/as method
-# bodies, for call demands. A type constructed only inside a method body must be
-# demanded here or it never resolves and the construction stamps type 0.
+# scanDefCalls -- scan a functiondef's body for call demands. A type's method
+# bodies are scanned one at a time, when each is walked (checkFunctionBodyIn):
+# a method is used per member, and scanning every body when its owner resolved
+# demanded whatever an unused method calls.
 scanDefCalls: function {
     st: zenv.ZSymbolTable
     scope: ztypes.declid
     ast: Ast.view
     op: astnode.view
 } is {
-    match (
-        op
-    ) case functiondef then {
-        scanCallsAt :st :scope :ast nid: op.body
-    } case objectdef then {
-        isx1839: u64
-        for isx1839 < op.isItems.count loop {
-            imId: zast.kidAt kids: ast.kids span: op.isItems i: isx1839
-            isx1839 = isx1839 + 1
-            im: ast.nodes.get i: imId
-            if im.namedoperation when (isFunctionDefWithBody o: (ast.nodes.get i: im.operation)
-            ) then (scanDefCalls
-                :st
-                :scope
-                :ast
-                op: (ast.nodes.get i: im.operation)
-            )
-        }
-        asx1649: u64
-        for asx1649 < op.asItems.count loop {
-            amId: zast.kidAt kids: ast.kids span: op.asItems i: asx1649
-            asx1649 = asx1649 + 1
-            am: ast.nodes.get i: amId
-            if am.namedoperation when (isFunctionDefWithBody o: (ast.nodes.get i: am.operation)
-            ) then (scanDefCalls
-                :st
-                :scope
-                :ast
-                op: (ast.nodes.get i: am.operation)
-            )
-        }
-    } else null
+    if op.functiondef then scanCallsAt :st :scope :ast nid: op.body
 }
 
 # scanMainBodyCalls -- record call-target demands for every function body in the
@@ -18052,13 +18043,14 @@ resolveUnitMemberAt: function {
 # subunit and a `public:` block differ only in who supplies the owner, so the
 # walk takes the owner's Decl and type id and never asks a name for them.
 #
-# `speculative` is the one fact the two entries differ on: a FILE unit's body is
-# walked before anything asks for it, a nested unit's because something demanded
-# the unit. Both of the file walk's peculiarities follow from it -- it resolves
-# only what a declaration needs (a function, a unit or an interface), and it does
-# not mark what it touched as DEFINED, having resolved it on nobody's behalf.
-# `rootOnly` narrows the eager set once more for the main unit, where demand
-# starts at `main` and everything else waits to be asked for.
+# `speculative` is the one fact the two entries differ on: the main FILE unit's
+# body is walked before anything asks for it, a nested unit's (under --eager;
+# otherwise resolveUnitScopes) because something demanded the unit. Both of the
+# file walk's peculiarities follow from it -- it resolves only what a
+# declaration needs (a function, a unit or an interface), and it does not mark
+# what it touched as DEFINED, having resolved it on nobody's behalf. `rootOnly`
+# narrows the eager set once more for the main unit, where demand starts at
+# `main` and everything else waits to be asked for.
 resolveUnitMembers: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -18085,6 +18077,38 @@ resolveUnitMembers: function {
             :speculative
             :rootOnly
         )
+    }
+}
+
+# resolveUnitScopes -- resolve the scopes ONE unit's body declares: its nested
+# namespaces and templates, and none of its other members.
+resolveUnitScopes: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    ownerDeclId: ztypes.declid
+    ownerTid: ztypes.tid
+    unitOpId: zast.nodeid
+} is {
+    bodyIds: zast.unitBodyIdsAt :ast unitId: unitOpId
+    i: u64
+    for i < bodyIds.count loop {
+        bm: zast.kidAt kids: ast.kids span: bodyIds :i
+        i = i + 1
+        op: (argRefAt :ast nid: bm).operation
+        if op.isZero.not when (isUnitOp op: (ast.nodes.get i: op)) then {
+            (resolveUnitMemberAt
+                :st
+                :ast
+                :unitDecl
+                scope: ownerDeclId
+                :ownerDeclId
+                :ownerTid
+                memberId: bm
+                speculative: false
+                rootOnly: false
+            )
+        }
     }
 }
 
@@ -18129,16 +18153,31 @@ resolveNamespaceUnit: function {
             st.reg.setDef typeId: uid :declId
         }
     }
-    (resolveUnitMembers
-        :st
-        :ast
-        :unitDecl
-        ownerDeclId: declId
-        ownerTid: uid
-        :unitOpId
-        speculative: false
-        rootOnly: false
-    )
+    # A namespace is a scope: its members resolve when a use names them, as a
+    # file unit's do. Only the scopes it declares -- nested namespaces and
+    # templates -- are properties of the declaration and resolve with it.
+    # `--eager` resolves every member.
+    if st.typing.eagerAll then {
+        (resolveUnitMembers
+            :st
+            :ast
+            :unitDecl
+            ownerDeclId: declId
+            ownerTid: uid
+            :unitOpId
+            speculative: false
+            rootOnly: false
+        )
+    } else {
+        (resolveUnitScopes
+            :st
+            :ast
+            :unitDecl
+            ownerDeclId: declId
+            ownerTid: uid
+            :unitOpId
+        )
+    }
     # A namespace's constants are NOT folded here. Each one declares itself
     # when something reads it (probeScopeTyperef's constant leg), the way every
     # other definition of this unit waits to be demanded. Folding them up front
@@ -20080,9 +20119,8 @@ typerefExcused: function {
     # the unit the ref was written in
     origin: ztypes.declid
     pval: zast.nameid
-    gpNames: (IdSet zast.nameid).view
 } out bool is {
-    if (gpNames.has item: pval) then return true
+    if (st.typing.gpNames.has item: pval) then return true
     dh: envLookup :st scope: rf nameId: pval
     if dh.declId.isZero.not then {
         dhWait: (
@@ -20122,7 +20160,6 @@ stampOnePendingTyperef: function {
     unitDecl: ztypes.declid
     uk: zast.nodeid
     pval: zast.nameid
-    gpNames: (IdSet zast.nameid).view
 } is {
     if ((st.typing.noStampNode.get key: uk).or d: false) then return
     # the type-ref resolves in the scope it was written in
@@ -20144,7 +20181,7 @@ stampOnePendingTyperef: function {
         stampResolvedTyperef :st :ast nid: uk :pval :origin tid: rt
         return
     }
-    if (typerefExcused :st :ast :uk :rf :origin :pval :gpNames) then return
+    if (typerefExcused :st :ast :uk :rf :origin :pval) then return
     un: ast.nodes.get i: uk
     pvalT: zast.nameTextAt :ast ref: pval
     um: "Unknown type '\{pvalT}'"
@@ -20165,6 +20202,52 @@ stampOnePendingTyperef: function {
 # resolved after it -- from a drain during the body walk -- records its
 # type-refs the same way, and the drain re-runs this over the new tail.
 stampPendingTyperefs: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+} is {
+    # nothing recorded or deferred since the last pass: a definition resolved
+    # on demand asks after each one, and most add nothing
+    if st.typing.typerefRetry.length == 0 when (
+        st.typing.pendingTyperef.length == st.typing.typerefsStamped
+    ) then return
+    # a declaration's type-refs belong to no instance and no template walk,
+    # whichever walk asked for them
+    prevMono: st.typing.curMonoStamp
+    prevSup: st.typing.suppressParamStamps
+    st.typing.curMonoStamp = ztypes.noTid
+    st.typing.suppressParamStamps = false
+    stampPendingTyperefsIn :st :ast :unitDecl
+    st.typing.curMonoStamp = prevMono
+    st.typing.suppressParamStamps = prevSup
+}
+
+# sweepGenericParamNames -- add the names of the generic parameters minted since
+# the last sweep to st.typing.gpNames. A PARTIAL and a trie NODE wear
+# GENERIC_PARAM too, and neither label is a parameter's: a partial's is a spec's
+# (`Cell_t`) and a node's is the template's own. Both are names a program may
+# itself declare, and interning either here would make a typeref spelled that
+# way resolve as a type PARAMETER. Ask the flags: the name shape must not be
+# what decides this, which is the whole reason the flags exist.
+sweepGenericParamNames: function {st: zenv.ZSymbolTable ast: Ast} is {
+    t: st.typing.gpNamesSwept
+    if t.isZero then t = t.next
+    last: st.reg.typeCount
+    for t < last loop {
+        isGp: (st.reg.typetypeOf typeId: t) == ztypes.ztypetype.genericParam
+        if isGp when (st.reg.isPartialOf tid: t).not when (st.reg.isTrieNodeOf tid: t).not then {
+            gnm: st.reg.nameOf tid: t
+            gnmId: nameIdOf :ast name: gnm.stringView
+            if gnmId.isZero.not then st.typing.gpNames.add item: gnmId
+        }
+        t = t.next
+    }
+    st.typing.gpNamesSwept = t
+}
+
+# stampPendingTyperefsIn -- stampPendingTyperefs' pass, in the declaration
+# context it sets up.
+stampPendingTyperefsIn: function {
     st: zenv.ZSymbolTable
     ast: Ast
     unitDecl: ztypes.declid
@@ -20197,29 +20280,7 @@ stampPendingTyperefs: function {
         }
     }
     st.typing.typerefsStamped = seen
-    gpNames: IdSet zast.nameid
-    gpiN: ztypes.tid 1
-    gpLast: st.reg.typeCount
-    for gpiN < gpLast loop {
-        # A PARTIAL and a trie NODE wear GENERIC_PARAM too, and neither label
-        # is a parameter's: a partial's is a spec's (`Cell_t`) and a node's is
-        # the template's own. Both are names a program may itself declare, and
-        # interning either here would make a typeref spelled that way resolve
-        # as a type PARAMETER. Ask the flags: the name shape must not be what
-        # decides this, which is the whole reason the flags exist. Measured --
-        # a node reaches this sweep in 559 of 602 corpus programs, and reaches
-        # no other GENERIC_PARAM consumer at all.
-        gpTid9: gpiN
-        if (
-            (st.reg.typetypeOf typeId: gpTid9) == ztypes.ztypetype.genericParam
-        ) when (st.reg.isPartialOf tid: gpTid9).not when (st.reg.isTrieNodeOf tid: gpTid9
-        ).not then {
-            gnm: st.reg.nameOf tid: gpTid9
-            gnmId: nameIdOf :ast name: gnm.stringView
-            if gnmId.isZero.not then gpNames.add item: gnmId
-        }
-        gpiN = gpiN.next
-    }
+    sweepGenericParamNames :st :ast
     pi: u64
     pcnt: pkeys.length
     for pi < pcnt loop {
@@ -20232,7 +20293,6 @@ stampPendingTyperefs: function {
             :unitDecl
             :uk
             :pval
-            :gpNames
         )
     }
 }
@@ -21407,6 +21467,9 @@ mintMonoMembers: function {
     cNames: List String
     cIds: ListVal ztypes.tid
     forceAllMembers :st :ast tid: templateId
+    # a template resolved on demand is copied at once, and the copy reads its
+    # members' signatures off their stamped type-refs
+    stampResolvedOnDemand :st :ast
     {
         mmq: u64
         mmn: st.typing.declRowSlots ownerTid: templateId
@@ -28375,15 +28438,33 @@ unitMemberTypeOf: function {
     }
     if root.isZero then root = st.typing.declIdOfType typeId: unitTid
     if root.isZero then root = declOfTypeId :st tid: unitTid
-    r: probeScopeTyperef :st :ast :root nameId: nid
+    r: scopeMemberTid :st :ast :root nameId: nid
     if r > 0 then return (optionval.some r)
     # a definition the unit's `public:` block makes is on its surface
     pb: publicNsChildOf :st :root
     if pb.isZero.not then {
-        r8: probeScopeTyperef :st :ast root: pb nameId: nid
+        r8: scopeMemberTid :st :ast root: pb nameId: nid
         if r8 > 0 then return (optionval.some r8)
     }
     return (optionval.none ztypes.tid)
+}
+
+# scopeMemberTid -- the type of member `nameId` of the scope `root`, resolving
+# it first when nothing has: a namespace's member resolves when a use first
+# names it, and this read is that use. Zero when the scope declares none.
+scopeMemberTid: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    root: ztypes.declid
+    nameId: zast.nameid
+} out ztypes.tid is {
+    r: probeScopeTyperef :st :ast :root :nameId
+    if r > 0 then return r
+    md: st.typing.declFindChild parentDeclId: root :nameId
+    if md.isZero or (st.typing.declIsDefined declId: md) then return r
+    resolveDemandedDecl :st scope: root :ast declId: md
+    stampResolvedOnDemand :st :ast
+    return (probeScopeTyperef :st :ast :root :nameId)
 }
 
 # reportUnknownMember -- an unknown member on a type whose member set is
@@ -32082,7 +32163,9 @@ typeOfBareName: function {
             tid: fo
         )
         stampRefDecl :st nid: node.nid declId: sfF
-        maybeWalkMethodsById :st scope: st.curScope :unitDecl :ast nameId: node.name
+        # the definition the name resolved to, wherever it lives: a namespace
+        # member is no definition of the unit the read is written in
+        walkDefinitionById :st :ast tid: fo
     } case none then null
     return result
 }
@@ -50860,8 +50943,17 @@ walkDeclaredDef: function {
     if canW.not when (objectdefHasMethodBodies :ast op: (ast.nodes.get i: mopId)) then canW = true
     if canW.not then return
     st.typing.declSetWalked declId: dd
+    # a walk reached from a use runs in a neutral context, as a drain does: the
+    # use may sit in an instance's or a template's walk, whose state belongs to
+    # that body and not to this definition
     prevMono: st.typing.curMonoStamp
+    prevMonoFn: st.typing.curMonoFnTid
+    prevSupP: st.typing.suppressParamStamps
+    prevEdge: st.typing.inContainmentEdge
     st.typing.curMonoStamp = ztypes.noTid
+    st.typing.curMonoFnTid = ztypes.tid
+    st.typing.suppressParamStamps = false
+    st.typing.inContainmentEdge = false
     # walkOwnerMethods only ever walked a TYPE's methods; a free function
     # reaching it was marked and declined, and its unit's own free-function walk
     # then skipped it as done -- a body emitted with nothing stamped.
@@ -50906,6 +50998,9 @@ walkDeclaredDef: function {
         )
     }
     st.typing.curMonoStamp = prevMono
+    st.typing.curMonoFnTid = prevMonoFn
+    st.typing.suppressParamStamps = prevSupP
+    st.typing.inContainmentEdge = prevEdge
 }
 
 
@@ -51866,6 +51961,10 @@ checkFunctionBodyIn: function {
             fnTid = dt
         }
     }
+    # a method's body demands what it names when it is walked, as its owner's
+    # resolution scans no member body; a type constructed only inside it must
+    # resolve before the walk, or the construction stamps type 0
+    if thisName.length > 0 then scanDefCalls :st scope: rf :ast op: (ast.nodes.get i: fn.nid)
     # a body is walked only once everything demanded so far has resolved:
     # an owner or function resolved late (from a walk) queued what its
     # bodies reference, and those must be resolved before those bodies are
@@ -61111,6 +61210,22 @@ declDeclaresTemplate: function {
     np: ast.nodes.get i: dn
     if np.namedoperation.not then return false
     return (zast.unitOpKindIs :ast opId: np.operation k: zast.unitkind.template)
+}
+
+# declIsNamespace -- the declaration is a namespace: an inline `m: unit { }`, a
+# hidden subunit or a `public:` block. A template is not one, and neither is a
+# type, though both are scopes.
+declIsNamespace: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    declId: ztypes.declid
+} out bool is {
+    if declId.isZero then return false
+    dn: (st.typing.decls.get i: declId).node
+    if dn.isZero then return false
+    np: ast.nodes.get i: dn
+    if np.namedoperation.not then return false
+    return (zast.unitOpDeclaresUnit :ast opId: np.operation)
 }
 
 # envTypeIdOf -- the environment's answer for a bare name as a type id: the
