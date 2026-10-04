@@ -29421,6 +29421,8 @@ checkUnitQualifiedMember: function {
             unitDecl: btUd
             memberId: effUcn
         )
+        # a unit instance walks the functions read through it
+        markMemberUsed :st ownerTid: bt nameId: effUcn
         # A hidden subunit is private to its parent BY DEFAULT: it is read
         # only because the parent named it, so it was never declared surface.
         # A `public:` block is the one visibility mechanism -- when the unit
@@ -46901,6 +46903,7 @@ bareCalleeKind: function {
             templateFnTid: funcId
             nameId: cnId
         )
+        markMemberUsed :st ownerTid: st.typing.curMonoStamp nameId: cnId
     }
     if funcId.isZero then {
         return (calleekind fid: funcId isUser: false isGen: false isCtor: false unknown: false)
@@ -53761,9 +53764,30 @@ bindUnitNestedTypes: function {st: zenv.ZSymbolTable monoId: ztypes.tid} is {
     }
 }
 
-# stampOneUnitMono -- the instance walk: bind the mono's type args (scope
-# defines + monoParamSubst), then re-check each template method body with
-# curMonoStamp routing stamps into the side table.
+# collectOwedUnitFns -- append the body index of each function unit instance
+# `monoId` owes a walk (instanceMemberOwed) to `idxs`, marking it walked.
+collectOwedUnitFns: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    bodyIds: zast.kidspan
+    monoId: ztypes.tid
+    idxs: (ListVal u64).borrow
+} is {
+    di: u64
+    for di < bodyIds.count loop {
+        bm: argRefAt :ast nid: (zast.kidAt kids: ast.kids span: bodyIds i: di)
+        if bm.nid.isZero.not when (isFunctionDefWithBody o: (ast.nodes.get i: bm.operation)
+        ) when (instanceMemberOwed :st :monoId nameId: bm.name) then {
+            markInstanceMemberWalked :st :monoId nameId: bm.name
+            idxs.append from: di
+        }
+        di = di + 1
+    }
+}
+
+# stampOneUnitMono -- one visit of a unit instance: the functions it owes a walk
+# (walkUnitMonoFns), then the methods of its own copy of each type the unit
+# declares.
 stampOneUnitMono: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -53772,9 +53796,36 @@ stampOneUnitMono: function {
     unitOpId: zast.nodeid
     monoId: ztypes.tid
 } is {
-    if (firstInstanceWalk :st :ast :monoId opId: unitOpId).not then return
-    minted: st.reg.typeCount
+    # an instance is revisited for the functions a use reached since its last
+    # walk; only its first visit asks whether instantiating it ends
+    if (st.typing.monosWalked.has item: monoId).not when (firstInstanceWalk
+        :st
+        :ast
+        :monoId
+        opId: unitOpId
+    ).not then return
     bodyIds: zast.unitBodyIdsAt :ast unitId: unitOpId
+    if (spanOwesWalk :st :ast span: bodyIds :monoId) then {
+        walkUnitMonoFns :st :ast :unitDecl :scope :bodyIds :monoId
+    }
+    # the methods of this instance's own copy of each type the unit declares
+    stampUnitNestedMethods :st :ast :unitDecl :scope :bodyIds :monoId
+}
+
+# walkUnitMonoFns -- the instance walk of the functions unit instance `monoId`
+# owes (instanceMemberOwed): bind the mono's type args (scope defines +
+# monoParamSubst), then re-check each template function body with curMonoStamp
+# routing stamps into the side table. A function another one calls is walked
+# in the same visit.
+walkUnitMonoFns: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    scope: ztypes.declid
+    bodyIds: zast.kidspan
+    monoId: ztypes.tid
+} is {
+    minted: st.reg.typeCount
     monoNm: st.reg.nameOf tid: monoId
     prevSup: st.typing.suppressParamStamps
     st.typing.suppressParamStamps = true
@@ -53785,66 +53836,56 @@ stampOneUnitMono: function {
         bindUnitNestedTypes :st :monoId
     }
     idxs: ListVal u64
-    {
-        di: u64
-        vx209: u64
-        for vx209 < bodyIds.count loop {
-            bmId: zast.kidAt kids: ast.kids span: bodyIds i: vx209
-            vx209 = vx209 + 1
-            bm: argRefAt :ast nid: bmId
-            if bm.nid.isZero.not when (isFunctionDefWithBody o: (ast.nodes.get i: bm.operation)
-            ) then {
-                dv: di
-                idxs.append dv
-            }
-            di = di + 1
-        }
-    }
+    collectOwedUnitFns :st :ast :bodyIds :monoId :idxs
     st.typing.curMonoStamp = monoId
     prevL: st.typing.synthLabel.copy
     prevL9U: st.typing.synthOwnerUnit
     prevL9N: st.typing.synthOwnerName
     prevT: st.typing.currentThisTid
-    wi: u64
-    for wi < idxs.length loop {
-        bidx: idxs.get i: wi
-        wi = wi + 1
-        bmId2: zast.kidAt kids: ast.kids span: bodyIds i: bidx
-        bm2: argRefAt :ast nid: bmId2
-        if bm2.nid.isZero.not then {
-            mnm: zast.nameTextCopy :ast ref: bm2.name
-            q: "\{monoNm}.\{mnm}"
-            mfo: (st.typing.declChildOf
-                pool: ast.names
-                parentTypeId: monoId
-                name: mnm.stringView
-            )
-            match (
-                mfo
-            ) case some then {
-                st.typing.curMonoFnTid = mfo
-            } case none then {
-                st.typing.curMonoFnTid = ztypes.noTid
+    for idxs.length > 0 loop {
+        wi: u64
+        for wi < idxs.length loop {
+            bidx: idxs.get i: wi
+            wi = wi + 1
+            bmId2: zast.kidAt kids: ast.kids span: bodyIds i: bidx
+            bm2: argRefAt :ast nid: bmId2
+            if bm2.nid.isZero.not then {
+                mnm: zast.nameTextCopy :ast ref: bm2.name
+                q: "\{monoNm}.\{mnm}"
+                mfo: (st.typing.declChildOf
+                    pool: ast.names
+                    parentTypeId: monoId
+                    name: mnm.stringView
+                )
+                match (
+                    mfo
+                ) case some then {
+                    st.typing.curMonoFnTid = mfo
+                } case none then {
+                    st.typing.curMonoFnTid = ztypes.noTid
+                }
+                tplDecl49Org: st.reg.genericOriginOf tid: monoId
+                unitTemplateDecl: declOfTypeId :st tid: tplDecl49Org
+                cfbFr: (fnRefAt
+                    :ast
+                    nid: (instanceBodyAt :st :ast mono: monoId opId: bm2.operation)
+                )
+                (checkFunctionBody
+                    :st
+                    :scope
+                    :unitDecl
+                    defName: q.stringView
+                    defNameId: zast.nameid
+                    fn: cfbFr
+                    thisName: ""
+                    thisTid: ztypes.tid
+                    :ast
+                    declId: unitTemplateDecl
+                )
             }
-            tplDecl49Org: st.reg.genericOriginOf tid: monoId
-            unitTemplateDecl: declOfTypeId :st tid: tplDecl49Org
-            cfbFr: (fnRefAt
-                :ast
-                nid: (instanceBodyAt :st :ast mono: monoId opId: bm2.operation)
-            )
-            (checkFunctionBody
-                :st
-                :scope
-                :unitDecl
-                defName: q.stringView
-                defNameId: zast.nameid
-                fn: cfbFr
-                thisName: ""
-                thisTid: ztypes.tid
-                :ast
-                declId: unitTemplateDecl
-            )
         }
+        idxs = ListVal u64
+        collectOwedUnitFns :st :ast :bodyIds :monoId :idxs
     }
     st.typing.synthLabel = prevL.take
     st.typing.synthOwnerUnit = prevL9U
@@ -53855,8 +53896,6 @@ stampOneUnitMono: function {
     st.typing.suppressParamStamps = prevSup
     st.typing.monoParamSubst = IdMapV ztypes.tid v: ztypes.tid
     st.pop
-    # the methods of this instance's own copy of each type the unit declares
-    stampUnitNestedMethods :st :ast :unitDecl :scope :bodyIds :monoId
     recordMintedBy :st :monoId minted: (ztypes.tid.create from: minted)
 }
 
