@@ -1470,16 +1470,16 @@ spanKindRank: function {kind: u8} out u8 is {
     return 1
 }
 
-# rangerow -- an enclosing-node span, start..end as line*1048576+col; kind
+# rangerow -- an enclosing-node span, start..end as source positions; kind
 # 4 = call, 5 = caseexpr. endPos is the last descendant's start (a subtree
 # extent good enough to find the node enclosing a cursor).
 rangerow: record {
     # the node this range belongs to
     nodeid: zast.nodeid
-    # the byte offset it starts at
-    startPos: u64
-    # one past the byte it ends at
-    endPos: u64
+    # where the node starts
+    startPos: zast.nodepos
+    # where its last descendant starts
+    endPos: zast.nodepos
     # what sort of thing it is
     kind: u8
 }
@@ -1492,18 +1492,18 @@ Spans: class {
     # size value
     names: List String
     # node id to its position, for the lookups that go the other way
-    pos: (IdMapV zast.nodeid v: u64)
-    # the byte-offset ranges, which a formatting or a rename edit needs
+    pos: (IdMapV zast.nodeid v: zast.nodepos)
+    # the enclosing calls and matches, which a cursor lookup searches
     ranges: ListVal rangerow
     # the last position recorded, so an append can tell whether it is moving
     # forward
-    lastPos: u64
+    lastPos: zast.nodepos
 } as {
     # record a node's position without a name, for the nodes a lookup finds but
     # never renders
     note: function {:this id: zast.nodeid line: u32 col: u32} is {
         if id.isZero.not then {
-            v: line.u64 * 1048576 + col
+            v: zast.nodepos :line :col
             this.pos.set key: id value: v
             if v > this.lastPos then this.lastPos = v
         }
@@ -1526,24 +1526,26 @@ Spans: class {
     }
 
     # innerRangeOfKind -- the innermost recorded range of `kind` whose
-    # [startPos, endPos + slack] contains `curPos` (line*1048576+col), or 0.
+    # [startPos, endPos + slack lines] contains `curPos`, or 0.
     innerRangeOfKind: function {
         t: this.view
-        curPos: u64
+        curPos: zast.nodepos
         kind: u8
-        slack: u64
+        slack: u32
         prog: Ast.view
         wantFsno: zvfs.fsno
     } out zast.nodeid is {
         best: zast.nodeid
-        bestStart: u64
+        bestStart: zast.nodepos line: 0 col: 0
         ri: u64
         for ri < t.ranges.length loop {
             rr: t.ranges.get i: ri
             hit: rr.kind == kind
             if rr.startPos > curPos then hit = false
-            if curPos > (rr.endPos + slack) then hit = false
-            # THE WALK SPANS EVERY UNIT and a position is line*2^20+col, so a
+            if (
+                curPos > (zast.nodepos line: rr.endPos.line + slack col: rr.endPos.col)
+            ) then hit = false
+            # THE WALK SPANS EVERY UNIT and a position is a line and a column, so a
             # range in ANOTHER file at the same line and a later column reads
             # as the innermost one. Every operator is a call now, so those
             # ranges are everywhere and the collision stopped being rare.
@@ -1613,7 +1615,7 @@ Spans: class {
             this.memberRow :ast dpid: n.nodeid c: (ast.nodes.get i: n.child)
             return
         } case call then {
-            csp: n.lineno.u64 * 1048576 + n.colno
+            csp: zast.nodepos line: n.lineno col: n.colno
             this.walkIds :ast ids: kids
             this.ranges.append (rangerow
                 nodeid: n.nodeid
@@ -1623,7 +1625,7 @@ Spans: class {
             )
             return
         } case caseexpr then {
-            xsp: n.lineno.u64 * 1048576 + n.colno
+            xsp: zast.nodepos line: n.lineno col: n.colno
             this.walkIds :ast ids: kids
             this.ranges.append (rangerow
                 nodeid: n.nodeid
@@ -2789,8 +2791,8 @@ locationValue: function {
     match (
         pg
     ) case some then {
-        line: (pg / 1048576).u32.orPanic
-        col: (pg % 1048576).u32.orPanic
+        line: pg.line
+        col: pg.col
         if line == 0 then return Value.nul
         fs: zcheck.fsnoFor r: snap nodeid: nid
         if fs.isZero then return Value.nul
@@ -3611,11 +3613,10 @@ hoverTypeFence: function {
 }
 
 # posLine -- the 1-based line a node sits on, from the span table; 0 when the
-# node has no recorded position. The table packs line and column into one
-# u64, line in the high bits.
+# node has no recorded position.
 posLine: function {sp: Spans.view nid: zast.nodeid} out u32 is {
-    packed: (sp.pos.get key: nid).or d: 0
-    return (packed / 1048576).u32.orPanic
+    p: (sp.pos.get key: nid).or d: (zast.nodepos line: 0 col: 0)
+    return p.line
 }
 
 # hoverDoc -- the `#` doc block above a definition node, "" when the node has
@@ -3754,7 +3755,7 @@ hoverCallNotes: function {
     body: String.borrow
     docBody: String.borrow
 } is {
-    hpos: (sp.pos.get key: hit.nodeid).or d: 0
+    hpos: (sp.pos.get key: hit.nodeid).or d: (zast.nodepos line: 0 col: 0)
     callId: (sp.innerRangeOfKind
         curPos: hpos
         kind: 4
@@ -3763,7 +3764,7 @@ hoverCallNotes: function {
         wantFsno: zvfs.fsno
     )
     if callId.isZero then return
-    callPos: (sp.pos.get key: callId).or d: 0
+    callPos: (sp.pos.get key: callId).or d: (zast.nodepos line: 0 col: 0)
     if callPos == hpos then {
         gl: inferredGenericLines o: snap.st prog: snap.prog :callId
         if gl.length > 0 then {
@@ -3900,9 +3901,9 @@ navAnswer: function {
     sp: (Spans
         rows: ListVal spanrow
         names: List String
-        pos: (IdMapV zast.nodeid v: u64)
+        pos: (IdMapV zast.nodeid v: zast.nodepos)
         ranges: ListVal rangerow
-        lastPos: 0
+        lastPos: (zast.nodepos line: 0 col: 0)
     )
     sp.walkProgram prog: snap.prog
     hitOpt: navResolve :snap :sp :docRel :srcDir :l1u :cp1
@@ -4527,9 +4528,9 @@ addScopeCompletions: function {
         sp: (Spans
             rows: ListVal spanrow
             names: List String
-            pos: (IdMapV zast.nodeid v: u64)
+            pos: (IdMapV zast.nodeid v: zast.nodepos)
             ranges: ListVal rangerow
-            lastPos: 0
+            lastPos: (zast.nodepos line: 0 col: 0)
         )
         sp.walkProgram prog: snap.prog
         nr: sp.rows.length
@@ -4680,9 +4681,9 @@ baseTypeInScope: function {
     sp: (Spans
         rows: ListVal spanrow
         names: List String
-        pos: (IdMapV zast.nodeid v: u64)
+        pos: (IdMapV zast.nodeid v: zast.nodepos)
         ranges: ListVal rangerow
-        lastPos: 0
+        lastPos: (zast.nodepos line: 0 col: 0)
     )
     sp.walkProgram prog: snap.prog
     nr: sp.rows.length
@@ -5218,21 +5219,21 @@ caseArmComplete: function {
     ltv: StringView
     ps: u64
     prefix: StringView
-    cursorPos: u64
+    cursorPos: zast.nodepos
 } out bool is {
     if (caseWordBefore :ltv :ps).not then return false
     sp: (Spans
         rows: ListVal spanrow
         names: List String
-        pos: (IdMapV zast.nodeid v: u64)
+        pos: (IdMapV zast.nodeid v: zast.nodepos)
         ranges: ListVal rangerow
-        lastPos: 0
+        lastPos: (zast.nodepos line: 0 col: 0)
     )
     sp.walkProgram :prog
     caseId: (sp.innerRangeOfKind
         curPos: cursorPos
         kind: 5
-        slack: 1048576
+        slack: 1
         :prog
         wantFsno: zvfs.fsno
     )
@@ -5324,7 +5325,7 @@ bareCalleeFuncId: function {
     o: (Option zenv.ZSymbolTable).view
     ltv: StringView
     ws: u64
-    cursorPos: u64
+    cursorPos: zast.nodepos
     sp: Spans.view
 } out ztypes.tid is {
     leaf9: cursorLeafNid :ltv :ws :cursorPos :sp
@@ -5339,7 +5340,7 @@ bareCalleeFuncId: function {
 cursorLeafNid: function {
     ltv: StringView
     ws: u64
-    cursorPos: u64
+    cursorPos: zast.nodepos
     sp: Spans.view
 } out zast.nodeid is {
     scan: ws
@@ -5361,7 +5362,7 @@ cursorLeafNid: function {
     sub: ltv.substring from: 0 to: scan
     cc: sub.count
     idCol: cc.u32.orPanic + 1
-    l1u: (cursorPos / 1048576).u32.orPanic
+    l1u: cursorPos.line
     leafNid: zast.nodeid
     bk: u8
     found: false
@@ -5460,7 +5461,7 @@ argLabelComplete: function {
     ltv: StringView
     ps: u64
     prefix: StringView
-    cursorPos: u64
+    cursorPos: zast.nodepos
 } out bool is {
     ws: ps
     for ws > 0 loop {
@@ -5489,9 +5490,9 @@ argLabelComplete: function {
     sp: (Spans
         rows: ListVal spanrow
         names: List String
-        pos: (IdMapV zast.nodeid v: u64)
+        pos: (IdMapV zast.nodeid v: zast.nodepos)
         ranges: ListVal rangerow
-        lastPos: 0
+        lastPos: (zast.nodepos line: 0 col: 0)
     )
     sp.walkProgram :prog
     # the cursor's OWN file: the leaf just before it names the unit whose call
@@ -5502,7 +5503,7 @@ argLabelComplete: function {
     callId: (sp.innerRangeOfKind
         curPos: cursorPos
         kind: 4
-        slack: 1048576
+        slack: 1
         :prog
         wantFsno: wantFs9
     )
@@ -5820,9 +5821,9 @@ signatureHelpAnswer: function {
     sp: (Spans
         rows: ListVal spanrow
         names: List String
-        pos: (IdMapV zast.nodeid v: u64)
+        pos: (IdMapV zast.nodeid v: zast.nodepos)
         ranges: ListVal rangerow
-        lastPos: 0
+        lastPos: (zast.nodepos line: 0 col: 0)
     )
     sp.walkProgram prog: snap.prog
     funcId: leafFuncIdAt :snap :sp :docRel :srcDir line1u: head.line :idCol
@@ -5913,7 +5914,7 @@ completionAnswer: function {
     # an owned copy: the completers below lend the line
     prefix: (ltv.substring from: ps to: cur).string
     if memberMode.not then {
-        curPos: l1u.u64 * 1048576 + cp1
+        curPos: zast.nodepos line: l1u col: cp1
         handledCA: (caseArmComplete
             :arr
             o: snap.st

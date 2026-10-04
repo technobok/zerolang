@@ -2289,7 +2289,9 @@ perf: $(PERFBIN)
 #
 # +678 the dentry table and its names are indexed by fsno: 0 behaviour, +675
 # source, the self-compile minting `List String i: fsno` beside `List String`.
-ALLOC_BASELINE := 2201833
+#
+# +58 a zls position is a line and a column, ordered: 0 behaviour, +58 source.
+ALLOC_BASELINE := 2201891
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
