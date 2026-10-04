@@ -670,24 +670,29 @@ A <em><strong>type method</strong></em> in these units may be a <code>.z</code> 
 <code>u8.times</code> and its seven siblings are: they construct an <code>intrange</code>
 and hand it back, and they emit and run like any other method. What was
 once true of them -- that no emit route existed -- no longer is.</p>
-<p>They carry one cost a free function does not, and it is paid by a gate
-rather than by a rule against writing them. A method body is demanded
-at the granularity of its OWNER, not of the member: resolving a type
-walks every bodied member it declares. For a type the author wrote that
-is fair, but every program touches the scalars, so a body on <code>u8</code>
-would be walked by every compile -- and a walk MINTS whatever the body
-constructs, which lands those types in the C of a program that never
-calls the method. Eight bodied <code>times</code> members cost 418 lines of C in
-<code>hello.z</code> that way, and 13,021 allocations on a self-compile.</p>
-<p>So a bodied member of a <em><strong>runtime-owned</strong></em> type is walked only where
-the program calls it (<code>bodiedMemberDeferred</code>), asked from
-<code>usedMemberDecl</code> -- the same set the collection emitters ask before
-writing a template method out. <code>forceOwnerMember</code> is asked BELOW that
-gate, because forcing a member mints its return type and would drag the
-types in regardless. A type that conforms to a protocol or facet is
-exempt: its vtable wrapper is emitted from the conformance row rather
-than from a use site, so its members are never stamped used.
-<code>--eager</code> walks everything, which is the point of it.</p>
+<p>A method body is demanded per MEMBER, as a free function is: resolving a
+type walks only the bodied members the program uses
+(<code>bodiedMemberDeferred</code>), asked from <code>usedMemberDecl</code>. A walk MINTS
+whatever the body constructs, so walking every member of every type a
+program touches would land those types in its C -- every program touches
+the scalars, so a bodied <code>u8.times</code> would be walked and emitted by every
+compile. Code that is never reached must parse; it is not
+typechecked, and <code>zl lint --full</code> and <code>--eager</code> check it.</p>
+<p>A use is any reference that reaches the member, not only a dotted read: an
+operator, a construction (a written <code>create</code>), a call or <code>for</code> over a
+callable object (its <code>call</code>), a list's <code>contains</code>, <code>==</code>
+and <code>sort</code> (the element's <code>==</code> or <code>compare</code>), a Map or Set key (its
+<code>hash</code> and <code>==</code>), the generated <code>==</code> every value type is emitted with
+(each part's own), and a function field naming a sibling method. A
+conformance uses every member its spec names, on the conformer and on each
+link of a typedef standing in for it: the vtable wrapper is emitted from
+the conformance row, not from a use site. A use of a generic instance's
+member uses the template's too, whose walk reports on the body. A use found
+after the owner walked has its member walked then (<code>walkLateUsedBodies</code>).
+<code>forceOwnerMember</code> is asked BELOW the gate, because forcing a member mints
+its return type and would drag the types in regardless. The emitter writes a
+method body only when the checker walked it. <code>--eager</code> walks everything,
+which is the point of it.</p>
 <p>With the gate, a bodied <code>times</code> on all eight scalars costs ONE line of
 C in a program that never iterates.</p>
 <h3 id="c-name-generation"><a href="#c-name-generation">8.2. C Name Generation</a></h3>

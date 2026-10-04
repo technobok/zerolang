@@ -1,0 +1,73 @@
+# A method is checked when something uses it (or under --eager), never
+# otherwise, whatever owns it: a class, a record, a typedef's own member and a
+# conformer's helper beside the members its protocol names. Each unused method
+# below is wrong, and the program compiles and runs because nothing reaches
+# them. A member the protocol names is used by the conformance itself, through
+# the vtable, though nothing calls it by name.
+
+# a shape that has an area
+Shape: protocol {
+    area: function {:this} out u64
+}
+
+Counter: class {
+    n: u64
+} as {
+    # one more
+    bump: function {:this} is {
+        this.n = this.n + 1
+    }
+    # never called: no member `count`
+    audit: function {:this} out u64 is {
+        return this.count
+    }
+}
+
+Pair: record {
+    a: i64
+    b: i64
+} as {
+    # the sum
+    sum: function {:this} out i64 is {
+        return this.a + this.b
+    }
+    # never called: a String where an i64 is declared
+    label: function {:this} out i64 is {
+        return "pair"
+    }
+}
+
+Wide: typedef Pair as {
+    # never called: no member `c`
+    third: function {:this} out i64 is {
+        return this.c
+    }
+}
+
+Square: class {
+    side: u64
+} as {
+    :Shape
+    # named by Shape, reached only through the vtable
+    area: function {:this} out u64 is {
+        return this.side * this.side
+    }
+    # never called: an undefined name
+    perimeter: function {:this} out u64 is {
+        return sides * this.side
+    }
+}
+
+# measure -- a shape's area, through the protocol
+measure: function {s: Shape} out u64 is {
+    return s.area
+}
+
+main: function is {
+    c: Counter n: 1
+    c.bump
+    p: Pair a: 2 b: 3
+    w: Wide (Pair a: 4 b: 5)
+    sq: Square side: 6
+    print "\{c.n} \{p.sum} \{w.sum} \{measure s: sq}"
+}

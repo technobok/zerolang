@@ -51013,13 +51013,11 @@ objectdefHasMethodBodies: function {ast: Ast.view op: astnode.view} out bool is 
 
 # bodiedMemberDeferred -- may this bodied member's body be left unwalked?
 #
-# A member of a RUNTIME-OWNED type is walked only where the program calls it.
-# A native type is one every program touches -- the scalars are -- so a member
-# written in zerolang on one is otherwise walked by every compile, mints
-# whatever its body constructs, and lands those types in the emitted C of a
-# program that never calls it. A type the AUTHOR declared is walked whole, as
-# it always has been; narrowing that is a separate question with a much wider
-# blast radius.
+# A method is walked only where the program uses it, like any other
+# definition: code that is never reached must parse, and is not typechecked.
+# Walking every member of a type the program touches checks, mints and emits
+# whatever each body constructs, for a program that calls one of them. A
+# member a spec names is used by the conformance (markSpecMembersUsed).
 #
 # `usedMemberDecl` is stamped by the reference that resolves the member. The
 # owner walks ONCE, and a use can come after it: reading another unit's typed
@@ -51038,28 +51036,13 @@ bodiedMemberDeferred: function {
     if st.typing.eagerAll then return false
     if memberDecl.isZero then return false
     if ownerTid.isZero then return false
-    if (st.reg.isNativeOf tid: ownerTid).not then return false
-    # A CONFORMING TYPE CARRIES ITS WHOLE SURFACE. A spec's vtable wrapper is
-    # emitted from the conformance row, not from a use site, so a member
-    # reached only through `spec.member` is never stamped used and deferring it
-    # would leave the wrapper calling a body nothing walked. The conformance
-    # force (forceAllMembers) resolves the signatures and stops there, which is
-    # why the row has to be asked here instead.
-    if (typeOwnerConforms :st tid: ownerTid) then return false
+    # a written `create` runs wherever the type is constructed, and a function
+    # field's body is the value construction stores in it; no member reference
+    # spells either
+    mn: zast.nameid.create from: (st.typing.decls.get i: memberDecl).name
+    if mn == zast.names.wkCreate then return false
+    if (st.typing.declIsFnptrFieldId parentTypeId: ownerTid nameId: mn) then return false
     return (st.typing.usedMemberDecl.has item: memberDecl.u64).not
-}
-
-# typeOwnerConforms -- does any conformance row name this type (or the template
-# it was instantiated from) as an implementation?
-typeOwnerConforms: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
-    og: st.reg.genericOriginOf :tid
-    found: false
-    for each crow: st.typing.conformance loop {
-        if (crow.implTypeId == tid) or ((og > 0) and (crow.implTypeId == og)) then {
-            found = true
-        }
-    }
-    return found
 }
 
 # checkMethodBodies -- body-check every method of one type definition (is- and
