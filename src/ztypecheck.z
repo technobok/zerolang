@@ -31279,6 +31279,9 @@ checkDottedOn: function {
     ) case some then {
         preHas = true
     } case none then null
+    # the partial a member is read through to its template, whose own type
+    # arguments the member's type takes back (partialSubstituted)
+    viaPartial: ztypes.tid
     if preHas.not then {
         udT: unitDeclOfTid :st tid: bt
         if udT.isZero then {
@@ -31297,6 +31300,7 @@ checkDottedOn: function {
         if (st.reg.isPartialOf tid: bt) then {
             pob9: st.reg.genericOriginOf tid: bt
             if pob9 > 0 then {
+                viaPartial = bt
                 bt = pob9
                 forceMemberOf :st :ast parentTypeId: bt nameId: cnId
                 mo = st.typing.declChildOfId parentTypeId: bt nameId: cnId
@@ -31327,7 +31331,7 @@ checkDottedOn: function {
     match (
         mo
     ) case some then {
-        return (checkResolvedMember
+        rm: (checkResolvedMember
             :st
             :unitDecl
             :ast
@@ -31338,9 +31342,64 @@ checkDottedOn: function {
             :coerce
             :aliasViaX
         )
+        return (memberTypeViaPartial :st :ast :unitDecl :dp partial: viaPartial tid: rm)
     } case none then {
         return (checkUnresolvedMember :st :ast :dp :bt :cnId)
     }
+}
+
+# memberTypeViaPartial -- a member's type as the dotted path at `dp` reads it:
+# read through a partial to its template, a value type takes the partial's own
+# arguments back (partialSubstituted) and the path is restamped with it; a
+# method, or a member read on no partial, is as checkResolvedMember answered
+memberTypeViaPartial: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    dp: dpref
+    partial: ztypes.tid
+    tid: ztypes.tid
+} out ztypes.tid is {
+    if partial.isZero or tid.isZero then return tid
+    if (st.reg.typetypeOf typeId: tid) == ztypes.ztypetype.functionType then return tid
+    rs: partialSubstituted :st :ast :unitDecl :partial :tid
+    if rs != tid then ztyping.nodeTypeSet tbl: st.typing.nodeType nid: dp.nid tid: rs
+    return rs
+}
+
+# partialSubstituted -- a type read off a partial instance's template, with the
+# partial's own type arguments put back: in a template walk `(array u64 to:
+# n).listView` is `(ListViewVal t: u64)`, not the array template's
+# `(ListViewVal t: t)`. A parameter the partial still leaves open stays a
+# parameter; the per-instance walk sees the completed spec.
+partialSubstituted: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    partial: ztypes.tid
+    tid: ztypes.tid
+} out ztypes.tid is {
+    tdecl: declOfTypeId :st tid: (st.reg.genericOriginOf tid: partial)
+    if tdecl.isZero then return tid
+    pn: st.reg.genericParamNamesOf :tdecl
+    n: st.reg.genericArgCount specId: partial
+    if pn.length < n then n = pn.length
+    subs: IdMapV zast.nameid v: ztypes.tid
+    idSubs: IdMapV u64 v: ztypes.genericarg
+    i: u64
+    for i < n loop {
+        ta: st.reg.genericTypeArgAt specId: partial ordinal: i
+        p: pn.get :i
+        i = i + 1
+        if ta.isZero then continue
+        subs.set key: p value: ta
+        (idSubs.set
+            key: (genericParamTidMint :st :ast :tdecl nameId: p).u64
+            value: ztypes.genericarg.typeArg ta
+        )
+    }
+    if subs.length == 0 then return tid
+    return (substitutedMemberTid :ast :st :unitDecl rf: tdecl chId: tid :subs :idSubs)
 }
 
 # declaresOwnInequality -- the member read is a `!=` this type answers itself,
