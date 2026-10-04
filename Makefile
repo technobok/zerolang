@@ -2193,7 +2193,7 @@ perf: $(PERFBIN)
 #
 # +20 math's fixed binary float, net of a typedef's print format read by its
 # base type's name: 0 behaviour, +20 source.
-ALLOC_BASELINE := 2226388
+ALLOC_BASELINE := 2225311
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
