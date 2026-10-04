@@ -1,0 +1,93 @@
+# type_member_path -- `type` in a type's members names that type, in a body as
+# in a signature: `type.make` is the type's own static `make`, `type.step` its
+# constant, `type.create` and `type.lit` its constructions. In a generic type's
+# members it is the instance being checked, so each instance reaches its own
+# members, and a result read on (`(type.make v: x).v`) is typed in the
+# template's own walk. A local named `type` is that local.
+public: unit {
+    :main
+}
+
+# Pt -- a plain record
+Pt: record {
+    v: i64
+} as {
+    # make -- a Pt holding v
+    make: function {v: i64} out type is {
+        return (meta.create :v)
+    }
+    # twice -- through `type`
+    twice: function {t: this.view} out type is {
+        return (type.make v: t.v * 2)
+    }
+}
+
+# Cell -- a generic record
+Cell: record {
+    v: i64
+} as {
+    n: u64.generic
+    # how far a step goes
+    step: 10
+    # make -- a Cell holding v
+    make: function {v: i64} out type is {
+        return (meta.create :v)
+    }
+    # bump -- a static, a constant and a parameter through `type`, its result read on
+    bump: function {t: this.view} out i64 is {
+        return (type.make v: t.v + type.step).v + n.i64.orPanic
+    }
+    # made -- the construction through `type`
+    made: function {t: this.view} out type is {
+        return (type.create v: t.v + 1)
+    }
+}
+
+# Counter -- a class
+Counter: class {
+    n: i64
+} as {
+    # fresh -- a Counter at n
+    fresh: function {n: i64} out type is {
+        return (meta.create :n)
+    }
+    # next -- through `type`
+    next: function {c: this.view} out type is {
+        return (type.fresh n: c.n + 1)
+    }
+}
+
+# shade -- a variant whose method builds an arm through `type`
+shade: variant { dark: null lit: i64 } as {
+    # brighter -- one more
+    brighter: function {s: this.view} out type is {
+        match s case dark then return (type.lit 1) case lit then return (type.lit s + 1)
+    }
+}
+
+# Box -- a local named `type` is that local
+Box: class {
+    v: i64
+} as {
+    # shadow -- the local wins
+    shadow: function {b: this.view} out i64 is {
+        type: b.v * 3
+        return type
+    }
+}
+
+main: function is {
+    p: Pt v: 4
+    print "\{p.twice.v}"
+    a: (Cell n: 3) v: 4
+    b: (Cell n: 5) v: 4
+    print "\{a.bump} \{b.bump} \{a.made.v}"
+    c: Counter n: 1
+    print "\{c.next.n}"
+    m: (shade.lit 4).brighter
+    match m case lit then print "lit \{m}" case dark then print "dark"
+    d: shade.dark.brighter
+    match d case lit then print "lit \{d}" case dark then print "dark"
+    x: Box v: 2
+    print "\{x.shadow}"
+}

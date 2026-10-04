@@ -26758,6 +26758,8 @@ nodeNamesType: function {
     }
     if isPath then return (pathNamesType :st :ast :nid)
     if nameId.isZero then return false
+    # `type` in a type's members names that type
+    if (bodySelfTypeNameId :st :ast :nameId) != nameId then return true
     if (st.isLocalName :nameId) then return false
     if (isNumericLiteralNameAt :ast ref: nameId) then return false
     return (nameNamesType :st :ast :unitDecl :nameId)
@@ -29970,7 +29972,15 @@ checkMemberNamespace: function {
         reportMemberNamespace :st :ast :dp :bt :cnId instanceMember: true functionMember: true
         return false
     }
-    baseIsAtom: (ast.nodes.get i: dp.parent).atomid
+    # a bare name of a generic type names no instance; `type` names the
+    # instance being checked
+    baseIsAtom: false
+    {
+        bn: ast.nodes.get i: dp.parent
+        if bn.atomid when (
+            (bodySelfTypeNameId :st :ast nameId: bn.name) == bn.name
+        ) then baseIsAtom = true
+    }
     if isValue.not when baseIsAtom when cnId != zast.names.wkCreate when (ownsTypeParams
         :st
         tid: bt
@@ -31824,6 +31834,13 @@ typeOfBareName: function {
 } out ztypes.tid is {
     result: ztypes.tid
     fo: walkLookupTyperefById :st scope: st.curScope :ast :unitDecl baseId: node.name
+    # `type` in a type's members names that type, in a body as in a signature,
+    # and in a generic type's members the instance being checked (spec, type):
+    # `type.make` is the type's own `make`
+    if (bodySelfTypeNameId :st :ast nameId: node.name) != node.name then {
+        sty: constructionArgTid :st :ast :unitDecl opId: node.nid baseId: node.name
+        if sty > 0 then fo = optionval.some sty
+    }
     match (
         fo
     ) case some then {
@@ -43261,6 +43278,9 @@ unresolvedBareName: function {
     # `meta` is the enclosing type's raw allocator base (meta.create):
     # contextual, never a unit-resolvable name
     if (zast.nameTextEq :ast ref: nameId s: "meta") then return ""
+    # `type` in a type's members names that type; a path through it a template
+    # walk leaves untyped is the instance walk's to check
+    if (bodySelfTypeNameId :st :ast :nameId) != nameId then return ""
     ubv: st.lookupVarId :nameId
     match (
         ubv
@@ -46446,6 +46466,10 @@ checkDottedCallableCall: function {
                 mzo.typetype == ztypes.ztypetype.functionType
             ) when mzo.isgeneric.not then isMethodFn = true
         }
+        # a method of the generic type being walked, generic only through it,
+        # is reached through `type` or `(T n: n)` as a method of the instance
+        # being checked
+        if isMethodFn.not when (ownMethodOfWalkedTemplate :st fid: dro) then isMethodFn = true
         if isMethodFn then {
             mleg: (checkResolvedMethodCall
                 :st
@@ -46470,6 +46494,25 @@ checkDottedCallableCall: function {
     return (callleg handled: false tid: result)
 }
 
+
+# ownMethodOfWalkedTemplate -- `fid` is a method of the generic type whose
+# members are being walked, marked generic only because that type is, with no
+# type parameters of its own to infer: reached through `type` or `(T n: n)` it
+# is a method of the instance being checked. A method of another generic type
+# reached through one of its partials stays the instance walk's to type.
+ownMethodOfWalkedTemplate: function {st: zenv.ZSymbolTable.view fid: ztypes.tid} out bool is {
+    if fid >= st.reg.typeById.length then return false
+    if (st.reg.typetypeOf typeId: fid) != ztypes.ztypetype.functionType then return false
+    if (st.reg.isGenericOf tid: fid).not then return false
+    if (
+        (st.reg.genericParamCountOf tdecl: (st.typing.declIdOfType typeId: fid)) > 0
+    ) then return false
+    owner: st.reg.ownerTidOf tid: fid
+    if owner.isZero or (st.reg.isGenericOf tid: owner).not then return false
+    td: enclosingTypeDecl :st scope: st.curScope
+    if td.isZero then return false
+    return (declTypeIdOf :st declId: td) == owner
+}
 
 # calleekind -- what a bare callee's resolved id turns out to be, and which of
 # the call shapes it takes.
