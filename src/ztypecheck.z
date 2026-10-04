@@ -23589,6 +23589,12 @@ markMemberUsed: function {st: zenv.ZSymbolTable ownerTid: ztypes.tid nameId: zas
     if md.isZero.not then st.typing.usedMemberDecl.add item: md.u64
     og: st.reg.genericOriginOf tid: ownerTid
     if og.isZero then return
+    # an author-declared generic's instance method no instance walk has taken
+    owedHere: md.isZero.not and (st.reg.isNativeOf tid: og).not
+    isMethod: st.typing.declIsMethodId parentTypeId: ownerTid :nameId
+    if owedHere when isMethod when (st.typing.declIsWalked declId: md).not then {
+        st.typing.instanceUseOwed = true
+    }
     od: st.typing.declMemberIdOf parentTypeId: og :nameId
     if od.isZero.not then st.typing.usedMemberDecl.add item: od.u64
 }
@@ -52576,9 +52582,12 @@ checkBodies: function {st: zenv.ZSymbolTable scope: ztypes.declid program: Ast} 
                 walkLateResolvedOwners :st :scope ast: program
                 markGeneratedEqParts :st ast: program
             }
+            # the instance sweep walks each instance member used so far, and a
+            # use it or a late walk finds after that is the next round's
             stampUnitMonoTemplates :st :scope :program
             markGeneratedEqParts :st ast: program
-            more = lateBodyPending :st
+            owed: st.typing.instanceUseOwed and (st.typing.errors.length == 0)
+            more = (lateBodyPending :st) or owed
         }
     }
 }
@@ -52882,7 +52891,7 @@ stampMonoTemplateClass: function {
     ast: Ast
     unitDecl: ztypes.declid
     scope: ztypes.declid
-    clsName: StringView
+    clsNameId: zast.nameid
     clsOpId: zast.nodeid
     ownerTid: ztypes.tid
 } is {
@@ -52897,7 +52906,7 @@ stampMonoTemplateClass: function {
         :ast
         :unitDecl
         :ownerTid
-        nameId: (zast.poolFind pool: ast.names text: clsName)
+        nameId: clsNameId
     )
     if templateTid.isZero then return
     last: st.reg.typeCount
@@ -52928,6 +52937,104 @@ stampMonoTemplateClass: function {
     }
 }
 
+# collectOwedMembers -- append the bodied members of a class template that
+# instance `monoId` owes a walk (instanceMemberOwed) to `names` and `ops`.
+collectOwedMembers: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    clsOpId: zast.nodeid
+    monoId: ztypes.tid
+    names: (ListVal zast.nameid).borrow
+    ops: (ListVal zast.nodeid).borrow
+} is {
+    cop: ast.nodes.get i: clsOpId
+    if cop.objectdef then {
+        isx1859: u64
+        for isx1859 < cop.isItems.count loop {
+            imId: zast.kidAt kids: ast.kids span: cop.isItems i: isx1859
+            isx1859 = isx1859 + 1
+            im: ast.nodes.get i: imId
+            if im.namedoperation when (isFunctionDefWithBody
+                o: (ast.nodes.get i: im.operation)
+            ) when (instanceMemberOwed :st :monoId nameId: im.name) then {
+                markInstanceMemberWalked :st :monoId nameId: im.name
+                names.append im.name
+                ops.append im.operation
+            }
+        }
+        asx1669: u64
+        for asx1669 < cop.asItems.count loop {
+            amId: zast.kidAt kids: ast.kids span: cop.asItems i: asx1669
+            asx1669 = asx1669 + 1
+            am: ast.nodes.get i: amId
+            if am.namedoperation when (isFunctionDefWithBody
+                o: (ast.nodes.get i: am.operation)
+            ) when (instanceMemberOwed :st :monoId nameId: am.name) then {
+                markInstanceMemberWalked :st :monoId nameId: am.name
+                names.append am.name
+                ops.append am.operation
+            }
+        }
+    }
+}
+
+# instanceMemberOwed -- an instance's bodied member its walk still owes: one
+# not yet walked that the program uses (bodiedMemberDeferred).
+instanceMemberOwed: function {
+    st: zenv.ZSymbolTable
+    monoId: ztypes.tid
+    nameId: zast.nameid
+} out bool is {
+    md: st.typing.declMemberIdOf parentTypeId: monoId :nameId
+    if md.isZero then return true
+    if (st.typing.declIsWalked declId: md) then return false
+    return (bodiedMemberDeferred :st ownerTid: monoId memberDecl: md).not
+}
+
+# markInstanceMemberWalked -- the instance walk is about to take this member.
+markInstanceMemberWalked: function {
+    st: zenv.ZSymbolTable
+    monoId: ztypes.tid
+    nameId: zast.nameid
+} is {
+    md: st.typing.declMemberIdOf parentTypeId: monoId :nameId
+    if md.isZero.not then st.typing.declSetWalked declId: md
+}
+
+# instanceOwesWalk -- does instance `monoId` owe a walk to any bodied member of
+# its class template? Asked before anything is gathered: the sweep revisits
+# every instance each round, and most owe nothing.
+instanceOwesWalk: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    clsOpId: zast.nodeid
+    monoId: ztypes.tid
+} out bool is {
+    cop: ast.nodes.get i: clsOpId
+    if cop.objectdef.not then return false
+    if (spanOwesWalk :st :ast span: cop.isItems :monoId) then return true
+    return (spanOwesWalk :st :ast span: cop.asItems :monoId)
+}
+
+# spanOwesWalk -- instanceOwesWalk over one block of the template's members.
+spanOwesWalk: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    span: zast.kidspan
+    monoId: ztypes.tid
+} out bool is {
+    i: u64
+    for i < span.count loop {
+        m: ast.nodes.get i: (zast.kidAt kids: ast.kids :span :i)
+        i = i + 1
+        if m.namedoperation when (isFunctionDefWithBody
+            o: (ast.nodes.get i: m.operation)
+        ) when (instanceMemberOwed :st :monoId nameId: m.name) then return true
+    }
+    return false
+}
+
+
 # stampOneClassMono -- the instance walk for one class/record mono: type args
 # bound, each template method body re-checked with `this` typed as the mono
 # and params bound through the mono's substituted method children.
@@ -52939,7 +53046,18 @@ stampOneClassMono: function {
     clsOpId: zast.nodeid
     monoId: ztypes.tid
 } is {
-    if (firstInstanceWalk :st :ast :monoId opId: clsOpId).not then return
+    # an instance is revisited for the members a use reached since its last
+    # walk; only its first visit asks whether instantiating it ends
+    if (st.typing.monosWalked.has item: monoId).not when (firstInstanceWalk
+        :st
+        :ast
+        :monoId
+        opId: clsOpId
+    ).not then return
+    if (instanceOwesWalk :st :ast :clsOpId :monoId).not then return
+    mNames: ListVal zast.nameid
+    mOps: ListVal zast.nodeid
+    collectOwedMembers :st :ast :clsOpId :monoId names: mNames ops: mOps
     minted: st.reg.typeCount
     monoNm: st.reg.nameOf tid: monoId
     prevSup: st.typing.suppressParamStamps
@@ -52949,92 +53067,69 @@ stampOneClassMono: function {
     {
         bindMonoParams :st :monoId
     }
-    mNames: List String
-    mOps: ListVal zast.nodeid
-    {
-        cop: ast.nodes.get i: clsOpId
-        if cop.objectdef then {
-            isx1859: u64
-            for isx1859 < cop.isItems.count loop {
-                imId: zast.kidAt kids: ast.kids span: cop.isItems i: isx1859
-                isx1859 = isx1859 + 1
-                im: ast.nodes.get i: imId
-                if im.namedoperation when (isFunctionDefWithBody
-                    o: (ast.nodes.get i: im.operation)
-                ) then {
-                    mNames.append (zast.nameTextCopy :ast ref: im.name)
-                    mOps.append im.operation
-                }
-            }
-            asx1669: u64
-            for asx1669 < cop.asItems.count loop {
-                amId: zast.kidAt kids: ast.kids span: cop.asItems i: asx1669
-                asx1669 = asx1669 + 1
-                am: ast.nodes.get i: amId
-                if am.namedoperation when (isFunctionDefWithBody
-                    o: (ast.nodes.get i: am.operation)
-                ) then {
-                    mNames.append (zast.nameTextCopy :ast ref: am.name)
-                    mOps.append am.operation
-                }
-            }
-        }
-    }
     st.typing.curMonoStamp = monoId
     prevL: st.typing.synthLabel.copy
     prevL9U: st.typing.synthOwnerUnit
     prevL9N: st.typing.synthOwnerName
     prevT: st.typing.currentThisTid
     errC0: st.typing.errors.length
-    mi: u64
-    for mi < mNames.length loop {
-        mnm: mNames.get i: mi
-        mop: mOps.get i: mi
-        mi = mi + 1
-        mfo: st.typing.declChildOf pool: ast.names parentTypeId: monoId name: mnm.stringView
-        match (
-            mfo
-        ) case some then {
-            st.typing.curMonoFnTid = mfo
-        } case none then {
-            st.typing.curMonoFnTid = ztypes.noTid
-        }
-        q: "\{monoNm}.\{mnm}"
-        tplDecl39Org: st.reg.genericOriginOf tid: monoId
-        classTemplateDecl: declOfTypeId :st tid: tplDecl39Org
-        mgen: st.typing.curMonoFnTid
-        if mgen.isZero.not when (st.reg.isGenericOf tid: mgen) then {
-            # a method with type parameters of its own is walked per instance
-            # of it, the instance's own arguments bound beside the type's
-            (stampClassMonoMethodMonos
+    # a walk can use another member of this instance, which is walked in the
+    # same visit
+    for mNames.length > 0 loop {
+        mi: u64
+        for mi < mNames.length loop {
+            mnmId: mNames.get i: mi
+            mop: mOps.get i: mi
+            mi = mi + 1
+            mnm: zast.nameTextCopy :ast ref: mnmId
+            mfo: st.typing.declChildOfId parentTypeId: monoId nameId: mnmId
+            match (
+                mfo
+            ) case some then {
+                st.typing.curMonoFnTid = mfo
+            } case none then {
+                st.typing.curMonoFnTid = ztypes.noTid
+            }
+            q: "\{monoNm}.\{mnm}"
+            tplDecl39Org: st.reg.genericOriginOf tid: monoId
+            classTemplateDecl: declOfTypeId :st tid: tplDecl39Org
+            mgen: st.typing.curMonoFnTid
+            if mgen.isZero.not when (st.reg.isGenericOf tid: mgen) then {
+                # a method with type parameters of its own is walked per instance
+                # of it, the instance's own arguments bound beside the type's
+                (stampClassMonoMethodMonos
+                    :st
+                    :scope
+                    :ast
+                    :unitDecl
+                    :monoId
+                    monoNm: monoNm.stringView
+                    :mop
+                    methodTid: mgen
+                )
+                st.typing.curMonoStamp = monoId
+                continue
+            }
+            cfbFr: (fnRefAt
+                :ast
+                nid: (instanceBodyAt :st :ast mono: monoId opId: mop)
+            )
+            (checkFunctionBody
                 :st
                 :scope
-                :ast
                 :unitDecl
-                :monoId
-                monoNm: monoNm.stringView
-                :mop
-                methodTid: mgen
+                defName: q.stringView
+                defNameId: zast.nameid
+                fn: cfbFr
+                thisName: monoNm.stringView
+                thisTid: monoId
+                :ast
+                declId: classTemplateDecl
             )
-            st.typing.curMonoStamp = monoId
-            continue
         }
-        cfbFr: (fnRefAt
-            :ast
-            nid: (instanceBodyAt :st :ast mono: monoId opId: mop)
-        )
-        (checkFunctionBody
-            :st
-            :scope
-            :unitDecl
-            defName: q.stringView
-            defNameId: zast.nameid
-            fn: cfbFr
-            thisName: monoNm.stringView
-            thisTid: monoId
-            :ast
-            declId: classTemplateDecl
-        )
+        mNames = ListVal zast.nameid
+        mOps = ListVal zast.nodeid
+        collectOwedMembers :st :ast :clsOpId :monoId names: mNames ops: mOps
     }
     noteInstanceErrors :st :ast mono: monoId from: errC0
     st.typing.synthLabel = prevL.take
@@ -53099,7 +53194,7 @@ stampMonoTemplateMethods: function {
     ast: Ast
     unitDecl: ztypes.declid
     scope: ztypes.declid
-    clsName: StringView
+    clsNameId: zast.nameid
     clsOpId: zast.nodeid
     ownerTid: ztypes.tid
 } is {
@@ -53113,7 +53208,7 @@ stampMonoTemplateMethods: function {
         :ast
         :unitDecl
         :ownerTid
-        nameId: (zast.poolFind pool: ast.names text: clsName)
+        nameId: clsNameId
     )
     if clsTid.isZero then return
     mTids: ListVal ztypes.tid
@@ -53126,6 +53221,9 @@ stampMonoTemplateMethods: function {
         }
     }
     mi: u64
+    # the owner's name labels each instance, and only an instance needs it
+    clsName: String
+    if mTids.length > 0 then clsName = zast.nameTextCopy :ast ref: clsNameId
     for mi < mTids.length loop {
         mt: mTids.get i: mi
         mop: mOps.get i: mi
@@ -53138,7 +53236,7 @@ stampMonoTemplateMethods: function {
                 :unitDecl
                 fnOpId: mop
                 monoId: t
-                ownerName: clsName
+                ownerName: clsName.stringView
                 ownerTid: clsTid
             )
         }
@@ -53211,35 +53309,22 @@ stampUnitMonoMembers: function {
         imId: zast.kidAt kids: program.kids span: ibody i: ibi
         ibi = ibi + 1
         imOp: zast.nodeid
-        imNm: String
         fnOp: zast.nodeid
-        fnNm: String
         clsOp: zast.nodeid
-        clsNm: String
+        mNm: zast.nameid
         {
             im: program.nodes.get i: imId
             if im.namedoperation then {
+                mNm = im.name
                 if (isUnitOp op: (program.nodes.get i: im.operation)) then {
                     imOp = im.operation
-                    imNm = (zast.poolTextCopy
-                        pool: program.names
-                        ref: im.name
-                    )
                 } else {
                     if (isFunctionDefWithBody o: (program.nodes.get i: im.operation)) then {
                         fnOp = im.operation
-                        fnNm = (zast.poolTextCopy
-                            pool: program.names
-                            ref: im.name
-                        )
                     } else {
                         opn2: program.nodes.get i: im.operation
                         if opn2.objectdef then {
                             clsOp = im.operation
-                            clsNm = (zast.poolTextCopy
-                                pool: program.names
-                                ref: im.name
-                            )
                         }
                     }
                 }
@@ -53252,7 +53337,7 @@ stampUnitMonoMembers: function {
                     :scope
                     ast: program
                     :unitDecl
-                    templateName: imNm.stringView
+                    templateNameId: mNm
                     unitOpId: imOp
                 )
             } else {
@@ -53267,7 +53352,7 @@ stampUnitMonoMembers: function {
                         ast: program
                         :unitDecl
                         :ownerTid
-                        nameId: (nameIdOf ast: program name: imNm.stringView)
+                        nameId: mNm
                     )
                 )
             }
@@ -53278,7 +53363,7 @@ stampUnitMonoMembers: function {
                 ast: program
                 :unitDecl
                 :ownerTid
-                nameId: (nameIdOf ast: program name: fnNm.stringView)
+                nameId: mNm
             )
             isGenFn: false
             if fnTid > 0 when (
@@ -53304,7 +53389,7 @@ stampUnitMonoMembers: function {
                 :scope
                 ast: program
                 :unitDecl
-                clsName: clsNm.stringView
+                clsNameId: mNm
                 clsOpId: clsOp
                 :ownerTid
             )
@@ -53313,7 +53398,7 @@ stampUnitMonoMembers: function {
                 :scope
                 ast: program
                 :unitDecl
-                clsName: clsNm.stringView
+                clsNameId: mNm
                 clsOpId: clsOp
                 :ownerTid
             )
@@ -53330,8 +53415,10 @@ stampUnitMonoMembers: function {
 # so its scopes/entries stay out of the dump log; skipped when diagnostics
 # exist (nothing will be emitted). An instance walk can mint an instance of a
 # template this sweep has already enumerated -- a generic function called from
-# a generic body with the body's own parameter -- so the sweep repeats until a
-# round mints nothing; each instance is walked once (firstInstanceWalk).
+# a generic body with the body's own parameter, and a walk can use another
+# member of an instance -- so the sweep repeats until a round mints nothing and
+# owes no instance member; each instance member is walked once
+# (instanceMemberOwed).
 stampUnitMonoTemplates: function {
     st: zenv.ZSymbolTable
     scope: ztypes.declid
@@ -53340,8 +53427,10 @@ stampUnitMonoTemplates: function {
     more: st.typing.errors.length == 0
     for more loop {
         minted: st.reg.typeCount
+        st.typing.instanceUseOwed = false
         stampUnitMonoRound :st :scope :program
-        more = (st.reg.typeCount > minted) and (st.typing.errors.length == 0)
+        grew: (st.reg.typeCount > minted) or st.typing.instanceUseOwed
+        more = grew and (st.typing.errors.length == 0)
     }
 }
 
@@ -53563,17 +53652,17 @@ stampUnitMonoRound: function {
             uId: program.units.get i: uIdx
             uIdx = uIdx + 1
             uOp: zast.nodeid
-            uNm: String
+            uNm: zast.nameid
             u: program.nodes.get i: uId
             if u.namedoperation then {
-                uNm = zast.poolTextCopy pool: program.names ref: u.name
+                uNm = u.name
                 uOp = u.operation
             }
             if uOp.isZero.not then {
                 uDecl9: (unitDeclOfNameOrOwn
                     :st
                     :scope
-                    nameId: (nameIdOf ast: program name: uNm.stringView)
+                    nameId: uNm
                 )
                 if (unitDefIsGeneric ast: program oId: uOp) then {
                     (stampMonoTemplateUnit
@@ -53581,7 +53670,7 @@ stampUnitMonoRound: function {
                         :scope
                         ast: program
                         unitDecl: uDecl9
-                        templateName: uNm.stringView
+                        templateNameId: uNm
                         unitOpId: uOp
                     )
                 } else {
@@ -53607,7 +53696,7 @@ stampMonoTemplateUnit: function {
     ast: Ast
     unitDecl: ztypes.declid
     scope: ztypes.declid
-    templateName: StringView
+    templateNameId: zast.nameid
     unitOpId: zast.nodeid
 } is {
     tplId: u64
@@ -53616,7 +53705,7 @@ stampMonoTemplateUnit: function {
             :st
             declId: (st.typing.declFindChild
                 parentDeclId: st.typing.programRoot
-                nameId: (nameIdOf :ast name: templateName)
+                nameId: templateNameId
             )
         )
         if tgo.isZero.not then tplId = tgo

@@ -2258,7 +2258,7 @@ perf: $(PERFBIN)
 #
 # +20 math's fixed binary float, net of a typedef's print format read by its
 # base type's name: 0 behaviour, +20 source.
-ALLOC_BASELINE := 2205188
+ALLOC_BASELINE := 2198478
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -3046,11 +3046,12 @@ fwd-shape-guard: bin/zc
 # Movement in EITHER direction fails: a new name means a regression, a lost one
 # means it was fixed and the row must go in the same commit.
 #
-# unused_definition_not_demanded and unused_method_not_demanded are bad under
-# `--eager` BY DESIGN: they pin that an unused definition, and an unused method,
-# is never checked, so their unused ones are wrong and `--eager` checks every
-# definition and refuses them.
-EAGER_KNOWN := unused_definition_not_demanded unused_method_not_demanded
+# unused_definition_not_demanded, unused_method_not_demanded and
+# generic_member_not_demanded are bad under `--eager` BY DESIGN: they pin that an
+# unused definition, an unused method and an instance's unused method are never
+# checked, so their unused ones are wrong and `--eager` checks every definition
+# and refuses them.
+EAGER_KNOWN := unused_definition_not_demanded unused_method_not_demanded generic_member_not_demanded
 
 eager-guard: bin/zc
 	@d=$$(mktemp -d); bad=""; \
