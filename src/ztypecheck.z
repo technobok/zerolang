@@ -8369,6 +8369,7 @@ recordConformance: function {
     if recordIt then {
         cf: st.reg.newConformance :implTypeId :specTypeId :label :labelNameId isFacet: isFacetC
         st.typing.conformance.append cf
+        markSpecMembersUsed :st impl: implTypeId spec: specTypeId
         # the vtable wrapper names every member the spec names, and it is
         # emitted from the conformance row rather than from a use site, so
         # nothing else would ever demand the impl's signatures
@@ -8545,6 +8546,7 @@ checkInstanceConformances: function {
                 :isFacet
             )
             st.typing.conformance.append cf
+            markSpecMembersUsed :st impl: mono spec: instSpec
         }
     }
 }
@@ -10515,6 +10517,7 @@ attachRecordField: function {
         parentTypeId: rid
         nameId: ftnR
     )
+    markMemberUsed :st ownerTid: rid nameId: ftnR
     mrefR: (resolvedByIdsMember
         :st
         :ast
@@ -13408,6 +13411,7 @@ resolveClassFieldEntry: function {
         parentTypeId: cid
         nameId: ftn
     )
+    markMemberUsed :st ownerTid: cid nameId: ftn
     mref: (resolvedByIdsMember
         :st
         :ast
@@ -21971,11 +21975,13 @@ constraintHolds: function {
         if (typeIsHashable :st :ast tid: argTid).not then return false
         st.typing.hashUsed.add item: argTid
         st.typing.hashKeys.add item: argTid
+        markKeyOpsUsed :ast :st tid: argTid
         return true
     } case refHashable then {
         if (st.reg.isReftypeOf tid: argTid).not then return false
         if (typeIsHashable :st :ast tid: argTid).not then return false
         st.typing.hashKeys.add item: argTid
+        markKeyOpsUsed :ast :st tid: argTid
         return true
     } case idKey then {
         # an id key is not merely hashable: the container indexes on its BITS,
@@ -23503,6 +23509,94 @@ valOpOwner: function {
     return t
 }
 
+# isValOpName -- `==`, `!=`, `hash` or `compare`: the members a value type may
+# have generated from its parts.
+isValOpName: function {cnId: zast.nameid} out bool is {
+    if (cnId == zast.names.wkOpEq) or (cnId == zast.names.wkOpNe) then return true
+    return (cnId == zast.names.wkHash) or (cnId == zast.names.wkCompare)
+}
+
+# markMemberUsed -- member `nameId` of `ownerTid` is used: the receiver's own
+# member, which is the INSTANCE's for a generic one, and the template's as
+# well, whose walk is the one that reports on its body. Nothing when there is
+# no such member.
+markMemberUsed: function {st: zenv.ZSymbolTable ownerTid: ztypes.tid nameId: zast.nameid} is {
+    if ownerTid.isZero or nameId.isZero then return
+    md: st.typing.declMemberIdOf parentTypeId: ownerTid :nameId
+    if md.isZero.not then st.typing.usedMemberDecl.add item: md.u64
+    og: st.reg.genericOriginOf tid: ownerTid
+    if og.isZero then return
+    od: st.typing.declMemberIdOf parentTypeId: og :nameId
+    if od.isZero.not then st.typing.usedMemberDecl.add item: od.u64
+}
+
+# markSpecMembersUsed -- `impl` conforms to `spec`: the vtable wrapper calls
+# every member the spec names, from the conformance row rather than a use
+# site, so each is used on every link of `impl`'s typedef chain -- a slot is
+# filled by the first link that declares the member.
+markSpecMembersUsed: function {st: zenv.ZSymbolTable impl: ztypes.tid spec: ztypes.tid} is {
+    sd: st.typing.declIdOfType typeId: spec
+    if sd.isZero then return
+    n: st.typing.declChildSlots declId: sd
+    i: u64
+    for i < n loop {
+        did: st.typing.declChildAt declId: sd index: i
+        i = i + 1
+        if did.isZero.not then {
+            mn: zast.nameid.create from: (st.typing.decls.get i: did).name
+            t: impl
+            for t.isZero.not loop {
+                markMemberUsed :st ownerTid: t nameId: mn
+                t = (st.typing.typedefBaseTid.get key: t).or d: ztypes.noTid
+            }
+        }
+    }
+}
+
+# markKeyOpsUsed -- a Map or Set key is hashed and compared by the container,
+# which no member reference spells.
+markKeyOpsUsed: function {ast: Ast.view st: zenv.ZSymbolTable tid: ztypes.tid} is {
+    markValOpUsed :ast :st :tid nameId: zast.names.wkHash depth: 0
+    markValOpUsed :ast :st :tid nameId: zast.names.wkOpEq depth: 0
+}
+
+# markValOpUsed -- `tid`'s `==`, `!=`, `hash` or `compare` is used. A written
+# member is marked used. A generated one is built from its parts' members, so
+# theirs are, and a `==` negated from a written `!=` uses that; the generated
+# member itself is not marked, as only a read of it by name asks the emitter to
+# write it out as a function.
+markValOpUsed: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable
+    tid: ztypes.tid
+    nameId: zast.nameid
+    depth: u64
+} is {
+    if tid.isZero or (depth > 64) then return
+    owner: valOpOwner :st :tid :nameId
+    if owner.isZero then return
+    md: st.typing.declMemberIdOf parentTypeId: owner :nameId
+    if md.isZero then return
+    if (st.typing.declMemberIsSynth parentTypeId: owner :nameId).not then {
+        st.typing.usedMemberDecl.add item: md.u64
+        return
+    }
+    if nameId == zast.names.wkOpEq when (valOpWritten
+        :ast
+        :st
+        :owner
+        nameId: zast.names.wkOpNe
+    ) then {
+        markValOpUsed :ast :st tid: owner nameId: zast.names.wkOpNe depth: depth + 1
+        return
+    }
+    parts: ListVal ztypes.tid
+    valPartTids :ast :st tid: owner :parts
+    for each pt: parts loop {
+        markValOpUsed :ast :st tid: pt :nameId depth: depth + 1
+    }
+}
+
 # valOpSource -- where `tid`'s member `nameId` (`==`, `hash` or `compare`)
 # comes from. Read from the DECLARATIONS alone, and no member is forced: this
 # runs while members are still resolving, and resolving a signature here would
@@ -23799,8 +23893,14 @@ refuseListMemberWithoutElemOp: function {
     elem: arrayElemTid :st tid: bt
     if elem.isZero then return false
     if (st.reg.typetypeOf typeId: elem) == ztypes.ztypetype.genericParam then return false
-    if isCmp when (listElemHasEq :st :ast :elem) then return false
-    if isSort when (listElemHasCompare :st :ast :elem) then return false
+    if isCmp when (listElemHasEq :st :ast :elem) then {
+        markValOpUsed :ast :st tid: elem nameId: zast.names.wkOpEq depth: 0
+        return false
+    }
+    if isSort when (listElemHasCompare :st :ast :elem) then {
+        markValOpUsed :ast :st tid: elem nameId: zast.names.wkCompare depth: 0
+        return false
+    }
     cn: zast.nameTextAt :ast ref: cnId
     btn: specWrittenName :st :ast tid: bt
     en: specWrittenName :st :ast tid: elem
@@ -30242,8 +30342,9 @@ checkResolvedMember: function {
         # and the member of the RECEIVER's own type. declMemberOf walks a mono
         # to the template that minted it, so mD names the template's member;
         # the emitter needs to know which INSTANCE was used
-        ownD: st.typing.declMemberIdOf parentTypeId: bt nameId: cnId
-        if ownD.isZero.not then st.typing.usedMemberDecl.add item: ownD.u64
+        markMemberUsed :st ownerTid: bt nameId: cnId
+        # a generated comparison or hash reaches its parts' own
+        if (isValOpName :cnId) then markValOpUsed :ast :st tid: bt nameId: cnId depth: 0
         # a typedef's view conversion (`Bytes.byteView`) IS its base's listView,
         # which the emitter writes only for a base instance something used
         markTypedefListViewUse :st :ast :bt :cnId
@@ -31746,6 +31847,7 @@ objectCallOf: function {st: zenv.ZSymbolTable ast: Ast t: ztypes.tid} out ztypes
         if (st.reg.typetypeOf typeId: ct) != ztypes.ztypetype.functionType then return ztypes.tid
         fnField: st.typing.declIsFnptrFieldId parentTypeId: t nameId: zast.names.wkCall
         if fnField then return ztypes.tid
+        markMemberUsed :st ownerTid: t nameId: zast.names.wkCall
         return ct
     } case none then {
         return ztypes.tid
@@ -36045,6 +36147,7 @@ probeForCallIteration: function {
         parentTypeId: vt
         nameId: zast.names.wkCall
     )
+    markMemberUsed :st ownerTid: vt nameId: zast.names.wkCall
 }
 
 
@@ -36099,6 +36202,7 @@ forIteratorElementOf: function {
         parentTypeId: vt
         nameId: zast.names.wkCall
     )
+    markMemberUsed :st ownerTid: vt nameId: zast.names.wkCall
     c1: st.typing.declChildOfId parentTypeId: vt nameId: zast.names.wkCall
     match (
         c1
@@ -36138,6 +36242,7 @@ partialForElement: function {
     og: st.reg.genericOriginOf tid: vt
     if og.isZero then return fe
     forceMemberOf :st :ast parentTypeId: og nameId: zast.names.wkCall
+    markMemberUsed :st ownerTid: vt nameId: zast.names.wkCall
     c1: (st.typing.declChildOfId parentTypeId: og nameId: zast.names.wkCall).or d: ztypes.noTid
     if c1.isZero then return fe
     rv: (methodReturnOf :st mid: c1).or d: ztypes.tid
@@ -36382,6 +36487,7 @@ forFactoryTid: function {
                             fco
                         ) case some then {
                             facId = ffo
+                            markMemberUsed :st ownerTid: fro nameId: zast.names.wkCall
                         } case none then null
                     }
                 } case none then null
@@ -41266,6 +41372,9 @@ noteSpecStandIn: function {
         :owning
     )
     st.typing.specStandIns.append su
+    # a typedef standing in on its base's conformance is boxed with a vtable of
+    # its own, whose slots call the members the spec names
+    markSpecMembersUsed :st impl: value :spec
 }
 
 # markSpecStandInOwned -- the argument at `nid` binds a parameter that owns
@@ -41408,6 +41517,7 @@ recordInheritedConformance: function {
         isFacet: isF
     )
     st.typing.conformance.append cf
+    markSpecMembersUsed :st impl: value :spec
     forceAllMembers :st :ast tid: value
 }
 
@@ -52369,15 +52479,49 @@ checkBodies: function {st: zenv.ZSymbolTable scope: ztypes.declid program: Ast} 
         resolveDemandedDefs :st :scope ast: program
         walkOwedNamespaceBodies :st :scope ast: program
         walkLateResolvedOwners :st :scope ast: program
-        # a member used only after its owner walked is walked now; that walk
-        # can demand in turn, so the completion passes run again until none is
-        for (walkLateUsedBodies :st ast: program) loop {
-            resolveDemandedDefs :st :scope ast: program
-            walkOwedNamespaceBodies :st :scope ast: program
-            walkLateResolvedOwners :st :scope ast: program
+        # a member used only after its owner walked is walked now, and an
+        # instance's walk is a use like any other; each walk can demand in
+        # turn, so the completion passes run until a round walks nothing
+        more: true
+        for more loop {
+            markGeneratedEqParts :st ast: program
+            for (walkLateUsedBodies :st ast: program) loop {
+                resolveDemandedDefs :st :scope ast: program
+                walkOwedNamespaceBodies :st :scope ast: program
+                walkLateResolvedOwners :st :scope ast: program
+                markGeneratedEqParts :st ast: program
+            }
+            stampUnitMonoTemplates :st :scope :program
+            markGeneratedEqParts :st ast: program
+            more = lateBodyPending :st
         }
-        stampUnitMonoTemplates :st :scope :program
     }
+}
+
+# lateBodyPending -- a deferred member a use has reached and nothing has walked.
+lateBodyPending: function {st: zenv.ZSymbolTable.view} out bool is {
+    for each d: st.typing.deferredDecls loop {
+        k: d.u64
+        if (st.typing.usedMemberDecl.has item: k) when (st.typing.lateBodiesWalked.has item: k
+        ).not then return true
+    }
+    return false
+}
+
+# markGeneratedEqParts -- every value type the program has is emitted with its
+# generated `==`, which calls each part's own; a part's written `==` is used by
+# it. Swept once per type, from the watermark the last sweep left.
+markGeneratedEqParts: function {st: zenv.ZSymbolTable ast: Ast.view} is {
+    t: st.typing.eqPartsSwept
+    last: st.reg.typeCount
+    for t < last loop {
+        isVal: (st.reg.isValtypeOf tid: t) and (st.reg.isGenericOf tid: t).not
+        if isVal when (st.typing.declMemberIsSynth parentTypeId: t nameId: zast.names.wkOpEq) then {
+            markValOpUsed :ast :st tid: t nameId: zast.names.wkOpEq depth: 0
+        }
+        t = t.next
+    }
+    st.typing.eqPartsSwept = t
 }
 
 # walkOwedNamespaceBodies -- walk the member bodies of every namespace or
