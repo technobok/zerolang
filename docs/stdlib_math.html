@@ -545,7 +545,7 @@ keys, such as <code>MapVR k: math.i256 V: String</code>.</p>
     match b case ok then print "\{(b * b).string}" case err then print "bad"
     print "\{(a &gt;&gt; 255).string} \{(a.neg &lt;&lt; 255).string}"
 }</code></pre>
-<p>The word loops are math's C kernels run over the limbs' own windows, so a
+<p>The word loops are math's kernels run over the limbs' own windows, so a
 fixed-width integer costs no allocation for <code>+</code>, <code>-</code>, <code>*</code>, the bit
 operators and the shifts; <code>/</code>, <code>%</code>, the text and the conversions through
 <code>BigInt</code> do allocate.</p>
@@ -607,24 +607,41 @@ the width, and <code>parse text:</code> reads as <code>BigFloat.parse</code> doe
 and rounds the result back, so it allocates as <code>BigFloat</code> does.</p>
 <h2 id="performance-and-toolchains"><a href="#performance-and-toolchains">16. Performance and toolchains</a></h2>
 <p>The loops every operation rests on -- add, subtract, shift and
-multiply-and-add over runs of 64-bit words -- are C, in
-<code>src/runtime/natives/_Z_MATH_ARITH.inc</code>, a port of Go's portable loops;
-the rest of <code>math</code> is zerolang. The loops step through the <code>system</code>
-word primitives, and those take a C compiler's fast forms where it has
-them: <code>unsigned __int128</code> for the two-word product and
-<code>__builtin_addcll</code> / <code>__builtin_subcll</code> for a carry chain, which gcc
-and clang lower to mul, adc and sbb on x86-64 and to umulh and adcs on
-aarch64. Elsewhere the primitives are portable C -- the product in four
-32-bit pieces, the carry by comparison. Both give the same words, and the
-corpus holds both to the same goldens.</p>
+multiply-and-add over runs of 64-bit words -- come in three tiers, picked when
+the program's C is compiled; the rest of <code>math</code> is zerolang.</p>
+<ul>
+<li>Assembly. On x86-64 under gcc or clang, the kernels Go's math/big
+    generates, written as GNU inline asm into
+    <code>src/runtime/natives/_Z_MATH_ARITH_AMD64.inc</code> by <code>tools/asmgen</code>, a port
+    of Go's generator. Each runs from the length where it measured faster than
+    the tier below: 4 words for add and subtract, 9 for the shifts and the
+    multiply by a word, 8 for multiply-and-add, which uses MULX, ADCX and ADOX
+    and so runs only on a processor with ADX, asked at run time. Over long runs
+    add and subtract take about 40% of the time the builtins do, shifts three
+    quarters, multiply-and-add 57%. The aarch64 kernels are generated and pass
+    the same tests but are compiled only with <code>-DZ_MATH_ASM_ARM64</code> until arm64
+    hardware has measured them.</li>
+<li>Compiler builtins. The C loops in <code>src/runtime/natives/_Z_MATH_ARITH.inc</code>,
+    a port of Go's portable loops, over the <code>system</code> word primitives, which
+    take <code>unsigned __int128</code> for the two-word product and
+    <code>__builtin_addcll</code> / <code>__builtin_subcll</code> for a carry chain where the C
+    compiler has them; gcc and clang lower those to mul, adc and sbb on x86-64
+    and to umulh and adcs on aarch64. <code>-DZ_MATH_NOASM</code> takes this tier
+    everywhere.</li>
+<li>Portable C. The same loops with the product in four 32-bit pieces and the
+    carry by comparison. <code>-DZ_WORD_PORTABLE</code> forces it under any compiler.</li>
+</ul>
+<p>All three give the same words, and the corpus holds them to the same goldens.</p>
 <p>tcc always takes the portable forms: it has no <code>__int128</code> and no carry
-builtins, and its assembler knows no MULX, ADCX or ADOX. <code>math</code> is as
-correct under tcc and slower; build with gcc or clang, <code>--release</code>, for
-speed.</p>
-<p><code>make bench-math</code> times each operation at sizes from 1 to 100,000 words
-in three builds: gcc with the fast forms, gcc with <code>-DZ_WORD_PORTABLE</code>
-forcing the portable ones, and tcc. <code>make test-math-arm64</code> builds the
-math corpus with <code>--target aarch64-linux-gnu</code> and runs it under qemu.</p>
+builtins, and compiles none of the inline asm. <code>math</code> is as correct under tcc
+and slower; build with gcc or clang, <code>--release</code>, for speed.</p>
+<p><code>make bench-math</code> times each operation at sizes from 1 to 100,000 words in
+four builds: asm, builtins, portable and tcc, after <code>make bench-math-kernels</code>
+has timed the word loops alone in the same four. A processor with two kinds of
+core is measured on one of them, <code>BENCH_CPU</code> (0 by default). <code>make
+test-math-arm64</code> builds the math corpus with <code>--target aarch64-linux-gnu</code> and
+runs it under qemu, on the builtins and then on the asm kernels; <code>make
+test-math-noasm</code> runs it on x86-64 with <code>-DZ_MATH_NOASM</code>.</p>
 </main>
 </body>
 </html>

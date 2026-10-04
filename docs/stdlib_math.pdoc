@@ -590,7 +590,7 @@ keys, such as #~"MapVR k: math.i256 V: String".
   }
   """
 
-The word loops are math's C kernels run over the limbs' own windows, so a
+The word loops are math's kernels run over the limbs' own windows, so a
 fixed-width integer costs no allocation for #~"+", #~"-", #~"*", the bit
 operators and the shifts; #~"/", #~"%", the text and the conversions through
 #~"BigInt" do allocate.
@@ -672,23 +672,41 @@ and rounds the result back, so it allocates as #~"BigFloat" does.
 #--: Performance and toolchains
 
 The loops every operation rests on -- add, subtract, shift and
-multiply-and-add over runs of 64-bit words -- are C, in
-#~"src/runtime/natives/_Z_MATH_ARITH.inc", a port of Go's portable loops;
-the rest of #~"math" is zerolang. The loops step through the #~"system"
-word primitives, and those take a C compiler's fast forms where it has
-them: #~"unsigned __int128" for the two-word product and
-#~"__builtin_addcll" / #~"__builtin_subcll" for a carry chain, which gcc
-and clang lower to mul, adc and sbb on x86-64 and to umulh and adcs on
-aarch64. Elsewhere the primitives are portable C -- the product in four
-32-bit pieces, the carry by comparison. Both give the same words, and the
-corpus holds both to the same goldens.
+multiply-and-add over runs of 64-bit words -- come in three tiers, picked when
+the program's C is compiled; the rest of #~"math" is zerolang.
+
+#ul:
+  [#*: Assembly. On x86-64 under gcc or clang, the kernels Go's math/big
+    generates, written as GNU inline asm into
+    #~"src/runtime/natives/_Z_MATH_ARITH_AMD64.inc" by #~"tools/asmgen", a port
+    of Go's generator. Each runs from the length where it measured faster than
+    the tier below: 4 words for add and subtract, 9 for the shifts and the
+    multiply by a word, 8 for multiply-and-add, which uses MULX, ADCX and ADOX
+    and so runs only on a processor with ADX, asked at run time. Over long runs
+    add and subtract take about 40% of the time the builtins do, shifts three
+    quarters, multiply-and-add 57%. The aarch64 kernels are generated and pass
+    the same tests but are compiled only with #~"-DZ_MATH_ASM_ARM64" until arm64
+    hardware has measured them.]
+  [#*: Compiler builtins. The C loops in #~"src/runtime/natives/_Z_MATH_ARITH.inc",
+    a port of Go's portable loops, over the #~"system" word primitives, which
+    take #~"unsigned __int128" for the two-word product and
+    #~"__builtin_addcll" / #~"__builtin_subcll" for a carry chain where the C
+    compiler has them; gcc and clang lower those to mul, adc and sbb on x86-64
+    and to umulh and adcs on aarch64. #~"-DZ_MATH_NOASM" takes this tier
+    everywhere.]
+  [#*: Portable C. The same loops with the product in four 32-bit pieces and the
+    carry by comparison. #~"-DZ_WORD_PORTABLE" forces it under any compiler.]
+
+All three give the same words, and the corpus holds them to the same goldens.
 
 tcc always takes the portable forms: it has no #~"__int128" and no carry
-builtins, and its assembler knows no MULX, ADCX or ADOX. #~"math" is as
-correct under tcc and slower; build with gcc or clang, #~"--release", for
-speed.
+builtins, and compiles none of the inline asm. #~"math" is as correct under tcc
+and slower; build with gcc or clang, #~"--release", for speed.
 
-#~"make bench-math" times each operation at sizes from 1 to 100,000 words
-in three builds: gcc with the fast forms, gcc with #~"-DZ_WORD_PORTABLE"
-forcing the portable ones, and tcc. #~"make test-math-arm64" builds the
-math corpus with #~"--target aarch64-linux-gnu" and runs it under qemu.
+#~"make bench-math" times each operation at sizes from 1 to 100,000 words in
+four builds: asm, builtins, portable and tcc, after #~"make bench-math-kernels"
+has timed the word loops alone in the same four. A processor with two kinds of
+core is measured on one of them, #~"BENCH_CPU" (0 by default). #~"make
+test-math-arm64" builds the math corpus with #~"--target aarch64-linux-gnu" and
+runs it under qemu, on the builtins and then on the asm kernels; #~"make
+test-math-noasm" runs it on x86-64 with #~"-DZ_MATH_NOASM".
