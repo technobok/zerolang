@@ -2161,7 +2161,10 @@ perf: $(PERFBIN)
 #
 # +51 a numeric generic argument written as a pun reads its name: 0
 # behaviour, +51 source.
-ALLOC_BASELINE := 2217624
+#
+# +145 an error is reported at the node it names, any kind: 0 behaviour, +145
+# source.
+ALLOC_BASELINE := 2217769
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
