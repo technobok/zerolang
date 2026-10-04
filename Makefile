@@ -2330,7 +2330,7 @@ emitter-guard:
 	chk "ztypecheck.resolvedByKey" "$$e1" 0; \
 	chk "ztypecheck.walkLookupTyperef" "$$e2" 5; \
 	chk "resolveTypeIdByName" "$$e3" 15; \
-	chk "userFnId" "$$e4" 21; \
+	chk "userFnId" "$$e4" 20; \
 	chk "childOwnershipText" "$$e5" 0; \
 	chk "regNameOf" "$$e6" 64; \
 	chk "ztypes.mangleVarName (both inside varCName)" "$$e7" 2; \
