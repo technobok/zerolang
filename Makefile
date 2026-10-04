@@ -2280,7 +2280,10 @@ perf: $(PERFBIN)
 # +1,173 an open-stack position is its own type (openpos): 0 behaviour, +1,170
 # source, all of it the `ListVal openpos` instance the self-compile mints (one
 # such list alone on the old tree measures +1,220).
-ALLOC_BASELINE := 2201150
+#
+# +190 a guard after a guard reads the arm off the payload: 0 behaviour, +190
+# source.
+ALLOC_BASELINE := 2201340
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

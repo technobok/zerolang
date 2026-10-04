@@ -28405,15 +28405,26 @@ seedPostGuardAlias: function {
         d: (ztypes.vid.create from: 0)
     )
     if pgrv.isZero then return
-    pgRecv: wholeLocalName :ctx vid: pgrv name: pgRawN.stringView
-    if pgRecv.length == 0 then return
     owner: (symtab.typing.postGuardTid.get key: pgid).or d: ztypes.noTid
     if owner.isZero then return
     armId: (symtab.typing.postGuardArm.get key: pgid).or d: zast.nameid
     arm: zast.poolTextAt pool: ast.names ref: armId
     if arm.length == 0 then return
+    pgRecv: wholeLocalName :ctx vid: pgrv name: pgRawN.stringView
     acc: ".".string
     if (isPtrVid :ctx vid: pgrv) then acc = "->"
+    # a subject an enclosing narrowing still holds at the guard's type -- an
+    # option narrowed to `some`, then guarded on its payload's arm -- is read
+    # through that narrowing: the arm is the payload's, not the local's. The
+    # narrowed value is the payload itself, read with `.`
+    if ((vtGet xs: ctx.narrowTid vid: pgrv).or d: ztypes.noTid) == owner then {
+        nb: vvGet xs: ctx.narrowBox vid: pgrv
+        if nb.length > 0 then {
+            pgRecv = nb.take
+            acc = "."
+        }
+    }
+    if pgRecv.length == 0 then return
     aliasText: (armAliasText
         :ast
         :symtab
