@@ -14933,8 +14933,8 @@ stackCollectionTid: function {
     return (isIdCollectionOriginOf :symtab :ctx :tid)
 }
 
-# callBaseTemp -- the temporary a stack collection base that is a call's result
-# is bound to, "" when the base needs none. Every collection leg takes the
+# callBaseTemp -- the temporary a stack collection or view base that is a call's
+# result is bound to, "" when the base needs none. Every collection leg takes the
 # base's address, and a call's result has none: `(ls.get i: 0).listView` wrote
 # `&z_get(...)`, which C rejects. Bound as a method call's receiver is
 callBaseTemp: function {
@@ -14947,7 +14947,14 @@ callBaseTemp: function {
     baseNid: zast.nodeid
 } out String is {
     if nstPtr then return ""
-    if (stackCollectionTid :symtab :ctx tid: nlid).not then return ""
+    # a view is a stack struct its walks take by address too
+    if (stackCollectionTid :symtab :ctx tid: nlid).not when (isListViewOriginOf
+        :symtab
+        :ctx
+        tid: nlid
+    ).not then {
+        return ""
+    }
     if (svRecvAddressable recv: base) then return ""
     return (hoistForAddress
         :ast
@@ -15018,6 +15025,14 @@ emitNestedCollectionBase: function {
             w9: "_\{mn2}("
             return "\{nlcb}\{w9}\{recvB})"
         }
+    }
+    # a view walks too: its read walks reached through a field or off a call's
+    # result (`l.listView.iterate`, the iterable of `for each w: l.listView`)
+    if (isListViewOriginOf :symtab :ctx tid: nlid) when (isListReadWalkMember name: mn2) then {
+        nvcb: ctxCname :ctx tid: nlid
+        recvV: colRecvRef :ctx bn: baseAtom vid: bs9vid
+        wv9: "_\{mn2}("
+        return "\{nvcb}\{wv9}\{recvV})"
     }
     # Set/Map are heap-pointer collections; their methods are emitted by the
     # collection template (not registry children), so a CLASS-dispatch
