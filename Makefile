@@ -3856,11 +3856,13 @@ generic-param-guard: bin/zl
 # A subunit file is linted as the subunit it is, reading its parent, and its
 # finding is at its own path and line; linting the PARENT reports none of the
 # subunit's findings, which are its file's, not the parent's; a subunit file its
-# parent never names is reported as unchecked.
+# parent never names is reported as unchecked. A hidden subunit named only from
+# its parent's public block is used by that naming, not reported unused (L012).
 ZLFULL_FIX := tests/fixtures/zl_full/tiered.z
 ZLFULL_DEP := tests/fixtures/zl_full/depunit/depmain.z
 ZLFULL_ONCE := tests/fixtures/zl_full/generic_once.z
 ZLFULL_SUB := tests/fixtures/zl_full/subunit/host
+ZLFULL_PUB := tests/fixtures/zl_full/pubhost.z
 zl-full-guard: bin/zl
 	@d=$$(mktemp -d); fail=0; \
 	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full $(CURDIR)/$(ZLFULL_FIX) 2>&1); \
@@ -3894,6 +3896,10 @@ zl-full-guard: bin/zl
 	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full $(CURDIR)/$(ZLFULL_SUB)/orphan.z 2>&1); rc=$$?; \
 	if [ $$rc -eq 0 ] || ! printf '%s\n' "$$out" | grep -q "did not run: no unit the roots load for 'host' comes from this file"; then \
 	  echo "zl-full-guard FAIL: a subunit file its parent never names was not reported (rc=$$rc):"; \
+	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
+	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full $(CURDIR)/$(ZLFULL_PUB) 2>&1); \
+	if printf '%s\n' "$$out" | grep -q 'L012'; then \
+	  echo "zl-full-guard FAIL: a hidden subunit named only from the public block was reported unused:"; \
 	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
 	rm -rf $$d; \
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
