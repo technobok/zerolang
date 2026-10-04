@@ -8118,6 +8118,7 @@ emitInstanceMethodCall: function {
         mco
     ) case some then {
         if (symtab.reg.typetypeOf typeId: mco) == ztypes.ztypetype.functionType then {
+            mci: methodInstanceOf :symtab mid: mco callable: call.callable
             recvExpr: emitDottedReceiver :ast :symtab :ctx callable: callableNode
             if recvExpr.length == 0 then return ""
             rIsPtr: dottedReceiverIsPtr :ast :symtab :ctx callable: callableNode
@@ -8142,7 +8143,7 @@ emitInstanceMethodCall: function {
                 :symtab
                 :ctx
                 :call
-                :mco
+                mco: mci
                 recvExpr: recvExpr.stringView
                 recvIsPtr: rIsPtr
                 posStart: 0
@@ -8150,6 +8151,18 @@ emitInstanceMethodCall: function {
         }
     } case none then null
     return ""
+}
+
+# methodInstanceOf -- the method a call reaches: a method with type parameters
+# of its own is a template, and the call reaches the instance the checker
+# minted for it and stamped on the callee
+methodInstanceOf: function {
+    symtab: zenv.ZSymbolTable.view mid: ztypes.tid callable: zast.nodeid
+} out ztypes.tid is {
+    if (isGenericFnTid :symtab tid: mid).not then return mid
+    inst: stampIdOf :symtab nid: callable
+    if (symtab.reg.genericOriginOf tid: inst) == mid then return inst
+    return mid
 }
 
 # collectionValueCallRhs -- the binding RHS is a value-producing expression
@@ -10939,7 +10952,7 @@ emitTypeQualCall: function {
     match (
         mco
     ) case some then {
-        mtid = mco
+        mtid = methodInstanceOf :symtab mid: mco callable: call.callable
     } case none then null
     if mtid.isZero then return ""
     if ((symtab.reg.typetypeOf typeId: mtid) == ztypes.ztypetype.functionType).not then {
@@ -42156,6 +42169,21 @@ emitMonoMethodAt: function {
     if mid.isZero then return
     fid: mid
     if (symtab.reg.typetypeOf typeId: fid) != ztypes.ztypetype.functionType then return
+    if (isGenericFnTid :symtab tid: fid) then {
+        # a method with type parameters of its own: each of its instances, from
+        # its own copy of the body
+        (emitMethodOrInstances
+            :ast
+            :symtab
+            :ctx
+            mid: fid
+            thisTid: monoId
+            op: (ast.nodes.get i: site.operation)
+            :declOnly
+            :buf
+        )
+        return
+    }
     fn: regNameOf :symtab tid: fid
     # the whole method is the instance's (emitUnitMonoFn)
     symtab.typing.emitMono = monoId
@@ -42328,7 +42356,7 @@ emitRecordMethods: function {
                         }
                     }
                     if skipM.not then {
-                        (emitOneMethod
+                        (emitMethodOrInstances
                             :ast
                             :symtab
                             :ctx
@@ -42377,7 +42405,7 @@ emitRecordMethods: function {
                 match (
                     imo
                 ) case some then {
-                    (emitOneMethod
+                    (emitMethodOrInstances
                         :ast
                         :symtab
                         :ctx
@@ -42391,6 +42419,39 @@ emitRecordMethods: function {
             }
             iwi = iwi + 1
         }
+    }
+}
+
+# emitMethodOrInstances -- a method, or, for a method with type parameters of
+# its own, each of its instances: the template itself is never emitted, an
+# instance is, from its own copy of the body
+emitMethodOrInstances: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    mid: ztypes.tid
+    thisTid: ztypes.tid
+    op: astnode.view
+    declOnly: bool
+    buf: String.borrow
+} is {
+    if (isGenericFnTid :symtab tid: mid).not then {
+        emitOneMethod :ast :symtab :ctx :mid :thisTid :op :declOnly :buf mono: ztypes.noTid
+        return
+    }
+    for each t: (symtab.reg.instancesOf origin: mid) loop {
+        iop: instanceOpAt :symtab mono: t op: (zast.nodeIdOf n: op)
+        (emitOneMethod
+            :ast
+            :symtab
+            :ctx
+            mid: t
+            :thisTid
+            op: (ast.nodes.get i: iop)
+            :declOnly
+            :buf
+            mono: t
+        )
     }
 }
 
@@ -43103,11 +43164,16 @@ emitOneMethod: function {
     op: astnode.view
     declOnly: bool
     buf: String.borrow
+    # the instance of a generic method this is, whose walk and body copy it is
+    # emitted from; 0 -- a method like any other
+    mono: ztypes.tid
 } is {
     mc: ctxCname :ctx tid: mid
-    # a method of an instance is the instance's whole (emitUnitMonoFn), and it
-    # is emitted from the instance's own copy
-    if (symtab.reg.genericOriginOf tid: thisTid).isZero.not then {
+    if mono.isZero.not then {
+        symtab.typing.emitMono = mono
+    } else if (symtab.reg.genericOriginOf tid: thisTid).isZero.not then {
+        # a method of an instance is the instance's whole (emitUnitMonoFn), and
+        # it is emitted from the instance's own copy
         symtab.typing.emitMono = thisTid
         iopId: instanceOpAt :symtab mono: thisTid op: (zast.nodeIdOf n: op)
         if iopId != (zast.nodeIdOf n: op) then {
@@ -43120,6 +43186,7 @@ emitOneMethod: function {
                 op: (ast.nodes.get i: iopId)
                 :declOnly
                 :buf
+                mono: ztypes.noTid
             )
             return
         }

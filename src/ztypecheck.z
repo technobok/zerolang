@@ -7276,8 +7276,15 @@ stampMemberSignature: function {
     rf: scope
     od: declOfTypeId :st tid: ownerTid
     if od.isZero.not then rf = od
+    # a generic member's own parameters are no names of that scope: a type-ref
+    # naming one stays unstamped, as a generic free function's does, and the
+    # walk binds the template's GENERIC_PARAM or an instance's substitution
+    md: ztypes.declid
+    if (st.reg.isGenericOf tid: mid) then md = declOfTypeId :st tid: mid
     rn: (st.typing.funcReturnNode.get key: mid).or d: zast.nodeid
-    stampForcedTyperef :st scope: rf :ast :unitDecl :thisName nid: rn
+    if (typeExprNamesParamOf :st :ast tdecl: md nid: rn).not then {
+        stampForcedTyperef :st scope: rf :ast :unitDecl :thisName nid: rn
+    }
     if fnNodeId.isZero then return
     fr: fnRefAt :ast nid: fnNodeId
     if fr.nid.isZero.not then {
@@ -7302,7 +7309,7 @@ stampMemberSignature: function {
                         nid: pn.operation
                         tid: ownerTid
                     )
-                } else {
+                } else if (typeExprNamesParamOf :st :ast tdecl: md nid: pn.operation).not then {
                     (stampForcedTyperef
                         :st
                         scope: rf
@@ -7317,6 +7324,34 @@ stampMemberSignature: function {
     }
 }
 
+
+# typeExprNamesParamOf -- a type expression names a generic parameter `tdecl`
+# declares anywhere inside it: under markers, as a call's callee or as one of
+# its arguments. false for a zero `tdecl`.
+typeExprNamesParamOf: function {
+    st: zenv.ZSymbolTable.view ast: Ast.view tdecl: ztypes.declid nid: zast.nodeid
+} out bool is {
+    if tdecl.isZero or nid.isZero then return false
+    n: ast.nodes.get i: nid
+    match (
+        n
+    ) case atomid then {
+        return (st.reg.isGenericParamOf :tdecl name: n.name)
+    } case dottedpath then {
+        return (typeExprNamesParamOf :st :ast :tdecl nid: n.parent)
+    } case call then {
+        if (typeExprNamesParamOf :st :ast :tdecl nid: n.callable) then return true
+        i: u64
+        for i < n.arguments.count loop {
+            a: argRefAt :ast nid: (zast.callArgAt :ast :nid :i)
+            i = i + 1
+            if (typeExprNamesParamOf :st :ast :tdecl nid: a.operation) then return true
+        }
+        return false
+    } else {
+        return false
+    }
+}
 
 # forceMemberDecl -- resolve one member's signature on demand: the rung below
 # descendNamed. The grey / done marks are read off the MEMBER's own Decl rather
@@ -20978,6 +21013,23 @@ cloneGenericMemberInto: function {
             :idSubs
         )
         deep5 = true
+        # a method with type parameters of its own stays a template on the
+        # instance: its calls mint instances of the clone, over the same
+        # parameters its signature names
+        chDecl: declOfTypeId :st tid: chId
+        if (st.reg.genericParamCountOf tdecl: chDecl) > 0 then {
+            cloneId: ((st.typing.declChildOfId
+                parentTypeId: mid
+                nameId: (zast.poolFind pool: ast.names text: chName)
+            ).or
+                d: ztypes.noTid
+            )
+            cloneDecl: st.typing.declIdOfType typeId: cloneId
+            if cloneDecl.isZero.not then {
+                st.reg.setGeneric typeId: cloneId value: true
+                st.reg.copyGenericParams from: chDecl to: cloneDecl
+            }
+        }
     }
     return deep5
 }
@@ -21450,6 +21502,9 @@ mintMono: function {
         st.reg.setValtype typeId: mid value: vto
     } case none then null
     st.reg.setGenericOrigin typeId: mid value: templateId
+    # an instance of a generic method takes its receiver where the template
+    # does, under the name the template gives it
+    st.reg.setThisParamName typeId: mid nameId: (st.reg.thisParamNameIdOf tid: templateId)
     declMonoType :st monoTid: mid :templateId
     (mintMonoTypedefBase
         :ast
@@ -45080,6 +45135,16 @@ checkGenericFnCall: function {
     # check happens at take; the pop releases it before the next statement).
     # A unit-member callee (io.eprintln) has no value root and skips.
     mcmG: st.pushCall node: call.nid
+    # a dotted base that names a type leaves the receiver to the arguments
+    # (`Acc.put a text: s`), as on the concrete leg (checkResolvedMethodCall)
+    recvVal: true
+    if call.infix.not when (methodHasThisReceiver :st mid: dro) then recvVal = (dottedBaseIsValue
+        :st
+        :ast
+        :unitDecl
+        n: (ast.nodes.get i: call.callable)
+    )
+    if recvVal.not then st.typing.callRecvFromArgs.add item: call.nid
     # the locks the call's result may keep: a hoisted argument's temporary
     # joins them AS IT IS MINTED, in argument order, so the walk and the
     # instance's own pass write to one list
@@ -45092,11 +45157,11 @@ checkGenericFnCall: function {
     st.typing.callKind.set key: call.nid value: zast.callkind.regular
     callableNode: ast.nodes.get i: call.callable
     midG: genericCallInstance :st :ast :call
-    checkGenericCallMissingArgs :ast :st :call mid: midG recvImplicit: true
+    checkGenericCallMissingArgs :ast :st :call mid: midG recvImplicit: recvVal
     rroG: methodReceiverRootId :ast n: callableNode
     # a generic method's receiver owns what it holds exactly as a concrete
     # method's does; the concrete leg reaches this through captureValueReceiver
-    ownedValueReceiver :st :ast :unitDecl :call
+    if recvVal then ownedValueReceiver :st :ast :unitDecl :call
     lockMethodReceiver :st :ast :call :dro rroId: rroG
     st.popTo marker: mcmG
     pinGenericCallResult :st mid: midG pins: pinsG
@@ -47462,6 +47527,9 @@ genericCallHolders: function {
     pNames: ListVal zast.nameid
     pHolderIds: ListVal ztypes.tid
     pHolders: ListVal zast.nameid
+    # the call passes the receiver as an argument (a type-qualified call), so
+    # it holds a positional slot like any parameter
+    recvFromArgs: bool
 } out ListVal zast.nameid is {
     gparams: st.reg.genericParamNamesOf tdecl: (st.typing.declIdOfType typeId: funcId)
     {
@@ -47488,7 +47556,7 @@ genericCallHolders: function {
                                 nameId: (zast.nameid.create from: gcNid.u32.orPanic)
                             )
                         }
-                        if isRecv.not then {
+                        if isRecv.not or recvFromArgs then {
                             pNames.append (zast.nameid.create from: gcNid.u32.orPanic)
                             cto2: cto
                             pHolderIds.append cto2
@@ -47695,6 +47763,7 @@ checkGenericCall: function {
         :pNames
         :pHolderIds
         :pHolders
+        recvFromArgs: (st.typing.callRecvFromArgs.has item: call.nid)
     )
     subs: IdMapV zast.nameid v: ztypes.tid
     errI: st.typing.errors.length
@@ -52387,16 +52456,18 @@ stampMonoTemplateFn: function {
                 :unitDecl
                 :fnOpId
                 monoId: t
+                ownerName: ""
+                ownerTid: ztypes.noTid
             )
         }
         t = t.next
     }
 }
 
-# stampOneFnMono -- the instance walk for one free-function mono: args bound,
-# params bound through the mono FUNCTION's substituted children, stamps into
-# the side table under the mono FUNCTION tid (the emitter's curThisTid for
-# fn-mono re-walks).
+# stampOneFnMono -- the instance walk for one generic function or method mono:
+# args bound, params bound through the mono FUNCTION's substituted children,
+# `this` the owner type for a method, stamps into the side table under the mono
+# FUNCTION tid (the emitter's curThisTid for fn-mono re-walks).
 stampOneFnMono: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -52404,6 +52475,10 @@ stampOneFnMono: function {
     scope: ztypes.declid
     fnOpId: zast.nodeid
     monoId: ztypes.tid
+    # the type a generic method belongs to, its receiver's type; "" and 0 for a
+    # free function
+    ownerName: StringView
+    ownerTid: ztypes.tid
 } is {
     if (firstInstanceWalk :st :ast :monoId opId: fnOpId).not then return
     minted: st.reg.typeCount
@@ -52435,8 +52510,8 @@ stampOneFnMono: function {
         defName: monoNm.stringView
         defNameId: zast.nameid
         fn: cfbFr
-        thisName: ""
-        thisTid: ztypes.tid
+        thisName: ownerName
+        thisTid: ownerTid
         :ast
         declId: fnTemplateDecl
     )
@@ -52581,6 +52656,23 @@ stampOneClassMono: function {
         q: "\{monoNm}.\{mnm}"
         tplDecl39Org: st.reg.genericOriginOf tid: monoId
         classTemplateDecl: declOfTypeId :st tid: tplDecl39Org
+        mgen: st.typing.curMonoFnTid
+        if mgen.isZero.not when (st.reg.isGenericOf tid: mgen) then {
+            # a method with type parameters of its own is walked per instance
+            # of it, the instance's own arguments bound beside the type's
+            (stampClassMonoMethodMonos
+                :st
+                :scope
+                :ast
+                :unitDecl
+                :monoId
+                monoNm: monoNm.stringView
+                :mop
+                methodTid: mgen
+            )
+            st.typing.curMonoStamp = monoId
+            continue
+        }
         cfbFr: (fnRefAt
             :ast
             nid: (instanceBodyAt :st :ast mono: monoId opId: mop)
@@ -52609,6 +52701,127 @@ stampOneClassMono: function {
     st.typing.monoParamSubst = IdMapV ztypes.tid v: ztypes.tid
     st.pop
     recordMintedBy :st :monoId minted: (ztypes.tid.create from: minted)
+}
+
+# stampClassMonoMethodMonos -- inside a class instance's walk, walk each
+# instance of its generic method `methodTid`: the type's arguments are bound
+# already, the method instance's own are bound beside them, and `this` is the
+# class instance.
+stampClassMonoMethodMonos: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    monoId: ztypes.tid
+    monoNm: StringView
+    mop: zast.nodeid
+    methodTid: ztypes.tid
+} is {
+    methodDecl: declOfTypeId :st tid: methodTid
+    for each t: (st.reg.instancesOf origin: methodTid) loop {
+        if (firstInstanceWalk :st :ast monoId: t opId: mop).not then continue
+        minted: st.reg.typeCount
+        bindMonoParams :st monoId: t
+        st.typing.curMonoStamp = t
+        st.typing.curMonoFnTid = t
+        q: st.reg.nameOf tid: t
+        cfbFr: fnRefAt :ast nid: (instanceBodyAt :st :ast mono: t opId: mop)
+        errM0: st.typing.errors.length
+        (checkFunctionBody
+            :st
+            :scope
+            :unitDecl
+            defName: q.stringView
+            defNameId: zast.nameid
+            fn: cfbFr
+            thisName: monoNm
+            thisTid: monoId
+            :ast
+            declId: methodDecl
+        )
+        noteInstanceErrors :st :ast mono: t from: errM0
+        recordMintedBy :st monoId: t minted: (ztypes.tid.create from: minted)
+    }
+}
+
+# stampMonoTemplateMethods -- walk every instance of each generic method a
+# non-generic record or class declares: a method with type parameters of its
+# own is a template exactly as a generic free function is, each instance
+# checked from its own copy of the body, `this` the type itself.
+stampMonoTemplateMethods: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    scope: ztypes.declid
+    clsName: StringView
+    clsOpId: zast.nodeid
+    ownerTid: ztypes.tid
+} is {
+    {
+        cop: ast.nodes.get i: clsOpId
+        if cop.objectdef.not then return
+    }
+    if (objectdefIsGeneric :ast o: (ast.nodes.get i: clsOpId)) then return
+    clsTid: (unitBodyMemberTid
+        :st
+        :ast
+        :unitDecl
+        :ownerTid
+        nameId: (zast.poolFind pool: ast.names text: clsName)
+    )
+    if clsTid.isZero then return
+    mTids: ListVal ztypes.tid
+    mOps: ListVal zast.nodeid
+    {
+        cop: ast.nodes.get i: clsOpId
+        if cop.objectdef then {
+            genericMethodsIn :st :ast :clsTid span: cop.isItems tids: mTids ops: mOps
+            genericMethodsIn :st :ast :clsTid span: cop.asItems tids: mTids ops: mOps
+        }
+    }
+    mi: u64
+    for mi < mTids.length loop {
+        mt: mTids.get i: mi
+        mop: mOps.get i: mi
+        mi = mi + 1
+        for each t: (st.reg.instancesOf origin: mt) loop {
+            (stampOneFnMono
+                :st
+                :scope
+                :ast
+                :unitDecl
+                fnOpId: mop
+                monoId: t
+                ownerName: clsName
+                ownerTid: clsTid
+            )
+        }
+    }
+}
+
+# genericMethodsIn -- the bodied methods among one item span of the type
+# `clsTid` that have type parameters of their own, with the function node each
+# is written at
+genericMethodsIn: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    clsTid: ztypes.tid
+    span: zast.kidspan
+    tids: ListVal ztypes.tid
+    ops: ListVal zast.nodeid
+} is {
+    k: u64
+    for k < span.count loop {
+        it: ast.nodes.get i: (zast.kidAt kids: ast.kids :span i: k)
+        k = k + 1
+        if it.namedoperation when (isFunctionDefWithBody o: (ast.nodes.get i: it.operation)) then {
+            mo: (st.typing.declChildOfId parentTypeId: clsTid nameId: it.name).or d: ztypes.noTid
+            if mo.isZero.not when (st.reg.isGenericOf tid: mo) then {
+                tids.append from: mo
+                ops.append from: it.operation
+            }
+        }
+    }
 }
 
 # unitBodyMemberTid -- the type id a unit body's definition `nameId` names: the
@@ -52741,6 +52954,15 @@ stampUnitMonoMembers: function {
         }
         if clsOp.isZero.not then {
             (stampMonoTemplateClass
+                :st
+                :scope
+                ast: program
+                :unitDecl
+                clsName: clsNm.stringView
+                clsOpId: clsOp
+                :ownerTid
+            )
+            (stampMonoTemplateMethods
                 :st
                 :scope
                 ast: program

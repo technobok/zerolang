@@ -1,0 +1,93 @@
+# generic_method -- a method with type parameters of its own is a template, as a
+# generic function is: every call instantiates it for its arguments, and the
+# instance is checked and emitted from its own copy of the body. On a class
+# and a record, on an instance of a generic class, and on a variant; its
+# receiver taken as `:this` or by name, its T forwarded to another generic
+# method, returned, and passed through a type-qualified call.
+public: unit {
+    :main
+}
+
+# Acc -- text collected from any string-like value
+Acc: class {
+    buf: String
+    n: i64
+} as {
+    # put -- append the text
+    put: function as { T: StringLike.generic } in {:this text: T.view} is {
+        this.buf.append text
+        this.n = this.n + 1
+    }
+    # twice -- put the text twice, its T forwarded
+    twice: function as { T: StringLike.generic } in {:this text: T.view} is {
+        this.put :text
+        this.put :text
+    }
+    # len -- the text's bytes and the buffer's, through a named receiver
+    len: function as { T: StringLike.generic } in {a: this.view text: T.view} out u64 is {
+        return text.length + a.buf.length
+    }
+    # pick -- one of two values of any type
+    pick: function as { t: anyval.generic } in {a: this.view x: t y: t first: bool} out t is {
+        if first then return x
+        return y
+    }
+    # plain -- a method with no parameters of its own, calling one that has
+    plain: function {:this} is {
+        this.put text: "-plain-"
+    }
+}
+
+# pt -- a record whose generic method labels its coordinate
+pt: record {
+    x: i64
+} as {
+    # label -- the text, then the coordinate
+    label: function as { T: StringLike.generic } in {p: this.view s: T.view} out String is {
+        return "\{s}=\{p.x}"
+    }
+}
+
+# Box -- a generic class whose method has a parameter of its own
+Box: class {
+    v: t
+} as {
+    t: anyval.generic
+    # show -- the value after the text
+    show: function as { T: StringLike.generic } in {b: this.view label: T.view} out String is {
+        return "\{label}:\{b.v}"
+    }
+}
+
+# shape -- a variant whose generic method names it
+shape: variant { dot: null line: i64 } as {
+    # named -- the text, then the shape
+    named: function as { T: StringLike.generic } in {s: this.view pre: T.view} out String is {
+        match s case dot then return "\{pre}dot" case line then return "\{pre}line \{s}"
+    }
+}
+
+main: function is {
+    a: Acc buf: "" n: 0
+    a.put text: "lit"
+    own: "own".string
+    a.put text: own
+    a.twice text: "tw"
+    a.plain
+    Acc.put a text: "+qual"
+    print a.buf
+    print "\{a.n}"
+    print "\{a.len text: "xyz"}"
+    print "\{a.len text: own}"
+    print "\{a.pick x: 3 y: 4 first: false}"
+    print "\{a.pick x: 2.5 y: 1.5 first: true}"
+    q: pt x: 7
+    print (q.label s: "x")
+    print (q.label s: own)
+    bi: Box t: i64 v: 5
+    print (bi.show label: "five")
+    bf: Box t: f64 v: 1.5
+    print (bf.show label: own)
+    print ((shape.line 3).named pre: ">")
+    print (shape.dot.named pre: own)
+}
