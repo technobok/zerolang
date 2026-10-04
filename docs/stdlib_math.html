@@ -105,6 +105,8 @@ Table of Contents</div>
 </li>
 <li><a href="#floatformat">floatformat</a>
 </li>
+<li><a href="#fixed-width-integers">Fixed-width integers</a>
+</li>
 <li><a href="#performance-and-toolchains">Performance and toolchains</a>
 </li>
 </ul>
@@ -120,8 +122,10 @@ written; every definition carries its own doc comment, and <code>zls</code>
 surfaces each on hover. This page is the prose and the worked examples.</p>
 <p>The <code>math</code> unit holds numbers past the machine's own. Today that is
 <strong>BigInt</strong>, a signed integer of any size, <strong>BigRat</strong>, a rational of any
-size, and <strong>BigFloat</strong>, a binary floating-point number of any precision;
-the fixed-width integers and the fixed decimals follow on the same core.</p>
+size, <strong>BigFloat</strong>, a binary floating-point number of any precision, and
+the fixed-width integers <strong>int</strong> and <strong>uint</strong> of any number of 64-bit
+words (<code>i256</code>, <code>u256</code>, <code>i512</code>, <code>u512</code>); the fixed decimals follow on
+the same core.</p>
 <p>The core is a port of Go's <code>math/big</code> at commit <code>577b91f341</code>
 (BSD-3-Clause, the license beside it in <code>math/LICENSE-GO</code>); each ported
 file names the Go file it came from. The algorithms are Go's:
@@ -151,6 +155,7 @@ one list sized before the work starts and carved into windows.</p>
 <li><a href="#roundingmode"><strong>roundingmode</strong> -- <code>variant { toNearestEven  toNearestAway  toZero  awayFromZero  toNegativeInf  toPositiveInf }</code></a></li>
 <li><a href="#accuracy"><strong>accuracy</strong> -- <code>variant { below  exact  above }</code></a></li>
 <li><a href="#floatformat"><strong>floatformat</strong> -- <code>variant { exponent  exponentUpper  fixed  general  generalUpper  hex  hexFraction  binary }</code></a></li>
+<li><a href="#fixed-width-integers"><strong>int</strong>, <strong>uint</strong> -- <code>record { limbs: (array t: u64 to: words) } as { words: u64.generic }</code>: a two's complement integer of <code>64*words</code> bits; <code>i256</code>, <code>u256</code>, <code>i512</code>, <code>u512</code> name four</a></li>
 </ul>
 <p><strong>Constants</strong></p>
 <ul>
@@ -169,6 +174,12 @@ one list sized before the work starts and carved into windows.</p>
 <li><a href="#bits"><code>&amp; | ^ andNot not &lt;&lt; &gt;&gt;</code>, <code>bit</code>, <code>setBit</code>, <code>bitLength</code>, <code>trailingZeros</code></a></li>
 <li><a href="#number-theory"><code>exp y: m:</code>, <code>gcd y:</code>, <code>gcdExtended y:</code>, <code>modInverse n:</code>, <code>sqrt</code>, <code>jacobi y:</code>, <code>probablyPrime n:</code>, <code>product from: to:</code>, <code>binomial n: k:</code></a></li>
 <li><a href="#accumulators"><code>add</code>, <code>sub</code>, <code>mul</code>, <code>quo</code>, <code>rem</code> -- in place</a></li>
+</ul>
+<p><strong>int and uint</strong></p>
+<ul>
+<li><a href="#fixed-width-integers"><code>create from:</code>, <code>fromBig from:</code>, <code>parse text: base:</code>, <code>string</code>, <code>text base:</code>, <code>big</code></a></li>
+<li><a href="#fixed-width-integers"><code>+ - * / %</code>, <code>&amp; | ^ not &lt;&lt; &gt;&gt;</code>, <code>neg</code> -- wrapping, as the <code>i64</code> family</a></li>
+<li><a href="#fixed-width-integers"><code>== != &lt; &lt;= &gt; &gt;=</code>, <code>compare</code>, <code>hash</code>; <code>i64</code>, <code>u64</code>, <code>f64</code> -- <code>resultval</code> with <code>converror</code></a></li>
 </ul>
 <p><strong>BigRat</strong></p>
 <ul>
@@ -481,7 +492,42 @@ or <code>above</code>, as a <code>BigFloat</code>'s <code>acc</code> reports it.
 <code>exponent</code> <code>'e'</code>, <code>exponentUpper</code> <code>'E'</code>, <code>fixed</code> <code>'f'</code>,
 <code>general</code> <code>'g'</code>, <code>generalUpper</code> <code>'G'</code>, <code>hex</code> <code>'x'</code>,
 <code>hexFraction</code> <code>'p'</code> and <code>binary</code> <code>'b'</code>.</p>
-<h2 id="performance-and-toolchains"><a href="#performance-and-toolchains">13. Performance and toolchains</a></h2>
+<h2 id="fixed-width-integers"><a href="#fixed-width-integers">13. Fixed-width integers</a></h2>
+<p><code>(math.int words: N)</code> and <code>(math.uint words: N)</code> hold <code>N</code> 64-bit
+words, least significant first, in two's complement: a signed or unsigned
+integer of <code>64*N</code> bits. They are records -- valtypes -- so they sit in
+other records, in variants and in arrays as plain data, and copy as values.
+<code>math.i256</code> and <code>math.u256</code> name the 4-word instances, <code>math.i512</code>
+and <code>math.u512</code> the 8-word ones; any other width is written out, as
+<code>(math.int words: 3)</code>.</p>
+<p>Their arithmetic is the <code>i64</code> family's. <code>+</code>, <code>-</code>, <code>*</code> and <code>neg</code>
+wrap modulo <code>2^(64*N)</code>; <code>/</code> truncates toward zero and <code>%</code> takes the
+dividend's sign, a zero divisor panics, and the most negative <code>int</code>
+divided by <code>-1</code> wraps to itself. <code>&lt;&lt;</code> and <code>&gt;&gt;</code> take a <code>u64</code> count:
+past the width a left shift gives 0 and a right shift 0, or <code>-1</code> for a
+negative <code>int</code>, whose right shift copies the sign in.</p>
+<p><code>create from:</code> takes an <code>i64</code> for <code>int</code> and a <code>u64</code> for <code>uint</code>,
+and defaults to 0, so a bare <code>math.i256</code> is zero. <code>fromBig from:</code>
+reads a <code>BigInt</code> and <code>parse text: base:</code> reads text as
+<code>BigInt.parse</code> does; both answer a <code>resultval</code> -- <code>outOfRange</code>, or
+<code>parseerror.overflow</code> -- when the value does not fit, rather than
+wrapping it. Out, <code>big</code> is the exact <code>BigInt</code>, <code>string</code> and
+<code>text base:</code> are its text, and <code>i64</code>, <code>u64</code> and <code>f64</code> answer a
+<code>resultval</code> as the <code>BigInt</code> conversions do.</p>
+<p><code>==</code>, <code>compare</code> and the order operators compare the values;
+<code>hash</code> agrees with <code>==</code>, so either type keys a map or set over value
+keys, such as <code>MapVR k: math.i256 V: String</code>.</p>
+<pre><code class="language-zerolang">main: function is {
+    a: math.i256 from: -1
+    b: math.u256.parse text: "0xffff_ffff_ffff_ffff_ffff" base: 0
+    match b case ok then print "\{(b * b).string}" case err then print "bad"
+    print "\{(a &gt;&gt; 255).string} \{(a.neg &lt;&lt; 255).string}"
+}</code></pre>
+<p>The word loops are math's C kernels run over the limbs' own windows, so a
+fixed-width integer costs no allocation for <code>+</code>, <code>-</code>, <code>*</code>, the bit
+operators and the shifts; <code>/</code>, <code>%</code>, the text and the conversions through
+<code>BigInt</code> do allocate.</p>
+<h2 id="performance-and-toolchains"><a href="#performance-and-toolchains">14. Performance and toolchains</a></h2>
 <p>The loops every operation rests on -- add, subtract, shift and
 multiply-and-add over runs of 64-bit words -- are C, in
 <code>src/runtime/natives/_Z_MATH_ARITH.inc</code>, a port of Go's portable loops;

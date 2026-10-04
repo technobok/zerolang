@@ -1,0 +1,617 @@
+# Fixed-width integers: `(int words: N)` and `(uint words: N)` hold N 64-bit
+# words, least significant first, in two's complement. They are valtypes, so
+# they sit in records, variants and arrays as plain data. Their arithmetic is
+# the i64 family's: `+`, `-` and `*` wrap, `/` and `%` truncate and panic on a
+# zero divisor, a shift past the width gives 0 (or, shifting a negative int
+# right, -1), and a conversion that cannot hold the value answers a resultval.
+#
+# The word loops are math's C kernels run over the limbs' own windows;
+# division, text and parsing go through the nat code and BigInt.
+
+# int -- a signed integer of 64*words bits
+int: record {
+    # the value's words, two's complement, least significant first
+    limbs: (array u64 to: words)
+} as {
+    # how many 64-bit words the value holds, at least 1
+    words: u64.generic
+
+    # the value of an i64, its sign extended through every word; 0 when
+    # `from` is left out
+    create: function {from: 0.i64} out this is {
+        r: meta.create limbs: (array u64 to: words)
+        if from < 0 then {
+            w: r.limbs.mutView
+            w.fill item: 18446744073709551615.u64
+        }
+        r.limbs.set i: 0 item: from.bits
+        return r
+    }
+
+    # fromBig -- the value of a BigInt, outOfRange when it does not fit
+    fromBig: function {from: bigint.BigInt.view} out (resultval t: type e: converror) is {
+        r: meta.create limbs: (array u64 to: words)
+        fits: false
+        {
+            w: r.limbs.mutView
+            fits = loadMagnitude z: w x: from.words.listView
+            if from.negative then negateWords z: w
+        }
+        # the sign bit has to agree with the sign: 2^(64*words-1) loads, but
+        # only its negation is an int
+        if fits when (isNegative x: r.limbs.listView) != from.negative then fits = false
+        if fits.not then return ((resultval t: type e: converror).err converror.outOfRange)
+        return ((resultval t: type e: converror).ok r)
+    }
+
+    # parse -- an int from text in a base as BigInt.parse reads it: a sign,
+    # then digits; overflow when the value does not fit
+    parse: function {text: StringView base: u64} out (resultval t: type e: parseerror) is {
+        p: bigint.BigInt.parse :text :base
+        match (
+            p
+        ) case err then return ((resultval t: type e: parseerror).err p) case ok then {
+            f: (int :words).fromBig from: p
+            match (
+                f
+            ) case ok then return ((resultval t: type e: parseerror).ok f) case err then {
+                return ((resultval t: type e: parseerror).err parseerror.overflow)
+            }
+        }
+    }
+
+    # the sum, wrapped
+    +: function {t: this.view rhs: type} out type is {
+        r: meta.create limbs: (array u64 to: words)
+        arith.addVV z: r.limbs.mutView x: t.limbs.listView y: rhs.limbs.listView
+        return r
+    }
+
+    # the difference, wrapped
+    -: function {t: this.view rhs: type} out type is {
+        r: meta.create limbs: (array u64 to: words)
+        arith.subVV z: r.limbs.mutView x: t.limbs.listView y: rhs.limbs.listView
+        return r
+    }
+
+    # the product, wrapped: its low words, which two's complement makes the
+    # same for signed operands as for their unsigned readings
+    *: function {t: this.view rhs: type} out type is {
+        r: meta.create limbs: (array u64 to: words)
+        mulLow z: r.limbs.mutView x: t.limbs.listView y: rhs.limbs.listView
+        return r
+    }
+
+    # the quotient truncated toward zero; the most negative value divided by
+    # -1 wraps to itself. Panics on a zero divisor
+    /: function {t: this.view rhs: type} out type is {
+        q: ListVal u64
+        m: ListVal u64
+        divMagnitudes :q r: m x: t.magnitude.listView y: rhs.magnitude.listView
+        r: meta.create limbs: (array u64 to: words)
+        {
+            w: r.limbs.mutView
+            storeWords z: w x: q.listView
+            if t.isNegative != rhs.isNegative then negateWords z: w
+        }
+        return r
+    }
+
+    # the remainder of `/`, with the dividend's sign. Panics on a zero divisor
+    %: function {t: this.view rhs: type} out type is {
+        q: ListVal u64
+        m: ListVal u64
+        divMagnitudes :q r: m x: t.magnitude.listView y: rhs.magnitude.listView
+        r: meta.create limbs: (array u64 to: words)
+        {
+            w: r.limbs.mutView
+            storeWords z: w x: m.listView
+            if t.isNegative then negateWords z: w
+        }
+        return r
+    }
+
+    # the negation, wrapped: the most negative value is its own
+    neg: function {t: this.view} out type is {
+        r: meta.create limbs: t.limbs
+        negateWords z: r.limbs.mutView
+        return r
+    }
+
+    # bitwise and
+    &: function {t: this.view rhs: type} out type is {
+        r: meta.create limbs: t.limbs
+        bitwiseWords z: r.limbs.mutView x: rhs.limbs.listView op: nat.bitop.and
+        return r
+    }
+
+    # bitwise or
+    |: function {t: this.view rhs: type} out type is {
+        r: meta.create limbs: t.limbs
+        bitwiseWords z: r.limbs.mutView x: rhs.limbs.listView op: nat.bitop.or
+        return r
+    }
+
+    # bitwise exclusive or
+    ^: function {t: this.view rhs: type} out type is {
+        r: meta.create limbs: t.limbs
+        bitwiseWords z: r.limbs.mutView x: rhs.limbs.listView op: nat.bitop.xor
+        return r
+    }
+
+    # every bit flipped: -1 - this
+    not: function {t: this.view} out type is {
+        r: meta.create limbs: t.limbs
+        notWords z: r.limbs.mutView
+        return r
+    }
+
+    # shifted left by rhs bits, 0 once rhs reaches the width
+    <<: function {t: this.view rhs: u64} out type is {
+        r: meta.create limbs: (array u64 to: words)
+        shiftUp z: r.limbs.mutView x: t.limbs.listView s: rhs
+        return r
+    }
+
+    # shifted right by rhs bits, the sign copied in: past the width, -1 for a
+    # negative value and 0 otherwise
+    >>: function {t: this.view rhs: u64} out type is {
+        r: meta.create limbs: (array u64 to: words)
+        fill: u64
+        if t.isNegative then fill = 18446744073709551615
+        shiftDown z: r.limbs.mutView x: t.limbs.listView s: rhs :fill
+        return r
+    }
+
+    # the order of the two as -1, 0 or 1
+    compare: function {t: this.view rhs: type} out i32 is {
+        if t.isNegative != rhs.isNegative then {
+            if t.isNegative then return -1
+            return 1
+        }
+        # one sign: two's complement orders as the unsigned words do
+        return (nat.natCmp x: t.limbs.listView y: rhs.limbs.listView)
+    }
+
+    # whether the two are the same number
+    ==: function {t: this.view rhs: type} out bool is {
+        return (nat.natCmp x: t.limbs.listView y: rhs.limbs.listView) == 0
+    }
+
+    # whether the two differ
+    !=: function {t: this.view rhs: type} out bool is {
+        return (nat.natCmp x: t.limbs.listView y: rhs.limbs.listView) != 0
+    }
+
+    # whether this is below rhs
+    <: function {t: this.view rhs: type} out bool is {
+        return (t.compare :rhs) < 0
+    }
+
+    # whether this is at most rhs
+    <=: function {t: this.view rhs: type} out bool is {
+        return (t.compare :rhs) <= 0
+    }
+
+    # whether this is above rhs
+    >: function {t: this.view rhs: type} out bool is {
+        return (t.compare :rhs) > 0
+    }
+
+    # whether this is at least rhs
+    >=: function {t: this.view rhs: type} out bool is {
+        return (t.compare :rhs) >= 0
+    }
+
+    # a hash that agrees with ==: FNV-1a over the words
+    hash: function {t: this.view} out u64 is {
+        return (hashWords x: t.limbs.listView)
+    }
+
+    # whether the value is below zero: its top bit
+    isNegative: function {t: this.view} out bool is {
+        return (isNegative x: t.limbs.listView)
+    }
+
+    # magnitude -- the absolute value's words, which hold 2^(64*words-1) too
+    magnitude: function {t: this.view} out (array u64 to: words) is {
+        a: t.limbs
+        if t.isNegative then {
+            w: a.mutView
+            negateWords z: w
+        }
+        return a
+    }
+
+    # the value as a BigInt, exactly
+    big: function {t: this.view} out bigint.BigInt is {
+        return (bigOf x: t.magnitude.listView neg: t.isNegative)
+    }
+
+    # the value as an i64, outOfRange when it does not fit
+    i64: function {t: this.view} out (resultval t: i64 e: converror) is {
+        w: t.limbs.get i: 0
+        ext: u64
+        if (w >> 63) == 1 then ext = 18446744073709551615
+        if (restIs x: t.limbs.listView w: ext).not then {
+            return ((resultval t: i64 e: converror).err converror.outOfRange)
+        }
+        return ((resultval t: i64 e: converror).ok (wordAsI64 :w))
+    }
+
+    # the value as a u64, outOfRange when it is negative or does not fit
+    u64: function {t: this.view} out (resultval t: u64 e: converror) is {
+        if t.isNegative or (restIs x: t.limbs.listView w: 0).not then {
+            return ((resultval t: u64 e: converror).err converror.outOfRange)
+        }
+        return ((resultval t: u64 e: converror).ok (t.limbs.get i: 0))
+    }
+
+    # the value as an f64 when it is one exactly, as BigInt.f64
+    f64: function {t: this.view} out (resultval t: f64 e: converror) is {
+        return t.big.f64
+    }
+
+    # the value in decimal, a leading '-' when it is negative
+    string: function {t: this.view} out String is {
+        return t.big.string
+    }
+
+    # the value in base 2 to 62, as BigInt.text
+    text: function {t: this.view base: u64} out String is {
+        return (t.big.text :base)
+    }
+}
+
+# uint -- an unsigned integer of 64*words bits
+uint: record {
+    # the value's words, least significant first
+    limbs: (array u64 to: words)
+} as {
+    # how many 64-bit words the value holds, at least 1
+    words: u64.generic
+
+    # the value of a u64; 0 when `from` is left out
+    create: function {from: 0.u64} out this is {
+        r: meta.create limbs: (array u64 to: words)
+        r.limbs.set i: 0 item: from
+        return r
+    }
+
+    # fromBig -- the value of a BigInt, outOfRange when it is negative or does
+    # not fit
+    fromBig: function {from: bigint.BigInt.view} out (resultval t: type e: converror) is {
+        r: meta.create limbs: (array u64 to: words)
+        fits: false
+        {
+            w: r.limbs.mutView
+            fits = loadMagnitude z: w x: from.words.listView
+        }
+        if from.negative or fits.not then {
+            return ((resultval t: type e: converror).err converror.outOfRange)
+        }
+        return ((resultval t: type e: converror).ok r)
+    }
+
+    # parse -- a uint from text in a base as BigInt.parse reads it; overflow
+    # when the value is negative or does not fit
+    parse: function {text: StringView base: u64} out (resultval t: type e: parseerror) is {
+        p: bigint.BigInt.parse :text :base
+        match (
+            p
+        ) case err then return ((resultval t: type e: parseerror).err p) case ok then {
+            f: (uint :words).fromBig from: p
+            match (
+                f
+            ) case ok then return ((resultval t: type e: parseerror).ok f) case err then {
+                return ((resultval t: type e: parseerror).err parseerror.overflow)
+            }
+        }
+    }
+
+    # the sum, wrapped
+    +: function {t: this.view rhs: type} out type is {
+        r: meta.create limbs: (array u64 to: words)
+        arith.addVV z: r.limbs.mutView x: t.limbs.listView y: rhs.limbs.listView
+        return r
+    }
+
+    # the difference, wrapped
+    -: function {t: this.view rhs: type} out type is {
+        r: meta.create limbs: (array u64 to: words)
+        arith.subVV z: r.limbs.mutView x: t.limbs.listView y: rhs.limbs.listView
+        return r
+    }
+
+    # the product, wrapped to its low words
+    *: function {t: this.view rhs: type} out type is {
+        r: meta.create limbs: (array u64 to: words)
+        mulLow z: r.limbs.mutView x: t.limbs.listView y: rhs.limbs.listView
+        return r
+    }
+
+    # the quotient, rounded down. Panics on a zero divisor
+    /: function {t: this.view rhs: type} out type is {
+        q: ListVal u64
+        m: ListVal u64
+        divMagnitudes :q r: m x: t.limbs.listView y: rhs.limbs.listView
+        r: meta.create limbs: (array u64 to: words)
+        storeWords z: r.limbs.mutView x: q.listView
+        return r
+    }
+
+    # the remainder of `/`. Panics on a zero divisor
+    %: function {t: this.view rhs: type} out type is {
+        q: ListVal u64
+        m: ListVal u64
+        divMagnitudes :q r: m x: t.limbs.listView y: rhs.limbs.listView
+        r: meta.create limbs: (array u64 to: words)
+        storeWords z: r.limbs.mutView x: m.listView
+        return r
+    }
+
+    # bitwise and
+    &: function {t: this.view rhs: type} out type is {
+        r: meta.create limbs: t.limbs
+        bitwiseWords z: r.limbs.mutView x: rhs.limbs.listView op: nat.bitop.and
+        return r
+    }
+
+    # bitwise or
+    |: function {t: this.view rhs: type} out type is {
+        r: meta.create limbs: t.limbs
+        bitwiseWords z: r.limbs.mutView x: rhs.limbs.listView op: nat.bitop.or
+        return r
+    }
+
+    # bitwise exclusive or
+    ^: function {t: this.view rhs: type} out type is {
+        r: meta.create limbs: t.limbs
+        bitwiseWords z: r.limbs.mutView x: rhs.limbs.listView op: nat.bitop.xor
+        return r
+    }
+
+    # every bit flipped: the largest value minus this
+    not: function {t: this.view} out type is {
+        r: meta.create limbs: t.limbs
+        notWords z: r.limbs.mutView
+        return r
+    }
+
+    # shifted left by rhs bits, 0 once rhs reaches the width
+    <<: function {t: this.view rhs: u64} out type is {
+        r: meta.create limbs: (array u64 to: words)
+        shiftUp z: r.limbs.mutView x: t.limbs.listView s: rhs
+        return r
+    }
+
+    # shifted right by rhs bits, zeros shifted in; 0 once rhs reaches the width
+    >>: function {t: this.view rhs: u64} out type is {
+        r: meta.create limbs: (array u64 to: words)
+        shiftDown z: r.limbs.mutView x: t.limbs.listView s: rhs fill: 0
+        return r
+    }
+
+    # the order of the two as -1, 0 or 1
+    compare: function {t: this.view rhs: type} out i32 is {
+        return (nat.natCmp x: t.limbs.listView y: rhs.limbs.listView)
+    }
+
+    # whether the two are the same number
+    ==: function {t: this.view rhs: type} out bool is {
+        return (nat.natCmp x: t.limbs.listView y: rhs.limbs.listView) == 0
+    }
+
+    # whether the two differ
+    !=: function {t: this.view rhs: type} out bool is {
+        return (nat.natCmp x: t.limbs.listView y: rhs.limbs.listView) != 0
+    }
+
+    # whether this is below rhs
+    <: function {t: this.view rhs: type} out bool is {
+        return (t.compare :rhs) < 0
+    }
+
+    # whether this is at most rhs
+    <=: function {t: this.view rhs: type} out bool is {
+        return (t.compare :rhs) <= 0
+    }
+
+    # whether this is above rhs
+    >: function {t: this.view rhs: type} out bool is {
+        return (t.compare :rhs) > 0
+    }
+
+    # whether this is at least rhs
+    >=: function {t: this.view rhs: type} out bool is {
+        return (t.compare :rhs) >= 0
+    }
+
+    # a hash that agrees with ==: FNV-1a over the words
+    hash: function {t: this.view} out u64 is {
+        return (hashWords x: t.limbs.listView)
+    }
+
+    # the value as a BigInt, exactly
+    big: function {t: this.view} out bigint.BigInt is {
+        return (bigOf x: t.limbs.listView neg: false)
+    }
+
+    # the value as an i64, outOfRange when it does not fit
+    i64: function {t: this.view} out (resultval t: i64 e: converror) is {
+        w: t.limbs.get i: 0
+        if ((w >> 63) == 1) or (restIs x: t.limbs.listView w: 0).not then {
+            return ((resultval t: i64 e: converror).err converror.outOfRange)
+        }
+        return ((resultval t: i64 e: converror).ok (wordAsI64 :w))
+    }
+
+    # the value as a u64, outOfRange when it does not fit
+    u64: function {t: this.view} out (resultval t: u64 e: converror) is {
+        if (restIs x: t.limbs.listView w: 0).not then {
+            return ((resultval t: u64 e: converror).err converror.outOfRange)
+        }
+        return ((resultval t: u64 e: converror).ok (t.limbs.get i: 0))
+    }
+
+    # the value as an f64 when it is one exactly, as BigInt.f64
+    f64: function {t: this.view} out (resultval t: f64 e: converror) is {
+        return t.big.f64
+    }
+
+    # the value in decimal
+    string: function {t: this.view} out String is {
+        return t.big.string
+    }
+
+    # the value in base 2 to 62, as BigInt.text
+    text: function {t: this.view base: u64} out String is {
+        return (t.big.text :base)
+    }
+}
+
+# isNegative -- whether two's complement words read as negative: the top bit
+isNegative: function {x: (ListViewVal u64).view} out bool is {
+    return ((x.get i: x.length - 1) >> 63) == 1
+}
+
+# restIs -- whether every word above the lowest is w
+restIs: function {x: (ListViewVal u64).view w: u64} out bool is {
+    i: 1.u64
+    for i < x.length loop {
+        if (x.get :i) != w then return false
+        i = i + 1
+    }
+    return true
+}
+
+# wordAsI64 -- a word read as two's complement
+wordAsI64: function {w: u64} out i64 is {
+    if (w >> 63) == 0 then return w.i64.orPanic
+    return 0 - w.not.i64.orPanic - 1
+}
+
+# loadMagnitude -- z = x, a normalized magnitude, zero-extended; false when x
+# has more words than z
+loadMagnitude: function {z: (SpanVal u64).borrow x: (ListViewVal u64).view} out bool is {
+    if x.length > z.length then return false
+    z.clear
+    lo: z.slice from: 0 to: x.length
+    lo.copyFrom from: x
+    return true
+}
+
+# storeWords -- z = x for an x no longer than z, zero-extended
+storeWords: function {z: (SpanVal u64).borrow x: (ListViewVal u64).view} is {
+    z.clear
+    lo: z.slice from: 0 to: x.length
+    lo.copyFrom from: x
+}
+
+# negateWords -- z = -z, two's complement: every bit flipped, then 1 added
+negateWords: function {z: (SpanVal u64).borrow} is {
+    notWords :z
+    arith.addVWInPlace :z y: 1
+}
+
+# notWords -- every bit of z flipped
+notWords: function {z: (SpanVal u64).borrow} is {
+    i: u64
+    for i < z.length loop {
+        z.set :i item: (z.get :i).not
+        i = i + 1
+    }
+}
+
+# bitwiseWords -- z = z op x, word by word over equal lengths
+bitwiseWords: function {z: (SpanVal u64).borrow x: (ListViewVal u64).view op: nat.bitop} is {
+    i: u64
+    for i < z.length loop {
+        a: z.get :i
+        b: x.get :i
+        match (
+            op
+        ) case and then {
+            z.set :i item: a & b
+        } case or then {
+            z.set :i item: a | b
+        } case xor then {
+            z.set :i item: a ^ b
+        } case andNot then {
+            z.set :i item: a & b.not
+        }
+        i = i + 1
+    }
+}
+
+# mulLow -- z = the low len(z) words of x*y over equal lengths, z neither
+# operand: each word of y adds its row of products into z, the words past the
+# top dropped
+mulLow: function {z: (SpanVal u64).borrow x: (ListViewVal u64).view y: (ListViewVal u64).view} is {
+    n: z.length
+    z.clear
+    j: u64
+    for j < n loop {
+        yj: y.get i: j
+        if yj != 0 then {
+            arith.addMulVVW z: (z.slice from: j to: n) x: (x.slice from: 0 to: n - j) y: yj
+        }
+        j = j + 1
+    }
+}
+
+# divMagnitudes -- q = x / y and r = x % y for unsigned words, each normalized
+# before natDiv sees it. Panics on a zero divisor
+divMagnitudes: function {
+    q: (ListVal u64).borrow
+    r: (ListVal u64).borrow
+    x: (ListViewVal u64).view
+    y: (ListViewVal u64).view
+} is {
+    (natdiv.natDiv
+        :q
+        :r
+        u: (x.slice from: 0 to: (natdiv.normLength :x))
+        v: (y.slice from: 0 to: (natdiv.normLength x: y))
+    )
+}
+
+# shiftUp -- z = x << s over equal lengths, the bits past the top dropped; all
+# zeros once s reaches the width
+shiftUp: function {z: (SpanVal u64).borrow x: (ListViewVal u64).view s: u64} is {
+    n: z.length
+    z.clear
+    if s >= (n * 64) then return
+    k: s / 64
+    arith.lshVU z: (z.slice from: k to: n) x: (x.slice from: 0 to: n - k) s: s % 64
+}
+
+# shiftDown -- z = x >> s over equal lengths, the vacated top bits taken from
+# fill (0, or all ones for a negative int); all fill once s reaches the width
+shiftDown: function {z: (SpanVal u64).borrow x: (ListViewVal u64).view s: u64 fill: u64} is {
+    n: z.length
+    z.fill item: fill
+    if s >= (n * 64) then return
+    k: s / 64
+    b: s % 64
+    arith.rshVU z: (z.slice from: 0 to: n - k) x: (x.slice from: k to: n) s: b
+    if b != 0 then {
+        top: n - k - 1
+        z.set i: top item: (z.get i: top) | (fill << (64.u64 - b))
+    }
+}
+
+# hashWords -- FNV-1a over the words
+hashWords: function {x: (ListViewVal u64).view} out u64 is {
+    h: 14695981039346656037.u64
+    for each w: x loop h = ((h ^ w).mulWide rhs: 1099511628211).lo
+    return h
+}
+
+# bigOf -- the BigInt with this magnitude and sign
+bigOf: function {x: (ListViewVal u64).view neg: bool} out bigint.BigInt is {
+    a: ListVal u64
+    nat.natSet z: a :x
+    nat.natNorm z: a
+    return (bigint.BigInt.fromParts neg: neg and (a.length > 0) abs: a.take)
+}

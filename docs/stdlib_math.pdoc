@@ -40,8 +40,10 @@ surfaces each on hover. This page is the prose and the worked examples.
 
 The #~"math" unit holds numbers past the machine's own. Today that is
 #b:"BigInt", a signed integer of any size, #b:"BigRat", a rational of any
-size, and #b:"BigFloat", a binary floating-point number of any precision;
-the fixed-width integers and the fixed decimals follow on the same core.
+size, #b:"BigFloat", a binary floating-point number of any precision, and
+the fixed-width integers #b:"int" and #b:"uint" of any number of 64-bit
+words (#~"i256", #~"u256", #~"i512", #~"u512"); the fixed decimals follow on
+the same core.
 
 The core is a port of Go's #~"math/big" at commit #~"577b91f341"
 (BSD-3-Clause, the license beside it in #~"math/LICENSE-GO"); each ported
@@ -79,6 +81,7 @@ one list sized before the work starts and carved into windows.
   [#*: #> to=roundingmode: #b:"roundingmode" -- #~"variant { toNearestEven  toNearestAway  toZero  awayFromZero  toNegativeInf  toPositiveInf }"]
   [#*: #> to=accuracy: #b:"accuracy" -- #~"variant { below  exact  above }"]
   [#*: #> to=floatformat: #b:"floatformat" -- #~"variant { exponent  exponentUpper  fixed  general  generalUpper  hex  hexFraction  binary }"]
+  [#*: #> to=fixed-width-integers: #b:"int", #b:"uint" -- #~"record { limbs: (array t: u64 to: words) } as { words: u64.generic }": a two's complement integer of #~"64*words" bits; #~"i256", #~"u256", #~"i512", #~"u512" name four]
 
 #p: #b:"Constants"
 
@@ -99,6 +102,13 @@ one list sized before the work starts and carved into windows.
   [#*: #> to=bits: #~"& | ^ andNot not << >>", #~"bit", #~"setBit", #~"bitLength", #~"trailingZeros"]
   [#*: #> to=number-theory: #~"exp y: m:", #~"gcd y:", #~"gcdExtended y:", #~"modInverse n:", #~"sqrt", #~"jacobi y:", #~"probablyPrime n:", #~"product from: to:", #~"binomial n: k:"]
   [#*: #> to=accumulators: #~"add", #~"sub", #~"mul", #~"quo", #~"rem" -- in place]
+
+#p: #b:"int and uint"
+
+#ul:
+  [#*: #> to=fixed-width-integers: #~"create from:", #~"fromBig from:", #~"parse text: base:", #~"string", #~"text base:", #~"big"]
+  [#*: #> to=fixed-width-integers: #~"+ - * / %", #~"& | ^ not << >>", #~"neg" -- wrapping, as the #~"i64" family]
+  [#*: #> to=fixed-width-integers: #~"== != < <= > >=", #~"compare", #~"hash"; #~"i64", #~"u64", #~"f64" -- #~"resultval" with #~"converror"]
 
 #p: #b:"BigRat"
 
@@ -519,6 +529,51 @@ How #~"BigFloat.text" spells a value, Go's format letters by name:
 #~"exponent" #~"'e'", #~"exponentUpper" #~"'E'", #~"fixed" #~"'f'",
 #~"general" #~"'g'", #~"generalUpper" #~"'G'", #~"hex" #~"'x'",
 #~"hexFraction" #~"'p'" and #~"binary" #~"'b'".
+
+
+#--: Fixed-width integers
+
+#~"(math.int words: N)" and #~"(math.uint words: N)" hold #~"N" 64-bit
+words, least significant first, in two's complement: a signed or unsigned
+integer of #~"64*N" bits. They are records -- valtypes -- so they sit in
+other records, in variants and in arrays as plain data, and copy as values.
+#~"math.i256" and #~"math.u256" name the 4-word instances, #~"math.i512"
+and #~"math.u512" the 8-word ones; any other width is written out, as
+#~"(math.int words: 3)".
+
+Their arithmetic is the #~"i64" family's. #~"+", #~"-", #~"*" and #~"neg"
+wrap modulo #~"2^(64*N)"; #~"/" truncates toward zero and #~"%" takes the
+dividend's sign, a zero divisor panics, and the most negative #~"int"
+divided by #~"-1" wraps to itself. #~"<<" and #~">>" take a #~"u64" count:
+past the width a left shift gives 0 and a right shift 0, or #~"-1" for a
+negative #~"int", whose right shift copies the sign in.
+
+#~"create from:" takes an #~"i64" for #~"int" and a #~"u64" for #~"uint",
+and defaults to 0, so a bare #~"math.i256" is zero. #~"fromBig from:"
+reads a #~"BigInt" and #~"parse text: base:" reads text as
+#~"BigInt.parse" does; both answer a #~"resultval" -- #~"outOfRange", or
+#~"parseerror.overflow" -- when the value does not fit, rather than
+wrapping it. Out, #~"big" is the exact #~"BigInt", #~"string" and
+#~"text base:" are its text, and #~"i64", #~"u64" and #~"f64" answer a
+#~"resultval" as the #~"BigInt" conversions do.
+
+#~"==", #~"compare" and the order operators compare the values;
+#~"hash" agrees with #~"==", so either type keys a map or set over value
+keys, such as #~"MapVR k: math.i256 V: String".
+
+#code language=zerolang: """
+  main: function is {
+      a: math.i256 from: -1
+      b: math.u256.parse text: "0xffff_ffff_ffff_ffff_ffff" base: 0
+      match b case ok then print "\{(b * b).string}" case err then print "bad"
+      print "\{(a >> 255).string} \{(a.neg << 255).string}"
+  }
+  """
+
+The word loops are math's C kernels run over the limbs' own windows, so a
+fixed-width integer costs no allocation for #~"+", #~"-", #~"*", the bit
+operators and the shifts; #~"/", #~"%", the text and the conversions through
+#~"BigInt" do allocate.
 
 
 #--: Performance and toolchains
