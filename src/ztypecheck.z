@@ -55124,7 +55124,21 @@ constFitsKindMessage: function {
         return (intRangeErr value: vt.stringView :k)
     }
     if v.kind.fvalKind.not then return ""
-    return "Numeric type specifier must be float for a float literal"
+    # a float landing where an integer is taken: a float literal converts to
+    # the float types alone, whatever its value
+    ft: spelling.string
+    if ft.length == 0 then ft = floatLiteralText :st :v
+    return (ztypes.floatLiteralErr lit: ft.stringView target: (ztypes.numkindName :k).stringView)
+}
+
+# floatLiteralText -- a folded float as a literal spells it: a whole value
+# shows its point, or it reads as an integer.
+floatLiteralText: function {st: zenv.ZSymbolTable.view v: ztypes.cval} out String is {
+    ft: constFloatText :st :v
+    if (ft.stringView.indexOf needle: ".").none when (ft.stringView.indexOf needle: "e").none then {
+        ft.append ".0"
+    }
+    return ft
 }
 
 # intRangeErr -- the out-of-range report for integer kind `k`, its bounds spelled
@@ -55484,12 +55498,15 @@ constOfConversion: function {
     if v.kind.fvalKind then litTid = st.reg.literalFloatTid
     litConv: st.typing.declMemberIdOf parentTypeId: litTid nameId: targetId
     if v.numTid.isZero when litConv.isZero then {
+        ft: floatLiteralText :st :v
+        tn: zast.nameTextCopy :ast ref: targetId
+        fm: ztypes.floatLiteralErr lit: ft.stringView target: tn.stringView
         (constFailMismatch
             :st
             :nid
             :ln
             :co
-            msg: "Numeric type specifier must be float for a float literal"
+            msg: fm.stringView
         )
         return ztypes.noConst
     }
