@@ -95,11 +95,17 @@ NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 # Keep pattern-chain intermediates (the per-example .c files) for debugging.
 .SECONDARY:
 
+# TOOLDIRS / TOOLSRC -- the developer tools under tools/, each a program of its
+# own units (tools/README.md), and their sources: every check that reaches src/
+# reaches them too.
+TOOLDIRS := $(patsubst %/,%,$(wildcard tools/*/))
+TOOLSRC := $(wildcard tools/*/*.z)
+
 # ZLSCOPE -- what the zl *linter* checks: the tool + compiler sources, and every unit
 # under lib/system -- which is the stdlib proper (io/os/collections/system/cli/core) as
 # well as the relocated front-end, because they share that directory. What it does NOT
 # reach is examples/ and tests/fixtures/; a rule that must hold there needs its own guard.
-ZLSCOPE := src/*.z lib/system/*.z lib/system/system/*.z lib/system/math/*.z tests/unit/*.z
+ZLSCOPE := src/*.z lib/system/*.z lib/system/system/*.z lib/system/math/*.z tests/unit/*.z $(TOOLSRC)
 # The --full tier checks a file as the unit it IS: a top-level unit under its
 # roots, or a subunit (lib/system/system/ holds `system`'s) inside the parent
 # beside its folder. style-lint gives each tree its roots: tests/unit's units
@@ -107,7 +113,7 @@ ZLSCOPE := src/*.z lib/system/*.z lib/system/system/*.z lib/system/math/*.z test
 ZLFULLSCOPE := src/*.z lib/system/*.z lib/system/system/*.z lib/system/math/*.z
 # FMTSCOPE -- what the zl *formatter* checks: every unit the printer lays out, the unit
 # tests included; tests/fixtures/ stays as written, since its files are inputs.
-FMTSCOPE := src/*.z lib/system/*.z lib/system/system/*.z lib/system/math/*.z examples/*.z tests/unit/*.z
+FMTSCOPE := src/*.z lib/system/*.z lib/system/system/*.z lib/system/math/*.z examples/*.z tests/unit/*.z $(TOOLSRC)
 
 # all -- the default target: build the three tools (compiler, linter/formatter,
 # language server). `make check` / `make test` are the gates; `make build` compiles
@@ -122,7 +128,7 @@ check: style-lint-fast complexity-report
 # one per line (score, file:line, name), highest first, under $(BUILDDIR); the
 # summary line is what check and ci print. Parse tier, so no project flags. The
 # ratchet that holds the count per file is tests/fixtures/arch_baseline.txt.
-COMPLEXITY_SCOPE := src/*.z lib/system/*.z lib/system/system/*.z lib/system/math/*.z tests/unit/*.z examples/*.z
+COMPLEXITY_SCOPE := src/*.z lib/system/*.z lib/system/system/*.z lib/system/math/*.z tests/unit/*.z examples/*.z $(TOOLSRC)
 COMPLEXITY_TSV := $(BUILDDIR)/cognitive-complexity.tsv
 complexity-report: bin/zl
 	@mkdir -p $(BUILDDIR)
@@ -145,6 +151,8 @@ style-lint-fast: bin/zl
 style-lint: bin/zl
 	bin/zl lint --full --src src --system lib/system $(ZLFULLSCOPE)
 	bin/zl lint --full --src tests/unit --src src --system lib/system tests/unit/*.z
+	@for d in $(TOOLDIRS); do echo "bin/zl lint --full --src $$d --system lib/system $$d/*.z"; \
+	  bin/zl lint --full --src $$d --system lib/system $$d/*.z || exit 1; done
 	bin/zl format --check $(FMTSCOPE)
 
 # out/ztestrunner -- the self-hosted corpus runner (src/ztestrunner.z), built
