@@ -109,6 +109,8 @@ Table of Contents</div>
 </li>
 <li><a href="#fixed-decimals">Fixed decimals</a>
 </li>
+<li><a href="#fixed-binary-floats">Fixed binary floats</a>
+</li>
 <li><a href="#performance-and-toolchains">Performance and toolchains</a>
 </li>
 </ul>
@@ -128,7 +130,8 @@ size, <strong>BigFloat</strong>, a binary floating-point number of any precision
 the fixed-width integers <strong>int</strong> and <strong>uint</strong> of any number of 64-bit
 words (<code>i256</code>, <code>u256</code>, <code>i512</code>, <code>u512</code>), and the SQL <code>NUMERIC</code>
 fixed decimals <strong>decimal32</strong>, <strong>decimal64</strong>, <strong>decimal128</strong> and
-<strong>decimal256</strong>.</p>
+<strong>decimal256</strong>, and <strong>float</strong>, a binary float of a fixed number of
+mantissa words.</p>
 <p>The core is a port of Go's <code>math/big</code> at commit <code>577b91f341</code>
 (BSD-3-Clause, the license beside it in <code>math/LICENSE-GO</code>); each ported
 file names the Go file it came from. The algorithms are Go's:
@@ -158,6 +161,7 @@ one list sized before the work starts and carved into windows.</p>
 <li><a href="#roundingmode"><strong>roundingmode</strong> -- <code>variant { toNearestEven  toNearestAway  toZero  awayFromZero  toNegativeInf  toPositiveInf }</code></a></li>
 <li><a href="#accuracy"><strong>accuracy</strong> -- <code>variant { below  exact  above }</code></a></li>
 <li><a href="#floatformat"><strong>floatformat</strong> -- <code>variant { exponent  exponentUpper  fixed  general  generalUpper  hex  hexFraction  binary }</code></a></li>
+<li><a href="#fixed-binary-floats"><strong>float</strong> -- <code>record { negative  form  exp: i32  mant: (array u64 to: words) } as { words: u64.generic }</code>: BigFloat's semantics at <code>64*words</code> bits, held inline</a></li>
 <li><a href="#fixed-decimals"><strong>decimal32</strong>, <strong>decimal64</strong>, <strong>decimal128</strong>, <strong>decimal256</strong> -- <code>record { coef } as { precision: u8.generic  scale: u8.generic }</code>: <code>NUMERIC(precision, scale)</code> over 9, 18, 38 or 76 digits</a></li>
 <li><a href="#fixed-decimals"><strong>decerror</strong> -- <code>variant { overflow  divisionByZero }</code>: why a decimal is invalid</a></li>
 <li><a href="#fixed-width-integers"><strong>int</strong>, <strong>uint</strong> -- <code>record { limbs: (array t: u64 to: words) } as { words: u64.generic }</code>: a two's complement integer of <code>64*words</code> bits; <code>i256</code>, <code>u256</code>, <code>i512</code>, <code>u512</code> name four</a></li>
@@ -192,6 +196,12 @@ one list sized before the work starts and carved into windows.</p>
 <li><a href="#fixed-decimals"><code>+ -</code>, <code>* /</code> -- rounded half-even to the scale; <code>neg</code>, <code>abs</code>, <code>sign</code></a></li>
 <li><a href="#fixed-decimals"><code>isInvalid</code>, <code>checked</code> -- <code>resultval</code> with <code>decerror</code></a></li>
 <li><a href="#fixed-decimals"><code>== != &lt; &lt;= &gt; &gt;=</code>, <code>compare</code>, <code>hash</code>; <code>rat</code>, <code>f64</code>, <code>string</code>; <code>i64</code> (32, 64) or <code>big</code> (128, 256)</a></li>
+</ul>
+<p><strong>float</strong></p>
+<ul>
+<li><a href="#fixed-binary-floats"><code>create from:</code>, <code>fromBig</code>, <code>fromInt</code>, <code>fromRat</code>, <code>parse text: base:</code>, <code>inf negative:</code></a></li>
+<li><a href="#fixed-binary-floats"><code>+ - * /</code>, <code>sqrt</code>, <code>neg</code>, <code>abs</code>, <code>sign</code>, <code>isInf</code>, <code>isInt</code></a></li>
+<li><a href="#fixed-binary-floats"><code>== != &lt; &lt;= &gt; &gt;=</code>, <code>compare</code>; <code>big</code>, <code>f64</code>, <code>roundF64</code>, <code>rat</code>, <code>truncInt</code>, <code>text format: digits:</code>, <code>string</code></a></li>
 </ul>
 <p><strong>BigRat</strong></p>
 <ul>
@@ -574,7 +584,28 @@ main: function is {
 <p>The native tiers compute in <code>i64</code>, a product or a scaled dividend of up to
 36 digits through the <code>u64</code> two-word multiply and divide, and allocate
 nothing; <code>decimal128</code> and <code>decimal256</code> compute in <code>BigInt</code>.</p>
-<h2 id="performance-and-toolchains"><a href="#performance-and-toolchains">15. Performance and toolchains</a></h2>
+<h2 id="fixed-binary-floats"><a href="#fixed-binary-floats">15. Fixed binary floats</a></h2>
+<p><code>(math.float words: N)</code> is a binary floating-point number of <code>64*N</code>
+mantissa bits held inline: a record of its sign, its form (zero, finite or
+infinite), an <code>i32</code> exponent and its mantissa words, so it sits in records,
+variants and arrays as plain data. Its semantics are <code>BigFloat</code>'s at that
+precision, rounding to nearest with ties to even: signed zeros, signed
+infinities, no subnormals, and an operation that would give a NaN -- an
+infinity minus itself, a zero times an infinity -- panics.</p>
+<p><code>create from:</code> takes an <code>f64</code>, which every width holds exactly, and
+defaults to +0; <code>fromBig</code>, <code>fromInt</code> and <code>fromRat</code> round their value to
+the width, and <code>parse text:</code> reads as <code>BigFloat.parse</code> does.
+<code>==</code> and the order treat the two zeros as equal; like <code>BigFloat</code>, a
+<code>float</code> has no <code>hash</code>. <code>big</code> is the exact <code>BigFloat</code>, and <code>f64</code>,
+<code>roundF64</code>, <code>rat</code>, <code>truncInt</code> and <code>text</code> answer as <code>BigFloat</code>'s do.</p>
+<pre><code class="language-zerolang">main: function is {
+    third: (math.float words: 2) from: 1.0
+    q: third / ((math.float words: 2) from: 3.0)
+    print "\{(q.text format: math.floatformat.exponent digits: 36)}"
+}</code></pre>
+<p>Each operation reads its operands as <code>BigFloat</code>s of the width's precision
+and rounds the result back, so it allocates as <code>BigFloat</code> does.</p>
+<h2 id="performance-and-toolchains"><a href="#performance-and-toolchains">16. Performance and toolchains</a></h2>
 <p>The loops every operation rests on -- add, subtract, shift and
 multiply-and-add over runs of 64-bit words -- are C, in
 <code>src/runtime/natives/_Z_MATH_ARITH.inc</code>, a port of Go's portable loops;

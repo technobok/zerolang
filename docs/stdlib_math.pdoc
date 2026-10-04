@@ -44,7 +44,8 @@ size, #b:"BigFloat", a binary floating-point number of any precision, and
 the fixed-width integers #b:"int" and #b:"uint" of any number of 64-bit
 words (#~"i256", #~"u256", #~"i512", #~"u512"), and the SQL #~"NUMERIC"
 fixed decimals #b:"decimal32", #b:"decimal64", #b:"decimal128" and
-#b:"decimal256".
+#b:"decimal256", and #b:"float", a binary float of a fixed number of
+mantissa words.
 
 The core is a port of Go's #~"math/big" at commit #~"577b91f341"
 (BSD-3-Clause, the license beside it in #~"math/LICENSE-GO"); each ported
@@ -82,6 +83,7 @@ one list sized before the work starts and carved into windows.
   [#*: #> to=roundingmode: #b:"roundingmode" -- #~"variant { toNearestEven  toNearestAway  toZero  awayFromZero  toNegativeInf  toPositiveInf }"]
   [#*: #> to=accuracy: #b:"accuracy" -- #~"variant { below  exact  above }"]
   [#*: #> to=floatformat: #b:"floatformat" -- #~"variant { exponent  exponentUpper  fixed  general  generalUpper  hex  hexFraction  binary }"]
+  [#*: #> to=fixed-binary-floats: #b:"float" -- #~"record { negative  form  exp: i32  mant: (array u64 to: words) } as { words: u64.generic }": BigFloat's semantics at #~"64*words" bits, held inline]
   [#*: #> to=fixed-decimals: #b:"decimal32", #b:"decimal64", #b:"decimal128", #b:"decimal256" -- #~"record { coef } as { precision: u8.generic  scale: u8.generic }": #~"NUMERIC(precision, scale)" over 9, 18, 38 or 76 digits]
   [#*: #> to=fixed-decimals: #b:"decerror" -- #~"variant { overflow  divisionByZero }": why a decimal is invalid]
   [#*: #> to=fixed-width-integers: #b:"int", #b:"uint" -- #~"record { limbs: (array t: u64 to: words) } as { words: u64.generic }": a two's complement integer of #~"64*words" bits; #~"i256", #~"u256", #~"i512", #~"u512" name four]
@@ -120,6 +122,13 @@ one list sized before the work starts and carved into windows.
   [#*: #> to=fixed-decimals: #~"+ -", #~"* /" -- rounded half-even to the scale; #~"neg", #~"abs", #~"sign"]
   [#*: #> to=fixed-decimals: #~"isInvalid", #~"checked" -- #~"resultval" with #~"decerror"]
   [#*: #> to=fixed-decimals: #~"== != < <= > >=", #~"compare", #~"hash"; #~"rat", #~"f64", #~"string"; #~"i64" (32, 64) or #~"big" (128, 256)]
+
+#p: #b:"float"
+
+#ul:
+  [#*: #> to=fixed-binary-floats: #~"create from:", #~"fromBig", #~"fromInt", #~"fromRat", #~"parse text: base:", #~"inf negative:"]
+  [#*: #> to=fixed-binary-floats: #~"+ - * /", #~"sqrt", #~"neg", #~"abs", #~"sign", #~"isInf", #~"isInt"]
+  [#*: #> to=fixed-binary-floats: #~"== != < <= > >=", #~"compare"; #~"big", #~"f64", #~"roundF64", #~"rat", #~"truncInt", #~"text format: digits:", #~"string"]
 
 #p: #b:"BigRat"
 
@@ -629,6 +638,35 @@ invalid value has no order, sign or numeric value: #~"compare", #~"<",
 The native tiers compute in #~"i64", a product or a scaled dividend of up to
 36 digits through the #~"u64" two-word multiply and divide, and allocate
 nothing; #~"decimal128" and #~"decimal256" compute in #~"BigInt".
+
+
+#--: Fixed binary floats
+
+#~"(math.float words: N)" is a binary floating-point number of #~"64*N"
+mantissa bits held inline: a record of its sign, its form (zero, finite or
+infinite), an #~"i32" exponent and its mantissa words, so it sits in records,
+variants and arrays as plain data. Its semantics are #~"BigFloat"'s at that
+precision, rounding to nearest with ties to even: signed zeros, signed
+infinities, no subnormals, and an operation that would give a NaN -- an
+infinity minus itself, a zero times an infinity -- panics.
+
+#~"create from:" takes an #~"f64", which every width holds exactly, and
+defaults to +0; #~"fromBig", #~"fromInt" and #~"fromRat" round their value to
+the width, and #~"parse text:" reads as #~"BigFloat.parse" does.
+#~"==" and the order treat the two zeros as equal; like #~"BigFloat", a
+#~"float" has no #~"hash". #~"big" is the exact #~"BigFloat", and #~"f64",
+#~"roundF64", #~"rat", #~"truncInt" and #~"text" answer as #~"BigFloat"'s do.
+
+#code language=zerolang: """
+  main: function is {
+      third: (math.float words: 2) from: 1.0
+      q: third / ((math.float words: 2) from: 3.0)
+      print "\{(q.text format: math.floatformat.exponent digits: 36)}"
+  }
+  """
+
+Each operation reads its operands as #~"BigFloat"s of the width's precision
+and rounds the result back, so it allocates as #~"BigFloat" does.
 
 
 #--: Performance and toolchains

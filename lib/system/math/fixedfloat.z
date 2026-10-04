@@ -1,0 +1,219 @@
+# Fixed binary floats: `(float words: N)` is a binary floating-point number of
+# 64*N mantissa bits held inline -- a valtype, so it sits in records, variants
+# and arrays as plain data. Its semantics are BigFloat's (Go's Float) at that
+# precision, rounding to nearest with ties to even: a signed zero and signed
+# infinities, an i32 exponent, no subnormals, and an operation that would give a
+# NaN panics. Each operation reads its operands as BigFloats of that precision
+# and rounds the result back.
+
+# float -- a binary float of 64*words mantissa bits: sign * mantissa * 2^exp
+# with 0.5 <= mantissa < 1 when finite
+float: record {
+    # the sign, a zero's and an infinity's included
+    negative: bool
+    # zero, finite or infinite
+    form: bigfloat.floatform
+    # the power of two the mantissa is scaled by
+    exp: i32
+    # a finite value's mantissa bits, least significant word first, the top
+    # word's top bit set; all zero for a zero or an infinity
+    mant: (array u64 to: words)
+} as {
+    # how many 64-bit words of mantissa, at least 1
+    words: u64.generic
+
+    # the value of an f64, which every precision holds exactly; +0 when `from`
+    # is left out
+    create: function {from: 0.0} out this is {
+        return ((float :words).fromBig from: (bigfloat.BigFloat :from prec: (precisionOf n: words)))
+    }
+
+    # fromBig -- a BigFloat rounded to this precision, ties to even
+    fromBig: function {from: bigfloat.BigFloat.view} out type is {
+        x: ((from.withMode mode: rounding.roundingmode.toNearestEven).withPrec
+            prec: (precisionOf n: words)
+        )
+        r: meta.create negative: x.negative form: x.form exp: x.exp mant: (array u64 to: words)
+        {
+            w: r.mant.mutView
+            loadMant z: w m: x.mant.listView
+        }
+        return r
+    }
+
+    # fromInt -- an integer rounded to this precision, ties to even
+    fromInt: function {from: bigint.BigInt.view} out type is {
+        return ((float :words).fromBig
+            from: (bigfloat.BigFloat.fromInt :from prec: (precisionOf n: words))
+        )
+    }
+
+    # fromRat -- a rational rounded to this precision, ties to even
+    fromRat: function {from: bigrat.BigRat.view} out type is {
+        return ((float :words).fromBig
+            from: (bigfloat.BigFloat.fromRat :from prec: (precisionOf n: words))
+        )
+    }
+
+    # parse -- text as BigFloat.parse reads it, rounded to this precision
+    parse: function {text: StringView base: 0.u64} out (resultval t: type e: parseerror) is {
+        p: bigfloat.BigFloat.parse :text :base prec: (precisionOf n: words)
+        match (
+            p
+        ) case err then return ((resultval t: type e: parseerror).err p) case ok then {
+            return ((resultval t: type e: parseerror).ok ((float :words).fromBig from: p))
+        }
+    }
+
+    # inf -- an infinity of either sign
+    inf: function {negative: bool} out type is {
+        return ((float :words).fromBig from: (bigfloat.BigFloat.inf :negative))
+    }
+
+    # the sum, rounded. Panics on infinities of opposite signs
+    +: function {t: this.view rhs: type} out type is {
+        return ((float :words).fromBig from: t.big + rhs.big)
+    }
+
+    # the difference, rounded. Panics on infinities of one sign
+    -: function {t: this.view rhs: type} out type is {
+        return ((float :words).fromBig from: t.big - rhs.big)
+    }
+
+    # the product, rounded. Panics on a zero times an infinity
+    *: function {t: this.view rhs: type} out type is {
+        return ((float :words).fromBig from: t.big * rhs.big)
+    }
+
+    # the quotient, rounded. Panics on zero by zero and infinity by infinity
+    /: function {t: this.view rhs: type} out type is {
+        return ((float :words).fromBig from: t.big / rhs.big)
+    }
+
+    # the square root, rounded. Panics on a negative value
+    sqrt: function {t: this.view} out type is {
+        return ((float :words).fromBig from: t.big.sqrt)
+    }
+
+    # the negation, exactly
+    neg: function {t: this.view} out type is {
+        return (meta.create negative: t.negative.not form: t.form exp: t.exp mant: t.mant)
+    }
+
+    # the absolute value, exactly
+    abs: function {t: this.view} out type is {
+        return (meta.create negative: false form: t.form exp: t.exp mant: t.mant)
+    }
+
+    # -1, 0 or 1 as the value is below, at or above zero; 0 for either zero
+    sign: function {t: this.view} out i32 is {
+        if t.form.zero then return 0
+        if t.negative then return -1
+        return 1
+    }
+
+    # whether the value is an infinity
+    isInf: function {t: this.view} out bool is {
+        return t.form.inf
+    }
+
+    # whether the value is an integer; an infinity is not
+    isInt: function {t: this.view} out bool is {
+        return t.big.isInt
+    }
+
+    # the order of the two as -1, 0 or 1; the zeros are equal
+    compare: function {t: this.view rhs: type} out i32 is {
+        return (t.big.compare rhs: rhs.big)
+    }
+
+    # whether the two are the same number; the zeros are equal
+    ==: function {t: this.view rhs: type} out bool is {
+        return (t.compare :rhs) == 0
+    }
+
+    # whether the two differ
+    !=: function {t: this.view rhs: type} out bool is {
+        return (t.compare :rhs) != 0
+    }
+
+    # whether this is below rhs
+    <: function {t: this.view rhs: type} out bool is {
+        return (t.compare :rhs) < 0
+    }
+
+    # whether this is at most rhs
+    <=: function {t: this.view rhs: type} out bool is {
+        return (t.compare :rhs) <= 0
+    }
+
+    # whether this is above rhs
+    >: function {t: this.view rhs: type} out bool is {
+        return (t.compare :rhs) > 0
+    }
+
+    # whether this is at least rhs
+    >=: function {t: this.view rhs: type} out bool is {
+        return (t.compare :rhs) >= 0
+    }
+
+    # the value as a BigFloat of this precision, exactly
+    big: function {t: this.view} out bigfloat.BigFloat is {
+        z: bigfloat.blank prec: (precisionOf n: words) mode: rounding.roundingmode.toNearestEven
+        z.form = t.form
+        z.negative = t.negative
+        if t.form.finite then {
+            z.exp = t.exp
+            i: u64
+            for i < words loop {
+                z.mant.append from: (t.mant.get :i)
+                i = i + 1
+            }
+        }
+        return z
+    }
+
+    # the value as an f64 when it is one exactly, as BigFloat.f64
+    f64: function {t: this.view} out (resultval t: f64 e: converror) is {
+        return t.big.f64
+    }
+
+    # roundF64 -- the f64 nearest the value, ties to even
+    roundF64: function {t: this.view} out f64 is {
+        return t.big.roundF64
+    }
+
+    # rat -- the value exactly as a BigRat; none for an infinity
+    rat: function {t: this.view} out Option bigrat.BigRat is {
+        return t.big.rat
+    }
+
+    # truncInt -- the integer the value truncates to; none for an infinity
+    truncInt: function {t: this.view} out Option bigint.BigInt is {
+        return t.big.truncInt
+    }
+
+    # text -- the value spelled as BigFloat.text spells it
+    text: function {t: this.view format: bigfloat.floatformat digits: i64} out String is {
+        return (t.big.text :format :digits)
+    }
+
+    # the value in general format with 10 digits
+    string: function {t: this.view} out String is {
+        return t.big.string
+    }
+}
+
+# precisionOf -- the mantissa bits of a float of n words
+precisionOf: function {n: u64} out u32 is {
+    return (n * 64).u32.orPanic
+}
+
+# loadMant -- z = a BigFloat's mantissa m, top-aligned: m's words fill z's top
+# and the words below them are zero. m has no more words than z
+loadMant: function {z: (SpanVal u64).borrow m: (ListViewVal u64).view} is {
+    z.clear
+    if m.length == 0 then return
+    top: z.slice from: z.length - m.length to: z.length
+    top.copyFrom from: m
+}
