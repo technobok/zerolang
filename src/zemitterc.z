@@ -40738,6 +40738,21 @@ emitUnitFnFwdDecls: function {
         fdx = fdx + 1
         bfd: ast.nodes.get i: bfdId
         if bfd.namedoperation.not then continue
+        # a template's instances are functions of this unit too, and a method
+        # emitted ahead of them may call one
+        if (isGenericTemplateUnitOp :ast opId: bfd.operation) then {
+            tnm: zast.nameTextAt :ast ref: bfd.name
+            (emitUnitMonoInstances
+                :symtab
+                :ast
+                :ctx
+                templateName: tnm.stringView
+                templateUnitOpId: bfd.operation
+                declOnly: true
+                :buf
+            )
+            continue
+        }
         bfdOp: ast.nodes.get i: bfd.operation
         if (ztypecheck.isFunctionDefWithBody o: bfdOp).not then continue
         fdn: zast.nameTextAt :ast ref: bfd.name
@@ -40785,6 +40800,20 @@ emitRecordDefsIn: function {
 } is {
     bodyIds: zast.unitBodyIdsAt :ast unitId: mainOpId
     emitRecordDefsInBody :ast :symtab :ctx :bodyIds ownerTid: ztypes.tid :phase :buf
+    # a file unit that is itself a template: its instances' functions are
+    # declared with the other forward declarations
+    if phase == 2 when (isGenericTemplateUnitOp :ast opId: mainOpId) then {
+        tplNm: ctx.mainName.copy
+        (emitUnitMonoInstances
+            :symtab
+            :ast
+            :ctx
+            templateName: tplNm.stringView
+            templateUnitOpId: mainOpId
+            declOnly: true
+            :buf
+        )
+    }
 }
 
 # emitRecordDefsInBody -- one unit body's share of a phase, then the share of
