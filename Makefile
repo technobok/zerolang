@@ -2276,7 +2276,11 @@ perf: $(PERFBIN)
 #
 # -18 a walk over every type id is bounded by the next id, not a count: 0
 # behaviour, -18 source.
-ALLOC_BASELINE := 2199977
+#
+# +1,173 an open-stack position is its own type (openpos): 0 behaviour, +1,170
+# source, all of it the `ListVal openpos` instance the self-compile mints (one
+# such list alone on the old tree measures +1,220).
+ALLOC_BASELINE := 2201150
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

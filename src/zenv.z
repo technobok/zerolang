@@ -23,6 +23,7 @@
 # other top-level definitions are private to this unit.
 public: unit {
     :ZSymbolTable
+    :openpos
     :divkind
     :sumArmNames
     :sumArmNameIds
@@ -308,6 +309,12 @@ formatAliasConflict: function {
 
 # --- carriers ---
 
+# openpos -- a scope's position in `open`, the stack of open scopes: 0 is the
+# outermost. Every marker of the body walk is one -- what popTo closes back
+# through, where an exit unwinds to, the scope a loop, `break` or function body
+# owns. A typedef so a position cannot cross with a depth, a count or an id.
+openpos: typedef u64
+
 # A row of the dump's `entry` table: a local of a scope, or an overlay row
 # laid over one, snapshotted when the scope closed. `position` is the row's
 # place among the scope's locals and overlays in the order they were laid.
@@ -317,7 +324,7 @@ exitrec: record {
     exit: zast.nodeid
     # the position in `open` the exit unwinds to: it leaves every scope from
     # there up
-    downTo: u64
+    downTo: openpos
     # the id the next variable minted after the exit was recorded took
     vidMark: ztypes.vid
 }
@@ -444,20 +451,20 @@ ZSymbolTable: class {
     # one did not, so it keeps the narrowing, while the code after the
     # statement runs after either
     armNarrowingEnds: ListVal u64
-    # the names a generator body bound to a borrow, in binding order, and how
-    # many scopes were open at each binding: a yield refuses every one still in
-    # scope, and each leaves with the scope that bound it
+    # the names a generator body bound to a borrow, in binding order, and the
+    # position in `open` of the scope each was bound in: a yield refuses every
+    # one still in scope, and each leaves with the scope that bound it
     genBorrowNames: ListVal zast.nameid
-    genBorrowDepths: ListVal u64
+    genBorrowPositions: ListVal openpos
     # how many dry runs are open: nothing a dry run walks is recorded
     dryRunDepth: u64
     # the place in `open` of each function body open, innermost last: a
     # `return` leaves every scope from there up
-    fnScopeDepths: ListVal u64
+    fnScopes: ListVal openpos
     # the place in `open` of each scope a `break` leaves, innermost last: a
     # loop's, or a `do` block's, which binds `break` to itself -- and whether
     # a `break` leaves it
-    breakScopes: ListVal u64
+    breakScopes: ListVal openpos
     breakSeen: ListVal bool
     # the function body a value-returning walk is in, and the block whose last
     # line is in return position: the body, or a `with` or `do` block that is
@@ -536,7 +543,7 @@ ZSymbolTable: class {
     # markUnconditional -- the open scope at `marker` (the index pushBlock
     # answered) is left, on every path that reaches the code after it, only
     # after all of it ran.
-    markUnconditional: function {:this marker: u64} is {
+    markUnconditional: function {:this marker: openpos} is {
         if marker >= this.open.length then return
         fr: this.open.getMut i: marker
         fr.unconditional = true
@@ -544,18 +551,18 @@ ZSymbolTable: class {
 
     # openIndexOf -- where the open scope `scope` sits in `open`, none when it is
     # not open.
-    openIndexOf: function {this: this.view scope: ztypes.declid} out optionval u64 is {
+    openIndexOf: function {this: this.view scope: ztypes.declid} out optionval openpos is {
         i: this.open.length
         for i > 0 loop {
             i = i - 1
-            if (this.open.get :i).id == scope then return (optionval.some i)
+            if (this.open.get :i).id == scope then return (optionval.some (openpos.create from: i))
         }
-        return (optionval.none u64)
+        return (optionval.none openpos)
     }
 
     # defineVarAt -- bind `nameId` to `vid` in the open scope at `index`, which
     # has its row, as defineLocal binds in the innermost.
-    defineVarAt: function {:this index: u64 nameId: zast.nameid vid: ztypes.vid} is {
+    defineVarAt: function {:this index: openpos nameId: zast.nameid vid: ztypes.vid} is {
         fr: this.open.get i: index
         if fr.id.isZero then return
         (this.typing.declNewLocal
@@ -574,7 +581,7 @@ ZSymbolTable: class {
     # `since` was minted that leaves that scope: such an exit may run after the
     # local is filled -- on a loop's later iteration -- and an exit that runs
     # before finds it empty, which frees nothing.
-    addToExitsLeaving: function {:this index: u64 since: ztypes.vid vid: ztypes.vid} is {
+    addToExitsLeaving: function {:this index: openpos since: ztypes.vid vid: ztypes.vid} is {
         if this.recording.not then return
         i: u64
         for i < this.exitLog.length loop {
@@ -626,14 +633,14 @@ ZSymbolTable: class {
 
     # push -- open a body scope (a function's, or a mono walk's) under the
     # declaration it belongs to.
-    push: function {:this parent: ztypes.declid node: zast.nodeid} out u64 is {
-        return (this.pushScope :parent :node).u64
+    push: function {:this parent: ztypes.declid node: zast.nodeid} out ztypes.declid is {
+        return (this.pushScope :parent :node)
     }
 
-    # pushBlock -- open a nested scope over `node`; the marker returned is the
-    # depth to pop back to.
-    pushBlock: function {:this node: zast.nodeid} out u64 is {
-        marker: this.open.length
+    # pushBlock -- open a nested scope over `node`; the marker returned is its
+    # position in `open`, which popTo closes back through.
+    pushBlock: function {:this node: zast.nodeid} out openpos is {
+        marker: openpos.create from: this.open.length
         this.pushLazyScope :node
         return marker
     }
@@ -641,7 +648,7 @@ ZSymbolTable: class {
     # pushCall -- open a call scope over the call `node` and answer the marker
     # that closes it. A call scope exists so a borrow taken for the call ends
     # with it.
-    pushCall: function {:this node: zast.nodeid} out u64 is {
+    pushCall: function {:this node: zast.nodeid} out openpos is {
         return (this.pushBlock :node)
     }
 
@@ -650,9 +657,9 @@ ZSymbolTable: class {
     # scope inherits so the error persists -- and the scope's locals and
     # rows are snapshotted for the dump first. The typing's current scope
     # returns to the scope's parent.
-    pop: function {:this} out u64 is {
+    pop: function {:this} out ztypes.declid is {
         n: this.open.length
-        if n == 0 then return 0
+        if n == 0 then return ztypes.declid
         fr: this.open.get i: n - 1
         top: fr.id
         start: fr.start
@@ -732,7 +739,7 @@ ZSymbolTable: class {
         }
         this.dropTail :start
         this.open.pop
-        if this.genBorrowDepths.length > 0 then this.dropGenBorrows
+        if this.genBorrowPositions.length > 0 then this.dropGenBorrows
         this.curScope = this.innermostScope
         for mLocks.length > 0 loop {
             le2: mLocks.pop
@@ -769,7 +776,7 @@ ZSymbolTable: class {
         }
         # laid last, so no row re-laid above narrows the local again
         for each md: mEnds loop this.layNarrowingEnd declId: md
-        return top.u64
+        return top
     }
 
     # pushDryRun -- open a scope for a dry run: its rows are discarded whole
@@ -787,13 +794,13 @@ ZSymbolTable: class {
         if n == 0 then return
         this.dropTail start: (this.open.get i: n - 1).start
         this.open.pop
-        if this.genBorrowDepths.length > 0 then this.dropGenBorrows
+        if this.genBorrowPositions.length > 0 then this.dropGenBorrows
         this.curScope = this.innermostScope
         if this.dryRunDepth > 0 then this.dryRunDepth = this.dryRunDepth - 1
     }
 
     # close every scope back to `marker`, dumping the entries as they go
-    popTo: function {:this marker: u64} is {
+    popTo: function {:this marker: openpos} is {
         for this.open.length > marker loop this.pop
     }
 
@@ -904,15 +911,15 @@ ZSymbolTable: class {
     # innermost open scope: it may not be in scope at a yield.
     noteGenBorrow: function {:this nameId: zast.nameid} is {
         this.genBorrowNames.append nameId
-        this.genBorrowDepths.append this.open.length
+        this.genBorrowPositions.append (openpos.create from: this.open.length - 1)
     }
 
     # dropGenBorrows -- forget the borrows whose scopes have closed.
     dropGenBorrows: function {:this} is {
         n: this.open.length
-        for this.genBorrowDepths.length > 0 loop {
-            if (this.genBorrowDepths.get i: this.genBorrowDepths.length - 1) <= n then return
-            this.genBorrowDepths.pop
+        for this.genBorrowPositions.length > 0 loop {
+            if (this.genBorrowPositions.get i: this.genBorrowPositions.length - 1) < n then return
+            this.genBorrowPositions.pop
             this.genBorrowNames.pop
         }
     }
@@ -1104,7 +1111,7 @@ ZSymbolTable: class {
     # recordExitDestroy -- what the exit at `nid` destroys: the owned locals of
     # every open scope from the innermost down to the one at `downTo` in `open`,
     # innermost first, but `except` -- the local a `return` hands back.
-    recordExitDestroy: function {:this nid: zast.nodeid downTo: u64 except: ztypes.vid} is {
+    recordExitDestroy: function {:this nid: zast.nodeid downTo: openpos except: ztypes.vid} is {
         if this.recording.not then return
         this.exitLog.append (exitrec exit: nid :downTo vidMark: this.reg.nextVid)
         start: this.typing.destroyItems.length
@@ -1120,9 +1127,9 @@ ZSymbolTable: class {
     # recordReturnDestroy -- what the `return` at `nid` destroys: every scope of
     # the function it leaves, but the local `except` it returns.
     recordReturnDestroy: function {:this nid: zast.nodeid except: ztypes.vid} is {
-        n: this.fnScopeDepths.length
+        n: this.fnScopes.length
         if n == 0 then return
-        this.recordExitDestroy :nid downTo: (this.fnScopeDepths.get i: n - 1) :except
+        this.recordExitDestroy :nid downTo: (this.fnScopes.get i: n - 1) :except
     }
 
     # recordLoopExitDestroy -- what the `continue` at `nid` destroys: every scope
@@ -1148,7 +1155,7 @@ ZSymbolTable: class {
 
     # openBreakScope -- the innermost open scope is one a `break` leaves.
     openBreakScope: function {:this} is {
-        this.breakScopes.append this.open.length - 1
+        this.breakScopes.append (openpos.create from: this.open.length - 1)
         this.breakSeen.append false
     }
 
@@ -2506,7 +2513,7 @@ ZSymbolTable: class {
             breakStart: this.loopBreakTakes.length
             contStart: this.loopContinueTakes.length
             onceStart: this.loopOnceTakes.length
-            scopeIndex: this.open.length - 1
+            scopeIndex: (openpos.create from: this.open.length - 1)
         )
     }
 
@@ -2741,7 +2748,7 @@ looprun: record {
     onceStart: u64
     # the place in `open` of the loop's own scope: a `break` or a `continue`
     # leaves every scope from there up
-    scopeIndex: u64
+    scopeIndex: openpos
 }
 
 # divkind -- how a scope's walk ended, when it did not fall through: `exit`
@@ -2772,10 +2779,10 @@ newSymbolTable: function {reg: ztypes.ZTypeRegistry.take typing: ZTyping.take} o
         loopMoveReported: IdSet u64
         armNarrowingEnds: ListVal u64
         genBorrowNames: ListVal zast.nameid
-        genBorrowDepths: ListVal u64
+        genBorrowPositions: ListVal openpos
         dryRunDepth: 0
-        fnScopeDepths: ListVal u64
-        breakScopes: ListVal u64
+        fnScopes: ListVal openpos
+        breakScopes: ListVal openpos
         breakSeen: ListVal bool
         tailBody: zast.nodeid
         tailBlock: zast.nodeid
