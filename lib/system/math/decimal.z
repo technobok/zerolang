@@ -1,0 +1,405 @@
+# Fixed decimals: what decimal32, decimal64, decimal128 and decimal256 share. A
+# decimal is a coefficient with `scale` digits after the point and at most
+# `precision` digits in all; its value is the coefficient divided by 10^scale.
+#
+# A result past the precision, or a division by zero, is a sticky INVALID value
+# rather than a panic: its coefficient is 10^maxDigits plus the reason (1
+# overflow, 2 division by zero), where maxDigits is the tier's most -- 9, 18,
+# 38 or 76 -- so every valid coefficient (|c| < 10^precision) stays below every
+# invalid one. An operation with an invalid operand answers it again.
+#
+# The native tiers (decimal32, decimal64) compute in i64: a coefficient of at
+# most 18 digits, and a product or a scaled dividend of up to 36 through the u64
+# word primitives' two-word multiply and divide. The limb tiers (decimal128,
+# decimal256) compute in BigInt. Rounding, text and parsing are shared.
+
+# decerror -- why a decimal is invalid
+decerror: variant {
+    # a result with more digits than the precision allows
+    overflow: null
+    # a quotient whose divisor was zero, which no decimal holds
+    divisionByZero: null
+}
+
+# tens -- 10^0 to 10^18, the scales and bounds of the native tiers
+tens: data {
+    1 10 100 1000 10000 100000 1000000 10000000 100000000 1000000000 10000000000 100000000000
+    1000000000000 10000000000000 100000000000000 1000000000000000 10000000000000000
+    100000000000000000 1000000000000000000
+} out i64
+
+# reasonCode -- the number an invalid coefficient adds to 10^maxDigits
+reasonCode: function {why: decerror} out i64 is {
+    match why case overflow then return 1 case divisionByZero then return 2
+}
+
+# reasonOf -- the reason a code names
+reasonOf: function {code: i64} out decerror is {
+    if code == 2 then return decerror.divisionByZero
+    return decerror.overflow
+}
+
+# ---- the native tiers: coefficients in i64 ----
+
+# pow10 -- 10^k for k at most 18
+pow10: function {k: u64} out i64 is {
+    return (tens.index k)
+}
+
+# invalid64 -- the invalid coefficient for `why`, in a tier of maxDigits
+invalid64: function {maxDigits: u64 why: decerror} out i64 is {
+    return (pow10 k: maxDigits) + (reasonCode :why)
+}
+
+# isInvalid64 -- the coefficient has p digits or more: |c| >= 10^p
+isInvalid64: function {c: i64 p: u64} out bool is {
+    b: pow10 k: p
+    return (c >= b) or (c <= (0 - b))
+}
+
+# reason64 -- why an invalid coefficient is invalid
+reason64: function {c: i64 maxDigits: u64} out decerror is {
+    m: c
+    if m < 0 then m = 0 - m
+    return (reasonOf code: m - (pow10 k: maxDigits))
+}
+
+# fit64 -- c when it holds at most p digits, else the overflow coefficient
+fit64: function {c: i64 p: u64 maxDigits: u64} out i64 is {
+    if (isInvalid64 :c :p) then return (invalid64 :maxDigits why: decerror.overflow)
+    return c
+}
+
+# add64 -- a + b at p digits; an invalid operand answers itself. Two
+# coefficients below 10^18 sum below 2*10^18, so i64 never wraps here
+add64: function {a: i64 b: i64 p: u64 maxDigits: u64} out i64 is {
+    if (isInvalid64 c: a :p) then return a
+    if (isInvalid64 c: b :p) then return b
+    return (fit64 c: a + b :p :maxDigits)
+}
+
+# sub64 -- a - b at p digits, as add64
+sub64: function {a: i64 b: i64 p: u64 maxDigits: u64} out i64 is {
+    if (isInvalid64 c: a :p) then return a
+    if (isInvalid64 c: b :p) then return b
+    return (fit64 c: a - b :p :maxDigits)
+}
+
+# wholeFits64 -- whether an integer has room before the point: at most p - s
+# digits. Asked with the parameters as values, so an instance whose scale passes
+# its precision is refused by its own check, not by a constant that wraps first
+wholeFits64: function {v: i64 p: u64 s: u64} out bool is {
+    if s > p then return false
+    return (isInvalid64 c: v p: p - s).not
+}
+
+# magnitude64 -- |c| as a u64, for a c above i64's minimum
+magnitude64: function {c: i64} out u64 is {
+    if c < 0 then return (0 - c).u64.orPanic
+    return c.u64.orPanic
+}
+
+# roundsUp -- whether q, the quotient whose remainder is r of a division by d,
+# rounds up to the nearest with ties to even: r past half of d, or exactly half
+# and q odd. r < d, so d - r does not wrap
+roundsUp: function {q: u64 r: u64 d: u64} out bool is {
+    if r > (d - r) then return true
+    if r == (d - r) then return (q & 1) == 1
+    return false
+}
+
+# divRound64 -- (hi:lo) / d rounded half-even, as the coefficient of sign `neg`
+# at p digits: overflow when the quotient has p digits or more
+divRound64: function {hi: u64 lo: u64 d: u64 neg: bool p: u64 maxDigits: u64} out i64 is {
+    # a quotient of 2^64 or more is past every precision
+    if hi >= d then return (invalid64 :maxDigits why: decerror.overflow)
+    qr: hi.divWide :lo by: d
+    q: qr.quo
+    bound: (pow10 k: p).u64.orPanic
+    if q >= bound then return (invalid64 :maxDigits why: decerror.overflow)
+    if (roundsUp :q r: qr.rem :d) then q = q + 1
+    if q >= bound then return (invalid64 :maxDigits why: decerror.overflow)
+    v: q.i64.orPanic
+    if neg then v = 0 - v
+    return v
+}
+
+# mul64 -- a * b with s digits after the point: the product of the
+# coefficients, up to 36 digits in two words, divided by 10^s and rounded
+# half-even
+mul64: function {a: i64 b: i64 s: u64 p: u64 maxDigits: u64} out i64 is {
+    if (isInvalid64 c: a :p) then return a
+    if (isInvalid64 c: b :p) then return b
+    w: (magnitude64 c: a).mulWide rhs: (magnitude64 c: b)
+    return (divRound64
+        hi: w.hi
+        lo: w.lo
+        d: (pow10 k: s).u64.orPanic
+        neg: a < 0 != (b < 0)
+        :p
+        :maxDigits
+    )
+}
+
+# div64 -- a / b with s digits after the point: a's coefficient scaled by 10^s,
+# up to 36 digits, divided by b's and rounded half-even; division by zero when b
+# is 0
+div64: function {a: i64 b: i64 s: u64 p: u64 maxDigits: u64} out i64 is {
+    if (isInvalid64 c: a :p) then return a
+    if (isInvalid64 c: b :p) then return b
+    if b == 0 then return (invalid64 :maxDigits why: decerror.divisionByZero)
+    w: (magnitude64 c: a).mulWide rhs: (pow10 k: s).u64.orPanic
+    return (divRound64
+        hi: w.hi
+        lo: w.lo
+        d: (magnitude64 c: b)
+        neg: a < 0 != (b < 0)
+        :p
+        :maxDigits
+    )
+}
+
+# compare64 -- the order of two valid coefficients as -1, 0 or 1; an invalid one
+# panics, since it has no place in the order
+compare64: function {a: i64 b: i64 p: u64} out i32 is {
+    if (isInvalid64 c: a :p) or (isInvalid64 c: b :p) then (panic
+        msg: "an invalid decimal has no order"
+    )
+    if a < b then return -1
+    if a > b then return 1
+    return 0
+}
+
+# equal64 -- the two coefficients are the same decimal: equal, or both invalid
+equal64: function {a: i64 b: i64 p: u64} out bool is {
+    ia: isInvalid64 c: a :p
+    ib: isInvalid64 c: b :p
+    if ia or ib then return ia and ib
+    return a == b
+}
+
+# hash64 -- a hash that agrees with equal64: every invalid alike
+hash64: function {c: i64 p: u64} out u64 is {
+    if (isInvalid64 :c :p) then return 0
+    return ((14695981039346656037.u64 ^ c.bits).mulWide rhs: 1099511628211).lo
+}
+
+# fromBig64 -- a BigInt coefficient at p digits, overflow past them
+fromBig64: function {c: bigint.BigInt.view p: u64 maxDigits: u64} out i64 is {
+    v: c.i64
+    match v case ok then return (fit64 c: v :p :maxDigits) case err then null
+    return (invalid64 :maxDigits why: decerror.overflow)
+}
+
+# ---- the limb tiers, and what every tier reads through BigInt ----
+
+# powBig -- 10^k as a BigInt
+powBig: function {k: u64} out bigint.BigInt is {
+    r: bigint.BigInt from: 1
+    ten: bigint.BigInt from: 10
+    i: u64
+    for i < k loop {
+        r.mul x: ten
+        i = i + 1
+    }
+    return r
+}
+
+# invalidBig -- the invalid coefficient for `why`, in a tier of maxDigits
+invalidBig: function {maxDigits: u64 why: decerror} out bigint.BigInt is {
+    return (powBig k: maxDigits) + (bigint.BigInt from: (reasonCode :why))
+}
+
+# isInvalidBig -- the coefficient has p digits or more
+isInvalidBig: function {c: bigint.BigInt.view p: u64} out bool is {
+    return (c.abs.compare rhs: (powBig k: p)) >= 0
+}
+
+# reasonBig -- why an invalid coefficient is invalid
+reasonBig: function {c: bigint.BigInt.view maxDigits: u64} out decerror is {
+    d: c.abs - (powBig k: maxDigits)
+    return (reasonOf code: d.i64.orPanic)
+}
+
+# fitBig -- c when it holds at most p digits, else the overflow coefficient
+fitBig: function {c: bigint.BigInt.take p: u64 maxDigits: u64} out bigint.BigInt is {
+    if (isInvalidBig :c :p) then return (invalidBig :maxDigits why: decerror.overflow)
+    return c
+}
+
+# addBig -- a + b at p digits, as add64
+addBig: function {
+    a: bigint.BigInt.view b: bigint.BigInt.view p: u64 maxDigits: u64
+} out bigint.BigInt is {
+    if (isInvalidBig c: a :p) then return a.copy
+    if (isInvalidBig c: b :p) then return b.copy
+    return (fitBig c: a + b :p :maxDigits)
+}
+
+# subBig -- a - b at p digits, as add64
+subBig: function {
+    a: bigint.BigInt.view b: bigint.BigInt.view p: u64 maxDigits: u64
+} out bigint.BigInt is {
+    if (isInvalidBig c: a :p) then return a.copy
+    if (isInvalidBig c: b :p) then return b.copy
+    return (fitBig c: a - b :p :maxDigits)
+}
+
+# mulBig -- a * b with s digits after the point, as mul64
+mulBig: function {
+    a: bigint.BigInt.view b: bigint.BigInt.view s: u64 p: u64 maxDigits: u64
+} out bigint.BigInt is {
+    if (isInvalidBig c: a :p) then return a.copy
+    if (isInvalidBig c: b :p) then return b.copy
+    q: ((a * b).divide by: (powBig k: s) mode: rounding.roundingmode.toNearestEven).quo.copy
+    return (fitBig c: q.take :p :maxDigits)
+}
+
+# divBig -- a / b with s digits after the point, as div64
+divBig: function {
+    a: bigint.BigInt.view b: bigint.BigInt.view s: u64 p: u64 maxDigits: u64
+} out bigint.BigInt is {
+    if (isInvalidBig c: a :p) then return a.copy
+    if (isInvalidBig c: b :p) then return b.copy
+    if b.sign == 0 then return (invalidBig :maxDigits why: decerror.divisionByZero)
+    q: ((a * (powBig k: s)).divide by: b mode: rounding.roundingmode.toNearestEven).quo.copy
+    return (fitBig c: q.take :p :maxDigits)
+}
+
+# ratCoef -- the coefficient of a rational at s digits after the point, rounded
+# by `mode`: the truncated quotient, stepped one further from zero when the
+# mode says so. BigInt.divide takes only Go's four integer modes, and a decimal
+# rounds by all six
+ratCoef: function {x: bigrat.BigRat.view s: u64 mode: rounding.roundingmode} out bigint.BigInt is {
+    n: x.num * (powBig k: s)
+    dv: n.divide by: x.den mode: rounding.roundingmode.toZero
+    q: dv.quo.copy
+    if dv.rem.sign == 0 then return q
+    neg: n.sign < 0
+    away: false
+    match (
+        mode
+    ) case toZero then {
+        away = false
+    } case awayFromZero then {
+        away = true
+    } case toNegativeInf then {
+        away = neg
+    } case toPositiveInf then {
+        away = neg.not
+    } else {
+        # the nearer: twice the remainder against the denominator, a tie as the
+        # mode breaks it
+        c: (dv.rem.abs << 1).compare rhs: x.den
+        away = c > 0
+        if c == 0 then {
+            match (
+                mode
+            ) case toNearestAway then {
+                away = true
+            } else {
+                away = (q.bit i: 0) == 1
+            }
+        }
+    }
+    if away then {
+        if neg then q.sub x: (bigint.BigInt from: 1) else q.add x: (bigint.BigInt from: 1)
+    }
+    return q
+}
+
+# coefRat -- the exact value of a valid coefficient with s digits after the
+# point
+coefRat: function {c: bigint.BigInt.view s: u64} out bigrat.BigRat is {
+    return (bigrat.BigRat.fromFraction num: c den: (powBig k: s))
+}
+
+# ---- text ----
+
+# pointText -- a coefficient's text with s digits after the point: its digits
+# zero-padded to s + 1 so there is a digit before the point, a leading '-' when
+# it is negative
+pointText: function {c: bigint.BigInt.view s: u64} out String is {
+    ad: c.abs.string
+    digits: String
+    for (digits.length + ad.length) < (s + 1) loop digits.append "0"
+    digits.append ad
+    r: String
+    if c.sign < 0 then r.append "-"
+    if s == 0 then {
+        r.append digits
+        return r
+    }
+    whole: digits.length - s
+    r.append (digits.substring from: 0 to: whole)
+    r.append "."
+    r.append (digits.substring from: whole to: digits.length)
+    return r
+}
+
+# parseCoef -- the coefficient decimal text names at s digits after the point:
+# an optional sign, digits, and an optional point with digits after it. Digits
+# past the scale round half-even; a text with no digit is `empty`, any other
+# character `invalidDigit`
+parseCoef: function {text: StringView s: u64} out (ResultRV bigint.BigInt e: parseerror) is {
+    pos: u64
+    neg: false
+    if text.length > 0 then {
+        c0: natconv.byteAt :text i: 0
+        if c0 == 45 then {
+            neg = true
+            pos = 1
+        } else if c0 == 43 then {
+            pos = 1
+        }
+    }
+    whole: String
+    frac: String
+    seenPoint: false
+    any: false
+    for pos < text.length loop {
+        ch: natconv.byteAt :text i: pos
+        pos = pos + 1
+        if ch == 46 when seenPoint.not then {
+            seenPoint = true
+        } else if (ch >= 48) and (ch <= 57) then {
+            any = true
+            if seenPoint then frac.appendByte b: ch else whole.appendByte b: ch
+        } else {
+            return ((ResultRV bigint.BigInt e: parseerror).err parseerror.invalidDigit)
+        }
+    }
+    if any.not then return ((ResultRV bigint.BigInt e: parseerror).err parseerror.empty)
+    # the digits the scale keeps, and what is cut: their first digit and whether
+    # any after it is nonzero decide the rounding
+    kept: whole.copy
+    i: u64
+    for i < s loop {
+        if i < frac.length then (kept.appendByte
+            b: (natconv.byteAt text: frac.stringView :i)
+        ) else kept.append "0"
+        i = i + 1
+    }
+    first: 48.u8
+    sticky: false
+    if frac.length > s then {
+        first = natconv.byteAt text: frac.stringView i: s
+        j: s + 1
+        for j < frac.length loop {
+            if (natconv.byteAt text: frac.stringView i: j) != 48 then sticky = true
+            j = j + 1
+        }
+    }
+    if kept.length == 0 then kept.append "0"
+    cp: bigint.BigInt.parse text: kept.stringView base: 10
+    match (
+        cp
+    ) case err then return ((ResultRV bigint.BigInt e: parseerror).err cp) case ok then {
+        c: cp.take
+        up: (first > 53) or ((first == 53) and sticky)
+        if first == 53 when sticky.not then up = (c.bit i: 0) == 1
+        if up then c.add x: (bigint.BigInt from: 1)
+        if neg then c = c.neg
+        return ((ResultRV bigint.BigInt e: parseerror).ok c)
+    }
+}

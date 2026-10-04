@@ -2170,7 +2170,10 @@ perf: $(PERFBIN)
 #
 # +831 math's fixed-width integers, the self-compile parsing them: 0
 # behaviour, +831 source.
-ALLOC_BASELINE := 2219454
+#
+# +1,989 math's fixed decimals, the self-compile parsing them: 0 behaviour,
+# +1,989 source.
+ALLOC_BASELINE := 2221443
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

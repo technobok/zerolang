@@ -107,6 +107,8 @@ Table of Contents</div>
 </li>
 <li><a href="#fixed-width-integers">Fixed-width integers</a>
 </li>
+<li><a href="#fixed-decimals">Fixed decimals</a>
+</li>
 <li><a href="#performance-and-toolchains">Performance and toolchains</a>
 </li>
 </ul>
@@ -124,8 +126,9 @@ surfaces each on hover. This page is the prose and the worked examples.</p>
 <strong>BigInt</strong>, a signed integer of any size, <strong>BigRat</strong>, a rational of any
 size, <strong>BigFloat</strong>, a binary floating-point number of any precision, and
 the fixed-width integers <strong>int</strong> and <strong>uint</strong> of any number of 64-bit
-words (<code>i256</code>, <code>u256</code>, <code>i512</code>, <code>u512</code>); the fixed decimals follow on
-the same core.</p>
+words (<code>i256</code>, <code>u256</code>, <code>i512</code>, <code>u512</code>), and the SQL <code>NUMERIC</code>
+fixed decimals <strong>decimal32</strong>, <strong>decimal64</strong>, <strong>decimal128</strong> and
+<strong>decimal256</strong>.</p>
 <p>The core is a port of Go's <code>math/big</code> at commit <code>577b91f341</code>
 (BSD-3-Clause, the license beside it in <code>math/LICENSE-GO</code>); each ported
 file names the Go file it came from. The algorithms are Go's:
@@ -155,6 +158,8 @@ one list sized before the work starts and carved into windows.</p>
 <li><a href="#roundingmode"><strong>roundingmode</strong> -- <code>variant { toNearestEven  toNearestAway  toZero  awayFromZero  toNegativeInf  toPositiveInf }</code></a></li>
 <li><a href="#accuracy"><strong>accuracy</strong> -- <code>variant { below  exact  above }</code></a></li>
 <li><a href="#floatformat"><strong>floatformat</strong> -- <code>variant { exponent  exponentUpper  fixed  general  generalUpper  hex  hexFraction  binary }</code></a></li>
+<li><a href="#fixed-decimals"><strong>decimal32</strong>, <strong>decimal64</strong>, <strong>decimal128</strong>, <strong>decimal256</strong> -- <code>record { coef } as { precision: u8.generic  scale: u8.generic }</code>: <code>NUMERIC(precision, scale)</code> over 9, 18, 38 or 76 digits</a></li>
+<li><a href="#fixed-decimals"><strong>decerror</strong> -- <code>variant { overflow  divisionByZero }</code>: why a decimal is invalid</a></li>
 <li><a href="#fixed-width-integers"><strong>int</strong>, <strong>uint</strong> -- <code>record { limbs: (array t: u64 to: words) } as { words: u64.generic }</code>: a two's complement integer of <code>64*words</code> bits; <code>i256</code>, <code>u256</code>, <code>i512</code>, <code>u512</code> name four</a></li>
 </ul>
 <p><strong>Constants</strong></p>
@@ -180,6 +185,13 @@ one list sized before the work starts and carved into windows.</p>
 <li><a href="#fixed-width-integers"><code>create from:</code>, <code>fromBig from:</code>, <code>parse text: base:</code>, <code>string</code>, <code>text base:</code>, <code>big</code></a></li>
 <li><a href="#fixed-width-integers"><code>+ - * / %</code>, <code>&amp; | ^ not &lt;&lt; &gt;&gt;</code>, <code>neg</code> -- wrapping, as the <code>i64</code> family</a></li>
 <li><a href="#fixed-width-integers"><code>== != &lt; &lt;= &gt; &gt;=</code>, <code>compare</code>, <code>hash</code>; <code>i64</code>, <code>u64</code>, <code>f64</code> -- <code>resultval</code> with <code>converror</code></a></li>
+</ul>
+<p><strong>decimal32, decimal64, decimal128, decimal256</strong></p>
+<ul>
+<li><a href="#fixed-decimals"><code>create from:</code>, <code>fromCoef from:</code>, <code>parse text:</code>, <code>fromRat from: mode:</code></a></li>
+<li><a href="#fixed-decimals"><code>+ -</code>, <code>* /</code> -- rounded half-even to the scale; <code>neg</code>, <code>abs</code>, <code>sign</code></a></li>
+<li><a href="#fixed-decimals"><code>isInvalid</code>, <code>checked</code> -- <code>resultval</code> with <code>decerror</code></a></li>
+<li><a href="#fixed-decimals"><code>== != &lt; &lt;= &gt; &gt;=</code>, <code>compare</code>, <code>hash</code>; <code>rat</code>, <code>f64</code>, <code>string</code>; <code>i64</code> (32, 64) or <code>big</code> (128, 256)</a></li>
 </ul>
 <p><strong>BigRat</strong></p>
 <ul>
@@ -527,7 +539,42 @@ keys, such as <code>MapVR k: math.i256 V: String</code>.</p>
 fixed-width integer costs no allocation for <code>+</code>, <code>-</code>, <code>*</code>, the bit
 operators and the shifts; <code>/</code>, <code>%</code>, the text and the conversions through
 <code>BigInt</code> do allocate.</p>
-<h2 id="performance-and-toolchains"><a href="#performance-and-toolchains">14. Performance and toolchains</a></h2>
+<h2 id="fixed-decimals"><a href="#fixed-decimals">14. Fixed decimals</a></h2>
+<p><code>(math.decimal64 precision: P scale: S)</code> is SQL's <code>NUMERIC(P, S)</code>: at
+most <code>P</code> decimal digits, <code>S</code> of them after the point. Its value is its
+coefficient, <code>coef</code>, divided by <code>10^S</code>. The four tiers differ in the
+coefficient and so in how many digits they hold: <code>decimal32</code> an <code>i32</code> (9
+digits, four bytes), <code>decimal64</code> an <code>i64</code> (18), <code>decimal128</code> a 128-bit
+<code>math.int</code> (38) and <code>decimal256</code> a 256-bit one (76). Each is a record, a
+valtype, and each instance is checked where it is built: a precision of 0 or
+past the tier, or a scale past the precision, is a compile-time error.</p>
+<p><code>create from:</code> takes an integer, <code>fromCoef from:</code> the coefficient itself,
+and <code>parse text:</code> a sign, digits and an optional point; digits past the scale
+round half-even. <code>+</code> and <code>-</code> are exact. <code>*</code> and <code>/</code> take the same type
+and round the result half-even back to its scale, as a bank or a database
+does. Changing the precision, the scale or the tier is an explicit conversion
+through the exact rational: <code>T.fromRat from: x.rat mode: m</code>, in any
+<code>roundingmode</code>.</p>
+<p>A result too long for the precision, or a division by zero, does not panic: it
+is an <strong>invalid</strong> decimal, sticky through every operation after it, which
+prints as <code>invalid</code>. <code>isInvalid</code> asks, <code>checked</code> answers a <code>resultval</code>
+with the <code>decerror</code> -- <code>overflow</code> or <code>divisionByZero</code> -- and every
+invalid value equals every other, so <code>==</code> and <code>hash</code> still hold. An
+invalid value has no order, sign or numeric value: <code>compare</code>, <code>&lt;</code>,
+<code>sign</code>, <code>rat</code>, <code>f64</code> and the integer part panic on one.</p>
+<pre><code class="language-zerolang">money: (math.decimal64 precision: 12 scale: 2)
+
+main: function is {
+    price: money.parse text: "19.99"
+    match price case ok then {
+        total: price * (money from: 3)
+        print "\{total.string} \{(total / (money from: 0)).string}"
+    } case err then print "bad price"
+}</code></pre>
+<p>The native tiers compute in <code>i64</code>, a product or a scaled dividend of up to
+36 digits through the <code>u64</code> two-word multiply and divide, and allocate
+nothing; <code>decimal128</code> and <code>decimal256</code> compute in <code>BigInt</code>.</p>
+<h2 id="performance-and-toolchains"><a href="#performance-and-toolchains">15. Performance and toolchains</a></h2>
 <p>The loops every operation rests on -- add, subtract, shift and
 multiply-and-add over runs of 64-bit words -- are C, in
 <code>src/runtime/natives/_Z_MATH_ARITH.inc</code>, a port of Go's portable loops;

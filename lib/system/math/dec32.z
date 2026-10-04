@@ -1,0 +1,196 @@
+# decimal32 -- a fixed decimal of at most 9 digits over an i32 coefficient, for
+# where four bytes matter: SQL NUMERIC(precision, scale). The arithmetic is
+# decimal.z's native tier, in i64, narrowed back to the i32 every result fits.
+
+# decimal32 -- `precision` digits in all, `scale` of them after the point; the
+# value is coef / 10^scale. An invalid value (decimal.z) is past every valid one
+decimal32: record {
+    # the value times 10^scale, or an invalid value's code
+    coef: i32
+} as {
+    # how many digits the value holds, 1 to 9
+    precision: u8.generic
+    # how many of them follow the point, at most the precision
+    scale: u8.generic
+
+    # checkParams -- refuse, at compile time, an instance whose precision is
+    # 0 or past 9 or whose scale passes its precision. Every constructor
+    # asks, so no value of such an instance exists
+    checkParams: function {} is {
+        if (precision == 0) or (precision > 9) then error "decimal32 holds 1 to 9 digits"
+        if scale > precision then error "a decimal's scale cannot exceed its precision"
+    }
+
+    # the value of an i64, which must fit the digits before the point; 0 when
+    # `from` is left out. An integer too long for them is invalid
+    create: function {from: 0.i64} out this is {
+        (decimal32 :precision :scale).checkParams
+        c: decimal.invalid64 maxDigits: 9 why: decimal.decerror.overflow
+        if (decimal.wholeFits64 v: from p: precision s: scale) then {
+            c = from * (decimal.pow10 k: scale)
+        }
+        return (meta.create coef: c.i32.orPanic)
+    }
+
+    # fromCoef -- the decimal whose coefficient is `from`: its value is
+    # from / 10^scale. A coefficient of `precision` digits or more is invalid
+    fromCoef: function {from: i64} out type is {
+        (decimal32 :precision :scale).checkParams
+        c: decimal.fit64 c: from p: precision maxDigits: 9
+        return (meta.create coef: c.i32.orPanic)
+    }
+
+    # parse -- decimal text: an optional sign, digits, an optional point and
+    # digits after it. Digits past the scale round half-even; a value too long
+    # for the precision is `overflow`
+    parse: function {text: StringView} out (resultval t: type e: parseerror) is {
+        (decimal32 :precision :scale).checkParams
+        c: decimal.parseCoef :text s: scale
+        match (
+            c
+        ) case err then return ((resultval t: type e: parseerror).err c) case ok then {
+            v: decimal.fromBig64 :c p: precision maxDigits: 9
+            if (decimal.isInvalid64 c: v p: precision) then {
+                return ((resultval t: type e: parseerror).err parseerror.overflow)
+            }
+            return ((resultval t: type e: parseerror).ok (meta.create coef: v.i32.orPanic))
+        }
+    }
+
+    # fromRat -- a rational at this precision and scale, rounded by `mode`; a
+    # value too long for the precision is invalid. Changing a decimal's
+    # precision, scale or tier is this, from its `rat`
+    fromRat: function {from: bigrat.BigRat.view mode: rounding.roundingmode} out type is {
+        (decimal32 :precision :scale).checkParams
+        c: decimal.ratCoef x: from s: scale :mode
+        v: decimal.fromBig64 :c p: precision maxDigits: 9
+        return (meta.create coef: v.i32.orPanic)
+    }
+
+    # the sum; invalid when it overflows
+    +: function {t: this.view rhs: type} out type is {
+        c: decimal.add64 a: t.coef b: rhs.coef p: precision maxDigits: 9
+        return (meta.create coef: c.i32.orPanic)
+    }
+
+    # the difference; invalid when it overflows
+    -: function {t: this.view rhs: type} out type is {
+        c: decimal.sub64 a: t.coef b: rhs.coef p: precision maxDigits: 9
+        return (meta.create coef: c.i32.orPanic)
+    }
+
+    # the product, rounded half-even to this scale; invalid when it overflows
+    *: function {t: this.view rhs: type} out type is {
+        c: decimal.mul64 a: t.coef b: rhs.coef s: scale p: precision maxDigits: 9
+        return (meta.create coef: c.i32.orPanic)
+    }
+
+    # the quotient, rounded half-even to this scale; invalid when it overflows
+    # or rhs is zero
+    /: function {t: this.view rhs: type} out type is {
+        c: decimal.div64 a: t.coef b: rhs.coef s: scale p: precision maxDigits: 9
+        return (meta.create coef: c.i32.orPanic)
+    }
+
+    # the negation; an invalid value stays itself
+    neg: function {t: this.view} out type is {
+        if t.isInvalid then return t
+        return (meta.create coef: 0 - t.coef)
+    }
+
+    # the absolute value; an invalid value stays itself
+    abs: function {t: this.view} out type is {
+        if t.isInvalid then return t
+        if t.coef < 0 then return t.neg
+        return t
+    }
+
+    # -1, 0 or 1 as the value is below, at or above zero. Panics when invalid
+    sign: function {t: this.view} out i32 is {
+        if t.isInvalid then panic msg: "an invalid decimal has no sign"
+        if t.coef < 0 then return -1
+        if t.coef > 0 then return 1
+        return 0
+    }
+
+    # whether this is invalid: an overflow or a division by zero
+    isInvalid: function {t: this.view} out bool is {
+        return (decimal.isInvalid64 c: t.coef p: precision)
+    }
+
+    # checked -- the value, or why it is invalid
+    checked: function {t: this.view} out (resultval t: type e: decimal.decerror) is {
+        if t.isInvalid then {
+            return ((resultval t: type e: decimal.decerror).err (decimal.reason64
+                c: t.coef
+                maxDigits: 9
+            )
+            )
+        }
+        return ((resultval t: type e: decimal.decerror).ok t)
+    }
+
+    # the order of two valid values as -1, 0 or 1. Panics when either is invalid
+    compare: function {t: this.view rhs: type} out i32 is {
+        return (decimal.compare64 a: t.coef b: rhs.coef p: precision)
+    }
+
+    # whether the two are the same value; every invalid equals every invalid
+    ==: function {t: this.view rhs: type} out bool is {
+        return (decimal.equal64 a: t.coef b: rhs.coef p: precision)
+    }
+
+    # whether the two differ
+    !=: function {t: this.view rhs: type} out bool is {
+        return (decimal.equal64 a: t.coef b: rhs.coef p: precision).not
+    }
+
+    # whether this is below rhs. Panics when either is invalid
+    <: function {t: this.view rhs: type} out bool is {
+        return (t.compare :rhs) < 0
+    }
+
+    # whether this is at most rhs. Panics when either is invalid
+    <=: function {t: this.view rhs: type} out bool is {
+        return (t.compare :rhs) <= 0
+    }
+
+    # whether this is above rhs. Panics when either is invalid
+    >: function {t: this.view rhs: type} out bool is {
+        return (t.compare :rhs) > 0
+    }
+
+    # whether this is at least rhs. Panics when either is invalid
+    >=: function {t: this.view rhs: type} out bool is {
+        return (t.compare :rhs) >= 0
+    }
+
+    # a hash that agrees with ==
+    hash: function {t: this.view} out u64 is {
+        return (decimal.hash64 c: t.coef p: precision)
+    }
+
+    # the exact value as a BigRat. Panics when invalid
+    rat: function {t: this.view} out bigrat.BigRat is {
+        if t.isInvalid then panic msg: "an invalid decimal has no value"
+        return (decimal.coefRat c: (bigint.BigInt from: t.coef.i64) s: scale)
+    }
+
+    # the integer part, truncated toward zero. Panics when invalid
+    i64: function {t: this.view} out i64 is {
+        if t.isInvalid then panic msg: "an invalid decimal has no value"
+        return t.coef.i64 / (decimal.pow10 k: scale)
+    }
+
+    # the nearest f64, ties to even. Panics when invalid
+    f64: function {t: this.view} out f64 is {
+        return t.rat.roundF64
+    }
+
+    # the value in decimal with `scale` digits after the point, "invalid" for
+    # an invalid one
+    string: function {t: this.view} out String is {
+        if t.isInvalid then return "invalid"
+        return (decimal.pointText c: (bigint.BigInt from: t.coef.i64) s: scale)
+    }
+}

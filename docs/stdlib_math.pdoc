@@ -42,8 +42,9 @@ The #~"math" unit holds numbers past the machine's own. Today that is
 #b:"BigInt", a signed integer of any size, #b:"BigRat", a rational of any
 size, #b:"BigFloat", a binary floating-point number of any precision, and
 the fixed-width integers #b:"int" and #b:"uint" of any number of 64-bit
-words (#~"i256", #~"u256", #~"i512", #~"u512"); the fixed decimals follow on
-the same core.
+words (#~"i256", #~"u256", #~"i512", #~"u512"), and the SQL #~"NUMERIC"
+fixed decimals #b:"decimal32", #b:"decimal64", #b:"decimal128" and
+#b:"decimal256".
 
 The core is a port of Go's #~"math/big" at commit #~"577b91f341"
 (BSD-3-Clause, the license beside it in #~"math/LICENSE-GO"); each ported
@@ -81,6 +82,8 @@ one list sized before the work starts and carved into windows.
   [#*: #> to=roundingmode: #b:"roundingmode" -- #~"variant { toNearestEven  toNearestAway  toZero  awayFromZero  toNegativeInf  toPositiveInf }"]
   [#*: #> to=accuracy: #b:"accuracy" -- #~"variant { below  exact  above }"]
   [#*: #> to=floatformat: #b:"floatformat" -- #~"variant { exponent  exponentUpper  fixed  general  generalUpper  hex  hexFraction  binary }"]
+  [#*: #> to=fixed-decimals: #b:"decimal32", #b:"decimal64", #b:"decimal128", #b:"decimal256" -- #~"record { coef } as { precision: u8.generic  scale: u8.generic }": #~"NUMERIC(precision, scale)" over 9, 18, 38 or 76 digits]
+  [#*: #> to=fixed-decimals: #b:"decerror" -- #~"variant { overflow  divisionByZero }": why a decimal is invalid]
   [#*: #> to=fixed-width-integers: #b:"int", #b:"uint" -- #~"record { limbs: (array t: u64 to: words) } as { words: u64.generic }": a two's complement integer of #~"64*words" bits; #~"i256", #~"u256", #~"i512", #~"u512" name four]
 
 #p: #b:"Constants"
@@ -109,6 +112,14 @@ one list sized before the work starts and carved into windows.
   [#*: #> to=fixed-width-integers: #~"create from:", #~"fromBig from:", #~"parse text: base:", #~"string", #~"text base:", #~"big"]
   [#*: #> to=fixed-width-integers: #~"+ - * / %", #~"& | ^ not << >>", #~"neg" -- wrapping, as the #~"i64" family]
   [#*: #> to=fixed-width-integers: #~"== != < <= > >=", #~"compare", #~"hash"; #~"i64", #~"u64", #~"f64" -- #~"resultval" with #~"converror"]
+
+#p: #b:"decimal32, decimal64, decimal128, decimal256"
+
+#ul:
+  [#*: #> to=fixed-decimals: #~"create from:", #~"fromCoef from:", #~"parse text:", #~"fromRat from: mode:"]
+  [#*: #> to=fixed-decimals: #~"+ -", #~"* /" -- rounded half-even to the scale; #~"neg", #~"abs", #~"sign"]
+  [#*: #> to=fixed-decimals: #~"isInvalid", #~"checked" -- #~"resultval" with #~"decerror"]
+  [#*: #> to=fixed-decimals: #~"== != < <= > >=", #~"compare", #~"hash"; #~"rat", #~"f64", #~"string"; #~"i64" (32, 64) or #~"big" (128, 256)]
 
 #p: #b:"BigRat"
 
@@ -574,6 +585,50 @@ The word loops are math's C kernels run over the limbs' own windows, so a
 fixed-width integer costs no allocation for #~"+", #~"-", #~"*", the bit
 operators and the shifts; #~"/", #~"%", the text and the conversions through
 #~"BigInt" do allocate.
+
+
+#--: Fixed decimals
+
+#~"(math.decimal64 precision: P scale: S)" is SQL's #~"NUMERIC(P, S)": at
+most #~"P" decimal digits, #~"S" of them after the point. Its value is its
+coefficient, #~"coef", divided by #~"10^S". The four tiers differ in the
+coefficient and so in how many digits they hold: #~"decimal32" an #~"i32" (9
+digits, four bytes), #~"decimal64" an #~"i64" (18), #~"decimal128" a 128-bit
+#~"math.int" (38) and #~"decimal256" a 256-bit one (76). Each is a record, a
+valtype, and each instance is checked where it is built: a precision of 0 or
+past the tier, or a scale past the precision, is a compile-time error.
+
+#~"create from:" takes an integer, #~"fromCoef from:" the coefficient itself,
+and #~"parse text:" a sign, digits and an optional point; digits past the scale
+round half-even. #~"+" and #~"-" are exact. #~"*" and #~"/" take the same type
+and round the result half-even back to its scale, as a bank or a database
+does. Changing the precision, the scale or the tier is an explicit conversion
+through the exact rational: #~"T.fromRat from: x.rat mode: m", in any
+#~"roundingmode".
+
+A result too long for the precision, or a division by zero, does not panic: it
+is an #b:"invalid" decimal, sticky through every operation after it, which
+prints as #~"invalid". #~"isInvalid" asks, #~"checked" answers a #~"resultval"
+with the #~"decerror" -- #~"overflow" or #~"divisionByZero" -- and every
+invalid value equals every other, so #~"==" and #~"hash" still hold. An
+invalid value has no order, sign or numeric value: #~"compare", #~"<",
+#~"sign", #~"rat", #~"f64" and the integer part panic on one.
+
+#code language=zerolang: """
+  money: (math.decimal64 precision: 12 scale: 2)
+
+  main: function is {
+      price: money.parse text: "19.99"
+      match price case ok then {
+          total: price * (money from: 3)
+          print "\{total.string} \{(total / (money from: 0)).string}"
+      } case err then print "bad price"
+  }
+  """
+
+The native tiers compute in #~"i64", a product or a scaled dividend of up to
+36 digits through the #~"u64" two-word multiply and divide, and allocate
+nothing; #~"decimal128" and #~"decimal256" compute in #~"BigInt".
 
 
 #--: Performance and toolchains
