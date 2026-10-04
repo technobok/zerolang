@@ -90,7 +90,7 @@ SKIP     := mathutil genmath dissectlib
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: emit-set ident-set natives-tbl-guard generic-param-guard zl-full-guard const-row-guard all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls tcc install regen-goldens regen-matrix bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard lifetime-guard native-guard fallback-guard member-guard highlight-guard deadcode-guard require-guard static-tcc-guard refusal-guard zlink-rules-guard fmt-raw-guard test-tcc test-tcc-heavy test-clang test-math-arm64 bench-math mode-parity readable-check user-native-guard perf-strict perf-elision pre-push
+.PHONY: emit-set ident-set natives-tbl-guard generic-param-guard zl-full-guard const-row-guard all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls tcc install regen-goldens regen-matrix bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard lifetime-guard native-guard fallback-guard member-guard highlight-guard deadcode-guard require-guard static-tcc-guard refusal-guard zlink-rules-guard fmt-raw-guard test-tcc test-tcc-heavy test-clang test-math-arm64 bench-math bench-math-kernels mode-parity readable-check user-native-guard perf-strict perf-elision pre-push
 
 # Keep pattern-chain intermediates (the per-example .c files) for debugging.
 .SECONDARY:
@@ -206,18 +206,35 @@ test-math-arm64: bin/zc
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
 	echo "test-math-arm64 OK: $$n math programs on aarch64, golden or refused as f128"
 
-# bench-math -- math's arithmetic timed per operation and size
-# (tests/bench/math_bench.z). NOT in ci: wall time is not a ratchet. One program,
-# three builds: gcc -O2 with the word primitives' builtins, gcc -O2 with
-# -DZ_WORD_PORTABLE forcing their portable forms, and tcc, which always takes
-# those.
+# bench-math -- math's arithmetic timed per operation and size: first the
+# word-vector kernels alone (bench-math-kernels), then the operations through
+# BigInt (tests/bench/math_bench.z). NOT in ci: wall time is not a ratchet. Each
+# program is built three ways: gcc -O2 with the word primitives' builtins, gcc
+# -O2 with -DZ_WORD_PORTABLE forcing their portable forms, and tcc, which always
+# takes those.
 BENCH_MATH_DIR := $(BUILDDIR)/bench-math
-bench-math: bin/zc $(BUILDDIR)/tcc
+bench-math: bin/zc $(BUILDDIR)/tcc bench-math-kernels
 	@mkdir -p $(BENCH_MATH_DIR)
 	@bin/zc build tests/bench/math_bench.z --release -o $(BENCH_MATH_DIR)/builtins
 	@bin/zc build tests/bench/math_bench.z --release --cflags -DZ_WORD_PORTABLE -o $(BENCH_MATH_DIR)/portable
 	@bin/zc build tests/bench/math_bench.z --cc $(BUILDDIR)/tcc --tcc-lib $(TCCLIB) -o $(BENCH_MATH_DIR)/tcc
 	@for v in builtins portable tcc; do echo "== $$v"; $(BENCH_MATH_DIR)/$$v; done
+
+# bench-math-kernels -- the kernels timed alone (tests/bench/math_kernels.c),
+# compiled straight from the runtime fragments as zc compiles a program, once
+# per tier. The wide multiply is cut out of z_hash.inc, whose other parts are
+# templates. A row prints the median of REPS timings.
+REPS ?= 5
+bench-math-kernels: $(BUILDDIR)/tcc
+	@mkdir -p $(BENCH_MATH_DIR)
+	@awk '/^\/\* 64x64 -> 128 multiply/,/^#endif/' src/runtime/z_hash.inc > $(BENCH_MATH_DIR)/mul128.h
+	@grep -q 'z_fh_mul128' $(BENCH_MATH_DIR)/mul128.h \
+	  || { echo "bench-math-kernels: z_hash.inc has no z_fh_mul128 block"; exit 1; }
+	@inc="-I$(BENCH_MATH_DIR) -Isrc/runtime/natives"; \
+	$(CC) -O2 -std=c17 -Wall -Wextra $$inc -o $(BENCH_MATH_DIR)/k-builtins tests/bench/math_kernels.c \
+	&& $(CC) -O2 -std=c17 -Wall -Wextra -DZ_WORD_PORTABLE $$inc -o $(BENCH_MATH_DIR)/k-portable tests/bench/math_kernels.c \
+	&& $(BUILDDIR)/tcc -B $(TCCLIB) $$inc -o $(BENCH_MATH_DIR)/k-tcc tests/bench/math_kernels.c
+	@for v in builtins portable tcc; do echo "== kernels $$v"; $(BENCH_MATH_DIR)/k-$$v -r $(REPS); done
 
 # test-clang -- the corpus under clang, the fast tier. gcc reaches __float128's
 # library through quadmath.h; clang has no such header on its path, so the
