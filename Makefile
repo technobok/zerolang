@@ -95,11 +95,11 @@ NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 # Keep pattern-chain intermediates (the per-example .c files) for debugging.
 .SECONDARY:
 
-# TOOLDIRS / TOOLSRC -- the developer tools under tools/, each a program of its
-# own units (tools/README.md), and their sources: every check that reaches src/
-# reaches them too.
-TOOLDIRS := $(patsubst %/,%,$(wildcard tools/*/))
+# TOOLSRC / TOOLDIRS -- the zerolang sources of the developer tools under tools/
+# (tools/README.md) and the directories holding them, each a program of its own
+# units: every check that reaches src/ reaches them too.
 TOOLSRC := $(wildcard tools/*/*.z)
+TOOLDIRS := $(sort $(patsubst %/,%,$(dir $(TOOLSRC))))
 
 # ZLSCOPE -- what the zl *linter* checks: the tool + compiler sources, and every unit
 # under lib/system -- which is the stdlib proper (io/os/collections/system/cli/core) as
