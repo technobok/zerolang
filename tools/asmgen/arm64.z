@@ -1,0 +1,236 @@
+# Copyright 2025 The Go Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style
+# license that can be found in lib/system/math/LICENSE-GO.
+#
+# Ported from Go's src/math/big/internal/asmgen/arm64.go at 577b91f341: the
+# arm64 architecture, written as GNU inline asm. GNU puts the destination
+# first, so Go's `op x, y, z` (z = y op x) is written `op z, y, x` and its
+# two-operand `op x, y` is `op y, y, x`; an immediate is `#n` and a memory
+# operand `[base, #off]`. Loops keep the carry in the flag: SUB without S and
+# CBZ/CBNZ leave it alone.
+
+public: unit {
+    :table
+    :render
+    :put2
+    :put3
+    :mov
+    :addWords
+    :loadIncN
+    :loadDecN
+    :storeIncN
+    :storeDecN
+}
+
+Arch: arch.Arch
+Asm: asm.Asm
+operand: arch.operand
+
+# names -- the registers' assembler names by number, row 0 the sentinel. x18
+# is the platform register, x27 to x30 are left to the C compiler (x29 the
+# frame pointer, x30 the link register), and xzr reads as zero
+names: "- x0 x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x19 x20 x21 x22 x23 x24 x25 x26 xzr"
+
+# regZR -- the zero register's number
+regZR: 27
+
+# table -- the arm64 Arch
+table: function out Arch is {
+    all: List String
+    for each n: (names.split sep: " ") loop all.append from: n.string
+    regs: ListVal u64
+    i: 1.u64
+    for i < regZR loop {
+        regs.append from: i
+        i = i + 1
+    }
+    return (Arch
+        name: "arm64"
+        kind: arch.isa.arm64
+        wordBits: 64
+        wordBytes: 8
+        carrySafeLoop: true
+        names: all.take
+        regs: regs.take
+        reg0: regZR
+        threeOp: true
+        memOK: false
+        maxColumns: 0
+        mov: "mov"
+        add: "add"
+        adds: "adds"
+        adc: "adc"
+        adcs: "adcs"
+        sub: "sub"
+        subs: "subs"
+        sbc: "sbc"
+        sbcs: "sbcs"
+        mul: "mul"
+        mulhi: "umulh"
+        lsh: "lsl"
+        lshd: ""
+        rsh: "lsr"
+        rshd: ""
+        opAnd: "and"
+        opOr: "orr"
+        opXor: "eor"
+        neg: ""
+        lea: ""
+        jmp: "b"
+        subCarryIsBorrow: false
+        altCarry: false
+    )
+}
+
+# render -- r in GNU arm64 syntax
+render: function {a: Asm.view r: operand} out String is {
+    match (
+        r.kind
+    ) case reg then {
+        return (a.regName n: r.num)
+    } case imm then {
+        return "#\{r.off}"
+    } case mem then {
+        return "[\{a.regName n: r.num}, #\{r.off}]"
+    } case none then {
+        a.fatal msg: "an empty operand"
+        return ""
+    }
+}
+
+# put2 -- Go's two-operand `op x, y` (y = y op x)
+put2: function as { T: StringLike.generic } in {
+    a: Asm.view op: T.view x: operand y: operand
+} out String is {
+    d: render :a r: y
+    return "\{op} \{d}, \{d}, \{render :a r: x}"
+}
+
+# put3 -- Go's `op x, y, z` (z = y op x)
+put3: function as { T: StringLike.generic } in {
+    a: Asm.view op: T.view x: operand y: operand z: operand
+} out String is {
+    return "\{op} \{render :a r: z}, \{render :a r: y}, \{render :a r: x}"
+}
+
+# mov -- dst = src: a load from memory, a store to it, or a register move
+mov: function {a: Asm.view src: operand dst: operand} out String is {
+    if src.isMem then return "ldr \{render :a r: dst}, \{render :a r: src}"
+    if dst.isMem then return "str \{render :a r: src}, \{render :a r: dst}"
+    return "mov \{render :a r: dst}, \{render :a r: src}"
+}
+
+# addWords -- dst = src1*8 + src2
+addWords: function {a: Asm.view src1: operand src2: operand dst: operand} out String is {
+    return "add \{render :a r: dst}, \{render :a r: src2}, \{render :a r: src1}, lsl #3"
+}
+
+# loadIncN -- load regs from successive words at p, advancing p past them
+loadIncN: function {a: Asm.borrow p: operand regs: (ListVal operand).view} is {
+    pn: render :a r: p
+    n: regs.length
+    if n == 1 then {
+        a.line text: "ldr \{render :a r: (regs.get i: 0)}, [\{pn}], #8"
+        return
+    }
+    (a.line
+        text: "ldp \{render :a r: (regs.get i: 0)}, \{(render
+            :a
+            r: (regs.get i: 1)
+        )}, [\{pn}], #\{n * 8}"
+    )
+    i: 2.u64
+    for (i + 2) <= n loop {
+        off: i.i64.orPanic - n.i64.orPanic * 8
+        (a.line
+            text: "ldp \{render :a r: (regs.get :i)}, \{(render
+                :a
+                r: (regs.get i: i + 1)
+            )}, [\{pn}, #\{off}]"
+        )
+        i = i + 2
+    }
+    if i < n then a.line text: "ldr \{render :a r: (regs.get :i)}, [\{pn}, #-8]"
+}
+
+# loadDecN -- load regs from the words below p, moving p down to the lowest
+loadDecN: function {a: Asm.borrow p: operand regs: (ListVal operand).view} is {
+    pn: render :a r: p
+    n: regs.length
+    if n == 1 then {
+        a.line text: "ldr \{render :a r: (regs.get i: 0)}, [\{pn}, #-8]!"
+        return
+    }
+    (a.line
+        text: "ldp \{render :a r: (regs.get i: n - 1)}, \{(render
+            :a
+            r: (regs.get i: n - 2)
+        )}, [\{pn}, #-\{n * 8}]!"
+    )
+    i: 2.u64
+    for (i + 2) <= n loop {
+        (a.line
+            text: "ldp \{render :a r: (regs.get i: n - 1 - i)}, \{(render
+                :a
+                r: (regs.get i: n - 2 - i)
+            )}, [\{pn}, #\{i * 8}]"
+        )
+        i = i + 2
+    }
+    if i < n then a.line text: "ldr \{render :a r: (regs.get i: 0)}, [\{pn}, #\{i * 8}]"
+}
+
+# storeIncN -- store regs to successive words at p, advancing p past them
+storeIncN: function {a: Asm.borrow p: operand regs: (ListVal operand).view} is {
+    pn: render :a r: p
+    n: regs.length
+    if n == 1 then {
+        a.line text: "str \{render :a r: (regs.get i: 0)}, [\{pn}], #8"
+        return
+    }
+    (a.line
+        text: "stp \{render :a r: (regs.get i: 0)}, \{(render
+            :a
+            r: (regs.get i: 1)
+        )}, [\{pn}], #\{n * 8}"
+    )
+    i: 2.u64
+    for (i + 2) <= n loop {
+        off: i.i64.orPanic - n.i64.orPanic * 8
+        (a.line
+            text: "stp \{render :a r: (regs.get :i)}, \{(render
+                :a
+                r: (regs.get i: i + 1)
+            )}, [\{pn}, #\{off}]"
+        )
+        i = i + 2
+    }
+    if i < n then a.line text: "str \{render :a r: (regs.get :i)}, [\{pn}, #-8]"
+}
+
+# storeDecN -- store regs to the words below p, moving p down to the lowest
+storeDecN: function {a: Asm.borrow p: operand regs: (ListVal operand).view} is {
+    pn: render :a r: p
+    n: regs.length
+    if n == 1 then {
+        a.line text: "str \{render :a r: (regs.get i: 0)}, [\{pn}, #-8]!"
+        return
+    }
+    (a.line
+        text: "stp \{render :a r: (regs.get i: n - 1)}, \{(render
+            :a
+            r: (regs.get i: n - 2)
+        )}, [\{pn}, #-\{n * 8}]!"
+    )
+    i: 2.u64
+    for (i + 2) <= n loop {
+        (a.line
+            text: "stp \{render :a r: (regs.get i: n - 1 - i)}, \{(render
+                :a
+                r: (regs.get i: n - 2 - i)
+            )}, [\{pn}, #\{i * 8}]"
+        )
+        i = i + 2
+    }
+    if i < n then a.line text: "str \{render :a r: (regs.get i: 0)}, [\{pn}, #\{i * 8}]"
+}

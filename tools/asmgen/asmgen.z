@@ -1,0 +1,173 @@
+# Copyright 2025 The Go Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style
+# license that can be found in lib/system/math/LICENSE-GO.
+#
+# asmgen -- writes math's word-vector kernels as GNU inline asm, one fragment
+# per architecture: src/runtime/natives/_Z_MATH_ARITH_<ARCH>.inc. A port of
+# Go's src/math/big/internal/asmgen at 577b91f341, its kernels written once
+# (add.z, mul.z, shift.z) over a Pipe of unrolled loads and stores (pipe.z)
+# and an assembler (asm.z) that each architecture (amd64.z, arm64.z) fills in
+# with its registers and instructions.
+#
+# Usage: asmgen DIR -- write both fragments into DIR. `make regen-math-asm`
+# writes them into the tree; `make math-asm-guard` writes them into the build
+# directory and fails when they differ from the committed ones.
+
+public: unit {
+    :main
+}
+
+# main -- write the fragments into the directory named on the command line
+main: function is {
+    argv: os.args
+    if argv.length != 2 then {
+        io.eprintln "usage: asmgen DIR"
+        os.exit code: 2
+    }
+    dir: argv.get i: 1
+    (write
+        path: "\{dir}/_Z_MATH_ARITH_AMD64.inc"
+        content: (generate target: amd64.table guard: amd64Guard keeps: keepAmd64)
+    )
+    (write
+        path: "\{dir}/_Z_MATH_ARITH_ARM64.inc"
+        content: (generate target: arm64.table guard: arm64Guard keeps: keepArm64)
+    )
+}
+
+# kernel -- a kernel the generator can write
+kernel: variant { addVV: null subVV: null lshVU: null rshVU: null mulAddVWW: null addMulVVWW: null }
+
+# kept -- a kernel kept for an architecture, and the fewest words it is used for:
+# below that the C kernel is the faster
+kept: record {
+    k: kernel
+    minWords: u64
+}
+
+# keepAmd64 -- the amd64 kernels that beat the C kernels' compiler builtins,
+# each from the length where it starts to (make bench-math-kernels, medians of
+# repeated runs)
+keepAmd64: function out ListVal kept is {
+    ks: ListVal kept
+    ks.append from: (kept k: kernel.addVV minWords: 1)
+    ks.append from: (kept k: kernel.subVV minWords: 1)
+    ks.append from: (kept k: kernel.lshVU minWords: 1)
+    ks.append from: (kept k: kernel.rshVU minWords: 1)
+    ks.append from: (kept k: kernel.mulAddVWW minWords: 1)
+    ks.append from: (kept k: kernel.addMulVVWW minWords: 1)
+    return ks
+}
+
+# keepArm64 -- the arm64 kernels, every one: they are compiled only on request
+# until arm64 hardware measures them
+keepArm64: function out ListVal kept is {
+    ks: ListVal kept
+    ks.append from: (kept k: kernel.addVV minWords: 1)
+    ks.append from: (kept k: kernel.subVV minWords: 1)
+    ks.append from: (kept k: kernel.lshVU minWords: 1)
+    ks.append from: (kept k: kernel.rshVU minWords: 1)
+    ks.append from: (kept k: kernel.mulAddVWW minWords: 1)
+    ks.append from: (kept k: kernel.addMulVVWW minWords: 1)
+    return ks
+}
+
+# amd64Guard -- when the amd64 kernels are compiled: an x86-64 target and a C
+# compiler other than tcc, whose assembler lacks MULX, ADCX and ADOX, unless
+# Z_MATH_NOASM or Z_WORD_PORTABLE asks for the C kernels
+amd64Guard: "defined(__x86_64__) && !defined(__TINYC__) && !defined(Z_MATH_NOASM) && !defined(Z_WORD_PORTABLE)"
+
+# arm64Guard -- when the arm64 kernels are compiled: only on request, with
+# Z_MATH_ASM_ARM64, until they are measured on arm64 hardware
+arm64Guard: "defined(__aarch64__) && defined(Z_MATH_ASM_ARM64) && !defined(__TINYC__) && !defined(Z_MATH_NOASM) && !defined(Z_WORD_PORTABLE)"
+
+# write -- write a generated file, stopping on failure
+write: function as { T: StringLike.generic U: StringLike.generic } in {
+    path: T.view content: U.view
+} is {
+    w: io.writeText :path :content
+    if w.err then {
+        io.eprintln "asmgen: cannot write \{path}"
+        os.exit code: 1
+    }
+}
+
+# generate -- one architecture's fragment: each kept kernel, announced by a
+# macro Z_MATHASM_<NAME>(n), true when the kernel is to run on n words, which
+# _Z_MATH_ARITH.inc asks before its C loop
+generate: function as { T: StringLike.generic } in {
+    target: arch.Arch.take
+    guard: T.view
+    keeps: (ListVal kept).view
+} out String is {
+    name: target.name.copy
+    a: asm.create a: target.take
+    for each kp: keeps loop {
+        cond: writeKernel :a k: kp.k
+        kn: kernelName k: kp.k
+        test: "(n) >= \{kp.minWords}"
+        if cond.length > 0 then test = "\{test} && \{cond}"
+        a.raw text: "#define Z_MATHASM_\{kn.stringView.toUpperAscii}(n) (\{test})\n"
+    }
+    out9: header :name
+    out9.append "#if \{guard}\n"
+    out9.append a.file
+    out9.append "\n#endif\n"
+    return out9
+}
+
+# writeKernel -- write the kernel, answering the C condition under which it may
+# run, "" for always
+writeKernel: function {a: asm.Asm.borrow k: kernel} out String is {
+    match (
+        k
+    ) case addVV then {
+        add.addOrSubVV :a name: "addVV"
+    } case subVV then {
+        add.addOrSubVV :a name: "subVV"
+    } case lshVU then {
+        shift.shiftVU :a name: "lshVU"
+    } case rshVU then {
+        shift.shiftVU :a name: "rshVU"
+    } case mulAddVWW then {
+        mul.mulAddVWW :a
+    } case addMulVVWW then {
+        return (mul.addMulVVWW :a)
+    }
+    return ""
+}
+
+# kernelName -- the kernel's name, as Go spells it
+kernelName: function {k: kernel} out String is {
+    match (
+        k
+    ) case addVV then {
+        return "addVV"
+    } case subVV then {
+        return "subVV"
+    } case lshVU then {
+        return "lshVU"
+    } case rshVU then {
+        return "rshVU"
+    } case mulAddVWW then {
+        return "mulAddVWW"
+    } case addMulVVWW then {
+        return "addMulVVWW"
+    }
+}
+
+# header -- the comment opening a fragment
+header: function as { T: StringLike.generic } in {name: T.view} out String is {
+    h: "/* Copyright 2025 The Go Authors. All rights reserved.\n".string
+    h.append "   Use of this source code is governed by a BSD-style\n"
+    h.append "   license that can be found in lib/system/math/LICENSE-GO.\n"
+    h.append "\n"
+    h.append "   Code generated by tools/asmgen (make regen-math-asm). DO NOT EDIT.\n"
+    h.append "\n"
+    h.append "   math's word-vector kernels for \{name}, as GNU inline asm: Go's\n"
+    h.append "   src/math/big/internal/asmgen at 577b91f341, its output rewritten for a\n"
+    h.append "   C compiler. Each z_mathasm_<name> keeps Go's contract -- the vectors share\n"
+    h.append "   the length n, z may be x itself, a shift count is 1 to 63 -- and\n"
+    h.append "   _Z_MATH_ARITH.inc calls one where Z_MATHASM_<NAME>(n) is true. */\n"
+    return h
+}

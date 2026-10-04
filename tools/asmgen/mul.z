@@ -1,0 +1,182 @@
+# Copyright 2025 The Go Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style
+# license that can be found in lib/system/math/LICENSE-GO.
+#
+# Ported from Go's src/math/big/internal/asmgen/mul.go at 577b91f341:
+# mulAddVWW, z, c = x*m + a, and addMulVVWW, z, c = x + y*m + a.
+#
+# For each word: lo, hi = m * mulsrc[i]; lo += a, carrying; lo += addsrc[i],
+# carrying alt; z[i] = lo; a = hi + carry + alt. That last sum cannot
+# overflow: after N words the value is at most
+# (2^64N - 1) + (2^64 - 1)(2^64N - 1) + (2^64 - 1) = 2^64(N+1) - 1, which fits
+# in N+1 words.
+#
+# With one carry flag (addMul) a block chains the multiply's carries through
+# its columns, then the adds' carries, so the flag is never saved: every
+# column's lo += previous hi, then every column's lo += addsrc. With two
+# independent flags (addMulAlt, amd64's ADCX and ADOX with MULX, which touches
+# neither) both chains run through every column of a block at once.
+
+public: unit {
+    :mulAddVWW
+    :addMulVVWW
+    :blockAddMul
+    :blockAlt
+    :altStart
+    :altEnd
+}
+
+Asm: asm.Asm
+Body: pipe.Body
+Grid: pipe.Grid
+Pipe: pipe.Pipe
+
+# mulAddVWW -- z, c = x*m + a
+mulAddVWW: function {a: Asm.borrow} is {
+    a.func name: "mulAddVWW" decl: "func mulAddVWW(z, x []Word, m, a Word) (c Word)"
+    addMul :a addsrc: "" mulsrc: "x" mulIndex: 0
+}
+
+# addMulVVWW -- z, c = x + y*m + a, answering the C condition under which the
+# kernel may run, "" for always. Where the processor may have a second carry
+# chain only the two-chain form is written, run where it has one: on the amd64
+# the generator was measured on, the one-chain form ran slower than the C
+# kernel's compiler builtins, which a processor without ADX takes instead.
+addMulVVWW: function {a: Asm.borrow} out String is {
+    a.func name: "addMulVVWW" decl: "func addMulVVWW(z, x, y []Word, m, a Word) (c Word)"
+    if a.arch.altCarry.not then {
+        addMul :a addsrc: "x" mulsrc: "y" mulIndex: 1
+        return ""
+    }
+    a.raw text: amd64.adxHelper
+    a.setOption enable: true
+    addMulAlt :a
+    a.setOption enable: false
+    return amd64.adxCheck.string
+}
+
+# addMul -- the one-carry form, its sum's words from addsrc (none when empty)
+addMul: function as { T: StringLike.generic U: StringLike.generic } in {
+    a: Asm.borrow addsrc: T.view mulsrc: U.view mulIndex: u64
+} is {
+    b: pipe.newBody kind: pipe.bodykind.addMul
+    b.m = a.arg name: "m"
+    b.c = a.arg name: "a"
+    n: a.arg name: "z_len"
+    p: pipe.create :a
+    b.hasAdd = addsrc.length > 0
+    if b.hasAdd then p.setHint :a name: addsrc h: arch.hint.memOK
+    p.setHint :a name: mulsrc h: arch.hint.mulSrc
+    b.mulIndex = mulIndex
+    # arm64: eight columns a block run 5% faster
+    top: 4
+    if a.arch.kind.arm64 then top = 8
+    p.start :a :n facs: (pipe.factors a: 1 b: top)
+    p.runLoop :a :b
+    a.storeArg src: b.c name: "c"
+    a.ret
+    a.finish
+}
+
+# blockAddMul -- a block of the one-carry form
+blockAddMul: function {
+    a: Asm.borrow p: Pipe.borrow b: Body.borrow ins: Grid.view outs: Grid.borrow
+} is {
+    a.comment text: "multiply"
+    prev: b.c
+    how: arch.carry.set
+    i: u64
+    for i < ins.cols loop {
+        x: ins.get r: b.mulIndex c: i
+        hi: a.regHint h: arch.hint.mulHi
+        a.mulWide src1: b.m src2: x dstlo: x dsthi: hi
+        a.add src1: prev src2: x dst: x c: how
+        how = arch.carry.use | arch.carry.set
+        if prev != b.c then a.free r: prev
+        outs.set r: 0 c: i v: x
+        prev = hi
+        i = i + 1
+    }
+    a.add src1: (a.imm x: 0) src2: prev dst: b.c c: arch.carry.use | arch.carry.smash
+    if b.hasAdd then {
+        a.comment text: "add"
+        how = arch.carry.set
+        i = 0
+        for i < ins.cols loop {
+            o: outs.get r: 0 c: i
+            a.add src1: (ins.get r: 0 c: i) src2: o dst: o c: how
+            how = arch.carry.use | arch.carry.set
+            i = i + 1
+        }
+        a.add src1: (a.imm x: 0) src2: b.c dst: b.c c: arch.carry.use | arch.carry.smash
+    }
+    p.storeN :a g: outs
+}
+
+# addMulAlt -- the two-chain form: the multiply's carries on one flag, the
+# adds' on the other, both kept in the flags through a whole block
+addMulAlt: function {a: Asm.borrow} is {
+    b: pipe.newBody kind: pipe.bodykind.addMulAlt
+    b.m = a.argHint name: "m" h: arch.hint.mulSrc
+    b.c = a.arg name: "a"
+    n: a.arg name: "z_len"
+    # the adds closing a block need a register holding 0: ADCX and ADOX take
+    # no immediate
+    b.r0 = a.zr
+    if b.r0.valid.not then {
+        b.r0 = a.reg
+        a.mov src: (a.imm x: 0) dst: b.r0
+    }
+    p: pipe.create :a
+    p.setLabel label: "alt"
+    p.setHint :a name: "x" h: arch.hint.memOK
+    p.setHint :a name: "y" h: arch.hint.memOK
+    if a.arch.kind.amd64 then p.setMaxColumns m: 2
+    b.prev = b.c
+    b.atStart = true
+    b.atEnd = true
+    p.start :a :n facs: (pipe.factors a: 1 b: 8)
+    p.runLoop :a :b
+    a.storeArg src: b.c name: "c"
+    a.ret
+    a.finish
+}
+
+# altStart -- clear both carry flags and take a register for the high words
+altStart: function {a: Asm.borrow b: Body.borrow} is {
+    a.comment text: "multiply and add"
+    a.clearCarry which: arch.carry.add | arch.carry.alt
+    a.clearCarry which: arch.carry.add
+    b.hi = a.reg
+}
+
+# altEnd -- fold both carries into the running high word
+altEnd: function {a: Asm.borrow b: Body.borrow} is {
+    a.add src1: b.r0 src2: b.prev dst: b.c c: arch.carry.use | arch.carry.smash
+    a.add src1: b.r0 src2: b.c dst: b.c c: arch.carry.use | arch.carry.smash | arch.carry.alt
+    b.prev = b.c
+}
+
+# blockAlt -- a block of the two-chain form
+blockAlt: function {
+    a: Asm.borrow p: Pipe.borrow b: Body.borrow ins: Grid.view outs: Grid.borrow
+} is {
+    i: u64
+    for i < ins.cols loop {
+        y: ins.get r: 1 c: i
+        lo: y
+        if lo.isMem then lo = a.reg
+        a.mulWide src1: b.m src2: y dstlo: lo dsthi: b.hi
+        a.add src1: b.prev src2: lo dst: lo c: arch.carry.use | arch.carry.set
+        (a.add
+            src1: (ins.get r: 0 c: i)
+            src2: lo
+            dst: lo
+            c: arch.carry.use | arch.carry.set | arch.carry.alt
+        )
+        outs.set r: 0 c: i v: lo
+        b.prev swap b.hi
+        i = i + 1
+    }
+    p.storeN :a g: outs
+}

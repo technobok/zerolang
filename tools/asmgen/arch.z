@@ -1,0 +1,174 @@
+# Copyright 2025 The Go Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style
+# license that can be found in lib/system/math/LICENSE-GO.
+#
+# Ported from Go's src/math/big/internal/asmgen/arch.go at 577b91f341: what an
+# architecture is to the generator. The kernels in add.z, mul.z and shift.z are
+# written once; an Arch names the registers and instructions that carry them
+# out. Only what amd64 and arm64 use is ported -- no carry register for a
+# machine without carry flags, no indexed addressing, no shifted operands.
+
+public: unit {
+    :Arch
+    :isa
+    :operand
+    :opkind
+    :carry
+    :hint
+    :noReg
+    :regOf
+    :immOf
+    :memOf
+}
+
+# isa -- the instruction set an Arch writes, which also picks its operand
+# syntax: AT&T for amd64, destination-first for arm64
+isa: variant { amd64: null arm64: null }
+
+# Arch -- an architecture's registers, instructions and conventions
+Arch: class {
+    # the name the generated file carries
+    name: String
+    kind: isa
+    wordBits: i64
+    wordBytes: i64
+    # loop control -- the count's decrement and the branch on it -- leaves the
+    # carry flag alone, so a carry chain can stay in the flag across iterations
+    carrySafeLoop: bool
+    # the assembler name of every register an operand can name, by number;
+    # row 0 is the sentinel no register
+    names: List String
+    # the allocatable registers' numbers, in allocation order
+    regs: ListVal u64
+    # the zero register's number; 0 -- the architecture has none
+    reg0: u64
+    # an arithmetic instruction takes three operands; without them
+    # `op x, y, z` is written `mov y, z; op x, z`
+    threeOp: bool
+    # arithmetic instructions read memory operands directly
+    memOK: bool
+    # the most vector columns one block of a Pipe loop handles; 0 -- no limit
+    maxColumns: i64
+    # the mnemonics; an empty one -- the architecture has no such instruction
+    mov: String
+    # add, carry not involved
+    add: String
+    # add, setting but not using carry
+    adds: String
+    # add, using but not setting carry
+    adc: String
+    # add, setting and using carry
+    adcs: String
+    sub: String
+    subs: String
+    sbc: String
+    sbcs: String
+    # multiply, the low word
+    mul: String
+    # multiply, the high word
+    mulhi: String
+    lsh: String
+    # double-width left shift, filling from a second register
+    lshd: String
+    rsh: String
+    rshd: String
+    opAnd: String
+    opOr: String
+    opXor: String
+    neg: String
+    lea: String
+    jmp: String
+    # the subtract carry bit means borrow -- 1 when a borrow happened -- as on
+    # x86; most systems set it when no borrow happened
+    subCarryIsBorrow: bool
+    # the architecture may have a second carry chain (ADX), tested at run time
+    altCarry: bool
+} as {
+    # hasShiftWide -- the architecture has double-width shifts
+    hasShiftWide: function {t: this.view} out bool is {
+        return t.lshd.length > 0
+    }
+}
+
+# hint -- what a register will be used for, so a fitting one is picked
+hint: data {
+    none: 0
+    # a shift count (CX on x86)
+    shiftCount: 1
+    # a wide multiply's source (AX on x86, DX with MULX)
+    mulSrc: 2
+    # a wide multiply's high word (DX on x86)
+    mulHi: 3
+    # a memory reference serves
+    memOK: 4
+} out u64
+
+# carry -- how an instruction sets and uses the carry flags, as bits. add and
+# sub take `use` or 0, then `set`, `keep` or `smash`, then `alt` or 0;
+# clearCarry, saveCarry and convertCarry take `add` or `sub`, and `alt` or 0
+carry: data {
+    # sets carry
+    set: 1
+    # uses carry
+    use: 2
+    # must preserve carry
+    keep: 4
+    # may change carry or not, whichever is easier
+    smash: 8
+    # the secondary carry flag
+    alt: 16
+    # add carry semantics
+    add: 32
+    # sub carry semantics
+    sub: 64
+} out u64
+
+# opkind -- what an operand is
+opkind: variant { none: null reg: null imm: null mem: null }
+
+# operand -- a register by number, an immediate, or the memory at a
+# byte offset from a base register
+operand: record {
+    kind: opkind
+    # the register's number, or a memory operand's base register
+    num: u64
+    # an immediate's value, or a memory operand's byte offset
+    off: i64
+} as {
+    # isImm -- an immediate value
+    isImm: function {t: this.view} out bool is {
+        return t.kind.imm
+    }
+    # isMem -- a memory reference
+    isMem: function {t: this.view} out bool is {
+        return t.kind.mem
+    }
+    # valid -- an operand at all, not the empty one
+    valid: function {t: this.view} out bool is {
+        return t.kind.none.not
+    }
+    # isReg -- a register, the one numbered n
+    isReg: function {t: this.view n: u64} out bool is {
+        return t.kind.reg and (t.num == n)
+    }
+}
+
+# noReg -- the empty operand
+noReg: function out operand is {
+    return (operand kind: opkind.none num: 0 off: 0)
+}
+
+# regOf -- the register numbered n
+regOf: function {n: u64} out operand is {
+    return (operand kind: opkind.reg num: n off: 0)
+}
+
+# immOf -- the immediate x
+immOf: function {x: i64} out operand is {
+    return (operand kind: opkind.imm num: 0 off: x)
+}
+
+# memOf -- the word off bytes from the pointer in register base
+memOf: function {base: u64 off: i64} out operand is {
+    return (operand kind: opkind.mem num: base :off)
+}

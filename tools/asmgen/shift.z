@@ -1,0 +1,140 @@
+# Copyright 2025 The Go Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style
+# license that can be found in lib/system/math/LICENSE-GO.
+#
+# Ported from Go's src/math/big/internal/asmgen/shift.go at 577b91f341: lshVU
+# and rshVU, z, c = x << s and z, c = x >> s, for 0 < s < 64.
+#
+# z and x may overlap at different offsets -- Go's z.Lsh(z, 65) has
+# &z[0] == &x[1] -- so a left shift runs from the top word down and a right
+# shift from the bottom up, each writing one word behind the one it reads.
+
+public: unit {
+    :shiftVU
+    :blockWide
+    :blockSplit
+}
+
+Asm: asm.Asm
+Body: pipe.Body
+Grid: pipe.Grid
+Pipe: pipe.Pipe
+operand: arch.operand
+
+# shiftVU -- lshVU or rshVU, by name
+shiftVU: function as { T: StringLike.generic } in {a: Asm.borrow name: T.view} is {
+    a.func :name decl: "func \{name}(z, x []Word, s uint) (c Word)"
+    # no input: there is no first word to read
+    n: a.arg name: "z_len"
+    a.jmpZero src: n label: "ret0"
+    s: a.argHint name: "s" h: arch.hint.shiftCount
+    p: pipe.create :a
+    left: name == "lshVU"
+    if left then p.setBackward :a
+    p.loadPtrs :a :n
+    a.comment text: "shift first word into carry"
+    first: p.loadN :a n: 1
+    b: pipe.newBody kind: pipe.bodykind.shiftWide
+    b.isLeft = left
+    b.s = s
+    b.prev = first.get r: 0 c: 0
+    if a.arch.hasShiftWide then {
+        # a wide shift needs no shift the other way: prev holds the previous
+        # word unshifted, the wide shift's fill, and after the loop the last
+        # word to write
+        c: a.reg
+        wide :a :b fill: b.prev src: (a.imm x: 0) dst: c
+        a.storeArg src: c name: "c"
+        a.free r: c
+        a.comment text: "shift remaining words"
+        p.start :a :n facs: (pipe.factors a: 1 b: 4)
+        p.runLoop :a :b
+        a.comment text: "store final shifted bits"
+        shiftBy :a :b src: b.prev dst: b.prev
+    } else {
+        # a word is x << s joined with the next word's x >> (64 - s): prev
+        # holds the shifted high bits waiting for the next word's low bits,
+        # and after the loop the last word to write
+        b.kind = pipe.bodykind.shiftSplit
+        b.sNeg = a.reg
+        a.mov src: (a.imm x: a.arch.wordBits) dst: b.sNeg
+        a.sub src1: s src2: b.sNeg dst: b.sNeg c: arch.carry.smash
+        c: a.reg
+        shiftBack :a :b src: b.prev dst: c
+        shiftBy :a :b src: b.prev dst: b.prev
+        a.storeArg src: c name: "c"
+        a.free r: c
+        a.comment text: "shift remaining words"
+        p.start :a :n facs: (pipe.factors a: 1 b: 4)
+        p.runLoop :a :b
+        a.comment text: "store final shifted bits"
+    }
+    last: pipe.grid rows: 1 cols: 1
+    last.set r: 0 c: 0 v: b.prev
+    p.storeN :a g: last
+    p.done :a
+    a.free r: s
+    a.ret
+    a.label name: "ret0"
+    a.storeArg src: (a.imm x: 0) name: "c"
+    a.ret
+    a.finish
+}
+
+# shiftBy -- dst = src shifted by s in the kernel's direction
+shiftBy: function {a: Asm.borrow b: Body.view src: operand dst: operand} is {
+    if b.isLeft then a.lsh shift: b.s :src :dst else a.rsh shift: b.s :src :dst
+}
+
+# shiftBack -- dst = src shifted by 64 - s the other way
+shiftBack: function {a: Asm.borrow b: Body.view src: operand dst: operand} is {
+    if b.isLeft then a.rsh shift: b.sNeg :src :dst else a.lsh shift: b.sNeg :src :dst
+}
+
+# wide -- dst = src shifted by s in the kernel's direction, filled from fill
+wide: function {a: Asm.borrow b: Body.view fill: operand src: operand dst: operand} is {
+    if b.isLeft then a.lshWide shift: b.s adj: fill :src :dst else (a.rshWide
+        shift: b.s
+        adj: fill
+        :src
+        :dst
+    )
+}
+
+# blockWide -- each output word, a wide shift of the previous input word
+# filled from this one; the input registers serve as outputs a column late
+blockWide: function {
+    a: Asm.borrow p: Pipe.borrow b: Body.borrow ins: Grid.view outs: Grid.borrow
+} is {
+    old: b.prev
+    i: u64
+    for i < ins.cols loop {
+        x: ins.get r: 0 c: i
+        wide :a :b fill: x src: old dst: old
+        outs.set r: 0 c: i v: old
+        old = x
+        i = i + 1
+    }
+    p.storeN :a g: outs
+    a.mov src: old dst: b.prev
+}
+
+# blockSplit -- each output word, the previous word's shifted bits joined with
+# this word's bits shifted back; the input registers serve as outputs a
+# column late
+blockSplit: function {
+    a: Asm.borrow p: Pipe.borrow b: Body.borrow ins: Grid.view outs: Grid.borrow
+} is {
+    z: a.reg
+    i: u64
+    for i < ins.cols loop {
+        x: ins.get r: 0 c: i
+        shiftBack :a :b src: x dst: z
+        a.orOp src1: b.prev src2: z dst: z
+        shiftBy :a :b src: x dst: b.prev
+        outs.set r: 0 c: i v: z
+        z = x
+        i = i + 1
+    }
+    p.storeN :a g: outs
+}

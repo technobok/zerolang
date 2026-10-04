@@ -1,0 +1,249 @@
+# Copyright 2025 The Go Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style
+# license that can be found in lib/system/math/LICENSE-GO.
+#
+# Ported from Go's src/math/big/internal/asmgen/amd64.go at 577b91f341: the
+# amd64 architecture, written as AT&T-syntax GNU inline asm. Operand order is
+# Go's own -- sources first, the destination last -- so an instruction keeps
+# its operands; a register is `%%name` inside the C string, an immediate
+# `$n`, a memory operand `off(%%base)`.
+
+public: unit {
+    :table
+    :hint
+    :add
+    :mulWide
+    :put2
+    :put3
+    :render
+    :plain
+    :addWords
+    :leaImm
+    :leaReg
+    :jmpTest
+    :regAX
+    :regDX
+    :regCX
+    :adxHelper
+    :adxCheck
+}
+
+Arch: arch.Arch
+Asm: asm.Asm
+operand: arch.operand
+
+# the register numbers, rows of the names table; AX, DX and CX come last in
+# allocation order so they stay free for hinted use
+regAX: 12
+regDX: 13
+regCX: 14
+
+# adxHelper -- the C asking whether the processor has ADX, and the BMI2 that
+# MULX belongs to; the compiler's cpu model answers it from a table it fills
+# once
+adxHelper: "\n/* the processor has ADX, and the BMI2 that MULX belongs to */\nstatic inline int z_mathasm_hasAdx(void) {\n    return __builtin_cpu_supports(\"adx\") && __builtin_cpu_supports(\"bmi2\");\n}\n"
+
+# adxCheck -- the condition adxHelper's function answers
+adxCheck: "z_mathasm_hasAdx()"
+
+# names -- the registers' assembler names by number, row 0 the sentinel
+names: "- rbx rsi rdi r8 r9 r10 r11 r12 r13 r14 r15 rax rdx rcx"
+
+# low8 -- the registers' low-byte names, which a shift count is written as
+low8: "- bl sil dil r8b r9b r10b r11b r12b r13b r14b r15b al dl cl"
+
+# table -- the amd64 Arch
+table: function out Arch is {
+    all: List String
+    for each n: (names.split sep: " ") loop all.append from: n.string
+    regs: ListVal u64
+    i: 1.u64
+    for i < 15 loop {
+        regs.append from: i
+        i = i + 1
+    }
+    return (Arch
+        name: "amd64"
+        kind: arch.isa.amd64
+        wordBits: 64
+        wordBytes: 8
+        carrySafeLoop: false
+        names: all.take
+        regs: regs.take
+        reg0: 0
+        threeOp: false
+        memOK: true
+        maxColumns: 0
+        mov: "movq"
+        add: ""
+        adds: "addq"
+        adc: ""
+        adcs: "adcq"
+        sub: ""
+        subs: "subq"
+        sbc: ""
+        sbcs: "sbbq"
+        mul: ""
+        mulhi: ""
+        lsh: "shlq"
+        lshd: "shldq"
+        rsh: "shrq"
+        rshd: "shrdq"
+        opAnd: "andq"
+        opOr: "orq"
+        opXor: "xorq"
+        neg: "negq"
+        lea: "leaq"
+        jmp: "jmp"
+        subCarryIsBorrow: true
+        altCarry: true
+    )
+}
+
+# hint -- the register a hint asks for: the count in CX, the multiply's source
+# in AX and its high word in DX -- with MULX, the source in DX and the high
+# word anywhere
+hint: function {altOn: bool h: u64} out u64 is {
+    if h == arch.hint.shiftCount then return regCX
+    if h == arch.hint.mulSrc then {
+        if altOn then return regDX
+        return regAX
+    }
+    if (h == arch.hint.mulHi) and altOn.not then return regDX
+    return 0
+}
+
+# add -- an add the two carry chains need: with ADX in use, a carry-using add
+# is ADCX, or ADOX on the second chain, and clearing the carry is a TEST,
+# which clears both flags; an ordinary ADD or ADC would smash both chains.
+# false -- not one of these, for the general rules
+add: function {a: Asm.borrow src1: operand src2: operand dst: operand c: u64} out bool is {
+    if a.altOn.not then return false
+    if ((c & arch.carry.use) != 0) and ((c & (arch.carry.set | arch.carry.smash)) != 0) then {
+        if (c & arch.carry.alt) != 0 then {
+            a.op3 op: "adoxq" :src1 :src2 :dst
+        } else {
+            a.op3 op: "adcxq" :src1 :src2 :dst
+        }
+        return true
+    }
+    if (
+        ((c & (arch.carry.set | arch.carry.use)) == arch.carry.set) and
+        (a.isZero r: src1) and
+        (src2 == dst)
+    ) then {
+        a.line text: "testq %%rax, %%rax"
+        return true
+    }
+    if c != arch.carry.keep then a.fatal msg: "unsupported carry"
+    return false
+}
+
+# mulWide -- the double-word product: MULQ, its one source in AX and the halves
+# in AX and DX; with ADX in use MULX, its source in DX and the halves anywhere,
+# which leaves both carry flags alone
+mulWide: function {a: Asm.borrow src1: operand src2: operand dstlo: operand dsthi: operand} is {
+    if a.altOn then {
+        s: src2
+        if (src1.isReg n: regDX).not then {
+            if (src2.isReg n: regDX).not then a.fatal msg: "mul src1 or src2 must be DX"
+            s = src1
+        }
+        a.line text: "mulxq \{a.render r: s}, \{a.render r: dstlo}, \{a.render r: dsthi}"
+        return
+    }
+    s: src2
+    if (src1.isReg n: regAX).not then {
+        if (src2.isReg n: regAX).not then a.fatal msg: "mulwide src1 or src2 must be AX"
+        s = src1
+    }
+    if (dstlo.isReg n: regAX).not then a.fatal msg: "mulwide dstlo must be AX"
+    if (dsthi.isReg n: regDX).not then a.fatal msg: "mulwide dsthi must be DX"
+    a.line text: "mulq \{a.render r: s}"
+}
+
+# nth -- the n-th space-separated word of a table
+nth: function as { T: StringLike.generic } in {table: T.view n: u64} out String is {
+    i: u64
+    for each w: (table.split sep: " ") loop {
+        if i == n then return w.string
+        i = i + 1
+    }
+    return "?"
+}
+
+# render -- r in AT&T syntax inside a C string, where `%` is written `%%`; a
+# shift count register by its low-byte name
+render: function {a: Asm.view r: operand count: bool} out String is {
+    match (
+        r.kind
+    ) case reg then {
+        if count then return "%%\{nth table: low8 n: r.num}"
+        return "%%\{nth table: names n: r.num}"
+    } case imm then {
+        return "$\{r.off}"
+    } case mem then {
+        return "\{r.off}(%%\{nth table: names n: r.num})"
+    } case none then {
+        a.fatal msg: "an empty operand"
+        return ""
+    }
+}
+
+# plain -- r as a comment names it
+plain: function {r: operand} out String is {
+    match (
+        r.kind
+    ) case reg then {
+        return "%\{nth table: names n: r.num}"
+    } case imm then {
+        return "$\{r.off}"
+    } case mem then {
+        return "\{r.off}(%\{nth table: names n: r.num})"
+    } case none then {
+        return "-"
+    }
+}
+
+# put2 -- `op x, y`, Go's operand order and AT&T's alike; count -- x is a
+# shift count
+put2: function as { T: StringLike.generic } in {
+    a: Asm.view op: T.view x: operand y: operand count: bool
+} out String is {
+    return "\{op} \{render :a r: x :count}, \{render :a r: y count: false}"
+}
+
+# put3 -- `op x, y, z`; count -- x is a shift count
+put3: function as { T: StringLike.generic } in {
+    a: Asm.view op: T.view x: operand y: operand z: operand count: bool
+} out String is {
+    return "\{op} \{render :a r: x :count}, \{render :a r: y count: false}, \{(render
+        :a
+        r: z
+        count: false
+    )}"
+}
+
+# addWords -- dst = src1*8 + src2
+addWords: function {a: Asm.view src1: operand src2: operand dst: operand} out String is {
+    return "leaq (\{a.render r: src2},\{a.render r: src1},8), \{a.render r: dst}"
+}
+
+# leaImm -- dst = src1 + src2 for an immediate src1, leaving the flags alone
+leaImm: function {a: Asm.view src1: operand src2: operand dst: operand} out String is {
+    return "leaq \{src1.off}(\{a.render r: src2}), \{a.render r: dst}"
+}
+
+# leaReg -- dst = src1 + src2 for registers, leaving the flags alone
+leaReg: function {a: Asm.view src1: operand src2: operand dst: operand} out String is {
+    return "leaq (\{a.render r: src1},\{a.render r: src2}), \{a.render r: dst}"
+}
+
+# jmpTest -- test src against itself and take the conditional jump
+jmpTest: function as { T: StringLike.generic U: StringLike.generic } in {
+    a: Asm.borrow src: operand label: T.view jump: U.view
+} is {
+    o: a.render r: src
+    a.line text: "testq \{o}, \{o}"
+    a.line text: "\{jump} \{label}%="
+}

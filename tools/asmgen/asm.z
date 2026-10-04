@@ -1,0 +1,778 @@
+# Copyright 2025 The Go Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style
+# license that can be found in lib/system/math/LICENSE-GO.
+#
+# Ported from Go's src/math/big/internal/asmgen/asm.go and func.go at
+# 577b91f341: the assembly being written, its register allocator and the
+# instructions the kernels are built from.
+#
+# The output is GNU extended inline asm, not Go assembly. A kernel is one C
+# function holding one asm statement -- flags cannot cross statements -- whose
+# lines are C string literals. An argument is not loaded from a stack frame:
+# it is bound to the register the allocator gives it, as a C register variable
+# passed as a "+r" operand, so the C compiler fills it. Every other register
+# the kernel touches is a clobber. The result lives in a register the kernel
+# keeps once it stores to it, read back after the statement. A label carries
+# `%=`, which the compiler makes unique per statement, and a return before the
+# end jumps to the end.
+
+public: unit {
+    :Asm
+    :create
+}
+
+Arch: arch.Arch
+operand: arch.operand
+
+# create -- an Asm writing for the given architecture
+create: function {a: Arch.take} out Asm is {
+    return (Asm
+        arch: a.take
+        file: ""
+        body: ""
+        regavail: 0
+        touched: 0
+        altOn: false
+        fname: ""
+        decl: ""
+        params: ""
+        inputs: List String
+        outputs: List String
+        argNames: List String
+        argExprs: List String
+        argRegs: ListVal u64
+        result: 0
+        retPending: false
+        retJumped: false
+    )
+}
+
+# Asm -- an assembly file being written, and the function being written in it
+Asm: class {
+    arch: Arch
+    # the finished functions, as C
+    file: String
+    # the current function's asm, as C string-literal lines
+    body: String
+    # which allocation-order positions of arch.regs are free, one bit each
+    regavail: u64
+    # which positions the current function has ever allocated: its operands
+    # and its clobbers
+    touched: u64
+    # the second carry chain (ADX) is in use
+    altOn: bool
+    # the current function's C name, its Go declaration and its C parameters
+    fname: String
+    decl: String
+    params: String
+    # the names of the vectors read and of those written (z first)
+    inputs: List String
+    outputs: List String
+    # the Go argument names the function knows, the C expression each is filled
+    # from, and the register number bound to it (0 -- not loaded)
+    argNames: List String
+    argExprs: List String
+    argRegs: ListVal u64
+    # the register number holding the result; 0 -- not stored yet
+    result: u64
+    # a return was written and nothing has followed it yet
+    retPending: bool
+    # some return jumped to the end
+    retJumped: bool
+} as {
+    # fatal -- report a bug in the generator, naming the function being
+    # written, and stop
+    fatal: function as { T: StringLike.generic } in {t: this.view msg: T.view} is {
+        io.eprintln "asmgen [\{t.arch.name}] internal error in \{t.fname}: \{msg}"
+        os.exit code: 1
+    }
+
+    # regName -- the assembler name of register n
+    regName: function {t: this.view n: u64} out String is {
+        return (t.arch.names.get i: n).copy
+    }
+
+    # position -- where register n stands in allocation order; -1 -- it is not
+    # allocatable
+    position: function {t: this.view n: u64} out i64 is {
+        i: u64
+        for i < t.arch.regs.length loop {
+            if (t.arch.regs.get :i) == n then return i.i64.orPanic
+            i = i + 1
+        }
+        return -1
+    }
+
+    # hintReg -- the register number a hint asks for; 0 -- no preference
+    hintReg: function {t: this.view h: u64} out u64 is {
+        if t.arch.kind.amd64 then return (amd64.hint altOn: t.altOn :h)
+        return 0
+    }
+
+    # zr -- the zero register, or the empty operand
+    zr: function {t: this.view} out operand is {
+        if t.arch.reg0 == 0 then return arch.noReg
+        return (arch.regOf n: t.arch.reg0)
+    }
+
+    # imm -- the immediate x, or the zero register for 0 where there is one
+    imm: function {t: this.view x: i64} out operand is {
+        if (x == 0) and (t.arch.reg0 != 0) then return (arch.regOf n: t.arch.reg0)
+        return (arch.immOf :x)
+    }
+
+    # isZero -- r is a zero immediate or the zero register
+    isZero: function {t: this.view r: operand} out bool is {
+        if r.isImm then return r.off == 0
+        return (t.arch.reg0 != 0) and (r.isReg n: t.arch.reg0)
+    }
+
+    # claim -- mark allocation position i in use
+    claim: function {:this i: u64} is {
+        bit: 1.u64 << i
+        this.regavail = this.regavail & bit.not
+        this.touched = this.touched | bit
+    }
+
+    # reg -- a newly allocated register
+    reg: function {:this} out operand is {
+        i: this.regavail.trailingZeros
+        if i >= this.arch.regs.length then this.fatal msg: "out of registers"
+        this.claim :i
+        return (arch.regOf n: (this.arch.regs.get :i))
+    }
+
+    # regHint -- a newly allocated register, with a hint as to its purpose
+    regHint: function {:this h: u64} out operand is {
+        n: this.hintReg :h
+        if n == 0 then return this.reg
+        p: this.position :n
+        if p < 0 then return (arch.regOf :n)
+        i: p.u64.orPanic
+        if (this.regavail & (1.u64 << i)) == 0 then {
+            this.fatal msg: "hint for already allocated register \{this.regName :n}"
+        }
+        this.claim :i
+        return (arch.regOf :n)
+    }
+
+    # free -- release a register; a no-op for an immediate, a memory operand or
+    # the register holding the result, which stays the kernel's to the end
+    free: function {:this r: operand} is {
+        if r.kind.reg.not then return
+        if r.num == this.result then return
+        p: this.position n: r.num
+        if p < 0 then return
+        bit: 1.u64 << p.u64.orPanic
+        if (this.regavail & bit) != 0 then (this.fatal
+            msg: "register \{this.regName n: r.num} already freed"
+        )
+        this.regavail = this.regavail | bit
+    }
+
+    # unfree -- reclaim a register freed earlier; a no-op for a non-register
+    unfree: function {:this r: operand} is {
+        if r.kind.reg.not then return
+        p: this.position n: r.num
+        if p < 0 then return
+        i: p.u64.orPanic
+        if (this.regavail & (1.u64 << i)) == 0 then (this.fatal
+            msg: "register \{this.regName n: r.num} not free"
+        )
+        this.claim :i
+    }
+
+    # freeAll -- free every allocatable register
+    freeAll: function {:this} is {
+        this.regavail = (1.u64 << this.arch.regs.length) - 1
+    }
+
+    # render -- r as the architecture writes it inside a C string
+    render: function {t: this.view r: operand} out String is {
+        if t.arch.kind.amd64 then return (amd64.render a: t :r count: false)
+        return (arm64.render a: t :r)
+    }
+
+    # plain -- r as a comment names it
+    plain: function {t: this.view r: operand} out String is {
+        if t.arch.kind.amd64 then return (amd64.plain :r)
+        return (arm64.render a: t :r)
+    }
+
+    # flush -- write the jump a pending return stands for, now that more code
+    # follows it
+    flush: function {:this} is {
+        if this.retPending then {
+            this.retPending = false
+            this.retJumped = true
+            this.body.append "        \"\\t\{this.arch.jmp} ret%=\\n\"\n"
+        }
+    }
+
+    # line -- one instruction, as the architecture spells it
+    line: function as { T: StringLike.generic } in {:this text: T.view} is {
+        this.flush
+        this.body.append "        \"\\t\{text}\\n\"\n"
+    }
+
+    # comment -- a comment on a line of its own
+    comment: function as { T: StringLike.generic } in {:this text: T.view} is {
+        this.body.append "        /* \{text} */\n"
+    }
+
+    # eol -- a comment at the end of the previous line
+    eol: function as { T: StringLike.generic } in {:this text: T.view} is {
+        if this.body.endsWith "\n" then {
+            kept: (this.body.substring from: 0 to: this.body.length - 1).string
+            this.body = kept.take
+        }
+        this.body.append " /* \{text} */\n"
+    }
+
+    # label -- a label; `%=` makes it unique to the asm statement
+    label: function as { T: StringLike.generic } in {:this name: T.view} is {
+        this.flush
+        this.body.append "        \"\{name}%=:\\n\"\n"
+    }
+
+    # put2 -- `op x, y` in Go's operand order
+    put2: function as { T: StringLike.generic } in {:this op: T.view x: operand y: operand} is {
+        if this.arch.kind.amd64 then {
+            this.line text: (amd64.put2 a: this :op :x :y count: false)
+        } else {
+            this.line text: (arm64.put2 a: this :op :x :y)
+        }
+    }
+
+    # put3 -- `op x, y, z` in Go's operand order
+    put3: function as { T: StringLike.generic } in {
+        :this op: T.view x: operand y: operand z: operand
+    } is {
+        if this.arch.kind.amd64 then {
+            this.line text: (amd64.put3 a: this :op :x :y :z count: false)
+        } else {
+            this.line text: (arm64.put3 a: this :op :x :y :z)
+        }
+    }
+
+    # op3 -- `op src1, src2, dst`, written in 2-operand form when src2 is dst,
+    # and as a move then the 2-operand form on a machine without 3-operand
+    # instructions
+    op3: function as { T: StringLike.generic } in {
+        :this op: T.view src1: operand src2: operand dst: operand
+    } is {
+        if op.length == 0 then this.fatal msg: "missing instruction"
+        if src2 == dst then {
+            this.put2 :op x: src1 y: dst
+        } else if this.arch.threeOp.not then {
+            if src1 == dst then {
+                (this.fatal
+                    msg: "implicit mov \{this.plain r: src2}, \{this.plain r: dst} would smash src1"
+                )
+            }
+            this.mov src: src2 :dst
+            this.put2 :op x: src1 y: dst
+        } else {
+            this.put3 :op x: src1 y: src2 z: dst
+        }
+    }
+
+    # shiftOp -- op3 for a shift, whose count may need a register's narrow name
+    shiftOp: function as { T: StringLike.generic } in {
+        :this op: T.view count: operand src: operand dst: operand
+    } is {
+        if this.arch.kind.arm64 then {
+            this.op3 :op src1: count src2: src :dst
+            return
+        }
+        if src != dst then this.mov :src :dst
+        this.line text: (amd64.put2 a: this :op x: count y: dst count: true)
+    }
+
+    # mov -- dst = src
+    mov: function {:this src: operand dst: operand} is {
+        if src == dst then return
+        if this.arch.kind.amd64 then {
+            this.line text: (amd64.put2 a: this op: this.arch.mov.copy x: src y: dst count: false)
+        } else {
+            this.line text: (arm64.mov a: this :src :dst)
+        }
+    }
+
+    # addWords -- dst = src1*wordBytes + src2, leaving the carry alone
+    addWords: function {:this src1: operand src2: operand dst: operand} is {
+        if this.arch.kind.amd64 then {
+            this.line text: (amd64.addWords a: this :src1 :src2 :dst)
+        } else {
+            this.line text: (arm64.addWords a: this :src1 :src2 :dst)
+        }
+    }
+
+    # andOp -- dst = src1 & src2, perhaps changing the carry flag
+    andOp: function {:this src1: operand src2: operand dst: operand} is {
+        this.op3 op: this.arch.opAnd.copy :src1 :src2 :dst
+    }
+
+    # orOp -- dst = src1 | src2, perhaps changing the carry flag
+    orOp: function {:this src1: operand src2: operand dst: operand} is {
+        this.op3 op: this.arch.opOr.copy :src1 :src2 :dst
+    }
+
+    # neg -- dst = -src, perhaps changing the carry flag
+    neg: function {:this src: operand dst: operand} is {
+        if this.arch.neg.length == 0 then {
+            if (this.arch.sub.length > 0) and (this.arch.reg0 != 0) then {
+                this.put3 op: this.arch.sub.copy x: src y: this.zr z: dst
+                return
+            }
+            this.fatal msg: "missing neg"
+        }
+        if src != dst then this.mov :src :dst
+        this.line text: "\{this.arch.neg} \{this.render r: dst}"
+    }
+
+    # lsh -- dst = src << shift, perhaps changing the carry flag
+    lsh: function {:this shift: operand src: operand dst: operand} is {
+        this.checkCount :shift
+        this.shiftOp op: this.arch.lsh.copy count: shift :src :dst
+    }
+
+    # rsh -- dst = src >> shift, perhaps changing the carry flag
+    rsh: function {:this shift: operand src: operand dst: operand} is {
+        this.checkCount :shift
+        this.shiftOp op: this.arch.rsh.copy count: shift :src :dst
+    }
+
+    # lshWide -- dst = src << shift, the low bits shifted in from adj
+    lshWide: function {:this shift: operand adj: operand src: operand dst: operand} is {
+        this.wide op: this.arch.lshd.copy :shift :adj :src :dst
+    }
+
+    # rshWide -- dst = src >> shift, the high bits shifted in from adj
+    rshWide: function {:this shift: operand adj: operand src: operand dst: operand} is {
+        this.wide op: this.arch.rshd.copy :shift :adj :src :dst
+    }
+
+    # wide -- a double-width shift of src into dst, filled from adj
+    wide: function as { T: StringLike.generic } in {
+        :this op: T.view shift: operand adj: operand src: operand dst: operand
+    } is {
+        if op.length == 0 then this.fatal msg: "no wide shift"
+        this.checkCount :shift
+        if src == dst then {
+            this.line text: (amd64.put3 a: this :op x: shift y: adj z: dst count: true)
+            return
+        }
+        if adj == dst then this.fatal msg: "implicit mov would smash the wide shift's fill"
+        this.mov :src :dst
+        this.line text: (amd64.put3 a: this :op x: shift y: adj z: dst count: true)
+    }
+
+    # checkCount -- a register shift count stands where the architecture needs it
+    checkCount: function {t: this.view shift: operand} is {
+        need: t.hintReg h: arch.hint.shiftCount
+        if (need != 0) and shift.isImm.not and (shift.isReg n: need).not then {
+            t.fatal msg: "shift count not in \{t.regName n: need}"
+        }
+    }
+
+    # add -- dst = src1 + src2, with the given carry behaviour
+    add: function {:this src1: operand src2: operand dst: operand c: u64} is {
+        if this.arch.kind.amd64 then {
+            if (amd64.add a: this :src1 :src2 :dst :c) then return
+        }
+        keepOrSmash: (c == arch.carry.keep) or (c == arch.carry.smash)
+        useOnly: (c == arch.carry.use) or (c == (arch.carry.use | arch.carry.smash))
+        useSet: (
+            (c == (arch.carry.use | arch.carry.set)) or (c == (arch.carry.use | arch.carry.smash))
+        )
+        if (this.arch.add.length > 0) and keepOrSmash then {
+            this.op3 op: this.arch.add.copy :src1 :src2 :dst
+        } else if (
+            (this.arch.adds.length > 0) and ((c == arch.carry.set) or (c == arch.carry.smash))
+        ) then {
+            this.op3 op: this.arch.adds.copy :src1 :src2 :dst
+        } else if (this.arch.adc.length > 0) and useOnly then {
+            this.op3 op: this.arch.adc.copy :src1 :src2 :dst
+        } else if (this.arch.adcs.length > 0) and useSet then {
+            this.op3 op: this.arch.adcs.copy :src1 :src2 :dst
+        } else if (this.arch.lea.length > 0) and keepOrSmash then {
+            if src1.isImm then {
+                this.line text: (amd64.leaImm a: this :src1 :src2 :dst)
+            } else {
+                this.line text: (amd64.leaReg a: this :src1 :src2 :dst)
+            }
+            if src2 == dst then {
+                this.eol text: "ADD \{this.plain r: src1}, \{this.plain r: dst}"
+            } else {
+                (this.eol
+                    text: "ADD \{this.plain r: src1}, \{this.plain r: src2}, \{this.plain r: dst}"
+                )
+            }
+        } else {
+            this.fatal msg: "unsupported carry behavior"
+        }
+    }
+
+    # sub -- dst = src2 - src1, with the given carry behaviour
+    sub: function {:this src1: operand src2: operand dst: operand c: u64} is {
+        keepOrSmash: (c == arch.carry.keep) or (c == arch.carry.smash)
+        useOnly: (c == arch.carry.use) or (c == (arch.carry.use | arch.carry.smash))
+        useSet: (
+            (c == (arch.carry.use | arch.carry.set)) or (c == (arch.carry.use | arch.carry.smash))
+        )
+        if (this.arch.sub.length > 0) and keepOrSmash then {
+            this.op3 op: this.arch.sub.copy :src1 :src2 :dst
+        } else if (
+            (this.arch.subs.length > 0) and ((c == arch.carry.set) or (c == arch.carry.smash))
+        ) then {
+            this.op3 op: this.arch.subs.copy :src1 :src2 :dst
+        } else if (this.arch.sbc.length > 0) and useOnly then {
+            this.op3 op: this.arch.sbc.copy :src1 :src2 :dst
+        } else if (this.arch.sbcs.length > 0) and useSet then {
+            this.op3 op: this.arch.sbcs.copy :src1 :src2 :dst
+        } else if src1.isImm and keepOrSmash then {
+            # no sub that leaves the carry alone: add the negation
+            this.add src1: (arch.immOf x: 0 - src1.off) :src2 :dst :c
+        } else {
+            this.fatal msg: "unsupported carry behavior"
+        }
+    }
+
+    # clearCarry -- clear the carry flag; which is carry.add or carry.sub, for
+    # how the flag will be used, and carry.alt or 0
+    clearCarry: function {:this which: u64} is {
+        dst: arch.regOf n: (this.arch.regs.get i: 0)
+        alt: which & arch.carry.alt
+        if (which & arch.carry.add) != 0 then {
+            this.add src1: (this.imm x: 0) src2: dst :dst c: arch.carry.set | alt
+        } else if (which & arch.carry.sub) != 0 then {
+            this.sub src1: (this.imm x: 0) src2: dst :dst c: arch.carry.set | alt
+        } else {
+            this.fatal msg: "bad carry"
+        }
+        this.eol text: "clear carry"
+    }
+
+    # saveCarry -- save the carry flag into dst, in an architecture's own
+    # encoding; the flag is left undefined
+    saveCarry: function {:this dst: operand} is {
+        this.sub src1: dst src2: dst :dst c: arch.carry.use | arch.carry.smash
+        this.eol text: "save carry"
+    }
+
+    # restoreCarry -- restore the carry flag from src, which is left undefined
+    restoreCarry: function {:this src: operand} is {
+        if this.arch.subCarryIsBorrow then {
+            this.add src1: src src2: src dst: src c: arch.carry.set
+        } else {
+            # saveCarry encoded the sub carry as 0 or ^0: subtracting it from
+            # the zero register carries exactly when it is not 0
+            this.sub src1: src src2: this.zr dst: src c: arch.carry.set
+        }
+        this.eol text: "restore carry"
+    }
+
+    # convertCarry -- turn the carry saved in dst into 0 or 1; the flag is
+    # left undefined
+    convertCarry: function {:this which: u64 dst: operand} is {
+        if which == arch.carry.add then {
+            if this.arch.subCarryIsBorrow then {
+                this.neg src: dst :dst
+            } else {
+                this.add src1: (this.imm x: 1) src2: dst :dst c: arch.carry.smash
+            }
+            this.eol text: "convert add carry"
+        } else if which == arch.carry.sub then {
+            this.neg src: dst :dst
+            this.eol text: "convert sub carry"
+        }
+    }
+
+    # saveConvertCarry -- save the carry flag into dst as 0 or 1; the flag is
+    # left undefined
+    saveConvertCarry: function {:this which: u64 dst: operand} is {
+        if (which != arch.carry.add) and (which != arch.carry.sub) then this.fatal msg: "bad carry"
+        hasAdc: (this.arch.adc.length > 0) or (this.arch.adcs.length > 0)
+        if (which == arch.carry.add) and hasAdc and this.zr.valid then {
+            this.add src1: this.zr src2: this.zr :dst c: arch.carry.use | arch.carry.smash
+            this.eol text: "save & convert add carry"
+            return
+        }
+        this.saveCarry :dst
+        this.convertCarry :which :dst
+    }
+
+    # mulWide -- dstlo, dsthi = the double-word product src1 * src2; the carry
+    # flag is left undefined. An empty dstlo or dsthi discards that half
+    mulWide: function {:this src1: operand src2: operand dstlo: operand dsthi: operand} is {
+        if this.arch.kind.amd64 then {
+            amd64.mulWide a: this :src1 :src2 :dstlo :dsthi
+            return
+        }
+        hasMul: this.arch.mul.length > 0
+        hasHi: this.arch.mulhi.length > 0
+        if hasMul and dsthi.valid.not then {
+            this.op3 op: this.arch.mul.copy :src1 :src2 dst: dstlo
+        } else if hasHi and dstlo.valid.not then {
+            this.op3 op: this.arch.mulhi.copy :src1 :src2 dst: dsthi
+        } else if hasMul and hasHi and (dstlo != src1) and (dstlo != src2) then {
+            this.op3 op: this.arch.mul.copy :src1 :src2 dst: dstlo
+            this.op3 op: this.arch.mulhi.copy :src1 :src2 dst: dsthi
+        } else if hasMul and hasHi and (dsthi != src1) and (dsthi != src2) then {
+            this.op3 op: this.arch.mulhi.copy :src1 :src2 dst: dsthi
+            this.op3 op: this.arch.mul.copy :src1 :src2 dst: dstlo
+        } else {
+            this.fatal msg: "mulwide not available"
+        }
+    }
+
+    # jmp -- jump to the label
+    jmp: function as { T: StringLike.generic } in {:this label: T.view} is {
+        this.line text: "\{this.arch.jmp} \{label}%="
+    }
+
+    # jmpZero -- jump to the label when src is zero; it may change the carry
+    # flag unless the architecture's loops are carry-safe
+    jmpZero: function as { T: StringLike.generic } in {:this src: operand label: T.view} is {
+        if this.arch.kind.amd64 then {
+            amd64.jmpTest a: this :src :label jump: "jz"
+        } else {
+            this.line text: "cbz \{this.render r: src}, \{label}%="
+        }
+    }
+
+    # jmpNonZero -- jump to the label when src is not zero
+    jmpNonZero: function as { T: StringLike.generic } in {:this src: operand label: T.view} is {
+        if this.arch.kind.amd64 then {
+            amd64.jmpTest a: this :src :label jump: "jnz"
+        } else {
+            this.line text: "cbnz \{this.render r: src}, \{label}%="
+        }
+    }
+
+    # loopBottom -- count n down and jump to the label while it is not zero,
+    # leaving the carry flag alone where the architecture can
+    loopBottom: function as { T: StringLike.generic } in {:this n: operand label: T.view} is {
+        if this.arch.kind.amd64 then {
+            this.line text: "subq $1, \{this.render r: n}"
+            this.line text: "jnz \{label}%="
+            return
+        }
+        this.sub src1: (this.imm x: 1) src2: n dst: n c: arch.carry.keep
+        this.jmpNonZero src: n :label
+    }
+
+    # ret -- return; anything written after it is reached only by a jump
+    ret: function {:this} is {
+        this.retPending = true
+    }
+
+    # enabled -- the second carry chain is in use
+    enabled: function {t: this.view} out bool is {
+        return t.altOn
+    }
+
+    # setOption -- turn the second carry chain on or off
+    setOption: function {:this enable: bool} is {
+        this.altOn = enable
+    }
+
+    # raw -- C written between the functions
+    raw: function as { T: StringLike.generic } in {:this text: T.view} is {
+        this.file.append text
+    }
+
+    # func -- start a function from its Go declaration, such as
+    # `func addVV(z, x, y []Word) (c Word)`, under the C name z_mathasm_<name>.
+    # Its []Word arguments are pointers -- z first, written; the rest read --
+    # and the length they share is the parameter n, last
+    func: function as { T: StringLike.generic U: StringLike.generic } in {
+        :this name: T.view decl: U.view
+    } is {
+        this.freeAll
+        this.touched = 0
+        this.body = ""
+        this.fname = "z_mathasm_\{name}"
+        declText: "\{decl}"
+        this.decl = declText.copy
+        this.inputs = List String
+        this.outputs = List String
+        this.argNames = List String
+        this.argExprs = List String
+        this.argRegs = ListVal u64
+        this.result = 0
+        this.retPending = false
+        this.retJumped = false
+        dv: declText.stringView
+        open: dv.indexOf needle: "("
+        if open.none then {
+            this.fatal msg: "func decl has no argument list"
+            return
+        }
+        close: dv.indexOf needle: ") ("
+        if close.none then {
+            this.fatal msg: "func decl has no result list"
+            return
+        }
+        args: dv.substring from: open + 1 to: close
+        # Go's `z, x, y []Word`: a name without a type takes the next one's
+        names: List String
+        types: List String
+        for each piece: (args.split sep: ",") loop {
+            word: piece.trim
+            sp: word.indexOf needle: " "
+            if sp.some then {
+                names.append from: (word.substring from: 0 to: sp).string
+                types.append from: (word.substring from: sp + 1 to: word.length).string
+            } else {
+                names.append from: word.string
+                types.append from: ""
+            }
+        }
+        i: names.length
+        for i > 0 loop {
+            i = i - 1
+            if (types.get :i).length == 0 then {
+                if (i + 1) == names.length then this.fatal msg: "missing argument type"
+                types.set :i val: (types.get i: i + 1).copy
+            }
+        }
+        params: String
+        words: String
+        i = 0
+        for i < names.length loop {
+            nm: names.get :i
+            ty: types.get :i
+            if ty == "[]Word" then {
+                if params.length > 0 then params.append ", "
+                if nm.startsWith "z" then {
+                    params.append "uint64_t* \{nm}"
+                    this.outputs.append from: nm.copy
+                } else {
+                    params.append "const uint64_t* \{nm}"
+                    this.inputs.append from: nm.copy
+                }
+                this.know name: "\{nm}_base" expr: "(uint64_t)\{nm}"
+                this.know name: "\{nm}_len" expr: "n"
+            } else if (ty == "Word") or (ty == "uint") then {
+                words.append ", uint64_t \{nm}"
+                this.know name: nm expr: nm
+            } else {
+                this.fatal msg: "unknown type \{ty}"
+            }
+            i = i + 1
+        }
+        this.params = "\{params}\{words}, uint64_t n"
+    }
+
+    # know -- record an argument the function can load and the C it comes from
+    know: function as { T: StringLike.generic U: StringLike.generic } in {
+        :this name: T.view expr: U.view
+    } is {
+        this.argNames.append from: "\{name}"
+        this.argExprs.append from: "\{expr}"
+        this.argRegs.append from: 0
+    }
+
+    # argIndex -- which known argument the name is
+    argIndex: function as { T: StringLike.generic } in {t: this.view name: T.view} out u64 is {
+        i: u64
+        for i < t.argNames.length loop {
+            if (t.argNames.get :i) == name then return i
+            i = i + 1
+        }
+        t.fatal msg: "unknown argument \{name}"
+        return 0
+    }
+
+    # inputIndex -- which input vector the name is
+    inputIndex: function as { T: StringLike.generic } in {t: this.view name: T.view} out u64 is {
+        i: u64
+        for i < t.inputs.length loop {
+            if (t.inputs.get :i) == name then return i
+            i = i + 1
+        }
+        t.fatal msg: "unknown input name \{name}"
+        return 0
+    }
+
+    # arg -- a register holding the named argument
+    arg: function as { T: StringLike.generic } in {:this name: T.view} out operand is {
+        return (this.argHint :name h: arch.hint.none)
+    }
+
+    # argHint -- arg, the register chosen with a hint
+    argHint: function as { T: StringLike.generic } in {:this name: T.view h: u64} out operand is {
+        i: this.argIndex :name
+        if (this.argRegs.get :i) != 0 then this.fatal msg: "argument \{name} loaded twice"
+        r: this.regHint :h
+        this.argRegs.set :i val: r.num
+        return r
+    }
+
+    # storeArg -- return src as the result c. The first register stored
+    # becomes the result's home and is never freed; a later store moves into it
+    storeArg: function as { T: StringLike.generic } in {:this src: operand name: T.view} is {
+        if name != "c" then this.fatal msg: "unknown result \{name}"
+        if this.result == 0 then {
+            if src.kind.reg then {
+                this.result = src.num
+                return
+            }
+            this.result = this.reg.num
+        }
+        this.mov :src dst: (arch.regOf n: this.result)
+    }
+
+    # finish -- close the function and write it into the file as C
+    finish: function {:this} is {
+        if this.result == 0 then this.fatal msg: "no result stored"
+        if this.retJumped then this.body.append "        \"ret%=:\\n\"\n"
+        f: "\n/* \{this.decl} */\n"
+        f.append "static uint64_t \{this.fname}(\{this.params}) {\n"
+        outs: String
+        bound: u64
+        resultBound: false
+        i: u64
+        for i < this.argNames.length loop {
+            n: this.argRegs.get :i
+            if n != 0 then {
+                nm: this.regName :n
+                f.append "    register uint64_t r_\{nm} __asm__(\"\{nm}\") = \{(this.argExprs.get
+                    :i
+                )};\n"
+                if outs.length > 0 then outs.append ", "
+                outs.append "\"+r\"(r_\{nm})"
+                p: this.position :n
+                if p >= 0 then bound = bound | (1.u64 << p.u64.orPanic)
+                if n == this.result then resultBound = true
+            }
+            i = i + 1
+        }
+        rn: this.regName n: this.result
+        if resultBound.not then {
+            f.append "    register uint64_t r_\{rn} __asm__(\"\{rn}\");\n"
+            if outs.length > 0 then outs.append ", "
+            outs.append "\"=&r\"(r_\{rn})"
+            p: this.position n: this.result
+            if p >= 0 then bound = bound | (1.u64 << p.u64.orPanic)
+        }
+        clobbers: String
+        i = 0
+        for i < this.arch.regs.length loop {
+            if ((this.touched & (1.u64 << i)) != 0) and ((bound & (1.u64 << i)) == 0) then {
+                clobbers.append "\"\{this.regName n: (this.arch.regs.get :i)}\", "
+            }
+            i = i + 1
+        }
+        f.append "    __asm__ volatile(\n"
+        f.append this.body
+        f.append "        : \{outs}\n"
+        f.append "        :\n"
+        f.append "        : \{clobbers}\"cc\", \"memory\");\n"
+        f.append "    return r_\{rn};\n"
+        f.append "}\n"
+        this.file.append f
+    }
+}

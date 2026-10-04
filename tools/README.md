@@ -10,5 +10,6 @@ Each tool is a zerolang program in its own directory, one unit per file,
 built by an `out/<tool>` rule in the Makefile and linted, formatted and
 complexity-checked with the rest of the tree.
 
-Each tool's directory says what it writes, the `make` target that regenerates
-it, and the guard that checks it.
+| Tool | Writes | Regenerate | Check |
+|---|---|---|---|
+| [asmgen](asmgen/asmgen.z) | `src/runtime/natives/_Z_MATH_ARITH_<ARCH>.inc`, math's word-vector kernels as GNU inline asm | `make regen-math-asm` | `make math-asm-guard` |

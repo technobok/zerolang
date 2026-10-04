@@ -1,0 +1,514 @@
+# Copyright 2025 The Go Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style
+# license that can be found in lib/system/math/LICENSE-GO.
+#
+# Ported from Go's src/math/big/internal/asmgen/pipe.go at 577b91f341: the
+# loads, stores and unrolled loops over a kernel's word vectors.
+#
+# The inputs are equal-length vectors of words, so together a matrix whose
+# rows are the vectors and whose columns are the words at one index; the
+# outputs are the same, usually one row. A Pipe walks the columns, unrolled:
+# for factors 1 and 4 it handles the n mod 4 leftover columns one at a time,
+# then four at a time. What a kernel does with a block of columns is its Body
+# -- Go passes a closure; here the Body names the kernel and carries the
+# registers its blocks share, and blockOf dispatches on it.
+
+public: unit {
+    :Pipe
+    :Grid
+    :Body
+    :bodykind
+    :create
+    :newBody
+    :factors
+    :grid
+}
+
+Asm: asm.Asm
+operand: arch.operand
+
+# bodykind -- which kernel's block a Body emits
+bodykind: variant { addSub: null addMul: null addMulAlt: null shiftWide: null shiftSplit: null }
+
+# Body -- a kernel's per-block code and the registers it carries between
+# blocks; a field a kernel does not use stays empty
+Body: class {
+    kind: bodykind
+    # the kernel writes before or after each unrolled block
+    atStart: bool
+    atEnd: bool
+    # subVV, not addVV
+    isSub: bool
+    # lshVU, not rshVU
+    isLeft: bool
+    # addMulVVWW, which adds x, not mulAddVWW
+    hasAdd: bool
+    # which input row the multiply reads
+    mulIndex: u64
+    # the carry or the running high word
+    c: operand
+    # the multiplier
+    m: operand
+    # the shift count, and the word size less it
+    s: operand
+    sNeg: operand
+    # the previous column's word or high half
+    prev: operand
+    hi: operand
+    # a register holding 0, for ADCX/ADOX, which take no immediate
+    r0: operand
+}
+
+# newBody -- an empty Body of the given kind
+newBody: function {kind: bodykind} out Body is {
+    return (Body
+        :kind
+        atStart: false
+        atEnd: false
+        isSub: false
+        isLeft: false
+        hasAdd: false
+        mulIndex: 0
+        c: arch.noReg
+        m: arch.noReg
+        s: arch.noReg
+        sNeg: arch.noReg
+        prev: arch.noReg
+        hi: arch.noReg
+        r0: arch.noReg
+    )
+}
+
+# Grid -- operands by row and column: a block's input words, or its outputs
+Grid: class {
+    rows: u64
+    cols: u64
+    cells: ListVal operand
+} as {
+    # get -- the operand at row r, column c
+    get: function {t: this.view r: u64 c: u64} out operand is {
+        return (t.cells.get i: r * t.cols + c)
+    }
+    # set -- put the operand at row r, column c
+    set: function {:this r: u64 c: u64 v: operand} is {
+        this.cells.set i: r * this.cols + c val: v
+    }
+    # row -- row r's operands
+    row: function {t: this.view r: u64} out ListVal operand is {
+        out9: ListVal operand
+        c: u64
+        for c < t.cols loop {
+            out9.append from: (t.get :r :c)
+            c = c + 1
+        }
+        return out9
+    }
+}
+
+# grid -- a rows-by-cols Grid of empty operands
+grid: function {rows: u64 cols: u64} out Grid is {
+    cells: ListVal operand
+    i: u64
+    for i < (rows * cols) loop {
+        cells.append from: arch.noReg
+        i = i + 1
+    }
+    return (Grid :rows :cols cells: cells.take)
+}
+
+# factors -- the unrolling factors a and b
+factors: function {a: i64 b: i64} out ListVal i64 is {
+    fs: ListVal i64
+    fs.append from: a
+    fs.append from: b
+    return fs
+}
+
+# create -- a Pipe over the current function's vectors
+create: function {a: Asm.view} out Pipe is {
+    m: 10000000
+    if a.arch.maxColumns != 0 then m = a.arch.maxColumns
+    return (Pipe
+        label: "loop"
+        backward: false
+        started: false
+        loaded: false
+        inPtr: ListVal operand
+        hints: ListVal u64
+        outPtr: ListVal operand
+        readOff: 0
+        writeOff: 0
+        facs: ListVal i64
+        counts: ListVal operand
+        needWrite: false
+        maxColumns: m
+    )
+}
+
+# Pipe -- the input and output pipelines of a function's memory operations
+Pipe: class {
+    # the prefix of the loop labels
+    label: String
+    # the columns are processed from the last to the first
+    backward: bool
+    started: bool
+    loaded: bool
+    # the input vectors' pointers, and a register hint for each one's words
+    inPtr: ListVal operand
+    hints: ListVal u64
+    # the output vectors' pointers
+    outPtr: ListVal operand
+    # the read and write offsets, in words, not yet added to the pointers
+    readOff: i64
+    writeOff: i64
+    # the unrolling factors, and the register counting each one's iterations
+    facs: ListVal i64
+    counts: ListVal operand
+    # a block has not yet stored its outputs
+    needWrite: bool
+    # the most columns one block handles
+    maxColumns: i64
+} as {
+    # setBackward -- process the columns in reverse, which a left shift needs
+    # so as not to overwrite words it has yet to read
+    setBackward: function {:this a: Asm.view} is {
+        if this.loaded then a.fatal msg: "setBackward after start/loadPtrs"
+        this.backward = true
+    }
+
+    # setLabel -- the prefix of the loop labels, "loop" until set
+    setLabel: function as { T: StringLike.generic } in {:this label: T.view} is {
+        this.label = "\{label}"
+    }
+
+    # setMaxColumns -- the most columns one block handles
+    setMaxColumns: function {:this m: i64} is {
+        this.maxColumns = m
+    }
+
+    # setHint -- allocate the named input's words with a register hint. A
+    # hint naming one register limits a block to one column, as that register
+    # holds one word at a time
+    setHint: function as { T: StringLike.generic } in {:this a: Asm.view name: T.view h: u64} is {
+        if (h == arch.hint.memOK) and a.arch.memOK.not then return
+        i: a.inputIndex :name
+        if (a.hintReg :h) != 0 then this.setMaxColumns m: 1
+        for this.hints.length <= i loop this.hints.append from: arch.hint.none
+        this.hints.set :i val: h
+    }
+
+    # loadPtrs -- load the vectors' pointers, the length already in n. start
+    # calls it; a kernel calls it first only to read a word before the loop
+    loadPtrs: function {:this a: Asm.borrow n: operand} is {
+        if this.loaded then a.fatal msg: "pointers already loaded"
+        this.loaded = true
+        i: u64
+        for i < a.inputs.length loop {
+            this.inPtr.append from: (a.arg name: "\{a.inputs.get :i}_base")
+            i = i + 1
+        }
+        i = 0
+        for i < a.outputs.length loop {
+            this.outPtr.append from: (a.arg name: "\{a.outputs.get :i}_base")
+            i = i + 1
+        }
+        if this.backward then {
+            # the pointers step down before each use, so they start at the end
+            a.comment text: "run loop backward"
+            i = 0
+            for i < this.inPtr.length loop {
+                p: this.inPtr.get :i
+                a.addWords src1: n src2: p dst: p
+                i = i + 1
+            }
+            i = 0
+            for i < this.outPtr.length loop {
+                p: this.outPtr.get :i
+                a.addWords src1: n src2: p dst: p
+                i = i + 1
+            }
+        }
+    }
+
+    # loadN -- the next n columns of input words, one row per input. A row
+    # hinted memOK is memory operands; the rest are newly allocated registers
+    loadN: function {:this a: Asm.borrow n: u64} out Grid is {
+        g: grid rows: this.inPtr.length cols: n
+        i: u64
+        for i < this.inPtr.length loop {
+            ptr: this.inPtr.get :i
+            if a.arch.kind.arm64 then {
+                regs: ListVal operand
+                j: u64
+                for j < n loop {
+                    regs.append from: a.reg
+                    j = j + 1
+                }
+                if this.backward then {
+                    arm64.loadDecN :a p: ptr :regs
+                } else {
+                    arm64.loadIncN :a p: ptr :regs
+                }
+                j = 0
+                for j < n loop {
+                    g.set r: i c: j v: (regs.get i: j)
+                    j = j + 1
+                }
+            } else {
+                h: arch.hint.none
+                if i < this.hints.length then h = this.hints.get :i
+                j: u64
+                for j < n loop {
+                    mem: (arch.memOf
+                        base: ptr.num
+                        off: (this.offset base: this.readOff :j) * a.arch.wordBytes
+                    )
+                    if h == arch.hint.memOK then {
+                        g.set r: i c: j v: mem
+                    } else {
+                        r: a.regHint :h
+                        a.mov src: mem dst: r
+                        g.set r: i c: j v: r
+                    }
+                    j = j + 1
+                }
+            }
+            i = i + 1
+        }
+        this.readOff = this.readOff + n.i64.orPanic
+        return g
+    }
+
+    # offset -- the word offset of column j past base, negative running
+    # backward
+    offset: function {t: this.view base: i64 j: u64} out i64 is {
+        off: base + j.i64.orPanic
+        if t.backward then return 0 - (off + 1)
+        return off
+    }
+
+    # storeN -- write the next columns of output, one row per output
+    storeN: function {:this a: Asm.borrow g: Grid.view} is {
+        this.needWrite = false
+        if g.rows != this.outPtr.length then a.fatal msg: "wrong number of output rows"
+        i: u64
+        for i < this.outPtr.length loop {
+            ptr: this.outPtr.get :i
+            if a.arch.kind.arm64 then {
+                regs: g.row r: i
+                if this.backward then {
+                    arm64.storeDecN :a p: ptr :regs
+                } else {
+                    arm64.storeIncN :a p: ptr :regs
+                }
+            } else {
+                j: u64
+                for j < g.cols loop {
+                    mem: (arch.memOf
+                        base: ptr.num
+                        off: (this.offset base: this.writeOff :j) * a.arch.wordBytes
+                    )
+                    a.mov src: (g.get r: i c: j) dst: mem
+                    j = j + 1
+                }
+            }
+            i = i + 1
+        }
+        this.writeOff = this.writeOff + g.cols.i64.orPanic
+    }
+
+    # advancePtrs -- step the pointers past the columns just handled, where
+    # the loads and stores did not already
+    advancePtrs: function {:this a: Asm.borrow step: i64} is {
+        if a.arch.kind.arm64 then return
+        this.readOff = this.readOff - step
+        this.writeOff = this.writeOff - step
+        by: step * a.arch.wordBytes
+        if this.backward then by = 0 - by
+        i: u64
+        for i < this.inPtr.length loop {
+            p: this.inPtr.get :i
+            a.add src1: (a.imm x: by) src2: p dst: p c: arch.carry.keep
+            i = i + 1
+        }
+        i = 0
+        for i < this.outPtr.length loop {
+            p: this.outPtr.get :i
+            a.add src1: (a.imm x: by) src2: p dst: p c: arch.carry.keep
+            i = i + 1
+        }
+    }
+
+    # start -- prepare to loop over n columns, unrolled by the factors, which
+    # rise or fall through powers of two and include 1: 1 then 4 handles the
+    # n mod 4 leftovers first, then four at a time. It may change the carry
+    # flag. Columns already read with loadN are not scanned again
+    start: function {:this a: Asm.borrow n: operand facs: (ListVal i64).take} is {
+        if this.started then a.fatal msg: "loop already started"
+        this.started = true
+        if this.loaded.not then this.loadPtrs :a :n
+        if this.readOff != 0 then (a.sub
+            src1: (a.imm x: this.readOff)
+            src2: n
+            dst: n
+            c: arch.carry.smash
+        )
+        this.restart :a :n facs: facs.take
+    }
+
+    # restart -- prepare to loop over n more columns, after an earlier loop.
+    # Every loop's count is computed ahead of the loops, in case computing it
+    # would smash a carry a loop needs
+    restart: function {:this a: Asm.borrow n: operand facs: (ListVal i64).take} is {
+        if this.started.not then a.fatal msg: "pipe not started"
+        this.counts = ListVal operand
+        k: facs.length
+        i: u64
+        for i < k loop {
+            this.counts.append from: arch.noReg
+            i = i + 1
+        }
+        if k > 1 then a.comment text: "compute unrolled loop lengths"
+        if (facs.get i: 0) == 1 then {
+            div: 1
+            i = 1
+            for i < k loop {
+                f: facs.get :i
+                if f <= (facs.get i: i - 1) then a.fatal msg: "non-increasing factors"
+                if (f & (f - 1)) != 0 then a.fatal msg: "non-power-of-two factors"
+                t: a.reg
+                f = f / div
+                a.andOp src1: (a.imm x: f - 1) src2: n dst: t
+                a.rsh shift: (a.imm x: f.u64.orPanic.trailingZeros.i64.orPanic) src: n dst: n
+                div = div * f
+                this.counts.set i: i - 1 val: t
+                i = i + 1
+            }
+        } else if (facs.get i: k - 1) == 1 then {
+            i = 0
+            for (i + 1) < k loop {
+                f: facs.get :i
+                if f <= (facs.get i: i + 1) then a.fatal msg: "non-decreasing factors"
+                if (f & (f - 1)) != 0 then a.fatal msg: "non-power-of-two factors"
+                t: a.reg
+                a.rsh shift: (a.imm x: f.u64.orPanic.trailingZeros.i64.orPanic) src: n dst: t
+                a.andOp src1: (a.imm x: f - 1) src2: n dst: n
+                this.counts.set :i val: t
+                i = i + 1
+            }
+        } else {
+            a.fatal msg: "invalid factors"
+        }
+        this.counts.set i: k - 1 val: n
+        this.facs = facs.take
+    }
+
+    # done -- free the pipe's pointer registers
+    done: function {:this a: Asm.borrow} is {
+        i: u64
+        for i < this.inPtr.length loop {
+            a.free r: (this.inPtr.get :i)
+            i = i + 1
+        }
+        i = 0
+        for i < this.outPtr.length loop {
+            a.free r: (this.outPtr.get :i)
+            i = i + 1
+        }
+        this.inPtr = ListVal operand
+        this.outPtr = ListVal operand
+    }
+
+    # runLoop -- the unrolled loops, the body handling each block of columns; it
+    # must store its outputs. Registers a block allocates are freed after it
+    runLoop: function {:this a: Asm.borrow b: Body.borrow} is {
+        if this.facs.length == 0 then a.fatal msg: "start not called"
+        k: this.facs.length
+        i: u64
+        for i < k loop {
+            n: this.counts.get :i
+            this.unroll :a :n factor: (this.facs.get :i) :b
+            if (i + 1) < k then a.free r: n
+            i = i + 1
+        }
+        this.facs = ListVal i64
+    }
+
+    # unroll -- one unrolled loop at the factor, iterating n times
+    unroll: function {:this a: Asm.borrow n: operand factor: i64 b: Body.borrow} is {
+        label: "\{this.label}\{factor}"
+        a.label name: label
+        a.jmpZero src: n label: "\{label}done"
+        a.label name: "\{label}cont"
+        if factor < this.maxColumns then {
+            a.comment text: "unroll \{factor}X"
+        } else {
+            a.comment text: "unroll \{factor}X in batches of \{this.maxColumns}"
+        }
+        if b.atStart then blockStart :a :b
+        done: i64
+        for done < factor loop {
+            batch: factor - done
+            if this.maxColumns < batch then batch = this.maxColumns
+            regs: a.regavail
+            outs: grid rows: this.outPtr.length cols: batch.u64.orPanic
+            ins: this.loadN :a n: batch.u64.orPanic
+            this.needWrite = true
+            blockOf :a p: this :b :ins :outs
+            if this.needWrite and (this.outPtr.length > 0) then (a.fatal
+                msg: "a block stored no output"
+            )
+            a.regavail = regs
+            done = done + batch
+        }
+        if b.atEnd then blockEnd :a :b
+        this.advancePtrs :a step: factor
+        a.loopBottom :n label: "\{label}cont"
+        a.label name: "\{label}done"
+    }
+}
+
+# blockOf -- a block of the kernel the Body names
+blockOf: function {
+    a: Asm.borrow p: Pipe.borrow b: Body.borrow ins: Grid.view outs: Grid.borrow
+} is {
+    match (
+        b.kind
+    ) case addSub then {
+        add.block :a :p :b :ins :outs
+    } case addMul then {
+        mul.blockAddMul :a :p :b :ins :outs
+    } case addMulAlt then {
+        mul.blockAlt :a :p :b :ins :outs
+    } case shiftWide then {
+        shift.blockWide :a :p :b :ins :outs
+    } case shiftSplit then {
+        shift.blockSplit :a :p :b :ins :outs
+    }
+}
+
+# blockStart -- what the kernel writes before each unrolled block
+blockStart: function {a: Asm.borrow b: Body.borrow} is {
+    match (
+        b.kind
+    ) case addSub then {
+        add.atStart :a :b
+    } case addMulAlt then {
+        mul.altStart :a :b
+    } else {
+        a.fatal msg: "no block start for this kernel"
+    }
+}
+
+# blockEnd -- what the kernel writes after each unrolled block
+blockEnd: function {a: Asm.borrow b: Body.borrow} is {
+    match (
+        b.kind
+    ) case addSub then {
+        add.atEnd :a :b
+    } case addMulAlt then {
+        mul.altEnd :a :b
+    } else {
+        a.fatal msg: "no block end for this kernel"
+    }
+}

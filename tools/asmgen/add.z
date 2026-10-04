@@ -1,0 +1,89 @@
+# Copyright 2025 The Go Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style
+# license that can be found in lib/system/math/LICENSE-GO.
+#
+# Ported from Go's src/math/big/internal/asmgen/add.go at 577b91f341: addVV
+# and subVV, z, c = x ± y, the caller holding len(z) == len(x) == len(y).
+
+public: unit {
+    :addOrSubVV
+    :block
+    :atStart
+    :atEnd
+}
+
+Asm: asm.Asm
+Body: pipe.Body
+Grid: pipe.Grid
+Pipe: pipe.Pipe
+
+# addOrSubVV -- addVV or subVV, by name
+addOrSubVV: function as { T: StringLike.generic } in {a: Asm.borrow name: T.view} is {
+    a.func :name decl: "func \{name}(z, x, y []Word) (c Word)"
+    b: pipe.newBody kind: pipe.bodykind.addSub
+    b.isSub = name == "subVV"
+    which: arch.carry.add
+    if b.isSub then which = arch.carry.sub
+    n: a.arg name: "z_len"
+    p: pipe.create :a
+    # y may be read from memory on x86
+    p.setHint :a name: "y" h: arch.hint.memOK
+    p.start :a :n facs: (pipe.factors a: 1 b: 4)
+    if a.arch.carrySafeLoop.not then {
+        # the loop tests smash the carry: keep it in a register between blocks
+        b.c = a.reg
+        a.mov src: (a.imm x: 0) dst: b.c
+        a.eol text: "clear saved carry"
+        b.atStart = true
+        b.atEnd = true
+    } else {
+        # the loop keeps the carry: clear it once, after start may have
+        # changed it
+        a.clearCarry :which
+    }
+    p.runLoop :a :b
+    p.done :a
+    c: b.c
+    if c.valid then {
+        a.convertCarry :which dst: c
+    } else {
+        c = a.reg
+        a.saveConvertCarry :which dst: c
+    }
+    a.storeArg src: c name: "c"
+    a.free r: c
+    a.ret
+    a.finish
+}
+
+# block -- each column's x ± y, written back over x's register
+block: function {a: Asm.borrow p: Pipe.borrow b: Body.borrow ins: Grid.view outs: Grid.borrow} is {
+    # the sums are written over x's registers, which are stored as they stand
+    outs.drop
+    top: pipe.grid rows: 1 cols: ins.cols
+    i: u64
+    for i < ins.cols loop {
+        x: ins.get r: 0 c: i
+        y: ins.get r: 1 c: i
+        if b.isSub then {
+            a.sub src1: y src2: x dst: x c: arch.carry.set | arch.carry.use
+        } else {
+            a.add src1: y src2: x dst: x c: arch.carry.set | arch.carry.use
+        }
+        top.set r: 0 c: i v: x
+        i = i + 1
+    }
+    p.storeN :a g: top
+}
+
+# atStart -- restore the saved carry, freeing its register for the block
+atStart: function {a: Asm.borrow b: Body.borrow} is {
+    a.restoreCarry src: b.c
+    a.free r: b.c
+}
+
+# atEnd -- reclaim the carry's register and save the carry in it
+atEnd: function {a: Asm.borrow b: Body.borrow} is {
+    a.unfree r: b.c
+    a.saveCarry dst: b.c
+}
