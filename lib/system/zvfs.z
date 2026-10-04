@@ -30,12 +30,26 @@ public: unit {
 # fsno -- a registered file's id in the vfs dentry space; 0 is "no file"
 # (synthesized nodes, typecheck-minted diagnostics). A typedef so a file id
 # cannot cross with the other numeric id spaces; equality is same-space
-# only, and sentinel checks read the base explicitly (f.u32 == 0).
+# only, sentinels read isZero, and the dentry table is indexed by it.
 fsno: typedef u32 as {
     # identity by index: two fsnos name the same entry when their indices match,
     # there being nothing else to an fsno
     ==: function {t: this.view rhs: fsno} out bool is {
         return t.u32 == rhs.u32
+    }
+    # the sentinel test: entry 0 is no file, never the first one registered
+    isZero: function {this: this.view} out bool is {
+        return this.u32 == 0
+    }
+    # the id's hash, agreeing with `==`: both read the id alone, so an fsno
+    # keys a map or a set
+    hash: function {this: this.view} out u64 is {
+        return this.u32
+    }
+    # the next id in sequence, which is how a walk over every entry steps
+    next: function {this: this.view} out fsno is {
+        n: this.u32 + 1
+        return (fsno from: n)
     }
 }
 
@@ -154,15 +168,13 @@ dentry: variant {
 
 # the id-indexed table of all VFS dentries.
 DentryTable: class {
-    # every entry, indexed by fsno. An fsno IS the index, which is what lets it
-    # be a plain integer
-    entries: ListVal dentry
+    # every entry, indexed by fsno: an fsno IS the index, so a row is read with
+    # an fsno and no other number
+    entries: (ListVal dentry i: fsno)
 } as {
     # add an entry and answer its fsno, which is simply where it landed
     append: function {:this entry: dentry.take} out fsno is {
-        idx: fsno.create from: this.entries.length.u32.orPanic
-        this.entries.append entry
-        return idx
+        return (this.entries.append entry)
     }
 }
 
@@ -574,7 +586,7 @@ ZVfs: class {
     # the dentries, which is where resolution actually caches its answers
     entrytable: DentryTable
     # the file names seen, so a name can be reported without re-deriving it
-    file_names: List String
+    file_names: (List String i: fsno)
     # resolved path to fsno. A path walked twice does not descend twice
     walk_cache: (MapRV String v: fsno)
     # the entry every absolute walk starts from
@@ -694,7 +706,7 @@ ZVfs: class {
             return r1
         }
         # extract parent's provider+nodeid
-        pe: this.entrytable.entries.get i: parent.u64
+        pe: this.entrytable.entries.get i: parent
         ppid: u32
         pnid: u32
         match (
@@ -737,7 +749,7 @@ ZVfs: class {
     # which we treat as a directory for printing purposes). file /
     # directory / notfound map directly. The mount case will be
     # mount arm once UNION-aware walk lands.
-    arm: function {this: this.view dentryid: u32} out nodekind is {
+    arm: function {this: this.view dentryid: fsno} out nodekind is {
         e: this.entrytable.entries.get i: dentryid
         match (
             e
@@ -759,17 +771,17 @@ ZVfs: class {
     # file_names) are excluded.
     fileTable: function {this: this.view outIds: ListVal fsno outPaths: List String} is {
         n: this.entrytable.entries.length
-        i: u64
-        for i < n loop {
+        i: fsno
+        for i.u64 < n loop {
             e: this.entrytable.entries.get :i
             match (
                 e
             ) case file then {
-                outIds.append from: (fsno.create from: i.u32.orPanic)
+                outIds.append from: i
                 nm: this.file_names.get :i
                 outPaths.append nm.copy
             } case root then null case notfound then null case directory then null case mount then null
-            i = i + 1
+            i = i.next
         }
     }
     # path -- reconstruct a "/"-separated path by following parentid
@@ -779,7 +791,7 @@ ZVfs: class {
     # anything else (notfound, file, dir, mount) keeps going. Up to
     # 1024 ancestors before we bail (defensive cap; trees in
     # practice stay shallow).
-    path: function {this: this.view dentryid: u32} out String is {
+    path: function {this: this.view dentryid: fsno} out String is {
         # Collect names walking upward, then assemble in reverse.
         # Cap at 1024 ancestors (defensive; trees stay shallow).
         names: List String
@@ -790,7 +802,7 @@ ZVfs: class {
         for active loop {
             e: this.entrytable.entries.get i: curid
             at_root: false
-            par: u32
+            par: fsno
             match (
                 e
             ) case root then {
@@ -835,7 +847,7 @@ ZVfs: class {
     # underlying path); for root/notfound returns "[NULL]"/
     # "[NOT FOUND]".
     pathfromprovider: function {this: this.view dentryid: fsno} out String is {
-        e: this.entrytable.entries.get i: dentryid.u64
+        e: this.entrytable.entries.get i: dentryid
         match (
             e
         ) case root then {
@@ -863,7 +875,7 @@ ZVfs: class {
     # provider's registered root joined with the provider-relative path).
     # "" when the provider has no native root (the in-memory overlay); the
     # caller resolves those against its source dir, which the overlay shadows.
-    pathfromproviderNative: function {this: this.view dentryid: u32} out String is {
+    pathfromproviderNative: function {this: this.view dentryid: fsno} out String is {
         e: this.entrytable.entries.get i: dentryid
         rel: String
         pid: u32
@@ -942,7 +954,7 @@ ZVfs: class {
     # parentOf -- the directory entry `dentryid` hangs under; the root is its
     # own parent.
     parentOf: function {this: this.view dentryid: fsno} out fsno is {
-        e: this.entrytable.entries.get i: dentryid.u64
+        e: this.entrytable.entries.get i: dentryid
         match (
             e
         ) case root then {
@@ -961,7 +973,7 @@ ZVfs: class {
     # _sameProvider -- whether two entries belong to one provider. A root or a
     # mount belongs to none, so it matches nothing.
     _sameProvider: function {this: this.view a: fsno b: fsno} out bool is {
-        ea: this.entrytable.entries.get i: a.u64
+        ea: this.entrytable.entries.get i: a
         pa: u32
         match (
             ea
@@ -976,7 +988,7 @@ ZVfs: class {
         } case mount then {
             return false
         }
-        eb: this.entrytable.entries.get i: b.u64
+        eb: this.entrytable.entries.get i: b
         match (
             eb
         ) case file then {
@@ -997,7 +1009,7 @@ ZVfs: class {
     # tool ran. A leading `./` is dropped; a file whose provider has no native
     # root (an in-memory overlay) keeps its path under that root.
     displayPath: function {this: this.view dentryid: fsno} out String is {
-        np: this.pathfromproviderNative dentryid: dentryid.u32
+        np: this.pathfromproviderNative :dentryid
         if np.length == 0 then return (this.pathfromprovider :dentryid)
         rest: np.stringView.stripPrefix p: "./"
         match (
@@ -1012,7 +1024,7 @@ ZVfs: class {
     # mountinfo carrier. For mount arms: is_mount=true + first/second/
     # has_second fields. For other arms: is_mount=false. Used by walk to
     # release the entrytable borrow before recursing into the mount arms.
-    _extractMount: function {this: this.view dentryid: u32} out mountinfo is {
+    _extractMount: function {this: this.view dentryid: fsno} out mountinfo is {
         e: this.entrytable.entries.get i: dentryid
         match (
             e
@@ -1030,7 +1042,7 @@ ZVfs: class {
     # _dentryIsNotFound -- true iff the dentry at `dentryid` is the
     # notfound arm. Used by walk to decide whether to fall through from
     # the first union arm to the second on a mount.
-    _dentryIsNotFound: function {this: this.view dentryid: u32} out bool is {
+    _dentryIsNotFound: function {this: this.view dentryid: fsno} out bool is {
         e: this.entrytable.entries.get i: dentryid
         match (
             e
@@ -1047,7 +1059,7 @@ ZVfs: class {
     # but returns OpenResult directly rather than wrapping in a
     # ZVfsOpenFile (the wrapper is needless in zerolang: OpenResult is
     # the value-returned result type, no with-block context manager).
-    open: function {this: this.view dentryid: u32} out OpenResult is {
+    open: function {this: this.view dentryid: fsno} out OpenResult is {
         e: this.entrytable.entries.get i: dentryid
         match (
             e
@@ -1074,7 +1086,7 @@ ZVfs: class {
     # return the one at `lineno` as Option.some. Out-of-range index or
     # open-failure returns Option.none. Whole-file read: VFS-mapped files
     # are small.
-    getline: function {this: this.view dentryid: u32 lineno: u64} out Option String is {
+    getline: function {this: this.view dentryid: fsno lineno: u64} out Option String is {
         r: this.open :dentryid
         match (
             r

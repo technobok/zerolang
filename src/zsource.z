@@ -3755,8 +3755,8 @@ Analysis: class {
         vfs: (zvfs.ZVfs
             providers: List zvfs.ProviderBox
             providerRoot: (IdMapR u32 V: String)
-            entrytable: (zvfs.DentryTable entries: ListVal zvfs.dentry)
-            file_names: List String
+            entrytable: (zvfs.DentryTable entries: (ListVal zvfs.dentry i: zvfs.fsno))
+            file_names: (List String i: zvfs.fsno)
             walk_cache: (MapRV String v: zvfs.fsno)
             rootid: zvfs.fsno
             shadow: (zvfs.shadowpair active: false top: zvfs.fsno base: zvfs.fsno)
@@ -3885,7 +3885,7 @@ Analysis: class {
                 return
             }
             where: String
-            if e.fsno.u64 > 0 then {
+            if e.fsno.isZero.not then {
                 path: vfs.displayPath dentryid: e.fsno
                 at: "in \{path} at line \{e.lineno}: "
                 where.append at
@@ -3933,12 +3933,12 @@ Analysis: class {
         for i < n loop {
             f: (this.diags.get :i).fsno
             ln: (this.diags.get :i).lineno
-            if f.u32 > 0 when (f == self).not then {
+            if f.isZero.not when (f == self).not then {
                 fp: vfs.displayPath dentryid: f
                 srcLine: String
                 hasLine: false
                 if ln > 0 then {
-                    got: vfs.getline dentryid: f.u32 lineno: ln.u64 - 1
+                    got: vfs.getline dentryid: f lineno: ln.u64 - 1
                     match (
                         got
                     ) case some then {
@@ -3959,8 +3959,8 @@ Analysis: class {
     selfFsnoOf: function {this: this.view vfs: zvfs.ZVfs.view prog: Ast.view} out zvfs.fsno is {
         found: zvfs.fsno
         for each f: prog.files loop {
-            if found.u32 == 0 then {
-                fp: vfs.pathfromproviderNative dentryid: f.u32
+            if found.isZero then {
+                fp: vfs.pathfromproviderNative dentryid: f
                 if (sameFile a: fp.stringView b: this.path.stringView) then found = f
             }
         }
@@ -3979,7 +3979,7 @@ Analysis: class {
     reportTypeErrors: function {:this st: zenv.ZSymbolTable.view prog: Ast.view} is {
         for each er: st.typing.errors loop {
             ef: er.fsno
-            if ef.u32 == 0 when er.nodeid.isZero.not then ef = prog.fsnoForNode nodeid: er.nodeid
+            if ef.isZero when er.nodeid.isZero.not then ef = prog.fsnoForNode nodeid: er.nodeid
             d: (zdiag.errorDiag
                 errv: er.err
                 fsno: ef
@@ -5264,7 +5264,7 @@ selfReferenceAt: function {
     prog: Ast.view file: zvfs.fsno um: UnitMembers.view siteNid: zast.nodeid declId: u64
 } out bool is {
     if declId == 0 then return false
-    if file.u32 == 0 then return false
+    if file.isZero then return false
     if ((prog.fsnoForNode nodeid: siteNid) == file).not then return false
     ln: u32
     {
@@ -5310,7 +5310,7 @@ LintedUnit: class {
 # body came from and never by name.
 lintedUnitOf: function {prog: Ast.view self: zvfs.fsno} out LintedUnit is {
     lu: LintedUnit op: zast.nodeid name: String names: List String
-    if self.u32 == 0 then return lu
+    if self.isZero then return lu
     trail: List String
     for each uId: prog.units loop {
         if lu.op.isZero then (findUnitIn
@@ -5493,7 +5493,7 @@ rootAtomNames: function {prog: Ast.view into: IdSet u64} is {
     ndJ: zast.nodeid
     ndJ = ndJ.next
     for ndJ.u64 < totN loop {
-        if (prog.fsnoForNode nodeid: ndJ).u32 == 0 then {
+        if (prog.fsnoForNode nodeid: ndJ).isZero then {
             ndB0: prog.nodes.get i: ndJ
             if ndB0.atomid then into.add item: ndB0.name.u64
         }
@@ -5507,7 +5507,7 @@ rootAtomNames: function {prog: Ast.view into: IdSet u64} is {
 # in a never-demanded factory) would otherwise read as dead.
 unitAtomNames: function {prog: Ast.view file: zvfs.fsno um: UnitMembers.view} out IdSet u64 is {
     names: IdSet u64
-    if file.u32 > 0 then {
+    if file.isZero.not then {
         atomNamesOutsideSelf :prog :file :um into: names
     } else {
         rootAtomNames :prog into: names
