@@ -90,7 +90,7 @@ SKIP     := mathutil genmath dissectlib
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: emit-set ident-set natives-tbl-guard generic-param-guard zl-full-guard const-row-guard all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls tcc install regen-goldens regen-matrix regen-math-asm bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard lifetime-guard native-guard fallback-guard member-guard highlight-guard deadcode-guard require-guard static-tcc-guard refusal-guard zlink-rules-guard fmt-raw-guard test-tcc test-tcc-heavy test-clang test-math-arm64 bench-math bench-math-kernels mode-parity readable-check user-native-guard perf-strict perf-elision pre-push
+.PHONY: emit-set ident-set natives-tbl-guard generic-param-guard zl-full-guard const-row-guard all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls tcc install regen-goldens regen-matrix regen-math-asm bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard lifetime-guard native-guard fallback-guard member-guard highlight-guard deadcode-guard require-guard static-tcc-guard refusal-guard zlink-rules-guard fmt-raw-guard test-tcc test-tcc-heavy test-clang test-math-arm64 test-math-noasm math-asm-guard bench-math bench-math-kernels mode-parity readable-check user-native-guard perf-strict perf-elision pre-push
 
 # Keep pattern-chain intermediates (the per-example .c files) for debugging.
 .SECONDARY:
@@ -177,7 +177,7 @@ test: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 # the Python-free seed bootstrap. The lint + guard + corpus phases are plain
 # prerequisites so -j overlaps them; test-bootstrap stays last (and is
 # internally serial -- b1 -> b2 -> b3 is a chain by nature).
-ci: style-lint zl-full-guard complexity-report warn-check shadow-guard emitter-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard member-guard highlight-guard any-guard deadcode-guard eager-guard eager-lib-guard case-guard user-native-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard readable-check perf-strict test-tcc-heavy test-clang test-math-arm64 mode-parity ci-corpus
+ci: style-lint zl-full-guard complexity-report warn-check shadow-guard emitter-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard member-guard highlight-guard any-guard deadcode-guard eager-guard eager-lib-guard case-guard user-native-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard readable-check perf-strict test-tcc-heavy test-clang test-math-arm64 test-math-noasm math-asm-guard mode-parity ci-corpus
 	$(MAKE) --no-print-directory test-bootstrap BOOTSTRAP_CCS="$(CI_BOOTSTRAP_CCS)"
 	@echo "CI GATE GREEN: style-lint + corpus(--heavy: +selfhost-asan +fixpoint) + bootstrap"
 
@@ -185,64 +185,109 @@ ci-corpus: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --heavy --jobs $(NPROC)
 
 # test-math-arm64 -- the math corpus cross-built for aarch64 by `zc --target
-# aarch64-linux-gnu` and run under qemu against the SAME goldens: the word
-# primitives' builtin tier on a second instruction set, where __int128 and the
-# carry builtins lower to umulh and adcs. A program in MATH_ARM64_REFUSED uses
-# f128, which quadfloat refuses for aarch64; it must fail with that refusal and
-# nothing else. Skipped, with a message, when the cross compiler or qemu is
-# absent; ci runs it when they are present.
+# aarch64-linux-gnu` and run under qemu against the SAME goldens, twice: the
+# word primitives' builtin tier, where __int128 and the carry builtins lower to
+# umulh and adcs, and with -DZ_MATH_ASM_ARM64 the generated asm kernels, which
+# are compiled only on request. A program in MATH_ARM64_REFUSED uses f128, which
+# quadfloat refuses for aarch64; it must fail with that refusal and nothing
+# else. Skipped, with a message, when the cross compiler or qemu is absent; ci
+# runs it when they are present.
 MATH_ARM64_DIR := $(BUILDDIR)/math-arm64
 MATH_ARM64_REFUSED := math_constants_wide
 test-math-arm64: bin/zc
 	@if ! command -v aarch64-linux-gnu-gcc >/dev/null 2>&1 || ! command -v qemu-aarch64 >/dev/null 2>&1; then \
 	  echo "test-math-arm64: skipped (needs aarch64-linux-gnu-gcc and qemu-aarch64)"; exit 0; fi; \
-	mkdir -p $(MATH_ARM64_DIR); fail=0; n=0; \
-	for f in tests/fixtures/emitc_corpus/math/*.z; do \
-	  b=$$(basename $$f .z); n=$$((n + 1)); \
-	  bin/zc build $$f --target aarch64-linux-gnu -o $(MATH_ARM64_DIR)/$$b > $(MATH_ARM64_DIR)/$$b.build 2>&1; rc=$$?; \
-	  case " $(MATH_ARM64_REFUSED) " in *" $$b "*) \
-	    grep -q "x86-64's" $(MATH_ARM64_DIR)/$$b.build && [ $$rc -eq 1 ] \
-	      || { echo "test-math-arm64 FAIL: $$b must be refused by quadfloat (exit $$rc)"; fail=1; }; \
-	    continue;; \
-	  esac; \
-	  if [ $$rc -ne 0 ]; then \
-	    echo "test-math-arm64 FAIL: $$b does not build"; sed -n 1,3p $(MATH_ARM64_DIR)/$$b.build; fail=1; continue; fi; \
-	  qemu-aarch64 -L /usr/aarch64-linux-gnu $(MATH_ARM64_DIR)/$$b > $(MATH_ARM64_DIR)/$$b.out 2>&1; \
-	  cmp -s $(MATH_ARM64_DIR)/$$b.out tests/fixtures/run_golden/$$b.out \
-	    || { echo "test-math-arm64 FAIL: $$b differs from its golden"; fail=1; }; \
+	fail=0; n=0; \
+	for v in builtins asm; do \
+	  d=$(MATH_ARM64_DIR)/$$v; mkdir -p $$d; fl=""; \
+	  if [ $$v = asm ]; then fl="--cflags -DZ_MATH_ASM_ARM64"; fi; \
+	  for f in tests/fixtures/emitc_corpus/math/*.z; do \
+	    b=$$(basename $$f .z); n=$$((n + 1)); \
+	    bin/zc build $$f --target aarch64-linux-gnu $$fl -o $$d/$$b > $$d/$$b.build 2>&1; rc=$$?; \
+	    case " $(MATH_ARM64_REFUSED) " in *" $$b "*) \
+	      grep -q "x86-64's" $$d/$$b.build && [ $$rc -eq 1 ] \
+	        || { echo "test-math-arm64 FAIL ($$v): $$b must be refused by quadfloat (exit $$rc)"; fail=1; }; \
+	      continue;; \
+	    esac; \
+	    if [ $$rc -ne 0 ]; then \
+	      echo "test-math-arm64 FAIL ($$v): $$b does not build"; sed -n 1,3p $$d/$$b.build; fail=1; continue; fi; \
+	    qemu-aarch64 -L /usr/aarch64-linux-gnu $$d/$$b > $$d/$$b.out 2>&1; \
+	    cmp -s $$d/$$b.out tests/fixtures/run_golden/$$b.out \
+	      || { echo "test-math-arm64 FAIL ($$v): $$b differs from its golden"; fail=1; }; \
+	  done; \
 	done; \
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
-	echo "test-math-arm64 OK: $$n math programs on aarch64, golden or refused as f128"
+	echo "test-math-arm64 OK: $$n math builds on aarch64 (builtins, asm), golden or refused as f128"
+
+# test-math-noasm -- the math corpus with -DZ_MATH_NOASM, which takes math's C
+# kernels where the generated asm would run. The corpus run covers the asm
+# kernels under gcc and clang, and tcc the portable C; this covers the
+# builtins tier between them, which a processor without ADX also takes.
+MATH_NOASM_DIR := $(BUILDDIR)/math-noasm
+test-math-noasm: bin/zc
+	@mkdir -p $(MATH_NOASM_DIR); fail=0; n=0; \
+	for f in tests/fixtures/emitc_corpus/math/*.z; do \
+	  b=$$(basename $$f .z); n=$$((n + 1)); \
+	  if ! bin/zc build $$f --cflags -DZ_MATH_NOASM -o $(MATH_NOASM_DIR)/$$b > $(MATH_NOASM_DIR)/$$b.build 2>&1; then \
+	    echo "test-math-noasm FAIL: $$b does not build"; sed -n 1,3p $(MATH_NOASM_DIR)/$$b.build; fail=1; continue; fi; \
+	  $(MATH_NOASM_DIR)/$$b > $(MATH_NOASM_DIR)/$$b.out 2>&1; \
+	  cmp -s $(MATH_NOASM_DIR)/$$b.out tests/fixtures/run_golden/$$b.out \
+	    || { echo "test-math-noasm FAIL: $$b differs from its golden"; fail=1; }; \
+	done; \
+	if [ $$fail -ne 0 ]; then exit 1; fi; \
+	echo "test-math-noasm OK: $$n math programs on math's C kernels"
+
+# math-asm-guard -- the committed asm fragments are what tools/asmgen writes:
+# regenerated into the build directory and compared, as Go's asmgen test does.
+MATH_ASM_CHECK_DIR := $(BUILDDIR)/asmgen-check
+MATH_ASM_FRAGS := _Z_MATH_ARITH_AMD64.inc _Z_MATH_ARITH_ARM64.inc
+math-asm-guard: out/asmgen
+	@mkdir -p $(MATH_ASM_CHECK_DIR)
+	@$(BUILDDIR)/asmgen $(MATH_ASM_CHECK_DIR)
+	@for f in $(MATH_ASM_FRAGS); do \
+	  if ! cmp -s $(MATH_ASM_CHECK_DIR)/$$f src/runtime/natives/$$f; then \
+	    echo "math-asm-guard FAIL: src/runtime/natives/$$f is not what tools/asmgen writes -- make regen-math-asm"; \
+	    diff $(MATH_ASM_CHECK_DIR)/$$f src/runtime/natives/$$f | head -20; exit 1; fi; \
+	done
+	@echo "math-asm-guard OK: $(MATH_ASM_FRAGS) are tools/asmgen's"
 
 # bench-math -- math's arithmetic timed per operation and size: first the
 # word-vector kernels alone (bench-math-kernels), then the operations through
 # BigInt (tests/bench/math_bench.z). NOT in ci: wall time is not a ratchet. Each
-# program is built three ways: gcc -O2 with the word primitives' builtins, gcc
-# -O2 with -DZ_WORD_PORTABLE forcing their portable forms, and tcc, which always
-# takes those.
+# program is built per kernel tier: gcc -O2 with the generated asm kernels
+# where they win, gcc -O2 with -DZ_MATH_NOASM (the word primitives' builtins),
+# gcc -O2 with -DZ_WORD_PORTABLE forcing their portable forms, and tcc, which
+# always takes those.
 BENCH_MATH_DIR := $(BUILDDIR)/bench-math
 bench-math: bin/zc $(BUILDDIR)/tcc bench-math-kernels
 	@mkdir -p $(BENCH_MATH_DIR)
-	@bin/zc build tests/bench/math_bench.z --release -o $(BENCH_MATH_DIR)/builtins
+	@bin/zc build tests/bench/math_bench.z --release -o $(BENCH_MATH_DIR)/asm
+	@bin/zc build tests/bench/math_bench.z --release --cflags -DZ_MATH_NOASM -o $(BENCH_MATH_DIR)/builtins
 	@bin/zc build tests/bench/math_bench.z --release --cflags -DZ_WORD_PORTABLE -o $(BENCH_MATH_DIR)/portable
 	@bin/zc build tests/bench/math_bench.z --cc $(BUILDDIR)/tcc --tcc-lib $(TCCLIB) -o $(BENCH_MATH_DIR)/tcc
-	@for v in builtins portable tcc; do echo "== $$v"; $(BENCH_MATH_DIR)/$$v; done
+	@pin=""; if command -v taskset >/dev/null 2>&1; then pin="taskset -c $(BENCH_CPU)"; fi; \
+	for v in asm builtins portable tcc; do echo "== $$v"; $$pin $(BENCH_MATH_DIR)/$$v; done
 
 # bench-math-kernels -- the kernels timed alone (tests/bench/math_kernels.c),
 # compiled straight from the runtime fragments as zc compiles a program, once
 # per tier. The wide multiply is cut out of z_hash.inc, whose other parts are
-# templates. A row prints the median of REPS timings.
+# templates. A row prints the median of REPS timings. The runs are pinned to
+# BENCH_CPU when taskset is present: on a processor with two kinds of core a
+# run the scheduler moves between them measures neither.
 REPS ?= 5
+BENCH_CPU ?= 0
 bench-math-kernels: $(BUILDDIR)/tcc
 	@mkdir -p $(BENCH_MATH_DIR)
 	@awk '/^\/\* 64x64 -> 128 multiply/,/^#endif/' src/runtime/z_hash.inc > $(BENCH_MATH_DIR)/mul128.h
 	@grep -q 'z_fh_mul128' $(BENCH_MATH_DIR)/mul128.h \
 	  || { echo "bench-math-kernels: z_hash.inc has no z_fh_mul128 block"; exit 1; }
 	@inc="-I$(BENCH_MATH_DIR) -Isrc/runtime/natives"; \
-	$(CC) -O2 -std=c17 -Wall -Wextra $$inc -o $(BENCH_MATH_DIR)/k-builtins tests/bench/math_kernels.c \
-	&& $(CC) -O2 -std=c17 -Wall -Wextra -DZ_WORD_PORTABLE $$inc -o $(BENCH_MATH_DIR)/k-portable tests/bench/math_kernels.c \
+	$(CC) -O2 -std=c17 -Wall -Wextra -Wno-unused-function $$inc -o $(BENCH_MATH_DIR)/k-asm tests/bench/math_kernels.c \
+	&& $(CC) -O2 -std=c17 -Wall -Wextra -Wno-unused-function -DZ_MATH_NOASM $$inc -o $(BENCH_MATH_DIR)/k-builtins tests/bench/math_kernels.c \
+	&& $(CC) -O2 -std=c17 -Wall -Wextra -Wno-unused-function -DZ_WORD_PORTABLE $$inc -o $(BENCH_MATH_DIR)/k-portable tests/bench/math_kernels.c \
 	&& $(BUILDDIR)/tcc -B $(TCCLIB) $$inc -o $(BENCH_MATH_DIR)/k-tcc tests/bench/math_kernels.c
-	@for v in builtins portable tcc; do echo "== kernels $$v"; $(BENCH_MATH_DIR)/k-$$v -r $(REPS); done
+	@pin=""; if command -v taskset >/dev/null 2>&1; then pin="taskset -c $(BENCH_CPU)"; fi; \
+	for v in asm builtins portable tcc; do echo "== kernels $$v"; $$pin $(BENCH_MATH_DIR)/k-$$v -r $(REPS); done
 
 # test-clang -- the corpus under clang, the fast tier. gcc reaches __float128's
 # library through quadmath.h; clang has no such header on its path, so the
@@ -2213,7 +2258,7 @@ perf: $(PERFBIN)
 #
 # +20 math's fixed binary float, net of a typedef's print format read by its
 # base type's name: 0 behaviour, +20 source.
-ALLOC_BASELINE := 2225311
+ALLOC_BASELINE := 2225331
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

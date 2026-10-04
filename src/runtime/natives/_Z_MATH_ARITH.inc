@@ -13,10 +13,18 @@
    A carry step and a borrow step are the system word primitives' and the
    wide multiply is z_fh_mul128, so a C compiler's builtins are taken where it
    has them -- __int128 and the carry builtins, which gcc and clang lower to
-   mul, adc and sbb -- and tcc runs their portable forms. */
+   mul, adc and sbb -- and tcc runs their portable forms.
+
+   Ahead of the loop, a kernel the asm fragments write (_Z_MATH_ARITH_AMD64.inc,
+   _Z_MATH_ARITH_ARM64.inc, from tools/asmgen) runs instead wherever its
+   Z_MATHASM_<NAME>(n) says it is the faster: only gcc and clang compile those,
+   and -DZ_MATH_NOASM takes the loops below everywhere. */
 
 /* z = x + y, the final carry 0 or 1 */
 static uint64_t z_mathk_addVV(uint64_t* z, const uint64_t* x, const uint64_t* y, uint64_t n) {
+#if defined(Z_MATHASM_ADDVV)
+    if (Z_MATHASM_ADDVV(n)) return z_mathasm_addVV(z, x, y, n);
+#endif
     uint64_t c = 0;
     for (uint64_t i = 0; i < n; i++) z[i] = z_word_addc(x[i], y[i], c, &c);
     return c;
@@ -24,6 +32,9 @@ static uint64_t z_mathk_addVV(uint64_t* z, const uint64_t* x, const uint64_t* y,
 
 /* z = x - y, the final borrow 0 or 1 */
 static uint64_t z_mathk_subVV(uint64_t* z, const uint64_t* x, const uint64_t* y, uint64_t n) {
+#if defined(Z_MATHASM_SUBVV)
+    if (Z_MATHASM_SUBVV(n)) return z_mathasm_subVV(z, x, y, n);
+#endif
     uint64_t c = 0;
     for (uint64_t i = 0; i < n; i++) z[i] = z_word_subb(x[i], y[i], c, &c);
     return c;
@@ -80,6 +91,9 @@ static uint64_t z_mathk_lshVU(uint64_t* z, const uint64_t* x, uint64_t s, uint64
         if (z != x) memcpy(z, x, (size_t)n * sizeof(uint64_t));
         return 0;
     }
+#if defined(Z_MATHASM_LSHVU)
+    if (Z_MATHASM_LSHVU(n)) return z_mathasm_lshVU(z, x, s, n);
+#endif
     uint64_t sh = s & 63;
     uint64_t back = (64 - sh) & 63;
     uint64_t c = x[n - 1] >> back;
@@ -96,6 +110,9 @@ static uint64_t z_mathk_rshVU(uint64_t* z, const uint64_t* x, uint64_t s, uint64
         if (z != x) memcpy(z, x, (size_t)n * sizeof(uint64_t));
         return 0;
     }
+#if defined(Z_MATHASM_RSHVU)
+    if (Z_MATHASM_RSHVU(n)) return z_mathasm_rshVU(z, x, s, n);
+#endif
     uint64_t sh = s & 63;
     uint64_t back = (64 - sh) & 63;
     uint64_t c = x[0] << back;
@@ -106,6 +123,9 @@ static uint64_t z_mathk_rshVU(uint64_t* z, const uint64_t* x, uint64_t s, uint64
 
 /* z = x*y + r for words y and r, the high word that spills past z */
 static uint64_t z_mathk_mulAddVWW(uint64_t* z, const uint64_t* x, uint64_t y, uint64_t r, uint64_t n) {
+#if defined(Z_MATHASM_MULADDVWW)
+    if (Z_MATHASM_MULADDVWW(n)) return z_mathasm_mulAddVWW(z, x, y, r, n);
+#endif
     uint64_t c = r;
     for (uint64_t i = 0; i < n; i++) {
         uint64_t lo;
@@ -120,6 +140,9 @@ static uint64_t z_mathk_mulAddVWW(uint64_t* z, const uint64_t* x, uint64_t y, ui
 
 /* z = x + y*m + a for words m and a, the high word that spills past z */
 static uint64_t z_mathk_addMulVVWW(uint64_t* z, const uint64_t* x, const uint64_t* y, uint64_t m, uint64_t a, uint64_t n) {
+#if defined(Z_MATHASM_ADDMULVVWW)
+    if (Z_MATHASM_ADDMULVVWW(n)) return z_mathasm_addMulVVWW(z, x, y, m, a, n);
+#endif
     uint64_t c = a;
     for (uint64_t i = 0; i < n; i++) {
         uint64_t lo;

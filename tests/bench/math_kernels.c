@@ -6,7 +6,7 @@
 
    make bench-math builds it once per kernel tier from the fragments
    themselves: _Z_SYSTEM_WORD.inc, the wide multiply cut out of z_hash.inc into
-   mul128.h, and _Z_MATH_ARITH.inc. A row repeats its kernel until 20 ms have
+   mul128.h, the generated asm kernels and _Z_MATH_ARITH.inc. A row repeats its kernel until 20 ms have
    passed, R times (-r R, default 5), and prints the median time per call;
    tiers are compared on those medians. */
 #define _POSIX_C_SOURCE 199309L
@@ -23,6 +23,8 @@ static void z_panic(const char* msg) {
 
 #include "mul128.h"
 #include "_Z_SYSTEM_WORD.inc"
+#include "_Z_MATH_ARITH_AMD64.inc"
+#include "_Z_MATH_ARITH_ARM64.inc"
 #include "_Z_MATH_ARITH.inc"
 
 /* the lengths a row is timed at, Go's series */
