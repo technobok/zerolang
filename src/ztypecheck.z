@@ -927,7 +927,7 @@ indexUnitDefs: function {st: zenv.ZSymbolTable scope: ztypes.declid program: Ast
         # a type minted before the def index existed has no def link; link any
         # still-unlinked named system def now
         cu: ztypes.tid
-        cn9x: st.reg.typeCount
+        cn9x: st.reg.nextTid
         for cu < cn9x loop {
             unl: false
             if (st.reg.defOf tid: cu).u64 == 0 then unl = true
@@ -8517,7 +8517,7 @@ checkInstanceConformances: function {
     labelNameId = crow.labelNameId
     isFacet = crow.isFacet
     crow.drop
-    last: st.reg.typeCount
+    last: st.reg.nextTid
     t: ztypes.tid 1
     for t < last loop {
         mono: t
@@ -20232,7 +20232,7 @@ stampPendingTyperefs: function {
 sweepGenericParamNames: function {st: zenv.ZSymbolTable ast: Ast} is {
     t: st.typing.gpNamesSwept
     if t.isZero then t = t.next
-    last: st.reg.typeCount
+    last: st.reg.nextTid
     for t < last loop {
         isGp: (st.reg.typetypeOf typeId: t) == ztypes.ztypetype.genericParam
         if isGp when (st.reg.isPartialOf tid: t).not when (st.reg.isTrieNodeOf tid: t).not then {
@@ -22925,7 +22925,7 @@ checkUnionArmSlots: function {ast: Ast st: zenv.ZSymbolTable} is {
     # the arms the slot cannot hold: each one's declaration node, and its armKey
     wideNodes: ListVal zast.nodeid
     wideKeys: ListVal ztyping.armkey
-    last: st.reg.typeCount
+    last: st.reg.nextTid
     t: ztypes.tid 1
     for t < last loop {
         uid: t
@@ -52610,7 +52610,7 @@ lateBodyPending: function {st: zenv.ZSymbolTable.view} out bool is {
 # it. Swept once per type, from the watermark the last sweep left.
 markGeneratedEqParts: function {st: zenv.ZSymbolTable ast: Ast.view} is {
     t: st.typing.eqPartsSwept
-    last: st.reg.typeCount
+    last: st.reg.nextTid
     for t < last loop {
         isVal: (st.reg.isValtypeOf tid: t) and (st.reg.isGenericOf tid: t).not
         if isVal when (st.typing.declMemberIsSynth parentTypeId: t nameId: zast.names.wkOpEq) then {
@@ -52798,7 +52798,7 @@ stampMonoTemplateFn: function {
     fnOpId: zast.nodeid
     templateFnId: u64
 } is {
-    last: st.reg.typeCount
+    last: st.reg.nextTid
     t: ztypes.tid 1
     for t < last loop {
         isMono: false
@@ -52839,7 +52839,7 @@ stampOneFnMono: function {
     ownerTid: ztypes.tid
 } is {
     if (firstInstanceWalk :st :ast :monoId opId: fnOpId).not then return
-    minted: st.reg.typeCount
+    minted: st.reg.nextTid
     monoNm: st.reg.nameOf tid: monoId
     prevSup: st.typing.suppressParamStamps
     st.typing.suppressParamStamps = true
@@ -52883,7 +52883,7 @@ stampOneFnMono: function {
     st.typing.suppressParamStamps = prevSup
     st.typing.monoParamSubst = IdMapV ztypes.tid v: ztypes.tid
     st.pop
-    recordMintedBy :st :monoId minted: (ztypes.tid.create from: minted)
+    recordMintedBy :st :monoId :minted
 }
 
 # stampMonoTemplateClass -- resolve one generic class/record template and
@@ -52912,7 +52912,7 @@ stampMonoTemplateClass: function {
         nameId: clsNameId
     )
     if templateTid.isZero then return
-    last: st.reg.typeCount
+    last: st.reg.nextTid
     t: ztypes.tid 1
     for t < last loop {
         isMono: false
@@ -53061,7 +53061,7 @@ stampOneClassMono: function {
     mNames: ListVal zast.nameid
     mOps: ListVal zast.nodeid
     collectOwedMembers :st :ast :clsOpId :monoId names: mNames ops: mOps
-    minted: st.reg.typeCount
+    minted: st.reg.nextTid
     monoNm: st.reg.nameOf tid: monoId
     prevSup: st.typing.suppressParamStamps
     st.typing.suppressParamStamps = true
@@ -53144,7 +53144,7 @@ stampOneClassMono: function {
     st.typing.suppressParamStamps = prevSup
     st.typing.monoParamSubst = IdMapV ztypes.tid v: ztypes.tid
     st.pop
-    recordMintedBy :st :monoId minted: (ztypes.tid.create from: minted)
+    recordMintedBy :st :monoId :minted
 }
 
 # stampClassMonoMethodMonos -- inside a class instance's walk, walk each
@@ -53164,7 +53164,7 @@ stampClassMonoMethodMonos: function {
     methodDecl: declOfTypeId :st tid: methodTid
     for each t: (st.reg.instancesOf origin: methodTid) loop {
         if (firstInstanceWalk :st :ast monoId: t opId: mop).not then continue
-        minted: st.reg.typeCount
+        minted: st.reg.nextTid
         bindMonoParams :st monoId: t
         st.typing.curMonoStamp = t
         st.typing.curMonoFnTid = t
@@ -53184,7 +53184,7 @@ stampClassMonoMethodMonos: function {
             declId: methodDecl
         )
         noteInstanceErrors :st :ast mono: t from: errM0
-        recordMintedBy :st monoId: t minted: (ztypes.tid.create from: minted)
+        recordMintedBy :st monoId: t :minted
     }
 }
 
@@ -53429,10 +53429,10 @@ stampUnitMonoTemplates: function {
 } is {
     more: st.typing.errors.length == 0
     for more loop {
-        minted: st.reg.typeCount
+        minted: st.reg.nextTid
         st.typing.instanceUseOwed = false
         stampUnitMonoRound :st :scope :program
-        grew: (st.reg.typeCount > minted) or st.typing.instanceUseOwed
+        grew: (st.reg.nextTid > minted) or st.typing.instanceUseOwed
         more = grew and (st.typing.errors.length == 0)
     }
 }
@@ -53632,7 +53632,7 @@ instanceNote: function {st: zenv.ZSymbolTable.view ast: Ast.view mono: ztypes.ti
 # of `monoId`.
 recordMintedBy: function {st: zenv.ZSymbolTable monoId: ztypes.tid minted: ztypes.tid} is {
     t: minted
-    last: st.reg.typeCount
+    last: st.reg.nextTid
     for t < last loop {
         (st.typing.monoMintedBy.set
             key: t
@@ -53723,7 +53723,7 @@ stampMonoTemplateUnit: function {
         }
     }
     if tplId == 0 then return
-    last: st.reg.typeCount
+    last: st.reg.nextTid
     t: ztypes.tid 1
     for t < last loop {
         isMono: false
@@ -53825,7 +53825,7 @@ walkUnitMonoFns: function {
     bodyIds: zast.kidspan
     monoId: ztypes.tid
 } is {
-    minted: st.reg.typeCount
+    minted: st.reg.nextTid
     monoNm: st.reg.nameOf tid: monoId
     prevSup: st.typing.suppressParamStamps
     st.typing.suppressParamStamps = true
@@ -53896,7 +53896,7 @@ walkUnitMonoFns: function {
     st.typing.suppressParamStamps = prevSup
     st.typing.monoParamSubst = IdMapV ztypes.tid v: ztypes.tid
     st.pop
-    recordMintedBy :st :monoId minted: (ztypes.tid.create from: minted)
+    recordMintedBy :st :monoId :minted
 }
 
 # stampUnitNestedMethods -- the instance walk of the methods each type a generic
@@ -62344,7 +62344,7 @@ canonicalizeShellChildren: function {
     nms: ListVal u64
     ctds: ListVal ztypes.tid
     (st.typing.declAllMemberRows
-        lastTid: st.reg.typeCount
+        lastTid: st.reg.nextTid
         owners: owns
         names: nms
         tids: ctds
