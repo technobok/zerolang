@@ -112,6 +112,17 @@ argdoc: record {
     forced: bool
 }
 
+# writtenpair -- the parentheses written in front of a value, as openWritten
+# skipped them
+writtenpair: record {
+    # the open-pair depth before them
+    entry: u32
+    # how many there were
+    opened: u32
+    # the gap after them, which belongs to the pair; empty when none was written
+    before: gapdocs
+}
+
 # a builder over one source: the tree, the token cursor and the document
 Builder: class {
     # the tree being printed
@@ -513,24 +524,13 @@ Builder: class {
     # for, with, block or data block carries braces. That pair shows only when
     # the value breaks, and never inside an interpolation hole.
     visitValue: function {:this id: zast.nodeid slot: u8 wrapped: bool} out u32 is {
-        entry: this.c.openParens
-        opened: u32
-        for (this.peekIs tt: zlexer.toktype.parenOpenTok) loop {
-            this.skipTok tt: zlexer.toktype.parenOpenTok
-            opened = opened + 1
-        }
-        this.c.openParens = this.c.openParens + opened
-        mine: entry + opened
+        wp: this.openWritten
         needed: this.parensRequired inner: id :slot
         innerNode: this.node :id
         # an INFIX call is not call-shaped: its parentheses are the layout pair
         # a binary operation owns, not the pair a call fills when it breaks
         isCall: innerNode.call
         if (this.isBinop :id) then isCall = false
-        # trivia inside a written pair belongs to that pair. Where none was
-        # written the surrounding gaps already own it, and asking here would
-        # take it from them -- but a closer landing at this level has to be
-        # asked for, or the comments in front of it are reported by nobody
         # a value inside a pair is a group of its own: a chain breaks at its
         # operators rather than inside its operands. Whether a pair is coming
         # is known before the body is built, so the body is told
@@ -540,33 +540,59 @@ Builder: class {
         if paired.not then paired = onBreak
         inPair: wrapped
         if paired then inPair = true
-        g: emptyGap
-        if opened > 0 then g = this.gapDocs cap: 0
         body: u32
         if isCall then {
             body = this.visitCall :id inParens: needed
         } else {
             body = this.visitValueArm :id wrapped: inPair
         }
-        # A closer is consumed by whichever value ENDS where it sits, which is
-        # not always the value that skipped the opener: in
-        # `out (Result (Box u64) E: IoError)` the last argument ends at the
-        # closer and takes it. So by the time this level exits, its own opener
-        # can be gone -- and asking for a gap then scans PAST the closer and
-        # swallows what follows, which is the next member's doc comment. Ask
-        # only while the opener is still standing.
-        stolen: this.c.openParens < mine
+        h: this.closeWritten p: wp
+        v: this.pairDoc :body :needed :onBreak :isCall before: wp.before after: h
+        return (this.withComments body: v before: emptyGap after: (this.closerTail entry: wp.entry))
+    }
+
+    # openWritten -- skip the openers written at the cursor and count them open.
+    # Trivia inside a written pair belongs to that pair and is read here; where
+    # none was written the surrounding gaps already own it, and asking would take
+    # it from them
+    openWritten: function {:this} out writtenpair is {
+        entry: this.c.openParens
+        opened: u32
+        for (this.peekIs tt: zlexer.toktype.parenOpenTok) loop {
+            this.skipTok tt: zlexer.toktype.parenOpenTok
+            opened = opened + 1
+        }
+        this.c.openParens = this.c.openParens + opened
+        before: emptyGap
+        if opened > 0 then before = this.gapDocs cap: 0
+        return (writtenpair :entry :opened :before)
+    }
+
+    # closeWritten -- once the value `p` was opened for is built: the comments in
+    # front of the closer it ends at, then the closers it consumes. A closer
+    # landing at this level has to be asked for, or the comments in front of it
+    # are reported by nobody.
+    #
+    # A closer is consumed by whichever value ENDS where it sits, which is not
+    # always the value that skipped the opener: in `out (Result (Box u64) E:
+    # IoError)` the last argument ends at the closer and takes it. So by the time
+    # this level exits, its own opener can be gone -- and asking for a gap then
+    # scans PAST the closer and swallows what follows, which is the next member's
+    # doc comment. Ask only while the opener is still standing. An own-line
+    # comment taken in front of a closer the value did not open ends the
+    # enclosing pair's argument list, which closerCommentAt tells argDoc.
+    closeWritten: function {:this p: writtenpair} out gapdocs is {
+        stolen: this.c.openParens < (p.entry + p.opened)
         willClose: false
         if this.c.openParens > 0 then willClose = this.peekIs tt: zlexer.toktype.parenCloseTok
-        takeH: opened > 0
+        takeH: p.opened > 0
         if takeH.not then takeH = willClose
         if stolen then takeH = false
         h: emptyGap
         if takeH then h = this.gapDocs cap: 0
-        if opened == 0 when h.dangling > 0 then this.closerCommentAt = this.c.openParens
+        if p.opened == 0 when h.dangling > 0 then this.closerCommentAt = this.c.openParens
         this.closeParens
-        v: this.pairDoc :body :needed :onBreak :isCall before: g after: h
-        return (this.withComments body: v before: emptyGap after: (this.closerTail :entry))
+        return h
     }
 
     # closerTail -- the comments in front of a closer closeParens left standing,
@@ -1567,41 +1593,18 @@ Builder: class {
     # parentheses are layout only, and written when it needs them; a call
     # keeps its callable on the opener's line
     matchSubject: function {:this xs: ListVal u32 id: zast.nodeid} is {
-        entry: this.c.openParens
-        opened: u32
-        for (this.peekIs tt: zlexer.toktype.parenOpenTok) loop {
-            this.skipTok tt: zlexer.toktype.parenOpenTok
-            opened = opened + 1
-        }
-        this.c.openParens = this.c.openParens + opened
-        mine: entry + opened
+        wp: this.openWritten
+        g: wp.before
         needed: this.parensRequired inner: id slot: slotkind.clause
         innerNode: this.node :id
         isCall: innerNode.call
-        g: emptyGap
-        if opened > 0 then g = this.gapDocs cap: 0
         core: u32
         if isCall then {
             core = this.visitCall :id inParens: true
         } else {
             core = this.visitValueArm :id wrapped: true
         }
-        # A closer is consumed by whichever value ENDS where it sits, which is
-        # not always the value that skipped the opener: in
-        # `out (Result (Box u64) E: IoError)` the last argument ends at the
-        # closer and takes it. So by the time this level exits, its own opener
-        # can be gone -- and asking for a gap then scans PAST the closer and
-        # swallows what follows, which is the next member's doc comment. Ask
-        # only while the opener is still standing.
-        stolen: this.c.openParens < mine
-        willClose: false
-        if this.c.openParens > 0 then willClose = this.peekIs tt: zlexer.toktype.parenCloseTok
-        takeH: opened > 0
-        if takeH.not then takeH = willClose
-        if stolen then takeH = false
-        h: emptyGap
-        if takeH then h = this.gapDocs cap: 0
-        this.closeParens
+        h: this.closeWritten p: wp
         hard: needed
         if isCall then hard = true
         if hard then {
