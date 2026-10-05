@@ -34,7 +34,7 @@ OwedFree: class {
     temp: bool
     # the checker's unnamed local the temporary realises (its name id), 0 for
     # none: a `.drop` that releases the last borrow of it destroys it there
-    tag: 0.u64
+    tag: zast.nameid.zero
     # the statement that zeroes the temporary, which an early destroy leaves
     # behind so the block's own destroy of it is a no-op
     zero: String
@@ -2526,7 +2526,7 @@ isBareReturn: function {n: astnode.view} out bool is {
     match (
         n
     ) case atomid then {
-        return n.name.u32 == zast.names.wkReturn
+        return n.name == zast.names.wkReturn
     } else {
         return false
     }
@@ -3259,7 +3259,7 @@ Ctx: class {
     fragUnits: List String
     # the hoists that realise one of the checker's unnamed locals: the local's
     # name id by hoist name; flushing a hoist moves it onto the temporary it owes
-    hoistTags: (MapRV String v: u64)
+    hoistTags: (MapRV String v: zast.nameid)
     # the table rows already written: a unit whose types a function type's
     # typedef spells is written ahead of the typedefs, and not again after
     rowsWritten: IdSet u64
@@ -3319,7 +3319,7 @@ Ctx: class {
     orderPendSlot: ListVal u64
     orderPendFid: ListVal ztypes.tid
     orderPendPid: ListVal ztypes.tid
-    orderPendName: ListVal u64
+    orderPendName: ListVal zast.nameid
     # the value node a waiting scalar part's temp is typed from, 0 for none
     orderPendNid: ListVal zast.nodeid
     # whether a waiting part only reads (isPureCText)
@@ -6315,7 +6315,7 @@ orderPart: function {
     ctx.orderPendSlot.append slot
     ctx.orderPendFid.append fid
     ctx.orderPendPid.append pid
-    ctx.orderPendName.append pname.u64
+    ctx.orderPendName.append pname
     ctx.orderPendNid.append valueNid
     ctx.orderPendPure.append pure
 }
@@ -6426,7 +6426,7 @@ orderSettle: function {
     pid: ctx.orderPendPid.get :i
     pn: (zast.poolTextAt
         pool: ast.names
-        ref: (zast.nameid.create from: (ctx.orderPendName.get :i).u32.orPanic)
+        ref: (ctx.orderPendName.get :i)
     )
     vnid: ctx.orderPendNid.get :i
     # a part no declared parameter types is typed as its own expression, read
@@ -7040,11 +7040,11 @@ hoistForAddress: function {
     # the value is a `T*` into storage the temp does not own
     ptr: false
     # the checker's unnamed local this temp realises, 0 for none
-    tag: 0.u64
+    tag: zast.nameid.zero
 } out String is {
     nm: argHoistName :symtab :ctx :argNid fallback: "_ah"
     owes: hoistOwes :symtab :argNid :ptr
-    if tag > 0 when owes then ctx.hoistTags.set key: nm.copy value: tag
+    if tag.isZero.not when owes then ctx.hoistTags.set key: nm.copy value: tag
     dt: String
     if owes then dt = hoistDestroyLine :symtab :ctx :tid nm: nm.stringView
     ctx.argHoistVals.append av.string
@@ -7063,8 +7063,8 @@ tagOwedTemps: function {ctx: Ctx tmp: TmpCtr from: u64} is {
         o: tmp.listFrees.getMut i: k
         k = k + 1
         if o.temp then {
-            tg: (ctx.hoistTags.remove key: o.name).or d: 0
-            if tg > 0 then {
+            tg: (ctx.hoistTags.remove key: o.name).or d: zast.nameid.zero
+            if tg.isZero.not then {
                 o.tag = tg
                 o.zero = "memset(&\{o.name}, 0, sizeof(\{o.name}));"
             }
@@ -9237,7 +9237,7 @@ emitCollectionMethodCall: function {
             av: bn.stringView
             tid: bt
             tag: ((symtab.typing.unnamedLocalOfNode.get key: (zast.nodeIdOf n: recvNode)).or
-                d: 0
+                d: zast.nameid.zero
             )
             argNid: (zast.nodeIdOf n: recvNode)
         )
@@ -14966,7 +14966,7 @@ callBaseTemp: function {
         :ctx
         av: base
         tid: nlid
-        tag: ((symtab.typing.unnamedLocalOfNode.get key: baseNid).or d: 0)
+        tag: ((symtab.typing.unnamedLocalOfNode.get key: baseNid).or d: zast.nameid.zero)
         argNid: baseNid
     )
 }
@@ -22697,7 +22697,7 @@ releaseUnheldTemps: function {
     kept: List OwedFree
     for tmp.listFrees.length > from loop {
         o: tmp.listFrees.pop
-        if o.temp when o.tag > 0 when (symtab.typing.unheldTemps.has item: o.tag) then {
+        if o.temp when o.tag.isZero.not when (symtab.typing.unheldTemps.has item: o.tag) then {
             buf.append o.stmt
         } else {
             kept.append o
@@ -28123,9 +28123,9 @@ emitTailStmt: function {
         ctx.exitNode = outerExit
         return done
     } case atomid then {
-        if n.name.u32 == zast.names.wkReturn then return false
-        if n.name.u32 == zast.names.wkBreak then return false
-        if n.name.u32 == zast.names.wkContinue then return false
+        if n.name == zast.names.wkReturn then return false
+        if n.name == zast.names.wkBreak then return false
+        if n.name == zast.names.wkContinue then return false
         if (zast.nameTextEq :ast ref: n.name s: "null") then return false
         emitReturnOfNode :ast :symtab :ctx vid: n.nodeid :ind :tmp :buf
         ctx.tailReturned = true
@@ -32700,7 +32700,7 @@ emitC: function {
         nativeConvMemb: (MapRV String v: bool)
         nativeArgMemb: (MapRV String v: bool)
         fragUnits: List String
-        hoistTags: (MapRV String v: u64)
+        hoistTags: (MapRV String v: zast.nameid)
         rowsWritten: IdSet u64
         fragMembs: List String
         fragNames: List String
@@ -32729,7 +32729,7 @@ emitC: function {
         orderPendSlot: ListVal u64
         orderPendFid: ListVal ztypes.tid
         orderPendPid: ListVal ztypes.tid
-        orderPendName: ListVal u64
+        orderPendName: ListVal zast.nameid
         orderPendNid: ListVal zast.nodeid
         orderPendPure: ListVal bool
         orderCtr: 0

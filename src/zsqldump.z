@@ -143,8 +143,8 @@ canonNodeText: function {ast: Ast.view nid: zast.nodeid} out String is {
 
 # destroyVarNames -- each variable a local binds, by id, to the local's name:
 # a variable is known by its id alone, and the dump names it.
-destroyVarNames: function {st: zenv.ZSymbolTable.view} out (IdMapV ztypes.vid v: u32) is {
-    names: IdMapV ztypes.vid v: u32
+destroyVarNames: function {st: zenv.ZSymbolTable.view} out (IdMapV ztypes.vid v: zast.nameid) is {
+    names: IdMapV ztypes.vid v: zast.nameid
     dd: ztypes.declid
     for dd < st.typing.nextDecl loop {
         dv: st.typing.declLocalVarOf declId: dd
@@ -158,7 +158,7 @@ destroyVarNames: function {st: zenv.ZSymbolTable.view} out (IdMapV ztypes.vid v:
 appendDestroyRows: function {
     ast: Ast.view
     st: zenv.ZSymbolTable.view
-    names: (IdMapV ztypes.vid v: u32).view
+    names: (IdMapV ztypes.vid v: zast.nameid).view
     kind: StringView
     nid: zast.nodeid
     range: ztyping.destroyrange
@@ -168,8 +168,8 @@ appendDestroyRows: function {
     i: u64
     for i < range.len loop {
         it: st.typing.destroyItems.get i: range.start.u64 + i
-        vni: (names.get key: it.vid).or d: 0
-        vn: zast.poolTextAt pool: ast.names ref: (zast.nameid.create from: vni)
+        vni: (names.get key: it.vid).or d: zast.nameid.zero
+        vn: zast.poolTextAt pool: ast.names ref: vni
         vnSql: sqlStr s: vn.stringView
         stt: destroyStateText state: it.state
         rows.append "\{kind} | \{nt} | \{i} | \{vnSql} | \{stt}"
@@ -923,7 +923,7 @@ ZDumper: class {
         }
         this.appendMonoStamps :typing
         for each np: typing.numericParamRead.iterateItems loop {
-            rowNp: "INSERT OR IGNORE INTO numeric_param_read VALUES (\{np.key}, \{np.value.u64});\n"
+            rowNp: "INSERT OR IGNORE INTO numeric_param_read VALUES (\{np.key}, \{np.value});\n"
             this.acc.append s: rowNp
         }
     }
@@ -1068,7 +1068,7 @@ ZDumper: class {
                 this.acc.append s: nr
             }
             for each xn2i: e.excludedSubtypes loop {
-                xn2: zast.poolTextAt :pool ref: (zast.nameid.create from: xn2i)
+                xn2: zast.poolTextAt :pool ref: xn2i
                 xnm: sqlStr s: xn2.stringView
                 xr: "INSERT INTO narrowed_subtype VALUES (\{e.entryId}, \{xnm}, NULL, 1);\n"
                 this.acc.append s: xr
@@ -1409,7 +1409,7 @@ ZDumper: class {
         # the iteration holds the table exclusively and rendering a value reads
         # the whole symbol table: collect this unit's entries first, render
         # them once the iterator has died
-        mNames: ListVal u64
+        mNames: ListVal zast.nameid
         mVals: ListVal ztypes.cval
         for each mc: st.typing.memberConst.iterateItems loop {
             pt: mc.key.owner
@@ -1419,13 +1419,13 @@ ZDumper: class {
             # unit and has nothing to say about the unit type itself.
             tn: canonTypeName reg: st.reg tid: pt
             if tn.stringView == unm then {
-                mNames.append nm.u64
+                mNames.append nm
                 mVals.append mc.value
             }
         }
         mi: u64
         for mi < mNames.length loop {
-            mn: pool.texts.get i: (zast.nameid.create from: (mNames.get i: mi).u32.orPanic)
+            mn: pool.texts.get i: (mNames.get i: mi)
             cvt: constValueCanonText :pool :st v: (mVals.get i: mi)
             line: "\{sqlStr s: mn.stringView} | \{sqlStr s: cvt.stringView}"
             rows.append line
@@ -1507,7 +1507,7 @@ ZDumper: class {
                 narrowedRows.append "\{nnmSql} | 0"
             }
             for each xni: e.excludedSubtypes loop {
-                xn: zast.poolTextAt :pool ref: (zast.nameid.create from: xni)
+                xn: zast.poolTextAt :pool ref: xni
                 xnmSql: sqlStr s: xn.stringView
                 narrowedRows.append "\{xnmSql} | 1"
             }
@@ -1637,7 +1637,7 @@ ZDumper: class {
         for each cg: st.typing.callGenericBinding.iterateItems loop {
             hld: (zast.poolTextAt
                 pool: program.names
-                ref: (zast.nameid.create from: cg.key.param.u32.orPanic)
+                ref: cg.key.param
             )
             tn: canonTypeName reg: st.reg tid: cg.value
             hSql: sqlStr s: hld.stringView

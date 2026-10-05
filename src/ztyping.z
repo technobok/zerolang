@@ -266,14 +266,15 @@ declkindName: function {k: declkind} out String is {
     }
 }
 
-# callslot -- which generic parameter of which call site. Two id spaces stay
-# two fields; both are widened to u64 so the key has no padding for the
-# container's byte hash to read.
+# callslot -- which generic parameter of which call site: the call node and the
+# parameter's name. Two id spaces stay two fields, both 32 bits wide, so the key
+# has no padding for the container's byte hash to read.
 callslot: record {
     # the call node
     call: zast.nodeid
-    # which parameter of it, by position. The pair keys a per-argument stamp
-    param: u64
+    # the generic parameter, by name. The pair keys the type argument the call
+    # bound it to
+    param: zast.nameid
 }
 
 # constslot -- which member of which type, for the compile-time value channel.
@@ -500,7 +501,7 @@ Decl: class {
     # type in this unit whose as-block named it (0 = none). A spec's `this`
     # binds to that type. On the DECLARATION, so the marker name is scoped by
     # what declared it rather than by the unit it was written in.
-    conformerName: u32
+    conformerName: zast.nameid
     # varId -- on a local declaration bound to a runtime variable, that
     # variable's id (0 for a type-only binding and for every other kind)
     varId: ztypes.vid
@@ -729,17 +730,17 @@ ZTyping: class {
     monoRecursionReported: IdSet ztypes.tid
     # the unnamed local a receiver node's value became (its name id): the
     # emitter tags the temporary it writes for that value with it
-    unnamedLocalOfNode: (IdMapV zast.nodeid v: u64)
+    unnamedLocalOfNode: (IdMapV zast.nodeid v: zast.nameid)
     # unnamed locals whose line ended with nothing holding them: their
     # temporaries end with the statement, even on a line a binding holds
-    unheldTemps: IdSet u64
+    unheldTemps: IdSet zast.nameid
     # unnamed locals a binding held when their line ended, until a `.drop`
     # releases the last hold
-    heldTemps: ListVal u64
+    heldTemps: ListVal zast.nameid
     # a `.drop` (node id) that released the last hold on an unnamed local (name
     # id, parallel): the temporary dies there
     dropTempNodes: ListVal zast.nodeid
-    dropTempNames: ListVal u64
+    dropTempNames: ListVal zast.nameid
     # the generic parameter to type-argument substitution in force for the
     # instantiation being walked
     monoParamSubst: (IdMapV ztypes.tid v: ztypes.tid)
@@ -1390,14 +1391,14 @@ ZTyping: class {
             grantsPrivate: false
             unitScope: false
             fnptrField: false
-            conformerName: 0
+            conformerName: zast.nameid.zero
             varId: ztypes.vid
             rows: 0
             children: (IdMapV zast.nameid v: ztypes.declid)
         )
         if parent.isZero.not then (this.declAddChildEdge
             parentDeclId: parent
-            nameId: (zast.nameid.create from: name.u32)
+            nameId: name
             childDeclId: id
         )
         if kind.publicNs then this.publicNsByOwner.set key: parent value: id
@@ -1664,9 +1665,9 @@ ZTyping: class {
 
     # First conformer wins, in body order: a later as-block naming the same
     # marker does not displace the spec receiver already bound.
-    declSetConformer: function {:this declId: ztypes.declid nameId: u32} is {
+    declSetConformer: function {:this declId: ztypes.declid nameId: zast.nameid} is {
         decl: this.decls.getMut i: declId
-        if decl.conformerName == 0 then decl.conformerName = nameId
+        if decl.conformerName.isZero then decl.conformerName = nameId
     }
 
     # declSetType -- record the canonical type a declaration minted, and the
@@ -2379,18 +2380,18 @@ ZTyping: class {
     # unfiltered walk leaves behind; paired with declMemberCount == 1 by the
     # single-parameter probes, which want the name without a row list. Direct,
     # for the same measured reason as declMemberCount above.
-    declLastChildNameId: function {this: this.view ownerTid: ztypes.tid} out u64 is {
+    declLastChildNameId: function {this: this.view ownerTid: ztypes.tid} out zast.nameid is {
         od: this.declIdOfType typeId: ownerTid
-        if od.isZero then return 0
-        r: u64
+        if od.isZero then return zast.nameid.zero
+        r: zast.nameid
         n: this.declChildSlots declId: od
         i: u64
         for i < n loop {
-            nid: u64
+            nid: zast.nameid
             did: ztypes.declid
             {
                 oo: this.decls.get i: od
-                nid = (oo.children.keyAt :i).u64
+                nid = oo.children.keyAt :i
                 vo: oo.children.valueAt :i
                 match (
                     vo
@@ -2736,10 +2737,10 @@ ZTyping: class {
             isArm = true
         }
         if tgt.isZero then return ""
-        nm: u32
+        nm: zast.nameid
         to: this.decls.get i: tgt
         nm = to.name
-        tx: zast.poolTextAt :pool ref: (zast.nameid.create from: nm.u32)
+        tx: zast.poolTextAt :pool ref: nm
         if isArm then return "arm \{tx}"
         return "func \{tx}"
     }
@@ -2993,9 +2994,9 @@ armSuffixSideOf: function {
     ty: ZTyping.view
     nid: zast.nodeid
     parentNid: zast.nodeid
-    childNameId: u64
+    childNameId: zast.nameid
 } out armside is {
-    if childNameId == 0 then return armside.none
+    if childNameId.isZero then return armside.none
     # The suffix reads a predicate's bool RESULT, so the receiver must itself
     # be an arm predicate. `o.some` is a predicate in its own right -- its
     # receiver is an ordinary value -- and falls through to the general path,
@@ -3016,12 +3017,12 @@ armSuffixSideOf: function {
         return (armSideOfName
             :ty
             typeId: dps
-            nameId: (zast.nameid.create from: childNameId.u32.orPanic)
+            nameId: childNameId
         )
     } case none then {
         # `.not` is bool's negation METHOD, not an arm, so the outer node
         # carries no stamp of its own; on an arm predicate it reads as `.false`
-        if childNameId == zast.names.wkNot.u64 then return armside.falsy
+        if childNameId == zast.names.wkNot then return armside.falsy
         return armside.none
     }
 }
@@ -3104,11 +3105,11 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         instanceUseOwed: false
         monoMintedBy: (IdMapV ztypes.tid v: ztypes.tid)
         monoRecursionReported: IdSet ztypes.tid
-        unnamedLocalOfNode: (IdMapV zast.nodeid v: u64)
-        unheldTemps: IdSet u64
-        heldTemps: ListVal u64
+        unnamedLocalOfNode: (IdMapV zast.nodeid v: zast.nameid)
+        unheldTemps: IdSet zast.nameid
+        heldTemps: ListVal zast.nameid
         dropTempNodes: ListVal zast.nodeid
-        dropTempNames: ListVal u64
+        dropTempNames: ListVal zast.nameid
         monoParamSubst: (IdMapV ztypes.tid v: ztypes.tid)
         curMonoStamp: ztypes.tid.zero
         constMono: ztypes.tid.zero
@@ -3309,7 +3310,7 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         grantsPrivate: false
         unitScope: false
         fnptrField: false
-        conformerName: 0
+        conformerName: zast.nameid.zero
         varId: ztypes.vid
         rows: 0
         children: (IdMapV zast.nameid v: ztypes.declid)

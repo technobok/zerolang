@@ -3209,7 +3209,7 @@ Analysis: class {
                 li: nodeInfoOf n: lit
                 written: (ci.line != li.line) or (ci.col != li.col)
                 if lit.atomstring when written when (
-                    (atomNameIdOf n: chn).u32 == zast.names.wkString
+                    (atomNameIdOf n: chn) == zast.names.wkString
                 ) then {
                     isLitString = ztypecheck.stringLitIsPlain :ast parts: lit.stringparts
                     cln = ci.line
@@ -4883,7 +4883,7 @@ Analysis: class {
         )
         if dmD.isZero then return
         if (ev.usedE.has item: dmD) then return
-        if (ev.refNames.has item: m.name.u64) then return
+        if (ev.refNames.has item: m.name) then return
         if (ztypecheck.declMemberIsPrivate
             :st
             tid: ev.mainTid
@@ -5183,7 +5183,7 @@ UnusedEvidence: class {
     usedE: IdSet ztypes.declid
     # every atom name in the unit's own file segment that is not a definition
     # naming itself, the syntactic fallback
-    refNames: IdSet u64
+    refNames: IdSet zast.nameid
     # the unit body's member nodes, in order
     memIds: ListVal zast.nodeid
 }
@@ -5197,7 +5197,7 @@ UnitMembers: class {
     # each member's start line, ascending
     lines: ListVal u32
     # each member's name id, 0 when it has none
-    names: ListVal u64
+    names: ListVal zast.nameid
     # each member's typed declaration id, 0 when it has none
     declIds: ListVal ztypes.declid
 }
@@ -5214,17 +5214,17 @@ unitMembersOf: function {
     memIds: (ListVal zast.nodeid).view
     file: zvfs.fsno
 } out UnitMembers is {
-    um: UnitMembers lines: ListVal u32 names: ListVal u64 declIds: ListVal ztypes.declid
+    um: UnitMembers lines: ListVal u32 names: ListVal zast.nameid declIds: ListVal ztypes.declid
     mI: u64
     for mI < memIds.length loop {
         mid: memIds.get i: mI
         mI = mI + 1
         if (prog.fsnoForNode nodeid: mid) != file then continue
         m: zast.namedSiteAt ast: prog nid: mid
-        nm9: u64
+        nm9: zast.nameid
         dc9: ztypes.declid
         if m.name.isZero.not then {
-            nm9 = m.name.u64
+            nm9 = m.name
             dc9 = st.typing.declTypedMemberIdOf parentTypeId: mainTid nameId: m.name
         }
         um.lines.append from: m.line
@@ -5485,14 +5485,14 @@ addPublicAliasTargets: function {
 
 # rootAtomNames -- every atom name among the rows that report from no file:
 # the root parse's own, since only a unit file's body reports from its file
-rootAtomNames: function {prog: Ast.view into: IdSet u64} is {
+rootAtomNames: function {prog: Ast.view into: IdSet zast.nameid} is {
     totN: prog.nodes.length
     ndJ: zast.nodeid
     ndJ = ndJ.next
     for ndJ.u64 < totN loop {
         if (prog.fsnoForNode nodeid: ndJ).isZero then {
             ndB0: prog.nodes.get i: ndJ
-            if ndB0.atomid then into.add item: ndB0.name.u64
+            if ndB0.atomid then into.add item: ndB0.name
         }
         ndJ = ndJ.next
     }
@@ -5502,8 +5502,12 @@ rootAtomNames: function {prog: Ast.view into: IdSet u64} is {
 # unit's own file holds. Stamps exist only for the bodies the demand walk
 # checked, so a private def used only inside an unchecked body (a construction
 # in a never-demanded factory) would otherwise read as dead.
-unitAtomNames: function {prog: Ast.view file: zvfs.fsno um: UnitMembers.view} out IdSet u64 is {
-    names: IdSet u64
+unitAtomNames: function {
+    prog: Ast.view
+    file: zvfs.fsno
+    um: UnitMembers.view
+} out IdSet zast.nameid is {
+    names: IdSet zast.nameid
     if file.isZero.not then {
         atomNamesOutsideSelf :prog :file :um into: names
     } else {
@@ -5517,7 +5521,7 @@ unitAtomNames: function {prog: Ast.view file: zvfs.fsno um: UnitMembers.view} ou
 # spells its own name, and counting that as a use is what kept L012 silent
 # about two dead emitter helpers for three months.
 atomNamesOutsideSelf: function {
-    prog: Ast.view file: zvfs.fsno um: UnitMembers.view into: IdSet u64
+    prog: Ast.view file: zvfs.fsno um: UnitMembers.view into: IdSet zast.nameid
 } is {
     totN: prog.nodes.length
     ndI: zast.nodeid
@@ -5529,8 +5533,8 @@ atomNamesOutsideSelf: function {
         if nd0.atomid when inFile == file then {
             k: memberIndexAtLine :um line: nd0.lineno
             isSelf: false
-            if k < um.names.length when (um.names.get i: k) == nd0.name.u64 then isSelf = true
-            if isSelf.not then into.add item: nd0.name.u64
+            if k < um.names.length when (um.names.get i: k) == nd0.name then isSelf = true
+            if isSelf.not then into.add item: nd0.name
         }
     }
 }

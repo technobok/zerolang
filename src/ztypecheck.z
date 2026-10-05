@@ -694,7 +694,7 @@ refBearingContainer: function {
 methodReceiverIsView: function {st: zenv.ZSymbolTable.view mid: ztypes.tid} out bool is {
     rpn: st.reg.thisParamNameIdOf tid: mid
     if rpn.isZero then return false
-    rpo: st.typing.declOwnershipOfId parentTypeId: mid nameId: (zast.nameid.create from: rpn.u32)
+    rpo: st.typing.declOwnershipOfId parentTypeId: mid nameId: rpn
     match (
         rpo
     ) case some then {
@@ -912,7 +912,7 @@ indexUnitDefs: function {st: zenv.ZSymbolTable scope: ztypes.declid program: Ast
             if clo.isZero.not then st.typing.collectionsUnitRoot = clo
             mro: (st.typing.declFindChild
                 parentDeclId: st.typing.programRoot
-                nameId: (zast.nameid.create from: st.reg.regMainUnitId.u32.orPanic)
+                nameId: st.reg.regMainUnitId
             )
             if mro.isZero.not then st.typing.mainUnitRoot = mro
             # the fourth anchor is established here with the rest: every unit
@@ -2414,14 +2414,14 @@ declOfFnDef: function {
     mown: declOfUnitDef :st :scope :unitDecl nameId: (nameIdOf :ast name: thisName)
     if ownerNameId.isZero.not when (zast.poolTextEq
         pool: ast.names
-        ref: (zast.nameid.create from: ownerNameId.u32)
+        ref: ownerNameId
         s: thisName
     ).not then {
         malt: (declOfUnitDef
             :st
             :scope
             :unitDecl
-            nameId: (zast.nameid.create from: ownerNameId.u32)
+            nameId: ownerNameId
         )
         if malt.isZero.not then mown = malt
     }
@@ -5386,7 +5386,7 @@ ensureUnitMonoBuilt: function {
     tdecl: declOfTypeId :st tid: tplId
     if tdecl.isZero then return
     tnode: zast.nodeid
-    tname: u32
+    tname: zast.nameid
     d: st.typing.decls.get i: tdecl
     tnode = d.node
     tname = d.name
@@ -5409,7 +5409,7 @@ ensureUnitMonoBuilt: function {
         :scope
         :ast
         tmplUnitName: (unitDeclOfTid :st tid: tplId)
-        tmplNameId: (zast.nameid.create from: tname)
+        tmplNameId: tname
         :monoId
         :tplId
         :subs
@@ -5835,7 +5835,7 @@ paramIsThisReceiver: function {ast: Ast.view op: astnode.view} out bool is {
     match (
         op
     ) case atomid then {
-        return op.name.u32 == zast.names.wkThis
+        return op.name == zast.names.wkThis
     } case dottedpath then {
         return (atomNameId :ast n: (ast.nodes.get i: op.parent)) == zast.names.wkThis
     } else {
@@ -5940,7 +5940,7 @@ typeHasNonOwnedField: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out 
             nid: frow.name
             if (st.typing.declIsBorrowedFieldId
                 parentTypeId: tid
-                nameId: (zast.nameid.create from: nid.u32)
+                nameId: nid
             ) then found = true
         }
         i = i + 1
@@ -7371,7 +7371,7 @@ forceMemberDecl: function {
 } out optionval ztypes.tid is {
     isM: false
     have: ztypes.tid
-    mnm: u32
+    mnm: zast.nameid
     mnd: zast.nodeid
     par: ztypes.declid
     memberDecl: st.typing.decls.get i: memberDeclId
@@ -7386,7 +7386,7 @@ forceMemberDecl: function {
     if (st.typing.declIsResolving declId: memberDeclId) then return (optionval.none ztypes.tid)
     if mnd.isZero then return (optionval.none ztypes.tid)
     otid: ztypes.tid
-    onm: u32
+    onm: zast.nameid
     po: st.typing.decls.get i: par
     otid = po.typeId
     onm = po.name
@@ -7398,8 +7398,8 @@ forceMemberDecl: function {
     if opId.isZero then return (optionval.none ztypes.tid)
     unD: unitDeclOfTid :st tid: otid
     if unD.isZero then return (optionval.none ztypes.tid)
-    tn: zast.nameTextCopy :ast ref: (zast.nameid.create from: onm)
-    mn: zast.nameTextCopy :ast ref: (zast.nameid.create from: mnm)
+    tn: zast.nameTextCopy :ast ref: onm
+    mn: zast.nameTextCopy :ast ref: mnm
     st.typing.declSetResolving declId: memberDeclId mark: true
     memberIdAt: optionval.none ztypes.tid
     # THE SIGNATURE IS THE OWNER'S, NOT THE CALLER'S. A member's types are
@@ -7414,7 +7414,7 @@ forceMemberDecl: function {
             scope: sigScope
             :ast
             unitDecl: unD
-            ownerNameId: (zast.nameid.create from: onm)
+            ownerNameId: onm
             mname: mn.stringView
             thisName: tn.stringView
             :opId
@@ -7450,7 +7450,7 @@ forceMemberDecl: function {
         )
         (st.typing.setMemberType
             parentTypeId: otid
-            nameId: (zast.nameid.create from: mnm)
+            nameId: mnm
             childTypeId: memberIdAt
         )
         return (optionval.some memberIdAt)
@@ -8119,7 +8119,7 @@ valueMayNameType: function {
     # a head that is a path names a type when it reaches one through a unit
     # (`(pr.Getter v: i64)`); an infix call's path (`cap * 2`) reaches none
     if pathHead.isZero.not then {
-        segs: ListVal u64
+        segs: ListVal zast.nameid
         instCallablePath :ast op: (ast.nodes.get i: pathHead) :segs
         pd: instTemplateDecl :st scopeDeclId: sc :segs
         if pd.isZero then return false
@@ -8636,7 +8636,7 @@ conformanceReceiverOwn: function {
 } out ztypes.zparamownership is {
     rpn: st.reg.thisParamNameIdOf tid: mid
     rn: zast.names.wkThis
-    if rpn.isZero.not then rn = zast.nameid.create from: rpn.u32
+    if rpn.isZero.not then rn = rpn
     return (conformanceOwn o: (st.typing.declOwnershipOfId parentTypeId: mid nameId: rn))
 }
 
@@ -9865,7 +9865,7 @@ scanPublicEntry: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
     nid: zast.nodeid
-    pubIds: IdSet u64
+    pubIds: IdSet zast.nameid
     aliases: ListVal aliasentry
     badMsg: StringView
 } is {
@@ -9873,7 +9873,7 @@ scanPublicEntry: function {
     if bn.namedoperation.not then return
     ent: argRefAt :ast :nid
     if (refuseNestedVisibility :st :ast m: ent) then return
-    pubIds.add item: bn.name.u64
+    pubIds.add item: bn.name
     bop: ast.nodes.get i: bn.operation
     match (
         bop
@@ -9903,7 +9903,7 @@ scanPublicBlock: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
     body: zast.kidspan
-    pubIds: IdSet u64
+    pubIds: IdSet zast.nameid
     aliases: ListVal aliasentry
     badMsg: StringView
 } is {
@@ -9923,7 +9923,7 @@ scanTypeAsBlock: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
     n: astnode.view
-    pubIds: IdSet u64
+    pubIds: IdSet zast.nameid
     aliases: ListVal aliasentry
 } out bool is {
     if n.namedoperation.not then return false
@@ -9947,23 +9947,23 @@ scanTypeField: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
     n: astnode.view
-    memberIds: IdSet u64
-    grants: ListVal u64
-    excl: ListVal u64
-    pubIds: IdSet u64
+    memberIds: IdSet zast.nameid
+    grants: ListVal zast.nameid
+    excl: ListVal zast.nameid
+    pubIds: IdSet zast.nameid
     pubFound: bool
 } is {
     if n.namedoperation.not then return
-    memberIds.add item: n.name.u64
+    memberIds.add item: n.name
     if (typeExprHasPrivate
         :ast
         n: (ast.nodes.get i: n.operation)
     ) then {
-        grants.append from: n.name.u64
+        grants.append from: n.name
         refuseBarePrivateField :st :ast opId: n.operation
     }
     if pubFound.not then return
-    if (pubIds.has item: n.name.u64).not then excl.append from: n.name.u64
+    if (pubIds.has item: n.name).not then excl.append from: n.name
 }
 
 # refuseBarePrivateField -- a field's type that ENDS in `.private`: a field holds
@@ -10002,14 +10002,14 @@ typeExprLeafId: function {ast: Ast.view opId: zast.nodeid} out zast.nameid is {
 scanTypeAsMember: function {
     ast: Ast.view
     n: astnode.view
-    memberIds: IdSet u64
-    excl: ListVal u64
-    pubIds: IdSet u64
+    memberIds: IdSet zast.nameid
+    excl: ListVal zast.nameid
+    pubIds: IdSet zast.nameid
 } is {
     if n.namedoperation.not then return
     if (zast.unitOpKindIs :ast opId: n.operation k: zast.unitkind.publicNs) then return
-    memberIds.add item: n.name.u64
-    if (pubIds.has item: n.name.u64).not then excl.append from: n.name.u64
+    memberIds.add item: n.name
+    if (pubIds.has item: n.name).not then excl.append from: n.name
 }
 
 # checkRenameAlias -- a `public:` rename must name a member this type has, and
@@ -10018,9 +10018,9 @@ checkRenameAlias: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
     al: aliasentry
-    memberIds: IdSet u64
+    memberIds: IdSet zast.nameid
 } out bool is {
-    if (memberIds.has item: al.internal.u64).not then {
+    if (memberIds.has item: al.internal).not then {
         iTxt: zast.nameTextAt :ast ref: al.internal
         (addResolveErrorH
             :st
@@ -10033,7 +10033,7 @@ checkRenameAlias: function {
         )
         return false
     }
-    if (memberIds.has item: al.pub.u64) then {
+    if (memberIds.has item: al.pub) then {
         pTxt: zast.nameTextAt :ast ref: al.pub
         (addResolveErrorH
             :st
@@ -10055,7 +10055,7 @@ installRenameAliases: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
     aliases: (ListVal aliasentry).view
-    memberIds: IdSet u64
+    memberIds: IdSet zast.nameid
 } is {
     ax: u64
     for ax < aliases.length loop {
@@ -10075,11 +10075,11 @@ scanVisibility: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
     onode: objref
-    excl: ListVal u64
-    grants: ListVal u64
+    excl: ListVal zast.nameid
+    grants: ListVal zast.nameid
 } is {
-    pubIds: IdSet u64
-    memberIds: IdSet u64
+    pubIds: IdSet zast.nameid
+    memberIds: IdSet zast.nameid
     aliases: ListVal aliasentry
     pubFound: false
     kAiter: u64
@@ -10127,14 +10127,14 @@ scanVisibility: function {
 
 # applyGrantsPrivate -- mark each `.private`-typed field as a friend handle.
 applyGrantsPrivate: function {
-    st: zenv.ZSymbolTable parentId: ztypes.tid grants: (ListVal u64).view
+    st: zenv.ZSymbolTable parentId: ztypes.tid grants: (ListVal zast.nameid).view
 } is {
     gi: u64
     gn: grants.length
     for gi < gn loop {
         (st.typing.setChildGrantsPrivateId
             parentTypeId: parentId
-            nameId: (zast.nameid.create from: (grants.get i: gi).u32.orPanic)
+            nameId: (grants.get i: gi)
         )
         gi = gi + 1
     }
@@ -10150,16 +10150,16 @@ scanUnitMember: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
     nid: zast.nodeid
-    pubIds: IdSet u64
+    pubIds: IdSet zast.nameid
     aliases: ListVal aliasentry
-    memberIds: IdSet u64
-    memberNameList: ListVal u64
+    memberIds: IdSet zast.nameid
+    memberNameList: ListVal zast.nameid
 } out bool is {
     um: ast.nodes.get i: nid
     if um.namedoperation.not then return false
     if (zast.unitOpKindIs :ast opId: um.operation k: zast.unitkind.publicNs).not then {
-        memberIds.add item: um.name.u64
-        memberNameList.append from: um.name.u64
+        memberIds.add item: um.name
+        memberNameList.append from: um.name
         return false
     }
     uop: ast.nodes.get i: um.operation
@@ -10180,9 +10180,9 @@ scanUnitVisibility: function {
     ast: Ast.view
     unitdefId: zast.nodeid
 } is {
-    pubIds: IdSet u64
-    memberIds: IdSet u64
-    memberNameList: ListVal u64
+    pubIds: IdSet zast.nameid
+    memberIds: IdSet zast.nameid
+    memberNameList: ListVal zast.nameid
     aliases: ListVal aliasentry
     pubFound: false
     bodyIds: zast.unitBodyIdsAt :ast unitId: unitdefId
@@ -10215,8 +10215,8 @@ scanUnitVisibility: function {
         okU: true
         # an atom naming no sibling is not a rename but a definition of the
         # block, resolved in the block's scope like any alias
-        if (memberIds.has item: alU.internal.u64).not then okU = false
-        if okU when (memberIds.has item: alU.pub.u64) then {
+        if (memberIds.has item: alU.internal).not then okU = false
+        if okU when (memberIds.has item: alU.pub) then {
             pTxtU: zast.nameTextAt :ast ref: alU.pub
             (addResolveErrorH
                 :st
@@ -11034,8 +11034,8 @@ resolveRecord: function {
     # routing can ask the declaration whether a type is runtime-backed instead
     # of comparing its name. Mirrors resolveClass.
     st.reg.setNative typeId: rt value: rnode.isNative
-    pvExcl_rrid: ListVal u64
-    pvGrants_rrid: ListVal u64
+    pvExcl_rrid: ListVal zast.nameid
+    pvGrants_rrid: ListVal zast.nameid
     scanVisibility :st :ast onode: rnode excl: pvExcl_rrid grants: pvGrants_rrid
     st.reg.setValtype typeId: rt value: true
     asItems: objAsItemsOf :ast nid: rnode.nid
@@ -11400,8 +11400,8 @@ resolveVariant: function {
     # routing can ask the declaration rather than compare a name. Mirrors
     # resolveRecord and resolveClass.
     st.reg.setNative typeId: variantTid value: vnode.isNative
-    pvExcl_vvid: ListVal u64
-    pvGrants_vvid: ListVal u64
+    pvExcl_vvid: ListVal zast.nameid
+    pvGrants_vvid: ListVal zast.nameid
     scanVisibility :st :ast onode: vnode excl: pvExcl_vvid grants: pvGrants_vvid
     st.reg.setValtype typeId: variantTid value: true
     isgen: false
@@ -12255,8 +12255,8 @@ resolveUnion: function {
         typetype: ztypes.ztypetype.unionType
     )
     uuid: uid
-    pvExcl_uuid: ListVal u64
-    pvGrants_uuid: ListVal u64
+    pvExcl_uuid: ListVal zast.nameid
+    pvGrants_uuid: ListVal zast.nameid
     scanVisibility :st :ast onode: vnode excl: pvExcl_uuid grants: pvGrants_uuid
     st.reg.setValtype typeId: uid value: false
     isgen: false
@@ -13754,8 +13754,8 @@ finishClassDef: function {
     isgen: bool
     cnode: objref
     needsDtorIn: bool
-    pvExcl: (ListVal u64).view
-    pvGrants: (ListVal u64).view
+    pvExcl: (ListVal zast.nameid).view
+    pvGrants: (ListVal zast.nameid).view
 } is {
     needsDtor: needsDtorIn
     resolveClassAsMethods :st :ast :unitDecl :scope :defName :cid :isgen :cnode
@@ -13812,8 +13812,8 @@ resolveClass: function {
     # runtime-backed instead of comparing its unit's name. Mirrors
     # resolveFunction, which has always written the function-path flag.
     st.reg.setNative typeId: cid value: cnode.isNative
-    pvExcl_ccid: ListVal u64
-    pvGrants_ccid: ListVal u64
+    pvExcl_ccid: ListVal zast.nameid
+    pvGrants_ccid: ListVal zast.nameid
     scanVisibility :st :ast onode: cnode excl: pvExcl_ccid grants: pvGrants_ccid
     st.reg.setValtype typeId: cid value: false
     needsDtor: false
@@ -13942,8 +13942,8 @@ resolveFacet: function {
         typetype: ztypes.ztypetype.facetType
     )
     ffid: fid
-    pvExcl_ffid: ListVal u64
-    pvGrants_ffid: ListVal u64
+    pvExcl_ffid: ListVal zast.nameid
+    pvGrants_ffid: ListVal zast.nameid
     scanVisibility :st :ast onode: fnode excl: pvExcl_ffid grants: pvGrants_ffid
     st.reg.setValtype typeId: fid value: true
     attachInterfaceAsConstants :st :ast parentId: fid :fnode
@@ -14039,8 +14039,8 @@ resolveProtocol: function {
         typetype: ztypes.ztypetype.protocolType
     )
     ppid: pid
-    pvExcl_ppid: ListVal u64
-    pvGrants_ppid: ListVal u64
+    pvExcl_ppid: ListVal zast.nameid
+    pvGrants_ppid: ListVal zast.nameid
     scanVisibility :st :ast onode: fnode excl: pvExcl_ppid grants: pvGrants_ppid
     st.reg.setValtype typeId: pid value: false
     attachInterfaceAsConstants :st :ast parentId: pid :fnode
@@ -14231,13 +14231,13 @@ typedefBaseDecl: function {
     if bn.call then headNid = bn.callable
     hdn: ast.nodes.get i: headNid
     if hdn.dottedpath then {
-        segs: ListVal u64
+        segs: ListVal zast.nameid
         instCallablePath :ast op: (ast.nodes.get i: headNid) :segs
         pd: instTemplateDecl :st scopeDeclId: (declParentIdOf :st :declId) :segs
         if pd.isZero.not then return pd
     }
     dk: dottedDefTargetIds :ast n: bn
-    if dk.unitName.u32 > 0 then {
+    if dk.unitName.isZero.not then {
         du: unitDeclOfName :st nameId: dk.unitName
         if du.isZero then return zd
         return (declOfUnitDef :st scope: du unitDecl: du nameId: dk.defName)
@@ -14378,7 +14378,7 @@ declDefTypetype: function {
     declId: ztypes.declid
 } out optionval ztypes.ztypetype is {
     dnode: zast.nodeid
-    dname: u32
+    dname: zast.nameid
     decl: st.typing.decls.get i: declId
     dnode = decl.node
     dname = decl.name
@@ -14389,7 +14389,7 @@ declDefTypetype: function {
     }
     nop: ast.nodes.get i: dnode
     if nop.namedoperation then {
-        nmNode: zast.poolTextAt pool: ast.names ref: (zast.nameid.create from: dname.u32)
+        nmNode: zast.poolTextAt pool: ast.names ref: dname
         return (defTypetypeOf
             defn: (ast.nodes.get i: nop.operation)
             name: nmNode.stringView
@@ -14412,7 +14412,7 @@ reexportTargetIdsOf: function {
         if nop.namedoperation then {
             vn: ast.nodes.get i: nop.operation
             dk: dottedDefTargetIds :ast n: vn
-            if dk.unitName.u32 > 0 then return dk
+            if dk.unitName.isZero.not then return dk
             # a BARE alias names a target in its OWN unit, so the missing
             # segment is the enclosing unit's name -- the Decl's parent.
             bid: bareDefTargetNameId n: vn
@@ -14467,7 +14467,7 @@ aliasNamesType: function {
         if nnp.namedoperation then {
             nvn: ast.nodes.get i: nnp.operation
             ntk: dottedDefTargetIds :ast n: nvn
-            if ntk.unitName.u32 > 0 then return (nameDenotesUnit
+            if ntk.unitName.isZero.not then return (nameDenotesUnit
                 :st
                 scope: st.curScope
                 nameId: ntk.unitName
@@ -14505,7 +14505,7 @@ valueAppliesUnitTemplate: function {
         }
     }
     if callableNid.isZero then return false
-    segs: ListVal u64
+    segs: ListVal zast.nameid
     instCallablePath :ast op: (ast.nodes.get i: callableNid) :segs
     td: instTemplateDecl :st scopeDeclId: (unitScopeOf :st declId: scope) :segs
     if td.isZero then return false
@@ -14783,7 +14783,7 @@ resolveAppliedMemberAlias: function {
     declId: ztypes.declid
 } out ztypes.tid is {
     vid: zast.nodeid
-    nm: u32
+    nm: zast.nameid
     {
         decl: st.typing.decls.get i: declId
         nm = decl.name
@@ -14815,7 +14815,7 @@ resolveAppliedMemberAlias: function {
     if ownTid.isZero.not then {
         (st.typing.setMemberType
             parentTypeId: ownTid
-            nameId: (zast.nameid.create from: nm)
+            nameId: nm
             childTypeId: rtid
         )
     }
@@ -16158,7 +16158,7 @@ registerUnitRoots: function {st: zenv.ZSymbolTable program: Ast.view} is {
         # holds one child per name and declFindChild there is unambiguous.
         # Keyed by name-pool id -- the pool interns, so id equality is text
         # equality and no spelling is compared.
-        seenUnits: IdSet u64
+        seenUnits: IdSet zast.nameid
         uCnt9c: program.units.length
         uIdx9c: u64
         for uIdx9c < uCnt9c loop {
@@ -16166,7 +16166,7 @@ registerUnitRoots: function {st: zenv.ZSymbolTable program: Ast.view} is {
             uIdx9c = uIdx9c + 1
             opId: zast.nodeid
             nmNode: String
-            nmRef: u64
+            nmRef: zast.nameid
             uNode: zast.nodeid
             uLine: u32
             uCol: u32
@@ -16176,7 +16176,7 @@ registerUnitRoots: function {st: zenv.ZSymbolTable program: Ast.view} is {
                     nm: zast.poolTextAt pool: program.names ref: ru.name
                     opId = ru.operation
                     nmNode = nm.copy
-                    nmRef = ru.name.u64
+                    nmRef = ru.name
                     uNode = ru.nodeid
                     uLine = ru.lineno
                     uCol = ru.colno
@@ -16912,7 +16912,7 @@ resolveDemandedNamespace: function {
     declId: ztypes.declid
     dParent: ztypes.declid
     puDecl: ztypes.declid
-    puNm: u32
+    puNm: zast.nameid
     defNameText: StringView
     opId: zast.nodeid
 } is {
@@ -16955,7 +16955,7 @@ resolveDemandedNamespace: function {
     # Signatures are resolved; the member bodies are owed a walk, which the
     # top-level drain does.
     st.typing.nsBodiesOwed.append (ztyping.nsbody
-        unitName: (zast.nameid.create from: puNm)
+        unitName: puNm
         unitOp: opId
     )
     # The members just resolved recorded their signature type-refs the way
@@ -16989,7 +16989,7 @@ resolveDemandedDecl: function {
     # a demanded declaration resolves in the scope it is written in -- its
     # parent -- whatever scope the demand came from
     rf: declParentIdOf :st :declId
-    dName: u32
+    dName: zast.nameid
     dParent: ztypes.declid
     dNode: zast.nodeid
     dTid: ztypes.tid
@@ -17000,11 +17000,11 @@ resolveDemandedDecl: function {
     dTid = decl.typeId
     decl.drop
     if (declAtProgramTop :st parentDeclId: dParent) then return
-    puNm: u32
+    puNm: zast.nameid
     pdo: st.typing.decls.get i: dParent
     puNm = pdo.name
     pdo.drop
-    defNameText: zast.nameTextCopy :ast ref: (zast.nameid.create from: dName)
+    defNameText: zast.nameTextCopy :ast ref: dName
     # the file unit the definition is written in, by id: a namespace may share
     # its name with a top-level unit, which a lookup by name would answer
     puDecl: unitRootOfDecl :st declId: dParent
@@ -17497,23 +17497,23 @@ resolveDemands: function {
 # outermost first: `mathops` -> [mathops], `helperu.mathops` -> [helperu,
 # mathops]. A segment that is not a plain name appends 0, which
 # instTemplateDecl then rejects -- there is no name to look up.
-instCallablePath: function {ast: Ast.view op: astnode.view segs: ListVal u64} is {
+instCallablePath: function {ast: Ast.view op: astnode.view segs: ListVal zast.nameid} is {
     match (
         op
     ) case dottedpath then {
         instCallablePath :ast op: (ast.nodes.get i: op.parent) :segs
-        segs.append (atomNameId :ast n: (ast.nodes.get i: op.child)).u64
+        segs.append (atomNameId :ast n: (ast.nodes.get i: op.child))
     } case atomid then {
-        segs.append op.name.u64
+        segs.append op.name
     } else {
-        segs.append 0
+        segs.append zast.nameid.zero
     }
 }
 
 # callableInstPath -- the path of a binding whose value is a call. Empty for anything else, which is what says a
 # binding is not an instantiation. The whole path, not a single atom name: a
 # dotted callable names another unit's template.
-callableInstPath: function {ast: Ast.view op: astnode.view segs: ListVal u64} is {
+callableInstPath: function {ast: Ast.view op: astnode.view segs: ListVal zast.nameid} is {
     match (
         op
     ) case call then {
@@ -17584,22 +17584,22 @@ declInScope: function {
 instTemplateDecl: function {
     st: zenv.ZSymbolTable.view
     scopeDeclId: ztypes.declid
-    segs: (ListVal u64).view
+    segs: (ListVal zast.nameid).view
 } out ztypes.declid is {
     cur: ztypes.declid
     if segs.length == 0 then return cur
     s0v: segs.get i: 0
-    if s0v == 0 then return cur
-    cur = declInScope :st :scopeDeclId nameId: (zast.nameid.create from: s0v.u32.orPanic)
+    if s0v.isZero then return cur
+    cur = declInScope :st :scopeDeclId nameId: s0v
     if cur.isZero then return cur
     si: u64
     si = 1
     for si < segs.length loop {
         sv: segs.get i: si
-        if sv == 0 then return ztypes.declid.zero
+        if sv.isZero then return ztypes.declid.zero
         cur = (st.typing.declFindChild
             parentDeclId: cur
-            nameId: (zast.nameid.create from: sv.u32.orPanic)
+            nameId: sv
         )
         if cur.isZero then return cur
         si = si + 1
@@ -17778,14 +17778,14 @@ collectMainInstantiations: function {
                         :reqs
                     )
                 } else {
-                    segs: ListVal u64
+                    segs: ListVal zast.nameid
                     callableInstPath :ast op: mop :segs
                     tdecl: instTemplateDecl :st :scopeDeclId :segs
                     topId: instTemplateOpOf :st :ast declId: tdecl
                     tnId: zast.nameid
                     if segs.length > 0 then {
                         lastv: segs.get i: segs.length - 1
-                        if lastv > 0 then tnId = zast.nameid.create from: lastv.u32.orPanic
+                        if lastv.isZero.not then tnId = lastv
                     }
                     if tnId.isZero.not then {
                         tuN: unitRootOfDecl :st declId: tdecl
@@ -19239,7 +19239,7 @@ completeOneInstance: function {
     program: Ast
     r: InstReq.view
     mgo: ztypes.tid
-    tnId: u32
+    tnId: zast.nameid
     subs: (IdMapV zast.nameid v: ztypes.tid).view
     valSubs: (IdMapV zast.nameid v: u64).view
 } is {
@@ -19315,7 +19315,7 @@ completeOneInstance: function {
             :st
             declId: (st.typing.declFindChild
                 parentDeclId: st.typing.programRoot
-                nameId: (zast.nameid.create from: tnId)
+                nameId: tnId
             )
         )
         if ugo.isZero.not then {
@@ -19395,7 +19395,7 @@ completeUnitInstantiations: function {
         # resolved arguments -- the identity the mint pass laid; the label is
         # not consulted
         mgo: optionval.none ztypes.tid
-        tnId: u32
+        tnId: zast.nameid
         {
             if rtdecl.isZero.not when r.tmplOpId.isZero.not then {
                 argsC: ListVal ztypes.genericarg
@@ -19403,7 +19403,7 @@ completeUnitInstantiations: function {
                     mgo = unitMonoOnTrie :st tplTid: (declTypeIdOf :st declId: rtdecl) args: argsC
                 }
             }
-            tnId = rtId.u32
+            tnId = rtId
         }
         match (
             mgo
@@ -20812,10 +20812,10 @@ cloneDroppedReceiver: function {
     st: zenv.ZSymbolTable
     tplFnId: ztypes.tid
     toFn: ztypes.tid
-    tpn0id: u32
+    tpn0id: zast.nameid
 } is {
-    if tpn0id == 0 then return
-    rnid: zast.nameid.create from: tpn0id
+    if tpn0id.isZero then return
+    rnid: tpn0id
     if (st.typing.declMemberIdOf parentTypeId: tplFnId nameId: rnid).isZero then return
     if (st.typing.declMemberIdOf parentTypeId: toFn nameId: rnid).isZero.not then return
     st.typing.declSynthMember parentTypeId: toFn nameId: rnid kind: ztyping.declkind.paramDecl
@@ -20865,7 +20865,7 @@ cloneMethodInto: function {
     # and the no-paren auto-call, funcReturnsBorrow carries the `.borrow`
     # return marker, and funcReturnNode backs methodReturnOf for concrete
     # (non-generic) returns.
-    tpn0id: u32
+    tpn0id: zast.nameid
     isNativeFn: false
     if tplFnId < st.reg.nextTid then {
         tz0: st.reg.typeById.get i: tplFnId
@@ -20873,11 +20873,11 @@ cloneMethodInto: function {
         tpn0id = tz0.thisParamNameId
     }
     if isNativeFn then st.reg.setNative typeId: fid5 value: true
-    if tpn0id > 0 then (st.reg.setThisParamName
+    if tpn0id.isZero.not then (st.reg.setThisParamName
         typeId: fid5
-        nameId: (zast.nameid.create from: tpn0id.u32)
+        nameId: tpn0id
     )
-    tpn0: zast.nameTextCopy :ast ref: (zast.nameid.create from: tpn0id.u32)
+    tpn0: zast.nameTextCopy :ast ref: tpn0id
     copyReturnMarkers :st fromFn: tplFnId toFn: fid5
     frn0: (st.typing.funcReturnNode.get key: tplFnId).or d: zast.nodeid
     if frn0.isZero.not then st.typing.funcReturnNode.set key: fid5 value: frn0
@@ -23019,7 +23019,7 @@ wideArmNode: function {
 # armKeyNotAfter -- `a` sorts no later than `b`: by union, then by arm name.
 armKeyNotAfter: function {a: ztyping.armkey b: ztyping.armkey} out bool is {
     if (a.owner == b.owner).not then return a.owner < b.owner
-    return a.name.u32 <= b.name.u32
+    return a.name <= b.name
 }
 
 # reportWideArms -- the collected refusals in the order their arms are
@@ -23484,7 +23484,7 @@ keyReceiverMismatch: function {
 } out String is {
     rpn: st.reg.thisParamNameIdOf tid: mid
     rn: zast.names.wkThis
-    if rpn.isZero.not then rn = zast.nameid.create from: rpn.u32
+    if rpn.isZero.not then rn = rpn
     rOwnO: st.typing.declOwnershipOfId parentTypeId: mid nameId: rn
     rOwn: rOwnO.or d: ztypes.zparamownership.noneMode
     if rOwn == ztypes.zparamownership.viewMode then return ""
@@ -28029,10 +28029,10 @@ methodHasNoUserArgs: function {
     # declLastChildNameId hands back a pool id, so the receiver test takes it
     # directly -- copying the text out to intern it again lands on this id.
     soleId: st.typing.declLastChildNameId ownerTid: mid
-    if soleId == zast.names.wkThis.u64 then return true
+    if soleId == zast.names.wkThis then return true
     return (st.reg.thisParamNameIs
         tid: mid
-        nameId: (zast.nameid.create from: soleId.u32.orPanic)
+        nameId: soleId
     )
 }
 
@@ -28243,7 +28243,7 @@ canonicalChildBase: function {
     nm: st.reg.nameOf tid: bt
     if nm.length == 0 then return ztypes.tid.zero
     nmId: nameIdOf :ast name: nm.stringView
-    uks: ListVal u64
+    uks: ListVal zast.nameid
     {
         puds: programUnitDecls :st
         for each ud: puds loop {
@@ -28251,7 +28251,7 @@ canonicalChildBase: function {
                 :st
                 declId: ud
             )
-            uks.append unm.u64
+            uks.append unm
         }
     }
     cands: ListVal ztypes.tid
@@ -28259,7 +28259,7 @@ canonicalChildBase: function {
     ukn: uks.length
     for uki < ukn loop {
         uk: uks.get i: uki
-        uq4z: unitDeclOfName :st nameId: (zast.nameid.create from: uk.u32.orPanic)
+        uq4z: unitDeclOfName :st nameId: uk
         ro: (resolvedByIds
             :st
             :ast
@@ -32964,10 +32964,10 @@ checkAtomid: function {
         # `yield` wears the same unregistered placeholder, and is the one of the
         # three that is NOT valueless: its argument is the element the consumer
         # receives, so a bare one is a call missing it.
-        if node.name.u32 == zast.names.wkYield when (yieldIsInScope :st) then {
+        if node.name == zast.names.wkYield when (yieldIsInScope :st) then {
             reportMissingYieldValue :st :node
         }
-        isBrk: (node.name.u32 == zast.names.wkBreak) or (node.name.u32 == zast.names.wkContinue)
+        isBrk: (node.name == zast.names.wkBreak) or (node.name == zast.names.wkContinue)
         if isBrk then {
             result = ((walkLookupTyperef
                 :st
@@ -33020,7 +33020,7 @@ checkUnboundAtom: function {
     ast: Ast
     node: atomref
 } out ztypes.tid is {
-    if node.name.u32 == zast.names.wkReturn then reportMissingReturnValue :st :node
+    if node.name == zast.names.wkReturn then reportMissingReturnValue :st :node
     if (st.isTakenName nameId: node.name) then {
         reportTakenNameUse :st :ast :node
         return ztypes.tid
@@ -33202,7 +33202,7 @@ armSuffixSide: function {
         ty: st.typing
         :nid
         parentNid: (nodeId n: parent)
-        childNameId: cid.u64
+        childNameId: cid
     )
 }
 
@@ -35855,7 +35855,7 @@ blockHasBreak: function {ast: Ast.view n: astnode.view} out bool is {
     } case statementline then {
         return (blockHasBreak :ast n: (ast.nodes.get i: n.statementline))
     } case atomid then {
-        return n.name.u32 == zast.names.wkBreak
+        return n.name == zast.names.wkBreak
     } case ifexpr then {
         clx889: u64
         for clx889 < n.clauses.count loop {
@@ -35898,9 +35898,9 @@ armLeaves: function {ast: Ast.view n: astnode.view inLoop: bool} out bool is {
     } case statementline then {
         return (armLeaves :ast n: (ast.nodes.get i: n.statementline) :inLoop)
     } case atomid then {
-        if n.name.u32 == zast.names.wkReturn then return true
+        if n.name == zast.names.wkReturn then return true
         if inLoop then return false
-        return (n.name.u32 == zast.names.wkBreak) or (n.name.u32 == zast.names.wkContinue)
+        return (n.name == zast.names.wkBreak) or (n.name == zast.names.wkContinue)
     } case ifexpr then {
         return (clauseArmsLeave :ast clauses: n.clauses elseId: n.elseclause :inLoop)
     } case caseexpr then {
@@ -37119,11 +37119,11 @@ checkFor: function {
 endLoopWriteNarrowing: function {st: zenv.ZSymbolTable ast: Ast.view fornode: forref} is {
     if st.anyNarrowed.not then return
     if (loopWritesNarrowedName :st :ast :fornode).not then return
-    written: ListVal u32
-    bound: IdSet u32
+    written: ListVal zast.nameid
+    bound: IdSet zast.nameid
     collectOuterWrites :ast nid: fornode.nid :bound names: written
     for each nm: written loop {
-        st.endNarrowingIfNarrowed nameId: (zast.nameid.create from: nm)
+        st.endNarrowingIfNarrowed nameId: nm
     }
 }
 
@@ -37203,9 +37203,9 @@ collectOuterWrites: function {
     ast: Ast.view
     nid: zast.nodeid
     # the names shadowed where `nid` sits
-    bound: IdSet u32
+    bound: IdSet zast.nameid
     # the written names, appended
-    names: ListVal u32
+    names: ListVal zast.nameid
 } is {
     if nid.isZero then return
     kids: ListVal zast.nodeid
@@ -37242,9 +37242,9 @@ writescope: record {
 readWriteScope: function {
     ast: Ast.view
     nid: zast.nodeid
-    bound: (IdSet u32).view
-    names: ListVal u32
-    inner: IdSet u32
+    bound: (IdSet zast.nameid).view
+    names: ListVal zast.nameid
+    inner: IdSet zast.nameid
     kids: ListVal zast.nodeid
 } out writescope is {
     n: ast.nodes.get i: nid
@@ -37257,7 +37257,7 @@ readWriteScope: function {
     zast.childIdsInto :ast :n acc: kids
     if n.statement then return (writescope walk: true block: true body: zast.nodeid)
     if n.withexpr then {
-        inner.add item: n.name.u32
+        inner.add item: n.name
         return (writescope walk: true block: false body: n.body)
     }
     if n.forexpr.not then return (writescope walk: true block: false body: zast.nodeid)
@@ -37265,7 +37265,7 @@ readWriteScope: function {
     for cx < n.conditions.count loop {
         cn: ast.nodes.get i: (zast.kidAt kids: ast.kids span: n.conditions i: cx)
         cx = cx + 1
-        if cn.namedoperation when cn.name.isZero.not then inner.add item: cn.name.u32
+        if cn.namedoperation when cn.name.isZero.not then inner.add item: cn.name
     }
     return (writescope walk: true block: false body: n.body)
 }
@@ -37275,13 +37275,13 @@ readWriteScope: function {
 collectBlockWrites: function {
     ast: Ast.view
     kids: (ListVal zast.nodeid).view
-    bound: IdSet u32
-    names: ListVal u32
+    bound: IdSet zast.nameid
+    names: ListVal zast.nameid
 } is {
     for each k: kids loop {
         collectOuterWrites :ast nid: k :bound :names
         bn: bindingNameOfLine :ast nid: k
-        if bn > 0 then bound.add item: bn
+        if bn.isZero.not then bound.add item: bn
     }
 }
 
@@ -37289,22 +37289,22 @@ collectBlockWrites: function {
 addOuterWrite: function {
     ast: Ast.view
     target: zast.nodeid
-    bound: (IdSet u32).view
-    names: ListVal u32
+    bound: (IdSet zast.nameid).view
+    names: ListVal zast.nameid
 } is {
     nm: atomNameId :ast n: (ast.nodes.get i: target)
     if nm.isZero then return
-    if (bound.has item: nm.u32).not then names.append nm.u32
+    if (bound.has item: nm).not then names.append nm
 }
 
 # bindingNameOfLine -- the name a block line binds (`name: value`), 0 when it
 # binds none.
-bindingNameOfLine: function {ast: Ast.view nid: zast.nodeid} out u32 is {
+bindingNameOfLine: function {ast: Ast.view nid: zast.nodeid} out zast.nameid is {
     line: ast.nodes.get i: nid
-    if line.statementline.not then return 0
+    if line.statementline.not then return zast.nameid.zero
     inner: ast.nodes.get i: line.statementline
-    if inner.assignment then return inner.name.u32
-    return 0
+    if inner.assignment then return inner.name
+    return zast.nameid.zero
 }
 
 # forCondBindsName -- the condition is the loop's binding (`x: E`), not one of
@@ -38850,8 +38850,8 @@ pinsAppendOne: function {
 # varNameText -- the name of the open local bound to `vid`, "" when none is.
 varNameText: function {st: zenv.ZSymbolTable.view ast: Ast.view vid: ztypes.vid} out String is {
     nm: st.localNameOfVar :vid
-    if nm == 0 then return ""
-    return (zast.nameTextCopy :ast ref: (zast.nameid.create from: nm.u32))
+    if nm.isZero then return ""
+    return (zast.nameTextCopy :ast ref: nm)
 }
 
 # transferHeldLocks -- a lock-holding value moves from `from` to `to`, and its
@@ -39427,7 +39427,7 @@ unnamedReceiverLocal: function {
     tnId: mintReceiverTemp :st :ast :recvT :recvNid
     if tnId.isZero then return
     st.typing.lineUnnamedLocals.append tnId
-    st.typing.unnamedLocalOfNode.set key: recvNid value: tnId.u64
+    st.typing.unnamedLocalOfNode.set key: recvNid value: tnId
     dst.append tnId
 }
 
@@ -39949,11 +39949,11 @@ pinnedMoveError: function {
 } out bool is {
     if name.length == 0 then return false
     pnid: nameIdOf :ast :name
-    pvo: st.lookupVarId nameId: (zast.nameid.create from: pnid.u32)
+    pvo: st.lookupVarId nameId: pnid
     if pvo.none then return false
-    plk: st.findLock nameId: (zast.nameid.create from: pnid.u32)
+    plk: st.findLock nameId: pnid
     if plk.none then return false
-    plh: st.findLockHolder nameId: (zast.nameid.create from: pnid.u32)
+    plh: st.findLockHolder nameId: pnid
     if plh.none then return false
     # A holder that is the binding itself is the readonly case, which
     # readonlyMoveError words better.
@@ -40651,12 +40651,12 @@ ctorArgProvided: function {
     provided: (ListVal zast.nameid).view
     posCount: u64
     posI: u64
-    nameId: u64
+    nameId: zast.nameid
 } out bool is {
     if posI < posCount then return true
     found: false
     for each pv: provided loop {
-        if pv.u64 == nameId then found = true
+        if pv == nameId then found = true
     }
     return found
 }
@@ -40748,7 +40748,7 @@ fieldSupplied: function {
         fieldTid: pcid
     ) then return true
     if (st.typing.declHasDefaultId parentTypeId: effId nameId: pnId) then return true
-    return (ctorArgProvided :provided :posCount :posI nameId: pnId.u64)
+    return (ctorArgProvided :provided :posCount :posI nameId: pnId)
 }
 
 # receiverParamNameOf -- the pool id of a method's receiver-parameter name, 0
@@ -40856,7 +40856,7 @@ checkUntypedArgLabel: function {
     isCtor: bool
     reportUnknown: bool
     argIdx: u64
-    boundArgIds: ListVal u64
+    boundArgIds: ListVal zast.nameid
     recvImplicit: bool
     arg: argref
 } is {
@@ -40888,7 +40888,7 @@ checkUntypedArgLabel: function {
         dcnU: pnIdU
         dupU: false
         for each bIdU: boundArgIds loop {
-            if bIdU == dcnU.u64 then dupU = true
+            if bIdU == dcnU then dupU = true
         }
         if dupU when reportUnknown then {
             pnU2: zast.nameTextAt :ast ref: pnIdU
@@ -40902,7 +40902,7 @@ checkUntypedArgLabel: function {
                 msg: dmU
             )
         } else {
-            boundArgIds.append dcnU.u64
+            boundArgIds.append dcnU
         }
     }
 }
@@ -41350,7 +41350,7 @@ coerceArgToParam: function {
     vt: ztypes.tid
     # the parameter's name (the label's, or the positional slot's)
     pnId: zast.nameid
-    boundArgIds: ListVal u64
+    boundArgIds: ListVal zast.nameid
     reportUnknown: bool
     wasPos: bool
     arg: argref
@@ -41363,7 +41363,7 @@ coerceArgToParam: function {
     dcnid: pnId
     dupSeen: false
     for each bId: boundArgIds loop {
-        if bId == dcnid.u64 then dupSeen = true
+        if bId == dcnid then dupSeen = true
     }
     if dupSeen when reportUnknown then {
         pn: zast.nameTextAt :ast ref: pnId
@@ -41377,7 +41377,7 @@ coerceArgToParam: function {
             msg: dmm
         )
     } else {
-        boundArgIds.append dcnid.u64
+        boundArgIds.append dcnid
     }
     if wasPos then coercePositionalArg :st :ast :effId :vt :pnId :arg
 }
@@ -42425,7 +42425,7 @@ checkTypedCallArg: function {
     reportUnknown: bool
     recvImplicit: bool
     argIdx: u64
-    boundArgIds: ListVal u64
+    boundArgIds: ListVal zast.nameid
     vt: ztypes.tid
     pins: List ztyping.PinPath
     # the call's result keeps its arguments' locks (walkCallArgsHoist decides)
@@ -42597,7 +42597,7 @@ walkOneCallArg: function {
     reportUnknown: bool
     recvImplicit: bool
     argIdx: u64
-    boundArgIds: ListVal u64
+    boundArgIds: ListVal zast.nameid
     pins: List ztyping.PinPath
     # the call's result keeps its arguments' locks
     calleePins: bool
@@ -43118,7 +43118,7 @@ walkCallArgsHoist: function {
 } out List ztyping.PinPath is {
     pins: List ztyping.PinPath
     argIdx: u64
-    boundArgIds: ListVal u64
+    boundArgIds: ListVal zast.nameid
     effId: funcId
     if isCtor then effId = ctorEffectiveTid :st :ast :call :funcId
     forceAllMembers :st :ast tid: effId
@@ -48177,7 +48177,7 @@ checkGenericCall: function {
     for each ge: subs.iterateItems loop {
         gk: (ztyping.callslot
             call: call.nid
-            param: ge.key.u64
+            param: ge.key
         )
         st.typing.callGenericBinding.set key: gk value: ge.value
     }
@@ -49057,14 +49057,18 @@ numeralBits: function {text: StringView} out optionval u64 is {
 
 # dissectArmByName -- the statement of the first case clause named `cnid`, for
 # a generic match over a TYPE parameter; 0 when none is (or the name is 0).
-dissectArmByName: function {ast: Ast.view m: zast.caserow.view cnid: u32} out zast.nodeid is {
-    if cnid == 0 then return zast.nodeid
+dissectArmByName: function {
+    ast: Ast.view
+    m: zast.caserow.view
+    cnid: zast.nameid
+} out zast.nodeid is {
+    if cnid.isZero then return zast.nodeid
     i: u64
     for i < m.clauses.count loop {
         cId: zast.kidAt kids: ast.kids span: m.clauses :i
         i = i + 1
         cnode: ast.nodes.get i: cId
-        if cnode.caseclause when cnode.name.u32 == cnid then return cnode.statement
+        if cnode.caseclause when cnode.name == cnid then return cnode.statement
     }
     return zast.nodeid
 }
@@ -50704,11 +50708,11 @@ forwardTail: function {st: zenv.ZSymbolTable ast: Ast.view innerId: zast.nodeid}
 # local a binding held that nothing holds now dies at the drop, for a
 # temporary belongs to the borrows of it and lives no longer than they do.
 noteDropReleasedTemps: function {st: zenv.ZSymbolTable dropNid: zast.nodeid} is {
-    kept: ListVal u64
+    kept: ListVal zast.nameid
     for st.typing.heldTemps.length > 0 loop {
         nm: st.typing.heldTemps.pop
         p: ListVal zast.nameid
-        p.append (zast.nameid.create from: nm.u32.orPanic)
+        p.append nm
         if (st.isPathLocked path: p) then {
             kept.append nm
         } else {
@@ -50732,9 +50736,9 @@ recordTempHoldingLine: function {st: zenv.ZSymbolTable lineId: zast.nodeid from:
         p.append nm
         if (st.isPathLocked path: p) then {
             held = true
-            st.typing.heldTemps.append nm.u64
+            st.typing.heldTemps.append nm
         } else {
-            st.typing.unheldTemps.add item: nm.u64
+            st.typing.unheldTemps.add item: nm
         }
         i = i + 1
     }
@@ -50927,11 +50931,11 @@ walkDefinitionById: function {
     if tid.isZero then return
     dcl: st.typing.declIdOfType typeId: tid
     if dcl.isZero then return
-    dnm: u32
+    dnm: zast.nameid
     dv: st.typing.decls.get i: dcl
     dnm = dv.name
     dv.drop
-    if dnm == 0 then return
+    if dnm.isZero then return
     unTd: unitDeclOfTid :st :tid
     if unTd.isZero then return
     (walkDeclaredDef
@@ -50939,7 +50943,7 @@ walkDefinitionById: function {
         scope: st.curScope
         :ast
         unitDecl: unTd
-        nameId: (zast.nameid.create from: dnm)
+        nameId: dnm
         declId: dcl
     )
 }
@@ -58918,7 +58922,7 @@ resolveCalledConstantDef: function {
             # namespace, or named through another unit, read as a
             # construction and was reported as a malformed constant.
             cscp: unitScopeOf :st declId: scope
-            csg: ListVal u64
+            csg: ListVal zast.nameid
             instCallablePath :ast op: (ast.nodes.get i: defn.callable) segs: csg
             cdc: instTemplateDecl :st scopeDeclId: cscp segs: csg
             if cdc.isZero.not then {
@@ -61140,7 +61144,7 @@ unitNameOfTid: function {
 declLinkTemplateMethod: function {
     st: zenv.ZSymbolTable
     tmplDeclId: ztypes.declid
-    memberNameId: u32
+    memberNameId: zast.nameid
     fnTid: ztypes.tid
 } is {
     if fnTid.isZero then return
@@ -61148,7 +61152,7 @@ declLinkTemplateMethod: function {
     if tmplDeclId.isZero then return
     md: (st.typing.declFindChild
         parentDeclId: tmplDeclId
-        nameId: (zast.nameid.create from: memberNameId.u32)
+        nameId: memberNameId
     )
     if md.isZero then return
     st.typing.declSetType declId: md typeId: fnTid
@@ -61485,7 +61489,7 @@ reexportUnitOf: function {
     nop: ast.nodes.get i: decl.node
     if nop.namedoperation then {
         dk: dottedDefTargetIds :ast n: (ast.nodes.get i: nop.operation)
-        if dk.unitName.u32 > 0 then {
+        if dk.unitName.isZero.not then {
             dkr: st.typing.declFindChild parentDeclId: st.typing.programRoot nameId: dk.unitName
             if dkr.isZero.not then return dk.unitName
         }
@@ -61709,7 +61713,7 @@ probeScopeTyperefRo: function {
             # a re-export the walk never touched: follow the target by
             # reading the ids off its def node -- never lay the edge
             alTgt: reexportTargetIdsOf :st :ast declId: cid
-            if alTgt.unitName.u32 > 0 then {
+            if alTgt.unitName.isZero.not then {
                 return (probeScopeTyperefRo
                     :ast
                     :st
@@ -61857,7 +61861,7 @@ resolvedByIds: function {
         }
     }
     alTgt: reexportTargetIdsOf :st :ast declId: alDecl
-    if alTgt.unitName.u32 > 0 then {
+    if alTgt.unitName.isZero.not then {
         tgo: (childOfWalkIds
             :st
             unitDecl: (unitDeclOfName :st nameId: alTgt.unitName)
@@ -61908,7 +61912,7 @@ resolvedByIdsRo: function {
         }
     }
     alTgt: reexportTargetIdsOf :st :ast declId: alDecl
-    if alTgt.unitName.u32 > 0 then {
+    if alTgt.unitName.isZero.not then {
         tgo: (childOfWalkIds
             :st
             unitDecl: (unitDeclOfName :st nameId: alTgt.unitName)
@@ -62476,12 +62480,12 @@ declPublicAliasInternal: function {
     if pn.isZero then return zast.nameid
     tgt: st.typing.declFindChild parentDeclId: pn nameId: nid
     if tgt.isZero then return zast.nameid
-    intName: u32
+    intName: zast.nameid
     decl: st.typing.decls.get i: tgt
     intName = decl.name
     if intName == nid then return zast.nameid
-    if intName == 0 then return zast.nameid
-    return (zast.nameid.create from: intName.u32)
+    if intName.isZero then return zast.nameid
+    return intName
 }
 
 # publicAliasInternalNames -- the internal member names `tid`'s public interface
@@ -62495,11 +62499,11 @@ publicAliasInternalNames: function {
     result: List String
     pn: publicNsOf :st :tid
     if pn.isZero then return result
-    ename: ListVal u64
+    ename: ListVal zast.nameid
     edecl: ListVal ztypes.declid
     po: st.typing.decls.get i: pn
     for each c: po.children.iterateItems loop {
-        ename.append from: c.key.u64
+        ename.append from: c.key
         edecl.append from: c.value
     }
     ei: u64
@@ -62508,12 +62512,12 @@ publicAliasInternalNames: function {
         pubNid: ename.get i: ei
         tdecl: edecl.get i: ei
         ei = ei + 1
-        intNid: u32
+        intNid: zast.nameid
         decl: st.typing.decls.get i: tdecl
         intNid = decl.name
-        if intNid > 0 when intNid.u64 != pubNid then result.append from: (zast.poolTextCopy
+        if intNid.isZero.not when intNid != pubNid then result.append from: (zast.poolTextCopy
             :pool
-            ref: (zast.nameid.create from: intNid.u32)
+            ref: intNid
         )
     }
     return result
