@@ -8,7 +8,6 @@ public: unit {
     :wordListHas
     :operatorKindOf
     :tid
-    :noTid
     :genericarg
     :declid
     :vid
@@ -357,7 +356,7 @@ deftarget: record {
 
 # noDefTarget -- the absent pair.
 noDefTarget: function {} out deftarget is {
-    return (deftarget unitName: (zast.nameid.create from: 0) defName: (zast.nameid.create from: 0))
+    return (deftarget unitName: zast.nameid.zero defName: zast.nameid.zero)
 }
 
 # the family's name as text, for diagnostics and dumps. The registry
@@ -545,6 +544,9 @@ vid: typedef u64 as {
     isZero: function {this: this.view} out bool is {
         return this.u64 == 0
     }
+    # the zero vid: no variable. A parameter or field that may be handed none
+    # defaults to it
+    zero: vid 0
 }
 
 # tid -- a type-registry id: an index into ZTypeRegistry.typeById. 0 is
@@ -563,6 +565,9 @@ tid: typedef u64 as {
     isZero: function {this: this.view} out bool is {
         return this.u64 == 0
     }
+    # the zero tid: no type. A parameter or field that may be handed none
+    # defaults to it
+    zero: tid 0
     # the id's hash, agreeing with `==`: both read the id alone, so a type id
     # keys a map or a set
     hash: function {this: this.view} out u64 is {
@@ -575,10 +580,6 @@ tid: typedef u64 as {
         return (tid from: n)
     }
 }
-
-# noTid -- the zero tid: no type. A parameter that may be handed none
-# defaults to it
-noTid: tid 0
 
 # genericarg -- one argument an instance was minted with: a type, or a numeric
 # value (an array's or a str's `to`). Which one a parameter takes is fixed by
@@ -593,7 +594,7 @@ genericarg: variant {
 
 # declid -- a Decl-tree row id (minted dense 1..N by declNew); 0 is "no
 # decl". A typedef so a decl id cannot cross with the other numeric id
-# spaces; equality is same-space only, sentinels read .u64.
+# spaces; equality is same-space only, sentinels read isZero.
 declid: typedef u64 as {
     # identity by id. Two declids name the same declaration when their numbers
     # match
@@ -604,6 +605,9 @@ declid: typedef u64 as {
     isZero: function {this: this.view} out bool is {
         return this.u64 == 0
     }
+    # the zero declid: no declaration. A parameter or field that may be handed none
+    # defaults to it
+    zero: declid 0
     # the id's hash, agreeing with `==`: both read the id alone, so a decl id
     # keys a map or a set, alone or as part of a key record
     hash: function {this: this.view} out u64 is {
@@ -1121,7 +1125,7 @@ ZTypeRegistry: class {
     # carrier, filling sensible field defaults. Callers mutate specific
     # fields afterward. They are registry methods (not free functions)
     # so the row they append persists through the `:this` receiver.
-    newType: function {:this name: StringView typetype: ztypetype ownerTid: noTid} out tid is {
+    newType: function {:this name: StringView typetype: ztypetype ownerTid: tid.zero} out tid is {
         t: (ZType
             isHole: false
             name: name.string
@@ -1362,7 +1366,7 @@ ZTypeRegistry: class {
 
     # ownerTidOf -- the type owning `tid` as a member, or 0.
     ownerTidOf: function {this: this.view tid: tid} out tid is {
-        if tid >= this.typeById.length then return noTid
+        if tid >= this.typeById.length then return ztypes.tid.zero
         got: this.typeById.get i: tid
         return got.ownerTid
     }
@@ -1454,10 +1458,10 @@ ZTypeRegistry: class {
             got: this.typeById.get i: specId
             if ordinal < got.genericArgs.length then return (got.genericArgs.get i: ordinal)
         }
-        return (genericarg.typeArg noTid)
+        return (genericarg.typeArg tid.zero)
     }
 
-    # genericTypeArgAt -- the TYPE argument at `ordinal`: noTid when that
+    # genericTypeArgAt -- the TYPE argument at `ordinal`: the zero tid when that
     # argument is a value or there is none
     genericTypeArgAt: function {this: this.view specId: tid ordinal: u64} out tid is {
         a: this.genericArgAt :specId :ordinal
@@ -1466,7 +1470,7 @@ ZTypeRegistry: class {
         ) case typeArg then {
             return a
         } case valueArg then {
-            return noTid
+            return tid.zero
         }
     }
 
@@ -1527,21 +1531,21 @@ ZTypeRegistry: class {
 
     # defOf -- the declaration that minted this type, or 0.
     defOf: function {this: this.view tid: tid} out declid is {
-        if tid >= this.typeById.length then return (declid.create from: 0)
+        if tid >= this.typeById.length then return declid.zero
         got: this.typeById.get i: tid
         return got.def
     }
 
     # returnTypeOf -- a function type's return type id, or 0 when it has none.
     returnTypeOf: function {this: this.view tid: tid} out tid is {
-        if tid >= this.typeById.length then return noTid
-        return ((this.typeById.get i: tid).returnTypeId.or d: noTid)
+        if tid >= this.typeById.length then return ztypes.tid.zero
+        return ((this.typeById.get i: tid).returnTypeId.or d: ztypes.tid.zero)
     }
 
     # thisParamNameIdOf -- the pool id of a method's receiver-parameter name,
     # or 0 when it declares none.
     thisParamNameIdOf: function {this: this.view tid: tid} out zast.nameid is {
-        if tid >= this.typeById.length then return (zast.nameid.create from: 0)
+        if tid >= this.typeById.length then return zast.nameid.zero
         got: this.typeById.get i: tid
         return got.thisParamNameId
     }
@@ -1659,8 +1663,8 @@ ZTypeRegistry: class {
     # rather than reading the `out T` name, so a block typed by its elements'
     # own tags emits the same C array as one typed by the clause.
     dataElemTypeOf: function {t: this.view tid: tid} out tid is {
-        if tid >= t.typeById.length then return noTid
-        return ((t.typeById.get i: tid).dataElemTypeId.or d: noTid)
+        if tid >= t.typeById.length then return ztypes.tid.zero
+        return ((t.typeById.get i: tid).dataElemTypeId.or d: ztypes.tid.zero)
     }
 
     # record a data block's element type
@@ -1674,8 +1678,8 @@ ZTypeRegistry: class {
     # genericOriginOf -- the template a mono was instantiated from, or 0 when
     # the type has no origin (0 is `notype`, never a real origin).
     genericOriginOf: function {t: this.view tid: tid} out tid is {
-        if tid >= t.typeById.length then return noTid
-        return ((t.typeById.get i: tid).genericOriginId.or d: noTid)
+        if tid >= t.typeById.length then return ztypes.tid.zero
+        return ((t.typeById.get i: tid).genericOriginId.or d: ztypes.tid.zero)
     }
 
     # record the template an instance came from
@@ -2090,7 +2094,7 @@ newRegistry: function {} out ZTypeRegistry is {
     r: (ZTypeRegistry
         nextEntryId: 0
         nextConformanceId: 0
-        ctlPlaceholderTid: noTid
+        ctlPlaceholderTid: tid.zero
         literalIntTid: tid
         literalFloatTid: tid
         literalBitsTid: tid
@@ -2148,9 +2152,9 @@ noConst: function out cval is {
         ratId: 0
         floatId: 0
         strId: 0
-        armTid: noTid
-        armName: (zast.nameid.create from: 0)
-        numTid: noTid
+        armTid: tid.zero
+        armName: zast.nameid.zero
+        numTid: tid.zero
     )
 }
 
