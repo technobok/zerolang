@@ -2294,7 +2294,11 @@ perf: $(PERFBIN)
 #
 # +495 --readable-names keys a (function, name) pair by a record: 0
 # behaviour, +494 source, the self-compile minting `SetVal fnname`.
-ALLOC_BASELINE := 2204491
+#
+# +518 a function named as a parameter or field default is asked of the type
+# the declaration resolved to, and walked where a construction uses it: 0
+# behaviour, +518 source.
+ALLOC_BASELINE := 2205009
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

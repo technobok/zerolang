@@ -6204,9 +6204,10 @@ recordParamArmDefault: function {
 }
 
 # checkParamTypeShape -- record the default a parameter's declaration carries
-# when it is not a bare name: a function reference (the head names a function
-# with a body), a suffixed numeric literal (`0.u64`), or a sum ARM
-# (`bool.false`). It reports nothing -- an unknown name is the pending-typeref
+# when it is not a bare name: a function reference (the declaration resolved to
+# a function with a body, bare or unit-qualified), a suffixed numeric literal
+# (`0.u64`), or a sum ARM (`bool.false`). A spec or a native function types the
+# parameter and supplies no default: neither has a body to reference. It reports nothing -- an unknown name is the pending-typeref
 # walk's business (stampOnePendingTyperef's E0023), reached through the
 # recordTyperef its caller lays either way.
 #
@@ -6217,36 +6218,24 @@ recordParamArmDefault: function {
 checkParamTypeShape: function {
     st: zenv.ZSymbolTable
     ast: Ast
-    unitDecl: ztypes.declid
     rf: ztypes.declid
     cid: ztypes.tid
-    # the name id the parameter's typeref spells at its head
-    ptn: zast.nameid
     pnameId: zast.nameid
     fid: ztypes.tid
     pm: argref
 } is {
-    fnRefIsFn: false
-    fnRefOpt: walkLookupTyperefById :st scope: rf :ast :unitDecl baseId: ptn
-    fnRefTid: ztypes.tid
-    match (
-        fnRefOpt
-    ) case some then {
-        if (st.reg.typetypeOf typeId: fnRefOpt) == ztypes.ztypetype.functionType then {
-            fnRefIsFn = true
-            fnRefTid = fnRefOpt
+    # the TYPE the declaration resolved to, not its head name: `helper.seven`
+    # heads with the unit, and a head lookup finds a spec as readily as a
+    # function it could call
+    if (st.reg.typetypeOf typeId: cid) == ztypes.ztypetype.functionType then {
+        fnDecl: declOfTypeId :st tid: cid
+        if (declaresFunctionWithBody :st :ast declId: fnDecl) then {
+            (st.typing.declSetDefaultId
+                parentTypeId: fid
+                nameId: pnameId
+                value: ztyping.defaultval.func fnDecl
+            )
         }
-    } case none then null
-    if fnRefIsFn then {
-        fnDecl: (declOfTypeId
-            :st
-            tid: fnRefTid
-        )
-        (st.typing.declSetDefaultId
-            parentTypeId: fid
-            nameId: pnameId
-            value: ztyping.defaultval.func fnDecl
-        )
     } else {
         pdcnId: dottedChildNameId :ast n: (ast.nodes.get i: pm.operation)
         if pdcnId.isZero.not when (isStripMarkerId nameId: pdcnId).not then {
@@ -6271,6 +6260,21 @@ checkParamTypeShape: function {
             }
         }
     }
+}
+
+# declaresFunctionWithBody -- the declaration is a function with a body: not a
+# spec, not a native, and not anything else.
+declaresFunctionWithBody: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    declId: ztypes.declid
+} out bool is {
+    if declId.isZero then return false
+    dn: (st.typing.decls.get i: declId).node
+    if dn.isZero then return false
+    n: ast.nodes.get i: dn
+    if n.namedoperation.not then return false
+    return (isFunctionDefWithBody o: (ast.nodes.get i: n.operation))
 }
 
 # declaredFunctionNode -- the functiondef row `baseId` declares, looked up
@@ -6485,10 +6489,8 @@ registerValueParam: function {
         (checkParamTypeShape
             :st
             :ast
-            :unitDecl
             :rf
             :cid
-            :ptn
             pnameId: pm.name
             :fid
             :pm
@@ -40725,10 +40727,36 @@ missingCtorFields: function {
         posI: vpos
         vpos = vpos + 1
         pnId: pnameId
-        if (fieldSupplied :st :isCtor :effId :pcid :pnId :provided :posCount :posI) then continue
+        if (fieldSupplied :st :isCtor :effId :pcid :pnId :provided :posCount :posI) then {
+            walkDefaultedFnField :st :ast :isCtor :effId :pcid :pnId :provided :posCount :posI
+            continue
+        }
         missingNames.append (zast.nameTextCopy :ast ref: pnId)
         missingIds.append pcid
     }
+}
+
+# walkDefaultedFnField -- a construction that leaves a FUNCTION-typed field to
+# its default calls through that function, so the function is used there: walk
+# it, or a function another unit declares has no body to emit.
+walkDefaultedFnField: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    isCtor: bool
+    effId: ztypes.tid
+    pcid: ztypes.tid
+    pnId: zast.nameid
+    provided: (ListVal zast.nameid).view
+    posCount: u64
+    posI: u64
+} is {
+    if isCtor.not then return
+    if (ctorArgProvided :provided :posCount :posI nameId: pnId) then return
+    if (ctorFieldIsFilled :st ownerTid: effId fieldTid: pcid) then (walkDefinitionById
+        :st
+        :ast
+        tid: pcid
+    )
 }
 
 # isReceiverParamName -- the parameter named `pnameId` is the receiver: `this`,
