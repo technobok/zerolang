@@ -2302,7 +2302,10 @@ perf: $(PERFBIN)
 # -3,514 the type checker answers platform's values from its own table: zc no
 # longer reads natives.tbl to find the six `fold` rows before type checking:
 # -1,986 behaviour, -1,527 source (the readers deleted from the self-compile).
-ALLOC_BASELINE := 2201495
+#
+# -53 natives.tbl loses the six `fold` rows the self-compile's emitter loaded:
+# 0 behaviour, -53 source.
+ALLOC_BASELINE := 2201442
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
