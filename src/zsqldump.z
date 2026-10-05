@@ -143,13 +143,13 @@ canonNodeText: function {ast: Ast.view nid: zast.nodeid} out String is {
 
 # destroyVarNames -- each variable a local binds, by id, to the local's name:
 # a variable is known by its id alone, and the dump names it.
-destroyVarNames: function {st: zenv.ZSymbolTable.view} out (IdMapV u64 v: u32) is {
-    names: IdMapV u64 v: u32
+destroyVarNames: function {st: zenv.ZSymbolTable.view} out (IdMapV ztypes.vid v: u32) is {
+    names: IdMapV ztypes.vid v: u32
     di: u64
     for di < st.typing.decls.length loop {
         dd: ztypes.declid.create from: di
         dv: st.typing.declLocalVarOf declId: dd
-        if dv.isZero.not then names.set key: dv.u64 value: (st.typing.declNameOf declId: dd)
+        if dv.isZero.not then names.set key: dv value: (st.typing.declNameOf declId: dd)
         di = di + 1
     }
     return names
@@ -159,7 +159,7 @@ destroyVarNames: function {st: zenv.ZSymbolTable.view} out (IdMapV u64 v: u32) i
 appendDestroyRows: function {
     ast: Ast.view
     st: zenv.ZSymbolTable.view
-    names: (IdMapV u64 v: u32).view
+    names: (IdMapV ztypes.vid v: u32).view
     kind: StringView
     nid: zast.nodeid
     range: ztyping.destroyrange
@@ -169,7 +169,7 @@ appendDestroyRows: function {
     i: u64
     for i < range.len loop {
         it: st.typing.destroyItems.get i: range.start.u64 + i
-        vni: (names.get key: it.vid.u64).or d: 0
+        vni: (names.get key: it.vid).or d: 0
         vn: zast.poolTextAt pool: ast.names ref: (zast.nameid.create from: vni)
         vnSql: sqlStr s: vn.stringView
         stt: destroyStateText state: it.state
@@ -1051,7 +1051,7 @@ ZDumper: class {
         :this
         pool: zast.StringPool.view
         st: zenv.ZSymbolTable.view
-        seen: IdSet u64
+        seen: IdSet ztypes.vid
     } is {
         for each e: st.entryDump loop {
             varSql: vidOrNullText o: e.varId
@@ -1086,10 +1086,9 @@ ZDumper: class {
         :this
         pool: zast.StringPool.view
         st: zenv.ZSymbolTable.view
-        seen: IdSet u64
+        seen: IdSet ztypes.vid
     } is {
-        for each vid: seen loop {
-            vidT: ztypes.vid.create from: vid
+        for each vidT: seen loop {
             if (st.reg.hasVariable id: vidT).not then continue
             ztSql: "\{st.reg.variableTypeOf id: vidT}"
             ownSql: varOwnSql o: (st.reg.variableOwnershipOf id: vidT)
@@ -1102,7 +1101,7 @@ ZDumper: class {
                 orKind: originKindSql o: vorigin
                 orSqlLit = sqlStr s: orKind.stringView
             }
-            r: "INSERT OR IGNORE INTO variable VALUES (\{vid}, \{ztSql}, \{ownSql}, \{privNum}, \{boSql}, \{soSql}, \{orSqlLit});\n"
+            r: "INSERT OR IGNORE INTO variable VALUES (\{vidT}, \{ztSql}, \{ownSql}, \{privNum}, \{boSql}, \{soSql}, \{orSqlLit});\n"
             this.acc.append s: r
         }
     }
@@ -1113,7 +1112,7 @@ ZDumper: class {
     # snapshotted when each scope closed; variable rows the per-id side
     # tables, deduped.
     appendSymbolTable: function {:this ast: Ast.view st: zenv.ZSymbolTable.view} is {
-        seen: IdSet u64
+        seen: IdSet ztypes.vid
         this.appendScopeRows :ast :st
         this.appendEntryRows pool: ast.names :st :seen
         this.appendVariableRows pool: ast.names :st :seen
@@ -1484,7 +1483,7 @@ ZDumper: class {
         pool: zast.StringPool.view
         st: zenv.ZSymbolTable.view
         scopeName: (IdMapR u64 V: String)
-        seen: IdSet u64
+        seen: IdSet ztypes.vid
         narrowedRows: List String
     } is {
         entryRows: List String
@@ -1527,11 +1526,10 @@ ZDumper: class {
         :this
         pool: zast.StringPool.view
         st: zenv.ZSymbolTable.view
-        seen: IdSet u64
+        seen: IdSet ztypes.vid
     } is {
         varRows: List String
-        for each vid: seen loop {
-            vidT: ztypes.vid.create from: vid
+        for each vidT: seen loop {
             if (st.reg.hasVariable id: vidT).not then continue
             vtid: st.reg.variableTypeOf id: vidT
             ztName: canonTypeName reg: st.reg tid: vtid
@@ -1554,7 +1552,7 @@ ZDumper: class {
     # bodies.
     appendSymbolTableCanon: function {:this ast: Ast.view st: zenv.ZSymbolTable.view} is {
         scopeName: IdMapR u64 V: String
-        seen: IdSet u64
+        seen: IdSet ztypes.vid
         narrowedRows: List String
         this.appendScopeRowsCanon :ast :st :scopeName
         this.appendEntryRowsCanon pool: ast.names :st :scopeName :seen :narrowedRows
