@@ -125,6 +125,13 @@ srcposSql: function {p: optionval ztypes.zsrcpos} out String is {
     }
 }
 
+# fsnoOrNullText -- a file number as decimal text, or "NULL" for the SQL row
+# when it is zero (no file).
+fsnoOrNullText: function {f: zvfs.fsno} out String is {
+    if f.isZero then return "NULL"
+    return "\{f}"
+}
+
 # vidOrNullText -- an optional vid as decimal text, or "NULL" for the SQL row.
 vidOrNullText: function {o: optionval ztypes.vid} out String is {
     match (
@@ -331,7 +338,7 @@ schemaSql: function {} out String is {
         s: "CREATE TABLE IF NOT EXISTS files (file_id INTEGER PRIMARY KEY, path TEXT NOT NULL);\n"
     )
     (acc.append
-        s: "CREATE TABLE IF NOT EXISTS ast_nodes (node_id INTEGER PRIMARY KEY, kind TEXT NOT NULL, token_id INTEGER, name TEXT, file_id INTEGER, start_line INTEGER, start_col INTEGER, synth_origin TEXT);\n"
+        s: "CREATE TABLE IF NOT EXISTS ast_nodes (node_id INTEGER PRIMARY KEY, kind TEXT NOT NULL, name TEXT, file_id INTEGER, start_line INTEGER, start_col INTEGER);\n"
     )
     (acc.append
         s: "CREATE TABLE IF NOT EXISTS unit (unit_id INTEGER PRIMARY KEY, name TEXT NOT NULL, is_main INTEGER NOT NULL, unit_type_id INTEGER);\n"
@@ -376,7 +383,7 @@ schemaSql: function {} out String is {
         s: "CREATE TABLE IF NOT EXISTS entry (entry_id INTEGER PRIMARY KEY, scope_id INTEGER NOT NULL, position INTEGER NOT NULL, decl_id INTEGER NOT NULL, overlay_id INTEGER, name TEXT NOT NULL, ztype_id INTEGER NOT NULL, is_definition INTEGER NOT NULL, variable_id INTEGER, original_ztype_id INTEGER, is_taken INTEGER NOT NULL, taken_at_line INTEGER, taken_at_col INTEGER, taken_at_file INTEGER);\n"
     )
     (acc.append
-        s: "CREATE TABLE IF NOT EXISTS narrowed_subtype (entry_id INTEGER NOT NULL, name TEXT NOT NULL, type_id INTEGER, excluded INTEGER NOT NULL);\n"
+        s: "CREATE TABLE IF NOT EXISTS narrowed_subtype (entry_id INTEGER NOT NULL, name TEXT NOT NULL, excluded INTEGER NOT NULL);\n"
     )
     (acc.append
         s: "CREATE TABLE IF NOT EXISTS generic_child (parent_id INTEGER NOT NULL, arg_key INTEGER NOT NULL, arg_is_value INTEGER NOT NULL, child_id INTEGER NOT NULL);\n"
@@ -531,13 +538,20 @@ ZDumper: class {
     # written once and never indexed
     acc: String
 } as {
-    # emit -- one ast_nodes row. token_id and file_id are NULL (the AST
-    # carries no token linkage); synth_origin is NULL (the parser sets
-    # none). nameSql is the pre-escaped context label.
+    # emit -- one ast_nodes row: `file` is the file the node reports from
+    # (Ast.fsnoForNode), NULL when it has none. nameSql is the pre-escaped
+    # context label.
     emit: function {
-        :this id: zast.nodeid line: u32 col: u32 kind: StringView nameSql: StringView
+        :this
+        id: zast.nodeid
+        file: zvfs.fsno
+        line: u32
+        col: u32
+        kind: StringView
+        nameSql: StringView
     } is {
-        row: "INSERT INTO ast_nodes VALUES (\{id}, '\{kind}', NULL, \{nameSql}, NULL, \{line}, \{col}, NULL);\n"
+        fileSql: fsnoOrNullText f: file
+        row: "INSERT INTO ast_nodes VALUES (\{id}, '\{kind}', \{nameSql}, \{fileSql}, \{line}, \{col});\n"
         this.acc.append s: row
     }
 
@@ -588,7 +602,14 @@ ZDumper: class {
         if node.placeholder then return
         pos: zast.posOf n: node
         nid: zast.nodeIdOf n: node
-        this.emit id: nid line: pos.line col: pos.col kind: (zast.armName n: node) :nameSql
+        (this.emit
+            id: nid
+            file: (ast.fsnoForNode nodeid: nid)
+            line: pos.line
+            col: pos.col
+            kind: (zast.armName n: node)
+            :nameSql
+        )
         match (
             node
         ) case ifclause then {
@@ -649,6 +670,7 @@ ZDumper: class {
             unameSql: sqlStr s: uname
             (this.emit
                 id: unitdef.nodeid
+                file: (ast.fsnoForNode nodeid: unitdef.nodeid)
                 line: unitdef.lineno
                 col: unitdef.colno
                 kind: "Unit"
@@ -837,6 +859,7 @@ ZDumper: class {
             ns: sqlStr s: lbl.stringView
             (this.emit
                 id: sn.nodeid
+                file: (ast.fsnoForNode nodeid: sn.nodeid)
                 line: sn.lineno
                 col: sn.colno
                 kind: sn.kind
@@ -1100,13 +1123,13 @@ ZDumper: class {
             if e.narrowedSubtype.isZero.not then {
                 nnb: zast.poolTextAt :pool ref: e.narrowedSubtype
                 nnm: sqlStr s: nnb.stringView
-                nr: "INSERT INTO narrowed_subtype VALUES (\{rowNo}, \{nnm}, NULL, 0);\n"
+                nr: "INSERT INTO narrowed_subtype VALUES (\{rowNo}, \{nnm}, 0);\n"
                 this.acc.append s: nr
             }
             for each xn2i: e.excludedSubtypes loop {
                 xn2: zast.poolTextAt :pool ref: xn2i
                 xnm: sqlStr s: xn2.stringView
-                xr: "INSERT INTO narrowed_subtype VALUES (\{rowNo}, \{xnm}, NULL, 1);\n"
+                xr: "INSERT INTO narrowed_subtype VALUES (\{rowNo}, \{xnm}, 1);\n"
                 this.acc.append s: xr
             }
             vd: e.varId
