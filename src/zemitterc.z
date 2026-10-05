@@ -3139,14 +3139,14 @@ Ctx: class {
     # which unit each definition came from
     defUnitId: (IdMapV ztypes.tid v: ztypes.declid)
     # the four stdlib units the emitter names outright, resolved once
-    ioUnitDecl: u64
+    ioUnitDecl: ztypes.declid
     # the os unit's declaration, cached because the native routing asks
     # constantly
-    osUnitDecl: u64
+    osUnitDecl: ztypes.declid
     # the cli unit's declaration, cached for the same reason
-    cliUnitDecl: u64
+    cliUnitDecl: ztypes.declid
     # the net unit's declaration, cached for the same reason
-    netUnitDecl: u64
+    netUnitDecl: ztypes.declid
     # the three fixed (unit, class) hooks, resolved once through the unit
     ioFileTid: ztypes.tid
     # net.Listener's type, needed to route its natives
@@ -22828,12 +22828,11 @@ ensureUnitCache: function {ctx: Ctx pool: zast.StringPool.view symtab: zenv.ZSym
     if ctx.unitCacheBuilt then return
     puds: ztypecheck.programUnitDecls st: symtab
     for each ud: puds loop {
-        ud8: ztypes.declid.create from: ud
-        utd: ztypecheck.declTypeIdOf st: symtab declId: ud8
+        utd: ztypecheck.declTypeIdOf st: symtab declId: ud
         if utd.isZero.not then {
             ukc: (zast.poolTextAt
                 :pool
-                ref: (ztypecheck.declNameIdOf st: symtab declId: ud8)
+                ref: (ztypecheck.declNameIdOf st: symtab declId: ud)
             )
             ctx.unitKeysC.append ukc.copy
             ctx.unitTidsC.append utd
@@ -30161,15 +30160,12 @@ regNameIs: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid name: String
 # is a lookup and not a search. 0 when the unit declares no such class.
 unitClassTid: function {
     symtab: zenv.ZSymbolTable.view
-    unitDecl: u64
+    unitDecl: ztypes.declid
     nameId: zast.nameid
 } out ztypes.tid is {
     z: ztypes.tid
-    if unitDecl == 0 then return z
-    d: (symtab.typing.declFindChild
-        parentDeclId: (ztypes.declid.create from: unitDecl)
-        :nameId
-    )
+    if unitDecl.isZero then return z
+    d: symtab.typing.declFindChild parentDeclId: unitDecl :nameId
     if d.isZero then return z
     t: ztypecheck.declTypeIdOf st: symtab declId: d
     if t.isZero then return z
@@ -30193,15 +30189,8 @@ unitDeclByName: function {
 }
 
 # defUnitIdOf -- the DECLARATION of the unit that defines tid (0 when none).
-defUnitIdOf: function {ctx: Ctx.view tid: ztypes.tid} out u64 is {
-    g: ctx.defUnitId.get key: tid
-    match (
-        g
-    ) case some then {
-        return g
-    } case none then {
-        return 0
-    }
+defUnitIdOf: function {ctx: Ctx.view tid: ztypes.tid} out ztypes.declid is {
+    return ((ctx.defUnitId.get key: tid).or d: ztypes.declid.zero)
 }
 
 # a type's registry name as an owned String ("" when absent). The zerolang
@@ -32417,17 +32406,16 @@ fnname: record {
 # construction rather than by enumeration.
 collectRnBareVids: function {symtab: zenv.ZSymbolTable.view bare: IdSet ztypes.vid} is {
     seen: SetVal fnname
-    dn: symtab.typing.decls.length
-    di: u64
-    for di < dn loop {
+    di: ztypes.declid
+    for di < symtab.typing.nextDecl loop {
         rvid: ztypes.vid
         rnm: zast.nameid
         rpar: ztypes.declid
-        d9r: symtab.typing.decls.get i: (ztypes.declid.create from: di)
+        d9r: symtab.typing.decls.get i: di
         rvid = d9r.varId
         rnm = zast.nameid.create from: d9r.name
         rpar = d9r.parent
-        di = di + 1
+        di = di.next
         if rvid.isZero.not when rnm.isZero.not then {
             fnd: rpar
             for (symtab.typing.declIsScope declId: fnd) loop {
@@ -32636,10 +32624,10 @@ emitC: function {
         tailRetActive: false
         tailReturned: false
         defUnitId: (IdMapV ztypes.tid v: ztypes.declid)
-        ioUnitDecl: 0
-        osUnitDecl: 0
-        cliUnitDecl: 0
-        netUnitDecl: 0
+        ioUnitDecl: ztypes.declid.zero
+        osUnitDecl: ztypes.declid.zero
+        cliUnitDecl: ztypes.declid.zero
+        netUnitDecl: ztypes.declid.zero
         ioFileTid: ztypes.tid.zero
         netListenerTid: ztypes.tid.zero
         netConnTid: ztypes.tid.zero
@@ -34074,7 +34062,7 @@ definedInNonMain: function {
 # with nothing and the fragment declares `static z__t`.
 definedInFragmentUnit: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
     duId: defUnitIdOf :ctx :tid
-    if duId == 0 then return false
+    if duId.isZero then return false
     return (
         (duId == ctx.ioUnitDecl) or
         (duId == ctx.cliUnitDecl) or
@@ -35770,7 +35758,7 @@ isIoUnitClass: function {symtab: zenv.ZSymbolTable.view ctx: Ctx tid: ztypes.tid
     if (symtab.reg.typetypeOf typeId: tid) != ztypes.ztypetype.classType then return false
     if (originTidOf :symtab :tid).isZero.not then return false
     duId: defUnitIdOf :ctx :tid
-    if duId == 0 then return false
+    if duId.isZero then return false
     return (duId == ctx.ioUnitDecl) or (duId == ctx.osUnitDecl) or (duId == ctx.cliUnitDecl)
 }
 

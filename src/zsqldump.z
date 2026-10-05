@@ -145,12 +145,11 @@ canonNodeText: function {ast: Ast.view nid: zast.nodeid} out String is {
 # a variable is known by its id alone, and the dump names it.
 destroyVarNames: function {st: zenv.ZSymbolTable.view} out (IdMapV ztypes.vid v: u32) is {
     names: IdMapV ztypes.vid v: u32
-    di: u64
-    for di < st.typing.decls.length loop {
-        dd: ztypes.declid.create from: di
+    dd: ztypes.declid
+    for dd < st.typing.nextDecl loop {
         dv: st.typing.declLocalVarOf declId: dd
         if dv.isZero.not then names.set key: dv value: (st.typing.declNameOf declId: dd)
-        di = di + 1
+        dd = dd.next
     }
     return names
 }
@@ -747,10 +746,9 @@ ZDumper: class {
     # appendDecls -- one decl row per declaration and one decl_child row
     # per namespace edge (the declaration tree the def indexer builds).
     appendDecls: function {:this ast: Ast.view typing: ztyping.ZTyping.view} is {
-        n: typing.decls.length
-        did: u64
-        for did < n loop {
-            dOpt: typing.decls.get i: (ztypes.declid.create from: did)
+        did: ztypes.declid
+        for did < typing.nextDecl loop {
+            dOpt: typing.decls.get i: did
             dnm: String
             if dOpt.name > 0 then {
                 dnB: ast.names.texts.get i: (zast.nameid.create from: dOpt.name)
@@ -785,7 +783,7 @@ ZDumper: class {
                 this.acc.append s: crow
                 pos = pos + 1
             }
-            did = did + 1
+            did = did.next
         }
     }
 
@@ -1021,11 +1019,10 @@ ZDumper: class {
     # the order they were declared in.
     appendScopeRows: function {:this ast: Ast.view st: zenv.ZSymbolTable.view} is {
         depth: u64
-        nd: st.typing.decls.length
-        di: u64
-        for di < nd loop {
-            d: ztypes.declid.create from: di
-            di = di + 1
+        di: ztypes.declid
+        for di < st.typing.nextDecl loop {
+            d: di
+            di = di.next
             if (st.typing.declIsScope declId: d).not then continue
             if (scopeUnderHidden :st scope: d) then continue
             kindSql: sqlStr s: (scopeKindText :ast :st scope: d)
@@ -1443,22 +1440,21 @@ ZDumper: class {
         :this
         ast: Ast.view
         st: zenv.ZSymbolTable.view
-        scopeName: (IdMapR u64 V: String)
+        scopeName: (IdMapR ztypes.declid V: String)
     } is {
         scopeRows: List String
         depth: u64
-        nd: st.typing.decls.length
-        di: u64
-        for di < nd loop {
-            d: ztypes.declid.create from: di
-            di = di + 1
+        di: ztypes.declid
+        for di < st.typing.nextDecl loop {
+            d: di
+            di = di.next
             if (st.typing.declIsScope declId: d).not then continue
             if (scopeUnderHidden :st scope: d) then continue
             name: canonScopeNode :ast :st scope: d
-            scopeName.set key: d.u64 value: name.copy
+            scopeName.set key: d value: name.copy
             parentNameSql: "NULL".string
             pd: st.typing.declParentOf declId: d
-            po: scopeName.get key: pd.u64
+            po: scopeName.get key: pd
             match (
                 po
             ) case some then {
@@ -1482,7 +1478,7 @@ ZDumper: class {
         :this
         pool: zast.StringPool.view
         st: zenv.ZSymbolTable.view
-        scopeName: (IdMapR u64 V: String)
+        scopeName: (IdMapR ztypes.declid V: String)
         seen: IdSet ztypes.vid
         narrowedRows: List String
     } is {
@@ -1551,7 +1547,7 @@ ZDumper: class {
     # canonTypeName. No unit filter -- the table holds only the main unit's
     # bodies.
     appendSymbolTableCanon: function {:this ast: Ast.view st: zenv.ZSymbolTable.view} is {
-        scopeName: IdMapR u64 V: String
+        scopeName: IdMapR ztypes.declid V: String
         seen: IdSet ztypes.vid
         narrowedRows: List String
         this.appendScopeRowsCanon :ast :st :scopeName

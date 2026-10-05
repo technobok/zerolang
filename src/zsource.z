@@ -4018,14 +4018,14 @@ Analysis: class {
             uname: lu.name.stringView
             namedIds: IdSet zast.nameid
             {
-                di: 1.u64
-                dn: st.typing.decls.length
-                for di < dn loop {
-                    d: st.typing.decls.get i: (ztypes.declid.create from: di)
+                # row 0 is the no-declaration sentinel
+                di: ztypes.declid.zero.next
+                for di < st.typing.nextDecl loop {
+                    d: st.typing.decls.get i: di
                     isNamed: d.kind.unitDecl
                     if d.kind.typeDecl then isNamed = true
                     if isNamed then namedIds.add item: (zast.nameid.create from: d.name)
-                    di = di + 1
+                    di = di.next
                 }
             }
             this.archWalk ast: prog nId: mainOp :namedIds
@@ -5180,7 +5180,7 @@ UnusedEvidence: class {
     # the type id of the unit being linted
     mainTid: ztypes.tid
     # every declaration a recorded reference reaches from OUTSIDE itself
-    usedE: IdSet u64
+    usedE: IdSet ztypes.declid
     # every atom name in the unit's own file segment that is not a definition
     # naming itself, the syntactic fallback
     refNames: IdSet u64
@@ -5199,7 +5199,7 @@ UnitMembers: class {
     # each member's name id, 0 when it has none
     names: ListVal u64
     # each member's typed declaration id, 0 when it has none
-    declIds: ListVal u64
+    declIds: ListVal ztypes.declid
 }
 
 # unitMembersOf -- the three columns, one row per unit body member written in
@@ -5214,7 +5214,7 @@ unitMembersOf: function {
     memIds: (ListVal zast.nodeid).view
     file: zvfs.fsno
 } out UnitMembers is {
-    um: UnitMembers lines: ListVal u32 names: ListVal u64 declIds: ListVal u64
+    um: UnitMembers lines: ListVal u32 names: ListVal u64 declIds: ListVal ztypes.declid
     mI: u64
     for mI < memIds.length loop {
         mid: memIds.get i: mI
@@ -5222,13 +5222,10 @@ unitMembersOf: function {
         if (prog.fsnoForNode nodeid: mid) != file then continue
         m: zast.namedSiteAt ast: prog nid: mid
         nm9: u64
-        dc9: u64
+        dc9: ztypes.declid
         if m.name.isZero.not then {
             nm9 = m.name.u64
-            dc9 = (st.typing.declTypedMemberIdOf
-                parentTypeId: mainTid
-                nameId: m.name
-            ).u64
+            dc9 = st.typing.declTypedMemberIdOf parentTypeId: mainTid nameId: m.name
         }
         um.lines.append from: m.line
         um.names.append from: nm9
@@ -5261,9 +5258,9 @@ memberIndexAtLine: function {um: UnitMembers.view line: u32} out u64 is {
 # shares no line numbering with these extents, and dropping one would report a
 # member that IS used.
 selfReferenceAt: function {
-    prog: Ast.view file: zvfs.fsno um: UnitMembers.view siteNid: zast.nodeid declId: u64
+    prog: Ast.view file: zvfs.fsno um: UnitMembers.view siteNid: zast.nodeid declId: ztypes.declid
 } out bool is {
-    if declId == 0 then return false
+    if declId.isZero then return false
     if file.isZero then return false
     if ((prog.fsnoForNode nodeid: siteNid) == file).not then return false
     ln: u32
@@ -5407,8 +5404,8 @@ usedDeclSet: function {
     mainTid: ztypes.tid
     file: zvfs.fsno
     um: UnitMembers.view
-} out IdSet u64 is {
-    usedE: IdSet u64
+} out IdSet ztypes.declid is {
+    usedE: IdSet ztypes.declid
     owners: ListVal ztypes.tid
     names: ListVal u64
     for each e: st.typing.refDecl.iterateItems loop {
@@ -5422,7 +5419,7 @@ usedDeclSet: function {
             :file
             :um
             siteNid: e.key
-            declId: e.value.u64
+            declId: e.value
         ) then {
             dPar = ztypes.declid
         }
@@ -5448,7 +5445,7 @@ addUsedMembers: function {
     st: zenv.ZSymbolTable.view
     tids: (ListVal ztypes.tid).view
     nms: (ListVal u64).view
-    into: IdSet u64
+    into: IdSet ztypes.declid
 } is {
     i: u64
     for i < tids.length loop {
@@ -5464,7 +5461,7 @@ addUsedMembers: function {
 # addPublicAliasTargets -- each name a public alias of the unit stands for
 # counts as used: the alias is the public face, the target is what it names
 addPublicAliasTargets: function {
-    prog: Ast.view st: zenv.ZSymbolTable.view mainTid: ztypes.tid into: IdSet u64
+    prog: Ast.view st: zenv.ZSymbolTable.view mainTid: ztypes.tid into: IdSet ztypes.declid
 } is {
     tgtNames: (ztypecheck.publicAliasInternalNames
         :st
