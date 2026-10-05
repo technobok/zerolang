@@ -10,6 +10,7 @@ public: unit {
     :tid
     :genericarg
     :declid
+    :entryid
     :vid
     :constraintdesc
     :ZConformance
@@ -738,6 +739,70 @@ declid: typedef u64 as {
     }
 }
 
+# entryid -- a scope entry's own id (ZEntry.entryId, minted 1..N by
+# newEntry); 0 is "no entry", which a definition's dump row carries. A
+# typedef so an entry id cannot cross with the declaration and variable ids
+# an entry sits beside; equality is same-space only, sentinels read isZero.
+entryid: typedef u64 as {
+    # identity by id. Two entry ids name the same entry when their numbers
+    # match
+    ==: function {this: this.view rhs: entryid} out bool is {
+        return this.u64 == rhs.u64
+    }
+    # the sentinel: 0 is no entry, never the first one
+    isZero: function {this: this.view} out bool is {
+        return this.u64 == 0
+    }
+    # the zero entryid: no entry. A parameter or field that may be handed none
+    # defaults to it
+    zero: entryid 0
+    # the entry id's place in the order newEntry minted the entries in: an id only ever orders
+    # against an id of its own space, never a bare number
+    compare: function {this: this.view rhs: entryid} out i32 is {
+        return (this.u64.compare rhs: rhs.u64)
+    }
+    # this entry id was numbered earlier than `rhs`
+    <: function {this: this.view rhs: entryid} out bool is {
+        return this.u64 < rhs.u64
+    }
+    # this entry id was numbered no later than `rhs`
+    <=: function {this: this.view rhs: entryid} out bool is {
+        return this.u64 <= rhs.u64
+    }
+    # this entry id was numbered later than `rhs`
+    >: function {this: this.view rhs: entryid} out bool is {
+        return this.u64 > rhs.u64
+    }
+    # this entry id was numbered no earlier than `rhs`
+    >=: function {this: this.view rhs: entryid} out bool is {
+        return this.u64 >= rhs.u64
+    }
+    # the next id in sequence, which is how newEntry mints without keeping a counter of its own
+    next: function {this: this.view} out entryid is {
+        n: this.u64 + 1
+        return (entryid from: n)
+    }
+    # no arithmetic and no bitwise operator: an entry id names one entry, and a number made from
+    # it names nothing. Minting reads `next`, and a boundary that needs the number (a dump) reads
+    # `.u64`
+    +: null
+    -: null
+    *: null
+    /: null
+    %: null
+    &: null
+    |: null
+    ^: null
+    <<: null
+    >>: null
+    not: null
+    # the id's hash, agreeing with `==`: both read the id alone, so an entry id
+    # keys a map or a set
+    hash: function {this: this.view} out u64 is {
+        return this.u64
+    }
+}
+
 # Source position triple (file, line, column) for take-location
 # tracking on a scope entry.
 zsrcpos: record {
@@ -1007,7 +1072,7 @@ ZType: class {
 # defSeq orders the row among the scope's locals for the dump.
 ZEntry: class {
     # the entry's own id
-    entryId: u64
+    entryId: entryid
     # the declaration this entry is for
     declId: declid
     # where it fell in declaration order, which shadowing resolves by
@@ -1189,7 +1254,7 @@ holeType: function {} out ZType is {
 # an index and every lookup here is one
 ZTypeRegistry: class {
     # the next entry id to mint
-    nextEntryId: u64
+    nextEntryId: entryid
     # the next conformance id to mint
     nextConformanceId: u64
     # the shared unregistered id worn by every `break` / `continue` entry
@@ -1371,7 +1436,7 @@ ZTypeRegistry: class {
     # narrowing, locks and ownership are tracked -- the type alone is not enough
     newEntry: function {:this ztypeId: tid} out ZEntry is {
         id: this.nextEntryId
-        this.nextEntryId = this.nextEntryId + 1
+        this.nextEntryId = this.nextEntryId.next
         return (ZEntry
             entryId: id
             declId: declid
@@ -2207,7 +2272,7 @@ ZTypeRegistry: class {
 # construct an empty type registry seeded with the builtin/native types.
 newRegistry: function {} out ZTypeRegistry is {
     r: (ZTypeRegistry
-        nextEntryId: 0
+        nextEntryId: entryid.zero.next
         nextConformanceId: 0
         ctlPlaceholderTid: tid.zero
         literalIntTid: tid
