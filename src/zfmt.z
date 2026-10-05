@@ -146,6 +146,10 @@ Builder: class {
     idHard: u32
     # the shared breakParent row
     idBreak: u32
+    # the pair depth whose closer had an own-line comment in front of it that the
+    # value ending there took, 0 when none: that comment ends the pair's
+    # argument list, so argDoc forces the call it sits in to break
+    closerCommentAt: u32
 } as {
     # a builder over `source`, parsed and scanned
     create: function {source: StringView keepMarkers: bool raw: bool} out this is {
@@ -182,6 +186,7 @@ Builder: class {
             :idSoft
             :idHard
             :idBreak
+            closerCommentAt: 0
         )
     }
 
@@ -558,6 +563,7 @@ Builder: class {
         if stolen then takeH = false
         h: emptyGap
         if takeH then h = this.gapDocs cap: 0
+        if opened == 0 when h.dangling > 0 then this.closerCommentAt = this.c.openParens
         this.closeParens
         v: this.pairDoc :body :needed :onBreak :isCall before: g after: h
         return (this.withComments body: v before: emptyGap after: (this.closerTail :entry))
@@ -961,8 +967,10 @@ Builder: class {
         # and the call takes none: `return (Res\n  a: 1\n)`, not
         # `(return (Res\n  a: 1\n))`. A LABELLED argument cannot take it
         # (`f (k: 1)` does not parse), and neither can two arguments, so those
-        # keep the call's own pair below.
-        if args.length == 1 when (this.soleUnnamedArg n: (this.node :id)) then {
+        # keep the call's own pair below. A forced break is the call's own --
+        # a comment around the argument is not the argument breaking -- so
+        # that call breaks one argument per line too.
+        if forced.not when args.length == 1 when (this.soleUnnamedArg n: (this.node :id)) then {
             return (this.joinArgs :callable :args :trails sep: this.idSpace)
         }
         # hug the last argument when it alone carries a forced break
@@ -990,12 +998,17 @@ Builder: class {
     # argDoc -- one argument of a call as a doc: its lead comment, then the
     # shorthand, or the label and the value. `doc` is 0 when the kid is not an
     # argument at all; `forced` says the argument list has to break -- a first
-    # argument that starts a kept marker, or any argument carrying a comment.
+    # argument that starts a kept marker, any argument carrying a comment, or
+    # a value that took the own-line comment in front of the call's closer,
+    # which would otherwise read as a last argument breaking on its own and
+    # be hugged.
     argDoc: function {:this id: zast.nodeid first: bool} out argdoc is {
         a: this.node :id
         if a.namedoperation.not then return (argdoc doc: 0 trailing: 0 forced: false)
         g: this.gapDocs cap: 0
         forced: first and g.marker and this.keepMarkers or g.hasComment
+        depth: this.c.openParens
+        this.closerCommentAt = 0
         one: ListVal u32
         if g.lead > 0 then one.append g.lead
         if a.name.isZero then {
@@ -1013,6 +1026,8 @@ Builder: class {
                 )
             }
         }
+        if depth > 0 when this.closerCommentAt == depth then forced = true
+        this.closerCommentAt = 0
         return (argdoc doc: this.d.concat one trailing: g.trailing :forced)
     }
 
