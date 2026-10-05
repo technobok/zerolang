@@ -105,8 +105,7 @@ vidOrNullText: function {o: optionval ztypes.vid} out String is {
     match (
         o
     ) case some then {
-        ov: o + 0
-        return "\{ov}"
+        return "\{o}"
     } case none then {
         return "NULL"
     }
@@ -242,7 +241,7 @@ definedUnitOf: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out Option 
 # id past the registry, and a type with no defining unit, belong to none. The
 # canon dumps ask this per type per unit, which is why it is one question.
 typeInUnit: function {st: zenv.ZSymbolTable.view tid: ztypes.tid unm: StringView} out bool is {
-    if (tid < st.reg.typeById.length).not then return false
+    if (tid < st.reg.nextTid).not then return false
     du: definedUnitOf :st :tid
     if du.none then return false
     return du.stringView == unm
@@ -763,7 +762,7 @@ ZDumper: class {
             ownSql: ztypes.zparamownershipInt dOpt.ownership
             fpSql: boolNum b: dOpt.fnptrField
             gpSql: boolNum b: dOpt.grantsPrivate
-            row: "INSERT OR IGNORE INTO decl VALUES (\{did}, \{nameSql}, \{dOpt.parent + 0}, \{kindSql}, \{dOpt.node}, \{dOpt.typeId}, \{ownSql}, \{fpSql}, \{gpSql});\n"
+            row: "INSERT OR IGNORE INTO decl VALUES (\{did}, \{nameSql}, \{dOpt.parent}, \{kindSql}, \{dOpt.node}, \{dOpt.typeId}, \{ownSql}, \{fpSql}, \{gpSql});\n"
             this.acc.append s: row
             pos: u64
             cnt: dOpt.children.length
@@ -777,12 +776,12 @@ ZDumper: class {
                     cdid = cvo
                 } case none then null
                 cnm: String
-                if cnid > 0 then {
+                if cnid.isZero.not then {
                     cnB: ast.names.texts.get i: cnid
                     cnm = cnB.copy
                 }
                 cnSql: sqlStr s: cnm.stringView
-                crow: "INSERT OR IGNORE INTO decl_child VALUES (\{did}, \{cnSql}, \{cdid + 0}, \{pos});\n"
+                crow: "INSERT OR IGNORE INTO decl_child VALUES (\{did}, \{cnSql}, \{cdid}, \{pos});\n"
                 this.acc.append s: crow
                 pos = pos + 1
             }
@@ -830,7 +829,7 @@ ZDumper: class {
         i: zast.nodeid
         for i.u64 < n loop {
             v: typing.nodeType.get :i
-            if v > 0 then {
+            if v.isZero.not then {
                 isc: 0
                 cvs: "NULL".string
                 cg: typing.nodeConst.get key: i
@@ -887,7 +886,7 @@ ZDumper: class {
             this.acc.append s: rowic
         }
         for each rd: typing.refDecl.iterateItems loop {
-            rowrd: "INSERT OR IGNORE INTO ref_decl VALUES (\{rd.key}, \{rd.value + 0});\n"
+            rowrd: "INSERT OR IGNORE INTO ref_decl VALUES (\{rd.key}, \{rd.value});\n"
             this.acc.append s: rowrd
         }
         for each ap: typing.dpArmPredicate.iterateItems loop {
@@ -1169,7 +1168,7 @@ ZDumper: class {
         n: st.reg.nextTid
         tid: ztypes.tid
         for tid < n loop {
-            if tid >= st.reg.typeById.length then return
+            if tid >= st.reg.nextTid then return
             zt: st.reg.typeById.get i: tid
             for each ge: zt.typeChildren.iterateItems loop {
                 row: "INSERT OR IGNORE INTO generic_child VALUES (\{tid}, \{ge.key}, \{ge.value});\n"
@@ -1190,7 +1189,7 @@ ZDumper: class {
         tid: ztypes.tid
         for tid < n loop {
             gargs: ListVal ztypes.genericarg
-            if tid < st.reg.typeById.length then {
+            if tid < st.reg.nextTid then {
                 zt: st.reg.typeById.get i: tid
                 zn: zt.genericArgs.length
                 zi: u64
@@ -1292,7 +1291,7 @@ ZDumper: class {
         n: st.reg.nextTid
         tid: ztypes.tid
         for tid < n loop {
-            if tid >= st.reg.typeById.length then return
+            if tid >= st.reg.nextTid then return
             zt: st.reg.typeById.get i: tid
             du: definedUnitOf :st :tid
             inUnit: false

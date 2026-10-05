@@ -143,7 +143,7 @@ cnameOf: function {tid: ztypes.tid ownerName: StringView name: StringView} out S
 # listCname -- a type's C name base from the table composed once at the start
 # of emitC. "" when the id names no registered type.
 listCname: function {cnames: (List String).view tid: ztypes.tid} out String is {
-    if tid >= cnames.length then return ""
+    if tid.u64 >= cnames.length then return ""
     got: cnames.get i: tid
     return got.copy
 }
@@ -153,7 +153,7 @@ listCname: function {cnames: (List String).view tid: ztypes.tid} out String is {
 # never written again, so a view into it is good for the whole run; listCname is
 # the owning twin, for a caller that keeps the String.
 listCnameView: function {cnames: (List String).view tid: ztypes.tid} outx StringView is {
-    if tid >= cnames.length then return ""
+    if tid.u64 >= cnames.length then return ""
     got: cnames.get i: tid
     return got.stringView
 }
@@ -387,7 +387,7 @@ tagStorageCType: function {
     # is where the tag was declared, and the instance stores it the same way
     {
         go: genericOriginTid :symtab :tid
-        if go > 0 then {
+        if go.isZero.not then {
             hasOwn: false
             o: symtab.typing.variantTagBase.get key: tid
             match (
@@ -2630,7 +2630,7 @@ ifDiverges: function {
 # It is the only form: nothing keeps this name.
 stampNameView: function {symtab: zenv.ZSymbolTable.view nid: zast.nodeid} outx StringView is {
     go: symtab.typing.nodeTypeFor :nid
-    if go > 0 then return (regNameView :symtab tid: go)
+    if go.isZero.not then return (regNameView :symtab tid: go)
     return ""
 }
 
@@ -2703,7 +2703,7 @@ specTidArgs: function {
 } out ztypes.tid is {
     argTids: ListVal ztypes.tid
     argTids.append a1
-    if a2 > 0 then argTids.append a2
+    if a2.isZero.not then argTids.append a2
     return (ztypecheck.specLookup
         st: symtab
         templateId: templateTid
@@ -3409,7 +3409,7 @@ canonFnId: function {
     tid: ztypes.tid
     name: StringView
 } out ztypes.tid is {
-    if (originTidOf :symtab :tid) > 0 then return tid
+    if (originTidOf :symtab :tid).isZero.not then return tid
     if (ztypecheck.declOfTypeId st: symtab :tid).isZero.not then return tid
     return (userFnId :ast :symtab :ctx :name)
 }
@@ -3422,9 +3422,9 @@ canonTypeId: function {
     tid: ztypes.tid
     name: StringView
 } out ztypes.tid is {
-    if (originTidOf :symtab :tid) > 0 then return tid
+    if (originTidOf :symtab :tid).isZero.not then return tid
     byName: resolveTypeIdByName :ast :symtab :ctx :name
-    if byName > 0 then return byName
+    if byName.isZero.not then return byName
     # The name route cannot reach a type declared in a NESTED unit -- there is
     # no name-index entry to find it by -- but the id in hand is already that
     # type. Accept it when it names a real aggregate, so a field typed through
@@ -3687,7 +3687,7 @@ borrowedFieldPath: function {
     pstn: regNameView :symtab tid: pstamp
     prid: canonTypeId :ast :symtab :ctx tid: pstamp name: pstn
     ptid: pstamp
-    if prid > 0 then ptid = prid
+    if prid.isZero.not then ptid = prid
     if (symtab.typing.declIsBorrowedFieldId
         parentTypeId: ptid
         nameId: (atomNameIdOf :ast n: (ast.nodes.get i: n.child))
@@ -3896,7 +3896,7 @@ restoreNarrow: function {
     } else {
         vvRemove xs: ctx.narrowBox :vid
     }
-    if prevTid > 0 then {
+    if prevTid.isZero.not then {
         vtSet xs: ctx.narrowTid :vid tid: prevTid
     } else {
         vtRemove xs: ctx.narrowTid :vid
@@ -4026,7 +4026,7 @@ takeAliasBaseNid: function {
         bnid: atomNodeId n: (ast.nodes.get i: n.parent)
         bt: stampIdOf :symtab nid: bnid
         bo: originTidOf :symtab tid: bt
-        if bo > 0 then return zast.nodeid
+        if bo.isZero.not then return zast.nodeid
         btt: symtab.reg.typetypeOf typeId: bt
         isUC: (
             (btt == ztypes.ztypetype.recordType) or
@@ -5714,7 +5714,7 @@ emitDataIndexCall: function {
         dtid = dataBlockTid :symtab nid: (atomNodeId n: (ast.nodes.get i: cn.parent))
         if dtid.isZero then {
             bst: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: cn.parent))
-            if bst > 0 when (
+            if bst.isZero.not when (
                 (symtab.reg.typetypeOf typeId: bst) == ztypes.ztypetype.dataType
             ) then dtid = bst
         }
@@ -6543,7 +6543,7 @@ orderConstant: function {
     if n.atomstring when (litIndexOf :ctx nid: n.nodeid) > 0 then return true
     if n.dottedpath then {
         # an arm without a payload named on its type, and a literal's own String
-        if (dottedTaggedTid :symtab nid: n.nodeid) > 0 then return true
+        if (dottedTaggedTid :symtab nid: n.nodeid).isZero.not then return true
         mid: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
         if mid == zast.names.wkString then {
             return (bindLitIndex :ast :ctx n: (ast.nodes.get i: n.parent)) > 0
@@ -7832,7 +7832,7 @@ operatorOwnerId: function {
     mnId: zast.nameid
 } out ztypes.tid is {
     own9: methodOwnerId :ast :symtab :rtid :mn
-    if own9 > 0 then return own9
+    if own9.isZero.not then return own9
     pid9: opPairPartnerId nameId: mnId
     if pid9.isZero then return ztypes.tid.zero
     pnm9: zast.nameTextAt :ast ref: pid9
@@ -7941,7 +7941,7 @@ emitOperatorCallForm: function {
                 rtid: tb9
                 mn: mnO
             )
-            if bow9 > 0 then {
+            if bow9.isZero.not then {
                 mb9: (symtab.typing.declChildOf
                     pool: ast.names
                     parentTypeId: bow9
@@ -8089,7 +8089,7 @@ emitInstanceMethodCall: function {
     isUserObj: isUserStructType tt: rttK
     if isUserObj.not then return ""
     monoOrigin: originTidOf :symtab tid: rtid
-    if monoOrigin > 0 when (isUserGenericMonoTid
+    if monoOrigin.isZero.not when (isUserGenericMonoTid
         :symtab
         :ctx
         tid: rtid
@@ -11037,7 +11037,7 @@ renderDefault: function {
                 tid: targetTid
                 name: tn.stringView
             )
-            if cf > 0 then return (ctxCname :ctx tid: cf)
+            if cf.isZero.not then return (ctxCname :ctx tid: cf)
             return (ctxCname :ctx tid: targetTid)
         }
     }
@@ -11057,7 +11057,7 @@ renderDefault: function {
                 name: tn2.stringView
             )
             vtarget: targetTid
-            if cv > 0 then vtarget = cv
+            if cv.isZero.not then vtarget = cv
             tg: variantTag :symtab tid: vtarget arm: arm.stringView
             tc: (typeRefC
                 :ast
@@ -13157,7 +13157,7 @@ emitFnptrFieldCall: function {
     # and a receiver-typed param (`r: this` on a record) is one of those.
     fnTid: ztypes.tid
     mnId: zast.poolFind pool: ast.names text: mn
-    if mnId > 0 then {
+    if mnId.isZero.not then {
         fnTid = (ztypes.tid.create
             from: ((symtab.typing.declChildOfId parentTypeId: rtid nameId: mnId).or
                 d: ztypes.tid.zero
@@ -13167,7 +13167,7 @@ emitFnptrFieldCall: function {
     pNames: List String
     pIds: ListVal ztypes.tid
     pNmIds: ListVal u64
-    if fnTid > 0 then {
+    if fnTid.isZero.not then {
         recFieldLists :ast :symtab tid: fnTid names: pNames ids: pIds nameIds: pNmIds
     }
     # the slot's parameters other than the receiver, which the call supplies
@@ -13176,7 +13176,7 @@ emitFnptrFieldCall: function {
     {
         thisNm: symtab.reg.thisParamNameIdOf tid: fnTid
         takesThis: false
-        if fnTid > 0 then takesThis = fnTypeTakesThis :symtab tid: fnTid
+        if fnTid.isZero.not then takesThis = fnTypeTakesThis :symtab tid: fnTid
         pk: u64
         for pk < pNmIds.length loop {
             pnk: pNmIds.get i: pk
@@ -13234,7 +13234,7 @@ emitFnptrFieldCall: function {
     }
     orderEnd :ctx st: ord
     callArgs: args.copy
-    if fnTid > 0 when (fnTypeTakesThis :symtab tid: fnTid) then {
+    if fnTid.isZero.not when (fnTypeTakesThis :symtab tid: fnTid) then {
         callArgs = "&"
         if rptr then callArgs = ""
         callArgs.append recvExpr
@@ -13331,7 +13331,7 @@ emitFnptrLocalCall: function {
     cn0: StringView
     cnVid: ztypes.vid
 } out String is {
-    if fid > 0 then return ""
+    if fid.isZero.not then return ""
     dct: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable)
     if dct.length > 0 then return ""
     cnid: interpPartNodeId n: (ast.nodes.get i: call.callable)
@@ -13791,12 +13791,12 @@ namedCalleeFnId: function {
         ) case some then null case none then {
             cst: monoStampIdOf :symtab :ctx nid: cbn0
             if cst.isZero then cst = stampIdOf :symtab nid: cbn0
-            if cst > 0 when (
+            if cst.isZero.not when (
                 (symtab.reg.typetypeOf typeId: cst) == ztypes.ztypetype.functionType
             ) then fid = cst
         }
     }
-    if fid > 0 when (fnIsNativeId :symtab :fid) then return ztypes.tid.zero
+    if fid.isZero.not when (fnIsNativeId :symtab :fid) then return ztypes.tid.zero
     return fid
 }
 
@@ -13815,7 +13815,7 @@ namedCalleeCtorTid: function {
     if fid.isZero.not then {
         if (isGenericType :symtab tid: fid).not then return fid
         gmid: stampIdOf :symtab nid: call.nodeid
-        if gmid > 0 then return gmid
+        if gmid.isZero.not then return gmid
         return fid
     }
     cstid: (stampIdOf
@@ -13854,7 +13854,7 @@ emitNamedCalleeChain: function {
     if tq.length > 0 then return tq
     fpfc: emitFnptrFieldCall :ast :symtab :ctx :call
     if fpfc.length > 0 then return fpfc
-    if fid > 0 then return (emitUserFnCall :ast :symtab :ctx :call :fid)
+    if fid.isZero.not then return (emitUserFnCall :ast :symtab :ctx :call :fid)
     cnV: atomVid :symtab nid: (atomNodeId n: (ast.nodes.get i: call.callable))
     fplc: (emitFnptrLocalCall
         :ast
@@ -14097,16 +14097,16 @@ emitFuncDeclCall: function {
     call: zast.callrow.view
     rtid: ztypes.tid
 } out String is {
-    if rtid > 0 when (symtab.reg.isNativeOf tid: rtid) then {
+    if rtid.isZero.not when (symtab.reg.isNativeOf tid: rtid) then {
         return (emitNativeFreeFnCall :ast :symtab :ctx :call fid: rtid)
     }
-    if rtid > 0 when (isGenericType :symtab tid: rtid) then {
+    if rtid.isZero.not when (isGenericType :symtab tid: rtid) then {
         rgf: emitGenericFnCall :ast :symtab :ctx :call
         if rgf.length > 0 then return rgf
     }
     rcu: emitCrossUnitFnCall :ast :symtab :ctx :call
     if rcu.length > 0 then return rcu
-    if rtid > 0 when (isGenericType :symtab tid: rtid).not then {
+    if rtid.isZero.not when (isGenericType :symtab tid: rtid).not then {
         return (emitSiblingFnCall :ast :symtab :ctx :call :rtid)
     }
     return ""
@@ -14538,7 +14538,7 @@ fnRefOrCallC: function {
     requireNoParams: bool
 } out String is {
     fst: stampIdOf :symtab :nid
-    if fst > 0 when (
+    if fst.isZero.not when (
         (symtab.reg.typetypeOf typeId: fst) == ztypes.ztypetype.functionType
     ) then return cname.string
     fad: emitAllDefaultedCall :ast :symtab :ctx :fnTid fcn: cname
@@ -14665,7 +14665,9 @@ emitDefRefAtom: function {
 } out String is {
     taa: tagAliasArmC :ast :symtab :ctx :brid :bdec
     if taa.length > 0 then return taa
-    if brid > 0 when (symtab.reg.typetypeOf typeId: brid) == ztypes.ztypetype.recordType then {
+    if brid.isZero.not when (
+        (symtab.reg.typetypeOf typeId: brid) == ztypes.ztypetype.recordType
+    ) then {
         btn: regNameOf :symtab tid: brid
         izr: symtab.typing.implicitCreate.get key: n.nodeid
         match (
@@ -14695,7 +14697,9 @@ emitDefRefAtom: function {
         be0: "((\{brc}_t){0})"
         return be0
     }
-    if brid > 0 when (symtab.reg.typetypeOf typeId: brid) == ztypes.ztypetype.classType then {
+    if brid.isZero.not when (
+        (symtab.reg.typetypeOf typeId: brid) == ztypes.ztypetype.classType
+    ) then {
         # no name is written for a class atom that the scalar leg could use:
         # a class typedef over a scalar reaches its zero through the chase
         izc: symtab.typing.implicitCreate.get key: n.nodeid
@@ -14711,7 +14715,9 @@ emitDefRefAtom: function {
             )
         } case none then null
     }
-    if brid > 0 when (symtab.reg.typetypeOf typeId: brid) == ztypes.ztypetype.functionType then {
+    if brid.isZero.not when (
+        (symtab.reg.typetypeOf typeId: brid) == ztypes.ztypetype.functionType
+    ) then {
         fbcn: ctxCname :ctx tid: brid
         return (fnRefOrCallC
             :ast
@@ -14784,7 +14790,7 @@ emitAtom: function {
         # innermost inlined nothing for a constant of an enclosing inline
         # unit, and the bare source name reached the C.
         nsCur: ztypecheck.declOfTypeId st: symtab tid: nsAt
-        for nsCur > 0 loop {
+        for nsCur.isZero.not loop {
             nsFt: ztypecheck.declTypeIdOf st: symtab declId: nsCur
             if nsFt.isZero.not then {
                 nsca: (memberConstText
@@ -15075,7 +15081,7 @@ emitNestedMonoMethodBase: function {
         (symtab.reg.typetypeOf typeId: (stampIdOf :symtab nid: n.nodeid)) ==
         ztypes.ztypetype.functionType
     )
-    if nlid > 0 then {
+    if nlid.isZero.not then {
         nrtt: symtab.reg.typetypeOf typeId: nlid
         # a protocol/facet-typed base reached through a FIELD dispatches
         # exactly as a bare one does; without this the member read falls
@@ -16240,7 +16246,7 @@ dottedAtomTaggedBase: function {
         name: bn2r
     )
     isTagged: false
-    if vtid2 > 0 then {
+    if vtid2.isZero.not then {
         vtt2: symtab.reg.typetypeOf typeId: vtid2
         if vtt2 == ztypes.ztypetype.variantType then isTagged = true
         if vtt2 == ztypes.ztypetype.unionType then isTagged = true
@@ -16390,7 +16396,7 @@ emitDottedAtomBase: function {
     bstamp: bstamp0
     bsn0: regNameView :symtab tid: bstamp0
     bcid: canonFnId :ast :symtab :ctx tid: bstamp0 name: bsn0
-    if bcid > 0 then {
+    if bcid.isZero.not then {
         bstamp = bcid
     } else {
         # canonicalize a SHELL (no defining unit) by name: a system type
@@ -16399,7 +16405,7 @@ emitDottedAtomBase: function {
         # the typeRefC canonicalization, so method cnames match).
         if (definedInUnitTid :symtab tid: bstamp0).isZero then {
             brid: canonTypeId :ast :symtab :ctx tid: bstamp0 name: bsn0
-            if brid > 0 then bstamp = brid
+            if brid.isZero.not then bstamp = brid
         }
     }
     bstamp = typedefMethodOwner :ast :symtab :ctx tid: bstamp mn: mn2
@@ -16804,12 +16810,14 @@ emitCopyConversion: function {
     cvp: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.parent))
     # `.copy` of a function is another reference to it: the base, which the
     # checker stamped as the function and not as a call of it
-    if cvp > 0 when (symtab.reg.typetypeOf typeId: cvp) == ztypes.ztypetype.functionType then {
+    if cvp.isZero.not when (
+        (symtab.reg.typetypeOf typeId: cvp) == ztypes.ztypetype.functionType
+    ) then {
         return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent))
     }
     cvgen: cvp.isZero
     if (symtab.reg.typetypeOf typeId: cvp) == ztypes.ztypetype.genericParam then cvgen = true
-    if cvgen.not when cvp > 0 then {
+    if cvgen.not when cvp.isZero.not then {
         return (emitValtypeCopy :ast :symtab :ctx :n tid: cvp)
     }
     if cvgen.not then return ""
@@ -16818,10 +16826,10 @@ emitCopyConversion: function {
         :ctx
         nid: (interpPartNodeId n: (ast.nodes.get i: n.parent))
     )
-    if cvms > 0 then {
+    if cvms.isZero.not then {
         return (emitResolvedCopy :ast :symtab :ctx :n tid: cvms inGeneric: true)
     }
-    if ctx.curThisTid > 0 then {
+    if ctx.curThisTid.isZero.not then {
         (emitFail
             :ctx
             what: "unresolved .copy receiver in a generic body"
@@ -17014,12 +17022,12 @@ emitDottedTagRead: function {
     # `Type.arm`, so member emission wins over the name-matched legs
     # below (io/os bases, ownership markers, numeric casts)
     dtp: dottedTaggedTid :symtab nid: n.nodeid
-    if dtp > 0 then {
+    if dtp.isZero.not then {
         r: taggedArmValueC :ast :symtab :ctx :dtp :mnc0Id
         if r.length > 0 then return r
     }
     dap: dottedArmPredicateTid :symtab nid: n.nodeid
-    if dap > 0 then return (armPredicateC
+    if dap.isZero.not then return (armPredicateC
         :ast
         :symtab
         :ctx
@@ -17028,7 +17036,7 @@ emitDottedTagRead: function {
         :mnc0Id
     )
     dtr: dottedTagReadTid :symtab nid: n.nodeid
-    if dtr > 0 then return (tagAccessorReadC
+    if dtr.isZero.not then return (tagAccessorReadC
         :ast
         :symtab
         :ctx
@@ -17163,7 +17171,7 @@ emitDottedNativeMarker: function {
     # the block is the base's stamped type, whatever shape the base takes;
     # no base is emitted
     dpbT: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.parent))
-    if dpbT > 0 when (symtab.reg.typetypeOf typeId: dpbT) == ztypes.ztypetype.dataType then {
+    if dpbT.isZero.not when (symtab.reg.typetypeOf typeId: dpbT) == ztypes.ztypetype.dataType then {
         mn2d: zast.nameTextAt :ast ref: mn2Id
         dres0: emitDataMember :ast :symtab :ctx :n dbt: dpbT mn2: mn2d
         if dres0.length > 0 then return dres0
@@ -17968,7 +17976,7 @@ emitOperatorAt: function {
     }
     isNat: false
     isSyn: false
-    if call > 0 then {
+    if call.isZero.not then {
         isNat = fnIsNativeId :symtab fid: call
         isSyn = (symtab.typing.declMemberIsSynth
             parentTypeId: owner
@@ -17986,7 +17994,7 @@ emitOperatorAt: function {
             neg: opId == zast.names.wkOpNe
         )
     }
-    if call > 0 when isNat.not when isSyn.not then {
+    if call.isZero.not when isNat.not when isSyn.not then {
         return (emitDeclaredOperator
             :ast
             :symtab
@@ -18004,7 +18012,7 @@ emitOperatorAt: function {
     # asking for one reports "no native implementation" about a member that is
     # implemented. Emit the ordinary method call instead -- the mirror of
     # emitOperatorCallForm, which routes the other direction.
-    if call > 0 when isNat then {
+    if call.isZero.not when isNat then {
         eNi: (emitSvNativeInfix
             :ast
             :symtab
@@ -18574,7 +18582,7 @@ numericFormatName: function {
         return r1
     }
     tid: userFnId :ast :symtab :ctx name: tn
-    if tid > 0 then {
+    if tid.isZero.not then {
         # a typedef formats as the float its chain ends at, any other as i64
         bn: typedefChaseBaseName :ast :symtab :tid
         if (isFloatName name: bn.stringView) then return bn
@@ -18697,7 +18705,7 @@ interpBaseIsOwnedStructField: function {
         bo: originTidOf :symtab tid: bt
         # a user-generic mono owns its fields once it carries a destructor;
         # other monos (views, collections) keep the owned-call-result legs
-        if bo > 0 when (symtab.reg.needsDestructor typeId: bt).not then return false
+        if bo.isZero.not when (symtab.reg.needsDestructor typeId: bt).not then return false
         btt: symtab.reg.typetypeOf typeId: bt
         isUC: btt.isFieldwise
         if isUC.not then return false
@@ -18732,9 +18740,9 @@ interpPartTypeName: function {
     di0: dataIndexElemName :ast :symtab :ctx :n
     if di0.length > 0 then return di0
     tn0: stampNameDeep :symtab :n
-    if tn0.length == 0 when ctx.curThisTid > 0 then {
+    if tn0.length == 0 when ctx.curThisTid.isZero.not then {
         msid: monoStampIdOf :symtab :ctx nid: (interpPartNodeId :n)
-        if msid > 0 then tn0 = regNameOf :symtab tid: msid
+        if msid.isZero.not then tn0 = regNameOf :symtab tid: msid
     }
     tnTd0: typedefChaseBaseName :ast :symtab tid: (stampIdDeep :symtab :n)
     if tnTd0.length > 0 then tn0 = tnTd0.copy
@@ -18988,16 +18996,16 @@ stampIdDeep: function {
 } out ztypes.tid is {
     nid: interpPartNodeId :n
     sid: stampIdOf :symtab :nid
-    if sid > 0 then {
+    if sid.isZero.not then {
         if (symtab.reg.typetypeOf typeId: sid) == ztypes.ztypetype.functionType then {
             rto: fnReturnTidOf :symtab tid: sid
-            if rto > 0 then return rto
+            if rto.isZero.not then return rto
             rno: symtab.typing.funcReturnNode.get key: sid
             match (
                 rno
             ) case some then {
                 rrt: stampIdOf :symtab nid: rno
-                if rrt > 0 then return rrt
+                if rrt.isZero.not then return rrt
             } case none then null
             return ztypes.tid.zero
         }
@@ -19020,13 +19028,13 @@ tidDeep: function {
     # method's return.
     if (symtab.reg.typetypeOf typeId: sid) == ztypes.ztypetype.functionType then {
         rto: fnReturnTidOf :symtab tid: sid
-        if rto > 0 then return rto
+        if rto.isZero.not then return rto
         rno: symtab.typing.funcReturnNode.get key: sid
         match (
             rno
         ) case some then {
             rrt: stampIdOf :symtab nid: rno
-            if rrt > 0 then return rrt
+            if rrt.isZero.not then return rrt
         } case none then null
     }
     return sid
@@ -20387,7 +20395,7 @@ bindAliasCType: function {
 } out String is {
     ctB8: "\{ct}"
     rbf8: refBorrowCalleeFid :ast :symtab :ctx n: avn
-    if rbf8 > 0 when (fnReturnsRefBorrow
+    if rbf8.isZero.not when (fnReturnsRefBorrow
         :ast
         :symtab
         :ctx
@@ -20612,15 +20620,15 @@ bindDeclaredCType: function {
     # shadow keeps the name and loses the C scalar, so it emits its struct.
     avn: ast.nodes.get i: n.value
     ct: cTypeOf name: tn
-    if ct.length > 0 when btid > 0 when (scalarTidIsBuiltin :symtab tid: btid).not then {
+    if ct.length > 0 when btid.isZero.not when (scalarTidIsBuiltin :symtab tid: btid).not then {
         ct = typeRefC :ast :symtab :ctx tid: btid thisTid: ztypes.tid
     }
     if ct.length == 0 then {
         tgo: symtab.typing.nodeTypeFor nid: n.nodeid
         # the binding's own stamp as the body being emitted sees it comes first:
         # an instance's differs from the shared one
-        if btid > 0 then tgo = btid
-        if tgo > 0 then {
+        if btid.isZero.not then tgo = btid
+        if tgo.isZero.not then {
             ct = (typeRefC
                 :ast
                 :symtab
@@ -20630,7 +20638,7 @@ bindDeclaredCType: function {
             )
         } else {
             vgo: symtab.typing.nodeTypeFor nid: (interpPartNodeId n: avn)
-            if vgo > 0 then {
+            if vgo.isZero.not then {
                 ct = (typeRefC
                     :ast
                     :symtab
@@ -21108,7 +21116,9 @@ emitReturnStmt: function {
     # coerced the atom to a call; emit the call expression as a statement.
     fcs: atomTextOf :ast :n
     ffid: userFnId :ast :symtab :ctx name: fcs
-    if ffid > 0 when (symtab.reg.typetypeOf typeId: ffid) == ztypes.ztypetype.functionType then {
+    if ffid.isZero.not when (
+        (symtab.reg.typetypeOf typeId: ffid) == ztypes.ztypetype.functionType
+    ) then {
         fce: emitExpr :ast :symtab :ctx :n
         flushArgHoists :ctx :ind :tmp :buf
         if (fce.stringView.startsWith prefix: "/*").not then {
@@ -22131,7 +22141,7 @@ emitWithLocal: function {
     }
     wvC: wv.string
     wrb: refBorrowCalleeFid :ast :symtab :ctx n: (ast.nodes.get i: n.value)
-    if wrb > 0 when (fnReturnsRefBorrow
+    if wrb.isZero.not when (fnReturnsRefBorrow
         :ast
         :symtab
         :ctx
@@ -22863,7 +22873,7 @@ typeIdByNameStages: function {
     nameId: zast.nameid
 } out ztypes.tid is {
     f: userFnIdById :ast :symtab :ctx :nameId
-    if f > 0 then return f
+    if f.isZero.not then return f
     mo: ztypecheck.resolveUnitChildRo :ast st: symtab unitDecl: symtab.typing.systemUnitRoot :nameId
     match (
         mo
@@ -22879,7 +22889,7 @@ typeIdByNameStages: function {
     ).or
         d: ztypes.tid.zero
     )
-    if lr > 0 then return lr
+    if lr.isZero.not then return lr
     # cross-unit: the type may live in a dep unit (zlexer/zast/zvfs) outside
     # walkLookupTyperefById's search list. Pass 1 probes each unit scope by id
     # (no key composition); the composed-key resolvedByKey pass (which also
@@ -22948,7 +22958,7 @@ resolveTypeIdByName: function {
 fnReturnTidOf: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out ztypes.tid is {
     r: ztypes.tid
     rt: symtab.reg.returnTypeOf :tid
-    if rt > 0 then r = rt
+    if rt.isZero.not then r = rt
     return r
 }
 
@@ -22957,7 +22967,7 @@ fnReturnTidOf: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out zty
 genericOriginTid: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out ztypes.tid is {
     g: ztypes.tid
     go: symtab.reg.genericOriginOf :tid
-    if go > 0 then g = go
+    if go.isZero.not then g = go
     return g
 }
 
@@ -23054,7 +23064,7 @@ emitReassignLvalue: function {
         rsn: regNameOf :symtab tid: stampTid
         rsc: canonFnId :ast :symtab :ctx tid: stampTid name: rsn.stringView
         rsFp: stampTid
-        if rsc > 0 then rsFp = rsc
+        if rsc.isZero.not then rsFp = rsc
         rsFpc: chaseAggregateTypedef :symtab :ctx tid: rsFp
         if (symtab.typing.declIsFnptrField
             pool: ast.names
@@ -23249,7 +23259,7 @@ matchGenericRoute: function {
         tbl: symtab.typing.nodeType
         nid: (interpPartNodeId n: (ast.nodes.get i: m.subject))
     )
-    if subjSid > 0 when (symtab.reg.isTypeParamOf tid: subjSid) then {
+    if subjSid.isZero.not when (symtab.reg.isTypeParamOf tid: subjSid) then {
         paramName9: zast.poolFind pool: ast.names text: (regNameView :symtab tid: subjSid)
         (emitGenericDissect
             :ast
@@ -23273,9 +23283,9 @@ matchGenericRoute: function {
         dbst: stampIdOf :symtab nid: dbnid
         downer: ctx.curThisTid
         if (symtab.reg.genericArgCount specId: dbst) > 0 then downer = dbst
-        if downer > 0 when dleaf.length > 0 then {
+        if downer.isZero.not when dleaf.length > 0 then {
             dkey: genericOwnerKey :symtab ownerTid: downer
-            if dkey > 0 then {
+            if dkey.isZero.not then {
                 dleafId: zast.poolFind pool: ast.names text: dleaf
                 if (symtab.reg.isGenericParamOf tdecl: dkey name: dleafId) then {
                     (emitGenericDissect
@@ -23458,7 +23468,7 @@ emitMatchStmt: function {
     }
     isVar: false
     isUni: false
-    if vtid > 0 then {
+    if vtid.isZero.not then {
         vtt0: symtab.reg.typetypeOf typeId: vtid
         if vtt0 == ztypes.ztypetype.variantType then isVar = true
         if vtt0 == ztypes.ztypetype.unionType then isUni = true
@@ -24759,7 +24769,7 @@ objIterIterableTid: function {
             parentTypeId: brt
             nameId: zast.names.wkCall
         )
-        if brt > 0 when hasCall then {
+        if brt.isZero.not when hasCall then {
             itid = brt
             bareFnId = itid0
         }
@@ -24770,7 +24780,7 @@ objIterIterableTid: function {
         # a mono, or a type with its own declaration, is already the one; only
         # a shell is looked up by name -- which in the main unit answers a
         # same-named type of its own, not one another unit declares
-        if (originTidOf :symtab tid: itid0) > 0 then {
+        if (originTidOf :symtab tid: itid0).isZero.not then {
             canoT = itid0
         } else if (ztypecheck.declOfTypeId st: symtab tid: itid0).isZero.not then {
             canoT = itid0
@@ -24793,7 +24803,7 @@ objIterIterableTid: function {
             parentTypeId: canoT
             nameId: zast.names.wkCall
         )
-        if canoT > 0 when hasCallC then itid = canoT
+        if canoT.isZero.not when hasCallC then itid = canoT
     }
     return (objitertids :itid :bareFnId)
 }
@@ -24807,7 +24817,7 @@ objIterYieldTid: function {
 } out ztypes.tid is {
     ovid: ztypes.tid
     rto: symtab.reg.returnTypeOf tid: cco
-    if rto > 0 then ovid = rto
+    if rto.isZero.not then ovid = rto
     if ovid.isZero then {
         # user-class iterator: returnTypeId unset, but the .call return
         # node carries the mono stamp.
@@ -24893,7 +24903,7 @@ emitObjIterRecv: function {
     } case none then null
     iterRecv: String
     ownGit: false
-    if bareFnId > 0 then {
+    if bareFnId.isZero.not then {
         bcn: ctxCname :ctx tid: bareFnId
         lgh: "\{ind}\{itCb}_t _git\{mN} = \{bcn}();\n"
         buf.append lgh
@@ -24963,7 +24973,7 @@ emitObjIterField: function {
         buf.append ld
     }
     ivex: String
-    if bareFnId > 0 then {
+    if bareFnId.isZero.not then {
         bcn: ctxCname :ctx tid: bareFnId
         ivex = "\{bcn}()"
     } else {
@@ -25018,7 +25028,7 @@ emitObjIterPayload: function {
         # valtype field, as a use-after-free for a reftype one. A
         # valtype or scalar payload is self-contained and copies safely.
         payRef: false
-        if payElemTid > 0 then payRef = (symtab.reg.isReftypeOf
+        if payElemTid.isZero.not then payRef = (symtab.reg.isReftypeOf
             tid: payElemTid
         )
         if payScalarC.length > 0 when payRef.not then {
@@ -26524,7 +26534,7 @@ seedCondOp: function {
     # it seeds the alias that form seeds.
     {
         ta0: ztypecheck.truthyCondArmOf st: symtab nid: (interpPartNodeId :n)
-        if ta0 > 0 then {
+        if ta0.isZero.not then {
             an0: zast.nameTextAt :ast ref: ta0
             tid93: symtab.typing.nodeTypeFor nid: (interpPartNodeId :n)
             (seedPositiveCore
@@ -26702,7 +26712,7 @@ restoreCondExclusions: function {ctx: Ctx mark: u64} is {
         } else {
             vvRemove xs: ctx.exclArms vid: rv
         }
-        if pt > 0 then {
+        if pt.isZero.not then {
             vtSet xs: ctx.exclTids vid: rv tid: pt
         } else {
             vtRemove xs: ctx.exclTids vid: rv
@@ -26974,7 +26984,7 @@ classifyCondFact: function {
     none9: noArmFact
     {
         ta1: ztypecheck.truthyCondArmOf st: symtab nid: (interpPartNodeId :n)
-        if ta1 > 0 then {
+        if ta1.isZero.not then {
             return (classifyFactCore
                 :ast
                 :symtab
@@ -28142,7 +28152,7 @@ emitTailStmt: function {
         # ALIASES its source exactly as a plain binding does
         {
             wrbT: refBorrowCalleeFid :ast :symtab :ctx n: (ast.nodes.get i: n.value)
-            if wrbT > 0 when (fnReturnsRefBorrow
+            if wrbT.isZero.not when (fnReturnsRefBorrow
                 :ast
                 :symtab
                 :ctx
@@ -28783,13 +28793,13 @@ isReftypeParam: function {
     if isShell then {
         rtn0: regNameView :symtab :tid
         rrid0: canonTypeId :ast :symtab :ctx :tid name: rtn0
-        if rrid0 > 0 then cid = rrid0
+        if rrid0.isZero.not then cid = rrid0
     }
     tt: symtab.reg.typetypeOf typeId: cid
     if tt == ztypes.ztypetype.unionType then return (unionBorrowsByPtr :symtab :ctx tid: cid)
     if tt != ztypes.ztypetype.classType then return false
     monoLk4: originTidOf :symtab tid: cid
-    if monoLk4 > 0 when (isUserClassMonoTid :symtab :ctx tid: cid).not then return false
+    if monoLk4.isZero.not when (isUserClassMonoTid :symtab :ctx tid: cid).not then return false
     # the types with their own family rule answer through it, not the
     # user-class one: containers via isListPtrParam/isSetMapPtrParam, String
     # via isBorrowStringParam (pointer when non-owned), StringView by value (a
@@ -29126,7 +29136,7 @@ paramTypeIsPointer: function {
     if owns.not then {
         if pname == "this" then return true
         rnid: zast.poolFind pool: ast.names text: pname
-        if rnid > 0 when (symtab.reg.thisParamNameIs tid: fid nameId: rnid) then return true
+        if rnid.isZero.not when (symtab.reg.thisParamNameIs tid: fid nameId: rnid) then return true
     }
     if owns.not when (markedValtypeRefParam :ast :symtab :fid :pname :pid) then return true
     if owns.not when (isReftypeParam
@@ -29186,7 +29196,7 @@ declaredReturnC: function {
     # answer is what says it is that template's instance rather than an
     # unrelated type.
     rbm: fnReturnTidOf :symtab tid: fid
-    if rbi > 0 when (
+    if rbi.isZero.not when (
         (genericOriginTid
             :symtab
             tid: rbm
@@ -29247,7 +29257,7 @@ fnReturnPointerC: function {
     retColId: fnReturnTidOf :symtab tid: fid
     if retColId.isZero then retColId = fnReturnTypeId :ast :symtab :op
     out0: ret.string
-    if retColId > 0 when (isHeapPtrCollection
+    if retColId.isZero.not when (isHeapPtrCollection
         :symtab
         :ctx
         tid: retColId
@@ -29285,7 +29295,7 @@ fnReturnC: function {
     if r1.length > 0 then ret = r1.take
     if ret.stringView == "void" then {
         rtnid: fnReturnTypeId :ast :symtab :op
-        if rtnid > 0 then {
+        if rtnid.isZero.not then {
             rtr: (typeRefC
                 :ast
                 :symtab
@@ -29501,7 +29511,7 @@ typedefChaseC: function {
         bc: cTypeOf name: bnX.stringView
         if bc.length > 0 then return bc
         bid: userFnId :ast :symtab :ctx name: bnX.stringView
-        if bid > 0 then return (typeRefC :ast :symtab :ctx tid: bid thisTid: ztypes.tid)
+        if bid.isZero.not then return (typeRefC :ast :symtab :ctx tid: bid thisTid: ztypes.tid)
         pmsg8: "zemitterc: unresolvable typedef base \{bnX} for id \{tid}"
         panic pmsg8
     }
@@ -29787,7 +29797,7 @@ cTypeForName: function {
         # Map value) is outside walkLookupTyperef's search list; resolve via
         # the registry-wide cross-unit scan.
         xid: resolveTypeIdByName :ast :symtab :ctx :name
-        if xid > 0 then return (typeRefC
+        if xid.isZero.not then return (typeRefC
             :ast
             :symtab
             :ctx
@@ -29891,7 +29901,7 @@ typeRefC: function {
         # shells all come back through it with their C type intact.
         ct: scalarCTypeFor :symtab name: tn :tid
         if ct.length > 0 then return ct
-        if tn == "this" when thisTid > 0 then cid = thisTid
+        if tn == "this" when thisTid.isZero.not then cid = thisTid
     }
     cmid: chaseAggregateTypedef :symtab :ctx tid: cid
     if cmid != cid then {
@@ -30233,7 +30243,7 @@ pathUnitTidOf: function {
         # unit names that unit's children first, then those of each unit
         # enclosing it -- which is how a sibling inline unit is reached.
         pCur: ztypecheck.declOfTypeId st: symtab tid: encl
-        for pCur > 0 loop {
+        for pCur.isZero.not loop {
             pFt: ztypecheck.declTypeIdOf st: symtab declId: pCur
             if pFt.isZero.not then {
                 ph: unitChildTidOf :symtab parentTid: pFt nameId: b.name
@@ -30302,7 +30312,7 @@ unitConstTextOf: function {
     cn8: zast.nameid
     ca8: ast.nodes.get i: n.child
     if ca8.atomid then cn8 = ca8.name
-    if cn8 > 0 then {
+    if cn8.isZero.not then {
         utd8: pathUnitTidOf :ast :symtab :ctx baseId: n.parent
         if utd8.isZero.not then {
             # the VALUE is the only source: a constant is never rendered to
@@ -31255,7 +31265,7 @@ emitUnitMonoInstances: function {
         tt: t
         if (symtab.reg.typetypeOf typeId: tt) == ztypes.ztypetype.unitType then {
             go9opt: symtab.reg.genericOriginOf tid: tt
-            if go9opt > 0 when go9opt.u64 == tplId then {
+            if go9opt.isZero.not when go9opt.u64 == tplId then {
                 emitUnitMonoMembers :ast :symtab :ctx :bodyIds :t :declOnly :buf
             }
         }
@@ -31374,7 +31384,7 @@ emitFnMonoInstances: function {
         isMono: false
         if (symtab.reg.typetypeOf typeId: t) == ztypes.ztypetype.functionType then {
             go9opt: symtab.reg.genericOriginOf tid: t
-            if go9opt.u64 == templateFnId when go9opt > 0 then isMono = true
+            if go9opt.u64 == templateFnId when go9opt.isZero.not then isMono = true
         }
         if isMono then {
             fnm: regNameOf :symtab tid: t
@@ -31916,7 +31926,7 @@ takeParamDestroyTid: function {
     if (symtab.reg.needsDestructor typeId: puse).not then {
         ptnm: regNameOf :symtab tid: pt
         prbn: canonTypeId :ast :symtab :ctx tid: pt name: ptnm.stringView
-        if prbn > 0 then puse = prbn
+        if prbn.isZero.not then puse = prbn
     }
     if (symtab.reg.needsDestructor typeId: puse).not then return ztypes.tid
     return puse
@@ -32443,7 +32453,7 @@ buildTypeCnames: function {
             if readableNames then {
                 onm: String
                 oti: symtab.reg.ownerTidOf tid: ctb
-                if oti > 0 then onm = symtab.reg.nameOf tid: oti
+                if oti.isZero.not then onm = symtab.reg.nameOf tid: oti
                 tnm: symtab.reg.nameOf tid: ctb
                 cn = (cnameOf
                     tid: ctb
@@ -32899,7 +32909,7 @@ monoOriginName: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out St
     # partial specs are trie bookkeeping, not monos
     if (symtab.reg.isPartialOf :tid) then return ""
     go: genericOriginTid :symtab :tid
-    if go > 0 then return (regNameOf :symtab tid: go)
+    if go.isZero.not then return (regNameOf :symtab tid: go)
     return ""
 }
 
@@ -33166,7 +33176,7 @@ listElemsDestroyC: function {
     if (destroyTargetTid :symtab :ctx tid: eid).isZero then {
         eln: regNameOf :symtab tid: eid
         rbn: canonTypeId :ast :symtab :ctx tid: eid name: eln.stringView
-        if rbn > 0 then ecid = rbn
+        if rbn.isZero.not then ecid = rbn
     }
     edc: destroyLineC :symtab :ctx tid: ecid nm: "p->data[_di]" ind: "        "
     if edc.length == 0 then return edc
@@ -33569,7 +33579,7 @@ emitListSliceOnDemand: function {
         # `type`, and an instance minted while the library is still being read
         # carries the template's member, which records no return id for it
         if rt.isZero when (isListViewOriginOf :symtab :ctx tid: monoId) then rt = monoId
-        if rt > 0 then {
+        if rt.isZero.not then {
             lvc: ctxCname :ctx tid: rt
             emitColSlice :nm lvc: lvc.stringView :kind :buf
         }
@@ -33937,7 +33947,7 @@ listviewMethods: function {
         lo
     ) case some then {
         rt: fnReturnTidOf :symtab tid: lo
-        if rt > 0 then {
+        if rt.isZero.not then {
             {
                 lvc: ctxCname :ctx tid: rt
                 buf: String
@@ -34230,7 +34240,7 @@ payloadDestructor: function {
             tid: co
             name: pn.stringView
         )
-        if rbn > 0 then return (destroyFnC :symtab :ctx tid: rbn)
+        if rbn.isZero.not then return (destroyFnC :symtab :ctx tid: rbn)
     } case none then null
     return ""
 }
@@ -35398,7 +35408,7 @@ ioCanonTidAny: function {
     canon: StringView
 } out ztypes.tid is {
     st: ioCanonTid :ast :symtab :ctx :canon
-    if st > 0 then return st
+    if st.isZero.not then return st
     # a plain source-name stem (File, IoError, Reader): the system unit first,
     # then the registry scan below for the io/cli units it does not cover.
     nameId94: zast.poolFind pool: ast.names text: canon
@@ -35420,7 +35430,7 @@ ioCanonTidAny: function {
         if found.isZero then {
             t9: ti
             okc: (definedInNonMain :symtab :ctx tid: t9) or (definedInFragmentUnit :ctx tid: t9)
-            if okc.not when (originTidOf :symtab tid: t9) > 0 then okc = true
+            if okc.not when (originTidOf :symtab tid: t9).isZero.not then okc = true
             if okc when (regNameIs :symtab tid: t9 name: canon) then found = t9
         }
         ti = ti.next
@@ -35633,7 +35643,7 @@ bindFragTypeTids: function {symtab: zenv.ZSymbolTable.view ctx: Ctx ast: Ast.vie
         if tn.length > 0 then {
             unitNameText: ctx.fragUnits.get :i
             uid: unitDeclByName :symtab :ast name: unitNameText.stringView
-            if uid > 0 then {
+            if uid.isZero.not then {
                 ti: ztypes.tid 1
                 for ti < last loop {
                     if found.isZero when (regNameIs
@@ -35649,7 +35659,7 @@ bindFragTypeTids: function {symtab: zenv.ZSymbolTable.view ctx: Ctx ast: Ast.vie
             }
         }
         ctx.fragTypeTids.append found
-        if found > 0 then ctx.demandGatedTids.add item: found
+        if found.isZero.not then ctx.demandGatedTids.add item: found
         i = i + 1
     }
 }
@@ -35659,7 +35669,7 @@ bindFragTypeTids: function {symtab: zenv.ZSymbolTable.view ctx: Ctx ast: Ast.vie
 # row naming the members that reach it, so it loads once however many fired.
 rowDemandFired: function {ctx: Ctx.view i: u64} out bool is {
     tt: ctx.fragTypeTids.get :i
-    if tt > 0 then return (typeIsUsed :ctx tid: tt)
+    if tt.isZero.not then return (typeIsUsed :ctx tid: tt)
     u: ctx.fragUnits.get :i
     d: ctx.fragMembs.get :i
     fired: false
@@ -35918,13 +35928,13 @@ maybePreEmitElem: function {
             tid: eid
             name: snm0.stringView
         )
-        if srid > 0 then rid0 = srid
+        if srid.isZero.not then rid0 = srid
     }
     cid: chaseAggregateTypedef :symtab :ctx tid: rid0
     # an instance is emitted by its own sweep, but a user's spec instance is
     # emitted as a user spec is
     monoLk4: originTidOf :symtab tid: cid
-    if monoLk4 > 0 when (userSpecInstance :symtab tid: cid).not then return
+    if monoLk4.isZero.not when (userSpecInstance :symtab tid: cid).not then return
     if (isGenericType :symtab tid: cid) then return
     duoPe: definedInUnitName :symtab tid: cid
     peUnit: ctx.mainName.copy
@@ -36136,9 +36146,9 @@ monoMapKV: function {symtab: zenv.ZSymbolTable.view monoId: ztypes.tid acc: List
         go
     ) case some then {
         vid: mapValType :symtab :monoId
-        if vid > 0 then acc.append vid
+        if vid.isZero.not then acc.append vid
         kid: mapKeyType :symtab :monoId
-        if kid > 0 then acc.append kid
+        if kid.isZero.not then acc.append kid
     } case none then null
 }
 
@@ -36162,12 +36172,12 @@ monoElemIdsOf: function {
     )
     if byGet then {
         e: listElemType :symtab :monoId
-        if e > 0 then acc.append e
+        if e.isZero.not then acc.append e
         return
     }
     if (isSetOriginOf :symtab :ctx tid: monoId) then {
         eid: setElemType :symtab :monoId
-        if eid > 0 then acc.append eid
+        if eid.isZero.not then acc.append eid
         return
     }
     if (isMapOriginOf :symtab :ctx tid: monoId) then {
@@ -36181,7 +36191,7 @@ monoElemIdsOf: function {
     # emitted ahead of the optionval its `get` returns.
     if (isIdSetOriginOf :symtab :ctx tid: monoId) then {
         ideid: setElemType :symtab :monoId
-        if ideid > 0 then acc.append ideid
+        if ideid.isZero.not then acc.append ideid
         return
     }
     if (isIdMapOriginOf :symtab :ctx tid: monoId) then {
@@ -36282,7 +36292,7 @@ monoDependsOnUser: function {
         ceid: chaseAggregateTypedef :symtab :ctx tid: eid
         if (userList.contains item: ceid) then return true
         emo: originTidOf :symtab tid: ceid
-        if emo > 0 when (monoDependsOnUser
+        if emo.isZero.not when (monoDependsOnUser
             :ast
             :symtab
             :ctx
@@ -36440,7 +36450,7 @@ monoLateDepsMet: function {
         ceid: chaseAggregateTypedef :symtab :ctx tid: eid
         if (group.has item: ceid) when (emitted.has item: ceid).not then return false
         emo: originTidOf :symtab tid: ceid
-        if emo > 0 when (monoLateDepsMet
+        if emo.isZero.not when (monoLateDepsMet
             :ast
             :symtab
             :ctx
@@ -36643,7 +36653,7 @@ fnptrTypedefEligible: function {
 } out bool is {
     if (isGenericType :symtab :tid) then return false
     mo: originTidOf :symtab :tid
-    if mo > 0 then return false
+    if mo.isZero.not then return false
     if (signatureNamesTemplate :symtab :tid) then return false
     return (stdFnRefEmittable :ast :symtab fid: tid)
 }
@@ -36857,7 +36867,7 @@ isComplexFnptrParam: function {
     nm: regNameView :symtab :tid
     ct: tid
     can: canonFnId :ast :symtab :ctx :tid name: nm
-    if can > 0 then ct = can
+    if can.isZero.not then ct = can
     if (isOrdinalVariant :symtab tid: ct) then return false
     tt: symtab.reg.typetypeOf typeId: ct
     isAgg: tt.isInterface or tt.isSum
@@ -36900,7 +36910,7 @@ emitOneFnptrTypedef: function {
     rn: pIds.length
     for ri < rn loop {
         rpv: pIds.get i: ri
-        if ownT > 0 then {
+        if ownT.isZero.not then {
             rpnB: (zast.poolTextAt
                 pool: ast.names
                 ref: (zast.nameid.create from: (pIdsNm.get i: ri).u32.orPanic)
@@ -36934,7 +36944,7 @@ emitOneFnptrTypedef: function {
         fwdDeclareSpec :symtab :ctx tid: (rIds.get i: fj) :buf
         fj = fj + 1
     }
-    if srt > 0 then fwdDeclareSpec :symtab :ctx tid: srt :buf
+    if srt.isZero.not then fwdDeclareSpec :symtab :ctx tid: srt :buf
     skipIt: false
     sj: u64
     sn: pIds.length
@@ -36948,7 +36958,7 @@ emitOneFnptrTypedef: function {
         ) then skipIt = true
         sj = sj + 1
     }
-    if srt > 0 when (isComplexFnptrParam :ast :symtab :ctx tid: srt) then skipIt = true
+    if srt.isZero.not when (isComplexFnptrParam :ast :symtab :ctx tid: srt) then skipIt = true
     if skipIt then return
     di: u64
     dn: pIds.length
@@ -36969,7 +36979,7 @@ emitOneFnptrTypedef: function {
         di = di + 1
     }
     rtid: fnRegReturnId :symtab :tid
-    if rtid > 0 then ensureFwdStruct :symtab :ctx tid: rtid :buf
+    if rtid.isZero.not then ensureFwdStruct :symtab :ctx tid: rtid :buf
     params: String
     pi: u64
     pn: pIdsNm.length
@@ -37734,7 +37744,7 @@ classifyMonoAt: function {
     tv: tcl
     tt: symtab.reg.typetypeOf typeId: tcl
     gen: isGenericType :symtab tid: tcl
-    isMono: (originTidOf :symtab tid: tcl) > 0
+    isMono: (originTidOf :symtab tid: tcl).isZero.not
     if (originIsTid
         :symtab
         tid: tcl
@@ -37855,9 +37865,9 @@ emitCollectionMonos: function {
         )
         tarr = tarr + 1
     }
-    tid: ztypes.tid
-    for tid < work.wListView.length loop {
-        lvId: work.wListView.get i: tid
+    tlv: u64
+    for tlv < work.wListView.length loop {
+        lvId: work.wListView.get i: tlv
         (emitListViewMono
             :ast
             :symtab
@@ -37866,7 +37876,7 @@ emitCollectionMonos: function {
             monoId: lvId
             :buf
         )
-        tid = tid.next
+        tlv = tlv + 1
     }
     # windows next: a window is a list view's layout, and a list's mutView
     # companion builds one by value
@@ -38305,8 +38315,9 @@ emitInstanceConformanceImpls: function {
     insts: ListVal ztypes.tid
     for each row: symtab.typing.conformance loop {
         it: row.implTypeId
-        if (symtab.reg.genericOriginOf tid: it).isZero.not when (nativeConformerRow :symtab tid: it
-        ).isZero when (insts.contains item: it).not then insts.append it
+        isMono: (symtab.reg.genericOriginOf tid: it).isZero.not
+        natRow: nativeConformerRow :symtab tid: it
+        if isMono when natRow.isZero when (insts.contains item: it).not then insts.append it
     }
     for each it: insts loop {
         implT: it
@@ -38346,7 +38357,7 @@ emitDefMethods: function {
         )
         if hasMethods then {
             rid: unitMemberTid :ast :symtab :ctx :ownerTid nameId: bm.name
-            if rid > 0 then (emitRecordMethods
+            if rid.isZero.not then (emitRecordMethods
                 :ast
                 :symtab
                 :ctx
@@ -38440,7 +38451,7 @@ protoParamCtype: function {
             tid: pid
             name: pn.stringView
         )
-        if rcid > 0 then cpid = rcid
+        if rcid.isZero.not then cpid = rcid
     }
     pct: typeRefC :ast :symtab :ctx tid: cpid :thisTid
     if pct.length == 0 then pct = "int64_t"
@@ -38767,7 +38778,7 @@ emitProtocolImpl: function {
     # a native mono (str) is boxed per instance, on demand (boxLabelFor); any
     # other instance conforms by a row of its own (emitInstanceConformanceImpls)
     isNat: (nativeConformerRow :symtab tid: implTid).isZero.not
-    if implOrig > 0 when isNat.not then {
+    if implOrig.isZero.not when isNat.not then {
         ownLbl: conformanceLabelFor :symtab :implTid :protoTid
         if ownLbl.length == 0 then return
     }
@@ -39259,7 +39270,7 @@ fileTypeIdOf: function {
     if tid.isZero then return ztypes.tid.zero
     if (symtab.reg.typetypeOf typeId: tid) != ztypes.ztypetype.classType then return ztypes.tid.zero
     fileOrig: originTidOf :symtab :tid
-    if fileOrig > 0 then return ztypes.tid.zero
+    if fileOrig.isZero.not then return ztypes.tid.zero
     mo: (symtab.typing.declChildOf
         pool: ast.names
         parentTypeId: tid
@@ -40180,9 +40191,9 @@ emitUserIterCall: function {
     if rid0.isZero then return ""
     iterId: iterClassWithCall :ast :symtab :ctx :rid0
     if (symtab.reg.typetypeOf typeId: iterId) != ztypes.ztypetype.classType then return ""
-    if (originTidOf :symtab tid: iterId) > 0 then return ""
+    if (originTidOf :symtab tid: iterId).isZero.not then return ""
     itn: regNameOf :symtab tid: iterId
-    if (canonFnId :ast :symtab :ctx tid: iterId name: itn.stringView) <= 0 then return ""
+    if (canonFnId :ast :symtab :ctx tid: iterId name: itn.stringView).isZero then return ""
     cco: symtab.typing.declChildOfId parentTypeId: iterId nameId: zast.names.wkCall
     if cco.none then return ""
     callC: ctxCname :ctx tid: cco
@@ -40325,7 +40336,7 @@ dispatchSlotNames: function {
     mpNames: List String
     mpIds: ListVal ztypes.tid
     mpIds9Nm: ListVal u64
-    if mtid > 0 then (recFieldLists
+    if mtid.isZero.not then (recFieldLists
         :ast
         :symtab
         tid: mtid
@@ -41276,7 +41287,7 @@ structDestroyNontrivial: function {
             nameId: (zast.nameid.create from: fnameId.u32.orPanic)
         ).not then {
             if fid == ctx.strTid then return true
-            if (fieldIsBox :symtab :fid) > 0 then return true
+            if (fieldIsBox :symtab :fid).isZero.not then return true
             fmid: chaseAggregateTypedef :symtab :ctx tid: fid
             if (symtab.reg.needsDestructor typeId: fmid) then return true
             if (isHeapPtrCollection
@@ -41333,7 +41344,7 @@ emitStructDestructor: function {
                 dsP: memberCPrefix name: fname.stringView
                 ds: "    \{ctx.strC}_free(&p->\{dsP}\{fname});\n"
                 buf.append ds
-            } else if bxF > 0 then {
+            } else if bxF.isZero.not then {
                 # a Box field IS the cell's pointer: its destroy takes the value
                 bxC: ctxCname :ctx tid: bxF
                 bxP: memberCPrefix name: fname.stringView
@@ -42344,7 +42355,7 @@ emitClassMonoMethods: function {
     t8: ztypes.tid
     for t8 < last8 loop {
         go8: symtab.reg.genericOriginOf tid: t8
-        if go8 > 0 when go8.u64 == tplId then {
+        if go8.isZero.not when go8.u64 == tplId then {
             emitMonoMethodsIn :ast :symtab :ctx span: isItems monoId: t8 :declOnly :buf
             emitMonoMethodsIn :ast :symtab :ctx span: asItems monoId: t8 :declOnly :buf
         }
@@ -43027,7 +43038,7 @@ methodReturnC: function {
     ret: "void".string
     {
         rto: fnReturnTidOf :symtab tid: mid
-        if rto > 0 then {
+        if rto.isZero.not then {
             rr: (typeRefC
                 :ast
                 :symtab
@@ -43049,7 +43060,7 @@ methodReturnC: function {
             if mrr.length > 0 then ret = mrr.take
         } case none then null
     }
-    if ret.stringView == "void" when thisTid > 0 when (
+    if ret.stringView == "void" when thisTid.isZero.not when (
         (ztypecheck.fnReturnBaseNameIdOf :ast :op) == zast.names.wkThis
     ) then {
         tcb: ctxCname :ctx tid: thisTid
@@ -43059,7 +43070,7 @@ methodReturnC: function {
         rbn: ztypecheck.fnReturnBaseNameOf :ast :op
         if rbn.length > 0 then {
             rbi: userFnId :ast :symtab :ctx name: rbn.stringView
-            if rbi > 0 then {
+            if rbi.isZero.not then {
                 rr2: (typeRefC
                     :ast
                     :symtab
@@ -43079,7 +43090,7 @@ methodReturnC: function {
     if ret.stringView != "void" then {
         retColId: ztypes.tid
         rtoR: symtab.reg.returnTypeOf tid: mid
-        if rtoR > 0 then retColId = rtoR
+        if rtoR.isZero.not then retColId = rtoR
         if retColId.isZero then {
             mroR: ztypecheck.methodReturnOf st: symtab :mid
             match (
@@ -43088,7 +43099,7 @@ methodReturnC: function {
                 retColId = mroR
             } case none then null
         }
-        if retColId > 0 when (isHeapPtrCollection
+        if retColId.isZero.not when (isHeapPtrCollection
             :symtab
             :ctx
             tid: retColId

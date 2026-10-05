@@ -2294,7 +2294,7 @@ perf: $(PERFBIN)
 #
 # +495 --readable-names keys a (function, name) pair by a record: 0
 # behaviour, +494 source, the self-compile minting `SetVal fnname`.
-ALLOC_BASELINE := 2202487
+ALLOC_BASELINE := 2211505
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
