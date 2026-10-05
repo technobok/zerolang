@@ -379,7 +379,7 @@ schemaSql: function {} out String is {
         s: "CREATE TABLE IF NOT EXISTS narrowed_subtype (entry_id INTEGER NOT NULL, name TEXT NOT NULL, type_id INTEGER, excluded INTEGER NOT NULL);\n"
     )
     (acc.append
-        s: "CREATE TABLE IF NOT EXISTS generic_child (parent_id INTEGER NOT NULL, arg_key INTEGER NOT NULL, child_id INTEGER NOT NULL);\n"
+        s: "CREATE TABLE IF NOT EXISTS generic_child (parent_id INTEGER NOT NULL, arg_key INTEGER NOT NULL, arg_is_value INTEGER NOT NULL, child_id INTEGER NOT NULL);\n"
     )
     (acc.append
         s: "CREATE TABLE IF NOT EXISTS generic_arg (spec_id INTEGER NOT NULL, ordinal INTEGER NOT NULL, arg_id INTEGER NOT NULL, arg_is_value INTEGER NOT NULL);\n"
@@ -1197,7 +1197,9 @@ ZDumper: class {
     }
 
     # appendGenericChildren -- one row per specialization-tree edge:
-    # parent type-id x argument key -> child spec type-id.
+    # parent type-id x argument key -> child spec type-id. A type argument's
+    # key is a type id and a value argument's key is the value itself, so
+    # arg_is_value says which space arg_key is in (as generic_arg does).
     appendGenericChildren: function {:this st: zenv.ZSymbolTable.view} is {
         n: st.reg.nextTid
         tid: ztypes.tid
@@ -1205,11 +1207,11 @@ ZDumper: class {
             if tid >= st.reg.nextTid then return
             zt: st.reg.typeById.get i: tid
             for each ge: zt.typeChildren.iterateItems loop {
-                row: "INSERT OR IGNORE INTO generic_child VALUES (\{tid}, \{ge.key}, \{ge.value});\n"
+                row: "INSERT OR IGNORE INTO generic_child VALUES (\{tid}, \{ge.key}, 0, \{ge.value});\n"
                 this.acc.append s: row
             }
             for each gv: zt.valueChildren.iterateItems loop {
-                row: "INSERT OR IGNORE INTO generic_child VALUES (\{tid}, \{gv.key}, \{gv.value});\n"
+                row: "INSERT OR IGNORE INTO generic_child VALUES (\{tid}, \{gv.key}, 1, \{gv.value});\n"
                 this.acc.append s: row
             }
             tid = tid.next
