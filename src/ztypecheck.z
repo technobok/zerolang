@@ -4395,8 +4395,8 @@ returnParamTid: function {
     enclDecl: ztypes.declid
     ast: Ast.view
     oId: zast.nodeid
-} out u64 is {
-    if oId.isZero then return 0
+} out ztypes.tid is {
+    if oId.isZero then return ztypes.tid.zero
     o: ast.nodes.get i: oId
     bnId: atomNameId :ast n: o
     # a marker-suffixed generic return (`of.take` / `of.borrow`) reads its
@@ -4407,7 +4407,7 @@ returnParamTid: function {
         return (genericParamTidMint :st :ast tdecl: enclDecl nameId: bnId)
     }
 
-    return 0
+    return ztypes.tid.zero
 }
 
 
@@ -4584,8 +4584,8 @@ partialReturnTid: function {
     scope: ztypes.declid
     enclDecl: ztypes.declid
     oId: zast.nodeid
-} out u64 is {
-    if oId.isZero then return 0
+} out ztypes.tid is {
+    if oId.isZero then return ztypes.tid.zero
     return (partialTyperefTid
         :st
         :scope
@@ -6817,23 +6817,23 @@ recordFunctionReturn: function {
     receiverEnclDecl: ztypes.declid
     fnode: fnref
 } is {
-    rpt4: u64
+    rpt4: ztypes.tid
     frOpt: fnode.returntype
     if isgen then {
         rpt4 = returnParamTid :st :ast enclDecl: fnDecl oId: frOpt
     }
-    if rpt4 == 0 then {
+    if rpt4.isZero then {
         frOpt9b: fnode.returntype
         rpt4 = returnParamTid :st :ast enclDecl: receiverEnclDecl oId: frOpt9b
     }
-    if rpt4 > 0 then {
+    if rpt4.isZero.not then {
         st.reg.setReturnType typeId: fid value: rpt4
         # a method whose return is a generic param (its own OR the enclosing
         # type's) is a per-instance clone candidate: mintMono's clone loop
         # (gated on isgeneric) must substitute the return for each mono
         st.reg.setGeneric typeId: fid value: true
     }
-    if rpt4 == 0 then {
+    if rpt4.isZero then {
         # a composite parameterized return whose argument names a generic
         # parameter -- `(ListIter :of).borrow`, `(Cell :t)` -- resolves to a
         # partial spec, which the clone heals through respecialize. Concrete
@@ -6842,7 +6842,7 @@ recordFunctionReturn: function {
         # first callers, never the rule.
         # a generic function's own parameters are declared on it, an enclosing
         # type's on the receiver's declaration
-        prt4: u64
+        prt4: ztypes.tid
         if isgen then {
             prt4 = (partialReturnTid
                 :st
@@ -6853,7 +6853,7 @@ recordFunctionReturn: function {
                 oId: fnode.returntype
             )
         }
-        if prt4 == 0 then {
+        if prt4.isZero then {
             prt4 = (partialReturnTid
                 :st
                 scope: rf
@@ -6863,7 +6863,7 @@ recordFunctionReturn: function {
                 oId: fnode.returntype
             )
         }
-        if prt4 > 0 then st.reg.setReturnType typeId: fid value: prt4
+        if prt4.isZero.not then st.reg.setReturnType typeId: fid value: prt4
         markNativeRecordClone :st :fid enclDecl: receiverEnclDecl partial: prt4
     }
     if (returnHasBorrowMarker :ast oId: fnode.returntype) then {
@@ -9591,7 +9591,7 @@ resolveData: function {
         nameId: zast.names.wkTag
         childTypeId: tagId
     )
-    st.reg.setDataElemType typeId: did value: elemTid.u64
+    st.reg.setDataElemType typeId: did value: elemTid
     return did
 }
 
@@ -18619,7 +18619,7 @@ fillMonoMethodSignature: function {
         )
         if rnmId.isZero.not then {
             rgo2: gpNames.get key: rnmId
-            rid2: u64
+            rid2: ztypes.tid
             match (
                 rgo2
             ) case some then {
@@ -18643,7 +18643,7 @@ fillMonoMethodSignature: function {
                     rid2 = rlo2
                 } case none then null
             }
-            if rid2 > 0 then st.reg.setReturnType typeId: newFnId value: rid2
+            if rid2.isZero.not then st.reg.setReturnType typeId: newFnId value: rid2
         }
     }
 }
@@ -19536,7 +19536,7 @@ unitMonoJoinTrie: function {
     monoId: ztypes.tid
 } is {
     if tplTid.isZero then return
-    cur: tplTid.u64
+    cur: tplTid
     n: args.length
     i: u64
     for i < n loop {
@@ -24082,7 +24082,7 @@ refuseHashWithoutPartHash: function {
         st.typing.hashUsed.add item: bt
         (st.reg.setReturnType
             typeId: mo
-            value: (builtinTidT :st scope: st.curScope :ast base: "u64").u64
+            value: (builtinTidT :st scope: st.curScope :ast base: "u64")
         )
         return false
     }
@@ -24533,7 +24533,7 @@ mintValuePartialSpec: function {
 } out ztypes.tid is {
     mn: "\{st.reg.nameOf tid: templateId}\{sfx}"
     mid: st.reg.newType name: mn.stringView typetype: ztypes.ztypetype.genericParam
-    st.reg.setGenericOrigin typeId: mid value: templateId.u64
+    st.reg.setGenericOrigin typeId: mid value: templateId
     st.reg.setPartial typeId: mid value: true
     for each a: args8 loop st.reg.appendGenericArg specId: mid arg: a
     return mid
@@ -24787,8 +24787,8 @@ mintEntryAndSizedChildren: function {
     }
     if templateId == strTid then {
         tstId: mintCollectionMethod :st :ast :monoId m: "string"
-        sgid: (builtinTidT :st scope: rf :ast base: "String").u64
-        if sgid > 0 then (st.reg.setReturnType
+        sgid: builtinTidT :st scope: rf :ast base: "String"
+        if sgid.isZero.not then (st.reg.setReturnType
             typeId: tstId
             value: sgid
         )
@@ -24818,8 +24818,8 @@ mintStrCompare: function {
     )
     st.reg.setThisParamName typeId: cft nameId: zast.names.wkThis
     st.typing.setMemberType parentTypeId: cft nameId: zast.names.wkRhs childTypeId: monoId
-    i32id: (builtinTidT :st scope: rf :ast base: "i32").u64
-    if i32id > 0 then st.reg.setReturnType typeId: cft value: i32id
+    i32id: builtinTidT :st scope: rf :ast base: "i32"
+    if i32id.isZero.not then st.reg.setReturnType typeId: cft value: i32id
 }
 
 # templateIsCollection -- whether a template is one of the builtin collection
@@ -26528,7 +26528,7 @@ valuePartialConstruction: function {
             name: tplNm.stringView
             typetype: ztypes.ztypetype.genericParam
         )
-        st.reg.setGenericOrigin typeId: mid value: tplId.u64
+        st.reg.setGenericOrigin typeId: mid value: tplId
         st.reg.setPartial typeId: mid value: true
         st.typing.valuePartialAt.set key: call.nid value: mid
     }
@@ -41533,7 +41533,7 @@ checkBareGenericReturns: function {ast: Ast st: zenv.ZSymbolTable} is {
         nameT: (walkLookupTyperefFrom :st :ast scope: rsc baseId: root).or d: ztypes.tid.zero
         if nameT.isZero.not when (st.reg.genericOriginOf tid: rtb).u64 == nameT then {
             fk: st.typing.funcReturnNode.keyAt i: ri - 1
-            if fk.isZero.not then st.reg.setReturnType typeId: fk value: rtb.u64
+            if fk.isZero.not then st.reg.setReturnType typeId: fk value: rtb
         }
     }
 }
