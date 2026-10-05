@@ -2731,7 +2731,7 @@ originIsTid: function {
 } out bool is {
     if originTid.isZero then return false
     ot: originTidOf :symtab :tid
-    return ot.u64 == originTid
+    return ot == originTid
 }
 
 # dataconstkey / dataslotkey -- which element of which data block. A data
@@ -3195,9 +3195,9 @@ Ctx: class {
     # the function types whose `_ft` typedef the program needs: every one a
     # written signature names before the typedef pass, and every one a field,
     # parameter, variable or return declares
-    fnptrDemand: IdSet u64
+    fnptrDemand: IdSet ztypes.tid
     # the function types whose `_ft` typedef the pass wrote
-    fnptrWritten: IdSet u64
+    fnptrWritten: IdSet ztypes.tid
     # the typedef pass has run: a function type met after it must be one it wrote
     fnptrPassDone: bool
     # the (impl, protocol) pairs a NATIVE conformer is boxed as -- a String or a
@@ -7164,7 +7164,7 @@ instanceMethodArgValue: function {
     call: zast.callrow.view
     mco: ztypes.tid
     posParamName: StringView
-    posParamId: u64
+    posParamId: ztypes.tid
     posIdx0: u64
     av: String.borrow
 } out instargval is {
@@ -10239,7 +10239,7 @@ emitInterpArgForParam: function {
     n: astnode.view
     fid: ztypes.tid
     pname: StringView
-    pid: u64
+    pid: ztypes.tid
 } out String is {
     sx: emitInterpArgExpr :ast :symtab :ctx :n
     if sx.length == 0 then return ""
@@ -11893,7 +11893,7 @@ ctorInterpArgAt: function {
     aid: zast.nodeid
     fid: ztypes.tid
     pname: StringView
-    pid: u64
+    pid: ztypes.tid
 } out String is {
     if aid.isZero then return ""
     return (emitInterpArgForParam :ast :symtab :ctx n: (ast.nodes.get i: aid) :fid :pname :pid)
@@ -14059,9 +14059,9 @@ emitMethodDeclCall: function {
         :ownerTid
     ).not then return ""
     isIoNat: (
-        (ownerTid.u64 == ctx.ioFileTid) or
-        (ownerTid.u64 == ctx.netListenerTid) or
-        (ownerTid.u64 == ctx.netConnTid)
+        (ownerTid == ctx.ioFileTid) or
+        (ownerTid == ctx.netListenerTid) or
+        (ownerTid == ctx.netConnTid)
     )
     if isIoNat then return ""
     if isCreate then return ""
@@ -15773,7 +15773,7 @@ emitUserTypeMemberRead: function {
         ffcc: ioCanonCname :ast :symtab :ctx canon: fbtn
         if ffcc.length > 0 then ffc = ffcc.take
         if isNetU then {
-            demandNetMember :ctx tid: bstamp.u64 member: mn2
+            demandNetMember :ctx tid: bstamp member: mn2
         } else {
             needsAddM :ctx uname: "io" memb: "@unit"
             ffm: "file_\{mn2}"
@@ -19493,7 +19493,7 @@ stringviewOfBaseNid: function {
             ) then return zast.nodeid
             bnid: atomNodeId n: (ast.nodes.get i: n.parent)
             sid: stampIdOf :symtab nid: bnid
-            if sid.u64 == (builtinTid :ast :symtab base: "String") then return bnid
+            if sid == (builtinTid :ast :symtab base: "String") then return bnid
         }
         return zast.nodeid
     } else {
@@ -29966,10 +29966,10 @@ typeRefC: function {
 # typedef must be one the pass wrote, or the C names a type that does not exist.
 noteFnptrUse: function {ctx: Ctx tid: ztypes.tid} is {
     if ctx.fnptrPassDone.not then {
-        ctx.fnptrDemand.add item: tid.u64
+        ctx.fnptrDemand.add item: tid
         return
     }
-    if (ctx.fnptrWritten.has item: tid.u64) then return
+    if (ctx.fnptrWritten.has item: tid) then return
     (emitFail
         :ctx
         what: "a function type spelled after its typedefs were written, and not among them"
@@ -31103,7 +31103,7 @@ unitTemplateTid: function {
     symtab: zenv.ZSymbolTable.view
     templateName: StringView
     templateUnitOpId: zast.nodeid
-} out u64 is {
+} out ztypes.tid is {
     tgo: (ztypecheck.declTypeIdOf
         st: symtab
         declId: (symtab.typing.declFindChild
@@ -31113,7 +31113,7 @@ unitTemplateTid: function {
     )
     if tgo.isZero.not then return tgo
     tuo: ast.nodes.get i: templateUnitOpId
-    if tuo.unitdef.not then return 0
+    if tuo.unitdef.not then return ztypes.tid.zero
     return (stampIdOf :symtab nid: tuo.nodeid)
 }
 
@@ -31247,14 +31247,14 @@ emitUnitMonoInstances: function {
         :templateName
         :templateUnitOpId
     )
-    if tplId == 0 then return
+    if tplId.isZero then return
     last: symtab.reg.nextTid
     t: ztypes.tid
     for t < last loop {
         tt: t
         if (symtab.reg.typetypeOf typeId: tt) == ztypes.ztypetype.unitType then {
             go9opt: symtab.reg.genericOriginOf tid: tt
-            if go9opt.isZero.not when go9opt.u64 == tplId then {
+            if go9opt.isZero.not when go9opt == tplId then {
                 emitUnitMonoMembers :ast :symtab :ctx :bodyIds :t :declOnly :buf
             }
         }
@@ -31362,7 +31362,7 @@ emitFnMonoInstances: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    templateFnId: u64
+    templateFnId: ztypes.tid
     templateFnOp: astnode.view
     declOnly: bool
     buf: String.borrow
@@ -31373,7 +31373,7 @@ emitFnMonoInstances: function {
         isMono: false
         if (symtab.reg.typetypeOf typeId: t) == ztypes.ztypetype.functionType then {
             go9opt: symtab.reg.genericOriginOf tid: t
-            if go9opt.u64 == templateFnId when go9opt.isZero.not then isMono = true
+            if go9opt == templateFnId when go9opt.isZero.not then isMono = true
         }
         if isMono then {
             fnm: regNameOf :symtab tid: t
@@ -32683,8 +32683,8 @@ emitC: function {
         lateDefs: String
         tagStems: (MapRV String v: ztypes.tid)
         fwdDeclaredTypes: IdSet ztypes.tid
-        fnptrDemand: IdSet u64
-        fnptrWritten: IdSet u64
+        fnptrDemand: IdSet ztypes.tid
+        fnptrWritten: IdSet ztypes.tid
         fnptrPassDone: false
         nativeBoxImpls: ListVal ztypes.tid
         nativeBoxProtos: ListVal ztypes.tid
@@ -35882,7 +35882,7 @@ emitNetClasses: function {ctx: Ctx buf: String.borrow} is {
 # demandNetMember -- load the fragment of a Listener's native method, demanded as
 # `listener_<name>`. A Conn's methods load on the Conn itself (netConnLive), so a
 # Conn call demands nothing here.
-demandNetMember: function {ctx: Ctx tid: u64 member: StringView} is {
+demandNetMember: function {ctx: Ctx tid: ztypes.tid member: StringView} is {
     if tid != ctx.netListenerTid then return
     lm: "listener_\{member}"
     needsAddM :ctx uname: "net" memb: lm.stringView
@@ -36267,10 +36267,10 @@ monoDependsOnUser: function {
     ctx: Ctx.view
     monoId: ztypes.tid
     userList: (ListVal ztypes.tid).view
-    seen: ListVal u64
+    seen: ListVal ztypes.tid
 } out bool is {
     if (seen.contains item: monoId) then return false
-    seen.append monoId.u64
+    seen.append monoId
     elems: ListVal ztypes.tid
     monoElemIdsOf :symtab :ctx :monoId acc: elems
     ei: u64
@@ -36302,7 +36302,7 @@ monoIsLate: function {
     monoId: ztypes.tid
     userList: (ListVal ztypes.tid).view
 } out bool is {
-    seen: ListVal u64
+    seen: ListVal ztypes.tid
     if (monoDependsOnUser :ast :symtab :ctx :monoId :userList :seen) then return true
     return (monoHoldsCollectionPassMono :symtab :ctx :monoId)
 }
@@ -36386,8 +36386,8 @@ userDefnRefsUnemitted: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
     typeId: ztypes.tid
-    group: (IdSet u64).view
-    emitted: (IdSet u64).view
+    group: (IdSet ztypes.tid).view
+    emitted: (IdSet ztypes.tid).view
 } out bool is {
     tt: symtab.reg.typetypeOf :typeId
     fids: ListVal ztypes.tid
@@ -36423,12 +36423,12 @@ monoLateDepsMet: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
     monoId: ztypes.tid
-    group: IdSet u64
-    emitted: IdSet u64
-    seen: ListVal u64
+    group: IdSet ztypes.tid
+    emitted: IdSet ztypes.tid
+    seen: ListVal ztypes.tid
 } out bool is {
     if (seen.contains item: monoId) then return true
-    seen.append monoId.u64
+    seen.append monoId
     elems: ListVal ztypes.tid
     monoElemIdsOf :symtab :ctx :monoId acc: elems
     ei: u64
@@ -36872,12 +36872,12 @@ emitOneFnptrTypedef: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     tid: ztypes.tid
-    seen: ListVal u64
+    seen: ListVal ztypes.tid
     fnOwner: (IdMapV ztypes.tid v: ztypes.tid)
     buf: String.borrow
 } is {
     if (seen.contains item: tid) then return
-    seen.append tid.u64
+    seen.append tid
     pIds: ListVal ztypes.tid
     pIdsNm: ListVal u64
     recFieldIds :symtab :tid ids: pIds nameIds: pIdsNm
@@ -36992,7 +36992,7 @@ emitOneFnptrTypedef: function {
     }
     if pn == 0 then params.append "void"
     retc: fnptrRetTypeC :ast :symtab :ctx :tid
-    ctx.fnptrWritten.add item: tid.u64
+    ctx.fnptrWritten.add item: tid
     cb: ctxCnameView :ctx :tid
     line: "typedef \{retc} (*\{cb}_ft)(\{params});\n"
     buf.append line
@@ -37008,7 +37008,7 @@ emitFnptrTypedefs: function {
     buf: String.borrow
 } is {
     last: symtab.reg.nextTid
-    seen: ListVal u64
+    seen: ListVal ztypes.tid
     # method FUNCTION tid -> owning object tid, for receiver-param resolution
     fnOwner: IdMapV ztypes.tid v: ztypes.tid
     {
@@ -37047,7 +37047,7 @@ emitFnptrTypedefs: function {
     for t0 < last loop {
         if (
             (symtab.reg.typetypeOf typeId: t0) == ztypes.ztypetype.functionType
-        ) when (ctx.fnptrDemand.has item: t0.u64) when (fnptrTypedefEligible :ast :symtab tid: t0
+        ) when (ctx.fnptrDemand.has item: t0) when (fnptrTypedefEligible :ast :symtab tid: t0
         ) then {
             (emitOneFnptrTypedef
                 :ast
@@ -37231,7 +37231,7 @@ closeLateGroup: function {
     ctx: Ctx.view
     userList: (ListVal ztypes.tid).view
     lateGroup: ListVal ztypes.tid
-    lateSet: IdSet u64
+    lateSet: IdSet ztypes.tid
 } is {
     li0: u64
     ln0: lateGroup.length
@@ -37241,7 +37241,7 @@ closeLateGroup: function {
         li0 = li0 + 1
     }
     # closure: a user struct embedding a late-group member by value is late too
-    emptySet: IdSet u64
+    emptySet: IdSet ztypes.tid
     changed: true
     for changed loop {
         changed = false
@@ -37272,7 +37272,7 @@ emitEarlyUserStructs: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     userList: (ListVal ztypes.tid).view
-    lateSet: (IdSet u64).view
+    lateSet: (IdSet ztypes.tid).view
     buf: String.borrow
 } is {
     e0: u64
@@ -37307,11 +37307,11 @@ lateMemberReady: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
     tid: ztypes.tid
-    group: IdSet u64
-    emitted: IdSet u64
+    group: IdSet ztypes.tid
+    emitted: IdSet ztypes.tid
 } out bool is {
     if (lateMemberIsMono :symtab :ctx :tid) then {
-        seen: ListVal u64
+        seen: ListVal ztypes.tid
         return (monoLateDepsMet :ast :symtab :ctx monoId: tid :group :emitted :seen)
     }
     return (userDefnRefsUnemitted :symtab :ctx typeId: tid :group :emitted).not
@@ -37350,10 +37350,10 @@ emitLateGroupOrdered: function {
     ctx: Ctx
     runtimeDir: StringView
     lateGroup: (ListVal ztypes.tid).view
-    lateSet: IdSet u64
+    lateSet: IdSet ztypes.tid
     buf: String.borrow
 } is {
-    emittedSet: IdSet u64
+    emittedSet: IdSet ztypes.tid
     allOut: emitLateFixpoint :ast :symtab :ctx :runtimeDir :lateGroup :lateSet :emittedSet :buf
     if allOut then return
     bodies: String
@@ -37389,8 +37389,8 @@ emitLateFixpoint: function {
     ctx: Ctx
     runtimeDir: StringView
     lateGroup: (ListVal ztypes.tid).view
-    lateSet: IdSet u64
-    emittedSet: IdSet u64
+    lateSet: IdSet ztypes.tid
+    emittedSet: IdSet ztypes.tid
     buf: String.borrow
 } out bool is {
     for true loop {
@@ -37438,7 +37438,7 @@ emitStuckContainerHeads: function {
     ctx: Ctx
     runtimeDir: StringView
     lateGroup: (ListVal ztypes.tid).view
-    emittedSet: IdSet u64
+    emittedSet: IdSet ztypes.tid
     buf: String.borrow
     bodies: String.borrow
 } is {
@@ -37503,7 +37503,7 @@ emitUserStructsOrdered: function {
     lateGroup: ListVal ztypes.tid
     collectLateGroup :ast :symtab :ctx :userList acc: lateGroup :last
     collectLateInstances :ast :symtab :ctx :userList acc: lateGroup :last
-    lateSet: IdSet u64
+    lateSet: IdSet ztypes.tid
     closeLateGroup :symtab :ctx :userList :lateGroup :lateSet
     emitEarlyUserStructs :ast :symtab :ctx :userList :lateSet :buf
     emitLateGroupOrdered :ast :symtab :ctx :runtimeDir :lateGroup :lateSet :buf
@@ -37955,7 +37955,7 @@ emitUserGenericInstances: function {
     buf: String.borrow
 } is {
     order: ListVal ztypes.tid
-    pending: IdSet u64
+    pending: IdSet ztypes.tid
     for each vv: work.wUgVar loop {
         order.append from: vv
         pending.add item: vv
@@ -37986,7 +37986,7 @@ emitReadyInstances: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     order: (ListVal ztypes.tid).view
-    pending: (IdSet u64).view
+    pending: (IdSet ztypes.tid).view
     emitted: IdSet ztypes.tid
     buf: String.borrow
 } out u64 is {
@@ -38036,7 +38036,7 @@ emitUserGenericInstance: function {
 ugEmbedsPending: function {
     symtab: zenv.ZSymbolTable.view
     tid: ztypes.tid
-    pending: (IdSet u64).view
+    pending: (IdSet ztypes.tid).view
     emitted: (IdSet ztypes.tid).view
 } out bool is {
     ids: ListVal ztypes.tid
@@ -38445,7 +38445,7 @@ protoParamCtype: function {
     if pct.length == 0 then pct = "int64_t"
     isCol: false
     ccm: chaseAggregateTypedef :symtab :ctx tid: cpid
-    if (ccm.u64 == cpid).not then isCol = true
+    if (ccm == cpid).not then isCol = true
     if (isCollectionOriginTid
         :ctx
         originTid: (originTidOf :symtab tid: cpid)
@@ -39392,7 +39392,7 @@ emitFileMethodCall: function {
         ) then isNet = true
     }
     if isNet then {
-        demandNetMember :ctx tid: fid.u64 member: mn
+        demandNetMember :ctx tid: fid member: mn
     } else {
         needsAddM :ctx uname: "io" memb: "@unit"
         fmm: "file_\{mn}"
@@ -42343,7 +42343,7 @@ emitClassMonoMethods: function {
     t8: ztypes.tid
     for t8 < last8 loop {
         go8: symtab.reg.genericOriginOf tid: t8
-        if go8.isZero.not when go8.u64 == tplId then {
+        if go8.isZero.not when go8 == tplId then {
             emitMonoMethodsIn :ast :symtab :ctx span: isItems monoId: t8 :declOnly :buf
             emitMonoMethodsIn :ast :symtab :ctx span: asItems monoId: t8 :declOnly :buf
         }
