@@ -36095,7 +36095,7 @@ checkDo: function {
     checkStatement :st :unitDecl :ast blockId: donode.statement
     result: lastStmtType :st :ast block: (ast.nodes.get i: donode.statement)
     broke: st.breakLeavesInnermost
-    endTook: ListVal u64
+    endTook: ListVal ztypes.declid
     if broke then st.takenDeclsInScope into: endTook
     if broke.not then st.markUnconditional marker: doMarker
     st.popTo marker: doMarker
@@ -37334,9 +37334,9 @@ reportLoopMoves: function {
     for i < st.entryMark loop {
         d: st.takenDeclAt :i
         i = i + 1
-        if d == 0 then continue
+        if d.isZero then continue
         if (st.isOnceTake :run :d) then continue
-        reportLoopMove :st :ast :fornode d: (ztypes.declid.create from: d)
+        reportLoopMove :st :ast :fornode :d
     }
 }
 
@@ -37351,9 +37351,8 @@ reportContinueMoves: function {
     run: zenv.looprun
 } is {
     for st.loopContinueTakes.length > run.contStart loop {
-        dn: st.loopContinueTakes.pop
-        if (st.isOnceTake :run d: dn) then continue
-        d: ztypes.declid.create from: dn
+        d: st.loopContinueTakes.pop
+        if (st.isOnceTake :run :d) then continue
         nid: zast.nameid.create from: (st.typing.declNameOf declId: d)
         if (st.findLocal nameId: nid) == d then reportLoopMove :st :ast :fornode :d
     }
@@ -37367,8 +37366,8 @@ reportLoopMove: function {
     fornode: forref
     d: ztypes.declid
 } is {
-    if (st.loopMoveReported.has item: d.u64) then return
-    st.loopMoveReported.add item: d.u64
+    if (st.loopMoveReported.has item: d) then return
+    st.loopMoveReported.add item: d
     {
         nid: zast.nameid.create from: (st.typing.declNameOf declId: d)
         nm: zast.nameTextAt :ast ref: nid
@@ -37397,7 +37396,7 @@ reportLoopMove: function {
 # so each is moved only maybe (D3).
 relayBreakTakes: function {st: zenv.ZSymbolTable run: zenv.looprun} is {
     for st.loopBreakTakes.length > run.breakStart loop {
-        d: ztypes.declid.create from: st.loopBreakTakes.pop
+        d: st.loopBreakTakes.pop
         nm: st.typing.declNameOf declId: d
         nid: zast.nameid.create from: nm
         if (st.findLocal nameId: nid) == d then (st.invalidateDeclAs
@@ -37414,13 +37413,16 @@ relayBreakTakes: function {st: zenv.ZSymbolTable run: zenv.looprun} is {
 # path reached past the block without it. A block-local is gone with the
 # block, and a name it shadowed must not be consumed in its place, so only a
 # declaration the name still resolves to is laid.
-settleDoBreakTakes: function {st: zenv.ZSymbolTable brkMark: u64 endTook: (ListVal u64).view} is {
+settleDoBreakTakes: function {
+    st: zenv.ZSymbolTable
+    brkMark: u64
+    endTook: (ListVal ztypes.declid).view
+} is {
     for st.loopBreakTakes.length > brkMark loop {
-        d: ztypes.declid.create from: st.loopBreakTakes.pop
+        d: st.loopBreakTakes.pop
         if (declStillResolves :st :d) then st.invalidateDeclAs declId: d loc: takenHere maybe: true
     }
-    for each dv: endTook loop {
-        d2: ztypes.declid.create from: dv
+    for each d2: endTook loop {
         if (declStillResolves :st d: d2) then st.markTakeMaybe declId: d2
     }
 }
@@ -37438,15 +37440,15 @@ declStillResolves: function {st: zenv.ZSymbolTable.view d: ztypes.declid} out bo
 # only maybe (D3).
 ArmTakes: class {
     # every local some arm moved
-    taken: IdSet u64
+    taken: IdSet ztypes.declid
     # how many reaching arms moved each
-    counts: (IdMapV u64 v: u64)
+    counts: (IdMapV ztypes.declid v: u64)
     # how many arms reach the statement's end
     reached: u64
     # every local moved out before the statement that some reaching arm refilled
-    refilled: IdSet u64
+    refilled: IdSet ztypes.declid
     # how many reaching arms refilled each
-    refillCounts: (IdMapV u64 v: u64)
+    refillCounts: (IdMapV ztypes.declid v: u64)
 }
 
 # settleArmTakes -- an arm's takes once its walk ends. A path that leaves the
@@ -37457,7 +37459,7 @@ ArmTakes: class {
 # divergence kind, `none` for a reachable end.
 settleArmTakes: function {
     st: zenv.ZSymbolTable
-    liveBefore: (IdSet u64).view
+    liveBefore: (IdSet ztypes.declid).view
     taken: ArmTakes
 } out u8 is {
     k: st.settleDivergingTakes
@@ -37470,15 +37472,14 @@ settleArmTakes: function {
     # stamps its type. A take is an overlay over a persisting entry, so the
     # clear alone restores it. A take laid over it since, outside the arm (a
     # sibling clause's condition), is not the arm's.
-    for each vn: liveBefore loop {
-        vd: ztypes.declid.create from: vn
+    for each vd: liveBefore loop {
         if (st.takenInInnermost declId: vd) then {
-            taken.taken.add item: vn
+            taken.taken.add item: vd
             # an arm that moved it on only some of its paths does not count: a
             # path through it reaches the end still holding the local
             if k == zenv.divkind.none when (st.stateOfDecl declId: vd) != 2 then (taken.counts.set
-                key: vn
-                value: ((taken.counts.get key: vn).or d: 0) + 1
+                key: vd
+                value: ((taken.counts.get key: vd).or d: 0) + 1
             )
             st.clearTakenDecl declId: vd
         }
@@ -37486,7 +37487,7 @@ settleArmTakes: function {
     if k == zenv.divkind.none then {
         taken.reached = taken.reached + 1
         # a local moved out before the statement that this arm refilled
-        refilled: ListVal u64
+        refilled: ListVal ztypes.declid
         st.refilledInInnermost into: refilled
         for each rd: refilled loop {
             taken.refilled.add item: rd
@@ -37504,14 +37505,14 @@ invalidateTakenAcross: function {st: zenv.ZSymbolTable decls: ArmTakes.view exha
     for each vd: decls.taken loop {
         c: (decls.counts.get key: vd).or d: 0
         every: exhaustive and (decls.reached > 0) and (c == decls.reached)
-        st.invalidateDeclAs declId: (ztypes.declid.create from: vd) loc: takenHere maybe: every.not
+        st.invalidateDeclAs declId: vd loc: takenHere maybe: every.not
     }
     # a local moved out before it and refilled by every arm that reaches the end
     # of an exhaustive statement holds a value after it
     for each rd: decls.refilled loop {
         rc: (decls.refillCounts.get key: rd).or d: 0
         if exhaustive when decls.reached > 0 when rc == decls.reached then {
-            st.layRefill declId: (ztypes.declid.create from: rd)
+            st.layRefill declId: rd
         }
     }
 }
@@ -37582,7 +37583,7 @@ checkIfClauses: function {
     accFacts: List ArmPredFact
     guardFacts: List ArmPredFact
     branchTypes: ListVal ztypes.tid
-    liveBefore: (IdSet u64).view
+    liveBefore: (IdSet ztypes.declid).view
     takenAcross: ArmTakes
     skipDead: bool
     pBool: ztypes.tid
@@ -37619,7 +37620,7 @@ checkIfClauses: function {
         bt: checkClauseBody :st :unitDecl :ast :clause
         # what the conditions moved is not the arm's: they ran before it on
         # every path that reached this clause, the next clause's among them
-        cDecls: ListVal u64
+        cDecls: ListVal ztypes.declid
         cMaybes: ListVal bool
         cLocs: ListVal ztypes.zsrcpos
         if (st.takenBetween from: cStart to: cEnd) then (st.liftTakenBetween
@@ -37666,7 +37667,7 @@ checkIfClauses: function {
 # moved only maybe (D3), as is what a conjunct after the first moved.
 layConditionTakes: function {
     st: zenv.ZSymbolTable
-    decls: (ListVal u64).view
+    decls: (ListVal ztypes.declid).view
     maybes: (ListVal bool).view
     locs: (ListVal ztypes.zsrcpos).view
     later: bool
@@ -37674,7 +37675,7 @@ layConditionTakes: function {
     i: decls.length
     for i > 0 loop {
         i = i - 1
-        d: ztypes.declid.create from: (decls.get :i)
+        d: decls.get :i
         if (declStillResolves :st :d) then (st.invalidateDeclAs
             declId: d
             loc: optionval.some (locs.get :i)
@@ -38076,11 +38077,11 @@ checkIf: function {
     armEnds: st.openArmNarrowingEnds
     liveBefore: st.getLiveOwnedVars
     takenAcross: (ArmTakes
-        taken: IdSet u64
-        counts: (IdMapV u64 v: u64)
+        taken: IdSet ztypes.declid
+        counts: (IdMapV ztypes.declid v: u64)
         reached: 0
-        refilled: IdSet u64
-        refillCounts: (IdMapV u64 v: u64)
+        refilled: IdSet ztypes.declid
+        refillCounts: (IdMapV ztypes.declid v: u64)
     )
     nvId: ((walkLookupTyperef :st scope: st.curScope :ast :unitDecl base: "never").or
         d: ztypes.tid.zero
@@ -48466,7 +48467,7 @@ checkCaseClause: function {
     diverging: List String
     armTypes: ListVal ztypes.tid
     # the owned locals live before the match, and those an arm took
-    liveBefore: (IdSet u64).view
+    liveBefore: (IdSet ztypes.declid).view
     takenAcross: ArmTakes
 } out casearmfacts is {
     anyEmpty: false
@@ -48730,7 +48731,7 @@ checkCaseElse: function {
     covered: List String
     armTypes: ListVal ztypes.tid
     # the owned locals live before the match, and those an arm took
-    liveBefore: (IdSet u64).view
+    liveBefore: (IdSet ztypes.declid).view
     takenAcross: ArmTakes
 } out casearmfacts is {
     anyEmpty: false
@@ -48782,7 +48783,7 @@ walkCaseClauses: function {
     covered: List String
     diverging: List String
     armTypes: ListVal ztypes.tid
-    liveBefore: (IdSet u64).view
+    liveBefore: (IdSet ztypes.declid).view
     takenAcross: ArmTakes
 } out casearmfacts is {
     anyEmpty: false
@@ -48904,11 +48905,11 @@ checkCaseArms: function {
     # the match is done, as an `if` arm's does
     liveBefore: st.getLiveOwnedVars
     takenAcross: (ArmTakes
-        taken: IdSet u64
-        counts: (IdMapV u64 v: u64)
+        taken: IdSet ztypes.declid
+        counts: (IdMapV ztypes.declid v: u64)
         reached: 0
-        refilled: IdSet u64
-        refillCounts: (IdMapV u64 v: u64)
+        refilled: IdSet ztypes.declid
+        refillCounts: (IdMapV ztypes.declid v: u64)
     )
     st.pushBlock node: zast.nodeid
     if targetName.length > 0 then st.resetNarrowing nameId: (nameIdOf

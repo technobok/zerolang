@@ -357,7 +357,7 @@ openscope: record {
 # the live table
 ZEntryDumpRow: class {
     # the scope the entry belonged to
-    scopeId: u64
+    scopeId: ztypes.declid
     # where it sat in that scope, which shadowing resolves by
     position: u64
     # the entry's own id
@@ -426,30 +426,30 @@ ZSymbolTable: class {
     entries: List ZEntry
     # scopes the walk proved unreachable, so nothing inside one is reported
     # twice
-    unreachableScopes: IdSet u64
+    unreachableScopes: IdSet ztypes.declid
     # how each such scope became unreachable, a `divkind`: the first kind
     # recorded is the one control took
-    unreachableKinds: (IdMapV u64 v: u8)
+    unreachableKinds: (IdMapV ztypes.declid v: u8)
     # the open loops' bookkeeping, innermost last: each run marks its start
     # in the two lists below, which every open loop shares
     loopRuns: ListVal looprun
     # decl ids moved on a path that left its loop with `break`; the loop
     # re-lays them after itself
-    loopBreakTakes: ListVal u64
+    loopBreakTakes: ListVal ztypes.declid
     # decl ids consumed at a `continue`, which the next iteration would find
     # consumed
-    loopContinueTakes: ListVal u64
+    loopContinueTakes: ListVal ztypes.declid
     # decl ids moved by a loop's iterable binding, which runs once before the
     # loop and not per iteration
-    loopOnceTakes: ListVal u64
+    loopOnceTakes: ListVal ztypes.declid
     # locals already reported as moved inside a loop, so an enclosing loop
     # does not report them again
-    loopMoveReported: IdSet u64
+    loopMoveReported: IdSet ztypes.declid
     # decl ids whose narrowing a NON-diverging arm's write ended, held until the
     # statement the arms belong to finishes: a sibling arm runs only when this
     # one did not, so it keeps the narrowing, while the code after the
     # statement runs after either
-    armNarrowingEnds: ListVal u64
+    armNarrowingEnds: ListVal ztypes.declid
     # the names a generator body bound to a borrow, in binding order, and the
     # position in `open` of the scope each was bound in: a yield refuses every
     # one still in scope, and each leaves with the scope that bound it
@@ -481,7 +481,7 @@ ZSymbolTable: class {
     # diagnostics-only template walk, an instance walk, a dry run) -- every
     # scope under one is left out with it -- and the rows snapshotted when a
     # scope closed
-    scopeHidden: IdSet u64
+    scopeHidden: IdSet ztypes.declid
     # the snapshot rows, appended as entries are popped rather than read live
     entryDump: List ZEntryDumpRow
     # the type registry this table resolves against
@@ -516,7 +516,7 @@ ZSymbolTable: class {
             firstVid: this.reg.nextVid
             unconditional: false
         )
-        if this.typing.suppressParamStamps then this.scopeHidden.add item: f.u64
+        if this.typing.suppressParamStamps then this.scopeHidden.add item: f
         this.curScope = f
         return f
     }
@@ -781,7 +781,7 @@ ZSymbolTable: class {
     # by popDiscard, and it stays out of the dump.
     pushDryRun: function {:this} is {
         f: this.pushScope parent: this.curScope node: zast.nodeid
-        this.scopeHidden.add item: f.u64
+        this.scopeHidden.add item: f
         this.dryRunDepth = this.dryRunDepth + 1
     }
 
@@ -1178,13 +1178,13 @@ ZSymbolTable: class {
 
     # takenDeclsInScope -- the declarations the innermost scope's rows take,
     # in order.
-    takenDeclsInScope: function {this: this.view into: ListVal u64} is {
+    takenDeclsInScope: function {this: this.view into: ListVal ztypes.declid} is {
         n: this.open.length
         if n == 0 then return
         p: (this.open.get i: n - 1).start
         for p < this.entries.length loop {
             e: this.entries.get i: p
-            if e.isTaken then into.append e.declId.u64
+            if e.isTaken then into.append e.declId
             p = p + 1
         }
     }
@@ -1227,7 +1227,7 @@ ZSymbolTable: class {
     recordScopeDestroy: function {:this fr: openscope} is {
         if fr.id.isZero or fr.node.isZero then return
         if this.recording.not then return
-        if (this.unreachableScopes.has item: fr.id.u64).not then {
+        if (this.unreachableScopes.has item: fr.id).not then {
             start: this.typing.destroyItems.length
             this.appendOwnedOf scope: fr.id except: ztypes.vid
             n: this.typing.destroyItems.length - start
@@ -1343,7 +1343,7 @@ ZSymbolTable: class {
     # refilledInInnermost -- the locals of enclosing scopes the innermost scope
     # refilled (a `refills` row) and that hold a value here, appended to `into`
     # once each.
-    refilledInInnermost: function {this: this.view into: ListVal u64} is {
+    refilledInInnermost: function {this: this.view into: ListVal ztypes.declid} is {
         n: this.open.length
         if n == 0 then return
         p: (this.open.get i: n - 1).start
@@ -1352,8 +1352,8 @@ ZSymbolTable: class {
             p = p + 1
             if e.refills.not then continue
             if (this.isTakenDecl declId: e.declId) then continue
-            if (into.contains item: e.declId.u64) then continue
-            into.append e.declId.u64
+            if (into.contains item: e.declId) then continue
+            into.append e.declId
         }
     }
 
@@ -1383,7 +1383,7 @@ ZSymbolTable: class {
         :this
         from: u64
         to: u64
-        decls: ListVal u64
+        decls: ListVal ztypes.declid
         maybes: ListVal bool
         locs: ListVal ztypes.zsrcpos
     } is {
@@ -1399,7 +1399,7 @@ ZSymbolTable: class {
                         taOpt
                     ) case some then {
                         tk = true
-                        decls.append e.declId.u64
+                        decls.append e.declId
                         maybes.append e.takenMaybe
                         locs.append taOpt
                     } case none then null
@@ -2350,7 +2350,7 @@ ZSymbolTable: class {
         for rev.length > 0 loop {
             e: rev.pop
             if e.endsNarrowing when (this.typing.declParentOf declId: e.declId) != top then {
-                this.armNarrowingEnds.append e.declId.u64
+                this.armNarrowingEnds.append e.declId
                 this.typing.declRowsAdd declId: e.declId delta: -1
             } else {
                 this.entries.append e
@@ -2365,7 +2365,7 @@ ZSymbolTable: class {
     # resolves to is ended.
     closeArmNarrowingEnds: function {:this marker: u64} is {
         for this.armNarrowingEnds.length > marker loop {
-            d: ztypes.declid.create from: this.armNarrowingEnds.pop
+            d: this.armNarrowingEnds.pop
             nid: zast.nameid.create from: (this.typing.declNameOf declId: d)
             if (this.findLocal nameId: nid) == d then this.layNarrowingEnd declId: d
         }
@@ -2453,9 +2453,9 @@ ZSymbolTable: class {
         this.materialiseTop
         f: this.curScope
         if f.isZero then return
-        this.unreachableScopes.add item: f.u64
-        known: this.unreachableKinds.get key: f.u64
-        if known.none then this.unreachableKinds.set key: f.u64 value: kind
+        this.unreachableScopes.add item: f
+        known: this.unreachableKinds.get key: f
+        if known.none then this.unreachableKinds.set key: f value: kind
     }
 
     # how the innermost open scope became unreachable; `divkind.none` while it
@@ -2466,7 +2466,7 @@ ZSymbolTable: class {
         if n == 0 then return divkind.none
         f: (this.open.get i: n - 1).id
         if f.isZero then return divkind.none
-        ko: this.unreachableKinds.get key: f.u64
+        ko: this.unreachableKinds.get key: f
         match (
             ko
         ) case some then {
@@ -2533,12 +2533,12 @@ ZSymbolTable: class {
         for i < this.entries.length loop {
             d: this.takenDeclAt :i
             i = i + 1
-            if d > 0 then this.loopOnceTakes.append d
+            if d.isZero.not then this.loopOnceTakes.append d
         }
     }
 
     # isOnceTake -- the decl was moved by this loop's iterable binding
-    isOnceTake: function {this: this.view run: looprun d: u64} out bool is {
+    isOnceTake: function {this: this.view run: looprun d: ztypes.declid} out bool is {
         i: run.onceStart
         for i < this.loopOnceTakes.length loop {
             if (this.loopOnceTakes.get :i) == d then return true
@@ -2560,10 +2560,10 @@ ZSymbolTable: class {
 
     # takenDeclAt -- the decl a scope-stack row marks as taken, 0 when the
     # row is not a take
-    takenDeclAt: function {this: this.view i: u64} out u64 is {
+    takenDeclAt: function {this: this.view i: u64} out ztypes.declid is {
         e: this.entries.get :i
-        if e.isTaken.not then return 0
-        return e.declId.u64
+        if e.isTaken.not then return ztypes.declid.zero
+        return e.declId
     }
 
     # recordContinueTakes -- at a `continue`, every move made since the
@@ -2576,7 +2576,7 @@ ZSymbolTable: class {
         for i < this.entries.length loop {
             d: this.takenDeclAt :i
             i = i + 1
-            if d > 0 then this.loopContinueTakes.append d
+            if d.isZero.not then this.loopContinueTakes.append d
         }
     }
 
@@ -2588,7 +2588,7 @@ ZSymbolTable: class {
         p: (this.open.get i: n - 1).start
         for p < this.entries.length loop {
             e: this.entries.get i: p
-            if e.isTaken then this.loopBreakTakes.append e.declId.u64
+            if e.isTaken then this.loopBreakTakes.append e.declId
             p = p + 1
         }
     }
@@ -2640,8 +2640,8 @@ ZSymbolTable: class {
     # taken row's, so a shadow of a name inside an arm neither hides the outer
     # local nor lends it the shadow's state; a narrowing laid over a binding is
     # a row of the same declaration and does not hide a take under it.
-    getLiveOwnedVars: function {this: this.view} out IdSet u64 is {
-        decls: IdSet u64
+    getLiveOwnedVars: function {this: this.view} out IdSet ztypes.declid is {
+        decls: IdSet ztypes.declid
         cur: this.curScope
         for cur.isZero.not loop {
             if (this.typing.declIsScope declId: cur).not then return decls
@@ -2658,7 +2658,7 @@ ZSymbolTable: class {
                     # a reftype moves on a take whether or not it has anything to
                     # destroy
                     owned: (this.reg.needsDestructor typeId: dt) or (this.reg.isReftypeOf tid: dt)
-                    if owned when (this.hasTakenRow declId: kd).not then decls.add item: kd.u64
+                    if owned when (this.hasTakenRow declId: kd).not then decls.add item: kd
                 }
             }
             cur = this.typing.declParentOf declId: cur
@@ -2689,7 +2689,7 @@ ZSymbolTable: class {
                 for each xn: e.excludedSubtypes loop exs.append xn.u32
                 nsc: e.narrowedSubtype
                 this.entryDump.append (ZEntryDumpRow
-                    scopeId: scope.u64
+                    scopeId: scope
                     position: pos
                     entryId: e.entryId
                     name: (this.typing.declNameOf declId: e.declId)
@@ -2711,7 +2711,7 @@ ZSymbolTable: class {
                 v: this.typing.declLocalVarOf declId: kd
                 if v.isZero.not then vidOpt = optionval.some v
                 this.entryDump.append (ZEntryDumpRow
-                    scopeId: scope.u64
+                    scopeId: scope
                     position: pos
                     entryId: kd.u64
                     name: (this.typing.declNameOf declId: kd)
@@ -2767,14 +2767,14 @@ newSymbolTable: function {reg: ztypes.ZTypeRegistry.take typing: ZTyping.take} o
         exitLog: ListVal exitrec
         curScope: ztypes.declid
         entries: List ZEntry
-        unreachableScopes: IdSet u64
-        unreachableKinds: (IdMapV u64 v: u8)
+        unreachableScopes: IdSet ztypes.declid
+        unreachableKinds: (IdMapV ztypes.declid v: u8)
         loopRuns: ListVal looprun
-        loopBreakTakes: ListVal u64
-        loopContinueTakes: ListVal u64
-        loopOnceTakes: ListVal u64
-        loopMoveReported: IdSet u64
-        armNarrowingEnds: ListVal u64
+        loopBreakTakes: ListVal ztypes.declid
+        loopContinueTakes: ListVal ztypes.declid
+        loopOnceTakes: ListVal ztypes.declid
+        loopMoveReported: IdSet ztypes.declid
+        armNarrowingEnds: ListVal ztypes.declid
         genBorrowNames: ListVal zast.nameid
         genBorrowPositions: ListVal openpos
         dryRunDepth: 0
@@ -2785,7 +2785,7 @@ newSymbolTable: function {reg: ztypes.ZTypeRegistry.take typing: ZTyping.take} o
         tailBlock: zast.nodeid
         templateStamps: (IdMapV zast.nodeid v: ztypes.tid)
         templateArmPreds: (IdMapV zast.nodeid v: ztypes.tid)
-        scopeHidden: IdSet u64
+        scopeHidden: IdSet ztypes.declid
         entryDump: List ZEntryDumpRow
         :reg
         :typing
