@@ -3278,8 +3278,8 @@ Ctx: class {
     demandGatedTids: IdSet ztypes.tid
     # the types something actually referenced, which is what decides emission
     usedTypeIds: IdSet ztypes.tid
-    # conformance rows whose helper set is already in the buffer, by row index
-    emittedConformance: IdSet u64
+    # conformance rows whose helper set is already in the buffer, by row id
+    emittedConformance: IdSet ztypes.confid
     # ListIter monos whose cursor is already in the buffer. A List and a view
     # of it resolve `iterate` to ONE mono, so both reach the same typedef
     emittedListIters: IdSet ztypes.tid
@@ -4585,14 +4585,14 @@ typeStructEmitted: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
 
 # conformanceRowMark / conformanceRowEmitted -- a conformance row is one
 # (impl, spec, label) triple and produces one set of wrappers, a vtable and the
-# two create helpers. Emitted once, keyed by the row's index in the table.
-conformanceRowMark: function {ctx: Ctx row: u64} is {
+# two create helpers. Emitted once, keyed by the row's confid.
+conformanceRowMark: function {ctx: Ctx row: ztypes.confid} is {
     ctx.emittedConformance.add item: row
 }
 
 # whether a conformance's row is already out, so a second demand does not
 # repeat it
-conformanceRowEmitted: function {ctx: Ctx.view row: u64} out bool is {
+conformanceRowEmitted: function {ctx: Ctx.view row: ztypes.confid} out bool is {
     return (ctx.emittedConformance.has item: row)
 }
 
@@ -32708,7 +32708,7 @@ emitC: function {
         fragTypeTids: ListVal ztypes.tid
         demandGatedTids: IdSet ztypes.tid
         usedTypeIds: IdSet ztypes.tid
-        emittedConformance: IdSet u64
+        emittedConformance: IdSet ztypes.confid
         emittedListIters: IdSet ztypes.tid
         unitOrder: List String
         argHoistNames: List String
@@ -38299,7 +38299,10 @@ emitInstanceConformanceImpls: function {
     buf: String.borrow
 } is {
     insts: ListVal ztypes.tid
-    for each row: symtab.typing.conformance loop {
+    cfId: ztypes.confid
+    for cfId.next < symtab.typing.nextConf loop {
+        cfId = cfId.next
+        row: symtab.typing.conformance.get i: cfId
         it: row.implTypeId
         isMono: (symtab.reg.genericOriginOf tid: it).isZero.not
         natRow: nativeConformerRow :symtab tid: it
@@ -38458,7 +38461,10 @@ protoParamCtype: function {
 facetImplTids: function {
     symtab: zenv.ZSymbolTable.view tid: ztypes.tid acc: ListVal ztypes.tid
 } is {
-    for each row: symtab.typing.conformance loop {
+    cfId: ztypes.confid
+    for cfId.next < symtab.typing.nextConf loop {
+        cfId = cfId.next
+        row: symtab.typing.conformance.get i: cfId
         if row.specTypeId == tid when (acc.contains item: row.implTypeId).not when (isGenericType
             :symtab
             tid: row.implTypeId
@@ -39080,56 +39086,58 @@ emitConformanceImplsForType: function {
     implTT: symtab.reg.typetypeOf typeId: implTid
     if isFacet when implTT.isValueData.not then return
     if (typeStructEmitted :ctx tid: implTid).not then return
-    tids: ListVal ztypes.tid
-    labels: List String
-    rows: ListVal u64
-    ri: u64
-    for each row: symtab.typing.conformance loop {
-        if row.implTypeId == implTid then {
-            tids.append row.specTypeId
-            labels.append row.label.copy
-            rows.append ri
-        }
-        ri = ri + 1
-    }
     want: ztypes.ztypetype.protocolType
     if isFacet then want = ztypes.ztypetype.facetType
-    i: u64
-    n: tids.length
-    for i < n loop {
-        tid: tids.get :i
-        label: labels.get :i
-        done: conformanceRowEmitted :ctx row: (rows.get :i)
-        if (
-            (symtab.reg.typetypeOf
-                typeId: tid
-            ) ==
-            want
-        ) when done.not then {
-            conformanceRowMark :ctx row: (rows.get :i)
-            if isFacet then {
-                (emitFacetImpl
-                    :ast
-                    :symtab
-                    :ctx
-                    :implTid
-                    facetTid: tid
-                    label: label.stringView
-                    :buf
-                )
-            } else {
-                (emitProtocolImpl
-                    :ast
-                    :symtab
-                    :ctx
-                    :implTid
-                    protoTid: tid
-                    label: label.stringView
-                    :buf
-                )
+    ri: ztypes.confid
+    for ri.next < symtab.typing.nextConf loop {
+        ri = ri.next
+        hit: false
+        tid: ztypes.tid
+        label: String
+        {
+            row: symtab.typing.conformance.get i: ri
+            if row.implTypeId == implTid then {
+                hit = true
+                tid = row.specTypeId
+                label = row.label.copy
             }
         }
-        i = i + 1
+        if hit.not then continue
+        if (symtab.reg.typetypeOf typeId: tid) == want when (conformanceRowEmitted
+            :ctx
+            row: ri
+        ).not then {
+            conformanceRowMark :ctx row: ri
+            (emitConformanceImpl
+                :ast
+                :symtab
+                :ctx
+                :implTid
+                specTid: tid
+                label: label.stringView
+                :isFacet
+                :buf
+            )
+        }
+    }
+}
+
+# emitConformanceImpl -- one conformance row's helper set: a facet's or a
+# protocol's, as `isFacet` says
+emitConformanceImpl: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    implTid: ztypes.tid
+    specTid: ztypes.tid
+    label: StringView
+    isFacet: bool
+    buf: String.borrow
+} is {
+    if isFacet then {
+        emitFacetImpl :ast :symtab :ctx :implTid facetTid: specTid :label :buf
+    } else {
+        emitProtocolImpl :ast :symtab :ctx :implTid protoTid: specTid :label :buf
     }
 }
 
@@ -39233,7 +39241,10 @@ conformanceLabelFor: function {
     protoTid: ztypes.tid
 } out String is {
     res: String
-    for each row: symtab.typing.conformance loop {
+    cfId: ztypes.confid
+    for cfId.next < symtab.typing.nextConf loop {
+        cfId = cfId.next
+        row: symtab.typing.conformance.get i: cfId
         if row.implTypeId == implTid when row.specTypeId == protoTid when (
             res.length == 0
         ) then res.append row.label

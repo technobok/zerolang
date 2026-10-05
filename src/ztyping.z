@@ -1094,7 +1094,9 @@ ZTyping: class {
     constFail: ztypes.constfail
 
     # aggregate typecheck state
-    conformance: List ztypes.ZConformance
+    # every recorded conformance, indexed by its confid: row 0 is the sentinel
+    # and rows are appended and never removed, so the id IS the index
+    conformance: (List ztypes.ZConformance i: ztypes.confid)
     # every value placed where a spec value is expected, checked at the end
     specStandIns: ListVal specstandin
     # the stand-ins that hold, by the value's node: what the emitter boxes the
@@ -1358,6 +1360,39 @@ ZTyping: class {
     # generator yields before it can receive.
     currentYieldInputTid: ztypes.tid
 } as {
+    # --- conformance rows ---
+
+    # nextConf -- the id the next conformance row takes: every id from 1 below
+    # it names a row, which bounds a walk over them
+    nextConf: function {this: this.view} out ztypes.confid is {
+        return (ztypes.confid.create from: this.conformance.length)
+    }
+
+    # addConformance -- record that one type satisfies a protocol or facet
+    # under a label; the row's id is the index it lands at
+    addConformance: function {
+        :this
+        # the type that conforms
+        implTypeId: ztypes.tid
+        # the protocol or facet it conforms to
+        specTypeId: ztypes.tid
+        # the conformance's written label
+        label: StringView
+        # that label interned, which is what the comparisons use
+        labelNameId: zast.nameid
+        # whether the spec is a facet rather than a protocol, which decides how the
+        # value carries its vtable
+        isFacet: bool
+    } is {
+        this.conformance.append (ztypes.ZConformance
+            :implTypeId
+            :specTypeId
+            label: label.string
+            :labelNameId
+            :isFacet
+        )
+    }
+
     # --- declaration tree ---
 
     # nextDecl -- the id the next declaration row takes. Every id below it names
@@ -3218,7 +3253,7 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         constBigFloats: List math.BigFloat
         foldedBranch: (IdMapV zast.nodeid v: foldedbranch)
         constFail: ztypes.noConstFail
-        conformance: List ztypes.ZConformance
+        conformance: (List ztypes.ZConformance i: ztypes.confid)
         specStandIns: ListVal specstandin
         standInOf: (IdMapV zast.nodeid v: specstandin)
         monoSite: (IdMapV ztypes.tid v: monosite)
@@ -3314,6 +3349,13 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         varId: ztypes.vid
         rows: 0
         children: (IdMapV zast.nameid v: ztypes.declid)
+    )
+    childTid.conformance.append (ztypes.ZConformance
+        implTypeId: ztypes.tid
+        specTypeId: ztypes.tid
+        label: String
+        labelNameId: zast.nameid.zero
+        isFacet: false
     )
     childTid.constStrings.append "".string
     childTid.constBigInts.append (math.BigInt from: 0)

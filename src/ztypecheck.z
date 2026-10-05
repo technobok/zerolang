@@ -8369,8 +8369,7 @@ recordConformance: function {
         # made the construction below it report a missing argument as well
     }
     if recordIt then {
-        cf: st.reg.newConformance :implTypeId :specTypeId :label :labelNameId isFacet: isFacetC
-        st.typing.conformance.append cf
+        st.typing.addConformance :implTypeId :specTypeId :label :labelNameId isFacet: isFacetC
         markSpecMembersUsed :st impl: implTypeId spec: specTypeId
         # the vtable wrapper names every member the spec names, and it is
         # emitted from the conformance row rather than from a use site, so
@@ -8446,13 +8445,12 @@ conformanceOwn: function {o: optionval ztypes.zparamownership} out ztypes.zparam
 # generic template's marker is a promise for every instance, so each instance
 # is checked instead of the template (checkInstanceConformances).
 checkConformances: function {ast: Ast st: zenv.ZSymbolTable} is {
-    rows: ListVal u64
-    ri: u64
-    for ri < st.typing.conformance.length loop {
-        rows.append ri
-        ri = ri + 1
-    }
-    for each ci: rows loop {
+    # the rows recorded so far: checking an instance records rows of its own,
+    # which are checked already
+    rowEnd: st.typing.nextConf
+    ci: ztypes.confid
+    for ci.next < rowEnd loop {
+        ci = ci.next
         implT: ztypes.tid
         specT: ztypes.tid
         lblId: zast.nameid
@@ -8496,8 +8494,8 @@ checkConformances: function {ast: Ast st: zenv.ZSymbolTable} is {
 checkInstanceConformances: function {
     st: zenv.ZSymbolTable
     ast: Ast
-    # the template's row, by position
-    row: u64
+    # the template's row
+    row: ztypes.confid
     markerOp: zast.nodeid
     implName: StringView
 } is {
@@ -8540,14 +8538,13 @@ checkInstanceConformances: function {
             # a failure another instance already reported is deduped away, so
             # this instance may still read as conforming; nothing is emitted
             # once there is an error
-            cf: (st.reg.newConformance
+            (st.typing.addConformance
                 implTypeId: mono
                 specTypeId: instSpec
                 label: label.stringView
                 :labelNameId
                 :isFacet
             )
-            st.typing.conformance.append cf
             markSpecMembersUsed :st impl: mono spec: instSpec
         }
     }
@@ -8583,7 +8580,10 @@ methodImplementsSpec: function {st: zenv.ZSymbolTable.view mid: ztypes.tid} out 
     mnameId: memberNameIdOfTid :st :owner :mid
     if mnameId.isZero then return false
     found: false
-    for each crow: st.typing.conformance loop {
+    cfId: ztypes.confid
+    for cfId.next < st.typing.nextConf loop {
+        cfId = cfId.next
+        crow: st.typing.conformance.get i: cfId
         isOwn: crow.implTypeId == owner
         if ownerOg.isZero.not when crow.implTypeId == ownerOg then isOwn = true
         if isOwn when (specDeclaresMethod
@@ -22037,7 +22037,10 @@ conformsToText: function {
     agoo: st.reg.genericOriginOf tid: argTid
     if agoo.isZero.not then probeT = agoo
     found: false
-    for each crow: st.typing.conformance loop {
+    cfId: ztypes.confid
+    for cfId.next < st.typing.nextConf loop {
+        cfId = cfId.next
+        crow: st.typing.conformance.get i: cfId
         if crow.specTypeId == txT when (
             (crow.implTypeId == argTid) or (crow.implTypeId == probeT)
         ) then found = true
@@ -22550,7 +22553,10 @@ typeConformsTo: function {
 } out bool is {
     og: st.reg.genericOriginOf tid: impl
     found: false
-    for each crow: st.typing.conformance loop {
+    cfId: ztypes.confid
+    for cfId.next < st.typing.nextConf loop {
+        cfId = cfId.next
+        crow: st.typing.conformance.get i: cfId
         if crow.specTypeId == spec when (
             (crow.implTypeId == impl) or (og.isZero.not and (crow.implTypeId == og))
         ) then {
@@ -40530,7 +40536,10 @@ conformanceMarkerIds: function {
     ids: ListVal zast.nameid
 } is {
     og: st.reg.genericOriginOf :tid
-    for each crow: st.typing.conformance loop {
+    cfId: ztypes.confid
+    for cfId.next < st.typing.nextConf loop {
+        cfId = cfId.next
+        crow: st.typing.conformance.get i: cfId
         if (crow.implTypeId == tid) or (og.isZero.not and (crow.implTypeId == og)) then {
             ids.append crow.labelNameId
         }
@@ -41606,7 +41615,10 @@ recordInheritedConformance: function {
     lblId: zast.nameid
     isF: false
     srcOg: st.reg.genericOriginOf tid: src
-    for each crow: st.typing.conformance loop {
+    cfId: ztypes.confid
+    for cfId.next < st.typing.nextConf loop {
+        cfId = cfId.next
+        crow: st.typing.conformance.get i: cfId
         isSrc: crow.implTypeId == src
         if srcOg.isZero.not when crow.implTypeId == srcOg then isSrc = true
         if crow.specTypeId == spec when isSrc when lbl.length == 0 then {
@@ -41615,14 +41627,13 @@ recordInheritedConformance: function {
             isF = crow.isFacet
         }
     }
-    cf: (st.reg.newConformance
+    (st.typing.addConformance
         implTypeId: value
         specTypeId: spec
         label: lbl.stringView
         labelNameId: lblId
         isFacet: isF
     )
-    st.typing.conformance.append cf
     markSpecMembersUsed :st impl: value :spec
     forceAllMembers :st :ast tid: value
 }
@@ -41637,7 +41648,10 @@ conformanceRowLink: function {
     t: impl
     for t.isZero.not loop {
         og: st.reg.genericOriginOf tid: t
-        for each crow: st.typing.conformance loop {
+        cfId: ztypes.confid
+        for cfId.next < st.typing.nextConf loop {
+            cfId = cfId.next
+            crow: st.typing.conformance.get i: cfId
             isT: crow.implTypeId == t
             if og.isZero.not when crow.implTypeId == og then isT = true
             if crow.specTypeId == spec when isT then return t

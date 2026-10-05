@@ -11,6 +11,7 @@ public: unit {
     :genericarg
     :declid
     :entryid
+    :confid
     :vid
     :constraintdesc
     :ZConformance
@@ -803,6 +804,70 @@ entryid: typedef u64 as {
     }
 }
 
+# confid -- a conformance row id: its index in ZTyping.conformance, whose row
+# 0 is the sentinel, so ids run dense from 1 and 0 is "no conformance". A
+# typedef so a row id cannot cross with the type ids the row holds; equality
+# is same-space only, sentinels read isZero.
+confid: typedef u64 as {
+    # identity by id. Two conformance ids name the same row when their numbers
+    # match
+    ==: function {this: this.view rhs: confid} out bool is {
+        return this.u64 == rhs.u64
+    }
+    # the sentinel: 0 is no conformance, never the first one
+    isZero: function {this: this.view} out bool is {
+        return this.u64 == 0
+    }
+    # the zero confid: no conformance. A parameter or field that may be handed none
+    # defaults to it
+    zero: confid 0
+    # the conformance id's place in the order the rows were recorded in: an id only ever orders
+    # against an id of its own space, never a bare number
+    compare: function {this: this.view rhs: confid} out i32 is {
+        return (this.u64.compare rhs: rhs.u64)
+    }
+    # this conformance row was recorded before `rhs`
+    <: function {this: this.view rhs: confid} out bool is {
+        return this.u64 < rhs.u64
+    }
+    # this conformance row was recorded no later than `rhs`
+    <=: function {this: this.view rhs: confid} out bool is {
+        return this.u64 <= rhs.u64
+    }
+    # this conformance row was recorded after `rhs`
+    >: function {this: this.view rhs: confid} out bool is {
+        return this.u64 > rhs.u64
+    }
+    # this conformance row was recorded no earlier than `rhs`
+    >=: function {this: this.view rhs: confid} out bool is {
+        return this.u64 >= rhs.u64
+    }
+    # the next id in sequence, which is how a walk over the conformance rows steps
+    next: function {this: this.view} out confid is {
+        n: this.u64 + 1
+        return (confid from: n)
+    }
+    # no arithmetic and no bitwise operator: a conformance id names one row, and a number made
+    # from it names nothing. Walking the rows reads `next`, and a boundary that needs the number
+    # (a dump, the table length) reads `.u64`
+    +: null
+    -: null
+    *: null
+    /: null
+    %: null
+    &: null
+    |: null
+    ^: null
+    <<: null
+    >>: null
+    not: null
+    # the id's hash, agreeing with `==`: both read the id alone, so a conformance id
+    # keys a map or a set
+    hash: function {this: this.view} out u64 is {
+        return this.u64
+    }
+}
+
 # Source position triple (file, line, column) for take-location
 # tracking on a scope entry.
 zsrcpos: record {
@@ -967,7 +1032,8 @@ ParsedNumber: class {
 }
 
 # A protocol/facet conformance: an impl type satisfying a spec type
-# under a label. Helper C names are pre-composed here.
+# under a label. A row of ZTyping.conformance, known by its index there (a
+# confid).
 ZConformance: class {
     # the type that conforms
     implTypeId: tid
@@ -982,8 +1048,6 @@ ZConformance: class {
     # whether the spec is a facet rather than a protocol, which decides how the
     # value carries its vtable
     isFacet: bool
-    # this conformance's own id
-    conformanceId: u64
 }
 
 # The type descriptor. A function's parameters, a record's or class's
@@ -1255,8 +1319,6 @@ holeType: function {} out ZType is {
 ZTypeRegistry: class {
     # the next entry id to mint
     nextEntryId: entryid
-    # the next conformance id to mint
-    nextConformanceId: u64
     # the shared unregistered id worn by every `break` / `continue` entry
     # (see ctlPlaceholder); 0 until first use
     ctlPlaceholderTid: tid
@@ -1457,34 +1519,6 @@ ZTypeRegistry: class {
             endsNarrowing: false
             takenMaybe: false
             refills: false
-        )
-    }
-
-    # record that one type satisfies a protocol or facet, and answer the
-    # conformance
-    newConformance: function {
-        :this
-        # the type that conforms
-        implTypeId: tid
-        # the protocol or facet it conforms to
-        specTypeId: tid
-        # the conformance's written label
-        label: StringView
-        # that label interned, which is what the comparisons use
-        labelNameId: zast.nameid
-        # whether the spec is a facet rather than a protocol, which decides how the
-        # value carries its vtable
-        isFacet: bool
-    } out ZConformance is {
-        id: this.nextConformanceId
-        this.nextConformanceId = this.nextConformanceId + 1
-        return (ZConformance
-            :implTypeId
-            :specTypeId
-            label: label.string
-            :labelNameId
-            :isFacet
-            conformanceId: id
         )
     }
 
@@ -2273,7 +2307,6 @@ ZTypeRegistry: class {
 newRegistry: function {} out ZTypeRegistry is {
     r: (ZTypeRegistry
         nextEntryId: entryid.zero.next
-        nextConformanceId: 0
         ctlPlaceholderTid: tid.zero
         literalIntTid: tid
         literalFloatTid: tid
