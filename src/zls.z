@@ -1565,7 +1565,10 @@ Spans: class {
     }
 
     # walkProgram -- root entry: notes the root row, then walks each unit
-    # wrapper. The tree is the parameter; `root` names the row inside it.
+    # wrapper. A loaded unit's wrapper (here, or a subunit's in its parent's
+    # body) holds the FILE's name at the file's first token, where no such
+    # text is written, so it adds no row: the first definition's own name sits
+    # there. The tree is the parameter; `root` names the row inside it.
     walkProgram: function {:this prog: Ast.view} is {
         {
             pr9: prog.nodes.get i: prog.root
@@ -1579,7 +1582,11 @@ Spans: class {
             wpn: prog.units.length
             for wpi < wpn loop {
                 wpid: prog.units.get i: wpi
-                this.walkAt ast: prog nId: wpid
+                wp: prog.nodes.get i: wpid
+                if wp.namedoperation then {
+                    this.note id: wpid line: wp.lineno col: wp.colno
+                    this.walkAt ast: prog nId: wp.operation
+                } else this.walk ast: prog n: wp
                 wpi = wpi + 1
             }
         }
@@ -1646,7 +1653,11 @@ Spans: class {
             # mostly declarations, which every lib/system unit is, therefore
             # read as though navigation were dead. Kind 6 is ranked last in
             # navAnswer so it can only fill an answer, never displace one.
-            if n.name.isZero.not then {
+            if n.name.isZero.not when (zast.unitOpKindIs
+                :ast
+                opId: n.operation
+                k: zast.unitkind.subunit
+            ).not then {
                 nmD: zast.nameTextAt :ast ref: n.name
                 # keyed by the OPERATION node, not the arm: the arm carries
                 # the name and the position, the operation carries the
