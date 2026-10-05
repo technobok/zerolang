@@ -12965,29 +12965,27 @@ armDefaultLeaf: function {
     return leaf
 }
 
-# pathNamesTypeConstant -- a two-segment path in declaration position that names
-# an `as` constant of a type the owner's unit declares (`n: cfg.LIMIT`): a value,
-# where any other path there is a type. Read off the declarations, so nothing
-# resolves to answer.
+# pathNamesTypeConstant -- a path in declaration position that names an `as`
+# constant of a type, or a constant of a unit (`n: cfg.LIMIT`, `n: ids.did.zero`,
+# `n: zast.noNode`): a value, where any other path there is a type. The
+# qualifier is followed through units and aliases (`did: ids.did`, then
+# `n: did.zero`), as a read of the same path in an expression is. Read off the
+# declarations, so nothing resolves to answer.
 pathNamesTypeConstant: function {
     st: zenv.ZSymbolTable.view
     ast: Ast.view
     ownerTid: ztypes.tid
     node: zast.nodeid
 } out bool is {
-    rootId: zast.nameid
     leafId: zast.nameid
+    qualNid: zast.nodeid
     n: ast.nodes.get i: node
     if n.dottedpath then {
-        rootId = bareAtomNameId n: (ast.nodes.get i: n.parent)
         leafId = bareAtomNameId n: (ast.nodes.get i: n.child)
+        qualNid = n.parent
     }
-    if rootId.isZero or leafId.isZero then return false
-    ownerDecl: declOfTypeId :st tid: ownerTid
-    td: st.typing.declFindChild parentDeclId: (unitRootOfDecl :st declId: ownerDecl) nameId: rootId
-    # a UNIT is a type too: `n: cfg.LIMIT` reads a constant of a unit the owner's
-    # unit declares, or of a file unit (`n: zast.noNode`)
-    if td.isZero then td = unitDeclOfName :st nameId: rootId
+    if leafId.isZero then return false
+    td: qualifierDecl :st :ast ownerDecl: (declOfTypeId :st tid: ownerTid) node: qualNid
     if td.isZero.not when (st.typing.decls.get i: td).kind.unitDecl then {
         return (unitMemberHoldsValue :st :ast unitDecl: td nameId: leafId)
     }
@@ -12996,6 +12994,39 @@ pathNamesTypeConstant: function {
     if md.isZero then return false
     mdNode: (st.typing.decls.get i: md).node
     return (typeMemberHoldsConstant :st :ast typeDecl: td defNode: mdNode)
+}
+
+# qualifierDecl -- the declaration a constant path's qualifier names, read off
+# the declarations: its root in the owner's unit or as a file unit, then each
+# further segment a member of the unit before it, each step followed through an
+# alias to what the alias names. Zero when a segment names nothing, or a
+# segment past the root sits under something that is not a unit.
+qualifierDecl: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    # the declaration of the type or function the member belongs to
+    ownerDecl: ztypes.declid
+    # the qualifier: a bare name, or a dotted path of names
+    node: zast.nodeid
+} out ztypes.declid is {
+    zd: ztypes.declid
+    if node.isZero then return zd
+    q: ast.nodes.get i: node
+    if q.dottedpath then {
+        pd: qualifierDecl :st :ast :ownerDecl node: q.parent
+        if pd.isZero or (st.typing.decls.get i: pd).kind.unitDecl.not then return zd
+        segId: bareAtomNameId n: (ast.nodes.get i: q.child)
+        if segId.isZero then return zd
+        sd: declOfUnitDef :st scope: pd unitDecl: pd nameId: segId
+        return (aliasTargetDecl :st :ast aliasDecl: sd)
+    }
+    rootId: bareAtomNameId n: q
+    if rootId.isZero then return zd
+    td: st.typing.declFindChild parentDeclId: (unitRootOfDecl :st declId: ownerDecl) nameId: rootId
+    # a UNIT is a type too: `n: cfg.LIMIT` reads a constant of a unit the owner's
+    # unit declares, or of a file unit (`n: zast.noNode`)
+    if td.isZero then td = unitDeclOfName :st nameId: rootId
+    return (aliasTargetDecl :st :ast aliasDecl: td)
 }
 
 # valueStampsTyperef -- whether a field declaration's value is stamped as a
