@@ -101,6 +101,7 @@ public: unit {
     :arrayElemTid
     :resolveUnitChildRo
     :resolvedByIdsRo
+    :answersNative
 }
 
 astnode: zast.astnode
@@ -60347,7 +60348,7 @@ targetIsHost: function {triple: StringView} out bool is {
     return (o9h.stringView == ho) and (a9h.stringView == ha)
 }
 
-# ensureFoldNativesSeeded -- the compile-time facts natives.tbl names (the
+# ensureFoldNativesSeeded -- the compile-time facts the checker answers (the
 # platform unit's os, arch, cc, ...), written ONCE and before the first fold
 # that reads them: a `require:` block, a unit-level constant, or the main pass,
 # whichever reaches them first. A unit-level `if` on `platform.os` folds while
@@ -60358,38 +60359,26 @@ ensureFoldNativesSeeded: function {st: zenv.ZSymbolTable scope: ztypes.declid as
     seedFoldNatives :st :scope :ast
 }
 
-# isFoldUnitDecl -- the declaration is a unit a natives.tbl `fold` row names:
-# its members are answered by the compiler, not folded from their source.
+# isFoldUnitDecl -- the declaration is the unit whose members the checker
+# answers: they are seeded by the compiler, not folded from their source.
 isFoldUnitDecl: function {
     st: zenv.ZSymbolTable
     scope: ztypes.declid
     ast: Ast.view
     declId: ztypes.declid
 } out bool is {
-    for each fp: st.typing.foldPaths loop {
-        fv: fp.stringView
-        dot: fv.indexOf needle: "."
-        match (
-            dot
-        ) case some then {
-            un: nameIdOf :ast name: (fv.substring from: 0 to: dot)
-            if un.isZero then continue
-            if (unitDeclOfNameOrOwn :st :scope nameId: un) == declId then return true
-        } case none then null
-    }
-    return false
+    un: nameIdOf :ast name: answeredUnit
+    if un.isZero then return false
+    return (unitDeclOfNameOrOwn :st :scope nameId: un) == declId
 }
 
-# seedFoldNatives -- answer the compile-time values THIS TABLE names.
+# seedFoldNatives -- answer the compile-time values the checker owns: each
+# member of the answered unit that answeredMemberName lists is written onto the
+# member-constant table, where every read of it folds. This is the lowering:
+# from here on the member is a constant of the checked program, and no backend
+# is asked to implement it.
 #
-# natives.tbl is what says which paths the compiler answers; this walks its
-# `fold` rows and asks foldProviderOf for each one. A row the compiler has no
-# answer for is an error here: the table would otherwise promise a value that
-# nothing supplies, which is the shape a bodyless native had before any of this
-# was checked. The other direction -- a native declaration with no row -- is
-# checkNativesResolve's, at the declaration.
-#
-# Silent for a unit this program never loads. A row is a fact about the
+# Silent for a program that never loads the unit. An answer is a fact about the
 # compiler; a SEED is a fact about a program, and there is no member table to
 # write onto for a unit that is not here.
 seedFoldNatives: function {
@@ -60397,68 +60386,83 @@ seedFoldNatives: function {
     st: zenv.ZSymbolTable
     scope: ztypes.declid
 } is {
-    # copied out first: every lookup below lends st, and the list is its field
-    paths9: List String
-    for each fp: st.typing.foldPaths loop paths9.append from: fp.copy
-    for each pth9: paths9 loop {
-        pv9: pth9.stringView
-        dotp9: pv9.indexOf needle: "."
-        match (
-            dotp9
-        ) case some then {
-            un9: pv9.substring from: 0 to: dotp9
-            mem9: pv9.substring from: dotp9 + 1 to: pv9.length
-            if (mem9.contains needle: ".") then {
-                mf9: "natives.tbl: `fold` row '\{pv9}' is not a free function <unit>.<name>"
-                (addError
-                    :st
-                    nodeid: zast.nodeid
-                    lineno: 0
-                    colno: 0
-                    e: zast.err.compilerError
-                    msg: mf9
-                )
-            } else {
-                unm9: nameIdOf :ast name: un9
-                mnm9: nameIdOf :ast name: mem9
-                if unm9.isZero.not then {
-                    ud9: unitDeclOfNameOrOwn :st :scope nameId: unm9
-                    ptid9: declTypeIdOf :st declId: ud9
-                    if ptid9.isZero.not then {
-                        # the answers are that unit's own definitions, so they
-                        # resolve in its scope where it has one
-                        rf9: scope
-                        pro9: (st.typing.declFindChild
-                            parentDeclId: st.typing.programRoot
-                            nameId: unm9
-                        )
-                        if pro9.isZero.not then rf9 = pro9
-                        prov9: foldProviderOf :ast unitNm: unm9 memberNm: mnm9
-                        if prov9 == 0 then {
-                            mp9: "natives.tbl marks '\{pv9}' `fold`, but this compiler answers no such value"
-                            (addError
-                                :st
-                                nodeid: zast.nodeid
-                                lineno: 0
-                                colno: 0
-                                e: zast.err.compilerError
-                                msg: mp9
-                            )
-                        } else {
-                            (applyFoldProvider
-                                :st
-                                :scope
-                                unitScope: rf9
-                                :ast
-                                ptid: ptid9
-                                prov: prov9
-                            )
-                        }
-                    }
-                }
-            }
-        } case none then null
+    unm9: nameIdOf :ast name: answeredUnit
+    if unm9.isZero then return
+    ud9: unitDeclOfNameOrOwn :st :scope nameId: unm9
+    ptid9: declTypeIdOf :st declId: ud9
+    if ptid9.isZero then return
+    # the answers are that unit's own definitions, so they resolve in its scope
+    # where it has one
+    rf9: scope
+    pro9: st.typing.declFindChild parentDeclId: st.typing.programRoot nameId: unm9
+    if pro9.isZero.not then rf9 = pro9
+    prov9: 1.u64
+    for (answeredMemberName prov: prov9).length > 0 loop {
+        if (answerHasNativeDecl :st :ast unitDecl: ud9 prov: prov9) then {
+            (applyFoldProvider
+                :st
+                :scope
+                unitScope: rf9
+                :ast
+                ptid: ptid9
+                prov: prov9
+            )
+        }
+        prov9 = prov9 + 1
     }
+}
+
+# answerHasNativeDecl -- the member an answer names is declared by the answered
+# unit, and declared `is native`. Reported when it is not: a member the unit
+# does not declare is an answer to nothing, and a member with a BODY is one the
+# program implements, which the checker must not overrule. A plain `is native`
+# the checker does not answer is a native some backend supplies, and the
+# backend's own check reports one that none does.
+answerHasNativeDecl: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    prov: u64
+} out bool is {
+    mn: answeredMemberName :prov
+    path: answeredUnit.string
+    path.append "."
+    path.append mn
+    mnm: nameIdOf :ast name: mn
+    d: ztypes.declid
+    if mnm.isZero.not then d = st.typing.declFindChild parentDeclId: unitDecl nameId: mnm
+    if d.isZero then {
+        (addError
+            :st
+            nodeid: zast.nodeid
+            lineno: 0
+            colno: 0
+            e: zast.err.compilerError
+            msg: "the checker answers '\{path}', and the unit declares no such member"
+        )
+        return false
+    }
+    dn: (st.typing.decls.get i: d).node
+    if dn.isZero then return false
+    dline: nodeLine n: (ast.nodes.get i: dn)
+    dcol: nodeCol n: (ast.nodes.get i: dn)
+    n: ast.nodes.get i: dn
+    if n.namedoperation.not then return false
+    op: ast.nodes.get i: n.operation
+    match (
+        op
+    ) case functiondef then {
+        if op.isNative then return true
+    } else null
+    (addError
+        :st
+        nodeid: dn
+        lineno: dline
+        colno: dcol
+        e: zast.err.compilerError
+        msg: "the checker answers '\{path}' itself, so it is declared `is native`, with no body"
+    )
+    return false
 }
 
 # foldProviderOf -- which compile-time answer a path names, as a 1-based index
@@ -60477,16 +60481,43 @@ foldProviderOf: function {
 } out u64 is {
     if unitNm.isZero then return 0
     if memberNm.isZero then return 0
-    pun: nameIdOf :ast name: "platform"
+    pun: nameIdOf :ast name: answeredUnit
     if pun.isZero then return 0
     if (unitNm == pun).not then return 0
-    if memberNm == (nameIdOf :ast name: "os") then return 1
-    if memberNm == (nameIdOf :ast name: "arch") then return 2
-    if memberNm == (nameIdOf :ast name: "cc") then return 3
-    if memberNm == (nameIdOf :ast name: "ccmode") then return 4
-    if memberNm == (nameIdOf :ast name: "target") then return 5
-    if memberNm == (nameIdOf :ast name: "ptrbits") then return 6
+    prov: 1.u64
+    for (answeredMemberName :prov).length > 0 loop {
+        if memberNm == (nameIdOf :ast name: (answeredMemberName :prov)) then return prov
+        prov = prov + 1
+    }
     return 0
+}
+
+# answeredUnit -- the unit whose `is native` members the checker answers.
+answeredUnit: "platform"
+
+# answeredMemberName -- the member of answeredUnit that applyFoldProvider's arm
+# `prov` answers, as the unit declares it; empty past the last arm. This IS the
+# answer table: foldProviderOf, the seed and its declaration check all walk it,
+# and nothing outside the checker lists these names.
+answeredMemberName: function {prov: u64} out StringView is {
+    if prov == 1 then return "os"
+    if prov == 2 then return "arch"
+    if prov == 3 then return "cc"
+    if prov == 4 then return "ccmode"
+    if prov == 5 then return "target"
+    if prov == 6 then return "ptrbits"
+    return ""
+}
+
+# answersNative -- the checker answers this `is native` free function of a unit
+# itself, so no backend implements it: `native` means a backend must supply the
+# body, and anything the checker can answer it lowers to a constant of the
+# checked program first. Keyed by NAMES rather than by a typed member, so it
+# holds for a declaration nothing used, which only parsed. A reference to one is
+# still refused as a native's (refuseNativeReference): that is the language's
+# rule about the declaration, and it reads the source.
+answersNative: function {ast: Ast.view unitNm: zast.nameid memberNm: zast.nameid} out bool is {
+    return (foldProviderOf :ast :unitNm :memberNm) > 0
 }
 
 # applyFoldProvider -- write one compile-time answer onto the member-constant
@@ -62582,7 +62613,6 @@ typecheck: function {
     ccPath: StringView
     ccMode: StringView
     target: StringView
-    foldPaths: List String
 } out zenv.ZSymbolTable is {
     nodeEstT: u64
     nodeEstT = program.nodes.length
@@ -62593,7 +62623,6 @@ typecheck: function {
     ty.ccPath = ccPath.string
     ty.ccMode = ccMode.string
     ty.targetTriple = target.string
-    for each fp: foldPaths loop ty.foldPaths.append from: fp.copy
     muNid: nameIdOf ast: program name: program.mainUnitName.stringView
     reg.setMainUnit name: program.mainUnitName.stringView nameId: muNid
     st: zenv.newSymbolTable :reg typing: ty

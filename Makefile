@@ -2298,7 +2298,11 @@ perf: $(PERFBIN)
 # +518 a function named as a parameter or field default is asked of the type
 # the declaration resolved to, and walked where a construction uses it: 0
 # behaviour, +518 source.
-ALLOC_BASELINE := 2205009
+#
+# -3,514 the type checker answers platform's values from its own table: zc no
+# longer reads natives.tbl to find the six `fold` rows before type checking:
+# -1,986 behaviour, -1,527 source (the readers deleted from the self-compile).
+ALLOC_BASELINE := 2201495
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -3988,9 +3992,10 @@ generic-param-guard: bin/zl
 # from a directory holding no project, with no flags, on a fixture outside it,
 # the pass still runs: the file's own directory is a src root and the stdlib is
 # found as zc finds it, so the fixture's L030 is reported. A --system that does
-# not exist, a --src the unit is not under, and a runtime whose natives.tbl
-# cannot be read are each reported as the reason the pass did not run, and exit
-# non-zero. An error the pass finds in a
+# not exist and a --src the unit is not under are each reported as the reason
+# the pass did not run, and exit non-zero. The pass needs no runtime directory:
+# the C runtime is the build's, not the type checker's, so it runs with none.
+# An error the pass finds in a
 # dependency unit is shown at THAT unit's path and line, with its source line.
 # A finding in a generic body is reported once, not once per instance's copy.
 # A subunit file is linted as the subunit it is, reading its parent, and its
@@ -4013,9 +4018,9 @@ zl-full-guard: bin/zl
 	if [ $$rc -eq 0 ] || ! printf '%s\n' "$$out" | grep -q 'did not run: the system directory'; then \
 	  echo "zl-full-guard FAIL: a missing --system was not reported (rc=$$rc):"; \
 	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
-	out=$$(cd $$d && ZEROLANG_RUNTIME=$$d/none $(CURDIR)/bin/zl lint --full $(CURDIR)/$(ZLFULL_FIX) 2>&1); rc=$$?; \
-	if [ $$rc -eq 0 ] || ! printf '%s\n' "$$out" | grep -q "did not run: cannot read '$$d/none/natives.tbl'"; then \
-	  echo "zl-full-guard FAIL: an unreadable runtime was not reported as the reason (rc=$$rc):"; \
+	out=$$(cd $$d && ZEROLANG_RUNTIME=$$d/none $(CURDIR)/bin/zl lint --full $(CURDIR)/$(ZLFULL_FIX) 2>&1); \
+	if ! printf '%s\n' "$$out" | grep -q 'L030'; then \
+	  echo "zl-full-guard FAIL: with no runtime directory the typecheck tier did not run:"; \
 	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
 	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full --src $$d $(CURDIR)/$(ZLFULL_FIX) 2>&1); rc=$$?; \
 	if [ $$rc -eq 0 ] || ! printf '%s\n' "$$out" | grep -q "did not run: unit 'tiered' is under none"; then \
@@ -4047,7 +4052,7 @@ zl-full-guard: bin/zl
 	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
 	rm -rf $$d; \
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
-	echo "zl-full-guard OK: --full runs without flags from a foreign cwd, says why when it cannot, places a dependency's error in its own file, and lints a subunit as itself"
+	echo "zl-full-guard OK: --full runs without flags from a foreign cwd and without a runtime, says why when it cannot, places a dependency's error in its own file, and lints a subunit as itself"
 
 # natives-tbl-guard -- src/runtime/natives.tbl answers "which implementation"
 # for every operator the system units declare `is native`, keyed by qualified

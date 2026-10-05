@@ -1402,8 +1402,6 @@ NativeHead: class {
     spec: String
     # `args=ptr`: the arguments arrive as pointers
     ptr: bool
-    # `fold`: the row folds at compile time
-    isFold: bool
 } as {
     # create -- the head between `[` and `]`, split on spaces: the first word
     # is the key, every other word an attribute
@@ -1417,7 +1415,6 @@ NativeHead: class {
             cst: String
             spec: String
             ptr: false
-            isFold: false
         )
         for each f: (head.split sep: " ") loop {
             if f.length > 0 then {
@@ -1431,18 +1428,12 @@ NativeHead: class {
         return h
     }
 
-    # setAttr -- one attribute word. A BARE attribute, like fold, is matched
-    # by STRIPPING rather than comparing: the keyed attributes below already
-    # ask that way, and a spelling compare is what the architecture rules
-    # count against this file.
+    # setAttr -- one attribute word. A keyed attribute is matched by STRIPPING
+    # its key rather than comparing the word: a spelling compare is what the
+    # architecture rules count against this file. A word it does not know is
+    # ignored.
     setAttr: function {:this f: StringView} is {
         if f == "args=ptr" then this.ptr = true
-        fdo: f.stripPrefix p: "fold"
-        match (
-            fdo
-        ) case some then {
-            if fdo.length == 0 then this.isFold = true
-        } case none then null
         fo: f.stripPrefix p: "frag="
         match (
             fo
@@ -1624,10 +1615,6 @@ recordRowBodies: function {ctx: Ctx h: NativeHead.view body: StringView} is {
         kp: h.key.copy
         ctx.nativePtrArgs.set key: kp value: true
     }
-    if h.isFold then {
-        kf: h.key.copy
-        ctx.nativeFold.set key: kf value: true
-    }
 }
 
 # recordNativeRow -- one row: its key, then the member filter it may feed,
@@ -1715,14 +1702,6 @@ nativeIsFragBacked: function {ctx: Ctx.view path: StringView} out bool is {
 # does the compiler claim to supply this native at all.
 nativeHasRow: function {ctx: Ctx.view path: StringView} out bool is {
     return ((ctx.nativeKeys.get key: path.asString).or d: false)
-}
-
-# nativeIsFoldRow -- the row marks the path `fold`: the compiler answers it at
-# compile time and emits nothing. Asked wherever a native would otherwise be
-# lowered to C, so a fold that did not happen is reported as itself rather
-# than as a missing implementation.
-nativeIsFoldRow: function {ctx: Ctx.view path: StringView} out bool is {
-    return ((ctx.nativeFold.get key: path.asString).or d: false)
 }
 
 # nativeImplOf -- the C body natives.tbl gives for a qualified path, "" when
@@ -3239,10 +3218,6 @@ Ctx: class {
     # every row's path, whatever the row carries: the check at the declaration
     # asks only whether one exists
     nativeKeys: (MapRV String v: bool)
-    # the paths a `fold` row marks: the compiler answers them at COMPILE TIME
-    # and there is no implementation to call. A call reaching emission is a
-    # defect in the fold, not a missing body, and says so.
-    nativeFold: (MapRV String v: bool)
     # the paths a FRAGMENT implements: a native whose C the runtime supplies
     # under the `z_<unit>_<name>` convention, whoever declares it
     nativeFragPaths: (MapRV String v: bool)
@@ -16489,22 +16464,22 @@ unitFnMemberC: function {
         fid = dpUfo
     } case none then null
     if fid.isZero then return ""
-    # a `fold` native has no implementation to call: the compiler was to have
-    # answered it while type checking. Reaching here means the read sat where
-    # the constant evaluator never visited, and the leg below would emit the
-    # plain cname with parens -- which is how this failed before it was
-    # checked: `implicit declaration of function 'z_t12'`, a mangled name that
-    # never mentions the declaration. The path is built inside a block: the
-    # child's name is read through a view of ast.
+    # a native the checker answers has no implementation to call: the read was
+    # to have folded to its constant while type checking. Reaching here means
+    # the read sat where the constant evaluator never visited, and the leg below
+    # would emit the plain cname with parens -- which is how this failed before
+    # it was checked: `implicit declaration of function 'z_t12'`, a mangled
+    # name that never mentions the declaration. The path is built inside a
+    # block: the child's name is read through a view of ast.
     {
-        dpCn: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child))
-        dpFp: baseName.string
-        dpFp.append "."
-        dpFp.append dpCn
-        if (nativeIsFoldRow :ctx path: dpFp.stringView) then {
+        dpCnId: atomNameIdOf :ast n: (ast.nodes.get i: n.child)
+        if (ztypecheck.answersNative :ast unitNm: baseNameId memberNm: dpCnId) then {
+            dpFp: baseName.string
+            dpFp.append "."
+            dpFp.append (zast.nameTextAt :ast ref: dpCnId)
             (emitFail
                 :ctx
-                what: "'\{dpFp}' is a fold native: nothing folded it, and there is no implementation to call"
+                what: "'\{dpFp}' is answered by the checker: nothing folded it, and there is no implementation to call"
                 line: n.lineno
             )
             return ""
@@ -30402,12 +30377,12 @@ checkNativeMembers: function {
     }
 }
 
-# checkNativesResolve -- every `is native` declaration in a loaded unit must
-# name a row in natives.tbl. `is native` says the compiler supplies the body, and
-# this is where that claim is checked: at the declaration, whether or not anyone
-# calls it. Without it an uncalled one is accepted in silence and a called one
-# is only found at the call, as an emitter gap rather than as the missing
-# implementation it is.
+# checkNativesResolve -- every `is native` declaration in a loaded unit that the
+# checker does not answer must name a row in natives.tbl. `is native` says a
+# backend supplies the body, and this is where that claim is checked: at the
+# declaration, whether or not anyone calls it. Without it an uncalled one is
+# accepted in silence and a called one is only found at the call, as an emitter
+# gap rather than as the missing implementation it is.
 #
 # EVERY loaded unit, not only the program's own. A program that loads
 # collections.z sees its native declarations exactly as it sees the ones it
@@ -30420,6 +30395,7 @@ checkNativesResolve: function {
     unitName: StringView
 } is {
     bodyIds: zast.unitBodyIdsAt :ast unitId: unitOpId
+    unitNm: zast.poolFind pool: ast.names text: unitName
     vx239: u64
     for vx239 < bodyIds.count loop {
         bm: zast.kidAt kids: ast.kids span: bodyIds i: vx239
@@ -30431,7 +30407,13 @@ checkNativesResolve: function {
             match (
                 op
             ) case functiondef then {
-                if op.isNative then {
+                # one the checker answers is a constant of the checked program:
+                # no backend implements it, so no row is asked for
+                if op.isNative when (ztypecheck.answersNative
+                    :ast
+                    :unitNm
+                    memberNm: bn.name
+                ).not then {
                     pk: "\{unitName}.\{nm}"
                     if (nativeHasRow :ctx path: pk.stringView).not then {
                         (emitFail
@@ -32695,7 +32677,6 @@ emitC: function {
         nativeNeed: (Map String V: String)
         nativePtrArgs: (MapRV String v: bool)
         nativeKeys: (MapRV String v: bool)
-        nativeFold: (MapRV String v: bool)
         nativeFragPaths: (MapRV String v: bool)
         nativeConvMemb: (MapRV String v: bool)
         nativeArgMemb: (MapRV String v: bool)
