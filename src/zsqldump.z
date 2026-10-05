@@ -88,8 +88,9 @@ constValueCanonText: function {
 }
 
 # optTidStr -- an optional TYPE id as decimal text, or "NULL". A sibling of
-# optIdStr rather than a conversion at each call: the dump projects several
-# optional tid columns and unwrapping at the boundary would lose the space.
+# vidOrNullText and optU64Str rather than a conversion at each call: the dump
+# projects several optional tid columns and unwrapping at the boundary would
+# lose the space.
 optTidStr: function {o: optionval ztypes.tid} out String is {
     match (
         o
@@ -97,6 +98,30 @@ optTidStr: function {o: optionval ztypes.tid} out String is {
         return "\{o}"
     } case none then {
         return "NULL"
+    }
+}
+
+# optU64Str -- an optional plain number as decimal text, or "NULL": an id of a
+# space no typedef names, such as a scope entry's own id.
+optU64Str: function {o: optionval u64} out String is {
+    match (
+        o
+    ) case some then {
+        return "\{o}"
+    } case none then {
+        return "NULL"
+    }
+}
+
+# srcposSql -- an optional source position as the three columns
+# `line, col, file`, or three NULLs when there is none.
+srcposSql: function {p: optionval ztypes.zsrcpos} out String is {
+    match (
+        p
+    ) case some then {
+        return "\{p.lineno}, \{p.colno}, \{p.fsno}"
+    } case none then {
+        return "NULL, NULL, NULL"
     }
 }
 
@@ -348,7 +373,7 @@ schemaSql: function {} out String is {
         s: "CREATE TABLE IF NOT EXISTS variable (variable_id INTEGER PRIMARY KEY, ztype_id INTEGER, ownership TEXT NOT NULL, is_private_access INTEGER NOT NULL, borrow_origin TEXT, synth_origin TEXT, origin TEXT);\n"
     )
     (acc.append
-        s: "CREATE TABLE IF NOT EXISTS entry (entry_id INTEGER PRIMARY KEY, scope_id INTEGER NOT NULL, position INTEGER NOT NULL, name TEXT NOT NULL, ztype_id INTEGER NOT NULL, is_definition INTEGER NOT NULL, variable_id INTEGER, original_ztype_id INTEGER, is_taken INTEGER NOT NULL, taken_at_line INTEGER, taken_at_col INTEGER, taken_at_file INTEGER);\n"
+        s: "CREATE TABLE IF NOT EXISTS entry (entry_id INTEGER PRIMARY KEY, scope_id INTEGER NOT NULL, position INTEGER NOT NULL, decl_id INTEGER NOT NULL, overlay_id INTEGER, name TEXT NOT NULL, ztype_id INTEGER NOT NULL, is_definition INTEGER NOT NULL, variable_id INTEGER, original_ztype_id INTEGER, is_taken INTEGER NOT NULL, taken_at_line INTEGER, taken_at_col INTEGER, taken_at_file INTEGER);\n"
     )
     (acc.append
         s: "CREATE TABLE IF NOT EXISTS narrowed_subtype (entry_id INTEGER NOT NULL, name TEXT NOT NULL, type_id INTEGER, excluded INTEGER NOT NULL);\n"
@@ -1046,31 +1071,42 @@ ZDumper: class {
     # `narrowed_subtype` row for the subtype it was narrowed TO and one per
     # subtype it was narrowed AWAY from. Each entry's variable id is recorded in
     # `seen`, which is what appendVariableRows then renders.
+    #
+    # entry_id is the row's own number in the dump. A row is either a local's
+    # definition or an overlay laid over it, and the two have different ids of
+    # their own -- the declaration's, and the overlay's ZEntry id -- so neither
+    # can key the table: the two spaces overlap, and a collision under the key
+    # would drop a row. The row carries both instead: decl_id on every row,
+    # overlay_id on an overlay row.
     appendEntryRows: function {
         :this
         pool: zast.StringPool.view
         st: zenv.ZSymbolTable.view
         seen: IdSet ztypes.vid
     } is {
+        rowNo: u64
         for each e: st.entryDump loop {
+            rowNo = rowNo + 1
+            ovSql: optU64Str o: e.overlayId
             varSql: vidOrNullText o: e.varId
             origSql: optTidStr o: e.originalZtypeId
             defNum: boolNum b: e.isDefinition
             takNum: boolNum b: e.isTaken
+            tpSql: srcposSql p: e.takenAt
             enmT: zast.poolTextAt :pool ref: e.name
             enmSql: sqlStr s: enmT.stringView
-            r: "INSERT OR IGNORE INTO entry VALUES (\{e.entryId}, \{e.scopeId}, \{e.position}, \{enmSql}, \{e.ztypeId}, \{defNum}, \{varSql}, \{origSql}, \{takNum}, NULL, NULL, NULL);\n"
+            r: "INSERT INTO entry VALUES (\{rowNo}, \{e.scopeId}, \{e.position}, \{e.declId}, \{ovSql}, \{enmSql}, \{e.ztypeId}, \{defNum}, \{varSql}, \{origSql}, \{takNum}, \{tpSql});\n"
             this.acc.append s: r
             if e.narrowedSubtype.isZero.not then {
                 nnb: zast.poolTextAt :pool ref: e.narrowedSubtype
                 nnm: sqlStr s: nnb.stringView
-                nr: "INSERT INTO narrowed_subtype VALUES (\{e.entryId}, \{nnm}, NULL, 0);\n"
+                nr: "INSERT INTO narrowed_subtype VALUES (\{rowNo}, \{nnm}, NULL, 0);\n"
                 this.acc.append s: nr
             }
             for each xn2i: e.excludedSubtypes loop {
                 xn2: zast.poolTextAt :pool ref: xn2i
                 xnm: sqlStr s: xn2.stringView
-                xr: "INSERT INTO narrowed_subtype VALUES (\{e.entryId}, \{xnm}, NULL, 1);\n"
+                xr: "INSERT INTO narrowed_subtype VALUES (\{rowNo}, \{xnm}, NULL, 1);\n"
                 this.acc.append s: xr
             }
             vd: e.varId
