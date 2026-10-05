@@ -156,7 +156,7 @@ specstandin: record {
 # running the same walk the list form runs, not a restatement of it.
 declrow: record {
     # the declaration's name, interned
-    name: u64
+    name: zast.nameid
     # the type it resolved to
     tid: ztypes.tid
     # whether the row survives the pass that built it, which is how a
@@ -281,7 +281,7 @@ constslot: record {
     # the type the constant is declared on
     owner: ztypes.tid
     # the constant's name. The pair keys memberConst
-    name: u64
+    name: zast.nameid
 }
 
 # armkey -- one union arm: the union's type and the arm's name
@@ -443,7 +443,7 @@ defaultval: variant {
 # child index records), not one it minted.
 Decl: class {
     # the declaration's name, as a shared Ast.names pool id
-    name: u32
+    name: zast.nameid
     # the declaration this one is a member of. The parent chain IS the member
     # index -- there is no separate table
     parent: ztypes.declid
@@ -1372,7 +1372,7 @@ ZTyping: class {
     # the program root, and the rows declNewScope and declCloneType parent
     # directly because nothing looks them up by name.
     declNew: function {
-        :this name: u32 parent: ztypes.declid kind: declkind node: zast.nodeid
+        :this name: zast.nameid parent: ztypes.declid kind: declkind node: zast.nodeid
     } out ztypes.declid is {
         id: this.decls.append (Decl
             :name
@@ -1434,7 +1434,7 @@ ZTyping: class {
         # parent-linked, but not edged into the parent's namespace: a scope is
         # climbed out of, never looked up, and a function's children stay its
         # parameters
-        id: this.declNew name: 0 parent: ztypes.declid kind: declkind.scopeDecl :node
+        id: this.declNew name: zast.nameid.zero parent: ztypes.declid kind: declkind.scopeDecl :node
         fo: this.decls.getMut i: id
         fo.parent = parent
         return id
@@ -1445,7 +1445,12 @@ ZTyping: class {
     # rebinding it in the same scope is a duplicate definition; a NESTED scope
     # is what shadows an outer local.
     declNewLocal: function {
-        :this name: u32 parent: ztypes.declid node: zast.nodeid typeId: ztypes.tid varId: ztypes.vid
+        :this
+        name: zast.nameid
+        parent: ztypes.declid
+        node: zast.nodeid
+        typeId: ztypes.tid
+        varId: ztypes.vid
     } out ztypes.declid is {
         id: this.declNew :name :parent kind: declkind.localDecl :node
         lo: this.decls.getMut i: id
@@ -1554,8 +1559,8 @@ ZTyping: class {
     }
 
     # a declaration's name as a pool id. Compare these, never the text
-    declNameOf: function {t: this.view declId: ztypes.declid} out u32 is {
-        r: u32
+    declNameOf: function {t: this.view declId: ztypes.declid} out zast.nameid is {
+        r: zast.nameid
         decl: t.decls.get i: declId
         r = decl.name
         return r
@@ -1588,7 +1593,11 @@ ZTyping: class {
 
     # whether member `nameId` of `implTid` is a conformance marker's label: the
     # marker is a member of its type, but no field of it and no arm
-    isConformanceLabel: function {this: this.view implTid: ztypes.tid nameId: u64} out bool is {
+    isConformanceLabel: function {
+        this: this.view
+        implTid: ztypes.tid
+        nameId: zast.nameid
+    } out bool is {
         isLabel: false
         for each crow: this.conformance loop {
             if crow.implTypeId == implTid when crow.labelNameId == nameId then isLabel = true
@@ -2048,7 +2057,7 @@ ZTyping: class {
     # resolving the template's name still finds the template, and a walk from
     # a specialisation's member climbs into the template's scope first.
     declCloneType: function {:this templateDeclId: ztypes.declid} out ztypes.declid is {
-        tname: u32
+        tname: zast.nameid
         tnode: zast.nodeid
         tkind: declkind.typeDecl
         tscope: false
@@ -2060,7 +2069,7 @@ ZTyping: class {
         tscope = to.unitScope
         for each c: to.children.iterateItems loop kids.append c.value
         to.drop
-        if tname == 0 then return ztypes.declid.zero
+        if tname.isZero then return ztypes.declid.zero
         # the clone keeps the template's kind: a monomorphisation of a generic
         # FUNCTION is a function, and only a function declaration may own its
         # parameter declarations.
@@ -2074,7 +2083,7 @@ ZTyping: class {
         for ki < kn loop {
             kd: kids.get i: ki
             ki = ki + 1
-            cn: u32
+            cn: zast.nameid
             cnode: zast.nodeid
             ck: declkind.fieldDecl
             isM: false
@@ -2182,12 +2191,12 @@ ZTyping: class {
         for i < n loop {
             w: this.pendWrites.get :i
             if w.parent == parentTypeId then {
-                if c == slot then return (declrow name: w.name.u64 tid: w.type keep: true)
+                if c == slot then return (declrow name: w.name tid: w.type keep: true)
                 c = c + 1
             }
             i = i + 1
         }
-        return (declrow name: 0 tid: ztypes.tid.zero keep: false)
+        return (declrow name: zast.nameid.zero tid: ztypes.tid.zero keep: false)
     }
 
     # declRowSlots -- how many slots a declChildWalk over `ownerTid` reads.
@@ -2213,11 +2222,11 @@ ZTyping: class {
     } out declrow is {
         od: this.declIdOfType typeId: ownerTid
         if od.isZero then return (this.declPendRowAt parentTypeId: ownerTid :slot)
-        nid: u64
+        nid: zast.nameid
         did: ztypes.declid
         {
             oo: this.decls.get i: od
-            nid = (oo.children.keyAt i: slot).u64
+            nid = oo.children.keyAt i: slot
             vo: oo.children.valueAt i: slot
             match (
                 vo
@@ -2250,7 +2259,7 @@ ZTyping: class {
         this: this.view
         ownerTid: ztypes.tid
         membersOnly: bool
-        names: ListVal u64
+        names: ListVal zast.nameid
         tids: ListVal ztypes.tid
     } is {
         n: this.declRowSlots :ownerTid
@@ -2275,7 +2284,7 @@ ZTyping: class {
     declMemberList: function {
         this: this.view
         ownerTid: ztypes.tid
-        names: ListVal u64
+        names: ListVal zast.nameid
         tids: ListVal ztypes.tid
     } is {
         this.declChildWalk :ownerTid membersOnly: true :names :tids
@@ -2289,7 +2298,7 @@ ZTyping: class {
     declChildRows: function {
         this: this.view
         ownerTid: ztypes.tid
-        names: ListVal u64
+        names: ListVal zast.nameid
         tids: ListVal ztypes.tid
     } is {
         this.declChildWalk :ownerTid membersOnly: false :names :tids
@@ -2307,7 +2316,7 @@ ZTyping: class {
         this: this.view
         lastTid: ztypes.tid
         owners: ListVal ztypes.tid
-        names: ListVal u64
+        names: ListVal zast.nameid
         tids: ListVal ztypes.tid
     } is {
         childTid: ztypes.tid
@@ -2463,7 +2472,7 @@ ZTyping: class {
         parentTypeId: ztypes.tid
         nameId: zast.nameid
     } out constslot is {
-        return (constslot owner: parentTypeId name: nameId.u64)
+        return (constslot owner: parentTypeId name: nameId)
     }
 
     # setMemberConst -- record the compile-time VALUE of member `nameId` on
@@ -3285,7 +3294,7 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
     # row with no arithmetic. The declaration sentinel answers "nothing" to
     # every reader: no name, no parent, no type, no children, kind none.
     childTid.decls.append (Decl
-        name: 0
+        name: zast.nameid.zero
         parent: ztypes.declid
         kind: declkind.noneDecl
         node: zast.nodeid
@@ -3316,7 +3325,7 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
     # unitScopeOf climbs through it and probeScopeTyperef finds no member
     # index on it.
     childTid.programRoot = (childTid.declNew
-        name: 0
+        name: zast.nameid.zero
         parent: ztypes.declid
         kind: declkind.programDecl
         node: zast.nodeid

@@ -200,7 +200,7 @@ isConformanceLabelOf: function {
     ty: ZTyping.view
     reg: ztypes.ZTypeRegistry.view
     tid: ztypes.tid
-    nameId: u64
+    nameId: zast.nameid
 } out bool is {
     if (ty.isConformanceLabel implTid: tid :nameId) then return true
     og: reg.genericOriginOf :tid
@@ -215,7 +215,7 @@ sumArmNameIds: function {
     ty: ZTyping.view
     reg: ztypes.ZTypeRegistry.view
     tid: ztypes.tid
-    ids: ListVal u64
+    ids: ListVal zast.nameid
 } is {
     # a partial carries no rows of its own: its template's arms are its arms
     ot8: tid
@@ -249,12 +249,12 @@ sumArmNames: function {
     tid: ztypes.tid
     names: List String
 } is {
-    ids: ListVal u64
+    ids: ListVal zast.nameid
     sumArmNameIds :ty :reg :tid :ids
     i: u64
     n: ids.length
     for i < n loop {
-        nb: pool.texts.get i: (zast.nameid.create from: (ids.get :i).u32.orPanic)
+        nb: pool.texts.get i: (ids.get :i)
         names.append nb.copy
         i = i + 1
     }
@@ -363,7 +363,7 @@ ZEntryDumpRow: class {
     # the entry's own id
     entryId: u64
     # its name, as a pool id
-    name: u32
+    name: zast.nameid
     # its type at the moment of the snapshot, narrowing included
     ztypeId: ztypes.tid
     # whether it defines the name or merely refers to it
@@ -565,7 +565,7 @@ ZSymbolTable: class {
         fr: this.open.get i: index
         if fr.id.isZero then return
         (this.typing.declNewLocal
-            name: nameId.u32
+            name: nameId
             parent: fr.id
             node: zast.nodeid
             typeId: (this.reg.variableTypeOf id: vid)
@@ -854,7 +854,7 @@ ZSymbolTable: class {
         ex: this.typing.declFindChild parentDeclId: top.id :nameId
         if ex.isZero.not then return
         (this.typing.declNewLocal
-            name: nameId.u32
+            name: nameId
             parent: top.id
             node: zast.nodeid
             typeId: ztypeId
@@ -2171,7 +2171,7 @@ ZSymbolTable: class {
     } is {
         d: this.findLocal :nameId
         if d.isZero then return
-        allSubs: ListVal u64
+        allSubs: ListVal zast.nameid
         (sumArmNameIds
             ty: this.typing
             reg: this.reg
@@ -2187,7 +2187,7 @@ ZSymbolTable: class {
         ri: u64
         for ri < rn loop {
             nm: allSubs.get i: ri
-            isExcl: newExcl.has item: (zast.nameid.create from: nm.u32.orPanic)
+            isExcl: newExcl.has item: nm
             if isExcl.not then {
                 riv: ri
                 remainIdx.append riv
@@ -2202,7 +2202,7 @@ ZSymbolTable: class {
             if remainIdx.length == 1 then {
                 soleIx: remainIdx.get i: 0
                 sole: allSubs.get i: soleIx
-                narrowedSub = zast.nameid.create from: sole.u32.orPanic
+                narrowedSub = sole
             }
             e: this.reg.newEntry ztypeId: fullTypeId
             e.narrowedSubtype = narrowedSub
@@ -2366,7 +2366,7 @@ ZSymbolTable: class {
     closeArmNarrowingEnds: function {:this marker: u64} is {
         for this.armNarrowingEnds.length > marker loop {
             d: this.armNarrowingEnds.pop
-            nid: zast.nameid.create from: (this.typing.declNameOf declId: d)
+            nid: this.typing.declNameOf declId: d
             if (this.findLocal nameId: nid) == d then this.layNarrowingEnd declId: d
         }
     }
@@ -2597,9 +2597,9 @@ ZSymbolTable: class {
 
     # All defined, non-taken names inner->outer (dedup), for did-you-mean:
     # each open scope's locals in definition order, innermost scope first.
-    allNames: function {this: this.view} out ListVal u32 is {
-        names: ListVal u32
-        seen: IdSet u32
+    allNames: function {this: this.view} out ListVal zast.nameid is {
+        names: ListVal zast.nameid
+        seen: IdSet zast.nameid
         cur: this.curScope
         for cur.isZero.not loop {
             if (this.typing.declIsScope declId: cur).not then return names
