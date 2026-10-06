@@ -2375,7 +2375,13 @@ perf: $(PERFBIN)
 #
 # +51 an interpolation built inline as a call's argument frees the temporaries
 # its parts hoisted: 0 behaviour, +16 source (ab.sh).
-ALLOC_BASELINE := 2224568
+#
+# +13,321 the generated `z` unit: every build makes z.z and z/build.z from its
+# values, writes them to .zerolang/ (or the cache dir) when they changed, and
+# mounts them from memory between src and the stdlib: +562 behaviour (the
+# text, the compare with the copy on disk, the in-memory provider), +12,722
+# source (ab.sh).
+ALLOC_BASELINE := 2237889
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

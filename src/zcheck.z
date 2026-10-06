@@ -28,6 +28,8 @@ public: unit {
     :vendoredTcc
     :newVfs
     :buildRoots
+    :GenLayer
+    :noLayer
 }
 
 astnode: zast.astnode
@@ -113,19 +115,43 @@ vfsroots: record {
     firstSrc: zvfs.fsno
 }
 
+# GenLayer -- the generated `z` unit as a build mounts it (zproject.zLayer
+# makes it). Its files are served from memory, so a build reads the values it
+# generated even while another build rewrites the copy on disk; the copy on
+# disk names them, so a diagnostic or an editor opens the real file.
+GenLayer: class {
+    # where the files live on disk, the directory holding z.z; "" when they
+    # have no copy on disk. An empty `paths` is no layer at all
+    dir: String
+    # each file's path under `dir`: z.z, z/build.z
+    paths: List String
+    # each file's text, parallel to `paths`
+    texts: List String
+    # the project's own project.z, mounted alone as z/project.z; "" for none
+    projectFile: String
+}
+
+# noLayer -- no generated layer: a build that mounts no `z` unit
+noLayer: function out GenLayer is {
+    return (GenLayer dir: String paths: List String texts: List String projectFile: String)
+}
+
 # buildRoots -- the one root stack every driver parses through: the stdlib
-# bound first, then each src root. Each `before` puts its root ahead of
-# everything already bound, so binding back to front leaves the FIRST src root
-# searched first. A unit name that two roots both answer resolves to the
-# earlier root's copy.
+# bound first, then the generated `z` unit, then each src root. Each `before`
+# puts its root ahead of everything already bound, so binding back to front
+# leaves the FIRST src root searched first. A unit name that two roots both
+# answer resolves to the earlier root's copy, so a project's own z.z shadows
+# the generated one as a user unit shadows the stdlib.
 buildRoots: function {
     vfs: zvfs.ZVfs
     systemdir: StringView
     srcdirs: (List String).view
+    layer: GenLayer.view
 } out vfsroots is {
     vfs.registerNull
     systemid: vfs.registerFS rootpath: systemdir.string parentpath: ""
     r: vfsroots root: (vfs.bindRoot newid: systemid kind: zvfs.bindkind.instead) firstSrc: zvfs.fsno
+    if layer.paths.length > 0 then r.root = bindLayer :vfs :layer
     si: srcdirs.length
     for si > 0 loop {
         si = si - 1
@@ -137,6 +163,33 @@ buildRoots: function {
     return r
 }
 
+# bindLayer -- mount the generated layer ahead of what is bound: its files from
+# memory, named by their real directory, and the project's project.z, a real
+# file, alone at z/project.z. Answers the new root.
+bindLayer: function {vfs: zvfs.ZVfs layer: GenLayer.view} out zvfs.fsno is {
+    gid: vfs.registerString
+    pidx: vfs.providers.length - 1
+    {
+        # scope the provider borrow: the binds below need the vfs exclusively
+        box: vfs.providers.getMut i: pidx
+        i: u64
+        for i < layer.paths.length loop {
+            fp: (layer.paths.get :i).copy
+            ct: (layer.texts.get :i).copy
+            box.p.addFile fpath: fp.take content: ct.take
+            i = i + 1
+        }
+    }
+    if layer.dir.length > 0 then vfs.providerRoot.set key: pidx.u32.orPanic value: layer.dir.copy
+    root: vfs.bindRoot newid: gid kind: zvfs.bindkind.before
+    if layer.projectFile.length > 0 then {
+        pz: vfs.registerFS rootpath: layer.projectFile.copy parentpath: ""
+        zdir: vfs.walk parent: gid name: "z"
+        vfs.bind parentid: zdir name: "project.z" newid: pz kind: zvfs.bindkind.instead
+    }
+    return root
+}
+
 # check -- parse + typecheck(full) `mainUnit` against `srcdir` layered
 # over `systemdir`. `overlays` maps root-relative file names (e.g.
 # "zparser.z") to live buffer text; when non-empty they are served by a
@@ -146,11 +199,12 @@ check: function {
     systemdir: StringView
     mainUnit: StringView
     overlays: (Map String V: String)
+    layer: GenLayer.view
 } out CheckResult is {
     vfs: newVfs
     srcdirs: List String
     srcdirs.append from: srcdir.string
-    roots: buildRoots :vfs :systemdir :srcdirs
+    roots: buildRoots :vfs :systemdir :srcdirs :layer
     rootid: roots.root
     srcid: roots.firstSrc
     if overlays.length > 0 then {

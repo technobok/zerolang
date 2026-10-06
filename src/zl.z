@@ -90,11 +90,12 @@ FileRoots: class {
     systemdir: String
     # what is wrong with the project.z the file belongs to, "" when nothing is
     error: String
+    # the generated `z` unit the typecheck tier mounts
+    layer: zcheck.GenLayer
 } as {
-    # fromProject -- what the project around directory `start` gives, where
-    # no flag gave it: its source root and its systemDir
-    fromProject: function {:this start: StringView} is {
-        pf: zproject.discoverProject :start
+    # fromProject -- what project `pf` gives, where no flag gave it: its
+    # source root and its systemDir
+    fromProject: function {:this pf: zproject.ProjectFile.view} is {
         if pf.found.not then return
         this.error = pf.error.copy
         sys: zproject.inProject dir: pf.dir.stringView rel: pf.systemDir.stringView
@@ -117,15 +118,39 @@ rootsFor: function {
     path: StringView
     discover: bool
 } out FileRoots is {
-    r: FileRoots srcdirs: List String systemdir: systemFlag.string error: String
+    r: (FileRoots
+        srcdirs: List String
+        systemdir: systemFlag.string
+        error: String
+        layer: zcheck.noLayer
+    )
     for each d: srcdirs loop r.srcdirs.append from: d.copy
+    pf: zproject.ProjectFile.create
     if discover then {
         start: zcheck.dirname p: path
         if start.length == 0 then start = "."
-        r.fromProject start: start.stringView
+        pf = zproject.discoverProject start: start.stringView
+        r.fromProject :pf
     }
     r.systemdir = zcheck.resolveSystemDir flagVal: r.systemdir.stringView
-    if r.srcdirs.length > 0 then return r
+    if r.srcdirs.length == 0 then fileOwnRoots :path into: r.srcdirs
+    if discover then {
+        un: zsource.unitNameOf :path
+        facts: (zproject.BuildFacts.create
+            srcdirs: r.srcdirs
+            systemdir: r.systemdir.stringView
+            main: un.stringView
+        )
+        facts.triple = pf.target.copy
+        r.layer = zproject.zLayer :pf :facts
+        zproject.writeLayer layer: r.layer
+    }
+    return r
+}
+
+# fileOwnRoots -- the roots of file `path` outside any project and with no
+# --src: its own directory, then the working directory
+fileOwnRoots: function {path: StringView into: List String} is {
     slashOpt: path.lastIndexOf needle: "/"
     match (
         slashOpt
@@ -133,10 +158,9 @@ rootsFor: function {
         # a file at the filesystem root keeps its `/`
         cut: slashOpt
         if cut == 0 then cut = 1
-        r.srcdirs.append from: (path.substring from: 0 to: cut).string
+        into.append from: (path.substring from: 0 to: cut).string
     } case none then null
-    r.srcdirs.append from: ".".string
-    return r
+    into.append from: ".".string
 }
 
 # runLint -- lint each target file at the tier `opts` asks for. Exit 1 if any
@@ -163,6 +187,7 @@ runLint: function {
             path: p.copy
             srcdirs: roots.srcdirs
             systemdir: roots.systemdir.stringView
+            layer: roots.layer
             :opts
         )
         reportAnalysis :a
@@ -271,6 +296,7 @@ formatOnePath: function {
         path: p.string
         srcdirs: roots.srcdirs
         systemdir: roots.systemdir.stringView
+        layer: roots.layer
         opts: fmtOpts
     )
     if a.parseErrorCount > 0 then {

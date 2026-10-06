@@ -13,9 +13,12 @@
 # Public interface -- the definitions other units may reference; all other
 # top-level definitions are private to this unit.
 public: unit {
+    :BuildFacts
     :ProjectFile
     :discoverProject
     :inProject
+    :writeLayer
+    :zLayer
 }
 
 astnode: zast.astnode
@@ -457,5 +460,410 @@ diagnostic: function {head: StringView shown: StringView line: u32 col: u32} out
     r.append "\{line}"
     r.append ":"
     r.append "\{col}"
+    return r
+}
+
+# BuildFacts -- the values one build uses, after every flag: what the generated
+# z/build.z records. The C toolchain's settings are recorded only in its header
+# comment: they are the backend's business, and no program reads them.
+BuildFacts: class {
+    # the --target triple as given, "" for the host
+    triple: String
+    # the src roots, the first searched first
+    srcdirs: List String
+    # the stdlib directory
+    systemdir: String
+    # the unit the build compiles
+    main: String
+    # where a build writes its executable, project-relative; "" for the default
+    outputDir: String
+    # --release
+    release: bool
+    # --fast-hash
+    fastHash: bool
+    # --readable-names
+    readableNames: bool
+    # --eager
+    eager: bool
+    # --cc as resolved, for the header comment only
+    cCompiler: String
+    # --cc-mode as resolved, for the header comment only
+    cCompilerMode: String
+    # --cflags, for the header comment only
+    cFlags: String
+    # --ldflags, for the header comment only
+    linkFlags: String
+    # --tcc-lib as resolved, for the header comment only
+    tccLibDir: String
+} as {
+    # create -- the facts of a build that set nothing but its roots and its unit
+    create: function {
+        srcdirs: (List String).view
+        systemdir: StringView
+        main: StringView
+    } out this is {
+        r: (meta.create
+            triple: String
+            srcdirs: List String
+            systemdir: systemdir.string
+            main: main.string
+            outputDir: String
+            release: false
+            fastHash: false
+            readableNames: false
+            eager: false
+            cCompiler: String
+            cCompilerMode: String
+            cFlags: String
+            linkFlags: String
+            tccLibDir: String
+        )
+        for each d: srcdirs loop r.srcdirs.append from: d.copy
+        return r
+    }
+}
+
+# zLayer -- the generated `z` unit for one build: z.z, which publishes
+# `build` and (in a project) `project`, and z/build.z, the build's values. It
+# lives in .zerolang/targets/<arch>-<os>/ beside the project's project.z, or,
+# with no project, in the user's cache directory, so nothing is written beside
+# a lone source file. The build reads the text from memory and the copy on disk
+# is for people and editors, so two builds running at once cannot read each
+# other's values.
+zLayer: function {pf: ProjectFile.view facts: BuildFacts.view} out zcheck.GenLayer is {
+    osn: ztarget.targetOrHostOs triple: facts.triple.stringView
+    arn: ztarget.targetOrHostArch triple: facts.triple.stringView
+    key: arn.copy
+    key.append "-"
+    key.append osn
+    base: layerBaseOf :pf :facts
+    home: zerolangDirOf :pf :facts
+    dir: String
+    tsub: "targets/\{key}"
+    if home.length > 0 then dir = zcheck.joinPath a: home.stringView b: tsub.stringView
+    projectFile: String
+    if pf.found then projectFile = zcheck.joinPath a: pf.dir.stringView b: projectFileName
+    layer: (zcheck.GenLayer
+        :dir
+        paths: List String
+        texts: List String
+        :projectFile
+    )
+    layer.paths.append from: "z.z".string
+    layer.texts.append from: (zText hasProject: pf.found)
+    layer.paths.append from: "z/build.z".string
+    layer.texts.append from: (buildText
+        :pf
+        :facts
+        base: base.stringView
+        osName: osn.stringView
+        archName: arn.stringView
+        key: key.stringView
+    )
+    return layer
+}
+
+# layerBaseOf -- the directory every path in z/build.z is relative to: the
+# project's, or with no project the first src root, the main file's own
+layerBaseOf: function {pf: ProjectFile.view facts: BuildFacts.view} out String is {
+    if pf.found then return pf.dir.copy
+    if facts.srcdirs.length == 0 then return "."
+    return (facts.srcdirs.get i: 0).copy
+}
+
+# zerolangDirOf -- the compiler's own directory for this build: `.zerolang`
+# beside project.z, or with no project one under the user's cache directory
+# keyed by the main file's directory; "" when there is no cache directory
+zerolangDirOf: function {pf: ProjectFile.view facts: BuildFacts.view} out String is {
+    if pf.found then return (zcheck.joinPath a: pf.dir.stringView b: ".zerolang")
+    cache: String
+    xc: os.env key: "XDG_CACHE_HOME"
+    match (
+        xc
+    ) case some then {
+        cache = xc.copy
+    } case none then null
+    if cache.length == 0 then {
+        hm: os.env key: "HOME"
+        match (
+            hm
+        ) case some then {
+            if hm.length > 0 then cache = zcheck.joinPath a: hm.stringView b: ".cache"
+        } case none then null
+    }
+    if cache.length == 0 then return ""
+    base: layerBaseOf :pf :facts
+    abs: cleanAbsolute p: base.stringView
+    h: abs.hash
+    sub: "zerolang/\{h}"
+    return (zcheck.joinPath a: cache.stringView b: sub.stringView)
+}
+
+# writeLayer -- put the layer's files on disk, each only when its text
+# changed, written whole to a name of its own and renamed into place, so a
+# reader never sees half a file and a concurrent build's write is never torn.
+# The compiler's directory gets a .gitignore of `*`: it is disposable. Silent
+# when the directory cannot be written: the build reads the layer from memory.
+writeLayer: function {layer: zcheck.GenLayer.view} is {
+    if layer.dir.length == 0 then return
+    zd: zcheck.dirname p: (zcheck.dirname p: layer.dir.stringView).stringView
+    mk: io.mkdirp path: layer.dir
+    if mk.err then return
+    gi: zcheck.joinPath a: zd.stringView b: ".gitignore"
+    writeIfChanged path: gi.stringView text: "*\n"
+    i: u64
+    for i < layer.paths.length loop {
+        rel: layer.paths.get :i
+        full: zcheck.joinPath a: layer.dir.stringView b: rel.stringView
+        sub: zcheck.dirname p: full.stringView
+        io.mkdirp path: sub
+        writeIfChanged path: full.stringView text: (layer.texts.get :i).stringView
+        i = i + 1
+    }
+}
+
+# writeIfChanged -- `text` into `path` unless it already holds exactly that:
+# whole, under a name of its own, then renamed over the old file
+writeIfChanged: function {path: StringView text: StringView} is {
+    old: io.readText :path
+    match (
+        old
+    ) case ok then {
+        if old.stringView == text then return
+    } case err then null
+    pid: os.pid
+    tmp: path.string
+    tmp.append ".\{pid}.tmp"
+    w: io.writeText path: tmp content: text
+    if w.err then return
+    mv: io.rename from: tmp to: path
+    if mv.err then io.remove path: tmp
+}
+
+# zText -- z.z: the unit a program names as `z`
+zText: function {hasProject: bool} out String is {
+    t: String
+    t.append "# z.z -- GENERATED by zc for the build that wrote it; do not edit. zc\n"
+    t.append "# rewrites it whenever a value changes, and the .zerolang directory\n"
+    t.append "# holding it is safe to delete.\n"
+    t.append "#\n"
+    t.append "# `z.build` is what the build is: its target, its unit, its switches.\n"
+    if hasProject then t.append "# `z.project` is the project's own project.z.\n"
+    t.append "public: unit {\n"
+    t.append "    :build\n"
+    if hasProject then t.append "    :project\n"
+    t.append "}\n"
+    return t
+}
+
+# buildText -- z/build.z: the build's values as constants, under a header
+# that says where the build's units came from
+buildText: function {
+    pf: ProjectFile.view
+    facts: BuildFacts.view
+    base: StringView
+    osName: StringView
+    archName: StringView
+    key: StringView
+} out String is {
+    t: buildHeader :pf :facts :base :key
+    t.append kindsText
+    t.append "\n# the operating system this build is for\n"
+    t.append "os: oskind.\{osName}\n"
+    t.append "\n# the architecture this build is for\n"
+    t.append "arch: archkind.\{archName}\n"
+    t.append "\n# the target triple: as --target or the project's target gave it, else the\n"
+    t.append "# host's, as <arch>-<os>\n"
+    tr: facts.triple.copy
+    if tr.length == 0 then tr = key.string
+    t.append "triple: \{quoted s: tr.stringView}\n"
+    t.append "\n# the unit this build compiles\n"
+    t.append "main: \{quoted s: facts.main.stringView}\n"
+    first: String
+    if facts.srcdirs.length > 0 then first = relativeTo :base p: (facts.srcdirs.get i: 0).stringView
+    t.append "\n# the first source root; \"\" when it lies outside the directory the paths\n"
+    t.append "# here are relative to\n"
+    t.append "sourceDir: \{quoted s: first.stringView}\n"
+    od: facts.outputDir.copy
+    if od.length == 0 then od = "."
+    t.append "\n# where the build writes its executable when -o names no file\n"
+    t.append "outputDir: \{quoted s: od.stringView}\n"
+    t.append (switchLine
+        doc: "built with optimisation (--release)"
+        name: "release"
+        value: facts.release
+    )
+    t.append (switchLine
+        doc: "the emitter's cheaper name hash (--fast-hash)"
+        name: "fastHash"
+        value: facts.fastHash
+    )
+    t.append (switchLine
+        doc: "source names in the C rather than numbered ones (--readable-names)"
+        name: "readableNames"
+        value: facts.readableNames
+    )
+    t.append (switchLine
+        doc: "every definition typechecked, not only what main reaches (--eager)"
+        name: "eager"
+        value: facts.eager
+    )
+    t.append "\n# the version of zc that wrote this\n"
+    ver: zversion.semver
+    t.append "zcVersion: \{quoted s: ver.stringView}\n"
+    return t
+}
+
+# buildHeader -- build.z's opening comment: what the file is, where each root
+# of the build comes from, and the C toolchain, which no constant names
+buildHeader: function {
+    pf: ProjectFile.view
+    facts: BuildFacts.view
+    base: StringView
+    key: StringView
+} out String is {
+    t: String
+    t.append "# build.z -- GENERATED by zc: the values this build used, after every flag.\n"
+    t.append "# Do not edit; zc rewrites it whenever a value changes. Read each as\n"
+    t.append "# `z.build.<name>`. A path below is relative to "
+    if pf.found then {
+        t.append "the project directory, the\n# one holding project.z.\n"
+    } else {
+        t.append "the main file's directory.\n"
+    }
+    t.append "#\n# Where the build's units come from, first searched first:\n"
+    for each d: facts.srcdirs loop {
+        t.append (layoutLine root: d.stringView :base what: "a source root")
+    }
+    if pf.found then {
+        t.append "#   .zerolang/targets/\{key}  -- this unit and z.z (generated)\n"
+    } else {
+        t.append "#   (the user's cache directory)  -- this unit and z.z (generated)\n"
+    }
+    t.append (layoutLine root: facts.systemdir.stringView :base what: "the stdlib")
+    if pf.found then t.append "#   project.z  -- mounted alone as z/project.z\n"
+    t.append "#\n# The C toolchain: the backend's business, so no constant below names it.\n"
+    t.append (commentPair name: "cCompiler" value: facts.cCompiler.stringView)
+    t.append (commentPair name: "cCompilerMode" value: facts.cCompilerMode.stringView)
+    t.append (commentPair name: "cFlags" value: facts.cFlags.stringView)
+    t.append (commentPair name: "linkFlags" value: facts.linkFlags.stringView)
+    tl: relativeTo :base p: facts.tccLibDir.stringView
+    if tl.length == 0 then tl = "(outside this directory)"
+    t.append (commentPair name: "tccLibDir" value: tl.stringView)
+    return t
+}
+
+# switchLine -- one switch of build.z, under its doc line
+switchLine: function {doc: StringView name: StringView value: bool} out String is {
+    v: "false"
+    if value then v = "true"
+    t: "\n# \{doc}\n"
+    t.append name
+    t.append ": "
+    t.append v
+    t.append "\n"
+    return t
+}
+
+# kindsText -- the two kinds build.z's os and arch are values of
+kindsText: function out String is {
+    t: "\n".string
+    t.append "# oskind -- operating-system family.\n"
+    t.append "oskind: variant {\n"
+    t.append "    # the Linux target: ELF objects and a glibc-shaped libc\n"
+    t.append "    linux: null\n"
+    t.append "    # macOS\n"
+    t.append "    darwin: null\n"
+    t.append "    # the Windows target: PE objects, and the one arm whose path separator\n"
+    t.append "    # and executable suffix differ from the rest\n"
+    t.append "    windows: null\n"
+    t.append "    # an OS the build does not name; a require: guard should treat it as\n"
+    t.append "    # unsupported rather than assume\n"
+    t.append "    other: null\n"
+    t.append "}\n"
+    t.append "\n"
+    t.append "# archkind -- CPU architecture family.\n"
+    t.append "archkind: variant {\n"
+    t.append "    # 64-bit x86\n"
+    t.append "    x86_64: null\n"
+    t.append "    # 64-bit ARM\n"
+    t.append "    aarch64: null\n"
+    t.append "    # an architecture the build does not name\n"
+    t.append "    other: null\n"
+    t.append "}\n"
+    return t
+}
+
+# layoutLine -- one root of the layout comment: its path relative to `base`,
+# or what it is when it lies outside
+layoutLine: function {root: StringView base: StringView what: StringView} out String is {
+    rel: relativeTo :base p: root
+    if rel.length == 0 then return "#   (\{what}, outside this directory)\n"
+    return "#   \{rel}  -- \{what}\n"
+}
+
+# commentPair -- `name: value` as a comment line
+commentPair: function {name: StringView value: StringView} out String is {
+    return "#   \{name}: \{value}\n"
+}
+
+# quoted -- `s` as a string literal
+quoted: function {s: StringView} out String is {
+    r: "\"".string
+    i: u64
+    for i < s.length loop {
+        b: s.byteAt :i
+        match (
+            b
+        ) case some then {
+            if b == 34 then {
+                r.append "\\\""
+            } else if b == 92 then {
+                r.append "\\\\"
+            } else {
+                r.appendByte :b
+            }
+        } case none then null
+        i = i + 1
+    }
+    r.append "\""
+    return r
+}
+
+# relativeTo -- `p` relative to `base`, both as the driver spells them: "." for
+# `base` itself, "" when `p` lies outside it (or is empty)
+relativeTo: function {base: StringView p: StringView} out String is {
+    if p.length == 0 then return ""
+    ab: cleanAbsolute p: base
+    ap: cleanAbsolute :p
+    if ap == ab then return "."
+    pre: "\{ab}/"
+    if (isRootPath p: ab.stringView) then pre = "/"
+    rest: ap.stringView.stripPrefix p: pre
+    match (
+        rest
+    ) case some then {
+        return rest.string
+    } case none then null
+    return ""
+}
+
+# cleanAbsolute -- `p` as an absolute path with `.` and `..` resolved by name
+cleanAbsolute: function {p: StringView} out String is {
+    abs: absoluteOf :p
+    parts: List String
+    for each piece: (abs.stringView.split sep: "/") loop {
+        if (dotsOnly p: piece n: 2) then {
+            if parts.length > 0 then parts.pop
+        } else if piece.length > 0 when (dotsOnly p: piece n: 1).not then {
+            parts.append piece.string
+        }
+    }
+    r: String
+    for each q: parts loop {
+        r.append "/"
+        r.append q
+    }
+    if r.length == 0 then return "/"
     return r
 }

@@ -1355,6 +1355,74 @@ emitCSource: function {
     return csrc
 }
 
+# applyProjectOrExit -- the project's settings under the flags, or, when its
+# project.z cannot be read, the error and stop.
+applyProjectOrExit: function {cf: ZcFlags pf: zproject.ProjectFile.view} is {
+    if pf.error.length > 0 then {
+        io.eprintln pf.error
+        io.eprintln "1 error found"
+        os.exit code: 2
+    }
+    cf.applyProject :pf
+}
+
+# printEnvAndExit -- `zc env`: the resolved settings, then stop.
+printEnvAndExit: function {cf: ZcFlags.view pf: zproject.ProjectFile.view} is {
+    (printEnv
+        project: pf.dir.stringView
+        systemFlag: cf.systemFlag.stringView
+        runtimeFlag: cf.runtimeFlag.stringView
+        ccFlag: cf.ccFlag.stringView
+        ccModeFlag: cf.ccModeFlag.stringView
+        targetTriple: cf.targetTriple.stringView
+        tccLibFlag: cf.tccLibFlag.stringView
+    )
+    os.exit code: 0
+}
+
+# buildFactsOf -- the values this build uses, after every flag, for the
+# generated z/build.z; the toolchain as resolved
+buildFactsOf: function {
+    cf: ZcFlags.view
+    systemdir: StringView
+    cc: StringView
+    ccMode: StringView
+    tccDir: StringView
+} out zproject.BuildFacts is {
+    f: zproject.BuildFacts.create srcdirs: cf.srcdirs :systemdir main: cf.unitname.stringView
+    f.triple = cf.targetTriple.copy
+    f.outputDir = cf.outputDir.copy
+    f.release = cf.release
+    f.fastHash = cf.fastHash
+    f.readableNames = cf.readableNames
+    f.eager = cf.eagerCheck
+    f.cCompiler = cc.string
+    f.cCompilerMode = ccMode.string
+    f.cFlags = cf.cflags.copy
+    f.linkFlags = cf.ldflags.copy
+    f.tccLibDir = tccDir.string
+    return f
+}
+
+# mountBuild -- bind the build's roots into `vfs`: the stdlib, the generated
+# `z` unit -- made from this build's values and written to disk for people
+# and editors -- and the src roots. Answers the root a parse starts from.
+mountBuild: function {
+    vfs: zvfs.ZVfs
+    cf: ZcFlags.view
+    pf: zproject.ProjectFile.view
+    systemdir: StringView
+    cc: StringView
+    ccMode: StringView
+    tccDir: StringView
+} out zvfs.fsno is {
+    facts: buildFactsOf :cf :systemdir :cc :ccMode :tccDir
+    layer: zproject.zLayer :pf :facts
+    zproject.writeLayer :layer
+    roots: zcheck.buildRoots :vfs :systemdir srcdirs: cf.srcdirs :layer
+    return roots.root
+}
+
 # CLI entry point: read the verbs answered before any flag, parse the rest of
 # the command line, then produce what the subcommand and the flags asked for --
 # C, a model dump, or a native executable, run when `run` asked for it.
@@ -1378,25 +1446,9 @@ main: function is {
     isRun: sub.stringView == "run"
     cf: parseZcArgs :argv :n sub: sub.stringView :unitname :isRun
     pf: zproject.discoverProject start: cf.projectStart.stringView
-    if pf.error.length > 0 then {
-        io.eprintln pf.error
-        io.eprintln "1 error found"
-        os.exit code: 2
-    }
-    cf.applyProject :pf
+    applyProjectOrExit :cf :pf
     refuseBadTarget targetTriple: cf.targetTriple.stringView
-    if sub.stringView == "env" then {
-        (printEnv
-            project: pf.dir.stringView
-            systemFlag: cf.systemFlag.stringView
-            runtimeFlag: cf.runtimeFlag.stringView
-            ccFlag: cf.ccFlag.stringView
-            ccModeFlag: cf.ccModeFlag.stringView
-            targetTriple: cf.targetTriple.stringView
-            tccLibFlag: cf.tccLibFlag.stringView
-        )
-        os.exit code: 0
-    }
+    if sub.stringView == "env" then printEnvAndExit :cf :pf
     mode: (resolveOutMode
         sub: sub.stringView
         unitname: cf.unitname.stringView
@@ -1430,8 +1482,15 @@ main: function is {
         os.exit code: 2
     }
     vfs: zcheck.newVfs
-    roots: zcheck.buildRoots :vfs systemdir: systemdir.stringView srcdirs: cf.srcdirs
-    rootid: roots.root
+    rootid: (mountBuild
+        :vfs
+        :cf
+        :pf
+        systemdir: systemdir.stringView
+        cc: ccPath.stringView
+        ccMode: ccMode.stringView
+        tccDir: tccDir.stringView
+    )
     p: zparser.Parser.create
     prog: p.parse :vfs :rootid mainUnitName: cf.unitname
     tParse1: os.monotonicMillis
