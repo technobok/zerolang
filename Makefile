@@ -2393,7 +2393,12 @@ perf: $(PERFBIN)
 #
 # +3,566 `zc init`: +5 behaviour, +3,399 source (ab.sh; init's templates and the
 # verb table zc now reads as data).
-ALLOC_BASELINE := 2238270
+#
+# -241 the repository is a project: the measured self-compile runs inside it, so
+# its generated `z` unit is the project's .zerolang rather than a cache
+# directory found through $HOME and named by a hash of the path. ab.sh: 0
+# behaviour, +28 source (the trees ab.sh compares each run in their own copy).
+ALLOC_BASELINE := 2238029
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

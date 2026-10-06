@@ -93,21 +93,26 @@ FileRoots: class {
     # the generated `z` unit the typecheck tier mounts
     layer: zcheck.GenLayer
 } as {
-    # fromProject -- what project `pf` gives, where no flag gave it: its
-    # source root and its systemDir
-    fromProject: function {:this pf: zproject.ProjectFile.view} is {
+    # fromProject -- what project `pf` gives the file at `path`, where no flag
+    # gave it: its systemDir, and its source root when the file lies under it.
+    # A file of the project's tree outside its sources (a test fixture, a
+    # script) is checked from its own directory, as zc checks a unit named by
+    # its file.
+    fromProject: function {:this pf: zproject.ProjectFile.view path: StringView} is {
         if pf.found.not then return
         this.error = pf.error.copy
         sys: zproject.inProject dir: pf.dir.stringView rel: pf.systemDir.stringView
         if this.systemdir.length == 0 then this.systemdir = sys.take
-        if this.srcdirs.length == 0 then this.srcdirs.append from: pf.sourceRoot
+        if this.srcdirs.length == 0 when (pf.holdsSource :path) then {
+            this.srcdirs.append from: pf.sourceRoot
+        }
     }
 }
 
 # rootsFor -- the roots `path` is checked against. The src roots are every
 # --src as given; when none was, the source root of the project the file sits
-# in; outside a project, the file's own directory and then the working
-# directory. The stdlib is --system, else the project's systemDir, else zc's
+# in, when the file lies under it; otherwise the file's own directory and then
+# the working directory. The stdlib is --system, else the project's systemDir, else zc's
 # resolution. For a subunit, `path` is its topmost unit's file. The file's own
 # directory comes first, so the unit checked is the file named and not a
 # same-named unit where zl happens to run. Only a `discover` run looks for the
@@ -130,7 +135,7 @@ rootsFor: function {
         start: zcheck.dirname p: path
         if start.length == 0 then start = "."
         pf = zproject.discoverProject start: start.stringView
-        r.fromProject :pf
+        r.fromProject :pf :path
     }
     r.systemdir = zcheck.resolveSystemDir flagVal: r.systemdir.stringView
     if r.srcdirs.length == 0 then fileOwnRoots :path into: r.srcdirs

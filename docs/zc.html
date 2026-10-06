@@ -85,6 +85,8 @@ Table of Contents</div>
 </li>
 <li><a href="#commands">Commands</a>
 </li>
+<li><a href="#projects">Projects</a>
+</li>
 <li><a href="#the-source-argument">The source argument</a>
 </li>
 <li><a href="#flags">Flags</a>
@@ -160,7 +162,9 @@ standard library and runtime relative to its own executable (see
 an error &#x2014; use <code>zc build &lt;src&gt;</code>.</p>
 <ul>
 <li><strong>build</strong> <code>&lt;src&gt;</code> &#x2014; compile to a native executable; output is
-<code>-o OUT</code> or <code>./&lt;unit&gt;</code>.</li>
+<code>-o OUT</code>, else <code>&lt;unit&gt;</code> in the project's directory (or its
+<code>outputDir</code>), or outside a project in <code>./</code>. In a project whose
+<code>project.z</code> sets <code>main</code>, <code>&lt;src&gt;</code> may be left out.</li>
 <li><strong>run</strong> <code>&lt;src&gt; [args...]</code> &#x2014; build to a temporary file, then run it
 with an inherited terminal, forwarding the trailing <code>args</code> and
 propagating the program's exit code.</li>
@@ -181,6 +185,9 @@ zl rule code -- an architecture rule <code>A001</code>, a lint <code>L013</code>
 <code>zl explain</code>'s; zc refuses it, naming that command, and exits 2.</li>
 <li><strong>env</strong> &#x2014; print resolved tool paths and settings (see
 <a href="#inspecting-the-environment">Inspecting the environment</a>).</li>
+<li><strong>init</strong> <code>[dir]</code> &#x2014; make <code>dir</code> (default <code>.</code>) a project: write its
+<code>project.z</code> and <code>.zerolang/</code>, and a <code>main.z</code> when it holds no unit
+(see <a href="#projects">Projects</a>).</li>
 <li><strong>lint</strong> <code>[args...]</code> and <strong>fmt</strong> <code>[args...]</code> &#x2014; thin shims that
 locate the sibling <code>zl</code> binary (the standalone linter/formatter), forward
 the arguments, inherit the terminal, and propagate its exit code. The rules,
@@ -199,7 +206,55 @@ zc emit hello -o hello.c
 zc explain E0200</code></pre>
 <p><code>-h</code> / <code>--help</code> and <code>-V</code> / <code>--version</code> are also accepted in any
 position, so <code>zc build --help</code> prints the help for <code>build</code>.</p>
-<h2 id="the-source-argument"><a href="#the-source-argument">4. The source argument</a></h2>
+<h2 id="projects"><a href="#projects">4. Projects</a></h2>
+<p>A <strong>project</strong> is a directory holding a <code>project.z</code>: the user's file of
+settings, and the marker of the project's root. <code>zc</code>, <code>zl</code> and <code>zls</code>
+find it by walking up from where they start -- <code>zc</code> from the directory of a
+unit named by its file, else the working directory -- and stop at the first,
+nearest one. With none anywhere above, each behaves exactly as without
+projects.</p>
+<pre><code class="language-zerolang">  # project.z
+  sourceDir: "src"
+  main: "app"
+  release: true</code></pre>
+<p>The settings are read <strong>before</strong> anything is built, since they say where the
+source and the stdlib are, so each one is a literal: a string, or <code>true</code> /
+<code>false</code>. A setting the file does not know, a value that is not a literal and
+a literal of the wrong kind are each an error at the line, and stop the
+driver. A path is relative to the project directory. A <strong>flag fully
+overrides</strong> the file's value; a unit named by its file is its own source root.</p>
+<ul>
+<li><code>sourceDir</code> -- the source root (<code>--src</code>); unset is the project
+directory itself</li>
+<li><code>systemDir</code> -- the stdlib (<code>--system</code>)</li>
+<li><code>runtimeDir</code> -- the C runtime (<code>--runtime</code>)</li>
+<li><code>main</code> -- the unit <code>build</code> / <code>run</code> / <code>emit</code> / <code>dump</code> compile
+when none is named</li>
+<li><code>target</code> -- the triple to build for (<code>--target</code>)</li>
+<li><code>outputDir</code> -- where <code>build</code> writes the executable when <code>-o</code>
+names no file; unset is the project directory</li>
+<li><code>release</code>, <code>fastHash</code>, <code>readableNames</code>, <code>eager</code> -- the
+switches (<code>--release</code>, <code>--fast-hash</code>, <code>--readable-names</code>,
+<code>--eager</code>)</li>
+<li><code>cCompiler</code>, <code>cCompilerMode</code>, <code>cFlags</code>, <code>linkFlags</code>,
+<code>tccLibDir</code> -- the C toolchain (<code>--cc</code>, <code>--cc-mode</code>, <code>--cflags</code>,
+<code>--ldflags</code>, <code>--tcc-lib</code>)</li>
+</ul>
+<p>The compiler's own folder, <code>.zerolang/</code>, sits beside <code>project.z</code> and is
+disposable: it holds a <code>.gitignore</code> of <code>*</code> and the <strong>generated</strong> unit
+<code>z</code> each build writes -- <code>z.build</code> says what the build is
+(<code>z.build.os</code>, <code>z.build.main</code>, ...) and <code>z.project</code> is the project's
+own <code>project.z</code> (see <code>z_unit.pdoc</code>). Outside a project that unit lives in
+the user's cache directory instead.</p>
+<p><code>zc init [dir]</code> makes a directory a project: it writes <code>project.z</code> with
+every setting commented out at its default, and <code>.zerolang/</code>. In a directory
+with no <code>.z</code> file it also writes <code>main.z</code>, printing a greeting, and sets
+<code>main</code> to it, so <code>zc build &amp;&amp; ./main</code> works at once. It refuses a directory
+that already holds a <code>project.z</code>.</p>
+<p>The zerolang repository is itself a project: its <code>project.z</code> names
+<code>src</code>, <code>lib/system</code> and the compiler's own unit, so a plain <code>zc build</code>
+anywhere in the tree builds <code>zc</code>.</p>
+<h2 id="the-source-argument"><a href="#the-source-argument">5. The source argument</a></h2>
 <p><strong>build</strong>, <strong>run</strong>, <strong>emit</strong>, and <strong>dump</strong> take a <strong>&lt;src&gt;</strong> &#x2014; either a
 unit name (<code>hello</code>) or a path to a <code>.z</code> file (<code>hello.z</code>,
 <code>./sub/hello.z</code>). A path &#x2014; anything containing <code>/</code> or ending in <code>.z</code> &#x2014;
@@ -208,8 +263,8 @@ sets <code>--src</code> to the file's directory and the unit to its base name, u
 <p>Because the command always comes first, a unit whose name collides with a
 command is reached through the explicit form: <code>zc build run</code> or
 <code>zc build ./run.z</code> to build a unit named <code>run</code>.</p>
-<h2 id="flags"><a href="#flags">5. Flags</a></h2>
-<h3 id="global-flags"><a href="#global-flags">5.1. Global flags</a></h3>
+<h2 id="flags"><a href="#flags">6. Flags</a></h2>
+<h3 id="global-flags"><a href="#global-flags">6.1. Global flags</a></h3>
 <p>These are accepted in any position.</p>
 <ul>
 <li><code>-h</code> / <code>--help</code> &#x2014; print usage; after a command, print that
@@ -217,7 +272,7 @@ command's help.</li>
 <li><code>-V</code> / <code>--version</code> &#x2014; print the version line (see
 <a href="#the-version-line">The version line</a>).</li>
 </ul>
-<h3 id="build-flags"><a href="#build-flags">5.2. Build flags</a></h3>
+<h3 id="build-flags"><a href="#build-flags">6.2. Build flags</a></h3>
 <p>These apply to <code>build</code>, <code>run</code>, <code>emit</code>, and <code>dump</code>.</p>
 <ul>
 <li><code>--src DIR</code> &#x2014; user source directory (default: the current directory).
@@ -273,7 +328,7 @@ flag does not.</li>
 on stderr.</li>
 <li><code>--canon</code> &#x2014; <code>dump</code> only: write the id-normalized model.</li>
 </ul>
-<h2 id="tree-resolution"><a href="#tree-resolution">6. Tree resolution</a></h2>
+<h2 id="tree-resolution"><a href="#tree-resolution">7. Tree resolution</a></h2>
 <p><code>zc</code> locates its system library and runtime by this precedence, first
 match wins:</p>
 <ul>
@@ -288,15 +343,16 @@ match wins:</p>
 <li>the current directory (<code>lib/system</code>, <code>src/runtime</code>) &#x2014; the final
     fallback.</li>
 </ul>
-<p><code>--src</code> (user code) always defaults to the current directory, never the
-install tree. Repeating it adds a root rather than replacing the previous one,
+<p>Inside a project, its <code>systemDir</code>, <code>runtimeDir</code> and <code>tccLibDir</code> come
+before the environment. <code>--src</code> (user code) defaults to the project's
+<code>sourceDir</code>, else the current directory, never the install tree. Repeating it adds a root rather than replacing the previous one,
 which is how a program in one tree reaches units in another &#x2014; the smoke
 harnesses under <code>tests/unit</code> reach the compiler's own units in <code>src</code> that
 way. The C compiler is chosen as <code>--cc</code> &gt; <code>--target</code>-derived
 (<code>&lt;triple&gt;-gcc</code>) &gt; <code>$CC</code> &gt; <code>cc</code>.</p>
 <p>tcc's runtime payload follows the same chain: <code>--tcc-lib</code> &gt; <code>$ZEROLANG_TCC</code>
 &gt; <code>$ZEROLANG_ROOT/lib/tcc</code> &gt; <code>&lt;root&gt;/lib/tcc</code> &gt; <code>out/tcc-lib</code>.</p>
-<h2 id="the-vendored-tcc"><a href="#the-vendored-tcc">7. The vendored tcc</a></h2>
+<h2 id="the-vendored-tcc"><a href="#the-vendored-tcc">8. The vendored tcc</a></h2>
 <p>The compiler vendors <strong>tinycc</strong> (<code>vendor/tinycc</code>) and <code>make install</code>
 lays it down as <code>bin/tcc</code> beside the three tools, with its runtime payload
 &#x2014; <code>libtcc1.a</code>, tcc's own headers &#x2014; in <code>lib/tcc</code>. <code>--cc tcc</code> finds it:
@@ -326,7 +382,7 @@ the portable C forms of the word primitives: tcc has no <code>__int128</code> an
 carry builtins, and it compiles none of <code>math</code>'s inline asm kernels. Its big-number
 arithmetic is slower for it; build with gcc or clang for speed (see
 Performance and toolchains in <a href="./stdlib_math.html">math</a>).</p>
-<h2 id="building-and-running"><a href="#building-and-running">8. Building and running</a></h2>
+<h2 id="building-and-running"><a href="#building-and-running">9. Building and running</a></h2>
 <p><strong>build</strong> type-checks the unit, emits self-contained C to a temporary
 file, and invokes the C compiler to produce an executable. Because the
 runtime is inlined at emit time, the single <code>.c</code> needs no extra include
@@ -354,7 +410,7 @@ program links, a unit's <code>require:</code> block's and the C backend's alike,
 executable with the parent's stdin / stdout / stderr (a live terminal),
 forwards the trailing program arguments, and exits with the program's own
 exit code.</p>
-<h2 id="cross-compilation"><a href="#cross-compilation">9. Cross-compilation</a></h2>
+<h2 id="cross-compilation"><a href="#cross-compilation">10. Cross-compilation</a></h2>
 <p><code>--target TRIPLE</code> selects a cross compiler: when <code>--cc</code> is not given,
 the compiler name is <code>&lt;triple&gt;-gcc</code> (for example
 <code>x86_64-w64-mingw32-gcc</code>). The executable name gains a <code>.exe</code> suffix
@@ -385,7 +441,7 @@ runtime natives (<code>os.spawn</code>, <code>io</code> file operations, directo
 will not link for Windows until those natives gain a Win32 backend &#x2014; a
 follow-on. Core, POSIX-free programs cross-build where the cross <code>cc</code> is
 installed.</p>
-<h2 id="the-version-line"><a href="#the-version-line">10. The version line</a></h2>
+<h2 id="the-version-line"><a href="#the-version-line">11. The version line</a></h2>
 <p><code>zc --version</code> (also <code>-V</code>, also the <code>version</code> command) prints one
 line: the release number, the commit the binary was built from as SemVer
 build metadata, that commit's date, and the C compiler that built it.</p>
@@ -403,13 +459,14 @@ identical.</p>
 companions read it, and <code>--cflags</code> passes the define through. See
 <code>docs/stdlib_os.pdoc</code>.</p>
 <pre><code>zc build myprog --cflags '-DZC_BUILD_COMMIT="a1b2c3d4"'</code></pre>
-<h2 id="inspecting-the-environment"><a href="#inspecting-the-environment">11. Inspecting the environment</a></h2>
+<h2 id="inspecting-the-environment"><a href="#inspecting-the-environment">12. Inspecting the environment</a></h2>
 <p><code>zc env</code> prints the resolved tool paths and settings as <code>KEY=VALUE</code>
 lines &#x2014; <code>ZEROLANG_ROOT</code>, <code>ZEROLANG_SYSTEM</code>, <code>ZEROLANG_RUNTIME</code>,
 <code>ZC_CC</code>, <code>ZC_CC_MODE</code>, <code>ZC_TCC</code>, <code>ZC_TCC_LIB</code>, <code>ZC_TARGET</code>,
+<code>ZC_PROJECT</code> (the <code>project.z</code> in effect, empty outside a project),
 <code>ZC_VERSION</code>,
 <code>ZC_COMMIT</code>, <code>ZC_BUILD_DATE</code>, <code>ZC_BUILD_CC</code>, and <code>ZC_EXE</code>. It
-honours the same flags as a build, so
+honours the same flags and project as a build, so
 <code>zc env --target x86_64-w64-mingw32</code> reports the cross compiler that would
 be used.</p>
 <p>Note that <code>ZC_CC</code> and <code>ZC_BUILD_CC</code> answer different questions:
@@ -418,7 +475,7 @@ be used.</p>
 release number alone; the full build line is what <code>--version</code> prints.</p>
 <pre><code>zc env
 zc env --target x86_64-w64-mingw32</code></pre>
-<h2 id="installation"><a href="#installation">12. Installation</a></h2>
+<h2 id="installation"><a href="#installation">13. Installation</a></h2>
 <p><code>make install</code> builds the three tools (<code>bin/zc</code>, the <code>zl</code>
 linter/formatter, and the <code>zls</code> language server) and copies a
 self-contained, GOROOT-style tree to <code>ROOT</code> (default
@@ -432,7 +489,7 @@ make install ROOT=/opt/zerolang BINDIR=/usr/local/bin</code></pre>
 resolves the symlink to the real binary, each installed tool finds its
 stdlib and runtime from any working directory. (A bare <code>make</code> builds the
 same three tools without installing.)</p>
-<h2 id="exit-codes"><a href="#exit-codes">13. Exit Codes</a></h2>
+<h2 id="exit-codes"><a href="#exit-codes">14. Exit Codes</a></h2>
 <ul>
 <li><code>0</code> &#x2014; Success. For <code>build</code> the executable was produced; for
 <code>run</code> the program ran (its own exit code is propagated); for <code>emit</code>
@@ -444,11 +501,11 @@ or invalid directory paths.</li>
 <li>other &#x2014; for <code>build</code> / <code>run</code>, a non-zero exit from the C compiler
     or from the program itself is propagated unchanged.</li>
 </ul>
-<h2 id="error-format"><a href="#error-format">14. Error Format</a></h2>
+<h2 id="error-format"><a href="#error-format">15. Error Format</a></h2>
 <p>The compiler uses a rustc-inspired error format designed for readability
 and tool integration. Each error includes an error code, source location,
 and the relevant source line with a caret pointing to the error.</p>
-<h3 id="basic-error-format"><a href="#basic-error-format">14.1. Basic Error Format</a></h3>
+<h3 id="basic-error-format"><a href="#basic-error-format">15.1. Basic Error Format</a></h3>
 <pre><code>error[E0008]: undefined identifier: x
  --&gt; MyFile.z:5:10
      |
@@ -463,7 +520,7 @@ root, so it opens from where <code>zc</code> ran: an error in the stdlib's <code
 subunit reads <code>lib/system/system/ranges.z</code> under <code>--system lib/system</code>.
 The source line is displayed with a caret marker pointing to the exact
 location of the error.</p>
-<h3 id="notes-and-hints"><a href="#notes-and-hints">14.2. Notes and Hints</a></h3>
+<h3 id="notes-and-hints"><a href="#notes-and-hints">15.2. Notes and Hints</a></h3>
 <p>Some errors include additional context as <em><strong>notes</strong></em> (explaining why the
 error occurred) or <em><strong>hints</strong></em> (suggesting how to fix it):</p>
 <pre><code>error[E0200]: a reference return keeps its sources locked for the result's
@@ -478,7 +535,7 @@ lifetime -- write `outx T.borrow` / `outx T.view`, not `out`
    2 |     pritn "hello"
      |     ^^^^^
      = hint: did you mean 'print'?</code></pre>
-<h3 id="error-code-numbering"><a href="#error-code-numbering">14.3. Error Code Numbering</a></h3>
+<h3 id="error-code-numbering"><a href="#error-code-numbering">15.3. Error Code Numbering</a></h3>
 <p>Error codes are grouped by category:</p>
 <ul>
 <li><code>E0001&#x2013;E0099</code>: Parser and syntax errors &#x2014; malformed source code,
@@ -557,7 +614,7 @@ itself, or an expression that is not statically evaluable</li>
 <p>Run <code>zc explain &lt;code&gt;</code> for a longer description of any code (for example
 <code>zc explain E0200</code>). An error count summary is printed at the end:</p>
 <pre><code>3 errors found</code></pre>
-<h2 id="compiling-emitted-c"><a href="#compiling-emitted-c">15. Compiling Emitted C</a></h2>
+<h2 id="compiling-emitted-c"><a href="#compiling-emitted-c">16. Compiling Emitted C</a></h2>
 <p><code>zc build</code> and <code>zc run</code> invoke the C compiler for you. If you instead
 <code>emit</code> C, the result is a standalone file that compiles with any C17
 compiler &#x2014; the runtime is inlined, so no extra include paths are needed:</p>
@@ -568,7 +625,7 @@ gcc -std=c17 -Wno-unused-function -o hello hello.c
 errors:</p>
 <pre><code>gcc -std=c17 -fsanitize=address,undefined -Wno-unused-function -o hello hello.c
 ./hello</code></pre>
-<h2 id="examples"><a href="#examples">16. Examples</a></h2>
+<h2 id="examples"><a href="#examples">17. Examples</a></h2>
 <p>Build and run a program:</p>
 <pre><code>zc run hello --src examples</code></pre>
 <p>Build a release executable at a chosen path:</p>

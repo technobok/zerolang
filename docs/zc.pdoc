@@ -71,7 +71,9 @@ an error — use #~"zc build <src>".
 
 #ul:
   [#*: #b:"build" #~"<src>" — compile to a native executable; output is
-    #~"-o OUT" or #~"./<unit>".]
+    #~"-o OUT", else #~"<unit>" in the project's directory (or its
+    #~"outputDir"), or outside a project in #~"./". In a project whose
+    #~"project.z" sets #~"main", #~"<src>" may be left out.]
   [#*: #b:"run" #~"<src> [args...]" — build to a temporary file, then run it
     with an inherited terminal, forwarding the trailing #~"args" and
     propagating the program's exit code.]
@@ -92,6 +94,9 @@ an error — use #~"zc build <src>".
     #~"zl explain"'s; zc refuses it, naming that command, and exits 2.]
   [#*: #b:"env" — print resolved tool paths and settings (see
     [#> to=inspecting-the-environment: Inspecting the environment]).]
+  [#*: #b:"init" #~"[dir]" — make #~"dir" (default #~".") a project: write its
+    #~"project.z" and #~".zerolang/", and a #~"main.z" when it holds no unit
+    (see [#> to=projects: Projects]).]
   [#*: #b:"lint" #~"[args...]" and #b:"fmt" #~"[args...]" — thin shims that
     locate the sibling #~"zl" binary (the standalone linter/formatter), forward
     the arguments, inherit the terminal, and propagate its exit code. The rules,
@@ -114,6 +119,64 @@ the unit (or after a #~"--" separator) is passed to the program.
 
 #~"-h" / #~"--help" and #~"-V" / #~"--version" are also accepted in any
 position, so #~"zc build --help" prints the help for #~"build".
+
+
+#--: Projects
+
+A #b:"project" is a directory holding a #~"project.z": the user's file of
+settings, and the marker of the project's root. #~"zc", #~"zl" and #~"zls"
+find it by walking up from where they start -- #~"zc" from the directory of a
+unit named by its file, else the working directory -- and stop at the first,
+nearest one. With none anywhere above, each behaves exactly as without
+projects.
+
+#code language=zerolang: """
+  # project.z
+  sourceDir: "src"
+  main: "app"
+  release: true
+"""
+
+The settings are read #b:"before" anything is built, since they say where the
+source and the stdlib are, so each one is a literal: a string, or #~"true" /
+#~"false". A setting the file does not know, a value that is not a literal and
+a literal of the wrong kind are each an error at the line, and stop the
+driver. A path is relative to the project directory. A #b:"flag fully
+overrides" the file's value; a unit named by its file is its own source root.
+
+#ul:
+  [#*: #~"sourceDir" -- the source root (#~"--src"); unset is the project
+    directory itself]
+  [#*: #~"systemDir" -- the stdlib (#~"--system")]
+  [#*: #~"runtimeDir" -- the C runtime (#~"--runtime")]
+  [#*: #~"main" -- the unit #~"build" / #~"run" / #~"emit" / #~"dump" compile
+    when none is named]
+  [#*: #~"target" -- the triple to build for (#~"--target")]
+  [#*: #~"outputDir" -- where #~"build" writes the executable when #~"-o"
+    names no file; unset is the project directory]
+  [#*: #~"release", #~"fastHash", #~"readableNames", #~"eager" -- the
+    switches (#~"--release", #~"--fast-hash", #~"--readable-names",
+    #~"--eager")]
+  [#*: #~"cCompiler", #~"cCompilerMode", #~"cFlags", #~"linkFlags",
+    #~"tccLibDir" -- the C toolchain (#~"--cc", #~"--cc-mode", #~"--cflags",
+    #~"--ldflags", #~"--tcc-lib")]
+
+The compiler's own folder, #~".zerolang/", sits beside #~"project.z" and is
+disposable: it holds a #~".gitignore" of #~"*" and the #b:"generated" unit
+#~"z" each build writes -- #~"z.build" says what the build is
+(#~"z.build.os", #~"z.build.main", ...) and #~"z.project" is the project's
+own #~"project.z" (see #~"z_unit.pdoc"). Outside a project that unit lives in
+the user's cache directory instead.
+
+#~"zc init [dir]" makes a directory a project: it writes #~"project.z" with
+every setting commented out at its default, and #~".zerolang/". In a directory
+with no #~".z" file it also writes #~"main.z", printing a greeting, and sets
+#~"main" to it, so #~"zc build && ./main" works at once. It refuses a directory
+that already holds a #~"project.z".
+
+The zerolang repository is itself a project: its #~"project.z" names
+#~"src", #~"lib/system" and the compiler's own unit, so a plain #~"zc build"
+anywhere in the tree builds #~"zc".
 
 
 #--: The source argument
@@ -217,8 +280,9 @@ match wins:
   [#*: the current directory (#~"lib/system", #~"src/runtime") — the final
     fallback.]
 
-#~"--src" (user code) always defaults to the current directory, never the
-install tree. Repeating it adds a root rather than replacing the previous one,
+Inside a project, its #~"systemDir", #~"runtimeDir" and #~"tccLibDir" come
+before the environment. #~"--src" (user code) defaults to the project's
+#~"sourceDir", else the current directory, never the install tree. Repeating it adds a root rather than replacing the previous one,
 which is how a program in one tree reaches units in another — the smoke
 harnesses under #~"tests/unit" reach the compiler's own units in #~"src" that
 way. The C compiler is chosen as #~"--cc" > #~"--target"-derived
@@ -375,9 +439,10 @@ companions read it, and #~"--cflags" passes the define through. See
 #~"zc env" prints the resolved tool paths and settings as #~"KEY=VALUE"
 lines — #~"ZEROLANG_ROOT", #~"ZEROLANG_SYSTEM", #~"ZEROLANG_RUNTIME",
 #~"ZC_CC", #~"ZC_CC_MODE", #~"ZC_TCC", #~"ZC_TCC_LIB", #~"ZC_TARGET",
+#~"ZC_PROJECT" (the #~"project.z" in effect, empty outside a project),
 #~"ZC_VERSION",
 #~"ZC_COMMIT", #~"ZC_BUILD_DATE", #~"ZC_BUILD_CC", and #~"ZC_EXE". It
-honours the same flags as a build, so
+honours the same flags and project as a build, so
 #~"zc env --target x86_64-w64-mingw32" reports the cross compiler that would
 be used.
 
