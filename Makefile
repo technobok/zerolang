@@ -2390,7 +2390,10 @@ perf: $(PERFBIN)
 #
 # +231 a project's executable goes to the project directory: +66 behaviour
 # (build.z's outputDir is made relative to the project), +28 source (ab.sh).
-ALLOC_BASELINE := 2234704
+#
+# +3,566 `zc init`: +5 behaviour, +3,399 source (ab.sh; init's templates and the
+# verb table zc now reads as data).
+ALLOC_BASELINE := 2238270
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

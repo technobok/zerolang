@@ -16,6 +16,7 @@ public: unit {
     :BuildFacts
     :ProjectFile
     :discoverProject
+    :initProject
     :inProject
     :writeLayer
     :zLayer
@@ -868,4 +869,104 @@ cleanAbsolute: function {p: StringView} out String is {
     }
     if r.length == 0 then return "/"
     return r
+}
+
+# initProject -- `zc init`: make `dir` a project. Writes project.z with every
+# setting present and commented out at its default, each under a line saying
+# what it is, and the compiler's .zerolang directory. When `dir` holds no `.z`
+# file it also writes main.z, a unit printing a greeting, and sets `main` to
+# it, so `zc build` works at once. Refuses a directory that already holds a
+# project.z. Answers each path written, one per line, or the refusal.
+initProject: function {dir: StringView} out InitResult is {
+    pz: zcheck.joinPath a: dir b: projectFileName
+    pzs: displayOf path: pz.stringView
+    if (io.exists path: pz) then {
+        return (InitResult ok: false text: "zc init: \{pzs} already exists")
+    }
+    fresh: (dirHoldsUnits :dir).not
+    w: io.writeText path: pz content: (projectTemplate withMain: fresh)
+    if w.err then return (InitResult ok: false text: "zc init: cannot write \{pzs}")
+    done: "wrote \{pzs}\n"
+    if fresh then {
+        mz: zcheck.joinPath a: dir b: "main.z"
+        mzs: displayOf path: mz.stringView
+        wm: io.writeText path: mz content: mainTemplate
+        if wm.err then return (InitResult ok: false text: "zc init: cannot write \{mzs}")
+        done.append "wrote \{mzs}\n"
+    }
+    zd: zcheck.joinPath a: dir b: ".zerolang"
+    io.mkdirp path: zd
+    gi: zcheck.joinPath a: zd.stringView b: ".gitignore"
+    writeIfChanged path: gi.stringView text: "*\n"
+    gis: displayOf path: gi.stringView
+    done.append "wrote \{gis}\n"
+    return (InitResult ok: true text: done.take)
+}
+
+# InitResult -- what `zc init` did: each path it wrote, or why it refused
+InitResult: class {
+    # false when the directory was refused or a file could not be written
+    ok: bool
+    # the paths written, one per line, or the refusal
+    text: String
+}
+
+# dirHoldsUnits -- whether directory `dir` holds a `.z` file
+dirHoldsUnits: function {dir: StringView} out bool is {
+    ls: io.listDir path: dir
+    if ls.err then return false
+    for each e: ls loop {
+        if (e.stringView.endsWith suffix: ".z") then return true
+    }
+    return false
+}
+
+# projectTemplate -- the project.z `zc init` writes: every setting, commented
+# out at its default; `main` set to main.z's unit when init wrote that too
+projectTemplate: function {withMain: bool} out String is {
+    t: String
+    t.append "# project.z -- this directory is a zerolang project. zc, zl and zls\n"
+    t.append "# started anywhere below it read their settings here. Every setting is\n"
+    t.append "# optional and shown at its default; a flag given to zc replaces it\n"
+    t.append "# outright. A path is relative to this directory.\n"
+    t.append "\n# the directory holding the project's units (--src)\n"
+    t.append "# sourceDir: \".\"\n"
+    t.append "\n# the unit `zc build` and `zc run` compile when none is named\n"
+    if withMain then {
+        t.append "main: \"main\"\n"
+    } else {
+        t.append "# main: \"main\"\n"
+    }
+    t.append "\n# where `zc build` writes the executable (-o names a file instead)\n"
+    t.append "# outputDir: \".\"\n"
+    t.append "\n# the target triple to build for (--target); unset builds for the host\n"
+    t.append "# target: \"x86_64-linux\"\n"
+    t.append "\n# build with optimisation (--release)\n"
+    t.append "# release: false\n"
+    t.append "\n# the emitter's cheaper name hash (--fast-hash)\n"
+    t.append "# fastHash: false\n"
+    t.append "\n# source names in the C rather than numbered ones (--readable-names)\n"
+    t.append "# readableNames: false\n"
+    t.append "\n# typecheck every definition, not only what main reaches (--eager)\n"
+    t.append "# eager: false\n"
+    t.append "\n# the stdlib directory (--system); unset uses the one installed with zc\n"
+    t.append "# systemDir: \"lib/system\"\n"
+    t.append "\n# the C runtime directory (--runtime); unset uses the one installed with zc\n"
+    t.append "# runtimeDir: \"runtime\"\n"
+    t.append "\n# the C compiler (--cc); unset picks one for the target\n"
+    t.append "# cCompiler: \"cc\"\n"
+    t.append "\n# how the C compiler runs, spawn or inproc (--cc-mode)\n"
+    t.append "# cCompilerMode: \"spawn\"\n"
+    t.append "\n# passed through to the C compile step (--cflags)\n"
+    t.append "# cFlags: \"\"\n"
+    t.append "\n# passed through to the link step (--ldflags)\n"
+    t.append "# linkFlags: \"\"\n"
+    t.append "\n# the tcc runtime payload directory (--tcc-lib); unset uses the vendored one\n"
+    t.append "# tccLibDir: \"\"\n"
+    return t
+}
+
+# mainTemplate -- the main.z `zc init` writes into an empty directory
+mainTemplate: function out StringView is {
+    return "# main.z -- the project's main unit: `zc run` builds and runs it\nmain: function is {\n    print \"Hello, world!\"\n}\n"
 }

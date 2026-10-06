@@ -113,15 +113,17 @@ printPhases: function {t0: i64 t1: i64 t2: i64 t3: i64} is {
     io.eprintln "zc --time: parse=\{t1 - t0}ms typecheck=\{t2 - t1}ms emit=\{t3 - t2}ms total=\{t3 - t0}ms"
 }
 
-# isPipelineVerb -- arg1 is a verb that proceeds to flag parsing. build/run/
-# emit/dump compile a unit; env prints settings. version/help/explain are
-# handled before this and exit early, so they are intentionally absent here.
+# pipelineVerbs -- the verbs that proceed to flag parsing, space-separated:
+# build/run/emit/dump compile a unit; env prints settings. version/help/explain
+# and init are handled before this and exit early, so they are absent here.
+pipelineVerbs: "build run emit dump env"
+
+# isPipelineVerb -- arg1 is one of pipelineVerbs. The verbs are DATA, compared
+# by the one loop rather than a chain of literal compares.
 isPipelineVerb: function {name: StringView} out bool is {
-    if name == "build" then return true
-    if name == "run" then return true
-    if name == "emit" then return true
-    if name == "dump" then return true
-    if name == "env" then return true
+    for each v: (pipelineVerbs.split sep: " ") loop {
+        if v == name then return true
+    }
     return false
 }
 
@@ -133,6 +135,10 @@ printUsage: function is {
     io.eprintln "  build <src>          compile <src> to a native executable"
     io.eprintln "  run   <src> [args]   build, then run it, forwarding [args]"
     io.eprintln "  emit  <src>          emit standalone C (-o FILE, else stdout)"
+    io.eprintln ""
+    io.eprintln "project:"
+    io.eprintln "  init [dir]           make dir (default .) a project: project.z, and main.z when"
+    io.eprintln "                       it holds no unit"
     io.eprintln ""
     io.eprintln "diagnostics:"
     io.eprintln "  dump  <src>          dump the typecheck model as SQL (--canon: id-normalized)"
@@ -640,6 +646,17 @@ dispatchToolVerb: function {argv: (List String).borrow n: u64 arg1: StringView} 
             io.eprintln "zc explain: missing error code (e.g. zc explain E0200)"
             os.exit code: 2
         }
+        os.exit code: 0
+    }
+    if arg1 == "init" then {
+        idir: ".".string
+        if n > 2 then idir = (argv.get i: 2).copy
+        ir: zproject.initProject dir: idir.stringView
+        if ir.ok.not then {
+            io.eprintln ir.text
+            os.exit code: 2
+        }
+        print ir.text.stringView.trim
         os.exit code: 0
     }
     if arg1 == "natives" then {
