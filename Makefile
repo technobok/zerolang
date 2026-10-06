@@ -2309,7 +2309,10 @@ perf: $(PERFBIN)
 #
 # +34 a float -> integer conversion checks its fraction in the source type: 0
 # behaviour, +34 source.
-ALLOC_BASELINE := 2201476
+#
+# +894 a default written as a converted constant expression folds, and one
+# that does not fold is refused: 0 behaviour, +894 source.
+ALLOC_BASELINE := 2202370
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

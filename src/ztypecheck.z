@@ -6418,6 +6418,23 @@ refuseMarkedFunctionType: function {
     return true
 }
 
+# foldParamValue -- the type a parameter's VALUE declares (foldedDeclType), asked
+# only where it could answer: always without a partial specialisation, and with
+# one only for a declaration that is a value. 0 for a type-ref. A conversion of
+# an expression that did not fold is refused here, where nothing else would.
+foldParamValue: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    fid: ztypes.tid
+    pm: argref
+    partialTid: ztypes.tid
+} out ztypes.tid is {
+    if partialTid.isZero.not when (valueDeclares :ast node: pm.operation).not then return ztypes.tid
+    f: foldedDeclType :st :ast ownerTid: fid dm: pm
+    if f.isZero then refuseUnfoldedConversion :st :ast what: "parameter" dm: pm
+    return f
+}
+
 # registerValueParam -- record an ordinary (non-generic, non-receiver) parameter
 # on its function's type: its declared type, its ownership, and the default it
 # carries.
@@ -6448,11 +6465,8 @@ registerValueParam: function {
     # it could answer.
     # a partial specialisation answers only for a typeref; a value that folds
     # (`n: 2 * 3`) is no typeref, whatever shell the partial walk made of it
-    folded: ztypes.tid
-    if cid.isZero or (valueDeclares :ast node: pm.operation) then {
-        folded = foldedDeclType :st :ast ownerTid: fid dm: pm
-        if folded.isZero.not then cid = folded
-    }
+    folded: foldParamValue :st :ast :fid :pm partialTid: cid
+    if folded.isZero.not then cid = folded
     if cid.isZero then cid = (resolveTyperefShell
         :st
         scope: rf
@@ -6486,7 +6500,9 @@ registerValueParam: function {
             nameId: pm.name
             value: ztyping.defaultval.literal pm.operation
         )
-    } else {
+    } else if folded.isZero then {
+        # a value that folded declared its own default above; only a type-ref
+        # carries a function, suffixed-literal or arm default
         (checkParamTypeShape
             :st
             :ast
@@ -10574,6 +10590,7 @@ attachDeclaredField: function {
 } is {
     folded: foldedDeclType :st :ast ownerTid: rid dm: fm
     cid: folded
+    if cid.isZero then refuseUnfoldedConversion :st :ast what: "field" dm: fm
     if cid.isZero then cid = (fieldSlotTid
         :st
         :ast
@@ -13058,7 +13075,52 @@ valueDeclares: function {ast: Ast.view node: zast.nodeid} out bool is {
     n: ast.nodes.get i: node
     if (bareAtomNameId :n).isZero.not then return true
     if n.ifexpr or n.caseexpr then return true
+    if (convertsExpression :ast :node) then return true
     return (zast.infixPartsOf :ast :n).found
+}
+
+# convertsExpression -- the declaration's value is a conversion written on an
+# OPERATOR EXPRESSION, `(0 - 7).i64`, or on a compile-time `if` or `match`: a
+# value, whose base names no type the way `4.u64`, `zast.nodeid` and a type
+# application's `(List t: u8).view` do.
+convertsExpression: function {ast: Ast.view node: zast.nodeid} out bool is {
+    n: ast.nodes.get i: node
+    match (
+        n
+    ) case dottedpath then {
+        pn: ast.nodes.get i: n.parent
+        if pn.ifexpr or pn.caseexpr then return true
+        return (zast.infixPartsOf :ast n: pn).found
+    } else {
+        return false
+    }
+}
+
+# refuseUnfoldedConversion -- a member declared by a conversion of an
+# expression that did not fold. A default is a compile-time constant, and the
+# path names no type, so nothing else declares the member: without this its
+# value's text was minted into a type of its own. True when it reported.
+refuseUnfoldedConversion: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    # the noun to report under: `field` or `parameter`
+    what: StringView
+    dm: argref
+} out bool is {
+    if (convertsExpression :ast node: dm.operation).not then return false
+    fname: zast.nameTextAt :ast ref: dm.name
+    (addErrorH
+        :st
+        nodeid: dm.nid
+        lineno: dm.lineno
+        colno: dm.colno
+        e: zast.err.typeError
+        msg: "\{what} '\{fname}' is declared by a conversion of a value with no compile-time value -- a default must be a compile-time constant"
+        note: ""
+        hint: "name the type instead (`\{fname}: i64`) and pass the value in, or convert a constant"
+        width: fname.length.u32.orPanic
+    )
+    return true
 }
 
 # recordFoldedScalarDefault -- record the default a declaration's folded value
