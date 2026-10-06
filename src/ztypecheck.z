@@ -27042,9 +27042,9 @@ nodeNamesType: function {
 
 # pathNamesType -- a path names a type when its member resolved to a type
 # declaration, to a definition that instantiates a generic (`lib.F2` for
-# `F2: (fx n: 2)`), or to a re-export of something that is not a function --
-# the answers nameNamesType gives a bare name. A path rooted at a local is a
-# value however it continues.
+# `F2: (fx n: 2)`), or to a re-export of something that is neither a function
+# nor a value -- the answers nameNamesType gives a bare name. A path rooted at a
+# local is a value however it continues.
 pathNamesType: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid} out bool is {
     rr: rootNameIdOf :ast n: (ast.nodes.get i: nid)
     if rr.isZero.not when (st.isLocalName nameId: rr) then return false
@@ -27064,7 +27064,19 @@ pathNamesType: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid} out bo
     if isReexport.not then return isType
     pst: walkTypeOf :st :nid
     if pst.isZero then return false
-    return (st.reg.typetypeOf typeId: pst) != ztypes.ztypetype.functionType
+    if (st.reg.typetypeOf typeId: pst) == ztypes.ztypetype.functionType then return false
+    # a re-export carrying a compile-time value -- one naming an arm (`k:
+    # kind.a`) or a constant -- is a VALUE alias, as nameNamesType reads a bare
+    # one, so `u.k.b` is the arm predicate and not a construction of `kind.b`
+    pcv: (constValueOfMemberId
+        :st
+        scope: (declParentIdOf :st declId: rd)
+        :ast
+        unitDecl: (owningUnitDecl :st declId: rd)
+        nameId: (declNameIdOf :st declId: rd)
+    )
+    constFailClear :st
+    return pcv.kind.none
 }
 
 # nameNamesType -- a bare name no open scope defines names a type. Asked without
@@ -29472,9 +29484,15 @@ checkUnitMemberValue: function {
     setu: result
     stampGate :st nid: dp.nid tid: setu
     # record the resolved declaration so go-to-definition on a
-    # unit-qualified `unit.member` can locate its defining unit.
+    # unit-qualified `unit.member` can locate its defining unit. The unit is
+    # the one the base resolved to -- a subunit (`u.sub.k`) is no child of the
+    # program root -- and only a unit nothing resolved is looked up by name.
+    # Without it, a member reached through a subunit was stamped with what its
+    # TYPE declares: a value alias `k2: kind2.a` read as the type `kind2`, so
+    # `u.sub.k2.a` constructed an arm rather than testing one.
     udD: ztypes.declid
-    udR: (st.typing.declFindChild
+    udR: memberUnit
+    if udR.isZero then udR = (st.typing.declFindChild
         parentDeclId: st.typing.programRoot
         nameId: (nameIdOf :ast name: un)
     )

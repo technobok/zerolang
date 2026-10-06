@@ -2368,7 +2368,11 @@ perf: $(PERFBIN)
 # settings, and zc, zcheck and zsource share one VFS builder: +77 behaviour
 # (every compile looks for a project.z from where it starts), +10,547 source
 # (ab.sh; the new unit and the drivers' use of it).
-ALLOC_BASELINE := 2224258
+#
+# +259 an arm predicate on a unit's value alias (`u.k.a`, `u.sub.k2.a`) tests
+# the arm instead of constructing it: 0 behaviour, +224 source (ab.sh; the
+# checker's value-alias test on a path and the emitter's predicate gate).
+ALLOC_BASELINE := 2224517
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
