@@ -145,18 +145,12 @@ check: function {
         )
     }
     reg: ztypes.newRegistry
-    # no --cc reaches the tooling front ends, so they resolve the DEFAULT the
-    # same way a flagless build would: same answer, same folded guards.
-    ccPath: pickCc ccFlag: "" targetTriple: ""
-    ccMode: pickCcMode modeFlag: ""
     st: (ztypecheck.typecheck
         program: prog
         :reg
         eager: true
         requireMain: false
         dumpRows: false
-        ccPath: ccPath.stringView
-        ccMode: ccMode.stringView
         target: ""
     )
     nerr: st.typing.errors.length
@@ -351,17 +345,15 @@ vendoredTcc: function out String is {
 }
 
 # pickCc -- the C compiler this build will use: --cc > <target>-gcc > $CC > cc.
-# Shared, not zc-local, because every front end has to agree about it: the
-# `platform` unit's `cc` constant is folded during TYPE CHECKING, so zls and
-# zl must resolve it the same way zc does or a require: guard would decide
-# differently in the editor than in the build.
+# A fact for the C backend and the build, which `zc env` reports too; no type
+# checking reads it, so the editor and the linter never resolve it.
 pickCc: function {ccFlag: StringView targetTriple: StringView} out String is {
     if ccFlag.length > 0 then {
         # a bare `tcc` means the one this tree vendors, when it has one:
         # `install` symlinks zc/zl/zls onto PATH and nothing else, so a plain
         # PATH lookup would never find <root>/bin/tcc. Resolving it here does
-        # not move any folded constant -- ccKindArm reads the BASENAME, and
-        # `tcc` and `<root>/bin/tcc` classify the same.
+        # not change the family -- zemitterc.ccFamilyOf reads the BASENAME,
+        # and `tcc` and `<root>/bin/tcc` classify the same.
         if ccFlag == "tcc" then {
             v: vendoredTcc
             if v.length > 0 then return v
@@ -384,11 +376,8 @@ pickCc: function {ccFlag: StringView targetTriple: StringView} out String is {
 }
 
 # pickCcMode -- how zc reaches the C compiler: `spawn` unless `--cc-mode`
-# says otherwise. Shared for exactly the reason pickCc is: `platform.ccmode`
-# is folded during TYPE CHECKING, so zl and zls must answer this the way zc
-# does or a require: guard would decide differently in the editor than in the
-# build. An unrecognised value is `spawn` here -- zc rejects it at the flag,
-# which is where a typo can still be reported against the argument that
+# says otherwise. An unrecognised value is `spawn` here -- zc rejects it at the
+# flag, which is where a typo can still be reported against the argument that
 # carried it.
 pickCcMode: function {modeFlag: StringView} out String is {
     if modeFlag == "inproc" then return "inproc"

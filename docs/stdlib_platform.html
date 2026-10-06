@@ -87,17 +87,9 @@ Table of Contents</div>
 </li>
 <li><a href="#archkind">archkind</a>
 </li>
-<li><a href="#cckind">cckind</a>
-</li>
-<li><a href="#ccmodekind">ccmodekind</a>
-</li>
 <li><a href="#os">os</a>
 </li>
 <li><a href="#arch">arch</a>
-</li>
-<li><a href="#cc">cc</a>
-</li>
-<li><a href="#ccmode">ccmode</a>
 </li>
 <li><a href="#target">target</a>
 </li>
@@ -116,9 +108,13 @@ own-line parameter there carries its own doc comment, and <code>zls</code> surfa
 each on hover; the corpus runner ratchets that coverage under <code>make ci</code>.
 This page is the prose and the worked examples -- read it for how the unit
 is meant to be used, and the source for the exact surface.</p>
-<p>The <code>platform</code> unit is what the compiler knows about the build it
-is performing: the operating system and architecture it is building
-for, and the C compiler it will hand the emitted C to.</p>
+<p>The <code>platform</code> unit is what the compiler knows about the target it
+is building for: its operating system and architecture, and the
+triple that named them. It says nothing about the toolchain that
+builds for it: which C compiler compiles the output, and how, are
+the C backend's business. What a unit needs of that toolchain -- f128
+needs <code>__float128</code> -- is in the C backend's table, which refuses a
+program by name when its compiler lacks it.</p>
 <p>Every member is a <strong>compile-time constant</strong>. A read is folded while
 compiling, so it can drive a unit-level <code>if</code> or a <code>require:</code>
 block, and a branch it decides never reaches the C.</p>
@@ -126,14 +122,14 @@ block, and a branch it decides never reaches the C.</p>
 <code>out</code> type is the type. The type checker answers every one of them
 itself, from the invocation it was given, and lowers it to a constant
 of the checked program: no backend implements it and the emitted C
-never names it. An answer whose member is missing, or is declared with
-a body, is an error -- which is what keeps these from being values that
-merely happen to agree with the build.</p>
+never names it. A member declared with a body is an error -- which is
+what keeps these from being values that merely happen to agree with
+the build.</p>
 <pre><code class="language-zerolang">  require: unit {
-      library: if platform.cc == platform.cckind.tcc then {
-          error "this unit needs a compiler with __float128"
+      library: if platform.os == platform.oskind.windows then {
+          "ws2_32"
       } else {
-          "quadmath"
+          ""
       }
   }</code></pre>
 <p>Each kind is named for its <strong>values</strong> rather than for the member
@@ -144,8 +140,6 @@ arising: the member is <code>os</code>, its type is <code>oskind</code>, and an 
 <ul>
 <li><a href="#os"><strong>platform.os</strong></a> -- <code>oskind</code></li>
 <li><a href="#arch"><strong>platform.arch</strong></a> -- <code>archkind</code></li>
-<li><a href="#cc"><strong>platform.cc</strong></a> -- <code>cckind</code></li>
-<li><a href="#ccmode"><strong>platform.ccmode</strong></a> -- <code>ccmodekind</code></li>
 <li><a href="#target"><strong>platform.target</strong></a> -- <code>StringView</code></li>
 <li><a href="#ptrbits"><strong>platform.ptrbits</strong></a> -- <code>u64</code></li>
 </ul>
@@ -153,55 +147,22 @@ arising: the member is <code>os</code>, its type is <code>oskind</code>, and an 
 <ul>
 <li><a href="#oskind"><strong>oskind</strong></a> -- <code>variant { linux: null  darwin: null  windows: null  other: null }</code></li>
 <li><a href="#archkind"><strong>archkind</strong></a> -- <code>variant { x86_64: null  aarch64: null  other: null }</code></li>
-<li><a href="#cckind"><strong>cckind</strong></a> -- <code>variant { gcc: null  clang: null  tcc: null  other: null }</code></li>
-<li><a href="#ccmodekind"><strong>ccmodekind</strong></a> -- <code>variant { spawn: null  inproc: null }</code></li>
 </ul>
 <h2 id="oskind"><a href="#oskind">2. oskind</a></h2>
 <p>Host operating-system family.</p>
 <h2 id="archkind"><a href="#archkind">3. archkind</a></h2>
 <p>CPU architecture family.</p>
-<h2 id="cckind"><a href="#cckind">4. cckind</a></h2>
-<p>The C compiler <code>zc</code> will hand the emitted C to, classified by the
-<strong>basename</strong> of the resolved path -- the same resolution order
-<code>zc</code> itself uses: <code>--cc</code>, then <code>&lt;target&gt;-gcc</code>, then <code>$CC</code>,
-then <code>cc</code>.</p>
-<p>Classification is by name alone. Probing <code>--version</code> would add a
-subprocess to every compile, so a <code>--cc</code> pointing at a wrapper
-script reads as <code>other</code> and a guard keyed on one compiler will not
-fire for it.</p>
-<h2 id="ccmodekind"><a href="#ccmodekind">5. ccmodekind</a></h2>
-<p>How <code>zc</code> reaches that compiler: <code>spawn</code> runs it as a child
-process, <code>inproc</code> loads it into this one. Selected with
-<code>--cc-mode</code>; the default is <code>spawn</code>.</p>
-<p>This is a separate axis from <code>cckind</code> on purpose, so
-<code>platform.cc == platform.cckind.tcc</code> keeps firing whichever way tcc
-is reached. Naming the in-process path as a compiler of its own would
-have made every guard already written quietly stop applying to it.</p>
-<p>There is no <code>auto</code>, and <code>zc</code> never falls back: the requested mode
-is always the resolved one. That is what keeps this constant
-foldable. An <code>auto</code> would have to probe for a loadable library, and
-<code>platform</code> is read during <strong>type checking</strong> -- so a program would
-typecheck differently depending on a machine's shared-library layout,
-and the editor would disagree with the build.</p>
-<h2 id="os"><a href="#os">6. os</a></h2>
+<h2 id="os"><a href="#os">4. os</a></h2>
 <p>The operating-system family being built for.</p>
 <pre><code class="language-zerolang">  if platform.os.linux then { ... }
   if platform.os == platform.oskind.linux then { ... }</code></pre>
 <p>Both spellings fold and agree: <code>value.arm</code> is always a predicate,
 so the first asks whether the constant holds that arm.</p>
-<h2 id="arch"><a href="#arch">7. arch</a></h2>
+<h2 id="arch"><a href="#arch">5. arch</a></h2>
 <p>The CPU architecture family being built for.</p>
-<h2 id="cc"><a href="#cc">8. cc</a></h2>
-<p>The C compiler <code>zc</code> will invoke.</p>
-<p>This is <strong>not</strong> <a href="./stdlib_os.html"><code>os.buildCompiler</code></a>, which
-reports the compiler that built the running <code>zc</code> binary. This one
-is the compiler that <code>zc</code> is about to run.</p>
-<h2 id="ccmode"><a href="#ccmode">9. ccmode</a></h2>
-<p>How <code>zc</code> will reach that compiler -- see
-<a href="#ccmodekind"><code>ccmodekind</code></a>.</p>
-<h2 id="target"><a href="#target">10. target</a></h2>
+<h2 id="target"><a href="#target">6. target</a></h2>
 <p>The <code>--target</code> triple, or the empty string for a native build.</p>
-<h2 id="ptrbits"><a href="#ptrbits">11. ptrbits</a></h2>
+<h2 id="ptrbits"><a href="#ptrbits">7. ptrbits</a></h2>
 <p>The width of a pointer on the target, in bits: 64 on both
 architectures <code>archkind</code> names. It is the width of a union's
 payload slot, which decides whether a bare value-type arm is held

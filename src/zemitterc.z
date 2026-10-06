@@ -9,6 +9,8 @@
 public: unit {
     :emitC
     :nativeConvRows
+    :ccfamily
+    :ccFamilyOf
 }
 
 astnode: zast.astnode
@@ -1599,6 +1601,72 @@ readTemplateCached: function {ctx: Ctx path: StringView} out String is {
     return txt
 }
 
+# ccfamily -- the C compiler zc hands the emitted C to, by family: what the C
+# backend asks when a unit needs something only some compilers have, and what
+# zc asks for warning flags and tcc's runtime directory. A fact about this
+# backend's toolchain, which nothing before emission sees.
+ccfamily: variant {
+    # GCC, reached by spawning it
+    gcc: null
+    # Clang, spawned like GCC
+    clang: null
+    # the vendored tcc, which compiles in-process as well as by spawn
+    tcc: null
+    # a C compiler the build does not name
+    other: null
+}
+
+# ccFamilyOf -- the family a resolved compiler PATH names, by basename. By name
+# alone: probing --version would put a subprocess in every compile, so a --cc
+# pointing at a wrapper script reads as `other`. `tcc` is tested before `cc`
+# and `clang` before `gcc`, since the shorter spelling is a substring of paths
+# naming the longer.
+ccFamilyOf: function {ccPath: StringView} out ccfamily is {
+    cut: u64
+    i: ccPath.length
+    for i > 0 loop {
+        i = i - 1
+        ch: ccPath.byteAt i
+        match (
+            ch
+        ) case some then {
+            if ch == 47 then {
+                cut = i + 1
+                i = 0
+            }
+        } case none then null
+    }
+    b: ccPath.substring from: cut to: ccPath.length
+    if (b.contains needle: "tcc") then return ccfamily.tcc
+    if (b.contains needle: "clang") then return ccfamily.clang
+    if (b.contains needle: "gcc") then return ccfamily.gcc
+    return ccfamily.other
+}
+
+# ccFamilyName -- a family as the word natives.tbl spells it in `nocc=`.
+ccFamilyName: function {f: ccfamily} out StringView is {
+    if f.tcc then return "tcc"
+    if f.clang then return "clang"
+    if f.gcc then return "gcc"
+    return "other"
+}
+
+# UnitReq -- an `@unit.<path>` row: what a unit needs from the C toolchain when
+# a program reaches it. The facts are this backend's, so they live in its table
+# rather than in the unit, which says nothing about how it is built.
+UnitReq: class {
+    # the unit's dotted path, `system.quadfloat`
+    path: String
+    # `cfeature=`: the C feature its types are built on, for the refusal
+    feature: String
+    # `nocc=`: a C compiler family that cannot build it
+    nocc: String
+    # `arch=`: the one target architecture that can
+    arch: String
+    # `link=`: the library its runtime links
+    link: String
+}
+
 # NativeHead -- a row's head, parsed: the path key and the attributes the
 # table spells, each "" or false until a word of the head sets it.
 NativeHead: class {
@@ -1621,6 +1689,12 @@ NativeHead: class {
     spec: String
     # `args=ptr`: the arguments arrive as pointers
     ptr: bool
+    # `link=`, `cfeature=`, `nocc=`, `arch=`: on an `@unit.` row, the unit's
+    # requirements of the C toolchain (UnitReq)
+    link: String
+    cfeature: String
+    nocc: String
+    arch: String
 } as {
     # create -- the head between `[` and `]`, split on spaces: the first word
     # is the key, every other word an attribute
@@ -1634,6 +1708,10 @@ NativeHead: class {
             cst: String
             spec: String
             ptr: false
+            link: String
+            cfeature: String
+            nocc: String
+            arch: String
         )
         for each f: (head.split sep: " ") loop {
             if f.length > 0 then {
@@ -1688,6 +1766,35 @@ NativeHead: class {
             spo
         ) case some then {
             this.spec = spo.string
+        } case none then null
+        this.setUnitAttr :f
+    }
+
+    # setUnitAttr -- an `@unit.` row's attribute word (UnitReq)
+    setUnitAttr: function {:this f: StringView} is {
+        lo: f.stripPrefix p: "link="
+        match (
+            lo
+        ) case some then {
+            this.link = lo.string
+        } case none then null
+        cfo: f.stripPrefix p: "cfeature="
+        match (
+            cfo
+        ) case some then {
+            this.cfeature = cfo.string
+        } case none then null
+        nco: f.stripPrefix p: "nocc="
+        match (
+            nco
+        ) case some then {
+            this.nocc = nco.string
+        } case none then null
+        aro: f.stripPrefix p: "arch="
+        match (
+            aro
+        ) case some then {
+            this.arch = aro.string
         } case none then null
     }
 }
@@ -1839,6 +1946,19 @@ recordRowBodies: function {ctx: Ctx h: NativeHead.view body: StringView} is {
 # recordNativeRow -- one row: its key, then the member filter it may feed,
 # the fragment halves when it is fragment-backed, and its tables
 recordNativeRow: function {ctx: Ctx h: NativeHead.view body: StringView} is {
+    up: h.key.stringView.stripPrefix p: "@unit."
+    match (
+        up
+    ) case some then {
+        ctx.unitReqs.append (UnitReq
+            path: up.string
+            feature: h.cfeature.copy
+            nocc: h.nocc.copy
+            arch: h.arch.copy
+            link: h.link.copy
+        )
+        return
+    } case none then null
     if h.spec.length > 0 then {
         recordCanonRow :ctx key: h.key.stringView spec: h.spec.stringView
         return
@@ -3419,6 +3539,8 @@ Ctx: class {
     # natives.tbl's canonical-stem rows: stem -> the instance's template and
     # type arguments, comma-separated
     canonSpecs: (Map String V: String)
+    # the `@unit.` rows: what a reached unit needs from the C toolchain
+    unitReqs: List UnitReq
     # natives.tbl, read once at emit start: qualified path -> the C body, plus
     # the two row attributes. Parsed eagerly rather than on first lookup
     # because the lookup site is inside emitExpr, which holds a Ctx but not the
@@ -32836,10 +32958,11 @@ emitC: function {
     readableNames: bool
     errs: List String
     libs: (List String).view
+    # the family of the C compiler the output is for: a unit the program
+    # reaches may need something only some have
+    ccFamily: ccfamily
 } out String is {
     buf: String
-    buf.append "/* Generated by zerolang compiler */\n"
-    emitCHeader :libs :runtimeDir :errs :buf
     rtids: resolveRuntimeTids :program :symtab
     strId: rtids.str
     svId: rtids.sv
@@ -32957,6 +33080,7 @@ emitC: function {
         tmplCache: (Map String V: String)
         ioCanonC: (Map String V: String)
         canonSpecs: (Map String V: String)
+        unitReqs: List UnitReq
         nativeTbl: (Map String V: String)
         nativeConstBody: (Map String V: String)
         nativeConstPos: (Map String V: String)
@@ -33037,6 +33161,9 @@ emitC: function {
         }
     }
     loadNativeTbl :ctx :runtimeDir
+    linkLibs: List String
+    for each lb: libs loop linkLibs.append from: lb.copy
+    applyUnitReqs ast: program :symtab :ctx :ccFamily libs: linkLibs
     {
         buildDefUnitIndex :symtab :ctx ast: program
         bindFragTypeTids :symtab :ctx ast: program
@@ -33097,7 +33224,88 @@ emitC: function {
         codeBuf: codeBuf.stringView
         fnsBuf: fnsBuf.stringView
     )
-    return buf
+    # the header goes in front last: its link line holds what the reached
+    # units need, which the table had to be read to know
+    whole: String
+    whole.append "/* Generated by zerolang compiler */\n"
+    emitCHeader libs: linkLibs :runtimeDir :errs buf: whole
+    whole.append buf
+    return whole
+}
+
+# applyUnitReqs -- what the reached units need from the C toolchain
+# (natives.tbl's `@unit.` rows): each one the program reaches adds its link
+# library, and refuses a C compiler or a target architecture that cannot build
+# it, by name, before any C is compiled. A unit nothing reaches asks nothing.
+applyUnitReqs: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    ccFamily: ccfamily
+    libs: List String
+} is {
+    if ctx.unitReqs.length == 0 then return
+    arch: ztypecheck.targetOrHostArch triple: symtab.typing.targetTriple.stringView
+    fam: ccFamilyName f: ccFamily
+    # collected, and reported once the walk over the rows is done: a report
+    # writes the context the rows live in
+    refusals: List String
+    for each r: ctx.unitReqs loop {
+        if (unitPathReached :ast :symtab path: r.path.stringView).not then continue
+        why: unitReqRefusal :r :fam arch: arch.stringView
+        if why.length > 0 then {
+            refusals.append why.take
+        } else {
+            appendLinkOnce :libs lib: r.link.stringView
+        }
+    }
+    for each m: refusals loop emitFail :ctx what: m.copy line: 0
+}
+
+# unitReqRefusal -- why a reached unit cannot be built with this toolchain,
+# "" when it can: the compiler family is one its row names, or the target
+# architecture is not the one it names.
+unitReqRefusal: function {r: UnitReq.view fam: StringView arch: StringView} out String is {
+    if r.nocc.length > 0 when r.nocc.stringView == fam then {
+        m1: "'\{r.path}' needs \{r.feature} from the C compiler, and \{r.nocc} has none; build with another compiler"
+        return m1
+    }
+    if r.arch.length > 0 when r.arch.stringView != arch then {
+        m2: "'\{r.path}' needs \{r.feature}, which only \{r.arch} targets have; this build targets \{arch}"
+        return m2
+    }
+    return String
+}
+
+# appendLinkOnce -- add a library to the link list unless it is there already;
+# "" adds nothing.
+appendLinkOnce: function {libs: List String lib: StringView} is {
+    if lib.length == 0 then return
+    for each l: libs loop {
+        if l.stringView == lib then return
+    }
+    libs.append from: lib.string
+}
+
+# unitPathReached -- the program reaches the unit a dotted path names: some
+# declaration in it was demanded (ZTyping.requireSeen).
+unitPathReached: function {
+    ast: Ast.view symtab: zenv.ZSymbolTable.view path: StringView
+} out bool is {
+    cur: ztypes.declid
+    first: true
+    for each seg: (path.split sep: ".") loop {
+        nid: zast.poolFind pool: ast.names text: seg
+        if nid.isZero then return false
+        if first then {
+            cur = ztypecheck.unitDeclOfName st: symtab nameId: nid
+            first = false
+        } else {
+            cur = symtab.typing.declFindChild parentDeclId: cur nameId: nid
+        }
+        if cur.isZero then return false
+    }
+    return (symtab.typing.requireSeen.has item: cur)
 }
 
 # true when the program defines a `main`.

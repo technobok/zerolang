@@ -40,9 +40,13 @@ each on hover; the corpus runner ratchets that coverage under #~"make ci".
 This page is the prose and the worked examples -- read it for how the unit
 is meant to be used, and the source for the exact surface.
 
-The #~"platform" unit is what the compiler knows about the build it
-is performing: the operating system and architecture it is building
-for, and the C compiler it will hand the emitted C to.
+The #~"platform" unit is what the compiler knows about the target it
+is building for: its operating system and architecture, and the
+triple that named them. It says nothing about the toolchain that
+builds for it: which C compiler compiles the output, and how, are
+the C backend's business. What a unit needs of that toolchain -- f128
+needs #~"__float128" -- is in the C backend's table, which refuses a
+program by name when its compiler lacks it.
 
 Every member is a #b:"compile-time constant". A read is folded while
 compiling, so it can drive a unit-level #~"if" or a #~"require:"
@@ -52,16 +56,16 @@ Each is declared as a zero-argument #~"is native" function, and the
 #~"out" type is the type. The type checker answers every one of them
 itself, from the invocation it was given, and lowers it to a constant
 of the checked program: no backend implements it and the emitted C
-never names it. An answer whose member is missing, or is declared with
-a body, is an error -- which is what keeps these from being values that
-merely happen to agree with the build.
+never names it. A member declared with a body is an error -- which is
+what keeps these from being values that merely happen to agree with
+the build.
 
 #code language=zerolang: """
   require: unit {
-      library: if platform.cc == platform.cckind.tcc then {
-          error "this unit needs a compiler with __float128"
+      library: if platform.os == platform.oskind.windows then {
+          "ws2_32"
       } else {
-          "quadmath"
+          ""
       }
   }
 """
@@ -76,8 +80,6 @@ arising: the member is #~"os", its type is #~"oskind", and an arm is
 #ul:
   [#*: [#> to=os: #b:"platform.os"] -- #~"oskind"]
   [#*: [#> to=arch: #b:"platform.arch"] -- #~"archkind"]
-  [#*: [#> to=cc: #b:"platform.cc"] -- #~"cckind"]
-  [#*: [#> to=ccmode: #b:"platform.ccmode"] -- #~"ccmodekind"]
   [#*: [#> to=target: #b:"platform.target"] -- #~"StringView"]
   [#*: [#> to=ptrbits: #b:"platform.ptrbits"] -- #~"u64"]
 
@@ -86,8 +88,6 @@ arising: the member is #~"os", its type is #~"oskind", and an arm is
 #ul:
   [#*: [#> to=oskind: #b:"oskind"] -- #~"variant { linux: null  darwin: null  windows: null  other: null }"]
   [#*: [#> to=archkind: #b:"archkind"] -- #~"variant { x86_64: null  aarch64: null  other: null }"]
-  [#*: [#> to=cckind: #b:"cckind"] -- #~"variant { gcc: null  clang: null  tcc: null  other: null }"]
-  [#*: [#> to=ccmodekind: #b:"ccmodekind"] -- #~"variant { spawn: null  inproc: null }"]
 
 
 #--: oskind
@@ -100,40 +100,6 @@ Host operating-system family.
 
 
 CPU architecture family.
-
-
-#--: cckind
-
-
-The C compiler #~"zc" will hand the emitted C to, classified by the
-#b:"basename" of the resolved path -- the same resolution order
-#~"zc" itself uses: #~"--cc", then #~"<target>-gcc", then #~"$CC",
-then #~"cc".
-
-Classification is by name alone. Probing #~"--version" would add a
-subprocess to every compile, so a #~"--cc" pointing at a wrapper
-script reads as #~"other" and a guard keyed on one compiler will not
-fire for it.
-
-
-#--: ccmodekind
-
-
-How #~"zc" reaches that compiler: #~"spawn" runs it as a child
-process, #~"inproc" loads it into this one. Selected with
-#~"--cc-mode"; the default is #~"spawn".
-
-This is a separate axis from #~"cckind" on purpose, so
-#~"platform.cc == platform.cckind.tcc" keeps firing whichever way tcc
-is reached. Naming the in-process path as a compiler of its own would
-have made every guard already written quietly stop applying to it.
-
-There is no #~"auto", and #~"zc" never falls back: the requested mode
-is always the resolved one. That is what keeps this constant
-foldable. An #~"auto" would have to probe for a loadable library, and
-#~"platform" is read during #b:"type checking" -- so a program would
-typecheck differently depending on a machine's shared-library layout,
-and the editor would disagree with the build.
 
 
 #--: os
@@ -154,23 +120,6 @@ so the first asks whether the constant holds that arm.
 
 
 The CPU architecture family being built for.
-
-
-#--: cc
-
-
-The C compiler #~"zc" will invoke.
-
-This is #b:"not" [#> to=./stdlib_os.html: #~"os.buildCompiler"], which
-reports the compiler that built the running #~"zc" binary. This one
-is the compiler that #~"zc" is about to run.
-
-
-#--: ccmode
-
-
-How #~"zc" will reach that compiler -- see
-[#> to=ccmodekind: #~"ccmodekind"].
 
 
 #--: target

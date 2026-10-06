@@ -343,7 +343,7 @@ ccOnPath: function {name: StringView} out String is {
 
 # ccRealPath -- the compiler the name actually runs: PATH-resolved, then read
 # through its symlink chain (`cc` -> /etc/alternatives/cc -> gcc-15 on Debian).
-# Links are READ, never run, so ccKindArm's reason for not probing --version
+# Links are READ, never run, so ccFamilyOf's reason for not probing --version
 # holds here too; a wrapper script still classifies as `other`. A name that
 # resolves to nothing, or a link deeper than eight hops, answers as written.
 ccRealPath: function {name: StringView} out String is {
@@ -379,9 +379,9 @@ ccRealPath: function {name: StringView} out String is {
 # COMPILE and nothing else.
 buildExe: function {
     cc: StringView
-    # the compiler family `cc` belongs to (ccKindOf): what decides which
-    # warning spellings it is handed
-    ccKind: platform.cckind
+    # the compiler family `cc` belongs to (zemitterc.ccFamilyOf): what decides
+    # which warning spellings it is handed
+    ccKind: zemitterc.ccfamily
     tempC: StringView
     exe: StringView
     release: bool
@@ -1203,7 +1203,7 @@ buildAndRun: function {
     # `--tcc-lib` overrides when both are present.
     ccTcc: String
     ccReal: ccRealPath name: cc
-    cka: ztypecheck.ccKindOf ccPath: ccReal.stringView
+    cka: zemitterc.ccFamilyOf ccPath: ccReal.stringView
     isTcc: cka.tcc
     if isTcc when (io.exists path: tccDir) then ccTcc = tccDir.string
     refuseCrossTarget targetTriple: cf.targetTriple.stringView :cc :isTcc
@@ -1263,6 +1263,35 @@ newVfs: function {} out zvfs.ZVfs is {
     )
 }
 
+# zlinkLibsOf -- the libraries an emitted C file's `/* zlink: ... */` header
+# names, which is where emitC records every library the program links.
+zlinkLibsOf: function {csrc: StringView} out List String is {
+    r: List String
+    n: u64
+    for each ln: csrc.lines loop {
+        n = n + 1
+        if n > 8 then break
+        lo: ln.stripPrefix p: "/* zlink:"
+        match (
+            lo
+        ) case some then {
+            # the words up to the comment's close
+            words: lo
+            ce: lo.indexOf needle: "*/"
+            match (
+                ce
+            ) case some then {
+                words = lo.substring from: 0 to: ce
+            } case none then null
+            for each w: (words.split sep: " ") loop {
+                if w.length > 0 then r.append from: w.string
+            }
+            return r
+        } case none then null
+    }
+    return r
+}
+
 # emitCSource -- the C for the whole program, with any emitter refusal reported
 # and the phase timings printed when --time asked for them. Both output paths
 # that need C ask this, so they cannot drift apart.
@@ -1272,6 +1301,7 @@ emitCSource: function {
     runtimeDir: StringView
     cf: ZcFlags.view
     libs: (List String).view
+    ccFamily: zemitterc.ccfamily
     t0: i64
     t1: i64
     t2: i64
@@ -1285,6 +1315,7 @@ emitCSource: function {
         readableNames: cf.readableNames
         errs: emitErrs
         :libs
+        :ccFamily
     )
     failEmitErrors errs: emitErrs
     if cf.timed then printPhases :t0 :t1 :t2 t3: os.monotonicMillis
@@ -1380,8 +1411,6 @@ main: function is {
         eager: cf.eagerCheck
         requireMain: wantRows.not
         dumpRows: wantRows
-        ccPath: ccPath.stringView
-        ccMode: ccMode.stringView
         target: cf.targetTriple.stringView
     )
     checkStart: os.monotonicMillis
@@ -1402,12 +1431,14 @@ main: function is {
         return
     }
     emitLibs: ztypecheck.requiredLibs :st program: prog
+    ccReal0: ccRealPath name: ccPath.stringView
     csrc: (emitCSource
         :prog
         :st
         runtimeDir: runtimeDir.stringView
         :cf
         libs: emitLibs
+        ccFamily: (zemitterc.ccFamilyOf ccPath: ccReal0.stringView)
         t0: tParse0
         t1: tParse1
         t2: checkStart
@@ -1417,10 +1448,13 @@ main: function is {
         writeOut target: tgt.stringView content: csrc.stringView what: "C output"
         return
     }
+    # the link line is the artifact's own: the reached units' libraries, the
+    # ones the C backend added among them
+    linkLibs: zlinkLibsOf csrc: csrc.stringView
     (buildAndRun
         :cf
         csrc: csrc.stringView
-        libs: emitLibs
+        libs: linkLibs
         cc: ccPath.stringView
         ccMode: ccMode.stringView
         tccDir: tccDir.stringView

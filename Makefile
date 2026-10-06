@@ -189,8 +189,8 @@ ci-corpus: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 # word primitives' builtin tier, where __int128 and the carry builtins lower to
 # umulh and adcs, and with -DZ_MATH_ASM_ARM64 the generated asm kernels, which
 # are compiled only on request. A program in MATH_ARM64_REFUSED uses f128, which
-# quadfloat refuses for aarch64; it must fail with that refusal and nothing
-# else. Skipped, with a message, when the cross compiler or qemu is absent; ci
+# the C backend refuses for aarch64 (natives.tbl's @unit.system.quadfloat row);
+# it must fail with that refusal and nothing else. Skipped, with a message, when the cross compiler or qemu is absent; ci
 # runs it when they are present.
 MATH_ARM64_DIR := $(BUILDDIR)/math-arm64
 MATH_ARM64_REFUSED := math_constants_wide
@@ -205,8 +205,8 @@ test-math-arm64: bin/zc
 	    b=$$(basename $$f .z); n=$$((n + 1)); \
 	    bin/zc build $$f --target aarch64-linux-gnu $$fl -o $$d/$$b > $$d/$$b.build 2>&1; rc=$$?; \
 	    case " $(MATH_ARM64_REFUSED) " in *" $$b "*) \
-	      grep -q "x86-64's" $$d/$$b.build && [ $$rc -eq 1 ] \
-	        || { echo "test-math-arm64 FAIL ($$v): $$b must be refused by quadfloat (exit $$rc)"; fail=1; }; \
+	      grep -q "which only x86_64 targets have" $$d/$$b.build && [ $$rc -eq 1 ] \
+	        || { echo "test-math-arm64 FAIL ($$v): $$b must be refused for f128 (exit $$rc)"; fail=1; }; \
 	      continue;; \
 	    esac; \
 	    if [ $$rc -ne 0 ]; then \
@@ -2344,7 +2344,12 @@ perf: $(PERFBIN)
 #
 # -108 an answered member the unit does not declare is not answered, rather
 # than reported: 0 behaviour, -108 source.
-ALLOC_BASELINE := 2209834
+#
+# +3,160 the C toolchain leaves the front end: the C backend reads what a reached
+# unit needs of it from natives.tbl's `@unit.` rows, and zc reads its link line
+# back off the emitted C: -7 behaviour, +3,161 source (the backend's unit rows
+# and family in the self-compile).
+ALLOC_BASELINE := 2212994
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -2628,27 +2633,29 @@ case-guard:
 	echo "case-guard OK: every program declaring main is in a case list"
 
 # require-guard -- zlink-guard's other half. That one pins which programs a
-# `require:` block CONTRIBUTES a library to; this pins which programs it is
-# allowed to REJECT. Both read the same rule -- a block speaks only for a
-# program that reaches its unit -- and only a toolchain the block objects to
-# exercises this side, so it is measured under `--cc tcc`: quadfloat's block
-# reports E0601 there. A rise means a unit now rejects programs that never
-# touch it (which is what made `--cc tcc` reject the entire corpus); a fall
-# means a guard stopped firing for a program that does touch it.
+# unit CONTRIBUTES a library to; this pins which programs it is allowed to
+# REJECT. Both read the same rule -- what a unit needs of the toolchain, in its
+# `require:` block or in the C backend's `@unit.` row, speaks only for a program
+# that reaches the unit -- and only a toolchain a unit cannot be built with
+# exercises this side, so it is measured under `--cc tcc`: the C backend
+# refuses quadfloat there (E0601 is a `require:` block's own refusal). A rise
+# means a unit now rejects programs that never touch it (which is what made
+# `--cc tcc` reject the entire corpus); a fall means a refusal stopped firing
+# for a program that does touch it.
 REQUIRE_TCC_BASELINE := 6
 
 require-guard: bin/zc
 	@n=0; rep=""; \
 	for f in examples/*.z tests/fixtures/emitc_corpus/*.z; do \
 	  b=$$(basename $$f .z); \
-	  if bin/zc emit $$f --system lib/system --cc tcc -o /dev/null 2>&1 | grep -q 'error\[E0601\]'; then \
+	  if bin/zc emit $$f --system lib/system --cc tcc -o /dev/null 2>&1 | grep -qE 'error\[E0601\]|from the C compiler, and tcc has none'; then \
 	    n=$$(($$n + 1)); rep="$$rep  $$b\n"; \
 	  fi; \
 	done; \
 	if [ "$$n" -ne $(REQUIRE_TCC_BASELINE) ]; then \
 	  echo "require-guard FAIL: $$n program(s) rejected under --cc tcc (baseline $(REQUIRE_TCC_BASELINE))"; \
 	  printf "$$rep"; \
-	  echo "  a require: block speaks only for a program that REACHES its unit."; \
+	  echo "  a unit's needs speak only for a program that REACHES it."; \
 	  exit 1; \
 	fi; \
 	echo "require-guard OK: $$n programs rejected under --cc tcc (baseline $(REQUIRE_TCC_BASELINE))"
@@ -2780,10 +2787,10 @@ zlink-rules-guard:
 # A system directory or a src root that is not a directory is refused, exit 2,
 # naming it: the source filesystem panics on such a root, so zc asks first.
 #
-# f128 for a target other than x86-64 is refused by quadfloat's require: block,
-# exit 1, before any C is written: __float128 and libquadmath are x86-64's, and
-# gcc for aarch64 would reject the emitted C over a type the program never
-# wrote.
+# f128 for a target other than x86-64 is refused by the C backend
+# (natives.tbl's @unit.system.quadfloat row), exit 1, before any C is written:
+# __float128 and libquadmath are x86-64's, and gcc for aarch64 would reject
+# the emitted C over a type the program never wrote.
 refusal-guard: bin/zc $(BUILDDIR)/tcc
 	@d=$(BUILDDIR)/refusal; rm -rf $$d; mkdir -p $$d; bad=0; \
 	bin/zc build hello --src examples --system lib/system --cc tcc --cc-mode spawn \
@@ -2827,8 +2834,8 @@ refusal-guard: bin/zc $(BUILDDIR)/tcc
 	fi; \
 	bin/zc emit tests/fixtures/emitc_corpus/math/math_constants_wide.z --target aarch64-linux-gnu \
 	  --system lib/system -o $$d/q.c > $$d/q.log 2>&1; rc=$$?; \
-	if [ $$rc -ne 1 ] || [ -e $$d/q.c ] || ! grep -q "x86-64's" $$d/q.log; then \
-	  echo "refusal-guard FAIL: f128 for a non-x86-64 target must be quadfloat's own refusal, exit 1 (got $$rc)"; \
+	if [ $$rc -ne 1 ] || [ -e $$d/q.c ] || ! grep -q "which only x86_64 targets have" $$d/q.log; then \
+	  echo "refusal-guard FAIL: f128 for a non-x86-64 target must be refused by name, exit 1 (got $$rc)"; \
 	  cat $$d/q.log; bad=1; \
 	fi; \
 	if ! bin/zc env --target x86_64-w64-mingw32 | grep -q '^ZC_CC=x86_64-w64-mingw32-gcc$$'; then \
@@ -2911,13 +2918,14 @@ static-tcc-guard: bin/zc bin/zl bin/zls
 	fi; \
 	echo "static-tcc-guard OK: no libtcc symbols in the driver binaries"
 
-# zlink-guard -- a `require:` block earns its keep only if it applies to the
+# zlink-guard -- a library a unit needs linked -- in its `require:` block, or in
+# the C backend's `@unit.` row -- earns its keep only if it applies to the
 # programs that reach the declaring unit and to no others. Nothing else can
-# catch a mistake here: gcc always has libquadmath, so a requiredLibs that
-# returned "quadmath" unconditionally would link fine and pass every other
-# gate. A rise means something now reaches a unit it did not; a fall means a
-# program lost a need it had.
-ZLINK_BASELINE := 7
+# catch a mistake here: gcc always has libquadmath, so a backend that linked
+# "quadmath" unconditionally would link fine and pass every other gate. A rise
+# means something now reaches a unit it did not; a fall means a program lost a
+# need it had.
+ZLINK_BASELINE := 6
 
 zlink-guard: bin/zc
 	@n=0; rep=""; \
@@ -3885,7 +3893,9 @@ FALLBACK_BASELINE :=
 # member it has no C spelling for (only Text.stringView has one).
 # 39: conformanceArgText's refusal -- a conformer boxed for an owning (`.take`)
 # parameter, which the checker refuses first.
-EMITFAIL_BASELINE := 38
+# 39: applyUnitReqs's refusal -- a reached unit the C toolchain cannot build
+# (natives.tbl's `@unit.` rows: f128 under tcc or off x86-64).
+EMITFAIL_BASELINE := 39
 MARKER_BASELINE := 24
 EXCS := $(NAMES:%=$(EXDIR)/%.c)
 fallback-guard: $(EXCS) bin/zc bin/zl bin/zls

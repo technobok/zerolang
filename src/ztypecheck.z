@@ -33,8 +33,8 @@ public: unit {
     :isFunctionDefWithBody
     :truthyCondArmOf
     :blockEndsInReturn
-    :ccKindOf
     :targetIsHost
+    :targetOrHostArch
     :targetExeSuffix
     :targetTripleError
     :blockHasBreak
@@ -10413,8 +10413,9 @@ checkRequireBlocks: function {
     program: Ast.view
 } is {
     {
+        # 0 when no source spells `library` at all: then every key a block
+        # writes is unknown, which is still a block to check
         libNid9q: zast.poolFind pool: program.names text: "library"
-        if libNid9q.isZero then return
         rqs9q: ListVal ztypes.declid
         for each r9q: st.typing.requireDemanded loop (rqs9q.append
             from: r9q
@@ -16850,13 +16851,14 @@ owningUnitDecl: function {st: zenv.ZSymbolTable.view declId: ztypes.declid} out 
     return ztypes.declid.zero
 }
 
-# ensureUnitRequire -- a unit's `require:` block states what it needs from the
-# host toolchain, which makes it a precondition on using the unit: the FIRST
-# declaration demanded from a unit resolves the block first, through the
-# ordinary unit machinery, so a block with definitions of its own folds them in
-# dependency order. Marking before demanding is what stops the regress --
-# folding `library:` demands `platform.cc`, a declaration in `platform`, which
-# re-enters here.
+# ensureUnitRequire -- the FIRST declaration demanded from a unit marks the unit
+# reached (requireSeen, which the C backend also reads for what a reached unit
+# needs of its toolchain), and resolves its `require:` block, if it has one:
+# what it needs linked, a precondition on using the unit. The block resolves
+# through the ordinary unit machinery, so one with definitions of its own folds
+# them in dependency order. Marking before demanding is what stops the regress
+# -- folding `library:` may demand a `platform` member, a declaration in
+# another unit, which re-enters here.
 ensureUnitRequire: function {
     st: zenv.ZSymbolTable
     scope: ztypes.declid
@@ -16873,12 +16875,12 @@ ensureUnitRequire: function {
     if rq.isZero then return
     st.typing.requireDemanded.append from: rq
     # a block that is demanded is one this program reaches, so a reached
-    # `error` in it -- quadfloat's under tcc -- is this program's to hear, and
-    # hearing it HERE is the point of the block: at the moment the unit is
-    # first used, not after its C has been written. The ambient pending
-    # failure belongs to whatever resolution we interrupted; save it.
-    # the block guards on the toolchain, so the platform facts have to be in
-    # place before it folds
+    # `error` in it is this program's to hear, and hearing it HERE is the point
+    # of the block: at the moment the unit is first used, not after its C has
+    # been written. The ambient pending failure belongs to whatever resolution
+    # we interrupted; save it.
+    # the block may guard on the platform, so its facts have to be in place
+    # before it folds
     ensureFoldNativesSeeded :st :scope :ast
     prevFail: st.typing.constFail
     constFailClear :st
@@ -60236,44 +60238,6 @@ isReexportShaped: function {ast: Ast.view opId: zast.nodeid} out bool is {
     return n.dottedpath or n.atomid
 }
 
-# ccKindOf -- the `cckind` a resolved compiler PATH names, by basename. By
-# name alone: probing --version would put a subprocess in every compile, so a
-# --cc pointing at a wrapper script reads as `other` and a guard keyed on one
-# compiler will not fire for it. `tcc` is tested before `cc` and `clang` before
-# `gcc`, since the shorter spelling is a substring of paths naming the longer.
-ccKindOf: function {ccPath: StringView} out platform.cckind is {
-    cut: u64
-    i: ccPath.length
-    for i > 0 loop {
-        i = i - 1
-        ch: ccPath.byteAt i
-        match (
-            ch
-        ) case some then {
-            if ch == 47 then {
-                cut = i + 1
-                i = 0
-            }
-        } case none then null
-    }
-    b: ccPath.substring from: cut to: ccPath.length
-    if (b.contains needle: "tcc") then return platform.cckind.tcc
-    if (b.contains needle: "clang") then return platform.cckind.clang
-    if (b.contains needle: "gcc") then return platform.cckind.gcc
-    return platform.cckind.other
-}
-
-# ccKindArm -- ccKindOf's answer as the arm's NAME, which is what seeding the
-# `platform.cc` constant needs. A caller that branches on the family asks
-# ccKindOf and reads the arm, not the spelling.
-ccKindArm: function {ccPath: StringView} out String is {
-    k: ccKindOf :ccPath
-    if k.tcc then return "tcc"
-    if k.clang then return "clang"
-    if k.gcc then return "gcc"
-    return "other"
-}
-
 # namesArm -- whether `comp`, one `-` separated component of a --target
 # triple, is one of the space-separated `spellings` that name a single
 # platform arm. The vocabulary is DATA passed in rather than a chain of
@@ -60505,7 +60469,6 @@ seedFoldNatives: function {
         if (answerHasNativeDecl :st :ast unitDecl: ud9 prov: prov9) then {
             (applyFoldProvider
                 :st
-                :scope
                 unitScope: rf9
                 :ast
                 ptid: ptid9
@@ -60599,10 +60562,8 @@ answeredUnit: "platform"
 answeredMemberName: function {prov: u64} out StringView is {
     if prov == 1 then return "os"
     if prov == 2 then return "arch"
-    if prov == 3 then return "cc"
-    if prov == 4 then return "ccmode"
-    if prov == 5 then return "target"
-    if prov == 6 then return "ptrbits"
+    if prov == 3 then return "target"
+    if prov == 4 then return "ptrbits"
     return ""
 }
 
@@ -60621,12 +60582,10 @@ answersNative: function {ast: Ast.view unitNm: zast.nameid memberNm: zast.nameid
 # table. Takes foldProviderOf's INDEX rather than a name: the path is resolved
 # once, at the lookup, and everything downstream of it compares integers.
 #
-# os and arch resolve their arm in the platform unit's own scope; cc and ccmode
-# in the caller's. That difference is deliberate.
+# os and arch resolve their arm in the platform unit's own scope.
 applyFoldProvider: function {
     ast: Ast
     st: zenv.ZSymbolTable
-    scope: ztypes.declid
     unitScope: ztypes.declid
     ptid: ztypes.tid
     prov: u64
@@ -60658,38 +60617,6 @@ applyFoldProvider: function {
         return
     }
     if prov == 3 then {
-        cka: ccKindArm ccPath: st.typing.ccPath.stringView
-        (seedPlatformArm
-            :st
-            :scope
-            :ast
-            :ptid
-            member: "cc"
-            typeName: "cckind"
-            armName: cka.stringView
-        )
-        return
-    }
-    if prov == 4 then {
-        # the mode needs no classifier: it arrives as an arm name already,
-        # having been validated at the flag. An unset one is answered `spawn`
-        # HERE, in the open. Seeding nothing and leaving an on-disk default
-        # reaches `spawn` too -- the same answer, arrived at by luck -- and
-        # there is no file to fall back to.
-        ccModeC: st.typing.ccMode.copy # copied out first: seeding lends st
-        if ccModeC.length == 0 then ccModeC = "spawn"
-        (seedPlatformArm
-            :st
-            :scope
-            :ast
-            :ptid
-            member: "ccmode"
-            typeName: "ccmodekind"
-            armName: ccModeC.stringView
-        )
-        return
-    }
-    if prov == 5 then {
         tripleC: st.typing.targetTriple.copy
         value9: ztypes.makeStrConst (constInternString :st text: tripleC.stringView)
         (seedPlatformValue
@@ -60701,7 +60628,7 @@ applyFoldProvider: function {
         )
         return
     }
-    if prov == 6 then {
+    if prov == 4 then {
         # the width of a pointer, which is the width of a union's payload slot
         pb: targetPointerBytes triple: st.typing.targetTriple.stringView
         (seedPlatformValue
@@ -62707,8 +62634,6 @@ typecheck: function {
     eager: bool
     requireMain: bool
     dumpRows: bool
-    ccPath: StringView
-    ccMode: StringView
     target: StringView
 } out zenv.ZSymbolTable is {
     nodeEstT: u64
@@ -62717,8 +62642,6 @@ typecheck: function {
     ty.eagerAll = eager
     ty.requireMain = requireMain
     ty.dumpRows = dumpRows
-    ty.ccPath = ccPath.string
-    ty.ccMode = ccMode.string
     ty.targetTriple = target.string
     muNid: nameIdOf ast: program name: program.mainUnitName.stringView
     reg.setMainUnit name: program.mainUnitName.stringView nameId: muNid

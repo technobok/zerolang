@@ -1,15 +1,19 @@
 # platform.z -- what the compiler knows about the build it is performing.
 #
 # Every definition here is a COMPILE-TIME CONSTANT, so a `require:` block or a
-# unit-level `if` can guard on the toolchain:
+# unit-level `if` can guard on the target:
 #
 #     require: unit {
-#         library: if platform.cc == platform.cckind.tcc then {
-#             error "this unit needs a compiler with __float128"
+#         library: if platform.os == platform.oskind.windows then {
+#             "ws2_32"
 #         } else {
-#             "quadmath"
+#             ""
 #         }
 #     }
+#
+# What it describes is the TARGET -- its operating system and architecture --
+# never the toolchain that builds for it: which C compiler compiles the output,
+# and how, are the C backend's business, and nothing here names them.
 #
 # Each kind is named for its VALUES rather than for the member that reads it,
 # which is what keeps `platform.platform` from ever arising: the member is
@@ -39,42 +43,7 @@ archkind: variant {
     other: null
 }
 
-# cckind -- the C compiler `zc` will hand the emitted C to, classified by the
-# basename of the resolved path. By NAME alone: probing `--version` would add
-# a subprocess to every compile, so a `--cc` pointing at a wrapper script
-# reads as `other` and a guard keyed on one compiler will not fire for it.
-cckind: variant {
-    # GCC, reached by spawning it; it has no in-process mode, so ccmode.inproc
-    # cannot select it
-    gcc: null
-    # Clang, spawned like GCC. The warn-check gate runs both because their
-    # warning sets are not the same one
-    clang: null
-    # the vendored tcc, which compiles in-process as well as by spawn
-    tcc: null
-    # a C compiler the build does not name
-    other: null
-}
-
-# ccmodekind -- how `zc` reaches that compiler: `spawn` runs it as a child
-# process, `inproc` loads it into this one. Orthogonal to `cckind` on purpose,
-# so `platform.cc == platform.cckind.tcc` keeps firing whichever way tcc is
-# reached; naming the in-process path as a compiler of its own would have made
-# every existing guard quietly stop applying to it.
-#
-# There is no `auto`: the requested mode is always the resolved one, and `zc`
-# reports an error rather than falling back. That is what keeps this constant
-# foldable -- an `auto` would have to probe for a loadable library, and
-# `platform` is read during TYPE CHECKING, where the answer must not depend on
-# a machine's shared-library layout.
-ccmodekind: variant {
-    # the C compiler runs as a child process
-    spawn: null
-    # the C compiler runs IN THIS PROCESS, which only the vendored tcc can do
-    inproc: null
-}
-
-# The six below are natives the type checker answers itself, from the
+# The four below are natives the type checker answers itself, from the
 # invocation it was given: zero-argument declarations whose `out` type is the
 # type. It lowers each to a constant of the checked program, so no backend
 # implements them and the emitted C never names them.
@@ -83,12 +52,6 @@ os: function out oskind is native
 # the architecture this build targets, answered from the invocation rather than
 # probed for
 arch: function out archkind is native
-
-# which C compiler the build will use, answered from the invocation
-cc: function out cckind is native
-
-# how that compiler is reached: spawned as a child, or run in this process
-ccmode: function out ccmodekind is native
 
 # the target triple as written text, for the cases the kind enums above do not
 # split finely enough
