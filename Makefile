@@ -90,7 +90,7 @@ SKIP     := mathutil genmath dissectlib
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: emit-set ident-set natives-tbl-guard generic-param-guard zl-full-guard const-row-guard all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls tcc install regen-goldens regen-matrix regen-math-asm bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard lifetime-guard native-guard fallback-guard member-guard highlight-guard deadcode-guard require-guard static-tcc-guard refusal-guard zlink-rules-guard fmt-raw-guard test-tcc test-tcc-heavy test-clang test-math-arm64 test-math-noasm test-portable-scalars math-asm-guard docs-link-guard bench-math bench-math-kernels mode-parity readable-check user-native-guard perf-strict perf-elision pre-push
+.PHONY: emit-set ident-set natives-tbl-guard generic-param-guard zl-full-guard const-row-guard all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls tcc install regen-goldens regen-matrix regen-math-asm bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard frontend-guard lifetime-guard native-guard fallback-guard member-guard highlight-guard deadcode-guard require-guard static-tcc-guard refusal-guard zlink-rules-guard fmt-raw-guard test-tcc test-tcc-heavy test-clang test-math-arm64 test-math-noasm test-portable-scalars math-asm-guard docs-link-guard bench-math bench-math-kernels mode-parity readable-check user-native-guard perf-strict perf-elision pre-push
 
 # Keep pattern-chain intermediates (the per-example .c files) for debugging.
 .SECONDARY:
@@ -177,7 +177,7 @@ test: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 # the Python-free seed bootstrap. The lint + guard + corpus phases are plain
 # prerequisites so -j overlaps them; test-bootstrap stays last (and is
 # internally serial -- b1 -> b2 -> b3 is a chain by nature).
-ci: style-lint zl-full-guard complexity-report warn-check shadow-guard emitter-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard member-guard highlight-guard any-guard deadcode-guard eager-guard eager-lib-guard case-guard user-native-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard readable-check perf-strict test-tcc-heavy test-clang test-math-arm64 test-math-noasm test-portable-scalars math-asm-guard docs-link-guard mode-parity ci-corpus
+ci: style-lint zl-full-guard complexity-report warn-check shadow-guard emitter-guard frontend-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard member-guard highlight-guard any-guard deadcode-guard eager-guard eager-lib-guard case-guard user-native-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard readable-check perf-strict test-tcc-heavy test-clang test-math-arm64 test-math-noasm test-portable-scalars math-asm-guard docs-link-guard mode-parity ci-corpus
 	$(MAKE) --no-print-directory test-bootstrap BOOTSTRAP_CCS="$(CI_BOOTSTRAP_CCS)"
 	@echo "CI GATE GREEN: style-lint + corpus(--heavy: +selfhost-asan +fixpoint) + bootstrap"
 
@@ -2352,7 +2352,10 @@ perf: $(PERFBIN)
 #
 # -449 a union's slot is 8 bytes on every target and platform.ptrbits goes:
 # -4 behaviour, -445 source.
-ALLOC_BASELINE := 2212545
+#
+# -19 the C keyword mangling moves from ztypes into the emitter: 0 behaviour,
+# -19 source.
+ALLOC_BASELINE := 2212526
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -2492,10 +2495,10 @@ emitter-guard:
 	e4=$$(grep -c 'userFnId' src/zemitterc.z); \
 	e5=$$(grep -c 'childOwnershipText' src/zemitterc.z); \
 	e6=$$(grep -c 'regNameOf' src/zemitterc.z); \
-	e7=$$(grep -c 'ztypes.mangleVarName' src/zemitterc.z); \
+	e7=$$(grep -c 'mangleVarName :name' src/zemitterc.z); \
 	e8=$$(grep -cF 'io.readText' src/zemitterc.z); \
 	e9=$$(grep -c 'monoOriginName' src/zemitterc.z); \
-	e10=$$(grep -c 'ztypes.mangleMemberPrefix' src/zemitterc.z); \
+	e10=$$(grep -c 'mangleMemberPrefix :name' src/zemitterc.z); \
 	g1=$$(grep -c 'composeCname' src/ztypes.z); \
 	g2=$$(grep -cF 'z_t\{' src/zemitterc.z); \
 	fail=0; \
@@ -2509,10 +2512,10 @@ emitter-guard:
 	chk "userFnId" "$$e4" 20; \
 	chk "childOwnershipText" "$$e5" 0; \
 	chk "regNameOf" "$$e6" 64; \
-	chk "ztypes.mangleVarName (both inside varCName)" "$$e7" 2; \
+	chk "mangleVarName (both inside varCName)" "$$e7" 2; \
 	chk "io.readText" "$$e8" 3; \
 	chk "monoOriginName" "$$e9" 6; \
-	chk "ztypes.mangleMemberPrefix (inside memberCPrefix)" "$$e10" 1; \
+	chk "mangleMemberPrefix (inside memberCPrefix)" "$$e10" 1; \
 	if [ "$$fail" = "1" ]; then \
 	  echo "  A new name-resolution site was added to the emitter. Read the typechecker"; \
 	  echo "  stamp (atomVariableId/atomUnitDefId/callKind), the canonical child id, or"; \
@@ -2520,6 +2523,35 @@ emitter-guard:
 	  exit 1; \
 	fi; \
 	echo "emitter-guard OK: resolvedByKey=$$e1 walkLookup=$$e2 resolveByName=$$e3 userFnId=$$e4 ownText=$$e5 nameOf=$$e6 mangleVar=$$e7 readText=$$e8 monoOrigin=$$e9 mangleMember=$$e10"
+
+# frontend-guard -- the front end knows no backend. Everything before emission
+# -- the lexer, parser and AST, the type checker and its model, the symbol table
+# and the generator lowering -- holds no C spelling in its code (a C type, a C
+# compiler, the C table, a link line, a C keyword list), and reads the target
+# triple only where the platform unit's answers come from it. A backend's facts
+# live in that backend (src/zemitterc.z, natives.tbl); a rise here is one
+# leaking forward. Comments are not counted: explaining what the C backend
+# does with a decision is not depending on it.
+FRONTEND_SRCS := src/ztypecheck.z src/ztyping.z src/ztypes.z src/zenv.z src/zgenerator.z \
+	lib/system/zparser.z lib/system/zlexer.z lib/system/zast.z
+frontend-guard:
+	@c=$$(cat $(FRONTEND_SRCS) | grep -vE '^[[:space:]]*#' \
+	  | grep -cE '__int128|_Float16|__float128|sizeof\(|_Alignof|void\*|u?int(8|16|32|64)_t|natives\.tbl|zlink|ccPath|ccMode|cckind|isCReserved|mangleVarName|mangleMemberPrefix'); \
+	t=$$(grep -vE '^[[:space:]]*#' src/ztypecheck.z | grep -c 'st\.typing\.targetTriple'); \
+	fail=0; \
+	if [ "$$c" -gt 0 ]; then \
+	  echo "frontend-guard FAIL: $$c C spelling(s) in the front end's code:"; \
+	  grep -nE '__int128|_Float16|__float128|sizeof\(|_Alignof|void\*|u?int(8|16|32|64)_t|natives\.tbl|zlink|ccPath|ccMode|cckind|isCReserved|mangleVarName|mangleMemberPrefix' $(FRONTEND_SRCS) \
+	    | grep -vE ':[0-9]+:[[:space:]]*#' | sed 's/^/    /' | head -10; fail=1; fi; \
+	if [ "$$t" -gt 3 ]; then \
+	  echo "frontend-guard FAIL: the type checker reads the target triple $$t times (baseline 3: os, arch, target)"; fail=1; \
+	elif [ "$$t" -lt 3 ]; then \
+	  echo "frontend-guard: target triple reads = $$t < 3 -- lower the baseline here"; fi; \
+	if [ "$$fail" = "1" ]; then \
+	  echo "  A backend fact belongs to the backend: the C emitter and its table (natives.tbl)."; \
+	  exit 1; \
+	fi; \
+	echo "frontend-guard OK: no C spelling in the front end's code; the target triple read $$t times, by platform's answers"
 
 # lifetime-guard -- ratchet on the emitter's own decisions about what dies when:
 # the checker records every scope end's and every exit's destroy list, with each

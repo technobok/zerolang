@@ -125,6 +125,8 @@ Table of Contents</div>
 </li>
 <li><a href="#code-generator">Code Generator</a>
 <ul>
+<li><a href="#the-backend-contract">The backend contract</a>
+</li>
 <li><a href="#runtime-backed-stdlib-units">Runtime-backed stdlib units</a>
 </li>
 <li><a href="#c-name-generation">C Name Generation</a>
@@ -636,7 +638,32 @@ features (<code>typeof</code>, <code>constexpr</code>, <code>#embed</code>) are 
 <p>The emitter produces several output sections in order: struct/type definitions,
 forward declarations, function typedefs, function bodies, and a <code>main()</code>
 entry point. Each section is collected separately and assembled at the end.</p>
-<h3 id="runtime-backed-stdlib-units"><a href="#runtime-backed-stdlib-units">8.1. Runtime-backed stdlib units</a></h3>
+<h3 id="the-backend-contract"><a href="#the-backend-contract">8.1. The backend contract</a></h3>
+<p>The front end -- lexer, parser, type checker, generator lowering -- knows no
+backend. It hands one over a checked program: the AST, the type registry and
+the <code>ZTyping</code> model, every value it can answer already a constant of the
+program (the <code>platform</code> members are, though declared <code>is native</code>), and the
+set of units the program reaches (<code>ZTyping.requireSeen</code>). What it decides
+holds for every backend: whether a program is legal, the language's own sizes
+(a union's slot is 8 bytes on every target), what a unit's <code>require:</code> block
+links. It reads the target triple only for <code>platform</code>'s answers, and never a
+toolchain. The <code>frontend-guard</code> ratchet holds its code to no C spelling.</p>
+<p>A backend supplies the rest:</p>
+<ul>
+<li>an implementation of every <code>is native</code> declaration the checker does
+    not answer, refusing at the declaration one it has none for -- the C
+    backend's are <code>src/runtime/natives.tbl</code> and its fragments;</li>
+<li>its representation of each type, holding every value the language's
+    rules admit -- the C backend gives a type the C compiler lacks (<code>i128</code>,
+    <code>u128</code>, <code>f16</code>) a struct and helper functions, and the C preprocessor,
+    not <code>zc</code>, picks between that and the compiler's own type;</li>
+<li>what a reached unit needs of its toolchain, and the refusal of a
+    toolchain that lacks it, by name and before anything is compiled -- the C
+    backend's <code>@unit.</code> rows: <code>system.quadfloat</code> needs <code>__float128</code>,
+    which tcc has none of and only x86-64 targets have, and links
+    libquadmath.</li>
+</ul>
+<h3 id="runtime-backed-stdlib-units"><a href="#runtime-backed-stdlib-units">8.2. Runtime-backed stdlib units</a></h3>
 <p>Six stdlib units -- <code>system</code>, <code>core</code>, <code>collections</code>, <code>io</code>,
 <code>os</code>, <code>cli</code> -- are <em><strong>runtime-backed</strong></em>: their types (String, File,
 the collections, the numerics) and their <code>is native</code> functions are
@@ -704,7 +731,7 @@ method body only when the checker walked it. <code>--eager</code> walks everythi
 which is the point of it.</p>
 <p>With the gate, a bodied <code>times</code> on all eight scalars costs ONE line of
 C in a program that never iterates.</p>
-<h3 id="c-name-generation"><a href="#c-name-generation">8.2. C Name Generation</a></h3>
+<h3 id="c-name-generation"><a href="#c-name-generation">8.3. C Name Generation</a></h3>
 <p>C names are the emitter's business -- the type checker composes none. At
 the start of <code>emitC</code> a single pass over the type registry fills a
 <code>tid</code>-indexed table on <code>Ctx.cnames</code>, and every emission site reads it
@@ -716,7 +743,7 @@ disagree.</p>
 sites call it, both naming a symbol that no registered type owns: the
 flattened <code>{base}.{member}</code> of a dotted member access, and an <code>as</code>-block
 constant's <code>{type}.{label}</code>. Variable names go through
-<code>ztypes.mangleVarName</code> (C-keyword mangling of the emitted identifier
+<code>zemitterc.mangleVarName</code> (C-keyword mangling of the emitted identifier
 only). The <code>emitter-guard</code> Makefile ratchet (run by <code>make ci</code>) pins the
 emitter's by-name resolution sites at their current floors, holds
 <code>composeCname</code> in the type checker at zero, and caps the <code>z_t{id}</code>

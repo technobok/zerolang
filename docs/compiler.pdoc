@@ -608,6 +608,34 @@ The emitter produces several output sections in order: struct/type definitions,
 forward declarations, function typedefs, function bodies, and a #~"main()"
 entry point. Each section is collected separately and assembled at the end.
 
+#---: The backend contract
+
+The front end -- lexer, parser, type checker, generator lowering -- knows no
+backend. It hands one over a checked program: the AST, the type registry and
+the #~"ZTyping" model, every value it can answer already a constant of the
+program (the #~"platform" members are, though declared #~"is native"), and the
+set of units the program reaches (#~"ZTyping.requireSeen"). What it decides
+holds for every backend: whether a program is legal, the language's own sizes
+(a union's slot is 8 bytes on every target), what a unit's #~"require:" block
+links. It reads the target triple only for #~"platform"'s answers, and never a
+toolchain. The #~"frontend-guard" ratchet holds its code to no C spelling.
+
+A backend supplies the rest:
+
+#ul:
+  [#*: an implementation of every #~"is native" declaration the checker does
+    not answer, refusing at the declaration one it has none for -- the C
+    backend's are #~"src/runtime/natives.tbl" and its fragments;]
+  [#*: its representation of each type, holding every value the language's
+    rules admit -- the C backend gives a type the C compiler lacks (#~"i128",
+    #~"u128", #~"f16") a struct and helper functions, and the C preprocessor,
+    not #~"zc", picks between that and the compiler's own type;]
+  [#*: what a reached unit needs of its toolchain, and the refusal of a
+    toolchain that lacks it, by name and before anything is compiled -- the C
+    backend's #~"@unit." rows: #~"system.quadfloat" needs #~"__float128",
+    which tcc has none of and only x86-64 targets have, and links
+    libquadmath.]
+
 #---: Runtime-backed stdlib units
 
 Six stdlib units -- #~"system", #~"core", #~"collections", #~"io",
@@ -696,7 +724,7 @@ The composer is #~"zemitterc.cnameOf". Outside the table builder only two
 sites call it, both naming a symbol that no registered type owns: the
 flattened #~"{base}.{member}" of a dotted member access, and an #~"as"-block
 constant's #~"{type}.{label}". Variable names go through
-#~"ztypes.mangleVarName" (C-keyword mangling of the emitted identifier
+#~"zemitterc.mangleVarName" (C-keyword mangling of the emitted identifier
 only). The #~"emitter-guard" Makefile ratchet (run by #~"make ci") pins the
 emitter's by-name resolution sites at their current floors, holds
 #~"composeCname" in the type checker at zero, and caps the #~"z_t{id}"
