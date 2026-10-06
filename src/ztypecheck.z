@@ -82,6 +82,7 @@ public: unit {
     :unitDeclOfTid
     :unitNameOfTid
     :unitNameViewOfTid
+    :unitPathOfTid
     :reexportTargetIdsOf
     :requiredLibs
     :rootNameOf
@@ -60900,14 +60901,15 @@ qualifiedTypePair: function {
     return (QualifiedPair expected: eq.copy got: aq.copy ok: good)
 }
 
-# qualifiedTypeName -- `name` prefixed with the unit that declares the type,
-# for a report where the bare name would appear twice and name two types.
+# qualifiedTypeName -- `name` prefixed with the path of units that declares the
+# type (unitPathOfTid), for a report where the bare name would appear twice and
+# name two types.
 qualifiedTypeName: function {
     st: zenv.ZSymbolTable.view
     tid: ztypes.tid
     name: StringView
 } out String is {
-    un: nearestUnitNameOfTid :st :tid
+    un: unitPathOfTid :st :tid
     if un.length > 0 then {
         r: un.copy
         r.append "."
@@ -60919,7 +60921,7 @@ qualifiedTypeName: function {
     # instance of
     if (st.reg.genericArgCount specId: tid) > 0 then {
         a0: st.reg.genericTypeArgAt specId: tid ordinal: 0
-        au: nearestUnitNameOfTid :st tid: a0
+        au: unitPathOfTid :st tid: a0
         if au.length > 0 then {
             r2: name.string
             r2.append " over "
@@ -60928,7 +60930,7 @@ qualifiedTypeName: function {
             r2.append (st.reg.nameOf tid: a0)
             return r2
         }
-        ou: nearestUnitNameOfTid :st tid: (st.reg.genericOriginOf :tid)
+        ou: unitPathOfTid :st tid: (st.reg.genericOriginOf :tid)
         if ou.length > 0 then {
             r3: ou.copy
             r3.append "."
@@ -60939,10 +60941,14 @@ qualifiedTypeName: function {
     return name.string
 }
 
-# nearestUnitNameOfTid -- the name of the INNERMOST unit that declares `tid`: a
-# subunit says its own name, where unitDeclOfTid answers the file unit both
-# such types share and the report would name one unit twice.
-nearestUnitNameOfTid: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out String is {
+# unitPathOfTid -- the path of units a program spells to reach `tid`, file unit
+# first: `io`, `armal.deep`, `z.build`. Every enclosing unit is in it, a subunit
+# and a nested namespace alike; a `public:` block is not, a type it declares
+# being spelled through its unit. "" when the type has no declaration. The file
+# unit alone (unitNameOfTid) dropped every level between, and the innermost
+# alone named a path nothing could write.
+unitPathOfTid: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out String is {
+    names: List String
     cur: st.reg.defOf :tid
     for cur.isZero.not loop {
         par: ztypes.declid
@@ -60952,12 +60958,22 @@ nearestUnitNameOfTid: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out 
         par = decl.parent
         isU = decl.kind.unitDecl
         selfT = decl.typeId
-        if isU when selfT.isZero.not when (selfT == tid).not then {
-            return (st.reg.nameOf tid: selfT)
+        decl.drop
+        isBlock: false
+        if par.isZero.not then isBlock = (st.typing.declPublicNsOf owner: par) == cur
+        if isU when isBlock.not when selfT.isZero.not when (selfT == tid).not then {
+            names.append (st.reg.nameOf tid: selfT)
         }
         cur = par
     }
-    return ""
+    r: String
+    i: names.length
+    for i > 0 loop {
+        i = i - 1
+        if r.length > 0 then r.append "."
+        r.append (names.get :i)
+    }
+    return r
 }
 
 
