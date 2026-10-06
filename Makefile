@@ -90,7 +90,7 @@ SKIP     := mathutil genmath dissectlib
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: emit-set ident-set natives-tbl-guard generic-param-guard zl-full-guard const-row-guard all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls tcc install regen-goldens regen-matrix regen-math-asm bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard lifetime-guard native-guard fallback-guard member-guard highlight-guard deadcode-guard require-guard static-tcc-guard refusal-guard zlink-rules-guard fmt-raw-guard test-tcc test-tcc-heavy test-clang test-math-arm64 test-math-noasm math-asm-guard docs-link-guard bench-math bench-math-kernels mode-parity readable-check user-native-guard perf-strict perf-elision pre-push
+.PHONY: emit-set ident-set natives-tbl-guard generic-param-guard zl-full-guard const-row-guard all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls tcc install regen-goldens regen-matrix regen-math-asm bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard lifetime-guard native-guard fallback-guard member-guard highlight-guard deadcode-guard require-guard static-tcc-guard refusal-guard zlink-rules-guard fmt-raw-guard test-tcc test-tcc-heavy test-clang test-math-arm64 test-math-noasm test-int128-portable math-asm-guard docs-link-guard bench-math bench-math-kernels mode-parity readable-check user-native-guard perf-strict perf-elision pre-push
 
 # Keep pattern-chain intermediates (the per-example .c files) for debugging.
 .SECONDARY:
@@ -177,7 +177,7 @@ test: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 # the Python-free seed bootstrap. The lint + guard + corpus phases are plain
 # prerequisites so -j overlaps them; test-bootstrap stays last (and is
 # internally serial -- b1 -> b2 -> b3 is a chain by nature).
-ci: style-lint zl-full-guard complexity-report warn-check shadow-guard emitter-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard member-guard highlight-guard any-guard deadcode-guard eager-guard eager-lib-guard case-guard user-native-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard readable-check perf-strict test-tcc-heavy test-clang test-math-arm64 test-math-noasm math-asm-guard docs-link-guard mode-parity ci-corpus
+ci: style-lint zl-full-guard complexity-report warn-check shadow-guard emitter-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard member-guard highlight-guard any-guard deadcode-guard eager-guard eager-lib-guard case-guard user-native-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard readable-check perf-strict test-tcc-heavy test-clang test-math-arm64 test-math-noasm test-int128-portable math-asm-guard docs-link-guard mode-parity ci-corpus
 	$(MAKE) --no-print-directory test-bootstrap BOOTSTRAP_CCS="$(CI_BOOTSTRAP_CCS)"
 	@echo "CI GATE GREEN: style-lint + corpus(--heavy: +selfhost-asan +fixpoint) + bootstrap"
 
@@ -236,6 +236,28 @@ test-math-noasm: bin/zc
 	done; \
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
 	echo "test-math-noasm OK: $$n math programs on math's C kernels"
+
+# test-int128-portable -- every program that names i128 or u128, built with
+# -DZ_INT128_PORTABLE: gcc then takes the two-word representation tcc always
+# takes (natives/_Z_INT128.inc), with f128 present, so the int128 <-> f128
+# helpers run as well, which tcc, having no f128, never reaches. The output
+# must be the golden the native representation writes.
+INT128_PORTABLE_DIR := $(BUILDDIR)/int128-portable
+test-int128-portable: bin/zc
+	@mkdir -p $(INT128_PORTABLE_DIR); fail=0; n=0; \
+	for f in examples/*.z tests/fixtures/emitc_corpus/*.z tests/fixtures/emitc_corpus/math/*.z; do \
+	  b=$$(basename $$f .z); \
+	  grep -qE '(^|[^A-Za-z0-9_])[iu]128([^A-Za-z0-9_]|$$)' $$f || continue; \
+	  [ -f tests/fixtures/run_golden/$$b.out ] || continue; \
+	  n=$$((n + 1)); \
+	  if ! bin/zc build $$f --system lib/system --cflags -DZ_INT128_PORTABLE -o $(INT128_PORTABLE_DIR)/$$b > $(INT128_PORTABLE_DIR)/$$b.build 2>&1; then \
+	    echo "test-int128-portable FAIL: $$b does not build"; sed -n 1,3p $(INT128_PORTABLE_DIR)/$$b.build; fail=1; continue; fi; \
+	  $(INT128_PORTABLE_DIR)/$$b > $(INT128_PORTABLE_DIR)/$$b.out 2>&1; \
+	  cmp -s $(INT128_PORTABLE_DIR)/$$b.out tests/fixtures/run_golden/$$b.out \
+	    || { echo "test-int128-portable FAIL: $$b differs from its golden"; fail=1; }; \
+	done; \
+	if [ $$fail -ne 0 ]; then exit 1; fi; \
+	echo "test-int128-portable OK: $$n programs on the two-word i128 / u128"
 
 # docs-link-guard -- every .pdoc link is bracketed, `[#> to=TARGET: text]`.
 # Written bare, a link's text runs to the end of its line, so the words after
@@ -2312,7 +2334,11 @@ perf: $(PERFBIN)
 #
 # +894 a default written as a converted constant expression folds, and one
 # that does not fold is refused: 0 behaviour, +894 source.
-ALLOC_BASELINE := 2202370
+#
+# +5,215 i128 and u128 go through the int128 helpers: +234 behaviour (the 101
+# table rows now carry `needs=prelude.int128`, read on every compile, and the
+# prelude's typedefs), +4,981 source.
+ALLOC_BASELINE := 2207585
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -2603,7 +2629,7 @@ case-guard:
 # reports E0601 there. A rise means a unit now rejects programs that never
 # touch it (which is what made `--cc tcc` reject the entire corpus); a fall
 # means a guard stopped firing for a program that does touch it.
-REQUIRE_TCC_BASELINE := 11
+REQUIRE_TCC_BASELINE := 6
 
 require-guard: bin/zc
 	@n=0; rep=""; \
@@ -4134,7 +4160,7 @@ natives-tbl-guard: bin/zc
 	    $$f; \
 	done | LC_ALL=C sort -u > $$d2/declkind; \
 	grep '^\[' $$d2/gen \
-	  | sed -E 's/^\[([^]]*)\] +\(\{.*/\1 lossy/; s/^\[([^]]*)\] +\(\(.*/\1 safe/' \
+	  | sed -E 's/^\[([^] ]*)[^]]*\] +\(\{.*/\1 lossy/; t; s/^\[([^] ]*)[^]]*\] +.*/\1 safe/' \
 	  | LC_ALL=C sort -u > $$d2/rowkind; \
 	nd=$$(wc -l < $$d2/declkind); nr=$$(wc -l < $$d2/rowkind); \
 	if [ "$$nd" != "$$nr" ]; then \
@@ -4144,7 +4170,7 @@ natives-tbl-guard: bin/zc
 	if [ -n "$$bad" ]; then \
 	  echo "natives-tbl-guard FAIL: a conversion row disagrees with its declared return:"; \
 	  echo "$$bad" | sed 's/^/    /' | head -8; \
-	  echo "  A `resultval` declaration must build one; a direct one must be a plain cast."; \
+	  echo "  A `resultval` declaration must build one; a direct one must be a plain conversion."; \
 	  exit 1; \
 	fi; \
 	rm -rf $$d2; \

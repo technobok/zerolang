@@ -1,0 +1,95 @@
+# int128_ops.z -- every operation i128 and u128 declare, at the edges of their
+# ranges, and every way a value reaches one: a typed or bare literal, a fold, a
+# unit constant, a default, a field, an argument, a return. The same program
+# runs where the C compiler has a 128-bit integer and where it has none (tcc,
+# or -DZ_INT128_PORTABLE), whose values are two 64-bit words, so the output is
+# the check that the two agree.
+
+I128Max: 170141183460469231731687303715884105727.i128
+I128Min: (0 - 170141183460469231731687303715884105728).i128
+U128Max: 340282366920938463463374607431768211455.u128
+Small: 0 - 5
+
+# meters -- a scalar typedef over i128
+meters: i128
+
+# span -- a record holding both widths
+span: record {
+    # the signed half
+    a: 0.i128
+    # the unsigned half
+    b: 0.u128
+}
+
+# give -- the value an i128 parameter receives, a literal default included
+give: function {v: (0 - 7).i128} out i128 is { return v }
+
+# ugive -- a u128 parameter's default past u64
+ugive: function {v: 36893488147419103232.u128} out u128 is { return v }
+
+# lit -- a bare literal returned into an i128
+lit: function out i128 is { return 0 - 42 }
+
+# ident -- a generic function instantiated at i128
+ident: function as { t: anyval.generic } in {x: t} out t is { return x }
+
+# showConv -- a conversion's outcome, the value or `err`
+showI8: function {r: (resultval t: i8 e: converror)} is {
+    match r case ok then print "  ok \{r}" case err then print "  err"
+}
+
+main: function is {
+    a: 123456789012345678901234567890.i128
+    b: 0.i128 - 98765432109876543210.i128
+    print "add \{a + b} sub \{a - b} mul \{b * 3} div \{a / b} rem \{a % b}"
+    print "neg div \{(0 - 7).i128 / 2} neg rem \{(0 - 7).i128 % 2} rem neg \{7.i128 % (0 - 2)}"
+    print "and \{a & b} or \{a | b} xor \{a ^ b} not \{a.not}"
+    print "shl \{a << 3} shr \{b >> 3} shr big \{b >> 200} shl big \{a << 128} shr neg \{b >> (0 - 1)}"
+    print "max \{I128Max} min \{I128Min} wrap \{(give v: I128Max) + 1} umax \{U128Max} uwrap \{(ugive v: U128Max) + 1}"
+    print "cmp \{a < b} \{a <= b} \{a > b} \{a >= b} \{a == b} \{a != b} \{a.compare rhs: b} \{b.compare rhs: a} \{a.compare rhs: a}"
+    u: 300000000000000000000000000000.u128
+    v: 18446744073709551617.u128
+    print "u add \{u + v} sub \{u - v} mul \{v * v} div \{u / v} rem \{u % v}"
+    print "u and \{u & v} or \{u | v} xor \{u ^ v} not \{v.not} shl \{v << 63} shr \{u >> 64} big \{u >> 128}"
+    print "u cmp \{u < v} \{u <= v} \{u > v} \{u >= v} \{u == v} \{u != v} \{u.compare rhs: v}"
+    print "bits \{b.bits} \{(0 - 1).i128.bits}"
+    # literals in every position
+    c: a + 5
+    c = c - 1000
+    d: 0xFFFFFFFFFFFFFFFF.i128
+    e: 0b1010.u128
+    print "lit \{c} \{d} \{e} \{Small.i128} \{give} \{give v: 9} \{ugive} \{lit}"
+    m: meters
+    print "typedef \{m}"
+    s0: span
+    s1: span a: 0 - 1 b: 2
+    s2: span a: 0 - 1 b: 2
+    print "zero \{s0.a} \{s0.b} eq \{s1 == s2} ne \{s1 == s0}"
+    print "generic \{ident x: a} \{ident x: u}"
+    # hashing: equal values are one key
+    hm: (MapVR i128 V: String)
+    hm.set key: a value: "a".string
+    hm.set key: (a + 0) value: "a again".string
+    hm.set key: b value: "b".string
+    ga: hm.get key: a
+    match ga case some then print "map \{hm.length} \{ga}" case none then print "map missing"
+    us: SetVal u128
+    us.add item: u
+    us.add item: u
+    us.add item: v
+    print "set \{us.length}"
+    # conversions out
+    print "to i64 \{a.i64.or d: 0} \{(0 - 5).i128.i64.or d: 0} \{I128Min.i64.or d: 1}"
+    print "to u64 \{v.u64.or d: 7} \{18446744073709551615.u128.u64.or d: 7} \{(0 - 1).i128.u64.or d: 7}"
+    showI8 r: 127.i128.i8
+    showI8 r: 128.i128.i8
+    showI8 r: (0 - 128).i128.i8
+    showI8 r: (0 - 129).i128.i8
+    print "to u128 \{a.u128.or d: 9} \{b.u128.or d: 9} i128 \{u.i128.or d: 9} \{U128Max.i128.or d: 9}"
+    print "to f64 \{(9007199254740993.i128.f64.or d: 0.5)} \{(4611686018427387904.i128.f64.or d: 0.5)} \{(0 - 3).i128.f64.or d: 0.5}"
+    print "to f32 \{(16777217.u128.f32.or d: 0.5)} \{(16777216.u128.f32.or d: 0.5)}"
+    # conversions in
+    print "from \{(0 - 9).i64.i128} \{18446744073709551615.u64.i128} \{255.u8.u128} \{(0 - 1).i32.u128.or d: 3}"
+    print "from f64 \{1.0e30.f64.i128.or d: 0} \{(0.0 - 2.5).f64.i128.or d: 0} \{1.0e40.f64.i128.or d: 0} \{3.0e38.f64.u128.or d: 0}"
+    print "from f32 \{(1.5.f32).i128.or d: 0} \{(16777216.0.f32).u128.or d: 0}"
+}

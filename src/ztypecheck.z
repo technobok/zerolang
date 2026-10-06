@@ -16838,8 +16838,8 @@ publicNsChildOf: function {st: zenv.ZSymbolTable.view root: ztypes.declid} out z
 
 # owningUnitDecl -- the unit a declaration is written in: the nearest
 # enclosing unit-kind Decl, or the declaration itself when it is one. Not the
-# file root -- a subunit owns its own `require:` block, and `wideint`'s is not
-# `system`'s.
+# file root -- a subunit owns its own `require:` block, and `quadfloat`'s is
+# not `system`'s.
 owningUnitDecl: function {st: zenv.ZSymbolTable.view declId: ztypes.declid} out ztypes.declid is {
     cur: declId
     for cur.isZero.not loop {
@@ -42006,6 +42006,7 @@ checkNumericCoercion: function {
     vn9: valueNid
     wn9: ast.nodes.get i: vn9
     if wn9.namedoperation then vn9 = wn9.operation
+    recordWideLiteralTarget :st :ast :dstTid valueNid: vn9
     # an `if` or a `match` lands each arm's value in the destination
     if (isControlValue :ast nid: vn9) then {
         checkArmsCoercion :st :ast :dstTid nid: vn9
@@ -42073,6 +42074,43 @@ checkArmsCoercion: function {
             )
         }
     }
+}
+
+# recordWideLiteralTarget -- an untyped integer constant landing in an i128 or
+# u128 destination (a scalar typedef over one included) is recorded with it, for
+# the emitter (ZTyping.wideLiteralTarget). Not inside a generic instance's walk:
+# the node is the template's, and the table keys on the node alone.
+recordWideLiteralTarget: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    dstTid: ztypes.tid
+    valueNid: zast.nodeid
+} is {
+    if st.typing.curMonoStamp.isZero.not then return
+    cf: st.typing.nodeConstIn mono: st.typing.curMonoStamp nid: valueNid
+    if cf.kind.ivalKind.not or cf.numTid.isZero.not then return
+    # read as views: this is asked of every integer constant at every typed
+    # destination, and a copied name per question is what losslessConvTo's
+    # note counts in the tens of thousands
+    wide: false
+    bo: st.typing.typedefBaseName.get key: dstTid
+    match (
+        bo
+    ) case some then {
+        bt: ast.names.texts.get i: bo
+        wide = isWideIntName name: bt.stringView
+    } case none then {
+        dn: st.reg.nameViewOf tid: dstTid
+        wide = isWideIntName name: dn
+    }
+    if wide then st.typing.wideLiteralTarget.set key: valueNid value: dstTid
+}
+
+# isWideIntName -- the scalar name is i128 or u128.
+isWideIntName: function {name: StringView} out bool is {
+    nk: ztypes.numkindByName :name
+    if nk.has.not then return false
+    return (nk.kind == ztypes.numkind.i128Type) or (nk.kind == ztypes.numkind.u128Type)
 }
 
 # checkUntypedConstFits -- an untyped folded constant at `valueNid` is settled by

@@ -240,14 +240,15 @@ under <code>lib/system/system/</code>), one per host-toolchain requirement,
 because each needs something that not every compiler has -- and a unit
 is the granularity at which a program says what it needs from one.
 <code>quadfloat</code> holds <code>f128</code>, whose runtime needs libquadmath and
-<code>__float128</code>, both x86-64's;
-<code>wideint</code> holds <code>i128</code> and <code>u128</code>, which need a compiler with
-<code>__int128</code>; <code>halffloat</code> holds <code>f16</code>, which needs one with
-<code>_Float16</code>. Each carries a <code>require:</code> block, and it applies only to
-programs that actually reach the subunit: quadfloat's names a library
-to link, the other two name none, and all three turn away a toolchain
-that cannot build the type -- by name, before any C is written, instead
-of letting the C compiler reject a type the program never wrote. The
+<code>__float128</code>, both x86-64's; <code>halffloat</code> holds <code>f16</code>, which needs a
+compiler with <code>_Float16</code>. Each carries a <code>require:</code> block, and it
+applies only to programs that actually reach the subunit: quadfloat's
+names a library to link, halffloat's none, and both turn away a
+toolchain that cannot build the type -- by name, before any C is
+written, instead of letting the C compiler reject a type the program
+never wrote. <code>wideint</code> holds <code>i128</code> and <code>u128</code>, and builds with
+every compiler: where the C compiler has no 128-bit integer (tcc) the
+runtime holds a value as two 64-bit words. The
 subunits are private to <code>system</code>, which re-exports the four types
 under their own names, and <code>core</code> re-exports them like the rest, so
 <code>1.5.f128</code> and <code>x.i128</code> read no differently.</p>
@@ -478,14 +479,14 @@ functions; <code>f16</code> and <code>f128</code> are refused there, as the type
 <p><strong>Overflow behavior.</strong> Signed overflow follows two's-complement
 wrap-around (C <code>-fwrapv</code> semantics), unsigned overflow wraps
 modulo 2^N. No trapping or saturating variants yet.</p>
-<p><strong>#~"i128" / #~"u128" caveat.</strong> These rely on C compiler
-support for <code>__int128</code> (gcc / clang). That reliance is declared
-rather than assumed: they live in <code>system</code>'s <code>wideint</code> subunit,
-whose <code>require:</code> block rejects a build with <strong>tcc</strong> and says why, so
-a program using
-them fails at type-check with its own message instead of inside the C
-compiler. Width on platforms without native 128-bit support is
-determined at C compile time.</p>
+<p><strong>#~"i128" / #~"u128" on every compiler.</strong> Where the C
+compiler has a 128-bit integer type (gcc, clang) a value is one; where
+it has none (<strong>tcc</strong>) a value is two 64-bit words and each operation a
+C function over them, in <code>src/runtime/natives/_Z_INT128.inc</code>. The C
+preprocessor makes the choice, so <code>zc</code> emits the same C either way
+and the results are the same; the two-word form is slower.
+<code>-DZ_INT128_PORTABLE</code> takes it under any compiler, which is how
+<code>make test-int128-portable</code> checks it.</p>
 <h2 id="intrange"><a href="#intrange">4. intrange</a></h2>
 <p>A walk over consecutive integers of type <code>t</code>, the value <code>times</code>,
 <code>upto</code> and <code>downto</code> hand back. A record, so a binding of it copies

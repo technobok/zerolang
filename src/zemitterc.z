@@ -306,8 +306,8 @@ cTypeOf: function {name: StringView} out String is {
     if name == "u16" then return "uint16_t"
     if name == "u32" then return "uint32_t"
     if name == "u64" then return "uint64_t"
-    if name == "i128" then return "__int128"
-    if name == "u128" then return "unsigned __int128"
+    if name == "i128" then return "z_i128"
+    if name == "u128" then return "z_u128"
     if name == "f16" then return "_Float16"
     if name == "f32" then return "float"
     if name == "f64" then return "double"
@@ -556,9 +556,6 @@ numLoStr: function {name: StringView} out String is {
     if name == "i16" then return "-32768"
     if name == "i32" then return "-2147483648"
     if name == "i64" then return "(-9223372036854775807LL - 1)"
-    if (
-        name == "i128"
-    ) then return "(-(__int128)((((unsigned __int128)0x7FFFFFFFFFFFFFFFULL) << 64) | 0xFFFFFFFFFFFFFFFFULL) - 1)"
     return "0"
 }
 
@@ -568,16 +565,12 @@ numHiStr: function {name: StringView} out String is {
     if name == "i16" then return "32767"
     if name == "i32" then return "2147483647"
     if name == "i64" then return "9223372036854775807"
-    if (
-        name == "i128"
-    ) then return "((__int128)((((unsigned __int128)0x7FFFFFFFFFFFFFFFULL) << 64) | 0xFFFFFFFFFFFFFFFFULL))"
     if name == "u8" then return "255"
     if name == "c8" then return "255"
     if name == "u16" then return "65535"
     if name == "u32" then return "4294967295U"
     if name == "c32" then return "4294967295U"
     if name == "u64" then return "18446744073709551615ULL"
-    if name == "u128" then return "(~(unsigned __int128)0)"
     return "0"
 }
 
@@ -590,15 +583,34 @@ numLitSuffix: function {name: StringView} out String is {
     return ""
 }
 
-# int128Cast -- a literal of a 128-bit integer type, cast to it. C has no
-# 128-bit literal and reads the digits as a 64-bit type, so an operation on
-# two of them -- `9223372036854775807.i128 * 9223372036854775807.i128` --
-# overflowed in 64 bits before the result ever reached the 128-bit
-# destination. Any other type's text is handed back as it came.
-int128Cast: function {text: String.take name: StringView} out String is {
-    if (numBits :name) != 128 then return text
-    if (numSigned :name) then return "((__int128) \{text})"
-    return "((unsigned __int128) \{text})"
+# wideLiteralOf -- an integer lexeme as a value of the 128-bit integer type
+# `name` (int128WordsC); "" when `name` is no 128-bit type or the lexeme is no
+# integer.
+wideLiteralOf: function {lex: StringView name: StringView} out String is {
+    if (numBits :name) != 128 then return ""
+    wb: ztypecheck.constLiteralBig :lex
+    match (
+        wb
+    ) case some then {
+        return (int128WordsC b: wb :name)
+    } case none then null
+    return ""
+}
+
+# int128WordsC -- a value of a 128-bit integer type as C: the prelude's
+# Z_I128_C / Z_U128_C of its two 64-bit words, high first, in two's
+# complement. C has no 128-bit literal, and a 64-bit one would overflow in 64
+# bits before reaching the destination; the macro is the type's own value
+# where the C compiler has the type and its two words where it has none.
+int128WordsC: function {b: math.BigInt.view name: StringView} out String is {
+    one: math.BigInt from: 1
+    bits: b.copy
+    if b.sign < 0 then bits = b + (one << 128)
+    mask: (one << 64) - one
+    hi: (bits >> 64).text base: 16
+    lo: (bits & mask).text base: 16
+    if (numSigned :name) then return "Z_I128_C(0x\{hi}ULL, 0x\{lo}ULL)"
+    return "Z_U128_C(0x\{hi}ULL, 0x\{lo}ULL)"
 }
 
 # literalDefaultC -- a literal default's C text: a decimal past i64 with its
@@ -724,20 +736,21 @@ convFloatRange: function {dstName: StringView} out String is {
 
 # convFloatToInt -- a float -> integer conversion: out of range when the value
 # is outside the destination's span, precision loss when truncation moved it.
-# The truncated value is compared in the SOURCE type, as convFloatToFloat's
-# round trip is: an integer truncated from a float is exact in that float, and
-# a narrower type would round the fraction away -- through double, an f128's
-# 2^60 + 0.5 read back as 2^60 and converted without an error.
+# The truncated value -- `trunc`, the destination's integer as C -- is compared
+# in the SOURCE type, as convFloatToFloat's round trip is: an integer truncated
+# from a float is exact in that float, and a narrower type would round the
+# fraction away -- through double, an f128's 2^60 + 0.5 read back as 2^60 and
+# converted without an error.
 convFloatToInt: function {
     scT: StringView
-    tcT: StringView
+    trunc: StringView
     dstName: StringView
     okSet: StringView
 } out String is {
     inRange: convFloatRange :dstName
     b: "if (!\{inRange}) { \{(convErr
         reason: "OUTOFRANGE"
-    )} } else if ((\{scT}) (\{tcT})_v != _v) { \{(convErr
+    )} } else if ((\{scT}) \{trunc} != _v) { \{(convErr
         reason: "PRECISIONLOSS"
     )} } else { \{okSet} }"
     return b
@@ -760,10 +773,8 @@ convMagExpr: function {signed: bool wide: bool} out String is {
         if signed then return "(_v < 0 ? (uint64_t)(0 - (uint64_t)_v) : (uint64_t)_v)"
         return "(uint64_t)_v"
     }
-    if signed then {
-        return "(_v < 0 ? (unsigned __int128)(0 - (unsigned __int128)_v) : (unsigned __int128)_v)"
-    }
-    return "(unsigned __int128)_v"
+    if signed then return "(z_i128_is_neg(_v) ? z_u128_sub(Z_U128_U64(0), z_i128_bits(_v)) : z_i128_bits(_v))"
+    return "_v"
 }
 
 # convIntToFloat -- an integer -> float conversion. It is exact when the
@@ -778,12 +789,15 @@ convIntToFloat: function {
 } out String is {
     p: convMantissaBits :dstName
     rangeAnd: ""
-    if dstName == "f16" then rangeAnd = " && _mag <= 65504"
     ssig: numSigned name: srcName
     wide: (srcName == "i128") or (srcName == "u128")
+    if dstName == "f16" then {
+        rangeAnd = " && _mag <= 65504"
+        if wide then rangeAnd = " && _mh == 0 && _ml <= 65504"
+    }
     magExpr: convMagExpr signed: ssig :wide
     if wide then {
-        w: "unsigned __int128 _mag = \{magExpr}; uint64_t _mh = (uint64_t)(_mag >> 64); uint64_t _ml = (uint64_t)_mag; int _bl = _mh ? (128 - __builtin_clzll(_mh)) : (_ml ? 64 - __builtin_clzll(_ml) : 0); int _tz = _ml ? __builtin_ctzll(_ml) : (_mh ? 64 + __builtin_ctzll(_mh) : 0); if (_mag == 0 || ((_bl - _tz) <= \{p}\{rangeAnd})) { \{okSet} } else { \{(convErr
+        w: "z_u128 _mag = \{magExpr}; uint64_t _mh = z_u128_hi(_mag); uint64_t _ml = z_u128_lo(_mag); int _bl = _mh ? (128 - __builtin_clzll(_mh)) : (_ml ? 64 - __builtin_clzll(_ml) : 0); int _tz = _ml ? __builtin_ctzll(_ml) : (_mh ? 64 + __builtin_ctzll(_mh) : 0); if ((_mh == 0 && _ml == 0) || ((_bl - _tz) <= \{p}\{rangeAnd})) { \{okSet} } else { \{(convErr
             reason: "PRECISIONLOSS"
         )} }"
         return w
@@ -832,6 +846,116 @@ convRangeCond: function {dstName: StringView needsLo: bool needsHi: bool} out St
     return b
 }
 
+# convRange128 -- convRangeCond for a 128-bit SOURCE, whose value is no C
+# arithmetic type where the C compiler has no 128-bit integer: each bound is
+# asked of the int128 helpers. Every such conversion has a bound to breach.
+convRange128: function {srcName: StringView dstName: StringView} out String is {
+    if (numBits name: dstName) == 128 then {
+        # the other 128-bit type: only the sign, or the top bit, is out of range
+        if (numSigned name: srcName) then return "z_i128_is_neg(_v)"
+        return "(z_u128_hi(_v) >> 63) != 0"
+    }
+    hi: numHiStr name: dstName
+    if (numSigned name: srcName).not then {
+        u: "z_u128_lt(Z_U128_U64(\{hi}), _v)"
+        return u
+    }
+    if (numSigned name: dstName).not then {
+        n: "z_i128_is_neg(_v) || z_i128_lt(z_i128_from_u64(\{hi}), _v)"
+        return n
+    }
+    lo: numLoStr name: dstName
+    b: "z_i128_lt(_v, z_i128_from_i64(\{lo})) || z_i128_lt(z_i128_from_i64(\{hi}), _v)"
+    return b
+}
+
+# convOkValue -- the converted value a checked conversion stores once its test
+# passed, as C: a cast, except where a 128-bit integer is on either side, whose
+# value moves only through the int128 helpers.
+convOkValue: function {srcName: StringView dstName: StringView tcT: StringView} out String is {
+    sw: (numBits name: srcName) == 128
+    dw: (numBits name: dstName) == 128
+    if sw.not when dw.not then {
+        c: "(\{tcT})_v"
+        return c
+    }
+    if dw then return (convOkInto128 :srcName :dstName)
+    return (convOkFrom128 :srcName :dstName :tcT)
+}
+
+# convOkInto128 -- convOkValue for a 128-bit destination.
+convOkInto128: function {srcName: StringView dstName: StringView} out String is {
+    if (numBits name: srcName) == 128 then {
+        if (numSigned name: srcName) then return "z_i128_bits(_v)"
+        return "z_u128_signed(_v)"
+    }
+    if (isFloatName name: srcName) then return (convFloatTrunc128 :srcName :dstName)
+    # a signed source checked non-negative, into u128
+    return "z_u128_from_u64((uint64_t)_v)"
+}
+
+# convOkFrom128 -- convOkValue for a 128-bit source into a narrower type: a
+# float reads its value, an integer its low word, which the bounds test has
+# already shown holds it.
+convOkFrom128: function {srcName: StringView dstName: StringView tcT: StringView} out String is {
+    if dstName == "f128" then {
+        if (numSigned name: srcName) then return "z_i128_to_f128(_v)"
+        return "z_u128_to_f128(_v)"
+    }
+    val: "z_u128_lo(_v)"
+    if (isFloatName name: dstName) then {
+        val = "z_u128_to_f64(_v)"
+        if (numSigned name: srcName) then val = "z_i128_to_f64(_v)"
+    } else if (numSigned name: srcName) then {
+        val = "z_u128_lo(z_i128_bits(_v))"
+    }
+    c: "(\{tcT})"
+    c.append val
+    return c
+}
+
+# convTruncC -- a float source truncated to the destination integer and read
+# back as a float, as C: what convFloatToInt compares the value against. A
+# 128-bit destination truncates and reads back through the int128 helpers.
+convTruncC: function {srcName: StringView dstName: StringView tcT: StringView} out String is {
+    if (numBits name: dstName) != 128 then {
+        c: "(\{tcT})_v"
+        return c
+    }
+    back: "z_i128_to_f64(".string
+    if (numSigned name: dstName).not then back = "z_u128_to_f64("
+    if srcName == "f128" then {
+        back = "z_i128_to_f128("
+        if (numSigned name: dstName).not then back = "z_u128_to_f128("
+    }
+    back.append (convFloatTrunc128 :srcName :dstName)
+    back.append ")"
+    return back
+}
+
+# convFloatTrunc128 -- a float source truncated to a 128-bit integer, as C: from
+# f128 directly, from any narrower float through double, which holds each of
+# them exactly.
+convFloatTrunc128: function {srcName: StringView dstName: StringView} out String is {
+    pfx: "z_u128"
+    if (numSigned name: dstName) then pfx = "z_i128"
+    if srcName == "f128" then {
+        q: "\{pfx}_from_f128(_v)"
+        return q
+    }
+    d: "\{pfx}_from_f64((double)_v)"
+    return d
+}
+
+# convWideCast -- a lossless conversion with a 128-bit integer on either side:
+# the same type handed back, or a narrower integer widened by the helpers.
+convWideCast: function {srcName: StringView dstName: StringView} out String is {
+    if srcName == dstName then return "(@V@)"
+    if (numSigned name: dstName).not then return "z_u128_from_u64(@V@)"
+    if (numSigned name: srcName) then return "z_i128_from_i64(@V@)"
+    return "z_i128_from_u64(@V@)"
+}
+
 # convIntToInt -- an integer -> integer conversion. It cannot lose precision,
 # only range, so the whole body is one bounds test.
 convIntToInt: function {srcName: StringView dstName: StringView okSet: StringView} out String is {
@@ -839,11 +963,16 @@ convIntToInt: function {srcName: StringView dstName: StringView okSet: StringVie
     dbits: numBits name: dstName
     ssig: numSigned name: srcName
     dsig: numSigned name: dstName
-    cond: (convRangeCond
-        :dstName
-        needsLo: (convNeedsLo :ssig :dsig :sbits :dbits)
-        needsHi: (convNeedsHi :ssig :dsig :sbits :dbits)
-    )
+    cond: String
+    if sbits == 128 then {
+        cond = convRange128 :srcName :dstName
+    } else {
+        cond = (convRangeCond
+            :dstName
+            needsLo: (convNeedsLo :ssig :dsig :sbits :dbits)
+            needsHi: (convNeedsHi :ssig :dsig :sbits :dbits)
+        )
+    }
     b: "if (\{cond}) { \{convErr reason: "OUTOFRANGE"} } else { \{okSet} }"
     return b
 }
@@ -858,11 +987,13 @@ convIntToInt: function {srcName: StringView dstName: StringView okSet: StringVie
 convBodyOf: function {srcName: StringView dstName: StringView lossy: bool} out String is {
     scT: cTypeOf name: srcName
     tcT: cTypeOf name: dstName
+    wide: ((numBits name: srcName) == 128) or ((numBits name: dstName) == 128)
     if lossy.not then {
+        if wide then return (convWideCast :srcName :dstName)
         d: "((\{tcT})@V@)"
         return d
     }
-    okSet: "_r.tag = @OKTAG@; _r.data.ok = (\{tcT})_v;"
+    okSet: "_r.tag = @OKTAG@; _r.data.ok = \{convOkValue :srcName :dstName tcT: tcT.stringView};"
     body: String
     # the four corners of float/integer, each with its own way of failing
     if (isFloatName name: srcName) then {
@@ -871,7 +1002,7 @@ convBodyOf: function {srcName: StringView dstName: StringView lossy: bool} out S
         } else {
             body = (convFloatToInt
                 scT: scT.stringView
-                tcT: tcT.stringView
+                trunc: (convTruncC :srcName :dstName tcT: tcT.stringView).stringView
                 :dstName
                 okSet: okSet.stringView
             )
@@ -929,6 +1060,13 @@ nativeConvRows: function out String is {
                 lossy: lo
             )
             key: "[system.\{s}.\{d}]"
+            if ((numBits name: s.stringView) == 128) or ((numBits name: d.stringView) == 128) then {
+                # a 128-bit row calls the int128 helpers: the attribute goes
+                # inside the head's bracket
+                kw: (key.stringView.substring from: 0 to: key.length - 1).string
+                kw.append " needs=prelude.int128]"
+                key = kw.take
+            }
             pad: key.copy
             for pad.length < 30 loop pad.append " "
             row: "\{pad} \{bd}\n"
@@ -10995,6 +11133,9 @@ renderDefault: function {
             if fk.has when (ztypes.isFloatKind k: fk.kind) then k = fk.kind
             return (floatBitsC bits: (ztypecheck.floatLexemeBits lex: lt.stringView :k) :k)
         }
+        tnW: constScalarNameForTid :ast :symtab tid: targetTid
+        wlD: wideLiteralOf lex: lt.stringView name: tnW.stringView
+        if wlD.length > 0 then return wlD
         return (literalDefaultC lex: lt.stringView)
     }
     {
@@ -12109,8 +12250,15 @@ intCvalText: function {
     tid: ztypes.tid
     v: ztypes.cval
 } out String is {
-    if v.bigId != 0 then return (bigConstC :symtab :v)
     tnN: constScalarNameForTid :ast :symtab :tid
+    if (numBits name: tnN.stringView) == 128 then {
+        if v.bigId != 0 then return (int128WordsC
+            b: (ztypecheck.constBigOf st: symtab :v)
+            name: tnN.stringView
+        )
+        return (int128WordsC b: (math.BigInt from: v.ival) name: tnN.stringView)
+    }
+    if v.bigId != 0 then return (bigConstC :symtab :v)
     iv: narrowConstToName v: v.ival name: tnN.stringView
     # C HAS NO NEGATIVE LITERALS. A leading `-` is an operator applied to a
     # POSITIVE constant, and the magnitude of the most negative i64 is one
@@ -12121,7 +12269,7 @@ intCvalText: function {
     if iv == (0 - 9223372036854775807 - 1) then return "(-9223372036854775807LL - 1)"
     r: "\{iv}"
     r.append (numLitSuffix name: tnN.stringView)
-    return (int128Cast text: r.take name: tnN.stringView)
+    return r
 }
 
 # bigConstC -- an integer constant outside i64 as C, spelled by its value: the
@@ -12138,15 +12286,8 @@ bigConstC: function {symtab: zenv.ZSymbolTable.view v: ztypes.cval} out String i
 bigValueC: function {b: math.BigInt.view} out String is {
     if b.sign > 0 when b.bitLength <= 64 then return "\{b.string}ULL"
     if b.bitLength > 128 then return ""
-    one: math.BigInt from: 1
-    bits: b.copy
-    if b.sign < 0 then bits = b + (one << 128)
-    mask: (one << 64) - one
-    hi: (bits >> 64).text base: 16
-    lo: (bits & mask).text base: 16
-    u: "(((unsigned __int128)0x\{hi}ULL << 64) | 0x\{lo}ULL)"
-    if b.sign < 0 then return "((__int128)\{u})"
-    return u
+    if b.sign < 0 then return (int128WordsC :b name: "i128")
+    return (int128WordsC :b name: "u128")
 }
 
 # floatCvalText -- cvalText for a folded float: the value the float type it is
@@ -12226,6 +12367,13 @@ nodeConstText: function {
     g: symtab.typing.nodeConstIn mono: ctx.curThisTid :nid
     if g.kind.none then return ""
     tv: symtab.typing.nodeTypeFor :nid
+    # an untyped constant landing in a 128-bit integer is spelled as that type
+    wt: symtab.typing.wideLiteralTarget.get key: nid
+    match (
+        wt
+    ) case some then {
+        tv = wt
+    } case none then null
     if g.kind.svalKind when (chaseStrTypedef :symtab :ctx tid: tv) == ctx.strTid then {
         return ""
     }
@@ -14587,7 +14735,7 @@ implicitZeroValue: function {
     tid: ztypes.tid
 } out String is {
     zc: scalarCTypeFor :symtab :name :tid
-    if zc.length > 0 then return "((\{zc})0)"
+    if zc.length > 0 then return (scalarZeroC :symtab cType: zc.stringView :tid)
     if tid == ctx.strTid then return (emitExprStrZero :ctx)
     # a String-typedef class (Path) shares the String struct: the empty value
     # is the zero struct
@@ -14634,8 +14782,30 @@ implicitZeroValue: function {
     }
     # a typedef over a scalar (meters -> i64) is the chased scalar's zero
     zt: typedefChaseC :ast :symtab :ctx :tid
-    if zt.length > 0 then return "((\{zt})0)"
+    if zt.length > 0 then return (scalarZeroC :symtab cType: zt.stringView :tid)
     return (emitCtorDefaultsFill :ast :symtab :ctx :tid)
+}
+
+# scalarZeroC -- the zero of a scalar whose C type is `cType`. A 128-bit
+# integer's is a braced zero, which C accepts for its own 128-bit type and for
+# the two-word struct alike; every other scalar's is a cast 0.
+scalarZeroC: function {
+    symtab: zenv.ZSymbolTable.view cType: StringView tid: ztypes.tid
+} out String is {
+    if (partIsWideInt :symtab :tid) then {
+        w: "((\{cType}){0})"
+        return w
+    }
+    z: "((\{cType})0)"
+    return z
+}
+
+# partIsWideInt -- the type is i128 or u128, or a scalar typedef over one: a
+# value no C operator may touch, since where the C compiler has no 128-bit
+# integer it is two words (z_prelude.inc).
+partIsWideInt: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
+    if tid.isZero then return false
+    return (numBits name: (regNameView :symtab tid: (typedefChaseTid :symtab :tid))) == 128
 }
 
 # emitDefRefAtom -- a bare atom that names a DEFINITION rather than a local: a
@@ -14731,6 +14901,11 @@ emitAtom: function {
 } out String is {
     avC: ast.names.texts.get i: n.name
     av: avC.stringView
+    # an integer literal landing in a 128-bit integer is that type's value
+    if (symtab.typing.wideLiteralTarget.has key: n.nodeid) then {
+        wa: nodeConstText :ast :symtab :ctx nid: n.nodeid
+        if wa.length > 0 then return wa
+    }
     # an integer literal outside i64 is spelled by its value, which the checker
     # settled in the type it landed in: C has no token for one past u64, and
     # none in binary or octal at all
@@ -15453,7 +15628,7 @@ typeNameCreateZero: function {
     symtab: zenv.ZSymbolTable.view ctx: Ctx fbtn: StringView bstamp: ztypes.tid
 } out String is {
     zsc: scalarCTypeFor :symtab name: fbtn tid: bstamp
-    if zsc.length > 0 then return "((\{zsc})0)"
+    if zsc.length > 0 then return (scalarZeroC :symtab cType: zsc.stringView tid: bstamp)
     if bstamp == ctx.strTid then return "((\{ctx.strC}_t){0})"
     return String
 }
@@ -16103,6 +16278,8 @@ dottedAtomNumericBase: function {
             # declare only the sixteen. Chasing a scalar typedef to its base
             # as well would make `1.nameid` mean "u32".
             cTypeLk3: cTypeOf name: mn2
+            wl3: wideLiteralOf lex: bn2 name: mn2
+            if wl3.length > 0 then return wl3
             if cTypeLk3.length > 0 then {
                 bc1: bn2.string
                 # `0cA.u8`: the 0c lexeme is not a C token; decode
@@ -16112,7 +16289,7 @@ dottedAtomNumericBase: function {
                 }
                 sfx1: numLitSuffix name: cTypeLk3.stringView
                 bc1.append sfx1
-                return (int128Cast text: bc1.take name: mn2)
+                return bc1
             }
         }
     } case none then null
@@ -18850,22 +19027,22 @@ emitInterpPart: function {
     bN: tmpNext :ctx :tmp
     tns: tn.stringView
     if tns == "i128" then {
-        needsAddM :ctx uname: "prelude" memb: "fmt_128"
+        needsAddM :ctx uname: "prelude" memb: "int128"
         (appendFormattedNum
             :ctx
             :sNm
             :bN
-            stmt: "char _b\{bN}[48]; int _b\{bN}_n = z_fmt_i128(_b\{bN}, (__int128)\{val})"
+            stmt: "char _b\{bN}[48]; int _b\{bN}_n = z_fmt_i128(_b\{bN}, \{val})"
             :ind
             :buf
         )
     } else if tns == "u128" then {
-        needsAddM :ctx uname: "prelude" memb: "fmt_128"
+        needsAddM :ctx uname: "prelude" memb: "int128"
         (appendFormattedNum
             :ctx
             :sNm
             :bN
-            stmt: "char _b\{bN}[48]; int _b\{bN}_n = z_fmt_u128(_b\{bN}, (unsigned __int128)\{val})"
+            stmt: "char _b\{bN}[48]; int _b\{bN}_n = z_fmt_u128(_b\{bN}, \{val})"
             :ind
             :buf
         )
@@ -41577,6 +41754,22 @@ partEqC: function {
         dest.append ")"
         return
     }
+    if (partIsWideInt :symtab :tid) then {
+        needsAddM :ctx uname: "prelude" memb: "int128"
+        hb: regNameView :symtab tid: (typedefChaseTid :symtab :tid)
+        if (numSigned name: hb) then {
+            dest.append "z_i128_eq("
+        } else {
+            dest.append "z_u128_eq("
+        }
+        dest.append lhs
+        dest.append sel
+        dest.append ", "
+        dest.append rhs
+        dest.append sel
+        dest.append ")"
+        return
+    }
     if (partIsCScalar :symtab :tid) then {
         dest.append lhs
         dest.append sel
@@ -41628,12 +41821,21 @@ partHashWords: function {
         return
     }
     if (partIsCScalar :symtab tid: base) then {
+        hbn: regNameView :symtab tid: base
+        if (numBits name: hbn) == 128 then {
+            # its two words, through the int128 helpers: the value is no C
+            # arithmetic type where the C compiler has no 128-bit integer
+            needsAddM :ctx uname: "prelude" memb: "int128"
+            hbits: v.string
+            if (numSigned name: hbn) then hbits = "z_i128_bits(\{v})"
+            wl: "z_u128_lo(\{hbits})"
+            words.append wl
+            wh: "z_u128_hi(\{hbits})"
+            words.append wh
+            return
+        }
         ws: "(uint64_t)\{v}"
         words.append ws
-        if (numBits name: (regNameView :symtab tid: base)) == 128 then {
-            wh: "(uint64_t)((unsigned __int128)\{v} >> 64)"
-            words.append wh
-        }
         return
     }
     hashFnDemand :ast :symtab :ctx tid: base
