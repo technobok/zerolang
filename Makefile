@@ -2402,7 +2402,11 @@ perf: $(PERFBIN)
 # +2,441 an alias whose target is reached through a subunit (`T: u.sub.duo`)
 # resolves, and a missing member there is reported: 0 behaviour, +2,315 source
 # (ab.sh).
-ALLOC_BASELINE := 2240470
+#
+# +342 a deferred type-ref spelled with its unit (`zproject.BuildFacts`) is
+# stamped by its path, not looked up by its leaf name: +17 behaviour (the
+# self-compile's own such refs now stamp), +199 source (ab.sh).
+ALLOC_BASELINE := 2240812
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

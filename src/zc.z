@@ -1009,6 +1009,34 @@ ZcFlags: class {
         if this.ldflags.length == 0 then this.ldflags = pf.linkFlags.copy
     }
 
+    # buildFacts -- the values this build uses, after every flag, for the
+    # generated z/build.z; the toolchain as resolved
+    buildFacts: function {
+        this: this.view
+        systemdir: StringView
+        cc: StringView
+        ccMode: StringView
+        tccDir: StringView
+    } out zproject.BuildFacts is {
+        f: (zproject.BuildFacts.create
+            srcdirs: this.srcdirs
+            :systemdir
+            main: this.unitname.stringView
+        )
+        f.triple = this.targetTriple.copy
+        f.outputDir = this.outputDir.copy
+        f.release = this.release
+        f.fastHash = this.fastHash
+        f.readableNames = this.readableNames
+        f.eager = this.eagerCheck
+        f.cCompiler = cc.string
+        f.cCompilerMode = ccMode.string
+        f.cFlags = this.cflags.copy
+        f.linkFlags = this.ldflags.copy
+        f.tccLibDir = tccDir.string
+        return f
+    }
+
     # resolveRoots -- with no --src given, a unit named as a PATH supplies its
     # own root: the directory it sits in, with the bare stem as the unit name.
     # With no root either way, the current directory is one.
@@ -1406,30 +1434,6 @@ printEnvAndExit: function {cf: ZcFlags.view pf: zproject.ProjectFile.view} is {
     os.exit code: 0
 }
 
-# buildFactsOf -- the values this build uses, after every flag, for the
-# generated z/build.z; the toolchain as resolved
-buildFactsOf: function {
-    cf: ZcFlags.view
-    systemdir: StringView
-    cc: StringView
-    ccMode: StringView
-    tccDir: StringView
-} out zproject.BuildFacts is {
-    f: zproject.BuildFacts.create srcdirs: cf.srcdirs :systemdir main: cf.unitname.stringView
-    f.triple = cf.targetTriple.copy
-    f.outputDir = cf.outputDir.copy
-    f.release = cf.release
-    f.fastHash = cf.fastHash
-    f.readableNames = cf.readableNames
-    f.eager = cf.eagerCheck
-    f.cCompiler = cc.string
-    f.cCompilerMode = ccMode.string
-    f.cFlags = cf.cflags.copy
-    f.linkFlags = cf.ldflags.copy
-    f.tccLibDir = tccDir.string
-    return f
-}
-
 # mountBuild -- bind the build's roots into `vfs`: the stdlib, the generated
 # `z` unit -- made from this build's values and written to disk for people
 # and editors -- and the src roots. Answers the root a parse starts from.
@@ -1442,7 +1446,7 @@ mountBuild: function {
     ccMode: StringView
     tccDir: StringView
 } out zvfs.fsno is {
-    facts: buildFactsOf :cf :systemdir :cc :ccMode :tccDir
+    facts: cf.buildFacts :systemdir :cc :ccMode :tccDir
     layer: zproject.zLayer :pf :facts
     zproject.writeLayer :layer
     roots: zcheck.buildRoots :vfs :systemdir srcdirs: cf.srcdirs :layer
