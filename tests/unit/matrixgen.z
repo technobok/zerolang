@@ -2695,21 +2695,34 @@ writeFixtures: function {
     writeCases :root :cases
 }
 
-# writeCases -- run_cases.txt with its matrix_ rows replaced by cases
+# writeCases -- run_cases.txt with its matrix_ rows replaced by cases, IN PLACE:
+# the block goes where the first matrix_ row stood, so rows other commits
+# appended after it stay where they are and a regeneration reproduces the
+# committed file. With no matrix_ row yet, the block is appended.
 writeCases: function {root: StringView cases: String.view} is {
     path: "\{root}/tests/fixtures/run_cases.txt"
+    content: String
+    if (io.exists :path) then content = slurp path: path.stringView
+    buf: spliceCases content: content.stringView cases: cases.stringView
+    writeFile :path content: buf.stringView
+}
+
+# spliceCases -- the run_cases.txt text `content` with its matrix_ rows replaced
+# by `cases`, at the first of them, or appended when there is none
+spliceCases: function {content: StringView cases: StringView} out String is {
     buf: String
-    if (io.exists :path) then {
-        content: slurp path: path.stringView
-        for each ln: content.stringView.lines loop {
-            if ln.length > 0 when (ln.startsWith prefix: "matrix_").not then {
-                buf.append ln
-                buf.append "\n"
-            }
+    placed: false
+    for each ln: content.lines loop {
+        isMatrix: ln.startsWith prefix: "matrix_"
+        if isMatrix when placed.not then buf.append cases
+        if isMatrix then placed = true
+        if ln.length > 0 when isMatrix.not then {
+            buf.append ln
+            buf.append "\n"
         }
     }
-    buf.append cases
-    writeFile :path content: buf.stringView
+    if placed.not then buf.append cases
+    return buf
 }
 
 # writeCells -- one program per writable cell, and the manifest
