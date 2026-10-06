@@ -2349,7 +2349,10 @@ perf: $(PERFBIN)
 # unit needs of it from natives.tbl's `@unit.` rows, and zc reads its link line
 # back off the emitted C: -7 behaviour, +3,161 source (the backend's unit rows
 # and family in the self-compile).
-ALLOC_BASELINE := 2212994
+#
+# -449 a union's slot is 8 bytes on every target and platform.ptrbits goes:
+# -4 behaviour, -445 source.
+ALLOC_BASELINE := 2212545
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

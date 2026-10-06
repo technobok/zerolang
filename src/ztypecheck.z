@@ -22822,13 +22822,16 @@ valHashableUnmetReason: function {
     return "it writes its own '==' but not its 'hash', and a key's two must agree"
 }
 
-# valtypelayout -- a value type's C size and alignment in bytes, as the emitter
-# lays it out; `known` false where the checker cannot say (a facet, a native
-# it does not model), which no union slot admits.
+# valtypelayout -- a value type's size and alignment in bytes, by the language's
+# own layout rules -- each scalar its width, aligned to itself; a record its
+# fields in order, padded to each one's alignment; a function reference
+# unionSlotBytes -- which no target changes; `known` false where the checker
+# cannot say (a facet, a native it does not model), which no union slot
+# admits.
 valtypelayout: record {
-    # the C sizeof
+    # the size
     size: u64
-    # the C _Alignof
+    # the alignment
     align: u64
     # whether size and align were computed
     known: bool
@@ -22874,32 +22877,33 @@ fixedLayout: function {n: u64} out valtypelayout is {
     return (valtypelayout size: n align: n known: true cyclic: false)
 }
 
-# valtypeLayout -- a value type's C size and alignment, following the emitter's
-# layout of each shape: a typedef its base; an ordinal variant its one-byte
-# discriminator; a record its fields in order with C padding, a
-# function-pointer field a pointer; any other variant its tag and the union of
-# its payloads; a native as nativeLayout says. A facet (a vtable and a copy)
-# and a native the checker does not model are not measured. The emitter
-# asserts every inline arm's fit in the C, so the two cannot disagree silently.
+# valtypeLayout -- a value type's size and alignment by the language's layout
+# rules, shape by shape: a typedef its base; an ordinal variant its one-byte
+# discriminator; a record its fields in order with padding, a function
+# reference `refBytes`; any other variant its tag and the union of its
+# payloads; a native as nativeLayout says. A facet (a vtable and a copy) and a
+# native the checker does not model are not measured. A backend lays an inline
+# arm out in the slot however it likes, but must hold every arm these rules
+# admit -- the C backend asserts each one's fit in the C.
 valtypeLayout: function {
     ast: Ast.view
     st: zenv.ZSymbolTable.view
     tid: ztypes.tid
-    ptrBytes: u64
+    refBytes: u64
     depth: u64
 } out valtypelayout is {
     if tid.isZero then return unknownLayout
     if depth > 32 then return (valtypelayout size: 0 align: 1 known: false cyclic: true)
     tb: typedefBaseTidOf :st :tid
-    if tb.isZero.not then return (valtypeLayout :ast :st tid: tb :ptrBytes depth: depth + 1)
+    if tb.isZero.not then return (valtypeLayout :ast :st tid: tb :refBytes depth: depth + 1)
     if (st.typing.ordinalVariant.has key: tid) then return (fixedLayout n: 1)
     # the runtime's shapes first: a `str` or an `array` instance is a record by
     # its typetype, and is not laid out as its declared fields
-    nl: nativeLayout :ast :st :tid :ptrBytes :depth
+    nl: nativeLayout :ast :st :tid :refBytes :depth
     if nl.known or nl.cyclic then return nl
     tt: st.reg.typetypeOf typeId: tid
-    if tt == ztypes.ztypetype.recordType then return (recordLayout :ast :st :tid :ptrBytes :depth)
-    if tt == ztypes.ztypetype.variantType then return (variantLayout :ast :st :tid :ptrBytes :depth)
+    if tt == ztypes.ztypetype.recordType then return (recordLayout :ast :st :tid :refBytes :depth)
+    if tt == ztypes.ztypetype.variantType then return (variantLayout :ast :st :tid :refBytes :depth)
     return unknownLayout
 }
 
@@ -22910,7 +22914,7 @@ nativeLayout: function {
     ast: Ast.view
     st: zenv.ZSymbolTable.view
     tid: ztypes.tid
-    ptrBytes: u64
+    refBytes: u64
     depth: u64
 } out valtypelayout is {
     if (st.reg.isNativeOf :tid) then {
@@ -22925,7 +22929,7 @@ nativeLayout: function {
         return (valtypelayout size: (alignUp n: w + cap a: w) align: w known: true cyclic: false)
     }
     if (valIsMonoOf :ast :st :tid base: "array") then {
-        el: valtypeLayout :ast :st tid: (arrayElemTid :st :tid) :ptrBytes depth: depth + 1
+        el: valtypeLayout :ast :st tid: (arrayElemTid :st :tid) :refBytes depth: depth + 1
         if el.known.not then return el
         n: st.reg.sizedLength specId: tid
         return (valtypelayout size: el.size * n align: el.align known: true cyclic: false)
@@ -22939,7 +22943,7 @@ recordLayout: function {
     ast: Ast.view
     st: zenv.ZSymbolTable.view
     tid: ztypes.tid
-    ptrBytes: u64
+    refBytes: u64
     depth: u64
 } out valtypelayout is {
     ids: ListVal ztypes.tid
@@ -22948,10 +22952,10 @@ recordLayout: function {
     off: u64
     al: 1.u64
     for each ft: ids loop {
-        fl: valtypelayout size: ptrBytes align: ptrBytes known: true cyclic: false
+        fl: valtypelayout size: refBytes align: refBytes known: true cyclic: false
         fid: ft
         if (st.reg.typetypeOf typeId: fid) != ztypes.ztypetype.functionType then {
-            fl = valtypeLayout :ast :st tid: fid :ptrBytes depth: depth + 1
+            fl = valtypeLayout :ast :st tid: fid :refBytes depth: depth + 1
         }
         if fl.known.not then return fl
         off = (alignUp n: off a: fl.align) + fl.size
@@ -22966,10 +22970,10 @@ variantLayout: function {
     ast: Ast.view
     st: zenv.ZSymbolTable.view
     tid: ztypes.tid
-    ptrBytes: u64
+    refBytes: u64
     depth: u64
 } out valtypelayout is {
-    tag: variantTagLayout :ast :st :tid :ptrBytes :depth
+    tag: variantTagLayout :ast :st :tid :refBytes :depth
     if tag.known.not then return tag
     usz: u64
     ual: 1.u64
@@ -22979,7 +22983,7 @@ variantLayout: function {
         anId: an
         pt: (st.typing.declChildOfId parentTypeId: tid nameId: anId).or d: ztypes.tid.zero
         if pt.isZero or (pt == st.typing.nullTypeId) then continue
-        pl: valtypeLayout :ast :st tid: pt :ptrBytes depth: depth + 1
+        pl: valtypeLayout :ast :st tid: pt :refBytes depth: depth + 1
         if pl.known.not then return pl
         if pl.size > usz then usz = pl.size
         if pl.align > ual then ual = pl.align
@@ -22999,7 +23003,7 @@ variantTagLayout: function {
     ast: Ast.view
     st: zenv.ZSymbolTable.view
     tid: ztypes.tid
-    ptrBytes: u64
+    refBytes: u64
     depth: u64
 } out valtypelayout is {
     key: tid
@@ -23011,22 +23015,27 @@ variantTagLayout: function {
     ) case some then {
         if tb.isZero then return (fixedLayout n: 4)
         btid: tb
-        return (valtypeLayout :ast :st tid: btid :ptrBytes depth: depth + 1)
+        return (valtypeLayout :ast :st tid: btid :refBytes depth: depth + 1)
     } case none then {
         return (fixedLayout n: 1)
     }
 }
 
+# unionSlotBytes -- a union's payload slot, in bytes, on every target: the
+# language fixes it, so whether an arm is held inline is a fact about the
+# program and never about the machine it is built for.
+unionSlotBytes: 8.u64
+
 # checkUnionArmSlots -- a union's arm layout is what its declaration writes
 # (spec §union). A bare value-type arm -- a payload with no ownership marker,
-# not written `(Box T)` -- is stored in the union's pointer-wide slot when its
+# not written `(Box T)` -- is stored in the union's 8-byte slot when its
 # size and alignment fit, and refused when they do not, with the hint to box
 # it; a reference-type arm and a boxed one are a heap cell. Every registered
 # union that is not a template is checked: an instance by its own arm types,
 # its error placed at the template's arm and naming the instance. The
 # refusals are reported in the order the arms are written.
 checkUnionArmSlots: function {ast: Ast st: zenv.ZSymbolTable} is {
-    ptrB: targetPointerBytes triple: st.typing.targetTriple.stringView
+    slotB: unionSlotBytes
     # the arms the slot cannot hold: each one's declaration node, and its armKey
     wideNodes: ListVal zast.nodeid
     wideKeys: ListVal ztyping.armkey
@@ -23038,9 +23047,9 @@ checkUnionArmSlots: function {ast: Ast st: zenv.ZSymbolTable} is {
         if (st.reg.typetypeOf typeId: uid) != ztypes.ztypetype.unionType then continue
         if (st.reg.isGenericOf tid: uid) then continue
         if (st.reg.isPartialOf tid: uid) then continue
-        checkUnionSlotArms :ast :st :uid :ptrB :wideNodes :wideKeys
+        checkUnionSlotArms :ast :st :uid :slotB :wideNodes :wideKeys
     }
-    reportWideArms :ast :st :wideNodes :wideKeys :ptrB
+    reportWideArms :ast :st :wideNodes :wideKeys :slotB
 }
 
 # checkUnionSlotArms -- checkUnionArmSlots for one union.
@@ -23048,7 +23057,7 @@ checkUnionSlotArms: function {
     ast: Ast
     st: zenv.ZSymbolTable
     uid: ztypes.tid
-    ptrB: u64
+    slotB: u64
     wideNodes: ListVal zast.nodeid
     wideKeys: ListVal ztyping.armkey
 } is {
@@ -23063,8 +23072,8 @@ checkUnionSlotArms: function {
         key: st.typing.armKey parentTypeId: uid nameId: nm
         if (st.typing.boxedArms.has item: key) then continue
         if (st.typing.declOwnershipOfId parentTypeId: uid nameId: nm).some then continue
-        lay: valtypeLayout :ast :st tid: ptid ptrBytes: ptrB depth: 0
-        if lay.known when lay.size <= ptrB when lay.align <= ptrB then {
+        lay: valtypeLayout :ast :st tid: ptid refBytes: slotB depth: 0
+        if lay.known when lay.size <= slotB when lay.align <= slotB then {
             st.typing.inlineArms.add item: key
         } else if lay.cyclic.not then {
             wideNodes.append (wideArmNode :st :uid :nm)
@@ -23103,7 +23112,7 @@ reportWideArms: function {
     st: zenv.ZSymbolTable
     wideNodes: ListVal zast.nodeid
     wideKeys: ListVal ztyping.armkey
-    ptrB: u64
+    slotB: u64
 } is {
     n: wideNodes.length
     i: 1.u64
@@ -23129,7 +23138,7 @@ reportWideArms: function {
         key: wideKeys.get i: k
         k = k + 1
         if nd.isZero then continue
-        reportWideArm :ast :st uid: key.owner nm: key.name :nd :ptrB
+        reportWideArm :ast :st uid: key.owner nm: key.name :nd :slotB
     }
 }
 
@@ -23145,17 +23154,16 @@ reportWideArm: function {
     nm: zast.nameid
     # the arm's declaration node (wideArmNode)
     nd: zast.nodeid
-    ptrB: u64
+    slotB: u64
 } is {
     ptid: (ztypes.tid.create
         from: ((st.typing.declChildOfId parentTypeId: uid nameId: nm).or d: ztypes.tid.zero)
     )
-    lay: valtypeLayout :ast :st tid: ptid ptrBytes: ptrB depth: 0
+    lay: valtypeLayout :ast :st tid: ptid refBytes: slotB depth: 0
     an: zast.nameTextCopy :ast ref: nm
     un: specWrittenName :st :ast tid: uid
     pn: specWrittenName :st :ast tid: ptid
-    arch: targetOrHostArch triple: st.typing.targetTriple.stringView
-    msg: "arm `\{an}` of `\{un}` holds `\{pn}` (\{lay.size} bytes), wider than a union's \{ptrB}-byte slot on \{arch}; write `(Box \{pn})`"
+    msg: "arm `\{an}` of `\{un}` holds `\{pn}` (\{lay.size} bytes), wider than a union's \{slotB}-byte slot; write `(Box \{pn})`"
     if (st.reg.typetypeOf typeId: ptid) == ztypes.ztypetype.facetType then {
         msg = "arm `\{an}` of `\{un}` holds the facet `\{pn}` (a vtable and a copy), which no union slot holds; write `(Box \{pn})`"
     } else if lay.known.not then {
@@ -23175,7 +23183,7 @@ reportWideArm: function {
             tat: (st.typing.declChildOfId parentTypeId: org nameId: nm).or d: ztypes.tid.zero
             tan: specWrittenName :st :ast tid: tat
             if lay.known then {
-                msg = "arm `\{an}` of `\{un}` holds `\{pn}` (\{lay.size} bytes), wider than a union's \{ptrB}-byte slot on \{arch}; an instance this wide needs the template's arm written `(Box \{tan})`"
+                msg = "arm `\{an}` of `\{un}` holds `\{pn}` (\{lay.size} bytes), wider than a union's \{slotB}-byte slot; an instance this wide needs the template's arm written `(Box \{tan})`"
             }
             und: (st.typing.decls.get i: so.unitDecl).node
             st.typing.errors.append (zast.ErrorData
@@ -60377,17 +60385,6 @@ targetOrHostArch: function {triple: StringView} out String is {
     return os.hostArchName
 }
 
-# targetPointerBytes -- the width of a pointer on the target, which is the width
-# of a union's payload slot. Both architectures the target vocabulary names
-# (tripleArchNames) are 64-bit, and a 32-bit one joins with its own answer
-# here. A host the vocabulary does not name is taken as 64-bit too: zc is
-# built only for 64-bit hosts.
-targetPointerBytes: function {triple: StringView} out u64 is {
-    arch: targetOrHostArch :triple
-    if (namesArm spellings: "x86_64 aarch64" comp: arch.stringView) then return 8
-    return 8
-}
-
 # targetExeSuffix -- the extension an executable built for this target carries.
 # It lives beside the vocabulary because it IS a question about the vocabulary:
 # no real mingw triple spells "windows", so asking the triple for the substring
@@ -60563,7 +60560,6 @@ answeredMemberName: function {prov: u64} out StringView is {
     if prov == 1 then return "os"
     if prov == 2 then return "arch"
     if prov == 3 then return "target"
-    if prov == 4 then return "ptrbits"
     return ""
 }
 
@@ -60625,18 +60621,6 @@ applyFoldProvider: function {
             :ast
             member: "target"
             value: value9
-        )
-        return
-    }
-    if prov == 4 then {
-        # the width of a pointer, which is the width of a union's payload slot
-        pb: targetPointerBytes triple: st.typing.targetTriple.stringView
-        (seedPlatformValue
-            :st
-            :ptid
-            :ast
-            member: "ptrbits"
-            value: (ztypes.makeIntConst v: (pb * 8).i64.orPanic)
         )
         return
     }

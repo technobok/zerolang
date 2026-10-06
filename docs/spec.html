@@ -4526,8 +4526,8 @@ fields block, indicating that the object's internal state is compiler-provided:<
 <pre><code class="language-zerolang">tag: record is native as { t: anyval.generic }</code></pre>
 <p><code>native</code> means <em><strong>a backend must supply this</strong></em>. Anything the compiler can
 answer itself it lowers to ordinary zerolang before any backend sees it: the
-members of <code>platform</code> (<code>os</code>, <code>arch</code>, <code>cc</code>, <code>ccmode</code>, <code>target</code>,
-<code>ptrbits</code>) are declared <code>is native</code>, and the type checker answers each one
+members of <code>platform</code> (<code>os</code>, <code>arch</code>, <code>target</code>) are declared
+<code>is native</code>, and the type checker answers each one
 as a compile-time constant from the build it is performing, so a read of one is
 a constant of the checked program and no backend implements it. The
 declaration is still native to the language: a reference to one
@@ -5808,8 +5808,8 @@ both are value types).</p>
 <p>For controlling the discriminator, see also the <a href="#tag">tag</a> type.</p>
 <p>Unions are sum-types that can hold exactly one of their child types at any
 given time. A discriminator (tag) is auto-generated for each subtype. A union
-is a reference type with a uniform two-word layout: a tag and a pointer-wide
-data slot. The union struct itself lives on the stack. A union is copied only
+is a reference type with a uniform two-part layout: a tag and an 8-byte data
+slot, the same on every target. The union struct itself lives on the stack. A union is copied only
 when it moves: a borrowed union -- a parameter, a match or <code>if</code> subject, a
 borrow binding, a non-owned field, a borrowed return -- is a pointer to the
 caller's union, so a write through a narrowed payload reaches it.</p>
@@ -5819,10 +5819,12 @@ caller's union, so a write through a narrowed payload reaches it.</p>
   union owns, which its slot points at: constructing the arm allocates the
   cell.</li>
 <li>A bare value-type arm is stored in the slot itself, with no allocation,
-  when it fits: its size and alignment no wider than a pointer on the target
-  (8 bytes on x86_64 and aarch64). An <code>i64</code>, a two-<code>i32</code> record, a typedef
-  over one, an ordinal variant and a <code>str 7</code> (its length byte and 7 chars)
-  all fit.</li>
+  when it fits: its size and alignment no wider than the slot's 8 bytes,
+  measured by the language's own layout -- each scalar its width, aligned to
+  itself; a record its fields in order, padded to each one's alignment; a
+  function reference 8 bytes -- so whether an arm fits never depends on the
+  target. An <code>i64</code>, a two-<code>i32</code> record, a typedef over one, an ordinal
+  variant and a <code>str 7</code> (its length byte and 7 chars) all fit.</li>
 <li>A bare value-type arm wider than the slot is a compile error at the arm,
   naming its size, the slot's and the target, with the hint <code>(Box T)</code>.
   Written <code>(Box T)</code>, the arm is a heap cell whatever its size, so every
