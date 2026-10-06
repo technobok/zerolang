@@ -2710,9 +2710,8 @@ require-guard: bin/zc
 # in both modes as much as a result does, which is what proves the in-process
 # error callback reports what the driver prints. Only the pid in the temp path
 # zc names is normalised away; it differs between two runs of the same mode.
-# os_platform is the one exclusion, and it is not an exception to the rule: it
-# PRINTS platform.ccmode, so its output is supposed to differ. A program that
-# reports which mode built it is the one program that cannot be mode-invariant.
+# Every run case is compared: no program can report which mode built it, since
+# the C toolchain is the backend's and nothing a program reads names it.
 #
 # --ldflags is the one flag whose meaning is deliberately NOT mode-invariant,
 # so it cannot be a parity row: spawn hands it to a linker and inproc has no
@@ -2724,7 +2723,6 @@ mode-parity: bin/zc $(BUILDDIR)/tcc
 	@mkdir -p $(BUILDDIR)/parity; n=0; bad=0; \
 	while read -r name dir rest; do \
 	  [ -n "$$name" ] || continue; \
-	  [ "$$name" = os_platform ] && continue; \
 	  args=$(BUILDDIR)/parity/$$name.args; \
 	  : > $$args; \
 	  [ -f tests/fixtures/run_golden/$$name.args ] && cp tests/fixtures/run_golden/$$name.args $$args; \
