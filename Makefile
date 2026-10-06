@@ -329,8 +329,8 @@ bench-math-kernels: $(BUILDDIR)/tcc
 # test-clang -- the corpus under clang, the fast tier. gcc reaches __float128's
 # library through quadmath.h; clang has no such header on its path, so the
 # prelude declares each libquadmath function by hand, and only a clang build
-# shows a function the f128 rows call with no declaration. --cc-forward folds
-# `platform.cc` to clang as a clang build would. The heavy kinds -- self-host
+# shows a function the f128 rows call with no declaration. --cc-forward hands
+# the backend clang as a clang build would. The heavy kinds -- self-host
 # and fixpoint -- are the bootstrap's to judge under clang.
 test-clang: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc clang --cc-forward --root . --jobs $(NPROC)
@@ -339,10 +339,10 @@ test-clang: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 TCC_RUN_DEPS := bin/zc bin/zl $(BUILDDIR)/tcc $(BUILDDIR)/ztestrunner
 
 # test-tcc -- the vendored tcc compiles the corpus. --cc-forward is what makes
-# this a test of the tcc BACKEND and not merely of tcc-the-C-compiler: zc folds
-# `platform.cc` during type checking, so quadfloat's `require:` guard fires,
-# and the programs that reach it are rejected by name instead of dying in
-# tcc's parser.
+# this a test of the tcc BACKEND and not merely of tcc-the-C-compiler: the C
+# backend refuses a unit its compiler cannot build (natives.tbl's @unit rows),
+# so the programs that reach quadfloat are rejected by name instead of dying
+# in tcc's parser.
 # tests/tcc-known-failures.txt records the split, program and stage; a move in
 # EITHER direction fails, so gaining a guard is a deliberate edit there.
 #
@@ -2384,7 +2384,10 @@ perf: $(PERFBIN)
 #
 # +565 a constant read through a subunit (`z.build.os`, `u.sub.K`) folds, and a
 # definition naming a subunit's arm resolves: 0 behaviour, +428 source (ab.sh).
-ALLOC_BASELINE := 2238454
+#
+# -3,981 `platform` goes, and with it the checker's answer machinery and its
+# target fields: -10 behaviour, -4,108 source (ab.sh).
+ALLOC_BASELINE := 2234473
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -2557,8 +2560,8 @@ emitter-guard:
 # -- the lexer, parser and AST, the type checker and its model, the symbol table
 # and the generator lowering -- holds no C spelling in its code (a C type, a C
 # compiler, the C table, a link line, a C keyword list), parses no --target
-# triple (ztarget is the drivers'), and reads the target the drivers resolved
-# only where the platform unit's answers come from it. A backend's facts
+# triple (ztarget is the drivers'), and names no target at all: what the build
+# is for is the generated `z` unit's constants. A backend's facts
 # live in that backend (src/zemitterc.z, natives.tbl); a rise here is one
 # leaking forward. Comments are not counted: explaining what the C backend
 # does with a decision is not depending on it.
@@ -2567,21 +2570,19 @@ FRONTEND_SRCS := src/ztypecheck.z src/ztyping.z src/ztypes.z src/zenv.z src/zgen
 frontend-guard:
 	@c=$$(cat $(FRONTEND_SRCS) | grep -vE '^[[:space:]]*#' \
 	  | grep -cE '__int128|_Float16|__float128|sizeof\(|_Alignof|void\*|u?int(8|16|32|64)_t|natives\.tbl|zlink|ccPath|ccMode|cckind|isCReserved|mangleVarName|mangleMemberPrefix|ztarget\.'); \
-	t=$$(grep -vE '^[[:space:]]*#' src/ztypecheck.z | grep -cE 'st\.typing\.target(Triple|Os|Arch)'); \
+	t=$$(cat $(FRONTEND_SRCS) | grep -vE '^[[:space:]]*#' | grep -cE 'target(Triple|Os|Arch)'); \
 	fail=0; \
 	if [ "$$c" -gt 0 ]; then \
 	  echo "frontend-guard FAIL: $$c C spelling(s) in the front end's code:"; \
 	  grep -nE '__int128|_Float16|__float128|sizeof\(|_Alignof|void\*|u?int(8|16|32|64)_t|natives\.tbl|zlink|ccPath|ccMode|cckind|isCReserved|mangleVarName|mangleMemberPrefix|ztarget\.' $(FRONTEND_SRCS) \
 	    | grep -vE ':[0-9]+:[[:space:]]*#' | sed 's/^/    /' | head -10; fail=1; fi; \
-	if [ "$$t" -gt 3 ]; then \
-	  echo "frontend-guard FAIL: the type checker reads the resolved target $$t times (baseline 3: os, arch, target)"; fail=1; \
-	elif [ "$$t" -lt 3 ]; then \
-	  echo "frontend-guard: resolved target reads = $$t < 3 -- lower the baseline here"; fi; \
+	if [ "$$t" -gt 0 ]; then \
+	  echo "frontend-guard FAIL: the front end names the resolved target $$t times; it is the generated z unit's to say"; fail=1; fi; \
 	if [ "$$fail" = "1" ]; then \
 	  echo "  A backend fact belongs to the backend: the C emitter and its table (natives.tbl)."; \
 	  exit 1; \
 	fi; \
-	echo "frontend-guard OK: no C spelling and no triple parse in the front end's code; the resolved target read $$t times, by platform's answers"
+	echo "frontend-guard OK: no C spelling, no triple parse and no target in the front end's code"
 
 # lifetime-guard -- ratchet on the emitter's own decisions about what dies when:
 # the checker records every scope end's and every exit's destroy list, with each
@@ -2907,7 +2908,7 @@ refusal-guard: bin/zc $(BUILDDIR)/tcc
 	fi; \
 	bin/zc build os_platform --src examples --system lib/system --cc gcc \
 	  --target x86_64-linux -o $$d/g > $$d/g.log 2>&1; rc=$$?; \
-	if [ $$rc -ne 0 ] || [ "$$($$d/g | head -1)" != "platform=linux" ]; then \
+	if [ $$rc -ne 0 ] || [ "$$($$d/g | head -1)" != "os=linux" ]; then \
 	  echo "refusal-guard FAIL: a HOST --target must still build and fold to the host (exit $$rc)"; \
 	  cat $$d/g.log; bad=1; \
 	fi; \
@@ -3958,7 +3959,9 @@ FALLBACK_BASELINE :=
 # parameter, which the checker refuses first.
 # 39: applyUnitReqs's refusal -- a reached unit the C toolchain cannot build
 # (natives.tbl's `@unit.` rows: f128 under tcc or off x86-64).
-EMITFAIL_BASELINE := 39
+# 38: the refusal of a `platform` member nothing folded goes with the checker's
+# answers: no native is answered by the checker any more.
+EMITFAIL_BASELINE := 38
 MARKER_BASELINE := 24
 EXCS := $(NAMES:%=$(EXDIR)/%.c)
 fallback-guard: $(EXCS) bin/zc bin/zl bin/zls

@@ -1,0 +1,134 @@
+#doc.lang: en
+
+#//: Zerolang: the generated z unit
+
+#doc.title: Zerolang -- the generated z unit
+#doc.content type=main id=content
+#doc.heading.number level=4
+#doc.heading.anchor level=4
+#doc.link rel=stylesheet href=style/zerolang.css
+#doc.link rel=icon type=image/png sizes=192x192 href=style/favicon-192x192.png
+#doc.link rel=icon type=image/x-icon href=style/favicon-48x48.ico
+#doc.link rel=icon type=image/png sizes=32x32 href=style/favicon-32x32.png
+#doc.link rel=icon type=image/png sizes=16x16 href=style/favicon-16x16.png
+
+#doc.script src=style/tocbot.min.js
+#doc.script src=style/init.js
+#doc.script src=style/prism.min.js
+#doc.script src=style/prism-zerolang.js
+#doc.author: pw <p@zerolang.org>
+#doc.datecreated: 2026-10-06
+#doc.version: v0.1
+
+#doc.body class=toc-sidebar
+#nav id=nav: [#include literal=true: style/nav.html]
+
+#header:
+  #-: z
+
+#nav id=toc class=toc-sidebar:
+  #div id=tocfile: Table of Contents
+  #doc.toc
+
+
+#--: Overview
+
+#~"z" is the unit that says what a build is. The compiler #b:"writes" it,
+before the build begins, from the values the build uses after every flag:
+the target, the unit, the switches. A program reads them as ordinary
+constants of an ordinary unit:
+
+#code language=zerolang: """
+  main: function is {
+      if z.build.os.linux then print "on linux"
+      print "built as \{z.build.main} for \{z.build.triple}"
+  }
+"""
+
+There is no answer machinery behind it and nothing native about it: the
+values are constants written into a file, so a unit-level #~"if" and a
+#~"require:" block fold on them like on any other constant, and a branch
+they decide never reaches the C.
+
+#code language=zerolang: """
+  require: unit {
+      library: if z.build.os == z.build.oskind.windows then {
+          "ws2_32"
+      } else {
+          ""
+      }
+  }
+"""
+
+#--: Where it lives
+
+The files are generated into the compiler's own folder, #~".zerolang/",
+which sits beside a project's #~"project.z" (see #~"zc.pdoc"). Outside a
+project it is a folder of the user's cache directory
+(#~"$XDG_CACHE_HOME/zerolang/", else #~"~/.cache/zerolang/"), so nothing is
+ever written beside a lone source file. Each target has a folder of its
+own, so builds for several targets sit side by side:
+
+#code: """
+  .zerolang/
+    .gitignore                    -- `*`: the folder is disposable
+    targets/x86_64-linux/
+      z.z                         -- publishes `build` and `project`
+      z/build.z                   -- the build's values
+"""
+
+#~"z/project.z" is not a file of that folder: the project's own
+#~"project.z" is #b:"mounted" there, alone, so #~"z.project.main" is the
+#~"main" the project file sets. A file is rewritten only when its text
+changes, and the build reads the text it generated, not the copy on disk,
+so two builds running at once never read each other's values.
+
+The generated layer is bound #b:"between" the source roots and the
+stdlib: a project's own unit named #~"z" shadows it, exactly as a user unit
+shadows the stdlib's.
+
+#--: z.build
+
+#ul:
+  [#*: #~"os" -- the operating system the build is for, an #~"oskind"]
+  [#*: #~"arch" -- the architecture the build is for, an #~"archkind"]
+  [#*: #~"triple" -- the #~"--target" triple as given (or the project's
+    #~"target"), else the host's, as #~"<arch>-<os>"]
+  [#*: #~"main" -- the unit the build compiles]
+  [#*: #~"sourceDir" -- the first source root, relative to the project
+    directory]
+  [#*: #~"outputDir" -- where the executable goes when #~"-o" names none]
+  [#*: #~"release", #~"fastHash", #~"readableNames", #~"eager" -- the
+    switches, #~"true" or #~"false"]
+  [#*: #~"zcVersion" -- the version of #~"zc" that wrote the file]
+
+#ul:
+  [#*: #~"oskind" -- #~"variant { linux: null  darwin: null  windows: null  other: null }"]
+  [#*: #~"archkind" -- #~"variant { x86_64: null  aarch64: null  other: null }"]
+
+#~"value.arm" is always a predicate, so #~"z.build.os.linux" and
+#~"z.build.os == z.build.oskind.linux" fold alike.
+
+No value names an absolute path: a path is relative to the project
+directory, so the file has the same shape on every machine. The header
+comment lays out where each root of the build comes from, and names the C
+toolchain the build used -- in the comment only. The toolchain is the C
+backend's business, and no constant a program can read names it.
+
+#p: #b:"Caveat"
+
+#~"os" and #~"arch" come from #~"--target" (or the project's #~"target")
+when one is given and from the host otherwise. A cross #~"--cc" used
+#b:"without" #~"--target" therefore leaves them describing the host while
+the C compiler targets something else.
+
+The triple is #b:"parsed", not substring-matched: each #~"-" separated
+component is matched whole against the arm names and their aliases, and a
+triple naming no operating system or two of them is refused at the flag.
+See the cross-compilation section of #~"zc.pdoc" for the vocabulary.
+
+#--: z.project
+
+The project's own #~"project.z", when there is one: #~"z.project.sourceDir",
+#~"z.project.main", and every other setting the file gives, as written. A
+setting the file leaves out is not a member.

@@ -16940,7 +16940,6 @@ unitFnMemberC: function {
     ctx: Ctx
     n: zast.dottedpathrow.view
     baseNameId: zast.nameid
-    baseName: StringView
 } out String is {
     ud6x: ztypecheck.unitDeclOfName st: symtab nameId: baseNameId
     dpUfo: (ztypecheck.resolvedByIdsRo
@@ -16956,27 +16955,6 @@ unitFnMemberC: function {
         fid = dpUfo
     } case none then null
     if fid.isZero then return ""
-    # a native the checker answers has no implementation to call: the read was
-    # to have folded to its constant while type checking. Reaching here means
-    # the read sat where the constant evaluator never visited, and the leg below
-    # would emit the plain cname with parens -- which is how this failed before
-    # it was checked: `implicit declaration of function 'z_t12'`, a mangled
-    # name that never mentions the declaration. The path is built inside a
-    # block: the child's name is read through a view of ast.
-    {
-        dpCnId: atomNameIdOf :ast n: (ast.nodes.get i: n.child)
-        if (ztypecheck.answersNative :ast unitNm: baseNameId memberNm: dpCnId) then {
-            dpFp: baseName.string
-            dpFp.append "."
-            dpFp.append (zast.nameTextAt :ast ref: dpCnId)
-            (emitFail
-                :ctx
-                what: "'\{dpFp}' is answered by the checker: nothing folded it, and there is no implementation to call"
-                line: n.lineno
-            )
-            return ""
-        }
-    }
     # only a bodied + demanded non-native fn earns the id-cname reference /
     # auto-call route here, whichever unit declares it
     if (stdFnRefEmittable :ast :symtab :fid).not then return ""
@@ -17061,7 +17039,6 @@ emitDottedUnitRead: function {
             tid: izd
         )
     } case none then null
-    dpUb: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.parent))
     dpUbId: atomNameIdOf :ast n: (ast.nodes.get i: n.parent)
     dpIsFile: false
     if (ztypecheck.isUnitNameDecl
@@ -17093,7 +17070,6 @@ emitDottedUnitRead: function {
             :ctx
             :n
             baseNameId: dpUbId
-            baseName: dpUb.stringView
         )
         if ufm.length > 0 then return ufm
     }
@@ -30897,7 +30873,6 @@ checkNativesResolve: function {
     unitName: StringView
 } is {
     bodyIds: zast.unitBodyIdsAt :ast unitId: unitOpId
-    unitNm: zast.poolFind pool: ast.names text: unitName
     vx239: u64
     for vx239 < bodyIds.count loop {
         bm: zast.kidAt kids: ast.kids span: bodyIds i: vx239
@@ -30909,13 +30884,7 @@ checkNativesResolve: function {
             match (
                 op
             ) case functiondef then {
-                # one the checker answers is a constant of the checked program:
-                # no backend implements it, so no row is asked for
-                if op.isNative when (ztypecheck.answersNative
-                    :ast
-                    :unitNm
-                    memberNm: bn.name
-                ).not then {
+                if op.isNative then {
                     pk: "\{unitName}.\{nm}"
                     if (nativeHasRow :ctx path: pk.stringView).not then {
                         (emitFail
@@ -33055,6 +33024,9 @@ emitC: function {
     # the family of the C compiler the output is for: a unit the program
     # reaches may need something only some have
     ccFamily: ccfamily
+    # the architecture the build is for (an archkind arm name), which a unit
+    # the program reaches may require
+    targetArch: StringView
 } out String is {
     buf: String
     rtids: resolveRuntimeTids :program :symtab
@@ -33257,7 +33229,7 @@ emitC: function {
     loadNativeTbl :ctx :runtimeDir
     linkLibs: List String
     for each lb: libs loop linkLibs.append from: lb.copy
-    applyUnitReqs ast: program :symtab :ctx :ccFamily libs: linkLibs
+    applyUnitReqs ast: program :symtab :ctx :ccFamily libs: linkLibs arch: targetArch
     {
         buildDefUnitIndex :symtab :ctx ast: program
         bindFragTypeTids :symtab :ctx ast: program
@@ -33337,16 +33309,17 @@ applyUnitReqs: function {
     ctx: Ctx
     ccFamily: ccfamily
     libs: List String
+    # the architecture the build is for, as an archkind arm name
+    arch: StringView
 } is {
     if ctx.unitReqs.length == 0 then return
-    arch: symtab.typing.targetArch.copy
     fam: ccFamilyName f: ccFamily
     # collected, and reported once the walk over the rows is done: a report
     # writes the context the rows live in
     refusals: List String
     for each r: ctx.unitReqs loop {
         if (unitPathReached :ast :symtab path: r.path.stringView).not then continue
-        why: unitReqRefusal :r :fam arch: arch.stringView
+        why: unitReqRefusal :r :fam :arch
         if why.length > 0 then {
             refusals.append why.take
         } else {

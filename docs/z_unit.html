@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Zerolang -- the generated z unit</title>
+<link rel="stylesheet" href="style/zerolang.css">
+<link rel="icon" href="style/favicon-192x192.png" type="image/png" sizes="192x192">
+<link rel="icon" href="style/favicon-48x48.ico" type="image/x-icon">
+<link rel="icon" href="style/favicon-32x32.png" type="image/png" sizes="32x32">
+<link rel="icon" href="style/favicon-16x16.png" type="image/png" sizes="16x16">
+<script src="style/tocbot.min.js"></script>
+<script src="style/init.js"></script>
+<script src="style/prism.min.js"></script>
+<script src="style/prism-zerolang.js"></script>
+<meta name="author" content="pw &lt;p@zerolang.org&gt;">
+<meta name="datecreated" content="2026-10-06">
+<meta name="version" content="v0.1">
+</head>
+<body class="toc-sidebar">
+<nav id="nav">
+  <div class="doc-wrapper">
+    <a title="Zerolang" href="./index.html">Zerolang</a>
+  </div>
+
+  <label>
+    <input id="mode-checkbox" class="mode-checkbox" type="checkbox" />
+    <div class="mode-slot">
+      <div class="sun-icon-wrapper">
+        <svg
+          class="sun-icon"
+          xmlns="http://www.w3.org/2000/svg"
+          width="24"
+          height="24"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <circle cx="12" cy="12" r="5"></circle>
+          <line x1="12" y1="1" x2="12" y2="3"></line>
+          <line x1="12" y1="21" x2="12" y2="23"></line>
+          <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+          <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+          <line x1="1" y1="12" x2="3" y2="12"></line>
+          <line x1="21" y1="12" x2="23" y2="12"></line>
+          <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+          <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+        </svg>
+      </div>
+      <div class="mode-button"></div>
+      <div class="moon-icon-wrapper">
+        <svg
+          class="moon-icon"
+          xmlns="http://www.w3.org/2000/svg"
+          width="24"
+          height="24"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+        </svg>
+      </div>
+    </div>
+  </label>
+
+
+</nav>
+<header>
+<h1 id="z"><a href="#z">z</a></h1>
+</header>
+<nav class="toc-sidebar" id="toc">
+<div id="tocfile">
+Table of Contents</div>
+
+<ul>
+<li><a href="#z">z</a>
+<ul>
+<li><a href="#overview">Overview</a>
+</li>
+<li><a href="#where-it-lives">Where it lives</a>
+</li>
+<li><a href="#z-build">z.build</a>
+</li>
+<li><a href="#z-project">z.project</a>
+</li>
+</ul>
+</li>
+</ul>
+
+</nav>
+<main id="content">
+<h2 id="overview"><a href="#overview">1. Overview</a></h2>
+<p><code>z</code> is the unit that says what a build is. The compiler <strong>writes</strong> it,
+before the build begins, from the values the build uses after every flag:
+the target, the unit, the switches. A program reads them as ordinary
+constants of an ordinary unit:</p>
+<pre><code class="language-zerolang">  main: function is {
+      if z.build.os.linux then print "on linux"
+      print "built as \{z.build.main} for \{z.build.triple}"
+  }</code></pre>
+<p>There is no answer machinery behind it and nothing native about it: the
+values are constants written into a file, so a unit-level <code>if</code> and a
+<code>require:</code> block fold on them like on any other constant, and a branch
+they decide never reaches the C.</p>
+<pre><code class="language-zerolang">  require: unit {
+      library: if z.build.os == z.build.oskind.windows then {
+          "ws2_32"
+      } else {
+          ""
+      }
+  }</code></pre>
+<h2 id="where-it-lives"><a href="#where-it-lives">2. Where it lives</a></h2>
+<p>The files are generated into the compiler's own folder, <code>.zerolang/</code>,
+which sits beside a project's <code>project.z</code> (see <code>zc.pdoc</code>). Outside a
+project it is a folder of the user's cache directory
+(<code>$XDG_CACHE_HOME/zerolang/</code>, else <code>~/.cache/zerolang/</code>), so nothing is
+ever written beside a lone source file. Each target has a folder of its
+own, so builds for several targets sit side by side:</p>
+<pre><code>  .zerolang/
+    .gitignore                    -- `*`: the folder is disposable
+    targets/x86_64-linux/
+      z.z                         -- publishes `build` and `project`
+      z/build.z                   -- the build's values</code></pre>
+<p><code>z/project.z</code> is not a file of that folder: the project's own
+<code>project.z</code> is <strong>mounted</strong> there, alone, so <code>z.project.main</code> is the
+<code>main</code> the project file sets. A file is rewritten only when its text
+changes, and the build reads the text it generated, not the copy on disk,
+so two builds running at once never read each other's values.</p>
+<p>The generated layer is bound <strong>between</strong> the source roots and the
+stdlib: a project's own unit named <code>z</code> shadows it, exactly as a user unit
+shadows the stdlib's.</p>
+<h2 id="z-build"><a href="#z-build">3. z.build</a></h2>
+<ul>
+<li><code>os</code> -- the operating system the build is for, an <code>oskind</code></li>
+<li><code>arch</code> -- the architecture the build is for, an <code>archkind</code></li>
+<li><code>triple</code> -- the <code>--target</code> triple as given (or the project's
+<code>target</code>), else the host's, as <code>&lt;arch&gt;-&lt;os&gt;</code></li>
+<li><code>main</code> -- the unit the build compiles</li>
+<li><code>sourceDir</code> -- the first source root, relative to the project
+directory</li>
+<li><code>outputDir</code> -- where the executable goes when <code>-o</code> names none</li>
+<li><code>release</code>, <code>fastHash</code>, <code>readableNames</code>, <code>eager</code> -- the
+switches, <code>true</code> or <code>false</code></li>
+<li><code>zcVersion</code> -- the version of <code>zc</code> that wrote the file</li>
+</ul>
+<ul>
+<li><code>oskind</code> -- <code>variant { linux: null  darwin: null  windows: null  other: null }</code></li>
+<li><code>archkind</code> -- <code>variant { x86_64: null  aarch64: null  other: null }</code></li>
+</ul>
+<p><code>value.arm</code> is always a predicate, so <code>z.build.os.linux</code> and
+<code>z.build.os == z.build.oskind.linux</code> fold alike.</p>
+<p>No value names an absolute path: a path is relative to the project
+directory, so the file has the same shape on every machine. The header
+comment lays out where each root of the build comes from, and names the C
+toolchain the build used -- in the comment only. The toolchain is the C
+backend's business, and no constant a program can read names it.</p>
+<p><strong>Caveat</strong></p>
+<p><code>os</code> and <code>arch</code> come from <code>--target</code> (or the project's <code>target</code>)
+when one is given and from the host otherwise. A cross <code>--cc</code> used
+<strong>without</strong> <code>--target</code> therefore leaves them describing the host while
+the C compiler targets something else.</p>
+<p>The triple is <strong>parsed</strong>, not substring-matched: each <code>-</code> separated
+component is matched whole against the arm names and their aliases, and a
+triple naming no operating system or two of them is refused at the flag.
+See the cross-compilation section of <code>zc.pdoc</code> for the vocabulary.</p>
+<h2 id="z-project"><a href="#z-project">4. z.project</a></h2>
+<p>The project's own <code>project.z</code>, when there is one: <code>z.project.sourceDir</code>,
+<code>z.project.main</code>, and every other setting the file gives, as written. A
+setting the file leaves out is not a member.</p>
+</main>
+</body>
+</html>

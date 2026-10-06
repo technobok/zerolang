@@ -97,7 +97,6 @@ public: unit {
     :arrayElemTid
     :resolveUnitChildRo
     :resolvedByIdsRo
-    :answersNative
 }
 
 astnode: zast.astnode
@@ -16853,7 +16852,7 @@ owningUnitDecl: function {st: zenv.ZSymbolTable.view declId: ztypes.declid} out 
 # what it needs linked, a precondition on using the unit. The block resolves
 # through the ordinary unit machinery, so one with definitions of its own folds
 # them in dependency order. Marking before demanding is what stops the regress
-# -- folding `library:` may demand a `platform` member, a declaration in
+# -- folding `library:` may demand a `z.build` member, a declaration in
 # another unit, which re-enters here.
 ensureUnitRequire: function {
     st: zenv.ZSymbolTable
@@ -16875,9 +16874,6 @@ ensureUnitRequire: function {
     # of the block: at the moment the unit is first used, not after its C has
     # been written. The ambient pending failure belongs to whatever resolution
     # we interrupted; save it.
-    # the block may guard on the platform, so its facts have to be in place
-    # before it folds
-    ensureFoldNativesSeeded :st :scope :ast
     prevFail: st.typing.constFail
     constFailClear :st
     resolveDemandedDecl :st :scope :ast declId: rq
@@ -56502,11 +56498,6 @@ constValueOfMemberId: function {
     if nid.isZero then return ztypes.noConst
     od: constOwnerDeclForId :st :scope :unitDecl :nameId
     if od.isZero then return ztypes.noConst
-    # a member the compiler answers (`platform.os`) is seeded before its
-    # first read, whichever fold reaches it first
-    if st.typing.platformSeeded.not when (isFoldUnitDecl :st :scope :ast declId: od) then {
-        ensureFoldNativesSeeded :st :scope :ast
-    }
     # the constant's own declaration is the owner's child of that name, so the
     # def node comes off the same walk that found the owner. u32 because a node
     # id is one, and the binding's type IS its initializer.
@@ -58410,7 +58401,7 @@ evalConstDotted: function {
         )
         if pbv.kind.none.not then return pbv
     }
-    # `platform.os.linux` -- the ARM-PREDICATE form, asked FIRST for the
+    # `z.build.os.linux` -- the ARM-PREDICATE form, asked FIRST for the
     # same reason the atomid case asks the constant first: `tsrc.os` is a
     # constant whose TYPE is a variant, so reading it as a qualified type
     # name would find that variant and answer with an arm where the
@@ -58445,7 +58436,7 @@ evalConstDotted: function {
             :co
         )
     }
-    # `platform.oskind.linux` -- an arm of a type reached THROUGH its unit.
+    # `io.filekind.dir` -- an arm of a type reached THROUGH its unit.
     # The parent is a dotted path of its own, so the type must be looked up
     # from that unit rather than from the one being evaluated.
     # `z.build.os` -- a constant of a unit reached through a path of units: a
@@ -60296,264 +60287,6 @@ isReexportShaped: function {ast: Ast.view opId: zast.nodeid} out bool is {
     if (isNumericLiteralNameAt :ast ref: root) then return false
     n: ast.nodes.get i: opId
     return n.dottedpath or n.atomid
-}
-
-# ensureFoldNativesSeeded -- the compile-time facts the checker answers (the
-# platform unit's os, arch and target), written ONCE and before the first fold
-# that reads them: a `require:` block, a unit-level constant, or the main pass,
-# whichever reaches them first. A unit-level `if` on `platform.os` folds while
-# the main unit's definitions resolve, which is before the main pass seeds.
-ensureFoldNativesSeeded: function {st: zenv.ZSymbolTable scope: ztypes.declid ast: Ast} is {
-    if st.typing.platformSeeded then return
-    st.typing.platformSeeded = true
-    seedFoldNatives :st :scope :ast
-}
-
-# isFoldUnitDecl -- the declaration is the unit whose members the checker
-# answers: they are seeded by the compiler, not folded from their source.
-isFoldUnitDecl: function {
-    st: zenv.ZSymbolTable
-    scope: ztypes.declid
-    ast: Ast.view
-    declId: ztypes.declid
-} out bool is {
-    un: nameIdOf :ast name: answeredUnit
-    if un.isZero then return false
-    return (unitDeclOfNameOrOwn :st :scope nameId: un) == declId
-}
-
-# seedFoldNatives -- answer the compile-time values the checker owns: each
-# member of the answered unit that answeredMemberName lists is written onto the
-# member-constant table, where every read of it folds. This is the lowering:
-# from here on the member is a constant of the checked program, and no backend
-# is asked to implement it.
-#
-# Silent for a program that never loads the unit. An answer is a fact about the
-# compiler; a SEED is a fact about a program, and there is no member table to
-# write onto for a unit that is not here.
-seedFoldNatives: function {
-    ast: Ast
-    st: zenv.ZSymbolTable
-    scope: ztypes.declid
-} is {
-    unm9: nameIdOf :ast name: answeredUnit
-    if unm9.isZero then return
-    ud9: unitDeclOfNameOrOwn :st :scope nameId: unm9
-    ptid9: declTypeIdOf :st declId: ud9
-    if ptid9.isZero then return
-    # the answers are that unit's own definitions, so they resolve in its scope
-    # where it has one
-    rf9: scope
-    pro9: st.typing.declFindChild parentDeclId: st.typing.programRoot nameId: unm9
-    if pro9.isZero.not then rf9 = pro9
-    prov9: 1.u64
-    for (answeredMemberName prov: prov9).length > 0 loop {
-        if (answerHasNativeDecl :st :ast unitDecl: ud9 prov: prov9) then {
-            (applyFoldProvider
-                :st
-                unitScope: rf9
-                :ast
-                ptid: ptid9
-                prov: prov9
-            )
-        }
-        prov9 = prov9 + 1
-    }
-}
-
-# answerHasNativeDecl -- the member an answer names is declared by the answered
-# unit, and declared `is native`. A member the unit does not declare is simply
-# not answered: nothing can read it -- a read is an unknown member -- and the
-# unit, not this table, says what the platform offers, so a compiler and a
-# system library one step apart in either direction still agree. A member with
-# a BODY is reported: it is one the program implements, which the checker must
-# not overrule. A plain `is native` the checker does not answer is a native
-# some backend supplies, and the backend's own check reports one that none
-# does.
-answerHasNativeDecl: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    unitDecl: ztypes.declid
-    prov: u64
-} out bool is {
-    mn: answeredMemberName :prov
-    path: answeredUnit.string
-    path.append "."
-    path.append mn
-    mnm: nameIdOf :ast name: mn
-    d: ztypes.declid
-    if mnm.isZero.not then d = st.typing.declFindChild parentDeclId: unitDecl nameId: mnm
-    if d.isZero then return false
-    dn: (st.typing.decls.get i: d).node
-    if dn.isZero then return false
-    dline: nodeLine n: (ast.nodes.get i: dn)
-    dcol: nodeCol n: (ast.nodes.get i: dn)
-    n: ast.nodes.get i: dn
-    if n.namedoperation.not then return false
-    op: ast.nodes.get i: n.operation
-    match (
-        op
-    ) case functiondef then {
-        if op.isNative then return true
-    } else null
-    (addError
-        :st
-        nodeid: dn
-        lineno: dline
-        colno: dcol
-        e: zast.err.compilerError
-        msg: "the checker answers '\{path}' itself, so it is declared `is native`, with no body"
-    )
-    return false
-}
-
-# foldProviderOf -- which compile-time answer a path names, as a 1-based index
-# into applyFoldProvider's arms; 0 for a path this compiler cannot answer.
-#
-# Keyed by NAME IDS, not by the spelling: the ids are what every other table
-# here compares, and routing by a literal is what the architecture rules count.
-# BOTH zeros are refused first. A name the program never mentions is not in the
-# pool and answers 0, and a nameless node answers 0 too -- so an unguarded
-# compare would match every path at once in exactly the programs that never
-# name the unit.
-foldProviderOf: function {
-    ast: Ast.view
-    unitNm: zast.nameid
-    memberNm: zast.nameid
-} out u64 is {
-    if unitNm.isZero then return 0
-    if memberNm.isZero then return 0
-    pun: nameIdOf :ast name: answeredUnit
-    if pun.isZero then return 0
-    if (unitNm == pun).not then return 0
-    prov: 1.u64
-    for (answeredMemberName :prov).length > 0 loop {
-        if memberNm == (nameIdOf :ast name: (answeredMemberName :prov)) then return prov
-        prov = prov + 1
-    }
-    return 0
-}
-
-# answeredUnit -- the unit whose `is native` members the checker answers.
-answeredUnit: "platform"
-
-# answeredMemberName -- the member of answeredUnit that applyFoldProvider's arm
-# `prov` answers, as the unit declares it; empty past the last arm. This IS the
-# answer table: foldProviderOf, the seed and its declaration check all walk it,
-# and nothing outside the checker lists these names.
-answeredMemberName: function {prov: u64} out StringView is {
-    if prov == 1 then return "os"
-    if prov == 2 then return "arch"
-    if prov == 3 then return "target"
-    return ""
-}
-
-# answersNative -- the checker answers this `is native` free function of a unit
-# itself, so no backend implements it: `native` means a backend must supply the
-# body, and anything the checker can answer it lowers to a constant of the
-# checked program first. Keyed by NAMES rather than by a typed member, so it
-# holds for a declaration nothing used, which only parsed. A reference to one is
-# still refused as a native's (refuseNativeReference): that is the language's
-# rule about the declaration, and it reads the source.
-answersNative: function {ast: Ast.view unitNm: zast.nameid memberNm: zast.nameid} out bool is {
-    return (foldProviderOf :ast :unitNm :memberNm) > 0
-}
-
-# applyFoldProvider -- write one compile-time answer onto the member-constant
-# table. Takes foldProviderOf's INDEX rather than a name: the path is resolved
-# once, at the lookup, and everything downstream of it compares integers.
-#
-# os and arch resolve their arm in the platform unit's own scope.
-applyFoldProvider: function {
-    ast: Ast
-    st: zenv.ZSymbolTable
-    unitScope: ztypes.declid
-    ptid: ztypes.tid
-    prov: u64
-} is {
-    if prov == 1 then {
-        osn: st.typing.targetOs.copy
-        (seedPlatformArm
-            :st
-            scope: unitScope
-            :ast
-            :ptid
-            member: "os"
-            typeName: "oskind"
-            armName: osn.stringView
-        )
-        return
-    }
-    if prov == 2 then {
-        arn: st.typing.targetArch.copy
-        (seedPlatformArm
-            :st
-            scope: unitScope
-            :ast
-            :ptid
-            member: "arch"
-            typeName: "archkind"
-            armName: arn.stringView
-        )
-        return
-    }
-    if prov == 3 then {
-        tripleC: st.typing.targetTriple.copy
-        value9: ztypes.makeStrConst (constInternString :st text: tripleC.stringView)
-        (seedPlatformValue
-            :st
-            :ptid
-            :ast
-            member: "target"
-            value: value9
-        )
-        return
-    }
-}
-
-# seedPlatformArm -- one platform member, as an arm of one of its kinds.
-seedPlatformArm: function {
-    ast: Ast
-    st: zenv.ZSymbolTable
-    scope: ztypes.declid
-    ptid: ztypes.tid
-    member: StringView
-    typeName: StringView
-    armName: StringView
-} is {
-    lookupUnit92: unitDeclOfNameOrOwn :st :scope nameId: (nameIdOf :ast name: "platform")
-    # the platform's kind and arm are text-born (host, target, flags): the
-    # only text-to-id step of the arm read is here
-    typeNameId: zast.poolFind pool: ast.names text: typeName
-    armNameId: zast.poolFind pool: ast.names text: armName
-    valFound: (constArmRead
-        :st
-        :scope
-        :ast
-        lookupUnit: lookupUnit92
-        :typeNameId
-        :armNameId
-    )
-    if valFound.kind.none then return
-    seedPlatformValue :st :ptid :ast :member value: valFound
-}
-
-# seedPlatformValue -- record the value and mark the member EVALUATED, so the
-# on-demand walk returns this instead of folding the placeholder on disk.
-seedPlatformValue: function {
-    st: zenv.ZSymbolTable
-    ptid: ztypes.tid
-    ast: Ast.view
-    member: StringView
-    value: ztypes.cval
-} is {
-    nid: zast.poolFind pool: ast.names text: member
-    if nid.isZero then return
-    st.typing.setMemberConst parentTypeId: ptid nameId: nid :value
-    (st.typing.constEvalState.set
-        key: (st.typing.memberConstKey parentTypeId: ptid nameId: nid)
-        value: 2.u8
-    )
 }
 
 # resolveConstantDefs -- materialise every unit's constant definitions, so a
@@ -62503,11 +62236,6 @@ typecheck: function {
     eager: bool
     requireMain: bool
     dumpRows: bool
-    # the --target triple as written, and the oskind / archkind arm names the
-    # driver resolved it to (ztarget)
-    target: StringView
-    targetOs: StringView
-    targetArch: StringView
 } out zenv.ZSymbolTable is {
     nodeEstT: u64
     nodeEstT = program.nodes.length
@@ -62515,9 +62243,6 @@ typecheck: function {
     ty.eagerAll = eager
     ty.requireMain = requireMain
     ty.dumpRows = dumpRows
-    ty.targetTriple = target.string
-    ty.targetOs = targetOs.string
-    ty.targetArch = targetArch.string
     muNid: nameIdOf ast: program name: program.mainUnitName.stringView
     reg.setMainUnit name: program.mainUnitName.stringView nameId: muNid
     st: zenv.newSymbolTable :reg typing: ty
@@ -62586,7 +62311,6 @@ typecheck: function {
             unitDecl: st.typing.mainUnitRoot
         )
     }
-    ensureFoldNativesSeeded :st scope: rf ast: program
     resolveConstantDefs :st scope: rf :program
     completeUnitInstantiations :st scope: rf :program
     applyUnitVisibility :st :program
