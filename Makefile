@@ -2387,7 +2387,10 @@ perf: $(PERFBIN)
 #
 # -3,981 `platform` goes, and with it the checker's answer machinery and its
 # target fields: -10 behaviour, -4,108 source (ab.sh).
-ALLOC_BASELINE := 2234473
+#
+# +231 a project's executable goes to the project directory: +66 behaviour
+# (build.z's outputDir is made relative to the project), +28 source (ab.sh).
+ALLOC_BASELINE := 2234704
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

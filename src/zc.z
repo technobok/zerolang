@@ -159,7 +159,8 @@ printCommandHelp: function {cmd: StringView} is {
     if cmd == "build" then {
         io.eprintln "usage: zc build <src> [flags]"
         io.eprintln "Compile <src> to a native executable."
-        io.eprintln "Output goes to -o OUT, else ./<unit> (./<unit>.exe for windows targets)."
+        io.eprintln "Output goes to -o OUT, else <unit> (<unit>.exe for windows targets) in the"
+        io.eprintln "project's directory (project.z's outputDir moves it), or outside a project in ."
         io.eprintln "Flags: --release --cc CC --cc-mode spawn|inproc --target TRIPLE"
         io.eprintln "       --save-temps"
         io.eprintln "       --cflags STR --ldflags STR --src DIR --tcc-lib DIR"
@@ -760,8 +761,9 @@ ZcFlags: class {
     dumpSqlTarget: String
     # -o: where any output goes when its own flag named none
     outPath: String
-    # project.z's outputDir, under the project directory: where a build writes
-    # its executable when -o names none; "" for the working directory
+    # where a build writes its executable when -o names none: the project
+    # directory, or project.z's outputDir under it; "" (the working directory)
+    # outside a project
     outputDir: String
     # --cc: the C compiler to drive, "" to resolve one from the target
     ccFlag: String
@@ -968,7 +970,13 @@ ZcFlags: class {
         if this.runtimeFlag.length == 0 then this.runtimeFlag = rt.take
         tl: zproject.inProject dir: d rel: pf.tccLibDir.stringView
         if this.tccLibFlag.length == 0 then this.tccLibFlag = tl.take
-        this.outputDir = zproject.inProject dir: d rel: pf.outputDir.stringView
+        # a project's executable goes to its own directory, as C's and Go's do,
+        # wherever in it the build started; outputDir moves it
+        this.outputDir = d.string
+        if pf.outputDir.length > 0 then this.outputDir = (zproject.inProject
+            dir: d
+            rel: pf.outputDir.stringView
+        )
     }
 
     # applyProjectTools -- the target and the C toolchain project.z names, where
@@ -1113,8 +1121,8 @@ outTarget: function {primary: StringView fallback: StringView} out String is {
 }
 
 # chooseExePath -- where a build writes its executable: a temporary under
-# `run`, `-o` when it names one, else `<unit>` with the target's suffix in
-# project.z's outputDir, or in the working directory.
+# `run`, `-o` when it names one, else `<unit>` with the target's suffix in the
+# project's output directory, or outside a project in the working directory.
 chooseExePath: function {
     isRun: bool
     outPath: StringView
