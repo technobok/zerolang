@@ -325,35 +325,10 @@ ProviderTable: class {
         this.providers.append box.take
         return idx
     }
-    # registerFS -- construct an FSProvider rooted at <rootpath>/<parentpath>,
-    # validating that the joined path is actually a directory. Panics if it
-    # isn't. Root node 0 carries `parentpath` literally, so all walked paths
-    # share that prefix.
+    # registerFS -- register an FSProvider rooted at <rootpath>/<parentpath>, a
+    # directory or a single file (newFSProvider), and answer its id
     registerFS: function {:this rootpath: String.take parentpath: String.take} out u32 is {
-        full: joinPath parent: rootpath.stringView name: parentpath.stringView
-        sr: io.stat full
-        match (
-            sr
-        ) case ok then {
-            match (
-                sr.kind
-            ) case dir then null case file then {
-                panic "FSProvider root is not a directory"
-            } case symlink then {
-                panic "FSProvider root is not a directory"
-            } case other then {
-                panic "FSProvider root is not a directory"
-            }
-        } case err then {
-            panic "FSProvider root is not a directory (stat failed)"
-        }
-        fp: (FSProvider
-            rootpath: rootpath.take
-            pathtable: List FSNode
-            pathcache: (MapRV String v: u32)
-        )
-        root: FSNode path: parentpath.take kind: nodekind.dir
-        fp.pathtable.append root.take
+        fp: newFSProvider rootpath: rootpath.take parentpath: parentpath.take
         prov: ZVfsProvider.create from: fp.take
         box: ProviderBox p: prov
         idx: this.providers.length.u32.orPanic
@@ -612,6 +587,61 @@ FSProvider: class {
     }
 }
 
+# newFSProvider -- an FSProvider rooted at <rootpath>/<parentpath>. A directory
+# is the usual root: node 0 is the directory, carrying `parentpath` literally,
+# so every walked path shares that prefix. A FILE root is a provider of that
+# one file: it is rooted at the directory holding the file, and node 0 is the
+# file by its name there, so its path reads as the real one. `ZVfs.bind` hangs
+# such a root at a name of its own, which mounts the file without its
+# neighbours. Panics when the path is neither.
+newFSProvider: function {rootpath: String.take parentpath: String.take} out FSProvider is {
+    full: joinPath parent: rootpath.stringView name: parentpath.stringView
+    k: nodekind.notfound
+    sr: io.stat full
+    match (
+        sr
+    ) case ok then {
+        match (
+            sr.kind
+        ) case dir then {
+            k = nodekind.dir
+        } case file then {
+            k = nodekind.file
+        } case symlink then null case other then null
+    } case err then {
+        panic "FSProvider root does not exist (stat failed)"
+    }
+    if k == nodekind.notfound then panic "FSProvider root is neither a directory nor a file"
+    if k == nodekind.dir then {
+        fp: (FSProvider
+            rootpath: rootpath.take
+            pathtable: List FSNode
+            pathcache: (MapRV String v: u32)
+        )
+        root: FSNode path: parentpath.take kind: k
+        fp.pathtable.append root.take
+        return fp
+    }
+    dir: ".".string
+    base: full.copy
+    cut: full.stringView.lastIndexOf needle: "/"
+    match (
+        cut
+    ) case some then {
+        dir = (full.stringView.substring from: 0 to: cut).string
+        if cut == 0 then dir = "/"
+        base = (full.stringView.substring from: cut + 1 to: full.length).string
+    } case none then null
+    ff: (FSProvider
+        rootpath: dir.take
+        pathtable: List FSNode
+        pathcache: (MapRV String v: u32)
+    )
+    froot: FSNode path: base.take kind: k
+    ff.pathtable.append froot.take
+    return ff
+}
+
 # ZVfs -- the engine layer. Owns its own provider list (parallel to
 # `ProviderTable`, which the provider-level verbs use) plus a dentry
 # table, a per-id name side-table indexed by dentry id (entry ids are
@@ -665,43 +695,21 @@ ZVfs: class {
         this.file_names.append "".string
         return did
     }
-    # registerFS -- append an FSProvider rooted at <rootpath>/<parentpath>,
-    # validating the joined path is a directory (panics otherwise), and
-    # create its root directory dentry.registerFS
-    # closely; the only differences are the dentry construction at the
-    # end and the use of ZVfs's own providers/entrytable/file_names.
+    # registerFS -- append an FSProvider rooted at <rootpath>/<parentpath>
+    # (newFSProvider) and create its root dentry: a directory entry for a
+    # directory root, a file entry for a file root, which belongs nowhere until
+    # `bind` hangs it at a name.
     registerFS: function {:this rootpath: String.take parentpath: String.take} out fsno is {
-        full: joinPath parent: rootpath.stringView name: parentpath.stringView
-        sr: io.stat full
-        match (
-            sr
-        ) case ok then {
-            match (
-                sr.kind
-            ) case dir then null case file then {
-                panic "ZVfs.registerFS: root is not a directory"
-            } case symlink then {
-                panic "ZVfs.registerFS: root is not a directory"
-            } case other then {
-                panic "ZVfs.registerFS: root is not a directory"
-            }
-        } case err then {
-            panic "ZVfs.registerFS: root is not a directory (stat failed)"
-        }
-        rpCopy: rootpath.copy
-        fp: (FSProvider
-            rootpath: rootpath.take
-            pathtable: List FSNode
-            pathcache: (MapRV String v: u32)
-        )
-        root: FSNode path: parentpath.take kind: nodekind.dir
-        fp.pathtable.append root.take
+        fp: newFSProvider rootpath: rootpath.take parentpath: parentpath.take
+        rpCopy: fp.rootpath.copy
+        isFile: (fp.stat item: 0) == nodekind.file
         prov: ZVfsProvider.create from: fp.take
         box: ProviderBox p: prov
         pid: this.providers.length.u32.orPanic
         this.providers.append box.take
         this.providerRoot.set key: pid value: rpCopy
         d: dentry.directory (dirdata parentid: fsno providerid: pid nodeid: 0)
+        if isFile then d = dentry.file (filedata parentid: fsno providerid: pid nodeid: 0)
         did: this.entrytable.append entry: d
         this.file_names.append "".string
         return did
@@ -1092,8 +1100,8 @@ ZVfs: class {
 
     # open -- match on the dentry arm; file delegates to the underlying
     # provider's open. Non-file arms construct the appropriate IoError
-    # (directory -> isdir, notfound -> notfound, root -> "[NULL]", mount
-    # -> panic untilpy:513-528
+    # (directory and mount -> "is a directory", a mount being a union of
+    # directories; notfound -> notfound; root -> "[NULL]"),
     # but returns OpenResult directly rather than wrapping in a
     # ZVfsOpenFile (the wrapper is needless in zerolang: OpenResult is
     # the value-returned result type, no with-block context manager).
@@ -1111,7 +1119,8 @@ ZVfs: class {
             ie: IoError.other "is a directory".string
             return (OpenResult.err ie.take)
         } case mount then {
-            panic "ZVfs.open: mount arms not yet supported"
+            ie: IoError.other "is a directory".string
+            return (OpenResult.err ie.take)
         } case file then {
             pid: e.providerid
             nid: e.nodeid
@@ -1170,8 +1179,12 @@ ZVfs: class {
     # walked there. INSTEAD discards the old entry; BEFORE / AFTER
     # layer the new mount as the union's first / second arm
     # respectively. The walk_cache entry for `<parentid>:<name>` is
-    # overwritten so future walks route to the new mount.
+    # overwritten so future walks route to the new mount. A FILE root
+    # (registerFS on a file) is bound by `_bindFile` instead.
     bind: function {:this parentid: fsno name: StringView newid: fsno kind: bindkind} out fsno is {
+        if (this.arm dentryid: newid) == nodekind.file then {
+            return (this._bindFile :parentid :name fileid: newid :kind)
+        }
         old: this.walk parent: parentid :name
         zf: fsno
         md: mountdata :parentid first: zf second: zf has_second: false
@@ -1187,9 +1200,43 @@ ZVfs: class {
         new_dentry: dentry.mount md
         new_id: this.entrytable.append entry: new_dentry
         this.file_names.append name.string
-        cachekey: "\{parentid}:\{name}"
-        this.walk_cache.set key: cachekey.take value: new_id
+        this._cacheWalk parent: parentid :name at: new_id
         return new_id
+    }
+
+    # _cacheWalk -- route every later walk of parent/name to `at`: a bind
+    # overrides whatever was resolved there before.
+    _cacheWalk: function {:this parent: fsno name: StringView at: fsno} is {
+        cachekey: "\{parent}:\{name}"
+        this.walk_cache.set key: cachekey.take value: at
+    }
+
+    # _bindFile -- hang a file root at parent/name. A file has no entries to
+    # layer, so only `instead` means anything, and no mount is made: the name
+    # now IS the file. The file takes the parent and the name it is bound at,
+    # so its path, and a sibling lookup beside it, read from there.
+    _bindFile: function {
+        :this parentid: fsno name: StringView fileid: fsno kind: bindkind
+    } out fsno is {
+        if kind.instead.not then panic "ZVfs.bind: a file is bound `instead`; it has no entries to layer"
+        e: this.entrytable.entries.get i: fileid
+        pid: u32
+        nid: u32
+        match (
+            e
+        ) case file then {
+            pid = e.providerid
+            nid = e.nodeid
+        } else {
+            panic "ZVfs.bind: not a file"
+        }
+        (this.entrytable.entries.set
+            i: fileid
+            val: dentry.file (filedata :parentid providerid: pid nodeid: nid)
+        )
+        this.file_names.set i: fileid val: name.string
+        this._cacheWalk parent: parentid :name at: fileid
+        return fileid
     }
 }
 

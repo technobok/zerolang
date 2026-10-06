@@ -2359,7 +2359,11 @@ perf: $(PERFBIN)
 # +270 the --target triple's vocabulary and parse move to ztarget, and the
 # drivers hand the checker the resolved os and arch: +4 behaviour (each compile
 # resolves the host's names), +266 source.
-ALLOC_BASELINE := 2212796
+#
+# +836 zvfs mounts a single file: a file root is a provider of one entry, and a
+# bind hangs it at a name. 0 behaviour, +836 source (zc compiles the new
+# provider constructor and bind path; no run of zc takes them).
+ALLOC_BASELINE := 2213632
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
