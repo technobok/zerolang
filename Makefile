@@ -318,8 +318,9 @@ TCC_RUN_DEPS := bin/zc bin/zl $(BUILDDIR)/tcc $(BUILDDIR)/ztestrunner
 
 # test-tcc -- the vendored tcc compiles the corpus. --cc-forward is what makes
 # this a test of the tcc BACKEND and not merely of tcc-the-C-compiler: zc folds
-# `platform.cc` during type checking, so quadfloat's `require:` guard fires and
-# its two programs are rejected by name instead of dying in tcc's parser.
+# `platform.cc` during type checking, so the `require:` guards of wideint,
+# halffloat and quadfloat fire, and the programs that reach them are rejected
+# by name instead of dying in tcc's parser.
 # tests/tcc-known-failures.txt records the split, program and stage; a move in
 # EITHER direction fails, so gaining a guard is a deliberate edit there.
 #
