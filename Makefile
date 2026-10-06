@@ -2372,7 +2372,10 @@ perf: $(PERFBIN)
 # +259 an arm predicate on a unit's value alias (`u.k.a`, `u.sub.k2.a`) tests
 # the arm instead of constructing it: 0 behaviour, +224 source (ab.sh; the
 # checker's value-alias test on a path and the emitter's predicate gate).
-ALLOC_BASELINE := 2224517
+#
+# +51 an interpolation built inline as a call's argument frees the temporaries
+# its parts hoisted: 0 behaviour, +16 source (ab.sh).
+ALLOC_BASELINE := 2224568
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
