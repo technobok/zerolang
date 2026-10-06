@@ -547,7 +547,7 @@ zc: bin/zc
 # front-end via the compiler. A separate binary from zc so the compiler stays
 # lean; zl links the front-end + typecheck (for --full's suffix rule), but never
 # the emitter.
-out/zl.c: $(BUILDDIR)/zc.o $(wildcard src/zl.z) $(wildcard src/zsource.z) $(wildcard src/zdiag.z) $(wildcard src/zrule.z) $(wildcard src/zfix.z) $(wildcard src/ztypecheck.z) $(wildcard src/ztypes.z) $(wildcard src/zenv.z) $(wildcard src/ztyping.z) $(wildcard src/zgenerator.z) $(wildcard src/zfmt.z) $(wildcard src/zfmtcursor.z) $(wildcard src/zdoc.z) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z) $(RT_DEP) | bin/zc
+out/zl.c: $(BUILDDIR)/zc.o $(wildcard src/zl.z) $(wildcard src/zsource.z) $(wildcard src/zcheck.z) $(wildcard src/ztarget.z) $(wildcard src/zdiag.z) $(wildcard src/zrule.z) $(wildcard src/zfix.z) $(wildcard src/ztypecheck.z) $(wildcard src/ztypes.z) $(wildcard src/zenv.z) $(wildcard src/ztyping.z) $(wildcard src/zgenerator.z) $(wildcard src/zfmt.z) $(wildcard src/zfmtcursor.z) $(wildcard src/zdoc.z) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z) $(RT_DEP) | bin/zc
 	@mkdir -p out
 	bin/zc zl --src src --system lib/system $(ZCHASH) --emit-c out/zl.c
 
@@ -562,7 +562,7 @@ bin/zl: $(BUILDDIR)/zl.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ)
 # stdio/--replay on the shared front-end via zcheck; no emitter. The
 # lsp test kind in ztestrunner builds its own copy; this rule is the
 # editor-facing binary.
-out/zls.c: $(BUILDDIR)/zc.o $(wildcard src/zls.z) $(wildcard src/zcheck.z) $(wildcard src/zsource.z) $(wildcard src/zdiag.z) $(wildcard src/zrule.z) $(wildcard src/zfix.z) $(wildcard src/ztypecheck.z) $(wildcard src/ztypes.z) $(wildcard src/zenv.z) $(wildcard src/ztyping.z) $(wildcard src/zgenerator.z) $(wildcard src/zfmt.z) $(wildcard src/zfmtcursor.z) $(wildcard src/zdoc.z) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z) $(RT_DEP) | bin/zc
+out/zls.c: $(BUILDDIR)/zc.o $(wildcard src/zls.z) $(wildcard src/zcheck.z) $(wildcard src/ztarget.z) $(wildcard src/zsource.z) $(wildcard src/zdiag.z) $(wildcard src/zrule.z) $(wildcard src/zfix.z) $(wildcard src/ztypecheck.z) $(wildcard src/ztypes.z) $(wildcard src/zenv.z) $(wildcard src/ztyping.z) $(wildcard src/zgenerator.z) $(wildcard src/zfmt.z) $(wildcard src/zfmtcursor.z) $(wildcard src/zdoc.z) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z) $(RT_DEP) | bin/zc
 	@mkdir -p out
 	bin/zc zls --src src --system lib/system $(ZCHASH) --emit-c out/zls.c
 
@@ -2355,7 +2355,11 @@ perf: $(PERFBIN)
 #
 # -19 the C keyword mangling moves from ztypes into the emitter: 0 behaviour,
 # -19 source.
-ALLOC_BASELINE := 2212526
+#
+# +270 the --target triple's vocabulary and parse move to ztarget, and the
+# drivers hand the checker the resolved os and arch: +4 behaviour (each compile
+# resolves the host's names), +266 source.
+ALLOC_BASELINE := 2212796
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -2527,8 +2531,9 @@ emitter-guard:
 # frontend-guard -- the front end knows no backend. Everything before emission
 # -- the lexer, parser and AST, the type checker and its model, the symbol table
 # and the generator lowering -- holds no C spelling in its code (a C type, a C
-# compiler, the C table, a link line, a C keyword list), and reads the target
-# triple only where the platform unit's answers come from it. A backend's facts
+# compiler, the C table, a link line, a C keyword list), parses no --target
+# triple (ztarget is the drivers'), and reads the target the drivers resolved
+# only where the platform unit's answers come from it. A backend's facts
 # live in that backend (src/zemitterc.z, natives.tbl); a rise here is one
 # leaking forward. Comments are not counted: explaining what the C backend
 # does with a decision is not depending on it.
@@ -2536,22 +2541,22 @@ FRONTEND_SRCS := src/ztypecheck.z src/ztyping.z src/ztypes.z src/zenv.z src/zgen
 	lib/system/zparser.z lib/system/zlexer.z lib/system/zast.z
 frontend-guard:
 	@c=$$(cat $(FRONTEND_SRCS) | grep -vE '^[[:space:]]*#' \
-	  | grep -cE '__int128|_Float16|__float128|sizeof\(|_Alignof|void\*|u?int(8|16|32|64)_t|natives\.tbl|zlink|ccPath|ccMode|cckind|isCReserved|mangleVarName|mangleMemberPrefix'); \
-	t=$$(grep -vE '^[[:space:]]*#' src/ztypecheck.z | grep -c 'st\.typing\.targetTriple'); \
+	  | grep -cE '__int128|_Float16|__float128|sizeof\(|_Alignof|void\*|u?int(8|16|32|64)_t|natives\.tbl|zlink|ccPath|ccMode|cckind|isCReserved|mangleVarName|mangleMemberPrefix|ztarget\.'); \
+	t=$$(grep -vE '^[[:space:]]*#' src/ztypecheck.z | grep -cE 'st\.typing\.target(Triple|Os|Arch)'); \
 	fail=0; \
 	if [ "$$c" -gt 0 ]; then \
 	  echo "frontend-guard FAIL: $$c C spelling(s) in the front end's code:"; \
-	  grep -nE '__int128|_Float16|__float128|sizeof\(|_Alignof|void\*|u?int(8|16|32|64)_t|natives\.tbl|zlink|ccPath|ccMode|cckind|isCReserved|mangleVarName|mangleMemberPrefix' $(FRONTEND_SRCS) \
+	  grep -nE '__int128|_Float16|__float128|sizeof\(|_Alignof|void\*|u?int(8|16|32|64)_t|natives\.tbl|zlink|ccPath|ccMode|cckind|isCReserved|mangleVarName|mangleMemberPrefix|ztarget\.' $(FRONTEND_SRCS) \
 	    | grep -vE ':[0-9]+:[[:space:]]*#' | sed 's/^/    /' | head -10; fail=1; fi; \
 	if [ "$$t" -gt 3 ]; then \
-	  echo "frontend-guard FAIL: the type checker reads the target triple $$t times (baseline 3: os, arch, target)"; fail=1; \
+	  echo "frontend-guard FAIL: the type checker reads the resolved target $$t times (baseline 3: os, arch, target)"; fail=1; \
 	elif [ "$$t" -lt 3 ]; then \
-	  echo "frontend-guard: target triple reads = $$t < 3 -- lower the baseline here"; fi; \
+	  echo "frontend-guard: resolved target reads = $$t < 3 -- lower the baseline here"; fi; \
 	if [ "$$fail" = "1" ]; then \
 	  echo "  A backend fact belongs to the backend: the C emitter and its table (natives.tbl)."; \
 	  exit 1; \
 	fi; \
-	echo "frontend-guard OK: no C spelling in the front end's code; the target triple read $$t times, by platform's answers"
+	echo "frontend-guard OK: no C spelling and no triple parse in the front end's code; the resolved target read $$t times, by platform's answers"
 
 # lifetime-guard -- ratchet on the emitter's own decisions about what dies when:
 # the checker records every scope end's and every exit's destroy list, with each
