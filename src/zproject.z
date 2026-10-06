@@ -1,0 +1,461 @@
+# zproject -- the project a driver runs in: the nearest project.z at or above
+# where it started, and the settings that file gives.
+#
+# A driver reads the settings before it builds anything, since they say where
+# the source and the stdlib are. So each setting is a LITERAL -- a string, or
+# true or false -- read from the parsed file without loading any unit, and a
+# flag the driver was given replaces the file's value outright. The compile
+# then loads the same file again, as the ordinary unit it also is.
+#
+# No project.z anywhere above is single-file mode: every setting is unset and
+# each driver behaves as it does without one.
+
+# Public interface -- the definitions other units may reference; all other
+# top-level definitions are private to this unit.
+public: unit {
+    :ProjectFile
+    :discoverProject
+    :inProject
+}
+
+astnode: zast.astnode
+Ast: zast.Ast
+
+# projectFileName -- the file that marks a project's root and holds its
+# settings
+projectFileName: "project.z"
+
+# settingNames -- every setting project.z may give, space-separated: the
+# string settings first, stringSettingCount of them, then the switches. The
+# vocabulary is DATA: a setting's name is the text a file spells, with no id to
+# compare it against, so the reader gets by on the one compare settingIndex
+# makes.
+settingNames: "sourceDir systemDir runtimeDir main target outputDir cCompiler cCompilerMode cFlags linkFlags tccLibDir release fastHash readableNames eager"
+
+# stringSettingCount -- how many of settingNames, from the first, take a string
+stringSettingCount: 11
+
+# ProjectFile -- what a project.z says, as read before the build. A string
+# setting the file leaves out is "", a switch it leaves out is false: both mean
+# "the driver's own default".
+ProjectFile: class {
+    # the directory holding project.z, spelled from where the search began, so
+    # relative when that was; "" when no project.z was found
+    dir: String
+    # the first thing wrong with the file, rendered as a diagnostic; "" when it
+    # read cleanly
+    error: String
+    # the source root, relative to `dir`; "" for `dir` itself
+    sourceDir: String
+    # the stdlib directory, relative to `dir`
+    systemDir: String
+    # the C runtime directory, relative to `dir`
+    runtimeDir: String
+    # the unit a build compiles when it names none
+    main: String
+    # the triple to build for
+    target: String
+    # where a build writes its executable, relative to `dir`
+    outputDir: String
+    # the C compiler to drive
+    cCompiler: String
+    # how the C compiler runs: spawn or inproc
+    cCompilerMode: String
+    # passed through to the C compile step
+    cFlags: String
+    # passed through to the link step
+    linkFlags: String
+    # the tcc runtime payload directory, relative to `dir`
+    tccLibDir: String
+    # build with optimisation
+    release: bool
+    # the emitter's cheaper name hash
+    fastHash: bool
+    # emit source names rather than numbered ones
+    readableNames: bool
+    # typecheck every definition, not only what main reaches
+    eager: bool
+} as {
+    # create -- no project: every setting unset
+    create: function out this is {
+        return (meta.create
+            dir: String
+            error: String
+            sourceDir: String
+            systemDir: String
+            runtimeDir: String
+            main: String
+            target: String
+            outputDir: String
+            cCompiler: String
+            cCompilerMode: String
+            cFlags: String
+            linkFlags: String
+            tccLibDir: String
+            release: false
+            fastHash: false
+            readableNames: false
+            eager: false
+        )
+    }
+
+    # sourceRoot -- the source root as a driver opens it: sourceDir under the
+    # project directory, or the project directory itself when it is unset
+    sourceRoot: function {this: this.view} out String is {
+        if this.sourceDir.length == 0 then return this.dir.copy
+        return (inProject dir: this.dir.stringView rel: this.sourceDir.stringView)
+    }
+
+    # found -- whether a project.z was found at all
+    found: function {this: this.view} out bool is {
+        return this.dir.length > 0
+    }
+
+    # setString -- record string setting `k` (settingIndex), one of the first
+    # stringSettingCount
+    setString: function {:this k: u64 value: String.take} is {
+        if k == 1 then {
+            this.sourceDir = value.take
+        } else if k == 2 then {
+            this.systemDir = value.take
+        } else if k == 3 then {
+            this.runtimeDir = value.take
+        } else if k == 4 then {
+            this.main = value.take
+        } else if k == 5 then {
+            this.target = value.take
+        } else if k == 6 then {
+            this.outputDir = value.take
+        } else if k == 7 then {
+            this.cCompiler = value.take
+        } else if k == 8 then {
+            this.cCompilerMode = value.take
+        } else if k == 9 then {
+            this.cFlags = value.take
+        } else if k == 10 then {
+            this.linkFlags = value.take
+        } else {
+            this.tccLibDir = value.take
+        }
+    }
+
+    # setSwitch -- record switch setting `k` (settingIndex), one after the
+    # string settings
+    setSwitch: function {:this k: u64 value: bool} is {
+        if k == (stringSettingCount + 1) then {
+            this.release = value
+        } else if k == (stringSettingCount + 2) then {
+            this.fastHash = value
+        } else if k == (stringSettingCount + 3) then {
+            this.readableNames = value
+        } else {
+            this.eager = value
+        }
+    }
+}
+
+# settingIndex -- where `name` is in settingNames, from 1; 0 when it names no
+# setting
+settingIndex: function {name: StringView} out u64 is {
+    i: u64
+    for each s: (settingNames.split sep: " ") loop {
+        i = i + 1
+        if s == name then return i
+    }
+    return 0
+}
+
+# dotsOnly -- whether path component `p` is exactly `n` dots: `.` or `..`
+dotsOnly: function {p: StringView n: u64} out bool is {
+    if p.length != n then return false
+    i: u64
+    for i < n loop {
+        b: p.byteAt :i
+        match (
+            b
+        ) case some then {
+            if b != 46 then return false
+        } case none then null
+        i = i + 1
+    }
+    return true
+}
+
+# isRootPath -- whether `p` is the filesystem root, `/`
+isRootPath: function {p: StringView} out bool is {
+    if p.length != 1 then return false
+    return (p.startsWith prefix: "/")
+}
+
+# inProject -- a path project.z gives, as the driver opens it: joined to the
+# project directory unless it is absolute. "" stays "" (unset).
+inProject: function {dir: StringView rel: StringView} out String is {
+    if rel.length == 0 then return ""
+    if (rel.startsWith prefix: "/") then return rel.string
+    if (dotsOnly p: dir n: 1) then return rel.string
+    return (zcheck.joinPath a: dir b: rel)
+}
+
+# discoverProject -- the project `start` (a directory) belongs to: the nearest
+# project.z at or above it, read. No project.z anywhere above is an empty
+# ProjectFile, which is single-file mode.
+discoverProject: function {start: StringView} out ProjectFile is {
+    dir: findProjectDir :start
+    if dir.length == 0 then return ProjectFile.create
+    return (readProject dir: dir.stringView)
+}
+
+# findProjectDir -- the nearest directory at or above `start` holding a
+# project.z, spelled by climbing from `start` (`src` climbs to `.`, then `..`),
+# so a relative start answers a relative directory. "" when there is none up to
+# the filesystem root.
+findProjectDir: function {start: StringView} out String is {
+    cand: trimSlash p: start
+    if cand.length == 0 then cand = "."
+    levels: depthOf p: (absoluteOf p: cand.stringView).stringView
+    k: u64
+    for k <= levels loop {
+        pz: zcheck.joinPath a: cand.stringView b: projectFileName
+        if (zcheck.pathKindIs path: pz.stringView want: io.filekind.file) then return cand
+        cand = upOne p: cand.stringView
+        k = k + 1
+    }
+    return ""
+}
+
+# trimSlash -- `p` without trailing slashes, the root `/` kept
+trimSlash: function {p: StringView} out String is {
+    r: p.string
+    for r.length > 1 while (r.stringView.endsWith suffix: "/") loop {
+        r = (r.stringView.substring from: 0 to: r.length - 1).string
+    }
+    return r
+}
+
+# absoluteOf -- `p` as an absolute path: itself when it is one, else under the
+# working directory
+absoluteOf: function {p: StringView} out String is {
+    if (p.startsWith prefix: "/") then return p.string
+    cw: os.cwd
+    match (
+        cw
+    ) case ok then {
+        return (zcheck.joinPath a: cw.stringView b: p)
+    } case err then null
+    return p.string
+}
+
+# depthOf -- how many directories an absolute path climbs through to reach the
+# root: its non-empty components, `..` included, which only over-counts
+depthOf: function {p: StringView} out u64 is {
+    n: u64
+    for each piece: (p.split sep: "/") loop {
+        if piece.length > 0 then n = n + 1
+    }
+    return n
+}
+
+# upOne -- the directory holding `p`, spelled lexically: `src` -> `.`,
+# `.` -> `..`, `..` -> `../..`, `/a` -> `/`
+upOne: function {p: StringView} out String is {
+    if (dotsOnly :p n: 1) then return ".."
+    if (isRootPath :p) then return "/"
+    if (dotsOnly :p n: 2) or (p.endsWith suffix: "/..") then return (zcheck.joinPath a: p b: "..")
+    cut: p.lastIndexOf needle: "/"
+    match (
+        cut
+    ) case some then {
+        if cut == 0 then return "/"
+        return (p.substring from: 0 to: cut).string
+    } case none then null
+    return "."
+}
+
+# readProject -- the settings of `dir`/project.z. Every top-level definition
+# must name a setting and give it a literal of the setting's kind; the first
+# that does not is the result's `error`, and the settings read before it are
+# kept.
+readProject: function {dir: StringView} out ProjectFile is {
+    pf: ProjectFile.create
+    pf.dir = dir.string
+    path: zcheck.joinPath a: dir b: projectFileName
+    shown: displayOf path: path.stringView
+    rd: io.readText :path
+    match (
+        rd
+    ) case ok then {
+        root: ast.parseSource source: rd.copy
+        pf.error = readSettings ast: root shown: shown.stringView into: pf
+    } case err then {
+        pf.error = "error: cannot read \{shown}"
+    }
+    return pf
+}
+
+# displayOf -- a path as a diagnostic names it: without a leading `./`
+displayOf: function {path: StringView} out String is {
+    rest: path.stripPrefix p: "./"
+    match (
+        rest
+    ) case some then {
+        return rest.string
+    } case none then null
+    return path.string
+}
+
+# readSettings -- each top-level definition of the parsed project.z into
+# `into`; the first problem rendered as a diagnostic, "" when there is none
+readSettings: function {ast: Ast.view shown: StringView into: ProjectFile} out String is {
+    if ast.units.length == 0 then return ""
+    un: ast.nodes.get i: (ast.units.get i: 0)
+    if un.namedoperation.not then return ""
+    body: zast.unitBodyIdsAt :ast unitId: un.operation
+    i: u64
+    for i < body.count loop {
+        id: zast.kidAt kids: ast.kids span: body :i
+        i = i + 1
+        problem: readOne :ast :id :shown :into
+        if problem.length > 0 then return problem.take
+    }
+    return ""
+}
+
+# readOne -- one top-level definition of project.z into `into`; what is wrong
+# with it as a diagnostic, "" when nothing is
+readOne: function {
+    ast: Ast.view
+    id: zast.nodeid
+    shown: StringView
+    into: ProjectFile
+} out String is {
+    n: ast.nodes.get i: id
+    match (
+        n
+    ) case error then {
+        return (parseProblem :ast row: n :shown)
+    } case namedoperation then {
+        return (readSetting :ast :id nameRef: n.name valueId: n.operation :shown :into)
+    } else {
+        return (located
+            :ast
+            at: id
+            :shown
+            msg: "project.z holds settings only, each written `name: value`"
+        )
+    }
+}
+
+# readSetting -- the setting `nameRef: <valueId>` into `into`; the problem with
+# it as a diagnostic, "" when there is none
+readSetting: function {
+    ast: Ast.view
+    id: zast.nodeid
+    nameRef: zast.nameid
+    valueId: zast.nodeid
+    shown: StringView
+    into: ProjectFile
+} out String is {
+    nm: zast.poolTextAt pool: ast.names ref: nameRef
+    v: ast.nodes.get i: valueId
+    match (
+        v
+    ) case error then {
+        return (parseProblem :ast row: v :shown)
+    } else null
+    k: settingIndex name: nm.stringView
+    if k == 0 then {
+        names: settingNames.replace needle: " " replacement: ", "
+        return (located
+            :ast
+            at: id
+            :shown
+            msg: "'\{nm}' is not a project setting; the settings are \{names}"
+        )
+    }
+    if k <= stringSettingCount then {
+        sv: literalString :ast :v
+        match (
+            sv
+        ) case some then {
+            into.setString :k value: sv.take
+            return ""
+        } case none then null
+        why: "'\{nm}' must be a string literal: project.z is read before any unit loads"
+        if (literalSwitch :ast :v).some then why = "'\{nm}' takes a string, not true or false"
+        return (located :ast at: id :shown msg: why.take)
+    }
+    bv: literalSwitch :ast :v
+    match (
+        bv
+    ) case some then {
+        into.setSwitch :k value: bv
+        return ""
+    } case none then null
+    why2: "'\{nm}' must be true or false: project.z is read before any unit loads"
+    if (literalString :ast :v).some then why2 = "'\{nm}' takes true or false, not a string"
+    return (located :ast at: id :shown msg: why2.take)
+}
+
+# literalString -- the text of a string literal with no interpolation, none for
+# any other node
+literalString: function {ast: Ast.view v: astnode.view} out Option String is {
+    match (
+        v
+    ) case atomstring then {
+        r: String
+        k: u64
+        for k < v.stringparts.count loop {
+            c: ast.nodes.get i: (zast.kidAt kids: ast.kids span: v.stringparts i: k)
+            k = k + 1
+            match (
+                c
+            ) case stringchunk then {
+                r.append (zast.poolTextAt pool: ast.names ref: c.text)
+            } else {
+                return (Option.none String)
+            }
+        }
+        return (Option.some r.take)
+    } else {
+        return (Option.none String)
+    }
+}
+
+# literalSwitch -- the value of a bare `true` or `false`, none for any other
+# node
+literalSwitch: function {ast: Ast.view v: astnode.view} out optionval bool is {
+    match (
+        v
+    ) case atomid then {
+        if (zast.nameTextEq :ast ref: v.name s: "true") then return (optionval.some true)
+        if (zast.nameTextEq :ast ref: v.name s: "false") then return (optionval.some false)
+    } else null
+    return (optionval.none bool)
+}
+
+# located -- `msg` as a diagnostic at node `at`
+located: function {ast: Ast.view at: zast.nodeid msg: String shown: StringView} out String is {
+    pos: zast.posOf n: (ast.nodes.get i: at)
+    head: "error: \{msg}"
+    return (diagnostic head: head.stringView :shown line: pos.line col: pos.col)
+}
+
+# parseProblem -- a parse error in project.z as a diagnostic
+parseProblem: function {ast: Ast.view row: zast.errorrow shown: StringView} out String is {
+    e: zast.errorDataOf :ast :row
+    head: zast.errorLine :e
+    return (diagnostic head: head.stringView :shown line: e.lineno col: e.colno)
+}
+
+# diagnostic -- `head` and the place it is about, as zc renders an error:
+# the second line `--> path:line:col`
+diagnostic: function {head: StringView shown: StringView line: u32 col: u32} out String is {
+    r: head.string
+    r.append "\n --> "
+    r.append shown
+    r.append ":"
+    r.append "\{line}"
+    r.append ":"
+    r.append "\{col}"
+    return r
+}

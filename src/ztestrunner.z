@@ -2037,6 +2037,117 @@ runVfsCases: function {r: Runner} is {
     }
 }
 
+# runProjectCases -- the PROJECT cases kind: zc run inside a project. Each
+# directory under tests/fixtures/project is one case: its files (a project.z,
+# the units) are copied to a scratch directory of their own, zc runs THERE with
+# the arguments `zc.args` gives on its one line, and what it printed is
+# compared with expected.out (stdout) and expected.err (stderr), whichever the
+# case has. A copy, because zc writes the project's .zerolang/ beside its
+# project.z, and a case must start from none.
+runProjectCases: function {r: Runner} is {
+    pdir: "\{r.root.stringView}/tests/fixtures/project"
+    ls: io.listDir path: pdir
+    if ls.err then return
+    for each cs: ls loop {
+        if (runProjectCase :r dir: pdir.stringView name: cs.stringView) then {
+            r.passN = r.passN + 1
+        } else {
+            print "FAIL(project) \{cs}"
+            r.fails = r.fails + 1
+        }
+    }
+}
+
+# runProjectCase -- one PROJECT case: copy it, run zc in the copy, compare.
+# True when everything it printed matches its goldens.
+runProjectCase: function {r: Runner.view dir: StringView name: StringView} out bool is {
+    src: "\{dir}/\{name}"
+    work: "\{r.tmp.stringView}/P_\{name}"
+    copyUnits from: src.stringView to: work.stringView
+    outP: "\{work}.out"
+    errP: "\{work}.err"
+    (os.spawn
+        argv: (projectArgv :r caseDir: src.stringView)
+        cwd: work.stringView
+        outPath: outP.stringView
+        errPath: errP.stringView
+        timeoutSecs: r.timeoutSecs
+    )
+    wantOut: "\{src}/expected.out"
+    wantErr: "\{src}/expected.err"
+    if (projectOutDiffers want: wantOut.stringView got: outP.stringView) then return false
+    return (projectOutDiffers want: wantErr.stringView got: errP.stringView).not
+}
+
+# copyUnits -- every `.z` file of directory `from` into a new directory `to`
+copyUnits: function {from: StringView to: StringView} is {
+    io.mkdirp path: to
+    files: io.listDir path: from
+    if files.err then return
+    for each fe: files loop {
+        fv: fe.stringView
+        if fv.endsWith ".z" then {
+            fsrc: "\{from}/\{fv}"
+            fc: slurp path: fsrc.stringView
+            io.writeText path: "\{to}/\{fv}" content: fc
+        }
+    }
+}
+
+# projectArgv -- zc and the arguments a PROJECT case's zc.args line gives.
+# The stdlib goes right after the verb: after the unit, `run` hands an argument
+# to the program. Every path is absolute, since zc runs in the case's own
+# directory. The case builds with zc's own C compiler, not the toolchain under
+# test: what it tests is the driver reading a project, which no backend
+# changes, and a forwarded --cc would need the toolchain's flags too.
+projectArgv: function {r: Runner.view caseDir: StringView} out List String is {
+    here: workingDir
+    argsPath: "\{caseDir}/zc.args"
+    argsLine: slurp path: argsPath.stringView
+    argv: List String
+    argv.append from: (absoluteFrom base: here.stringView p: r.zc.stringView)
+    first: true
+    for each tok: (argsLine.stringView.trim.split sep: " ") loop {
+        if tok.length > 0 then {
+            argv.append from: tok.string
+            if first then {
+                argv.append from: "--system".string
+                argv.append from: (absoluteFrom base: here.stringView p: r.sys.stringView)
+                first = false
+            }
+        }
+    }
+    return argv
+}
+
+# projectOutDiffers -- a project case printed other than its golden `want`
+# says; false when the case has no such golden
+projectOutDiffers: function {want: StringView got: StringView} out bool is {
+    if (io.exists path: want).not then return false
+    w: slurp path: want
+    g: slurp path: got
+    return w.stringView != g
+}
+
+# workingDir -- the directory the runner runs in, absolute
+workingDir: function out String is {
+    cw: os.cwd
+    match (
+        cw
+    ) case ok then {
+        return cw.copy
+    } case err then null
+    return String
+}
+
+# absoluteFrom -- `p` as a path that opens from any directory: unchanged when
+# it is absolute or a bare command name (no `/`), else joined to `base`
+absoluteFrom: function {base: StringView p: StringView} out String is {
+    if p.startsWith "/" then return p.string
+    if (p.contains needle: "/").not then return p.string
+    return "\{base}/\{p}"
+}
+
 # runSmokeCases -- the SMOKE (per-unit no-arg golden) cases kind.
 runSmokeCases: function {r: Runner} is {
     # ---------------- SMOKE (per-unit no-arg golden) cases ----------------
@@ -2673,6 +2784,7 @@ main: function is {
     runDumpCases :r
     runDifferentialCases :r
     runVfsCases :r
+    runProjectCases :r
     runSmokeCases :r
     runFmtCases :r
     runSelfhostAsan :r

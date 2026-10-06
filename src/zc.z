@@ -248,6 +248,7 @@ stripDotZ: function {p: StringView} out String is {
 
 # printEnv -- resolved tool paths and settings as KEY=VALUE lines (stdout).
 printEnv: function {
+    project: StringView
     systemFlag: StringView
     runtimeFlag: StringView
     ccFlag: StringView
@@ -290,6 +291,8 @@ printEnv: function {
     buf.append tccd
     buf.append "\nZC_TARGET="
     buf.append targetTriple
+    buf.append "\nZC_PROJECT="
+    if project.length > 0 then buf.append (zcheck.joinPath a: project b: "project.z")
     buf.append "\nZC_VERSION="
     buf.append ver
     buf.append "\nZC_COMMIT="
@@ -685,10 +688,10 @@ dispatchInlineVerb: function {av: StringView sub: StringView} out bool is {
 # otherwise resolve to `spawn` and the build would silently do something other
 # than what was asked, which is the same failure `--cc-mode` exists to rule
 # out.
-refuseUnknownCcMode: function {mode: StringView} is {
+refuseUnknownCcMode: function {mode: StringView named: StringView} is {
     known: (mode == "spawn") or (mode == "inproc")
     if known then return
-    mm: "zc: --cc-mode must be 'spawn' or 'inproc', not '\{mode}'"
+    mm: "zc: \{named} must be 'spawn' or 'inproc', not '\{mode}'"
     io.eprintln mm
     os.exit code: 2
 }
@@ -757,6 +760,9 @@ ZcFlags: class {
     dumpSqlTarget: String
     # -o: where any output goes when its own flag named none
     outPath: String
+    # project.z's outputDir, under the project directory: where a build writes
+    # its executable when -o names none; "" for the working directory
+    outputDir: String
     # --cc: the C compiler to drive, "" to resolve one from the target
     ccFlag: String
     # --cc-mode: "spawn" to run the compiler as a child, "inproc" for libtcc
@@ -882,7 +888,7 @@ ZcFlags: class {
         }
         if av == "--cc-mode" then {
             this.ccModeFlag = flagValue :argv :i :n flagName: "--cc-mode"
-            refuseUnknownCcMode mode: this.ccModeFlag.stringView
+            refuseUnknownCcMode mode: this.ccModeFlag.stringView named: "--cc-mode"
             return (argstep taken: true at: i + 1)
         }
         if av == "--tcc-lib" then {
@@ -916,22 +922,78 @@ ZcFlags: class {
         this.inProgArgs = true
     }
 
+    # unitIsPath -- the unit was named by its file (`hello.z`, `sub/hello`)
+    # rather than by its name
+    unitIsPath: function {this: this.view} out bool is {
+        return (
+            (this.unitname.stringView.endsWith suffix: ".z") or
+            (this.unitname.stringView.contains needle: "/")
+        )
+    }
+
+    # projectStart -- where the search for project.z begins: the directory of
+    # a unit named by its file, else the working directory
+    projectStart: function {this: this.view} out String is {
+        if this.unitIsPath.not then return "."
+        d: zcheck.dirname p: this.unitname.stringView
+        if d.length == 0 then return "."
+        return d
+    }
+
+    # applyProject -- each setting no flag gave, from project.z. A flag
+    # replaces the file's value outright, and a unit named by its file is its
+    # own source root; a switch the file turns on stays on. Paths the file gives
+    # are relative to the project directory.
+    applyProject: function {:this pf: zproject.ProjectFile.view} is {
+        if pf.found.not then return
+        if this.srcdirs.length == 0 when this.unitIsPath.not then {
+            this.srcdirs.append from: pf.sourceRoot
+        }
+        if this.unitname.length == 0 then this.unitname = pf.main.copy
+        this.applyProjectPaths :pf
+        this.applyProjectTools :pf
+        if pf.release then this.release = true
+        if pf.fastHash then this.fastHash = true
+        if pf.readableNames then this.readableNames = true
+        if pf.eager then this.eagerCheck = true
+    }
+
+    # applyProjectPaths -- the directories project.z gives, under the project
+    # directory, where no flag gave one
+    applyProjectPaths: function {:this pf: zproject.ProjectFile.view} is {
+        d: pf.dir.stringView
+        sys: zproject.inProject dir: d rel: pf.systemDir.stringView
+        if this.systemFlag.length == 0 then this.systemFlag = sys.take
+        rt: zproject.inProject dir: d rel: pf.runtimeDir.stringView
+        if this.runtimeFlag.length == 0 then this.runtimeFlag = rt.take
+        tl: zproject.inProject dir: d rel: pf.tccLibDir.stringView
+        if this.tccLibFlag.length == 0 then this.tccLibFlag = tl.take
+        this.outputDir = zproject.inProject dir: d rel: pf.outputDir.stringView
+    }
+
+    # applyProjectTools -- the target and the C toolchain project.z names, where
+    # no flag named them
+    applyProjectTools: function {:this pf: zproject.ProjectFile.view} is {
+        if this.targetTriple.length == 0 then this.targetTriple = pf.target.copy
+        if this.ccFlag.length == 0 then this.ccFlag = pf.cCompiler.copy
+        if this.ccModeFlag.length == 0 when pf.cCompilerMode.length > 0 then {
+            this.ccModeFlag = pf.cCompilerMode.copy
+            refuseUnknownCcMode mode: this.ccModeFlag.stringView named: "project.z's cCompilerMode"
+        }
+        if this.cflags.length == 0 then this.cflags = pf.cFlags.copy
+        if this.ldflags.length == 0 then this.ldflags = pf.linkFlags.copy
+    }
+
     # resolveRoots -- with no --src given, a unit named as a PATH supplies its
     # own root: the directory it sits in, with the bare stem as the unit name.
     # With no root either way, the current directory is one.
     resolveRoots: function {:this} is {
-        if this.srcdirs.length == 0 then {
-            isPath: (
-                (this.unitname.stringView.endsWith suffix: ".z") or
-                (this.unitname.stringView.contains needle: "/")
-            )
-            if isPath then {
-                baseNoExt: stripDotZ p: this.unitname.stringView
-                d: zcheck.dirname p: baseNoExt.stringView
-                bn: baseName p: baseNoExt.stringView
-                this.srcdirs.append from: d
-                this.unitname = bn.take
-            }
+        if this.srcdirs.length == 0 when this.unitIsPath then {
+            baseNoExt: stripDotZ p: this.unitname.stringView
+            d: zcheck.dirname p: baseNoExt.stringView
+            bn: baseName p: baseNoExt.stringView
+            this.srcdirs.append from: d
+            this.unitname = bn.take
         }
         if this.srcdirs.length == 0 then this.srcdirs.append from: ".".string
     }
@@ -956,6 +1018,7 @@ parseZcArgs: function {
         emitTarget: String
         dumpSqlTarget: String
         outPath: String
+        outputDir: String
         ccFlag: String
         ccModeFlag: String
         tccLibFlag: String
@@ -993,30 +1056,6 @@ parseZcArgs: function {
         i = i + 1
     }
     return cf
-}
-
-# buildVfs -- the file system a parse reads: the stdlib bound first, then each
-# --src root. Each `before` puts its root ahead of everything already bound, so
-# binding back to front leaves the FIRST --src searched first. A unit name that
-# two roots both answer resolves to the earlier flag's copy. Returns the root
-# the parse starts from.
-buildVfs: function {
-    vfs: zvfs.ZVfs
-    systemdir: StringView
-    srcdirs: (List String).view
-} out zvfs.fsno is {
-    vfs.registerNull
-    systemid: vfs.registerFS rootpath: systemdir.string parentpath: ""
-    vfs.bindRoot newid: systemid kind: zvfs.bindkind.instead
-    rootid: zvfs.fsno
-    si: srcdirs.length
-    for si > 0 loop {
-        si = si - 1
-        sd: srcdirs.get i: si
-        sid: vfs.registerFS rootpath: sd.copy parentpath: ""
-        rootid = vfs.bindRoot newid: sid kind: zvfs.bindkind.before
-    }
-    return rootid
 }
 
 # reportParseError -- a failed parse hands the tree back with the error as its
@@ -1074,16 +1113,22 @@ outTarget: function {primary: StringView fallback: StringView} out String is {
 }
 
 # chooseExePath -- where a build writes its executable: a temporary under
-# `run`, `-o` when it names one, else `./<unit>` with the target's suffix.
+# `run`, `-o` when it names one, else `<unit>` with the target's suffix in
+# project.z's outputDir, or in the working directory.
 chooseExePath: function {
     isRun: bool
     outPath: StringView
+    outputDir: StringView
     unitname: StringView
     targetTriple: StringView
 } out String is {
     if isRun then return (tempPath uname: unitname ext: ".bin")
     if outPath.length > 0 then return outPath.string
     e2: "./".string
+    if outputDir.length > 0 then {
+        io.mkdirp path: outputDir
+        e2 = zcheck.joinPath a: outputDir b: ""
+    }
     e2.append unitname
     e2.append (ztarget.targetExeSuffix triple: targetTriple)
     return e2
@@ -1195,6 +1240,7 @@ buildAndRun: function {
     exe: (chooseExePath
         :isRun
         outPath: cf.outPath.stringView
+        outputDir: cf.outputDir.stringView
         unitname: cf.unitname.stringView
         targetTriple: cf.targetTriple.stringView
     )
@@ -1248,19 +1294,6 @@ refuseBadTarget: function {targetTriple: StringView} is {
     tm: "zc: \{te.stringView}"
     io.eprintln tm
     os.exit code: 2
-}
-
-# newVfs -- an empty file system for a parse to bind its roots into.
-newVfs: function {} out zvfs.ZVfs is {
-    return (zvfs.ZVfs
-        providers: List zvfs.ProviderBox
-        providerRoot: (IdMapR u32 V: String)
-        entrytable: (zvfs.DentryTable entries: (ListVal zvfs.dentry i: zvfs.fsno))
-        file_names: (List String i: zvfs.fsno)
-        walk_cache: (MapRV String v: zvfs.fsno)
-        rootid: zvfs.fsno
-        shadow: (zvfs.shadowpair active: false top: zvfs.fsno base: zvfs.fsno)
-    )
 }
 
 # zlinkLibsOf -- the libraries an emitted C file's `/* zlink: ... */` header
@@ -1344,9 +1377,17 @@ main: function is {
     }
     isRun: sub.stringView == "run"
     cf: parseZcArgs :argv :n sub: sub.stringView :unitname :isRun
+    pf: zproject.discoverProject start: cf.projectStart.stringView
+    if pf.error.length > 0 then {
+        io.eprintln pf.error
+        io.eprintln "1 error found"
+        os.exit code: 2
+    }
+    cf.applyProject :pf
     refuseBadTarget targetTriple: cf.targetTriple.stringView
     if sub.stringView == "env" then {
         (printEnv
+            project: pf.dir.stringView
             systemFlag: cf.systemFlag.stringView
             runtimeFlag: cf.runtimeFlag.stringView
             ccFlag: cf.ccFlag.stringView
@@ -1388,8 +1429,9 @@ main: function is {
         io.eprintln "zc: \{rootCause}"
         os.exit code: 2
     }
-    vfs: newVfs
-    rootid: buildVfs :vfs systemdir: systemdir.stringView srcdirs: cf.srcdirs
+    vfs: zcheck.newVfs
+    roots: zcheck.buildRoots :vfs systemdir: systemdir.stringView srcdirs: cf.srcdirs
+    rootid: roots.root
     p: zparser.Parser.create
     prog: p.parse :vfs :rootid mainUnitName: cf.unitname
     tParse1: os.monotonicMillis

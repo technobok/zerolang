@@ -26,6 +26,8 @@ public: unit {
     :resolveSystemDir
     :resolveTccDir
     :vendoredTcc
+    :newVfs
+    :buildRoots
 }
 
 astnode: zast.astnode
@@ -89,6 +91,52 @@ CheckResult: class {
     parser: zparser.Parser
 }
 
+# newVfs -- an empty file system for a parse to bind its roots into.
+newVfs: function {} out zvfs.ZVfs is {
+    return (zvfs.ZVfs
+        providers: List zvfs.ProviderBox
+        providerRoot: (IdMapR u32 V: String)
+        entrytable: (zvfs.DentryTable entries: (ListVal zvfs.dentry i: zvfs.fsno))
+        file_names: (List String i: zvfs.fsno)
+        walk_cache: (MapRV String v: zvfs.fsno)
+        rootid: zvfs.fsno
+        shadow: (zvfs.shadowpair active: false top: zvfs.fsno base: zvfs.fsno)
+    )
+}
+
+# vfsroots -- what binding a project's roots answers: where a parse starts, and
+# the first src root's own entry, which an overlay of open buffers shadows.
+vfsroots: record {
+    # the union every unit is looked up from
+    root: zvfs.fsno
+    # the first --src root's directory entry; zero when there is no src root
+    firstSrc: zvfs.fsno
+}
+
+# buildRoots -- the one root stack every driver parses through: the stdlib
+# bound first, then each src root. Each `before` puts its root ahead of
+# everything already bound, so binding back to front leaves the FIRST src root
+# searched first. A unit name that two roots both answer resolves to the
+# earlier root's copy.
+buildRoots: function {
+    vfs: zvfs.ZVfs
+    systemdir: StringView
+    srcdirs: (List String).view
+} out vfsroots is {
+    vfs.registerNull
+    systemid: vfs.registerFS rootpath: systemdir.string parentpath: ""
+    r: vfsroots root: (vfs.bindRoot newid: systemid kind: zvfs.bindkind.instead) firstSrc: zvfs.fsno
+    si: srcdirs.length
+    for si > 0 loop {
+        si = si - 1
+        sd: srcdirs.get i: si
+        sid: vfs.registerFS rootpath: sd.copy parentpath: ""
+        r.root = vfs.bindRoot newid: sid kind: zvfs.bindkind.before
+        r.firstSrc = sid
+    }
+    return r
+}
+
 # check -- parse + typecheck(full) `mainUnit` against `srcdir` layered
 # over `systemdir`. `overlays` maps root-relative file names (e.g.
 # "zparser.z") to live buffer text; when non-empty they are served by a
@@ -99,20 +147,12 @@ check: function {
     mainUnit: StringView
     overlays: (Map String V: String)
 } out CheckResult is {
-    vfs: (zvfs.ZVfs
-        providers: List zvfs.ProviderBox
-        providerRoot: (IdMapR u32 V: String)
-        entrytable: (zvfs.DentryTable entries: (ListVal zvfs.dentry i: zvfs.fsno))
-        file_names: (List String i: zvfs.fsno)
-        walk_cache: (MapRV String v: zvfs.fsno)
-        rootid: zvfs.fsno
-        shadow: (zvfs.shadowpair active: false top: zvfs.fsno base: zvfs.fsno)
-    )
-    vfs.registerNull
-    systemid: vfs.registerFS rootpath: systemdir.string parentpath: ""
-    srcid: vfs.registerFS rootpath: srcdir.string parentpath: ""
-    vfs.bindRoot newid: systemid kind: zvfs.bindkind.instead
-    rootid: vfs.bindRoot newid: srcid kind: zvfs.bindkind.before
+    vfs: newVfs
+    srcdirs: List String
+    srcdirs.append from: srcdir.string
+    roots: buildRoots :vfs :systemdir :srcdirs
+    rootid: roots.root
+    srcid: roots.firstSrc
     if overlays.length > 0 then {
         ovid: vfs.registerString
         {

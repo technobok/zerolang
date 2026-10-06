@@ -82,15 +82,50 @@ reportAnalysis: function {a: zsource.Analysis.view} is {
     }
 }
 
-# rootsFor -- the src roots `path` is checked against: every --src as given,
-# or, when none was, the file's own directory and then the working directory.
-# For a subunit, `path` is its topmost unit's file.
-# The file's own directory comes first, so the unit checked is the file named
-# and not a same-named unit where zl happens to run.
-rootsFor: function {srcdirs: (List String).view path: StringView} out List String is {
-    roots: List String
-    for each d: srcdirs loop roots.append from: d.copy
-    if roots.length > 0 then return roots
+# FileRoots -- the roots one file is checked against.
+FileRoots: class {
+    # the src roots, the first that answers a unit name winning
+    srcdirs: List String
+    # the stdlib directory
+    systemdir: String
+    # what is wrong with the project.z the file belongs to, "" when nothing is
+    error: String
+} as {
+    # fromProject -- what the project around directory `start` gives, where
+    # no flag gave it: its source root and its systemDir
+    fromProject: function {:this start: StringView} is {
+        pf: zproject.discoverProject :start
+        if pf.found.not then return
+        this.error = pf.error.copy
+        sys: zproject.inProject dir: pf.dir.stringView rel: pf.systemDir.stringView
+        if this.systemdir.length == 0 then this.systemdir = sys.take
+        if this.srcdirs.length == 0 then this.srcdirs.append from: pf.sourceRoot
+    }
+}
+
+# rootsFor -- the roots `path` is checked against. The src roots are every
+# --src as given; when none was, the source root of the project the file sits
+# in; outside a project, the file's own directory and then the working
+# directory. The stdlib is --system, else the project's systemDir, else zc's
+# resolution. For a subunit, `path` is its topmost unit's file. The file's own
+# directory comes first, so the unit checked is the file named and not a
+# same-named unit where zl happens to run. Only a `discover` run looks for the
+# project: the fast tier reads no root.
+rootsFor: function {
+    srcdirs: (List String).view
+    systemFlag: StringView
+    path: StringView
+    discover: bool
+} out FileRoots is {
+    r: FileRoots srcdirs: List String systemdir: systemFlag.string error: String
+    for each d: srcdirs loop r.srcdirs.append from: d.copy
+    if discover then {
+        start: zcheck.dirname p: path
+        if start.length == 0 then start = "."
+        r.fromProject start: start.stringView
+    }
+    r.systemdir = zcheck.resolveSystemDir flagVal: r.systemdir.stringView
+    if r.srcdirs.length > 0 then return r
     slashOpt: path.lastIndexOf needle: "/"
     match (
         slashOpt
@@ -98,10 +133,10 @@ rootsFor: function {srcdirs: (List String).view path: StringView} out List Strin
         # a file at the filesystem root keeps its `/`
         cut: slashOpt
         if cut == 0 then cut = 1
-        roots.append from: (path.substring from: 0 to: cut).string
+        r.srcdirs.append from: (path.substring from: 0 to: cut).string
     } case none then null
-    roots.append from: ".".string
-    return roots
+    r.srcdirs.append from: ".".string
+    return r
 }
 
 # runLint -- lint each target file at the tier `opts` asks for. Exit 1 if any
@@ -119,8 +154,17 @@ runLint: function {
     total: u64
     for each p: paths loop {
         top: zsource.topUnitPathOf path: p.stringView
-        roots: rootsFor :srcdirs path: top.stringView
-        a: zsource.analyzeFileTiered path: p.copy srcdirs: roots :systemdir :opts
+        roots: rootsFor :srcdirs systemFlag: systemdir path: top.stringView discover: opts.full
+        if roots.error.length > 0 then {
+            io.eprintln roots.error
+            return 2
+        }
+        a: (zsource.analyzeFileTiered
+            path: p.copy
+            srcdirs: roots.srcdirs
+            systemdir: roots.systemdir.stringView
+            :opts
+        )
         reportAnalysis :a
         total = total + a.failCount
     }
@@ -218,8 +262,17 @@ formatOnePath: function {
     fmtOpts: zsource.defaultOpts
     fmtOpts.full = full
     top: zsource.topUnitPathOf path: p
-    roots: rootsFor :srcdirs path: top.stringView
-    a: zsource.analyzeFileTiered path: p.string srcdirs: roots :systemdir opts: fmtOpts
+    roots: rootsFor :srcdirs systemFlag: systemdir path: top.stringView discover: full
+    if roots.error.length > 0 then {
+        io.eprintln roots.error
+        return 2
+    }
+    a: (zsource.analyzeFileTiered
+        path: p.string
+        srcdirs: roots.srcdirs
+        systemdir: roots.systemdir.stringView
+        opts: fmtOpts
+    )
     if a.parseErrorCount > 0 then {
         reportAnalysis :a
         mp: "zl fmt: \{p} has parse errors; not formatting"
@@ -354,7 +407,8 @@ CliFlags: class {
     # a unit name wins, as zc resolves them. Empty when none was given, and
     # each file is then checked from its own directory (rootsFor)
     srcdirs: List String
-    # --system as given, empty when absent: main resolves it as zc does
+    # --system as given, empty when absent: each file's roots resolve it as zc
+    # does, after its project's systemDir (rootsFor)
     systemdir: String
     # the lint options, filled in place as the flags are read
     opts: zsource.lintopts
@@ -564,9 +618,9 @@ main: function is {
         os.exit code: 0
     }
 
+    # --system stays as given: each file's roots resolve it, after its
+    # project's systemDir, by zc's own precedence (rootsFor)
     cf: parseArgs :argv from: 2 :n
-    # the stdlib by zc's own precedence, so a run from outside the tree finds it
-    cf.systemdir = zcheck.resolveSystemDir flagVal: cf.systemdir.stringView
     if sv == "lint" then {
         lintOpts: cf.lintOpts
         rc: (runLint
