@@ -22,8 +22,8 @@ static z_@resultval_f16_parseerror@_t z_@StringView@_parseF16(const z_@StringVie
         out.data.err@TAG_parseerror@ = Z_PARSEERROR_TAG_INVALIDDIGIT;
         return out;
     }
-    _Float16 h = (_Float16)v;
-    if (err == ERANGE || (!isinf(v) && isinf((float)h))) {
+    z_f16 h = z_f16_from_f32(v);
+    if (err == ERANGE || (!isinf(v) && isinf(z_f16_to_f32(h)))) {
         out.tag = Z_RESULTVAL_F16_PARSEERROR_TAG_ERR;
         out.data.err@TAG_parseerror@ = Z_PARSEERROR_TAG_OVERFLOW;
         return out;

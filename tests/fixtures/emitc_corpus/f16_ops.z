@@ -1,0 +1,75 @@
+# f16_ops.z -- every operation f16 declares, at the edges of its range, and
+# every way a value reaches one: a typed or bare literal, a unit constant, a
+# default, a field, an argument, a return, a conversion and a parse. The same
+# program runs where the C compiler has _Float16 and where it has none (tcc,
+# or -DZ_F16_PORTABLE), whose values are their 16 bits, so the output is the
+# check that the two agree. Each operation rounds once, in f16.
+
+Max: 65504.0.f16
+Tiny: 0.000000059604644775390625.f16
+
+# meters -- a scalar typedef over f16
+hmeters: f16
+
+# hpair -- a record holding an f16
+hpair: record {
+    # the value
+    a: 0.0.f16
+    # a tag beside it
+    n: 0
+}
+
+# give -- the value an f16 parameter receives, a literal default included
+give: function {v: 1.5.f16} out f16 is { return v }
+
+# lit -- a literal returned into an f16
+lit: function out f16 is { return 2.25.f16 }
+
+# ident -- a generic function instantiated at f16
+ident: function as { t: anyval.generic } in {x: t} out t is { return x }
+
+# showI8 -- a conversion's outcome, the value or `err`
+showI8: function {r: (resultval t: i8 e: converror)} is {
+    match r case ok then print "  ok \{r}" case err then print "  err"
+}
+
+main: function is {
+    a: 3.5.f16
+    b: 0.0.f16 - 1.25.f16
+    print "ops \{a + b} \{a - b} \{a * b} \{a / b} \{a % 2.0.f16}"
+    print "round \{1.0.f16 + 0.0009765625.f16} \{1.0.f16 + 0.00048828125.f16} \{2049.0.f16 + 1.0.f16}"
+    print "edge \{Max} \{Max + Max} \{Tiny} \{Tiny / 2.0.f16} \{Tiny * 3.0.f16} \{0.0.f16 - Max * 2.0.f16}"
+    nan: 0.0.f16 / 0.0.f16
+    print "nan \{nan.isNaN} \{nan == nan} \{nan != nan} \{nan < a} \{nan >= a}"
+    print "cmp \{a < b} \{a <= b} \{a > b} \{a >= b} \{a == b} \{a != b} \{a == 3.5.f16}"
+    print "bits \{a.bits} \{b.bits} \{Max.bits} \{Tiny.bits} \{(0.0.f16 - 0.0.f16).bits}"
+    print "math \{a.sqrt} \{a.floor} \{b.ceil} \{b.abs} \{a.min y: b} \{a.max y: b} \{(a.pow y: 2.0.f16)} \{a.round}"
+    print "scale \{a.scaleB n: 3} \{a.logB} \{b.copySign y: a} \{a.fma y: b z: 1.0.f16}"
+    print "class \{a.isInf} \{(Max * 2.0.f16).isInf} \{a.isFinite} \{b.signBit}"
+    c: a
+    c = c * 2.0.f16
+    print "lit \{c} \{give} \{give v: 0.5.f16} \{lit}"
+    m: hmeters
+    print "typedef \{m}"
+    p0: hpair
+    p1: hpair a: 1.5.f16 n: 1
+    p2: hpair a: 1.5.f16 n: 1
+    print "rec \{p0.a} \{p1 == p2} \{p1 == p0}"
+    print "generic \{ident x: a}"
+    # conversions out
+    print "to f32 \{a.f32} f64 \{b.f64}"
+    print "to i32 \{a.i32.or d: 99} \{3.0.f16.i32.or d: 99} \{Max.i16.or d: 99} \{Max.u16.or d: 99}"
+    showI8 r: 127.0.f16.i8
+    showI8 r: 128.0.f16.i8
+    showI8 r: (0.0.f16 - 128.0.f16).i8
+    print "to i128 \{Max.i128.or d: 7} \{b.i128.or d: 7} \{(0.0.f16 - 8.0.f16).u128.or d: 7}"
+    # conversions in
+    print "from \{200.u8.f16} \{(0 - 100).i8.f16} \{2048.i32.f16.or d: 0.5.f16} \{2049.i32.f16.or d: 0.5.f16} \{70000.u32.f16.or d: 0.5.f16}"
+    print "from i128 \{2048.i128.f16.or d: 0.5.f16} \{2049.u128.f16.or d: 0.5.f16}"
+    print "from f32 \{1.5.f32.f16.or d: 0.5.f16} \{1.0001.f32.f16.or d: 0.5.f16} \{70000.0.f32.f16.or d: 0.5.f16}"
+    print "from f64 \{0.25.f64.f16.or d: 0.5.f16} \{1.0e-9.f64.f16.or d: 0.5.f16} \{65504.0.f64.f16.or d: 0.5.f16} \{65520.0.f64.f16.or d: 0.5.f16}"
+    ph: "6.5".parseF16
+    match ph case ok then print "parse \{ph}" case err then print "parse err"
+    pe: "1e9".parseF16
+    match pe case ok then print "parse \{pe}" case err then print "parse big err"
+}

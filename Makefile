@@ -90,7 +90,7 @@ SKIP     := mathutil genmath dissectlib
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: emit-set ident-set natives-tbl-guard generic-param-guard zl-full-guard const-row-guard all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls tcc install regen-goldens regen-matrix regen-math-asm bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard lifetime-guard native-guard fallback-guard member-guard highlight-guard deadcode-guard require-guard static-tcc-guard refusal-guard zlink-rules-guard fmt-raw-guard test-tcc test-tcc-heavy test-clang test-math-arm64 test-math-noasm test-int128-portable math-asm-guard docs-link-guard bench-math bench-math-kernels mode-parity readable-check user-native-guard perf-strict perf-elision pre-push
+.PHONY: emit-set ident-set natives-tbl-guard generic-param-guard zl-full-guard const-row-guard all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls tcc install regen-goldens regen-matrix regen-math-asm bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard lifetime-guard native-guard fallback-guard member-guard highlight-guard deadcode-guard require-guard static-tcc-guard refusal-guard zlink-rules-guard fmt-raw-guard test-tcc test-tcc-heavy test-clang test-math-arm64 test-math-noasm test-portable-scalars math-asm-guard docs-link-guard bench-math bench-math-kernels mode-parity readable-check user-native-guard perf-strict perf-elision pre-push
 
 # Keep pattern-chain intermediates (the per-example .c files) for debugging.
 .SECONDARY:
@@ -177,7 +177,7 @@ test: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 # the Python-free seed bootstrap. The lint + guard + corpus phases are plain
 # prerequisites so -j overlaps them; test-bootstrap stays last (and is
 # internally serial -- b1 -> b2 -> b3 is a chain by nature).
-ci: style-lint zl-full-guard complexity-report warn-check shadow-guard emitter-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard member-guard highlight-guard any-guard deadcode-guard eager-guard eager-lib-guard case-guard user-native-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard readable-check perf-strict test-tcc-heavy test-clang test-math-arm64 test-math-noasm test-int128-portable math-asm-guard docs-link-guard mode-parity ci-corpus
+ci: style-lint zl-full-guard complexity-report warn-check shadow-guard emitter-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard member-guard highlight-guard any-guard deadcode-guard eager-guard eager-lib-guard case-guard user-native-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard readable-check perf-strict test-tcc-heavy test-clang test-math-arm64 test-math-noasm test-portable-scalars math-asm-guard docs-link-guard mode-parity ci-corpus
 	$(MAKE) --no-print-directory test-bootstrap BOOTSTRAP_CCS="$(CI_BOOTSTRAP_CCS)"
 	@echo "CI GATE GREEN: style-lint + corpus(--heavy: +selfhost-asan +fixpoint) + bootstrap"
 
@@ -237,27 +237,27 @@ test-math-noasm: bin/zc
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
 	echo "test-math-noasm OK: $$n math programs on math's C kernels"
 
-# test-int128-portable -- every program that names i128 or u128, built with
-# -DZ_INT128_PORTABLE: gcc then takes the two-word representation tcc always
-# takes (natives/_Z_INT128.inc), with f128 present, so the int128 <-> f128
-# helpers run as well, which tcc, having no f128, never reaches. The output
-# must be the golden the native representation writes.
-INT128_PORTABLE_DIR := $(BUILDDIR)/int128-portable
-test-int128-portable: bin/zc
-	@mkdir -p $(INT128_PORTABLE_DIR); fail=0; n=0; \
+# test-portable-scalars -- every program that names i128, u128 or f16, built
+# with -DZ_INT128_PORTABLE -DZ_F16_PORTABLE: gcc then takes the struct forms
+# tcc always takes (natives/_Z_INT128.inc, natives/_Z_F16.inc), with f128
+# present, so the f128 legs of the helpers run as well, which tcc, having no
+# f128, never reaches. The output must be the golden the native types write.
+PORTABLE_SCALARS_DIR := $(BUILDDIR)/portable-scalars
+test-portable-scalars: bin/zc
+	@mkdir -p $(PORTABLE_SCALARS_DIR); fail=0; n=0; \
 	for f in examples/*.z tests/fixtures/emitc_corpus/*.z tests/fixtures/emitc_corpus/math/*.z; do \
 	  b=$$(basename $$f .z); \
-	  grep -qE '(^|[^A-Za-z0-9_])[iu]128([^A-Za-z0-9_]|$$)' $$f || continue; \
+	  grep -qE '(^|[^A-Za-z0-9_])([iu]128|f16)([^A-Za-z0-9_]|$$)' $$f || continue; \
 	  [ -f tests/fixtures/run_golden/$$b.out ] || continue; \
 	  n=$$((n + 1)); \
-	  if ! bin/zc build $$f --system lib/system --cflags -DZ_INT128_PORTABLE -o $(INT128_PORTABLE_DIR)/$$b > $(INT128_PORTABLE_DIR)/$$b.build 2>&1; then \
-	    echo "test-int128-portable FAIL: $$b does not build"; sed -n 1,3p $(INT128_PORTABLE_DIR)/$$b.build; fail=1; continue; fi; \
-	  $(INT128_PORTABLE_DIR)/$$b > $(INT128_PORTABLE_DIR)/$$b.out 2>&1; \
-	  cmp -s $(INT128_PORTABLE_DIR)/$$b.out tests/fixtures/run_golden/$$b.out \
-	    || { echo "test-int128-portable FAIL: $$b differs from its golden"; fail=1; }; \
+	  if ! bin/zc build $$f --system lib/system --cflags "-DZ_INT128_PORTABLE -DZ_F16_PORTABLE" -o $(PORTABLE_SCALARS_DIR)/$$b > $(PORTABLE_SCALARS_DIR)/$$b.build 2>&1; then \
+	    echo "test-portable-scalars FAIL: $$b does not build"; sed -n 1,3p $(PORTABLE_SCALARS_DIR)/$$b.build; fail=1; continue; fi; \
+	  $(PORTABLE_SCALARS_DIR)/$$b > $(PORTABLE_SCALARS_DIR)/$$b.out 2>&1; \
+	  cmp -s $(PORTABLE_SCALARS_DIR)/$$b.out tests/fixtures/run_golden/$$b.out \
+	    || { echo "test-portable-scalars FAIL: $$b differs from its golden"; fail=1; }; \
 	done; \
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
-	echo "test-int128-portable OK: $$n programs on the two-word i128 / u128"
+	echo "test-portable-scalars OK: $$n programs on the struct forms of i128, u128 and f16"
 
 # docs-link-guard -- every .pdoc link is bracketed, `[#> to=TARGET: text]`.
 # Written bare, a link's text runs to the end of its line, so the words after
@@ -340,9 +340,9 @@ TCC_RUN_DEPS := bin/zc bin/zl $(BUILDDIR)/tcc $(BUILDDIR)/ztestrunner
 
 # test-tcc -- the vendored tcc compiles the corpus. --cc-forward is what makes
 # this a test of the tcc BACKEND and not merely of tcc-the-C-compiler: zc folds
-# `platform.cc` during type checking, so the `require:` guards of wideint,
-# halffloat and quadfloat fire, and the programs that reach them are rejected
-# by name instead of dying in tcc's parser.
+# `platform.cc` during type checking, so quadfloat's `require:` guard fires,
+# and the programs that reach it are rejected by name instead of dying in
+# tcc's parser.
 # tests/tcc-known-failures.txt records the split, program and stage; a move in
 # EITHER direction fails, so gaining a guard is a deliberate edit there.
 #
@@ -2338,7 +2338,10 @@ perf: $(PERFBIN)
 # +5,215 i128 and u128 go through the int128 helpers: +234 behaviour (the 101
 # table rows now carry `needs=prelude.int128`, read on every compile, and the
 # prelude's typedefs), +4,981 source.
-ALLOC_BASELINE := 2207585
+#
+# +2,357 f16 goes through the f16 helpers: +90 behaviour (its rows' `needs=`
+# and the prelude's typedef), +2,267 source.
+ALLOC_BASELINE := 2209942
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

@@ -308,7 +308,7 @@ cTypeOf: function {name: StringView} out String is {
     if name == "u64" then return "uint64_t"
     if name == "i128" then return "z_i128"
     if name == "u128" then return "z_u128"
-    if name == "f16" then return "_Float16"
+    if name == "f16" then return "z_f16"
     if name == "f32" then return "float"
     if name == "f64" then return "double"
     if name == "f128" then return "__float128"
@@ -875,6 +875,16 @@ convRange128: function {srcName: StringView dstName: StringView} out String is {
 convOkValue: function {srcName: StringView dstName: StringView tcT: StringView} out String is {
     sw: (numBits name: srcName) == 128
     dw: (numBits name: dstName) == 128
+    if (isHalfName name: dstName) then {
+        # an integer the bounds test has shown is exact in f16
+        src: "(double)_v"
+        if sw then {
+            src = "z_u128_to_f64(_v)"
+            if (numSigned name: srcName) then src = "z_i128_to_f64(_v)"
+        }
+        h: "z_f16_from_f64(\{src})"
+        return h
+    }
     if sw.not when dw.not then {
         c: "(\{tcT})_v"
         return c
@@ -947,6 +957,32 @@ convFloatTrunc128: function {srcName: StringView dstName: StringView} out String
     return d
 }
 
+# convHalfCast -- a lossless conversion with an f16 on either side: the same
+# value handed back, a narrow integer widened into one, or an f16 widened to a
+# wider float, each through the f16 helpers.
+convHalfCast: function {srcName: StringView dstName: StringView tcT: StringView} out String is {
+    if srcName == dstName then return "(@V@)"
+    if (isHalfName name: dstName) then return "z_f16_from_f32((float)@V@)"
+    w: "((\{tcT})z_f16_to_f32(@V@))"
+    return w
+}
+
+# convFloatToHalf -- a float -> f16 conversion, convFloatToFloat's test through
+# the f16 helpers: rounded once from the source, out of range when that made an
+# infinity of a finite value, precision lost when it does not read back. `scT`
+# is the type the source is read as.
+convFloatToHalf: function {srcName: StringView scT: StringView} out String is {
+    from: "z_f16_from_f64"
+    if (numMantissa name: srcName) == 24 then from = "z_f16_from_f32"
+    if (numMantissa name: srcName) == 113 then from = "z_f16_from_f128"
+    b: "z_f16 _f = \{from}(_v); if (isinf(z_f16_to_f32(_f)) && !isinf(_v)) { \{(convErr
+        reason: "OUTOFRANGE"
+    )} } else if ((\{scT}) z_f16_to_f32(_f) != _v) { \{(convErr
+        reason: "PRECISIONLOSS"
+    )} } else { _r.tag = @OKTAG@; _r.data.ok = _f; }"
+    return b
+}
+
 # convWideCast -- a lossless conversion with a 128-bit integer on either side:
 # the same type handed back, or a narrower integer widened by the helpers.
 convWideCast: function {srcName: StringView dstName: StringView} out String is {
@@ -989,19 +1025,32 @@ convBodyOf: function {srcName: StringView dstName: StringView lossy: bool} out S
     tcT: cTypeOf name: dstName
     wide: ((numBits name: srcName) == 128) or ((numBits name: dstName) == 128)
     if lossy.not then {
+        if (isHalfName name: srcName) or (isHalfName name: dstName) then {
+            return (convHalfCast :srcName :dstName tcT: tcT.stringView)
+        }
         if wide then return (convWideCast :srcName :dstName)
         d: "((\{tcT})@V@)"
         return d
+    }
+    # an f16 source is read as the float it widens to exactly, so every test
+    # below compares C arithmetic values
+    vT: scT.copy
+    vInit: "@V@"
+    if (isHalfName name: srcName) then {
+        vT = "float"
+        vInit = "z_f16_to_f32(@V@)"
     }
     okSet: "_r.tag = @OKTAG@; _r.data.ok = \{convOkValue :srcName :dstName tcT: tcT.stringView};"
     body: String
     # the four corners of float/integer, each with its own way of failing
     if (isFloatName name: srcName) then {
-        if (isFloatName name: dstName) then {
+        if (isHalfName name: dstName) then {
+            body = convFloatToHalf :srcName scT: vT.stringView
+        } else if (isFloatName name: dstName) then {
             body = convFloatToFloat scT: scT.stringView tcT: tcT.stringView
         } else {
             body = (convFloatToInt
-                scT: scT.stringView
+                scT: vT.stringView
                 trunc: (convTruncC :srcName :dstName tcT: tcT.stringView).stringView
                 :dstName
                 okSet: okSet.stringView
@@ -1014,7 +1063,22 @@ convBodyOf: function {srcName: StringView dstName: StringView lossy: bool} out S
             body = convIntToInt :srcName :dstName okSet: okSet.stringView
         }
     }
-    r: "({ \{scT} _v = @V@; z_@RT@_t _r = {0}; \{body} _r; })"
+    r: "({ \{vT} _v = \{vInit}; z_@RT@_t _r = {0}; \{body} _r; })"
+    return r
+}
+
+# convNeeds -- the helper fragments a conversion row calls, as its `needs=`
+# list: the int128 helpers for a 128-bit integer on either side, the f16 ones
+# for an f16. "" for a row that needs neither.
+convNeeds: function {srcName: StringView dstName: StringView} out String is {
+    r: String
+    if (
+        ((numBits name: srcName) == 128) or ((numBits name: dstName) == 128)
+    ) then r.append "prelude.int128"
+    if (isHalfName name: srcName) or (isHalfName name: dstName) then {
+        if r.length > 0 then r.append ","
+        r.append "prelude.f16"
+    }
     return r
 }
 
@@ -1060,11 +1124,14 @@ nativeConvRows: function out String is {
                 lossy: lo
             )
             key: "[system.\{s}.\{d}]"
-            if ((numBits name: s.stringView) == 128) or ((numBits name: d.stringView) == 128) then {
-                # a 128-bit row calls the int128 helpers: the attribute goes
-                # inside the head's bracket
+            nds: convNeeds srcName: s.stringView dstName: d.stringView
+            if nds.length > 0 then {
+                # the helpers the row calls: the attribute goes inside the
+                # head's bracket
                 kw: (key.stringView.substring from: 0 to: key.length - 1).string
-                kw.append " needs=prelude.int128]"
+                kw.append " needs="
+                kw.append nds
+                kw.append "]"
                 key = kw.take
             }
             pad: key.copy
@@ -1938,8 +2005,16 @@ nativeNeedOf: function {ctx: Ctx.view path: StringView} out String is {
 # demand of the unit its path names, wherever the row is emitted from. A need
 # spelled `<unit>.<member>` is a demand of that unit instead.
 rowNeedAdd: function {ctx: Ctx key: StringView} is {
-    nd: nativeNeedOf :ctx path: key
-    if nd.length == 0 then return
+    ndAll: nativeNeedOf :ctx path: key
+    if ndAll.length == 0 then return
+    for each nd: (ndAll.stringView.split sep: ",") loop {
+        if nd.length > 0 then rowNeedAddOne :ctx :key need: nd
+    }
+}
+
+# rowNeedAddOne -- one need of a row's `needs=` list (rowNeedAdd).
+rowNeedAddOne: function {ctx: Ctx key: StringView need: StringView} is {
+    nd: need.string
     qd: nd.stringView.indexOf needle: "."
     match (
         qd
@@ -12186,7 +12261,7 @@ floatBitsC: function {bits: math.BigInt.view k: ztypes.numkind} out String is {
     if field == ((1 << eb.i64.orPanic) - 1) then return ""
     bias: (1 << (eb - 1).i64.orPanic) - 1
     r: String
-    if k.f16Type then r.append "((_Float16)"
+    if k.f16Type then r.append "Z_F16_C("
     if (bits.bit i: mb + eb) == 1 then r.append "-"
     # the fraction's bits, padded to whole hex digits
     pad: 4.u64 - (mb % 4) % 4
@@ -12208,7 +12283,11 @@ floatBitsC: function {bits: math.BigInt.view k: ztypes.numkind} out String is {
     r.append "p\{e}"
     if k.f32Type then r.append "f"
     if k.f128Type then r.append "Q"
-    if k.f16Type then r.append ")"
+    if k.f16Type then {
+        # and its bits, which is the value where the C compiler has no _Float16
+        hb: bits.text base: 16
+        r.append ", 0x\{hb})"
+    }
     return r
 }
 
@@ -12367,8 +12446,9 @@ nodeConstText: function {
     g: symtab.typing.nodeConstIn mono: ctx.curThisTid :nid
     if g.kind.none then return ""
     tv: symtab.typing.nodeTypeFor :nid
-    # an untyped constant landing in a 128-bit integer is spelled as that type
-    wt: symtab.typing.wideLiteralTarget.get key: nid
+    # an untyped constant landing in an i128, u128 or f16 is spelled as that
+    # type
+    wt: symtab.typing.helperScalarTarget.get key: nid
     match (
         wt
     ) case some then {
@@ -14787,12 +14867,13 @@ implicitZeroValue: function {
 }
 
 # scalarZeroC -- the zero of a scalar whose C type is `cType`. A 128-bit
-# integer's is a braced zero, which C accepts for its own 128-bit type and for
-# the two-word struct alike; every other scalar's is a cast 0.
+# integer's or an f16's is a braced zero, which C accepts for the C compiler's
+# own type and for the struct that stands in for it alike; every other scalar's
+# is a cast 0.
 scalarZeroC: function {
     symtab: zenv.ZSymbolTable.view cType: StringView tid: ztypes.tid
 } out String is {
-    if (partIsWideInt :symtab :tid) then {
+    if (partIsHelperScalar :symtab :tid) then {
         w: "((\{cType}){0})"
         return w
     }
@@ -14800,12 +14881,19 @@ scalarZeroC: function {
     return z
 }
 
-# partIsWideInt -- the type is i128 or u128, or a scalar typedef over one: a
-# value no C operator may touch, since where the C compiler has no 128-bit
-# integer it is two words (z_prelude.inc).
-partIsWideInt: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
+# partIsHelperScalar -- the type is i128, u128 or f16, or a scalar typedef over
+# one: a value no C operator may touch, since where the C compiler lacks the
+# type it is a struct (z_prelude.inc).
+partIsHelperScalar: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
     if tid.isZero then return false
-    return (numBits name: (regNameView :symtab tid: (typedefChaseTid :symtab :tid))) == 128
+    bn: regNameView :symtab tid: (typedefChaseTid :symtab :tid)
+    return ((numBits name: bn) == 128) or (isHalfName name: bn)
+}
+
+# isHalfName -- the scalar name is f16, asked by its numeric kind.
+isHalfName: function {name: StringView} out bool is {
+    nk: ztypes.numkindByName :name
+    return nk.has and (nk.kind == ztypes.numkind.f16Type)
 }
 
 # emitDefRefAtom -- a bare atom that names a DEFINITION rather than a local: a
@@ -14901,8 +14989,8 @@ emitAtom: function {
 } out String is {
     avC: ast.names.texts.get i: n.name
     av: avC.stringView
-    # an integer literal landing in a 128-bit integer is that type's value
-    if (symtab.typing.wideLiteralTarget.has key: n.nodeid) then {
+    # a literal landing in an i128, u128 or f16 is that type's value
+    if (symtab.typing.helperScalarTarget.has key: n.nodeid) then {
         wa: nodeConstText :ast :symtab :ctx nid: n.nodeid
         if wa.length > 0 then return wa
     }
@@ -19076,11 +19164,18 @@ emitInterpPart: function {
             :buf
         )
     } else if (isFloatName name: tns) then {
+        # an f16 is read as the float it widens to: its value need be no C
+        # arithmetic type
+        fv: val.copy
+        if (isHalfName name: tns) then {
+            needsAddM :ctx uname: "prelude" memb: "f16"
+            fv = "z_f16_to_f32(\{val})"
+        }
         (appendFormattedNum
             :ctx
             :sNm
             :bN
-            stmt: "char _b\{bN}[64]; int _b\{bN}_n = snprintf(_b\{bN}, 64, \"%g\", (double)\{val})"
+            stmt: "char _b\{bN}[64]; int _b\{bN}_n = snprintf(_b\{bN}, 64, \"%g\", (double)\{fv})"
             :ind
             :buf
         )
@@ -41754,12 +41849,16 @@ partEqC: function {
         dest.append ")"
         return
     }
-    if (partIsWideInt :symtab :tid) then {
-        needsAddM :ctx uname: "prelude" memb: "int128"
+    if (partIsHelperScalar :symtab :tid) then {
         hb: regNameView :symtab tid: (typedefChaseTid :symtab :tid)
-        if (numSigned name: hb) then {
+        if (isHalfName name: hb) then {
+            needsAddM :ctx uname: "prelude" memb: "f16"
+            dest.append "z_f16_eq("
+        } else if (numSigned name: hb) then {
+            needsAddM :ctx uname: "prelude" memb: "int128"
             dest.append "z_i128_eq("
         } else {
+            needsAddM :ctx uname: "prelude" memb: "int128"
             dest.append "z_u128_eq("
         }
         dest.append lhs
