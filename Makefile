@@ -2341,7 +2341,10 @@ perf: $(PERFBIN)
 #
 # +2,357 f16 goes through the f16 helpers: +90 behaviour (its rows' `needs=`
 # and the prelude's typedef), +2,267 source.
-ALLOC_BASELINE := 2209942
+#
+# -108 an answered member the unit does not declare is not answered, rather
+# than reported: 0 behaviour, -108 source.
+ALLOC_BASELINE := 2209834
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
