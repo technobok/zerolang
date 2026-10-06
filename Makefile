@@ -2305,7 +2305,10 @@ perf: $(PERFBIN)
 #
 # -53 natives.tbl loses the six `fold` rows the self-compile's emitter loaded:
 # 0 behaviour, -53 source.
-ALLOC_BASELINE := 2201442
+#
+# +34 a float -> integer conversion checks its fraction in the source type: 0
+# behaviour, +34 source.
+ALLOC_BASELINE := 2201476
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

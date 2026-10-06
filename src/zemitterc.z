@@ -724,11 +724,20 @@ convFloatRange: function {dstName: StringView} out String is {
 
 # convFloatToInt -- a float -> integer conversion: out of range when the value
 # is outside the destination's span, precision loss when truncation moved it.
-convFloatToInt: function {tcT: StringView dstName: StringView okSet: StringView} out String is {
+# The truncated value is compared in the SOURCE type, as convFloatToFloat's
+# round trip is: an integer truncated from a float is exact in that float, and
+# a narrower type would round the fraction away -- through double, an f128's
+# 2^60 + 0.5 read back as 2^60 and converted without an error.
+convFloatToInt: function {
+    scT: StringView
+    tcT: StringView
+    dstName: StringView
+    okSet: StringView
+} out String is {
     inRange: convFloatRange :dstName
     b: "if (!\{inRange}) { \{(convErr
         reason: "OUTOFRANGE"
-    )} } else if ((double)(\{tcT})_v != (double)_v) { \{(convErr
+    )} } else if ((\{scT}) (\{tcT})_v != _v) { \{(convErr
         reason: "PRECISIONLOSS"
     )} } else { \{okSet} }"
     return b
@@ -860,7 +869,12 @@ convBodyOf: function {srcName: StringView dstName: StringView lossy: bool} out S
         if (isFloatName name: dstName) then {
             body = convFloatToFloat scT: scT.stringView tcT: tcT.stringView
         } else {
-            body = convFloatToInt tcT: tcT.stringView :dstName okSet: okSet.stringView
+            body = (convFloatToInt
+                scT: scT.stringView
+                tcT: tcT.stringView
+                :dstName
+                okSet: okSet.stringView
+            )
         }
     } else {
         if (isFloatName name: dstName) then {
