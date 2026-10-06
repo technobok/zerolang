@@ -14533,6 +14533,11 @@ aliasNamesType: function {
                 scope: st.curScope
                 nameId: ntk.unitName
             )
+            # a member reached through a path of units (`T: u.sub.duo`): the
+            # qualifier names a unit as a bare one does
+            if (qualifierIsUnitPath :st :ast scope: ndo.parent valueNid: nnp.operation) then {
+                return true
+            }
             # a member of a unit applied in place (`(cells t: i64).Cell`): what
             # it resolved to says whether it is a type
             if (valueAppliesUnitTemplate :st :ast scope: st.curScope valueNid: nnp.operation) then {
@@ -14541,6 +14546,20 @@ aliasNamesType: function {
         }
     }
     return false
+}
+
+# qualifierIsUnitPath -- the definition value `valueNid` is `<path>.<name>` with
+# a qualifier that is itself a path and names a unit (`u.sub` in `u.sub.duo`)
+qualifierIsUnitPath: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    scope: ztypes.declid
+    valueNid: zast.nodeid
+} out bool is {
+    vn: ast.nodes.get i: valueNid
+    if vn.dottedpath.not then return false
+    if (ast.nodes.get i: vn.parent).dottedpath.not then return false
+    return (unitDeclOfPath :st :scope :ast nid: vn.parent).isZero.not
 }
 
 # valueAppliesUnitTemplate -- the definition value `valueNid` is a member of a
@@ -14828,8 +14847,107 @@ resolveAliasKey: function {
     if cvA.kind.none.not then return (declTypeIdOf :st :declId)
     r: resolveAliasKeyIn :st scope: ascope :ast :declId
     if r.isZero then r = resolveAppliedMemberAlias :st :ast scope: ascope :declId
+    if r.isZero then r = resolveDeepAlias :st :ast scope: ascope :declId
     refuseArmAliasPayload :st :ast :declId tid: r
     return r
+}
+
+# resolveDeepAlias -- a unit-level alias whose target is reached through a path
+# of units (`T: u.sub.duo`, `X: z.build.oskind`). The target pair carries only
+# the qualifier's last segment, which names no file unit when it is a subunit,
+# so the qualifier is resolved unit by unit (unitDeclOfPath) and the member
+# looked up in the unit it names, and recorded as any alias is. A member that
+# unit does not declare is the body's error, at the definition; so is a member
+# a TYPE so reached does not declare (`u.sub.duo.nosuch`), its arms having
+# folded already. 0 when the value is not that shape or names nothing.
+resolveDeepAlias: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    scope: ztypes.declid
+    declId: ztypes.declid
+} out ztypes.tid is {
+    ar: argRefAt :ast nid: (st.typing.decls.get i: declId).node
+    if ar.operation.isZero then return ztypes.tid.zero
+    v: ast.nodes.get i: ar.operation
+    if v.dottedpath.not then return ztypes.tid.zero
+    qn: ast.nodes.get i: v.parent
+    if qn.dottedpath.not then return ztypes.tid.zero
+    cn: atomNameId :ast n: (ast.nodes.get i: v.child)
+    qcn: atomNameId :ast n: (ast.nodes.get i: qn.child)
+    if cn.isZero or qcn.isZero then return ztypes.tid.zero
+    pu: unitDeclOfPath :st :scope :ast nid: v.parent
+    if pu.isZero then {
+        reportDeepTypeMember :st :scope :ast :declId unitPath: qn.parent typeId: qcn memberId: cn
+        return ztypes.tid.zero
+    }
+    own: qualifiedMemberScope :st unitRoot: pu memberId: cn
+    if (st.typing.declFindChild parentDeclId: own nameId: cn).isZero then {
+        reportDeepAliasMissing :st :ast :declId what: "unit" ownerId: qcn memberId: cn
+        return ztypes.tid.zero
+    }
+    atid: descendNamedId :st :scope :ast unitDecl: pu nameId: cn
+    if atid.isZero then return ztypes.tid.zero
+    ownTid: declTypeIdOf :st declId: (declParentIdOf :st :declId)
+    if ownTid.isZero.not then {
+        (st.typing.setMemberType
+            parentTypeId: ownTid
+            nameId: (declNameIdOf :st :declId)
+            childTypeId: atid
+        )
+    }
+    st.typing.declSetType :declId typeId: atid
+    return atid
+}
+
+# reportDeepTypeMember -- `u.sub.duo.nosuch`: the qualifier is a TYPE reached
+# through units, and the member is no member of it. Silent when the type does
+# not resolve either, or the member exists (a payload arm is refused where its
+# value is read).
+reportDeepTypeMember: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    declId: ztypes.declid
+    # the units before the type (`u.sub`)
+    unitPath: zast.nodeid
+    # the type's name
+    typeId: zast.nameid
+    # the member asked of it
+    memberId: zast.nameid
+} is {
+    tu: unitDeclOfPath :st :scope :ast nid: unitPath
+    if tu.isZero then return
+    ptid: descendNamedId :st :scope :ast unitDecl: tu nameId: typeId
+    if ptid.isZero then return
+    if (st.typing.declChildOfId parentTypeId: ptid nameId: memberId).none.not then return
+    if (leafNamesNoMember leafId: memberId) then return
+    reportDeepAliasMissing :st :ast :declId what: "type" ownerId: typeId :memberId
+}
+
+# reportDeepAliasMissing -- the alias `declId` names a member its owner (a unit
+# or a type, `what`) does not declare: the body's E0100, at the definition
+reportDeepAliasMissing: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    declId: ztypes.declid
+    what: StringView
+    ownerId: zast.nameid
+    memberId: zast.nameid
+} is {
+    owner: zast.nameTextAt :ast ref: ownerId
+    member: zast.nameTextAt :ast ref: memberId
+    at: aliasValueSite :st :ast adecl: declId
+    (addErrorH
+        :st
+        nodeid: at.nid
+        lineno: at.lineno
+        colno: at.colno
+        e: zast.err.typeError
+        msg: "\{what} '\{owner}' has no member '\{member}'"
+        note: ""
+        hint: ""
+        width: owner.length.u32.orPanic
+    )
 }
 
 # resolveAppliedMemberAlias -- `C5: (cells t: i64).Cell`: a unit-level alias of a
@@ -58313,7 +58431,7 @@ constOfUnitPathMember: function {
 # each segment a unit the one before declares (`z.build`). 0 when any step names
 # no unit.
 unitDeclOfPath: function {
-    st: zenv.ZSymbolTable
+    st: zenv.ZSymbolTable.view
     scope: ztypes.declid
     ast: Ast.view
     nid: zast.nodeid
