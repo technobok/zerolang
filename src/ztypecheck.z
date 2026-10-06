@@ -58271,10 +58271,11 @@ evalConstString: function {
     return ztypes.noConst
 }
 
-# evalConstArmViaUnit -- `platform.oskind.linux`: an arm of a type reached
-# THROUGH its unit. The parent is a dotted path of its own (`gpId.gcId`), so
-# the type is looked up from that unit rather than from the one being
-# evaluated. noConst when the path is not that shape.
+# evalConstArmViaUnit -- `unit.kind.arm`: an arm of a type reached THROUGH its
+# unit, which may itself be a subunit (`z.build.oskind.linux`). The parent is a
+# dotted path of its own (`gpId.gcId`), so the type is looked up from that unit
+# rather than from the one being evaluated. noConst when the path is not that
+# shape.
 evalConstArmViaUnit: function {
     st: zenv.ZSymbolTable
     scope: ztypes.declid
@@ -58285,22 +58286,10 @@ evalConstArmViaUnit: function {
     nameCountId: zast.nameid
 } out ztypes.cval is {
     gcNameId: zast.nameid
-    gpNameId: zast.nameid
-    gp: ast.nodes.get i: gpId
     gc: ast.nodes.get i: gcId
-    if gp.atomid when gc.atomid then {
-        gcNameId = gc.name
-        gpNameId = gp.name
-    }
-    if gpNameId.isZero or gcNameId.isZero then return ztypes.noConst
-    lookupUnit9: ztypes.declid
-    if (nameDenotesUnit :st :scope nameId: gpNameId) then {
-        lookupUnit9 = unitDeclOfNameOrOwn :st :scope nameId: gpNameId
-    } else {
-        # a unit this one DECLARES (`inl.codes.lf`, `kit.shape.sq`): in scope
-        # through the environment, and its own declaration is where the type is
-        lookupUnit9 = nestedUnitDeclNamed :st :scope nameId: gpNameId
-    }
+    if gc.atomid then gcNameId = gc.name
+    if gcNameId.isZero then return ztypes.noConst
+    lookupUnit9: unitDeclOfPath :st :scope :ast nid: gpId
     if lookupUnit9.isZero then return ztypes.noConst
     qa: (constArmRead
         :st
@@ -58311,6 +58300,52 @@ evalConstArmViaUnit: function {
         armNameId: nameCountId
     )
     return qa
+}
+
+# constOfUnitPathMember -- the constant `ncId` of the unit the path `parentId`
+# names (`z.build`), none when the path names no unit or the unit no constant
+constOfUnitPathMember: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    parentId: zast.nodeid
+    ncId: zast.nameid
+} out ztypes.cval is {
+    pud: unitDeclOfPath :st :scope :ast nid: parentId
+    if pud.isZero then return ztypes.noConst
+    pown: qualifiedMemberScope :st unitRoot: pud memberId: ncId
+    return (constValueOfMemberId :st scope: pown :ast unitDecl: pud nameId: ncId)
+}
+
+# unitDeclOfPath -- the unit declaration a name or dotted path names: a unit
+# at its root (a file unit, or one this scope declares, `inl.codes.lf`), then
+# each segment a unit the one before declares (`z.build`). 0 when any step names
+# no unit.
+unitDeclOfPath: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast.view
+    nid: zast.nodeid
+} out ztypes.declid is {
+    n: ast.nodes.get i: nid
+    match (
+        n
+    ) case atomid then {
+        if (nameDenotesUnit :st :scope nameId: n.name) then {
+            return (unitDeclOfNameOrOwn :st :scope nameId: n.name)
+        }
+        return (nestedUnitDeclNamed :st :scope nameId: n.name)
+    } case dottedpath then {
+        pu: unitDeclOfPath :st :scope :ast nid: n.parent
+        if pu.isZero then return ztypes.declid.zero
+        cn: atomNameId :ast n: (ast.nodes.get i: n.child)
+        if cn.isZero then return ztypes.declid.zero
+        cd: st.typing.declFindChild parentDeclId: pu nameId: cn
+        if (declDeclaresUnit :st :ast declId: cd) then return cd
+        return ztypes.declid.zero
+    } else {
+        return ztypes.declid.zero
+    }
 }
 
 # nestedUnitDeclNamed -- the declaration of the nested unit or subunit `nameId`
@@ -58413,9 +58448,12 @@ evalConstDotted: function {
     # `platform.oskind.linux` -- an arm of a type reached THROUGH its unit.
     # The parent is a dotted path of its own, so the type must be looked up
     # from that unit rather than from the one being evaluated.
+    # `z.build.os` -- a constant of a unit reached through a path of units: a
+    # subunit is no file unit, so no bare base names it
     if parentIsDotted then {
         qa: evalConstArmViaUnit :st :scope :ast :gpId :gcId nameCountId: ncId
         if qa.kind.none.not then return qa
+        return (constOfUnitPathMember :st :scope :ast :parentId :ncId)
     }
     return ztypes.noConst
 }

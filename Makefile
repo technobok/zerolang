@@ -2381,7 +2381,10 @@ perf: $(PERFBIN)
 # mounts them from memory between src and the stdlib: +562 behaviour (the
 # text, the compare with the copy on disk, the in-memory provider), +12,722
 # source (ab.sh).
-ALLOC_BASELINE := 2237889
+#
+# +565 a constant read through a subunit (`z.build.os`, `u.sub.K`) folds, and a
+# definition naming a subunit's arm resolves: 0 behaviour, +428 source (ab.sh).
+ALLOC_BASELINE := 2238454
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
