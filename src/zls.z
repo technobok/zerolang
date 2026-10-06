@@ -152,12 +152,18 @@ ResolvedRoots: class {
     srcWhy: String
     # how systemDir was chosen, for the same reason
     systemWhy: String
+    # whether a flag or initializationOptions named srcDir, which a document's
+    # project then does not override
+    srcExplicit: bool
+    # whether a flag or initializationOptions named systemDir
+    systemExplicit: bool
 }
 
-# resolveRoots -- the one workspace-discovery resolution, shared by
-# `initialize` and `--print-roots` so the report cannot drift from what the
-# server actually checks against. Precedence: CLI flags > initializationOptions
-# > rootUri auto-detect (the zerolang repo layout) > cwd.
+# resolveRoots -- the session's roots, resolved once at `initialize`.
+# Precedence: CLI flags > initializationOptions > rootUri itself > cwd. A
+# document inside a project (a project.z at or above its directory) is checked
+# against that project's roots instead, wherever no flag or option named them
+# (Server.enterProjectOf).
 resolveRoots: function {
     srcFlag: StringView
     sysFlag: StringView
@@ -185,23 +191,12 @@ resolveRoots: function {
         syd = optSys.string
         yw = "initializationOptions.systemDir"
     }
+    srcExplicit: sd.length > 0
+    systemExplicit: syd.length > 0
     if sd.length == 0 then {
         if rootPath.length > 0 then {
-            candSys: zcheck.joinPath a: rootPath b: "lib/system"
-            candSrc: zcheck.joinPath a: rootPath b: "src"
-            hasSys: io.exists path: candSys
-            hasSrc: io.exists path: candSrc
-            if hasSys when hasSrc then {
-                sd = candSrc.copy
-                sw = "rootUri auto-detect (root holds src/ and lib/system/)"
-                if syd.length == 0 then {
-                    syd = candSys.copy
-                    yw = "rootUri auto-detect (root holds src/ and lib/system/)"
-                }
-            } else {
-                sd = rootPath.string
-                sw = "rootUri itself (no src/ + lib/system/ pair under it)"
-            }
+            sd = rootPath.string
+            sw = "rootUri itself, for a document in no project"
         } else {
             # the literal "." cannot work: relPathOf tests a "./" prefix
             # against the document's absolute path and never matches, so every
@@ -242,6 +237,8 @@ resolveRoots: function {
         systemDir: syd.take
         srcWhy: sw.take
         systemWhy: yw.take
+        :srcExplicit
+        :systemExplicit
     )
 }
 
@@ -451,6 +448,11 @@ Document: class {
     path: String
     # its path relative to the project root, which is what diagnostics report
     relpath: String
+    # the src root of the project it belongs to, which its relpath is relative
+    # to; documents of one project are checked together
+    srcDir: String
+    # that project's stdlib directory
+    systemDir: String
     # the buffer's CURRENT contents, which may differ from what is on disk --
     # that difference is the whole reason the server keeps documents
     text: String
@@ -463,10 +465,22 @@ Document: class {
 Server: class {
     # the open buffers by uri
     docs: (Map String V: Document)
-    # the resolved src root
+    # the src root of the project in hand: the document being checked or
+    # answered for (enterProjectOf)
     srcDir: String
-    # the resolved stdlib root
+    # the stdlib root of the project in hand
     systemDir: String
+    # the session's src root (resolveRoots), for a document in no project
+    baseSrcDir: String
+    # the session's stdlib root
+    baseSystemDir: String
+    # whether a flag or initializationOptions named srcDir, which no project
+    # overrides
+    srcExplicit: bool
+    # whether a flag or initializationOptions named systemDir
+    systemExplicit: bool
+    # the generated `z` unit of the project in hand
+    layer: zcheck.GenLayer
     # the src root as given on the command line, kept apart from the resolved
     # one so the resolution can be explained
     srcFlag: String
@@ -712,6 +726,10 @@ Server: class {
         io.eprintln "zls: systemDir=\{rr.systemDir} [\{rr.systemWhy}]"
         this.srcDir = rr.srcDir.copy
         this.systemDir = rr.systemDir.copy
+        this.baseSrcDir = rr.srcDir.copy
+        this.baseSystemDir = rr.systemDir.copy
+        this.srcExplicit = rr.srcExplicit
+        this.systemExplicit = rr.systemExplicit
         # response
         caps: newObj
         caps.set key: "textDocumentSync" value: Value.intval 1
@@ -751,6 +769,42 @@ Server: class {
         this.initialized = true
     }
 
+    # enterProjectOf -- make the project the file at `path` belongs to the one
+    # in hand: the nearest project.z at or above its directory gives the src
+    # and stdlib roots no flag or initializationOptions named, and its `z`
+    # unit is generated -- the same writer zc uses, so the editor has the
+    # unit, on disk, before any build. A file in no project takes the
+    # session's roots and a cache-directory `z`.
+    enterProjectOf: function {:this path: StringView} is {
+        this.srcDir = this.baseSrcDir.copy
+        this.systemDir = this.baseSystemDir.copy
+        start: zcheck.dirname p: path
+        if start.length == 0 then start = "."
+        pf: zproject.discoverProject start: start.stringView
+        if pf.found when pf.error.length > 0 then {
+            io.eprintln "zls: \{pf.error}"
+            pf = zproject.ProjectFile.create
+        }
+        if pf.found then {
+            if this.srcExplicit.not then this.srcDir = pf.sourceRoot
+            sysp: zproject.inProject dir: pf.dir.stringView rel: pf.systemDir.stringView
+            if this.systemExplicit.not when sysp.length > 0 then {
+                this.systemDir = zcheck.resolveSystemDir flagVal: sysp.stringView
+            }
+        }
+        srcs: List String
+        srcs.append from: this.srcDir.copy
+        un: zsource.unitNameOf :path
+        facts: (zproject.BuildFacts.create
+            srcdirs: srcs
+            systemdir: this.systemDir.stringView
+            main: un.stringView
+        )
+        facts.triple = pf.target.copy
+        this.layer = zproject.zLayer :pf :facts
+        zproject.writeLayer layer: this.layer
+    }
+
     # ---- document sync (full text) ----
 
     # the editor opened a buffer; record its text and check it
@@ -771,6 +825,7 @@ Server: class {
                 to
             ) case some then {
                 pth: uriToPath uri: uo.stringView
+                this.enterProjectOf path: pth.stringView
                 rel: (relPathBest
                     path: pth.stringView
                     srcDir: this.srcDir.stringView
@@ -790,7 +845,15 @@ Server: class {
                     rel = "\{un9}.z"
                     io.eprintln "zls: \{pth} is outside srcDir and systemDir; serving it from its open buffer"
                 }
-                d: Document uri: uo.copy path: pth relpath: rel text: to.copy version: ver
+                d: (Document
+                    uri: uo.copy
+                    path: pth
+                    relpath: rel
+                    srcDir: this.srcDir.copy
+                    systemDir: this.systemDir.copy
+                    text: to.copy
+                    version: ver
+                )
                 key: uo.copy
                 this.docs.set :key value: d
                 this.syncDoc uri: uo.stringView
@@ -931,14 +994,6 @@ Server: class {
     # re-analyse one document and publish its diagnostics
     recomputeFor: function {:this uri: StringView} is {
         if this.initialized.not then return
-        ov: Map String V: String
-        for each e: this.docs.iterateItems loop {
-            if e.value.relpath.length > 0 then {
-                k: e.value.relpath.copy
-                v: e.value.text.copy
-                ov.set key: k value: v
-            }
-        }
         mp: String
         drel: String
         found: false
@@ -953,16 +1008,31 @@ Server: class {
             } case none then null
         }
         if found.not then return
+        this.enterProjectOf path: mp.stringView
+        # the open buffers of the same project shadow its files on disk
+        ov: Map String V: String
+        for each e: this.docs.iterateItems loop {
+            if e.value.relpath.length > 0 when e.value.srcDir.stringView == this.srcDir then {
+                k: e.value.relpath.copy
+                v: e.value.text.copy
+                ov.set key: k value: v
+            }
+        }
         # a subunit's document is checked inside its topmost unit, which the
         # parse starts from; that unit's relpath keys the group's shared check
-        topRel: this.topRelOf rel: drel.stringView
+        topRel: (this.topRelOf
+            rel: drel.stringView
+            srcDir: this.srcDir.stringView
+            systemDir: this.systemDir.stringView
+        )
         mu: zsource.unitNameOf path: topRel.stringView
+        gk: zcheck.joinPath a: this.srcDir.stringView b: topRel.stringView
         r: (zcheck.check
             srcdir: this.srcDir.stringView
             systemdir: this.systemDir.stringView
             mainUnit: mu.stringView
             overlays: ov
-            layer: zcheck.noLayer
+            layer: this.layer
         )
         rows: ListVal zcheck.diagrow
         msgs: List String
@@ -971,8 +1041,8 @@ Server: class {
         if r.parseOk then {
             # the check answers for every open document of the group, so an
             # edit to any of them refreshes navigation for all
-            this.bindGroup :uri topRel: topRel.stringView
-            this.snapshots.set key: topRel.copy value: r
+            this.bindGroup :uri topRel: topRel.stringView key: gk.stringView
+            this.snapshots.set key: gk.copy value: r
         }
     }
 
@@ -981,7 +1051,12 @@ Server: class {
     # subunit and the walk steps up; the parent counts when it is an open
     # buffer, saved or not, or a file under either root. A relpath with no
     # folder is its own top, so the climb never leaves the roots.
-    topRelOf: function {this: this.view rel: StringView} out String is {
+    topRelOf: function {
+        this: this.view
+        rel: StringView
+        srcDir: StringView
+        systemDir: StringView
+    } out String is {
         cur: rel.string
         stepping: true
         for stepping loop {
@@ -992,7 +1067,7 @@ Server: class {
             ) case some then {
                 if slashOpt > 0 then {
                     parentRel: "\{cur.stringView.substring from: 0 to: slashOpt}.z"
-                    if (this.unitFileExists rel: parentRel.stringView) then {
+                    if (this.unitFileExists rel: parentRel.stringView :srcDir :systemDir) then {
                         cur = parentRel.take
                         stepping = true
                     }
@@ -1003,42 +1078,55 @@ Server: class {
     }
 
     # unitFileExists -- whether a unit file is at `rel`: an open document's
-    # buffer, saved or not, or a file under the src or system root.
-    unitFileExists: function {this: this.view rel: StringView} out bool is {
+    # buffer of the project rooted at `srcDir`, saved or not, or a file under
+    # the src or system root.
+    unitFileExists: function {
+        this: this.view
+        rel: StringView
+        srcDir: StringView
+        systemDir: StringView
+    } out bool is {
         open: false
         for each k: this.docs loop {
             dgo: this.docs.get key: k
             match (
                 dgo
             ) case some then {
-                if dgo.relpath.stringView == rel then open = true
+                if dgo.relpath.stringView == rel when (
+                    dgo.srcDir.stringView == srcDir
+                ) then open = true
             } case none then null
         }
         if open then return true
-        if (io.exists path: (zcheck.joinPath a: this.srcDir.stringView b: rel)) then return true
-        return (io.exists path: (zcheck.joinPath a: this.systemDir.stringView b: rel))
+        if (io.exists path: (zcheck.joinPath a: srcDir b: rel)) then return true
+        return (io.exists path: (zcheck.joinPath a: systemDir b: rel))
     }
 
     # groupOf -- the group key of the open document `uri`: its topmost unit's
-    # relpath. "" when the document is not open.
+    # file, under its project's src root. "" when the document is not open.
     groupOf: function {this: this.view uri: StringView} out String is {
         rel: String
+        sd: String
+        syd: String
         {
             dgo: this.docs.get key: uri.asString
             match (
                 dgo
             ) case some then {
                 rel = dgo.relpath.copy
+                sd = dgo.srcDir.copy
+                syd = dgo.systemDir.copy
             } case none then {
                 return rel
             }
         }
-        return (this.topRelOf rel: rel.stringView)
+        top: this.topRelOf rel: rel.stringView srcDir: sd.stringView systemDir: syd.stringView
+        return (zcheck.joinPath a: sd.stringView b: top.stringView)
     }
 
-    # bindGroup -- point every open document of the group `topRel` at its check,
-    # the one just run for `uri` included.
-    bindGroup: function {:this uri: StringView topRel: StringView} is {
+    # bindGroup -- point every open document of the group `topRel` of the
+    # project in hand at its check, `key`, the one just run for `uri` included.
+    bindGroup: function {:this uri: StringView topRel: StringView key: StringView} is {
         # the documents are copied out first: the climb reads `this.docs` too
         uris: List String
         rels: List String
@@ -1047,20 +1135,26 @@ Server: class {
             match (
                 dgo
             ) case some then {
-                uris.append k.copy
-                rels.append dgo.relpath.copy
+                if dgo.srcDir.stringView == this.srcDir then {
+                    uris.append k.copy
+                    rels.append dgo.relpath.copy
+                }
             } case none then null
         }
         members: List String
         members.append uri.string
         i: u64
         for i < uris.length loop {
-            top: this.topRelOf rel: (rels.get :i).stringView
+            top: (this.topRelOf
+                rel: (rels.get :i).stringView
+                srcDir: this.srcDir.stringView
+                systemDir: this.systemDir.stringView
+            )
             if top.stringView == topRel then members.append (uris.get :i).copy
             i = i + 1
         }
         for each m: members loop {
-            this.docCheck.set key: m.copy value: topRel.string
+            this.docCheck.set key: m.copy value: key.string
         }
     }
 
@@ -1110,6 +1204,8 @@ Server: class {
             paths.append pp
         }
         for each e: this.docs.iterateItems loop {
+            # a document of another project is not this check's to clear
+            if e.value.srcDir.stringView != this.srcDir then continue
             drel: e.value.relpath
             dfs: zcheck.joinPath a: this.srcDir.stringView b: drel.stringView
             dov: "/".string
@@ -1242,6 +1338,8 @@ Server: class {
             if line0 >= 0 when ch0 >= 0 then {
                 dtext: String
                 drel: String
+                dsrc: String
+                dsys: String
                 found: false
                 {
                     dgo: this.docs.get key: uo
@@ -1250,10 +1348,15 @@ Server: class {
                     ) case some then {
                         dtext = dgo.text.copy
                         drel = dgo.relpath.copy
+                        dsrc = dgo.srcDir.copy
+                        dsys = dgo.systemDir.copy
                         found = true
                     } case none then null
                 }
                 if found then {
+                    # the document's own project answers for it
+                    this.srcDir = dsrc.take
+                    this.systemDir = dsys.take
                     ck: this.checkKeyOf uri: uo.stringView
                     sno: this.snapshots.get key: ck
                     match (
@@ -1322,6 +1425,8 @@ Server: class {
         ) case some then {
             drel: String
             dtext: String
+            dsrc: String
+            dsys: String
             found: false
             {
                 dgo: this.docs.get key: uo
@@ -1330,10 +1435,14 @@ Server: class {
                 ) case some then {
                     drel = dgo.relpath.copy
                     dtext = dgo.text.copy
+                    dsrc = dgo.srcDir.copy
+                    dsys = dgo.systemDir.copy
                     found = true
                 } case none then null
             }
             if found then {
+                this.srcDir = dsrc.take
+                this.systemDir = dsys.take
                 ck: this.checkKeyOf uri: uo.stringView
                 sno: this.snapshots.get key: ck
                 match (
@@ -6076,6 +6185,11 @@ main: function is {
         docs: (Map String V: Document)
         srcDir: ""
         systemDir: ""
+        baseSrcDir: ""
+        baseSystemDir: ""
+        srcExplicit: false
+        systemExplicit: false
+        layer: zcheck.noLayer
         :srcFlag
         :sysFlag
         encUtf32: false
