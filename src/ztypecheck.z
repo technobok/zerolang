@@ -9791,16 +9791,24 @@ resolveData: function {
     etId: dataElemTypeName :ast :st :dnode outName: etn.stringView :vals
     etName: zast.nameTextCopy :ast ref: etId
     elemTid: litId
-    {
-        lk: walkLookupTyperef :st :scope :ast :unitDecl base: etName.stringView
+    if dnode.outType.isZero.not then {
+        # `out T` is a type written in the block's scope and resolved as any
+        # written type is: a user type spelled like a builtin is the user's
+        ot: resolveTyperefShell :st :scope :ast :unitDecl nid: dnode.outType thisName: defName
+        if ot.isZero.not then elemTid = ot
+        # recorded as any signature's type is, so a name that resolves to
+        # nothing is reported as an unknown type where it is written
+        recordTyperef :st :scope :ast :unitDecl thisName: defName nid: dnode.outType
+    } else {
+        # an element's suffix (`0.u8`) or the untyped default names the
+        # prelude's type whatever the unit declares, as a literal's suffix
+        # does in a body
+        lk: walkLookupTyperefFrom :st :ast scope: ztypes.declid baseId: etId
         match (
             lk
         ) case some then {
             elemTid = lk
-        } case none then {
-            dn: descendNamed :st :scope :ast :unitDecl name: etName.stringView
-            if dn.isZero.not then elemTid = dn
-        }
+        } case none then null
     }
     ek: ztypes.numkindByName name: etName.stringView
     # a block of mixed kinds has no element type to check its elements against
@@ -9811,6 +9819,25 @@ resolveData: function {
     typed: (etn.length > 0) or (dataTagWritten :ast :dnode)
     # the template the block's name is a value of: its members are the block's own
     valTpl: dataValueTemplate :ast :st :scope :elemTid
+    # a type that resolved and is no number or string; one that resolved to
+    # nothing is the unknown type recordTyperef reports
+    outDecl: declOfTypeId :st tid: elemTid
+    if dnode.outType.isZero.not when outDecl.isZero.not when valTpl.isZero then {
+        otn: specWrittenName :st :ast tid: elemTid
+        oNode: ast.nodes.get i: dnode.outType
+        om: "a data block's `out` names its element type, and '\{otn}' is no integer, float or string type"
+        (addErrorH
+            :st
+            nodeid: dnode.outType
+            lineno: (nodeLine n: oNode)
+            colno: (nodeCol n: oNode)
+            e: zast.err.typeError
+            msg: om
+            note: String
+            hint: "write an integer, float or string type after `out`, or leave `out` off"
+            width: otn.length.u32.orPanic
+        )
+    }
     # every name an element takes: its label, else its ordinal
     taken: IdSet zast.nameid
     ordinal: u64
