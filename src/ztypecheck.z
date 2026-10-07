@@ -59256,17 +59256,10 @@ monoNumericParamValue: function {
     return (st.typing.memberConstOf parentTypeId: mono :nameId)
 }
 
-# atomFoldedToString -- the node is a bare atom the value walk already stamped
-# with a STRING value: a string constant read at a use site.
-atomFoldedToString: function {
-    st: zenv.ZSymbolTable.view
-    ast: Ast.view
-    nid: zast.nodeid
-} out bool is {
-    isAtom: false
-    n: ast.nodes.get i: nid
-    isAtom = n.atomid
-    if isAtom.not then return false
+# foldedToString -- the node already carries a folded string: a string constant
+# or a literal read at a use site, whose methods (`W.length`, `"abc".substring
+# from: 1 to: 2`) fold too.
+foldedToString: function {st: zenv.ZSymbolTable.view nid: zast.nodeid} out bool is {
     g: st.typing.nodeConstIn mono: st.typing.curMonoStamp :nid
     return g.kind.svalKind
 }
@@ -59278,7 +59271,7 @@ foldedToNumber: function {st: zenv.ZSymbolTable.view nid: zast.nodeid} out bool 
     return v.kind.ivalKind or v.kind.fvalKind
 }
 
-# callOnFoldedString -- the call at `nid` is a method called on such an atom.
+# callOnFoldedString -- the call at `nid` is a method called on a folded string.
 callOnFoldedString: function {
     st: zenv.ZSymbolTable.view
     ast: Ast.view
@@ -59291,7 +59284,7 @@ callOnFoldedString: function {
         if cn.dottedpath then recvId = cn.parent
     }
     if recvId.isZero then return false
-    return (atomFoldedToString :st :ast nid: recvId)
+    return (foldedToString :st nid: recvId)
 }
 
 # stampConstAt -- record what a USE SITE evaluates to, when it evaluates to
@@ -59326,7 +59319,7 @@ stampConstAt: function {
     got: st.typing.constFail
     st.typing.constFail = held
     if cv.kind.none then {
-        hasNone: got.kind.overflow or got.kind.indexRange
+        hasNone: got.kind.overflow or got.kind.indexRange or got.kind.substringRange
         if got.kind.divZero then hasNone = integerDivision :st :ast f: got
         if hasNone then renderConstFail :st f: got
         return
@@ -59432,7 +59425,7 @@ useSiteAsks: function {
     if (plan.arm == 7) or (plan.arm == 8) then return false
     if plan.arm == 3 then return plan.parts < 2
     if plan.arm != 4 then return true
-    if (atomFoldedToString :st :ast nid: plan.parentId) then return true
+    if (foldedToString :st nid: plan.parentId) then return true
     if (foldedToNumber :st nid: plan.parentId) then return true
     # `blk.a` reads an element of a data block, a constant
     pbt: walkTypeOf :st nid: plan.parentId
