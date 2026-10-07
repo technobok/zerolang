@@ -2065,7 +2065,7 @@ declTypeIdOf: function {
 }
 
 # the owner type id of the member referenced at node `nid` (the member
-# declaration's parent type via refDecl), or 0.
+# declaration's parent type or data block, via refDecl), or 0.
 memberOwnerOf: function {o: (Option zenv.ZSymbolTable).view nid: zast.nodeid} out ztypes.tid is {
     rd: refDeclOf :o :nid
     if rd.isZero then return ztypes.tid.zero
@@ -2081,7 +2081,8 @@ memberOwnerOf: function {o: (Option zenv.ZSymbolTable).view nid: zast.nodeid} ou
         o
     ) case some then {
         p: o.typing.decls.get i: par
-        if p.kind.typeDecl then return p.typeId
+        # a data block's element is a member of the block
+        if p.kind.typeDecl or p.kind.dataDecl then return p.typeId
         return ztypes.tid.zero
     } case none then {
         return ztypes.tid.zero
@@ -3466,16 +3467,12 @@ navtarget: record {
 # falls back to its def tid); a binding is its variable; a declaration is its
 # type, then a unit, then its own variable. The Decl comes from refDecl.
 navTargetByKind: function {snap: zcheck.CheckResult hnid: zast.nodeid kind: u8} out navtarget is {
+    if kind == 2 then return (memberNavTarget :snap :hnid)
     refVid: ztypes.vid
     refTid: ztypes.tid
-    refOwner: ztypes.tid
     if kind == 1 then {
         refVid = useVarId o: snap.st nid: hnid
         if refVid.isZero then refTid = useUnitDef o: snap.st nid: hnid
-    }
-    if kind == 2 then {
-        refOwner = memberOwnerOf o: snap.st nid: hnid
-        if refOwner.isZero then refTid = useUnitDef o: snap.st nid: hnid
     }
     if kind == 3 then refVid = defVarIdOf o: snap.st nid: hnid
     if kind == 6 then {
@@ -3486,9 +3483,51 @@ navTargetByKind: function {snap: zcheck.CheckResult hnid: zast.nodeid kind: u8} 
     return (navtarget
         vid: refVid
         tid: refTid
-        owner: refOwner
+        owner: ztypes.tid
         declId: (refDeclOf o: snap.st nid: hnid)
     )
+}
+
+# memberNavTarget -- what a member hit names: its owner, or, for a
+# unit-qualified member with no owner stamp, its def tid. A data block's own
+# `length` has no declaration of its own: the block owns it, and is where it is
+# declared.
+memberNavTarget: function {snap: zcheck.CheckResult hnid: zast.nodeid} out navtarget is {
+    refTid: ztypes.tid
+    refDecl: refDeclOf o: snap.st nid: hnid
+    refOwner: memberOwnerOf o: snap.st nid: hnid
+    if refOwner.isZero then {
+        refOwner = dataBaseOfOpt :snap dpid: hnid
+        if refOwner.isZero.not then refDecl = declOfTidOpt o: snap.st tid: refOwner
+    }
+    if refOwner.isZero then refTid = useUnitDef o: snap.st nid: hnid
+    return (navtarget vid: ztypes.vid tid: refTid owner: refOwner declId: refDecl)
+}
+
+# declOfTidOpt -- the declaration that declares type `tid`, over the LSP's
+# optional snapshot; 0 when there is none.
+declOfTidOpt: function {o: (Option zenv.ZSymbolTable).view tid: ztypes.tid} out ztypes.declid is {
+    match (
+        o
+    ) case some then {
+        return (o.typing.declIdOfType typeId: tid)
+    } case none then {
+        return ztypes.declid
+    }
+}
+
+# dataBaseOfOpt -- the data block the base of dotted path `dpid` names, 0 when
+# the base is no data block.
+dataBaseOfOpt: function {snap: zcheck.CheckResult dpid: zast.nodeid} out ztypes.tid is {
+    baseId: zast.nodeid
+    {
+        n: snap.prog.nodes.get i: dpid
+        if n.dottedpath then baseId = n.parent
+    }
+    if baseId.isZero then return ztypes.tid.zero
+    bt: nodeTypeAt o: snap.st nid: baseId
+    if (ownerIsDataOpt o: snap.st tid: bt) then return bt
+    return ztypes.tid.zero
 }
 
 # isUnitTidOpt -- `tid` is a unit's type, over the LSP's optional snapshot.
@@ -3628,16 +3667,27 @@ genericParamHoverCard: function {snap: zcheck.CheckResult hit: navhit} out Value
     return (hoverMarkdown code: gcard.stringView doc: gdoc.stringView)
 }
 
-# hitReadsConstOpt -- the hit is a bare name that reads a constant (`LIMIT`,
-# `ON: true`, `M: mode.slow`): a use with no variable, resolved to a
-# declaration, whose node carries the value the checker folded. A numeric
-# literal folds too and is not asked.
+# hitReadsConstOpt -- the hit reads a constant: a bare name (`LIMIT`, `ON:
+# true`, `M: mode.slow`) -- a use with no variable, resolved to a declaration,
+# whose node carries the value the checker folded -- or a data block's element
+# or length read through the block. A numeric literal folds too and is not
+# asked.
 hitReadsConstOpt: function {
     o: (Option zenv.ZSymbolTable).view
     hit: navhit
     # the hit's written text
     name: StringView
 } out bool is {
+    # a data block's element or length, read through the block
+    if hit.kind == 2 when (ownerIsDataOpt :o tid: hit.owner) then {
+        match (
+            o
+        ) case some then {
+            return (o.typing.nodeConst.has key: hit.nodeid)
+        } case none then {
+            return false
+        }
+    }
     if hit.kind != 1 then return false
     if hit.vid.isZero.not then return false
     # a literal folds too, and is no constant's name
@@ -3647,6 +3697,19 @@ hitReadsConstOpt: function {
         o
     ) case some then {
         return (o.typing.nodeConst.has key: hit.nodeid)
+    } case none then {
+        return false
+    }
+}
+
+# ownerIsDataOpt -- `tid` is a data block's type, over the LSP's optional
+# snapshot.
+ownerIsDataOpt: function {o: (Option zenv.ZSymbolTable).view tid: ztypes.tid} out bool is {
+    if tid.isZero then return false
+    match (
+        o
+    ) case some then {
+        return (o.reg.typetypeOf typeId: tid) == ztypes.ztypetype.dataType
     } case none then {
         return false
     }
@@ -3731,6 +3794,8 @@ hoverTypeFence: function {
             fence.append cv
         }
     }
+    # a data block's element or length is a constant, which nothing owns
+    if (ownerIsDataOpt o: snap.st tid: hit.owner) then return fence
     annot: refAnnotation prog: snap.prog o: snap.st vid: hit.vid nid: hit.nodeid
     if annot.length > 0 then {
         fence.append "  # "
@@ -3833,6 +3898,11 @@ navHoverAnswer: function {
         docBody = hoverDoc :snap :sp nid: legacyDnd
     }
     hoverCallNotes :snap :sp :hit :body :docBody
+    # a data block's ordinal (`primes.0`) is spelled like a literal, and is none
+    if (ownerIsDataOpt o: snap.st tid: hit.owner) then return (hoverMarkdown
+        code: body.stringView
+        doc: docBody.stringView
+    )
     ln9: (literalNote
         o: snap.st
         name: hname.stringView
