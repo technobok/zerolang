@@ -3055,13 +3055,10 @@ stampNameView: function {symtab: zenv.ZSymbolTable.view nid: zast.nodeid} outx S
     return ""
 }
 
-# builtinTidInU -- builtinTid for a builtin DECLARED IN `unit`: currentUnit is
-# walkLookupTyperef's first probe, so naming the unit resolves without leaning on
-# the stdlib fallbacks. For the builtins `core` does not re-export.
 # builtinTidInU -- the canonical registry id of a stdlib builtin DECLARED IN
 # `unitName`: currentUnit is walkLookupTyperef's first probe, so naming the unit
-# is the qualified lookup, for the builtins `core` does not re-export. Passing
-# "" is the unqualified form and the only other caller is builtinTid.
+# is the qualified lookup, for the builtins `core` does not re-export (a
+# natives.tbl canonical part spelled `unit.name`).
 builtinTidInU: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -3083,34 +3080,30 @@ builtinTidInU: function {
     )
 }
 
-# builtinTid -- builtinTidInU with no unit named, so a user type of the same
-# name never shadows it. 0 when absent from the program.
+# builtinTid -- the stdlib type a name names, resolved from the prelude by its
+# id (ztypecheck.stdTidPeek), so a user type of the same name never shadows it.
+# 0 when absent from the program.
 builtinTid: function {
-    ast: Ast.view symtab: zenv.ZSymbolTable.view base: StringView
+    ast: Ast.view symtab: zenv.ZSymbolTable.view nameId: zast.nameid
 } out ztypes.tid is {
-    return (builtinTidInU :ast :symtab unitName: "" :base)
+    return (ztypecheck.stdTidPeek :ast st: symtab wk: nameId)
 }
 
-# specStemTid -- the minted instance of a system template over one or two
-# concrete arguments, every part named by its SOURCE name (`optionval` over
-# `u64`). A runtime fragment's text still carries the mangled spelling, but the
-# identity comes off the spec trie. 0 when that instance was never demanded.
+# specStemTid -- the minted instance of a stdlib template over one concrete
+# argument, both well-known names (`ListVal` over `u8`). A runtime fragment's
+# text still carries the mangled spelling, but the identity comes off the spec
+# trie. 0 when that instance was never demanded.
 specStemTid: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
-    base: StringView
-    arg1: StringView
-    arg2: StringView
+    base: zast.nameid
+    arg: zast.nameid
 } out ztypes.tid is {
-    arg2Tid: ztypes.tid
-    if arg2.length > 0 then arg2Tid = builtinTid :ast :symtab base: arg2
-    templateTid9: builtinTid :ast :symtab :base
-    a19: builtinTid :ast :symtab base: arg1
     return (specTidArgs
         :symtab
-        templateTid: templateTid9
-        a1: a19
-        a2: arg2Tid
+        templateTid: (builtinTid :ast :symtab nameId: base)
+        a1: (builtinTid :ast :symtab nameId: arg)
+        a2: ztypes.tid.zero
     )
 }
 
@@ -3295,7 +3288,14 @@ buildOriginTids: function {
     symtab: zenv.ZSymbolTable.view
     acc: ListVal ztypes.tid
 } is {
-    for each nm: family loop acc.append (builtinTid ast: program :symtab base: nm)
+    # a family row is runtime text: interned, then asked by id
+    for each nm: family loop {
+        acc.append (builtinTid
+            ast: program
+            :symtab
+            nameId: (zast.poolFind pool: program.names text: nm)
+        )
+    }
 }
 
 
@@ -35890,7 +35890,7 @@ canonPartTid: function {
             base: (part.substring from: dot + 1 to: part.length)
         )
     } case none then null
-    return (builtinTid :ast :symtab base: part)
+    return (builtinTid :ast :symtab nameId: (zast.poolFind pool: ast.names text: part))
 }
 
 # ioCanonCname -- memoized wrapper: the canon->cname map is emit-stable and io
@@ -36080,9 +36080,19 @@ ioFileId: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view} out ztypes.tid
 ioFileLive: function {ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx.view} out bool is {
     calleeTid: ioFileId :symtab :ctx
     if calleeTid.isZero then return false
-    listValU8Tid: specStemTid :ast :symtab base: "ListVal" arg1: "u8" arg2: ""
+    listValU8Tid: (specStemTid
+        :ast
+        :symtab
+        base: zast.wellKnown.slot.tyListVal
+        arg: zast.wellKnown.slot.tyU8
+    )
     if listValU8Tid.isZero then return false
-    listViewValU8Tid: specStemTid :ast :symtab base: "ListViewVal" arg1: "u8" arg2: ""
+    listViewValU8Tid: (specStemTid
+        :ast
+        :symtab
+        base: zast.wellKnown.slot.tyListViewVal
+        arg: zast.wellKnown.slot.tyU8
+    )
     if listViewValU8Tid.isZero then return false
     return true
 }
@@ -36099,9 +36109,19 @@ netListenerLive: function {ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx
 # netConnLive -- see netListenerLive.
 netConnLive: function {ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx.view} out bool is {
     if (netResultOf :ast :symtab tid: ctx.netConnTid).isZero then return false
-    listValU8Tid: specStemTid :ast :symtab base: "ListVal" arg1: "u8" arg2: ""
+    listValU8Tid: (specStemTid
+        :ast
+        :symtab
+        base: zast.wellKnown.slot.tyListVal
+        arg: zast.wellKnown.slot.tyU8
+    )
     if listValU8Tid.isZero then return false
-    listViewValU8Tid: specStemTid :ast :symtab base: "ListViewVal" arg1: "u8" arg2: ""
+    listViewValU8Tid: (specStemTid
+        :ast
+        :symtab
+        base: zast.wellKnown.slot.tyListViewVal
+        arg: zast.wellKnown.slot.tyU8
+    )
     if listViewValU8Tid.isZero then return false
     return true
 }
