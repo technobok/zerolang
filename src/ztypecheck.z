@@ -9490,6 +9490,21 @@ dataElemFits: function {
     return false
 }
 
+# dataTagWritten -- some element of the block carries its own type tag
+# (`cNul: 0.u8`).
+dataTagWritten: function {ast: Ast dnode: dataref} out bool is {
+    k: u64
+    for k < dnode.nelems loop {
+        el: ast.nodes.get i: (zast.dataElemAt :ast nid: dnode.nid i: k)
+        k = k + 1
+        if el.namedoperation then {
+            de: dataElemParts :ast opId: el.operation
+            if de.tagId.isZero.not then return true
+        }
+    }
+    return false
+}
+
 # dataElemTypeName -- the ONE type name a data block's elements carry: the
 # `out T` clause when written, else the type the elements' own tags agree on,
 # else i64 -- f64 when every element is a bare float literal. Tags that
@@ -9710,6 +9725,10 @@ resolveData: function {
         }
     }
     ek: ztypes.numkindByName name: etName.stringView
+    # a block that names its type -- `out T`, or a tagged element -- reads each
+    # element at that type; one that names none reads them untyped, as a unit
+    # constant reads, and only what reaches run time is the i64 / f64 default
+    typed: (etn.length > 0) or (dataTagWritten :ast :dnode)
     # the template the block's name is a value of: its members are the block's own
     valTpl: dataValueTemplate :ast :st :scope :elemTid
     # every name an element takes: its label, else its ordinal
@@ -9780,6 +9799,9 @@ resolveData: function {
             # it is the discriminator a tagged type using this block will be
             # emitted with, and a backend reading it has no unit to fold under.
             cv: vals.get i: ordinal
+            if typed when cv.kind.none.not when (isNumericTid :ast :st :scope tid: elemTid) then {
+                cv = ztypes.typedConst c: cv numTid: elemTid
+            }
             if cv.kind.none.not when (dataElemFits
                 :ast
                 :st
@@ -57326,8 +57348,9 @@ foldIfBranch: function {
 }
 
 # constDataMember -- a data block's element or length as a value, from the
-# constants the block recorded as it resolved; a cycle when the block is still
-# evaluating its elements, one of which reads it. An element is a value only when
+# constants the block recorded as it resolved -- typed when the block names its
+# type, untyped when it names none; a cycle when the block is still evaluating
+# its elements, one of which reads it. An element is a value only when
 # the block's elements are a builtin number: `out byteid` makes each element a
 # byteid, whose own `==` a fold of the bare integer would bypass. The length is
 # a count, never an element, and is always one.
@@ -57353,11 +57376,10 @@ constDataMember: function {
         return ztypes.noConst
     }
     eo: (st.typing.declChildOfId parentTypeId: dataTid :nameId).or d: ztypes.tid.zero
-    numeric: isNumericTid :ast :st :scope tid: eo
-    if nameId != zast.names.wkLength when numeric.not then return ztypes.noConst
-    mv: st.typing.memberConstOf parentTypeId: dataTid :nameId
-    if numeric.not or mv.kind.none then return mv
-    return (ztypes.typedConst c: mv numTid: eo)
+    if nameId != zast.names.wkLength when (isNumericTid :ast :st :scope tid: eo).not then {
+        return ztypes.noConst
+    }
+    return (st.typing.memberConstOf parentTypeId: dataTid :nameId)
 }
 
 # constArmRead -- `<typeName>.<armName>` looked up from `lookupUnit`, as a
@@ -58540,8 +58562,8 @@ constOfDataIndex: function {
     }
     ev: st.typing.dataSlotConstOf :dataTid slot: kv.ival.u64.orPanic
     et: st.reg.dataElemTypeOf tid: dataTid
-    if ev.kind.none or (isNumericTid :ast :st :scope tid: et).not then return ztypes.noConst
-    return (ztypes.typedConst c: ev numTid: et)
+    if (isNumericTid :ast :st :scope tid: et).not then return ztypes.noConst
+    return ev
 }
 
 # constOfNamedBase -- a dotted path whose base is a bare atom. The base can name a
@@ -59306,6 +59328,9 @@ useSiteAsks: function {
     if plan.arm != 4 then return true
     if (atomFoldedToString :st :ast nid: plan.parentId) then return true
     if (foldedToNumber :st nid: plan.parentId) then return true
+    # `blk.a` reads an element of a data block, a constant
+    pbt: walkTypeOf :st nid: plan.parentId
+    if (st.reg.typetypeOf typeId: pbt) == ztypes.ztypetype.dataType then return true
     pn: atomNameId :ast n: (ast.nodes.get i: plan.parentId)
     # `unit.CONST` reads another unit's constant, which a conversion after it
     # (`unit.CONST.u8`) folds
