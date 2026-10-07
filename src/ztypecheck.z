@@ -9782,27 +9782,39 @@ dataBlockFits: function {
     want: ztypes.tid
 } out bool is {
     if (st.reg.typetypeOf typeId: dataTid) != ztypes.ztypetype.dataType then return false
+    # a block's `slot` names positions and is no value
+    if (st.typing.dataSlotTypes.has item: dataTid) then return false
     elemTid: st.reg.dataElemTypeOf tid: dataTid
     tpl: dataValueTemplate :ast :st scope: st.curScope :elemTid
     if tpl.isZero then return false
-    if want != tpl then {
-        if (st.reg.genericOriginOf tid: want) != tpl then return false
-        # the parameters by position, as dataValueTypeFor binds them
-        isStr: tpl == (builtinTidT :st scope: st.curScope :ast base: "stringdata")
-        idxAt: 1.u64
-        if isStr then idxAt = 0
-        if isStr.not when (
-            (st.reg.genericTypeArgAt specId: want ordinal: 0) != elemTid
-        ) then return false
-        # the index the block declares, else the template's default
-        wantIdx: st.reg.genericTypeArgAt specId: want ordinal: idxAt
-        haveIdx: (st.typing.dataIndexType.get key: dataTid).or d: ztypes.tid.zero
-        if haveIdx.isZero then haveIdx = builtinTidT :st scope: st.curScope :ast base: "u64"
-        if wantIdx.isZero.not when wantIdx != haveIdx then return false
-    }
+    if want != tpl when (dataValueArgsMatch :ast :st :dataTid :want :tpl :elemTid
+    ).not then return false
     st.reg.setDataValueType typeId: dataTid value: want
     markDataRuntimeIndexed :st tid: dataTid
     return true
+}
+
+# dataValueArgsMatch -- instance `want` of data template `tpl` is what block
+# `dataTid` (of element type `elemTid`) is a value of: its element and its index.
+# The parameters are read by position, as dataValueTypeFor binds them.
+dataValueArgsMatch: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    dataTid: ztypes.tid
+    want: ztypes.tid
+    tpl: ztypes.tid
+    elemTid: ztypes.tid
+} out bool is {
+    if (st.reg.genericOriginOf tid: want) != tpl then return false
+    isStr: tpl == (builtinTidT :st scope: st.curScope :ast base: "stringdata")
+    idxAt: 1.u64
+    if isStr then idxAt = 0
+    if isStr.not when (st.reg.genericTypeArgAt specId: want ordinal: 0) != elemTid then return false
+    # the index the block declares, else the template's default
+    wantIdx: st.reg.genericTypeArgAt specId: want ordinal: idxAt
+    haveIdx: (st.typing.dataIndexType.get key: dataTid).or d: ztypes.tid.zero
+    if haveIdx.isZero then haveIdx = builtinTidT :st scope: st.curScope :ast base: "u64"
+    return wantIdx.isZero or (wantIdx == haveIdx)
 }
 
 # dataBlockAsValue -- a data block written where a value is wanted: its name's
@@ -9817,6 +9829,21 @@ dataBlockAsValue: function {
     nid: zast.nodeid
 } out ztypes.tid is {
     if (st.reg.typetypeOf typeId: vt) != ztypes.ztypetype.dataType then return vt
+    if (st.typing.dataSlotTypes.has item: vt) then {
+        nn: ast.nodes.get i: nid
+        (addErrorH
+            :st
+            nodeid: nid
+            lineno: (nodeLine n: nn)
+            colno: (nodeCol n: nn)
+            e: zast.err.typeError
+            msg: "a block's `slot` is no value: it names its labels' positions"
+            note: String
+            hint: "read one label's position, `blk.slot.label`"
+            width: 4
+        )
+        return ztypes.tid.zero
+    }
     dv: dataValueTypeFor :st :ast :unitDecl dataTid: vt
     if dv.isZero then return vt
     markDataRuntimeIndexed :st tid: vt
@@ -9918,6 +9945,9 @@ resolveData: function {
     }
     # every name an element takes: its label, else its ordinal
     taken: IdSet zast.nameid
+    # the labelled elements' labels and positions, which `slot` reads
+    slotLabels: ListVal zast.nameid
+    slotOrds: ListVal u64
     ordinal: u64
     kE: u64
     for kE < dnode.nelems loop {
@@ -9954,6 +9984,10 @@ resolveData: function {
                 )
             }
             taken.add item: memberIdAt
+            if nmRef.isZero.not then {
+                slotLabels.append nmRef
+                slotOrds.append ordinal
+            }
             # an element named for one of the block's own members would shadow
             # it, or be shadowed by it -- either way a read of the name would
             # not mean what it says
@@ -10001,6 +10035,11 @@ resolveData: function {
             }
         }
         ordinal = ordinal + 1
+    }
+    if slotLabels.length > 0 then {
+        sIdx: (st.typing.dataIndexType.get key: did).or d: ztypes.tid.zero
+        if sIdx.isZero then sIdx = builtinTidT :st :scope :ast base: "u64"
+        resolveDataSlots :ast :st :scope dataTid: did idxTid: sIdx labels: slotLabels ords: slotOrds
     }
     # `length` is a constant of the block: every element is known here, so the
     # read folds like a labelled element rather than reaching a runtime array.
@@ -10052,6 +10091,51 @@ resolveData: function {
         childTypeId: tagId
     )
     return did
+}
+
+# resolveDataSlots -- data block `dataTid`'s `slot`: a member whose own members
+# are the block's labels, each the POSITION of its element, typed as the block's
+# index (`wk.slot.wkLen`). It is a data type of its own, so a label reads as an
+# element of a block reads; it is read through a label and nothing else.
+resolveDataSlots: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    dataTid: ztypes.tid
+    idxTid: ztypes.tid
+    labels: (ListVal zast.nameid).view
+    ords: (ListVal u64).view
+} is {
+    slotTid: (st.reg.newType
+        name: "slot"
+        typetype: ztypes.ztypetype.dataType
+        ownerTid: dataTid
+    )
+    st.reg.setValtype typeId: slotTid value: false
+    st.typing.dataSlotTypes.add item: slotTid
+    (st.typing.declSynthMemberTyped
+        parentTypeId: dataTid
+        nameId: zast.names.wkSlot
+        kind: ztyping.declkind.fieldDecl
+        childTypeId: slotTid
+    )
+    st.reg.setDataElemType typeId: slotTid value: idxTid
+    num: isNumericTid :ast :st :scope tid: idxTid
+    k: u64
+    for k < labels.length loop {
+        lab: labels.get i: k
+        cv: ztypes.makeIntConst (ords.get i: k).i64.orPanic
+        if num then cv = ztypes.typedConst c: cv numTid: idxTid
+        (st.typing.declSynthMemberTyped
+            parentTypeId: slotTid
+            nameId: lab
+            kind: ztyping.declkind.fieldDecl
+            childTypeId: idxTid
+        )
+        st.typing.setMemberConst parentTypeId: slotTid nameId: lab value: cv
+        st.typing.setDataSlotConst dataTid: slotTid slot: k value: cv
+        k = k + 1
+    }
 }
 
 # recordIsTypedef -- true when a definition is a `typedef`. Such a type gets no
@@ -30186,6 +30270,10 @@ checkDataBlockMember: function {
         handled: true
         tid: ztypes.tid.zero
     )
+    if (refuseDataSlotMember :st :ast :dp :bt :cnId) then return (callleg
+        handled: true
+        tid: ztypes.tid.zero
+    )
     if (st.reg.typetypeOf typeId: bt) == ztypes.ztypetype.dataType then {
         if isArray when (dataElemCount :st dataTid: bt) == 0 then {
             (addErrorH
@@ -30283,6 +30371,47 @@ checkDataBlockMember: function {
     return (callleg handled: false tid: ztypes.tid.zero)
 }
 
+# refuseDataSlotMember -- a `slot` read that names no label: a member of a block's
+# `slot` other than one of its labels (`codes.slot.length`, a misspelt label),
+# or `slot` on a block with no labelled element. True when refused.
+refuseDataSlotMember: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    dp: dpref
+    bt: ztypes.tid
+    cnId: zast.nameid
+} out bool is {
+    mn: zast.nameTextAt :ast ref: cnId
+    msg: String
+    hint: String
+    if (st.typing.dataSlotTypes.has item: bt) then {
+        if (st.typing.declChildOfId parentTypeId: bt nameId: cnId).some then return false
+        msg = "'\{mn}' is no label of this block: its `slot` holds its labels' positions and nothing else"
+        hint = "read a label's position, `blk.slot.label`"
+    } else if cnId == zast.names.wkSlot when (
+        (st.reg.typetypeOf typeId: bt) == ztypes.ztypetype.dataType
+    ) then {
+        if (st.typing.declChildOfId parentTypeId: bt nameId: cnId).some then return false
+        bn: st.reg.nameOf tid: bt
+        msg = "'\{bn}' has no labelled element, so no `slot`"
+        hint = "label the elements whose positions you read: `data { first: 2 second: 3 }`"
+    } else {
+        return false
+    }
+    (addErrorH
+        :st
+        nodeid: dp.nid
+        lineno: dp.lineno
+        colno: dp.colno
+        e: zast.err.typeError
+        :msg
+        note: String
+        :hint
+        width: mn.length.u32.orPanic
+    )
+    return true
+}
+
 # refuseDataValueMember -- `.array` or `.tag` read through a data VALUE: both are
 # the block's, reached through its name -- `array t to: N` needs the count, which
 # a value does not carry, and a tag is declared in an `as` block. True when
@@ -30295,11 +30424,14 @@ refuseDataValueMember: function {
     cnId: zast.nameid
     isArray: bool
 } out bool is {
-    if isArray.not and (cnId != zast.names.wkTag) then return false
+    isSlot: cnId == zast.names.wkSlot
+    if isArray.not and (cnId != zast.names.wkTag) and isSlot.not then return false
     og: st.reg.genericOriginOf tid: bt
-    if og.isZero then return false
+    if og.isZero then og = bt
     if og != (builtinTidT :st scope: st.curScope :ast base: "intdata") when (
         og != (builtinTidT :st scope: st.curScope :ast base: "floatdata")
+    ) when (
+        isSlot.not or (og != (builtinTidT :st scope: st.curScope :ast base: "stringdata"))
     ) then return false
     mn: zast.nameTextAt :ast ref: cnId
     (addErrorH
@@ -59033,6 +59165,55 @@ evalConstString: function {
     return ztypes.noConst
 }
 
+# constDataSlotRead -- `blk.slot.label`: the position of a data block's labelled
+# element, as the block's `slot` member records it. The block is named bare or
+# through its unit (`zast.wellKnown`). noConst when the path is not that shape.
+constDataSlotRead: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    # the block's path and the `slot` segment
+    gpId: zast.nodeid
+    gcId: zast.nodeid
+    labelId: zast.nameid
+} out ztypes.cval is {
+    lookupUnit: unitDecl
+    blkId: zast.nameid
+    {
+        gc: ast.nodes.get i: gcId
+        if gc.atomid.not then return ztypes.noConst
+        if gc.name != zast.names.wkSlot then return ztypes.noConst
+    }
+    unitPath: zast.nodeid
+    {
+        gp: ast.nodes.get i: gpId
+        if gp.atomid then blkId = gp.name
+        if gp.dottedpath then {
+            unitPath = gp.parent
+            gpc: ast.nodes.get i: gp.child
+            if gpc.atomid then blkId = gpc.name
+        }
+    }
+    if blkId.isZero then return ztypes.noConst
+    if unitPath.isZero.not then {
+        lookupUnit = unitDeclOfPath :st :scope :ast nid: unitPath
+        if lookupUnit.isZero then return ztypes.noConst
+    }
+    dataTid: typeNamedFrom :st :scope :ast :lookupUnit typeNameId: blkId
+    if (st.reg.typetypeOf typeId: dataTid) != ztypes.ztypetype.dataType then return ztypes.noConst
+    slotTid: ((st.typing.declChildOfId parentTypeId: dataTid nameId: zast.names.wkSlot).or
+        d: ztypes.tid.zero
+    )
+    if (st.typing.dataSlotTypes.has item: slotTid).not then return ztypes.noConst
+    # a position folds as an element of its type would: a typedef index is a
+    # value of its own type, read where it is written and not folded
+    if (dataElemFolds :ast :st :scope elemTid: (st.reg.dataElemTypeOf tid: slotTid)).not then {
+        return ztypes.noConst
+    }
+    return (st.typing.memberConstOf parentTypeId: slotTid nameId: labelId)
+}
+
 # evalConstArmViaUnit -- `unit.kind.arm`: an arm of a type reached THROUGH its
 # unit, which may itself be a subunit (`z.build.oskind.linux`). The parent is a
 # dotted path of its own (`gpId.gcId`), so the type is looked up from that unit
@@ -59213,11 +59394,30 @@ evalConstDotted: function {
     # `z.build.os` -- a constant of a unit reached through a path of units: a
     # subunit is no file unit, so no bare base names it
     if parentIsDotted then {
-        qa: evalConstArmViaUnit :st :scope :ast :gpId :gcId nameCountId: ncId
-        if qa.kind.none.not then return qa
-        return (constOfUnitPathMember :st :scope :ast :parentId :ncId)
+        return (evalConstViaDottedParent :st :scope :ast :unitDecl :parentId :gpId :gcId :ncId)
     }
     return ztypes.noConst
+}
+
+# evalConstViaDottedParent -- `a.b.c` whose parent `a.b` is itself a path: a
+# block's label position (`codes.slot.lf`, `zast.wellKnown.slot.wkThis`), an arm
+# of a type reached through its unit (`io.filekind.dir`), or a constant of a unit
+# reached through a path of units (`z.build.os`).
+evalConstViaDottedParent: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    parentId: zast.nodeid
+    gpId: zast.nodeid
+    gcId: zast.nodeid
+    ncId: zast.nameid
+} out ztypes.cval is {
+    sl: constDataSlotRead :st :scope :ast :unitDecl :gpId :gcId labelId: ncId
+    if sl.kind.none.not then return sl
+    qa: evalConstArmViaUnit :st :scope :ast :gpId :gcId nameCountId: ncId
+    if qa.kind.none.not then return qa
+    return (constOfUnitPathMember :st :scope :ast :parentId :ncId)
 }
 
 # evalConstNode -- the compile-time value of a node, or `none` when the node is
@@ -60019,6 +60219,8 @@ resolveDottedConstantRead: function {
     sfTy: String
     # `unit.Type.member`: the parent is itself a path, through a unit
     qUnitPath: zast.nodeid
+    # `blk.slot.label`: the parent is a block's `slot`
+    viaSlot: false
     {
         sfB: ast.nodes.get i: dr.parent
         if sfB.atomid then sfLit = zast.nameTextCopy :ast ref: sfB.name
@@ -60027,6 +60229,7 @@ resolveDottedConstantRead: function {
             if gpc.atomid then {
                 qUnitPath = sfB.parent
                 sfLit = zast.nameTextCopy :ast ref: gpc.name
+                viaSlot = gpc.name == zast.names.wkSlot
             }
         }
         sfC: ast.nodes.get i: dr.child
@@ -60036,6 +60239,21 @@ resolveDottedConstantRead: function {
     # read written there would be
     lookupUnit: unitDecl
     if qUnitPath.isZero.not then lookupUnit = unitDeclOfPath :st :scope :ast nid: qUnitPath
+    # a label's position is a constant when its index type folds: a typedef
+    # index is a value of its own type, as a typedef element is
+    if viaSlot when lookupUnit.isZero when (evalConstNode :st :scope :ast :unitDecl nid: defnId
+    ).kind.none then {
+        (reportUnitConstantShape
+            :st
+            nodeid: dr.nid
+            lineno: dr.lineno
+            colno: dr.colno
+            width: 4
+            msg: "a unit-level constant takes a literal value, not a construction"
+            hint: "read the position inside a function, where it is a value of the block's index type"
+        )
+        return
+    }
     if sfLit.length > 0 when sfTy.length > 0 when lookupUnit.isZero.not then {
         (resolveDottedConstantDef
             :ast
