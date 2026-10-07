@@ -6108,7 +6108,7 @@ emitSvCallLegs: function {
 }
 
 # emitDataIndexCall -- `primes.index i`: a data-block element read,
-# emitted as z_{name}[arg].
+# emitted as z_{name}_at(arg), which checks the bounds.
 emitDataIndexCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -6146,7 +6146,7 @@ emitDataIndexCall: function {
             }
         }
         dsym0: ctxCname :ctx tid: dtid
-        e0: "\{dsym0}[\{ax}]"
+        e0: "\{dsym0}_at(\{ax})"
         return e0
     }
     return ""
@@ -41468,9 +41468,10 @@ unitMemberTid: function {
 }
 
 # emitDataBlock -- `name: data { e0 e1 ... } out T`: a static const array
-# z_{name}[], with the element C type from out T (i64 default). Emitted only
-# when the block is read at runtime (`.index` / `.array`); labels, ordinals and
-# `.length` fold to constants and need no array.
+# z_{name}[], with the element C type from out T (i64 default), and its reader
+# z_{name}_at, which panics on an index past the end (a negative i64 converts
+# to a huge u64). Emitted only when the block is read at runtime (`.index` /
+# `.array`); labels, ordinals and `.length` fold to constants and need no array.
 emitDataBlock: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -41513,6 +41514,16 @@ emitDataBlock: function {
             dsym: ctxCname :ctx tid: ridtid
             l0: "static const \{ect} \{dsym}[] = {\{elems}};\n\n"
             buf.append l0
+            buf.append "static \{ect} \{dsym}_at(uint64_t _idx);\n"
+            buf.append "static \{ect} \{dsym}_at(uint64_t _idx) {\n"
+            buf.append "    if (_idx >= \{cnt}) {\n"
+            buf.append "        char _zp_buf[96];\n"
+            b2: "        snprintf(_zp_buf, sizeof(_zp_buf), \"data index: index %lu out of bounds (length \{cnt})\", (unsigned long)_idx);\n"
+            buf.append b2
+            buf.append "        z_panic(_zp_buf);\n"
+            buf.append "    }\n"
+            buf.append "    return \{dsym}[_idx];\n"
+            buf.append "}\n\n"
         }
     } else null
 }
