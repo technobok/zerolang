@@ -16,17 +16,49 @@ public: unit {
     :targetIsHost
 }
 
+# The vocabulary: each block lists the spellings of a --target triple that name
+# one oskind or archkind arm, the arm's own name first. It is DATA rather than a
+# chain of comparisons: the spelling is the datum for external text -- there is
+# no name id for "mingw32" -- so the whole parser gets by on the one compare
+# namesArm makes, and the refusal lists the vocabulary from the same blocks.
+
+# linuxSpellings -- the spellings that name linux
+linuxSpellings: data { "linux" } out StringView
+
+# darwinSpellings -- the spellings that name darwin
+darwinSpellings: data { "darwin" "apple" "macos" } out StringView
+
+# windowsSpellings -- the spellings that name windows
+windowsSpellings: data { "windows" "mingw32" "mingw" "msvc" } out StringView
+
+# x86Spellings -- the spellings that name x86_64
+x86Spellings: data { "x86_64" "amd64" } out StringView
+
+# armSpellings -- the spellings that name aarch64
+armSpellings: data { "aarch64" "arm64" } out StringView
+
 # namesArm -- whether `comp`, one `-` separated component of a --target
-# triple, is one of the space-separated `spellings` that name a single
-# oskind or archkind arm. The vocabulary is DATA passed in rather than a chain of
-# comparisons in the caller: the spelling is the datum for external text --
-# there is no name id for "mingw32" -- so the whole parser gets by on the one
-# literal compare made here.
-namesArm: function {spellings: StringView comp: StringView} out bool is {
-    for each s9n: (spellings.split sep: " ") loop {
+# triple, is one of the `spellings` of an arm
+namesArm: function {spellings: stringdata comp: StringView} out bool is {
+    for each s9n: spellings loop {
         if s9n == comp then return true
     }
     return false
+}
+
+# armVocabulary -- an arm's spellings as the refusal lists them: its name, then
+# the others in parentheses (`darwin (also apple, macos)`)
+armVocabulary: function {spellings: stringdata} out String is {
+    r: String
+    k: u64
+    for each s9v: spellings loop {
+        if k == 1 then r.append " (also "
+        if k > 1 then r.append ", "
+        r.append s9v
+        k = k + 1
+    }
+    if k > 1 then r.append ")"
+    return r
 }
 
 # tripleOsNames -- the DISTINCT `oskind` arm names a --target triple asks for,
@@ -44,19 +76,19 @@ tripleOsNames: function {triple: StringView} out String is {
     hasDarwin: false
     hasWindows: false
     for each c9t: (triple.split sep: "-") loop {
-        if (namesArm spellings: "linux" comp: c9t) then hasLinux = true
-        if (namesArm spellings: "darwin apple macos" comp: c9t) then hasDarwin = true
-        if (namesArm spellings: "windows mingw32 mingw msvc" comp: c9t) then hasWindows = true
+        if (namesArm spellings: linuxSpellings comp: c9t) then hasLinux = true
+        if (namesArm spellings: darwinSpellings comp: c9t) then hasDarwin = true
+        if (namesArm spellings: windowsSpellings comp: c9t) then hasWindows = true
     }
     r: String
-    if hasLinux then r.append "linux"
+    if hasLinux then r.append linuxSpellings.0
     if hasDarwin then {
         if r.length > 0 then r.append " "
-        r.append "darwin"
+        r.append darwinSpellings.0
     }
     if hasWindows then {
         if r.length > 0 then r.append " "
-        r.append "windows"
+        r.append windowsSpellings.0
     }
     return r
 }
@@ -67,14 +99,14 @@ tripleArchNames: function {triple: StringView} out String is {
     hasX86: false
     hasArm: false
     for each c9a: (triple.split sep: "-") loop {
-        if (namesArm spellings: "x86_64 amd64" comp: c9a) then hasX86 = true
-        if (namesArm spellings: "aarch64 arm64" comp: c9a) then hasArm = true
+        if (namesArm spellings: x86Spellings comp: c9a) then hasX86 = true
+        if (namesArm spellings: armSpellings comp: c9a) then hasArm = true
     }
     r: String
-    if hasX86 then r.append "x86_64"
+    if hasX86 then r.append x86Spellings.0
     if hasArm then {
         if r.length > 0 then r.append " "
-        r.append "aarch64"
+        r.append armSpellings.0
     }
     return r
 }
@@ -113,8 +145,16 @@ targetTripleError: function {triple: StringView} out String is {
     } else {
         return ""
     }
-    bad.append "\n  operating systems: linux, windows (also mingw32, mingw, msvc), darwin (also apple, macos)"
-    bad.append "\n  architectures: x86_64 (also amd64), aarch64 (also arm64)"
+    bad.append "\n  operating systems: "
+    bad.append (armVocabulary spellings: linuxSpellings)
+    bad.append ", "
+    bad.append (armVocabulary spellings: windowsSpellings)
+    bad.append ", "
+    bad.append (armVocabulary spellings: darwinSpellings)
+    bad.append "\n  architectures: "
+    bad.append (armVocabulary spellings: x86Spellings)
+    bad.append ", "
+    bad.append (armVocabulary spellings: armSpellings)
     return bad
 }
 
@@ -161,7 +201,7 @@ targetOrHostArch: function {triple: StringView} out String is {
 # left `x86_64-w64-mingw32` -- the example the docs give -- without a suffix.
 targetExeSuffix: function {triple: StringView} out String is {
     osn: targetOsName :triple
-    if (namesArm spellings: "windows" comp: osn.stringView) then return ".exe"
+    if osn.stringView == windowsSpellings.0 then return ".exe"
     return ""
 }
 
