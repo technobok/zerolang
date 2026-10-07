@@ -22310,6 +22310,8 @@ constraintKindFor: function {text: StringView} out ztypes.constraintkind is {
     if text == "valhashable" then return ztypes.constraintkind.valHashable
     if text == "RefHashable" then return ztypes.constraintkind.refHashable
     if text == "idkey" then return ztypes.constraintkind.idKey
+    if text == "anyint" then return ztypes.constraintkind.anyInt
+    if text == "anyfloat" then return ztypes.constraintkind.anyFloat
     # The pre-rename spellings -- `AnyVal`, `ValHashable`, `Any.valtype`,
     # `Any.reftype` -- are GONE. They were mapped because an unmapped
     # constraint fell through to `other`, which constrained nothing at all;
@@ -22329,6 +22331,8 @@ constraintTextOf: function {desc: ztypes.constraintdesc} out String is {
     if desc.kind == ztypes.constraintkind.valHashable then return "valhashable"
     if desc.kind == ztypes.constraintkind.refHashable then return "RefHashable"
     if desc.kind == ztypes.constraintkind.idKey then return "idkey"
+    if desc.kind == ztypes.constraintkind.anyInt then return "anyint"
+    if desc.kind == ztypes.constraintkind.anyFloat then return "anyfloat"
     if desc.kind == ztypes.constraintkind.stringLike then return "StringLike"
     if desc.kind == ztypes.constraintkind.numeric when desc.numKind.has then {
         return (ztypes.numkindName k: desc.numKind.kind)
@@ -22413,6 +22417,10 @@ constraintHolds: function {
         # an id key is not merely hashable: the container indexes on its BITS,
         # so the bound admits only the scalars whose bits are an index
         return (typeIsIdKey :st :scope :ast tid: argTid)
+    } case anyInt then {
+        return (typeIsNumberOf :st :scope :ast tid: argTid float: false)
+    } case anyFloat then {
+        return (typeIsNumberOf :st :scope :ast tid: argTid float: true)
     } case stringLike then {
         # a union bound, so it admits reference types only: a `str` conforms to
         # Text as a value, and is handed to a StringLike parameter as its
@@ -24533,6 +24541,36 @@ typeIsIdKey: function {
     if ktd == (builtinTidT :st :scope :ast base: "u64") then return true
     if ktd == (builtinTidT :st :scope :ast base: "c8") then return true
     return ktd == (builtinTidT :st :scope :ast base: "c32")
+}
+
+# typeIsNumberOf -- the type's chain-end base is a builtin integer type (`float`
+# false) or float type (`float` true): what `anyint` and `anyfloat` admit. Asked
+# by kind rather than through a variant of the types, which would reach every
+# one of them -- and with i128 and f128 their helpers and libquadmath -- in every
+# program that names the bound.
+typeIsNumberOf: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    tid: ztypes.tid
+    float: bool
+} out bool is {
+    if tid.isZero then return false
+    ktd: tid
+    for true loop {
+        bo: st.typing.typedefBaseTid.get key: ktd
+        match (
+            bo
+        ) case some then {
+            ktd = bo
+        } case none then break
+    }
+    nk: numKindOfTid :st tid: ktd
+    if nk.has.not then return false
+    if (ztypes.isFloatKind k: nk.kind) != float then return false
+    # the builtin of that name, not a user type that shadows it
+    kn: st.reg.nameOf tid: ktd
+    return ktd == (builtinTidT :st :scope :ast base: kn.stringView)
 }
 
 # completeSpecChildren -- finish a spec that the trie already carries: the

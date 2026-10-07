@@ -2432,7 +2432,7 @@ perf: $(PERFBIN)
 # +338 a type is named by the path of units that declares it (unitPathOfTid):
 # 0 behaviour, +338 source (ab.sh, now staging its trees at equal depth --
 # behaviour + source equals perf-strict's delta).
-ALLOC_BASELINE := 2247530
+ALLOC_BASELINE := 2248714
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -3642,7 +3642,8 @@ VIEW_GUARD_INLINE := Bytes.byteView:unemitted \
   str.length:inline str.size:inline str.string:byvalue \
   str.stringView:inline str.substring:inline \
   optionval.or:byvalue resultval.orPanic:byvalue resultval.or:byvalue \
-  intliteral.*:byvalue floatliteral.*:byvalue *.iterate:byvalue *.times:byvalue
+  intliteral.*:byvalue floatliteral.*:byvalue *.iterate:byvalue *.times:byvalue \
+  intdata.*:inline floatdata.*:inline stringdata.*:inline
 
 define VIEW_GUARD_AWK
 # Reads lib/system/*.z (declarations) and the C backings, then joins them.

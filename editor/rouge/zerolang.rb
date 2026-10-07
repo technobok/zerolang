@@ -91,16 +91,16 @@ module Rouge
           MapVV Option OptionView OptionViewVal Path PathView Reader
           RefHashable Result ResultRV ResultVR Seeker Set SetIter SetIterVal
           SetRef SetVal SpanPair SpanVal Splitter String StringLike StringView
-          Text TextReader Writer _ anyval array
+          Text TextReader Writer _ anyfloat anyint anyval array
           bool break c32 c8 continue
           converror copy error f128 f16
-          f32 f64 false floatliteral
+          f32 f64 false floatdata floatliteral
           i128 i16 i32 i64 i8
-          idkey intliteral intrange iterator meta
+          idkey intdata intliteral intrange iterator meta
           never
           null openmode optionval panic parseerror print
           public resultval return seekorigin stderr
-          stdin stdout str stringJoin tag
+          stdin stdout str stringJoin stringdata tag
           this true u128 u16
           u32 u64 u8 valhashable yield
         )

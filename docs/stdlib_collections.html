@@ -89,6 +89,8 @@ Table of Contents</div>
 </li>
 <li><a href="#str">str</a>
 </li>
+<li><a href="#data-values">Data values</a>
+</li>
 <li><a href="#the-list-family">The List family</a>
 </li>
 <li><a href="#the-list-views">The list views</a>
@@ -198,6 +200,9 @@ see <a href="./ownership.html">ownership</a>.</p>
 <ul>
 <li><a href="#array"><strong>array</strong></a> -- <code>record is native as { t: anyval.generic  to: u64.generic }</code></li>
 <li><a href="#str"><strong>str</strong></a> -- <code>record is native as { :Text  to: u64.generic ... }</code></li>
+<li><a href="#data-values"><strong>intdata</strong></a> -- <code>record is native as { t: anyint.generic }</code>, the value a data block of integers names</li>
+<li><a href="#data-values"><strong>floatdata</strong></a> -- <code>record is native as { t: anyfloat.generic }</code>, the value a data block of floats names</li>
+<li><a href="#data-values"><strong>stringdata</strong></a> -- <code>record is native</code>, the value a data block of strings names</li>
 </ul>
 <p><strong>List family</strong></p>
 <ul>
@@ -264,9 +269,8 @@ constant or an expression of constants (<code>to: N * 2</code>,
   a: (array t: i64 to: 8)
 
   # Initialise from a data block (one entry per element)
-  data block_of_ten:
-      0 1 2 3 4 5 6 7 8 9
-  b: block_of_ten.array  # array of: i64 to: 10</code></pre>
+  block_of_ten: data { 0 1 2 3 4 5 6 7 8 9 }
+  b: block_of_ten.array  # array t: i64 to: 10</code></pre>
 <p><strong>Indexing.</strong></p>
 <ul>
 <li><strong>Compile-time</strong> -- dotted numeric syntax:
@@ -305,7 +309,34 @@ literal; <code>.string</code> copies out to a heap <code>String</code>;
 <code>to:</code> is a runtime error, not a silent truncation.</p>
 <p>Since <code>str</code> is a valtype it is copied on assignment; the
 copy is a plain byte copy of the inline buffer.</p>
-<h2 id="the-list-family"><a href="#the-list-family">5. The List family</a></h2>
+<h2 id="data-values"><a href="#data-values">5. Data values</a></h2>
+<p>The name of a <code>data</code> block is a value of one of three types:
+<code>intdata t</code> for a block of integers, <code>floatdata t</code> for one of
+floats, and <code>stringdata</code> for one of strings (whose <code>out</code> is
+<code>StringView</code>). <code>t</code> is the block's element type -- any integer
+type for <code>intdata</code> (<code>anyint</code>), any float type for
+<code>floatdata</code> (<code>anyfloat</code>), or a typedef over one.</p>
+<p>A data value is a static readonly view: the block's length and a
+pointer at its elements, which the program carries as a constant
+array. Nothing is freed and no lock or pin is taken -- static memory
+can be neither written nor freed -- and binding one copies it.</p>
+<ul>
+<li><code>index i: u64</code> -- the element at <code>i</code>. Out of bounds
+panics. Through the block's name a constant <code>i</code> folds to the
+element, and one out of bounds is a compile error</li>
+<li><code>length</code> -- how many elements the block holds</li>
+<li><code>iterate</code> -- the walk over the elements, first to last</li>
+<li><code>array</code> (<code>intdata</code>, <code>floatdata</code>) -- a copy into a sized
+array, through the block's name only: the count is the block's</li>
+<li><code>tag</code> (<code>intdata</code>) -- the block as a tagged type's
+discriminator source, written in its <code>as</code> block</li>
+</ul>
+<p>There is no projection to a list: build one where it is wanted.</p>
+<pre><code class="language-zerolang">  verbs: data { "build" "run" "emit" } out StringView
+
+  names: List String
+  for each v: verbs.iterate loop names.append v.string</code></pre>
+<h2 id="the-list-family"><a href="#the-list-family">6. The List family</a></h2>
 <p>Growable, heap-allocated, homogeneous sequence. <code>ListRef</code>
 holds reference elements; <code>List</code> is its <code>core</code> alias, so
 <code>(List String)</code> and <code>(ListRef String)</code> name the same
@@ -427,7 +458,7 @@ EMPTY list <code>xs.length - 1</code> underflows <code>u64</code> and the loop w
 endpoints are values the author wrote. The cursor counts what it has
 yielded rather than where it is, so a reverse walk over an empty
 window ends before it subtracts anything.</p>
-<h2 id="the-list-views"><a href="#the-list-views">6. The list views</a></h2>
+<h2 id="the-list-views"><a href="#the-list-views">7. The list views</a></h2>
 <p>A window over a list's elements, produced by <code>listView</code> on the
 matching list form (<code>ListRef.listView</code> returns a <code>ListView</code>;
 <code>ListVal.listView</code> returns a <code>ListViewVal</code>). The view shares
@@ -473,7 +504,7 @@ unobservable in a valid program, because the lock model already
 excludes a writer for the iterator's lifetime.</p>
 <p><code>ByteView</code> is <code>(ListViewVal t: u8)</code> behind a typedef -- the
 standard byte-window type that <code>io</code> writers accept.</p>
-<h2 id="windows"><a href="#windows">7. Windows</a></h2>
+<h2 id="windows"><a href="#windows">8. Windows</a></h2>
 <p>A <code>SpanVal</code> is a WRITABLE window: a length and a pointer into storage
 a <code>ListVal</code> or an <code>array</code> lends, with no storage of its own.
 <code>ListVal.mutView</code> and <code>array.mutView</code> lend all of it,
@@ -520,7 +551,7 @@ pair lives.</p>
 <p><strong>Resizing.</strong> <code>ListVal.resize to:</code> makes the list <code>to</code> elements long:
 the new elements are zero and the ones past <code>to</code> are dropped. It may
 move the storage, so no window can be live across it.</p>
-<h2 id="the-map-family"><a href="#the-map-family">8. The Map family</a></h2>
+<h2 id="the-map-family"><a href="#the-map-family">9. The Map family</a></h2>
 <p>A hash map names the family of its key AND of its value, giving
 four forms. The key position is hashed, so its bound also
 requires <code>hash</code> and <code>==</code>:</p>
@@ -566,7 +597,7 @@ stays readable). <code>iterateItems</code> yields borrowed entries whose
 the map <code>.borrow</code> -- readonly, and with no mutable twin by
 design: a key is hashed, so writing through one in place would
 put the entry in the wrong bucket.</p>
-<h2 id="the-set-family"><a href="#the-set-family">9. The Set family</a></h2>
+<h2 id="the-set-family"><a href="#the-set-family">10. The Set family</a></h2>
 <p>A hash set of unique elements. An item IS the key here, so the
 element bound is the hashability interface of its family:
 <code>SetRef</code> (alias <code>Set</code>) holds reftypes, <code>SetVal</code> holds
@@ -580,7 +611,7 @@ changed.</p>
 <p>Like maps, sets are compact dicts: dense entries, separate index
 table, INSERTION-order iteration, and a <code>.view</code> (shared,
 readonly) <code>iterate</code> with no mutable twin by design.</p>
-<h2 id="iterators-and-entries"><a href="#iterators-and-entries">10. Iterators and entries</a></h2>
+<h2 id="iterators-and-entries"><a href="#iterators-and-entries">11. Iterators and entries</a></h2>
 <p>Each container family has its own iterator template, because the
 emitter names the cursor struct after <code>iterate</code>'s declared
 return -- and within the List family a list and a window into it
@@ -597,7 +628,7 @@ two share one layout and differ only in their bound.</p>
 creates and drives them implicitly. A
 <code>MapEntry</code> (any form) presents <code>.key</code> and <code>.value</code> as
 borrowed projections into the map's entry storage.</p>
-<h2 id="string-join"><a href="#string-join">11. string_join</a></h2>
+<h2 id="string-join"><a href="#string-join">12. string_join</a></h2>
 <p>Concatenate every string in <code>parts</code> with <code>sep</code> between each.
 Returns a fresh owned <code>String</code>. One allocation, bulk memcpy
 in sequence. <code>sep</code> is any <code>StringLike</code> -- a literal,

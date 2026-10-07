@@ -67,6 +67,96 @@ str: record is native as {
     create: function out type is native
 }
 
+# intdata -- the value a data block of integers names: `primes` in
+# `primes: data { 2 3 5 7 } out u8` is an `intdata u8`. A static readonly view,
+# the block's length and a pointer at its elements, which the program carries as
+# a constant array: nothing is freed, no lock or pin is taken -- static memory can
+# be neither written nor freed -- and binding one copies it.
+#
+# THROUGH THE DECLARATION a read folds: a label (`codes.ht`), the ordinal of an
+# unlabelled element (`primes.0`), `length`, and `index` with a constant
+# argument, which a constant out of range makes a compile error. Through a VALUE
+# -- a binding, a parameter -- `index` and `length` are read at run time and
+# `iterate` walks the elements. A block of integers with no `out` and no tagged
+# element is an `intdata i64`.
+#
+# The member names are the block's own: no element may take one. `create: null`
+# because only a `data` block makes one.
+intdata: record is native as {
+    # the element type: an integer type, or a typedef over one
+    t: anyint.generic
+
+    # A DATA VALUE HAS NO EQUALITY. Two blocks are two blocks; compare their
+    # elements. Without the opt-out a record is given a structural one
+    ==: null
+    # `!=` on the same terms: the pair is opted out together
+    !=: null
+    # the element at `i`. Out of bounds panics; through the declaration a
+    # constant `i` folds, and one out of bounds is a compile error
+    index: function {t: this.view i: u64} out t is native
+    # how many elements the block holds
+    length: function {t: this.view} out u64 is native
+    # the walk over the elements, first to last: `for each p: primes.iterate`.
+    # To keep them, build a list: `for each p: primes.iterate loop ps.append p`
+    iterate: function {t: this.view} out (ListIterVal :t) is native
+    # a copy of the block into a sized array (`array t to: length`). Through the
+    # block's NAME only: the count is the block's, and a value does not carry it
+    array: function {t: this.view} is native
+    # the block as the discriminator source of a variant or union, written in
+    # its `as` block (`tag: codes.tag`); the labels name the arms' values
+    tag: function {t: this.view} is native
+    create: null
+}
+
+# floatdata -- the value a data block of floats names: `data { 0.5 0.25 }` is a
+# `floatdata f64`. The float twin of `intdata`, on the same terms: a static
+# readonly view, copied on binding, never freed or locked, read through the
+# declaration as constants and through a value at run time. A float block takes
+# float elements only -- an integer element is refused, not converted.
+floatdata: record is native as {
+    # the element type: a float type, or a typedef over one
+    t: anyfloat.generic
+
+    # A DATA VALUE HAS NO EQUALITY: compare the elements
+    ==: null
+    # `!=` on the same terms
+    !=: null
+    # the element at `i`. Out of bounds panics; through the declaration a
+    # constant `i` folds, and one out of bounds is a compile error
+    index: function {t: this.view i: u64} out t is native
+    # how many elements the block holds
+    length: function {t: this.view} out u64 is native
+    # the walk over the elements, first to last
+    iterate: function {t: this.view} out (ListIterVal :t) is native
+    # a copy of the block into a sized array, through the block's NAME only
+    array: function {t: this.view} is native
+    create: null
+}
+
+# stringdata -- the value a data block of strings names:
+# `verbs: data { "build" "run" } out StringView`. Each element is a StringView
+# of static program memory, so reading one copies nothing and pins nothing. A
+# string block's `out` is StringView, and each element folds to a string: a
+# literal, a unit string constant, `+` over them, another block's element.
+# Interpolation has no compile-time value and is refused.
+#
+# To own the strings, or to search them as a list, build one:
+# `for each v: verbs.iterate loop names.append v.string`.
+stringdata: record is native as {
+    # A DATA VALUE HAS NO EQUALITY: compare the elements
+    ==: null
+    # `!=` on the same terms
+    !=: null
+    # the element at `i`. Out of bounds panics; through the declaration a
+    # constant `i` folds, and one out of bounds is a compile error
+    index: function {t: this.view i: u64} out StringView is native
+    # how many elements the block holds
+    length: function {t: this.view} out u64 is native
+    # the walk over the elements, first to last
+    iterate: function {t: this.view} out ListIter StringView is native
+    create: null
+}
+
 # a growable, heap-backed sequence of reference `T` elements. `List` in
 # core is this template's alias.
 ListRef: class is native as {
