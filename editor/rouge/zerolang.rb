@@ -93,7 +93,7 @@ module Rouge
           SetRef SetVal SpanPair SpanVal Splitter String StringLike StringView
           Text TextReader Writer _ anyfloat anyint anyval array
           bool break c32 c8 continue
-          converror copy error f128 f16
+          converror copy dataindex error f128 f16
           f32 f64 false floatdata floatliteral
           i128 i16 i32 i64 i8
           idkey intdata intliteral intrange iterator meta

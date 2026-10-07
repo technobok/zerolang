@@ -68,7 +68,8 @@ str: record is native as {
 }
 
 # intdata -- the value a data block of integers names: `primes` in
-# `primes: data { 2 3 5 7 } out u8` is an `intdata u8`. A static readonly view,
+# `primes: data { 2 3 5 7 } out intdata u8` is an `intdata u8`, the type its
+# `out` names. A static readonly view,
 # the block's length and a pointer at its elements, which the program carries as
 # a constant array: nothing is freed, no lock or pin is taken -- static memory can
 # be neither written nor freed -- and binding one copies it.
@@ -78,16 +79,20 @@ str: record is native as {
 # argument, which a constant out of range makes a compile error. Through a VALUE
 # -- a binding, a parameter -- `index` and `length` are read at run time and
 # `iterate` walks the elements. A block of integers with no `out` and no tagged
-# element is an `intdata i64`.
+# element is untyped: its reads land anywhere a literal would, and as a value
+# it is an `intdata i64`.
 #
 # The member names are the block's own: no element may take one. `create: null`
 # because only a `data` block makes one.
 intdata: record is native as {
-    # the element type: an integer type, or a typedef over one
-    t: anyint.generic
+    # the element type: an integer type, or a typedef over one. Left out --
+    # `out intdata`, or no `out` at all -- the elements are untyped, read as
+    # literals are, and the block's value holds them as i64s
+    t: (anyint.generic default: intliteral)
     # the type that indexes the block -- its `index` argument and its `slot`
-    # reads: u64 unless the block says otherwise (`out (intdata u8 i: byteid)`)
-    i: (idkey.generic default: u64)
+    # reads (`out (intdata u8 i: byteid)`). Left out, a slot is untyped and the
+    # block's value is indexed by u64
+    i: (dataindex.generic default: intliteral)
 
     # A DATA VALUE HAS NO EQUALITY. Two blocks are two blocks; compare their
     # elements. Without the opt-out a record is given a structural one
@@ -110,22 +115,25 @@ intdata: record is native as {
     # its `as` block (`tag: codes.tag`); the labels name the arms' values
     tag: function {t: this.view} is native
     # each label's POSITION, typed `i`: `codes.slot.lf` is 1 in
-    # `codes: data { ht: 9 lf: 10 } out intdata u8`. Through the block's NAME
-    # only, and only for a labelled element
+    # `codes: data { ht: 9 lf: 10 } out (intdata u8 i: byteid)`, a `byteid`;
+    # untyped when the block names no index. Through the block's NAME only,
+    # and only for a labelled element
     slot: function {t: this.view} is native
     create: null
 }
 
-# floatdata -- the value a data block of floats names: `data { 0.5 0.25 }` is a
-# `floatdata f64`. The float twin of `intdata`, on the same terms: a static
+# floatdata -- the value a data block of floats names: `data { 0.5 0.25 } out
+# floatdata f32` is a `floatdata f32`, and with no `out` the block is untyped
+# and its value a `floatdata f64`. The float twin of `intdata`, on the same terms: a static
 # readonly view, copied on binding, never freed or locked, read through the
 # declaration as constants and through a value at run time. A float block takes
 # float elements only -- an integer element is refused, not converted.
 floatdata: record is native as {
-    # the element type: a float type, or a typedef over one
-    t: anyfloat.generic
+    # the element type: a float type, or a typedef over one; left out, the
+    # elements are untyped and the block's value holds them as f64s
+    t: (anyfloat.generic default: floatliteral)
     # the type that indexes the block, as intdata's `i` does
-    i: (idkey.generic default: u64)
+    i: (dataindex.generic default: intliteral)
 
     # A DATA VALUE HAS NO EQUALITY: compare the elements
     ==: null
@@ -145,21 +153,25 @@ floatdata: record is native as {
 }
 
 # stringdata -- the value a data block of strings names:
-# `verbs: data { "build" "run" } out StringView`. Each element is a StringView
+# `verbs: data { "build" "run" } out stringdata`. Each element is a StringView
 # of static program memory, so reading one copies nothing and pins nothing. A
-# string block's `out` is StringView, and each element folds to a string: a
-# literal, a unit string constant, `+` over them, another block's element.
-# Interpolation has no compile-time value and is refused.
+# string block's `out` is a stringdata -- `(stringdata i: nameid)` to give it
+# an index type of its own -- and each element folds to a string: a literal, a
+# unit string constant, `+` over them, another block's element. Interpolation
+# has no compile-time value and is refused.
 #
 # To own the strings, or to search them as a list, build one:
 # `for each v: verbs loop names.append v.string`.
 stringdata: record is native as {
+    # the type that indexes the block, as intdata's `i` does
+    i: (dataindex.generic default: intliteral)
+
     # A DATA VALUE HAS NO EQUALITY: compare the elements
     ==: null
     # `!=` on the same terms
     !=: null
     # the string at `i`, bounded and folded as intdata's `index` is
-    index: function {t: this.view i: u64} out StringView is native
+    index: function {t: this.view :i} out StringView is native
     # how many strings the block holds
     length: function {t: this.view} out u64 is native
     # the walk over the strings, first to last

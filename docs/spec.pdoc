@@ -4487,8 +4487,8 @@ block's name is a value: an #~"intdata t" for a block of integers, a
 #~"floatdata t" for one of floats, a #~"stringdata" for one of strings (see
 [#> to="./stdlib_collections.html#data-values": Data values]).
 
-A block may be empty when its #~"out" names the element type
-(#~"data {} out StringView"): its length is 0, its walk ends at once, and it
+A block may be empty when its #~"out" names its value type
+(#~"data {} out stringdata"): its length is 0, its walk ends at once, and it
 has no #~".array". With no #~"out" an empty block has nothing to take a type
 from and is an error.
 
@@ -4503,39 +4503,52 @@ unlabelled element is named by (#~"data { 0 1 1: 3 }"), is an error.
 Named #~"data" elements can be reference directly elsewhere in the source and
 this is similar to refrencing a constant.
 
-The element type for the whole block is determined by unifying every
-explicit type tag — the optional #~"out T" argument plus any per-element
-type tag (#~"name: 0.T"). All explicit tags must agree; conflicts are a
-type error. When no explicit tag appears anywhere, the block defaults to
-#~"i64" (#~"f64" when every element is a float, #~"StringView" when every
-one is a string). A block of strings is a #~"StringView" block: any other
-#~"out" is an error, and so is a number in an #~"out StringView" block. An
+A block's optional #~"out" names its VALUE type -- #~"out intdata u8",
+#~"out floatdata f32", #~"out stringdata" -- or an instance that also names
+the type its elements are indexed by, #~"out (intdata u8 i: byteid)" or
+#~"out (stringdata i: nameid)". The block's element type is the value
+type's, and any per-element type tag (#~"name: 0.T") must agree with it;
+without an #~"out" the tags alone name it, and must agree with each other.
+A value type that leaves its element out -- #~"out intdata", or one that
+writes the literal type, #~"out (intdata intliteral)" -- names none, and
+neither does a block with no #~"out" and no tag. A number in a
+#~"stringdata" block is an error, as is a string in a block of numbers. An
 interpolated string builds its value at run time, so it is no element.
 
-A block that names its type -- an #~"out T", or a tagged element -- reads
-every element at that type, whether or not the element wrote a tag of its
-own: #~"mydata.cNul" reads at the block's type at every access, and
+A block whose element type is named -- by its #~"out", or by a tagged element
+-- reads every element at that type, whether or not the element wrote a tag
+of its own: #~"mydata.cNul" reads at the block's type at every access, and
 converts as a typed numeric literal does anywhere else. A block that names
-no type reads its elements UNTYPED, as a unit constant reads: #~"sizes.small"
-lands in whatever numeric type takes it, checked by its value. Only what
-reaches run time -- the block's value, a run-time #~".index", a walk -- is
-the #~"i64" / #~"f64" default.
+no element type reads its elements UNTYPED, as a unit constant reads:
+#~"sizes.small" lands in whatever numeric type takes it, checked by its
+value. Only what reaches run time -- the block's value, a run-time
+#~".index", a walk -- materialises, as a literal does: an untyped block's
+value is an #~"intdata i64" or a #~"floatdata f64", indexed by #~"u64", and
+the emitted program never holds an untyped element. One block is one static
+array, so an untyped block is not an #~"intdata u8": a parameter that asks
+for one is refused it.
 
-A value the chosen type cannot hold — #~"data { 300 } out u8", or a
+A value the chosen type cannot hold — #~"data { 300 } out intdata u8", or a
 negative element in an unsigned block — is an error at the #~"data"
 declaration, reported against the element that does not fit. The check
 happens where the value is written rather than where it is read, because
 a data block has no other place that sees every element at once.
 
 A #~"data" block has the members its value type declares -- #~"length",
-#~"index" and #~"iterate" on every block, #~"array" on a block of numbers,
-and #~"tag", the discriminator for a tagged type (see below), on a block of
-integers:
+#~"index", #~"iterate" and #~"slot" on every block, #~"array" on a block of
+numbers, and #~"tag", the discriminator for a tagged type (see below), on a
+block of integers:
 
 #ul:
   [#*: #~"tag" -- the block's discriminator, for a tagged type (see below)]
   [#*: #~"length" -- its element count, a constant]
-  [#*: #~"index" -- #~".index i: k", the element at index #~"k" (a #~"u64")]
+  [#*: #~"index" -- #~".index i: k", the element at index #~"k", of the block's
+    index type (#~"u64" when it names none)]
+  [#*: #~"slot" -- #~"blk.slot.label", the POSITION of a labelled element, of
+    the block's index type, or untyped when it names none. A vocabulary held as
+    one block reads each entry's position by its label
+    (#~"names.slot.wkThis"); an unlabelled element has no slot, and a block
+    with no label has no #~"slot" at all]
   [#*: #~"iterate" -- the walk over the elements, first to last]
   [#*: #~"array" -- #~".array", a copy of the block into a sized array]
 
@@ -4544,8 +4557,9 @@ names: a second definition of a name the block already has is refused
 where the element is written, naming the member it would collide with.
 
 The block's element type also determines the element width of the runtime array
-a data block is emitted as, when it is indexed by a variable or iterated. With
-no #~"out" and no typed elements it defaults to #~"i64"; see
+a data block is emitted as, when it is indexed by a variable or iterated. An
+untyped block's array holds the #~"i64" or #~"f64" its elements materialise
+to; see
 [#> to=./representation_of_types.html: representation_of_types] for the layout.
 
 String literal fragments are built on top of a u8 data sequence.
@@ -4562,19 +4576,19 @@ or walked (#~"for each p: primes"), it is a view of the static array --
 its length and a pointer at it -- which binding copies and which takes no lock,
 since static memory can be neither written nor freed. Through a value,
 #~"index" reads at run time and panics out of range, and #~"length" and
-#~"iterate" read the view; #~".array" and #~".tag" are the block's, reached
-through its name only. Written alone as a statement the name does nothing and
+#~"iterate" read the view; #~".array", #~".tag" and #~".slot" are the block's,
+reached through its name only. Written alone as a statement the name does nothing and
 is #~"E0100", and an ownership marker on the block or on an element, which
 names no storage, is #~"E0100" too.
 
 #code language=zerolang: """
-  # array of i64 (default — no explicit type tag)
+  # untyped elements; as a value, an intdata i64
   mydata_i64: data { 1 2 0x07 }
 
-  # array of u8 via `out T` — every element is u8, no per-element tag
-  mydata_u8: data { 0 64 250 } out u8
+  # array of u8 via `out intdata u8` — every element is u8, no per-element tag
+  mydata_u8: data { 0 64 250 } out intdata u8
 
-  # array of u8 via a per-element type tag — same result as `out u8`
+  # array of u8 via a per-element type tag — same result as `out intdata u8`
   mydata_u8b: data { 1.u8 2 0x07 }
 
   # an integer label names its element: length 3, and `mydata_lbl.4` is 4
@@ -4592,13 +4606,18 @@ names no storage, is #~"E0100" too.
 
   # elements read at the block's own type, so a block whose values are
   # bytes says so once and reaches a u8 parameter directly
-  mydata_byte: data { FIRST: 1 SECOND: 2 } out u8
+  mydata_byte: data { FIRST: 1 SECOND: 2 } out intdata u8
   take_u8: function {b: u8} out u8 is { return b }
   result: take_u8 b: mydata_byte.FIRST
 
   # can also use elements as constants in top level or in code:
   One: mydata_key.FIRST   # same as..
   One: 1
+
+  # a vocabulary of strings indexed by its own id type: `words.slot.lf` is
+  # the id 1, and `words.index i: words.slot.lf` is "line feed"
+  wordid: typedef u64
+  words: data { ht: "tab" lf: "line feed" } out (stringdata i: wordid)
   """
 
 #---: array

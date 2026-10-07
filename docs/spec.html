@@ -3972,8 +3972,8 @@ an expression over them (string <code>+</code> too), another block's element. Th
 block's name is a value: an <code>intdata t</code> for a block of integers, a
 <code>floatdata t</code> for one of floats, a <code>stringdata</code> for one of strings (see
 <a href="./stdlib_collections.html#data-values">Data values</a>).</p>
-<p>A block may be empty when its <code>out</code> names the element type
-(<code>data {} out StringView</code>): its length is 0, its walk ends at once, and it
+<p>A block may be empty when its <code>out</code> names its value type
+(<code>data {} out stringdata</code>): its length is 0, its walk ends at once, and it
 has no <code>.array</code>. With no <code>out</code> an empty block has nothing to take a type
 from and is an error.</p>
 <p>Elements are stored in the order they are written: the first is at index 0,
@@ -3985,35 +3985,48 @@ in a block is distinct -- a label that repeats another label, or the index an
 unlabelled element is named by (<code>data { 0 1 1: 3 }</code>), is an error.</p>
 <p>Named <code>data</code> elements can be reference directly elsewhere in the source and
 this is similar to refrencing a constant.</p>
-<p>The element type for the whole block is determined by unifying every
-explicit type tag &#x2014; the optional <code>out T</code> argument plus any per-element
-type tag (<code>name: 0.T</code>). All explicit tags must agree; conflicts are a
-type error. When no explicit tag appears anywhere, the block defaults to
-<code>i64</code> (<code>f64</code> when every element is a float, <code>StringView</code> when every
-one is a string). A block of strings is a <code>StringView</code> block: any other
-<code>out</code> is an error, and so is a number in an <code>out StringView</code> block. An
+<p>A block's optional <code>out</code> names its VALUE type -- <code>out intdata u8</code>,
+<code>out floatdata f32</code>, <code>out stringdata</code> -- or an instance that also names
+the type its elements are indexed by, <code>out (intdata u8 i: byteid)</code> or
+<code>out (stringdata i: nameid)</code>. The block's element type is the value
+type's, and any per-element type tag (<code>name: 0.T</code>) must agree with it;
+without an <code>out</code> the tags alone name it, and must agree with each other.
+A value type that leaves its element out -- <code>out intdata</code>, or one that
+writes the literal type, <code>out (intdata intliteral)</code> -- names none, and
+neither does a block with no <code>out</code> and no tag. A number in a
+<code>stringdata</code> block is an error, as is a string in a block of numbers. An
 interpolated string builds its value at run time, so it is no element.</p>
-<p>A block that names its type -- an <code>out T</code>, or a tagged element -- reads
-every element at that type, whether or not the element wrote a tag of its
-own: <code>mydata.cNul</code> reads at the block's type at every access, and
+<p>A block whose element type is named -- by its <code>out</code>, or by a tagged element
+-- reads every element at that type, whether or not the element wrote a tag
+of its own: <code>mydata.cNul</code> reads at the block's type at every access, and
 converts as a typed numeric literal does anywhere else. A block that names
-no type reads its elements UNTYPED, as a unit constant reads: <code>sizes.small</code>
-lands in whatever numeric type takes it, checked by its value. Only what
-reaches run time -- the block's value, a run-time <code>.index</code>, a walk -- is
-the <code>i64</code> / <code>f64</code> default.</p>
-<p>A value the chosen type cannot hold &#x2014; <code>data { 300 } out u8</code>, or a
+no element type reads its elements UNTYPED, as a unit constant reads:
+<code>sizes.small</code> lands in whatever numeric type takes it, checked by its
+value. Only what reaches run time -- the block's value, a run-time
+<code>.index</code>, a walk -- materialises, as a literal does: an untyped block's
+value is an <code>intdata i64</code> or a <code>floatdata f64</code>, indexed by <code>u64</code>, and
+the emitted program never holds an untyped element. One block is one static
+array, so an untyped block is not an <code>intdata u8</code>: a parameter that asks
+for one is refused it.</p>
+<p>A value the chosen type cannot hold &#x2014; <code>data { 300 } out intdata u8</code>, or a
 negative element in an unsigned block &#x2014; is an error at the <code>data</code>
 declaration, reported against the element that does not fit. The check
 happens where the value is written rather than where it is read, because
 a data block has no other place that sees every element at once.</p>
 <p>A <code>data</code> block has the members its value type declares -- <code>length</code>,
-<code>index</code> and <code>iterate</code> on every block, <code>array</code> on a block of numbers,
-and <code>tag</code>, the discriminator for a tagged type (see below), on a block of
-integers:</p>
+<code>index</code>, <code>iterate</code> and <code>slot</code> on every block, <code>array</code> on a block of
+numbers, and <code>tag</code>, the discriminator for a tagged type (see below), on a
+block of integers:</p>
 <ul>
 <li><code>tag</code> -- the block's discriminator, for a tagged type (see below)</li>
 <li><code>length</code> -- its element count, a constant</li>
-<li><code>index</code> -- <code>.index i: k</code>, the element at index <code>k</code> (a <code>u64</code>)</li>
+<li><code>index</code> -- <code>.index i: k</code>, the element at index <code>k</code>, of the block's
+index type (<code>u64</code> when it names none)</li>
+<li><code>slot</code> -- <code>blk.slot.label</code>, the POSITION of a labelled element, of
+the block's index type, or untyped when it names none. A vocabulary held as
+one block reads each entry's position by its label
+(<code>names.slot.wkThis</code>); an unlabelled element has no slot, and a block
+with no label has no <code>slot</code> at all</li>
 <li><code>iterate</code> -- the walk over the elements, first to last</li>
 <li><code>array</code> -- <code>.array</code>, a copy of the block into a sized array</li>
 </ul>
@@ -4021,8 +4034,9 @@ integers:</p>
 names: a second definition of a name the block already has is refused
 where the element is written, naming the member it would collide with.</p>
 <p>The block's element type also determines the element width of the runtime array
-a data block is emitted as, when it is indexed by a variable or iterated. With
-no <code>out</code> and no typed elements it defaults to <code>i64</code>; see
+a data block is emitted as, when it is indexed by a variable or iterated. An
+untyped block's array holds the <code>i64</code> or <code>f64</code> its elements materialise
+to; see
 <a href="./representation_of_types.html">representation_of_types</a> for the layout.</p>
 <p>String literal fragments are built on top of a u8 data sequence.</p>
 <p>Through the block's name, its elements (<code>primes.0</code>, <code>codes.ht</code>), its
@@ -4036,17 +4050,17 @@ or walked (<code>for each p: primes</code>), it is a view of the static array --
 its length and a pointer at it -- which binding copies and which takes no lock,
 since static memory can be neither written nor freed. Through a value,
 <code>index</code> reads at run time and panics out of range, and <code>length</code> and
-<code>iterate</code> read the view; <code>.array</code> and <code>.tag</code> are the block's, reached
-through its name only. Written alone as a statement the name does nothing and
+<code>iterate</code> read the view; <code>.array</code>, <code>.tag</code> and <code>.slot</code> are the block's,
+reached through its name only. Written alone as a statement the name does nothing and
 is <code>E0100</code>, and an ownership marker on the block or on an element, which
 names no storage, is <code>E0100</code> too.</p>
-<pre><code class="language-zerolang"># array of i64 (default &#x2014; no explicit type tag)
+<pre><code class="language-zerolang"># untyped elements; as a value, an intdata i64
 mydata_i64: data { 1 2 0x07 }
 
-# array of u8 via `out T` &#x2014; every element is u8, no per-element tag
-mydata_u8: data { 0 64 250 } out u8
+# array of u8 via `out intdata u8` &#x2014; every element is u8, no per-element tag
+mydata_u8: data { 0 64 250 } out intdata u8
 
-# array of u8 via a per-element type tag &#x2014; same result as `out u8`
+# array of u8 via a per-element type tag &#x2014; same result as `out intdata u8`
 mydata_u8b: data { 1.u8 2 0x07 }
 
 # an integer label names its element: length 3, and `mydata_lbl.4` is 4
@@ -4064,13 +4078,18 @@ myvariant: variant {
 
 # elements read at the block's own type, so a block whose values are
 # bytes says so once and reaches a u8 parameter directly
-mydata_byte: data { FIRST: 1 SECOND: 2 } out u8
+mydata_byte: data { FIRST: 1 SECOND: 2 } out intdata u8
 take_u8: function {b: u8} out u8 is { return b }
 result: take_u8 b: mydata_byte.FIRST
 
 # can also use elements as constants in top level or in code:
 One: mydata_key.FIRST   # same as..
-One: 1</code></pre>
+One: 1
+
+# a vocabulary of strings indexed by its own id type: `words.slot.lf` is
+# the id 1, and `words.index i: words.slot.lf` is "line feed"
+wordid: typedef u64
+words: data { ht: "tab" lf: "line feed" } out (stringdata i: wordid)</code></pre>
 <h3 id="array"><a href="#array">5.7. array</a></h3>
 <p>Arrays are fixed-length, stack-allocated value types that are generic over
 both the element type and length. Arrays of different lengths are different

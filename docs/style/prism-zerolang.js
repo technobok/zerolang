@@ -69,7 +69,7 @@
         'Option', 'optionval', 'OptionView', 'OptionViewVal', 'Result', 'ResultVR', 'ResultRV', 'resultval', 'converror', 'Box', 'intrange',
         'array', 'str', 'List', 'ListRef', 'ListVal', 'ListView', 'ListViewVal', 'ListIter', 'ListIterVal', 'SpanVal', 'SpanPair', 'intdata', 'floatdata', 'stringdata', 'Set', 'SetRef', 'SetVal', 'SetIter', 'SetIterVal', 'Bytes', 'ByteView',
         'IdMapR', 'IdMapV', 'IdMapEntryR', 'IdMapEntryV', 'IdMapItemIterR', 'IdMapItemIterV', 'IdSet', 'IdSetIter',
-        'CpIter', 'LinesIter', 'Splitter', 'TextReader', 'intliteral', 'floatliteral', 'idkey', 'anyint', 'anyfloat', 'parseerror',
+        'CpIter', 'LinesIter', 'Splitter', 'TextReader', 'intliteral', 'floatliteral', 'idkey', 'anyint', 'anyfloat', 'dataindex', 'parseerror',
         'Map', 'MapRR', 'MapRV', 'MapVR', 'MapVV', 'MapKeyIter', 'MapItemIter', 'MapEntry', 'MapKeyIterRV', 'MapKeyIterVR', 'MapKeyIterVV', 'MapItemIterRV', 'MapItemIterVR', 'MapItemIterVV', 'MapEntryRV', 'MapEntryVR', 'MapEntryVV',
         'Path', 'PathView', 'IoError', 'Reader', 'Writer', 'Closer', 'Seeker', 'seekorigin', 'File', 'openmode',
         'print', 'stringJoin', 'error', 'panic', 'stdin', 'stdout', 'stderr',

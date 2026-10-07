@@ -200,9 +200,9 @@ see <a href="./ownership.html">ownership</a>.</p>
 <ul>
 <li><a href="#array"><strong>array</strong></a> -- <code>record is native as { t: anyval.generic  to: u64.generic }</code></li>
 <li><a href="#str"><strong>str</strong></a> -- <code>record is native as { :Text  to: u64.generic ... }</code></li>
-<li><a href="#data-values"><strong>intdata</strong></a> -- <code>record is native as { t: anyint.generic }</code>, the value a data block of integers names</li>
-<li><a href="#data-values"><strong>floatdata</strong></a> -- <code>record is native as { t: anyfloat.generic }</code>, the value a data block of floats names</li>
-<li><a href="#data-values"><strong>stringdata</strong></a> -- <code>record is native</code>, the value a data block of strings names</li>
+<li><a href="#data-values"><strong>intdata</strong></a> -- <code>record is native as { t: (anyint.generic default: intliteral) i: (dataindex.generic default: intliteral) }</code>, the value a data block of integers names</li>
+<li><a href="#data-values"><strong>floatdata</strong></a> -- <code>record is native as { t: (anyfloat.generic default: floatliteral) i: (dataindex.generic default: intliteral) }</code>, the value a data block of floats names</li>
+<li><a href="#data-values"><strong>stringdata</strong></a> -- <code>record is native as { i: (dataindex.generic default: intliteral) }</code>, the value a data block of strings names</li>
 </ul>
 <p><strong>List family</strong></p>
 <ul>
@@ -310,18 +310,29 @@ literal; <code>.string</code> copies out to a heap <code>String</code>;
 <p>Since <code>str</code> is a valtype it is copied on assignment; the
 copy is a plain byte copy of the inline buffer.</p>
 <h2 id="data-values"><a href="#data-values">5. Data values</a></h2>
-<p>The name of a <code>data</code> block is a value of one of three types:
-<code>intdata t</code> for a block of integers, <code>floatdata t</code> for one of
-floats, and <code>stringdata</code> for one of strings (whose <code>out</code> is
-<code>StringView</code>). <code>t</code> is the block's element type -- any integer
-type for <code>intdata</code> (<code>anyint</code>), any float type for
-<code>floatdata</code> (<code>anyfloat</code>), or a typedef over one.</p>
+<p>The name of a <code>data</code> block is a value of one of three types, and
+the block's <code>out</code> names which: <code>intdata t</code> for a block of integers,
+<code>floatdata t</code> for one of floats, and <code>stringdata</code> for one of
+strings (<code>verbs: data { "build" "run" } out stringdata</code>). <code>t</code>
+is the block's element type -- any integer type for <code>intdata</code>
+(<code>anyint</code>), any float type for <code>floatdata</code> (<code>anyfloat</code>), or a
+typedef over one. <code>i</code>, the type the block is indexed by, is an id key
+-- an unsigned integer type or a typedef over one (<code>dataindex</code>) --
+written <code>(intdata u8 i: byteid)</code>.</p>
+<p>Either may be left out, or written as the literal type: then it is
+UNTYPED. A block with untyped elements reads them as literals through
+its name, and with an untyped index reads its <code>slot</code> positions as
+literals; a block with no <code>out</code> is untyped in both. As a run-time
+value the literal arguments materialise, as a literal does: an untyped
+element is an <code>i64</code> (a <code>floatdata</code>'s an <code>f64</code>) and an untyped
+index a <code>u64</code>, so the value of <code>data { 2 3 5 }</code> is an
+<code>intdata i64</code>, and the emitted program holds no literal type.</p>
 <p>A data value is a static readonly view: the block's length and a
 pointer at its elements, which the program carries as a constant
 array. Nothing is freed and no lock or pin is taken -- static memory
 can be neither written nor freed -- and binding one copies it.</p>
 <ul>
-<li><code>index i: u64</code> -- the element at <code>i</code>. Out of bounds
+<li><code>index i: i</code> -- the element at <code>i</code>. Out of bounds
 panics. Through the block's name a constant <code>i</code> folds to the
 element, and one out of bounds is a compile error</li>
 <li><code>length</code> -- how many elements the block holds</li>
@@ -330,9 +341,11 @@ element, and one out of bounds is a compile error</li>
 array, through the block's name only: the count is the block's</li>
 <li><code>tag</code> (<code>intdata</code>) -- the block as a tagged type's
 discriminator source, written in its <code>as</code> block</li>
+<li><code>slot</code> -- <code>blk.slot.label</code>, the position of a labelled
+element, typed <code>i</code>: through the block's name only</li>
 </ul>
 <p>There is no projection to a list: build one where it is wanted.</p>
-<pre><code class="language-zerolang">  verbs: data { "build" "run" "emit" } out StringView
+<pre><code class="language-zerolang">  verbs: data { "build" "run" "emit" } out stringdata
 
   names: List String
   for each v: verbs loop names.append v.string</code></pre>

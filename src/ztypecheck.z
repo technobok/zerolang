@@ -9322,15 +9322,6 @@ attachMarkers: function {
     return needsDtor
 }
 
-# dataOutTypeName -- the element-type name from a data block's optional `out T`
-# (an atom type-expr), or "" when absent. The Option is BORROWED (param), never
-# bound to a local: a bare bind would move the Option out of the shared AST node
-# and free its payload, corrupting the later dump walk.
-dataOutTypeName: function {ast: Ast.view oId: zast.nodeid} out String is {
-    if oId.isZero then return ""
-    return (atomName :ast n: (ast.nodes.get i: oId))
-}
-
 # dataelem -- one data-block element dissected into the nodes carrying its
 # lexeme and its per-element type tag (`cNul: 0.u8` gives the `0` node and the
 # `u8` node). `tagId` is 0 for a bare element, which is what lets the block's
@@ -9532,7 +9523,7 @@ dataKindsAgree: function {
                 e: zast.err.typeError
                 :msg
                 note: String
-                hint: "a block holds all integers, all floats, or all strings with `out StringView`"
+                hint: "a block holds all integers, all floats, or all strings (`out stringdata`)"
                 width: 1
             )
             return false
@@ -9652,6 +9643,42 @@ dataOwnMember: function {
     forceMemberDecl :st :ast memberDeclId: md
     mt: (st.typing.declChildOfId parentTypeId: tpl :nameId).or d: ztypes.tid.zero
     return (st.reg.typetypeOf typeId: mt) == ztypes.ztypetype.functionType
+}
+
+# refuseDataOutType -- a data block's `out` names a type that is no data value
+# type. When it names an element type the value type is the one wrapping it, and
+# the hint writes that out.
+refuseDataOutType: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    outId: zast.nodeid
+    ot: ztypes.tid
+} is {
+    otn: specWrittenName :st :ast tid: ot
+    wrap: String
+    if ot == (builtinTidT :st :scope :ast base: "StringView") then {
+        wrap = "out stringdata"
+    } else if (typeIsNumberOf :st :scope :ast tid: ot float: true) then {
+        wrap = "out floatdata \{otn}"
+    } else if (typeIsNumberOf :st :scope :ast tid: ot float: false) then {
+        wrap = "out intdata \{otn}"
+    }
+    hint: "name the block's value type: `out intdata u8`, `out floatdata f32`, `out stringdata`".string
+    if wrap.length > 0 then hint = "a block of \{otn} is `\{wrap}`"
+    msg: "'\{otn}' is no data value type: a data block's `out` names the block's value type"
+    oNode: ast.nodes.get i: outId
+    (addErrorH
+        :st
+        nodeid: outId
+        lineno: (nodeLine n: oNode)
+        colno: (nodeCol n: oNode)
+        e: zast.err.typeError
+        :msg
+        note: String
+        :hint
+        width: otn.length.u32.orPanic
+    )
 }
 
 # dataoutparts -- what a data block's `out` says when it names the block's VALUE
@@ -10006,8 +10033,10 @@ resolveData: function {
         recordTyperef :st :scope :ast :unitDecl thisName: defName nid: dnode.outType
         vparts = dataOutParts :ast :st :scope :unitDecl valueTid: ot outId: dnode.outType
     }
+    # a typed value type names the element type the elements' own tags are
+    # weighed against; an untyped one, or an `out` refused below, names none
     etn: String
-    if vparts.isValue.not then etn = dataOutTypeName :ast oId: dnode.outType
+    if vparts.isValue when vparts.elemLiteral.not then etn = st.reg.nameOf tid: vparts.elem
     etId: dataElemTypeName :ast :st :dnode outName: etn.stringView :vals
     etName: zast.nameTextCopy :ast ref: etId
     elemTid: litId
@@ -10020,8 +10049,6 @@ resolveData: function {
         valueOut = vparts.elemLiteral.not
         elemTid = vparts.elem
         etName = st.reg.nameOf tid: elemTid
-    } else if ot.isZero.not then {
-        elemTid = ot
     } else {
         # an element's suffix (`0.u8`) or the untyped default names the
         # prelude's type whatever the unit declares, as a literal's suffix
@@ -10042,24 +10069,11 @@ resolveData: function {
     typed: (etn.length > 0) or valueOut or (dataTagWritten :ast :dnode)
     # the template the block's name is a value of: its members are the block's own
     valTpl: dataValueTemplate :ast :st :scope :elemTid
-    # a type that resolved and is no number or string; one that resolved to
-    # nothing is the unknown type recordTyperef reports
-    outDecl: declOfTypeId :st tid: elemTid
-    if dnode.outType.isZero.not when outDecl.isZero.not when valTpl.isZero then {
-        otn: specWrittenName :st :ast tid: elemTid
-        oNode: ast.nodes.get i: dnode.outType
-        om: "a data block's `out` names its element type, and '\{otn}' is no integer, float or string type"
-        (addErrorH
-            :st
-            nodeid: dnode.outType
-            lineno: (nodeLine n: oNode)
-            colno: (nodeCol n: oNode)
-            e: zast.err.typeError
-            msg: om
-            note: String
-            hint: "write an integer, float or string type after `out`, or leave `out` off"
-            width: otn.length.u32.orPanic
-        )
+    # an `out` names the block's value type; a declared type that is none is
+    # refused here, and a name that resolved to nothing is the unknown type
+    # recordTyperef reports
+    if vparts.isValue.not when ot.isZero.not when (declOfTypeId :st tid: ot).isZero.not then {
+        refuseDataOutType :ast :st :scope outId: dnode.outType :ot
     }
     # every name an element takes: its label, else its ordinal
     taken: IdSet zast.nameid
@@ -25523,10 +25537,12 @@ getOrMintSpec: function {
     }
     # the label components the defaults add, after the caller's own
     dsfx8: String
+    # a data template's parameters are all bound here, at the run-time types
+    # their literals materialise to, so no literal default names the instance
+    materialiseDataArgs :st :ast :scope :templateId pnames: pnames8 :subs
     if (templateHasDefaults :st tdecl: tk8) then {
         bindSpecDefaults :st :ast :tk8 :pnames8 :subs :valSubs :fallbackArg sfx: dsfx8
     }
-    materialiseDataArgs :st :ast :scope :templateId pnames: pnames8 :subs
     args8: ListVal ztypes.genericarg
     trieOk8: (buildSpecTrieKeys
         :ast
@@ -25648,12 +25664,13 @@ getOrMintSpec: function {
     return mid8
 }
 
-# materialiseDataArgs -- a data value type's literal arguments as the run-time
-# types they become: an untyped element is an i64 (a floatdata's an f64) and an
+# materialiseDataArgs -- a data value type's arguments at the run-time types its
+# literals become: an untyped element is an i64 (a floatdata's an f64) and an
 # untyped index a u64, as an untyped block's value is `intdata i64 i: u64`. A
-# literal type reaches no instance, so the emitter never sees one. The
-# parameters are read by position: the element first, then the index; a
-# stringdata has only the index.
+# parameter left out takes its default, which is the literal type, so it is
+# bound here too -- the instance is named by what it holds, and a literal type
+# reaches no instance, so the emitter never sees one. The parameters are read by
+# position: the element first, then the index; a stringdata has only the index.
 materialiseDataArgs: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -25664,25 +25681,21 @@ materialiseDataArgs: function {
 } is {
     if pnames.length == 0 then return
     isStr: templateId == (builtinTidT :st :scope :ast base: "stringdata")
-    if isStr.not when templateId != (builtinTidT :st :scope :ast base: "intdata") when (
-        templateId != (builtinTidT :st :scope :ast base: "floatdata")
+    isFloat: templateId == (builtinTidT :st :scope :ast base: "floatdata")
+    if isStr.not when isFloat.not when (
+        templateId != (builtinTidT :st :scope :ast base: "intdata")
     ) then return
     k: u64
     for k < pnames.length loop {
         pn: pnames.get i: k
         v: (subs.get key: pn).or d: ztypes.tid.zero
         isElem: isStr.not and (k == 0)
-        if v == st.reg.literalIntTid then {
-            if isElem then {
-                subs.set key: pn value: (builtinTidT :st :scope :ast base: "i64")
-            } else {
-                subs.set key: pn value: (builtinTidT :st :scope :ast base: "u64")
-            }
+        if v.isZero or (isLiteralTypeId :st tid: v) then {
+            mat: builtinTidT :st :scope :ast base: "u64"
+            if isElem then mat = builtinTidT :st :scope :ast base: "i64"
+            if isElem when isFloat then mat = builtinTidT :st :scope :ast base: "f64"
+            subs.set key: pn value: mat
         }
-        if v == st.reg.literalFloatTid then (subs.set
-            key: pn
-            value: (builtinTidT :st :scope :ast base: "f64")
-        )
         k = k + 1
     }
 }
@@ -45895,6 +45908,10 @@ fillOneDefault: function {
         return false
     }
     subs.set key: pn value: dt
+    # a literal default leaves the parameter untyped, and the instance holds the
+    # run-time type it materialises to (materialiseDataArgs): it adds no part to
+    # the instance's name
+    if (isLiteralTypeId :st tid: dt) then return true
     an: monoValName :st scope: tdecl :ast tid: dt
     sfx.append s: "_"
     sfx.append s: an
