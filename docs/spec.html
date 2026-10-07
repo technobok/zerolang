@@ -3962,8 +3962,10 @@ arguments.</p>
 naming that type as the discriminator source for a union or variant. It is
 written in the <code>as</code> block and nowhere else -- see <a href="#tag">tag</a>.</p>
 <h3 id="data"><a href="#data">5.6. data</a></h3>
-<p>Creates a constant list of embedded data. It is a reftype. All components must
-be numeric valtypes.</p>
+<p>Creates a constant list of embedded data. All components must be numeric
+valtypes. The block's name is a value: an <code>intdata t</code> for a block of
+integers, a <code>floatdata t</code> for one of floats (see
+<a href="./stdlib_collections.html#data-values">Data values</a>).</p>
 <p>Elements are stored in the order they are written: the first is at index 0,
 and each one after it at the next index. An element may carry a label, which
 names it (labels are required for <code>data</code> that is destined to be used as a
@@ -3987,12 +3989,14 @@ negative element in an unsigned block &#x2014; is an error at the <code>data</co
 declaration, reported against the element that does not fit. The check
 happens where the value is written rather than where it is read, because
 a data block has no other place that sees every element at once.</p>
-<p>A <code>data</code> block comes with four members already defined, as if the
-statement declared them ahead of its elements:</p>
+<p>A <code>data</code> block has the members its value type declares -- <code>length</code>,
+<code>index</code>, <code>iterate</code>, <code>array</code> (and <code>tag</code> on <code>intdata</code>) -- plus
+<code>tag</code>, the block's discriminator for a tagged type (see below):</p>
 <ul>
 <li><code>tag</code> -- the block's discriminator, for a tagged type (see below)</li>
 <li><code>length</code> -- its element count, a constant</li>
-<li><code>index</code> -- <code>.index i</code>, the element at a run-time index</li>
+<li><code>index</code> -- <code>.index i: k</code>, the element at index <code>k</code> (a <code>u64</code>)</li>
+<li><code>iterate</code> -- the walk over the elements, first to last</li>
 <li><code>array</code> -- <code>.array</code>, a copy of the block into a sized array</li>
 </ul>
 <p>An element is a member of the block too, so it may not take one of these
@@ -4003,15 +4007,21 @@ a data block is emitted as, when it is indexed by a variable or iterated. With
 no <code>out</code> and no typed elements it defaults to <code>i64</code>; see
 <a href="./representation_of_types.html">representation_of_types</a> for the layout.</p>
 <p>String literal fragments are built on top of a u8 data sequence.</p>
-<p>A data block is compile-time data. Its elements (<code>primes.0</code>,
-<code>codes.ht</code>) and its <code>.length</code> are constants -- in a body and in a
-unit-level definition alike (<code>COUNT: primes.length</code>) -- and a program that
-reads only those carries no array at all. Only <code>.index i</code> (an element at a run-time
-index) and <code>.array</code> (a copy into a sized array) put the block into the
-program. The block itself is not a value: binding it (<code>w: primes</code>, a
-<code>with</code> or a <code>for</code> header) or writing it as a statement is <code>E0100</code>, and
-so is an ownership marker on the block or on an element, which names no
-storage.</p>
+<p>Through the block's name, its elements (<code>primes.0</code>, <code>codes.ht</code>), its
+<code>.length</code> and <code>.index K</code> with a constant <code>K</code> are constants -- in a body
+and in a unit-level definition alike (<code>COUNT: primes.length</code>) -- and a
+program that reads only those carries no array at all. A constant <code>K</code> out of
+range is a compile error. A run-time <code>.index i</code>, <code>.array</code> (a copy into a
+sized array) and the block used as a value put its array into the program.</p>
+<p>The name is a value: bound (<code>w: primes</code>), passed, returned, held in a field
+or walked (<code>for each p: primes.iterate</code>), it is a view of the static array --
+its length and a pointer at it -- which binding copies and which takes no lock,
+since static memory can be neither written nor freed. Through a value,
+<code>index</code> reads at run time and panics out of range, and <code>length</code> and
+<code>iterate</code> read the view; <code>.array</code> and <code>.tag</code> are the block's, reached
+through its name only. Written alone as a statement the name does nothing and
+is <code>E0100</code>, and an ownership marker on the block or on an element, which
+names no storage, is <code>E0100</code> too.</p>
 <pre><code class="language-zerolang"># array of i64 (default &#x2014; no explicit type tag)
 mydata_i64: data { 1 2 0x07 }
 

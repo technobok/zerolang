@@ -726,6 +726,7 @@ typesCompatible: function {
 } out bool is {
     if a == b then return true
     if (st.reg.typetypeOf typeId: a) == ztypes.ztypetype.neverType then return true
+    if (dataBlockFits :ast :st dataTid: a want: b) then return true
     if (st.reg.typetypeOf typeId: a) == ztypes.ztypetype.genericParam when (
         (st.reg.typetypeOf typeId: b) == ztypes.ztypetype.genericParam
     ) then {
@@ -9547,18 +9548,118 @@ dataElemTypeName: function {
     return (ast.internString text: "i64")
 }
 
-# dataOwnMember -- what a data block's own member of this name is, or "" when
-# the name is free for an element: `tag` its discriminator (synthesised under
-# that name), `length` its element count, `index` its run-time element read and
-# `array` its copy into a sized array. An element of one of these names is
-# refused where it is written.
-dataOwnMember: function {ast: Ast.view nameId: zast.nameid} out String is {
-    if nameId.isZero then return ""
-    if nameId == zast.names.wkTag then return "discriminator"
-    if nameId == zast.names.wkLength then return "element count"
-    if nameId == (nameIdOf :ast name: "index") then return "run-time element read"
-    if nameId == (nameIdOf :ast name: "array") then return "copy into a sized array"
-    return ""
+# dataOwnMember -- the name is one of the block's own members, so no element
+# may take it: a method its value template `tpl` declares (`index`, `length`,
+# `iterate`, ...), or `tag`, the discriminator every block carries. The
+# template's generic parameter and its `null` opt-outs name nothing a block
+# reads, so they stay free.
+dataOwnMember: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    tpl: ztypes.tid
+    nameId: zast.nameid
+} out bool is {
+    if nameId.isZero then return false
+    if nameId == zast.names.wkTag then return true
+    if tpl.isZero then return false
+    md: st.typing.declMemberIdOf parentTypeId: tpl :nameId
+    if md.isZero then return false
+    forceMemberDecl :st :ast memberDeclId: md
+    mt: (st.typing.declChildOfId parentTypeId: tpl :nameId).or d: ztypes.tid.zero
+    return (st.reg.typetypeOf typeId: mt) == ztypes.ztypetype.functionType
+}
+
+# dataValueTemplate -- the template a data block of element type `elemTid` is a
+# value of: `floatdata` for a float, `intdata` for an integer, 0 for anything
+# else (an element type that did not resolve).
+dataValueTemplate: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    elemTid: ztypes.tid
+} out ztypes.tid is {
+    if (typeIsNumberOf :st :scope :ast tid: elemTid float: true) then {
+        return (builtinTidT :st :scope :ast base: "floatdata")
+    }
+    if (typeIsNumberOf :st :scope :ast tid: elemTid float: false) then {
+        return (builtinTidT :st :scope :ast base: "intdata")
+    }
+    return ztypes.tid.zero
+}
+
+# dataValueTypeFor -- the type data block `dataTid`'s name has as a value: its
+# template's instance over the block's element type, minted on the first use
+# of the block as a value and kept on the block. 0 when it has none.
+dataValueTypeFor: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    dataTid: ztypes.tid
+} out ztypes.tid is {
+    have: st.reg.dataValueTypeOf tid: dataTid
+    if have.isZero.not then return have
+    elemTid: st.reg.dataElemTypeOf tid: dataTid
+    tpl: dataValueTemplate :ast :st scope: st.curScope :elemTid
+    if tpl.isZero then return ztypes.tid.zero
+    pn: st.reg.genericParamNamesOf tdecl: (declOfTypeId :st tid: tpl)
+    if pn.length < 1 then return ztypes.tid.zero
+    subs: IdMapV zast.nameid v: ztypes.tid
+    subs.set key: (pn.get i: 0) value: elemTid
+    en: st.reg.nameOf tid: elemTid
+    sfx: "_\{en}"
+    noVals: IdMapV zast.nameid v: u64
+    vt: (getOrMintSpec
+        :st
+        scope: st.curScope
+        :ast
+        :unitDecl
+        sfx: sfx.stringView
+        templateId: tpl
+        :subs
+        valSubs: noVals
+        fallbackArg: ztypes.tid.zero
+    )
+    st.reg.setDataValueType typeId: dataTid value: vt
+    return vt
+}
+
+# dataBlockFits -- data block `dataTid`, written where a `want` is taken, is a
+# value of it: `want` is the block's value template over its element type. The
+# block's value type is recorded as `want`, and the block keeps its static array
+# for the view to point at.
+dataBlockFits: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    dataTid: ztypes.tid
+    want: ztypes.tid
+} out bool is {
+    if (st.reg.typetypeOf typeId: dataTid) != ztypes.ztypetype.dataType then return false
+    elemTid: st.reg.dataElemTypeOf tid: dataTid
+    tpl: dataValueTemplate :ast :st scope: st.curScope :elemTid
+    if tpl.isZero or ((st.reg.genericOriginOf tid: want) != tpl) then return false
+    if (st.reg.genericTypeArgAt specId: want ordinal: 0) != elemTid then return false
+    st.reg.setDataValueType typeId: dataTid value: want
+    markDataRuntimeIndexed :st tid: dataTid
+    return true
+}
+
+# dataBlockAsValue -- a data block written where a value is wanted: its name's
+# value, the static view of its elements. The node is restamped with the value
+# type, and the block keeps its static array for the view to point at. `vt`
+# itself for anything that is not a data block.
+dataBlockAsValue: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    vt: ztypes.tid
+    nid: zast.nodeid
+} out ztypes.tid is {
+    if (st.reg.typetypeOf typeId: vt) != ztypes.ztypetype.dataType then return vt
+    dv: dataValueTypeFor :st :ast :unitDecl dataTid: vt
+    if dv.isZero then return vt
+    markDataRuntimeIndexed :st tid: vt
+    stampGate :st :nid tid: dv
+    return dv
 }
 
 # resolveData -- resolve a data-block definition into a DATA type: one child per
@@ -9609,6 +9710,8 @@ resolveData: function {
         }
     }
     ek: ztypes.numkindByName name: etName.stringView
+    # the template the block's name is a value of: its members are the block's own
+    valTpl: dataValueTemplate :ast :st :scope :elemTid
     # every name an element takes: its label, else its ordinal
     taken: IdSet zast.nameid
     ordinal: u64
@@ -9650,12 +9753,12 @@ resolveData: function {
             # an element named for one of the block's own members would shadow
             # it, or be shadowed by it -- either way a read of the name would
             # not mean what it says
-            ownM: dataOwnMember :ast nameId: memberIdAt
-            if ownM.length > 0 then {
+            if (dataOwnMember :st :ast tpl: valTpl nameId: memberIdAt) then {
                 elN: ast.nodes.get i: elId
                 emN: zast.nameTextAt :ast ref: memberIdAt
+                tn: st.reg.nameOf tid: valTpl
                 tm: "a data element may not be named '\{emN}'"
-                th: "`\{emN}` is the block's own \{ownM}: rename the element"
+                th: "`\{emN}` is a member of every \{tn}: rename the element"
                 (addErrorH
                     :st
                     nodeid: (zast.nodeIdOf n: elN)
@@ -29867,10 +29970,13 @@ checkUnitQualifiedMember: function {
     return (callleg handled: false tid: ztypes.tid.zero)
 }
 
-# checkDataBlockMember -- `.index` and `.array` on a data block. `.index` yields
-# one element (markDataIndexRead keeps the static array when the read does not
-# fold); `.array` keeps the array always and copies the elements into the sized
-# array instance (array_{elem}_{count}), minting it on first access.
+# checkDataBlockMember -- a member of a data block that no element names, read
+# through the block's name: a member of its value type (`index`, `iterate`),
+# and `.array`. `.index` reads the block's own array, which markDataIndexRead
+# keeps when the read does not fold; every other value member reads the value,
+# which keeps the array always. `.array` copies the elements into the sized
+# array instance (array_{elem}_{count}), minting it on first access. Through a
+# VALUE, `.array` and `.tag` are refused: both are the block's.
 checkDataBlockMember: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
@@ -29878,16 +29984,44 @@ checkDataBlockMember: function {
     dp: dpref
     bt: ztypes.tid
     cnId: zast.nameid
+    coerce: bool
 } out callleg is {
+    isArray: zast.nameTextEq :ast ref: cnId s: "array"
+    if (refuseDataValueMember :st :ast :dp :bt :cnId :isArray) then return (callleg
+        handled: true
+        tid: ztypes.tid.zero
+    )
     if (st.reg.typetypeOf typeId: bt) == ztypes.ztypetype.dataType then {
-        if (zast.nameTextEq :ast ref: cnId s: "index") then {
-            sedi: st.reg.dataElemTypeOf tid: bt
-            if sedi.isZero.not then {
-                stampGate :st nid: dp.nid tid: sedi
-                return (callleg handled: true tid: sedi)
-            }
+        if isArray then markDataRuntimeIndexed :st tid: bt
+        if isArray.not when (st.typing.declChildOfId parentTypeId: bt nameId: cnId).none then {
+            dv: dataValueTypeFor :st :ast :unitDecl dataTid: bt
+            forceMemberOf :st :ast parentTypeId: dv nameId: cnId
+            vmo: st.typing.declChildOfId parentTypeId: dv nameId: cnId
+            match (
+                vmo
+            ) case some then {
+                # `index` reads the block's own array; any other member reads
+                # the block as its value
+                if (zast.nameTextEq :ast ref: cnId s: "index").not then {
+                    markDataRuntimeIndexed :st tid: bt
+                    stampGate :st nid: dp.parent tid: dv
+                }
+                return (callleg
+                    handled: true
+                    tid: (checkResolvedMember
+                        :st
+                        :unitDecl
+                        :ast
+                        :dp
+                        bt: dv
+                        :cnId
+                        mo: vmo
+                        :coerce
+                        aliasViaX: false
+                    )
+                )
+            } case none then null
         }
-        if (zast.nameTextEq :ast ref: cnId s: "array") then markDataRuntimeIndexed :st tid: bt
     }
     # `.array` on a data block copies the elements into the sized array
     # instance (array_{elem}_{count}), minting it on first access.
@@ -29938,6 +30072,39 @@ checkDataBlockMember: function {
         } case none then null
     }
     return (callleg handled: false tid: ztypes.tid.zero)
+}
+
+# refuseDataValueMember -- `.array` or `.tag` read through a data VALUE: both are
+# the block's, reached through its name -- `array t to: N` needs the count, which
+# a value does not carry, and a tag is declared in an `as` block. True when
+# refused.
+refuseDataValueMember: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    dp: dpref
+    bt: ztypes.tid
+    cnId: zast.nameid
+    isArray: bool
+} out bool is {
+    if isArray.not and (cnId != zast.names.wkTag) then return false
+    og: st.reg.genericOriginOf tid: bt
+    if og.isZero then return false
+    if og != (builtinTidT :st scope: st.curScope :ast base: "intdata") when (
+        og != (builtinTidT :st scope: st.curScope :ast base: "floatdata")
+    ) then return false
+    mn: zast.nameTextAt :ast ref: cnId
+    (addErrorH
+        :st
+        nodeid: dp.nid
+        lineno: dp.lineno
+        colno: dp.colno
+        e: zast.err.typeError
+        msg: "'\{mn}' is read through a data block's name, not through its value"
+        note: "a data value is the block's elements and length; the count an array type needs is the block's"
+        hint: "use the block's name: `blk.\{mn}`"
+        width: mn.length.u32.orPanic
+    )
+    return true
 }
 
 # dataElemCount -- how many elements data block `dataTid` holds: its `length`
@@ -31777,7 +31944,7 @@ checkDottedOn: function {
     if fcp.handled then return fcp.tid
     aix: checkArrayIndexMember :st :ast :dp :bt :cnId
     if aix.handled then return aix.tid
-    dbm: checkDataBlockMember :st :unitDecl :ast :dp :bt :cnId
+    dbm: checkDataBlockMember :st :unitDecl :ast :dp :bt :cnId :coerce
     if dbm.handled then return dbm.tid
     uqm: checkUnitQualifiedMember :st :unitDecl :ast :dp :bt :cnId :coerce
     if uqm.handled then return uqm.tid
@@ -34418,15 +34585,14 @@ refuseNullValue: function {
     return true
 }
 
-# refuseNonValue -- a data block or a unit used whole where a value is wanted.
-# True when `vt`, the value's type, is one and was refused.
+# refuseNonValue -- a unit used whole where a value is wanted. True when `vt`,
+# the value's type, is one and was refused.
 refuseNonValue: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
     vt: ztypes.tid
     nid: zast.nodeid
 } out bool is {
-    if (refuseDataBlockValue :st :ast :vt :nid) then return true
     return (refuseUnitValue :st :ast :vt :nid)
 }
 
@@ -34462,12 +34628,10 @@ refuseUnitValue: function {
     return true
 }
 
-# refuseDataBlockValue -- a data block used whole where a value is wanted: bound
-# to a name, by a `with` or a `for` header, or written as a statement. A block is compile-time data
-# with no runtime object of its own -- its elements and its length fold to
-# constants, and only `.array` and `.index` put it in the program -- so it has no
-# value to bind. True when `vt`, the value's type, is a block and was refused.
-refuseDataBlockValue: function {
+# refuseDataBlockStatement -- a data block's name written alone as a statement.
+# Its value is a view of constants, so evaluating it does nothing. True when
+# `vt`, the statement's type, is a block and was refused.
+refuseDataBlockStatement: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
     vt: ztypes.tid
@@ -34489,9 +34653,9 @@ refuseDataBlockValue: function {
         lineno: ln
         colno: co
         e: zast.err.typeError
-        msg: "'\{pp}' is a data block, not a value"
-        note: "a data block's elements and length are constants; the block has no runtime object"
-        hint: "read an element or its '.length', or copy it with '\{pp}.array'"
+        msg: "'\{pp}' alone does nothing: a data block's value is a view of constants"
+        note: String
+        hint: "bind it, pass it, or read an element"
         width: pp.length.u32.orPanic
     )
     return true
@@ -34521,6 +34685,7 @@ checkAssignment: function {
         reportUnresolvedValue :st :unitDecl :ast nid: asgn.value
     }
     if (refuseNullValue :st :ast :vt nid: asgn.value) then return
+    vt = dataBlockAsValue :st :ast :unitDecl :vt nid: asgn.value
     if (refuseNonValue :st :ast :vt nid: asgn.value) then return
     refuseValueBorrow :st :ast :vt value: asgn.value
     if vt.isZero.not then {
@@ -36048,6 +36213,7 @@ checkWith: function {
     withMarker: st.pushBlock node: withnode.nid
     errW: st.typing.errors.length
     vt: checkValueAt :st :unitDecl :ast nid: withnode.value
+    vt = dataBlockAsValue :st :ast :unitDecl :vt nid: withnode.value
     if (refuseNonValue :st :ast :vt nid: withnode.value) then vt = ztypes.tid
     refuseValueBorrow :st :ast :vt value: withnode.value
     if vt.u64 == 0 when st.typing.errors.length == errW then {
@@ -37098,6 +37264,7 @@ checkForCondition: function {
     }
     st.typing.allowBareFnRef = bfrFor
     st.typing.eachSubjectNid = esPrev
+    vt = dataBlockAsValue :st :ast :unitDecl :vt nid: cond.operation
     if (refuseNonValue :st :ast :vt nid: cond.operation) then vt = ztypes.tid
     # a condition that typed to nothing and raised nothing is an
     # unresolvable name -- the same rule the binding and operand sites
@@ -50817,7 +50984,9 @@ checkStmtExpression: function {
     st.typing.stmtExprNid = valueId
     et0: checkValueAt :st :unitDecl :ast nid: valueId
     st.typing.stmtExprNid = outerStmt0
-    refuseNonValue :st :ast vt: et0 nid: valueId
+    if (refuseDataBlockStatement :st :ast vt: et0 nid: valueId).not then {
+        refuseNonValue :st :ast vt: et0 nid: valueId
+    }
     if et0.isZero.not then stampGate :st nid: lineId tid: et0
     ckOpt0: st.typing.callKind.get key: valueId
     isR0: isReturnCallKind o: ckOpt0

@@ -255,6 +255,8 @@ Table of Contents</div>
 </li>
 </ul>
 </li>
+<li><a href="#intdata-floatdata">intdata / floatdata</a>
+</li>
 <li><a href="#string">string</a>
 <ul>
 <li><a href="#memory-layout-12">Memory Layout</a>
@@ -370,6 +372,7 @@ Born-borrowed is removed as a concept.</li>
 <tr><td>idmap / idset</td><td>stack (struct)</td><td>no</td><td>yes (free arrays)</td><td>n/a</td><td>no</td></tr>
 <tr><td>string</td><td>stack (struct)</td><td>no</td><td>yes (free data buf)</td><td>n/a</td><td>no</td></tr>
 <tr><td>listView(T) (both families)</td><td>stack</td><td>no</td><td>no</td><td>no</td><td>yes</td></tr>
+<tr><td>intdata / floatdata</td><td>stack</td><td>yes</td><td>no</td><td>no</td><td>no</td></tr>
 <tr><td>stringView</td><td>stack</td><td>no</td><td>no</td><td>no</td><td>yes</td></tr>
 </tbody>
 </table>
@@ -1018,10 +1021,21 @@ bare key, because the <code>idkey</code> bound makes one a scalar and <code>0</c
 end is the "no id" every id space already spells; <code>valueAt</code> answers exactly
 what <code>get</code> answers, because a value is neither always a scalar nor always a
 copy.</p>
-<h2 id="string"><a href="#string">15. string</a></h2>
+<h2 id="intdata-floatdata"><a href="#intdata-floatdata">15. intdata / floatdata</a></h2>
+<p>A data block's name, as a value, is a view of the block's static array:</p>
+<pre><code class="language-c">  typedef struct z_intdata_u8_t {
+      uint64_t length;
+      const uint8_t* data;
+  } z_intdata_u8_t;</code></pre>
+<p>16 bytes on the stack, copied by value. <code>data</code> points at the block's
+<code>static const</code> array, which the program carries once the block is indexed at
+run time or used as a value; nothing is allocated, freed or locked. <code>index</code>
+is a function of the mono that checks the bound and panics past it, and
+<code>iterate</code> hands the window to the <code>ListIterVal</code> cursor.</p>
+<h2 id="string"><a href="#string">16. string</a></h2>
 <p><code>String</code> is a growable UTF-8 byte buffer. The struct lives on the stack; only
 the data buffer is heap-allocated.</p>
-<h3 id="memory-layout-12"><a href="#memory-layout-12">15.1. Memory Layout</a></h3>
+<h3 id="memory-layout-12"><a href="#memory-layout-12">16.1. Memory Layout</a></h3>
 <pre><code class="language-c">typedef struct {
     uint64_t size;          /* byte count of current content */
     char* data;             /* heap-allocated data buffer */
@@ -1037,7 +1051,7 @@ directly.</p>
 <p>The struct (24 bytes) is on the stack. The <code>data</code> pointer references a
 heap-allocated buffer. Strings are null-terminated (for C interop) but <code>size</code>
 tracks the actual content length.</p>
-<h3 id="construction-7"><a href="#construction-7">15.2. Construction</a></h3>
+<h3 id="construction-7"><a href="#construction-7">16.2. Construction</a></h3>
 <pre><code class="language-c">static z_string_t z_string_new(const char* s) {
     z_string_t str = {0};
     if (s) {
@@ -1048,14 +1062,14 @@ tracks the actual content length.</p>
     }
     return str;
 }</code></pre>
-<h3 id="destructor-8"><a href="#destructor-8">15.3. Destructor</a></h3>
+<h3 id="destructor-8"><a href="#destructor-8">16.3. Destructor</a></h3>
 <p>Frees the data buffer only:</p>
 <pre><code class="language-c">static void z_string_free(z_string_t* s) {
     if (s &amp;&amp; s-&gt;data) free(s-&gt;data);
 }</code></pre>
-<h3 id="growth-formula-4"><a href="#growth-formula-4">15.4. Growth Formula</a></h3>
+<h3 id="growth-formula-4"><a href="#growth-formula-4">16.4. Growth Formula</a></h3>
 <p>Unchanged: <code>new_cap = cap + (cap &gt;&gt; 1) + 16</code> (approximately 1.5x + 16).</p>
-<h3 id="runtime-functions"><a href="#runtime-functions">15.5. Runtime Functions</a></h3>
+<h3 id="runtime-functions"><a href="#runtime-functions">16.5. Runtime Functions</a></h3>
 <p>The string runtime functions and their signatures:</p>
 <table>
 <colgroup>
@@ -1079,10 +1093,10 @@ tracks the actual content length.</p>
 <tr><td><code>z_string_print</code></td><td>Takes <code>z_string_t*</code></td></tr>
 </tbody>
 </table>
-<h2 id="stringview"><a href="#stringview">16. stringView</a></h2>
+<h2 id="stringview"><a href="#stringview">17. stringView</a></h2>
 <p><code>StringView</code> is a  class: a read-only view into a <code>String</code>, with
 single-owner semantics and a <code>.borrow</code> on the source string.</p>
-<h3 id="memory-layout-13"><a href="#memory-layout-13">16.1. Memory Layout</a></h3>
+<h3 id="memory-layout-13"><a href="#memory-layout-13">17.1. Memory Layout</a></h3>
 <pre><code class="language-c">typedef struct {
     uint64_t size;          /* byte count of the viewed region */
     const char* data;       /* pointer into string's data buffer */
@@ -1090,20 +1104,20 @@ single-owner semantics and a <code>.borrow</code> on the source string.</p>
 <p>Field order: <code>size</code> first, <code>data</code> second. This matches the first two
 fields of <code>String</code> in order, name and type, enabling zero-cost casting from
 <code>z_string_t*</code> to <code>z_stringview_t*</code>.</p>
-<h3 id="ownership-4"><a href="#ownership-4">16.2. Ownership</a></h3>
+<h3 id="ownership-4"><a href="#ownership-4">17.2. Ownership</a></h3>
 <p>Stringview is a class (reftype): single ownership, cannot be copied. It holds a
 <code>.borrow</code> on the source string (when created from a string variable).
 Stringviews created from string literals point into static <code>.rodata</code> and do
 not lock anything (static data has infinite lifetime).</p>
 <p>Stringview has no destructor (no heap allocations).</p>
-<h3 id="methods-5"><a href="#methods-5">16.3. Methods</a></h3>
+<h3 id="methods-5"><a href="#methods-5">17.3. Methods</a></h3>
 <ul>
 <li><code>length() out u64</code> -- byte count</li>
 <li><code>String() out String</code> -- materialise a new owned string from the view</li>
 <li><code>==(rhs: StringView) out bool</code> -- content comparison</li>
 <li><code>!=(rhs: StringView) out bool</code> -- negated comparison</li>
 </ul>
-<h2 id="option-optionval-impact"><a href="#option-optionval-impact">17. option / optionval -- Impact</a></h2>
+<h2 id="option-optionval-impact"><a href="#option-optionval-impact">18. option / optionval -- Impact</a></h2>
 <p><code>Option</code> is a union with subtypes <code>{ none: null, some: T }</code> (falsy arm
 first). Under the new
 model, the <code>Option</code> struct (<code>{ tag, void* }</code>) moves to the stack but its
@@ -1112,11 +1126,11 @@ subtype data is still heap-allocated (standard union behaviour).</p>
 pointer-typed payloads (box, protocol, etc.), <code>Option</code> is represented as a
 bare pointer with <code>NULL</code> sentinel, avoiding the tag + void* overhead entirely.</p>
 <h1 id="born-borrowed-analysis"><a href="#born-borrowed-analysis">Born-Borrowed Analysis</a></h1>
-<h2 id="removal-from-valtypes"><a href="#removal-from-valtypes">18. Removal from Valtypes</a></h2>
+<h2 id="removal-from-valtypes"><a href="#removal-from-valtypes">19. Removal from Valtypes</a></h2>
 <p>Born-borrowed is removed as a language concept. The non-owned field mechanism
 is now available only to reftypes (classes). Valtypes (records, variants)
 cannot hold locks.</p>
-<h3 id="rationale"><a href="#rationale">18.1. Rationale</a></h3>
+<h3 id="rationale"><a href="#rationale">19.1. Rationale</a></h3>
 <p>The original motivation for born-borrowed was to allow stack-allocated records
 to hold locked references to heap-allocated classes. Since records are
 valtypes (freely copyable), the born-borrowed flag was needed to prevent copies
@@ -1127,7 +1141,7 @@ references (they had no identity or destructor).</p>
 non-owned fields has single-owner semantics that naturally prevent copies,
 without any special born-borrowed mechanism. The class can be moved
 (<code>.take</code>), which born-borrowed records could not do.</p>
-<h3 id="migration"><a href="#migration">18.2. Migration</a></h3>
+<h3 id="migration"><a href="#migration">19.2. Migration</a></h3>
 <p>Types that were born-borrowed records become classes:</p>
 <ul>
 <li><code>StringView</code>: becomes a class with <code>.borrow</code> on the source string.</li>
@@ -1135,7 +1149,7 @@ without any special born-borrowed mechanism. The class can be moved
   container.</li>
 <li>Any record with non-owned fields: becomes a class.</li>
 </ul>
-<h3 id="critique"><a href="#critique">18.3. Critique</a></h3>
+<h3 id="critique"><a href="#critique">19.3. Critique</a></h3>
 <p>Removing born-borrowed from valtypes is a simplification but has trade-offs:</p>
 <ul>
 <li>Pro: Cleaner type system. Valtypes are always values -- freely
@@ -1169,7 +1183,7 @@ This would require the compiler to recognise that <code>.rodata</code>-backed
 stringviews need no lock.</li>
 </ul>
 <h1 id="pros-cons-and-risks"><a href="#pros-cons-and-risks">Pros, Cons, and Risks</a></h1>
-<h2 id="pros"><a href="#pros">19. Pros</a></h2>
+<h2 id="pros"><a href="#pros">20. Pros</a></h2>
 <ul>
 <li>Simpler mental model. "Everything is on the stack. Only box and data
 buffers are on the heap." Easy to teach and reason about.</li>
@@ -1185,7 +1199,7 @@ references with identity. No hybrid category.</li>
 <li>Predictable memory usage. Stack allocation makes memory usage more
 predictable and eliminates <code>malloc</code> failure risk for ordinary objects.</li>
 </ul>
-<h2 id="cons"><a href="#cons">20. Cons</a></h2>
+<h2 id="cons"><a href="#cons">21. Cons</a></h2>
 <ul>
 <li>Stack size. Large class structs consume stack space. For deeply
 recursive functions with large local classes, stack overflow is possible.
@@ -1201,7 +1215,7 @@ valtypes (typically small).</li>
 nodes) must use <code>Box(self)</code> for the recursive field. Error message should
 be clear.</li>
 </ul>
-<h2 id="risks"><a href="#risks">21. Risks</a></h2>
+<h2 id="risks"><a href="#risks">22. Risks</a></h2>
 <ul>
 <li>Protocol interaction. Protocol wrappers that own their data
 heap-allocate a copy of the implementation.</li>

@@ -3218,10 +3218,12 @@ family: data {
     optionval: 40
     resultval: 41
     optionViewVal: 42
+    intData: 43
+    floatData: 44
 
     # none -- one past the last row: both the count and the "not one of ours"
     # answer, so no real index can be mistaken for it.
-    none: 43
+    none: 45
 } out u64
 
 # dispatch -- the names the emitter DISPATCHES on -- a member selector, or the
@@ -3257,6 +3259,7 @@ dispatch: data {
     mutView: 22
     mutSlice: 23
     resize: 24
+    dataIndex: 25
 } out u64
 
 # familyPut -- place one row AT its own element. Writing the index and the name
@@ -3308,6 +3311,7 @@ memberDispatchNames: function {acc: List String} is {
     dispatchPut :acc at: dispatch.mutView name: "mutView"
     dispatchPut :acc at: dispatch.mutSlice name: "mutSlice"
     dispatchPut :acc at: dispatch.resize name: "resize"
+    dispatchPut :acc at: dispatch.dataIndex name: "index"
 }
 
 # dispatchIs -- is `id` the dispatch name at index `at`? TWO zeros meet here and they
@@ -3380,6 +3384,8 @@ originBaseNames: function {acc: List String} is {
     familyPut :acc at: family.optionval name: "optionval"
     familyPut :acc at: family.resultval name: "resultval"
     familyPut :acc at: family.optionViewVal name: "OptionViewVal"
+    familyPut :acc at: family.intData name: "intdata"
+    familyPut :acc at: family.floatData name: "floatdata"
 }
 
 # buildOriginTids -- resolve every row in one pass. A unit with no program node
@@ -9674,6 +9680,9 @@ emitFamilyMethodCall: function {
     fam: monoFamilyOf :symtab :ctx tid: bt
     isArr: fam == family.fixedArray
     if isArr then return (emitArrayMethodCall :ast :symtab :ctx :call :mnId :bn :bt :bvid)
+    if (fam == family.intData) or (fam == family.floatData) then {
+        return (emitDataValueMethodCall :ast :symtab :ctx :call :mnId :bn :bt)
+    }
     isSpan: fam == family.spanVal
     if isSpan then return (emitSpanMethodCall :ast :symtab :ctx :call :mnId :bn :bt :bvid)
     if fam == family.listVal then {
@@ -9994,6 +10003,23 @@ emitArrayMethodCall: function {
         )
     }
     return ""
+}
+
+# emitDataValueMethodCall -- `v.index i: k` on a data value: the mono's own
+# bounds-checked reader, handed the view by value.
+emitDataValueMethodCall: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    call: zast.callrow.view
+    mnId: zast.nameid
+    bn: String
+    bt: ztypes.tid
+} out String is {
+    if (dispatchIs :ctx id: mnId at: dispatch.dataIndex).not then return ""
+    cb: ctxCname :ctx tid: bt
+    vi: listArg :ast :symtab :ctx :call label: "i"
+    return "\{cb}_index(\{bn}, \{vi})"
 }
 
 # emitSpanMethodCall -- a window's members that take arguments. get, set and
@@ -14382,7 +14408,18 @@ ownerIsCollectionFamily: function {ctx: Ctx.view fam: ztypes.tid} out bool is {
         (fam == (ctx.origins.get i: family.idMapR)) or
         (fam == (ctx.origins.get i: family.idMapV)) or
         (fam == (ctx.origins.get i: family.idSet)) or
-        (fam == (ctx.origins.get i: family.fixedArray))
+        (fam == (ctx.origins.get i: family.fixedArray)) or
+        (isDataValueFamily :ctx :fam)
+    )
+}
+
+# isDataValueFamily -- is `fam` the template of a data block's value: intdata or
+# floatdata?
+isDataValueFamily: function {ctx: Ctx.view fam: ztypes.tid} out bool is {
+    if fam.isZero then return false
+    return (
+        (fam == (ctx.origins.get i: family.intData)) or
+        (fam == (ctx.origins.get i: family.floatData))
     )
 }
 
@@ -15188,6 +15225,24 @@ emitDefRefAtom: function {
     return ""
 }
 
+# dataValueText -- a data block's name, read as a value: the view of its static
+# array, `((z_M_t){ .length = N, .data = z_tN })`. "" when the atom names no
+# block, or a block the checker never used as a value.
+dataValueText: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    nid: zast.nodeid
+} out String is {
+    dt: dataBlockTid :symtab :nid
+    if dt.isZero then return ""
+    vt: symtab.reg.dataValueTypeOf tid: dt
+    if vt.isZero then return ""
+    vc: ctxCname :ctx tid: vt
+    ac: ctxCname :ctx tid: dt
+    n: (symtab.typing.memberConstOf parentTypeId: dt nameId: zast.names.wkLength).ival
+    return "((\{vc}_t){ .length = \{n}, .data = \{ac} })"
+}
+
 # emitAtom -- the C text of a bare identifier. A STAMPED atom is a local and is
 # answered first (the module-constant probe below costs an owned key and a hash);
 # then a name written inside a namespace, then a stamped unit-def reference, and
@@ -15200,6 +15255,8 @@ emitAtom: function {
 } out String is {
     avC: ast.names.texts.get i: n.name
     av: avC.stringView
+    dv: dataValueText :symtab :ctx nid: n.nodeid
+    if dv.length > 0 then return dv
     # a literal landing in an i128, u128 or f16 is that type's value
     if (symtab.typing.helperScalarTarget.has key: n.nodeid) then {
         wa: nodeConstText :ast :symtab :ctx nid: n.nodeid
@@ -15379,6 +15436,7 @@ nestedCounterRead: function {
     isCounted: (
         (isListOriginOf :symtab :ctx tid: nlid) or
         (isListViewOriginOf :symtab :ctx tid: nlid) or
+        (isDataValueFamily :ctx fam: (originTidOf :symtab tid: nlid)) or
         (isSetOriginOf :symtab :ctx tid: nlid) or
         (isMapOriginOf :symtab :ctx tid: nlid) or
         (isIdCollectionOriginOf :symtab :ctx tid: nlid)
@@ -15492,6 +15550,13 @@ emitNestedCollectionBase: function {
             w9: "_\{mn2}("
             return "\{nlcb}\{w9}\{recvB})"
         }
+    }
+    if (isDataValueFamily :ctx fam: (originTidOf :symtab tid: nlid)) when (
+        mnId == zast.names.wkIterate
+    ) then {
+        ndcb: ctxCname :ctx tid: nlid
+        recvD: colRecvRef :ctx bn: baseAtom vid: bs9vid
+        return "\{ndcb}_iterate(\{recvD})"
     }
     # a view walks too: its read walks reached through a field or off a call's
     # result (`l.listView.iterate`, the iterable of `for each w: l.listView`)
@@ -16059,6 +16124,33 @@ fnptrSlotCallC: function {
     return "\{base}\{acc}\{pfx}\{mn}(\{recv})"
 }
 
+# dataValueMemberRead -- `length` and `iterate` read off a data value: the view's
+# own length, and the mono's walk over it. A block's name as the base is its
+# value, the view of its array. "" for any other read.
+dataValueMemberRead: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    baseNid: zast.nodeid
+    mn2: StringView
+    bn2: StringView
+    bn2v: ztypes.vid
+    bstamp: ztypes.tid
+} out String is {
+    if (isDataValueFamily :ctx fam: (originTidOf :symtab tid: bstamp)).not then return ""
+    mnId: zast.poolFind pool: ast.names text: mn2
+    isLen: mnId == zast.names.wkLength
+    if isLen.not when mnId != zast.names.wkIterate then return ""
+    base: dataValueText :symtab :ctx nid: (atomNodeId n: (ast.nodes.get i: baseNid))
+    if base.length == 0 then base = bn2.string
+    acc: "."
+    if (isPtrVid :ctx vid: bn2v) then acc = "->"
+    if isLen then return "\{base}\{acc}length"
+    dvc: ctxCname :ctx tid: bstamp
+    if (isPtrVid :ctx vid: bn2v) then return "\{dvc}_iterate(\{base})"
+    return "\{dvc}_iterate(&\{base})"
+}
+
 # emitResolvedMemberRead -- the member resolved on the receiver's type: a protocol
 # conformance field, an fn-pointer field, a plain field, or a no-arg method that
 # auto-calls. The receiver goes by address or by value as its variable dictates.
@@ -16076,6 +16168,8 @@ emitResolvedMemberRead: function {
     # the read is the member's own function (a `.take` of it), not a call
     readIsRef: bool
 } out String is {
+    dvr: dataValueMemberRead :ast :symtab :ctx :baseNid :mn2 :bn2 :bn2v :bstamp
+    if dvr.length > 0 then return dvr
     mtt: symtab.reg.typetypeOf typeId: mco
     if mtt.isInterface then {
         pj: protocolProjectionRead :symtab :ctx :mn2 :bn2 :bn2v :bstamp :mco
@@ -34121,6 +34215,36 @@ emitListIterCursor: function {
     buf.append s7
 }
 
+# emitIterCursorOf -- the list cursor `liId` and the OptionView its `call` yields,
+# emitted once. False when either was never minted, which leaves the walk with
+# nothing to emit.
+emitIterCursorOf: function {
+    ctx: Ctx
+    symtab: zenv.ZSymbolTable.view
+    liId: ztypes.tid
+    ect: StringView
+    buf: String.borrow
+} out bool is {
+    if liId.isZero then return false
+    ovId: (monoMethodReturn
+        :symtab
+        monoId: liId
+        nameId: zast.names.wkCall
+    )
+    if ovId.isZero then return false
+    ovName: regNameOf :symtab tid: ovId
+    ovu: cUpperOf text: ovName.stringView
+    (emitListIterCursor
+        :ctx
+        :liId
+        :ovId
+        ovu: ovu.stringView
+        :ect
+        :buf
+    )
+    return true
+}
+
 # emitListIter -- the borrowed-view iterator over a List or ListView mono: the
 # shared cursor (above) plus this container's constructors, emitted only when
 # `iterate` resolved (the ListIter / OptionView monos were minted). The
@@ -34145,23 +34269,7 @@ emitListIter: function {
             nameId: zast.names.wkIterateReverse
         )
     }
-    if liId.isZero then return
-    ovId: (monoMethodReturn
-        :symtab
-        monoId: liId
-        nameId: zast.names.wkCall
-    )
-    if ovId.isZero then return
-    ovName: regNameOf :symtab tid: ovId
-    ovu: cUpperOf text: ovName.stringView
-    (emitListIterCursor
-        :ctx
-        :liId
-        :ovId
-        ovu: ovu.stringView
-        :ect
-        :buf
-    )
+    if (emitIterCursorOf :ctx :symtab :liId :ect :buf).not then return
     li: cbaseNoPrefix :ctx tid: liId
     # `iterate` is the READONLY walk, so its receiver is const and view-guard
     # checks it. No cast is needed to read the window out of it -- a const
@@ -34306,6 +34414,57 @@ emitListViewMono: function {
         :buf
     )
     emitListIter :ctx :symtab :monoId nm: nm.stringView ect: ect.stringView :buf
+}
+
+# emitDataMono -- a data value mono (`intdata u8`): z_data.c.tmpl's view struct
+# -- a length and a pointer at the block's static const array -- and each
+# member a use site reached: `index`, the bounds-checked read, and `iterate`,
+# which hands the window to the list cursor. The cursor's `data` is a plain
+# pointer shared with walks that write, so the const is dropped there; the
+# typechecker is what keeps a data walk readonly.
+emitDataMono: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    runtimeDir: StringView
+    monoId: ztypes.tid
+    buf: String.borrow
+} is {
+    nm: cbaseNoPrefix :ctx tid: monoId
+    eid: symtab.reg.genericTypeArgAt specId: monoId ordinal: 0
+    ect0: slotCType :ast :symtab :ctx tid: eid
+    ect: ctypeOrI64 s: ect0.stringView
+    p: "\{runtimeDir}/z_data.c.tmpl"
+    raw: readTemplateCached :ctx path: p.stringView
+    if raw.length > 0 then {
+        t1: applyTmpl text: raw key: "NAME" val: nm.stringView
+        t2: applyTmpl text: t1 key: "ELEM_T" val: ect.stringView
+        buf.append t2
+        buf.append "\n"
+    }
+    if (monoMemberUsed :symtab :monoId nameId: (ctx.mnames.get i: dispatch.dataIndex)) then {
+        buf.append "static \{ect} z_\{nm}_index(z_\{nm}_t _this, uint64_t _idx);\n"
+        buf.append "static \{ect} z_\{nm}_index(z_\{nm}_t _this, uint64_t _idx) {\n"
+        buf.append "    if (_idx >= _this.length) {\n"
+        buf.append "        char _zp_buf[96];\n"
+        b2: "        snprintf(_zp_buf, sizeof(_zp_buf), \"data index: index %lu out of bounds (length %lu)\", (unsigned long)_idx, (unsigned long)_this.length);\n"
+        buf.append b2
+        buf.append "        z_panic(_zp_buf);\n"
+        buf.append "    }\n"
+        buf.append "    return _this.data[_idx];\n"
+        buf.append "}\n\n"
+    }
+    if (monoMemberUsed :symtab :monoId nameId: zast.names.wkIterate).not then return
+    liId: monoMethodReturn :symtab :monoId nameId: zast.names.wkIterate
+    if (emitIterCursorOf :ctx :symtab :liId ect: ect.stringView :buf).not then return
+    li: cbaseNoPrefix :ctx tid: liId
+    buf.append "static z_\{li}_t z_\{nm}_iterate(const z_\{nm}_t* _this);\n"
+    buf.append "static z_\{li}_t z_\{nm}_iterate(const z_\{nm}_t* _this) {\n"
+    buf.append "    z_\{li}_t _it = {0};\n"
+    buf.append "    _it.data = (\{ect}*)_this->data;\n"
+    buf.append "    _it.length = _this->length;\n"
+    buf.append "    return _it;\n"
+    buf.append "}\n\n"
 }
 
 # emitSpanMono -- a SpanVal mono: the window struct, which is a ListView's -- a
@@ -38033,6 +38192,8 @@ MonoWork: class {
     wListView: ListVal ztypes.tid
     # the windows still owed emission
     wSpan: ListVal ztypes.tid
+    # the data values still owed emission
+    wData: ListVal ztypes.tid
     # the lists still owed emission
     wList: ListVal ztypes.tid
     # the sets still owed emission
@@ -38116,6 +38277,10 @@ classifyCollectionMono: function {
         isColKind = true
         colDst = 8
     }
+    if (isDataValueFamily :ctx fam: (originTidOf :symtab tid: tcl)) then {
+        isColKind = true
+        colDst = 9
+    }
     if isColKind when (monoIsLate
         :ast
         :symtab
@@ -38131,6 +38296,7 @@ classifyCollectionMono: function {
         if colDst == 6 then work.wIdSet.append tv
         if colDst == 7 then work.wIdMap.append tv
         if colDst == 8 then work.wSpan.append tv
+        if colDst == 9 then work.wData.append tv
     }
     return isColKind
 }
@@ -38339,6 +38505,12 @@ emitCollectionMonos: function {
 } is {
     # ListView structs next -- a List's listView companion references
     # the ListView struct by value.
+    # data values first: each is a scalar view, and nothing it names comes later
+    tdat: u64
+    for tdat < work.wData.length loop {
+        emitDataMono :ast :symtab :ctx :runtimeDir monoId: (work.wData.get i: tdat) :buf
+        tdat = tdat + 1
+    }
     tarr: u64
     for tarr < work.wArr.length loop {
         arrId: work.wArr.get i: tarr
@@ -38624,6 +38796,7 @@ emitMonos: function {
         wArr: ListVal ztypes.tid
         wListView: ListVal ztypes.tid
         wSpan: ListVal ztypes.tid
+        wData: ListVal ztypes.tid
         wList: ListVal ztypes.tid
         wSet: ListVal ztypes.tid
         wMap: ListVal ztypes.tid

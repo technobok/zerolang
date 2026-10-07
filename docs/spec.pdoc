@@ -4476,8 +4476,10 @@ written in the #~"as" block and nowhere else -- see [#> to=tag: tag].
 
 #---: data
 
-Creates a constant list of embedded data. It is a reftype. All components must
-be numeric valtypes.
+Creates a constant list of embedded data. All components must be numeric
+valtypes. The block's name is a value: an #~"intdata t" for a block of
+integers, a #~"floatdata t" for one of floats (see
+[#> to="./stdlib_collections.html#data-values": Data values]).
 
 Elements are stored in the order they are written: the first is at index 0,
 and each one after it at the next index. An element may carry a label, which
@@ -4507,13 +4509,15 @@ declaration, reported against the element that does not fit. The check
 happens where the value is written rather than where it is read, because
 a data block has no other place that sees every element at once.
 
-A #~"data" block comes with four members already defined, as if the
-statement declared them ahead of its elements:
+A #~"data" block has the members its value type declares -- #~"length",
+#~"index", #~"iterate", #~"array" (and #~"tag" on #~"intdata") -- plus
+#~"tag", the block's discriminator for a tagged type (see below):
 
 #ul:
   [#*: #~"tag" -- the block's discriminator, for a tagged type (see below)]
   [#*: #~"length" -- its element count, a constant]
-  [#*: #~"index" -- #~".index i", the element at a run-time index]
+  [#*: #~"index" -- #~".index i: k", the element at index #~"k" (a #~"u64")]
+  [#*: #~"iterate" -- the walk over the elements, first to last]
   [#*: #~"array" -- #~".array", a copy of the block into a sized array]
 
 An element is a member of the block too, so it may not take one of these
@@ -4527,15 +4531,22 @@ no #~"out" and no typed elements it defaults to #~"i64"; see
 
 String literal fragments are built on top of a u8 data sequence.
 
-A data block is compile-time data. Its elements (#~"primes.0",
-#~"codes.ht") and its #~".length" are constants -- in a body and in a
-unit-level definition alike (#~"COUNT: primes.length") -- and a program that
-reads only those carries no array at all. Only #~".index i" (an element at a run-time
-index) and #~".array" (a copy into a sized array) put the block into the
-program. The block itself is not a value: binding it (#~"w: primes", a
-#~"with" or a #~"for" header) or writing it as a statement is #~"E0100", and
-so is an ownership marker on the block or on an element, which names no
-storage.
+Through the block's name, its elements (#~"primes.0", #~"codes.ht"), its
+#~".length" and #~".index K" with a constant #~"K" are constants -- in a body
+and in a unit-level definition alike (#~"COUNT: primes.length") -- and a
+program that reads only those carries no array at all. A constant #~"K" out of
+range is a compile error. A run-time #~".index i", #~".array" (a copy into a
+sized array) and the block used as a value put its array into the program.
+
+The name is a value: bound (#~"w: primes"), passed, returned, held in a field
+or walked (#~"for each p: primes.iterate"), it is a view of the static array --
+its length and a pointer at it -- which binding copies and which takes no lock,
+since static memory can be neither written nor freed. Through a value,
+#~"index" reads at run time and panics out of range, and #~"length" and
+#~"iterate" read the view; #~".array" and #~".tag" are the block's, reached
+through its name only. Written alone as a statement the name does nothing and
+is #~"E0100", and an ownership marker on the block or on an element, which
+names no storage, is #~"E0100" too.
 
 #code language=zerolang: """
   # array of i64 (default — no explicit type tag)
