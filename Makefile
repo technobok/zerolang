@@ -2432,7 +2432,7 @@ perf: $(PERFBIN)
 # +338 a type is named by the path of units that declares it (unitPathOfTid):
 # 0 behaviour, +338 source (ab.sh, now staging its trees at equal depth --
 # behaviour + source equals perf-strict's delta).
-ALLOC_BASELINE := 2274872
+ALLOC_BASELINE := 2232091
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -2532,7 +2532,7 @@ shadow-guard:
 	fail=0; \
 	chk() { if [ "$$2" -gt "$$3" ]; then echo "shadow-guard FAIL: $$1 = $$2 (baseline $$3)"; fail=1; \
 	  elif [ "$$2" -lt "$$3" ]; then echo "shadow-guard: $$1 = $$2 < baseline $$3 -- lower the baseline here"; fi; }; \
-	chk "'cTypeOf name:'" "$$n1" 8; \
+	chk "'cTypeOf name:'" "$$n1" 0; \
 	chk "'cTypeForName symtab:'" "$$n2" 0; \
 	chk "'isStdlibUnitName'" "$$n3" 0; \
 	chk "'isStdlibUnitName (any src)'" "$$n4" 0; \
@@ -2553,7 +2553,7 @@ shadow-guard:
 	  echo "  (If a site was legitimately removed, lower the baseline here instead.)"; \
 	  exit 1; \
 	fi; \
-	echo "shadow-guard OK: cTypeOf name:=$$n1 (<=8)  cTypeForName symtab:=$$n2 (<=0)  isStdlibUnitName=$$n3/$$n4 (<=0)  demand set=$$n5 (<=0)"
+	echo "shadow-guard OK: cTypeOf name:=$$n1 (<=0)  cTypeForName symtab:=$$n2 (<=0)  isStdlibUnitName=$$n3/$$n4 (<=0)  demand set=$$n5 (<=0)"
 
 # emitter-guard -- ratchet against name-resolution creep in the C emitter: the
 # emitter reads typechecker stamps and canonical ids, and every remaining
@@ -2586,12 +2586,12 @@ emitter-guard:
 	chk "ztypecheck.resolvedByKey" "$$e1" 0; \
 	chk "ztypecheck.walkLookupTyperef" "$$e2" 5; \
 	chk "resolveTypeIdByName" "$$e3" 15; \
-	chk "userFnId" "$$e4" 20; \
+	chk "userFnId" "$$e4" 18; \
 	chk "childOwnershipText" "$$e5" 0; \
-	chk "regNameOf" "$$e6" 64; \
+	chk "regNameOf" "$$e6" 52; \
 	chk "mangleVarName (both inside varCName)" "$$e7" 2; \
 	chk "io.readText" "$$e8" 3; \
-	chk "monoOriginName" "$$e9" 6; \
+	chk "monoOriginName" "$$e9" 5; \
 	chk "mangleMemberPrefix (inside memberCPrefix)" "$$e10" 1; \
 	if [ "$$fail" = "1" ]; then \
 	  echo "  A new name-resolution site was added to the emitter. Read the typechecker"; \

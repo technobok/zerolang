@@ -56,6 +56,7 @@ public: unit {
     :isMoveMarkerId
     :isStringViewMember
     :isNumericTypeName
+    :isScalarNameId
     :isNumericLiteralName
     :isFloatLiteralName
     :armSuffixSide
@@ -80,6 +81,7 @@ public: unit {
     :declMemberIsPrivate
     :publicAliasInternalNames
     :unitDeclOfTid
+    :numKindOfTid
     :unitNameOfTid
     :unitNameViewOfTid
     :unitPathOfTid
@@ -2033,25 +2035,18 @@ aliasedContainerTwin: function {name: StringView} out StringView is {
     return ""
 }
 
-# isNumericTypeName -- the name of a builtin numeric scalar type.
+# isNumericTypeName -- whether TEXT spells one of the sixteen scalar names: a
+# literal's suffix, or a fix-it's proposed name, which no pool holds. A name
+# that is a pool id asks isScalarNameId instead; the spellings live once, in
+# the lexer's suffix table (ztypes.numkindByName).
 isNumericTypeName: function {name: StringView} out bool is {
-    if name == "i8" then return true
-    if name == "i16" then return true
-    if name == "i32" then return true
-    if name == "i64" then return true
-    if name == "i128" then return true
-    if name == "u8" then return true
-    if name == "u16" then return true
-    if name == "u32" then return true
-    if name == "u64" then return true
-    if name == "u128" then return true
-    if name == "f16" then return true
-    if name == "f32" then return true
-    if name == "f64" then return true
-    if name == "f128" then return true
-    if name == "c8" then return true
-    if name == "c32" then return true
-    return false
+    return (ztypes.numkindByName :name).has
+}
+
+# isScalarNameId -- whether name id `id` is one of the sixteen scalar names,
+# which every pool holds at fixed ids (zast.wellKnown's ty* entries).
+isScalarNameId: function {id: zast.nameid} out bool is {
+    return (id >= zast.wellKnown.slot.tyI8) and (id <= zast.wellKnown.slot.tyF128)
 }
 
 # isNumericLiteralName -- true when a name begins with a digit or a minus: a
@@ -2086,13 +2081,11 @@ isNumericLiteralNameAt: function {ast: Ast.view ref: zast.nameid} out bool is {
     return r9nl
 }
 
-# isNumericTypeNameAt -- isNumericTypeName asked of an interned name id, the
-# text read through a borrow.
+# isNumericTypeNameAt -- isNumericTypeName asked of an interned name id: by id,
+# no text read.
 isNumericTypeNameAt: function {ast: Ast.view ref: zast.nameid} out bool is {
-    r9nt: false
-    t9nt: zast.nameTextAt :ast :ref
-    r9nt = isNumericTypeName name: t9nt.stringView
-    return r9nt
+    ast.drop
+    return (isScalarNameId id: ref)
 }
 
 # markerText -- a field or parameter marker's source spelling, for diagnostics.
@@ -11778,10 +11771,10 @@ detectTagAccessor: function {
     ownerId: ztypes.tid
     am: argref
 } is {
-    tp: dottedParentName :ast n: (ast.nodes.get i: am.operation)
-    tc: zast.nameTextCopy :ast ref: (dottedChildNameId :ast n: (ast.nodes.get i: am.operation))
-    if tc.stringView != "tag" then return
-    if (isNumericTypeName name: tp.stringView).not then return
+    tagOp: ast.nodes.get i: am.operation
+    if tagOp.dottedpath.not then return
+    if (atomNameId :ast n: (ast.nodes.get i: tagOp.child)) != zast.wellKnown.slot.wkTag then return
+    if (isScalarNameId id: (atomNameId :ast n: (ast.nodes.get i: tagOp.parent))).not then return
     # A TAG ACCESSOR IS NOT A CONTAINMENT EDGE. `tag: u8.tag` declares a read of
     # the discriminator the variant already carries, not a field that has to lay
     # out inside it -- so it takes the plain typeref, and a type reached through
@@ -29479,8 +29472,7 @@ reportUnknownMember: function {
             # the base by ID, the builtin itself or a literal type: a user type
             # spelled like a scalar is a type of its own and converts to nothing
             baseNum: (isNumericTid :st tid: bt) or (isLiteralTypeId :st tid: bt)
-            cn: zast.nameTextAt :ast ref: cnId
-            if (isNumericTypeName name: cn.stringView) when baseNum then stillMiss = false
+            if (isScalarNameId id: cnId) when baseNum then stillMiss = false
         }
         if stillMiss then {
             cn: zast.nameTextAt :ast ref: cnId
@@ -32241,8 +32233,8 @@ refuseLiteralConversion: function {
     litTid: ztypes.tid
     childId: zast.nameid
 } out bool is {
+    if (isScalarNameId id: childId).not then return false
     missChild: zast.nameTextAt :ast ref: childId
-    if (isNumericTypeName name: missChild.stringView).not then return false
     ltn: specWrittenName :st :ast tid: litTid
     cm9: "'\{ltn}' has no conversion to '\{missChild}'"
     ch9: "a literal with a decimal point or an exponent is a float: convert it to a float type, or write the integer's digits".string
@@ -63029,18 +63021,6 @@ walkLookupTyperefFrom: function {
     return (typerefHitAnswer :st r: r5 :waitDecl)
 }
 
-# shellScalarName -- a shell named like a C scalar stays a shell: the
-# emitter spells those by NAME (cTypeOf) before any canonicalization, so
-# rebinding them would change shadow semantics. The set is the numeric
-# scalars the emitter spells, plus `bool` -- which cTypeOf does not spell
-# (its C form comes from the bool declaration) but which is a shell name on
-# the same footing. The two literal types are NOT here: they never reach the
-# emitter, so there is no spelling of them to protect.
-shellScalarName: function {name: StringView} out bool is {
-    if (isNumericTypeName :name) then return true
-    return name == "bool"
-}
-
 # canonShellTid -- the canonical id for a SHELL stamp value, 0 to leave
 # the stamp alone. Mirrors canonicalizeShellChildren's shell detection
 # (no defining unit, not a generic param / scalar shell);
@@ -63068,7 +63048,6 @@ canonShellTid: function {
     if ok when (unitDeclOfTid :st :tid).isZero.not then ok = false
     if ok then {
         nmNode: st.reg.nameOf :tid
-        if (shellScalarName name: nmNode.stringView) then nmNode = ""
         if nmNode.length > 0 then {
             rid: (shellResolveByName
                 :st
@@ -63316,12 +63295,9 @@ memberTypeIsShell: function {
     return true
 }
 
-# shellNameToResolve -- the name a shell resolves by: the recorded type's
-# name, unless it is a scalar's (which is not a shell); empty then.
+# shellNameToResolve -- the name a shell resolves by: the recorded type's name.
 shellNameToResolve: function {st: zenv.ZSymbolTable cto: ztypes.tid} out String is {
-    nmNode: st.reg.nameOf tid: cto
-    if (shellScalarName name: nmNode.stringView) then return String
-    return nmNode
+    return (st.reg.nameOf tid: cto)
 }
 
 # shellChildScope -- where a member's shell resolves: the scope its parent

@@ -287,60 +287,178 @@ cnameById: function {tid: ztypes.tid} out String is {
     return "z_t\{tid}"
 }
 
-# cTypeOf -- the C spelling of a scalar type NAME ("" when not scalar). A NAME is
-# not an identity, so this is never the answer on its own: a caller holding a tid
-# must go through scalarCTypeFor, which asks the declaration whether the tid is
-# the builtin behind the name. shadow-guard holds the count down.
-#
-# The C spelling has to be SOMEWHERE, and the one place it cannot live is the
-# table it helps build:
-# convBodyOf reads it to GENERATE the natives.tbl conversion rows, so moving the
-# spelling into that table would have the generator reading its own output. The
-# rest have no declaration to ask -- two want a scalar-NAME predicate rather than
-# a C type, and the others start from a typedef base name or an AST type name,
-# with no tid in hand.
-cTypeOf: function {name: StringView} out String is {
-    if name == "i8" then return "int8_t"
-    if name == "i16" then return "int16_t"
-    if name == "i32" then return "int32_t"
-    if name == "i64" then return "int64_t"
-    if name == "u8" then return "uint8_t"
-    if name == "u16" then return "uint16_t"
-    if name == "u32" then return "uint32_t"
-    if name == "u64" then return "uint64_t"
-    if name == "i128" then return "z_i128"
-    if name == "u128" then return "z_u128"
-    if name == "f16" then return "z_f16"
-    if name == "f32" then return "float"
-    if name == "f64" then return "double"
-    if name == "f128" then return "__float128"
-    if name == "c8" then return "uint8_t"
-    if name == "c32" then return "uint32_t"
-    return ""
+# The scalar kinds' C facts, one block each in ztypes.numkind's order and read
+# by a kind's position, `k.tag`. What a scalar is in C is asked of its KIND,
+# which the type's declaration settles (ztypecheck.numKindOfTid), never of a
+# name: a program's own `u8` is no u8.
+
+# kindCTypes -- the C type a scalar kind is spelled as
+kindCTypes: data {
+    i8Type: "int8_t"
+    i16Type: "int16_t"
+    i32Type: "int32_t"
+    i64Type: "int64_t"
+    i128Type: "z_i128"
+    u8Type: "uint8_t"
+    u16Type: "uint16_t"
+    u32Type: "uint32_t"
+    u64Type: "uint64_t"
+    u128Type: "z_u128"
+    c8Type: "uint8_t"
+    c32Type: "uint32_t"
+    f16Type: "z_f16"
+    f32Type: "float"
+    f64Type: "double"
+    f128Type: "__float128"
+} out stringdata
+
+# kindBitsT -- an integer kind's width in bits; 0 for a float
+kindBitsT: data {
+    i8Type: 8
+    i16Type: 16
+    i32Type: 32
+    i64Type: 64
+    i128Type: 128
+    u8Type: 8
+    u16Type: 16
+    u32Type: 32
+    u64Type: 64
+    u128Type: 128
+    c8Type: 8
+    c32Type: 32
+    f16Type: 0
+    f32Type: 0
+    f64Type: 0
+    f128Type: 0
+} out intdata u64
+
+# kindLoT -- the lower bound a narrowing check compares with, as C; "0" where
+# no check reads one
+kindLoT: data {
+    i8Type: "-128"
+    i16Type: "-32768"
+    i32Type: "-2147483648"
+    i64Type: "(-9223372036854775807LL - 1)"
+    i128Type: "0"
+    u8Type: "0"
+    u16Type: "0"
+    u32Type: "0"
+    u64Type: "0"
+    u128Type: "0"
+    c8Type: "0"
+    c32Type: "0"
+    f16Type: "0"
+    f32Type: "0"
+    f64Type: "0"
+    f128Type: "0"
+} out stringdata
+
+# kindHiT -- the upper bound a narrowing check compares with, as C; "0" where
+# no check reads one
+kindHiT: data {
+    i8Type: "127"
+    i16Type: "32767"
+    i32Type: "2147483647"
+    i64Type: "9223372036854775807"
+    i128Type: "0"
+    u8Type: "255"
+    u16Type: "65535"
+    u32Type: "4294967295U"
+    u64Type: "18446744073709551615ULL"
+    u128Type: "0"
+    c8Type: "255"
+    c32Type: "4294967295U"
+    f16Type: "0"
+    f32Type: "0"
+    f64Type: "0"
+    f128Type: "0"
+} out stringdata
+
+# kindSuffixT -- the C literal suffix that keeps a large constant of an unsigned
+# kind unsigned
+kindSuffixT: data {
+    i8Type: ""
+    i16Type: ""
+    i32Type: ""
+    i64Type: ""
+    i128Type: ""
+    u8Type: ""
+    u16Type: ""
+    u32Type: "U"
+    u64Type: "ULL"
+    u128Type: ""
+    c8Type: ""
+    c32Type: "U"
+    f16Type: ""
+    f32Type: ""
+    f64Type: ""
+    f128Type: ""
+} out stringdata
+
+# kindMantissaT -- a float kind's significand width; 0 for an integer
+kindMantissaT: data {
+    i8Type: 0
+    i16Type: 0
+    i32Type: 0
+    i64Type: 0
+    i128Type: 0
+    u8Type: 0
+    u16Type: 0
+    u32Type: 0
+    u64Type: 0
+    u128Type: 0
+    c8Type: 0
+    c32Type: 0
+    f16Type: 11
+    f32Type: 24
+    f64Type: 53
+    f128Type: 113
+} out intdata u64
+
+# kindCType -- the C type scalar kind `k` is spelled as.
+kindCType: function {k: ztypes.numkind} out StringView is {
+    return (kindCTypes.index i: k.tag.u64)
 }
 
-# scalarTidIsBuiltin -- asked only where cTypeOf has already matched the NAME:
-# is this tid the runtime-backed type behind that name, or a USER type wearing
-# it? The DECLARATION answers it. The sixteen scalars are `record is native` and
-# the two literal pseudo-types are minted by the registry itself, so the marker
-# covers eighteen of cTypeOf's nineteen names; a user's `i64: record { hi: 0 }`
-# carries no marker and is a shadow. `bool` carries it too: the grammar gives
-# `is native`
-# only to a type with no is-block -- and `bool` is a native VARIANT, which keeps
-# its arms, so the marker covers all nineteen.
-#
-# A tid with no defining unit is a SHELL -- a fresh param/field child named
-# after the real type -- not a user type wearing the name. There is no
-# declaration there to shadow with, so it keeps the C scalar, as typeRefC says
-# of shells. Asked of the declaration directly rather than through its unit's
-# name, which is the same question one step earlier.
-scalarTidIsBuiltin: function {
-    symtab: zenv.ZSymbolTable.view
-    tid: ztypes.tid
-} out bool is {
-    if (symtab.reg.isNativeOf :tid) then return true
-    dc: symtab.typing.declIdOfType typeId: tid
-    return dc.isZero
+# kindBits -- integer kind `k`'s width in bits; 0 for a float.
+kindBits: function {k: ztypes.numkind} out u64 is {
+    return (kindBitsT.index i: k.tag.u64)
+}
+
+# kindLoStr / kindHiStr -- kind `k`'s range bounds, as the C a narrowing check
+# compares with.
+kindLoStr: function {k: ztypes.numkind} out StringView is {
+    return (kindLoT.index i: k.tag.u64)
+}
+
+# kindHiStr -- see kindLoStr.
+kindHiStr: function {k: ztypes.numkind} out StringView is {
+    return (kindHiT.index i: k.tag.u64)
+}
+
+# kindLitSuffix -- the C literal suffix of unsigned kind `k`, so a large decimal
+# constant is unambiguously unsigned to the C compiler; "" for the others.
+kindLitSuffix: function {k: ztypes.numkind} out StringView is {
+    return (kindSuffixT.index i: k.tag.u64)
+}
+
+# kindMantissa -- float kind `k`'s significand width; 0 for an integer. A
+# conversion INTO a float is exact only while the source's magnitude fits here.
+kindMantissa: function {k: ztypes.numkind} out u64 is {
+    return (kindMantissaT.index i: k.tag.u64)
+}
+
+# kindSigned -- whether `k` is one of the signed integers.
+kindSigned: function {k: ztypes.numkind} out bool is {
+    if (k == ztypes.numkind.i8Type) or (k == ztypes.numkind.i16Type) then return true
+    if (k == ztypes.numkind.i32Type) or (k == ztypes.numkind.i64Type) then return true
+    return k == ztypes.numkind.i128Type
+}
+
+# kindIsFloat -- whether `k` is one of the floats.
+kindIsFloat: function {k: ztypes.numkind} out bool is {
+    if (k == ztypes.numkind.f16Type) or (k == ztypes.numkind.f32Type) then return true
+    return (k == ztypes.numkind.f64Type) or (k == ztypes.numkind.f128Type)
 }
 
 # ordinalVariantCType -- the C scalar a VARIANT lowers to instead of a tag
@@ -409,12 +527,10 @@ tagStorageCType: function {
         if tb.isZero then return ""
         # BIND the name: regNameOf hands back an OWNED copy, and taking a
         # view of it inline leaves the copy with no owner to free it.
-        tn: regNameOf :symtab tid: tb
         # scalarCTypeFor, not cTypeOf: the tid is in hand, so a user type
         # shadowing a numeric name must not pick up that numeric's C spelling
         return (scalarCTypeFor
             :symtab
-            name: tn.stringView
             tid: tb
         )
     } case none then {
@@ -474,42 +590,18 @@ ordinalPairFirstArmId: function {
     return ((symtab.typing.sumPairFirstArm.get key: tid).or d: none)
 }
 
-# scalarCTypeFor -- the C scalar type for a builtin-named tid, BUT empty when the
-# tid is a user type SHADOWING the scalar. The caller then emits the user struct
-# (typeRefC / cnameOf) instead of the C scalar. The single "trust the canonical
-# id, not the name" gate for the by-name C-type sites.
-scalarCTypeFor: function {
-    symtab: zenv.ZSymbolTable.view
-    name: StringView
-    tid: ztypes.tid
-} out String is {
+# scalarCTypeFor -- the C scalar a type lowers to: an ordinal variant's (bool's)
+# C type, or the C type of a scalar the system declares (its KIND, which the
+# declaration settles); "" for any other type, a program's own type spelled like
+# a scalar included. The caller then emits the type's struct (typeRefC /
+# cnameOf). The one gate every C-type site asks, by id.
+scalarCTypeFor: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out String is {
     if (isOrdinalVariant :symtab :tid) then {
         return (ordinalVariantCType :symtab :tid)
     }
-    sc: cTypeOf :name
-    if sc.length == 0 then return sc
-    if (scalarTidIsBuiltin :symtab :tid).not then {
-        return ""
-    }
-    return sc
-}
-
-# isIntName -- integer scalar family check (snprintf %ld path).
-isIntName: function {name: StringView} out bool is {
-    if name == "i8" then return true
-    if name == "i16" then return true
-    if name == "i32" then return true
-    if name == "i64" then return true
-    if name == "u8" then return true
-    if name == "u16" then return true
-    if name == "u32" then return true
-    if name == "u64" then return true
-    if name == "i128" then return true
-    if name == "u128" then return true
-    if name == "c8" then return true
-    if name == "c32" then return true
-    if name == "bool" then return true
-    return false
+    nk: ztypecheck.numKindOfTid st: symtab :tid
+    if nk.has.not then return ""
+    return (kindCType k: nk.kind).string
 }
 
 # isUserStructType -- the type-types whose values are user objects laid out as a
@@ -519,82 +611,16 @@ isUserStructType: function {tt: ztypes.ztypetype} out bool is {
     return tt.isValueFamily or tt.isReferenceData
 }
 
-# true when `name` is a floating-point type name.
-isFloatName: function {name: StringView} out bool is {
-    return (name == "f16") or (name == "f32") or (name == "f64") or (name == "f128")
-}
-
-# numBits -- integer numeric type bit width (0 if not an integer type).
-numBits: function {name: StringView} out u64 is {
-    if name == "i8" then return 8
-    if name == "u8" then return 8
-    if name == "c8" then return 8
-    if name == "i16" then return 16
-    if name == "u16" then return 16
-    if name == "i32" then return 32
-    if name == "u32" then return 32
-    if name == "c32" then return 32
-    if name == "i64" then return 64
-    if name == "u64" then return 64
-    if name == "i128" then return 128
-    if name == "u128" then return 128
-    return 0
-}
-
-# numSigned -- true for the signed integer family.
-numSigned: function {name: StringView} out bool is {
-    if name == "i8" then return true
-    if name == "i16" then return true
-    if name == "i32" then return true
-    if name == "i64" then return true
-    if name == "i128" then return true
-    return false
-}
-
-# numLoStr / numHiStr -- decimal range bounds, the comparands of the
-# overflow check emitted on a narrowing cast.
-numLoStr: function {name: StringView} out String is {
-    if name == "i8" then return "-128"
-    if name == "i16" then return "-32768"
-    if name == "i32" then return "-2147483648"
-    if name == "i64" then return "(-9223372036854775807LL - 1)"
-    return "0"
-}
-
-# the maximum-value literal (as C text) for numeric type `name`.
-numHiStr: function {name: StringView} out String is {
-    if name == "i8" then return "127"
-    if name == "i16" then return "32767"
-    if name == "i32" then return "2147483647"
-    if name == "i64" then return "9223372036854775807"
-    if name == "u8" then return "255"
-    if name == "c8" then return "255"
-    if name == "u16" then return "65535"
-    if name == "u32" then return "4294967295U"
-    if name == "c32" then return "4294967295U"
-    if name == "u64" then return "18446744073709551615ULL"
-    return "0"
-}
-
-# numLitSuffix -- the C integer-literal suffix for an unsigned type, so a large
-# decimal literal (e.g. u64 max) is unambiguously unsigned to the C compiler.
-numLitSuffix: function {name: StringView} out String is {
-    if name == "u64" then return "ULL"
-    if name == "u32" then return "U"
-    if name == "c32" then return "U"
-    return ""
-}
-
-# wideLiteralOf -- an integer lexeme as a value of the 128-bit integer type
-# `name` (int128WordsC); "" when `name` is no 128-bit type or the lexeme is no
-# integer.
-wideLiteralOf: function {lex: StringView name: StringView} out String is {
-    if (numBits :name) != 128 then return ""
+# wideLiteralOf -- an integer lexeme as a value of 128-bit integer kind `k`
+# (int128WordsC); "" when `k` is no 128-bit kind or the lexeme is no integer.
+wideLiteralOf: function {lex: StringView k: ztypes.suffixinfo} out String is {
+    if k.has.not then return ""
+    if (kindBits k: k.kind) != 128 then return ""
     wb: ztypecheck.constLiteralBig :lex
     match (
         wb
     ) case some then {
-        return (int128WordsC b: wb :name)
+        return (int128WordsC b: wb signed: (kindSigned k: k.kind))
     } case none then null
     return ""
 }
@@ -604,14 +630,14 @@ wideLiteralOf: function {lex: StringView name: StringView} out String is {
 # complement. C has no 128-bit literal, and a 64-bit one would overflow in 64
 # bits before reaching the destination; the macro is the type's own value
 # where the C compiler has the type and its two words where it has none.
-int128WordsC: function {b: math.BigInt.view name: StringView} out String is {
+int128WordsC: function {b: math.BigInt.view signed: bool} out String is {
     one: math.BigInt from: 1
     bits: b.copy
     if b.sign < 0 then bits = b + (one << 128)
     mask: (one << 64) - one
     hi: (bits >> 64).text base: 16
     lo: (bits & mask).text base: 16
-    if (numSigned :name) then return "Z_I128_C(0x\{hi}ULL, 0x\{lo}ULL)"
+    if signed then return "Z_I128_C(0x\{hi}ULL, 0x\{lo}ULL)"
     return "Z_U128_C(0x\{hi}ULL, 0x\{lo}ULL)"
 }
 
@@ -645,9 +671,10 @@ wideLiteralC: function {lex: StringView} out String is {
 
 # castLitVal -- val with the unsigned C suffix appended when it is a bare decimal
 # literal cast to an unsigned type, so large u64 constants don't warn as signed.
-castLitVal: function {val: StringView dstName: StringView} out String is {
+castLitVal: function {val: StringView dst: ztypes.suffixinfo} out String is {
     r: val.string
-    sfx: numLitSuffix name: dstName
+    if dst.has.not then return r
+    sfx: kindLitSuffix k: dst.kind
     if sfx.length == 0 then return r
     if val.length == 0 then return r
     allDig: true
@@ -667,16 +694,6 @@ castLitVal: function {val: StringView dstName: StringView} out String is {
     return r
 }
 
-# numMantissa -- the significand width of a float type (0 if not one). A
-# conversion INTO a float is exact only while the source's magnitude fits here.
-numMantissa: function {name: StringView} out u64 is {
-    if name == "f16" then return 11
-    if name == "f32" then return 24
-    if name == "f64" then return 53
-    if name == "f128" then return 113
-    return 0
-}
-
 # convIsLossy -- whether `<src>.<dst>` can lose information, which is exactly
 # what decides the DECLARED return: the units give a lossy conversion a
 # `resultval` and a provably-safe one the target type itself. Identity and
@@ -685,19 +702,19 @@ numMantissa: function {name: StringView} out u64 is {
 # target must have significand enough for the source's whole width.
 # natives-tbl-guard checks this against the declarations, so the two encodings
 # of the rule cannot drift apart.
-convIsLossy: function {srcName: StringView dstName: StringView} out bool is {
-    if srcName == dstName then return false
-    sf: isFloatName name: srcName
-    df: isFloatName name: dstName
+convIsLossy: function {srcK: ztypes.numkind dstK: ztypes.numkind} out bool is {
+    if srcK == dstK then return false
+    sf: kindIsFloat k: srcK
+    df: kindIsFloat k: dstK
     if sf then {
-        if df then return (numMantissa name: srcName) > (numMantissa name: dstName)
+        if df then return (kindMantissa k: srcK) > (kindMantissa k: dstK)
         return true
     }
-    if df then return (numBits name: srcName) > (numMantissa name: dstName)
-    sb: numBits name: srcName
-    db: numBits name: dstName
-    ss: numSigned name: srcName
-    ds: numSigned name: dstName
+    if df then return (kindBits k: srcK) > (kindMantissa k: dstK)
+    sb: kindBits k: srcK
+    db: kindBits k: dstK
+    ss: kindSigned k: srcK
+    ds: kindSigned k: dstK
     if ss == ds then return sb > db
     if ss then return true
     return sb >= db
@@ -725,9 +742,9 @@ convFloatToFloat: function {scT: StringView tcT: StringView} out String is {
 # convFloatRange -- the C test that a float value lies inside the destination
 # INTEGER's range, written as powers of two so the bound is exact at every
 # width. An unsigned destination has no negative half.
-convFloatRange: function {dstName: StringView} out String is {
-    b: numBits name: dstName
-    if (numSigned name: dstName).not then {
+convFloatRange: function {dstK: ztypes.numkind} out String is {
+    b: kindBits k: dstK
+    if (kindSigned k: dstK).not then {
         u: "(_v >= 0.0 && _v < 0x1p\{b})"
         return u
     }
@@ -746,25 +763,16 @@ convFloatRange: function {dstName: StringView} out String is {
 convFloatToInt: function {
     scT: StringView
     trunc: StringView
-    dstName: StringView
+    dstK: ztypes.numkind
     okSet: StringView
 } out String is {
-    inRange: convFloatRange :dstName
+    inRange: convFloatRange :dstK
     b: "if (!\{inRange}) { \{(convErr
         reason: "OUTOFRANGE"
     )} } else if ((\{scT}) \{trunc} != _v) { \{(convErr
         reason: "PRECISIONLOSS"
     )} } else { \{okSet} }"
     return b
-}
-
-# convMantissaBits -- how many mantissa bits the destination float keeps, which
-# is what decides whether an integer converts to it exactly.
-convMantissaBits: function {dstName: StringView} out u64 is {
-    if dstName == "f32" then return 24
-    if dstName == "f16" then return 11
-    if dstName == "f128" then return 113
-    return 53
 }
 
 # convMagExpr -- the C for an integer's MAGNITUDE, which is what the exactness
@@ -785,15 +793,15 @@ convMagExpr: function {signed: bool wide: bool} out String is {
 # than comparing values. f16 also has a range bound, which no other float here
 # is narrow enough to need.
 convIntToFloat: function {
-    srcName: StringView
-    dstName: StringView
+    srcK: ztypes.numkind
+    dstK: ztypes.numkind
     okSet: StringView
 } out String is {
-    p: convMantissaBits :dstName
+    p: kindMantissa k: dstK
     rangeAnd: ""
-    ssig: numSigned name: srcName
-    wide: (srcName == "i128") or (srcName == "u128")
-    if dstName == "f16" then {
+    ssig: kindSigned k: srcK
+    wide: (srcK == ztypes.numkind.i128Type) or (srcK == ztypes.numkind.u128Type)
+    if dstK == ztypes.numkind.f16Type then {
         rangeAnd = " && _mag <= 65504"
         if wide then rangeAnd = " && _mh == 0 && _ml <= 65504"
     }
@@ -831,19 +839,19 @@ convNeedsHi: function {ssig: bool dsig: bool sbits: u64 dbits: u64} out bool is 
 # convRangeCond -- the C test for an integer conversion FAILING, built from
 # whichever bounds can actually be breached. Neither bound means the conversion
 # is total and the test is a constant.
-convRangeCond: function {dstName: StringView needsLo: bool needsHi: bool} out String is {
+convRangeCond: function {dstK: ztypes.numkind needsLo: bool needsHi: bool} out String is {
     if needsLo.not then {
         if needsHi.not then return "0"
-        hi2: numHiStr name: dstName
+        hi2: kindHiStr k: dstK
         h: "_v > \{hi2}"
         return h
     }
-    lo: numLoStr name: dstName
+    lo: kindLoStr k: dstK
     if needsHi.not then {
         l: "_v < \{lo}"
         return l
     }
-    hi: numHiStr name: dstName
+    hi: kindHiStr k: dstK
     b: "_v < \{lo} || _v > \{hi}"
     return b
 }
@@ -851,22 +859,22 @@ convRangeCond: function {dstName: StringView needsLo: bool needsHi: bool} out St
 # convRange128 -- convRangeCond for a 128-bit SOURCE, whose value is no C
 # arithmetic type where the C compiler has no 128-bit integer: each bound is
 # asked of the int128 helpers. Every such conversion has a bound to breach.
-convRange128: function {srcName: StringView dstName: StringView} out String is {
-    if (numBits name: dstName) == 128 then {
+convRange128: function {srcK: ztypes.numkind dstK: ztypes.numkind} out String is {
+    if (kindBits k: dstK) == 128 then {
         # the other 128-bit type: only the sign, or the top bit, is out of range
-        if (numSigned name: srcName) then return "z_i128_is_neg(_v)"
+        if (kindSigned k: srcK) then return "z_i128_is_neg(_v)"
         return "(z_u128_hi(_v) >> 63) != 0"
     }
-    hi: numHiStr name: dstName
-    if (numSigned name: srcName).not then {
+    hi: kindHiStr k: dstK
+    if (kindSigned k: srcK).not then {
         u: "z_u128_lt(Z_U128_U64(\{hi}), _v)"
         return u
     }
-    if (numSigned name: dstName).not then {
+    if (kindSigned k: dstK).not then {
         n: "z_i128_is_neg(_v) || z_i128_lt(z_i128_from_u64(\{hi}), _v)"
         return n
     }
-    lo: numLoStr name: dstName
+    lo: kindLoStr k: dstK
     b: "z_i128_lt(_v, z_i128_from_i64(\{lo})) || z_i128_lt(z_i128_from_i64(\{hi}), _v)"
     return b
 }
@@ -874,15 +882,15 @@ convRange128: function {srcName: StringView dstName: StringView} out String is {
 # convOkValue -- the converted value a checked conversion stores once its test
 # passed, as C: a cast, except where a 128-bit integer is on either side, whose
 # value moves only through the int128 helpers.
-convOkValue: function {srcName: StringView dstName: StringView tcT: StringView} out String is {
-    sw: (numBits name: srcName) == 128
-    dw: (numBits name: dstName) == 128
-    if (isHalfName name: dstName) then {
+convOkValue: function {srcK: ztypes.numkind dstK: ztypes.numkind tcT: StringView} out String is {
+    sw: (kindBits k: srcK) == 128
+    dw: (kindBits k: dstK) == 128
+    if dstK == ztypes.numkind.f16Type then {
         # an integer the bounds test has shown is exact in f16
         src: "(double)_v"
         if sw then {
             src = "z_u128_to_f64(_v)"
-            if (numSigned name: srcName) then src = "z_i128_to_f64(_v)"
+            if (kindSigned k: srcK) then src = "z_i128_to_f64(_v)"
         }
         h: "z_f16_from_f64(\{src})"
         return h
@@ -891,17 +899,17 @@ convOkValue: function {srcName: StringView dstName: StringView tcT: StringView} 
         c: "(\{tcT})_v"
         return c
     }
-    if dw then return (convOkInto128 :srcName :dstName)
-    return (convOkFrom128 :srcName :dstName :tcT)
+    if dw then return (convOkInto128 :srcK :dstK)
+    return (convOkFrom128 :srcK :dstK :tcT)
 }
 
 # convOkInto128 -- convOkValue for a 128-bit destination.
-convOkInto128: function {srcName: StringView dstName: StringView} out String is {
-    if (numBits name: srcName) == 128 then {
-        if (numSigned name: srcName) then return "z_i128_bits(_v)"
+convOkInto128: function {srcK: ztypes.numkind dstK: ztypes.numkind} out String is {
+    if (kindBits k: srcK) == 128 then {
+        if (kindSigned k: srcK) then return "z_i128_bits(_v)"
         return "z_u128_signed(_v)"
     }
-    if (isFloatName name: srcName) then return (convFloatTrunc128 :srcName :dstName)
+    if (kindIsFloat k: srcK) then return (convFloatTrunc128 :srcK :dstK)
     # a signed source checked non-negative, into u128
     return "z_u128_from_u64((uint64_t)_v)"
 }
@@ -909,16 +917,16 @@ convOkInto128: function {srcName: StringView dstName: StringView} out String is 
 # convOkFrom128 -- convOkValue for a 128-bit source into a narrower type: a
 # float reads its value, an integer its low word, which the bounds test has
 # already shown holds it.
-convOkFrom128: function {srcName: StringView dstName: StringView tcT: StringView} out String is {
-    if dstName == "f128" then {
-        if (numSigned name: srcName) then return "z_i128_to_f128(_v)"
+convOkFrom128: function {srcK: ztypes.numkind dstK: ztypes.numkind tcT: StringView} out String is {
+    if dstK == ztypes.numkind.f128Type then {
+        if (kindSigned k: srcK) then return "z_i128_to_f128(_v)"
         return "z_u128_to_f128(_v)"
     }
     val: "z_u128_lo(_v)"
-    if (isFloatName name: dstName) then {
+    if (kindIsFloat k: dstK) then {
         val = "z_u128_to_f64(_v)"
-        if (numSigned name: srcName) then val = "z_i128_to_f64(_v)"
-    } else if (numSigned name: srcName) then {
+        if (kindSigned k: srcK) then val = "z_i128_to_f64(_v)"
+    } else if (kindSigned k: srcK) then {
         val = "z_u128_lo(z_i128_bits(_v))"
     }
     c: "(\{tcT})"
@@ -929,18 +937,18 @@ convOkFrom128: function {srcName: StringView dstName: StringView tcT: StringView
 # convTruncC -- a float source truncated to the destination integer and read
 # back as a float, as C: what convFloatToInt compares the value against. A
 # 128-bit destination truncates and reads back through the int128 helpers.
-convTruncC: function {srcName: StringView dstName: StringView tcT: StringView} out String is {
-    if (numBits name: dstName) != 128 then {
+convTruncC: function {srcK: ztypes.numkind dstK: ztypes.numkind tcT: StringView} out String is {
+    if (kindBits k: dstK) != 128 then {
         c: "(\{tcT})_v"
         return c
     }
     back: "z_i128_to_f64(".string
-    if (numSigned name: dstName).not then back = "z_u128_to_f64("
-    if srcName == "f128" then {
+    if (kindSigned k: dstK).not then back = "z_u128_to_f64("
+    if srcK == ztypes.numkind.f128Type then {
         back = "z_i128_to_f128("
-        if (numSigned name: dstName).not then back = "z_u128_to_f128("
+        if (kindSigned k: dstK).not then back = "z_u128_to_f128("
     }
-    back.append (convFloatTrunc128 :srcName :dstName)
+    back.append (convFloatTrunc128 :srcK :dstK)
     back.append ")"
     return back
 }
@@ -948,10 +956,10 @@ convTruncC: function {srcName: StringView dstName: StringView tcT: StringView} o
 # convFloatTrunc128 -- a float source truncated to a 128-bit integer, as C: from
 # f128 directly, from any narrower float through double, which holds each of
 # them exactly.
-convFloatTrunc128: function {srcName: StringView dstName: StringView} out String is {
+convFloatTrunc128: function {srcK: ztypes.numkind dstK: ztypes.numkind} out String is {
     pfx: "z_u128"
-    if (numSigned name: dstName) then pfx = "z_i128"
-    if srcName == "f128" then {
+    if (kindSigned k: dstK) then pfx = "z_i128"
+    if srcK == ztypes.numkind.f128Type then {
         q: "\{pfx}_from_f128(_v)"
         return q
     }
@@ -962,9 +970,9 @@ convFloatTrunc128: function {srcName: StringView dstName: StringView} out String
 # convHalfCast -- a lossless conversion with an f16 on either side: the same
 # value handed back, a narrow integer widened into one, or an f16 widened to a
 # wider float, each through the f16 helpers.
-convHalfCast: function {srcName: StringView dstName: StringView tcT: StringView} out String is {
-    if srcName == dstName then return "(@V@)"
-    if (isHalfName name: dstName) then return "z_f16_from_f32((float)@V@)"
+convHalfCast: function {srcK: ztypes.numkind dstK: ztypes.numkind tcT: StringView} out String is {
+    if srcK == dstK then return "(@V@)"
+    if dstK == ztypes.numkind.f16Type then return "z_f16_from_f32((float)@V@)"
     w: "((\{tcT})z_f16_to_f32(@V@))"
     return w
 }
@@ -973,10 +981,10 @@ convHalfCast: function {srcName: StringView dstName: StringView tcT: StringView}
 # the f16 helpers: rounded once from the source, out of range when that made an
 # infinity of a finite value, precision lost when it does not read back. `scT`
 # is the type the source is read as.
-convFloatToHalf: function {srcName: StringView scT: StringView} out String is {
+convFloatToHalf: function {srcK: ztypes.numkind scT: StringView} out String is {
     from: "z_f16_from_f64"
-    if (numMantissa name: srcName) == 24 then from = "z_f16_from_f32"
-    if (numMantissa name: srcName) == 113 then from = "z_f16_from_f128"
+    if (kindMantissa k: srcK) == 24 then from = "z_f16_from_f32"
+    if (kindMantissa k: srcK) == 113 then from = "z_f16_from_f128"
     b: "z_f16 _f = \{from}(_v); if (isinf(z_f16_to_f32(_f)) && !isinf(_v)) { \{(convErr
         reason: "OUTOFRANGE"
     )} } else if ((\{scT}) z_f16_to_f32(_f) != _v) { \{(convErr
@@ -987,26 +995,26 @@ convFloatToHalf: function {srcName: StringView scT: StringView} out String is {
 
 # convWideCast -- a lossless conversion with a 128-bit integer on either side:
 # the same type handed back, or a narrower integer widened by the helpers.
-convWideCast: function {srcName: StringView dstName: StringView} out String is {
-    if srcName == dstName then return "(@V@)"
-    if (numSigned name: dstName).not then return "z_u128_from_u64(@V@)"
-    if (numSigned name: srcName) then return "z_i128_from_i64(@V@)"
+convWideCast: function {srcK: ztypes.numkind dstK: ztypes.numkind} out String is {
+    if srcK == dstK then return "(@V@)"
+    if (kindSigned k: dstK).not then return "z_u128_from_u64(@V@)"
+    if (kindSigned k: srcK) then return "z_i128_from_i64(@V@)"
     return "z_i128_from_u64(@V@)"
 }
 
 # convIntToInt -- an integer -> integer conversion. It cannot lose precision,
 # only range, so the whole body is one bounds test.
-convIntToInt: function {srcName: StringView dstName: StringView okSet: StringView} out String is {
-    sbits: numBits name: srcName
-    dbits: numBits name: dstName
-    ssig: numSigned name: srcName
-    dsig: numSigned name: dstName
+convIntToInt: function {srcK: ztypes.numkind dstK: ztypes.numkind okSet: StringView} out String is {
+    sbits: kindBits k: srcK
+    dbits: kindBits k: dstK
+    ssig: kindSigned k: srcK
+    dsig: kindSigned k: dstK
     cond: String
     if sbits == 128 then {
-        cond = convRange128 :srcName :dstName
+        cond = convRange128 :srcK :dstK
     } else {
         cond = (convRangeCond
-            :dstName
+            :dstK
             needsLo: (convNeedsLo :ssig :dsig :sbits :dbits)
             needsHi: (convNeedsHi :ssig :dsig :sbits :dbits)
         )
@@ -1022,47 +1030,47 @@ convIntToInt: function {srcName: StringView dstName: StringView okSet: StringVie
 # it that way. `lossy` follows the DECLARATION: a conversion the units declare as
 # returning `resultval` builds one, and one returning the type directly is a
 # plain cast, so the table and the declaration agree by construction.
-convBodyOf: function {srcName: StringView dstName: StringView lossy: bool} out String is {
-    scT: cTypeOf name: srcName
-    tcT: cTypeOf name: dstName
-    wide: ((numBits name: srcName) == 128) or ((numBits name: dstName) == 128)
+convBodyOf: function {srcK: ztypes.numkind dstK: ztypes.numkind lossy: bool} out String is {
+    scT: kindCType k: srcK
+    tcT: kindCType k: dstK
+    wide: ((kindBits k: srcK) == 128) or ((kindBits k: dstK) == 128)
     if lossy.not then {
-        if (isHalfName name: srcName) or (isHalfName name: dstName) then {
-            return (convHalfCast :srcName :dstName tcT: tcT.stringView)
+        if (srcK == ztypes.numkind.f16Type) or (dstK == ztypes.numkind.f16Type) then {
+            return (convHalfCast :srcK :dstK :tcT)
         }
-        if wide then return (convWideCast :srcName :dstName)
+        if wide then return (convWideCast :srcK :dstK)
         d: "((\{tcT})@V@)"
         return d
     }
     # an f16 source is read as the float it widens to exactly, so every test
     # below compares C arithmetic values
-    vT: scT.copy
+    vT: scT.string
     vInit: "@V@"
-    if (isHalfName name: srcName) then {
+    if srcK == ztypes.numkind.f16Type then {
         vT = "float"
         vInit = "z_f16_to_f32(@V@)"
     }
-    okSet: "_r.tag = @OKTAG@; _r.data.ok = \{convOkValue :srcName :dstName tcT: tcT.stringView};"
+    okSet: "_r.tag = @OKTAG@; _r.data.ok = \{convOkValue :srcK :dstK :tcT};"
     body: String
     # the four corners of float/integer, each with its own way of failing
-    if (isFloatName name: srcName) then {
-        if (isHalfName name: dstName) then {
-            body = convFloatToHalf :srcName scT: vT.stringView
-        } else if (isFloatName name: dstName) then {
-            body = convFloatToFloat scT: scT.stringView tcT: tcT.stringView
+    if (kindIsFloat k: srcK) then {
+        if dstK == ztypes.numkind.f16Type then {
+            body = convFloatToHalf :srcK scT: vT.stringView
+        } else if (kindIsFloat k: dstK) then {
+            body = convFloatToFloat :scT :tcT
         } else {
             body = (convFloatToInt
                 scT: vT.stringView
-                trunc: (convTruncC :srcName :dstName tcT: tcT.stringView).stringView
-                :dstName
+                trunc: (convTruncC :srcK :dstK :tcT).stringView
+                :dstK
                 okSet: okSet.stringView
             )
         }
     } else {
-        if (isFloatName name: dstName) then {
-            body = convIntToFloat :srcName :dstName okSet: okSet.stringView
+        if (kindIsFloat k: dstK) then {
+            body = convIntToFloat :srcK :dstK okSet: okSet.stringView
         } else {
-            body = convIntToInt :srcName :dstName okSet: okSet.stringView
+            body = convIntToInt :srcK :dstK okSet: okSet.stringView
         }
     }
     r: "({ \{vT} _v = \{vInit}; z_@RT@_t _r = {0}; \{body} _r; })"
@@ -1072,12 +1080,10 @@ convBodyOf: function {srcName: StringView dstName: StringView lossy: bool} out S
 # convNeeds -- the helper fragments a conversion row calls, as its `needs=`
 # list: the int128 helpers for a 128-bit integer on either side, the f16 ones
 # for an f16. "" for a row that needs neither.
-convNeeds: function {srcName: StringView dstName: StringView} out String is {
+convNeeds: function {srcK: ztypes.numkind dstK: ztypes.numkind} out String is {
     r: String
-    if (
-        ((numBits name: srcName) == 128) or ((numBits name: dstName) == 128)
-    ) then r.append "prelude.int128"
-    if (isHalfName name: srcName) or (isHalfName name: dstName) then {
+    if ((kindBits k: srcK) == 128) or ((kindBits k: dstK) == 128) then r.append "prelude.int128"
+    if (srcK == ztypes.numkind.f16Type) or (dstK == ztypes.numkind.f16Type) then {
         if r.length > 0 then r.append ","
         r.append "prelude.f16"
     }
@@ -1090,43 +1096,43 @@ convNeeds: function {srcName: StringView dstName: StringView} out String is {
 # natives-tbl-guard regenerates this and diffs it against the checked-in file,
 # so the table is provably the rule's own output.
 nativeConvRows: function out String is {
-    order: List String
-    order.append from: "u8".string
-    order.append from: "c8".string
-    order.append from: "c32".string
-    order.append from: "i8".string
-    order.append from: "i16".string
-    order.append from: "i32".string
-    order.append from: "i64".string
-    order.append from: "u16".string
-    order.append from: "u32".string
-    order.append from: "u64".string
-    order.append from: "f32".string
-    order.append from: "f64".string
-    order.append from: "i128".string
-    order.append from: "u128".string
-    order.append from: "f16".string
-    order.append from: "f128".string
+    # the rows' order: the table is diffed against its checked-in self, so it
+    # is fixed here rather than taken from the kinds' own order
+    order: ListVal ztypes.numkind
+    order.append ztypes.numkind.u8Type
+    order.append ztypes.numkind.c8Type
+    order.append ztypes.numkind.c32Type
+    order.append ztypes.numkind.i8Type
+    order.append ztypes.numkind.i16Type
+    order.append ztypes.numkind.i32Type
+    order.append ztypes.numkind.i64Type
+    order.append ztypes.numkind.u16Type
+    order.append ztypes.numkind.u32Type
+    order.append ztypes.numkind.u64Type
+    order.append ztypes.numkind.f32Type
+    order.append ztypes.numkind.f64Type
+    order.append ztypes.numkind.i128Type
+    order.append ztypes.numkind.u128Type
+    order.append ztypes.numkind.f16Type
+    order.append ztypes.numkind.f128Type
     buf: String
     si: u64
     n: order.length
     for si < n loop {
         s: order.get i: si
         si = si + 1
-        hdr: "\n# system.\{s} conversions\n"
+        sn: ztypes.numkindName k: s
+        hdr: "\n# system.\{sn} conversions\n"
         buf.append hdr
         di: u64
         for di < n loop {
             d: order.get i: di
             di = di + 1
-            lo: convIsLossy srcName: s.stringView dstName: d.stringView
-            bd: (convBodyOf
-                srcName: s.stringView
-                dstName: d.stringView
-                lossy: lo
-            )
-            key: "[system.\{s}.\{d}]"
-            nds: convNeeds srcName: s.stringView dstName: d.stringView
+            lo: convIsLossy srcK: s dstK: d
+            bd: convBodyOf srcK: s dstK: d lossy: lo
+            dn: ztypes.numkindName k: d
+            key: "[system.\{sn}.\{dn}]"
+            nds: convNeeds srcK: s dstK: d
             if nds.length > 0 then {
                 # the helpers the row calls: the attribute goes inside the
                 # head's bracket
@@ -1158,7 +1164,6 @@ nativeConvRows: function out String is {
 # conversion's row spells the resultval mono and its two tags.
 emitNumericCast: function {
     ctx: Ctx
-    dstName: StringView
     val: StringView
     symtab: zenv.ZSymbolTable.view
     retTid: ztypes.tid
@@ -1196,7 +1201,7 @@ emitNumericCast: function {
         rn.append from: "V".string
         rv.append from: val.string
     } else {
-        sval: castLitVal :val :dstName
+        sval: castLitVal :val dst: (constScalarKindForTid :symtab tid: retTid)
         rn.append from: "V".string
         rv.append from: sval.copy
         # a row that builds a record spells the record's C type as @RT@
@@ -2806,7 +2811,6 @@ binopKeyOf: function {
         if bn.length > 0 then {
             sc: (scalarCTypeFor
                 :symtab
-                name: bn.stringView
                 tid: (typedefChaseTid :symtab tid: owner)
             )
             if sc.length > 0 then {
@@ -5347,9 +5351,8 @@ svArgAddr: function {
         ) case some then {
             if b0d >= 48 when b0d <= 57 then return ""
         } case none then null
-        snm: stampNameView :symtab nid: n.nodeid
-        if (isIntName name: snm) then return ""
-        if (isFloatName name: snm) then return ""
+        if (ztypecheck.numKindOfTid st: symtab tid: (stampIdOf :symtab nid: n.nodeid)
+        ).has then return ""
         # a bare name that names no VARIABLE is not a place. A zero-argument
         # function read in value position is one of these: it is a CALL, and
         # addressing it handed the native `&fn`, which the C has no object for.
@@ -5372,9 +5375,8 @@ svArgAddr: function {
     } case labelvalue then {
         anlC: ast.names.texts.get i: n.name
         anl: anlC.stringView
-        snl: stampNameView :symtab nid: n.nodeid
-        if (isIntName name: snl) then return ""
-        if (isFloatName name: snl) then return ""
+        if (ztypecheck.numKindOfTid st: symtab tid: (stampIdOf :symtab nid: n.nodeid)
+        ).has then return ""
         # an ordinal pair is a C scalar, and passes like one
         if (isOrdinalVariant
             :symtab
@@ -9656,13 +9658,14 @@ narrowListIndex: function {
     pos: String.take
 } out String is {
     idx: stampIdOf :symtab nid: call.nodeid
-    bn: regNameView :symtab tid: (typedefChaseTid :symtab tid: idx)
-    dbits: numBits name: bn
-    dsig: numSigned name: bn
+    nk: ztypecheck.numKindOfTid st: symtab tid: (typedefChaseTid :symtab tid: idx)
+    if nk.has.not then return pos
+    dbits: kindBits k: nk.kind
+    dsig: kindSigned k: nk.kind
     if dbits == 0 then return pos
     if (convNeedsHi ssig: false :dsig sbits: 64 :dbits).not then return pos
     ct: typeRefC :ast :symtab :ctx tid: idx thisTid: ztypes.tid
-    cond: convRangeCond dstName: bn needsLo: false needsHi: true
+    cond: convRangeCond dstK: nk.kind needsLo: false needsHi: true
     r: String
     r.append "({ uint64_t _v = "
     r.append pos
@@ -11332,14 +11335,12 @@ renderDefault: function {
         # a float literal is the target type's value nearest it, as a body
         # literal is
         if (ztypes.isFloatLexeme numstr: lt.stringView) then {
-            tnD: constScalarNameForTid :ast :symtab tid: targetTid
-            fk: ztypes.numkindByName name: tnD.stringView
+            fk: constScalarKindForTid :symtab tid: targetTid
             k: ztypes.numkind.f64Type
             if fk.has when (ztypes.isFloatKind k: fk.kind) then k = fk.kind
             return (floatBitsC bits: (ztypecheck.floatLexemeBits lex: lt.stringView :k) :k)
         }
-        tnW: constScalarNameForTid :ast :symtab tid: targetTid
-        wlD: wideLiteralOf lex: lt.stringView name: tnW.stringView
+        wlD: wideLiteralOf lex: lt.stringView k: (constScalarKindForTid :symtab tid: targetTid)
         if wlD.length > 0 then return wlD
         return (literalDefaultC lex: lt.stringView)
     }
@@ -12301,74 +12302,29 @@ argSlotList: function {
     return result
 }
 
-# constScalarNameForTid -- the BUILTIN SCALAR NAME a constant of type `tid` is
-# rendered as: `u32` for u32, and for a scalar typedef the base it spells
-# (`nameid` -> u32). "" when the type is not a scalar at all.
-#
-# It answers a name rather than a suffix because the two things a literal needs
-# from its type -- how wide it is and what suffix C wants -- are both read off
-# that name, and resolving the tid twice to ask them separately is a second
-# name-resolution site in the emitter for one question.
-constScalarNameForTid: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    tid: ztypes.tid
-} out String is {
-    if tid.isZero then return ""
-    tn: regNameOf :symtab :tid
-    if tn.length == 0 then return ""
-    # scalarCTypeFor rather than cTypeOf: it re-checks the tid for a user
-    # shadow, so a user type named `u32` cannot pick up u32's C suffix. The
-    # name lookup it needs is the shape shadow-guard sanctions.
-    if (scalarCTypeFor :symtab name: tn.stringView :tid).length > 0 then return tn
-    # a scalar TYPEDEF chases to the builtin it spells, keyed by tid so the
-    # answer does not depend on which unit the read happens in. numLitSuffix
-    # yields "" for a name that is not a builtin, so no second scalar test is
-    # needed here.
-    bo: symtab.typing.typedefBaseName.get key: tid
-    match (
-        bo
-    ) case some then {
-        boId: zast.nameid
-        boId = bo
-        return (zast.nameTextCopy :ast ref: boId)
-    } case none then null
-    return ""
+# constScalarKindForTid -- the scalar kind a folded constant of type `tid` is
+# rendered in: the type's own, or the builtin a scalar TYPEDEF chases to
+# (`nameid` -> u64), keyed by tid so the answer does not depend on which unit the
+# read happens in. `has` false when the type is no scalar at all -- a program's
+# own type spelled like one included.
+constScalarKindForTid: function {
+    symtab: zenv.ZSymbolTable.view tid: ztypes.tid
+} out ztypes.suffixinfo is {
+    return (ztypecheck.numKindOfTid st: symtab tid: (typedefChaseTid :symtab :tid))
 }
 
-# narrowConstToName -- a folded i64 reduced to what the named integer type can
-# actually hold, the way the runtime operator does it. The evaluator holds an
-# i64 whatever the width, and an inline use (an interpolation, a nested
-# operator) has no assignment to truncate it the way a binding's C initializer
-# does, so the rendering keeps to the node's type itself. Membership strings
-# rather than a compare chain, which is the shape A001 exists to discourage.
-narrowConstToName: function {v: i64 name: StringView} out i64 is {
-    probe: " \{name} "
-    mu8: " u8 c8 "
-    if (mu8.contains needle: probe) then return v & 255
-    mu16: " u16 "
-    if (mu16.contains needle: probe) then return v & 65535
-    mu32: " u32 c32 "
-    if (mu32.contains needle: probe) then return v & 4294967295
-    mi8: " i8 "
-    if (mi8.contains needle: probe) then {
-        t8: v & 255
-        if t8 > 127 then return t8 - 256
-        return t8
-    }
-    mi16: " i16 "
-    if (mi16.contains needle: probe) then {
-        t16: v & 65535
-        if t16 > 32767 then return t16 - 65536
-        return t16
-    }
-    mi32: " i32 "
-    if (mi32.contains needle: probe) then {
-        t32: v & 4294967295
-        if t32 > 2147483647 then return t32 - 4294967296
-        return t32
-    }
-    return v
+# narrowConstToKind -- a folded i64 reduced to what integer kind `k` can actually
+# hold, the way the runtime operator does it. The evaluator holds an i64 whatever
+# the width, and an inline use (an interpolation, a nested operator) has no
+# assignment to truncate it the way a binding's C initializer does, so the
+# rendering keeps to the node's type itself.
+narrowConstToKind: function {v: i64 k: ztypes.numkind} out i64 is {
+    b: kindBits :k
+    if (b == 0) or (b >= 64) then return v
+    span: 1 << (b.i64.or d: 0)
+    t: v & (span - 1)
+    if (kindSigned :k) when t >= (span / 2) then return t - span
+    return t
 }
 
 # floatValueC -- the C literal for float kind `k`'s value nearest the number
@@ -12433,8 +12389,8 @@ cvalText: function {
     tid: ztypes.tid
     v: ztypes.cval
 } out String is {
-    if v.kind.ivalKind then return (intCvalText :ast :symtab :tid :v)
-    if v.kind.fvalKind then return (floatCvalText :ast :symtab :tid :v)
+    if v.kind.ivalKind then return (intCvalText :symtab :tid :v)
+    if v.kind.fvalKind then return (floatCvalText :symtab :tid :v)
     if v.kind.armKind then {
         if v.armTid.isZero then return ""
         if v.armName.isZero then return ""
@@ -12456,21 +12412,22 @@ cvalText: function {
 # intCvalText -- cvalText for a folded integer: inline in the type it is
 # narrowed to, or a value outside i64 spelled whole.
 intCvalText: function {
-    ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     tid: ztypes.tid
     v: ztypes.cval
 } out String is {
-    tnN: constScalarNameForTid :ast :symtab :tid
-    if (numBits name: tnN.stringView) == 128 then {
+    nk: constScalarKindForTid :symtab :tid
+    if nk.has when (kindBits k: nk.kind) == 128 then {
+        sg: kindSigned k: nk.kind
         if v.bigId != 0 then return (int128WordsC
             b: (ztypecheck.constBigOf st: symtab :v)
-            name: tnN.stringView
+            signed: sg
         )
-        return (int128WordsC b: (math.BigInt from: v.ival) name: tnN.stringView)
+        return (int128WordsC b: (math.BigInt from: v.ival) signed: sg)
     }
     if v.bigId != 0 then return (bigConstC :symtab :v)
-    iv: narrowConstToName v: v.ival name: tnN.stringView
+    iv: v.ival
+    if nk.has then iv = narrowConstToKind v: v.ival k: nk.kind
     # C HAS NO NEGATIVE LITERALS. A leading `-` is an operator applied to a
     # POSITIVE constant, and the magnitude of the most negative i64 is one
     # past what a signed constant can hold -- so `-9223372036854775808`
@@ -12479,7 +12436,7 @@ intCvalText: function {
     # subtracting from the one below it, and so does this.
     if iv == (0 - 9223372036854775807 - 1) then return "(-9223372036854775807LL - 1)"
     r: "\{iv}"
-    r.append (numLitSuffix name: tnN.stringView)
+    if nk.has then r.append (kindLitSuffix k: nk.kind)
     return r
 }
 
@@ -12497,20 +12454,18 @@ bigConstC: function {symtab: zenv.ZSymbolTable.view v: ztypes.cval} out String i
 bigValueC: function {b: math.BigInt.view} out String is {
     if b.sign > 0 when b.bitLength <= 64 then return "\{b.string}ULL"
     if b.bitLength > 128 then return ""
-    if b.sign < 0 then return (int128WordsC :b name: "i128")
-    return (int128WordsC :b name: "u128")
+    if b.sign < 0 then return (int128WordsC :b signed: true)
+    return (int128WordsC :b signed: false)
 }
 
 # floatCvalText -- cvalText for a folded float: the value the float type it is
 # written as holds nearest it, an f64 where the type is no float one.
 floatCvalText: function {
-    ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     tid: ztypes.tid
     v: ztypes.cval
 } out String is {
-    tnF: constScalarNameForTid :ast :symtab :tid
-    fk: ztypes.numkindByName name: tnF.stringView
+    fk: constScalarKindForTid :symtab :tid
     k: ztypes.numkind.f64Type
     if fk.has when (ztypes.isFloatKind k: fk.kind) then k = fk.kind
     return (floatValueC :symtab :v :k)
@@ -14608,7 +14563,6 @@ emitCallValue: function {
                         :ast
                         :symtab
                         :ctx
-                        name: (regNameView :symtab tid: ctid)
                         tid: ctid
                     )
                 }
@@ -14965,10 +14919,9 @@ implicitZeroValue: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    name: StringView
     tid: ztypes.tid
 } out String is {
-    zc: scalarCTypeFor :symtab :name :tid
+    zc: scalarCTypeFor :symtab :tid
     if zc.length > 0 then return (scalarZeroC :symtab cType: zc.stringView :tid)
     if tid == ctx.strTid then return (emitExprStrZero :ctx)
     # a String-typedef class (Path) shares the String struct: the empty value
@@ -15039,15 +14992,9 @@ scalarZeroC: function {
 # one: a value no C operator may touch, since where the C compiler lacks the
 # type it is a struct (z_prelude.inc).
 partIsHelperScalar: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
-    if tid.isZero then return false
-    bn: regNameView :symtab tid: (typedefChaseTid :symtab :tid)
-    return ((numBits name: bn) == 128) or (isHalfName name: bn)
-}
-
-# isHalfName -- the scalar name is f16, asked by its numeric kind.
-isHalfName: function {name: StringView} out bool is {
-    nk: ztypes.numkindByName :name
-    return nk.has and (nk.kind == ztypes.numkind.f16Type)
+    nk: constScalarKindForTid :symtab :tid
+    if nk.has.not then return false
+    return ((kindBits k: nk.kind) == 128) or (nk.kind == ztypes.numkind.f16Type)
 }
 
 # emitDefRefAtom -- a bare atom that names a DEFINITION rather than a local: a
@@ -15076,7 +15023,6 @@ emitDefRefAtom: function {
                 :ast
                 :symtab
                 :ctx
-                name: btn.stringView
                 tid: izr
             )
         } case none then null
@@ -15084,7 +15030,6 @@ emitDefRefAtom: function {
         # record is its zero struct
         boundCType: (scalarCTypeFor
             :symtab
-            name: btn.stringView
             tid: brid
         )
         if boundCType.length > 0 then {
@@ -15109,7 +15054,6 @@ emitDefRefAtom: function {
                 :ast
                 :symtab
                 :ctx
-                name: ""
                 tid: izc
             )
         } case none then null
@@ -15897,9 +15841,9 @@ protocolProjectionRead: function {
 # the zero value is the construction (those creates have no C symbol). Empty
 # for every other type.
 typeNameCreateZero: function {
-    symtab: zenv.ZSymbolTable.view ctx: Ctx fbtn: StringView bstamp: ztypes.tid
+    symtab: zenv.ZSymbolTable.view ctx: Ctx bstamp: ztypes.tid
 } out String is {
-    zsc: scalarCTypeFor :symtab name: fbtn tid: bstamp
+    zsc: scalarCTypeFor :symtab tid: bstamp
     if zsc.length > 0 then return (scalarZeroC :symtab cType: zsc.stringView tid: bstamp)
     if bstamp == ctx.strTid then return "((\{ctx.strC}_t){0})"
     return String
@@ -15959,7 +15903,7 @@ methodAutoCallRead: function {
     mt: mco
     mc2: autoCallCname :symtab :ctx owner: bstamp method: mt
     if bn2v.isZero when bn2 == fbtn when mn2 == "create" then {
-        z: typeNameCreateZero :symtab :ctx :fbtn :bstamp
+        z: typeNameCreateZero :symtab :ctx :bstamp
         if z.length > 0 then return z
     }
     if bn2v.isZero when bn2 == fbtn then {
@@ -16580,19 +16524,19 @@ dottedAtomNumericBase: function {
             # A LITERAL SUFFIX NAMES A BUILTIN SCALAR, always: it is a
             # conversion the literal type declares, and the literal types
             # declare only the sixteen. Chasing a scalar typedef to its base
-            # as well would make `1.nameid` mean "u32".
-            cTypeLk3: cTypeOf name: mn2
-            wl3: wideLiteralOf lex: bn2 name: mn2
+            # as well would make `1.nameid` mean "u32". The suffix is the
+            # literal's own text, read as the lexer reads one (numkindByName).
+            nk3: ztypes.numkindByName name: mn2
+            wl3: wideLiteralOf lex: bn2 k: nk3
             if wl3.length > 0 then return wl3
-            if cTypeLk3.length > 0 then {
+            if nk3.has then {
                 bc1: bn2.string
                 # `0cA.u8`: the 0c lexeme is not a C token; decode
                 if bn2.startsWith "0c" then {
                     pn1: ztypes.parseNumber numstr: bn2
                     if pn1.err.length == 0 then bc1 = "\{pn1.ival}"
                 }
-                sfx1: numLitSuffix name: cTypeLk3.stringView
-                bc1.append sfx1
+                bc1.append (kindLitSuffix k: nk3.kind)
                 return bc1
             }
         }
@@ -17036,12 +16980,10 @@ emitDottedUnitRead: function {
     match (
         izd
     ) case some then {
-        dzn: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child))
         return (implicitZeroValue
             :ast
             :symtab
             :ctx
-            name: dzn.stringView
             tid: izd
         )
     } case none then null
@@ -17653,7 +17595,6 @@ emitDottedNativeMarker: function {
         return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent))
     }
     # `.take` / `.hold` hands on the base itself (markerHandsOnBase)
-    mn2b: zast.nameTextAt :ast ref: mn2Id
     if (ztypecheck.isMoveMarkerId nameId: mn2Id) when (markerHandsOnBase
         :ast
         :symtab
@@ -17674,7 +17615,6 @@ emitDottedNativeMarker: function {
         ncRetM: chaseAggregateTypedef :symtab :ctx tid: ncRet
         return (emitNumericCast
             :ctx
-            dstName: mn2b.stringView
             val: ncVal.stringView
             :symtab
             retTid: ncRetM
@@ -18677,7 +18617,7 @@ operandIsStr: function {
 operandScalarC: function {symtab: zenv.ZSymbolTable.view n: astnode.view} out String is {
     st: stampIdDeep :symtab :n
     if st.isZero then return ""
-    return (scalarCTypeFor :symtab name: (regNameView :symtab tid: st) tid: st)
+    return (scalarCTypeFor :symtab tid: st)
 }
 
 # emitDeclaredOperator -- an operator whose body the author wrote: the method
@@ -19016,32 +18956,6 @@ emitInterpBuild: function {
     return sNm
 }
 
-# the printf format specifier for a numeric type.
-numericFormatName: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    tn: StringView
-} out String is {
-    if (isIntName name: tn) then {
-        r0: tn.string
-        return r0
-    }
-    if (isFloatName name: tn) then {
-        r1: tn.string
-        return r1
-    }
-    tid: userFnId :ast :symtab :ctx name: tn
-    if tid.isZero.not then {
-        # a typedef formats as the float its chain ends at, any other as i64
-        bn: typedefChaseBaseName :ast :symtab :tid
-        if (isFloatName name: bn.stringView) then return bn
-        if bn.length > 0 then return "i64"
-    }
-    rr: tn.string
-    return rr
-}
-
 # interpBaseIsMapEntry -- true when an interp part is `<entry>.key`/`.value`
 # off a borrowed MapEntry: the projected String views the bucket, so it must
 # be appended inline (freeing the hoisted copy would double-free the bucket
@@ -19148,24 +19062,20 @@ interpBaseIsOwnedStructField: function {
     }
 }
 
-# interpPartTypeName -- the type name an interpolated part formats as: the
-# deep stamp (a template node side-stamped by the checker's per-mono walk
-# when the global table suppresses it), a typedef as its chain-end base,
-# numeric names normalised.
-interpPartTypeName: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    n: astnode.view
-} out String is {
-    tn0: stampNameDeep :symtab :n
-    if tn0.length == 0 when ctx.curThisTid.isZero.not then {
-        msid: monoStampIdOf :symtab :ctx nid: (interpPartNodeId :n)
-        if msid.isZero.not then tn0 = regNameOf :symtab tid: msid
-    }
-    tnTd0: typedefChaseBaseName :ast :symtab tid: (stampIdDeep :symtab :n)
-    if tnTd0.length > 0 then tn0 = tnTd0.copy
-    return (numericFormatName :ast :symtab :ctx tn: tn0.stringView)
+# interpPartTid -- the type an interpolated part formats as: the deep stamp (a
+# template node side-stamped by the checker's per-mono walk when the global
+# table suppresses it), else the mono's own, with a typedef read as the type
+# its chain ends at.
+interpPartTid: function {
+    symtab: zenv.ZSymbolTable.view ctx: Ctx n: astnode.view
+} out ztypes.tid is {
+    t: stampIdDeep :symtab :n
+    if t.isZero when ctx.curThisTid.isZero.not then t = (monoStampIdOf
+        :symtab
+        :ctx
+        nid: (interpPartNodeId :n)
+    )
+    return (typedefChaseTid :symtab tid: t)
 }
 
 # appendFormattedNum -- format a number into a stack buffer and append it: the
@@ -19254,6 +19164,17 @@ appendStringPart: function {
     }
 }
 
+# interpPartIsInt -- an interpolated part that prints as an integer: an integer
+# kind, or a bool or a tag, which print as their number.
+interpPartIsInt: function {
+    symtab: zenv.ZSymbolTable.view tid: ztypes.tid nk: ztypes.suffixinfo
+} out bool is {
+    if nk.has then return (kindIsFloat k: nk.kind).not
+    if tid.isZero then return false
+    if (isOrdinalVariant :symtab :tid) then return true
+    return (symtab.reg.typetypeOf typeId: tid) == ztypes.ztypetype.tagType
+}
+
 # emit one part of a string interpolation.
 emitInterpPart: function {
     hoistFloor: 0.u64
@@ -19273,15 +19194,15 @@ emitInterpPart: function {
         buf.append "\{ind}\{ctx.strC}_append(&\{sNm}, \"\{esc}\", sizeof(\"\{esc}\")-1);\n"
         return
     }
-    tn: interpPartTypeName :ast :symtab :ctx :n
+    pt: interpPartTid :symtab :ctx :n
+    nk: ztypecheck.numKindOfTid st: symtab tid: pt
     val: valueExprC :ast :symtab :ctx :n
     # a call fragment may have hoisted non-lvalue args to _ah temps:
     # declare them before the fragment uses them (mirrors the direct
     # print path's flush after emitCallValue)
     flushArgHoists :ctx :ind :tmp :buf floor: hoistFloor rawFloor: hoistRawFloor
     bN: tmpNext :ctx :tmp
-    tns: tn.stringView
-    if tns == "i128" then {
+    if nk.has when nk.kind == ztypes.numkind.i128Type then {
         needsAddM :ctx uname: "prelude" memb: "int128"
         (appendFormattedNum
             :ctx
@@ -19291,7 +19212,7 @@ emitInterpPart: function {
             :ind
             :buf
         )
-    } else if tns == "u128" then {
+    } else if nk.has when nk.kind == ztypes.numkind.u128Type then {
         needsAddM :ctx uname: "prelude" memb: "int128"
         (appendFormattedNum
             :ctx
@@ -19301,15 +19222,15 @@ emitInterpPart: function {
             :ind
             :buf
         )
-    } else if (isIntName name: tns) then {
+    } else if (interpPartIsInt :symtab tid: pt :nk) then {
         # u64 is the one integer width whose range does not fit in
         # int64_t, so the signed conversion specifier turns its top half
-        # negative -- u64 max printed as -1. The family answers this, not
-        # the spelling: unsigned and 64 bits wide is the case, and i128 /
-        # u128 have already taken their own branches above.
+        # negative -- u64 max printed as -1. The kind answers this: unsigned
+        # and 64 bits wide is the case, and i128 / u128 have already taken
+        # their own branches above. A bool or a tag prints as its number.
         conv: "%ld"
         cast: "(long)(int64_t)"
-        if (numSigned name: tns).not when (numBits name: tns) == 64 then {
+        if nk.has when (kindSigned k: nk.kind).not when (kindBits k: nk.kind) == 64 then {
             conv = "%lu"
             cast = "(unsigned long)(uint64_t)"
         }
@@ -19321,7 +19242,7 @@ emitInterpPart: function {
             :ind
             :buf
         )
-    } else if tns == "f128" then {
+    } else if nk.has when nk.kind == ztypes.numkind.f128Type then {
         (appendFormattedNum
             :ctx
             :sNm
@@ -19330,11 +19251,11 @@ emitInterpPart: function {
             :ind
             :buf
         )
-    } else if (isFloatName name: tns) then {
+    } else if nk.has when (kindIsFloat k: nk.kind) then {
         # an f16 is read as the float it widens to: its value need be no C
         # arithmetic type
         fv: val.copy
-        if (isHalfName name: tns) then {
+        if nk.kind == ztypes.numkind.f16Type then {
             needsAddM :ctx uname: "prelude" memb: "f16"
             fv = "z_f16_to_f32(\{val})"
         }
@@ -19346,9 +19267,9 @@ emitInterpPart: function {
             :ind
             :buf
         )
-    } else if tns == "StringView" then {
+    } else if pt.isZero.not when pt == ctx.svTid then {
         appendViewPart :ctx val: val.stringView :sNm :ind :tmp :buf
-    } else if tns == "String" then {
+    } else if pt.isZero.not when pt == ctx.strTid then {
         appendStringPart :ast :symtab :ctx :n val: val.stringView :sNm :ind :buf
     } else if (originIsTid
         :symtab
@@ -19357,6 +19278,7 @@ emitInterpPart: function {
     ) then {
         buf.append "\{ind}\{ctx.strC}_append(&\{sNm}, \{val}.data, \{val}.len);\n"
     } else {
+        tn: regNameView :symtab tid: pt
         emitFail :ctx what: "unhandled interp part type \{tn}" line: (ztypecheck.nodeLine :n)
         buf.append "\{ind}/* zemitterc: unhandled interp part type \{tn} */\n"
     }
@@ -21031,25 +20953,21 @@ bindingStampOf: function {
     return (stampIdOf :symtab :nid)
 }
 
-# bindDeclaredCType -- the C type a binding declares. The NAME says scalar; the TID
-# says whether it is the BUILTIN one -- a shadow keeps the name and loses the C
-# scalar, so it emits its struct instead. An unnamed binding takes the stamped
-# type of the statement, or of the value when the statement carries none.
+# bindDeclaredCType -- the C type a binding declares: the C scalar of a scalar
+# the system declares, else its type's struct. An unnamed binding takes the
+# stamped type of the statement, or of the value when the statement carries none.
 bindDeclaredCType: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     n: zast.assignmentrow.view
     btid: ztypes.tid
-    tn: StringView
 } out String is {
-    # the NAME says scalar; the tid says whether it is the builtin one. A
-    # shadow keeps the name and loses the C scalar, so it emits its struct.
+    # a scalar the system declares keeps its C scalar; anything else, a type
+    # spelled like a scalar included, is spelled from its id below
     avn: ast.nodes.get i: n.value
-    ct: cTypeOf name: tn
-    if ct.length > 0 when btid.isZero.not when (scalarTidIsBuiltin :symtab tid: btid).not then {
-        ct = typeRefC :ast :symtab :ctx tid: btid thisTid: ztypes.tid
-    }
+    ct: String
+    if btid.isZero.not then ct = scalarCTypeFor :symtab tid: btid
     if ct.length == 0 then {
         tgo: symtab.typing.nodeTypeFor nid: n.nodeid
         # the binding's own stamp as the body being emitted sees it comes first:
@@ -21093,13 +21011,7 @@ emitAssignment: function {
 } is {
     avn: ast.nodes.get i: n.value
     btid: bindingStampOf :symtab :ctx nid: n.nodeid
-    ct: String
-    # the stamped name is read once and never kept, so it is borrowed -- and
-    # scoped, because the view pins `symtab` and the legs below lend it on
-    {
-        tn: regNameView :symtab tid: btid
-        ct = bindDeclaredCType :ast :symtab :ctx :n :btid :tn
-    }
+    ct: bindDeclaredCType :ast :symtab :ctx :n :btid
     anmC: zast.poolTextAt pool: ast.names ref: n.name
     nameVid: defVid :symtab nid: n.nodeid
     nm: varCName :ctx vid: nameVid name: anmC.stringView
@@ -22496,7 +22408,7 @@ withValueCType: function {
     if wsid.isZero then return (cTypeForName :ast :symtab :ctx name: wtn.stringView)
     # a builtin scalar keeps its C name, as a binding's does (bindDeclaredCType);
     # a Set or a Map is held as its pointer (slotCType)
-    sc: scalarCTypeFor :symtab name: wtn.stringView :tid
+    sc: scalarCTypeFor :symtab :tid
     if sc.length > 0 then return sc
     return (slotCType :ast :symtab :ctx :tid)
 }
@@ -23598,11 +23510,10 @@ pairSubjectCType: function {
     ctx: Ctx
     symtab: zenv.ZSymbolTable.view
     # the subject's stamped type name
-    stn: StringView
     # the subject's type
     tid: ztypes.tid
 } out String is {
-    sct: scalarCTypeFor :symtab name: stn :tid
+    sct: scalarCTypeFor :symtab :tid
     if sct.length > 0 then return sct
     return "\{ctxCname :ctx :tid}_t"
 }
@@ -23621,7 +23532,6 @@ matchOrdinalPairRoute: function {
     m: zast.caserow.view
     subj: StringView
     # the subject's stamped type name
-    stn: StringView
     assignTo: StringView
     ind: StringView
     tmp: TmpCtr
@@ -23633,7 +23543,7 @@ matchOrdinalPairRoute: function {
         subjOnce: String
         core: ast.nodes.get i: m.subject
         if core.call then {
-            ct: pairSubjectCType :ctx :symtab :stn tid: sTid
+            ct: pairSubjectCType :ctx :symtab tid: sTid
             mp: tmpNext :ctx :tmp
             buf.append "\{ind}\{ct} _mp\{mp} = \{subj};\n"
             emitCallTakeInvalidations :ast :symtab :ctx call: core :ind :buf
@@ -23872,7 +23782,6 @@ emitMatchStmt: function {
         :ctx
         :m
         subj: sx.stringView
-        stn: stn.stringView
         :assignTo
         :ind
         :tmp
@@ -23902,7 +23811,6 @@ emitMatchStmt: function {
     if isVar.not when isUni.not then {
         sct: (scalarCTypeFor
             :symtab
-            name: stn.stringView
             tid: vtid
         )
         if sct.length > 0 then {
@@ -25422,8 +25330,6 @@ emitObjIterPayload: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     ovid: ztypes.tid
-    ovn: String
-    oovorig: StringView
     payC: StringView
     lbl: StringView
     lblV: ztypes.vid
@@ -25435,8 +25341,6 @@ emitObjIterPayload: function {
         # borrowed-view yield: scalar payloads copy by value; aggregate
         # payloads bind a borrowed pointer (no copy -> the shared fields
         # are never double-freed).
-        payElemPfx: oovorig.length + 1
-        payElemName: monoElemName full: ovn prefixLen: payElemPfx
         payElemTid: ((symtab.typing.declChildOfId
             parentTypeId: ovid
             nameId: zast.wellKnown.slot.wkSome
@@ -25447,7 +25351,6 @@ emitObjIterPayload: function {
             :ast
             :symtab
             :ctx
-            name: payElemName.stringView
             tid: payElemTid
         )
         # A REFTYPE payload must alias. Copying its struct duplicates
@@ -25675,7 +25578,6 @@ emitOptionLoopTail: function {
     ovn: regNameOf :symtab tid: ovid
     ovu: cUpperOf text: ovn.stringView
     payC: armPayloadC :ast :symtab :ctx tid: ovid arm: "some"
-    oovorig: monoOriginName :symtab tid: ovid
     if (originIsTid
         :symtab
         tid: ovid
@@ -25693,8 +25595,6 @@ emitOptionLoopTail: function {
         :symtab
         :ctx
         :ovid
-        :ovn
-        oovorig: oovorig.stringView
         payC: payC.stringView
         :lbl
         :lblV
@@ -26370,7 +26270,7 @@ intScalarCTypeOf: function {
     if tid.isZero then return ""
     rnm: regNameOf :symtab :tid
     if (isIntScalarName name: rnm.stringView).not then return ""
-    return (scalarCTypeFor :symtab name: rnm.stringView :tid)
+    return (scalarCTypeFor :symtab :tid)
 }
 
 # rangeCType -- the C type a counted range's induction variable takes: the
@@ -29606,17 +29506,8 @@ declaredReturnC: function {
     rtid0: fnReturnTypeId :ast :symtab :op
     if rtid0 == ctx.strTid then return "\{ctx.strC}_t"
     if rtid0 == ctx.svTid then return "\{ctx.svC}_t"
-    rbc: cTypeOf name: rbn
-    if rbc.length > 0 then {
-        if (scalarTidIsBuiltin :symtab tid: rtid0) then return rbc
-        return (typeRefC
-            :ast
-            :symtab
-            :ctx
-            tid: rtid0
-            thisTid: ztypes.tid
-        )
-    }
+    rbc: scalarCTypeFor :symtab tid: rtid0
+    if rbc.length > 0 then return rbc
     rbi: userFnId :ast :symtab :ctx name: rbn
     # a SELF-TYPED return is spelled as the template, so the name answers the
     # template and its C type names a struct no instance has. The clone's own
@@ -29646,18 +29537,8 @@ stampedReturnC: function {
 } out String is {
     rto: fnReturnTidOf :symtab tid: fid
     if rto.isZero then return String
-    rn: regNameOf :symtab tid: rto
-    rc: cTypeOf name: rn.stringView
-    if rc.length > 0 then {
-        if (scalarTidIsBuiltin :symtab tid: rto) then return rc
-        return (typeRefC
-            :ast
-            :symtab
-            :ctx
-            tid: rto
-            thisTid: ztypes.tid
-        )
-    }
+    rc: scalarCTypeFor :symtab tid: rto
+    if rc.length > 0 then return rc
     # a non-scalar return the declared name did not resolve -- an
     # optionval/resultval (or other) mono. typeRefC gives the mono's C type,
     # and only while the return is still void, so a resolution from the
@@ -29923,27 +29804,11 @@ typedefChaseC: function {
     ctx: Ctx
     tid: ztypes.tid
 } out String is {
-    boId: zast.nameid
-    hitB: false
-    {
-        bo: symtab.typing.typedefBaseName.get key: tid
-        match (
-            bo
-        ) case some then {
-            hitB = true
-            boId = bo
-        } case none then null
-    }
-    if hitB then {
-        bnX: zast.poolTextAt pool: ast.names ref: boId
-        bc: cTypeOf name: bnX.stringView
-        if bc.length > 0 then return bc
-        bid: userFnId :ast :symtab :ctx name: bnX.stringView
-        if bid.isZero.not then return (typeRefC :ast :symtab :ctx tid: bid thisTid: ztypes.tid)
-        pmsg8: "zemitterc: unresolvable typedef base \{bnX} for id \{tid}"
-        panic pmsg8
-    }
-    return ""
+    bid: typedefChaseTid :symtab :tid
+    if bid == tid then return ""
+    bc: scalarCTypeFor :symtab tid: bid
+    if bc.length > 0 then return bc
+    return (typeRefC :ast :symtab :ctx tid: bid thisTid: ztypes.tid)
 }
 
 # isTypedefType -- the type id carries a typedef base.
@@ -30176,10 +30041,9 @@ cTypeForNameTid: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    name: StringView
     tid: ztypes.tid
 } out String is {
-    sc: scalarCTypeFor :symtab :name :tid
+    sc: scalarCTypeFor :symtab :tid
     if sc.length > 0 then return sc
     return (slotCType :ast :symtab :ctx :tid)
 }
@@ -30198,16 +30062,14 @@ slotCType: function {
     return ct
 }
 
-# cTypeForName -- the C type for a type NAME: scalar via cTypeOf, else
-# resolve the type id (across units) and use typeRefC; "" when unknown.
+# cTypeForName -- the C type for a type NAME: resolve the type id (across
+# units) and use typeRefC, which spells a scalar too; "" when unknown.
 cTypeForName: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     name: StringView
 } out String is {
-    sc: cTypeOf :name
-    if sc.length > 0 then return sc
     to: (ztypecheck.walkLookupTyperefRo
         scope: ztypes.declid
         :ast
@@ -30332,7 +30194,7 @@ typeRefC: function {
         # the `is native` declaration -- emit its struct, not the C scalar.
         # scalarCTypeFor is that gate, and the sixteen scalars, `bool` and the
         # shells all come back through it with their C type intact.
-        ct: scalarCTypeFor :symtab name: tn :tid
+        ct: scalarCTypeFor :symtab :tid
         if ct.length > 0 then return ct
         if tn == "this" when thisTid.isZero.not then cid = thisTid
     }
@@ -33606,7 +33468,8 @@ elemEqIsBytes: function {ast: Ast.view symtab: zenv.ZSymbolTable.view tid: ztype
     src: ztypecheck.valOpSource :ast st: symtab :tid nameId: zast.wellKnown.slot.wkOpEq
     if src.builtin.not then return false
     if (partIsCScalar :symtab :tid).not then return false
-    return (isFloatName name: (regNameView :symtab tid: (typedefChaseTid :symtab :tid))).not
+    nk: constScalarKindForTid :symtab :tid
+    return (nk.has and (kindIsFloat k: nk.kind)).not
 }
 
 # capLenT -- the C length-field type for a str mono of the given capacity:
@@ -35059,8 +34922,7 @@ keyHashKind: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.
     isRv: tt == ztypes.ztypetype.recordType
     if isRv.not then isRv = tt == ztypes.ztypetype.variantType
     if isRv then {
-        tn: regNameOf :symtab tid: ktid
-        sc: scalarCTypeFor :symtab name: tn.stringView tid: ktid
+        sc: scalarCTypeFor :symtab tid: ktid
         if sc.length > 0 then return 0
         return 3
     }
@@ -35163,12 +35025,10 @@ emitSetMono: function {
     nm: cbaseNoPrefix :ctx tid: monoId
     mcr: cUpperOf text: nm.stringView
     elemTid: setElemType :symtab :monoId
-    elemName: regNameOf :symtab tid: elemTid
     itemT: (cTypeForNameTid
         :ast
         :symtab
         :ctx
-        name: elemName.stringView
         tid: elemTid
     )
     ekind: keyHashKind :symtab :ctx tid: elemTid
@@ -35506,17 +35366,14 @@ emitMapMono: function {
     if ovId.isZero then return
     ovName: regNameOf :symtab tid: ovId
     valTid: mapValType :symtab :monoId
-    valName: regNameOf :symtab tid: valTid
-    valT: cTypeForNameTid :ast :symtab :ctx name: valName.stringView tid: valTid
+    valT: cTypeForNameTid :ast :symtab :ctx tid: valTid
     ov: cbaseNoPrefix :ctx tid: ovId
     ovu: cUpperOf text: ovName.stringView
     keyTid: mapKeyType :symtab :monoId
-    keyName: regNameOf :symtab tid: keyTid
     keyT: (cTypeForNameTid
         :ast
         :symtab
         :ctx
-        name: keyName.stringView
         tid: keyTid
     )
     kkind: keyHashKind :symtab :ctx tid: keyTid
@@ -35748,15 +35605,12 @@ emitIdMapMono: function {
     ov: cbaseNoPrefix :ctx tid: ovId
     ovu: cUpperOf text: ovName.stringView
     valTid: mapValType :symtab :monoId
-    valName: regNameOf :symtab tid: valTid
-    valT: cTypeForNameTid :ast :symtab :ctx name: valName.stringView tid: valTid
+    valT: cTypeForNameTid :ast :symtab :ctx tid: valTid
     keyTid: mapKeyType :symtab :monoId
-    keyName: regNameOf :symtab tid: keyTid
     keyT: (cTypeForNameTid
         :ast
         :symtab
         :ctx
-        name: keyName.stringView
         tid: keyTid
     )
     vfDestroy: mapValFreeStmt :symtab :ctx :valTid slot: "p->entries[i].value"
@@ -35934,12 +35788,10 @@ emitIdSetMono: function {
     nm: cbaseNoPrefix :ctx tid: monoId
     mcr: cUpperOf text: nm.stringView
     elemTid: setElemType :symtab :monoId
-    elemName: regNameOf :symtab tid: elemTid
     itemT: (cTypeForNameTid
         :ast
         :symtab
         :ctx
-        name: elemName.stringView
         tid: elemTid
     )
     siId: monoMethodReturn :symtab :monoId nameId: zast.wellKnown.slot.wkIterate
@@ -37384,12 +37236,11 @@ fnptrRetTypeC: function {
     } case none then null
     if rtid.isZero then rtid = fnRegReturnId :symtab :tid
     if rtid.isZero then return "void"
-    rn: regNameOf :symtab tid: rtid
     base9: String
     if rtid == ctx.strTid then base9 = "\{ctx.strC}_t"
     if base9.length == 0 when rtid == ctx.svTid then base9 = "\{ctx.svC}_t"
     if base9.length == 0 then {
-        rc: scalarCTypeFor :symtab name: rn.stringView tid: rtid
+        rc: scalarCTypeFor :symtab tid: rtid
         if rc.length > 0 then base9 = rc.take
     }
     if base9.length == 0 then {
@@ -37462,8 +37313,7 @@ ensureFwdStruct: function {
     # anonymous `typedef struct { ... } X_t;` with no tag for
     # `typedef struct X_t X_t;` to name. The monos emit before this pass runs.
     if (typeStructEmitted :ctx :tid) then return
-    nmS: regNameView :symtab :tid
-    scalarCType: scalarCTypeFor :symtab name: nmS :tid
+    scalarCType: scalarCTypeFor :symtab :tid
     if scalarCType.length > 0 then return
     if (definedInUnitTid :symtab :tid).isZero.not when (symtab.reg.isNativeOf
         :tid
@@ -41663,7 +41513,7 @@ emitDataBlock: function {
             if etd.isZero.not when isSv.not then {
                 rbn: regNameOf :symtab tid: etd
                 if rbn.length > 0 then {
-                    rc: scalarCTypeFor :symtab name: rbn.stringView tid: etd
+                    rc: scalarCTypeFor :symtab tid: etd
                     if rc.length > 0 then ect = rc.take
                 }
             }
@@ -42310,11 +42160,11 @@ partEqC: function {
         return
     }
     if (partIsHelperScalar :symtab :tid) then {
-        hb: regNameView :symtab tid: (typedefChaseTid :symtab :tid)
-        if (isHalfName name: hb) then {
+        hk: (constScalarKindForTid :symtab :tid).kind
+        if hk == ztypes.numkind.f16Type then {
             needsAddM :ctx uname: "prelude" memb: "f16"
             dest.append "z_f16_eq("
-        } else if (numSigned name: hb) then {
+        } else if (kindSigned k: hk) then {
             needsAddM :ctx uname: "prelude" memb: "int128"
             dest.append "z_i128_eq("
         } else {
@@ -42380,13 +42230,13 @@ partHashWords: function {
         return
     }
     if (partIsCScalar :symtab tid: base) then {
-        hbn: regNameView :symtab tid: base
-        if (numBits name: hbn) == 128 then {
+        hbk: ztypecheck.numKindOfTid st: symtab tid: base
+        if hbk.has when (kindBits k: hbk.kind) == 128 then {
             # its two words, through the int128 helpers: the value is no C
             # arithmetic type where the C compiler has no 128-bit integer
             needsAddM :ctx uname: "prelude" memb: "int128"
             hbits: v.string
-            if (numSigned name: hbn) then hbits = "z_i128_bits(\{v})"
+            if (kindSigned k: hbk.kind) then hbits = "z_i128_bits(\{v})"
             wl: "z_u128_lo(\{hbits})"
             words.append wl
             wh: "z_u128_hi(\{hbits})"
@@ -42731,7 +42581,6 @@ emitHashPrototypes: function {
                 :ast
                 :symtab
                 :ctx
-                name: (regNameView :symtab tid: r)
                 tid: r
             )
             buf.append "static uint64_t \{ctxCname :ctx tid: fid}(const \{rt}* _t);\n"
@@ -42755,7 +42604,6 @@ emitHashDefs: function {
                 :ast
                 :symtab
                 :ctx
-                name: (regNameView :symtab tid: r)
                 tid: r
             )
             he: hashExprC :ast :symtab :ctx tid: r v: "(*_t)"
@@ -42807,7 +42655,7 @@ partsCallWritten: function {
 partIsCScalar: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
     base: typedefChaseTid :symtab :tid
     if (symtab.reg.typetypeOf typeId: base) == ztypes.ztypetype.functionType then return true
-    return (scalarCTypeFor :symtab name: (regNameView :symtab tid: base) tid: base).length > 0
+    return (scalarCTypeFor :symtab tid: base).length > 0
 }
 
 # emitEqLate -- a generated `_eq` that calls a method the author wrote: its
@@ -43834,7 +43682,7 @@ methodReturnC: function {
                 )
                 if rr2.length > 0 then ret = rr2.take
             } else {
-                rr3: cTypeOf name: rbn.stringView
+                rr3: scalarCTypeFor :symtab tid: (fnReturnTidOf :symtab tid: mid)
                 if rr3.length > 0 then ret = rr3.take
             }
         }
