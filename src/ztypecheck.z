@@ -9364,6 +9364,131 @@ dataElemParts: function {ast: Ast.view opId: zast.nodeid} out dataelem is {
     return miss
 }
 
+# dataElemValues -- each element's VALUE, by slot. A literal is read from its
+# lexeme; anything else folds through the evaluator, so an element may be any
+# compile-time constant -- an expression, a unit constant, another block's
+# element. An element with no value is refused where it is written and holds
+# noConst, keeping its slot.
+dataElemValues: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    scope: ztypes.declid
+    dnode: dataref
+} out ListVal ztypes.cval is {
+    vals: ListVal ztypes.cval
+    kV: u64
+    for kV < dnode.nelems loop {
+        elId: zast.dataElemAt :ast nid: dnode.nid i: kV
+        kV = kV + 1
+        opRef: zast.nodeid
+        {
+            el: ast.nodes.get i: elId
+            if el.namedoperation then opRef = el.operation
+        }
+        vals.append (dataElemValue :ast :st :unitDecl :scope :opRef)
+    }
+    return vals
+}
+
+# dataElemValue -- one element's value (dataElemValues), or noConst after the
+# refusal: a number is the only value a numeric block holds.
+dataElemValue: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    scope: ztypes.declid
+    opRef: zast.nodeid
+} out ztypes.cval is {
+    if opRef.isZero then return ztypes.noConst
+    de: dataElemParts :ast opId: opRef
+    if de.ok then {
+        lt: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: de.litId))
+        return (constLiteralValue :st name: lt.stringView)
+    }
+    held: st.typing.constFail
+    constFailClear :st
+    cv: evalConstNode :st :scope :ast :unitDecl nid: opRef
+    got: st.typing.constFail
+    st.typing.constFail = held
+    if cv.kind.ivalKind or cv.kind.fvalKind then return cv
+    en: ast.nodes.get i: opRef
+    if got.kind.none.not when cv.kind.none then {
+        # a block read from its own elements fails where nothing is written
+        if got.kind.cycle then {
+            got.nodeid = opRef
+            got.lineno = nodeLine n: en
+            got.colno = nodeCol n: en
+        }
+        renderConstFail :st f: got
+        return ztypes.noConst
+    }
+    msg: "a data element must be a compile-time constant".string
+    hint: "an element is a literal, a unit constant, or an expression over them".string
+    if cv.kind.svalKind then {
+        msg = "a data block holds numbers, not strings"
+        hint = "write the strings where they are used"
+    } else if cv.kind.none.not then {
+        msg = "a data element must be a number"
+        hint = "a data block holds numbers"
+    }
+    (addErrorH
+        :st
+        nodeid: opRef
+        lineno: (nodeLine n: en)
+        colno: (nodeCol n: en)
+        e: zast.err.typeError
+        :msg
+        note: String
+        :hint
+        width: 1
+    )
+    return ztypes.noConst
+}
+
+# dataElemFits -- the element's value lies in the block's element type, else the
+# report, where the element is written. A literal is checked by its lexeme, as a
+# literal is everywhere; a folded value by its value.
+dataElemFits: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    dnode: dataref
+    opRef: zast.nodeid
+    cv: ztypes.cval
+    # the element type's numeric kind, by name
+    ek: ztypes.suffixinfo
+    fitTid: ztypes.tid
+} out bool is {
+    de: dataElemParts :ast opId: opRef
+    if de.ok then {
+        if ek.has.not then return true
+        lt: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: de.litId))
+        pn: ztypes.parseNumberAs numstr: lt.stringView k: ek.kind
+        if pn.err.length == 0 then return true
+        (addError
+            :st
+            nodeid: dnode.nid
+            lineno: (nodeLine n: (ast.nodes.get i: de.litId))
+            colno: (nodeCol n: (ast.nodes.get i: de.litId))
+            e: zast.err.typeError
+            msg: pn.err
+        )
+        return false
+    }
+    fm: constFitsType :st v: cv target: fitTid
+    if fm.length == 0 then return true
+    en: ast.nodes.get i: opRef
+    (addError
+        :st
+        nodeid: dnode.nid
+        lineno: (nodeLine n: en)
+        colno: (nodeCol n: en)
+        e: zast.err.typeError
+        msg: fm
+    )
+    return false
+}
+
 # dataElemTypeName -- the ONE type name a data block's elements carry: the
 # `out T` clause when written, else the type the elements' own tags agree on,
 # else i64 -- f64 when every element is a bare float literal. Tags that
@@ -9374,6 +9499,8 @@ dataElemTypeName: function {
     st: zenv.ZSymbolTable
     dnode: dataref
     outName: StringView
+    # each element's value, by slot (dataElemValues)
+    vals: ListVal ztypes.cval
 } out zast.nameid is {
     pick: zast.nameid
     if outName.length > 0 then pick = ast.internString text: outName
@@ -9382,38 +9509,34 @@ dataElemTypeName: function {
     kU: u64
     for kU < dnode.nelems loop {
         elId: zast.dataElemAt :ast nid: dnode.nid i: kU
+        cv: vals.get i: kU
         kU = kU + 1
+        if cv.kind.fvalKind.not then allFloat = false
+        if cv.bits.not then allBits = false
         opRef: zast.nodeid
         el: ast.nodes.get i: elId
         if el.namedoperation then opRef = el.operation
         de: dataElemParts :ast opId: opRef
-        if de.ok.not then allFloat = false
-        if de.ok then {
-            lx: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: de.litId))
-            cv: constLiteralValue :st name: lx.stringView
-            if cv.kind.fvalKind.not then allFloat = false
-            if cv.bits.not then allBits = false
-            if de.tagId.isZero.not then {
-                tgId: atomNameId :ast n: (ast.nodes.get i: de.tagId)
-                if pick.isZero then pick = tgId
-                if (tgId == pick).not then {
-                    pn: zast.nameTextAt :ast ref: pick
-                    tn: zast.nameTextAt :ast ref: tgId
-                    dm: "data element types disagree: '\{pn.stringView}' and '\{tn.stringView}'"
-                    dh: "a data block has one element type: write it once, as `out T`".string
-                    en: String
-                    (addErrorH
-                        :st
-                        nodeid: dnode.nid
-                        lineno: dnode.lineno
-                        colno: dnode.colno
-                        e: zast.err.typeError
-                        msg: dm
-                        note: en
-                        hint: dh
-                        width: 4
-                    )
-                }
+        if de.tagId.isZero.not then {
+            tgId: atomNameId :ast n: (ast.nodes.get i: de.tagId)
+            if pick.isZero then pick = tgId
+            if (tgId == pick).not then {
+                pn: zast.nameTextAt :ast ref: pick
+                tn: zast.nameTextAt :ast ref: tgId
+                dm: "data element types disagree: '\{pn.stringView}' and '\{tn.stringView}'"
+                dh: "a data block has one element type: write it once, as `out T`".string
+                en: String
+                (addErrorH
+                    :st
+                    nodeid: dnode.nid
+                    lineno: dnode.lineno
+                    colno: dnode.colno
+                    e: zast.err.typeError
+                    msg: dm
+                    note: en
+                    hint: dh
+                    width: 4
+                )
             }
         }
     }
@@ -9464,8 +9587,14 @@ resolveData: function {
     )
     st.reg.setValtype typeId: did value: false
     litId: st.reg.literalIntTid
+    # the block's elements are evaluating: a read of the block from one of
+    # them is a cycle (constDataMember)
+    lk: st.typing.memberConstKey parentTypeId: did nameId: zast.names.wkLength
+    st.typing.constEvalState.set key: lk value: 1.u8
+    vals: dataElemValues :ast :st :unitDecl :scope :dnode
+    st.typing.constEvalState.set key: lk value: 2.u8
     etn: dataOutTypeName :ast oId: dnode.outType
-    etId: dataElemTypeName :ast :st :dnode outName: etn.stringView
+    etId: dataElemTypeName :ast :st :dnode outName: etn.stringView :vals
     etName: zast.nameTextCopy :ast ref: etId
     elemTid: litId
     {
@@ -9529,34 +9658,18 @@ resolveData: function {
             # The element's VALUE, recorded here rather than folded on demand:
             # it is the discriminator a tagged type using this block will be
             # emitted with, and a backend reading it has no unit to fold under.
-            # A non-literal element records nothing and keeps its position.
-            de: dataElemParts :ast opId: opRef
-            if de.ok then {
-                lt: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: de.litId))
-                if lt.length > 0 then {
-                    if ek.has then {
-                        pn: ztypes.parseNumberAs numstr: lt.stringView k: ek.kind
-                        if pn.err.length > 0 then {
-                            (addError
-                                :st
-                                nodeid: dnode.nid
-                                lineno: (nodeLine n: (ast.nodes.get i: de.litId))
-                                colno: (nodeCol n: (ast.nodes.get i: de.litId))
-                                e: zast.err.typeError
-                                msg: pn.err
-                            )
-                        }
-                    }
-                    cv: constLiteralValue :st name: lt.stringView
-                    if cv.kind.ivalKind then {
-                        (st.typing.setMemberConst
-                            parentTypeId: did
-                            nameId: memberIdAt
-                            value: cv
-                        )
-                        st.typing.setDataSlotConst dataTid: did slot: ordinal value: cv
-                    }
-                }
+            cv: vals.get i: ordinal
+            if cv.kind.none.not when (dataElemFits
+                :ast
+                :st
+                :dnode
+                :opRef
+                :cv
+                :ek
+                fitTid: elemTid
+            ) then {
+                st.typing.setMemberConst parentTypeId: did nameId: memberIdAt value: cv
+                st.typing.setDataSlotConst dataTid: did slot: ordinal value: cv
             }
         }
         ordinal = ordinal + 1
@@ -28528,44 +28641,6 @@ markDataRuntimeIndexed: function {st: zenv.ZSymbolTable tid: ztypes.tid} is {
     to.runtimeIndexed = true
 }
 
-# dataElemTypeOf -- the element type of a data block, 0 when it cannot be
-# derived. A data block records its `out T` as the name of its tag child
-# (`tag__u8`), so the element type is that name resolved in the reading unit's
-# scope. Both `.index` and `.array` read it -- `.index` yields one element,
-# `.array` an array of them -- so it is derived once.
-dataElemTypeOf: function {
-    ast: Ast
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    dataTid: ztypes.tid
-} out ztypes.tid is {
-    forceMemberOf :st :ast parentTypeId: dataTid nameId: zast.names.wkTag
-    tgo: st.typing.declChildOfId parentTypeId: dataTid nameId: zast.names.wkTag
-    match (
-        tgo
-    ) case some then {
-        tagn: st.reg.nameOf tid: tgo
-        eno: tagn.stringView.stripPrefix p: "tag__"
-        match (
-            eno
-        ) case some then {
-            elo: (walkLookupTyperef
-                :st
-                scope: st.curScope
-                :ast
-                :unitDecl
-                base: eno
-            )
-            match (
-                elo
-            ) case some then {
-                return elo
-            } case none then null
-        } case none then null
-    } case none then null
-    return ztypes.tid.zero
-}
-
 # baseIsPrivateCapable -- may a private member be read through this base? True
 # when the base is the type's own `this`/same-type receiver (self, inside its
 # methods), a `.private` projection, or a read of a `.private`-typed friend
@@ -29750,7 +29825,7 @@ checkDataBlockMember: function {
 } out callleg is {
     if (st.reg.typetypeOf typeId: bt) == ztypes.ztypetype.dataType then {
         if (zast.nameTextEq :ast ref: cnId s: "index") then {
-            sedi: dataElemTypeOf :ast :st :unitDecl dataTid: bt
+            sedi: st.reg.dataElemTypeOf tid: bt
             if sedi.isZero.not then {
                 stampGate :st nid: dp.nid tid: sedi
                 return (callleg handled: true tid: sedi)
@@ -29759,94 +29834,61 @@ checkDataBlockMember: function {
         if (zast.nameTextEq :ast ref: cnId s: "array") then markDataRuntimeIndexed :st tid: bt
     }
     # `.array` on a data block copies the elements into the sized array
-    # instance (array_{elem}_{count}), minting it on first access. The
-    # element type rides the data's `tag__{elem}` tag-child name.
+    # instance (array_{elem}_{count}), minting it on first access.
     if (zast.nameTextEq :ast ref: cnId s: "array") when (
         (st.reg.typetypeOf typeId: bt) == ztypes.ztypetype.dataType
     ) then {
-        forceMemberOf :st :ast parentTypeId: bt nameId: zast.names.wkTag
-        tgo: st.typing.declChildOfId parentTypeId: bt nameId: zast.names.wkTag
+        elo: st.reg.dataElemTypeOf tid: bt
+        if elo.isZero then return (callleg handled: false tid: ztypes.tid.zero)
+        ecnt: dataElemCount :st dataTid: bt
+        ato: (walkLookupTyperef
+            :st
+            scope: st.curScope
+            :ast
+            :unitDecl
+            base: "array"
+        )
         match (
-            tgo
+            ato
         ) case some then {
-            tagn: st.reg.nameOf tid: tgo
-            eno: tagn.stringView.stripPrefix p: "tag__"
-            match (
-                eno
-            ) case some then {
-                elo: (walkLookupTyperef
-                    :st
-                    scope: st.curScope
-                    :ast
-                    :unitDecl
-                    base: eno
-                )
-                match (
-                    elo
-                ) case some then {
-                    ecnt: (st.typing.declMemberCount ownerTid: bt) - 1
-                    ato: (walkLookupTyperef
-                        :st
-                        scope: st.curScope
-                        :ast
-                        :unitDecl
-                        base: "array"
-                    )
-                    match (
-                        ato
-                    ) case some then {
-                        amn: "_\{eno}_\{ecnt}"
-                        # `array` declares its element parameter then its
-                        # count; asking the template for both names keeps
-                        # this site correct across a rename. Two names or
-                        # the leg declines: a zero key is the ELIDED key,
-                        # and getOrMintSpec rebinds that to the FIRST
-                        # parameter -- which would bind the count to the
-                        # element slot.
-                        aNames: (st.reg.genericParamNamesOf
-                            tdecl: (declOfTypeId
-                                :st
-                                tid: ato
-                            )
-                        )
-                        if aNames.length < 2 then {
-                            return (callleg
-                                handled: false
-                                tid: ztypes.tid.zero
-                            )
-                        }
-                        asubs: IdMapV zast.nameid v: ztypes.tid
-                        sv0: elo
-                        asubs.set key: (aNames.get i: 0) value: sv0
-                        vsE: IdMapV zast.nameid v: u64
-                        vsE.set key: (aNames.get i: 1) value: ecnt
-                        amid: (getOrMintSpec
-                            :st
-                            scope: st.curScope
-                            :ast
-                            :unitDecl
-                            sfx: amn.stringView
-                            templateId: ato
-                            subs: asubs
-                            valSubs: vsE
-                            fallbackArg: ztypes.tid.zero
-                        )
-                        (mintCollectionChildren
-                            :st
-                            scope: st.curScope
-                            :ast
-                            monoId: amid
-                            templateId: ato
-                        )
-                        setar: amid
-                        stampGate :st nid: dp.nid tid: setar
-                        return (callleg handled: true tid: amid)
-                    } case none then null
-                } case none then null
-            } case none then null
+            eno: st.reg.nameOf tid: elo
+            amn: "_\{eno}_\{ecnt}"
+            # `array` declares its element parameter then its count; asking
+            # the template for both names keeps this site correct across a
+            # rename. Two names or the leg declines: a zero key is the ELIDED
+            # key, and getOrMintSpec rebinds that to the FIRST parameter --
+            # which would bind the count to the element slot.
+            aNames: st.reg.genericParamNamesOf tdecl: (declOfTypeId :st tid: ato)
+            if aNames.length < 2 then return (callleg handled: false tid: ztypes.tid.zero)
+            asubs: IdMapV zast.nameid v: ztypes.tid
+            asubs.set key: (aNames.get i: 0) value: elo
+            vsE: IdMapV zast.nameid v: u64
+            vsE.set key: (aNames.get i: 1) value: ecnt
+            amid: (getOrMintSpec
+                :st
+                scope: st.curScope
+                :ast
+                :unitDecl
+                sfx: amn.stringView
+                templateId: ato
+                subs: asubs
+                valSubs: vsE
+                fallbackArg: ztypes.tid.zero
+            )
+            mintCollectionChildren :st scope: st.curScope :ast monoId: amid templateId: ato
+            setar: amid
+            stampGate :st nid: dp.nid tid: setar
+            return (callleg handled: true tid: amid)
         } case none then null
     }
     return (callleg handled: false tid: ztypes.tid.zero)
+}
+
+# dataElemCount -- how many elements data block `dataTid` holds: its `length`
+# constant, a name no element may take.
+dataElemCount: function {st: zenv.ZSymbolTable.view dataTid: ztypes.tid} out u64 is {
+    lc: st.typing.memberConstOf parentTypeId: dataTid nameId: zast.names.wkLength
+    return lc.ival.u64.orPanic
 }
 
 # checkArrayIndexMember -- a compile-time numeric index on an array instance
@@ -57059,7 +57101,8 @@ foldIfBranch: function {
 }
 
 # constDataMember -- a data block's element or length as a value, from the
-# constants the block recorded as it resolved. An element is a value only when
+# constants the block recorded as it resolved; a cycle when the block is still
+# evaluating its elements, one of which reads it. An element is a value only when
 # the block's elements are a builtin number: `out byteid` makes each element a
 # byteid, whose own `==` a fold of the bare integer would bypass. The length is
 # a count, never an element, and is always one.
@@ -57070,6 +57113,20 @@ constDataMember: function {
     dataTid: ztypes.tid
     nameId: zast.nameid
 } out ztypes.cval is {
+    lk: st.typing.memberConstKey parentTypeId: dataTid nameId: zast.names.wkLength
+    if ((st.typing.constEvalState.get key: lk).or d: 0) == 1 then {
+        bn: st.reg.nameOf tid: dataTid
+        (constFailRecord
+            :st
+            kind: ztypes.constfailkind.cycle
+            nodeid: zast.nodeid
+            lineno: 0
+            colno: 0
+            width: 1
+            strId: (constInternString :st text: bn.stringView)
+        )
+        return ztypes.noConst
+    }
     eo: (st.typing.declChildOfId parentTypeId: dataTid :nameId).or d: ztypes.tid.zero
     numeric: isNumericTid :ast :st :scope tid: eo
     if nameId != zast.names.wkLength when numeric.not then return ztypes.noConst

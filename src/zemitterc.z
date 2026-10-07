@@ -3447,8 +3447,8 @@ Ctx: class {
     # each function's "RET cname(PARAMS)", by its type: the forward
     # declaration and the definition write the same text, built once
     fnSigs: (IdMapR ztypes.tid V: String)
-    # each data block's element text, by type
-    dataElems: (IdMapR ztypes.tid V: String)
+    # the data blocks the program declares, by type
+    dataElems: IdSet ztypes.tid
     # a native operator row's hole bindings: `StringView` and `T` its cnames,
     # `L` and `R` its operands. The names never change and the values are
     # replaced per operator, so the four lists live here and an operator
@@ -6131,7 +6131,7 @@ emitDataIndexCall: function {
         }
     }
     if dtid.isZero then return ""
-    isData: ctx.dataElems.has key: dtid
+    isData: ctx.dataElems.has item: dtid
     if isData.not then return ""
     if mn == "index" then {
         ax: "0".string
@@ -19036,35 +19036,6 @@ numericFormatName: function {
     return rr
 }
 
-# the element name for an indexed data-block access.
-dataIndexElemName: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
-    n: astnode.view
-} out String is {
-    match (
-        n
-    ) case call then {
-        mn: dottedChildText :ast n: (ast.nodes.get i: n.callable)
-        if mn == "index" then {
-            dnid: dottedBaseNodeId :ast n: (ast.nodes.get i: n.callable)
-            dk: dataBlockTid :symtab nid: dnid
-            go: ctx.dataElems.get key: dk
-            match (
-                go
-            ) case some then {
-                gv: go.stringView
-                gc: gv.string
-                return gc
-            } case none then null
-        }
-        return ""
-    } else {
-        return ""
-    }
-}
-
 # interpBaseIsMapEntry -- true when an interp part is `<entry>.key`/`.value`
 # off a borrowed MapEntry: the projected String views the bucket, so it must
 # be appended inline (freeing the hoisted copy would double-free the bucket
@@ -19174,15 +19145,13 @@ interpBaseIsOwnedStructField: function {
 # interpPartTypeName -- the type name an interpolated part formats as: the
 # deep stamp (a template node side-stamped by the checker's per-mono walk
 # when the global table suppresses it), a typedef as its chain-end base,
-# numeric names normalised, and a data-block element as its element name.
+# numeric names normalised.
 interpPartTypeName: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     n: astnode.view
 } out String is {
-    di0: dataIndexElemName :ast :symtab :ctx :n
-    if di0.length > 0 then return di0
     tn0: stampNameDeep :symtab :n
     if tn0.length == 0 when ctx.curThisTid.isZero.not then {
         msid: monoStampIdOf :symtab :ctx nid: (interpPartNodeId :n)
@@ -30999,23 +30968,15 @@ fillOneDataElem: function {
     match (
         op
     ) case datablock then {
-        ebn: dataElemBaseName :ast oId: op.outType
         dtid: stampIdOf :symtab nid: op.nodeid
-        k: dtid
-        if ebn.length > 0 then {
-            ev: ebn.string
-            ctx.dataElems.set key: k value: ev
-        } else {
-            iv: "i64".string
-            ctx.dataElems.set key: k value: iv
-        }
+        ctx.dataElems.add item: dtid
         idx: u64
         hasLen: false
         ei9a: u64
         for ei9a < op.elements.count loop {
             e: zast.kidAt kids: ast.kids span: op.elements i: ei9a
             ei9a = ei9a + 1
-            vx: emitDataElem :ast :symtab :ctx n: (ast.nodes.get i: e)
+            vx: dataSlotText :ast :symtab :ctx dataTid: dtid slot: idx
             ik: dataslotkey owner: dtid slot: idx
             iv2: vx.copy
             ctx.dataSlot.set key: ik value: iv2
@@ -33097,7 +33058,7 @@ emitC: function {
         needUnits: List String
         needMembs: List String
         fnSigs: (IdMapR ztypes.tid V: String)
-        dataElems: (IdMapR ztypes.tid V: String)
+        dataElems: IdSet ztypes.tid
         opBindNames: List String
         opBindVals: List String
         opRawNames: List String
@@ -41218,7 +41179,7 @@ emitUnitDataBlocks: function {
         acx = acx + 1
         bm: ast.nodes.get i: bmId
         if bm.namedoperation.not then continue
-        emitDataBlock :ast :symtab :ctx op: (ast.nodes.get i: bm.operation) :buf
+        emitDataBlock :symtab :ctx op: (ast.nodes.get i: bm.operation) :buf
     }
 }
 
@@ -41473,9 +41434,8 @@ unitMemberTid: function {
 # to a huge u64). Emitted only when the block is read at runtime (`.index` /
 # `.array`); labels, ordinals and `.length` fold to constants and need no array.
 emitDataBlock: function {
-    ast: Ast.view
     symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
+    ctx: Ctx.view
     op: astnode.view
     buf: String.borrow
 } is {
@@ -41502,13 +41462,12 @@ emitDataBlock: function {
             }
             elems: String
             cnt: u64
-            ei9b: u64
-            for ei9b < op.elements.count loop {
-                e: zast.kidAt kids: ast.kids span: op.elements i: ei9b
-                ei9b = ei9b + 1
-                ev: emitDataElem :ast :symtab :ctx n: (ast.nodes.get i: e)
+            for cnt < op.elements.count loop {
                 if cnt > 0 then elems.append ", "
-                elems.append ev
+                eso: ctx.dataSlot.get key: (dataslotkey owner: ridtid slot: cnt)
+                match (
+                    eso
+                ) case some then elems.append eso case none then null
                 cnt = cnt + 1
             }
             dsym: ctxCname :ctx tid: ridtid
@@ -41528,27 +41487,22 @@ emitDataBlock: function {
     } else null
 }
 
-# emitDataElem -- a data-block element (a NamedOperation wrapping the
-# value atom); emit its inner expression.
-emitDataElem: function {
+# dataSlotText -- the C constant for element `slot` of data block `dataTid`,
+# rendered from the value the checker recorded, at the block's element type.
+dataSlotText: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    n: astnode.view
+    ctx: Ctx.view
+    dataTid: ztypes.tid
+    slot: u64
 } out String is {
-    match (
-        n
-    ) case namedoperation then {
-        return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.operation))
-    } else {
-        return (emitExpr :ast :symtab :ctx :n)
-    }
-}
-
-# the base type name of data block `oId`.
-dataElemBaseName: function {ast: Ast.view oId: zast.nodeid} outx StringView is {
-    if oId.isZero then return ""
-    return (atomTextOf :ast n: (ast.nodes.get i: oId))
+    return (cvalText
+        :ast
+        :symtab
+        :ctx
+        tid: (symtab.reg.dataElemTypeOf tid: dataTid)
+        v: (symtab.typing.dataSlotConstOf :dataTid :slot)
+    )
 }
 
 # armTagValueText -- the declared discriminator of the arm named `armNameId`
