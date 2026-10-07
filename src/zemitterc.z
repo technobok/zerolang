@@ -41658,15 +41658,7 @@ emitDataBlock: function {
                 eso: ctx.dataSlot.get key: (dataslotkey owner: ridtid slot: cnt)
                 match (
                     eso
-                ) case some then {
-                    # a static initializer takes the string's bytes, not the
-                    # `_zcsN` view variable, which is no constant expression
-                    if isSv then {
-                        sl: (symtab.typing.dataSlotConstOf dataTid: ridtid slot: cnt).strId
-                        sn: (symtab.typing.constStrings.get i: sl).length
-                        elems.append "{ .data = \{eso}_d, .size = \{sn} }"
-                    } else elems.append eso
-                } case none then null
+                ) case some then elems.append eso case none then null
                 cnt = cnt + 1
             }
             dsym: ctxCname :ctx tid: ridtid
@@ -41692,7 +41684,8 @@ emitDataBlock: function {
 }
 
 # dataSlotText -- the C constant for element `slot` of data block `dataTid`,
-# rendered from the value the checker recorded, at the block's element type.
+# rendered from the value the checker recorded, at the block's element type; a
+# string as the StringView initializer its static array holds.
 dataSlotText: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -41701,7 +41694,18 @@ dataSlotText: function {
     slot: u64
 } out String is {
     v: symtab.typing.dataSlotConstOf :dataTid :slot
-    if v.kind.svalKind then return (cvalStrText :symtab :ctx :v)
+    if v.kind.svalKind then {
+        # a static initializer takes the bytes themselves: the pool's `_zcsN`
+        # view is no constant expression, and a read of a string element folds
+        # to its own
+        sv: symtab.typing.constStrings.get i: v.strId
+        r: "{ .data = \"".string
+        r.append (cEscape text: sv.stringView)
+        r.append "\", .size = "
+        r.append "\{sv.length}"
+        r.append " }"
+        return r
+    }
     return (cvalText :ast :symtab :ctx tid: (symtab.reg.dataElemTypeOf tid: dataTid) :v)
 }
 
