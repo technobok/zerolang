@@ -2432,7 +2432,7 @@ perf: $(PERFBIN)
 # +338 a type is named by the path of units that declares it (unitPathOfTid):
 # 0 behaviour, +338 source (ab.sh, now staging its trees at equal depth --
 # behaviour + source equals perf-strict's delta).
-ALLOC_BASELINE := 2273841
+ALLOC_BASELINE := 2273792
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -3393,7 +3393,7 @@ member-guard:
 # highlight-guard -- the two syntax highlighters must carry the language's
 # actual vocabulary. THE LANGUAGE IS THE SOURCE OF TRUTH, never the lists:
 # predeclared names come from lib/system/core.z, keywords and reserved words
-# from zlexer.z's kwlookup and islookupReserved.
+# from zlexer.z's kwOfId and isReservedId (their wellKnown labels).
 #
 # Three renames in a row missed these files -- `.release` -> `.drop`, the
 # camelCase view rename, and the arc that added `drop` -- because nothing
@@ -3431,13 +3431,25 @@ print('\n'.join(sorted(set(m.group(1).split()))))" "$$1"
 
 grep -oE '^[A-Za-z_][A-Za-z0-9_]*:' lib/system/core.z | sed 's/:$$//' | sort -u > "$$D/core"
 # the keyword set is read from the CONSTRUCTION rather than from a function
-# range: the table is spelled as one function per keyword family, and a guard
-# that had to name them would go stale the next time a family is added.
-grep -oE 'sv == "[^"]+" then return \(kwresult found: true' lib/system/zlexer.z \
-  | sed -E 's/sv == "([^"]+)".*/\1/' | sort -u > "$$D/lexkw.all"
+# range: the lexer classifies by id, one function per keyword family, and a
+# guard that had to name them would go stale the next time a family is added.
+# Each `zast.wellKnown.slot.LABEL` a kw*Id function returns a keyword for is
+# spelled beside its label in zast's wellKnown block.
+wkspell() {
+  sed -n '/^wellKnown: data {/,/^}/p' lib/system/zast.z | awk -v want="$$1" '
+    BEGIN { n = split(want, a, " "); for (i = 1; i <= n; i++) w[a[i]] = 1 }
+    match($$0, /^ +[A-Za-z0-9_]+: "/) {
+      l = $$1; sub(/:$$/, "", l)
+      if (l in w) { s = $$0; sub(/^[^"]*"/, "", s); sub(/"$$/, "", s); print s }
+    }' | sort -u
+}
+kwlabels=$$(sed -n '/^kw[A-Za-z]*Id: function/,/^}/p' lib/system/zlexer.z \
+  | grep -oE 'slot\.[A-Za-z0-9_]+' | sed 's/slot\.//' | tr '\n' ' ')
+wkspell "$$kwlabels" > "$$D/lexkw.all"
 cp "$$D/lexkw.all" "$$D/lexkw"
-sed -n '/^islookupReserved: function/,/^}/p' lib/system/zlexer.z \
-  | grep -oE 'sv == "[^"]+"' | sed 's/sv == //; s/"//g' | sort -u > "$$D/lexres"
+rslabels=$$(sed -n '/^isReservedId: function/,/^}/p' lib/system/zlexer.z \
+  | grep -oE 'slot\.[A-Za-z0-9_]+' | sed 's/slot\.//' | tr '\n' ' ')
+wkspell "$$rslabels" > "$$D/lexres"
 
 # the SPEC's two tables. Nothing gated them against the lexer, which is how
 # `yield` sat in kwlookup while the spec called it a builtin function and both
@@ -3469,14 +3481,14 @@ cmp_set() {
     fail=1
   fi
 }
-cmp_set "prism keywords vs zlexer kwlookup"         "$$D/lexkw"  "$$D/pkw"
-cmp_set "nvim keywords vs zlexer kwlookup"          "$$D/lexkw"  "$$D/vkw"
-cmp_set "prism reserved vs zlexer islookupReserved" "$$D/lexres" "$$D/pres"
-cmp_set "nvim reserved vs zlexer islookupReserved"  "$$D/lexres" "$$D/vres"
-cmp_set "spec Keywords vs zlexer kwlookup"          "$$D/lexkw"  "$$D/speckw"
-cmp_set "spec Reserved Words vs zlexer islookupReserved" "$$D/lexres" "$$D/specres"
-cmp_set "rouge keywords vs zlexer kwlookup"          "$$D/lexkw"  "$$D/rkw"
-cmp_set "rouge reserved vs zlexer islookupReserved" "$$D/lexres" "$$D/rres"
+cmp_set "prism keywords vs zlexer kwOfId"            "$$D/lexkw"  "$$D/pkw"
+cmp_set "nvim keywords vs zlexer kwOfId"             "$$D/lexkw"  "$$D/vkw"
+cmp_set "prism reserved vs zlexer isReservedId" "$$D/lexres" "$$D/pres"
+cmp_set "nvim reserved vs zlexer isReservedId"  "$$D/lexres" "$$D/vres"
+cmp_set "spec Keywords vs zlexer kwOfId"             "$$D/lexkw"  "$$D/speckw"
+cmp_set "spec Reserved Words vs zlexer isReservedId" "$$D/lexres" "$$D/specres"
+cmp_set "rouge keywords vs zlexer kwOfId"             "$$D/lexkw"  "$$D/rkw"
+cmp_set "rouge reserved vs zlexer isReservedId" "$$D/lexres" "$$D/rres"
 cmp_set "prism builtins vs nvim builtins"           "$$D/pbi"    "$$D/vbi"
 cmp_set "rouge builtins vs prism builtins"          "$$D/pbi"    "$$D/rbi"
 sort -u "$$D/core" "$$D/ctx" > "$$D/want_bi"
