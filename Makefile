@@ -2432,7 +2432,7 @@ perf: $(PERFBIN)
 # +338 a type is named by the path of units that declares it (unitPathOfTid):
 # 0 behaviour, +338 source (ab.sh, now staging its trees at equal depth --
 # behaviour + source equals perf-strict's delta).
-ALLOC_BASELINE := 2223993
+ALLOC_BASELINE := 2223178
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -3388,7 +3388,7 @@ member-guard:
 	if [ "$$m1" -lt 0 ]; then \
 	  echo "member-guard: string-keyed member compares = $$m1 < baseline 0 -- lower the baseline here"; \
 	fi; \
-	echo "member-guard OK: string-keyed member compares = $$m1 (<=5)"
+	echo "member-guard OK: string-keyed member compares = $$m1 (<=0)"
 
 # highlight-guard -- the two syntax highlighters must carry the language's
 # actual vocabulary. THE LANGUAGE IS THE SOURCE OF TRUTH, never the lists:

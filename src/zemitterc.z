@@ -3229,57 +3229,6 @@ family: data {
 # ours" answer, so no real index can be mistaken for it
 noFamily: family.length
 
-# dispatch -- the names the emitter DISPATCHES on -- a member selector, or the
-# base atom of a path it recognises -- one list, looked up in the program's pool
-# once (buildMemberNameIds). A row's SLOT is its index into `ctx.mnames`, as a
-# `family` row's indexes `ctx.origins` -- and an id compare is what the text compare was reaching for,
-# without copying the name out of the pool to make it. A name this program
-# never interned answers 0, and no member's name id is 0, so the miss is the
-# right answer by construction.
-dispatch: data {
-    orPanic: "orPanic"
-    copy: "copy"
-    meta: "meta"
-    option: "Option"
-    result: "Result"
-    print: "print"
-    panic: "panic"
-    error: "error"
-    append: "append"
-    insert: "insert"
-    push: "push"
-    getMut: "getMut"
-    pop: "pop"
-    extend: "extend"
-    has: "has"
-    delete: "delete"
-    keyAt: "keyAt"
-    valueAt: "valueAt"
-    split: "split"
-    fill: "fill"
-    clear: "clear"
-    copyFrom: "copyFrom"
-    mutView: "mutView"
-    mutSlice: "mutSlice"
-    resize: "resize"
-    dataIndex: "index"
-} out stringdata
-
-# dispatchIs -- is `id` the dispatch name at index `at`? TWO zeros meet here and they
-# are not the same zero: a node with no member name answers 0, and a name this
-# program never interned is 0 in the table. Comparing them directly would say
-# yes to every nameless callable, so a zero id is no name at all and answers no.
-dispatchIs: function {ctx: Ctx.view id: zast.nameid at: u64} out bool is {
-    if id.isZero then return false
-    return id == (ctx.mnames.get i: at)
-}
-
-# buildMemberNameIds -- those names as pool ids for the program being emitted,
-# in `dispatch` order. A carrier with no program answers zeros, which match nothing.
-buildMemberNameIds: function {program: Ast.view acc: ListVal zast.nameid} is {
-    for each nm9: dispatch loop acc.append (zast.poolFind pool: program.names text: nm9)
-}
-
 # buildOriginTids -- resolve every row in one pass. A unit with no program node
 # registers none of them and every row stays 0; the list is filled either way,
 # so a `family` index is always in range.
@@ -3468,8 +3417,6 @@ Ctx: class {
     unitKeysC: List String
     # whether those two are built yet
     unitCacheBuilt: bool
-    # the member names this program interned, indexed by the `dispatch` elements
-    mnames: ListVal zast.nameid
     # name-id -> resolved tid (misses cached as 0): the typed model is
     # frozen during emission, so resolution per name id is emit-stable
     resolveByNameC: (IdMapV zast.nameid v: ztypes.tid)
@@ -5110,9 +5057,9 @@ stmtFormNameId: function {
     zid: zast.nameid
     if cid.isZero then return zid
     isSf: (
-        (dispatchIs :ctx id: cid at: dispatch.slot.print) or
-        (dispatchIs :ctx id: cid at: dispatch.slot.panic) or
-        (dispatchIs :ctx id: cid at: dispatch.slot.error) or
+        (cid == zast.wellKnown.slot.wkPrint) or
+        (cid == zast.wellKnown.slot.wkPanic) or
+        (cid == zast.wellKnown.slot.wkError) or
         (cid == zast.wellKnown.slot.wkReturn)
     )
     if isSf.not then return zid
@@ -9624,8 +9571,8 @@ emitListValLendCall: function {
     bt: ztypes.tid
     bvid: ztypes.vid
 } out String is {
-    isResize: dispatchIs :ctx id: mnId at: dispatch.slot.resize
-    if isResize.not when (dispatchIs :ctx id: mnId at: dispatch.slot.mutSlice).not then return ""
+    isResize: mnId == zast.wellKnown.slot.wkResize
+    if isResize.not when (mnId == zast.wellKnown.slot.wkMutSlice).not then return ""
     cb: ctxCname :ctx tid: bt
     recvR: colRecvRef :ctx bn: bn.stringView vid: bvid
     if isResize then {
@@ -9692,7 +9639,7 @@ emitListMethodCall: function {
 } out String is {
     cb: ctxCname :ctx tid: bt
     recvR: colRecvRef :ctx bn: bn.stringView vid: bvid
-    if (dispatchIs :ctx id: mnId at: dispatch.slot.append) then {
+    if mnId == zast.wellKnown.slot.wkAppend then {
         v: colArg :ast :symtab :ctx :call label: "from" consumes: true
         e0: "\{cb}_append(\{recvR}, \{v})"
         return (narrowListIndex :ast :symtab :ctx :call pos: e0)
@@ -9708,7 +9655,7 @@ emitListMethodCall: function {
         ) then return "(*\{e1})"
         return e1
     }
-    if (dispatchIs :ctx id: mnId at: dispatch.slot.getMut) then {
+    if mnId == zast.wellKnown.slot.wkGetMut then {
         vm: listArg :ast :symtab :ctx :call label: "i"
         e1m: "\{cb}_getMut(\{recvR}, \{vm})"
         if (listGetIsPtr
@@ -9754,11 +9701,11 @@ emitListMethodCall: function {
             bForm: argform.moved
         )
     }
-    if (dispatchIs :ctx id: mnId at: dispatch.slot.pop) then {
+    if mnId == zast.wellKnown.slot.wkPop then {
         e3: "\{cb}_pop(\{recvR})"
         return e3
     }
-    if (dispatchIs :ctx id: mnId at: dispatch.slot.insert) then {
+    if mnId == zast.wellKnown.slot.wkInsert then {
         return (emitOrderedPair
             :ast
             :symtab
@@ -9773,7 +9720,7 @@ emitListMethodCall: function {
             bForm: argform.value
         )
     }
-    if (dispatchIs :ctx id: mnId at: dispatch.slot.extend) then {
+    if mnId == zast.wellKnown.slot.wkExtend then {
         eaa: listTakeArgBase :ast :call label: "from"
         eaV: atomVid :symtab nid: (listTakeArgBaseNid :ast :call label: "from")
         ea: emitLocalAtomName :ctx name: eaa vid: eaV
@@ -9873,10 +9820,7 @@ emitArrayMethodCall: function {
             bForm: argform.value
         )
     }
-    isSlice: (
-        (mnId == zast.wellKnown.slot.wkSlice) or
-        (dispatchIs :ctx id: mnId at: dispatch.slot.mutSlice)
-    )
+    isSlice: (mnId == zast.wellKnown.slot.wkSlice) or (mnId == zast.wellKnown.slot.wkMutSlice)
     if isSlice then {
         recvA: colRecvRef :ctx bn: bn.stringView vid: bvid
         recvTa: "const \{cb}_t*"
@@ -9911,7 +9855,7 @@ emitDataValueMethodCall: function {
     bn: String
     bt: ztypes.tid
 } out String is {
-    if (dispatchIs :ctx id: mnId at: dispatch.slot.dataIndex).not then return ""
+    if (mnId == zast.wellKnown.slot.wkIndex).not then return ""
     cb: ctxCname :ctx tid: bt
     vi: listArg :ast :symtab :ctx :call label: "i"
     return "\{cb}_index(\{bn}, \{vi})"
@@ -9973,12 +9917,12 @@ emitSpanMethodCall: function {
             bForm: argform.value
         )
     }
-    if (dispatchIs :ctx id: mnId at: dispatch.slot.fill) then {
+    if mnId == zast.wellKnown.slot.wkFill then {
         vf: listArg :ast :symtab :ctx :call label: "item"
         ef: "\{cb}_fill(\{recvR}, \{vf})"
         return ef
     }
-    if (dispatchIs :ctx id: mnId at: dispatch.slot.split) then {
+    if mnId == zast.wellKnown.slot.wkSplit then {
         needsAddM :ctx uname: "collections" memb: "window"
         va: listArg :ast :symtab :ctx :call label: "at"
         pc: (ctxCname
@@ -9992,7 +9936,7 @@ emitSpanMethodCall: function {
         es.append ".hi = { .length = _zs->length - _za, .data = _zs->data + _za } }; })"
         return es
     }
-    if (dispatchIs :ctx id: mnId at: dispatch.slot.copyFrom) then {
+    if mnId == zast.wellKnown.slot.wkCopyFrom then {
         vc: listArg :ast :symtab :ctx :call label: "from"
         vn: labelArgNode :ast :call label: "from" form: argform.value
         lc: (ctxCname
@@ -10153,7 +10097,7 @@ emitSetMethodCall: function {
         e0: "\{cb}_add(\{bn}, \{v})"
         return e0
     }
-    if (dispatchIs :ctx id: mnId at: dispatch.slot.has) then {
+    if mnId == zast.wellKnown.slot.wkHas then {
         viv: colArgAsStringViewExpr :ast :symtab :ctx :call label: "item"
         if viv.length > 0 then return "\{cb}_hasv(\{bn}, \{viv})"
         v: colArg :ast :symtab :ctx :call label: "item" consumes: false
@@ -10170,7 +10114,7 @@ emitSetMethodCall: function {
         e1: "\{cb}_has(\{bn}, \{v})"
         return e1
     }
-    if (dispatchIs :ctx id: mnId at: dispatch.slot.delete) then {
+    if mnId == zast.wellKnown.slot.wkDelete then {
         viv: colArgAsStringViewExpr :ast :symtab :ctx :call label: "item"
         if viv.length > 0 then return "\{cb}_deletev(\{bn}, \{viv})"
         v: colArg :ast :symtab :ctx :call label: "item" consumes: false
@@ -10235,7 +10179,7 @@ emitMapMethodCall: function {
         e1: "\{cb}_get(\{bn}, \{vk})"
         return e1
     }
-    if (dispatchIs :ctx id: mnId at: dispatch.slot.has) then {
+    if mnId == zast.wellKnown.slot.wkHas then {
         vkv: colArgAsStringViewExpr :ast :symtab :ctx :call label: "key"
         if vkv.length > 0 then return "\{cb}_hasv(\{bn}, \{vkv})"
         vk: colArg :ast :symtab :ctx :call label: "key" consumes: false
@@ -10307,22 +10251,22 @@ emitIdMapMethodCall: function {
         e1: "\{cb}_get(\{recvR}, \{vk})"
         return e1
     }
-    if (dispatchIs :ctx id: mnId at: dispatch.slot.getMut) then {
+    if mnId == zast.wellKnown.slot.wkGetMut then {
         vkm: colArg :ast :symtab :ctx :call label: "key" consumes: false
         e1m: "\{cb}_getMut(\{recvR}, \{vkm})"
         return e1m
     }
-    if (dispatchIs :ctx id: mnId at: dispatch.slot.has) then {
+    if mnId == zast.wellKnown.slot.wkHas then {
         vk: colArg :ast :symtab :ctx :call label: "key" consumes: false
         e2: "\{cb}_has(\{recvR}, \{vk})"
         return e2
     }
-    if (dispatchIs :ctx id: mnId at: dispatch.slot.keyAt) then {
+    if mnId == zast.wellKnown.slot.wkKeyAt then {
         vi: colArg :ast :symtab :ctx :call label: "i" consumes: false
         e3: "\{cb}_keyAt(\{recvR}, \{vi})"
         return e3
     }
-    if (dispatchIs :ctx id: mnId at: dispatch.slot.valueAt) then {
+    if mnId == zast.wellKnown.slot.wkValueAt then {
         vi2: colArg :ast :symtab :ctx :call label: "i" consumes: false
         e4: "\{cb}_valueAt(\{recvR}, \{vi2})"
         return e4
@@ -10348,7 +10292,7 @@ emitIdSetMethodCall: function {
         e0: "\{cb}_add(\{recvR}, \{v})"
         return e0
     }
-    if (dispatchIs :ctx id: mnId at: dispatch.slot.has) then {
+    if mnId == zast.wellKnown.slot.wkHas then {
         v: colArg :ast :symtab :ctx :call label: "item" consumes: false
         e1: "\{cb}_has(\{recvR}, \{v})"
         return e1
@@ -15379,7 +15323,7 @@ emitNestedCollectionBase: function {
         vid: bs9vid
     )
     if wmn.length > 0 then return wmn
-    if (dispatchIs :ctx id: mnId at: dispatch.slot.copy) then {
+    if mnId == zast.wellKnown.slot.wkCopy then {
         fam: copyFamilyOf :symtab :ctx tid: nlid
         if fam > 0 then {
             crv: colRecvRef :ctx bn: baseAtom vid: bs9vid
@@ -16351,16 +16295,14 @@ windowMemberRead: function {
     acc: "."
     if recvIsPtr then acc = "->"
     if isSpan when mnId == zast.wellKnown.slot.wkLength then return "\{base}\{acc}length"
-    if isSpan when (dispatchIs :ctx id: mnId at: dispatch.slot.clear) then {
+    if isSpan when mnId == zast.wellKnown.slot.wkClear then {
         sc: ctxCname :ctx :tid
         rr: colRecvRef :ctx bn: base :vid
         return "\{sc}_clear(\{rr})"
     }
     lendsView: isArr or isSpan and (mnId == zast.wellKnown.slot.wkListView)
     lendsWindow: (
-        isArr or
-        (fam == family.slot.listVal) and
-        (dispatchIs :ctx id: mnId at: dispatch.slot.mutView)
+        isArr or (fam == family.slot.listVal) and (mnId == zast.wellKnown.slot.wkMutView)
     )
     if (lendsView or lendsWindow).not then return ""
     co: symtab.typing.declChildOfId parentTypeId: tid nameId: mnId
@@ -16418,7 +16360,7 @@ emitCollectionMemberRead: function {
         vid: bn2v
     )
     if wmr.length > 0 then return wmr
-    if (dispatchIs :ctx id: mnc9 at: dispatch.slot.copy) then {
+    if mnc9 == zast.wellKnown.slot.wkCopy then {
         fam9: copyFamilyOf :symtab :ctx tid: bstamp
         if fam9 > 0 then return (containerCopyText
             :ctx
@@ -17269,7 +17211,7 @@ emitDottedConversionRead: function {
     dps: ast.nodes.get i: n.parent
     ccbc: emitCrossUnitBareCreate :ctx :ast :symtab parent: dps childId: mnc0Id
     if ccbc.length > 0 then return ccbc
-    if (dispatchIs :ctx id: mnc0Id at: dispatch.slot.copy) then {
+    if mnc0Id == zast.wellKnown.slot.wkCopy then {
         cpc: emitCopyConversion :ast :symtab :ctx :n
         if cpc.length > 0 then return cpc
     }
@@ -17727,7 +17669,7 @@ emitDottedRead: function {
     # is handled by emitResultCombinator in the call dispatch instead.
     # the member is asked by ID: the legs below lend ast, and an id is a scalar
     dcMnId: atomNameIdOf :ast n: (ast.nodes.get i: n.child)
-    if (dispatchIs :ctx id: dcMnId at: dispatch.slot.orPanic) then {
+    if dcMnId == zast.wellKnown.slot.wkOrPanic then {
         pStamp: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.parent))
         pMono: chaseAggregateTypedef :symtab :ctx tid: pStamp
         isRcc: (originIsTid
@@ -20198,15 +20140,15 @@ emitCallStmt: function {
             n: (ast.nodes.get i: call.callable)
         )
     }
-    if (dispatchIs :ctx id: sfnId at: dispatch.slot.print) then {
+    if sfnId == zast.wellKnown.slot.wkPrint then {
         emitPrintStmt :ast :symtab :ctx :call :ind :tmp :buf
         return
     }
-    if (dispatchIs :ctx id: sfnId at: dispatch.slot.panic) then {
+    if sfnId == zast.wellKnown.slot.wkPanic then {
         emitPanicStmt :ast :symtab :ctx :call :ind :tmp :buf
         return
     }
-    if (dispatchIs :ctx id: sfnId at: dispatch.slot.error) then {
+    if sfnId == zast.wellKnown.slot.wkError then {
         emitErrorStmt :ast :symtab :ctx :call :ind :tmp :buf
         return
     }
@@ -32978,8 +32920,6 @@ emitC: function {
     if svId.isZero then svC = "z_StringView"
     origins: ListVal ztypes.tid
     buildOriginTids :program :symtab acc: origins
-    mnames: ListVal zast.nameid
-    buildMemberNameIds :program acc: mnames
     (emitStringFragments
         :runtimeDir
         :errs
@@ -33022,7 +32962,6 @@ emitC: function {
         unitTidsC: ListVal ztypes.tid
         unitKeysC: List String
         unitCacheBuilt: false
-        :mnames
         resolveByNameC: (IdMapV zast.nameid v: ztypes.tid)
         mainUnitId: ztypes.declid
         condDepth: 0
@@ -33699,7 +33638,7 @@ emitListMono: function {
         :ctx
         :runtimeDir
         :monoId
-        nameId: (ctx.mnames.get i: dispatch.slot.resize)
+        nameId: zast.wellKnown.slot.wkResize
         file: "z_List_resize.c.tmpl"
         nm: nm.stringView
         hole: "ELEM_T"
@@ -33714,7 +33653,7 @@ emitListMono: function {
         :ctx
         :runtimeDir
         :monoId
-        nameId: (ctx.mnames.get i: dispatch.slot.copy)
+        nameId: zast.wellKnown.slot.wkCopy
         file: "z_List_copy.c.tmpl"
         nm: nm.stringView
         hole: "ELEM_T"
@@ -34319,7 +34258,7 @@ emitDataMono: function {
         buf.append t2
         buf.append "\n"
     }
-    if (monoMemberUsed :symtab :monoId nameId: (ctx.mnames.get i: dispatch.slot.dataIndex)) then {
+    if (monoMemberUsed :symtab :monoId nameId: zast.wellKnown.slot.wkIndex) then {
         buf.append "static \{ect} z_\{nm}_index(z_\{nm}_t _this, uint64_t _idx);\n"
         buf.append "static \{ect} z_\{nm}_index(z_\{nm}_t _this, uint64_t _idx) {\n"
         buf.append "    if (_idx >= _this.length) {\n"
@@ -34406,7 +34345,7 @@ emitSpanMono: function {
         :ctx
         :runtimeDir
         :monoId
-        nameId: (ctx.mnames.get i: dispatch.slot.fill)
+        nameId: zast.wellKnown.slot.wkFill
         file: "z_SpanVal_fill.c.tmpl"
         nm: nm.stringView
         ect: ect.stringView
@@ -34417,7 +34356,7 @@ emitSpanMono: function {
         :ctx
         :runtimeDir
         :monoId
-        nameId: (ctx.mnames.get i: dispatch.slot.clear)
+        nameId: zast.wellKnown.slot.wkClear
         file: "z_SpanVal_clear.c.tmpl"
         nm: nm.stringView
         ect: ect.stringView
@@ -35151,7 +35090,7 @@ emitSetMono: function {
         :ctx
         :runtimeDir
         :monoId
-        nameId: (ctx.mnames.get i: dispatch.slot.copy)
+        nameId: zast.wellKnown.slot.wkCopy
         file: "z_dict_copy.c.tmpl"
         nm: nm.stringView
         hole: ""
@@ -35559,7 +35498,7 @@ emitMapMono: function {
         :ctx
         :runtimeDir
         :monoId
-        nameId: (ctx.mnames.get i: dispatch.slot.copy)
+        nameId: zast.wellKnown.slot.wkCopy
         file: "z_dict_copy.c.tmpl"
         nm: nm.stringView
         hole: ""
@@ -35672,7 +35611,7 @@ emitIdMapMono: function {
         :ctx
         :runtimeDir
         :monoId
-        nameId: (ctx.mnames.get i: dispatch.slot.copy)
+        nameId: zast.wellKnown.slot.wkCopy
         file: "z_IdMap_copy.c.tmpl"
         nm: nm.stringView
         hole: ""
@@ -35819,7 +35758,7 @@ emitIdSetMono: function {
         :ctx
         :runtimeDir
         :monoId
-        nameId: (ctx.mnames.get i: dispatch.slot.copy)
+        nameId: zast.wellKnown.slot.wkCopy
         file: "z_IdSet_copy.c.tmpl"
         nm: nm.stringView
         hole: "ITEM_T"
