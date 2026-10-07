@@ -34,10 +34,10 @@ projectFileName: "project.z"
 # vocabulary is DATA: a setting's name is the text a file spells, with no id to
 # compare it against, so the reader gets by on the one compare settingIndex
 # makes.
-settingNames: "sourceDir systemDir runtimeDir main target outputDir cCompiler cCompilerMode cFlags linkFlags tccLibDir release fastHash readableNames eager"
+settingNames: "systemDir runtimeDir main target outputDir cCompiler cCompilerMode cFlags linkFlags tccLibDir release fastHash readableNames eager"
 
 # stringSettingCount -- how many of settingNames, from the first, take a string
-stringSettingCount: 11
+stringSettingCount: 10
 
 # listSettingNames -- the settings project.z gives as a data block of string
 # literals, space-separated
@@ -59,9 +59,6 @@ ProjectFile: class {
     # whether the file gave `sourceDirs`: given and empty is no source root,
     # left out is `dir` itself
     sourceDirsGiven: bool
-    # the one source root `sourceDir` gives: the setting `sourceDirs` replaces,
-    # read while project files still spell it
-    sourceDir: String
     # the stdlib directory, relative to `dir`
     systemDir: String
     # the C runtime directory, relative to `dir`
@@ -98,7 +95,6 @@ ProjectFile: class {
             error: String
             sourceDirs: List String
             sourceDirsGiven: false
-            sourceDir: String
             systemDir: String
             runtimeDir: String
             main: String
@@ -118,15 +114,14 @@ ProjectFile: class {
 
     # sourceRoots -- the source roots as a driver opens them, the first searched
     # first: each of `sourceDirs` under the project directory ("" is the
-    # directory itself), `sourceDir` when that is what the file gave, and the
-    # project directory alone when it gave neither
+    # directory itself), or the project directory alone when the file gave none
     sourceRoots: function {this: this.view} out List String is {
         r: List String
-        if this.sourceDirsGiven then {
-            for each d: this.sourceDirs loop r.append from: (this.rootAt rel: d.stringView)
+        if this.sourceDirsGiven.not then {
+            r.append from: this.dir.copy
             return r
         }
-        r.append from: (this.rootAt rel: this.sourceDir.stringView)
+        for each d: this.sourceDirs loop r.append from: (this.rootAt rel: d.stringView)
         return r
     }
 
@@ -174,24 +169,22 @@ ProjectFile: class {
     # stringSettingCount
     setString: function {:this k: u64 value: String.take} is {
         if k == 1 then {
-            this.sourceDir = value.take
-        } else if k == 2 then {
             this.systemDir = value.take
-        } else if k == 3 then {
+        } else if k == 2 then {
             this.runtimeDir = value.take
-        } else if k == 4 then {
+        } else if k == 3 then {
             this.main = value.take
-        } else if k == 5 then {
+        } else if k == 4 then {
             this.target = value.take
-        } else if k == 6 then {
+        } else if k == 5 then {
             this.outputDir = value.take
-        } else if k == 7 then {
+        } else if k == 6 then {
             this.cCompiler = value.take
-        } else if k == 8 then {
+        } else if k == 7 then {
             this.cCompilerMode = value.take
-        } else if k == 9 then {
+        } else if k == 8 then {
             this.cFlags = value.take
-        } else if k == 10 then {
+        } else if k == 9 then {
             this.linkFlags = value.take
         } else {
             this.tccLibDir = value.take
@@ -784,11 +777,14 @@ buildText: function {
     t.append "triple: \{quoted s: tr.stringView}\n"
     t.append "\n# the unit this build compiles\n"
     t.append "main: \{quoted s: facts.main.stringView}\n"
-    first: String
-    if facts.srcdirs.length > 0 then first = relativeTo :base p: (facts.srcdirs.get i: 0).stringView
-    t.append "\n# the first source root; \"\" when it lies outside the directory the paths\n"
-    t.append "# here are relative to\n"
-    t.append "sourceDir: \{quoted s: first.stringView}\n"
+    t.append "\n# the source roots, the first searched first; \"\" for one outside the\n"
+    t.append "# directory the paths here are relative to\n"
+    t.append "sourceDirs: data {"
+    for each sd: facts.srcdirs loop {
+        rel: relativeTo :base p: sd.stringView
+        t.append " \{quoted s: rel.stringView}"
+    }
+    t.append " } out StringView\n"
     odp: facts.outputDir.copy
     if odp.length == 0 then odp = "."
     od: relativeTo :base p: odp.stringView
@@ -1033,8 +1029,9 @@ projectTemplate: function {withMain: bool} out String is {
     t.append "# started anywhere below it read their settings here. Every setting is\n"
     t.append "# optional and shown at its default; a flag given to zc replaces it\n"
     t.append "# outright. A path is relative to this directory.\n"
-    t.append "\n# the directory holding the project's units (--src)\n"
-    t.append "# sourceDir: \".\"\n"
+    t.append "\n# the directories holding the project's units, the first searched first\n"
+    t.append "# (--src)\n"
+    t.append "# sourceDirs: data { \".\" } out StringView\n"
     t.append "\n# the unit `zc build` and `zc run` compile when none is named\n"
     if withMain then {
         t.append "main: \"main\"\n"
