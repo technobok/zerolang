@@ -2432,7 +2432,7 @@ perf: $(PERFBIN)
 # +338 a type is named by the path of units that declares it (unitPathOfTid):
 # 0 behaviour, +338 source (ab.sh, now staging its trees at equal depth --
 # behaviour + source equals perf-strict's delta).
-ALLOC_BASELINE := 2221688
+ALLOC_BASELINE := 2221521
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -2588,7 +2588,7 @@ emitter-guard:
 	chk "resolveTypeIdByName" "$$e3" 15; \
 	chk "userFnId" "$$e4" 18; \
 	chk "childOwnershipText" "$$e5" 0; \
-	chk "regNameOf" "$$e6" 48; \
+	chk "regNameOf" "$$e6" 45; \
 	chk "mangleVarName (both inside varCName)" "$$e7" 2; \
 	chk "io.readText" "$$e8" 3; \
 	chk "monoOriginName" "$$e9" 0; \

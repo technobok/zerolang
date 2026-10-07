@@ -29706,16 +29706,25 @@ fnSignature: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    name: StringView
     fid: ztypes.tid
     op: astnode.view
 } out String is {
-    if name == "main" then return "void z_main(void)"
+    if (isEntryMain :symtab :ctx :fid) then return "void z_main(void)"
     ret: fnReturnC :ast :symtab :ctx :fid :op
     params: fnParamsC :ast :symtab :ctx :fid :op
     fc: ctxCnameView :ctx tid: fid
     sig: "\{ret} \{fc}(\{params})"
     return sig
+}
+
+# isEntryMain -- `fid` is the program's entry point: the `main` the main unit
+# itself declares. A function of that name anywhere else -- a namespace's, a
+# type's -- is an ordinary function and keeps its own signature.
+isEntryMain: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view fid: ztypes.tid} out bool is {
+    if ctx.mainUnitId.isZero then return false
+    md: symtab.typing.declFindChild parentDeclId: ctx.mainUnitId nameId: zast.wellKnown.slot.wkMain
+    if md.isZero then return false
+    return (ztypecheck.declTypeIdOf st: symtab declId: md) == fid
 }
 
 # appendFnSignature -- fnSignature's text appended to `buf`, then `tail` (";\n"
@@ -29725,7 +29734,6 @@ appendFnSignature: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    name: StringView
     fid: ztypes.tid
     op: astnode.view
     buf: String.borrow
@@ -29742,7 +29750,7 @@ appendFnSignature: function {
         } case none then null
     }
     if hit.not then {
-        sig: fnSignature :ast :symtab :ctx :name :fid :op
+        sig: fnSignature :ast :symtab :ctx :fid :op
         buf.append sig
         ctx.fnSigs.set key: fid value: sig.take
     }
@@ -31437,7 +31445,6 @@ emitUnitMonoFn: function {
     declOnly: bool
     buf: String.borrow
 } is {
-    fnm: regNameOf :symtab tid: cfid
     # the whole function is the instance's: its parameters are the variables
     # the instance walk bound, in the signature as in the body, and the body is
     # its own copy
@@ -31446,11 +31453,11 @@ emitUnitMonoFn: function {
         i: (instanceOpAt :symtab mono: t op: (zast.nodeIdOf n: op))
     )
     if declOnly then {
-        appendFnSignature :ast :symtab :ctx name: fnm.stringView fid: cfid op: iop :buf tail: ";\n"
+        appendFnSignature :ast :symtab :ctx fid: cfid op: iop :buf tail: ";\n"
         symtab.typing.emitMono = ztypes.tid.zero
         return
     }
-    appendFnSignature :ast :symtab :ctx name: fnm.stringView fid: cfid op: iop :buf tail: " {\n"
+    appendFnSignature :ast :symtab :ctx fid: cfid op: iop :buf tail: " {\n"
     resetFnEmitState :ctx
     registerReftypeParams :ast :symtab :ctx fid: cfid op: iop
     ctx.curThisTid = t
@@ -31682,7 +31689,6 @@ emitFnMonoInstances: function {
             if go9opt == templateFnId when go9opt.isZero.not then isMono = true
         }
         if isMono then {
-            fnm: regNameOf :symtab tid: t
             # the whole function is the instance's (emitUnitMonoFn), and so is
             # the body it is emitted from
             symtab.typing.emitMono = t
@@ -31694,7 +31700,6 @@ emitFnMonoInstances: function {
                     :ast
                     :symtab
                     :ctx
-                    name: fnm.stringView
                     fid: t
                     op: iop
                     :buf
@@ -31705,7 +31710,6 @@ emitFnMonoInstances: function {
                     :ast
                     :symtab
                     :ctx
-                    name: fnm.stringView
                     fid: t
                     op: iop
                     :buf
@@ -31903,7 +31907,6 @@ emitFnDeclsInOrder: function {
                         :ast
                         :symtab
                         :ctx
-                        name: nm2.stringView
                         :fid
                         op: (ast.nodes.get i: dm2.operation)
                         :buf
@@ -31914,7 +31917,6 @@ emitFnDeclsInOrder: function {
                         :ast
                         :symtab
                         :ctx
-                        name: nm2.stringView
                         :fid
                         op: (ast.nodes.get i: dm2.operation)
                         :buf
@@ -41371,7 +41373,6 @@ emitUnitFnFwdDecls: function {
         }
         bfdOp: ast.nodes.get i: bfd.operation
         if (ztypecheck.isFunctionDefWithBody o: bfdOp).not then continue
-        fdn: zast.nameTextAt :ast ref: bfd.name
         fdid: unitMemberTid :ast :symtab :ctx :ownerTid nameId: bfd.name
         if fdid.isZero then continue
         if (isGenericFnTid :symtab tid: fdid) then {
@@ -41390,7 +41391,6 @@ emitUnitFnFwdDecls: function {
             :ast
             :symtab
             :ctx
-            name: fdn.stringView
             fid: fdid
             op: bfdOp
             :buf
@@ -42893,7 +42893,6 @@ emitMonoMethodAt: function {
         )
         return
     }
-    fn: regNameOf :symtab tid: fid
     # the whole method is the instance's (emitUnitMonoFn)
     symtab.typing.emitMono = monoId
     if declOnly then {
@@ -42901,7 +42900,6 @@ emitMonoMethodAt: function {
             :ast
             :symtab
             :ctx
-            name: fn.stringView
             :fid
             op: (ast.nodes.get i: opId)
             :buf
@@ -42914,7 +42912,6 @@ emitMonoMethodAt: function {
         :ast
         :symtab
         :ctx
-        name: fn.stringView
         :fid
         op: (ast.nodes.get i: opId)
         :buf
