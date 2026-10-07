@@ -39,6 +39,10 @@ settingNames: "sourceDir systemDir runtimeDir main target outputDir cCompiler cC
 # stringSettingCount -- how many of settingNames, from the first, take a string
 stringSettingCount: 11
 
+# listSettingNames -- the settings project.z gives as a data block of string
+# literals, space-separated
+listSettingNames: "sourceDirs"
+
 # ProjectFile -- what a project.z says, as read before the build. A string
 # setting the file leaves out is "", a switch it leaves out is false: both mean
 # "the driver's own default".
@@ -49,7 +53,14 @@ ProjectFile: class {
     # the first thing wrong with the file, rendered as a diagnostic; "" when it
     # read cleanly
     error: String
-    # the source root, relative to `dir`; "" for `dir` itself
+    # the source roots, each relative to `dir` ("" for `dir` itself), the first
+    # searched first
+    sourceDirs: List String
+    # whether the file gave `sourceDirs`: given and empty is no source root,
+    # left out is `dir` itself
+    sourceDirsGiven: bool
+    # the one source root `sourceDir` gives: the setting `sourceDirs` replaces,
+    # read while project files still spell it
     sourceDir: String
     # the stdlib directory, relative to `dir`
     systemDir: String
@@ -85,6 +96,8 @@ ProjectFile: class {
         return (meta.create
             dir: String
             error: String
+            sourceDirs: List String
+            sourceDirsGiven: false
             sourceDir: String
             systemDir: String
             runtimeDir: String
@@ -103,18 +116,53 @@ ProjectFile: class {
         )
     }
 
-    # sourceRoot -- the source root as a driver opens it: sourceDir under the
-    # project directory, or the project directory itself when it is unset
-    sourceRoot: function {this: this.view} out String is {
-        if this.sourceDir.length == 0 then return this.dir.copy
-        return (inProject dir: this.dir.stringView rel: this.sourceDir.stringView)
+    # sourceRoots -- the source roots as a driver opens them, the first searched
+    # first: each of `sourceDirs` under the project directory ("" is the
+    # directory itself), `sourceDir` when that is what the file gave, and the
+    # project directory alone when it gave neither
+    sourceRoots: function {this: this.view} out List String is {
+        r: List String
+        if this.sourceDirsGiven then {
+            for each d: this.sourceDirs loop r.append from: (this.rootAt rel: d.stringView)
+            return r
+        }
+        r.append from: (this.rootAt rel: this.sourceDir.stringView)
+        return r
     }
 
-    # holdsSource -- whether the file at `path` lies under the project's
-    # source root
+    # rootAt -- one source root, relative to the project directory, as a driver
+    # opens it; "" is the project directory itself
+    rootAt: function {this: this.view rel: StringView} out String is {
+        if rel.length == 0 then return this.dir.copy
+        return (inProject dir: this.dir.stringView :rel)
+    }
+
+    # rootHolding -- the source root the file at `path` lies under, "" when it
+    # lies under none
+    rootHolding: function {this: this.view path: StringView} out String is {
+        for each sr: this.sourceRoots loop {
+            if (relativeTo base: sr.stringView p: path).length > 0 then return sr.copy
+        }
+        return ""
+    }
+
+    # sourceRootsFor -- the source roots, the one the file at `path` lies under
+    # first: what a file is checked against, its own root being the one its
+    # relpath is relative to
+    sourceRootsFor: function {this: this.view path: StringView} out List String is {
+        held: this.rootHolding :path
+        r: List String
+        if held.length > 0 then r.append from: held.copy
+        for each sr: this.sourceRoots loop {
+            if sr.stringView != held then r.append from: sr.copy
+        }
+        return r
+    }
+
+    # holdsSource -- whether the file at `path` lies under one of the project's
+    # source roots
     holdsSource: function {this: this.view path: StringView} out bool is {
-        sr: this.sourceRoot
-        return (relativeTo base: sr.stringView p: path).length > 0
+        return (this.rootHolding :path).length > 0
     }
 
     # found -- whether a project.z was found at all
@@ -163,6 +211,17 @@ ProjectFile: class {
             this.eager = value
         }
     }
+}
+
+# listSettingIndex -- where `name` is in listSettingNames, from 1; 0 when it
+# names no list setting
+listSettingIndex: function {name: StringView} out u64 is {
+    i: u64
+    for each s: (listSettingNames.split sep: " ") loop {
+        i = i + 1
+        if s == name then return i
+    }
+    return 0
 }
 
 # settingIndex -- where `name` is in settingNames, from 1; 0 when it names no
@@ -373,9 +432,13 @@ readSetting: function {
     ) case error then {
         return (parseProblem :ast row: v :shown)
     } else null
+    if (listSettingIndex name: nm.stringView) > 0 then {
+        return (readListSetting :ast :id :v :shown :into)
+    }
     k: settingIndex name: nm.stringView
     if k == 0 then {
-        names: settingNames.replace needle: " " replacement: ", "
+        every: "\{settingNames} \{listSettingNames}"
+        names: every.stringView.replace needle: " " replacement: ", "
         return (located
             :ast
             at: id
@@ -405,6 +468,38 @@ readSetting: function {
     why2: "'\{nm}' must be true or false: project.z is read before any unit loads"
     if (literalString :ast :v).some then why2 = "'\{nm}' takes true or false, not a string"
     return (located :ast at: id :shown msg: why2.take)
+}
+
+# readListSetting -- `sourceDirs: data { "src" "lib" } out StringView` into
+# `into`: a data block, possibly empty, of string literals, read before any unit
+# loads; the problem with it as a diagnostic, "" when there is none
+readListSetting: function {
+    ast: Ast.view
+    id: zast.nodeid
+    v: astnode.view
+    shown: StringView
+    into: ProjectFile
+} out String is {
+    why: "'sourceDirs' must be a data block of string literals -- `data { \"src\" } out StringView` -- since project.z is read before any unit loads".string
+    if v.datablock.not then return (located :ast at: id :shown msg: why.take)
+    dirs: List String
+    k: u64
+    for k < v.elements.count loop {
+        en: ast.nodes.get i: (zast.kidAt kids: ast.kids span: v.elements i: k)
+        k = k + 1
+        ev: Option.none String
+        if en.namedoperation then ev = literalString :ast v: (ast.nodes.get i: en.operation)
+        match (
+            ev
+        ) case some then {
+            dirs.append from: ev.take
+        } case none then {
+            return (located :ast at: id :shown msg: why.take)
+        }
+    }
+    into.sourceDirs = dirs.take
+    into.sourceDirsGiven = true
+    return ""
 }
 
 # literalString -- the text of a string literal with no interpolation, none for

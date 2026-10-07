@@ -465,9 +465,11 @@ Document: class {
 Server: class {
     # the open buffers by uri
     docs: (Map String V: Document)
-    # the src root of the project in hand: the document being checked or
-    # answered for (enterProjectOf)
+    # the src root of the project in hand that holds the document being checked
+    # or answered for (enterProjectOf)
     srcDir: String
+    # every src root of the project in hand, `srcDir` first
+    srcDirs: List String
     # the stdlib root of the project in hand
     systemDir: String
     # the session's src root (resolveRoots), for a document in no project
@@ -777,6 +779,7 @@ Server: class {
     # session's roots and a cache-directory `z`.
     enterProjectOf: function {:this path: StringView} is {
         this.srcDir = this.baseSrcDir.copy
+        this.srcDirs = List String
         this.systemDir = this.baseSystemDir.copy
         start: zcheck.dirname p: path
         if start.length == 0 then start = "."
@@ -786,17 +789,21 @@ Server: class {
             pf = zproject.ProjectFile.create
         }
         if pf.found then {
-            if this.srcExplicit.not then this.srcDir = pf.sourceRoot
+            if this.srcExplicit.not then {
+                # the document's own root first: its relpath, and the open
+                # buffers, are relative to it
+                this.srcDirs = pf.sourceRootsFor :path
+                if this.srcDirs.length > 0 then this.srcDir = (this.srcDirs.get i: 0).copy
+            }
             sysp: zproject.inProject dir: pf.dir.stringView rel: pf.systemDir.stringView
             if this.systemExplicit.not when sysp.length > 0 then {
                 this.systemDir = zcheck.resolveSystemDir flagVal: sysp.stringView
             }
         }
-        srcs: List String
-        srcs.append from: this.srcDir.copy
+        if this.srcDirs.length == 0 then this.srcDirs.append from: this.srcDir.copy
         un: zsource.unitNameOf :path
         facts: (zproject.BuildFacts.create
-            srcdirs: srcs
+            srcdirs: this.srcDirs
             systemdir: this.systemDir.stringView
             main: un.stringView
         )
@@ -1028,7 +1035,7 @@ Server: class {
         mu: zsource.unitNameOf path: topRel.stringView
         gk: zcheck.joinPath a: this.srcDir.stringView b: topRel.stringView
         r: (zcheck.check
-            srcdir: this.srcDir.stringView
+            srcdirs: this.srcDirs
             systemdir: this.systemDir.stringView
             mainUnit: mu.stringView
             overlays: ov
@@ -6183,6 +6190,7 @@ main: function is {
     srv: (Server
         docs: (Map String V: Document)
         srcDir: ""
+        srcDirs: List String
         systemDir: ""
         baseSrcDir: ""
         baseSystemDir: ""
