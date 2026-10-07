@@ -1431,7 +1431,7 @@ linkDeclTypeId: function {
 # path aliases, the null/never empty types, enums/generics in later slices).
 defTypetypeOf: function {
     defn: astnode.view
-    name: StringView
+    nameId: zast.nameid
 } out optionval ztypes.ztypetype is {
     match (
         defn
@@ -1449,8 +1449,12 @@ defTypetypeOf: function {
             # aliases, and an unclassified def resolves to tid 0 -- which is
             # why core's `null:`/`never:` re-exports never resolved and the
             # lookup chain's system probe had to answer for them.
-            if name == "null" then return (optionval.some ztypes.ztypetype.nullType)
-            if name == "never" then return (optionval.some ztypes.ztypetype.neverType)
+            if nameId == zast.wellKnown.slot.tyNull then {
+                return (optionval.some ztypes.ztypetype.nullType)
+            }
+            if nameId == zast.wellKnown.slot.tyNever then {
+                return (optionval.some ztypes.ztypetype.neverType)
+            }
             return (optionval.some ztypes.ztypetype.recordType)
         } case variantDef then {
             return (optionval.some ztypes.ztypetype.variantType)
@@ -1902,7 +1906,7 @@ resolveNamedTypeId: function {
     # the referencing node, for the generic-parameter record; 0 when none
     nid: zast.nodeid.zero
 } out ztypes.tid is {
-    if (zast.nameTextEq :ast ref: nameId s: "null") then {
+    if nameId == zast.wellKnown.slot.tyNull then {
         return (declareCanonicalType
             :st
             :scope
@@ -1913,7 +1917,7 @@ resolveNamedTypeId: function {
             typetype: ztypes.ztypetype.nullType
         )
     }
-    if (zast.nameTextEq :ast ref: nameId s: "never") then {
+    if nameId == zast.wellKnown.slot.tyNever then {
         return (declareCanonicalType
             :st
             :scope
@@ -4066,8 +4070,7 @@ mintMonoRefParts: function {
         if memberIdAt.isZero then return ztypes.tid.zero
         # backstop for a sized record whose size literal did not parse as a
         # decimal (the value-keyed trie path arms sized specs centrally)
-        isSized: (tn.stringView == "str") or (tn.stringView == "array")
-        if isSized then {
+        if (isSizedTemplate :ast :st tid: tplId) then {
             (mintCollectionChildren
                 :st
                 :ast
@@ -5849,33 +5852,33 @@ paramTypeBaseNameId: function {ast: Ast.view op: astnode.view} out zast.nameid i
 # ListView (stack struct + heap buffer). Set/Map monos are heap-allocated (no BORROW);
 # the native iterator views have no destructor (no BORROW); str/array are valtypes.
 isBorrowReftypeCollection: function {ast: Ast.view nameId: zast.nameid} out bool is {
-    if (zast.nameTextEq :ast ref: nameId s: "List") then return true
-    if (zast.nameTextEq :ast ref: nameId s: "ListRef") then return true
-    if (zast.nameTextEq :ast ref: nameId s: "ListVal") then return true
-    if (zast.nameTextEq :ast ref: nameId s: "ListView") then return true
-    if (zast.nameTextEq :ast ref: nameId s: "ListViewVal") then return true
+    if nameId == zast.wellKnown.slot.tyList then return true
+    if nameId == zast.wellKnown.slot.tyListRef then return true
+    if nameId == zast.wellKnown.slot.tyListVal then return true
+    if nameId == zast.wellKnown.slot.tyListView then return true
+    if nameId == zast.wellKnown.slot.tyListViewVal then return true
     # the id-keyed containers are stack structs too -- a header plus two heap
     # arrays, created BY VALUE -- so they take the same borrow default
     return (
-        (zast.nameTextEq :ast ref: nameId s: "IdMapR") or
+        (nameId == zast.wellKnown.slot.tyIdMapR) or
         (zast.nameTextEq
             :ast
             ref: nameId
             s: "IdMapV"
         ) or
-        (zast.nameTextEq :ast ref: nameId s: "IdSet")
+        (nameId == zast.wellKnown.slot.tyIdSet)
     )
 }
 
 # isBorrowNativeReftypeId / isNativeValueViewId -- the two native-shape
 # predicates asked of a name id: the text is compared in place, never copied.
-isBorrowNativeReftypeId: function {ast: Ast.view nameId: zast.nameid} out bool is {
-    return (zast.nameTextEq :ast ref: nameId s: "String")
+isBorrowNativeReftypeId: function {nameId: zast.nameid} out bool is {
+    return nameId == zast.wellKnown.slot.tyString
 }
 
 # isNativeValueViewId -- the native value view (`StringView`), asked of a name id.
-isNativeValueViewId: function {ast: Ast.view nameId: zast.nameid} out bool is {
-    return (zast.nameTextEq :ast ref: nameId s: "StringView")
+isNativeValueViewId: function {nameId: zast.nameid} out bool is {
+    return nameId == zast.wellKnown.slot.tyStringView
 }
 
 # isBorrowNativeReftype -- true for native heap-owning reftypes (currently String)
@@ -7168,7 +7171,7 @@ paramIsBorrowReftype: function {
                 isref = rgo
             } case none then null
         }
-        if (isNativeValueViewId :ast nameId: (zast.poolFind pool: ast.names text: thisName)) then {
+        if (isNativeValueViewId nameId: (zast.poolFind pool: ast.names text: thisName)) then {
             isref = false
         }
     } else {
@@ -7179,8 +7182,8 @@ paramIsBorrowReftype: function {
             isref = nameIsInUnitReftypeId :st :ast :unitDecl nameId: tnId
             tdu: (definingSiteForId :st :scope :ast :unitDecl nameId: tnId).defUnit
             inSys: tdu == st.typing.systemUnitRoot
-            if (isBorrowNativeReftypeId :ast nameId: tnId) when inSys then isref = true
-            if (isNativeValueViewId :ast nameId: tnId) when inSys then isref = false
+            if (isBorrowNativeReftypeId nameId: tnId) when inSys then isref = true
+            if (isNativeValueViewId nameId: tnId) when inSys then isref = false
         }
     }
     return isref
@@ -7925,11 +7928,8 @@ asDeclaresMemberId: function {
         h18x9 = h18x9 + 1
         am: ast.nodes.get i: amId
         if am.namedoperation when am.name == nameId then {
-            vn: (zast.nameTextAt
-                :ast
-                ref: (atomNameId :ast n: (ast.nodes.get i: am.operation))
-            )
-            if vn.stringView != "null" then result = true
+            vn: atomNameId :ast n: (ast.nodes.get i: am.operation)
+            if vn != zast.wellKnown.slot.tyNull then result = true
         }
     }
     return result
@@ -7951,11 +7951,8 @@ memberNullOptOut: function {
         if am.namedoperation then {
             mn: zast.nameTextAt :ast ref: am.name
             if mn.stringView == member then {
-                vn: (zast.nameTextAt
-                    :ast
-                    ref: (atomNameId :ast n: (ast.nodes.get i: am.operation))
-                )
-                if vn.stringView == "null" then result = true
+                vn: atomNameId :ast n: (ast.nodes.get i: am.operation)
+                if vn == zast.wellKnown.slot.tyNull then result = true
             }
         }
     }
@@ -8010,11 +8007,8 @@ eqNullOptOut: function {ast: Ast.view asItems: zast.kidspan} out bool is {
             mn: zast.nameTextAt :ast ref: am.name
             isEqNe: (mn.stringView == "==") or (mn.stringView == "!=")
             if isEqNe then {
-                vn: (zast.nameTextAt
-                    :ast
-                    ref: (atomNameId :ast n: (ast.nodes.get i: am.operation))
-                )
-                if vn.stringView == "null" then result = true
+                vn: atomNameId :ast n: (ast.nodes.get i: am.operation)
+                if vn == zast.wellKnown.slot.tyNull then result = true
             }
         }
     }
@@ -8039,7 +8033,7 @@ attachAsConstant: function {
     notValue: false
     op: ast.nodes.get i: item.operation
     notValue = (isBareGenericParam :ast :op) or (isLabelValue :op)
-    if notValue.not then notValue = isNullName :st :ast nameId: (bareAtomNameId n: op)
+    if notValue.not then notValue = isNullName :st nameId: (bareAtomNameId n: op)
     if notValue then return
     md: st.typing.declMemberIdOf parentTypeId: parentId nameId: item.name
     if md.isZero then return
@@ -8163,10 +8157,9 @@ reportAsMemberNotConstant: function {
 # isNullName -- the name is `null`'s own, compared by id with the name the null
 # type was registered under: an opt-out's value (`create: null`) resolves to
 # nothing worth demanding.
-isNullName: function {st: zenv.ZSymbolTable.view ast: Ast.view nameId: zast.nameid} out bool is {
+isNullName: function {st: zenv.ZSymbolTable.view nameId: zast.nameid} out bool is {
     if nameId.isZero or st.typing.nullTypeId.isZero then return false
-    nn: st.reg.nameViewOf tid: st.typing.nullTypeId
-    return (zast.poolFind pool: ast.names text: nn) == nameId
+    return nameId == zast.wellKnown.slot.tyNull
 }
 
 # attachInterfaceAsConstants -- a protocol's or a facet's `as` constants. An
@@ -9142,7 +9135,7 @@ asItemTypeNameRefused: function {
     if vnId.isZero then return
     if (isNumericLiteralNameAt :ast ref: vnId) then return
     # `create: null` opts out of a member; null is no type an item declares
-    if (isNullName :st :ast nameId: vnId) then return
+    if (isNullName :st nameId: vnId) then return
     tto: (walkLookupTyperefById :st :scope :ast :unitDecl baseId: vnId).or d: ztypes.tid.zero
     if tto.isZero then return
     asItemNamesPlainType :st :ast :parentId :item target: tto
@@ -9221,9 +9214,9 @@ attachMarkers: function {
             # spell `u8.tag`. A program declaring no sum type never names it,
             # so it resolves when something does -- forceMemberDecl.
             lazyTag: false
-            if st.typing.eagerAll.not when cnm.stringView == "tag" then {
-                mlbT: zast.nameTextAt :ast ref: mmName
-                if mlbT.stringView == "tag" then lazyTag = true
+            if st.typing.eagerAll.not when mmName == zast.wellKnown.slot.wkTag then {
+                opName: atomNameId :ast n: (ast.nodes.get i: mmOp)
+                if opName == zast.wellKnown.slot.wkTag then lazyTag = true
             }
             if (isNumericLiteralName name: cnm.stringView).not when lazyTag.not then {
                 (recordTyperef
@@ -11850,9 +11843,8 @@ synthVariantEqHash: function {
 sumMethodNameRejected: function {
     st: zenv.ZSymbolTable
     am: argref
-    mname: StringView
 } out bool is {
-    if mname == "tag" then {
+    if am.name == zast.wellKnown.slot.wkTag then {
         mr: "'tag' is a reserved member name".string
         (addResolveErrorH
             :st
@@ -11906,7 +11898,6 @@ attachVariantMethods: function {
                 if (sumMethodNameRejected
                     :st
                     :am
-                    mname: mname.stringView
                 ).not then {
                     (st.typing.setMemberType
                         parentTypeId: variantTid
@@ -12131,12 +12122,8 @@ resolveVariant: function {
             armCountV = armCountV + 1
             if armCountV == 1 then firstArmV = fm.name
             if armCountV == 2 then secondArmV = fm.name
-            anV: (zast.nameTextAt
-                :ast
-                ref: (atomNameId :ast n: (ast.nodes.get i: fm.operation))
-            )
-            if anV.stringView != "null" then allNullV = false
-            anV.drop
+            anV: atomNameId :ast n: (ast.nodes.get i: fm.operation)
+            if anV != zast.wellKnown.slot.tyNull then allNullV = false
             if fm.name == zast.wellKnown.slot.wkTag then {
                 mt: "'tag' is a reserved member name".string
                 (addResolveErrorH
@@ -12486,8 +12473,7 @@ unionCustomTagOfArm: function {
     uid: ztypes.tid
     am: argref
 } out optionval ztypes.tid is {
-    nm: zast.nameTextCopy :ast ref: am.name
-    if nm.stringView == "tag" then {
+    if am.name == zast.wellKnown.slot.wkTag then {
         pn: dottedParentName :ast n: (ast.nodes.get i: am.operation)
         if pn.length != 0 then {
             rr: walkLookupTyperef :st :scope :ast :unitDecl base: pn.stringView
@@ -12728,8 +12714,8 @@ attachUnionArm: function {
     isBoxCall: false
     acr: callRefAt :ast nid: armOpId
     if acr.nid.isZero.not then {
-        bxh: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: acr.callable))
-        isBoxCall = bxh.stringView == "Box"
+        calleeName: atomNameId :ast n: (ast.nodes.get i: acr.callable)
+        isBoxCall = calleeName == zast.wellKnown.slot.tyBox
     }
     if isBoxCall then {
         bxt: (walkLookupTyperef :st :scope :ast :unitDecl base: "Box").or d: ztypes.tid.zero
@@ -12842,7 +12828,6 @@ attachUnionMethods: function {
                 if (sumMethodNameRejected
                     :st
                     :am
-                    mname: mname.stringView
                 ).not then {
                     (st.typing.setMemberType
                         parentTypeId: uid
@@ -12949,11 +12934,8 @@ resolveUnion: function {
             armCountU = armCountU + 1
             if armCountU == 1 then firstArmU = fm.name
             if armCountU == 2 then secondArmU = fm.name
-            anU: (zast.nameTextCopy
-                :ast
-                ref: (atomNameId :ast n: (ast.nodes.get i: fm.operation))
-            )
-            if anU.stringView != "null" then allNull = false
+            anU: atomNameId :ast n: (ast.nodes.get i: fm.operation)
+            if anU != zast.wellKnown.slot.tyNull then allNull = false
             armBadU: (refuseStringArmPayload
                 :st
                 :ast
@@ -13039,29 +13021,29 @@ fieldTypeNeedsCleanup: function {
     isBorrowed: bool
 } out bool is {
     if isBorrowed then return true
-    if (zast.nameTextEq :ast ref: nameId s: "String") then return true
-    if (zast.nameTextEq :ast ref: nameId s: "List") then return true
-    if (zast.nameTextEq :ast ref: nameId s: "ListRef") then return true
-    if (zast.nameTextEq :ast ref: nameId s: "ListVal") then return true
-    if (zast.nameTextEq :ast ref: nameId s: "Map") then return true
-    if (zast.nameTextEq :ast ref: nameId s: "MapRR") then return true
-    if (zast.nameTextEq :ast ref: nameId s: "MapRV") then return true
-    if (zast.nameTextEq :ast ref: nameId s: "MapVR") then return true
-    if (zast.nameTextEq :ast ref: nameId s: "MapVV") then return true
-    if (zast.nameTextEq :ast ref: nameId s: "Set") then return true
-    if (zast.nameTextEq :ast ref: nameId s: "SetRef") then return true
-    if (zast.nameTextEq :ast ref: nameId s: "SetVal") then return true
+    if nameId == zast.wellKnown.slot.tyString then return true
+    if nameId == zast.wellKnown.slot.tyList then return true
+    if nameId == zast.wellKnown.slot.tyListRef then return true
+    if nameId == zast.wellKnown.slot.tyListVal then return true
+    if nameId == zast.wellKnown.slot.tyMap then return true
+    if nameId == zast.wellKnown.slot.tyMapRR then return true
+    if nameId == zast.wellKnown.slot.tyMapRV then return true
+    if nameId == zast.wellKnown.slot.tyMapVR then return true
+    if nameId == zast.wellKnown.slot.tyMapVV then return true
+    if nameId == zast.wellKnown.slot.tySet then return true
+    if nameId == zast.wellKnown.slot.tySetRef then return true
+    if nameId == zast.wellKnown.slot.tySetVal then return true
     # the id-keyed containers own two heap arrays each. A Map field is a heap
     # POINTER whose destroy the holder calls; these are stack structs, so the
     # holder must free them in place -- and without a cleanup mark the holder
     # gets no destructor at all and the arrays leak.
-    if (zast.nameTextEq :ast ref: nameId s: "IdMapR") then return true
-    if (zast.nameTextEq :ast ref: nameId s: "IdMapV") then return true
-    if (zast.nameTextEq :ast ref: nameId s: "IdSet") then return true
-    if (zast.nameTextEq :ast ref: nameId s: "Option") then return true
-    if (zast.nameTextEq :ast ref: nameId s: "Result") then return true
+    if nameId == zast.wellKnown.slot.tyIdMapR then return true
+    if nameId == zast.wellKnown.slot.tyIdMapV then return true
+    if nameId == zast.wellKnown.slot.tyIdSet then return true
+    if nameId == zast.wellKnown.slot.tyOption then return true
+    if nameId == zast.wellKnown.slot.tyResult then return true
     # a Box is the heap cell it points at: the holder frees it
-    if (zast.nameTextEq :ast ref: nameId s: "Box") then return true
+    if nameId == zast.wellKnown.slot.tyBox then return true
     duo8: (definingSiteForId :st :scope :ast :unitDecl :nameId).defUnit
     if duo8.isZero.not then {
         tto8: optionval.none ztypes.ztypetype
@@ -14463,7 +14445,6 @@ finishClassDef: function {
         :isgen
         :cnode
     ) then needsDtor = true
-    if defName == "String" then needsDtor = true
     if needsDtor then {
         st.reg.setNeedsDestructor typeId: cid
     }
@@ -14485,6 +14466,8 @@ resolveClass: function {
     unitDecl: ztypes.declid
     scope: ztypes.declid
     defName: StringView
+    # the class's name, interned
+    nameId: zast.nameid
     cnode: objref
 } is {
     cid: (declareCanonicalType
@@ -14506,7 +14489,8 @@ resolveClass: function {
     pvGrants_ccid: ListVal zast.nameid
     scanVisibility :st :ast onode: cnode excl: pvExcl_ccid grants: pvGrants_ccid
     st.reg.setValtype typeId: cid value: false
-    needsDtor: false
+    # the system's String owns its bytes, whatever its native layout declares
+    needsDtor: (unitDecl == st.typing.systemUnitRoot) and (nameId == zast.wellKnown.slot.tyString)
     isgen: false
     onIsgen: ast.nodes.get i: cnode.nid
     if onIsgen.objectdef then {
@@ -14717,6 +14701,8 @@ resolveProtocol: function {
     unitDecl: ztypes.declid
     scope: ztypes.declid
     defName: StringView
+    # the protocol's name, interned
+    nameId: zast.nameid
     fnode: objref
 } is {
     pid: (declareCanonicalType
@@ -14748,7 +14734,7 @@ resolveProtocol: function {
     # to the enclosing String -- mirror that for the system Text protocol.
     specThisStr: defName.string
     dropThis: true
-    if unitDecl == st.typing.systemUnitRoot when defName == "Text" then {
+    if unitDecl == st.typing.systemUnitRoot when nameId == zast.wellKnown.slot.tyText then {
         specThisStr = "String"
         dropThis = false
     }
@@ -15079,11 +15065,7 @@ declDefTypetype: function {
     }
     nop: ast.nodes.get i: dnode
     if nop.namedoperation then {
-        nmNode: zast.poolTextAt pool: ast.names ref: dname
-        return (defTypetypeOf
-            defn: (ast.nodes.get i: nop.operation)
-            name: nmNode.stringView
-        )
+        return (defTypetypeOf defn: (ast.nodes.get i: nop.operation) nameId: dname)
     }
     return (optionval.none ztypes.ztypetype)
 }
@@ -16673,19 +16655,19 @@ resolveObjectDef: function {
     } case unionDef then {
         resolveUnion :st scope: rf :ast :unitDecl :defName vnode: defn
     } case classDef then {
-        resolveClass :st scope: rf :ast :unitDecl :defName cnode: defn
+        resolveClass :st scope: rf :ast :unitDecl :defName :nameId cnode: defn
     } case generatorDef then {
-        resolveClass :st scope: rf :ast :unitDecl :defName cnode: defn
+        resolveClass :st scope: rf :ast :unitDecl :defName :nameId cnode: defn
     } case typedefDef then {
         if (typedefDefIsReftype :st :ast :unitDecl :defName) then {
-            resolveClass :st scope: rf :ast :unitDecl :defName cnode: defn
+            resolveClass :st scope: rf :ast :unitDecl :defName :nameId cnode: defn
         } else {
             resolveRecord :st scope: rf :ast :unitDecl :defName rnode: defn
         }
     } case facetDef then {
         resolveFacet :st scope: rf :ast :unitDecl :defName fnode: defn
     } case protocolDef then {
-        resolveProtocol :st scope: rf :ast :unitDecl :defName fnode: defn
+        resolveProtocol :st scope: rf :ast :unitDecl :defName :nameId fnode: defn
     } else null
     objrid: (resolvedByIds
         :st
@@ -22131,6 +22113,14 @@ mintMonoMember: function {
     return monoNeedsDtor
 }
 
+# isSizedTemplate -- `tid` is one of the stdlib's SIZED record templates, `str`
+# or `array`, whose instances are keyed by a numeric value parameter. Never
+# resolves either: `tid` exists, so the template it could be does too.
+isSizedTemplate: function {ast: Ast.view st: zenv.ZSymbolTable tid: ztypes.tid} out bool is {
+    if tid == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyStr) then return true
+    return tid == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyArray)
+}
+
 # isBoxTemplate -- `tid` is the system Box template: a class named `Box`
 # declaring no members. Compared by name, never resolved: resolving Box would
 # mint its tid earlier than before and renumber every later type id.
@@ -22160,10 +22150,7 @@ mintMonoRecordShape: function {
         ((st.reg.isNativeOf tid: templateId).not or (isBoxTemplate :st tid: templateId))
     )
     if (tt == ztypes.ztypetype.recordType) or isUserClass then {
-        isSized: (
-            (templateId == (stdTid :ast :st wk: zast.wellKnown.slot.tyStr)) or
-            (templateId == (stdTid :ast :st wk: zast.wellKnown.slot.tyArray))
-        )
+        isSized: isSizedTemplate :ast :st tid: templateId
         # a `create` the TEMPLATE writes was cloned onto the instance; a record
         # template's synthesised one names the template's own field types and
         # is replaced
@@ -25846,8 +25833,6 @@ mintCollectionChildren: function {
     if isColl.not then return
     listTid: stdTid :ast :st wk: zast.wellKnown.slot.tyListRef
     listValTid: stdTid :ast :st wk: zast.wellKnown.slot.tyListVal
-    strTid: stdTid :ast :st wk: zast.wellKnown.slot.tyStr
-    arrayTid: stdTid :ast :st wk: zast.wellKnown.slot.tyArray
     # every List child comes from the produced template methods cloned per
     # instance (composite returns healed by respecialize)
     isListTpl: (templateId == listTid) or (templateId == listValTid)
@@ -25860,12 +25845,7 @@ mintCollectionChildren: function {
     bk0: monoId
     st.typing.collectionChildrenBuilt.add item: bk0
     mintCollectionCreate :ast :st :monoId :templateId :isIter
-    isSized: (
-        (templateId == strTid) or
-        (
-            templateId == arrayTid
-        )
-    )
+    isSized: isSizedTemplate :ast :st tid: templateId
     # str/array are PERMANENT materializer arms: sized RECORDs are keyed by
     # a numeric value parameter that rides the trie as a literal VALUE key
     # (genericArgIsValue marks the ordinal); it never enters idSubs, so
@@ -27367,8 +27347,7 @@ genericTypeConstruction: function {
     if mid.isZero then return ztypes.tid.zero
     noteMonoSite :st mono: mid :call :unitDecl
     reportTypedefClash :ast :st tid: mid at: call.nid lineno: call.lineno colno: call.colno
-    isSized: (tname.stringView == "str") or (tname.stringView == "array")
-    if isSized then {
+    if (isSizedTemplate :ast :st tid: tplId) then {
         (mintCollectionChildren
             :st
             :ast
@@ -30446,7 +30425,7 @@ checkDataBlockMember: function {
     }
     # `.array` on a data block copies the elements into the sized array
     # instance (array_{elem}_{count}), minting it on first access.
-    if (zast.nameTextEq :ast ref: cnId s: "array") when (
+    if cnId == zast.wellKnown.slot.tyArray when (
         (st.reg.typetypeOf typeId: bt) == ztypes.ztypetype.dataType
     ) then {
         elo: st.reg.dataElemTypeOf tid: bt
@@ -30595,10 +30574,7 @@ checkArrayIndexMember: function {
         bga8: ztypes.tid
         bgo8: st.reg.genericOriginOf tid: bt
         if bgo8.isZero.not then bga8 = bgo8
-        if bga8.isZero.not then {
-            gn8: st.reg.nameOf tid: bga8
-            if gn8.stringView == "array" then isArr = true
-        }
+        if bga8.isZero.not then isArr = bga8 == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyArray)
         if isArr then {
             forceMemberOf :st :ast parentTypeId: bt nameId: zast.wellKnown.slot.wkGet
             go8: st.typing.declChildOfId parentTypeId: bt nameId: zast.wellKnown.slot.wkGet
@@ -31729,7 +31705,7 @@ checkMarkerMember: function {
     # `.str` on String/StringView/str bases is the sized-conversion form:
     # the path resolves to the str TEMPLATE (unstamped -- the call check
     # mints the sized instance and stamps only the Call node).
-    if (zast.nameTextEq :ast ref: cnId s: "str") then {
+    if cnId == zast.wellKnown.slot.tyStr then {
         isStrBase: (
             (bt == (stdTid :ast :st wk: zast.wellKnown.slot.tyString)) or
             (bt == (stdTid :ast :st wk: zast.wellKnown.slot.tyStringView))
@@ -47942,7 +47918,7 @@ refuseMetaMember: function {
     if bId.isZero or (zast.nameTextEq :ast ref: bId s: "meta").not then return false
     if (st.lookupVarId nameId: bId).some then return false
     mId: atomNameId :ast n: (ast.nodes.get i: pn.child)
-    if mId.isZero or (zast.nameTextEq :ast ref: mId s: "create") then return false
+    if mId.isZero or (mId == zast.wellKnown.slot.wkCreate) then return false
     mn: zast.nameTextAt :ast ref: mId
     (addError
         :st
@@ -57526,7 +57502,7 @@ typeMemberHoldsConstant: function {
             op: ast.nodes.get i: item.operation
             if op.functiondef then return false
             if (isBareGenericParam :ast :op) or (isLabelValue :op) then return false
-            return (isNullName :st :ast nameId: (bareAtomNameId n: op)).not
+            return (isNullName :st nameId: (bareAtomNameId n: op)).not
         }
     }
     return false

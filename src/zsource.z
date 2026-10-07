@@ -735,33 +735,32 @@ isElseIfWrap: function {ast: Ast.view n: astnode.view} out bool is {
 }
 
 # primaryGenericParam -- the elidable first parameter name of a built-in template,
-# or "" when `name` is not such a template. Index 0 only.
+# or "" when `nameId` names no such template. Index 0 only.
 #
 # The names are literals because this unit is the front end and has no symbol
 # table to ask a template for its own. That makes the table the one place a
 # parameter rename can go stale silently: a wrong entry stops L003 firing and
 # nothing else here goes red. tests/fixtures/lsp_cases/lint_elidelabel pins one
 # entry from each of the three groups so it cannot.
-primaryGenericParam: function {name: StringView} out String is {
-    if name == "List" then return "T"
-    if name == "ListRef" then return "T"
-    if name == "ListVal" then return "t"
-    if name == "ListView" then return "T"
-    if name == "ListViewVal" then return "t"
-    if name == "Set" then return "K"
-    if name == "SetRef" then return "K"
-    if name == "SetVal" then return "k"
-    if name == "array" then return "t"
-    if name == "Map" then return "K"
-    if name == "MapRR" then return "K"
-    if name == "MapRV" then return "K"
-    if name == "MapVR" then return "k"
-    if name == "MapVV" then return "k"
-    if name == "option" then return "t"
-    if name == "optionval" then return "t"
-    if name == "Option" then return "T"
-    if name == "OptionView" then return "T"
-    if name == "Result" then return "T"
+primaryGenericParam: function {nameId: zast.nameid} out StringView is {
+    if nameId == zast.wellKnown.slot.tyList then return "T"
+    if nameId == zast.wellKnown.slot.tyListRef then return "T"
+    if nameId == zast.wellKnown.slot.tyListVal then return "t"
+    if nameId == zast.wellKnown.slot.tyListView then return "T"
+    if nameId == zast.wellKnown.slot.tyListViewVal then return "t"
+    if nameId == zast.wellKnown.slot.tySet then return "K"
+    if nameId == zast.wellKnown.slot.tySetRef then return "K"
+    if nameId == zast.wellKnown.slot.tySetVal then return "k"
+    if nameId == zast.wellKnown.slot.tyArray then return "t"
+    if nameId == zast.wellKnown.slot.tyMap then return "K"
+    if nameId == zast.wellKnown.slot.tyMapRR then return "K"
+    if nameId == zast.wellKnown.slot.tyMapRV then return "K"
+    if nameId == zast.wellKnown.slot.tyMapVR then return "k"
+    if nameId == zast.wellKnown.slot.tyMapVV then return "k"
+    if nameId == zast.wellKnown.slot.tyOptionval then return "t"
+    if nameId == zast.wellKnown.slot.tyOption then return "T"
+    if nameId == zast.wellKnown.slot.tyOptionView then return "T"
+    if nameId == zast.wellKnown.slot.tyResult then return "T"
     return ""
 }
 
@@ -1389,9 +1388,7 @@ Analysis: class {
     # checkElide -- L003 a built-in template call whose first argument carries its
     # primary parameter name. Receives the narrowed callable + argument list.
     checkElide: function {:this ast: Ast.view callable: astnode.view arguments: zast.kidspan} is {
-        cn: atomName :ast n: callable
-        if cn.length == 0 then return
-        primary: primaryGenericParam name: cn.stringView
+        primary: primaryGenericParam nameId: (atomNameIdOf n: callable)
         if primary.length == 0 then return
         idx: u64
         h1x9: u64
@@ -1402,7 +1399,7 @@ Analysis: class {
                 (this.checkElideFirst
                     :ast
                     arg: (ast.nodes.get i: aId)
-                    primary: primary.stringView
+                    :primary
                 )
             }
             idx = idx + 1
@@ -3031,7 +3028,9 @@ Analysis: class {
             ptext: bareZeroParentText :ast n: (ast.nodes.get i: value.parent)
             if ptext.length == 0 then return
             isStr: ptext.stringView == "\"\""
-            isStrRepl: repl.stringView == "String"
+            # `.string` is the one member whose bare type is not its own spelling
+            childName: atomNameIdOf n: (ast.nodes.get i: value.child)
+            isStrRepl: childName == zast.wellKnown.slot.wkString
             if isStr when isStrRepl.not then return
             if isStr.not when isStrRepl then return
             pin: nodeInfoOf n: (ast.nodes.get i: value.parent)
