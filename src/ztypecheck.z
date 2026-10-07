@@ -20977,14 +20977,6 @@ isReturnCallKind: function {o: optionval zast.callkind} out bool is {
     }
 }
 
-# printableNumericName -- the numeric/bool scalar names the emitter's
-# interp formatter accepts by name (shadow or spec-scoped instances carry
-# these names with non-builtin ids).
-printableNumericName: function {name: StringView} out bool is {
-    if (isNumericTypeName :name) then return true
-    return name == "bool"
-}
-
 # printableInterpTid -- an interpolated part must be a value the string
 # machinery can splice: a numeric scalar, bool, a declared tag, String or
 # StringView (directly, via typedef, or a str-origin mono/port). Unstamped
@@ -21010,10 +21002,6 @@ printableInterpTid: function {
     tt: st.reg.typetypeOf typeId: t
     if tt == ztypes.ztypetype.genericParam then return true
     if tt == ztypes.ztypetype.tagType then return true
-    tn: st.reg.nameOf tid: t
-    if (printableNumericName name: tn.stringView) then return true
-    if tn.stringView == "String" then return true
-    if tn.stringView == "StringView" then return true
     strO: builtinTidT :st scope: st.curScope :ast base: "str"
     go: st.reg.genericOriginOf tid: t
     if strO.isZero.not when go == strO then return true
@@ -29079,7 +29067,6 @@ reportUnknownMember: function {
     if (memberStrictType :st :bt) then {
         # demand-order safety: walk the type's methods once and
         # re-probe before declaring the member unknown
-        btnMm0: st.reg.nameOf tid: bt
         walkDefinitionById :st :ast tid: bt
         forceMemberOf :st :ast parentTypeId: bt nameId: cnId
         moMm: st.typing.declChildOfId parentTypeId: bt nameId: cnId
@@ -29110,10 +29097,12 @@ reportUnknownMember: function {
         # conversion; the identity form (x.T where x is already T) is
         # not a declared child but is a valid (redundant) cast.
         if stillMiss then {
+            # the base by ID, the builtin itself or a literal type: a user type
+            # spelled like a scalar is a type of its own and converts to nothing
+            baseNum: (
+                (isNumericTid :st scope: st.curScope :ast tid: bt) or (isLiteralTypeId :st tid: bt)
+            )
             cn: zast.nameTextAt :ast ref: cnId
-            # the literal types by ID: the tid is in hand here, and their
-            # spellings now name declared types like any other
-            baseNum: (isNumericTypeName name: btnMm0.stringView) or (isLiteralTypeId :st tid: bt)
             if (isNumericTypeName name: cn.stringView) when baseNum then stillMiss = false
         }
         if stillMiss then {
