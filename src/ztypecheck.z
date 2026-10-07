@@ -6488,7 +6488,7 @@ registerValueParam: function {
             fname: pnmA.stringView
             dm: pm
         )
-        recordFoldedScalarDefault :st :ast what: "parameter" ownerTid: fid dm: pm
+        recordFoldedScalarDefault :st :ast ownerTid: fid dm: pm
     }
     if (isNumericLiteralNameAt :ast ref: ptn) then {
         refuseWideDefault :st :ast nid: pm.operation
@@ -11005,7 +11005,7 @@ attachDeclaredField: function {
         }
     }
     recordFoldedArmDefault :st :ast what: "field" ownerTid: rid :fname dm: fm
-    recordFoldedScalarDefault :st :ast what: "field" ownerTid: rid dm: fm
+    recordFoldedScalarDefault :st :ast ownerTid: rid dm: fm
     if dcn1Id.isZero.not when (isStripMarkerId nameId: dcn1Id) then null else {
         if dcn1Id.isZero.not then {
             rdk3: nodeId n: (ast.nodes.get i: fm.operation)
@@ -13320,8 +13320,9 @@ armDefaultLeaf: function {
 }
 
 # pathNamesTypeConstant -- a path in declaration position that names an `as`
-# constant of a type, or a constant of a unit (`n: cfg.LIMIT`, `n: ids.did.zero`,
-# `n: zast.nodeid.zero`): a value, where any other path there is a type. The
+# constant of a type, a constant of a unit (`n: cfg.LIMIT`, `n: ids.did.zero`,
+# `n: zast.nodeid.zero`) or an element of a data block (`v: verbs.run`): a value,
+# where any other path there is a type. The
 # qualifier is followed through units and aliases (`did: ids.did`, then
 # `n: did.zero`), as a read of the same path in an expression is. Read off the
 # declarations, so nothing resolves to answer.
@@ -13343,6 +13344,8 @@ pathNamesTypeConstant: function {
     if td.isZero.not when (st.typing.decls.get i: td).kind.unitDecl then {
         return (unitMemberHoldsValue :st :ast unitDecl: td nameId: leafId)
     }
+    # an element of a data block, or its length
+    if td.isZero.not when (st.typing.decls.get i: td).kind.dataDecl then return true
     if (declIsType :st declId: td).not then return false
     md: st.typing.declFindChild parentDeclId: td nameId: leafId
     if md.isZero then return false
@@ -13403,14 +13406,14 @@ valueStampsTyperef: function {
 }
 
 # valueDeclares -- a field or parameter declaration whose value, when it folds,
-# declares the member's type: a bare name (`n: LIMIT`, `p: false`), an operator
-# (`n: 2 * 3`) or a compile-time `if` or `match`. A path is a TYPE in declaration position
+# declares the member's type: a bare name (`n: LIMIT`, `p: false`), a string
+# (`s: "x"`), an operator (`n: 2 * 3`) or a compile-time `if` or `match`. A path is a TYPE in declaration position
 # (`zast.astnode.view`), and its value forms -- a suffixed literal,
 # an arm -- have paths of their own.
 valueDeclares: function {ast: Ast.view node: zast.nodeid} out bool is {
     n: ast.nodes.get i: node
     if (bareAtomNameId :n).isZero.not then return true
-    if n.ifexpr or n.caseexpr then return true
+    if n.atomstring or n.ifexpr or n.caseexpr then return true
     if (convertsExpression :ast :node) then return true
     return (zast.infixPartsOf :ast :n).found
 }
@@ -13461,15 +13464,13 @@ refuseUnfoldedConversion: function {
 
 # recordFoldedScalarDefault -- record the default a declaration's folded value
 # is, when that value is a compile-time SCALAR written as a name or an
-# expression (`n: LIMIT`, `n: 2 * 3`, `n: CAP + 1`). A default is re-emitted
-# at every call and construction, so it must stay a scalar: a number or a bool
-# is one, and a string -- literal or constant -- is refused as a string
-# literal is. A literal and an arm keep their own kinds of default.
+# expression (`n: LIMIT`, `n: 2 * 3`, `n: CAP + 1`) or a string that folds (a
+# literal, a unit string constant, a data element): a StringView of static
+# memory, re-emitted at every call and construction as its `_zcsN`. A literal
+# number and an arm keep their own kinds of default.
 recordFoldedScalarDefault: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
-    # the noun to report under: `field` or `parameter`
-    what: StringView
     # the owner the member hangs off
     ownerTid: ztypes.tid
     # the member's declaration
@@ -13482,8 +13483,6 @@ recordFoldedScalarDefault: function {
         nameId: dm.name
     )
     cv: constValueOfDecl :st :ast declId: fdc
-    if cv.kind.svalKind then reportStringConstantDefault :st :ast :what :dm
-    # a refused string keeps its default, so the member is not required as well
     if cv.kind.ivalKind or cv.kind.fvalKind or cv.kind.svalKind then {
         (st.typing.declSetDefaultId
             parentTypeId: ownerTid
@@ -13491,29 +13490,6 @@ recordFoldedScalarDefault: function {
             value: ztyping.defaultval.constant fdc
         )
     }
-}
-
-# reportStringConstantDefault -- a field or parameter defaulted to a string
-# constant: refused as a string literal default is, since a default must stay a
-# compile-time scalar.
-reportStringConstantDefault: function {
-    st: zenv.ZSymbolTable
-    ast: Ast.view
-    what: StringView
-    dm: argref
-} is {
-    fname: zast.nameTextAt :ast ref: dm.name
-    (addErrorH
-        :st
-        nodeid: dm.nid
-        lineno: dm.lineno
-        colno: dm.colno
-        e: zast.err.typeError
-        msg: "\{what} '\{fname}' is defaulted to a string constant -- a default must be a compile-time constant: a number, an arm that carries nothing, or a function reference"
-        note: ""
-        hint: "name the type instead (`\{fname}: String`) and pass the text in, or default it to a number"
-        width: fname.length.u32.orPanic
-    )
 }
 
 # recordFoldedArmDefault -- record the default a declaration's folded value
@@ -13618,7 +13594,7 @@ resolveNamedFieldSlot: function {
     if needsDtor.not when cidf.isZero.not when (st.reg.needsDestructor typeId: cidf
     ) then needsDtor = true
     recordFoldedArmDefault :st :ast what: "field" ownerTid: cid :fname dm: fm
-    recordFoldedScalarDefault :st :ast what: "field" ownerTid: cid dm: fm
+    recordFoldedScalarDefault :st :ast ownerTid: cid dm: fm
     if (st.reg.typetypeOf typeId: cidf) == ztypes.ztypetype.functionType then {
         (st.typing.setChildFnptrField
             pool: ast.names
@@ -13712,18 +13688,12 @@ rootIsStringLiteral: function {ast: Ast.view n: astnode.view} out bool is {
 }
 
 # refuseStringDefault -- a field or parameter declared by VALUE carries a
-# DEFAULT, and a default is a COMPILE-TIME CONSTANT: a number, a null-payload
-# arm, or a function / method reference. `defaultval.literal` holds a node the
-# emitter re-emits verbatim, which a String cannot be -- it needs a runtime
-# allocation. So a string literal in declaration position names no type and
-# leaves the slot with none.
-#
-# It was accepted. Beside a field that did resolve, zc reported NOTHING and
-# emitted C naming an undeclared struct -- and wrote `Z_?_TAG_` into the output,
-# the unresolved type leaking through verbatim. Alone it surfaced as `missing
-# required arguments 'v' (type: ?)` against whoever later tried to CONSTRUCT the
-# type, which is neither the mistake nor the place it was made. A PARAMETER said
-# nothing at all until the call, and then said `expected ?, got StringView`.
+# DEFAULT, and a default is a COMPILE-TIME CONSTANT. A string that folds is
+# one -- a StringView of static program memory, emitted as its `_zcsN` -- but
+# two string shapes build their value at run time and so are no default: an
+# interpolated literal, and an owned copy (`"x".string`, `.copy`), which
+# allocates. Each is refused where it is written, rather than reaching the
+# fold, whose failure would name neither shape.
 refuseStringDefault: function {
     # where the string-literal refusal lands
     st: zenv.ZSymbolTable
@@ -13741,10 +13711,12 @@ refuseStringDefault: function {
 } out bool is {
     fop: ast.nodes.get i: fm.operation
     if (rootIsStringLiteral :ast n: fop).not then return false
+    built: stringBuiltAtRunTime :ast n: fop
+    if built.length == 0 then return false
     fname: zast.nameTextAt :ast ref: nameId
     fp: zast.posOf n: fop
-    md: "\{what} '\{fname}' is declared by a string literal -- a default must be a compile-time constant: a number, an arm that carries nothing, or a function reference"
-    hd: "name the type instead (`\{fname}: String`) and pass the text in, or default it to a number"
+    md: "\{what} '\{fname}' is defaulted to \{built}, which is built at run time -- a default must be a compile-time constant"
+    hd: "default it to a plain string, which is a StringView; or name the type (`\{fname}: String`) and pass the text in"
     nd: String
     (addErrorH
         :st
@@ -13758,6 +13730,31 @@ refuseStringDefault: function {
         width: 1
     )
     return true
+}
+
+# stringBuiltAtRunTime -- what a string-rooted declaration builds at run time,
+# as a diagnostic names it: an interpolated string, or an owned copy of one. ""
+# for a string that folds.
+stringBuiltAtRunTime: function {ast: Ast.view n: astnode.view} out String is {
+    match (
+        n
+    ) case atomstring then {
+        k: u64
+        for k < n.stringparts.count loop {
+            pn: ast.nodes.get i: (zast.kidAt kids: ast.kids span: n.stringparts i: k)
+            k = k + 1
+            if pn.stringchunk.not then return "an interpolated string"
+        }
+        return ""
+    } case dottedpath then {
+        cId: atomNameId :ast n: (ast.nodes.get i: n.child)
+        if (cId == zast.names.wkString) or (cId == (nameIdOf :ast name: "copy")) then {
+            return "an owned String"
+        }
+        return (stringBuiltAtRunTime :ast n: (ast.nodes.get i: n.parent))
+    } else {
+        return ""
+    }
 }
 
 # refuseStringArmPayload -- a variant or union ARM declares the TYPE of what it

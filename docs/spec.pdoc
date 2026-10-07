@@ -1224,9 +1224,10 @@ When a function parameter has a default value, the caller may omit that
 argument and the default value is used in place of the missing one. The
 eligible forms are listed once, for parameters and fields together, under
 [#> to=default-values: Default values] — a numeric constant or compile-time
-scalar expression, a null-payload variant or union subtype, or a function /
-method reference. Anything else, a string literal or string constant in
-particular, is refused at the declaration. Bare numeric
+scalar expression, a string that folds (a #~"StringView"), a null-payload
+variant or union subtype, or a function / method reference. Anything else --
+an interpolated string or an owned #~"String" in particular -- is refused at
+the declaration. Bare numeric
 defaults follow the literal default rules described in
 [#> to=numeric-defaults: Numeric defaults] —
 decimal integers default to i64, non-decimal to u64, floats to f64.
@@ -6148,6 +6149,12 @@ type name there is a compile error.)
   [#*: #_b:"Numeric literal" -- bare (#~"42") or typed
     (#~"0.u32"). Field / parameter type is the inferred numeric
     type.]
+  [#*: #_b:"String" -- a string literal (#~"msg: \"hi\""), a unit string
+    constant (#~"s: GREETING"), or a data block's string element
+    (#~"verb: verbs.run"): anything that folds to a string. The member is a
+    #~"StringView" of the string's static bytes, re-emitted wherever it is left
+    out, so it costs what a number does. An interpolated string and an owned
+    copy (#~"\"x\".string") are built at run time and are refused.]
   [#*: #_b:"Function reference" -- a module-level function with a
     body. The parameter / field's type is the function's signature
     and the default value is the named function. Specs (functions
@@ -6181,8 +6188,7 @@ type name there is a compile error.)
     compile-time #~"if" or #~"match" built from them (#~"n: 2 * 3"), converted
     to a numeric type where it is written so (#~"n: (0 - 7).i128"). The member's
     type is the value's. A default is re-emitted at every call and
-    construction, so it must stay a scalar: a number or a bool. A
-    string constant is refused, as a string literal is. A constant whose
+    construction, so it must stay a scalar: a number or a bool. A constant whose
     type is a typedef over a numeric type is one of these too
     (#~"NONE: rid 0", then #~"r: NONE"): the member's type is the typedef,
     so a caller passing #~"r" still passes a #~"rid", never a bare number.]
@@ -6245,7 +6251,7 @@ default type, while a reftype VALUE is never a valid default. See
 """
 
 #b:"Restrictions." Default values must be expressible without
-constructor arguments. A reftype value (heap-allocated string,
+constructor arguments. A reftype value (an owned #~"String", a
 list, map, user class) is not a valid default at this layer; for
 those, supply the value at construction time. Defaulting to an
 arm that carries a non-null payload is rejected for the same
