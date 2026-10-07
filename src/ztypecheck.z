@@ -60003,6 +60003,53 @@ resolveCalledConstantDef: function {
 }
 
 
+# resolveDottedConstantRead -- a unit constant whose value is a dotted path, taken
+# apart for resolveDottedConstantDef: the base and the member, and the unit a
+# `unit.Type.member` path is read through.
+resolveDottedConstantRead: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    scope: ztypes.declid
+    defName: StringView
+    defnId: zast.nodeid
+} is {
+    dr: dpRefAt :ast nid: defnId
+    sfLit: String
+    sfTy: String
+    # `unit.Type.member`: the parent is itself a path, through a unit
+    qUnitPath: zast.nodeid
+    {
+        sfB: ast.nodes.get i: dr.parent
+        if sfB.atomid then sfLit = zast.nameTextCopy :ast ref: sfB.name
+        if sfB.dottedpath then {
+            gpc: ast.nodes.get i: sfB.child
+            if gpc.atomid then {
+                qUnitPath = sfB.parent
+                sfLit = zast.nameTextCopy :ast ref: gpc.name
+            }
+        }
+        sfC: ast.nodes.get i: dr.child
+        if sfC.atomid then sfTy = zast.nameTextCopy :ast ref: sfC.name
+    }
+    # the read is classified in the unit its path names, as the same
+    # read written there would be
+    lookupUnit: unitDecl
+    if qUnitPath.isZero.not then lookupUnit = unitDeclOfPath :st :scope :ast nid: qUnitPath
+    if sfLit.length > 0 when sfTy.length > 0 when lookupUnit.isZero.not then {
+        (resolveDottedConstantDef
+            :ast
+            :st
+            unitDecl: lookupUnit
+            scope: (if qUnitPath.isZero then scope else lookupUnit)
+            :defName
+            defn: dr
+            sfLit: sfLit.stringView
+            sfTy: sfTy.stringView
+        )
+    }
+}
+
 # resolveConstantDef -- one definition: a numeric-literal atomid is a unit
 # constant, recorded as the literal's concrete default (i64 / f64, which
 # materialiseLiteral demands). The definition's own nodes stay unstamped.
@@ -60032,25 +60079,7 @@ resolveConstantDef: function {
     } case dottedpath then {
         # a width-suffixed numeric literal (`1.u32`) is a dotted path over the
         # literal, not an atom: the child names the constant's type
-        dr: dpRefAt :ast nid: defnId
-        sfLit: String
-        sfTy: String
-        sfB: ast.nodes.get i: dr.parent
-        if sfB.atomid then sfLit = zast.nameTextCopy :ast ref: sfB.name
-        sfC: ast.nodes.get i: dr.child
-        if sfC.atomid then sfTy = zast.nameTextCopy :ast ref: sfC.name
-        if sfLit.length > 0 when sfTy.length > 0 then {
-            (resolveDottedConstantDef
-                :ast
-                :st
-                :unitDecl
-                :scope
-                :defName
-                defn: dr
-                sfLit: sfLit.stringView
-                sfTy: sfTy.stringView
-            )
-        }
+        resolveDottedConstantRead :ast :st :unitDecl :scope :defName :defnId
     } case call then {
         # A construction is not a literal. A generic-unit instantiation
         # (`intmath: (genmath t: i64)`) stays legal, and the test here is that
