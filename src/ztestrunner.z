@@ -141,7 +141,11 @@ sanEnvValue: function {bounds: bool} out String is {
 # Two spellings because they are two different tools: gcc and clang have ASan,
 # tcc has its own bounds checker (`-b`) and no ASan at all -- it ACCEPTS
 # -fsanitize=address and ignores it, which is how 453 cases were once reported
-# leak-clean by a check that never ran.
+# leak-clean by a check that never ran. Under ASan EVERY AddressSanitizer
+# report is a violation -- a read past a global array is a
+# global-buffer-overflow, which a list of the heap and stack kinds missed -- and
+# a leak is LeakSanitizer's, a different prefix; UBSan's bounds check reports a
+# `runtime error`.
 isUnsafe: function {bounds: bool s: StringView} out bool is {
     if bounds then {
         return (
@@ -152,14 +156,7 @@ isUnsafe: function {bounds: bool s: StringView} out bool is {
         )
     }
     return (
-        (s.contains needle: "ERROR: AddressSanitizer: heap-use-after-free") or
-        (s.contains
-            needle: "ERROR: AddressSanitizer: attempting double-free"
-        ) or
-        (s.contains needle: "ERROR: AddressSanitizer: heap-buffer-overflow") or
-        (s.contains
-            needle: "ERROR: AddressSanitizer: stack-"
-        )
+        (s.contains needle: "ERROR: AddressSanitizer: ") or (s.contains needle: ": runtime error: ")
     )
 }
 
@@ -362,6 +359,10 @@ gccArgv: function {
             a.append from: "-w".string
         } else {
             a.append from: "-fsanitize=address".string
+            # an index past the end of a C array (a data block's static one,
+            # an array's inline storage) aborts rather than reads on
+            a.append from: "-fsanitize=bounds".string
+            a.append from: "-fno-sanitize-recover=bounds".string
             a.append from: "-g".string
             a.append from: "-O0".string
             a.append from: "-std=c17".string
@@ -1444,7 +1445,8 @@ buildAndRunProbe: function {
 # a leak, BEFORE a single leak verdict is trusted. It builds a program that
 # leaks 1 KB on purpose and one that does not, runs both under the environment
 # the leak pool will use, and requires the first to report and the second to
-# stay silent.
+# stay silent. A third reads one past the end of a static array -- what an
+# unchecked data block read was -- and must be reported unsafe.
 #
 # This is the check the leak dimension never had. `leak-clean=453` was printed
 # by every tcc run of a harness that had appended -fsanitize=address to a
@@ -1458,6 +1460,18 @@ proveSanitizer: function {r: Runner bounds: bool kind: StringView} out bool is {
     cbp: "\{r.tmp.stringView}/S_clean.bin"
     lep: "\{r.tmp.stringView}/S_leak.err"
     cep: "\{r.tmp.stringView}/S_clean.err"
+    obp: "\{r.tmp.stringView}/S_bounds.c"
+    obb: "\{r.tmp.stringView}/S_bounds.bin"
+    obe: "\{r.tmp.stringView}/S_bounds.err"
+    # the index is volatile, so no compiler can see the read is out of range
+    boundsSrc: "static const unsigned char tab[3] = {1, 2, 3};\nstatic volatile unsigned long at = 3;\nint main(void) { return tab[at] == 0; }\n"
+    wb: io.writeText path: obp content: boundsSrc
+    match (
+        wb
+    ) case ok then null case err then {
+        print "FAIL(leak) sanitizer-probe (write)"
+        return false
+    }
     # the pointer leaves through a file-scope sink and is then cleared, so the
     # block is unreachable at exit however the stack happens to be laid out.
     head9p: "#include <stdlib.h>\nstatic void *sink;\n"
@@ -1501,6 +1515,10 @@ proveSanitizer: function {r: Runner bounds: bool kind: StringView} out bool is {
         os.unsetEnv key: ek9p.stringView
         return false
     }
+    if (buildAndRunProbe :r csrc: obp.stringView bin: obb.stringView err: obe.stringView).not then {
+        os.unsetEnv key: ek9p.stringView
+        return false
+    }
     os.unsetEnv key: ek9p.stringView
     dirty9p: slurp path: lep.stringView
     clean9p: slurp path: cep.stringView
@@ -1511,6 +1529,16 @@ proveSanitizer: function {r: Runner bounds: bool kind: StringView} out bool is {
     }
     if (isLeak :bounds s: clean9p.stringView) then {
         print "FAIL(leak) sanitizer-probe: '\{r.cc.stringView}' (\{kind}) reports a leak for a program with none"
+        ok9p = false
+    }
+    past9p: slurp path: obe.stringView
+    if (isUnsafe :bounds s: past9p.stringView).not then {
+        print "FAIL(leak) sanitizer-probe: '\{r.cc.stringView}' (\{kind}) did not report a read past a static array"
+        print "  the unsafe verdicts below would miss one"
+        ok9p = false
+    }
+    if (isUnsafe :bounds s: clean9p.stringView) then {
+        print "FAIL(leak) sanitizer-probe: '\{r.cc.stringView}' (\{kind}) reports unsafe memory for a program with none"
         ok9p = false
     }
     return ok9p
