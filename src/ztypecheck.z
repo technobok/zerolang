@@ -16629,6 +16629,8 @@ resolveObjectDef: function {
     unitDecl: ztypes.declid
     rf: ztypes.declid
     defName: StringView
+    # the definition's name, interned
+    nameId: zast.nameid
     defn: objref
 } is {
     # a refused definition still resolves, as the fieldless type it was
@@ -16638,7 +16640,7 @@ resolveObjectDef: function {
     match (
         defn.kind
     ) case recordDef then {
-        if defName == "null" then {
+        if nameId == zast.wellKnown.slot.tyNull then {
             (registerEmptyType
                 :st
                 scope: rf
@@ -16648,7 +16650,7 @@ resolveObjectDef: function {
                 tt: ztypes.ztypetype.nullType
             )
         } else {
-            if defName == "never" then {
+            if nameId == zast.wellKnown.slot.tyNever then {
                 nvid: (registerEmptyType
                     :st
                     scope: rf
@@ -16717,7 +16719,8 @@ resolveDef: function {
     # a definition resolves in the scope it is written in, whatever path
     # asked for it. A definition the name index cannot place keeps the
     # caller's scope (a nested unit's member reached from its own unit walk).
-    resolvedDecl: declOfUnitDef :st :scope :unitDecl nameId: (nameIdOf :ast name: defName)
+    defNameId: nameIdOf :ast name: defName
+    resolvedDecl: declOfUnitDef :st :scope :unitDecl nameId: defNameId
     # every resolver funnels through here, so this is where a unit's toolchain
     # requirement is owed: before its first definition resolves.
     ehd: resolvedDecl
@@ -16787,6 +16790,7 @@ resolveDef: function {
             :unitDecl
             :rf
             :defName
+            nameId: defNameId
             defn: orf
         )
     } case dottedpath then {
@@ -35038,23 +35042,33 @@ refuseValueBorrow: function {
     return true
 }
 
-# refuseNullValue -- `null` bound or assigned as a value, `vt` its type: it has
-# no value until a union or variant wraps it. true when it refused.
+# refuseNullValue -- `null` or `never` bound or assigned as a value, `vt` its
+# type: `null` has no value until a union or variant wraps it, and an
+# expression of type `never` does not finish, so there is nothing to bind.
+# true when it refused.
 refuseNullValue: function {
     st: zenv.ZSymbolTable ast: Ast.view vt: ztypes.tid nid: zast.nodeid
 } out bool is {
-    if vt.isZero or ((st.reg.typetypeOf typeId: vt) != ztypes.ztypetype.nullType) then return false
+    if vt.isZero then return false
+    vtt: st.reg.typetypeOf typeId: vt
+    if vtt != ztypes.ztypetype.nullType when vtt != ztypes.ztypetype.neverType then return false
     vn: ast.nodes.get i: nid
+    nm: "'null' cannot be used as a value — null must be wrapped in a union or variant (eg. option.none)".string
+    w: 4.u32
+    if vtt == ztypes.ztypetype.neverType then {
+        nm = "a value of type 'never' cannot be bound -- the expression never finishes"
+        w = 1
+    }
     (addErrorH
         :st
         nodeid: nid
         lineno: (nodeLine n: vn)
         colno: (nodeCol n: vn)
         e: zast.err.typeError
-        msg: "'null' cannot be used as a value — null must be wrapped in a union or variant (eg. option.none)"
+        msg: nm
         note: String
         hint: String
-        width: 4
+        width: w
     )
     return true
 }
@@ -37877,8 +37891,7 @@ forComprehensionTid: function {
     # for-as-expression: a value-producing body makes the loop a List of
     # that element type (the comprehension form).
     if elemT.isZero.not then {
-        en: st.reg.nameOf tid: elemT
-        isNull: (en.stringView == "null") or (en.length == 0)
+        isNull: (isNullTid :st tid: elemT) or ((st.reg.nameViewOf tid: elemT).length == 0)
         if isNull.not then {
             # the comprehension's element decides the family, exactly as a
             # written-out container declaration would
@@ -37908,7 +37921,7 @@ forComprehensionTid: function {
                     )
                     value: lv
                 )
-                lsfx: "_\{en}"
+                lsfx: "_\{st.reg.nameViewOf tid: elemT}"
                 vsG: IdMapV zast.nameid v: u64
                 lmid: (getOrMintSpec
                     :st
@@ -41443,8 +41456,8 @@ hoistRows: function {
 
 # isNullTid -- the type is `null`, the payload-less marker.
 isNullTid: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
-    if tid == st.typing.nullTypeId then return true
-    return (st.reg.nameIs :tid name: "null")
+    if tid.isZero then return false
+    return (st.reg.typetypeOf typeId: tid) == ztypes.ztypetype.nullType
 }
 
 # memberIsDataField -- whether a member row is stored in the type's C struct:
@@ -46183,9 +46196,7 @@ checkGenericTypeCall: function {
     )
     payId: co.or d: ztypes.tid.zero
     if payId.isZero.not then {
-        pn0: st.reg.nameOf tid: payId
-        isNullPay: false
-        if pn0.stringView == "null" then isNullPay = true
+        isNullPay: isNullTid :st tid: payId
         subT: ztypes.tid
         argFound: false
         kArgIter: u64
@@ -46377,8 +46388,7 @@ checkTaggedCtorArg: function {
             # A null-payload arm names a TYPE rather
             # than passing a value (optionval.none
             # u64), so it is not a payload at all.
-            upnm: st.reg.nameOf tid: uparmid
-            upNull: upnm.stringView == "null"
+            upNull: isNullTid :st tid: uparmid
             if uparmid.isZero.not when uvt.isZero.not when upNull.not when (typesCompatible
                 :ast
                 :st
@@ -46387,7 +46397,8 @@ checkTaggedCtorArg: function {
             ).not then {
                 apn: specWrittenName :st :ast tid: uvt
                 dtn: specWrittenName :st :ast tid: dtp
-                upm: "arm '\{unionCtorArm}' payload type mismatch: expected \{upnm}, got \{apn}"
+                upExp: st.reg.nameOf tid: uparmid
+                upm: "arm '\{unionCtorArm}' payload type mismatch: expected \{upExp}, got \{apn}"
                 # Name the rule for the one typedef
                 # shape that reaches here. The
                 # other direction (a typedef where
