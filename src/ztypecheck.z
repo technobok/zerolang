@@ -5667,6 +5667,8 @@ refuseLiteralTyperef: function {
     tid: ztypes.tid
 } is {
     if (isLiteralTypeId :st :tid).not then return
+    # a data block's `out` names an untyped element or index this way
+    if (st.typing.dataLiteralArgs.has item: nid) then return
     ltn: st.reg.nameOf :tid
     # only where the NAME was written. A literal type's own conversions take an
     # elided `:this`, whose type legitimately IS the literal type -- there is no
@@ -9653,29 +9655,43 @@ dataOwnMember: function {
 }
 
 # dataoutparts -- what a data block's `out` says when it names the block's VALUE
-# type: the element type (StringView for a stringdata) and the index type (0 when
-# the value type leaves it at its default).
+# type: the element type (StringView for a stringdata) and the index type, as the
+# run-time instance has them, and whether each was left untyped -- written as a
+# literal type or not written at all.
 dataoutparts: record {
-    # whether the `out` type is a data value type at all; the two below mean
+    # whether the `out` type is a data value type at all; the rest mean
     # nothing when it is not
     isValue: bool
     # the element type
     elem: ztypes.tid
     # the type that indexes the block, 0 for the default
     index: ztypes.tid
+    # the element was left untyped: the block's elements read as literals
+    elemLiteral: bool
+    # the index was left untyped: the block's slots read as literals
+    indexLiteral: bool
 }
 
 # dataOutParts -- a block's `out` type, when it is intdata, floatdata or
 # stringdata or an instance of one, taken apart. The parameters are read by
 # position in each template's own declaration: the element first, then the
-# index, and a stringdata has only the index.
+# index, and a stringdata has only the index. What the `out` node WROTE decides
+# what is untyped -- the instance itself materialises a literal argument.
 dataOutParts: function {
     ast: Ast
     st: zenv.ZSymbolTable
     scope: ztypes.declid
+    unitDecl: ztypes.declid
     valueTid: ztypes.tid
+    outId: zast.nodeid
 } out dataoutparts is {
-    none: dataoutparts isValue: false elem: ztypes.tid index: ztypes.tid
+    none: (dataoutparts
+        isValue: false
+        elem: ztypes.tid
+        index: ztypes.tid
+        elemLiteral: false
+        indexLiteral: false
+    )
     if valueTid.isZero then return none
     tpl: st.reg.genericOriginOf tid: valueTid
     if tpl.isZero then tpl = valueTid
@@ -9693,7 +9709,89 @@ dataOutParts: function {
         elem = st.reg.genericTypeArgAt specId: valueTid ordinal: 0
     }
     idx: st.reg.genericTypeArgAt specId: valueTid ordinal: idxAt
-    return (dataoutparts isValue: true :elem index: idx)
+    pn: st.reg.genericParamNamesOf tdecl: (declOfTypeId :st tid: tpl)
+    elemName: zast.nameid
+    idxName: zast.nameid
+    if isStr.not when pn.length > 0 then elemName = pn.get i: 0
+    if idxAt < pn.length then idxName = pn.get i: idxAt
+    # what the `out` wrote for each part: nothing, or a literal type, leaves
+    # it untyped
+    wrote: dataOutWrote :ast :st :scope :unitDecl :outId :elemName :idxName :isStr
+    elemWrote: wrote.elem
+    idxWrote: wrote.index
+    eLit: elemWrote.isZero or (isLiteralTypeId :st tid: elemWrote)
+    iLit: idxWrote.isZero or (isLiteralTypeId :st tid: idxWrote)
+    if iLit then idx = ztypes.tid.zero
+    return (dataoutparts
+        isValue: true
+        :elem
+        index: idx
+        elemLiteral: eLit and isStr.not
+        indexLiteral: iLit
+    )
+}
+
+# dataoutwrote -- the element and index types a data block's `out` names as its
+# value type's arguments, 0 for a part it leaves to the template's default.
+dataoutwrote: record {
+    # the element type written, positionally or by its parameter's name
+    elem: ztypes.tid
+    # the index type written, by its parameter's name
+    index: ztypes.tid
+}
+
+# typeAppArgs -- the argument nodes of a type application (`(intdata u8 i:
+# nid)`), in order; none for a bare name.
+typeAppArgs: function {ast: Ast.view nid: zast.nodeid} out ListVal zast.nodeid is {
+    args: ListVal zast.nodeid
+    n: ast.nodes.get i: nid
+    if n.call then {
+        ak: u64
+        for ak < n.arguments.count loop {
+            args.append (zast.kidAt kids: ast.kids span: n.arguments i: ak)
+            ak = ak + 1
+        }
+    }
+    return args
+}
+
+# dataOutWrote -- what `(intdata u8 i: nid)` writes for each parameter of its
+# template: an unlabelled argument is the element (a stringdata's index, it
+# having no element), and a labelled one is the parameter it names.
+dataOutWrote: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    unitDecl: ztypes.declid
+    outId: zast.nodeid
+    elemName: zast.nameid
+    idxName: zast.nameid
+    isStr: bool
+} out dataoutwrote is {
+    elemWrote: ztypes.tid
+    idxWrote: ztypes.tid
+    args: typeAppArgs :ast nid: outId
+    positional: u64
+    for each argId: args loop {
+        lbl: zast.nameid
+        opId: zast.nodeid
+        {
+            an: ast.nodes.get i: argId
+            if an.namedoperation then {
+                lbl = an.name
+                opId = an.operation
+            }
+        }
+        if opId.isZero then continue
+        at: resolveTyperefShell :st :scope :ast :unitDecl nid: opId thisName: ""
+        # an untyped element or index is written as its literal type here
+        if (isLiteralTypeId :st tid: at) then st.typing.dataLiteralArgs.add item: opId
+        first: lbl.isZero and (positional == 0)
+        if lbl.isZero then positional = positional + 1
+        if lbl.isZero.not and (lbl == elemName) or (first and isStr.not) then elemWrote = at
+        if lbl.isZero.not and (lbl == idxName) or (first and isStr) then idxWrote = at
+    }
+    return (dataoutwrote elem: elemWrote index: idxWrote)
 }
 
 # dataValueTemplate -- the template a data block of element type `elemTid` is a
@@ -9883,27 +9981,47 @@ resolveData: function {
     st.typing.constEvalState.set key: lk value: 1.u8
     vals: dataElemValues :ast :st :unitDecl :scope :dnode
     st.typing.constEvalState.set key: lk value: 2.u8
-    etn: dataOutTypeName :ast oId: dnode.outType
-    etId: dataElemTypeName :ast :st :dnode outName: etn.stringView :vals
-    etName: zast.nameTextCopy :ast ref: etId
-    elemTid: litId
     # whether `out` names the block's VALUE type (`out intdata u8`) rather than
     # its element type (`out u8`, read until every block says its value type)
     valueOut: false
+    # whether `slot` reads untyped: the index was left untyped, or no `out` named
+    # one. An old-form `out T` keeps its typed (u64) slots.
+    untypedSlots: dnode.outType.isZero
+    # the `out` type, resolved first: a value type says the element type, and
+    # only an old-form element type is a name dataElemTypeName weighs
+    ot: ztypes.tid
+    vparts: (dataoutparts
+        isValue: false
+        elem: ztypes.tid
+        index: ztypes.tid
+        elemLiteral: false
+        indexLiteral: false
+    )
     if dnode.outType.isZero.not then {
         # `out T` is a type written in the block's scope and resolved as any
         # written type is: a user type spelled like a builtin is the user's
-        ot: resolveTyperefShell :st :scope :ast :unitDecl nid: dnode.outType thisName: defName
+        ot = resolveTyperefShell :st :scope :ast :unitDecl nid: dnode.outType thisName: defName
         # recorded as any signature's type is, so a name that resolves to
         # nothing is reported as an unknown type where it is written
         recordTyperef :st :scope :ast :unitDecl thisName: defName nid: dnode.outType
-        vparts: dataOutParts :ast :st :scope valueTid: ot
-        if vparts.isValue then {
-            valueOut = true
-            elemTid = vparts.elem
-            if vparts.index.isZero.not then st.typing.dataIndexType.set key: did value: vparts.index
-            etName = st.reg.nameOf tid: elemTid
-        } else if ot.isZero.not then elemTid = ot
+        vparts = dataOutParts :ast :st :scope :unitDecl valueTid: ot outId: dnode.outType
+    }
+    etn: String
+    if vparts.isValue.not then etn = dataOutTypeName :ast oId: dnode.outType
+    etId: dataElemTypeName :ast :st :dnode outName: etn.stringView :vals
+    etName: zast.nameTextCopy :ast ref: etId
+    elemTid: litId
+    if vparts.isValue then {
+        if vparts.index.isZero.not then st.typing.dataIndexType.set key: did value: vparts.index
+        untypedSlots = vparts.indexLiteral
+        # an untyped element reads as a literal, as in a block with no `out`,
+        # and the block's value is the template's over the run-time type the
+        # literal materialises to
+        valueOut = vparts.elemLiteral.not
+        elemTid = vparts.elem
+        etName = st.reg.nameOf tid: elemTid
+    } else if ot.isZero.not then {
+        elemTid = ot
     } else {
         # an element's suffix (`0.u8`) or the untyped default names the
         # prelude's type whatever the unit declares, as a literal's suffix
@@ -10039,6 +10157,7 @@ resolveData: function {
     if slotLabels.length > 0 then {
         sIdx: (st.typing.dataIndexType.get key: did).or d: ztypes.tid.zero
         if sIdx.isZero then sIdx = builtinTidT :st :scope :ast base: "u64"
+        if untypedSlots then sIdx = st.reg.literalIntTid
         resolveDataSlots :ast :st :scope dataTid: did idxTid: sIdx labels: slotLabels ords: slotOrds
     }
     # `length` is a constant of the block: every element is known here, so the
@@ -22693,6 +22812,7 @@ constraintKindFor: function {text: StringView} out ztypes.constraintkind is {
     if text == "idkey" then return ztypes.constraintkind.idKey
     if text == "anyint" then return ztypes.constraintkind.anyInt
     if text == "anyfloat" then return ztypes.constraintkind.anyFloat
+    if text == "dataindex" then return ztypes.constraintkind.dataIndex
     # The pre-rename spellings -- `AnyVal`, `ValHashable`, `Any.valtype`,
     # `Any.reftype` -- are GONE. They were mapped because an unmapped
     # constraint fell through to `other`, which constrained nothing at all;
@@ -22714,6 +22834,7 @@ constraintTextOf: function {desc: ztypes.constraintdesc} out String is {
     if desc.kind == ztypes.constraintkind.idKey then return "idkey"
     if desc.kind == ztypes.constraintkind.anyInt then return "anyint"
     if desc.kind == ztypes.constraintkind.anyFloat then return "anyfloat"
+    if desc.kind == ztypes.constraintkind.dataIndex then return "dataindex"
     if desc.kind == ztypes.constraintkind.stringLike then return "StringLike"
     if desc.kind == ztypes.constraintkind.numeric when desc.numKind.has then {
         return (ztypes.numkindName k: desc.numKind.kind)
@@ -22764,6 +22885,19 @@ conformsToText: function {
     return found
 }
 
+# literalSatisfies -- an untyped literal type meets the bound that admits one: a
+# data block's element may be left untyped (anyint, anyfloat), and so may its
+# index (dataindex), which leaves its slots untyped.
+literalSatisfies: function {
+    st: zenv.ZSymbolTable.view ck: ztypes.constraintkind argTid: ztypes.tid
+} out bool is {
+    if argTid == st.reg.literalIntTid then {
+        return (ck == ztypes.constraintkind.anyInt) or (ck == ztypes.constraintkind.dataIndex)
+    }
+    if argTid == st.reg.literalFloatTid then return ck == ztypes.constraintkind.anyFloat
+    return false
+}
+
 # constraintHolds -- the generic argument satisfies the constraint KIND. Yes or
 # no only: the caller owns the diagnostic, and a kind with nothing to demand
 # admits everything.
@@ -22774,6 +22908,7 @@ constraintHolds: function {
     ck: ztypes.constraintkind
     argTid: ztypes.tid
 } out bool is {
+    if (literalSatisfies :st :ck :argTid) then return true
     match (
         ck
     ) case valType then {
@@ -22802,6 +22937,9 @@ constraintHolds: function {
         return (typeIsNumberOf :st :scope :ast tid: argTid float: false)
     } case anyFloat then {
         return (typeIsNumberOf :st :scope :ast tid: argTid float: true)
+    } case dataIndex then {
+        # a data block's index: an id key, or untyped (literalSatisfies)
+        return (typeIsIdKey :st :scope :ast tid: argTid)
     } case stringLike then {
         # a union bound, so it admits reference types only: a `str` conforms to
         # Text as a value, and is handed to a StringLike parameter as its
@@ -25388,6 +25526,7 @@ getOrMintSpec: function {
     if (templateHasDefaults :st tdecl: tk8) then {
         bindSpecDefaults :st :ast :tk8 :pnames8 :subs :valSubs :fallbackArg sfx: dsfx8
     }
+    materialiseDataArgs :st :ast :scope :templateId pnames: pnames8 :subs
     args8: ListVal ztypes.genericarg
     trieOk8: (buildSpecTrieKeys
         :ast
@@ -25507,6 +25646,45 @@ getOrMintSpec: function {
         recordNumericFieldDefaults :st monoId: mid8 :templateId
     }
     return mid8
+}
+
+# materialiseDataArgs -- a data value type's literal arguments as the run-time
+# types they become: an untyped element is an i64 (a floatdata's an f64) and an
+# untyped index a u64, as an untyped block's value is `intdata i64 i: u64`. A
+# literal type reaches no instance, so the emitter never sees one. The
+# parameters are read by position: the element first, then the index; a
+# stringdata has only the index.
+materialiseDataArgs: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    scope: ztypes.declid
+    templateId: ztypes.tid
+    pnames: (ListVal zast.nameid).view
+    subs: (IdMapV zast.nameid v: ztypes.tid)
+} is {
+    if pnames.length == 0 then return
+    isStr: templateId == (builtinTidT :st :scope :ast base: "stringdata")
+    if isStr.not when templateId != (builtinTidT :st :scope :ast base: "intdata") when (
+        templateId != (builtinTidT :st :scope :ast base: "floatdata")
+    ) then return
+    k: u64
+    for k < pnames.length loop {
+        pn: pnames.get i: k
+        v: (subs.get key: pn).or d: ztypes.tid.zero
+        isElem: isStr.not and (k == 0)
+        if v == st.reg.literalIntTid then {
+            if isElem then {
+                subs.set key: pn value: (builtinTidT :st :scope :ast base: "i64")
+            } else {
+                subs.set key: pn value: (builtinTidT :st :scope :ast base: "u64")
+            }
+        }
+        if v == st.reg.literalFloatTid then (subs.set
+            key: pn
+            value: (builtinTidT :st :scope :ast base: "f64")
+        )
+        k = k + 1
+    }
 }
 
 # monoValName -- the value-type name component of a get-wrapper mono name. A type
@@ -59208,7 +59386,9 @@ constDataSlotRead: function {
     if (st.typing.dataSlotTypes.has item: slotTid).not then return ztypes.noConst
     # a position folds as an element of its type would: a typedef index is a
     # value of its own type, read where it is written and not folded
-    if (dataElemFolds :ast :st :scope elemTid: (st.reg.dataElemTypeOf tid: slotTid)).not then {
+    sEl: st.reg.dataElemTypeOf tid: slotTid
+    if (isLiteralTypeId :st tid: sEl).not when (dataElemFolds :ast :st :scope elemTid: sEl
+    ).not then {
         return ztypes.noConst
     }
     return (st.typing.memberConstOf parentTypeId: slotTid nameId: labelId)
