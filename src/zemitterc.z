@@ -15241,8 +15241,9 @@ emitDefRefAtom: function {
 }
 
 # dataValueText -- a data block's name, read as a value: the view of its static
-# array, `((z_M_t){ .length = N, .data = z_tN })`. "" when the atom names no
-# block, or a block the checker never used as a value.
+# array, `((z_M_t){ .length = N, .data = z_tN })` -- NULL for an empty block,
+# which has none. "" when the atom names no block, or a block the checker never
+# used as a value.
 dataValueText: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
@@ -15255,6 +15256,7 @@ dataValueText: function {
     vc: ctxCname :ctx tid: vt
     ac: ctxCname :ctx tid: dt
     n: (symtab.typing.memberConstOf parentTypeId: dt nameId: zast.names.wkLength).ival
+    if n == 0 then return "((\{vc}_t){ .length = 0, .data = NULL })"
     return "((\{vc}_t){ .length = \{n}, .data = \{ac} })"
 }
 
@@ -41670,8 +41672,9 @@ emitDataBlock: function {
                 cnt = cnt + 1
             }
             dsym: ctxCname :ctx tid: ridtid
-            l0: "static const \{ect} \{dsym}[] = {\{elems}};\n\n"
-            buf.append l0
+            # an empty block has no array -- C has no empty initializer -- and
+            # every index is past its end
+            if cnt > 0 then buf.append "static const \{ect} \{dsym}[] = {\{elems}};\n\n"
             buf.append "static \{ect} \{dsym}_at(uint64_t _idx);\n"
             buf.append "static \{ect} \{dsym}_at(uint64_t _idx) {\n"
             buf.append "    if (_idx >= \{cnt}) {\n"
@@ -41680,7 +41683,11 @@ emitDataBlock: function {
             buf.append b2
             buf.append "        z_panic(_zp_buf);\n"
             buf.append "    }\n"
-            buf.append "    return \{dsym}[_idx];\n"
+            if cnt > 0 then {
+                buf.append "    return \{dsym}[_idx];\n"
+            } else {
+                buf.append "    return (\{ect}){0};\n"
+            }
             buf.append "}\n\n"
         }
     } else null

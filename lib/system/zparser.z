@@ -2633,18 +2633,28 @@ Parser: class {
 
     # dataBlockWithOut -- the data block itself, carrying the `out` type when one
     # follows the body. The elements are spanned here because both answers need
-    # the span and neither needs the list afterwards.
+    # the span and neither needs the list afterwards. An empty block has no
+    # element to take its type from, so it must write `out`.
     dataBlockWithOut: function {
         :this
         lex: zlexer.Lexer
         elements: ListVal zast.nodeid
         dLine: u32
         dCol: u32
+        # where the definition starts, for the empty-block report
+        startPos: zlexer.tokpos
     } out astnode is {
         outOpt: lex.accept tt: zlexer.toktype.outTok pool: this.ast.names
         match (
             outOpt
         ) case none then {
+            if elements.length == 0 then {
+                return (this.mkErrorAt
+                    pos: startPos
+                    code: zast.err.badData
+                    msg: "an empty data block must name its element type: `data {} out T`"
+                )
+            }
             eSpan: zast.kidsAdd kids: this.ast.kids xs: elements
             return (astnode.datablock (zast.datablockrow
                 nodeid: this.nextId
@@ -2724,15 +2734,7 @@ Parser: class {
                 msg: "Expected closing brace for data body"
             )
         } case some then null
-        eLen: elements.length
-        if eLen == 0 then {
-            return (this.mkErrorAt
-                pos: startPos
-                code: zast.err.badData
-                msg: "data definition must have at least one element"
-            )
-        }
-        return (this.dataBlockWithOut :lex :elements :dLine :dCol)
+        return (this.dataBlockWithOut :lex :elements :dLine :dCol :startPos)
     }
 
     # Build a reassignment from an already-parsed LHS path list (the `=`
