@@ -27,6 +27,18 @@
 #              <n> is a member of the row's own unit, or `<unit>.<member>` for
 #              another unit's (`system.word`, the word primitives)
 #   args=ptr   the body takes its operands by pointer, so they must be lvalues
+#   pulls=<l>  demanding the member demands each `<unit>.<member>` of <l>
+#              (comma-separated) at once, where the demand is recorded: the
+#              helpers another unit's C supplies to this body (os.env needs
+#              io's StringView-to-C-string), registered before that unit's
+#              runtime is emitted
+#   call=<k>   on a `system.StringView.<m>` row: how a call of <m> on a String or
+#              StringView is emitted -- `simple` (the receiver and arguments by
+#              pointer), `arg` (an argument, an optionval/Option result),
+#              `parse` (a resultval result) or `noarg` (no arguments, its
+#              fragment registered ahead of the type-method bodies). The
+#              emitter keys these by the member's name id; a member with none
+#              takes the general paths.
 #   const=<p>  a VARIANT row, chosen over the plain one for the same path only
 #              when the argument positions <p> -- comma-separated, 1-based,
 #              RECEIVER EXCLUDED, so a binop's one argument is 1 -- are all
@@ -743,30 +755,30 @@
 # os -- args (a hand-ordered pair: the argv globals main() fills, then the copy)
 # and env come first, then the convention loads
 [os.args demand=args frag=_Z_OS_ARGV_GLOBALS,_Z_OS_ARGS]
-[os.env frag=_Z_OS_GET_ENV]
+[os.env pulls=io.@sv_cstr frag=_Z_OS_GET_ENV]
 [os.buildCommit frag=_Z_OS_BUILD_COMMIT]
 [os.buildCompiler frag=_Z_OS_BUILD_COMPILER]
 [os.buildDate frag=_Z_OS_BUILD_DATE]
-[os.cwd frag=_Z_OS_CWD]
+[os.cwd pulls=io.@errno frag=_Z_OS_CWD]
 [os.envNames frag=_Z_OS_ENV_NAMES]
-[os.exePath frag=_Z_OS_EXE_PATH]
+[os.exePath pulls=io.@errno frag=_Z_OS_EXE_PATH]
 [os.exit frag=_Z_OS_EXIT]
-[os.homeDir frag=_Z_OS_HOME_DIR]
+[os.homeDir pulls=io.@errno frag=_Z_OS_HOME_DIR]
 [os.hostArchName frag=_Z_OS_HOST_ARCH_NAME]
 [os.hostOsName frag=_Z_OS_HOST_OS_NAME]
-[os.hostname frag=_Z_OS_HOSTNAME]
+[os.hostname pulls=io.@errno frag=_Z_OS_HOSTNAME]
 [os.kill frag=_Z_OS_KILL]
 [os.monotonicMillis frag=_Z_OS_MONOTONIC_MILLIS]
 [os.cpuCount frag=_Z_OS_CPU_COUNT]
 [os.pid frag=_Z_OS_PID]
 [os.ppid frag=_Z_OS_PPID]
-[os.setCwd frag=_Z_OS_SET_CWD]
-[os.setEnv frag=_Z_OS_SET_ENV]
+[os.setCwd pulls=io.@sv_cstr,io.@errno frag=_Z_OS_SET_CWD]
+[os.setEnv pulls=io.@sv_cstr,io.@errno frag=_Z_OS_SET_ENV]
 [os.sleepMillis frag=_Z_OS_SLEEP_MILLIS]
-[os.spawn frag=_Z_OS_SPAWN]
+[os.spawn pulls=io.@sv_cstr frag=_Z_OS_SPAWN]
 [os.spawnAsync frag=_Z_OS_SPAWN_ASYNC]
-[os.unsetEnv frag=_Z_OS_UNSET_ENV]
-[os.userName frag=_Z_OS_USER_NAME]
+[os.unsetEnv pulls=io.@sv_cstr,io.@errno frag=_Z_OS_UNSET_ENV]
+[os.userName pulls=io.@errno frag=_Z_OS_USER_NAME]
 [os.waitAny frag=_Z_OS_WAIT_ANY]
 
 # net -- each fragment on its own demand, as io's are: a fragment names the
@@ -846,41 +858,41 @@
 [system.StringView.asString]
 [system.StringView.compare]
 [system.StringView.split]
-[system.StringView.lines]
-[system.StringView.isEmpty frag=_Z_SV_IS_EMPTY]
-[system.StringView.isAscii frag=_Z_SV_IS_ASCII]
-[system.StringView.startsWith frag=_Z_SV_STARTS_WITH]
-[system.StringView.endsWith frag=_Z_SV_ENDS_WITH]
+[system.StringView.lines call=noarg]
+[system.StringView.isEmpty call=simple frag=_Z_SV_IS_EMPTY]
+[system.StringView.isAscii call=simple frag=_Z_SV_IS_ASCII]
+[system.StringView.startsWith call=simple frag=_Z_SV_STARTS_WITH]
+[system.StringView.endsWith call=simple frag=_Z_SV_ENDS_WITH]
 [@system.index_of_raw demand=contains,indexOf,lastIndexOf frag=_Z_SV_INDEX_OF_RAW]
-[system.StringView.contains frag=_Z_SV_CONTAINS]
+[system.StringView.contains call=simple frag=_Z_SV_CONTAINS]
 [@system.is_ascii_ws demand=trim,trimStart,trimEnd frag=_Z_SV_IS_ASCII_WS]
 [system.StringView.substring frag=_Z_SV_SUBSTRING]
-[system.StringView.hash frag=_Z_SV_HASH]
-[system.StringView.fastHash frag=_Z_SV_FAST_HASH]
-[system.StringView.trim frag=_Z_SV_TRIM]
-[system.StringView.trimStart frag=_Z_SV_TRIM_START]
-[system.StringView.trimEnd frag=_Z_SV_TRIM_END]
-[system.StringView.toLowerAscii frag=_Z_SV_TO_LOWER_ASCII]
+[system.StringView.hash call=noarg frag=_Z_SV_HASH]
+[system.StringView.fastHash call=noarg frag=_Z_SV_FAST_HASH]
+[system.StringView.trim call=simple frag=_Z_SV_TRIM]
+[system.StringView.trimStart call=simple frag=_Z_SV_TRIM_START]
+[system.StringView.trimEnd call=simple frag=_Z_SV_TRIM_END]
+[system.StringView.toLowerAscii call=simple frag=_Z_SV_TO_LOWER_ASCII]
 [@system.replace_impl demand=replace,replaceFirst frag=_Z_SV_REPLACE_IMPL]
-[system.StringView.replace frag=_Z_SV_REPLACE]
-[system.StringView.replaceFirst frag=_Z_SV_REPLACE_FIRST]
-[system.StringView.repeated frag=_Z_SV_REPEAT]
-[system.StringView.concat frag=_Z_SV_CONCAT]
-[system.StringView.toUpperAscii frag=_Z_SV_TO_UPPER_ASCII]
+[system.StringView.replace call=simple frag=_Z_SV_REPLACE]
+[system.StringView.replaceFirst call=simple frag=_Z_SV_REPLACE_FIRST]
+[system.StringView.repeated call=simple frag=_Z_SV_REPEAT]
+[system.StringView.concat call=simple frag=_Z_SV_CONCAT]
+[system.StringView.toUpperAscii call=simple frag=_Z_SV_TO_UPPER_ASCII]
 [@system.utf8_decode demand=count,codepoints frag=_Z_SV_UTF8_DECODE]
-[system.StringView.count frag=_Z_SV_COUNT]
-[system.StringView.codepoints frag=_Z_SV_CPITER_STRUCT,_Z_SV_CODEPOINTS,_Z_SV_CPITER_CALL]
-[system.StringView.indexOf frag=_Z_SV_INDEX_OF]
-[system.StringView.lastIndexOf frag=_Z_SV_LAST_INDEX_OF]
-[system.StringView.byteAt frag=_Z_SV_BYTE_AT]
-[system.StringView.stripPrefix frag=_Z_SV_STRIP_PREFIX]
-[system.StringView.stripSuffix frag=_Z_SV_STRIP_SUFFIX]
-[system.StringView.splitOnce frag=_Z_SV_SPLIT_ONCE]
-[system.StringView.parseI64 frag=_Z_SV_PARSE_I64]
-[system.StringView.parseU64 frag=_Z_SV_PARSE_U64]
-[system.StringView.parseF64 frag=_Z_SV_PARSE_F64]
-[system.StringView.parseF16 frag=_Z_SV_PARSE_F16 needs=prelude.f16]
-[system.StringView.parseF128 frag=_Z_SV_PARSE_F128]
+[system.StringView.count call=noarg frag=_Z_SV_COUNT]
+[system.StringView.codepoints call=noarg frag=_Z_SV_CPITER_STRUCT,_Z_SV_CODEPOINTS,_Z_SV_CPITER_CALL]
+[system.StringView.indexOf call=arg frag=_Z_SV_INDEX_OF]
+[system.StringView.lastIndexOf call=arg frag=_Z_SV_LAST_INDEX_OF]
+[system.StringView.byteAt call=arg frag=_Z_SV_BYTE_AT]
+[system.StringView.stripPrefix call=arg frag=_Z_SV_STRIP_PREFIX]
+[system.StringView.stripSuffix call=arg frag=_Z_SV_STRIP_SUFFIX]
+[system.StringView.splitOnce call=arg frag=_Z_SV_SPLIT_ONCE]
+[system.StringView.parseI64 call=parse frag=_Z_SV_PARSE_I64]
+[system.StringView.parseU64 call=parse frag=_Z_SV_PARSE_U64]
+[system.StringView.parseF64 call=parse frag=_Z_SV_PARSE_F64]
+[system.StringView.parseF16 call=parse frag=_Z_SV_PARSE_F16 needs=prelude.f16]
+[system.StringView.parseF128 call=parse frag=_Z_SV_PARSE_F128]
 
 # system's word primitives: the carry-chain steps and the two-word division the
 # u64 rows reach with `needs=word`, one fragment for all three
