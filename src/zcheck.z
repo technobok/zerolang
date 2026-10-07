@@ -106,13 +106,13 @@ newVfs: function {} out zvfs.ZVfs is {
     )
 }
 
-# vfsroots -- what binding a project's roots answers: where a parse starts, and
-# the first src root's own entry, which an overlay of open buffers shadows.
-vfsroots: record {
+# VfsRoots -- what binding a project's roots answers: where a parse starts, and
+# each src root's own entry, which an overlay of its open buffers shadows.
+VfsRoots: class {
     # the union every unit is looked up from
     root: zvfs.fsno
-    # the first --src root's directory entry; zero when there is no src root
-    firstSrc: zvfs.fsno
+    # every --src root's directory entry, in srcdirs order
+    srcIds: ListVal zvfs.fsno
 }
 
 # GenLayer -- the generated `z` unit as a build mounts it (zproject.zLayer
@@ -136,6 +136,32 @@ noLayer: function out GenLayer is {
     return (GenLayer dir: String paths: List String texts: List String projectFile: String)
 }
 
+# bindOverlay -- mount the open buffers of one src root ahead of what is bound:
+# their files from memory, named by that root's directory, and one tree with the
+# root to a subunit lookup. Answers the new root.
+bindOverlay: function {
+    vfs: zvfs.ZVfs
+    files: (Map String V: String)
+    dir: StringView
+    base: zvfs.fsno
+} out zvfs.fsno is {
+    ovid: vfs.registerString
+    pidx: vfs.providers.length - 1
+    {
+        # scope the provider borrow: bindRoot below needs the vfs exclusively
+        box: vfs.providers.getMut i: pidx
+        for each e: files.iterateItems loop {
+            fp: e.key.copy
+            ct: e.value.copy
+            box.p.addFile fpath: fp.take content: ct.take
+        }
+    }
+    vfs.providerRoot.set key: pidx.u32.orPanic value: dir.string
+    root: vfs.bindRoot newid: ovid kind: zvfs.bindkind.before
+    vfs.shadowOver top: ovid :base
+    return root
+}
+
 # buildRoots -- the one root stack every driver parses through: the stdlib
 # bound first, then the generated `z` unit, then each src root. Each `before`
 # puts its root ahead of everything already bound, so binding back to front
@@ -147,18 +173,28 @@ buildRoots: function {
     systemdir: StringView
     srcdirs: (List String).view
     layer: GenLayer.view
-} out vfsroots is {
+} out VfsRoots is {
     vfs.registerNull
     systemid: vfs.registerFS rootpath: systemdir.string parentpath: ""
-    r: vfsroots root: (vfs.bindRoot newid: systemid kind: zvfs.bindkind.instead) firstSrc: zvfs.fsno
+    r: (VfsRoots
+        root: (vfs.bindRoot newid: systemid kind: zvfs.bindkind.instead)
+        srcIds: ListVal zvfs.fsno
+    )
     if layer.paths.length > 0 then r.root = bindLayer :vfs :layer
+    bound: ListVal zvfs.fsno
     si: srcdirs.length
     for si > 0 loop {
         si = si - 1
         sd: srcdirs.get i: si
         sid: vfs.registerFS rootpath: sd.copy parentpath: ""
         r.root = vfs.bindRoot newid: sid kind: zvfs.bindkind.before
-        r.firstSrc = sid
+        bound.append sid
+    }
+    # bound last root first: put them back in srcdirs order
+    bi: bound.length
+    for bi > 0 loop {
+        bi = bi - 1
+        r.srcIds.append (bound.get i: bi)
     }
     return r
 }
@@ -191,37 +227,37 @@ bindLayer: function {vfs: zvfs.ZVfs layer: GenLayer.view} out zvfs.fsno is {
 }
 
 # check -- parse + typecheck(full) `mainUnit` against `srcdirs` layered
-# over `systemdir`. `overlays` maps names relative to the first src root (e.g.
-# "zparser.z") to live buffer text; when non-empty they are served by a
-# StringProvider bound in front of that root, shadowing disk.
+# over `systemdir`. `overlays` holds, per src root, live buffer text by the
+# name relative to that root (e.g. "zparser.z"); each root's buffers are served
+# by a StringProvider bound in front of everything, shadowing disk.
 check: function {
-    # the src roots, the first searched first; the open buffers shadow the first
+    # the src roots, the first searched first
     srcdirs: (List String).view
     systemdir: StringView
     mainUnit: StringView
-    overlays: (Map String V: String)
+    # the open buffers, one map per src root (in step with srcdirs), each by its
+    # path relative to that root
+    overlays: List (Map String V: String)
     layer: GenLayer.view
 } out CheckResult is {
     vfs: newVfs
     roots: buildRoots :vfs :systemdir :srcdirs :layer
     rootid: roots.root
-    srcid: roots.firstSrc
-    if overlays.length > 0 then {
-        ovid: vfs.registerString
-        {
-            # scope the provider borrow: bindRoot below needs the vfs
-            # exclusively
-            pidx: vfs.providers.length - 1
-            box: vfs.providers.getMut i: pidx
-            for each e: overlays.iterateItems loop {
-                fp: e.key.copy
-                ct: e.value.copy
-                box.p.addFile fpath: fp.take content: ct.take
+    # the last root's buffers first, so the first root's end up in front
+    oi: overlays.length
+    for oi > 0 loop {
+        oi = oi - 1
+        if oi < roots.srcIds.length then {
+            ov: overlays.getMut i: oi
+            if ov.length > 0 then {
+                rootid = (bindOverlay
+                    :vfs
+                    files: ov
+                    dir: (srcdirs.get i: oi).stringView
+                    base: (roots.srcIds.get i: oi)
+                )
             }
         }
-        rootid = vfs.bindRoot newid: ovid kind: zvfs.bindkind.before
-        # the open buffers and the src dir are one tree to a subunit lookup
-        vfs.shadowOver top: ovid base: srcid
     }
     p: zparser.Parser.create
     prog: p.parse :vfs :rootid mainUnitName: mainUnit.string
