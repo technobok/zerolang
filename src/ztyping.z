@@ -285,6 +285,13 @@ constslot: record {
     name: zast.nameid
 }
 
+# dataslot -- one element of a data block, by position: the block's type and
+# the element's slot, counted from 0 in the order the elements are written.
+dataslot: record {
+    owner: ztypes.tid
+    slot: u64
+}
+
 # armkey -- one union arm: the union's type and the arm's name
 armkey: record {
     owner: ztypes.tid
@@ -1081,6 +1088,9 @@ ZTyping: class {
     # Constants are not written in dependency order, so the evaluator pulls
     # rather than pushes and this is its cycle guard.
     constEvalState: (MapVV constslot v: u8)
+    # each data block's element values by slot, beside memberConst's by name:
+    # a constant `.index K` reads its element by position
+    dataSlotConst: (MapVV dataslot v: ztypes.cval)
     # the svalKind payload pool; cval.strId indexes it 1-based (0 = none)
     constStrings: List String
     # the integers outside i64 a constant holds; cval.bigId indexes it 1-based
@@ -2618,6 +2628,17 @@ ZTyping: class {
         return ((t.foldedBranch.get key: nid).or d: (foldedbranch known: false stmt: zast.nodeid))
     }
 
+    # setDataSlotConst -- record the VALUE of element `slot` of data block
+    # `dataTid`.
+    setDataSlotConst: function {:this dataTid: ztypes.tid slot: u64 value: ztypes.cval} is {
+        this.dataSlotConst.set key: (dataslot owner: dataTid :slot) :value
+    }
+
+    # dataSlotConstOf -- that value, or `none` when the element has none.
+    dataSlotConstOf: function {t: this.view dataTid: ztypes.tid slot: u64} out ztypes.cval is {
+        return ((t.dataSlotConst.get key: (dataslot owner: dataTid :slot)).or d: ztypes.noConst)
+    }
+
     # memberConstOf -- that value, or `none` when the member has none.
     memberConstOf: function {
         t: this.view
@@ -3234,6 +3255,7 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         nodeConst: (IdMapV zast.nodeid v: ztypes.cval)
         memberConst: (MapVV constslot v: ztypes.cval)
         constEvalState: (MapVV constslot v: u8)
+        dataSlotConst: (MapVV dataslot v: ztypes.cval)
         constStrings: List String
         constBigInts: List math.BigInt
         constRats: List math.BigRat

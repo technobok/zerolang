@@ -9554,6 +9554,7 @@ resolveData: function {
                             nameId: memberIdAt
                             value: cv
                         )
+                        st.typing.setDataSlotConst dataTid: did slot: ordinal value: cv
                     }
                 }
             }
@@ -29735,10 +29736,10 @@ checkUnitQualifiedMember: function {
     return (callleg handled: false tid: ztypes.tid.zero)
 }
 
-# checkDataBlockMember -- `.index` and `.array` on a data block. Both need the
-# block's static array kept by the emitter (label accesses fold to constants);
-# `.array` additionally copies the elements into the sized array instance
-# (array_{elem}_{count}), minting it on first access.
+# checkDataBlockMember -- `.index` and `.array` on a data block. `.index` yields
+# one element (markDataIndexRead keeps the static array when the read does not
+# fold); `.array` keeps the array always and copies the elements into the sized
+# array instance (array_{elem}_{count}), minting it on first access.
 checkDataBlockMember: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
@@ -29747,11 +29748,8 @@ checkDataBlockMember: function {
     bt: ztypes.tid
     cnId: zast.nameid
 } out callleg is {
-    # `.index` / `.array` on a data block need its static array emitted (label
-    # accesses fold to constants); mark the type so the emitter keeps the array.
     if (st.reg.typetypeOf typeId: bt) == ztypes.ztypetype.dataType then {
         if (zast.nameTextEq :ast ref: cnId s: "index") then {
-            markDataRuntimeIndexed :st tid: bt
             sedi: dataElemTypeOf :ast :st :unitDecl dataTid: bt
             if sedi.isZero.not then {
                 stampGate :st nid: dp.nid tid: sedi
@@ -50598,7 +50596,43 @@ checkValueAt: function {
 } out ztypes.tid is {
     t: checkValueArmAt :st :unitDecl :ast :nid
     stampConstAt :st :unitDecl :ast :nid
+    markDataIndexRead :st :ast :nid
     return t
+}
+
+# markDataIndexRead -- a `blk.index i` the fold did not answer reads the block's
+# static array at run time, so the emitter must keep it. A constant index folds
+# to its element and needs no array.
+markDataIndexRead: function {st: zenv.ZSymbolTable ast: Ast.view nid: zast.nodeid} is {
+    dataTid: dataIndexedAt :st :ast :nid
+    if dataTid.isZero then return
+    if (st.typing.nodeConstIn mono: st.typing.curMonoStamp :nid).kind.none.not then return
+    markDataRuntimeIndexed :st tid: dataTid
+}
+
+# dataIndexedAt -- the data block a `blk.index i` call at `nid` reads, as the
+# walk typed its base; 0 for any other node.
+dataIndexedAt: function {
+    st: zenv.ZSymbolTable.view ast: Ast.view nid: zast.nodeid
+} out ztypes.tid is {
+    baseId: zast.nodeid
+    {
+        n: ast.nodes.get i: nid
+        if n.call.not then return ztypes.tid.zero
+        cn: ast.nodes.get i: n.callable
+        if cn.dottedpath.not then return ztypes.tid.zero
+        if (atomIsIndex :ast nid: cn.child).not then return ztypes.tid.zero
+        baseId = cn.parent
+    }
+    dataTid: walkTypeOf :st nid: baseId
+    if (st.reg.typetypeOf typeId: dataTid) != ztypes.ztypetype.dataType then return ztypes.tid.zero
+    return dataTid
+}
+
+# atomIsIndex -- node `nid` is the atom `index`, the member a data block reads an
+# element by position through.
+atomIsIndex: function {ast: Ast.view nid: zast.nodeid} out bool is {
+    return (atomNameId :ast n: (ast.nodes.get i: nid)) == (nameIdOf :ast name: "index")
 }
 
 # checkValueArmAt -- the arm dispatch: each handler takes its row as plain
@@ -54958,6 +54992,10 @@ renderConstFail: function {st: zenv.ZSymbolTable f: ztypes.constfail} is {
         noMethodMsg = "constant 'substring' range is out of bounds"
         hintText = "from and to must satisfy from <= to <= length; the run-time call panics"
     }
+    if f.kind.indexRange then {
+        noMethodMsg = constStringAt :st id: f.strId
+        hintText = "a constant index must be below the block's length; the run-time read panics"
+    }
     if noMethodMsg.length == 0 then return
     (reportConstError
         :st
@@ -57055,6 +57093,39 @@ constArmRead: function {
     # the arm's name id
     armNameId: zast.nameid
 } out ztypes.cval is {
+    ptid: typeNamedFrom :st :scope :ast :lookupUnit :typeNameId
+    if ptid.isZero then return ztypes.noConst
+    ptt: st.reg.typetypeOf typeId: ptid
+    if ptt == ztypes.ztypetype.dataType then {
+        return (constDataMember :st :scope :ast dataTid: ptid nameId: armNameId)
+    }
+    # another type's `as` constant (`cfg.LIMIT`), folded where it is declared
+    ptd: declOfTypeId :st tid: ptid
+    pmd: st.typing.declFindChild parentDeclId: ptd nameId: armNameId
+    if pmd.isZero.not when (typeMemberHoldsConstant
+        :st
+        :ast
+        typeDecl: ptd
+        defNode: (st.typing.decls.get i: pmd).node
+    ) then return (constValueOfMemberTidId :ast :st unitTid: ptid nameId: armNameId)
+    isSum: ptt.isSum
+    if isSum.not then return ztypes.noConst
+    anm: armNameId
+    # an arm the type does not declare is no value of it
+    if (st.typing.declChildOfId parentTypeId: ptid nameId: anm).none then return ztypes.noConst
+    if (armCarriesPayload :st armTid: ptid armName: anm) then return ztypes.noConst
+    return (ztypes.makeArmConst armTid: ptid armName: anm)
+}
+
+# typeNamedFrom -- the type a constant's bare name `typeNameId` names, looked up
+# from `lookupUnit`; 0 when it names none.
+typeNamedFrom: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    lookupUnit: ztypes.declid
+    typeNameId: zast.nameid
+} out ztypes.tid is {
     # the type is looked up in `lookupUnit`'s scope -- `scope` itself when
     # it already lies inside that unit (a nested scope of it is nearer than
     # its root), else the unit's root
@@ -57085,28 +57156,7 @@ constArmRead: function {
         # arm IS a use of the type.
         ptu = descendNamedId :st scope: rf :ast unitDecl: lookupUnit nameId: typeNameId
     }
-    if ptu.isZero then return ztypes.noConst
-    ptid: ptu
-    ptt: st.reg.typetypeOf typeId: ptid
-    if ptt == ztypes.ztypetype.dataType then {
-        return (constDataMember :st :scope :ast dataTid: ptid nameId: armNameId)
-    }
-    # another type's `as` constant (`cfg.LIMIT`), folded where it is declared
-    ptd: declOfTypeId :st tid: ptid
-    pmd: st.typing.declFindChild parentDeclId: ptd nameId: armNameId
-    if pmd.isZero.not when (typeMemberHoldsConstant
-        :st
-        :ast
-        typeDecl: ptd
-        defNode: (st.typing.decls.get i: pmd).node
-    ) then return (constValueOfMemberTidId :ast :st unitTid: ptid nameId: armNameId)
-    isSum: ptt.isSum
-    if isSum.not then return ztypes.noConst
-    anm: armNameId
-    # an arm the type does not declare is no value of it
-    if (st.typing.declChildOfId parentTypeId: ptid nameId: anm).none then return ztypes.noConst
-    if (armCarriesPayload :st armTid: ptid armName: anm) then return ztypes.noConst
-    return (ztypes.makeArmConst armTid: ptid armName: anm)
+    return ptu
 }
 
 # constValEq -- do two compile-time values denote the same thing? Only defined
@@ -58104,6 +58154,24 @@ constOfCall: function {
     # bail before ever looking at the receiver. Intercept first.
     sm: constOfValueCall :st :scope :ast :unitDecl :nid :callableId args: argIds :ln :co
     if sm.kind.none.not then return sm
+    dx: constOfDataIndex :st :scope :ast :unitDecl :nid :callableId args: argIds :ln :co
+    if dx.kind.none.not then return dx
+    return (constOfErrorCall :st :scope :ast :unitDecl :nid :callableId args: argIds :ln :co)
+}
+
+# constOfErrorCall -- `error "..."` in constant position: the program asserting,
+# recorded as a reachedError failure in the user's own words. noConst always.
+constOfErrorCall: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    nid: zast.nodeid
+    callableId: zast.nodeid
+    args: ListVal zast.nodeid
+    ln: u32
+    co: u32
+} out ztypes.cval is {
     isError: false
     cnode: ast.nodes.get i: callableId
     cbn: zast.nameTextAt :ast ref: (atomNameId :ast n: cnode)
@@ -58111,7 +58179,7 @@ constOfCall: function {
     cbn.drop
     if isError.not then return ztypes.noConst
     umsg: "compile-time error".string
-    for each aId: argIds loop {
+    for each aId: args loop {
         opId: zast.nodeid
         {
             an: ast.nodes.get i: aId
@@ -58133,6 +58201,65 @@ constOfCall: function {
         strId: strId93
     )
     return ztypes.noConst
+}
+
+# constOfDataIndex -- `blk.index K` with a constant K: the element at slot K,
+# read through the declaration as a label is. noConst for any other call, for a
+# K that does not fold, and for an element with no value; a K outside the block
+# is recorded as an indexRange failure, a constant with no value.
+constOfDataIndex: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    nid: zast.nodeid
+    callableId: zast.nodeid
+    args: ListVal zast.nodeid
+    ln: u32
+    co: u32
+} out ztypes.cval is {
+    if args.length != 1 then return ztypes.noConst
+    baseId: zast.nodeid
+    baseName: zast.nameid
+    opId: zast.nodeid
+    {
+        cn: ast.nodes.get i: callableId
+        if cn.dottedpath when (atomIsIndex :ast nid: cn.child) then {
+            baseId = cn.parent
+            baseName = atomNameId :ast n: (ast.nodes.get i: cn.parent)
+        }
+        an: ast.nodes.get i: (args.get i: 0)
+        if an.namedoperation then opId = an.operation
+    }
+    if baseName.isZero or opId.isZero then return ztypes.noConst
+    if (st.typing.atomVariableId.get key: baseId).none.not then return ztypes.noConst
+    dataTid: walkTypeOf :st nid: baseId
+    if (st.reg.typetypeOf typeId: dataTid) != ztypes.ztypetype.dataType then {
+        dataTid = typeNamedFrom :st :scope :ast lookupUnit: unitDecl typeNameId: baseName
+    }
+    if dataTid.isZero then return ztypes.noConst
+    if (st.reg.typetypeOf typeId: dataTid) != ztypes.ztypetype.dataType then return ztypes.noConst
+    kv: evalConstNode :st :scope :ast :unitDecl nid: opId
+    if kv.kind.ivalKind.not then return ztypes.noConst
+    count: (st.typing.memberConstOf parentTypeId: dataTid nameId: zast.names.wkLength).ival
+    if (kv.bigId != 0) or (kv.ival < 0) or (kv.ival >= count) then {
+        rm: "constant index \{kv.ival} is outside the data block (length \{count})"
+        if kv.bigId != 0 then rm = "constant index is outside the data block (length \{count})"
+        (constFailRecord
+            :st
+            kind: ztypes.constfailkind.indexRange
+            nodeid: nid
+            lineno: ln
+            colno: co
+            width: 1
+            strId: (constInternString :st text: rm.stringView)
+        )
+        return ztypes.noConst
+    }
+    ev: st.typing.dataSlotConstOf :dataTid slot: kv.ival.u64.orPanic
+    et: st.reg.dataElemTypeOf tid: dataTid
+    if ev.kind.none or (isNumericTid :ast :st :scope tid: et).not then return ztypes.noConst
+    return (ztypes.typedConst c: ev numTid: et)
 }
 
 # constOfNamedBase -- a dotted path whose base is a bare atom. The base can name a
@@ -58789,7 +58916,7 @@ stampConstAt: function {
     got: st.typing.constFail
     st.typing.constFail = held
     if cv.kind.none then {
-        hasNone: got.kind.overflow
+        hasNone: got.kind.overflow or got.kind.indexRange
         if got.kind.divZero then hasNone = integerDivision :st :ast f: got
         if hasNone then renderConstFail :st f: got
         return
@@ -58889,7 +59016,9 @@ useSiteAsks: function {
         rv: st.typing.nodeConstIn :mono nid: br.rhs
         return rv.kind.none.not
     }
-    if plan.arm == 6 then return (callOnFoldedString :st :ast :nid)
+    if plan.arm == 6 then {
+        return (callOnFoldedString :st :ast :nid) or (dataIndexedAt :st :ast :nid).isZero.not
+    }
     if (plan.arm == 7) or (plan.arm == 8) then return false
     if plan.arm == 3 then return plan.parts < 2
     if plan.arm != 4 then return true
@@ -59284,6 +59413,18 @@ resolveCalledConstantDef: function {
                 defName: cbn.stringView
             )
             if crv.kind.svalKind then cbu = true
+        }
+        # `blk.index K` reads an element by position, a value the value
+        # channel folds and range-checks
+        if cbu.not when ccn.dottedpath when (atomIsIndex :ast nid: ccn.child) then {
+            dbt: (typeNamedFrom
+                :st
+                :scope
+                :ast
+                lookupUnit: unitDecl
+                typeNameId: (nameIdOf :ast name: cbn.stringView)
+            )
+            if (st.reg.typetypeOf typeId: dbt) == ztypes.ztypetype.dataType then cbu = true
         }
         if cbu.not then {
             # found the way a type reference finds its template: a name the
