@@ -2102,17 +2102,16 @@ markerText: function {o: ztypes.zparamownership} out String is {
 # isStringViewMember / isListViewMember -- the view-conversion members, named
 # once each so a reader changing the spelling has one place to change and the
 # emitter, the checker and the linter cannot drift apart on it.
-isStringViewMember: function {name: StringView} out bool is {
-    if name == "stringView" then return true
-    return false
+isStringViewMember: function {nameId: zast.nameid} out bool is {
+    return nameId == zast.wellKnown.slot.wkStringView
 }
 
 # see isStringViewMember.
-isListViewMember: function {name: StringView} out bool is {
-    if name == "listView" then return true
+isListViewMember: function {nameId: zast.nameid} out bool is {
+    if nameId == zast.wellKnown.slot.wkListView then return true
     # `Bytes.byteView` is its base's listView, re-typed: the typedef shares the
     # base's representation
-    return name == "byteView"
+    return nameId == zast.wellKnown.slot.wkByteView
 }
 
 # valueIsHold -- true when a bound value carries the `.hold` marker. `hold` is
@@ -7300,12 +7299,8 @@ stampMemberSignature: function {
                 # the parameter's root name is read through a view, dropped
                 # before the stamp below lends ast
                 isThisRoot: false
-                pRoot: (zast.nameTextAt
-                    :ast
-                    ref: (rootNameIdOf :ast n: (ast.nodes.get i: pn.operation))
-                )
-                isThisRoot = pRoot.stringView == "this"
-                pRoot.drop
+                pRoot: rootNameIdOf :ast n: (ast.nodes.get i: pn.operation)
+                isThisRoot = pRoot == zast.wellKnown.slot.wkThis
                 if isThisRoot then {
                     (ztyping.nodeTypeSet
                         tbl: st.typing.nodeType
@@ -8004,8 +7999,7 @@ eqNullOptOut: function {ast: Ast.view asItems: zast.kidspan} out bool is {
         h20x9 = h20x9 + 1
         am: ast.nodes.get i: amId
         if am.namedoperation then {
-            mn: zast.nameTextAt :ast ref: am.name
-            isEqNe: (mn.stringView == "==") or (mn.stringView == "!=")
+            isEqNe: (cmpOpOf opnId: am.name).eq or (cmpOpOf opnId: am.name).ne
             if isEqNe then {
                 vn: atomNameId :ast n: (ast.nodes.get i: am.operation)
                 if vn == zast.wellKnown.slot.tyNull then result = true
@@ -10307,8 +10301,10 @@ objectTypedefBaseTid: function {
 # fnFieldFlaggableName -- an is-block FUNCTION member that should become a struct
 # fnptr slot (a spec field / method / method-ref), excluding the constructor and
 # comparison synthetics so they stay free functions / ctors.
-fnFieldFlaggableName: function {name: StringView} out bool is {
-    return ((name == "create") or (name == "==") or (name == "!=")).not
+fnFieldFlaggableName: function {nameId: zast.nameid} out bool is {
+    if nameId == zast.wellKnown.slot.wkCreate then return false
+    if nameId == zast.wellKnown.slot.wkOpEq then return false
+    return nameId != zast.wellKnown.slot.wkOpNe
 }
 
 # typeExprHasPrivate -- does a field's type expression carry a `.private` marker
@@ -11637,7 +11633,7 @@ attachRecordIsItems: function {
                 got.eq = got.eq or (fm.name == zast.wellKnown.slot.wkOpEq)
                 got.ne = got.ne or (fm.name == zast.wellKnown.slot.wkOpNe)
                 st.typing.setMemberType parentTypeId: rt nameId: fm.name childTypeId: mido
-                if (fnFieldFlaggableName name: fname.stringView) then {
+                if (fnFieldFlaggableName nameId: fm.name) then {
                     (st.typing.setChildFnptrField
                         pool: ast.names
                         parentTypeId: rt
@@ -13134,7 +13130,7 @@ resolveClassMethodDecl: function {
                     typeId: mido
                     value: true
                 )
-                if (fnFieldFlaggableName name: fname.stringView) then {
+                if (fnFieldFlaggableName nameId: fm.name) then {
                     (st.typing.setChildFnptrField
                         pool: ast.names
                         parentTypeId: cid
@@ -13821,7 +13817,7 @@ resolveNamedFieldSlot: function {
     needsDtor: false
     refuseMarkedFunctionType :st :ast :unitDecl :scope typeNid: fm.operation
     fieldOwn: pathOwnership :ast n: (ast.nodes.get i: fm.operation)
-    if fname != "_resume_input" when (fieldTypeNeedsCleanup
+    if fm.name != zast.wellKnown.slot.wkResumeInput when (fieldTypeNeedsCleanup
         :st
         :scope
         :ast
@@ -17455,8 +17451,7 @@ exprCallIsReturn: function {ast: Ast.view op: astnode.view} out bool is {
     match (
         op
     ) case call then {
-        cn: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: op.callable))
-        return cn.stringView == "return"
+        return (atomNameId :ast n: (ast.nodes.get i: op.callable)) == zast.wellKnown.slot.wkReturn
     } else {
         return false
     }
@@ -18036,7 +18031,7 @@ scanCallsInNode: function {
         scanCallsInSpan :st :scope :ast span: node.clauses
         scanCallsAt :st :scope :ast nid: node.elseclause
     } case forexpr then {
-        demandNever :st :scope :ast
+        demandNever :st :scope
         # conditions, body, postconditions -- childIds' order for a for, walked
         # through the node's own fields. scanCallsAt skips an absent body
         # exactly as childIds' appendOptId omits it.
@@ -18044,7 +18039,7 @@ scanCallsInNode: function {
         scanCallsAt :st :scope :ast nid: node.body
         scanCallsInSpan :st :scope :ast span: node.postconditions
     } case doexpr then {
-        doFr: demandNever :st :scope :ast
+        doFr: demandNever :st :scope
         if (blockHasBreak :ast n: (ast.nodes.get i: node.statement)) then {
             (demandDefinition
                 :st
@@ -18126,14 +18121,13 @@ demandCalleeName: function {
     calleeId: zast.nodeid
 } is {
     nameId: atomNameId :ast n: (ast.nodes.get i: calleeId)
-    cn: zast.nameTextAt :ast ref: nameId
     fr: unitScopeOf :st declId: scope
-    if cn.stringView == "return" then {
+    if nameId == zast.wellKnown.slot.wkReturn then {
         demandDefinition :st scope: fr nameId: zast.wellKnown.slot.wkReturn
-        demandDefinition :st scope: fr nameId: (zast.poolFind pool: ast.names text: "never")
+        demandDefinition :st scope: fr nameId: zast.wellKnown.slot.tyNever
         return
     }
-    if cn.length > 0 then demandDefinition :st scope: fr :nameId
+    if nameId.isZero.not then demandDefinition :st scope: fr :nameId
 }
 
 # demandPathNames -- what a DOTTED PATH demands: the name its root spells, and
@@ -18164,10 +18158,9 @@ demandPathNames: function {
 demandNever: function {
     st: zenv.ZSymbolTable
     scope: ztypes.declid
-    ast: Ast.view
 } out ztypes.declid is {
     fr: unitScopeOf :st declId: scope
-    demandDefinition :st scope: fr nameId: (zast.poolFind pool: ast.names text: "never")
+    demandDefinition :st scope: fr nameId: zast.wellKnown.slot.tyNever
     return fr
 }
 
@@ -18253,10 +18246,7 @@ scanUnitCalls: function {
         bm: ast.nodes.get i: bmId
         if bm.namedoperation then {
             scanIt: true
-            if rootOnly then {
-                bnm: zast.nameTextAt :ast ref: bm.name
-                if bnm.stringView != "main" then scanIt = false
-            }
+            if rootOnly when bm.name != zast.wellKnown.slot.wkMain then scanIt = false
             if scanIt then {
                 scanDefCalls :st :scope :ast op: (ast.nodes.get i: bm.operation)
             }
@@ -18269,7 +18259,7 @@ scanUnitCalls: function {
 demandReturnNever: function {st: zenv.ZSymbolTable ast: Ast.view} is {
     sysId: nameIdOf :ast name: "system"
     demandUnitMember :st unitNameId: sysId nameId: zast.wellKnown.slot.wkReturn
-    demandUnitMember :st unitNameId: sysId nameId: (zast.poolFind pool: ast.names text: "never")
+    demandUnitMember :st unitNameId: sysId nameId: zast.wellKnown.slot.tyNever
 }
 
 # seed the demand set from `main`: the walk resolves only what a reference
@@ -18729,13 +18719,14 @@ isUnitOp: function {op: astnode.view} out bool is {
 memberIsRestricted: function {
     ast: Ast
     opId: zast.nodeid
-    mName: StringView
+    # the definition's name id
+    mName: zast.nameid
     speculative: bool
     rootOnly: bool
 } out bool is {
     if (isUnitOp op: (ast.nodes.get i: opId)) then return false
     if speculative when (isFunctionDefOp op: (ast.nodes.get i: opId)).not then return true
-    if rootOnly when mName != "main" then return true
+    if rootOnly when mName != zast.wellKnown.slot.wkMain then return true
     return false
 }
 
@@ -18831,7 +18822,7 @@ resolveUnitMemberAt: function {
     if st.typing.eagerAll.not when (memberIsRestricted
         :ast
         opId: bmNode.operation
-        mName: mName.stringView
+        mName: bmNode.name
         :speculative
         :rootOnly
     ) then return
@@ -27736,8 +27727,8 @@ isOptionViewValOrigin: function {
 # `create` (explicit construction: `T.create` is bare-name construction).
 createDottedBaseId: function {ast: Ast.view n: astnode.view} out optionval zast.nodeid is {
     if n.dottedpath then {
-        ccn: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: n.child))
-        if ccn.stringView == "create" then return (optionval.some n.parent)
+        ccn: atomNameId :ast n: (ast.nodes.get i: n.child)
+        if ccn == zast.wellKnown.slot.wkCreate then return (optionval.some n.parent)
     }
     return (optionval.none zast.nodeid)
 }
@@ -28196,8 +28187,7 @@ checkProjectionCreate: function {
         if arg.nid.isZero then continue
         if found then continue
         # the source is the `from:` argument, or the one unlabelled argument
-        an: zast.nameTextCopy :ast ref: arg.name
-        if an.length > 0 when (an.stringView == "from").not then continue
+        if arg.name.isZero.not when arg.name != zast.wellKnown.slot.wkFrom then continue
         found = true
         # a projection or construction as the source is a temporary this one
         # consumes or re-views, so it owns what it holds
@@ -28247,9 +28237,9 @@ checkProjectionCreate: function {
 # `meta.create` (the enclosing type's raw allocator), or none.
 metaCreateBaseId: function {ast: Ast.view n: astnode.view} out optionval zast.nodeid is {
     if n.dottedpath then {
-        pn: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: n.parent))
-        cn2: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: n.child))
-        if pn.stringView == "meta" when cn2.stringView == "create" then {
+        pn: atomNameId :ast n: (ast.nodes.get i: n.parent)
+        cn2: atomNameId :ast n: (ast.nodes.get i: n.child)
+        if pn == zast.wellKnown.slot.wkMeta when cn2 == zast.wellKnown.slot.wkCreate then {
             return (optionval.some (nodeId n: (ast.nodes.get i: n.parent)))
         }
     }
@@ -31287,11 +31277,10 @@ checkTypeReadSuppliesReceiver: function {
 # lowers to it.
 markTypedefListViewUse: function {
     st: zenv.ZSymbolTable
-    ast: Ast.view
     bt: ztypes.tid
     cnId: zast.nameid
 } is {
-    if (isListViewMember name: (zast.nameTextAt :ast ref: cnId).stringView).not then return
+    if (isListViewMember nameId: cnId).not then return
     base: typedefBaseTidOf :st tid: bt
     if base.isZero then return
     lvD: st.typing.declMemberIdOf parentTypeId: base nameId: zast.wellKnown.slot.wkListView
@@ -31401,7 +31390,7 @@ checkResolvedMember: function {
         if (isValOpName :cnId) then markValOpUsed :ast :st tid: bt nameId: cnId depth: 0
         # a typedef's view conversion (`Bytes.byteView`) IS its base's listView,
         # which the emitter writes only for a base instance something used
-        markTypedefListViewUse :st :ast :bt :cnId
+        markTypedefListViewUse :st :bt :cnId
     }
     if (checkMemberNamespace :st :ast :unitDecl :dp :bt :cnId :mo :coerce
     ).not then return ztypes.tid.zero
@@ -34039,15 +34028,32 @@ isFloatLiteralName: function {name: StringView} out bool is {
     return (ztypes.isFloatLexeme numstr: name)
 }
 
+# cmpop -- the comparison operators, as the folder applies them
+cmpop: variant {
+    # none of these
+    other: null
+    eq: null
+    ne: null
+    lt: null
+    le: null
+    gt: null
+    ge: null
+} as { tag: u8.tag }
+
+# cmpOpOf -- the comparison operator the name `opnId` spells.
+cmpOpOf: function {opnId: zast.nameid} out cmpop is {
+    if opnId == zast.wellKnown.slot.wkOpEq then return cmpop.eq
+    if opnId == zast.wellKnown.slot.wkOpNe then return cmpop.ne
+    if opnId == zast.wellKnown.slot.wkOpLt then return cmpop.lt
+    if opnId == zast.wellKnown.slot.wkOpLe then return cmpop.le
+    if opnId == zast.wellKnown.slot.wkOpGt then return cmpop.gt
+    if opnId == zast.wellKnown.slot.wkOpGe then return cmpop.ge
+    return cmpop.other
+}
+
 # isComparisonOp -- a binop operator whose result is bool (not the operand type).
-isComparisonOp: function {name: StringView} out bool is {
-    if name == "<" then return true
-    if name == ">" then return true
-    if name == "<=" then return true
-    if name == ">=" then return true
-    if name == "==" then return true
-    if name == "!=" then return true
-    return false
+isComparisonOp: function {nameId: zast.nameid} out bool is {
+    return (cmpOpOf opnId: nameId).other.not
 }
 
 # stampTruthyCond -- record which arm a bare 2-arm-sum condition HOLDS when it
@@ -34177,11 +34183,8 @@ equalityArmFact: function {
 } out Option ArmPredFact is {
     br0: binRefAt :ast nid: (nodeId :n)
     if br0.operator.isZero then return (Option.none ArmPredFact)
-    opn0: (zast.nameTextAt
-        :ast
-        ref: (bareAtomNameId n: (ast.nodes.get i: br0.operator))
-    )
-    if opn0.stringView != "==" then return (Option.none ArmPredFact)
+    opn0: bareAtomNameId n: (ast.nodes.get i: br0.operator)
+    if opn0 != zast.wellKnown.slot.wkOpEq then return (Option.none ArmPredFact)
     lsd0: (ztyping.armSideOfName
         ty: st.typing
         typeId: boolId
@@ -41235,11 +41238,8 @@ literalTidOfLiteralOperand: function {
     {
         ipL: zast.infixPartsOf :ast :n
         if ipL.found then {
-            opT: (zast.nameTextAt
-                :ast
-                ref: (bareAtomNameId n: (ast.nodes.get i: ipL.operator))
-            )
-            if (isComparisonOp name: opT.stringView) then return ztypes.tid.zero
+            opT: bareAtomNameId n: (ast.nodes.get i: ipL.operator)
+            if (isComparisonOp nameId: opT) then return ztypes.tid.zero
             return (literalTidOfLiteralOperand :st :ast nid: ipL.lhs)
         }
     }
@@ -44188,8 +44188,8 @@ reportBoxUnknownArgument: function {
     ast: Ast
     arg: argref
 } is {
+    if arg.name == zast.wellKnown.slot.wkFrom then return
     an: zast.nameTextCopy :ast ref: arg.name
-    if an.stringView == "from" then return
     mbx7: "the builtin Box constructs with 'from:'; unknown argument '\{an}'"
     (addError
         :st
@@ -45659,10 +45659,7 @@ checkResolvedMethodCall: function {
             cbl: ast.nodes.get i: call.callable
             if cbl.dottedpath then bpl = cbl.parent
             cnL: dottedChildNameId :ast n: (ast.nodes.get i: call.callable)
-            if cnL.isZero.not then {
-                opnL: zast.nameTextAt :ast ref: cnL
-                isCmpL = isComparisonOp name: opnL.stringView
-            }
+            if cnL.isZero.not then isCmpL = isComparisonOp nameId: cnL
         }
         if bpl.isZero.not when isCmpL.not then {
             ltl: walkTypeOf :st nid: bpl
@@ -46277,8 +46274,8 @@ checkTaggedCtorArg: function {
 } is {
     arg2: argRefAt :ast nid: arg2Id
     if arg2.nid.isZero.not then {
-        uan: zast.nameTextCopy :ast ref: arg2.name
-        if uan.length > 0 when uan.stringView != "from" then {
+        if arg2.name.isZero.not when arg2.name != zast.wellKnown.slot.wkFrom then {
+            uan: zast.nameTextCopy :ast ref: arg2.name
             uum: "unknown argument '\{uan}'"
             (addError
                 :st
@@ -46897,14 +46894,13 @@ checkBareGenericCall: function {
             declId: declId92
         )
     }
-    cn: zast.nameTextAt :ast ref: cnId
-    if cn.stringView == "panic" then {
+    if cnId == zast.wellKnown.slot.wkPanic then {
         calleeNodeId: nodeId n: (ast.nodes.get i: call.callable)
         setpk: funcId
         stampGate :st nid: calleeNodeId tid: setpk
         st.typing.callKind.set key: call.nid value: zast.callkind.panicCall
     }
-    if cn.stringView == "error" then {
+    if cnId == zast.wellKnown.slot.wkError then {
         calid3: nodeId n: (ast.nodes.get i: call.callable)
         seter: funcId
         stampGate :st nid: calid3 tid: seter
@@ -53529,28 +53525,25 @@ checkUnitBodies: function {
             mmId: zast.kidAt kids: ast.kids span: bodyIds i: mi
             mi = mi + 1
             mm: argRefAt :ast nid: mmId
-            if mm.nid.isZero.not then {
-                memberName: zast.nameTextCopy :ast ref: mm.name
-                if memberName.stringView == "main" when (isFunctionDefOp
-                    op: (ast.nodes.get i: mm.operation)
-                ) then {
-                    foundMain = true
-                    hDeclId2: declOfUnitDefIds :st :unitDecl nameId: mm.name
-                    cfbFr: fnRefAt :ast nid: mm.operation
-                    checkMainSignature :st at: mm fn: cfbFr
-                    (checkFunctionBody
-                        :st
-                        :scope
-                        :unitDecl
-                        defName: memberName.stringView
-                        defNameId: zast.nameid
-                        fn: cfbFr
-                        thisName: ""
-                        thisTid: ztypes.tid
-                        :ast
-                        declId: hDeclId2
-                    )
-                }
+            if mm.nid.isZero.not when mm.name == zast.wellKnown.slot.wkMain when (isFunctionDefOp
+                op: (ast.nodes.get i: mm.operation)
+            ) then {
+                foundMain = true
+                hDeclId2: declOfUnitDefIds :st :unitDecl nameId: mm.name
+                cfbFr: fnRefAt :ast nid: mm.operation
+                checkMainSignature :st at: mm fn: cfbFr
+                (checkFunctionBody
+                    :st
+                    :scope
+                    :unitDecl
+                    defName: "main"
+                    defNameId: zast.nameid
+                    fn: cfbFr
+                    thisName: ""
+                    thisTid: ztypes.tid
+                    :ast
+                    declId: hDeclId2
+                )
             }
         }
         # E0039 -- there is no root to demand from. Compilation is demand-driven
@@ -53594,7 +53587,7 @@ checkUnitBodies: function {
                         :unitDecl
                         unitdefId: bm.operation
                     )
-                } else if defName.stringView != "main" then {
+                } else if bm.name != zast.wellKnown.slot.wkMain then {
                     hDeclId: declOfUnitDefIds :st :unitDecl nameId: bm.name
                     cfbFr: fnRefAt :ast nid: bm.operation
                     (checkFunctionBody
@@ -55223,8 +55216,7 @@ constantBinopType: function {
 } out ztypes.tid is {
     lt: constantOperandType :st :scope :ast :unitDecl nid: lhsId
     rt: constantOperandType :st :scope :ast :unitDecl nid: rhsId
-    opn: zast.nameTextCopy :ast ref: (atomNameId :ast n: (ast.nodes.get i: opId))
-    if (isComparisonOp name: opn.stringView) then {
+    if (isComparisonOp nameId: (atomNameId :ast n: (ast.nodes.get i: opId))) then {
         return (constantCompareType :st :scope :ast :unitDecl :nid :lhsId :rhsId :lt :rt)
     }
     result: lt
@@ -56347,7 +56339,6 @@ constOfTypedFold: function {
     ast: Ast
     lv: ztypes.cval
     rv: ztypes.cval
-    op: StringView
     # the operator's name id
     opnId: zast.nameid
     nid: zast.nodeid
@@ -56371,7 +56362,6 @@ constOfTypedFold: function {
             :ast
             :lv
             :rv
-            :op
             :opnId
             :gov
             k: gk.kind
@@ -56381,7 +56371,8 @@ constOfTypedFold: function {
         )
     }
     if lv.kind.ivalKind.not or rv.kind.ivalKind.not then return ztypes.noConst
-    if (isComparisonOp name: op) then return (constCompareInt :st :ast :op :lv :rv)
+    cop: cmpOpOf :opnId
+    if cop.other.not then return (constCompareInt :st :ast op: cop :lv :rv)
     aop: arithOpOf :opnId
     if aop.shl or aop.shr then {
         return (constTypedShift :st op: aop :lv :rv k: gk.kind numTid: gov)
@@ -56482,7 +56473,6 @@ constOfTypedFloatFold: function {
     ast: Ast
     lv: ztypes.cval
     rv: ztypes.cval
-    op: StringView
     # the operator's name id
     opnId: zast.nameid
     gov: ztypes.tid
@@ -56495,10 +56485,11 @@ constOfTypedFloatFold: function {
     lf: constFloatIn :st v: lv :k
     rf: constFloatIn :st v: rv :k
     if lf.has.not or rf.has.not then return ztypes.noConst
-    if (isComparisonOp name: op) then return (constCompareFloat
+    cop: cmpOpOf :opnId
+    if cop.other.not then return (constCompareFloat
         :st
         :ast
-        :op
+        op: cop
         a: lf.val
         b: rf.val
     )
@@ -57219,7 +57210,7 @@ constArmChild: function {
 constCompareInt: function {
     ast: Ast
     st: zenv.ZSymbolTable
-    op: StringView
+    op: cmpop
     lv: ztypes.cval
     rv: ztypes.cval
 } out ztypes.cval is {
@@ -57230,12 +57221,12 @@ constCompareInt: function {
         a = (constBigOf :st v: lv).compare rhs: (constBigOf :st v: rv)
         b = 0
     }
-    if op == "==" then return (boolConst :st :ast v: a == b)
-    if op == "!=" then return (boolConst :st :ast v: a != b)
-    if op == "<" then return (boolConst :st :ast v: a < b)
-    if op == "<=" then return (boolConst :st :ast v: a <= b)
-    if op == ">" then return (boolConst :st :ast v: a > b)
-    if op == ">=" then return (boolConst :st :ast v: a >= b)
+    if op.eq then return (boolConst :st :ast v: a == b)
+    if op.ne then return (boolConst :st :ast v: a != b)
+    if op.lt then return (boolConst :st :ast v: a < b)
+    if op.le then return (boolConst :st :ast v: a <= b)
+    if op.gt then return (boolConst :st :ast v: a > b)
+    if op.ge then return (boolConst :st :ast v: a >= b)
     return ztypes.noConst
 }
 
@@ -57243,16 +57234,16 @@ constCompareInt: function {
 constCompareFloat: function {
     ast: Ast
     st: zenv.ZSymbolTable
-    op: StringView
+    op: cmpop
     a: f64
     b: f64
 } out ztypes.cval is {
-    if op == "==" then return (boolConst :st :ast v: a == b)
-    if op == "!=" then return (boolConst :st :ast v: a != b)
-    if op == "<" then return (boolConst :st :ast v: a < b)
-    if op == "<=" then return (boolConst :st :ast v: a <= b)
-    if op == ">" then return (boolConst :st :ast v: a > b)
-    if op == ">=" then return (boolConst :st :ast v: a >= b)
+    if op.eq then return (boolConst :st :ast v: a == b)
+    if op.ne then return (boolConst :st :ast v: a != b)
+    if op.lt then return (boolConst :st :ast v: a < b)
+    if op.le then return (boolConst :st :ast v: a <= b)
+    if op.gt then return (boolConst :st :ast v: a > b)
+    if op.ge then return (boolConst :st :ast v: a >= b)
     return ztypes.noConst
 }
 
@@ -57682,8 +57673,7 @@ foldIfCond: function {
         if cond.namedoperation then {
             # a labelled condition other than `when` is not a plain guard, and
             # this fold does not speak for it
-            cl: zast.nameTextAt :ast ref: cond.name
-            if cl.length > 0 when cl.stringView != "when" then {
+            if cond.name.isZero.not when cond.name != zast.wellKnown.slot.kwWhen then {
                 isOther = true
             } else {
                 isGuard = true
@@ -58033,7 +58023,8 @@ constStrArgAt: function {
     unitDecl: ztypes.declid
     scope: ztypes.declid
     args: (ListVal zast.nodeid).view
-    label: StringView
+    # the argument's label id
+    label: zast.nameid
     idx: u64
 } out ztypes.cval is {
     res: ztypes.noConst
@@ -58043,12 +58034,8 @@ constStrArgAt: function {
         if found.not then {
             an: argRefAt :ast nid: aId
             if an.nid.isZero.not then {
-                hit: false
-                if an.name.isZero when i == idx then hit = true
-                if an.name.isZero.not then {
-                    lt: zast.nameTextAt :ast ref: an.name
-                    if lt.stringView == label then hit = true
-                }
+                # a positional argument at `idx`, or the one labelled `label`
+                hit: an.name.isZero and (i == idx) or (an.name == label)
                 if hit then {
                     res = (evalConstNode
                         :st
@@ -58465,36 +58452,39 @@ constStringMethod: function {
     scope: ztypes.declid
     args: (ListVal zast.nodeid).view
     recv: ztypes.cval
-    name: StringView
+    # the method's name id
+    nameId: zast.nameid
     nodeid: zast.nodeid
     lineno: u32
     colno: u32
 } out ztypes.cval is {
     s: constStringAt :st id: recv.strId
-    if name == "length" then return (constStringLength :st :scope :ast s: s.stringView)
-    lbl: ""
-    if name == "startsWith" then lbl = "prefix"
-    if name == "endsWith" then lbl = "suffix"
-    if name == "contains" then lbl = "needle"
-    if lbl.length > 0 then {
+    if nameId == zast.wellKnown.slot.wkLength then {
+        return (constStringLength :st :scope :ast s: s.stringView)
+    }
+    lbl: zast.nameid
+    if nameId == zast.wellKnown.slot.wkStartsWith then lbl = zast.wellKnown.slot.wkPrefix
+    if nameId == zast.wellKnown.slot.wkEndsWith then lbl = zast.wellKnown.slot.wkSuffix
+    if nameId == zast.wellKnown.slot.wkContains then lbl = zast.wellKnown.slot.wkNeedle
+    if lbl.isZero.not then {
         a: constStrArgAt :st :scope :ast :unitDecl :args label: lbl idx: 0
         if a.kind.svalKind.not then return ztypes.noConst
         constStr: constStringAt :st id: a.strId
-        if name == "startsWith" then return (boolConst
+        if nameId == zast.wellKnown.slot.wkStartsWith then return (boolConst
             :st
             :ast
             v: (s.startsWith prefix: constStr)
         )
-        if name == "endsWith" then return (boolConst
+        if nameId == zast.wellKnown.slot.wkEndsWith then return (boolConst
             :st
             :ast
             v: (s.endsWith suffix: constStr)
         )
         return (boolConst :st :ast v: (s.contains needle: constStr))
     }
-    if name == "substring" then {
-        f: constStrArgAt :st :scope :ast :unitDecl :args label: "from" idx: 0
-        t: constStrArgAt :st :scope :ast :unitDecl :args label: "to" idx: 1
+    if nameId == zast.wellKnown.slot.wkSubstring then {
+        f: constStrArgAt :st :scope :ast :unitDecl :args label: zast.wellKnown.slot.wkFrom idx: 0
+        t: constStrArgAt :st :scope :ast :unitDecl :args label: zast.wellKnown.slot.wkTo idx: 1
         if f.kind.ivalKind.not then return ztypes.noConst
         if t.kind.ivalKind.not then return ztypes.noConst
         sz: s.length.i64.orPanic
@@ -58515,7 +58505,13 @@ constStringMethod: function {
         sub: s.substring from: f.ival.u64.orPanic to: t.ival.u64.orPanic
         return (ztypes.makeStrConst (constInternString :st text: sub))
     }
-    return (constUnsupportedMethod :st :name :nodeid :lineno :colno)
+    return (constUnsupportedMethod
+        :st
+        name: (zast.nameTextAt :ast ref: nameId).stringView
+        :nodeid
+        :lineno
+        :colno
+    )
 }
 
 # constOfBinopFold -- the folded value of `lv <op> rv`: two tags compare by
@@ -58527,12 +58523,12 @@ constOfBinopFold: function {
     ast: Ast
     lv: ztypes.cval
     rv: ztypes.cval
-    op: StringView
     opnId: zast.nameid
     nid: zast.nodeid
     ln: u32
     co: u32
 } out ztypes.cval is {
+    cop: cmpOpOf :opnId
     # two tags compare by ARM IDENTITY -- the owning type and the arm's
     # name-pool id -- never by rendered text. Only equality is defined, since
     # arms have no order -- except bool's, which also fold `and` and `or`.
@@ -58541,12 +58537,8 @@ constOfBinopFold: function {
         if bl.kind.none.not then return bl
         same: false
         if lv.armTid == rv.armTid when lv.armName == rv.armName then same = true
-        if op == "==" then return (boolConst :st :ast v: same)
-        if op == "!=" then return (boolConst
-            :st
-            :ast
-            v: same.not
-        )
+        if cop.eq then return (boolConst :st :ast v: same)
+        if cop.ne then return (boolConst :st :ast v: same.not)
         return ztypes.noConst
     }
     # two string constants compare by their interned TEXT. Only equality is
@@ -58556,22 +58548,22 @@ constOfBinopFold: function {
         ls: constStringAt :st id: lv.strId
         rs: constStringAt :st id: rv.strId
         eq: ls.stringView == rs
-        if op == "==" then return (boolConst :st :ast v: eq)
-        if op == "!=" then return (boolConst :st :ast v: eq.not)
+        if cop.eq then return (boolConst :st :ast v: eq)
+        if cop.ne then return (boolConst :st :ast v: eq.not)
         # `+` BUILDS, so the folded value is the joined text, interned like
         # any other. `A + B + C` folds left to right through this leg with
         # no runtime temporary at any step.
-        if op == "+" then {
+        if opnId == zast.wellKnown.slot.wkOpAdd then {
             ls.append rs
             return (ztypes.makeStrConst (constInternString :st text: ls.stringView))
         }
         return ztypes.noConst
     }
     if lv.numTid.isZero.not or rv.numTid.isZero.not then {
-        return (constOfTypedFold :st :scope :ast :lv :rv :op :opnId :nid :ln :co)
+        return (constOfTypedFold :st :scope :ast :lv :rv :opnId :nid :ln :co)
     }
     if lv.kind.ivalKind when rv.kind.ivalKind then {
-        if (isComparisonOp name: op) then return (constCompareInt :st :ast :op :lv :rv)
+        if cop.other.not then return (constCompareInt :st :ast op: cop :lv :rv)
         r: (constArithInt
             :st
             nodeid: nid
@@ -58587,7 +58579,7 @@ constOfBinopFold: function {
     }
     lNum: lv.kind.ivalKind or lv.kind.fvalKind
     rNum: rv.kind.ivalKind or rv.kind.fvalKind
-    if lNum and rNum then return (constOfExactBinop :st :ast :lv :rv :op :opnId :nid :ln :co)
+    if lNum and rNum then return (constOfExactBinop :st :ast :lv :rv :opnId :nid :ln :co)
     return ztypes.noConst
 }
 
@@ -58599,14 +58591,14 @@ constOfExactBinop: function {
     ast: Ast
     lv: ztypes.cval
     rv: ztypes.cval
-    op: StringView
     opnId: zast.nameid
     nid: zast.nodeid
     ln: u32
     co: u32
 } out ztypes.cval is {
     aop: arithOpOf :opnId
-    cmp: isComparisonOp name: op
+    cop: cmpOpOf :opnId
+    cmp: cop.other.not
     if cmp.not when (arithIsFloat op: aop).not then return ztypes.noConst
     if aop.div when (constIsZero :st v: rv) then {
         (constFailRecord
@@ -58624,12 +58616,12 @@ constOfExactBinop: function {
     if lr.some when rr.some then {
         a: lr.take
         b: rr.take
-        if cmp then return (constCompareOrder :st :ast :op c: (a.compare rhs: b))
+        if cmp then return (constCompareOrder :st :ast op: cop c: (a.compare rhs: b))
         return (constOfRat :st r: (ratArith :aop :a :b))
     }
     x: constBigFloatOf :st v: lv
     y: constBigFloatOf :st v: rv
-    if cmp then return (constCompareOrder :st :ast :op c: (x.compare rhs: y))
+    if cmp then return (constCompareOrder :st :ast op: cop c: (x.compare rhs: y))
     return (constOfBigFloat :st f: (bigFloatArith :aop :x :y))
 }
 
@@ -58658,7 +58650,7 @@ bigFloatArith: function {
 constCompareOrder: function {
     st: zenv.ZSymbolTable
     ast: Ast
-    op: StringView
+    op: cmpop
     c: i32
 } out ztypes.cval is {
     return (constCompareInt
@@ -58693,9 +58685,8 @@ constOfBinop: function {
     rv: evalConstNode :st :scope :ast :unitDecl nid: rhsId
     if rv.kind.none then return ztypes.noConst
     opnId: atomNameId :ast n: (ast.nodes.get i: opId)
-    opNode: zast.nameTextCopy :ast ref: opnId
-    if opNode.length == 0 then return ztypes.noConst
-    return (constOfBinopFold :st :scope :ast :lv :rv op: opNode.stringView :opnId :nid :ln :co)
+    if opnId.isZero then return ztypes.noConst
+    return (constOfBinopFold :st :scope :ast :lv :rv :opnId :nid :ln :co)
 }
 
 # constOfStringMethodCall -- a static method on a string constant
@@ -58723,10 +58714,8 @@ constOfStringMethodCall: function {
     if recvId.isZero then return ztypes.noConst
     rcv: evalConstNode :st :scope :ast :unitDecl nid: recvId
     if rcv.kind.svalKind.not then return ztypes.noConst
-    mnc: String
-    mnode: ast.nodes.get i: methodId
-    mnc = zast.nameTextCopy :ast ref: (atomNameId :ast n: mnode)
-    if mnc.length == 0 then return ztypes.noConst
+    mnc: atomNameId :ast n: (ast.nodes.get i: methodId)
+    if mnc.isZero then return ztypes.noConst
     return (constStringMethod
         :st
         :scope
@@ -58734,7 +58723,7 @@ constOfStringMethodCall: function {
         :unitDecl
         :args
         recv: rcv
-        name: mnc.stringView
+        nameId: mnc
         nodeid: nid
         lineno: ln
         colno: co
@@ -58938,9 +58927,7 @@ constOfErrorCall: function {
 } out ztypes.cval is {
     isError: false
     cnode: ast.nodes.get i: callableId
-    cbn: zast.nameTextAt :ast ref: (atomNameId :ast n: cnode)
-    if cbn.stringView == "error" then isError = true
-    cbn.drop
+    if (atomNameId :ast n: cnode) == zast.wellKnown.slot.wkError then isError = true
     if isError.not then return ztypes.noConst
     umsg: "compile-time error".string
     for each aId: args loop {

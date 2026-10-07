@@ -2432,7 +2432,7 @@ perf: $(PERFBIN)
 # +338 a type is named by the path of units that declares it (unitPathOfTid):
 # 0 behaviour, +338 source (ab.sh, now staging its trees at equal depth --
 # behaviour + source equals perf-strict's delta).
-ALLOC_BASELINE := 2225613
+ALLOC_BASELINE := 2223993
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -3377,16 +3377,16 @@ eager-lib-guard: bin/zc
 # the spelling moves, and it dies silently.
 member-guard:
 	@m1=$$(grep -cE '[a-z]*cn\.stringView ==|[a-z]*cn == "' src/ztypecheck.z); \
-	if [ "$$m1" -gt 5 ]; then \
-	  echo "member-guard FAIL: string-keyed member compares = $$m1 (baseline 5)"; \
+	if [ "$$m1" -gt 0 ]; then \
+	  echo "member-guard FAIL: string-keyed member compares = $$m1 (baseline 0)"; \
 	  echo "  A new hardcoded string-keyed member/marker special-case was added to the"; \
 	  echo "  type checker. Resolve members through their declared childOf edges (the"; \
 	  echo "  system units are the source of truth); bump the baseline only for a"; \
 	  echo "  genuinely-sanctioned marker."; \
 	  exit 1; \
 	fi; \
-	if [ "$$m1" -lt 5 ]; then \
-	  echo "member-guard: string-keyed member compares = $$m1 < baseline 5 -- lower the baseline here"; \
+	if [ "$$m1" -lt 0 ]; then \
+	  echo "member-guard: string-keyed member compares = $$m1 < baseline 0 -- lower the baseline here"; \
 	fi; \
 	echo "member-guard OK: string-keyed member compares = $$m1 (<=5)"
 

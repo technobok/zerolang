@@ -2274,9 +2274,8 @@ Analysis: class {
     checkLiteralCompare: function {
         :this ast: Ast.view opId: zast.nodeid lhsId: zast.nodeid rhsId: zast.nodeid
     } is {
-        op: atomName :ast n: (ast.nodes.get i: opId)
-        isCmp: op.stringView == "=="
-        if op.stringView == "!=" then isCmp = true
+        op: atomNameIdOf n: (ast.nodes.get i: opId)
+        isCmp: (op == zast.wellKnown.slot.wkOpEq) or (op == zast.wellKnown.slot.wkOpNe)
         if isCmp.not then return
         this.literalCompareSide :ast id: lhsId
         this.literalCompareSide :ast id: rhsId
@@ -2547,38 +2546,33 @@ Analysis: class {
     checkDocsMember: function {
         :this ast: Ast.view member: astnode.view code: StringView kind: StringView
     } is {
-        if member.namedoperation then {
-            nm: zast.nameTextAt :ast ref: member.name
-            skip: false
-            if nm.stringView == "this" then skip = true
-            if skip.not then {
-                documented: false
-                if (this.hasDocAbove line1: member.lineno) then documented = true
-                if documented.not then {
-                    li: (member.lineno - 1).u64
-                    if li < this.lines.length then {
-                        mline: this.lines.get i: li
-                        if (hasHash line: mline.stringView) then documented = true
-                    }
+        if member.namedoperation when member.name != zast.wellKnown.slot.wkThis then {
+            documented: false
+            if (this.hasDocAbove line1: member.lineno) then documented = true
+            if documented.not then {
+                li: (member.lineno - 1).u64
+                if li < this.lines.length then {
+                    mline: this.lines.get i: li
+                    if (hasHash line: mline.stringView) then documented = true
                 }
-                if documented.not then {
-                    msg: "missing doc comment: add a `#` comment above this \{kind}"
-                    (this.warn
-                        :code
-                        :msg
-                        line: member.lineno
-                        col: member.colno
-                        width: nm.length.u32.orPanic
-                    )
-                }
-                if documented when this.opts.docsQuality then {
-                    (this.reportDocEcho
-                        :ast
-                        nameRef: member.name
-                        line: member.lineno
-                        col: member.colno
-                    )
-                }
+            }
+            if documented.not then {
+                msg: "missing doc comment: add a `#` comment above this \{kind}"
+                (this.warn
+                    :code
+                    :msg
+                    line: member.lineno
+                    col: member.colno
+                    width: (zast.nameTextAt :ast ref: member.name).length.u32.orPanic
+                )
+            }
+            if documented when this.opts.docsQuality then {
+                (this.reportDocEcho
+                    :ast
+                    nameRef: member.name
+                    line: member.lineno
+                    col: member.colno
+                )
             }
         }
     }
@@ -3326,6 +3320,7 @@ Analysis: class {
         )
         if (cd.kind == ztypes.constraintkind.stringLike).not then return
         cn: String
+        cnId: zast.nameid
         cln: u32
         ccl: u32
         bnid: zast.nodeid
@@ -3334,6 +3329,7 @@ Analysis: class {
             if dpn.dottedpath then {
                 chn: ast.nodes.get i: dpn.child
                 cn = atomName :ast n: chn
+                cnId = atomNameIdOf n: chn
                 ci: nodeInfoOf n: chn
                 cln = ci.line
                 ccl = ci.col
@@ -3348,7 +3344,7 @@ Analysis: class {
         bto: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: bnid
         if bto.isZero.not then bt = bto
         if bt.isZero then return
-        if (ztypecheck.isStringViewMember name: cn.stringView) when bt == strTid then {
+        if (ztypecheck.isStringViewMember nameId: cnId) when bt == strTid then {
             (this.emitConv
                 ln: cln
                 col: ccl
@@ -3359,7 +3355,7 @@ Analysis: class {
             return
         }
         isOwned: false
-        if cn.stringView == "string" then isOwned = true
+        if cnId == zast.wellKnown.slot.wkString then isOwned = true
         if isOwned when bt == svTid when (st.typing.declOwnershipIs
             pool: ast.names
             parentTypeId: originTid
@@ -3634,12 +3630,13 @@ Analysis: class {
             if ipS.found then {
                 blS: ast.nodes.get i: ipS.lhs
                 brS: ast.nodes.get i: ipS.rhs
-                bopS: atomName :ast n: (ast.nodes.get i: ipS.operator)
                 (this.sufBinop
                     :ast
                     lhs: blS
                     rhs: brS
-                    isCmp: (ztypecheck.isComparisonOp name: bopS.stringView)
+                    isCmp: (ztypecheck.isComparisonOp
+                        nameId: (atomNameIdOf n: (ast.nodes.get i: ipS.operator))
+                    )
                     :st
                 )
             }
@@ -4138,10 +4135,8 @@ Analysis: class {
         {
             ipA: zast.infixPartsOf :ast :n
             if ipA.found then {
-                opA: atomName :ast n: (ast.nodes.get i: ipA.operator)
-                isCmpA: opA.stringView == "=="
-                if opA.stringView == "!=" then isCmpA = true
-                if isCmpA then {
+                opA: atomNameIdOf n: (ast.nodes.get i: ipA.operator)
+                if (opA == zast.wellKnown.slot.wkOpEq) or (opA == zast.wellKnown.slot.wkOpNe) then {
                     this.archNamedLiteral :ast id: ipA.lhs :namedIds
                     this.archNamedLiteral :ast id: ipA.rhs :namedIds
                 }
@@ -4596,17 +4591,17 @@ Analysis: class {
             rn
         ) case dottedpath then {
             chn: ast.nodes.get i: rn.child
-            cn: atomName :ast n: chn
-            if cn.length == 0 then return ""
+            cn: atomNameIdOf n: chn
+            if cn.isZero then return ""
             pnn: ast.nodes.get i: rn.parent
             if (this.srcIsFieldRead :ast :st n: pnn) then return ""
             pin: nodeInfoOf n: pnn
             bt: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: pin.id
             if bt.isZero then return ""
-            if cn.stringView == "string" when (
+            if cn == zast.wellKnown.slot.wkString when (
                 bt == (ztypecheck.stdTidRo :ast :st wk: zast.wellKnown.slot.tyStringView)
             ) then return "`.string`"
-            if cn.stringView == "copy" when (
+            if cn == zast.wellKnown.slot.wkCopy when (
                 bt == (ztypecheck.stdTidRo :ast :st wk: zast.wellKnown.slot.tyString)
             ) then return "`.copy`"
             return ""
@@ -4615,9 +4610,9 @@ Analysis: class {
             match (
                 cbl
             ) case dottedpath then {
-                ccn: atomName :ast n: (ast.nodes.get i: cbl.child)
-                if ccn.stringView == "nameTextCopy" then return "`nameTextCopy`"
-                if ccn.stringView == "poolTextCopy" then return "`poolTextCopy`"
+                ccn: atomNameIdOf n: (ast.nodes.get i: cbl.child)
+                if ccn == zast.wellKnown.slot.wkNameTextCopy then return "`nameTextCopy`"
+                if ccn == zast.wellKnown.slot.wkPoolTextCopy then return "`poolTextCopy`"
                 return ""
             } else {
                 return ""

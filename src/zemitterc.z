@@ -5396,8 +5396,8 @@ svArgAddr: function {
         a2l: "&\{anlE}"
         return a2l
     } case dottedpath then {
-        dpm: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child))
-        if (ztypecheck.isStringViewMember name: dpm.stringView) then {
+        dpm: atomNameIdOf :ast n: (ast.nodes.get i: n.child)
+        if (ztypecheck.isStringViewMember nameId: dpm) then {
             pe: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent)
             pIsStr: (stampIsStr
                 :symtab
@@ -10397,12 +10397,12 @@ emitInterpArgExpr: function {
         }
         return ""
     } case dottedpath then {
-        cm: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child))
-        if cm.stringView == "string" then {
+        cm: atomNameIdOf :ast n: (ast.nodes.get i: n.child)
+        if cm == zast.wellKnown.slot.wkString then {
             dpp: ast.nodes.get i: n.parent
             return (emitInterpArgExpr :ast :symtab :ctx n: dpp)
         }
-        if (ztypecheck.isStringViewMember name: cm.stringView) then return (emitInterpArgExpr
+        if (ztypecheck.isStringViewMember nameId: cm) then return (emitInterpArgExpr
             :ast
             :symtab
             :ctx
@@ -10448,12 +10448,12 @@ emitInterpStmtValue: function {
         }
         return ""
     } case dottedpath then {
-        cm: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child))
-        if cm.stringView == "string" then {
+        cm: atomNameIdOf :ast n: (ast.nodes.get i: n.child)
+        if cm == zast.wellKnown.slot.wkString then {
             dpr: ast.nodes.get i: n.parent
             return (emitInterpStmtValue :ast :symtab :ctx n: dpr :ind :tmp :buf)
         }
-        if (ztypecheck.isStringViewMember name: cm.stringView) then {
+        if (ztypecheck.isStringViewMember nameId: cm) then {
             dpr: ast.nodes.get i: n.parent
             return (emitInterpStmtValue :ast :symtab :ctx n: dpr :ind :tmp :buf)
         }
@@ -14604,26 +14604,27 @@ emitStringMethod: function {
     ctx: Ctx.view
     recv: StringView
     recvIsPtr: bool
-    mn: StringView
+    # the member's name id
+    mnId: zast.nameid
     recvVid: ztypes.vid
 } out String is {
-    if mn == "copy" then {
+    if mnId == zast.wellKnown.slot.wkCopy then {
         if recvIsPtr then return "\{ctx.strC}_copy(\{recv})"
         return "\{ctx.strC}_copy(&\{recv})"
     }
-    if mn == "length" then {
+    if mnId == zast.wellKnown.slot.wkLength then {
         if recvIsPtr then return "\{recv}->size"
         return "\{recv}.size"
     }
-    if mn == "capacity" then {
+    if mnId == zast.wellKnown.slot.wkCapacity then {
         if recvIsPtr then return "\{recv}->capacity"
         return "\{recv}.capacity"
     }
-    if (ztypecheck.isStringViewMember name: mn) then {
+    if (ztypecheck.isStringViewMember nameId: mnId) then {
         if recvIsPtr then return (svValueFormPtr :ctx expr: recv)
         return (svValueForm :ctx expr: recv isStr: true vid: recvVid)
     }
-    if mn == "shrink" then {
+    if mnId == zast.wellKnown.slot.wkShrink then {
         if recvIsPtr then return "\{ctx.strC}_shrink(\{recv})"
         return "\{ctx.strC}_shrink(&\{recv})"
     }
@@ -15244,7 +15245,7 @@ emitNestedStringViewBase: function {
     n: zast.dottedpathrow.view
     mn2: StringView
 } out String is {
-    if (ztypecheck.isStringViewMember name: mn2) then {
+    if (ztypecheck.isStringViewMember nameId: (zast.poolFind pool: ast.names text: mn2)) then {
         ppid: interpPartNodeId n: (ast.nodes.get i: n.parent)
         parentStampTid: stampIdOf :symtab nid: ppid
         if parentStampTid == ctx.strTid then {
@@ -15396,7 +15397,7 @@ emitNestedCollectionBase: function {
         if mn2 == "length" then return "\{baseAtom}.len"
         if mn2 == "size" then return "\{nstrcb}_size"
         if mn2 == "string" then return "\{nstrcb}_string(\{baseAtom})"
-        if (ztypecheck.isStringViewMember name: mn2) then {
+        if (ztypecheck.isStringViewMember nameId: mnId) then {
             return "(\{ctx.svC}_t){ .data = \{baseAtom}.data, .size = \{baseAtom}.len }"
         }
     }
@@ -15405,7 +15406,7 @@ emitNestedCollectionBase: function {
         recvB: colRecvRef :ctx bn: baseAtom vid: bs9vid
         if mn2 == "pop" then return "\{nlcb}_pop(\{recvB})"
         if mn2 == "sort" then return "\{nlcb}_sort(\{recvB})"
-        if (ztypecheck.isListViewMember name: mn2) then return "\{nlcb}_listView(\{recvB})"
+        if (ztypecheck.isListViewMember nameId: mnId) then return "\{nlcb}_listView(\{recvB})"
         if (isListWalkMember name: mn2) then {
             w9: "_\{mn2}("
             return "\{nlcb}\{w9}\{recvB})"
@@ -15654,7 +15655,7 @@ nestedStringMember: function {
             :ctx
             recv: base
             recvIsPtr: (pathIsPointer :ast :symtab :ctx n: parent)
-            mn: mn2
+            mnId: (zast.poolFind pool: ast.names text: mn2)
             recvVid: bs9vid
         )
         if nsm.length > 0 then return nsm
@@ -16152,7 +16153,7 @@ emitUserTypeMemberRead: function {
             :ctx
             recv: bn2
             recvIsPtr: sptr
-            mn: mn2
+            mnId: (zast.poolFind pool: ast.names text: mn2)
             recvVid: bn2v
         )
         if sm.length > 0 then return sm
@@ -16453,7 +16454,7 @@ emitCollectionMemberRead: function {
             estr: "\{scba}_string(\{bn2})"
             return estr
         }
-        if (ztypecheck.isStringViewMember name: mn2) then {
+        if (ztypecheck.isStringViewMember nameId: mnc9) then {
             esvw: "(\{ctx.svC}_t){ .data = \{bn2}\{accB2}data, .size = \{bn2}\{accB2}len }"
             return esvw
         }
@@ -16490,7 +16491,7 @@ emitCollectionMemberRead: function {
             ep1: "\{lcb2}_sort(\{recvB2})"
             return ep1
         }
-        if (ztypecheck.isListViewMember name: mn2) then {
+        if (ztypecheck.isListViewMember nameId: mnc9) then {
             ep2: "\{lcb2}_listView(\{recvB2})"
             return ep2
         }
@@ -19841,8 +19842,8 @@ stringviewOfBaseNid: function {
     match (
         n
     ) case dottedpath then {
-        mn: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child))
-        if (ztypecheck.isStringViewMember name: mn.stringView) then {
+        mn: atomNameIdOf :ast n: (ast.nodes.get i: n.child)
+        if (ztypecheck.isStringViewMember nameId: mn) then {
             # a base atom naming a FUNCTION is a call, whose String has no name
             if (baseAtomNamesFunction :symtab n: (ast.nodes.get i: n.parent)
             ) then return zast.nodeid
