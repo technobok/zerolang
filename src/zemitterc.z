@@ -33080,6 +33080,94 @@ emitRuntimeUnits: function {
 }
 
 
+# separateTagStems -- a sum's tag ENUMERATORS are spelled from its registry name
+# (variantTag, the option and iterator templates), and the runtime fragments spell
+# the stdlib's literally. Two sums may share a name -- `pal` declared in two units,
+# `Option Foo` over two units' own `Foo` -- and would then declare one enumerator
+# twice (checkTagStem). Before anything reads a name, each emittable sum that
+# shares its name with another is renamed `name_tid`, unless the stdlib owns it
+# (stdlibStem): the fragments name those, and the stdlib's own names are unique.
+# A template or a partial is never emitted, so it shares a name with nothing.
+separateTagStems: function {program: Ast.view symtab: zenv.ZSymbolTable} is {
+    anchors: IdSet ztypes.declid
+    anchors.add item: symtab.typing.systemUnitRoot
+    anchors.add item: symtab.typing.collectionsUnitRoot
+    anchors.add item: symtab.typing.coreUnitRoot
+    anchors.add item: (unitDeclByName :symtab ast: program name: "io")
+    anchors.add item: (unitDeclByName :symtab ast: program name: "cli")
+    anchors.add item: (unitDeclByName :symtab ast: program name: "net")
+    shared: sharedSumNames :symtab
+    n: symtab.reg.nextTid
+    t: ztypes.tid
+    for t < n loop {
+        if (emittableSum :symtab tid: t) then {
+            owned: stdlibStem :symtab :anchors tid: t depth: 0
+            renamed: String
+            {
+                nv: regNameView :symtab tid: t
+                if owned.not when (shared.has item: nv.hash) then renamed = "\{nv}_\{t}"
+            }
+            if renamed.length > 0 then symtab.reg.rename typeId: t name: renamed.take
+        }
+        t = t.next
+    }
+}
+
+# sharedSumNames -- the names two or more emittable sums share, as hashes of the
+# name, so no name is copied to be a key. Two names that hash alike cost one
+# rename C did not need, never a wrong one.
+sharedSumNames: function {symtab: zenv.ZSymbolTable.view} out IdSet u64 is {
+    seen: IdSet u64
+    shared: IdSet u64
+    n: symtab.reg.nextTid
+    t: ztypes.tid
+    for t < n loop {
+        if (emittableSum :symtab tid: t) then {
+            h: (regNameView :symtab tid: t).hash
+            if (seen.has item: h) then shared.add item: h else seen.add item: h
+        }
+        t = t.next
+    }
+    return shared
+}
+
+# emittableSum -- a tagged sum with C of its own: neither a template nor a partial.
+emittableSum: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
+    if (symtab.reg.typetypeOf typeId: tid).isSum.not then return false
+    if (symtab.reg.isGenericOf :tid) then return false
+    return (symtab.reg.isPartialOf :tid).not
+}
+
+# stdlibStem -- whether the stdlib owns type `tid`'s name: no unit declares it, or
+# one of `anchors` does, or it is an instance whose template and every type
+# argument are owned so.
+stdlibStem: function {
+    symtab: zenv.ZSymbolTable.view
+    anchors: (IdSet ztypes.declid).view
+    tid: ztypes.tid
+    depth: u64
+} out bool is {
+    if tid.isZero then return true
+    # an instance nests no deeper than its source wrote it; a cycle would
+    # be a registry fault, and owning nothing is the safe answer to one
+    if depth > 32 then return false
+    og: symtab.reg.genericOriginOf :tid
+    if og.isZero.not then {
+        if (stdlibStem :symtab :anchors tid: og depth: depth + 1).not then return false
+        k: u64
+        na: symtab.reg.genericArgCount specId: tid
+        for k < na loop {
+            a: symtab.reg.genericTypeArgAt specId: tid ordinal: k
+            k = k + 1
+            if (stdlibStem :symtab :anchors tid: a depth: depth + 1).not then return false
+        }
+        return true
+    }
+    ud: ztypecheck.unitDeclOfTid st: symtab :tid
+    if ud.isZero then return true
+    return (anchors.has item: ud)
+}
+
 # emitC -- emit the C translation unit for a typechecked program.
 emitC: function {
     program: Ast.view
@@ -33097,6 +33185,7 @@ emitC: function {
     targetArch: StringView
 } out String is {
     buf: String
+    separateTagStems :program :symtab
     rtids: resolveRuntimeTids :program :symtab
     strId: rtids.str
     svId: rtids.sv
