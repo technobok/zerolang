@@ -2939,7 +2939,7 @@ isBareReturn: function {n: astnode.view} out bool is {
     match (
         n
     ) case atomid then {
-        return n.name == zast.names.wkReturn
+        return n.name == zast.wellKnown.slot.wkReturn
     } else {
         return false
     }
@@ -3168,152 +3168,101 @@ dataslotkey: record {
     slot: u64
 }
 
-# family -- the builtin templates the emitter keys on by ORIGIN tid, one
-# element per family. The element IS the index into `ctx.origins`, so
-# `ctx.origins.get i: family.listVal` is the tid `ListVal` was minted from --
+# family -- the builtin templates the emitter keys on by ORIGIN tid: one list, a
+# family's label beside its template's name. A row's SLOT is its index into
+# `ctx.origins`, which buildOriginTids fills by walking the names, so
+# `ctx.origins.get i: family.slot.listVal` is the tid `ListVal` was minted from --
 # and an id compare against it is shadow-proof, which comparing the spelling was
 # not. `fixedArray` is the `array` template: a data block's own `.array` member
-# would shadow an element of that name.
+# would shadow a label of that name.
 family: data {
-    str: 0
-    fixedArray: 1
-    list: 2
-    listVal: 3
-    listView: 4
-    listViewVal: 5
-    spanVal: 6
-    map: 7
-    mapRV: 8
-    mapVR: 9
-    mapVV: 10
-    set: 11
-    setVal: 12
-    idMapR: 13
-    idMapV: 14
-    idSet: 15
-    idSetIter: 16
-    idMapItemIterR: 17
-    idMapItemIterV: 18
-    idMapEntryR: 19
-    idMapEntryV: 20
-    mapEntry: 21
-    listIter: 22
-    listIterVal: 23
-    setIter: 24
-    setIterVal: 25
-    mapKeyIter: 26
-    mapItemIter: 27
-    mapKeyIterRV: 28
-    mapKeyIterVR: 29
-    mapKeyIterVV: 30
-    mapItemIterRV: 31
-    mapItemIterVR: 32
-    mapItemIterVV: 33
-    mapEntryRV: 34
-    mapEntryVR: 35
-    mapEntryVV: 36
-    option: 37
-    optionView: 38
-    result: 39
-    optionval: 40
-    resultval: 41
-    optionViewVal: 42
-    intData: 43
-    floatData: 44
-    stringData: 45
+    str: "str"
+    fixedArray: "array"
+    list: "ListRef"
+    listVal: "ListVal"
+    listView: "ListView"
+    listViewVal: "ListViewVal"
+    spanVal: "SpanVal"
+    map: "MapRR"
+    mapRV: "MapRV"
+    mapVR: "MapVR"
+    mapVV: "MapVV"
+    set: "SetRef"
+    setVal: "SetVal"
+    idMapR: "IdMapR"
+    idMapV: "IdMapV"
+    idSet: "IdSet"
+    idSetIter: "IdSetIter"
+    idMapItemIterR: "IdMapItemIterR"
+    idMapItemIterV: "IdMapItemIterV"
+    idMapEntryR: "IdMapEntryR"
+    idMapEntryV: "IdMapEntryV"
+    mapEntry: "MapEntry"
+    listIter: "ListIter"
+    listIterVal: "ListIterVal"
+    setIter: "SetIter"
+    setIterVal: "SetIterVal"
+    mapKeyIter: "MapKeyIter"
+    mapItemIter: "MapItemIter"
+    mapKeyIterRV: "MapKeyIterRV"
+    mapKeyIterVR: "MapKeyIterVR"
+    mapKeyIterVV: "MapKeyIterVV"
+    mapItemIterRV: "MapItemIterRV"
+    mapItemIterVR: "MapItemIterVR"
+    mapItemIterVV: "MapItemIterVV"
+    mapEntryRV: "MapEntryRV"
+    mapEntryVR: "MapEntryVR"
+    mapEntryVV: "MapEntryVV"
+    option: "Option"
+    optionView: "OptionView"
+    result: "Result"
+    optionval: "optionval"
+    resultval: "resultval"
+    optionViewVal: "OptionViewVal"
+    intData: "intdata"
+    floatData: "floatdata"
+    stringData: "stringdata"
+} out stringdata
 
-    # none -- one past the last row: both the count and the "not one of ours"
-    # answer, so no real index can be mistaken for it.
-    none: 46
-} out intdata u64
+# noFamily -- one past the last row: the count of families and the "not one of
+# ours" answer, so no real index can be mistaken for it
+noFamily: family.length
 
 # dispatch -- the names the emitter DISPATCHES on -- a member selector, or the
-# base atom of a path it recognises -- interned once per program. The element
-# IS the index into `ctx.mnames`, exactly as a `family` element indexes
-# `ctx.origins` -- and an id compare is what the text compare was reaching for,
+# base atom of a path it recognises -- one list, looked up in the program's pool
+# once (buildMemberNameIds). A row's SLOT is its index into `ctx.mnames`, as a
+# `family` row's indexes `ctx.origins` -- and an id compare is what the text compare was reaching for,
 # without copying the name out of the pool to make it. A name this program
 # never interned answers 0, and no member's name id is 0, so the miss is the
 # right answer by construction.
 dispatch: data {
-    orPanic: 0
-    copy: 1
-    meta: 2
-    option: 3
-    result: 4
-    print: 5
-    panic: 6
-    error: 7
-    append: 8
-    insert: 9
-    push: 10
-    getMut: 11
-    pop: 12
-    extend: 13
-    has: 14
-    delete: 15
-    keyAt: 16
-    valueAt: 17
-    split: 18
-    fill: 19
-    clear: 20
-    copyFrom: 21
-    mutView: 22
-    mutSlice: 23
-    resize: 24
-    dataIndex: 25
-} out intdata u64
-
-# familyPut -- place one row AT its own element. Writing the index and the name
-# together is what keeps the two halves of the table in step; a row that drifts
-# fails here rather than silently renaming a family.
-familyPut: function {acc: List String at: u64 name: StringView} is {
-    if acc.length != at then {
-        m: "zemitterc: origin table out of order at \{at} (\{name})"
-        panic msg: m
-    }
-    acc.append name.string
-}
-
-# dispatchPut / memberDispatchNames -- familyPut's twin for the member-name
-# table: the list and the `dispatch` elements are one table written twice, so
-# the filler checks the row it is about to write is the row the element names.
-dispatchPut: function {acc: List String at: u64 name: StringView} is {
-    if acc.length != at then {
-        m: "zemitterc: member-name table out of order at \{at} (\{name})"
-        panic msg: m
-    }
-    acc.append name.string
-}
-
-# the member names a dispatch table needs, collected in one pass
-memberDispatchNames: function {acc: List String} is {
-    dispatchPut :acc at: dispatch.orPanic name: "orPanic"
-    dispatchPut :acc at: dispatch.copy name: "copy"
-    dispatchPut :acc at: dispatch.meta name: "meta"
-    dispatchPut :acc at: dispatch.option name: "Option"
-    dispatchPut :acc at: dispatch.result name: "Result"
-    dispatchPut :acc at: dispatch.print name: "print"
-    dispatchPut :acc at: dispatch.panic name: "panic"
-    dispatchPut :acc at: dispatch.error name: "error"
-    dispatchPut :acc at: dispatch.append name: "append"
-    dispatchPut :acc at: dispatch.insert name: "insert"
-    dispatchPut :acc at: dispatch.push name: "push"
-    dispatchPut :acc at: dispatch.getMut name: "getMut"
-    dispatchPut :acc at: dispatch.pop name: "pop"
-    dispatchPut :acc at: dispatch.extend name: "extend"
-    dispatchPut :acc at: dispatch.has name: "has"
-    dispatchPut :acc at: dispatch.delete name: "delete"
-    dispatchPut :acc at: dispatch.keyAt name: "keyAt"
-    dispatchPut :acc at: dispatch.valueAt name: "valueAt"
-    dispatchPut :acc at: dispatch.split name: "split"
-    dispatchPut :acc at: dispatch.fill name: "fill"
-    dispatchPut :acc at: dispatch.clear name: "clear"
-    dispatchPut :acc at: dispatch.copyFrom name: "copyFrom"
-    dispatchPut :acc at: dispatch.mutView name: "mutView"
-    dispatchPut :acc at: dispatch.mutSlice name: "mutSlice"
-    dispatchPut :acc at: dispatch.resize name: "resize"
-    dispatchPut :acc at: dispatch.dataIndex name: "index"
-}
+    orPanic: "orPanic"
+    copy: "copy"
+    meta: "meta"
+    option: "Option"
+    result: "Result"
+    print: "print"
+    panic: "panic"
+    error: "error"
+    append: "append"
+    insert: "insert"
+    push: "push"
+    getMut: "getMut"
+    pop: "pop"
+    extend: "extend"
+    has: "has"
+    delete: "delete"
+    keyAt: "keyAt"
+    valueAt: "valueAt"
+    split: "split"
+    fill: "fill"
+    clear: "clear"
+    copyFrom: "copyFrom"
+    mutView: "mutView"
+    mutSlice: "mutSlice"
+    resize: "resize"
+    dataIndex: "index"
+} out stringdata
 
 # dispatchIs -- is `id` the dispatch name at index `at`? TWO zeros meet here and they
 # are not the same zero: a node with no member name answers 0, and a name this
@@ -3327,67 +3276,7 @@ dispatchIs: function {ctx: Ctx.view id: zast.nameid at: u64} out bool is {
 # buildMemberNameIds -- those names as pool ids for the program being emitted,
 # in `dispatch` order. A carrier with no program answers zeros, which match nothing.
 buildMemberNameIds: function {program: Ast.view acc: ListVal zast.nameid} is {
-    names: List String
-    memberDispatchNames acc: names
-    mn9: names.length
-    mi9: u64
-    for mi9 < mn9 loop {
-        nm9: names.get i: mi9
-        acc.append (zast.poolFind pool: program.names text: nm9.stringView)
-        mi9 = mi9 + 1
-    }
-}
-
-# originBaseNames -- those templates by name, in `family` order. This list and the
-# constants above are the same table read two ways; nothing else may reorder it,
-# because the index is the identity.
-originBaseNames: function {acc: List String} is {
-    familyPut :acc at: family.str name: "str"
-    familyPut :acc at: family.fixedArray name: "array"
-    familyPut :acc at: family.list name: "ListRef"
-    familyPut :acc at: family.listVal name: "ListVal"
-    familyPut :acc at: family.listView name: "ListView"
-    familyPut :acc at: family.listViewVal name: "ListViewVal"
-    familyPut :acc at: family.spanVal name: "SpanVal"
-    familyPut :acc at: family.map name: "MapRR"
-    familyPut :acc at: family.mapRV name: "MapRV"
-    familyPut :acc at: family.mapVR name: "MapVR"
-    familyPut :acc at: family.mapVV name: "MapVV"
-    familyPut :acc at: family.set name: "SetRef"
-    familyPut :acc at: family.setVal name: "SetVal"
-    familyPut :acc at: family.idMapR name: "IdMapR"
-    familyPut :acc at: family.idMapV name: "IdMapV"
-    familyPut :acc at: family.idSet name: "IdSet"
-    familyPut :acc at: family.idSetIter name: "IdSetIter"
-    familyPut :acc at: family.idMapItemIterR name: "IdMapItemIterR"
-    familyPut :acc at: family.idMapItemIterV name: "IdMapItemIterV"
-    familyPut :acc at: family.idMapEntryR name: "IdMapEntryR"
-    familyPut :acc at: family.idMapEntryV name: "IdMapEntryV"
-    familyPut :acc at: family.mapEntry name: "MapEntry"
-    familyPut :acc at: family.listIter name: "ListIter"
-    familyPut :acc at: family.listIterVal name: "ListIterVal"
-    familyPut :acc at: family.setIter name: "SetIter"
-    familyPut :acc at: family.setIterVal name: "SetIterVal"
-    familyPut :acc at: family.mapKeyIter name: "MapKeyIter"
-    familyPut :acc at: family.mapItemIter name: "MapItemIter"
-    familyPut :acc at: family.mapKeyIterRV name: "MapKeyIterRV"
-    familyPut :acc at: family.mapKeyIterVR name: "MapKeyIterVR"
-    familyPut :acc at: family.mapKeyIterVV name: "MapKeyIterVV"
-    familyPut :acc at: family.mapItemIterRV name: "MapItemIterRV"
-    familyPut :acc at: family.mapItemIterVR name: "MapItemIterVR"
-    familyPut :acc at: family.mapItemIterVV name: "MapItemIterVV"
-    familyPut :acc at: family.mapEntryRV name: "MapEntryRV"
-    familyPut :acc at: family.mapEntryVR name: "MapEntryVR"
-    familyPut :acc at: family.mapEntryVV name: "MapEntryVV"
-    familyPut :acc at: family.option name: "Option"
-    familyPut :acc at: family.optionView name: "OptionView"
-    familyPut :acc at: family.result name: "Result"
-    familyPut :acc at: family.optionval name: "optionval"
-    familyPut :acc at: family.resultval name: "resultval"
-    familyPut :acc at: family.optionViewVal name: "OptionViewVal"
-    familyPut :acc at: family.intData name: "intdata"
-    familyPut :acc at: family.floatData name: "floatdata"
-    familyPut :acc at: family.stringData name: "stringdata"
+    for each nm9: dispatch loop acc.append (zast.poolFind pool: program.names text: nm9)
 }
 
 # buildOriginTids -- resolve every row in one pass. A unit with no program node
@@ -3398,16 +3287,7 @@ buildOriginTids: function {
     symtab: zenv.ZSymbolTable.view
     acc: ListVal ztypes.tid
 } is {
-    names: List String
-    originBaseNames acc: names
-    n: names.length
-    i: u64
-    for i < n loop {
-        nm: names.get :i
-        bt: builtinTid ast: program :symtab base: nm.stringView
-        acc.append bt
-        i = i + 1
-    }
+    for each nm: family loop acc.append (builtinTid ast: program :symtab base: nm)
 }
 
 
@@ -4085,10 +3965,10 @@ pathIsPointer: function {
 # markerEmitsBase -- a path leaf that is an access or borrow marker, which
 # emits as the path's base unchanged.
 markerEmitsBase: function {id: zast.nameid} out bool is {
-    if id == zast.names.wkPrivate then return true
-    if id == zast.names.wkPublic then return true
-    if id == zast.names.wkBorrow then return true
-    return id == zast.names.wkView
+    if id == zast.wellKnown.slot.wkPrivate then return true
+    if id == zast.wellKnown.slot.wkPublic then return true
+    if id == zast.wellKnown.slot.wkBorrow then return true
+    return id == zast.wellKnown.slot.wkView
 }
 
 # borrowedFieldPath -- the dotted path reads a NON-OWNED field (`c.l` on
@@ -5222,10 +5102,10 @@ stmtFormNameId: function {
     zid: zast.nameid
     if cid.isZero then return zid
     isSf: (
-        (dispatchIs :ctx id: cid at: dispatch.print) or
-        (dispatchIs :ctx id: cid at: dispatch.panic) or
-        (dispatchIs :ctx id: cid at: dispatch.error) or
-        (cid == zast.names.wkReturn)
+        (dispatchIs :ctx id: cid at: dispatch.slot.print) or
+        (dispatchIs :ctx id: cid at: dispatch.slot.panic) or
+        (dispatchIs :ctx id: cid at: dispatch.slot.error) or
+        (cid == zast.wellKnown.slot.wkReturn)
     )
     if isSf.not then return zid
     bid: dottedBaseAtomId :ast :n
@@ -6168,7 +6048,9 @@ argumentsAreCreates: function {ast: Ast.view callable: astnode.view} out bool is
     match (
         callable
     ) case dottedpath then {
-        return (atomNameIdOf :ast n: (ast.nodes.get i: callable.child)) == zast.names.wkCreate
+        return (
+            (atomNameIdOf :ast n: (ast.nodes.get i: callable.child)) == zast.wellKnown.slot.wkCreate
+        )
     } else {
         return false
     }
@@ -6313,7 +6195,7 @@ emitNativeArgMethod: function {
     if mn.length == 0 then return ""
     # a str instance's members are declared on its template
     srcT: ownerTid
-    if (originIsTid :symtab tid: ownerTid originTid: (ctx.origins.get i: family.str)) then {
+    if (originIsTid :symtab tid: ownerTid originTid: (ctx.origins.get i: family.slot.str)) then {
         srcT = originTidOf :symtab tid: ownerTid
     }
     srcP: convSrcPathOf :symtab srcTid: srcT
@@ -6964,7 +6846,7 @@ orderConstant: function {
         # an arm without a payload named on its type, and a literal's own String
         if (dottedTaggedTid :symtab nid: n.nodeid).isZero.not then return true
         mid: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
-        if mid == zast.names.wkString then {
+        if mid == zast.wellKnown.slot.wkString then {
             return (bindLitIndex :ast :ctx n: (ast.nodes.get i: n.parent)) > 0
         }
     }
@@ -8179,8 +8061,8 @@ wordOperatorRowBinds: function {
 # answers for both, through the derived-comparison leg that negates the one it
 # has. Asked by NAME ID, never by spelling.
 opPairPartnerId: function {nameId: zast.nameid} out zast.nameid is {
-    if nameId == zast.names.wkOpEq then return zast.names.wkOpNe
-    if nameId == zast.names.wkOpNe then return zast.names.wkOpEq
+    if nameId == zast.wellKnown.slot.wkOpEq then return zast.wellKnown.slot.wkOpNe
+    if nameId == zast.wellKnown.slot.wkOpNe then return zast.wellKnown.slot.wkOpEq
     return zast.nameid
 }
 
@@ -8959,7 +8841,7 @@ bindingRhsIsBorrow: function {
         } case none then null
         chId: atomNameIdOf :ast n: (ast.nodes.get i: n.child)
         # a `.borrow` value is a reference by definition
-        if chId == zast.names.wkBorrow then return true
+        if chId == zast.wellKnown.slot.wkBorrow then return true
         ch: zast.nameTextAt :ast ref: chId
         bnmV: atomVid :symtab nid: (atomNodeId n: (ast.nodes.get i: n.parent))
         if (vvHas xs: ctx.narrowBox vid: bnmV) then {
@@ -9029,7 +8911,7 @@ rhsBorrowMarkerBase: function {
         n
     ) case dottedpath then {
         if (
-            (atomNameIdOf :ast n: (ast.nodes.get i: n.child)) != zast.names.wkBorrow
+            (atomNameIdOf :ast n: (ast.nodes.get i: n.child)) != zast.wellKnown.slot.wkBorrow
         ) then return zast.nodeid
         pidB: interpPartNodeId n: (ast.nodes.get i: n.parent)
         bst: stampIdOf :symtab nid: pidB
@@ -9130,7 +9012,9 @@ underBorrowMarker: function {ast: Ast.view nid: zast.nodeid} out zast.nodeid is 
     if nid.isZero then return zast.nodeid
     src: ast.nodes.get i: nid
     if src.dottedpath.not then return nid
-    if (atomNameIdOf :ast n: (ast.nodes.get i: src.child)) != zast.names.wkBorrow then return nid
+    if (
+        (atomNameIdOf :ast n: (ast.nodes.get i: src.child)) != zast.wellKnown.slot.wkBorrow
+    ) then return nid
     return src.parent
 }
 
@@ -9259,8 +9143,8 @@ rhsIsBorrowGet: function {
     } case call then {
         cbl: ast.nodes.get i: n.callable
         chId: aliasChildNameId :ast :symtab n: cbl
-        isMut: chId == zast.names.wkGetMut
-        if isMut.not when (chId == zast.names.wkGet).not then return false
+        isMut: chId == zast.wellKnown.slot.wkGetMut
+        if isMut.not when (chId == zast.wellKnown.slot.wkGet).not then return false
         rst: dottedReceiverStampId :ast :symtab callable: cbl
         bt: chaseAggregateTypedef :symtab :ctx tid: rst
         isC: (isListOriginOf :symtab :ctx tid: bt) or (isListViewOriginOf :symtab :ctx tid: bt)
@@ -9414,7 +9298,7 @@ emitStrConvCall: function {
     if (originIsTid
         :symtab
         tid: rid
-        originTid: (ctx.origins.get i: family.str)
+        originTid: (ctx.origins.get i: family.slot.str)
     ).not then return ""
     rnm: cbaseNoPrefix :ctx tid: rid
     pv: emitDottedReceiver :ast :symtab :ctx callable: (ast.nodes.get i: call.callable)
@@ -9522,7 +9406,7 @@ emitEmptyColCreate: function {
         if (originIsTid
             :symtab
             tid: amid
-            originTid: (ctx.origins.get i: family.fixedArray)
+            originTid: (ctx.origins.get i: family.slot.fixedArray)
         ) then {
             acb: ctxCname :ctx tid: amid
             return "\{acb}_create()"
@@ -9538,7 +9422,7 @@ emitEmptyColCreate: function {
         if (originIsTid
             :symtab
             tid: smid
-            originTid: (ctx.origins.get i: family.str)
+            originTid: (ctx.origins.get i: family.slot.str)
         ) then {
             scb: ctxCname :ctx tid: smid
             return "\{scb}_create()"
@@ -9680,22 +9564,22 @@ emitFamilyMethodCall: function {
     bvid: ztypes.vid
 } out String is {
     fam: monoFamilyOf :symtab :ctx tid: bt
-    isArr: fam == family.fixedArray
+    isArr: fam == family.slot.fixedArray
     if isArr then return (emitArrayMethodCall :ast :symtab :ctx :call :mnId :bn :bt :bvid)
     if (dataValueFamilyOf :symtab :ctx tid: bt).isZero.not then {
         return (emitDataValueMethodCall :ast :symtab :ctx :call :mnId :bn :bt)
     }
-    isSpan: fam == family.spanVal
+    isSpan: fam == family.slot.spanVal
     if isSpan then return (emitSpanMethodCall :ast :symtab :ctx :call :mnId :bn :bt :bvid)
-    if fam == family.listVal then {
+    if fam == family.slot.listVal then {
         lend: emitListValLendCall :ast :symtab :ctx :call :mnId :bn :bt :bvid
         if lend.length > 0 then return lend
     }
     isList: (
-        (fam == family.list) or
-        (fam == family.listVal) or
-        (fam == family.listView) or
-        (fam == family.listViewVal)
+        (fam == family.slot.list) or
+        (fam == family.slot.listVal) or
+        (fam == family.slot.listView) or
+        (fam == family.slot.listViewVal)
     )
     if isList then return (emitListMethodCall
         :ast
@@ -9707,7 +9591,7 @@ emitFamilyMethodCall: function {
         :bt
         :bvid
     )
-    isSet: (fam == family.set) or (fam == family.setVal)
+    isSet: (fam == family.slot.set) or (fam == family.slot.setVal)
     if isSet then return (emitSetMethodCall :ast :symtab :ctx :call :mnId :bn :bt)
     if (isMapOriginOf :symtab :ctx tid: bt) then return (emitMapMethodCall
         :ast
@@ -9718,9 +9602,9 @@ emitFamilyMethodCall: function {
         :bn
         :bt
     )
-    isIdMap: (fam == family.idMapR) or (fam == family.idMapV)
+    isIdMap: (fam == family.slot.idMapR) or (fam == family.slot.idMapV)
     if isIdMap then return (emitIdMapMethodCall :ast :symtab :ctx :call :mnId :bn :bt :bvid)
-    isIdSet: fam == family.idSet
+    isIdSet: fam == family.slot.idSet
     if isIdSet then return (emitIdSetMethodCall :ast :symtab :ctx :call :mnId :bn :bt :bvid)
     return ""
 }
@@ -9737,8 +9621,8 @@ emitListValLendCall: function {
     bt: ztypes.tid
     bvid: ztypes.vid
 } out String is {
-    isResize: dispatchIs :ctx id: mnId at: dispatch.resize
-    if isResize.not when (dispatchIs :ctx id: mnId at: dispatch.mutSlice).not then return ""
+    isResize: dispatchIs :ctx id: mnId at: dispatch.slot.resize
+    if isResize.not when (dispatchIs :ctx id: mnId at: dispatch.slot.mutSlice).not then return ""
     cb: ctxCname :ctx tid: bt
     recvR: colRecvRef :ctx bn: bn.stringView vid: bvid
     if isResize then {
@@ -9804,12 +9688,12 @@ emitListMethodCall: function {
 } out String is {
     cb: ctxCname :ctx tid: bt
     recvR: colRecvRef :ctx bn: bn.stringView vid: bvid
-    if (dispatchIs :ctx id: mnId at: dispatch.append) then {
+    if (dispatchIs :ctx id: mnId at: dispatch.slot.append) then {
         v: colArg :ast :symtab :ctx :call label: "from" consumes: true
         e0: "\{cb}_append(\{recvR}, \{v})"
         return (narrowListIndex :ast :symtab :ctx :call pos: e0)
     }
-    if mnId == zast.names.wkGet then {
+    if mnId == zast.wellKnown.slot.wkGet then {
         v: listArg :ast :symtab :ctx :call label: "i"
         e1: "\{cb}_get(\{recvR}, \{v})"
         if (listGetIsPtr
@@ -9820,7 +9704,7 @@ emitListMethodCall: function {
         ) then return "(*\{e1})"
         return e1
     }
-    if (dispatchIs :ctx id: mnId at: dispatch.getMut) then {
+    if (dispatchIs :ctx id: mnId at: dispatch.slot.getMut) then {
         vm: listArg :ast :symtab :ctx :call label: "i"
         e1m: "\{cb}_getMut(\{recvR}, \{vm})"
         if (listGetIsPtr
@@ -9831,7 +9715,7 @@ emitListMethodCall: function {
         ) then return "(*\{e1m})"
         return e1m
     }
-    if mnId == zast.names.wkSlice then {
+    if mnId == zast.wellKnown.slot.wkSlice then {
         return (emitOrderedPair
             :ast
             :symtab
@@ -9846,12 +9730,12 @@ emitListMethodCall: function {
             bForm: argform.value
         )
     }
-    if mnId == zast.names.wkExtendView then {
+    if mnId == zast.wellKnown.slot.wkExtendView then {
         vw9: listArg :ast :symtab :ctx :call label: "from"
         e1e: "\{cb}_extendView(\{recvR}, \{vw9})"
         return e1e
     }
-    if mnId == zast.names.wkSet then {
+    if mnId == zast.wellKnown.slot.wkSet then {
         return (emitOrderedPair
             :ast
             :symtab
@@ -9866,11 +9750,11 @@ emitListMethodCall: function {
             bForm: argform.moved
         )
     }
-    if (dispatchIs :ctx id: mnId at: dispatch.pop) then {
+    if (dispatchIs :ctx id: mnId at: dispatch.slot.pop) then {
         e3: "\{cb}_pop(\{recvR})"
         return e3
     }
-    if (dispatchIs :ctx id: mnId at: dispatch.insert) then {
+    if (dispatchIs :ctx id: mnId at: dispatch.slot.insert) then {
         return (emitOrderedPair
             :ast
             :symtab
@@ -9885,19 +9769,19 @@ emitListMethodCall: function {
             bForm: argform.value
         )
     }
-    if (dispatchIs :ctx id: mnId at: dispatch.extend) then {
+    if (dispatchIs :ctx id: mnId at: dispatch.slot.extend) then {
         eaa: listTakeArgBase :ast :call label: "from"
         eaV: atomVid :symtab nid: (listTakeArgBaseNid :ast :call label: "from")
         ea: emitLocalAtomName :ctx name: eaa vid: eaV
         e5: "\{cb}_extend(\{recvR}, &\{ea})"
         return e5
     }
-    if mnId == zast.names.wkContains then {
+    if mnId == zast.wellKnown.slot.wkContains then {
         vc: containsNeedleC :ast :symtab :ctx :call
         e6: "\{cb}_contains(\{recvR}, \{vc})"
         return e6
     }
-    if mnId == zast.names.wkSort then {
+    if mnId == zast.wellKnown.slot.wkSort then {
         e7: "\{cb}_sort(\{recvR})"
         return e7
     }
@@ -9965,11 +9849,11 @@ emitArrayMethodCall: function {
     bvid: ztypes.vid
 } out String is {
     cb: ctxCname :ctx tid: bt
-    if mnId == zast.names.wkGet then {
+    if mnId == zast.wellKnown.slot.wkGet then {
         vi: listArg :ast :symtab :ctx :call label: "i"
         return "\{cb}_get(\{bn}, \{vi})"
     }
-    if mnId == zast.names.wkSet then {
+    if mnId == zast.wellKnown.slot.wkSet then {
         recvR: colRecvRef :ctx bn: bn.stringView vid: bvid
         return (emitOrderedPair
             :ast
@@ -9985,13 +9869,18 @@ emitArrayMethodCall: function {
             bForm: argform.value
         )
     }
-    isSlice: (mnId == zast.names.wkSlice) or (dispatchIs :ctx id: mnId at: dispatch.mutSlice)
+    isSlice: (
+        (mnId == zast.wellKnown.slot.wkSlice) or
+        (dispatchIs :ctx id: mnId at: dispatch.slot.mutSlice)
+    )
     if isSlice then {
         recvA: colRecvRef :ctx bn: bn.stringView vid: bvid
         recvTa: "const \{cb}_t*"
         lenA: "\{cb}_length"
         whatA: "array slice"
-        if mnId == zast.names.wkSlice then whatA = "array slice" else whatA = "array mutSlice"
+        if (
+            mnId == zast.wellKnown.slot.wkSlice
+        ) then whatA = "array slice" else whatA = "array mutSlice"
         return (emitWindowSlice
             :ast
             :symtab
@@ -10018,7 +9907,7 @@ emitDataValueMethodCall: function {
     bn: String
     bt: ztypes.tid
 } out String is {
-    if (dispatchIs :ctx id: mnId at: dispatch.dataIndex).not then return ""
+    if (dispatchIs :ctx id: mnId at: dispatch.slot.dataIndex).not then return ""
     cb: ctxCname :ctx tid: bt
     vi: listArg :ast :symtab :ctx :call label: "i"
     return "\{cb}_index(\{bn}, \{vi})"
@@ -10039,7 +9928,7 @@ emitSpanMethodCall: function {
 } out String is {
     cb: ctxCname :ctx tid: bt
     recvR: colRecvRef :ctx bn: bn.stringView vid: bvid
-    if mnId == zast.names.wkGet then {
+    if mnId == zast.wellKnown.slot.wkGet then {
         v: listArg :ast :symtab :ctx :call label: "i"
         e1: "\{cb}_get(\{recvR}, \{v})"
         if (listGetIsPtr
@@ -10050,7 +9939,7 @@ emitSpanMethodCall: function {
         ) then return "(*\{e1})"
         return e1
     }
-    if mnId == zast.names.wkSet then {
+    if mnId == zast.wellKnown.slot.wkSet then {
         return (emitOrderedPair
             :ast
             :symtab
@@ -10065,7 +9954,7 @@ emitSpanMethodCall: function {
             bForm: argform.value
         )
     }
-    if mnId == zast.names.wkSlice then {
+    if mnId == zast.wellKnown.slot.wkSlice then {
         return (emitOrderedPair
             :ast
             :symtab
@@ -10080,12 +9969,12 @@ emitSpanMethodCall: function {
             bForm: argform.value
         )
     }
-    if (dispatchIs :ctx id: mnId at: dispatch.fill) then {
+    if (dispatchIs :ctx id: mnId at: dispatch.slot.fill) then {
         vf: listArg :ast :symtab :ctx :call label: "item"
         ef: "\{cb}_fill(\{recvR}, \{vf})"
         return ef
     }
-    if (dispatchIs :ctx id: mnId at: dispatch.split) then {
+    if (dispatchIs :ctx id: mnId at: dispatch.slot.split) then {
         needsAddM :ctx uname: "collections" memb: "window"
         va: listArg :ast :symtab :ctx :call label: "at"
         pc: (ctxCname
@@ -10099,7 +9988,7 @@ emitSpanMethodCall: function {
         es.append ".hi = { .length = _zs->length - _za, .data = _zs->data + _za } }; })"
         return es
     }
-    if (dispatchIs :ctx id: mnId at: dispatch.copyFrom) then {
+    if (dispatchIs :ctx id: mnId at: dispatch.slot.copyFrom) then {
         vc: listArg :ast :symtab :ctx :call label: "from"
         vn: labelArgNode :ast :call label: "from" form: argform.value
         lc: (ctxCname
@@ -10255,12 +10144,12 @@ emitSetMethodCall: function {
     bt: ztypes.tid
 } out String is {
     cb: ctxCname :ctx tid: bt
-    if mnId == zast.names.wkAdd then {
+    if mnId == zast.wellKnown.slot.wkAdd then {
         v: colArg :ast :symtab :ctx :call label: "item" consumes: true
         e0: "\{cb}_add(\{bn}, \{v})"
         return e0
     }
-    if (dispatchIs :ctx id: mnId at: dispatch.has) then {
+    if (dispatchIs :ctx id: mnId at: dispatch.slot.has) then {
         viv: colArgAsStringViewExpr :ast :symtab :ctx :call label: "item"
         if viv.length > 0 then return "\{cb}_hasv(\{bn}, \{viv})"
         v: colArg :ast :symtab :ctx :call label: "item" consumes: false
@@ -10277,7 +10166,7 @@ emitSetMethodCall: function {
         e1: "\{cb}_has(\{bn}, \{v})"
         return e1
     }
-    if (dispatchIs :ctx id: mnId at: dispatch.delete) then {
+    if (dispatchIs :ctx id: mnId at: dispatch.slot.delete) then {
         viv: colArgAsStringViewExpr :ast :symtab :ctx :call label: "item"
         if viv.length > 0 then return "\{cb}_deletev(\{bn}, \{viv})"
         v: colArg :ast :symtab :ctx :call label: "item" consumes: false
@@ -10310,7 +10199,7 @@ emitMapMethodCall: function {
     bt: ztypes.tid
 } out String is {
     cb: ctxCname :ctx tid: bt
-    if mnId == zast.names.wkSet then {
+    if mnId == zast.wellKnown.slot.wkSet then {
         return (emitOrderedPair
             :ast
             :symtab
@@ -10325,7 +10214,7 @@ emitMapMethodCall: function {
             bForm: argform.moved
         )
     }
-    if mnId == zast.names.wkGet then {
+    if mnId == zast.wellKnown.slot.wkGet then {
         vkv: colArgAsStringViewExpr :ast :symtab :ctx :call label: "key"
         if vkv.length > 0 then return "\{cb}_getv(\{bn}, \{vkv})"
         vk: colArg :ast :symtab :ctx :call label: "key" consumes: false
@@ -10342,7 +10231,7 @@ emitMapMethodCall: function {
         e1: "\{cb}_get(\{bn}, \{vk})"
         return e1
     }
-    if (dispatchIs :ctx id: mnId at: dispatch.has) then {
+    if (dispatchIs :ctx id: mnId at: dispatch.slot.has) then {
         vkv: colArgAsStringViewExpr :ast :symtab :ctx :call label: "key"
         if vkv.length > 0 then return "\{cb}_hasv(\{bn}, \{vkv})"
         vk: colArg :ast :symtab :ctx :call label: "key" consumes: false
@@ -10359,7 +10248,7 @@ emitMapMethodCall: function {
         e2: "\{cb}_has(\{bn}, \{vk})"
         return e2
     }
-    if mnId == zast.names.wkRemove then {
+    if mnId == zast.wellKnown.slot.wkRemove then {
         vk: colArg :ast :symtab :ctx :call label: "key" consumes: false
         if (mapKeyIsString :symtab :ctx monoId: bt) then {
             return "\{cb}_remove(\{bn}, \{(stringKeyArgPointer
@@ -10394,7 +10283,7 @@ emitIdMapMethodCall: function {
 } out String is {
     cb: ctxCname :ctx tid: bt
     recvR: colRecvRef :ctx bn: bn.stringView vid: bvid
-    if mnId == zast.names.wkSet then {
+    if mnId == zast.wellKnown.slot.wkSet then {
         return (emitOrderedPair
             :ast
             :symtab
@@ -10409,27 +10298,27 @@ emitIdMapMethodCall: function {
             bForm: argform.moved
         )
     }
-    if mnId == zast.names.wkGet then {
+    if mnId == zast.wellKnown.slot.wkGet then {
         vk: colArg :ast :symtab :ctx :call label: "key" consumes: false
         e1: "\{cb}_get(\{recvR}, \{vk})"
         return e1
     }
-    if (dispatchIs :ctx id: mnId at: dispatch.getMut) then {
+    if (dispatchIs :ctx id: mnId at: dispatch.slot.getMut) then {
         vkm: colArg :ast :symtab :ctx :call label: "key" consumes: false
         e1m: "\{cb}_getMut(\{recvR}, \{vkm})"
         return e1m
     }
-    if (dispatchIs :ctx id: mnId at: dispatch.has) then {
+    if (dispatchIs :ctx id: mnId at: dispatch.slot.has) then {
         vk: colArg :ast :symtab :ctx :call label: "key" consumes: false
         e2: "\{cb}_has(\{recvR}, \{vk})"
         return e2
     }
-    if (dispatchIs :ctx id: mnId at: dispatch.keyAt) then {
+    if (dispatchIs :ctx id: mnId at: dispatch.slot.keyAt) then {
         vi: colArg :ast :symtab :ctx :call label: "i" consumes: false
         e3: "\{cb}_keyAt(\{recvR}, \{vi})"
         return e3
     }
-    if (dispatchIs :ctx id: mnId at: dispatch.valueAt) then {
+    if (dispatchIs :ctx id: mnId at: dispatch.slot.valueAt) then {
         vi2: colArg :ast :symtab :ctx :call label: "i" consumes: false
         e4: "\{cb}_valueAt(\{recvR}, \{vi2})"
         return e4
@@ -10450,12 +10339,12 @@ emitIdSetMethodCall: function {
 } out String is {
     cb: ctxCname :ctx tid: bt
     recvR: colRecvRef :ctx bn: bn.stringView vid: bvid
-    if mnId == zast.names.wkAdd then {
+    if mnId == zast.wellKnown.slot.wkAdd then {
         v: colArg :ast :symtab :ctx :call label: "item" consumes: false
         e0: "\{cb}_add(\{recvR}, \{v})"
         return e0
     }
-    if (dispatchIs :ctx id: mnId at: dispatch.has) then {
+    if (dispatchIs :ctx id: mnId at: dispatch.slot.has) then {
         v: colArg :ast :symtab :ctx :call label: "item" consumes: false
         e1: "\{cb}_has(\{recvR}, \{v})"
         return e1
@@ -11534,7 +11423,8 @@ renderDefault: function {
 # spelled two ways, emitting two different things. This mirrors the checker's
 # methodHasThisReceiver, which has always asked both.
 fnTypeTakesThis: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
-    if (symtab.typing.declHasMemberId parentTypeId: tid nameId: zast.names.wkThis) then return true
+    if (symtab.typing.declHasMemberId parentTypeId: tid nameId: zast.wellKnown.slot.wkThis
+    ) then return true
     return (symtab.reg.hasThisParamName :tid)
 }
 
@@ -11618,7 +11508,10 @@ renderedMethodDefaultArgs: function {
         pij: pidl.get i: j
         pnjId: pidlNm.get i: j
         j = j + 1
-        isRecv: (pnjId == zast.names.wkThis) or ((thisPn.length > 0) and (thisPn.stringView == pnj))
+        isRecv: (
+            (pnjId == zast.wellKnown.slot.wkThis) or
+            ((thisPn.length > 0) and (thisPn.stringView == pnj))
+        )
         if isRecv.not then {
             userSeen = true
             hd: (symtab.typing.declHasDefaultId
@@ -11649,7 +11542,7 @@ emitExprStrZero: function {ctx: Ctx.view} out String is {
 # constructor: a function-typed `create` member with a body (a return node).
 # Zero when the type has none, and construction is field-wise.
 userCreateFn: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out ztypes.tid is {
-    cco: symtab.typing.declChildOfId parentTypeId: tid nameId: zast.names.wkCreate
+    cco: symtab.typing.declChildOfId parentTypeId: tid nameId: zast.wellKnown.slot.wkCreate
     if cco.none then return ztypes.tid
     ct: cco
     if ((symtab.reg.typetypeOf typeId: ct) == ztypes.ztypetype.functionType).not then {
@@ -12373,7 +12266,7 @@ argSlotList: function {
             # the match is an id compare. An UNLABELLED argument carries no name;
             # the empty spelling has an id of its own, so both are excluded
             hasLbl: a.name.isZero.not
-            if hasLbl when a.name == zast.names.wkEmpty then hasLbl = false
+            if hasLbl when a.name == zast.wellKnown.slot.wkEmpty then hasLbl = false
             slot: fpNameIds.length
             if hasLbl then {
                 fi: u64
@@ -13250,7 +13143,7 @@ emitCrossUnitBareCreate: function {
     parent: astnode.view
     childId: zast.nameid
 } out String is {
-    if childId != zast.names.wkCreate then return ""
+    if childId != zast.wellKnown.slot.wkCreate then return ""
     pbId: dottedBaseAtomId :ast n: parent
     ptId: dottedChildNameIdOf :ast n: parent
     if pbId.isZero then return ""
@@ -13275,7 +13168,7 @@ emitCrossUnitBareCreate: function {
     if tid.isZero then return ""
     cco: (symtab.typing.declChildOfId
         parentTypeId: tid
-        nameId: zast.names.wkCreate
+        nameId: zast.wellKnown.slot.wkCreate
     )
     match (
         cco
@@ -13298,7 +13191,7 @@ emitCrossUnitExplicitCreate: function {
     call: zast.callrow.view
 } out String is {
     armId: aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable)
-    if armId != zast.names.wkCreate then return ""
+    if armId != zast.wellKnown.slot.wkCreate then return ""
     obId: outerBaseAtomId :ast n: (ast.nodes.get i: call.callable)
     pcId: dottedParentChildId :ast n: (ast.nodes.get i: call.callable)
     if obId.isZero then return ""
@@ -13324,7 +13217,7 @@ emitCrossUnitExplicitCreate: function {
     # a generic template's create resolves through the callable's mono
     # stamp (the constructor leg below); this leg handles concrete types only
     if (isGenericType :symtab :tid) then return ""
-    cco: symtab.typing.declChildOfId parentTypeId: tid nameId: zast.names.wkCreate
+    cco: symtab.typing.declChildOfId parentTypeId: tid nameId: zast.wellKnown.slot.wkCreate
     match (
         cco
     ) case some then {
@@ -13636,7 +13529,7 @@ emitFnptrFieldCall: function {
             pnk: pNmIds.get i: pk
             isRecv: false
             if takesThis then {
-                if pnk == zast.names.wkThis then isRecv = true
+                if pnk == zast.wellKnown.slot.wkThis then isRecv = true
                 if thisNm.isZero.not when pnk == thisNm then isRecv = true
             }
             if isRecv.not then {
@@ -14394,21 +14287,21 @@ emitCallProbeChain: function {
 # template's own id.
 ownerIsCollectionFamily: function {ctx: Ctx.view fam: ztypes.tid} out bool is {
     return (
-        (fam == (ctx.origins.get i: family.list)) or
-        (fam == (ctx.origins.get i: family.listVal)) or
-        (fam == (ctx.origins.get i: family.listView)) or
-        (fam == (ctx.origins.get i: family.listViewVal)) or
-        (fam == (ctx.origins.get i: family.spanVal)) or
-        (fam == (ctx.origins.get i: family.set)) or
-        (fam == (ctx.origins.get i: family.setVal)) or
-        (fam == (ctx.origins.get i: family.map)) or
-        (fam == (ctx.origins.get i: family.mapRV)) or
-        (fam == (ctx.origins.get i: family.mapVR)) or
-        (fam == (ctx.origins.get i: family.mapVV)) or
-        (fam == (ctx.origins.get i: family.idMapR)) or
-        (fam == (ctx.origins.get i: family.idMapV)) or
-        (fam == (ctx.origins.get i: family.idSet)) or
-        (fam == (ctx.origins.get i: family.fixedArray)) or
+        (fam == (ctx.origins.get i: family.slot.list)) or
+        (fam == (ctx.origins.get i: family.slot.listVal)) or
+        (fam == (ctx.origins.get i: family.slot.listView)) or
+        (fam == (ctx.origins.get i: family.slot.listViewVal)) or
+        (fam == (ctx.origins.get i: family.slot.spanVal)) or
+        (fam == (ctx.origins.get i: family.slot.set)) or
+        (fam == (ctx.origins.get i: family.slot.setVal)) or
+        (fam == (ctx.origins.get i: family.slot.map)) or
+        (fam == (ctx.origins.get i: family.slot.mapRV)) or
+        (fam == (ctx.origins.get i: family.slot.mapVR)) or
+        (fam == (ctx.origins.get i: family.slot.mapVV)) or
+        (fam == (ctx.origins.get i: family.slot.idMapR)) or
+        (fam == (ctx.origins.get i: family.slot.idMapV)) or
+        (fam == (ctx.origins.get i: family.slot.idSet)) or
+        (fam == (ctx.origins.get i: family.slot.fixedArray)) or
         (isDataValueFamily :ctx :fam)
     )
 }
@@ -14419,9 +14312,9 @@ ownerIsCollectionFamily: function {ctx: Ctx.view fam: ztypes.tid} out bool is {
 isDataValueFamily: function {ctx: Ctx.view fam: ztypes.tid} out bool is {
     if fam.isZero then return false
     return (
-        (fam == (ctx.origins.get i: family.intData)) or
-        (fam == (ctx.origins.get i: family.floatData)) or
-        (fam == (ctx.origins.get i: family.stringData))
+        (fam == (ctx.origins.get i: family.slot.intData)) or
+        (fam == (ctx.origins.get i: family.slot.floatData)) or
+        (fam == (ctx.origins.get i: family.slot.stringData))
     )
 }
 
@@ -14628,7 +14521,7 @@ emitCallByDecl: function {
             :call
             :ownerTid
             fnptrField: rdecl.fnptrField
-            isCreate: rdecl.name == zast.names.wkCreate
+            isCreate: rdecl.name == zast.wellKnown.slot.wkCreate
         )
     }
     if rkind.funcDecl then return (emitFuncDeclCall :ast :symtab :ctx :call :rtid)
@@ -15097,8 +14990,8 @@ implicitZeroValue: function {
     # a sized str or array is built by its parameterless runtime create
     {
         zso: originTidOf :symtab tid: zm
-        strO: ctx.origins.get i: family.str
-        arrO: ctx.origins.get i: family.fixedArray
+        strO: ctx.origins.get i: family.slot.str
+        arrO: ctx.origins.get i: family.slot.fixedArray
         isSized: (zso == strO) or (zso == arrO)
         if isSized when zso.isZero.not then {
             zsc: ctxCname :ctx tid: zm
@@ -15253,7 +15146,7 @@ dataValueText: function {
     if vt.isZero then return ""
     vc: ctxCname :ctx tid: vt
     ac: ctxCname :ctx tid: dt
-    n: (symtab.typing.memberConstOf parentTypeId: dt nameId: zast.names.wkLength).ival
+    n: (symtab.typing.memberConstOf parentTypeId: dt nameId: zast.wellKnown.slot.wkLength).ival
     if n == 0 then return "((\{vc}_t){ .length = 0, .data = NULL })"
     return "((\{vc}_t){ .length = \{n}, .data = \{ac} })"
 }
@@ -15442,8 +15335,8 @@ nestedCounterRead: function {
     baseAtom: StringView
     recvIsPtr: bool
 } out String is {
-    isLength: mnId == zast.names.wkLength
-    arrO: ctx.origins.get i: family.fixedArray
+    isLength: mnId == zast.wellKnown.slot.wkLength
+    arrO: ctx.origins.get i: family.slot.fixedArray
     if isLength when (originIsTid :symtab tid: nlid originTid: arrO) then {
         acnb: ctxCname :ctx tid: nlid
         return "\{acnb}_length"
@@ -15460,7 +15353,7 @@ nestedCounterRead: function {
     accN: ".".string
     if recvIsPtr then accN = "->"
     if isLength then return "\{baseAtom}\{accN}length"
-    if mnId == zast.names.wkCapacity then return "\{baseAtom}\{accN}capacity"
+    if mnId == zast.wellKnown.slot.wkCapacity then return "\{baseAtom}\{accN}capacity"
     return ""
 }
 
@@ -15533,7 +15426,7 @@ emitNestedCollectionBase: function {
         vid: bs9vid
     )
     if wmn.length > 0 then return wmn
-    if (dispatchIs :ctx id: mnId at: dispatch.copy) then {
+    if (dispatchIs :ctx id: mnId at: dispatch.slot.copy) then {
         fam: copyFamilyOf :symtab :ctx tid: nlid
         if fam > 0 then {
             crv: colRecvRef :ctx bn: baseAtom vid: bs9vid
@@ -15546,7 +15439,7 @@ emitNestedCollectionBase: function {
             )
         }
     }
-    if (originIsTid :symtab tid: nlid originTid: (ctx.origins.get i: family.str)) then {
+    if (originIsTid :symtab tid: nlid originTid: (ctx.origins.get i: family.slot.str)) then {
         nstrcb: ctxCname :ctx tid: nlid
         if mn2 == "length" then return "\{baseAtom}.len"
         if mn2 == "size" then return "\{nstrcb}_size"
@@ -15567,7 +15460,7 @@ emitNestedCollectionBase: function {
         }
     }
     if (dataValueFamilyOf :symtab :ctx tid: nlid).isZero.not when (
-        mnId == zast.names.wkIterate
+        mnId == zast.wellKnown.slot.wkIterate
     ) then {
         ndcb: ctxCname :ctx tid: nlid
         recvD: colRecvRef :ctx bn: baseAtom vid: bs9vid
@@ -16023,7 +15916,7 @@ autoCallCname: function {
     owner: ztypes.tid
     method: ztypes.tid
 } out String is {
-    oc: ((symtab.typing.declChildOfId parentTypeId: owner nameId: zast.names.wkCall).or
+    oc: ((symtab.typing.declChildOfId parentTypeId: owner nameId: zast.wellKnown.slot.wkCall).or
         d: ztypes.tid.zero
     )
     if oc == method then return (objIterCallC :symtab :ctx cco: method itid: owner)
@@ -16154,8 +16047,8 @@ dataValueMemberRead: function {
 } out String is {
     if (dataValueFamilyOf :symtab :ctx tid: bstamp).isZero then return ""
     mnId: zast.poolFind pool: ast.names text: mn2
-    isLen: mnId == zast.names.wkLength
-    if isLen.not when mnId != zast.names.wkIterate then return ""
+    isLen: mnId == zast.wellKnown.slot.wkLength
+    if isLen.not when mnId != zast.wellKnown.slot.wkIterate then return ""
     base: dataValueText :symtab :ctx nid: (atomNodeId n: (ast.nodes.get i: baseNid))
     if base.length == 0 then base = bn2.string
     acc: "."
@@ -16499,20 +16392,22 @@ windowMemberRead: function {
     vid: ztypes.vid
 } out String is {
     fam: monoFamilyOf :symtab :ctx :tid
-    isArr: fam == family.fixedArray
-    isSpan: fam == family.spanVal
-    if (isArr or isSpan or (fam == family.listVal)).not then return ""
+    isArr: fam == family.slot.fixedArray
+    isSpan: fam == family.slot.spanVal
+    if (isArr or isSpan or (fam == family.slot.listVal)).not then return ""
     acc: "."
     if recvIsPtr then acc = "->"
-    if isSpan when mnId == zast.names.wkLength then return "\{base}\{acc}length"
-    if isSpan when (dispatchIs :ctx id: mnId at: dispatch.clear) then {
+    if isSpan when mnId == zast.wellKnown.slot.wkLength then return "\{base}\{acc}length"
+    if isSpan when (dispatchIs :ctx id: mnId at: dispatch.slot.clear) then {
         sc: ctxCname :ctx :tid
         rr: colRecvRef :ctx bn: base :vid
         return "\{sc}_clear(\{rr})"
     }
-    lendsView: isArr or isSpan and (mnId == zast.names.wkListView)
+    lendsView: isArr or isSpan and (mnId == zast.wellKnown.slot.wkListView)
     lendsWindow: (
-        isArr or (fam == family.listVal) and (dispatchIs :ctx id: mnId at: dispatch.mutView)
+        isArr or
+        (fam == family.slot.listVal) and
+        (dispatchIs :ctx id: mnId at: dispatch.slot.mutView)
     )
     if (lendsView or lendsWindow).not then return ""
     co: symtab.typing.declChildOfId parentTypeId: tid nameId: mnId
@@ -16570,7 +16465,7 @@ emitCollectionMemberRead: function {
         vid: bn2v
     )
     if wmr.length > 0 then return wmr
-    if (dispatchIs :ctx id: mnc9 at: dispatch.copy) then {
+    if (dispatchIs :ctx id: mnc9 at: dispatch.slot.copy) then {
         fam9: copyFamilyOf :symtab :ctx tid: bstamp
         if fam9 > 0 then return (containerCopyText
             :ctx
@@ -16580,7 +16475,8 @@ emitCollectionMemberRead: function {
             heapRecv: bn2
         )
     }
-    if (originIsTid :symtab tid: bstamp originTid: (ctx.origins.get i: family.fixedArray)) then {
+    if (originIsTid :symtab tid: bstamp originTid: (ctx.origins.get i: family.slot.fixedArray)
+    ) then {
         acba: ctxCname :ctx tid: bstamp
         if mn2 == "length" then {
             eal: "\{acba}_length"
@@ -16591,7 +16487,7 @@ emitCollectionMemberRead: function {
             return eai
         }
     }
-    if (originIsTid :symtab tid: bstamp originTid: (ctx.origins.get i: family.str)) then {
+    if (originIsTid :symtab tid: bstamp originTid: (ctx.origins.get i: family.slot.str)) then {
         scba: ctxCname :ctx tid: bstamp
         if mn2 == "length" then {
             esl: "\{bn2}\{accB2}len"
@@ -16876,8 +16772,8 @@ dottedAtomRecClsBase: function {
     if rtt == ztypes.ztypetype.recordType when (originIsTid
         :symtab
         tid: bstamp
-        originTid: (ctx.origins.get i: family.fixedArray)
-    ).not when (originIsTid :symtab tid: bstamp originTid: (ctx.origins.get i: family.str)
+        originTid: (ctx.origins.get i: family.slot.fixedArray)
+    ).not when (originIsTid :symtab tid: bstamp originTid: (ctx.origins.get i: family.slot.str)
     ).not then isRecOrCls = true
     if rtt == ztypes.ztypetype.classType then {
         # user classes only -- collection monos (List/Set/Map, with a
@@ -16947,7 +16843,7 @@ emitDottedAtomBase: function {
     # `.stringView` of a view is the view: a generic body wrote it for a type
     # parameter a StringView fills
     mnId: atomNameIdOf :ast n: (ast.nodes.get i: n.child)
-    if bareSv when mnId == zast.names.wkStringView then return bn2.string
+    if bareSv when mnId == zast.wellKnown.slot.wkStringView then return bn2.string
     eSv: emitSvAtomBase :ctx :bn2 :mn2 :bn2v :bareSv
     if eSv.length > 0 then return eSv
     if bareTid == ctx.strTid when mn2 == "length" then {
@@ -17249,7 +17145,7 @@ emitResolvedCopy: function {
     if (originIsTid
         :symtab
         :tid
-        originTid: (ctx.origins.get i: family.str)
+        originTid: (ctx.origins.get i: family.slot.str)
     ) then cvstr = true
     cvref: cvtt.isReferenceFamily or cvstr
     if cvref.not when (symtab.reg.needsDestructor typeId: tid).not then {
@@ -17322,11 +17218,11 @@ colCopyCall: function {
 # up as a missing call, never as a wrong emission on a reference family whose
 # elements would get two owners.
 copyFamilyOf: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.tid} out u64 is {
-    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: family.listVal)) then return 1
-    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: family.idMapV)) then return 1
-    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: family.idSet)) then return 1
-    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: family.setVal)) then return 2
-    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: family.mapVV)) then return 2
+    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: family.slot.listVal)) then return 1
+    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: family.slot.idMapV)) then return 1
+    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: family.slot.idSet)) then return 1
+    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: family.slot.setVal)) then return 2
+    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: family.slot.mapVV)) then return 2
     return 0
 }
 
@@ -17422,11 +17318,11 @@ emitDottedConversionRead: function {
     dps: ast.nodes.get i: n.parent
     ccbc: emitCrossUnitBareCreate :ctx :ast :symtab parent: dps childId: mnc0Id
     if ccbc.length > 0 then return ccbc
-    if (dispatchIs :ctx id: mnc0Id at: dispatch.copy) then {
+    if (dispatchIs :ctx id: mnc0Id at: dispatch.slot.copy) then {
         cpc: emitCopyConversion :ast :symtab :ctx :n
         if cpc.length > 0 then return cpc
     }
-    if mnc0Id == zast.names.wkString then {
+    if mnc0Id == zast.wellKnown.slot.wkString then {
         stc: emitDottedStringConversion :ast :symtab :ctx :n
         if stc.length > 0 then return stc
     }
@@ -17882,7 +17778,7 @@ emitDottedRead: function {
     # is handled by emitResultCombinator in the call dispatch instead.
     # the member is asked by ID: the legs below lend ast, and an id is a scalar
     dcMnId: atomNameIdOf :ast n: (ast.nodes.get i: n.child)
-    if (dispatchIs :ctx id: dcMnId at: dispatch.orPanic) then {
+    if (dispatchIs :ctx id: dcMnId at: dispatch.slot.orPanic) then {
         pStamp: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.parent))
         pMono: chaseAggregateTypedef :symtab :ctx tid: pStamp
         pOrig: monoOriginName :symtab tid: pMono
@@ -18512,8 +18408,8 @@ emitOperatorAt: function {
         mineSyn = symtab.typing.declMemberIsSynth parentTypeId: owner nameId: opId
     }
     if mineSyn then {
-        otherId: zast.names.wkOpEq
-        if opId == zast.names.wkOpEq then otherId = zast.names.wkOpNe
+        otherId: zast.wellKnown.slot.wkOpEq
+        if opId == zast.wellKnown.slot.wkOpEq then otherId = zast.wellKnown.slot.wkOpNe
         oo9: symtab.typing.declChildOfId parentTypeId: owner nameId: otherId
         match (
             oo9
@@ -18545,7 +18441,7 @@ emitOperatorAt: function {
             :owner
             :lhsNid
             :rhsNid
-            neg: opId == zast.names.wkOpNe
+            neg: opId == zast.wellKnown.slot.wkOpNe
         )
     }
     if call.isZero.not when isNat.not when isSyn.not then {
@@ -18876,7 +18772,7 @@ operatorOperandText: function {
     # the receiver by its name id, `this` for the `:this` shorthand; every other
     # row of a function type is a parameter
     recvId: symtab.reg.thisParamNameIdOf tid: call
-    if recvId.isZero then recvId = zast.names.wkThis
+    if recvId.isZero then recvId = zast.wellKnown.slot.wkThis
     ri: u64
     nRows: symtab.typing.declRowSlots ownerTid: call
     for ri < nRows loop {
@@ -18920,9 +18816,9 @@ isListCompare: function {
     owner: ztypes.tid
     opId: zast.nameid
 } out bool is {
-    isCmp: (opId == zast.names.wkOpEq) or (opId == zast.names.wkOpNe)
+    isCmp: (opId == zast.wellKnown.slot.wkOpEq) or (opId == zast.wellKnown.slot.wkOpNe)
     if isCmp.not then return false
-    return (originIsTid :symtab tid: owner originTid: (ctx.origins.get i: family.listVal))
+    return (originIsTid :symtab tid: owner originTid: (ctx.origins.get i: family.slot.listVal))
 }
 
 # emitListEqOperator -- a ListVal `==` (or its negation): the mono's `_eq`
@@ -19457,7 +19353,7 @@ emitInterpPart: function {
     } else if (originIsTid
         :symtab
         tid: (stampIdOf :symtab nid: (interpPartNodeId :n))
-        originTid: (ctx.origins.get i: family.str)
+        originTid: (ctx.origins.get i: family.slot.str)
     ) then {
         buf.append "\{ind}\{ctx.strC}_append(&\{sNm}, \{val}.data, \{val}.len);\n"
     } else {
@@ -19778,7 +19674,7 @@ emitPrintViaStringView: function {
     ind: StringView
     buf: String.borrow
 } is {
-    svco: symtab.typing.declChildOfId parentTypeId: argTid nameId: zast.names.wkStringView
+    svco: symtab.typing.declChildOfId parentTypeId: argTid nameId: zast.wellKnown.slot.wkStringView
     match (
         svco
     ) case some then {
@@ -19857,7 +19753,7 @@ emitPrintAtom: function {
         buf.append lpv
         return
     }
-    if (originIsTid :symtab tid: argTid originTid: (ctx.origins.get i: family.str)) then {
+    if (originIsTid :symtab tid: argTid originTid: (ctx.origins.get i: family.slot.str)) then {
         lpstr: "\{ind}\{ctx.svC}_print((\{ctx.svC}_t){ .data = \{anmE}.data, .size = \{anmE}.len });\n"
         buf.append lpstr
         return
@@ -20213,7 +20109,8 @@ emitOptionBoxHoist: function {
         cn: dottedChildText :ast n: (ast.nodes.get i: n.callable)
         if cn != "some" then return ""
         mid: stampIdOf :symtab nid: n.nodeid
-        if (originIsTid :symtab tid: mid originTid: (ctx.origins.get i: family.option)).not then {
+        if (originIsTid :symtab tid: mid originTid: (ctx.origins.get i: family.slot.option)
+        ).not then {
             return ""
         }
         av: "0".string
@@ -20371,19 +20268,19 @@ emitCallStmt: function {
             n: (ast.nodes.get i: call.callable)
         )
     }
-    if (dispatchIs :ctx id: sfnId at: dispatch.print) then {
+    if (dispatchIs :ctx id: sfnId at: dispatch.slot.print) then {
         emitPrintStmt :ast :symtab :ctx :call :ind :tmp :buf
         return
     }
-    if (dispatchIs :ctx id: sfnId at: dispatch.panic) then {
+    if (dispatchIs :ctx id: sfnId at: dispatch.slot.panic) then {
         emitPanicStmt :ast :symtab :ctx :call :ind :tmp :buf
         return
     }
-    if (dispatchIs :ctx id: sfnId at: dispatch.error) then {
+    if (dispatchIs :ctx id: sfnId at: dispatch.slot.error) then {
         emitErrorStmt :ast :symtab :ctx :call :ind :tmp :buf
         return
     }
-    if sfnId == zast.names.wkReturn then {
+    if sfnId == zast.wellKnown.slot.wkReturn then {
         outerExit: ctx.exitNode
         ctx.exitNode = call.nodeid
         hasArg: false
@@ -24971,7 +24868,7 @@ emitDoBindValue: function {
             # malloc'd box, none carries NULL data, and the local owns the
             # box (scope-exit destroy).
             boxedC: String
-            if (originIsTid :symtab :tid originTid: (ctx.origins.get i: family.option)) then {
+            if (originIsTid :symtab :tid originTid: (ctx.origins.get i: family.slot.option)) then {
                 boxedC = armPayloadC :ast :symtab :ctx :tid arm: "some"
             }
             l0: "\{ind}\{nm}.tag = \{noneTag};\n"
@@ -25245,8 +25142,10 @@ isForIterCall: function {ast: Ast.view n: astnode.view} out bool is {
         return true
     } case dottedpath then {
         cn: atomNameIdOf :ast n: (ast.nodes.get i: n.child)
-        if (cn == zast.names.wkIterate) or (cn == zast.names.wkIterateMut) then return true
-        return cn == zast.names.wkIterateReverse
+        if (
+            (cn == zast.wellKnown.slot.wkIterate) or (cn == zast.wellKnown.slot.wkIterateMut)
+        ) then return true
+        return cn == zast.wellKnown.slot.wkIterateReverse
     } else {
         return false
     }
@@ -25296,7 +25195,7 @@ objIterIterableTid: function {
         }
         hasCall: (symtab.typing.declHasMemberId
             parentTypeId: brt
-            nameId: zast.names.wkCall
+            nameId: zast.wellKnown.slot.wkCall
         )
         if brt.isZero.not when hasCall then {
             itid = brt
@@ -25330,7 +25229,7 @@ objIterIterableTid: function {
         }
         hasCallC: (symtab.typing.declHasMemberId
             parentTypeId: canoT
-            nameId: zast.names.wkCall
+            nameId: zast.wellKnown.slot.wkCall
         )
         if canoT.isZero.not when hasCallC then itid = canoT
     }
@@ -25540,7 +25439,7 @@ emitObjIterPayload: function {
         payElemName: monoElemName full: ovn prefixLen: payElemPfx
         payElemTid: ((symtab.typing.declChildOfId
             parentTypeId: ovid
-            nameId: zast.names.wkSome
+            nameId: zast.wellKnown.slot.wkSome
         ).or
             d: ztypes.tid.zero
         )
@@ -25580,7 +25479,7 @@ emitObjIterPayload: function {
     } else if (originIsTid
         :symtab
         tid: ovid
-        originTid: (ctx.origins.get i: family.option)
+        originTid: (ctx.origins.get i: family.slot.option)
     ) then {
         # owned heap yield: move the payload out, free just the box; the
         # loop var owns it and is freed at the end of each iteration.
@@ -25659,7 +25558,7 @@ objIterPayCleanup: function {
     if (originIsTid
         :symtab
         tid: ovid
-        originTid: (ctx.origins.get i: family.option)
+        originTid: (ctx.origins.get i: family.slot.option)
     ) then {
         pfree: (payloadDestructor
             :ast
@@ -25780,7 +25679,7 @@ emitOptionLoopTail: function {
     if (originIsTid
         :symtab
         tid: ovid
-        originTid: (ctx.origins.get i: family.option)
+        originTid: (ctx.origins.get i: family.slot.option)
     ) then {
         # owned heap-payload union: destroy the box on the NONE arm too.
         l2o: "\{ind}    if (_iter\{mN}.tag == Z_\{ovu}_TAG_NONE) { \{ovc}_destroy(&_iter\{mN}); break; }\n"
@@ -25879,7 +25778,7 @@ objIterForNamed: function {
     if tids.itid.isZero then return false
     itid: tids.itid
     bareFnId: tids.bareFnId
-    cco: symtab.typing.declChildOfId parentTypeId: itid nameId: zast.names.wkCall
+    cco: symtab.typing.declChildOfId parentTypeId: itid nameId: zast.wellKnown.slot.wkCall
     match (
         cco
     ) case some then {
@@ -26040,7 +25939,7 @@ emitIntRangeFor: function {
             :m
             n: (ast.nodes.get i: c0.operation)
             lbl: lbl.stringView
-            down: crM == zast.names.wkDownto
+            down: crM == zast.wellKnown.slot.wkDownto
             :ind
             :tmp
             :buf
@@ -26329,7 +26228,7 @@ isIntScalarName: function {name: StringView} out bool is {
 # the counted-loop path into the iterator protocol, where it never advances --
 # a loop that prints the receiver forever.
 isCountRangeMemberId: function {id: zast.nameid} out bool is {
-    return id == zast.names.wkTimes
+    return id == zast.wellKnown.slot.wkTimes
 }
 
 # isClosedRangeMemberId -- `upto` or `downto`, by INTERNED ID. SEPARATE from
@@ -26340,7 +26239,7 @@ isCountRangeMemberId: function {id: zast.nameid} out bool is {
 # one of two recognisers knows the member and the other does not. rangeCType asks
 # both, because the width is the receiver's whichever family it is.
 isClosedRangeMemberId: function {id: zast.nameid} out bool is {
-    return (id == zast.names.wkUpto) or (id == zast.names.wkDownto)
+    return (id == zast.wellKnown.slot.wkUpto) or (id == zast.wellKnown.slot.wkDownto)
 }
 
 # closedRangeMemberOf -- the closed-range member a `for` header's operation
@@ -28655,9 +28554,9 @@ emitTailStmt: function {
         ctx.exitNode = outerExit
         return done
     } case atomid then {
-        if n.name == zast.names.wkReturn then return false
-        if n.name == zast.names.wkBreak then return false
-        if n.name == zast.names.wkContinue then return false
+        if n.name == zast.wellKnown.slot.wkReturn then return false
+        if n.name == zast.wellKnown.slot.wkBreak then return false
+        if n.name == zast.wellKnown.slot.wkContinue then return false
         if (zast.nameTextEq :ast ref: n.name s: "null") then return false
         emitReturnOfNode :ast :symtab :ctx vid: n.nodeid :ind :tmp :buf
         ctx.tailReturned = true
@@ -29565,7 +29464,7 @@ paramIsReceiverName: function {
     # receiver name of its own -- `this` is the implicit one
     pid: zast.poolFind pool: ast.names text: pname
     if (symtab.reg.thisParamNameIs tid: fid nameId: pid) then return true
-    if (symtab.reg.thisParamNameIdOf tid: fid).isZero then return pid == zast.names.wkThis
+    if (symtab.reg.thisParamNameIdOf tid: fid).isZero then return pid == zast.wellKnown.slot.wkThis
     return false
 }
 
@@ -30112,20 +30011,20 @@ nodeIsAtomBox: function {
 }
 
 # originFamilyOf -- the origins table read backwards: which `family` element an
-# ORIGIN tid names, or family.none. Zero is no family -- a builtin the program never
+# ORIGIN tid names, or noFamily. Zero is no family -- a builtin the program never
 # registers leaves its row 0, and matching that would make every origin-less
 # type a List.
 originFamilyOf: function {ctx: Ctx.view originTid: ztypes.tid} out u64 is {
-    if originTid.isZero then return family.none
+    if originTid.isZero then return noFamily
     i: u64
-    for i < family.none loop {
+    for i < noFamily loop {
         if originTid == (ctx.origins.get :i) then return i
         i = i + 1
     }
-    return family.none
+    return noFamily
 }
 
-# monoFamilyOf -- the family a MONO was minted from, or family.none. Every predicate
+# monoFamilyOf -- the family a MONO was minted from, or noFamily. Every predicate
 # below asks exactly this and differs only in which answers it accepts.
 monoFamilyOf: function {
     symtab: zenv.ZSymbolTable.view
@@ -30146,7 +30045,7 @@ isListOriginOf: function {
     tid: ztypes.tid
 } out bool is {
     f: monoFamilyOf :symtab :ctx :tid
-    return (f == family.list) or (f == family.listVal)
+    return (f == family.slot.list) or (f == family.slot.listVal)
 }
 
 # isSetOriginOf -- the type is a Set of EITHER family. The two templates differ
@@ -30160,7 +30059,7 @@ isSetOriginOf: function {
     tid: ztypes.tid
 } out bool is {
     f: monoFamilyOf :symtab :ctx :tid
-    return (f == family.set) or (f == family.setVal)
+    return (f == family.slot.set) or (f == family.slot.setVal)
 }
 
 # isMapOriginOf -- the type is a Map of ANY of the four key/value families.
@@ -30170,7 +30069,12 @@ isMapOriginOf: function {
     tid: ztypes.tid
 } out bool is {
     f: monoFamilyOf :symtab :ctx :tid
-    return (f == family.map) or (f == family.mapRV) or (f == family.mapVR) or (f == family.mapVV)
+    return (
+        (f == family.slot.map) or
+        (f == family.slot.mapRV) or
+        (f == family.slot.mapVR) or
+        (f == family.slot.mapVV)
+    )
 }
 
 # isIdMapOriginOf -- the type is an IdMap of either value family.
@@ -30180,7 +30084,7 @@ isIdMapOriginOf: function {
     tid: ztypes.tid
 } out bool is {
     f: monoFamilyOf :symtab :ctx :tid
-    return (f == family.idMapR) or (f == family.idMapV)
+    return (f == family.slot.idMapR) or (f == family.slot.idMapV)
 }
 
 # isIdSetOriginOf -- the type is an IdSet.
@@ -30190,7 +30094,7 @@ isIdSetOriginOf: function {
     tid: ztypes.tid
 } out bool is {
     f: monoFamilyOf :symtab :ctx :tid
-    return f == family.idSet
+    return f == family.slot.idSet
 }
 
 # isIdCollectionOriginOf -- the type is an IdMap or an IdSet: the id-keyed
@@ -30201,7 +30105,7 @@ isIdCollectionOriginOf: function {
     tid: ztypes.tid
 } out bool is {
     f: monoFamilyOf :symtab :ctx :tid
-    return (f == family.idMapR) or (f == family.idMapV) or (f == family.idSet)
+    return (f == family.slot.idMapR) or (f == family.slot.idMapV) or (f == family.slot.idSet)
 }
 
 # isOptionViewOriginOf -- the type is an OptionView of either element family:
@@ -30212,7 +30116,7 @@ isOptionViewOriginOf: function {
     tid: ztypes.tid
 } out bool is {
     f: monoFamilyOf :symtab :ctx :tid
-    return (f == family.optionView) or (f == family.optionViewVal)
+    return (f == family.slot.optionView) or (f == family.slot.optionViewVal)
 }
 
 # isListViewOriginOf -- the type is a ListView of either element family.
@@ -30222,7 +30126,7 @@ isListViewOriginOf: function {
     tid: ztypes.tid
 } out bool is {
     f: monoFamilyOf :symtab :ctx :tid
-    return (f == family.listView) or (f == family.listViewVal)
+    return (f == family.slot.listView) or (f == family.slot.listViewVal)
 }
 
 # isMapEntryOriginOf -- the type is a MapEntry of any of the four families.
@@ -30232,8 +30136,8 @@ isMapEntryOriginOf: function {
     tid: ztypes.tid
 } out bool is {
     f: monoFamilyOf :symtab :ctx :tid
-    if (f == family.mapEntry) or (f == family.mapEntryRV) then return true
-    return (f == family.mapEntryVR) or (f == family.mapEntryVV)
+    if (f == family.slot.mapEntry) or (f == family.slot.mapEntryRV) then return true
+    return (f == family.slot.mapEntryVR) or (f == family.slot.mapEntryVV)
 }
 
 # isIdMapEntryOriginOf -- the type is an IdMapEntry of either value family.
@@ -30243,22 +30147,22 @@ isIdMapEntryOriginOf: function {
     tid: ztypes.tid
 } out bool is {
     f: monoFamilyOf :symtab :ctx :tid
-    return (f == family.idMapEntryR) or (f == family.idMapEntryV)
+    return (f == family.slot.idMapEntryR) or (f == family.slot.idMapEntryV)
 }
 
 # isCollectionOriginTid -- originTid (a genericOriginId) is one of the cached
 # collection/iterator origins, i.e. a template that mints a C struct type
 # (List/ListView/Set/Map/MapEntry and the iterators).
 #
-# The table has three zones and this is the MIDDLE one: family.str and family.fixedArray
+# The table has three zones and this is the MIDDLE one: family.slot.str and family.slot.fixedArray
 # precede it, the option/result families follow it. Moving a row across either
 # bound changes what counts as a collection, silently -- which is why the two
 # bounds are named here rather than a membership list being written out again.
 isCollectionOriginTid: function {ctx: Ctx.view originTid: ztypes.tid} out bool is {
     f: originFamilyOf :ctx :originTid
-    if f == family.none then return false
-    if f < family.list then return false
-    return f < family.option
+    if f == noFamily then return false
+    if f < family.slot.list then return false
+    return f < family.slot.option
 }
 
 # cTypeForNameTid -- like cTypeForName, for a site that holds the tid: a
@@ -30356,8 +30260,8 @@ chaseAggregateTypedef: function {
     isRec: (symtab.reg.typetypeOf typeId: e) == ztypes.ztypetype.recordType
     if isRec when (symtab.reg.isNativeOf tid: e) then {
         eo: originTidOf :symtab tid: e
-        strO: ctx.origins.get i: family.str
-        arrO: ctx.origins.get i: family.fixedArray
+        strO: ctx.origins.get i: family.slot.str
+        arrO: ctx.origins.get i: family.slot.fixedArray
         isSized: (eo == strO) or (eo == arrO)
         if isSized.not or eo.isZero then return tid
     }
@@ -30466,7 +30370,7 @@ typeRefC: function {
         cTypeText: "\{cc}_t"
         return cTypeText
     }
-    if (originIsTid :symtab tid: cid originTid: (ctx.origins.get i: family.fixedArray)) then {
+    if (originIsTid :symtab tid: cid originTid: (ctx.origins.get i: family.slot.fixedArray)) then {
         aca: ctxCnameView :ctx tid: cid
         act: "\{aca}_t"
         return act
@@ -30525,7 +30429,7 @@ variantArmIds: function {
             vnid1: rwvi1.name
             vtid1: rwvi1.tid
             if (symtab.reg.typetypeOf typeId: vtid1) != ztypes.ztypetype.functionType when (
-                vnid1 != zast.names.wkTag
+                vnid1 != zast.wellKnown.slot.wkTag
             ) when (zenv.isConformanceLabelOf
                 ty: symtab.typing
                 reg: symtab.reg
@@ -31093,7 +30997,7 @@ fillOneDataElem: function {
             elbl: dataElemLabel :ast n: (ast.nodes.get i: e)
             if elbl.length > 0 then {
                 elid: zast.poolFind pool: ast.names text: elbl.stringView
-                if elid == zast.names.wkLength then hasLen = true
+                if elid == zast.wellKnown.slot.wkLength then hasLen = true
                 lk: dataconstkey owner: dtid name: elid
                 lv: vx.copy
                 ctx.dataConst.set key: lk value: lv
@@ -31104,7 +31008,7 @@ fillOneDataElem: function {
         # never forces the static array out. An element labelled `length` has
         # already claimed the name.
         if hasLen.not then {
-            lnk: dataconstkey owner: dtid name: zast.names.wkLength
+            lnk: dataconstkey owner: dtid name: zast.wellKnown.slot.wkLength
             lnv: "\{idx}"
             ctx.dataConst.set key: lnk value: lnv
         }
@@ -33604,7 +33508,7 @@ monoOriginName: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out St
 # listElemType -- a List/ListView mono's element type id (the get-child
 # return), 0 when absent.
 listElemType: function {symtab: zenv.ZSymbolTable.view monoId: ztypes.tid} out ztypes.tid is {
-    go: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.names.wkGet
+    go: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.wellKnown.slot.wkGet
     match (
         go
     ) case some then {
@@ -33699,7 +33603,7 @@ arrayEqBody: function {
 # elemEqIsBytes -- the runtime's `==` for this element is a compare of its
 # bytes: an integer, a char, a bool, a function pointer. Not a float.
 elemEqIsBytes: function {ast: Ast.view symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
-    src: ztypecheck.valOpSource :ast st: symtab :tid nameId: zast.names.wkOpEq
+    src: ztypecheck.valOpSource :ast st: symtab :tid nameId: zast.wellKnown.slot.wkOpEq
     if src.builtin.not then return false
     if (partIsCScalar :symtab :tid).not then return false
     return (isFloatName name: (regNameView :symtab tid: (typedefChaseTid :symtab :tid))).not
@@ -33741,7 +33645,7 @@ emitStrMono: function {
     capStr: "\{capV}"
     lenT: capLenT cap: capV
     eqBody: String
-    eqo: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.names.wkOpEq
+    eqo: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.wellKnown.slot.wkOpEq
     match (
         eqo
     ) case some then {
@@ -33910,7 +33814,7 @@ emitListMono: function {
         :ctx
         :runtimeDir
         :monoId
-        nameId: zast.names.wkInsert
+        nameId: zast.wellKnown.slot.wkInsert
         file: "z_List_insert.c.tmpl"
         nm: nm.stringView
         hole: "ELEM_T"
@@ -33922,7 +33826,7 @@ emitListMono: function {
         :ctx
         :runtimeDir
         :monoId
-        nameId: zast.names.wkExtend
+        nameId: zast.wellKnown.slot.wkExtend
         file: "z_List_extend.c.tmpl"
         nm: nm.stringView
         hole: "ELEM_T"
@@ -33935,7 +33839,7 @@ emitListMono: function {
         :ctx
         :runtimeDir
         :monoId
-        nameId: (ctx.mnames.get i: dispatch.resize)
+        nameId: (ctx.mnames.get i: dispatch.slot.resize)
         file: "z_List_resize.c.tmpl"
         nm: nm.stringView
         hole: "ELEM_T"
@@ -33950,15 +33854,15 @@ emitListMono: function {
         :ctx
         :runtimeDir
         :monoId
-        nameId: (ctx.mnames.get i: dispatch.copy)
+        nameId: (ctx.mnames.get i: dispatch.slot.copy)
         file: "z_List_copy.c.tmpl"
         nm: nm.stringView
         hole: "ELEM_T"
         holeVal: ect.stringView
         :buf
     )
-    useGet: monoMemberUsed :symtab :monoId nameId: zast.names.wkGet
-    useMut: monoMemberUsed :symtab :monoId nameId: zast.names.wkGetMut
+    useGet: monoMemberUsed :symtab :monoId nameId: zast.wellKnown.slot.wkGet
+    useMut: monoMemberUsed :symtab :monoId nameId: zast.wellKnown.slot.wkGetMut
     if ctx.colGetFromCode when useGet or useMut then {
         (emitColGet
             nm: nm.stringView
@@ -33972,7 +33876,7 @@ emitListMono: function {
         )
     }
     elemT: eid
-    if (monoMemberUsed :symtab :monoId nameId: zast.names.wkContains) then {
+    if (monoMemberUsed :symtab :monoId nameId: zast.wellKnown.slot.wkContains) then {
         (emitListContains
             :ast
             :symtab
@@ -33985,8 +33889,8 @@ emitListMono: function {
         )
     }
     eqUsed: (
-        (monoMemberUsed :symtab :monoId nameId: zast.names.wkOpEq) or
-        (monoMemberUsed :symtab :monoId nameId: zast.names.wkOpNe)
+        (monoMemberUsed :symtab :monoId nameId: zast.wellKnown.slot.wkOpEq) or
+        (monoMemberUsed :symtab :monoId nameId: zast.wellKnown.slot.wkOpNe)
     )
     if eqUsed then (emitListEq
         :ast
@@ -33997,7 +33901,7 @@ emitListMono: function {
         elem: elemT
         :buf
     )
-    if (monoMemberUsed :symtab :monoId nameId: zast.names.wkSort) then {
+    if (monoMemberUsed :symtab :monoId nameId: zast.wellKnown.slot.wkSort) then {
         (emitListSort
             :ast
             :symtab
@@ -34047,7 +33951,7 @@ emitListContains: function {
         late = true
         fo: (symtab.typing.declChildOfId
             parentTypeId: (typedefChaseTid :symtab tid: elem)
-            nameId: zast.names.wkOpEq
+            nameId: zast.wellKnown.slot.wkOpEq
         )
         body.append "        { \{ect} _e = _this->data[i]; if ("
         body.append (ctxCname :ctx tid: (fo.or d: ztypes.tid.zero))
@@ -34115,7 +34019,8 @@ sortCallsWritten: function {
     ast: Ast.view symtab: zenv.ZSymbolTable.view elem: ztypes.tid
 } out bool is {
     if (symtab.reg.isValtypeOf tid: elem).not then return true
-    return (ztypecheck.valOpSource :ast st: symtab tid: elem nameId: zast.names.wkCompare).written
+    return (ztypecheck.valOpSource :ast st: symtab tid: elem nameId: zast.wellKnown.slot.wkCompare
+    ).written
 }
 
 # sortLessC -- `_a` sorts before `_b`, by the element's own `compare`: a
@@ -34134,11 +34039,11 @@ sortLessC: function {
     owner: typedefChaseTid :symtab tid: elem
     rhs: "_b"
     if (symtab.reg.isValtypeOf tid: elem) then {
-        owner = ztypecheck.valOpOwner st: symtab tid: elem nameId: zast.names.wkCompare
+        owner = ztypecheck.valOpOwner st: symtab tid: elem nameId: zast.wellKnown.slot.wkCompare
     } else if (elemBorrowsByPtr :ast :symtab :ctx tid: elem) then {
         rhs = "&_b"
     }
-    fo: symtab.typing.declChildOfId parentTypeId: owner nameId: zast.names.wkCompare
+    fo: symtab.typing.declChildOfId parentTypeId: owner nameId: zast.wellKnown.slot.wkCompare
     fc: ctxCname :ctx tid: (fo.or d: ztypes.tid.zero)
     return "\{fc}(&_a, \{rhs}) < 0"
 }
@@ -34255,10 +34160,10 @@ emitListSliceOnDemand: function {
     kind: StringView
     buf: String.borrow
 } is {
-    md: symtab.typing.declMemberIdOf parentTypeId: monoId nameId: zast.names.wkSlice
+    md: symtab.typing.declMemberIdOf parentTypeId: monoId nameId: zast.wellKnown.slot.wkSlice
     if md.isZero then return
     if (symtab.typing.usedMemberDecl.has item: md).not then return
-    co: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.names.wkSlice
+    co: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.wellKnown.slot.wkSlice
     match (
         co
     ) case some then {
@@ -34336,7 +34241,7 @@ emitIterCursorOf: function {
     ovId: (monoMethodReturn
         :symtab
         monoId: liId
-        nameId: zast.names.wkCall
+        nameId: zast.wellKnown.slot.wkCall
     )
     if ovId.isZero then return false
     ovName: regNameOf :symtab tid: ovId
@@ -34365,7 +34270,7 @@ emitListIter: function {
     ect: StringView
     buf: String.borrow
 } is {
-    liId: monoMethodReturn :symtab :monoId nameId: zast.names.wkIterate
+    liId: monoMethodReturn :symtab :monoId nameId: zast.wellKnown.slot.wkIterate
     # a mono that walks only BACKWARDS mints its cursor through the reverse
     # member, so the forward one answers nothing and the cursor would go
     # unemitted under a name the reverse constructor then names
@@ -34373,7 +34278,7 @@ emitListIter: function {
         liId = (monoMethodReturn
             :symtab
             :monoId
-            nameId: zast.names.wkIterateReverse
+            nameId: zast.wellKnown.slot.wkIterateReverse
         )
     }
     if (emitIterCursorOf :ctx :symtab :liId :ect :buf).not then return
@@ -34388,7 +34293,7 @@ emitListIter: function {
     # the element inherits the strength of the lock its holder has on the
     # container.
     s8: "static z_\{li}_t z_\{nm}_iterate(const z_\{nm}_t* _this);\n"
-    if (monoMemberUsed :symtab :monoId nameId: zast.names.wkIterate) then {
+    if (monoMemberUsed :symtab :monoId nameId: zast.wellKnown.slot.wkIterate) then {
         buf.append s8
         s: "static z_\{li}_t z_\{nm}_iterate(const z_\{nm}_t* _this) {\n    z_\{li}_t _it = {0};\n    _it.data = _this->data;\n    _it.length = _this->length;\n    _it.idx = 0;\n    _it.down = false;\n    return _it;\n}\n\n"
         buf.append s
@@ -34396,7 +34301,7 @@ emitListIter: function {
     # iterateReverse -- the same cursor over the same window, walked from the
     # far end. Readonly like `iterate`, and there is no mutable twin: writing
     # through a walk is `iterateMut`, in either direction it is the same lock.
-    if (monoMemberUsed :symtab :monoId nameId: zast.names.wkIterateReverse) then {
+    if (monoMemberUsed :symtab :monoId nameId: zast.wellKnown.slot.wkIterateReverse) then {
         s12: "static z_\{li}_t z_\{nm}_iterateReverse(const z_\{nm}_t* _this);\n"
         buf.append s12
         s13: "static z_\{li}_t z_\{nm}_iterateReverse(const z_\{nm}_t* _this) {\n    z_\{li}_t _it = {0};\n    _it.data = _this->data;\n    _it.length = _this->length;\n    _it.idx = 0;\n    _it.down = true;\n    return _it;\n}\n\n"
@@ -34407,7 +34312,7 @@ emitListIter: function {
     # lets the caller do with the elements, so the C bodies are identical. A
     # view declares none: it is readonly, and an ungated one would be a
     # writable walk over storage the view may not write.
-    if (monoMemberUsed :symtab :monoId nameId: zast.names.wkIterateMut) then {
+    if (monoMemberUsed :symtab :monoId nameId: zast.wellKnown.slot.wkIterateMut) then {
         s10: "static z_\{li}_t z_\{nm}_iterateMut(z_\{nm}_t* _this);\n"
         buf.append s10
         s11: "static z_\{li}_t z_\{nm}_iterateMut(z_\{nm}_t* _this) {\n    z_\{li}_t _it = {0};\n    _it.data = _this->data;\n    _it.length = _this->length;\n    _it.idx = 0;\n    _it.down = false;\n    return _it;\n}\n\n"
@@ -34499,7 +34404,7 @@ emitListViewMono: function {
     if ctx.colGetFromCode when (monoMemberUsed
         :symtab
         :monoId
-        nameId: zast.names.wkGet
+        nameId: zast.wellKnown.slot.wkGet
     ) then {
         (emitColGet
             nm: nm.stringView
@@ -34539,7 +34444,9 @@ emitDataMono: function {
 } is {
     nm: cbaseNoPrefix :ctx tid: monoId
     ect: "\{ctx.svC}_t"
-    if (dataValueFamilyOf :symtab :ctx tid: monoId) != (ctx.origins.get i: family.stringData) then {
+    if (
+        (dataValueFamilyOf :symtab :ctx tid: monoId) != (ctx.origins.get i: family.slot.stringData)
+    ) then {
         eid: symtab.reg.genericTypeArgAt specId: monoId ordinal: 0
         ect0: slotCType :ast :symtab :ctx tid: eid
         ect = ctypeOrI64 s: ect0.stringView
@@ -34552,7 +34459,7 @@ emitDataMono: function {
         buf.append t2
         buf.append "\n"
     }
-    if (monoMemberUsed :symtab :monoId nameId: (ctx.mnames.get i: dispatch.dataIndex)) then {
+    if (monoMemberUsed :symtab :monoId nameId: (ctx.mnames.get i: dispatch.slot.dataIndex)) then {
         buf.append "static \{ect} z_\{nm}_index(z_\{nm}_t _this, uint64_t _idx);\n"
         buf.append "static \{ect} z_\{nm}_index(z_\{nm}_t _this, uint64_t _idx) {\n"
         buf.append "    if (_idx >= _this.length) {\n"
@@ -34564,8 +34471,8 @@ emitDataMono: function {
         buf.append "    return _this.data[_idx];\n"
         buf.append "}\n\n"
     }
-    if (monoMemberUsed :symtab :monoId nameId: zast.names.wkIterate).not then return
-    liId: monoMethodReturn :symtab :monoId nameId: zast.names.wkIterate
+    if (monoMemberUsed :symtab :monoId nameId: zast.wellKnown.slot.wkIterate).not then return
+    liId: monoMethodReturn :symtab :monoId nameId: zast.wellKnown.slot.wkIterate
     if (emitIterCursorOf :ctx :symtab :liId ect: ect.stringView :buf).not then return
     li: cbaseNoPrefix :ctx tid: liId
     buf.append "static z_\{li}_t z_\{nm}_iterate(const z_\{nm}_t* _this);\n"
@@ -34602,7 +34509,7 @@ emitSpanMono: function {
         buf.append t2
         buf.append "\n"
     }
-    if (monoMemberUsed :symtab :monoId nameId: zast.names.wkGet) then (emitColGet
+    if (monoMemberUsed :symtab :monoId nameId: zast.wellKnown.slot.wkGet) then (emitColGet
         nm: nm.stringView
         ect: ect.stringView
         kind: "SpanVal"
@@ -34617,7 +34524,7 @@ emitSpanMono: function {
         :ctx
         :runtimeDir
         :monoId
-        nameId: zast.names.wkSet
+        nameId: zast.wellKnown.slot.wkSet
         file: "z_SpanVal_set.c.tmpl"
         nm: nm.stringView
         ect: ect.stringView
@@ -34628,7 +34535,7 @@ emitSpanMono: function {
         :ctx
         :runtimeDir
         :monoId
-        nameId: zast.names.wkSlice
+        nameId: zast.wellKnown.slot.wkSlice
         file: "z_SpanVal_slice.c.tmpl"
         nm: nm.stringView
         ect: ect.stringView
@@ -34639,7 +34546,7 @@ emitSpanMono: function {
         :ctx
         :runtimeDir
         :monoId
-        nameId: (ctx.mnames.get i: dispatch.fill)
+        nameId: (ctx.mnames.get i: dispatch.slot.fill)
         file: "z_SpanVal_fill.c.tmpl"
         nm: nm.stringView
         ect: ect.stringView
@@ -34650,7 +34557,7 @@ emitSpanMono: function {
         :ctx
         :runtimeDir
         :monoId
-        nameId: (ctx.mnames.get i: dispatch.clear)
+        nameId: (ctx.mnames.get i: dispatch.slot.clear)
         file: "z_SpanVal_clear.c.tmpl"
         nm: nm.stringView
         ect: ect.stringView
@@ -34698,7 +34605,7 @@ listviewMethods: function {
     nm: StringView
     ect: StringView
 } out String is {
-    lo: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.names.wkListView
+    lo: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.wellKnown.slot.wkListView
     match (
         lo
     ) case some then {
@@ -34707,11 +34614,11 @@ listviewMethods: function {
             {
                 lvc: ctxCname :ctx tid: rt
                 buf: String
-                if (monoMemberUsed :symtab :monoId nameId: zast.names.wkListView) then {
+                if (monoMemberUsed :symtab :monoId nameId: zast.wellKnown.slot.wkListView) then {
                     m0: "static \{lvc}_t z_\{nm}_listView(const z_\{nm}_t* _this) { return *(\{lvc}_t*)_this; }\n"
                     buf.append m0
                 }
-                if (monoMemberUsed :symtab :monoId nameId: zast.names.wkExtendView) then {
+                if (monoMemberUsed :symtab :monoId nameId: zast.wellKnown.slot.wkExtendView) then {
                     m1: "static void z_\{nm}_extendView(z_\{nm}_t* _this, \{lvc}_t _from) {\n"
                     buf.append m1
                     # an empty window carries a null data pointer, and memcpy is
@@ -34793,7 +34700,7 @@ ctxBindMain: function {ctx: Ctx name: StringView unitDecl: ztypes.declid} is {
 # runtime supplies that symbol and the field-wise meta_create alias would
 # redeclare it with a different signature.
 typeHasNativeCreate: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
-    co: symtab.typing.declChildOfId parentTypeId: tid nameId: zast.names.wkCreate
+    co: symtab.typing.declChildOfId parentTypeId: tid nameId: zast.wellKnown.slot.wkCreate
     match (
         co
     ) case some then {
@@ -35266,12 +35173,12 @@ emitSetMono: function {
     )
     ekind: keyHashKind :symtab :ctx tid: elemTid
     isStr: ekind == 1
-    siId: monoMethodReturn :symtab :monoId nameId: zast.names.wkIterate
+    siId: monoMethodReturn :symtab :monoId nameId: zast.wellKnown.slot.wkIterate
     if siId.isZero then return
     ovId: (monoMethodReturn
         :symtab
         monoId: siId
-        nameId: zast.names.wkCall
+        nameId: zast.wellKnown.slot.wkCall
     )
     if ovId.isZero then return
     ovName: regNameOf :symtab tid: ovId
@@ -35388,7 +35295,7 @@ emitSetMono: function {
         :ctx
         :runtimeDir
         :monoId
-        nameId: (ctx.mnames.get i: dispatch.copy)
+        nameId: (ctx.mnames.get i: dispatch.slot.copy)
         file: "z_dict_copy.c.tmpl"
         nm: nm.stringView
         hole: ""
@@ -35461,28 +35368,28 @@ emitMapIters: function {
     valT: StringView
     buf: String.borrow
 } is {
-    miiId: monoMethodReturn :symtab :monoId nameId: zast.names.wkIterateItems
+    miiId: monoMethodReturn :symtab :monoId nameId: zast.wellKnown.slot.wkIterateItems
     if miiId.isZero then return
-    mkiId: monoMethodReturn :symtab :monoId nameId: zast.names.wkIterate
+    mkiId: monoMethodReturn :symtab :monoId nameId: zast.wellKnown.slot.wkIterate
     if mkiId.isZero then return
     ovkId: (monoMethodReturn
         :symtab
         monoId: mkiId
-        nameId: zast.names.wkCall
+        nameId: zast.wellKnown.slot.wkCall
     )
     if ovkId.isZero then return
     ovkName: regNameOf :symtab tid: ovkId
     oveId: (monoMethodReturn
         :symtab
         monoId: miiId
-        nameId: zast.names.wkCall
+        nameId: zast.wellKnown.slot.wkCall
     )
     if oveId.isZero then return
     oveName: regNameOf :symtab tid: oveId
     meId: ztypes.tid
     meo: (symtab.typing.declChildOfId
         parentTypeId: oveId
-        nameId: zast.names.wkSome
+        nameId: zast.wellKnown.slot.wkSome
     )
     match (
         meo
@@ -35519,12 +35426,22 @@ emitMapIters: function {
 # parameter rather than off the mono's name: the name is composed text, the
 # parameter is the declaration.
 mapKeyType: function {symtab: zenv.ZSymbolTable.view monoId: ztypes.tid} out ztypes.tid is {
-    return (memberOfMemberType :symtab :monoId outer: zast.names.wkSet inner: zast.names.wkKey)
+    return (memberOfMemberType
+        :symtab
+        :monoId
+        outer: zast.wellKnown.slot.wkSet
+        inner: zast.wellKnown.slot.wkKey
+    )
 }
 
 # the element type id of Set instantiation `monoId`.
 setElemType: function {symtab: zenv.ZSymbolTable.view monoId: ztypes.tid} out ztypes.tid is {
-    return (memberOfMemberType :symtab :monoId outer: zast.names.wkAdd inner: zast.names.wkItem)
+    return (memberOfMemberType
+        :symtab
+        :monoId
+        outer: zast.wellKnown.slot.wkAdd
+        inner: zast.wellKnown.slot.wkItem
+    )
 }
 
 # memberOfMemberType -- the type of `inner` on the type of `outer` on `monoId`:
@@ -35547,13 +35464,13 @@ memberOfMemberType: function {
 
 # the value type id of Map instantiation `monoId`.
 mapValType: function {symtab: zenv.ZSymbolTable.view monoId: ztypes.tid} out ztypes.tid is {
-    so: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.names.wkSet
+    so: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.wellKnown.slot.wkSet
     match (
         so
     ) case some then {
         vo: (symtab.typing.declChildOfId
             parentTypeId: so
-            nameId: zast.names.wkValue
+            nameId: zast.wellKnown.slot.wkValue
         )
         match (
             vo
@@ -35580,7 +35497,7 @@ emitMapMono: function {
     nm: cbaseNoPrefix :ctx tid: monoId
     mcr: cUpperOf text: nm.stringView
     ovId: ztypes.tid
-    go: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.names.wkGet
+    go: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.wellKnown.slot.wkGet
     match (
         go
     ) case some then {
@@ -35687,7 +35604,7 @@ emitMapMono: function {
     if (originIsTid
         :symtab
         tid: ovId
-        originTid: (ctx.origins.get i: family.optionval)
+        originTid: (ctx.origins.get i: family.slot.optionval)
     ) then {
         gbV: "    z_\{ov}_t _r;\n    if (idx >= 0) {\n        _r.tag = Z_\{ovu}_TAG_SOME;\n        _r.data.some = _this->entries[idx].value;\n    } else {\n        _r.tag = Z_\{ovu}_TAG_NONE;\n    }\n    return _r;"
         getBody = gbV.take
@@ -35701,7 +35618,7 @@ emitMapMono: function {
         getBody = gbR.take
     }
     rmWrapId: ztypes.tid
-    roMm: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.names.wkRemove
+    roMm: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.wellKnown.slot.wkRemove
     match (
         roMm
     ) case some then {
@@ -35717,7 +35634,7 @@ emitMapMono: function {
     if (originIsTid
         :symtab
         tid: rmWrapId
-        originTid: (ctx.origins.get i: family.optionval)
+        originTid: (ctx.origins.get i: family.slot.optionval)
     ) then {
         removeBody = "    z_\{rmWrap}_t _r;\n    if (idx < 0) {\n        _r.tag = Z_\{rmWrapU}_TAG_NONE;\n        return _r;\n    }\n    _r.tag = Z_\{rmWrapU}_TAG_SOME;\n    _r.data.some = _this->entries[idx].value;\n\{delTail}    return _r;"
     } else {
@@ -35789,7 +35706,7 @@ emitMapMono: function {
         :ctx
         :runtimeDir
         :monoId
-        nameId: (ctx.mnames.get i: dispatch.copy)
+        nameId: (ctx.mnames.get i: dispatch.slot.copy)
         file: "z_dict_copy.c.tmpl"
         nm: nm.stringView
         hole: ""
@@ -35820,7 +35737,7 @@ emitIdMapMono: function {
     nm: cbaseNoPrefix :ctx tid: monoId
     mcr: cUpperOf text: nm.stringView
     ovId: ztypes.tid
-    go: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.names.wkGet
+    go: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.wellKnown.slot.wkGet
     match (
         go
     ) case some then {
@@ -35856,7 +35773,7 @@ emitIdMapMono: function {
     if (originIsTid
         :symtab
         tid: ovId
-        originTid: (ctx.origins.get i: family.optionval)
+        originTid: (ctx.origins.get i: family.slot.optionval)
     ) then {
         getBody = "    z_\{ov}_t _r;\n    if (idx >= 0) {\n        _r.tag = Z_\{ovu}_TAG_SOME;\n        _r.data.some = _this->entries[idx].value;\n    } else {\n        _r.tag = Z_\{ovu}_TAG_NONE;\n    }\n    return _r;"
     } else {
@@ -35905,7 +35822,7 @@ emitIdMapMono: function {
         :ctx
         :runtimeDir
         :monoId
-        nameId: (ctx.mnames.get i: dispatch.copy)
+        nameId: (ctx.mnames.get i: dispatch.slot.copy)
         file: "z_IdMap_copy.c.tmpl"
         nm: nm.stringView
         hole: ""
@@ -35963,12 +35880,12 @@ emitIdMapIters: function {
     valT: StringView
     buf: String.borrow
 } is {
-    miiId: monoMethodReturn :symtab :monoId nameId: zast.names.wkIterateItems
+    miiId: monoMethodReturn :symtab :monoId nameId: zast.wellKnown.slot.wkIterateItems
     if miiId.isZero then return
     oveId: (monoMethodReturn
         :symtab
         monoId: miiId
-        nameId: zast.names.wkCall
+        nameId: zast.wellKnown.slot.wkCall
     )
     if oveId.isZero then return
     oveName: regNameOf :symtab tid: oveId
@@ -35976,7 +35893,7 @@ emitIdMapIters: function {
     {
         meo: (symtab.typing.declChildOfId
             parentTypeId: oveId
-            nameId: zast.names.wkSome
+            nameId: zast.wellKnown.slot.wkSome
         )
         match (
             meo
@@ -36025,12 +35942,12 @@ emitIdSetMono: function {
         name: elemName.stringView
         tid: elemTid
     )
-    siId: monoMethodReturn :symtab :monoId nameId: zast.names.wkIterate
+    siId: monoMethodReturn :symtab :monoId nameId: zast.wellKnown.slot.wkIterate
     if siId.isZero then return
     ovId: (monoMethodReturn
         :symtab
         monoId: siId
-        nameId: zast.names.wkCall
+        nameId: zast.wellKnown.slot.wkCall
     )
     if ovId.isZero then return
     ovName: regNameOf :symtab tid: ovId
@@ -36054,7 +35971,7 @@ emitIdSetMono: function {
         :ctx
         :runtimeDir
         :monoId
-        nameId: (ctx.mnames.get i: dispatch.copy)
+        nameId: (ctx.mnames.get i: dispatch.slot.copy)
         file: "z_IdSet_copy.c.tmpl"
         nm: nm.stringView
         hole: "ITEM_T"
@@ -36807,7 +36724,8 @@ monoNeedsFwdDecl: function {
     tid: ztypes.tid
 } out bool is {
     if (symtab.reg.needsDestructor typeId: tid) then return true
-    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: family.fixedArray)) then return true
+    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: family.slot.fixedArray)
+    ) then return true
     if (isListOriginOf :symtab :ctx :tid) then return true
     if (isListViewOriginOf :symtab :ctx :tid) then return true
     if (isSetOriginOf :symtab :ctx :tid) then return true
@@ -36897,7 +36815,7 @@ emitMainFwdDecls: function {symtab: zenv.ZSymbolTable.view ctx: Ctx buf: String.
 # get-return OptionView's element name and the key via the mangled-name
 # remainder, mirroring emitMapMono.
 monoMapKV: function {symtab: zenv.ZSymbolTable.view monoId: ztypes.tid acc: ListVal ztypes.tid} is {
-    go: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.names.wkGet
+    go: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.wellKnown.slot.wkGet
     match (
         go
     ) case some then {
@@ -36923,8 +36841,8 @@ monoElemIdsOf: function {
     byGet: (
         (isListOriginOf :symtab :ctx tid: monoId) or
         (isListViewOriginOf :symtab :ctx tid: monoId) or
-        (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: family.fixedArray)) or
-        (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: family.spanVal))
+        (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: family.slot.fixedArray)) or
+        (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: family.slot.spanVal))
     )
     if byGet then {
         e: listElemType :symtab :monoId
@@ -36955,10 +36873,10 @@ monoElemIdsOf: function {
         return
     }
     isWrap: (
-        (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: family.optionval)) or
-        (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: family.resultval)) or
-        (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: family.option)) or
-        (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: family.result)) or
+        (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: family.slot.optionval)) or
+        (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: family.slot.resultval)) or
+        (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: family.slot.option)) or
+        (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: family.slot.result)) or
         (isOptionViewOriginOf :symtab :ctx tid: monoId) or
         ((symtab.reg.typetypeOf typeId: monoId) == ztypes.ztypetype.variantType)
     )
@@ -37121,8 +37039,9 @@ unionInlineArmTids: function {
 isValueSumMono: function {
     symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.tid
 } out bool is {
-    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: family.optionval)) then return true
-    return (originIsTid :symtab :tid originTid: (ctx.origins.get i: family.resultval))
+    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: family.slot.optionval)
+    ) then return true
+    return (originIsTid :symtab :tid originTid: (ctx.origins.get i: family.slot.resultval))
 }
 
 # isCollectionPassMono -- a mono whose C the collection pass writes: a collection,
@@ -37134,12 +37053,12 @@ isCollectionPassMono: function {
     co: originTidOf :symtab :tid
     if co.isZero then return false
     if (isCollectionOriginTid :ctx originTid: co) then return true
-    if (originFamilyOf :ctx originTid: co) == family.fixedArray then return true
+    if (originFamilyOf :ctx originTid: co) == family.slot.fixedArray then return true
     tt: symtab.reg.typetypeOf typeId: tid
     if (isUserGenericRecordMono :symtab :ctx tcl: tid :tt) then return true
     isValMono: (
-        (originIsTid :symtab :tid originTid: (ctx.origins.get i: family.optionval)) or
-        (originIsTid :symtab :tid originTid: (ctx.origins.get i: family.resultval))
+        (originIsTid :symtab :tid originTid: (ctx.origins.get i: family.slot.optionval)) or
+        (originIsTid :symtab :tid originTid: (ctx.origins.get i: family.slot.resultval))
     )
     return (isUserGenericVariantMono :symtab :ctx tcl: tid :tt :isValMono)
 }
@@ -37287,11 +37206,13 @@ emitMonoById: function {
     monoId: ztypes.tid
     buf: String.borrow
 } is {
-    if (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: family.optionval)) then {
+    if (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: family.slot.optionval)
+    ) then {
         emitOneVariant :ast :symtab :ctx tid: monoId :buf
         return
     }
-    if (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: family.resultval)) then {
+    if (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: family.slot.resultval)
+    ) then {
         emitOneVariant :ast :symtab :ctx tid: monoId :buf
         return
     }
@@ -37299,11 +37220,12 @@ emitMonoById: function {
         emitListViewMono :ast :symtab :ctx :runtimeDir :monoId :buf
         return
     }
-    if (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: family.spanVal)) then {
+    if (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: family.slot.spanVal)) then {
         emitSpanMono :ast :symtab :ctx :runtimeDir :monoId :buf
         return
     }
-    if (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: family.fixedArray)) then {
+    if (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: family.slot.fixedArray)
+    ) then {
         emitArrayMono :ast :symtab :ctx :runtimeDir :monoId :buf
         return
     }
@@ -37552,8 +37474,8 @@ ensureFwdStruct: function {
     tt: symtab.reg.typetypeOf typeId: tid
     isStruct: tt.isFieldwise
     if isStruct then {
-        strO: ctx.origins.get i: family.str
-        arrO: ctx.origins.get i: family.fixedArray
+        strO: ctx.origins.get i: family.slot.str
+        arrO: ctx.origins.get i: family.slot.fixedArray
         if (originIsTid :symtab :tid originTid: strO) then isStruct = false
         if (originIsTid :symtab :tid originTid: arrO) then isStruct = false
     }
@@ -37941,23 +37863,23 @@ collectLateGroup: function {
     last: ztypes.tid
 } is {
     fams: ListVal ztypes.tid
-    fams.append (ctx.origins.get i: family.fixedArray)
-    fams.append (ctx.origins.get i: family.optionval)
-    fams.append (ctx.origins.get i: family.resultval)
-    fams.append (ctx.origins.get i: family.listView)
-    fams.append (ctx.origins.get i: family.listViewVal)
-    fams.append (ctx.origins.get i: family.spanVal)
-    fams.append (ctx.origins.get i: family.list)
-    fams.append (ctx.origins.get i: family.listVal)
-    fams.append (ctx.origins.get i: family.set)
-    fams.append (ctx.origins.get i: family.setVal)
-    fams.append (ctx.origins.get i: family.map)
-    fams.append (ctx.origins.get i: family.mapRV)
-    fams.append (ctx.origins.get i: family.idSet)
-    fams.append (ctx.origins.get i: family.idMapR)
-    fams.append (ctx.origins.get i: family.idMapV)
-    fams.append (ctx.origins.get i: family.mapVR)
-    fams.append (ctx.origins.get i: family.mapVV)
+    fams.append (ctx.origins.get i: family.slot.fixedArray)
+    fams.append (ctx.origins.get i: family.slot.optionval)
+    fams.append (ctx.origins.get i: family.slot.resultval)
+    fams.append (ctx.origins.get i: family.slot.listView)
+    fams.append (ctx.origins.get i: family.slot.listViewVal)
+    fams.append (ctx.origins.get i: family.slot.spanVal)
+    fams.append (ctx.origins.get i: family.slot.list)
+    fams.append (ctx.origins.get i: family.slot.listVal)
+    fams.append (ctx.origins.get i: family.slot.set)
+    fams.append (ctx.origins.get i: family.slot.setVal)
+    fams.append (ctx.origins.get i: family.slot.map)
+    fams.append (ctx.origins.get i: family.slot.mapRV)
+    fams.append (ctx.origins.get i: family.slot.idSet)
+    fams.append (ctx.origins.get i: family.slot.idMapR)
+    fams.append (ctx.origins.get i: family.slot.idMapV)
+    fams.append (ctx.origins.get i: family.slot.mapVR)
+    fams.append (ctx.origins.get i: family.slot.mapVV)
     fi: u64
     fn: fams.length
     for fi < fn loop {
@@ -38340,8 +38262,8 @@ classifyCollectionMono: function {
 } out bool is {
     isColKind: false
     isOptRes: (
-        (originIsTid :symtab tid: tcl originTid: (ctx.origins.get i: family.option)) or
-        (originIsTid :symtab tid: tcl originTid: (ctx.origins.get i: family.result))
+        (originIsTid :symtab tid: tcl originTid: (ctx.origins.get i: family.slot.option)) or
+        (originIsTid :symtab tid: tcl originTid: (ctx.origins.get i: family.slot.result))
     )
     if isOptRes then work.wOptRes.append tv
     if isMono when tt == ztypes.ztypetype.unionType then {
@@ -38355,7 +38277,7 @@ classifyCollectionMono: function {
     }
     if (isOptionViewOriginOf :symtab :ctx tid: tcl) then work.wOptView.append tv
     colDst: u64
-    if (originIsTid :symtab tid: tcl originTid: (ctx.origins.get i: family.fixedArray)) then {
+    if (originIsTid :symtab tid: tcl originTid: (ctx.origins.get i: family.slot.fixedArray)) then {
         isColKind = true
         colDst = 1
     }
@@ -38383,7 +38305,7 @@ classifyCollectionMono: function {
         isColKind = true
         colDst = 7
     }
-    if (originIsTid :symtab tid: tcl originTid: (ctx.origins.get i: family.spanVal)) then {
+    if (originIsTid :symtab tid: tcl originTid: (ctx.origins.get i: family.slot.spanVal)) then {
         isColKind = true
         colDst = 8
     }
@@ -38445,12 +38367,12 @@ isUserGenericRecordMono: function {
     if (originIsTid
         :symtab
         tid: tcl
-        originTid: (ctx.origins.get i: family.fixedArray)
+        originTid: (ctx.origins.get i: family.slot.fixedArray)
     ) then return false
     if (originIsTid
         :symtab
         tid: tcl
-        originTid: (ctx.origins.get i: family.str)
+        originTid: (ctx.origins.get i: family.slot.str)
     ) then return false
     return (isBoxTid :symtab tid: tcl).not
 }
@@ -38511,13 +38433,13 @@ classifyMonoAt: function {
     if (originIsTid
         :symtab
         tid: tcl
-        originTid: (ctx.origins.get i: family.str)
+        originTid: (ctx.origins.get i: family.slot.str)
     ) then work.wStr.append tv
     if (isBoxTid :symtab tid: tcl) then work.wBox.append tv
     if (isSystemVariantTid :symtab :ctx :tcl :tt :isMono :gen) then work.wSysVar.append tv
     isValMono: (
-        (originIsTid :symtab tid: tcl originTid: (ctx.origins.get i: family.optionval)) or
-        (originIsTid :symtab tid: tcl originTid: (ctx.origins.get i: family.resultval))
+        (originIsTid :symtab tid: tcl originTid: (ctx.origins.get i: family.slot.optionval)) or
+        (originIsTid :symtab tid: tcl originTid: (ctx.origins.get i: family.slot.resultval))
     )
     if isValMono then (classifyValueMono
         :ast
@@ -38561,8 +38483,8 @@ isUserInstance: function {
     tt: symtab.reg.typetypeOf typeId: tcl
     if (isUserGenericRecordMono :symtab :ctx :tcl :tt) then return true
     isValMono: (
-        (originIsTid :symtab tid: tcl originTid: (ctx.origins.get i: family.optionval)) or
-        (originIsTid :symtab tid: tcl originTid: (ctx.origins.get i: family.resultval))
+        (originIsTid :symtab tid: tcl originTid: (ctx.origins.get i: family.slot.optionval)) or
+        (originIsTid :symtab tid: tcl originTid: (ctx.origins.get i: family.slot.resultval))
     )
     return (isUserGenericVariantMono :symtab :ctx :tcl :tt :isValMono)
 }
@@ -39164,7 +39086,7 @@ protoChildMethods: function {
             pnid4: rwpi4.name
             ptid4: rwpi4.tid
             if (symtab.reg.typetypeOf typeId: ptid4) == ztypes.ztypetype.functionType then {
-                isSynth: pnid4 == zast.names.wkCreate
+                isSynth: pnid4 == zast.wellKnown.slot.wkCreate
                 if isSynth.not then {
                     cnBe4: ast.names.texts.get i: pnid4
                     cn0: cnBe4.copy
@@ -39281,7 +39203,7 @@ specMemberIsSelfTyped: function {
     pi: u64
     for pi < pnames.length loop {
         isRecv: (
-            ((pidsNm.get i: pi) == zast.names.wkThis) or
+            ((pidsNm.get i: pi) == zast.wellKnown.slot.wkThis) or
             (rpn.isZero.not and ((pidsNm.get i: pi) == rpn))
         )
         if isRecv.not when (pids.get i: pi) == ifaceTid then found = true
@@ -39978,7 +39900,7 @@ nativeBoxCall: function {
 } out String is {
     if mname == "stringView" then {
         if implTid == ctx.strTid then return (svValueFormPtr :ctx expr: "_self")
-        if (originIsTid :symtab tid: implTid originTid: (ctx.origins.get i: family.str)) then {
+        if (originIsTid :symtab tid: implTid originTid: (ctx.origins.get i: family.slot.str)) then {
             return "((\{ctx.svC}_t){ .data = _self->data, .size = _self->len })"
         }
     }
@@ -40354,7 +40276,7 @@ emitIoWrapperCreate: function {
     if (symtab.reg.typetypeOf typeId: wid) != ztypes.ztypetype.classType then return ""
     cco: (symtab.typing.declChildOfId
         parentTypeId: wid
-        nameId: zast.names.wkCreate
+        nameId: zast.wellKnown.slot.wkCreate
     )
     cid: ztypes.tid
     match (
@@ -40757,7 +40679,7 @@ emitCliSpecCreate: function {
     if cid.isZero then return ""
     cco: (symtab.typing.declChildOfId
         parentTypeId: cid
-        nameId: zast.names.wkCreate
+        nameId: zast.wellKnown.slot.wkCreate
     )
     crid: ztypes.tid
     match (
@@ -40843,8 +40765,8 @@ emitResultCombinator: function {
     rtid0: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: bnid))
     rtid: chaseAggregateTypedef :symtab :ctx tid: rtid0
     if rtid.isZero then return ""
-    isRes: originIsTid :symtab tid: rtid originTid: (ctx.origins.get i: family.resultval)
-    isOpt: originIsTid :symtab tid: rtid originTid: (ctx.origins.get i: family.optionval)
+    isRes: originIsTid :symtab tid: rtid originTid: (ctx.origins.get i: family.slot.resultval)
+    isOpt: originIsTid :symtab tid: rtid originTid: (ctx.origins.get i: family.slot.optionval)
     if isRes.not when isOpt.not then return ""
     # `orPanic` is resultval's alone
     if isP when isRes.not then return ""
@@ -40924,7 +40846,8 @@ iterClassWithCall: function {
     )
     if cano.none then return rid0
     ct: cano
-    if (symtab.typing.declHasMemberId parentTypeId: ct nameId: zast.names.wkCall) then return ct
+    if (symtab.typing.declHasMemberId parentTypeId: ct nameId: zast.wellKnown.slot.wkCall
+    ) then return ct
     return rid0
 }
 
@@ -40975,7 +40898,7 @@ emitUserIterCall: function {
     if (originTidOf :symtab tid: iterId).isZero.not then return ""
     itn: regNameOf :symtab tid: iterId
     if (canonFnId :ast :symtab :ctx tid: iterId name: itn.stringView).isZero then return ""
-    cco: symtab.typing.declChildOfId parentTypeId: iterId nameId: zast.names.wkCall
+    cco: symtab.typing.declChildOfId parentTypeId: iterId nameId: zast.wellKnown.slot.wkCall
     if cco.none then return ""
     callC: ctxCname :ctx tid: cco
     recvVid: atomVid :symtab nid: bnid
@@ -41129,7 +41052,7 @@ dispatchSlotNames: function {
     vi: u64
     for vi < mpIds9Nm.length loop {
         nmId: mpIds9Nm.get i: vi
-        if nmId != zast.names.wkThis then vpn.append nmId
+        if nmId != zast.wellKnown.slot.wkThis then vpn.append nmId
         vi = vi + 1
     }
     return vpn
@@ -41817,7 +41740,7 @@ armTagValueText: function {
     armNameId: zast.nameid
 } out String is {
     if armNameId.isZero then return ""
-    dt: ((symtab.typing.declChildOfId parentTypeId: tid nameId: zast.names.wkTag).or
+    dt: ((symtab.typing.declChildOfId parentTypeId: tid nameId: zast.wellKnown.slot.wkTag).or
         d: ztypes.tid.zero
     )
     if dt.isZero then return ""
@@ -42323,7 +42246,7 @@ eqGenerated: function {
     )
     # a valtype cannot hold itself; asking first keeps a malformed chain finite
     ctx.eqAsked.add item: tid
-    src: ztypecheck.valOpSource :ast st: symtab :tid nameId: zast.names.wkOpEq
+    src: ztypecheck.valOpSource :ast st: symtab :tid nameId: zast.wellKnown.slot.wkOpEq
     if src.generated.not then return false
     parts: ListVal ztypes.tid
     ztypecheck.valPartTids :ast st: symtab :tid :parts
@@ -42345,7 +42268,7 @@ partHasEq: function {
     ctx: Ctx
     tid: ztypes.tid
 } out bool is {
-    src: ztypecheck.valOpSource :ast st: symtab :tid nameId: zast.names.wkOpEq
+    src: ztypecheck.valOpSource :ast st: symtab :tid nameId: zast.wellKnown.slot.wkOpEq
     if src.none then return false
     if src.generated.not then return true
     return (eqGenerated :ast :symtab :ctx tid: (typedefChaseTid :symtab :tid))
@@ -42367,14 +42290,14 @@ partEqC: function {
     sel: StringView
     dest: String.borrow
 } is {
-    src: ztypecheck.valOpSource :ast st: symtab :tid nameId: zast.names.wkOpEq
+    src: ztypecheck.valOpSource :ast st: symtab :tid nameId: zast.wellKnown.slot.wkOpEq
     if src.written or src.negated then {
-        opId: zast.names.wkOpEq
+        opId: zast.wellKnown.slot.wkOpEq
         if src.negated then {
-            opId = zast.names.wkOpNe
+            opId = zast.wellKnown.slot.wkOpNe
             dest.append "!"
         }
-        owner: ztypecheck.valOpOwner st: symtab :tid nameId: zast.names.wkOpEq
+        owner: ztypecheck.valOpOwner st: symtab :tid nameId: zast.wellKnown.slot.wkOpEq
         fo: symtab.typing.declChildOfId parentTypeId: owner nameId: opId
         dest.append (ctxCname :ctx tid: (fo.or d: ztypes.tid.zero))
         dest.append "(&"
@@ -42437,10 +42360,10 @@ partHashWords: function {
     v: StringView
     words: List String
 } is {
-    src: ztypecheck.valOpSource :ast st: symtab :tid nameId: zast.names.wkHash
+    src: ztypecheck.valOpSource :ast st: symtab :tid nameId: zast.wellKnown.slot.wkHash
     if src.written then {
-        owner: ztypecheck.valOpOwner st: symtab :tid nameId: zast.names.wkHash
-        fo: symtab.typing.declChildOfId parentTypeId: owner nameId: zast.names.wkHash
+        owner: ztypecheck.valOpOwner st: symtab :tid nameId: zast.wellKnown.slot.wkHash
+        fo: symtab.typing.declChildOfId parentTypeId: owner nameId: zast.wellKnown.slot.wkHash
         fc: ctxCname :ctx tid: (fo.or d: ztypes.tid.zero)
         wr: String
         wr.append fc
@@ -42496,7 +42419,7 @@ hashExprC: function {
         w1: words.get i: 1
         return "z_hash_u64(\{w0} ^ z_hash_u64(\{w1}))"
     }
-    src: ztypecheck.valOpSource :ast st: symtab :tid nameId: zast.names.wkHash
+    src: ztypecheck.valOpSource :ast st: symtab :tid nameId: zast.wellKnown.slot.wkHash
     base: typedefChaseTid :symtab :tid
     if src.written.not when (partIsCScalar :symtab tid: base) then return "z_hash_u64(\{w0})"
     if (symtab.reg.typetypeOf typeId: base) == ztypes.ztypetype.functionType then {
@@ -42520,7 +42443,7 @@ hashFnDemand: function {
     if (partIsCScalar :symtab :tid) then return
     ctx.hashAsked.add item: tid
     ctx.hashOrder.append tid
-    if (ztypecheck.valOpSource :ast st: symtab :tid nameId: zast.names.wkHash
+    if (ztypecheck.valOpSource :ast st: symtab :tid nameId: zast.wellKnown.slot.wkHash
     ).generated.not then return
     parts: ListVal ztypes.tid
     ztypecheck.valPartTids :ast st: symtab :tid :parts
@@ -42528,7 +42451,7 @@ hashFnDemand: function {
     for i < parts.length loop {
         p: parts.get :i
         i = i + 1
-        if (ztypecheck.valOpSource :ast st: symtab tid: p nameId: zast.names.wkHash
+        if (ztypecheck.valOpSource :ast st: symtab tid: p nameId: zast.wellKnown.slot.wkHash
         ).written.not then {
             hashFnDemand :ast :symtab :ctx tid: (typedefChaseTid :symtab tid: p)
         }
@@ -42674,9 +42597,9 @@ arrayHashBody: function {
 synthHashOf: function {
     symtab: zenv.ZSymbolTable.view owner: ztypes.tid mco: ztypes.tid
 } out bool is {
-    fo: symtab.typing.declChildOfId parentTypeId: owner nameId: zast.names.wkHash
+    fo: symtab.typing.declChildOfId parentTypeId: owner nameId: zast.wellKnown.slot.wkHash
     if (fo.or d: ztypes.tid.zero) != mco then return false
-    return (symtab.typing.declMemberIsSynth parentTypeId: owner nameId: zast.names.wkHash)
+    return (symtab.typing.declMemberIsSynth parentTypeId: owner nameId: zast.wellKnown.slot.wkHash)
 }
 
 # hashMemberRead -- the generated `hash` member of `tid` that a program reads,
@@ -42687,13 +42610,14 @@ hashMemberRead: function {
     symtab: zenv.ZSymbolTable.view
     tid: ztypes.tid
 } out ztypes.tid is {
-    if (ztypecheck.valOpSource :ast st: symtab :tid nameId: zast.names.wkHash).generated.not then {
+    if (ztypecheck.valOpSource :ast st: symtab :tid nameId: zast.wellKnown.slot.wkHash
+    ).generated.not then {
         return ztypes.tid
     }
-    fo: symtab.typing.declChildOfId parentTypeId: tid nameId: zast.names.wkHash
+    fo: symtab.typing.declChildOfId parentTypeId: tid nameId: zast.wellKnown.slot.wkHash
     fid: fo.or d: ztypes.tid.zero
     if fid.isZero then return fid
-    md: symtab.typing.declMemberIdOf parentTypeId: tid nameId: zast.names.wkHash
+    md: symtab.typing.declMemberIdOf parentTypeId: tid nameId: zast.wellKnown.slot.wkHash
     if (symtab.typing.usedMemberDecl.has item: md).not then return ztypes.tid
     return fid
 }
@@ -42709,10 +42633,10 @@ valKeyHashBody: function {
     keyT: StringView
     buf: String.borrow
 } out String is {
-    src: ztypecheck.valOpSource :ast st: symtab tid: key nameId: zast.names.wkHash
+    src: ztypecheck.valOpSource :ast st: symtab tid: key nameId: zast.wellKnown.slot.wkHash
     if src.written then {
-        owner: ztypecheck.valOpOwner st: symtab tid: key nameId: zast.names.wkHash
-        fo: symtab.typing.declChildOfId parentTypeId: owner nameId: zast.names.wkHash
+        owner: ztypecheck.valOpOwner st: symtab tid: key nameId: zast.wellKnown.slot.wkHash
+        fo: symtab.typing.declChildOfId parentTypeId: owner nameId: zast.wellKnown.slot.wkHash
         fid: fo.or d: ztypes.tid.zero
         buf.append "static uint64_t "
         buf.append (ctxCname :ctx tid: fid)
@@ -42739,11 +42663,11 @@ valKeyEqBody: function {
     keyT: StringView
     buf: String.borrow
 } out String is {
-    src: ztypecheck.valOpSource :ast st: symtab tid: key nameId: zast.names.wkOpEq
+    src: ztypecheck.valOpSource :ast st: symtab tid: key nameId: zast.wellKnown.slot.wkOpEq
     if src.written or src.negated then {
-        opId: zast.names.wkOpEq
-        if src.negated then opId = zast.names.wkOpNe
-        owner: ztypecheck.valOpOwner st: symtab tid: key nameId: zast.names.wkOpEq
+        opId: zast.wellKnown.slot.wkOpEq
+        if src.negated then opId = zast.wellKnown.slot.wkOpNe
+        owner: ztypecheck.valOpOwner st: symtab tid: key nameId: zast.wellKnown.slot.wkOpEq
         fo: symtab.typing.declChildOfId parentTypeId: owner nameId: opId
         fid: fo.or d: ztypes.tid.zero
         buf.append "static bool "
@@ -42783,7 +42707,7 @@ emitHashPrototypes: function {
             :ast
             st: symtab
             tid: h
-            nameId: zast.names.wkHash
+            nameId: zast.wellKnown.slot.wkHash
         ).written.not then {
             (hashFnDemand
                 :ast
@@ -42859,7 +42783,7 @@ partCallsWritten: function {
     symtab: zenv.ZSymbolTable.view
     tid: ztypes.tid
 } out bool is {
-    src: ztypecheck.valOpSource :ast st: symtab :tid nameId: zast.names.wkOpEq
+    src: ztypecheck.valOpSource :ast st: symtab :tid nameId: zast.wellKnown.slot.wkOpEq
     return src.written or src.negated
 }
 
@@ -43446,7 +43370,7 @@ setupGenCtx: function {
     if (originIsTid
         :symtab
         tid: rid
-        originTid: (ctx.origins.get i: family.option)
+        originTid: (ctx.origins.get i: family.slot.option)
     ) then {
         gp = armPayloadC :ast :symtab :ctx tid: rid arm: "some"
     }
@@ -43891,7 +43815,7 @@ methodReturnC: function {
         } case none then null
     }
     if ret.stringView == "void" when thisTid.isZero.not when (
-        (ztypecheck.fnReturnBaseNameIdOf :ast :op) == zast.names.wkThis
+        (ztypecheck.fnReturnBaseNameIdOf :ast :op) == zast.wellKnown.slot.wkThis
     ) then {
         tcb: ctxCname :ctx tid: thisTid
         ret = "\{tcb}_t"

@@ -470,7 +470,7 @@ checkBareTypeValueAt: function {
         st.typing.implicitCreate.set key: nodeid value: icn
         return
     }
-    forceMemberOf :st :ast parentTypeId: tid nameId: zast.names.wkCreate
+    forceMemberOf :st :ast parentTypeId: tid nameId: zast.wellKnown.slot.wkCreate
     # the zero-argument spelling of self-construction: a bare type name (or
     # `T.create` with no arguments) in value position inside T's own create.
     if (ctorSelfRecursionAt :st :nodeid :lineno :colno :width ctorTid: tid) then return
@@ -604,9 +604,9 @@ isNativeIteratorTid: function {ast: Ast st: zenv.ZSymbolTable tid: ztypes.tid} o
         :st
         :ast
         parentTypeId: tid
-        nameId: zast.names.wkCall
+        nameId: zast.wellKnown.slot.wkCall
     )
-    coIt: st.typing.declChildOfId parentTypeId: tid nameId: zast.names.wkCall
+    coIt: st.typing.declChildOfId parentTypeId: tid nameId: zast.wellKnown.slot.wkCall
     match (
         coIt
     ) case some then {
@@ -2017,7 +2017,7 @@ resolveAtomType: function {
     thisName: StringView
     nid: zast.nodeid.zero
 } out ztypes.tid is {
-    if nameId == zast.names.wkThis then {
+    if nameId == zast.wellKnown.slot.wkThis then {
         # the receiver's name is both the name and the receiver: the second
         # role reads an owned copy
         tnOwn: thisName.string
@@ -2194,7 +2194,7 @@ isDropMarkerId: function {nameId: zast.nameid} out bool is {
 # by id: not addressable segments of the path. A type reference peels them to
 # reach its base; `public` peels too, as the in-unit `public.X` namespace.
 isStripMarkerId: function {nameId: zast.nameid} out bool is {
-    if nameId == zast.names.wkPublic then return true
+    if nameId == zast.wellKnown.slot.wkPublic then return true
     k: zast.markerKindOfName id: nameId
     if k.unmarked or k.dropMarker then return false
     return k.genericBound.not
@@ -2202,7 +2202,7 @@ isStripMarkerId: function {nameId: zast.nameid} out bool is {
 
 # isStringViewMemberId -- `.stringView`, by id.
 isStringViewMemberId: function {nameId: zast.nameid} out bool is {
-    return nameId == zast.names.wkStringView
+    return nameId == zast.wellKnown.slot.wkStringView
 }
 
 # isLabelValue -- true when a node is a bare `:X` label-value (an anonymous
@@ -2763,10 +2763,18 @@ pathOwnership: function {ast: Ast.view n: astnode.view} out optionval ztypes.zpa
         n
     ) case dottedpath then {
         cid: atomNameId :ast n: (ast.nodes.get i: n.child)
-        if cid == zast.names.wkBorrow then return (optionval.some ztypes.zparamownership.borrowMode)
-        if cid == zast.names.wkTake then return (optionval.some ztypes.zparamownership.takeMode)
-        if cid == zast.names.wkView then return (optionval.some ztypes.zparamownership.viewMode)
-        if cid == zast.names.wkHold then return (optionval.some ztypes.zparamownership.holdMode)
+        if (
+            cid == zast.wellKnown.slot.wkBorrow
+        ) then return (optionval.some ztypes.zparamownership.borrowMode)
+        if (
+            cid == zast.wellKnown.slot.wkTake
+        ) then return (optionval.some ztypes.zparamownership.takeMode)
+        if (
+            cid == zast.wellKnown.slot.wkView
+        ) then return (optionval.some ztypes.zparamownership.viewMode)
+        if (
+            cid == zast.wellKnown.slot.wkHold
+        ) then return (optionval.some ztypes.zparamownership.holdMode)
         return (optionval.none ztypes.zparamownership)
     } else {
         return (optionval.none ztypes.zparamownership)
@@ -2914,7 +2922,7 @@ recordResolvedName: function {
     nid: zast.nodeid
     recScope: ztypes.declid
 } is {
-    if nameId == zast.names.wkThis then {
+    if nameId == zast.wellKnown.slot.wkThis then {
         recordNodeName :ast :st name: thisName :nid scope: recScope
     } else {
         if (zast.nameTextEq :ast ref: nameId s: "type") then {
@@ -3343,7 +3351,7 @@ namedTypeArg: function {
     argNid: zast.nodeid
 } out ztypes.tid is {
     nameId: atomNameId :ast n: (ast.nodes.get i: argNid)
-    if nameId == zast.names.wkThis then return aid
+    if nameId == zast.wellKnown.slot.wkThis then return aid
     if (zast.nameTextEq :ast ref: nameId s: "type") when thisName.length != 0 then {
         sa: selfApplicationTid :st :ast :unitDecl :scope templateId: aid nid: argNid
         if sa.isZero.not then return sa
@@ -4192,7 +4200,9 @@ recordDottedTyperef: function {
             }
             # Ownership markers peel and stamp the inner ref; `.private` /
             # `.public` resolve the pair atomically (no base-atom stamp).
-            if cnId != zast.names.wkPrivate when cnId != zast.names.wkPublic then {
+            if cnId != zast.wellKnown.slot.wkPrivate when (
+                cnId != zast.wellKnown.slot.wkPublic
+            ) then {
                 recordTyperef :st :scope :ast :unitDecl :thisName nid: parentId
             }
         } else {
@@ -4764,7 +4774,7 @@ reportReturnNamesNoType: function {
     rdc: declOfUnitDef :st :unitDecl :scope nameId: unitId
     child: ztypes.declid
     if rdc.isZero.not then child = st.typing.declFindChild parentDeclId: rdc nameId: memberId
-    if (memberId == zast.names.wkDrop) or child.isZero then {
+    if (memberId == zast.wellKnown.slot.wkDrop) or child.isZero then {
         reportPeeledLeaf :st :scope :ast :unitDecl :nid leafId: memberId
         return
     }
@@ -4963,7 +4973,7 @@ reportPeeledLeaf: function {
     nid: zast.nodeid
     leafId: zast.nameid
 } is {
-    if leafId != zast.names.wkDrop then {
+    if leafId != zast.wellKnown.slot.wkDrop then {
         reportMissingTypeMember :st :scope :ast :unitDecl op: nid
         return
     }
@@ -5018,7 +5028,7 @@ reportPathLeaf: function {
     # the type the parent path resolved to, 0 when it resolved to none
     parentTid: ztypes.tid
 } is {
-    if leafId == zast.names.wkDrop then {
+    if leafId == zast.wellKnown.slot.wkDrop then {
         reportPeeledLeaf :st :scope :ast :unitDecl :nid :leafId
         return
     }
@@ -5503,7 +5513,7 @@ resolveTyperefShell: function {
             :nid
         )
         # a receiver's `this` is the type being declared
-        if nameId != zast.names.wkThis then {
+        if nameId != zast.wellKnown.slot.wkThis then {
             return (bareGenericType
                 :st
                 :ast
@@ -5835,9 +5845,9 @@ paramIsThisReceiver: function {ast: Ast.view op: astnode.view} out bool is {
     match (
         op
     ) case atomid then {
-        return op.name == zast.names.wkThis
+        return op.name == zast.wellKnown.slot.wkThis
     } case dottedpath then {
-        return (atomNameId :ast n: (ast.nodes.get i: op.parent)) == zast.names.wkThis
+        return (atomNameId :ast n: (ast.nodes.get i: op.parent)) == zast.wellKnown.slot.wkThis
     } else {
         return false
     }
@@ -5952,7 +5962,7 @@ typeHasNonOwnedField: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out 
 # with or without a marker), which is what a constructor writes.
 returnNamesThis: function {ast: Ast.view oId: zast.nodeid} out bool is {
     if oId.isZero then return false
-    return (rootNameIdOf :ast n: (ast.nodes.get i: oId)) == zast.names.wkThis
+    return (rootNameIdOf :ast n: (ast.nodes.get i: oId)) == zast.wellKnown.slot.wkThis
 }
 
 # pinHonestyAt -- checkPinHonesty on a type whose members may not be attached
@@ -6740,7 +6750,7 @@ resolveFunctionParam: function {
             # the predicate catches every MARKED form, whose type is a
             # dotted path and so has no atom name at all. Dropping either
             # leaves that family of receivers as ordinary parameters.
-            if ptn == zast.names.wkThis then skipParam = true
+            if ptn == zast.wellKnown.slot.wkThis then skipParam = true
             if isRecvP then skipParam = true
         }
         if skipParam.not when isgen when (st.reg.isGenericParamOf tdecl: fnDecl name: gpn) then {
@@ -7181,7 +7191,7 @@ paramIsBorrowReftype: function {
 } out bool is {
     tnId: atomNameId :ast n: (ast.nodes.get i: opId)
     isref: false
-    if tnId == zast.names.wkThis then {
+    if tnId == zast.wellKnown.slot.wkThis then {
         isref = nameIsInUnitReftype :st :ast :unitDecl name: thisName
         if isref.not then {
             tk0: zast.poolFind pool: ast.names text: thisName
@@ -8059,7 +8069,7 @@ attachAsConstant: function {
     item: argref
 } is {
     if item.operation.isZero then return
-    if item.name == zast.names.wkTag then return
+    if item.name == zast.wellKnown.slot.wkTag then return
     notValue: false
     op: ast.nodes.get i: item.operation
     notValue = (isBareGenericParam :ast :op) or (isLabelValue :op)
@@ -8284,7 +8294,7 @@ attachMethods: function {
         am: argRefAt :ast nid: amId
         if am.nid.isZero.not then {
             mname: zast.nameTextCopy :ast ref: am.name
-            if am.name == zast.names.wkCreate then hasCreate = true
+            if am.name == zast.wellKnown.slot.wkCreate then hasCreate = true
             {
                 mop: ast.nodes.get i: am.operation
                 if mop.functiondef then {
@@ -8653,7 +8663,7 @@ conformanceReceiverOwn: function {
     mid: ztypes.tid
 } out ztypes.zparamownership is {
     rpn: st.reg.thisParamNameIdOf tid: mid
-    rn: zast.names.wkThis
+    rn: zast.wellKnown.slot.wkThis
     if rpn.isZero.not then rn = rpn
     return (conformanceOwn o: (st.typing.declOwnershipOfId parentTypeId: mid nameId: rn))
 }
@@ -8676,7 +8686,7 @@ conformanceParams: function {
         pn: anms.get :i
         pt: aids.get :i
         i = i + 1
-        if (pn == zast.names.wkThis) or (rpn.isZero.not and (pn == rpn)) then continue
+        if (pn == zast.wellKnown.slot.wkThis) or (rpn.isZero.not and (pn == rpn)) then continue
         ids.append pt
         nameIds.append pn
     }
@@ -8743,7 +8753,7 @@ checkConformanceSignature: function {
         row: st.typing.declRowAt ownerTid: specTid membersOnly: true slot: si
         si = si + 1
         smid: row.tid
-        if row.keep.not or (row.name == zast.names.wkCreate) then continue
+        if row.keep.not or (row.name == zast.wellKnown.slot.wkCreate) then continue
         if (st.reg.typetypeOf typeId: smid) != ztypes.ztypetype.functionType then continue
         if (conformanceSpecIsSelfTyped :st :specTid :smid) then continue
         (checkConformanceMethod
@@ -9068,7 +9078,7 @@ asItemMarkerTarget: function {
 # leafNamesNoMember -- a path leaf that marks its root rather than naming a
 # member of it: `.generic`, an ownership or access marker, and the tag spec.
 leafNamesNoMember: function {leafId: zast.nameid} out bool is {
-    if leafId == zast.names.wkTag then return true
+    if leafId == zast.wellKnown.slot.wkTag then return true
     if (isStripMarkerId nameId: leafId) then return true
     return (zast.markerKindOfName id: leafId).genericBound
 }
@@ -9142,7 +9152,7 @@ asItemNamesPlainType: function {
     item: zast.nameid
     target: ztypes.tid
 } out bool is {
-    if item == zast.names.wkTag then return false
+    if item == zast.wellKnown.slot.wkTag then return false
     tt: specTypetypeOf :st tid: target
     if tt.isInterface then return false
     reportAsItemTypeName :st :ast :parentId :item
@@ -10004,7 +10014,7 @@ resolveData: function {
     litId: st.reg.literalIntTid
     # the block's elements are evaluating: a read of the block from one of
     # them is a cycle (constDataMember)
-    lk: st.typing.memberConstKey parentTypeId: did nameId: zast.names.wkLength
+    lk: st.typing.memberConstKey parentTypeId: did nameId: zast.wellKnown.slot.wkLength
     st.typing.constEvalState.set key: lk value: 1.u8
     vals: dataElemValues :ast :st :unitDecl :scope :dnode
     st.typing.constEvalState.set key: lk value: 2.u8
@@ -10181,19 +10191,19 @@ resolveData: function {
     # element type would make `for i < xs.length` compare across widths.
     lgot: (st.typing.declChildOfId
         parentTypeId: did
-        nameId: zast.names.wkLength
+        nameId: zast.wellKnown.slot.wkLength
     )
     match (
         lgot
     ) case some then null case none then {
         (st.typing.setMemberType
             parentTypeId: did
-            nameId: zast.names.wkLength
+            nameId: zast.wellKnown.slot.wkLength
             childTypeId: litId
         )
         (st.typing.setMemberConst
             parentTypeId: did
-            nameId: zast.names.wkLength
+            nameId: zast.wellKnown.slot.wkLength
             value: ztypes.makeIntConst ordinal.i64.orPanic
         )
     }
@@ -10215,12 +10225,12 @@ resolveData: function {
     # type is known
     (st.typing.declSynthMember
         parentTypeId: did
-        nameId: zast.names.wkTag
+        nameId: zast.wellKnown.slot.wkTag
         kind: ztyping.declkind.fieldDecl
     )
     (st.typing.setMemberType
         parentTypeId: did
-        nameId: zast.names.wkTag
+        nameId: zast.wellKnown.slot.wkTag
         childTypeId: tagId
     )
     return did
@@ -10248,7 +10258,7 @@ resolveDataSlots: function {
     st.typing.dataSlotTypes.add item: slotTid
     (st.typing.declSynthMemberTyped
         parentTypeId: dataTid
-        nameId: zast.names.wkSlot
+        nameId: zast.wellKnown.slot.wkSlot
         kind: ztyping.declkind.fieldDecl
         childTypeId: slotTid
     )
@@ -10366,7 +10376,7 @@ typeExprRootIsThis: function {ast: Ast.view n: astnode.view} out bool is {
     match (
         n
     ) case atomid then {
-        return n.name == zast.names.wkThis
+        return n.name == zast.wellKnown.slot.wkThis
     } case dottedpath then {
         return (typeExprRootIsThis :ast n: (ast.nodes.get i: n.parent))
     } else {
@@ -10646,7 +10656,7 @@ scanTypeField: function {
 # a friend handle by reference, and must say which kind, `.private.borrow` or
 # `.private.view`. A parameter's bare `.private` is `.private.borrow`.
 refuseBarePrivateField: function {st: zenv.ZSymbolTable ast: Ast.view opId: zast.nodeid} is {
-    if (typeExprLeafId :ast :opId) != zast.names.wkPrivate then return
+    if (typeExprLeafId :ast :opId) != zast.wellKnown.slot.wkPrivate then return
     op: ast.nodes.get i: opId
     (addResolveErrorH
         :st
@@ -11364,7 +11374,7 @@ synthRecordHash: function {
             hshAsR = (asDeclaresMemberId
                 :ast
                 asItems: onHshAsR.asItems
-                nameId: zast.names.wkHash
+                nameId: zast.wellKnown.slot.wkHash
             )
         }
     }
@@ -11382,22 +11392,22 @@ synthHashMember: function {st: zenv.ZSymbolTable rid: ztypes.tid} is {
     )
     (st.typing.declSynthMemberTyped
         parentTypeId: rid
-        nameId: zast.names.wkHash
+        nameId: zast.wellKnown.slot.wkHash
         kind: ztyping.declkind.methodDecl
         childTypeId: hshR
     )
     hft: hshR
     (st.typing.setMemberType
         parentTypeId: hft
-        nameId: zast.names.wkThis
+        nameId: zast.wellKnown.slot.wkThis
         childTypeId: rid
     )
     (st.typing.setChildOwnershipId
         parentTypeId: hft
-        nameId: zast.names.wkThis
+        nameId: zast.wellKnown.slot.wkThis
         ownership: ztypes.zparamownership.viewMode
     )
-    st.reg.setThisParamName typeId: hft nameId: zast.names.wkThis
+    st.reg.setThisParamName typeId: hft nameId: zast.wellKnown.slot.wkThis
 }
 
 # synthComparisonMember -- ONE structural comparison member (`==` or `!=`) as a
@@ -11445,7 +11455,7 @@ synthComparisonMember: function {
     ft: fid
     (st.typing.setMemberType
         parentTypeId: ft
-        nameId: zast.names.wkThis
+        nameId: zast.wellKnown.slot.wkThis
         childTypeId: ownerTid
     )
     # a comparison READS its receiver: the synthesised member says `.view`, as
@@ -11453,13 +11463,13 @@ synthComparisonMember: function {
     # and `e.kind == x` on a view-held `e` conflicts with nothing
     (st.typing.setChildOwnershipId
         parentTypeId: ft
-        nameId: zast.names.wkThis
+        nameId: zast.wellKnown.slot.wkThis
         ownership: ztypes.zparamownership.viewMode
     )
-    st.reg.setThisParamName typeId: ft nameId: zast.names.wkThis
+    st.reg.setThisParamName typeId: ft nameId: zast.wellKnown.slot.wkThis
     (st.typing.setMemberType
         parentTypeId: ft
-        nameId: zast.names.wkRhs
+        nameId: zast.wellKnown.slot.wkRhs
         childTypeId: ownerTid
     )
     # NO RETURN TYPE HERE. Resolving `bool` at this point means MINTING it --
@@ -11486,14 +11496,14 @@ synthComparisonPair: function {
     (synthComparisonMember
         :st
         :ownerTid
-        nameId: zast.names.wkOpEq
+        nameId: zast.wellKnown.slot.wkOpEq
         opName: "=="
         declared: eqDecl
     )
     (synthComparisonMember
         :st
         :ownerTid
-        nameId: zast.names.wkOpNe
+        nameId: zast.wellKnown.slot.wkOpNe
         opName: "!="
         declared: neDecl
     )
@@ -11545,7 +11555,7 @@ checkTypedefShape: function {st: zenv.ZSymbolTable ast: Ast.view onode: objref} 
         if am.nid.isZero then continue
         amOp: ast.nodes.get i: am.operation
         nm: zast.nameTextAt :ast ref: am.name
-        if am.name == zast.names.wkCreate when (isFunctionDefOp op: amOp) then {
+        if am.name == zast.wellKnown.slot.wkCreate when (isFunctionDefOp op: amOp) then {
             (addErrorH
                 :st
                 nodeid: am.nid
@@ -11668,9 +11678,9 @@ attachRecordIsItems: function {
                     fname: fname.stringView
                 )
             } else {
-                got.create = got.create or (fm.name == zast.names.wkCreate)
-                got.eq = got.eq or (fm.name == zast.names.wkOpEq)
-                got.ne = got.ne or (fm.name == zast.names.wkOpNe)
+                got.create = got.create or (fm.name == zast.wellKnown.slot.wkCreate)
+                got.eq = got.eq or (fm.name == zast.wellKnown.slot.wkOpEq)
+                got.ne = got.ne or (fm.name == zast.wellKnown.slot.wkOpNe)
                 st.typing.setMemberType parentTypeId: rt nameId: fm.name childTypeId: mido
                 if (fnFieldFlaggableName name: fname.stringView) then {
                     (st.typing.setChildFnptrField
@@ -11725,8 +11735,8 @@ resolveRecord: function {
     # synthesised the pair, so a type writing only `!=` had its own operator
     # replaced by the synth shell -- and one writing only `==` got no `!=`
     # MEMBER at all, only the emitter's derived negation.
-    eqAsR: asDeclaresMemberId :ast :asItems nameId: zast.names.wkOpEq
-    neAsR: asDeclaresMemberId :ast :asItems nameId: zast.names.wkOpNe
+    eqAsR: asDeclaresMemberId :ast :asItems nameId: zast.wellKnown.slot.wkOpEq
+    neAsR: asDeclaresMemberId :ast :asItems nameId: zast.wellKnown.slot.wkOpNe
     refuseValtypeCopy :st :ast :asItems :defName
     if (memberNullOptOut :ast :asItems member: "create") then st.typing.createOptOut.add item: rid
     if isgen then {
@@ -11767,7 +11777,7 @@ resolveRecord: function {
         )
         (st.typing.declSynthMemberTyped
             parentTypeId: rt
-            nameId: zast.names.wkCreate
+            nameId: zast.wellKnown.slot.wkCreate
             kind: ztyping.declkind.methodDecl
             childTypeId: createId
         )
@@ -11864,7 +11874,7 @@ synthVariantEqHash: function {
             hshAsV = (asDeclaresMemberId
                 :ast
                 asItems: onHshAsV.asItems
-                nameId: zast.names.wkHash
+                nameId: zast.wellKnown.slot.wkHash
             )
         }
     }
@@ -12028,12 +12038,12 @@ attachVariantTag: function {
     # tag's own type is known
     (st.typing.declSynthMember
         parentTypeId: variantTid
-        nameId: zast.names.wkTag
+        nameId: zast.wellKnown.slot.wkTag
         kind: ztyping.declkind.fieldDecl
     )
     (st.typing.setMemberType
         parentTypeId: variantTid
-        nameId: zast.names.wkTag
+        nameId: zast.wellKnown.slot.wkTag
         childTypeId: tagId
     )
     # the shape, for whatever backend reads it: every arm written `null`,
@@ -12102,12 +12112,12 @@ resolveVariant: function {
             eqAsV = (asDeclaresMemberId
                 :ast
                 asItems: onEqAsV.asItems
-                nameId: zast.names.wkOpEq
+                nameId: zast.wellKnown.slot.wkOpEq
             )
             neAsV = (asDeclaresMemberId
                 :ast
                 asItems: onEqAsV.asItems
-                nameId: zast.names.wkOpNe
+                nameId: zast.wellKnown.slot.wkOpNe
             )
         }
     }
@@ -12165,7 +12175,7 @@ resolveVariant: function {
             )
             if anV.stringView != "null" then allNullV = false
             anV.drop
-            if fm.name == zast.names.wkTag then {
+            if fm.name == zast.wellKnown.slot.wkTag then {
                 mt: "'tag' is a reserved member name".string
                 (addResolveErrorH
                     :st
@@ -12305,7 +12315,7 @@ variantTagBaseTid: function {
             bn: String
             opNode: ast.nodes.get i: am.operation
             if opNode.dottedpath when (
-                (atomNameId :ast n: (ast.nodes.get i: opNode.child)) == zast.names.wkTag
+                (atomNameId :ast n: (ast.nodes.get i: opNode.child)) == zast.wellKnown.slot.wkTag
             ) then isTagRef = true
             if isTagRef then bn = dottedParentName :ast n: opNode
             if isTagRef then {
@@ -12343,7 +12353,7 @@ variantTagBaseTid: function {
 opIsTagRef: function {ast: Ast am: argref} out bool is {
     opNode: ast.nodes.get i: am.operation
     if opNode.dottedpath.not then return false
-    return (atomNameId :ast n: (ast.nodes.get i: opNode.child)) == zast.names.wkTag
+    return (atomNameId :ast n: (ast.nodes.get i: opNode.child)) == zast.wellKnown.slot.wkTag
 }
 
 # tagBaseIsU8 -- whether the base a `.tag` reference names resolves to `u8`
@@ -12537,7 +12547,7 @@ unionCustomTagOfArm: function {
                             :st
                             :ast
                             unitDecl: hUnitDecl
-                            name: zast.names.wkTag
+                            name: zast.wellKnown.slot.wkTag
                         )
                         match (
                             tgo
@@ -12734,7 +12744,7 @@ attachUnionArm: function {
     fm: argref
 } is {
     aname: zast.nameTextCopy :ast ref: fm.name
-    if fm.name == zast.names.wkTag then {
+    if fm.name == zast.wellKnown.slot.wkTag then {
         mt: "'tag' is a reserved member name".string
         (addResolveErrorH
             :st
@@ -13026,12 +13036,12 @@ resolveUnion: function {
         # tag's own type is known
         (st.typing.declSynthMember
             parentTypeId: uid
-            nameId: zast.names.wkTag
+            nameId: zast.wellKnown.slot.wkTag
             kind: ztyping.declkind.fieldDecl
         )
         (st.typing.setMemberType
             parentTypeId: uid
-            nameId: zast.names.wkTag
+            nameId: zast.wellKnown.slot.wkTag
             childTypeId: tagId
         )
     }
@@ -13152,7 +13162,7 @@ resolveClassMethodDecl: function {
                 # method decls like user template methods; create is
                 # special-cased.
                 if unitDecl == st.typing.collectionsUnitRoot then {
-                    prodSkipL: fm.name == zast.names.wkCreate
+                    prodSkipL: fm.name == zast.wellKnown.slot.wkCreate
                     if prodSkipL.not then prodM4 = true
                 }
             }
@@ -14070,7 +14080,7 @@ stringBuiltAtRunTime: function {ast: Ast.view n: astnode.view} out String is {
         return ""
     } case dottedpath then {
         cId: atomNameId :ast n: (ast.nodes.get i: n.child)
-        if (cId == zast.names.wkString) or (cId == (nameIdOf :ast name: "copy")) then {
+        if (cId == zast.wellKnown.slot.wkString) or (cId == (nameIdOf :ast name: "copy")) then {
             return "an owned String"
         }
         return (stringBuiltAtRunTime :ast n: (ast.nodes.get i: n.parent))
@@ -14335,7 +14345,7 @@ resolveClassAsMethods: function {
             if isgen then {
                 if fnNativeP4 then {
                     if unitDecl == st.typing.collectionsUnitRoot then {
-                        skipA4: amP4.name == zast.names.wkCreate
+                        skipA4: amP4.name == zast.wellKnown.slot.wkCreate
                         if skipA4.not then prodA4 = true
                     }
                 } else {
@@ -14414,7 +14424,7 @@ resolveClassCreate: function {
         )
         (st.typing.declSynthMemberTyped
             parentTypeId: cid
-            nameId: zast.names.wkCreate
+            nameId: zast.wellKnown.slot.wkCreate
             kind: ztyping.declkind.methodDecl
             childTypeId: createId
         )
@@ -14726,7 +14736,7 @@ resolveFacet: function {
         )
         (st.typing.declSynthMemberTyped
             parentTypeId: fid
-            nameId: zast.names.wkCreate
+            nameId: zast.wellKnown.slot.wkCreate
             kind: ztyping.declkind.methodDecl
             childTypeId: createId
         )
@@ -14822,7 +14832,7 @@ resolveProtocol: function {
         )
         (st.typing.declSynthMemberTyped
             parentTypeId: pid
-            nameId: zast.names.wkCreate
+            nameId: zast.wellKnown.slot.wkCreate
             kind: ztyping.declkind.methodDecl
             childTypeId: createId
         )
@@ -14860,7 +14870,7 @@ registerEmptyType: function {
         )
         (st.typing.declSynthMemberTyped
             parentTypeId: ex0
-            nameId: zast.names.wkCreate
+            nameId: zast.wellKnown.slot.wkCreate
             kind: ztyping.declkind.methodDecl
             childTypeId: cci0
         )
@@ -14871,7 +14881,7 @@ registerEmptyType: function {
     ccid: st.reg.newType name: "create" ownerTid: nid typetype: ztypes.ztypetype.functionType
     (st.typing.declSynthMemberTyped
         parentTypeId: nid
-        nameId: zast.names.wkCreate
+        nameId: zast.wellKnown.slot.wkCreate
         kind: ztyping.declkind.methodDecl
         childTypeId: ccid
     )
@@ -17413,12 +17423,12 @@ fixupCustomTags: function {
                 cuidc: cuid
                 (st.typing.declSynthMember
                     parentTypeId: cuidc
-                    nameId: zast.names.wkTag
+                    nameId: zast.wellKnown.slot.wkTag
                     kind: ztyping.declkind.fieldDecl
                 )
                 (st.typing.setMemberType
                     parentTypeId: cuidc
-                    nameId: zast.names.wkTag
+                    nameId: zast.wellKnown.slot.wkTag
                     childTypeId: ctid
                 )
             } else {
@@ -17431,7 +17441,7 @@ fixupCustomTags: function {
                         :st
                         :ast
                         unitDecl: unitDecl98
-                        name: zast.names.wkTag
+                        name: zast.wellKnown.slot.wkTag
                     )
                     match (
                         tgo2
@@ -18152,7 +18162,7 @@ demandCalleeName: function {
     cn: zast.nameTextAt :ast ref: nameId
     fr: unitScopeOf :st declId: scope
     if cn.stringView == "return" then {
-        demandDefinition :st scope: fr nameId: zast.names.wkReturn
+        demandDefinition :st scope: fr nameId: zast.wellKnown.slot.wkReturn
         demandDefinition :st scope: fr nameId: (zast.poolFind pool: ast.names text: "never")
         return
     }
@@ -18291,7 +18301,7 @@ scanUnitCalls: function {
 # naming them in source: system's `return` and its `never` result.
 demandReturnNever: function {st: zenv.ZSymbolTable ast: Ast.view} is {
     sysId: nameIdOf :ast name: "system"
-    demandUnitMember :st unitNameId: sysId nameId: zast.names.wkReturn
+    demandUnitMember :st unitNameId: sysId nameId: zast.wellKnown.slot.wkReturn
     demandUnitMember :st unitNameId: sysId nameId: (zast.poolFind pool: ast.names text: "never")
 }
 
@@ -20810,7 +20820,7 @@ builtinTidT: function {
     # cached for the readers that hold no ast to look it up with -- a synth
     # comparison's return type is answered from here. Asked by pool id: `bk` is
     # already the id `base` interned to, so nothing compares a spelling.
-    if bk == zast.names.wkBool then st.typing.boolTid = r
+    if bk == zast.wellKnown.slot.wkBool then st.typing.boolTid = r
     return r
 }
 
@@ -21548,7 +21558,7 @@ unitSiblingReturn: function {
 returnNamesSelf: function {ast: Ast.view nid: zast.nodeid templateName: StringView} out bool is {
     bid: rootNameIdOf :ast n: (ast.nodes.get i: nid)
     if bid.isZero then return false
-    if bid == zast.names.wkThis then return true
+    if bid == zast.wellKnown.slot.wkThis then return true
     if (zast.nameTextEq :ast ref: bid s: "type") then return true
     bt: zast.nameTextAt :ast ref: bid
     return bt.stringView == templateName
@@ -21934,7 +21944,10 @@ cloneGenericMemberInto: function {
     # one is the instance's own (mintMonoRecordShape)
     isSynth: false
     if chName == "create" then {
-        isSynth = st.typing.declMemberIsSynth parentTypeId: templateId nameId: zast.names.wkCreate
+        isSynth = (st.typing.declMemberIsSynth
+            parentTypeId: templateId
+            nameId: zast.wellKnown.slot.wkCreate
+        )
     }
     # a list's `contains`, `==`, `!=` and `sort` exist on every instance and
     # are checked where they are called (refuseListMemberWithoutElemOp)
@@ -22225,11 +22238,14 @@ mintMonoRecordShape: function {
         # a `create` the TEMPLATE writes was cloned onto the instance; a record
         # template's synthesised one names the template's own field types and
         # is replaced
-        written: (st.typing.declChildOfId parentTypeId: templateId nameId: zast.names.wkCreate).some
+        written: (st.typing.declChildOfId
+            parentTypeId: templateId
+            nameId: zast.wellKnown.slot.wkCreate
+        ).some
         if written then {
             written = (st.typing.declMemberIsSynth
                 parentTypeId: templateId
-                nameId: zast.names.wkCreate
+                nameId: zast.wellKnown.slot.wkCreate
             ).not
         }
         # `create: null` on the template: its instances construct in no spelling
@@ -22242,12 +22258,12 @@ mintMonoRecordShape: function {
             )
             (st.typing.declSynthMember
                 parentTypeId: mid
-                nameId: zast.names.wkCreate
+                nameId: zast.wellKnown.slot.wkCreate
                 kind: ztyping.declkind.methodDecl
             )
             (st.typing.setMemberType
                 parentTypeId: mid
-                nameId: zast.names.wkCreate
+                nameId: zast.wellKnown.slot.wkCreate
                 childTypeId: crId
             )
             materializeCreateParams :st :ast typeTid: mid createId: crId
@@ -22313,12 +22329,12 @@ mintMonoTagShape: function {
         tagId: st.reg.newType name: tagName.stringView typetype: ztypes.ztypetype.dataType
         (st.typing.declSynthMember
             parentTypeId: mid
-            nameId: zast.names.wkTag
+            nameId: zast.wellKnown.slot.wkTag
             kind: ztyping.declkind.fieldDecl
         )
         (st.typing.setMemberType
             parentTypeId: mid
-            nameId: zast.names.wkTag
+            nameId: zast.wellKnown.slot.wkTag
             childTypeId: tagId
         )
     }
@@ -22527,7 +22543,7 @@ mintMono: function {
 mintSpecInstanceShape: function {st: zenv.ZSymbolTable mid: ztypes.tid tt: ztypes.ztypetype} is {
     if tt != ztypes.ztypetype.protocolType when tt != ztypes.ztypetype.facetType then return
     mt: mid
-    if (st.typing.declHasMemberId parentTypeId: mt nameId: zast.names.wkCreate).not then {
+    if (st.typing.declHasMemberId parentTypeId: mt nameId: zast.wellKnown.slot.wkCreate).not then {
         createId: (st.reg.newType
             name: "create"
             ownerTid: mid
@@ -22535,7 +22551,7 @@ mintSpecInstanceShape: function {st: zenv.ZSymbolTable mid: ztypes.tid tt: ztype
         )
         (st.typing.declSynthMemberTyped
             parentTypeId: mt
-            nameId: zast.names.wkCreate
+            nameId: zast.wellKnown.slot.wkCreate
             kind: ztyping.declkind.methodDecl
             childTypeId: createId
         )
@@ -22687,9 +22703,9 @@ synthInstanceValueMembers: function {
         (templateId == (builtinTidT :st scope: rf :ast base: "array"))
     ) then return
     mt: mid
-    forceMemberOf :st :ast parentTypeId: mt nameId: zast.names.wkOpEq
-    forceMemberOf :st :ast parentTypeId: mt nameId: zast.names.wkOpNe
-    forceMemberOf :st :ast parentTypeId: mt nameId: zast.names.wkHash
+    forceMemberOf :st :ast parentTypeId: mt nameId: zast.wellKnown.slot.wkOpEq
+    forceMemberOf :st :ast parentTypeId: mt nameId: zast.wellKnown.slot.wkOpNe
+    forceMemberOf :st :ast parentTypeId: mt nameId: zast.wellKnown.slot.wkHash
     items: templateAsItems :st :ast :templateId
     if (eqNullOptOut :ast asItems: items).not then (synthComparisonPair
         :st
@@ -22697,7 +22713,8 @@ synthInstanceValueMembers: function {
         eqDecl: false
         neDecl: false
     )
-    if (st.typing.declChildOfId parentTypeId: mt nameId: zast.names.wkHash).some then return
+    if (st.typing.declChildOfId parentTypeId: mt nameId: zast.wellKnown.slot.wkHash
+    ).some then return
     if (memberNullOptOut :ast asItems: items member: "hash") then return
     synthHashMember :st rid: mid
 }
@@ -23460,7 +23477,7 @@ typedefInheritsConformance: function {
         row: st.typing.declRowAt ownerTid: spec membersOnly: true slot: si
         si = si + 1
         smid: row.tid
-        if row.keep.not or (row.name == zast.names.wkCreate) then continue
+        if row.keep.not or (row.name == zast.wellKnown.slot.wkCreate) then continue
         if (st.reg.typetypeOf typeId: smid) != ztypes.ztypetype.functionType then continue
         if (conformanceSpecIsSelfTyped :st specTid: spec :smid) then continue
         imid: (conformanceImplMethod
@@ -23587,12 +23604,12 @@ hashableUnmetReason: function {
     }
     if ck == ztypes.constraintkind.refHashable when (st.reg.isReftypeOf :tid) then {
         kn: specWrittenName :st :ast :tid
-        ho: valOpOwner :st :tid nameId: zast.names.wkHash
-        if (st.typing.declIsMethodId parentTypeId: ho nameId: zast.names.wkHash).not then {
+        ho: valOpOwner :st :tid nameId: zast.wellKnown.slot.wkHash
+        if (st.typing.declIsMethodId parentTypeId: ho nameId: zast.wellKnown.slot.wkHash).not then {
             return "'\{kn}' declares no 'hash'"
         }
-        eo: valOpOwner :st :tid nameId: zast.names.wkOpEq
-        if (st.typing.declIsMethodId parentTypeId: eo nameId: zast.names.wkOpEq).not then {
+        eo: valOpOwner :st :tid nameId: zast.wellKnown.slot.wkOpEq
+        if (st.typing.declIsMethodId parentTypeId: eo nameId: zast.wellKnown.slot.wkOpEq).not then {
             return "'\{kn}' declares no '=='"
         }
         if (ownEqWithoutOwnHash :st :tid) then {
@@ -23612,8 +23629,8 @@ valHashableUnmetReason: function {
     kn: specWrittenName :st :ast :tid
     em: valEqMissingPart :ast :st :tid depth: 0
     if em == tid then {
-        eo: valOpOwner :st :tid nameId: zast.names.wkOpEq
-        if (st.typing.declIsMethodId parentTypeId: eo nameId: zast.names.wkOpEq) then {
+        eo: valOpOwner :st :tid nameId: zast.wellKnown.slot.wkOpEq
+        if (st.typing.declIsMethodId parentTypeId: eo nameId: zast.wellKnown.slot.wkOpEq) then {
             return "its '==' does not compare a '\{kn}' with another '\{kn}'"
         }
         return "'\{kn}' has no '=='"
@@ -23622,7 +23639,7 @@ valHashableUnmetReason: function {
     hm: valHashMissingPart :ast :st :tid depth: 0
     if hm.isZero then return ""
     if hm != tid then return "its part '\{specWrittenName :st :ast tid: hm}' has no 'hash'"
-    hsrc: valOpSource :ast :st :tid nameId: zast.names.wkHash
+    hsrc: valOpSource :ast :st :tid nameId: zast.wellKnown.slot.wkHash
     if hsrc.none then return "'\{kn}' has no 'hash'"
     return "it writes its own '==' but not its 'hash', and a key's two must agree"
 }
@@ -24207,10 +24224,12 @@ typeIsHashable: function {
     }
     # a reference type declares both itself; a typedef takes each from the
     # first link of its chain that declares it, and a `null` shell is no method
-    ho: valOpOwner :st :tid nameId: zast.names.wkHash
-    if (st.typing.declIsMethodId parentTypeId: ho nameId: zast.names.wkHash).not then return false
-    eo: valOpOwner :st :tid nameId: zast.names.wkOpEq
-    if (st.typing.declIsMethodId parentTypeId: eo nameId: zast.names.wkOpEq).not then return false
+    ho: valOpOwner :st :tid nameId: zast.wellKnown.slot.wkHash
+    if (st.typing.declIsMethodId parentTypeId: ho nameId: zast.wellKnown.slot.wkHash
+    ).not then return false
+    eo: valOpOwner :st :tid nameId: zast.wellKnown.slot.wkOpEq
+    if (st.typing.declIsMethodId parentTypeId: eo nameId: zast.wellKnown.slot.wkOpEq
+    ).not then return false
     return (ownEqWithoutOwnHash :st :tid).not
 }
 
@@ -24222,10 +24241,12 @@ ownEqWithoutOwnHash: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out b
     for t.isZero.not loop {
         bo: st.typing.typedefBaseTid.get key: t
         if bo.none then return false
-        if (st.typing.declMemberIdOf parentTypeId: t nameId: zast.names.wkHash).isZero.not then {
+        if (st.typing.declMemberIdOf parentTypeId: t nameId: zast.wellKnown.slot.wkHash
+        ).isZero.not then {
             return false
         }
-        if (st.typing.declMemberIdOf parentTypeId: t nameId: zast.names.wkOpEq).isZero.not then {
+        if (st.typing.declMemberIdOf parentTypeId: t nameId: zast.wellKnown.slot.wkOpEq
+        ).isZero.not then {
             return true
         }
         t = bo
@@ -24266,30 +24287,30 @@ checkHashKey: function {
         (checkKeyMember
             :ast
             :st
-            owner: (valOpOwner :st :tid nameId: zast.names.wkHash)
-            nameId: zast.names.wkHash
+            owner: (valOpOwner :st :tid nameId: zast.wellKnown.slot.wkHash)
+            nameId: zast.wellKnown.slot.wkHash
         )
         (checkKeyMember
             :ast
             :st
-            owner: (valOpOwner :st :tid nameId: zast.names.wkOpEq)
-            nameId: zast.names.wkOpEq
+            owner: (valOpOwner :st :tid nameId: zast.wellKnown.slot.wkOpEq)
+            nameId: zast.wellKnown.slot.wkOpEq
         )
         return
     }
-    hs: valOpSource :ast :st :tid nameId: zast.names.wkHash
-    es: valOpSource :ast :st :tid nameId: zast.names.wkOpEq
+    hs: valOpSource :ast :st :tid nameId: zast.wellKnown.slot.wkHash
+    es: valOpSource :ast :st :tid nameId: zast.wellKnown.slot.wkOpEq
     if hs.written then {
-        ho: valOpOwner :st :tid nameId: zast.names.wkHash
-        checkKeyMember :ast :st owner: ho nameId: zast.names.wkHash
+        ho: valOpOwner :st :tid nameId: zast.wellKnown.slot.wkHash
+        checkKeyMember :ast :st owner: ho nameId: zast.wellKnown.slot.wkHash
     }
     if es.written then {
-        eo: valOpOwner :st :tid nameId: zast.names.wkOpEq
-        checkKeyMember :ast :st owner: eo nameId: zast.names.wkOpEq
+        eo: valOpOwner :st :tid nameId: zast.wellKnown.slot.wkOpEq
+        checkKeyMember :ast :st owner: eo nameId: zast.wellKnown.slot.wkOpEq
     }
     if (hs.generated or es.generated).not then return
     parts: ListVal ztypes.tid
-    valPartTids :ast :st tid: (valOpOwner :st :tid nameId: zast.names.wkOpEq) :parts
+    valPartTids :ast :st tid: (valOpOwner :st :tid nameId: zast.wellKnown.slot.wkOpEq) :parts
     for each pt: parts loop {
         checkHashKey :ast :st tid: pt :seen depth: depth + 1
     }
@@ -24337,7 +24358,7 @@ keyMemberMismatch: function {
     mid: ztypes.tid
     nameId: zast.nameid
 } out String is {
-    isHash: nameId == zast.names.wkHash
+    isHash: nameId == zast.wellKnown.slot.wkHash
     mname: zast.nameTextCopy :ast ref: nameId
     ids: ListVal ztypes.tid
     nms: ListVal zast.nameid
@@ -24369,7 +24390,7 @@ keyReceiverMismatch: function {
     mname: StringView
 } out String is {
     rpn: st.reg.thisParamNameIdOf tid: mid
-    rn: zast.names.wkThis
+    rn: zast.wellKnown.slot.wkThis
     if rpn.isZero.not then rn = rpn
     rOwnO: st.typing.declOwnershipOfId parentTypeId: mid nameId: rn
     rOwn: rOwnO.or d: ztypes.zparamownership.noneMode
@@ -24493,8 +24514,8 @@ valOpOwner: function {
 # isValOpName -- `==`, `!=`, `hash` or `compare`: the members a value type may
 # have generated from its parts.
 isValOpName: function {cnId: zast.nameid} out bool is {
-    if (cnId == zast.names.wkOpEq) or (cnId == zast.names.wkOpNe) then return true
-    return (cnId == zast.names.wkHash) or (cnId == zast.names.wkCompare)
+    if (cnId == zast.wellKnown.slot.wkOpEq) or (cnId == zast.wellKnown.slot.wkOpNe) then return true
+    return (cnId == zast.wellKnown.slot.wkHash) or (cnId == zast.wellKnown.slot.wkCompare)
 }
 
 # markMemberUsed -- member `nameId` of `ownerTid` is used: the receiver's own
@@ -24543,8 +24564,8 @@ markSpecMembersUsed: function {st: zenv.ZSymbolTable impl: ztypes.tid spec: ztyp
 # markKeyOpsUsed -- a Map or Set key is hashed and compared by the container,
 # which no member reference spells.
 markKeyOpsUsed: function {ast: Ast.view st: zenv.ZSymbolTable tid: ztypes.tid} is {
-    markValOpUsed :ast :st :tid nameId: zast.names.wkHash depth: 0
-    markValOpUsed :ast :st :tid nameId: zast.names.wkOpEq depth: 0
+    markValOpUsed :ast :st :tid nameId: zast.wellKnown.slot.wkHash depth: 0
+    markValOpUsed :ast :st :tid nameId: zast.wellKnown.slot.wkOpEq depth: 0
 }
 
 # markValOpUsed -- `tid`'s `==`, `!=`, `hash` or `compare` is used. A written
@@ -24568,13 +24589,13 @@ markValOpUsed: function {
         st.typing.usedMemberDecl.add item: md
         return
     }
-    if nameId == zast.names.wkOpEq when (valOpWritten
+    if nameId == zast.wellKnown.slot.wkOpEq when (valOpWritten
         :ast
         :st
         :owner
-        nameId: zast.names.wkOpNe
+        nameId: zast.wellKnown.slot.wkOpNe
     ) then {
-        markValOpUsed :ast :st tid: owner nameId: zast.names.wkOpNe depth: depth + 1
+        markValOpUsed :ast :st tid: owner nameId: zast.wellKnown.slot.wkOpNe depth: depth + 1
         return
     }
     parts: ListVal ztypes.tid
@@ -24609,8 +24630,8 @@ valOpSource: function {
     if (st.typing.declMemberIsSynth parentTypeId: t :nameId).not then {
         return (valDeclaredSource :ast :st owner: t :nameId memberDecl: md)
     }
-    if nameId == zast.names.wkOpEq then {
-        neWritten: valOpWritten :ast :st owner: t nameId: zast.names.wkOpNe
+    if nameId == zast.wellKnown.slot.wkOpEq then {
+        neWritten: valOpWritten :ast :st owner: t nameId: zast.wellKnown.slot.wkOpNe
         if neWritten then return valopsrc.negated
     }
     return valopsrc.generated
@@ -24629,7 +24650,7 @@ valDeclaredSource: function {
 } out valopsrc is {
     fnode: valMemberFnNode :ast :st :memberDecl
     if (functiondefIsNative op: (ast.nodes.get i: fnode)) then return valopsrc.builtin
-    if nameId == zast.names.wkHash then return valopsrc.written
+    if nameId == zast.wellKnown.slot.wkHash then return valopsrc.written
     if (valRhsIsOwner :ast :st :owner :fnode) then return valopsrc.written
     return valopsrc.none
 }
@@ -24678,7 +24699,7 @@ valRhsIsOwner: function {
     pn: ast.nodes.get i: pm
     if pn.namedoperation then rn = rootNameIdOf :ast n: (ast.nodes.get i: pn.operation)
     if rn.isZero then return false
-    if rn == zast.names.wkThis then return true
+    if rn == zast.wellKnown.slot.wkThis then return true
     if (zast.nameTextEq :ast ref: rn s: "type") then return true
     od: st.typing.declIdOfType typeId: owner
     if od.isZero then return false
@@ -24782,11 +24803,11 @@ valEqMissingPart: function {
     tid: ztypes.tid
     depth: u64
 } out ztypes.tid is {
-    src: valOpSource :ast :st :tid nameId: zast.names.wkOpEq
+    src: valOpSource :ast :st :tid nameId: zast.wellKnown.slot.wkOpEq
     if src.none then return tid
     if src.generated.not then return ztypes.tid
     if depth > 64 then return tid
-    owner: valOpOwner :st :tid nameId: zast.names.wkOpEq
+    owner: valOpOwner :st :tid nameId: zast.wellKnown.slot.wkOpEq
     parts: ListVal ztypes.tid
     valPartTids :ast :st tid: owner :parts
     i: u64
@@ -24810,13 +24831,13 @@ valHashMissingPart: function {
     tid: ztypes.tid
     depth: u64
 } out ztypes.tid is {
-    src: valOpSource :ast :st :tid nameId: zast.names.wkHash
+    src: valOpSource :ast :st :tid nameId: zast.wellKnown.slot.wkHash
     if src.none then return tid
     if src.generated.not then return ztypes.tid
-    eqSrc: valOpSource :ast :st :tid nameId: zast.names.wkOpEq
+    eqSrc: valOpSource :ast :st :tid nameId: zast.wellKnown.slot.wkOpEq
     if (eqSrc.generated or eqSrc.builtin).not then return tid
     if depth > 64 then return tid
-    owner: valOpOwner :st :tid nameId: zast.names.wkHash
+    owner: valOpOwner :st :tid nameId: zast.wellKnown.slot.wkHash
     parts: ListVal ztypes.tid
     valPartTids :ast :st tid: owner :parts
     i: u64
@@ -24838,8 +24859,8 @@ forceValParts: function {
     depth: u64
 } is {
     if depth > 64 then return
-    if (valOpSource :ast :st :tid nameId: zast.names.wkOpEq).generated.not then return
-    owner: valOpOwner :st :tid nameId: zast.names.wkOpEq
+    if (valOpSource :ast :st :tid nameId: zast.wellKnown.slot.wkOpEq).generated.not then return
+    owner: valOpOwner :st :tid nameId: zast.wellKnown.slot.wkOpEq
     forceAllFields :st :ast tid: owner
     parts: ListVal ztypes.tid
     valPartTids :ast :st tid: owner :parts
@@ -24865,11 +24886,11 @@ refuseListMemberWithoutElemOp: function {
     cnId: zast.nameid
 } out bool is {
     isCmp: (
-        (cnId == zast.names.wkContains) or
-        (cnId == zast.names.wkOpEq) or
-        (cnId == zast.names.wkOpNe)
+        (cnId == zast.wellKnown.slot.wkContains) or
+        (cnId == zast.wellKnown.slot.wkOpEq) or
+        (cnId == zast.wellKnown.slot.wkOpNe)
     )
-    isSort: cnId == zast.names.wkSort
+    isSort: cnId == zast.wellKnown.slot.wkSort
     if isCmp.not when isSort.not then return false
     if (st.reg.isPartialOf tid: bt) then return false
     org: st.reg.genericOriginOf tid: bt
@@ -24881,11 +24902,11 @@ refuseListMemberWithoutElemOp: function {
     if elem.isZero then return false
     if (st.reg.typetypeOf typeId: elem) == ztypes.ztypetype.genericParam then return false
     if isCmp when (listElemHasEq :st :ast :elem) then {
-        markValOpUsed :ast :st tid: elem nameId: zast.names.wkOpEq depth: 0
+        markValOpUsed :ast :st tid: elem nameId: zast.wellKnown.slot.wkOpEq depth: 0
         return false
     }
     if isSort when (listElemHasCompare :st :ast :elem) then {
-        markValOpUsed :ast :st tid: elem nameId: zast.names.wkCompare depth: 0
+        markValOpUsed :ast :st tid: elem nameId: zast.wellKnown.slot.wkCompare depth: 0
         return false
     }
     cn: zast.nameTextAt :ast ref: cnId
@@ -24914,7 +24935,7 @@ refuseListMemberWithoutElemOp: function {
 # is generated -- an order is the author's to choose -- and a float has none.
 listElemHasCompare: function {st: zenv.ZSymbolTable ast: Ast elem: ztypes.tid} out bool is {
     if (st.reg.isValtypeOf tid: elem) then {
-        src: valOpSource :ast :st tid: elem nameId: zast.names.wkCompare
+        src: valOpSource :ast :st tid: elem nameId: zast.wellKnown.slot.wkCompare
         return src.builtin or src.written
     }
     et: elem
@@ -24926,7 +24947,7 @@ listElemHasCompare: function {st: zenv.ZSymbolTable ast: Ast elem: ztypes.tid} o
             et = bo
         } case none then break
     }
-    return (st.typing.declIsMethodId parentTypeId: et nameId: zast.names.wkCompare)
+    return (st.typing.declIsMethodId parentTypeId: et nameId: zast.wellKnown.slot.wkCompare)
 }
 
 # listElemHasEq -- a list element type that has an `==` of its own: a value
@@ -24945,7 +24966,7 @@ listElemHasEq: function {st: zenv.ZSymbolTable ast: Ast elem: ztypes.tid} out bo
             et = bo
         } case none then break
     }
-    return (st.typing.declIsMethodId parentTypeId: et nameId: zast.names.wkOpEq)
+    return (st.typing.declIsMethodId parentTypeId: et nameId: zast.wellKnown.slot.wkOpEq)
 }
 
 # refuseHashWithoutPartHash -- a generated `hash` read on a type whose `==` is
@@ -24980,7 +25001,7 @@ refuseHashWithoutPartHash: function {
         hm: "its part of type '\{mn}' has no 'hash'"
         h = hm.take
     }
-    eqSrc: valOpSource :ast :st tid: bt nameId: zast.names.wkOpEq
+    eqSrc: valOpSource :ast :st tid: bt nameId: zast.wellKnown.slot.wkOpEq
     if miss == bt when eqSrc.written or eqSrc.negated then {
         h = "its `==` is written by hand, and a generated `hash` would not agree with it"
     }
@@ -25765,14 +25786,14 @@ mintStrCompare: function {
 } is {
     cmpId: mintCollectionMethod :st :ast :monoId m: "compare"
     cft: cmpId
-    st.typing.setMemberType parentTypeId: cft nameId: zast.names.wkThis childTypeId: monoId
+    st.typing.setMemberType parentTypeId: cft nameId: zast.wellKnown.slot.wkThis childTypeId: monoId
     (st.typing.setChildOwnershipId
         parentTypeId: cft
-        nameId: zast.names.wkThis
+        nameId: zast.wellKnown.slot.wkThis
         ownership: ztypes.zparamownership.viewMode
     )
-    st.reg.setThisParamName typeId: cft nameId: zast.names.wkThis
-    st.typing.setMemberType parentTypeId: cft nameId: zast.names.wkRhs childTypeId: monoId
+    st.reg.setThisParamName typeId: cft nameId: zast.wellKnown.slot.wkThis
+    st.typing.setMemberType parentTypeId: cft nameId: zast.wellKnown.slot.wkRhs childTypeId: monoId
     i32id: builtinTidT :st scope: rf :ast base: "i32"
     if i32id.isZero.not then st.reg.setReturnType typeId: cft value: i32id
 }
@@ -26494,11 +26515,12 @@ inferConstructionSubs: function {
 writtenTemplateCreate: function {
     st: zenv.ZSymbolTable.view templateId: ztypes.tid
 } out ztypes.tid is {
-    co: ((st.typing.declChildOfId parentTypeId: templateId nameId: zast.names.wkCreate).or
+    co: ((st.typing.declChildOfId parentTypeId: templateId nameId: zast.wellKnown.slot.wkCreate).or
         d: ztypes.tid.zero
     )
     if co.isZero then return ztypes.tid
-    if (st.typing.declMemberIsSynth parentTypeId: templateId nameId: zast.names.wkCreate) then {
+    if (st.typing.declMemberIsSynth parentTypeId: templateId nameId: zast.wellKnown.slot.wkCreate
+    ) then {
         return ztypes.tid
     }
     return co
@@ -26728,20 +26750,20 @@ inferGenericConstruction: function {
     )
     if mid.isZero then return ztypes.tid.zero
     noteMonoSite :st mono: mid :call :unitDecl
-    forceMemberOf :st :ast parentTypeId: mid nameId: zast.names.wkCreate
-    cro: st.typing.declChildOfId parentTypeId: mid nameId: zast.names.wkCreate
+    forceMemberOf :st :ast parentTypeId: mid nameId: zast.wellKnown.slot.wkCreate
+    cro: st.typing.declChildOfId parentTypeId: mid nameId: zast.wellKnown.slot.wkCreate
     match (
         cro
     ) case some then null case none then {
         crId: st.reg.newType name: "create" ownerTid: mid typetype: ztypes.ztypetype.functionType
         (st.typing.declSynthMember
             parentTypeId: mid
-            nameId: zast.names.wkCreate
+            nameId: zast.wellKnown.slot.wkCreate
             kind: ztyping.declkind.methodDecl
         )
         (st.typing.setMemberType
             parentTypeId: mid
-            nameId: zast.names.wkCreate
+            nameId: zast.wellKnown.slot.wkCreate
             childTypeId: crId
         )
     }
@@ -26791,7 +26813,10 @@ skipCapacityArg: function {
     isP0: bool
 } out bool is {
     skipCr: false
-    if isP0.not when pk0 == zast.names.wkCapacity when (templateTakesCapacity :st :ast :tplId
+    if isP0.not when pk0 == zast.wellKnown.slot.wkCapacity when (templateTakesCapacity
+        :st
+        :ast
+        :tplId
     ) then skipCr = true
     if skipCr then checkCapacityArg :st :unitDecl :ast :argId :argOpId
     return skipCr
@@ -26821,7 +26846,7 @@ checkCapacityArg: function {
         :ast
         ptid: u64t
         :vt
-        pnId: zast.names.wkCapacity
+        pnId: zast.wellKnown.slot.wkCapacity
         arg: (argRefAt :ast nid: argId)
     )
 }
@@ -27517,7 +27542,10 @@ reportBadGenericArgLabel: function {
     # create argument (`Type arg:` is `Type.create arg:`);
     # native create params carry no modeled children, so
     # the label is admitted by template identity.
-    if isField.not when pk == zast.names.wkCapacity when (templateTakesCapacity :st :ast :tplId
+    if isField.not when pk == zast.wellKnown.slot.wkCapacity when (templateTakesCapacity
+        :st
+        :ast
+        :tplId
     ) then isField = true
     if isField.not then {
         pkT2: zast.nameTextAt :ast ref: pk
@@ -27767,8 +27795,11 @@ iterWrapperElem: function {
         if origin == wo then isWrapper = true
     } case none then null
     if (isOptionViewValOrigin :ast :st :unitDecl :origin) then isWrapper = true
-    forceMemberOf :st :ast parentTypeId: wid nameId: zast.names.wkSome
-    if isWrapper then return (st.typing.declChildOfId parentTypeId: wid nameId: zast.names.wkSome)
+    forceMemberOf :st :ast parentTypeId: wid nameId: zast.wellKnown.slot.wkSome
+    if isWrapper then return (st.typing.declChildOfId
+        parentTypeId: wid
+        nameId: zast.wellKnown.slot.wkSome
+    )
     return (optionval.none ztypes.tid)
 }
 
@@ -28384,7 +28415,7 @@ reportUnresolvedCastArg: function {
     eh: String
     # `yield` resolves like any other name, so an ordinary function gets the
     # ordinary miss -- which on its own says nothing about why. Name the rule.
-    if (atomNameId :ast n: (ast.nodes.get i: argId)) == zast.names.wkYield then {
+    if (atomNameId :ast n: (ast.nodes.get i: argId)) == zast.wellKnown.slot.wkYield then {
         en = "`yield` is defined only inside a generator body"
         eh = "`yield` is in scope inside a generator's `call` and nowhere else -- move the body into one, or remove the yield"
     }
@@ -28966,7 +28997,7 @@ pinTypedefBorrowSource: function {st: zenv.ZSymbolTable ast: Ast src: zast.nodei
     srcN: src
     so: ast.nodes.get i: src
     if so.dottedpath when (
-        (atomNameId :ast n: (ast.nodes.get i: so.child)) == zast.names.wkBorrow
+        (atomNameId :ast n: (ast.nodes.get i: so.child)) == zast.wellKnown.slot.wkBorrow
     ) then {
         srcN = so.parent
     }
@@ -28981,7 +29012,8 @@ pinTypedefBorrowSource: function {st: zenv.ZSymbolTable ast: Ast src: zast.nodei
 # `this` param (shorthand) or a recorded long-form receiver name. A this-less
 # function member is a callable field, not a method.
 methodHasThisReceiver: function {st: zenv.ZSymbolTable.view mid: ztypes.tid} out bool is {
-    if (st.typing.declHasMemberId parentTypeId: mid nameId: zast.names.wkThis) then return true
+    if (st.typing.declHasMemberId parentTypeId: mid nameId: zast.wellKnown.slot.wkThis
+    ) then return true
     return (st.reg.hasThisParamName tid: mid)
 }
 
@@ -28996,7 +29028,7 @@ methodHasNoUserArgs: function {
     # declLastChildNameId hands back a pool id, so the receiver test takes it
     # directly -- copying the text out to intern it again lands on this id.
     soleId: st.typing.declLastChildNameId ownerTid: mid
-    if soleId == zast.names.wkThis then return true
+    if soleId == zast.wellKnown.slot.wkThis then return true
     return (st.reg.thisParamNameIs
         tid: mid
         nameId: soleId
@@ -29097,7 +29129,8 @@ fnAutoCallable: function {st: zenv.ZSymbolTable.view mid: ztypes.tid} out bool i
         if row.keep then {
             pnameId: row.name
             isRecv: (
-                (pnameId == zast.names.wkThis) or (thisPnId.isZero.not and (pnameId == thisPnId))
+                (pnameId == zast.wellKnown.slot.wkThis) or
+                (thisPnId.isZero.not and (pnameId == thisPnId))
             )
             if isRecv.not then {
                 userSeen = true
@@ -29283,7 +29316,7 @@ baseIsPrivateCapable: function {
     match (
         baseNode
     ) case atomid then {
-        if baseNode.name == zast.names.wkThis then return true
+        if baseNode.name == zast.wellKnown.slot.wkThis then return true
         vo: st.lookupVarId nameId: baseNode.name
         match (
             vo
@@ -29294,7 +29327,7 @@ baseIsPrivateCapable: function {
         }
     } case dottedpath then {
         cnId: atomNameId :ast n: (ast.nodes.get i: baseNode.child)
-        if cnId == zast.names.wkPrivate then return true
+        if cnId == zast.wellKnown.slot.wkPrivate then return true
         pbNode: ast.nodes.get i: baseNode.parent
         pbNid: nodeId n: pbNode
         pbType: walkTypeOf :st nid: pbNid
@@ -29735,7 +29768,7 @@ checkMemberProjections: function {
     # as the bare type name); route it through the shared construction check
     # so a synthesized create's required fields are enforced and the
     # implicitCreate stamp drives field-wise emission.
-    if coerce when cnId == zast.names.wkCreate when (
+    if coerce when cnId == zast.wellKnown.slot.wkCreate when (
         (st.reg.typetypeOf typeId: mo) == ztypes.ztypetype.functionType
     ) when (isImplicitZeroCreateTid
         :ast
@@ -30107,7 +30140,7 @@ checkTagAccessor: function {
                 return (callleg handled: true tid: tat5)
             }
         }
-        if cnId == zast.names.wkTag then {
+        if cnId == zast.wellKnown.slot.wkTag then {
             cn: zast.nameTextAt :ast ref: cnId
             btn5: specWrittenName :st :ast tid: bt
             mnx5: "tag not exposed on '\{btn5}' — declare it in the as block (eg. `tag: u8.tag`)"
@@ -30579,7 +30612,7 @@ refuseDataSlotMember: function {
         if (st.typing.declChildOfId parentTypeId: bt nameId: cnId).some then return false
         msg = "'\{mn}' is no label of this block: its `slot` holds its labels' positions and nothing else"
         hint = "read a label's position, `blk.slot.label`"
-    } else if cnId == zast.names.wkSlot when (
+    } else if cnId == zast.wellKnown.slot.wkSlot when (
         (st.reg.typetypeOf typeId: bt) == ztypes.ztypetype.dataType
     ) then {
         if (st.typing.declChildOfId parentTypeId: bt nameId: cnId).some then return false
@@ -30615,8 +30648,8 @@ refuseDataValueMember: function {
     cnId: zast.nameid
     isArray: bool
 } out bool is {
-    isSlot: cnId == zast.names.wkSlot
-    if isArray.not and (cnId != zast.names.wkTag) and isSlot.not then return false
+    isSlot: cnId == zast.wellKnown.slot.wkSlot
+    if isArray.not and (cnId != zast.wellKnown.slot.wkTag) and isSlot.not then return false
     og: st.reg.genericOriginOf tid: bt
     if og.isZero then og = bt
     if og != (builtinTidT :st scope: st.curScope :ast base: "intdata") when (
@@ -30642,7 +30675,7 @@ refuseDataValueMember: function {
 # dataElemCount -- how many elements data block `dataTid` holds: its `length`
 # constant, a name no element may take.
 dataElemCount: function {st: zenv.ZSymbolTable.view dataTid: ztypes.tid} out u64 is {
-    lc: st.typing.memberConstOf parentTypeId: dataTid nameId: zast.names.wkLength
+    lc: st.typing.memberConstOf parentTypeId: dataTid nameId: zast.wellKnown.slot.wkLength
     return lc.ival.u64.orPanic
 }
 
@@ -30667,8 +30700,8 @@ checkArrayIndexMember: function {
             if gn8.stringView == "array" then isArr = true
         }
         if isArr then {
-            forceMemberOf :st :ast parentTypeId: bt nameId: zast.names.wkGet
-            go8: st.typing.declChildOfId parentTypeId: bt nameId: zast.names.wkGet
+            forceMemberOf :st :ast parentTypeId: bt nameId: zast.wellKnown.slot.wkGet
+            go8: st.typing.declChildOfId parentTypeId: bt nameId: zast.wellKnown.slot.wkGet
             match (
                 go8
             ) case some then {
@@ -30831,7 +30864,7 @@ derivedInequalityMember: function {
     cnId: zast.nameid
     mo: optionval ztypes.tid
 } out optionval ztypes.tid is {
-    if cnId != zast.names.wkOpNe then return (optionval.none ztypes.tid)
+    if cnId != zast.wellKnown.slot.wkOpNe then return (optionval.none ztypes.tid)
     neSynthetic: true
     match (
         mo
@@ -30839,8 +30872,8 @@ derivedInequalityMember: function {
         neSynthetic = st.typing.synthCmpTids.has item: mo
     } case none then null
     if neSynthetic.not then return (optionval.none ztypes.tid)
-    forceMemberOf :st :ast parentTypeId: bt nameId: zast.names.wkOpEq
-    eqM9: st.typing.declChildOfId parentTypeId: bt nameId: zast.names.wkOpEq
+    forceMemberOf :st :ast parentTypeId: bt nameId: zast.wellKnown.slot.wkOpEq
+    eqM9: st.typing.declChildOfId parentTypeId: bt nameId: zast.wellKnown.slot.wkOpEq
     match (
         eqM9
     ) case some then {
@@ -31114,7 +31147,7 @@ checkUnresolvedMember: function {
     # type, a generic sum template: the construction is refused by the rule it
     # breaks, in the words every other spelling of it uses, not as a missing
     # member
-    if cnId == zast.names.wkCreate when (refuseNameConstruction
+    if cnId == zast.wellKnown.slot.wkCreate when (refuseNameConstruction
         :ast
         :st
         nodeid: dp.nid
@@ -31155,7 +31188,7 @@ checkUnresolvedMember: function {
     # strict unknown-member check says so, but a generic instance is
     # lenient there, so unstamped it reached the emitter as an unhandled
     # binding (E0500, no location) -- diagnose it on every base.
-    if cnId == zast.names.wkView when st.typing.suppressParamStamps.not then {
+    if cnId == zast.wellKnown.slot.wkView when st.typing.suppressParamStamps.not then {
         cn: zast.nameTextAt :ast ref: cnId
         btnVw: specWrittenName :st :ast tid: bt
         mVw: "type '\{btnVw}' has no member 'view'"
@@ -31226,7 +31259,7 @@ checkMemberNamespace: function {
             (bodySelfTypeNameId :st :ast nameId: bn.name) == bn.name
         ) then baseIsAtom = true
     }
-    if isValue.not when baseIsAtom when cnId != zast.names.wkCreate when (ownsTypeParams
+    if isValue.not when baseIsAtom when cnId != zast.wellKnown.slot.wkCreate when (ownsTypeParams
         :st
         tid: bt
     ) then {
@@ -31235,7 +31268,7 @@ checkMemberNamespace: function {
     }
     if isValue.not then return (checkTypeReadSuppliesReceiver :st :ast :dp :bt :cnId :mo :coerce)
     if (memberDeclaresReceiver :st :bt :cnId :mo) then return true
-    isCreate: cnId == zast.names.wkCreate
+    isCreate: cnId == zast.wellKnown.slot.wkCreate
     if isCreate.not when (st.typing.declMemberIsSynth parentTypeId: bt nameId: cnId
     ) then return true
     reportMemberNamespace :st :ast :dp :bt :cnId instanceMember: false functionMember: true
@@ -31354,7 +31387,7 @@ checkTypeReadSuppliesReceiver: function {
     if coerce.not or st.typing.suppressFnAutoCall then return true
     if (memberDeclaresReceiver :st :bt :cnId :mo).not then return true
     rpn: receiverParamNameOf :st tid: mo
-    if rpn.isZero then rpn = zast.names.wkThis
+    if rpn.isZero then rpn = zast.wellKnown.slot.wkThis
     rn: zast.nameTextAt :ast ref: rpn
     tn: specWrittenName :st :ast tid: bt
     mr: "missing required argument '\{rn}' (type: \{tn})"
@@ -31385,7 +31418,7 @@ markTypedefListViewUse: function {
     if (isListViewMember name: (zast.nameTextAt :ast ref: cnId).stringView).not then return
     base: typedefBaseTidOf :st tid: bt
     if base.isZero then return
-    lvD: st.typing.declMemberIdOf parentTypeId: base nameId: zast.names.wkListView
+    lvD: st.typing.declMemberIdOf parentTypeId: base nameId: zast.wellKnown.slot.wkListView
     if lvD.isZero.not then st.typing.usedMemberDecl.add item: lvD
 }
 
@@ -31501,7 +31534,8 @@ checkResolvedMember: function {
     if isSynthCmp when (refuseEqWithoutPartEq :st :ast :dp :bt :cnId) then return ztypes.tid
     if (refuseListMemberWithoutElemOp :st :ast :dp :bt :cnId) then return ztypes.tid
     isSynthHash: (
-        (cnId == zast.names.wkHash) and (st.typing.declMemberIsSynth parentTypeId: bt nameId: cnId)
+        (cnId == zast.wellKnown.slot.wkHash) and
+        (st.typing.declMemberIsSynth parentTypeId: bt nameId: cnId)
     )
     if isSynthHash when (refuseHashWithoutPartHash :st :ast :dp :bt :mo) then return ztypes.tid
     # a type's `as` constant reads as its value, typed by it
@@ -31649,7 +31683,7 @@ refuseMarkerWithoutStorage: function {
     bt: ztypes.tid
     cnId: zast.nameid
 } out bool is {
-    isMarker: (isMoveMarkerId nameId: cnId) or (cnId == zast.names.wkBorrow)
+    isMarker: (isMoveMarkerId nameId: cnId) or (cnId == zast.wellKnown.slot.wkBorrow)
     if isMarker.not then return false
     btt: st.reg.typetypeOf typeId: bt
     isFn: btt == ztypes.ztypetype.functionType
@@ -31710,7 +31744,7 @@ checkMarkerMember: function {
 } out callleg is {
     # `.private` / `.public` access markers: the path carries the base's
     # type (the access view is a dump-filtered shell, not a member).
-    if cnId == zast.names.wkPrivate then {
+    if cnId == zast.wellKnown.slot.wkPrivate then {
         # Gate B: a `.private` view may only be produced from a base that
         # already holds private access -- the type's own `this`/same-type
         # receiver (the class minting it), or an existing `.private` handle (a
@@ -31744,7 +31778,7 @@ checkMarkerMember: function {
     # `public` is no member of anything: a unit's `public:` block IS its
     # surface (`host.MAX`), and a value outside its type reads only that
     # surface already. Inside the unit the block is reached by its own name.
-    if cnId == zast.names.wkPublic then {
+    if cnId == zast.wellKnown.slot.wkPublic then {
         pbWhat: "type"
         if (st.reg.typetypeOf typeId: bt) == ztypes.ztypetype.unitType then pbWhat = "unit"
         pbNm: specWrittenName :st :ast tid: bt
@@ -31815,7 +31849,7 @@ checkMarkerMember: function {
             } case none then null
         }
     }
-    if cnId == zast.names.wkBorrow then {
+    if cnId == zast.wellKnown.slot.wkBorrow then {
         # a `.borrow` VALUE bound by a binding or a `with` is a second name for
         # what it names: the alias pins the source SHARED and may write through
         # itself. An ARGUMENT position locks through the call's own leg
@@ -32566,7 +32600,8 @@ checkDottedOn: function {
     # one `create: function {capacity: 0.u64}`, which no type argument
     # substitutes, and an instance need not carry a copy of it -- under --eager
     # none does, and `(ListVal t: i64).create` was "no member"
-    if mo.none when cnId == zast.names.wkCreate when (monoOfNativeTemplate :st tid: bt) then {
+    if mo.none when cnId == zast.wellKnown.slot.wkCreate when (monoOfNativeTemplate :st tid: bt
+    ) then {
         ctpl: st.reg.genericOriginOf tid: bt
         # resolved by its declaration: the eager tier resolves no native create,
         # and forceMemberOf defers to it
@@ -32658,7 +32693,7 @@ declaresOwnInequality: function {
     bt: ztypes.tid
     cnId: zast.nameid
 } out bool is {
-    if cnId != zast.names.wkOpNe then return false
+    if cnId != zast.wellKnown.slot.wkOpNe then return false
     forceMemberOf :st :ast parentTypeId: bt nameId: cnId
     mo: st.typing.declChildOfId parentTypeId: bt nameId: cnId
     return (derivedInequalityMember :st :ast :bt :cnId :mo).some
@@ -32967,8 +33002,10 @@ eachSubjectNidOf: function {isEach: bool nid: zast.nodeid} out zast.nodeid is {
 # declaresIterate -- values of type `t` have a zero-argument `iterate`, the walk
 # `for each` implies (implicitIterate).
 declaresIterate: function {st: zenv.ZSymbolTable ast: Ast t: ztypes.tid} out bool is {
-    forceMemberOf :st :ast parentTypeId: t nameId: zast.names.wkIterate
-    mo: (st.typing.declChildOfId parentTypeId: t nameId: zast.names.wkIterate).or d: ztypes.tid.zero
+    forceMemberOf :st :ast parentTypeId: t nameId: zast.wellKnown.slot.wkIterate
+    mo: ((st.typing.declChildOfId parentTypeId: t nameId: zast.wellKnown.slot.wkIterate).or
+        d: ztypes.tid.zero
+    )
     if mo.isZero then return false
     mt: mo
     if (st.reg.typetypeOf typeId: mt) != ztypes.ztypetype.functionType then return false
@@ -32983,16 +33020,16 @@ objectCallOf: function {st: zenv.ZSymbolTable ast: Ast t: ztypes.tid} out ztypes
     tt: st.reg.typetypeOf typeId: t
     if tt == ztypes.ztypetype.functionType then return ztypes.tid
     if tt == ztypes.ztypetype.genericParam then return ztypes.tid
-    forceMemberOf :st :ast parentTypeId: t nameId: zast.names.wkCall
-    co: st.typing.declChildOfId parentTypeId: t nameId: zast.names.wkCall
+    forceMemberOf :st :ast parentTypeId: t nameId: zast.wellKnown.slot.wkCall
+    co: st.typing.declChildOfId parentTypeId: t nameId: zast.wellKnown.slot.wkCall
     match (
         co
     ) case some then {
         ct: co
         if (st.reg.typetypeOf typeId: ct) != ztypes.ztypetype.functionType then return ztypes.tid
-        fnField: st.typing.declIsFnptrFieldId parentTypeId: t nameId: zast.names.wkCall
+        fnField: st.typing.declIsFnptrFieldId parentTypeId: t nameId: zast.wellKnown.slot.wkCall
         if fnField then return ztypes.tid
-        markMemberUsed :st ownerTid: t nameId: zast.names.wkCall
+        markMemberUsed :st ownerTid: t nameId: zast.wellKnown.slot.wkCall
         return ct
     } case none then {
         return ztypes.tid
@@ -33062,7 +33099,7 @@ rewriteReadAsObjectCall: function {ast: Ast node: atomref} is {
             nodeid: cid
             lineno: node.lineno
             colno: node.colno
-            name: zast.names.wkCall
+            name: zast.wellKnown.slot.wkCall
         )
     )
     (zast.tableSet
@@ -33104,7 +33141,7 @@ rewriteFieldReadAsObjectCall: function {
             nodeid: cid
             lineno: dp.lineno
             colno: dp.colno
-            name: zast.names.wkCall
+            name: zast.wellKnown.slot.wkCall
         )
     )
     (zast.tableSet
@@ -33854,7 +33891,9 @@ checkWideConstants: function {ast: Ast.view st: zenv.ZSymbolTable} is {
 # checkClosedRangeSpans asks of once the walk has folded them.
 noteClosedRange: function {st: zenv.ZSymbolTable ast: Ast.view call: callref} is {
     cn: dottedChildNameId :ast n: (ast.nodes.get i: call.callable)
-    if (cn == zast.names.wkUpto).not when (cn == zast.names.wkDownto).not then return
+    if (cn == zast.wellKnown.slot.wkUpto).not when (
+        cn == zast.wellKnown.slot.wkDownto
+    ).not then return
     st.typing.closedRangeCalls.append from: call.nid
     st.typing.closedRangeMonos.append from: st.typing.curMonoStamp
 }
@@ -33906,7 +33945,9 @@ closedRangeEnds: function {ast: Ast.view nid: zast.nodeid} out rangeends is {
             cl
         ) case dottedpath then {
             r.from = cl.parent
-            r.down = (atomNameId :ast n: (ast.nodes.get i: cl.child)) == zast.names.wkDownto
+            r.down = (
+                (atomNameId :ast n: (ast.nodes.get i: cl.child)) == zast.wellKnown.slot.wkDownto
+            )
         } else null
         a: zast.kidAt kids: ast.kids span: n.arguments i: 0
         r.to = a
@@ -33990,10 +34031,13 @@ checkAtomid: function {
         # `yield` wears the same unregistered placeholder, and is the one of the
         # three that is NOT valueless: its argument is the element the consumer
         # receives, so a bare one is a call missing it.
-        if node.name == zast.names.wkYield when (yieldIsInScope :st) then {
+        if node.name == zast.wellKnown.slot.wkYield when (yieldIsInScope :st) then {
             reportMissingYieldValue :st :node
         }
-        isBrk: (node.name == zast.names.wkBreak) or (node.name == zast.names.wkContinue)
+        isBrk: (
+            (node.name == zast.wellKnown.slot.wkBreak) or
+            (node.name == zast.wellKnown.slot.wkContinue)
+        )
         if isBrk then {
             result = ((walkLookupTyperef
                 :st
@@ -34046,7 +34090,7 @@ checkUnboundAtom: function {
     ast: Ast
     node: atomref
 } out ztypes.tid is {
-    if node.name == zast.names.wkReturn then reportMissingReturnValue :st :node
+    if node.name == zast.wellKnown.slot.wkReturn then reportMissingReturnValue :st :node
     if (st.isTakenName nameId: node.name) then {
         reportTakenNameUse :st :ast :node
         return ztypes.tid
@@ -36880,7 +36924,7 @@ blockHasBreak: function {ast: Ast.view n: astnode.view} out bool is {
     } case statementline then {
         return (blockHasBreak :ast n: (ast.nodes.get i: n.statementline))
     } case atomid then {
-        return n.name == zast.names.wkBreak
+        return n.name == zast.wellKnown.slot.wkBreak
     } case ifexpr then {
         clx889: u64
         for clx889 < n.clauses.count loop {
@@ -36923,9 +36967,9 @@ armLeaves: function {ast: Ast.view n: astnode.view inLoop: bool} out bool is {
     } case statementline then {
         return (armLeaves :ast n: (ast.nodes.get i: n.statementline) :inLoop)
     } case atomid then {
-        if n.name == zast.names.wkReturn then return true
+        if n.name == zast.wellKnown.slot.wkReturn then return true
         if inLoop then return false
-        return (n.name == zast.names.wkBreak) or (n.name == zast.names.wkContinue)
+        return (n.name == zast.wellKnown.slot.wkBreak) or (n.name == zast.wellKnown.slot.wkContinue)
     } case ifexpr then {
         return (clauseArmsLeave :ast clauses: n.clauses elseId: n.elseclause :inLoop)
     } case caseexpr then {
@@ -37110,7 +37154,7 @@ checkDo: function {
     st.openBreakScope
     dbk: st.reg.ctlPlaceholder
     (st.define
-        nameId: zast.names.wkBreak
+        nameId: zast.wellKnown.slot.wkBreak
         ztypeId: dbk
     )
     brkMark: st.loopBreakTakes.length
@@ -37275,9 +37319,9 @@ probeForCallIteration: function {
         :st
         :ast
         parentTypeId: vt
-        nameId: zast.names.wkCall
+        nameId: zast.wellKnown.slot.wkCall
     )
-    markMemberUsed :st ownerTid: vt nameId: zast.names.wkCall
+    markMemberUsed :st ownerTid: vt nameId: zast.wellKnown.slot.wkCall
 }
 
 
@@ -37330,10 +37374,10 @@ forIteratorElementOf: function {
         :st
         :ast
         parentTypeId: vt
-        nameId: zast.names.wkCall
+        nameId: zast.wellKnown.slot.wkCall
     )
-    markMemberUsed :st ownerTid: vt nameId: zast.names.wkCall
-    c1: st.typing.declChildOfId parentTypeId: vt nameId: zast.names.wkCall
+    markMemberUsed :st ownerTid: vt nameId: zast.wellKnown.slot.wkCall
+    c1: st.typing.declChildOfId parentTypeId: vt nameId: zast.wellKnown.slot.wkCall
     match (
         c1
     ) case some then {
@@ -37371,9 +37415,11 @@ partialForElement: function {
     fe: forelem elem: ztypes.tid.zero wrapper: vt isView: false
     og: st.reg.genericOriginOf tid: vt
     if og.isZero then return fe
-    forceMemberOf :st :ast parentTypeId: og nameId: zast.names.wkCall
-    markMemberUsed :st ownerTid: vt nameId: zast.names.wkCall
-    c1: (st.typing.declChildOfId parentTypeId: og nameId: zast.names.wkCall).or d: ztypes.tid.zero
+    forceMemberOf :st :ast parentTypeId: og nameId: zast.wellKnown.slot.wkCall
+    markMemberUsed :st ownerTid: vt nameId: zast.wellKnown.slot.wkCall
+    c1: ((st.typing.declChildOfId parentTypeId: og nameId: zast.wellKnown.slot.wkCall).or
+        d: ztypes.tid.zero
+    )
     if c1.isZero then return fe
     rv: (methodReturnOf :st mid: c1).or d: ztypes.tid
     if rv.isZero or ((st.reg.genericArgCount specId: rv) == 0) then return fe
@@ -37607,17 +37653,17 @@ forFactoryTid: function {
                             :st
                             :ast
                             parentTypeId: fro
-                            nameId: zast.names.wkCall
+                            nameId: zast.wellKnown.slot.wkCall
                         )
                         fco: (st.typing.declChildOfId
                             parentTypeId: fro
-                            nameId: zast.names.wkCall
+                            nameId: zast.wellKnown.slot.wkCall
                         )
                         match (
                             fco
                         ) case some then {
                             facId = ffo
-                            markMemberUsed :st ownerTid: fro nameId: zast.names.wkCall
+                            markMemberUsed :st ownerTid: fro nameId: zast.wellKnown.slot.wkCall
                         } case none then null
                     }
                 } case none then null
@@ -37688,13 +37734,13 @@ implicitIterate: function {
     none: iterwalk nid: zast.nodeid tid: vt
     # the member is read where checkDottedOn will read it: a typedef's is its
     # owner's, and a partial's is its template's
-    ot: typedefMemberOwner :st :ast bt: vt cnId: zast.names.wkIterate
+    ot: typedefMemberOwner :st :ast bt: vt cnId: zast.wellKnown.slot.wkIterate
     if (st.reg.isPartialOf tid: ot) then {
         og: st.reg.genericOriginOf tid: ot
         if og.isZero.not then ot = og
     }
-    forceMemberOf :st :ast parentTypeId: ot nameId: zast.names.wkIterate
-    mo: ((st.typing.declChildOfId parentTypeId: ot nameId: zast.names.wkIterate).or
+    forceMemberOf :st :ast parentTypeId: ot nameId: zast.wellKnown.slot.wkIterate
+    mo: ((st.typing.declChildOfId parentTypeId: ot nameId: zast.wellKnown.slot.wkIterate).or
         d: ztypes.tid.zero
     )
     if mo.isZero then return none
@@ -37724,7 +37770,7 @@ implicitIterateNode: function {st: zenv.ZSymbolTable ast: Ast cond: argref} out 
             nodeid: aid
             lineno: cond.lineno
             colno: cond.colno
-            name: zast.names.wkIterate
+            name: zast.wellKnown.slot.wkIterate
         )
     )
     did: zast.tableReserve :ast from: cond.operation
@@ -38049,12 +38095,12 @@ checkFor: function {
     endLoopWriteNarrowing :st :ast :fornode
     bk: st.reg.ctlPlaceholder
     (st.define
-        nameId: zast.names.wkBreak
+        nameId: zast.wellKnown.slot.wkBreak
         ztypeId: bk
     )
     ct: st.reg.ctlPlaceholder
     (st.define
-        nameId: zast.names.wkContinue
+        nameId: zast.wellKnown.slot.wkContinue
         ztypeId: ct
     )
     # inside a generator body, a loop whose body suspends keeps what its
@@ -39357,7 +39403,7 @@ memberIsSelfTyped: function {
         if prow.keep then {
             pnid: prow.name
             isRecv: (
-                (pnid == zast.names.wkThis) or
+                (pnid == zast.wellKnown.slot.wkThis) or
                 (st.reg.thisParamNameIs
                     tid: memberTid
                     nameId: pnid
@@ -39468,7 +39514,7 @@ ctorSelfRecursionAt: function {
     if (ctorTid == tt).not then return false
     ft: st.typing.currentFnTid
     if ft.isZero then return false
-    cro: st.typing.declChildOfId parentTypeId: tt nameId: zast.names.wkCreate
+    cro: st.typing.declChildOfId parentTypeId: tt nameId: zast.wellKnown.slot.wkCreate
     crid: ztypes.tid
     match (
         cro
@@ -39520,7 +39566,7 @@ positionalParamNameId: function {
             pnid: prow.name
             isRecv: false
             if skipRecv then {
-                if pnid == zast.names.wkThis then isRecv = true
+                if pnid == zast.wellKnown.slot.wkThis then isRecv = true
                 if (st.reg.thisParamNameIs tid: funcId nameId: pnid) then isRecv = true
             }
             if isRecv.not then {
@@ -39985,7 +40031,7 @@ pathLeafIsTake: function {ast: Ast.view n: astnode.view} out bool is {
     match (
         n
     ) case dottedpath then {
-        return (atomNameId :ast n: (ast.nodes.get i: n.child)) == zast.names.wkTake
+        return (atomNameId :ast n: (ast.nodes.get i: n.child)) == zast.wellKnown.slot.wkTake
     } else {
         return false
     }
@@ -40833,7 +40879,7 @@ forElementIteratorName: function {ast: Ast.view nid: zast.nodeid} out zast.namei
         return n.name
     } case dottedpath then {
         leaf: atomNameId :ast n: (ast.nodes.get i: n.child)
-        if leaf != zast.names.wkCall then return zast.nameid
+        if leaf != zast.wellKnown.slot.wkCall then return zast.nameid
         return (atomNameId :ast n: (ast.nodes.get i: n.parent))
     } else {
         return zast.nameid
@@ -41644,9 +41690,9 @@ ctorParamOwnerTid: function {
         :st
         :ast
         parentTypeId: funcId
-        nameId: zast.names.wkCreate
+        nameId: zast.wellKnown.slot.wkCreate
     )
-    crId: ((st.typing.declChildOfId parentTypeId: funcId nameId: zast.names.wkCreate).or
+    crId: ((st.typing.declChildOfId parentTypeId: funcId nameId: zast.wellKnown.slot.wkCreate).or
         d: ztypes.tid.zero
     )
     if crId.isZero then return funcId
@@ -41780,7 +41826,7 @@ walkDefaultedFnField: function {
 # isReceiverParamName -- the parameter named `pnameId` is the receiver: `this`,
 # or the name the method gave its receiver parameter (`thisPnId`, 0 for none).
 isReceiverParamName: function {pnameId: zast.nameid thisPnId: zast.nameid} out bool is {
-    if pnameId == zast.names.wkThis then return true
+    if pnameId == zast.wellKnown.slot.wkThis then return true
     return thisPnId.isZero.not and (pnameId == thisPnId)
 }
 
@@ -42571,7 +42617,9 @@ checkBareGenericReturns: function {ast: Ast st: zenv.ZSymbolTable} is {
         n: ast.nodes.get i: rn
         if n.call then continue
         root: rootNameIdOf :ast :n
-        if (root == zast.names.wkThis) or (zast.nameTextEq :ast ref: root s: "type") then continue
+        if (
+            (root == zast.wellKnown.slot.wkThis) or (zast.nameTextEq :ast ref: root s: "type")
+        ) then continue
         rsc: (st.typing.pendingTyperefScope.get key: rn).or d: ztypes.declid
         rtd: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: rn
         rtb: (bareGenericType
@@ -42806,7 +42854,7 @@ takenBareName: function {ast: Ast.view nid: zast.nodeid} out zast.nameid is {
     vn: ast.nodes.get i: nid
     if vn.dottedpath.not then return zast.nameid
     cid: atomNameId :ast n: (ast.nodes.get i: vn.child)
-    if cid != zast.names.wkTake then return zast.nameid
+    if cid != zast.wellKnown.slot.wkTake then return zast.nameid
     return (bareAtomNameId n: (ast.nodes.get i: vn.parent))
 }
 
@@ -43305,7 +43353,7 @@ argIsPrivateHandle: function {
         n
     ) case dottedpath then {
         cnId: atomNameId :ast n: (ast.nodes.get i: n.child)
-        if cnId == zast.names.wkPrivate then return true
+        if cnId == zast.wellKnown.slot.wkPrivate then return true
         pbNode: ast.nodes.get i: n.parent
         if (isStripMarkerId nameId: cnId) then return (argIsPrivateHandle :st :ast n: pbNode)
         pbType: walkTypeOf :st nid: (nodeId n: pbNode)
@@ -43583,7 +43631,7 @@ checkTypedCallArg: function {
     # way goes by reference like a dotted receiver, so it locks like one
     isRecvArg: false
     if isCtor.not when funcId.isZero.not when pnId.isZero.not then {
-        if pnId == zast.names.wkThis then isRecvArg = true
+        if pnId == zast.wellKnown.slot.wkThis then isRecvArg = true
         if (st.reg.thisParamNameIs tid: funcId nameId: pnId) then isRecvArg = true
     }
     # the argument's disposition, decided once here: the emitter reads it to
@@ -43674,9 +43722,10 @@ ctorEffectiveTid: function {
             :st
             :ast
             parentTypeId: funcId
-            nameId: zast.names.wkCreate
+            nameId: zast.wellKnown.slot.wkCreate
         )
-        crEff: ((st.typing.declChildOfId parentTypeId: funcId nameId: zast.names.wkCreate).or
+        crEff: ((st.typing.declChildOfId parentTypeId: funcId nameId: zast.wellKnown.slot.wkCreate
+        ).or
             d: ztypes.tid.zero
         )
         if crEff.isZero.not when (
@@ -43712,7 +43761,7 @@ walkOneCallArg: function {
     # object the reader can plainly see being handed over.
     if isCtor.not when funcId.isZero.not when arg.name.isZero.not then {
         rNm9: st.reg.thisParamNameIdOf tid: funcId
-        if rNm9.isZero then rNm9 = zast.names.wkThis
+        if rNm9.isZero then rNm9 = zast.wellKnown.slot.wkThis
         if arg.name == rNm9 then {
             by9: receiverSuppliedBy :ast :call :recvImplicit
             if by9.length > 0 then {
@@ -43870,7 +43919,7 @@ promoteStringLiteral: function {
             nodeid: sid
             lineno: lit.lineno
             colno: lit.colno
-            name: zast.names.wkString
+            name: zast.wellKnown.slot.wkString
         )
     )
     (zast.tableSet
@@ -44094,7 +44143,7 @@ ownershipCallee: function {
 } out ztypes.tid is {
     if isCtor when (effId == funcId).not when (st.typing.declMemberIsSynth
         parentTypeId: funcId
-        nameId: zast.names.wkCreate
+        nameId: zast.wellKnown.slot.wkCreate
     ).not then return effId
     return funcId
 }
@@ -44456,7 +44505,7 @@ checkBoxConstruction: function {
         crId: st.reg.newType name: "create" ownerTid: mid typetype: ztypes.ztypetype.functionType
         (st.typing.declSynthMemberTyped
             parentTypeId: mid
-            nameId: zast.names.wkCreate
+            nameId: zast.wellKnown.slot.wkCreate
             kind: ztyping.declkind.methodDecl
             childTypeId: crId
         )
@@ -44880,7 +44929,7 @@ monoMemberOf: function {
 # compiler's. A user binding resolves to a real type and is an ordinary call.
 yieldIsInScope: function {st: zenv.ZSymbolTable.view} out bool is {
     if st.reg.ctlPlaceholderTid.isZero then return false
-    yo: st.lookup nameId: zast.names.wkYield
+    yo: st.lookup nameId: zast.wellKnown.slot.wkYield
     match (
         yo
     ) case some then {
@@ -47041,7 +47090,8 @@ refuseValueCallArgs: function {
     if (call.nargs == 0) or vt.isZero then return
     vtt: st.reg.typetypeOf typeId: vt
     if (vtt == ztypes.ztypetype.functionType) or (vtt == ztypes.ztypetype.genericParam) then return
-    if (st.typing.declChildOfId parentTypeId: vt nameId: zast.names.wkCall).some then return
+    if (st.typing.declChildOfId parentTypeId: vt nameId: zast.wellKnown.slot.wkCall
+    ).some then return
     arg0: argRefAt :ast nid: (zast.callArgAt :ast nid: call.nid i: 0)
     if arg0.nid.isZero then return
     tn: specWrittenName :st :ast tid: (materialiseLiteral :ast :st :unitDecl t: vt)
@@ -47105,7 +47155,7 @@ checkNonUserCall: function {
             # says nothing about why. Name the rule instead.
             ubn0: String
             ubh0: String
-            if cnId == zast.names.wkYield then {
+            if cnId == zast.wellKnown.slot.wkYield then {
                 ubn0 = "`yield` is defined only inside a generator body"
                 ubh0 = "`yield` is in scope inside a generator's `call` and nowhere else -- move the body into one, or remove the yield"
             }
@@ -47233,8 +47283,8 @@ checkTypeConstruction: function {
     walkFn: funcId
     walkAsCtor: true
     {
-        forceMemberOf :st :ast parentTypeId: funcId nameId: zast.names.wkCreate
-        wco: st.typing.declChildOfId parentTypeId: funcId nameId: zast.names.wkCreate
+        forceMemberOf :st :ast parentTypeId: funcId nameId: zast.wellKnown.slot.wkCreate
+        wco: st.typing.declChildOfId parentTypeId: funcId nameId: zast.wellKnown.slot.wkCreate
         match (
             wco
         ) case some then {
@@ -47242,7 +47292,7 @@ checkTypeConstruction: function {
             isFn: (st.reg.typetypeOf typeId: wct) == ztypes.ztypetype.functionType
             if isFn when (st.typing.declMemberIsSynth
                 parentTypeId: funcId
-                nameId: zast.names.wkCreate
+                nameId: zast.wellKnown.slot.wkCreate
             ).not then {
                 walkFn = wct
                 walkAsCtor = false
@@ -47304,7 +47354,7 @@ checkTypeConstruction: function {
 pinConstructionSources: function {
     st: zenv.ZSymbolTable tid: ztypes.tid pins: (List ztyping.PinPath).view
 } is {
-    cxO: st.typing.declChildOfId parentTypeId: tid nameId: zast.names.wkCreate
+    cxO: st.typing.declChildOfId parentTypeId: tid nameId: zast.wellKnown.slot.wkCreate
     match (
         cxO
     ) case some then {
@@ -47538,9 +47588,9 @@ checkContainerCreateArgs: function {
     tpl: st.reg.genericOriginOf tid: wcv
     # resolved by its declaration, in either tier: the eager one resolves no
     # native create, and forceMemberOf defers to it
-    crd: st.typing.declMemberIdOf parentTypeId: tpl nameId: zast.names.wkCreate
+    crd: st.typing.declMemberIdOf parentTypeId: tpl nameId: zast.wellKnown.slot.wkCreate
     if crd.isZero.not then forceMemberDecl :st :ast memberDeclId: crd
-    cr: ((st.typing.declChildOfId parentTypeId: tpl nameId: zast.names.wkCreate).or
+    cr: ((st.typing.declChildOfId parentTypeId: tpl nameId: zast.wellKnown.slot.wkCreate).or
         d: ztypes.tid.zero
     )
     crt: cr
@@ -47775,7 +47825,7 @@ checkExplicitConstruction: function {
     baseId: zast.nodeid
     cq: ast.nodes.get i: call.callable
     if cq.dottedpath when (
-        (atomNameId :ast n: (ast.nodes.get i: cq.child)) == zast.names.wkCreate
+        (atomNameId :ast n: (ast.nodes.get i: cq.child)) == zast.wellKnown.slot.wkCreate
     ) then {
         baseId = cq.parent
     }
@@ -48174,10 +48224,10 @@ checkCall: function {
         :ast
         nameId: (atomNameId :ast n: (ast.nodes.get i: call.callable))
     )
-    if cnId == zast.names.wkReturn then {
+    if cnId == zast.wellKnown.slot.wkReturn then {
         return (checkControlBuiltinCall :st :unitDecl :ast :call)
     }
-    if cnId == zast.names.wkYield when (yieldIsInScope :st) then {
+    if cnId == zast.wellKnown.slot.wkYield when (yieldIsInScope :st) then {
         return (checkYieldCall :st :unitDecl :ast :call)
     }
     # a spec has no body to call; a local holding a reference of its type does
@@ -48981,7 +49031,7 @@ genericCallHolders: function {
                         # maps to the first USER param (T holders included). The
                         # receiver is the shorthand `this` or the type's recorded
                         # long-form receiver name.
-                        isRecv: gcNid == zast.names.wkThis
+                        isRecv: gcNid == zast.wellKnown.slot.wkThis
                         if isRecv.not then {
                             isRecv = (st.reg.thisParamNameIs
                                 tid: funcId
@@ -51495,9 +51545,9 @@ checkValueArmAt: function {
 # leaves the function, `break` the loop, `continue` the iteration;
 # `divkind.none` for any other name.
 ctlDivKind: function {bn: zast.nameid} out u8 is {
-    if bn == zast.names.wkReturn then return zenv.divkind.exit
-    if bn == zast.names.wkBreak then return zenv.divkind.brk
-    if bn == zast.names.wkContinue then return zenv.divkind.cont
+    if bn == zast.wellKnown.slot.wkReturn then return zenv.divkind.exit
+    if bn == zast.wellKnown.slot.wkBreak then return zenv.divkind.brk
+    if bn == zast.wellKnown.slot.wkContinue then return zenv.divkind.cont
     return zenv.divkind.none
 }
 
@@ -52314,7 +52364,7 @@ bodiedMemberDeferred: function {
     # field's body is the value construction stores in it; no member reference
     # spells either
     mn: (st.typing.decls.get i: memberDecl).name
-    if mn == zast.names.wkCreate then return false
+    if mn == zast.wellKnown.slot.wkCreate then return false
     if (st.typing.declIsFnptrFieldId parentTypeId: ownerTid nameId: mn) then return false
     return (st.typing.usedMemberDecl.has item: memberDecl).not
 }
@@ -53291,7 +53341,7 @@ checkFunctionBodyIn: function {
             if st.typing.curMonoStamp.isZero then st.typing.currentGenTid = thisTid
             ykp: st.reg.ctlPlaceholder
             (st.define
-                nameId: zast.names.wkYield
+                nameId: zast.wellKnown.slot.wkYield
                 ztypeId: ykp
             )
             # what `yield` evaluates to: the per-call input, which is the
@@ -53781,8 +53831,11 @@ markGeneratedEqParts: function {st: zenv.ZSymbolTable ast: Ast.view} is {
     last: st.reg.nextTid
     for t < last loop {
         isVal: (st.reg.isValtypeOf tid: t) and (st.reg.isGenericOf tid: t).not
-        if isVal when (st.typing.declMemberIsSynth parentTypeId: t nameId: zast.names.wkOpEq) then {
-            markValOpUsed :ast :st tid: t nameId: zast.names.wkOpEq depth: 0
+        if isVal when (st.typing.declMemberIsSynth
+            parentTypeId: t
+            nameId: zast.wellKnown.slot.wkOpEq
+        ) then {
+            markValOpUsed :ast :st tid: t nameId: zast.wellKnown.slot.wkOpEq depth: 0
         }
         t = t.next
     }
@@ -56939,16 +56992,16 @@ arithop: variant {
 
 # arithOpOf -- the arithmetic operator the name `opnId` spells.
 arithOpOf: function {opnId: zast.nameid} out arithop is {
-    if opnId == zast.names.wkOpAdd then return arithop.add
-    if opnId == zast.names.wkOpSub then return arithop.sub
-    if opnId == zast.names.wkOpMul then return arithop.mul
-    if opnId == zast.names.wkOpDiv then return arithop.div
-    if opnId == zast.names.wkOpRem then return arithop.rem
-    if opnId == zast.names.wkOpAnd then return arithop.band
-    if opnId == zast.names.wkOpOr then return arithop.bor
-    if opnId == zast.names.wkOpXor then return arithop.bxor
-    if opnId == zast.names.wkOpShl then return arithop.shl
-    if opnId == zast.names.wkOpShr then return arithop.shr
+    if opnId == zast.wellKnown.slot.wkOpAdd then return arithop.add
+    if opnId == zast.wellKnown.slot.wkOpSub then return arithop.sub
+    if opnId == zast.wellKnown.slot.wkOpMul then return arithop.mul
+    if opnId == zast.wellKnown.slot.wkOpDiv then return arithop.div
+    if opnId == zast.wellKnown.slot.wkOpRem then return arithop.rem
+    if opnId == zast.wellKnown.slot.wkOpAnd then return arithop.band
+    if opnId == zast.wellKnown.slot.wkOpOr then return arithop.bor
+    if opnId == zast.wellKnown.slot.wkOpXor then return arithop.bxor
+    if opnId == zast.wellKnown.slot.wkOpShl then return arithop.shl
+    if opnId == zast.wellKnown.slot.wkOpShr then return arithop.shr
     return arithop.other
 }
 
@@ -57242,12 +57295,12 @@ constBoolLogic: function {
     ra: boolArmTruth :st :scope :ast v: rv
     if la > 1 then return ztypes.noConst
     if ra > 1 then return ztypes.noConst
-    if opnId == zast.names.wkAnd then {
+    if opnId == zast.wellKnown.slot.wkAnd then {
         both: false
         if la == 1 when ra == 1 then both = true
         return (boolConst :st :scope :ast v: both)
     }
-    if opnId == zast.names.wkOr then {
+    if opnId == zast.wellKnown.slot.wkOr then {
         either: (la == 1) or (ra == 1)
         return (boolConst :st :scope :ast v: either)
     }
@@ -57264,7 +57317,7 @@ constArmChild: function {
     v: ztypes.cval
     ncId: zast.nameid
 } out ztypes.cval is {
-    if ncId == zast.names.wkNot then {
+    if ncId == zast.wellKnown.slot.wkNot then {
         t: boolArmTruth :st :scope :ast :v
         if t < 2 then return (boolConst :st :scope :ast v: t == 0)
     }
@@ -57556,7 +57609,7 @@ typeMemberHoldsConstant: function {
         i = i + 1
         if itemId == defNode then {
             item: argRefAt :ast nid: itemId
-            if item.name == zast.names.wkTag then return false
+            if item.name == zast.wellKnown.slot.wkTag then return false
             op: ast.nodes.get i: item.operation
             if op.functiondef then return false
             if (isBareGenericParam :ast :op) or (isLabelValue :op) then return false
@@ -57875,7 +57928,7 @@ constDataMember: function {
     dataTid: ztypes.tid
     nameId: zast.nameid
 } out ztypes.cval is {
-    lk: st.typing.memberConstKey parentTypeId: dataTid nameId: zast.names.wkLength
+    lk: st.typing.memberConstKey parentTypeId: dataTid nameId: zast.wellKnown.slot.wkLength
     if ((st.typing.constEvalState.get key: lk).or d: 0) == 1 then {
         bn: st.reg.nameOf tid: dataTid
         (constFailRecord
@@ -57890,7 +57943,8 @@ constDataMember: function {
         return ztypes.noConst
     }
     eo: (st.typing.declChildOfId parentTypeId: dataTid :nameId).or d: ztypes.tid.zero
-    if nameId != zast.names.wkLength when (dataElemFolds :ast :st :scope elemTid: eo).not then {
+    if nameId != zast.wellKnown.slot.wkLength when (dataElemFolds :ast :st :scope elemTid: eo
+    ).not then {
         return ztypes.noConst
     }
     return (st.typing.memberConstOf parentTypeId: dataTid :nameId)
@@ -58505,7 +58559,7 @@ constStringDotted: function {
     lineno: u32
     colno: u32
 } out ztypes.cval is {
-    if nameId == zast.names.wkLength then {
+    if nameId == zast.wellKnown.slot.wkLength then {
         s: constStringAt :st id: v.strId
         return (constStringLength :st :scope :ast s: s.stringView)
     }
@@ -59072,7 +59126,7 @@ constOfDataIndex: function {
     if (st.reg.typetypeOf typeId: dataTid) != ztypes.ztypetype.dataType then return ztypes.noConst
     kv: evalConstNode :st :scope :ast :unitDecl nid: opId
     if kv.kind.ivalKind.not then return ztypes.noConst
-    count: (st.typing.memberConstOf parentTypeId: dataTid nameId: zast.names.wkLength).ival
+    count: (st.typing.memberConstOf parentTypeId: dataTid nameId: zast.wellKnown.slot.wkLength).ival
     if (kv.bigId != 0) or (kv.ival < 0) or (kv.ival >= count) then {
         rm: "constant index \{kv.ival} is outside the data block (length \{count})"
         if kv.bigId != 0 then rm = "constant index is outside the data block (length \{count})"
@@ -59203,7 +59257,10 @@ constOfNamedBase: function {
                 colno: atCol
             )
         }
-        if pcv.kind.ivalKind when ncId == zast.names.wkNot then return (constIntNot :st v: pcv)
+        if pcv.kind.ivalKind when ncId == zast.wellKnown.slot.wkNot then return (constIntNot
+            :st
+            v: pcv
+        )
         if pcv.kind.ivalKind or pcv.kind.fvalKind then {
             return (constOfConversion
                 :st
@@ -59378,7 +59435,7 @@ constDataSlotRead: function {
     {
         gc: ast.nodes.get i: gcId
         if gc.atomid.not then return ztypes.noConst
-        if gc.name != zast.names.wkSlot then return ztypes.noConst
+        if gc.name != zast.wellKnown.slot.wkSlot then return ztypes.noConst
     }
     unitPath: zast.nodeid
     {
@@ -59397,7 +59454,7 @@ constDataSlotRead: function {
     }
     dataTid: typeNamedFrom :st :scope :ast :lookupUnit typeNameId: blkId
     if (st.reg.typetypeOf typeId: dataTid) != ztypes.ztypetype.dataType then return ztypes.noConst
-    slotTid: ((st.typing.declChildOfId parentTypeId: dataTid nameId: zast.names.wkSlot).or
+    slotTid: ((st.typing.declChildOfId parentTypeId: dataTid nameId: zast.wellKnown.slot.wkSlot).or
         d: ztypes.tid.zero
     )
     if (st.typing.dataSlotTypes.has item: slotTid).not then return ztypes.noConst
@@ -59572,7 +59629,7 @@ evalConstDotted: function {
             colno: co
         )
     }
-    if pv.kind.ivalKind when ncId == zast.names.wkNot then return (constIntNot :st v: pv)
+    if pv.kind.ivalKind when ncId == zast.wellKnown.slot.wkNot then return (constIntNot :st v: pv)
     if pv.kind.ivalKind or pv.kind.fvalKind then {
         return (constOfConversion
             :st
@@ -60023,7 +60080,7 @@ dataConstantIsConstruction: function {
         )
         return false
     }
-    if mid == zast.names.wkLength then return false
+    if mid == zast.wellKnown.slot.wkLength then return false
     return (isNumericTid :ast :st :scope tid: member).not
 }
 
@@ -60426,7 +60483,7 @@ resolveDottedConstantRead: function {
             if gpc.atomid then {
                 qUnitPath = sfB.parent
                 sfLit = zast.nameTextCopy :ast ref: gpc.name
-                viaSlot = gpc.name == zast.names.wkSlot
+                viaSlot = gpc.name == zast.wellKnown.slot.wkSlot
             }
         }
         sfC: ast.nodes.get i: dr.child
@@ -61593,11 +61650,11 @@ validateGeneratorDef: function {
             asx1679 = asx1679 + 1
             am: ast.nodes.get i: amId
             if am.namedoperation then {
-                if am.name == zast.names.wkCall then {
+                if am.name == zast.wellKnown.slot.wkCall then {
                     nCall = nCall + 1
                     callId = am.operation
                 }
-                if am.name == zast.names.wkCreate then {
+                if am.name == zast.wellKnown.slot.wkCreate then {
                     mc: "'\{defName}' declares its own `create` -- a generator's construction is generated from its `is` fields"
                     hc: "delete the `create`; the `is` fields already name its parameters, in order".string
                     nc: String
@@ -61661,10 +61718,10 @@ paramNamesReceiver: function {ast: Ast.view pId: zast.nodeid} out bool is {
     match (
         pm
     ) case namedoperation then {
-        if pm.name == zast.names.wkThis then return true
+        if pm.name == zast.wellKnown.slot.wkThis then return true
         return (paramIsThisReceiverId :ast opId: pm.operation)
     } case labelvalue then {
-        return pm.name == zast.names.wkThis
+        return pm.name == zast.wellKnown.slot.wkThis
     } else {
         return false
     }
