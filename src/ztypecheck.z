@@ -9652,6 +9652,50 @@ dataOwnMember: function {
     return (st.reg.typetypeOf typeId: mt) == ztypes.ztypetype.functionType
 }
 
+# dataoutparts -- what a data block's `out` says when it names the block's VALUE
+# type: the element type (StringView for a stringdata) and the index type (0 when
+# the value type leaves it at its default).
+dataoutparts: record {
+    # whether the `out` type is a data value type at all; the two below mean
+    # nothing when it is not
+    isValue: bool
+    # the element type
+    elem: ztypes.tid
+    # the type that indexes the block, 0 for the default
+    index: ztypes.tid
+}
+
+# dataOutParts -- a block's `out` type, when it is intdata, floatdata or
+# stringdata or an instance of one, taken apart. The parameters are read by
+# position in each template's own declaration: the element first, then the
+# index, and a stringdata has only the index.
+dataOutParts: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    valueTid: ztypes.tid
+} out dataoutparts is {
+    none: dataoutparts isValue: false elem: ztypes.tid index: ztypes.tid
+    if valueTid.isZero then return none
+    tpl: st.reg.genericOriginOf tid: valueTid
+    if tpl.isZero then tpl = valueTid
+    sdT: builtinTidT :st :scope :ast base: "stringdata"
+    isStr: tpl == sdT
+    if isStr.not when tpl != (builtinTidT :st :scope :ast base: "intdata") when (
+        tpl != (builtinTidT :st :scope :ast base: "floatdata")
+    ) then return none
+    idxAt: 1.u64
+    elem: ztypes.tid
+    if isStr then {
+        idxAt = 0
+        elem = builtinTidT :st :scope :ast base: "StringView"
+    } else {
+        elem = st.reg.genericTypeArgAt specId: valueTid ordinal: 0
+    }
+    idx: st.reg.genericTypeArgAt specId: valueTid ordinal: idxAt
+    return (dataoutparts isValue: true :elem index: idx)
+}
+
 # dataValueTemplate -- the template a data block of element type `elemTid` is a
 # value of: `stringdata` for StringView, `floatdata` for a float, `intdata` for
 # an integer, 0 for anything else (an element type that did not resolve).
@@ -9688,15 +9732,29 @@ dataValueTypeFor: function {
     tpl: dataValueTemplate :ast :st scope: st.curScope :elemTid
     if tpl.isZero then return ztypes.tid.zero
     pn: st.reg.genericParamNamesOf tdecl: (declOfTypeId :st tid: tpl)
-    # stringdata has no element parameter: it is its own value type
+    # a template with no parameter is its own value type
     if pn.length == 0 then {
         st.reg.setDataValueType typeId: dataTid value: tpl
         return tpl
     }
+    # the parameters by position in the template's own declaration: the
+    # element first, then the index; a stringdata has only the index
+    isStr: tpl == (builtinTidT :st scope: st.curScope :ast base: "stringdata")
+    idxAt: 1.u64
+    if isStr then idxAt = 0
+    idxTid: (st.typing.dataIndexType.get key: dataTid).or d: ztypes.tid.zero
     subs: IdMapV zast.nameid v: ztypes.tid
-    subs.set key: (pn.get i: 0) value: elemTid
-    en: st.reg.nameOf tid: elemTid
-    sfx: "_\{en}"
+    sfx: String
+    if isStr.not then {
+        subs.set key: (pn.get i: 0) value: elemTid
+        sfx.append "_"
+        sfx.append (st.reg.nameOf tid: elemTid)
+    }
+    if idxTid.isZero.not when idxAt < pn.length then {
+        subs.set key: (pn.get i: idxAt) value: idxTid
+        sfx.append "_"
+        sfx.append (st.reg.nameOf tid: idxTid)
+    }
     noVals: IdMapV zast.nameid v: u64
     vt: (getOrMintSpec
         :st
@@ -9729,7 +9787,18 @@ dataBlockFits: function {
     if tpl.isZero then return false
     if want != tpl then {
         if (st.reg.genericOriginOf tid: want) != tpl then return false
-        if (st.reg.genericTypeArgAt specId: want ordinal: 0) != elemTid then return false
+        # the parameters by position, as dataValueTypeFor binds them
+        isStr: tpl == (builtinTidT :st scope: st.curScope :ast base: "stringdata")
+        idxAt: 1.u64
+        if isStr then idxAt = 0
+        if isStr.not when (
+            (st.reg.genericTypeArgAt specId: want ordinal: 0) != elemTid
+        ) then return false
+        # the index the block declares, else the template's default
+        wantIdx: st.reg.genericTypeArgAt specId: want ordinal: idxAt
+        haveIdx: (st.typing.dataIndexType.get key: dataTid).or d: ztypes.tid.zero
+        if haveIdx.isZero then haveIdx = builtinTidT :st scope: st.curScope :ast base: "u64"
+        if wantIdx.isZero.not when wantIdx != haveIdx then return false
     }
     st.reg.setDataValueType typeId: dataTid value: want
     markDataRuntimeIndexed :st tid: dataTid
@@ -9791,14 +9860,23 @@ resolveData: function {
     etId: dataElemTypeName :ast :st :dnode outName: etn.stringView :vals
     etName: zast.nameTextCopy :ast ref: etId
     elemTid: litId
+    # whether `out` names the block's VALUE type (`out intdata u8`) rather than
+    # its element type (`out u8`, read until every block says its value type)
+    valueOut: false
     if dnode.outType.isZero.not then {
         # `out T` is a type written in the block's scope and resolved as any
         # written type is: a user type spelled like a builtin is the user's
         ot: resolveTyperefShell :st :scope :ast :unitDecl nid: dnode.outType thisName: defName
-        if ot.isZero.not then elemTid = ot
         # recorded as any signature's type is, so a name that resolves to
         # nothing is reported as an unknown type where it is written
         recordTyperef :st :scope :ast :unitDecl thisName: defName nid: dnode.outType
+        vparts: dataOutParts :ast :st :scope valueTid: ot
+        if vparts.isValue then {
+            valueOut = true
+            elemTid = vparts.elem
+            if vparts.index.isZero.not then st.typing.dataIndexType.set key: did value: vparts.index
+            etName = st.reg.nameOf tid: elemTid
+        } else if ot.isZero.not then elemTid = ot
     } else {
         # an element's suffix (`0.u8`) or the untyped default names the
         # prelude's type whatever the unit declares, as a literal's suffix
@@ -9816,7 +9894,7 @@ resolveData: function {
     # a block that names its type -- `out T`, or a tagged element -- reads each
     # element at that type; one that names none reads them untyped, as a unit
     # constant reads, and only what reaches run time is the i64 / f64 default
-    typed: (etn.length > 0) or (dataTagWritten :ast :dnode)
+    typed: (etn.length > 0) or valueOut or (dataTagWritten :ast :dnode)
     # the template the block's name is a value of: its members are the block's own
     valTpl: dataValueTemplate :ast :st :scope :elemTid
     # a type that resolved and is no number or string; one that resolved to
