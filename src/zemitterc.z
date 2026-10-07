@@ -1177,12 +1177,16 @@ emitNumericCast: function {
     rowNeedAdd :ctx :key
     # a lossy conversion builds a `resultval`; the row spells the tags and the
     # mono's name, and the DECLARATION is what decided which shape it is
-    resOrig: monoOriginName :symtab tid: retTid
+    isResultval: (originIsTid
+        :symtab
+        tid: retTid
+        originTid: (ctx.origins.get i: family.slot.resultval)
+    )
     bn: List String
     bv: List String
     rn: List String
     rv: List String
-    if resOrig.stringView == "resultval" then {
+    if isResultval then {
         bn.append from: "RT".string
         bv.append from: (ctxCname :ctx tid: retTid)
         rn.append from: "OKTAG".string
@@ -3129,7 +3133,7 @@ specTidArgs: function {
 }
 
 # originTidOf -- a type's genericOriginId (the template it monomorphized from), or
-# 0 when it has none. The id form of monoOriginName.
+# 0 when it has none.
 originTidOf: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out ztypes.tid is {
     # a partial spec is trie bookkeeping, never an emittable mono; origin-keyed
     # sweeps must not select it. Asked of the flag, not the typetype: a bare
@@ -5452,12 +5456,10 @@ emitSvCompareCall: function {
             ca: ast.nodes.get i: caId
             if ca.namedoperation then {
                 cae: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: ca.operation)
-                cat: stampNameDeep :symtab n: (ast.nodes.get i: ca.operation)
                 caIsStr: (operandIsStr
                     :symtab
                     :ctx
                     n: (ast.nodes.get i: ca.operation)
-                    tname: cat.stringView
                 )
                 cav: (atomVidIfPlain
                     :ast
@@ -6360,8 +6362,7 @@ emitStringArgMethod: function {
     rtid0: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: call.callable)
     rtid: chaseAggregateTypedef :symtab :ctx tid: rtid0
     rtid = chaseStrTypedef :symtab :ctx tid: rtid
-    rtn: regNameOf :symtab tid: rtid
-    if rtn.stringView != "String" then return ""
+    if rtid != ctx.strTid then return ""
     rptr: dottedReceiverIsPtr :ast :symtab :ctx callable: (ast.nodes.get i: call.callable)
     recvAddr: "&\{recvExpr}"
     if rptr then recvAddr = "\{recvExpr}"
@@ -7387,7 +7388,6 @@ stringViewBinopOperand: function {
     ctx: Ctx
     n: astnode.view
     expr: StringView
-    tname: StringView
 } out String is {
     src: expr.string
     if (isNonLvalueArg s: expr) then {
@@ -7403,7 +7403,7 @@ stringViewBinopOperand: function {
         )
         if hv.length > 0 then src = hv.copy
     }
-    isStrT: operandIsStr :symtab :ctx :n :tname
+    isStrT: operandIsStr :symtab :ctx :n
     if isStrT.not when (singleReadNeedsTemp s: src.stringView) then {
         # the operand is a view: bound so it is read once; it frees nothing
         src = hoistForAddress :ast :symtab :ctx av: expr tid: ctx.svTid argNid: zast.nodeid
@@ -9396,9 +9396,10 @@ emitEmptyColCreate: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
-    cn0: StringView
+    # the callee's name, interned
+    cnId: zast.nameid
 } out String is {
-    if cn0 == "array" then {
+    if cnId == zast.wellKnown.slot.tyArray then {
         amid0: (bindingStampOf
             :symtab
             :ctx
@@ -9414,7 +9415,7 @@ emitEmptyColCreate: function {
             return "\{acb}_create()"
         }
     }
-    if cn0 == "str" then {
+    if cnId == zast.wellKnown.slot.tyStr then {
         smid0: (bindingStampOf
             :symtab
             :ctx
@@ -14141,7 +14142,13 @@ emitNamedCalleeChain: function {
     call: zast.callrow.view
 } out String is {
     cn0: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: call.callable))
-    ecc: emitEmptyColCreate :ast :symtab :ctx :call cn0: cn0.stringView
+    ecc: (emitEmptyColCreate
+        :ast
+        :symtab
+        :ctx
+        :call
+        cnId: (atomNameIdOf :ast n: (ast.nodes.get i: call.callable))
+    )
     if ecc.length > 0 then return ecc
     fid: namedCalleeFnId :ast :symtab :ctx :call cn0: cn0.stringView
     ctorTid: namedCalleeCtorTid :ast :symtab :call :fid
@@ -14550,11 +14557,13 @@ emitCallValue: function {
             ccal: ast.nodes.get i: call.callable
             if ccal.atomid when (symtab.typing.refDecl.has key: call.callable).not then {
                 ctid: stampIdOf :symtab nid: call.nodeid
-                cnm: (zast.nameTextAt
+                cec: (emitEmptyColCreate
                     :ast
-                    ref: (atomNameIdOf :ast n: (ast.nodes.get i: call.callable))
+                    :symtab
+                    :ctx
+                    :call
+                    cnId: (atomNameIdOf :ast n: (ast.nodes.get i: call.callable))
                 )
-                cec: emitEmptyColCreate :ast :symtab :ctx :call cn0: cnm.stringView
                 if cec.length > 0 then return cec
                 # a generic typedef's instance applied to its type arguments
                 # alone (`Label n: 4`) is its base's empty value
@@ -14932,8 +14941,7 @@ implicitZeroValue: function {
     ) case some then {
         ztbId: zast.nameid
         ztbId = ztb
-        ztbT: zast.poolTextAt pool: ast.names ref: ztbId
-        if ztbT.stringView == "String" then return (emitExprStrZero :ctx)
+        if ztbId == zast.wellKnown.slot.tyString then return (emitExprStrZero :ctx)
     } case none then null
     # The collection is asked BEFORE the scalar chase, and the order is not a
     # preference: a typedef over a collection names its base `ListVal`, which
@@ -17721,9 +17729,11 @@ emitDottedRead: function {
     if (dispatchIs :ctx id: dcMnId at: dispatch.slot.orPanic) then {
         pStamp: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.parent))
         pMono: chaseAggregateTypedef :symtab :ctx tid: pStamp
-        pOrig: monoOriginName :symtab tid: pMono
-        isRcc: false
-        if pOrig.stringView == "resultval" then isRcc = true
+        isRcc: (originIsTid
+            :symtab
+            tid: pMono
+            originTid: (ctx.origins.get i: family.slot.resultval)
+        )
         if isRcc then {
             rcRecv: valueExprC :ast :symtab :ctx n: (ast.nodes.get i: n.parent)
             okTagX: variantTag :symtab tid: pMono arm: "ok"
@@ -18577,9 +18587,8 @@ orderRowOperand: function {
         )
         return
     }
-    tname: stampNameDeep :symtab :n
     if (nativePtrArgsOf :ctx path: key) then {
-        pf: stringViewBinopOperand :ast :symtab :ctx :n expr: v.stringView tname: tname.stringView
+        pf: stringViewBinopOperand :ast :symtab :ctx :n expr: v.stringView
         v = pf.take
     } else {
         q: atomVidIfPlain :ast :symtab :ctx :n text: v.stringView
@@ -18589,7 +18598,7 @@ orderRowOperand: function {
             :ctx
             :n
             expr: v.stringView
-            isStr: (operandIsStr :symtab :ctx :n tname: tname.stringView)
+            isStr: (operandIsStr :symtab :ctx :n)
             vid: q
         )
         v = vf.take
@@ -18605,9 +18614,7 @@ operandIsStr: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     n: astnode.view
-    tname: StringView
 } out bool is {
-    if tname == "String" then return true
     return (chaseStrTypedef :symtab :ctx tid: (stampIdDeep :symtab :n)) == ctx.strTid
 }
 
@@ -19914,8 +19921,7 @@ copyRvalueHoist: function {
     ) case dottedpath then {
         cn: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child))
         if cn.stringView != "copy" then return ""
-        pnm: stampNameDeep :symtab n: (ast.nodes.get i: n.parent)
-        if pnm.stringView != "String" then return ""
+        if (stampIdDeep :symtab n: (ast.nodes.get i: n.parent)) != ctx.strTid then return ""
         # the receiver is spelled again by the caller when this declines, so
         # what this spelling hoisted is dropped with it
         hmk: pendingHoistMark :ctx
@@ -19982,8 +19988,7 @@ emitStringBindValue: function {
             # `<rvalue>.copy` over a String (e.g. `(list.get i: n).copy`): the
             # receiver is a non-lvalue, so hoist it to a borrowed temp (List.get
             # returns a shallow view -- never freed) before String_copy(&temp).
-            pnm: stampNameDeep :symtab n: (ast.nodes.get i: n.parent)
-            if pnm.stringView == "String" then {
+            if (stampIdDeep :symtab n: (ast.nodes.get i: n.parent)) == ctx.strTid then {
                 # the value is spelled again by the caller when this declines,
                 # so what this spelling hoisted is dropped with it
                 hmk: pendingHoistMark :ctx
@@ -30400,8 +30405,7 @@ armPayloadC: function {
     match (
         co
     ) case some then {
-        pn: regNameView :symtab tid: co
-        if pn == "null" then return ""
+        if (symtab.reg.typetypeOf typeId: co) == ztypes.ztypetype.nullType then return ""
         return (slotCType :ast :symtab :ctx tid: co)
     } case none then {
         return ""
@@ -33359,16 +33363,6 @@ applyTmpl: function {text: String key: StringView val: StringView} out String is
     return (substituteAll :text needle: needle.stringView repl: val)
 }
 
-# monoOriginName -- the template name a mono derives from (List/Map/Set),
-# "" when not a mono.
-monoOriginName: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out String is {
-    # partial specs are trie bookkeeping, not monos
-    if (symtab.reg.isPartialOf :tid) then return ""
-    go: genericOriginTid :symtab :tid
-    if go.isZero.not then return (regNameOf :symtab tid: go)
-    return ""
-}
-
 # listElemType -- a List/ListView mono's element type id (the get-child
 # return), 0 when absent.
 listElemType: function {symtab: zenv.ZSymbolTable.view monoId: ztypes.tid} out ztypes.tid is {
@@ -34754,8 +34748,7 @@ payloadDestructor: function {
     match (
         co
     ) case some then {
-        pn: regNameOf :symtab tid: co
-        if pn.stringView == "null" then return ""
+        if (symtab.reg.typetypeOf typeId: co) == ztypes.ztypetype.nullType then return ""
         # childOf already resolves the arm to its concrete (possibly cross-unit)
         # payload id; canonicalize a destructor-less shell via resolveTypeIdByName,
         # the same way the List-element destructor does
@@ -34766,7 +34759,7 @@ payloadDestructor: function {
             :symtab
             :ctx
             tid: co
-            name: pn.stringView
+            name: (regNameView :symtab tid: co)
         )
         if rbn.isZero.not then return (destroyFnC :symtab :ctx tid: rbn)
     } case none then null
@@ -36306,8 +36299,7 @@ isIoUnitClass: function {symtab: zenv.ZSymbolTable.view ctx: Ctx tid: ztypes.tid
 ioClassIsLive: function {
     ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx tid: ztypes.tid
 } out bool is {
-    cn: regNameOf :symtab :tid
-    if cn.stringView == "File" then return (ioFileLive :ast :symtab :ctx)
+    if tid == ctx.ioFileTid then return (ioFileLive :ast :symtab :ctx)
     return (typeIsUsed :ctx :tid)
 }
 
