@@ -3220,10 +3220,11 @@ family: data {
     optionViewVal: 42
     intData: 43
     floatData: 44
+    stringData: 45
 
     # none -- one past the last row: both the count and the "not one of ours"
     # answer, so no real index can be mistaken for it.
-    none: 45
+    none: 46
 } out u64
 
 # dispatch -- the names the emitter DISPATCHES on -- a member selector, or the
@@ -3386,6 +3387,7 @@ originBaseNames: function {acc: List String} is {
     familyPut :acc at: family.optionViewVal name: "OptionViewVal"
     familyPut :acc at: family.intData name: "intdata"
     familyPut :acc at: family.floatData name: "floatdata"
+    familyPut :acc at: family.stringData name: "stringdata"
 }
 
 # buildOriginTids -- resolve every row in one pass. A unit with no program node
@@ -9680,7 +9682,7 @@ emitFamilyMethodCall: function {
     fam: monoFamilyOf :symtab :ctx tid: bt
     isArr: fam == family.fixedArray
     if isArr then return (emitArrayMethodCall :ast :symtab :ctx :call :mnId :bn :bt :bvid)
-    if (fam == family.intData) or (fam == family.floatData) then {
+    if (dataValueFamilyOf :symtab :ctx tid: bt).isZero.not then {
         return (emitDataValueMethodCall :ast :symtab :ctx :call :mnId :bn :bt)
     }
     isSpan: fam == family.spanVal
@@ -14413,14 +14415,27 @@ ownerIsCollectionFamily: function {ctx: Ctx.view fam: ztypes.tid} out bool is {
     )
 }
 
-# isDataValueFamily -- is `fam` the template of a data block's value: intdata or
-# floatdata?
+# isDataValueFamily -- is `fam` the template of a data block's value: intdata,
+# floatdata or stringdata (which has no element parameter, so is its own value
+# type)?
 isDataValueFamily: function {ctx: Ctx.view fam: ztypes.tid} out bool is {
     if fam.isZero then return false
     return (
         (fam == (ctx.origins.get i: family.intData)) or
-        (fam == (ctx.origins.get i: family.floatData))
+        (fam == (ctx.origins.get i: family.floatData)) or
+        (fam == (ctx.origins.get i: family.stringData))
     )
+}
+
+# dataValueFamilyOf -- the data value family type `tid` belongs to: its origin
+# for an instance, itself for stringdata; 0 for any other type.
+dataValueFamilyOf: function {
+    symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.tid
+} out ztypes.tid is {
+    og: originTidOf :symtab :tid
+    if og.isZero then og = tid
+    if (isDataValueFamily :ctx fam: og) then return og
+    return ztypes.tid.zero
 }
 
 # emitStringFamilyCall -- a method whose owner is String or StringView: the
@@ -15436,7 +15451,7 @@ nestedCounterRead: function {
     isCounted: (
         (isListOriginOf :symtab :ctx tid: nlid) or
         (isListViewOriginOf :symtab :ctx tid: nlid) or
-        (isDataValueFamily :ctx fam: (originTidOf :symtab tid: nlid)) or
+        (dataValueFamilyOf :symtab :ctx tid: nlid).isZero.not or
         (isSetOriginOf :symtab :ctx tid: nlid) or
         (isMapOriginOf :symtab :ctx tid: nlid) or
         (isIdCollectionOriginOf :symtab :ctx tid: nlid)
@@ -15551,7 +15566,7 @@ emitNestedCollectionBase: function {
             return "\{nlcb}\{w9}\{recvB})"
         }
     }
-    if (isDataValueFamily :ctx fam: (originTidOf :symtab tid: nlid)) when (
+    if (dataValueFamilyOf :symtab :ctx tid: nlid).isZero.not when (
         mnId == zast.names.wkIterate
     ) then {
         ndcb: ctxCname :ctx tid: nlid
@@ -16137,7 +16152,7 @@ dataValueMemberRead: function {
     bn2v: ztypes.vid
     bstamp: ztypes.tid
 } out String is {
-    if (isDataValueFamily :ctx fam: (originTidOf :symtab tid: bstamp)).not then return ""
+    if (dataValueFamilyOf :symtab :ctx tid: bstamp).isZero then return ""
     mnId: zast.poolFind pool: ast.names text: mn2
     isLen: mnId == zast.names.wkLength
     if isLen.not when mnId != zast.names.wkIterate then return ""
@@ -34431,9 +34446,12 @@ emitDataMono: function {
     buf: String.borrow
 } is {
     nm: cbaseNoPrefix :ctx tid: monoId
-    eid: symtab.reg.genericTypeArgAt specId: monoId ordinal: 0
-    ect0: slotCType :ast :symtab :ctx tid: eid
-    ect: ctypeOrI64 s: ect0.stringView
+    ect: "\{ctx.svC}_t"
+    if (dataValueFamilyOf :symtab :ctx tid: monoId) != (ctx.origins.get i: family.stringData) then {
+        eid: symtab.reg.genericTypeArgAt specId: monoId ordinal: 0
+        ect0: slotCType :ast :symtab :ctx tid: eid
+        ect = ctypeOrI64 s: ect0.stringView
+    }
     p: "\{runtimeDir}/z_data.c.tmpl"
     raw: readTemplateCached :ctx path: p.stringView
     if raw.length > 0 then {
@@ -38277,7 +38295,7 @@ classifyCollectionMono: function {
         isColKind = true
         colDst = 8
     }
-    if (isDataValueFamily :ctx fam: (originTidOf :symtab tid: tcl)) then {
+    if (dataValueFamilyOf :symtab :ctx tid: tcl).isZero.not then {
         isColKind = true
         colDst = 9
     }
@@ -41624,7 +41642,9 @@ emitDataBlock: function {
             # a block typed by its tags emits the same array as one typed by
             # the clause. scalarCTypeFor re-checks the tid for a user shadow.
             etd: symtab.reg.dataElemTypeOf tid: ridtid
-            if etd.isZero.not then {
+            isSv: etd == ctx.svTid
+            if isSv then ect = "\{ctx.svC}_t"
+            if etd.isZero.not when isSv.not then {
                 rbn: regNameOf :symtab tid: etd
                 if rbn.length > 0 then {
                     rc: scalarCTypeFor :symtab name: rbn.stringView tid: etd
@@ -41638,7 +41658,15 @@ emitDataBlock: function {
                 eso: ctx.dataSlot.get key: (dataslotkey owner: ridtid slot: cnt)
                 match (
                     eso
-                ) case some then elems.append eso case none then null
+                ) case some then {
+                    # a static initializer takes the string's bytes, not the
+                    # `_zcsN` view variable, which is no constant expression
+                    if isSv then {
+                        sl: (symtab.typing.dataSlotConstOf dataTid: ridtid slot: cnt).strId
+                        sn: (symtab.typing.constStrings.get i: sl).length
+                        elems.append "{ .data = \{eso}_d, .size = \{sn} }"
+                    } else elems.append eso
+                } case none then null
                 cnt = cnt + 1
             }
             dsym: ctxCname :ctx tid: ridtid
@@ -41663,17 +41691,13 @@ emitDataBlock: function {
 dataSlotText: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
+    ctx: Ctx
     dataTid: ztypes.tid
     slot: u64
 } out String is {
-    return (cvalText
-        :ast
-        :symtab
-        :ctx
-        tid: (symtab.reg.dataElemTypeOf tid: dataTid)
-        v: (symtab.typing.dataSlotConstOf :dataTid :slot)
-    )
+    v: symtab.typing.dataSlotConstOf :dataTid :slot
+    if v.kind.svalKind then return (cvalStrText :symtab :ctx :v)
+    return (cvalText :ast :symtab :ctx tid: (symtab.reg.dataElemTypeOf tid: dataTid) :v)
 }
 
 # armTagValueText -- the declared discriminator of the arm named `armNameId`

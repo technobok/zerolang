@@ -9367,9 +9367,9 @@ dataElemParts: function {ast: Ast.view opId: zast.nodeid} out dataelem is {
 
 # dataElemValues -- each element's VALUE, by slot. A literal is read from its
 # lexeme; anything else folds through the evaluator, so an element may be any
-# compile-time constant -- an expression, a unit constant, another block's
-# element. An element with no value is refused where it is written and holds
-# noConst, keeping its slot.
+# compile-time constant -- an expression, a unit constant, string `+`, another
+# block's element. An element with no value is refused where it is written and
+# holds noConst, keeping its slot.
 dataElemValues: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -9412,7 +9412,7 @@ dataElemValue: function {
     cv: evalConstNode :st :scope :ast :unitDecl nid: opRef
     got: st.typing.constFail
     st.typing.constFail = held
-    if cv.kind.ivalKind or cv.kind.fvalKind then return cv
+    if cv.kind.ivalKind or cv.kind.fvalKind or cv.kind.svalKind then return cv
     en: ast.nodes.get i: opRef
     if got.kind.none.not when cv.kind.none then {
         # a block read from its own elements fails where nothing is written
@@ -9426,12 +9426,9 @@ dataElemValue: function {
     }
     msg: "a data element must be a compile-time constant".string
     hint: "an element is a literal, a unit constant, or an expression over them".string
-    if cv.kind.svalKind then {
-        msg = "a data block holds numbers, not strings"
-        hint = "write the strings where they are used"
-    } else if cv.kind.none.not then {
-        msg = "a data element must be a number"
-        hint = "a data block holds numbers"
+    if cv.kind.none.not then {
+        msg = "a data element must be a number or a string"
+        hint = "a data block holds integers, floats or strings"
     }
     (addErrorH
         :st
@@ -9490,6 +9487,74 @@ dataElemFits: function {
     return false
 }
 
+# dataKindsAgree -- a block holds one kind of element: all integers, all floats
+# or all strings, and a block of strings is a StringView one. An element of
+# another kind than the first, or a kind its `out` cannot be, is refused where
+# it is written. An integer in a float block is refused too: a float block's
+# elements are written as floats. False when one was refused.
+dataKindsAgree: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    dnode: dataref
+    vals: ListVal ztypes.cval
+    elemTid: ztypes.tid
+} out bool is {
+    svT: builtinTidT :st scope: st.curScope :ast base: "StringView"
+    first: u8
+    k: u64
+    for k < dnode.nelems loop {
+        cv: vals.get i: k
+        elId: zast.dataElemAt :ast nid: dnode.nid i: k
+        k = k + 1
+        kind: dataValueKind :cv
+        if kind == 0 then continue
+        if first == 0 then first = kind
+        msg: String
+        kt: dataKindText :kind
+        isStr: kind == 3
+        svBlock: elemTid == svT
+        if kind != first then {
+            ft: dataKindText kind: first
+            msg = "data elements are of one kind: this one is \{kt}, the first \{ft}"
+        } else if isStr != svBlock then {
+            en: st.reg.nameOf tid: elemTid
+            msg = "\{kt} cannot be an element of a block of \{en}"
+        }
+        if msg.length > 0 then {
+            el: ast.nodes.get i: elId
+            (addErrorH
+                :st
+                nodeid: (zast.nodeIdOf n: el)
+                lineno: (nodeLine n: el)
+                colno: (nodeCol n: el)
+                e: zast.err.typeError
+                :msg
+                note: String
+                hint: "a block holds all integers, all floats, or all strings with `out StringView`"
+                width: 1
+            )
+            return false
+        }
+    }
+    return true
+}
+
+# dataValueKind -- a data element's kind: 1 an integer, 2 a float, 3 a string,
+# 0 no value.
+dataValueKind: function {cv: ztypes.cval} out u8 is {
+    if cv.kind.ivalKind then return 1
+    if cv.kind.fvalKind then return 2
+    if cv.kind.svalKind then return 3
+    return 0
+}
+
+# dataKindText -- a data element kind as a diagnostic names it.
+dataKindText: function {kind: u8} out String is {
+    if kind == 1 then return "an integer"
+    if kind == 2 then return "a float"
+    return "a string"
+}
+
 # dataTagWritten -- some element of the block carries its own type tag
 # (`cNul: 0.u8`).
 dataTagWritten: function {ast: Ast dnode: dataref} out bool is {
@@ -9507,9 +9572,9 @@ dataTagWritten: function {ast: Ast dnode: dataref} out bool is {
 
 # dataElemTypeName -- the ONE type name a data block's elements carry: the
 # `out T` clause when written, else the type the elements' own tags agree on,
-# else i64 -- f64 when every element is a bare float literal. Tags that
-# disagree are reported here, at the declaration, because a block that means
-# two widths at once has no honest emission.
+# else i64 -- StringView when every element is a string, f64 when every one is
+# a float. Tags that disagree are reported here, at the declaration, because a
+# block that means two widths at once has no honest emission.
 dataElemTypeName: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -9522,11 +9587,15 @@ dataElemTypeName: function {
     if outName.length > 0 then pick = ast.internString text: outName
     allFloat: true
     allBits: true
+    allString: true
     kU: u64
     for kU < dnode.nelems loop {
         elId: zast.dataElemAt :ast nid: dnode.nid i: kU
         cv: vals.get i: kU
         kU = kU + 1
+        # an element with no value was refused already, and says nothing here
+        if cv.kind.none then continue
+        if cv.kind.svalKind.not then allString = false
         if cv.kind.fvalKind.not then allFloat = false
         if cv.bits.not then allBits = false
         opRef: zast.nodeid
@@ -9557,6 +9626,7 @@ dataElemTypeName: function {
         }
     }
     if pick.isZero.not then return pick
+    if allString when dnode.nelems > 0 then return (ast.internString text: "StringView")
     if allFloat when dnode.nelems > 0 then return (ast.internString text: "f64")
     # every element written in hex, octal or binary: the bits they spell, a u64
     if allBits when dnode.nelems > 0 then return (ast.internString text: "u64")
@@ -9565,18 +9635,16 @@ dataElemTypeName: function {
 
 # dataOwnMember -- the name is one of the block's own members, so no element
 # may take it: a method its value template `tpl` declares (`index`, `length`,
-# `iterate`, ...), or `tag`, the discriminator every block carries. The
-# template's generic parameter and its `null` opt-outs name nothing a block
-# reads, so they stay free.
+# `iterate`, and `tag` on a block of integers). The template's generic
+# parameter and its `null` opt-outs name nothing a block reads, so they stay
+# free.
 dataOwnMember: function {
     st: zenv.ZSymbolTable
     ast: Ast
     tpl: ztypes.tid
     nameId: zast.nameid
 } out bool is {
-    if nameId.isZero then return false
-    if nameId == zast.names.wkTag then return true
-    if tpl.isZero then return false
+    if nameId.isZero or tpl.isZero then return false
     md: st.typing.declMemberIdOf parentTypeId: tpl :nameId
     if md.isZero then return false
     forceMemberDecl :st :ast memberDeclId: md
@@ -9585,14 +9653,17 @@ dataOwnMember: function {
 }
 
 # dataValueTemplate -- the template a data block of element type `elemTid` is a
-# value of: `floatdata` for a float, `intdata` for an integer, 0 for anything
-# else (an element type that did not resolve).
+# value of: `stringdata` for StringView, `floatdata` for a float, `intdata` for
+# an integer, 0 for anything else (an element type that did not resolve).
 dataValueTemplate: function {
     ast: Ast
     st: zenv.ZSymbolTable
     scope: ztypes.declid
     elemTid: ztypes.tid
 } out ztypes.tid is {
+    if elemTid == (builtinTidT :st :scope :ast base: "StringView") then {
+        return (builtinTidT :st :scope :ast base: "stringdata")
+    }
     if (typeIsNumberOf :st :scope :ast tid: elemTid float: true) then {
         return (builtinTidT :st :scope :ast base: "floatdata")
     }
@@ -9617,7 +9688,11 @@ dataValueTypeFor: function {
     tpl: dataValueTemplate :ast :st scope: st.curScope :elemTid
     if tpl.isZero then return ztypes.tid.zero
     pn: st.reg.genericParamNamesOf tdecl: (declOfTypeId :st tid: tpl)
-    if pn.length < 1 then return ztypes.tid.zero
+    # stringdata has no element parameter: it is its own value type
+    if pn.length == 0 then {
+        st.reg.setDataValueType typeId: dataTid value: tpl
+        return tpl
+    }
     subs: IdMapV zast.nameid v: ztypes.tid
     subs.set key: (pn.get i: 0) value: elemTid
     en: st.reg.nameOf tid: elemTid
@@ -9651,8 +9726,11 @@ dataBlockFits: function {
     if (st.reg.typetypeOf typeId: dataTid) != ztypes.ztypetype.dataType then return false
     elemTid: st.reg.dataElemTypeOf tid: dataTid
     tpl: dataValueTemplate :ast :st scope: st.curScope :elemTid
-    if tpl.isZero or ((st.reg.genericOriginOf tid: want) != tpl) then return false
-    if (st.reg.genericTypeArgAt specId: want ordinal: 0) != elemTid then return false
+    if tpl.isZero then return false
+    if want != tpl then {
+        if (st.reg.genericOriginOf tid: want) != tpl then return false
+        if (st.reg.genericTypeArgAt specId: want ordinal: 0) != elemTid then return false
+    }
     st.reg.setDataValueType typeId: dataTid value: want
     markDataRuntimeIndexed :st tid: dataTid
     return true
@@ -9725,6 +9803,8 @@ resolveData: function {
         }
     }
     ek: ztypes.numkindByName name: etName.stringView
+    # a block of mixed kinds has no element type to check its elements against
+    kindsOk: dataKindsAgree :ast :st :dnode :vals :elemTid
     # a block that names its type -- `out T`, or a tagged element -- reads each
     # element at that type; one that names none reads them untyped, as a unit
     # constant reads, and only what reaches run time is the i64 / f64 default
@@ -9802,7 +9882,7 @@ resolveData: function {
             if typed when cv.kind.none.not when (isNumericTid :ast :st :scope tid: elemTid) then {
                 cv = ztypes.typedConst c: cv numTid: elemTid
             }
-            if cv.kind.none.not when (dataElemFits
+            if kindsOk when cv.kind.none.not when (dataElemFits
                 :ast
                 :st
                 :dnode
@@ -9840,6 +9920,9 @@ resolveData: function {
             value: ztypes.makeIntConst ordinal.i64.orPanic
         )
     }
+    st.reg.setDataElemType typeId: did value: elemTid
+    # only a block of integers is a discriminator source
+    if (typeIsNumberOf :st :scope :ast tid: elemTid float: false).not then return did
     tagName: "tag__\{etName.stringView}"
     tagId: (declareCanonicalType
         :st
@@ -9863,7 +9946,6 @@ resolveData: function {
         nameId: zast.names.wkTag
         childTypeId: tagId
     )
-    st.reg.setDataElemType typeId: did value: elemTid
     return did
 }
 
@@ -57376,10 +57458,23 @@ constDataMember: function {
         return ztypes.noConst
     }
     eo: (st.typing.declChildOfId parentTypeId: dataTid :nameId).or d: ztypes.tid.zero
-    if nameId != zast.names.wkLength when (isNumericTid :ast :st :scope tid: eo).not then {
+    if nameId != zast.names.wkLength when (dataElemFolds :ast :st :scope elemTid: eo).not then {
         return ztypes.noConst
     }
     return (st.typing.memberConstOf parentTypeId: dataTid :nameId)
+}
+
+# dataElemFolds -- a data element of type `elemTid` reads as a constant: a
+# builtin number, or a string. A typedef element is a value of its own type,
+# whose own members a fold of the bare number would bypass.
+dataElemFolds: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    elemTid: ztypes.tid
+} out bool is {
+    if (isNumericTid :ast :st :scope tid: elemTid) then return true
+    return elemTid == (builtinTidT :st :scope :ast base: "StringView")
 }
 
 # constArmRead -- `<typeName>.<armName>` looked up from `lookupUnit`, as a
@@ -58562,7 +58657,7 @@ constOfDataIndex: function {
     }
     ev: st.typing.dataSlotConstOf :dataTid slot: kv.ival.u64.orPanic
     et: st.reg.dataElemTypeOf tid: dataTid
-    if (isNumericTid :ast :st :scope tid: et).not then return ztypes.noConst
+    if (dataElemFolds :ast :st :scope elemTid: et).not then return ztypes.noConst
     return ev
 }
 
