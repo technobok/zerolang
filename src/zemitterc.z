@@ -31843,7 +31843,10 @@ collectFnDecls: function {
                     :ownerTid
                     wantWalked: true
                 ) or
-                ((nm.stringView == "main") and (ctx.mainName.stringView != ctx.realMain))
+                (
+                    (bm.name == zast.wellKnown.slot.wkMain) and
+                    (ctx.mainName.stringView != ctx.realMain)
+                )
             )
             if skipDepMain.not then {
                 dv: di
@@ -37463,14 +37466,9 @@ emitOneFnptrTypedef: function {
     for ri < rn loop {
         rpv: pIds.get i: ri
         if ownT.isZero.not then {
-            rpnB: (zast.poolTextAt
-                pool: ast.names
-                ref: (pIdsNm.get i: ri)
-            )
-            rpn: rpnB.stringView
             rtn: regNameOf :symtab tid: rpv
             isRecv: (
-                (rpn == "this") or
+                ((pIdsNm.get i: ri) == zast.wellKnown.slot.wkThis) or
                 (rtn.stringView == "this") or
                 (rtn.stringView == ownNm) or
                 (rpv == ownT)
@@ -39148,14 +39146,13 @@ emitOneFacet: function {
         pi: u64
         pn: pnames.length
         for pi < pn loop {
-            pnm: pnames.get i: pi
             pid: pids.get i: pi
             # spec receivers are dropped by resolveSpecFn; a MARKED one is
             # found by the registry below. A parameter of the interface's OWN
             # type is not the receiver -- reading it as one is what dropped it
             # from the slot while the wrapper still passed it.
             isThis: false
-            if pnm.stringView == "this" then isThis = true
+            if (pidsNm.get i: pi) == zast.wellKnown.slot.wkThis then isThis = true
             # a marked receiver is an alias, so ask the registry which
             # parameter IS the receiver rather than matching on `this`
             rpnV: symtab.reg.thisParamNameIdOf tid: smid
@@ -39256,11 +39253,10 @@ emitOneProtocol: function {
         pi: u64
         pn: pnames.length
         for pi < pn loop {
-            pnm: pnames.get i: pi
             pid: pids.get i: pi
             ptn: regNameOf :symtab tid: pid
             isThis: (
-                (pnm.stringView == "this") or
+                ((pidsNm.get i: pi) == zast.wellKnown.slot.wkThis) or
                 (
                     ptn.stringView == "this"
                 )
@@ -39409,7 +39405,7 @@ emitProtocolImpl: function {
             pid: pids.get i: pi
             ptn: regNameOf :symtab tid: pid
             isThis: (
-                (pnm.stringView == "this") or
+                ((pidsNm.get i: pi) == zast.wellKnown.slot.wkThis) or
                 (
                     ptn.stringView == "this"
                 )
@@ -39466,7 +39462,7 @@ emitProtocolImpl: function {
             if natOwner != implTid when natRow.isZero.not then viaNat = true
         }
         if viaNat then {
-            nbc: nativeBoxCall :symtab :ctx implTid: natOwner mname: mname.stringView
+            nbc: nativeBoxCall :symtab :ctx implTid: natOwner mname: mname.stringView :mnameId
             w2 = "    \{retkw}\{nbc};\n"
         }
         buf.append w2
@@ -39577,7 +39573,7 @@ emitFacetImpl: function {
             pnm: pnames.get i: pi
             pid: pids.get i: pi
             isThis: false
-            if pnm.stringView == "this" then isThis = true
+            if (pidsNm.get i: pi) == zast.wellKnown.slot.wkThis then isThis = true
             # A marked receiver is an ALIAS (`{t: this.view}`), so neither its
             # name nor its type says `this`. The registry records which
             # parameter IS the receiver; that is the question to ask, and it is
@@ -39771,8 +39767,10 @@ nativeBoxCall: function {
     ctx: Ctx
     implTid: ztypes.tid
     mname: StringView
+    # the member's name id
+    mnameId: zast.nameid
 } out String is {
-    if mname == "stringView" then {
+    if mnameId == zast.wellKnown.slot.wkStringView then {
         if implTid == ctx.strTid then return (svValueFormPtr :ctx expr: "_self")
         if (originIsTid :symtab tid: implTid originTid: (ctx.origins.get i: family.slot.str)) then {
             return "((\{ctx.svC}_t){ .data = _self->data, .size = _self->len })"
@@ -40689,8 +40687,11 @@ emitParsedMethodCall: function {
     bnid: dottedBaseNodeId :ast n: (ast.nodes.get i: call.callable)
     pid: fileTypeIdOf :ast :symtab nid: bnid mname: mn
     if pid.isZero then return ""
-    pcn: regNameOf :symtab tid: pid
-    if pcn.stringView != "Parsed" then return ""
+    if (
+        pid != (unitClassTid :symtab unitDecl: ctx.cliUnitDecl nameId: zast.wellKnown.slot.tyParsed)
+    ) then {
+        return ""
+    }
     pc: ctxCname :ctx tid: pid
     recvV0: atomVid :symtab nid: bnid
     recv: aliasResolveAt :symtab :ctx nid: bnid name: bn vid: recvV0
