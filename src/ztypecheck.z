@@ -314,42 +314,10 @@ isBorrowedVar: function {st: zenv.ZSymbolTable.view vid: ztypes.vid} out bool is
     return (st.reg.variableOwnershipOf id: vid) == ztypes.zownership.borrowed
 }
 
-# isNumericTid -- a concrete integer/float type id (literal-coercion target).
-# Reads the id's own name and confirms it against the single builtin that name
-# spells. A builtin lookup resolves, so asking for all sixteen would mint every
-# numeric type -- and in most programs nothing else reaches f128's unit.
-isNumericTid: function {
-    ast: Ast
-    st: zenv.ZSymbolTable
-    scope: ztypes.declid
-    tid: ztypes.tid
-} out bool is {
-    if tid.isZero then return false
-    if tid >= st.reg.nextTid then return false
-    # ASK THE NAME BEFORE COPYING IT. Almost every type handed to this is not
-    # numeric, and `numkindByName` is a length-and-bytes test that keeps
-    # nothing -- so it reads a view. The copy is only needed to survive
-    # `builtinTidT`, which mints, and that is reached only once the name has
-    # already said it is one of the fourteen.
-    isNum: false
-    tv: st.reg.nameViewOf :tid
-    isNum = (ztypes.numkindByName name: tv).has
-    tv.drop
-    if isNum.not then return false
-    known: st.typing.numericTidMemo.get key: tid
-    match (
-        known
-    ) case some then {
-        return known
-    } case none then null
-    tn: String
-    row: st.reg.typeById.get i: tid
-    tn = row.name.copy
-    row.drop
-    bt: builtinTidT :st :scope :ast base: tn.stringView
-    if bt.isZero then return false
-    st.typing.numericTidMemo.set key: tid value: tid == bt
-    return tid == bt
+# isNumericTid -- a concrete integer/float type id (literal-coercion target):
+# one of the system's scalars (numKindOfTid).
+isNumericTid: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
+    return (numKindOfTid :st :tid).has
 }
 
 # isImplicitZeroCreateTid -- a bare type name in a runtime value position
@@ -361,7 +329,7 @@ isImplicitZeroCreateTid: function {
     st: zenv.ZSymbolTable
     tid: ztypes.tid
 } out bool is {
-    if (isNumericTid :st scope: st.curScope :ast :tid) then return true
+    if (isNumericTid :st :tid) then return true
     if tid == (builtinTidT :st scope: st.curScope :ast base: "String") then return true
     return false
 }
@@ -738,8 +706,8 @@ typesCompatible: function {
     aLit: isLiteralTypeId :st tid: a
     bLit: isLiteralTypeId :st tid: b
     if aLit when bLit then return true
-    if aLit when (isNumericTid :st scope: st.curScope :ast tid: b) then return true
-    if bLit when (isNumericTid :st scope: st.curScope :ast tid: a) then return true
+    if aLit when (isNumericTid :st tid: b) then return true
+    if bLit when (isNumericTid :st tid: a) then return true
     cur: a
     for cur.isZero.not loop {
         nb: typedefBaseTidOf :st tid: cur
@@ -10160,7 +10128,7 @@ resolveData: function {
             # it is the discriminator a tagged type using this block will be
             # emitted with, and a backend reading it has no unit to fold under.
             cv: vals.get i: ordinal
-            if typed when cv.kind.none.not when (isNumericTid :ast :st :scope tid: elemTid) then {
+            if typed when cv.kind.none.not when (isNumericTid :st tid: elemTid) then {
                 cv = ztypes.typedConst c: cv numTid: elemTid
             }
             if kindsOk when cv.kind.none.not when (dataElemFits
@@ -10182,7 +10150,7 @@ resolveData: function {
         sIdx: (st.typing.dataIndexType.get key: did).or d: ztypes.tid.zero
         if sIdx.isZero then sIdx = builtinTidT :st :scope :ast base: "u64"
         if untypedSlots then sIdx = st.reg.literalIntTid
-        resolveDataSlots :ast :st :scope dataTid: did idxTid: sIdx labels: slotLabels ords: slotOrds
+        resolveDataSlots :st dataTid: did idxTid: sIdx labels: slotLabels ords: slotOrds
     }
     # `length` is a constant of the block: every element is known here, so the
     # read folds like a labelled element rather than reaching a runtime array.
@@ -10241,9 +10209,7 @@ resolveData: function {
 # index (`wk.slot.wkLen`). It is a data type of its own, so a label reads as an
 # element of a block reads; it is read through a label and nothing else.
 resolveDataSlots: function {
-    ast: Ast
     st: zenv.ZSymbolTable
-    scope: ztypes.declid
     dataTid: ztypes.tid
     idxTid: ztypes.tid
     labels: (ListVal zast.nameid).view
@@ -10263,7 +10229,7 @@ resolveDataSlots: function {
         childTypeId: slotTid
     )
     st.reg.setDataElemType typeId: slotTid value: idxTid
-    num: isNumericTid :ast :st :scope tid: idxTid
+    num: isNumericTid :st tid: idxTid
     k: u64
     for k < labels.length loop {
         lab: labels.get i: k
@@ -21327,7 +21293,7 @@ printableInterpTid: function {
         if b.isZero then break
         t = b
     }
-    if (isNumericTid :st scope: st.curScope :ast tid: t) then return true
+    if (isNumericTid :st tid: t) then return true
     if t == (builtinTidT :st scope: st.curScope :ast base: "bool") then return true
     if t == (builtinTidT :st scope: st.curScope :ast base: "String") then return true
     if t == (builtinTidT :st scope: st.curScope :ast base: "StringView") then return true
@@ -29512,9 +29478,7 @@ reportUnknownMember: function {
         if stillMiss then {
             # the base by ID, the builtin itself or a literal type: a user type
             # spelled like a scalar is a type of its own and converts to nothing
-            baseNum: (
-                (isNumericTid :st scope: st.curScope :ast tid: bt) or (isLiteralTypeId :st tid: bt)
-            )
+            baseNum: (isNumericTid :st tid: bt) or (isLiteralTypeId :st tid: bt)
             cn: zast.nameTextAt :ast ref: cnId
             if (isNumericTypeName name: cn.stringView) when baseNum then stillMiss = false
         }
@@ -35549,7 +35513,7 @@ checkReassignedType: function {
                 } case none then null
             }
         }
-        if (numberLandsInNumber :st :ast srcTid: rvt dstTid: chkT) then {
+        if (numberLandsInNumber :st srcTid: rvt dstTid: chkT) then {
             (checkNumericCoercion
                 :st
                 :ast
@@ -38943,7 +38907,7 @@ coerceLiteralArms: function {
     arms: (ListVal armvalue).view
     governing: armvalue
 } is {
-    numeric: isNumericTid :st scope: st.curScope :ast tid: governing.tid
+    numeric: isNumericTid :st tid: governing.tid
     for each av: arms loop {
         if av.untyped when numeric.not then reportArmTypes :st :ast :nid a: governing b: av
         if av.untyped when numeric then {
@@ -42523,17 +42487,7 @@ argMismatchSkipped: function {
     vt: ztypes.tid
     ptid: ztypes.tid
 } out bool is {
-    if (isNumericTid
-        :st
-        scope: st.curScope
-        :ast
-        tid: vt
-    ) when (isNumericTid
-        :st
-        scope: st.curScope
-        :ast
-        tid: ptid
-    ) then return true
+    if (isNumericTid :st tid: vt) when (isNumericTid :st tid: ptid) then return true
     ptt: st.reg.typetypeOf typeId: ptid
     if ptt == ztypes.ztypetype.functionType then {
         return (functionSignaturesMatch :ast :st a: vt b: ptid)
@@ -43030,8 +42984,8 @@ checkNumericCoercion: function {
         )
         return
     }
-    if (isNumericTid :st scope: st.curScope :ast tid: srcTid).not then return
-    if (isNumericTid :st scope: st.curScope :ast tid: dstTid).not then return
+    if (isNumericTid :st tid: srcTid).not then return
+    if (isNumericTid :st tid: dstTid).not then return
     if (losslessConvTo :st :ast from: srcTid to: dstTid) then return
     an9n: specWrittenName :st :ast tid: srcTid
     pn9n: specWrittenName :st :ast tid: dstTid
@@ -45145,7 +45099,7 @@ checkYieldedValue: function {
     } case none then return
     # an instance over a template's parameters is checked per instance
     if (st.reg.isPartialOf tid: elem) then return
-    if (numberLandsInNumber :st :ast srcTid: argT dstTid: elem) then {
+    if (numberLandsInNumber :st srcTid: argT dstTid: elem) then {
         (checkNumericCoercion
             :st
             :ast
@@ -45351,13 +45305,12 @@ returnOwnedLocal: function {
 # checkNumericCoercion's question, not a type-compatibility one.
 numberLandsInNumber: function {
     st: zenv.ZSymbolTable
-    ast: Ast
     srcTid: ztypes.tid
     dstTid: ztypes.tid
 } out bool is {
-    if (isNumericTid :st scope: st.curScope :ast tid: dstTid).not then return false
+    if (isNumericTid :st tid: dstTid).not then return false
     if (isLiteralTypeId :st tid: srcTid) then return true
-    return (isNumericTid :st scope: st.curScope :ast tid: srcTid)
+    return (isNumericTid :st tid: srcTid)
 }
 
 # checkReturnTypeMatch -- the returned value against what the enclosing
@@ -45383,7 +45336,7 @@ checkReturnTypeMatch: function {
     # a returned number lands in the declared type as an argument lands in its
     # parameter: a literal or an untyped constant must fit it, a typed value
     # must convert without loss
-    if (numberLandsInNumber :st :ast srcTid: argT dstTid: expR) then {
+    if (numberLandsInNumber :st srcTid: argT dstTid: expR) then {
         (checkNumericCoercion
             :st
             :ast
@@ -56309,11 +56262,36 @@ constNumTidOf: function {
     return ztypes.tid
 }
 
-# numKindOfTid -- the numeric kind a scalar type id spells; `has` false for
-# any other type.
+# numKindOfTid -- the numeric kind of a scalar type: one the SYSTEM declares, by
+# the name its declaration was given -- system.z's own `u8`, or wideint's `i128`.
+# `has` false for any other type: a program's own type spelled `u8` is that
+# program's type, and no spelling decides what a type is.
 numKindOfTid: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out ztypes.suffixinfo is {
-    tn: st.reg.nameViewOf :tid
-    return (ztypes.numkindByName name: tn)
+    none: ztypes.suffixinfo has: false kind: ztypes.numkind.i64Type len: 0
+    if tid.isZero then return none
+    d: st.reg.defOf :tid
+    if d.isZero then return none
+    nm: zast.nameid
+    {
+        decl: st.typing.decls.get i: d
+        nm = decl.name
+    }
+    first: zast.wellKnown.slot.tyI8
+    if (nm < first) or (nm > zast.wellKnown.slot.tyF128) then return none
+    if (declaredBySystem :st declId: d).not then return none
+    return (ztypes.numkindAt k: nm.u64 - first.u64)
+}
+
+# declaredBySystem -- whether a declaration sits in the system unit or one of the
+# implementation subunits it loads (wideint, halffloat, quadfloat).
+declaredBySystem: function {st: zenv.ZSymbolTable.view declId: ztypes.declid} out bool is {
+    if st.typing.systemUnitRoot.isZero then return false
+    cur: declId
+    for cur.isZero.not loop {
+        if cur == st.typing.systemUnitRoot then return true
+        cur = declParentIdOf :st declId: cur
+    }
+    return false
 }
 
 # constFitsType -- whether the untyped number `v` fits the numeric type
@@ -57959,7 +57937,7 @@ dataElemFolds: function {
     scope: ztypes.declid
     elemTid: ztypes.tid
 } out bool is {
-    if (isNumericTid :ast :st :scope tid: elemTid) then return true
+    if (isNumericTid :st tid: elemTid) then return true
     return elemTid == (builtinTidT :st :scope :ast base: "StringView")
 }
 
@@ -58492,7 +58470,7 @@ checkConstantArgKind: function {
         if av.kind.svalKind.not then reportConstantConstraintArg :st :scope :ast :fid :pt :av :arg
         return
     }
-    wantsInt: isNumericTid :ast :st :scope tid: pt
+    wantsInt: isNumericTid :st tid: pt
     wantsText: pt == (builtinTidT :ast :st :scope base: "StringView")
     if wantsInt when av.kind.ivalKind then return
     if wantsText when av.kind.svalKind then return
@@ -58911,7 +58889,7 @@ numericTypedefNamed: function {
     )
     base: typedefBaseTidOf :st tid: tdTid
     if base.isZero then return ztypes.tid
-    if (isNumericTid :ast :st :scope tid: base).not then return ztypes.tid
+    if (isNumericTid :st tid: base).not then return ztypes.tid
     return tdTid
 }
 
@@ -60081,7 +60059,7 @@ dataConstantIsConstruction: function {
         return false
     }
     if mid == zast.wellKnown.slot.wkLength then return false
-    return (isNumericTid :ast :st :scope tid: member).not
+    return (isNumericTid :st tid: member).not
 }
 
 # resolveDottedConstantDef -- a unit-level constant whose value is a dotted path.
