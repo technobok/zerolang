@@ -2461,7 +2461,10 @@ perf: $(PERFBIN)
 #
 # -1,077 the parser no longer desugars a `null` clause body (each `then null` is
 # now a statement line holding the atom): +22 behaviour, -1,099 source (ab.sh).
-ALLOC_BASELINE := 2207634
+#
+# +975 an unlabelled leading argument binds a numeric first parameter
+# (numericLeadingParam, leadingArgIsValue): 0 behaviour, +975 source (ab.sh).
+ALLOC_BASELINE := 2208609
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

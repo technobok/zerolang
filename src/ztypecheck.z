@@ -3336,8 +3336,9 @@ collectMonoRefArgs: function {
         arg: argRefAt :ast nid: arg9Id
         if arg.nid.isZero.not then {
             an: atomName :ast n: (ast.nodes.get i: arg.operation)
-            cdR: st.reg.genericParamConstraintOf :tdecl paramName: arg.name
-            if arg.name.isZero.not when cdR.numKind.has then {
+            pnR: numericLeadingParam :st :tdecl label: arg.name argIdx: h21x9 - 1
+            cdR: st.reg.genericParamConstraintOf :tdecl paramName: pnR
+            if pnR.isZero.not when cdR.numKind.has then {
                 if (collectNumericMonoRefArg
                     :st
                     :ast
@@ -3347,6 +3348,7 @@ collectMonoRefArgs: function {
                     :enclDecl
                     :tdecl
                     :arg
+                    param: pnR
                     an: an.stringView
                     :sfx
                     :typeSubs
@@ -3502,6 +3504,9 @@ collectNumericMonoRefArg: function {
     enclDecl: ztypes.declid
     tdecl: ztypes.declid
     arg: argref
+    # the numeric parameter the argument is for: its label, or the template's
+    # first parameter when the leading argument is written unlabelled
+    param: zast.nameid
     an: StringView
     sfx: String
     typeSubs: (IdMapV zast.nameid v: ztypes.tid)
@@ -3511,7 +3516,7 @@ collectNumericMonoRefArg: function {
     if depR.isZero.not then {
         sfx.append s: "_"
         sfx.append s: an
-        typeSubs.set key: arg.name value: depR
+        typeSubs.set key: param value: depR
         return true
     }
     # re-resolved without its enclosing declaration (a recorded signature ref):
@@ -3524,21 +3529,21 @@ collectNumericMonoRefArg: function {
         :unitDecl
         :scope
         :tdecl
-        param: arg.name
+        :param
         argOp: arg.operation
         inBody: false
     )
     if naR.state.dependent then {
-        reportDependentTypeArg :st :ast :tdecl param: arg.name argOp: arg.operation
+        reportDependentTypeArg :st :ast :tdecl :param argOp: arg.operation
         return false
     }
     if naR.state.refused then return false
     (appendNumericArgSuffix
         :sfx
         bits: naR.bits
-        cd: (st.reg.genericParamConstraintOf :tdecl paramName: arg.name)
+        cd: (st.reg.genericParamConstraintOf :tdecl paramName: param)
     )
-    valSubsR.set key: arg.name value: naR.bits
+    valSubsR.set key: param value: naR.bits
     return true
 }
 
@@ -3657,6 +3662,57 @@ monoRefTemplateTidById: function {
         :nameId
     )
     return tplId
+}
+
+# numericLeadingParam -- the parameter an argument is for when its label says
+# or a numeric first parameter decides it: the label, or -- for an unlabelled
+# leading argument, whose label is optional -- the template's first parameter
+# when that takes a value. 0 otherwise: an unlabelled leading TYPE argument is
+# bound by the caller's own test that it names a type.
+numericLeadingParam: function {
+    # the symbol table holding the template's parameter constraints
+    st: zenv.ZSymbolTable.view
+    # the template's declaration
+    tdecl: ztypes.declid
+    # the argument's label, 0 when unlabelled
+    label: zast.nameid
+    # the argument's position, 0 for the leading one
+    argIdx: u64
+} out zast.nameid is {
+    if label.isZero.not or (argIdx != 0) then return label
+    if (st.reg.genericParamCountOf :tdecl) == 0 then return label
+    p0: st.reg.genericParamNameAt :tdecl i: 0
+    if (st.reg.genericParamConstraintOf :tdecl paramName: p0).numKind.has then return p0
+    return label
+}
+
+# leadingArgIsValue -- the application's first argument is unlabelled and a
+# value, not a type: a numeric literal, or a bare name declared as a constant.
+# Its label is optional, so it is the template's first parameter's, which only
+# the template knows.
+leadingArgIsValue: function {
+    # the symbol table whose declarations a bare name is looked up in
+    st: zenv.ZSymbolTable
+    # the tree the application is written in
+    ast: Ast
+    # the unit the application is written in
+    unitDecl: ztypes.declid
+    # the scope the application is written in
+    scope: ztypes.declid
+    # the application's arguments
+    arguments: (ListVal zast.nodeid).view
+} out bool is {
+    if arguments.length == 0 then return false
+    arg: argRefAt :ast nid: (arguments.get i: 0)
+    if arg.nid.isZero or arg.name.isZero.not then return false
+    nameId: bareAtomNameId n: (ast.nodes.get i: arg.operation)
+    if nameId.isZero then return false
+    if (isNumericLiteralNameAt :ast ref: nameId) then return true
+    # a bare name is a value when its nearest declaration is a constant, read
+    # from the declarations so nothing resolves ahead of the arguments
+    hit: envLookup :st scope: (scopeFor :st :scope :unitDecl) :nameId
+    if hit.declId.isZero then return false
+    return (st.typing.decls.get i: hit.declId).kind.constDecl
 }
 
 # anyLabelledArg -- whether any of a call-shaped reference's arguments carries a
@@ -3933,7 +3989,10 @@ mintMonoRefParts: function {
         # resolve, as a type reference that does not settle is common while
         # definitions are still resolving
         tplId: ztypes.tid
-        if (anyLabelledArg :ast :arguments) then {
+        if (
+            (anyLabelledArg :ast :arguments) or
+            (leadingArgIsValue :st :ast :unitDecl :scope :arguments)
+        ) then {
             tplId = typeApplicationTemplate :st :scope :ast :unitDecl :callableNid
             if tplId.isZero then return ztypes.tid.zero
         }
@@ -26417,7 +26476,7 @@ inferConstructionArg: function {
     opId: zast.nodeid
     arg: argRefAt :ast nid: argId
     if arg.nid.isZero then return
-    pk = arg.name
+    pk = numericLeadingParam :st tdecl: tk label: arg.name :argIdx
     opId = arg.operation
     if pk.isZero when argIdx == 0 when (elidedPrimaryTypeArg
         :st
@@ -27254,7 +27313,7 @@ collectTypeArgAt: function {
     opId: zast.nodeid
     arg: argRefAt :ast nid: argId
     if arg.nid.isZero then return (argscan miss: anyMiss tid: ztypes.tid.zero)
-    pk0 = arg.name
+    pk0 = numericLeadingParam :st tdecl: tk0 label: arg.name :argIdx
     opId = arg.operation
     if pk0.isZero when argIdx == 0 when primaryName.isZero.not when (explicitPrimaryArgTid
         :ast
@@ -27659,7 +27718,7 @@ validateGenericTypeArgs: function {
         kAiter = kAiter + 1
         arg: argRefAt :ast nid: argId
         if arg.nid.isZero.not then {
-            pk: arg.name
+            pk: numericLeadingParam :st tdecl: tk label: arg.name :argIdx
             if pk.isZero when argIdx == 0 when primaryName.isZero.not then {
                 anP: paramTypeBaseNameId :ast op: (ast.nodes.get i: arg.operation)
                 pid0: ztypes.tid
