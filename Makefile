@@ -401,7 +401,10 @@ test-tcc-heavy: $(TCC_RUN_DEPS)
 # rather than in the corpus alone because the scheme is what the cases are
 # about: readable names spell a local by its SOURCE name, so a local shadowing
 # another unit's constant, or two sibling blocks binding one name, only diverge
-# under this flag. The COMPILER leg below is the one that matters most: the
+# under this flag. A tag enumerator carries its type's and arm's names under it
+# (after the ordinal that makes it unique): `arm_case_tags` holds two arms whose
+# names differ only in case, `tag_stem_clash` two units' sums of one name. The
+# COMPILER leg below is the one that matters most: the
 # small programs exercise a handful of locals each, and a naming scheme is only
 # proven by a program with tens of thousands of them.
 readable-check: bin/zc $(BUILDDIR)/buildstamp.o
@@ -409,7 +412,8 @@ readable-check: bin/zc $(BUILDDIR)/buildstamp.o
 	@for c in hello:examples vector:examples records:examples fibonacci:examples \
 	          typedefs:examples shadow_unit_const:tests/fixtures/emitc_corpus \
 	          rn_sibling_shadow:tests/fixtures/emitc_corpus \
-          rn_two_companions:tests/fixtures/emitc_corpus; do \
+          rn_two_companions:tests/fixtures/emitc_corpus \
+	          arm_case_tags:tests/fixtures/emitc_corpus tag_stem_clash:tests/fixtures/emitc_corpus; do \
 	  n=$${c%%:*}; d=$$(echo $$c | sed 's/^[^:]*://'); \
 	  bin/zc $$n --src $$d --system lib/system --emit-c $(BUILDDIR)/rn/$$n-id.c || exit 1; \
 	  bin/zc $$n --src $$d --system lib/system --readable-names --emit-c $(BUILDDIR)/rn/$$n-rn.c || exit 1; \
@@ -2471,7 +2475,7 @@ perf: $(PERFBIN)
 #
 # +2 ztypecheck exports envLookup / scopeFor / unitdefNodeId for zls's
 # shadow-aware hover: 0 behaviour, +2 source (ab.sh).
-ALLOC_BASELINE := 2190953
+ALLOC_BASELINE := 2182697
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -2627,7 +2631,7 @@ emitter-guard:
 	chk "resolveTypeIdByName" "$$e3" 15; \
 	chk "userFnId" "$$e4" 18; \
 	chk "childOwnershipText" "$$e5" 0; \
-	chk "regNameOf" "$$e6" 29; \
+	chk "regNameOf" "$$e6" 28; \
 	chk "mangleVarName (both inside varCName)" "$$e7" 2; \
 	chk "io.readText" "$$e8" 3; \
 	chk "monoOriginName" "$$e9" 0; \
@@ -4062,7 +4066,9 @@ FALLBACK_BASELINE :=
 # (natives.tbl's `@unit.` rows: f128 under tcc or off x86-64).
 # 38: the refusal of a `platform` member nothing folded goes with the checker's
 # answers: no native is answered by the checker any more.
-EMITFAIL_BASELINE := 38
+# 37: checkTagStem's refusal -- two monos of one name -- goes with tag
+# constants spelled from names.
+EMITFAIL_BASELINE := 37
 MARKER_BASELINE := 24
 EXCS := $(NAMES:%=$(EXDIR)/%.c)
 fallback-guard: $(EXCS) bin/zc bin/zl bin/zls
