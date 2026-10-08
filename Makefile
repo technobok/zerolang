@@ -2439,7 +2439,10 @@ perf: $(PERFBIN)
 # +79 only the system unit's `null` / `never` declarations are the empty types
 # (defTypetypeOf takes whether the definition is the system's): 0 behaviour,
 # +79 source (ab.sh).
-ALLOC_BASELINE := 2207526
+#
+# +28 a loop and `return` demand the system unit's `never` by its unit, not by
+# a lookup where they are written: -1 behaviour, +29 source (ab.sh).
+ALLOC_BASELINE := 2207554
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -3261,7 +3264,9 @@ fwd-shape-guard: bin/zc
 # `--eager` BY DESIGN: they pin that an unused definition, an unused method and
 # an instance's unused method or function are never checked, so their unused
 # ones are wrong and `--eager` checks every definition and refuses them.
-EAGER_KNOWN := unused_definition_not_demanded unused_method_not_demanded generic_member_not_demanded generic_unit_member_not_demanded
+# user_never_not_demanded is the same by design: it pins that a loop demands the
+# SYSTEM's `never`, never a user's, so its unused user `never` is wrong.
+EAGER_KNOWN := unused_definition_not_demanded unused_method_not_demanded generic_member_not_demanded generic_unit_member_not_demanded user_never_not_demanded
 
 eager-guard: bin/zc
 	@d=$$(mktemp -d); bad=""; \
