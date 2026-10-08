@@ -620,9 +620,6 @@ isMutableViewTid: function {ast: Ast st: zenv.ZSymbolTable tid: ztypes.tid} out 
     if tid.isZero then return false
     vog: st.reg.genericOriginOf :tid
     if vog.isZero then return false
-    # a program whose units never spell the window template has no window, and
-    # the lookup below is memoized only for a name the program interned
-    if (zast.poolFind pool: ast.names text: "SpanVal").isZero then return false
     if vog == (stdTid :ast :st wk: zast.wellKnown.slot.tySpanVal) then return true
     return vog == (stdTid :ast :st wk: zast.wellKnown.slot.tySpanPair)
 }
@@ -11001,13 +10998,10 @@ requireLibraryOf: function {
 # ZTyping.requireDemanded IS that set: a block is demanded by the first
 # declaration resolved from its unit and by nothing else, so it cannot light
 # its own unit.
-requiredLibs: function {
-    st: zenv.ZSymbolTable.view
-    program: Ast.view
-} out List String is {
+requiredLibs: function {st: zenv.ZSymbolTable.view} out List String is {
     libs9w: List String
     {
-        libNid9w: zast.poolFind pool: program.names text: "library"
+        libNid9w: zast.wellKnown.slot.wkLibrary
         if libNid9w.isZero then return libs9w
         for each rq9w: st.typing.requireDemanded loop {
             lib9x: requireLibraryOf :st declId: rq9w libNid: libNid9w
@@ -11034,7 +11028,7 @@ checkRequireBlocks: function {
     {
         # 0 when no source spells `library` at all: then every key a block
         # writes is unknown, which is still a block to check
-        libNid9q: zast.poolFind pool: program.names text: "library"
+        libNid9q: zast.wellKnown.slot.wkLibrary
         rqs9q: ListVal ztypes.declid
         for each r9q: st.typing.requireDemanded loop (rqs9q.append
             from: r9q
@@ -12486,7 +12480,7 @@ unionCustomTagOfArm: function {
                     # only the main unit's custom-tag items stamp
                     # (system variants resolve standalone, unstamped).
                     if unitDecl == st.typing.mainUnitRoot then {
-                        hUnitDecl: unitDeclOfName :st nameId: (nameIdOf :ast name: "system")
+                        hUnitDecl: unitDeclOfName :st nameId: zast.wellKnown.slot.unSystem
                         tgo: (resolvedByIds
                             :st
                             :ast
@@ -12717,7 +12711,7 @@ attachUnionArm: function {
         isBoxCall = calleeName == zast.wellKnown.slot.tyBox
     }
     if isBoxCall then {
-        bxt: (walkLookupTyperef :st :scope :ast :unitDecl base: "Box").or d: ztypes.tid.zero
+        bxt: stdTid :ast :st wk: zast.wellKnown.slot.tyBox
         isBx: false
         if bxt.isZero.not when (st.reg.typetypeOf typeId: bxt) == ztypes.ztypetype.classType when (
             (st.typing.declMemberCount ownerTid: bxt) == 0
@@ -14021,7 +14015,7 @@ stringBuiltAtRunTime: function {ast: Ast.view n: astnode.view} out String is {
         return ""
     } case dottedpath then {
         cId: atomNameId :ast n: (ast.nodes.get i: n.child)
-        if (cId == zast.wellKnown.slot.wkString) or (cId == (nameIdOf :ast name: "copy")) then {
+        if (cId == zast.wellKnown.slot.wkString) or (cId == zast.wellKnown.slot.wkCopy) then {
             return "an owned String"
         }
         return (stringBuiltAtRunTime :ast n: (ast.nodes.get i: n.parent))
@@ -17291,7 +17285,7 @@ enterUnitOnce: function {
             }
         }
     }
-    demandReturnNever :st :ast
+    demandReturnNever :st
 }
 
 # stampCtorDefaults -- a construction fills unprovided defaulted fields: the
@@ -17403,7 +17397,7 @@ fixupCustomTags: function {
                 cngo: st.typing.pendingCustomTagNode.get key: cuidn
                 cnid: cngo.or d: zast.nodeid
                 if cnid.isZero.not then {
-                    unitDecl98: unitDeclOfName :st nameId: (nameIdOf :ast name: "system")
+                    unitDecl98: unitDeclOfName :st nameId: zast.wellKnown.slot.unSystem
                     tgo2: (resolvedByIds
                         :st
                         :ast
@@ -17617,7 +17611,7 @@ ensureUnitRequire: function {
     if own.isZero then return
     if (st.typing.requireSeen.has item: own) then return
     st.typing.requireSeen.add item: own
-    rqn: zast.poolFind pool: ast.names text: "require"
+    rqn: zast.wellKnown.slot.wkRequire
     if rqn.isZero then return
     rq: st.typing.declFindChild parentDeclId: own nameId: rqn
     if rq.isZero then return
@@ -18048,7 +18042,7 @@ scanCallsInNode: function {
             (demandDefinition
                 :st
                 scope: doFr
-                nameId: (zast.poolFind pool: ast.names text: "optionval")
+                nameId: zast.wellKnown.slot.tyOptionval
             )
         }
         scanCallsAt :st :scope :ast nid: node.statement
@@ -18260,8 +18254,8 @@ scanUnitCalls: function {
 
 # demandReturnNever -- the builtins a walked or synthesized body uses without
 # naming them in source: system's `return` and its `never` result.
-demandReturnNever: function {st: zenv.ZSymbolTable ast: Ast.view} is {
-    sysId: nameIdOf :ast name: "system"
+demandReturnNever: function {st: zenv.ZSymbolTable} is {
+    sysId: zast.wellKnown.slot.unSystem
     demandUnitMember :st unitNameId: sysId nameId: zast.wellKnown.slot.wkReturn
     demandUnitMember :st unitNameId: sysId nameId: zast.wellKnown.slot.tyNever
 }
@@ -18281,7 +18275,7 @@ seedBodyWalkDemands: function {st: zenv.ZSymbolTable scope: ztypes.declid progra
                 ) then found = true
             }
         }
-        if found then demandReturnNever :st ast: program
+        if found then demandReturnNever :st
     }
 }
 
@@ -19193,7 +19187,7 @@ createUnitMono: function {
     if mud.isZero.not then st.typing.declSetType declId: mud typeId: monoId
     if tplTid.isZero.not then st.reg.setGenericOrigin typeId: monoId value: tplTid
     attachMonoUnitFuncs :st :ast :monoId :templateOpId
-    demandReturnNever :st :ast
+    demandReturnNever :st
     return monoId
 }
 
@@ -20752,6 +20746,13 @@ stdTid: function {ast: Ast st: zenv.ZSymbolTable wk: zast.nameid} out ztypes.tid
     return r
 }
 
+# stdTidOpt -- stdTid as an optional: none when the program has no such type
+stdTidOpt: function {ast: Ast st: zenv.ZSymbolTable wk: zast.nameid} out optionval ztypes.tid is {
+    t: stdTid :ast :st :wk
+    if t.isZero then return (optionval.none ztypes.tid)
+    return (optionval.some t)
+}
+
 # stdTidRo -- stdTid's read half: the memoised or already-resolved id, 0 when the
 # type has not been resolved. Never mints, so it lends ast as a view; a
 # comparison against a tid that already exists is exact, because the stdlib type
@@ -22118,7 +22119,9 @@ isSizedTemplate: function {ast: Ast.view st: zenv.ZSymbolTable tid: ztypes.tid} 
 isBoxTemplate: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
     if tid.isZero then return false
     if ((st.reg.typetypeOf typeId: tid) == ztypes.ztypetype.classType).not then return false
-    if (st.reg.nameIs :tid name: "Box").not then return false
+    if (
+        (st.typing.decls.get i: (st.reg.defOf :tid)).name != zast.wellKnown.slot.tyBox
+    ) then return false
     return (st.typing.declMemberCount ownerTid: tid) == 0
 }
 
@@ -23656,14 +23659,14 @@ nativeLayout: function {
         nk: numKindOfTid :st :tid
         if nk.has then return (numericLayout k: nk.kind)
     }
-    if (valIsMonoOf :ast :st :tid base: "str") then {
+    if (valIsMonoOf :st :tid wk: zast.wellKnown.slot.tyStr) then {
         cap: st.reg.sizedLength specId: tid
         w: 4.u64
         if cap <= 65535 then w = 2
         if cap <= 255 then w = 1
         return (valtypelayout size: (alignUp n: w + cap a: w) align: w known: true cyclic: false)
     }
-    if (valIsMonoOf :ast :st :tid base: "array") then {
+    if (valIsMonoOf :st :tid wk: zast.wellKnown.slot.tyArray) then {
         el: valtypeLayout :ast :st tid: (arrayElemTid :st :tid) :refBytes depth: depth + 1
         if el.known.not then return el
         n: st.reg.sizedLength specId: tid
@@ -24221,7 +24224,7 @@ checkHashKey: function {
     }
     if (hs.generated or es.generated).not then return
     parts: ListVal ztypes.tid
-    valPartTids :ast :st tid: (valOpOwner :st :tid nameId: zast.wellKnown.slot.wkOpEq) :parts
+    valPartTids :st tid: (valOpOwner :st :tid nameId: zast.wellKnown.slot.wkOpEq) :parts
     for each pt: parts loop {
         checkHashKey :ast :st tid: pt :seen depth: depth + 1
     }
@@ -24510,7 +24513,7 @@ markValOpUsed: function {
         return
     }
     parts: ListVal ztypes.tid
-    valPartTids :ast :st tid: owner :parts
+    valPartTids :st tid: owner :parts
     for each pt: parts loop {
         markValOpUsed :ast :st tid: pt :nameId depth: depth + 1
     }
@@ -24535,7 +24538,7 @@ valOpSource: function {
     md: st.typing.declMemberIdOf parentTypeId: t :nameId
     if md.isZero then return valopsrc.none
     # a str compares and hashes its content, which the runtime does
-    if (valIsMonoOf :ast :st tid: t base: "str") then return valopsrc.builtin
+    if (valIsMonoOf :st tid: t wk: zast.wellKnown.slot.tyStr) then return valopsrc.builtin
     # a `null` shell is a member that is not a method
     if (st.typing.declIsMethodId parentTypeId: t :nameId).not then return valopsrc.none
     if (st.typing.declMemberIsSynth parentTypeId: t :nameId).not then {
@@ -24620,7 +24623,6 @@ valRhsIsOwner: function {
 # valPartTids -- the parts a generated member of `tid` is built from: a
 # record's fields, a variant's payloads, an array's element.
 valPartTids: function {
-    ast: Ast.view
     st: zenv.ZSymbolTable.view
     tid: ztypes.tid
     parts: ListVal ztypes.tid
@@ -24637,7 +24639,7 @@ valPartTids: function {
         variantPayloadTids :st :tid :parts
         return
     }
-    if (valIsMonoOf :ast :st :tid base: "array") then {
+    if (valIsMonoOf :st :tid wk: zast.wellKnown.slot.tyArray) then {
         parts.append (arrayElemTid :st :tid)
         return
     }
@@ -24684,16 +24686,14 @@ arrayElemTid: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out ztypes.t
 
 # valIsMonoOf -- `tid` is an instance of the builtin template named `base`.
 valIsMonoOf: function {
-    ast: Ast.view
     st: zenv.ZSymbolTable.view
     tid: ztypes.tid
-    base: StringView
+    # the stdlib template's well-known name
+    wk: zast.nameid
 } out bool is {
     org: st.reg.genericOriginOf :tid
     if org.isZero then return false
-    ak: zast.poolFind pool: ast.names text: base
-    if ak.isZero then return false
-    at: st.typing.stdTidMemo.get key: ak
+    at: st.typing.stdTidMemo.get key: wk
     match (
         at
     ) case some then {
@@ -24720,7 +24720,7 @@ valEqMissingPart: function {
     if depth > 64 then return tid
     owner: valOpOwner :st :tid nameId: zast.wellKnown.slot.wkOpEq
     parts: ListVal ztypes.tid
-    valPartTids :ast :st tid: owner :parts
+    valPartTids :st tid: owner :parts
     i: u64
     for i < parts.length loop {
         p: parts.get :i
@@ -24750,7 +24750,7 @@ valHashMissingPart: function {
     if depth > 64 then return tid
     owner: valOpOwner :st :tid nameId: zast.wellKnown.slot.wkHash
     parts: ListVal ztypes.tid
-    valPartTids :ast :st tid: owner :parts
+    valPartTids :st tid: owner :parts
     i: u64
     for i < parts.length loop {
         p: parts.get :i
@@ -24774,7 +24774,7 @@ forceValParts: function {
     owner: valOpOwner :st :tid nameId: zast.wellKnown.slot.wkOpEq
     forceAllFields :st :ast tid: owner
     parts: ListVal ztypes.tid
-    valPartTids :ast :st tid: owner :parts
+    valPartTids :st tid: owner :parts
     i: u64
     for i < parts.length loop {
         p: parts.get :i
@@ -27541,7 +27541,7 @@ validateGenericTypeArgs: function {
     # labels, not type arguments
     appendRowNames :st ownerTid: (writtenTemplateCreate :st templateId: tplId) dst: childNames
     primaryName: firstGenericParamId :st templateId: tplId
-    fromId: nameIdOf :ast name: "from"
+    fromId: zast.wellKnown.slot.wkFrom
     seen: IdSet zast.nameid
     ok: true
     argIdx: u64
@@ -27644,7 +27644,6 @@ methodReturnOf: function {st: zenv.ZSymbolTable.view mid: ztypes.tid} out option
 iterWrapperElem: function {
     ast: Ast
     st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
     wid: ztypes.tid
 } out optionval ztypes.tid is {
     origin: ztypes.tid
@@ -27652,25 +27651,25 @@ iterWrapperElem: function {
     if goo.isZero.not then origin = goo
     if origin.isZero then return (optionval.none ztypes.tid)
     isWrapper: false
-    oo: walkLookupTyperef :st scope: st.curScope :ast :unitDecl base: "Option"
+    oo: stdTidOpt :ast :st wk: zast.wellKnown.slot.tyOption
     match (
         oo
     ) case some then {
         if origin == oo then isWrapper = true
     } case none then null
-    vo: walkLookupTyperef :st scope: st.curScope :ast :unitDecl base: "optionval"
+    vo: stdTidOpt :ast :st wk: zast.wellKnown.slot.tyOptionval
     match (
         vo
     ) case some then {
         if origin == vo then isWrapper = true
     } case none then null
-    wo: walkLookupTyperef :st scope: st.curScope :ast :unitDecl base: "OptionView"
+    wo: stdTidOpt :ast :st wk: zast.wellKnown.slot.tyOptionView
     match (
         wo
     ) case some then {
         if origin == wo then isWrapper = true
     } case none then null
-    if (isOptionViewValOrigin :ast :st :unitDecl :origin) then isWrapper = true
+    if (isOptionViewValOrigin :ast :st :origin) then isWrapper = true
     forceMemberOf :st :ast parentTypeId: wid nameId: zast.wellKnown.slot.wkSome
     if isWrapper then return (st.typing.declChildOfId
         parentTypeId: wid
@@ -27684,15 +27683,14 @@ iterWrapperElem: function {
 isOptionViewMono: function {
     ast: Ast
     st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
     wid: ztypes.tid
 } out bool is {
     origin: ztypes.tid
     goo: st.reg.genericOriginOf tid: wid
     if goo.isZero.not then origin = goo
     if origin.isZero then return false
-    if (isOptionViewValOrigin :ast :st :unitDecl :origin) then return true
-    wo: walkLookupTyperef :st scope: st.curScope :ast :unitDecl base: "OptionView"
+    if (isOptionViewValOrigin :ast :st :origin) then return true
+    wo: stdTidOpt :ast :st wk: zast.wellKnown.slot.tyOptionView
     match (
         wo
     ) case some then {
@@ -27707,10 +27705,9 @@ isOptionViewMono: function {
 isOptionViewValOrigin: function {
     ast: Ast
     st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
     origin: ztypes.tid
 } out bool is {
-    wv: walkLookupTyperef :st scope: st.curScope :ast :unitDecl base: "OptionViewVal"
+    wv: stdTidOpt :ast :st wk: zast.wellKnown.slot.tyOptionViewVal
     match (
         wv
     ) case some then {
@@ -28845,7 +28842,7 @@ checkCastFromType: function {
     if vt == base then return
     if vt == tdId then return
     if (isLiteralTypeId :st tid: vt) then {
-        checkArgTypeMismatch :st :ast ptid: base :vt pnId: (nameIdOf :ast name: "from") :arg
+        checkArgTypeMismatch :st :ast ptid: base :vt pnId: zast.wellKnown.slot.wkFrom :arg
         return
     }
     en: specWrittenName :st :ast tid: base
@@ -29924,9 +29921,7 @@ checkTaggedMemberPath: function {
             # unit declares, tests its arm as any value does
             ptSelf: (st.reg.isPartialOf tid: ptb) or ((unitNestedSelf :st :ast tid: ptb) == ptb)
             if isArm when gtpl when ptSelf then {
-                pbool: ((walkLookupTyperef :st scope: st.curScope :ast :unitDecl base: "bool").or
-                    d: ztypes.tid.zero
-                )
+                pbool: stdTid :ast :st wk: zast.wellKnown.slot.wkBool
                 if pbool.isZero.not then {
                     st.templateArmPreds.set key: dp.nid value: ptb
                     stampGate :st nid: dp.nid tid: pbool
@@ -31601,7 +31596,6 @@ refuseMarkerWithoutStorage: function {
 # where it is a projection callable.
 checkMarkerMember: function {
     st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
     ast: Ast
     dp: dpref
     bt: ztypes.tid
@@ -31708,7 +31702,7 @@ checkMarkerMember: function {
             ) then isStrBase = true
         }
         if isStrBase then {
-            sto: walkLookupTyperef :st scope: st.curScope :ast :unitDecl base: "str"
+            sto: stdTidOpt :ast :st wk: zast.wellKnown.slot.tyStr
             match (
                 sto
             ) case some then {
@@ -32369,7 +32363,7 @@ checkDottedOn: function {
     ) then return ztypes.tid.zero
     noStorage: refuseMarkerWithoutStorage :st :unitDecl :ast :dp :bt :cnId
     if noStorage then return ztypes.tid.zero
-    mkm: checkMarkerMember :st :unitDecl :ast :dp :bt :cnId
+    mkm: checkMarkerMember :st :ast :dp :bt :cnId
     if mkm.handled then return mkm.tid
     xfm: checkTransferMarker :st :unitDecl :ast :dp :bt :cnId
     if xfm.handled then return xfm.tid
@@ -37201,11 +37195,10 @@ bindForBorrowedElement: function {
 # before the loop binds an element.
 probeForCallIteration: function {
     st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
     ast: Ast
     vt: ztypes.tid
 } is {
-    if (iterWrapperElem :ast :st :unitDecl wid: vt).none.not then return
+    if (iterWrapperElem :ast :st wid: vt).none.not then return
     (forceMemberOf
         :st
         :ast
@@ -37236,17 +37229,16 @@ forelem: record {
 # return; a function REFERENCE is a value, as anywhere, and answers no option.
 forOptionElementOf: function {
     st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
     ast: Ast
     vt: ztypes.tid
 } out forelem is {
     fe: forelem elem: ztypes.tid.zero wrapper: vt isView: false
-    w1: iterWrapperElem :ast :st :unitDecl wid: vt
+    w1: iterWrapperElem :ast :st wid: vt
     match (
         w1
     ) case some then {
         fe.elem = w1
-        fe.isView = isOptionViewMono :ast :st :unitDecl wid: vt
+        fe.isView = isOptionViewMono :ast :st wid: vt
     } case none then null
     return fe
 }
@@ -37256,7 +37248,6 @@ forOptionElementOf: function {
 # its `call` member. 0 when it has no `call` answering an option.
 forIteratorElementOf: function {
     st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
     ast: Ast
     vt: ztypes.tid
 } out forelem is {
@@ -37276,18 +37267,18 @@ forIteratorElementOf: function {
         match (
             rv
         ) case some then {
-            w2: iterWrapperElem :ast :st :unitDecl wid: rv
+            w2: iterWrapperElem :ast :st wid: rv
             match (
                 w2
             ) case some then {
                 fe.elem = w2
                 fe.wrapper = rv
-                fe.isView = isOptionViewMono :ast :st :unitDecl wid: rv
+                fe.isView = isOptionViewMono :ast :st wid: rv
             } case none then null
         } case none then null
     } case none then null
     if fe.elem.isZero when (st.reg.isPartialOf tid: vt) then {
-        return (partialForElement :st :unitDecl :ast :vt)
+        return (partialForElement :st :ast :vt)
     }
     return fe
 }
@@ -37299,7 +37290,6 @@ forIteratorElementOf: function {
 # checks the loop on the concrete iterator.
 partialForElement: function {
     st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
     ast: Ast
     vt: ztypes.tid
 } out forelem is {
@@ -37323,7 +37313,7 @@ partialForElement: function {
     ) case some then {
         fe.elem = st.reg.genericTypeArgAt specId: vt ordinal: ordo
         fe.wrapper = rv
-        fe.isView = isOptionViewMono :ast :st :unitDecl wid: rv
+        fe.isView = isOptionViewMono :ast :st wid: rv
     } case none then null
     return fe
 }
@@ -37442,11 +37432,11 @@ bindForIteration: function {
         # in an empty call scope; gated on the value being an iterator
         # wrapper.
         if (isCallNode n: (ast.nodes.get i: cond.operation)) then {
-            probeForCallIteration :st :unitDecl :ast :vt
+            probeForCallIteration :st :ast :vt
         }
-        fe = forIteratorElementOf :st :unitDecl :ast :vt
+        fe = forIteratorElementOf :st :ast :vt
     } else {
-        fe = forOptionElementOf :st :unitDecl :ast :vt
+        fe = forOptionElementOf :st :ast :vt
     }
     if fe.elem.isZero then {
         refuseUnwalkableBinding :st :ast :cond :vt :isEach
@@ -39043,15 +39033,9 @@ checkIf: function {
         refilled: IdSet ztypes.declid
         refillCounts: (IdMapV ztypes.declid v: u64)
     )
-    nvId: ((walkLookupTyperef :st scope: st.curScope :ast :unitDecl base: "never").or
-        d: ztypes.tid.zero
-    )
-    nullId: ((walkLookupTyperef :st scope: st.curScope :ast :unitDecl base: "null").or
-        d: ztypes.tid.zero
-    )
-    pBool: ((walkLookupTyperef :st scope: st.curScope :ast :unitDecl base: "bool").or
-        d: ztypes.tid.zero
-    )
+    nvId: stdTid :ast :st wk: zast.wellKnown.slot.tyNever
+    nullId: stdTid :ast :st wk: zast.wellKnown.slot.tyNull
+    pBool: stdTid :ast :st wk: zast.wellKnown.slot.wkBool
     accFacts: List ArmPredFact
     guardFacts: List ArmPredFact
     elseDvg: false
@@ -43739,7 +43723,7 @@ walkOneCallArg: function {
 # callable, `_.create x: 1`. 0 when it starts from anything else; a bare `_`
 # with nothing after it names no member and stays an unknown reference.
 underscoreRoot: function {ast: Ast.view op: zast.nodeid} out zast.nodeid is {
-    us: zast.poolFind pool: ast.names text: "_"
+    us: zast.wellKnown.slot.wkUnderscore
     if us.isZero then return zast.nodeid
     cur: op
     dotted: false
@@ -44893,7 +44877,7 @@ checkYieldCall: function {
             ya: argRefAt :ast nid: yaId
             if ya.nid.isZero.not then {
                 yaT: checkOwnedValueAt :st :unitDecl :ast nid: ya.operation
-                checkYieldedValue :st :unitDecl :ast arg: ya argT: yaT
+                checkYieldedValue :st :ast arg: ya argT: yaT
             }
         }
     }
@@ -44902,7 +44886,7 @@ checkYieldCall: function {
     # the declared form stashes the input's type on entry to `call`; the
     # function form binds it as a parameter literally named `value`, and is
     # asked only when the stash is empty.
-    yvn: nameIdOf :ast name: "value"
+    yvn: zast.wellKnown.slot.wkValue
     yvo: st.lookup nameId: yvn
     if st.typing.currentYieldInputTid.isZero.not then yvo = optionval.some st.typing.currentYieldInputTid
     match (
@@ -45005,7 +44989,6 @@ valueIsYieldCall: function {ast: Ast.view nid: zast.nodeid} out bool is {
 # of it. The element is what the `call` wrapper carries.
 checkYieldedValue: function {
     st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
     ast: Ast
     arg: argref
     argT: ztypes.tid
@@ -45014,7 +44997,7 @@ checkYieldedValue: function {
     wr: st.typing.currentReturnTypeId
     if wr.isZero then return
     elem: ztypes.tid
-    eo: iterWrapperElem :ast :st :unitDecl wid: wr
+    eo: iterWrapperElem :ast :st wid: wr
     match (
         eo
     ) case some then {
@@ -45370,7 +45353,7 @@ checkControlBuiltinCall: function {
     call: callref
 } out ztypes.tid is {
     result: ztypes.tid
-    rtOpt: walkLookupTyperef :st scope: st.curScope :ast :unitDecl base: "return"
+    rtOpt: stdTidOpt :ast :st wk: zast.wellKnown.slot.wkReturn
     match (
         rtOpt
     ) case some then {
@@ -45387,7 +45370,7 @@ checkControlBuiltinCall: function {
             if arg.nid.isZero.not then checkReturnedValue :st :unitDecl :ast :arg
         }
     }
-    nvOpt: walkLookupTyperef :st scope: st.curScope :ast :unitDecl base: "never"
+    nvOpt: stdTidOpt :ast :st wk: zast.wellKnown.slot.tyNever
     match (
         nvOpt
     ) case some then {
@@ -49914,15 +49897,13 @@ checkCaseArms: function {
         targetName = tn.take
     }
     neverId: ztypes.tid
-    nvOpt: walkLookupTyperef :st scope: st.curScope :ast :unitDecl base: "never"
+    nvOpt: stdTidOpt :ast :st wk: zast.wellKnown.slot.tyNever
     match (
         nvOpt
     ) case some then {
         neverId = nvOpt
     } case none then null
-    nullId: ((walkLookupTyperef :st scope: st.curScope :ast :unitDecl base: "null").or
-        d: ztypes.tid.zero
-    )
+    nullId: stdTid :ast :st wk: zast.wellKnown.slot.tyNull
     anyEmpty: false
     armEnds: st.openArmNarrowingEnds
     # a take in one arm is restored for its siblings and consumes the local once
@@ -51351,7 +51332,7 @@ dataIndexedAt: function {
 # atomIsIndex -- node `nid` is the atom `index`, the member a data block reads an
 # element by position through.
 atomIsIndex: function {ast: Ast.view nid: zast.nodeid} out bool is {
-    return (atomNameId :ast n: (ast.nodes.get i: nid)) == (nameIdOf :ast name: "index")
+    return (atomNameId :ast n: (ast.nodes.get i: nid)) == zast.wellKnown.slot.wkIndex
 }
 
 # checkValueArmAt -- the arm dispatch: each handler takes its row as plain
@@ -55058,15 +55039,10 @@ recordSuffixDecl: function {
 # defaults (i64 / f64 / u64) after the body walk: the unregistered pseudo ids
 # and the data blocks' registered intliteral/floatliteral element shells.
 # Symbol-table entries keep their literal ids.
-foldLiteralStamps: function {st: zenv.ZSymbolTable scope: ztypes.declid program: Ast} is {
-    unitDecl: (unitDeclOfNameOrOwn
-        :st
-        :scope
-        nameId: (nameIdOf ast: program name: program.mainUnitName.stringView)
-    )
-    intId: (walkLookupTyperef :st :scope ast: program :unitDecl base: "i64").or d: ztypes.tid.zero
-    floatId: (walkLookupTyperef :st :scope ast: program :unitDecl base: "f64").or d: ztypes.tid.zero
-    bitsId: (walkLookupTyperef :st :scope ast: program :unitDecl base: "u64").or d: ztypes.tid.zero
+foldLiteralStamps: function {st: zenv.ZSymbolTable program: Ast} is {
+    intId: stdTid ast: program :st wk: zast.wellKnown.slot.tyI64
+    floatId: stdTid ast: program :st wk: zast.wellKnown.slot.tyF64
+    bitsId: stdTid ast: program :st wk: zast.wellKnown.slot.tyU64
     nn: st.typing.nodeType.length
     ni: zast.nodeid
     for ni.u64 < nn loop {
@@ -55216,7 +55192,7 @@ constantBinopType: function {
     lt: constantOperandType :st :scope :ast :unitDecl nid: lhsId
     rt: constantOperandType :st :scope :ast :unitDecl nid: rhsId
     if (isComparisonOp nameId: (atomNameId :ast n: (ast.nodes.get i: opId))) then {
-        return (constantCompareType :st :scope :ast :unitDecl :nid :lhsId :rhsId :lt :rt)
+        return (constantCompareType :st :ast :nid :lhsId :rhsId :lt :rt)
     }
     result: lt
     if lt.isZero then result = rt
@@ -55239,8 +55215,6 @@ constantBinopType: function {
 constantCompareType: function {
     ast: Ast
     st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
     nid: zast.nodeid
     lhsId: zast.nodeid
     rhsId: zast.nodeid
@@ -55274,7 +55248,7 @@ constantCompareType: function {
         }
     }
     bres: ztypes.tid
-    bo: walkLookupTyperef :st :scope :ast :unitDecl base: "bool"
+    bo: stdTidOpt :ast :st wk: zast.wellKnown.slot.wkBool
     match (
         bo
     ) case some then {
@@ -56715,9 +56689,9 @@ literalDefaultTid: function {
     ast: Ast
     v: ztypes.cval
 } out ztypes.tid is {
-    dflt: zast.poolFind pool: ast.names text: "i64"
-    if v.bits then dflt = zast.poolFind pool: ast.names text: "u64"
-    if v.kind.fvalKind then dflt = zast.poolFind pool: ast.names text: "f64"
+    dflt: zast.wellKnown.slot.tyI64
+    if v.bits then dflt = zast.wellKnown.slot.tyU64
+    if v.kind.fvalKind then dflt = zast.wellKnown.slot.tyF64
     return (scalarTidOf :st :scope :ast nameId: dflt)
 }
 
@@ -56851,7 +56825,7 @@ constStringLength: function {
     s: StringView
 } out ztypes.cval is {
     n: ztypes.makeIntConst s.length.i64.orPanic
-    u64Id: zast.poolFind pool: ast.names text: "u64"
+    u64Id: zast.wellKnown.slot.tyU64
     return (ztypes.typedConst c: n numTid: (scalarTidOf :st :scope :ast nameId: u64Id))
 }
 
@@ -62078,7 +62052,7 @@ declSurfaceOfName: function {
         }
         co: (st.typing.declFindChild
             parentDeclId: st.typing.programRoot
-            nameId: (nameIdOf :ast name: "core")
+            nameId: zast.wellKnown.slot.unCore
         )
         if co.isZero.not then {
             cd8: st.typing.declFindChild parentDeclId: co :nameId
@@ -63484,7 +63458,7 @@ typecheck: function {
             unitDecl: ctorUd9
         )
     }
-    foldLiteralStamps :st scope: rf :program
+    foldLiteralStamps :st :program
     {
         canonUd9: (unitDeclOfNameOrOwn
             :st

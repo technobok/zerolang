@@ -20134,7 +20134,8 @@ emitOptionBoxHoist: function {
         b4: armCellFill box: bx.stringView value: tv.stringView
         buf.append "\{ind}\{b4}\n"
         if (isBareCName s: av.stringView) when (isRegisteredOwned :tmp name: av.stringView) then {
-            payT: ((symtab.typing.declChildOf pool: ast.names parentTypeId: mid name: "some").or
+            payT: ((symtab.typing.declChildOfId parentTypeId: mid nameId: zast.wellKnown.slot.wkSome
+            ).or
                 d: ztypes.tid.zero
             )
             bz: movedZeroC :symtab :ctx tid: payT
@@ -32694,9 +32695,9 @@ resolveRuntimeTids: function {
     strNmId: zast.nameid
     svNmId: zast.nameid
     {
-        sysId = zast.poolFind pool: program.names text: "system"
-        strNmId = zast.poolFind pool: program.names text: "String"
-        svNmId = zast.poolFind pool: program.names text: "StringView"
+        sysId = zast.wellKnown.slot.unSystem
+        strNmId = zast.wellKnown.slot.tyString
+        svNmId = zast.wellKnown.slot.tyStringView
     }
     sgo: optionval.none ztypes.tid
     {
@@ -32736,7 +32737,7 @@ resolveRuntimeTids: function {
             ast: program
             st: symtab
             unitDecl: ud13x
-            name: (zast.poolFind pool: program.names text: "converror")
+            name: zast.wellKnown.slot.tyConverror
         )
     }
     match (
@@ -32934,14 +32935,14 @@ emitRuntimeUnits: function {
 # shares its name with another is renamed `name_tid`, unless the stdlib owns it
 # (stdlibStem): the fragments name those, and the stdlib's own names are unique.
 # A template or a partial is never emitted, so it shares a name with nothing.
-separateTagStems: function {program: Ast.view symtab: zenv.ZSymbolTable} is {
+separateTagStems: function {symtab: zenv.ZSymbolTable} is {
     anchors: IdSet ztypes.declid
     anchors.add item: symtab.typing.systemUnitRoot
     anchors.add item: symtab.typing.collectionsUnitRoot
     anchors.add item: symtab.typing.coreUnitRoot
-    anchors.add item: (unitDeclByName :symtab ast: program name: "io")
-    anchors.add item: (unitDeclByName :symtab ast: program name: "cli")
-    anchors.add item: (unitDeclByName :symtab ast: program name: "net")
+    anchors.add item: (ztypecheck.unitDeclOfName st: symtab nameId: zast.wellKnown.slot.unIo)
+    anchors.add item: (ztypecheck.unitDeclOfName st: symtab nameId: zast.wellKnown.slot.unCli)
+    anchors.add item: (ztypecheck.unitDeclOfName st: symtab nameId: zast.wellKnown.slot.unNet)
     shared: sharedSumNames :symtab
     n: symtab.reg.nextTid
     t: ztypes.tid
@@ -33031,7 +33032,7 @@ emitC: function {
     targetArch: StringView
 } out String is {
     buf: String
-    separateTagStems :program :symtab
+    separateTagStems :symtab
     rtids: resolveRuntimeTids :program :symtab
     strId: rtids.str
     svId: rtids.sv
@@ -33236,7 +33237,7 @@ emitC: function {
     for each lb: libs loop linkLibs.append from: lb.copy
     applyUnitReqs ast: program :symtab :ctx :ccFamily libs: linkLibs arch: targetArch
     {
-        buildDefUnitIndex :symtab :ctx ast: program
+        buildDefUnitIndex :symtab :ctx
         bindFragTypeTids :symtab :ctx ast: program
         rmn: ctx.realMain.copy
         (ctxBindMain
@@ -33960,7 +33961,7 @@ sortLessC: function {
     ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx elem: ztypes.tid
 } out String is {
     if (sortCallsWritten :ast :symtab :elem).not then {
-        if (ztypecheck.valIsMonoOf :ast st: symtab tid: elem base: "str") then {
+        if (ztypecheck.valIsMonoOf st: symtab tid: elem wk: zast.wellKnown.slot.tyStr) then {
             return "memcmp(_a.data, _b.data, _a.len < _b.len ? _a.len : _b.len) < 0 || (memcmp(_a.data, _b.data, _a.len < _b.len ? _a.len : _b.len) == 0 && _a.len < _b.len)"
         }
         return "_a < _b"
@@ -34579,7 +34580,7 @@ isGenericType: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out boo
 # emission (the Decl chain is immutable during emission); zero-alloc id
 # lookups then serve the hot definedInNonMain path. Interning a fresh integer
 # per unit NAME collapsed two units that share a spelling into one id.
-buildDefUnitIndex: function {symtab: zenv.ZSymbolTable.view ctx: Ctx ast: Ast.view} is {
+buildDefUnitIndex: function {symtab: zenv.ZSymbolTable.view ctx: Ctx} is {
     t: ztypes.tid
     n: symtab.reg.nextTid
     for t < n loop {
@@ -34592,24 +34593,24 @@ buildDefUnitIndex: function {symtab: zenv.ZSymbolTable.view ctx: Ctx ast: Ast.vi
         }
         t = t.next
     }
-    ctx.ioUnitDecl = unitDeclByName :symtab :ast name: "io"
-    ctx.osUnitDecl = unitDeclByName :symtab :ast name: "os"
-    ctx.cliUnitDecl = unitDeclByName :symtab :ast name: "cli"
-    ctx.netUnitDecl = unitDeclByName :symtab :ast name: "net"
+    ctx.ioUnitDecl = ztypecheck.unitDeclOfName st: symtab nameId: zast.wellKnown.slot.unIo
+    ctx.osUnitDecl = ztypecheck.unitDeclOfName st: symtab nameId: zast.wellKnown.slot.unOs
+    ctx.cliUnitDecl = ztypecheck.unitDeclOfName st: symtab nameId: zast.wellKnown.slot.unCli
+    ctx.netUnitDecl = ztypecheck.unitDeclOfName st: symtab nameId: zast.wellKnown.slot.unNet
     ctx.ioFileTid = (unitClassTid
         :symtab
         unitDecl: ctx.ioUnitDecl
-        nameId: (zast.poolFind pool: ast.names text: "File")
+        nameId: zast.wellKnown.slot.tyFile
     )
     ctx.netListenerTid = (unitClassTid
         :symtab
         unitDecl: ctx.netUnitDecl
-        nameId: (zast.poolFind pool: ast.names text: "Listener")
+        nameId: zast.wellKnown.slot.tyListener
     )
     ctx.netConnTid = (unitClassTid
         :symtab
         unitDecl: ctx.netUnitDecl
-        nameId: (zast.poolFind pool: ast.names text: "Conn")
+        nameId: zast.wellKnown.slot.tyConn
     )
 }
 
@@ -35716,7 +35717,6 @@ emitIdMapMono: function {
     buf.append t
     buf.append "\n"
     (emitIdMapGetMut
-        :ast
         :symtab
         :ctx
         :monoId
@@ -35755,7 +35755,6 @@ emitIdMapMono: function {
 # over the VALUE in both families, where `get`'s differs between them -- is
 # resolved through the interned name.
 emitIdMapGetMut: function {
-    ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     monoId: ztypes.tid
@@ -35767,7 +35766,7 @@ emitIdMapGetMut: function {
     gmId: (monoMethodReturn
         :symtab
         :monoId
-        nameId: (zast.poolFind pool: ast.names text: "getMut")
+        nameId: zast.wellKnown.slot.wkGetMut
     )
     if gmId.isZero then return
     gmName: regNameOf :symtab tid: gmId
@@ -42185,7 +42184,7 @@ eqGenerated: function {
     src: ztypecheck.valOpSource :ast st: symtab :tid nameId: zast.wellKnown.slot.wkOpEq
     if src.generated.not then return false
     parts: ListVal ztypes.tid
-    ztypecheck.valPartTids :ast st: symtab :tid :parts
+    ztypecheck.valPartTids st: symtab :tid :parts
     ok: true
     i: u64
     for i < parts.length while ok loop {
@@ -42382,7 +42381,7 @@ hashFnDemand: function {
     if (ztypecheck.valOpSource :ast st: symtab :tid nameId: zast.wellKnown.slot.wkHash
     ).generated.not then return
     parts: ListVal ztypes.tid
-    ztypecheck.valPartTids :ast st: symtab :tid :parts
+    ztypecheck.valPartTids st: symtab :tid :parts
     i: u64
     for i < parts.length loop {
         p: parts.get :i
@@ -42409,11 +42408,11 @@ hashDefC: function {
     bytesFn: "z_siphash_bytes".string
     if ctx.fastHash then bytesFn = "z_fasthash_bytes"
     dest.append "static uint64_t \{cn}_hash(\{cn}_t a) {\n"
-    if (ztypecheck.valIsMonoOf :ast st: symtab :tid base: "str") then {
+    if (ztypecheck.valIsMonoOf st: symtab :tid wk: zast.wellKnown.slot.tyStr) then {
         dest.append "    return \{bytesFn}(a.data, a.len);\n}\n\n"
         return
     }
-    if (ztypecheck.valIsMonoOf :ast st: symtab :tid base: "array") then {
+    if (ztypecheck.valIsMonoOf st: symtab :tid wk: zast.wellKnown.slot.tyArray) then {
         arrayHashBody :ast :symtab :ctx :tid bytesFn: bytesFn.stringView :dest
         return
     }
