@@ -21572,15 +21572,25 @@ unitSiblingReturn: function {
 }
 
 # returnNamesSelf -- a return typeref that names the type declaring the method:
-# `this`, `type` (in a generic type's members, the instance), or the type's own
-# name, bare or marked.
-returnNamesSelf: function {ast: Ast.view nid: zast.nodeid templateName: StringView} out bool is {
+# `this`, `type` (in a generic type's members, the instance), or a name that,
+# looked up from the template, reaches the template's own declaration, bare or
+# marked.
+returnNamesSelf: function {
+    # the tree the return typeref is read from
+    ast: Ast.view
+    # the declarations the written name is looked up in
+    st: zenv.ZSymbolTable.view
+    # the return typeref
+    nid: zast.nodeid
+    # the declaration of the template whose method returns it
+    tplDecl: ztypes.declid
+} out bool is {
     bid: rootNameIdOf :ast n: (ast.nodes.get i: nid)
     if bid.isZero then return false
     if bid == zast.wellKnown.slot.wkThis then return true
     if bid == zast.wellKnown.slot.wkType then return true
-    bt: zast.nameTextAt :ast ref: bid
-    return bt.stringView == templateName
+    if tplDecl.isZero then return false
+    return (declInScope :st scopeDeclId: tplDecl nameId: bid) == tplDecl
 }
 
 # cloneMethodReturn -- the clone's return type: the template's, with the
@@ -21619,8 +21629,9 @@ cloneMethodReturn: function {
         # an alias) still knows a return that names the type itself
         if rto5.isZero when rn5.isZero.not when (returnNamesSelf
             :ast
+            :st
             nid: rn5
-            :templateName
+            tplDecl: (declOfTypeId :st tid: tplClassId)
         ) then {
             st.reg.setReturnType typeId: fid5 value: specId
             return
@@ -42995,7 +43006,7 @@ checkNumericCoercion: function {
     vn9: valueNid
     wn9: ast.nodes.get i: vn9
     if wn9.namedoperation then vn9 = wn9.operation
-    recordHelperScalarTarget :st :ast :dstTid valueNid: vn9
+    recordHelperScalarTarget :st :dstTid valueNid: vn9
     # an `if` or a `match` lands each arm's value in the destination
     if (isControlValue :ast nid: vn9) then {
         checkArmsCoercion :st :ast :dstTid nid: vn9
@@ -43072,7 +43083,6 @@ checkArmsCoercion: function {
 # alone.
 recordHelperScalarTarget: function {
     st: zenv.ZSymbolTable
-    ast: Ast
     dstTid: ztypes.tid
     valueNid: zast.nodeid
 } is {
@@ -43080,31 +43090,19 @@ recordHelperScalarTarget: function {
     cf: st.typing.nodeConstIn mono: st.typing.curMonoStamp nid: valueNid
     if cf.numTid.isZero.not then return
     if cf.kind.ivalKind.not and cf.kind.fvalKind.not then return
-    # read as views: this is asked of every integer constant at every typed
-    # destination, and a copied name per question is what losslessConvTo's
-    # note counts in the tens of thousands
-    wide: false
-    bo: st.typing.typedefBaseName.get key: dstTid
-    match (
-        bo
-    ) case some then {
-        bt: ast.names.texts.get i: bo
-        wide = isHelperScalarName name: bt.stringView
-    } case none then {
-        dn: st.reg.nameViewOf tid: dstTid
-        wide = isHelperScalarName name: dn
-    }
+    # the destination's kind, through any typedef, by declaration
+    b: dstTid
+    for (typedefBaseTidOf :st tid: b).isZero.not loop b = typedefBaseTidOf :st tid: b
+    nk: numKindOfTid :st tid: b
+    if nk.has.not then return
+    wide: (
+        (nk.kind == ztypes.numkind.i128Type) or
+        (nk.kind == ztypes.numkind.u128Type) or
+        (nk.kind == ztypes.numkind.f16Type)
+    )
     if wide then st.typing.helperScalarTarget.set key: valueNid value: dstTid
 }
 
-# isHelperScalarName -- the scalar name is i128, u128 or f16: a type a C
-# compiler may lack, whose values move only through the runtime's helpers.
-isHelperScalarName: function {name: StringView} out bool is {
-    nk: ztypes.numkindByName :name
-    if nk.has.not then return false
-    if (nk.kind == ztypes.numkind.i128Type) or (nk.kind == ztypes.numkind.u128Type) then return true
-    return nk.kind == ztypes.numkind.f16Type
-}
 
 # checkUntypedConstFits -- an untyped folded constant at `valueNid` is settled by
 # its value, which must fit the destination; true when the value was one.
@@ -56817,8 +56815,8 @@ declaredLossless: function {
     from: ztypes.tid
     targetId: zast.nameid
 } out bool is {
-    fromName: st.reg.nameViewOf tid: from
-    if (zast.poolFind pool: ast.names text: fromName) == targetId then return true
+    fd: declOfTypeId :st tid: from
+    if fd.isZero.not when (st.typing.decls.get i: fd).name == targetId then return true
     md: st.typing.declMemberIdOf parentTypeId: from nameId: targetId
     if md.isZero then return false
     retId: zast.nodeid
