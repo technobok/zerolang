@@ -140,42 +140,6 @@ unitKindForLabel: function {id: zast.nameid unitBody: bool} out zast.unitkind is
     return zast.unitkind.namespace
 }
 
-# True when the node is the bare identifier `null`.
-nodeIsBareNull: function {n: astnode.view} out bool is {
-    match (
-        n
-    ) case atomid then {
-        return n.name == zast.wellKnown.slot.tyNull
-    } else {
-        return false
-    }
-}
-
-# True when a statement line wraps the bare identifier `null`.
-slIsBareNull: function {ast: Ast.view sl: astnode.view} out bool is {
-    match (
-        sl
-    ) case statementline then {
-        return (nodeIsBareNull n: (ast.nodes.get i: sl.statementline))
-    } else {
-        return false
-    }
-}
-
-# True when a clause body is exactly the bare atom `null` (one wrapped
-# expression statement): the empty-body spelling.
-isBareNullBody: function {ast: Ast.view body: astnode.view} out bool is {
-    match (
-        body
-    ) case statement then {
-        if body.statements.count.u64 != 1 then return false
-        slId: zast.kidAt kids: ast.kids span: body.statements i: 0
-        return (slIsBareNull :ast sl: (ast.nodes.get i: slId))
-    } else {
-        return false
-    }
-}
-
 # True for the keyword token types that open an inline type definition
 # (record / class / variant / union / protocol / facet / typedef / data). These are
 # rejected inside an object body -- such a type must be defined at unit
@@ -1762,44 +1726,19 @@ Parser: class {
         )
     }
 
-    # a bare `null` body is an EMPTY BLOCK, not the value null: `then null` /
-    # `else null` declare a body that does nothing. Shared by both clause-body
-    # forms so `then` and `else` desugar identically.
-    nullBodyDesugar: function {:this body: astnode.view line: u32 col: u32} out astnode is {
-        if (isBareNullBody ast: this.ast :body) then {
-            stmts: ListVal zast.nodeid
-            return (astnode.statement (zast.statementrow
-                nodeid: this.nextId
-                lineno: line
-                colno: col
-                statements: (zast.kidsAdd kids: this.ast.kids xs: stmts)
-            )
-            )
-        }
-        return body
-    }
-
     # clause-body -> primary-expression. The body of a `then` or a `case`,
     # where the enclosing construct is still open and a bare `if`/`match`
     # would leave a following `else` with two owners. Loop bodies do not take
     # this form; they take an expression-body.
     acceptClauseBody: function {:this lex: zlexer.Lexer} out astnode is {
-        bodyPos: lex.peekPos
-        body: this.acceptPrimaryExpression :lex
-        bErr: Parser.isError node: body
-        if bErr then return body
-        return (this.nullBodyDesugar :body line: bodyPos.lineno col: bodyPos.colno)
+        return (this.acceptPrimaryExpression :lex)
     }
 
     # else-body -> expression. The enclosing `if` or `match` has just taken its
     # own `else` and can never take another, so every form is unambiguous here
     # -- including a bare `if`, which is what `else if` is.
     acceptElseBody: function {:this lex: zlexer.Lexer} out astnode is {
-        bodyPos: lex.peekPos
-        body: this.acceptExpressionBody :lex
-        bErr: Parser.isError node: body
-        if bErr then return body
-        return (this.nullBodyDesugar :body line: bodyPos.lineno col: bodyPos.colno)
+        return (this.acceptExpressionBody :lex)
     }
 
     # primary-expression -> an expression MINUS `if` and `match`. The body of a

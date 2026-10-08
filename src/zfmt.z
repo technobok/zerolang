@@ -147,8 +147,6 @@ Builder: class {
     idClose: u32
     # the ": " between a label and its value
     idColonSpace: u32
-    # the shared "null" text row
-    idNull: u32
     # the shared line row
     idLine: u32
     # the shared softline row
@@ -175,7 +173,6 @@ Builder: class {
         idOpen: d.lex "("
         idClose: d.lex ")"
         idColonSpace: d.lex ": "
-        idNull: d.lex "null"
         idLine: d.line
         idSoft: d.softline
         idHard: d.hardline
@@ -192,7 +189,6 @@ Builder: class {
             :idOpen
             :idClose
             :idColonSpace
-            :idNull
             :idLine
             :idSoft
             :idHard
@@ -276,12 +272,6 @@ Builder: class {
     # peekIs -- whether the next significant token is `tt`
     peekIs: function {:this tt: zlexer.toktype} out bool is {
         return this.c.peekKind == tt
-    }
-
-    # peekIsNull -- whether the next significant token is the name `null`
-    peekIsNull: function {:this} out bool is {
-        if (this.peekIs tt: zlexer.toktype.refIdTok).not then return false
-        return (this.c.peekTextIs s: "null")
     }
 
     # commentText -- comment token `k` as a text row, its trailing spaces
@@ -1356,9 +1346,10 @@ Builder: class {
         }
     }
 
-    # visitBody -- a clause or loop body: `null`, a block (`{}` printed as
-    # written: whether `null` would mean the same depends on what `null` names
-    # where it is written, which a layout cannot know), or a bare statement
+    # visitBody -- a clause or loop body: a block (`{}` printed as written:
+    # whether `null` would mean the same depends on what `null` names where it is
+    # written, which a layout cannot know), or a bare statement -- `null` among
+    # them, an ordinary name
     visitBody: function {:this id: zast.nodeid} out u32 is {
         n: this.node :id
         count: u64
@@ -1367,10 +1358,6 @@ Builder: class {
         ) case statement then {
             count = n.statements.count
         } else null
-        if this.peekIsNull then {
-            this.skipTok tt: zlexer.toktype.refIdTok
-            return this.idNull
-        }
         if (this.peekIs tt: zlexer.toktype.braceOpenTok) then return (this.visitBlock :id)
         # a bare body: the one statement
         match (
