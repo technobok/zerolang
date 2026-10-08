@@ -13150,78 +13150,23 @@ resolveUnion: function {
     applyGrantsPrivate :st parentId: uuid grants: pvGrants_uuid
 }
 
-# fieldTypeNeedsCleanup -- true when a class field needs cleanup (so the holder keeps
-# a destructor): a borrowed field (its borrow is released at scope exit), a native heap
-# type (String/List/Map/Set), or an in-unit type that itself HAS a destructor
-# (`st.reg.needsDestructor`). A scalar field, or an owned class/union field whose type
-# has no destructor, needs none. Name check for the natives is a scaffold-stage
-# approximation (system types carry no real id under resolve-only-main).
+# fieldTypeNeedsCleanup -- true when a class field needs cleanup (so the holder
+# keeps a destructor), asked of the field's resolved type: a borrowed field (its
+# borrow is released at scope exit), a type with a destructor, or a class or
+# union whose declaration is still resolving -- a self-reference, whose
+# destructor is not known yet and which owns its data whatever it turns out to
+# hold. A scalar, a record, or a class or union with no destructor needs none.
 fieldTypeNeedsCleanup: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    # the type name asked about, as its id
-    nameId: zast.nameid
+    st: zenv.ZSymbolTable.view
+    # the field's type
+    tid: ztypes.tid
     isBorrowed: bool
 } out bool is {
     if isBorrowed then return true
-    if nameId == zast.wellKnown.slot.tyString then return true
-    if nameId == zast.wellKnown.slot.tyList then return true
-    if nameId == zast.wellKnown.slot.tyListRef then return true
-    if nameId == zast.wellKnown.slot.tyListVal then return true
-    if nameId == zast.wellKnown.slot.tyMap then return true
-    if nameId == zast.wellKnown.slot.tyMapRR then return true
-    if nameId == zast.wellKnown.slot.tyMapRV then return true
-    if nameId == zast.wellKnown.slot.tyMapVR then return true
-    if nameId == zast.wellKnown.slot.tyMapVV then return true
-    if nameId == zast.wellKnown.slot.tySet then return true
-    if nameId == zast.wellKnown.slot.tySetRef then return true
-    if nameId == zast.wellKnown.slot.tySetVal then return true
-    # the id-keyed containers own two heap arrays each. A Map field is a heap
-    # POINTER whose destroy the holder calls; these are stack structs, so the
-    # holder must free them in place -- and without a cleanup mark the holder
-    # gets no destructor at all and the arrays leak.
-    if nameId == zast.wellKnown.slot.tyIdMapR then return true
-    if nameId == zast.wellKnown.slot.tyIdMapV then return true
-    if nameId == zast.wellKnown.slot.tyIdSet then return true
-    if nameId == zast.wellKnown.slot.tyOption then return true
-    if nameId == zast.wellKnown.slot.tyResult then return true
-    # a Box is the heap cell it points at: the holder frees it
-    if nameId == zast.wellKnown.slot.tyBox then return true
-    duo8: (definingSiteForId :st :scope :ast :unitDecl :nameId).defUnit
-    if duo8.isZero.not then {
-        tto8: optionval.none ztypes.ztypetype
-        dd8: declOfUnitDef :st :scope unitDecl: duo8 :nameId
-        if dd8.isZero.not then tto8 = declDefTypetype :st :ast declId: dd8
-        match (
-            tto8
-        ) case some then {
-            boxed8: tto8.isReferenceData
-            if boxed8 when (st.typing.declIsResolving
-                declId: (declOfUnitDef :st :scope unitDecl: duo8 :nameId)
-            ) then return true
-        } case none then null
-        descendNamedId :st :scope :ast unitDecl: duo8 :nameId
-    }
-    # key by the DEFINING unit: a bare cross-unit field type (Bytes from
-    # collections) resolves under its own unit, not the class's
-    ku8: unitNameIdOf :st :unitDecl
-    if duo8.isZero.not then ku8 = unitNameIdOf :st unitDecl: duo8
-    unitDecl9: unitDeclOfName :st nameId: ku8
-    rr: (resolvedByIds
-        :st
-        :ast
-        unitDecl: unitDecl9
-        name: nameId
-    )
-    match (
-        rr
-    ) case some then {
-        return (st.reg.needsDestructor typeId: rr)
-    } case none then {
-        return false
-    }
+    if tid.isZero then return false
+    if (st.reg.needsDestructor typeId: tid) then return true
+    if (st.reg.typetypeOf typeId: tid).isReferenceData.not then return false
+    return (st.typing.declIsResolving declId: (st.reg.defOf :tid))
 }
 
 # resolveClassMethodDecl -- resolve a method declared in a class's `is` block:
@@ -13958,22 +13903,12 @@ resolveNamedFieldSlot: function {
     defName: StringView
     cid: ztypes.tid
     fname: StringView
-    # the field's head type name id
-    ftn: zast.nameid
     borrowedField: bool
     fm: argref
 } out bool is {
     needsDtor: false
     refuseMarkedFunctionType :st :ast :unitDecl :scope typeNid: fm.operation
     fieldOwn: pathOwnership :ast n: (ast.nodes.get i: fm.operation)
-    if fm.name != zast.wellKnown.slot.wkResumeInput when (fieldTypeNeedsCleanup
-        :st
-        :scope
-        :ast
-        :unitDecl
-        nameId: ftn
-        isBorrowed: borrowedField
-    ) then needsDtor = true
     # THE VALUE DECLARES THE TYPE, when the declaration is a value. A field
     # declared by one is a constant declaration in the same sense a unit-level
     # `x: -1` is, so it takes the same door -- the fold -- and only a
@@ -13989,6 +13924,11 @@ resolveNamedFieldSlot: function {
         oId: fm.operation
         thisName: defName
     )
+    if fm.name != zast.wellKnown.slot.wkResumeInput when (fieldTypeNeedsCleanup
+        :st
+        tid: cidf
+        isBorrowed: borrowedField
+    ) then needsDtor = true
     # `null` is no runtime value, in a class exactly as in a record: `create:
     # null` in the BODY would otherwise be a field of no type every
     # construction then demands
@@ -14006,12 +13946,6 @@ resolveNamedFieldSlot: function {
         nameId: fm.name
         childTypeId: cidf
     )
-    # the resolved type answers by ID what the name walk above could not: a
-    # field typed `unit.Type` is not visible under its bare name in this unit,
-    # so the walk found no type and said "no cleanup", and a holder whose only
-    # field was such a class was never destroyed
-    if needsDtor.not when cidf.isZero.not when (st.reg.needsDestructor typeId: cidf
-    ) then needsDtor = true
     recordFoldedArmDefault :st :ast what: "field" ownerTid: cid :fname dm: fm
     recordFoldedScalarDefault :st :ast ownerTid: cid dm: fm
     if (st.reg.typetypeOf typeId: cidf) == ztypes.ztypetype.functionType then {
@@ -14284,7 +14218,6 @@ resolveClassFieldEntry: function {
             :defName
             :cid
             fname: fname.stringView
-            :ftn
             :borrowedField
             :fm
         ) then needsDtor = true
@@ -14536,13 +14469,8 @@ resolveClassTypedefBase: function {
     tdbase: objectTypedefBaseId :ast onode: cnode
     tdt3: objectTypedefBaseTid :st :scope :ast :unitDecl ownerTid: cid onode: cnode
     # the base the typedef resolved to answers for itself -- one reached through
-    # its unit (`(pr.GBox t: i64)`) included, which its name alone does not find
-    if tdt3.isZero.not when (st.reg.needsDestructor typeId: tdt3) then {
-        needsDtor = true
-    }
-    if (fieldTypeNeedsCleanup :st :scope :ast :unitDecl nameId: tdbase isBorrowed: false) then {
-        needsDtor = true
-    }
+    # its unit (`(pr.GBox t: i64)`) included
+    if (fieldTypeNeedsCleanup :st tid: tdt3 isBorrowed: false) then needsDtor = true
     if tdbase.isZero.not then {
         tdk3: cid
         st.typing.typedefBaseName.set key: tdk3 value: tdbase
@@ -25250,14 +25178,15 @@ mintSpecUnderTemplate: function {
             :fallbackArg
             monoTid: mid8
         )
-        # a Box spec minted from TYPE POSITION (a union's type argument)
-        # registers the identity the construction path stamps: isBox drives
-        # typeRefC's bare-pointer rendering and the destructor plumbing. The
-        # member copy stays with construction -- nothing reads members off
-        # an un-constructed Box.
+        # a Box spec minted from TYPE POSITION (a field's or a union's type
+        # argument) registers the identity the construction path stamps: isBox
+        # drives typeRefC's bare-pointer rendering, and the cell it points at
+        # is the holder's to free. The member copy stays with construction --
+        # nothing reads members off an un-constructed Box.
         if (isBoxTemplate :st tid: templateId) then {
             st.reg.setIsBox typeId: mid8
             st.reg.setIsHeapAllocated typeId: mid8
+            st.reg.setNeedsDestructor typeId: mid8
         }
     }
     return mid8
