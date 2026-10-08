@@ -426,6 +426,38 @@ flagU32: function {opt: StringView argv: (List String).view i: u64 n: u64} out u
     return 0
 }
 
+# zlWord -- every word zl reads off its command line: the commands and the
+# flags. A word is classified by its slot here (zast.Vocab), never by comparing
+# its text.
+zlWord: data {
+    vLint: "lint"
+    vFmt: "fmt"
+    vFormat: "format"
+    vExplain: "explain"
+    vHelp: "help"
+    fH: "-h"
+    fHelp: "--help"
+    fV: "-V"
+    fVersion: "--version"
+    fFull: "--full"
+    fCasing: "--casing"
+    fDocs: "--docs"
+    fDocsParams: "--docs-params"
+    fDocsFields: "--docs-fields"
+    fDocsPrivate: "--docs-private"
+    fDocsQuality: "--docs-quality"
+    fDocsAll: "--docs-all"
+    fArch: "--arch"
+    fCheck: "--check"
+    fStdout: "--stdout"
+    fDiff: "--diff"
+    fCollapse: "--collapse"
+    fSrc: "--src"
+    fSystem: "--system"
+    fLineLength: "--line-length"
+    fComplexity: "--complexity"
+} out stringdata
+
 # CliFlags -- what `zl`'s command line sets: the lint options a run threads
 # through every rule, the formatter's own switches, and the roots a unit name
 # resolves against. The two "was it given" bits are kept because --line-length
@@ -456,37 +488,37 @@ CliFlags: class {
     # whether --complexity was given, which is what suppresses --arch's default
     fcSet: bool
 } as {
-    # setLintSwitch -- the lint tier switches. True when `av` named one.
-    setLintSwitch: function {:this av: StringView} out bool is {
-        if av == "--full" then {
+    # setLintSwitch -- the lint tier switches. True when `w` named one.
+    setLintSwitch: function {:this w: u64} out bool is {
+        if w == zlWord.slot.fFull then {
             this.opts.full = true
             return true
         }
-        if av == "--casing" then {
+        if w == zlWord.slot.fCasing then {
             this.opts.casing = true
             return true
         }
-        if av == "--docs" then {
+        if w == zlWord.slot.fDocs then {
             this.opts.docs = true
             return true
         }
-        if av == "--docs-params" then {
+        if w == zlWord.slot.fDocsParams then {
             this.opts.docParams = true
             return true
         }
-        if av == "--docs-fields" then {
+        if w == zlWord.slot.fDocsFields then {
             this.opts.docFields = true
             return true
         }
-        if av == "--docs-private" then {
+        if w == zlWord.slot.fDocsPrivate then {
             this.opts.docsPrivate = true
             return true
         }
-        if av == "--docs-quality" then {
+        if w == zlWord.slot.fDocsQuality then {
             this.opts.docsQuality = true
             return true
         }
-        if av == "--docs-all" then {
+        if w == zlWord.slot.fDocsAll then {
             this.opts.docs = true
             this.opts.docParams = true
             this.opts.docFields = true
@@ -494,28 +526,28 @@ CliFlags: class {
             this.opts.docsQuality = true
             return true
         }
-        if av == "--arch" then {
+        if w == zlWord.slot.fArch then {
             this.opts.arch = true
             return true
         }
         return false
     }
 
-    # setFormatSwitch -- the formatter switches. True when `av` named one.
-    setFormatSwitch: function {:this av: StringView} out bool is {
-        if av == "--check" then {
+    # setFormatSwitch -- the formatter switches. True when `w` named one.
+    setFormatSwitch: function {:this w: u64} out bool is {
+        if w == zlWord.slot.fCheck then {
             this.check = true
             return true
         }
-        if av == "--stdout" then {
+        if w == zlWord.slot.fStdout then {
             this.stdout = true
             return true
         }
-        if av == "--diff" then {
+        if w == zlWord.slot.fDiff then {
             this.diff = true
             return true
         }
-        if av == "--collapse" then {
+        if w == zlWord.slot.fCollapse then {
             this.collapse = true
             return true
         }
@@ -527,24 +559,26 @@ CliFlags: class {
     takeValueFlag: function {
         :this
         av: StringView
+        # the argument's slot in zlWord
+        w: u64
         argv: (List String).view
         i: u64
         n: u64
     } out argstep is {
-        if av == "--src" then {
+        if w == zlWord.slot.fSrc then {
             this.srcdirs.append from: (flagValue opt: av noun: "directory" :argv :i :n)
             return (argstep taken: true at: i + 1)
         }
-        if av == "--system" then {
+        if w == zlWord.slot.fSystem then {
             this.systemdir = flagValue opt: av noun: "directory" :argv :i :n
             return (argstep taken: true at: i + 1)
         }
-        if av == "--line-length" then {
+        if w == zlWord.slot.fLineLength then {
             this.opts.lineLength = flagU32 opt: av :argv :i :n
             this.llSet = true
             return (argstep taken: true at: i + 1)
         }
-        if av == "--complexity" then {
+        if w == zlWord.slot.fComplexity then {
             this.opts.complexity = flagU32 opt: av :argv :i :n
             this.fcSet = true
             return (argstep taken: true at: i + 1)
@@ -585,7 +619,9 @@ CliFlags: class {
 # parseArgs -- every argument from `from` on, read into a fresh CliFlags: the
 # lint switches first, then the formatter's, then the value-taking flags, and
 # anything left is a target file.
-parseArgs: function {argv: (List String).view from: u64 n: u64} out CliFlags is {
+parseArgs: function {
+    argv: (List String).view zv: zast.Vocab.view from: u64 n: u64
+} out CliFlags is {
     cf: (CliFlags
         paths: List String
         srcdirs: List String
@@ -602,10 +638,11 @@ parseArgs: function {argv: (List String).view from: u64 n: u64} out CliFlags is 
     for i < n loop {
         arg: argv.get :i
         av: arg.stringView
-        known: cf.setLintSwitch :av
-        if known.not then known = cf.setFormatSwitch :av
+        w: zv.slotOf text: av
+        known: cf.setLintSwitch :w
+        if known.not then known = cf.setFormatSwitch :w
         if known.not then {
-            step: cf.takeValueFlag :av :argv :i :n
+            step: cf.takeValueFlag :av :w :argv :i :n
             known = step.taken
             i = step.at
         }
@@ -625,34 +662,35 @@ main: function is {
         os.exit code: 2
     }
     sub: argv.get i: 1
-    sv: sub.stringView
+    zv: zast.Vocab.create block: zlWord
+    sw: zv.slotOf text: sub.stringView
 
-    if sv == "-h" then {
+    if sw == zlWord.slot.fH then {
         printUsage
         os.exit code: 0
     }
-    if sv == "--help" then {
+    if sw == zlWord.slot.fHelp then {
         printUsage
         os.exit code: 0
     }
-    if sv == "help" then {
+    if sw == zlWord.slot.vHelp then {
         printUsage
         os.exit code: 0
     }
 
-    if sv == "-V" then {
+    if sw == zlWord.slot.fV then {
         printVersion
         os.exit code: 0
     }
-    if sv == "--version" then {
+    if sw == zlWord.slot.fVersion then {
         printVersion
         os.exit code: 0
     }
 
     # --system stays as given: each file's roots resolve it, after its
     # project's systemDir, by zc's own precedence (rootsFor)
-    cf: parseArgs :argv from: 2 :n
-    if sv == "lint" then {
+    cf: parseArgs :argv :zv from: 2 :n
+    if sw == zlWord.slot.vLint then {
         lintOpts: cf.lintOpts
         rc: (runLint
             paths: cf.paths
@@ -662,8 +700,8 @@ main: function is {
         )
         os.exit code: rc
     }
-    isFmt: sv == "fmt"
-    if sv == "format" then isFmt = true
+    isFmt: sw == zlWord.slot.vFmt
+    if sw == zlWord.slot.vFormat then isFmt = true
     if isFmt then {
         lineLength: cf.formatWidth
         rc: (runFormat
@@ -679,7 +717,7 @@ main: function is {
         )
         os.exit code: rc
     }
-    if sv == "explain" then {
+    if sw == zlWord.slot.vExplain then {
         if n < 3 then {
             io.eprintln "usage: zl explain <code>"
             os.exit code: 2
