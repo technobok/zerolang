@@ -1246,6 +1246,8 @@ emitNumericCast: function {
         }
     }
     return (fillHolesForCtx
+        :ast
+        :symtab
         :ctx
         text: body
         path: key
@@ -1581,8 +1583,13 @@ fillHoles: function {
 # fillHolesForCtx -- fillHoles for every loader that holds a Ctx: the fill's
 # failures are reported through the emit-failure channel, so a bad fragment
 # fails the run. The three unconditional loads in emitC run before Ctx exists
-# and drain fillHoles' sink into their own fails list instead.
+# and drain fillHoles' sink into their own fails list instead. The tag-constant
+# holes are bound here, for every loader alike (bindArmHoles).
 fillHolesForCtx: function {
+    # the arm names
+    ast: Ast.view
+    # the checked program the canons resolve in
+    symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     text: String
     path: StringView
@@ -1591,6 +1598,7 @@ fillHolesForCtx: function {
     rawNames: List String
     rawVals: List String
 } out String is {
+    bindArmHoles :ast :symtab :ctx text: text.stringView :rawNames :rawVals
     ferr: List String
     cur: (fillHoles
         :text
@@ -1611,6 +1619,54 @@ fillHolesForCtx: function {
     return cur
 }
 
+
+# bindArmHoles -- bind every `@ARM_<canon>.<arm>@` hole a fragment spells to the
+# tag constant of that arm of the type the canon names (ioCanonTidAny, as the
+# `@TAG_<canon>@` holes resolve): a fragment names a tag constant by its type
+# and its arm, never by the constant's own spelling. A canon naming no type in
+# this program, or an arm that type does not declare, leaves the hole unbound,
+# which fillHoles reports as fatal.
+bindArmHoles: function {
+    # the arm names
+    ast: Ast.view
+    # the checked program the canons resolve in
+    symtab: zenv.ZSymbolTable.view
+    # the emission context the canons resolve through
+    ctx: Ctx
+    # the fragment's text
+    text: StringView
+    # the raw bindings the fill reads, appended to
+    rawNames: List String
+    # and their values
+    rawVals: List String
+} is {
+    if (text.contains needle: "@ARM_").not then return
+    for each hn: (holeNames :text) loop {
+        hv: hn.stringView
+        if (hv.startsWith prefix: "ARM_") then {
+            body: hv.substring from: 4 to: hv.length
+            ord: optionval.none u64
+            tt: ztypes.tid
+            dot: body.indexOf needle: "."
+            match (
+                dot
+            ) case some then {
+                tt = ioCanonTidAny :ast :symtab :ctx canon: (body.substring from: 0 to: dot)
+                aid: (zast.poolFind
+                    pool: ast.names
+                    text: (body.substring from: dot + 1 to: body.length)
+                )
+                ord = armOrdinalOf :symtab tid: tt armId: aid
+            } case none then null
+            match (
+                ord
+            ) case some then {
+                rawNames.append from: hv.string
+                rawVals.append from: (tagConstC :ast :symtab tid: tt armOrd: ord)
+            } case none then null
+        }
+    }
+}
 
 # readTemplateCached -- the raw text of a runtime template file, read once
 # per emit and cached by path. A missing file is fatal and reported once (the
@@ -6290,6 +6346,8 @@ emitNativeArgMethod: function {
         )
     }
     filled: (fillHolesForCtx
+        :ast
+        :symtab
         :ctx
         text: body
         path: key.stringView
@@ -18515,7 +18573,7 @@ emitOperatorAt: function {
     # a typedef emits no helper of its own: the chain end owns it
     tcnTid: owner
     if (typedefChaseHasBaseName :symtab tid: owner) then tcnTid = typedefChaseTid :symtab tid: owner
-    filled: fillOperatorRow :ctx :ord :body :key :tcnTid
+    filled: fillOperatorRow :ast :symtab :ctx :ord :body :key :tcnTid
     return (orderWrap prefix: oprefix call: filled)
 }
 
@@ -18524,6 +18582,10 @@ emitOperatorAt: function {
 # lists borrowed from the context. The names are fixed, the owner's cname and
 # the operands move in, and nothing is copied.
 fillOperatorRow: function {
+    # the arm names
+    ast: Ast.view
+    # the checked program the row's canons resolve in
+    symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     ord: orderstate
     body: String
@@ -18553,6 +18615,8 @@ fillOperatorRow: function {
     rv.set i: 1 val: (ctx.orderVals.set i: ord.valBase + 1 val: String)
     orderEnd :ctx st: ord
     filled: (fillHolesForCtx
+        :ast
+        :symtab
         :ctx
         text: body
         path: key.stringView
@@ -33566,6 +33630,30 @@ cbaseNoPrefix: function {ctx: Ctx.view tid: ztypes.tid} out String is {
     return rest.string
 }
 
+# applyOptionTags -- fill a template's `@@<key>_SOME@@` and `@@<key>_NONE@@`
+# with the two tag constants of the option type `tid`.
+applyOptionTags: function {
+    # the arm names
+    ast: Ast.view
+    # the checked program
+    symtab: zenv.ZSymbolTable.view
+    # the template, its other keys filled or not
+    text: String.take
+    # the key both names extend
+    key: StringView
+    # the option type
+    tid: ztypes.tid
+} out String is {
+    probe: "@@\{key}_"
+    if (text.stringView.contains needle: probe).not then return text
+    sk: "\{key}_SOME"
+    nk: "\{key}_NONE"
+    sv: tagConstOf :ast :symtab :tid armId: zast.wellKnown.slot.wkSome
+    nv: tagConstOf :ast :symtab :tid armId: zast.wellKnown.slot.wkNone
+    a: applyTmpl :text key: sk.stringView val: sv.stringView
+    return (applyTmpl text: a key: nk.stringView val: nv.stringView)
+}
+
 # applyTmpl -- substitute one @@KEY@@ placeholder in template text.
 applyTmpl: function {text: String key: StringView val: StringView} out String is {
     needle: "@@\{key}@@"
@@ -35339,7 +35427,8 @@ emitSetMono: function {
         t6b: applyTmpl text: t6 key: "FREE_ITEM_DUP" val: freeItemDup.stringView
         t6c: applyTmpl text: t6b key: "FREE_ITEM_DEL" val: freeItemDel.stringView
         t7: applyTmpl text: t6c key: "OPTIONVIEW" val: ov.stringView
-        t8: applyTmpl text: t7 key: "OPTIONVIEW_TAG" val: ovu.stringView
+        t8a: applyTmpl text: t7 key: "OPTIONVIEW_TAG" val: ovu.stringView
+        t8: applyOptionTags :ast :symtab text: t8a key: "OPTIONVIEW" tid: ovId
         t: applyTmpl text: t8 key: "SETITER" val: si.stringView
         buf.append t
         buf.append "\n"
@@ -35432,6 +35521,8 @@ mapValFreeStmt: function {
 # (OptionView_<K>, OptionView_MapEntry_<K>_<V>) are defined by the earlier
 # OptionView leg.
 emitMapIters: function {
+    # the arm names
+    ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     monoId: ztypes.tid
@@ -35485,11 +35576,13 @@ emitMapIters: function {
         i3: applyTmpl text: i2 key: "VAL_T" val: valT
         i4: applyTmpl text: i3 key: "MAPKEYITER" val: mki.stringView
         i5: applyTmpl text: i4 key: "OPTIONVIEW_K" val: ovk.stringView
-        i6: applyTmpl text: i5 key: "OPTIONVIEW_K_TAG" val: ovku.stringView
+        i6a: applyTmpl text: i5 key: "OPTIONVIEW_K_TAG" val: ovku.stringView
+        i6: applyOptionTags :ast :symtab text: i6a key: "OPTIONVIEW_K" tid: ovkId
         i7: applyTmpl text: i6 key: "MAPENTRY" val: me.stringView
         i8: applyTmpl text: i7 key: "MAPITEMITER" val: mii.stringView
         i: applyTmpl text: i8 key: "OPTIONVIEW_ENTRY" val: ove.stringView
-        i10: applyTmpl text: i key: "OPTIONVIEW_ENTRY_TAG" val: oveu.stringView
+        i10a: applyTmpl text: i key: "OPTIONVIEW_ENTRY_TAG" val: oveu.stringView
+        i10: applyOptionTags :ast :symtab text: i10a key: "OPTIONVIEW_ENTRY" tid: oveId
         buf.append i10
         buf.append "\n"
     }
@@ -35762,6 +35855,7 @@ emitMapMono: function {
         buf.append hv2
     }
     (emitMapIters
+        :ast
         :symtab
         :ctx
         :monoId
@@ -35868,6 +35962,7 @@ emitIdMapMono: function {
     buf.append t
     buf.append "\n"
     (emitIdMapGetMut
+        :ast
         :symtab
         :ctx
         :monoId
@@ -35877,6 +35972,7 @@ emitIdMapMono: function {
         :buf
     )
     (emitIdMapIters
+        :ast
         :symtab
         :ctx
         :monoId
@@ -35906,6 +36002,8 @@ emitIdMapMono: function {
 # over the VALUE in both families, where `get`'s differs between them -- is
 # resolved through the interned name.
 emitIdMapGetMut: function {
+    # the arm names
+    ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     monoId: ztypes.tid
@@ -35929,7 +36027,8 @@ emitIdMapGetMut: function {
     m1: applyTmpl text: rawm key: "NAME" val: nm
     m2: applyTmpl text: m1 key: "KEY_T" val: keyT
     m3: applyTmpl text: m2 key: "OPTIONVIEW_V" val: gmv.stringView
-    m4: applyTmpl text: m3 key: "OPTIONVIEW_V_TAG" val: gmu.stringView
+    m4a: applyTmpl text: m3 key: "OPTIONVIEW_V_TAG" val: gmu.stringView
+    m4: applyOptionTags :ast :symtab text: m4a key: "OPTIONVIEW_V" tid: gmId
     buf.append m4
     buf.append "\n"
 }
@@ -35940,6 +36039,8 @@ emitIdMapGetMut: function {
 # its container, so the part that needs the iterator types is the part that can
 # be skipped.
 emitIdMapIters: function {
+    # the arm names
+    ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     monoId: ztypes.tid
@@ -35984,7 +36085,8 @@ emitIdMapIters: function {
     j4: applyTmpl text: j3 key: "IDMAPITEMITER" val: mii.stringView
     j5: applyTmpl text: j4 key: "IDMAPENTRY" val: me.stringView
     j6: applyTmpl text: j5 key: "OPTIONVIEW_ENTRY" val: ove.stringView
-    j7: applyTmpl text: j6 key: "OPTIONVIEW_ENTRY_TAG" val: oveu.stringView
+    j7a: applyTmpl text: j6 key: "OPTIONVIEW_ENTRY_TAG" val: oveu.stringView
+    j7: applyOptionTags :ast :symtab text: j7a key: "OPTIONVIEW_ENTRY" tid: oveId
     buf.append j7
     buf.append "\n"
 }
@@ -36029,7 +36131,8 @@ emitIdSetMono: function {
     t3: applyTmpl text: t2 key: "ITEM_T" val: itemT.stringView
     t4: applyTmpl text: t3 key: "IDSETITER" val: si.stringView
     t5: applyTmpl text: t4 key: "OPTIONVIEW" val: ov.stringView
-    t6: applyTmpl text: t5 key: "OPTIONVIEW_TAG" val: ovu.stringView
+    t6a: applyTmpl text: t5 key: "OPTIONVIEW_TAG" val: ovu.stringView
+    t6: applyOptionTags :ast :symtab text: t6a key: "OPTIONVIEW" tid: ovId
     buf.append t6
     buf.append "\n"
     # IdSet is one form only, so this writes for every instance that calls it
@@ -36223,8 +36326,10 @@ loadIoFragment: function {
             # IS its discriminator, and the hole fills with nothing. A fragment
             # spelling this stays correct across a change to the representation,
             # which matters because this file is read by the running compiler
-            # AND by the committed seed, and they need not agree.
-            if (nv.startsWith prefix: "TAG_") then {
+            # AND by the committed seed, and they need not agree. An
+            # `@ARM_<canon>.<arm>@` tag constant is fillHolesForCtx's to bind.
+            if (nv.startsWith prefix: "ARM_") then null else if (nv.startsWith prefix: "TAG_"
+            ) then {
                 tn: nv.substring from: 4 to: nv.length
                 tt: ioCanonTidAny :ast :symtab :ctx canon: tn
                 rwn.append from: nv.string
@@ -36261,6 +36366,8 @@ loadIoFragment: function {
             ni = ni + 1
         }
         return (fillHolesForCtx
+            :ast
+            :symtab
             :ctx
             text: rd
             :path

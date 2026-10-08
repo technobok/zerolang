@@ -2471,7 +2471,7 @@ perf: $(PERFBIN)
 #
 # +2 ztypecheck exports envLookup / scopeFor / unitdefNodeId for zls's
 # shadow-aware hover: 0 behaviour, +2 source (ab.sh).
-ALLOC_BASELINE := 2185293
+ALLOC_BASELINE := 2186985
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -4128,7 +4128,9 @@ clean:
 # CpIter), an ioCanonTid arm (the generic instances, declared nowhere), or a
 # name a loader binds explicitly (the mono/parse/codepoint stems). Derived
 # from the declarations rather than a list, so a new fragment-backed type is
-# legal the moment it is declared.
+# legal the moment it is declared. Leg 4: every `@ARM_<canon>.<arm>@` hole (a
+# tag constant, named by its type and arm) names a known canon, and an arm the
+# canon's declaration -- its template's, for an instance -- declares.
 NATIVE_GUARD_EXCEPTIONS := io.print io.stdin io.stdout io.stderr os.env net.pollReadable
 # reached by something other than a per-member demand: the statement-special and
 # the three streams have no fragment of their own, and os.args is a bundle its
@@ -4182,8 +4184,21 @@ native-guard:
 	    esac; \
 	  done; \
 	done; \
+	na=0; \
+	for f in src/runtime/natives/*.inc src/runtime/*.inc src/runtime/*.c.tmpl src/runtime/*.tbl; do \
+	  for h in $$(grep -ohE '@ARM_[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*@' $$f | sed -e 's/^@ARM_//' -e 's/@$$//' | sort -u); do \
+	    na=$$((na + 1)); canon=$${h%%.*}; arm=$${h#*.}; head=$${canon%%_*}; \
+	    case "$$known" in *" $$canon "*) ;; \
+	      *) echo "native-guard: $$f spells @ARM_$$h@, whose type $$canon names no known canon"; fail=1; continue;; \
+	    esac; \
+	    arms=" $$(awk -v h="$$head" '$$0 ~ ("^" h ": (variant|union) [{]") {on=1; next} on && /^[}]/ {on=0} on && /^    [A-Za-z][A-Za-z0-9]*: / {sub(/^    /, ""); sub(/:.*/, ""); printf "%s ", $$0}' lib/system/*.z lib/system/*/*.z) "; \
+	    case "$$arms" in *" $$arm "*) ;; \
+	      *) echo "native-guard: $$f spells @ARM_$$h@, but $$head declares no arm $$arm"; fail=1;; \
+	    esac; \
+	  done; \
+	done; \
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
-	echo "native-guard OK: native declarations and runtime fragments consistent (incl. no orphans, $$nh fragment holes known)"
+	echo "native-guard OK: native declarations and runtime fragments consistent (incl. no orphans, $$nh fragment holes known, $$na tag-constant holes name declared arms)"
 
 # generic-param-guard -- L023 (a generic parameter's case follows its bound's)
 # over the trees the linter is not pointed at. ZLSCOPE covers src/ and
