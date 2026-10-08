@@ -86,28 +86,57 @@ TmpCtr: class {
     }
 }
 
-# opCnameOf -- a C-identifier spelling for an operator method name (a
-# typedef's shadowed `==`, a numeric `+`), "" for ordinary names.
-opCnameOf: function {name: StringView} out String is {
-    if name == "==" then return "op_eq"
-    if name == "!=" then return "op_ne"
-    if name == "<=" then return "op_le"
-    if name == ">=" then return "op_ge"
-    if name == "<" then return "op_lt"
-    if name == ">" then return "op_gt"
-    if name == "+" then return "op_add"
-    if name == "-" then return "op_sub"
-    if name == "*" then return "op_mul"
-    if name == "/" then return "op_div"
-    if name == "%" then return "op_mod"
-    if name == "&" then return "op_and"
-    return ""
+# opSpelling / opCname -- the operator method names a C identifier cannot spell
+# (a typedef's shadowed `==`, a numeric `+`), and the spelling each takes instead,
+# slot for slot. opSpelling is read through a zast.Vocab (ctx.opWords).
+opSpelling: data {
+    eq: "=="
+    ne: "!="
+    le: "<="
+    ge: ">="
+    lt: "<"
+    gt: ">"
+    add: "+"
+    sub: "-"
+    mul: "*"
+    div: "/"
+    mod: "%"
+    band: "&"
+} out stringdata
+
+opCname: data {
+    eq: "op_eq"
+    ne: "op_ne"
+    le: "op_le"
+    ge: "op_ge"
+    lt: "op_lt"
+    gt: "op_gt"
+    add: "op_add"
+    sub: "op_sub"
+    mul: "op_mul"
+    div: "op_div"
+    mod: "op_mod"
+    band: "op_and"
+} out stringdata
+
+# opCnameOf -- the C-identifier spelling of an operator method name, "" for an
+# ordinary name.
+opCnameOf: function {ow: zast.Vocab.view name: StringView} out String is {
+    k: ow.slotOf text: name
+    if k == ow.none then return ""
+    return (opCname.index i: k).string
 }
 
 # cnameOf -- the id-based C name base for a type ("z_t{id}_{name}", dots
 # joined with underscores).
-cnameOf: function {tid: ztypes.tid ownerName: StringView name: StringView} out String is {
-    flat: opCnameOf :name
+cnameOf: function {
+    tid: ztypes.tid
+    ownerName: StringView
+    name: StringView
+    # the operator spellings (opSpelling)
+    ow: zast.Vocab.view
+} out String is {
+    flat: opCnameOf :ow :name
     if flat.length == 0 then {
         biter: u64
         n: name.length
@@ -1751,6 +1780,19 @@ UnitReq: class {
     link: String
 }
 
+# nativeWord -- the words natives.tbl and the runtime fragments spell that the
+# loader acts on: the pointer-arguments flag, the unit-order row, the two
+# runtime units it orders specially, and the two type holes the emitter fills
+# itself. Read through a zast.Vocab (ctx.nativeWords), never compared as text.
+nativeWord: data {
+    argsPtr: "args=ptr"
+    unitsRow: "@units"
+    unitIo: "io"
+    unitPrelude: "prelude"
+    holeString: "String"
+    holeStringView: "StringView"
+} out stringdata
+
 # NativeHead -- a row's head, parsed: the path key and the attributes the
 # table spells, each "" or false until a word of the head sets it.
 NativeHead: class {
@@ -1786,7 +1828,7 @@ NativeHead: class {
 } as {
     # create -- the head between `[` and `]`, split on spaces: the first word
     # is the key, every other word an attribute
-    create: function {head: StringView} out this is {
+    create: function {head: StringView words: zast.Vocab.view} out this is {
         h: (meta.create
             key: String
             need: String
@@ -1808,7 +1850,7 @@ NativeHead: class {
                 if h.key.length == 0 then {
                     h.key = f.string
                 } else {
-                    h.setAttr :f
+                    h.setAttr :f :words
                 }
             }
         }
@@ -1819,8 +1861,8 @@ NativeHead: class {
     # its key rather than comparing the word: a spelling compare is what the
     # architecture rules count against this file. A word it does not know is
     # ignored.
-    setAttr: function {:this f: StringView} is {
-        if f == "args=ptr" then this.ptr = true
+    setAttr: function {:this f: StringView words: zast.Vocab.view} is {
+        if (words.slotOf text: f) == nativeWord.slot.argsPtr then this.ptr = true
         fo: f.stripPrefix p: "frag="
         match (
             fo
@@ -2152,8 +2194,10 @@ loadNativeTbl: function {ctx: Ctx ast: Ast.view runtimeDir: StringView} is {
                 head: t.substring from: 1 to: co
                 rest: t.substring from: co + 1 to: t.length
                 body: rest.trim
-                h: NativeHead.create :head
-                if h.key == "@units" then {
+                h: NativeHead.create :head words: ctx.nativeWords
+                if (
+                    (ctx.nativeWords.slotOf text: h.key.stringView) == nativeWord.slot.unitsRow
+                ) then {
                     recordUnitOrder :ctx order: h.ord.stringView
                 } else if h.key.length > 0 then {
                     recordNativeRow :ctx :ast :h :body
@@ -3558,6 +3602,10 @@ Ctx: class {
     nativeKeys: (MapRV String v: bool)
     # the C words an emitted identifier dodges (cReserved)
     cWords: zast.Vocab
+    # the operator spellings a C identifier cannot carry (opSpelling)
+    opWords: zast.Vocab
+    # the words natives.tbl and the fragments spell that the loader acts on
+    nativeWords: zast.Vocab
     # the StringView natives' call kinds (natives.tbl `call=`), by member name id
     svCalls: (IdMapV zast.nameid v: svcall)
     # the paths a FRAGMENT implements: a native whose C the runtime supplies
@@ -15464,6 +15512,7 @@ emitNestedMonoMethodBase: function {
                 acc: nacc.stringView
                 mn: mn2
                 cw: ctx.cWords
+                ow: ctx.opWords
                 isFacet: nrtt == ztypes.ztypetype.facetType
             )
         }
@@ -16174,7 +16223,7 @@ emitUserTypeMemberRead: function {
         } case none then null
     }
     if isFile then {
-        if (definedInUnitName :symtab tid: bstamp) == "net" then isNetU = true
+        if (isNetUnitTid :symtab :ctx tid: bstamp) then isNetU = true
         ffc: ctxCname :ctx tid: bstamp
         ffcc: ioCanonCname :ast :symtab :ctx canon: fbtn
         if ffcc.length > 0 then ffc = ffcc.take
@@ -16839,6 +16888,7 @@ emitDottedAtomBase: function {
             acc: pacc.stringView
             mn: mn2
             cw: ctx.cWords
+            ow: ctx.opWords
             isFacet: rtt == ztypes.ztypetype.facetType
         )
     }
@@ -18691,6 +18741,7 @@ emitDeclaredOperator: function {
             arg: (orderSlotText t: ctx st: ord slot: 1)
             mn: mn.stringView
             cw: ctx.cWords
+            ow: ctx.opWords
             :isFacet
         )
     } else {
@@ -18864,6 +18915,7 @@ appendVtableOperator: function {
     arg: StringView
     mn: StringView
     cw: zast.Vocab.view
+    ow: zast.Vocab.view
     isFacet: bool
 } is {
     place: String
@@ -18877,7 +18929,15 @@ appendVtableOperator: function {
         place.append ")"
     }
     tail: ", \{arg}"
-    buf.append (vtableCallC recv: place.stringView :acc :mn :cw :isFacet argTail: tail.stringView)
+    buf.append (vtableCallC
+        recv: place.stringView
+        :acc
+        :mn
+        :cw
+        :ow
+        :isFacet
+        argTail: tail.stringView
+    )
 }
 
 # emitInterpPrint -- the interpolated-print temp chain: create, per-part
@@ -23319,6 +23379,13 @@ genericOriginTid: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out 
     go: symtab.reg.genericOriginOf :tid
     if go.isZero.not then g = go
     return g
+}
+
+# isNetUnitTid -- `tid` is declared in the net unit, asked of the unit's
+# declaration (unitDeclOfTid) and never of its name
+isNetUnitTid: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.tid} out bool is {
+    if ctx.netUnitDecl.isZero then return false
+    return (ztypecheck.unitDeclOfTid st: symtab :tid) == ctx.netUnitDecl
 }
 
 # definedInUnitName -- the defining unit's name for `tid`, BORROWED, and "" when
@@ -32039,12 +32106,12 @@ isBareCName: function {s: StringView} out bool is {
 #
 # The fallback is byte-wise so any operator the table misses still yields a
 # unique, deterministic identifier rather than colliding with another one.
-cSlotName: function {name: StringView cw: zast.Vocab.view} out String is {
+cSlotName: function {name: StringView cw: zast.Vocab.view ow: zast.Vocab.view} out String is {
     if (isBareCName s: name) then {
         sp: memberCPrefix :name :cw
         return "\{sp}\{name}"
     }
-    op: opCnameOf :name
+    op: opCnameOf :ow :name
     if op.length > 0 then return op
     result: "op".string
     i: u64
@@ -32743,6 +32810,7 @@ buildTypeCnames: function {
     readableNames: bool
     typeCnames: List String
 } is {
+    ow: zast.Vocab.create block: opSpelling
     ctb: ztypes.tid
     ctlast: symtab.reg.nextTid
     for ctb < ctlast loop {
@@ -32757,6 +32825,7 @@ buildTypeCnames: function {
                     tid: ctb
                     ownerName: onm.stringView
                     name: tnm.stringView
+                    :ow
                 )
             } else {
                 cn = cnameById tid: ctb
@@ -32862,7 +32931,9 @@ emitRuntimeUnits: function {
     for each uo0: ctx.unitOrder loop uos.append uo0.copy
     for each uo: uos loop {
         emitRuntimeUnit :ast :symtab :ctx :runtimeDir uname: uo.stringView :buf
-        if late.not when uo.stringView == "io" then {
+        if late.not when (
+            (ctx.nativeWords.slotOf text: uo.stringView) == nativeWord.slot.unitIo
+        ) then {
             emitIoFileConformance :ast :symtab :ctx :buf
             emitIoStdStreams :ast :symtab :ctx :buf
         }
@@ -33100,6 +33171,8 @@ emitC: function {
         nativePtrArgs: (MapRV String v: bool)
         nativeKeys: (MapRV String v: bool)
         cWords: (zast.Vocab.create block: cReserved)
+        opWords: (zast.Vocab.create block: opSpelling)
+        nativeWords: (zast.Vocab.create block: nativeWord)
         svCalls: (IdMapV zast.nameid v: svcall)
         nativeFragPaths: (MapRV String v: bool)
         nativeConvMemb: (MapRV String v: bool)
@@ -36028,10 +36101,11 @@ loadIoFragment: function {
                 }
             } else {
                 bn.append from: nv.string
-                if nv == "StringView" then {
+                hw: ctx.nativeWords.slotOf text: nv
+                if hw == nativeWord.slot.holeStringView then {
                     sv: ctx.svC
                     bv.append from: sv.copy
-                } else if nv == "String" then {
+                } else if hw == nativeWord.slot.holeString then {
                     st: ctx.strC
                     bv.append from: st.copy
                 } else {
@@ -36288,7 +36362,9 @@ emitUnorderedUnits: function {
         # an owned copy: the runtime emitter below lends ctx
         u: (ctx.fragUnits.get :i).copy
         skip: false
-        if u.stringView == "prelude" then skip = true
+        if (
+            (ctx.nativeWords.slotOf text: u.stringView) == nativeWord.slot.unitPrelude
+        ) then skip = true
         for each o: ctx.unitOrder loop {
             if o.stringView == u then skip = true
         }
@@ -39179,7 +39255,7 @@ emitOneFacet: function {
             }
             pi = pi + 1
         }
-        vslot: cSlotName name: mname.stringView cw: ctx.cWords
+        vslot: cSlotName name: mname.stringView cw: ctx.cWords ow: ctx.opWords
         vline: "    \{ret} (*\{vslot})(\{vparams});\n"
         vfuncs.append vline
         mi = mi + 1
@@ -39287,7 +39363,7 @@ emitOneProtocol: function {
             }
             pi = pi + 1
         }
-        vslot: cSlotName name: mname.stringView cw: ctx.cWords
+        vslot: cSlotName name: mname.stringView cw: ctx.cWords ow: ctx.opWords
         vline: "    \{ret} (*\{vslot})(\{vparams});\n"
         vfuncs.append vline
         mi = mi + 1
@@ -39457,7 +39533,7 @@ emitProtocolImpl: function {
             retkw = ""
             ret = "void"
         }
-        wslot: cSlotName name: mname.stringView cw: ctx.cWords
+        wslot: cSlotName name: mname.stringView cw: ctx.cWords ow: ctx.opWords
         w0: "static \{ret} \{wbase}_\{wslot}_wrapper(\{wparams}) {\n"
         buf.append w0
         w1: "    \{implCtype}* _self = (\{implCtype}*)_data;\n"
@@ -39496,7 +39572,7 @@ emitProtocolImpl: function {
             mj = mj + 1
             continue
         }
-        rslot: cSlotName name: mname2.stringView cw: ctx.cWords
+        rslot: cSlotName name: mname2.stringView cw: ctx.cWords ow: ctx.opWords
         vrow: "    .\{rslot} = \{wbase}_\{rslot}_wrapper,\n"
         buf.append vrow
         mj = mj + 1
@@ -39624,7 +39700,7 @@ emitFacetImpl: function {
             retkw = ""
             ret = "void"
         }
-        wslot: cSlotName name: mname.stringView cw: ctx.cWords
+        wslot: cSlotName name: mname.stringView cw: ctx.cWords ow: ctx.opWords
         w0: "static \{ret} \{wbase}_\{wslot}_wrapper(\{wparams}) {\n"
         buf.append w0
         w1: "    \{implCtype}* _self = (\{implCtype}*)_data;\n"
@@ -39649,7 +39725,7 @@ emitFacetImpl: function {
             mj = mj + 1
             continue
         }
-        rslot: cSlotName name: mname2.stringView cw: ctx.cWords
+        rslot: cSlotName name: mname2.stringView cw: ctx.cWords ow: ctx.opWords
         vrow: "    .\{rslot} = \{wbase}_\{rslot}_wrapper,\n"
         buf.append vrow
         mj = mj + 1
@@ -39985,13 +40061,7 @@ emitFileMethodCall: function {
     if (isPtrVid :ctx vid: recvV) then recvExpr = recvC.take
     isNet: false
     {
-        if (
-            (definedInUnitName
-                :symtab
-                tid: fid
-            ) ==
-            "net"
-        ) then isNet = true
+        if (isNetUnitTid :symtab :ctx tid: fid) then isNet = true
     }
     if isNet then {
         demandNetMember :ctx tid: fid member: mn
@@ -40045,13 +40115,25 @@ emitFileMethodCall: function {
     return ""
 }
 
-# ioCreateWrapper -- the wrapper name X of an `io.X.create` callable, else "".
-ioCreateWrapper: function {ast: Ast.view n: astnode.view} outx StringView is {
+# unitDeclNameId -- the name a unit is declared under, interned; 0 for no unit
+unitDeclNameId: function {symtab: zenv.ZSymbolTable.view declId: ztypes.declid} out zast.nameid is {
+    if declId.isZero then return zast.nameid.zero
+    return (symtab.typing.decls.get i: declId).name
+}
+
+# unitCreateMember -- the member name X of a `<unit>.X.create` callable, the unit
+# named by `unitName` (io's wrappers, cli's spec classes), else "".
+unitCreateMember: function {
+    ast: Ast.view n: astnode.view unitName: zast.nameid
+} outx StringView is {
     if n.dottedpath then {
         ccn: atomNameIdOf :ast n: (ast.nodes.get i: n.child)
         if ccn == zast.wellKnown.slot.wkCreate then {
-            pb: dottedBaseAtom :ast n: (ast.nodes.get i: n.parent)
-            if pb == "io" then return (dottedChildText :ast n: (ast.nodes.get i: n.parent))
+            pb: dottedBaseAtomId :ast n: (ast.nodes.get i: n.parent)
+            if pb.isZero.not when pb == unitName then return (dottedChildText
+                :ast
+                n: (ast.nodes.get i: n.parent)
+            )
         }
     }
     return ""
@@ -40156,7 +40238,11 @@ emitIoWrapperCreate: function {
     ctx: Ctx
     call: zast.callrow.view
 } out String is {
-    wn: ioCreateWrapper :ast n: (ast.nodes.get i: call.callable)
+    wn: (unitCreateMember
+        :ast
+        n: (ast.nodes.get i: call.callable)
+        unitName: (unitDeclNameId :symtab declId: ctx.ioUnitDecl)
+    )
     if wn.length == 0 then return ""
     wid: resolveTypeIdByName :ast :symtab :ctx name: wn
     if wid.isZero then return ""
@@ -40536,18 +40622,6 @@ emitNativeFreeFnCall: function {
     return (orderClose prefix: oprefix callee: callee.stringView args: args.stringView)
 }
 
-# cliCreateClass -- the class name X of a `cli.X.create` callable, else "".
-cliCreateClass: function {ast: Ast.view n: astnode.view} outx StringView is {
-    if n.dottedpath then {
-        ccn: atomNameIdOf :ast n: (ast.nodes.get i: n.child)
-        if ccn == zast.wellKnown.slot.wkCreate then {
-            pb: dottedBaseAtom :ast n: (ast.nodes.get i: n.parent)
-            if pb == "cli" then return (dottedChildText :ast n: (ast.nodes.get i: n.parent))
-        }
-    }
-    return ""
-}
-
 # emitCliSpecCreate -- `cli.Spec.create programName: ... summary: ...` ->
 # z_t{id}_Spec_create(<args in param order>). "" for any non-cli-create callee.
 emitCliSpecCreate: function {
@@ -40556,7 +40630,11 @@ emitCliSpecCreate: function {
     ctx: Ctx
     call: zast.callrow.view
 } out String is {
-    cn: cliCreateClass :ast n: (ast.nodes.get i: call.callable)
+    cn: (unitCreateMember
+        :ast
+        n: (ast.nodes.get i: call.callable)
+        unitName: (unitDeclNameId :symtab declId: ctx.cliUnitDecl)
+    )
     if cn.length == 0 then return ""
     cid: (cliClassTypeId
         :symtab
@@ -40865,9 +40943,10 @@ vtableAutoCallC: function {
     acc: StringView
     mn: StringView
     cw: zast.Vocab.view
+    ow: zast.Vocab.view
     isFacet: bool
 } out String is {
-    return (vtableCallC :recv :acc :mn :cw :isFacet argTail: "")
+    return (vtableCallC :recv :acc :mn :cw :ow :isFacet argTail: "")
 }
 
 # vtableCallC -- the dispatch itself: `recv.vtable->slot(dataArg, args...)`.
@@ -40882,11 +40961,12 @@ vtableCallC: function {
     acc: StringView
     mn: StringView
     cw: zast.Vocab.view
+    ow: zast.Vocab.view
     isFacet: bool
     argTail: StringView
 } out String is {
     dargs: vtableDataArg :recv :acc :isFacet
-    return "\{recv}\{acc}vtable->\{cSlotName name: mn :cw}(\{dargs}\{argTail})"
+    return "\{recv}\{acc}vtable->\{cSlotName name: mn :cw :ow}(\{dargs}\{argTail})"
 }
 
 # dispatchReceiverTid -- the dispatchable type a protocol receiver stands for
@@ -41154,7 +41234,7 @@ emitProtocolDispatch: function {
     } else {
         prefix = appendPlainDispatchArgs :ast :symtab :ctx :call :dargs
     }
-    dslot: cSlotName name: mn cw: ctx.cWords
+    dslot: cSlotName name: mn cw: ctx.cWords ow: ctx.opWords
     return (orderWrap :prefix call: "\{recv}\{acc}vtable->\{dslot}(\{dargs})")
 }
 
