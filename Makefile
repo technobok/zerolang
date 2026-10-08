@@ -2471,7 +2471,7 @@ perf: $(PERFBIN)
 #
 # +2 ztypecheck exports envLookup / scopeFor / unitdefNodeId for zls's
 # shadow-aware hover: 0 behaviour, +2 source (ab.sh).
-ALLOC_BASELINE := 2207972
+ALLOC_BASELINE := 2208002
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -4224,13 +4224,18 @@ generic-param-guard: bin/zl
 # its parent's public block is used by that naming, not reported unused (L012).
 # L003 reads the template the checker resolved: the fixture's six labelled first
 # arguments (stdlib list/map/option, a user template, one nested) are reported,
-# and the plain `zl lint` tier, which has no checker, reports none.
+# and the plain `zl lint` tier, which has no checker, reports none. L011 offers
+# a bare system type name only where it reaches the system's type: both shapes
+# are reported in bare_zero.z, neither in bare_zero_shadow.z, whose unit
+# declares its own `String` and `u64`; the plain tier reports none.
 ZLFULL_FIX := tests/fixtures/zl_full/tiered.z
 ZLFULL_DEP := tests/fixtures/zl_full/depunit/depmain.z
 ZLFULL_ONCE := tests/fixtures/zl_full/generic_once.z
 ZLFULL_SUB := tests/fixtures/zl_full/subunit/host
 ZLFULL_PUB := tests/fixtures/zl_full/pubhost.z
 ZLFULL_ELIDE := tests/fixtures/zl_full/elide.z
+ZLFULL_BZ := tests/fixtures/zl_full/bare_zero.z
+ZLFULL_BZS := tests/fixtures/zl_full/bare_zero_shadow.z
 zl-full-guard: bin/zl
 	@d=$$(mktemp -d); fail=0; \
 	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full $(CURDIR)/$(ZLFULL_FIX) 2>&1); \
@@ -4279,6 +4284,16 @@ zl-full-guard: bin/zl
 	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
 	if $(CURDIR)/bin/zl lint $(CURDIR)/$(ZLFULL_ELIDE) 2>&1 | grep -q 'L003'; then \
 	  echo "zl-full-guard FAIL: the parse tier reported L003, which needs the checker"; fail=1; fi; \
+	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full $(CURDIR)/$(ZLFULL_BZ) 2>&1); \
+	if [ "$$(printf '%s\n' "$$out" | grep -c 'L011')" != 2 ]; then \
+	  echo "zl-full-guard FAIL: L011 did not report the fixture's two bare-zero initializers:"; \
+	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
+	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full $(CURDIR)/$(ZLFULL_BZS) 2>&1); \
+	if printf '%s\n' "$$out" | grep -q 'L011'; then \
+	  echo "zl-full-guard FAIL: L011 offered a bare name the unit's own type takes:"; \
+	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
+	if $(CURDIR)/bin/zl lint $(CURDIR)/$(ZLFULL_BZ) 2>&1 | grep -q 'L011'; then \
+	  echo "zl-full-guard FAIL: the parse tier reported L011, which needs the checker"; fail=1; fi; \
 	rm -rf $$d; \
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
 	echo "zl-full-guard OK: --full runs without flags from a foreign cwd and without a runtime, says why when it cannot, places a dependency's error in its own file, and lints a subunit as itself"

@@ -41,8 +41,7 @@ public: unit {
     :dissectedArgText
     :stdTidRo
     :firstGenericParamId
-    :envLookup
-    :scopeFor
+    :bareNameReaches
     :unitdefNodeId
     :stdTidPeek
     :dataFieldIds
@@ -62462,6 +62461,35 @@ envLookup: function {
         if h8.isZero.not then return (zdefhit declId: h8 scope: st.typing.coreUnitRoot)
     }
     return (zdefhit declId: ztypes.declid scope: ztypes.declid)
+}
+
+# bareNameReaches -- the type's bare name, looked up from `site`, reaches the
+# type: its nearest declaration there is the type's own, or a re-export that
+# resolved to it (core's `u8: system.u8`). A re-export not yet resolved is
+# taken to reach it; any other declaration of the name shadows it. Read from
+# declarations only. True for no site.
+bareNameReaches: function {
+    # the checked program the lookup reads
+    st: zenv.ZSymbolTable.view
+    # the unit the name would be written in
+    site: ztypes.declid
+    # the type, a template for a generic instance
+    base: ztypes.tid
+} out bool is {
+    if site.isZero then return true
+    bd: declOfTypeId :st tid: base
+    if bd.isZero then return true
+    nameId: (st.typing.decls.get i: bd).name
+    hit: (envLookup
+        :st
+        scope: (scopeFor :st scope: site unitDecl: site)
+        :nameId
+    )
+    if hit.declId == bd then return true
+    if hit.declId.isZero then return false
+    hd: st.typing.decls.get i: hit.declId
+    if hd.kind.reexportDecl.not then return false
+    return hd.typeId.isZero or (hd.typeId == base)
 }
 
 # zdefhit -- an envLookup hit: the child DeclId and the scope (its root

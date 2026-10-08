@@ -1208,6 +1208,11 @@ Analysis: class {
     fastToks: ListVal tokenize.token
     # how deep in nested functions the walk is
     funcDepth: u64
+    # the same, for the typecheck-tier walk (walkSuf)
+    sufFnDepth: u64
+    # the declaration of the unit the typecheck-tier walk is in: where a name a
+    # fix would write is looked up
+    sufSite: ztypes.declid
     # the pool ids of `true` and `false` in this file, 0 when absent, so the
     # boolean-literal rule compares ids and never spellings
     trueId: zast.nameid
@@ -1766,11 +1771,6 @@ Analysis: class {
             if this.opts.complexity > 0 when this.funcDepth == 0 then {
                 this.checkComplexity :ast nameId: n.name opId: n.operation
             }
-        } case assignment then {
-            if this.funcDepth > 0 then (this.tryBareZeroInit
-                :ast
-                value: (ast.nodes.get i: n.value)
-            )
         } case forexpr then {
             this.checkImpliedIterate :ast :n
         } case ifexpr then {
@@ -2994,22 +2994,25 @@ Analysis: class {
         }
     }
 
-    # tryBareZeroInit -- L011: a zero/empty binding initializer written as a
-    # literal (`"".string`, `0.u64`) where the bare type name constructs the
-    # same value. Function-body binding initializers only: record/class
-    # fields and parameter defaults keep literal values (a bare type name
-    # there is an annotation), and reassignment right-hand sides prefer the
-    # coerced bare literal (`x = 0`). The replacement span is byte-verified
-    # against the expected source spelling before any edit is recorded.
-    tryBareZeroInit: function {:this ast: Ast.view value: astnode.view} is {
+    # tryBareZeroInit -- L011 (typecheck tier): a zero/empty binding initializer
+    # written as a literal (`"".string`, `0.u64`) where the bare type name
+    # constructs the same value. Function-body binding initializers only:
+    # record/class fields and parameter defaults keep literal values (a bare
+    # type name there is an annotation), and reassignment right-hand sides
+    # prefer the coerced bare literal (`x = 0`). The bare name is the system's
+    # type only where, written in this unit, it reaches that type -- a unit's
+    # own `String` or `u64` takes it -- so the rule says nothing elsewhere. The
+    # replacement span is byte-verified against the expected source spelling
+    # before any edit is recorded.
+    tryBareZeroInit: function {:this ast: Ast.view value: astnode.view st: zenv.ZSymbolTable} is {
         match (
             value
         ) case statementline then {
-            this.tryBareZeroInit :ast value: (ast.nodes.get i: value.statementline)
+            this.tryBareZeroInit :ast value: (ast.nodes.get i: value.statementline) :st
         } case statement then {
             if value.statements.count.u64 == 1 then {
                 s0Id: zast.kidAt kids: ast.kids span: value.statements i: 0
-                this.tryBareZeroInit :ast value: (ast.nodes.get i: s0Id)
+                this.tryBareZeroInit :ast value: (ast.nodes.get i: s0Id) :st
             }
         } case dottedpath then {
             repl: bareZeroTypeName :ast n: (ast.nodes.get i: value.child)
@@ -3022,6 +3025,11 @@ Analysis: class {
             isStrRepl: childName == zast.wellKnown.slot.wkString
             if isStr when isStrRepl.not then return
             if isStr.not when isStrRepl then return
+            sysId: zast.wellKnown.slot.tyString
+            if isStrRepl.not then sysId = atomNameIdOf n: (ast.nodes.get i: value.child)
+            sysT: ztypecheck.stdTidRo :ast :st wk: sysId
+            if sysT.isZero then return
+            if (ztypecheck.bareNameReaches :st site: this.sufSite base: sysT).not then return
             pin: nodeInfoOf n: (ast.nodes.get i: value.parent)
             cin: nodeInfoOf n: (ast.nodes.get i: value.child)
             if pin.line != cin.line then return
@@ -3741,11 +3749,19 @@ Analysis: class {
                 strTid: (ztypecheck.stdTidRo :ast :st wk: zast.wellKnown.slot.tyString)
             )
             this.wideningRedundant :ast opId: n.value destTid: rtt :st
+        } case assignment then {
+            if this.sufFnDepth > 0 then (this.tryBareZeroInit
+                :ast
+                value: (ast.nodes.get i: n.value)
+                :st
+            )
         } case functiondef then {
             # the function's own return type is the funcret for everything below it
             this.walkSufRet :ast retId: n.returntype :uname :st
             this.walkSufIds :ast ids: n.parameters :uname :st funcretId: n.returntype
+            this.sufFnDepth = this.sufFnDepth + 1
             this.walkSufOptAt :ast oId: n.body :uname :st funcretId: n.returntype
+            this.sufFnDepth = this.sufFnDepth - 1
             this.walkSufIds :ast ids: n.asItems :uname :st funcretId: n.returntype
             return
         } else null
@@ -3804,6 +3820,10 @@ Analysis: class {
 
     # lintSuffixUnit -- run the suffix check over the linted unit.
     lintSuffixUnit: function {:this prog: Ast.view lu: LintedUnit.view st: zenv.ZSymbolTable} is {
+        uk: ztypecheck.unitdefNodeId ast: prog nId: lu.op
+        ut: (st.typing.unitTypesById.get key: uk).or d: ztypes.tid.zero
+        this.sufSite = ztypes.declid
+        if ut.isZero.not then this.sufSite = st.reg.defOf tid: ut
         (this.walkSuf
             ast: prog
             n: (prog.nodes.get i: lu.op)
@@ -6182,6 +6202,8 @@ analyzeSource: function {source: String.take path: String.take opts: lintopts} o
         edits: List zfix.Edit
         fastToks: ListVal tokenize.token
         funcDepth: 0
+        sufFnDepth: 0
+        sufSite: ztypes.declid
         trueId: zast.nameid
         falseId: zast.nameid
         elsewhere: (IdMapR u32 V: DiagSrc)
@@ -6227,6 +6249,8 @@ analyzeFile: function {path: String.take opts: lintopts} out Analysis is {
             edits: List zfix.Edit
             fastToks: ListVal tokenize.token
             funcDepth: 0
+            sufFnDepth: 0
+            sufSite: ztypes.declid
             trueId: zast.nameid
             falseId: zast.nameid
             elsewhere: (IdMapR u32 V: DiagSrc)
@@ -6275,6 +6299,8 @@ analyzeFileFull: function {
             edits: List zfix.Edit
             fastToks: ListVal tokenize.token
             funcDepth: 0
+            sufFnDepth: 0
+            sufSite: ztypes.declid
             trueId: zast.nameid
             falseId: zast.nameid
             elsewhere: (IdMapR u32 V: DiagSrc)
@@ -6313,6 +6339,8 @@ analyzeFileFull: function {
             edits: List zfix.Edit
             fastToks: ListVal tokenize.token
             funcDepth: 0
+            sufFnDepth: 0
+            sufSite: ztypes.declid
             trueId: zast.nameid
             falseId: zast.nameid
             elsewhere: (IdMapR u32 V: DiagSrc)
@@ -6384,6 +6412,8 @@ sourceParses: function {source: String.take} out bool is {
         edits: List zfix.Edit
         fastToks: ListVal tokenize.token
         funcDepth: 0
+        sufFnDepth: 0
+        sufSite: ztypes.declid
         trueId: zast.nameid
         falseId: zast.nameid
         elsewhere: (IdMapR u32 V: DiagSrc)
