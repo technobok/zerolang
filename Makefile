@@ -2449,7 +2449,12 @@ perf: $(PERFBIN)
 # -452 sums whose names differ only in case are renamed apart before their tag
 # enumerators are spelled (the stem hash folds case, byte by byte), and cUpperOf
 # reserves its buffer: -767 behaviour, +315 source (ab.sh).
-ALLOC_BASELINE := 2206892
+#
+# +879 an opt-out (`create: null`, `==: null`) and a payload-less sum arm ask
+# whether the operand's nearest declaration is the system's `null`
+# (namesNullType), not whether it is spelled `null`: 0 behaviour, +879 source
+# (ab.sh).
+ALLOC_BASELINE := 2207771
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

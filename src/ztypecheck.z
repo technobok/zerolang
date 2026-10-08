@@ -7887,7 +7887,11 @@ specTypetypeOf: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out ztypes
 # pool ids, so this compares what the pool already interned rather than the
 # text it interned from.
 asDeclaresMemberId: function {
+    # the declarations the as-block's operands are looked up in
+    st: zenv.ZSymbolTable.view
     ast: Ast.view
+    # the declaration whose as-block may declare the member
+    ownerDecl: ztypes.declid
     asItems: zast.kidspan
     nameId: zast.nameid
 } out bool is {
@@ -7899,7 +7903,7 @@ asDeclaresMemberId: function {
         am: ast.nodes.get i: amId
         if am.namedoperation when am.name == nameId then {
             vn: atomNameId :ast n: (ast.nodes.get i: am.operation)
-            if vn != zast.wellKnown.slot.tyNull then result = true
+            if (namesNullType :st :ast :ownerDecl nameId: vn).not then result = true
         }
     }
     return result
@@ -7908,7 +7912,11 @@ asDeclaresMemberId: function {
 # whether an as-block opts a member OUT with `null`, which is how a type
 # declines a member its family would otherwise synthesise
 memberNullOptOut: function {
+    # the declarations an opt-out's `null` is looked up in
+    st: zenv.ZSymbolTable.view
     ast: Ast.view
+    # the declaration whose as-block may strike the member off
+    ownerDecl: ztypes.declid
     asItems: zast.kidspan
     member: StringView
 } out bool is {
@@ -7922,7 +7930,7 @@ memberNullOptOut: function {
             mn: zast.nameTextAt :ast ref: am.name
             if mn.stringView == member then {
                 vn: atomNameId :ast n: (ast.nodes.get i: am.operation)
-                if vn == zast.wellKnown.slot.tyNull then result = true
+                if (namesNullType :st :ast :ownerDecl nameId: vn) then result = true
             }
         }
     }
@@ -7966,7 +7974,16 @@ refuseValtypeCopy: function {
 
 # memberNullOptOut -- true when a type's `as {}` block defines `member` as
 # `null`, the language's way of striking a compiler-provided member off a type.
-eqNullOptOut: function {ast: Ast.view asItems: zast.kidspan} out bool is {
+eqNullOptOut: function {
+    # the declarations the `==: null` operand is looked up in
+    st: zenv.ZSymbolTable.view
+    # the tree holding the as-block
+    ast: Ast.view
+    # the declaration whose as-block may strike equality off
+    ownerDecl: ztypes.declid
+    # the as-block's items
+    asItems: zast.kidspan
+} out bool is {
     result: false
     h20x9: u64
     for h20x9 < asItems.count loop {
@@ -7977,7 +7994,7 @@ eqNullOptOut: function {ast: Ast.view asItems: zast.kidspan} out bool is {
             isEqNe: (cmpOpOf opnId: am.name).eq or (cmpOpOf opnId: am.name).ne
             if isEqNe then {
                 vn: atomNameId :ast n: (ast.nodes.get i: am.operation)
-                if vn == zast.wellKnown.slot.tyNull then result = true
+                if (namesNullType :st :ast :ownerDecl nameId: vn) then result = true
             }
         }
     }
@@ -8002,7 +8019,14 @@ attachAsConstant: function {
     notValue: false
     op: ast.nodes.get i: item.operation
     notValue = (isBareGenericParam :ast :op) or (isLabelValue :op)
-    if notValue.not then notValue = isNullName :st nameId: (bareAtomNameId n: op)
+    if notValue.not then {
+        notValue = (namesNullType
+            :st
+            :ast
+            ownerDecl: (declOfTypeId :st tid: parentId)
+            nameId: (bareAtomNameId n: op)
+        )
+    }
     if notValue then return
     md: st.typing.declMemberIdOf parentTypeId: parentId nameId: item.name
     if md.isZero then return
@@ -8123,12 +8147,43 @@ reportAsMemberNotConstant: function {
     return true
 }
 
-# isNullName -- the name is `null`'s own, compared by id with the name the null
-# type was registered under: an opt-out's value (`create: null`) resolves to
-# nothing worth demanding.
-isNullName: function {st: zenv.ZSymbolTable.view nameId: zast.nameid} out bool is {
-    if nameId.isZero or st.typing.nullTypeId.isZero then return false
-    return nameId == zast.wellKnown.slot.tyNull
+# namesNullType -- whether the bare name `nameId`, written in the definition
+# `ownerDecl` declares, names the null type: its nearest declaration is the
+# system unit's own `null`, reached directly or through re-exports (core's
+# `null: system.null`). Read from the declarations, so nothing is resolved or
+# minted. A record a nearer scope declares under the name is that record, so an
+# opt-out (`create: null`) and a payload-less arm are written with the system's
+# `null` only.
+namesNullType: function {
+    # the declarations the name is looked up in, never resolved
+    st: zenv.ZSymbolTable.view
+    # the tree the re-exports are read from
+    ast: Ast.view
+    # the declaration whose definition the name is written in
+    ownerDecl: ztypes.declid
+    # the name, interned; 0 when the operand is no bare name
+    nameId: zast.nameid
+} out bool is {
+    if nameId.isZero or ownerDecl.isZero then return false
+    scope: declParentIdOf :st declId: ownerDecl
+    unitDecl: unitRootOfDecl :st declId: ownerDecl
+    du: (definingSiteForId :st :ast :unitDecl :scope :nameId).defUnit
+    hops: u64
+    for hops < 8 loop {
+        hops = hops + 1
+        if du.isZero then return false
+        dd: declOfUnitDef :st :scope unitDecl: du :nameId
+        if dd.isZero then return false
+        tt: declDefTypetype :st :ast declId: dd
+        match (
+            tt
+        ) case some then {
+            return tt == ztypes.ztypetype.nullType
+        } case none then null
+        # a re-export the defining unit itself makes (core's `null: system.null`)
+        du = unitDeclOfName :st nameId: (reexportUnitOf :st :ast declId: dd)
+    }
+    return false
 }
 
 # attachInterfaceAsConstants -- a protocol's or a facet's `as` constants. An
@@ -9104,7 +9159,7 @@ asItemTypeNameRefused: function {
     if vnId.isZero then return
     if (isNumericLiteralNameAt :ast ref: vnId) then return
     # `create: null` opts out of a member; null is no type an item declares
-    if (isNullName :st nameId: vnId) then return
+    if (namesNullType :st :ast ownerDecl: (declOfTypeId :st tid: parentId) nameId: vnId) then return
     tto: (walkLookupTyperefById :st :scope :ast :unitDecl baseId: vnId).or d: ztypes.tid.zero
     if tto.isZero then return
     asItemNamesPlainType :st :ast :parentId :item target: tto
@@ -11288,14 +11343,22 @@ synthRecordHash: function {
     hshOptR: false
     onHshOptR: ast.nodes.get i: rnode.nid
     if onHshOptR.objectdef then {
-        hshOptR = memberNullOptOut :ast asItems: onHshOptR.asItems member: "hash"
+        hshOptR = (memberNullOptOut
+            :st
+            :ast
+            ownerDecl: (declOfTypeId :st tid: rid)
+            asItems: onHshOptR.asItems
+            member: "hash"
+        )
     }
     hshAsR: false
     {
         onHshAsR: ast.nodes.get i: rnode.nid
         if onHshAsR.objectdef then {
             hshAsR = (asDeclaresMemberId
+                :st
                 :ast
+                ownerDecl: (declOfTypeId :st tid: rid)
                 asItems: onHshAsR.asItems
                 nameId: zast.wellKnown.slot.wkHash
             )
@@ -11653,15 +11716,30 @@ resolveRecord: function {
     isgen: hasGenericParam :ast items: asItems
     unitTmpl: nestedTemplateUnit :st :ast :scope :unitDecl nameId: (nameIdOf :ast name: defName)
     if unitTmpl.isZero.not then isgen = true
-    eqOptR: eqNullOptOut :ast :asItems
+    ridDecl: declOfTypeId :st tid: rid
+    eqOptR: eqNullOptOut :st :ast ownerDecl: ridDecl :asItems
     # BOTH NAMES, INDEPENDENTLY. The old gate asked about `==` alone and then
     # synthesised the pair, so a type writing only `!=` had its own operator
     # replaced by the synth shell -- and one writing only `==` got no `!=`
     # MEMBER at all, only the emitter's derived negation.
-    eqAsR: asDeclaresMemberId :ast :asItems nameId: zast.wellKnown.slot.wkOpEq
-    neAsR: asDeclaresMemberId :ast :asItems nameId: zast.wellKnown.slot.wkOpNe
+    eqAsR: (asDeclaresMemberId
+        :st
+        :ast
+        ownerDecl: ridDecl
+        :asItems
+        nameId: zast.wellKnown.slot.wkOpEq
+    )
+    neAsR: (asDeclaresMemberId
+        :st
+        :ast
+        ownerDecl: ridDecl
+        :asItems
+        nameId: zast.wellKnown.slot.wkOpNe
+    )
     refuseValtypeCopy :st :ast :asItems :defName
-    if (memberNullOptOut :ast :asItems member: "create") then st.typing.createOptOut.add item: rid
+    if (memberNullOptOut :st :ast ownerDecl: ridDecl :asItems member: "create") then {
+        st.typing.createOptOut.add item: rid
+    }
     if isgen then {
         st.reg.setGeneric typeId: rt value: true
         tdecl9: declOfUnitDef :st :scope :unitDecl nameId: (nameIdOf :ast name: defName)
@@ -11788,14 +11866,22 @@ synthVariantEqHash: function {
     hshOptV: false
     onHshOptV: ast.nodes.get i: vnode.nid
     if onHshOptV.objectdef then {
-        hshOptV = memberNullOptOut :ast asItems: onHshOptV.asItems member: "hash"
+        hshOptV = (memberNullOptOut
+            :st
+            :ast
+            ownerDecl: (declOfTypeId :st tid: variantTid)
+            asItems: onHshOptV.asItems
+            member: "hash"
+        )
     }
     hshAsV: false
     {
         onHshAsV: ast.nodes.get i: vnode.nid
         if onHshAsV.objectdef then {
             hshAsV = (asDeclaresMemberId
+                :st
                 :ast
+                ownerDecl: (declOfTypeId :st tid: variantTid)
                 asItems: onHshAsV.asItems
                 nameId: zast.wellKnown.slot.wkHash
             )
@@ -12013,6 +12099,7 @@ resolveVariant: function {
     pvGrants_vvid: ListVal zast.nameid
     scanVisibility :st :ast onode: vnode excl: pvExcl_vvid grants: pvGrants_vvid
     st.reg.setValtype typeId: variantTid value: true
+    vDecl: declOfTypeId :st tid: variantTid
     isgen: false
     onIsgen: ast.nodes.get i: vnode.nid
     if onIsgen.objectdef then {
@@ -12023,7 +12110,7 @@ resolveVariant: function {
     eqOptV: false
     onEqOptV: ast.nodes.get i: vnode.nid
     if onEqOptV.objectdef then {
-        eqOptV = eqNullOptOut :ast asItems: onEqOptV.asItems
+        eqOptV = eqNullOptOut :st :ast ownerDecl: vDecl asItems: onEqOptV.asItems
     }
     eqAsV: false
     neAsV: false
@@ -12031,12 +12118,16 @@ resolveVariant: function {
         onEqAsV: ast.nodes.get i: vnode.nid
         if onEqAsV.objectdef then {
             eqAsV = (asDeclaresMemberId
+                :st
                 :ast
+                ownerDecl: vDecl
                 asItems: onEqAsV.asItems
                 nameId: zast.wellKnown.slot.wkOpEq
             )
             neAsV = (asDeclaresMemberId
+                :st
                 :ast
+                ownerDecl: vDecl
                 asItems: onEqAsV.asItems
                 nameId: zast.wellKnown.slot.wkOpNe
             )
@@ -12091,7 +12182,7 @@ resolveVariant: function {
             if armCountV == 1 then firstArmV = fm.name
             if armCountV == 2 then secondArmV = fm.name
             anV: atomNameId :ast n: (ast.nodes.get i: fm.operation)
-            if anV != zast.wellKnown.slot.tyNull then allNullV = false
+            if (namesNullType :st :ast ownerDecl: vDecl nameId: anV).not then allNullV = false
             if fm.name == zast.wellKnown.slot.wkTag then {
                 mt: "'tag' is a reserved member name".string
                 (addResolveErrorH
@@ -12861,6 +12952,7 @@ resolveUnion: function {
     pvGrants_uuid: ListVal zast.nameid
     scanVisibility :st :ast onode: vnode excl: pvExcl_uuid grants: pvGrants_uuid
     st.reg.setValtype typeId: uid value: false
+    uDecl: declOfTypeId :st tid: uid
     isgen: false
     onIsgen: ast.nodes.get i: vnode.nid
     if onIsgen.objectdef then {
@@ -12903,7 +12995,7 @@ resolveUnion: function {
             if armCountU == 1 then firstArmU = fm.name
             if armCountU == 2 then secondArmU = fm.name
             anU: atomNameId :ast n: (ast.nodes.get i: fm.operation)
-            if anU != zast.wellKnown.slot.tyNull then allNull = false
+            if (namesNullType :st :ast ownerDecl: uDecl nameId: anU).not then allNull = false
             armBadU: (refuseStringArmPayload
                 :st
                 :ast
@@ -14400,7 +14492,13 @@ finishClassDef: function {
     needsDtor: needsDtorIn
     resolveClassAsMethods :st :ast :unitDecl :scope :defName :cid :isgen :cnode
     cobj: ast.nodes.get i: cnode.nid
-    if cobj.objectdef when (memberNullOptOut :ast asItems: cobj.asItems member: "create") then {
+    if cobj.objectdef when (memberNullOptOut
+        :st
+        :ast
+        ownerDecl: (declOfTypeId :st tid: cid)
+        asItems: cobj.asItems
+        member: "create"
+    ) then {
         st.typing.createOptOut.add item: cid
     }
     if (resolveClassCreate
@@ -22604,7 +22702,8 @@ synthInstanceValueMembers: function {
     forceMemberOf :st :ast parentTypeId: mt nameId: zast.wellKnown.slot.wkOpNe
     forceMemberOf :st :ast parentTypeId: mt nameId: zast.wellKnown.slot.wkHash
     items: templateAsItems :st :ast :templateId
-    if (eqNullOptOut :ast asItems: items).not then (synthComparisonPair
+    tmplDecl: declOfTypeId :st tid: templateId
+    if (eqNullOptOut :st :ast ownerDecl: tmplDecl asItems: items).not then (synthComparisonPair
         :st
         ownerTid: mid
         eqDecl: false
@@ -22612,7 +22711,7 @@ synthInstanceValueMembers: function {
     )
     if (st.typing.declChildOfId parentTypeId: mt nameId: zast.wellKnown.slot.wkHash
     ).some then return
-    if (memberNullOptOut :ast asItems: items member: "hash") then return
+    if (memberNullOptOut :st :ast ownerDecl: tmplDecl asItems: items member: "hash") then return
     synthHashMember :st rid: mid
 }
 
@@ -32655,7 +32754,7 @@ typedefHidesMember: function {
     op: ast.nodes.get i: nop.operation
     if op.objectdef then {
         nm: zast.nameTextAt :ast ref: cnId
-        return (memberNullOptOut :ast asItems: op.asItems member: nm.stringView)
+        return (memberNullOptOut :st :ast ownerDecl: td asItems: op.asItems member: nm.stringView)
     }
     return false
 }
@@ -57425,7 +57524,7 @@ typeMemberHoldsConstant: function {
             op: ast.nodes.get i: item.operation
             if op.functiondef then return false
             if (isBareGenericParam :ast :op) or (isLabelValue :op) then return false
-            return (isNullName :st nameId: (bareAtomNameId n: op)).not
+            return (namesNullType :st :ast ownerDecl: typeDecl nameId: (bareAtomNameId n: op)).not
         }
     }
     return false
