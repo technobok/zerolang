@@ -461,8 +461,41 @@ Document: class {
     version: i64
 }
 
+# zlsWord -- every word zls reads off outside text: its command-line flags, the
+# JSON-RPC methods it answers, the position encoding it negotiates and the
+# completion trigger it reads. A word is classified by its slot here
+# (zast.Vocab), never by comparing its text.
+zlsWord: data {
+    mInitialize: "initialize"
+    mInitialized: "initialized"
+    mShutdown: "shutdown"
+    mExit: "exit"
+    mDidOpen: "textDocument/didOpen"
+    mDidChange: "textDocument/didChange"
+    mDidClose: "textDocument/didClose"
+    mDefinition: "textDocument/definition"
+    mHover: "textDocument/hover"
+    mReferences: "textDocument/references"
+    mCompletion: "textDocument/completion"
+    mSignatureHelp: "textDocument/signatureHelp"
+    mFormatting: "textDocument/formatting"
+    mDocumentSymbol: "textDocument/documentSymbol"
+    encUtf32: "utf-32"
+    fV: "-V"
+    fVersion: "--version"
+    fStdio: "--stdio"
+    fReplay: "--replay"
+    fSrc: "--src"
+    fSystem: "--system"
+    fListen: "--listen"
+    fHelp: "--help"
+    trigSpace: " "
+} out stringdata
+
 # the language-server state: open documents, the project dirs, and the check cache.
 Server: class {
+    # the words zls classifies outside text by (zlsWord)
+    words: zast.Vocab
     # the open buffers by uri
     docs: (Map String V: Document)
     # the src root of the project in hand that holds the document being checked
@@ -628,35 +661,37 @@ Server: class {
         match (
             mo
         ) case some then {
-            mv: mo.stringView
-            if mv == "initialize" then {
+            mv: this.words.slotOf text: mo.stringView
+            # the handshake's acknowledgement: a notification, with nothing to answer
+            if mv == zlsWord.slot.mInitialized then return
+            if mv == zlsWord.slot.mInitialize then {
                 this.handleInitialize :msg
-            } else if mv == "initialized" then null else if mv == "shutdown" then {
+            } else if mv == zlsWord.slot.mShutdown then {
                 this.shutdownReq = true
                 idv: idValueOf :msg
                 sendResult id: idv result: Value.nul tp: this.transport
-            } else if mv == "exit" then {
+            } else if mv == zlsWord.slot.mExit then {
                 this.running = false
                 if this.shutdownReq.not then this.exitCode = 1
-            } else if mv == "textDocument/didOpen" then {
+            } else if mv == zlsWord.slot.mDidOpen then {
                 this.handleDidOpen :msg
-            } else if mv == "textDocument/didChange" then {
+            } else if mv == zlsWord.slot.mDidChange then {
                 this.handleDidChange :msg
-            } else if mv == "textDocument/didClose" then {
+            } else if mv == zlsWord.slot.mDidClose then {
                 this.handleDidClose :msg
-            } else if mv == "textDocument/definition" then {
+            } else if mv == zlsWord.slot.mDefinition then {
                 this.handleNav :msg mode: 1
-            } else if mv == "textDocument/hover" then {
+            } else if mv == zlsWord.slot.mHover then {
                 this.handleNav :msg mode: 2
-            } else if mv == "textDocument/references" then {
+            } else if mv == zlsWord.slot.mReferences then {
                 this.handleNav :msg mode: 3
-            } else if mv == "textDocument/completion" then {
+            } else if mv == zlsWord.slot.mCompletion then {
                 this.handleNav :msg mode: 4
-            } else if mv == "textDocument/signatureHelp" then {
+            } else if mv == zlsWord.slot.mSignatureHelp then {
                 this.handleNav :msg mode: 5
-            } else if mv == "textDocument/formatting" then {
+            } else if mv == zlsWord.slot.mFormatting then {
                 this.handleFormatting :msg
-            } else if mv == "textDocument/documentSymbol" then {
+            } else if mv == zlsWord.slot.mDocumentSymbol then {
                 this.handleDocSymbol :msg
             } else {
                 if hasId then {
@@ -682,7 +717,9 @@ Server: class {
             match (
                 k
             ) case text then {
-                if f.s.stringView == "utf-32" then this.encUtf32 = true
+                if (this.words.slotOf text: f.s.stringView) == zlsWord.slot.encUtf32 then {
+                    this.encUtf32 = true
+                }
             } else {
                 done = true
             }
@@ -1392,6 +1429,7 @@ Server: class {
                                 ch: ch0
                                 utf32: this.encUtf32
                                 trig: trigCh.stringView
+                                words: this.words
                             )
                         } else if mode == 5 then {
                             res = (signatureHelpAnswer
@@ -5379,11 +5417,12 @@ backOverIdent: function {ltv: StringView pos: u64} out u64 is {
 
 # caseWordBefore -- whether the word before the blank run ending at `ps` is
 # `case`: the cursor sits where an arm name goes.
-caseWordBefore: function {ltv: StringView ps: u64} out bool is {
+caseWordBefore: function {prog: Ast.view ltv: StringView ps: u64} out bool is {
     ws: backOverBlanks :ltv pos: ps
     if ws == ps then return false
     wb: backOverIdent :ltv pos: ws
-    return (ltv.substring from: wb to: ws) == "case"
+    wid: zast.poolFind pool: prog.names text: (ltv.substring from: wb to: ws)
+    return wid == zast.wellKnown.slot.kwCase
 }
 
 # caseClauseIds -- a match's subject node index, with its clause ids appended
@@ -5448,7 +5487,7 @@ caseArmComplete: function {
     prefix: StringView
     cursorPos: zast.nodepos
 } out bool is {
-    if (caseWordBefore :ltv :ps).not then return false
+    if (caseWordBefore :prog :ltv :ps).not then return false
     sp: (Spans
         rows: ListVal spanrow
         names: List String
@@ -6093,6 +6132,8 @@ completionAnswer: function {
     ch: i64
     utf32: bool
     trig: StringView
+    # zls's words, which the trigger character is classified by
+    words: zast.Vocab.view
 } out Value is {
     arr: newArr
     l1: line0 + 1
@@ -6162,7 +6203,7 @@ completionAnswer: function {
             cursorPos: curPos
         )
         if handledAL then return (Value.array arr)
-        if trig == " " then return (Value.array arr)
+        if (words.slotOf text: trig) == zlsWord.slot.trigSpace then return (Value.array arr)
         addScopeCompletions :snap :docRel :srcDir :l1u sink: cands
     }
 
@@ -6248,35 +6289,36 @@ main: function is {
     listenArg: String
     srcFlag: String
     sysFlag: String
+    words: zast.Vocab.create block: zlsWord
     i: 1.u64
     for i < n loop {
         arg: argv.get :i
-        av: arg.stringView
-        if (av == "-V") or (av == "--version") then {
+        av: words.slotOf text: arg.stringView
+        if (av == zlsWord.slot.fV) or (av == zlsWord.slot.fVersion) then {
             v: zversion.versionLine tool: "zls"
             print "\{v}\n"
             os.exit code: 0
-        } else if av == "--stdio" then null else if av == "--replay" then {
+        } else if av == zlsWord.slot.fStdio then null else if av == zlsWord.slot.fReplay then {
             if (i + 1) < n then {
                 i = i + 1
                 replay = (argv.get :i).copy
             }
-        } else if av == "--src" then {
+        } else if av == zlsWord.slot.fSrc then {
             if (i + 1) < n then {
                 i = i + 1
                 srcFlag = (argv.get :i).copy
             }
-        } else if av == "--system" then {
+        } else if av == zlsWord.slot.fSystem then {
             if (i + 1) < n then {
                 i = i + 1
                 sysFlag = (argv.get :i).copy
             }
-        } else if av == "--listen" then {
+        } else if av == zlsWord.slot.fListen then {
             if (i + 1) < n then {
                 i = i + 1
                 listenArg = (argv.get :i).copy
             }
-        } else if av == "--help" then {
+        } else if av == zlsWord.slot.fHelp then {
             printUsage
             os.exit code: 0
         } else {
@@ -6288,6 +6330,7 @@ main: function is {
     }
     ib: Bytes
     srv: (Server
+        :words
         docs: (Map String V: Document)
         srcDir: ""
         srcDirs: List String
