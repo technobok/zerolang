@@ -8164,9 +8164,31 @@ namesNullType: function {
     # the name, interned; 0 when the operand is no bare name
     nameId: zast.nameid
 } out bool is {
-    if nameId.isZero or ownerDecl.isZero then return false
-    scope: declParentIdOf :st declId: ownerDecl
-    unitDecl: unitRootOfDecl :st declId: ownerDecl
+    if ownerDecl.isZero then return false
+    return (namesNullTypeAt
+        :st
+        :ast
+        unitDecl: (unitRootOfDecl :st declId: ownerDecl)
+        scope: (declParentIdOf :st declId: ownerDecl)
+        :nameId
+    )
+}
+
+# namesNullTypeAt -- namesNullType for a name written in `scope` of `unitDecl`:
+# the same walk over declarations, from where a body or a definition stands.
+namesNullTypeAt: function {
+    # the declarations the name is looked up in, by its definitions alone
+    st: zenv.ZSymbolTable.view
+    # the tree whose re-export edges the walk follows
+    ast: Ast.view
+    # the unit the name is written in
+    unitDecl: ztypes.declid
+    # the scope the name is written in
+    scope: ztypes.declid
+    # the name, interned; 0 for no name
+    nameId: zast.nameid
+} out bool is {
+    if nameId.isZero then return false
     du: (definingSiteForId :st :ast :unitDecl :scope :nameId).defUnit
     hops: u64
     for hops < 8 loop {
@@ -38610,7 +38632,8 @@ checkIfClauses: function {
         clause: ifClauseRefAt :ast nid: clauseId
         dead: false
         if clause.nid.isZero.not then {
-            if (isEmptyBody n: (ast.nodes.get i: clause.statement)) then anyEmpty = true
+            if (isEmptyBody :st :ast :unitDecl n: (ast.nodes.get i: clause.statement)
+            ) then anyEmpty = true
             if skipDead when clause.statement != fbr.stmt then dead = true
         }
         if dead then continue
@@ -39119,7 +39142,8 @@ checkIf: function {
     hasElse: false
     if ifnode.elseclause.isZero.not then {
         hasElse = true
-        if (isEmptyBody n: (ast.nodes.get i: ifnode.elseclause)) then anyEmpty = true
+        if (isEmptyBody :st :ast :unitDecl n: (ast.nodes.get i: ifnode.elseclause)
+        ) then anyEmpty = true
         elseDead: false
         if skipDead when ifnode.elseclause != fbr.stmt then elseDead = true
         if elseDead.not then {
@@ -49286,13 +49310,41 @@ sumSubtypeNames: function {
     return arms
 }
 
-# isEmptyBody -- a statement block with no statement lines (an empty
-# `{}` or `null` clause body).
-isEmptyBody: function {n: astnode.view} out bool is {
+# isEmptyBody -- a clause body that does nothing: a statement block with no
+# statement lines (`{}`), or one whose only line is the null value (`then null`).
+# Decided before the body is walked, so the null value is told by declarations:
+# a bare name no local binds whose nearest declaration is the system's `null`.
+isEmptyBody: function {
+    # the symbol table whose locals and scope the body is written in
+    st: zenv.ZSymbolTable.view
+    # the tree holding the body
+    ast: Ast.view
+    # the unit the body is written in
+    unitDecl: ztypes.declid
+    # the clause body
+    n: astnode.view
+} out bool is {
     match (
         n
     ) case statement then {
-        return n.statements.count.u64 == 0
+        if n.statements.count.u64 == 0 then return true
+        if n.statements.count.u64 != 1 then return false
+        sl: ast.nodes.get i: (zast.kidAt kids: ast.kids span: n.statements i: 0)
+        match (
+            sl
+        ) case statementline then {
+            v: ast.nodes.get i: sl.statementline
+            match (
+                v
+            ) case atomid then {
+                if (st.lookup nameId: v.name).some then return false
+                return (namesNullTypeAt :st :ast :unitDecl scope: st.curScope nameId: v.name)
+            } else {
+                return false
+            }
+        } else {
+            return false
+        }
     } else {
         return false
     }
@@ -49539,7 +49591,7 @@ checkCaseClause: function {
     allDiverge: true
     armName: atomName :ast n: (ast.nodes.get i: clause.matcharm)
     armId: atomNameId :ast n: (ast.nodes.get i: clause.matcharm)
-    if (isEmptyBody n: (ast.nodes.get i: clause.statement)) then anyEmpty = true
+    if (isEmptyBody :st :ast :unitDecl n: (ast.nodes.get i: clause.statement)) then anyEmpty = true
     # A value-match literal arm wears the subject's concrete type.
     if isSum.not when (isNumericLiteralName name: armName.stringView
     ) when subjT.isZero.not when (isLiteralTypeId :st tid: subjT).not then {
@@ -49801,7 +49853,8 @@ checkCaseElse: function {
 } out casearmfacts is {
     anyEmpty: false
     allDiverge: true
-    if (isEmptyBody n: (ast.nodes.get i: casenode.elseclause)) then anyEmpty = true
+    if (isEmptyBody :st :ast :unitDecl n: (ast.nodes.get i: casenode.elseclause)
+    ) then anyEmpty = true
     elseMarker: st.pushBlock node: casenode.elseclause
     if targetName.length > 0 when subjT.isZero.not then {
         for each en2: covered loop {

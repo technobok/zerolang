@@ -21495,6 +21495,29 @@ emitContinueStmt: function {
     }
 }
 
+# isNullValueAtom -- a bare name the checker stamped with the null type: the null
+# value written as a statement, which does nothing. A record that a program names
+# `null` is no null type, and its bare name is emitted like any other.
+isNullValueAtom: function {symtab: zenv.ZSymbolTable.view n: astnode.view} out bool is {
+    match (
+        n
+    ) case atomid then {
+        return (stampIsNullType :symtab nid: n.nodeid)
+    } else {
+        return false
+    }
+}
+
+# stampIsNullType -- the checker stamped the bare name `nid` with the null type
+# as its value: the null value itself, not a call of an out-less function, whose
+# result wears the same stamp (autoCallNodes)
+stampIsNullType: function {symtab: zenv.ZSymbolTable.view nid: zast.nodeid} out bool is {
+    if (symtab.typing.autoCallNodes.has item: nid) then return false
+    t: stampIdOf :symtab :nid
+    if t.isZero then return false
+    return (symtab.reg.typetypeOf typeId: t) == ztypes.ztypetype.nullType
+}
+
 # emitReturnStmt -- the statement shapes that are not one of the named node arms:
 # a `return` with its scope cleanup, `break` / `continue` with theirs, and a bare
 # expression statement.
@@ -21507,6 +21530,8 @@ emitReturnStmt: function {
     tmp: TmpCtr
     buf: String.borrow
 } is {
+    # the null value as a statement (`then null`, a bare `null` line) does nothing
+    if (isNullValueAtom :symtab :n) then return
     # a no-arg method auto-call in statement position (this.accept,
     # this.statepop) is a dotted path: emit the call expression as a statement.
     if (isDottedAutoCall :n) then {
@@ -28522,7 +28547,7 @@ emitTailStmt: function {
         if n.name == zast.wellKnown.slot.wkReturn then return false
         if n.name == zast.wellKnown.slot.wkBreak then return false
         if n.name == zast.wellKnown.slot.wkContinue then return false
-        if n.name == zast.wellKnown.slot.tyNull then return false
+        if (stampIsNullType :symtab nid: n.nodeid) then return false
         emitReturnOfNode :ast :symtab :ctx vid: n.nodeid :ind :tmp :buf
         ctx.tailReturned = true
         return true
