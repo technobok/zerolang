@@ -90,7 +90,7 @@ SKIP     := mathutil genmath dissectlib
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: emit-set ident-set natives-tbl-guard generic-param-guard zl-full-guard const-row-guard all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls tcc install regen-goldens regen-matrix regen-math-asm bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard frontend-guard lifetime-guard native-guard fallback-guard member-guard highlight-guard deadcode-guard require-guard static-tcc-guard refusal-guard zlink-rules-guard fmt-raw-guard test-tcc test-tcc-heavy test-clang test-math-arm64 test-math-noasm test-portable-scalars math-asm-guard matrix-guard docs-link-guard bench-math bench-math-kernels mode-parity readable-check user-native-guard perf-strict perf-elision pre-push
+.PHONY: emit-set ident-set natives-tbl-guard generic-param-guard zl-full-guard const-row-guard all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls tcc install regen-goldens regen-matrix regen-math-asm bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard typename-guard frontend-guard lifetime-guard native-guard fallback-guard member-guard highlight-guard deadcode-guard require-guard static-tcc-guard refusal-guard zlink-rules-guard fmt-raw-guard test-tcc test-tcc-heavy test-clang test-math-arm64 test-math-noasm test-portable-scalars math-asm-guard matrix-guard docs-link-guard bench-math bench-math-kernels mode-parity readable-check user-native-guard perf-strict perf-elision pre-push
 
 # Keep pattern-chain intermediates (the per-example .c files) for debugging.
 .SECONDARY:
@@ -177,7 +177,7 @@ test: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 # the Python-free seed bootstrap. The lint + guard + corpus phases are plain
 # prerequisites so -j overlaps them; test-bootstrap stays last (and is
 # internally serial -- b1 -> b2 -> b3 is a chain by nature).
-ci: style-lint zl-full-guard complexity-report warn-check shadow-guard emitter-guard frontend-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard member-guard highlight-guard any-guard deadcode-guard eager-guard eager-lib-guard case-guard user-native-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard readable-check perf-strict test-tcc-heavy test-clang test-math-arm64 test-math-noasm test-portable-scalars math-asm-guard matrix-guard docs-link-guard mode-parity ci-corpus
+ci: style-lint zl-full-guard complexity-report warn-check shadow-guard emitter-guard typename-guard frontend-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard member-guard highlight-guard any-guard deadcode-guard eager-guard eager-lib-guard case-guard user-native-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard readable-check perf-strict test-tcc-heavy test-clang test-math-arm64 test-math-noasm test-portable-scalars math-asm-guard matrix-guard docs-link-guard mode-parity ci-corpus
 	$(MAKE) --no-print-directory test-bootstrap BOOTSTRAP_CCS="$(CI_BOOTSTRAP_CCS)"
 	@echo "CI GATE GREEN: style-lint + corpus(--heavy: +selfhost-asan +fixpoint) + bootstrap"
 
@@ -2608,6 +2608,41 @@ shadow-guard:
 # counts pin where C names are BUILT: the type checker composes none, and the
 # emitter spells the z_t{id} shape only inside its one composer, which the
 # per-program table in emitC calls once per type.
+# typename-guard -- a type is identified by its declaration, never by the name it
+# is spelled with: a program's own `String`, `List`, `Box` or `u64` is its own
+# type. A comparison of a name id against one of zast.wellKnown's ty* slots is
+# therefore allowed only where it is not a type identity: below are the
+# functions that may make one, each with why. Anything else fails, which is how
+# the ~47 such tests the ids-not-names arc removed stay removed.
+#   system-gated: the system unit's own declaration, or a declaration
+#     declaredBySystem confirms --
+#     resolveClass, resolveProtocol, defTypetypeOf, resolveObjectDef,
+#     paramIsBorrowReftype, isBoxTemplate
+#   member and suffix vocabulary: `.array`, `.str`, a `c8`/`c32` suffix --
+#     checkDataBlockMember, checkMarkerMember, emitDataMember,
+#     emitStrConvCall, bareZeroTypeName
+#   bound-family vocabulary, whose declaration familyNameTaken checks --
+#     constraintKindForId
+TYPENAME_OK := src/ztypecheck.z:resolveClass src/ztypecheck.z:resolveProtocol \
+	src/ztypecheck.z:defTypetypeOf src/ztypecheck.z:resolveObjectDef \
+	src/ztypecheck.z:paramIsBorrowReftype src/ztypecheck.z:isBoxTemplate \
+	src/ztypecheck.z:checkDataBlockMember src/ztypecheck.z:checkMarkerMember \
+	src/zemitterc.z:emitDataMember src/zemitterc.z:emitStrConvCall \
+	src/zsource.z:bareZeroTypeName src/ztypecheck.z:constraintKindForId
+typename-guard:
+	@fail=0; n=0; \
+	for e in $$(awk '/^[A-Za-z_][A-Za-z0-9_]*: function/ {fn=$$1; sub(":", "", fn)} \
+	    /^[ \t]*#/ {next} \
+	    /(==|!=)[ \t]*zast\.wellKnown\.slot\.ty[A-Za-z0-9]+|zast\.wellKnown\.slot\.ty[A-Za-z0-9]+[ \t]*(==|!=)/ {print FILENAME ":" fn}' \
+	    src/*.z | sort -u); do \
+	  n=$$((n + 1)); \
+	  case " $(TYPENAME_OK) " in *" $$e "*) ;; \
+	    *) echo "typename-guard FAIL: $$e compares a name id with a wellKnown type name -- decide by the declaration (stdTidRo, declaredBySystem, numKindOfTid), or add the function to TYPENAME_OK with why"; fail=1;; \
+	  esac; \
+	done; \
+	if [ $$fail -ne 0 ]; then exit 1; fi; \
+	echo "typename-guard OK: $$n functions compare a wellKnown type name, each sanctioned"
+
 emitter-guard:
 	@e1=$$(grep -c 'ztypecheck.resolvedByKey' src/zemitterc.z); \
 	e2=$$(grep -c 'ztypecheck.walkLookupTyperef' src/zemitterc.z); \
