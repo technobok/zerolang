@@ -7,6 +7,7 @@
 # other top-level definitions are private to this unit.
 public: unit {
     :nameid
+    :Vocab
     :nodeid
     :tableReserveIn
     :markerkind
@@ -1239,9 +1240,10 @@ StringPool: class {
     # how many slots are occupied, so the index can be grown before it degrades
     used: u64
 } as {
-    # an empty pool with the sentinel already in place, so id 0 is the empty
-    # text before anything has been interned
-    create: function {} out this is {
+    # createEmpty -- a pool holding only the sentinel, so id 0 is the empty text
+    # before anything has been interned: a Vocab's, which interns its own block
+    # and nothing else
+    createEmpty: function {} out this is {
         p: (meta.create
             texts: (List String i: nameid)
             hashes: (ListVal u64 i: nameid)
@@ -1254,6 +1256,12 @@ StringPool: class {
         p.texts.append "".string
         p.hashes.append 0
         p.wordClass.append 0
+        return p
+    }
+
+    # create -- a program's pool: the sentinel, then the well-known names
+    create: function {} out this is {
+        p: StringPool.createEmpty
         # the well-known names, in their block's order: each one's id is its
         # slot, in every pool. Slot 0 is the sentinel row above; `wkEmpty` is
         # an empty text of its own, which the sentinel's lack of a slot lets
@@ -2036,6 +2044,37 @@ posOf: function {n: astnode.view} out nodepos is {
         return (nodepos line: n.lineno col: n.colno)
     } case placeholder then {
         return (nodepos line: 0 col: 0)
+    }
+}
+
+# Vocab -- a fixed vocabulary read off outside text (a tool's flags and verbs, a
+# script's commands), interned into a pool of its own. A reader classifies a
+# word by asking `slotOf` for its slot in the block, compares that with the
+# block's own `.slot.label`, and never compares the bytes: the pool is where
+# that happens, once per word. The pool holds the block alone, in order, so a
+# word's id is its slot plus one.
+Vocab: class {
+    # the vocabulary's words, interned in block order after the sentinel
+    pool: StringPool
+    # the slot an unknown word answers: one past the block's last
+    none: u64
+} as {
+    # create -- intern every word of `block` in order. A word given twice would
+    # break id == slot + 1 for every word after it, so it is refused here.
+    create: function {block: stringdata} out this is {
+        v: meta.create pool: StringPool.createEmpty none: block.length
+        for each w: block loop v.pool.set s: w
+        if v.pool.texts.length != (block.length + 1) then {
+            panic msg: "zast: a vocabulary names one word twice, so the ids are not the slots"
+        }
+        return v
+    }
+
+    # slotOf -- `text`'s slot in the block, `none` when it is not one of its words
+    slotOf: function {this: this.view text: StringView} out u64 is {
+        id: this.pool.find s: text
+        if id.isZero then return this.none
+        return id.u32.u64 - 1
     }
 }
 

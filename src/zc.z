@@ -113,18 +113,60 @@ printPhases: function {t0: i64 t1: i64 t2: i64 t3: i64} is {
     io.eprintln "zc --time: parse=\{t1 - t0}ms typecheck=\{t2 - t1}ms emit=\{t3 - t2}ms total=\{t3 - t0}ms"
 }
 
-# pipelineVerbs -- the verbs that proceed to flag parsing: build/run/emit/dump
+# zcWord -- every word zc reads off its command line: the verbs, the flags, the
+# values a flag validates and `-` for standard output. A word is classified by
+# its slot here (zast.Vocab), never by comparing its text.
+zcWord: data {
+    vBuild: "build"
+    vRun: "run"
+    vEmit: "emit"
+    vDump: "dump"
+    vNatives: "natives"
+    vExplain: "explain"
+    vEnv: "env"
+    vVersion: "version"
+    vHelp: "help"
+    vInit: "init"
+    vFmt: "fmt"
+    vLint: "lint"
+    vFormat: "format"
+    fH: "-h"
+    fHelp: "--help"
+    fV: "-V"
+    fVersion: "--version"
+    fProgArgs: "--"
+    fCanon: "--canon"
+    fRelease: "--release"
+    fSaveTemps: "--save-temps"
+    fTime: "--time"
+    fFastHash: "--fast-hash"
+    fReadableNames: "--readable-names"
+    fEager: "--eager"
+    fSrc: "--src"
+    fSystem: "--system"
+    fRuntime: "--runtime"
+    fEmitC: "--emit-c"
+    fDumpSql: "--dump-sql"
+    fOut: "-o"
+    fCc: "--cc"
+    fCcMode: "--cc-mode"
+    fTccLib: "--tcc-lib"
+    fTarget: "--target"
+    fCflags: "--cflags"
+    fLdflags: "--ldflags"
+    mSpawn: "spawn"
+    mInproc: "inproc"
+    stdoutPath: "-"
+} out stringdata
+
+# isPipelineVerb -- the verbs that proceed to flag parsing: build/run/emit/dump
 # compile a unit; env prints settings. version/help/explain and init are handled
 # before this and exit early, so they are absent here.
-pipelineVerbs: data { "build" "run" "emit" "dump" "env" } out stringdata
-
-# isPipelineVerb -- arg1 is one of pipelineVerbs. The verbs are DATA, compared
-# by the one loop rather than a chain of literal compares.
-isPipelineVerb: function {name: StringView} out bool is {
-    for each v: pipelineVerbs loop {
-        if v == name then return true
-    }
-    return false
+isPipelineVerb: function {w: u64} out bool is {
+    if w == zcWord.slot.vBuild then return true
+    if w == zcWord.slot.vRun then return true
+    if w == zcWord.slot.vEmit then return true
+    return (w == zcWord.slot.vDump) or (w == zcWord.slot.vEnv)
 }
 
 # printUsage -- the general help text (stderr): command groups, then flags.
@@ -161,8 +203,9 @@ printUsage: function is {
 }
 
 # printCommandHelp -- detailed help for one command (stderr).
-printCommandHelp: function {cmd: StringView} is {
-    if cmd == "build" then {
+printCommandHelp: function {zv: zast.Vocab.view cmd: StringView} is {
+    w: zv.slotOf text: cmd
+    if w == zcWord.slot.vBuild then {
         io.eprintln "usage: zc build <src> [flags]"
         io.eprintln "Compile <src> to a native executable."
         io.eprintln "Output goes to -o OUT, else <unit> (<unit>.exe for windows targets) in the"
@@ -170,35 +213,35 @@ printCommandHelp: function {cmd: StringView} is {
         io.eprintln "Flags: --release --cc CC --cc-mode spawn|inproc --target TRIPLE"
         io.eprintln "       --save-temps"
         io.eprintln "       --cflags STR --ldflags STR --src DIR --tcc-lib DIR"
-    } else if cmd == "run" then {
+    } else if w == zcWord.slot.vRun then {
         io.eprintln "usage: zc run <src> [args] [flags]"
         io.eprintln "Build <src>, then run it. Flags before <src> configure the build;"
         io.eprintln "args after <src> (or after --) are passed to the program."
         io.eprintln "The program's own exit code is propagated."
-    } else if cmd == "emit" then {
+    } else if w == zcWord.slot.vEmit then {
         io.eprintln "usage: zc emit <src> [flags]"
         io.eprintln "Emit standalone C17 to -o FILE (or stdout). The runtime is inlined,"
         io.eprintln "so the single .c needs no extra include paths."
-    } else if cmd == "dump" then {
+    } else if w == zcWord.slot.vDump then {
         io.eprintln "usage: zc dump <src> [--canon] [flags]"
         io.eprintln "Dump the typecheck model as SQL to -o FILE (or stdout)."
         io.eprintln "--canon emits the id-normalized model instead."
-    } else if cmd == "natives" then {
+    } else if w == zcWord.slot.vNatives then {
         io.eprintln "usage: zc natives"
         io.eprintln "Print the conversions section of src/runtime/natives.tbl, derived from"
         io.eprintln "the numeric rule. natives-tbl-guard diffs this against the checked-in"
         io.eprintln "file, so the table cannot drift from the rule it caches."
-    } else if cmd == "explain" then {
+    } else if w == zcWord.slot.vExplain then {
         io.eprintln "usage: zc explain <code>"
         io.eprintln "Explain a diagnostic error code, e.g. zc explain E0200."
-    } else if cmd == "env" then {
+    } else if w == zcWord.slot.vEnv then {
         io.eprintln "usage: zc env"
         io.eprintln "Print resolved tool paths and settings: system, runtime and tcc dirs,"
         io.eprintln "the C compiler, the target triple, and the version."
-    } else if cmd == "version" then {
+    } else if w == zcWord.slot.vVersion then {
         io.eprintln "usage: zc version"
         io.eprintln "Print the compiler version."
-    } else if cmd == "help" then {
+    } else if w == zcWord.slot.vHelp then {
         io.eprintln "usage: zc help [command]"
         io.eprintln "Print general usage, or detailed help for one command."
     } else {
@@ -496,8 +539,10 @@ runZlShim: function {verb: StringView argv: (List String).borrow} out i32 is {
 }
 
 # writeOut -- write content to a file path, or stdout when the path is "-".
-writeOut: function {target: StringView content: StringView what: StringView} is {
-    if target == "-" then {
+writeOut: function {
+    zv: zast.Vocab.view target: StringView content: StringView what: StringView
+} is {
+    if (zv.slotOf text: target) == zcWord.slot.stdoutPath then {
         print content
     } else {
         wr: io.writeText path: target :content
@@ -603,31 +648,31 @@ flagValue: function {argv: (List String).view i: u64 n: u64 flagName: StringView
 
 # dispatchHelpVerb -- the verbs that only print and stop: -h, --help,
 # help [command], -V, --version and version. Anything else returns.
-dispatchHelpVerb: function {argv: (List String).view n: u64 arg1: StringView} is {
-    if arg1 == "-h" then {
+dispatchHelpVerb: function {argv: (List String).view n: u64 zv: zast.Vocab.view w: u64} is {
+    if w == zcWord.slot.fH then {
         printUsage
         os.exit code: 0
     }
-    if arg1 == "--help" then {
+    if w == zcWord.slot.fHelp then {
         printUsage
         os.exit code: 0
     }
-    if arg1 == "-V" then {
+    if w == zcWord.slot.fV then {
         printVersion
         os.exit code: 0
     }
-    if arg1 == "--version" then {
+    if w == zcWord.slot.fVersion then {
         printVersion
         os.exit code: 0
     }
-    if arg1 == "version" then {
+    if w == zcWord.slot.vVersion then {
         printVersion
         os.exit code: 0
     }
-    if arg1 != "help" then return
+    if w != zcWord.slot.vHelp then return
     if n > 2 then {
         hc: argv.get i: 2
-        printCommandHelp cmd: hc.stringView
+        printCommandHelp :zv cmd: hc.stringView
     } else {
         printUsage
     }
@@ -637,8 +682,8 @@ dispatchHelpVerb: function {argv: (List String).view n: u64 arg1: StringView} is
 # dispatchToolVerb -- the verbs that do work of their own before any unit is
 # named: `explain`, the natives table, and the three that shim through to zl.
 # Anything else returns.
-dispatchToolVerb: function {argv: (List String).borrow n: u64 arg1: StringView} is {
-    if arg1 == "explain" then {
+dispatchToolVerb: function {argv: (List String).borrow n: u64 w: u64} is {
+    if w == zcWord.slot.vExplain then {
         if n > 2 then {
             ec: argv.get i: 2
             runExplain codeArg: ec.stringView
@@ -648,7 +693,7 @@ dispatchToolVerb: function {argv: (List String).borrow n: u64 arg1: StringView} 
         }
         os.exit code: 0
     }
-    if arg1 == "init" then {
+    if w == zcWord.slot.vInit then {
         idir: ".".string
         if n > 2 then idir = (argv.get i: 2).copy
         ir: zproject.initProject dir: idir.stringView
@@ -659,20 +704,20 @@ dispatchToolVerb: function {argv: (List String).borrow n: u64 arg1: StringView} 
         print ir.text.stringView.trim
         os.exit code: 0
     }
-    if arg1 == "natives" then {
+    if w == zcWord.slot.vNatives then {
         nrows: zemitterc.nativeConvRows
         print nrows
         os.exit code: 0
     }
-    if arg1 == "fmt" then {
+    if w == zcWord.slot.vFmt then {
         rcf: runZlShim verb: "fmt" :argv
         os.exit code: rcf
     }
-    if arg1 == "lint" then {
+    if w == zcWord.slot.vLint then {
         rcl: runZlShim verb: "lint" :argv
         os.exit code: rcl
     }
-    if arg1 == "format" then {
+    if w == zcWord.slot.vFormat then {
         rcm: runZlShim verb: "format" :argv
         os.exit code: rcm
     }
@@ -681,20 +726,20 @@ dispatchToolVerb: function {argv: (List String).borrow n: u64 arg1: StringView} 
 # dispatchInlineVerb -- the print-and-stop flags accepted anywhere on the line,
 # after the subcommand rather than instead of it. Nothing returns true: each
 # one exits, and the caller reads the result like any other flag group.
-dispatchInlineVerb: function {av: StringView sub: StringView} out bool is {
-    if av == "-h" then {
-        printCommandHelp cmd: sub
+dispatchInlineVerb: function {zv: zast.Vocab.view w: u64 sub: StringView} out bool is {
+    if w == zcWord.slot.fH then {
+        printCommandHelp :zv cmd: sub
         os.exit code: 0
     }
-    if av == "--help" then {
-        printCommandHelp cmd: sub
+    if w == zcWord.slot.fHelp then {
+        printCommandHelp :zv cmd: sub
         os.exit code: 0
     }
-    if av == "-V" then {
+    if w == zcWord.slot.fV then {
         printVersion
         os.exit code: 0
     }
-    if av == "--version" then {
+    if w == zcWord.slot.fVersion then {
         printVersion
         os.exit code: 0
     }
@@ -706,8 +751,9 @@ dispatchInlineVerb: function {av: StringView sub: StringView} out bool is {
 # otherwise resolve to `spawn` and the build would silently do something other
 # than what was asked, which is the same failure `--cc-mode` exists to rule
 # out.
-refuseUnknownCcMode: function {mode: StringView named: StringView} is {
-    known: (mode == "spawn") or (mode == "inproc")
+refuseUnknownCcMode: function {zv: zast.Vocab.view mode: StringView named: StringView} is {
+    w: zv.slotOf text: mode
+    known: (w == zcWord.slot.mSpawn) or (w == zcWord.slot.mInproc)
     if known then return
     mm: "zc: \{named} must be 'spawn' or 'inproc', not '\{mode}'"
     io.eprintln mm
@@ -740,13 +786,15 @@ outmode: variant {
 # --dump-sql means that output; with neither it names no command at all.
 resolveOutMode: function {
     sub: StringView
+    # the subcommand's slot in zcWord
+    subW: u64
     unitname: StringView
     canon: bool
     emitTarget: StringView
     dumpSqlTarget: StringView
 } out outmode is {
-    if sub == "emit" then return outmode.emitc
-    if sub == "dump" then {
+    if subW == zcWord.slot.vEmit then return outmode.emitc
+    if subW == zcWord.slot.vDump then {
         if canon then return outmode.dumpcanon
         return outmode.dumpsql
     }
@@ -815,43 +863,43 @@ ZcFlags: class {
 } as {
     # takeProgArg -- once `--` has been seen, every remaining argument belongs
     # to the program rather than to zc.
-    takeProgArg: function {:this av: StringView arg: String.view} out bool is {
+    takeProgArg: function {:this w: u64 arg: String.view} out bool is {
         if this.inProgArgs then {
             this.progArgs.append from: arg.copy
             return true
         }
-        if av != "--" then return false
+        if w != zcWord.slot.fProgArgs then return false
         this.inProgArgs = true
         return true
     }
 
-    # setSwitch -- the flags that take no value. True when `av` named one.
-    setSwitch: function {:this av: StringView} out bool is {
-        if av == "--canon" then {
+    # setSwitch -- the flags that take no value. True when `w` named one.
+    setSwitch: function {:this w: u64} out bool is {
+        if w == zcWord.slot.fCanon then {
             this.canon = true
             return true
         }
-        if av == "--release" then {
+        if w == zcWord.slot.fRelease then {
             this.release = true
             return true
         }
-        if av == "--save-temps" then {
+        if w == zcWord.slot.fSaveTemps then {
             this.saveTemps = true
             return true
         }
-        if av == "--time" then {
+        if w == zcWord.slot.fTime then {
             this.timed = true
             return true
         }
-        if av == "--fast-hash" then {
+        if w == zcWord.slot.fFastHash then {
             this.fastHash = true
             return true
         }
-        if av == "--readable-names" then {
+        if w == zcWord.slot.fReadableNames then {
             this.readableNames = true
             return true
         }
-        if av == "--eager" then {
+        if w == zcWord.slot.fEager then {
             this.eagerCheck = true
             return true
         }
@@ -861,32 +909,33 @@ ZcFlags: class {
     # takePathFlag -- the flags naming a file or a directory.
     takePathFlag: function {
         :this
-        av: StringView
+        # the argument's slot in zcWord
+        w: u64
         argv: (List String).view
         i: u64
         n: u64
     } out argstep is {
-        if av == "--src" then {
+        if w == zcWord.slot.fSrc then {
             this.srcdirs.append from: (flagValue :argv :i :n flagName: "--src")
             return (argstep taken: true at: i + 1)
         }
-        if av == "--system" then {
+        if w == zcWord.slot.fSystem then {
             this.systemFlag = flagValue :argv :i :n flagName: "--system"
             return (argstep taken: true at: i + 1)
         }
-        if av == "--runtime" then {
+        if w == zcWord.slot.fRuntime then {
             this.runtimeFlag = flagValue :argv :i :n flagName: "--runtime"
             return (argstep taken: true at: i + 1)
         }
-        if av == "--emit-c" then {
+        if w == zcWord.slot.fEmitC then {
             this.emitTarget = flagValue :argv :i :n flagName: "--emit-c"
             return (argstep taken: true at: i + 1)
         }
-        if av == "--dump-sql" then {
+        if w == zcWord.slot.fDumpSql then {
             this.dumpSqlTarget = flagValue :argv :i :n flagName: "--dump-sql"
             return (argstep taken: true at: i + 1)
         }
-        if av == "-o" then {
+        if w == zcWord.slot.fOut then {
             this.outPath = flagValue :argv :i :n flagName: "-o"
             return (argstep taken: true at: i + 1)
         }
@@ -896,33 +945,35 @@ ZcFlags: class {
     # takeToolFlag -- the flags naming the C toolchain and what to hand it.
     takeToolFlag: function {
         :this
-        av: StringView
+        zv: zast.Vocab.view
+        # the argument's slot in zcWord
+        w: u64
         argv: (List String).view
         i: u64
         n: u64
     } out argstep is {
-        if av == "--cc" then {
+        if w == zcWord.slot.fCc then {
             this.ccFlag = flagValue :argv :i :n flagName: "--cc"
             return (argstep taken: true at: i + 1)
         }
-        if av == "--cc-mode" then {
+        if w == zcWord.slot.fCcMode then {
             this.ccModeFlag = flagValue :argv :i :n flagName: "--cc-mode"
-            refuseUnknownCcMode mode: this.ccModeFlag.stringView named: "--cc-mode"
+            refuseUnknownCcMode :zv mode: this.ccModeFlag.stringView named: "--cc-mode"
             return (argstep taken: true at: i + 1)
         }
-        if av == "--tcc-lib" then {
+        if w == zcWord.slot.fTccLib then {
             this.tccLibFlag = flagValue :argv :i :n flagName: "--tcc-lib"
             return (argstep taken: true at: i + 1)
         }
-        if av == "--target" then {
+        if w == zcWord.slot.fTarget then {
             this.targetTriple = flagValue :argv :i :n flagName: "--target"
             return (argstep taken: true at: i + 1)
         }
-        if av == "--cflags" then {
+        if w == zcWord.slot.fCflags then {
             this.cflags = flagValue :argv :i :n flagName: "--cflags"
             return (argstep taken: true at: i + 1)
         }
-        if av == "--ldflags" then {
+        if w == zcWord.slot.fLdflags then {
             this.ldflags = flagValue :argv :i :n flagName: "--ldflags"
             return (argstep taken: true at: i + 1)
         }
@@ -963,14 +1014,14 @@ ZcFlags: class {
     # replaces the file's value outright, and a unit named by its file is its
     # own source root; a switch the file turns on stays on. Paths the file gives
     # are relative to the project directory.
-    applyProject: function {:this pf: zproject.ProjectFile.view} is {
+    applyProject: function {:this zv: zast.Vocab.view pf: zproject.ProjectFile.view} is {
         if pf.found.not then return
         if this.srcdirs.length == 0 when this.unitIsPath.not then {
             for each sr: pf.sourceRoots loop this.srcdirs.append from: sr.copy
         }
         if this.unitname.length == 0 then this.unitname = pf.main.copy
         this.applyProjectPaths :pf
-        this.applyProjectTools :pf
+        this.applyProjectTools :zv :pf
         if pf.release then this.release = true
         if pf.fastHash then this.fastHash = true
         if pf.readableNames then this.readableNames = true
@@ -998,12 +1049,16 @@ ZcFlags: class {
 
     # applyProjectTools -- the target and the C toolchain project.z names, where
     # no flag named them
-    applyProjectTools: function {:this pf: zproject.ProjectFile.view} is {
+    applyProjectTools: function {:this zv: zast.Vocab.view pf: zproject.ProjectFile.view} is {
         if this.targetTriple.length == 0 then this.targetTriple = pf.target.copy
         if this.ccFlag.length == 0 then this.ccFlag = pf.cCompiler.copy
         if this.ccModeFlag.length == 0 when pf.cCompilerMode.length > 0 then {
             this.ccModeFlag = pf.cCompilerMode.copy
-            refuseUnknownCcMode mode: this.ccModeFlag.stringView named: "project.z's cCompilerMode"
+            (refuseUnknownCcMode
+                :zv
+                mode: this.ccModeFlag.stringView
+                named: "project.z's cCompilerMode"
+            )
         }
         if this.cflags.length == 0 then this.cflags = pf.cFlags.copy
         if this.ldflags.length == 0 then this.ldflags = pf.linkFlags.copy
@@ -1059,6 +1114,7 @@ ZcFlags: class {
 parseZcArgs: function {
     argv: (List String).view
     n: u64
+    zv: zast.Vocab.view
     sub: StringView
     unitname: String.view
     isRun: bool
@@ -1091,17 +1147,17 @@ parseZcArgs: function {
     i: 2.u64
     for i < n loop {
         a: argv.get :i
-        av: a.stringView
-        known: cf.takeProgArg :av arg: a
-        if known.not then known = dispatchInlineVerb :av :sub
-        if known.not then known = cf.setSwitch :av
+        w: zv.slotOf text: a.stringView
+        known: cf.takeProgArg :w arg: a
+        if known.not then known = dispatchInlineVerb :zv :w :sub
+        if known.not then known = cf.setSwitch :w
         if known.not then {
-            sp: cf.takePathFlag :av :argv :i :n
+            sp: cf.takePathFlag :w :argv :i :n
             known = sp.taken
             i = sp.at
         }
         if known.not then {
-            st9: cf.takeToolFlag :av :argv :i :n
+            st9: cf.takeToolFlag :zv :w :argv :i :n
             known = st9.taken
             i = st9.at
         }
@@ -1281,6 +1337,7 @@ buildAndRun: function {
     ccMode: StringView
     tccDir: StringView
     isRun: bool
+    zv: zast.Vocab.view
 } is {
     tmpc: tempPath uname: cf.unitname.stringView ext: ".c"
     wrc: io.writeText path: tmpc content: csrc
@@ -1306,7 +1363,7 @@ buildAndRun: function {
     isTcc: cka.tcc
     if isTcc when (io.exists path: tccDir) then ccTcc = tccDir.string
     refuseCrossTarget targetTriple: cf.targetTriple.stringView :cc :isTcc
-    inproc: ccMode == "inproc"
+    inproc: (zv.slotOf text: ccMode) == zcWord.slot.mInproc
     if inproc then (refuseInprocMisuse
         :isTcc
         :cc
@@ -1411,13 +1468,13 @@ emitCSource: function {
 
 # applyProjectOrExit -- the project's settings under the flags, or, when its
 # project.z cannot be read, the error and stop.
-applyProjectOrExit: function {cf: ZcFlags pf: zproject.ProjectFile.view} is {
+applyProjectOrExit: function {cf: ZcFlags zv: zast.Vocab.view pf: zproject.ProjectFile.view} is {
     if pf.error.length > 0 then {
         io.eprintln pf.error
         io.eprintln "1 error found"
         os.exit code: 2
     }
-    cf.applyProject :pf
+    cf.applyProject :zv :pf
 }
 
 # printEnvAndExit -- `zc env`: the resolved settings, then stop.
@@ -1464,23 +1521,28 @@ main: function is {
         os.exit code: 2
     }
     arg1: (argv.get i: 1).copy
-    dispatchHelpVerb :argv :n arg1: arg1.stringView
-    dispatchToolVerb :argv :n arg1: arg1.stringView
+    zv: zast.Vocab.create block: zcWord
+    w1: zv.slotOf text: arg1.stringView
+    dispatchHelpVerb :argv :n :zv w: w1
+    dispatchToolVerb :argv :n w: w1
     sub: String
+    subW: zv.none
     unitname: String
-    if (isPipelineVerb name: arg1.stringView) then {
+    if (isPipelineVerb w: w1) then {
         sub = arg1.copy
+        subW = w1
     } else {
         unitname = arg1.copy
     }
-    isRun: sub.stringView == "run"
-    cf: parseZcArgs :argv :n sub: sub.stringView :unitname :isRun
+    isRun: subW == zcWord.slot.vRun
+    cf: parseZcArgs :argv :n :zv sub: sub.stringView :unitname :isRun
     pf: zproject.discoverProject start: cf.projectStart.stringView
-    applyProjectOrExit :cf :pf
+    applyProjectOrExit :cf :zv :pf
     refuseBadTarget targetTriple: cf.targetTriple.stringView
-    if sub.stringView == "env" then printEnvAndExit :cf :pf
+    if subW == zcWord.slot.vEnv then printEnvAndExit :cf :pf
     mode: (resolveOutMode
         sub: sub.stringView
+        :subW
         unitname: cf.unitname.stringView
         canon: cf.canon
         emitTarget: cf.emitTarget.stringView
@@ -1548,7 +1610,7 @@ main: function is {
     if mode.dumpcanon then {
         canonOut: zsqldump.dumpCanon program: prog symtab: st
         tgt2: outTarget primary: "" fallback: cf.outPath.stringView
-        writeOut target: tgt2.stringView content: canonOut.stringView what: "canonical dump"
+        writeOut :zv target: tgt2.stringView content: canonOut.stringView what: "canonical dump"
         return
     }
     if mode.dumpsql then {
@@ -1557,7 +1619,7 @@ main: function is {
             primary: cf.dumpSqlTarget.stringView
             fallback: cf.outPath.stringView
         )
-        writeOut target: tgt3.stringView content: sql.stringView what: "SQL dump"
+        writeOut :zv target: tgt3.stringView content: sql.stringView what: "SQL dump"
         return
     }
     emitLibs: ztypecheck.requiredLibs :st program: prog
@@ -1575,7 +1637,7 @@ main: function is {
     )
     if mode.emitc then {
         tgt: outTarget primary: cf.emitTarget.stringView fallback: cf.outPath.stringView
-        writeOut target: tgt.stringView content: csrc.stringView what: "C output"
+        writeOut :zv target: tgt.stringView content: csrc.stringView what: "C output"
         return
     }
     # the link line is the artifact's own: the reached units' libraries, the
@@ -1589,5 +1651,6 @@ main: function is {
         ccMode: ccMode.stringView
         tccDir: tccDir.stringView
         :isRun
+        :zv
     )
 }
