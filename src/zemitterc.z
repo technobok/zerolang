@@ -1192,6 +1192,8 @@ nativeConvRows: function out String is {
 # declaration's return type decides only which bindings the row needs: a lossy
 # conversion's row spells the resultval mono and its two tags.
 emitNumericCast: function {
+    # the arm names
+    ast: Ast.view
     ctx: Ctx
     val: StringView
     symtab: zenv.ZSymbolTable.view
@@ -1219,9 +1221,9 @@ emitNumericCast: function {
         bn.append from: "RT".string
         bv.append from: (ctxCname :ctx tid: retTid)
         rn.append from: "OKTAG".string
-        rv.append from: (variantTag :symtab tid: retTid arm: "ok")
+        rv.append from: (tagConstOf :ast :symtab tid: retTid armId: zast.wellKnown.slot.wkOk)
         rn.append from: "ERRTAG".string
-        rv.append from: (variantTag :symtab tid: retTid arm: "err")
+        rv.append from: (tagConstOf :ast :symtab tid: retTid armId: zast.wellKnown.slot.wkErr)
         # the error slot's assignment, spelled for whatever `converror` IS
         if ctx.converrorTid.isZero.not then {
             rn.append from: "TAG_converror".string
@@ -11033,7 +11035,7 @@ emitInlineVariantCtor: function {
     arm: StringView
 } out String is {
     pc: armPayloadC :ast :symtab :ctx :tid :arm
-    tg: variantTag :symtab :tid :arm
+    tg: tagConstNamed :ast :symtab :tid :arm
     vc: ctxCname :ctx :tid
     if pc.length > 0 then {
         av: "0".string
@@ -11053,7 +11055,7 @@ emitInlineVariantCtor: function {
         e0: "((\{vc}_t){ .tag = \{tg}, .data.\{armCiP}\{arm} = (\{av}) })"
         return e0
     } else {
-        armValue: armValueC :symtab :tid :arm
+        armValue: armValueC :ast :symtab :tid :arm
         if armValue.length > 0 then return armValue
         e1: "((\{vc}_t){ .tag = \{tg} })"
         return e1
@@ -11082,7 +11084,7 @@ emitArmCtorCall: function {
     }
     if tt != ztypes.ztypetype.unionType then return ""
     vc: ctxCname :ctx tid: stid
-    tg: variantTag :symtab tid: stid :arm
+    tg: tagConstNamed :ast :symtab tid: stid :arm
     payC: armPayloadC :ast :symtab :ctx tid: stid :arm
     if payC.length == 0 then {
         en: "((\{vc}_t){ .tag = \{tg}, .data = NULL })"
@@ -11410,7 +11412,7 @@ renderDefault: function {
             )
             vtarget: targetTid
             if cv.isZero.not then vtarget = cv
-            tg: variantTag :symtab tid: vtarget arm: arm.stringView
+            tg: tagConstNamed :ast :symtab tid: vtarget arm: arm.stringView
             tc: (typeRefC
                 :ast
                 :symtab
@@ -11418,6 +11420,7 @@ renderDefault: function {
                 tid: vtarget
             )
             avd: (armValueC
+                :ast
                 :symtab
                 tid: vtarget
                 arm: arm.stringView
@@ -12415,9 +12418,9 @@ cvalText: function {
         # a variant that maps onto a scalar C type (bool) renders as that
         # scalar; anything else is the payload-less compound literal
         # emitInlineVariantCtor builds for the same arm written as a call
-        atomVarId: armValueC :symtab tid: v.armTid arm: an.stringView
+        atomVarId: armValueC :ast :symtab tid: v.armTid arm: an.stringView
         if atomVarId.length > 0 then return atomVarId
-        tg: variantTag :symtab tid: v.armTid arm: an.stringView
+        tg: tagConstNamed :ast :symtab tid: v.armTid arm: an.stringView
         if tg.length == 0 then return ""
         vc: ctxCname :ctx tid: v.armTid
         if vc.length == 0 then return ""
@@ -13309,7 +13312,7 @@ emitCrossUnitSumCtor: function {
     )
     if ttx != ztypes.ztypetype.unionType then return ""
     vc: ctxCname :ctx tid: utid
-    tg: variantTag :symtab tid: utid arm: ctorArmName
+    tg: tagConstNamed :ast :symtab tid: utid arm: ctorArmName
     payC: (armPayloadC
         :ast
         :symtab
@@ -13422,9 +13425,10 @@ emitCrossUnitTag: function {
     if isTagged.not then return ""
     pc: armPayloadC :ast :symtab :ctx tid: vtid :arm
     if pc.length == 0 then {
-        tg: variantTag :symtab tid: vtid :arm
+        tg: tagConstNamed :ast :symtab tid: vtid :arm
         vc: ctxCnameView :ctx tid: vtid
         avx: (armValueC
+            :ast
             :symtab
             tid: vtid
             :arm
@@ -14927,9 +14931,9 @@ tagAliasArmC: function {
     if atk.unitName.u32 == 0 then return ""
     ctorArmName: zast.poolTextAt pool: ast.names ref: atk.defName
     if ctorArmName.length == 0 then return ""
-    ava: armValueC :symtab tid: brid arm: ctorArmName.stringView
+    ava: armValueC :ast :symtab tid: brid arm: ctorArmName.stringView
     if ava.length > 0 then return ava
-    atg: variantTag :symtab tid: brid arm: ctorArmName.stringView
+    atg: tagConstNamed :ast :symtab tid: brid arm: ctorArmName.stringView
     if atg.length == 0 then return ""
     avc: ctxCname :ctx tid: brid
     return "((\{avc}_t){ .tag = \{atg} })"
@@ -16715,13 +16719,15 @@ dottedAtomTaggedBase: function {
             arm: mn2
         )
         if pc2.length == 0 then {
-            tg2: (variantTag
+            tg2: (tagConstNamed
+                :ast
                 :symtab
                 tid: vtid2
                 arm: mn2
             )
             vc2: ctxCname :ctx tid: vtid2
             armValueText: (armValueC
+                :ast
                 :symtab
                 tid: vtid2
                 arm: mn2
@@ -17350,9 +17356,9 @@ taggedArmValueC: function {
     if vcH.length == 0 then return String
     mnc0: zast.nameTextAt :ast ref: mnc0Id
     if (armPayloadC :ast :symtab :ctx tid: dtp arm: mnc0.stringView).length > 0 then return String
-    avh: armValueC :symtab tid: dtp arm: mnc0.stringView
+    avh: armValueC :ast :symtab tid: dtp arm: mnc0.stringView
     if avh.length > 0 then return avh
-    tgH: variantTag :symtab tid: dtp arm: mnc0.stringView
+    tgH: tagConstOf :ast :symtab tid: dtp armId: mnc0Id
     return "((\{vcH}_t){ .tag = \{tgH} })"
 }
 
@@ -17395,8 +17401,7 @@ armPredicateC: function {
         if fa.isZero.not when mnc0Id == fa then return "(!(\{valP}))"
         return "(\{valP})"
     }
-    mnc0P: zast.nameTextAt :ast ref: mnc0Id
-    tgP: variantTag :symtab tid: dap arm: mnc0P.stringView
+    tgP: tagConstOf :ast :symtab tid: dap armId: mnc0Id
     # an ordinal IS its discriminator: compare the value, not a field
     if (isOrdinalVariant :symtab tid: dap) then return "((\{valP}) == \{tgP})"
     accP: receiverTagAccess :ast :symtab :ctx :pn
@@ -17657,6 +17662,7 @@ emitDottedNativeMarker: function {
         ncRet: stampIdOf :symtab nid: n.nodeid
         ncRetM: chaseAggregateTypedef :symtab :ctx tid: ncRet
         return (emitNumericCast
+            :ast
             :ctx
             val: ncVal.stringView
             :symtab
@@ -17771,7 +17777,7 @@ emitDottedRead: function {
         )
         if isRcc then {
             rcRecv: valueExprC :ast :symtab :ctx n: (ast.nodes.get i: n.parent)
-            okTagX: variantTag :symtab tid: pMono arm: "ok"
+            okTagX: tagConstOf :ast :symtab tid: pMono armId: zast.wellKnown.slot.wkOk
             rcT: ctxCname :ctx tid: pMono
             return "({ \{rcT}_t _rc = (\{rcRecv.stringView}); if (_rc.tag != \{okTagX.stringView}) z_panic(\"orPanic: result is err\"); _rc.data.ok; })"
         }
@@ -20107,7 +20113,7 @@ emitOptionBoxHoist: function {
         }
         vc: ctxCname :ctx tid: mid
         payC: armPayloadC :ast :symtab :ctx tid: mid arm: "some"
-        tg: variantTag :symtab tid: mid arm: "some"
+        tg: tagConstOf :ast :symtab tid: mid armId: zast.wellKnown.slot.wkSome
         # what the payload hoisted is declared ahead of the box
         flushArgHoists :ctx :ind :tmp :buf
         bN: tmpNext :ctx :tmp
@@ -24607,7 +24613,7 @@ emitMatchClause: function {
     if c.caseclause then {
         armC: zast.nameTextAt :ast ref: c.name
         arm: armC.stringView
-        tg: variantTag :symtab tid: vtid :arm
+        tg: tagConstNamed :ast :symtab tid: vtid :arm
         l2: "\{ind}case \{tg}: {\n"
         buf.append l2
         pc: armPayloadC :ast :symtab :ctx tid: vtid :arm
@@ -24857,8 +24863,8 @@ emitDoBindValue: function {
         ld: "\{ind}\{ct} \{nm};\n"
         buf.append ld
         if (ztypecheck.blockHasBreak :ast n: (ast.nodes.get i: n.statement)) then {
-            noneTag: variantTag :symtab :tid arm: "none"
-            someTag: variantTag :symtab :tid arm: "some"
+            noneTag: tagConstOf :ast :symtab :tid armId: zast.wellKnown.slot.wkNone
+            someTag: tagConstOf :ast :symtab :tid armId: zast.wellKnown.slot.wkSome
             # a reftype value wraps in Option: the payload lives in a
             # malloc'd box, none carries NULL data, and the local owns the
             # box (scope-exit destroy).
@@ -25662,8 +25668,7 @@ emitOptionLoopTail: function {
     tmp: TmpCtr
     buf: String.borrow
 } is {
-    ovn: regNameOf :symtab tid: ovid
-    ovu: cUpperOf text: ovn.stringView
+    ovNone: tagConstOf :ast :symtab tid: ovid armId: zast.wellKnown.slot.wkNone
     payC: armPayloadC :ast :symtab :ctx tid: ovid arm: "some"
     if (originIsTid
         :symtab
@@ -25671,10 +25676,10 @@ emitOptionLoopTail: function {
         originTid: (ctx.origins.get i: family.slot.option)
     ) then {
         # owned heap-payload union: destroy the box on the NONE arm too.
-        l2o: "\{ind}    if (_iter\{mN}.tag == Z_\{ovu}_TAG_NONE) { \{ovc}_destroy(&_iter\{mN}); break; }\n"
+        l2o: "\{ind}    if (_iter\{mN}.tag == \{ovNone}) { \{ovc}_destroy(&_iter\{mN}); break; }\n"
         buf.append l2o
     } else {
-        l2: "\{ind}    if (_iter\{mN}.tag == Z_\{ovu}_TAG_NONE) break;\n"
+        l2: "\{ind}    if (_iter\{mN}.tag == \{ovNone}) break;\n"
         buf.append l2
     }
     pk: (emitObjIterPayload
@@ -26872,8 +26877,7 @@ truthyCondText: function {
     tid: symtab.typing.nodeTypeFor nid: (interpPartNodeId :n)
     if tid.isZero then return ""
     if (isOrdinalPair :symtab :tid) then return ""
-    an: zast.nameTextAt :ast ref: fa
-    tg: variantTag :symtab :tid arm: an.stringView
+    tg: tagConstOf :ast :symtab :tid armId: fa
     if tg.length == 0 then return ""
     accessOp: ".".string
     rn: atomNodeId :n
@@ -30371,24 +30375,30 @@ variantArmIds: function {
     for vi1 < vn1 loop {
         rwvi1: symtab.typing.declRowAt ownerTid: otvi1 membersOnly: true slot: vi1
         vi1 = vi1 + 1
-        if rwvi1.keep then {
-            vnid1: rwvi1.name
-            vtid1: rwvi1.tid
-            if (symtab.reg.typetypeOf typeId: vtid1) != ztypes.ztypetype.functionType when (
-                vnid1 != zast.wellKnown.slot.wkTag
-            ) when (zenv.isConformanceLabelOf
-                ty: symtab.typing
-                reg: symtab.reg
-                tid: otvi1
-                nameId: vnid1
-            ).not then {
-                cid0: vtid1
-                ids.append cid0
-                nid0: vnid1
-                nameIds.append nid0
-            }
+        if rwvi1.keep when (isArmRow :symtab tid: otvi1 nameId: rwvi1.name rowTid: rwvi1.tid) then {
+            cid0: rwvi1.tid
+            ids.append cid0
+            nid0: rwvi1.name
+            nameIds.append nid0
         }
     }
+}
+
+# isArmRow -- a member row of sum `tid` is one of its arms: not a method, not
+# the tag accessor's slot and not a conformance label.
+isArmRow: function {
+    # the checked program
+    symtab: zenv.ZSymbolTable.view
+    # the sum type
+    tid: ztypes.tid
+    # the row's name, interned
+    nameId: zast.nameid
+    # the row's type
+    rowTid: ztypes.tid
+} out bool is {
+    if (symtab.reg.typetypeOf typeId: rowTid) == ztypes.ztypetype.functionType then return false
+    if nameId == zast.wellKnown.slot.wkTag then return false
+    return (zenv.isConformanceLabelOf ty: symtab.typing reg: symtab.reg :tid :nameId).not
 }
 
 # variantArms -- a variant's arm names and payload ids in order
@@ -30413,17 +30423,113 @@ variantArms: function {
     }
 }
 
-# variantTag -- the C tag constant for an arm.
-variantTag: function {
+# tagConstC -- the C constant naming the tag of sum `tid`'s arm at ordinal
+# `armOrd` (declaration order, as variantArmIds lists the arms). Every tag
+# constant the emitter writes is spelled here.
+tagConstC: function {
+    # the arm names
+    ast: Ast.view
+    # the checked program
     symtab: zenv.ZSymbolTable.view
+    # the sum type
     tid: ztypes.tid
+    # the arm's position among the sum's arms
+    armOrd: u64
+} out String is {
+    tn: regNameView :symtab :tid
+    an: zast.nameTextAt :ast ref: (armIdAt :symtab :tid :armOrd)
+    t: String
+    t.reserve n: tn.length + an.length + 7
+    t.append "Z_"
+    appendUpper buf: t text: tn
+    t.append "_TAG_"
+    appendUpper buf: t text: an.stringView
+    return t
+}
+
+# tagConstOf -- tagConstC for the arm of sum `tid` named `armId`. A name the sum
+# does not declare as an arm has no tag, and asking for one is an emitter defect.
+tagConstOf: function {
+    # the arm names
+    ast: Ast.view
+    # the checked program
+    symtab: zenv.ZSymbolTable.view
+    # the sum type
+    tid: ztypes.tid
+    # the arm's name, interned
+    armId: zast.nameid
+} out String is {
+    o: armOrdinalOf :symtab :tid :armId
+    match (
+        o
+    ) case some then {
+        return (tagConstC :ast :symtab :tid armOrd: o)
+    } case none then {
+        an: zast.nameTextAt :ast ref: armId
+        tn: regNameView :symtab :tid
+        panic msg: "zemitterc: a tag constant for '\{an}', which '\{tn}' does not declare as an arm"
+    }
+}
+
+# tagConstNamed -- tagConstOf for an arm a caller holds as text.
+tagConstNamed: function {
+    # the arm names
+    ast: Ast.view
+    # the checked program
+    symtab: zenv.ZSymbolTable.view
+    # the sum type
+    tid: ztypes.tid
+    # the arm's name, as text
     arm: StringView
 } out String is {
-    t: "Z_".string
-    appendUpper buf: t text: (regNameView :symtab :tid)
-    t.append "_TAG_"
-    appendUpper buf: t text: arm
-    return t
+    return (tagConstOf :ast :symtab :tid armId: (zast.poolFind pool: ast.names text: arm))
+}
+
+# armOrdinalOf -- the position of the arm named `armId` among sum `tid`'s arms
+# (variantArmIds' order); none when the sum declares no such arm.
+armOrdinalOf: function {
+    # the checked program
+    symtab: zenv.ZSymbolTable.view
+    # the sum type
+    tid: ztypes.tid
+    # the arm's name, interned
+    armId: zast.nameid
+} out optionval u64 is {
+    k: u64
+    i: u64
+    n: symtab.typing.declRowSlots ownerTid: tid
+    for i < n loop {
+        rw: symtab.typing.declRowAt ownerTid: tid membersOnly: true slot: i
+        i = i + 1
+        if rw.keep when (isArmRow :symtab :tid nameId: rw.name rowTid: rw.tid) then {
+            if rw.name == armId then return (optionval.some k)
+            k = k + 1
+        }
+    }
+    return (optionval.none u64)
+}
+
+# armIdAt -- the name of sum `tid`'s arm at ordinal `armOrd`; 0 past the last.
+armIdAt: function {
+    # the checked program
+    symtab: zenv.ZSymbolTable.view
+    # the sum type
+    tid: ztypes.tid
+    # the arm's position among the sum's arms
+    armOrd: u64
+} out zast.nameid is {
+    k: u64
+    i: u64
+    n: symtab.typing.declRowSlots ownerTid: tid
+    for i < n loop {
+        rw: symtab.typing.declRowAt ownerTid: tid membersOnly: true slot: i
+        i = i + 1
+        if rw.keep when (isArmRow :symtab :tid nameId: rw.name rowTid: rw.tid) then {
+            if k == armOrd then return rw.name
+            k = k + 1
+        }
+    }
+    return zast.nameid
 }
 
 # armValueC -- a no-payload arm's VALUE when the tagged type's C form is a
@@ -30433,13 +30539,15 @@ variantTag: function {
 # cast to that C form. Returns "" when the type carries a real tag struct --
 # callers keep composing it, byte for byte.
 armValueC: function {
+    # the arm names
+    ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     tid: ztypes.tid
     arm: StringView
 } out String is {
     avs: ordinalVariantCType :symtab :tid
     if avs.length == 0 then return ""
-    avt: variantTag :symtab :tid :arm
+    avt: tagConstNamed :ast :symtab :tid :arm
     avr: "((\{avs})\{avt})"
     return avr
 }
@@ -33882,7 +33990,7 @@ emitListMono: function {
         kind: "List"
         :buf
     )
-    emitListIter :ctx :symtab :monoId nm: nm.stringView ect: ect.stringView :buf
+    emitListIter :ast :ctx :symtab :monoId nm: nm.stringView ect: ect.stringView :buf
 }
 
 # emitListContains -- a list's linear `contains`, comparing each element with
@@ -34161,7 +34269,10 @@ emitListIterCursor: function {
     ctx: Ctx
     liId: ztypes.tid
     ovId: ztypes.tid
-    ovu: StringView
+    # the yielded option's `none` tag constant
+    ovNone: StringView
+    # the yielded option's `some` tag constant
+    ovSome: StringView
     ect: StringView
     buf: String.borrow
 } is {
@@ -34177,9 +34288,9 @@ emitListIterCursor: function {
     buf.append s2
     s3: "    z_\{ov}_t _out = {0};\n"
     buf.append s3
-    s4: "    if (_it->idx >= _it->length) { _out.tag = Z_\{ovu}_TAG_NONE; return _out; }\n"
+    s4: "    if (_it->idx >= _it->length) { _out.tag = \{ovNone}; return _out; }\n"
     buf.append s4
-    s5: "    _out.tag = Z_\{ovu}_TAG_SOME;\n"
+    s5: "    _out.tag = \{ovSome};\n"
     buf.append s5
     s6: "    _out.data = &_it->data[_it->down ? (_it->length - 1 - _it->idx) : _it->idx];\n"
     buf.append s6
@@ -34191,6 +34302,8 @@ emitListIterCursor: function {
 # emitted once. False when either was never minted, which leaves the walk with
 # nothing to emit.
 emitIterCursorOf: function {
+    # the arm names
+    ast: Ast.view
     ctx: Ctx
     symtab: zenv.ZSymbolTable.view
     liId: ztypes.tid
@@ -34204,13 +34317,15 @@ emitIterCursorOf: function {
         nameId: zast.wellKnown.slot.wkCall
     )
     if ovId.isZero then return false
-    ovName: regNameOf :symtab tid: ovId
-    ovu: cUpperOf text: ovName.stringView
+    if (listIterEmitted :ctx tid: liId) then return true
+    ovNone: tagConstOf :ast :symtab tid: ovId armId: zast.wellKnown.slot.wkNone
+    ovSome: tagConstOf :ast :symtab tid: ovId armId: zast.wellKnown.slot.wkSome
     (emitListIterCursor
         :ctx
         :liId
         :ovId
-        ovu: ovu.stringView
+        ovNone: ovNone.stringView
+        ovSome: ovSome.stringView
         :ect
         :buf
     )
@@ -34223,6 +34338,8 @@ emitIterCursorOf: function {
 # OptionView mono is emitted by the earlier OptionView pass, so this can
 # reference it.
 emitListIter: function {
+    # the arm names
+    ast: Ast.view
     ctx: Ctx
     symtab: zenv.ZSymbolTable.view
     monoId: ztypes.tid
@@ -34241,7 +34358,7 @@ emitListIter: function {
             nameId: zast.wellKnown.slot.wkIterateReverse
         )
     }
-    if (emitIterCursorOf :ctx :symtab :liId :ect :buf).not then return
+    if (emitIterCursorOf :ast :ctx :symtab :liId :ect :buf).not then return
     li: cbaseNoPrefix :ctx tid: liId
     # `iterate` is the READONLY walk, so its receiver is const and view-guard
     # checks it. No cast is needed to read the window out of it -- a const
@@ -34385,7 +34502,7 @@ emitListViewMono: function {
         kind: "ListView"
         :buf
     )
-    emitListIter :ctx :symtab :monoId nm: nm.stringView ect: ect.stringView :buf
+    emitListIter :ast :ctx :symtab :monoId nm: nm.stringView ect: ect.stringView :buf
 }
 
 # emitDataMono -- a data value mono (`intdata u8`): z_data.c.tmpl's view struct
@@ -34433,7 +34550,7 @@ emitDataMono: function {
     }
     if (monoMemberUsed :symtab :monoId nameId: zast.wellKnown.slot.wkIterate).not then return
     liId: monoMethodReturn :symtab :monoId nameId: zast.wellKnown.slot.wkIterate
-    if (emitIterCursorOf :ctx :symtab :liId ect: ect.stringView :buf).not then return
+    if (emitIterCursorOf :ast :ctx :symtab :liId ect: ect.stringView :buf).not then return
     li: cbaseNoPrefix :ctx tid: liId
     buf.append "static z_\{li}_t z_\{nm}_iterate(const z_\{nm}_t* _this);\n"
     buf.append "static z_\{li}_t z_\{nm}_iterate(const z_\{nm}_t* _this) {\n"
@@ -34739,7 +34856,7 @@ emitUnionMono: function {
     an: anames.length
     for ai < an loop {
         aname: anames.get i: ai
-        tg: variantTag :symtab :tid arm: aname.stringView
+        tg: tagConstNamed :ast :symtab :tid arm: aname.stringView
         tv: armTagValueText :symtab :tid armNameId: (aidsNm.get i: ai)
         lt: "    \{tg}\{tv},\n"
         buf.append lt
@@ -34781,7 +34898,7 @@ emitUnionMono: function {
         pc: armPayloadC :ast :symtab :ctx :tid arm: pname.stringView
         # an inline payload is a value in the slot: nothing to destroy or free
         if pc.length > 0 when (armIsInlineC :ast :symtab :tid arm: pname.stringView).not then {
-            ptg: variantTag :symtab :tid arm: pname.stringView
+            ptg: tagConstNamed :ast :symtab :tid arm: pname.stringView
             lcase: "        case \{ptg}:\n"
             buf.append lcase
             (emitArmPayloadDestroy
@@ -35076,18 +35193,18 @@ setFreeItemDel: function {itemFree: StringView} out String is {
 # emitOptionViewMono -- the borrowed-view option a collection iterator yields:
 # a {tag; void* data} struct with a no-op destroy (the view owns nothing).
 emitOptionViewMono: function {
+    # the arm names
+    ast: Ast.view
     ctx: Ctx.view
     symtab: zenv.ZSymbolTable.view
     monoId: ztypes.tid
     buf: String.borrow
 } is {
-    mn: regNameOf :symtab tid: monoId
     nm: cbaseNoPrefix :ctx tid: monoId
-    ovu: cUpperOf text: mn.stringView
     buf.append "typedef enum {\n"
-    l1: "    Z_\{ovu}_TAG_NONE,\n"
+    l1: "    \{tagConstOf :ast :symtab tid: monoId armId: zast.wellKnown.slot.wkNone},\n"
     buf.append l1
-    l2: "    Z_\{ovu}_TAG_SOME,\n"
+    l2: "    \{tagConstOf :ast :symtab tid: monoId armId: zast.wellKnown.slot.wkSome},\n"
     buf.append l2
     l3: "} z_\{nm}_tag_t;\n"
     buf.append l3
@@ -35465,6 +35582,8 @@ emitMapMono: function {
     valT: cTypeForNameTid :ast :symtab :ctx tid: valTid
     ov: cbaseNoPrefix :ctx tid: ovId
     ovu: cUpperOf text: ovName.stringView
+    ovSome: tagConstOf :ast :symtab tid: ovId armId: zast.wellKnown.slot.wkSome
+    ovNone: tagConstOf :ast :symtab tid: ovId armId: zast.wellKnown.slot.wkNone
     keyTid: mapKeyType :symtab :monoId
     keyT: (cTypeForNameTid
         :ast
@@ -35559,7 +35678,7 @@ emitMapMono: function {
         tid: ovId
         originTid: (ctx.origins.get i: family.slot.optionval)
     ) then {
-        gbV: "    z_\{ov}_t _r;\n    if (idx >= 0) {\n        _r.tag = Z_\{ovu}_TAG_SOME;\n        _r.data.some = _this->entries[idx].value;\n    } else {\n        _r.tag = Z_\{ovu}_TAG_NONE;\n    }\n    return _r;"
+        gbV: "    z_\{ov}_t _r;\n    if (idx >= 0) {\n        _r.tag = \{ovSome};\n        _r.data.some = _this->entries[idx].value;\n    } else {\n        _r.tag = \{ovNone};\n    }\n    return _r;"
         getBody = gbV.take
     } else {
         # every OptionView-producing value kind (class, String, union,
@@ -35567,7 +35686,7 @@ emitMapMono: function {
         # view's SHARED lock pins the map, and OptionView destroy is a
         # no-op, so a malloc'd box here would leak (the audited get
         # contract is "no deep-copy on get")
-        gbR: "    z_\{ov}_t _r = {0};\n    if (idx >= 0) {\n        _r.tag = Z_\{ovu}_TAG_SOME;\n        _r.data = &_this->entries[idx].value;\n    } else {\n        _r.tag = Z_\{ovu}_TAG_NONE;\n        _r.data = NULL;\n    }\n    return _r;"
+        gbR: "    z_\{ov}_t _r = {0};\n    if (idx >= 0) {\n        _r.tag = \{ovSome};\n        _r.data = &_this->entries[idx].value;\n    } else {\n        _r.tag = \{ovNone};\n        _r.data = NULL;\n    }\n    return _r;"
         getBody = gbR.take
     }
     rmWrapId: ztypes.tid
@@ -35577,9 +35696,9 @@ emitMapMono: function {
     ) case some then {
         rmWrapId = symtab.reg.returnTypeOf tid: roMm
     } case none then null
-    rmWrapName: regNameOf :symtab tid: rmWrapId
     rmWrap: cbaseNoPrefix :ctx tid: rmWrapId
-    rmWrapU: cUpperOf text: rmWrapName.stringView
+    rmNone: tagConstOf :ast :symtab tid: rmWrapId armId: zast.wellKnown.slot.wkNone
+    rmSome: tagConstOf :ast :symtab tid: rmWrapId armId: zast.wellKnown.slot.wkSome
     kfDel: mapValFreeStmt :symtab :ctx valTid: kk slot: "_this->entries[idx].key"
     keyOnlyFree: mapFreeKeyDel keyFree: kfDel.stringView valFree: ""
     delTail: "\{keyOnlyFree}    _this->entries[idx].alive = 0;\n    _this->indices[slot] = Z_\{mcr}_INDEX_DELETED;\n    _this->length--;\n"
@@ -35589,12 +35708,12 @@ emitMapMono: function {
         tid: rmWrapId
         originTid: (ctx.origins.get i: family.slot.optionval)
     ) then {
-        removeBody = "    z_\{rmWrap}_t _r;\n    if (idx < 0) {\n        _r.tag = Z_\{rmWrapU}_TAG_NONE;\n        return _r;\n    }\n    _r.tag = Z_\{rmWrapU}_TAG_SOME;\n    _r.data.some = _this->entries[idx].value;\n\{delTail}    return _r;"
+        removeBody = "    z_\{rmWrap}_t _r;\n    if (idx < 0) {\n        _r.tag = \{rmNone};\n        return _r;\n    }\n    _r.tag = \{rmSome};\n    _r.data.some = _this->entries[idx].value;\n\{delTail}    return _r;"
     } else {
         ral: armCellAlloc pc: valT.stringView box: "_box"
         rfl: armCellFill box: "_box" value: "_this->entries[idx].value"
         rat: armCellAttach slot: "_r.data" box: "_box"
-        removeBody = "    z_\{rmWrap}_t _r = {0};\n    if (idx < 0) {\n        _r.tag = Z_\{rmWrapU}_TAG_NONE;\n        _r.data = NULL;\n        return _r;\n    }\n    _r.tag = Z_\{rmWrapU}_TAG_SOME;\n    \{ral}\n    \{rfl}\n    \{rat}\n\{delTail}    return _r;"
+        removeBody = "    z_\{rmWrap}_t _r = {0};\n    if (idx < 0) {\n        _r.tag = \{rmNone};\n        _r.data = NULL;\n        return _r;\n    }\n    _r.tag = \{rmSome};\n    \{ral}\n    \{rfl}\n    \{rat}\n\{delTail}    return _r;"
     }
     p: "\{runtimeDir}/z_Map.c.tmpl"
     raw: readTemplateCached :ctx path: p.stringView
@@ -35700,6 +35819,8 @@ emitIdMapMono: function {
     ovName: regNameOf :symtab tid: ovId
     ov: cbaseNoPrefix :ctx tid: ovId
     ovu: cUpperOf text: ovName.stringView
+    ovSome: tagConstOf :ast :symtab tid: ovId armId: zast.wellKnown.slot.wkSome
+    ovNone: tagConstOf :ast :symtab tid: ovId armId: zast.wellKnown.slot.wkNone
     valTid: mapValType :symtab :monoId
     valT: cTypeForNameTid :ast :symtab :ctx tid: valTid
     keyTid: mapKeyType :symtab :monoId
@@ -35725,12 +35846,12 @@ emitIdMapMono: function {
         tid: ovId
         originTid: (ctx.origins.get i: family.slot.optionval)
     ) then {
-        getBody = "    z_\{ov}_t _r;\n    if (idx >= 0) {\n        _r.tag = Z_\{ovu}_TAG_SOME;\n        _r.data.some = _this->entries[idx].value;\n    } else {\n        _r.tag = Z_\{ovu}_TAG_NONE;\n    }\n    return _r;"
+        getBody = "    z_\{ov}_t _r;\n    if (idx >= 0) {\n        _r.tag = \{ovSome};\n        _r.data.some = _this->entries[idx].value;\n    } else {\n        _r.tag = \{ovNone};\n    }\n    return _r;"
     } else {
         # same borrowed-pointer contract as Map.get: the OptionView pins the
         # container with a SHARED lock and its destroy is a no-op, so nothing
         # is copied out of the entry storage
-        getBody = "    z_\{ov}_t _r = {0};\n    if (idx >= 0) {\n        _r.tag = Z_\{ovu}_TAG_SOME;\n        _r.data = (void*)&_this->entries[idx].value;\n    } else {\n        _r.tag = Z_\{ovu}_TAG_NONE;\n        _r.data = NULL;\n    }\n    return _r;"
+        getBody = "    z_\{ov}_t _r = {0};\n    if (idx >= 0) {\n        _r.tag = \{ovSome};\n        _r.data = (void*)&_this->entries[idx].value;\n    } else {\n        _r.tag = \{ovNone};\n        _r.data = NULL;\n    }\n    return _r;"
     }
     p: "\{runtimeDir}/z_IdMap.c.tmpl"
     raw: readTemplateCached :ctx path: p.stringView
@@ -38755,7 +38876,7 @@ emitOptionMonos: function {
     tiov: u64
     for tiov < work.wOptView.length loop {
         ovId: work.wOptView.get i: tiov
-        emitOptionViewMono :ctx :symtab monoId: ovId :buf
+        emitOptionViewMono :ast :ctx :symtab monoId: ovId :buf
         tiov = tiov + 1
     }
 }
@@ -40728,10 +40849,14 @@ emitResultCombinator: function {
     # `orPanic` is resultval's alone
     if isP when isRes.not then return ""
     payArm: "ok"
-    if isOpt then payArm = "some"
+    payArmId: zast.wellKnown.slot.wkOk
+    if isOpt then {
+        payArm = "some"
+        payArmId = zast.wellKnown.slot.wkSome
+    }
     recvExpr: valueExprC :ast :symtab :ctx n: (ast.nodes.get i: bnid)
     if recvExpr.length == 0 then return ""
-    okTag: variantTag :symtab tid: rtid arm: payArm
+    okTag: tagConstOf :ast :symtab tid: rtid armId: payArmId
     rcT: ctxCname :ctx tid: rtid
     if isP then {
         rp: "({ \{rcT}_t _rc = (\{recvExpr.stringView}); if (_rc.tag != \{okTag.stringView}) z_panic(\"orPanic: result is err\"); _rc.data.ok; })"
@@ -41795,7 +41920,7 @@ writeVariantEq: function {
         qco: symtab.typing.declChildOf pool: ast.names parentTypeId: tid name: qname.stringView
         qc: armPayloadC :ast :symtab :ctx :tid arm: qname.stringView
         if qc.length > 0 when qco.some then {
-            qtg: variantTag :symtab :tid arm: qname.stringView
+            qtg: tagConstNamed :ast :symtab :tid arm: qname.stringView
             qnameP: memberCPrefix name: qname.stringView cw: ctx.cWords
             qsel: ".data.\{qnameP}\{qname}"
             dest.append "        case \{qtg}: return "
@@ -41869,7 +41994,7 @@ emitOneVariant: function {
     an: anames.length
     for ai < an loop {
         aname: anames.get i: ai
-        tg: variantTag :symtab :tid arm: aname.stringView
+        tg: tagConstNamed :ast :symtab :tid arm: aname.stringView
         tv: armTagValueText :symtab :tid armNameId: (aidsNm.get i: ai)
         lt: "    \{tg}\{tv},\n"
         buf.append lt
@@ -42518,7 +42643,7 @@ variantHashBody: function {
                 :words
             )
             if words.length > width then width = words.length
-            cases.append "        case \{variantTag :symtab :tid arm: qname.stringView}:"
+            cases.append "        case \{tagConstNamed :ast :symtab :tid arm: qname.stringView}:"
             wi: u64
             for wi < words.length loop {
                 cases.append " _h[\{wi + 1}] = \{words.get i: wi};"
@@ -43314,8 +43439,6 @@ setupGenCtx: function {
         ctx.genActive = false
         return false
     }
-    rn: regNameOf :symtab tid: rid
-    ru: cUpperOf text: rn.stringView
     rc: ctxCname :ctx tid: rid
     ctx.genActive = true
     ctx.genYieldCount = gyc
@@ -43323,8 +43446,8 @@ setupGenCtx: function {
     ctx.genForNext = 0
     for ctx.genForSpills.length > 0 loop ctx.genForSpills.pop
     ctx.genWrap = "\{rc}_t"
-    ctx.genSomeTag = "Z_\{ru}_TAG_SOME"
-    ctx.genNoneTag = "Z_\{ru}_TAG_NONE"
+    ctx.genSomeTag = tagConstOf :ast :symtab tid: rid armId: zast.wellKnown.slot.wkSome
+    ctx.genNoneTag = tagConstOf :ast :symtab tid: rid armId: zast.wellKnown.slot.wkNone
     # a reftype element wraps in Option: the yield leg boxes the payload
     # (emitOptionalAssign's malloc'd-box shape); valtype wrappers stay inline.
     gp: String
