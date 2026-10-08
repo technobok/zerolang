@@ -2442,7 +2442,10 @@ perf: $(PERFBIN)
 #
 # +28 a loop and `return` demand the system unit's `never` by its unit, not by
 # a lookup where they are written: -1 behaviour, +29 source (ab.sh).
-ALLOC_BASELINE := 2207554
+#
+# -210 a type reference spelled `null` / `never` resolves through scope, with no
+# short-circuit to the system's types: 0 behaviour, -210 source (ab.sh).
+ALLOC_BASELINE := 2207344
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
