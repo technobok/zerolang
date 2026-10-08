@@ -14936,13 +14936,10 @@ tagAliasArmC: function {
 }
 
 # implicitZeroValue -- the C text a stamped implicit zero-create builds for the
-# stamped type: a scalar's zero, String's empty value, a String-typedef class's
-# zero struct, a typedef's chased scalar zero, a collection instantiation's
-# empty create, and otherwise the type's own create with its field defaults
-# filled. The tid is the STAMP's value, which is what the checker decided to
-# construct; `name` is the name written at the site, and only the scalar leg
-# consults it -- a site with no name in hand passes "" and reaches the same
-# answer through the typedef chase.
+# stamped type: a scalar's zero, String's empty value, a typedef's base's zero,
+# a collection instantiation's empty create, and otherwise the type's own
+# create with its field defaults filled. The tid is the STAMP's value, which is
+# what the checker decided to construct.
 implicitZeroValue: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -14952,16 +14949,15 @@ implicitZeroValue: function {
     zc: scalarCTypeFor :symtab :tid
     if zc.length > 0 then return (scalarZeroC :symtab cType: zc.stringView :tid)
     if tid == ctx.strTid then return (emitExprStrZero :ctx)
-    # a String-typedef class (Path) shares the String struct: the empty value
-    # is the zero struct
-    ztb: symtab.typing.typedefBaseName.get key: tid
-    match (
-        ztb
-    ) case some then {
-        ztbId: zast.nameid
-        ztbId = ztb
-        if ztbId == zast.wellKnown.slot.tyString then return (emitExprStrZero :ctx)
-    } case none then null
+    # a typedef is its base's zero: a scalar base's cast zero (meters -> i64),
+    # and otherwise whatever the base builds -- the String struct for Path, a
+    # record's create with its defaults
+    zb: typedefChaseTid :symtab :tid
+    if zb != tid then {
+        zt: scalarCTypeFor :symtab tid: zb
+        if zt.length > 0 then return (scalarZeroC :symtab cType: zt.stringView :tid)
+        return (implicitZeroValue :ast :symtab :ctx tid: zb)
+    }
     # The collection is asked BEFORE the scalar chase, and the order is not a
     # preference: a typedef over a collection names its base `ListVal`, which
     # is a template rather than a C scalar or a user function, and the chase
@@ -14994,9 +14990,6 @@ implicitZeroValue: function {
         if takesCap then return "\{zmc}_create((uint64_t)0)"
         return "\{zmc}_create()"
     }
-    # a typedef over a scalar (meters -> i64) is the chased scalar's zero
-    zt: typedefChaseC :ast :symtab :ctx :tid
-    if zt.length > 0 then return (scalarZeroC :symtab cType: zt.stringView :tid)
     return (emitCtorDefaultsFill :ast :symtab :ctx :tid)
 }
 
