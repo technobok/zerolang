@@ -11890,8 +11890,9 @@ resolveRecord: function {
 }
 
 # detectTagAccessor -- a non-function variant/union as-item of the form
-# `name: <numeric>.tag` declares the read-only tag accessor: instances
-# expose the discriminator ordinal as the numeric type under that name.
+# `name: <integer>.tag` declares the read-only tag accessor: instances
+# expose the discriminator ordinal as that integer type under that name. The
+# storage is the type its name resolves to.
 detectTagAccessor: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -11901,10 +11902,15 @@ detectTagAccessor: function {
     ownerId: ztypes.tid
     am: argref
 } is {
-    tagOp: ast.nodes.get i: am.operation
-    if tagOp.dottedpath.not then return
-    if (atomNameId :ast n: (ast.nodes.get i: tagOp.child)) != zast.wellKnown.slot.wkTag then return
-    if (isScalarNameId id: (atomNameId :ast n: (ast.nodes.get i: tagOp.parent))).not then return
+    if (opIsTagRef :ast :am).not then return
+    # a data block names the tag's values, and is no storage to resolve
+    storeNm: zast.nameid
+    {
+        op: ast.nodes.get i: am.operation
+        if op.dottedpath then storeNm = atomNameId :ast n: (ast.nodes.get i: op.parent)
+    }
+    sd: declInScope :st scopeDeclId: scope nameId: storeNm
+    if sd.isZero.not when (st.typing.decls.get i: sd).kind.dataDecl then return
     # A TAG ACCESSOR IS NOT A CONTAINMENT EDGE. `tag: u8.tag` declares a read of
     # the discriminator the variant already carries, not a field that has to lay
     # out inside it -- so it takes the plain typeref, and a type reached through
@@ -11919,9 +11925,20 @@ detectTagAccessor: function {
             thisName: defName
         )
     )
-    if nid.isZero then return
+    # a storage that is not an integer is refused where the storage is
+    # decided (variantTagBaseTid)
+    if (isTagStorage :st tid: nid).not then return
     st.typing.tagAccessorName.set key: ownerId value: am.name
     st.typing.tagAccessorTid.set key: ownerId value: nid
+}
+
+# isTagStorage -- `tid` can hold a sum's discriminator: one of the system's
+# integer types, at most 64 bits wide.
+isTagStorage: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
+    nk: numKindOfTid :st :tid
+    if nk.has.not then return false
+    if (ztypes.isFloatKind k: nk.kind) then return false
+    return (ztypes.intKindBits k: nk.kind) <= 64
 }
 
 # synthVariantEqHash -- a variant that writes its own `==` or `!=` keeps it: the
@@ -12384,7 +12401,9 @@ resolveVariant: function {
 # the spec's default (§tag: "If no tag is specified, the compiler uses u8 by
 # default with sequential values starting from 0"). 0 when the tag is
 # `data`-sourced -- its constants are whatever the data block says, so its width
-# is that block's business -- or when the base does not resolve.
+# is that block's business -- or when the base does not resolve. Any other base
+# is the type its name resolves to, and one that is not one of the system's
+# integers of at most 64 bits is refused here, where the storage is decided.
 #
 # Recorded so a backend can honour what the declaration asked for. Emitting the
 # discriminator as a C `enum` ignores it: an enum is `int`, so `tag: u8.tag`
@@ -12404,34 +12423,38 @@ variantTagBaseTid: function {
         amId: zast.objAsItemAt :ast nid: objId i: kIter
         kIter = kIter + 1
         am: argRefAt :ast nid: amId
-        if am.nid.isZero.not then {
-            # whether the member's operation reads a type's tag
-            isTagRef: false
-            bn: String
-            opNode: ast.nodes.get i: am.operation
-            if opNode.dottedpath when (
-                (atomNameId :ast n: (ast.nodes.get i: opNode.child)) == zast.wellKnown.slot.wkTag
-            ) then isTagRef = true
-            if isTagRef then bn = dottedParentName :ast n: opNode
-            if isTagRef then {
-                sawTag = true
-                if bn.length > 0 then {
-                    rr: (walkLookupTyperef
-                        :st
-                        :scope
-                        :ast
-                        :unitDecl
-                        base: bn.stringView
-                    )
-                    match (
-                        rr
-                    ) case some then {
-                        if (st.reg.typetypeOf typeId: rr) == ztypes.ztypetype.dataType then {
-                            declared = ztypes.tid.zero
-                        } else {
-                            declared = rr
-                        }
-                    } case none then null
+        if am.nid.isZero.not when (opIsTagRef :ast :am) then {
+            sawTag = true
+            # the storage's name: a data block names the tag's values; any
+            # other name is the type it resolves to, as every type-ref is
+            bnId: zast.nameid
+            {
+                opNode: ast.nodes.get i: am.operation
+                if opNode.dottedpath then bnId = (atomNameId
+                    :ast
+                    n: (ast.nodes.get i: opNode.parent)
+                )
+            }
+            if bnId.isZero.not then {
+                bd: declInScope :st scopeDeclId: scope nameId: bnId
+                if bd.isZero.not when (st.typing.decls.get i: bd).kind.dataDecl then {
+                    declared = ztypes.tid.zero
+                } else {
+                    rr: resolveAtomType :st :ast :unitDecl :scope nameId: bnId thisName: ""
+                    if (isTagStorage :st tid: rr) then {
+                        declared = rr
+                    } else if rr.isZero.not then {
+                        bn: zast.nameTextCopy :ast ref: bnId
+                        (addResolveErrorH
+                            :st
+                            nodeid: am.nid
+                            lineno: am.lineno
+                            colno: am.colno
+                            e: zast.err.typeError
+                            msg: "a tag is stored as an integer type of at most 64 bits: '\{bn}' is not one"
+                            width: bn.length.u32.orPanic
+                        )
+                    }
                 }
             }
         }
