@@ -1356,9 +1356,10 @@ Builder: class {
         }
     }
 
-    # visitBody -- a clause body: `null`, `{}` (printed `null` when `clause`,
-    # which a loop body is not), a block, or a bare statement
-    visitBody: function {:this id: zast.nodeid clause: bool} out u32 is {
+    # visitBody -- a clause or loop body: `null`, a block (`{}` printed as
+    # written: whether `null` would mean the same depends on what `null` names
+    # where it is written, which a layout cannot know), or a bare statement
+    visitBody: function {:this id: zast.nodeid} out u32 is {
         n: this.node :id
         count: u64
         match (
@@ -1370,27 +1371,7 @@ Builder: class {
             this.skipTok tt: zlexer.toktype.refIdTok
             return this.idNull
         }
-        if (this.peekIs tt: zlexer.toktype.braceOpenTok) then {
-            if count == 0 when clause then {
-                # `{}` with nothing inside prints as `null`; a comment inside
-                # keeps the braces
-                openK: this.c.peekIndex
-                k: openK + 1
-                onlyWs: true
-                for (this.c.rawKind :k) != zlexer.toktype.braceCloseTok loop {
-                    kk: this.c.rawKind :k
-                    if kk == zlexer.toktype.commentTok then onlyWs = false
-                    if kk == zlexer.toktype.eofTok then break
-                    k = k + 1
-                }
-                if onlyWs then {
-                    this.skipTok tt: zlexer.toktype.braceOpenTok
-                    this.skipTok tt: zlexer.toktype.braceCloseTok
-                    return this.idNull
-                }
-            }
-            return (this.visitBlock :id)
-        }
+        if (this.peekIs tt: zlexer.toktype.braceOpenTok) then return (this.visitBlock :id)
         # a bare body: the one statement
         match (
             n
@@ -1436,7 +1417,7 @@ Builder: class {
                     xs.append this.idSpace
                     xs.append (this.tok tt: zlexer.toktype.thenTok)
                     xs.append this.idSpace
-                    xs.append (this.visitBody id: cl.statement clause: true)
+                    xs.append (this.visitBody id: cl.statement)
                 } else null
             }
             if n.elseclause.isZero.not then {
@@ -1464,7 +1445,7 @@ Builder: class {
                 )
             } else null
         }
-        return (this.visitBody :id clause: true)
+        return (this.visitBody :id)
     }
 
     # visitFor -- the loop header in the order it was written, then the body
@@ -1512,7 +1493,7 @@ Builder: class {
                     xs.append this.idSpace
                     xs.append (this.tok tt: zlexer.toktype.loopTok)
                     xs.append this.idSpace
-                    xs.append (this.visitBody id: n.body clause: false)
+                    xs.append (this.visitBody id: n.body)
                     sawBody = true
                 } else if ci == 0 when sawBody.not when n.conditions.count > 0 then {
                     # the leading condition, spelled without `while`
@@ -1579,7 +1560,7 @@ Builder: class {
                     xs.append this.idSpace
                     xs.append (this.tok tt: zlexer.toktype.thenTok)
                     xs.append this.idSpace
-                    xs.append (this.visitBody id: cl.statement clause: true)
+                    xs.append (this.visitBody id: cl.statement)
                 } else null
             }
             if n.elseclause.isZero.not then {
