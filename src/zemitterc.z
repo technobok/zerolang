@@ -3806,45 +3806,15 @@ Ctx: class {
     origins: ListVal ztypes.tid
 }
 
-# canonFnId -- userFnId, but a tid that is already the one needs no name
-# round-trip: a registered mono (it carries a generic origin), or a type with
-# its own declaration. Only a SHELL -- an id with no declaration, standing for
-# a main-unit type -- is resolved by its name; a declared type's name looked up
-# in the main unit answers ANOTHER type there when two units declare the name
-# (`kit.Cell` and a top-level `Cell`), and every member read through it called
-# the other type's method.
-canonFnId: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
-    tid: ztypes.tid
-    name: StringView
-} out ztypes.tid is {
-    if (originTidOf :symtab :tid).isZero.not then return tid
-    if (ztypecheck.declOfTypeId st: symtab :tid).isZero.not then return tid
-    return (userFnId :ast :symtab :ctx :name)
-}
 
-# canonTypeId -- resolveTypeIdByName with the same mono short-circuit.
-canonTypeId: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    tid: ztypes.tid
-    name: StringView
-} out ztypes.tid is {
+# canonTypeId -- the type a stamped id stands for: itself when it is a generic
+# instance, has a declaration, or is a user family's type; 0 for a shell that is
+# none of these (a generic parameter, a data block). Never looked up by name: a
+# name names a different type in another unit.
+canonTypeId: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out ztypes.tid is {
     if (originTidOf :symtab :tid).isZero.not then return tid
-    # a type with a declaration is itself; only a shell is resolved by name
     if (ztypecheck.declOfTypeId st: symtab :tid).isZero.not then return tid
-    byName: resolveTypeIdByName :ast :symtab :ctx :name
-    if byName.isZero.not then return byName
-    # The name route cannot reach a type declared in a NESTED unit -- there is
-    # no name-index entry to find it by -- but the id in hand is already that
-    # type. Accept it when it names a real aggregate, so a field typed through
-    # a subunit compares field-wise instead of falling through to a C `==` on
-    # two structs, and a class resolves to the conformances it declares.
-    tt: symtab.reg.typetypeOf typeId: tid
-    if tt.isUserFamily then return tid
+    if (symtab.reg.typetypeOf typeId: tid).isUserFamily then return tid
     return ztypes.tid.zero
 }
 
@@ -3939,7 +3909,7 @@ needsValueDeref: function {
     if (nodeIsBareAtom :n).not then return false
     if (pathIsPointer :ast :symtab :ctx :n).not then return false
     if (valueIsItsPointer :symtab :ctx :tid) then return false
-    return (isReftypeParam :ast :symtab :ctx :tid).not
+    return (isReftypeParam :symtab :ctx :tid).not
 }
 
 # valueExprC -- an expression standing where a VALUE is wanted: a binop
@@ -4097,8 +4067,7 @@ borrowedFieldPath: function {
 } out bool is {
     pnid: zast.nodeIdOf n: (ast.nodes.get i: n.parent)
     pstamp: stampIdOf :symtab nid: pnid
-    pstn: regNameView :symtab tid: pstamp
-    prid: canonTypeId :ast :symtab :ctx tid: pstamp name: pstn
+    prid: canonTypeId :symtab tid: pstamp
     ptid: pstamp
     if prid.isZero.not then ptid = prid
     if (symtab.typing.declIsBorrowedFieldId
@@ -4106,7 +4075,7 @@ borrowedFieldPath: function {
         nameId: (atomNameIdOf :ast n: (ast.nodes.get i: n.child))
     ).not then return false
     ft: stampIdOf :symtab nid: (zast.nodeIdOf n: (ast.nodes.get i: n.nodeid))
-    return (borrowedFieldHeldByPointer :ast :symtab :ctx fid: ft)
+    return (borrowedFieldHeldByPointer :symtab :ctx fid: ft)
 }
 
 # refValtypeResult -- the node is a reference-returning call whose result is a
@@ -4134,7 +4103,7 @@ nodeIsRefBorrowResult: function {
     if f.isZero then return false
     r: stampIdOf :symtab nid: (interpPartNodeId :n)
     ft: f
-    if (fnReturnsRefBorrow :ast :symtab :ctx fid: ft retTid: r).not then return false
+    if (fnReturnsRefBorrow :symtab :ctx fid: ft retTid: r).not then return false
     if (symtab.reg.isNativeOf tid: ft) then return true
     return (returnsValueStructRef :symtab :ctx fid: ft retTid: r).not
 }
@@ -7207,41 +7176,6 @@ popLoopLabel: function {ctx: Ctx id: u64 ind: StringView buf: String.borrow} is 
     } case none then null
 }
 
-# methodOwnerId -- the type id that actually owns method `mn`. A cross-unit
-# receiver may be stamped a same-named SHELL id whose childOf lacks the method;
-# scan for the same-named type that has it (emitter twin of canonicalChildBase).
-methodOwnerId: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    rtid: ztypes.tid
-    mn: StringView
-} out ztypes.tid is {
-    direct: symtab.typing.declChildOf pool: ast.names parentTypeId: rtid name: mn
-    match (
-        direct
-    ) case some then {
-        return rtid
-    } case none then null
-    # the names are compared, never kept: the scan asks every registered type
-    # and a copy of each name is what made one miss cost thousands of blocks
-    rn: regNameView :symtab tid: rtid
-    if rn.length == 0 then return rtid
-    last: symtab.reg.nextTid
-    t: ztypes.tid
-    for t < last loop {
-        tn: regNameView :symtab tid: t
-        if tn == rn then {
-            co: symtab.typing.declChildOf pool: ast.names parentTypeId: t name: mn
-            match (
-                co
-            ) case some then {
-                return t
-            } case none then null
-        }
-        t = t.next
-    }
-    return rtid
-}
 
 # destroyTargetTid -- the type whose cleanup frees a value of tid, zero when the
 # value owns nothing. A typedef emits no cleanup of its own: it shares its end's
@@ -8192,24 +8126,6 @@ operatorReceiverTid: function {
     return rtc
 }
 
-# operatorOwnerId -- the type that DECLARES the operator, or the one declaring
-# its comparison partner. Giving up here is what left `f != 3` on a facet as an
-# unhandled callee: the derived-comparison leg that would have answered is
-# reached through this owner, so the owner has to be found first.
-operatorOwnerId: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    rtid: ztypes.tid
-    mn: StringView
-    mnId: zast.nameid
-} out ztypes.tid is {
-    own9: methodOwnerId :ast :symtab :rtid :mn
-    if own9.isZero.not then return own9
-    pid9: opPairPartnerId nameId: mnId
-    if pid9.isZero then return ztypes.tid.zero
-    pnm9: zast.nameTextAt :ast ref: pid9
-    return (methodOwnerId :ast :symtab :rtid mn: pnm9.stringView)
-}
 
 # emitOperatorCallForm -- `a.+ rhs: b` through the same emitter the infix form
 # uses. "" when this is not a one-argument operator call, which leaves the
@@ -8273,8 +8189,7 @@ emitOperatorCallForm: function {
         } case none then null
     }
     if owner.isZero then {
-        rtc: operatorReceiverTid :ast :symtab :ctx :call
-        owner = operatorOwnerId :ast :symtab rtid: rtc mn: mnO mnId: mnId9
+        owner = operatorReceiverTid :ast :symtab :ctx :call
         if owner.isZero then return ""
         mo9: (symtab.typing.declChildOf
             pool: ast.names
@@ -8307,12 +8222,7 @@ emitOperatorCallForm: function {
         match (
             tb9
         ) case some then {
-            bow9: (methodOwnerId
-                :ast
-                :symtab
-                rtid: tb9
-                mn: mnO
-            )
+            bow9: tb9
             if bow9.isZero.not then {
                 mb9: (symtab.typing.declChildOf
                     pool: ast.names
@@ -8387,12 +8297,7 @@ emitSynthOperatorCallForm: function {
     if call.arguments.count.u64 != 1 then return ""
     rt0S: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: call.callable)
     rtcS: typedefMethodOwner :ast :symtab :ctx tid: rt0S mn: mnS
-    ownerS: (methodOwnerId
-        :ast
-        :symtab
-        rtid: rtcS
-        mn: mnS
-    )
+    ownerS: rtcS
     if ownerS.isZero then return ""
     nidS: zast.poolFind pool: ast.names text: mnS
     if nidS.isZero then return ""
@@ -8451,7 +8356,7 @@ emitInstanceMethodCall: function {
     bxEl: callableBoxElem :ast :symtab :ctx callable: callableNode
     if bxEl.isZero.not then rtid0 = bxEl
     rtidc: typedefMethodOwner :ast :symtab :ctx tid: rtid0 :mn
-    rtid: methodOwnerId :ast :symtab rtid: rtidc :mn
+    rtid: rtidc
     if rtid.isZero then return ""
     # Both families reach here: a user record's methods take their receiver by
     # pointer too, so they need the same receiver-addressing logic below. The
@@ -8630,7 +8535,6 @@ refPtrC: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid base: StringVi
 # COMPOUND VALTYPE, i.e. the one case where emitColGet's generated `getMut`
 # returns a pointer that `get` does not.
 isColGetMutRef: function {
-    ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     fid: ztypes.tid
@@ -8641,8 +8545,8 @@ isColGetMutRef: function {
     if isLG.not then return false
     if (regNameIs :symtab tid: fid name: "getMut").not then return false
     eG: listElemType :symtab monoId: ownG
-    if (elemBorrowsByPtr :ast :symtab :ctx tid: eG) then return false
-    return (elemRefByPtr :ast :symtab :ctx tid: eG)
+    if (elemBorrowsByPtr :symtab :ctx tid: eG) then return false
+    return (elemRefByPtr :symtab :ctx tid: eG)
 }
 
 # returnsValueStructRef -- a user function's `.borrow` return of a String or a
@@ -8686,7 +8590,6 @@ isValueStructTid: function {
 # `retTid` is the caller's already-resolved return type: the registry's
 # returnTypeOf is 0 for a user method, so both signature emitters fall back to
 fnReturnsRefBorrow: function {
-    ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     fid: ztypes.tid
@@ -8700,7 +8603,7 @@ fnReturnsRefBorrow: function {
     # reach it: for a compound valtype element it really does return a pointer
     # into the storage, and binding that by value is the write loss `getMut`
     # exists to prevent.
-    if (isColGetMutRef :ast :symtab :ctx :fid) then return true
+    if (isColGetMutRef :symtab :ctx :fid) then return true
     # a NATIVE callee's ABI is fixed by its hand-written `.inc` fragment, which
     # returns its struct by value (`List.iterate` -> ListIter). This emitter only
     # rewrites the bodies it generates itself.
@@ -8717,7 +8620,7 @@ fnReturnsRefBorrow: function {
     # UNION are passed and returned by reference, a protocol and a view union
     # by value. `isReftypeParam` is the emitter's answer to exactly this and is
     # what the param side uses.
-    return (isReftypeParam :ast :symtab :ctx tid: retTid)
+    return (isReftypeParam :symtab :ctx tid: retTid)
 }
 
 # callRhsIsBorrow -- the call-shaped leg of bindingRhsIsBorrow: the callee's
@@ -9114,7 +9017,7 @@ valueStructRefNode: function {
     if fid.isZero then return zast.nodeid
     # a native reference (`getMut`) keeps its own pointer spelling
     if (symtab.reg.isNativeOf tid: fid) then return zast.nodeid
-    if (fnReturnsRefBorrow :ast :symtab :ctx :fid retTid: rt).not then return zast.nodeid
+    if (fnReturnsRefBorrow :symtab :ctx :fid retTid: rt).not then return zast.nodeid
     return (zast.nodeIdOf :n)
 }
 
@@ -9223,14 +9126,13 @@ rhsIsBorrowGet: function {
             return (
                 ctx.colGetFromCode and
                 (elemRefByPtr
-                    :ast
                     :symtab
                     :ctx
                     tid: (listElemType :symtab monoId: bt)
                 )
             )
         }
-        return (listGetIsPtr :ast :symtab :ctx monoId: bt)
+        return (listGetIsPtr :symtab :ctx monoId: bt)
     } else {
         return false
     }
@@ -9767,7 +9669,6 @@ emitListMethodCall: function {
         v: listArg :ast :symtab :ctx :call label: "i"
         e1: "\{cb}_get(\{recvR}, \{v})"
         if (listGetIsPtr
-            :ast
             :symtab
             :ctx
             monoId: bt
@@ -9778,7 +9679,6 @@ emitListMethodCall: function {
         vm: listArg :ast :symtab :ctx :call label: "i"
         e1m: "\{cb}_getMut(\{recvR}, \{vm})"
         if (listGetIsPtr
-            :ast
             :symtab
             :ctx
             monoId: bt
@@ -9999,7 +9899,6 @@ emitSpanMethodCall: function {
         v: listArg :ast :symtab :ctx :call label: "i"
         e1: "\{cb}_get(\{recvR}, \{v})"
         if (listGetIsPtr
-            :ast
             :symtab
             :ctx
             monoId: bt
@@ -11428,14 +11327,7 @@ renderDefault: function {
     {
         df: dv
         if df.func then {
-            tn: regNameOf :symtab tid: targetTid
-            cf: (canonFnId
-                :ast
-                :symtab
-                :ctx
-                tid: targetTid
-                name: tn.stringView
-            )
+            cf: targetTid
             if cf.isZero.not then return (ctxCname :ctx tid: cf)
             return (ctxCname :ctx tid: targetTid)
         }
@@ -11447,14 +11339,7 @@ renderDefault: function {
             ao: symtab.typing.decls.get i: da
             armId = ao.name
             arm: zast.poolTextAt pool: ast.names ref: armId
-            tn2: regNameOf :symtab tid: targetTid
-            cv: (canonFnId
-                :ast
-                :symtab
-                :ctx
-                tid: targetTid
-                name: tn2.stringView
-            )
+            cv: targetTid
             vtarget: targetTid
             if cv.isZero.not then vtarget = cv
             tg: tagConstNamed :ast :ctx :symtab tid: vtarget arm: arm.stringView
@@ -11935,7 +11820,7 @@ orderRecordField: function {
     # a borrowed reftype field is a pointer; a source stored INLINE (the
     # receiver's own field, a field of a parameter) is passed by address
     # the field is a pointer: whatever passes it hands on an address
-    byref: fieldIsReftypePtr :ast :symtab :ctx owner: tid :fnameId :ffid
+    byref: fieldIsReftypePtr :symtab :ctx owner: tid :fnameId :ffid
     if byref when ca.labelled when (argIsPointerByLabel :ast :symtab :ctx :call label: fname
     ).not then {
         av = (emitByrefArg
@@ -11985,7 +11870,6 @@ orderRecordField: function {
 # fieldIsReftypePtr -- a borrowed field of a reftype, which the C holds as a
 # pointer.
 fieldIsReftypePtr: function {
-    ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     owner: ztypes.tid
@@ -11996,7 +11880,7 @@ fieldIsReftypePtr: function {
         parentTypeId: owner
         nameId: fnameId
     ).not then return false
-    return (borrowedFieldHeldByPointer :ast :symtab :ctx fid: ffid)
+    return (borrowedFieldHeldByPointer :symtab :ctx fid: ffid)
 }
 
 # ctorArgPositions -- for each parameter of a construction, in declaration
@@ -12732,7 +12616,6 @@ emitMetaCreateCall: function {
             mk: pendingHoistMark :ctx
             av: metaCreateFieldText :ast :symtab :ctx :call :et fname: fname.stringView :fids :fi
             ptrField: (fieldIsReftypePtr
-                :ast
                 :symtab
                 :ctx
                 owner: et
@@ -12819,7 +12702,6 @@ metaCreateFieldText: function {
             parentTypeId: et
             name: fname
         ) when (borrowedFieldHeldByPointer
-            :ast
             :symtab
             :ctx
             fid: ffidL
@@ -12854,7 +12736,6 @@ metaCreateFieldText: function {
             parentTypeId: et
             name: fname
         ) when (borrowedFieldHeldByPointer
-            :ast
             :symtab
             :ctx
             fid: ffid
@@ -13851,7 +13732,6 @@ paramTakesPointer: function {
     if (paramIsReceiverName :ast :symtab :fid :pname) then return true
     if (markedValtypeRefParam :ast :symtab :fid :pname :pid) then return true
     if takesArg.not when (isReftypeParam
-        :ast
         :symtab
         :ctx
         tid: pid
@@ -15085,7 +14965,6 @@ emitDefRefAtom: function {
     if brid.isZero.not when (
         (symtab.reg.typetypeOf typeId: brid) == ztypes.ztypetype.recordType
     ) then {
-        btn: regNameOf :symtab tid: brid
         izr: symtab.typing.implicitCreate.get key: n.nodeid
         match (
             izr
@@ -15097,17 +14976,13 @@ emitDefRefAtom: function {
                 tid: izr
             )
         } case none then null
-        # unstamped: a scalar-name atom keeps the raw name text, any other
-        # record is its zero struct
-        boundCType: (scalarCTypeFor
+        # unstamped: a scalar is its zero, any other record its zero struct
+        if (scalarCTypeFor :symtab tid: brid).length > 0 then return (implicitZeroValue
+            :ast
             :symtab
+            :ctx
             tid: brid
         )
-        if boundCType.length > 0 then {
-            bsv: btn.stringView
-            bsc: bsv.string
-            return bsc
-        }
         brc: ctxCname :ctx tid: brid
         be0: "((\{brc}_t){0})"
         return be0
@@ -15490,9 +15365,9 @@ emitNestedCollectionBase: function {
         return "\{nvcb}\{wv9}\{recvV})"
     }
     # Set/Map are heap-pointer collections; their methods are emitted by the
-    # collection template (not registry children), so a CLASS-dispatch
-    # methodOwnerId scan would mis-resolve to a duplicate same-named mono. The
-    # receiver field is already a pointer, so it is passed directly (no `&`).
+    # collection template, not as registry children a CLASS dispatch would
+    # find. The receiver field is already a pointer, so it is passed directly
+    # (no `&`).
     if (isSetOriginOf :symtab :ctx tid: nlid) then {
         nscb: ctxCname :ctx tid: nlid
         if mnId == zast.wellKnown.slot.wkIterate then return "\{nscb}_iterate(\{baseAtom})"
@@ -15590,7 +15465,7 @@ emitNestedMonoMethodBase: function {
             )
         }
         if nDisp then {
-            nlidM: methodOwnerId :ast :symtab rtid: nlid mn: mn2
+            nlidM: nlid
             nmco: (symtab.typing.declChildOf
                 pool: ast.names
                 parentTypeId: nlidM
@@ -16907,8 +16782,7 @@ emitDottedAtomBase: function {
     if bstamp0.isZero then bstamp0 = stampIdOf :symtab nid: bnid2
     if boxElem.isZero.not then bstamp0 = boxElem
     bstamp: bstamp0
-    bsn0: regNameView :symtab tid: bstamp0
-    bcid: canonFnId :ast :symtab :ctx tid: bstamp0 name: bsn0
+    bcid: bstamp0
     if bcid.isZero.not then {
         bstamp = bcid
     } else {
@@ -16917,7 +16791,7 @@ emitDottedAtomBase: function {
         # registered class whose struct + methods are emitted (mirrors
         # the typeRefC canonicalization, so method cnames match).
         if (definedInUnitTid :symtab tid: bstamp0).isZero then {
-            brid: canonTypeId :ast :symtab :ctx tid: bstamp0 name: bsn0
+            brid: canonTypeId :symtab tid: bstamp0
             if brid.isZero.not then bstamp = brid
         }
     }
@@ -17790,8 +17664,7 @@ boxMemberElem: function {
     if bt.isZero then bt = stampIdOf :symtab nid: bnid
     if bt.isZero then return ztypes.tid.zero
     if (isBoxTid :symtab tid: bt).not then {
-        bxn: regNameView :symtab tid: bt
-        bxc: canonTypeId :ast :symtab :ctx tid: bt name: bxn
+        bxc: canonTypeId :symtab tid: bt
         if bxc.isZero then return ztypes.tid.zero
         bt = bxc
         if (isBoxTid :symtab tid: bt).not then return ztypes.tid.zero
@@ -18635,7 +18508,7 @@ operandValueC: function {
 } out String is {
     n: ast.nodes.get i: nid
     v: valueExprC :ast :symtab :ctx :n
-    if (nodeIsAtomBox :ast :symtab :ctx :n) then {
+    if (nodeIsAtomBox :symtab :n) then {
         # a by-pointer PARAMETER holds the box through a second pointer, so its
         # value is two derefs away: one for the parameter, one for the box. With
         # one, `b + 0` added to an address and `b == 7` compared one.
@@ -20863,7 +20736,6 @@ bindAliasCType: function {
     ctB8: "\{ct}"
     rbf8: refBorrowCalleeFid :ast :symtab :ctx n: avn
     if rbf8.isZero.not when (fnReturnsRefBorrow
-        :ast
         :symtab
         :ctx
         fid: rbf8
@@ -22622,7 +22494,6 @@ emitWithLocal: function {
     wvC: wv.string
     wrb: refBorrowCalleeFid :ast :symtab :ctx n: (ast.nodes.get i: n.value)
     if wrb.isZero.not when (fnReturnsRefBorrow
-        :ast
         :symtab
         :ctx
         fid: wrb
@@ -23547,8 +23418,7 @@ emitReassignLvalue: function {
         memFp: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child))
         rpnid: interpPartNodeId n: (ast.nodes.get i: n.parent)
         stampTid: stampIdOf :symtab nid: rpnid
-        rsn: regNameOf :symtab tid: stampTid
-        rsc: canonFnId :ast :symtab :ctx tid: stampTid name: rsn.stringView
+        rsc: stampTid
         rsFp: stampTid
         if rsc.isZero.not then rsFp = rsc
         rsFpc: chaseAggregateTypedef :symtab :ctx tid: rsFp
@@ -23935,13 +23805,7 @@ emitMatchStmt: function {
         :tmp
         :buf
     ) then return
-    vtid: (canonTypeId
-        :ast
-        :symtab
-        :ctx
-        tid: (stampIdDeep :symtab n: (ast.nodes.get i: m.subject))
-        name: stn.stringView
-    )
+    vtid: canonTypeId :symtab tid: (stampIdDeep :symtab n: (ast.nodes.get i: m.subject))
     if (matchGenericRoute :ast :symtab :ctx :m :assignTo :ind :tmp :buf) then return
     # a typedef over a union or variant is matched on its base's tag
     vend: typedefChaseTid :symtab tid: vtid
@@ -26252,17 +26116,6 @@ isListReadWalkMember: function {name: StringView} out bool is {
     return (known.contains needle: probe)
 }
 
-# isIntScalarName -- one of the twelve INTEGER scalar names. A counted range
-# counts in an integer induction variable, so a float receiver would truncate
-# silently and a bool one is meaningless -- cTypeOf answers for both, so it
-# cannot be the test. Membership through one string rather than a compare chain,
-# which is the shape A001 exists to discourage.
-isIntScalarName: function {name: StringView} out bool is {
-    if name.length == 0 then return false
-    known: " i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 c8 c32 "
-    probe: " \{name} "
-    return (known.contains needle: probe)
-}
 
 # isCountRangeMemberId -- `times`, by INTERNED ID: the COUNT family, whose
 # receiver is the range's BOUND and whose walk is half-open. Both legs of the
@@ -26411,8 +26264,9 @@ intScalarCTypeOf: function {
     tid: ztypes.tid
 } out String is {
     if tid.isZero then return ""
-    rnm: regNameOf :symtab :tid
-    if (isIntScalarName name: rnm.stringView).not then return ""
+    nk: ztypecheck.numKindOfTid st: symtab :tid
+    if nk.has.not then return ""
+    if (ztypes.isFloatKind k: nk.kind) then return ""
     return (scalarCTypeFor :symtab :tid)
 }
 
@@ -28623,7 +28477,6 @@ emitTailStmt: function {
         {
             wrbT: refBorrowCalleeFid :ast :symtab :ctx n: (ast.nodes.get i: n.value)
             if wrbT.isZero.not when (fnReturnsRefBorrow
-                :ast
                 :symtab
                 :ctx
                 fid: wrbT
@@ -29252,7 +29105,6 @@ isUserClassMonoTid: function {
 # protocols and natives stay by value. A typedef passes as the end of its chain
 # does: a typedef over a class is that class.
 isReftypeParam: function {
-    ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     tid: ztypes.tid
@@ -29261,8 +29113,7 @@ isReftypeParam: function {
     duT: definedInUnitTid :symtab :tid
     isShell: duT.isZero
     if isShell then {
-        rtn0: regNameView :symtab :tid
-        rrid0: canonTypeId :ast :symtab :ctx :tid name: rtn0
+        rrid0: canonTypeId :symtab :tid
         if rrid0.isZero.not then cid = rrid0
     }
     tt: symtab.reg.typetypeOf typeId: cid
@@ -29303,7 +29154,6 @@ unionBorrowsByPtr: function {
 # stored element on a freed pointer). A valtype has no interior -- the copy IS
 # the borrow.
 elemBorrowsByPtr: function {
-    ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     tid: ztypes.tid
@@ -29312,7 +29162,7 @@ elemBorrowsByPtr: function {
     if tid == ctx.strTid then return true
     chasedStrTid: chaseStrTypedef :symtab :ctx :tid
     if chasedStrTid == ctx.strTid then return true
-    return (isReftypeParam :ast :symtab :ctx :tid)
+    return (isReftypeParam :symtab :ctx :tid)
 }
 
 # elemRefByPtr -- a List/ListView element type whose MUTABLE reference is a
@@ -29326,12 +29176,11 @@ elemBorrowsByPtr: function {
 # use" for the declared hash/`==` dispatch, where a record is still passed BY
 # VALUE.
 elemRefByPtr: function {
-    ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     tid: ztypes.tid
 } out bool is {
-    if (elemBorrowsByPtr :ast :symtab :ctx :tid) then return true
+    if (elemBorrowsByPtr :symtab :ctx :tid) then return true
     # a Set or a Map element is already a pointer, so a copy of it IS the reference
     if (isHeapPtrCollection :symtab :ctx :tid) then return false
     ce: chaseAggregateTypedef :symtab :ctx :tid
@@ -29346,13 +29195,12 @@ elemRefByPtr: function {
 # emitted C must agree with whichever compiler read the template), so the
 # lowering flips atomically when `get` moves into emitColGet.
 listGetIsPtr: function {
-    ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     monoId: ztypes.tid
 } out bool is {
     if ctx.colGetFromCode.not then return false
-    return (elemBorrowsByPtr :ast :symtab :ctx tid: (listElemType :symtab :monoId))
+    return (elemBorrowsByPtr :symtab :ctx tid: (listElemType :symtab :monoId))
 }
 
 # isBorrowStringParam -- a non-owned String param (BORROW/LOCK or VIEW), passed
@@ -29610,7 +29458,6 @@ paramTypeIsPointer: function {
     }
     if owns.not when (markedValtypeRefParam :ast :symtab :fid :pname :pid) then return true
     if owns.not when (isReftypeParam
-        :ast
         :symtab
         :ctx
         tid: pid
@@ -29713,7 +29560,6 @@ fnReturnPointerC: function {
         tid: retColId
     ) then out0 = "\{ret}*"
     if (fnReturnsRefBorrow
-        :ast
         :symtab
         :ctx
         :fid
@@ -30003,9 +29849,7 @@ isBoxTid: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is 
 # the address. typeRefC canonicalises before the same question for the same
 # reason.
 nodeIsAtomBox: function {
-    ast: Ast.view
     symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
     n: astnode.view
 } out bool is {
     match (
@@ -30015,8 +29859,7 @@ nodeIsAtomBox: function {
         if (isBoxTid :symtab tid: bxt) then return true
         if bxt.isZero then return false
         bxc: ztypes.tid
-        bxn: regNameView :symtab tid: bxt
-        bxc = canonTypeId :ast :symtab :ctx tid: bxt name: bxn
+        bxc = canonTypeId :symtab tid: bxt
         if bxc.isZero then return false
         return (isBoxTid :symtab tid: bxc)
     } else {
@@ -32450,7 +32293,6 @@ emitReturnCleanup: function {
 # collection typedef destroys as its chased mono; a type with no destructor
 # of its own may still have a canonical one that has.
 takeParamDestroyTid: function {
-    ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     ppid: ztypes.tid
@@ -32458,8 +32300,7 @@ takeParamDestroyTid: function {
     pt: ppid
     puse: chaseAggregateTypedef :symtab :ctx tid: pt
     if (symtab.reg.needsDestructor typeId: puse).not then {
-        ptnm: regNameOf :symtab tid: pt
-        prbn: canonTypeId :ast :symtab :ctx tid: pt name: ptnm.stringView
+        prbn: canonTypeId :symtab tid: pt
         if prbn.isZero.not then puse = prbn
     }
     if (symtab.reg.needsDestructor typeId: puse).not then return ztypes.tid
@@ -32501,7 +32342,7 @@ oweTakeParamFrees: function {
             if ppid == ctx.strTid then {
                 tmp.oweFree name: pmn.copy vid: pmnB
             } else {
-                puse: takeParamDestroyTid :ast :symtab :ctx :ppid
+                puse: takeParamDestroyTid :symtab :ctx :ppid
                 if puse.isZero.not then {
                     pdc: destroyLineC :symtab :ctx tid: puse nm: pmn.stringView ind: "    "
                     tmp.oweList stmt: pdc.take name: pmn.copy vid: pmnB
@@ -32523,7 +32364,6 @@ emitFnBody: function {
     rbt: fnReturnTidOf :symtab tid: fid
     if rbt.isZero then rbt = fnReturnTypeId :ast :symtab :op
     ctx.refBorrowRet = (fnReturnsRefBorrow
-        :ast
         :symtab
         :ctx
         :fid
@@ -33805,15 +33645,13 @@ emitColMethodOnDemand: function {
 # through its address. A collection typedef (Bytes) is destroyed as the
 # collection it wraps, which is the only one with a destructor of its own.
 listElemsDestroyC: function {
-    ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     eid: ztypes.tid
 } out String is {
     ecid: eid
     if (destroyTargetTid :symtab :ctx tid: eid).isZero then {
-        eln: regNameOf :symtab tid: eid
-        rbn: canonTypeId :ast :symtab :ctx tid: eid name: eln.stringView
+        rbn: canonTypeId :symtab tid: eid
         if rbn.isZero.not then ecid = rbn
     }
     edc: destroyLineC :symtab :ctx tid: ecid nm: "p->data[_di]" ind: "        "
@@ -33845,7 +33683,7 @@ emitListMono: function {
     {
         t1: applyTmpl text: raw key: "NAME" val: nm.stringView
         t2: applyTmpl text: t1 key: "ELEM_T" val: ect.stringView
-        delems: listElemsDestroyC :ast :symtab :ctx :eid
+        delems: listElemsDestroyC :symtab :ctx :eid
         t3: applyTmpl text: t2 key: "DESTROY_ELEMS" val: delems.stringView
         lvm: listviewMethods :ctx :symtab :monoId nm: nm.stringView ect: ect.stringView
         t4: applyTmpl text: t3 key: "LISTVIEW_METHODS" val: lvm.stringView
@@ -33914,8 +33752,8 @@ emitListMono: function {
             nm: nm.stringView
             ect: ect.stringView
             kind: "List"
-            ptr: (elemBorrowsByPtr :ast :symtab :ctx tid: eid)
-            mutPtr: (elemRefByPtr :ast :symtab :ctx tid: eid)
+            ptr: (elemBorrowsByPtr :symtab :ctx tid: eid)
+            mutPtr: (elemRefByPtr :symtab :ctx tid: eid)
             hasGet: useGet
             hasMut: useMut
             :buf
@@ -34002,7 +33840,7 @@ emitListContains: function {
         body.append "        { \{ect} _e = _this->data[i]; if ("
         body.append (ctxCname :ctx tid: (fo.or d: ztypes.tid.zero))
         body.append "(&_e, "
-        if (elemBorrowsByPtr :ast :symtab :ctx tid: elem) then body.append "&"
+        if (elemBorrowsByPtr :symtab :ctx tid: elem) then body.append "&"
         body.append "_needle)) return true; }\n"
     } else if (partIsCScalar :symtab tid: elem) when (partCallsWritten :ast :symtab tid: elem
     ).not then {
@@ -34086,7 +33924,7 @@ sortLessC: function {
     rhs: "_b"
     if (symtab.reg.isValtypeOf tid: elem) then {
         owner = ztypecheck.valOpOwner st: symtab tid: elem nameId: zast.wellKnown.slot.wkCompare
-    } else if (elemBorrowsByPtr :ast :symtab :ctx tid: elem) then {
+    } else if (elemBorrowsByPtr :symtab :ctx tid: elem) then {
         rhs = "&_b"
     }
     fo: symtab.typing.declChildOfId parentTypeId: owner nameId: zast.wellKnown.slot.wkCompare
@@ -34465,8 +34303,8 @@ emitListViewMono: function {
             nm: nm.stringView
             ect: ect.stringView
             kind: "ListView"
-            ptr: (elemBorrowsByPtr :ast :symtab :ctx tid: eid)
-            mutPtr: (elemRefByPtr :ast :symtab :ctx tid: eid)
+            ptr: (elemBorrowsByPtr :symtab :ctx tid: eid)
+            mutPtr: (elemRefByPtr :symtab :ctx tid: eid)
             hasGet: true
             hasMut: false
             :buf
@@ -34568,7 +34406,7 @@ emitSpanMono: function {
         nm: nm.stringView
         ect: ect.stringView
         kind: "SpanVal"
-        ptr: (elemBorrowsByPtr :ast :symtab :ctx tid: eid)
+        ptr: (elemBorrowsByPtr :symtab :ctx tid: eid)
         mutPtr: false
         hasGet: true
         hasMut: false
@@ -34949,13 +34787,7 @@ payloadDestructor: function {
         # the same way the List-element destructor does
         pfn: destroyFnC :symtab :ctx tid: co
         if pfn.length > 0 then return pfn
-        rbn: (canonTypeId
-            :ast
-            :symtab
-            :ctx
-            tid: co
-            name: (regNameView :symtab tid: co)
-        )
+        rbn: canonTypeId :symtab tid: co
         if rbn.isZero.not then return (destroyFnC :symtab :ctx tid: rbn)
     } case none then null
     return ""
@@ -35255,7 +35087,7 @@ emitSetMono: function {
         if dh.length > 0 when de.length > 0 then {
             hb: "\{dh}(&_key)"
             hashBody = hb.take
-            rhsPs: elemBorrowsByPtr :ast :symtab :ctx tid: elemTid
+            rhsPs: elemBorrowsByPtr :symtab :ctx tid: elemTid
             rhsAs: "_b".string
             rhsTs: itemT.copy
             if rhsPs then {
@@ -35593,7 +35425,7 @@ emitMapMono: function {
             # the receiver is a pointer either way; the `rhs` PARAMETER follows
             # the key's own calling convention, which is a pointer for a class
             # and a value for a record
-            rhsP: elemBorrowsByPtr :ast :symtab :ctx tid: keyTid
+            rhsP: elemBorrowsByPtr :symtab :ctx tid: keyTid
             rhsA: "_b".string
             rhsT: keyT.copy
             if rhsP then {
@@ -36647,13 +36479,7 @@ maybePreEmitElem: function {
         :symtab
         tid: eid
     ).isZero when snm0.length > 0 then {
-        srid: (canonTypeId
-            :ast
-            :symtab
-            :ctx
-            tid: eid
-            name: snm0.stringView
-        )
+        srid: canonTypeId :symtab tid: eid
         if srid.isZero.not then rid0 = srid
     }
     cid: chaseAggregateTypedef :symtab :ctx tid: rid0
@@ -37458,7 +37284,6 @@ fnptrRetTypeC: function {
         base9 = bs9.take
     }
     if (fnReturnsRefBorrow
-        :ast
         :symtab
         :ctx
         fid: tid
@@ -37588,14 +37413,12 @@ fwdDeclareSpec: function {
 # OR as the return -- lost its `_ft` typedef while the struct field kept using
 # the name, and the C had no such type.
 isComplexFnptrParam: function {
-    ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
     tid: ztypes.tid
 } out bool is {
-    nm: regNameView :symtab :tid
     ct: tid
-    can: canonFnId :ast :symtab :ctx :tid name: nm
+    can: tid
     if can.isZero.not then ct = can
     if (isOrdinalVariant :symtab tid: ct) then return false
     tt: symtab.reg.typetypeOf typeId: ct
@@ -37622,10 +37445,9 @@ emitOneFnptrTypedef: function {
     pIds: ListVal ztypes.tid
     pIdsNm: ListVal zast.nameid
     recFieldIds :symtab :tid ids: pIds nameIds: pIdsNm
-    # A method's `this`/self-typed receiver child is a fresh shell named after
-    # the owner; resolve it to the owner's canonical id so the typedef matches
-    # the method's emitted signature (a by-name canonicalization can land on an
-    # unrelated same-named type, e.g. a stdlib generic template).
+    # A method's `this` receiver is the owner: the typedef takes the owner's id
+    # so it matches the method's emitted signature. Never matched by name, which
+    # can land on an unrelated same-named type (a stdlib generic template).
     ownT: ztypes.tid
     fno: fnOwner.get key: tid
     match (
@@ -37633,19 +37455,13 @@ emitOneFnptrTypedef: function {
     ) case some then {
         ownT = fno
     } case none then null
-    ownNm: regNameOf :symtab tid: ownT
     rIds: ListVal ztypes.tid
     ri: u64
     rn: pIds.length
     for ri < rn loop {
         rpv: pIds.get i: ri
         if ownT.isZero.not then {
-            rtn: regNameOf :symtab tid: rpv
-            isRecv: (
-                ((pIdsNm.get i: ri) == zast.wellKnown.slot.wkThis) or
-                (rtn.stringView == ownNm) or
-                (rpv == ownT)
-            )
+            isRecv: ((pIdsNm.get i: ri) == zast.wellKnown.slot.wkThis) or (rpv == ownT)
             if isRecv then rpv = ownT
         }
         rIds.append rpv
@@ -37674,14 +37490,13 @@ emitOneFnptrTypedef: function {
     for sj < sn loop {
         spid: rIds.get i: sj
         if (isComplexFnptrParam
-            :ast
             :symtab
             :ctx
             tid: spid
         ) then skipIt = true
         sj = sj + 1
     }
-    if srt.isZero.not when (isComplexFnptrParam :ast :symtab :ctx tid: srt) then skipIt = true
+    if srt.isZero.not when (isComplexFnptrParam :symtab :ctx tid: srt) then skipIt = true
     if skipIt then return
     di: u64
     dn: pIds.length
@@ -39190,14 +39005,7 @@ protoParamCtype: function {
     cpid: pid
     pidShell: (definedInUnitTid :symtab tid: pid).isZero
     if pidShell then {
-        pn: regNameOf :symtab tid: pid
-        rcid: (canonTypeId
-            :ast
-            :symtab
-            :ctx
-            tid: pid
-            name: pn.stringView
-        )
+        rcid: canonTypeId :symtab tid: pid
         if rcid.isZero.not then cpid = rcid
     }
     pct: typeRefC :ast :symtab :ctx tid: cpid
@@ -40258,14 +40066,7 @@ wrapperCreateArg: function {
     label: StringView
     ptid: ztypes.tid
 } out String is {
-    prtn: regNameOf :symtab tid: ptid
-    prtid: (canonTypeId
-        :ast
-        :symtab
-        :ctx
-        tid: ptid
-        name: prtn.stringView
-    )
+    prtid: canonTypeId :symtab tid: ptid
     arx579: u64
     for arx579 < call.arguments.count loop {
         aId: zast.kidAt kids: ast.kids span: call.arguments i: arx579
@@ -40531,7 +40332,6 @@ lowerNativeArg: function {
     needAmp: false
     if isTake.not then {
         if (isReftypeParam
-            :ast
             :symtab
             :ctx
             tid: pid
@@ -40922,7 +40722,7 @@ iterCallValueArg: function {
     vbase: argBaseAtom :ast n: vop
     if vbase.length == 0 then return ve
     vbnid: argBaseNodeId :ast n: vop
-    if (isReftypeParam :ast :symtab :ctx tid: (stampIdOf :symtab nid: vbnid)).not then return ve
+    if (isReftypeParam :symtab :ctx tid: (stampIdOf :symtab nid: vbnid)).not then return ve
     valueBaseVid: atomVid :symtab nid: vbnid
     vbr: aliasResolveAt :symtab :ctx nid: vbnid name: vbase vid: valueBaseVid
     vbv: ztypes.vid
@@ -40950,8 +40750,7 @@ emitUserIterCall: function {
     iterId: iterClassWithCall :ast :symtab :ctx :rid0
     if (symtab.reg.typetypeOf typeId: iterId) != ztypes.ztypetype.classType then return ""
     if (originTidOf :symtab tid: iterId).isZero.not then return ""
-    itn: regNameOf :symtab tid: iterId
-    if (canonFnId :ast :symtab :ctx tid: iterId name: itn.stringView).isZero then return ""
+    if iterId.isZero then return ""
     cco: symtab.typing.declChildOfId parentTypeId: iterId nameId: zast.wellKnown.slot.wkCall
     if cco.none then return ""
     callC: ctxCname :ctx tid: cco
@@ -41067,13 +40866,7 @@ dispatchReceiverTid: function {
     if (isDispatchableTid :symtab tid: own) then return own
     rtn0: regNameOf :symtab tid: own
     if rtn0.length == 0 then return own
-    brid: (canonTypeId
-        :ast
-        :symtab
-        :ctx
-        tid: own
-        name: rtn0.stringView
-    )
+    brid: canonTypeId :symtab tid: own
     base: brid
     if (isDispatchableTid :symtab tid: base) then return base
     return own
@@ -41366,13 +41159,9 @@ emitProtocolCreateCall: function {
             ) case some then {
                 fromTid = sio.value
             } case none then {
-                fdn: stampNameDeep :symtab n: (ast.nodes.get i: a.operation)
                 fromTid = (canonTypeId
-                    :ast
                     :symtab
-                    :ctx
                     tid: (stampIdDeep :symtab n: (ast.nodes.get i: a.operation))
-                    name: fdn.stringView
                 )
             }
             if fromTid.isZero then return ""
@@ -42148,13 +41937,11 @@ storedFieldPtrC: function {
 # one holds that value, as the parameter does (passesByValue); a value type's
 # borrowed field is refused before emission.
 borrowedFieldHeldByPointer: function {
-    ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     fid: ztypes.tid
 } out bool is {
-    ftn: regNameOf :symtab tid: fid
-    ftid: canonTypeId :ast :symtab :ctx tid: fid name: ftn.stringView
+    ftid: canonTypeId :symtab tid: fid
     if ftid.isZero then ftid = fid
     # a Map or a Set IS its heap pointer, and a borrowed field holds that
     if (isHeapPtrCollection :symtab :ctx tid: ftid) then return false
@@ -42179,7 +41966,7 @@ storedFieldC: function {
     if (symtab.typing.declIsBorrowedFieldId
         parentTypeId: ownerTid
         nameId: fnameId
-    ) when (borrowedFieldHeldByPointer :ast :symtab :ctx :fid) then {
+    ) when (borrowedFieldHeldByPointer :symtab :ctx :fid) then {
         fctP: (storedFieldPtrC
             :ast
             :symtab
@@ -43888,7 +43675,6 @@ methodReturnC: function {
             tid: retColId
         ) then ret = "\{ret}*"
         if (fnReturnsRefBorrow
-            :ast
             :symtab
             :ctx
             fid: mid
@@ -43918,7 +43704,7 @@ classParamByPointer: function {
 } out bool is {
     pt: pid
     takesArg: paramTakesArg :ast :symtab fid: mid :pname
-    if takesArg.not when (isReftypeParam :ast :symtab :ctx tid: pt) then return true
+    if takesArg.not when (isReftypeParam :symtab :ctx tid: pt) then return true
     if (isBorrowStringParam :ast :symtab :ctx fid: mid :pname pid: pt) then return true
     if (markedValtypeRefParam :ast :symtab fid: mid :pname :pid) then return true
     if (isListPtrParam :ast :symtab :ctx fid: mid :pname tid: pt) then return true
