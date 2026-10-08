@@ -752,8 +752,11 @@ convIsLossy: function {srcK: ztypes.numkind dstK: ztypes.numkind} out bool is {
 # convErr -- one converror arm of a checked conversion's result, as the C that
 # tags `_r` with it. The two reasons a conversion can fail are the whole
 # vocabulary here: the value did not fit, or it fitted and lost bits doing so.
-convErr: function {reason: StringView} out String is {
-    e: "_r.tag = @ERRTAG@; _r.data.err@TAG_converror@ = Z_CONVERROR_TAG_\{reason};"
+convErr: function {
+    # the converror arm, as declared
+    arm: StringView
+} out String is {
+    e: "_r.tag = @ERRTAG@; _r.data.err@TAG_converror@ = @ARM_converror.\{arm}@;"
     return e
 }
 
@@ -763,8 +766,8 @@ convErr: function {reason: StringView} out String is {
 convFloatToFloat: function {scT: StringView tcT: StringView} out String is {
     okF: "_r.tag = @OKTAG@; _r.data.ok = _f;"
     b: "\{tcT} _f = (\{tcT})_v; if (isinf(_f) && !isinf(_v)) { \{(convErr
-        reason: "OUTOFRANGE"
-    )} } else if ((\{scT})_f != _v) { \{convErr reason: "PRECISIONLOSS"} } else { \{okF} }"
+        arm: "outOfRange"
+    )} } else if ((\{scT})_f != _v) { \{convErr arm: "precisionLoss"} } else { \{okF} }"
     return b
 }
 
@@ -797,9 +800,9 @@ convFloatToInt: function {
 } out String is {
     inRange: convFloatRange :dstK
     b: "if (!\{inRange}) { \{(convErr
-        reason: "OUTOFRANGE"
+        arm: "outOfRange"
     )} } else if ((\{scT}) \{trunc} != _v) { \{(convErr
-        reason: "PRECISIONLOSS"
+        arm: "precisionLoss"
     )} } else { \{okSet} }"
     return b
 }
@@ -837,12 +840,12 @@ convIntToFloat: function {
     magExpr: convMagExpr signed: ssig :wide
     if wide then {
         w: "z_u128 _mag = \{magExpr}; uint64_t _mh = z_u128_hi(_mag); uint64_t _ml = z_u128_lo(_mag); int _bl = _mh ? (128 - __builtin_clzll(_mh)) : (_ml ? 64 - __builtin_clzll(_ml) : 0); int _tz = _ml ? __builtin_ctzll(_ml) : (_mh ? 64 + __builtin_ctzll(_mh) : 0); if ((_mh == 0 && _ml == 0) || ((_bl - _tz) <= \{p}\{rangeAnd})) { \{okSet} } else { \{(convErr
-            reason: "PRECISIONLOSS"
+            arm: "precisionLoss"
         )} }"
         return w
     }
     n: "uint64_t _mag = \{magExpr}; if (_v == 0 || ((64 - __builtin_clzll(_mag) - __builtin_ctzll(_mag)) <= \{p}\{rangeAnd})) { \{okSet} } else { \{(convErr
-        reason: "PRECISIONLOSS"
+        arm: "precisionLoss"
     )} }"
     return n
 }
@@ -1015,9 +1018,9 @@ convFloatToHalf: function {srcK: ztypes.numkind scT: StringView} out String is {
     if (kindMantissa k: srcK) == 24 then from = "z_f16_from_f32"
     if (kindMantissa k: srcK) == 113 then from = "z_f16_from_f128"
     b: "z_f16 _f = \{from}(_v); if (isinf(z_f16_to_f32(_f)) && !isinf(_v)) { \{(convErr
-        reason: "OUTOFRANGE"
+        arm: "outOfRange"
     )} } else if ((\{scT}) z_f16_to_f32(_f) != _v) { \{(convErr
-        reason: "PRECISIONLOSS"
+        arm: "precisionLoss"
     )} } else { _r.tag = @OKTAG@; _r.data.ok = _f; }"
     return b
 }
@@ -1048,7 +1051,7 @@ convIntToInt: function {srcK: ztypes.numkind dstK: ztypes.numkind okSet: StringV
             needsHi: (convNeedsHi :ssig :dsig :sbits :dbits)
         )
     }
-    b: "if (\{cond}) { \{convErr reason: "OUTOFRANGE"} } else { \{okSet} }"
+    b: "if (\{cond}) { \{convErr arm: "outOfRange"} } else { \{okSet} }"
     return b
 }
 
@@ -35342,9 +35345,7 @@ emitSetMono: function {
         nameId: zast.wellKnown.slot.wkCall
     )
     if ovId.isZero then return
-    ovName: regNameOf :symtab tid: ovId
     ov: cbaseNoPrefix :ctx tid: ovId
-    ovu: cUpperOf text: ovName.stringView
     si: cbaseNoPrefix :ctx tid: siId
     hashBody: setHashBody kind: ekind fast: ctx.fastHash
     eqBody: setEqBody kind: ekind
@@ -35427,8 +35428,7 @@ emitSetMono: function {
         t6b: applyTmpl text: t6 key: "FREE_ITEM_DUP" val: freeItemDup.stringView
         t6c: applyTmpl text: t6b key: "FREE_ITEM_DEL" val: freeItemDel.stringView
         t7: applyTmpl text: t6c key: "OPTIONVIEW" val: ov.stringView
-        t8a: applyTmpl text: t7 key: "OPTIONVIEW_TAG" val: ovu.stringView
-        t8: applyOptionTags :ast :symtab text: t8a key: "OPTIONVIEW" tid: ovId
+        t8: applyOptionTags :ast :symtab text: t7 key: "OPTIONVIEW" tid: ovId
         t: applyTmpl text: t8 key: "SETITER" val: si.stringView
         buf.append t
         buf.append "\n"
@@ -35542,14 +35542,12 @@ emitMapIters: function {
         nameId: zast.wellKnown.slot.wkCall
     )
     if ovkId.isZero then return
-    ovkName: regNameOf :symtab tid: ovkId
     oveId: (monoMethodReturn
         :symtab
         monoId: miiId
         nameId: zast.wellKnown.slot.wkCall
     )
     if oveId.isZero then return
-    oveName: regNameOf :symtab tid: oveId
     meId: ztypes.tid
     meo: (symtab.typing.declChildOfId
         parentTypeId: oveId
@@ -35565,9 +35563,7 @@ emitMapIters: function {
     mii: cbaseNoPrefix :ctx tid: miiId
     me: cbaseNoPrefix :ctx tid: meId
     ovk: cbaseNoPrefix :ctx tid: ovkId
-    ovku: cUpperOf text: ovkName.stringView
     ove: cbaseNoPrefix :ctx tid: oveId
-    oveu: cUpperOf text: oveName.stringView
     pi: "\{runtimeDir}/z_MapIter.c.tmpl"
     rawi: readTemplateCached :ctx path: pi.stringView
     if rawi.length > 0 then {
@@ -35576,13 +35572,11 @@ emitMapIters: function {
         i3: applyTmpl text: i2 key: "VAL_T" val: valT
         i4: applyTmpl text: i3 key: "MAPKEYITER" val: mki.stringView
         i5: applyTmpl text: i4 key: "OPTIONVIEW_K" val: ovk.stringView
-        i6a: applyTmpl text: i5 key: "OPTIONVIEW_K_TAG" val: ovku.stringView
-        i6: applyOptionTags :ast :symtab text: i6a key: "OPTIONVIEW_K" tid: ovkId
+        i6: applyOptionTags :ast :symtab text: i5 key: "OPTIONVIEW_K" tid: ovkId
         i7: applyTmpl text: i6 key: "MAPENTRY" val: me.stringView
         i8: applyTmpl text: i7 key: "MAPITEMITER" val: mii.stringView
         i: applyTmpl text: i8 key: "OPTIONVIEW_ENTRY" val: ove.stringView
-        i10a: applyTmpl text: i key: "OPTIONVIEW_ENTRY_TAG" val: oveu.stringView
-        i10: applyOptionTags :ast :symtab text: i10a key: "OPTIONVIEW_ENTRY" tid: oveId
+        i10: applyOptionTags :ast :symtab text: i key: "OPTIONVIEW_ENTRY" tid: oveId
         buf.append i10
         buf.append "\n"
     }
@@ -35670,11 +35664,9 @@ emitMapMono: function {
         ovId = symtab.reg.returnTypeOf tid: go
     } case none then null
     if ovId.isZero then return
-    ovName: regNameOf :symtab tid: ovId
     valTid: mapValType :symtab :monoId
     valT: cTypeForNameTid :ast :symtab :ctx tid: valTid
     ov: cbaseNoPrefix :ctx tid: ovId
-    ovu: cUpperOf text: ovName.stringView
     ovSome: tagConstOf :ast :symtab tid: ovId armId: zast.wellKnown.slot.wkSome
     ovNone: tagConstOf :ast :symtab tid: ovId armId: zast.wellKnown.slot.wkNone
     keyTid: mapKeyType :symtab :monoId
@@ -35829,8 +35821,7 @@ emitMapMono: function {
         t7: applyTmpl text: t6 key: "DESTROY_ENTRIES" val: destroyEntries.stringView
         t8: applyTmpl text: t7 key: "FREE_KEY_DUP" val: freeKeyDup.stringView
         t10: applyTmpl text: t8 key: "OPTIONVAL" val: ov.stringView
-        t11: applyTmpl text: t10 key: "OPTIONVAL_TAG" val: ovu.stringView
-        t12: applyTmpl text: t11 key: "GET_BODY" val: getBody.stringView
+        t12: applyTmpl text: t10 key: "GET_BODY" val: getBody.stringView
         t13: applyTmpl text: t12 key: "FREE_VAL_DUP" val: freeValDup.stringView
         t14: applyTmpl text: t13 key: "REMOVE_WRAP" val: rmWrap.stringView
         t15: applyTmpl text: t14 key: "REMOVE_BODY" val: removeBody.stringView
@@ -35910,9 +35901,7 @@ emitIdMapMono: function {
         ovId = symtab.reg.returnTypeOf tid: go
     } case none then null
     if ovId.isZero then return
-    ovName: regNameOf :symtab tid: ovId
     ov: cbaseNoPrefix :ctx tid: ovId
-    ovu: cUpperOf text: ovName.stringView
     ovSome: tagConstOf :ast :symtab tid: ovId armId: zast.wellKnown.slot.wkSome
     ovNone: tagConstOf :ast :symtab tid: ovId armId: zast.wellKnown.slot.wkNone
     valTid: mapValType :symtab :monoId
@@ -35957,8 +35946,7 @@ emitIdMapMono: function {
     t5: applyTmpl text: t4 key: "DESTROY_ENTRIES" val: destroyEntries.stringView
     t6: applyTmpl text: t5 key: "FREE_VAL_DUP" val: freeValDup.stringView
     t7: applyTmpl text: t6 key: "OPTIONVAL" val: ov.stringView
-    t8: applyTmpl text: t7 key: "OPTIONVAL_TAG" val: ovu.stringView
-    t: applyTmpl text: t8 key: "GET_BODY" val: getBody.stringView
+    t: applyTmpl text: t7 key: "GET_BODY" val: getBody.stringView
     buf.append t
     buf.append "\n"
     (emitIdMapGetMut
@@ -36018,17 +36006,14 @@ emitIdMapGetMut: function {
         nameId: zast.wellKnown.slot.wkGetMut
     )
     if gmId.isZero then return
-    gmName: regNameOf :symtab tid: gmId
     gmv: cbaseNoPrefix :ctx tid: gmId
-    gmu: cUpperOf text: gmName.stringView
     pm: "\{runtimeDir}/z_IdMapMut.c.tmpl"
     rawm: readTemplateCached :ctx path: pm.stringView
     if rawm.length == 0 then return
     m1: applyTmpl text: rawm key: "NAME" val: nm
     m2: applyTmpl text: m1 key: "KEY_T" val: keyT
     m3: applyTmpl text: m2 key: "OPTIONVIEW_V" val: gmv.stringView
-    m4a: applyTmpl text: m3 key: "OPTIONVIEW_V_TAG" val: gmu.stringView
-    m4: applyOptionTags :ast :symtab text: m4a key: "OPTIONVIEW_V" tid: gmId
+    m4: applyOptionTags :ast :symtab text: m3 key: "OPTIONVIEW_V" tid: gmId
     buf.append m4
     buf.append "\n"
 }
@@ -36058,7 +36043,6 @@ emitIdMapIters: function {
         nameId: zast.wellKnown.slot.wkCall
     )
     if oveId.isZero then return
-    oveName: regNameOf :symtab tid: oveId
     meId: ztypes.tid
     {
         meo: (symtab.typing.declChildOfId
@@ -36075,7 +36059,6 @@ emitIdMapIters: function {
     mii: cbaseNoPrefix :ctx tid: miiId
     me: cbaseNoPrefix :ctx tid: meId
     ove: cbaseNoPrefix :ctx tid: oveId
-    oveu: cUpperOf text: oveName.stringView
     pi: "\{runtimeDir}/z_IdMapIter.c.tmpl"
     rawi: readTemplateCached :ctx path: pi.stringView
     if rawi.length == 0 then return
@@ -36085,8 +36068,7 @@ emitIdMapIters: function {
     j4: applyTmpl text: j3 key: "IDMAPITEMITER" val: mii.stringView
     j5: applyTmpl text: j4 key: "IDMAPENTRY" val: me.stringView
     j6: applyTmpl text: j5 key: "OPTIONVIEW_ENTRY" val: ove.stringView
-    j7a: applyTmpl text: j6 key: "OPTIONVIEW_ENTRY_TAG" val: oveu.stringView
-    j7: applyOptionTags :ast :symtab text: j7a key: "OPTIONVIEW_ENTRY" tid: oveId
+    j7: applyOptionTags :ast :symtab text: j6 key: "OPTIONVIEW_ENTRY" tid: oveId
     buf.append j7
     buf.append "\n"
 }
@@ -36119,9 +36101,7 @@ emitIdSetMono: function {
         nameId: zast.wellKnown.slot.wkCall
     )
     if ovId.isZero then return
-    ovName: regNameOf :symtab tid: ovId
     ov: cbaseNoPrefix :ctx tid: ovId
-    ovu: cUpperOf text: ovName.stringView
     si: cbaseNoPrefix :ctx tid: siId
     p: "\{runtimeDir}/z_IdSet.c.tmpl"
     raw: readTemplateCached :ctx path: p.stringView
@@ -36131,8 +36111,7 @@ emitIdSetMono: function {
     t3: applyTmpl text: t2 key: "ITEM_T" val: itemT.stringView
     t4: applyTmpl text: t3 key: "IDSETITER" val: si.stringView
     t5: applyTmpl text: t4 key: "OPTIONVIEW" val: ov.stringView
-    t6a: applyTmpl text: t5 key: "OPTIONVIEW_TAG" val: ovu.stringView
-    t6: applyOptionTags :ast :symtab text: t6a key: "OPTIONVIEW" tid: ovId
+    t6: applyOptionTags :ast :symtab text: t5 key: "OPTIONVIEW" tid: ovId
     buf.append t6
     buf.append "\n"
     # IdSet is one form only, so this writes for every instance that calls it
@@ -36299,8 +36278,8 @@ ioCanonCnameUncached: function {
 # loadIoFragment -- read an io/cli runtime `.inc` and fill the `z_@Name@`
 # holes it spells. The holes found in the file ARE the demand: each name
 # resolves through StringView/String or the canon path, and a name that
-# resolves to nothing is fatal. Tags (Z_IOERROR_TAG_*) are name-based and
-# already match.
+# resolves to nothing is fatal. A tag constant is an `@ARM_<canon>.<arm>@` hole,
+# which fillHolesForCtx binds.
 loadIoFragment: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view

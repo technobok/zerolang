@@ -16,7 +16,7 @@ static z_@Result_Conn_IoError@_t z_net_connect(uint16_t port) {
             z_@Conn@_t* boxed = (z_@Conn@_t*)z_xmalloc(sizeof(z_@Conn@_t));
             boxed->fd = (int32_t)fd;
             boxed->closed = false;
-            result.tag = Z_RESULT_CONN_IOERROR_TAG_OK;
+            result.tag = @ARM_Result_Conn_IoError.ok@;
             result.data = boxed;
             return result;
         }
@@ -25,7 +25,7 @@ static z_@Result_Conn_IoError@_t z_net_connect(uint16_t port) {
     if (fd >= 0) close(fd);
     z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
     *boxed = z_io_errno_to_IoError(e);
-    result.tag = Z_RESULT_CONN_IOERROR_TAG_ERR;
+    result.tag = @ARM_Result_Conn_IoError.err@;
     result.data = boxed;
     return result;
 }

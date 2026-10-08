@@ -26,7 +26,7 @@ static z_@ResultVR_u64_IoError@_t z_@BufReader@_read(
         z_@ResultVR_u64_IoError@_t rr = self->source.vtable->read(
             self->source.data, &self->buf, self->cap
         );
-        if (rr.tag != Z_RESULTVR_U64_IOERROR_TAG_OK) return rr;
+        if (rr.tag != @ARM_ResultVR_u64_IoError.ok@) return rr;
         available = self->buf.length;
         if (available == 0) return z_io_u64_ok(0);
     }

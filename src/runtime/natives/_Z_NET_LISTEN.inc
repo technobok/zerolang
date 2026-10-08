@@ -6,7 +6,7 @@ static z_@Result_Listener_IoError@_t z_net_listen(uint16_t port) {
     if (fd < 0) {
         z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
         *boxed = z_io_errno_to_IoError(errno);
-        result.tag = Z_RESULT_LISTENER_IOERROR_TAG_ERR;
+        result.tag = @ARM_Result_Listener_IoError.err@;
         result.data = boxed;
         return result;
     }
@@ -21,14 +21,14 @@ static z_@Result_Listener_IoError@_t z_net_listen(uint16_t port) {
         close(fd);
         z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
         *boxed = z_io_errno_to_IoError(e);
-        result.tag = Z_RESULT_LISTENER_IOERROR_TAG_ERR;
+        result.tag = @ARM_Result_Listener_IoError.err@;
         result.data = boxed;
         return result;
     }
     z_@Listener@_t* boxed = (z_@Listener@_t*)z_xmalloc(sizeof(z_@Listener@_t));
     boxed->fd = (int32_t)fd;
     boxed->closed = false;
-    result.tag = Z_RESULT_LISTENER_IOERROR_TAG_OK;
+    result.tag = @ARM_Result_Listener_IoError.ok@;
     result.data = boxed;
     return result;
 }

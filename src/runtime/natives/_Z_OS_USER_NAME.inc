@@ -15,7 +15,7 @@ static z_@Result_String_IoError@_t z_os_userName(void) {
             z_@String@_t* boxed = (z_@String@_t*)z_xmalloc(sizeof(z_@String@_t));
             *boxed = z_@String@_new(pwd.pw_name);
             free(buf);
-            out.tag = Z_RESULT_STRING_IOERROR_TAG_OK;
+            out.tag = @ARM_Result_String_IoError.ok@;
             out.data = boxed;
             return out;
         }
@@ -27,12 +27,12 @@ static z_@Result_String_IoError@_t z_os_userName(void) {
         int e = (rc == 0) ? ENOENT : rc;
         z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
         *boxed = z_io_errno_to_IoError(e);
-        out.tag = Z_RESULT_STRING_IOERROR_TAG_ERR;
+        out.tag = @ARM_Result_String_IoError.err@;
         out.data = boxed;
         return out;
     }
     /* unreachable */
-    out.tag = Z_RESULT_STRING_IOERROR_TAG_ERR;
+    out.tag = @ARM_Result_String_IoError.err@;
     out.data = NULL;
     return out;
 }

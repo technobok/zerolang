@@ -2471,7 +2471,7 @@ perf: $(PERFBIN)
 #
 # +2 ztypecheck exports envLookup / scopeFor / unitdefNodeId for zls's
 # shadow-aware hover: 0 behaviour, +2 source (ab.sh).
-ALLOC_BASELINE := 2186985
+ALLOC_BASELINE := 2190895
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -2627,7 +2627,7 @@ emitter-guard:
 	chk "resolveTypeIdByName" "$$e3" 15; \
 	chk "userFnId" "$$e4" 18; \
 	chk "childOwnershipText" "$$e5" 0; \
-	chk "regNameOf" "$$e6" 37; \
+	chk "regNameOf" "$$e6" 29; \
 	chk "mangleVarName (both inside varCName)" "$$e7" 2; \
 	chk "io.readText" "$$e8" 3; \
 	chk "monoOriginName" "$$e9" 0; \
@@ -4130,7 +4130,9 @@ clean:
 # from the declarations rather than a list, so a new fragment-backed type is
 # legal the moment it is declared. Leg 4: every `@ARM_<canon>.<arm>@` hole (a
 # tag constant, named by its type and arm) names a known canon, and an arm the
-# canon's declaration -- its template's, for an instance -- declares.
+# canon's declaration -- its template's, for an instance -- declares; and no
+# fragment spells a tag constant (`Z_..._TAG_...`) literally, the emitter's
+# spelling being the emitter's to choose.
 NATIVE_GUARD_EXCEPTIONS := io.print io.stdin io.stdout io.stderr os.env net.pollReadable
 # reached by something other than a per-member demand: the statement-special and
 # the three streams have no fragment of their own, and os.args is a bundle its
@@ -4183,6 +4185,11 @@ native-guard:
 	      *) echo "native-guard: $$f spells hole @$$h@, which names no known canon (declare the type, add its natives.tbl canon row, or bind it at the loader)"; fail=1;; \
 	    esac; \
 	  done; \
+	done; \
+	for f in src/runtime/natives/*.inc src/runtime/*.inc src/runtime/*.c.tmpl src/runtime/*.tbl; do \
+	  if grep -qE 'Z_[A-Z0-9_]+_TAG_' $$f; then \
+	    echo "native-guard: $$f spells a tag constant literally; name it @ARM_<canon>.<arm>@ (or @@<KEY>_SOME@@ in a template)"; fail=1; \
+	  fi; \
 	done; \
 	na=0; \
 	for f in src/runtime/natives/*.inc src/runtime/*.inc src/runtime/*.c.tmpl src/runtime/*.tbl; do \

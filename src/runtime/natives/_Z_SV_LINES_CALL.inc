@@ -2,7 +2,7 @@ static z_@Option_StringView@_t z_@LinesIter@_call(z_@LinesIter@_t* s);
 static z_@Option_StringView@_t z_@LinesIter@_call(z_@LinesIter@_t* s) {
     z_@Option_StringView@_t out = {0};
     if (s->done) {
-        out.tag = Z_OPTION_STRINGVIEW_TAG_NONE;
+        out.tag = @ARM_Option_StringView.none@;
         return out;
     }
     const char* start = s->src + s->cursor;
@@ -21,7 +21,7 @@ static z_@Option_StringView@_t z_@LinesIter@_call(z_@LinesIter@_t* s) {
         s->cursor += i + 1;
         if (s->cursor >= s->src_len) s->done = true;
     }
-    out.tag = Z_OPTION_STRINGVIEW_TAG_SOME;
+    out.tag = @ARM_Option_StringView.some@;
     out.data = boxed;
     return out;
 }

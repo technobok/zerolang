@@ -22,20 +22,20 @@ static z_@resultval_i64_parseerror@_t z_@StringView@_parseI64(const z_@StringVie
     if (acc > bound) goto overflow;
     int64_t v = neg ? -(int64_t)acc : (int64_t)acc;
     if (neg && acc == ((uint64_t)1 << 63)) v = INT64_MIN;
-    out.tag = Z_RESULTVAL_I64_PARSEERROR_TAG_OK;
+    out.tag = @ARM_resultval_i64_parseerror.ok@;
     out.data.ok = v;
     return out;
 empty:
-    out.tag = Z_RESULTVAL_I64_PARSEERROR_TAG_ERR;
-    out.data.err@TAG_parseerror@ = Z_PARSEERROR_TAG_EMPTY;
+    out.tag = @ARM_resultval_i64_parseerror.err@;
+    out.data.err@TAG_parseerror@ = @ARM_parseerror.empty@;
     return out;
 invalid:
-    out.tag = Z_RESULTVAL_I64_PARSEERROR_TAG_ERR;
-    out.data.err@TAG_parseerror@ = Z_PARSEERROR_TAG_INVALIDDIGIT;
+    out.tag = @ARM_resultval_i64_parseerror.err@;
+    out.data.err@TAG_parseerror@ = @ARM_parseerror.invalidDigit@;
     return out;
 overflow:
-    out.tag = Z_RESULTVAL_I64_PARSEERROR_TAG_ERR;
-    out.data.err@TAG_parseerror@ = Z_PARSEERROR_TAG_OVERFLOW;
+    out.tag = @ARM_resultval_i64_parseerror.err@;
+    out.data.err@TAG_parseerror@ = @ARM_parseerror.overflow@;
     return out;
 }
 

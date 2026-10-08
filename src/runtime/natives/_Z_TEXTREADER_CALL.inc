@@ -7,7 +7,7 @@ static z_@Option_String@_t z_@TextReader@_call(z_@TextReader@_t* self);
 static z_@Option_String@_t z_@TextReader@_call(z_@TextReader@_t* self) {
     z_@Option_String@_t out = {0};
     z_@Result_String_IoError@_t rr = z_@TextReader@_readLine(self);
-    if (rr.tag == Z_RESULT_STRING_IOERROR_TAG_OK) {
+    if (rr.tag == @ARM_Result_String_IoError.ok@) {
         /* Move the heap-owned string out of rr's ok box into a
            fresh some box; free the source box without calling
            the string destructor (ownership moved). */
@@ -15,7 +15,7 @@ static z_@Option_String@_t z_@TextReader@_call(z_@TextReader@_t* self) {
         z_@String@_t* dst = (z_@String@_t*)z_xmalloc(sizeof(z_@String@_t));
         *dst = *src;
         free(src);
-        out.tag = Z_OPTION_STRING_TAG_SOME;
+        out.tag = @ARM_Option_String.some@;
         out.data = dst;
         return out;
     }
@@ -25,7 +25,7 @@ static z_@Option_String@_t z_@TextReader@_call(z_@TextReader@_t* self) {
         z_@IoError@_destroy((z_@IoError@_t*)rr.data);
         free(rr.data);
     }
-    out.tag = Z_OPTION_STRING_TAG_NONE;
+    out.tag = @ARM_Option_String.none@;
     return out;
 }
 

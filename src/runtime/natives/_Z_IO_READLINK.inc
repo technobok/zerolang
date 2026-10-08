@@ -21,7 +21,7 @@ static z_@Result_String_IoError@_t z_io_readlink(z_@StringView@_t path) {
             z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
             if (e == EINVAL) {
                 z_@IoError@_t v = {0};
-                v.tag = Z_IOERROR_TAG_INVALIDPATH;
+                v.tag = @ARM_IoError.invalidpath@;
                 z_@String@_t* sp = (z_@String@_t*)z_xmalloc(sizeof(z_@String@_t));
                 *sp = z_@String@_new("not a symbolic link");
                 v.data = sp;
@@ -29,7 +29,7 @@ static z_@Result_String_IoError@_t z_io_readlink(z_@StringView@_t path) {
             } else {
                 *boxed = z_io_errno_to_IoError(e);
             }
-            result.tag = Z_RESULT_STRING_IOERROR_TAG_ERR;
+            result.tag = @ARM_Result_String_IoError.err@;
             result.data = boxed;
             return result;
         }
@@ -47,7 +47,7 @@ static z_@Result_String_IoError@_t z_io_readlink(z_@StringView@_t path) {
     free(path_cstr);
     z_@String@_t* boxed = (z_@String@_t*)z_xmalloc(sizeof(z_@String@_t));
     *boxed = target;
-    result.tag = Z_RESULT_STRING_IOERROR_TAG_OK;
+    result.tag = @ARM_Result_String_IoError.ok@;
     result.data = boxed;
     return result;
 }

@@ -17,11 +17,11 @@ static z_@Result_null_IoError@_t z_os_setEnv(
     if (rc != 0) {
         z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
         *boxed = z_io_errno_to_IoError(e);
-        out.tag = Z_RESULT_NULL_IOERROR_TAG_ERR;
+        out.tag = @ARM_Result_null_IoError.err@;
         out.data = boxed;
         return out;
     }
-    out.tag = Z_RESULT_NULL_IOERROR_TAG_OK;
+    out.tag = @ARM_Result_null_IoError.ok@;
     out.data = NULL;
     return out;
 }

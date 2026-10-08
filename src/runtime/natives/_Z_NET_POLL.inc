@@ -7,11 +7,11 @@ static z_@ResultVR_bool_IoError@_t z_net_pollReadable(int32_t fd, int32_t timeou
     if (rc < 0 && errno != EINTR) {
         z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
         *boxed = z_io_errno_to_IoError(errno);
-        result.tag = Z_RESULTVR_BOOL_IOERROR_TAG_ERR;
+        result.tag = @ARM_ResultVR_bool_IoError.err@;
         result.data = boxed;
         return result;
     }
-    result.tag = Z_RESULTVR_BOOL_IOERROR_TAG_OK;
+    result.tag = @ARM_ResultVR_bool_IoError.ok@;
     result.in_ok = (rc > 0) && (p.revents & (POLLIN | POLLHUP));
     return result;
 }

@@ -7,13 +7,13 @@ static z_@Option_StringView@_t z_@StringView@_stripSuffix(
         || (s->size > 0
             && memcmp(self->data + (self->size - s->size),
                       s->data, s->size) != 0)) {
-        out.tag = Z_OPTION_STRINGVIEW_TAG_NONE;
+        out.tag = @ARM_Option_StringView.none@;
         return out;
     }
     z_@StringView@_t* boxed = (z_@StringView@_t*)z_xmalloc(sizeof(z_@StringView@_t));
     boxed->data = self->data;
     boxed->size = self->size - s->size;
-    out.tag = Z_OPTION_STRINGVIEW_TAG_SOME;
+    out.tag = @ARM_Option_StringView.some@;
     out.data = boxed;
     return out;
 }

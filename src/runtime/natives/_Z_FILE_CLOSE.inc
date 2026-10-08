@@ -4,7 +4,7 @@ static z_@Result_null_IoError@_t z_@File@_close(z_@File@_t* p);
 static z_@Result_null_IoError@_t z_@File@_close(z_@File@_t* p) {
     z_@Result_null_IoError@_t result = {0};
     if (!p || p->closed) {
-        result.tag = Z_RESULT_NULL_IOERROR_TAG_OK;
+        result.tag = @ARM_Result_null_IoError.ok@;
         result.data = NULL;
         return result;
     }

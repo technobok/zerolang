@@ -29,7 +29,7 @@ static z_@Result_Parsed_CliError@_t z_cli_parse(z_@Spec@_t* spec, z_@List_String
                 if (eq) {
                     z_@Parsed@_destroy(parsed); free(parsed); z_@List_String@_destroy(&args);
                     return z_cli_wrap_err(
-                        z_cli_err(Z_CLIERROR_TAG_UNEXPECTEDARG,
+                        z_cli_err(@ARM_CliError.unexpectedArg@,
                                   a->data, a->size));
                 }
                 z_@List_String@_append(
@@ -53,7 +53,7 @@ static z_@Result_Parsed_CliError@_t z_cli_parse(z_@Spec@_t* spec, z_@List_String
                         z_@String@_free(&key);
                         z_@Parsed@_destroy(parsed); free(parsed); z_@List_String@_destroy(&args);
                         return z_cli_wrap_err(
-                            z_cli_err(Z_CLIERROR_TAG_MISSINGVALUE,
+                            z_cli_err(@ARM_CliError.missingValue@,
                                       a->data, a->size));
                     }
                     val = z_@String@_new(args.data[i + 1].data);
@@ -66,7 +66,7 @@ static z_@Result_Parsed_CliError@_t z_cli_parse(z_@Spec@_t* spec, z_@List_String
             }
             z_@Parsed@_destroy(parsed); free(parsed); z_@List_String@_destroy(&args);
             return z_cli_wrap_err(
-                z_cli_err(Z_CLIERROR_TAG_UNKNOWNFLAG,
+                z_cli_err(@ARM_CliError.unknownFlag@,
                           a->data, a->size));
         }
         /* short form `-x[yz...]` */
@@ -87,7 +87,7 @@ static z_@Result_Parsed_CliError@_t z_cli_parse(z_@Spec@_t* spec, z_@List_String
                 if (i + 1 >= args.length) {
                     z_@Parsed@_destroy(parsed); free(parsed); z_@List_String@_destroy(&args);
                     return z_cli_wrap_err(
-                        z_cli_err(Z_CLIERROR_TAG_MISSINGVALUE,
+                        z_cli_err(@ARM_CliError.missingValue@,
                                   a->data, a->size));
                 }
                 z_@String@_t key = z_@String@_new(spec->options.data[oi].name.data);
@@ -130,7 +130,7 @@ static z_@Result_Parsed_CliError@_t z_cli_parse(z_@Spec@_t* spec, z_@List_String
                 if (!ok) {
                     z_@Parsed@_destroy(parsed); free(parsed); z_@List_String@_destroy(&args);
                     return z_cli_wrap_err(
-                        z_cli_err(Z_CLIERROR_TAG_UNKNOWNFLAG,
+                        z_cli_err(@ARM_CliError.unknownFlag@,
                                   a->data, a->size));
                 }
                 i++;
@@ -163,11 +163,11 @@ static z_@Result_Parsed_CliError@_t z_cli_parse(z_@Spec@_t* spec, z_@List_String
         if (!spec->options.data[k].required) continue;
         z_@OptionView_String@_t v = z_@Map_String_String@_get(
             parsed->optionValues, &spec->options.data[k].name);
-        bool missing = (v.tag == Z_OPTIONVIEW_STRING_TAG_NONE);
+        bool missing = (v.tag == @ARM_OptionView_String.none@);
         if (missing) {
             z_@Parsed@_destroy(parsed); free(parsed);
             return z_cli_wrap_err(
-                z_cli_err(Z_CLIERROR_TAG_MISSINGREQUIRED,
+                z_cli_err(@ARM_CliError.missingRequired@,
                           spec->options.data[k].name.data,
                           spec->options.data[k].name.size));
         }
@@ -176,17 +176,17 @@ static z_@Result_Parsed_CliError@_t z_cli_parse(z_@Spec@_t* spec, z_@List_String
         if (!spec->positionals.data[k].required) continue;
         z_@OptionView_String@_t v = z_@Map_String_String@_get(
             parsed->positionalValues, &spec->positionals.data[k].name);
-        bool missing = (v.tag == Z_OPTIONVIEW_STRING_TAG_NONE);
+        bool missing = (v.tag == @ARM_OptionView_String.none@);
         if (missing) {
             z_@Parsed@_destroy(parsed); free(parsed);
             return z_cli_wrap_err(
-                z_cli_err(Z_CLIERROR_TAG_MISSINGREQUIRED,
+                z_cli_err(@ARM_CliError.missingRequired@,
                           spec->positionals.data[k].name.data,
                           spec->positionals.data[k].name.size));
         }
     }
     z_@Result_Parsed_CliError@_t r = {0};
-    r.tag = Z_RESULT_PARSED_CLIERROR_TAG_OK;
+    r.tag = @ARM_Result_Parsed_CliError.ok@;
     r.data = parsed;
     return r;
 }

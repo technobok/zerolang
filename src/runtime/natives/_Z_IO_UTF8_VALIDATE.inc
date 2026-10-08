@@ -44,7 +44,7 @@ static z_@Result_String_IoError@_t z_io_String_err_arm(z_@IoError@_tag_t tag) {
     z_@IoError@_t e = {0};
     e.tag = tag;
     *boxed = e;
-    result.tag = Z_RESULT_STRING_IOERROR_TAG_ERR;
+    result.tag = @ARM_Result_String_IoError.err@;
     result.data = boxed;
     return result;
 }
@@ -56,7 +56,7 @@ static z_@Result_String_IoError@_t z_io_String_ok(z_@String@_t s) {
     z_@Result_String_IoError@_t result = {0};
     z_@String@_t* boxed = (z_@String@_t*)z_xmalloc(sizeof(z_@String@_t));
     *boxed = s;
-    result.tag = Z_RESULT_STRING_IOERROR_TAG_OK;
+    result.tag = @ARM_Result_String_IoError.ok@;
     result.data = boxed;
     return result;
 }

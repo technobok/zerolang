@@ -57,7 +57,7 @@ static z_@Result_Parsed_CliError@_t z_cli_wrap_err(z_@CliError@_t e) {
     z_@Result_Parsed_CliError@_t r = {0};
     z_@CliError@_t* boxed = (z_@CliError@_t*)z_xmalloc(sizeof(z_@CliError@_t));
     *boxed = e;
-    r.tag = Z_RESULT_PARSED_CLIERROR_TAG_ERR;
+    r.tag = @ARM_Result_Parsed_CliError.err@;
     r.data = boxed;
     return r;
 }

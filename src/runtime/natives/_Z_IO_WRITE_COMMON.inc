@@ -25,7 +25,7 @@ static z_@Result_null_IoError@_t z_io_write_common(
         int e = errno;
         z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
         *boxed = z_io_errno_to_IoError(e);
-        result.tag = Z_RESULT_NULL_IOERROR_TAG_ERR;
+        result.tag = @ARM_Result_null_IoError.err@;
         result.data = boxed;
         return result;
     }
@@ -34,11 +34,11 @@ static z_@Result_null_IoError@_t z_io_write_common(
     if (werr != 0) {
         z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
         *boxed = z_io_errno_to_IoError(werr);
-        result.tag = Z_RESULT_NULL_IOERROR_TAG_ERR;
+        result.tag = @ARM_Result_null_IoError.err@;
         result.data = boxed;
         return result;
     }
-    result.tag = Z_RESULT_NULL_IOERROR_TAG_OK;
+    result.tag = @ARM_Result_null_IoError.ok@;
     result.data = NULL;
     return result;
 }

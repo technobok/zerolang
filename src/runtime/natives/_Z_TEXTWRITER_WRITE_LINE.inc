@@ -14,11 +14,11 @@ static z_@ResultVR_u64_IoError@_t z_@TextWriter@_writeLine(
 ) {
     z_@ListViewVal_u8@_t body = { from->size, (uint8_t*)from->data };
     z_@ResultVR_u64_IoError@_t br = z_@BufWriter@_write(self->sink, &body);
-    if (br.tag != Z_RESULTVR_U64_IOERROR_TAG_OK) return br;
+    if (br.tag != @ARM_ResultVR_u64_IoError.ok@) return br;
     uint8_t nl = (uint8_t)'\n';
     z_@ListViewVal_u8@_t tail = { (uint64_t)1, &nl };
     z_@ResultVR_u64_IoError@_t tr = z_@BufWriter@_write(self->sink, &tail);
-    if (tr.tag != Z_RESULTVR_U64_IOERROR_TAG_OK) return tr;
+    if (tr.tag != @ARM_ResultVR_u64_IoError.ok@) return tr;
     return z_io_u64_ok(br.in_ok + tr.in_ok);
 }
 

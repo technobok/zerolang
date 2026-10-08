@@ -1,7 +1,7 @@
 static z_@ResultVR_u64_IoError@_t z_io_u64_ok(uint64_t v);
 static z_@ResultVR_u64_IoError@_t z_io_u64_ok(uint64_t v) {
     z_@ResultVR_u64_IoError@_t result = {0};
-    result.tag = Z_RESULTVR_U64_IOERROR_TAG_OK;
+    result.tag = @ARM_ResultVR_u64_IoError.ok@;
     result.in_ok = v;
     return result;
 }
@@ -11,7 +11,7 @@ static z_@ResultVR_u64_IoError@_t z_io_u64_err(int saved_errno) {
     z_@ResultVR_u64_IoError@_t result = {0};
     z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
     *boxed = z_io_errno_to_IoError(saved_errno);
-    result.tag = Z_RESULTVR_U64_IOERROR_TAG_ERR;
+    result.tag = @ARM_ResultVR_u64_IoError.err@;
     result.data = boxed;
     return result;
 }

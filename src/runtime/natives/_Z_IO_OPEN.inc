@@ -6,9 +6,9 @@ static z_@Result_File_IoError@_t z_io_open(
     int flags;
     mode_t perm = 0644;
     switch (mode@TAG_openmode@) {
-        case Z_OPENMODE_TAG_READ:   flags = O_RDONLY; break;
-        case Z_OPENMODE_TAG_WRITE:  flags = O_WRONLY | O_CREAT | O_TRUNC; break;
-        case Z_OPENMODE_TAG_APPEND: flags = O_WRONLY | O_CREAT | O_APPEND; break;
+        case @ARM_openmode.read@:   flags = O_RDONLY; break;
+        case @ARM_openmode.write@:  flags = O_WRONLY | O_CREAT | O_TRUNC; break;
+        case @ARM_openmode.append@: flags = O_WRONLY | O_CREAT | O_APPEND; break;
         default:                    flags = O_RDONLY; break;
     }
     char* path_cstr = z_sv_to_cstr(path);
@@ -18,14 +18,14 @@ static z_@Result_File_IoError@_t z_io_open(
     if (fd < 0) {
         z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
         *boxed = z_io_errno_to_IoError(e);
-        result.tag = Z_RESULT_FILE_IOERROR_TAG_ERR;
+        result.tag = @ARM_Result_File_IoError.err@;
         result.data = boxed;
         return result;
     }
     z_@File@_t* boxed = (z_@File@_t*)z_xmalloc(sizeof(z_@File@_t));
     boxed->fd = (int32_t)fd;
     boxed->closed = false;
-    result.tag = Z_RESULT_FILE_IOERROR_TAG_OK;
+    result.tag = @ARM_Result_File_IoError.ok@;
     result.data = boxed;
     return result;
 }

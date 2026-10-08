@@ -8,7 +8,7 @@ static z_@Result_String_IoError@_t z_io_readText(z_@StringView@_t path) {
         int e = errno;
         z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
         *boxed = z_io_errno_to_IoError(e);
-        result.tag = Z_RESULT_STRING_IOERROR_TAG_ERR;
+        result.tag = @ARM_Result_String_IoError.err@;
         result.data = boxed;
         return result;
     }
@@ -24,7 +24,7 @@ static z_@Result_String_IoError@_t z_io_readText(z_@StringView@_t path) {
             z_@String@_free(&content);
             z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
             *boxed = z_io_errno_to_IoError(e);
-            result.tag = Z_RESULT_STRING_IOERROR_TAG_ERR;
+            result.tag = @ARM_Result_String_IoError.err@;
             result.data = boxed;
             return result;
         }
@@ -33,7 +33,7 @@ static z_@Result_String_IoError@_t z_io_readText(z_@StringView@_t path) {
     close(fd);
     z_@String@_t* boxed = (z_@String@_t*)z_xmalloc(sizeof(z_@String@_t));
     *boxed = content;
-    result.tag = Z_RESULT_STRING_IOERROR_TAG_OK;
+    result.tag = @ARM_Result_String_IoError.ok@;
     result.data = boxed;
     return result;
 }

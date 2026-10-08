@@ -2,15 +2,15 @@ static z_@IoError@_t z_io_errno_to_IoError(int e) {
     z_@IoError@_t r = {0};
     r.data = NULL;
     switch (e) {
-        case ENOENT:  r.tag = Z_IOERROR_TAG_NOTFOUND; break;
+        case ENOENT:  r.tag = @ARM_IoError.notfound@; break;
         case EACCES:
-        case EPERM:   r.tag = Z_IOERROR_TAG_PERMISSIONDENIED; break;
-        case EINTR:   r.tag = Z_IOERROR_TAG_INTERRUPTED; break;
-        case EEXIST:  r.tag = Z_IOERROR_TAG_EXISTS; break;
-        case EISDIR:  r.tag = Z_IOERROR_TAG_ISDIR; break;
-        case ENOTDIR: r.tag = Z_IOERROR_TAG_NOTDIR; break;
-        case ENOSPC:  r.tag = Z_IOERROR_TAG_NOSPACE; break;
-        default:      r.tag = Z_IOERROR_TAG_OTHER; break;
+        case EPERM:   r.tag = @ARM_IoError.permissiondenied@; break;
+        case EINTR:   r.tag = @ARM_IoError.interrupted@; break;
+        case EEXIST:  r.tag = @ARM_IoError.exists@; break;
+        case EISDIR:  r.tag = @ARM_IoError.isdir@; break;
+        case ENOTDIR: r.tag = @ARM_IoError.notdir@; break;
+        case ENOSPC:  r.tag = @ARM_IoError.nospace@; break;
+        default:      r.tag = @ARM_IoError.other@; break;
     }
     return r;
 }

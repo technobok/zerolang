@@ -8,18 +8,18 @@ static z_@Result_String_IoError@_t z_os_homeDir(void) {
     if (h == NULL) {
         z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
         z_@IoError@_t v = {0};
-        v.tag = Z_IOERROR_TAG_OTHER;
+        v.tag = @ARM_IoError.other@;
         z_@String@_t* sp = (z_@String@_t*)z_xmalloc(sizeof(z_@String@_t));
         *sp = z_@String@_new("$HOME is not set");
         v.data = sp;
         *boxed = v;
-        out.tag = Z_RESULT_STRING_IOERROR_TAG_ERR;
+        out.tag = @ARM_Result_String_IoError.err@;
         out.data = boxed;
         return out;
     }
     z_@String@_t* boxed = (z_@String@_t*)z_xmalloc(sizeof(z_@String@_t));
     *boxed = z_@String@_new(h);
-    out.tag = Z_RESULT_STRING_IOERROR_TAG_OK;
+    out.tag = @ARM_Result_String_IoError.ok@;
     out.data = boxed;
     return out;
 }

@@ -9,12 +9,12 @@ static z_@Option_String@_t z_os_env(z_@StringView@_t key) {
     const char* v = getenv(key_cstr);
     free(key_cstr);
     if (v == NULL) {
-        out.tag = Z_OPTION_STRING_TAG_NONE;
+        out.tag = @ARM_Option_String.none@;
         return out;
     }
     z_@String@_t* boxed = (z_@String@_t*)z_xmalloc(sizeof(z_@String@_t));
     *boxed = z_@String@_new(v);
-    out.tag = Z_OPTION_STRING_TAG_SOME;
+    out.tag = @ARM_Option_String.some@;
     out.data = boxed;
     return out;
 }

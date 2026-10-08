@@ -9,9 +9,9 @@ static z_@ResultVR_u64_IoError@_t z_@File@_seek(
 ) {
     int whence;
     switch (origin@TAG_seekorigin@) {
-        case Z_SEEKORIGIN_TAG_START:   whence = SEEK_SET; break;
-        case Z_SEEKORIGIN_TAG_CURRENT: whence = SEEK_CUR; break;
-        case Z_SEEKORIGIN_TAG_END:     whence = SEEK_END; break;
+        case @ARM_seekorigin.start@:   whence = SEEK_SET; break;
+        case @ARM_seekorigin.current@: whence = SEEK_CUR; break;
+        case @ARM_seekorigin.end@:     whence = SEEK_END; break;
         default:                       whence = SEEK_SET; break;
     }
     off_t pos = lseek(f->fd, (off_t)off, whence);

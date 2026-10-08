@@ -19,7 +19,7 @@ static z_@Result_String_IoError@_t z_@TextReader@_readLine(
         for (uint64_t i = scan_start; i < self->buf.length; i++) {
             if (self->buf.data[i] == (uint8_t)'\n') {
                 if (!z_io_utf8_is_valid(self->buf.data, i)) {
-                    return z_io_String_err_arm(Z_IOERROR_TAG_BADENCODING);
+                    return z_io_String_err_arm(@ARM_IoError.badencoding@);
                 }
                 line.size = i;
                 line.capacity = i + 1;
@@ -42,20 +42,20 @@ static z_@Result_String_IoError@_t z_@TextReader@_readLine(
         z_@ResultVR_u64_IoError@_t rr = z_@BufReader@_read(
             self->source, &self->buf, cap
         );
-        if (rr.tag != Z_RESULTVR_U64_IOERROR_TAG_OK) {
+        if (rr.tag != @ARM_ResultVR_u64_IoError.ok@) {
             z_@Result_String_IoError@_t result = {0};
-            result.tag = Z_RESULT_STRING_IOERROR_TAG_ERR;
+            result.tag = @ARM_Result_String_IoError.err@;
             result.data = rr.data;
             return result;
         }
         uint64_t n = rr.in_ok;
         if (n == 0) {
             if (self->buf.length == 0) {
-                return z_io_String_err_arm(Z_IOERROR_TAG_EOF);
+                return z_io_String_err_arm(@ARM_IoError.eof@);
             }
             uint64_t size = self->buf.length;
             if (!z_io_utf8_is_valid(self->buf.data, size)) {
-                return z_io_String_err_arm(Z_IOERROR_TAG_BADENCODING);
+                return z_io_String_err_arm(@ARM_IoError.badencoding@);
             }
             line.size = size;
             line.capacity = size + 1;

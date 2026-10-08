@@ -2,7 +2,7 @@ static z_@Option_StringView@_t z_@Splitter@_call(z_@Splitter@_t* s);
 static z_@Option_StringView@_t z_@Splitter@_call(z_@Splitter@_t* s) {
     z_@Option_StringView@_t out = {0};
     if (s->done) {
-        out.tag = Z_OPTION_STRINGVIEW_TAG_NONE;
+        out.tag = @ARM_Option_StringView.none@;
         return out;
     }
     const char* start = s->src + s->cursor;
@@ -14,7 +14,7 @@ static z_@Option_StringView@_t z_@Splitter@_call(z_@Splitter@_t* s) {
         boxed->size = remaining;
         s->cursor = s->src_len;
         s->done = true;
-        out.tag = Z_OPTION_STRINGVIEW_TAG_SOME;
+        out.tag = @ARM_Option_StringView.some@;
         out.data = boxed;
         return out;
     }
@@ -25,7 +25,7 @@ static z_@Option_StringView@_t z_@Splitter@_call(z_@Splitter@_t* s) {
             boxed->data = start;
             boxed->size = i;
             s->cursor += i + s->sep_len;
-            out.tag = Z_OPTION_STRINGVIEW_TAG_SOME;
+            out.tag = @ARM_Option_StringView.some@;
             out.data = boxed;
             return out;
         }
@@ -36,7 +36,7 @@ static z_@Option_StringView@_t z_@Splitter@_call(z_@Splitter@_t* s) {
     boxed->size = remaining;
     s->cursor = s->src_len;
     s->done = true;
-    out.tag = Z_OPTION_STRINGVIEW_TAG_SOME;
+    out.tag = @ARM_Option_StringView.some@;
     out.data = boxed;
     return out;
 }
