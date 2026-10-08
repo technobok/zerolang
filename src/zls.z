@@ -2272,12 +2272,17 @@ displayTypeNameSt: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out Str
     if bname.length == 0 then return disp
     path: ztypecheck.unitPathOfTid :st tid: base
     if path.length == 0 then return disp
-    fileUnit: ztypecheck.unitNameOfTid :st tid: base
-    uv: fileUnit.stringView
-    if uv == "system" then return disp
-    if uv == "core" then return disp
-    if uv == "collections" then return disp
+    if (isCoreLanguageUnit :st unitDecl: (ztypecheck.unitDeclOfTid :st tid: base)) then return disp
     return "\{path}.\{disp.stringView}"
+}
+
+# isCoreLanguageUnit -- the unit is one whose types a program spells bare: the
+# system, core and collections units, by their declarations
+isCoreLanguageUnit: function {st: zenv.ZSymbolTable.view unitDecl: ztypes.declid} out bool is {
+    if unitDecl.isZero then return false
+    if unitDecl == st.typing.systemUnitRoot then return true
+    if unitDecl == st.typing.coreUnitRoot then return true
+    return unitDecl == st.typing.collectionsUnitRoot
 }
 
 # the hover display name of type `tid` (unit-qualified outside core/system).
@@ -3372,9 +3377,9 @@ isInstanceOfOpt: function {
 }
 
 # declAnnotation -- what a reference with no variable names, as a hover's `#`
-# note: a unit's own definition is "static unit-level", a type's `as` constant
-# is "constant", and a type's field or conformance -- read off a value -- takes
-# no note. "" when the reference resolved to no declaration.
+# note: a type's `as` constant is "constant"; a unit's own definition takes none
+# (its card names it by its full path), nor does a type's field or conformance
+# read off a value. "" when the reference resolved to no declaration.
 declAnnotation: function {o: (Option zenv.ZSymbolTable).view nid: zast.nodeid} out String is {
     rd: refDeclOf :o :nid
     if rd.isZero then return ""
@@ -3382,9 +3387,6 @@ declAnnotation: function {o: (Option zenv.ZSymbolTable).view nid: zast.nodeid} o
         o
     ) case some then {
         if (o.typing.isAsConstDecl declId: rd) then return "constant"
-        parent: (o.typing.decls.get i: rd).parent
-        if parent.isZero then return ""
-        if (o.typing.decls.get i: parent).unitScope then return "static unit-level"
         return ""
     } case none then {
         return ""
@@ -3393,8 +3395,8 @@ declAnnotation: function {o: (Option zenv.ZSymbolTable).view nid: zast.nodeid} o
 
 # refAnnotation -- a value reference's ownership + scope origin (+ borrow
 # source) as an in-fence `#` comment body: "owned local" / "borrowed
-# parameter" / "borrowed local, from s" / "static unit-level"; "" when the
-# reference carries no stamped ownership/origin.
+# parameter" / "borrowed local, from s" / "constant"; "" when the reference
+# carries no stamped ownership/origin.
 refAnnotation: function {
     prog: Ast.view
     o: (Option zenv.ZSymbolTable).view
@@ -3777,8 +3779,10 @@ untypedConstTypeName: function {o: (Option zenv.ZSymbolTable).view nid: zast.nod
     }
 }
 
-# constHoverText -- the compile-time value a use site reads, as source would
-# spell it: a number, a quoted string, `Type.arm`. "" when the node has none.
+# constHoverText -- the compile-time value a use site reads, as source spells it:
+# an untyped number bare (`10`), a typed one with its type (`5.u8`), a typedef's
+# as its construction (`rid 0`), a quoted string, an arm by its type's full path
+# (`nav.mode.slow`). "" when the node has none.
 constHoverText: function {
     o: (Option zenv.ZSymbolTable).view
     prog: Ast.view
@@ -3790,21 +3794,80 @@ constHoverText: function {
         cvo: o.typing.nodeConst.get key: nid
         if cvo.none then return ""
         v: cvo
-        if v.kind.ivalKind then return (ztypecheck.constIntText st: o :v)
-        if v.kind.fvalKind then return (ztypecheck.constFloatText st: o :v)
+        if v.kind.ivalKind then return (typedNumberText
+            st: o
+            :v
+            num: (ztypecheck.constIntText st: o :v)
+        )
+        if v.kind.fvalKind then return (typedNumberText
+            st: o
+            :v
+            num: (ztypecheck.constFloatText st: o :v)
+        )
         if v.kind.svalKind then {
             sv: o.typing.constStrings.get i: v.strId
             return "\"\{sv}\""
         }
         if v.kind.armKind then {
-            # display text, spelled as the source writes the arm
-            arm: String
-            arm.append (o.reg.nameViewOf tid: v.armTid)
+            arm: displayTypeNameSt st: o tid: v.armTid
             arm.appendByte b: 46
             arm.append (zast.poolTextAt pool: prog.names ref: v.armName)
             return arm
         }
         return ""
+    } case none then {
+        return ""
+    }
+}
+
+# typedNumberText -- a number as source spells its type: bare when it has none,
+# `5.u8` for a scalar, `rid 0` for a typedef, which constructs from its base
+typedNumberText: function {
+    st: zenv.ZSymbolTable.view v: ztypes.cval num: String.take
+} out String is {
+    if v.numTid.isZero then return num
+    tn: displayTypeNameSt :st tid: v.numTid
+    if (st.typing.typedefBaseName.has key: v.numTid) then return "\{tn} \{num}"
+    # display text, not a key: the literal, its dot and its type
+    r: num.take
+    r.appendByte b: 46
+    r.append tn
+    return r
+}
+
+# constCard -- a constant's card in source syntax, by its full path: `nav.K: 10
+# # intliteral`, `nav.LIMIT: 5.u8`, `nav.M: nav.mode.slow`, `nav.primes.0: 2
+# # intliteral` -- the binding a program could write, with an untyped value's
+# literal type as the comment. "" when the value cannot be spelled.
+constCard: function {snap: zcheck.CheckResult hit: navhit hname: String.view} out String is {
+    cv: constHoverText o: snap.st prog: snap.prog nid: hit.nodeid
+    if cv.length == 0 then return ""
+    card: String
+    pre: constPathPrefix :snap :hit
+    if pre.length > 0 then {
+        card.append pre
+        card.appendByte b: 46
+    }
+    card.append hname
+    card.append ": "
+    card.append cv
+    ut: untypedConstTypeName o: snap.st nid: hit.nodeid
+    if ut.length > 0 then {
+        card.append "  # "
+        card.append ut
+    }
+    return card
+}
+
+# constPathPrefix -- what a constant's name is spelled through: its owner (a data
+# block, `nav.primes`) when it has one, else the units its declaration sits in
+constPathPrefix: function {snap: zcheck.CheckResult hit: navhit} out String is {
+    if hit.owner.isZero.not then return (displayTypeNameOfOpt o: snap.st tid: hit.owner)
+    o: snap.st
+    match (
+        o
+    ) case some then {
+        return (ztypecheck.unitPathOfDecl st: o declId: hit.declId)
     } case none then {
         return ""
     }
@@ -3832,14 +3895,12 @@ hoverTypeFence: function {
         kindFence.append tk
         return kindFence
     }
+    if isConst then {
+        cc: constCard :snap :hit :hname
+        if cc.length > 0 then return cc
+    }
     if t.isZero then return ""
     tn: displayTypeNameOfOpt o: snap.st tid: t
-    # an untyped constant is untyped where it is read: the type it lands in is
-    # the use's, not the constant's
-    if isConst then {
-        ut: untypedConstTypeName o: snap.st nid: hit.nodeid
-        if ut.length > 0 then tn = ut.take
-    }
     if tn.length == 0 then return ""
     fence: String
     if hit.owner.isZero.not then {
@@ -3855,13 +3916,6 @@ hoverTypeFence: function {
     fence.append hname
     fence.append ": "
     fence.append tn
-    if isConst then {
-        cv: constHoverText o: snap.st prog: snap.prog nid: hit.nodeid
-        if cv.length > 0 then {
-            fence.append " = "
-            fence.append cv
-        }
-    }
     # a data block's element or length is a constant, which nothing owns
     if (ownerIsDataOpt o: snap.st tid: hit.owner) then return fence
     annot: refAnnotation prog: snap.prog o: snap.st vid: hit.vid nid: hit.nodeid
