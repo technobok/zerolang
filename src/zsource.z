@@ -1199,6 +1199,24 @@ DiagSrc: class {
     hasLine: bool
 }
 
+# lookupFn -- the compiler's functions that resolve a NAME of the program --
+# intern or find it in a pool, walk a scope for a type, find a unit or a child
+# declaration -- which A011 refuses a string literal: a name the compiler itself
+# spells is a zast.wellKnown entry, read by id.
+lookupFn: data {
+    poolFind: "poolFind"
+    nameIdOf: "nameIdOf"
+    unitDeclByName: "unitDeclByName"
+    walkLookupTyperef: "walkLookupTyperef"
+    walkLookupTyperefRo: "walkLookupTyperefRo"
+    nameTextEq: "nameTextEq"
+    poolTextEq: "poolTextEq"
+    nameIs: "nameIs"
+    declChildOf: "declChildOf"
+    resolveTypeIdByName: "resolveTypeIdByName"
+    userFnId: "userFnId"
+} out stringdata
+
 # the working state of one file's lint/format analysis: the source and
 # its line table, the collected diagnostics and fix edits, and the raw
 # token stream shared across the checks.
@@ -1232,6 +1250,8 @@ Analysis: class {
     # line to every rule, so a new rule is a field here and not a parameter on
     # every layer between
     opts: lintopts
+    # the name-lookup functions A011 watches (lookupFn)
+    lookupWords: zast.Vocab
 } as {
     # parseErrorCount -- how many collected diagnostics are hard (ERROR) -- i.e.
     # parse errors. The fmt parse gate refuses any file with a non-zero count.
@@ -1802,6 +1822,11 @@ Analysis: class {
                 arguments: n.arguments
             )
             this.checkCollapseName :ast arguments: n.arguments
+            (this.checkLiteralLookup
+                :ast
+                callable: (ast.nodes.get i: n.callable)
+                arguments: n.arguments
+            )
         } case atomstring then {
             if this.opts.arch then (this.checkComposedKey
                 :ast
@@ -2293,6 +2318,48 @@ Analysis: class {
             (this.info
                 code: "A001"
                 msg: "string literal `\{txt}` compared by spelling; compare an id (name id, declaration, type id)"
+                line: p.line
+                col: p.col
+                width: 1
+            )
+        } case none then null
+    }
+
+    # checkLiteralLookup -- A011, under --arch: a string literal handed to one
+    # of the compiler's name-lookup functions (lookupFn): the name is looked up
+    # by its spelling where the compiler should read a well-known id.
+    checkLiteralLookup: function {
+        :this ast: Ast.view callable: astnode.view arguments: zast.kidspan
+    } is {
+        if this.opts.arch.not then return
+        leaf: atomNameIdOf n: callable
+        if callable.dottedpath then leaf = atomNameIdOf n: (ast.nodes.get i: callable.child)
+        if leaf.isZero then return
+        fw: this.lookupWords.slotOf text: (zast.nameTextAt :ast ref: leaf).stringView
+        if fw == this.lookupWords.none then return
+        k: u64
+        for k < arguments.count loop {
+            aId: zast.kidAt kids: ast.kids span: arguments i: k
+            k = k + 1
+            this.literalLookupArg :ast :aId
+        }
+    }
+
+    # literalLookupArg -- one argument of a name lookup: A011 when its value is a
+    # string literal
+    literalLookupArg: function {:this ast: Ast.view aId: zast.nodeid} is {
+        a: ast.nodes.get i: aId
+        vId: aId
+        if a.namedoperation then vId = a.operation
+        v: ast.nodes.get i: vId
+        txt: plainLiteralText :ast n: v
+        match (
+            txt
+        ) case some then {
+            p: zast.posOf n: v
+            (this.info
+                code: "A011"
+                msg: "string literal `\{txt}` looked up by spelling; read its well-known id (zast.wellKnown) or the declaration"
                 line: p.line
                 col: p.col
                 width: 1
@@ -6117,6 +6184,7 @@ analyzeSource: function {source: String.take path: String.take opts: lintopts} o
         falseId: zast.nameid
         elsewhere: (IdMapR u32 V: DiagSrc)
         :opts
+        lookupWords: (zast.Vocab.create block: lookupFn)
     )
     a.runFastChecks n: root
     if opts.arch then a.reportDuplicateBodies prog: root
@@ -6161,6 +6229,7 @@ analyzeFile: function {path: String.take opts: lintopts} out Analysis is {
             falseId: zast.nameid
             elsewhere: (IdMapR u32 V: DiagSrc)
             :opts
+            lookupWords: (zast.Vocab.create block: lookupFn)
         )
         d: (zdiag.errorDiag
             errv: zast.err.ioError
@@ -6208,6 +6277,7 @@ analyzeFileFull: function {
             falseId: zast.nameid
             elsewhere: (IdMapR u32 V: DiagSrc)
             :opts
+            lookupWords: (zast.Vocab.create block: lookupFn)
         )
         a.runFastChecks n: root
         if opts.arch then a.reportDuplicateBodies prog: root
@@ -6245,6 +6315,7 @@ analyzeFileFull: function {
             falseId: zast.nameid
             elsewhere: (IdMapR u32 V: DiagSrc)
             :opts
+            lookupWords: (zast.Vocab.create block: lookupFn)
         )
         d: (zdiag.errorDiag
             errv: zast.err.ioError
@@ -6315,6 +6386,7 @@ sourceParses: function {source: String.take} out bool is {
         falseId: zast.nameid
         elsewhere: (IdMapR u32 V: DiagSrc)
         opts: defaultOpts
+        lookupWords: (zast.Vocab.create block: lookupFn)
     )
     root: ast.parseSource :source
     a.walkProgram prog: root

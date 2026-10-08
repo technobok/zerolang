@@ -868,13 +868,13 @@ indexUnitDefs: function {st: zenv.ZSymbolTable scope: ztypes.declid program: Ast
         st.typing.defNodeIndexBuilt = true
         cro: (st.typing.declFindChild
             parentDeclId: st.typing.programRoot
-            nameId: (nameIdOf ast: program name: "core")
+            nameId: zast.wellKnown.slot.unCore
         )
         if cro.isZero.not then st.typing.coreUnitRoot = cro
         {
             clo: (st.typing.declFindChild
                 parentDeclId: st.typing.programRoot
-                nameId: (nameIdOf ast: program name: "collections")
+                nameId: zast.wellKnown.slot.unCollections
             )
             if clo.isZero.not then st.typing.collectionsUnitRoot = clo
             mro: (st.typing.declFindChild
@@ -887,7 +887,7 @@ indexUnitDefs: function {st: zenv.ZSymbolTable scope: ztypes.declid program: Ast
             # spelling never decides which one it meant
             sro: (st.typing.declFindChild
                 parentDeclId: st.typing.programRoot
-                nameId: (nameIdOf ast: program name: "system")
+                nameId: zast.wellKnown.slot.unSystem
             )
             if sro.isZero.not then st.typing.systemUnitRoot = sro
         }
@@ -5848,7 +5848,7 @@ paramTypeBaseNameId: function {ast: Ast.view op: astnode.view} out zast.nameid i
 # non-heap-allocated reftype, which takes the reftype-param BORROW default: List and
 # ListView (stack struct + heap buffer). Set/Map monos are heap-allocated (no BORROW);
 # the native iterator views have no destructor (no BORROW); str/array are valtypes.
-isBorrowReftypeCollection: function {ast: Ast.view nameId: zast.nameid} out bool is {
+isBorrowReftypeCollection: function {nameId: zast.nameid} out bool is {
     if nameId == zast.wellKnown.slot.tyList then return true
     if nameId == zast.wellKnown.slot.tyListRef then return true
     if nameId == zast.wellKnown.slot.tyListVal then return true
@@ -5858,11 +5858,7 @@ isBorrowReftypeCollection: function {ast: Ast.view nameId: zast.nameid} out bool
     # arrays, created BY VALUE -- so they take the same borrow default
     return (
         (nameId == zast.wellKnown.slot.tyIdMapR) or
-        (zast.nameTextEq
-            :ast
-            ref: nameId
-            s: "IdMapV"
-        ) or
+        (nameId == zast.wellKnown.slot.tyIdMapV) or
         (nameId == zast.wellKnown.slot.tyIdSet)
     )
 }
@@ -7174,7 +7170,7 @@ paramIsBorrowReftype: function {
     } else {
         if tnId.isZero then {
             base: paramTypeBaseNameId :ast op: (ast.nodes.get i: opId)
-            isref = isBorrowReftypeCollection :ast nameId: base
+            isref = isBorrowReftypeCollection nameId: base
         } else {
             isref = nameIsInUnitReftypeId :st :ast :unitDecl nameId: tnId
             tdu: (definingSiteForId :st :scope :ast :unitDecl nameId: tnId).defUnit
@@ -20746,6 +20742,15 @@ stdTid: function {ast: Ast st: zenv.ZSymbolTable wk: zast.nameid} out ztypes.tid
     return r
 }
 
+# stdTidOr -- stdTid, or `d` when the program has no such type
+stdTidOr: function {
+    ast: Ast st: zenv.ZSymbolTable wk: zast.nameid d: ztypes.tid
+} out ztypes.tid is {
+    t: stdTid :ast :st :wk
+    if t.isZero then return d
+    return t
+}
+
 # stdTidOpt -- stdTid as an optional: none when the program has no such type
 stdTidOpt: function {ast: Ast st: zenv.ZSymbolTable wk: zast.nameid} out optionval ztypes.tid is {
     t: stdTid :ast :st :wk
@@ -21343,21 +21348,9 @@ checkString: function {
     # canonical even in a unit that shadows the name
     tyOpt: optionval.none ztypes.tid
     if hasInterp then {
-        tyOpt = (walkLookupTyperef
-            :st
-            scope: st.curScope
-            :ast
-            unitDecl: ztypes.declid
-            base: "String"
-        )
+        tyOpt = stdTidOpt :ast :st wk: zast.wellKnown.slot.tyString
     } else {
-        tyOpt = (walkLookupTyperef
-            :st
-            scope: st.curScope
-            :ast
-            unitDecl: ztypes.declid
-            base: "StringView"
-        )
+        tyOpt = stdTidOpt :ast :st wk: zast.wellKnown.slot.tyStringView
     }
     match (
         tyOpt
@@ -29447,11 +29440,7 @@ checkCopyMember: function {
         (bt.isZero.not and (bt == st.typing.nullTypeId))
     )
     if noMembers then return (callleg handled: false tid: ztypes.tid.zero)
-    if (zast.nameTextEq
-        :ast
-        ref: cnId
-        s: "copy"
-    ) when (st.reg.isTypeParamOf tid: bt).not then {
+    if cnId == zast.wellKnown.slot.wkCopy when (st.reg.isTypeParamOf tid: bt).not then {
         # A MONO PRESENTS EXACTLY THE CONCRETE TYPE'S INTERFACE, so there is
         # no per-mono leg here. The template body validated `.copy` against
         # the parameter (t -> t); the INSTANCE is held to what the type it was
@@ -29929,15 +29918,7 @@ checkTaggedMemberPath: function {
                 }
             }
             if isArm when gtpl.not then {
-                boolId: ((walkLookupTyperef
-                    :st
-                    scope: st.curScope
-                    :ast
-                    :unitDecl
-                    base: "bool"
-                ).or
-                    d: ztypes.tid.zero
-                )
+                boolId: stdTid :ast :st wk: zast.wellKnown.slot.wkBool
                 if boolId.isZero.not then {
                     st.typing.dpArmPredicate.set key: dp.nid value: bt
                     stampGate :st nid: dp.nid tid: boolId
@@ -30418,13 +30399,7 @@ checkDataBlockMember: function {
         elo: st.reg.dataElemTypeOf tid: bt
         if elo.isZero then return (callleg handled: false tid: ztypes.tid.zero)
         ecnt: dataElemCount :st dataTid: bt
-        ato: (walkLookupTyperef
-            :st
-            scope: st.curScope
-            :ast
-            :unitDecl
-            base: "array"
-        )
+        ato: stdTidOpt :ast :st wk: zast.wellKnown.slot.tyArray
         match (
             ato
         ) case some then {
@@ -33899,17 +33874,7 @@ checkAtomid: function {
             (node.name == zast.wellKnown.slot.wkBreak) or
             (node.name == zast.wellKnown.slot.wkContinue)
         )
-        if isBrk then {
-            result = ((walkLookupTyperef
-                :st
-                scope: st.curScope
-                :ast
-                :unitDecl
-                base: "never"
-            ).or
-                d: result
-            )
-        }
+        if isBrk then result = stdTidOr :ast :st wk: zast.wellKnown.slot.tyNever d: result
         # a variable holding a function reference is called when read bare,
         # as the function's own name is. The read BECOMES the call in the tree
         # (rewriteReadAsCall), so everything after -- receiver temporaries,
