@@ -1906,6 +1906,31 @@ docFsnoOf: function {
     return found
 }
 
+# docUnitDecl -- the declaration of the document's unit, where a card shown for
+# it reads a bare type name; 0 when no loaded unit comes from the document.
+docUnitDecl: function {
+    # the snapshot whose units are searched
+    r: zcheck.CheckResult.view
+    # the document, relative to the workspace
+    rel: StringView
+    # the workspace's source root
+    srcDir: StringView
+} out ztypes.declid is {
+    op: docUnitOp :r :rel :srcDir
+    if op.isZero then return ztypes.declid
+    o: r.st
+    match (
+        o
+    ) case some then {
+        uk: ztypecheck.unitdefNodeId ast: r.prog nId: op
+        ut: (o.typing.unitTypesById.get key: uk).or d: ztypes.tid.zero
+        if ut.isZero then return ztypes.declid
+        return (o.reg.defOf tid: ut)
+    } case none then {
+        return ztypes.declid
+    }
+}
+
 # docUnitOp -- the unitdef node of the document's unit, found by its FILE: a
 # subunit's document is that subunit, never a top-level unit of the same name.
 # 0 when no loaded unit comes from the document.
@@ -2030,13 +2055,15 @@ genericParamCard: function {
     o: (Option zenv.ZSymbolTable).view
     prog: Ast.view
     nid: zast.nodeid
+    # the unit the generic parameter's card is shown in
+    site: ztypes.declid
 } out String is {
     gpd: genericParamDeclOf :o :nid
     if gpd.isZero then return ""
     # the bound answers through the channel that already resolves it
     bnm: String
     btid: useUnitDef :o nid: (genericParamBoundOf :o :nid)
-    if btid.isZero.not then bnm = displayTypeNameOfOpt :o tid: btid
+    if btid.isZero.not then bnm = displayTypeNameOfOpt :o tid: btid :site
     card: String
     {
         pnm: String
@@ -2205,6 +2232,8 @@ literalNote: function {
     name: StringView
     refTid: ztypes.tid
     nodeTid: ztypes.tid
+    # the unit the literal's note is shown in
+    site: ztypes.declid
 } out String is {
     if (ztypecheck.isNumericLiteralName :name).not then return ""
     match (
@@ -2213,7 +2242,7 @@ literalNote: function {
         falls: literalFallNote st: o :name :refTid
         if falls.length > 0 then return falls
         if nodeTid.isZero.not then {
-            tn: displayTypeNameSt st: o tid: nodeTid
+            tn: displayTypeNameSt st: o tid: nodeTid :site
             if tn.length > 0 then {
                 kind: "an integer literal"
                 if (ztypecheck.isFloatLiteralName :name) then kind = "a float literal"
@@ -2260,7 +2289,18 @@ varDefNode: function {o: (Option zenv.ZSymbolTable).view vid: ztypes.vid} out za
 # net and other stdlib units render dotted (io.File, cli.OptionDef). A generic mono
 # keys the unit test on its ORIGIN's declaring unit while displaying the full
 # instance name (e.g. "List u64" stays bare -- List is declared in collections).
-displayTypeNameSt: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out String is {
+# A core-language type stays bare only where its bare name reaches it: under a
+# unit's own `u8` the system's prints as a program there would write it,
+# `core.u8` (or its own unit's path when core does not re-export it).
+displayTypeNameSt: function {
+    # the checked program the type is named from
+    st: zenv.ZSymbolTable.view
+    # the type to name
+    tid: ztypes.tid
+    # the unit the name is shown in (docUnitDecl): a core-language type prints
+    # bare only when its bare name, looked up there, reaches it. 0 for no site.
+    site: ztypes.declid
+} out String is {
     disp: st.reg.nameOf :tid
     if disp.length == 0 then return disp
     base: tid
@@ -2272,8 +2312,49 @@ displayTypeNameSt: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out Str
     if bname.length == 0 then return disp
     path: ztypecheck.unitPathOfTid :st tid: base
     if path.length == 0 then return disp
-    if (isCoreLanguageUnit :st unitDecl: (ztypecheck.unitDeclOfTid :st tid: base)) then return disp
+    if (isCoreLanguageUnit :st unitDecl: (ztypecheck.unitDeclOfTid :st tid: base)) then {
+        if (bareNameReaches :st :site :base) then return disp
+        if (coreReexports :st :base) then path = "core"
+    }
     return "\{path}.\{disp.stringView}"
+}
+
+# bareNameReaches -- the type's bare name, looked up from `site`, reaches the
+# type: its nearest declaration there is the type's own, or a re-export that
+# resolved to it (core's `u8: system.u8`). A re-export not yet resolved is
+# taken to reach it; any other declaration of the name shadows it. Read from
+# declarations only. True for no site.
+bareNameReaches: function {
+    # the checked program the lookup reads
+    st: zenv.ZSymbolTable.view
+    # the unit the name would be written in
+    site: ztypes.declid
+    # the type, a template for a generic instance
+    base: ztypes.tid
+} out bool is {
+    if site.isZero then return true
+    bd: ztypecheck.declOfTypeId :st tid: base
+    if bd.isZero then return true
+    nameId: (st.typing.decls.get i: bd).name
+    hit: (ztypecheck.envLookup
+        :st
+        scope: (ztypecheck.scopeFor :st scope: site unitDecl: site)
+        :nameId
+    )
+    if hit.declId == bd then return true
+    if hit.declId.isZero then return false
+    hd: st.typing.decls.get i: hit.declId
+    if hd.kind.reexportDecl.not then return false
+    return hd.typeId.isZero or (hd.typeId == base)
+}
+
+# coreReexports -- core names the type under its own name, so `core.<name>`
+# reaches it from any unit
+coreReexports: function {st: zenv.ZSymbolTable.view base: ztypes.tid} out bool is {
+    bd: ztypecheck.declOfTypeId :st tid: base
+    if bd.isZero or st.typing.coreUnitRoot.isZero then return false
+    nameId: (st.typing.decls.get i: bd).name
+    return (st.typing.declFindChild parentDeclId: st.typing.coreUnitRoot :nameId).isZero.not
 }
 
 # isCoreLanguageUnit -- the unit is one whose types a program spells bare: the
@@ -2286,11 +2367,18 @@ isCoreLanguageUnit: function {st: zenv.ZSymbolTable.view unitDecl: ztypes.declid
 }
 
 # the hover display name of type `tid` (unit-qualified outside core/system).
-displayTypeNameOfOpt: function {o: (Option zenv.ZSymbolTable).view tid: ztypes.tid} out String is {
+displayTypeNameOfOpt: function {
+    # the snapshot's checked program, none when the check did not run
+    o: (Option zenv.ZSymbolTable).view
+    # the type to name
+    tid: ztypes.tid
+    # the name's unit
+    site: ztypes.declid
+} out String is {
     match (
         o
     ) case some then {
-        return (displayTypeNameSt st: o :tid)
+        return (displayTypeNameSt st: o :tid :site)
     } case none then {
         return ""
     }
@@ -2299,7 +2387,14 @@ displayTypeNameOfOpt: function {o: (Option zenv.ZSymbolTable).view tid: ztypes.t
 # typeKindTextOpt -- a type definition's kind word ("class", "variant", ...)
 # for hover, or "" when tid is 0 or names something other than a type def. A
 # typedef says so and names its base: "typedef u64".
-typeKindTextOpt: function {o: (Option zenv.ZSymbolTable).view tid: ztypes.tid} out String is {
+typeKindTextOpt: function {
+    # the snapshot's checked program, if any
+    o: (Option zenv.ZSymbolTable).view
+    # the type whose kind is named
+    tid: ztypes.tid
+    # the card's unit
+    site: ztypes.declid
+} out String is {
     result: String
     if tid.isZero then return result
     match (
@@ -2310,7 +2405,7 @@ typeKindTextOpt: function {o: (Option zenv.ZSymbolTable).view tid: ztypes.tid} o
             tdb
         ) case some then {
             result = "typedef "
-            result.append (displayTypeNameSt st: o tid: tdb)
+            result.append (displayTypeNameSt st: o tid: tdb :site)
             return result
         } case none then null
         tt: o.reg.typetypeOf typeId: tid
@@ -2626,11 +2721,13 @@ paramDisplayOf: function {
     pname: StringView
     ptid: ztypes.tid
     pnid: zast.nameid
+    # the unit the parameter is shown in
+    site: ztypes.declid
 } out String is {
     owner: tid
     pid: pnid
     dv: st.typing.declDefaultOfId parentTypeId: owner nameId: pid
-    ptn: displayTypeNameSt :st tid: ptid
+    ptn: displayTypeNameSt :st tid: ptid :site
     ps: pname.string
     ps.append ": "
     if dv.none then {
@@ -2666,7 +2763,14 @@ returnSuffix: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out StringVi
 # fnReturnClause -- a function type's return clause as a signature spells it,
 # " out T" or " outx T" with the result's own ownership suffixes after the
 # type. "" when the function returns nothing.
-fnReturnClause: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out String is {
+fnReturnClause: function {
+    # the checked program holding the function
+    st: zenv.ZSymbolTable.view
+    # the function type
+    tid: ztypes.tid
+    # the signature's unit
+    site: ztypes.declid
+} out String is {
     rets: String
     rr: ztypecheck.methodReturnOf :st mid: tid
     rtid: rr.or d: ztypes.tid
@@ -2676,7 +2780,7 @@ fnReturnClause: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out String
     } else {
         rets.append " out "
     }
-    rets.append (displayTypeNameSt :st tid: rtid)
+    rets.append (displayTypeNameSt :st tid: rtid :site)
     rets.append (returnSuffix :st :tid)
     if ((st.typing.funcReturnsFrozen.get key: tid).or d: false) then rets.append ".hold"
     return rets
@@ -2806,6 +2910,8 @@ fnSigTextOpt: function {
     o: (Option zenv.ZSymbolTable).view
     tid: ztypes.tid
     name: StringView
+    # the unit the signature is shown in
+    site: ztypes.declid
 } out String is {
     docs: paramDocs :o :prog :vfs :tid
     leads: paramLeadDocs :o :prog :vfs :tid
@@ -2837,10 +2943,11 @@ fnSigTextOpt: function {
                 pname: pn.stringView
                 ptid: (ptids.get i: pi)
                 pnid: (pnids.get i: pi)
+                :site
             )
             pi = pi + 1
         }
-        rets: fnReturnClause st: o :tid
+        rets: fnReturnClause st: o :tid :site
         # one line, or param-per-line (zl fmt >100-col style) when too long.
         pdocs: List String
         pleads: List String
@@ -2862,6 +2969,8 @@ fnParamDisplays: function {
     prog: Ast.view
     o: (Option zenv.ZSymbolTable).view
     tid: ztypes.tid
+    # the unit the parameters are shown in
+    site: ztypes.declid
 } out List String is {
     result: List String
     match (
@@ -2883,6 +2992,7 @@ fnParamDisplays: function {
                 pname: pn.stringView
                 ptid: (ptids.get i: pi)
                 pnid: (pnids.get i: pi)
+                :site
             )
             pi = pi + 1
         }
@@ -3326,6 +3436,8 @@ inferredGenericLines: function {
     o: Option zenv.ZSymbolTable
     prog: Ast.view
     callId: zast.nodeid
+    # the unit the inferred arguments are shown in
+    site: ztypes.declid
 } out String is {
     match (
         o
@@ -3347,7 +3459,7 @@ inferredGenericLines: function {
         r: String
         hi: u64
         for hi < holders.length loop {
-            tn: displayTypeNameSt st: o tid: (tids.get i: hi)
+            tn: displayTypeNameSt st: o tid: (tids.get i: hi) :site
             if r.length > 0 then r.appendByte b: 10
             r.append "# "
             r.append (holders.get i: hi)
@@ -3594,7 +3706,7 @@ typeNamedAs: function {
 } out bool is {
     # a unit's name resolves through the unit lookup, which knows its file
     if (isUnitTidOpt :o :tid) then return false
-    full: displayTypeNameOfOpt :o :tid
+    full: displayTypeNameOfOpt :o :tid site: ztypes.declid
     if full.stringView == name then return true
     dotted: ".\{name}"
     return (full.stringView.endsWith suffix: dotted)
@@ -3698,9 +3810,16 @@ navResolve: function {
 # own card. Never for a member row: the `.generic` selector shares the
 # declaration's node id, and a card there would sit on a word that is not the
 # parameter.
-genericParamHoverCard: function {snap: zcheck.CheckResult hit: navhit} out Value is {
+genericParamHoverCard: function {
+    # the snapshot the card is built from
+    snap: zcheck.CheckResult
+    # the generic parameter under the cursor
+    hit: navhit
+    # the card's site
+    site: ztypes.declid
+} out Value is {
     if hit.kind == 2 then return Value.nul
-    gcard: genericParamCard o: snap.st prog: snap.prog nid: hit.nodeid
+    gcard: genericParamCard o: snap.st prog: snap.prog nid: hit.nodeid :site
     if gcard.length == 0 then return Value.nul
     gdoc: String
     gown: genericParamOwner o: snap.st prog: snap.prog nid: hit.nodeid
@@ -3787,6 +3906,8 @@ constHoverText: function {
     o: (Option zenv.ZSymbolTable).view
     prog: Ast.view
     nid: zast.nodeid
+    # the unit the constant's value is shown in
+    site: ztypes.declid
 } out String is {
     match (
         o
@@ -3798,18 +3919,20 @@ constHoverText: function {
             st: o
             :v
             num: (ztypecheck.constIntText st: o :v)
+            :site
         )
         if v.kind.fvalKind then return (typedNumberText
             st: o
             :v
             num: (ztypecheck.constFloatText st: o :v)
+            :site
         )
         if v.kind.svalKind then {
             sv: o.typing.constStrings.get i: v.strId
             return "\"\{sv}\""
         }
         if v.kind.armKind then {
-            arm: displayTypeNameSt st: o tid: v.armTid
+            arm: displayTypeNameSt st: o tid: v.armTid :site
             arm.appendByte b: 46
             arm.append (zast.poolTextAt pool: prog.names ref: v.armName)
             return arm
@@ -3823,10 +3946,14 @@ constHoverText: function {
 # typedNumberText -- a number as source spells its type: bare when it has none,
 # `5.u8` for a scalar, `rid 0` for a typedef, which constructs from its base
 typedNumberText: function {
-    st: zenv.ZSymbolTable.view v: ztypes.cval num: String.take
+    st: zenv.ZSymbolTable.view
+    v: ztypes.cval
+    num: String.take
+    # the unit the number's type is named in
+    site: ztypes.declid
 } out String is {
     if v.numTid.isZero then return num
-    tn: displayTypeNameSt :st tid: v.numTid
+    tn: displayTypeNameSt :st tid: v.numTid :site
     if (st.typing.typedefBaseName.has key: v.numTid) then return "\{tn} \{num}"
     # display text, not a key: the literal, its dot and its type
     r: num.take
@@ -3839,11 +3966,20 @@ typedNumberText: function {
 # # intliteral`, `nav.LIMIT: 5.u8`, `nav.M: nav.mode.slow`, `nav.primes.0: 2
 # # intliteral` -- the binding a program could write, with an untyped value's
 # literal type as the comment. "" when the value cannot be spelled.
-constCard: function {snap: zcheck.CheckResult hit: navhit hname: String.view} out String is {
-    cv: constHoverText o: snap.st prog: snap.prog nid: hit.nodeid
+constCard: function {
+    # the snapshot a constant's card reads
+    snap: zcheck.CheckResult
+    # the constant's hit
+    hit: navhit
+    # the name under the cursor
+    hname: String.view
+    # the constant card's unit
+    site: ztypes.declid
+} out String is {
+    cv: constHoverText o: snap.st prog: snap.prog nid: hit.nodeid :site
     if cv.length == 0 then return ""
     card: String
-    pre: constPathPrefix :snap :hit
+    pre: constPathPrefix :snap :hit :site
     if pre.length > 0 then {
         card.append pre
         card.appendByte b: 46
@@ -3861,8 +3997,15 @@ constCard: function {snap: zcheck.CheckResult hit: navhit hname: String.view} ou
 
 # constPathPrefix -- what a constant's name is spelled through: its owner (a data
 # block, `nav.primes`) when it has one, else the units its declaration sits in
-constPathPrefix: function {snap: zcheck.CheckResult hit: navhit} out String is {
-    if hit.owner.isZero.not then return (displayTypeNameOfOpt o: snap.st tid: hit.owner)
+constPathPrefix: function {
+    # the snapshot the hover reads
+    snap: zcheck.CheckResult
+    # the constant under the cursor
+    hit: navhit
+    # the hover's unit
+    site: ztypes.declid
+} out String is {
+    if hit.owner.isZero.not then return (displayTypeNameOfOpt o: snap.st tid: hit.owner :site)
     o: snap.st
     match (
         o
@@ -3883,30 +4026,33 @@ hoverTypeFence: function {
     hname: String
     # the node's own stamped type, which the kind fallback does not use
     t: ztypes.tid
+    # the unit the hover is shown in
+    site: ztypes.declid
 } out String is {
     # a CONSTANT's hit carries its value's type: the card names the constant,
     # its type and its value, not the type
     isConst: hitReadsConstOpt o: snap.st :hit name: hname.stringView
     tk: String
-    if isConst.not then tk = typeKindTextOpt o: snap.st tid: hit.tid
+    if isConst.not then tk = typeKindTextOpt o: snap.st tid: hit.tid :site
     if tk.length > 0 then {
-        kindFence: displayTypeNameOfOpt o: snap.st tid: hit.tid
+        kindFence: displayTypeNameOfOpt o: snap.st tid: hit.tid :site
         kindFence.append ": "
         kindFence.append tk
         return kindFence
     }
     if isConst then {
-        cc: constCard :snap :hit :hname
+        cc: constCard :snap :hit :hname :site
         if cc.length > 0 then return cc
     }
     if t.isZero then return ""
-    tn: displayTypeNameOfOpt o: snap.st tid: t
+    tn: displayTypeNameOfOpt o: snap.st tid: t :site
     if tn.length == 0 then return ""
     fence: String
     if hit.owner.isZero.not then {
         own: (displayTypeNameOfOpt
             o: snap.st
             tid: hit.owner
+            :site
         )
         if own.length > 0 then {
             fence.append own
@@ -3965,6 +4111,8 @@ navHoverAnswer: function {
     sp: Spans.view
     hit: navhit
     hname: String
+    # the hovered document's unit (docUnitDecl)
+    site: ztypes.declid
 } out Value is {
     if hit.unitFsno.isZero.not then {
         ub: hname.copy
@@ -3982,11 +4130,12 @@ navHoverAnswer: function {
         o: snap.st
         tid: sigTid
         name: hname.stringView
+        :site
     )
     if body.length == 0 then {
-        gc: genericParamHoverCard :snap :hit
+        gc: genericParamHoverCard :snap :hit :site
         if gc.nul.not then return gc
-        tf: hoverTypeFence :snap :hit :hname :t
+        tf: hoverTypeFence :snap :hit :hname :t :site
         if tf.length == 0 then return Value.nul
         body.append tf
     }
@@ -4019,7 +4168,7 @@ navHoverAnswer: function {
     ).not then {
         docBody = hoverDoc :snap :sp nid: legacyDnd
     }
-    hoverCallNotes :snap :sp :hit :body :docBody
+    hoverCallNotes :snap :sp :hit :body :docBody :site
     # a data block's ordinal (`primes.0`) is spelled like a literal, and is none
     if (ownerIsDataOpt o: snap.st tid: hit.owner) then return (hoverMarkdown
         code: body.stringView
@@ -4030,6 +4179,7 @@ navHoverAnswer: function {
         name: hname.stringView
         refTid: hit.tid
         nodeTid: (nodeTypeAt o: snap.st nid: hit.nodeid)
+        :site
     )
     appendNote :docBody note: ln9.stringView
     return (hoverMarkdown code: body.stringView doc: docBody.stringView)
@@ -4073,6 +4223,8 @@ hoverCallNotes: function {
     hit: navhit
     body: String.borrow
     docBody: String.borrow
+    # the unit the call's notes are shown in
+    site: ztypes.declid
 } is {
     hpos: (sp.pos.get key: hit.nodeid).or d: (zast.nodepos line: 0 col: 0)
     callId: (sp.innerRangeOfKind
@@ -4085,7 +4237,7 @@ hoverCallNotes: function {
     if callId.isZero then return
     callPos: (sp.pos.get key: callId).or d: (zast.nodepos line: 0 col: 0)
     if callPos == hpos then {
-        gl: inferredGenericLines o: snap.st prog: snap.prog :callId
+        gl: inferredGenericLines o: snap.st prog: snap.prog :callId :site
         if gl.length > 0 then {
             body.appendByte b: 10
             body.append gl
@@ -4229,7 +4381,13 @@ navAnswer: function {
     if hitOpt.none then return Value.nul
     hit: hitOpt
     hname: (sp.names.get i: hit.idx).copy
-    if mode == 2 then return (navHoverAnswer :snap :sp :hit :hname)
+    if mode == 2 then return (navHoverAnswer
+        :snap
+        :sp
+        :hit
+        :hname
+        site: (docUnitDecl r: snap rel: docRel :srcDir)
+    )
     if mode == 1 then {
         return (navDefinitionAnswer
             :snap
@@ -5721,6 +5879,8 @@ emitLabels: function {
     funcId: ztypes.tid
     supplied: List String
     prefix: StringView
+    # the unit the completion labels are shown in
+    site: ztypes.declid
 } out bool is {
     # callee params (skip receiver), collected before any declaration read
     pnames: List String
@@ -5755,7 +5915,7 @@ emitLabels: function {
             match (
                 o
             ) case some then {
-                tn: displayTypeNameSt st: o tid: (pptids.get i: ri)
+                tn: displayTypeNameSt st: o tid: (pptids.get i: ri) :site
                 det.append tn
                 det.append (ownershipSuffix
                     st: o
@@ -5782,6 +5942,8 @@ argLabelComplete: function {
     ps: u64
     prefix: StringView
     cursorPos: zast.nodepos
+    # the unit the completion is asked in
+    site: ztypes.declid
 } out bool is {
     ws: ps
     for ws > 0 loop {
@@ -5844,6 +6006,7 @@ argLabelComplete: function {
                 funcId: bfid
                 supplied: empty
                 :prefix
+                :site
             )
         }
     }
@@ -5886,7 +6049,7 @@ argLabelComplete: function {
         }
         si = si + 1
     }
-    return (emitLabels :arr :o :prog :funcId :supplied :prefix)
+    return (emitLabels :arr :o :prog :funcId :supplied :prefix :site)
 }
 
 # HeadScan -- the running state of the backward scan for the head of the call
@@ -6118,6 +6281,8 @@ signatureHelpAnswer: function {
     ch: i64
     utf32: bool
 } out Value is {
+    # the unit the signature is shown in, where a core type's bare name is read
+    site: docUnitDecl r: snap rel: docRel :srcDir
     l1: line0 + 1
     l1u: l1.u32.orPanic
     curLt: docLine text: docText lineno: l1u
@@ -6154,9 +6319,10 @@ signatureHelpAnswer: function {
         o: snap.st
         tid: funcId
         name: nmS
+        :site
     )
     if label.length == 0 then return Value.nul
-    pdisps: fnParamDisplays prog: snap.prog o: snap.st tid: funcId
+    pdisps: fnParamDisplays prog: snap.prog o: snap.st tid: funcId :site
     activeIdx: activeParamIndex :pdisps label: activeLabel.stringView
     params: signatureParams :pdisps
     siginfo: newObj
@@ -6255,6 +6421,7 @@ completionAnswer: function {
             :ps
             prefix: prefix.stringView
             cursorPos: curPos
+            site: (docUnitDecl r: snap rel: docRel :srcDir)
         )
         if handledAL then return (Value.array arr)
         if (words.slotOf text: trig) == zlsWord.slot.trigSpace then return (Value.array arr)
