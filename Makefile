@@ -2445,7 +2445,11 @@ perf: $(PERFBIN)
 #
 # -210 a type reference spelled `null` / `never` resolves through scope, with no
 # short-circuit to the system's types: 0 behaviour, -210 source (ab.sh).
-ALLOC_BASELINE := 2207344
+#
+# -452 sums whose names differ only in case are renamed apart before their tag
+# enumerators are spelled (the stem hash folds case, byte by byte), and cUpperOf
+# reserves its buffer: -767 behaviour, +315 source (ab.sh).
+ALLOC_BASELINE := 2206892
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

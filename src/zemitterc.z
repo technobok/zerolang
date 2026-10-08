@@ -1274,6 +1274,7 @@ cUpperOf: function {text: StringView} out String is {
     buf: String
     i: u64
     n: text.length
+    buf.reserve :n
     for i < n loop {
         bo: text.byteAt :i
         match (
@@ -32919,14 +32920,15 @@ emitRuntimeUnits: function {
 }
 
 
-# separateTagStems -- a sum's tag ENUMERATORS are spelled from its registry name
-# (variantTag, the option and iterator templates), and the runtime fragments spell
-# the stdlib's literally. Two sums may share a name -- `pal` declared in two units,
-# `Option Foo` over two units' own `Foo` -- and would then declare one enumerator
-# twice (checkTagStem). Before anything reads a name, each emittable sum that
-# shares its name with another is renamed `name_tid`, unless the stdlib owns it
-# (stdlibStem): the fragments name those, and the stdlib's own names are unique.
-# A template or a partial is never emitted, so it shares a name with nothing.
+# separateTagStems -- a sum's tag ENUMERATORS are spelled from its registry name,
+# upper-cased (variantTag, the option and iterator templates), and the runtime
+# fragments spell the stdlib's literally. Two sums may share that stem -- `pal`
+# declared in two units, `Option Foo` over two units' own `Foo`, a `shape` beside
+# a `Shape` -- and would then declare one enumerator twice (checkTagStem). Before
+# anything reads a name, each emittable sum that shares its stem with another is
+# renamed `name_tid`, unless the stdlib owns it (stdlibStem): the fragments name
+# those, and the stdlib's own stems are unique. A template or a partial is never
+# emitted, so it shares a stem with nothing.
 separateTagStems: function {symtab: zenv.ZSymbolTable} is {
     anchors: IdSet ztypes.declid
     anchors.add item: symtab.typing.systemUnitRoot
@@ -32944,7 +32946,8 @@ separateTagStems: function {symtab: zenv.ZSymbolTable} is {
             renamed: String
             {
                 nv: regNameView :symtab tid: t
-                if owned.not when (shared.has item: nv.hash) then renamed = "\{nv}_\{t}"
+                if owned.not when (shared.has item: (tagStemHash name: nv)
+                ) then renamed = "\{nv}_\{t}"
             }
             if renamed.length > 0 then symtab.reg.rename typeId: t name: renamed.take
         }
@@ -32952,9 +32955,9 @@ separateTagStems: function {symtab: zenv.ZSymbolTable} is {
     }
 }
 
-# sharedSumNames -- the names two or more emittable sums share, as hashes of the
-# name, so no name is copied to be a key. Two names that hash alike cost one
-# rename C did not need, never a wrong one.
+# sharedSumNames -- the tag stems two or more emittable sums share, as hashes of
+# the stem. Two stems that hash alike cost one rename C did not need, never a
+# wrong one.
 sharedSumNames: function {symtab: zenv.ZSymbolTable.view} out IdSet u64 is {
     seen: IdSet u64
     shared: IdSet u64
@@ -32962,12 +32965,29 @@ sharedSumNames: function {symtab: zenv.ZSymbolTable.view} out IdSet u64 is {
     t: ztypes.tid
     for t < n loop {
         if (emittableSum :symtab tid: t) then {
-            h: (regNameView :symtab tid: t).hash
+            h: tagStemHash name: (regNameView :symtab tid: t)
             if (seen.has item: h) then shared.add item: h else seen.add item: h
         }
         t = t.next
     }
     return shared
+}
+
+# tagStemHash -- a hash of the stem a sum's tag enumerators are spelled from: its
+# name upper-cased, so two names that differ only in case hash alike. Folded byte
+# by byte (an FNV-style add-multiply over the upper-cased bytes), so no stem
+# is built.
+tagStemHash: function {name: StringView} out u64 is {
+    h: 14695981039346656037.u64
+    i: u64
+    n: name.length
+    for i < n loop {
+        b: (name.byteAt :i).or d: 0
+        if b >= 97 when b <= 122 then b = b - 32
+        h = h + b * 1099511628211
+        i = i + 1
+    }
+    return h
 }
 
 # emittableSum -- a tagged sum with C of its own: neither a template nor a partial.
@@ -41690,7 +41710,8 @@ armTagValueText: function {
 # declarations of one enumerator.
 checkTagStem: function {symtab: zenv.ZSymbolTable.view ctx: Ctx tid: ztypes.tid} is {
     tsN: regNameOf :symtab :tid
-    tsO: ctx.tagStems.get key: tsN
+    tsU: cUpperOf text: tsN.stringView
+    tsO: ctx.tagStems.get key: tsU
     match (
         tsO
     ) case some then {
@@ -41699,7 +41720,7 @@ checkTagStem: function {symtab: zenv.ZSymbolTable.view ctx: Ctx tid: ztypes.tid}
         mts: "two monos share the name '\{tsN}' (\{c1s}, \{c2s}); their tag enumerators collide"
         emitFail :ctx what: mts line: 0
     } case none then {
-        ctx.tagStems.set key: tsN.copy value: tid
+        ctx.tagStems.set key: tsU.take value: tid
     }
 }
 
