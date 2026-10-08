@@ -80,18 +80,19 @@ expectArgc: function {n: u64 want: u64 msg: StringView} is {
 
 # Verb: entry <arm> [args...]. Constructs the named dentry arm with
 # the given args, appends to the table, prints the assigned id.
-dispatchEntry: function {tokens: (List String).view table: DentryTable} is {
+dispatchEntry: function {tokens: (List String).view words: zast.Vocab.view table: DentryTable} is {
     n: tokens.length
     if n < 2 then panic "entry verb expects an arm name"
     arm_str: tokens.get i: 1
     arm: arm_str.stringView
-    if arm == "root" then {
+    armW: words.slotOf text: arm
+    if armW == scriptWord.slot.root then {
         expectArgc :n want: 2 msg: "entry root takes no args"
         idx: table.append entry: dentry.root
         print "\{idx.u64}"
         return
     }
-    if arm == "notfound" then {
+    if armW == scriptWord.slot.notfound then {
         expectArgc :n want: 5 msg: "entry notfound expects 3 args"
         pid: fsno.create from: (parseU32at :tokens i: 2)
         prv: parseU32at :tokens i: 3
@@ -101,7 +102,7 @@ dispatchEntry: function {tokens: (List String).view table: DentryTable} is {
         print "\{idx.u64}"
         return
     }
-    if arm == "file" then {
+    if armW == scriptWord.slot.file then {
         expectArgc :n want: 5 msg: "entry file expects 3 args"
         pid: fsno.create from: (parseU32at :tokens i: 2)
         prv: parseU32at :tokens i: 3
@@ -111,7 +112,7 @@ dispatchEntry: function {tokens: (List String).view table: DentryTable} is {
         print "\{idx.u64}"
         return
     }
-    if arm == "directory" then {
+    if armW == scriptWord.slot.directory then {
         expectArgc :n want: 5 msg: "entry directory expects 3 args"
         pid: fsno.create from: (parseU32at :tokens i: 2)
         prv: parseU32at :tokens i: 3
@@ -121,15 +122,16 @@ dispatchEntry: function {tokens: (List String).view table: DentryTable} is {
         print "\{idx.u64}"
         return
     }
-    if arm == "mount" then {
+    if armW == scriptWord.slot.mount then {
         expectArgc :n want: 6 msg: "entry mount expects 4 args"
         pid: fsno.create from: (parseU32at :tokens i: 2)
         first: fsno.create from: (parseU32at :tokens i: 3)
         second: fsno.create from: (parseU32at :tokens i: 4)
         hassec_str: tokens.get i: 5
         hassec_sv: hassec_str.stringView
+        hassecW: words.slotOf text: hassec_sv
         hassec: false
-        if hassec_sv == "true" then hassec = true
+        if hassecW == scriptWord.slot.true then hassec = true
         e: dentry.mount (mountdata parentid: pid :first :second has_second: hassec)
         idx: table.append entry: e
         print "\{idx.u64}"
@@ -151,24 +153,27 @@ dispatchDump: function {tokens: (List String).view table: DentryTable} is {
 # Verb: provider <kind>. Constructs a provider of the named
 # kind (`null` / `string` / `fs`), registers it in the provider
 # table, prints the assigned id.
-dispatchProvider: function {tokens: (List String).view providers: ProviderTable} is {
+dispatchProvider: function {
+    tokens: (List String).view words: zast.Vocab.view providers: ProviderTable
+} is {
     n: tokens.length
     if n < 2 then panic "provider verb expects a kind name"
     kind_str: tokens.get i: 1
     kind: kind_str.stringView
-    if kind == "null" then {
+    kindW: words.slotOf text: kind
+    if kindW == scriptWord.slot.null then {
         if n != 2 then panic "provider null takes no args"
         idx: providers.registerNull
         print "\{idx.u64}"
         return
     }
-    if kind == "string" then {
+    if kindW == scriptWord.slot.string then {
         if n != 2 then panic "provider string takes no args"
         idx: providers.registerString
         print "\{idx.u64}"
         return
     }
-    if kind == "fs" then {
+    if kindW == scriptWord.slot.fs then {
         if n != 4 then panic "provider fs expects 2 args (rootpath parentpath)"
         rp_str: tokens.get i: 2
         pp_str: tokens.get i: 3
@@ -300,10 +305,13 @@ dispatchOpen: function {tokens: (List String).view providers: ProviderTable} is 
 # parseBindKind -- how a bind replaces what is already at a name. The refusal
 # text comes from the caller, so it still names the subverb that was given the
 # bad spelling.
-parseBindKind: function {kind_sv: StringView msg: StringView} out bindkind is {
-    if kind_sv == "instead" then return bindkind.instead
-    if kind_sv == "before" then return bindkind.before
-    if kind_sv == "after" then return bindkind.after
+parseBindKind: function {
+    kind_sv: StringView words: zast.Vocab.view msg: StringView
+} out bindkind is {
+    kindW: words.slotOf text: kind_sv
+    if kindW == scriptWord.slot.instead then return bindkind.instead
+    if kindW == scriptWord.slot.before then return bindkind.before
+    if kindW == scriptWord.slot.after then return bindkind.after
     panic msg
 }
 
@@ -311,27 +319,30 @@ parseBindKind: function {kind_sv: StringView msg: StringView} out bindkind is {
 # KIND before its arguments. False when `sub` is some other subverb.
 dispatchVfsRegister: function {
     tokens: (List String).view
+    words: zast.Vocab.view
     vfs: ZVfs
     n: u64
     sub: StringView
 } out bool is {
-    if sub != "register" then return false
+    subW: words.slotOf text: sub
+    if subW != scriptWord.slot.register then return false
     if n < 3 then panic "vfs register expects a kind"
     kind_str: tokens.get i: 2
     kind: kind_str.stringView
-    if kind == "null" then {
+    kindW: words.slotOf text: kind
+    if kindW == scriptWord.slot.null then {
         expectArgc :n want: 3 msg: "vfs register null takes no args"
         did: vfs.registerNull
         print "\{did.u64}"
         return true
     }
-    if kind == "string" then {
+    if kindW == scriptWord.slot.string then {
         expectArgc :n want: 3 msg: "vfs register string takes no args"
         did: vfs.registerString
         print "\{did.u64}"
         return true
     }
-    if kind == "fs" then {
+    if kindW == scriptWord.slot.fs then {
         expectArgc :n want: 5 msg: "vfs register fs expects 2 args (rootpath parentpath)"
         rp_str: tokens.get i: 3
         pp_str: tokens.get i: 4
@@ -349,11 +360,13 @@ dispatchVfsRegister: function {
 # subverb.
 dispatchVfsQuery: function {
     tokens: (List String).view
+    words: zast.Vocab.view
     vfs: ZVfs
     n: u64
     sub: StringView
 } out bool is {
-    if sub == "walk" then {
+    subW: words.slotOf text: sub
+    if subW == scriptWord.slot.walk then {
         expectArgc :n want: 4 msg: "vfs walk expects 2 args (parentid name)"
         pid: fsno.create from: (parseU32at :tokens i: 2)
         name_str: tokens.get i: 3
@@ -362,7 +375,7 @@ dispatchVfsQuery: function {
         print "\{did.u64}"
         return true
     }
-    if sub == "stat" then {
+    if subW == scriptWord.slot.stat then {
         expectArgc :n want: 3 msg: "vfs stat expects 1 arg (dentryid)"
         did: fsno.create from: (parseU32at :tokens i: 2)
         k: vfs.arm dentryid: did
@@ -377,28 +390,28 @@ dispatchVfsQuery: function {
         }
         return true
     }
-    if sub == "path" then {
+    if subW == scriptWord.slot.path then {
         expectArgc :n want: 3 msg: "vfs path expects 1 arg (dentryid)"
         did: fsno.create from: (parseU32at :tokens i: 2)
         s: vfs.path dentryid: did
         print s
         return true
     }
-    if sub == "pathfromprovider" then {
+    if subW == scriptWord.slot.pathfromprovider then {
         expectArgc :n want: 3 msg: "vfs pathfromprovider expects 1 arg (dentryid)"
         did: fsno.create from: (parseU32at :tokens i: 2)
         s: vfs.pathfromprovider dentryid: did
         print s
         return true
     }
-    if sub == "open" then {
+    if subW == scriptWord.slot.open then {
         expectArgc :n want: 3 msg: "vfs open expects 1 arg (dentryid)"
         did: fsno.create from: (parseU32at :tokens i: 2)
         r: vfs.open dentryid: did
         printOpenResult r: r.take
         return true
     }
-    if sub == "getline" then {
+    if subW == scriptWord.slot.getline then {
         expectArgc :n want: 4 msg: "vfs getline expects 2 args (dentryid lineno)"
         did: fsno.create from: (parseU32at :tokens i: 2)
         ln_u32: parseU32at :tokens i: 3
@@ -421,23 +434,26 @@ dispatchVfsQuery: function {
 # other subverb.
 dispatchVfsBind: function {
     tokens: (List String).view
+    words: zast.Vocab.view
     vfs: ZVfs
     n: u64
     sub: StringView
 } out bool is {
-    if sub == "bindroot" then {
+    subW: words.slotOf text: sub
+    if subW == scriptWord.slot.bindroot then {
         expectArgc :n want: 4 msg: "vfs bindroot expects 2 args (newid kind)"
         newid: fsno.create from: (parseU32at :tokens i: 2)
         kind_str: tokens.get i: 3
         kind: (parseBindKind
             kind_sv: kind_str.stringView
+            :words
             msg: "vfs bindroot: unknown kind (instead/before/after)"
         )
         did: vfs.bindRoot :newid :kind
         print "\{did.u64}"
         return true
     }
-    if sub == "bind" then {
+    if subW == scriptWord.slot.bind then {
         expectArgc :n want: 6 msg: "vfs bind expects 4 args (parentid name newid kind)"
         pid: fsno.create from: (parseU32at :tokens i: 2)
         name_str: tokens.get i: 3
@@ -446,6 +462,7 @@ dispatchVfsBind: function {
         kind_str: tokens.get i: 5
         kind: (parseBindKind
             kind_sv: kind_str.stringView
+            :words
             msg: "vfs bind: unknown kind (instead/before/after)"
         )
         did: vfs.bind parentid: pid name: name_sv :newid :kind
@@ -468,64 +485,100 @@ dispatchVfsBind: function {
 #   bind <name> <providerid>
 # Each prints one line: the returned id, the arm name, or the
 # path string.
-dispatchVfs: function {tokens: (List String).view vfs: ZVfs} is {
+dispatchVfs: function {tokens: (List String).view words: zast.Vocab.view vfs: ZVfs} is {
     n: tokens.length
     if n < 2 then panic "vfs verb expects a subverb"
     sub_str: tokens.get i: 1
     sub: sub_str.stringView
-    if (dispatchVfsRegister :tokens :vfs :n :sub) then return
-    if (dispatchVfsQuery :tokens :vfs :n :sub) then return
-    if (dispatchVfsBind :tokens :vfs :n :sub) then return
+    if (dispatchVfsRegister :tokens :words :vfs :n :sub) then return
+    if (dispatchVfsQuery :tokens :words :vfs :n :sub) then return
+    if (dispatchVfsBind :tokens :words :vfs :n :sub) then return
     panic "vfs: unknown subverb"
 }
 
+# scriptWord -- the words this program reads off its input, classified by slot
+# (zast.Vocab) rather than compared as text
+scriptWord: data {
+    entry: "entry"
+    dump: "dump"
+    provider: "provider"
+    walk: "walk"
+    stat: "stat"
+    path: "path"
+    addFile: "addFile"
+    open: "open"
+    vfs: "vfs"
+    root: "root"
+    notfound: "notfound"
+    file: "file"
+    directory: "directory"
+    mount: "mount"
+    true: "true"
+    null: "null"
+    string: "string"
+    fs: "fs"
+    instead: "instead"
+    before: "before"
+    after: "after"
+    register: "register"
+    pathfromprovider: "pathfromprovider"
+    getline: "getline"
+    bindroot: "bindroot"
+    bind: "bind"
+} out stringdata
+
 # run one line of a VFS test script against the given tables.
-dispatchLine: function {line: StringView table: DentryTable providers: ProviderTable vfs: ZVfs} is {
+dispatchLine: function {
+    line: StringView words: zast.Vocab.view table: DentryTable providers: ProviderTable vfs: ZVfs
+} is {
     tokens: tokenizeLine :line
     if tokens.length == 0 then return
     verb_str: tokens.get i: 0
     verb: verb_str.stringView
-    if verb == "entry" then {
-        dispatchEntry :tokens :table
+    verbW: words.slotOf text: verb
+    if verbW == scriptWord.slot.entry then {
+        dispatchEntry :tokens :words :table
         return
     }
-    if verb == "dump" then {
+    if verbW == scriptWord.slot.dump then {
         dispatchDump :tokens :table
         return
     }
-    if verb == "provider" then {
-        dispatchProvider :tokens :providers
+    if verbW == scriptWord.slot.provider then {
+        dispatchProvider :tokens :words :providers
         return
     }
-    if verb == "walk" then {
+    if verbW == scriptWord.slot.walk then {
         dispatchWalk :tokens :providers
         return
     }
-    if verb == "stat" then {
+    if verbW == scriptWord.slot.stat then {
         dispatchStat :tokens :providers
         return
     }
-    if verb == "path" then {
+    if verbW == scriptWord.slot.path then {
         dispatchPath :tokens :providers
         return
     }
-    if verb == "addFile" then {
+    if verbW == scriptWord.slot.addFile then {
         dispatchAddFile :tokens :providers
         return
     }
-    if verb == "open" then {
+    if verbW == scriptWord.slot.open then {
         dispatchOpen :tokens :providers
         return
     }
-    if verb == "vfs" then {
-        dispatchVfs :tokens :vfs
+    if verbW == scriptWord.slot.vfs then {
+        dispatchVfs :tokens :words :vfs
         return
     }
     panic "unknown verb"
 }
 
 # run a whole VFS test script.
-runScript: function {text: String table: DentryTable providers: ProviderTable vfs: ZVfs} is {
+runScript: function {
+    text: String words: zast.Vocab.view table: DentryTable providers: ProviderTable vfs: ZVfs
+} is {
     sv: text.stringView
     for each line: sv.lines loop {
         trimmed: line.trim
@@ -535,7 +588,7 @@ runScript: function {text: String table: DentryTable providers: ProviderTable vf
                 fb_opt
             ) case some then {
                 if fb_opt != 35 then {
-                    dispatchLine line: trimmed :table :providers :vfs
+                    dispatchLine line: trimmed :words :table :providers :vfs
                 }
             } case none then null
         }
@@ -554,6 +607,7 @@ main: function is {
     match (
         r
     ) case ok then {
+        words: zast.Vocab.create block: scriptWord
         table: DentryTable entries: (ListVal dentry i: fsno)
         providers: ProviderTable providers: List ProviderBox
         vtable: DentryTable entries: (ListVal dentry i: fsno)
@@ -566,7 +620,7 @@ main: function is {
             rootid: fsno
             shadow: (zvfs.shadowpair active: false top: zvfs.fsno base: zvfs.fsno)
         )
-        runScript text: r.take :table :providers :vfs
+        runScript text: r.take :words :table :providers :vfs
     } case err then {
         io.eprintln "zvfs: could not read script file"
         os.exit code: 1

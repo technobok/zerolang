@@ -171,13 +171,34 @@ fill: function {tpl: StringView n: i64} out String is {
 # argument, operator; plain is an `@` that starts none
 form: variant { plain: null make: null read: null method: null methodArg: null operator: null }
 
+# matrixWord -- the words this program reads off its input, classified by slot
+# (zast.Vocab) rather than compared as text
+matrixWord: data {
+    make: "MK"
+    read: "RD"
+    method: "ME"
+    methodArg: "MA"
+    operator: "OP"
+    closeBrace: "}"
+    run: "RUN"
+    refused: "REFUSED"
+    na: "NA"
+    ask: "ASK"
+    known: "KNOWN"
+    anyFamily: "*"
+    fRoot: "--root"
+    fCells: "--cells"
+} out stringdata
+
 # formOf -- the form a name before `[` spells
 formOf: function {name: StringView} out form is {
-    if name == "MK" then return form.make
-    if name == "RD" then return form.read
-    if name == "ME" then return form.method
-    if name == "MA" then return form.methodArg
-    if name == "OP" then return form.operator
+    words: zast.Vocab.create block: matrixWord
+    nameW: words.slotOf text: name
+    if nameW == matrixWord.slot.make then return form.make
+    if nameW == matrixWord.slot.read then return form.read
+    if nameW == matrixWord.slot.method then return form.method
+    if nameW == matrixWord.slot.methodArg then return form.methodArg
+    if nameW == matrixWord.slot.operator then return form.operator
     return form.plain
 }
 
@@ -1110,7 +1131,9 @@ typeDeclName: function {line: StringView} out String is {
 
 # closesBlock -- the line that closes a top-level declaration block
 closesBlock: function {line: StringView} out bool is {
-    return line == "}"
+    words: zast.Vocab.create block: matrixWord
+    lineW: words.slotOf text: line
+    return lineW == matrixWord.slot.closeBrace
 }
 
 # movedName -- the identifier `word` at `at` in `text` is one of `names` and no
@@ -2311,11 +2334,13 @@ slurp: function {path: StringView} out String is {
 
 # outcomeOf -- the outcome a verdict word names, stopping on any other word
 outcomeOf: function {w: StringView where: String.view} out outcome is {
-    if w == "RUN" then return outcome.run
-    if w == "REFUSED" then return outcome.refused
-    if w == "NA" then return outcome.na
-    if w == "ASK" then return outcome.ask
-    if w == "KNOWN" then return outcome.known
+    words: zast.Vocab.create block: matrixWord
+    wW: words.slotOf text: w
+    if wW == matrixWord.slot.run then return outcome.run
+    if wW == matrixWord.slot.refused then return outcome.refused
+    if wW == matrixWord.slot.na then return outcome.na
+    if wW == matrixWord.slot.ask then return outcome.ask
+    if wW == matrixWord.slot.known then return outcome.known
     fail msg: "\{where}: unknown verdict '\{w}'"
     return outcome.run
 }
@@ -2339,7 +2364,9 @@ isCode: function {w: StringView} out bool is {
 # selects -- whether a row's selector names the family: `*`, `@<tag>` (tags
 # joined by `&` select the families carrying every one), or its name
 selects: function {sel: StringView f: Family.view} out bool is {
-    if sel == "*" then return true
+    words: zast.Vocab.create block: matrixWord
+    selW: words.slotOf text: sel
+    if selW == matrixWord.slot.anyFamily then return true
     if (sel.startsWith prefix: "@") then {
         for each t: ((sel.substring from: 1 to: sel.length).split sep: "&") loop {
             tag: " \{t} "
@@ -2810,16 +2837,18 @@ Options: class {
 
 # parseArgs -- the command line as Options, stopping on anything else
 parseArgs: function out Options is {
+    words: zast.Vocab.create block: matrixWord
     argv: os.args
     opts: Options root: "." cellsDir: ""
     i: 1.u64
     for i < argv.length loop {
         a: argv.get :i
+        aW: words.slotOf text: a.stringView
         if (i + 1) >= argv.length then fail msg: "usage: matrixgen [--root DIR] [--cells DIR]"
         v: argv.get i: i + 1
-        if a == "--root" then {
+        if aW == matrixWord.slot.fRoot then {
             opts.root = v.copy
-        } else if a == "--cells" then {
+        } else if aW == matrixWord.slot.fCells then {
             opts.cellsDir = v.copy
         } else fail msg: "usage: matrixgen [--root DIR] [--cells DIR]"
         i = i + 2
