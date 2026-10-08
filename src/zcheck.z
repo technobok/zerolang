@@ -472,17 +472,25 @@ vendoredTcc: function out String is {
     return ""
 }
 
+# ccWord -- the C toolchain words zc's flags name: the vendored compiler and the
+# in-process mode, classified by slot (zast.Vocab)
+ccWord: data {
+    tcc: "tcc"
+    inproc: "inproc"
+} out stringdata
+
 # pickCc -- the C compiler this build will use: --cc > <target>-gcc > $CC > cc.
 # A fact for the C backend and the build, which `zc env` reports too; no type
 # checking reads it, so the editor and the linter never resolve it.
 pickCc: function {ccFlag: StringView targetTriple: StringView} out String is {
     if ccFlag.length > 0 then {
+        ccWords: zast.Vocab.create block: ccWord
         # a bare `tcc` means the one this tree vendors, when it has one:
         # `install` symlinks zc/zl/zls onto PATH and nothing else, so a plain
         # PATH lookup would never find <root>/bin/tcc. Resolving it here does
         # not change the family -- zemitterc.ccFamilyOf reads the BASENAME,
         # and `tcc` and `<root>/bin/tcc` classify the same.
-        if ccFlag == "tcc" then {
+        if (ccWords.slotOf text: ccFlag) == ccWord.slot.tcc then {
             v: vendoredTcc
             if v.length > 0 then return v
         }
@@ -508,7 +516,8 @@ pickCc: function {ccFlag: StringView targetTriple: StringView} out String is {
 # flag, which is where a typo can still be reported against the argument that
 # carried it.
 pickCcMode: function {modeFlag: StringView} out String is {
-    if modeFlag == "inproc" then return "inproc"
+    ccWords: zast.Vocab.create block: ccWord
+    if (ccWords.slotOf text: modeFlag) == ccWord.slot.inproc then return "inproc"
     return "spawn"
 }
 

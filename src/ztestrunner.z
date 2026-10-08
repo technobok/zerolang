@@ -236,6 +236,7 @@ dumpArgv: function {
 # would drop every -l flag with no error -- and the reader would go on linking,
 # because a missing library the libc happens to supply looks like success.
 zlinkArgs: function {csrc: StringView} out List String is {
+    words: zast.Vocab.create block: runnerWord
     flags9k: List String
     txt9k: slurp path: csrc
     if txt9k.length == 0 then return flags9k
@@ -246,13 +247,14 @@ zlinkArgs: function {csrc: StringView} out List String is {
         if (line9k.startsWith prefix: "/* zlink:") then {
             seen9k: false
             for each tok9k: (line9k.split sep: " ") loop {
-                if tok9k == "*/" then seen9k = false
+                tw9k: words.slotOf text: tok9k
+                if tw9k == runnerWord.slot.zlinkClose then seen9k = false
                 if seen9k then {
                     la9k: "-l".string
                     la9k.append tok9k
                     flags9k.append from: la9k
                 }
-                if tok9k == "zlink:" then seen9k = true
+                if tw9k == runnerWord.slot.zlinkOpen then seen9k = true
             }
         }
     }
@@ -670,6 +672,7 @@ frameLsp: function {src: StringView} out String is {
 # emits the exact form "Content-Length: N\r\n\r\n<body>"; anything
 # else surfaces as a literal marker line so the diff fails loudly.
 deframeLsp: function {raw: StringView} out String is {
+    words: zast.Vocab.create block: runnerWord
     result: String
     pos: u64
     n: raw.length
@@ -681,7 +684,7 @@ deframeLsp: function {raw: StringView} out String is {
         }
         okHdr: false
         hd: raw.substring from: pos to: pos + 16
-        if hd == "Content-Length: " then okHdr = true
+        if (words.slotOf text: hd) == runnerWord.slot.lspHeader then okHdr = true
         if okHdr.not then {
             result.append "<<deframe error: bad prefix>>"
             result.appendByte b: 10
@@ -721,6 +724,26 @@ deframeLsp: function {raw: StringView} out String is {
     }
     return result
 }
+
+# runnerWord -- every word the runner reads off outside text: its flags, the
+# LSP frame header and the emitted C's `zlink:` comment. A word is classified by
+# its slot here (zast.Vocab), never by comparing its text.
+runnerWord: data {
+    fCcForward: "--cc-forward"
+    fReport: "--report"
+    fHeavy: "--heavy"
+    fSaveTemps: "--save-temps"
+    fRegenLsp: "--regen-lsp"
+    fZc: "--zc"
+    fCc: "--cc"
+    fCcflags: "--ccflags"
+    fRoot: "--root"
+    fJobs: "--jobs"
+    fTimeout: "--timeout"
+    lspHeader: "Content-Length: "
+    zlinkOpen: "zlink:"
+    zlinkClose: "*/"
+} out stringdata
 
 # test-runner entry point: build the compiler, run the
 # run/leak/error/dump/lsp suites, and report pass/fail counts.
@@ -2694,25 +2717,25 @@ newRunner: function out Runner is {
     )
 }
 
-# takeFlag -- a bare switch: set it and answer true; false when `av` is not one.
-takeFlag: function {r: Runner av: StringView} out bool is {
-    if av == "--cc-forward" then {
+# takeFlag -- a bare switch: set it and answer true; false when `w` is not one.
+takeFlag: function {r: Runner w: u64} out bool is {
+    if w == runnerWord.slot.fCcForward then {
         r.ccFwdOn = true
         return true
     }
-    if av == "--report" then {
+    if w == runnerWord.slot.fReport then {
         r.report = true
         return true
     }
-    if av == "--heavy" then {
+    if w == runnerWord.slot.fHeavy then {
         r.heavy = true
         return true
     }
-    if av == "--save-temps" then {
+    if w == runnerWord.slot.fSaveTemps then {
         r.saveTemps = true
         return true
     }
-    if av == "--regen-lsp" then {
+    if w == runnerWord.slot.fRegenLsp then {
         r.regenLsp = true
         return true
     }
@@ -2720,31 +2743,31 @@ takeFlag: function {r: Runner av: StringView} out bool is {
 }
 
 # takeValue -- a switch that consumes the argument after it (`val`): set it and
-# answer true; false when `av` is not one. A --jobs value counts only when it
+# answer true; false when `w` is not one. A --jobs value counts only when it
 # is a positive number; an unparsable --timeout keeps the default.
-takeValue: function {r: Runner av: StringView val: StringView} out bool is {
-    if av == "--zc" then {
+takeValue: function {r: Runner w: u64 val: StringView} out bool is {
+    if w == runnerWord.slot.fZc then {
         r.zc = val.string
         return true
     }
-    if av == "--cc" then {
+    if w == runnerWord.slot.fCc then {
         r.cc = val.string
         return true
     }
-    if av == "--ccflags" then {
+    if w == runnerWord.slot.fCcflags then {
         r.ccflags = val.string
         return true
     }
-    if av == "--root" then {
+    if w == runnerWord.slot.fRoot then {
         r.root = val.string
         return true
     }
-    if av == "--jobs" then {
+    if w == runnerWord.slot.fJobs then {
         jv: val.parseI64
         if jv.ok when jv > 0 then r.jobsMax = jv.u64.orPanic
         return true
     }
-    if av == "--timeout" then {
+    if w == runnerWord.slot.fTimeout then {
         tv: val.parseI64
         if tv.ok then r.timeoutSecs = tv.i32.orPanic
         return true
@@ -2758,14 +2781,15 @@ takeValue: function {r: Runner av: StringView val: StringView} out bool is {
 # flags may arrive in either order, and reading `cc` early would make
 # `--cc-forward --cc X` forward the default instead of X.
 parseRunnerArgs: function {r: Runner argv: (List String).view} is {
+    words: zast.Vocab.create block: runnerWord
     n: argv.length
     i: 1.u64
     for i < n loop {
         a: argv.get :i
-        av: a.stringView
-        if (takeFlag :r :av).not when (i + 1) < n then {
+        w: words.slotOf text: a.stringView
+        if (takeFlag :r :w).not when (i + 1) < n then {
             v: argv.get i: i + 1
-            if (takeValue :r :av val: v.stringView) then i = i + 1
+            if (takeValue :r :w val: v.stringView) then i = i + 1
         }
         i = i + 1
     }
