@@ -5888,41 +5888,32 @@ paramTypeBaseNameId: function {ast: Ast.view op: astnode.view} out zast.nameid i
     }
 }
 
-# isBorrowReftypeCollection -- true for a parameterized collection whose mono is a
-# non-heap-allocated reftype, which takes the reftype-param BORROW default: List and
-# ListView (stack struct + heap buffer). Set/Map monos are heap-allocated (no BORROW);
-# the native iterator views have no destructor (no BORROW); str/array are valtypes.
-isBorrowReftypeCollection: function {nameId: zast.nameid} out bool is {
-    if nameId == zast.wellKnown.slot.tyList then return true
-    if nameId == zast.wellKnown.slot.tyListRef then return true
-    if nameId == zast.wellKnown.slot.tyListVal then return true
-    if nameId == zast.wellKnown.slot.tyListView then return true
-    if nameId == zast.wellKnown.slot.tyListViewVal then return true
-    # the id-keyed containers are stack structs too -- a header plus two heap
-    # arrays, created BY VALUE -- so they take the same borrow default
-    return (
-        (nameId == zast.wellKnown.slot.tyIdMapR) or
-        (nameId == zast.wellKnown.slot.tyIdMapV) or
-        (nameId == zast.wellKnown.slot.tyIdSet)
-    )
+# isBorrowReftypeCollection -- the parameter type is an instance of a system
+# collection whose mono is a non-heap-allocated reftype, which takes the
+# reftype-param BORROW default: List and ListView (stack struct + heap buffer),
+# and the id-keyed containers (a header plus two heap arrays, created BY VALUE).
+# Set/Map monos are heap-allocated (no BORROW); the native iterator views have
+# no destructor (no BORROW); str/array are valtypes. Asked of the instance's
+# template, so a program's own `List` is its own type.
+isBorrowReftypeCollection: function {
+    # the tree the system's templates are looked up through
+    ast: Ast.view
+    # the table holding the instance and its template
+    st: zenv.ZSymbolTable
+    # the parameter's type
+    tid: ztypes.tid
+} out bool is {
+    o: st.reg.genericOriginOf :tid
+    if o.isZero then return false
+    if o == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyListRef) then return true
+    if o == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyListVal) then return true
+    if o == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyListView) then return true
+    if o == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyListViewVal) then return true
+    if o == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyIdMapR) then return true
+    if o == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyIdMapV) then return true
+    return o == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyIdSet)
 }
 
-# isBorrowNativeReftypeId / isNativeValueViewId -- the two native-shape
-# predicates asked of a name id: the text is compared in place, never copied.
-isBorrowNativeReftypeId: function {nameId: zast.nameid} out bool is {
-    return nameId == zast.wellKnown.slot.tyString
-}
-
-# isNativeValueViewId -- the native value view (`StringView`), asked of a name id.
-isNativeValueViewId: function {nameId: zast.nameid} out bool is {
-    return nameId == zast.wellKnown.slot.tyStringView
-}
-
-# isBorrowNativeReftype -- true for native heap-owning reftypes (currently String)
-# that take the BORROW default as an unannotated param. Keyed by name, like the
-# classifiers above: native types resolve AFTER the main unit, so the metadata
-# that would answer (a native CLASS that owns heap) is not yet populated when a
-# param resolves.
 # demandReturnType -- demand a function's return-type names (`out (Result t:
 # u64 e: IoError)` -> Result), so a type named only in a return position is
 # resolved.
@@ -6563,11 +6554,11 @@ registerValueParam: function {
     } case none then {
         isref: (paramIsBorrowReftype
             :st
-            scope: rf
             :ast
             :unitDecl
             :thisName
             opId: pm.operation
+            tid: cid
         )
         if isref then {
             (st.typing.setChildOwnershipId
@@ -7191,9 +7182,10 @@ paramIsBorrowReftype: function {
     ast: Ast
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
-    scope: ztypes.declid
     thisName: StringView
     opId: zast.nodeid
+    # the parameter's resolved type
+    tid: ztypes.tid
 } out bool is {
     tnId: atomNameId :ast n: (ast.nodes.get i: opId)
     isref: false
@@ -7208,19 +7200,21 @@ paramIsBorrowReftype: function {
                 isref = rgo
             } case none then null
         }
-        if (isNativeValueViewId nameId: (zast.poolFind pool: ast.names text: thisName)) then {
+        # the system's StringView is a native value view, passed by value
+        if unitDecl == st.typing.systemUnitRoot when (
+            (zast.poolFind pool: ast.names text: thisName) == zast.wellKnown.slot.tyStringView
+        ) then {
             isref = false
         }
     } else {
         if tnId.isZero then {
-            base: paramTypeBaseNameId :ast op: (ast.nodes.get i: opId)
-            isref = isBorrowReftypeCollection nameId: base
+            isref = isBorrowReftypeCollection :ast :st :tid
         } else {
             isref = nameIsInUnitReftypeId :st :ast :unitDecl nameId: tnId
-            tdu: (definingSiteForId :st :scope :ast :unitDecl nameId: tnId).defUnit
-            inSys: tdu == st.typing.systemUnitRoot
-            if (isBorrowNativeReftypeId nameId: tnId) when inSys then isref = true
-            if (isNativeValueViewId nameId: tnId) when inSys then isref = false
+            # the system's String owns heap and borrows; its StringView is a
+            # native value view and does not
+            if tid == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyString) then isref = true
+            if tid == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyStringView) then isref = false
         }
     }
     return isref
