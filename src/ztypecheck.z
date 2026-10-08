@@ -2937,9 +2937,9 @@ recordResolvedName: function {
 # monoArgName -- a pending-instantiation argument's recorded name: `this` and
 # `type` map to the enclosing type (the recordResolvedName mapping); "" when
 # there is no enclosing type.
-monoArgName: function {an: StringView thisName: StringView} out String is {
-    if an == "this" then return thisName.string
-    if an == "type" then return thisName.string
+monoArgName: function {an: StringView anId: zast.nameid thisName: StringView} out String is {
+    if anId == zast.wellKnown.slot.wkThis then return thisName.string
+    if anId == zast.wellKnown.slot.wkType then return thisName.string
     return an.string
 }
 
@@ -3217,7 +3217,7 @@ monoRefArgTid: function {
             }
         }
     } else {
-        anc: monoArgName :an :thisName
+        anc: monoArgName :an anId: (atomNameId :ast n: (ast.nodes.get i: arg.operation)) :thisName
         if anc.length == 0 then {
             allOk = false
         } else {
@@ -12564,12 +12564,14 @@ typeExprText: function {ast: Ast.view nid: zast.nodeid} out String is {
     if nid.isZero then return ""
     isCall: false
     n9t: ast.nodes.get i: nid
+    # exprTextOf spells atoms, dotted paths and calls; any other node spells
+    # nothing a report could name
+    if n9t.atomid.not when n9t.dottedpath.not when n9t.call.not then return ""
     isCall = n9t.call
     r: String
     if isCall then r.append "("
     exprTextOf :ast n: (ast.nodes.get i: nid) dst: r
     if isCall then r.append ")"
-    if r.stringView == "(...)" then return ""
     return r
 }
 
@@ -21378,23 +21380,26 @@ cloneMethodParams: function {
     specId: ztypes.tid
     fid5: ztypes.tid
     templateName: StringView
-    cN5: (List String).view
+    # the template's parameters: name ids, types and declared ownership, slot
+    # for slot
+    cNid5: (ListVal zast.nameid).view
     cI5: (ListVal ztypes.tid).view
     cOh5: (ListVal bool).view
     cOv5: (ListVal ztypes.zparamownership).view
     idSubs: (IdMapV ztypes.tid v: ztypes.genericarg)
     tplClassId: ztypes.tid
-    tpn0: StringView
+    # the template's receiver name, when a marked receiver renames it
+    tpn0id: zast.nameid
 } is {
     pi5: u64
-    pn5: cN5.length
+    pn5: cNid5.length
     for pi5 < pn5 loop {
-        pnm5: cN5.get i: pi5
+        pnm5: cNid5.get i: pi5
         ptid5: cI5.get i: pi5
         tgt5: ptid5
         if ptid5 == tplClassId then tgt5 = specId
-        if pnm5.stringView == "this" then tgt5 = specId
-        if tpn0.length > 0 when pnm5.stringView == tpn0 then tgt5 = specId
+        if pnm5 == zast.wellKnown.slot.wkThis then tgt5 = specId
+        if tpn0id.isZero.not when pnm5 == tpn0id then tgt5 = specId
         if tgt5 == ptid5 then {
             # `this`/`type`-typed params carry fresh shells named after the
             # class; shell-name identity marks the self type.
@@ -21419,19 +21424,10 @@ cloneMethodParams: function {
                 if rs5.isZero.not then tgt5 = rs5
             }
         }
-        (st.typing.setMemberType
-            parentTypeId: fid5
-            nameId: (zast.poolFind pool: ast.names text: pnm5.stringView)
-            childTypeId: tgt5
-        )
+        st.typing.setMemberType parentTypeId: fid5 nameId: pnm5 childTypeId: tgt5
         if (cOh5.get i: pi5) then {
             pov5: cOv5.get i: pi5
-            (st.typing.setChildOwnership
-                pool: ast.names
-                parentTypeId: fid5
-                name: pnm5.stringView
-                ownership: pov5
-            )
+            st.typing.setChildOwnershipId parentTypeId: fid5 nameId: pnm5 ownership: pov5
         }
         pi5 = pi5 + 1
     }
@@ -21637,11 +21633,9 @@ cloneMethodInto: function {
         typeId: fid5
         nameId: tpn0id
     )
-    tpn0: zast.nameTextCopy :ast ref: tpn0id
     copyReturnMarkers :st fromFn: tplFnId toFn: fid5
     frn0: (st.typing.funcReturnNode.get key: tplFnId).or d: zast.nodeid
     if frn0.isZero.not then st.typing.funcReturnNode.set key: fid5 value: frn0
-    cN5: List String
     cI5: ListVal ztypes.tid
     cNid5: ListVal zast.nameid
     cOh5: ListVal bool
@@ -21656,9 +21650,6 @@ cloneMethodInto: function {
             if rw5.keep then {
                 cNid5.append rw5.name
                 cI5.append rw5.tid
-                nmB5: ast.names.texts.get i: rw5.name
-                nm5: nmB5.copy
-                cN5.append nm5
             }
         }
     }
@@ -21693,13 +21684,13 @@ cloneMethodInto: function {
         :specId
         :fid5
         templateName: templateName.stringView
-        :cN5
+        :cNid5
         :cI5
         :cOh5
         :cOv5
         :idSubs
         :tplClassId
-        tpn0: tpn0.stringView
+        :tpn0id
     )
     cloneDroppedReceiver :st :tplFnId toFn: fid5 :tpn0id
     # the parameter defaults: a construction or a call that leaves one out
@@ -21841,6 +21832,8 @@ cloneGenericMemberInto: function {
     templateId: ztypes.tid
     mid: ztypes.tid
     chName: StringView
+    # the member's name, interned
+    chNameId: zast.nameid
     chId: ztypes.tid
     idSubs: (IdMapV ztypes.tid v: ztypes.genericarg)
 } out bool is {
@@ -21848,7 +21841,7 @@ cloneGenericMemberInto: function {
     # a `create` the template writes is cloned like any method; the synthesised
     # one is the instance's own (mintMonoRecordShape)
     isSynth: false
-    if chName == "create" then {
+    if chNameId == zast.wellKnown.slot.wkCreate then {
         isSynth = (st.typing.declMemberIsSynth
             parentTypeId: templateId
             nameId: zast.wellKnown.slot.wkCreate
@@ -21876,7 +21869,7 @@ cloneGenericMemberInto: function {
         if (st.reg.genericParamCountOf tdecl: chDecl) > 0 then {
             cloneId: ((st.typing.declChildOfId
                 parentTypeId: mid
-                nameId: (zast.poolFind pool: ast.names text: chName)
+                nameId: chNameId
             ).or
                 d: ztypes.tid.zero
             )
@@ -21900,10 +21893,11 @@ copyMemberMarkers: function {
     mid: ztypes.tid
     templateId: ztypes.tid
     chName: StringView
+    # the member's name, interned
+    chNameId: zast.nameid
     target: ztypes.tid
 } out bool is {
     monoNeedsDtor: false
-    chNameId: zast.poolFind pool: ast.names text: chName
     # A marker belongs to the MEMBER, and every use site asks the
     # INSTANCE type about it -- so it has to be copied onto the clone
     # or it is enforced on the template alone, which nothing checks.
@@ -22033,6 +22027,8 @@ mintMonoMember: function {
     subs: (IdMapV zast.nameid v: ztypes.tid).view
     idSubs: (IdMapV ztypes.tid v: ztypes.genericarg)
     chName: StringView
+    # the member's name, interned
+    chNameId: zast.nameid
     chId: ztypes.tid
 } out bool is {
     monoNeedsDtor: false
@@ -22065,7 +22061,7 @@ mintMonoMember: function {
         (st.typing.boxedArms.add
             item: (st.typing.armKey
                 parentTypeId: mid
-                nameId: (zast.poolFind pool: ast.names text: chName)
+                nameId: chNameId
             )
         )
     }
@@ -22085,13 +22081,14 @@ mintMonoMember: function {
         :templateId
         :mid
         :chName
+        :chNameId
         :chId
         :idSubs
     ) then deep5 = true
     if deep5.not then {
         (st.typing.setMemberType
             parentTypeId: mid
-            nameId: (zast.poolFind pool: ast.names text: chName)
+            nameId: chNameId
             childTypeId: target
         )
     }
@@ -22101,6 +22098,7 @@ mintMonoMember: function {
         :mid
         :templateId
         :chName
+        :chNameId
         :target
     ) then monoNeedsDtor = true
     return monoNeedsDtor
@@ -22262,6 +22260,7 @@ mintMonoMembers: function {
     idSubs: (IdMapV ztypes.tid v: ztypes.genericarg)
 } out bool is {
     cNames: List String
+    cNameIds: ListVal zast.nameid
     cIds: ListVal ztypes.tid
     forceAllMembers :st :ast tid: templateId
     # a template resolved on demand is copied at once, and the copy reads its
@@ -22275,6 +22274,7 @@ mintMonoMembers: function {
             mmq = mmq + 1
             if rwMm.keep then {
                 cIds.append rwMm.tid
+                cNameIds.append rwMm.name
                 cnB1: ast.names.texts.get i: rwMm.name
                 cn: cnB1.copy
                 cNames.append cn
@@ -22298,6 +22298,7 @@ mintMonoMembers: function {
             :subs
             :idSubs
             chName: chNameC.stringView
+            chNameId: (cNameIds.get i: ci)
             chId: (cIds.get i: ci)
         ) then monoNeedsDtor = true
         ci = ci + 1
