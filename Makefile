@@ -2435,7 +2435,11 @@ perf: $(PERFBIN)
 #
 # -65 a union arm collapses only when its callee resolves to the builtin Box,
 # not when it is spelled `Box`: 0 behaviour, -65 source (ab.sh).
-ALLOC_BASELINE := 2207447
+#
+# +79 only the system unit's `null` / `never` declarations are the empty types
+# (defTypetypeOf takes whether the definition is the system's): 0 behaviour,
+# +79 source (ab.sh).
+ALLOC_BASELINE := 2207526
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

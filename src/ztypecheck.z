@@ -1426,10 +1426,13 @@ linkDeclTypeId: function {
 
 # defTypetypeOf -- the typetype a top-level definition node declares, mirroring
 # resolveDef's dispatch. None for nodes that mint no canonical type here (dotted-
-# path aliases, the null/never empty types, enums/generics in later slices).
+# path aliases, enums/generics in later slices).
 defTypetypeOf: function {
     defn: astnode.view
     nameId: zast.nameid
+    # whether the definition is the system unit's own: only there do `null` and
+    # `never` name the empty types
+    inSystem: bool
 } out optionval ztypes.ztypetype is {
     match (
         defn
@@ -1441,16 +1444,16 @@ defTypetypeOf: function {
         match (
             defn.kind
         ) case recordDef then {
-            # `null` and `never` parse as empty records but ARE their own
-            # typetypes, which resolveNamedType and resolveDef already know.
+            # the system unit's `null` and `never` parse as empty records but
+            # ARE their own typetypes, which resolveObjectDef gives them too.
             # Reporting none here left them "unclassified" alongside dotted
             # aliases, and an unclassified def resolves to tid 0 -- which is
-            # why core's `null:`/`never:` re-exports never resolved and the
-            # lookup chain's system probe had to answer for them.
-            if nameId == zast.wellKnown.slot.tyNull then {
+            # why core's `null:`/`never:` re-exports never resolved. A record
+            # any other unit names `null` is an ordinary record.
+            if inSystem when nameId == zast.wellKnown.slot.tyNull then {
                 return (optionval.some ztypes.ztypetype.nullType)
             }
-            if nameId == zast.wellKnown.slot.tyNever then {
+            if inSystem when nameId == zast.wellKnown.slot.tyNever then {
                 return (optionval.some ztypes.ztypetype.neverType)
             }
             return (optionval.some ztypes.ztypetype.recordType)
@@ -15052,7 +15055,11 @@ declDefTypetype: function {
     }
     nop: ast.nodes.get i: dnode
     if nop.namedoperation then {
-        return (defTypetypeOf defn: (ast.nodes.get i: nop.operation) nameId: dname)
+        return (defTypetypeOf
+            defn: (ast.nodes.get i: nop.operation)
+            nameId: dname
+            inSystem: decl.parent == st.typing.systemUnitRoot
+        )
     }
     return (optionval.none ztypes.ztypetype)
 }
@@ -16609,7 +16616,10 @@ resolveObjectDef: function {
     match (
         defn.kind
     ) case recordDef then {
-        if nameId == zast.wellKnown.slot.tyNull then {
+        # the empty types are the system unit's own declarations; a record
+        # another unit names `null` or `never` is an ordinary record
+        isSys: unitDecl == st.typing.systemUnitRoot
+        if isSys when nameId == zast.wellKnown.slot.tyNull then {
             (registerEmptyType
                 :st
                 scope: rf
@@ -16619,7 +16629,7 @@ resolveObjectDef: function {
                 tt: ztypes.ztypetype.nullType
             )
         } else {
-            if nameId == zast.wellKnown.slot.tyNever then {
+            if isSys when nameId == zast.wellKnown.slot.tyNever then {
                 nvid: (registerEmptyType
                     :st
                     scope: rf
