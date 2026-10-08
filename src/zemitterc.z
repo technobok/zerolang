@@ -14016,27 +14016,19 @@ isFieldwiseCtorTid: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} ou
 # shadows -- silently, with the wrong answer. A variable id stamped on the
 # callable atom says "this is a local", which is the fnptr leg's business, and
 # it is the same precedence implicitTakeSourceAtom keeps for the same reason.
-# The name route reads the FILE unit's members, so a callee the checker
-# resolved in the scope the call was WRITTEN in -- a namespace's sibling
-# function -- is reached instead through the id the callable atom carries. A
-# NATIVE fn (or generic native template) answers 0: it never takes the
+# A callee the checker resolved in the scope the call was WRITTEN in -- a
+# namespace's sibling function included -- is reached through the id the
+# callable atom carries. A NATIVE fn (or generic native template) answers 0: it never takes the
 # resolved-cname route, and the zero sends it to the name interceptions.
 namedCalleeFnId: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
-    cn0: StringView
 } out ztypes.tid is {
     cbn0: atomNodeId n: (ast.nodes.get i: call.callable)
-    calleeIsLocal: (
-        cbn0.isZero.not and
-        (symtab.typing.atomVariableId.get key: cbn0).none.not or
-        (symtab.typing.atomVariableId.get key: call.callable).none.not
-    )
     fid: ztypes.tid
-    if calleeIsLocal.not then fid = userFnId :ast :symtab :ctx name: cn0
-    if fid.isZero when cbn0.isZero.not then {
+    if cbn0.isZero.not then {
         clv: symtab.typing.atomVariableId.get key: cbn0
         match (
             clv
@@ -14099,7 +14091,7 @@ emitNamedCalleeChain: function {
         cnId: (atomNameIdOf :ast n: (ast.nodes.get i: call.callable))
     )
     if ecc.length > 0 then return ecc
-    fid: namedCalleeFnId :ast :symtab :ctx :call cn0: cn0.stringView
+    fid: namedCalleeFnId :ast :symtab :ctx :call
     ctorTid: namedCalleeCtorTid :ast :symtab :call :fid
     if (isFieldwiseCtorTid :symtab tid: ctorTid) then {
         return (emitRecordCtor :ast :symtab :ctx :call tid: ctorTid)
@@ -15138,8 +15130,7 @@ emitAtom: function {
     mcsa: memberConstStringText :symtab :ctx unitTid: mutd nameId: n.name
     if mcsa.length > 0 then return mcsa
     # stamped unit-def reference: the RECORD / FUNCTION legs run off the
-    # stamped tid; unstamped atoms (fn-mono template re-emission walks
-    # the shared template AST) fall back to the name probe
+    # stamped declaration; an atom with none names no definition
     brid: ztypes.tid
     bdec: ztypes.declid
     {
@@ -15152,7 +15143,6 @@ emitAtom: function {
             bdec = audo
         } case none then null
     }
-    if brid.isZero then brid = userFnId :ast :symtab :ctx name: av
     dra: emitDefRefAtom :ast :symtab :ctx :n :brid :bdec
     if dra.length > 0 then return dra
     # a stamped implicit zero-create on a String atom is the empty
@@ -31966,7 +31956,7 @@ emitFnDeclsInOrder: function {
         if dm2.namedoperation then {
             fid: ztypes.tid
             if ownerTid.isZero then {
-                fid = userFnId :ast :symtab :ctx name: nm2.stringView
+                fid = userFnIdById :ast :symtab :ctx nameId: dm2.name
             } else {
                 fo: (symtab.typing.declChildOfId
                     parentTypeId: ownerTid
