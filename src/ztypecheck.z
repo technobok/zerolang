@@ -26364,7 +26364,7 @@ bindValueArgSub: function {
         bindPartialRowArg :st :ast :pk :ptNames :ptTids argTid: vt0 :sfx :subs :boundParams :tk
         return
     }
-    mv0: materialiseLiteral :ast :st :unitDecl t: vt0
+    mv0: materialiseLiteral :ast :st t: vt0
     if mv0 != vt0 then {
         iid0: nodeId n: (ast.nodes.get i: opId)
         if iid0.isZero.not then {
@@ -32389,7 +32389,7 @@ dottedBaseTid: function {
     # A literal base materialises before member lookup (`5.times` is i64's);
     # the parent node restamps at the concrete default.
     if (isLiteralTypeId :st tid: bt) then {
-        mbt: materialiseLiteral :ast :st :unitDecl t: bt
+        mbt: materialiseLiteral :ast :st t: bt
         if mbt != bt then {
             bt = mbt
             pid: dp.parent
@@ -34661,26 +34661,38 @@ lastStmtType: function {
 materialiseLiteral: function {
     ast: Ast
     st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
     t: ztypes.tid
 } out ztypes.tid is {
-    base: literalDefaultName :st tid: t
-    if base.length == 0 then return t
-    got: (walkLookupTyperef :st scope: st.curScope :ast :unitDecl :base).or d: ztypes.tid.zero
-    if got.isZero.not then return got
     # a bare literal in a value context with no expected type IS `42.i64`: it
     # demands its own default scalar, the way the suffixed form and the
     # literal-NAME form (resolveNamedType) already do. Without this nothing
     # demands i64 for `x: 42` -- a literal names nothing.
-    dn: (descendNamed
-        :st
-        scope: st.curScope
-        :ast
-        unitDecl: st.typing.systemUnitRoot
-        name: base
-    )
-    if dn.isZero.not then return dn
-    return t
+    dn: literalTypeDefaultTid :st scope: st.curScope :ast :t
+    if dn.isZero then return t
+    return dn
+}
+
+# literalTypeDefaultTid -- the system scalar a literal pseudo-type takes where
+# nothing gives it one (i64, u64 or f64), read from the system unit as
+# literalDefaultTid reads a constant's: a program's own `i64` is never a
+# literal's type. `t` itself when it is no literal type; 0 when the system
+# does not declare the scalar.
+literalTypeDefaultTid: function {
+    # the checked program
+    st: zenv.ZSymbolTable
+    # the scope the literal is written in
+    scope: ztypes.declid
+    # the tree the system unit is read from
+    ast: Ast
+    # the literal's type
+    t: ztypes.tid
+} out ztypes.tid is {
+    nm: zast.nameid
+    if t == st.reg.literalIntTid then nm = zast.wellKnown.slot.tyI64
+    if t == st.reg.literalBitsTid then nm = zast.wellKnown.slot.tyU64
+    if t == st.reg.literalFloatTid then nm = zast.wellKnown.slot.tyF64
+    if nm.isZero then return t
+    return (scalarTidOf :st :scope :ast nameId: nm)
 }
 
 # armValueLeaves -- the values the arms of the `if` or `match` at `nid` yield,
@@ -35252,7 +35264,7 @@ checkAssignment: function {
     st.typing.formValueNid = asgn.value
     vt: checkMovedValueAt :st :unitDecl :ast nid: asgn.value
     st.typing.formValueNid = outerForm
-    mvt: materialiseLiteral :ast :st :unitDecl t: vt
+    mvt: materialiseLiteral :ast :st t: vt
     vt = mvt
     if vt.isZero when st.typing.errors.length == errA0 then {
         reportUnresolvedValue :st :unitDecl :ast nid: asgn.value
@@ -35827,7 +35839,7 @@ checkReassignment: function {
     refuseBorrowedReassign :st :ast :rasgn targetNameId: hbNmId :rvt
     refuseBorrowedArms :st :ast nid: rasgn.value verb: "by reassignment"
     consumeReassignPins :st :ast :rasgn :hbNmId :rvt
-    mrv0: materialiseLiteral :ast :st :unitDecl t: rvt
+    mrv0: materialiseLiteral :ast :st t: rvt
     if (refuseNullValue :st :ast vt: mrv0 nid: rasgn.value) then return
     # A literal RHS at a concretely-typed target coerces: restamp the RHS. A
     # literal-typed target (a literal-init loop binding) keeps the pseudo.
@@ -36576,7 +36588,7 @@ checkSwapSide: function {
         } case none then null
         if dt != walked then stampGate :st nid: side tid: dt
     }
-    return (materialiseLiteral :ast :st :unitDecl t: dt)
+    return (materialiseLiteral :ast :st t: dt)
 }
 
 # resetSwapNarrowing -- a swap writes a bare name, so narrowing on it ends.
@@ -36864,7 +36876,7 @@ checkWith: function {
         if (withValueCrossesSuspension :st :ast :withnode :own) then {
             # a literal value's type is the literal placeholder until a slot
             # asks for a width; a field is such a slot
-            wvt: materialiseLiteral :ast :st :unitDecl t: vt
+            wvt: materialiseLiteral :ast :st t: vt
             wf: mintGenField :st :ast name: "_wf" tid: wvt
             st.typing.withValueField.set key: withnode.nid value: wf
         }
@@ -37085,7 +37097,7 @@ wrapDoBreakValue: function {
     # rebinding happens in a local.
     res: result
     if res.isZero.not when (blockHasBreak :ast n: (ast.nodes.get i: donode.statement)) then {
-        mres0: materialiseLiteral :ast :st :unitDecl t: res
+        mres0: materialiseLiteral :ast :st t: res
         res = mres0
         vtn0: st.reg.nameOf tid: res
         payloadTid: res
@@ -44191,7 +44203,7 @@ refuseValueTypeArg: function {
 } is {
     baseId: paramTypeBaseNameId :ast op: (ast.nodes.get i: arg.operation)
     if (typeArgTid :st :ast :unitDecl opId: arg.operation :baseId).isZero.not then return
-    tn: specWrittenName :st :ast tid: (materialiseLiteral :ast :st :unitDecl t: vt)
+    tn: specWrittenName :st :ast tid: (materialiseLiteral :ast :st t: vt)
     msg: "the type argument is a value of type '\{tn}', not a type"
     if baseId.isZero.not then {
         nm: zast.nameTextAt :ast ref: baseId
@@ -44434,7 +44446,7 @@ boxArgumentTid: function {
         reportBoxUnknownArgument :st :ast :arg
         fnd = true
         avt: checkOwnedValueAt :st :unitDecl :ast nid: arg.operation
-        vt = materialiseLiteral :ast :st :unitDecl t: avt
+        vt = materialiseLiteral :ast :st t: avt
         if vt.isZero then continue
         bindBoxedArgument :st :ast :arg argT: vt
     }
@@ -46289,7 +46301,7 @@ checkGenericTypeCall: function {
                     )
                 } else {
                     avt2: checkValueAt :st :unitDecl :ast nid: farg.operation
-                    mvt2: materialiseLiteral :ast :st :unitDecl t: avt2
+                    mvt2: materialiseLiteral :ast :st t: avt2
                     subT = mvt2
                     fpbn: (bareAtomName
                         :ast
@@ -47039,7 +47051,7 @@ reportValueCalledWithArgs: function {
         vt = checkValueAt :st :unitDecl :ast nid: call.callable
         if st.typing.errors.length != errC then return
     }
-    refuseValueCallArgs :st :unitDecl :ast :call :vt :nameId
+    refuseValueCallArgs :st :ast :call :vt :nameId
 }
 
 # refuseValueCallArgs -- refuse the arguments of a call whose callee is a value
@@ -47048,7 +47060,6 @@ reportValueCalledWithArgs: function {
 # members are its instance's, which a template walk does not know.
 refuseValueCallArgs: function {
     st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
     ast: Ast
     call: callref
     vt: ztypes.tid
@@ -47061,7 +47072,7 @@ refuseValueCallArgs: function {
     ).some then return
     arg0: argRefAt :ast nid: (zast.callArgAt :ast nid: call.nid i: 0)
     if arg0.nid.isZero then return
-    tn: specWrittenName :st :ast tid: (materialiseLiteral :ast :st :unitDecl t: vt)
+    tn: specWrittenName :st :ast tid: (materialiseLiteral :ast :st t: vt)
     msg: "too many arguments: the callee is a value of type '\{tn}', not a function"
     if nameId.isZero.not then {
         nm: zast.nameTextAt :ast ref: nameId
@@ -47655,7 +47666,7 @@ checkWrappedCall: function {
         return (checkTypeConstruction :st :unitDecl :ast :call tid: wcv)
     }
     if call.nargs > 0 when (wrappedCalleeIsCallResult :st :call) then {
-        refuseValueCallArgs :st :unitDecl :ast :call vt: wcv nameId: zast.nameid
+        refuseValueCallArgs :st :ast :call vt: wcv nameId: zast.nameid
         checkWrappedValueArgs :st :unitDecl :ast :call
     } else if call.nargs > 0 when (wrappedCalleeIsContainer :ast :st :wcv) then {
         checkContainerCreateArgs :st :unitDecl :ast :call :wcv
@@ -48767,7 +48778,7 @@ inferGenericCallSubs: function {
                 nid: arg.operation
             )
         }
-        mat: materialiseLiteral :ast :st :unitDecl t: avt
+        mat: materialiseLiteral :ast :st t: avt
         hs: (argHolderSlot
             :st
             :ast
@@ -55419,10 +55430,7 @@ constantLineType: function {
 } out ztypes.tid is {
     bt0: constantOperandType :st :scope :ast :unitDecl nid: innerId
     mt0: ztypes.tid
-    dflt0: literalDefaultName :st tid: bt0
-    if dflt0.length > 0 then {
-        mt0 = (walkLookupTyperef :st :scope :ast :unitDecl base: dflt0).or d: ztypes.tid.zero
-    }
+    if (isLiteralTypeId :st tid: bt0) then mt0 = literalTypeDefaultTid :st :scope :ast t: bt0
     if mt0.isZero.not then {
         (ztyping.nodeTypeSet
             tbl: st.typing.nodeType
@@ -61007,11 +61015,12 @@ operandConstantType: function {
     scope: ztypes.declid
     nid: zast.nodeid
 } out ztypes.tid is {
-    t: constantOperandType :st :scope :ast :unitDecl :nid
-    litBase: literalDefaultName :st tid: t
-    if litBase.length == 0 then return t
-    lt: (walkLookupTyperef :st :scope :ast :unitDecl base: litBase).or d: ztypes.tid.zero
-    return lt
+    return (literalTypeDefaultTid
+        :st
+        :scope
+        :ast
+        t: (constantOperandType :st :scope :ast :unitDecl :nid)
+    )
 }
 
 # isComputedConstantDef -- the definition COMPUTES its value: an operator or a
