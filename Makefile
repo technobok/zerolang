@@ -2464,7 +2464,11 @@ perf: $(PERFBIN)
 #
 # +975 an unlabelled leading argument binds a numeric first parameter
 # (numericLeadingParam, leadingArgIsValue): 0 behaviour, +975 source (ab.sh).
-ALLOC_BASELINE := 2208609
+#
+# +366 L003 moves to the linter's full tier (elideCall reads the resolved
+# template), and the standard library elides the 294 first-argument labels it
+# then reports: 0 behaviour, +366 source (ab.sh).
+ALLOC_BASELINE := 2208975
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -4215,11 +4219,15 @@ generic-param-guard: bin/zl
 # subunit's findings, which are its file's, not the parent's; a subunit file its
 # parent never names is reported as unchecked. A hidden subunit named only from
 # its parent's public block is used by that naming, not reported unused (L012).
+# L003 reads the template the checker resolved: the fixture's six labelled first
+# arguments (stdlib list/map/option, a user template, one nested) are reported,
+# and the plain `zl lint` tier, which has no checker, reports none.
 ZLFULL_FIX := tests/fixtures/zl_full/tiered.z
 ZLFULL_DEP := tests/fixtures/zl_full/depunit/depmain.z
 ZLFULL_ONCE := tests/fixtures/zl_full/generic_once.z
 ZLFULL_SUB := tests/fixtures/zl_full/subunit/host
 ZLFULL_PUB := tests/fixtures/zl_full/pubhost.z
+ZLFULL_ELIDE := tests/fixtures/zl_full/elide.z
 zl-full-guard: bin/zl
 	@d=$$(mktemp -d); fail=0; \
 	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full $(CURDIR)/$(ZLFULL_FIX) 2>&1); \
@@ -4262,6 +4270,12 @@ zl-full-guard: bin/zl
 	if printf '%s\n' "$$out" | grep -q 'L012'; then \
 	  echo "zl-full-guard FAIL: a hidden subunit named only from the public block was reported unused:"; \
 	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
+	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full $(CURDIR)/$(ZLFULL_ELIDE) 2>&1); \
+	if [ "$$(printf '%s\n' "$$out" | grep -c 'L003')" != 6 ] || ! printf '%s\n' "$$out" | grep -q 'elide.z:19:23'; then \
+	  echo "zl-full-guard FAIL: L003 did not report the fixture's six labelled first arguments:"; \
+	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
+	if $(CURDIR)/bin/zl lint $(CURDIR)/$(ZLFULL_ELIDE) 2>&1 | grep -q 'L003'; then \
+	  echo "zl-full-guard FAIL: the parse tier reported L003, which needs the checker"; fail=1; fi; \
 	rm -rf $$d; \
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
 	echo "zl-full-guard OK: --full runs without flags from a foreign cwd and without a runtime, says why when it cannot, places a dependency's error in its own file, and lints a subunit as itself"

@@ -734,37 +734,6 @@ isElseIfWrap: function {ast: Ast.view n: astnode.view} out bool is {
     }
 }
 
-# primaryGenericParam -- the elidable first parameter name of a built-in template,
-# or "" when `nameId` names no such template. Index 0 only.
-#
-# The names are literals because this unit is the front end and has no symbol
-# table to ask a template for its own. That makes the table the one place a
-# parameter rename can go stale silently: a wrong entry stops L003 firing and
-# nothing else here goes red. tests/fixtures/lsp_cases/lint_elidelabel pins one
-# entry from each of the three groups so it cannot.
-primaryGenericParam: function {nameId: zast.nameid} out StringView is {
-    if nameId == zast.wellKnown.slot.tyList then return "T"
-    if nameId == zast.wellKnown.slot.tyListRef then return "T"
-    if nameId == zast.wellKnown.slot.tyListVal then return "t"
-    if nameId == zast.wellKnown.slot.tyListView then return "T"
-    if nameId == zast.wellKnown.slot.tyListViewVal then return "t"
-    if nameId == zast.wellKnown.slot.tySet then return "K"
-    if nameId == zast.wellKnown.slot.tySetRef then return "K"
-    if nameId == zast.wellKnown.slot.tySetVal then return "k"
-    if nameId == zast.wellKnown.slot.tyArray then return "t"
-    if nameId == zast.wellKnown.slot.tyMap then return "K"
-    if nameId == zast.wellKnown.slot.tyMapRR then return "K"
-    if nameId == zast.wellKnown.slot.tyMapRV then return "K"
-    if nameId == zast.wellKnown.slot.tyMapVR then return "k"
-    if nameId == zast.wellKnown.slot.tyMapVV then return "k"
-    if nameId == zast.wellKnown.slot.tyOptionval then return "t"
-    if nameId == zast.wellKnown.slot.tyOption then return "T"
-    if nameId == zast.wellKnown.slot.tyOptionView then return "T"
-    if nameId == zast.wellKnown.slot.tyResult then return "T"
-    return ""
-}
-
-
 # casingSuggest -- the lowerCamelCase form of an ALL-CAPS / SCREAMING_SNAKE member name:
 # split on `_`, lowercase each segment, and capitalise the first letter of every segment
 # after the first. Compounds without underscores become run-together lowercase.
@@ -1405,42 +1374,6 @@ Analysis: class {
         }
     }
 
-    # checkElide -- L003 a built-in template call whose first argument carries its
-    # primary parameter name. Receives the narrowed callable + argument list.
-    checkElide: function {:this ast: Ast.view callable: astnode.view arguments: zast.kidspan} is {
-        primary: primaryGenericParam nameId: (atomNameIdOf n: callable)
-        if primary.length == 0 then return
-        idx: u64
-        h1x9: u64
-        for h1x9 < arguments.count loop {
-            aId: zast.kidAt kids: ast.kids span: arguments i: h1x9
-            h1x9 = h1x9 + 1
-            if idx == 0 then {
-                (this.checkElideFirst
-                    :ast
-                    arg: (ast.nodes.get i: aId)
-                    :primary
-                )
-            }
-            idx = idx + 1
-        }
-    }
-
-    # checkElideFirst -- flag the first generic argument when its label is the
-    # template's primary parameter name.
-    checkElideFirst: function {:this ast: Ast.view arg: astnode.view primary: StringView} is {
-        if arg.namedoperation when (zast.nameTextEq :ast ref: arg.name s: primary) then {
-            w: primary.length + 1
-            (this.warn
-                code: "L003"
-                msg: "redundant `\{primary}:` label on a built-in template's first argument"
-                line: arg.lineno
-                col: arg.colno
-                width: w.u32.orPanic
-            )
-        }
-    }
-
     # checkCollapseName -- L006: a named argument `name: name` whose label equals its bare-atom
     # value collapses to the `:name` shorthand (same atomVariableId stamp -- codegen-neutral once
     # the emitter treats labelvalue == atomid). Fires on atomid values only, so it is idempotent:
@@ -1816,11 +1749,6 @@ Analysis: class {
             )
             this.diags.append d
         } case call then {
-            (this.checkElide
-                :ast
-                callable: (ast.nodes.get i: n.callable)
-                arguments: n.arguments
-            )
             this.checkCollapseName :ast arguments: n.arguments
             (this.checkLiteralLookup
                 :ast
@@ -3680,6 +3608,73 @@ Analysis: class {
         }
     }
 
+    # elideCall -- L003: a generic reference whose first argument carries its
+    # template's first parameter name, a label the spec makes optional. The
+    # template is the one the checker resolved -- a built-in or the program's
+    # own -- and its first parameter is read from its declaration
+    # (firstGenericParamId). A call whose callee is no type -- a function whose
+    # result happens to be an instance -- is not a generic reference. The safe
+    # fix deletes the label up to its value.
+    elideCall: function {
+        :this
+        # the project tree the linted unit was checked in
+        ast: Ast.view
+        # the call node, whose stamp is the instance the reference names
+        callNid: zast.nodeid
+        # the callee, stamped with the template or the instance
+        callable: astnode.view
+        # the reference's arguments, the first of which may carry the label
+        arguments: zast.kidspan
+        # the checked program whose stamps and templates the rule reads
+        st: zenv.ZSymbolTable
+    } is {
+        if arguments.count == 0 then return
+        inst: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: callNid
+        if inst.isZero then return
+        tmpl: st.reg.genericOriginOf tid: inst
+        if tmpl.isZero then return
+        ct: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: (zast.nodeIdOf n: callable)
+        if ct != tmpl when ct != inst then return
+        first: ztypecheck.firstGenericParamId :st templateId: tmpl
+        if first.isZero then return
+        arg: ast.nodes.get i: (zast.kidAt kids: ast.kids span: arguments i: 0)
+        match (
+            arg
+        ) case namedoperation then {
+            if arg.name != first then return
+            if this.lineStart.length == 0 then this.lineStart = (lineStartIndex
+                src: this.source.stringView
+            )
+            label: zast.nameTextAt :ast ref: arg.name
+            # the edit is the label, its colon and the spaces after it, read
+            # from the source: the value may open with a paren its node does
+            # not start at
+            srcOwned: this.source.copy
+            sv: srcOwned.stringView
+            lo: (tokByteStart
+                lineStart: this.lineStart
+                srcLines: this.lines
+                lineno: arg.lineno
+                colno: arg.colno
+            )
+            hi: lo + label.length + 1
+            if hi > sv.length then return
+            expect: "\{label}:"
+            if (sv.substring from: lo to: hi) != expect then return
+            for hi < sv.length while ((sv.byteAt i: hi).or d: 0) == 32 loop hi = hi + 1
+            (this.warnFix
+                code: "L003"
+                msg: "redundant `\{label}:` label on a generic reference's first argument"
+                line: arg.lineno
+                col: arg.colno
+                width: (label.length + 1).u32.orPanic
+                :lo
+                :hi
+                repl: ""
+            )
+        } else null
+    }
+
     # walkSuf -- preorder over the subtree running the typecheck-based suffix check, threading
     # the enclosing function's return type for `return`s. The arms a check reads are spelled;
     # every child is visited through zast.childIds.
@@ -3726,6 +3721,13 @@ Analysis: class {
                 arguments: n.arguments
                 :st
                 :funcretId
+            )
+            (this.elideCall
+                :ast
+                callNid: n.nodeid
+                callable: (ast.nodes.get i: n.callable)
+                arguments: n.arguments
+                :st
             )
         } case reassignment then {
             tpn: ast.nodes.get i: n.topath
