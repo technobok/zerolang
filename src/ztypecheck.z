@@ -2506,9 +2506,23 @@ boundNameShadowsFamily: function {
     if (genericBoundQualifierId :ast n: op).isZero.not then return false
     bnid: genericBoundAtomId :ast n: op
     if bnid.isZero then return false
-    bnm: atomNameId :ast n: (ast.nodes.get i: bnid)
-    if bnm.isZero then return false
-    d: declInScope :st scopeDeclId: (declParentIdOf :st declId: tdecl) nameId: bnm
+    return (familyNameTaken :st :tdecl nameId: (atomNameId :ast n: (ast.nodes.get i: bnid)))
+}
+
+# familyNameTaken -- a bare bound name written on template `tdecl` reaches a
+# type the program declares rather than the family the system and core units
+# declare under that name: a unit's own `anyval` or `u32` is that unit's type,
+# and bounds as one.
+familyNameTaken: function {
+    # the checked program
+    st: zenv.ZSymbolTable.view
+    # the template the bound is written on
+    tdecl: ztypes.declid
+    # the bound's name, interned
+    nameId: zast.nameid
+} out bool is {
+    if nameId.isZero then return false
+    d: declInScope :st scopeDeclId: (declParentIdOf :st declId: tdecl) :nameId
     if d.isZero then return false
     ur: unitRootOfDecl :st declId: d
     if (ur == st.typing.systemUnitRoot) or (ur == st.typing.coreUnitRoot) then return false
@@ -22838,10 +22852,11 @@ specLookupDefaults: function {
 }
 
 # constraintKindForId -- classify a constraint by its bound's NAME ID once, at
-# registration; the checks then compare the tag. The bounds are zast.wellKnown
-# entries, so a program's own type named like one is no bound family. A scalar
-# name is a numeric bound; any other name, or a bound named through a path (id
-# 0), is a declaration the bound check finds by name.
+# registration; the checks then compare the tag. These are the names the system
+# and core units declare the families under; a bound whose bare name reaches a
+# program's own declaration instead is no family, which both readers ask of
+# familyNameTaken. A scalar name is a numeric bound; any other name, or a bound
+# named through a path (id 0), is a declaration the bound check finds by name.
 constraintKindForId: function {id: zast.nameid} out ztypes.constraintkind is {
     if id == zast.wellKnown.slot.tyAnyval then return ztypes.constraintkind.valType
     if id == zast.wellKnown.slot.tyAnyRef then return ztypes.constraintkind.refType
@@ -24101,9 +24116,9 @@ boundRefusalText: function {
     scope: ztypes.declid
 } out String is {
     if nameId.isZero then return ""
-    if (constraintKindForId id: nameId) != ztypes.constraintkind.other then return ""
-    bt: zast.nameTextAt :ast ref: nameId
     qn: (st.typing.genericBoundQual.get key: nid).or d: zast.nameid
+    if (boundIsFamily :st tdecl: scope :nameId qualId: qn) then return ""
+    bt: zast.nameTextAt :ast ref: nameId
     if qn.isZero.not then {
         qual: boundQualifierUnit :st :scope qualId: qn
         # the qualifier names no unit, so it is what does not exist
@@ -24128,6 +24143,24 @@ boundRefusalText: function {
         if dc.isZero.not then return (boundFamilyRefusal :ast :st declId: dc bt: bt.stringView)
     }
     return (unknownBoundText bt: bt.stringView)
+}
+
+# boundIsFamily -- the bound is one of the families, which answer for
+# themselves: a family's name, written qualified or reaching no declaration of
+# the program's own (familyNameTaken).
+boundIsFamily: function {
+    # the checked program
+    st: zenv.ZSymbolTable.view
+    # the template the bound is written on
+    tdecl: ztypes.declid
+    # the bound's name, interned
+    nameId: zast.nameid
+    # the unit name a qualified bound is reached through, 0 for a bare one
+    qualId: zast.nameid
+} out bool is {
+    if (constraintKindForId id: nameId) == ztypes.constraintkind.other then return false
+    if qualId.isZero.not then return true
+    return (familyNameTaken :st :tdecl :nameId).not
 }
 
 # unknownBoundText -- the report a bound naming no declaration earns.
