@@ -3071,9 +3071,8 @@ dottedTagReadTid: function {symtab: zenv.ZSymbolTable.view nid: zast.nodeid} out
 }
 
 # dataBlockTid -- the DATA type a data-block reference resolved to, read off
-# the refDecl stamp on the access base. userFnId cannot serve here: it resolves
-# against ctx.mainName, so it is main-relative and answers with the main unit's
-# block for a dependency unit's reference.
+# the refDecl stamp on the access base: the reference's own declaration, in
+# whichever unit wrote it.
 dataBlockTid: function {symtab: zenv.ZSymbolTable.view nid: zast.nodeid} out ztypes.tid is {
     if nid.isZero then return ztypes.tid.zero
     rd: (symtab.typing.refDecl.get key: nid).or d: ztypes.declid
@@ -3900,31 +3899,8 @@ canonTypeId: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out ztype
     return ztypes.tid.zero
 }
 
-# userFnId -- the resolved type id of a main-unit function name (0 absent).
-userFnId: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
-    name: StringView
-} out ztypes.tid is {
-    uq0z: ctx.mainUnitId
-    nameId9: zast.poolFind pool: ast.names text: name
-    go: (ztypecheck.resolveUnitChildRo
-        :ast
-        st: symtab
-        unitDecl: uq0z
-        nameId: nameId9
-    )
-    match (
-        go
-    ) case some then {
-        return go
-    } case none then {
-        return ztypes.tid.zero
-    }
-}
-
-# userFnIdById -- id-keyed userFnId: the child name is already an Ast.names id.
+# userFnIdById -- the resolved type id of the main unit's child named by `nameId` (0
+# absent).
 userFnIdById: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -21743,13 +21719,21 @@ emitReturnStmt: function {
         emitDottedAutoCallStmt :ast :symtab :ctx :n :ind :tmp :buf
         return
     }
-    # a bare no-arg function call as a statement (`check_mode`): typecheck
-    # coerced the atom to a call; emit the call expression as a statement.
-    fcs: atomTextOf :ast :n
-    ffid: userFnId :ast :symtab :ctx name: fcs
+    # a bare no-arg function call as a statement (`check_mode`): the checker
+    # marked the atom auto-called (autoCallNodes) and its declaration is the
+    # function; emit the call expression as a statement. A native one is a
+    # builtin the legs below spell (`return`, `break`, `continue`).
+    ffid: ztypes.tid
+    {
+        anid: interpPartNodeId :n
+        if (symtab.typing.autoCallNodes.has item: anid) then {
+            ard: (symtab.typing.refDecl.get key: anid).or d: ztypes.declid
+            if ard.isZero.not then ffid = ztypecheck.declTypeIdOf st: symtab declId: ard
+        }
+    }
     if ffid.isZero.not when (
         (symtab.reg.typetypeOf typeId: ffid) == ztypes.ztypetype.functionType
-    ) then {
+    ) when (fnIsNativeId :symtab fid: ffid).not then {
         fce: emitExpr :ast :symtab :ctx :n
         flushArgHoists :ctx :ind :tmp :buf
         if (fce.stringView.startsWith prefix: "/*").not then {

@@ -2481,7 +2481,7 @@ perf: $(PERFBIN)
 #
 # +2 ztypecheck exports envLookup / scopeFor / unitdefNodeId for zls's
 # shadow-aware hover: 0 behaviour, +2 source (ab.sh).
-ALLOC_BASELINE := 2201825
+ALLOC_BASELINE := 2201772
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -2670,7 +2670,7 @@ emitter-guard:
 	chk "ztypecheck.resolvedByKey" "$$e1" 0; \
 	chk "ztypecheck.walkLookupTyperef" "$$e2" 5; \
 	chk "resolveTypeIdByName" "$$e3" 9; \
-	chk "userFnId" "$$e4" 10; \
+	chk "userFnId" "$$e4" 6; \
 	chk "childOwnershipText" "$$e5" 0; \
 	chk "regNameOf" "$$e6" 10; \
 	chk "mangleVarName (both inside varCName)" "$$e7" 2; \
