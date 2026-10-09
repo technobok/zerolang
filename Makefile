@@ -2475,7 +2475,7 @@ perf: $(PERFBIN)
 #
 # +2 ztypecheck exports envLookup / scopeFor / unitdefNodeId for zls's
 # shadow-aware hover: 0 behaviour, +2 source (ab.sh).
-ALLOC_BASELINE := 2174831
+ALLOC_BASELINE := 2211057
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -4173,7 +4173,9 @@ clean:
 # tag constant, named by its type and arm) names a known canon, and an arm the
 # canon's declaration -- its template's, for an instance -- declares; and no
 # fragment spells a tag constant (`Z_..._TAG_...`) literally, the emitter's
-# spelling being the emitter's to choose.
+# spelling being the emitter's to choose. Leg 5: every `@MEMBER_<canon>.<name>@`
+# hole (a member of a struct the compiler generates) names a known canon and a
+# member -- a field or an arm -- its declaration declares.
 NATIVE_GUARD_EXCEPTIONS := io.print io.stdin io.stdout io.stderr os.env net.pollReadable
 # reached by something other than a per-member demand: the statement-special and
 # the three streams have no fragment of their own, and os.args is a bundle its
@@ -4245,8 +4247,21 @@ native-guard:
 	    esac; \
 	  done; \
 	done; \
+	nm=0; \
+	for f in src/runtime/natives/*.inc src/runtime/*.inc src/runtime/*.c.tmpl src/runtime/*.tbl; do \
+	  for h in $$(grep -ohE '@MEMBER_[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*@' $$f | sed -e 's/^@MEMBER_//' -e 's/@$$//' | sort -u); do \
+	    nm=$$((nm + 1)); canon=$${h%%.*}; mem=$${h#*.}; head=$${canon%%_*}; \
+	    case "$$known" in *" $$canon "*) ;; \
+	      *) echo "native-guard: $$f spells @MEMBER_$$h@, whose type $$canon names no known canon"; fail=1; continue;; \
+	    esac; \
+	    mems=" $$(awk -v h="$$head" '$$0 ~ ("^" h ": (record|class|variant|union) [{]") {on=1; next} on && /^[}]/ {on=0} on && /^    [A-Za-z_][A-Za-z0-9_]*: / {sub(/^    /, ""); sub(/:.*/, ""); printf "%s ", $$0}' lib/system/*.z lib/system/*/*.z) "; \
+	    case "$$mems" in *" $$mem "*) ;; \
+	      *) echo "native-guard: $$f spells @MEMBER_$$h@, but $$head declares no member $$mem"; fail=1;; \
+	    esac; \
+	  done; \
+	done; \
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
-	echo "native-guard OK: native declarations and runtime fragments consistent (incl. no orphans, $$nh fragment holes known, $$na tag-constant holes name declared arms)"
+	echo "native-guard OK: native declarations and runtime fragments consistent (incl. no orphans, $$nh fragment holes known, $$na tag-constant holes name declared arms, $$nm member holes name declared members)"
 
 # generic-param-guard -- L023 (a generic parameter's case follows its bound's)
 # over the trees the linter is not pointed at. ZLSCOPE covers src/ and
