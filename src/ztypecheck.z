@@ -50321,20 +50321,37 @@ numeralBits: function {text: StringView} out optionval u64 is {
     return (optionval.some bits)
 }
 
-# dissectArmByName -- the statement of the first case clause named `cnid`, for
-# a generic match over a TYPE parameter; 0 when none is (or the name is 0).
-dissectArmByName: function {
+# dissectArmByType -- the statement of the first case clause whose written type
+# IS `darg`, for a generic match over a TYPE parameter: each arm's name is
+# resolved where the template writes it (`scope`, the nearest declaration), so
+# a `Point` another unit declares, or the builtin `i64` beside a program's own
+# `i64`, is not the arm's type. 0 when none is.
+dissectArmByType: function {
+    st: zenv.ZSymbolTable.view
     ast: Ast.view
     m: zast.caserow.view
-    cnid: zast.nameid
+    scope: ztypes.declid
+    darg: ztypes.tid
 } out zast.nodeid is {
-    if cnid.isZero then return zast.nodeid
+    if darg.isZero or scope.isZero then return zast.nodeid
+    ud: unitRootOfDecl :st declId: scope
     i: u64
     for i < m.clauses.count loop {
         cId: zast.kidAt kids: ast.kids span: m.clauses :i
         i = i + 1
         cnode: ast.nodes.get i: cId
-        if cnode.caseclause when cnode.name == cnid then return cnode.statement
+        if cnode.caseclause then {
+            at: ((walkLookupTyperefByIdRo
+                :ast
+                :st
+                unitDecl: ud
+                :scope
+                baseId: cnode.name
+            ).or
+                d: ztypes.tid.zero
+            )
+            if at == darg then return cnode.statement
+        }
     }
     return zast.nodeid
 }
@@ -50372,7 +50389,8 @@ dissectedArgText: function {st: zenv.ZSymbolTable.view darg: ztypes.genericarg} 
 }
 
 # dissectedArmOf -- the statement a compile-time `match` over a generic
-# parameter runs for `darg`: the first case naming the bound type (for a value
+# parameter runs in the instance `ownerTid` for `darg`: the first case naming
+# the bound type, resolved where the template writes it (for a value
 # parameter, the bound numeral), else the else arm, else 0. The checker's
 # instance walk and the emitter both ask here, so the arm that is checked is the
 # arm that is written.
@@ -50380,6 +50398,7 @@ dissectedArmOf: function {
     st: zenv.ZSymbolTable.view
     ast: Ast.view
     m: zast.caserow.view
+    ownerTid: ztypes.tid
     darg: ztypes.genericarg
 } out zast.nodeid is {
     win: zast.nodeid
@@ -50388,10 +50407,9 @@ dissectedArmOf: function {
     ) case valueArg then {
         win = dissectArmByValue :ast :m value: darg
     } case typeArg then {
-        if darg.isZero.not then {
-            cnm: st.reg.nameViewOf tid: darg
-            win = dissectArmByName :ast :m cnid: (zast.poolFind pool: ast.names text: cnm)
-        }
+        # the template's own declaration is the scope its arms are written in
+        tsc: declOfTypeId :st tid: (st.reg.genericOriginOf tid: ownerTid)
+        win = dissectArmByType :st :ast :m scope: tsc :darg
     }
     if win.isZero then win = m.elseclause
     return win
@@ -50474,7 +50492,7 @@ checkDissectedArm: function {
                 ownerTid: st.typing.curMonoStamp
                 paramName: (nameIdOf :ast name: pname.stringView)
             )
-            win = dissectedArmOf :st :ast m: mn :darg
+            win = dissectedArmOf :st :ast m: mn ownerTid: st.typing.curMonoStamp :darg
         }
     }
     rebindSkippedArms :st :ast :casenode :win
