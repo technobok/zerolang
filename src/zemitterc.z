@@ -12470,9 +12470,8 @@ memberConstTid: function {
 # memberConstText -- the C text for a unit constant, rendered from its VALUE
 # and carrying the literal suffix its declared type asks for. "" when the
 # member has no compile-time value, which is what leaves the caller on its
-# ordinary path. SCALARS ONLY: it answers on a Ctx.view, which is what lets
-# scalarArmLabel keep using it, and a folded string needs the mutable Ctx that
-# memberConstStringText takes.
+# ordinary path. SCALARS ONLY: it answers on a Ctx.view, and a folded string
+# needs the mutable Ctx that memberConstStringText takes.
 memberConstText: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -12488,11 +12487,8 @@ memberConstText: function {
     return (cvalText :ast :symtab :ctx tid: mt v: mv)
 }
 
-# memberConstStringText -- the `_zcsN` a STRING constant renders as. The string
-# half of memberConstText, split off rather than folded into it because
-# minting needs a mutable Ctx and one caller -- scalarArmLabel, building a C
-# case label -- can only ever want the scalar half: a case label is a scalar by
-# definition, so the string pool must not be on its path.
+# memberConstStringText -- the `_zcsN` a STRING constant renders as: the string
+# half of memberConstText, split off because minting needs a mutable Ctx.
 memberConstStringText: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
@@ -23771,15 +23767,8 @@ emitMatchStmt: function {
         if vtt0 == ztypes.ztypetype.variantType then isVar = true
         if vtt0 == ztypes.ztypetype.unionType then isUni = true
     }
+    # the checker refuses a match on any other subject (a scalar's included)
     if isVar.not when isUni.not then {
-        sct: (scalarCTypeFor
-            :symtab
-            tid: vtid
-        )
-        if sct.length > 0 then {
-            emitScalarMatch :ast :symtab :ctx :m subj: sx.stringView :assignTo :ind :tmp :buf
-            return
-        }
         stn: regNameView :symtab tid: vtid
         emitFail :ctx what: "unhandled match subject type \{stn}" line: m.lineno
         lu0: "\{ind}/* zemitterc: unhandled match subject type \{stn} */\n"
@@ -23909,53 +23898,6 @@ emitMatchStmt: function {
     buf.append l
 }
 
-# emitScalarMatch -- a value match over a scalar subject: a C switch with
-# constant arm labels (arm names resolve through the constant pool).
-emitScalarMatch: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    m: zast.caserow.view
-    subj: StringView
-    assignTo: StringView
-    ind: StringView
-    tmp: TmpCtr
-    buf: String.borrow
-} is {
-    l0: "\{ind}switch (\{subj}) {\n"
-    buf.append l0
-    ind2: "\{ind}    "
-    clx1019: u64
-    for clx1019 < m.clauses.count loop {
-        cId: zast.kidAt kids: ast.kids span: m.clauses i: clx1019
-        clx1019 = clx1019 + 1
-        (emitScalarClause
-            :ast
-            :symtab
-            :ctx
-            c: (ast.nodes.get i: cId)
-            :assignTo
-            ind: ind2.stringView
-            :tmp
-            :buf
-        )
-    }
-    mdvg: matchDiverges :symtab nid: m.nodeid
-    (emitMatchElse
-        :ast
-        :symtab
-        :ctx
-        oId: m.elseclause
-        :assignTo
-        ind: ind2.stringView
-        :tmp
-        diverges: mdvg
-        :buf
-    )
-    l: "\{ind}}\n"
-    buf.append l
-}
-
 # emitOrdinalPairMatch -- a match over a TWO-ARM ORDINAL sum, emitted as an
 # if (subj) / else if (!subj) chain on the subject itself rather than a tag
 # switch, with the optional else arm a trailing `else`. The arm whose
@@ -24079,26 +24021,6 @@ emitBoolElse: function {
             buf.append lcD
         }
     }
-}
-
-# scalarArmLabel -- the C case label for a scalar arm: the constant
-# pool's rendering when the arm names a constant, else the name itself.
-scalarArmLabel: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
-    arm: zast.nameid
-} out String is {
-    unitTid92: mainUnitTid :symtab :ctx
-    lv: (memberConstText
-        :ast
-        :symtab
-        :ctx
-        unitTid: unitTid92
-        nameId: arm
-    )
-    if lv.length > 0 then return lv
-    return (zast.nameTextCopy :ast ref: arm)
 }
 
 # flushBlockFrees -- emit + reclaim the heap/collection destructors registered
@@ -24412,54 +24334,6 @@ exitKeeps: function {
 } out bool is {
     if keepRefd when (refsLocal expr: retExpr :name) then return true
     return (vvHas xs: ctx.aliases :vid)
-}
-
-# emit one arm of a match over a scalar subject.
-emitScalarClause: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    c: astnode.view
-    assignTo: StringView
-    ind: StringView
-    tmp: TmpCtr
-    buf: String.borrow
-} is {
-    if c.caseclause then {
-        arm: c.name
-        lbl: scalarArmLabel :ast :symtab :ctx :arm
-        l2: "\{ind}case \{lbl}: {\n"
-        buf.append l2
-        ind3: "\{ind}    "
-        dv: false
-        if assignTo.length > 0 then {
-            aInd1: "\{ind}    "
-            (emitBranchAssign
-                :ast
-                :symtab
-                :ctx
-                n: (ast.nodes.get i: c.statement)
-                target: assignTo
-                scope: c.nodeid
-                ind: aInd1.stringView
-                :tmp
-                :buf
-            )
-        } else {
-            fL: tmp.frees.length
-            lL: tmp.listFrees.length
-            cst: ast.nodes.get i: c.statement
-            emitBodyNode :ast :symtab :ctx n: cst ind: ind3.stringView :tmp :buf
-            dv = blockDiverges :ast :symtab :ctx n: cst
-            closeScopeBlock :symtab :ctx :tmp :fL :lL diverged: dv node: c.nodeid :buf
-        }
-        if dv.not then {
-            l5: "\{ind}    break;\n"
-            buf.append l5
-        }
-        l6: "\{ind}}\n"
-        buf.append l6
-    }
 }
 
 # emit one arm of a match over a tagged sum.
