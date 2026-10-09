@@ -37260,17 +37260,10 @@ forIteratorElementOf: function {
     vt: ztypes.tid
 } out forelem is {
     fe: forelem elem: ztypes.tid.zero wrapper: vt isView: false
-    (forceMemberOf
-        :st
-        :ast
-        parentTypeId: vt
-        nameId: zast.wellKnown.slot.wkCall
-    )
-    markMemberUsed :st ownerTid: vt nameId: zast.wellKnown.slot.wkCall
-    c1: st.typing.declChildOfId parentTypeId: vt nameId: zast.wellKnown.slot.wkCall
-    match (
-        c1
-    ) case some then {
+    # the iterator's `call` METHOD: a field or an arm named `call` is no
+    # iterator's
+    c1: objectCallOf :st :ast t: vt
+    if c1.isZero.not then {
         rv: methodReturnOf :st mid: c1
         match (
             rv
@@ -37284,7 +37277,7 @@ forIteratorElementOf: function {
                 fe.isView = isOptionViewMono :ast :st wid: rv
             } case none then null
         } case none then null
-    } case none then null
+    }
     if fe.elem.isZero when (st.reg.isPartialOf tid: vt) then {
         return (partialForElement :st :ast :vt)
     }
@@ -37304,11 +37297,8 @@ partialForElement: function {
     fe: forelem elem: ztypes.tid.zero wrapper: vt isView: false
     og: st.reg.genericOriginOf tid: vt
     if og.isZero then return fe
-    forceMemberOf :st :ast parentTypeId: og nameId: zast.wellKnown.slot.wkCall
     markMemberUsed :st ownerTid: vt nameId: zast.wellKnown.slot.wkCall
-    c1: ((st.typing.declChildOfId parentTypeId: og nameId: zast.wellKnown.slot.wkCall).or
-        d: ztypes.tid.zero
-    )
+    c1: objectCallOf :st :ast t: og
     if c1.isZero then return fe
     rv: (methodReturnOf :st mid: c1).or d: ztypes.tid
     if rv.isZero or ((st.reg.genericArgCount specId: rv) == 0) then return fe
@@ -37540,24 +37530,9 @@ forFactoryTid: function {
                 match (
                     fro
                 ) case some then {
-                    if (st.reg.typetypeOf typeId: fro) == ztypes.ztypetype.classType then {
-                        (forceMemberOf
-                            :st
-                            :ast
-                            parentTypeId: fro
-                            nameId: zast.wellKnown.slot.wkCall
-                        )
-                        fco: (st.typing.declChildOfId
-                            parentTypeId: fro
-                            nameId: zast.wellKnown.slot.wkCall
-                        )
-                        match (
-                            fco
-                        ) case some then {
-                            facId = ffo
-                            markMemberUsed :st ownerTid: fro nameId: zast.wellKnown.slot.wkCall
-                        } case none then null
-                    }
+                    if (
+                        (st.reg.typetypeOf typeId: fro) == ztypes.ztypetype.classType
+                    ) when (objectCallOf :st :ast t: fro).isZero.not then facId = ffo
                 } case none then null
             }
         } case none then null
@@ -46941,8 +46916,7 @@ refuseValueCallArgs: function {
     if (call.nargs == 0) or vt.isZero then return
     vtt: st.reg.typetypeOf typeId: vt
     if (vtt == ztypes.ztypetype.functionType) or (vtt == ztypes.ztypetype.genericParam) then return
-    if (st.typing.declChildOfId parentTypeId: vt nameId: zast.wellKnown.slot.wkCall
-    ).some then return
+    if (objectCallOf :st :ast t: vt).isZero.not then return
     arg0: argRefAt :ast nid: (zast.callArgAt :ast nid: call.nid i: 0)
     if arg0.nid.isZero then return
     tn: specWrittenName :st :ast tid: (materialiseLiteral :ast :st t: vt)
