@@ -16249,8 +16249,6 @@ emitUserTypeMemberRead: function {
     if isFile then {
         if (isNetUnitTid :symtab :ctx tid: bstamp) then isNetU = true
         ffc: ctxCname :ctx tid: bstamp
-        ffcc: ioCanonCname :ast :symtab :ctx canon: fbtn
-        if ffcc.length > 0 then ffc = ffcc.take
         if isNetU then {
             demandNetMember :ctx tid: bstamp member: mn2
         } else {
@@ -34194,25 +34192,6 @@ definedInNonMain: function {
     }
 }
 
-# definedInFragmentUnit -- the type is defined in one of the three units whose
-# runtime fragments name types by SOURCE name: io, cli, net. definedInNonMain
-# answers "is this a library type to emit alongside the main closure", which is
-# a different question and gives the wrong answer for exactly these three: when
-# `io.z` is itself the main unit, io's own IoError IS a main-unit type, and a
-# scan that only accepts non-main ones cannot find it -- the hole then fills
-# with nothing and the fragment declares `static z__t`.
-definedInFragmentUnit: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
-    duId: defUnitIdOf :ctx :tid
-    if duId.isZero then return false
-    return (
-        (duId == ctx.ioUnitDecl) or
-        (duId == ctx.cliUnitDecl) or
-        (
-            duId == ctx.netUnitDecl
-        )
-    )
-}
-
 # emitUnionMono -- a UNION (a user union, an Option/Result mono): tag enum +
 # { tag; slot } struct, the slot a `void* data` overlaid by each inline arm's
 # member (emitUnionSlot), + destroy (free a cell arm's payload, recursing into
@@ -35523,7 +35502,8 @@ ioCanonTidAny: function {
     st: ioCanonTid :ast :symtab :ctx :canon
     if st.isZero.not then return st
     # a plain source-name stem (File, IoError, Reader): the system unit first,
-    # then the registry scan below for the io/cli units it does not cover.
+    # then each unit that brings runtime fragments, by id. A generic instance's
+    # stem is a natives.tbl @canon row, resolved above.
     nameId94: zast.poolFind pool: ast.names text: canon
     mo: (ztypecheck.resolveUnitChildRo
         :ast
@@ -35536,19 +35516,39 @@ ioCanonTidAny: function {
     ) case some then {
         return mo
     } case none then null
-    last: symtab.reg.nextTid
-    found: ztypes.tid
-    ti: ztypes.tid 1
-    for ti < last loop {
-        if found.isZero then {
-            t9: ti
-            okc: (definedInNonMain :symtab :ctx tid: t9) or (definedInFragmentUnit :ctx tid: t9)
-            if okc.not when (originTidOf :symtab tid: t9).isZero.not then okc = true
-            if okc when (regNameIs :symtab tid: t9 name: canon) then found = t9
-        }
-        ti = ti.next
-    }
+    found: fragUnitChild :ast :symtab unitDecl: ctx.ioUnitDecl nameId: nameId94
+    if found.isZero then found = (fragUnitChild
+        :ast
+        :symtab
+        unitDecl: ctx.cliUnitDecl
+        nameId: nameId94
+    )
+    if found.isZero then found = (fragUnitChild
+        :ast
+        :symtab
+        unitDecl: ctx.netUnitDecl
+        nameId: nameId94
+    )
+    if found.isZero then found = (fragUnitChild
+        :ast
+        :symtab
+        unitDecl: ctx.osUnitDecl
+        nameId: nameId94
+    )
     return found
+}
+
+# fragUnitChild -- the type `nameId` a runtime-fragment unit declares, 0 when the
+# unit is absent or declares none.
+fragUnitChild: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    unitDecl: ztypes.declid
+    nameId: zast.nameid
+} out ztypes.tid is {
+    if unitDecl.isZero then return ztypes.tid.zero
+    uo: ztypecheck.resolveUnitChildRo :ast st: symtab :unitDecl :nameId
+    return (uo.or d: ztypes.tid.zero)
 }
 
 # ioCanonCnameUncached -- the id-based cname for an io canonical stem (the part
@@ -39593,9 +39593,6 @@ emitFileMethodCall: function {
     fid: fileTypeIdOf :symtab nid: bnid :mnId
     if fid.isZero then return ""
     fc: ctxCname :ctx tid: fid
-    fcn: regNameOf :symtab tid: fid
-    fcc: ioCanonCname :ast :symtab :ctx canon: fcn.stringView
-    if fcc.length > 0 then fc = fcc.take
     recvV0: atomVid :symtab nid: bnid
     recv: aliasResolveAt :symtab :ctx nid: bnid name: bn vid: recvV0
     recvV: ztypes.vid

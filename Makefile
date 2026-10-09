@@ -2496,7 +2496,7 @@ perf: $(PERFBIN)
 # -10,832 the emitter names arms and members by id (memberCNamed, tagConstNamed,
 # variantArms and the space-joined exclusion text gone): -9,726 behaviour,
 # -1,106 source (ab.sh).
-ALLOC_BASELINE := 2168820
+ALLOC_BASELINE := 2168409
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -2688,7 +2688,7 @@ emitter-guard:
 	chk "resolveTypeIdByName" "$$e3" 0; \
 	chk "userFnId" "$$e4" 0; \
 	chk "childOwnershipText" "$$e5" 0; \
-	chk "regNameOf" "$$e6" 9; \
+	chk "regNameOf" "$$e6" 8; \
 	chk "mangleVarName (both inside varCName)" "$$e7" 2; \
 	chk "io.readText" "$$e8" 3; \
 	chk "monoOriginName" "$$e9" 0; \
