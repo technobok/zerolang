@@ -11254,22 +11254,22 @@ emitTypeQualCall: function {
     ctx: Ctx
     call: zast.callrow.view
 } out String is {
-    bn: dottedBaseAtom :ast n: (ast.nodes.get i: call.callable)
+    # the checker decided whether the base names a type (callBaseNamesType); the
+    # type is the base's stamp -- an instance's own, inside a generic body
+    if (symtab.typing.callBaseNamesType.has item: call.nodeid).not then return ""
     mn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable)
     mnId: aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable)
     btid: ztypes.tid
-    if bn.length > 0 then btid = userFnId :ast :symtab :ctx name: bn
-    # a type reached through its unit (`other.T.helper`) has no bare base name:
-    # the checker stamped the call type-qualified, and the base path its type
-    if btid.isZero when (symtab.typing.callRecvFromArgs.has item: call.nodeid) then {
+    {
         cq: ast.nodes.get i: call.callable
-        if cq.dottedpath then btid = (stampIdOf
-            :symtab
-            nid: (interpPartNodeId n: (ast.nodes.get i: cq.parent))
-        )
+        if cq.dottedpath then {
+            bnid: interpPartNodeId n: (ast.nodes.get i: cq.parent)
+            btid = monoStampIdOf :symtab :ctx nid: bnid
+            if btid.isZero then btid = stampIdOf :symtab nid: bnid
+        }
     }
-    # a type written as an application (`(Pair t: u64).create`) has no bare
-    # name either: the checker stamped the construction with the instance
+    # a type written as an application (`(Pair t: u64).create`) is stamped on
+    # the construction, with the instance
     isCreate: mnId == zast.wellKnown.slot.wkCreate
     if btid.isZero when isCreate when (callKindIsCreate :symtab nid: call.nodeid) then {
         btid = stampIdOf :symtab nid: call.nodeid
