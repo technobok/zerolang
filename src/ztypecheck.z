@@ -2819,8 +2819,11 @@ recordNodeNameId: function {
 # (`out sub.T`) names a member exactly as a cross-unit reference does, but it
 # cannot be recorded as a pending typeref: that carries a (unit NAME, member
 # name) pair, and a nested unit has no name-index entry to be found by. So it
-# resolves here and stamps the node itself. Recorded by nothing, such a
-# reference reached no resolver at all and its slot typed as null.
+# resolves here and stamps the node itself, as it does a member reached through
+# a unit instance: a binding of one (`ic.Cell`) or one applied in place
+# (`(cells t: i64).Cell`). Recorded by nothing, such a reference reached no
+# resolver at all: a parameter typed by it was typed as nothing and a return
+# as null.
 stampNestedTyperef: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -2830,21 +2833,23 @@ stampNestedTyperef: function {
     memberId: zast.nameid
     nid: zast.nodeid
 } is {
-    if unitId.isZero then return
     if memberId.isZero then return
-    root: ztypes.declid
-    ro: unitDecl
-    if ro.isZero.not then root = ro
-    if root.isZero then return
-    mt: (nestedUnitMemberTid
-        :st
-        :scope
-        :ast
-        ownerDeclId: root
-        nestedNameId: unitId
-        defName: memberId
-    )
-    if mt.isZero when (qualifierMayBeInstance :st :ast :scope nameId: unitId) then {
+    mt: ztypes.tid
+    if unitId.isZero.not when unitDecl.isZero.not then {
+        mt = (nestedUnitMemberTid
+            :st
+            :scope
+            :ast
+            ownerDeclId: unitDecl
+            nestedNameId: unitId
+            defName: memberId
+        )
+    }
+    # a qualifier with no name is an application (`(cells t: i64).Cell`), which
+    # can only be a unit instance written in place
+    if mt.isZero when (
+        unitId.isZero or (qualifierMayBeInstance :st :ast :scope nameId: unitId)
+    ) then {
         mt = unitInstanceMemberTid :st :scope :ast :unitDecl :nid :memberId
     }
     if mt.isZero then return
