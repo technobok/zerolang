@@ -2481,7 +2481,7 @@ perf: $(PERFBIN)
 #
 # +2 ztypecheck exports envLookup / scopeFor / unitdefNodeId for zls's
 # shadow-aware hover: 0 behaviour, +2 source (ab.sh).
-ALLOC_BASELINE := 2189208
+ALLOC_BASELINE := 2189251
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -4111,7 +4111,9 @@ FALLBACK_BASELINE :=
 # constants spelled from names.
 # 38: withValueCType's refusal -- a `with` value the checker gave no type, which
 # a lookup of its stamped NAME used to answer instead (names-to-ids-2 Part C).
-EMITFAIL_BASELINE := 38
+# 39: protoParamCtype's refusal -- an interface slot's parameter whose type the
+# backend cannot spell, which used to be declared `int64_t` in silence.
+EMITFAIL_BASELINE := 39
 MARKER_BASELINE := 24
 EXCS := $(NAMES:%=$(EXDIR)/%.c)
 fallback-guard: $(EXCS) bin/zc bin/zl bin/zls
