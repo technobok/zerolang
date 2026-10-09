@@ -45622,17 +45622,9 @@ checkResolvedMethodCall: function {
     # constructs -- so the receiver always arrives through the dot. Only the
     # DOTTED spelling reads its left as a path, where a bare type name is
     # type-qualified dispatch and hands the receiver to the arguments.
-    recvVal: true
-    if call.infix.not then recvVal = (dottedBaseIsValue
-        :st
-        :ast
-        :unitDecl
-        n: (ast.nodes.get i: call.callable)
-    )
-    # the ONE place this question is answered. The emitter reads the stamp
-    # rather than asking again: two derivations of one question is what let
-    # a type-qualified call be emitted with its receiver slot never filled.
-    if recvVal.not then st.typing.callRecvFromArgs.add item: call.nid
+    # checkDottedCallableCall answered whether the base names a type, once, for
+    # every dotted call (callBaseNamesType); an infix call is never in it
+    recvVal: (st.typing.callBaseNamesType.has item: call.nid).not
     # a receiver that is not a variable is evaluated before the arguments: what
     # its value keeps locked is taken now, before the argument walk drains it
     rvPins: List ztyping.PinPath
@@ -46492,13 +46484,9 @@ checkGenericFnCall: function {
     # a dotted base that names a type leaves the receiver to the arguments
     # (`Acc.put a text: s`), as on the concrete leg (checkResolvedMethodCall)
     recvVal: true
-    if call.infix.not when (methodHasThisReceiver :st mid: dro) then recvVal = (dottedBaseIsValue
-        :st
-        :ast
-        :unitDecl
-        n: (ast.nodes.get i: call.callable)
-    )
-    if recvVal.not then st.typing.callRecvFromArgs.add item: call.nid
+    if (methodHasThisReceiver :st mid: dro) then recvVal = (st.typing.callBaseNamesType.has
+        item: call.nid
+    ).not
     # the locks the call's result may keep: a hoisted argument's temporary
     # joins them AS IT IS MINTED, in argument order, so the walk and the
     # instance's own pass write to one list
@@ -49146,7 +49134,10 @@ checkGenericCall: function {
         :pNames
         :pHolderIds
         :pHolders
-        recvFromArgs: (st.typing.callRecvFromArgs.has item: call.nid)
+        recvFromArgs: (
+            (st.typing.callBaseNamesType.has item: call.nid) and
+            (methodHasThisReceiver :st mid: funcId)
+        )
     )
     subs: IdMapV zast.nameid v: ztypes.tid
     errI: st.typing.errors.length
