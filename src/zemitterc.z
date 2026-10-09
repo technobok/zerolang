@@ -1776,8 +1776,7 @@ readTemplateCached: function {ctx: Ctx path: StringView} out String is {
 }
 
 # cReserved -- the words an emitted identifier must not collide with, so a local
-# variable or a struct member whose zerolang name is one of them is emitted as
-# `v_<name>`: the C statement keywords (a local named one would be read as the
+# variable whose zerolang name is one of them is emitted as `v_<name>`: the C statement keywords (a local named one would be read as the
 # statement it spells); the type specifiers, aggregate introducers and
 # signedness words a declaration's type slot may hold; the storage classes and
 # qualifiers a declaration may carry and `sizeof`; and the three library or
@@ -1833,21 +1832,6 @@ isCReserved: function {cw: zast.Vocab.view name: StringView} out bool is {
 mangleVarName: function {name: StringView cw: zast.Vocab.view} out String is {
     if (isCReserved :cw :name) then return ("v_".concat name)
     return name.string
-}
-
-# The prefix `name` needs to be a C-safe struct member identifier: `v_` for a
-# C reserved word and empty for every other name, which is nearly all of them.
-# A member shares the local scheme and its residual -- a member literally named
-# `v_default` collides with a member named `default`. It is a prefix rather
-# than a mangled copy because every caller is already building the C text
-# around the name, so `\{prefix}\{name}` costs no allocation where handing back
-# a mangled String would cost one per member spelling. It is separate from
-# mangleVarName because the emitter-guard ratchet pins mangleVarName's call
-# sites at the two inside varCName: locals are named in exactly one place, and
-# so are members, in memberCPrefix.
-mangleMemberPrefix: function {name: StringView cw: zast.Vocab.view} out StringView is {
-    if (isCReserved :cw :name) then return "v_"
-    return ""
 }
 
 # ccfamily -- the C compiler zc hands the emitted C to, by family: what the C
@@ -10026,15 +10010,15 @@ emitSpanMethodCall: function {
     if mnId == zast.wellKnown.slot.wkSplit then {
         needsAddM :ctx uname: "collections" memb: "window"
         va: listArg :ast :symtab :ctx :call label: "at"
-        pc: (ctxCname
-            :ctx
-            tid: (chaseAggregateTypedef :symtab :ctx tid: (stampIdOf :symtab nid: call.nodeid))
-        )
+        pairTid: chaseAggregateTypedef :symtab :ctx tid: (stampIdOf :symtab nid: call.nodeid)
+        pc: ctxCname :ctx tid: pairTid
+        loC: memberCNamed :ast :symtab :ctx owner: pairTid kind: memberkind.field name: "lo"
+        hiC: memberCNamed :ast :symtab :ctx owner: pairTid kind: memberkind.field name: "hi"
         es: String
         es.append "({ \{cb}_t* _zs = \{recvR}; uint64_t _za = \{va}; "
         es.append "z_coll_window_check(0, _za, _zs->length, \"SpanVal split\"); "
-        es.append "(\{pc}_t){ .lo = { .length = _za, .data = _zs->data }, "
-        es.append ".hi = { .length = _zs->length - _za, .data = _zs->data + _za } }; })"
+        es.append "(\{pc}_t){ .\{loC} = { .length = _za, .data = _zs->data }, "
+        es.append ".\{hiC} = { .length = _zs->length - _za, .data = _zs->data + _za } }; })"
         return es
     }
     if mnId == zast.wellKnown.slot.wkCopyFrom then {
@@ -14698,20 +14682,6 @@ varCNameIs: function {ctx: Ctx.view vid: ztypes.vid name: StringView text: Strin
     }
 }
 
-# memberCPrefix -- what a struct member's name needs in front of it to be a C
-# identifier. A member keeps its source spelling: it has no id space of its
-# own, and its namespace is the struct, so nothing but a C reserved word can
-# collide. A field named `default` would emit `int64_t default;`, which the C
-# compiler rejects, so the name carries the same `v_` a local does -- empty
-# for every other name. Every spelling of a member -- the declaration, the
-# reads and writes, the constructor parameters, the destructor, the generated
-# `_eq` and the vtable slots cSlotName keeps in step -- puts this in front of
-# it, because a prefix applied at the declaration and not at a read emits
-# `b.v_default` against a field named `default`.
-memberCPrefix: function {name: StringView cw: zast.Vocab.view} out StringView is {
-    return (mangleMemberPrefix :name :cw)
-}
-
 # memberkind -- the family a member of a compiler-generated struct is counted
 # in: a record's or class's field, a variant's arm in `data`, a union's inline
 # arm slot, an interface's vtable slot, or a meta_create parameter (a field's,
@@ -14730,12 +14700,16 @@ memberkind: variant {
 }
 
 # memberC -- the C name of the member of `owner` named `nameId`, counted in
-# `kind`. Every spelling of a member of a struct this emitter generates -- its
-# declaration, the reads and writes, the constructor's parameters, the
-# destructor, the generated `_eq` and `hash`, the vtable rows and the dispatch
-# through them -- is this, so the declaration and each use cannot disagree. The
-# member is found by its owner's declaration (memberOrdinal); asking for one the
-# owner does not declare is an emitter defect.
+# `kind`: its family's letter and its ordinal (memberLetter, memberOrdinal) --
+# `f2`, `a0` -- from ids alone, as a type's own C name is. A source name is never
+# part of it, so no member can collide with a C keyword, a macro (`errno`,
+# `st_mtime`), the emitter's own locals (`_this`) or another member. Under
+# --readable-names the source name is appended (`f2_default`); nothing about
+# uniqueness rests on it. Every spelling of a member of a struct this emitter
+# generates -- its declaration, the reads and writes, the constructor's
+# parameters, the destructor, the generated `_eq` and `hash`, the vtable rows
+# and the dispatch through them, and the runtime fragments' `@MEMBER_` holes --
+# is this. Asking for a member the owner does not declare is an emitter defect.
 memberC: function {
     # the member names
     ast: Ast.view
@@ -14756,15 +14730,34 @@ memberC: function {
         tn: regNameView :symtab tid: owner
         panic msg: "zemitterc: a C name for member '\{nm}', which '\{tn}' does not declare"
     }
+    r: "\{memberLetter :kind}\{o}"
+    if ctx.readableNames then {
+        r.append "_"
+        if kind.slot then {
+            r.append (slotReadableName name: nm.stringView ow: ctx.opWords)
+        } else {
+            r.append nm
+        }
+    }
+    return r
+}
+
+# memberLetter -- the letter a member's C name starts with, by its family: a
+# field `f`, a variant arm `a`, a union's inline arm slot `i`, a vtable slot
+# `s`, a parameter `p`.
+memberLetter: function {kind: memberkind} out StringView is {
     match (
         kind
-    ) case inlineArm then {
-        return (armInlineMember arm: nm.stringView)
+    ) case field then {
+        return "f"
+    } case arm then {
+        return "a"
+    } case inlineArm then {
+        return "i"
     } case slot then {
-        return (cSlotName name: nm.stringView cw: ctx.cWords ow: ctx.opWords)
-    } else {
-        sp: memberCPrefix name: nm.stringView cw: ctx.cWords
-        return "\{sp}\{nm}"
+        return "s"
+    } case param then {
+        return "p"
     }
 }
 
@@ -26785,12 +26778,6 @@ armSlotC: function {
     return "\{recv}\{acc}data"
 }
 
-# armInlineMember -- the name an inline arm's member carries in the union that
-# overlays `data`: the arm's own, after a prefix no arm named `data` can meet.
-armInlineMember: function {arm: StringView} out String is {
-    return "in_\{arm}"
-}
-
 # armCellRef -- the payload as a parenthesised lvalue; an inline arm's is the
 # member access itself, unparenthesised: it binds tighter than any operator
 # around it, and the emitter's lvalue test reads it as the place it is.
@@ -32473,21 +32460,13 @@ isBareCName: function {s: StringView} out bool is {
     return true
 }
 
-# cSlotName -- a member name as a C identifier for an interface vtable slot.
-# An OPERATOR member (`==`, `<=`, ...) is not a C identifier: a facet or
-# protocol declaring `==` would emit `bool (*==)(void*, T);`, which gcc
-# rejects. The operator spelling comes from opCnameOf, the same table the
-# implementation's own C name is built from, so the struct field, the wrapper
-# name, the vtable row and the dispatch site cannot drift apart -- they are
-# four spellings of one slot, and one table is what makes that true.
-#
-# The fallback is byte-wise so any operator the table misses still yields a
-# unique, deterministic identifier rather than colliding with another one.
-cSlotName: function {name: StringView cw: zast.Vocab.view ow: zast.Vocab.view} out String is {
-    if (isBareCName s: name) then {
-        sp: memberCPrefix :name :cw
-        return "\{sp}\{name}"
-    }
+# slotReadableName -- a vtable slot's member name as C identifier text, for the
+# readable suffix of its C name (memberC under --readable-names). An OPERATOR
+# member (`==`, `<=`, ...) is not a C identifier; its spelling comes from
+# opCnameOf, the table the implementation's own C name is built from, and any
+# operator the table misses falls back to its bytes, which stays unique.
+slotReadableName: function {name: StringView ow: zast.Vocab.view} out String is {
+    if (isBareCName s: name) then return name.string
     op: opCnameOf :ow :name
     if op.length > 0 then return op
     result: "op".string
@@ -36799,58 +36778,112 @@ emitIoStdStreams: function {
     }
 }
 
-# emitIoFileClass -- the io.File value rep: { int32_t fd; bool closed } + a
-# destructor that closes the fd once (RAII). Emitted only when File is reachable
+# emitIoFileClass -- the io.File value rep, emitted only when File is reachable
 # (in the demand-driven registry). The generic record path can't produce the
-# close-fd destructor, so File gets this dedicated emitter. The type is marked
-# in ctx.emittedUserTypes so every other path skips it -- without that mark a
-# by-value use of File would emit a second struct carrying a generic destructor
-# that never closes the fd.
-emitIoFileClass: function {ctx: Ctx buf: String.borrow} is {
+# close-fd destructor, so File gets this dedicated emitter (emitFdClass). The type
+# is marked in ctx.emittedUserTypes so every other path skips it -- without that
+# mark a by-value use of File would emit a second struct carrying a generic
+# destructor that never closes the fd.
+emitIoFileClass: function {
+    # the File class's field names
+    ast: Ast.view
+    # the checked program declaring File
+    symtab: zenv.ZSymbolTable.view
+    # the emission context holding ctx.ioFileTid
+    ctx: Ctx
+    # the type section File's struct joins
+    buf: String.borrow
+} is {
     fid: ctx.ioFileTid
     if fid.isZero then return
     if (ctx.emittedUserTypes.has item: fid) then return
     ctx.emittedUserTypes.add item: fid
-    fc: ctxCname :ctx tid: fid
-    if (isFwdDeclared :ctx tid: fid) then {
-        l0: "struct \{fc}_t {\n    int32_t fd;\n    bool closed;\n};\n"
-        buf.append l0
-    } else {
-        l0: "typedef struct {\n    int32_t fd;\n    bool closed;\n} \{fc}_t;\n"
-        buf.append l0
-    }
-    l1: "static void \{fc}_destroy(\{fc}_t* p) {\n    if (!p) return;\n    if (p->closed) return;\n    close(p->fd);\n    p->closed = true;\n}\n\n"
-    buf.append l1
+    emitFdClass :ast :symtab :ctx tid: fid :buf
 }
 
-# emitNetFdClass -- one net fd-holder class ({ int32_t fd; bool closed } + a
-# close-once destructor) when the program made one, the net analogue of
-# emitIoFileClass. The net runtime fragments dereference the fields, so the
-# body is pre-emitted here and the type marked in ctx.emittedUserTypes so the
-# ordered user-struct pass skips it (that pass runs after the fragments -- too
-# late).
-emitNetFdClass: function {ctx: Ctx tid: ztypes.tid buf: String.borrow} is {
-    fid: tid
-    if fid.isZero then return
-    if (typeIsUsed :ctx tid: fid).not then return
-    if (ctx.emittedUserTypes.has item: fid) then return
-    ctx.emittedUserTypes.add item: fid
-    fc: ctxCname :ctx tid: fid
-    if (isFwdDeclared :ctx tid: fid) then {
-        l0: "struct \{fc}_t {\n    int32_t fd;\n    bool closed;\n};\n"
-        buf.append l0
+# emitNetFdClass -- one net fd-holder class (emitFdClass) when the program made
+# one, the net analogue of emitIoFileClass. The net runtime fragments
+# dereference the fields, so the body is pre-emitted here and the type marked in
+# ctx.emittedUserTypes so the ordered user-struct pass skips it (that pass runs
+# after the fragments -- too late).
+emitNetFdClass: function {
+    # the net class's field names
+    ast: Ast.view
+    # the checked program declaring it
+    symtab: zenv.ZSymbolTable.view
+    # the emission context recording what was emitted
+    ctx: Ctx
+    # Listener or Conn
+    tid: ztypes.tid
+    # the type section its struct joins
+    buf: String.borrow
+} is {
+    if tid.isZero then return
+    if (typeIsUsed :ctx :tid).not then return
+    if (ctx.emittedUserTypes.has item: tid) then return
+    ctx.emittedUserTypes.add item: tid
+    emitFdClass :ast :symtab :ctx :tid :buf
+}
+
+# emitFdClass -- a file-descriptor holder (io.File, net.Listener, net.Conn): its
+# struct, laid out from its declaration as a record's is (emitRecordStructBody),
+# and a destructor that closes the fd once (RAII).
+emitFdClass: function {
+    # the fd holder's field names
+    ast: Ast.view
+    # the checked program its declaration is read from
+    symtab: zenv.ZSymbolTable.view
+    # the emission context its C names come from
+    ctx: Ctx
+    # the class
+    tid: ztypes.tid
+    # where its struct and destructor are written
+    buf: String.borrow
+} is {
+    fc: ctxCname :ctx :tid
+    fnames: List String
+    fids: ListVal ztypes.tid
+    fidsNm: ListVal zast.nameid
+    recFieldLists :ast :symtab :tid names: fnames ids: fids nameIds: fidsNm
+    fwd: isFwdDeclared :ctx :tid
+    if fwd then {
+        lo: "struct \{fc}_t {\n"
+        buf.append lo
     } else {
-        l0: "typedef struct {\n    int32_t fd;\n    bool closed;\n} \{fc}_t;\n"
-        buf.append l0
+        buf.append "typedef struct {\n"
     }
-    l1: "static void \{fc}_destroy(\{fc}_t* p) {\n    if (!p) return;\n    if (p->closed) return;\n    close(p->fd);\n    p->closed = true;\n}\n\n"
-    buf.append l1
+    emitRecordStructBody :ast :symtab :ctx :tid names: fnames ids: fids nameIds: fidsNm :buf
+    if fwd then {
+        buf.append "};\n"
+    } else {
+        lc: "} \{fc}_t;\n"
+        buf.append lc
+    }
+    fdC: memberCNamed :ast :symtab :ctx owner: tid kind: memberkind.field name: "fd"
+    clC: memberCNamed :ast :symtab :ctx owner: tid kind: memberkind.field name: "closed"
+    d0: "static void \{fc}_destroy(\{fc}_t* p) {\n    if (!p) return;\n"
+    buf.append d0
+    d1: "    if (p->\{clC}) return;\n"
+    buf.append d1
+    d2: "    close(p->\{fdC});\n"
+    buf.append d2
+    d3: "    p->\{clC} = true;\n}\n\n"
+    buf.append d3
 }
 
 # emitNetClasses -- the net fd-holder value reps (Listener/Conn).
-emitNetClasses: function {ctx: Ctx buf: String.borrow} is {
-    emitNetFdClass :ctx tid: ctx.netListenerTid :buf
-    emitNetFdClass :ctx tid: ctx.netConnTid :buf
+emitNetClasses: function {
+    # the net classes' field names
+    ast: Ast.view
+    # the checked program declaring net
+    symtab: zenv.ZSymbolTable.view
+    # the emission context naming Listener and Conn
+    ctx: Ctx
+    # the type section both structs join
+    buf: String.borrow
+} is {
+    emitNetFdClass :ast :symtab :ctx tid: ctx.netListenerTid :buf
+    emitNetFdClass :ast :symtab :ctx tid: ctx.netConnTid :buf
 }
 
 # demandNetMember -- load the fragment of a Listener's native method, demanded as
@@ -39122,8 +39155,8 @@ emitMonos: function {
         emitBoxMono :symtab :ctx monoId: boxId :buf
         tbox = tbox + 1
     }
-    emitIoFileClass :ctx :buf
-    emitNetClasses :ctx :buf
+    emitIoFileClass :ast :symtab :ctx :buf
+    emitNetClasses :ast :symtab :ctx :buf
     # reachable non-mono system VARIANTs (parseerror, seekorigin, ...) --
     # payloads of the variant monos / used directly.
     tsv: u64

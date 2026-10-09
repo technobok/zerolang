@@ -403,7 +403,10 @@ test-tcc-heavy: $(TCC_RUN_DEPS)
 # another unit's constant, or two sibling blocks binding one name, only diverge
 # under this flag. A tag enumerator carries its type's and arm's names under it
 # (after the ordinal that makes it unique): `arm_case_tags` holds two arms whose
-# names differ only in case, `tag_stem_clash` two units' sums of one name. The
+# names differ only in case, `tag_stem_clash` two units' sums of one name. A
+# member carries its source name too (after its ordinal): `member_names_c_words`
+# holds members named like C keywords, libc macros and the emitter's own names.
+# The
 # COMPILER leg below is the one that matters most: the
 # small programs exercise a handful of locals each, and a naming scheme is only
 # proven by a program with tens of thousands of them.
@@ -413,7 +416,8 @@ readable-check: bin/zc $(BUILDDIR)/buildstamp.o
 	          typedefs:examples shadow_unit_const:tests/fixtures/emitc_corpus \
 	          rn_sibling_shadow:tests/fixtures/emitc_corpus \
           rn_two_companions:tests/fixtures/emitc_corpus \
-	          arm_case_tags:tests/fixtures/emitc_corpus tag_stem_clash:tests/fixtures/emitc_corpus; do \
+	          arm_case_tags:tests/fixtures/emitc_corpus tag_stem_clash:tests/fixtures/emitc_corpus \
+	          member_names_c_words:tests/fixtures/emitc_corpus; do \
 	  n=$${c%%:*}; d=$$(echo $$c | sed 's/^[^:]*://'); \
 	  bin/zc $$n --src $$d --system lib/system --emit-c $(BUILDDIR)/rn/$$n-id.c || exit 1; \
 	  bin/zc $$n --src $$d --system lib/system --readable-names --emit-c $(BUILDDIR)/rn/$$n-rn.c || exit 1; \
@@ -2475,7 +2479,7 @@ perf: $(PERFBIN)
 #
 # +2 ztypecheck exports envLookup / scopeFor / unitdefNodeId for zls's
 # shadow-aware hover: 0 behaviour, +2 source (ab.sh).
-ALLOC_BASELINE := 2212238
+ALLOC_BASELINE := 2205453
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -2653,7 +2657,7 @@ emitter-guard:
 	e7=$$(grep -c 'mangleVarName :name' src/zemitterc.z); \
 	e8=$$(grep -cF 'io.readText' src/zemitterc.z); \
 	e9=$$(grep -c 'monoOriginName' src/zemitterc.z); \
-	e10=$$(grep -c 'mangleMemberPrefix :name' src/zemitterc.z); \
+	e10=$$(grep -vE '^[[:space:]]*#' src/zemitterc.z | grep -cE '\.data\.[a-z]'); \
 	g1=$$(grep -c 'composeCname' src/ztypes.z); \
 	g2=$$(grep -cF 'z_t\{' src/zemitterc.z); \
 	fail=0; \
@@ -2670,14 +2674,14 @@ emitter-guard:
 	chk "mangleVarName (both inside varCName)" "$$e7" 2; \
 	chk "io.readText" "$$e8" 3; \
 	chk "monoOriginName" "$$e9" 0; \
-	chk "mangleMemberPrefix (inside memberCPrefix)" "$$e10" 1; \
+	chk "literal arm members (.data.<arm>; memberC spells them)" "$$e10" 0; \
 	if [ "$$fail" = "1" ]; then \
 	  echo "  A new name-resolution site was added to the emitter. Read the typechecker"; \
 	  echo "  stamp (atomVariableId/atomUnitDefId/callKind), the canonical child id, or"; \
 	  echo "  ctxCname instead of resolving by name."; \
 	  exit 1; \
 	fi; \
-	echo "emitter-guard OK: resolvedByKey=$$e1 walkLookup=$$e2 resolveByName=$$e3 userFnId=$$e4 ownText=$$e5 nameOf=$$e6 mangleVar=$$e7 readText=$$e8 monoOrigin=$$e9 mangleMember=$$e10"
+	echo "emitter-guard OK: resolvedByKey=$$e1 walkLookup=$$e2 resolveByName=$$e3 userFnId=$$e4 ownText=$$e5 nameOf=$$e6 mangleVar=$$e7 readText=$$e8 monoOrigin=$$e9 armLiteral=$$e10"
 
 # frontend-guard -- the front end knows no backend. Everything before emission
 # -- the lexer, parser and AST, the type checker and its model, the symbol table
@@ -2692,12 +2696,12 @@ FRONTEND_SRCS := src/ztypecheck.z src/ztyping.z src/ztypes.z src/zenv.z src/zgen
 	lib/system/zparser.z lib/system/zlexer.z lib/system/zast.z
 frontend-guard:
 	@c=$$(cat $(FRONTEND_SRCS) | grep -vE '^[[:space:]]*#' \
-	  | grep -cE '__int128|_Float16|__float128|sizeof\(|_Alignof|void\*|u?int(8|16|32|64)_t|natives\.tbl|zlink|ccPath|ccMode|cckind|isCReserved|mangleVarName|mangleMemberPrefix|ztarget\.'); \
+	  | grep -cE '__int128|_Float16|__float128|sizeof\(|_Alignof|void\*|u?int(8|16|32|64)_t|natives\.tbl|zlink|ccPath|ccMode|cckind|isCReserved|mangleVarName|ztarget\.'); \
 	t=$$(cat $(FRONTEND_SRCS) | grep -vE '^[[:space:]]*#' | grep -cE 'target(Triple|Os|Arch)'); \
 	fail=0; \
 	if [ "$$c" -gt 0 ]; then \
 	  echo "frontend-guard FAIL: $$c C spelling(s) in the front end's code:"; \
-	  grep -nE '__int128|_Float16|__float128|sizeof\(|_Alignof|void\*|u?int(8|16|32|64)_t|natives\.tbl|zlink|ccPath|ccMode|cckind|isCReserved|mangleVarName|mangleMemberPrefix|ztarget\.' $(FRONTEND_SRCS) \
+	  grep -nE '__int128|_Float16|__float128|sizeof\(|_Alignof|void\*|u?int(8|16|32|64)_t|natives\.tbl|zlink|ccPath|ccMode|cckind|isCReserved|mangleVarName|ztarget\.' $(FRONTEND_SRCS) \
 	    | grep -vE ':[0-9]+:[[:space:]]*#' | sed 's/^/    /' | head -10; fail=1; fi; \
 	if [ "$$t" -gt 0 ]; then \
 	  echo "frontend-guard FAIL: the front end names the resolved target $$t times; it is the generated z unit's to say"; fail=1; fi; \
