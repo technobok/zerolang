@@ -1411,6 +1411,8 @@ appendResumeFields: function {
     yieldSlots: u64
     # the field list the counters join
     addFields: ListVal zast.nodeid
+    # where each slot's name is recorded for the emitter
+    dst: GenDeclared
 } is {
     yvi: u64
     for yvi < yieldSlots loop {
@@ -1419,10 +1421,12 @@ appendResumeFields: function {
         yvNm: "#yv_\{yvi}"
         yvF: mkNamedOp :ast from: inputTypeId :line :col name: yvNm.stringView op: yvT
         addFields.append (zast.tableAdd :ast n: yvF)
+        dst.yieldSlotFields.append (ast.names.set s: yvNm.stringView)
     }
     riT: resumeFieldPath :ast nid: inputTypeId
     riF: mkNamedOp :ast from: inputTypeId :line :col name: "#resume_input" op: riT
     addFields.append (zast.tableAdd :ast n: riF)
+    dst.resumeInputField = ast.names.set s: "#resume_input"
 }
 
 # appendForCounterFields -- one counter field per label-bound `for` whose body
@@ -1444,6 +1448,8 @@ appendForCounterFields: function {
     forSlots: u64
     # the field list the resume fields join
     addFields: ListVal zast.nodeid
+    # where each counter's name is recorded for the emitter
+    dst: GenDeclared
 } is {
     fci: u64
     for fci < forSlots loop {
@@ -1452,6 +1458,7 @@ appendForCounterFields: function {
         fcNm: "#fc_\{fci}"
         fcF: mkNamedOp :ast :from :line :col name: fcNm.stringView op: fcTy
         addFields.append (zast.tableAdd :ast n: fcF)
+        dst.forCounterFields.append (ast.names.set s: fcNm.stringView)
         # and its TRIP COUNT, for the loops that turn out to be a CLOSED range:
         # those spill two values where a half-open one spills the counter alone,
         # and the count is no more recomputable on resume than the counter is.
@@ -1463,13 +1470,15 @@ appendForCounterFields: function {
         fnNm: "#fn_\{fci}"
         fnF: mkNamedOp :ast :from :line :col name: fnNm.stringView op: fnTy
         addFields.append (zast.tableAdd :ast n: fnF)
+        dst.forCountFields.append (ast.names.set s: fnNm.stringView)
     }
 }
 
 # GenDeclared -- what preparing a declared `generator` leaves the checker to
-# record: the `call` whose body `yield` is legal in, and the wrapper node whose
-# Option collapses to `optionval` over a valtype element. Both are node ids the
-# checker keys side tables on; nothing here is a node the pass hands back.
+# record: the `call` whose body `yield` is legal in, the wrapper node whose
+# Option collapses to `optionval` over a valtype element, and the state fields
+# this pass adds, by their interned names, so the emitter reaches each by id
+# rather than by rebuilding its name. Nothing here is a node the pass hands back.
 GenDeclared: class {
     # `call`'s own functiondef node, 0 when there was no `call` to prepare
     callFnId: zast.nodeid
@@ -1478,6 +1487,16 @@ GenDeclared: class {
     # the body binds `yield`'s own value while `call` declares no input to
     # receive: the binding names a value nothing can ever supply
     readsAbsentInput: bool
+    # the resume cursor
+    stateField: zast.nameid
+    # the latest resumed input; 0 when `call` declares no input
+    resumeInputField: zast.nameid
+    # the resume slot of the k-th suspension, at k - 1
+    yieldSlotFields: ListVal zast.nameid
+    # the counter of the k-th suspending `for`, at k - 1
+    forCounterFields: ListVal zast.nameid
+    # and its trip count
+    forCountFields: ListVal zast.nameid
 }
 
 # createParamPath -- the generated `create`'s parameter type for one `is` field.
@@ -1597,7 +1616,8 @@ lowerDeclared: function {
     stTy: scalarTypePath :ast from: objId :line :col name: "i64"
     stField: mkNamedOp :ast from: objId :line :col name: "#state" op: stTy
     addFields.append (zast.tableAdd :ast n: stField)
-    appendForCounterFields :ast from: objId :line :col :forSlots :addFields
+    dst.stateField = ast.names.set s: "#state"
+    appendForCounterFields :ast from: objId :line :col :forSlots :addFields :dst
     if parts.inputTypeId.isZero.not then (appendResumeFields
         :ast
         :line
@@ -1605,6 +1625,7 @@ lowerDeclared: function {
         inputTypeId: parts.inputTypeId
         :yieldSlots
         :addFields
+        :dst
     )
     buildDeclaredCreate :ast :objId :line :col authorNames: parts.names authorTypes: parts.types
     appendDeclaredFields :ast :objId :addFields

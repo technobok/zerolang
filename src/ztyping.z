@@ -17,6 +17,7 @@
 # other top-level definitions are private to this unit.
 public: unit {
     :SynthNode
+    :GenFields
     :membercheck
     :defaultval
     :foldedbranch
@@ -162,6 +163,23 @@ declrow: record {
     # whether the row survives the pass that built it, which is how a
     # speculative registration is undone without a second table
     keep: bool
+}
+
+# GenFields -- the state fields the generator transform (zgenerator) added to
+# one generator's class, by their interned names: the emitter reads them here
+# rather than rebuilding a name. Each list is indexed by the suspension or loop
+# number less one.
+GenFields: class {
+    # the resume cursor
+    state: zast.nameid
+    # the latest resumed input; 0 when `call` declares no input
+    resumeInput: zast.nameid
+    # the k-th suspension's resume slot
+    yieldSlots: ListVal zast.nameid
+    # the k-th suspending `for`'s counter
+    forCounters: ListVal zast.nameid
+    # and its trip count
+    forCounts: ListVal zast.nameid
 }
 
 # a node the checker made rather than the parser: it has no source position
@@ -784,6 +802,10 @@ ZTyping: class {
     inlineArms: SetVal armkey
     # types synthesised to carry a generator's state
     generatorWrapper: (IdMapV zast.nodeid v: bool)
+    # each generator's synthesized state fields (zgenerator)
+    genFields: List GenFields
+    # a generator's row of them, by its `call` method's functiondef node
+    genFieldsOf: (IdMapV zast.nodeid v: u64)
     # nodes deliberately left unstamped, so a later pass does not read absence
     # as an error
     noStampNode: (IdMapV zast.nodeid v: bool)
@@ -3170,6 +3192,8 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         boxedArms: SetVal armkey
         inlineArms: SetVal armkey
         generatorWrapper: (IdMapV zast.nodeid v: bool)
+        genFields: List GenFields
+        genFieldsOf: (IdMapV zast.nodeid v: u64)
         noStampNode: (IdMapV zast.nodeid v: bool)
         fnHasBody: (IdMapV ztypes.tid v: bool)
         inAssignTarget: false

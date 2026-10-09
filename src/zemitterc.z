@@ -3547,6 +3547,8 @@ Ctx: class {
     # the generator class whose `call` is being emitted: the owner of its state
     # fields
     genTid: ztypes.tid
+    # that generator's row of synthesized state fields (typing.genFields)
+    genFieldsRow: u64
     # the `return`, `break` or `continue` statement being emitted, whose
     # destroys the checker recorded (exitDestroy); 0 at a tail value, which
     # records none
@@ -14107,8 +14109,8 @@ emitNamedCalleeChain: function {
     match (
         yk
     ) case some then {
-        yvN: "#yv_\{yk}"
-        return (genFieldC :ast :symtab :ctx name: yvN.stringView)
+        yvN: genSynthField :symtab :ctx which: gensynth.yieldSlot k: yk
+        return (genFieldC :ast :symtab :ctx nameId: yvN)
     } case none then null
     # a yield the hoist declined -- a second one in the same expression, or one
     # inside a condition, where lifting the suspension would either lose the
@@ -22674,8 +22676,7 @@ emitWithField: function {
     ind: StringView
     buf: String.borrow
 } is {
-    fnm: zast.nameTextAt :ast ref: wf
-    fld: genFieldC :ast :symtab :ctx name: fnm.stringView
+    fld: genFieldC :ast :symtab :ctx nameId: wf
     if (structDestroyNontrivial :symtab :ctx tid: wsid) then {
         buf.append (destroyLineC
             :symtab
@@ -22703,8 +22704,7 @@ genSubjectFieldC: function {
     if tv.none then return ""
     gf: symtab.typing.genLocalFieldOf.get key: tv
     if gf.none then return ""
-    fnm: zast.nameTextAt :ast ref: gf
-    fld: genFieldC :ast :symtab :ctx name: fnm.stringView
+    fld: genFieldC :ast :symtab :ctx nameId: gf
     vvSet xs: ctx.aliases vid: tv val: fld.stringView
     return fld
 }
@@ -22725,8 +22725,7 @@ emitGenLocalBind: function {
     tmp: TmpCtr
     buf: String.borrow
 } is {
-    fnm: zast.nameTextAt :ast ref: field
-    fld: genFieldC :ast :symtab :ctx name: fnm.stringView
+    fld: genFieldC :ast :symtab :ctx nameId: field
     rtsid: (chaseAggregateTypedef
         :symtab
         :ctx
@@ -25363,8 +25362,7 @@ emitObjIterField: function {
     tmp: TmpCtr
     buf: String.borrow
 } out String is {
-    fnm: zast.nameTextAt :ast ref: gi
-    recv: genFieldC :ast :symtab :ctx name: fnm.stringView
+    recv: genFieldC :ast :symtab :ctx nameId: gi
     if (structDestroyNontrivial :symtab :ctx tid: itid) then {
         ld: "\{ind}\{itCb}_destroy(&\{recv});\n"
         buf.append ld
@@ -25491,7 +25489,6 @@ pushPayloadSpill: function {
     match (
         pfO
     ) case some then {
-        fnm: zast.nameTextAt :ast ref: pfO
         savedO: lbl.string
         restoredO: lbl.string
         if pk.viewPtr then {
@@ -25499,7 +25496,7 @@ pushPayloadSpill: function {
             restoredO = "__borrow_\{lbl}"
         }
         if pk.viewCopy then savedO = "_iter\{mN}"
-        fldS: genFieldC :ast :symtab :ctx name: fnm.stringView
+        fldS: genFieldC :ast :symtab :ctx nameId: pfO
         ctx.genForSpills.append (ForSpill
             field: fldS
             saved: savedO
@@ -25967,8 +25964,8 @@ emitCountedRangeFor: function {
     pushed: false
     if ctx.genActive when (zast.yieldCountIn :ast nid: m.body) > 0 then {
         ctx.genForNext = ctx.genForNext + 1
-        fcF: "#fc_\{ctx.genForNext}"
-        fcC: genFieldC :ast :symtab :ctx name: fcF.stringView
+        fcF: genSynthField :symtab :ctx which: gensynth.forCounter k: ctx.genForNext
+        fcC: genFieldC :ast :symtab :ctx nameId: fcF
         ctx.genForSpills.append (ForSpill
             field: fcC
             saved: lbl.string
@@ -25977,8 +25974,8 @@ emitCountedRangeFor: function {
             payC: String
             payZero: String
         )
-        fnF: "#fn_\{ctx.genForNext}"
-        fnC: genFieldC :ast :symtab :ctx name: fnF.stringView
+        fnF: genSynthField :symtab :ctx which: gensynth.forCount k: ctx.genForNext
+        fnC: genFieldC :ast :symtab :ctx nameId: fnF
         ctx.genForSpills.append (ForSpill
             field: fnC
             saved: fn.copy
@@ -26105,8 +26102,8 @@ emitClosedRangeFor: function {
         pushed: false
         if ctx.genActive when (zast.yieldCountIn :ast nid: m.body) > 0 then {
             ctx.genForNext = ctx.genForNext + 1
-            fcF: "#fc_\{ctx.genForNext}"
-            fcC: genFieldC :ast :symtab :ctx name: fcF.stringView
+            fcF: genSynthField :symtab :ctx which: gensynth.forCounter k: ctx.genForNext
+            fcC: genFieldC :ast :symtab :ctx nameId: fcF
             ctx.genForSpills.append (ForSpill
                 field: fcC
                 saved: lbl.string
@@ -26115,8 +26112,8 @@ emitClosedRangeFor: function {
                 payC: String
                 payZero: String
             )
-            fnF: "#fn_\{ctx.genForNext}"
-            fnC: genFieldC :ast :symtab :ctx name: fnF.stringView
+            fnF: genSynthField :symtab :ctx which: gensynth.forCount k: ctx.genForNext
+            fnC: genFieldC :ast :symtab :ctx nameId: fnF
             ctx.genForSpills.append (ForSpill
                 field: fnC
                 saved: fn.copy
@@ -32945,6 +32942,7 @@ emitC: function {
         exSaveT: ListVal ztypes.tid
         genActive: false
         genTid: ztypes.tid.zero
+        genFieldsRow: 0
         exitNode: zast.nodeid
         genRecvC: "this"
         genValC: "value"
@@ -43203,6 +43201,15 @@ fnYieldCount: function {ast: Ast.view op: astnode.view} out u64 is {
     }
 }
 
+# genFieldsRowOf -- the row of synthesized state fields (typing.genFields) the
+# checker recorded for the generator whose `call` is `op`. Every generator the
+# transform prepared has one; a `call` without one is an emitter defect.
+genFieldsRowOf: function {symtab: zenv.ZSymbolTable.view op: astnode.view} out u64 is {
+    gfr: symtab.typing.genFieldsOf.get key: (zast.nodeIdOf n: op)
+    if gfr.none then panic msg: "zemitterc: a generator call with no recorded state fields"
+    return gfr
+}
+
 # setupGenCtx -- arm the generator state-machine context on ctx when `op` is a
 # generator `call` (its body yields). Resolves the optionval wrapper from the
 # method's return type. Returns false (and disarms) for a normal method.
@@ -43234,6 +43241,7 @@ setupGenCtx: function {
         return false
     }
     rc: ctxCname :ctx tid: rid
+    ctx.genFieldsRow = genFieldsRowOf :symtab :op
     ctx.genActive = true
     ctx.genTid = owner
     ctx.genYieldCount = gyc
@@ -43295,11 +43303,13 @@ emitGenPrologue: function {
     buf: String.borrow
 } is {
     if ctx.genHasValue then {
-        riC: genFieldC :ast :symtab :ctx name: "#resume_input"
+        riI: genSynthField :symtab :ctx which: gensynth.resumeInput k: 0
+        riC: genFieldC :ast :symtab :ctx nameId: riI
         lgv: "    \{riC} = \{ctx.genValC};\n"
         buf.append lgv
     }
-    stC: genFieldC :ast :symtab :ctx name: "#state"
+    stI: genSynthField :symtab :ctx which: gensynth.state k: 0
+    stC: genFieldC :ast :symtab :ctx nameId: stI
     lgs: "    switch (\{stC}) {\n"
     buf.append lgs
     buf.append "        case 0: goto L_entry;\n"
@@ -43337,7 +43347,8 @@ emitGenEpilogue: function {
         kd = kd + 1
     }
     buf.append "L_done:;\n"
-    stC: genFieldC :ast :symtab :ctx name: "#state"
+    stI: genSynthField :symtab :ctx which: gensynth.state k: 0
+    stC: genFieldC :ast :symtab :ctx nameId: stI
     lge: "    \{stC} = -1;\n"
     buf.append lge
     le: "    \{ctx.genWrap} _r_done = {0};\n"
@@ -43394,15 +43405,16 @@ emitExprFormYield: function {
     # the hoist has already suspended this yield and left the resume value in
     # a temp; only a yield it declined (no resume type it could name) still
     # needs suspending here
-    srcC: genFieldC :ast :symtab :ctx name: "#resume_input"
+    riS: genSynthField :symtab :ctx which: gensynth.resumeInput k: 0
+    srcC: genFieldC :ast :symtab :ctx nameId: riS
     {
         ycid: zast.yieldCallIdAt :ast nid: (zast.nodeIdOf n: value)
         ykq: ctx.yieldTempK.get key: ycid
         match (
             ykq
         ) case some then {
-            yvQ: "#yv_\{ykq}"
-            srcC = genFieldC :ast :symtab :ctx name: yvQ.stringView
+            yvQ: genSynthField :symtab :ctx which: gensynth.yieldSlot k: ykq
+            srcC = genFieldC :ast :symtab :ctx nameId: yvQ
         } case none then {
             emitYieldFromNode :ast :symtab :ctx n: value :ind :buf
         }
@@ -43568,9 +43580,10 @@ hoistExprYields: function {
     # into the state object's slot, NOT a C local: the suspension above
     # returned, so a local declared here would be gone by the next one. The
     # lowering allocated one slot per suspension point for exactly this.
-    yvK: "#yv_\{kNum}"
-    yvC: genFieldC :ast :symtab :ctx name: yvK.stringView
-    riC: genFieldC :ast :symtab :ctx name: "#resume_input"
+    yvK: genSynthField :symtab :ctx which: gensynth.yieldSlot k: kNum
+    yvC: genFieldC :ast :symtab :ctx nameId: yvK
+    riK: genSynthField :symtab :ctx which: gensynth.resumeInput k: 0
+    riC: genFieldC :ast :symtab :ctx nameId: riK
     lrv: "\{ind}\{yvC} = \{riC};\n"
     buf.append lrv
     kv: kNum
@@ -43602,7 +43615,8 @@ emitYieldStmt: function {
     # is in the box, before the suspension
     ytmp: TmpCtr n: 0 frees: List OwedFree listFrees: List OwedFree
     flushArgHoists :ctx :ind tmp: ytmp :buf
-    stC: genFieldC :ast :symtab :ctx name: "#state"
+    stI: genSynthField :symtab :ctx which: gensynth.state k: 0
+    stC: genFieldC :ast :symtab :ctx nameId: stI
     ls: "\{ind}\{stC} = \{k};\n"
     buf.append ls
     lw: "\{ind}\{ctx.genWrap} _ry_\{k} = {0};\n"
@@ -43647,13 +43661,58 @@ genFieldC: function {
     symtab: zenv.ZSymbolTable.view
     # the emission context: the receiver and the generator class
     ctx: Ctx
-    # the field's name, as text
-    name: StringView
+    # the field's name, interned
+    nameId: zast.nameid
 } out String is {
     r: ctx.genRecvC.copy
     r.append "->"
-    r.append (memberCNamed :ast :symtab :ctx owner: ctx.genTid kind: memberkind.field :name)
+    r.append (memberC :ast :symtab :ctx owner: ctx.genTid kind: memberkind.field :nameId)
     return r
+}
+
+# gensynth -- which of the state fields the generator transform adds: the resume
+# cursor, the latest resumed input, a suspension's resume slot, a suspending
+# `for`'s counter or its trip count.
+gensynth: variant {
+    # `#state`, the resume cursor
+    state: null
+    # `#resume_input`, the latest resumed input
+    resumeInput: null
+    # `#yv_<k>`, the k-th suspension's resume slot
+    yieldSlot: null
+    # `#fc_<k>`, the k-th suspending `for`'s counter
+    forCounter: null
+    # `#fn_<k>`, that loop's trip count
+    forCount: null
+}
+
+# genSynthField -- the name of one of the state fields the generator transform
+# added to the class whose `call` is being emitted (typing.genFields): `which`
+# picks the family, `k` the 1-based suspension or loop number within it.
+genSynthField: function {
+    # the checked program holding typing.genFields
+    symtab: zenv.ZSymbolTable.view
+    # the generator context: its row
+    ctx: Ctx.view
+    # the field's family
+    which: gensynth
+    # the suspension or loop number; unread for the cursor and the input
+    k: u64
+} out zast.nameid is {
+    row: symtab.typing.genFields.get i: ctx.genFieldsRow
+    match (
+        which
+    ) case state then {
+        return row.state
+    } case resumeInput then {
+        return row.resumeInput
+    } case yieldSlot then {
+        return (row.yieldSlots.get i: k - 1)
+    } case forCounter then {
+        return (row.forCounters.get i: k - 1)
+    } case forCount then {
+        return (row.forCounts.get i: k - 1)
+    }
 }
 
 # emitSpillSaves -- before a suspension's `return`: every open loop counter,
