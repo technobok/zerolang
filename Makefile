@@ -2481,7 +2481,10 @@ perf: $(PERFBIN)
 #
 # +2 ztypecheck exports envLookup / scopeFor / unitdefNodeId for zls's
 # shadow-aware hover: 0 behaviour, +2 source (ab.sh).
-ALLOC_BASELINE := 2191114
+#
+# +14 a data block's element kind is asked of its type through its typedefs
+# (baseNumKind, wideConstKind): -2 behaviour, +16 source (ab.sh).
+ALLOC_BASELINE := 2191128
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

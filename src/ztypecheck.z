@@ -9469,7 +9469,7 @@ dataElemFits: function {
     dnode: dataref
     opRef: zast.nodeid
     cv: ztypes.cval
-    # the element type's numeric kind, by name
+    # the element type's numeric kind, through any typedef, by declaration
     ek: ztypes.suffixinfo
     fitTid: ztypes.tid
 } out bool is {
@@ -10081,7 +10081,7 @@ resolveData: function {
             elemTid = lk
         } case none then null
     }
-    ek: ztypes.numkindByName name: etName.stringView
+    ek: baseNumKind :st tid: elemTid
     # a block of mixed kinds has no element type to check its elements against
     kindsOk: dataKindsAgree :ast :st :dnode :vals :elemTid
     # a block that names its type -- `out T`, or a tagged element -- reads each
@@ -33776,7 +33776,7 @@ checkWideConstants: function {ast: Ast.view st: zenv.ZSymbolTable} is {
         t: st.typing.nodeTypeIn :mono :nid
         if taken == 0 when (st.reg.typetypeOf typeId: t) != ztypes.ztypetype.genericParam then {
             v: st.typing.nodeConstIn :mono :nid
-            tk: ztypes.numkindByName name: (wideConstTarget :st :t).stringView
+            tk: wideConstKind :st :t
             sp: wideConstSpelling :ast :nid
             m: constFitsKindMessage :st :v k: tk.kind spelling: sp.stringView
             if m.length > 0 then {
@@ -33912,16 +33912,18 @@ wideConstSpelling: function {ast: Ast.view nid: zast.nodeid} out String is {
     return (zast.nameTextCopy :ast ref: nm)
 }
 
-# wideConstTarget -- the numeric type a constant stamped `t` lands in: its
-# typedef's base, or i64 for one nothing typed.
-wideConstTarget: function {st: zenv.ZSymbolTable.view t: ztypes.tid} out String is {
-    if t.isZero then return "i64"
-    if (isLiteralTypeId :st tid: t) then return (literalDefaultName :st tid: t).string
-    b: t
-    for (typedefBaseTidOf :st tid: b).isZero.not loop {
-        b = typedefBaseTidOf :st tid: b
+# wideConstKind -- the numeric kind a constant stamped `t` lands in: its
+# typedef's base, or the literal's default (i64 for one nothing typed).
+wideConstKind: function {st: zenv.ZSymbolTable.view t: ztypes.tid} out ztypes.suffixinfo is {
+    kind: ztypes.numkind.i64Type
+    if t == st.reg.literalBitsTid then {
+        kind = ztypes.numkind.u64Type
+    } else if t == st.reg.literalFloatTid then {
+        kind = ztypes.numkind.f64Type
+    } else if t.isZero.not when t != st.reg.literalIntTid then {
+        return (baseNumKind :st tid: t)
     }
-    return (st.reg.nameOf tid: b)
+    return (ztypes.suffixinfo has: true :kind len: 0)
 }
 
 # checkAtomid -- type a bare name: a scope entry (break/continue diverge),
@@ -43013,9 +43015,7 @@ recordHelperScalarTarget: function {
     if cf.numTid.isZero.not then return
     if cf.kind.ivalKind.not and cf.kind.fvalKind.not then return
     # the destination's kind, through any typedef, by declaration
-    b: dstTid
-    for (typedefBaseTidOf :st tid: b).isZero.not loop b = typedefBaseTidOf :st tid: b
-    nk: numKindOfTid :st tid: b
+    nk: baseNumKind :st tid: dstTid
     if nk.has.not then return
     wide: (
         (nk.kind == ztypes.numkind.i128Type) or
@@ -56232,6 +56232,14 @@ numKindOfTid: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out ztypes.s
     if (nm < first) or (nm > zast.wellKnown.slot.tyF128) then return none
     if (declaredBySystem :st declId: d).not then return none
     return (ztypes.numkindAt k: nm.u64 - first.u64)
+}
+
+# baseNumKind -- numKindOfTid of the type under every typedef over
+# `tid`: a block of `w: typedef u8` holds u8 values.
+baseNumKind: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out ztypes.suffixinfo is {
+    b: tid
+    for (typedefBaseTidOf :st tid: b).isZero.not loop b = typedefBaseTidOf :st tid: b
+    return (numKindOfTid :st tid: b)
 }
 
 # declaredBySystem -- whether a declaration sits in the system unit or one of the
