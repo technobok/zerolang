@@ -2492,7 +2492,11 @@ perf: $(PERFBIN)
 # +3,987 a union or variant bound is read off its declaration and resolves only
 # the arms its instance can be (sumBoundDeclAdmits); bounds read from the
 # template's scope: +2 behaviour, +3,985 source (ab.sh).
-ALLOC_BASELINE := 2191354
+#
+# -10,832 the emitter names arms and members by id (memberCNamed, tagConstNamed,
+# variantArms and the space-joined exclusion text gone): -9,726 behaviour,
+# -1,106 source (ab.sh).
+ALLOC_BASELINE := 2180522
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

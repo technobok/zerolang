@@ -3530,7 +3530,7 @@ Ctx: class {
     # the type a variable is currently narrowed to
     narrowTid: List VidTid
     # the arms ruled out for a variable, which lets a switch omit them
-    exclArms: List VidVal
+    exclArms: List VidArms
     # the types behind those exclusions
     exclTids: List VidTid
     # the save stack for exclusions layered by an `if` clause's conjuncts. One
@@ -3539,7 +3539,7 @@ Ctx: class {
     # allocations per clause for an empty answer. Entries are popped in reverse,
     # so a nested clause restores before the one enclosing it.
     exSaveVid: ListVal ztypes.vid
-    exSaveV: List String
+    exSaveV: List VidArms
     exSaveT: ListVal ztypes.tid
     # whether a generator body is being emitted, which changes what a return
     # means
@@ -4205,12 +4205,49 @@ VidTid: class {
     tid: ztypes.tid
 }
 
-# vvFind -- the 1-based index of `vid`'s entry in `xs`, 0 when absent. The
+# a variable paired with the arms recorded for it, by name: the arms an `if`
+# clause's conjuncts ruled out for it
+VidArms: class {
+    # the variable
+    vid: ztypes.vid
+    # the arms, by name
+    arms: ListVal zast.nameid
+}
+
+# vaGet -- the arms recorded for `vid`, none when absent.
+vaGet: function {xs: (List VidArms).view vid: ztypes.vid} out ListVal zast.nameid is {
+    f: vidFind :xs :vid
+    if f > 0 then return (xs.get i: f - 1).arms.copy
+    none: ListVal zast.nameid
+    return none
+}
+
+# vaSet -- replace-or-append: one entry per variable.
+vaSet: function {xs: List VidArms vid: ztypes.vid arms: (ListVal zast.nameid).view} is {
+    if vid.isZero then return
+    f: vidFind :xs :vid
+    if f > 0 then {
+        xs.set i: f - 1 val: (VidArms :vid arms: arms.copy)
+    } else {
+        xs.append (VidArms :vid arms: arms.copy)
+    }
+}
+
+# idListHas -- whether name id `id` is in `xs`.
+idListHas: function {xs: (ListVal zast.nameid).view id: zast.nameid} out bool is {
+    for each x: xs loop {
+        if x == id then return true
+    }
+    return false
+}
+
+# vidFind -- the 1-based index of `vid`'s entry in `xs`, an assoc list keyed by
+# variable id (VidVal, VidTid, VidArms), 0 when absent. The
 # value is copied only on a hit, so a miss allocates nothing at all. vvGet's
 # empty-String sentinel cost 277,711 one-byte allocations on a self-compile
 # (2.9% of every allocation the compiler makes) because the miss is the common
 # case: read through this, not vvGet, on any hot path.
-vvFind: function {xs: (List VidVal).view vid: ztypes.vid} out u64 is {
+vidFind: function as { T: AnyRef.generic } in {xs: (List T).view vid: ztypes.vid} out u64 is {
     if vid.isZero then return 0
     i: u64
     n: xs.length
@@ -4223,64 +4260,41 @@ vvFind: function {xs: (List VidVal).view vid: ztypes.vid} out u64 is {
 
 # vvGet -- the value recorded for `vid`, "" when absent (values never empty).
 vvGet: function {xs: (List VidVal).view vid: ztypes.vid} out String is {
-    f: vvFind :xs :vid
+    f: vidFind :xs :vid
     if f == 0 then return ""
     return (xs.get i: f - 1).val.copy
 }
 
 # true when list `xs` has an entry for `vid`.
 vvHas: function {xs: (List VidVal).view vid: ztypes.vid} out bool is {
-    if vid.isZero then return false
-    i: u64
-    n: xs.length
-    for i < n loop {
-        if (xs.get :i).vid == vid then return true
-        i = i + 1
-    }
-    return false
+    return (vidFind :xs :vid) > 0
 }
 
 # vvSet -- replace-or-append: one entry per variable (map.set semantics).
 vvSet: function {xs: List VidVal vid: ztypes.vid val: StringView} is {
     if vid.isZero then return
-    i: u64
-    n: xs.length
-    for i < n loop {
-        if (xs.get :i).vid == vid then {
-            xs.set :i val: (VidVal :vid val: val.string)
-            return
-        }
-        i = i + 1
+    f: vidFind :xs :vid
+    if f > 0 then {
+        xs.set i: f - 1 val: (VidVal :vid val: val.string)
+    } else {
+        xs.append (VidVal :vid val: val.string)
     }
-    xs.append (VidVal :vid val: val.string)
 }
 
-# vvRemove -- drop `vid`'s entry (swap-with-last; vids are unique).
-vvRemove: function {xs: List VidVal vid: ztypes.vid} is {
-    if vid.isZero then return
-    i: u64
-    n: xs.length
-    for i < n loop {
-        if (xs.get :i).vid == vid then {
-            last: xs.pop
-            if (i + 1) < n then xs.set :i val: last
-            return
-        }
-        i = i + 1
-    }
+# vidRemove -- drop `vid`'s entry from an assoc list keyed by variable id
+# (swap-with-last; vids are unique).
+vidRemove: function as { T: AnyRef.generic } in {xs: List T vid: ztypes.vid} is {
+    f: vidFind :xs :vid
+    if f == 0 then return
+    last: xs.pop
+    if f <= xs.length then xs.set i: f - 1 val: last
 }
 
 # the type id bound to `vid` in `xs`, or none.
 vtGet: function {xs: (List VidTid).view vid: ztypes.vid} out optionval ztypes.tid is {
-    if vid.isZero then return (optionval.none ztypes.tid)
-    i: u64
-    n: xs.length
-    for i < n loop {
-        e: xs.get :i
-        if e.vid == vid then return (optionval.some e.tid)
-        i = i + 1
-    }
-    return (optionval.none ztypes.tid)
+    f: vidFind :xs :vid
+    if f == 0 then return (optionval.none ztypes.tid)
+    return (optionval.some (xs.get i: f - 1).tid)
 }
 
 # restoreNarrow -- put back the narrowing a scope shadowed: the value and the
@@ -4296,12 +4310,12 @@ restoreNarrow: function {
     if prevVal.length > 0 then {
         vvSet xs: ctx.narrowBox :vid val: prevVal
     } else {
-        vvRemove xs: ctx.narrowBox :vid
+        vidRemove xs: ctx.narrowBox :vid
     }
     if prevTid.isZero.not then {
         vtSet xs: ctx.narrowTid :vid tid: prevTid
     } else {
-        vtRemove xs: ctx.narrowTid :vid
+        vidRemove xs: ctx.narrowTid :vid
     }
 }
 
@@ -4348,30 +4362,11 @@ restoreNarrowSeeds: function {
 # bind `vid` to type id `tid` in `xs`.
 vtSet: function {xs: List VidTid vid: ztypes.vid tid: ztypes.tid} is {
     if vid.isZero then return
-    i: u64
-    n: xs.length
-    for i < n loop {
-        if (xs.get :i).vid == vid then {
-            xs.set :i val: (VidTid :vid :tid)
-            return
-        }
-        i = i + 1
-    }
-    xs.append (VidTid :vid :tid)
-}
-
-# remove `vid`'s binding from `xs`.
-vtRemove: function {xs: List VidTid vid: ztypes.vid} is {
-    if vid.isZero then return
-    i: u64
-    n: xs.length
-    for i < n loop {
-        if (xs.get :i).vid == vid then {
-            last: xs.pop
-            if (i + 1) < n then xs.set :i val: last
-            return
-        }
-        i = i + 1
+    f: vidFind :xs :vid
+    if f > 0 then {
+        xs.set i: f - 1 val: (VidTid :vid :tid)
+    } else {
+        xs.append (VidTid :vid :tid)
     }
 }
 
@@ -4379,12 +4374,12 @@ vtRemove: function {xs: List VidTid vid: ztypes.vid} is {
 # narrowing box or a take alias? The question aliasResolve is asked when the
 # caller wants no text, only the answer; asking it this way copies nothing.
 aliasResolvesToSelf: function {ctx: Ctx.view name: StringView vid: ztypes.vid} out bool is {
-    nb: vvFind xs: ctx.narrowBox :vid
+    nb: vidFind xs: ctx.narrowBox :vid
     if nb > 0 then {
         eNb: ctx.narrowBox.get i: nb - 1
         return eNb.val.stringView == name
     }
-    al: vvFind xs: ctx.aliases :vid
+    al: vidFind xs: ctx.aliases :vid
     if al > 0 then {
         eAl: ctx.aliases.get i: al - 1
         return eAl.val.stringView == name
@@ -4398,9 +4393,9 @@ aliasResolve: function {ctx: Ctx.view name: StringView vid: ztypes.vid} out Stri
     # variable resolves to the narrowed union payload cast, not the un-narrowed
     # binding or a stale for-loop/borrow/take alias -- mirrors takeSourceResolve.
     # `name` is only what comes back when neither table has an entry.
-    nb: vvFind xs: ctx.narrowBox :vid
+    nb: vidFind xs: ctx.narrowBox :vid
     if nb > 0 then return (ctx.narrowBox.get i: nb - 1).val.copy
-    al: vvFind xs: ctx.aliases :vid
+    al: vidFind xs: ctx.aliases :vid
     if al > 0 then return (ctx.aliases.get i: al - 1).val.copy
     return name.string
 }
@@ -9952,8 +9947,22 @@ emitSpanMethodCall: function {
         va: listArg :ast :symtab :ctx :call label: "at"
         pairTid: chaseAggregateTypedef :symtab :ctx tid: (stampIdOf :symtab nid: call.nodeid)
         pc: ctxCname :ctx tid: pairTid
-        loC: memberCNamed :ast :symtab :ctx owner: pairTid kind: memberkind.field name: "lo"
-        hiC: memberCNamed :ast :symtab :ctx owner: pairTid kind: memberkind.field name: "hi"
+        loC: (memberC
+            :ast
+            :symtab
+            :ctx
+            owner: pairTid
+            kind: memberkind.field
+            nameId: zast.wellKnown.slot.wkLo
+        )
+        hiC: (memberC
+            :ast
+            :symtab
+            :ctx
+            owner: pairTid
+            kind: memberkind.field
+            nameId: zast.wellKnown.slot.wkHi
+        )
         es: String
         es.append "({ \{cb}_t* _zs = \{recvR}; uint64_t _za = \{va}; "
         es.append "z_coll_window_check(0, _za, _zs->length, \"SpanVal split\"); "
@@ -10954,10 +10963,10 @@ emitInlineVariantCtor: function {
     ctx: Ctx
     call: zast.callrow.view
     tid: ztypes.tid
-    arm: StringView
+    arm: zast.nameid
 } out String is {
     pc: armPayloadC :ast :symtab :ctx :tid :arm
-    tg: tagConstNamed :ast :ctx :symtab :tid :arm
+    tg: tagConstOf :ast :ctx :symtab :tid armId: arm
     vc: ctxCname :ctx :tid
     if pc.length > 0 then {
         av: "0".string
@@ -10973,7 +10982,7 @@ emitInlineVariantCtor: function {
                 av = valueExprC :ast :symtab :ctx n: aOpNode
             }
         }
-        armCiC: memberCNamed :ast :symtab :ctx owner: tid kind: memberkind.arm name: arm
+        armCiC: memberC :ast :symtab :ctx owner: tid kind: memberkind.arm nameId: arm
         e0: "((\{vc}_t){ .tag = \{tg}, .data.\{armCiC} = (\{av}) })"
         return e0
     } else {
@@ -10996,8 +11005,8 @@ emitArmCtorCall: function {
     ctx: Ctx
     call: zast.callrow.view
 } out String is {
-    arm: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable)
-    if arm.length == 0 then return ""
+    arm: aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable)
+    if arm.isZero then return ""
     stid: stampIdOf :symtab nid: call.nodeid
     if stid.isZero then return ""
     tt: symtab.reg.typetypeOf typeId: stid
@@ -11006,7 +11015,7 @@ emitArmCtorCall: function {
     }
     if tt != ztypes.ztypetype.unionType then return ""
     vc: ctxCname :ctx tid: stid
-    tg: tagConstNamed :ast :ctx :symtab tid: stid :arm
+    tg: tagConstOf :ast :ctx :symtab tid: stid armId: arm
     payC: armPayloadC :ast :symtab :ctx tid: stid :arm
     if payC.length == 0 then {
         en: "((\{vc}_t){ .tag = \{tg}, .data = NULL })"
@@ -11024,7 +11033,7 @@ emitArmCtorCall: function {
             av = emitExpr :ast :symtab :ctx n: (ast.nodes.get i: a.operation)
         }
     }
-    inl: armIsInlineC :ast :symtab tid: stid :arm
+    inl: armIsInlineC :symtab tid: stid :arm
     usl: armSlotC :ast :symtab :ctx tid: stid recv: "_u" acc: "." :arm inline: inl
     st: (armCellStore
         pc: payC.stringView
@@ -11316,11 +11325,10 @@ renderDefault: function {
             armId: zast.nameid
             ao: symtab.typing.decls.get i: da
             armId = ao.name
-            arm: zast.poolTextAt pool: ast.names ref: armId
             cv: targetTid
             vtarget: targetTid
             if cv.isZero.not then vtarget = cv
-            tg: tagConstNamed :ast :ctx :symtab tid: vtarget arm: arm.stringView
+            tg: tagConstOf :ast :ctx :symtab tid: vtarget :armId
             tc: (typeRefC
                 :ast
                 :symtab
@@ -11332,7 +11340,7 @@ renderDefault: function {
                 :ctx
                 :symtab
                 tid: vtarget
-                arm: arm.stringView
+                arm: armId
             )
             if avd.length > 0 then return avd
             return "(\{tc}){ .tag = \{tg} }"
@@ -12322,13 +12330,12 @@ cvalText: function {
     if v.kind.armKind then {
         if v.armTid.isZero then return ""
         if v.armName.isZero then return ""
-        an: ast.names.texts.get i: v.armName
         # a variant that maps onto a scalar C type (bool) renders as that
         # scalar; anything else is the payload-less compound literal
         # emitInlineVariantCtor builds for the same arm written as a call
-        atomVarId: armValueC :ast :ctx :symtab tid: v.armTid arm: an.stringView
+        atomVarId: armValueC :ast :ctx :symtab tid: v.armTid arm: v.armName
         if atomVarId.length > 0 then return atomVarId
-        tg: tagConstNamed :ast :ctx :symtab tid: v.armTid arm: an.stringView
+        tg: tagConstOf :ast :ctx :symtab tid: v.armTid armId: v.armName
         if tg.length == 0 then return ""
         vc: ctxCname :ctx tid: v.armTid
         if vc.length == 0 then return ""
@@ -13184,8 +13191,8 @@ emitCrossUnitSumCtor: function {
         st: symtab
         nameId: obId
     ).not then return ""
-    ctorArmName: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable)
-    if ctorArmName.length == 0 then return ""
+    ctorArmName: aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable)
+    if ctorArmName.isZero then return ""
     if (
         (aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable)) ==
         zast.wellKnown.slot.wkCreate
@@ -13217,7 +13224,7 @@ emitCrossUnitSumCtor: function {
     )
     if ttx != ztypes.ztypetype.unionType then return ""
     vc: ctxCname :ctx tid: utid
-    tg: tagConstNamed :ast :ctx :symtab tid: utid arm: ctorArmName
+    tg: tagConstOf :ast :ctx :symtab tid: utid armId: ctorArmName
     payC: (armPayloadC
         :ast
         :symtab
@@ -13244,7 +13251,6 @@ emitCrossUnitSumCtor: function {
             }
         }
         inl: (armIsInlineC
-            :ast
             :symtab
             tid: utid
             arm: ctorArmName
@@ -13296,17 +13302,12 @@ emitCrossUnitTag: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    pbase: StringView
-    ptype: StringView
-    arm: StringView
+    pbase: zast.nameid
+    ptype: zast.nameid
+    arm: zast.nameid
 } out String is {
-    if pbase.length == 0 then return ""
-    if ptype.length == 0 then return ""
-    if arm.length == 0 then return ""
-    unm: (zast.poolFind
-        pool: ast.names
-        text: pbase
-    )
+    if pbase.isZero or ptype.isZero or arm.isZero then return ""
+    unm: pbase
     if (ztypecheck.isUnitNameDecl
         st: symtab
         nameId: unm
@@ -13316,7 +13317,7 @@ emitCrossUnitTag: function {
         :ast
         st: symtab
         unitDecl: ud5x
-        name: (zast.poolFind pool: ast.names text: ptype)
+        name: ptype
     )
     vtid: ztypes.tid
     match (
@@ -13330,7 +13331,7 @@ emitCrossUnitTag: function {
     if isTagged.not then return ""
     pc: armPayloadC :ast :symtab :ctx tid: vtid :arm
     if pc.length == 0 then {
-        tg: tagConstNamed :ast :ctx :symtab tid: vtid :arm
+        tg: tagConstOf :ast :ctx :symtab tid: vtid armId: arm
         vc: ctxCnameView :ctx tid: vtid
         avx: (armValueC
             :ast
@@ -13357,16 +13358,12 @@ emitFnptrFieldCall: function {
     ctx: Ctx
     call: zast.callrow.view
 } out String is {
-    mn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable)
-    if mn.length == 0 then return ""
+    mnId: aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable)
+    if mnId.isZero then return ""
     rtid0: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: call.callable)
     rtid: chaseAggregateTypedef :symtab :ctx tid: rtid0
     if rtid.isZero then return ""
-    if (symtab.typing.declIsFnptrField
-        pool: ast.names
-        parentTypeId: rtid
-        name: mn
-    ).not then return ""
+    if (symtab.typing.declIsFnptrFieldId parentTypeId: rtid nameId: mnId).not then return ""
     callableNode: ast.nodes.get i: call.callable
     recvText: emitDottedReceiver :ast :symtab :ctx callable: callableNode
     if recvText.length == 0 then return ""
@@ -13385,15 +13382,9 @@ emitFnptrFieldCall: function {
     # the slot's own parameter list decides how each argument is passed:
     # fnptrParamTypeC pointerizes a param exactly when paramTypeIsPointer does,
     # and a receiver-typed param (`r: this` on a record) is one of those.
-    fnTid: ztypes.tid
-    mnId: zast.poolFind pool: ast.names text: mn
-    if mnId.isZero.not then {
-        fnTid = (ztypes.tid.create
-            from: ((symtab.typing.declChildOfId parentTypeId: rtid nameId: mnId).or
-                d: ztypes.tid.zero
-            )
-        )
-    }
+    fnTid: ((symtab.typing.declChildOfId parentTypeId: rtid nameId: mnId).or
+        d: ztypes.tid.zero
+    )
     pNames: List String
     pIds: ListVal ztypes.tid
     pNmIds: ListVal zast.nameid
@@ -13482,7 +13473,7 @@ emitFnptrFieldCall: function {
             owner: rtid
             base: recvExpr.stringView
             acc: acc.stringView
-            :mn
+            :mnId
             recv: callArgs.stringView
         )
     )
@@ -14680,25 +14671,6 @@ memberLetter: function {kind: memberkind} out StringView is {
     }
 }
 
-# memberCNamed -- memberC for a member a caller holds as text.
-memberCNamed: function {
-    # the member names
-    ast: Ast.view
-    # the checked program
-    symtab: zenv.ZSymbolTable.view
-    # the emission context memberC reads through
-    ctx: Ctx
-    # the type declaring the member
-    owner: ztypes.tid
-    # the member family, as memberC takes it
-    kind: memberkind
-    # the member's name, as text
-    name: StringView
-} out String is {
-    nid: zast.poolFind pool: ast.names text: name
-    return (memberC :ast :symtab :ctx :owner :kind nameId: nid)
-}
-
 # memberOrdinal -- the position of the member named `nameId` among `owner`'s
 # members of `kind`, in declaration order: a field among the data fields the
 # struct lays down (ztypecheck.dataFieldIds, through any typedef to the
@@ -14807,9 +14779,9 @@ emitLocalAtomName: function {ctx: Ctx.view name: StringView vid: ztypes.vid} out
     # Probed directly rather than through aliasResolve: that would synthesize a
     # copy of `name` for the no-alias case, which is the common one, only for the
     # comparison below to discard it.
-    nb: vvFind xs: ctx.narrowBox :vid
+    nb: vidFind xs: ctx.narrowBox :vid
     if nb > 0 then return (ctx.narrowBox.get i: nb - 1).val.copy
-    al: vvFind xs: ctx.aliases :vid
+    al: vidFind xs: ctx.aliases :vid
     if al > 0 then return (ctx.aliases.get i: al - 1).val.copy
     return (varCName :ctx :vid :name)
 }
@@ -14836,7 +14808,7 @@ narrowingEndedAt: function {
 # wholeLocalName -- the local's own storage: a take alias where one stands,
 # never the payload a narrowing aliased it to.
 wholeLocalName: function {ctx: Ctx.view name: StringView vid: ztypes.vid} out String is {
-    al: vvFind xs: ctx.aliases :vid
+    al: vidFind xs: ctx.aliases :vid
     if al > 0 then return (ctx.aliases.get i: al - 1).val.copy
     return (varCName :ctx :vid :name)
 }
@@ -14867,10 +14839,10 @@ localAtomNameIsAt: function {
     text: StringView
 } out bool is {
     if (narrowingEndedAt :symtab :ctx :nid :vid).not then {
-        nb: vvFind xs: ctx.narrowBox :vid
+        nb: vidFind xs: ctx.narrowBox :vid
         if nb > 0 then return (ctx.narrowBox.get i: nb - 1).val.stringView == text
     }
-    al: vvFind xs: ctx.aliases :vid
+    al: vidFind xs: ctx.aliases :vid
     if al > 0 then return (ctx.aliases.get i: al - 1).val.stringView == text
     return (varCNameIs :ctx :vid :name :text)
 }
@@ -14885,7 +14857,7 @@ aliasResolveAt: function {
     vid: ztypes.vid
 } out String is {
     if (narrowingEndedAt :symtab :ctx :nid :vid).not then return (aliasResolve :ctx :name :vid)
-    al: vvFind xs: ctx.aliases :vid
+    al: vidFind xs: ctx.aliases :vid
     if al > 0 then return (ctx.aliases.get i: al - 1).val.copy
     return name.string
 }
@@ -14901,7 +14873,7 @@ aliasResolvesToSelfAt: function {
     if (narrowingEndedAt :symtab :ctx :nid :vid).not then {
         return (aliasResolvesToSelf :ctx :name :vid)
     }
-    al: vvFind xs: ctx.aliases :vid
+    al: vidFind xs: ctx.aliases :vid
     if al == 0 then return true
     return (ctx.aliases.get i: al - 1).val.stringView == name
 }
@@ -15020,11 +14992,11 @@ tagAliasArmC: function {
         declId: bdec
     )
     if atk.unitName.u32 == 0 then return ""
-    ctorArmName: zast.poolTextAt pool: ast.names ref: atk.defName
-    if ctorArmName.length == 0 then return ""
-    ava: armValueC :ast :ctx :symtab tid: brid arm: ctorArmName.stringView
+    ctorArmName: atk.defName
+    if ctorArmName.isZero then return ""
+    ava: armValueC :ast :ctx :symtab tid: brid arm: ctorArmName
     if ava.length > 0 then return ava
-    atg: tagConstNamed :ast :ctx :symtab tid: brid arm: ctorArmName.stringView
+    atg: tagConstOf :ast :ctx :symtab tid: brid armId: ctorArmName
     if atg.length == 0 then return ""
     avc: ctxCname :ctx tid: brid
     return "((\{avc}_t){ .tag = \{atg} })"
@@ -15592,15 +15564,14 @@ emitNestedMonoMethodBase: function {
                 owner: nlid
                 recv: nrecv.stringView
                 acc: nacc.stringView
-                mn: mn2
+                :mnId
                 isFacet: nrtt == ztypes.ztypetype.facetType
             )
         }
         nDisp: nrtt.isFieldwise
-        if nDisp when (symtab.typing.declIsFnptrField pool: ast.names parentTypeId: nlid name: mn2
-        ) then {
+        if nDisp when (symtab.typing.declIsFnptrFieldId parentTypeId: nlid nameId: mnId) then {
             if readIsRef then return ""
-            return (nestedFnptrFieldRead :ast :symtab :ctx :n :mn2 :nlid :baseAtom)
+            return (nestedFnptrFieldRead :ast :symtab :ctx :n :mnId :nlid :baseAtom)
         }
         if nDisp then {
             nlidM: nlid
@@ -15692,7 +15663,7 @@ nestedFnptrFieldRead: function {
     # the read
     n: zast.dottedpathrow.view
     # the field's name
-    mn2: StringView
+    mnId: zast.nameid
     # the record or class it is read off
     nlid: ztypes.tid
     # the base's C expression
@@ -15711,7 +15682,7 @@ nestedFnptrFieldRead: function {
         nfbase = "(\{nfrcv})"
         nfacc = "->"
     }
-    nfco: ((symtab.typing.declChildOf pool: ast.names parentTypeId: nlid name: mn2).or
+    nfco: ((symtab.typing.declChildOfId parentTypeId: nlid nameId: mnId).or
         d: ztypes.tid.zero
     )
     if (fnTypeTakesThis :symtab tid: nfco).not then nfrcv = ""
@@ -15722,7 +15693,7 @@ nestedFnptrFieldRead: function {
         owner: nlid
         base: nfbase.stringView
         acc: nfacc.stringView
-        mn: mn2
+        :mnId
         recv: nfrcv.stringView
     )
 }
@@ -16073,7 +16044,7 @@ fnptrFieldRead: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    mn2: StringView
+    mnId: zast.nameid
     bn2: StringView
     bn2v: ztypes.vid
     # the record or class the field is read off
@@ -16101,7 +16072,7 @@ fnptrFieldRead: function {
         owner: bstamp
         base: bn2
         acc: accFp.stringView
-        mn: mn2
+        :mnId
         recv: rcvFp.stringView
     )
 }
@@ -16122,11 +16093,11 @@ fnptrSlotCallC: function {
     # `.` or `->`, as the base is a value or a pointer
     acc: StringView
     # the field's name
-    mn: StringView
+    mnId: zast.nameid
     # the receiver argument, empty for a field that takes none
     recv: StringView
 } out String is {
-    fc: memberCNamed :ast :symtab :ctx :owner kind: memberkind.field name: mn
+    fc: memberC :ast :symtab :ctx :owner kind: memberkind.field nameId: mnId
     return "\{base}\{acc}\{fc}(\{recv})"
 }
 
@@ -16183,8 +16154,8 @@ emitResolvedMemberRead: function {
         if pj.length > 0 then return pj
     }
     if (mtt == ztypes.ztypetype.functionType).not then return ""
-    if (symtab.typing.declIsFnptrField pool: ast.names parentTypeId: bstamp name: mn2) then {
-        return (fnptrFieldRead :ast :symtab :ctx :mn2 :bn2 :bn2v :bstamp :mco :fbtn :readIsRef)
+    if (symtab.typing.declIsFnptrFieldId parentTypeId: bstamp nameId: mnId) then {
+        return (fnptrFieldRead :ast :symtab :ctx :mnId :bn2 :bn2v :bstamp :mco :fbtn :readIsRef)
     }
     sh: synthHashRead :ast :symtab :ctx :bn2 :bn2v :bstamp :mco :fbtn :readIsRef
     if sh.length > 0 then return sh
@@ -16951,7 +16922,7 @@ emitDottedAtomBase: function {
             owner: bstamp
             recv: precv.stringView
             acc: pacc.stringView
-            mn: mn2
+            :mnId
             isFacet: rtt == ztypes.ztypetype.facetType
         )
     }
@@ -17387,16 +17358,16 @@ emitDottedConversionRead: function {
     # an arm PREDICATE on a unit's constant (`u.k.a`, `k: kind.a`) has the
     # three segments of a cross-unit tag; the checker said it tests the arm
     if (dottedArmPredicateTid :symtab nid: n.nodeid).isZero.not then return ""
-    xpb: dottedBaseAtom :ast n: (ast.nodes.get i: n.parent)
-    xpt: dottedChildText :ast n: (ast.nodes.get i: n.parent)
-    xar: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child))
+    xpb: dottedBaseAtomId :ast n: (ast.nodes.get i: n.parent)
+    xpt: dottedChildNameIdOf :ast n: (ast.nodes.get i: n.parent)
+    xar: atomNameIdOf :ast n: (ast.nodes.get i: n.child)
     xtag: (emitCrossUnitTag
         :ast
         :symtab
         :ctx
         pbase: xpb
         ptype: xpt
-        arm: xar.stringView
+        arm: xar
     )
     if xtag.length > 0 then return xtag
     return ""
@@ -17421,9 +17392,8 @@ taggedArmValueC: function {
     if (isGenericType :symtab tid: dtp) then return String
     vcH: ctxCname :ctx tid: dtp
     if vcH.length == 0 then return String
-    mnc0: zast.nameTextAt :ast ref: mnc0Id
-    if (armPayloadC :ast :symtab :ctx tid: dtp arm: mnc0.stringView).length > 0 then return String
-    avh: armValueC :ast :ctx :symtab tid: dtp arm: mnc0.stringView
+    if (armPayloadC :ast :symtab :ctx tid: dtp arm: mnc0Id).length > 0 then return String
+    avh: armValueC :ast :ctx :symtab tid: dtp arm: mnc0Id
     if avh.length > 0 then return avh
     tgH: tagConstOf :ast :ctx :symtab tid: dtp armId: mnc0Id
     return "((\{vcH}_t){ .tag = \{tgH} })"
@@ -20226,7 +20196,7 @@ emitOptionBoxHoist: function {
             }
         }
         vc: ctxCname :ctx tid: mid
-        payC: armPayloadC :ast :symtab :ctx tid: mid arm: "some"
+        payC: armPayloadC :ast :symtab :ctx tid: mid arm: zast.wellKnown.slot.wkSome
         tg: tagConstOf :ast :ctx :symtab tid: mid armId: zast.wellKnown.slot.wkSome
         # what the payload hoisted is declared ahead of the box
         flushArgHoists :ctx :ind :tmp :buf
@@ -21114,7 +21084,7 @@ emitNarrowedTakeBind: function {
 dropStaleBorrowAlias: function {ctx: Ctx vid: ztypes.vid} is {
     sab: vvGet xs: ctx.aliases :vid
     if sab.length == 0 then return
-    if (sab.stringView.startsWith prefix: "(*__borrow_") then vvRemove xs: ctx.aliases :vid
+    if (sab.stringView.startsWith prefix: "(*__borrow_") then vidRemove xs: ctx.aliases :vid
 }
 
 # bindingStampOf -- the type a binding was stamped with, as the body being
@@ -22501,7 +22471,7 @@ emitIfStmt: function {
     }
     chS: List String
     chV: ListVal ztypes.vid
-    chA: List String
+    chA: ListVal zast.nameid
     chT: ListVal ztypes.tid
     chN: ListVal bool
     chR: List String
@@ -23787,14 +23757,12 @@ matchElseNarrowing: function {
     }
     if remME == 1 then {
         {
-            # the residual arm's text is spelled into the alias: one copy, here
-            armMET: zast.poolTextAt pool: ast.names ref: armME
             aliasText: (armAliasText
                 :ast
                 :symtab
                 :ctx
                 tid: vtid
-                arm: armMET.stringView
+                arm: armME
                 :recv
                 :acc
             )
@@ -24207,7 +24175,7 @@ scalarArmLabel: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
-    arm: StringView
+    arm: zast.nameid
 } out String is {
     unitTid92: unitTidOf :ast :symtab unitName: ctx.mainName.stringView
     lv: (memberConstText
@@ -24215,11 +24183,10 @@ scalarArmLabel: function {
         :symtab
         :ctx
         unitTid: unitTid92
-        nameId: (zast.poolFind pool: ast.names text: arm)
+        nameId: arm
     )
     if lv.length > 0 then return lv
-    ac: arm.string
-    return ac
+    return (zast.nameTextCopy :ast ref: arm)
 }
 
 # flushBlockFrees -- emit + reclaim the heap/collection destructors registered
@@ -24397,7 +24364,7 @@ emitUnownedDestroy: function {
 } is {
     gf: symtab.typing.genLocalFieldOf.get key: vid
     if gf.none then return
-    al: vvFind xs: ctx.aliases :vid
+    al: vidFind xs: ctx.aliases :vid
     if al == 0 then return
     fld: (ctx.aliases.get i: al - 1).val.copy
     tid: symtab.reg.variableTypeOf id: vid
@@ -24547,8 +24514,7 @@ emitScalarClause: function {
     buf: String.borrow
 } is {
     if c.caseclause then {
-        armC: zast.nameTextAt :ast ref: c.name
-        arm: armC.stringView
+        arm: c.name
         lbl: scalarArmLabel :ast :symtab :ctx :arm
         l2: "\{ind}case \{lbl}: {\n"
         buf.append l2
@@ -24604,9 +24570,8 @@ emitMatchClause: function {
     buf: String.borrow
 } is {
     if c.caseclause then {
-        armC: zast.nameTextAt :ast ref: c.name
-        arm: armC.stringView
-        tg: tagConstNamed :ast :ctx :symtab tid: vtid :arm
+        arm: c.name
+        tg: tagConstOf :ast :ctx :symtab tid: vtid armId: arm
         l2: "\{ind}case \{tg}: {\n"
         buf.append l2
         pc: armPayloadC :ast :symtab :ctx tid: vtid :arm
@@ -24620,7 +24585,7 @@ emitMatchClause: function {
         prevT: (vtGet xs: ctx.narrowTid vid: snameVid).or d: ztypes.tid.zero
         if pc.length > 0 when sname.length > 0 then {
             if isUni then {
-                inl: armIsInlineC :ast :symtab tid: vtid :arm
+                inl: armIsInlineC :symtab tid: vtid :arm
                 msl: (armSlotC
                     :ast
                     :symtab
@@ -24635,7 +24600,7 @@ emitMatchClause: function {
                 cmt: "\{ind}    /* alias: \{sname} => \{nbv} */\n"
                 buf.append cmt
                 vvSet xs: ctx.narrowBox vid: snameVid val: nbv.stringView
-                co: symtab.typing.declChildOf pool: ast.names parentTypeId: vtid name: arm
+                co: symtab.typing.declChildOfId parentTypeId: vtid nameId: arm
                 match (
                     co
                 ) case some then {
@@ -24647,10 +24612,10 @@ emitMatchClause: function {
                 # shadowing local of the same C name would hide: the payload is
                 # aliased instead, and each read picks the alias or the variable
                 # by its stamp
-                armMV: memberCNamed :ast :symtab :ctx owner: vtid kind: memberkind.arm name: arm
+                armMV: memberC :ast :symtab :ctx owner: vtid kind: memberkind.arm nameId: arm
                 nbvV: "_m\{mN}.data.\{armMV}"
                 vvSet xs: ctx.narrowBox vid: snameVid val: nbvV.stringView
-                cov: symtab.typing.declChildOf pool: ast.names parentTypeId: vtid name: arm
+                cov: symtab.typing.declChildOfId parentTypeId: vtid nameId: arm
                 match (
                     cov
                 ) case some then {
@@ -24659,7 +24624,7 @@ emitMatchClause: function {
                 didSeed = true
             } else {
                 snE: varCName :ctx vid: snameVid name: sname
-                armMP: memberCNamed :ast :symtab :ctx owner: vtid kind: memberkind.arm name: arm
+                armMP: memberC :ast :symtab :ctx owner: vtid kind: memberkind.arm nameId: arm
                 l3: "\{ind}    \{pc} \{snE} = _m\{mN}.data.\{armMP};\n"
                 buf.append l3
                 l4: "\{ind}    (void)\{snE};\n"
@@ -24667,8 +24632,8 @@ emitMatchClause: function {
                 # the shadow IS the payload: a narrowing an enclosing guard gave
                 # the subject would spell the arm's reads through the old value
                 if prevV.length > 0 then {
-                    vvRemove xs: ctx.narrowBox vid: snameVid
-                    vtRemove xs: ctx.narrowTid vid: snameVid
+                    vidRemove xs: ctx.narrowBox vid: snameVid
+                    vidRemove xs: ctx.narrowTid vid: snameVid
                     didSeed = true
                 }
                 # a subject that arrives by pointer (a method's `this`) is
@@ -24884,7 +24849,7 @@ emitDoBindValue: function {
             # box (scope-exit destroy).
             boxedC: String
             if (originIsTid :symtab :tid originTid: (ctx.origins.get i: family.slot.option)) then {
-                boxedC = armPayloadC :ast :symtab :ctx :tid arm: "some"
+                boxedC = armPayloadC :ast :symtab :ctx :tid arm: zast.wellKnown.slot.wkSome
             }
             l0: "\{ind}\{nm}.tag = \{noneTag};\n"
             buf.append l0
@@ -25086,7 +25051,7 @@ emitIfBindValue: function {
         }
         chS: List String
         chV: ListVal ztypes.vid
-        chA: List String
+        chA: ListVal zast.nameid
         chT: ListVal ztypes.tid
         chN: ListVal bool
         chR: List String
@@ -25565,7 +25530,6 @@ pushPayloadSpill: function {
 # what the break-label cleanup slot carries. Returns the line, "" when the yield
 # owns nothing.
 objIterPayCleanup: function {
-    ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     ovid: ztypes.tid
@@ -25579,11 +25543,10 @@ objIterPayCleanup: function {
         originTid: (ctx.origins.get i: family.slot.option)
     ) then {
         pfree: (payloadDestructor
-            :ast
             :symtab
             :ctx
             tid: ovid
-            arm: "some"
+            arm: zast.wellKnown.slot.wkSome
         )
         if pfree.length > 0 then payCleanup = "\{pfree}(&\{lbl});\n"
     }
@@ -25642,7 +25605,7 @@ emitObjIterLoop: function {
         :buf
     )
     lidO: pushLoopLabel :ctx :tmp isDo: false
-    payCleanup: objIterPayCleanup :ast :symtab :ctx :ovid :lbl :lblV
+    payCleanup: objIterPayCleanup :symtab :ctx :ovid :lbl :lblV
     l0: "\{ind}while (1) {\n"
     buf.append l0
     l1: "\{ind}    \{ovc}_t _iter\{mN} = \{callC}(&\{iterRecv});\n"
@@ -25691,7 +25654,7 @@ emitOptionLoopTail: function {
     buf: String.borrow
 } is {
     ovNone: tagConstOf :ast :ctx :symtab tid: ovid armId: zast.wellKnown.slot.wkNone
-    payC: armPayloadC :ast :symtab :ctx tid: ovid arm: "some"
+    payC: armPayloadC :ast :symtab :ctx tid: ovid arm: zast.wellKnown.slot.wkSome
     if (originIsTid
         :symtab
         tid: ovid
@@ -25843,7 +25806,7 @@ emitPlainBindingFor: function {
     ovc: ctxCname :ctx tid: ovid
     mN: tmpNext :ctx :tmp
     lidO: pushLoopLabel :ctx :tmp isDo: false
-    payCleanup: objIterPayCleanup :ast :symtab :ctx :ovid lbl: lbl.stringView :lblV
+    payCleanup: objIterPayCleanup :symtab :ctx :ovid lbl: lbl.stringView :lblV
     buf.append "\{ind}while (1) {\n"
     ind2: "\{ind}    "
     fL: tmp.frees.length
@@ -26449,17 +26412,6 @@ exprNodeId: function {n: astnode.view} out zast.nodeid is {
     return (interpPartNodeId :n)
 }
 
-# sumArmNamesInto -- the arm names of a sum type, in declaration order (the
-# checker's exclusion universe).
-sumArmNamesInto: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    tid: ztypes.tid
-    names: List String
-} is {
-    zenv.sumArmNames ty: symtab.typing reg: symtab.reg pool: ast.names :tid :names
-}
-
 # armAliasText -- the C lvalue for `recv`'s payload of `arm` on sum type
 # `tid`: the inline union member for variants, the heap cast for unions.
 # "" when the arm carries no payload.
@@ -26468,18 +26420,18 @@ armAliasText: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     tid: ztypes.tid
-    arm: StringView
+    arm: zast.nameid
     recv: StringView
     acc: StringView
 } out String is {
     pc: armPayloadC :ast :symtab :ctx :tid :arm
     if pc.length == 0 then return ""
     if (symtab.reg.typetypeOf typeId: tid) == ztypes.ztypetype.unionType then {
-        inl: armIsInlineC :ast :symtab :tid :arm
+        inl: armIsInlineC :symtab :tid :arm
         rsl: armSlotC :ast :symtab :ctx :tid :recv :acc :arm inline: inl
         return (armCellRef pc: pc.stringView slot: rsl.stringView inline: inl)
     }
-    armC: memberCNamed :ast :symtab :ctx owner: tid kind: memberkind.arm name: arm
+    armC: memberC :ast :symtab :ctx owner: tid kind: memberkind.arm nameId: arm
     return "\{recv}\{acc}data.\{armC}"
 }
 
@@ -26493,14 +26445,12 @@ armAliasText: function {
 
 # armIsInlineC -- arm `arm` of union `tid` keeps its payload in the slot.
 armIsInlineC: function {
-    ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     tid: ztypes.tid
-    arm: StringView
+    arm: zast.nameid
 } out bool is {
-    nid: zast.poolFind pool: ast.names text: arm
-    if nid.isZero then return false
-    return (symtab.typing.armIsInline parentTypeId: tid nameId: nid)
+    if arm.isZero then return false
+    return (symtab.typing.armIsInline parentTypeId: tid nameId: arm)
 }
 
 # armSlotC -- the slot arm `arm` of union `tid` keeps its payload in, reached
@@ -26519,12 +26469,12 @@ armSlotC: function {
     # `.` or `->`, as recv is a value or a pointer
     acc: StringView
     # the arm's name
-    arm: StringView
+    arm: zast.nameid
     # whether the arm keeps its payload in the slot itself
     inline: bool
 } out String is {
     if inline then {
-        im: memberCNamed :ast :symtab :ctx owner: tid kind: memberkind.inlineArm name: arm
+        im: memberC :ast :symtab :ctx owner: tid kind: memberkind.inlineArm nameId: arm
         return "\{recv}\{acc}\{im}"
     }
     return "\{recv}\{acc}data"
@@ -26599,12 +26549,11 @@ armCellAbsent: function {slot: StringView} out String is {
 # armMemberTid -- the payload type `arm` names on sum type `owner`, 0 when the
 # arm is not a member of it.
 armMemberTid: function {
-    ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     owner: ztypes.tid
-    arm: StringView
+    arm: zast.nameid
 } out ztypes.tid is {
-    pt: ((symtab.typing.declChildOf pool: ast.names parentTypeId: owner name: arm).or
+    pt: ((symtab.typing.declChildOfId parentTypeId: owner nameId: arm).or
         d: ztypes.tid.zero
     )
     return pt
@@ -26614,40 +26563,25 @@ armMemberTid: function {
 # ambient exclusions recorded for variable `subjVid` (ctx.exclArms) plus the
 # `extra` space-joined arms; "" when zero or more than one remain.
 remainingArm: function {
-    ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
     subjVid: ztypes.vid
     tid: ztypes.tid
-    extra: StringView
-} out String is {
-    exv: vvGet xs: ctx.exclArms vid: subjVid
-    all: List String
-    sumArmNamesInto :ast :symtab :tid names: all
+    extra: zast.nameid
+} out zast.nameid is {
+    exv: vaGet xs: ctx.exclArms vid: subjVid
+    all: ListVal zast.nameid
+    zenv.sumArmNameIds ty: symtab.typing reg: symtab.reg :tid ids: all
     remN: u64
-    rem: String
+    rem: zast.nameid
     for each a: all loop {
-        hit: (
-            (exv.length > 0) and
-            (hasSpaceDelimitedWord hay: exv.stringView word: a.stringView) or
-            ((extra.length > 0) and (hasSpaceDelimitedWord hay: extra word: a.stringView))
-        )
-        if hit.not then {
+        if a != extra when (idListHas xs: exv id: a).not then {
             remN = remN + 1
-            rv: a.copy
-            rem = rv.take
+            rem = a
         }
     }
-    if remN != 1 then return ""
+    if remN != 1 then return zast.nameid
     return rem
-}
-
-# hasSpaceDelimitedWord -- space-delimited word membership.
-hasSpaceDelimitedWord: function {hay: StringView word: StringView} out bool is {
-    for each w: (hay.split sep: " ") loop {
-        if w == word then return true
-    }
-    return false
 }
 
 # bodyReassigns -- true when the body (at any depth through the common
@@ -26734,7 +26668,7 @@ seedFromPredicate: function {
     match (
         n
     ) case dottedpath then {
-        arm0: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child))
+        arm0: atomNameIdOf :ast n: (ast.nodes.get i: n.child)
         tid92: dottedArmPredicateTid :symtab nid: n.nodeid
         (seedPositiveCore
             :ast
@@ -26742,7 +26676,7 @@ seedFromPredicate: function {
             :ctx
             tid: tid92
             parent: (ast.nodes.get i: n.parent)
-            childName: arm0.stringView
+            childName: arm0
             :names
             :svids
             :vals
@@ -26759,7 +26693,7 @@ seedPositiveCore: function {
     ctx: Ctx
     tid: ztypes.tid
     parent: astnode.view
-    childName: StringView
+    childName: zast.nameid
     names: List String
     svids: ListVal ztypes.vid
     vals: List String
@@ -26788,11 +26722,7 @@ seedPositiveCore: function {
     names.append subj.string
     svids.append (atomVid :symtab nid: (atomNodeId n: parent))
     vals.append aliasText
-    pt: ((symtab.typing.declChildOf
-        pool: ast.names
-        parentTypeId: tid
-        name: childName
-    ).or
+    pt: ((symtab.typing.declChildOfId parentTypeId: tid nameId: childName).or
         d: ztypes.tid.zero
     )
     tids.append pt
@@ -26820,16 +26750,15 @@ seedNegatedFromPredicate: function {
         subj: atomTextOf :ast n: (ast.nodes.get i: n.parent)
         if subj.length == 0 then return
         snv: atomVid :symtab nid: (atomNodeId n: (ast.nodes.get i: n.parent))
-        ctorArmName: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child))
+        ctorArmName: atomNameIdOf :ast n: (ast.nodes.get i: n.child)
         rem: (remainingArm
-            :ast
             :symtab
             :ctx
             subjVid: snv
             tid: dap
-            extra: ctorArmName.stringView
+            extra: ctorArmName
         )
-        if rem.length == 0 then return
+        if rem.isZero then return
         recvText: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent)
         accessOp: ".".string
         if (isPtrVid :ctx vid: snv) then accessOp = "->"
@@ -26838,7 +26767,7 @@ seedNegatedFromPredicate: function {
             :symtab
             :ctx
             tid: dap
-            arm: rem.stringView
+            arm: rem
             recv: recvText.stringView
             acc: accessOp.stringView
         )
@@ -26846,11 +26775,7 @@ seedNegatedFromPredicate: function {
         names.append subj.string
         svids.append snv
         vals.append aliasText
-        pt: ((symtab.typing.declChildOf
-            pool: ast.names
-            parentTypeId: dap
-            name: rem.stringView
-        ).or
+        pt: ((symtab.typing.declChildOfId parentTypeId: dap nameId: rem).or
             d: ztypes.tid.zero
         )
         tids.append pt
@@ -26980,7 +26905,6 @@ seedCondOp: function {
     {
         ta0: ztypecheck.truthyCondArmOf st: symtab nid: (interpPartNodeId :n)
         if ta0.isZero.not then {
-            an0: zast.nameTextAt :ast ref: ta0
             tid93: symtab.typing.nodeTypeFor nid: (interpPartNodeId :n)
             (seedPositiveCore
                 :ast
@@ -26988,7 +26912,7 @@ seedCondOp: function {
                 :ctx
                 tid: tid93
                 parent: n
-                childName: an0.stringView
+                childName: ta0
                 :names
                 :svids
                 :vals
@@ -27001,7 +26925,7 @@ seedCondOp: function {
     match (
         n
     ) case dottedpath then {
-        cn: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child))
+        cn: atomNameIdOf :ast n: (ast.nodes.get i: n.child)
         # `.true` / `.false` on a predicate: which side it is comes from the
         # stamped type's arm ORDER, never from the spelling of the segment.
         sd: (ztypecheck.armSuffixSide
@@ -27028,7 +26952,7 @@ seedCondOp: function {
             :ctx
             tid: tid94
             parent: (ast.nodes.get i: n.parent)
-            childName: cn.stringView
+            childName: cn
             :names
             :svids
             :vals
@@ -27115,8 +27039,7 @@ layerCondExclusion: function {
     f: classifyCondFact :ast :symtab n: (ast.nodes.get i: k.operation)
     if f.ok.not then return
     if f.neg.not then return
-    fa: zast.nameTextAt :ast ref: f.armRef
-    pushExclusion :ctx vid: f.svid arm: fa owner: f.owner
+    pushExclusion :ctx vid: f.svid arm: f.armRef owner: f.owner
 }
 
 # pushExclusion -- add `arm` to the arms already excluded for `vid`, saving what
@@ -27125,22 +27048,16 @@ layerCondExclusion: function {
 pushExclusion: function {
     ctx: Ctx
     vid: ztypes.vid
-    arm: String.view
+    arm: zast.nameid
     owner: ztypes.tid
 } is {
-    pv0: vvGet xs: ctx.exclArms :vid
-    nx: String
-    if pv0.length > 0 then {
-        nj: "\{pv0} \{arm}"
-        nx = nj.take
-    } else {
-        na0: arm.copy
-        nx = na0.take
-    }
+    pv0: vaGet xs: ctx.exclArms :vid
+    nx: pv0.copy
+    nx.append arm
     ctx.exSaveVid.append vid
-    ctx.exSaveV.append pv0
+    ctx.exSaveV.append (VidArms :vid arms: pv0)
     ctx.exSaveT.append ((vtGet xs: ctx.exclTids :vid).or d: ztypes.tid.zero)
-    vvSet xs: ctx.exclArms :vid val: nx.stringView
+    vaSet xs: ctx.exclArms :vid arms: nx
     vtSet xs: ctx.exclTids :vid tid: owner
 }
 
@@ -27152,15 +27069,15 @@ restoreCondExclusions: function {ctx: Ctx mark: u64} is {
         rv: ctx.exSaveVid.pop
         pv: ctx.exSaveV.pop
         pt: ctx.exSaveT.pop
-        if pv.length > 0 then {
-            vvSet xs: ctx.exclArms vid: rv val: pv.stringView
+        if pv.arms.length > 0 then {
+            vaSet xs: ctx.exclArms vid: rv arms: pv.arms
         } else {
-            vvRemove xs: ctx.exclArms vid: rv
+            vidRemove xs: ctx.exclArms vid: rv
         }
         if pt.isZero.not then {
             vtSet xs: ctx.exclTids vid: rv tid: pt
         } else {
-            vtRemove xs: ctx.exclTids vid: rv
+            vidRemove xs: ctx.exclTids vid: rv
         }
     }
 }
@@ -27236,7 +27153,7 @@ chainFactsOfClauses: function {
     clauses: zast.kidspan
     subjects: List String
     svids: ListVal ztypes.vid
-    arms: List String
+    arms: ListVal zast.nameid
     tids: ListVal ztypes.tid
     negs: ListVal bool
     recvs: List String
@@ -27249,7 +27166,7 @@ chainFactsOfClauses: function {
         if c.ifclause when c.conditions.count.u64 == 1 then {
             tS: List String
             tV: ListVal ztypes.vid
-            tA: List String
+            tA: ListVal zast.nameid
             tT: ListVal ztypes.tid
             tN: ListVal bool
             tR: List String
@@ -27277,8 +27194,7 @@ chainFactsOfClauses: function {
                 ms: tS.pop
                 subjects.append ms
                 svids.append (tV.get i: 0)
-                ma: tA.pop
-                arms.append ma
+                arms.append (tA.get i: 0)
                 tids.append (tT.get i: 0)
                 negs.append (tN.get i: 0)
                 mr: tR.pop
@@ -27491,7 +27407,7 @@ chainCondFact: function {
     n: astnode.view
     subjects: List String
     svids: ListVal ztypes.vid
-    arms: List String
+    arms: ListVal zast.nameid
     tids: ListVal ztypes.tid
     negs: ListVal bool
     recvs: List String
@@ -27500,11 +27416,10 @@ chainCondFact: function {
     if f.ok.not then return
     parent: ast.nodes.get i: f.parentNid
     subj: atomTextOf :ast n: parent
-    an: zast.nameTextAt :ast ref: f.armRef
     rv: emitExpr :ast :symtab :ctx n: parent
     subjects.append subj.string
     svids.append f.svid
-    arms.append an.copy
+    arms.append f.armRef
     tids.append f.owner
     negs.append f.neg
     recvs.append rv
@@ -28014,7 +27929,7 @@ emitIfClause: function {
 layerChainExclusions: function {
     ctx: Ctx
     svids: (ListVal ztypes.vid).view
-    arms: (List String).view
+    arms: (ListVal zast.nameid).view
     tids: (ListVal ztypes.tid).view
     negs: (ListVal bool).view
 } is {
@@ -28037,18 +27952,16 @@ layerChainExclusions: function {
 # accumulation does.
 negatedChainArm: function {
     svids: (ListVal ztypes.vid).view
-    arms: (List String).view
+    arms: (ListVal zast.nameid).view
     negs: (ListVal bool).view
     subj: ztypes.vid
-} out String is {
-    negArm: String
+} out zast.nameid is {
+    negArm: zast.nameid
     hj: u64
     for hj < negs.length loop {
         h2v: svids.get i: hj
         if h2v == subj when (negs.get i: hj) then {
-            hav: arms.get i: hj
-            hac: hav.copy
-            negArm = hac.take
+            negArm = arms.get i: hj
         }
         hj = hj + 1
     }
@@ -28066,19 +27979,16 @@ seedElseSubject: function {
     subjVid: ztypes.vid
     owner: ztypes.tid
     recv: StringView
-    negArm: StringView
+    negArm: zast.nameid
     ind: StringView
     svids: ListVal ztypes.vid
     prevV: List String
     prevT: ListVal ztypes.tid
     buf: String.borrow
 } is {
-    fArm: negArm.string
-    if fArm.length == 0 then {
-        rr: remainingArm :ast :symtab :ctx :subjVid tid: owner extra: ""
-        fArm = rr.take
-    }
-    if fArm.length == 0 then return
+    fArm: negArm
+    if fArm.isZero then fArm = remainingArm :symtab :ctx :subjVid tid: owner extra: zast.nameid
+    if fArm.isZero then return
     acc: ".".string
     if (isPtrVid :ctx vid: subjVid) then acc = "->"
     aliasText: (armAliasText
@@ -28086,7 +27996,7 @@ seedElseSubject: function {
         :symtab
         :ctx
         tid: owner
-        arm: fArm.stringView
+        arm: fArm
         :recv
         acc: acc.stringView
     )
@@ -28095,7 +28005,7 @@ seedElseSubject: function {
         :ctx
         vid: subjVid
         val: aliasText.stringView
-        tid: (armMemberTid :ast :symtab :owner arm: fArm.stringView)
+        tid: (armMemberTid :symtab :owner arm: fArm)
         :prevV
         :prevT
     )
@@ -28112,7 +28022,7 @@ seedElseNarrows: function {
     ctx: Ctx
     subjects: (List String).view
     chVids: (ListVal ztypes.vid).view
-    arms: (List String).view
+    arms: (ListVal zast.nameid).view
     tids: (ListVal ztypes.tid).view
     negs: (ListVal bool).view
     recvs: (List String).view
@@ -28139,7 +28049,7 @@ seedElseNarrows: function {
                 subjVid: gv
                 owner: (tids.get i: gi)
                 recv: grecv.stringView
-                negArm: na.stringView
+                negArm: na
                 :ind
                 :svids
                 :prevV
@@ -28162,7 +28072,7 @@ emitElse: function {
     tmp: TmpCtr
     chSubjects: (List String).view
     chSubjectVids: (ListVal ztypes.vid).view
-    chArms: (List String).view
+    chArms: (ListVal zast.nameid).view
     chTids: (ListVal ztypes.tid).view
     chNegs: (ListVal bool).view
     chRecvs: (List String).view
@@ -28864,8 +28774,7 @@ seedPostGuardAlias: function {
     owner: (symtab.typing.postGuardTid.get key: pgid).or d: ztypes.tid.zero
     if owner.isZero then return
     armId: (symtab.typing.postGuardArm.get key: pgid).or d: zast.nameid
-    arm: zast.poolTextAt pool: ast.names ref: armId
-    if arm.length == 0 then return
+    if armId.isZero then return
     pgRecv: wholeLocalName :ctx vid: pgrv name: pgRawN.stringView
     acc: ".".string
     if (isPtrVid :ctx vid: pgrv) then acc = "->"
@@ -28886,7 +28795,7 @@ seedPostGuardAlias: function {
         :symtab
         :ctx
         tid: owner
-        arm: arm.stringView
+        arm: armId
         recv: pgRecv.stringView
         acc: acc.stringView
     )
@@ -28895,7 +28804,7 @@ seedPostGuardAlias: function {
         :ctx
         vid: pgrv
         val: aliasText.stringView
-        tid: (armMemberTid :ast :symtab :owner arm: arm.stringView)
+        tid: (armMemberTid :symtab :owner arm: armId)
         :prevV
         :prevT
     )
@@ -29413,7 +29322,7 @@ resetFnEmitState: function {ctx: Ctx} is {
     ctx.aliases = List VidVal
     ctx.narrowBox = List VidVal
     ctx.narrowTid = List VidTid
-    ctx.exclArms = List VidVal
+    ctx.exclArms = List VidArms
     ctx.exclTids = List VidTid
 }
 
@@ -30288,28 +30197,6 @@ isArmRow: function {
     return (zenv.isConformanceLabelOf ty: symtab.typing reg: symtab.reg :tid :nameId).not
 }
 
-# variantArms -- a variant's arm names and payload ids in order
-# (non-FUNCTION children, the tag child excluded).
-variantArms: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    tid: ztypes.tid
-    names: List String
-    ids: ListVal ztypes.tid
-    nameIds: ListVal zast.nameid
-} is {
-    variantArmIds :symtab :tid :ids :nameIds
-    ai0: u64
-    an0: nameIds.length
-    for ai0 < an0 loop {
-        anx: nameIds.get i: ai0
-        cnBv: ast.names.texts.get i: anx
-        cnv: cnBv.copy
-        names.append cnv
-        ai0 = ai0 + 1
-    }
-}
-
 # tagConstC -- the C constant naming the tag of sum `tid`'s arm at ordinal
 # `armOrd` (declaration order, as variantArmIds lists the arms):
 # `Z_T<tid>_TAG_<ordinal>`, from ids alone, as the type's own C name is. Every
@@ -30363,22 +30250,6 @@ tagConstOf: function {
         tn: regNameView :symtab :tid
         panic msg: "zemitterc: a tag constant for '\{an}', which '\{tn}' does not declare as an arm"
     }
-}
-
-# tagConstNamed -- tagConstOf for an arm a caller holds as text.
-tagConstNamed: function {
-    # the arm names
-    ast: Ast.view
-    # the C names
-    ctx: Ctx.view
-    # the checked program
-    symtab: zenv.ZSymbolTable.view
-    # the sum type
-    tid: ztypes.tid
-    # the arm's name, as text
-    arm: StringView
-} out String is {
-    return (tagConstOf :ast :ctx :symtab :tid armId: (zast.poolFind pool: ast.names text: arm))
 }
 
 # armOrdinalOf -- the position of the arm named `armId` among sum `tid`'s arms
@@ -30441,11 +30312,12 @@ armValueC: function {
     ctx: Ctx.view
     symtab: zenv.ZSymbolTable.view
     tid: ztypes.tid
-    arm: StringView
+    # the arm's name
+    arm: zast.nameid
 } out String is {
     avs: ordinalVariantCType :symtab :tid
     if avs.length == 0 then return ""
-    avt: tagConstNamed :ast :ctx :symtab :tid :arm
+    avt: tagConstOf :ast :ctx :symtab :tid armId: arm
     avr: "((\{avs})\{avt})"
     return avr
 }
@@ -30455,17 +30327,16 @@ armValueC: function {
 # stored (`pc`), and a Set or a Map payload is stored as its pointer, so that
 # one is destroyed through what the box holds.
 emitArmPayloadDestroy: function {
-    ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     tid: ztypes.tid
-    arm: StringView
+    arm: zast.nameid
     pc: StringView
     buf: String.borrow
 } is {
-    pdtr: payloadDestructor :ast :symtab :ctx :tid :arm
+    pdtr: payloadDestructor :symtab :ctx :tid :arm
     if pdtr.length == 0 then return
-    co: symtab.typing.declChildOf pool: ast.names parentTypeId: tid name: arm
+    co: symtab.typing.declChildOfId parentTypeId: tid nameId: arm
     if (isHeapPtrCollection :symtab :ctx tid: (co.or d: ztypes.tid.zero)) then {
         dh: armCellDeref :pc slot: "u->data"
         buf.append "            \{pdtr}(\{dh});\n"
@@ -30482,9 +30353,9 @@ armPayloadC: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     tid: ztypes.tid
-    arm: StringView
+    arm: zast.nameid
 } out String is {
-    co: symtab.typing.declChildOf pool: ast.names parentTypeId: tid name: arm
+    co: symtab.typing.declChildOfId parentTypeId: tid nameId: arm
     match (
         co
     ) case some then {
@@ -32953,10 +32824,10 @@ emitC: function {
         aliases: List VidVal
         narrowBox: List VidVal
         narrowTid: List VidTid
-        exclArms: List VidVal
+        exclArms: List VidArms
         exclTids: List VidTid
         exSaveVid: ListVal ztypes.vid
-        exSaveV: List String
+        exSaveV: List VidArms
         exSaveT: ListVal ztypes.tid
         genActive: false
         genTid: ztypes.tid.zero
@@ -34566,13 +34437,12 @@ emitUnionMono: function {
 } is {
     if (ctx.emittedUserTypes.has item: tid) then return
     ctx.emittedUserTypes.add item: tid
-    anames: List String
     aids: ListVal ztypes.tid
     aidsNm: ListVal zast.nameid
-    variantArms :ast :symtab :tid names: anames ids: aids nameIds: aidsNm
+    variantArmIds :symtab :tid ids: aids nameIds: aidsNm
     # an arm-less union is a constraint-only bound (`AnyRef`): no
     # runtime form, and an empty C enum does not compile. See emitOneVariant.
-    if anames.length == 0 then return
+    if aidsNm.length == 0 then return
     # an inline arm holds its payload by value, so the payload's struct comes
     # first
     inlTids: ListVal ztypes.tid
@@ -34581,11 +34451,11 @@ emitUnionMono: function {
     vc: ctxCname :ctx :tid
     buf.append "typedef enum {\n"
     ai: u64
-    an: anames.length
+    an: aidsNm.length
     for ai < an loop {
-        aname: anames.get i: ai
-        tg: tagConstNamed :ast :ctx :symtab :tid arm: aname.stringView
-        tv: armTagValueText :symtab :tid armNameId: (aidsNm.get i: ai)
+        aname: aidsNm.get i: ai
+        tg: tagConstOf :ast :ctx :symtab :tid armId: aname
+        tv: armTagValueText :symtab :tid armNameId: aname
         lt: "    \{tg}\{tv},\n"
         buf.append lt
         ai = ai + 1
@@ -34606,7 +34476,7 @@ emitUnionMono: function {
         lfD: "    \{tsc} tag;\n"
         buf.append lfD
     }
-    inlineAsserts: emitUnionSlot :ast :symtab :ctx :tid :anames :buf
+    inlineAsserts: emitUnionSlot :ast :symtab :ctx :tid arms: aidsNm :buf
     if (isFwdDeclared :ctx :tid) then {
         buf.append "};\n"
     } else {
@@ -34622,19 +34492,18 @@ emitUnionMono: function {
     buf.append "    switch (u->tag) {\n"
     pj: u64
     for pj < an loop {
-        pname: anames.get i: pj
-        pc: armPayloadC :ast :symtab :ctx :tid arm: pname.stringView
+        pname: aidsNm.get i: pj
+        pc: armPayloadC :ast :symtab :ctx :tid arm: pname
         # an inline payload is a value in the slot: nothing to destroy or free
-        if pc.length > 0 when (armIsInlineC :ast :symtab :tid arm: pname.stringView).not then {
-            ptg: tagConstNamed :ast :ctx :symtab :tid arm: pname.stringView
+        if pc.length > 0 when (armIsInlineC :symtab :tid arm: pname).not then {
+            ptg: tagConstOf :ast :ctx :symtab :tid armId: pname
             lcase: "        case \{ptg}:\n"
             buf.append lcase
             (emitArmPayloadDestroy
-                :ast
                 :symtab
                 :ctx
                 :tid
-                arm: pname.stringView
+                arm: pname
                 pc: pc.stringView
                 :buf
             )
@@ -34659,22 +34528,16 @@ emitUnionSlot: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     tid: ztypes.tid
-    anames: (List String).view
+    # the union's arms, by name
+    arms: (ListVal zast.nameid).view
     buf: String.borrow
 } out String is {
     members: String
     asserts: String
-    for each an: anames loop {
-        if (armIsInlineC :ast :symtab :tid arm: an.stringView) then {
-            pc: armPayloadC :ast :symtab :ctx :tid arm: an.stringView
-            im: (memberCNamed
-                :ast
-                :symtab
-                :ctx
-                owner: tid
-                kind: memberkind.inlineArm
-                name: an.stringView
-            )
+    for each an: arms loop {
+        if (armIsInlineC :symtab :tid arm: an) then {
+            pc: armPayloadC :ast :symtab :ctx :tid arm: an
+            im: memberC :ast :symtab :ctx owner: tid kind: memberkind.inlineArm nameId: an
             members.append "        \{pc} \{im};\n"
             asserts.append "_Static_assert(sizeof(\{pc}) <= 8 && _Alignof(\{pc}) <= 8, \"union arm payload wider than its 8-byte slot\");\n"
         }
@@ -34692,13 +34555,12 @@ emitUnionSlot: function {
 # payloadDestructor -- the destructor cname for an arm whose payload is an
 # aggregate with a destructor ("" for scalar/view payloads).
 payloadDestructor: function {
-    ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     tid: ztypes.tid
-    arm: StringView
+    arm: zast.nameid
 } out String is {
-    co: symtab.typing.declChildOf pool: ast.names parentTypeId: tid name: arm
+    co: symtab.typing.declChildOfId parentTypeId: tid nameId: arm
     match (
         co
     ) case some then {
@@ -36423,8 +36285,22 @@ emitFdClass: function {
         lc: "} \{fc}_t;\n"
         buf.append lc
     }
-    fdC: memberCNamed :ast :symtab :ctx owner: tid kind: memberkind.field name: "fd"
-    clC: memberCNamed :ast :symtab :ctx owner: tid kind: memberkind.field name: "closed"
+    fdC: (memberC
+        :ast
+        :symtab
+        :ctx
+        owner: tid
+        kind: memberkind.field
+        nameId: zast.wellKnown.slot.wkFd
+    )
+    clC: (memberC
+        :ast
+        :symtab
+        :ctx
+        owner: tid
+        kind: memberkind.field
+        nameId: zast.wellKnown.slot.wkClosed
+    )
     d0: "static void \{fc}_destroy(\{fc}_t* p) {\n    if (!p) return;\n"
     buf.append d0
     d1: "    if (p->\{clC}) return;\n"
@@ -40848,10 +40724,11 @@ vtableAutoCallC: function {
     owner: ztypes.tid
     recv: StringView
     acc: StringView
-    mn: StringView
+    # the slot's name
+    mnId: zast.nameid
     isFacet: bool
 } out String is {
-    sl: memberCNamed :ast :symtab :ctx :owner kind: memberkind.slot name: mn
+    sl: memberC :ast :symtab :ctx :owner kind: memberkind.slot nameId: mnId
     return (vtableCallC :recv :acc slot: sl.stringView :isFacet argTail: "")
 }
 
@@ -41631,19 +41508,20 @@ emitVariantEq: function {
     tid: ztypes.tid
     # the variant's C name
     vc: StringView
-    anames: (List String).view
-    # the arms' payload ids, parallel to `anames`
+    # the variant's arms, by name
+    arms: (ListVal zast.nameid).view
+    # the arms' payload ids, parallel to `arms`
     aids: (ListVal ztypes.tid).view
     # whether any arm carries a payload
     haveP: bool
     buf: String.borrow
 } is {
     if (partsCallWritten :ast :symtab ids: aids).not then {
-        writeVariantEq :ast :symtab :ctx :tid :vc :anames :haveP dest: buf
+        writeVariantEq :ast :symtab :ctx :tid :vc :arms :haveP dest: buf
         return
     }
     body: String
-    writeVariantEq :ast :symtab :ctx :tid :vc :anames :haveP dest: body
+    writeVariantEq :ast :symtab :ctx :tid :vc :arms :haveP dest: body
     emitEqLate :ctx cname: vc :body :buf
 }
 
@@ -41654,7 +41532,8 @@ writeVariantEq: function {
     ctx: Ctx
     tid: ztypes.tid
     vc: StringView
-    anames: (List String).view
+    # the variant's arms, by name
+    arms: (ListVal zast.nameid).view
     haveP: bool
     dest: String.borrow
 } is {
@@ -41667,22 +41546,15 @@ writeVariantEq: function {
     dest.append "    if (a.tag != b.tag) return false;\n"
     dest.append "    switch (a.tag) {\n"
     qk: u64
-    an: anames.length
+    an: arms.length
     for qk < an loop {
-        qname: anames.get i: qk
+        qname: arms.get i: qk
         qk = qk + 1
-        qco: symtab.typing.declChildOf pool: ast.names parentTypeId: tid name: qname.stringView
-        qc: armPayloadC :ast :symtab :ctx :tid arm: qname.stringView
+        qco: symtab.typing.declChildOfId parentTypeId: tid nameId: qname
+        qc: armPayloadC :ast :symtab :ctx :tid arm: qname
         if qc.length > 0 when qco.some then {
-            qtg: tagConstNamed :ast :ctx :symtab :tid arm: qname.stringView
-            qnameC: (memberCNamed
-                :ast
-                :symtab
-                :ctx
-                owner: tid
-                kind: memberkind.arm
-                name: qname.stringView
-            )
+            qtg: tagConstOf :ast :ctx :symtab :tid armId: qname
+            qnameC: memberC :ast :symtab :ctx owner: tid kind: memberkind.arm nameId: qname
             qsel: ".data.\{qnameC}"
             dest.append "        case \{qtg}: return "
             (partEqC
@@ -41736,26 +41608,25 @@ emitOneVariant: function {
 } is {
     if (ctx.emittedUserTypes.has item: tid) then return
     ctx.emittedUserTypes.add item: tid
-    anames: List String
     aids: ListVal ztypes.tid
     aidsNm: ListVal zast.nameid
-    variantArms :ast :symtab :tid names: anames ids: aids nameIds: aidsNm
+    variantArmIds :symtab :tid ids: aids nameIds: aidsNm
     # An ARMLESS variant is a constraint-only marker (`anyval`): nothing can
     # ever hold one, and an empty C enum does not compile. emitUnionMono
     # carries the same guard for the union bound `AnyRef`. It did
     # not when this comment first claimed it did, and under `--eager` -- the
     # one mode that reaches a definition nothing references -- that cost every
     # program in the corpus its C.
-    if anames.length == 0 then return
+    if aidsNm.length == 0 then return
     preEmitEmbeddedTypes :ast :symtab :ctx ids: aids :buf
     vc: ctxCname :ctx :tid
     buf.append "typedef enum {\n"
     ai: u64
-    an: anames.length
+    an: aidsNm.length
     for ai < an loop {
-        aname: anames.get i: ai
-        tg: tagConstNamed :ast :ctx :symtab :tid arm: aname.stringView
-        tv: armTagValueText :symtab :tid armNameId: (aidsNm.get i: ai)
+        aname: aidsNm.get i: ai
+        tg: tagConstOf :ast :ctx :symtab :tid armId: aname
+        tv: armTagValueText :symtab :tid armNameId: aname
         lt: "    \{tg}\{tv},\n"
         buf.append lt
         ai = ai + 1
@@ -41784,8 +41655,8 @@ emitOneVariant: function {
     haveP: false
     pj: u64
     for pj < an loop {
-        pname: anames.get i: pj
-        pc: armPayloadC :ast :symtab :ctx :tid arm: pname.stringView
+        pname: aidsNm.get i: pj
+        pc: armPayloadC :ast :symtab :ctx :tid arm: pname
         if pc.length > 0 then {
             if haveP.not then {
                 haveP = true
@@ -41797,7 +41668,7 @@ emitOneVariant: function {
                 :ctx
                 owner: tid
                 kind: memberkind.arm
-                nameId: (aidsNm.get i: pj)
+                nameId: pname
             )
             lp: "        \{pc} \{pnameC};\n"
             buf.append lp
@@ -41807,7 +41678,7 @@ emitOneVariant: function {
     if haveP then buf.append "    } data;\n"
     closeStructBody :ctx :tid cn: vc.stringView :buf
     if (eqGenerated :ast :symtab :ctx :tid) then {
-        emitVariantEq :ast :symtab :ctx :tid vc: vc.stringView :anames :aids :haveP :buf
+        emitVariantEq :ast :symtab :ctx :tid vc: vc.stringView arms: aidsNm :aids :haveP :buf
     }
 }
 
@@ -42401,27 +42272,19 @@ variantHashBody: function {
     bytesFn: StringView
     dest: String.borrow
 } is {
-    anames: List String
     aids: ListVal ztypes.tid
     aidsNm: ListVal zast.nameid
-    variantArms :ast :symtab :tid names: anames ids: aids nameIds: aidsNm
+    variantArmIds :symtab :tid ids: aids nameIds: aidsNm
     cases: String
     width: u64
     qk: u64
-    for qk < anames.length loop {
-        qname: anames.get i: qk
+    for qk < aidsNm.length loop {
+        qname: aidsNm.get i: qk
         qk = qk + 1
-        qco: symtab.typing.declChildOf pool: ast.names parentTypeId: tid name: qname.stringView
-        qc: armPayloadC :ast :symtab :ctx :tid arm: qname.stringView
+        qco: symtab.typing.declChildOfId parentTypeId: tid nameId: qname
+        qc: armPayloadC :ast :symtab :ctx :tid arm: qname
         if qc.length > 0 when qco.some then {
-            qnameC: (memberCNamed
-                :ast
-                :symtab
-                :ctx
-                owner: tid
-                kind: memberkind.arm
-                name: qname.stringView
-            )
+            qnameC: memberC :ast :symtab :ctx owner: tid kind: memberkind.arm nameId: qname
             qv: "a.data.\{qnameC}"
             words: List String
             (partHashWords
@@ -42433,13 +42296,7 @@ variantHashBody: function {
                 :words
             )
             if words.length > width then width = words.length
-            cases.append "        case \{(tagConstNamed
-                :ast
-                :ctx
-                :symtab
-                :tid
-                arm: qname.stringView
-            )}:"
+            cases.append "        case \{tagConstOf :ast :ctx :symtab :tid armId: qname}:"
             wi: u64
             for wi < words.length loop {
                 cases.append " _h[\{wi + 1}] = \{words.get i: wi};"
@@ -43286,7 +43143,7 @@ setupGenCtx: function {
         tid: rid
         originTid: (ctx.origins.get i: family.slot.option)
     ) then {
-        gp = armPayloadC :ast :symtab :ctx tid: rid arm: "some"
+        gp = armPayloadC :ast :symtab :ctx tid: rid arm: zast.wellKnown.slot.wkSome
     }
     ctx.genPayC = gp.take
     # a `.call` that receives a per-call input is one with a SECOND parameter --
