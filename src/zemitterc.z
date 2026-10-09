@@ -30942,11 +30942,13 @@ fillNeeds: function {program: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx} 
             uIdx9b = uIdx9b + 1
             opId: zast.nodeid
             unitNameText: String
+            uNameId: zast.nameid
             u: program.nodes.get i: uId
             if u.namedoperation then {
                 un: zast.poolTextAt pool: program.names ref: u.name
                 opId = u.operation
                 unitNameText = un.copy
+                uNameId = u.name
             }
             if opId.isZero.not then {
                 (fillNeedsIn
@@ -30954,6 +30956,7 @@ fillNeeds: function {program: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx} 
                     :ctx
                     ast: program
                     unitName: unitNameText.stringView
+                    unitDecl: (ztypecheck.unitDeclOfName st: symtab nameId: uNameId)
                     mainOpId: opId
                 )
             }
@@ -30967,6 +30970,8 @@ fillNeedsIn: function {
     ctx: Ctx
     ast: Ast.view
     unitName: StringView
+    # the unit's declaration
+    unitDecl: ztypes.declid
     mainOpId: zast.nodeid
 } is {
     bodyIds: zast.unitBodyIdsAt :ast unitId: mainOpId
@@ -30975,27 +30980,24 @@ fillNeedsIn: function {
         bm: zast.kidAt kids: ast.kids span: bodyIds i: vx259
         vx259 = vx259 + 1
         bmNode: ast.nodes.get i: bm
-        if bmNode.namedoperation then {
-            # a body that will not be emitted must not register needs either:
-            # a runtime fragment pulled in by dead code carries the signature
-            # types that code named, and nothing minted them.
-            fnn: zast.nameTextAt :ast ref: bmNode.name
-            if (stdFnUndemanded
+        # a body that will not be emitted must not register needs either: a
+        # runtime fragment pulled in by dead code carries the signature types
+        # that code named, and nothing minted them.
+        if bmNode.namedoperation when (fnUndemanded
+            :ast
+            :symtab
+            :unitDecl
+            nameId: bmNode.name
+            ownerTid: ztypes.tid
+            wantWalked: true
+        ).not then {
+            (scanNeeds
                 :ast
                 :symtab
+                :ctx
                 :unitName
-                fnName: fnn.stringView
-                ownerTid: ztypes.tid
-                wantWalked: true
-            ).not then {
-                (scanNeeds
-                    :ast
-                    :symtab
-                    :ctx
-                    :unitName
-                    n: (ast.nodes.get i: bmNode.operation)
-                )
-            }
+                n: (ast.nodes.get i: bmNode.operation)
+            )
         }
     }
 }
@@ -31349,7 +31351,7 @@ scanNeeds: function {
 }
 
 
-# stdFnUndemanded -- a bodied free fn the program never referenced: its def was
+# fnUndemanded -- a bodied free fn the program never referenced: its def was
 # not resolved, so its body carries no stamps and emitting it renders the
 # signature as `z_t0(void)` over unbound parameter names. Skip it everywhere
 # (definition, needs pre-scan, literal pooling). Whether the fn resolved is a
@@ -31358,11 +31360,13 @@ scanNeeds: function {
 # only the eager pass hid that for the second. ownerTid names the enclosing
 # namespace / subunit type for a nested fn -- its members are children of IT,
 # so the unit-root key below misses them and would drop a fn that IS used.
-stdFnUndemanded: function {
+fnUndemanded: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
-    unitName: StringView
-    fnName: StringView
+    # the file unit that declares the function (the nested case: ownerTid)
+    unitDecl: ztypes.declid
+    # the function's name, interned
+    nameId: zast.nameid
     ownerTid: ztypes.tid
     # ask whether the body was WALKED, not merely resolved. Only the definition
     # pass may: the literal pool has to cover everything that might be emitted,
@@ -31371,45 +31375,20 @@ stdFnUndemanded: function {
     wantWalked: bool
 } out bool is {
     if ownerTid.isZero.not then {
-        nn: zast.poolFind pool: ast.names text: fnName
-        if (symtab.typing.declChildOfId parentTypeId: ownerTid nameId: nn).none then return true
+        if (symtab.typing.declChildOfId parentTypeId: ownerTid :nameId).none then return true
         if wantWalked.not then return false
-        md: symtab.typing.declMemberIdOf parentTypeId: ownerTid nameId: nn
+        md: symtab.typing.declMemberIdOf parentTypeId: ownerTid :nameId
         return (symtab.typing.declIsWalked declId: md).not
     }
-    ud9x: (ztypecheck.unitDeclOfName
-        st: symtab
-        nameId: (zast.poolFind pool: ast.names text: unitName)
-    )
-    ro: (ztypecheck.resolvedByIdsRo
-        :ast
-        st: symtab
-        unitDecl: ud9x
-        name: (zast.poolFind pool: ast.names text: fnName)
-    )
-    rres: false
-    match (
-        ro
-    ) case some then {
-        rres = true
-    } case none then null
-    if rres.not then return true
+    if (ztypecheck.resolvedByIdsRo :ast st: symtab :unitDecl name: nameId).none then return true
     # resolved is not enough: emitting a body that was never WALKED emits code
     # whose types were never minted -- a resolved but unwalked json.at emitted
     # a call whose return spec nothing ever created, `z_t0_t`. The walk is what
     # stamps a body, so being walked is the honest question. The main unit is
     # walked in full and keeps no such mark.
     if wantWalked.not then return false
-    if unitName == symtab.reg.regMainUnit then return false
-    ud10x: (ztypecheck.unitDeclOfName
-        st: symtab
-        nameId: (zast.poolFind pool: ast.names text: unitName)
-    )
-    wd: (ztypecheck.declOfUnitDefIds
-        st: symtab
-        unitDecl: ud10x
-        nameId: (zast.poolFind pool: ast.names text: fnName)
-    )
+    if unitDecl == symtab.typing.mainUnitRoot then return false
+    wd: ztypecheck.declOfUnitDefIds st: symtab :unitDecl :nameId
     return (symtab.typing.declIsWalked declId: wd).not
 }
 
@@ -31601,7 +31580,7 @@ emitUnitMonoInstances: function {
 # emitFnsPass -- one declOnly-parameterized sweep over EVERY unit, routing
 # generic template units to their mono instances and plain units to emitFnsIn.
 # It asks no unit-level question: what a runtime-backed unit supplies is dropped
-# per DEFINITION, by stdFnUndemanded and the native filters collectFnDecls
+# per DEFINITION, by fnUndemanded and the native filters collectFnDecls
 # applies. ctx.mainName is rebound to each unit for the duration.
 emitFnsPass: function {
     program: Ast.view
@@ -31853,15 +31832,14 @@ collectFnDecls: function {
         if bm.namedoperation when (ztypecheck.isFunctionDefWithBody
             o: (ast.nodes.get i: bm.operation)
         ) then {
-            nm: zast.nameTextAt :ast ref: bm.name
             # a runtime-backed unit's bodied fn only emits when the
             # program referenced it (undemanded bodies carry no stamps)
             skipDepMain: (
-                (stdFnUndemanded
+                (fnUndemanded
                     :ast
                     :symtab
-                    unitName: ctx.mainName.stringView
-                    fnName: nm.stringView
+                    unitDecl: ctx.mainUnitId
+                    nameId: bm.name
                     :ownerTid
                     wantWalked: true
                 ) or
@@ -32373,19 +32351,18 @@ collectUnitLiterals: function {
             uId: program.units.get i: uIdx9f
             uIdx9f = uIdx9f + 1
             opId: zast.nodeid
-            unitNameText: String
+            uNameId: zast.nameid
             u: program.nodes.get i: uId
             if u.namedoperation then {
-                un: zast.poolTextAt pool: program.names ref: u.name
                 opId = u.operation
-                unitNameText = un.copy
+                uNameId = u.name
             }
             if opId.isZero.not then {
                 (collectUnitLiteralsIn
                     ast: program
                     mainOpId: opId
                     :symtab
-                    unitName: unitNameText.stringView
+                    unitDecl: (ztypecheck.unitDeclOfName st: symtab nameId: uNameId)
                     :ids
                     :texts
                 )
@@ -32409,7 +32386,8 @@ collectUnitLiteralsIn: function {
     ast: Ast.view
     mainOpId: zast.nodeid
     symtab: zenv.ZSymbolTable.view
-    unitName: StringView
+    # the unit's declaration
+    unitDecl: ztypes.declid
     ids: ListVal zast.nodeid
     texts: List String
 } is {
@@ -32420,12 +32398,11 @@ collectUnitLiteralsIn: function {
         vx309 = vx309 + 1
         bmNode: ast.nodes.get i: bm
         if bmNode.namedoperation then {
-            bn: zast.nameTextAt :ast ref: bmNode.name
-            skipU: (stdFnUndemanded
+            skipU: (fnUndemanded
                 :ast
                 :symtab
-                :unitName
-                fnName: bn.stringView
+                :unitDecl
+                nameId: bmNode.name
                 ownerTid: ztypes.tid
                 wantWalked: false
             )
@@ -37188,18 +37165,16 @@ stdFnRefEmittable: function {
     symtab: zenv.ZSymbolTable.view
     fid: ztypes.tid
 } out bool is {
-    duo: definedInUnitName :symtab tid: fid
-    if duo.length == 0 then return false
+    ud: ztypecheck.unitDeclOfTid st: symtab tid: fid
+    if ud.isZero then return false
     if (fnIsNativeId :symtab :fid) then return false
-    # demand is recorded under the composed "unit.fn" key; read the fn name off
-    # the id-keyed registry entry to compose it
-    fnm: regNameView :symtab tid: fid
-    if fnm.length == 0 then return false
-    return (stdFnUndemanded
+    fd: ztypecheck.declOfTypeId st: symtab tid: fid
+    if fd.isZero then return false
+    return (fnUndemanded
         :ast
         :symtab
-        unitName: duo
-        fnName: fnm
+        unitDecl: ud
+        nameId: (symtab.typing.decls.get i: fd).name
         ownerTid: (fnDeclScopeTid :symtab :fid)
         wantWalked: false
     ).not
