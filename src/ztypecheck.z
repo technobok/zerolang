@@ -78,6 +78,7 @@ public: unit {
     :declDeclaresUnit
     :declOfUnitDefIds
     :unitDeclOfName
+    :filePathsOf
     :declMemberIsPrivate
     :publicAliasInternalNames
     :unitDeclOfTid
@@ -15505,7 +15506,7 @@ resolveDeepAlias: function {
     }
     own: qualifiedMemberScope :st unitRoot: pu memberId: cn
     if (st.typing.declFindChild parentDeclId: own nameId: cn).isZero then {
-        reportDeepAliasMissing :st :ast :declId what: "unit" ownerId: qcn memberId: cn
+        reportDeepAliasMissing :st :ast :declId what: "unit" ownerId: qcn memberId: cn ownerUnit: pu
         return ztypes.tid.zero
     }
     atid: descendNamedId :st :scope :ast unitDecl: pu nameId: cn
@@ -15544,7 +15545,15 @@ reportDeepTypeMember: function {
     if ptid.isZero then return
     if (st.typing.declChildOfId parentTypeId: ptid nameId: memberId).none.not then return
     if (leafNamesNoMember leafId: memberId) then return
-    reportDeepAliasMissing :st :ast :declId what: "type" ownerId: typeId :memberId
+    (reportDeepAliasMissing
+        :st
+        :ast
+        :declId
+        what: "type"
+        ownerId: typeId
+        :memberId
+        ownerUnit: ztypes.declid
+    )
 }
 
 # reportDeepAliasMissing -- the alias `declId` names a member its owner (a unit
@@ -15556,6 +15565,8 @@ reportDeepAliasMissing: function {
     what: StringView
     ownerId: zast.nameid
     memberId: zast.nameid
+    # the unit the owner resolved to, 0 for a type owner
+    ownerUnit: ztypes.declid
 } is {
     owner: zast.nameTextAt :ast ref: ownerId
     member: zast.nameTextAt :ast ref: memberId
@@ -15567,7 +15578,7 @@ reportDeepAliasMissing: function {
         colno: at.colno
         e: zast.err.typeError
         msg: "\{what} '\{owner}' has no member '\{member}'"
-        note: ""
+        note: (unitFileNote :st :ast unitDecl: ownerUnit)
         hint: ""
         width: owner.length.u32.orPanic
     )
@@ -16071,11 +16082,19 @@ reportMissingAliasTarget: function {
 } is {
     what: missingAliasTargetKind :st :scope :ast :adecl :aParent :target
     if what == 0 then return
+    # the unit the root resolved to, which the note names the file of
+    rootU: ztypes.declid
+    if what == 1 then rootU = (aliasRootScope :st :scope :ast :aParent nameId: target.unitName
+    ).unitDecl
     root: zast.nameTextAt :ast ref: target.unitName
     member: zast.nameTextAt :ast ref: target.defName
     msg: "Unknown reference '\{root}'"
     code: zast.err.badReference
-    if what == 1 then msg = "unit '\{root}' has no member '\{member}'"
+    note: String
+    if what == 1 then {
+        msg = "unit '\{root}' has no member '\{member}'"
+        note = unitFileNote :st :ast unitDecl: rootU
+    }
     if what == 2 then msg = "type '\{root}' has no member '\{member}'"
     if what != 3 then code = zast.err.typeError
     at: aliasValueSite :st :ast :adecl
@@ -16086,7 +16105,7 @@ reportMissingAliasTarget: function {
         colno: at.colno
         e: code
         :msg
-        note: ""
+        :note
         hint: ""
         width: root.length.u32.orPanic
     )
@@ -30098,7 +30117,7 @@ reportUnknownUnitMember: function {
         hp3: "'\{cn}' is private (not in the public interface)"
         h3 = hp3.take
     }
-    en3: String
+    en3: unitFileNote :st :ast unitDecl: (declOfTypeId :st tid: bt)
     cnid3: nodeId n: (ast.nodes.get i: dp.child)
     cnln3: nodeLine n: (ast.nodes.get i: dp.child)
     cncl3: nodeCol n: (ast.nodes.get i: dp.child)
@@ -63509,6 +63528,34 @@ publicAliasInternalNames: function {
     return result
 }
 
+# filePathsOf -- each file the parse of `ast` loaded, by its id, at the path a
+# diagnostic's location shows it at.
+filePathsOf: function {vfs: zvfs.ZVfs.view ast: Ast.view} out (IdMapR zvfs.fsno V: String) is {
+    r: IdMapR zvfs.fsno V: String
+    for each f: ast.files loop r.set key: f value: (vfs.displayPath dentryid: f)
+    return r
+}
+
+# unitFileNote -- the note an unknown member of a unit carries: the file the
+# unit resolved to. A report written in one unit about another (core's
+# `print: io.print`, when a project's own io.z is the `io` it reaches) then
+# says which file that other unit is. "" when the file is not known.
+unitFileNote: function {
+    st: zenv.ZSymbolTable.view ast: Ast.view unitDecl: ztypes.declid
+} out String is {
+    if unitDecl.isZero then return ""
+    d: st.typing.decls.get i: unitDecl
+    if d.node.isZero then return ""
+    p: st.typing.filePaths.get key: (ast.rowFile.get i: d.node)
+    match (
+        p
+    ) case some then {
+        return "unit '\{zast.nameTextAt :ast ref: d.name}' is \{p}"
+    } case none then {
+        return ""
+    }
+}
+
 # typecheck -- entry point. Registers a UNIT type per unit and resolves the main
 # unit's definition signatures, then demand-resolves the cross-unit types those
 # signatures referenced. The registry is supplied by the caller, read by the dumper.
@@ -63521,10 +63568,13 @@ typecheck: function {
     eager: bool
     requireMain: bool
     dumpRows: bool
+    # each loaded file's path as a location shows it (filePathsOf)
+    filePaths: (IdMapR zvfs.fsno V: String).take
 } out zenv.ZSymbolTable is {
     nodeEstT: u64
     nodeEstT = program.nodes.length
     ty: ztyping.newTyping nodeEst: nodeEstT
+    ty.filePaths = filePaths.take
     ty.eagerAll = eager
     ty.requireMain = requireMain
     ty.dumpRows = dumpRows
