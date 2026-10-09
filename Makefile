@@ -2496,7 +2496,7 @@ perf: $(PERFBIN)
 # -10,832 the emitter names arms and members by id (memberCNamed, tagConstNamed,
 # variantArms and the space-joined exclusion text gone): -9,726 behaviour,
 # -1,106 source (ab.sh).
-ALLOC_BASELINE := 2167179
+ALLOC_BASELINE := 2165790
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -2684,16 +2684,16 @@ emitter-guard:
 	chk "composeCname in src/ztypes.z" "$$g1" 0; \
 	chk "'z_t{' literals in src/zemitterc.z" "$$g2" 3; \
 	chk "ztypecheck.resolvedByKey" "$$e1" 0; \
-	chk "ztypecheck.walkLookupTyperef" "$$e2" 3; \
+	chk "ztypecheck.walkLookupTyperef" "$$e2" 1; \
 	chk "resolveTypeIdByName" "$$e3" 0; \
 	chk "userFnId" "$$e4" 0; \
 	chk "childOwnershipText" "$$e5" 0; \
-	chk "regNameOf" "$$e6" 8; \
+	chk "regNameOf" "$$e6" 5; \
 	chk "mangleVarName (both inside varCName)" "$$e7" 2; \
 	chk "io.readText" "$$e8" 3; \
 	chk "monoOriginName" "$$e9" 0; \
 	chk "literal arm members (.data.<arm>; memberC spells them)" "$$e10" 0; \
-	chk "poolFind (a re-intern of a name the emitter held as an id)" "$$e11" 11; \
+	chk "poolFind (a re-intern of a name the emitter held as an id, or table text)" "$$e11" 12; \
 	if [ "$$fail" = "1" ]; then \
 	  echo "  A new name-resolution site was added to the emitter. Read the typechecker"; \
 	  echo "  stamp (atomVariableId/atomUnitDefId/callKind), the canonical child id, or"; \

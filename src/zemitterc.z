@@ -13514,8 +13514,8 @@ emitFnptrLocalCall: function {
     cTid: stampIdOf :symtab nid: cnid
     if cTid.isZero then return ""
     if (symtab.reg.typetypeOf typeId: cTid) != ztypes.ztypetype.functionType then return ""
-    stn: regNameOf :symtab tid: cTid
-    if stn.stringView == cn0 then return ""
+    # a bare atom that is no variable names a top-level function, called as one
+    if cnVid.isZero then return ""
     fcm: wholeLocalName :ctx vid: cnVid name: cn0
     # THE SLOT'S OWN PARAMETER LIST DECIDES HOW EACH ARGUMENT IS PASSED, the
     # same question emitFnptrFieldCall asks of a fn-pointer FIELD. It matters
@@ -15934,8 +15934,8 @@ methodAutoCallRead: function {
     bstamp: ztypes.tid
     # the method
     mco: ztypes.tid
-    # the enclosing type's name
-    fbtn: StringView
+    # the base names the TYPE itself (the checker said so), not a value of it
+    baseIsType: bool
     # the read names the method itself, a `.take` of it, rather than its call
     readIsRef: bool
 } out String is {
@@ -15946,11 +15946,11 @@ methodAutoCallRead: function {
     }
     mt: mco
     mc2: autoCallCname :symtab :ctx owner: bstamp method: mt
-    if bn2v.isZero when bn2 == fbtn when mnId == zast.wellKnown.slot.wkCreate then {
+    if baseIsType when mnId == zast.wellKnown.slot.wkCreate then {
         z: typeNameCreateZero :symtab :ctx :bstamp
         if z.length > 0 then return z
     }
-    if bn2v.isZero when bn2 == fbtn then {
+    if baseIsType then {
         if readIsRef or (fnTypeTakesThis :symtab tid: mt) then return mc2
         sda: renderedMethodDefaultArgs :ast :symtab :ctx fnTid: mt
         if sda.length > 0 then return "\{mc2}(\{sda})"
@@ -15990,12 +15990,12 @@ fnptrFieldRead: function {
     # the record or class the field is read off
     bstamp: ztypes.tid
     mco: ztypes.tid
-    fbtn: StringView
+    baseIsType: bool
     # the checker stamped this read as the field's function, so it is not called
     readIsRef: bool
 } out String is {
     mcFp: ctxCname :ctx tid: mco
-    if bn2v.isZero when bn2 == fbtn then return mcFp
+    if baseIsType then return mcFp
     takesThis: fnTypeTakesThis :symtab tid: mco
     if readIsRef when takesThis.not then return String
     accFp: ".".string
@@ -16081,7 +16081,7 @@ emitResolvedMemberRead: function {
     bn2v: ztypes.vid
     bstamp: ztypes.tid
     mco: ztypes.tid
-    fbtn: StringView
+    baseIsType: bool
     # the read is the member's own function (a `.take` of it), not a call
     readIsRef: bool
 } out String is {
@@ -16094,9 +16094,20 @@ emitResolvedMemberRead: function {
     }
     if (mtt == ztypes.ztypetype.functionType).not then return ""
     if (symtab.typing.declIsFnptrFieldId parentTypeId: bstamp nameId: mnId) then {
-        return (fnptrFieldRead :ast :symtab :ctx :mnId :bn2 :bn2v :bstamp :mco :fbtn :readIsRef)
+        return (fnptrFieldRead
+            :ast
+            :symtab
+            :ctx
+            :mnId
+            :bn2
+            :bn2v
+            :bstamp
+            :mco
+            :baseIsType
+            :readIsRef
+        )
     }
-    sh: synthHashRead :ast :symtab :ctx :bn2 :bn2v :bstamp :mco :fbtn :readIsRef
+    sh: synthHashRead :ast :symtab :ctx :bn2 :bn2v :bstamp :mco :baseIsType :readIsRef
     if sh.length > 0 then return sh
     return (methodAutoCallRead
         :ast
@@ -16109,7 +16120,7 @@ emitResolvedMemberRead: function {
         :bn2v
         :bstamp
         :mco
-        :fbtn
+        :baseIsType
         :readIsRef
     )
 }
@@ -16125,11 +16136,11 @@ synthHashRead: function {
     bn2v: ztypes.vid
     bstamp: ztypes.tid
     mco: ztypes.tid
-    fbtn: StringView
+    baseIsType: bool
     readIsRef: bool
 } out String is {
     if readIsRef then return String
-    if bn2v.isZero when bn2 == fbtn then return String
+    if baseIsType then return String
     if (synthHashOf :symtab owner: bstamp :mco).not then return String
     hv: "(\{bn2})"
     if (isPtrVid :ctx vid: bn2v) then hv = "(*\{bn2})"
@@ -16142,9 +16153,9 @@ synthHashRead: function {
 # read is; the payload read below applies only when it answers nothing, or
 # names something with no body to read. The declared arms are children too,
 # hence the FUNCTION test.
-# fbtn names the enclosing type for a read whose base is a TYPE rather than a
-# value; a sum value's base is always a variable, and the type-name form is
-# taken by dottedAtomTaggedBase before this leg is reached.
+# baseIsType says the base is a TYPE rather than a value; a sum value's base is
+# always a variable, and the type-name form is taken by dottedAtomTaggedBase
+# before this leg is reached.
 sumMemberMethodRead: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -16182,7 +16193,7 @@ sumMemberMethodRead: function {
             :bn2v
             :bstamp
             :mco
-            fbtn: ""
+            baseIsType: false
             readIsRef: false
         )
     } case none then null
@@ -16205,7 +16216,8 @@ emitUserTypeMemberRead: function {
     # handed to emitResolvedMemberRead: the read names the function, not its call
     readIsRef: bool
 } out String is {
-    fbtn: regNameView :symtab tid: bstamp
+    baseIsType: false
+    if bn2v.isZero when (symtab.typing.dpTypeBase.has item: baseNid) then baseIsType = true
     if bstamp == ctx.strTid then {
         sptr: isPtrVid :ctx vid: bn2v
         sm: (emitStringMethod
@@ -16278,7 +16290,7 @@ emitUserTypeMemberRead: function {
             :bn2v
             :bstamp
             :mco
-            :fbtn
+            :baseIsType
             :readIsRef
         )
         if rmr.length > 0 then return rmr
@@ -25042,14 +25054,11 @@ objitertids: record {
     bareFnId: ztypes.tid
 }
 
-# objIterIterableTid -- the iterator class behind `for each x: <iterable> loop`. A
-# bare generator fn resolves through its return type and is auto-called; every
-# other iterable resolves through its canonical origin, so a shadowed or
-# re-exported name still finds the template that declares `.call`.
+# objIterIterableTid -- the iterator class behind `for each x: <iterable> loop`: the
+# iterable's stamp, or, for a bare generator fn, its return type, auto-called.
 objIterIterableTid: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
     cOp: zast.nodeid
 } out objitertids is {
     oeid: iterableNodeId n: (ast.nodes.get i: cOp)
@@ -25082,37 +25091,6 @@ objIterIterableTid: function {
             itid = brt
             bareFnId = itid0
         }
-    }
-    if itid.isZero then return (objitertids :itid :bareFnId)
-    if bareFnId.isZero then {
-        canoT: ztypes.tid
-        # a mono, or a type with its own declaration, is already the one; only
-        # a shell is looked up by name -- which in the main unit answers a
-        # same-named type of its own, not one another unit declares
-        if (originTidOf :symtab tid: itid0).isZero.not then {
-            canoT = itid0
-        } else if (ztypecheck.declOfTypeId st: symtab tid: itid0).isZero.not then {
-            canoT = itid0
-        } else {
-            itn0: regNameOf :symtab tid: itid0
-            cano: (ztypecheck.walkLookupTyperefRo
-                scope: ztypes.declid
-                :ast
-                st: symtab
-                unitDecl: ctx.mainUnitId
-                base: itn0.stringView
-            )
-            match (
-                cano
-            ) case some then {
-                canoT = cano
-            } case none then null
-        }
-        hasCallC: (symtab.typing.declHasMemberId
-            parentTypeId: canoT
-            nameId: zast.wellKnown.slot.wkCall
-        )
-        if canoT.isZero.not when hasCallC then itid = canoT
     }
     return (objitertids :itid :bareFnId)
 }
@@ -25647,7 +25625,7 @@ objIterForNamed: function {
     cOp = (symtab.typing.forImplicitIterate.get key: cNid).or d: cOp
     lblV: defVid :symtab nid: (interpPartNodeId n: (ast.nodes.get i: cOp))
     lbl: varCName :ctx vid: lblV name: lblR.stringView
-    tids: objIterIterableTid :ast :symtab :ctx :cOp
+    tids: objIterIterableTid :ast :symtab :cOp
     if tids.itid.isZero then return false
     itid: tids.itid
     bareFnId: tids.bareFnId
@@ -30288,13 +30266,6 @@ recFieldLists: function {
         :ids
         :nameIds
     )
-}
-
-# regNameIs -- compare a type's registry name without materializing it
-# (borrowed typeById view, StringView compare). The none arm mirrors
-# comparing against the empty string.
-regNameIs: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid name: StringView} out bool is {
-    return (symtab.reg.nameIs :tid :name)
 }
 
 # unitClassTid -- the CLASS a unit declares under `nameId`, asked of THAT
@@ -35654,21 +35625,16 @@ loadIoFragment: function {
     }
 }
 
-# ioFileId -- the io File class type id (0 when File is not reachable).
-# Keyed on io's own unit rather than on "not the main unit": the two agree
-# for every program that OPENS io, and disagree for the one that IS io.
+# ioFileId -- the io File class type id: the File io's own unit declares, by id
+# (0 when io is not in the program).
 ioFileId: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view} out ztypes.tid is {
-    last: symtab.reg.nextTid
-    ti: ztypes.tid 1
-    for ti < last loop {
-        if (symtab.reg.typetypeOf typeId: ti) == ztypes.ztypetype.classType when (regNameIs
-            :symtab
-            tid: ti
-            name: "File"
-        ) when (defUnitIdOf :ctx tid: ti) == ctx.ioUnitDecl then return ti
-        ti = ti.next
-    }
-    return ztypes.tid.zero
+    if ctx.ioUnitDecl.isZero then return ztypes.tid.zero
+    return ((symtab.typing.declChildOfId
+        parentTypeId: (ztypecheck.declTypeIdOf st: symtab declId: ctx.ioUnitDecl)
+        nameId: zast.wellKnown.slot.tyFile
+    ).or
+        d: ztypes.tid.zero
+    )
 }
 
 # ioFileLive -- the File class is present AND its read/write param monos (the
@@ -35774,7 +35740,6 @@ isHeapPtrCollection: function {
 # The registry scan is the house pattern and runs once over the handful of
 # rows the table demand-types.
 bindFragTypeTids: function {symtab: zenv.ZSymbolTable.view ctx: Ctx ast: Ast.view} is {
-    last: symtab.reg.nextTid
     i: u64
     n: ctx.fragTypeNames.length
     for i < n loop {
@@ -35783,20 +35748,16 @@ bindFragTypeTids: function {symtab: zenv.ZSymbolTable.view ctx: Ctx ast: Ast.vie
         if tn.length > 0 then {
             unitNameText: ctx.fragUnits.get :i
             uid: unitDeclByName :symtab :ast name: unitNameText.stringView
-            if uid.isZero.not then {
-                ti: ztypes.tid 1
-                for ti < last loop {
-                    if found.isZero when (regNameIs
-                        :symtab
-                        tid: ti
-                        name: tn.stringView
-                    ) then {
-                        du: defUnitIdOf :ctx tid: ti
-                        if du == uid then found = ti
-                    }
-                    ti = ti.next
-                }
-            }
+            # the table names the type by its unit and its name: asked of that
+            # unit, by id
+            if uid.isZero.not then found = ((ztypecheck.resolveUnitChildRo
+                :ast
+                st: symtab
+                unitDecl: uid
+                nameId: (zast.poolFind pool: ast.names text: tn.stringView)
+            ).or
+                d: ztypes.tid.zero
+            )
         }
         ctx.fragTypeTids.append found
         if found.isZero.not then ctx.demandGatedTids.add item: found
@@ -40304,31 +40265,6 @@ emitParsedMethodCall: function {
     return "\{pc}_\{mn}(\{recvExpr}, &\{nameArg})"
 }
 
-# iterClassWithCall -- the class a `.call` receiver's stamp resolves to: the
-# stamp itself when it is an instance, else the canonical type its name
-# looks up, provided that one declares `call`.
-iterClassWithCall: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    rid0: ztypes.tid
-} out ztypes.tid is {
-    if (originTidOf :symtab tid: rid0).isZero.not then return rid0
-    rtn: regNameOf :symtab tid: rid0
-    cano: (ztypecheck.walkLookupTyperefRo
-        scope: ztypes.declid
-        :ast
-        st: symtab
-        unitDecl: ctx.mainUnitId
-        base: rtn.stringView
-    )
-    if cano.none then return rid0
-    ct: cano
-    if (symtab.typing.declHasMemberId parentTypeId: ct nameId: zast.wellKnown.slot.wkCall
-    ) then return ct
-    return rid0
-}
-
 # iterCallValueArg -- the C text of `.call`'s one argument, the per-call
 # input. The resume value goes by REFERENCE when it is a reftype -- the
 # synthesised `.call` declares that parameter as a pointer. Decided by the
@@ -40371,7 +40307,7 @@ emitUserIterCall: function {
     bnid: dottedBaseNodeId :ast n: (ast.nodes.get i: call.callable)
     rid0: stampIdOf :symtab nid: bnid
     if rid0.isZero then return ""
-    iterId: iterClassWithCall :ast :symtab :ctx :rid0
+    iterId: rid0
     if (symtab.reg.typetypeOf typeId: iterId) != ztypes.ztypetype.classType then return ""
     if (originTidOf :symtab tid: iterId).isZero.not then return ""
     if iterId.isZero then return ""
