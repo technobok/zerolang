@@ -544,7 +544,11 @@ Builder: class {
         }
         h: this.closeWritten p: wp
         v: this.pairDoc :body :needed :onBreak :isCall before: wp.before after: h
-        return (this.withComments body: v before: emptyGap after: (this.closerTail entry: wp.entry))
+        t: this.closerTail entry: wp.entry
+        # a comment in front of the enclosing pair's closer ends that pair's
+        # argument list, as one closeWritten takes does
+        if (t.dangling > 0) or (t.trailing > 0) then this.closerCommentAt = this.c.openParens
+        return (this.withComments body: v before: emptyGap after: t)
     }
 
     # openWritten -- skip the openers written at the cursor and count them open.
@@ -574,9 +578,10 @@ Builder: class {
     # IoError)` the last argument ends at the closer and takes it. So by the time
     # this level exits, its own opener can be gone -- and asking for a gap then
     # scans PAST the closer and swallows what follows, which is the next member's
-    # doc comment. Ask only while the opener is still standing. An own-line
-    # comment taken in front of a closer the value did not open ends the
-    # enclosing pair's argument list, which closerCommentAt tells argDoc.
+    # doc comment. Ask only while the opener is still standing. A comment taken
+    # in front of a closer the value did not open -- on a line of its own or
+    # trailing the value's -- ends the enclosing pair's argument list, which
+    # closerCommentAt tells argDoc.
     closeWritten: function {:this p: writtenpair} out gapdocs is {
         stolen: this.c.openParens < (p.entry + p.opened)
         willClose: false
@@ -586,7 +591,8 @@ Builder: class {
         if stolen then takeH = false
         h: emptyGap
         if takeH then h = this.gapDocs cap: 0
-        if p.opened == 0 when h.dangling > 0 then this.closerCommentAt = this.c.openParens
+        commented: (h.dangling > 0) or (h.trailing > 0)
+        if p.opened == 0 when commented then this.closerCommentAt = this.c.openParens
         this.closeParens
         return h
     }
@@ -1020,9 +1026,10 @@ Builder: class {
     # shorthand, or the label and the value. `doc` is 0 when the kid is not an
     # argument at all; `forced` says the argument list has to break -- a first
     # argument that starts a kept marker, any argument carrying a comment, or
-    # a value that took the own-line comment in front of the call's closer,
-    # which would otherwise read as a last argument breaking on its own and
-    # be hugged.
+    # a value that took the comment in front of the call's closer (its own
+    # line's or a line of its own), which would otherwise read as a last
+    # argument breaking on its own and be hugged, or leave the arguments
+    # bunched on the call's line above a closer on its own.
     argDoc: function {:this id: zast.nodeid first: bool} out argdoc is {
         a: this.node :id
         if a.namedoperation.not then return (argdoc doc: 0 trailing: 0 forced: false)
