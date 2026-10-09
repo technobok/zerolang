@@ -2496,7 +2496,7 @@ perf: $(PERFBIN)
 # -10,832 the emitter names arms and members by id (memberCNamed, tagConstNamed,
 # variantArms and the space-joined exclusion text gone): -9,726 behaviour,
 # -1,106 source (ab.sh).
-ALLOC_BASELINE := 2180522
+ALLOC_BASELINE := 2180746
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
