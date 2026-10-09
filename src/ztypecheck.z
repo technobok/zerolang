@@ -24382,7 +24382,7 @@ keyParamAdmits: function {
 } out bool is {
     tdecl: declOfTypeId :st tid: mid
     if tdecl.isZero then return true
-    pn: nameIdOf :ast name: (st.reg.nameOf tid: pT).stringView
+    pn: st.reg.genericParamNameOfTid :tdecl ptid: pT
     cd: st.reg.genericParamConstraintOf :tdecl paramName: pn
     if cd.kind == ztypes.constraintkind.none then return true
     if cd.kind == ztypes.constraintkind.other then {
@@ -26448,7 +26448,6 @@ appendRowNames: function {
 # them from the argument's own arguments (`ptNames`/`ptTids`).
 classifyInferenceRows: function {
     st: zenv.ZSymbolTable.view
-    ast: Ast.view
     tk: ztypes.declid
     childNames: (ListVal zast.nameid).view
     rowTids: (ListVal ztypes.tid).view
@@ -26460,9 +26459,10 @@ classifyInferenceRows: function {
     ci3: u64
     for ci3 < rowTids.length loop {
         cid3: rowTids.get i: ci3
-        pnm3: st.reg.nameViewOf tid: cid3
-        pid3: zast.poolFind pool: ast.names text: pnm3
-        if pid3.isZero.not when (st.reg.isGenericParamOf tdecl: tk name: pid3) then {
+        # a row typed by one of the template's own parameters, by id: a type
+        # merely spelled like one (`lib.T`) is no parameter
+        pid3: st.reg.genericParamNameOfTid tdecl: tk ptid: cid3
+        if pid3.isZero.not then {
             fNames.append (childNames.get i: ci3)
             fParams.append pid3
         } else if (st.reg.isPartialOf tid: cid3) then {
@@ -26556,7 +26556,6 @@ inferGenericConstruction: function {
     ptTids: ListVal ztypes.tid
     (classifyInferenceRows
         :st
-        :ast
         :tk
         :childNames
         rowTids: cIds3
@@ -29116,70 +29115,6 @@ bareFnRefErrorFor: function {
         hint: eh
         :width
     )
-}
-
-# canonicalChildBase -- a cross-unit narrowed match-arm base can be a shell id
-# (distinct from the canonical defining-unit id) whose member children are not
-# registered. Find a same-named type in any unit's resolved scope that has the
-# named member; 0 when none.
-canonicalChildBase: function {
-    ast: Ast.view
-    st: zenv.ZSymbolTable
-    bt: ztypes.tid
-    childId: zast.nameid
-} out ztypes.tid is {
-    nm: st.reg.nameOf tid: bt
-    if nm.length == 0 then return ztypes.tid.zero
-    nmId: nameIdOf :ast name: nm.stringView
-    uks: ListVal zast.nameid
-    {
-        puds: programUnitDecls :st
-        for each ud: puds loop {
-            unm: (declNameIdOf
-                :st
-                declId: ud
-            )
-            uks.append unm
-        }
-    }
-    cands: ListVal ztypes.tid
-    uki: u64
-    ukn: uks.length
-    for uki < ukn loop {
-        uk: uks.get i: uki
-        uq4z: unitDeclOfName :st nameId: uk
-        ro: (resolvedByIds
-            :st
-            :ast
-            unitDecl: uq4z
-            name: nmId
-        )
-        match (
-            ro
-        ) case some then {
-            if ro != bt then cands.append ro
-        } case none then null
-        uki = uki + 1
-    }
-    found: ztypes.tid
-    ci: u64
-    cnn: cands.length
-    for ci < cnn loop {
-        if found.isZero then {
-            cand: cands.get i: ci
-            rc: (st.typing.declChildOfId
-                parentTypeId: cand
-                nameId: childId
-            )
-            match (
-                rc
-            ) case some then {
-                found = cand
-            } case none then null
-        }
-        ci = ci + 1
-    }
-    return found
 }
 
 # markDataRuntimeIndexed -- a data block accessed via `.index` / `.array` needs
@@ -32422,10 +32357,6 @@ checkDottedOn: function {
     if (refuseTypedefArmConstructor :st :unitDecl :ast :dp :tdT :bt :cnId) then return ztypes.tid
     tacc: checkTagAccessor :st :unitDecl :ast :dp :bt :cnId
     if tacc.handled then return tacc.tid
-    # A cross-unit narrowed match-arm base can be a SHELL whose member
-    # children are not registered (cross-unit demand mints a shell id distinct
-    # from the canonical defining-unit id); on a member miss retarget the base
-    # to a same-named type in another unit's resolved scope that has the member.
     forceMemberOf :st :ast parentTypeId: bt nameId: cnId
     mo: st.typing.declChildOfId parentTypeId: bt nameId: cnId
     preHas: false
@@ -32437,32 +32368,21 @@ checkDottedOn: function {
     # the partial a member is read through to its template, whose own type
     # arguments the member's type takes back (partialSubstituted)
     viaPartial: ztypes.tid
-    if preHas.not then {
-        udT: unitDeclOfTid :st tid: bt
-        if udT.isZero then {
-            cb: canonicalChildBase :ast :st :bt childId: cnId
-            if cb.isZero.not then {
-                bt = cb
-                forceMemberOf :st :ast parentTypeId: bt nameId: cnId
-                mo = st.typing.declChildOfId parentTypeId: bt nameId: cnId
-            }
-        }
-        # A partial carries no members of its own: getOrMintSpec skips the
-        # clone for it, because an argument that is still a generic parameter
-        # has nothing concrete to substitute. Read through to the TEMPLATE,
-        # whose members ARE the answer while the template body is being
-        # checked; the per-instance walk asks the completed spec instead.
-        if (st.reg.isPartialOf tid: bt) then {
-            pob9: st.reg.genericOriginOf tid: bt
-            if pob9.isZero.not then {
-                viaPartial = bt
-                bt = pob9
-                forceMemberOf :st :ast parentTypeId: bt nameId: cnId
-                mo = st.typing.declChildOfId parentTypeId: bt nameId: cnId
-                # an element read by index (`a.1`) is no member the template
-                # declares: the per-instance walk types it on the completed spec
-                if mo.none when (isNumericLiteralNameAt :ast ref: cnId) then return ztypes.tid
-            }
+    # A partial carries no members of its own: getOrMintSpec skips the clone
+    # for it, because an argument that is still a generic parameter has nothing
+    # concrete to substitute. Read through to the TEMPLATE, whose members ARE
+    # the answer while the template body is being checked; the per-instance
+    # walk asks the completed spec instead.
+    if preHas.not when (st.reg.isPartialOf tid: bt) then {
+        pob9: st.reg.genericOriginOf tid: bt
+        if pob9.isZero.not then {
+            viaPartial = bt
+            bt = pob9
+            forceMemberOf :st :ast parentTypeId: bt nameId: cnId
+            mo = st.typing.declChildOfId parentTypeId: bt nameId: cnId
+            # an element read by index (`a.1`) is no member the template
+            # declares: the per-instance walk types it on the completed spec
+            if mo.none when (isNumericLiteralNameAt :ast ref: cnId) then return ztypes.tid
         }
     }
     dn9: derivedInequalityMember :st :ast :bt :cnId :mo
@@ -37323,8 +37243,9 @@ partialForElement: function {
     if rv.isZero or ((st.reg.genericArgCount specId: rv) == 0) then return fe
     et: st.reg.genericTypeArgAt specId: rv ordinal: 0
     if (st.reg.typetypeOf typeId: et) != ztypes.ztypetype.genericParam then return fe
-    pn: nameIdOf :ast name: (st.reg.nameOf tid: et).stringView
-    ordo: st.reg.paramOrdinalOf tdecl: (declOfTypeId :st tid: og) paramName: pn
+    otd: declOfTypeId :st tid: og
+    pn: st.reg.genericParamNameOfTid tdecl: otd ptid: et
+    ordo: st.reg.paramOrdinalOf tdecl: otd paramName: pn
     match (
         ordo
     ) case some then {
@@ -58456,7 +58377,7 @@ reportConstantConstraintArg: function {
             :ast
             :st
             tdecl: (declOfTypeId :st tid: fid)
-            paramName: (nameIdOf :ast name: (st.reg.nameOf tid: pt).stringView)
+            paramName: (st.reg.genericParamNameOfTid tdecl: (declOfTypeId :st tid: fid) ptid: pt)
             argTid: at
         )
         note: ""
