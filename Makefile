@@ -2676,6 +2676,7 @@ emitter-guard:
 	e9=$$(grep -c 'monoOriginName' src/zemitterc.z); \
 	e10=$$(grep -vE '^[[:space:]]*#' src/zemitterc.z | grep -cE '\.data\.[a-z]'); \
 	e11=$$(grep -c 'poolFind' src/zemitterc.z); \
+	e12=$$(grep -cE 'aliasChildName :ast|aliasOrChild :ast' src/zemitterc.z); \
 	g1=$$(grep -c 'composeCname' src/ztypes.z); \
 	g2=$$(grep -cF 'z_t\{' src/zemitterc.z); \
 	fail=0; \
@@ -2694,13 +2695,14 @@ emitter-guard:
 	chk "monoOriginName" "$$e9" 0; \
 	chk "literal arm members (.data.<arm>; memberC spells them)" "$$e10" 0; \
 	chk "poolFind (a re-intern of a name the emitter held as an id, or table text)" "$$e11" 12; \
+	chk "member-name TEXT (C spelling and natives.tbl keys only; look members up by aliasChildNameId)" "$$e12" 18; \
 	if [ "$$fail" = "1" ]; then \
 	  echo "  A new name-resolution site was added to the emitter. Read the typechecker"; \
 	  echo "  stamp (atomVariableId/atomUnitDefId/callKind), the canonical child id, or"; \
 	  echo "  ctxCname instead of resolving by name."; \
 	  exit 1; \
 	fi; \
-	echo "emitter-guard OK: resolvedByKey=$$e1 walkLookup=$$e2 resolveByName=$$e3 userFnId=$$e4 ownText=$$e5 nameOf=$$e6 mangleVar=$$e7 readText=$$e8 monoOrigin=$$e9 armLiteral=$$e10 poolFind=$$e11"
+	echo "emitter-guard OK: resolvedByKey=$$e1 walkLookup=$$e2 resolveByName=$$e3 userFnId=$$e4 ownText=$$e5 nameOf=$$e6 mangleVar=$$e7 readText=$$e8 monoOrigin=$$e9 armLiteral=$$e10 poolFind=$$e11 memberText=$$e12"
 
 # frontend-guard -- the front end knows no backend. Everything before emission
 # -- the lexer, parser and AST, the type checker and its model, the symbol table
