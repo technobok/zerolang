@@ -19133,6 +19133,18 @@ createUnitMono: function {
     return monoId
 }
 
+# fnReturnTyperefOf -- the node of function `op`'s declared return type-ref, 0
+# when it declares none.
+fnReturnTyperefOf: function {op: astnode.view} out zast.nodeid is {
+    match (
+        op
+    ) case functiondef then {
+        return op.returntype
+    } else {
+        return zast.nodeid
+    }
+}
+
 # fnReturnBaseNameIdOf -- the base type name id of function `op`'s declared
 # return typeref -- the head of a form like `List X`; zero when absent. Completes
 # substituted signatures whose template return was still unresolved at
@@ -19167,6 +19179,9 @@ registerMonoFnParams: function {
             ppm: ast.nodes.get i: ppmId
             if ppm.namedoperation then {
                 pptn: atomNameId :ast n: (ast.nodes.get i: ppm.operation)
+                # the function's own generic parameter is nearer than the unit's
+                if (fnDeclaresGeneric :ast op: (ast.nodes.get i: op.nodeid) nameId: pptn
+                ) then continue
                 ppgo: subs.get key: pptn
                 match (
                     ppgo
@@ -19237,6 +19252,46 @@ unitMonoIdSubs: function {
     }
 }
 
+# unitTemplateKeyOf -- the key a generic unit instance's substitutions hold
+# `tid` under: a generic parameter of the template `tdecl`, or a type the
+# template declares, by its name; 0 for a type declared anywhere else,
+# whatever it is spelled (`lib.T` is not the template's `T`).
+unitTemplateKeyOf: function {
+    st: zenv.ZSymbolTable.view
+    tdecl: ztypes.declid
+    tid: ztypes.tid
+} out zast.nameid is {
+    if tdecl.isZero or tid.isZero then return zast.nameid
+    pn: st.reg.genericParamNameOfTid :tdecl ptid: tid
+    if pn.isZero.not then return pn
+    d: declOfTypeId :st :tid
+    if d.isZero then return zast.nameid
+    if (declParentIdOf :st declId: d) != tdecl then return zast.nameid
+    return (st.typing.decls.get i: d).name
+}
+
+# fnDeclaresGeneric -- the function definition `op` declares `nameId` as its own
+# generic parameter (`as { t: anyval.generic }`).
+fnDeclaresGeneric: function {ast: Ast.view op: astnode.view nameId: zast.nameid} out bool is {
+    if nameId.isZero then return false
+    match (
+        op
+    ) case functiondef then {
+        k: u64
+        for k < op.asItems.count loop {
+            gi: argRefAt :ast nid: (zast.kidAt kids: ast.kids span: op.asItems i: k)
+            k = k + 1
+            if gi.name == nameId when (isGenericParam :ast op: (ast.nodes.get i: gi.operation)
+            ) then {
+                return true
+            }
+        }
+        return false
+    } else {
+        return false
+    }
+}
+
 # fillMonoMethodSignature -- copy a template method's parameters and return type
 # into the mono's method, with the instantiation's arguments substituted for the
 # generic parameters the template names.
@@ -19249,12 +19304,12 @@ fillMonoMethodSignature: function {
     srcId: ztypes.tid
     newFnId: ztypes.tid
     subs: (IdMapV zast.nameid v: ztypes.tid).view
-    gpNames: (IdMapV zast.nameid v: bool).view
     # the unit instance and its template, whose arguments complete a partial
     # parameter type
     monoId: ztypes.tid
     tplId: ztypes.tid
 } is {
+    tdeclU: declOfTypeId :st tid: tplId
     otBm: srcId
     idSubs: IdMapV ztypes.tid v: ztypes.genericarg
     idSubsBuilt: false
@@ -19278,19 +19333,8 @@ fillMonoMethodSignature: function {
                 idSubsBuilt = true
                 target = completeUnitMonoPartial :st :ast :rf partialTid: chId :idSubs
             }
-            ctnT: st.reg.nameOf tid: chId
-            ctn: nameIdOf :ast name: ctnT.stringView
-            cgo: gpNames.get key: ctn
-            match (
-                cgo
-            ) case some then {
-                cg: subs.get key: ctn
-                match (
-                    cg
-                ) case some then {
-                    target = cg
-                } case none then null
-            } case none then null
+            ctn: unitTemplateKeyOf :st tdecl: tdeclU tid: chId
+            if ctn.isZero.not then target = (subs.get key: ctn).or d: target
             (st.typing.setMemberType
                 parentTypeId: newFnId
                 nameId: chName
@@ -19335,19 +19379,8 @@ fillMonoMethodSignature: function {
             rtFull: completeUnitMonoPartial :st :ast :rf partialTid: rto :idSubs
             rtv = rtFull
         }
-        rtnT: st.reg.nameOf tid: rtv
-        rtn: nameIdOf :ast name: rtnT.stringView
-        rgo: gpNames.get key: rtn
-        match (
-            rgo
-        ) case some then {
-            rg: subs.get key: rtn
-            match (
-                rg
-            ) case some then {
-                rtv = rg
-            } case none then null
-        } case none then null
+        rtn: unitTemplateKeyOf :st tdecl: tdeclU tid: rtv
+        if rtn.isZero.not then rtv = (subs.get key: rtn).or d: rtv
         st.reg.setReturnType typeId: newFnId value: rtv
     } else {
         # template return unresolved at signature time
@@ -19356,18 +19389,35 @@ fillMonoMethodSignature: function {
             :ast
             op: (ast.nodes.get i: fmNode.operation)
         )
+        # a name the function declares as its own generic parameter is that
+        # parameter, nearer than any of the unit's
+        if (fnDeclaresGeneric :ast op: (ast.nodes.get i: fmNode.operation) nameId: rnmId
+        ) then return
+        if rnmId.isZero then {
+            # a qualified return (`out lib.T`) names a type declared elsewhere,
+            # resolved where the template writes it
+            rtr: fnReturnTyperefOf op: (ast.nodes.get i: fmNode.operation)
+            if rtr.isZero.not when (ast.nodes.get i: rtr).dottedpath then {
+                qt: (resolveTyperefShell
+                    :st
+                    :ast
+                    unitDecl: tmplUnitName
+                    scope: rf
+                    nid: rtr
+                    thisName: ""
+                )
+                if qt.isZero.not then st.reg.setReturnType typeId: newFnId value: qt
+            }
+        }
         if rnmId.isZero.not then {
-            rgo2: gpNames.get key: rnmId
+            # written bare in the template, the name is the unit's own -- a
+            # parameter, or a type it declares -- before anything wider
+            rgo2: subs.get key: rnmId
             rid2: ztypes.tid
             match (
                 rgo2
             ) case some then {
-                sg2: subs.get key: rnmId
-                match (
-                    sg2
-                ) case some then {
-                    rid2 = sg2
-                } case none then null
+                rid2 = rgo2
             } case none then {
                 rlo2: (walkLookupTyperefById
                     :st
@@ -19401,7 +19451,6 @@ buildUnitMonoMember: function {
     tplId: ztypes.tid
     fmNode: argref
     subs: (IdMapV zast.nameid v: ztypes.tid).view
-    gpNames: (IdMapV zast.nameid v: bool).view
 } is {
     if (isFunctionDefOp op: (ast.nodes.get i: fmNode.operation)) then {
         fn: zast.nameTextCopy :ast ref: fmNode.name
@@ -19481,7 +19530,6 @@ buildUnitMonoMember: function {
                 :srcId
                 :newFnId
                 :subs
-                :gpNames
                 :monoId
                 :tplId
             )
@@ -19508,7 +19556,6 @@ mintUnitNestedInstances: function {
     monoId: ztypes.tid
     bodyIds: zast.kidspan
     allSubs: (IdMapV zast.nameid v: ztypes.tid)
-    gpNames: (IdMapV zast.nameid v: bool)
 } is {
     copies: IdMapV ztypes.tid v: ztypes.tid
     vi: u64
@@ -19528,7 +19575,6 @@ mintUnitNestedInstances: function {
                 )
                 st.typing.setMemberType parentTypeId: monoId nameId: nm.name childTypeId: inst
                 allSubs.set key: nm.name value: inst
-                gpNames.set key: nm.name value: true
                 copies.set key: (st.reg.genericOriginOf tid: inst) value: inst
             }
         }
@@ -19657,24 +19703,12 @@ buildUnitMono: function {
     td: declOfTypeId :st tid: tplId
     if td.isZero.not then rf = td
     bodyIds: zast.unitBodyIdsAt :ast unitId: templateOpId
-    gpNames: IdMapV zast.nameid v: bool
     # the substitutions the instance's signatures take: its arguments, and each
     # type the unit declares as this instance's own copy of it
     allSubs: IdMapV zast.nameid v: ztypes.tid
     for each se: subs.iterateItems loop allSubs.set key: se.key value: se.value
     {
-        vx169: u64
-        for vx169 < bodyIds.count loop {
-            gmId: zast.kidAt kids: ast.kids span: bodyIds i: vx169
-            vx169 = vx169 + 1
-            gm: argRefAt :ast nid: gmId
-            if gm.nid.isZero.not when (isGenericParam :ast op: (ast.nodes.get i: gm.operation)
-            ) then {
-                gv: true
-                gpNames.set key: gm.name value: gv
-            }
-        }
-        mintUnitNestedInstances :st :ast :rf :tmplUnitName :monoId :bodyIds :allSubs :gpNames
+        mintUnitNestedInstances :st :ast :rf :tmplUnitName :monoId :bodyIds :allSubs
         vx179: u64
         for vx179 < bodyIds.count loop {
             fm: zast.kidAt kids: ast.kids span: bodyIds i: vx179
@@ -19691,7 +19725,6 @@ buildUnitMono: function {
                     :tplId
                     :fmNode
                     subs: allSubs
-                    :gpNames
                 )
             }
         }
@@ -21924,13 +21957,14 @@ elidedArgFallbackTid: function {
 
 # substitutedMemberTid -- the type a template member resolves to for this
 # instance: the id the argument map gives it, a respecialised nested generic,
-# or the substitution its own type name selects; the member's own type when
-# nothing substitutes.
+# or, for a type declared beside the template (a generic unit's own types),
+# the instance's copy of it; the member's own type when nothing substitutes.
 substitutedMemberTid: function {
     ast: Ast
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     rf: ztypes.declid
+    templateId: ztypes.tid
     chId: ztypes.tid
     subs: (IdMapV zast.nameid v: ztypes.tid).view
     idSubs: (IdMapV ztypes.tid v: ztypes.genericarg)
@@ -21945,10 +21979,30 @@ substitutedMemberTid: function {
         rsp: respecialize :st scope: rf :ast :unitDecl specTid: chId :idSubs
         if rsp.isZero.not then target = rsp
     }
-    ctnT: st.reg.nameOf tid: chId
-    ctn: nameIdOf :ast name: ctnT.stringView
-    if target == chId then target = (subs.get key: ctn).or d: target
+    if target == chId then {
+        sk: siblingKeyOf :st :templateId tid: chId
+        if sk.isZero.not then target = (subs.get key: sk).or d: target
+    }
     return target
+}
+
+# siblingKeyOf -- the key an instance's substitutions hold `tid` under when it
+# belongs to the template `templateId`: one of its generic parameters, or a type
+# declared beside it (in the same generic unit); 0 for a type declared anywhere
+# else, whatever it is spelled.
+siblingKeyOf: function {
+    st: zenv.ZSymbolTable.view
+    templateId: ztypes.tid
+    tid: ztypes.tid
+} out zast.nameid is {
+    td: declOfTypeId :st tid: templateId
+    if td.isZero then return zast.nameid
+    pn: st.reg.genericParamNameOfTid tdecl: td ptid: tid
+    if pn.isZero.not then return pn
+    d: declOfTypeId :st :tid
+    if d.isZero then return zast.nameid
+    if (declParentIdOf :st declId: d) != (declParentIdOf :st declId: td) then return zast.nameid
+    return (st.typing.decls.get i: d).name
 }
 
 # mintMonoMember -- give one member of a monomorphised type its substituted
@@ -21972,7 +22026,7 @@ mintMonoMember: function {
     chId: ztypes.tid
 } out bool is {
     monoNeedsDtor: false
-    target: substitutedMemberTid :ast :st :unitDecl :rf :chId :subs :idSubs
+    target: substitutedMemberTid :ast :st :unitDecl :rf :templateId :chId :subs :idSubs
     # A VALTYPE HOLDS VALUE DATA ONLY at instantiation: a bound the kinds do
     # not classify (a facet) admits any argument, so a reftype can reach a
     # record field or a variant arm here that refuseReftypeBounds could not
@@ -22436,7 +22490,7 @@ mintMonoTypedefBase: function {
         st.typing.typedefClash.set key: mid value: cl
         st.typing.quietBounds = true
     }
-    target: substitutedMemberTid :ast :st :unitDecl :rf chId: tb :subs :idSubs
+    target: substitutedMemberTid :ast :st :unitDecl :rf :templateId chId: tb :subs :idSubs
     st.typing.quietBounds = prevQuiet
     st.typing.typedefBaseTid.set key: mt value: target
     bn: st.typing.typedefBaseName.get key: templateId
@@ -32668,7 +32722,16 @@ partialSubstituted: function {
         )
     }
     if subs.length == 0 then return tid
-    return (substitutedMemberTid :ast :st :unitDecl rf: tdecl chId: tid :subs :idSubs)
+    return (substitutedMemberTid
+        :ast
+        :st
+        :unitDecl
+        rf: tdecl
+        templateId: (st.reg.genericOriginOf tid: partial)
+        chId: tid
+        :subs
+        :idSubs
+    )
 }
 
 # declaresOwnInequality -- the member read is a `!=` this type answers itself,
