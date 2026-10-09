@@ -6734,10 +6734,6 @@ orderSettle: function {
     slot: ctx.orderPendSlot.get :i
     fid: ctx.orderPendFid.get :i
     pid: ctx.orderPendPid.get :i
-    pn: (zast.poolTextAt
-        pool: ast.names
-        ref: (ctx.orderPendName.get :i)
-    )
     vnid: ctx.orderPendNid.get :i
     # a part no declared parameter types is typed as its own expression, read
     # through a comma so a `const` source still gives an assignable temp. A
@@ -6749,7 +6745,14 @@ orderSettle: function {
         n: (ast.nodes.get i: vnid)
     )
     if ct.length == 0 then ct = "__typeof__(((void)0, \{text}))"
-    if fid.isZero.not then ct = paramCType :ast :symtab :ctx :fid pname: pn.stringView :pid
+    if fid.isZero.not then ct = (paramCType
+        :ast
+        :symtab
+        :ctx
+        :fid
+        pnameId: (ctx.orderPendName.get :i)
+        :pid
+    )
     if given.length > 0 then ct = given.take
     if ct.length == 0 then {
         orderSetSlot :ctx :st :slot :text
@@ -7437,7 +7440,7 @@ instanceMethodArgValue: function {
     ctx: Ctx
     call: zast.callrow.view
     mco: ztypes.tid
-    posParamName: StringView
+    posParamNameId: zast.nameid
     posParamId: ztypes.tid
     posIdx0: u64
     av: String.borrow
@@ -7446,8 +7449,8 @@ instanceMethodArgValue: function {
     # the label and the parameter name are the same text, but a reftype argument
     # may appear only once in a call -- projecting `.stringView` at each site
     # would cost two temporaries.
-    pnameL: posParamName
-    ca: ctorArgFor :ast :call label: posParamName posIdx: positionalIdx
+    pnameL: zast.nameTextAt :ast ref: posParamNameId
+    ca: ctorArgFor :ast :call label: pnameL.stringView posIdx: positionalIdx
     isLbl9b: ca.labelled
     iiVal: (ctorInterpArgAt
         :ast
@@ -7455,7 +7458,7 @@ instanceMethodArgValue: function {
         :ctx
         aid: ca.nid
         fid: mco
-        pname: pnameL
+        pnameId: posParamNameId
         pid: posParamId
     )
     atomVarId: String
@@ -7475,9 +7478,9 @@ instanceMethodArgValue: function {
             :symtab
             :ctx
             :call
-            label: posParamName
+            label: pnameL.stringView
         )
-        avNd = ctorArgNodeByLabel :ast :call label: posParamName
+        avNd = ctorArgNodeByLabel :ast :call label: pnameL.stringView
         if isLbl9b.not then {
             pv: ctorArgByPosition :ast :symtab :ctx :call idx: positionalIdx
             if pv.length > 0 then {
@@ -7505,20 +7508,19 @@ instanceMethodArgPtr: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     mco: ztypes.tid
-    posParamName: StringView
+    posParamNameId: zast.nameid
     posParamId: ztypes.tid
     usedInterp: bool
     av: StringView
     # the argument's node, 0 for an interpolated one
     avNd: zast.nodeid
 } out instargptr is {
-    pTake: paramTakesArg :ast :symtab fid: mco pname: posParamName
+    pTake: paramTakesArg :symtab fid: mco pnameId: posParamNameId
     ptra: (paramTakesPointer
-        :ast
         :symtab
         :ctx
         fid: mco
-        pname: posParamName
+        pnameId: posParamNameId
         pid: posParamId
         takesArg: pTake
     )
@@ -7543,7 +7545,7 @@ instanceMethodArg: function {
     ctx: Ctx
     call: zast.callrow.view
     mco: ztypes.tid
-    posParamName: StringView
+    posParamNameId: zast.nameid
     posParamId: ztypes.tid
     posIdx0: u64
     args: String.borrow
@@ -7555,7 +7557,7 @@ instanceMethodArg: function {
         :ctx
         :call
         :mco
-        :posParamName
+        :posParamNameId
         :posParamId
         :posIdx0
         av: atomVarId
@@ -7565,7 +7567,7 @@ instanceMethodArg: function {
         :symtab
         :ctx
         :mco
-        :posParamName
+        :posParamNameId
         :posParamId
         usedInterp: avr.usedInterp
         av: atomVarId.stringView
@@ -7896,14 +7898,13 @@ orderMethodParam: function {
         # a parameter the call leaves out is its declared default
         one.append (paramDefaultText :ast :symtab :ctx cco: mco nameId: pname :pid)
     } else {
-        pnB: zast.poolTextAt pool: ast.names ref: pname
         (instanceMethodArg
             :ast
             :symtab
             :ctx
             :call
             :mco
-            posParamName: pnB.stringView
+            posParamNameId: pname
             posParamId: pid
             posIdx0: posIdx
             args: one
@@ -10515,13 +10516,13 @@ emitInterpArgForParam: function {
     ctx: Ctx
     n: astnode.view
     fid: ztypes.tid
-    pname: StringView
+    pnameId: zast.nameid
     pid: ztypes.tid
 } out String is {
     sx: emitInterpArgExpr :ast :symtab :ctx :n
     if sx.length == 0 then return ""
     isTake: false
-    if pid == ctx.strTid when (paramTakesArg :ast :symtab :fid :pname) then isTake = true
+    if pid == ctx.strTid when (paramTakesArg :symtab :fid :pnameId) then isTake = true
     nmH: (hoistForAddress
         :ast
         :symtab
@@ -11047,7 +11048,7 @@ userCreateCallC: function {
                 :ctx
                 :fid
                 pinId: (pids.get i: pi)
-                pinNm: pname.stringView
+                pinNmId: (pidsNm.get i: pi)
                 pname: (pidsNm.get i: pi)
                 argOpNode: (ast.nodes.get i: aNid)
                 slot: pi
@@ -11571,7 +11572,7 @@ createArgText: function {
     nameId: zast.nameid
     # the parameter's type
     pid: ztypes.tid
-    pname: StringView
+    pnameId: zast.nameid
 } out String is {
     if ca.nid.isZero then return (paramDefaultText :ast :symtab :ctx :cco :nameId :pid)
     return (userFnArgText
@@ -11580,7 +11581,7 @@ createArgText: function {
         :ctx
         fid: cco
         pinId: pid
-        pinNm: pname
+        pinNmId: pnameId
         argOpNode: (ast.nodes.get i: ca.nid)
     )
 }
@@ -11653,7 +11654,7 @@ userCreateCtor: function {
             :ca
             nameId: (cpiNm.get i: ci)
             pid: (cpi.get i: ci)
-            pname: cpname.stringView
+            pnameId: (cpiNm.get i: ci)
         )
         wr: ctx.orderWrit.get i: wbase + ci
         constant: true
@@ -12126,11 +12127,11 @@ ctorInterpArgAt: function {
     ctx: Ctx
     aid: zast.nodeid
     fid: ztypes.tid
-    pname: StringView
+    pnameId: zast.nameid
     pid: ztypes.tid
 } out String is {
     if aid.isZero then return ""
-    return (emitInterpArgForParam :ast :symtab :ctx n: (ast.nodes.get i: aid) :fid :pname :pid)
+    return (emitInterpArgForParam :ast :symtab :ctx n: (ast.nodes.get i: aid) :fid :pnameId :pid)
 }
 
 # argSlotList -- per call-argument (in call order), the index of the parameter
@@ -12561,7 +12562,17 @@ emitMetaCreateCall: function {
             fname: fnames.get i: fi
             wr: ctx.orderWrit.get i: wbase + fi
             mk: pendingHoistMark :ctx
-            av: metaCreateFieldText :ast :symtab :ctx :call :et fname: fname.stringView :fids :fi
+            av: (metaCreateFieldText
+                :ast
+                :symtab
+                :ctx
+                :call
+                :et
+                fname: fname.stringView
+                fnameId: (fidsNm.get i: fi)
+                :fids
+                :fi
+            )
             ptrField: (fieldIsReftypePtr
                 :symtab
                 :ctx
@@ -12634,6 +12645,8 @@ metaCreateFieldText: function {
     call: zast.callrow.view
     et: ztypes.tid
     fname: StringView
+    # the field's name, interned
+    fnameId: zast.nameid
     fids: (ListVal ztypes.tid).view
     fi: u64
 } out String is {
@@ -12644,10 +12657,9 @@ metaCreateFieldText: function {
         # (the receiver's own field, a field of a parameter) is passed
         # by address
         ffidL: fids.get i: fi
-        if (symtab.typing.declIsBorrowedField
-            pool: ast.names
+        if (symtab.typing.declIsBorrowedFieldId
             parentTypeId: et
-            name: fname
+            nameId: fnameId
         ) when (borrowedFieldHeldByPointer
             :symtab
             :ctx
@@ -12678,20 +12690,18 @@ metaCreateFieldText: function {
             pmsg7: "zemitterc: unspellable field type id \{ffid}"
             panic pmsg7
         }
-        if (symtab.typing.declIsBorrowedField
-            pool: ast.names
+        if (symtab.typing.declIsBorrowedFieldId
             parentTypeId: et
-            name: fname
+            nameId: fnameId
         ) when (borrowedFieldHeldByPointer
             :symtab
             :ctx
             fid: ffid
         ) then {
             ffctP: (storedFieldPtrC
-                :ast
                 :symtab
                 ownerTid: et
-                :fname
+                :fnameId
                 fct: ffct.stringView
             )
             ffct = ffctP.take
@@ -12805,14 +12815,13 @@ emitFnCallWithFid: function {
         if a.namedoperation then {
             slot9g: slots9g.get i: ai
             if slot9g < fpNames.length then {
-                fpnO: fpNames.get i: slot9g
                 (orderUserFnArg
                     :ast
                     :symtab
                     :ctx
                     :fid
                     pinId: (fpIds.get i: slot9g)
-                    pinNm: fpnO.stringView
+                    pinNmId: (fpIds9Nm.get i: slot9g)
                     pname: (fpIds9Nm.get i: slot9g)
                     argOpNode: (ast.nodes.get i: a.operation)
                     slot: slot9g
@@ -13448,14 +13457,13 @@ orderFnptrArg: function {
 } is {
     if slot < argIds.length then {
         pnm: argNmIds.get i: slot
-        pnt: zast.poolTextAt pool: ast.names ref: pnm
         (orderUserFnArg
             :ast
             :symtab
             :ctx
             fid: fnTid
             pinId: (argIds.get i: slot)
-            pinNm: pnt.stringView
+            pinNmId: pnm
             pname: pnm
             argOpNode: op
             :slot
@@ -13637,11 +13645,10 @@ standInText: function {
 # protocol or a view union as the handle it is (passesByValue), a Set or a Map
 # as the heap pointer it already is.
 paramTakesPointer: function {
-    ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     fid: ztypes.tid
-    pname: StringView
+    pnameId: zast.nameid
     pid: ztypes.tid
     takesArg: bool
 } out bool is {
@@ -13649,22 +13656,21 @@ paramTakesPointer: function {
     # needs `&`. Only this leg is added, not the whole definition-side
     # predicate: a Map/Set argument is already a pointer here and must not
     # be addressed again.
-    if (paramIsReceiverName :ast :symtab :fid :pname) then return true
-    if (markedValtypeRefParam :ast :symtab :fid :pname :pid) then return true
+    if (paramIsReceiverName :symtab :fid :pnameId) then return true
+    if (markedValtypeRefParam :symtab :fid :pnameId :pid) then return true
     if takesArg.not when (isReftypeParam
         :symtab
         :ctx
         tid: pid
     ) then return true
     if (isBorrowStringParam
-        :ast
         :symtab
         :ctx
         :fid
-        :pname
+        :pnameId
         :pid
     ) then return true
-    return (isListPtrParam :ast :symtab :ctx :fid :pname tid: pid)
+    return (isListPtrParam :symtab :ctx :fid :pnameId tid: pid)
 }
 
 # boxAddressArg -- a conformance box handed to a facet parameter marked
@@ -13700,7 +13706,7 @@ userFnArgText: function {
     ctx: Ctx
     fid: ztypes.tid
     pinId: ztypes.tid
-    pinNm: StringView
+    pinNmId: zast.nameid
     argOpNode: astnode.view
 } out String is {
     ctx.lastArgByPtr = false
@@ -13710,7 +13716,7 @@ userFnArgText: function {
         :ctx
         n: argOpNode
         :fid
-        pname: pinNm
+        pnameId: pinNmId
         pid: pinId
     )
     atomVarId: String
@@ -13741,7 +13747,7 @@ userFnArgText: function {
         if spec.length > 0 then {
             atomVarId = spec.take
             projd = true
-            if (markedValtypeRefParam :ast :symtab :fid pname: pinNm pid: ppid) then {
+            if (markedValtypeRefParam :symtab :fid pnameId: pinNmId pid: ppid) then {
                 atomVarId = boxAddressArg :ast :symtab :ctx box: atomVarId.stringView tid: ppid
                 ctx.lastArgByPtr = true
             }
@@ -13750,13 +13756,12 @@ userFnArgText: function {
     if projd then return atomVarId
     # the parameter's mode: by pointer (addressed unless already one), or a
     # borrow hoist of the value
-    pTake8: paramTakesArg :ast :symtab :fid pname: pinNm
+    pTake8: paramTakesArg :symtab :fid pnameId: pinNmId
     ctx.lastArgByPtr = (paramTakesPointer
-        :ast
         :symtab
         :ctx
         :fid
-        pname: pinNm
+        pnameId: pinNmId
         pid: pinId
         takesArg: pTake8
     )
@@ -13814,17 +13819,13 @@ emitUserFnCall: function {
             argOpNode: ast.nodes.get i: a.operation
             slot9b: slots.get i: ai8
             if slot9b < fpIdsNm.length then {
-                pinNmB: (zast.poolTextAt
-                    pool: ast.names
-                    ref: (fpIdsNm.get i: slot9b)
-                )
                 (orderUserFnArg
                     :ast
                     :symtab
                     :ctx
                     :fid
                     pinId: (fpIds.get i: slot9b)
-                    pinNm: pinNmB.stringView
+                    pinNmId: (fpIdsNm.get i: slot9b)
                     pname: (fpIdsNm.get i: slot9b)
                     :argOpNode
                     slot: slot9b
@@ -13887,7 +13888,7 @@ orderUserFnArg: function {
     ctx: Ctx
     fid: ztypes.tid
     pinId: ztypes.tid
-    pinNm: StringView
+    pinNmId: zast.nameid
     # the parameter's name id, which a temp's C type is spelled from
     pname: zast.nameid
     argOpNode: astnode.view
@@ -13895,7 +13896,7 @@ orderUserFnArg: function {
     ord: orderstate.borrow
 } is {
     mk: pendingHoistMark :ctx
-    txt: userFnArgText :ast :symtab :ctx :fid :pinId :pinNm :argOpNode
+    txt: userFnArgText :ast :symtab :ctx :fid :pinId :pinNmId :argOpNode
     constant: (orderConstant
         :ast
         :symtab
@@ -18740,13 +18741,12 @@ operatorOperandText: function {
         rw: symtab.typing.declRowAt ownerTid: call membersOnly: true slot: ri
         ri = ri + 1
         if rw.keep.not or (rw.name == recvId) then continue
-        pn: zast.poolTextAt pool: ast.names ref: rw.name
         ptr: (instanceMethodArgPtr
             :ast
             :symtab
             :ctx
             mco: call
-            posParamName: pn.stringView
+            posParamNameId: rw.name
             posParamId: rw.tid
             usedInterp: false
             av: av.stringView
@@ -23357,21 +23357,14 @@ emitReassignLvalue: function {
                 return lvx
             }
         }
-        memFp: (zast.nameTextAt
-            :ast
-            ref: (aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child)
-        )
+        memFpId: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
         rpnid: interpPartNodeId n: (ast.nodes.get i: n.parent)
         stampTid: stampIdOf :symtab nid: rpnid
         rsc: stampTid
         rsFp: stampTid
         if rsc.isZero.not then rsFp = rsc
         rsFpc: chaseAggregateTypedef :symtab :ctx tid: rsFp
-        if (symtab.typing.declIsFnptrField
-            pool: ast.names
-            parentTypeId: rsFpc
-            name: memFp.stringView
-        ) then {
+        if (symtab.typing.declIsFnptrFieldId parentTypeId: rsFpc nameId: memFpId) then {
             recvFp: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.parent))
             accFpL: ".".string
             recvFpC: String
@@ -29157,24 +29150,21 @@ listGetIsPtr: function {
 # for a stated reason: a 16-byte fat pointer with no owned interior -- two
 # registers on SysV, and copying it carries nothing that can dangle.
 isBorrowStringParam: function {
-    ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
     fid: ztypes.tid
-    pname: StringView
+    pnameId: zast.nameid
     pid: ztypes.tid
 } out bool is {
     if pid != ctx.strTid then return false
     if (symtab.typing.declOwnershipIs
-        pool: ast.names
         parentTypeId: fid
-        name: pname
+        nameId: pnameId
         own: ztypes.zparamownership.borrowMode
     ) then return true
     if (symtab.typing.declOwnershipIs
-        pool: ast.names
         parentTypeId: fid
-        name: pname
+        nameId: pnameId
         own: ztypes.zparamownership.viewMode
     ) then return true
     return false
@@ -29193,12 +29183,12 @@ isSetMapPtrParam: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
     fid: ztypes.tid
-    pname: StringView
+    pnameId: zast.nameid
     tid: ztypes.tid
 } out bool is {
     ast.drop
     fid.drop
-    pname.drop
+    pnameId.drop
     # the param's own origin (a typedef wrapper chases to its base mono)
     # against the cached Set/Map template ids
     bt: chaseAggregateTypedef :symtab :ctx :tid
@@ -29216,14 +29206,13 @@ isSetMapPtrParam: function {
 # POINTER so the callee's append/pop/set persist to the caller. A `.take` List is
 # moved by value; Set/Map monos are already heap pointers (no extra `*`).
 isListPtrParam: function {
-    ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
     fid: ztypes.tid
-    pname: StringView
+    pnameId: zast.nameid
     tid: ztypes.tid
 } out bool is {
-    if (paramTakesArg :ast :symtab :fid :pname) then return false
+    if (paramTakesArg :symtab :fid :pnameId) then return false
     bt: chaseAggregateTypedef :symtab :ctx :tid
     if (isIdCollectionOriginOf :symtab :ctx tid: bt) then return true
     return (isListOriginOf :symtab :ctx tid: bt)
@@ -29259,17 +29248,12 @@ registerReftypeParams: function {
     rn: pNmIds.length
     for ri < rn loop {
         rpid: pIds.get i: ri
-        rpnB: (zast.poolTextAt
-            pool: ast.names
-            ref: (pNmIds.get i: ri)
-        )
-        rpn: rpnB.stringView
         regp: (paramTypeIsPointer
             :ast
             :symtab
             :ctx
             :fid
-            pname: rpn
+            pnameId: (pNmIds.get i: ri)
             pid: rpid
         )
         if regp then {
@@ -29291,14 +29275,13 @@ registerReftypeParams: function {
 # Call sites add this leg ALONE, never the whole definition-side predicate: a
 # Map or Set argument is already a pointer and must not be addressed again.
 paramIsReceiverName: function {
-    ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     fid: ztypes.tid
-    pname: StringView
+    pnameId: zast.nameid
 } out bool is {
     # by id, and only fall back to the spelling when the type records no
     # receiver name of its own -- `this` is the implicit one
-    pid: zast.poolFind pool: ast.names text: pname
+    pid: pnameId
     if (symtab.reg.thisParamNameIs tid: fid nameId: pid) then return true
     if (symtab.reg.thisParamNameIdOf tid: fid).isZero then return pid == zast.wellKnown.slot.wkThis
     return false
@@ -29318,8 +29301,7 @@ calleeTakesReceiverByPtr: function {
     fpNm: ListVal zast.nameid
     recFieldLists :ast :symtab tid: fid names: fpN ids: fpI nameIds: fpNm
     if fpN.length == 0 then return false
-    firstFieldName: fpN.get i: 0
-    return (paramIsReceiverName :ast :symtab :fid pname: firstFieldName.stringView)
+    return (paramIsReceiverName :symtab :fid pnameId: (fpNm.get i: 0))
 }
 
 # markedValtypeRefParam -- an explicitly marked VALTYPE parameter, which is a
@@ -29333,24 +29315,21 @@ calleeTakesReceiverByPtr: function {
 # item: of.view` monomorphise that marker onto a valtype key, and the runtime
 # templates would stop matching their own prototypes.
 markedValtypeRefParam: function {
-    ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     fid: ztypes.tid
-    pname: StringView
+    pnameId: zast.nameid
     pid: ztypes.tid
 } out bool is {
     if (symtab.reg.isNativeOf tid: fid) then return false
     if (symtab.reg.isValtypeOf tid: pid).not then return false
     if (symtab.typing.declOwnershipIs
-        pool: ast.names
         parentTypeId: fid
-        name: pname
+        nameId: pnameId
         own: ztypes.zparamownership.viewMode
     ) then return true
     if (symtab.typing.declOwnershipIs
-        pool: ast.names
         parentTypeId: fid
-        name: pname
+        nameId: pnameId
         own: ztypes.zparamownership.borrowMode
     ) then return true
     return false
@@ -29361,18 +29340,18 @@ markedValtypeRefParam: function {
 # then frozen. Readonly is the checker's to enforce, so the two pass, and are
 # destroyed, alike.
 paramTakesArg: function {
-    ast: Ast.view symtab: zenv.ZSymbolTable.view fid: ztypes.tid pname: StringView
+    symtab: zenv.ZSymbolTable.view
+    fid: ztypes.tid
+    pnameId: zast.nameid
 } out bool is {
     if (symtab.typing.declOwnershipIs
-        pool: ast.names
         parentTypeId: fid
-        name: pname
+        nameId: pnameId
         own: ztypes.zparamownership.takeMode
     ) then return true
     return (symtab.typing.declOwnershipIs
-        pool: ast.names
         parentTypeId: fid
-        name: pname
+        nameId: pnameId
         own: ztypes.zparamownership.holdMode
     )
 }
@@ -29390,31 +29369,30 @@ paramTypeIsPointer: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     fid: ztypes.tid
-    pname: StringView
+    pnameId: zast.nameid
     pid: ztypes.tid
 } out bool is {
-    owns: paramTakesArg :ast :symtab :fid :pname
+    owns: paramTakesArg :symtab :fid :pnameId
     # The receiver is a reference in BOTH families -- its default is `borrow`,
     # not `take`, so a record method acts on the caller's instance rather than
     # on a copy of it.
     if owns.not then {
-        rnid: zast.poolFind pool: ast.names text: pname
+        rnid: pnameId
         if rnid == zast.wellKnown.slot.wkThis then return true
         if rnid.isZero.not when (symtab.reg.thisParamNameIs tid: fid nameId: rnid) then return true
     }
-    if owns.not when (markedValtypeRefParam :ast :symtab :fid :pname :pid) then return true
+    if owns.not when (markedValtypeRefParam :symtab :fid :pnameId :pid) then return true
     if owns.not when (isReftypeParam
         :symtab
         :ctx
         tid: pid
     ) then return true
-    if (isBorrowStringParam :ast :symtab :ctx :fid :pname :pid) then return true
+    if (isBorrowStringParam :symtab :ctx :fid :pnameId :pid) then return true
     if (isListPtrParam
-        :ast
         :symtab
         :ctx
         :fid
-        :pname
+        :pnameId
         tid: pid
     ) then return true
     if (isSetMapPtrParam
@@ -29422,7 +29400,7 @@ paramTypeIsPointer: function {
         :symtab
         :ctx
         :fid
-        :pname
+        :pnameId
         tid: pid
     ) then return true
     return false
@@ -29487,16 +29465,15 @@ paramCType: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     fid: ztypes.tid
-    pname: StringView
+    pnameId: zast.nameid
     pid: ztypes.tid
 } out String is {
     ct: typeRefC :ast :symtab :ctx tid: pid
-    if (paramTypeIsPointer :ast :symtab :ctx :fid :pname :pid).not then return ct
+    if (paramTypeIsPointer :ast :symtab :ctx :fid :pnameId :pid).not then return ct
     if ct.length == 0 then return ct
     if (symtab.typing.declOwnershipIs
-        pool: ast.names
         parentTypeId: fid
-        name: pname
+        nameId: pnameId
         own: ztypes.zparamownership.viewMode
     ) then return "const \{ct}*"
     return "\{ct}*"
@@ -29525,7 +29502,7 @@ fnParamsC: function {
             :symtab
             :ctx
             :fid
-            :pname
+            pnameId: pnmId
             pid: (cIds.get i: pi)
         )
         if pi > 0 then params.append ", "
@@ -31958,21 +31935,17 @@ oweTakeParamFrees: function {
     pj: u64
     pn: pids9Nm.length
     for pj < pn loop {
-        ppnB: (zast.poolTextAt
-            pool: ast.names
-            ref: (pids9Nm.get i: pj)
-        )
-        ppn: ppnB.stringView
+        ppnId: pids9Nm.get i: pj
         ppid: pids.get i: pj
         pj = pj + 1
-        if (paramTakesArg :ast :symtab :fid pname: ppn) then {
+        if (paramTakesArg :symtab :fid pnameId: ppnId) then {
             pmnB: (paramVidIn
                 :ast
                 :symtab
                 params: op.parameters
-                nameId: (pids9Nm.get i: pj - 1)
+                nameId: ppnId
             )
-            pmn: varCName :ctx vid: pmnB name: ppn
+            pmn: varCName :ctx vid: pmnB name: (zast.nameTextAt :ast ref: ppnId).stringView
             if ppid == ctx.strTid then {
                 tmp.oweFree name: pmn.copy vid: pmnB
             } else {
@@ -34476,7 +34449,6 @@ declaredKeyFnC: function {
 # `index` is a view (its pointer is written `const` in the definition), ""
 # otherwise or when there is no such method.
 keyFnParamConstC: function {
-    ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     fid: ztypes.tid
     index: u64
@@ -34486,14 +34458,9 @@ keyFnParamConstC: function {
     pIdsNm: ListVal zast.nameid
     recFieldIds :symtab tid: fid ids: pIds nameIds: pIdsNm
     if index >= pIdsNm.length then return ""
-    pnmB: (zast.poolTextAt
-        pool: ast.names
-        ref: (pIdsNm.get i: index)
-    )
     if (symtab.typing.declOwnershipIs
-        pool: ast.names
         parentTypeId: fid
-        name: pnmB.stringView
+        nameId: (pIdsNm.get i: index)
         own: ztypes.zparamownership.viewMode
     ) then return "const "
     return ""
@@ -34517,10 +34484,10 @@ keyFnProtosC: function {
 } out String is {
     hfid: declaredKeyFnId :ast :symtab :ctx tid0: tid member: "hash"
     efid: declaredKeyFnId :ast :symtab :ctx tid0: tid member: "=="
-    hq: keyFnParamConstC :ast :symtab fid: hfid index: 0
-    eq: keyFnParamConstC :ast :symtab fid: efid index: 0
+    hq: keyFnParamConstC :symtab fid: hfid index: 0
+    eq: keyFnParamConstC :symtab fid: efid index: 0
     rq: String
-    if rhsByPtr then rq = keyFnParamConstC :ast :symtab fid: efid index: 1
+    if rhsByPtr then rq = keyFnParamConstC :symtab fid: efid index: 1
     return "static uint64_t \{dh}(\{hq}\{keyT}*);\nstatic bool \{de}(\{eq}\{keyT}*, \{rq}\{rhsT});\n"
 }
 
@@ -36997,19 +36964,18 @@ fnptrParamTypeC: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     fid: ztypes.tid
-    pname: StringView
+    pnameId: zast.nameid
     pid: ztypes.tid
 } out String is {
     ct: typeRefC :ast :symtab :ctx tid: pid
-    ptrp: paramTypeIsPointer :ast :symtab :ctx :fid :pname :pid
+    ptrp: paramTypeIsPointer :ast :symtab :ctx :fid :pnameId :pid
     if ptrp when ct.length > 0 then {
         ctp: "\{ct}*"
         # the same rule as fnSignature: a view is read through, and a
         # function value must match the signatures it is assigned
         if (symtab.typing.declOwnershipIs
-            pool: ast.names
             parentTypeId: fid
-            name: pname
+            nameId: pnameId
             own: ztypes.zparamownership.viewMode
         ) then ctp = "const \{ct}*"
         ct = ctp.take
@@ -37216,18 +37182,13 @@ emitOneFnptrTypedef: function {
     pi: u64
     pn: pIdsNm.length
     for pi < pn loop {
-        pnmB: (zast.poolTextAt
-            pool: ast.names
-            ref: (pIdsNm.get i: pi)
-        )
-        pnm: pnmB.stringView
         pidp: rIds.get i: pi
         pct: (fnptrParamTypeC
             :ast
             :symtab
             :ctx
             fid: tid
-            pname: pnm
+            pnameId: (pIdsNm.get i: pi)
             pid: pidp
         )
         if pi > 0 then params.append ", "
@@ -39985,7 +39946,7 @@ lowerNativeArg: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     fid: ztypes.tid
-    pname: StringView
+    pnameId: zast.nameid
     pid: ztypes.tid
     op: astnode.view
 } out String is {
@@ -40019,7 +39980,7 @@ lowerNativeArg: function {
     }
     iv: emitInterpArgExpr :ast :symtab :ctx n: op
     if iv.length > 0 then return iv
-    isTake: paramTakesArg :ast :symtab :fid :pname
+    isTake: paramTakesArg :symtab :fid :pnameId
     needAmp: false
     if isTake.not then {
         if (isReftypeParam
@@ -40028,14 +39989,13 @@ lowerNativeArg: function {
             tid: pid
         ) then needAmp = true
         if (isListPtrParam
-            :ast
             :symtab
             :ctx
             :fid
-            :pname
+            :pnameId
             tid: pid
         ) then needAmp = true
-        if (markedValtypeRefParam :ast :symtab :fid :pname :pid) then needAmp = true
+        if (markedValtypeRefParam :symtab :fid :pnameId :pid) then needAmp = true
     }
     av1: emitExpr :ast :symtab :ctx n: op
     # by reference: a value with no address (`outbuf.byteView`) is hoisted first,
@@ -40061,7 +40021,7 @@ emitNativeArg: function {
     ctx: Ctx
     call: zast.callrow.view
     fid: ztypes.tid
-    pname: StringView
+    pnameId: zast.nameid
     pid: ztypes.tid
     usePos: bool
     posIdx: u64
@@ -40082,7 +40042,7 @@ emitNativeArg: function {
                             :symtab
                             :ctx
                             :fid
-                            :pname
+                            :pnameId
                             :pid
                             op: (ast.nodes.get i: a.operation)
                         )
@@ -40090,13 +40050,13 @@ emitNativeArg: function {
                     seen = seen + 1
                 }
             } else {
-                if al.stringView == pname then {
+                if a.name == pnameId then {
                     return (lowerNativeArg
                         :ast
                         :symtab
                         :ctx
                         :fid
-                        :pname
+                        :pnameId
                         :pid
                         op: (ast.nodes.get i: a.operation)
                     )
@@ -40162,7 +40122,7 @@ emitNativeFreeFnCall: function {
             :ctx
             :call
             :fid
-            pname: pname.stringView
+            pnameId: (pidlNm.get i: j)
             pid: (pidl.get i: j)
             usePos: (ctorHasLabel :ast :call label: pname.stringView).not
             posIdx: (ctx.orderPosAt.get i: wbase + j)
@@ -41587,13 +41547,11 @@ emitStructDestructor: function {
     fi: u64
     fn0: fnames.length
     for fi < fn0 loop {
-        fname: fnames.get i: fi
         fid: fids.get i: fi
         # a borrowed field is a borrowed pointer -- never freed by the destructor.
-        if (symtab.typing.declIsBorrowedField
-            pool: ast.names
+        if (symtab.typing.declIsBorrowedFieldId
             parentTypeId: tid
-            name: fname.stringView
+            nameId: (fnameIds.get i: fi)
         ).not then {
             bxF: fieldIsBox :symtab :fid
             fC: (memberC
@@ -41632,16 +41590,14 @@ emitStructDestructor: function {
 # meta_create parameter that fills it: a pointer to the container, `const`
 # when the field is a `.view`, since what it reaches is only ever read.
 storedFieldPtrC: function {
-    ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ownerTid: ztypes.tid
-    fname: StringView
+    fnameId: zast.nameid
     fct: StringView
 } out String is {
     if (symtab.typing.declOwnershipIs
-        pool: ast.names
         parentTypeId: ownerTid
-        name: fname
+        nameId: fnameId
         own: ztypes.zparamownership.viewMode
     ) then return "const \{fct}*"
     return "\{fct}*"
@@ -41674,7 +41630,6 @@ storedFieldC: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     ownerTid: ztypes.tid
-    fname: String.view
     fid: ztypes.tid
     fnameId: zast.nameid
 } out String is {
@@ -41685,10 +41640,9 @@ storedFieldC: function {
         nameId: fnameId
     ) when (borrowedFieldHeldByPointer :symtab :ctx :fid) then {
         fctP: (storedFieldPtrC
-            :ast
             :symtab
             :ownerTid
-            fname: fname.stringView
+            :fnameId
             fct: fct.stringView
         )
         fct = fctP.take
@@ -41710,13 +41664,11 @@ emitRecordStructBody: function {
 } is {
     fi: u64
     for fi < names.length loop {
-        fname: names.get i: fi
         fct: (storedFieldC
             :ast
             :symtab
             :ctx
             ownerTid: tid
-            :fname
             fid: (ids.get i: fi)
             fnameId: (nameIds.get i: fi)
         )
@@ -41749,13 +41701,11 @@ recordCreateArgs: function {
 } is {
     fj: u64
     for fj < names.length loop {
-        fname2: names.get i: fj
         fct2: (storedFieldC
             :ast
             :symtab
             :ctx
             ownerTid: tid
-            fname: fname2
             fid: (ids.get i: fj)
             fnameId: (nameIds.get i: fj)
         )
@@ -42186,7 +42136,7 @@ valKeyHashBody: function {
         buf.append "static uint64_t "
         buf.append (ctxCname :ctx tid: fid)
         buf.append "("
-        buf.append (keyFnParamConstC :ast :symtab :fid index: 0)
+        buf.append (keyFnParamConstC :symtab :fid index: 0)
         buf.append keyT
         buf.append "*);\n"
     }
@@ -42218,7 +42168,7 @@ valKeyEqBody: function {
         buf.append "static bool "
         buf.append (ctxCname :ctx tid: fid)
         buf.append "("
-        buf.append (keyFnParamConstC :ast :symtab :fid index: 0)
+        buf.append (keyFnParamConstC :symtab :fid index: 0)
         buf.append keyT
         buf.append "*, "
         buf.append keyT
@@ -43516,16 +43466,16 @@ classParamByPointer: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     mid: ztypes.tid
-    pname: StringView
+    pnameId: zast.nameid
     pid: ztypes.tid
 } out bool is {
     pt: pid
-    takesArg: paramTakesArg :ast :symtab fid: mid :pname
+    takesArg: paramTakesArg :symtab fid: mid :pnameId
     if takesArg.not when (isReftypeParam :symtab :ctx tid: pt) then return true
-    if (isBorrowStringParam :ast :symtab :ctx fid: mid :pname pid: pt) then return true
-    if (markedValtypeRefParam :ast :symtab fid: mid :pname :pid) then return true
-    if (isListPtrParam :ast :symtab :ctx fid: mid :pname tid: pt) then return true
-    return (isSetMapPtrParam :ast :symtab :ctx fid: mid :pname tid: pt)
+    if (isBorrowStringParam :symtab :ctx fid: mid :pnameId pid: pt) then return true
+    if (markedValtypeRefParam :symtab fid: mid :pnameId :pid) then return true
+    if (isListPtrParam :symtab :ctx fid: mid :pnameId tid: pt) then return true
+    return (isSetMapPtrParam :ast :symtab :ctx fid: mid :pnameId tid: pt)
 }
 
 # pointerParamC -- a parameter passed by pointer: its C type gains the `*`
@@ -43536,7 +43486,6 @@ pointerParamC: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     mid: ztypes.tid
-    pname: StringView
     # the parameter's pool index, which names its vid
     nameId: zast.nameid
     # the by-value C type
@@ -43550,9 +43499,8 @@ pointerParamC: function {
         :nameId
     )
     if (symtab.typing.declOwnershipIs
-        pool: ast.names
         parentTypeId: mid
-        name: pname
+        :nameId
         own: ztypes.zparamownership.viewMode
     ) then return "const \{pt}*"
     return "\{pt}*"
@@ -43602,7 +43550,7 @@ emitMethodParams: function {
             :symtab
             :ctx
             :mid
-            pname: pname.stringView
+            pnameId: (pidsNm.get i: pi)
             :pid
         ) then byPtr = true
         if byPtr then {
@@ -43611,7 +43559,6 @@ emitMethodParams: function {
                 :symtab
                 :ctx
                 :mid
-                pname: pname.stringView
                 nameId: (pidsNm.get i: pi)
                 pt: pt.stringView
                 :op

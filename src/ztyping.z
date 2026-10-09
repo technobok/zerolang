@@ -1867,24 +1867,13 @@ ZTyping: class {
         }
     }
 
-    # declChildOf / declChildOfId -- the type of member `name` on parentTypeId.
-    # The member's DECLARATION is the source of truth: undeclared, or declared
-    # carrying no type, both read as absent. A member with no declaration at
-    # all falls back to the pended pre-index writes, which is the only record
-    # of a type whose owner never acquires a declaration.
-    declChildOf: function {
-        this: this.view
-        pool: zast.StringPool.view
-        parentTypeId: ztypes.tid
-        name: StringView
-    } out optionval ztypes.tid is {
-        nid: pool.find s: name
-        if nid.isZero then return (optionval.none ztypes.tid)
-        return (this.declChildOfId :parentTypeId nameId: nid)
-    }
-
-    # a member of `parentTypeId` by name id. The Decl tree IS the member index,
-    # so this is the lookup everything else is built from
+    # declChildOfId -- the type of member `nameId` on parentTypeId. The member's
+    # DECLARATION is the source of truth: undeclared, or declared carrying no
+    # type, both read as absent. A member with no declaration at all falls back
+    # to the pended pre-index writes, which is the only record of a type whose
+    # owner never acquires a declaration. The Decl tree IS the member index, so
+    # this is the lookup everything else is built from; members are asked by
+    # id, never by text.
     declChildOfId: function {
         t: this.view
         parentTypeId: ztypes.tid
@@ -1902,21 +1891,7 @@ ZTyping: class {
         return (optionval.some pv)
     }
 
-    # declIsBorrowedField / declIsBorrowedFieldId -- is `name` the lock field of the
-    # type that minted parentTypeId? The owning declaration names one member as
-    # its lock, so this is a round trip through that pointer.
-    declIsBorrowedField: function {
-        this: this.view
-        pool: zast.StringPool.view
-        parentTypeId: ztypes.tid
-        name: StringView
-    } out bool is {
-        nid: pool.find s: name
-        if nid.isZero then return false
-        return (this.declIsBorrowedFieldId :parentTypeId nameId: nid)
-    }
-
-    # whether the named member is a NON-OWNED field, which decides whether the
+    # declIsBorrowedFieldId -- whether the member `nameId` is a NON-OWNED field, which decides whether the
     # destructor frees it, whether the struct holds it by pointer, and whether
     # a write through it takes the container exclusively.
     #
@@ -2008,14 +1983,12 @@ ZTyping: class {
     # mode never matches take, borrow or lock.
     declOwnershipIs: function {
         this: this.view
-        pool: zast.StringPool.view
         parentTypeId: ztypes.tid
-        name: StringView
+        nameId: zast.nameid
         own: ztypes.zparamownership
     } out bool is {
-        nid: pool.find s: name
-        if nid.isZero then return false
-        md: this.declMemberIdOf :parentTypeId nameId: nid
+        if nameId.isZero then return false
+        md: this.declMemberIdOf :parentTypeId :nameId
         if md.isZero then return false
         r: false
         mo: this.decls.get i: md
@@ -2024,22 +1997,10 @@ ZTyping: class {
         return r
     }
 
-    # declIsFnptrField / declIsFnptrFieldId -- does member `name` occupy a
-    # struct function-pointer slot? Where it was declared decides this, so the
-    # member declaration carries it as a bit.
-    declIsFnptrField: function {
-        this: this.view
-        pool: zast.StringPool.view
-        parentTypeId: ztypes.tid
-        name: StringView
-    } out bool is {
-        nid: pool.find s: name
-        if nid.isZero then return false
-        return (this.declIsFnptrFieldId :parentTypeId nameId: nid)
-    }
-
-    # whether the named member holds a function pointer, which the emitter calls
-    # through differently from a method
+    # declIsFnptrFieldId -- does member `nameId` occupy a struct
+    # function-pointer slot? Where it was declared decides this, so the member
+    # declaration carries it as a bit; the emitter calls through it differently
+    # from a method.
     declIsFnptrFieldId: function {
         this: this.view
         parentTypeId: ztypes.tid
@@ -2829,23 +2790,6 @@ ZTyping: class {
 
     # declOwnershipText -- a member's ownership as display text, "none" when
     # it has none.
-    declOwnershipText: function {
-        this: this.view
-        pool: zast.StringPool.view
-        parentTypeId: ztypes.tid
-        name: StringView
-    } out String is {
-        nid: pool.find s: name
-        if nid.isZero then return "none"
-        r: this.declOwnershipOfId :parentTypeId nameId: nid
-        match (
-            r
-        ) case some then {
-            return (ztypes.zparamownershipName r)
-        } case none then {
-            return "none"
-        }
-    }
 }
 
 # armside -- which side of a 2-arm sum a trailing predicate segment names.

@@ -2496,7 +2496,7 @@ perf: $(PERFBIN)
 # -10,832 the emitter names arms and members by id (memberCNamed, tagConstNamed,
 # variantArms and the space-joined exclusion text gone): -9,726 behaviour,
 # -1,106 source (ab.sh).
-ALLOC_BASELINE := 2172053
+ALLOC_BASELINE := 2169519
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -2675,6 +2675,7 @@ emitter-guard:
 	e8=$$(grep -cF 'io.readText' src/zemitterc.z); \
 	e9=$$(grep -c 'monoOriginName' src/zemitterc.z); \
 	e10=$$(grep -vE '^[[:space:]]*#' src/zemitterc.z | grep -cE '\.data\.[a-z]'); \
+	e11=$$(grep -c 'poolFind' src/zemitterc.z); \
 	g1=$$(grep -c 'composeCname' src/ztypes.z); \
 	g2=$$(grep -cF 'z_t\{' src/zemitterc.z); \
 	fail=0; \
@@ -2692,13 +2693,14 @@ emitter-guard:
 	chk "io.readText" "$$e8" 3; \
 	chk "monoOriginName" "$$e9" 0; \
 	chk "literal arm members (.data.<arm>; memberC spells them)" "$$e10" 0; \
+	chk "poolFind (a re-intern of a name the emitter held as an id)" "$$e11" 13; \
 	if [ "$$fail" = "1" ]; then \
 	  echo "  A new name-resolution site was added to the emitter. Read the typechecker"; \
 	  echo "  stamp (atomVariableId/atomUnitDefId/callKind), the canonical child id, or"; \
 	  echo "  ctxCname instead of resolving by name."; \
 	  exit 1; \
 	fi; \
-	echo "emitter-guard OK: resolvedByKey=$$e1 walkLookup=$$e2 resolveByName=$$e3 userFnId=$$e4 ownText=$$e5 nameOf=$$e6 mangleVar=$$e7 readText=$$e8 monoOrigin=$$e9 armLiteral=$$e10"
+	echo "emitter-guard OK: resolvedByKey=$$e1 walkLookup=$$e2 resolveByName=$$e3 userFnId=$$e4 ownText=$$e5 nameOf=$$e6 mangleVar=$$e7 readText=$$e8 monoOrigin=$$e9 armLiteral=$$e10 poolFind=$$e11"
 
 # frontend-guard -- the front end knows no backend. Everything before emission
 # -- the lexer, parser and AST, the type checker and its model, the symbol table

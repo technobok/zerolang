@@ -19505,11 +19505,7 @@ buildUnitMonoMember: function {
     if (isFunctionDefOp op: (ast.nodes.get i: fmNode.operation)) then {
         fn: zast.nameTextCopy :ast ref: fmNode.name
         srcId: ztypes.tid
-        tfo: (st.typing.declChildOf
-            pool: ast.names
-            parentTypeId: tplId
-            name: fn.stringView
-        )
+        tfo: st.typing.declChildOfId parentTypeId: tplId nameId: fmNode.name
         match (
             tfo
         ) case some then {
@@ -21742,11 +21738,7 @@ copyMemberMarkers: function {
             ownership: cho
         )
     } case none then null
-    if (st.typing.declIsBorrowedField
-        pool: ast.names
-        parentTypeId: templateId
-        name: chName
-    ) then null else {
+    if (st.typing.declIsBorrowedFieldId parentTypeId: templateId nameId: chNameId) then null else {
         if (st.reg.needsDestructor typeId: target) then monoNeedsDtor = true
     }
     return monoNeedsDtor
@@ -35410,24 +35402,20 @@ borrowedFieldMarkerOf: function {
 } out String is {
     tmk: String
     targetRoot: methodReceiverRootId :ast n: (ast.nodes.get i: rasgn.topath)
-    targetFnName: (zast.nameTextAt
-        :ast
-        ref: (dottedChildNameId :ast n: (ast.nodes.get i: rasgn.topath))
-    )
-    if targetRoot.isZero or (targetFnName.length == 0) then return tmk
+    targetFnId: dottedChildNameId :ast n: (ast.nodes.get i: rasgn.topath)
+    if targetRoot.isZero or targetFnId.isZero then return tmk
     tto: st.lookup nameId: targetRoot
     match (
         tto
     ) case some then {
-        if (st.typing.declIsBorrowedField
-            pool: ast.names
+        if (st.typing.declIsBorrowedFieldId
             parentTypeId: tto
-            name: targetFnName.stringView
+            nameId: targetFnId
         ) then {
             tmk.append "borrow"
             tmo: (st.typing.declOwnershipOfId
                 parentTypeId: tto
-                nameId: (zast.poolFind pool: ast.names text: targetFnName.stringView)
+                nameId: targetFnId
             )
             match (
                 tmo
@@ -39282,7 +39270,6 @@ dottedParentNodeId: function {ast: Ast.view n: astnode.view} out zast.nodeid is 
 # same question, asked where a call to it can still be refused with something
 # better than a C compiler's opinion.
 memberIsSelfTyped: function {
-    ast: Ast.view
     st: zenv.ZSymbolTable.view
     ifaceTid: ztypes.tid
     memberTid: ztypes.tid
@@ -39302,12 +39289,10 @@ memberIsSelfTyped: function {
                     nameId: pnid
                 )
             )
-            tnB: ast.names.texts.get i: pnid
             if isRecv.not then {
-                pto: (st.typing.declChildOf
-                    pool: ast.names
+                pto: (st.typing.declChildOfId
                     parentTypeId: memberTid
-                    name: tnB.stringView
+                    nameId: pnid
                 )
                 match (
                     pto
@@ -39341,7 +39326,7 @@ refuseSelfTypedMember: function {
         mo
     ) case some then {
         mtid: mo
-        if (memberIsSelfTyped :ast :st ifaceTid: recvTid memberTid: mtid) then {
+        if (memberIsSelfTyped :st ifaceTid: recvTid memberTid: mtid) then {
             iname: st.reg.nameOf tid: recvTid
             # the member's own spelling, read only HERE: this is the one path
             # that renders it, and every call in the program reaches the test
@@ -46262,6 +46247,8 @@ checkTaggedCtorArg: function {
     ast: Ast
     dtp: ztypes.tid
     unionCtorArm: StringView
+    # the arm, interned
+    unionCtorArmId: zast.nameid
     arg2Id: zast.nodeid
 } is {
     arg2: argRefAt :ast nid: arg2Id
@@ -46317,10 +46304,9 @@ checkTaggedCtorArg: function {
                 )
             } case none then null
         }
-        uparmo: (st.typing.declChildOf
-            pool: ast.names
+        uparmo: (st.typing.declChildOfId
             parentTypeId: dtp
-            name: unionCtorArm
+            nameId: unionCtorArmId
         )
         uparmid: uparmo.or d: ztypes.tid.zero
         # a literal payload coerces at the arm's
@@ -46420,6 +46406,7 @@ checkTaggedTypeCall: function {
             :ast
             :dtp
             unionCtorArm: unionCtorArm.stringView
+            unionCtorArmId: (dottedChildNameId :ast n: (ast.nodes.get i: call.callable))
             :arg2Id
         )
     }
@@ -55004,11 +54991,7 @@ walkUnitMonoFns: function {
             if bm2.nid.isZero.not then {
                 mnm: zast.nameTextCopy :ast ref: bm2.name
                 q: "\{monoNm}.\{mnm}"
-                mfo: (st.typing.declChildOf
-                    pool: ast.names
-                    parentTypeId: monoId
-                    name: mnm.stringView
-                )
+                mfo: st.typing.declChildOfId parentTypeId: monoId nameId: bm2.name
                 match (
                     mfo
                 ) case some then {
