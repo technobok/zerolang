@@ -29830,65 +29830,6 @@ paramTypeIsPointer: function {
     return false
 }
 
-# declaredReturnC -- the C type a function's DECLARED return name spells, "" when
-# the name resolves to nothing the emitter can spell.
-declaredReturnC: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    fid: ztypes.tid
-    op: astnode.view
-    rbn: StringView
-} out String is {
-    rtid0: fnReturnTypeId :ast :symtab :op
-    if rtid0 == ctx.strTid then return "\{ctx.strC}_t"
-    if rtid0 == ctx.svTid then return "\{ctx.svC}_t"
-    rbc: scalarCTypeFor :symtab tid: rtid0
-    if rbc.length > 0 then return rbc
-    rbi: userFnId :ast :symtab :ctx name: rbn
-    # a SELF-TYPED return is spelled as the template, so the name answers the
-    # template and its C type names a struct no instance has. The clone's own
-    # return type carries the substitution; an id compare against the by-name
-    # answer is what says it is that template's instance rather than an
-    # unrelated type.
-    rbm: fnReturnTidOf :symtab tid: fid
-    if rbi.isZero.not when (
-        (genericOriginTid
-            :symtab
-            tid: rbm
-        ) ==
-        rbi
-    ) then rbi = rbm
-    if rbi.isZero then return String
-    return (typeRefC :ast :symtab :ctx tid: rbi)
-}
-
-# stampedReturnC -- the C type the function's stamped return tid spells, "" when
-# the stamp adds nothing the declaration did not already give.
-stampedReturnC: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    fid: ztypes.tid
-    current: StringView
-} out String is {
-    rto: fnReturnTidOf :symtab tid: fid
-    if rto.isZero then return String
-    rc: scalarCTypeFor :symtab tid: rto
-    if rc.length > 0 then return rc
-    # a non-scalar return the declared name did not resolve -- an
-    # optionval/resultval (or other) mono. typeRefC gives the mono's C type,
-    # and only while the return is still unnamed, so a resolution from the
-    # declaration is never overridden.
-    if current.length > 0 then return String
-    return (typeRefC
-        :ast
-        :symtab
-        :ctx
-        tid: rto
-    )
-}
-
 # fnReturnPointerC -- how a non-void return is passed back: a heap collection by
 # pointer, a ref-borrow by the borrow's pointer form.
 fnReturnPointerC: function {
@@ -29919,9 +29860,10 @@ fnReturnPointerC: function {
     return out0
 }
 
-# fnReturnC -- a user function's C return type. Three sources answer in order --
-# the declared return name, the stamped return tid, the return node's own type --
-# and the first that resolves wins; the pointer forms apply last.
+# fnReturnC -- a user function's C return type: what the registry records it
+# returns (an instance's own, for a function minted from a template), else its
+# return node's stamp; `void` when neither names one. The pointer forms apply
+# last. methodReturnC asks a method the same two questions.
 fnReturnC: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -29929,27 +29871,10 @@ fnReturnC: function {
     fid: ztypes.tid
     op: astnode.view
 } out String is {
-    # empty until something names the return type: the function returns nothing
-    ret: String
-    rbn: ztypecheck.fnReturnBaseNameOf :ast :op
-    if rbn.length > 0 then {
-        r0: declaredReturnC :ast :symtab :ctx :fid :op rbn: rbn.stringView
-        if r0.length > 0 then ret = r0.take
-    }
-    r1: stampedReturnC :ast :symtab :ctx :fid current: ret.stringView
-    if r1.length > 0 then ret = r1.take
-    if ret.length == 0 then {
-        rtnid: fnReturnTypeId :ast :symtab :op
-        if rtnid.isZero.not then {
-            rtr: (typeRefC
-                :ast
-                :symtab
-                :ctx
-                tid: rtnid
-            )
-            if rtr.length > 0 then ret = rtr.take
-        }
-    }
+    rt: fnReturnTidOf :symtab tid: fid
+    if rt.isZero then rt = fnReturnTypeId :ast :symtab :op
+    if rt.isZero then return "void"
+    ret: typeRefC :ast :symtab :ctx tid: rt
     if ret.length == 0 then return "void"
     return (fnReturnPointerC :ast :symtab :ctx :fid :op ret: ret.stringView)
 }
