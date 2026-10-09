@@ -11767,7 +11767,7 @@ resolveRecord: function {
         tdecl9: declOfUnitDef :st :scope :unitDecl nameId: (nameIdOf :ast name: defName)
         registerGenericParams :st :ast tdecl: tdecl9 items: asItems
         if unitTmpl.isZero.not then registerUnitParamsOn :st :ast tdecl: tdecl9 :unitTmpl
-        refuseReftypeBounds :st :ast :scope tdecl: tdecl9 what: "record" items: asItems
+        refuseReftypeBounds :st :ast tdecl: tdecl9 what: "record" items: asItems
     }
     istd: recordIsTypedef :rnode
     if istd then recordTypedefBase :st :scope :ast :unitDecl :rnode :rid
@@ -12197,7 +12197,6 @@ resolveVariant: function {
                 (refuseReftypeBounds
                     :st
                     :ast
-                    :scope
                     tdecl: tdecl92
                     what: "variant"
                     items: onRg.asItems
@@ -12690,7 +12689,6 @@ refuseReftypeMember: function {
 boundAdmitsReftype: function {
     st: zenv.ZSymbolTable
     ast: Ast
-    scope: ztypes.declid
     tdecl: ztypes.declid
     fm: argref
 } out bool is {
@@ -12700,9 +12698,17 @@ boundAdmitsReftype: function {
     if k == ztypes.constraintkind.refHashable then return true
     if k == ztypes.constraintkind.stringLike then return true
     if k != ztypes.constraintkind.other then return false
+    # a bound naming a union or a variant answers from its declaration, which
+    # resolves none of its arms
+    dtt: boundDeclTypetype :ast :st :tdecl desc: cd
+    if dtt.none.not when (
+        (dtt == ztypes.ztypetype.unionType) or (dtt == ztypes.ztypetype.variantType)
+    ) then {
+        return dtt == ztypes.ztypetype.unionType
+    }
     # what the bound RESOLVES to answers -- an application (`(Getter v: i64)`)
     # or a qualified name included, which its text alone does not find
-    bt: namedBoundTid :ast :st :scope :tdecl :cd
+    bt: namedBoundTid :ast :st :tdecl :cd
     if bt.isZero then return false
     fam: boundFamilyOf :st :bt
     if fam.none then return (typeIsReftype :st tid: bt)
@@ -12717,7 +12723,6 @@ boundAdmitsReftype: function {
 refuseReftypeBounds: function {
     st: zenv.ZSymbolTable
     ast: Ast
-    scope: ztypes.declid
     tdecl: ztypes.declid
     what: StringView
     items: zast.kidspan
@@ -12731,7 +12736,7 @@ refuseReftypeBounds: function {
         if fm.nid.isZero.not when (isGenericParam
             :ast
             op: (ast.nodes.get i: fm.operation)
-        ) when (boundAdmitsReftype :st :ast :scope :tdecl :fm) then {
+        ) when (boundAdmitsReftype :st :ast :tdecl :fm) then {
             pn: zast.nameTextAt :ast ref: fm.name
             mb: "a \{what}'s type parameter holds valtypes; bound '\{pn}' with 'anyval.generic'"
             (addResolveErrorH
@@ -15726,21 +15731,34 @@ stampGenericBounds: function {st: zenv.ZSymbolTable ast: Ast} is {
             } case none then null
         }
         if nm9.isZero.not then {
-            ud9: unitRootOfDecl :st declId: fr9
-            # the READ-ONLY twin: a resolver that may MINT would materialise
-            # types the program never asked for, and the frozen A/B says so --
-            # a probe cannot mint.
-            bo9: walkLookupTyperefByIdRo :ast :st unitDecl: ud9 scope: fr9 baseId: nm9
-            match (
-                bo9
-            ) case some then {
-                td9: declOfTypeId :st tid: bo9
-                if td9.isZero.not then {
-                    st.typing.toolRefDecl.set key: k9 value: td9
-                }
-            } case none then null
+            td9: boundNameDecl :st :ast scope: fr9 nameId: nm9
+            if td9.isZero.not then st.typing.toolRefDecl.set key: k9 value: td9
         }
     }
+}
+
+# boundNameDecl -- the declaration a bare bound name written in `scope` names,
+# for an editor: the DECLARATION, read without resolving it (bareBoundDecl), as
+# a sum used only as a bound is never resolved (sumBoundDeclAdmits) and a
+# resolver that may MINT would materialise types the program never asked for;
+# else the minted type's own, for a name the nearest scope holds only in its
+# member index. Zero when neither answers.
+boundNameDecl: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    scope: ztypes.declid
+    nameId: zast.nameid
+} out ztypes.declid is {
+    d: bareBoundDecl :st :ast :scope :nameId
+    if d.isZero.not then return d
+    ud: unitRootOfDecl :st declId: scope
+    bo: walkLookupTyperefByIdRo :ast :st unitDecl: ud :scope baseId: nameId
+    match (
+        bo
+    ) case some then {
+        return (declOfTypeId :st tid: bo)
+    } case none then null
+    return d
 }
 
 # stampGenericParams -- resolve each recorded generic PARAMETER and record the
@@ -22414,7 +22432,7 @@ mintMonoTypedefBase: function {
     # error, reported where the instance is named; the base is minted
     # quietly, so its members still answer and nothing repeats the refusal
     prevQuiet: st.typing.quietBounds
-    cl: typedefBaseClash :ast :st scope: rf base: tb :idSubs
+    cl: typedefBaseClash :ast :st base: tb :idSubs
     if cl.argTid.isZero.not then {
         st.typing.typedefClash.set key: mid value: cl
         st.typing.quietBounds = true
@@ -22439,7 +22457,6 @@ mintMonoTypedefBase: function {
 typedefBaseClash: function {
     ast: Ast
     st: zenv.ZSymbolTable
-    scope: ztypes.declid
     base: ztypes.tid
     idSubs: (IdMapV ztypes.tid v: ztypes.genericarg).view
 } out ztyping.typedefclash is {
@@ -22463,7 +22480,7 @@ typedefBaseClash: function {
             sa: (idTypeSubOf :idSubs key: a).or d: a
             p: pn.get :i
             at: sa
-            if (constraintAdmits :ast :st :scope tdecl: bd paramName: p argTid: at).not then {
+            if (constraintAdmits :ast :st tdecl: bd paramName: p argTid: at).not then {
                 return (ztyping.typedefclash baseDecl: bd paramName: p argTid: at reported: false)
             }
         }
@@ -22827,7 +22844,6 @@ constraintHolds: function {
 constraintAdmits: function {
     ast: Ast
     st: zenv.ZSymbolTable
-    scope: ztypes.declid
     tdecl: ztypes.declid
     paramName: zast.nameid
     argTid: ztypes.tid
@@ -22848,7 +22864,6 @@ constraintAdmits: function {
     if ck == ztypes.constraintkind.other then return (namedBoundAdmits
         :ast
         :st
-        :scope
         :tdecl
         :cd
         :argTid
@@ -22862,7 +22877,6 @@ constraintAdmits: function {
 checkConstraintSat: function {
     ast: Ast
     st: zenv.ZSymbolTable
-    scope: ztypes.declid
     tdecl: ztypes.declid
     paramName: zast.nameid
     at: zast.nodeid
@@ -22871,7 +22885,7 @@ checkConstraintSat: function {
     argTid: ztypes.tid
 } is {
     if st.typing.quietBounds then return
-    if (constraintAdmits :ast :st :scope :tdecl :paramName :argTid) then return
+    if (constraintAdmits :ast :st :tdecl :paramName :argTid) then return
     if lineno == 0 when st.typing.boundSiteLine > 0 then {
         if st.typing.boundSiteFailArg == argTid then return
         st.typing.boundSiteFailArg = argTid
@@ -23019,21 +23033,27 @@ reportConstraintUnmet: function {
 # declaration says, within the one family boundFamilyAdmits gives it: a
 # protocol or facet admits its conformers, a union a member's own type or a
 # conformer of a protocol member, and a variant exactly its arms' payload
-# types. A bound that names nothing is
-# checkGenericBounds's report, not this one, and admits everything here so the
-# same mistake is not reported twice. A bound over another of the template's
-# parameters (`(Getter v: u).generic`) is a PARTIAL instance, which one
-# argument alone cannot decide, and admits it.
+# types. A union or variant bound is read off its declaration
+# (sumBoundDeclAdmits), so checking an instance resolves only the arms it can
+# be. A bound that names nothing is checkGenericBounds's report, not this one,
+# and admits everything here so the same mistake is not reported twice. A
+# bound over another of the template's parameters (`(Getter v: u).generic`) is
+# a PARTIAL instance, which one argument alone cannot decide, and admits it.
 namedBoundAdmits: function {
     ast: Ast
     st: zenv.ZSymbolTable
-    scope: ztypes.declid
     # the template whose parameter the bound is on
     tdecl: ztypes.declid
     cd: ztypes.constraintdesc
     argTid: ztypes.tid
 } out bool is {
-    bt: namedBoundTid :ast :st :scope :tdecl :cd
+    sb: sumBoundByDecl :ast :st :tdecl :cd :argTid
+    match (
+        sb
+    ) case some then {
+        return sb
+    } case none then null
+    bt: namedBoundTid :ast :st :tdecl :cd
     if bt.isZero then return true
     if (boundFamilyAdmits :st :bt :argTid).not then return false
     if bt == argTid then return true
@@ -23049,6 +23069,163 @@ namedBoundAdmits: function {
         return (sumBoundAdmits :st :bt :argTid conform: false)
     }
     return true
+}
+
+# sumBoundByDecl -- namedBoundAdmits's answer for a bound whose declaration is a
+# union or a variant (sumBoundDeclAdmits); none for any other bound.
+sumBoundByDecl: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    tdecl: ztypes.declid
+    cd: ztypes.constraintdesc
+    argTid: ztypes.tid
+} out optionval bool is {
+    bd: boundDeclOf :st :ast :tdecl :cd
+    if bd.isZero then return (optionval.none bool)
+    dtt: declDefTypetype :st :ast declId: bd
+    if dtt.none then return (optionval.none bool)
+    isUnion: dtt == ztypes.ztypetype.unionType
+    if isUnion.not when dtt != ztypes.ztypetype.variantType then return (optionval.none bool)
+    return (optionval.some (sumBoundDeclAdmits :ast :st :bd :isUnion :argTid))
+}
+
+# sumBoundDeclAdmits -- a union or variant bound, read off its DECLARATION
+# `bd`: the argument is one of its arms' types, or -- a union's -- conforms to
+# a protocol or facet arm. A sum's definition does not make every arm used: only
+# an arm that can be the argument is resolved (sumArmCanBe), so an f64 instance
+# of `wide: variant { :f64 :f128 }` never demands f128's unit.
+sumBoundDeclAdmits: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    bd: ztypes.declid
+    isUnion: bool
+    argTid: ztypes.tid
+} out bool is {
+    if (sumFamilyAdmits :st :isUnion :argTid).not then return false
+    argDecl: declOfTypeId :st tid: argTid
+    og: st.reg.genericOriginOf tid: argTid
+    if og.isZero.not then argDecl = declOfTypeId :st tid: og
+    if argDecl == bd then return true
+    sc: declParentIdOf :st declId: bd
+    ud: unitRootOfDecl :st declId: bd
+    opId: declOperationOf :st :ast declId: bd
+    if opId.isZero or (objRefAt :ast nid: opId).nid.isZero then return false
+    nis: (objRefAt :ast nid: opId).nis
+    k: u64
+    for k < nis loop {
+        fm: argRefAt :ast nid: (zast.objIsItemAt :ast nid: opId i: k)
+        k = k + 1
+        if fm.nid.isZero then continue
+        te: sumArmTypeNode :st :ast scope: sc unitDecl: ud op: fm.operation
+        if (sumArmCanBe :st :ast scope: sc unitDecl: ud :te :argDecl :isUnion) then {
+            mt: resolveTyperefShell :st :ast unitDecl: ud scope: sc nid: te thisName: ""
+            if (sumMemberAdmits :st member: mt :argTid conform: isUnion) then return true
+        }
+    }
+    return false
+}
+
+# sumFamilyAdmits -- the family a sum bound admits: a union reference types and
+# `null`, a variant value types.
+sumFamilyAdmits: function {
+    st: zenv.ZSymbolTable.view
+    isUnion: bool
+    argTid: ztypes.tid
+} out bool is {
+    if (isNullTid :st tid: argTid) then return isUnion
+    if isUnion then return (typeIsValtype :st tid: argTid).not
+    return (typeIsReftype :st tid: argTid).not
+}
+
+# sumArmCanBe -- whether the arm whose type is written at `te` can admit an
+# argument declared at `argDecl`, read without resolving it: its type names that
+# declaration, or it is a union's protocol or facet arm, or the arm's type (or
+# the argument) names no declaration readable here, which only resolving can
+# settle.
+sumArmCanBe: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    scope: ztypes.declid
+    unitDecl: ztypes.declid
+    te: zast.nodeid
+    argDecl: ztypes.declid
+    isUnion: bool
+} out bool is {
+    hd: sumArmHeadDecl :st :ast :scope :unitDecl op: te
+    if hd.isZero or argDecl.isZero or (hd == argDecl) then return true
+    if isUnion.not then return false
+    htt: declDefTypetype :st :ast declId: hd
+    if htt.none then return false
+    return (htt == ztypes.ztypetype.protocolType) or (htt == ztypes.ztypetype.facetType)
+}
+
+# declOperationOf -- the definition node a declaration's namedoperation holds;
+# zero for a declaration with none.
+declOperationOf: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    declId: ztypes.declid
+} out zast.nodeid is {
+    dn: (st.typing.decls.get i: declId).node
+    if dn.isZero then return dn
+    nop: ast.nodes.get i: dn
+    if nop.namedoperation then return nop.operation
+    return zast.nodeid
+}
+
+# sumArmTypeNode -- the node an arm's type is written at: a `(Box T)` arm's T,
+# which the arm IS (attachUnionArm collapses it), else the arm's own operation.
+sumArmTypeNode: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    scope: ztypes.declid
+    unitDecl: ztypes.declid
+    op: zast.nodeid
+} out zast.nodeid is {
+    acr: callRefAt :ast nid: op
+    if acr.nid.isZero or (acr.nargs != 1) then return op
+    cd: sumArmHeadDecl :st :ast :scope :unitDecl op: acr.callable
+    if cd.isZero then return op
+    if (
+        cd != (declOfTypeId :st tid: (stdTidRo :ast :st wk: zast.wellKnown.slot.tyBox))
+    ) then return op
+    ba: argRefAt :ast nid: (zast.callArgAt :ast nid: acr.nid i: 0)
+    if ba.nid.isZero then return op
+    return ba.operation
+}
+
+# sumArmHeadDecl -- the definition an arm's type names, read without resolving
+# it: a bare name's nearest declaration from the sum's scope, an application's
+# callee's, or a qualified `unit.T`'s member of that unit, through aliases. Zero
+# when the type names nothing readable here.
+sumArmHeadDecl: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    scope: ztypes.declid
+    unitDecl: ztypes.declid
+    op: zast.nodeid
+} out ztypes.declid is {
+    d: ztypes.declid
+    n: ast.nodes.get i: op
+    if n.atomid then {
+        d = (nearestDeclOf
+            :st
+            scope: (scopeFor :st :unitDecl :scope)
+            baseId: (atomNameId :ast n: (ast.nodes.get i: op))
+        )
+    } else if n.call then {
+        return (sumArmHeadDecl :st :ast :scope :unitDecl op: (callRefAt :ast nid: op).callable)
+    } else if n.dottedpath then {
+        qu: boundQualifierUnit :st :scope qualId: (atomNameId :ast n: (ast.nodes.get i: n.parent))
+        if qu.isZero.not then {
+            d = (st.typing.declFindChild
+                parentDeclId: qu
+                nameId: (atomNameId :ast n: (ast.nodes.get i: n.child))
+            )
+        }
+    }
+    if d.isZero then return d
+    return (aliasTargetDecl :st :ast aliasDecl: d)
 }
 
 # boundFamilyAdmits -- a generic parameter admits ONE family: the family of
@@ -23078,8 +23255,8 @@ boundFamilyOf: function {st: zenv.ZSymbolTable.view bt: ztypes.tid} out optionva
 }
 
 # boundDeclTypetype -- the kind of declaration a bound names, found read-only
-# as namedBoundTid finds it; StringLike is a union. An application bound is not
-# read, and answers none, as does a bound the kinds classify otherwise.
+# (boundDeclOf); StringLike is a union. An application bound is not read, and
+# answers none, as does a bound the kinds classify otherwise.
 boundDeclTypetype: function {
     ast: Ast.view
     st: zenv.ZSymbolTable.view
@@ -23089,20 +23266,48 @@ boundDeclTypetype: function {
     if desc.kind == ztypes.constraintkind.stringLike then {
         return (optionval.some ztypes.ztypetype.unionType)
     }
-    if (desc.kind != ztypes.constraintkind.other) or desc.boundName.isZero then {
-        return (optionval.none ztypes.ztypetype)
-    }
-    ud: unitRootOfDecl :st declId: tdecl
-    if desc.boundQual.isZero.not then {
-        ud = boundQualifierUnit :st scope: tdecl qualId: desc.boundQual
-    }
-    if ud.isZero then return (optionval.none ztypes.ztypetype)
-    d: declOfUnitDefIds :st unitDecl: ud nameId: desc.boundName
-    if d.isZero when st.typing.coreUnitRoot.isZero.not then {
-        d = declOfUnitDefIds :st unitDecl: st.typing.coreUnitRoot nameId: desc.boundName
-    }
+    if desc.kind != ztypes.constraintkind.other then return (optionval.none ztypes.ztypetype)
+    d: boundDeclOf :st :ast :tdecl cd: desc
     if d.isZero then return (optionval.none ztypes.ztypetype)
     return (declDefTypetype :st :ast declId: d)
+}
+
+# boundDeclOf -- the definition a named bound names, read without resolving it:
+# the nearest declaration of its name from the TEMPLATE's scope, where the bound
+# is written (never a call's), or the member of the unit a qualified bound
+# names, through aliases. Zero for an application bound or a name that declares
+# nothing.
+boundDeclOf: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    tdecl: ztypes.declid
+    cd: ztypes.constraintdesc
+} out ztypes.declid is {
+    d: ztypes.declid
+    if cd.boundName.isZero or cd.boundApp.isZero.not then return d
+    if cd.boundQual.isZero.not then {
+        qu: boundQualifierUnit :st scope: tdecl qualId: cd.boundQual
+        if qu.isZero then return d
+        d = st.typing.declFindChild parentDeclId: qu nameId: cd.boundName
+        if d.isZero then return d
+        return (aliasTargetDecl :st :ast aliasDecl: d)
+    }
+    return (bareBoundDecl :st :ast scope: tdecl nameId: cd.boundName)
+}
+
+# bareBoundDecl -- the definition a bare bound name written in `scope` names: its
+# nearest declaration (nearestDeclOf), through aliases, read without resolving
+# anything. Zero when no scope declares it.
+bareBoundDecl: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    scope: ztypes.declid
+    nameId: zast.nameid
+} out ztypes.declid is {
+    ud: unitRootOfDecl :st declId: scope
+    d: nearestDeclOf :st scope: (scopeFor :st unitDecl: ud :scope) baseId: nameId
+    if d.isZero then return d
+    return (aliasTargetDecl :st :ast aliasDecl: d)
 }
 
 # familyOfBoundTypetype -- boundFamilyOf's answer for a declaration of kind
@@ -23180,9 +23385,8 @@ boundQualifierUnit: function {
 namedBoundTid: function {
     ast: Ast
     st: zenv.ZSymbolTable
-    scope: ztypes.declid
-    # the template whose parameter the bound is on, where an application's
-    # names resolve
+    # the template whose parameter the bound is on, where the bound's names
+    # resolve
     tdecl: ztypes.declid
     cd: ztypes.constraintdesc
 } out ztypes.tid is {
@@ -23192,12 +23396,12 @@ namedBoundTid: function {
     # written type is, nearest scope first (a definition nothing has demanded
     # yet is resolved where the walk meets it)
     if cd.boundQual.isZero.not then {
-        qu: boundQualifierUnit :st :scope qualId: cd.boundQual
+        qu: boundQualifierUnit :st scope: tdecl qualId: cd.boundQual
         if qu.isZero then return ztypes.tid
         return (scopeMemberTid :st :ast root: qu nameId: cd.boundName)
     }
-    ud: unitRootOfDecl :st declId: scope
-    return ((walkLookupTyperefById :st :scope :ast unitDecl: ud baseId: cd.boundName).or
+    ud: unitRootOfDecl :st declId: tdecl
+    return ((walkLookupTyperefById :st scope: tdecl :ast unitDecl: ud baseId: cd.boundName).or
         d: ztypes.tid.zero
     )
 }
@@ -24296,7 +24500,7 @@ keyParamAdmits: function {
     cd: st.reg.genericParamConstraintOf :tdecl paramName: pn
     if cd.kind == ztypes.constraintkind.none then return true
     if cd.kind == ztypes.constraintkind.other then {
-        return (namedBoundAdmits :ast :st scope: st.curScope :tdecl :cd argTid: key)
+        return (namedBoundAdmits :ast :st :tdecl :cd argTid: key)
     }
     return (constraintHolds :ast :st ck: cd.kind argTid: key)
 }
@@ -25093,7 +25297,6 @@ buildSpecTrieKeys: function {
     valSubs: (IdMapV zast.nameid v: u64).view
     fallbackArg: ztypes.tid
     args8: ListVal ztypes.genericarg
-    scope: ztypes.declid
     tk8: ztypes.declid
 } out bool is {
     trieOk8: true
@@ -25123,7 +25326,6 @@ buildSpecTrieKeys: function {
             ) case typeArg then {
                 (checkConstraintSat
                     :st
-                    :scope
                     :ast
                     tdecl: tk8
                     paramName: pn8
@@ -25383,7 +25585,6 @@ getOrMintSpec: function {
     trieOk8: (buildSpecTrieKeys
         :ast
         :st
-        :scope
         :tk8
         :pnames8
         :subs
@@ -44442,7 +44643,7 @@ boundMayBeReftype: function {
         nid: (st.typing.decls.get i: pd).node
     )
     if fm.nid.isZero then return true
-    return (boundAdmitsReftype :st :ast scope: tdecl :tdecl :fm)
+    return (boundAdmitsReftype :st :ast :tdecl :fm)
 }
 
 # unresolvedBareName -- prove a bare name resolves NOWHERE in value
@@ -45681,14 +45882,12 @@ fillOneDefault: function {
     if (constraintAdmits
         :ast
         :st
-        scope: tdecl
         :tdecl
         paramName: pn
         argTid: dt
     ).not then {
         (checkConstraintSat
             :st
-            scope: tdecl
             :ast
             :tdecl
             paramName: pn
@@ -48908,7 +49107,6 @@ bindCallParams: function {
         ) case some then {
             (checkConstraintSat
                 :st
-                scope: st.curScope
                 :ast
                 :tdecl
                 paramName: gp3
@@ -62828,6 +63026,19 @@ scopeHoldsName: function {
     rt: declTypeIdOf :st declId: root
     if rt.isZero then return false
     return (st.typing.declChildOfId parentTypeId: rt :nameId).none.not
+}
+
+# nearestDeclOf -- the declaration the type-ref walk meets first for `baseId`
+# from `scope`, read without demanding it: zero when the nearest scope holds the
+# name only in its member index, or no scope holds it.
+nearestDeclOf: function {
+    st: zenv.ZSymbolTable.view
+    scope: ztypes.declid
+    baseId: zast.nameid
+} out ztypes.declid is {
+    at: nearestScopeOf :st :scope :baseId
+    if at.isZero then return at
+    return (st.typing.declFindChild parentDeclId: at nameId: baseId)
 }
 
 # walkLookupTyperefFrom -- the walk itself, from an explicit start scope (0:

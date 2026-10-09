@@ -2488,7 +2488,11 @@ perf: $(PERFBIN)
 # -3,761 the type-ref walk answers from the nearest scope that holds the name and
 # demands its declaration there (nearestScopeOf); the wait and the custom-tag
 # and member-check fixups go: -28 behaviour, -3,733 source (ab.sh).
-ALLOC_BASELINE := 2187367
+#
+# +3,987 a union or variant bound is read off its declaration and resolves only
+# the arms its instance can be (sumBoundDeclAdmits); bounds read from the
+# template's scope: +2 behaviour, +3,985 source (ab.sh).
+ALLOC_BASELINE := 2191354
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -2844,7 +2848,7 @@ case-guard:
 # means a unit now rejects programs that never touch it (which is what made
 # `--cc tcc` reject the entire corpus); a fall means a refusal stopped firing
 # for a program that does touch it.
-REQUIRE_TCC_BASELINE := 6
+REQUIRE_TCC_BASELINE := 8
 
 require-guard: bin/zc
 	@n=0; rep=""; \
@@ -3125,7 +3129,7 @@ static-tcc-guard: bin/zc bin/zl bin/zls
 # "quadmath" unconditionally would link fine and pass every other gate. A rise
 # means something now reaches a unit it did not; a fall means a program lost a
 # need it had.
-ZLINK_BASELINE := 6
+ZLINK_BASELINE := 8
 
 zlink-guard: bin/zc
 	@n=0; rep=""; \
