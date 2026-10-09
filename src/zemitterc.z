@@ -3570,7 +3570,7 @@ Ctx: class {
     genYieldCount: u64
     # the next yield's number as the body is walked
     genYieldNext: u64
-    # the last `_fc_<k>` loop-counter field handed to a counted `for` whose
+    # the last `#fc_<k>` loop-counter field handed to a counted `for` whose
     # body suspends. Which field a loop gets does not matter, only that each
     # gets its own: they are all i64, and the lowering allocated at least this
     # many by the same walk
@@ -3586,7 +3586,7 @@ Ctx: class {
     comprehendTo: List ComprehendTo
     # the yield number of each yield HOISTED out of expression position, by
     # call node id. The suspension runs as its own statement and the resume
-    # value lands in `_yv_<k>`; the expression emitter then renders that yield
+    # value lands in `#yv_<k>`; the expression emitter then renders that yield
     # as a plain read of it
     yieldTempK: (IdMapV zast.nodeid v: u64)
     # the wrapper type the generator's `.call` returns
@@ -4214,7 +4214,7 @@ spillkind: variant {
 # variable id to look up. The C name is the right key anyway -- the spill and
 # the reload are both plain C assignments, written in the loop's own scope.
 ForSpill: class {
-    # the state field, as the C lvalue genFieldC spells (`this->_fc_3`)
+    # the state field, as the C lvalue genFieldC spells (`this->f3`)
     field: String
     # the C expression saved before the return: the local, or the `_iterN`
     # wrapper a borrowed view is re-derived from
@@ -14200,7 +14200,7 @@ emitNamedCalleeChain: function {
     match (
         yk
     ) case some then {
-        yvN: "_yv_\{yk}"
+        yvN: "#yv_\{yk}"
         return (genFieldC :ast :symtab :ctx name: yvN.stringView)
     } case none then null
     # a yield the hoist declined -- a second one in the same expression, or one
@@ -14736,7 +14736,15 @@ memberC: function {
         if kind.slot then {
             r.append (slotReadableName name: nm.stringView ow: ctx.opWords)
         } else {
-            r.append nm
+            # a generator's synthesized field is `#`-prefixed: only the
+            # identifier bytes are C
+            nmv: nm.stringView
+            bi: u64
+            for bi < nmv.length loop {
+                b: (nmv.byteAt i: bi).or d: 0
+                bi = bi + 1
+                if (isIdChar :b) then r.appendByte :b
+            }
         }
     }
     return r
@@ -26260,7 +26268,7 @@ emitCountedRangeFor: function {
     pushed: false
     if ctx.genActive when (zast.yieldCountIn :ast nid: m.body) > 0 then {
         ctx.genForNext = ctx.genForNext + 1
-        fcF: "_fc_\{ctx.genForNext}"
+        fcF: "#fc_\{ctx.genForNext}"
         fcC: genFieldC :ast :symtab :ctx name: fcF.stringView
         ctx.genForSpills.append (ForSpill
             field: fcC
@@ -26270,7 +26278,7 @@ emitCountedRangeFor: function {
             payC: String
             payZero: String
         )
-        fnF: "_fn_\{ctx.genForNext}"
+        fnF: "#fn_\{ctx.genForNext}"
         fnC: genFieldC :ast :symtab :ctx name: fnF.stringView
         ctx.genForSpills.append (ForSpill
             field: fnC
@@ -26398,7 +26406,7 @@ emitClosedRangeFor: function {
         pushed: false
         if ctx.genActive when (zast.yieldCountIn :ast nid: m.body) > 0 then {
             ctx.genForNext = ctx.genForNext + 1
-            fcF: "_fc_\{ctx.genForNext}"
+            fcF: "#fc_\{ctx.genForNext}"
             fcC: genFieldC :ast :symtab :ctx name: fcF.stringView
             ctx.genForSpills.append (ForSpill
                 field: fcC
@@ -26408,7 +26416,7 @@ emitClosedRangeFor: function {
                 payC: String
                 payZero: String
             )
-            fnF: "_fn_\{ctx.genForNext}"
+            fnF: "#fn_\{ctx.genForNext}"
             fnC: genFieldC :ast :symtab :ctx name: fnF.stringView
             ctx.genForSpills.append (ForSpill
                 field: fnC
@@ -43749,11 +43757,11 @@ emitGenPrologue: function {
     buf: String.borrow
 } is {
     if ctx.genHasValue then {
-        riC: genFieldC :ast :symtab :ctx name: "_resume_input"
+        riC: genFieldC :ast :symtab :ctx name: "#resume_input"
         lgv: "    \{riC} = \{ctx.genValC};\n"
         buf.append lgv
     }
-    stC: genFieldC :ast :symtab :ctx name: "state"
+    stC: genFieldC :ast :symtab :ctx name: "#state"
     lgs: "    switch (\{stC}) {\n"
     buf.append lgs
     buf.append "        case 0: goto L_entry;\n"
@@ -43791,7 +43799,7 @@ emitGenEpilogue: function {
         kd = kd + 1
     }
     buf.append "L_done:;\n"
-    stC: genFieldC :ast :symtab :ctx name: "state"
+    stC: genFieldC :ast :symtab :ctx name: "#state"
     lge: "    \{stC} = -1;\n"
     buf.append lge
     le: "    \{ctx.genWrap} _r_done = {0};\n"
@@ -43848,14 +43856,14 @@ emitExprFormYield: function {
     # the hoist has already suspended this yield and left the resume value in
     # a temp; only a yield it declined (no resume type it could name) still
     # needs suspending here
-    srcC: genFieldC :ast :symtab :ctx name: "_resume_input"
+    srcC: genFieldC :ast :symtab :ctx name: "#resume_input"
     {
         ycid: zast.yieldCallIdAt :ast nid: (zast.nodeIdOf n: value)
         ykq: ctx.yieldTempK.get key: ycid
         match (
             ykq
         ) case some then {
-            yvQ: "_yv_\{ykq}"
+            yvQ: "#yv_\{ykq}"
             srcC = genFieldC :ast :symtab :ctx name: yvQ.stringView
         } case none then {
             emitYieldFromNode :ast :symtab :ctx n: value :ind :buf
@@ -43938,7 +43946,7 @@ hoistStopsHere: function {n: astnode.view} out bool is {
 # A yield SUSPENDS the function: everything before it must already have run,
 # and what follows resumes at a label. It cannot sit in the middle of a C
 # expression, so the statement is split around it -- `b: (yield a) + 1` becomes
-# the suspension, then `b = _yv_k + 1`.
+# the suspension, then `b = #yv_k + 1`.
 #
 # Operands are hoisted before the yield that contains them (post-order), which
 # is the order they evaluate in, so `yield (yield a)` suspends innermost-first.
@@ -44022,9 +44030,9 @@ hoistExprYields: function {
     # into the state object's slot, NOT a C local: the suspension above
     # returned, so a local declared here would be gone by the next one. The
     # lowering allocated one slot per suspension point for exactly this.
-    yvK: "_yv_\{kNum}"
+    yvK: "#yv_\{kNum}"
     yvC: genFieldC :ast :symtab :ctx name: yvK.stringView
-    riC: genFieldC :ast :symtab :ctx name: "_resume_input"
+    riC: genFieldC :ast :symtab :ctx name: "#resume_input"
     lrv: "\{ind}\{yvC} = \{riC};\n"
     buf.append lrv
     kv: kNum
@@ -44056,7 +44064,7 @@ emitYieldStmt: function {
     # is in the box, before the suspension
     ytmp: TmpCtr n: 0 frees: List OwedFree listFrees: List OwedFree
     flushArgHoists :ctx :ind tmp: ytmp :buf
-    stC: genFieldC :ast :symtab :ctx name: "state"
+    stC: genFieldC :ast :symtab :ctx name: "#state"
     ls: "\{ind}\{stC} = \{k};\n"
     buf.append ls
     lw: "\{ind}\{ctx.genWrap} _ry_\{k} = {0};\n"

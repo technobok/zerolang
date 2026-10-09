@@ -405,7 +405,8 @@ test-tcc-heavy: $(TCC_RUN_DEPS)
 # (after the ordinal that makes it unique): `arm_case_tags` holds two arms whose
 # names differ only in case, `tag_stem_clash` two units' sums of one name. A
 # member carries its source name too (after its ordinal): `member_names_c_words`
-# holds members named like C keywords, libc macros and the emitter's own names.
+# holds members named like C keywords, libc macros and the emitter's own names,
+# `generator_field_names` a generator's `#`-named fields beside the author's.
 # The
 # COMPILER leg below is the one that matters most: the
 # small programs exercise a handful of locals each, and a naming scheme is only
@@ -417,7 +418,8 @@ readable-check: bin/zc $(BUILDDIR)/buildstamp.o
 	          rn_sibling_shadow:tests/fixtures/emitc_corpus \
           rn_two_companions:tests/fixtures/emitc_corpus \
 	          arm_case_tags:tests/fixtures/emitc_corpus tag_stem_clash:tests/fixtures/emitc_corpus \
-	          member_names_c_words:tests/fixtures/emitc_corpus; do \
+	          member_names_c_words:tests/fixtures/emitc_corpus \
+	          generator_field_names:tests/fixtures/emitc_corpus; do \
 	  n=$${c%%:*}; d=$$(echo $$c | sed 's/^[^:]*://'); \
 	  bin/zc $$n --src $$d --system lib/system --emit-c $(BUILDDIR)/rn/$$n-id.c || exit 1; \
 	  bin/zc $$n --src $$d --system lib/system --readable-names --emit-c $(BUILDDIR)/rn/$$n-rn.c || exit 1; \
@@ -2479,7 +2481,7 @@ perf: $(PERFBIN)
 #
 # +2 ztypecheck exports envLookup / scopeFor / unitdefNodeId for zls's
 # shadow-aware hover: 0 behaviour, +2 source (ab.sh).
-ALLOC_BASELINE := 2205453
+ALLOC_BASELINE := 2205596
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

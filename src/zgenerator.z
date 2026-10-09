@@ -5,11 +5,17 @@
 # author's, so this unit synthesises nothing the author already wrote -- it
 # adds `call`'s implicit receiver and the option wrapper around its element
 # type, generates the `create` the `is` fields describe, and appends the fields
-# the suspension transform needs: a `state` cursor, the loop counters, and the
+# the suspension transform needs: a `#state` cursor, the loop counters, and the
 # resume slots. The body's locals, the payload a suspending loop binds, the
 # iterable it constructs and the value a `with` holds are the checker's fields:
-# it mints them during the body walk, where their types are known. The state machine itself is the emitter's job; what happens here is
-# that the class arrives at it complete.
+# it mints them during the body walk, where their types are known. The state
+# machine itself is the emitter's job; what happens here is that the class
+# arrives at it complete.
+#
+# Every field added here or by the checker is named with a leading `#`, which no
+# source can spell (it begins a comment), so it shares the class with the
+# author's fields without ever meeting one: a field the author names `state`
+# is the author's.
 #
 # Nothing here infers ownership. A field's marker is what the author declared,
 # and the generated `create`'s parameter follows from it -- which is the whole
@@ -253,7 +259,7 @@ buildCreateMethod: function {
         child: (zast.tableAdd :ast n: createAtom)
     )
     zeroAtom: mkAtom :ast :from :line :col name: "0"
-    stArg: mkNamedOp :ast :from :line :col name: "state" op: zeroAtom
+    stArg: mkNamedOp :ast :from :line :col name: "#state" op: zeroAtom
     cargs: ListVal zast.nodeid
     cargs.append (zast.tableAdd :ast n: stArg)
     fi: u64
@@ -1281,7 +1287,7 @@ declaredInputTypeId: function {
     return zast.nodeid
 }
 
-# resumeFieldPath -- the `_resume_input` field's type for a declared input. The
+# resumeFieldPath -- the `#resume_input` field's type for a declared input. The
 # field holds the most recent resumed value: an OWNED input (`.take` / `.hold`)
 # strips to an owned field, a non-owned one (`.borrow` / `.view`) keeps its
 # marker, and an unmarked one is a reference into the caller's argument for the
@@ -1410,12 +1416,12 @@ appendResumeFields: function {
     for yvi < yieldSlots loop {
         yvi = yvi + 1
         yvT: resumeFieldPath :ast nid: inputTypeId
-        yvNm: "_yv_\{yvi}"
+        yvNm: "#yv_\{yvi}"
         yvF: mkNamedOp :ast from: inputTypeId :line :col name: yvNm.stringView op: yvT
         addFields.append (zast.tableAdd :ast n: yvF)
     }
     riT: resumeFieldPath :ast nid: inputTypeId
-    riF: mkNamedOp :ast from: inputTypeId :line :col name: "_resume_input" op: riT
+    riF: mkNamedOp :ast from: inputTypeId :line :col name: "#resume_input" op: riT
     addFields.append (zast.tableAdd :ast n: riF)
 }
 
@@ -1443,7 +1449,7 @@ appendForCounterFields: function {
     for fci < forSlots loop {
         fci = fci + 1
         fcTy: scalarTypePath :ast :from :line :col name: "i64"
-        fcNm: "_fc_\{fci}"
+        fcNm: "#fc_\{fci}"
         fcF: mkNamedOp :ast :from :line :col name: fcNm.stringView op: fcTy
         addFields.append (zast.tableAdd :ast n: fcF)
         # and its TRIP COUNT, for the loops that turn out to be a CLOSED range:
@@ -1454,7 +1460,7 @@ appendForCounterFields: function {
         # families apart needs the checker's stamps, which this pass does not
         # have, and a spare scalar field costs nothing.
         fnTy: scalarTypePath :ast :from :line :col name: "u64"
-        fnNm: "_fn_\{fci}"
+        fnNm: "#fn_\{fci}"
         fnF: mkNamedOp :ast :from :line :col name: fnNm.stringView op: fnTy
         addFields.append (zast.tableAdd :ast n: fnF)
     }
@@ -1589,7 +1595,7 @@ lowerDeclared: function {
     # The body's locals are the checker's: it keeps each in a field of its own.
     addFields: ListVal zast.nodeid
     stTy: scalarTypePath :ast from: objId :line :col name: "i64"
-    stField: mkNamedOp :ast from: objId :line :col name: "state" op: stTy
+    stField: mkNamedOp :ast from: objId :line :col name: "#state" op: stTy
     addFields.append (zast.tableAdd :ast n: stField)
     appendForCounterFields :ast from: objId :line :col :forSlots :addFields
     if parts.inputTypeId.isZero.not then (appendResumeFields
