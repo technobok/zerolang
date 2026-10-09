@@ -8694,11 +8694,13 @@ callRhsIsBorrow: function {
 } out bool is {
     cstid: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: call.callable))
     if (funcBorrowFlag :symtab tid: cstid) then return true
-    cnmId: atomNameIdOf :ast n: (ast.nodes.get i: call.callable)
-    if cnmId.isZero.not then {
-        ufid: userFnIdById :ast :symtab :ctx nameId: cnmId
-        if (funcBorrowFlag :symtab tid: ufid) then return true
-    }
+    # a bare callee's own declaration (refDecl), when its stamp missed
+    cnid: interpPartNodeId n: (ast.nodes.get i: call.callable)
+    crd: (symtab.typing.refDecl.get key: cnid).or d: ztypes.declid
+    if crd.isZero.not when (funcBorrowFlag
+        :symtab
+        tid: (ztypecheck.declTypeIdOf st: symtab declId: crd)
+    ) then return true
     chId: aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable)
     if chId.isZero then return false
     rid: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: call.callable)
@@ -32130,7 +32132,7 @@ emitNestedUnitFns: function {
 }
 
 # collectFnDecls -- the bodied, demanded function declarations of this unit, in
-# source order: their body-list indices and their names.
+# source order, as their body-list indices.
 collectFnDecls: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -32138,7 +32140,6 @@ collectFnDecls: function {
     bodyIds: zast.kidspan
     ownerTid: ztypes.tid
     idxs: ListVal u64
-    names: List String
 } is {
     di: u64
     vx299: u64
@@ -32169,7 +32170,6 @@ collectFnDecls: function {
             if skipDepMain.not then {
                 dv: di
                 idxs.append dv
-                names.append nm.copy
             }
         }
         di = di + 1
@@ -32186,32 +32186,17 @@ emitFnDeclsInOrder: function {
     bodyIds: zast.kidspan
     ownerTid: ztypes.tid
     idxs: (ListVal u64).view
-    names: (List String).view
     declOnly: bool
     buf: String.borrow
 } is {
     wn: idxs.length
     wi: u64
     for wi < wn loop {
-        nm2: names.get i: wi
         didx: idxs.get i: wi
         dm2Id: zast.kidAt kids: ast.kids span: bodyIds i: didx
         dm2: ast.nodes.get i: dm2Id
         if dm2.namedoperation then {
-            fid: ztypes.tid
-            if ownerTid.isZero then {
-                fid = userFnIdById :ast :symtab :ctx nameId: dm2.name
-            } else {
-                fo: (symtab.typing.declChildOfId
-                    parentTypeId: ownerTid
-                    nameId: (zast.poolFind pool: ast.names text: nm2.stringView)
-                )
-                match (
-                    fo
-                ) case some then {
-                    fid = fo
-                } case none then null
-            }
+            fid: unitMemberTid :symtab :ctx :ownerTid nameId: dm2.name
             if (isGenericFnTid :symtab tid: fid) then {
                 (emitFnMonoInstances
                     :ast
@@ -32287,8 +32272,7 @@ emitFnsIn: function {
     {
         emitNestedUnitFns :ast :symtab :ctx :bodyIds :ownerTid :declOnly :buf
         idxs: ListVal u64
-        names: List String
-        collectFnDecls :ast :symtab :ctx :bodyIds :ownerTid :idxs :names
+        collectFnDecls :ast :symtab :ctx :bodyIds :ownerTid :idxs
         (emitFnDeclsInOrder
             :ast
             :symtab
@@ -32296,7 +32280,6 @@ emitFnsIn: function {
             :bodyIds
             :ownerTid
             :idxs
-            :names
             :declOnly
             :buf
         )
@@ -39234,7 +39217,7 @@ emitDefMethods: function {
             (isTypedefDef n: opn9)
         )
         if hasMethods then {
-            rid: unitMemberTid :ast :symtab :ctx :ownerTid nameId: bm.name
+            rid: unitMemberTid :symtab :ctx :ownerTid nameId: bm.name
             if rid.isZero.not then (emitRecordMethods
                 :ast
                 :symtab
@@ -41628,7 +41611,7 @@ emitUnitConformanceImpls: function {
             (isVariantDef n: biOp) or
             (isTypedefDef n: biOp)
         ).not then continue
-        implT: unitMemberTid :ast :symtab :ctx :ownerTid nameId: bi.name
+        implT: unitMemberTid :symtab :ctx :ownerTid nameId: bi.name
         if implT.isZero then continue
         (emitConformanceImplsForType
             :ast
@@ -41690,7 +41673,7 @@ emitUnitFnFwdDecls: function {
         }
         bfdOp: ast.nodes.get i: bfd.operation
         if (ztypecheck.isFunctionDefWithBody o: bfdOp).not then continue
-        fdid: unitMemberTid :ast :symtab :ctx :ownerTid nameId: bfd.name
+        fdid: unitMemberTid :symtab :ctx :ownerTid nameId: bfd.name
         if fdid.isZero then continue
         if (isGenericFnTid :symtab tid: fdid) then {
             (emitFnMonoInstances
@@ -41793,7 +41776,7 @@ emitNestedRecordDefs: function {
         nOp: nm.operation
         if (zast.unitOpDeclaresUnit :ast opId: nOp).not then continue
         if (isGenericTemplateUnitOp :ast opId: nOp) then continue
-        nsTid: unitMemberTid :ast :symtab :ctx :ownerTid nameId: nm.name
+        nsTid: unitMemberTid :symtab :ctx :ownerTid nameId: nm.name
         if nsTid.isZero then continue
         sns: ctx.nsTid
         ctx.nsTid = nsTid
@@ -41810,18 +41793,17 @@ emitNestedRecordDefs: function {
     }
 }
 
-# unitMemberTid -- the type id a unit body's definition `nameId` names: a file
-# unit's member when `ownerTid` is 0, else a child of the nested unit `ownerTid`.
+# unitMemberTid -- the type id a unit body's definition `nameId` names: a child of
+# the nested unit `ownerTid`, or of the file unit ctx is bound to when it is 0.
 unitMemberTid: function {
-    ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
     ownerTid: ztypes.tid
     nameId: zast.nameid
 } out ztypes.tid is {
-    if ownerTid.isZero then return (userFnIdById :ast :symtab :ctx :nameId)
-    co: (symtab.typing.declChildOfId parentTypeId: ownerTid :nameId).or d: ztypes.tid.zero
-    return co
+    owner: ownerTid
+    if owner.isZero then owner = ztypecheck.declTypeIdOf st: symtab declId: ctx.mainUnitId
+    return ((symtab.typing.declChildOfId parentTypeId: owner :nameId).or d: ztypes.tid.zero)
 }
 
 # emitDataBlock -- `name: data { e0 e1 ... } out intdata T`: a static const
