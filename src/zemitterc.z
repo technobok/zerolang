@@ -3866,6 +3866,8 @@ Ctx: class {
     # natives.tbl's conversion rows name its arms -- so the emitter has to know
     # which type that is to spell the error assignment for its representation.
     converrorTid: ztypes.tid
+    # bool's type id: an interpolated bool prints its arm's name
+    boolTid: ztypes.tid
     # the well-known generic origins -- Option, Result, List and the rest --
     # looked up once and compared by id after
     origins: ListVal ztypes.tid
@@ -19310,7 +19312,8 @@ appendStringPart: function {
 }
 
 # interpPartIsInt -- an interpolated part that prints as an integer: an integer
-# kind, or a bool or a tag, which print as their number.
+# kind, or a tag, which prints as its number. A bool is not one: it prints its
+# arm's name (interpBoolPart).
 interpPartIsInt: function {
     symtab: zenv.ZSymbolTable.view tid: ztypes.tid nk: ztypes.suffixinfo
 } out bool is {
@@ -19318,6 +19321,43 @@ interpPartIsInt: function {
     if tid.isZero then return false
     if (isOrdinalVariant :symtab :tid) then return true
     return (symtab.reg.typetypeOf typeId: tid) == ztypes.ztypetype.tagType
+}
+
+# interpBoolPart -- an interpolated bool, appended as the name of the arm it holds
+# (`true` or `false`, read off bool's declaration). The value is bound once:
+# each interpolation part is evaluated exactly once.
+interpBoolPart: function {
+    # the arm names
+    ast: Ast.view
+    # the checked program declaring bool
+    symtab: zenv.ZSymbolTable.view
+    # the emission context holding bool's tid
+    ctx: Ctx
+    # the bool's C expression
+    val: StringView
+    # the string being built
+    sNm: StringView
+    # the temp number for the part's locals
+    bN: u64
+    # the statements' indent
+    ind: StringView
+    # the function body being written
+    buf: String.borrow
+} is {
+    f: zast.nameTextAt :ast ref: (armIdAt :symtab tid: ctx.boolTid armOrd: 0)
+    t: zast.nameTextAt :ast ref: (armIdAt :symtab tid: ctx.boolTid armOrd: 1)
+    fl: f.length
+    tl: t.length
+    fq: "\"\{f}\""
+    tq: "\"\{t}\""
+    (appendFormattedNum
+        :ctx
+        :sNm
+        :bN
+        stmt: "bool _v\{bN} = \{val}; const char* _b\{bN} = _v\{bN} ? \{tq} : \{fq}; int _b\{bN}_n = _v\{bN} ? \{tl} : \{fl}"
+        :ind
+        :buf
+    )
 }
 
 # emit one part of a string interpolation.
@@ -19367,12 +19407,20 @@ emitInterpPart: function {
             :ind
             :buf
         )
+    } else if pt.isZero.not when ctx.boolTid.isZero.not when (
+        (ztypecheck.typedefChaseTid
+            st: symtab
+            tid: pt
+        ) ==
+        ctx.boolTid
+    ) then {
+        interpBoolPart :ast :symtab :ctx val: val.stringView :sNm :bN :ind :buf
     } else if (interpPartIsInt :symtab tid: pt :nk) then {
         # u64 is the one integer width whose range does not fit in
         # int64_t, so the signed conversion specifier turns its top half
         # negative -- u64 max printed as -1. The kind answers this: unsigned
         # and 64 bits wide is the case, and i128 / u128 have already taken
-        # their own branches above. A bool or a tag prints as its number.
+        # their own branches above. A tag prints as its number.
         conv: "%ld"
         cast: "(long)(int64_t)"
         if nk.has when (kindSigned k: nk.kind).not when (kindBits k: nk.kind) == 64 then {
@@ -32586,82 +32634,51 @@ emitCHeader: function {
     buf.append (loadFragment path: p0.stringView svC: "" strC: "" fails: errs)
 }
 
-# the three runtime types the emitter must name before anything else: String,
-# StringView, and the C-error record. They are resolved by ID out of the system
-# unit, never by the C names the fragments use.
+# the runtime types the emitter must name before anything else: String,
+# StringView, the C-error record and bool. They are resolved by ID out of the
+# system unit, never by the C names the fragments use.
 runtimetids: record {
     # String's type id
     str: ztypes.tid
     # StringView's type id
     sv: ztypes.tid
-    # converror's type id. The three are fetched together because every emit
-    # path needs at least one
+    # converror's type id. They are fetched together because every emit path
+    # needs at least one
     cerr: ztypes.tid
+    # bool's type id
+    bool: ztypes.tid
 }
 
-# resolveRuntimeTids -- resolve those three, or leave a tid 0 where the program
+# resolveRuntimeTids -- resolve those, or leave a tid 0 where the program
 # registers none (a unit with no main and no strings registers neither).
 resolveRuntimeTids: function {
     program: Ast.view
     symtab: zenv.ZSymbolTable.view
 } out runtimetids is {
-    strId: ztypes.tid
-    svId: ztypes.tid
-    sysId: zast.nameid
-    strNmId: zast.nameid
-    svNmId: zast.nameid
-    {
-        sysId = zast.wellKnown.slot.unSystem
-        strNmId = zast.wellKnown.slot.tyString
-        svNmId = zast.wellKnown.slot.tyStringView
-    }
-    sgo: optionval.none ztypes.tid
-    {
-        ud11x: ztypecheck.unitDeclOfName st: symtab nameId: sysId
-        sgo = (ztypecheck.resolvedByIdsRo
-            ast: program
-            st: symtab
-            unitDecl: ud11x
-            name: strNmId
-        )
-    }
-    match (
-        sgo
-    ) case some then {
-        strId = sgo
-    } case none then null
-    vgo: optionval.none ztypes.tid
-    {
-        ud12x: ztypecheck.unitDeclOfName st: symtab nameId: sysId
-        vgo = (ztypecheck.resolvedByIdsRo
-            ast: program
-            st: symtab
-            unitDecl: ud12x
-            name: svNmId
-        )
-    }
-    match (
-        vgo
-    ) case some then {
-        svId = vgo
-    } case none then null
-    cerrId: ztypes.tid
-    cgo: optionval.none ztypes.tid
-    {
-        ud13x: ztypecheck.unitDeclOfName st: symtab nameId: sysId
-        cgo = (ztypecheck.resolvedByIdsRo
-            ast: program
-            st: symtab
-            unitDecl: ud13x
-            name: zast.wellKnown.slot.tyConverror
-        )
-    }
-    match (
-        cgo
-    ) case some then {
-        cerrId = cgo
-    } case none then null
-    return (runtimetids str: strId sv: svId cerr: cerrId)
+    sysU: ztypecheck.unitDeclOfName st: symtab nameId: zast.wellKnown.slot.unSystem
+    return (runtimetids
+        str: (systemTypeTid :program :symtab :sysU nameId: zast.wellKnown.slot.tyString)
+        sv: (systemTypeTid :program :symtab :sysU nameId: zast.wellKnown.slot.tyStringView)
+        cerr: (systemTypeTid :program :symtab :sysU nameId: zast.wellKnown.slot.tyConverror)
+        bool: (systemTypeTid :program :symtab :sysU nameId: zast.wellKnown.slot.wkBool)
+    )
+}
+
+# systemTypeTid -- the type the system unit declares as `nameId`, 0 when the
+# program registered none.
+systemTypeTid: function {
+    # the program's names
+    program: Ast.view
+    # the checked program the system unit is in
+    symtab: zenv.ZSymbolTable.view
+    # the system unit's declaration
+    sysU: ztypes.declid
+    # the type's well-known name
+    nameId: zast.nameid
+} out ztypes.tid is {
+    return ((ztypecheck.resolvedByIdsRo ast: program st: symtab unitDecl: sysU name: nameId).or
+        d: ztypes.tid.zero
+    )
 }
 
 # fnname -- a name within a function: the key that decides which of the
@@ -32864,6 +32881,7 @@ emitC: function {
     strId: rtids.str
     svId: rtids.sv
     cerrId: rtids.cerr
+    boolId: rtids.bool
     typeCnames: List String
     buildTypeCnames :symtab :readableNames :typeCnames
     strC: listCname cnames: typeCnames tid: strId
@@ -33049,6 +33067,7 @@ emitC: function {
         strTid: strId
         svTid: svId
         converrorTid: cerrId
+        boolTid: boolId
         :origins
     )
     {
