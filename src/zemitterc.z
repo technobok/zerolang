@@ -6226,10 +6226,9 @@ emitNativeArgMethod: function {
         rd: "(*\{recv})"
         recv = rd.copy
     }
-    mtid: ((symtab.typing.declChildOf
-        pool: ast.names
+    mtid: ((symtab.typing.declChildOfId
         parentTypeId: ownerTid
-        name: mn
+        nameId: mnId
     ).or
         d: ztypes.tid.zero
     )
@@ -8045,18 +8044,15 @@ opPairPartnerId: function {nameId: zast.nameid} out zast.nameid is {
 # `owner` may answer for it: a typedef base's raw comparison would silently
 # replace the equality the author defined.
 derivedComparisonHere: function {
-    ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     owner: ztypes.tid
     mnId: zast.nameid
 } out bool is {
     pid9: opPairPartnerId nameId: mnId
     if pid9.isZero then return false
-    pnm9: zast.nameTextAt :ast ref: pid9
-    oo9: (symtab.typing.declChildOf
-        pool: ast.names
+    oo9: (symtab.typing.declChildOfId
         parentTypeId: owner
-        name: pnm9.stringView
+        nameId: pid9
     )
     return oo9.some
 }
@@ -8160,10 +8156,9 @@ emitOperatorCallForm: function {
     if owner.isZero then {
         owner = operatorReceiverTid :ast :symtab :ctx :call
         if owner.isZero then return ""
-        mo9: (symtab.typing.declChildOf
-            pool: ast.names
+        mo9: (symtab.typing.declChildOfId
             parentTypeId: owner
-            name: mnO
+            nameId: mnId9
         )
         match (
             mo9
@@ -8181,7 +8176,6 @@ emitOperatorCallForm: function {
         # would discard the equality the author defined.
         tb9: optionval.none ztypes.tid
         if (derivedComparisonHere
-            :ast
             :symtab
             :owner
             mnId: mnId9
@@ -8193,10 +8187,9 @@ emitOperatorCallForm: function {
         ) case some then {
             bow9: tb9
             if bow9.isZero.not then {
-                mb9: (symtab.typing.declChildOf
-                    pool: ast.names
+                mb9: (symtab.typing.declChildOfId
                     parentTypeId: bow9
-                    name: mnO
+                    nameId: mnId9
                 )
                 match (
                     mb9
@@ -8228,7 +8221,7 @@ emitOperatorCallForm: function {
     a0: ast.nodes.get i: (zast.kidAt kids: ast.kids span: call.arguments i: 0)
     if a0.namedoperation then rhsNid = a0.operation
     if rhsNid.isZero then return ""
-    oid9: zast.poolFind pool: ast.names text: mnO
+    oid9: mnId9
     return (emitOperatorAt
         :ast
         :symtab
@@ -8265,10 +8258,15 @@ emitSynthOperatorCallForm: function {
     if (isOperatorName name: mnS).not then return ""
     if call.arguments.count.u64 != 1 then return ""
     rt0S: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: call.callable)
-    rtcS: typedefMethodOwner :ast :symtab :ctx tid: rt0S mn: mnS
+    rtcS: (typedefMethodOwner
+        :symtab
+        :ctx
+        tid: rt0S
+        mnId: (aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable))
+    )
     ownerS: rtcS
     if ownerS.isZero then return ""
-    nidS: zast.poolFind pool: ast.names text: mnS
+    nidS: aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable)
     if nidS.isZero then return ""
     if (symtab.typing.declMemberIsSynth
         parentTypeId: ownerS
@@ -8324,7 +8322,12 @@ emitInstanceMethodCall: function {
     # the pointer to the element a method takes its receiver by
     bxEl: callableBoxElem :ast :symtab :ctx callable: callableNode
     if bxEl.isZero.not then rtid0 = bxEl
-    rtidc: typedefMethodOwner :ast :symtab :ctx tid: rtid0 :mn
+    rtidc: (typedefMethodOwner
+        :symtab
+        :ctx
+        tid: rtid0
+        mnId: (aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable))
+    )
     rtid: rtidc
     if rtid.isZero then return ""
     # Both families reach here: a user record's methods take their receiver by
@@ -8340,10 +8343,9 @@ emitInstanceMethodCall: function {
         :ctx
         tid: rtid
     ).not then return ""
-    mco: (symtab.typing.declChildOf
-        pool: ast.names
+    mco: (symtab.typing.declChildOfId
         parentTypeId: rtid
-        name: mn
+        nameId: (aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable))
     )
     # a NATIVE member is the dedicated dispatchers' to emit -- the String and
     # StringView emitters, the collection ones, the io/cli/os fragment call --
@@ -8618,9 +8620,8 @@ callRhsIsBorrow: function {
     chId: aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable)
     if chId.isZero then return false
     rid: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: call.callable)
-    chNm: zast.nameTextAt :ast ref: chId
     ridT: rid
-    rid = typedefMethodOwner :ast :symtab :ctx tid: ridT mn: chNm.stringView
+    rid = typedefMethodOwner :symtab :ctx tid: ridT mnId: chId
     mfid: ((symtab.typing.declChildOfId
         parentTypeId: rid
         nameId: chId
@@ -8723,11 +8724,15 @@ refBorrowCalleeFid: function {
         ch8: aliasChildName :ast :symtab n: (ast.nodes.get i: n.callable)
         if ch8.length == 0 then return ztypes.tid.zero
         rid8: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: n.callable)
-        rid8 = typedefMethodOwner :ast :symtab :ctx tid: rid8 mn: ch8
-        mf8: ((symtab.typing.declChildOf
-            pool: ast.names
+        rid8 = (typedefMethodOwner
+            :symtab
+            :ctx
+            tid: rid8
+            mnId: (aliasChildNameId :ast :symtab n: (ast.nodes.get i: n.callable))
+        )
+        mf8: ((symtab.typing.declChildOfId
             parentTypeId: rid8
-            name: ch8
+            nameId: (aliasChildNameId :ast :symtab n: (ast.nodes.get i: n.callable))
         ).or
             d: ztypes.tid.zero
         )
@@ -8735,12 +8740,9 @@ refBorrowCalleeFid: function {
         return ztypes.tid.zero
     } case dottedpath then {
         # a zero-arg method auto-call reads as a dotted path
-        ch7: (zast.nameTextAt
-            :ast
-            ref: (aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child)
-        )
+        ch7: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
         pt7: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.parent))
-        cc7: symtab.typing.declChildOf pool: ast.names parentTypeId: pt7 name: ch7.stringView
+        cc7: symtab.typing.declChildOfId parentTypeId: pt7 nameId: ch7
         match (
             cc7
         ) case some then {
@@ -8793,7 +8795,6 @@ bindingRhsIsBorrow: function {
         chId: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
         # a `.borrow` value is a reference by definition
         if chId == zast.wellKnown.slot.wkBorrow then return true
-        ch: zast.nameTextAt :ast ref: chId
         bnmV: atomVid :symtab nid: (atomNodeId n: (ast.nodes.get i: n.parent))
         if (vvHas xs: ctx.narrowBox vid: bnmV) then {
             # a field read off a narrowed subject is a shallow-copy borrow (it aliases
@@ -8806,10 +8807,9 @@ bindingRhsIsBorrow: function {
             match (
                 ntO2
             ) case some then {
-                ncc: (symtab.typing.declChildOf
-                    pool: ast.names
+                ncc: (symtab.typing.declChildOfId
                     parentTypeId: ntO2
-                    name: ch.stringView
+                    nameId: chId
                 )
                 match (
                     ncc
@@ -8822,7 +8822,7 @@ bindingRhsIsBorrow: function {
             return true
         }
         ptid: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.parent))
-        cco: symtab.typing.declChildOf pool: ast.names parentTypeId: ptid name: ch.stringView
+        cco: symtab.typing.declChildOfId parentTypeId: ptid nameId: chId
         match (
             cco
         ) case some then {
@@ -9217,12 +9217,10 @@ rhsIsBorrowedFieldRead: function {
         rtn: ast.nodes.get i: n.parent
         if (pathRootsAtVariable :ast :symtab n: rtn).not then return false
         if (bindingVarIsBorrowed :symtab n: abind).not then return false
-        fch: aliasChildName :ast :symtab n: dn
         fpid: interpPartNodeId n: (ast.nodes.get i: n.parent)
-        fco: (symtab.typing.declChildOf
-            pool: ast.names
+        fco: (symtab.typing.declChildOfId
             parentTypeId: (stampIdOf :symtab nid: fpid)
-            name: fch
+            nameId: (aliasChildNameId :ast :symtab n: dn)
         )
         match (
             fco
@@ -11171,7 +11169,6 @@ emitTypeQualCall: function {
     # the checker decided whether the base names a type (callBaseNamesType); the
     # type is the base's stamp -- an instance's own, inside a generic body
     if (symtab.typing.callBaseNamesType.has item: call.nodeid).not then return ""
-    mn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable)
     mnId: aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable)
     btid: ztypes.tid
     {
@@ -11196,7 +11193,7 @@ emitTypeQualCall: function {
     # takes its receiver from the dotted base -- and that base is the type name,
     # so the emitted C named a variable that does not exist.
     if (isUserStructType tt: bttq).not then return ""
-    mco: symtab.typing.declChildOf pool: ast.names parentTypeId: btid name: mn
+    mco: symtab.typing.declChildOfId parentTypeId: btid nameId: mnId
     mtid: ztypes.tid
     match (
         mco
@@ -12889,7 +12886,10 @@ emitUnitMethodCall: function {
     if rmo.isZero then return ""
     child: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable)
     if child.length == 0 then return ""
-    co: symtab.typing.declChildOf pool: ast.names parentTypeId: rsid name: child
+    co: (symtab.typing.declChildOfId
+        parentTypeId: rsid
+        nameId: (aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable))
+    )
     calleeTid: ztypes.tid
     match (
         co
@@ -14201,12 +14201,9 @@ calleeHasBody: function {
     call: zast.callrow.view
     ownerTid: ztypes.tid
 } out bool is {
-    mnB: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable)
-    if mnB.length == 0 then return false
-    co: (symtab.typing.declChildOfId
-        parentTypeId: ownerTid
-        nameId: (zast.poolFind pool: ast.names text: mnB)
-    )
+    mnB: aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable)
+    if mnB.isZero then return false
+    co: symtab.typing.declChildOfId parentTypeId: ownerTid nameId: mnB
     if co.none then return false
     return (fnIsNativeId :symtab fid: co).not
 }
@@ -14861,7 +14858,7 @@ emitDataMember: function {
     dno: (ctx.dataConst.get
         key: (dataconstkey
             owner: dbt
-            name: (zast.poolFind pool: ast.names text: mn2.stringView)
+            name: mnId
         )
     )
     match (
@@ -15523,10 +15520,9 @@ emitNestedMonoMethodBase: function {
         }
         if nDisp then {
             nlidM: nlid
-            nmco: (symtab.typing.declChildOf
-                pool: ast.names
+            nmco: (symtab.typing.declChildOfId
                 parentTypeId: nlidM
-                name: mn2
+                nameId: mnId
             )
             match (
                 nmco
@@ -15772,7 +15768,7 @@ emitDottedNestedBase: function {
     nnid9: interpPartNodeId n: (ast.nodes.get i: n.parent)
     nlid: monoStampIdOf :symtab :ctx nid: nnid9
     if nlid.isZero then nlid = stampIdOf :symtab nid: nnid9
-    nlid = typedefMethodOwner :ast :symtab :ctx tid: nlid mn: mn2
+    nlid = typedefMethodOwner :symtab :ctx tid: nlid :mnId
     # a Map/Set-typed base is a heap pointer regardless of how it was
     # reached (a field path fails pathIsPointer's lock-field test)
     nbPar: ast.nodes.get i: n.parent
@@ -16057,13 +16053,12 @@ dataValueMemberRead: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     baseNid: zast.nodeid
-    mn2: StringView
+    mnId: zast.nameid
     bn2: StringView
     bn2v: ztypes.vid
     bstamp: ztypes.tid
 } out String is {
     if (dataValueFamilyOf :symtab :ctx tid: bstamp).isZero then return ""
-    mnId: zast.poolFind pool: ast.names text: mn2
     isLen: mnId == zast.wellKnown.slot.wkLength
     if isLen.not when mnId != zast.wellKnown.slot.wkIterate then return ""
     base: dataValueText :symtab :ctx nid: (atomNodeId n: (ast.nodes.get i: baseNid))
@@ -16094,7 +16089,7 @@ emitResolvedMemberRead: function {
     # the read is the member's own function (a `.take` of it), not a call
     readIsRef: bool
 } out String is {
-    dvr: dataValueMemberRead :ast :symtab :ctx :baseNid :mn2 :bn2 :bn2v :bstamp
+    dvr: dataValueMemberRead :ast :symtab :ctx :baseNid :mnId :bn2 :bn2v :bstamp
     if dvr.length > 0 then return dvr
     mtt: symtab.reg.typetypeOf typeId: mco
     if mtt.isInterface then {
@@ -16165,10 +16160,9 @@ sumMemberMethodRead: function {
     bn2v: ztypes.vid
     bstamp: ztypes.tid
 } out String is {
-    mco: (symtab.typing.declChildOf
-        pool: ast.names
+    mco: (symtab.typing.declChildOfId
         parentTypeId: bstamp
-        name: mn2
+        nameId: mnId
     )
     match (
         mco
@@ -16243,10 +16237,9 @@ emitUserTypeMemberRead: function {
         # fragment that never defined them -- `z_t13_close` was called and
         # never emitted, at exit 0. Being declared native also subsumes the
         # receiver test `accept` would otherwise need.
-        mcoF: (symtab.typing.declChildOf
-            pool: ast.names
+        mcoF: (symtab.typing.declChildOfId
             parentTypeId: bstamp
-            name: mn2
+            nameId: mnId
         )
         match (
             mcoF
@@ -16273,10 +16266,9 @@ emitUserTypeMemberRead: function {
         if (isPtrVid :ctx vid: bn2v) then frecv = "\{bn2}"
         return "\{ffc}_\{mn2}(\{frecv})"
     }
-    mco: (symtab.typing.declChildOf
-        pool: ast.names
+    mco: (symtab.typing.declChildOfId
         parentTypeId: bstamp
-        name: mn2
+        nameId: mnId
     )
     match (
         mco
@@ -16856,7 +16848,7 @@ emitDottedAtomBase: function {
             if brid.isZero.not then bstamp = brid
         }
     }
-    bstamp = typedefMethodOwner :ast :symtab :ctx tid: bstamp mn: mn2
+    bstamp = typedefMethodOwner :symtab :ctx tid: bstamp :mnId
     rtt: symtab.reg.typetypeOf typeId: bstamp
     viaVtable: vtableAutoCallName :ast leaf: n.child nameId: mnId
     if (isDispatchableTid :symtab tid: bstamp) when viaVtable then {
@@ -19080,11 +19072,8 @@ interpBaseIsOwnedStructField: function {
         btt: symtab.reg.typetypeOf typeId: bt
         isUC: btt.isFieldwise
         if isUC.not then return false
-        cn: (zast.nameTextAt
-            :ast
-            ref: (aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child)
-        )
-        co: symtab.typing.declChildOf pool: ast.names parentTypeId: bt name: cn.stringView
+        cn: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
+        co: symtab.typing.declChildOfId parentTypeId: bt nameId: cn
         match (
             co
         ) case some then {
@@ -23602,30 +23591,27 @@ matchGenericRoute: function {
     dcore: m.subject
     dcn: ast.nodes.get i: dcore
     if dcn.dottedpath then {
-        dleaf: aliasChildName :ast :symtab n: (ast.nodes.get i: dcore)
+        dleafId: aliasChildNameId :ast :symtab n: (ast.nodes.get i: dcore)
         dbnid: dottedBaseNodeId :ast n: (ast.nodes.get i: dcore)
         dbst: stampIdOf :symtab nid: dbnid
         downer: ctx.curThisTid
         if (symtab.reg.genericArgCount specId: dbst) > 0 then downer = dbst
-        if downer.isZero.not when dleaf.length > 0 then {
+        if downer.isZero.not when dleafId.isZero.not then {
             dkey: genericOwnerKey :symtab ownerTid: downer
-            if dkey.isZero.not then {
-                dleafId: zast.poolFind pool: ast.names text: dleaf
-                if (symtab.reg.isGenericParamOf tdecl: dkey name: dleafId) then {
-                    (emitGenericDissect
-                        :ast
-                        :symtab
-                        :ctx
-                        :m
-                        ownerTid: downer
-                        paramName: dleafId
-                        :assignTo
-                        :ind
-                        :tmp
-                        :buf
-                    )
-                    return true
-                }
+            if dkey.isZero.not when (symtab.reg.isGenericParamOf tdecl: dkey name: dleafId) then {
+                (emitGenericDissect
+                    :ast
+                    :symtab
+                    :ctx
+                    :m
+                    ownerTid: downer
+                    paramName: dleafId
+                    :assignTo
+                    :ind
+                    :tmp
+                    :buf
+                )
+                return true
             }
         }
     }
@@ -29958,16 +29944,16 @@ chaseAggregateTypedef: function {
 # shares every other member with. A typedef's NATIVE member (Bytes.byteView)
 # has no C of its own: the runtime serves it as the end's.
 typedefMethodOwner: function {
-    ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
     tid: ztypes.tid
-    mn: StringView
+    # the method's name
+    mnId: zast.nameid
 } out ztypes.tid is {
     if (symtab.typing.typedefBaseTid.has key: tid).not then return tid
     t: tid
     for t.isZero.not loop {
-        mo: symtab.typing.declChildOf pool: ast.names parentTypeId: t name: mn
+        mo: symtab.typing.declChildOfId parentTypeId: t nameId: mnId
         match (
             mo
         ) case some then {
@@ -30699,9 +30685,8 @@ fillOneDataElem: function {
             ik: dataslotkey owner: dtid slot: idx
             iv2: vx.copy
             ctx.dataSlot.set key: ik value: iv2
-            elbl: dataElemLabel :ast n: (ast.nodes.get i: e)
-            if elbl.length > 0 then {
-                elid: zast.poolFind pool: ast.names text: elbl.stringView
+            elid: dataElemLabelId n: (ast.nodes.get i: e)
+            if elid.isZero.not then {
                 if elid == zast.wellKnown.slot.wkLength then hasLen = true
                 lk: dataconstkey owner: dtid name: elid
                 lv: vx.copy
@@ -30720,14 +30705,14 @@ fillOneDataElem: function {
     } else null
 }
 
-# the label of data-block element `n`.
-dataElemLabel: function {ast: Ast.view n: astnode.view} out String is {
+# the label of data-block element `n`, by id: 0 for an unlabelled one.
+dataElemLabelId: function {n: astnode.view} out zast.nameid is {
     match (
         n
     ) case namedoperation then {
-        return (zast.nameTextCopy :ast ref: n.name)
+        return n.name
     } else {
-        return ""
+        return zast.nameid.zero
     }
 }
 
@@ -31272,11 +31257,9 @@ emitUnitMonoMembers: function {
         if fm9Node.namedoperation when (ztypecheck.isFunctionDefWithBody
             o: (ast.nodes.get i: fm9Node.operation)
         ) then {
-            mname: zast.nameTextAt :ast ref: fm9Node.name
-            cfo: (symtab.typing.declChildOf
-                pool: ast.names
+            cfo: (symtab.typing.declChildOfId
                 parentTypeId: t
-                name: mname.stringView
+                nameId: fm9Node.name
             )
             # written when the instance walk took it, which is where the
             # program uses it
@@ -39543,20 +39526,18 @@ conformanceLabelFor: function {
 # to stand in for that and admitted every type declared in the unit, so a user
 # unit spelled `cli` or `os` had its own bodied methods called as fragments.
 fileTypeIdOf: function {
-    ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     nid: zast.nodeid
-    mname: StringView
+    mnId: zast.nameid
 } out ztypes.tid is {
     tid: stampIdOf :symtab :nid
     if tid.isZero then return ztypes.tid.zero
     if (symtab.reg.typetypeOf typeId: tid) != ztypes.ztypetype.classType then return ztypes.tid.zero
     fileOrig: originTidOf :symtab :tid
     if fileOrig.isZero.not then return ztypes.tid.zero
-    mo: (symtab.typing.declChildOf
-        pool: ast.names
+    mo: (symtab.typing.declChildOfId
         parentTypeId: tid
-        name: mname
+        nameId: mnId
     )
     match (
         mo
@@ -39662,7 +39643,7 @@ emitFileMethodCall: function {
     )
     if isFM.not then return ""
     bnid: dottedBaseNodeId :ast n: (ast.nodes.get i: call.callable)
-    fid: fileTypeIdOf :ast :symtab nid: bnid mname: mn
+    fid: fileTypeIdOf :symtab nid: bnid :mnId
     if fid.isZero then return ""
     fc: ctxCname :ctx tid: fid
     fcn: regNameOf :symtab tid: fid
@@ -40359,7 +40340,7 @@ emitParsedMethodCall: function {
     )
     if isPM.not then return ""
     bnid: dottedBaseNodeId :ast n: (ast.nodes.get i: call.callable)
-    pid: fileTypeIdOf :ast :symtab nid: bnid mname: mn
+    pid: fileTypeIdOf :symtab nid: bnid :mnId
     if pid.isZero then return ""
     if (
         pid != (unitClassTid :symtab unitDecl: ctx.cliUnitDecl nameId: zast.wellKnown.slot.tyParsed)
@@ -40572,10 +40553,10 @@ dispatchReceiverTid: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     callable: astnode.view
-    mn: StringView
+    mnId: zast.nameid
 } out ztypes.tid is {
     rtid: dottedReceiverStampId :ast :symtab :callable
-    own: typedefMethodOwner :ast :symtab :ctx tid: rtid :mn
+    own: typedefMethodOwner :symtab :ctx tid: rtid :mnId
     if (isDispatchableTid :symtab tid: own) then return own
     rtn0: regNameOf :symtab tid: own
     if rtn0.length == 0 then return own
@@ -40592,12 +40573,11 @@ dispatchSlotNames: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     rtid: ztypes.tid
-    mn: StringView
+    mnId: zast.nameid
 } out ListVal zast.nameid is {
-    mtid: ((symtab.typing.declChildOf
-        pool: ast.names
+    mtid: ((symtab.typing.declChildOfId
         parentTypeId: rtid
-        name: mn
+        nameId: mnId
     ).or
         d: ztypes.tid.zero
     )
@@ -40801,7 +40781,7 @@ emitProtocolDispatch: function {
     mk: zast.markerKindOf :ast n: (ast.nodes.get i: call.callable)
     if mk.borrowMarker or mk.dropMarker then return ""
     callableNode: ast.nodes.get i: call.callable
-    rtid: dispatchReceiverTid :ast :symtab :ctx callable: callableNode :mn
+    rtid: dispatchReceiverTid :ast :symtab :ctx callable: callableNode :mnId
     if (isDispatchableTid :symtab tid: rtid).not then return ""
     recvText: emitDottedReceiver :ast :symtab :ctx callable: callableNode
     if recvText.length == 0 then return ""
@@ -40814,7 +40794,7 @@ emitProtocolDispatch: function {
         acc: acc.stringView
         isFacet: (symtab.reg.typetypeOf typeId: rtid) == ztypes.ztypetype.facetType
     )
-    vpn: dispatchSlotNames :ast :symtab :rtid :mn
+    vpn: dispatchSlotNames :ast :symtab :rtid :mnId
     prefix: String
     if vpn.length > 0 then {
         prefix = appendSlottedDispatchArgs :ast :symtab :ctx :call :vpn :dargs
@@ -42565,11 +42545,9 @@ emitMonoMethodAt: function {
     opId: instanceOpAt :symtab mono: monoId op: site.operation
     mid: ztypes.tid
     {
-        mn: zast.nameTextAt :ast ref: site.name
-        co: (symtab.typing.declChildOf
-            pool: ast.names
+        co: (symtab.typing.declChildOfId
             parentTypeId: monoId
-            name: mn.stringView
+            nameId: site.name
         )
         mid = co.or d: ztypes.tid.zero
     }
@@ -42738,14 +42716,12 @@ emitRecordMethods: function {
         wn: idxs.length
         for wi < wn loop {
             midx: idxs.get i: wi
-            mname: names.get i: wi
             am2Id: zast.kidAt kids: ast.kids span: op.asItems i: midx
             am2: ast.nodes.get i: am2Id
             if am2.namedoperation then {
-                mo: (symtab.typing.declChildOf
-                    pool: ast.names
+                mo: (symtab.typing.declChildOfId
                     parentTypeId: tid
-                    name: mname.stringView
+                    nameId: am2.name
                 )
                 match (
                     mo
@@ -42793,14 +42769,12 @@ emitRecordMethods: function {
         iwn: iidxs.length
         for iwi < iwn loop {
             imidx: iidxs.get i: iwi
-            imname: inames.get i: iwi
             im2Id: zast.kidAt kids: ast.kids span: op.isItems i: imidx
             im2: ast.nodes.get i: im2Id
             if im2.namedoperation then {
-                imo: (symtab.typing.declChildOf
-                    pool: ast.names
+                imo: (symtab.typing.declChildOfId
                     parentTypeId: tid
-                    name: imname.stringView
+                    nameId: im2.name
                 )
                 match (
                     imo
