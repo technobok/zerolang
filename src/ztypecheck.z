@@ -105,6 +105,7 @@ public: unit {
     :arrayElemTid
     :resolveUnitChildRo
     :resolvedByIdsRo
+    :typedefChaseTid
 }
 
 astnode: zast.astnode
@@ -2264,10 +2265,7 @@ recordConformerContexts: function {
     op: astnode.view
 } is {
     if op.objectdef then {
-        isRef: defKindIsReftype :st :ast :unitDecl :defName kind: op.kind
         dk0: zast.poolFind pool: ast.names text: defName
-        dv0: isRef
-        st.typing.mainDefIsReftype.set key: dk0 value: dv0
         asx1619: u64
         for asx1619 < op.asItems.count loop {
             amId: zast.kidAt kids: ast.kids span: op.asItems i: asx1619
@@ -5743,51 +5741,6 @@ resolveFieldTyperef: function {
     return cid
 }
 
-# nameIsInUnitReftype -- true when a type name resolves to an in-unit reference type
-# (class or union). Drives the reftype-param BORROW default and class field cleanup.
-# Native heap params (String/List/Map) are pointer-typed already and get no BORROW
-# default, so they are NOT matched here -- only user class/union types defined in
-# this unit.
-nameIsInUnitReftype: function {
-    ast: Ast
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    name: StringView
-} out bool is {
-    nid: zast.poolFind pool: ast.names text: name
-    return (nameIsInUnitReftypeId :st :ast :unitDecl nameId: nid)
-}
-
-# nameIsInUnitReftypeId -- nameIsInUnitReftype by the name's id.
-nameIsInUnitReftypeId: function {
-    # the tree the unit's members are read from
-    ast: Ast
-    # the symbol table the member resolves in
-    st: zenv.ZSymbolTable
-    # the unit asked
-    unitDecl: ztypes.declid
-    # the member's name, interned
-    nameId: zast.nameid
-} out bool is {
-    rr: resolveUnitChild :st :ast :unitDecl :nameId
-    match (
-        rr
-    ) case some then {
-        tt: st.reg.typetypeOf typeId: rr
-        match (
-            tt
-        ) case classType then {
-            return true
-        } case unionType then {
-            return true
-        } else {
-            return false
-        }
-    } case none then {
-        return false
-    }
-}
-
 # returnHasBorrowMarkerNode / returnHasBorrowMarker -- the function's return
 # type carries a REFERENCE marker: `out T.borrow` hands back a mutable
 # reference into the receiver, `out T.view` a readonly one. Both pin the
@@ -6560,15 +6513,7 @@ registerValueParam: function {
             ownership: pown
         )
     } case none then {
-        isref: (paramIsBorrowReftype
-            :st
-            :ast
-            :unitDecl
-            :thisName
-            opId: pm.operation
-            tid: cid
-        )
-        if isref then {
+        if (paramIsBorrowReftype :ast :st tid: cid) then {
             (st.typing.setChildOwnershipId
                 parentTypeId: fid
                 nameId: pm.name
@@ -7183,49 +7128,46 @@ resolveFunction: function {
 }
 
 
-# paramIsBorrowReftype -- the default-ownership rule for a parameter with no
-# explicit suffix: user reftypes (and the borrow-default native reftypes /
-# collections) borrow; native value views do not.
+# paramIsBorrowReftype -- the ownership a parameter with no explicit marker
+# takes, asked of its resolved type: a class or an owning union borrows, as
+# String and the borrow-default collections do, whichever unit declared it and
+# however the parameter spells it (an application, a typedef, a dotted path).
+# StringView, the view unions, a native class and every valtype do not. A
+# typedef answers as the end of its chain, an instance as its template.
 paramIsBorrowReftype: function {
     ast: Ast
     st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    thisName: StringView
-    opId: zast.nodeid
     # the parameter's resolved type
     tid: ztypes.tid
 } out bool is {
-    tnId: atomNameId :ast n: (ast.nodes.get i: opId)
-    isref: false
-    if tnId == zast.wellKnown.slot.wkThis then {
-        isref = nameIsInUnitReftype :st :ast :unitDecl name: thisName
-        if isref.not then {
-            tk0: zast.poolFind pool: ast.names text: thisName
-            rgo: st.typing.mainDefIsReftype.get key: tk0
-            match (
-                rgo
-            ) case some then {
-                isref = rgo
-            } case none then null
-        }
-        # the system's StringView is a native value view, passed by value
-        if unitDecl == st.typing.systemUnitRoot when (
-            (zast.poolFind pool: ast.names text: thisName) == zast.wellKnown.slot.tyStringView
-        ) then {
-            isref = false
-        }
-    } else {
-        if tnId.isZero then {
-            isref = isBorrowReftypeCollection :ast :st :tid
-        } else {
-            isref = nameIsInUnitReftypeId :st :ast :unitDecl nameId: tnId
-            # the system's String owns heap and borrows; its StringView is a
-            # native value view and does not
-            if tid == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyString) then isref = true
-            if tid == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyStringView) then isref = false
-        }
+    cid: typedefChaseTid :st :tid
+    if cid.isZero then return false
+    if cid == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyString) then return true
+    if cid == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyStringView) then return false
+    if (isBorrowReftypeCollection :ast :st tid: cid) then return true
+    o: st.reg.genericOriginOf tid: cid
+    if o.isZero.not then cid = o
+    if cid == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyOptionView) then return false
+    if cid == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyOptionViewVal) then return false
+    if (st.reg.isNativeOf tid: cid) then return false
+    tt: st.reg.typetypeOf typeId: cid
+    return (tt == ztypes.ztypetype.classType) or (tt == ztypes.ztypetype.unionType)
+}
+
+# typedefChaseTid -- the chain-end base tid of a typedef (tid itself when it
+# is not one): a typedef behaves exactly as its base wherever its ownership,
+# equality, casts or C layout are asked.
+typedefChaseTid: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out ztypes.tid is {
+    cur: tid
+    for true loop {
+        bo: st.typing.typedefBaseTid.get key: cur
+        match (
+            bo
+        ) case some then {
+            cur = bo
+        } case none then break
     }
-    return isref
+    return cur
 }
 
 # resolveMethodFn -- resolve one method as-item (a namedoperation whose operation
@@ -15103,25 +15045,6 @@ declTypedefBaseNid: function {
         }
     }
     return zn
-}
-
-# defKindIsReftype -- a unit's definition named `defName`, of kind `kind`,
-# is a reftype: a class, union or generator, or a typedef over a reftype.
-defKindIsReftype: function {
-    st: zenv.ZSymbolTable.view
-    ast: Ast.view
-    unitDecl: ztypes.declid
-    defName: StringView
-    kind: zast.objectkind
-} out bool is {
-    if kind == zast.objectkind.typedefDef then {
-        return (typedefDefIsReftype :st :ast :unitDecl :defName)
-    }
-    return (
-        (kind == zast.objectkind.classDef) or
-        (kind == zast.objectkind.unionDef) or
-        (kind == zast.objectkind.generatorDef)
-    )
 }
 
 # typedefDefIsReftype -- a unit's `typedef` definition named `defName` takes a

@@ -2964,7 +2964,7 @@ binopKeyOf: function {
         if bn.length > 0 then {
             sc: (scalarCTypeFor
                 :symtab
-                tid: (typedefChaseTid :symtab tid: owner)
+                tid: (ztypecheck.typedefChaseTid st: symtab tid: owner)
             )
             if sc.length > 0 then {
                 k2: "@scalar.\{op}"
@@ -9612,7 +9612,7 @@ narrowListIndex: function {
     pos: String.take
 } out String is {
     idx: stampIdOf :symtab nid: call.nodeid
-    nk: ztypecheck.numKindOfTid st: symtab tid: (typedefChaseTid :symtab tid: idx)
+    nk: ztypecheck.numKindOfTid st: symtab tid: (ztypecheck.typedefChaseTid st: symtab tid: idx)
     if nk.has.not then return pos
     dbits: kindBits k: nk.kind
     dsig: kindSigned k: nk.kind
@@ -12245,7 +12245,7 @@ argSlotList: function {
 constScalarKindForTid: function {
     symtab: zenv.ZSymbolTable.view tid: ztypes.tid
 } out ztypes.suffixinfo is {
-    return (ztypecheck.numKindOfTid st: symtab tid: (typedefChaseTid :symtab :tid))
+    return (ztypecheck.numKindOfTid st: symtab tid: (ztypecheck.typedefChaseTid st: symtab :tid))
 }
 
 # narrowConstToKind -- a folded i64 reduced to what integer kind `k` can actually
@@ -14858,7 +14858,7 @@ implicitZeroValue: function {
     # a typedef is its base's zero: a scalar base's cast zero (meters -> i64),
     # and otherwise whatever the base builds -- the String struct for Path, a
     # record's create with its defaults
-    zb: typedefChaseTid :symtab :tid
+    zb: ztypecheck.typedefChaseTid st: symtab :tid
     if zb != tid then {
         zt: scalarCTypeFor :symtab tid: zb
         if zt.length > 0 then return (scalarZeroC :symtab cType: zt.stringView :tid)
@@ -17483,7 +17483,7 @@ convRowKeyOf: function {
     )
     mo9: symtab.typing.declChildOfId parentTypeId: ownTid9 nameId: mn2Id
     if mo9.some when (fnIsNativeId :symtab fid: mo9).not then return String
-    ncSrcP: convSrcPathOf :symtab srcTid: (typedefChaseTid :symtab tid: ownTid9)
+    ncSrcP: convSrcPathOf :symtab srcTid: (ztypecheck.typedefChaseTid st: symtab tid: ownTid9)
     if ncSrcP.length == 0 then return String
     ncKey: nativeMemberKey srcPath: ncSrcP.stringView memb: mn2c.stringView
     if (nativeHasRow :ctx path: ncKey.stringView).not then return String
@@ -18409,7 +18409,9 @@ emitOperatorAt: function {
     oprefix: orderFinish :ctx st: ord
     # a typedef emits no helper of its own: the chain end owns it
     tcnTid: owner
-    if (typedefChaseHasBaseName :symtab tid: owner) then tcnTid = typedefChaseTid :symtab tid: owner
+    if (typedefChaseHasBaseName :symtab tid: owner) then {
+        tcnTid = ztypecheck.typedefChaseTid st: symtab tid: owner
+    }
     filled: fillOperatorRow :ast :symtab :ctx :ord :body :key :tcnTid
     return (orderWrap prefix: oprefix call: filled)
 }
@@ -19039,7 +19041,7 @@ interpPartTid: function {
         :ctx
         nid: (interpPartNodeId :n)
     )
-    return (typedefChaseTid :symtab tid: t)
+    return (ztypecheck.typedefChaseTid st: symtab tid: t)
 }
 
 # appendFormattedNum -- format a number into a stack buffer and append it: the
@@ -23788,7 +23790,7 @@ emitMatchStmt: function {
     vtid: canonTypeId :symtab tid: (stampIdDeep :symtab n: (ast.nodes.get i: m.subject))
     if (matchGenericRoute :ast :symtab :ctx :m :assignTo :ind :tmp :buf) then return
     # a typedef over a union or variant is matched on its base's tag
-    vend: typedefChaseTid :symtab tid: vtid
+    vend: ztypecheck.typedefChaseTid st: symtab tid: vtid
     vett: symtab.reg.typetypeOf typeId: vend
     if vett.isSum then {
         vtid = vend
@@ -29710,22 +29712,6 @@ appendFnSignature: function {
     buf.append tail
 }
 
-# typedefChaseTid -- the chain-end base tid of a typedef (tid itself when it
-# is not one). The equality, cast and key-classification legs ask this so a
-# typedef behaves exactly as its base at the C level.
-typedefChaseTid: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out ztypes.tid is {
-    cur: tid
-    for true loop {
-        bo: symtab.typing.typedefBaseTid.get key: cur
-        match (
-            bo
-        ) case some then {
-            cur = bo
-        } case none then break
-    }
-    return cur
-}
-
 # typedefChaseBaseName -- the chain-end base NAME of a typedef, "" when tid
 # is not one.
 typedefChaseBaseName: function {
@@ -29779,7 +29765,7 @@ typedefChaseC: function {
     ctx: Ctx
     tid: ztypes.tid
 } out String is {
-    bid: typedefChaseTid :symtab :tid
+    bid: ztypecheck.typedefChaseTid st: symtab :tid
     if bid == tid then return ""
     bc: scalarCTypeFor :symtab tid: bid
     if bc.length > 0 then return bc
@@ -30085,7 +30071,7 @@ chaseAggregateTypedef: function {
     tid: ztypes.tid
 } out ztypes.tid is {
     if (symtab.typing.typedefBaseTid.has key: tid).not then return tid
-    e: typedefChaseTid :symtab :tid
+    e: ztypecheck.typedefChaseTid st: symtab :tid
     if (e == ctx.strTid) or (e == ctx.svTid) then return tid
     # a scalar is a native record, and an ordinal variant emits as one; a
     # sized str or array is a native record too, and an aggregate
@@ -30139,7 +30125,7 @@ chaseStrTypedef: function {
     tid: ztypes.tid
 } out ztypes.tid is {
     if (symtab.typing.typedefBaseTid.has key: tid).not then return tid
-    e: typedefChaseTid :symtab :tid
+    e: ztypecheck.typedefChaseTid st: symtab :tid
     if (e == ctx.strTid) or (e == ctx.svTid) then return e
     return tid
 }
@@ -33814,7 +33800,7 @@ emitListContains: function {
         # address, as a Set's element does
         late = true
         fo: (symtab.typing.declChildOfId
-            parentTypeId: (typedefChaseTid :symtab tid: elem)
+            parentTypeId: (ztypecheck.typedefChaseTid st: symtab tid: elem)
             nameId: zast.wellKnown.slot.wkOpEq
         )
         body.append "        { \{ect} _e = _this->data[i]; if ("
@@ -33900,7 +33886,7 @@ sortLessC: function {
         }
         return "_a < _b"
     }
-    owner: typedefChaseTid :symtab tid: elem
+    owner: ztypecheck.typedefChaseTid st: symtab tid: elem
     rhs: "_b"
     if (symtab.reg.isValtypeOf tid: elem) then {
         owner = ztypecheck.valOpOwner st: symtab tid: elem nameId: zast.wellKnown.slot.wkCompare
@@ -34909,7 +34895,7 @@ keyFnProtosC: function {
 # stays a struct). A record holds value data only, so a struct's `_eq` is
 # total: the typechecker refuses a reftype member at the declaration.
 keyHashKind: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.tid} out u64 is {
-    ktid: typedefChaseTid :symtab :tid
+    ktid: ztypecheck.typedefChaseTid st: symtab :tid
     if ktid == ctx.strTid then return 1
     if ktid == ctx.svTid then return 2
     tt: symtab.reg.typetypeOf typeId: ktid
@@ -42075,7 +42061,7 @@ partHasEq: function {
     src: ztypecheck.valOpSource :ast st: symtab :tid nameId: zast.wellKnown.slot.wkOpEq
     if src.none then return false
     if src.generated.not then return true
-    return (eqGenerated :ast :symtab :ctx tid: (typedefChaseTid :symtab :tid))
+    return (eqGenerated :ast :symtab :ctx tid: (ztypecheck.typedefChaseTid st: symtab :tid))
 }
 
 # partEqC -- appends the C comparison of one part, `lhs` against `rhs`, each
@@ -42141,7 +42127,7 @@ partEqC: function {
         dest.append sel
         return
     }
-    dest.append (ctxCname :ctx tid: (typedefChaseTid :symtab :tid))
+    dest.append (ctxCname :ctx tid: (ztypecheck.typedefChaseTid st: symtab :tid))
     dest.append "_eq("
     dest.append lhs
     dest.append sel
@@ -42177,7 +42163,7 @@ partHashWords: function {
         words.append wr
         return
     }
-    base: typedefChaseTid :symtab :tid
+    base: ztypecheck.typedefChaseTid st: symtab :tid
     if (symtab.reg.typetypeOf typeId: base) == ztypes.ztypetype.functionType then {
         wf: "(uint64_t)(uintptr_t)\{v}"
         words.append wf
@@ -42224,7 +42210,7 @@ hashExprC: function {
         return "z_hash_u64(\{w0} ^ z_hash_u64(\{w1}))"
     }
     src: ztypecheck.valOpSource :ast st: symtab :tid nameId: zast.wellKnown.slot.wkHash
-    base: typedefChaseTid :symtab :tid
+    base: ztypecheck.typedefChaseTid st: symtab :tid
     if src.written.not when (partIsCScalar :symtab tid: base) then return "z_hash_u64(\{w0})"
     if (symtab.reg.typetypeOf typeId: base) == ztypes.ztypetype.functionType then {
         return "z_hash_u64(\{w0})"
@@ -42257,7 +42243,7 @@ hashFnDemand: function {
         i = i + 1
         if (ztypecheck.valOpSource :ast st: symtab tid: p nameId: zast.wellKnown.slot.wkHash
         ).written.not then {
-            hashFnDemand :ast :symtab :ctx tid: (typedefChaseTid :symtab tid: p)
+            hashFnDemand :ast :symtab :ctx tid: (ztypecheck.typedefChaseTid st: symtab tid: p)
         }
     }
 }
@@ -42455,7 +42441,7 @@ valKeyHashBody: function {
         buf.append keyT
         buf.append "*);\n"
     }
-    base: typedefChaseTid :symtab tid: key
+    base: ztypecheck.typedefChaseTid st: symtab tid: key
     if src.written.not when (partIsCScalar :symtab tid: base).not then {
         bc: ctxCname :ctx tid: base
         buf.append "static uint64_t \{bc}_hash(\{bc}_t a);\n"
@@ -42523,7 +42509,7 @@ emitHashPrototypes: function {
                 :ast
                 :symtab
                 :ctx
-                tid: (typedefChaseTid :symtab tid: h)
+                tid: (ztypecheck.typedefChaseTid st: symtab tid: h)
             )
         }
     }
@@ -42613,7 +42599,7 @@ partsCallWritten: function {
 # partIsCScalar -- a part C compares with `==`: a scalar, or a function
 # pointer. Asked after the author's own `==`, which always comes first.
 partIsCScalar: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
-    base: typedefChaseTid :symtab :tid
+    base: ztypecheck.typedefChaseTid st: symtab :tid
     if (symtab.reg.typetypeOf typeId: base) == ztypes.ztypetype.functionType then return true
     return (scalarCTypeFor :symtab tid: base).length > 0
 }
