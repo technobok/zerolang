@@ -2649,7 +2649,7 @@ unitNestedSelf: function {
     if td.isZero then return none
     ud: declParentIdOf :st declId: td
     if ud.isZero then return none
-    if (declDeclaresTemplate :st :ast declId: ud).not then return none
+    if (declIsUnitTemplate :st :ast declId: ud).not then return none
     cur: st.curScope
     for cur.isZero.not loop {
         if cur == ud then return (monoSubstTid :st :tid)
@@ -2659,7 +2659,8 @@ unitNestedSelf: function {
 }
 
 # nestedTemplateUnit -- the generic unit template a type definition is written
-# in: a type inside `cells: unit as { t: anyval.generic ... }` is generic over the
+# in: a type inside `cells: unit as { t: anyval.generic ... }`, or inside a
+# generic FILE unit (its parameters at the file's top), is generic over the
 # unit's parameters, and every instance of the unit has its own. 0 for a type
 # written anywhere else.
 nestedTemplateUnit: function {
@@ -2674,8 +2675,38 @@ nestedTemplateUnit: function {
     if td.isZero then return none
     pd: declParentIdOf :st declId: td
     if pd.isZero then return none
-    if (declDeclaresTemplate :st :ast declId: pd) then return pd
+    if (declIsUnitTemplate :st :ast declId: pd) then return pd
     return none
+}
+
+# declIsUnitTemplate -- the declaration is a generic unit: a nested
+# `unit as { t: anyval.generic ... }` template, or a generic FILE unit. The
+# types either declares are generic over its parameters, and each instance has
+# its own copy of them.
+declIsUnitTemplate: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    declId: ztypes.declid
+} out bool is {
+    if declId.isZero then return false
+    if (declDeclaresTemplate :st :ast :declId) then return true
+    return (declIsGenericFileUnit :st :ast :declId)
+}
+
+# declIsGenericFileUnit -- the declaration is a FILE unit (a child of the program
+# root) whose body declares a generic parameter: a template like a nested
+# `unit as { ... }`, with its parameters on its root declaration.
+declIsGenericFileUnit: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    declId: ztypes.declid
+} out bool is {
+    if (declParentIdOf :st :declId) != st.typing.programRoot then return false
+    dn: (st.typing.decls.get i: declId).node
+    if dn.isZero then return false
+    ar: argRefAt :ast nid: dn
+    if ar.operation.isZero then return false
+    return (unitDefIsGeneric :ast oId: ar.operation)
 }
 
 # registerUnitParamsOn -- a type nested in a generic unit takes the unit's
@@ -15216,7 +15247,7 @@ unitNestedCopyNamed: function {
     td: declOfTypeId :st tid: og
     if td.isZero then return false
     if ((declNameIdOf :st declId: td) == nameId).not then return false
-    return (declDeclaresTemplate :st :ast declId: (declParentIdOf :st declId: td))
+    return (declIsUnitTemplate :st :ast declId: (declParentIdOf :st declId: td))
 }
 
 # preludeAliasNamesType -- whether core aliases the name `nameId` to type `tid`
@@ -21217,7 +21248,7 @@ unitSiblingReturn: function {
     td: declOfTypeId :st tid: tplClassId
     if td.isZero then return none
     ud: declParentIdOf :st declId: td
-    if ud.isZero or (declDeclaresTemplate :st :ast declId: ud).not then return none
+    if ud.isZero or (declIsUnitTemplate :st :ast declId: ud).not then return none
     bn: baseTypeNameId :ast n: (ast.nodes.get i: rn)
     if bn.isZero then return none
     sib: st.typing.declFindChild parentDeclId: ud nameId: bn
@@ -52072,7 +52103,7 @@ walkDeclaredDef: function {
     memId: (st.typing.decls.get i: dd).node
     if memId.isZero then return
     # a template's member is checked per instance, from the instance's copy
-    if (declDeclaresTemplate :st :ast declId: (declParentIdOf :st declId: dd)) then return
+    if (declIsUnitTemplate :st :ast declId: (declParentIdOf :st declId: dd)) then return
     # The mark means BODY WALKED, so it is never set for a definition this is
     # not about to walk. Claiming one and declining is what made a free function
     # -- and then a namespace -- vanish: the unit's own walk skipped it as done.
