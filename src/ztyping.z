@@ -1061,8 +1061,9 @@ ZTyping: class {
     # vid -> the binding's value was MOVED out (ownership transfer recorded at
     # the symtab's invalidate choke point); a moved local is not viewable
     variableMoved: IdSet ztypes.vid
-    # dotted-path nodeid -> the internal member name a public alias resolved to
-    aliasInternalName: (IdMapR zast.nodeid V: String)
+    # dotted-path (or case-arm) nodeid -> the internal member a public alias
+    # resolved to
+    aliasInternalId: (IdMapV zast.nodeid v: zast.nameid)
     # calls that construct without naming a constructor
     implicitCreate: (IdMapV zast.nodeid v: ztypes.tid)
     # the node a function's return type came from, for the diagnostic that has
@@ -2666,24 +2667,18 @@ ZTyping: class {
 
     # --- per-member flags ---
 
-    # setAliasInternalName / aliasInternalNameOf -- per dotted-path-node record
-    # of the internal member an external access resolved to through a public
-    # alias; the emitter reads it to emit the internal C name.
-    setAliasInternalName: function {:this nodeid: zast.nodeid internalName: StringView} is {
-        v: internalName.string
-        this.aliasInternalName.set key: nodeid value: v
+    # setAliasInternalId / aliasInternalIdOf -- per node record of the internal
+    # member an external access resolved to through a public alias: a dotted
+    # path's member, or a case arm's. Every pass that asks WHICH member the node
+    # names reads it, so a renamed member is the member it renames everywhere.
+    setAliasInternalId: function {:this nodeid: zast.nodeid internalId: zast.nameid} is {
+        this.aliasInternalId.set key: nodeid value: internalId
     }
 
-    # the internal name an alias resolved to, for the node that wrote the alias
-    aliasInternalNameOf: function {this: this.view nodeid: zast.nodeid} out String is {
-        r: this.aliasInternalName.get key: nodeid
-        match (
-            r
-        ) case some then {
-            return r.copy
-        } case none then {
-            return ""
-        }
+    # the internal member an alias resolved to, for the node that wrote the
+    # alias; zero when the node wrote no alias
+    aliasInternalIdOf: function {this: this.view nodeid: zast.nodeid} out zast.nameid is {
+        return ((this.aliasInternalId.get key: nodeid).or d: zast.nameid.zero)
     }
 
     # setChildGrantsPrivateId -- mark a field edge as one whose declared type
@@ -3253,7 +3248,7 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         variableMutated: IdSet ztypes.vid
         variableRebound: IdSet ztypes.vid
         variableMoved: IdSet ztypes.vid
-        aliasInternalName: (IdMapR zast.nodeid V: String)
+        aliasInternalId: (IdMapV zast.nodeid v: zast.nameid)
         implicitCreate: (IdMapV zast.nodeid v: ztypes.tid)
         funcReturnNode: (IdMapV ztypes.tid v: zast.nodeid)
         defVariableId: (IdMapV zast.nodeid v: ztypes.vid)

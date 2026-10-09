@@ -28088,13 +28088,13 @@ dottedChildNameId: function {ast: Ast.view n: astnode.view} out zast.nameid is {
     }
 }
 
-# unionCreateArmName -- the constructed arm's name when a value is a tagged
+# unionCreateArmId -- the constructed arm's name id when a value is a tagged
 # subtype construction (a UNION_CREATE-stamped call's dotted child), or "".
-unionCreateArmName: function {
+unionCreateArmId: function {
     ast: Ast.view
     st: zenv.ZSymbolTable.view
     n: astnode.view
-} out String is {
+} out zast.nameid is {
     match (
         n
     ) case dottedpath then {
@@ -28102,9 +28102,9 @@ unionCreateArmName: function {
         match (
             dgot
         ) case some then {
-            return (atomName :ast n: (ast.nodes.get i: n.child))
+            return (dottedMemberId :st :ast nid: n.nodeid child: n.child)
         } case none then {
-            return ""
+            return zast.nameid
         }
     } case call then {
         kOpt: st.typing.callKind.get key: n.nodeid
@@ -28114,10 +28114,25 @@ unionCreateArmName: function {
         ) case some then {
             if kOpt == zast.callkind.unionCreate then isUC = true
         } case none then null
-        if isUC then return (dottedChildName :ast n: (ast.nodes.get i: n.callable))
-        return ""
+        if isUC then return (dottedNodeMemberId :st :ast nid: n.callable)
+        return zast.nameid
     } else {
-        return ""
+        return zast.nameid
+    }
+}
+
+# dottedNodeMemberId -- dottedMemberId of the node `nid`, 0 when it is no
+# dotted path.
+dottedNodeMemberId: function {
+    st: zenv.ZSymbolTable.view ast: Ast.view nid: zast.nodeid
+} out zast.nameid is {
+    n: ast.nodes.get i: nid
+    match (
+        n
+    ) case dottedpath then {
+        return (dottedMemberId :st :ast nid: n.nodeid child: n.child)
+    } else {
+        return zast.nameid
     }
 }
 
@@ -29658,7 +29673,7 @@ readsMethodThroughInstance: function {
     bt: ztypes.tid
     mo: ztypes.tid
 } out bool is {
-    cnId: atomNameId :ast n: (ast.nodes.get i: dp.child)
+    cnId: dottedMemberId :st :ast nid: dp.nid child: dp.child
     if (st.typing.declIsFnptrFieldId parentTypeId: bt nameId: cnId) then return false
     if (memberDeclaresReceiver :st :bt :cnId :mo).not then return false
     return (dottedBaseIsValue :st :ast :unitDecl n: (ast.nodes.get i: dp.nid))
@@ -30180,10 +30195,7 @@ unitMemberEffectiveName: function {
         if st.typing.renameSeen then {
             intU: declPublicAliasInternal :st tid: bt nameId: cnId
             if intU.isZero.not then {
-                (st.typing.setAliasInternalName
-                    nodeid: dp.nid
-                    internalName: (zast.nameTextAt :ast ref: intU).stringView
-                )
+                st.typing.setAliasInternalId nodeid: dp.nid internalId: intU
                 effUcn = intU
                 aliasHitU = true
             }
@@ -32512,10 +32524,7 @@ checkDottedOn: function {
         }
     }
     if intNmX.isZero.not then {
-        (st.typing.setAliasInternalName
-            nodeid: dp.nid
-            internalName: (zast.nameTextAt :ast ref: intNmX).stringView
-        )
+        st.typing.setAliasInternalId nodeid: dp.nid internalId: intNmX
         cnId = intNmX
         aliasViaX = true
     }
@@ -34213,9 +34222,13 @@ predDottedCore: function {
     sn: bareAtomNameId n: parent
     if sn.isZero then return (Option.none ArmPredFact)
     if childName.isZero then return (Option.none ArmPredFact)
+    # a renamed arm is the arm it renames
+    arm: childName
+    ai: st.typing.aliasInternalIdOf nodeid: nid
+    if ai.isZero.not then arm = ai
     return (Option.some (ArmPredFact
         subject: sn
-        armName: childName
+        armName: arm
         fullTid: ptid
         :negated
     )
@@ -35367,12 +35380,12 @@ checkAssignment: function {
         # Binding a tagged-subtype construction narrows the name to the
         # constructed arm (assignment-based narrowing: the overlay keeps the
         # subject's type and records the narrowed subtype).
-        ucArm: unionCreateArmName :ast :st n: (ast.nodes.get i: asgn.value)
-        if ucArm.length > 0 then {
+        ucArm: unionCreateArmId :ast :st n: (ast.nodes.get i: asgn.value)
+        if ucArm.isZero.not then {
             (st.narrow
                 nameId: asgn.name
                 toTypeId: vt
-                subtypeName: (nameIdOf :ast name: ucArm.stringView)
+                subtypeName: ucArm
                 shadow: false
             )
         }
@@ -36238,7 +36251,7 @@ valueIsLent: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid} out bool
         if fReft when n.dottedpath when (memberReadIsField
             :st
             parentNid: n.parent
-            nameId: (atomNameId :ast n: (ast.nodes.get i: n.child))
+            nameId: (dottedMemberId :st :ast :nid child: n.child)
         ) then fbase = n.parent
     }
     if fbase.isZero.not when (valueIsLent :st :ast nid: fbase) then return true
@@ -41115,7 +41128,7 @@ movedFieldPath: function {st: zenv.ZSymbolTable.view ast: Ast.view n: astnode.vi
         n
     ) case dottedpath then {
         p: ast.nodes.get i: n.parent
-        cid: atomNameId :ast n: (ast.nodes.get i: n.child)
+        cid: dottedMemberId :st :ast nid: n.nodeid child: n.child
         if (isMoveMarkerId nameId: cid) then return (movedFieldPath :st :ast n: p)
         if (memberReadIsField :st parentNid: n.parent nameId: cid).not then return false
         if p.atomid then return true
@@ -41123,6 +41136,21 @@ movedFieldPath: function {st: zenv.ZSymbolTable.view ast: Ast.view n: astnode.vi
     } else {
         return false
     }
+}
+
+# dottedMemberId -- the member the dotted path `nid` reads: the internal member
+# a public alias resolved to (stamped where the alias resolved), else the
+# written child. A pass that asks WHICH member a resolved path reads asks here,
+# so a renamed member is the member it renames everywhere.
+dottedMemberId: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    nid: zast.nodeid
+    child: zast.nodeid
+} out zast.nameid is {
+    ai: st.typing.aliasInternalIdOf nodeid: nid
+    if ai.isZero.not then return ai
+    return (atomNameId :ast n: (ast.nodes.get i: child))
 }
 
 # memberReadIsField -- the member `nameId` read off the node `parentNid` is a
@@ -44566,7 +44594,7 @@ returnedBareFieldName: function {
         arm
     ) case dottedpath then {
         dr: dpRefAt :ast :nid
-        bfcId: atomNameId :ast n: (ast.nodes.get i: dr.child)
+        bfcId: dottedMemberId :st :ast :nid child: dr.child
         if bfcId.isZero then return ""
         if (isStripMarkerId nameId: bfcId) then return ""
         bft: walkTypeOf :st nid: dr.parent
@@ -49578,6 +49606,40 @@ sumArmTid: function {
     return (optionval.some arm)
 }
 
+# publicCaseArm -- the arm a case clause names through its subject type's
+# public interface: a renamed arm is the arm it renames (stamped on the clause
+# for the emitter), and a private arm is refused, as a member read is.
+publicCaseArm: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    clause: caseclauseref
+    subjT: ztypes.tid
+    written: zast.nameid
+    # false through a private-capable subject, which names arms as declared
+    armsPublic: bool
+} out zast.nameid is {
+    if armsPublic.not then return written
+    intA: declPublicAliasInternal :st tid: subjT nameId: written
+    if intA.isZero.not then {
+        st.typing.setAliasInternalId nodeid: clause.nid internalId: intA
+        return intA
+    }
+    if (declMemberIsPrivate :st tid: subjT nameId: written) then {
+        an: zast.nameTextAt :ast ref: written
+        stn: specWrittenName :st :ast tid: subjT
+        marm: ast.nodes.get i: clause.matcharm
+        (addError
+            :st
+            nodeid: (zast.nodeIdOf n: marm)
+            lineno: (nodeLine n: marm)
+            colno: (nodeCol n: marm)
+            e: zast.err.notPublic
+            msg: "'\{an}' is not public on type '\{stn}'"
+        )
+    }
+    return written
+}
+
 # checkCaseClause -- type one `case` arm: bind what the arm narrows to, walk
 # its body, and report what the arm contributes to the match -- whether it is
 # empty and whether it diverges. Its arm name and value type are appended to
@@ -49589,6 +49651,7 @@ checkCaseClause: function {
     clause: caseclauseref
     subjT: ztypes.tid
     isSum: bool
+    armsPublic: bool
     targetName: StringView
     neverId: ztypes.tid
     covered: List String
@@ -49600,8 +49663,12 @@ checkCaseClause: function {
 } out casearmfacts is {
     anyEmpty: false
     allDiverge: true
-    armName: atomName :ast n: (ast.nodes.get i: clause.matcharm)
-    armId: atomNameId :ast n: (ast.nodes.get i: clause.matcharm)
+    # the arm as written, for the messages
+    writtenId: atomNameId :ast n: (ast.nodes.get i: clause.matcharm)
+    # through the public interface a renamed arm is the arm it renames, as a
+    # member read is (checkDottedOn): stamped on the clause for the emitter
+    armId: publicCaseArm :st :ast :clause :subjT written: writtenId :armsPublic
+    armName: zast.nameTextCopy :ast ref: armId
     if (isEmptyBody :st :ast :unitDecl n: (ast.nodes.get i: clause.statement)) then anyEmpty = true
     # A value-match literal arm wears the subject's concrete type.
     if isSum.not when (isNumericLiteralName name: armName.stringView
@@ -49628,7 +49695,7 @@ checkCaseClause: function {
             :ast
             :clause
             :subjT
-            armName: armName.stringView
+            armName: (zast.nameTextAt :ast ref: writtenId).stringView
             armTid: (armo.or d: ztypes.tid.zero)
         )
     }
@@ -49659,7 +49726,7 @@ checkCaseClause: function {
             lineno: clause.lineno
             colno: clause.colno
             e: zast.err.typeError
-            msg: "arm '\{armName}' is matched twice"
+            msg: "arm '\{zast.nameTextAt :ast ref: writtenId}' is matched twice"
         )
     }
     cn2: armName.copy
@@ -49733,11 +49800,19 @@ caseIsExhaustive: function {
     missing: List String
     missingArms :required :covered into: missing
     if missing.length == 0 then return true
+    # through the public interface an arm is named by its public name
+    armsPublic: caseArmsArePublic :st :ast subject: casenode.subject :subjT
     mj: String
     mfirst: true
     for each mn: missing loop {
         if mfirst.not then mj.append ", "
-        mj.append mn
+        pubA: zast.nameid
+        if armsPublic then pubA = (declPublicAliasOf
+            :st
+            tid: subjT
+            internalId: (nameIdOf :ast name: mn.stringView)
+        )
+        if pubA.isZero then mj.append mn else mj.append (zast.nameTextAt :ast ref: pubA)
         mfirst = false
     }
     (addErrorH
@@ -49917,6 +49992,7 @@ walkCaseClauses: function {
 } out casearmfacts is {
     anyEmpty: false
     allDiverge: true
+    armsPublic: caseArmsArePublic :st :ast subject: casenode.subject :subjT
     kC: u64
     for kC < casenode.nclauses loop {
         clauseId: zast.caseClauseAt :ast nid: casenode.nid i: kC
@@ -49930,6 +50006,7 @@ walkCaseClauses: function {
                 :clause
                 :subjT
                 :isSum
+                :armsPublic
                 :targetName
                 :neverId
                 :covered
@@ -63445,14 +63522,21 @@ publicNsOf: function {
     # a nested unit or hidden subunit links its declaration through the
     # typing side (declSetType), not the registry's def
     if od.u64 == 0 then od = st.typing.declIdOfType typeId: tid
-    if od.u64 == 0 then return ztypes.declid.zero
-    return (st.typing.declPublicNsOf owner: od)
+    pn: ztypes.declid
+    if od.u64 != 0 then pn = st.typing.declPublicNsOf owner: od
+    # a generic instance IS its template's type: it presents the template's
+    # public interface, renames and private members alike
+    if pn.isZero then {
+        og: st.reg.genericOriginOf :tid
+        if og.isZero.not when og != tid then return (publicNsOf :st tid: og)
+    }
+    return pn
 }
 
 # declMemberIsPrivate -- member `nameId` is private on the type/unit that minted
 # `tid`: true iff that type has a publicNs (a `public:` block) and `nameId` is not
-# one of its exposed edges. Exact-tid: a mono has no own publicNs, so all its
-# members read public (matching the childPrivate map's exact-tid keying).
+# one of its exposed edges. A generic instance answers with its template's
+# publicNs (publicNsOf).
 declMemberIsPrivate: function {
     st: zenv.ZSymbolTable.view
     tid: ztypes.tid
@@ -63492,6 +63576,40 @@ declPublicAliasInternal: function {
     if intName == nid then return zast.nameid
     if intName.isZero then return zast.nameid
     return intName
+}
+
+# declPublicAliasOf -- the public name `tid`'s interface exposes its member
+# `internalId` under when that differs (the reverse of declPublicAliasInternal),
+# zero otherwise.
+declPublicAliasOf: function {
+    st: zenv.ZSymbolTable.view
+    tid: ztypes.tid
+    internalId: zast.nameid
+} out zast.nameid is {
+    if internalId.isZero then return zast.nameid
+    pn: publicNsOf :st :tid
+    if pn.isZero then return zast.nameid
+    po: st.typing.decls.get i: pn
+    for each c: po.children.iterateItems loop {
+        if c.key != internalId when (st.typing.decls.get i: c.value).name == internalId then {
+            return c.key
+        }
+    }
+    return zast.nameid
+}
+
+# caseArmsArePublic -- a match's arms are named through its subject type's
+# public interface: renames resolve, as a member read off the same subject
+# would (checkDottedOn), unless the subject is private-capable.
+caseArmsArePublic: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    subject: zast.nodeid
+    subjT: ztypes.tid
+} out bool is {
+    if st.typing.renameSeen.not then return false
+    if subject.isZero or subjT.isZero then return false
+    return (baseIsPrivateCapable :st :ast bt: subjT baseNode: (ast.nodes.get i: subject)).not
 }
 
 # publicAliasInternalNames -- the internal member names `tid`'s public interface

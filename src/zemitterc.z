@@ -3195,7 +3195,7 @@ loopNeverExits: function {
             if (boolArmSideOf :symtab n: cop).truthy then alwaysT = true
             # `true` also arrives as the dotted tag bool.true
             if cop.dottedpath then {
-                chn: atomNameIdOf :ast n: (ast.nodes.get i: cop.child)
+                chn: aliasOrChildId :ast :symtab aliasId: cop.nodeid childId: cop.child
                 chs: armSideAtNode :symtab nid: cop.nodeid nameId: chn
                 if chs.truthy then alwaysT = true
             }
@@ -4057,7 +4057,8 @@ pathIsPointer: function {
         if (nodeIsRefBorrowResult :ast :symtab :ctx n: dnd) then return true
         # an access or borrow marker contributes no C text: `b.private` and
         # `b.borrow` ARE `b`, a pointer exactly when `b` is one
-        if (markerEmitsBase id: (atomNameIdOf :ast n: (ast.nodes.get i: n.child))) then {
+        if (markerEmitsBase id: (aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child)
+        ) then {
             return (pathIsPointer :ast :symtab :ctx n: (ast.nodes.get i: n.parent))
         }
         return (borrowedFieldPath :ast :symtab :ctx :n)
@@ -4092,7 +4093,7 @@ borrowedFieldPath: function {
     if prid.isZero.not then ptid = prid
     if (symtab.typing.declIsBorrowedFieldId
         parentTypeId: ptid
-        nameId: (atomNameIdOf :ast n: (ast.nodes.get i: n.child))
+        nameId: (aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child)
     ).not then return false
     ft: stampIdOf :symtab nid: (zast.nodeIdOf n: (ast.nodes.get i: n.nodeid))
     return (borrowedFieldHeldByPointer :symtab :ctx fid: ft)
@@ -5100,8 +5101,6 @@ svValueFormAt: function {
     return (svValueForm :ctx :expr :isStr :vid)
 }
 
-# dottedBaseAtom / dottedChildText -- the parent atom and member name of
-# a dotted path ("" when the shape is deeper than one segment).
 # dottedBaseAtomId -- the base atom's interned name id (0 when absent). The
 # id form of dottedBaseAtom, for callers that only need to identify the name.
 dottedBaseAtomId: function {ast: Ast.view n: astnode.view} out zast.nameid is {
@@ -5134,18 +5133,6 @@ atomOrBaseText: function {ast: Ast.view n: astnode.view} outx StringView is {
     return (dottedBaseAtom :ast :n)
 }
 
-# the child member name of dotted-path node `n`, taken by copy as atomTextOf's
-# is: the name is `ast`'s.
-dottedChildText: function {ast: Ast.view n: astnode} outx StringView is {
-    match (
-        n
-    ) case dottedpath then {
-        return (atomTextOf :ast n: (ast.nodes.get i: n.child))
-    } else {
-        return ""
-    }
-}
-
 # aliasOrChild / aliasChildName -- the internal member name a dotted-path node
 # resolved to through a public-interface alias (typecheck stamp keyed on the
 # dotted-path nodeid), else the plain AST child text. Centralizes rename-aware
@@ -5156,15 +5143,7 @@ aliasOrChild: function {
     aliasId: zast.nodeid
     childId: zast.nodeid
 } outx StringView is {
-    if symtab.typing.renameSeen then {
-        ai: symtab.typing.aliasInternalName.get key: aliasId
-        match (
-            ai
-        ) case some then {
-            if ai.length > 0 then return ai.stringView
-        } case none then null
-    }
-    return (atomTextOf :ast n: (ast.nodes.get i: childId))
+    return (zast.nameTextAt :ast ref: (aliasOrChildId :ast :symtab :aliasId :childId)).stringView
 }
 
 # the emitted (internal) name of a possibly-renamed member access.
@@ -5201,7 +5180,7 @@ stmtFormNameId: function {
 } out zast.nameid is {
     # the child's name as an ID: this runs for every dotted callee in statement
     # position, and four compares against the four forms need no text at all
-    cid: dottedChildNameIdOf :ast :n
+    cid: aliasChildNameId :ast :symtab :n
     zid: zast.nameid
     if cid.isZero then return zid
     isSf: (
@@ -5237,7 +5216,7 @@ stmtFormNameId: function {
         :ast
         st: symtab
         unitDecl: ud0x
-        name: (dottedChildNameIdOf :ast :n)
+        name: (aliasChildNameId :ast :symtab :n)
     )
     match (
         fo
@@ -5251,23 +5230,14 @@ stmtFormNameId: function {
     return zid
 }
 
-# the child member name id of dotted-path node `n` (0 when not one).
-dottedChildNameIdOf: function {ast: Ast.view n: astnode.view} out zast.nameid is {
-    match (
-        n
-    ) case dottedpath then {
-        return (atomNameIdOf :ast n: (ast.nodes.get i: n.child))
-    } else {
-        return zast.nameid.zero
-    }
-}
-
 # the middle segment's name id of a LEFT-nested `(a.B).c` path (0 otherwise).
-dottedParentChildId: function {ast: Ast.view n: astnode.view} out zast.nameid is {
+dottedParentChildId: function {
+    ast: Ast.view symtab: zenv.ZSymbolTable.view n: astnode.view
+} out zast.nameid is {
     match (
         n
     ) case dottedpath then {
-        return (dottedChildNameIdOf :ast n: (ast.nodes.get i: n.parent))
+        return (aliasChildNameId :ast :symtab n: (ast.nodes.get i: n.parent))
     } else {
         return zast.nameid.zero
     }
@@ -5289,6 +5259,18 @@ aliasChildNameId: function {
     }
 }
 
+# clauseArmId -- the arm a match clause names: the internal arm a public
+# alias resolved to (the checker stamps the clause), else the written one.
+clauseArmId: function {
+    symtab: zenv.ZSymbolTable.view
+    nid: zast.nodeid
+    written: zast.nameid
+} out zast.nameid is {
+    ai: symtab.typing.aliasInternalIdOf nodeid: nid
+    if ai.isZero.not then return ai
+    return written
+}
+
 # aliasOrChildId -- aliasOrChild's id twin: the same answer as a pool id, for
 # the sites that only need to know WHICH member this is.
 aliasOrChildId: function {
@@ -5298,8 +5280,8 @@ aliasOrChildId: function {
     childId: zast.nodeid
 } out zast.nameid is {
     if symtab.typing.renameSeen then {
-        ai: symtab.typing.aliasInternalNameOf nodeid: aliasId
-        if ai.length > 0 then return (zast.poolFind pool: ast.names text: ai.stringView)
+        ai: symtab.typing.aliasInternalIdOf nodeid: aliasId
+        if ai.isZero.not then return ai
     }
     return (atomNameIdOf :ast n: (ast.nodes.get i: childId))
 }
@@ -5439,7 +5421,7 @@ svArgAddr: function {
         a2l: "&\{anlE}"
         return a2l
     } case dottedpath then {
-        dpm: atomNameIdOf :ast n: (ast.nodes.get i: n.child)
+        dpm: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
         if (ztypecheck.isStringViewMember nameId: dpm) then {
             pe: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent)
             pIsStr: (stampIsStr
@@ -6098,13 +6080,16 @@ emitDataIndexCall: function {
 # argumentsAreCreates -- a construction's arguments are its `create`'s rather than
 # its type's: after a parenthesised type application, and in an explicit
 # `T.create`.
-argumentsAreCreates: function {ast: Ast.view callable: astnode.view} out bool is {
+argumentsAreCreates: function {
+    ast: Ast.view symtab: zenv.ZSymbolTable.view callable: astnode.view
+} out bool is {
     if callable.call then return true
     match (
         callable
     ) case dottedpath then {
         return (
-            (atomNameIdOf :ast n: (ast.nodes.get i: callable.child)) == zast.wellKnown.slot.wkCreate
+            (aliasOrChildId :ast :symtab aliasId: callable.nodeid childId: callable.child) ==
+            zast.wellKnown.slot.wkCreate
         )
     } else {
         return false
@@ -6126,7 +6111,7 @@ listCapArg: function {
     match (
         n
     ) case call then {
-        afterType: argumentsAreCreates :ast callable: (ast.nodes.get i: n.callable)
+        afterType: argumentsAreCreates :ast :symtab callable: (ast.nodes.get i: n.callable)
         arx259: u64
         for arx259 < n.arguments.count loop {
             aId: zast.kidAt kids: ast.kids span: n.arguments i: arx259
@@ -8478,7 +8463,10 @@ collectionValueCallRhs: function {
     } case dottedpath then {
         # a bare dotted path returning a collection (e.g. `st.allNames`) is a
         # no-arg method auto-call or field access -- a value, never a construction.
-        atc: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child))
+        atc: (zast.nameTextAt
+            :ast
+            ref: (aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child)
+        )
         return atc.length > 0
     } case atomid then {
         # a bare name resolving to a VARIABLE is that container's value -- a
@@ -8507,7 +8495,7 @@ collectionValueCallRhs: function {
             # a dotted-path method callable (e.g. `p.operationPaths lex: lx`)
             # returning a List is a value-producing call, not a construction --
             # emit the call rather than falling to the empty-collection default.
-            dct: dottedChildText :ast n: (ast.nodes.get i: n.callable)
+            dct: aliasChildName :ast :symtab n: (ast.nodes.get i: n.callable)
             return dct.length > 0
         }
         return true
@@ -8686,7 +8674,7 @@ isSvAsStringNode: function {
     match (
         n
     ) case dottedpath then {
-        cnId: atomNameIdOf :ast n: (ast.nodes.get i: n.child)
+        cnId: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
         if cnId != zast.wellKnown.slot.wkAsString then return false
         bnidA: interpPartNodeId n: (ast.nodes.get i: n.parent)
         btA: chaseStrTypedef :symtab :ctx tid: (stampIdOf :symtab nid: bnidA)
@@ -8778,7 +8766,10 @@ refBorrowCalleeFid: function {
         return ztypes.tid.zero
     } case dottedpath then {
         # a zero-arg method auto-call reads as a dotted path
-        ch7: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child))
+        ch7: (zast.nameTextAt
+            :ast
+            ref: (aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child)
+        )
         pt7: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.parent))
         cc7: symtab.typing.declChildOf pool: ast.names parentTypeId: pt7 name: ch7.stringView
         match (
@@ -8830,7 +8821,7 @@ bindingRhsIsBorrow: function {
         ) case some then {
             return false
         } case none then null
-        chId: atomNameIdOf :ast n: (ast.nodes.get i: n.child)
+        chId: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
         # a `.borrow` value is a reference by definition
         if chId == zast.wellKnown.slot.wkBorrow then return true
         ch: zast.nameTextAt :ast ref: chId
@@ -8880,7 +8871,7 @@ bindingRhsIsBorrow: function {
             # frees the buffer and the binding must not free it again. A
             # protocol or facet declaring a real `borrow` projection resolves
             # above and never reaches here.
-            chId: atomNameIdOf :ast n: (ast.nodes.get i: n.child)
+            chId: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
             if (zast.markerKindOfName id: chId).borrowMarker then return true
             return false
         }
@@ -8902,7 +8893,8 @@ rhsBorrowMarkerBase: function {
         n
     ) case dottedpath then {
         if (
-            (atomNameIdOf :ast n: (ast.nodes.get i: n.child)) != zast.wellKnown.slot.wkBorrow
+            (aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child) !=
+            zast.wellKnown.slot.wkBorrow
         ) then return zast.nodeid
         pidB: interpPartNodeId n: (ast.nodes.get i: n.parent)
         bst: stampIdOf :symtab nid: pidB
@@ -8974,6 +8966,7 @@ typedefBorrowSource: function {
         if ck != zast.callkind.typedefBorrow then return zast.nodeid
         return (underBorrowMarker
             :ast
+            :symtab
             nid: (castSourceArg :ast call: n)
         )
     } else {
@@ -8998,12 +8991,15 @@ castSourceArg: function {ast: Ast.view call: zast.callrow.view} out zast.nodeid 
 
 # underBorrowMarker -- the path a `.borrow` marker is written on (`xs` of
 # `xs.borrow`), else the node itself.
-underBorrowMarker: function {ast: Ast.view nid: zast.nodeid} out zast.nodeid is {
+underBorrowMarker: function {
+    ast: Ast.view symtab: zenv.ZSymbolTable.view nid: zast.nodeid
+} out zast.nodeid is {
     if nid.isZero then return zast.nodeid
     src: ast.nodes.get i: nid
     if src.dottedpath.not then return nid
     if (
-        (atomNameIdOf :ast n: (ast.nodes.get i: src.child)) != zast.wellKnown.slot.wkBorrow
+        (aliasOrChildId :ast :symtab aliasId: src.nodeid childId: src.child) !=
+        zast.wellKnown.slot.wkBorrow
     ) then return nid
     return src.parent
 }
@@ -10375,7 +10371,7 @@ emitInterpArgExpr: function {
         }
         return ""
     } case dottedpath then {
-        cm: atomNameIdOf :ast n: (ast.nodes.get i: n.child)
+        cm: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
         if cm == zast.wellKnown.slot.wkString then {
             dpp: ast.nodes.get i: n.parent
             return (emitInterpArgExpr :ast :symtab :ctx n: dpp)
@@ -10426,7 +10422,7 @@ emitInterpStmtValue: function {
         }
         return ""
     } case dottedpath then {
-        cm: atomNameIdOf :ast n: (ast.nodes.get i: n.child)
+        cm: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
         if cm == zast.wellKnown.slot.wkString then {
             dpr: ast.nodes.get i: n.parent
             return (emitInterpStmtValue :ast :symtab :ctx n: dpr :ind :tmp :buf)
@@ -13030,7 +13026,7 @@ emitCrossUnitBareCreate: function {
 } out String is {
     if childId != zast.wellKnown.slot.wkCreate then return ""
     pbId: dottedBaseAtomId :ast n: parent
-    ptId: dottedChildNameIdOf :ast n: parent
+    ptId: aliasChildNameId :ast :symtab n: parent
     if pbId.isZero then return ""
     if ptId.isZero then return ""
     if (ztypecheck.isUnitNameDecl
@@ -13078,7 +13074,7 @@ emitCrossUnitExplicitCreate: function {
     armId: aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable)
     if armId != zast.wellKnown.slot.wkCreate then return ""
     obId: outerBaseAtomId :ast n: (ast.nodes.get i: call.callable)
-    pcId: dottedParentChildId :ast n: (ast.nodes.get i: call.callable)
+    pcId: dottedParentChildId :ast :symtab n: (ast.nodes.get i: call.callable)
     if obId.isZero then return ""
     if pcId.isZero then return ""
     if (ztypecheck.isUnitNameDecl
@@ -13184,7 +13180,7 @@ emitCrossUnitSumCtor: function {
     call: zast.callrow.view
 } out String is {
     obId: outerBaseAtomId :ast n: (ast.nodes.get i: call.callable)
-    pcId: dottedParentChildId :ast n: (ast.nodes.get i: call.callable)
+    pcId: dottedParentChildId :ast :symtab n: (ast.nodes.get i: call.callable)
     if obId.isZero then return ""
     if pcId.isZero then return ""
     if (ztypecheck.isUnitNameDecl
@@ -16695,7 +16691,7 @@ dottedTypeConstRead: function {
 } out String is {
     bt: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.parent))
     if bt.isZero then return ""
-    cid: atomNameIdOf :ast n: (ast.nodes.get i: n.child)
+    cid: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
     # a data block's `slot.label` is the label's position, a constant of the
     # block's index type
     isSlot: symtab.typing.dataSlotTypes.has item: bt
@@ -16874,7 +16870,7 @@ emitDottedAtomBase: function {
     }
     # `.stringView` of a view is the view: a generic body wrote it for a type
     # parameter a StringView fills
-    childNameId: atomNameIdOf :ast n: (ast.nodes.get i: n.child)
+    childNameId: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
     if bareSv when childNameId == zast.wellKnown.slot.wkStringView then return bn2.string
     eSv: emitSvAtomBase :ctx :bn2 :mn2 :mnId :bn2v :bareSv
     if eSv.length > 0 then return eSv
@@ -16987,7 +16983,7 @@ unitFnMemberC: function {
         :ast
         st: symtab
         unitDecl: ud6x
-        name: (atomNameIdOf :ast n: (ast.nodes.get i: n.child))
+        name: (aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child)
     )
     fid: ztypes.tid
     match (
@@ -17026,7 +17022,7 @@ nsFnMemberC: function {
 } out String is {
     nfo: (symtab.typing.declChildOfId
         parentTypeId: nsTid
-        nameId: (atomNameIdOf :ast n: (ast.nodes.get i: n.child))
+        nameId: (aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child)
     )
     nftid: ztypes.tid
     match (
@@ -17359,8 +17355,8 @@ emitDottedConversionRead: function {
     # three segments of a cross-unit tag; the checker said it tests the arm
     if (dottedArmPredicateTid :symtab nid: n.nodeid).isZero.not then return ""
     xpb: dottedBaseAtomId :ast n: (ast.nodes.get i: n.parent)
-    xpt: dottedChildNameIdOf :ast n: (ast.nodes.get i: n.parent)
-    xar: atomNameIdOf :ast n: (ast.nodes.get i: n.child)
+    xpt: aliasChildNameId :ast :symtab n: (ast.nodes.get i: n.parent)
+    xar: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
     xtag: (emitCrossUnitTag
         :ast
         :symtab
@@ -17662,7 +17658,7 @@ emitDottedNativeMarker: function {
         unitName: ctx.mainName.stringView
         baseId: (atomNameIdOf :ast n: (ast.nodes.get i: n.parent))
         base: bn2r
-        membId: (atomNameIdOf :ast n: (ast.nodes.get i: n.child))
+        membId: (aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child)
     )
     if nnu.length > 0 then {
         mn2n: zast.nameTextAt :ast ref: mn2Id
@@ -17771,7 +17767,7 @@ boxMemberElem: function {
     ctx: Ctx
     n: zast.dottedpathrow.view
 } out ztypes.tid is {
-    mnId: atomNameIdOf :ast n: (ast.nodes.get i: n.child)
+    mnId: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
     if (ztypecheck.boxMemberDelegates nameId: mnId).not then return ztypes.tid.zero
     bnid: interpPartNodeId n: (ast.nodes.get i: n.parent)
     bt: monoStampIdOf :symtab :ctx nid: bnid
@@ -17821,7 +17817,7 @@ emitDottedRead: function {
     # the receiver value is materialized once. `.or d:` is a call node and
     # is handled by emitResultCombinator in the call dispatch instead.
     # the member is asked by ID: the legs below lend ast, and an id is a scalar
-    dcMnId: atomNameIdOf :ast n: (ast.nodes.get i: n.child)
+    dcMnId: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
     if dcMnId == zast.wellKnown.slot.wkOrPanic then {
         pStamp: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.parent))
         pMono: chaseAggregateTypedef :symtab :ctx tid: pStamp
@@ -19161,7 +19157,10 @@ interpBaseIsOwnedStructField: function {
         btt: symtab.reg.typetypeOf typeId: bt
         isUC: btt.isFieldwise
         if isUC.not then return false
-        cn: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child))
+        cn: (zast.nameTextAt
+            :ast
+            ref: (aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child)
+        )
         co: symtab.typing.declChildOf pool: ast.names parentTypeId: bt name: cn.stringView
         match (
             co
@@ -19981,7 +19980,7 @@ stringviewOfBaseNid: function {
     match (
         n
     ) case dottedpath then {
-        mn: atomNameIdOf :ast n: (ast.nodes.get i: n.child)
+        mn: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
         if (ztypecheck.isStringViewMember nameId: mn) then {
             # a base atom naming a FUNCTION is a call, whose String has no name
             if (baseAtomNamesFunction :symtab n: (ast.nodes.get i: n.parent)
@@ -20015,13 +20014,14 @@ stringviewOfBase: function {
 # stringCopyLitIndex -- the pool index of `\"lit\".string` (0 otherwise).
 stringCopyLitIndex: function {
     ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     n: astnode.view
 } out u64 is {
     match (
         n
     ) case dottedpath then {
-        mnId: atomNameIdOf :ast n: (ast.nodes.get i: n.child)
+        mnId: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
         if mnId == zast.wellKnown.slot.wkString then {
             return (bindLitIndex :ast :ctx n: (ast.nodes.get i: n.parent))
         } else {
@@ -20059,7 +20059,7 @@ copyRvalueHoist: function {
     match (
         n
     ) case dottedpath then {
-        cnId: atomNameIdOf :ast n: (ast.nodes.get i: n.child)
+        cnId: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
         if cnId != zast.wellKnown.slot.wkCopy then return ""
         if (stampIdDeep :symtab n: (ast.nodes.get i: n.parent)) != ctx.strTid then return ""
         # the receiver is spelled again by the caller when this declines, so
@@ -20119,7 +20119,7 @@ emitStringBindValue: function {
             return false
         }
     } case dottedpath then {
-        cndId: atomNameIdOf :ast n: (ast.nodes.get i: n.child)
+        cndId: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
         if cndId == zast.wellKnown.slot.wkString then {
             dpv: ast.nodes.get i: n.parent
             return (emitStringBindValue :ast :symtab :ctx n: dpv :nm :nmVid :ind :tmp :buf)
@@ -20175,7 +20175,7 @@ emitOptionBoxHoist: function {
         sln: ast.nodes.get i: n.statementline
         return (emitOptionBoxHoist :ast :symtab :ctx n: sln :ind :tmp :buf)
     } case call then {
-        cnId: dottedChildNameIdOf :ast n: (ast.nodes.get i: n.callable)
+        cnId: aliasChildNameId :ast :symtab n: (ast.nodes.get i: n.callable)
         if cnId != zast.wellKnown.slot.wkSome then return ""
         mid: stampIdOf :symtab nid: n.nodeid
         if (originIsTid :symtab tid: mid originTid: (ctx.origins.get i: family.slot.option)
@@ -20266,7 +20266,7 @@ emitStringReturnValue: function {
             return false
         }
     } case dottedpath then {
-        cndId: atomNameIdOf :ast n: (ast.nodes.get i: n.child)
+        cndId: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
         if cndId == zast.wellKnown.slot.wkString then {
             dpw: ast.nodes.get i: n.parent
             return (emitStringReturnValue :ast :symtab :ctx n: dpw :ind :tmp :buf)
@@ -20821,7 +20821,7 @@ emitStringBind: function {
         return true
     }
     if btid == ctx.strTid then {
-        fvN: stringCopyLitIndex :ast :ctx n: avn
+        fvN: stringCopyLitIndex :ast :symtab :ctx n: avn
         if fvN > 0 then {
             lsc: "\{ind}\{ctx.strC}_t \{nm} = \{ctx.strC}_from_view(_zs\{fvN});\n"
             buf.append lsc
@@ -21376,7 +21376,8 @@ readsNullField: function {
 } out bool is {
     rt: dottedReceiverStampId :ast :symtab callable: n
     if rt.isZero then return false
-    ct: ((symtab.typing.declChildOfId parentTypeId: rt nameId: (dottedChildNameIdOf :ast :n)).or
+    ct: ((symtab.typing.declChildOfId parentTypeId: rt nameId: (aliasChildNameId :ast :symtab :n)
+    ).or
         d: ztypes.tid.zero
     )
     if ct.isZero then return false
@@ -21936,7 +21937,7 @@ emitRepointStmt: function {
         return
     }
     base: (ast.nodes.get
-        i: (underBorrowMarker :ast nid: n.value)
+        i: (underBorrowMarker :ast :symtab nid: n.value)
     )
     rvm: emitExpr :ast :symtab :ctx n: base
     flushArgHoists :ctx :ind :tmp :buf
@@ -23439,13 +23440,16 @@ emitReassignLvalue: function {
                     :ctx
                     owner: ((vtGet xs: ctx.narrowTid vid: ba9V).or d: ztypes.tid.zero)
                     kind: memberkind.field
-                    nameId: (atomNameIdOf :ast n: (ast.nodes.get i: n.child))
+                    nameId: (aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child)
                 )
                 lvx: "\{nbo}.\{memC}"
                 return lvx
             }
         }
-        memFp: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child))
+        memFp: (zast.nameTextAt
+            :ast
+            ref: (aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child)
+        )
         rpnid: interpPartNodeId n: (ast.nodes.get i: n.parent)
         stampTid: stampIdOf :symtab nid: rpnid
         rsc: stampTid
@@ -23484,7 +23488,7 @@ emitReassignLvalue: function {
                 :ctx
                 owner: rsFpc
                 kind: memberkind.field
-                nameId: (atomNameIdOf :ast n: (ast.nodes.get i: n.child))
+                nameId: (aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child)
             )
             return "\{recvFpC}\{accFpL}\{memFpC}"
         }
@@ -23676,7 +23680,7 @@ matchGenericRoute: function {
     dcore: m.subject
     dcn: ast.nodes.get i: dcore
     if dcn.dottedpath then {
-        dleaf: dottedChildText :ast n: (ast.nodes.get i: dcore)
+        dleaf: aliasChildName :ast :symtab n: (ast.nodes.get i: dcore)
         dbnid: dottedBaseNodeId :ast n: (ast.nodes.get i: dcore)
         dbst: stampIdOf :symtab nid: dbnid
         downer: ctx.curThisTid
@@ -23947,7 +23951,7 @@ emitMatchStmt: function {
         clx1009 = clx1009 + 1
         c3: ast.nodes.get i: c3Id
         if c3.caseclause then {
-            cnm: c3.name
+            cnm: clauseArmId :symtab nid: c3.nodeid written: c3.name
             covA.append cnm
         }
     }
@@ -24073,7 +24077,9 @@ emitOrdinalPairMatch: function {
         c: ast.nodes.get i: cId
         if c.caseclause then {
             condB: subj.string
-            if falseArm.isZero.not when c.name == falseArm then condB = "!\{subj}"
+            if falseArm.isZero.not when (
+                (clauseArmId :symtab nid: c.nodeid written: c.name) == falseArm
+            ) then condB = "!\{subj}"
             kwB: "if"
             if firstB.not then kwB = "else if"
             firstB = false
@@ -24570,7 +24576,7 @@ emitMatchClause: function {
     buf: String.borrow
 } is {
     if c.caseclause then {
-        arm: c.name
+        arm: clauseArmId :symtab nid: c.nodeid written: c.name
         tg: tagConstOf :ast :ctx :symtab tid: vtid armId: arm
         l2: "\{ind}case \{tg}: {\n"
         buf.append l2
@@ -25116,13 +25122,13 @@ iterableNodeId: function {n: astnode.view} out zast.nodeid is {
 # isForIterCall -- the for-loop iterable is a call expression (an rvalue that
 # must be hoisted to a temp before `&recv`); a bare atom / dotted field is an
 # lvalue used directly.
-isForIterCall: function {ast: Ast.view n: astnode.view} out bool is {
+isForIterCall: function {ast: Ast.view symtab: zenv.ZSymbolTable.view n: astnode.view} out bool is {
     match (
         n
     ) case call then {
         return true
     } case dottedpath then {
-        cn: atomNameIdOf :ast n: (ast.nodes.get i: n.child)
+        cn: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
         if (
             (cn == zast.wellKnown.slot.wkIterate) or (cn == zast.wellKnown.slot.wkIterateMut)
         ) then return true
@@ -25328,7 +25334,7 @@ emitObjIterRecv: function {
         # what the iterable's own arguments hoisted is declared ahead of it,
         # before the loop label like the instance
         flushArgHoists :ctx :ind :tmp :buf
-        hoistIt: isForIterCall :ast n: (ast.nodes.get i: cOp)
+        hoistIt: isForIterCall :ast :symtab n: (ast.nodes.get i: cOp)
         if hoistIt.not then hoistIt = isNonLvalueArg s: ivex.stringView
         if hoistIt then {
             lgi: "\{ind}\{itCb}_t _git\{mN} = \{ivex};\n"
@@ -25904,7 +25910,7 @@ emitIntRangeFor: function {
         # closed range's receiver is its start, not its bound, so it has no
         # bound to read and the half-open leg would decline the header and hand
         # it to the object path to build a cursor.
-        crM: closedRangeMemberOf :ast n: (ast.nodes.get i: c0.operation)
+        crM: closedRangeMemberOf :ast :symtab n: (ast.nodes.get i: c0.operation)
         if crM.isZero.not then return (emitClosedRangeFor
             :ast
             :symtab
@@ -26211,11 +26217,13 @@ isClosedRangeMemberId: function {id: zast.nameid} out bool is {
 # closedRangeMemberOf -- the closed-range member a `for` header's operation
 # calls, or 0 for anything else. Only the CALL shape can name one: the endpoint
 # arrives as a `to:` argument, so there is no bare dotted-path spelling to test.
-closedRangeMemberOf: function {ast: Ast.view n: astnode.view} out zast.nameid is {
+closedRangeMemberOf: function {
+    ast: Ast.view symtab: zenv.ZSymbolTable.view n: astnode.view
+} out zast.nameid is {
     match (
         n
     ) case call then {
-        mnId: dottedChildNameIdOf :ast n: (ast.nodes.get i: n.callable)
+        mnId: aliasChildNameId :ast :symtab n: (ast.nodes.get i: n.callable)
         if (isClosedRangeMemberId id: mnId) then return mnId
         return zast.nameid
     } else {
@@ -26307,7 +26315,7 @@ rangeBoundExpr: function {
     match (
         n
     ) case dottedpath then {
-        cmnId: atomNameIdOf :ast n: (ast.nodes.get i: n.child)
+        cmnId: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
         if (isCountRangeMemberId id: cmnId) then {
             # the receiver may be a dotted path itself (squares.length.times) --
             # stampTidDeep resolves its scalar type either way
@@ -26360,14 +26368,14 @@ rangeCType: function {
     ) case call then {
         # the CLOSED family: only it takes an argument, so only it is a call
         callableNode: ast.nodes.get i: n.callable
-        if (isClosedRangeMemberId id: (dottedChildNameIdOf :ast n: callableNode)) then {
+        if (isClosedRangeMemberId id: (aliasChildNameId :ast :symtab n: callableNode)) then {
             rsid: dottedReceiverStampId :ast :symtab callable: callableNode
             return (intScalarCTypeOf :symtab tid: (tidDeep :symtab sid: rsid))
         }
         return ""
     } case dottedpath then {
         # the COUNT family, whose receiver rangeBoundExpr reads as the bound
-        cmnId: atomNameIdOf :ast n: (ast.nodes.get i: n.child)
+        cmnId: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
         if (isCountRangeMemberId id: cmnId) then {
             rt2: stampTidDeep :symtab n: (ast.nodes.get i: n.parent)
             return (intScalarCTypeOf :symtab tid: rt2)
@@ -26668,7 +26676,7 @@ seedFromPredicate: function {
     match (
         n
     ) case dottedpath then {
-        arm0: atomNameIdOf :ast n: (ast.nodes.get i: n.child)
+        arm0: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
         tid92: dottedArmPredicateTid :symtab nid: n.nodeid
         (seedPositiveCore
             :ast
@@ -26750,7 +26758,7 @@ seedNegatedFromPredicate: function {
         subj: atomTextOf :ast n: (ast.nodes.get i: n.parent)
         if subj.length == 0 then return
         snv: atomVid :symtab nid: (atomNodeId n: (ast.nodes.get i: n.parent))
-        ctorArmName: atomNameIdOf :ast n: (ast.nodes.get i: n.child)
+        ctorArmName: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
         rem: (remainingArm
             :symtab
             :ctx
@@ -26925,7 +26933,7 @@ seedCondOp: function {
     match (
         n
     ) case dottedpath then {
-        cn: atomNameIdOf :ast n: (ast.nodes.get i: n.child)
+        cn: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
         # `.true` / `.false` on a predicate: which side it is comes from the
         # stamped type's arm ORDER, never from the spelling of the segment.
         sd: (ztypecheck.armSuffixSide
@@ -27276,7 +27284,7 @@ classifyInnerFact: function {
             :symtab
             owner: (dottedArmPredicateTid :symtab nid: n.nodeid)
             parentNid: n.parent
-            armRef: (atomNameIdOf :ast n: (ast.nodes.get i: n.child))
+            armRef: (aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child)
             :neg
         )
     } else {
@@ -27388,7 +27396,7 @@ classifyCondFact: function {
             :symtab
             owner: (dottedArmPredicateTid :symtab nid: n.nodeid)
             parentNid: n.parent
-            armRef: (atomNameIdOf :ast n: (ast.nodes.get i: n.child))
+            armRef: (aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child)
             neg: false
         )
     } else {
@@ -31018,11 +31026,11 @@ scanNeedsCall: function {
     unitName: StringView
     n: zast.callrow.view
 } is {
-    mn0: dottedChildText :ast n: (ast.nodes.get i: n.callable)
+    mn0: aliasChildName :ast :symtab n: (ast.nodes.get i: n.callable)
     cbi0: dottedBaseAtomId :ast n: (ast.nodes.get i: n.callable)
     # the member as an id, by the same rule the text followed: the dotted
     # child, or the bare atom when the callable is not a path
-    cmbId: dottedChildNameIdOf :ast n: (ast.nodes.get i: n.callable)
+    cmbId: aliasChildNameId :ast :symtab n: (ast.nodes.get i: n.callable)
     if cbi0.isZero then {
         cmbId = atomNameIdOf :ast n: (ast.nodes.get i: n.callable)
     }
@@ -31040,7 +31048,7 @@ scanNeedsCall: function {
         (scanSvMemberNeed
             :ctx
             m: mn0
-            mId: (dottedChildNameIdOf :ast n: (ast.nodes.get i: n.callable))
+            mId: (aliasChildNameId :ast :symtab n: (ast.nodes.get i: n.callable))
         )
     }
     arx559: u64
@@ -31062,12 +31070,12 @@ scanNeedsDotted: function {
 } is {
     # a no-paren member read auto-calls, so the view natives with no argument
     # arrive as a dotted read -- the same parity the call arm has
-    pdm: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child))
+    pdm: zast.nameTextAt :ast ref: (aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child)
     if (svReceiverOf :symtab :ctx path: (ast.nodes.get i: n.nodeid)) then {
         (scanSvMemberNeed
             :ctx
             m: pdm.stringView
-            mId: (atomNameIdOf :ast n: (ast.nodes.get i: n.child))
+            mId: (aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child)
         )
     }
     # a no-paren member read auto-calls, so a zero-parameter native (os.pid,
@@ -31078,7 +31086,7 @@ scanNeedsDotted: function {
         :ctx
         :unitName
         baseId: (atomNameIdOf :ast n: (ast.nodes.get i: n.parent))
-        membId: (atomNameIdOf :ast n: (ast.nodes.get i: n.child))
+        membId: (aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child)
     )
     scanNeeds :ast :symtab :ctx :unitName n: (ast.nodes.get i: n.parent)
 }
@@ -39902,16 +39910,19 @@ unitDeclNameId: function {symtab: zenv.ZSymbolTable.view declId: ztypes.declid} 
 # unitCreateMember -- the member name X of a `<unit>.X.create` callable, the unit
 # named by `unitName` (io's wrappers, cli's spec classes), else "".
 unitCreateMember: function {
-    ast: Ast.view n: astnode.view unitName: zast.nameid
+    ast: Ast.view
+    n: astnode.view
+    unitName: zast.nameid
+    symtab: zenv.ZSymbolTable.view
 } outx StringView is {
     if n.dottedpath then {
-        ccn: atomNameIdOf :ast n: (ast.nodes.get i: n.child)
+        ccn: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
         if ccn == zast.wellKnown.slot.wkCreate then {
             pb: dottedBaseAtomId :ast n: (ast.nodes.get i: n.parent)
-            if pb.isZero.not when pb == unitName then return (dottedChildText
+            if pb.isZero.not when pb == unitName then return (zast.nameTextAt
                 :ast
-                n: (ast.nodes.get i: n.parent)
-            )
+                ref: (aliasChildNameId :ast :symtab n: (ast.nodes.get i: n.parent))
+            ).stringView
         }
     }
     return ""
@@ -40011,6 +40022,7 @@ emitIoWrapperCreate: function {
 } out String is {
     wn: (unitCreateMember
         :ast
+        :symtab
         n: (ast.nodes.get i: call.callable)
         unitName: (unitDeclNameId :symtab declId: ctx.ioUnitDecl)
     )
@@ -40177,7 +40189,7 @@ noArgNativeRhs: function {
             :unitName
             baseId: (atomNameIdOf :ast n: (ast.nodes.get i: n.parent))
             base: baseAtom.stringView
-            membId: (atomNameIdOf :ast n: (ast.nodes.get i: n.child))
+            membId: (aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child)
         )
         return nu.length > 0
     } else {
@@ -40338,7 +40350,7 @@ emitNativeFreeFnCall: function {
     calr: ast.nodes.get i: call.callable
     mn: ""
     if (dottedBaseAtom :ast n: calr).length > 0 then {
-        mn = dottedChildText :ast n: calr
+        mn = aliasChildName :ast :symtab n: calr
     } else {
         mn = atomTextOf :ast n: calr
     }
@@ -40410,6 +40422,7 @@ emitCliSpecCreate: function {
 } out String is {
     cn: (unitCreateMember
         :ast
+        :symtab
         n: (ast.nodes.get i: call.callable)
         unitName: (unitDeclNameId :symtab declId: ctx.cliUnitDecl)
     )
