@@ -3266,15 +3266,6 @@ ifDiverges: function {
     }
 }
 
-# stampNameView -- the stamped type's name for node `nid`, BORROWED, and "" when
-# the node carries no stamp. The view pins the registry for its binding's scope;
-# It is the only form: nothing keeps this name.
-stampNameView: function {symtab: zenv.ZSymbolTable.view nid: zast.nodeid} outx StringView is {
-    go: symtab.typing.nodeTypeFor :nid
-    if go.isZero.not then return (regNameView :symtab tid: go)
-    return ""
-}
-
 # builtinTidInU -- the canonical registry id of a stdlib builtin DECLARED IN
 # `unitName`: currentUnit is walkLookupTyperef's first probe, so naming the unit
 # is the qualified lookup, for the builtins `core` does not re-export (a
@@ -3636,15 +3627,6 @@ Ctx: class {
     netListenerTid: ztypes.tid
     # net.Conn's type, needed to route its natives
     netConnTid: ztypes.tid
-    # the unit types, parallel to unitKeysC
-    unitTidsC: ListVal ztypes.tid
-    # their C keys, built once and reused
-    unitKeysC: List String
-    # whether those two are built yet
-    unitCacheBuilt: bool
-    # name-id -> resolved tid (misses cached as 0): the typed model is
-    # frozen during emission, so resolution per name id is emit-stable
-    resolveByNameC: (IdMapV zast.nameid v: ztypes.tid)
     # where each record's or class's data-field list starts in fieldNameIds, read
     # once per type (fieldOrdinalOf)
     fieldListAt: (IdMapV ztypes.tid v: u64)
@@ -3897,30 +3879,6 @@ canonTypeId: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out ztype
     if (ztypecheck.declOfTypeId st: symtab :tid).isZero.not then return tid
     if (symtab.reg.typetypeOf typeId: tid).isUserFamily then return tid
     return ztypes.tid.zero
-}
-
-# userFnIdById -- the resolved type id of the main unit's child named by `nameId` (0
-# absent).
-userFnIdById: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
-    nameId: zast.nameid
-} out ztypes.tid is {
-    uq1z: ctx.mainUnitId
-    go: (ztypecheck.resolveUnitChildRo
-        :ast
-        st: symtab
-        unitDecl: uq1z
-        :nameId
-    )
-    match (
-        go
-    ) case some then {
-        return go
-    } case none then {
-        return ztypes.tid.zero
-    }
 }
 
 # dropPtrVid -- forget that `vid` arrives by pointer, for the scope in which a
@@ -19519,10 +19477,8 @@ controlValueNodeId: function {n: astnode.view} out zast.nodeid is {
     }
 }
 
-# the fully-resolved emitted name for node `n`.
-# stampIdDeep -- stampNameDeep's id form: the stamped type id, unwrapping a
-# value-position FUNCTION stamp to its return tid. 0 where stampNameDeep would resolve a shell method by name (no
-# clean id) or find nothing.
+# stampIdDeep -- node `n`'s stamped type id, unwrapping a value-position FUNCTION
+# stamp to its return tid; 0 when it carries none.
 stampIdDeep: function {
     symtab: zenv.ZSymbolTable.view
     n: astnode.view
@@ -19579,18 +19535,6 @@ stampTidDeep: function {
     n: astnode.view
 } out ztypes.tid is {
     return (tidDeep :symtab sid: (stampIdOf :symtab nid: (interpPartNodeId :n)))
-}
-
-# stampNameDeep -- a node's stamped type name, unwrapping a value-position
-# FUNCTION stamp to its return type. The name of what stampTidDeep answers, so
-# the two cannot disagree about which type a node carries.
-stampNameDeep: function {
-    symtab: zenv.ZSymbolTable.view
-    n: astnode.view
-} out String is {
-    sid: stampTidDeep :symtab :n
-    if sid.isZero then return ""
-    return (regNameOf :symtab tid: sid)
 }
 
 # emitPrintStmt -- a statement-position print call.
@@ -19776,7 +19720,6 @@ emitPrintViaStringView: function {
     argTid: ztypes.tid
     name: StringView
     vid: ztypes.vid
-    tn: StringView
     line: u32
     ind: StringView
     buf: String.borrow
@@ -19799,6 +19742,7 @@ emitPrintViaStringView: function {
             buf.append lpt2
         }
     } case none then {
+        tn: regNameView :symtab tid: argTid
         emitFail :ctx what: "unhandled print of \{name} type \{tn}" :line
         lpu: "\{ind}/* zemitterc: unhandled print of \{name} type \{tn} */\n"
         buf.append lpu
@@ -19816,7 +19760,6 @@ emitPrintAtom: function {
     ind: StringView
     buf: String.borrow
 } is {
-    tn: stampNameView :symtab nid: n.nodeid
     anC: zast.nameTextAt :ast ref: n.name
     an: anC.stringView
     anmV0: atomVid :symtab nid: n.nodeid
@@ -19871,7 +19814,6 @@ emitPrintAtom: function {
         :argTid
         name: anmE.stringView
         vid: anv
-        :tn
         line: n.lineno
         :ind
         :buf
@@ -21001,12 +20943,12 @@ emitTypedBind: function {
     nameVid: ztypes.vid
     ct: StringView
     ltid: ztypes.tid
-    tn: StringView
 } is {
     avn: ast.nodes.get i: n.value
     rv: emitExpr :ast :symtab :ctx n: avn
     flushArgHoists :ctx :ind :tmp :buf
     if ct.length == 0 then {
+        tn: regNameView :symtab tid: ltid
         emitFail :ctx what: "unhandled binding type \{tn} for \{nm}" line: n.lineno
         lb: "\{ind}/* zemitterc: unhandled binding type \{tn} for \{nm} */\n"
         buf.append lb
@@ -21293,10 +21235,6 @@ emitAssignment: function {
         :tmp
         :buf
     ) then return
-    # read the stamped name again rather than holding the first view across the
-    # legs above: two borrows cost nothing, and one pin spanning them would
-    # block every `symtab` those legs lend
-    tn: stampNameView :symtab nid: n.nodeid
     (emitTypedBind
         :ast
         :symtab
@@ -21309,7 +21247,6 @@ emitAssignment: function {
         :nameVid
         ct: ct.stringView
         :ltid
-        :tn
     )
 }
 
@@ -22607,10 +22544,8 @@ valueIsArmTag: function {symtab: zenv.ZSymbolTable.view n: astnode.view} out boo
 }
 
 # withValueCType -- the C type of a `with` binding's value, as a binding's is:
-# a builtin scalar by its C name, anything else by its stamped id. The name
-# route found nothing for a type a nested unit declares (`with c: kit.Cfg`
-# was declared int64_t), and the main unit's own type for a name two units
-# declare.
+# a builtin scalar by its C name, anything else by its stamped id `wsid`. A
+# value with no stamp has no type the emitter can name, and is reported.
 withValueCType: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -22619,8 +22554,10 @@ withValueCType: function {
     wsid: ztypes.tid
 } out String is {
     tid: wsid
-    wtn: stampNameDeep :symtab :n
-    if wsid.isZero then return (cTypeForName :ast :symtab :ctx name: wtn.stringView)
+    if wsid.isZero then {
+        emitFail :ctx what: "a `with` value the checker gave no type" line: (zast.posOf :n).line
+        return ""
+    }
     # a builtin scalar keeps its C name, as a binding's does (bindDeclaredCType);
     # a Set or a Map is held as its pointer (slotCType)
     sc: scalarCTypeFor :symtab :tid
@@ -23373,138 +23310,6 @@ emitStmtParts: function {
     }
 }
 
-# ensureUnitCache -- build the emit-stable unit lists (tids for the id probe,
-# keys for the composed-key fallback) once per Ctx. The program root's children
-# are settled in typecheck and never mutated during emit, so the snapshot stays
-# valid.
-ensureUnitCache: function {ctx: Ctx pool: zast.StringPool.view symtab: zenv.ZSymbolTable.view} is {
-    if ctx.unitCacheBuilt then return
-    puds: ztypecheck.programUnitDecls st: symtab
-    for each ud: puds loop {
-        utd: ztypecheck.declTypeIdOf st: symtab declId: ud
-        if utd.isZero.not then {
-            ukc: (zast.poolTextAt
-                :pool
-                ref: (ztypecheck.declNameIdOf st: symtab declId: ud)
-            )
-            ctx.unitKeysC.append ukc.copy
-            ctx.unitTidsC.append utd
-        }
-    }
-    ctx.unitCacheBuilt = true
-}
-
-# resolveTypeIdByNameId -- a type id for an already-interned name (Ast.names
-# pool id): main-unit, then system, then the cross-unit lookup. 0 when
-# unresolved (incl. a 0 id -- a name not in the pool matches no member).
-# Every stage is id-keyed (declChildOfId); the name text is materialised only on
-# the rare composed-key fallback.
-resolveTypeIdByNameId: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    nameId: zast.nameid
-} out ztypes.tid is {
-    if nameId.isZero then return ztypes.tid.zero
-    mc: ctx.resolveByNameC.get key: nameId
-    match (
-        mc
-    ) case some then {
-        return mc
-    } case none then null
-    r: typeIdByNameStages :ast :symtab :ctx :nameId
-    ctx.resolveByNameC.set key: nameId value: r
-    return r
-}
-
-# resolve a type id by name across the resolution stages.
-typeIdByNameStages: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    nameId: zast.nameid
-} out ztypes.tid is {
-    f: userFnIdById :ast :symtab :ctx :nameId
-    if f.isZero.not then return f
-    mo: ztypecheck.resolveUnitChildRo :ast st: symtab unitDecl: symtab.typing.systemUnitRoot :nameId
-    match (
-        mo
-    ) case some then {
-        return mo
-    } case none then null
-    lr: ((ztypecheck.walkLookupTyperefByIdRo
-        scope: ztypes.declid
-        :ast
-        st: symtab
-        unitDecl: ctx.mainUnitId
-        baseId: nameId
-    ).or
-        d: ztypes.tid.zero
-    )
-    if lr.isZero.not then return lr
-    # cross-unit: the type may live in a dep unit (zlexer/zast/zvfs) outside
-    # walkLookupTyperefById's search list. Pass 1 probes each unit scope by id
-    # (no key composition); the composed-key resolvedByKey pass (which also
-    # follows unit-level aliases) runs only when every direct probe missed.
-    found: ztypes.tid
-    ensureUnitCache :ctx pool: ast.names :symtab
-    uki: u64
-    ukn: ctx.unitTidsC.length
-    for uki < ukn loop {
-        if found.isZero then {
-            co: (symtab.typing.declChildOfId
-                parentTypeId: (ctx.unitTidsC.get i: uki)
-                :nameId
-            )
-            match (
-                co
-            ) case some then {
-                found = co
-            } case none then null
-        }
-        uki = uki + 1
-    }
-    if found.isZero then {
-        uki8: u64
-        ukn8: ctx.unitKeysC.length
-        for uki8 < ukn8 loop {
-            if found.isZero then {
-                uk: ctx.unitKeysC.get i: uki8
-                ud7x: (ztypecheck.unitDeclOfName
-                    st: symtab
-                    nameId: (zast.poolFind pool: ast.names text: uk.stringView)
-                )
-                r2: (ztypecheck.resolvedByIdsRo
-                    :ast
-                    st: symtab
-                    unitDecl: ud7x
-                    name: nameId
-                )
-                match (
-                    r2
-                ) case some then {
-                    found = r2
-                } case none then null
-            }
-            uki8 = uki8 + 1
-        }
-    }
-    return found
-}
-
-# resolveTypeIdByName -- text entry point: intern-probe the name to a pool id
-# (a name not in the pool matches no interned member, so 0 resolves to 0) and
-# resolve id-keyed.
-resolveTypeIdByName: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    name: StringView
-} out ztypes.tid is {
-    nid: zast.poolFind pool: ast.names text: name
-    return (resolveTypeIdByNameId :ast :symtab :ctx nameId: nid)
-}
-
 # fnReturnTidOf -- the registry-recorded return tid for a FUNCTION id, 0 when
 # absent. Scopes the typeById view so no lock outlives the read.
 fnReturnTidOf: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out ztypes.tid is {
@@ -24015,7 +23820,6 @@ emitMatchStmt: function {
     buf: String.borrow
 } is {
     sx: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: m.subject)
-    stn: stampNameDeep :symtab n: (ast.nodes.get i: m.subject)
     if (matchOrdinalPairRoute
         :ast
         :symtab
@@ -24051,6 +23855,7 @@ emitMatchStmt: function {
             emitScalarMatch :ast :symtab :ctx :m subj: sx.stringView :assignTo :ind :tmp :buf
             return
         }
+        stn: regNameView :symtab tid: vtid
         emitFail :ctx what: "unhandled match subject type \{stn}" line: m.lineno
         lu0: "\{ind}/* zemitterc: unhandled match subject type \{stn} */\n"
         buf.append lu0
@@ -30202,7 +30007,7 @@ isCollectionOriginTid: function {ctx: Ctx.view originTid: ztypes.tid} out bool i
     return f < family.slot.option
 }
 
-# cTypeForNameTid -- like cTypeForName, for a site that holds the tid: a
+# cTypeForNameTid -- the C type a collection mono's element or key slot spells: a
 # builtin scalar spells as its C scalar (scalarCTypeFor, which also asks the
 # declaration, so a user type wearing a scalar's name is not one); everything
 # else -- a user type, a mono, a stdlib class -- spells from its id. A native
@@ -30232,45 +30037,6 @@ slotCType: function {
     ct: typeRefC :ast :symtab :ctx :tid
     if (isHeapPtrCollection :symtab :ctx :tid) then ct.append "*"
     return ct
-}
-
-# cTypeForName -- the C type for a type NAME: resolve the type id (across
-# units) and use typeRefC, which spells a scalar too; "" when unknown.
-cTypeForName: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    name: StringView
-} out String is {
-    to: (ztypecheck.walkLookupTyperefRo
-        scope: ztypes.declid
-        :ast
-        st: symtab
-        unitDecl: ctx.mainUnitId
-        base: name
-    )
-    match (
-        to
-    ) case some then {
-        return (typeRefC
-            :ast
-            :symtab
-            :ctx
-            tid: to
-        )
-    } case none then {
-        # cross-unit: a dep-unit type (e.g. ztypes.zownership used as a ztyping
-        # Map value) is outside walkLookupTyperef's search list; resolve via
-        # the registry-wide cross-unit scan.
-        xid: resolveTypeIdByName :ast :symtab :ctx :name
-        if xid.isZero.not then return (typeRefC
-            :ast
-            :symtab
-            :ctx
-            tid: xid
-        )
-        return ""
-    }
 }
 
 # chaseAggregateTypedef -- the end of tid's typedef chain when that end is an
@@ -33175,10 +32941,6 @@ emitC: function {
         ioFileTid: ztypes.tid.zero
         netListenerTid: ztypes.tid.zero
         netConnTid: ztypes.tid.zero
-        unitTidsC: ListVal ztypes.tid
-        unitKeysC: List String
-        unitCacheBuilt: false
-        resolveByNameC: (IdMapV zast.nameid v: ztypes.tid)
         fieldListAt: (IdMapV ztypes.tid v: u64)
         fieldNameIds: ListVal zast.nameid
         mainUnitId: ztypes.declid
@@ -34948,8 +34710,8 @@ payloadDestructor: function {
     ) case some then {
         if (symtab.reg.typetypeOf typeId: co) == ztypes.ztypetype.nullType then return ""
         # childOf already resolves the arm to its concrete (possibly cross-unit)
-        # payload id; canonicalize a destructor-less shell via resolveTypeIdByName,
-        # the same way the List-element destructor does
+        # payload id; canonicalize a destructor-less shell (canonTypeId), the same
+        # way the List-element destructor does
         pfn: destroyFnC :symtab :ctx tid: co
         if pfn.length > 0 then return pfn
         rbn: canonTypeId :symtab tid: co
@@ -36096,8 +35858,8 @@ canonPartTid: function {
 
 # ioCanonCname -- memoized wrapper: the canon->cname map is emit-stable and io
 # fragments reload the same canons once per unit, so cache each result (incl.
-# the "" miss) per program, mirroring resolveByNameC. Avoids re-running the
-# O(type count) registry scan in ioCanonCnameUncached ~30x per canon.
+# the "" miss) per program. Avoids re-running the O(type count) registry scan in
+# ioCanonCnameUncached ~30x per canon.
 ioCanonCname: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -39240,11 +39002,10 @@ protoParamCtype: function {
     pid: ztypes.tid
 } out String is {
     # The spec param is usually a SHELL named after the system type; canonicalize
-    # it by name (resolveTypeIdByName covers system types) so typeRefC resolves it
-    # (and chases ByteView/Bytes to their collection mono). But a param already
-    # resolved to a CANONICAL id (a linked declaration, e.g. system i64) is trusted
-    # as-is -- re-resolving "i64" by name would wrongly pick up a user shadow of
-    # the scalar in the main unit. Mirrors typeRefC's none-branch shell gate.
+    # it (canonTypeId) so typeRefC resolves it (and chases ByteView/Bytes to their
+    # collection mono). A param already resolved to a CANONICAL id (a linked
+    # declaration, e.g. system i64) is trusted as-is. Mirrors typeRefC's shell
+    # gate.
     cpid: pid
     pidShell: (definedInUnitTid :symtab tid: pid).isZero
     if pidShell then {

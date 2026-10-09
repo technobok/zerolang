@@ -2481,7 +2481,7 @@ perf: $(PERFBIN)
 #
 # +2 ztypecheck exports envLookup / scopeFor / unitdefNodeId for zls's
 # shadow-aware hover: 0 behaviour, +2 source (ab.sh).
-ALLOC_BASELINE := 2192984
+ALLOC_BASELINE := 2189208
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -2668,11 +2668,11 @@ emitter-guard:
 	chk "composeCname in src/ztypes.z" "$$g1" 0; \
 	chk "'z_t{' literals in src/zemitterc.z" "$$g2" 3; \
 	chk "ztypecheck.resolvedByKey" "$$e1" 0; \
-	chk "ztypecheck.walkLookupTyperef" "$$e2" 5; \
-	chk "resolveTypeIdByName" "$$e3" 8; \
-	chk "userFnId" "$$e4" 3; \
+	chk "ztypecheck.walkLookupTyperef" "$$e2" 3; \
+	chk "resolveTypeIdByName" "$$e3" 0; \
+	chk "userFnId" "$$e4" 0; \
 	chk "childOwnershipText" "$$e5" 0; \
-	chk "regNameOf" "$$e6" 10; \
+	chk "regNameOf" "$$e6" 9; \
 	chk "mangleVarName (both inside varCName)" "$$e7" 2; \
 	chk "io.readText" "$$e8" 3; \
 	chk "monoOriginName" "$$e9" 0; \
@@ -4109,7 +4109,9 @@ FALLBACK_BASELINE :=
 # answers: no native is answered by the checker any more.
 # 37: checkTagStem's refusal -- two monos of one name -- goes with tag
 # constants spelled from names.
-EMITFAIL_BASELINE := 37
+# 38: withValueCType's refusal -- a `with` value the checker gave no type, which
+# a lookup of its stamped NAME used to answer instead (names-to-ids-2 Part C).
+EMITFAIL_BASELINE := 38
 MARKER_BASELINE := 24
 EXCS := $(NAMES:%=$(EXDIR)/%.c)
 fallback-guard: $(EXCS) bin/zc bin/zl bin/zls
