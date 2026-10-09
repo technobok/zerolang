@@ -8518,7 +8518,11 @@ isColGetMutRef: function {
     if ownG.isZero then return false
     isLG: (isListOriginOf :symtab :ctx tid: ownG) or (isListViewOriginOf :symtab :ctx tid: ownG)
     if isLG.not then return false
-    if (regNameIs :symtab tid: fid name: "getMut").not then return false
+    if (
+        (ztypecheck.declNameIdOf st: symtab declId: (ztypecheck.declOfTypeId st: symtab tid: fid)
+        ) !=
+        zast.wellKnown.slot.wkGetMut
+    ) then return false
     eG: listElemType :symtab monoId: ownG
     if (elemBorrowsByPtr :symtab :ctx tid: eG) then return false
     return (elemRefByPtr :symtab :ctx tid: eG)
@@ -12501,19 +12505,10 @@ memberConstStringText: function {
     return (cvalStrText :symtab :ctx v: mv)
 }
 
-# unitTidOf -- the type id of the unit named `unitName`, or 0.
-unitTidOf: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    unitName: StringView
-} out ztypes.tid is {
-    return (ztypecheck.declTypeIdOf
-        st: symtab
-        declId: (symtab.typing.declFindChild
-            parentDeclId: symtab.typing.programRoot
-            nameId: (zast.poolFind pool: ast.names text: unitName)
-        )
-    )
+# mainUnitTid -- the type id of the unit being emitted: its declaration's type,
+# never a name looked up at the program root.
+mainUnitTid: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view} out ztypes.tid is {
+    return (ztypecheck.declTypeIdOf st: symtab declId: ctx.mainUnitId)
 }
 
 # ctorHasLabel -- whether a call carries a named argument with this label.
@@ -15208,7 +15203,7 @@ emitAtom: function {
             ) then nsCur = nsNx
         }
     }
-    mutd: unitTidOf :ast :symtab unitName: ctx.mainName.stringView
+    mutd: mainUnitTid :symtab :ctx
     mca: (memberConstText
         :ast
         :symtab
@@ -19708,7 +19703,7 @@ emitPrintAtom: function {
     {
         alo: symtab.typing.atomVariableId.get key: n.nodeid
         if alo.none then {
-            unitTid9: unitTidOf :ast :symtab unitName: ctx.mainName.stringView
+            unitTid9: mainUnitTid :symtab :ctx
             cst: (memberConstStringText
                 :symtab
                 :ctx
@@ -24084,7 +24079,7 @@ scalarArmLabel: function {
     ctx: Ctx.view
     arm: zast.nameid
 } out String is {
-    unitTid92: unitTidOf :ast :symtab unitName: ctx.mainName.stringView
+    unitTid92: mainUnitTid :symtab :ctx
     lv: (memberConstText
         :ast
         :symtab
@@ -31499,7 +31494,7 @@ emitNestedUnitFns: function {
                 {
                     ownr: ownerTid
                     if ownr.isZero then {
-                        ownr = unitTidOf :ast :symtab unitName: ctx.mainName.stringView
+                        ownr = mainUnitTid :symtab :ctx
                     }
                     no: symtab.typing.declChildOfId parentTypeId: ownr nameId: ium.name
                     match (
@@ -32754,7 +32749,7 @@ emitC: function {
         (ctxBindMain
             :ctx
             name: rmn.stringView
-            unitDecl: (unitDeclByName :symtab ast: program name: rmn.stringView)
+            unitDecl: symtab.typing.mainUnitRoot
         )
     }
     checkLoadedNatives :program :ctx
@@ -34404,13 +34399,12 @@ monoMethodReturn: function {
 # typedef over an aggregate keys by the first link of its chain that declares
 # each, as the checker admitted it; a scalar typedef hashes as its scalar.
 declaredKeyFnId: function {
-    ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
     tid0: ztypes.tid
-    member: StringView
+    # the member, `hash` or `==`
+    nid: zast.nameid
 } out ztypes.tid is {
-    nid: zast.poolFind pool: ast.names text: member
     if nid.isZero then return ztypes.tid
     tid: tid0
     if (chaseAggregateTypedef :symtab :ctx tid: tid0) != tid0 then {
@@ -34434,13 +34428,12 @@ declaredKeyFnId: function {
 # The member's receiver is a pointer like any other method's, and the template
 # holds the key BY VALUE, so the caller addresses it.
 declaredKeyFnC: function {
-    ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
     tid: ztypes.tid
-    member: StringView
+    memberId: zast.nameid
 } out String is {
-    fid: declaredKeyFnId :ast :symtab :ctx tid0: tid :member
+    fid: declaredKeyFnId :symtab :ctx tid0: tid nid: memberId
     if fid.isZero then return ""
     return (ctxCname :ctx tid: fid)
 }
@@ -34472,7 +34465,6 @@ keyFnParamConstC: function {
 # The receiver is the first parameter; `==`'s `rhs` is the second, a pointer
 # when the key's calling convention is.
 keyFnProtosC: function {
-    ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
     tid: ztypes.tid
@@ -34482,8 +34474,8 @@ keyFnProtosC: function {
     rhsT: StringView
     rhsByPtr: bool
 } out String is {
-    hfid: declaredKeyFnId :ast :symtab :ctx tid0: tid member: "hash"
-    efid: declaredKeyFnId :ast :symtab :ctx tid0: tid member: "=="
+    hfid: declaredKeyFnId :symtab :ctx tid0: tid nid: zast.wellKnown.slot.wkHash
+    efid: declaredKeyFnId :symtab :ctx tid0: tid nid: zast.wellKnown.slot.wkOpEq
     hq: keyFnParamConstC :symtab fid: hfid index: 0
     eq: keyFnParamConstC :symtab fid: efid index: 0
     rq: String
@@ -34641,18 +34633,16 @@ emitSetMono: function {
         de: String
         if ekind == 0 when valElem.not then {
             dh = (declaredKeyFnC
-                :ast
                 :symtab
                 :ctx
                 tid: elemTid
-                member: "hash"
+                memberId: zast.wellKnown.slot.wkHash
             )
             de = (declaredKeyFnC
-                :ast
                 :symtab
                 :ctx
                 tid: elemTid
-                member: "=="
+                memberId: zast.wellKnown.slot.wkOpEq
             )
         }
         if dh.length > 0 when de.length > 0 then {
@@ -34669,7 +34659,6 @@ emitSetMono: function {
             eb: "\{de}(&_a, \{rhsAs})"
             eqBody = eb.take
             fd: (keyFnProtosC
-                :ast
                 :symtab
                 :ctx
                 tid: elemTid
@@ -34976,18 +34965,16 @@ emitMapMono: function {
         dem: String
         if kkind == 0 when valKey.not then {
             dhm = (declaredKeyFnC
-                :ast
                 :symtab
                 :ctx
                 tid: keyTid
-                member: "hash"
+                memberId: zast.wellKnown.slot.wkHash
             )
             dem = (declaredKeyFnC
-                :ast
                 :symtab
                 :ctx
                 tid: keyTid
-                member: "=="
+                memberId: zast.wellKnown.slot.wkOpEq
             )
         }
         if dhm.length > 0 when dem.length > 0 then {
@@ -35007,7 +34994,6 @@ emitMapMono: function {
             ebm: "\{dem}(&_a, \{rhsA})"
             keysEqBody = ebm.take
             fdm: (keyFnProtosC
-                :ast
                 :symtab
                 :ctx
                 tid: keyTid

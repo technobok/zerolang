@@ -2496,7 +2496,7 @@ perf: $(PERFBIN)
 # -10,832 the emitter names arms and members by id (memberCNamed, tagConstNamed,
 # variantArms and the space-joined exclusion text gone): -9,726 behaviour,
 # -1,106 source (ab.sh).
-ALLOC_BASELINE := 2169496
+ALLOC_BASELINE := 2168820
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -2693,7 +2693,7 @@ emitter-guard:
 	chk "io.readText" "$$e8" 3; \
 	chk "monoOriginName" "$$e9" 0; \
 	chk "literal arm members (.data.<arm>; memberC spells them)" "$$e10" 0; \
-	chk "poolFind (a re-intern of a name the emitter held as an id)" "$$e11" 13; \
+	chk "poolFind (a re-intern of a name the emitter held as an id)" "$$e11" 11; \
 	if [ "$$fail" = "1" ]; then \
 	  echo "  A new name-resolution site was added to the emitter. Read the typechecker"; \
 	  echo "  stamp (atomVariableId/atomUnitDefId/callKind), the canonical child id, or"; \
