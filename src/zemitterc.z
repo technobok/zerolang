@@ -31187,26 +31187,10 @@ isGenericTemplateUnitOp: function {ast: Ast.view opId: zast.nodeid} out bool is 
     return false
 }
 
-# unitTemplateTid -- the type id of a unit template: the program root's
-# declaration of its name, else the stamp on its unit node; 0 when neither
-# answers.
-unitTemplateTid: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    templateName: StringView
-    templateUnitOpId: zast.nodeid
-} out ztypes.tid is {
-    tgo: (ztypecheck.declTypeIdOf
-        st: symtab
-        declId: (symtab.typing.declFindChild
-            parentDeclId: symtab.typing.programRoot
-            nameId: (zast.poolFind pool: ast.names text: templateName)
-        )
-    )
-    if tgo.isZero.not then return tgo
-    tuo: ast.nodes.get i: templateUnitOpId
-    if tuo.unitdef.not then return ztypes.tid.zero
-    return (stampIdOf :symtab nid: tuo.nodeid)
+# nestedTemplateTid -- the type id of the unit template whose definition node is
+# `opId`: the stamp the checker put on it, never a name looked up anywhere.
+nestedTemplateTid: function {symtab: zenv.ZSymbolTable.view opId: zast.nodeid} out ztypes.tid is {
+    return (stampIdOf :symtab nid: opId)
 }
 
 # emitUnitMonoFn -- one function of a unit mono: its signature as a
@@ -31326,18 +31310,13 @@ emitUnitMonoInstances: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    templateName: StringView
+    # the template, and its definition node
+    tplId: ztypes.tid
     templateUnitOpId: zast.nodeid
     declOnly: bool
     buf: String.borrow
 } is {
     bodyIds: zast.unitBodyIdsAt :ast unitId: templateUnitOpId
-    tplId: (unitTemplateTid
-        :ast
-        :symtab
-        :templateName
-        :templateUnitOpId
-    )
     if tplId.isZero then return
     last: symtab.reg.nextTid
     t: ztypes.tid
@@ -31397,7 +31376,7 @@ emitFnsPass: function {
                         :symtab
                         ast: program
                         :ctx
-                        templateName: unitNameText.stringView
+                        tplId: (ztypecheck.declTypeIdOf st: symtab declId: ctx.mainUnitId)
                         templateUnitOpId: opId
                         :declOnly
                         :buf
@@ -31539,12 +31518,11 @@ emitNestedUnitFns: function {
         if ium.namedoperation then {
             iuOpId: ium.operation
             if (isGenericTemplateUnitOp :ast opId: iuOpId) then {
-                iunm: zast.nameTextAt :ast ref: ium.name
                 (emitUnitMonoInstances
                     :symtab
                     :ast
                     :ctx
-                    templateName: iunm.stringView
+                    tplId: (nestedTemplateTid :symtab opId: iuOpId)
                     templateUnitOpId: iuOpId
                     :declOnly
                     :buf
@@ -41056,12 +41034,11 @@ emitUnitFnFwdDecls: function {
         # a template's instances are functions of this unit too, and a method
         # emitted ahead of them may call one
         if (isGenericTemplateUnitOp :ast opId: bfd.operation) then {
-            tnm: zast.nameTextAt :ast ref: bfd.name
             (emitUnitMonoInstances
                 :symtab
                 :ast
                 :ctx
-                templateName: tnm.stringView
+                tplId: (nestedTemplateTid :symtab opId: bfd.operation)
                 templateUnitOpId: bfd.operation
                 declOnly: true
                 :buf
@@ -41116,12 +41093,11 @@ emitRecordDefsIn: function {
     # a file unit that is itself a template: its instances' functions are
     # declared with the other forward declarations
     if phase == 2 when (isGenericTemplateUnitOp :ast opId: mainOpId) then {
-        tplNm: ctx.mainName.copy
         (emitUnitMonoInstances
             :symtab
             :ast
             :ctx
-            templateName: tplNm.stringView
+            tplId: (ztypecheck.declTypeIdOf st: symtab declId: ctx.mainUnitId)
             templateUnitOpId: mainOpId
             declOnly: true
             :buf

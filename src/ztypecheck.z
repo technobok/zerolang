@@ -19732,191 +19732,34 @@ buildUnitMono: function {
 }
 
 
-# completeInlineReq -- locate an inline template member by name in the main
-# unit body and build its mono's completion.
-completeInlineReq: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    monoId: ztypes.tid
-    tmplNameId: zast.nameid
-    tplId: ztypes.tid
-    subs: (IdMapV zast.nameid v: ztypes.tid).view
-    mainOpId: zast.nodeid
-} is {
-    bodyIds: zast.unitBodyIdsAt :ast unitId: mainOpId
-    {
-        vx189: u64
-        for vx189 < bodyIds.count loop {
-            bm: zast.kidAt kids: ast.kids span: bodyIds i: vx189
-            vx189 = vx189 + 1
-            bmNode: argRefAt :ast nid: bm
-            if bmNode.nid.isZero.not when bmNode.name == tmplNameId when (isUnitOp
-                op: (ast.nodes.get i: bmNode.operation)
-            ) then {
-                (buildUnitMono
-                    :st
-                    :scope
-                    :ast
-                    tmplUnitName: unitDecl
-                    :tmplNameId
-                    :monoId
-                    :tplId
-                    :subs
-                    templateOpId: bmNode.operation
-                )
-            }
-        }
-    }
-}
-
-# inlineTemplateTid -- the canonical id of an inline generic-unit template
-# (mathops: unit as {...} in the main body). A generic inline template has no
-# unit->def childOf edge (it would shadow instance lookups) and is not a unit
-# root, so the only durable record of its id is the def-node stamp
-# laid by resolveInlineGenericUnit; 0 when no such binding is stamped.
-inlineTemplateTid: function {
-    st: zenv.ZSymbolTable.view
-    ast: Ast.view
-    mainOpId: zast.nodeid
-    tmplNameId: zast.nameid
-} out ztypes.tid is {
-    bodyIds: zast.unitBodyIdsAt :ast unitId: mainOpId
-    found: ztypes.tid
-    {
-        vx199: u64
-        for vx199 < bodyIds.count loop {
-            bm: zast.kidAt kids: ast.kids span: bodyIds i: vx199
-            vx199 = vx199 + 1
-            bmNode: ast.nodes.get i: bm
-            if bmNode.namedoperation when bmNode.name == tmplNameId when (isUnitOp
-                op: (ast.nodes.get i: bmNode.operation)
-            ) then {
-                tnid: unitdefNodeId :ast nId: bmNode.operation
-                tso: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: tnid
-                if tso.isZero.not then found = tso
-            }
-        }
-    }
-    return found
-}
-
-# buildInstanceMono -- build the monomorphised unit for one instantiation request.
-# When collection resolved the template (its id, the declaring node and the unit
-# whose AST holds it) one call covers both shapes; otherwise the template is
-# hunted down as a file unit named by the request or as an inline binding.
+# buildInstanceMono -- build the monomorphised unit for one instantiation request,
+# from the template collection resolved: its id, the declaring node and the unit
+# whose AST holds it.
 buildInstanceMono: function {
     st: zenv.ZSymbolTable
     scope: ztypes.declid
     program: Ast
     rtId: zast.nameid
     rtu: ztypes.declid
-    ru: ztypes.declid
     rtop: zast.nodeid
     tplId0: ztypes.tid
     memberIdAt: ztypes.tid
     subs: (IdMapV zast.nameid v: ztypes.tid).view
 } is {
-    tplId: tplId0
-    # the request resolved its template at COLLECTION: its id, the
-    # node that declares it, and the unit whose AST holds that node.
-    # One call covers both shapes the scans below split -- a file unit
-    # named by the template, and an inline binding of the instantiating
-    # unit -- because neither is found by name any more.
-    if rtop.isZero.not when tplId.isZero.not then {
-        {
-            (buildUnitMono
-                :st
-                :scope
-                ast: program
-                tmplUnitName: rtu
-                tmplNameId: rtId
-                monoId: memberIdAt
-                :tplId
-                :subs
-                templateOpId: rtop
-            )
-        }
-    } else {
-        if tplId.isZero then {
-            {
-                tuiter: program.units.iterate
-                for tuId: tuiter loop {
-                    tu: program.nodes.get i: tuId
-                    if tu.namedoperation then {
-                        uc3z: (unitDeclOfNameOrOwn
-                            :st
-                            :scope
-                            nameId: tu.name
-                        )
-                        if uc3z == ru then {
-                            tplId = (inlineTemplateTid
-                                :st
-                                ast: program
-                                mainOpId: tu.operation
-                                tmplNameId: rtId
-                            )
-                        }
-                    }
-                }
-            }
-        }
-        if tplId.isZero.not then {
-            {
-                uN: program.units.length
-                uI: u64
-                for uI < uN loop {
-                    u9Id: program.units.get i: uI
-                    uI = uI + 1
-                    # the unit row's name and operation
-                    unitOpNodeId: zast.nodeid
-                    un29Id: zast.nameid
-                    u: program.nodes.get i: u9Id
-                    if u.namedoperation then {
-                        un29Id = u.name
-                        unitOpNodeId = u.operation
-                    }
-                    if un29Id == rtId then {
-                        uq2z: (unitDeclOfNameOrOwn
-                            :st
-                            :scope
-                            nameId: un29Id
-                        )
-                        (buildUnitMono
-                            :st
-                            :scope
-                            ast: program
-                            tmplUnitName: uq2z
-                            tmplNameId: rtId
-                            monoId: memberIdAt
-                            :tplId
-                            :subs
-                            templateOpId: unitOpNodeId
-                        )
-                    }
-                    uc4z: (unitDeclOfNameOrOwn
-                        :st
-                        :scope
-                        nameId: un29Id
-                    )
-                    if uc4z == ru then {
-                        (completeInlineReq
-                            :st
-                            :scope
-                            ast: program
-                            unitDecl: ru
-                            monoId: memberIdAt
-                            tmplNameId: rtId
-                            :tplId
-                            :subs
-                            mainOpId: unitOpNodeId
-                        )
-                    }
-                }
-            }
-        }
-    }
+    # the request resolved its template at COLLECTION: its id, the node that
+    # declares it, and the unit whose AST holds that node
+    if rtop.isZero or tplId0.isZero then return
+    (buildUnitMono
+        :st
+        :scope
+        ast: program
+        tmplUnitName: rtu
+        tmplNameId: rtId
+        monoId: memberIdAt
+        tplId: tplId0
+        :subs
+        templateOpId: rtop
+    )
 }
 
 # resolveInstArgSubs -- resolve one request's generic arguments into the type and
@@ -20011,13 +19854,11 @@ completeOneInstance: function {
     program: Ast
     r: InstReq.view
     mgo: ztypes.tid
-    tnId: zast.nameid
     subs: (IdMapV zast.nameid v: ztypes.tid).view
     valSubs: (IdMapV zast.nameid v: u64).view
 } is {
     rbId: r.bindId
     rtId: r.tmplId
-    ru: r.declUnit
     rc: r.callId
     rl: r.calId
     rtu: r.tmplUnit
@@ -20048,57 +19889,12 @@ completeOneInstance: function {
             )
         }
     }
-    tplId: ztypes.tid
-    tgo: optionval.none ztypes.tid
-    tplDecl: ztypes.declid
-    {
-        mnUid8: unitNameIdOf :st unitDecl: ru
-        rtNid: rtId
-        unitDecl99: unitDeclOfName :st nameId: mnUid8
-        tgo = (resolvedByIds
-            :st
-            ast: program
-            unitDecl: unitDecl99
-            name: rtNid
-        )
-        tplDecl = (declOfUnitDef
-            :st
-            :scope
-            unitDecl: ru
-            nameId: rtId
-        )
-        if tplDecl.isZero then tplDecl = rtdecl
-        if tplDecl.isZero then {
-            # a generic FILE unit used as the template: its params
-            # live on its root Decl
-            tro: (st.typing.declFindChild
-                parentDeclId: st.typing.programRoot
-                nameId: rtId
-            )
-            if tro.isZero.not then tplDecl = tro
-        }
-    }
-    match (
-        tgo
-    ) case some then {
-        tplId = tgo
-    } case none then {
-        ugo: (declTypeIdOf
-            :st
-            declId: (st.typing.declFindChild
-                parentDeclId: st.typing.programRoot
-                nameId: tnId
-            )
-        )
-        if ugo.isZero.not then {
-            tplId = ugo
-        }
-    }
-    # neither probe reaches a template nested in a namespace or living
-    # in another unit; the request resolved one at COLLECTION. Settled
-    # HERE, before the arguments are keyed -- the trie join below needs
-    # the template as its root.
+    # the template the request resolved at COLLECTION, through the scope the
+    # instantiation is written in. A name probed anywhere else finds a file
+    # unit, or another scope's template, of the same spelling.
+    tplId: declTypeIdOf :st declId: rtdecl
     if tplId.isZero then tplId = rtid
+    tplDecl: rtdecl
     (recordInstanceGenericArgs
         :st
         :tplDecl
@@ -20112,7 +19908,6 @@ completeOneInstance: function {
         :program
         :rtId
         :rtu
-        :ru
         :rtop
         tplId0: tplId
         :memberIdAt
@@ -20149,7 +19944,6 @@ completeUnitInstantiations: function {
     i: u64
     for i < reqs.length loop {
         r: reqs.get :i
-        rtId: r.tmplId
         rtdecl: r.tmplDeclId
         # the collector gathers every call-shaped unit definition; only one
         # whose callable names a generic UNIT is an instantiation, as the mint
@@ -20167,7 +19961,6 @@ completeUnitInstantiations: function {
         # resolved arguments -- the identity the mint pass laid; the label is
         # not consulted
         mgo: optionval.none ztypes.tid
-        tnId: zast.nameid
         {
             if rtdecl.isZero.not when r.tmplOpId.isZero.not then {
                 argsC: ListVal ztypes.genericarg
@@ -20175,7 +19968,6 @@ completeUnitInstantiations: function {
                     mgo = unitMonoOnTrie :st tplTid: (declTypeIdOf :st declId: rtdecl) args: argsC
                 }
             }
-            tnId = rtId
         }
         match (
             mgo
@@ -20186,7 +19978,6 @@ completeUnitInstantiations: function {
                 :program
                 :r
                 :mgo
-                :tnId
                 :subs
                 :valSubs
             )
@@ -54686,7 +54477,7 @@ stampUnitMonoMembers: function {
                     :scope
                     ast: program
                     :unitDecl
-                    templateNameId: mNm
+                    tplId: (templateUnitStampAt :st ast: program opId: imOp)
                     unitOpId: imOp
                 )
             } else {
@@ -55019,7 +54810,7 @@ stampUnitMonoRound: function {
                         :scope
                         ast: program
                         unitDecl: uDecl9
-                        templateNameId: uNm
+                        tplId: (declTypeIdOf :st declId: uDecl9)
                         unitOpId: uOp
                     )
                 } else {
@@ -55037,37 +54828,28 @@ stampUnitMonoRound: function {
     }
 }
 
-# stampMonoTemplateUnit -- resolve one generic template unit (file-level by
-# unit name, inline by its def-node stamp), then stamp-walk every registry
-# mono minted from it.
+# templateUnitStampAt -- the type a nested unit template's definition node was
+# stamped with: the template itself, never a name looked up anywhere.
+templateUnitStampAt: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    opId: zast.nodeid
+} out ztypes.tid is {
+    tuo: ast.nodes.get i: opId
+    if tuo.unitdef.not then return ztypes.tid
+    return (ztyping.nodeTypeAt tbl: st.typing.nodeType nid: opId)
+}
+
+# stampMonoTemplateUnit -- stamp-walk every registry mono minted from the
+# generic template unit `tplId`, whose definition node is `unitOpId`.
 stampMonoTemplateUnit: function {
     st: zenv.ZSymbolTable
     ast: Ast
     unitDecl: ztypes.declid
     scope: ztypes.declid
-    templateNameId: zast.nameid
+    tplId: ztypes.tid
     unitOpId: zast.nodeid
 } is {
-    tplId: ztypes.tid
-    {
-        tgo: (declTypeIdOf
-            :st
-            declId: (st.typing.declFindChild
-                parentDeclId: st.typing.programRoot
-                nameId: templateNameId
-            )
-        )
-        if tgo.isZero.not then tplId = tgo
-    }
-    if tplId.isZero then {
-        rid: zast.nodeid
-        tuo: ast.nodes.get i: unitOpId
-        if tuo.unitdef then rid = tuo.nodeid
-        if rid.isZero.not then {
-            sgo: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: rid
-            if sgo.isZero.not then tplId = sgo
-        }
-    }
     if tplId.isZero then return
     last: st.reg.nextTid
     t: ztypes.tid 1
