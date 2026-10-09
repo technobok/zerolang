@@ -8,13 +8,13 @@ static z_@procexit@_t z_os_waitAny(void) {
     int wst = 0;
     pid_t p = waitpid(-1, &wst, WNOHANG);
     if (p <= 0) return r;
-    r.pid = (int32_t)p;
+    r.@MEMBER_procexit.pid@ = (int32_t)p;
     if (WIFEXITED(wst)) {
-        r.status = (int32_t)WEXITSTATUS(wst);
+        r.@MEMBER_procexit.status@ = (int32_t)WEXITSTATUS(wst);
     } else if (WIFSIGNALED(wst)) {
-        r.status = 128 + (int32_t)WTERMSIG(wst);
+        r.@MEMBER_procexit.status@ = 128 + (int32_t)WTERMSIG(wst);
     } else {
-        r.status = 127;
+        r.@MEMBER_procexit.status@ = 127;
     }
     return r;
 }

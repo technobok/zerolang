@@ -9,7 +9,7 @@ static bool z_cli_str_eq(const z_@String@_t* a, const char* b, uint64_t blen) {
 static int64_t z_cli_find_flag_long(const z_@List_FlagDef@_t* flags, const char* name, uint64_t nlen);
 static int64_t z_cli_find_flag_long(const z_@List_FlagDef@_t* flags, const char* name, uint64_t nlen) {
     for (uint64_t i = 0; i < flags->length; i++) {
-        if (z_cli_str_eq(&flags->data[i].name, name, nlen)) return (int64_t)i;
+        if (z_cli_str_eq(&flags->data[i].@MEMBER_FlagDef.name@, name, nlen)) return (int64_t)i;
     }
     return -1;
 }
@@ -18,7 +18,7 @@ static int64_t z_cli_find_flag_long(const z_@List_FlagDef@_t* flags, const char*
 static int64_t z_cli_find_flag_short(const z_@List_FlagDef@_t* flags, const char* name, uint64_t nlen);
 static int64_t z_cli_find_flag_short(const z_@List_FlagDef@_t* flags, const char* name, uint64_t nlen) {
     for (uint64_t i = 0; i < flags->length; i++) {
-        if (z_cli_str_eq(&flags->data[i].shortName, name, nlen)) return (int64_t)i;
+        if (z_cli_str_eq(&flags->data[i].@MEMBER_FlagDef.shortName@, name, nlen)) return (int64_t)i;
     }
     return -1;
 }
@@ -26,7 +26,7 @@ static int64_t z_cli_find_flag_short(const z_@List_FlagDef@_t* flags, const char
 static int64_t z_cli_findOption_long(const z_@List_OptionDef@_t* options, const char* name, uint64_t nlen);
 static int64_t z_cli_findOption_long(const z_@List_OptionDef@_t* options, const char* name, uint64_t nlen) {
     for (uint64_t i = 0; i < options->length; i++) {
-        if (z_cli_str_eq(&options->data[i].name, name, nlen)) return (int64_t)i;
+        if (z_cli_str_eq(&options->data[i].@MEMBER_OptionDef.name@, name, nlen)) return (int64_t)i;
     }
     return -1;
 }
@@ -34,7 +34,7 @@ static int64_t z_cli_findOption_long(const z_@List_OptionDef@_t* options, const 
 static int64_t z_cli_findOption_short(const z_@List_OptionDef@_t* options, const char* name, uint64_t nlen);
 static int64_t z_cli_findOption_short(const z_@List_OptionDef@_t* options, const char* name, uint64_t nlen) {
     for (uint64_t i = 0; i < options->length; i++) {
-        if (z_cli_str_eq(&options->data[i].shortName, name, nlen)) return (int64_t)i;
+        if (z_cli_str_eq(&options->data[i].@MEMBER_OptionDef.shortName@, name, nlen)) return (int64_t)i;
     }
     return -1;
 }

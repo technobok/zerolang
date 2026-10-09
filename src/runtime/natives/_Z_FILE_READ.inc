@@ -15,7 +15,7 @@ static z_@ResultVR_u64_IoError@_t z_@File@_read(
     }
     long n;
     for (;;) {
-        n = read(f->fd, buf->data + buf->length, max);
+        n = read(f->@MEMBER_File.fd@, buf->data + buf->length, max);
         if (n >= 0) break;
         if (errno != EINTR) return z_io_u64_err(errno);
     }

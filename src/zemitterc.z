@@ -756,7 +756,7 @@ convErr: function {
     # the converror arm, as declared
     arm: StringView
 } out String is {
-    e: "_r.tag = @ERRTAG@; _r.data.err@TAG_converror@ = @ARM_converror.\{arm}@;"
+    e: "_r.tag = @ERRTAG@; _r.data.@ERRMEMBER@@TAG_converror@ = @ARM_converror.\{arm}@;"
     return e
 }
 
@@ -764,7 +764,7 @@ convErr: function {
 # the source was finite is out of range; anything that does not survive the
 # round trip back to the source type lost precision.
 convFloatToFloat: function {scT: StringView tcT: StringView} out String is {
-    okF: "_r.tag = @OKTAG@; _r.data.ok = _f;"
+    okF: "_r.tag = @OKTAG@; _r.data.@OKMEMBER@ = _f;"
     b: "\{tcT} _f = (\{tcT})_v; if (isinf(_f) && !isinf(_v)) { \{(convErr
         arm: "outOfRange"
     )} } else if ((\{scT})_f != _v) { \{convErr arm: "precisionLoss"} } else { \{okF} }"
@@ -1021,7 +1021,7 @@ convFloatToHalf: function {srcK: ztypes.numkind scT: StringView} out String is {
         arm: "outOfRange"
     )} } else if ((\{scT}) z_f16_to_f32(_f) != _v) { \{(convErr
         arm: "precisionLoss"
-    )} } else { _r.tag = @OKTAG@; _r.data.ok = _f; }"
+    )} } else { _r.tag = @OKTAG@; _r.data.@OKMEMBER@ = _f; }"
     return b
 }
 
@@ -1082,7 +1082,7 @@ convBodyOf: function {srcK: ztypes.numkind dstK: ztypes.numkind lossy: bool} out
         vT = "float"
         vInit = "z_f16_to_f32(@V@)"
     }
-    okSet: "_r.tag = @OKTAG@; _r.data.ok = \{convOkValue :srcK :dstK :tcT};"
+    okSet: "_r.tag = @OKTAG@; _r.data.@OKMEMBER@ = \{convOkValue :srcK :dstK :tcT};"
     body: String
     # the four corners of float/integer, each with its own way of failing
     if (kindIsFloat k: srcK) then {
@@ -1685,8 +1685,9 @@ bindArmHoles: function {
 # the `@ARM_` holes resolve): a fragment reaches a field of a struct the
 # compiler generates, or an arm in a sum's `data`, by its type and its name,
 # never by the member's C spelling, which is the emitter's to choose
-# (memberC). A record's or class's member is a field, a variant's an arm, and a
-# union's an inline arm slot -- its other arms live behind `data`. A canon
+# (memberC). A record's or class's member is a field, a variant's an arm, a
+# union's an inline arm slot -- its other arms live behind `data` -- and a
+# protocol's or facet's a vtable slot. A canon
 # naming no type, or a member the type does not declare, leaves the hole
 # unbound, which fillHoles reports as fatal.
 bindMemberHoles: function {
@@ -1737,6 +1738,9 @@ memberHoleC: function {
     ttt: symtab.reg.typetypeOf typeId: (chaseAggregateTypedef :symtab :ctx tid: tt)
     if ttt == ztypes.ztypetype.variantType then k = memberkind.arm
     if ttt == ztypes.ztypetype.unionType then k = memberkind.inlineArm
+    if (ttt == ztypes.ztypetype.protocolType) or (ttt == ztypes.ztypetype.facetType) then {
+        k = memberkind.slot
+    }
     if (memberOrdinal :symtab :ctx owner: tt kind: k nameId: mid).none then return ""
     return (memberC :ast :symtab :ctx owner: tt kind: k nameId: mid)
 }

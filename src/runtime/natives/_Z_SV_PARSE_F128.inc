@@ -3,7 +3,7 @@ static z_@resultval_f128_parseerror@_t z_@StringView@_parseF128(const z_@StringV
     z_@resultval_f128_parseerror@_t out = {0};
     if (self->size == 0) {
         out.tag = @ARM_resultval_f128_parseerror.err@;
-        out.data.err@TAG_parseerror@ = @ARM_parseerror.empty@;
+        out.data.@MEMBER_resultval_f128_parseerror.err@@TAG_parseerror@ = @ARM_parseerror.empty@;
         return out;
     }
     char buf[64];
@@ -19,16 +19,16 @@ static z_@resultval_f128_parseerror@_t z_@StringView@_parseF128(const z_@StringV
     if (p != buf) free(p);
     if (consumed == 0 || consumed != self->size) {
         out.tag = @ARM_resultval_f128_parseerror.err@;
-        out.data.err@TAG_parseerror@ = @ARM_parseerror.invalidDigit@;
+        out.data.@MEMBER_resultval_f128_parseerror.err@@TAG_parseerror@ = @ARM_parseerror.invalidDigit@;
         return out;
     }
     if (err == ERANGE) {
         out.tag = @ARM_resultval_f128_parseerror.err@;
-        out.data.err@TAG_parseerror@ = @ARM_parseerror.overflow@;
+        out.data.@MEMBER_resultval_f128_parseerror.err@@TAG_parseerror@ = @ARM_parseerror.overflow@;
         return out;
     }
     out.tag = @ARM_resultval_f128_parseerror.ok@;
-    out.data.ok = v;
+    out.data.@MEMBER_resultval_f128_parseerror.ok@ = v;
     return out;
 }
 

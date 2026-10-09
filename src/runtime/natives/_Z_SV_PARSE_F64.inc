@@ -3,7 +3,7 @@ static z_@resultval_f64_parseerror@_t z_@StringView@_parseF64(const z_@StringVie
     z_@resultval_f64_parseerror@_t out = {0};
     if (self->size == 0) {
         out.tag = @ARM_resultval_f64_parseerror.err@;
-        out.data.err@TAG_parseerror@ = @ARM_parseerror.empty@;
+        out.data.@MEMBER_resultval_f64_parseerror.err@@TAG_parseerror@ = @ARM_parseerror.empty@;
         return out;
     }
     /* copy into a NUL-terminated local buffer for strtod */
@@ -20,21 +20,21 @@ static z_@resultval_f64_parseerror@_t z_@StringView@_parseF64(const z_@StringVie
     if (p != buf) free(p);
     if (consumed == 0) {
         out.tag = @ARM_resultval_f64_parseerror.err@;
-        out.data.err@TAG_parseerror@ = @ARM_parseerror.invalidDigit@;
+        out.data.@MEMBER_resultval_f64_parseerror.err@@TAG_parseerror@ = @ARM_parseerror.invalidDigit@;
         return out;
     }
     if (consumed != self->size) {
         out.tag = @ARM_resultval_f64_parseerror.err@;
-        out.data.err@TAG_parseerror@ = @ARM_parseerror.invalidDigit@;
+        out.data.@MEMBER_resultval_f64_parseerror.err@@TAG_parseerror@ = @ARM_parseerror.invalidDigit@;
         return out;
     }
     if (err == ERANGE) {
         out.tag = @ARM_resultval_f64_parseerror.err@;
-        out.data.err@TAG_parseerror@ = @ARM_parseerror.overflow@;
+        out.data.@MEMBER_resultval_f64_parseerror.err@@TAG_parseerror@ = @ARM_parseerror.overflow@;
         return out;
     }
     out.tag = @ARM_resultval_f64_parseerror.ok@;
-    out.data.ok = v;
+    out.data.@MEMBER_resultval_f64_parseerror.ok@ = v;
     return out;
 }
 

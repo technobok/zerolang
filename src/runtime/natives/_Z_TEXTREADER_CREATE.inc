@@ -4,8 +4,8 @@
 static z_@TextReader@_t z_@TextReader@_create(z_@BufReader@_t* source);
 static z_@TextReader@_t z_@TextReader@_create(z_@BufReader@_t* source) {
     z_@TextReader@_t self = {0};
-    self.source = source;
-    self.buf = z_@ListVal_u8@_create(0);
+    self.@MEMBER_TextReader.source@ = source;
+    self.@MEMBER_TextReader.buf@ = z_@ListVal_u8@_create(0);
     return self;
 }
 

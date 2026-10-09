@@ -26,8 +26,8 @@ static z_@Result_Listener_IoError@_t z_net_listen(uint16_t port) {
         return result;
     }
     z_@Listener@_t* boxed = (z_@Listener@_t*)z_xmalloc(sizeof(z_@Listener@_t));
-    boxed->fd = (int32_t)fd;
-    boxed->closed = false;
+    boxed->@MEMBER_Listener.fd@ = (int32_t)fd;
+    boxed->@MEMBER_Listener.closed@ = false;
     result.tag = @ARM_Result_Listener_IoError.ok@;
     result.data = boxed;
     return result;

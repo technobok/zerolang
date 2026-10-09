@@ -14,7 +14,7 @@ static z_@ResultVR_u64_IoError@_t z_@File@_seek(
         case @ARM_seekorigin.end@:     whence = SEEK_END; break;
         default:                       whence = SEEK_SET; break;
     }
-    off_t pos = lseek(f->fd, (off_t)off, whence);
+    off_t pos = lseek(f->@MEMBER_File.fd@, (off_t)off, whence);
     if (pos < 0) return z_io_u64_err(errno);
     return z_io_u64_ok((uint64_t)pos);
 }

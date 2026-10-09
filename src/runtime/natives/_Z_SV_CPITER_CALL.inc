@@ -7,7 +7,7 @@ static z_@optionval_u32@_t z_@CpIter@_call(z_@CpIter@_t* it) {
     }
     uint32_t cp = z_utf8_decode_one(it->data, it->length, &it->cursor);
     out.tag = @ARM_optionval_u32.some@;
-    out.data.some = cp;
+    out.data.@MEMBER_optionval_u32.some@ = cp;
     return out;
 }
 

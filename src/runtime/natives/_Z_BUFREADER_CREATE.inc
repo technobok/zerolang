@@ -6,10 +6,10 @@
 static z_@BufReader@_t z_@BufReader@_create(z_@Reader@_t source, uint64_t cap);
 static z_@BufReader@_t z_@BufReader@_create(z_@Reader@_t source, uint64_t cap) {
     z_@BufReader@_t self = {0};
-    self.source = source;
-    self.buf = z_@ListVal_u8@_create(cap);
-    self.head = 0;
-    self.cap = cap;
+    self.@MEMBER_BufReader.source@ = source;
+    self.@MEMBER_BufReader.buf@ = z_@ListVal_u8@_create(cap);
+    self.@MEMBER_BufReader.head@ = 0;
+    self.@MEMBER_BufReader.cap@ = cap;
     return self;
 }
 

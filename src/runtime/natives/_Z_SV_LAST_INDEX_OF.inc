@@ -3,7 +3,7 @@ static z_@optionval_u64@_t z_@StringView@_lastIndexOf(const z_@StringView@_t* se
     z_@optionval_u64@_t out = {0};
     if (needle->size == 0) {
         out.tag = @ARM_optionval_u64.some@;
-        out.data.some = self->size;
+        out.data.@MEMBER_optionval_u64.some@ = self->size;
         return out;
     }
     if (needle->size > self->size) {
@@ -14,7 +14,7 @@ static z_@optionval_u64@_t z_@StringView@_lastIndexOf(const z_@StringView@_t* se
         uint64_t idx = i - 1;
         if (memcmp(self->data + idx, needle->data, needle->size) == 0) {
             out.tag = @ARM_optionval_u64.some@;
-            out.data.some = idx;
+            out.data.@MEMBER_optionval_u64.some@ = idx;
             return out;
         }
     }

@@ -12,7 +12,7 @@ static z_@ResultVR_bool_IoError@_t z_net_pollReadable(int32_t fd, int32_t timeou
         return result;
     }
     result.tag = @ARM_ResultVR_bool_IoError.ok@;
-    result.in_ok = (rc > 0) && (p.revents & (POLLIN | POLLHUP));
+    result.@MEMBER_ResultVR_bool_IoError.ok@ = (rc > 0) && (p.revents & (POLLIN | POLLHUP));
     return result;
 }
 

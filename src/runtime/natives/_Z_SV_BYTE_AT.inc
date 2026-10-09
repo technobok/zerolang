@@ -6,7 +6,7 @@ static z_@optionval_u8@_t z_@StringView@_byteAt(const z_@StringView@_t* self, ui
         return out;
     }
     out.tag = @ARM_optionval_u8.some@;
-    out.data.some = (uint8_t)self->data[i];
+    out.data.@MEMBER_optionval_u8.some@ = (uint8_t)self->data[i];
     return out;
 }
 

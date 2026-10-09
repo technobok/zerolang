@@ -5,7 +5,7 @@ static z_@optionval_u64@_t z_@StringView@_splitOnce(
     z_@optionval_u64@_t out = {0};
     if (sep->size == 0) {
         out.tag = @ARM_optionval_u64.some@;
-        out.data.some = 0;
+        out.data.@MEMBER_optionval_u64.some@ = 0;
         return out;
     }
     if (sep->size > self->size) {
@@ -16,7 +16,7 @@ static z_@optionval_u64@_t z_@StringView@_splitOnce(
     for (uint64_t i = 0; i <= last; i++) {
         if (memcmp(self->data + i, sep->data, sep->size) == 0) {
             out.tag = @ARM_optionval_u64.some@;
-            out.data.some = i;
+            out.data.@MEMBER_optionval_u64.some@ = i;
             return out;
         }
     }

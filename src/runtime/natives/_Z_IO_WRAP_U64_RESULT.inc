@@ -2,7 +2,7 @@ static z_@ResultVR_u64_IoError@_t z_io_u64_ok(uint64_t v);
 static z_@ResultVR_u64_IoError@_t z_io_u64_ok(uint64_t v) {
     z_@ResultVR_u64_IoError@_t result = {0};
     result.tag = @ARM_ResultVR_u64_IoError.ok@;
-    result.in_ok = v;
+    result.@MEMBER_ResultVR_u64_IoError.ok@ = v;
     return result;
 }
 

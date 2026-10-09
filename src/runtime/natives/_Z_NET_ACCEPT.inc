@@ -3,7 +3,7 @@ static z_@Result_Conn_IoError@_t z_@Listener@_accept(z_@Listener@_t* l) {
     z_@Result_Conn_IoError@_t result = {0};
     int fd;
     for (;;) {
-        fd = accept(l->fd, NULL, NULL);
+        fd = accept(l->@MEMBER_Listener.fd@, NULL, NULL);
         if (fd >= 0) break;
         if (errno == EINTR) continue;
         z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
@@ -13,8 +13,8 @@ static z_@Result_Conn_IoError@_t z_@Listener@_accept(z_@Listener@_t* l) {
         return result;
     }
     z_@Conn@_t* boxed = (z_@Conn@_t*)z_xmalloc(sizeof(z_@Conn@_t));
-    boxed->fd = (int32_t)fd;
-    boxed->closed = false;
+    boxed->@MEMBER_Conn.fd@ = (int32_t)fd;
+    boxed->@MEMBER_Conn.closed@ = false;
     result.tag = @ARM_Result_Conn_IoError.ok@;
     result.data = boxed;
     return result;

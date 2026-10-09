@@ -5,7 +5,7 @@
 static z_@TextWriter@_t z_@TextWriter@_create(z_@BufWriter@_t* sink);
 static z_@TextWriter@_t z_@TextWriter@_create(z_@BufWriter@_t* sink) {
     z_@TextWriter@_t self = {0};
-    self.sink = sink;
+    self.@MEMBER_TextWriter.sink@ = sink;
     return self;
 }
 

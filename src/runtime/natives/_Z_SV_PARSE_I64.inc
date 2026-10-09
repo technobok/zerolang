@@ -23,19 +23,19 @@ static z_@resultval_i64_parseerror@_t z_@StringView@_parseI64(const z_@StringVie
     int64_t v = neg ? -(int64_t)acc : (int64_t)acc;
     if (neg && acc == ((uint64_t)1 << 63)) v = INT64_MIN;
     out.tag = @ARM_resultval_i64_parseerror.ok@;
-    out.data.ok = v;
+    out.data.@MEMBER_resultval_i64_parseerror.ok@ = v;
     return out;
 empty:
     out.tag = @ARM_resultval_i64_parseerror.err@;
-    out.data.err@TAG_parseerror@ = @ARM_parseerror.empty@;
+    out.data.@MEMBER_resultval_i64_parseerror.err@@TAG_parseerror@ = @ARM_parseerror.empty@;
     return out;
 invalid:
     out.tag = @ARM_resultval_i64_parseerror.err@;
-    out.data.err@TAG_parseerror@ = @ARM_parseerror.invalidDigit@;
+    out.data.@MEMBER_resultval_i64_parseerror.err@@TAG_parseerror@ = @ARM_parseerror.invalidDigit@;
     return out;
 overflow:
     out.tag = @ARM_resultval_i64_parseerror.err@;
-    out.data.err@TAG_parseerror@ = @ARM_parseerror.overflow@;
+    out.data.@MEMBER_resultval_i64_parseerror.err@@TAG_parseerror@ = @ARM_parseerror.overflow@;
     return out;
 }
 

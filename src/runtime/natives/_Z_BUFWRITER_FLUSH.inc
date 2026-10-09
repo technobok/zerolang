@@ -5,16 +5,16 @@
 static z_@Result_null_IoError@_t z_@BufWriter@_flush(z_@BufWriter@_t* self);
 static z_@Result_null_IoError@_t z_@BufWriter@_flush(z_@BufWriter@_t* self) {
     z_@Result_null_IoError@_t result = {0};
-    if (self->buf.length == 0) {
+    if (self->@MEMBER_BufWriter.buf@.length == 0) {
         result.tag = @ARM_Result_null_IoError.ok@;
         result.data = NULL;
         return result;
     }
-    z_@ListViewVal_u8@_t view = { self->buf.length, self->buf.data };
+    z_@ListViewVal_u8@_t view = { self->@MEMBER_BufWriter.buf@.length, self->@MEMBER_BufWriter.buf@.data };
     z_@ResultVR_u64_IoError@_t wr =
-        self->sink.vtable->write(self->sink.data, &view);
+        self->@MEMBER_BufWriter.sink@.vtable->@MEMBER_Writer.write@(self->@MEMBER_BufWriter.sink@.data, &view);
     if (wr.tag == @ARM_ResultVR_u64_IoError.ok@) {
-        self->buf.length = 0;
+        self->@MEMBER_BufWriter.buf@.length = 0;
         result.tag = @ARM_Result_null_IoError.ok@;
         result.data = NULL;
         return result;

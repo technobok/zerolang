@@ -3,7 +3,7 @@ static z_@resultval_f16_parseerror@_t z_@StringView@_parseF16(const z_@StringVie
     z_@resultval_f16_parseerror@_t out = {0};
     if (self->size == 0) {
         out.tag = @ARM_resultval_f16_parseerror.err@;
-        out.data.err@TAG_parseerror@ = @ARM_parseerror.empty@;
+        out.data.@MEMBER_resultval_f16_parseerror.err@@TAG_parseerror@ = @ARM_parseerror.empty@;
         return out;
     }
     char buf[64];
@@ -19,17 +19,17 @@ static z_@resultval_f16_parseerror@_t z_@StringView@_parseF16(const z_@StringVie
     if (p != buf) free(p);
     if (consumed == 0 || consumed != self->size) {
         out.tag = @ARM_resultval_f16_parseerror.err@;
-        out.data.err@TAG_parseerror@ = @ARM_parseerror.invalidDigit@;
+        out.data.@MEMBER_resultval_f16_parseerror.err@@TAG_parseerror@ = @ARM_parseerror.invalidDigit@;
         return out;
     }
     z_f16 h = z_f16_from_f32(v);
     if (err == ERANGE || (!isinf(v) && isinf(z_f16_to_f32(h)))) {
         out.tag = @ARM_resultval_f16_parseerror.err@;
-        out.data.err@TAG_parseerror@ = @ARM_parseerror.overflow@;
+        out.data.@MEMBER_resultval_f16_parseerror.err@@TAG_parseerror@ = @ARM_parseerror.overflow@;
         return out;
     }
     out.tag = @ARM_resultval_f16_parseerror.ok@;
-    out.data.ok = h;
+    out.data.@MEMBER_resultval_f16_parseerror.ok@ = h;
     return out;
 }
 

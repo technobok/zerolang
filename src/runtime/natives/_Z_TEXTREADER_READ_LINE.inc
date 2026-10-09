@@ -16,31 +16,31 @@ static z_@Result_String_IoError@_t z_@TextReader@_readLine(
     z_@String@_t line = {0};
     bool found = false;
     for (;;) {
-        for (uint64_t i = scan_start; i < self->buf.length; i++) {
-            if (self->buf.data[i] == (uint8_t)'\n') {
-                if (!z_io_utf8_is_valid(self->buf.data, i)) {
+        for (uint64_t i = scan_start; i < self->@MEMBER_TextReader.buf@.length; i++) {
+            if (self->@MEMBER_TextReader.buf@.data[i] == (uint8_t)'\n') {
+                if (!z_io_utf8_is_valid(self->@MEMBER_TextReader.buf@.data, i)) {
                     return z_io_String_err_arm(@ARM_IoError.badencoding@);
                 }
                 line.size = i;
                 line.capacity = i + 1;
                 line.data = (char*)z_xmalloc(line.capacity + 1);
-                if (i > 0) memcpy(line.data, self->buf.data, i);
+                if (i > 0) memcpy(line.data, self->@MEMBER_TextReader.buf@.data, i);
                 line.data[i] = '\0';
-                uint64_t tail = self->buf.length - (i + 1);
+                uint64_t tail = self->@MEMBER_TextReader.buf@.length - (i + 1);
                 if (tail > 0) {
-                    memmove(self->buf.data, self->buf.data + i + 1, tail);
+                    memmove(self->@MEMBER_TextReader.buf@.data, self->@MEMBER_TextReader.buf@.data + i + 1, tail);
                 }
-                self->buf.length = tail;
+                self->@MEMBER_TextReader.buf@.length = tail;
                 found = true;
                 break;
             }
         }
         if (found) break;
-        scan_start = self->buf.length;
-        uint64_t cap = self->source->cap;
+        scan_start = self->@MEMBER_TextReader.buf@.length;
+        uint64_t cap = self->@MEMBER_TextReader.source@->@MEMBER_BufReader.cap@;
         if (cap == 0) cap = 4096;
         z_@ResultVR_u64_IoError@_t rr = z_@BufReader@_read(
-            self->source, &self->buf, cap
+            self->@MEMBER_TextReader.source@, &self->@MEMBER_TextReader.buf@, cap
         );
         if (rr.tag != @ARM_ResultVR_u64_IoError.ok@) {
             z_@Result_String_IoError@_t result = {0};
@@ -48,21 +48,21 @@ static z_@Result_String_IoError@_t z_@TextReader@_readLine(
             result.data = rr.data;
             return result;
         }
-        uint64_t n = rr.in_ok;
+        uint64_t n = rr.@MEMBER_ResultVR_u64_IoError.ok@;
         if (n == 0) {
-            if (self->buf.length == 0) {
+            if (self->@MEMBER_TextReader.buf@.length == 0) {
                 return z_io_String_err_arm(@ARM_IoError.eof@);
             }
-            uint64_t size = self->buf.length;
-            if (!z_io_utf8_is_valid(self->buf.data, size)) {
+            uint64_t size = self->@MEMBER_TextReader.buf@.length;
+            if (!z_io_utf8_is_valid(self->@MEMBER_TextReader.buf@.data, size)) {
                 return z_io_String_err_arm(@ARM_IoError.badencoding@);
             }
             line.size = size;
             line.capacity = size + 1;
             line.data = (char*)z_xmalloc(line.capacity + 1);
-            if (size > 0) memcpy(line.data, self->buf.data, size);
+            if (size > 0) memcpy(line.data, self->@MEMBER_TextReader.buf@.data, size);
             line.data[size] = '\0';
-            self->buf.length = 0;
+            self->@MEMBER_TextReader.buf@.length = 0;
             break;
         }
     }

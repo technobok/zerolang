@@ -5,7 +5,7 @@ static z_@ResultVR_u64_IoError@_t z_@Conn@_write(
 ) {
     uint64_t total = 0;
     while (total < src->length) {
-        long n = write(c->fd, src->data + total, src->length - total);
+        long n = write(c->@MEMBER_Conn.fd@, src->data + total, src->length - total);
         if (n < 0) {
             if (errno == EINTR) continue;
             return z_io_u64_err(errno);

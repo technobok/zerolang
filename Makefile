@@ -2475,7 +2475,7 @@ perf: $(PERFBIN)
 #
 # +2 ztypecheck exports envLookup / scopeFor / unitdefNodeId for zls's
 # shadow-aware hover: 0 behaviour, +2 source (ab.sh).
-ALLOC_BASELINE := 2211057
+ALLOC_BASELINE := 2212238
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -4175,7 +4175,10 @@ clean:
 # fragment spells a tag constant (`Z_..._TAG_...`) literally, the emitter's
 # spelling being the emitter's to choose. Leg 5: every `@MEMBER_<canon>.<name>@`
 # hole (a member of a struct the compiler generates) names a known canon and a
-# member -- a field or an arm -- its declaration declares.
+# member -- a field, an arm or a vtable slot -- its declaration declares; and no
+# fragment spells an arm in `data`, an inline arm or a vtable slot literally,
+# those spellings being the emitter's. A literal field is not refused: its text
+# cannot be told from a runtime-owned layout's field (StringView's `size`).
 NATIVE_GUARD_EXCEPTIONS := io.print io.stdin io.stdout io.stderr os.env net.pollReadable
 # reached by something other than a per-member demand: the statement-special and
 # the three streams have no fragment of their own, and os.args is a bundle its
@@ -4254,11 +4257,16 @@ native-guard:
 	    case "$$known" in *" $$canon "*) ;; \
 	      *) echo "native-guard: $$f spells @MEMBER_$$h@, whose type $$canon names no known canon"; fail=1; continue;; \
 	    esac; \
-	    mems=" $$(awk -v h="$$head" '$$0 ~ ("^" h ": (record|class|variant|union) [{]") {on=1; next} on && /^[}]/ {on=0} on && /^    [A-Za-z_][A-Za-z0-9_]*: / {sub(/^    /, ""); sub(/:.*/, ""); printf "%s ", $$0}' lib/system/*.z lib/system/*/*.z) "; \
+	    mems=" $$(awk -v h="$$head" '$$0 ~ ("^" h ": (record|class|variant|union|protocol|facet) [{]") {on=1; next} on && /^[}]/ {on=0} on && /^    [A-Za-z_][A-Za-z0-9_]*: / {sub(/^    /, ""); sub(/:.*/, ""); printf "%s ", $$0}' lib/system/*.z lib/system/*/*.z) "; \
 	    case "$$mems" in *" $$mem "*) ;; \
 	      *) echo "native-guard: $$f spells @MEMBER_$$h@, but $$head declares no member $$mem"; fail=1;; \
 	    esac; \
 	  done; \
+	done; \
+	for f in src/runtime/natives/*.inc src/runtime/*.inc src/runtime/*.c.tmpl src/runtime/*.tbl; do \
+	  if grep -qE '\.data\.[A-Za-z_]|(\.|->)in_[A-Za-z_]|vtable->[A-Za-z_]' $$f; then \
+	    echo "native-guard: $$f spells a member of a generated struct literally (an arm in \`data\`, an inline arm, a vtable slot); name it @MEMBER_<canon>.<name>@ (or @OKMEMBER@/@ERRMEMBER@ in a conversion row)"; fail=1; \
+	  fi; \
 	done; \
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
 	echo "native-guard OK: native declarations and runtime fragments consistent (incl. no orphans, $$nh fragment holes known, $$na tag-constant holes name declared arms, $$nm member holes name declared members)"

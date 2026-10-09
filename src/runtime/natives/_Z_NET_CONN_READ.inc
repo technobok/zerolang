@@ -10,7 +10,7 @@ static z_@ResultVR_u64_IoError@_t z_@Conn@_read(
     }
     long n;
     for (;;) {
-        n = read(c->fd, buf->data + buf->length, max);
+        n = read(c->@MEMBER_Conn.fd@, buf->data + buf->length, max);
         if (n >= 0) break;
         if (errno != EINTR) return z_io_u64_err(errno);
     }
