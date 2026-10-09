@@ -2484,7 +2484,11 @@ perf: $(PERFBIN)
 #
 # +14 a data block's element kind is asked of its type through its typedefs
 # (baseNumKind, wideConstKind): -2 behaviour, +16 source (ab.sh).
-ALLOC_BASELINE := 2191128
+#
+# -3,761 the type-ref walk answers from the nearest scope that holds the name and
+# demands its declaration there (nearestScopeOf); the wait and the custom-tag
+# and member-check fixups go: -28 behaviour, -3,733 source (ab.sh).
+ALLOC_BASELINE := 2187367
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

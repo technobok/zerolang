@@ -18,7 +18,6 @@
 public: unit {
     :SynthNode
     :GenFields
-    :membercheck
     :defaultval
     :foldedbranch
     :specstandin
@@ -78,18 +77,6 @@ pendwrite: record {
     name: zast.nameid
     # the type being written into it, held until the parent finishes resolving
     type: ztypes.tid
-}
-
-# One member check a dotted type-ref owes its parent (`b: Bag.bogus`), held
-# until the parent it demanded has resolved: the question is asked of the
-# parent's TYPE, which exists only once something demands it.
-membercheck: record {
-    # the dotted type-ref
-    op: zast.nodeid
-    # the scope it was written in
-    scope: ztypes.declid
-    # the unit it was written in
-    unitDecl: ztypes.declid
 }
 
 # monosite -- where an instantiation was first made: the call's line and
@@ -895,10 +882,6 @@ ZTyping: class {
     postGuardTid: (IdMapV zast.nodeid v: ztypes.tid)
     # the arm it narrowed to
     postGuardArm: (IdMapV zast.nodeid v: zast.nameid)
-    # a custom tag named before the type declaring it has resolved
-    pendingCustomTag: (IdMapV ztypes.tid v: zast.nameid)
-    # the node that named it, so the eventual error can point somewhere
-    pendingCustomTagNode: (IdMapV ztypes.tid v: zast.nodeid)
     # the type owning a default not yet resolvable
     pendingDefaultOwner: (IdMapV zast.nodeid v: ztypes.tid)
     # the type of the member that default names, which the construction fill
@@ -1338,9 +1321,6 @@ ZTyping: class {
     # declarations a reference found and demanded, in discovery order,
     # awaiting resolution (resolveDemandedDefs drains it)
     pendingDefs: ListVal ztypes.declid
-    # member checks whose parent type was demanded and not yet resolved; the
-    # drain that resolves it asks them (resolveDemandedDefs)
-    pendingMemberChecks: ListVal membercheck
     # dependency units in which a demanded definition has resolved (by unit
     # name id): each runs its conformance pass once, on first entry
     enteredUnits: IdSet ztypes.declid
@@ -3223,8 +3203,6 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         postGuardVarId: (IdMapV zast.nodeid v: ztypes.vid)
         postGuardTid: (IdMapV zast.nodeid v: ztypes.tid)
         postGuardArm: (IdMapV zast.nodeid v: zast.nameid)
-        pendingCustomTag: (IdMapV ztypes.tid v: zast.nameid)
-        pendingCustomTagNode: (IdMapV ztypes.tid v: zast.nodeid)
         pendingDefaultOwner: (IdMapV zast.nodeid v: ztypes.tid)
         pendingDefaultId: (IdMapV zast.nodeid v: ztypes.tid)
         pendingDefaultName: (IdMapV zast.nodeid v: zast.nameid)
@@ -3347,7 +3325,6 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         gpNames: IdSet zast.nameid
         gpNamesSwept: ztypes.tid
         pendingDefs: ListVal ztypes.declid
-        pendingMemberChecks: ListVal membercheck
         enteredUnits: IdSet ztypes.declid
         requireSeen: IdSet ztypes.declid
         requireDemanded: ListVal ztypes.declid

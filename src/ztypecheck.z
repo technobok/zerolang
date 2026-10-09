@@ -9125,15 +9125,7 @@ reportMissingTypeMember: function {
     rdc: declOfUnitDef :st :unitDecl :scope nameId: rootId
     if rdc.isZero.not when (declDefTypetype :st :ast declId: rdc).none then return false
     rto: walkLookupTyperefById :ast :st :unitDecl :scope baseId: rootId
-    if rto.none then {
-        # a type this unit declares and nothing has demanded yet (a field
-        # typed `Bag.bogus`, its owner demanded first): demand it, and ask
-        # once the drain has resolved it
-        if rdc.isZero then return false
-        demandDecl :st declId: rdc
-        st.typing.pendingMemberChecks.append (ztyping.membercheck :op :scope :unitDecl)
-        return false
-    }
+    if rto.none then return false
     rt: rto
     if (st.reg.typetypeOf typeId: rt) == ztypes.ztypetype.unitType then return false
     if (st.typing.declChildOfId parentTypeId: rt nameId: leafId).none.not then return false
@@ -12077,7 +12069,7 @@ attachVariantTag: function {
     armCountV: u64
     allNullV: bool
 } is {
-    customTagV: unionCustomTagId :st :scope :ast :unitDecl uid: variantTid objId: vnode.nid
+    customTagV: unionCustomTagId :st :scope :ast :unitDecl objId: vnode.nid
     tagId: ztypes.tid
     match (
         customTagV
@@ -12575,71 +12567,35 @@ qualifierUnitDecl: function {
 }
 
 # unionCustomTagOfArm -- one as-item of a union: a `tag` member naming a data
-# block answers that block's type; a tag whose base resolves later records the
-# demand and a pending fixup; anything else answers none.
+# block answers that block's type. A tag on any other base (`u8.tag`) stamps the
+# item with the system's `tag` and answers none, as does every other item.
 unionCustomTagOfArm: function {
     ast: Ast
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     scope: ztypes.declid
-    uid: ztypes.tid
     am: argref
 } out optionval ztypes.tid is {
-    if am.name == zast.wellKnown.slot.wkTag then {
-        pn: dottedParentName :ast n: (ast.nodes.get i: am.operation)
-        if pn.length != 0 then {
-            rr: walkLookupTyperef :st :scope :ast :unitDecl base: pn.stringView
-            match (
-                rr
-            ) case some then {
-                tt: st.reg.typetypeOf typeId: rr
-                isdata: false
-                if tt.dataType then isdata = true
-                if isdata then {
-                    return (optionval.some rr)
-                } else {
-                    # only the main unit's custom-tag items stamp
-                    # (system variants resolve standalone, unstamped).
-                    if unitDecl == st.typing.mainUnitRoot then {
-                        hUnitDecl: unitDeclOfName :st nameId: zast.wellKnown.slot.unSystem
-                        tgo: (resolvedByIds
-                            :st
-                            :ast
-                            unitDecl: hUnitDecl
-                            name: zast.wellKnown.slot.wkTag
-                        )
-                        match (
-                            tgo
-                        ) case some then {
-                            tnid0: (nodeId
-                                n: (ast.nodes.get i: am.operation)
-                            )
-                            (ztyping.nodeTypeSet
-                                tbl: st.typing.nodeType
-                                nid: tnid0
-                                tid: tgo
-                            )
-                        } case none then null
-                    }
-                }
-            } case none then {
-                # the tag base resolves later (demand order): record
-                # the demand and a pending fixup for the tag child.
-                pnId: zast.poolFind pool: ast.names text: pn.stringView
-                scope95: unitScopeOf :st declId: scope
-                (demandDefinition
-                    :st
-                    scope: scope95
-                    nameId: pnId
-                )
-                uk: uid
-                st.typing.pendingCustomTag.set key: uk value: pnId
-                uk2: uid
-                pnid: nodeId n: (ast.nodes.get i: am.operation)
-                st.typing.pendingCustomTagNode.set key: uk2 value: pnid
-            }
-        }
+    if am.name != zast.wellKnown.slot.wkTag then return (optionval.none ztypes.tid)
+    pnId: zast.nameid
+    {
+        op: ast.nodes.get i: am.operation
+        if op.dottedpath then pnId = atomNameId :ast n: (ast.nodes.get i: op.parent)
     }
+    if pnId.isZero then return (optionval.none ztypes.tid)
+    rr: ((walkLookupTyperefById :st :scope :ast :unitDecl baseId: pnId).or
+        d: ztypes.tid.zero
+    )
+    if rr.isZero then return (optionval.none ztypes.tid)
+    if (st.reg.typetypeOf typeId: rr).dataType then return (optionval.some rr)
+    hUnitDecl: unitDeclOfName :st nameId: zast.wellKnown.slot.unSystem
+    tgo: resolvedByIds :st :ast unitDecl: hUnitDecl name: zast.wellKnown.slot.wkTag
+    match (
+        tgo
+    ) case some then {
+        tnid0: nodeId n: (ast.nodes.get i: am.operation)
+        ztyping.nodeTypeSet tbl: st.typing.nodeType nid: tnid0 tid: tgo
+    } case none then null
     return (optionval.none ztypes.tid)
 }
 
@@ -12651,7 +12607,6 @@ unionCustomTagId: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     scope: ztypes.declid
-    uid: ztypes.tid
     objId: zast.nodeid
 } out optionval ztypes.tid is {
     orf: objRefAt :ast nid: objId
@@ -12661,7 +12616,7 @@ unionCustomTagId: function {
         kIter = kIter + 1
         am: argRefAt :ast nid: amId
         if am.nid.isZero.not then {
-            r: unionCustomTagOfArm :st :scope :ast :unitDecl :uid :am
+            r: unionCustomTagOfArm :st :scope :ast :unitDecl :am
             match (
                 r
             ) case some then {
@@ -13076,7 +13031,7 @@ resolveUnion: function {
     # generic template's is its instances'
     recordTagBase :st :scope :ast :unitDecl objId: vnode.nid ownerId: uid
     if isgen.not then {
-        customTag: unionCustomTagId :st :scope :ast :unitDecl :uid objId: vnode.nid
+        customTag: unionCustomTagId :st :scope :ast :unitDecl objId: vnode.nid
         tagId: ztypes.tid
         match (
             customTag
@@ -17398,70 +17353,6 @@ stampCtorDefaults: function {
     }
 }
 
-# fixupCustomTags -- bind deferred custom union tags: a `tag: X.tag` as-item
-# whose data block resolved after the union (demand order) overrides the
-# synthesized tag child once both exist.
-fixupCustomTags: function {
-    ast: Ast
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-} is {
-    pend: ListVal ztypes.tid
-    pnames: ListVal zast.nameid
-    for each ce: st.typing.pendingCustomTag.iterateItems loop {
-        ck: ce.key
-        pend.append ck
-        pnames.append ce.value
-    }
-    ci: u64
-    cn: pend.length
-    for ci < cn loop {
-        cuid: pend.get i: ci
-        cnm: zast.nameTextCopy :ast ref: (pnames.get i: ci)
-        co: walkLookupTyperef :st :scope :ast :unitDecl base: cnm.stringView
-        ctid: co.or d: ztypes.tid.zero
-        if ctid.isZero.not then {
-            if (st.reg.typetypeOf typeId: ctid) == ztypes.ztypetype.dataType then {
-                cuidc: cuid
-                (st.typing.declSynthMember
-                    parentTypeId: cuidc
-                    nameId: zast.wellKnown.slot.wkTag
-                    kind: ztyping.declkind.fieldDecl
-                )
-                (st.typing.setMemberType
-                    parentTypeId: cuidc
-                    nameId: zast.wellKnown.slot.wkTag
-                    childTypeId: ctid
-                )
-            } else {
-                cuidn: cuid
-                cngo: st.typing.pendingCustomTagNode.get key: cuidn
-                cnid: cngo.or d: zast.nodeid
-                if cnid.isZero.not then {
-                    unitDecl98: unitDeclOfName :st nameId: zast.wellKnown.slot.unSystem
-                    tgo2: (resolvedByIds
-                        :st
-                        :ast
-                        unitDecl: unitDecl98
-                        name: zast.wellKnown.slot.wkTag
-                    )
-                    match (
-                        tgo2
-                    ) case some then {
-                        (ztyping.nodeTypeSet
-                            tbl: st.typing.nodeType
-                            nid: cnid
-                            tid: tgo2
-                        )
-                    } case none then null
-                }
-            }
-        }
-        ci = ci + 1
-    }
-}
-
 # true when `block`'s last statement is a return.
 blockEndsInReturn: function {ast: Ast.view block: astnode.view} out bool is {
     match (
@@ -17944,21 +17835,6 @@ resolveDemandedDecl: function {
     }
 }
 
-# askPendingMemberChecks -- the member checks whose parent a drain has now
-# resolved. A parent still unresolved has its own report; its check is dropped.
-askPendingMemberChecks: function {st: zenv.ZSymbolTable ast: Ast} is {
-    if st.typing.pendingMemberChecks.length == 0 then return
-    checks: ListVal ztyping.membercheck
-    checks swap st.typing.pendingMemberChecks
-    for each mc: checks loop (reportMissingTypeMember
-        :st
-        scope: mc.scope
-        :ast
-        unitDecl: mc.unitDecl
-        op: mc.op
-    )
-}
-
 # stampResolvedOnDemand -- stamp the type-refs a definition resolved outside a
 # drain recorded, as a drain stamps what it resolves: an unstamped signature
 # reads its return type as nothing at every call site. Before the type-ref pass
@@ -17997,7 +17873,6 @@ resolveDemandedDefs: function {st: zenv.ZSymbolTable scope: ztypes.declid ast: A
         resolveDemandedDecl :st scope: rf :ast declId: d
     }
     st.typing.pendingDefs = ListVal ztypes.declid
-    askPendingMemberChecks :st :ast
     # after the post-demand stamp pass, a drain stamps what it recorded
     if st.typing.typerefPassRan then {
         (stampPendingTyperefs
@@ -23313,47 +23188,18 @@ namedBoundTid: function {
 } out ztypes.tid is {
     if cd.boundApp.isZero.not then return (boundApplicationTid :ast :st :tdecl app: cd.boundApp)
     if cd.boundName.isZero then return ztypes.tid
-    ud: unitRootOfDecl :st declId: scope
+    # a qualified bound names a member of that unit; a bare one is found as any
+    # written type is, nearest scope first (a definition nothing has demanded
+    # yet is resolved where the walk meets it)
     if cd.boundQual.isZero.not then {
         qu: boundQualifierUnit :st :scope qualId: cd.boundQual
         if qu.isZero then return ztypes.tid
-        ud = qu
+        return (scopeMemberTid :st :ast root: qu nameId: cd.boundName)
     }
-    # the DEF INDEX first: a bound may name a definition nothing has demanded
-    # yet, and a type-ref walk answers only for ids resolution minted
-    d: declOfUnitDefIds :st unitDecl: ud nameId: cd.boundName
-    if d.isZero when st.typing.coreUnitRoot.isZero.not then {
-        d = declOfUnitDefIds :st unitDecl: st.typing.coreUnitRoot nameId: cd.boundName
-    }
-    if d.isZero.not then {
-        dt: declTypeIdOf :st declId: d
-        if dt.isZero.not then return dt
-        fd: forceUnitDefMemberTid :st :ast declId: d
-        if fd.isZero.not then return fd
-    }
-    r: ((walkLookupTyperefById :st :scope :ast unitDecl: ud baseId: cd.boundName).or
+    ud: unitRootOfDecl :st declId: scope
+    return ((walkLookupTyperefById :st :scope :ast unitDecl: ud baseId: cd.boundName).or
         d: ztypes.tid.zero
     )
-    return r
-}
-
-# forceUnitDefMemberTid -- resolve the TYPE definition `declId` now and answer
-# its type id: a bound may name a definition written after its use, which
-# nothing has demanded when the bound is checked.
-forceUnitDefMemberTid: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    declId: ztypes.declid
-} out ztypes.tid is {
-    dn: zast.nodeid
-    dd: st.typing.decls.get i: declId
-    dn = dd.node
-    dd.drop
-    if dn.isZero then return ztypes.tid
-    ud: unitRootOfDecl :st :declId
-    if ud.isZero then return ztypes.tid
-    r: forceUnitDef :st :ast unitDecl: ud scope: ud memId: dn
-    return r
 }
 
 # sumBoundAdmits -- a union or variant bound: the argument IS one of its
@@ -29401,6 +29247,10 @@ scopeMemberTid: function {
     if r.isZero.not then return r
     md: st.typing.declFindChild parentDeclId: root :nameId
     if md.isZero or (st.typing.declIsDefined declId: md) then return r
+    # a constant folds and a re-export follows its target inside the probe,
+    # which is their resolution: neither is resolved a second time here
+    mk: (st.typing.decls.get i: md).kind
+    if mk.constDecl or mk.reexportDecl then return r
     resolveDemandedDecl :st scope: root :ast declId: md
     stampResolvedOnDemand :st :ast
     return (probeScopeTyperef :st :ast :root :nameId)
@@ -47625,20 +47475,7 @@ bareCalleeTid: function {
                 fo
             ) case some then {
                 funcId = fo
-            } case none then {
-                # The callee is a main-unit type not yet demand-resolved
-                # (a construction inside a method body, walked before the
-                # constructed type). Resolve it on demand, then retry --
-                # otherwise the construction returns 0 and the binding goes
-                # unstamped.
-                maybeWalkMethodsById :st scope: st.curScope :unitDecl :ast nameId: cnId
-                fo2: walkLookupTyperefById :st scope: st.curScope :ast :unitDecl baseId: cnId
-                match (
-                    fo2
-                ) case some then {
-                    funcId = fo2
-                } case none then null
-            }
+            } case none then null
         }
     }
     return funcId
@@ -62703,11 +62540,11 @@ probeScopeTyperefRo: function {
     return ztypes.tid.zero
 }
 
-# walkLookupTyperefRo -- the post-typecheck read-only environment walk:
-# enclosing unit scopes, then core, answering only from what resolution
-# already minted. The emitter consumes and never demands, so the mint legs
-# (re-export aliases, const folds, pending waits) have nothing left to do
-# by the time it asks.
+# walkLookupTyperefRo -- the post-typecheck read-only environment walk: the
+# nearest scope that holds the name answers (nearestScopeOf), from what
+# resolution already minted, and an outer scope never stands in for it. The
+# emitter consumes and never demands, so the mint legs (re-export aliases,
+# const folds, in-place demands) have nothing left to do by the time it asks.
 walkLookupTyperefRo: function {
     ast: Ast.view
     st: zenv.ZSymbolTable.view
@@ -62730,21 +62567,11 @@ walkLookupTyperefByIdRo: function {
     baseId: zast.nameid
 } out optionval ztypes.tid is {
     if baseId.isZero then return (optionval.none ztypes.tid)
-    cur: scopeFor :st :scope :unitDecl
-    for cur.isZero.not loop {
-        if cur == st.typing.coreUnitRoot then {
-            cur = ztypes.declid
-        } else {
-            r: probeScopeTyperefRo :ast :st root: cur nameId: baseId depth: 0
-            if r.isZero.not then return (optionval.some r)
-            cur = unitScopeOf :st declId: (declParentIdOf :st declId: cur)
-        }
-    }
-    if st.typing.coreUnitRoot.isZero.not then {
-        r5: probeScopeTyperefRo :ast :st root: st.typing.coreUnitRoot nameId: baseId depth: 0
-        if r5.isZero.not then return (optionval.some r5)
-    }
-    return (optionval.none ztypes.tid)
+    at: nearestScopeOf :st scope: (scopeFor :st :scope :unitDecl) :baseId
+    if at.isZero then return (optionval.none ztypes.tid)
+    r: probeScopeTyperefRo :ast :st root: at nameId: baseId depth: 0
+    if r.isZero then return (optionval.none ztypes.tid)
+    return (optionval.some r)
 }
 
 
@@ -62966,34 +62793,48 @@ walkLookupTyperefById: function {
     )
 }
 
-# typerefHitAnswer -- a scope answered the type-ref with `r`: taken as it
-# stands when no nearer scope holds the name's declaration in flight;
-# otherwise only when it IS that declaration's own id (core's re-export of
-# it), never a different definition of the same name -- the reference then
-# waits for the declaration to resolve.
-typerefHitAnswer: function {
-    st: zenv.ZSymbolTable r: ztypes.tid waitDecl: ztypes.declid
-} out optionval ztypes.tid is {
-    if waitDecl.isZero then return (optionval.some r)
-    od: declOfTypeId :st tid: r
-    if od == waitDecl then return (optionval.some r)
-    return (optionval.none ztypes.tid)
-}
-
-# scopeDeclInFlight -- the declaration of `baseId` in scope `cur` when it is
-# still queued or mid-resolution; zero otherwise.
-scopeDeclInFlight: function {
-    st: zenv.ZSymbolTable cur: ztypes.declid baseId: zast.nameid
+# nearestScopeOf -- the scope the type-ref walk answers `baseId` from: the first,
+# from `scope` (0: the prelude alone) through each enclosing unit scope outward
+# to core, that declares the name or holds it in its unit type's member index.
+# The nearest declaration wins whatever its state: an outer scope never answers
+# a name a nearer one declares. Zero when no scope holds it.
+nearestScopeOf: function {
+    st: zenv.ZSymbolTable.view
+    scope: ztypes.declid
+    baseId: zast.nameid
 } out ztypes.declid is {
-    here: st.typing.declFindChild parentDeclId: cur nameId: baseId
-    if here.isZero then return here
-    hd: st.typing.decls.get i: here
-    if hd.pending or hd.resolving then return here
+    cur: scope
+    for cur.isZero.not loop {
+        if cur == st.typing.coreUnitRoot then {
+            cur = ztypes.declid
+        } else {
+            if (scopeHoldsName :st root: cur nameId: baseId) then return cur
+            cur = unitScopeOf :st declId: (declParentIdOf :st declId: cur)
+        }
+    }
+    core: st.typing.coreUnitRoot
+    if core.isZero.not when (scopeHoldsName :st root: core nameId: baseId) then return core
     return ztypes.declid
 }
 
+# scopeHoldsName -- whether the unit scope `root` declares `nameId`, or holds it
+# in its unit type's member index (a unit mono, a namespace binding).
+scopeHoldsName: function {
+    st: zenv.ZSymbolTable.view
+    root: ztypes.declid
+    nameId: zast.nameid
+} out bool is {
+    if (st.typing.declFindChild parentDeclId: root :nameId).isZero.not then return true
+    rt: declTypeIdOf :st declId: root
+    if rt.isZero then return false
+    return (st.typing.declChildOfId parentTypeId: rt :nameId).none.not
+}
+
 # walkLookupTyperefFrom -- the walk itself, from an explicit start scope (0:
-# the prelude alone): each enclosing unit scope outward, then core.
+# the prelude alone): the nearest scope that holds the name answers, and a
+# declaration nothing has demanded yet is resolved there, in place
+# (scopeMemberTid). None when that declaration does not resolve, or is
+# mid-resolution; the walk never moves past it.
 walkLookupTyperefFrom: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -63001,26 +62842,11 @@ walkLookupTyperefFrom: function {
     baseId: zast.nameid
 } out optionval ztypes.tid is {
     if baseId.isZero then return (optionval.none ztypes.tid)
-    cur: scope
-    # the nearest scope that declares the name with a declaration still in
-    # flight (queued or mid-resolution): the nearest declaration wins
-    # whatever its state (envLookup's rule), so an outer scope may answer
-    # only with THAT declaration's own id -- see typerefHitAnswer
-    waitDecl: ztypes.declid
-    for cur.isZero.not loop {
-        if cur == st.typing.coreUnitRoot then {
-            cur = ztypes.declid
-        } else {
-            r: probeScopeTyperef :st :ast root: cur nameId: baseId
-            if r.isZero.not then return (typerefHitAnswer :st :r :waitDecl)
-            if waitDecl.isZero then waitDecl = scopeDeclInFlight :st :cur :baseId
-            cur = unitScopeOf :st declId: (declParentIdOf :st declId: cur)
-        }
-    }
-    if st.typing.coreUnitRoot.isZero then return (optionval.none ztypes.tid)
-    r5: probeScopeTyperef :st :ast root: st.typing.coreUnitRoot nameId: baseId
-    if r5.isZero then return (optionval.none ztypes.tid)
-    return (typerefHitAnswer :st r: r5 :waitDecl)
+    at: nearestScopeOf :st :scope :baseId
+    if at.isZero then return (optionval.none ztypes.tid)
+    r: scopeMemberTid :st :ast root: at nameId: baseId
+    if r.isZero then return (optionval.none ztypes.tid)
+    return (optionval.some r)
 }
 
 # canonShellTid -- the canonical id for a SHELL stamp value, 0 to leave
@@ -63549,14 +63375,6 @@ typecheck: function {
     scanMainBodyCalls :st scope: rf :program rootOnly: rootOnlyMain
     demandAllDefs :st :program
     resolveDemands :st scope: rf :program
-    {
-        (fixupCustomTags
-            :st
-            scope: rf
-            ast: program
-            unitDecl: st.typing.mainUnitRoot
-        )
-    }
     resolveConstantDefs :st scope: rf :program
     completeUnitInstantiations :st scope: rf :program
     applyUnitVisibility :st :program
