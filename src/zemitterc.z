@@ -5101,18 +5101,6 @@ svValueFormAt: function {
     return (svValueForm :ctx :expr :isStr :vid)
 }
 
-# dottedBaseAtomId -- the base atom's interned name id (0 when absent). The
-# id form of dottedBaseAtom, for callers that only need to identify the name.
-dottedBaseAtomId: function {ast: Ast.view n: astnode.view} out zast.nameid is {
-    match (
-        n
-    ) case dottedpath then {
-        return (atomNameIdOf :ast n: (ast.nodes.get i: n.parent))
-    } else {
-        return zast.nameid.zero
-    }
-}
-
 # the base atom of a dotted path, which is the sanctioned discriminator the
 # shadow guard allows
 dottedBaseAtom: function {ast: Ast.view n: astnode.view} outx StringView is {
@@ -5175,7 +5163,6 @@ aliasChildName: function {
 stmtFormNameId: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
     n: astnode.view
 } out zast.nameid is {
     # the child's name as an ID: this runs for every dotted callee in statement
@@ -5190,28 +5177,10 @@ stmtFormNameId: function {
         (cid == zast.wellKnown.slot.wkReturn)
     )
     if isSf.not then return zid
-    bid: dottedBaseAtomId :ast :n
-    if bid.isZero then return zid
-    if (ztypecheck.isUnitNameDecl
-        st: symtab
-        nameId: bid
-    ).not then return zid
-    # ... and a DECLARATION of that name here shadows the unit: name ids are
-    # pooled program-wide, so the unit probe answers either way
-    uq2z: ctx.mainUnitId
-    sh: (ztypecheck.resolveUnitChildRo
-        :ast
-        st: symtab
-        unitDecl: uq2z
-        nameId: bid
-    )
-    match (
-        sh
-    ) case some then {
-        shT: symtab.reg.typetypeOf typeId: sh
-        if shT != ztypes.ztypetype.unitType then return zid
-    } case none then null
-    ud0x: ztypecheck.unitDeclOfName st: symtab nameId: bid
+    # the unit the checker resolved the base to: a declaration spelled like
+    # the unit, or a nested unit, is not it
+    ud0x: baseFileUnitDecl :symtab baseId: (dottedParentNodeId :n)
+    if ud0x.isZero then return zid
     fo: (ztypecheck.resolvedByIdsRo
         :ast
         st: symtab
@@ -12939,14 +12908,13 @@ emitUnitMethodCall: function {
 dottedMemberTidOf: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
     callableId: zast.nodeid
 } out ztypes.tid is {
-    baseId: dottedBaseAtomId :ast n: (ast.nodes.get i: callableId)
     childId: aliasChildNameId :ast :symtab n: (ast.nodes.get i: callableId)
     if childId.isZero then return ztypes.tid
-    if baseId.isZero.not when (ztypecheck.isUnitNameDecl st: symtab nameId: baseId) then {
-        ud1x: ztypecheck.unitDeclOfName st: symtab nameId: baseId
+    pb: dottedParentNodeId n: (ast.nodes.get i: callableId)
+    ud1x: baseFileUnitDecl :symtab baseId: pb
+    if ud1x.isZero.not then {
         go: (ztypecheck.resolvedByIdsRo
             :ast
             st: symtab
@@ -12960,10 +12928,7 @@ dottedMemberTidOf: function {
         } case none then null
         return ztypes.tid
     }
-    pb: zast.nodeid
-    cln: ast.nodes.get i: callableId
-    if cln.dottedpath then pb = cln.parent
-    nst: pathUnitTidOf :ast :symtab :ctx baseId: pb
+    nst: pathUnitTidOf :symtab baseId: pb
     if nst.isZero then return ztypes.tid
     co: symtab.typing.declChildOfId parentTypeId: nst nameId: childId
     match (
@@ -13001,7 +12966,7 @@ emitCrossUnitFnCall: function {
     ctx: Ctx
     call: zast.callrow.view
 } out String is {
-    fid: dottedMemberTidOf :ast :symtab :ctx callableId: call.callable
+    fid: dottedMemberTidOf :ast :symtab callableId: call.callable
     if fid.isZero then return ""
     if (symtab.reg.typetypeOf typeId: fid) != ztypes.ztypetype.functionType then return ""
     return (emitFnCallWithFid
@@ -13025,15 +12990,10 @@ emitCrossUnitBareCreate: function {
     childId: zast.nameid
 } out String is {
     if childId != zast.wellKnown.slot.wkCreate then return ""
-    pbId: dottedBaseAtomId :ast n: parent
     ptId: aliasChildNameId :ast :symtab n: parent
-    if pbId.isZero then return ""
     if ptId.isZero then return ""
-    if (ztypecheck.isUnitNameDecl
-        st: symtab
-        nameId: pbId
-    ).not then return ""
-    ud2x: ztypecheck.unitDeclOfName st: symtab nameId: pbId
+    ud2x: baseFileUnitDecl :symtab baseId: (dottedParentNodeId n: parent)
+    if ud2x.isZero then return ""
     go: (ztypecheck.resolvedByIdsRo
         :ast
         st: symtab
@@ -13073,15 +13033,13 @@ emitCrossUnitExplicitCreate: function {
 } out String is {
     armId: aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable)
     if armId != zast.wellKnown.slot.wkCreate then return ""
-    obId: outerBaseAtomId :ast n: (ast.nodes.get i: call.callable)
     pcId: dottedParentChildId :ast :symtab n: (ast.nodes.get i: call.callable)
-    if obId.isZero then return ""
     if pcId.isZero then return ""
-    if (ztypecheck.isUnitNameDecl
-        st: symtab
-        nameId: obId
-    ).not then return ""
-    ud3x: ztypecheck.unitDeclOfName st: symtab nameId: obId
+    ud3x: (baseFileUnitDecl
+        :symtab
+        baseId: (outerBaseNodeId :ast n: (ast.nodes.get i: call.callable))
+    )
+    if ud3x.isZero then return ""
     go: (ztypecheck.resolvedByIdsRo
         :ast
         st: symtab
@@ -13154,16 +13112,15 @@ emitCrossUnitExplicitCreate: function {
     return ""
 }
 
-# outerBaseAtomId -- the interned name id of the leftmost atom of a
-# LEFT-nested three-segment dotted path `(a.B).c`: `a`. 0 for shallower
-# shapes.
-outerBaseAtomId: function {ast: Ast.view n: astnode.view} out zast.nameid is {
+# outerBaseNodeId -- the node of a LEFT-nested `(a.B).c` path's outer base `a`
+# (0 otherwise).
+outerBaseNodeId: function {ast: Ast.view n: astnode.view} out zast.nodeid is {
     match (
         n
     ) case dottedpath then {
-        return (dottedBaseAtomId :ast n: (ast.nodes.get i: n.parent))
+        return (dottedParentNodeId n: (ast.nodes.get i: n.parent))
     } else {
-        return zast.nameid.zero
+        return zast.nodeid
     }
 }
 
@@ -13179,14 +13136,13 @@ emitCrossUnitSumCtor: function {
     ctx: Ctx
     call: zast.callrow.view
 } out String is {
-    obId: outerBaseAtomId :ast n: (ast.nodes.get i: call.callable)
     pcId: dottedParentChildId :ast :symtab n: (ast.nodes.get i: call.callable)
-    if obId.isZero then return ""
     if pcId.isZero then return ""
-    if (ztypecheck.isUnitNameDecl
-        st: symtab
-        nameId: obId
-    ).not then return ""
+    ud4x: (baseFileUnitDecl
+        :symtab
+        baseId: (outerBaseNodeId :ast n: (ast.nodes.get i: call.callable))
+    )
+    if ud4x.isZero then return ""
     ctorArmName: aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable)
     if ctorArmName.isZero then return ""
     if (
@@ -13195,7 +13151,6 @@ emitCrossUnitSumCtor: function {
     ) then return ""
     ctorMk: zast.markerKindOf :ast n: (ast.nodes.get i: call.callable)
     if ctorMk.borrowMarker then return ""
-    ud4x: ztypecheck.unitDeclOfName st: symtab nameId: obId
     go: (ztypecheck.resolvedByIdsRo
         :ast
         st: symtab
@@ -13277,7 +13232,7 @@ emitCrossUnitCtor: function {
     ctx: Ctx
     call: zast.callrow.view
 } out String is {
-    tid: dottedMemberTidOf :ast :symtab :ctx callableId: call.callable
+    tid: dottedMemberTidOf :ast :symtab callableId: call.callable
     if tid.isZero then return ""
     # a generic type's construction built the instance the call is stamped with
     if (symtab.reg.isGenericOf :tid) then {
@@ -13298,17 +13253,14 @@ emitCrossUnitTag: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    pbase: zast.nameid
+    # the node of the unit segment
+    pbase: zast.nodeid
     ptype: zast.nameid
     arm: zast.nameid
 } out String is {
-    if pbase.isZero or ptype.isZero or arm.isZero then return ""
-    unm: pbase
-    if (ztypecheck.isUnitNameDecl
-        st: symtab
-        nameId: unm
-    ).not then return ""
-    ud5x: ztypecheck.unitDeclOfName st: symtab nameId: unm
+    if ptype.isZero or arm.isZero then return ""
+    ud5x: baseFileUnitDecl :symtab baseId: pbase
+    if ud5x.isZero then return ""
     go: (ztypecheck.resolvedByIdsRo
         :ast
         st: symtab
@@ -16976,9 +16928,9 @@ unitFnMemberC: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     n: zast.dottedpathrow.view
-    baseNameId: zast.nameid
+    # the file unit the base resolved to
+    ud6x: ztypes.declid
 } out String is {
-    ud6x: ztypecheck.unitDeclOfName st: symtab nameId: baseNameId
     dpUfo: (ztypecheck.resolvedByIdsRo
         :ast
         st: symtab
@@ -17048,9 +17000,8 @@ nsFnMemberC: function {
 
 # emitDottedUnitRead -- a read whose BASE names a unit: another unit's constant
 # inlines its rendered C text, a unit-qualified type path constructs, and a
-# zero-argument function member of a unit or namespace auto-calls. A base naming a
-# top-level unit may ALSO name a nested unit of the one being emitted, and the
-# nested one is nearer -- it is what the checker bound.
+# zero-argument function member of a unit or namespace auto-calls. The unit is
+# the one the checker resolved the base to (pathUnitTidOf).
 emitDottedUnitRead: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -17074,40 +17025,16 @@ emitDottedUnitRead: function {
             tid: izd
         )
     } case none then null
-    dpUbId: atomNameIdOf :ast n: (ast.nodes.get i: n.parent)
-    dpIsFile: false
-    if (ztypecheck.isUnitNameDecl
-        st: symtab
-        nameId: dpUbId
-    ) then dpIsFile = true
-    # A base that names a top-level unit may ALSO name a nested unit of the
-    # unit being emitted, and the nested one is nearer -- it is what the
-    # checker bound. Deciding by the name alone let the emitter call the
-    # other unit's member, with no diagnostic anywhere.
-    if dpIsFile then {
-        dpEncl: ctx.nsTid
-        if dpEncl.isZero then dpEncl = (unitTidOf
-            :ast
-            :symtab
-            unitName: ctx.mainName.stringView
-        )
-        dpOwn: unitChildTidOf :symtab parentTid: dpEncl nameId: dpUbId
-        if dpOwn.isZero.not then dpIsFile = false
-    }
-    # a zero-argument function member reads as a dotted path, not a call,
-    # so a namespace's own needs the by-id route here too
-    dpNsTid: ztypes.tid
-    if dpIsFile.not then dpNsTid = pathUnitTidOf :ast :symtab :ctx baseId: n.parent
-    if dpIsFile when dpNsTid.isZero then {
-        ufm: (unitFnMemberC
-            :ast
-            :symtab
-            :ctx
-            :n
-            baseNameId: dpUbId
-        )
+    # the unit the checker resolved the base to: a file unit's zero-argument
+    # function member, or a namespace's own -- a zero-argument function member
+    # reads as a dotted path, not a call
+    dpFile: baseFileUnitDecl :symtab baseId: n.parent
+    if dpFile.isZero.not then {
+        ufm: unitFnMemberC :ast :symtab :ctx :n ud6x: dpFile
         if ufm.length > 0 then return ufm
+        return ""
     }
+    dpNsTid: pathUnitTidOf :symtab baseId: n.parent
     if dpNsTid.isZero.not then {
         return (nsFnMemberC :ast :symtab :ctx :n nsTid: dpNsTid)
     }
@@ -17354,7 +17281,7 @@ emitDottedConversionRead: function {
     # an arm PREDICATE on a unit's constant (`u.k.a`, `k: kind.a`) has the
     # three segments of a cross-unit tag; the checker said it tests the arm
     if (dottedArmPredicateTid :symtab nid: n.nodeid).isZero.not then return ""
-    xpb: dottedBaseAtomId :ast n: (ast.nodes.get i: n.parent)
+    xpb: dottedParentNodeId n: (ast.nodes.get i: n.parent)
     xpt: aliasChildNameId :ast :symtab n: (ast.nodes.get i: n.parent)
     xar: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
     xtag: (emitCrossUnitTag
@@ -17637,7 +17564,6 @@ emitDottedNativeMarker: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     n: zast.dottedpathrow.view
-    bn2r: StringView
 } out String is {
     mn2Id: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
     # a data block's element read (`codes.ht`, `consts.codes.ht`, `primes.0`):
@@ -17655,9 +17581,7 @@ emitDottedNativeMarker: function {
     nnu: (nativeNoArgOf
         :ast
         :symtab
-        unitName: ctx.mainName.stringView
-        baseId: (atomNameIdOf :ast n: (ast.nodes.get i: n.parent))
-        base: bn2r
+        baseId: n.parent
         membId: (aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child)
     )
     if nnu.length > 0 then {
@@ -17908,7 +17832,6 @@ emitDottedRead: function {
         :symtab
         :ctx
         :n
-        bn2r: bn2r.stringView
     )
     if dnm.length > 0 then return dnm
     mn2: aliasOrChild :ast :symtab aliasId: n.nodeid childId: n.child
@@ -20333,7 +20256,6 @@ emitCallStmt: function {
         sfnId = (stmtFormNameId
             :ast
             :symtab
-            :ctx
             n: (ast.nodes.get i: call.callable)
         )
     }
@@ -30473,82 +30395,35 @@ regNameView: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} outx Stri
 }
 
 # pathUnitTidOf -- the type id of the unit a dotted path's BASE names, or 0
-# when the base names no unit. A file unit answers from the unit-name index; a
-# nested namespace is deliberately absent from it, so it is found as a member
-# of the unit being emitted, and `outer.inner` by walking that chain by id.
-pathUnitTidOf: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
-    baseId: zast.nodeid
-} out ztypes.tid is {
+# when the base names no unit. The checker stamps a base that names a unit with
+# that unit's type, so this is the unit the checker chose -- the nearest scope,
+# a nested unit sharing a file unit's spelling -- and a value, a type or a
+# nested unit spelled like a unit is never taken for it.
+pathUnitTidOf: function {symtab: zenv.ZSymbolTable.view baseId: zast.nodeid} out ztypes.tid is {
     if baseId.isZero then return ztypes.tid
-    b: ast.nodes.get i: baseId
-    match (
-        b
-    ) case atomid then {
-        # the enclosing unit answers first -- a name written inside a namespace
-        # resolves against that namespace before anything wider, and a user
-        # unit may shadow a top-level name
-        encl: ctx.nsTid
-        if encl.isZero then encl = unitTidOf :ast :symtab unitName: ctx.mainName.stringView
-        # the nested scopes, innermost outward: a path base written inside a
-        # unit names that unit's children first, then those of each unit
-        # enclosing it -- which is how a sibling inline unit is reached.
-        pCur: ztypecheck.declOfTypeId st: symtab tid: encl
-        for pCur.isZero.not loop {
-            pFt: ztypecheck.declTypeIdOf st: symtab declId: pCur
-            if pFt.isZero.not then {
-                ph: unitChildTidOf :symtab parentTid: pFt nameId: b.name
-                if ph.isZero.not then return ph
-            }
-            pNx: ztypecheck.declParentIdOf st: symtab declId: pCur
-            pCur = ztypes.declid
-            if pNx.isZero.not when (ztypecheck.declDeclaresUnit st: symtab :ast declId: pNx
-            ) then pCur = pNx
-        }
-        ht: unitChildTidOf :symtab parentTid: encl nameId: b.name
-        if ht.isZero.not then return ht
-        uo: (ztypecheck.declTypeIdOf
-            st: symtab
-            declId: (symtab.typing.declFindChild
-                parentDeclId: symtab.typing.programRoot
-                nameId: b.name
-            )
-        )
-        if uo.isZero.not then return uo
-        return ztypes.tid
-    } case dottedpath then {
-        pt: pathUnitTidOf :ast :symtab :ctx baseId: b.parent
-        if pt.isZero then return ztypes.tid
-        cn: zast.nameid
-        ca: ast.nodes.get i: b.child
-        if ca.atomid then cn = ca.name
-        return (unitChildTidOf :symtab parentTid: pt nameId: cn)
-    } else {
-        return ztypes.tid
-    }
+    t: stampIdOf :symtab nid: baseId
+    if t.isZero then return t
+    if (symtab.reg.typetypeOf typeId: t) != ztypes.ztypetype.unitType then return ztypes.tid
+    return t
 }
 
-# unitChildTidOf -- the id of a member of `parentTid` when that member is
-# itself a UNIT, else 0. Both legs of the path walk above ask exactly this, of
-# the enclosing unit and of the segment before them.
-unitChildTidOf: function {
-    symtab: zenv.ZSymbolTable.view
-    parentTid: ztypes.tid
-    nameId: zast.nameid
-} out ztypes.tid is {
-    if nameId.isZero then return ztypes.tid
-    co: symtab.typing.declChildOfId parentTypeId: parentTid :nameId
-    match (
-        co
-    ) case some then {
-        cTypeText: co
-        if (
-            (symtab.reg.typetypeOf typeId: cTypeText) == ztypes.ztypetype.unitType
-        ) then return cTypeText
-    } case none then null
-    return ztypes.tid
+# baseFileUnitDecl -- the FILE unit (a child of the program root) the dotted
+# path base `baseId` resolved to, 0 for any other base: a nested unit, an
+# instance of a generic file unit, or a value, type or nested unit that shares
+# a file unit's spelling.
+baseFileUnitDecl: function {
+    symtab: zenv.ZSymbolTable.view baseId: zast.nodeid
+} out ztypes.declid is {
+    t: pathUnitTidOf :symtab :baseId
+    if t.isZero then return ztypes.declid.zero
+    d: ztypecheck.declOfTypeId st: symtab tid: t
+    if (ztypecheck.declParentIdOf st: symtab declId: d) != symtab.typing.programRoot then {
+        return ztypes.declid.zero
+    }
+    # an instance of a generic file unit is not the file unit: declOfTypeId
+    # answers an instance with its template's declaration
+    if (ztypecheck.declTypeIdOf st: symtab declId: d) != t then return ztypes.declid.zero
+    return d
 }
 
 # unitConstTextOf -- the rendered C text of a `unit.CONST` dotted path, or ""
@@ -30566,7 +30441,7 @@ unitConstTextOf: function {
     ca8: ast.nodes.get i: n.child
     if ca8.atomid then cn8 = ca8.name
     if cn8.isZero.not then {
-        utd8: pathUnitTidOf :ast :symtab :ctx baseId: n.parent
+        utd8: pathUnitTidOf :symtab baseId: n.parent
         if utd8.isZero.not then {
             # the VALUE is the only source: a constant is never rendered to
             # text ahead of time and re-read.
@@ -30937,41 +30812,18 @@ scanNativeNeed: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     unitName: StringView
-    baseId: zast.nameid
+    # the callee path's base node, 0 for a bare callee
+    baseId: zast.nodeid
     membId: zast.nameid
 } is {
     calleeTid: ztypes.tid
     if baseId.isZero.not when membId.isZero.not then {
-        # a qualified path names a unit only when the base IS one: a program
-        # may declare a TYPE with a runtime unit's name (a variant `io` with a
-        # `stdout` arm), and `io.stdout` there constructs an arm rather than
-        # reaching the native. Name ids are pooled program-wide, so resolving
-        # the child without this gate would find the stdlib declaration.
-        if (ztypecheck.isUnitNameDecl
-            st: symtab
-            nameId: baseId
-        ).not then return
-        # ... but a DECLARATION of that name in the scanning unit shadows it:
-        # a variant `io` with a `stdout` arm makes `io.stdout` an arm
-        # construction, and the unit probe still answers because name ids are
-        # pooled program-wide.
-        uq3z: (ztypecheck.unitDeclOfName
-            st: symtab
-            nameId: (zast.poolFind pool: ast.names text: unitName)
-        )
-        sh: (ztypecheck.resolveUnitChildRo
-            :ast
-            st: symtab
-            unitDecl: uq3z
-            nameId: baseId
-        )
-        match (
-            sh
-        ) case some then {
-            shT: symtab.reg.typetypeOf typeId: sh
-            if shT != ztypes.ztypetype.unitType then return
-        } case none then null
-        ud8x: ztypecheck.unitDeclOfName st: symtab nameId: baseId
+        # a qualified path names a unit only when the checker resolved its base
+        # to one: a TYPE or value spelled like a runtime unit (a variant `io`
+        # with a `stdout` arm) constructs or reads rather than reaching the
+        # native
+        ud8x: baseFileUnitDecl :symtab :baseId
+        if ud8x.isZero then return
         fo: (ztypecheck.resolvedByIdsRo
             :ast
             st: symtab
@@ -31027,7 +30879,7 @@ scanNeedsCall: function {
     n: zast.callrow.view
 } is {
     mn0: aliasChildName :ast :symtab n: (ast.nodes.get i: n.callable)
-    cbi0: dottedBaseAtomId :ast n: (ast.nodes.get i: n.callable)
+    cbi0: dottedParentNodeId n: (ast.nodes.get i: n.callable)
     # the member as an id, by the same rule the text followed: the dotted
     # child, or the bare atom when the callable is not a path
     cmbId: aliasChildNameId :ast :symtab n: (ast.nodes.get i: n.callable)
@@ -31085,7 +30937,7 @@ scanNeedsDotted: function {
         :symtab
         :ctx
         :unitName
-        baseId: (atomNameIdOf :ast n: (ast.nodes.get i: n.parent))
+        baseId: n.parent
         membId: (aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child)
     )
     scanNeeds :ast :symtab :ctx :unitName n: (ast.nodes.get i: n.parent)
@@ -39901,31 +39753,23 @@ emitFileMethodCall: function {
     return ""
 }
 
-# unitDeclNameId -- the name a unit is declared under, interned; 0 for no unit
-unitDeclNameId: function {symtab: zenv.ZSymbolTable.view declId: ztypes.declid} out zast.nameid is {
-    if declId.isZero then return zast.nameid.zero
-    return (symtab.typing.decls.get i: declId).name
-}
-
-# unitCreateMember -- the member name X of a `<unit>.X.create` callable, the unit
-# named by `unitName` (io's wrappers, cli's spec classes), else "".
-unitCreateMember: function {
+# unitCreateMemberId -- the member X of a `<unit>.X.create` callable whose base
+# the checker resolved to the file unit `unitDecl` (io's wrappers, cli's spec
+# classes), else 0. A nested unit, value or type spelled like the unit is not it.
+unitCreateMemberId: function {
     ast: Ast.view
-    n: astnode.view
-    unitName: zast.nameid
     symtab: zenv.ZSymbolTable.view
-} outx StringView is {
-    if n.dottedpath then {
-        ccn: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
-        if ccn == zast.wellKnown.slot.wkCreate then {
-            pb: dottedBaseAtomId :ast n: (ast.nodes.get i: n.parent)
-            if pb.isZero.not when pb == unitName then return (zast.nameTextAt
-                :ast
-                ref: (aliasChildNameId :ast :symtab n: (ast.nodes.get i: n.parent))
-            ).stringView
-        }
+    n: astnode.view
+    unitDecl: ztypes.declid
+} out zast.nameid is {
+    if unitDecl.isZero then return zast.nameid.zero
+    if (aliasChildNameId :ast :symtab :n) != zast.wellKnown.slot.wkCreate then {
+        return zast.nameid.zero
     }
-    return ""
+    if (baseFileUnitDecl :symtab baseId: (outerBaseNodeId :ast :n)) != unitDecl then {
+        return zast.nameid.zero
+    }
+    return (aliasChildNameId :ast :symtab n: (ast.nodes.get i: (dottedParentNodeId :n)))
 }
 
 # argBaseAtom / argBaseNodeId -- the base of a wrapper-create argument. The
@@ -40020,19 +39864,19 @@ emitIoWrapperCreate: function {
     ctx: Ctx
     call: zast.callrow.view
 } out String is {
-    wn: (unitCreateMember
+    wn: (unitCreateMemberId
         :ast
         :symtab
         n: (ast.nodes.get i: call.callable)
-        unitName: (unitDeclNameId :symtab declId: ctx.ioUnitDecl)
+        unitDecl: ctx.ioUnitDecl
     )
-    if wn.length == 0 then return ""
+    if wn.isZero then return ""
     # the io unit's own member: a program's type of that name is not it
     wid: ((ztypecheck.resolveUnitChildRo
         :ast
         st: symtab
         unitDecl: ctx.ioUnitDecl
-        nameId: (zast.poolFind pool: ast.names text: wn)
+        nameId: wn
     ).or
         d: ztypes.tid.zero
     )
@@ -40110,17 +39954,12 @@ emitIoWrapperCreate: function {
 nativeNoArgOf: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
-    unitName: StringView
-    baseId: zast.nameid
-    base: StringView
+    # the path's base node
+    baseId: zast.nodeid
     membId: zast.nameid
 } out String is {
-    if baseId.isZero then return ""
-    if (ztypecheck.isUnitNameDecl
-        st: symtab
-        nameId: baseId
-    ).not then return ""
-    ud14x: ztypecheck.unitDeclOfName st: symtab nameId: baseId
+    ud14x: baseFileUnitDecl :symtab :baseId
+    if ud14x.isZero then return ""
     fo: (ztypecheck.resolvedByIdsRo
         :ast
         st: symtab
@@ -40141,23 +39980,6 @@ nativeNoArgOf: function {
     pnm: ListVal zast.nameid
     recFieldIds :symtab tid: calleeTid ids: pi nameIds: pnm
     if pi.length > 0 then return ""
-    uq5z: (ztypecheck.unitDeclOfName
-        st: symtab
-        nameId: (zast.poolFind pool: ast.names text: unitName)
-    )
-    nameId95: zast.poolFind pool: ast.names text: base
-    sh: (ztypecheck.resolveUnitChildRo
-        :ast
-        st: symtab
-        unitDecl: uq5z
-        nameId: nameId95
-    )
-    match (
-        sh
-    ) case some then {
-        shT: symtab.reg.typetypeOf typeId: sh
-        if shT != ztypes.ztypetype.unitType then return ""
-    } case none then null
     duo: definedInUnitName :symtab tid: calleeTid
     if duo.length == 0 then return ""
     return duo.string
@@ -40182,13 +40004,10 @@ noArgNativeRhs: function {
             n: (ast.nodes.get i: n.statementline)
         )
     } case dottedpath then {
-        baseAtom: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.parent))
         nu: (nativeNoArgOf
             :ast
             :symtab
-            :unitName
-            baseId: (atomNameIdOf :ast n: (ast.nodes.get i: n.parent))
-            base: baseAtom.stringView
+            baseId: n.parent
             membId: (aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child)
         )
         return nu.length > 0
@@ -40420,18 +40239,14 @@ emitCliSpecCreate: function {
     ctx: Ctx
     call: zast.callrow.view
 } out String is {
-    cn: (unitCreateMember
+    cn: (unitCreateMemberId
         :ast
         :symtab
         n: (ast.nodes.get i: call.callable)
-        unitName: (unitDeclNameId :symtab declId: ctx.cliUnitDecl)
+        unitDecl: ctx.cliUnitDecl
     )
-    if cn.length == 0 then return ""
-    cid: (cliClassTypeId
-        :symtab
-        :ctx
-        nameId: (zast.poolFind pool: ast.names text: cn)
-    )
+    if cn.isZero then return ""
+    cid: cliClassTypeId :symtab :ctx nameId: cn
     if cid.isZero then return ""
     cco: (symtab.typing.declChildOfId
         parentTypeId: cid
@@ -40444,11 +40259,10 @@ emitCliSpecCreate: function {
         crid = cco
     } case none then null
     if crid.isZero then return ""
-    # the class name reached here through a SOURCE-TEXT match on `cli.X.create`
-    # and a lookup of X in whichever unit is spelled `cli` -- a user unit can
-    # win that. Ask the resolved `create` its own declaration instead: the
-    # stdlib's is `is native`, a fragment supplies the body, and the parameters
-    # laid out below are its. A user's bodied create is not that one.
+    # a project unit can replace `cli` (a user unit shadows the stdlib), so ask
+    # the resolved `create` its own declaration: the stdlib's is `is native`,
+    # a fragment supplies the body, and the parameters laid out below are its.
+    # A user's bodied create is not that one.
     if (fnIsNativeId :symtab fid: crid).not then return ""
     pnames: List String
     pids: ListVal ztypes.tid
