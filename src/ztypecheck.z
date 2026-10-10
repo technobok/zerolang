@@ -2150,103 +2150,60 @@ isLabelValue: function {op: astnode.view} out bool is {
     }
 }
 
-# anyKidMentionsName -- whether any node in `span` mentions `name`.
-anyKidMentionsName: function {ast: Ast.view span: zast.kidspan name: StringView} out bool is {
+# collectMentions -- every bare name a subtree references (atom reads, call
+# callables and arguments, dotted bases), added to `into` by id. One walk
+# answers what each member's name would otherwise rescan the body for: the
+# conformer-context gate asks it of `main`'s body once per unit, not once per
+# member.
+collectMentions: function {ast: Ast.view n: astnode.view into: (IdSet zast.nameid).borrow} is {
+    match (
+        n
+    ) case atomid then {
+        into.add item: n.name
+    } case dottedpath then {
+        collectMentions :ast n: (ast.nodes.get i: n.parent) :into
+    } case call then {
+        collectMentions :ast n: (ast.nodes.get i: n.callable) :into
+        i: u64
+        for i < n.arguments.count loop {
+            arg: ast.nodes.get i: (zast.kidAt kids: ast.kids span: n.arguments :i)
+            i = i + 1
+            if arg.namedoperation then {
+                collectMentions :ast n: (ast.nodes.get i: arg.operation) :into
+            }
+        }
+    } case statement then {
+        collectMentionsIn :ast span: n.statements :into
+    } case statementline then {
+        collectMentions :ast n: (ast.nodes.get i: n.statementline) :into
+    } case assignment then {
+        collectMentions :ast n: (ast.nodes.get i: n.value) :into
+    } case reassignment then {
+        collectMentions :ast n: (ast.nodes.get i: n.value) :into
+    } case caseexpr then {
+        collectMentions :ast n: (ast.nodes.get i: n.subject) :into
+        collectMentionsIn :ast span: n.clauses :into
+    } case caseclause then {
+        collectMentions :ast n: (ast.nodes.get i: n.statement) :into
+    } case ifexpr then {
+        collectMentionsIn :ast span: n.clauses :into
+    } case forexpr then {
+        if n.body.isZero.not then collectMentions :ast n: (ast.nodes.get i: n.body) :into
+    } case withexpr then {
+        collectMentions :ast n: (ast.nodes.get i: n.value) :into
+        collectMentions :ast n: (ast.nodes.get i: n.body) :into
+    } case doexpr then {
+        collectMentions :ast n: (ast.nodes.get i: n.statement) :into
+    } else null
+}
+
+# collectMentionsIn -- collectMentions over every node in `span`.
+collectMentionsIn: function {ast: Ast.view span: zast.kidspan into: (IdSet zast.nameid).borrow} is {
     i: u64
     for i < span.count loop {
         kid: zast.kidAt kids: ast.kids :span :i
         i = i + 1
-        if (nodeMentionsName :ast n: (ast.nodes.get i: kid) :name) then return true
-    }
-    return false
-}
-
-# anyArgMentionsName -- whether any named argument's value in `span` mentions
-# `name`.
-anyArgMentionsName: function {ast: Ast.view span: zast.kidspan name: StringView} out bool is {
-    i: u64
-    for i < span.count loop {
-        argId: zast.kidAt kids: ast.kids :span :i
-        i = i + 1
-        arg: ast.nodes.get i: argId
-        if arg.namedoperation when (nodeMentionsName
-            :ast
-            n: (ast.nodes.get i: arg.operation)
-            :name
-        ) then return true
-    }
-    return false
-}
-
-# nodeMentionsName -- whether a subtree references a bare name (atom reads,
-# call callables, dotted bases). Drives the conformer-context gate: the
-# reference's lazy resolution only reaches a conformer the main body names.
-nodeMentionsName: function {ast: Ast.view n: astnode.view name: StringView} out bool is {
-    match (
-        n
-    ) case atomid then {
-        return (zast.nameTextEq :ast ref: n.name s: name)
-    } case dottedpath then {
-        return (nodeMentionsName :ast n: (ast.nodes.get i: n.parent) :name)
-    } case call then {
-        return (
-            (nodeMentionsName :ast n: (ast.nodes.get i: n.callable) :name) or
-            (anyArgMentionsName :ast span: n.arguments :name)
-        )
-    } case statement then {
-        return (anyKidMentionsName :ast span: n.statements :name)
-    } case statementline then {
-        sln: ast.nodes.get i: n.statementline
-        return (nodeMentionsName :ast n: sln :name)
-    } case assignment then {
-        return (nodeMentionsName :ast n: (ast.nodes.get i: n.value) :name)
-    } case reassignment then {
-        return (nodeMentionsName :ast n: (ast.nodes.get i: n.value) :name)
-    } case caseexpr then {
-        return (
-            (nodeMentionsName :ast n: (ast.nodes.get i: n.subject) :name) or
-            (anyKidMentionsName
-                :ast
-                span: n.clauses
-                :name
-            )
-        )
-    } case caseclause then {
-        return (nodeMentionsName :ast n: (ast.nodes.get i: n.statement) :name)
-    } case ifexpr then {
-        return (anyKidMentionsName :ast span: n.clauses :name)
-    } case forexpr then {
-        return (nodeMentionsNameOptAt :ast oId: n.body :name)
-    } case withexpr then {
-        return (
-            (nodeMentionsName :ast n: (ast.nodes.get i: n.value) :name) or
-            (nodeMentionsName
-                :ast
-                n: (ast.nodes.get i: n.body)
-                :name
-            )
-        )
-    } case doexpr then {
-        return (nodeMentionsName :ast n: (ast.nodes.get i: n.statement) :name)
-    } else {
-        return false
-    }
-}
-
-# nodeMentionsNameOptAt -- nodeMentionsName over a table id (0 = absent).
-nodeMentionsNameOptAt: function {ast: Ast.view oId: zast.nodeid name: StringView} out bool is {
-    if oId.isZero then return false
-    return (nodeMentionsName :ast n: (ast.nodes.get i: oId) :name)
-}
-
-# fnBodyMentions -- nodeMentionsName over a function definition's body.
-fnBodyMentions: function {ast: Ast.view op: astnode.view name: StringView} out bool is {
-    match (
-        op
-    ) case functiondef then {
-        return (nodeMentionsNameOptAt :ast oId: op.body :name)
-    } else {
-        return false
+        collectMentions :ast n: (ast.nodes.get i: kid) :into
     }
 }
 
@@ -2257,11 +2214,10 @@ recordConformerContexts: function {
     ast: Ast.view
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
-    defName: StringView
+    dk0: zast.nameid
     op: astnode.view
 } is {
     if op.objectdef then {
-        dk0: zast.poolFind pool: ast.names text: defName
         asx1619: u64
         for asx1619 < op.asItems.count loop {
             amId: zast.kidAt kids: ast.kids span: op.asItems i: asx1619
@@ -11651,6 +11607,9 @@ synthRecordMembers: function {
 checkTypedefShape: function {st: zenv.ZSymbolTable ast: Ast.view onode: objref} is {
     bn: objectTypedefBaseNode :ast :onode
     if bn.isZero then return
+    # the names the base reads, collected once for every parameter to ask
+    baseNames: IdSet zast.nameid
+    collectMentions :ast n: (ast.nodes.get i: bn) into: baseNames
     kAiter: u64
     for kAiter < onode.nas loop {
         amId: zast.objAsItemAt :ast nid: onode.nid i: kAiter
@@ -11672,11 +11631,7 @@ checkTypedefShape: function {st: zenv.ZSymbolTable ast: Ast.view onode: objref} 
                 width: 6
             )
         }
-        if (isGenericParam :ast op: amOp) when (nodeMentionsName
-            :ast
-            n: (ast.nodes.get i: bn)
-            name: nm.stringView
-        ).not then {
+        if (isGenericParam :ast op: amOp) when (baseNames.has item: am.name).not then {
             (addErrorH
                 :st
                 nodeid: am.nid
@@ -17004,21 +16959,6 @@ recordUnitConformerContexts: function {
     unitdefId: zast.nodeid
 } is {
     bodyIds: zast.unitBodyIdsAt :ast unitId: unitdefId
-    # collect member names first -- the body list cannot be passed while its
-    # iterator is live.
-    ccNames: List String
-    vx69: u64
-    for vx69 < bodyIds.count loop {
-        cmmId: zast.kidAt kids: ast.kids span: bodyIds i: vx69
-        vx69 = vx69 + 1
-        cmm: ast.nodes.get i: cmmId
-        ccn0: String
-        if cmm.namedoperation then {
-            ccn1: zast.nameTextCopy :ast ref: cmm.name
-            ccn0 = ccn1.take
-        }
-        ccNames.append ccn0
-    }
     mainOp: zast.nodeid
     vx79: u64
     for vx79 < bodyIds.count loop {
@@ -17032,30 +16972,34 @@ recordUnitConformerContexts: function {
         }
     }
     if mainOp.isZero then return
+    # the names main's body reads, collected once for every member to ask
+    mentioned: IdSet zast.nameid
+    mainFn: ast.nodes.get i: mainOp
+    match (
+        mainFn
+    ) case functiondef then {
+        if mainFn.body.isZero.not then (collectMentions
+            :ast
+            n: (ast.nodes.get i: mainFn.body)
+            into: mentioned
+        )
+    } else null
     uid: unitNameIdOf :st :unitDecl
     cci: u64
-    ccTotal: ccNames.length
-    for cci < ccTotal loop {
-        cnm2: ccNames.get i: cci
-        if cnm2.length > 0 when (fnBodyMentions
-            :ast
-            op: (ast.nodes.get i: mainOp)
-            name: cnm2.stringView
-        ) then {
-            mem2Id: zast.kidAt kids: ast.kids span: bodyIds i: cci
-            mem2: ast.nodes.get i: mem2Id
-            if mem2.namedoperation then {
-                unitDecl94: unitDeclOfName :st nameId: uid
-                (recordConformerContexts
-                    :st
-                    :ast
-                    unitDecl: unitDecl94
-                    defName: cnm2.stringView
-                    op: (ast.nodes.get i: mem2.operation)
-                )
-            }
-        }
+    for cci < bodyIds.count loop {
+        mem2Id: zast.kidAt kids: ast.kids span: bodyIds i: cci
         cci = cci + 1
+        mem2: ast.nodes.get i: mem2Id
+        if mem2.namedoperation when (mentioned.has item: mem2.name) then {
+            unitDecl94: unitDeclOfName :st nameId: uid
+            (recordConformerContexts
+                :st
+                :ast
+                unitDecl: unitDecl94
+                dk0: mem2.name
+                op: (ast.nodes.get i: mem2.operation)
+            )
+        }
     }
 }
 
