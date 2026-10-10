@@ -2496,7 +2496,7 @@ perf: $(PERFBIN)
 # -10,832 the emitter names arms and members by id (memberCNamed, tagConstNamed,
 # variantArms and the space-joined exclusion text gone): -9,726 behaviour,
 # -1,106 source (ab.sh).
-ALLOC_BASELINE := 2164324
+ALLOC_BASELINE := 2164850
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -3359,11 +3359,18 @@ fwd-shape-guard: bin/zc
 # ones are wrong and `--eager` checks every definition and refuses them.
 # user_never_not_demanded is the same by design: it pins that a loop demands the
 # SYSTEM's `never`, never a user's, so its unused user `never` is wrong.
-EAGER_KNOWN := unused_definition_not_demanded unused_method_not_demanded generic_member_not_demanded generic_unit_member_not_demanded user_never_not_demanded
+# user_unit_public_instance_lazy, user_unit_public_reexport_lazy and
+# user_unit_namespace_lazy are the same for another unit's definitions: what the
+# program never reaches through a unit's public names is never checked.
+EAGER_KNOWN := unused_definition_not_demanded unused_method_not_demanded generic_member_not_demanded generic_unit_member_not_demanded user_never_not_demanded user_unit_public_instance_lazy user_unit_public_reexport_lazy user_unit_namespace_lazy
 
+# The user_units run cases are programs over SEVERAL units, where the order the
+# units resolve in is an input: a signature naming another unit's instance type
+# resolves before that unit's own instantiations under `--eager` alone.
 eager-guard: bin/zc
 	@d=$$(mktemp -d); bad=""; \
-	for f in examples/*.z tests/fixtures/emitc_corpus/*.z; do \
+	uu=$$(awk '$$2 == "tests/fixtures/user_units" { print $$2 "/" $$1 ".z" }' tests/fixtures/run_cases.txt); \
+	for f in examples/*.z tests/fixtures/emitc_corpus/*.z $$uu; do \
 	  b=$$(basename $$f .z); em=$$d/$$b.c; \
 	  if ! bin/zc emit $$f --eager -o $$em >/dev/null 2>&1; then \
 	    bad="$$bad $$b"; continue; \
@@ -3391,7 +3398,7 @@ eager-guard: bin/zc
 	  echo "  Delete the row from EAGER_KNOWN in the same commit that fixed it."; \
 	  exit 1; \
 	fi; \
-	echo "eager-guard OK: examples + corpus emit AND compile under --eager ($(words $(EAGER_KNOWN)) known)"
+	echo "eager-guard OK: examples + corpus + user units emit AND compile under --eager ($(words $(EAGER_KNOWN)) known)"
 
 # EAGER_LIB_KNOWN -- the library / compiler units still bad under `--eager`.
 # Empty, and a name added here needs the cause written beside it. Movement in

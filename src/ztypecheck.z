@@ -3675,7 +3675,8 @@ typeApplicationTemplate: function {
 
 # monoRefTemplateTid -- the template a mono type-reference names: a name the
 # CURRENT unit defines wins even when not yet declared, then the ladder, then
-# the defining unit. 0 when none is found.
+# the defining unit, then a generic file unit of that name. 0 when none is
+# found.
 monoRefTemplateTid: function {
     st: zenv.ZSymbolTable
     scope: ztypes.declid
@@ -3709,6 +3710,12 @@ monoRefTemplateTidById: function {
         unitDecl: tduo
         :nameId
     )
+    if tplId.isZero then {
+        fud: st.typing.declFindChild parentDeclId: st.typing.programRoot :nameId
+        if fud.isZero.not when (declIsGenericFileUnit :st :ast declId: fud) then {
+            tplId = declTypeIdOf :st declId: fud
+        }
+    }
     return tplId
 }
 
@@ -5352,7 +5359,9 @@ paramArgOf: function {
 }
 
 # unitInstanceKeys -- an instance's arguments in the template's parameter order;
-# false when one is missing or is a generic parameter (a template walk).
+# false when one is missing or is a generic parameter (a template walk), or
+# when the template has no parameters registered: no arguments would find the
+# trie's root, the template itself.
 unitInstanceKeys: function {
     st: zenv.ZSymbolTable.view
     tdecl: ztypes.declid
@@ -5360,7 +5369,9 @@ unitInstanceKeys: function {
     valSubs: (IdMapV zast.nameid v: u64).view
     args: ListVal ztypes.genericarg
 } out bool is {
-    for each pnm: (st.reg.genericParamNamesOf :tdecl) loop {
+    pn: st.reg.genericParamNamesOf :tdecl
+    if pn.length == 0 then return false
+    for each pnm: pn loop {
         a: paramArgOf :st :tdecl :pnm :subs :valSubs
         if a.none then return false
         match (
@@ -5465,7 +5476,7 @@ ensureUnitMonoBuilt: function {
         :st
         :scope
         :ast
-        tmplUnitName: (unitDeclOfTid :st tid: tplId)
+        tmplUnitName: (unitRootOfDecl :st declId: tdecl)
         tmplNameId: tname
         :monoId
         :tplId
@@ -16771,11 +16782,15 @@ resolveDef: function {
         declId: resolvedDecl
     )
     # a definition that declares a unit -- an inline namespace, a hidden
-    # subunit -- resolves as the namespace it is, which the demand path does.
-    # The dispatch below has no leg for one, and its defined mark left the unit
-    # typeless for good: the demand path then skipped it as done. A constant
-    # fold reaching `impl.Foo` through the descent got here first.
-    if resolvedDecl.isZero.not when (zast.unitOpDeclaresUnit :ast opId: defnId) then {
+    # subunit, a template -- resolves as the unit it is, which the demand path
+    # does. The dispatch below has no leg for one, and its defined mark left the
+    # unit typeless for good: the demand path then skipped it as done. A
+    # constant fold reaching `impl.Foo` or `lib.ic` through the descent gets
+    # here first.
+    if resolvedDecl.isZero.not when (
+        (zast.unitOpDeclaresUnit :ast opId: defnId) or
+        (zast.unitOpKindIs :ast opId: defnId k: zast.unitkind.template)
+    ) then {
         resolveDemandedDecl :st :scope :ast declId: resolvedDecl
         return
     }
@@ -17070,6 +17085,11 @@ registerUnitRoots: function {st: zenv.ZSymbolTable program: Ast.view} is {
                 } else {
                     seenUnits.add item: nmRef
                     uid: st.reg.newType name: nmNode.stringView typetype: ztypes.ztypetype.unitType
+                    # a file unit whose body declares a generic parameter is a
+                    # template, as a nested `unit as` is
+                    if (unitDefIsGeneric ast: program oId: opId) then {
+                        st.reg.setGeneric typeId: uid value: true
+                    }
                     opid: unitdefNodeId ast: program nId: opId
                     st.typing.unitTypesById.set key: opid value: uid
                 }
@@ -17218,6 +17238,22 @@ registerAndResolveMain: function {
         # like zlexer/zast/zvfs), so cross-unit type refs resolve to the dep's
         # own type and the dep's type/fn def nodes get stamped for emission.
         muN0: program.units.length
+        # every unit's own generic parameters, before any body resolves: an
+        # eagerly-resolved unit can instantiate a unit later in the order
+        gpI: u64
+        for gpI < muN0 loop {
+            gpU: program.nodes.get i: (program.units.get i: gpI)
+            gpI = gpI + 1
+            if gpU.namedoperation when gpU.operation.isZero.not then {
+                (registerUnitGenericParams
+                    :st
+                    :scope
+                    ast: program
+                    unitDecl: (unitDeclOfNameOrOwn :st :scope nameId: gpU.name)
+                    unitdefId: gpU.operation
+                )
+            }
+        }
         muI0: u64
         for muI0 < muN0 loop {
             muId: program.units.get i: muI0
@@ -17230,18 +17266,6 @@ registerAndResolveMain: function {
                 nmId = mu.name
             }
             if opId.isZero.not then {
-                # a unit's own generic parameters are a property of its
-                # DECLARATION, not of whether its body is walked eagerly. Kept
-                # at this point in the unit order so an eagerly-resolved unit
-                # mints them exactly when it did before.
-                unitDecl95: unitDeclOfNameOrOwn :st :scope nameId: nmId
-                (registerUnitGenericParams
-                    :st
-                    :scope
-                    ast: program
-                    unitDecl: unitDecl95
-                    unitdefId: opId
-                )
                 # what a unit's own `main` names about its conformers is a
                 # property of its declarations too, recorded for every unit:
                 # only the main unit's body is eagerly resolved.
