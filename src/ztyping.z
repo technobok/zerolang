@@ -315,6 +315,15 @@ armkey: record {
     name: zast.nameid
 }
 
+# instcopy -- a generic unit instance and one of its template's members: the
+# key of the copy the instance holds of that member.
+instcopy: record {
+    # the instance
+    mono: ztypes.tid
+    # the template's member it holds a copy of
+    member: ztypes.tid
+}
+
 # monostamp -- which node of which monomorphisation. One template node carries
 # a different answer per instance, so the instance id is part of the key.
 monostamp: record {
@@ -1374,6 +1383,10 @@ ZTyping: class {
     # the rest of the run. Keyed by (parent, name), last write wins, a handful
     # of entries.
     pendWrites: ListVal pendwrite
+    # each generic unit instance's copies of its template's members -- a type,
+    # an alias, a data block, a nested unit, a function -- recorded where
+    # buildUnitMono mints them, and read by instanceCopyOf
+    unitMemberCopies: (MapVV instcopy v: ztypes.tid)
     # the parents pendWrites holds a row for: a member read of any other type,
     # which is nearly every read, answers without scanning the rows
     pendParents: IdSet ztypes.tid
@@ -1752,6 +1765,24 @@ ZTyping: class {
             } case none then null
             if seen.not then this.declByTypeId.set key: typeId value: declId
         }
+    }
+
+    # unitMemberCopySet -- record `copy` as the instance `mono`'s copy of its
+    # template's `member`. The first record of a pair stands.
+    unitMemberCopySet: function {:this mono: ztypes.tid member: ztypes.tid copy: ztypes.tid} is {
+        k: instcopy :mono :member
+        # a key with no instance or no member names no copy
+        if k.mono.isZero or k.member.isZero then return
+        if (this.unitMemberCopies.has key: k) then return
+        this.unitMemberCopies.set key: k value: copy
+    }
+
+    # unitMemberCopyAt -- the instance `mono`'s copy of its template's `member`; 0
+    # when it holds none.
+    unitMemberCopyAt: function {
+        t: this.view mono: ztypes.tid member: ztypes.tid
+    } out ztypes.tid is {
+        return ((t.unitMemberCopies.get key: (instcopy :mono :member)).or d: ztypes.tid.zero)
     }
 
     # declPendWrite -- hold a member-type write whose owner has no declaration
@@ -3307,6 +3338,7 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         typerefPassRan: false
         typerefRetry: ListVal zast.nodeid
         pendWrites: ListVal pendwrite
+        unitMemberCopies: (MapVV instcopy v: ztypes.tid)
         pendParents: IdSet ztypes.tid
         errors: List zast.ErrorData
         currentReturnTypeId: ztypes.tid

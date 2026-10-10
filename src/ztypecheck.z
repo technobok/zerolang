@@ -45,6 +45,7 @@ public: unit {
     :bareNameReaches
     :unitdefNodeId
     :stdTidPeek
+    :instanceCopyOf
     :dataFieldIds
     :isNullTid
     :dataFieldNames
@@ -19406,24 +19407,22 @@ unitMonoTypeOf: function {
     k: unitTemplateKeyOf :st :tdecl :tid
     if k.isZero.not then return ((subs.get key: k).or d: r)
     # a type an enclosing generic unit declares is that unit's instance's copy
-    return (ownerInstanceCopyOf :st :monoId tid: r)
+    return (instanceCopyOf :st mono: (st.reg.ownerTidOf tid: monoId) tid: r)
 }
 
-# ownerInstanceCopyOf -- `tid` as the instances owning `monoId` see it: the copy
-# whose generic origin it is, among the members of the nearest owner that has
-# one; `tid` itself when none does.
-ownerInstanceCopyOf: function {
-    st: zenv.ZSymbolTable.view monoId: ztypes.tid tid: ztypes.tid
+# instanceCopyOf -- `tid`, a member of a generic unit template, as the instance
+# `mono` sees it: the copy `mono` holds, else the copy the nearest instance
+# owning it holds -- a nested unit's instance reads its enclosing instance's
+# members. The walk stops at the first owner that is no instance; `tid` itself
+# when none on the way holds a copy. The copies are recorded where buildUnitMono
+# mints them (recordUnitMemberCopy).
+instanceCopyOf: function {
+    st: zenv.ZSymbolTable.view mono: ztypes.tid tid: ztypes.tid
 } out ztypes.tid is {
-    own: st.reg.ownerTidOf tid: monoId
+    own: mono
     for own.isZero.not and (st.reg.genericOriginOf tid: own).isZero.not loop {
-        ri: u64
-        rn: st.typing.declRowSlots ownerTid: own
-        for ri < rn loop {
-            rw: st.typing.declRowAt ownerTid: own membersOnly: false slot: ri
-            ri = ri + 1
-            if rw.keep when (st.reg.genericOriginOf tid: rw.tid) == tid then return rw.tid
-        }
+        cp: st.typing.unitMemberCopyAt mono: own member: tid
+        if cp.isZero.not then return cp
         own = st.reg.ownerTidOf tid: own
     }
     return tid
@@ -19632,6 +19631,7 @@ buildUnitMonoMember: function {
             nameId: fmNode.name
             childTypeId: newFnId
         )
+        recordUnitMemberCopy :st :monoId :tplId nameId: fmNode.name copy: newFnId
         if srcId.isZero.not then {
             (fillMonoMethodSignature
                 :st
@@ -19688,6 +19688,7 @@ mintUnitNestedInstances: function {
     rf: ztypes.declid
     tmplUnitName: ztypes.declid
     monoId: ztypes.tid
+    tplId: ztypes.tid
     bodyIds: zast.kidspan
     allSubs: (IdMapV zast.nameid v: ztypes.tid)
 } is {
@@ -19710,6 +19711,7 @@ mintUnitNestedInstances: function {
                 st.typing.setMemberType parentTypeId: monoId nameId: nm.name childTypeId: inst
                 allSubs.set key: nm.name value: inst
                 copies.set key: (st.reg.genericOriginOf tid: inst) value: inst
+                recordUnitMemberCopy :st :monoId :tplId nameId: nm.name copy: inst
             }
         }
     }
@@ -19758,6 +19760,7 @@ mintUnitAliasInstances: function {
         )
         st.typing.setMemberType parentTypeId: monoId nameId: nm.name childTypeId: inst
         allSubs.set key: nm.name value: inst
+        recordUnitMemberCopy :st :monoId :tplId nameId: nm.name copy: inst
     }
 }
 
@@ -19820,6 +19823,7 @@ mintUnitDataInstances: function {
             kind: ztyping.declkind.dataDecl
         )
         st.typing.setMemberType parentTypeId: monoId nameId: nm.name childTypeId: did
+        recordUnitMemberCopy :st :monoId :tplId nameId: nm.name copy: did
     }
 }
 
@@ -19884,7 +19888,28 @@ mintUnitNamespaceInstances: function {
             kind: ztyping.declkind.unitDecl
         )
         st.typing.setMemberType parentTypeId: monoId nameId: nm.name childTypeId: inst
+        recordUnitMemberCopy :st :monoId :tplId nameId: nm.name copy: inst
     }
+}
+
+# recordUnitMemberCopy -- `copy` is the instance `monoId`'s own member `nameId`:
+# record it against both things it is a copy of -- its generic origin (a type,
+# an alias's target, a data block, a nested unit), and the template's member of
+# that name, which is what a bare name read in the template resolves to (a
+# function copy carries no origin at all).
+recordUnitMemberCopy: function {
+    st: zenv.ZSymbolTable
+    monoId: ztypes.tid
+    tplId: ztypes.tid
+    nameId: zast.nameid
+    copy: ztypes.tid
+} is {
+    st.typing.unitMemberCopySet mono: monoId member: (st.reg.genericOriginOf tid: copy) :copy
+    (st.typing.unitMemberCopySet
+        mono: monoId
+        member: ((st.typing.declChildOfId parentTypeId: tplId :nameId).or d: ztypes.tid.zero)
+        :copy
+    )
 }
 
 # retargetNestedSignatures -- a copy's methods, cloned before its siblings
@@ -20011,7 +20036,7 @@ buildUnitMono: function {
     allSubs: IdMapV zast.nameid v: ztypes.tid
     for each se: subs.iterateItems loop allSubs.set key: se.key value: se.value
     {
-        mintUnitNestedInstances :st :ast :rf :tmplUnitName :monoId :bodyIds :allSubs
+        mintUnitNestedInstances :st :ast :rf :tmplUnitName :monoId :tplId :bodyIds :allSubs
         mintUnitAliasInstances :st :ast :rf :monoId :tplId :bodyIds :allSubs
         mintUnitDataInstances :st :ast :rf :tmplUnitName :monoId :tplId :bodyIds :allSubs
         mintUnitNamespaceInstances :st :ast :rf :monoId :tplId :bodyIds :allSubs
@@ -45080,29 +45105,6 @@ walkOwnerMono: function {st: zenv.ZSymbolTable.view} out ztypes.tid is {
     return own
 }
 
-# monoMemberOf -- inside a unit mono's instance walk (walkOwnerMono), the mono's
-# own member -- or an owning mono's -- for a bare callee that resolved to the
-# TEMPLATE's method of that name; any other id passes through unchanged.
-monoMemberOf: function {
-    st: zenv.ZSymbolTable.view
-    templateFnTid: ztypes.tid
-    nameId: zast.nameid
-} out ztypes.tid is {
-    # the walked instance, then each instance owning it: a nested unit's
-    # function calls its enclosing unit's functions as that instance's
-    owner: walkOwnerMono :st
-    for owner.isZero.not loop {
-        org: st.reg.genericOriginOf tid: owner
-        if org.isZero then return templateFnTid
-        tm: (st.typing.declChildOfId parentTypeId: org :nameId).or d: ztypes.tid.zero
-        if tm == templateFnTid then {
-            return ((st.typing.declChildOfId parentTypeId: owner :nameId).or d: templateFnTid)
-        }
-        owner = st.reg.ownerTidOf tid: owner
-    }
-    return templateFnTid
-}
-
 # yieldIsInScope -- `yield` here names the binding a generator body's scope
 # defines, and not a user name that happens to be spelled that way. The name is
 # looked up like any other; wearing the control placeholder -- the same
@@ -48225,11 +48227,10 @@ bareCalleeKind: function {
     # member is the MONO's member: the same definition with the argument
     # substitution applied to its parameters and return
     if funcId.isZero.not when st.typing.curMonoStamp.isZero.not then {
-        funcId = (monoMemberOf
-            :st
-            templateFnTid: funcId
-            nameId: cnId
-        )
+        # the walked instance's copy, or the copy of an instance owning it: a
+        # nested unit's function calls its enclosing unit's functions as that
+        # instance's
+        funcId = instanceCopyOf :st mono: (walkOwnerMono :st) tid: funcId
         # used on the instance whose member it is: the walked one, or an
         # instance owning it
         usedOn: st.reg.ownerTidOf tid: funcId
