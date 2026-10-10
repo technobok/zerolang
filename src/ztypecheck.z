@@ -21,6 +21,7 @@
 # Public interface -- the definitions other units may reference; all
 # other top-level definitions are private to this unit.
 public: unit {
+    :generatorCallOf
     :stringLitIsPlain
     :constBigOf
     :constIntText
@@ -4078,10 +4079,8 @@ mintMonoRefParts: function {
         ).not then {
             return tplId
         }
-        # generator wrapper collapse: the synth `.call` return's Option over a
-        # VALTYPE element is optionval (ownership is a physical no-op there);
-        # a REFTYPE element is Option (the yielded value is owned — it must
-        # outlive the `.call`, so the payload lives in a malloc'd box).
+        # the synth `.call` return's wrapper is the one its element takes
+        # (generatorWrapperOf)
         tn: tname.copy
         gwv: (st.typing.generatorWrapper.get key: nid).or d: false
         if gwv when firstA.isZero.not then {
@@ -4105,31 +4104,8 @@ mintMonoRefParts: function {
                     msg: "a generator cannot yield a reference: its `call` hands back an OWNED element, so the return is `out T` and each yield is an owned value (`.copy` what the generator captured)"
                 )
             }
-            if (typeIsValtype :st tid: firstA) then {
-                ovd: (descendNamed
-                    :st
-                    :scope
-                    :ast
-                    unitDecl: st.typing.systemUnitRoot
-                    name: "optionval"
-                )
-                if ovd.isZero.not then {
-                    tplId = ovd
-                    tn = "optionval"
-                }
-            } else {
-                obd: (descendNamed
-                    :st
-                    :scope
-                    :ast
-                    unitDecl: st.typing.systemUnitRoot
-                    name: "Option"
-                )
-                if obd.isZero.not then {
-                    tplId = obd
-                    tn = "Option"
-                }
-            }
+            gwt: generatorWrapperOf :st :ast :scope elem: firstA
+            if gwt.isZero.not then tplId = gwt
         }
         mainName: st.typing.mainUnitRoot
         uat: unitAppliedTypeRef :st :scope :ast :tplId :typeSubs :valSubsR :tn :sfx :nid
@@ -5928,12 +5904,16 @@ demandReturnType: function {
 # typeHasNonOwnedField -- the type declares at least one field the instance does
 # NOT own: a `borrow`/`view` slot, i.e. a reference into something else. Such an
 # instance is only sound while whatever it points at outlives it.
-typeHasNonOwnedField: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
+typeHasNonOwnedField: function {
+    st: zenv.ZSymbolTable.view ast: Ast.view tid: ztypes.tid
+} out bool is {
     if tid.isZero then return false
     # a generator's per-call slots are non-owned fields its generated `create`
-    # never sets: the lowering declares that create honestly, so the instance
-    # is not asked
-    if (st.typing.generatorTypes.has item: tid) then return false
+    # never sets: the lowering declares that create honestly, so neither the
+    # generator nor an instance of a generic one is asked
+    gdef: st.reg.genericOriginOf :tid
+    if gdef.isZero then gdef = tid
+    if (definedAsGenerator :st :ast tid: gdef) then return false
     i: u64
     n: st.typing.declRowSlots ownerTid: tid
     found: false
@@ -6066,7 +6046,7 @@ checkPinHonesty: function {
     if go.isZero.not then probe = go
     # a valtype holds no reference
     if (typeIsReftype :st tid: probe).not then return
-    if (typeHasNonOwnedField :st tid: probe).not then return
+    if (typeHasNonOwnedField :st :ast tid: probe).not then return
     (addResolveErrorH
         :st
         nodeid: fnode.nid
@@ -8329,11 +8309,6 @@ attachMethods: function {
     # (mintMono reads a member list), so a template's signatures resolve eagerly
     agen: methodsAreTemplate :st :ast :objId :parentId
     orf: objRefAt :ast nid: objId
-    # a generator instance carries per-call slots no constructor sets; the
-    # honesty rule on owned returns reads this set to leave them alone
-    if orf.kind == zast.objectkind.generatorDef then (st.typing.generatorTypes.add
-        item: parentId
-    )
     kAiter: u64
     for kAiter < orf.nas loop {
         amId: zast.objAsItemAt :ast nid: objId i: kAiter
@@ -21382,13 +21357,18 @@ cloneMethodReturn: function {
             if rtn5.stringView == templateName then rt5 = specId
         }
         rdo5: idTypeSubOf :idSubs key: rto5
+        gw5: generatorCallWrap :st :ast :unitDecl :scope :tplFnId wrap: rto5 :idSubs
         match (
             rdo5
         ) case some then {
             rt5 = rdo5
         } case none then {
-            rr5: respecialize :st :scope :ast :unitDecl specTid: rto5 :idSubs
-            if rr5.isZero.not then rt5 = rr5
+            if gw5.isZero.not then {
+                rt5 = gw5
+            } else {
+                rr5: respecialize :st :scope :ast :unitDecl specTid: rto5 :idSubs
+                if rr5.isZero.not then rt5 = rr5
+            }
         }
         # a return still GENERIC_PARAM-typed stays unset -- a partial the subs
         # could not complete (multi-param chains mint with empty subs) OR a
@@ -21399,6 +21379,77 @@ cloneMethodReturn: function {
             st.reg.setReturnType typeId: fid5 value: rt5
         }
     }
+}
+
+# generatorCallWrap -- the return of an instance's `call` of a generic
+# generator: the wrapper its own element takes (generatorWrapperOf). The
+# template's wrapper is over its parameter, so respecializing it would keep the
+# template's choice, which is `Option` whatever the instance's element is. 0 for
+# any other method, and while the element is still a parameter.
+generatorCallWrap: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    scope: ztypes.declid
+    tplFnId: ztypes.tid
+    # the template's return: its wrapper over the template's element
+    wrap: ztypes.tid
+    idSubs: (IdMapV ztypes.tid v: ztypes.genericarg)
+} out ztypes.tid is {
+    rn: (st.typing.funcReturnNode.get key: tplFnId).or d: zast.nodeid
+    if ((st.typing.generatorWrapper.get key: rn).or d: false).not then return ztypes.tid
+    tElem: st.reg.genericTypeArgAt specId: wrap ordinal: 0
+    if tElem.isZero then return ztypes.tid
+    elem: tElem
+    eso: idTypeSubOf :idSubs key: tElem
+    match (
+        eso
+    ) case some then {
+        elem = eso
+    } case none then {
+        er: respecialize :st :scope :ast :unitDecl specTid: tElem :idSubs
+        if er.isZero.not then elem = er
+    }
+    if (st.reg.typetypeOf typeId: elem) == ztypes.ztypetype.genericParam then return ztypes.tid
+    tpl: generatorWrapperOf :st :ast :scope :elem
+    if tpl.isZero then return ztypes.tid
+    subs: IdMapV zast.nameid v: ztypes.tid
+    subs.set key: (st.reg.genericParamNameAt tdecl: (declOfTypeId :st tid: tpl) i: 0) value: elem
+    noVals: IdMapV zast.nameid v: u64
+    sfx: "_\{monoValName :ast :st tid: elem}"
+    return (getOrMintSpec
+        :st
+        :scope
+        :ast
+        :unitDecl
+        sfx: sfx.stringView
+        templateId: tpl
+        :subs
+        valSubs: noVals
+        fallbackArg: ztypes.tid.zero
+    )
+}
+
+# generatorWrapperOf -- the option a generator's `call` hands its element back
+# in: `optionval` over a valtype, held inline, and `Option` otherwise, whose
+# boxed payload outlives the `call` that yields it. The lowering writes one
+# wrapper over the element as written; this is the choice for the element the
+# template or an instance actually has.
+generatorWrapperOf: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    scope: ztypes.declid
+    elem: ztypes.tid
+} out ztypes.tid is {
+    wk: zast.wellKnown.slot.tyOption
+    if (typeIsValtype :st tid: elem) then wk = zast.wellKnown.slot.tyOptionval
+    return (descendNamedId
+        :st
+        :scope
+        :ast
+        unitDecl: st.typing.systemUnitRoot
+        nameId: wk
+    )
 }
 
 # cloneParamDefaults -- the defaults the template method's parameters carry,
@@ -46752,7 +46803,7 @@ fieldBoundGenericConstruction: function {
             recvImplicit: false
         )
         st.popTo marker: cm
-        pinConstructionSources :st tid: gmid pins: gPins
+        pinConstructionSources :st :ast tid: gmid pins: gPins
         ctk: gmid
         ctv: true
         st.typing.constructedTypes.set key: ctk value: ctv
@@ -47174,7 +47225,7 @@ checkTypeConstruction: function {
     if ctt.isSum then {
         st.typing.callKind.set key: call.nid value: zast.callkind.unionCreate
     }
-    pinConstructionSources :st :tid :pins
+    pinConstructionSources :st :ast :tid :pins
     return result
 }
 
@@ -47185,7 +47236,7 @@ checkTypeConstruction: function {
 # inferred instance, cannot change it. The binding stays owned; only the sources
 # are pinned.
 pinConstructionSources: function {
-    st: zenv.ZSymbolTable tid: ztypes.tid pins: (List ztyping.PinPath).view
+    st: zenv.ZSymbolTable ast: Ast.view tid: ztypes.tid pins: (List ztyping.PinPath).view
 } is {
     cxO: st.typing.declChildOfId parentTypeId: tid nameId: zast.wellKnown.slot.wkCreate
     match (
@@ -47193,7 +47244,7 @@ pinConstructionSources: function {
     ) case some then {
         noRecvC: ListVal zast.nameid
         cxPins: (st.typing.funcPins.get key: cxO).or d: false
-        if cxPins.not when (typeHasNonOwnedField :st :tid) then {
+        if cxPins.not when (typeHasNonOwnedField :st :ast :tid) then {
             # a create that does not say `outx this` on a type declaring a
             # non-owned field is the SYNTHESISED one (a written one is
             # refused): the construction pins as `outx this` would
@@ -47211,7 +47262,7 @@ pinConstructionSources: function {
         # no `create` written: the construction IS the constructor, and a
         # type declaring a non-owned field is built `outx this` -- every
         # borrowed-field argument stays pinned under the result
-        if (typeHasNonOwnedField :st :tid) then pinConstructionResult :st :pins
+        if (typeHasNonOwnedField :st :ast :tid) then pinConstructionResult :st :pins
     }
 }
 
@@ -47483,7 +47534,7 @@ checkWrappedCtorArgs: function {
     )
     checkMissingCallArgs :ast :st :call funcId: wcv isCtor: true recvImplicit: false
     st.popTo marker: wcm
-    pinConstructionSources :st tid: wcv pins: wPins
+    pinConstructionSources :st :ast tid: wcv pins: wPins
     st.typing.constructedTypes.set key: wcv value: true
 }
 
@@ -52827,7 +52878,7 @@ checkImplicitReturn: function {
     expR: st.typing.currentReturnTypeId
     if expR.isZero or defn.body.isZero then return
     # a generator's body yields its values; its synthesised `.call` returns none
-    if (st.typing.generatorCallBodies.has item: defn.nid) then return
+    if (generatorCallOf :st nid: defn.nid).isZero.not then return
     lsid: lastStmtLineIdAt :ast oId: defn.body
     valId: zast.nodeid
     if lsid.isZero.not then valId = implicitReturnValue :st :ast lineId: lsid
@@ -53193,10 +53244,13 @@ checkFunctionBodyIn: function {
             d: ztypes.tid
         )
         st.typing.currentReturnTypeId = crt
+        # a generator's `call`, or an instance's copy of one: its body yields
+        # its values, and its return is the wrapper the lowering wrote
+        isGenCall: (generatorCallOf :st nid: fn.nid).isZero.not
         # the body walk is where a user function's return type is first
         # known: an owned result holding a reference into an input is
         # declared `outx` or refused here
-        if crt.isZero.not when (st.typing.generatorCallBodies.has item: fn.nid).not then {
+        if crt.isZero.not when isGenCall.not then {
             pinHonestyAt :st :ast fnode: fn retTid: crt :defName :defNameId
         }
         # an instance walk returns what the instance it checks returns
@@ -53237,15 +53291,16 @@ checkFunctionBodyIn: function {
         prevYi: st.typing.currentYieldInputTid
         st.typing.currentYieldInputTid = ztypes.tid
         # the class a suspending loop or `with` in this body mints its state
-        # fields on: this generator's, and never a template's (a mono walk
-        # would mint on the template) or, for a nested function literal, the
-        # enclosing generator's
+        # fields on: the walked generator's -- an instance's own in an instance
+        # walk -- and never a generic template's, whose fields would be typed by
+        # its parameters, nor, for a nested function literal, the enclosing
+        # generator's
         prevGen: st.typing.currentGenTid
         prevSpill: st.typing.genSpillNext
         st.typing.currentGenTid = ztypes.tid
         st.typing.genSpillNext = 0
-        if (st.typing.generatorCallBodies.has item: fn.nid) then {
-            if st.typing.curMonoStamp.isZero then st.typing.currentGenTid = thisTid
+        if isGenCall then {
+            if (st.reg.isGenericOf tid: thisTid).not then st.typing.currentGenTid = thisTid
             ykp: st.reg.ctlPlaceholder
             (st.define
                 nameId: zast.wellKnown.slot.wkYield
@@ -53266,9 +53321,7 @@ checkFunctionBodyIn: function {
         prevTailBlock: st.tailBlock
         st.tailBody = zast.nodeid
         st.tailBlock = zast.nodeid
-        if st.typing.currentReturnTypeId.isZero.not when (st.typing.generatorCallBodies.has
-            item: fn.nid
-        ).not then {
+        if st.typing.currentReturnTypeId.isZero.not when isGenCall.not then {
             st.tailBody = fn.body
             st.tailBlock = fn.body
         }
@@ -54645,7 +54698,19 @@ instanceBodyAt: function {
     cid: zast.tableAdd :ast n: row
     st.typing.instanceCopies.append (ztyping.bodycopy functionRow: cid last: bcId)
     st.typing.instanceBody.set key: k value: cid
+    st.typing.instanceOrigin.set key: cid value: opId
     return cid
+}
+
+# generatorCallOf -- the generator `call` whose recorded answers (`yield` in
+# scope, the state fields) the function node `nid` takes: the node itself, or
+# for an instance's copy of a generic generator's `call`, the template's. 0 for
+# any other function.
+generatorCallOf: function {st: zenv.ZSymbolTable.view nid: zast.nodeid} out zast.nodeid is {
+    if (st.typing.generatorCallBodies.has item: nid) then return nid
+    org: (st.typing.instanceOrigin.get key: nid).or d: zast.nodeid
+    if org.isZero.not when (st.typing.generatorCallBodies.has item: org) then return org
+    return zast.nodeid
 }
 
 # instanceRepeatLimit -- how many times a template may recur in the chain of
@@ -61717,13 +61782,13 @@ lowerDeclaredGeneratorsInUnit: function {
                     opId = bm.operation
                     gnm = zast.nameTextCopy :ast ref: bm.name
                 }
-                if bo.unitdef when (zast.unitOpDeclaresUnit :ast opId: bm.operation) then {
+                if bo.unitdef when (zast.unitOpHasBody :ast opId: bm.operation) then {
                     nestedId = bm.operation
                 }
             }
         }
-        # a unit declared inside this one -- inline, a hidden subunit, one more
-        # level down -- declares generators of its own
+        # a unit declared inside this one -- inline, a hidden subunit, a generic
+        # unit, one more level down -- declares generators of its own
         if nestedId.isZero.not then lowerDeclaredGeneratorsInUnit :st :ast unitdefId: nestedId
         if opId.isZero.not then {
             validateGeneratorDef :st :ast defName: gnm.stringView objId: opId

@@ -1,0 +1,138 @@
+# A GENERIC GENERATOR IS CHECKED AND EMITTED PER INSTANCE. Each instance walks
+# its own copy of `call`: the copy answers as its template's `call` does (yield
+# in scope, the state fields), its return wraps the instance's own element --
+# optionval over a valtype, Option otherwise -- and the state fields a
+# suspending loop or a crossing local needs are minted on the instance. A
+# generator inside a generic unit is lowered like any other.
+
+# over a value type, and through `.call` directly
+Once: generator { item: t } as {
+    t: anyval.generic
+    call: function out t is {
+        yield this.item
+    }
+}
+
+# over a reference type: each yield is an owned element
+Twice: generator { item: T } as {
+    T: AnyRef.generic
+    call: function out T is {
+        yield this.item.copy
+        yield this.item.copy
+    }
+}
+
+# a per-call input of the parameter's type
+Acc: generator { start: t } as {
+    t: anyval.generic
+    call: function {add: t} out t is {
+        total: this.start
+        for true loop {
+            got: yield total
+            total = total + got
+        }
+    }
+}
+
+# a local crossing a suspending loop
+Pairs: generator { items: (ListVal t) } as {
+    t: anyval.generic
+    call: function out t is {
+        prev: this.items.get i: 0
+        for each x: this.items loop {
+            yield prev
+            prev = x
+        }
+    }
+}
+
+# one generic generator iterated inside another
+Rep: generator { item: t n: i64 } as {
+    t: anyval.generic
+    call: function out t is {
+        for each i: this.n.times loop yield this.item
+    }
+}
+Again: generator { item: t } as {
+    t: anyval.generic
+    call: function out t is {
+        for each v: (Rep t: t item: this.item n: 2) loop yield v
+    }
+}
+
+# a numeric parameter
+Count: generator { base: u64 } as {
+    n: u64.generic
+    call: function out u64 is {
+        for each i: n.times loop yield this.base + i
+    }
+}
+
+# two parameters
+Zip: generator { a: t b: u } as {
+    t: anyval.generic
+    u: anyval.generic
+    call: function out t is {
+        print "b \{this.b}"
+        yield this.a
+    }
+}
+
+# a bound two different families satisfy
+Echo: generator { item: T } as {
+    T: StringLike.generic
+    call: function out String is {
+        yield "\{this.item}"
+        yield "\{this.item}!"
+    }
+}
+
+# a view field
+Each: generator { items: (ListVal t).view } as {
+    t: anyval.generic
+    call: function out t is {
+        for each x: this.items loop yield x
+    }
+}
+
+# a generator a generic unit declares
+fills: unit as {
+    t: anyval.generic
+    Fill: generator { item: t n: i64 } as {
+        call: function out t is {
+            for each i: this.n.times loop yield this.item
+        }
+    }
+}
+intFills: (fills t: i64)
+
+main: function is {
+    for each v: (Once t: i64 item: 5) loop print "\{v}"
+    for each f: (Once t: f64 item: 2.5) loop print "\{f}"
+    for each v: (Once item: 6) loop print "\{v}"
+    g: Once t: i64 item: 5
+    a: g.call
+    b: g.call
+    match a case some then print "a \{a}" case none then print "a none"
+    match b case some then print "b \{b}" case none then print "b none"
+    for each s: (Twice T: String item: "ab".string) loop print s
+    acc: Acc t: i64 start: 10
+    x: (acc.call add: 1).or d: -1
+    y: (acc.call add: 5).or d: -1
+    print "\{x} \{y}"
+    l: ListVal t: i64
+    l.append 1
+    l.append 2
+    l.append 3
+    for each v: (Pairs t: i64 items: l) loop print "\{v}"
+    for each v: (Again t: f64 item: 1.5) loop print "\{v}"
+    for each v: (Count n: 3 base: 10) loop print "\{v}"
+    for each v: (Zip t: i64 u: f64 a: 1 b: 2.5) loop print "\{v}"
+    for each s: (Echo T: String item: "ab".string) loop print s
+    for each s: (Echo T: StringView item: "cd") loop print s
+    m: ListVal t: i64
+    m.append 7
+    m.append 8
+    for each v: (Each t: i64 items: m) loop print "\{v}"
+    for each v: (intFills.Fill item: 4 n: 2) loop print "\{v}"
+}
