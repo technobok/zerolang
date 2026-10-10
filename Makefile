@@ -1,6 +1,5 @@
 CC       := gcc
-# -Wdiscarded-qualifiers is the GCC spelling; clang groups the same
-# diagnostic under -Wincompatible-pointer-types-discards-qualifiers.
+# the gcc spelling of the discarded-qualifiers error; clang names it differently.
 QUALWERR := $(if $(findstring clang,$(shell $(CC) --version 2>/dev/null | head -1)),-Werror=incompatible-pointer-types-discards-qualifiers,-Werror=discarded-qualifiers)
 CFLAGS_BASE := -std=c17 -Wall -Wextra -Wno-unused-function -Wno-unused-parameter \
             -Werror=implicit-function-declaration -Werror=implicit-int \
@@ -8,40 +7,23 @@ CFLAGS_BASE := -std=c17 -Wall -Wextra -Wno-unused-function -Wno-unused-parameter
             -Werror=unused-but-set-variable
 CFLAGS   := $(CFLAGS_BASE) $(QUALWERR)
 
-# Parallel by default: make fans out independent targets and the corpus runner
-# fans out its per-case pipelines (--jobs). `make NPROC=1` forces everything
-# serial (NPROC feeds both -j and the runner's --jobs).
+# Parallel by default, for make and for the corpus runner's --jobs; NPROC=1 is serial.
 NPROC    ?= $(shell nproc 2>/dev/null || echo 1)
 MAKEFLAGS += -j$(NPROC)
-# Daily-driver binaries only (bin/zc, bin/zl, bin/zls -- the three `make
-# install` lays down). -fwrapv and -fno-strict-aliasing pin down the C the
-# emitter relies on. Bootstrap intermediates and the test runner stay -O0:
-# they are built once and run once, so gcc time dominates.
-# -O2 is the RELEASE level: self-compile wall 0.53s -> 0.37s, for a bin/zc.c
-# compile of 14s -> 20s. Set OPTFLAGS='-O1 -fno-strict-aliasing -fwrapv' for
-# a faster edit-test loop.
+# The three drivers (bin/zc, bin/zl, bin/zls) build at -O2; -fwrapv and
+# -fno-strict-aliasing pin down the C the emitter relies on. Bootstrap
+# intermediates and the test runner stay -O0: built once, run once.
 OPTFLAGS := -O2 -fno-strict-aliasing -fwrapv
-# Daily drivers also emit with the wyhash-style fast path for their own
-# Map/Set dispatch (their inputs are trusted source trees). Everything
-# else -- corpus, goldens, bootstrap fixpoint -- emits with the SipHash
-# default; emitted C is byte-identical either way.
+# The drivers emit their own Map/Set with the fast hash (their input is trusted
+# source); everything else keeps the SipHash default. The C is identical either way.
 ZCHASH   := --fast-hash
-# Daily drivers link the vendored mimalloc (vendor/mimalloc, one TU via
-# src/static.c) ahead of libc so its malloc/free override glibc's:
-# self-compile 0.93s -> 0.80s. `make MIMALLOC=0` builds pure-glibc
-# drivers. Everything else (bootstrap intermediates, ztestrunner, corpus
-# and user emission) stays glibc; the allocator never changes emitted C.
 BUILDDIR := out
-# the -l flags a driver's own emitted C declares on its fixed second line.
-# bin/zc reaches lib/system/tcc.z and so needs -ldl; zl and zls do not. Read
-# off the artifact rather than hardcoded, exactly as $(EXDIR)/%.bin does.
-# ZLINKSED lifts the names out of an emitted C file's `zlink:` header; ZLINKOF
-# turns them into -l flags. SEARCHED in the first few lines rather than pinned
-# to line 2: an emitter change that inserted a line above it would otherwise
-# yield NO libraries, silently and with no error anywhere. One definition, so
-# the three readers cannot drift.
+# The -l flags an emitted C file declares in its `zlink:` header (searched in the
+# first lines, not pinned to one). Every rule linking emitted C uses ZLINKOF.
 ZLINKSED = sed -n '1,8s|^/\* zlink: \(.*\) \*/$$|\1|p'
 ZLINKOF = $$($(ZLINKSED) $(1) | tr ' ' '\n' | sed -e '/^$$/d' -e 's|^|-l|')
+# The drivers link the vendored mimalloc ahead of libc; MIMALLOC=0 builds them on
+# glibc. Nothing else uses it, and it never changes emitted C.
 MIMALLOC ?= 1
 ifeq ($(MIMALLOC),1)
 MIMALLOC_OBJ := $(BUILDDIR)/mimalloc.o
@@ -49,85 +31,67 @@ else
 MIMALLOC_OBJ :=
 endif
 
-# The perf series is -O1 and stays -O1, on a binary of its own. Every row in
-# docs/perf-baseline.md was measured that way; -O2 moves wall but not one
-# allocation, so mixing levels would make the wall column meaningless while
-# leaving the allocation column looking fine. A dedicated binary also means a
-# driver rebuild -- at another level, or by another compiler -- can never leak
-# into a measurement. See "Toolchain findings" in docs/perf-baseline.md.
+# The allocation series is measured on a binary of its own, always gcc -O1, so a
+# driver rebuilt at another level or by another compiler never reaches it.
 PERFOPT  := -O1 -fno-strict-aliasing -fwrapv
 PERFCC   ?= gcc
 PERFBIN  := $(BUILDDIR)/zc-perf
 
-# The build stamp the three drivers link in, so `zc --version` can name the
-# commit it was built from. Empty when git is unavailable (a release tarball,
-# an exported tree), and the version line then simply carries no build
-# metadata. It arrives as a LINKED SYMBOL, overriding the weak default in
-# src/runtime/natives/_Z_OS_BUILD_COMMIT.inc, rather than as a -D: the natives
-# that read it live inside the drivers' single multi-megabyte translation
-# unit, so a define costs a 20s recompile per commit where a link costs 41ms.
+# The commit `zc --version` names. It is linked in as a symbol (out/buildstamp.o,
+# overriding a weak default) rather than passed as -D, which would recompile the
+# drivers' single large translation unit on every commit.
 BUILDID   := $(shell git rev-parse --short=8 HEAD 2>/dev/null)
 BUILDID   := $(if $(BUILDID),$(BUILDID)$(shell git diff --quiet 2>/dev/null && git diff --cached --quiet 2>/dev/null || echo .dirty))
 BUILDDATE := $(if $(BUILDID),$(shell git show -s --format=%cs HEAD 2>/dev/null))
 
-# Bootstrap compiler for building the .z sources: the committed, Python-free
-# seed (bootstrap/zc.c -> $(BUILDDIR)/zc-seed; see bootstrap/README.md). A C
-# toolchain is the only requirement to build and test zerolang.
+# The bootstrap compiler, built from the committed seed (bootstrap/README.md).
 ZC      := $(BUILDDIR)/zc-seed
-ZC_DEP  := $(BUILDDIR)/zc-seed
-# The hand-written runtime the emitter inlines into every file it emits
-# (fragments, per-family templates and the native table). An edit here changes
-# emitted C exactly as a source edit does, so the emitted artifacts depend on
-# it -- without that, a fragment change quietly does not reach the binaries.
+# The runtime the emitter inlines: an edit here changes emitted C as a source edit does.
 RT_DEP  := $(wildcard src/runtime/*.inc) $(wildcard src/runtime/*.c.tmpl) $(wildcard src/runtime/natives/*.inc) src/runtime/natives.tbl
 
-# install tree (GOROOT-style). Override e.g. ROOT=/opt/zerolang BINDIR=/usr/local/bin.
+# install tree. Override e.g. ROOT=/opt/zerolang BINDIR=/usr/local/bin.
 ROOT     ?= $(HOME)/.local/lib/zerolang
 BINDIR   ?= $(HOME)/.local/bin
 
-# all .z files in examples/ (exclude library-only modules without main)
+# examples/ minus the library-only units, which have no main.
 SKIP     := mathutil genmath dissectlib
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: emit-set ident-set natives-tbl-guard generic-param-guard zl-full-guard const-row-guard all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls tcc install regen-goldens regen-matrix regen-math-asm bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard typename-guard frontend-guard lifetime-guard native-guard fallback-guard member-guard highlight-guard deadcode-guard require-guard static-tcc-guard refusal-guard zlink-rules-guard fmt-raw-guard test-tcc test-tcc-heavy test-clang test-math-arm64 test-math-noasm test-portable-scalars math-asm-guard matrix-guard docs-link-guard bench-math bench-math-kernels mode-parity readable-check user-native-guard perf-strict perf-elision pre-push
+.PHONY: all check complexity-report style-lint-fast style-lint test ci ci-corpus \
+	test-math-arm64 test-math-noasm test-portable-scalars docs-link-guard math-asm-guard \
+	bench-math bench-math-kernels test-clang test-tcc test-tcc-heavy readable-check build \
+	tcc zc zl zls regen-goldens regen-fmt-goldens regen-matrix matrix-guard regen-math-asm \
+	fmt-raw-guard regen-lsp-goldens bump-seed test-bootstrap install docs warn-check perf \
+	perf-strict pre-push perf-elision any-guard typename-guard emitter-guard frontend-guard \
+	lifetime-guard user-native-guard case-guard require-guard mode-parity zlink-rules-guard \
+	refusal-guard static-tcc-guard zlink-guard emit-set ident-set const-row-guard \
+	deadcode-guard alias-label-guard fwd-shape-guard eager-guard eager-lib-guard \
+	highlight-guard view-guard fallback-guard clean native-guard generic-param-guard \
+	zl-full-guard natives-tbl-guard
 
-# Keep pattern-chain intermediates (the per-example .c files) for debugging.
+# Keep the per-example .c intermediates.
 .SECONDARY:
 
-# TOOLSRC / TOOLDIRS -- the zerolang sources of the developer tools under tools/
-# (tools/README.md) and the directories holding them, each a program of its own
-# units: every check that reaches src/ reaches them too.
+# The zerolang sources of the tools under tools/ (one program per directory).
 TOOLSRC := $(wildcard tools/*/*.z)
 TOOLDIRS := $(sort $(patsubst %/,%,$(dir $(TOOLSRC))))
 
-# ZLSCOPE -- what the zl *linter* checks: the tool + compiler sources, and every unit
-# under lib/system -- which is the stdlib proper (io/os/collections/system/cli/core) as
-# well as the relocated front-end, because they share that directory. What it does NOT
-# reach is examples/ and tests/fixtures/; a rule that must hold there needs its own guard.
+# What the parse-tier linter reads.
 ZLSCOPE := src/*.z lib/system/*.z lib/system/system/*.z lib/system/math/*.z tests/unit/*.z $(TOOLSRC)
-# The --full tier checks a file as the unit it IS: a top-level unit under its
-# roots, or a subunit (lib/system/system/ holds `system`'s) inside the parent
-# beside its folder. style-lint gives each tree its roots: tests/unit's units
-# live under tests/unit.
+# What the --full tier reads. It checks a file as the unit it is, so style-lint
+# gives each tree its own roots.
 ZLFULLSCOPE := src/*.z lib/system/*.z lib/system/system/*.z lib/system/math/*.z
-# FMTSCOPE -- what the zl *formatter* checks: every unit the printer lays out, the unit
-# tests included; tests/fixtures/ stays as written, since its files are inputs.
+# What the formatter checks; tests/fixtures/ is input and stays as written.
 FMTSCOPE := src/*.z lib/system/*.z lib/system/system/*.z lib/system/math/*.z examples/*.z tests/unit/*.z $(TOOLSRC)
 
-# all -- the default target: build the three tools (compiler, linter/formatter,
-# language server). `make check` / `make test` are the gates; `make build` compiles
-# the examples.
 all: bin/zc bin/zl bin/zls
 
-# check -- the fast pre-commit gate: the parse/token/whitespace rules, a repo-wide
-# formatter check, and the cognitive-complexity report.
+# check -- the fast pre-commit gate.
 check: style-lint-fast complexity-report
 
-# complexity-report -- every function over A008's cognitive-complexity threshold,
-# one per line (score, file:line, name), highest first, under $(BUILDDIR); the
-# summary line is what check and ci print. Parse tier, so no project flags. The
-# ratchet that holds the count per file is tests/fixtures/arch_baseline.txt.
+# complexity-report -- every function over A008's threshold, highest first, into
+# $(COMPLEXITY_TSV); the per-file ratchet is tests/fixtures/arch_baseline.txt.
 COMPLEXITY_SCOPE := src/*.z lib/system/*.z lib/system/system/*.z lib/system/math/*.z tests/unit/*.z examples/*.z $(TOOLSRC)
 COMPLEXITY_TSV := $(BUILDDIR)/cognitive-complexity.tsv
 complexity-report: bin/zl
@@ -139,11 +103,8 @@ complexity-report: bin/zl
 	@n=$$(($$(wc -l < $(COMPLEXITY_TSV)) - 1)); top=$$(sed -n '2p' $(COMPLEXITY_TSV) | cut -f1,3 | tr '\t' ' '); \
 	  echo "complexity-report: $$n functions over 15, highest $$top -- $(COMPLEXITY_TSV)"
 
-# Style gate, enforced by the self-hosted `zl` linter/formatter (src/zl.z). style-lint-fast is
-# the fast tier (empty clauses, first-arg elision, for-while, trailing whitespace, final
-# newline, colon and blank-line spacing) plus `zl format --check`, the printer's layout; it
-# runs in `check`. style-lint adds the typecheck-tier redundant-suffix rule (slower; run
-# pre-push). See docs/zl.pdoc.
+# style-lint-fast -- the parse-tier lint and the formatter check (docs/zl.pdoc).
+# style-lint -- adds the typecheck tier, which needs each tree's roots.
 style-lint-fast: bin/zl
 	bin/zl lint $(ZLSCOPE)
 	bin/zl format --check $(FMTSCOPE)
@@ -155,43 +116,30 @@ style-lint: bin/zl
 	  bin/zl lint --full --src $$d --system lib/system $$d/*.z || exit 1; done
 	bin/zl format --check $(FMTSCOPE)
 
-# out/ztestrunner -- the self-hosted corpus runner (src/ztestrunner.z), built
-# on demand; test/ci run it with --jobs so per-case pipelines fan out (heavy
-# kinds -- differential, selfhost-asan, fixpoint -- stay serial inside it).
+# out/ztestrunner -- the corpus runner (src/ztestrunner.z).
 $(BUILDDIR)/ztestrunner: bin/zc src/ztestrunner.z $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z)
 	@mkdir -p $(BUILDDIR)
 	bin/zc ztestrunner --src src --system lib/system --emit-c $(BUILDDIR)/ztestrunner.c
 	$(CC) $(CFLAGS) -o $(BUILDDIR)/ztestrunner $(BUILDDIR)/ztestrunner.c $(call ZLINKOF,$(BUILDDIR)/ztestrunner.c) -lm
 
-# test -- build the compiler + the corpus runner, then run the fast corpus gate
-# (run/leak/error/dump/smoke/differential kinds, all driven via os.spawn; no
-# Python, no shell). Run before every commit. The arch and docs kinds run
-# bin/zl, so every target that runs the corpus needs it built first: without it
-# those kinds count nothing and every ratchet row reads "0 findings".
+# test -- the fast corpus gate. The arch and docs kinds run bin/zl, so it must be
+# built: without it those kinds count nothing and every ratchet reads zero.
 test: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --jobs $(NPROC)
 
-# ci -- the consolidated gate, runnable in one command with only a C toolchain:
-# the full style-lint, the heavy corpus gate (--heavy adds the self-host ASan +
-# byte-identity fixpoint kinds to run/leak/error/dump/smoke/differential), and
-# the Python-free seed bootstrap. The lint + guard + corpus phases are plain
-# prerequisites so -j overlaps them; test-bootstrap stays last (and is
-# internally serial -- b1 -> b2 -> b3 is a chain by nature).
-ci: style-lint zl-full-guard complexity-report warn-check shadow-guard emitter-guard typename-guard frontend-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard member-guard highlight-guard any-guard deadcode-guard eager-guard eager-lib-guard case-guard user-native-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard readable-check perf-strict test-tcc-heavy test-clang test-math-arm64 test-math-noasm test-portable-scalars math-asm-guard matrix-guard docs-link-guard mode-parity ci-corpus
+# ci -- every gate: the guards, the heavy corpus (self-host ASan and the
+# fixpoint) and the seed bootstrap under gcc, clang and tcc, last and serial.
+ci: style-lint zl-full-guard complexity-report warn-check emitter-guard typename-guard frontend-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard highlight-guard any-guard deadcode-guard eager-guard eager-lib-guard case-guard user-native-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard readable-check perf-strict test-tcc-heavy test-clang test-math-arm64 test-math-noasm test-portable-scalars math-asm-guard matrix-guard docs-link-guard mode-parity ci-corpus
 	$(MAKE) --no-print-directory test-bootstrap BOOTSTRAP_CCS="$(CI_BOOTSTRAP_CCS)"
 	@echo "CI GATE GREEN: style-lint + corpus(--heavy: +selfhost-asan +fixpoint) + bootstrap"
 
 ci-corpus: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --heavy --jobs $(NPROC)
 
-# test-math-arm64 -- the math corpus cross-built for aarch64 by `zc --target
-# aarch64-linux-gnu` and run under qemu against the SAME goldens, twice: the
-# word primitives' builtin tier, where __int128 and the carry builtins lower to
-# umulh and adcs, and with -DZ_MATH_ASM_ARM64 the generated asm kernels, which
-# are compiled only on request. A program in MATH_ARM64_REFUSED uses f128, which
-# the C backend refuses for aarch64 (natives.tbl's @unit.system.quadfloat row);
-# it must fail with that refusal and nothing else. Skipped, with a message, when the cross compiler or qemu is absent; ci
-# runs it when they are present.
+# test-math-arm64 -- the math corpus cross-built for aarch64 and run under qemu
+# against the same goldens, on the builtin word primitives and on the generated
+# asm kernels. MATH_ARM64_REFUSED uses f128, which the backend refuses off
+# x86-64: it must fail with that refusal. Skipped without the cross tools.
 MATH_ARM64_DIR := $(BUILDDIR)/math-arm64
 MATH_ARM64_REFUSED := math_constants_wide
 test-math-arm64: bin/zc
@@ -219,10 +167,7 @@ test-math-arm64: bin/zc
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
 	echo "test-math-arm64 OK: $$n math builds on aarch64 (builtins, asm), golden or refused as f128"
 
-# test-math-noasm -- the math corpus with -DZ_MATH_NOASM, which takes math's C
-# kernels where the generated asm would run. The corpus run covers the asm
-# kernels under gcc and clang, and tcc the portable C; this covers the
-# builtins tier between them, which a processor without ADX also takes.
+# test-math-noasm -- the math corpus on math's C kernels (-DZ_MATH_NOASM).
 MATH_NOASM_DIR := $(BUILDDIR)/math-noasm
 test-math-noasm: bin/zc
 	@mkdir -p $(MATH_NOASM_DIR); fail=0; n=0; \
@@ -237,11 +182,8 @@ test-math-noasm: bin/zc
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
 	echo "test-math-noasm OK: $$n math programs on math's C kernels"
 
-# test-portable-scalars -- every program that names i128, u128 or f16, built
-# with -DZ_INT128_PORTABLE -DZ_F16_PORTABLE: gcc then takes the struct forms
-# tcc always takes (natives/_Z_INT128.inc, natives/_Z_F16.inc), with f128
-# present, so the f128 legs of the helpers run as well, which tcc, having no
-# f128, never reaches. The output must be the golden the native types write.
+# test-portable-scalars -- every program naming i128, u128 or f16, built on
+# their struct forms (what tcc always takes) and compared with the native goldens.
 PORTABLE_SCALARS_DIR := $(BUILDDIR)/portable-scalars
 test-portable-scalars: bin/zc
 	@mkdir -p $(PORTABLE_SCALARS_DIR); fail=0; n=0; \
@@ -259,10 +201,8 @@ test-portable-scalars: bin/zc
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
 	echo "test-portable-scalars OK: $$n programs on the struct forms of i128, u128 and f16"
 
-# docs-link-guard -- every .pdoc link is bracketed, `[#> to=TARGET: text]`.
-# Written bare, a link's text runs to the end of its line, so the words after
-# the one meant to be linked became link text too. A target holding a `#` is
-# quoted: inside the brackets a bare `#` starts a macro.
+# docs-link-guard -- every .pdoc link is bracketed (a bare one runs to the end of
+# its line), and a target holding `#` is quoted.
 docs-link-guard:
 	@bad=$$(grep -nE '(^|[^[])#> to=' docs/*.pdoc); \
 	if [ -n "$$bad" ]; then \
@@ -274,8 +214,7 @@ docs-link-guard:
 	  printf '%s\n' "$$bad" | sed 's/^/    /'; exit 1; fi; \
 	echo "docs-link-guard OK: every docs link is bracketed"
 
-# math-asm-guard -- the committed asm fragments are what tools/asmgen writes:
-# regenerated into the build directory and compared, as Go's asmgen test does.
+# math-asm-guard -- the committed asm fragments are what tools/asmgen writes.
 MATH_ASM_CHECK_DIR := $(BUILDDIR)/asmgen-check
 MATH_ASM_FRAGS := _Z_MATH_ARITH_AMD64.inc _Z_MATH_ARITH_ARM64.inc
 math-asm-guard: out/asmgen
@@ -288,13 +227,8 @@ math-asm-guard: out/asmgen
 	done
 	@echo "math-asm-guard OK: $(MATH_ASM_FRAGS) are tools/asmgen's"
 
-# bench-math -- math's arithmetic timed per operation and size: first the
-# word-vector kernels alone (bench-math-kernels), then the operations through
-# BigInt (tests/bench/math_bench.z). NOT in ci: wall time is not a ratchet. Each
-# program is built per kernel tier: gcc -O2 with the generated asm kernels
-# where they win, gcc -O2 with -DZ_MATH_NOASM (the word primitives' builtins),
-# gcc -O2 with -DZ_WORD_PORTABLE forcing their portable forms, and tcc, which
-# always takes those.
+# bench-math -- math's operations timed per kernel tier (asm, builtins, portable,
+# tcc). Not in ci: wall time is no ratchet.
 BENCH_MATH_DIR := $(BUILDDIR)/bench-math
 bench-math: bin/zc $(BUILDDIR)/tcc bench-math-kernels
 	@mkdir -p $(BENCH_MATH_DIR)
@@ -305,12 +239,8 @@ bench-math: bin/zc $(BUILDDIR)/tcc bench-math-kernels
 	@pin=""; if command -v taskset >/dev/null 2>&1; then pin="taskset -c $(BENCH_CPU)"; fi; \
 	for v in asm builtins portable tcc; do echo "== $$v"; $$pin $(BENCH_MATH_DIR)/$$v; done
 
-# bench-math-kernels -- the kernels timed alone (tests/bench/math_kernels.c),
-# compiled straight from the runtime fragments as zc compiles a program, once
-# per tier. The wide multiply is cut out of z_hash.inc, whose other parts are
-# templates. A row prints the median of REPS timings. The runs are pinned to
-# BENCH_CPU when taskset is present: on a processor with two kinds of core a
-# run the scheduler moves between them measures neither.
+# bench-math-kernels -- the word-vector kernels timed alone, per tier; the median of
+# REPS runs, pinned to BENCH_CPU (the host mixes two kinds of core).
 REPS ?= 5
 BENCH_CPU ?= 0
 bench-math-kernels: $(BUILDDIR)/tcc
@@ -326,34 +256,17 @@ bench-math-kernels: $(BUILDDIR)/tcc
 	@pin=""; if command -v taskset >/dev/null 2>&1; then pin="taskset -c $(BENCH_CPU)"; fi; \
 	for v in asm builtins portable tcc; do echo "== kernels $$v"; $$pin $(BENCH_MATH_DIR)/k-$$v -r $(REPS); done
 
-# test-clang -- the corpus under clang, the fast tier. gcc reaches __float128's
-# library through quadmath.h; clang has no such header on its path, so the
-# prelude declares each libquadmath function by hand, and only a clang build
-# shows a function the f128 rows call with no declaration. --cc-forward hands
-# the backend clang as a clang build would. The heavy kinds -- self-host
-# and fixpoint -- are the bootstrap's to judge under clang.
+# test-clang -- the corpus under clang. Only clang shows an f128 helper the
+# prelude forgot to declare (gcc reads quadmath.h).
 test-clang: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc clang --cc-forward --root . --jobs $(NPROC)
 
-# what a corpus run under the vendored tcc needs built before it starts.
+# what a corpus run under the vendored tcc needs built first.
 TCC_RUN_DEPS := bin/zc bin/zl $(BUILDDIR)/tcc $(BUILDDIR)/ztestrunner
 
-# test-tcc -- the vendored tcc compiles the corpus. --cc-forward is what makes
-# this a test of the tcc BACKEND and not merely of tcc-the-C-compiler: the C
-# backend refuses a unit its compiler cannot build (natives.tbl's @unit rows),
-# so the programs that reach quadfloat are rejected by name instead of dying
-# in tcc's parser.
-# tests/tcc-known-failures.txt records the split, program and stage; a move in
-# EITHER direction fails, so gaining a guard is a deliberate edit there.
-#
-# TWO TIERS, the same split `test` and `ci-corpus` already use for gcc, and for
-# the same reason: the fast one is 4s and belongs in the edit loop, the heavy
-# one is 6m23s and belongs in ci. `test-tcc-heavy` adds the self-host and
-# fixpoint kinds, and that is where it earns its keep -- the self-host leg
-# builds zc ITSELF under the sanitizer and runs it over every unit, and tcc's
-# bounds checker reports every block still LIVE at exit where ASan reports only
-# what is definitely LOST. The gcc heavy leg cannot see what that one sees.
-# One recipe and one ratchet serve both; only the flag differs.
+# test-tcc -- the corpus under the vendored tcc, as a backend (--cc-forward), so
+# units tcc cannot build are refused by name. tests/tcc-known-failures.txt is
+# the expected failure set; a move either way fails.
 TCC_KNOWN := tests/tcc-known-failures.txt
 # empty for the fast tier; test-tcc-heavy overrides it.
 TCC_TIER ?=
@@ -375,42 +288,15 @@ test-tcc: $(TCC_RUN_DEPS)
 	fi; \
 	echo "test-tcc$(TCC_TIER:--heavy=-heavy) OK: $$(grep -c . $(BUILDDIR)/tcc-fails.txt) known failures, none new"
 
-# test-tcc-heavy -- the same corpus and the same ratchet, plus the self-host and
-# fixpoint kinds. In ci, not in the edit loop: 6m23s against test-tcc's 4s.
-#
-# IT CARRIES test-tcc's PREREQUISITES EVEN THOUGH THE SUB-MAKE WOULD BUILD
-# THEM. A recursive make is a SECOND SCHEDULER: it decides for itself what is
-# out of date, and it cannot see what the parent is already building. With no
-# prerequisites of its own this target was eligible immediately, so `make ci -j`
-# ran it beside the guards -- and the parent linked bin/zc for them while the
-# sub-make linked bin/zc for this one. Two processes writing the binary that
-# every guard was executing. Measured: `make -j8 test-tcc-heavy require-guard`
-# after touching a source linked bin/zc TWICE.
-#
-# Naming them here makes the parent build them once, in order, before the
-# sub-make starts; the sub-make then finds everything current and only runs the
-# recipe. ONE list, shared with test-tcc, so the two cannot drift apart -- a
-# copy that fell behind would put the race back without changing a line here.
+# test-tcc-heavy -- test-tcc with the self-host and fixpoint kinds (ci only).
+# It names test-tcc's prerequisites itself so the parent make builds them before
+# the sub-make starts; otherwise both link bin/zc at once.
 test-tcc-heavy: $(TCC_RUN_DEPS)
 	@$(MAKE) --no-print-directory test-tcc TCC_TIER=--heavy
 
-# readable-check -- --readable-names is a debug affordance, so nothing else
-# exercises it; without this it would rot unnoticed. The two schemes differ
-# only in identifier spelling, so the built programs must behave identically.
-# Cases are `name:srcdir`. `shadow_unit_const` and `rn_sibling_shadow` are here
-# rather than in the corpus alone because the scheme is what the cases are
-# about: readable names spell a local by its SOURCE name, so a local shadowing
-# another unit's constant, or two sibling blocks binding one name, only diverge
-# under this flag. A tag enumerator carries its type's and arm's names under it
-# (after the ordinal that makes it unique): `arm_case_tags` holds two arms whose
-# names differ only in case, `tag_stem_clash` two units' sums of one name. A
-# member carries its source name too (after its ordinal): `member_names_c_words`
-# holds members named like C keywords, libc macros and the emitter's own names,
-# `generator_field_names` a generator's `#`-named fields beside the author's.
-# The
-# COMPILER leg below is the one that matters most: the
-# small programs exercise a handful of locals each, and a naming scheme is only
-# proven by a program with tens of thousands of them.
+# readable-check -- --readable-names programs build and behave as the default
+# names do; the cases are the ones about naming (shadowing, case-only arm names,
+# C-keyword members). Last, a readable-named compiler must emit identical C.
 readable-check: bin/zc $(BUILDDIR)/buildstamp.o
 	@mkdir -p $(BUILDDIR)/rn
 	@for c in hello:examples vector:examples records:examples fibonacci:examples \
@@ -440,8 +326,7 @@ readable-check: bin/zc $(BUILDDIR)/buildstamp.o
 	  || { echo "readable-check FAIL: the readable-named compiler emits different C"; exit 1; }
 	@echo "readable-check OK: --readable-names builds and runs identically (the compiler included)"
 
-# compile all examples: .z -> .c -> binary, one pattern-rule chain per example
-# so -j fans out the emits and gcc's. Binaries land in $(BUILDDIR)/ex/.
+# build -- compile every example, one pattern chain each.
 EXDIR  := $(BUILDDIR)/ex
 EXBINS := $(NAMES:%=$(EXDIR)/%.bin)
 
@@ -449,8 +334,6 @@ $(EXDIR)/%.c: examples/%.z bin/zc
 	@mkdir -p $(EXDIR)
 	bin/zc $* --src examples --system lib/system --emit-c $@
 
-# the emitted C names the libraries its reached units declared on its fixed
-# second line, so the link follows the program rather than a blanket flag.
 $(EXDIR)/%.bin: $(EXDIR)/%.c
 	$(CC) $(CFLAGS) -o $@ $< \
 	  $(call ZLINKOF,$<) -lm
@@ -458,12 +341,8 @@ $(EXDIR)/%.bin: $(EXDIR)/%.c
 build: $(EXBINS)
 	@echo "$(words $(EXBINS)) examples built ($(EXDIR)/)"
 
-# out/mimalloc.o -- the vendored allocator, one TU (own flags: third-party
-# code is exempt from the project -Werror set). zc_tune.c is the option hook.
-# out/buildstamp.c -- regenerated every run but REWRITTEN only when its text
-# changes, so its timestamp (and the relink it triggers) moves only when the
-# commit or the tree's cleanliness actually moved. FORCE is what makes the
-# recipe run; cmp is what makes the write conditional.
+# out/buildstamp.c is rewritten only when its text changes, so the drivers relink
+# only when the commit or the tree's cleanliness moves.
 .PHONY: FORCE
 FORCE:
 
@@ -483,23 +362,10 @@ $(BUILDDIR)/mimalloc.o: vendor/mimalloc/src/static.c vendor/mimalloc/zc_tune.c $
 	$(CC) -O2 -DNDEBUG -I vendor/mimalloc/include -c vendor/mimalloc/zc_tune.c -o $(BUILDDIR)/mimalloc-tune.o
 	ld -r $(BUILDDIR)/mimalloc-core.o $(BUILDDIR)/mimalloc-tune.o -o $@
 
-# out/tcc + out/tcc-lib -- the vendored tinycc (vendor/tinycc), built by
-# UPSTREAM's Makefile from a staged copy rather than by rules of our own:
-# libtcc1.a is produced by the freshly built tcc through tcc's lib/Makefile,
-# which includes its root Makefile, so a hand-rolled object list would have to
-# track upstream by hand. Own flags, third-party code. This is NOT on the
-# bin/zc path -- `make bin/zc` never builds it; test-tcc, install and ci do.
-#
-# GITHASH=no -- upstream stamps `git rev-parse` output into tcc.o, which from a
-# staged copy inside THIS repo would bake zerolang's branch and dirty flag into
-# `tcc -v`. CPPFLAGS=-fPIC rather than CFLAGS= (which would clobber
-# config.mak's): the driver and libtcc.so share one set of objects and only
-# libtcc.so carries -fPIC upstream, so without this the objects' flags depend
-# on which target make reaches first. Sequential -j1 sub-makes: libtcc1.a needs
-# the built tcc, and upstream documents a c2str/tccdefs_.h race under -j.
-#
-# libtcc.so is staged INTO the payload dir beside libtcc1.a and include/, so
-# one resolved directory answers every question zc has and `install` is one cp.
+# out/tcc + out/tcc-lib -- the vendored tinycc, built by upstream's own Makefile
+# from a staged copy. GITHASH=no keeps our git state out of `tcc -v`;
+# CPPFLAGS=-fPIC gives the driver and libtcc.so one set of objects; -j1 because
+# libtcc1.a needs the built tcc. The payload dir holds everything zc needs.
 TCC_TRIPLE ?= linux-x86_64
 TCC_CONFIGDIR := vendor/tinycc/config/$(TCC_TRIPLE)
 TCC_SRC := $(wildcard vendor/tinycc/src/*.c vendor/tinycc/src/*.h \
@@ -523,22 +389,18 @@ $(BUILDDIR)/tcc: $(TCC_SRC) $(TCC_CONFIGDIR)/config.h $(TCC_CONFIGDIR)/config.ma
 	cp -r vendor/tinycc/src/include $(TCCLIB)/include
 	cp $(BUILDDIR)/tinycc/tcc $@
 
-# the payload comes out of the same recipe; the driver is its stamp.
 $(TCCLIB)/libtcc.so: $(BUILDDIR)/tcc ;
 
 tcc: $(BUILDDIR)/tcc $(TCCLIB)/libtcc.so
 	@echo "vendored tcc: $(BUILDDIR)/tcc (payload $(TCCLIB))"
 
-# out/zc-seed -- the bootstrap compiler built from the committed, Python-free
-# seed (bootstrap/zc.c). See bootstrap/README.md and `make test-bootstrap`.
+# out/zc-seed -- the bootstrap compiler, from the committed seed.
 $(BUILDDIR)/zc-seed: bootstrap/zc.c
 	@mkdir -p $(BUILDDIR)
 	$(CC) $(CFLAGS) -o $@ bootstrap/zc.c $(call ZLINKOF,bootstrap/zc.c) -lm
 
-# bin/zc -- the self-hosted compiler, bootstrapped by the seed. Persistent +
-# git-ignored; rebuilt when the compiler sources change. The dev bin/zc
-# self-locates to this repo (lib/system here; runtime falls back to src/runtime).
-bin/zc.c: $(wildcard src/*.z) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z) $(ZC_DEP) $(RT_DEP)
+# bin/zc -- the self-hosted compiler, built by the seed.
+bin/zc.c: $(wildcard src/*.z) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z) $(ZC) $(RT_DEP)
 	@mkdir -p bin
 	$(ZC) zc --src src --system lib/system $(ZCHASH) --emit-c bin/zc.c
 
@@ -550,13 +412,9 @@ bin/zc: $(BUILDDIR)/zc.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ)
 	@mkdir -p bin
 	$(CC) -o bin/zc $(BUILDDIR)/zc.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ) $(call ZLINKOF,bin/zc.c) -lpthread -lm
 
-# zc -- convenience alias for bin/zc.
 zc: bin/zc
 
-# bin/zl -- the zerolang linter + formatter (src/zl.z), built on the shared
-# front-end via the compiler. A separate binary from zc so the compiler stays
-# lean; zl links the front-end + typecheck (for --full's suffix rule), but never
-# the emitter.
+# bin/zl -- the linter and formatter (src/zl.z); no emitter.
 out/zl.c: $(BUILDDIR)/zc.o $(wildcard src/zl.z) $(wildcard src/zsource.z) $(wildcard src/zcheck.z) $(wildcard src/ztarget.z) $(wildcard src/zproject.z) $(wildcard src/zdiag.z) $(wildcard src/zrule.z) $(wildcard src/zfix.z) $(wildcard src/ztypecheck.z) $(wildcard src/ztypes.z) $(wildcard src/zenv.z) $(wildcard src/ztyping.z) $(wildcard src/zgenerator.z) $(wildcard src/zfmt.z) $(wildcard src/zfmtcursor.z) $(wildcard src/zdoc.z) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z) $(RT_DEP) | bin/zc
 	@mkdir -p out
 	bin/zc zl --src src --system lib/system $(ZCHASH) --emit-c out/zl.c
@@ -568,10 +426,7 @@ bin/zl: $(BUILDDIR)/zl.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ)
 	@mkdir -p bin
 	$(CC) -o bin/zl $(BUILDDIR)/zl.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ) $(call ZLINKOF,$(BUILDDIR)/zl.c) -lpthread -lm
 
-# bin/zls -- the zerolang language server (src/zls.z): JSON-RPC over
-# stdio/--replay on the shared front-end via zcheck; no emitter. The
-# lsp test kind in ztestrunner builds its own copy; this rule is the
-# editor-facing binary.
+# bin/zls -- the language server (src/zls.z); no emitter.
 out/zls.c: $(BUILDDIR)/zc.o $(wildcard src/zls.z) $(wildcard src/zcheck.z) $(wildcard src/ztarget.z) $(wildcard src/zproject.z) $(wildcard src/zsource.z) $(wildcard src/zdiag.z) $(wildcard src/zrule.z) $(wildcard src/zfix.z) $(wildcard src/ztypecheck.z) $(wildcard src/ztypes.z) $(wildcard src/zenv.z) $(wildcard src/ztyping.z) $(wildcard src/zgenerator.z) $(wildcard src/zfmt.z) $(wildcard src/zfmtcursor.z) $(wildcard src/zdoc.z) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z) $(RT_DEP) | bin/zc
 	@mkdir -p out
 	bin/zc zls --src src --system lib/system $(ZCHASH) --emit-c out/zls.c
@@ -583,14 +438,11 @@ bin/zls: $(BUILDDIR)/zls.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ)
 	@mkdir -p bin
 	$(CC) -o bin/zls $(BUILDDIR)/zls.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ) $(call ZLINKOF,$(BUILDDIR)/zls.c) -lpthread -lm
 
-# zl -- convenience alias for bin/zl.
 zl: bin/zl
 
-# zls -- convenience alias for bin/zls.
 zls: bin/zls
 
-# The dump tools behind the goldens: tests/unit/zlexer_dump.z and
-# tests/unit/zparser_dump.z, programs over the front-end units.
+# The dump tools behind the lexer, parser and program goldens.
 out/zlexer: bin/zc tests/unit/zlexer_dump.z $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z)
 	@mkdir -p $(BUILDDIR)
 	bin/zc zlexer_dump --src tests/unit --system lib/system --emit-c $(BUILDDIR)/zlexer.c
@@ -601,8 +453,7 @@ out/zparser: bin/zc tests/unit/zparser_dump.z $(wildcard lib/system/*.z) $(wildc
 	bin/zc zparser_dump --src tests/unit --system lib/system --emit-c $(BUILDDIR)/zparser.c
 	$(CC) $(CFLAGS) -o $(BUILDDIR)/zparser $(BUILDDIR)/zparser.c $(call ZLINKOF,$(BUILDDIR)/zparser.c) -lm
 
-# Regenerate the lexer / parser / whole-program goldens from the dump tools.
-# Always review the resulting diff before committing.
+# regen-goldens -- rewrite the lexer, parser and program goldens; review the diff.
 regen-goldens: out/zlexer out/zparser
 	@for f in examples/*.z; do \
 		name=$$(basename $$f .z); \
@@ -619,16 +470,13 @@ regen-goldens: out/zlexer out/zparser
 	done
 	@echo "regenerated lexer/parser/program goldens via $(BUILDDIR)/zlexer + $(BUILDDIR)/zparser"
 
-# The formatter's dump tool behind the fmt goldens: tests/unit/zfmt_dump.z over
-# src/zfmt.z, src/zfmtcursor.z and src/zdoc.z.
+# The formatter's dump tool, behind the fmt goldens and fmt-raw-guard.
 out/zfmt: bin/zc tests/unit/zfmt_dump.z src/zfmt.z src/zfmtcursor.z src/zdoc.z $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z)
 	@mkdir -p $(BUILDDIR)
 	bin/zc zfmt_dump --src tests/unit --src src --system lib/system --emit-c $(BUILDDIR)/zfmt.c
 	$(CC) $(CFLAGS) -o $(BUILDDIR)/zfmt $(BUILDDIR)/zfmt.c $(call ZLINKOF,$(BUILDDIR)/zfmt.c) -lm
 
-# Regenerate the fmt goldens from the dump tool; a case's `.args` file names
-# the flags it is laid out with. Always review the resulting diff before
-# committing.
+# regen-fmt-goldens -- rewrite the fmt goldens (a case's .args holds its flags).
 regen-fmt-goldens: out/zfmt
 	@for f in tests/fixtures/fmt_cases/*.z; do \
 		name=$$(basename $$f .z); args=""; \
@@ -637,26 +485,18 @@ regen-fmt-goldens: out/zfmt
 	done
 	@echo "regenerated fmt goldens via $(BUILDDIR)/zfmt"
 
-# The ownership matrix's generator: tests/unit/matrixgen.z crosses every type
-# family with every position, each cell's verdict read from
-# tests/fixtures/matrix_expect.txt.
+# The ownership matrix generator: every type family by every position.
 out/matrixgen: bin/zc tests/unit/matrixgen.z $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z)
 	@mkdir -p $(BUILDDIR)
 	bin/zc matrixgen --src tests/unit --system lib/system --emit-c $(BUILDDIR)/matrixgen.c
 	$(CC) $(CFLAGS) -o $(BUILDDIR)/matrixgen $(BUILDDIR)/matrixgen.c $(call ZLINKOF,$(BUILDDIR)/matrixgen.c) -lm
 
-# Regenerate the matrix fixtures (emitc_corpus/matrix_*, run_golden/matrix_*,
-# errors/matrix_*_refused, the matrix_ rows of run_cases.txt) from the
-# expectations table. Always review the resulting diff before committing.
+# regen-matrix -- rewrite the matrix fixtures from tests/fixtures/matrix_expect.txt.
 regen-matrix: out/matrixgen
 	$(BUILDDIR)/matrixgen --root .
 
-# matrix-guard -- the committed matrix fixtures are matrixgen's output: it
-# regenerates them under a scratch root, from the committed expectations table
-# and run_cases.txt, and every file it writes must equal the repository's,
-# with no matrix_ fixture left over that it no longer writes. A template edit
-# in tests/unit/matrixgen.z committed without `make regen-matrix` fails here --
-# a42c51c8 changed one and left six fixtures stale for days.
+# matrix-guard -- the committed matrix fixtures are matrixgen's output, regenerated
+# under a scratch root, with none left over that it no longer writes.
 matrix-guard: out/matrixgen
 	@d=$$(mktemp -d); mkdir -p $$d/tests/fixtures; \
 	cp tests/fixtures/matrix_expect.txt tests/fixtures/run_cases.txt $$d/tests/fixtures/; \
@@ -673,23 +513,17 @@ matrix-guard: out/matrixgen
 	if [ $$bad -ne 0 ]; then echo "  run 'make regen-matrix' and review the diff"; exit 1; fi; \
 	echo "matrix-guard OK: $$n files equal matrixgen's output"
 
-# The asm kernels' generator: tools/asmgen, Go's math/big asmgen ported to
-# zerolang, writes math's word-vector kernels as GNU inline asm, one fragment
-# per architecture (_Z_MATH_ARITH_AMD64.inc, _Z_MATH_ARITH_ARM64.inc).
+# tools/asmgen -- writes math's word-vector kernels as inline asm, per architecture.
 out/asmgen: bin/zc $(wildcard tools/asmgen/*.z) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z)
 	@mkdir -p $(BUILDDIR)
 	bin/zc asmgen --src tools/asmgen --system lib/system --emit-c $(BUILDDIR)/asmgen.c
 	$(CC) $(CFLAGS) -o $(BUILDDIR)/asmgen $(BUILDDIR)/asmgen.c $(call ZLINKOF,$(BUILDDIR)/asmgen.c) -lm
 
-# Regenerate the asm kernel fragments under src/runtime/natives.
 regen-math-asm: out/asmgen
 	$(BUILDDIR)/asmgen src/runtime/natives
 
-# fmt-raw-guard -- the cursor's round-trip proof, gated. RAW mode lays out
-# nothing: it replays every token and its trivia straight from the cursor, so
-# the output is the input byte for byte unless the walk lost something. That is
-# what makes it the check that SURVIVES a change to the layout rules, which the
-# fmt goldens cannot be, since those record what the rules currently print.
+# fmt-raw-guard -- RAW mode replays every token and its trivia, so the output must
+# equal the input byte for byte; unlike the fmt goldens it survives layout changes.
 fmt-raw-guard: out/zfmt
 	@bad=0; n=0; \
 	for f in $(FMTSCOPE); do \
@@ -704,60 +538,25 @@ fmt-raw-guard: out/zfmt
 	fi; \
 	echo "fmt-raw-guard OK: $$n file(s) byte-identical through a RAW round trip"
 
-# regen-lsp-goldens -- rewrite tests/fixtures/lsp_golden/*.out from the
-# language server's current answers. A full runner pass, since the runner
-# has no kind filter; the run's other kinds gate as usual.
+# regen-lsp-goldens -- rewrite the lsp goldens (a full runner pass).
 regen-lsp-goldens: bin/zc $(BUILDDIR)/ztestrunner
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --jobs $(NPROC) --regen-lsp
 
-# emit-snapshot -- the emitted C of every example and corpus program and of the
-# three drivers, under SNAP=<dir>: two snapshots taken around a reformat must
-# compare equal, since layout and parentheses reach no emitted byte.
-emit-snapshot: bin/zc
-	@test -n "$(SNAP)" || { echo "usage: make emit-snapshot SNAP=<dir>"; exit 2; }
-	@mkdir -p $(SNAP)/examples $(SNAP)/corpus $(SNAP)/drivers
-	@for f in examples/*.z; do n=$$(basename $$f .z); \
-	  bin/zc $$n --src examples --system lib/system --emit-c $(SNAP)/examples/$$n.c 2>/dev/null || echo "no emit: $$f"; done
-	@for f in tests/fixtures/emitc_corpus/*.z; do n=$$(basename $$f .z); \
-	  bin/zc $$n --src tests/fixtures/emitc_corpus --system lib/system --emit-c $(SNAP)/corpus/$$n.c 2>/dev/null || echo "no emit: $$f"; done
-	@for d in zc zl zls; do bin/zc $$d --src src --system lib/system --emit-c $(SNAP)/drivers/$$d.c; done
-	@echo "emitted C snapshot under $(SNAP)"
-
-# bump-seed -- regenerate the committed seed from a fresh bin/zc. Run only when
-# test-bootstrap reports the seed can no longer build main, or for hygiene.
+# bump-seed -- regenerate the committed seed from bin/zc; review the diff.
 bump-seed: bin/zc
 	bin/zc zc --src src --system lib/system --emit-c bootstrap/zc.c
 	@echo "regenerated bootstrap/zc.c -- review the diff and commit"
 
-# BOOTSTRAP_CCS -- the compilers test-bootstrap proves the seed against. The
-# default is whatever $(CC) names, which keeps the local loop to one chain;
-# `ci` passes all three, because "no Python, any C compiler" is a claim about a
-# SET of compilers and gcc alone cannot support it.
+# The compilers test-bootstrap proves the seed against: $(CC) locally, all three
+# in ci. A named compiler that is missing fails rather than proving less.
 BOOTSTRAP_CCS ?= $(CC)
 
-# CI_BOOTSTRAP_CCS -- what `ci` proves the seed against. Overridable, but a
-# narrower list is a narrower CLAIM: test-bootstrap refuses a compiler it
-# cannot run rather than quietly proving less than the banner says.
 CI_BOOTSTRAP_CCS ?= $(CC) clang $(BUILDDIR)/tcc
 
-# test-bootstrap -- prove the committed seed bootstraps a correct compiler with
-# NO Python: cc the seed, double-bootstrap and assert the fixpoint (b2 == b3),
-# plus a correctness check (a seed-built compiler builds ztypes to its golden).
-# Slow (3 zc.c compiles per compiler; tcc's whole chain is ~0.4s, clang's is the
-# expensive one).
-#
-# Run per compiler in BOOTSTRAP_CCS, and then across them: the emitted C must be
-# BYTE-IDENTICAL whichever compiler built the compiler that emitted it. That is
-# the real content of the claim. Three toolchains each producing *a* working zc
-# would still allow three different zcs; b1(gcc) == b1(clang) == b1(tcc) says
-# they are the same compiler, and it is the assertion that would catch a
-# codegen-dependent emission -- an uninitialised read, a pointer printed, an
-# iteration order that depends on layout.
-#
-# gcc and clang get the project's CFLAGS. The vendored tcc gets -B, which it
-# cannot resolve its own headers without, and NONE of the -Werror= pins, which
-# it accepts and does not implement: a harness never hands a compiler a flag
-# whose effect it has not established.
+# test-bootstrap -- per compiler: cc the seed, bootstrap twice and require the
+# fixpoint (b2 == b3), and check a seed-built zc compiles the ztypes smoke to its
+# golden. Then across compilers: b1 must be byte-identical whichever compiler
+# built the zc that emitted it. tcc gets -B and none of the -Werror pins.
 test-bootstrap:
 	@mkdir -p $(BUILDDIR)
 	@set -e; \
@@ -808,7 +607,7 @@ test-bootstrap:
 	fi
 	@echo "bootstrap seed OK: 'cc bootstrap/zc.c' builds a correct self-hosting zc (no Python)"
 
-# install -- a self-contained tree at $(ROOT) + a $(BINDIR)/zc symlink.
+# install -- a self-contained tree at $(ROOT) plus symlinks in $(BINDIR).
 install: bin/zc bin/zl bin/zls $(BUILDDIR)/tcc
 	mkdir -p $(ROOT)/bin $(ROOT)/lib $(BINDIR)
 	cp bin/zc $(ROOT)/bin/zc
@@ -826,41 +625,21 @@ install: bin/zc bin/zl bin/zls $(BUILDDIR)/tcc
 	ln -sf $(ROOT)/bin/zls $(BINDIR)/zls
 	@echo "installed zc, zl, zls -> $(BINDIR) (tree: $(ROOT), tcc: $(ROOT)/bin/tcc)"
 
-# docs -- render the .pdoc documentation to HTML. Commit the regenerated .html.
-# Needs the picodoc renderer at ../picodoc-c/picodoc (see docs/Makefile).
+# docs -- render docs/*.pdoc to HTML (needs ../picodoc-c); commit the .html.
 docs:
 	$(MAKE) -C docs
 	@echo "rendered docs/ -- commit the regenerated .html"
 
-# WARN_CCS -- the compilers warn-check gates. Same reasoning as
-# CI_BOOTSTRAP_CCS: a compiler named here but missing is an error, because a
-# shorter list is a smaller claim.
+# warn-check -- the seed and the three drivers' C, with warnings as errors, under
+# gcc, clang and tcc: each sees things the others do not. WARNSET_* is the set
+# each compiler actually implements (tcc silently accepts any -W).
 WARN_CCS ?= $(CC) clang $(BUILDDIR)/tcc
 
-# WARNSET_* -- the warnings each family actually IMPLEMENTS. QUALWERR's
-# gcc/clang split, generalised: clang rejects gcc's -Werror=discarded-qualifiers
-# outright, and tcc implements exactly six warnings (`tcc -hh`) and silently
-# accepts every other -W it is handed. Passing tcc gcc's set would be the same
-# defect as passing it -fsanitize=address -- the gate would report checks it had
-# not run. -Wunsupported is tcc's own version of this rule, and is on
-# deliberately: it makes tcc say when it is ignoring something.
 WARNSET_gcc   := $(CFLAGS_BASE) -Werror=discarded-qualifiers $(OPTFLAGS)
 WARNSET_clang := $(CFLAGS_BASE) -Werror=incompatible-pointer-types-discards-qualifiers $(OPTFLAGS)
 WARNSET_tcc   := -B $(TCCLIB) -Wall -Wunsupported \
                  -Werror=implicit-function-declaration -Werror=discarded-qualifiers
 
-# warn-check -- compile every emitted C file with each warning as an error, with
-# every compiler that has to build it.
-#
-# All FOUR files, because they are not the same program: zl and zls carry units
-# zc does not, so a dead store reachable only from one of them shows up only
-# there -- and the committed SEED is what a fresh clone compiles first, so a
-# warning left in it greets every new checkout no matter how clean src/ is.
-#
-# All THREE compilers, because they do not see the same things. tcc's "function
-# might return no value" is the one diagnostic that points at a genuinely
-# missing tail return, which surfaces at runtime as `zpanic: out of memory` and
-# nowhere else; gcc and clang never report it. The residue is zero on all three.
 warn-check: bin/zc.c $(BUILDDIR)/zl.c $(BUILDDIR)/zls.c $(BUILDDIR)/tcc
 	@set -e; \
 	for cc in $(WARN_CCS); do \
@@ -883,20 +662,12 @@ warn-check: bin/zc.c $(BUILDDIR)/zl.c $(BUILDDIR)/zls.c $(BUILDDIR)/tcc
 	done
 	@echo "warn-check OK: zero warnings from $(words $(WARN_CCS)) compiler(s) on all four emitted files"
 
-# perf -- self-compile performance snapshot for docs/perf-baseline.md, measured the
-# same way as the rows there (default hash, --emit-c /dev/null): the zerolang line
-# count (compiler + relocated front-end/stdlib), self-compile wall best-of-5 + peak
-# RSS, the parse/typecheck/emit phase split, and -- when valgrind is installed -- the
-# ground-truth allocation total (heap blocks for one self-compile). Append the printed
-# numbers as a row to docs/perf-baseline.md in the commit that lands a perf-relevant
-# change. The glibc wall (make MIMALLOC=0), corpus wall (make test) and the DHAT
-# allocation-site census stay manual -- see the command list in that doc.
+# perf -- the self-compile snapshot for docs/perf-baseline.md: line count, wall,
+# peak RSS, phase split and the allocation total.
 PERFARGS := zc --src src --system lib/system --emit-c /dev/null
 PERFRUN  := $(PERFBIN) $(PERFARGS)
 
-# The series binary: the same emitted C as bin/zc, compiled at the series
-# level by the series compiler. Depends on bin/zc because that rule is what
-# emits bin/zc.c.
+# The series binary: bin/zc.c compiled by PERFCC at PERFOPT.
 $(PERFBIN): bin/zc.c $(MIMALLOC_OBJ) $(BUILDDIR)/buildstamp.o
 	@$(PERFCC) -std=c17 -w $(PERFOPT) -o $@ $(MIMALLOC_OBJ) $(BUILDDIR)/buildstamp.o bin/zc.c $(call ZLINKOF,bin/zc.c) -lpthread -lm
 
@@ -913,1589 +684,11 @@ perf: $(PERFBIN)
 	  valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: /  /'; \
 	else echo "  (valgrind not installed -- skipping alloc total)"; fi
 
-# perf-strict -- the trustworthy allocation number. $(PERFBIN) is compiled
-# here, by PERFCC at PERFOPT, so the two traps that produced wrong readings
-# before -- a bin/zc silently rebuilt by `make test CC=clang`, and a driver
-# built at another optimization level -- cannot reach the measurement at all;
-# the .comment probe stays as a cheap assertion. The remaining guards are on
-# the RUN: check the exit code (an early-aborted self-compile reads as a huge
-# perf win) and require allocs == frees.
-# The clang deletion is REAL behavior, not a bug: LLVM removes an allocation
-# whose bytes are written but never READ and whose pointer never escapes -- a
-# read of the copied bytes blocks it -- which gcc does at no tested level (an
-# allocator attribute on z_xmalloc changes nothing). So a clang build is a
-# different measurement, not a wrong one; `make perf-elision` measures that
-# pool deliberately, and it belongs at zero.
-# ALLOC_BASELINE -- heap blocks for one self-compile of $(PERFBIN) (gcc -O1, the
-# default hash, --emit-c /dev/null): the count at the last commit that measured
-# it. The number is bit-identical run to run, so it is a sound ratchet where wall
-# and cycles are not. perf-strict fails ABOVE it; a commit that raises it states
-# the reason in its message, and one that lowers the count lowers it here.
-#
-# 2,131,114 was 2e582352's. The drift that followed was 83,632, of which 53,575
-# was waste and came back out (d45c3204, 43e533e1). What is left is work the
-# tree asked for: 11,244 of it is missingCtorFields checking a NATIVE call's
-# required arguments, priced by restoring the old bail and measuring, and the
-# rest is fourteen commits of new checks over 665 new lines of source.
-#
-# +2,763 for the five container `.copy` declarations: a stdlib member costs a
-# Decl row on its template AND on every monomorphisation of it, and a
-# self-compile mints many. The C is still emitted only for an instance that
-# calls one, so this is the declaration's price and not the body's. Six of the
-# 2,763 are the member-name id the collection read binds before testing it,
-# which the formatter's wrap of the inline form made unreadable.
-#
-# -181 when isContainerReaderCall went: it ran at three lock sites on every
-# auto-called member read, and every one of them already asked
-# methodReceiverIsView beside it.
-#
-# +372 for selfReturnOnInstance. NOT per call -- a self-compile makes tens of
-# thousands of auto-calls and this is 372 -- but downstream: a member reached on
-# a monomorphisation now answers that INSTANCE where it used to answer the
-# template, so instances materialise where a template stood in.
-#
-# +1,087 for the iterator-construction refusal, and it is the COMPILER'S OWN
-# SOURCE, not the check: 83 more lines of src/, at the 13-17 allocations a line
-# this tree costs to compile. Measured, because the obvious theory was wrong --
-# skipping the member materialisation for monos, where the lookup answers
-# without it, cost 59 allocations MORE than it saved.
-#
-# +1,093 for `upto` / `downto` on the eight scalars: sixteen more bodied stdlib
-# members, which the self-compile compiles like any other source. The demand
-# gate keeps them off the programs that do not call them.
-#
-# +524 for the conformance exemption on the method-body gate: a conformance row
-# scan per bodied member of a runtime-owned type. A vtable wrapper is emitted
-# from the row and not from a use site, so a member reached only through
-# `spec.member` is never stamped used and must not be deferred.
-#
-# +1,633 for the integer range itself: `intrange` and a bodied `times` on the
-# eight scalars are ~70 lines of new lib/system, which the self-compile
-# compiles like any other source. The DEMAND gate above is what keeps that off
-# the programs: a bodied `times` costs 1 line of emitted C in a program that
-# never iterates, against 418 without it.
-#
-# +556 for the method-body demand gate: a bodied member of a RUNTIME-OWNED
-# type is walked only where the program calls it, so the gate is asked at every
-# bodied member of every type resolved. 0 behaviour -- no stdlib type has a
-# bodied member yet, so nothing is deferred; it is the ~30 net lines of src/.
-# It pays for itself the moment one does: a bodied `times` on the eight scalars
-# costs 1 line of C in a program that never iterates, against 418 without it.
-#
-# +675 for the containment check asking whether the target is on the
-# containment PATH rather than merely mid-resolution: a per-Decl mark, set and
-# restored around each field or arm typeref. 0 behaviour on the corpus -- it
-# only stops a FALSE cycle, and nothing in the corpus triggered one -- so all
-# of it is the ~40 net lines of new src/ plus the mark's own set and restore
-# at every field edge of every type the compiler resolves.
-#
-# +1,369 for the counted range counting in the RECEIVER's width, and it is the
-# COMPILER'S OWN SOURCE, not the reader: 73 net lines of src/, at the 13-17
-# allocations a line this tree costs to compile. ab.sh splits it 0 behaviour /
-# +1,369 source, and the emitted C changes only where the width was wrong.
-#
-# +337,556 for the infix form compiling as a call. `a op b` IS `a.op b`, so an
-# operator expression is now a call node, a dotted callable and an unlabelled
-# namedoperation where it was one binop row -- and it takes the call path's
-# argument binding, positional coercion and ownership disposition, which is the
-# whole reason the infix form no longer transfers an argument without saying so.
-#
-# MEASURED AT ~4 ALLOCATIONS PER OPERATOR INSTANCE by two probes that agree:
-# 500 operators in a flat function cost 1,984 over the same file without them
-# (3.97 each), and 1,200 operator instances through ten instantiations of one
-# generic cost 5,029 (4.19 each). It is LINEAR in operator INSTANCES --
-# monomorphisation does not amplify the rate -- so the self-compile's number is
-# that rate over the operators the compiler and stdlib contain once
-# monomorphised, around 82,000 of them.
-#
-# It was 8,800,686 before two things were measured and kept, and the emitted C
-# of all 435 corpus programs, every example and the zl/zls drivers is
-# byte-identical across both:
-#   -6,631,000  the operator emitter is asked BEFORE the named-callee probe
-#               chain instead of at the end of it, and reads the declaration
-#               THE CHECKER ALREADY RESOLVED rather than re-deriving the
-#               receiver type, the declaring type and the method for every
-#               operator in the program. The binop leg read a stamp and did no
-#               lookup at all; this restores that. The comparison pair is
-#               excluded: `!=` on a typedef resolves to the base's raw compare,
-#               which is the one chase the emitter must not make.
-#       -4,213  the one-argument kidspan is minted without a list to carry it.
-#
-# -16,111 for retiring the dead binop legs. Nothing here is a check that
-# stopped running: the self-compile's INPUT is the compiler's own source, and
-# this commit takes 754 lines out of src/ and lib/system/. That is 21
-# allocations a line against the 13-17 this tree usually costs, which is what
-# a checker family of nested calls and table walks weighs next to an average
-# line -- the four ZTyping stamp tables that went with it are four blocks.
-#
-# +509 when the parser stopped minting the `expression` wrapper, and it is two
-# measured movements (valgrind, the old and new compiler over the same input):
-#   +2,468  every call-shaped TYPE reference resolves its mono where it is
-#           recorded. A parenthesised field type `rows: (List Row)` always did;
-#           the bare `rows: List Row` did not, because only the wrapper's arm
-#           resolved inline. Without the wrapper the two spellings are one tree
-#           and take one path, and the compiler's own source holds 143 bare
-#           field types at ~17 allocations each. The emitted C is byte-identical.
-#   -1,959  the input: 98 fewer lines of src/ and lib/system/.
-# The bytes allocated fall by 2.6 MB: the wrapper rows themselves.
-#
-# -28,966 when the `expression` arm and every name reading it were deleted, and
-# it is the INPUT: over the same source the old and new compilers differ by 6
-# allocations, while the compiler's own source is 933 lines shorter. The bytes
-# fall 5.2 MB, 3.3 MB of it the compiler's own over that same source.
-#
-# +12,966 when a unit-level constant expression that does not fold became a
-# refusal, and it is the INPUT: over the same source (and the same argv[0]) the
-# old and new compilers allocate identically, while the compiler's own source is
-# 528 lines longer -- the walk that says why a constant has no value.
-#
-# +12,578 when a swap and a reassignment target became checked (unknown names,
-# addressability, borrowed names, one type), and it is the INPUT again: over the
-# same source and argv[0] the old and new compilers allocate identically, while
-# the compiler's own source is 272 lines longer.
-#
-# +25,019 when a write started ending narrowing in every scope it reaches.
-# Measured with valgrind, old and new compiler from one argv[0]: over the old
-# source the new compiler allocates 1,145 more -- one pre-sized worklist per loop
-# walked while something is narrowed, the quick question of whether the loop
-# writes a narrowed name at all -- and the rest is the input, the compiler's own
-# source being 346 lines longer.
-#
-# +3,487 when the emitter started writing a narrowed name as the whole variable:
-# over the old source the new compiler allocates 20 more, and the rest is the
-# input, the compiler's own source being 74 lines longer.
-#
-# +1,153 when a container construction's arguments became `create`'s: over the
-# old source the new compiler allocates 27 more (the call walk the arguments now
-# take), and the rest is the input, 70 more source lines.
-#
-# +10,403 when a container's `length`, `capacity` and `size` became methods in the
-# type model: over the old source the new compiler allocates 11,774 more -- each
-# container mono's counters are produced and cloned from the template's
-# declarations where a u64 was stamped -- and the input allocates 1,371 fewer.
-#
-# +744 when a surplus unlabelled argument to a receiver-only method became an
-# error: over the same source the old and new compilers allocate identically, and
-# it is the input, the compiler's own source 29 lines longer.
-#
-# +4,412 when a function field became each instance's own writable slot and a
-# function value had to match the signature it fills: over the same source the
-# old and new compilers allocate identically, and it is the input, the
-# compiler's own source 169 lines longer.
-#
-# +5,492 when a type's static members and an instance's function fields became
-# two namespaces: over the new source the new compiler allocates 10 fewer than the
-# old (the old source itself is refused by the new rule, so it cannot be the
-# common input), and it is the input, the compiler's own source longer.
-#
-# +2,101 when a body walked on demand set aside the expression position it was
-# reached from, and fields and constants joined the two namespaces: over the
-# same source the new compiler allocates 3 more, and the rest is the input, the
-# compiler's own source longer.
-#
-# +5,910 when every spelling of a construction became one call of the type's
-# `create`: over the same source the new compiler allocates 4 fewer, and it is the
-# input, the compiler's own source longer.
-#
-# +10,935 when a string constant became a method receiver and a unit-level call
-# of its methods was checked as a body checks it: over the same source the new
-# compiler allocates exactly as the old, and it is the input, the compiler's own
-# source longer.
-#
-# +3,661 when an ownership marker on a literal, a constant or data, and a data
-# block used as a value, were refused: over the same source the new compiler
-# allocates exactly as the old, and it is the input, the compiler's own source
-# longer.
-#
-# +3,126 when a call whose view is read for its data and its size was bound to a
-# temp and evaluated once: over the same source the new compiler allocates
-# exactly as the old, and it is the input, the compiler's own source longer.
-#
-# +8,958 when an escaped string constant and a data element or length became
-# unit-level constants: over the same source the new compiler allocates exactly
-# as the old, and it is the input, the compiler's own source longer.
-#
-# +6,027 when a unit-level definition naming a missing target became the body's
-# error, and break and continue were declared: over the same source the new
-# compiler allocates exactly as the old (the old source itself is refused by the
-# new rule -- core.z re-exported the two undeclared builtins), and it is the
-# input, the compiler's own source longer.
-#
-# +10,727 when a type's `as` constants joined the unit-constant channel and a
-# default became any compile-time scalar: over the same source the new compiler
-# allocates exactly as the old, and it is the input, the compiler's own source
-# longer.
-#
-# +5,912 when a constant came to carry its width: the compiler's own source grew
-# by 12,175 allocations, and over the same source the new compiler allocates
-# 6,321 fewer -- a coercion check reads an argument's literal lexeme only when
-# no folded value settles it, where every argument copied it.
-#
-# +4,990 when a unit-level `match` came to fold: over the same source the new
-# compiler allocates exactly as the old, and it is the input, the compiler's
-# own source longer.
-#
-# +3,249 when a float constant came to be emitted exactly and refused when not
-# finite: over the same source the new compiler allocates exactly as the old,
-# and it is the input, the compiler's own source longer.
-#
-# +5,117 when a function's last expression came to be checked and emitted as
-# its result: over the same source the new compiler allocates exactly as the
-# old, and it is the input, the compiler's own source longer.
-#
-# +12,904 when the arms of an `if` or `match` used as a value came to agree on
-# one type: over the same source the new compiler allocates exactly as the old,
-# and it is the input, the compiler's own source longer.
-#
-# +11,269 when every arm of an `if` or `match` used as a value came to be
-# emitted: over the same source the new compiler allocates exactly as the old,
-# and it is the input, the compiler's own source longer.
-#
-# +71 when a function of no arguments returning a collection came to be called
-# where bound by its bare name: over the same source the new compiler allocates
-# exactly as the old, and it is the input, the compiler's own source longer.
-#
-# +8,788 when a returned view came to be judged by what it keeps locked: over the
-# same source the new compiler allocates ~900 more (the unnamed local a pinning
-# call's value receiver becomes -- its name, its pool entry, its row), and the old
-# compiler allocates +7,698 more over the new source, which is 271 lines of checks
-# longer; the `outx` slicing natives and the view `print` cost ~200.
-#
-# +3,195 when a condition past the first `when`, a loop's test and a do-while's
-# trailing test came to build their temporaries in place: +668 over the same
-# source (the statement expression each such condition in zc's own source now
-# is), the rest the source ~100 lines longer.
-#
-# +3,714 when a ternary arm and a later ternary condition came to assign their
-# temporaries where they run: over the same source the new compiler allocates
-# exactly as the old, and it is the input, the compiler's own source 133 lines
-# longer.
-#
-# +2,056 when a String no name holds came to be bound once under a view, and a
-# call's value receiver once under a vtable or a function field: +115 over the
-# same source (the temporaries the pool-text views in zc's own source now bind,
-# which also stops calling each pool read twice), +1,941 the source 122 lines
-# longer.
-#
-# +1,574 when an owned argument a pinning call keeps locked came to be an unnamed
-# local: the adopted temps and their pins over the same source, and the source
-# 35 lines longer. (A tid-valued id map was a new instantiation that cost
-# +1,400 more; the u64-valued one the checker already mints carries the tid.)
-#
-# +2,306 when an argument's temporary came to be released at the end of its
-# statement: over the same source the new compiler allocates 152 fewer (a release
-# is emitted once after its statement instead of on every return path), and the
-# source is 96 lines longer.
-#
-# +588 when a for initialiser of a type that is not a scalar came to be declared
-# with its C type and released: the source ~30 lines longer.
-#
-# +302 when a take Box parameter came to be released through its pointer: the
-# source ~12 lines longer.
-#
-# +103 when a box came to be built in place: the source a few lines longer.
-#
-# +36,630 when a user function's arguments came to be evaluated in written order:
-# +28,172 over the same source, the ordered temps zc's own calls now read their
-# arguments into (7,084 of them in zc.c: a name, its declaration and its C type
-# each), and +8,378 the source longer. The first cut allocated +146k; building
-# a temp only once a later part follows the last one, and assembling the
-# assignments without a string per piece, took that out.
-#
-# +26,299 when a method's, a function field's or local's, and a vtable call's
-# arguments came to be evaluated in written order: +17,368 over the same source
-# (2,134 more ordered temps in zc.c, and the positions a method call's
-# arguments are built in), +8,914 the source longer. Argument slots and
-# positions ride stacks on the emit context; a per-call id map and three small
-# lists had cost +42k.
-#
-# +17,703 when a construction's arguments came to be evaluated in written order:
-# +9,824 over the same source (1,395 more ordered temps in zc.c), +7,863 the
-# source longer.
-#
-# +3,246 when a collection method's, a native row's and a native function's
-# arguments came to be evaluated in written order: -1,706 over the same source
-# (a literal's String and an arm without a payload are constants, which takes
-# out more ordered temps than the collection calls add: 10,210 in zc.c against
-# 10,684), +4,952 the source longer.
-#
-# +8,957 when an operator's operands came to be evaluated in written order:
-# +5,311 over the same source (1,717 more ordered temps in zc.c, a scalar one
-# typed from its stamp only once it is needed -- typing every operand up front
-# cost +25k), +3,646 the source longer.
-#
-# +2,674 when a field moved into a parameter that takes it came to be zeroed:
-# +551 over the same source (a return that moves one binds its value first),
-# +2,123 the source longer.
-#
-# +2,126 when a move out of a field came to be checked as a write: +7 over the
-# same source, +2,119 the source longer.
-#
-# +7,426 when a generator line's parts written before a yield came to be bound
-# ahead of it: the source ~190 lines longer; zc itself declares no generator.
-#
-# +7,375 when a field moved into an argument came to be gone for the rest of the
-# call: +9 over the same source (zc moves no field while its call reads the
-# owner, so the read check never runs), +7,364 the source longer.
-#
-# +443 when a field moved into an argument came to be zeroed where the move is
-# written: +0 over the same source (whether a field owns anything is asked
-# before any text is built), the source longer.
-#
-# +5,911 when an `if` or `match` arm yielding a bare local came to move it into
-# a binding, a reassignment, a taking parameter or a return: +0 over the same
-# source (zc binds no such value), +5,911 the source longer.
-#
-# +3,281 when a List, Set or Map bound from an `if`, a `match` or a do block came
-# to get the value its arm yields: +0 over the same source, the source longer.
-#
-# +552 when a value with a destructor bound from an `if` or a `match` came to be
-# destroyed: +0 over the same source, the source longer.
-#
-# +533 when `.take` on a value that owns nothing came to hand on the value in
-# every position: +0 over the same source, the source longer.
-#
-# +820 when a reftype field bound to a local came to pin the field's path: +25
-# over the same source (a pin path per bound field in zc), +795 the source longer.
-#
-# +55 when `print` came to leave a borrowed element in its list: the source
-# longer.
-#
-# +3,771 when a borrowed value moved into storage that owns what it holds came to
-# be refused: +0 over the same source, the source longer.
-#
-# +9,171 when an `if` or a `match` with a place arm came to be a reference where
-# its value is borrowed: +0 over the same source, the source longer.
-#
-# +6,888 when the arms of a bound or consumed `if` or `match` came to answer as
-# the same read written alone does: +0 over the same source, the source longer.
-#
-# +2,267 when a borrowing binding of a by-value reftype came to be a reference:
-# +17 over the same source (the shape and type questions the alias gate asks per
-# binding), +2,250 the source longer.
-#
-# -12 when three bare bindings that MOVE came to spell the move `.take`: the
-# marker is read instead of the bind-move rule being reached. C is identical.
-#
-# +468 when a local binding of a reftype came to BORROW: the source is longer
-# (the pin, the alias leg and the six sites that bound a name and then
-# reassigned it). The rule itself is CHEAPER than what it replaced -- -818 over
-# the same source, because a borrow installs a pin where a move transferred
-# every held lock and laid a taken row.
-#
-# -275 when sixteen bindings that only renamed their source were removed: each
-# was a local the emitter built and a pin the checker installed, for a name used
-# once or twice right below it.
-#
-# +440 when a member read on a FUNCTION VALUE came to be refused: +0 over the
-# same source -- the legs run only where a member is read off a function, which
-# is now an error -- and +440 the source longer.
-#
-# +1,388 when a call's result came to be bound before its address is taken:
-# +0 over the same source -- the legs fire only where the C did not compile
-# before -- and +1,388 the source longer.
-#
-# +140 when a `.take` Set/Map parameter became the pointer it always was: +0
-# over the same source (no program in the tree had one), the source longer.
-#
-# +451 when a Box PARAMETER's operand came to deref twice: +0 over the same
-# source (the compiler boxes nothing), the source longer.
-#
-# +11,414 when `bool` stopped disqualifying a signature from the fnptr-typedef
-# pass: +11,363 over the same source and +51 the source longer. The pass is
-# EAGER -- one typedef per eligible function, referenced or not -- so admitting
-# every bool-mentioning function adds 848 typedef lines to zc.c (651 to zl.c,
-# 660 to zls.c), almost all of them unreferenced. The eagerness is the existing
-# design and predates this; making the pass demand-driven would take all three
-# numbers back and is its own change.
-#
-# +18,224 when a generated `==` came to need an `==` on every part: +76 over the
-# same source (the checker's gate, answered once per type, and the emitter's
-# once-per-type test of whether a C `_eq` can be written at all) and +18,148
-# the source longer, 15,828 of it the checker's new functions.
-#
-# +1,042 when a generated `==` came to call each part's own: -521 over the same
-# source (no `_eq` for a type whose `==` is written or struck off; a definition
-# is built apart only when it must follow the methods it calls) and +1,563 the
-# source longer.
-#
-# -206 when array and str `==` became the generated pair every value type has:
-# +0 over the same source, -206 the source shorter.
-#
-# -82 when the floats lost their `hash`: the compiler is unchanged, and f32
-# and f64 no longer mint a synthesised one.
-#
-# +24,168 when a key came to be hashed and compared with its own members: +377
-# over the same source (the part gates at every hashed position, the generated
-# hashes' prototypes and definitions) and +23,791 the source longer.
-#
-# -906 when a list's `contains`, `==` and `!=` came to use the element's own
-# `==`: +1,337 over the same source and library, +4,441 for ListVal's two new
-# members, and about -6,700 the source: roughly +7,000 of new code, and -14,000
-# for two `a != b` on tids rewritten as `(a == b).not` -- a derived `!=` on a
-# type with a written `==` costs ~7,300 allocations to compile (N33).
-#
-# +2,749 when `sort` came to need the element's own `compare`: +1,240 over the
-# same source and library (each str instance's native `compare`, the sort
-# check), about +150 for the new native members, and about +1,350 the source
-# longer.
-#
-# +4,705 when an instance walk came to check the arm its compile-time `match`
-# selects: the same source compiles with the same count, all of it is the
-# source longer (the arm selection, now shared with the emitter, and the
-# instance walk of that arm).
-#
-# -2,114 when a generic instance's concrete members stopped being looked up by
-# name to decide whether they were the elided argument: -1,805 over the same
-# source, -309 the source shorter.
-#
-# +1,017 when a generic function's concrete parameters came to be checked
-# against their arguments: the same source compiles with the same count, all
-# of it is the source longer.
-#
-# +1,804 when a generic function's instance return came to be specialised and
-# checked: +199 over the same source (the instance walks check returns), about
-# +1,600 the source longer.
-#
-# +2,940 when a generic instance came to have its own `create`: +106 over the
-# same source (class instances' field-wise create and its parameters), about
-# +2,830 the source longer.
-#
-# +1,026 when a type application came to answer the bare-name construction
-# rules: -820 over the same source (the check names the type only when it
-# reports, which also cheapened the bare-name check), about +1,850 the source
-# longer.
-#
-# +1,361 when an optionval/resultval came to carry an instance and an arm's
-# uninferred parameter was refused: the same source compiles with the same
-# count, all of it is the source longer.
-#
-# +2,749 when a sum over a generic parameter came to be matched and narrowed
-# in its generic body: the same source compiles with the same count, all of it
-# is the source longer (a first cut compared two tids with `!=` and cost
-# +9,758 -- N33).
-#
-# +456 when a generic sum's tag accessor and tag storage came to be its
-# instances': +14 over the same source (the templates' `as` items are read for
-# a tag), about +440 the source longer.
-#
-# +2,677 when generic instances came to be written after the instances they
-# embed, and a sum's arm over its own parameter to resolve: the same source
-# compiles with the same count, all of it is the source longer.
-#
-# +13,882 when a type a generic unit declares came to be each instance's own:
-# the same source compiles with the same count, all of it is the source longer
-# (a first cut listed every function type's parameters to ask whether one names
-# a template, +10,696 over the same source).
-#
-# -498 when an `Any` bound came to be reported at the atom that spells it: the
-# same source compiles with the same count, all of it is the source shorter.
-#
-# +712 when a dotted zero-arg call came to answer for its own result where it is
-# hoisted: the same source compiles with the same count, all of it is the
-# source longer.
-#
-# +4,356 when a user function's String or List `.borrow` return came to be a
-# reference: +214 over the same source (each call and path asks whether it is
-# one), about +4,140 the source longer.
-#
-# +520 when an argument moved out of another call's result came to run that
-# call once: the same source compiles with the same count, all of it is the
-# source longer.
-#
-# +3,103 when a parameter a call leaves out came to be its declared default
-# whatever declares it: +1,417 over the same source (every generic clone copies
-# its parameters' defaults), about +1,690 the source longer.
-#
-# +8,549 when an integer literal that cannot be represented where it lands
-# came to be refused: +54 over the same source (each literal of nineteen
-# characters or more is read for its width), about +8,500 the source longer (a
-# first cut kept the wide literals in a `ListVal monostamp`, which the compiler
-# then instantiates for itself: +1,900 more).
-#
-# +1,121 when a value receiver's pins came to be its own and held locked across
-# the call's arguments: +2 over the same source, about +1,120 the source longer
-# (a first cut asked every method call for its receiver tuple: +15,800).
-#
-# -353,613 when a typedef's `!=` came to be the `==` its author wrote, negated:
-# -297,948 over the same source (the emitter reads the declaration the checker
-# resolved for the pair, so the scan that copied EVERY registered type's name
-# to find the owner is gone -- and where it still runs it compares the names
-# through a view), -55,665 the source shorter (five comparisons of a typedef id
-# against a raw value, which the rule now refuses, spell the conversion).
-#
-# +944 when a member's signature came to resolve in the declaration that owns
-# it, and a report of two same-named types came to name each one's unit: the
-# same source compiles with the same count, all of it is the source longer
-# (the demand points no longer take the caller's frame at all, which is most of
-# what the report's own helpers cost back).
-#
-# +354 when a `.typedef` marker written as a unit definition came to be refused
-# whether or not it is parenthesised: the same source compiles with the same
-# count, all of it is the source longer.
-#
-# +733 when a report of a type came to spell what the author WROTE -- the Box
-# hint's arm type and the reftype-member refusal's -- rather than the name the
-# compiler minted: the same source compiles with the same count, all of it is
-# the source longer.
-#
-# +5,165 when a generic bound came to name a type the program declares, and one
-# that HAS a `.generic`: +7 over the same source (the bound atoms are walked
-# once after resolution, as `Any`'s are), about +5,160 the source longer.
-#
-# +4,317 when a bound that names a declaration came to admit what that
-# declaration says: the same source compiles with the same count, all of it is
-# the source longer.
-#
-# +384 when a generic function of another unit, called `unit.fn`, came to run
-# the instance its call is stamped with rather than the template: the same
-# source compiles with the same count, all of it is the source longer.
-#
-# +62 when a generic function's instances came to be declared before the
-# method bodies that may call them: the same source compiles with the same
-# count, all of it is the source longer.
-#
-# +2,633 when an instance minted inside another instance's walk came to be
-# walked -- the post-sweep repeats until a round mints nothing, and refuses a
-# template that instantiates itself without end: the same source compiles with
-# the same count, all of it is the source longer.
-#
-# +53 when an explicit type argument written inside an instance's walk came to
-# name the instance's type: the same source compiles with the same count, all
-# of it is the source longer.
-#
-# +2,048 when a generic instance holding a mono that embeds a user type came to
-# be placed in the late group rather than at the tail of the collection pass:
-# the same source compiles with the same count, all of it is the source longer.
-#
-# +2,822 when a type a nested unit declares came to have its method bodies
-# checked and emitted, at any depth: the same source compiles with the same
-# count, all of it is the source longer.
-#
-# +1,170 when a typedef reached through its unit came to be constructed as the
-# cast the bare spelling is, and a typedef's cast came to check its value: +326
-# over the same source (a typed number of another width is still cast, which
-# asks both types whether they are numbers; an exact match asks nothing), about
-# +840 the source longer.
-#
-# +838 when a record's or variant's method came to take a parameter the way a
-# call passes it, and `.copy` of an all-valtype container came to be one call
-# for every receiver shape: the same source compiles with the same count, all
-# of it is the source longer.
-#
-# +1,779 when a `getMut` element came to be bound before a collection method
-# reads it and loaded where a by-value parameter takes it, and a discarded
-# statement came to declare the temps it hoists: the same source compiles with
-# the same count, all of it is the source longer.
-#
-# +311 when a reassignment whose value has run came to zero the sources it
-# moved out of before freeing the target's old value: the same source compiles
-# with the same count, all of it is the source longer.
-#
-# -53,285 when a function type's `_ft` typedef came to be written only for a
-# type the program spells -- a field, parameter, variable or return holding a
-# function value, or a signature naming one: -55,329 over the same source (the
-# compiler's own C carried 2,791 such typedefs and referenced none), about
-# +2,040 the source longer.
-#
-# +354 when an iterator cursor came to be declared on its mono's terms and the
-# split / lines iterator types came to be written ahead of the function types
-# spelling them: +14 over the same source (the written-row set), +340 the
-# source longer.
-#
-# +735 when a borrow of a fresh value at the end of a variable's path came to
-# keep that value alive, as a call's result is kept: the same source compiles
-# with the same count, all of it is the source longer.
-#
-# +6,631 when a type a unit instance declares came to be nameable through the
-# instance in any type position (`ic.Cell`), the instance built on demand: the
-# same source compiles with the same count, all of it is the source longer.
-#
-# +8,506 when a generic unit applied in place came to be its instance -- in a
-# body, a signature, a unit-level definition -- and a unit bound as a value came
-# to be refused: the same source compiles with the same count, all of it is the
-# source longer.
-#
-# +1,286 when a generic type that writes its `create` came to be constructed
-# with that create's parameters, each keeping its own ownership: +12 over the
-# same source, +1,274 the source longer.
-#
-# +236 when a generic class's construction came to pin the source of a
-# borrowed field, as a non-generic one does: the same source compiles with the
-# same count, all of it is the source longer.
-#
-# -1,558 when a record or class came to need a field and Box came to be `is
-# native`: -1,410 over the same source (the one Box test compares the
-# registered name in place where three copies read it out), -148 the source
-# shorter.
-#
-# +302 when a match on an ordinal variant held through a pointer came to test
-# the value and a receiver with no address came to be hoisted: the same source
-# compiles with the same count, all of it is the source longer.
-#
-# +1,252 when a generic function's instance came to carry its template's return
-# markers, a generic body's instance walk to read them, and a generic call's
-# reference result to pin what it points into: the same source compiles with
-# the same count, all of it is the source longer.
-#
-# +801 when a field-path argument to a generic call whose result keeps its
-# inputs came to be pinned by the result: the same source compiles with the
-# same count, all of it is the source longer.
-#
-# +1,310 when a constant integer operation that overflows, or divides by a
-# constant zero, came to be refused in a body as at unit level: the same source
-# compiles with the same count, all of it is the source longer.
-#
-# +2,064 when a binding's shared lock on a path another binding already locks
-# came to be recorded as its own, since the two can end apart: +1,887 over the
-# same source (the rows the compiler's own aliases now lay), +177 the source
-# longer.
-#
-# +997 when `.drop` came to end a readonly name and a borrowed parameter came to
-# be dropped without destroying what its caller owns: the same source compiles
-# with the same count, all of it is the source longer.
-#
-# +3,570 when a `.drop` that releases the last borrow of a temporary came to
-# destroy it there, and a temporary nothing holds on a held line to end with its
-# statement: +3 over the same source, +3,567 the source longer.
-#
-# +1,601 when a typedef came to be constructed only from exactly its base type:
-# the same source compiles with the same count, all of it is the source's own
-# thirty-one conversions to u32 at the name and node ids it built from u64s.
-#
-# +5,428 when every integer operator came to fold over constant operands, and
-# the arithmetic operators to be routed by well-known name id: the same source
-# compiles with the same count, all of it is the source longer.
-#
-# +3,706 when a generic call's arguments came to lock what they reference while
-# they are walked: +84 of it is the call locks themselves (the old source,
-# compiled by both compilers), the rest the source's own new lock and move legs.
-#
-# +2,013 when a field argument's lock came to be held by the call and a call's
-# pinning result to hold its pins: +1,038 of it is those locks (the new source,
-# compiled by both compilers -- the old compiler reads it, the new one refuses
-# the old source's two views into the registry), the rest the source.
-#
-# +1,114 when a definition whose value names itself came to be reported rather
-# than followed down the stack: all of it the source; the compiler's own source
-# compiles with the same count.
-#
-# +197 when generator lowering came to walk every unit a unit declares: all of
-# it the source; the compiler's own source compiles with the same count.
-#
-# +1,819 when a generator's `call` came to refuse a written receiver: all of it
-# the source. (The splits above were first measured with the two compilers at
-# paths of different lengths, which alone moves the count by 240 -- argv[0] is
-# an input; they are corrected here.)
-#
-# +865 when a data block a nested unit declares came to be readable: all of it
-# the source.
-#
-# +1,566 when a type a nested unit declares came to be a type argument: all of
-# it the source.
-#
-# +623 when a class came to free the Box it holds: +36 of it the destroy
-# operand a reassignment now spells through destroyOperand, the rest the source.
-#
-# +2,592 when a Box's fields and methods came to be its element's: all of it
-# the source.
-#
-# +2,543 when a generic type's construction came to infer through a type
-# application: all of it the source.
-#
-# +1,988 when a pinning call came to hold an argument that is a temporary: +378
-# of it is the temps a bare function or type name now gets as an argument (the
-# old source, both compilers), the rest the source.
-#
-# +161 when only a generic unit's instantiation came to have its arguments
-# resolved at completion: all of it the source.
-#
-# +1,721 when a field came never to move: about a hundred are the empty Ast a
-# swap-out constructs per parse (89defeea), the rest the source of the refusal
-# and of the generator local map.
-#
-# -10,513 when a scope came to be named by its node: no label string per body
-# scope, and a template walk's scopes are lazy like every other walk's.
-#
-# +4,178 when an instance walk came to keep its own variable ids: all of it the
-# source (the per-instance maps themselves cost 3).
-#
-# +434 when a promoted argument temp came to keep its variable: all of it the
-# source (the self-compile promotes none).
-#
-# -782 when a generic call stopped making a divergence scope only the dump read.
-#
-# +3,109 when a generator's borrow came to be refused at a yield and a yielded
-# value came to be checked against the element type: all of it the source.
-#
-# -13,630 when a generator's locals came to be the checker's: all of it the
-# source (the lowering's crossing analysis and its rewrite of the whole body are
-# gone; the self-compile has no generator).
-#
-# -7,995 when the machinery for moving a field out went with the generator
-# locals it served: -6,925 the source, -1,023 the emitter no longer spelling
-# every member read a second time to ask whether it moved a field.
-#
-# -4,444 when the `typeof` node and the field shells it typed went with the
-# generator locals that were their only source: all of it the source.
-#
-# -2,587 when the lowering's two copiers became one deep copy in zast: all of
-# it the source.
-#
-# +5,360 when each generic instance came to walk and emit its own copy of the
-# body: +1 the behaviour (the self-compile has no instance), the rest the
-# source, which the per-instance routing's retirement returns.
-#
-# -1,403 when an atom's and a guard's variables stopped being kept per
-# instance: all of it the source. A signature's stamps stay per instance.
-#
-# +8,494 when the checker came to record what each scope's end destroys: +492
-# the behaviour (the self-compile's own lists), the rest the source.
-#
-# +5,255 when the checker came to record what each exit destroys: +28 the
-# behaviour, the rest the source.
-#
-# +4,302 when a block's, a branch's and a body's end came to print the
-# checker's lists: -170 the behaviour, the rest the source.
-#
-# +600 when a loop body's end came to print them too: the source.
-#
-# +1,091 when a match arm's end did, and a constant-folded branch's: the
-# source.
-#
-# +145 when a `with` came to end its value where it ends: the source.
-#
-# +449 when a branch that yields a value, and a `do` value, came to print the
-# checker's lists: the source.
-#
-# +531 when a scope's end came to print only the checker's list, and a `with`
-# bound to an auto-called member came to own its value: the source.
-#
-# +713 when a `break` came to be recorded against the scope it leaves: the
-# source.
-#
-# +1,063 when a `return`, a `break` and a `continue` came to print the
-# checker's lists: -1,052 the behaviour, the rest the source.
-#
-# +120 when a generator's `return` came to print its list too: the source.
-#
-# -304 when a return's three filters came to share one helper: the source.
-#
-# -249 when a `.hold` parameter came to take its argument as `.take` does: the
-# source.
-#
-# +3,583 when an arm's pins came to be kept for the binding of its `if` or
-# `match`: +6 the behaviour, the rest the source (a new IdMapV instance among
-# it).
-#
-# +5,882 when a move on only some paths came to be recorded as one (an arm
-# value, an arm's inner path, a narrowed payload, a block's `break`, a later
-# condition) and a condition's moves came to outlive its clause: -66 the
-# behaviour (the arm settle's two sets went), the rest the source.
-#
-# -58 when a `.take` binding came to move rather than alias: the source.
-#
-# -496 when a local moved on every path came to print no destroy: -599 the
-# behaviour, the rest the source.
-#
-# +2,177 when a body's last line came to be recorded as the return it is:
-# the source.
-#
-# +328 when a reassignment and a `.drop` came to destroy what the checker
-# recorded: the source.
-#
-# +156 when an exit the checker recorded nothing for came to be refused: the
-# source.
-#
-# +56 when a local moved on every path came to be zeroed no more: -1,152 the
-# behaviour, the rest the source.
-#
-# +24 when a `do` block whose last line returned stopped freeing its locals
-# again: the source.
-#
-# +411 when a hoisted argument's temporary came to be recorded (tempOf) and a
-# compile stopped reserving its dump rows: -10 the behaviour (and 10.6 MB
-# fewer bytes), the rest the source.
-#
-# +3,887 when a statement's discarded result came to be held in a temporary of
-# the checker's: +66 the behaviour, the rest the source.
-#
-# +351 when the dump came to list each hoisted argument's temporary: the
-# source.
-#
-# +1,223 when a temporary came to record the scope that binds it, so a hoist
-# can ask what the checker listed for that scope: +24 the behaviour -- one map
-# grown once per compile -- and the rest the source.
-#
-# +49 when the interpolated argument of a user call asked the same question:
-# 0 behaviour, all of it the source.
-#
-# +47 for the comment that says why a nameless variable keeps its id under
-# --readable-names: 0 behaviour, all of it the source.
-#
-# -94 when three definitions the linter had been calling dead went: 0
-# behaviour, all of it the source.
-#
-# -67 when the by-reference argument hoist stopped taking a caller's reading
-# of whether its value borrows: 0 behaviour, all of it the source (one
-# parameter and eight arguments).
-#
-# +22 when the `.copy` receiver temp asked the checker instead: 0 behaviour,
-# all of it the source.
-#
-# +81 when a method-leaf pin came to be kept for a method that LENDS what it
-# answers: 0 behaviour, all of it the source (the rule's comment is most of
-# it).
-#
-# +100 when a receiver temporary stopped claiming to own a borrowed element:
-# 0 behaviour, all of it the source.
-#
-# +7 when a scope the walk cannot fall out of still answered for its
-# temporaries: 0 behaviour, all of it the source.
-#
-# -162 when the lvalue hoist stopped taking a caller's reading of whether it
-# owns: 0 behaviour, all of it the source (a parameter, its one argument and
-# the predicate call that built it).
-#
-# -25 when the instance-method `&` hoist asked the checker too: 0 behaviour,
-# all of it the source.
-#
-# +9 when a member read off a BOX came to hold the box rather than nothing:
-# 0 behaviour, all of it the source.
-#
-# +58 when the owned-receiver hoist's destroy became the checker's: 0
-# behaviour, all of it the source.
-#
-# +538 when a control value's temporary came to answer for its ARMS: 0
-# behaviour, all of it the source (a walk of the arm leaves per hoisted
-# control value, and the rule stated in its own function).
-#
-# -2,142 when the by-value borrow hoist stopped taking a caller's reading of
-# whether its value borrows: 0 behaviour, all of it the source. Ten arguments,
-# six locals that computed them, two parameters threaded for them, a record
-# field, and the two `ctorArgIsBorrow*` walks that nothing was left to call.
-#
-# +821 when the arms a REFERENCE control value parks came to be temporaries of
-# the checker's: 0 behaviour, all of it the source. A temporary bound in an
-# arm materialises the scope that brackets it, so the scope rows a compile
-# makes move with it.
-#
-# -43 when the parked arm took that temporary's name: 0 behaviour, all of it
-# the source.
-#
-# +55 when its destroy became the checker's too: 0 behaviour, all of it the
-# source. No leg composes a destructor of its own any more.
-#
-# +209 when an interpolation PART no name binds became a temporary: +99 the
-# behaviour -- the compiler's own source is full of them, and each mints a
-# variable and materialises the scope bracketing it -- and 110 the source.
-#
-# +54 when the part's buffer took that temporary's name: +34 the behaviour (a
-# name built from a vid rather than a counter) and 20 the source.
-#
-# -600 when the part's free became the checker's and `hoistExprIsBorrowRooted`
-# went with `dottedCalleeFid`, its last reader: 0 behaviour, all of it the
-# source. The emitter no longer reads ownership off an expression's shape
-# anywhere.
-#
-# +1,324 when the interpolation BUFFER took the checker's name: +1,239 the
-# behaviour and 85 the source. The behaviour is one String per interpolated
-# literal -- the name, which the old spelling never materialised because it
-# built `_s<n>` inline at each use from a counter it threaded. D1 asks for the
-# name, and the name costs a String.
-#
-# +40 when that buffer's free became the checker's: 0 behaviour, all of it the
-# source.
-#
-# -159 when a binding stopped reading its RHS's shape and asked only what the
-# checker made its variable: 0 behaviour, all of it the source.
-#
-# +181 when the String binding asked the same question of its own variable: 0
-# behaviour, all of it the source (the note saying why the scope-destroy
-# registration cannot follow it yet is most of it).
-#
-# +941 when a loop BODY became its own scope, separate from the header's:
-# +824 the behaviour -- one more scope per loop, and the compiler is full of
-# loops -- and 117 the source.
-#
-# +427 when a `for` INITIALISER became a variable of the checker's: 0
-# behaviour (the scope it needed was the commit before), all of it the source.
-#
-# -113 when the scope-destroy registration asked the checker instead of the
-# value's shape: -114 the behaviour (the shape walk is gone from that path),
-# +1 the source.
-#
-# -22 when that registration stopped taking the tree it no longer reads: 0
-# behaviour, all of it the source.
-#
-# +5,414 for the closed range's counted lowering: +2 behaviour -- two more
-# well-known names interned per carrier, and nothing else on the old source --
-# and 5,412 the SOURCE, ~307 net lines of src/ at the 13-17 allocations a line
-# this tree costs to compile. The emitted C is smaller wherever a closed range
-# is a `for` header: `range_closed_forms.z` builds seven fewer range objects.
-#
-# -3,692 when `iterate` left the integer types: -631 behaviour and -3,061 the
-# source. The behaviour is three readers that ran on every `for` header and now
-# do not -- the lean-form probe that stamped each operand's type to ask whether
-# it was its own bound, the `from:` argument scan, and the value-form emitter --
-# and the source is ~190 fewer lines of src/ plus ten fewer stdlib declarations.
-# 0 corpus difference: the call sites had already moved to `each` / `upto`.
-#
-# -3,066 when a `for` binding had to be an iterator: 0 behaviour and all of it
-# the source. The header initialiser was a VARIABLE of the checker's -- the
-# commit that made it one cost +427 -- and with it go its mint, its ownership
-# question, the two emitters that declared it, and the generator pass that
-# hoisted it back out of suspending headers.
-#
-# +3,466 for `iterateReverse` on the four list types: 421 behaviour and 3,045
-# the source. The behaviour is FOUR MORE DECLARATIONS -- a stdlib member costs
-# a Decl row on its template and on every monomorphisation of it, and a
-# self-compile mints many -- not the walk, which is one field and one branch in
-# a cursor that already existed. The source is the emitter's own new legs.
-#
-# +289 when the `for` ELEMENT became a variable of the checker's: 57 behaviour
-# -- one mint per element binding, and the compiler is full of loops -- and 232
-# the source. A binding with no vid sat outside every destroy list and every
-# take overlay, so no rule that reads a variable could reach it; the readonly
-# loop-variable lock is the rule that has to.
-#
-# +649 when `each` joined the trip-count form: 0 behaviour and all of it the
-# source. The emitter reads the bound once into a count rather than at every
-# test, which is two more emitted statements per counted loop and no more work
-# at run time -- measured at -O0 it is FASTER than the re-read, and at -O1 the
-# three shapes are within 1%.
-#
-# +1,410 when the `for` element took a lock on its ITERATOR: 470 behaviour --
-# one lock row per `with`-form element, and the compiler walks many -- and 940
-# the source. 0 emitted C: the row is the checker's alone.
-#
-# +1,809 when a for-EXPRESSION's value became the append it always was: 0
-# behaviour and all of it the source. The rule asks nothing of a statement
-# loop, and the compiler's own comprehensions are over valtype elements, which
-# copy -- so the new walk costs the self-compile nothing and the new code costs
-# it everything.
-#
-# +894 when the for-EXPRESSION started walking what the statement form walks: 0
-# behaviour again, and for the same reason -- there is no comprehension in src/
-# or lib/system, so the new routing never runs on a self-compile. All of it is
-# the new emitter code, which is a class, a Ctx stack and two lifted functions.
-#
-# -122 backing the `with`-expression fallback leg out again: 0 behaviour, -122
-# source. A construct the emitter cannot render is a FALLBACK, and those only
-# ever shrink -- the answer is to make the value bind, not to refuse it here.
-#
-# -139 deleting the array `getMut` leg: 0 behaviour, -139 source. It emitted a
-# call to a C function z_array.c.tmpl does not write, for a member `array` does
-# not declare, and nothing could reach it.
-#
-# +226 hoisting a non-lvalue at a protocol or facet parameter: 0 behaviour --
-# the compiler passes no construction to one -- and 226 source, which is the
-# hoist leg and the `ast` the site now takes.
-#
-# +581 refusing a reference conformer of a facet: 0 behaviour -- the compiler
-# conforms no reftype to one -- and 581 source, which is the rule and its
-# message.
-#
-# +3,218 giving `with` its value form: -13 behaviour and 3,231 source. The
-# behaviour falls because forwardTail asks withForwardsTail once where it used
-# to recurse; the source is the emission itself, which is one binding emitter
-# for the statement and the expression plus the three small readers that say
-# which node a `with` takes its value and its type from.
-#
-# +776 giving every temporary ONE death: 0 behaviour and 776 source. The map
-# that says which temps a pinning call's result will adopt is one row per such
-# temp, and the compiler makes few; the source is the map and its two readers.
-#
-# +8 flipping emitBindSourceZero onto the binding's own variable: 0 behaviour,
-# 8 source -- one more parameter threaded to one call site.
-#
-# +47 flipping rhsIsBorrowedFieldRead the same way: 0 behaviour, 47 source --
-# the binding row threaded through a recursive reader.
-#
-# -51 flipping ownedReceiverHoist onto scopeOwnsTemp: 0 behaviour, -51 source.
-# It asked TWO questions where one does -- a shape test to decide whether to
-# hoist, and the checker's answer to decide the free -- and the shape test cost
-# more than the earlier exit saves.
-#
-# -43 flipping oweControlBinding onto the binding's variable: 0 behaviour, -43
-# source. A walk of every arm becomes one read of one variable, and three
-# parameters stop being threaded to reach it.
-#
-# +434 reading a container through a borrowed field: 0 behaviour, 434 source.
-# The receiver legs asked whether a VARIABLE is a pointer, which a field path
-# has none of; the source is borrowedFieldPath -- pathIsPointer's field leg,
-# lifted out so the two collection receiver sites ask it by id -- and the two
-# derefs that read through it.
-#
-# -14 letting only a FUNCTION member auto-call: -28 behaviour, +14 source. A
-# field read no longer takes and releases a receiver lock as though it were a
-# call, which is also 1.1% of the self-compile's instructions.
-#
-# +414 calling a stored function through a readonly path: 0 behaviour, 414
-# source -- callReadsReceiver, the one question the three receiver-lock sites
-# now ask in place of the receiver marker alone.
-#
-# +1967 a `.private` slot takes a spelled grant: 0 behaviour, 1967 source --
-# refusePlainPrivateArg and argIsPrivateHandle, which never fire on the
-# compiler's own source (it declares no `.private` parameter or field).
-#
-# +292 the `:name` shorthand in a type body is checked for a reserved name: 0
-# behaviour, 292 source -- the parser's new leg, which the compiler's own
-# source never takes.
-#
-# +171 a unit-level definition named after a marker is refused: 0 behaviour,
-# 171 source -- the unit-body legs of the same reserved-name check.
-#
-# +1 the E0037 help names the current reserved words: 0 behaviour, 1 source --
-# the longer literal only.
-#
-# +753 a `public:` block may not hold a visibility block: 0 behaviour, 753
-# source -- refuseNestedVisibility, asked of every interface entry on both the
-# file-unit scan and the subunit index.
-#
-# +419 a marker path is a pointer when its base is: 0 behaviour, 419 source --
-# markerEmitsBase and pathIsPointer's new leg.
-#
-# -1798 `.valtype`/`.reftype` no longer declare a generic parameter: -298
-# behaviour, -1500 source -- two fewer name-text compares per generic-param
-# question and genericConstraintKind's String, gone.
-#
-# +2572 a declaration reading a member its type lacks is reported: +32
-# behaviour, 2540 source -- resolveFunction lists a function's `as` item values
-# to ask each one (the list allocates only where an `as` block exists), and
-# reportMissingTypeMember's lookups.
-#
-# +1026 a bare-name projection (`Speaker d.borrow`) takes its ownership from the
-# source's marker: 0 behaviour, 1026 source -- projectionSourceBorrows and the
-# construction leg's projection branch; the compiler constructs no protocol.
-#
-# +34 a typedef over a generic instance is built from that instance: 0
-# behaviour, 34 source -- two comments' worth of the checker and emitter legs.
-#
-# +438 an inline typedef argument's temporary is freed: 0 behaviour, 438
-# source -- ownedTypedefArg, asked by the two argument hoists.
-#
-# +2377 a borrowed typedef is a second name for its source: 0 behaviour, 2377
-# source -- the checker's routing and exclusive pin, and the emitter's alias
-# leg (typedefBorrowSource and its two helpers).
-#
-# +261 a call's value passed by address to a protocol method is bound to a temp:
-# 0 behaviour, 261 source -- dispatchArgText's hoist leg.
-#
-# +500 `Bytes.byteView` lowers to its base's listView: 0 behaviour, 500 source
-# -- markTypedefListViewUse, asked at each resolved member.
-#
-# -3075 the `T.borrow from:` verb and `X.public` are retired: -46 behaviour,
-# -3029 source -- no `borrow` member is minted per typedef, protocol and facet,
-# and the verb's routing and exemptions are gone.
-#
-# -28 the typedef flag the retired `borrow` synthesis needed leaves two
-# signatures: 0 behaviour, -28 source.
-#
-# -3258 a String member through a field is asked by tid: -3230 behaviour, -28
-# source -- the nested leg spelled the receiver's type NAME (stampNameDeep, a
-# fresh String) for every member read through a field, to compare it with
-# "String"; nestedStringMember compares the chased tid.
-#
-# +456 a hoisted argument read out of a lent value is held by a temp that owns
-# nothing: 0 behaviour, 456 source -- valueIsLent's field leg and hoistArg
-# asking it.
-#
-# +180 a typedef's callee is stamped with the type it builds: 0 behaviour, 180
-# source (the zls half is not on the self-compile's path).
-#
-# -15 the name-keyed isStringy is gone: 0 behaviour, -15 source.
-#
-# +2705 a native Text conformer (String, a str mono) boxes on demand: 0
-# behaviour, 2705 source -- the compiler boxes no native conformer, so the
-# demand list stays empty and the splice never runs.
-#
-# +1 the Text spec's receiver is `t: this.view`: 0 behaviour, 1 source (a
-# named receiver where `:this` was).
-#
-# +2 RefHashable's two receivers are `t: this.view`: 0 behaviour, 2 source.
-#
-# +9047 a conformer is checked against its spec: 317 behaviour (the check runs
-# over the compiler's own rows -- String and str against Text, the io classes,
-# the zvfs providers), 8742 source, -12 the three zvfs receivers aligned to
-# the spec. Measured against the old tree with the new zvfs.z, since the new
-# zc refuses the old one.
-#
-# -28 a valtype `.hold` binding is frozen: 0 behaviour, -28 source (the gate
-# that asked typeIsReftype is gone).
-#
-# +746 L030, a valtype `.borrow` parameter never mutated: 0 behaviour (the
-# mutation evidence for a valtype argument allocates nothing), 746 source.
-#
-# +11 `zl lint --full` never silent: 0 behaviour, 11 source (zdiag.render's
-# file-level location line; the rest is zl's and zsource's, which a zc
-# self-compile does not load).
-#
-# +5252 a valtype passed by pointer takes the call lock: 4655 behaviour (every
-# valtype argument to a `.borrow`/`.view` parameter in the compiler's own
-# source -- `astnode.view` above all -- now takes the lock a reftype one
-# does), 597 source.
-#
-# +7517 a hash key is checked exactly: 25 behaviour (each Map/Set key type the
-# compiler's own source admits is recorded and its two members compared once),
-# 7492 source.
-#
-# +2673 a value written where a spec value is expected must conform: 0
-# behaviour (the compiler's own source writes none), 2671 source; perf-strict
-# reads 2 more than ab.sh, the usual argv[0]/cwd difference.
-#
-# +3440 an owning place refuses a bare conformer: -7 behaviour (a protocol-typed
-# DATA field read -- zvfs's ProviderBox.p -- no longer pushes a projection pin;
-# only a conformance label projects), 3447 source.
-#
-# +1408 `List <Protocol>` works: 7 behaviour (the new pass gathers the
-# compiler's own collection monos to look for a protocol argument, and finds
-# none), 1401 source.
-#
-# +607 an unresolved spec return is no conformance evidence: 0 behaviour, 607
-# source.
-#
-# +4420 member use on a type parameter waits for the instance: 6 behaviour,
-# 4411 source; perf-strict reads 3 more than ab.sh.
-#
-# +2870 a reference to a function over a spec or a variant has its typedef: 0
-# behaviour (the compiler's own source takes no such reference), 2870 source.
-#
-# +574 a readonly value reaches a protocol or facet: 0 behaviour, 574 source.
-#
-# +574 a generic protocol instance's method keeps its receiver marker: 0
-# behaviour (the compiler's own source declares no generic spec), 574 source.
-#
-# +526 a type application over a non-generic type is refused: 0 behaviour, 526
-# source.
-#
-# +507 an interface's generic parameter in `as` is refused: 0 behaviour, 507
-# source.
-#
-# +134 a facet may be generic: 0 behaviour, 134 source.
-#
-# +1732 a bound written as a type application names its instance: 0
-# behaviour (the compiler's own source writes no such bound), 1732 source.
-#
-# -72 a facet box handed to a marked parameter has a temp of its own: 0
-# behaviour, -72 source.
-#
-# -18 the dead `Iterator` protocol is gone: 0 behaviour, -18 source.
-#
-# +1147 an `as` item called on a head that names nothing is reported: 0
-# behaviour, 1147 source.
-#
-# +5793 a marker names a generic spec's instance: 0 behaviour (the compiler's
-# own source declares no generic spec), 5793 source.
-#
-# +1198 a generic conformer names an instance over its own parameter: 0
-# behaviour, 1198 source.
-#
-# +229 a union returned through its payload is still destroyed: 0 behaviour,
-# 229 source.
-#
-# +34 a generic union instance is minted with its destructor flag: 0
-# behaviour, 34 source.
-#
-# -212 an operator's owned rvalue receiver is released: 0 behaviour, -212
-# source (lvalueForm is gone).
-#
-# +536 an instance a type names is sited: 2 behaviour (the site table holds the
-# instances the compiler's own signatures and fields name first, and grows
-# twice more), 534 source.
-#
-# +2578 a bound over another parameter is decided once bound: 0 behaviour
-# (the compiler's own source writes no application bound), 2578 source.
-#
-# +454 a `.borrow` on a facet projection is refused: 0 behaviour, 454 source.
-#
-# +609 a spec instance projects as its name does: 0 behaviour, 609 source.
-#
-# -1194 a call through a function value builds its arguments as a direct call
-# does: 0 behaviour, -1194 source (orderFnptrArg's own copy is gone).
-#
-# +13 `.take`/`.hold` hand a protocol value on: 0 behaviour, 13 source.
-#
-# +711 a `.borrow` binding of a value type is refused: 0 behaviour, 711 source.
-#
-# -966 a value-type union arm is boxed implicitly: -18 behaviour (the arm
-# check that copied every arm's name is gone), -948 source.
-#
-# +464 a suspending generator counts a zero-argument `N.each` header: 0
-# behaviour (the compiler's own source has no generator), 464 source.
-#
-# +38 integer `each` is renamed `times`: 2 behaviour (the well-known name pool
-# interns one more name), 36 source.
-#
-# +1,235 the `each` keyword on a `for` binding: 0 behaviour (the compiler's own
-# source writes no `each` yet), 1,235 source (the parser's forBinding and the
-# flag threaded through the header and the tree).
-#
-# +1 every iterator walk says `for each`: 0 behaviour, 1 source.
-#
-# +376 an explicit `.call` on a native iterator names its template's function:
-# 0 behaviour (the compiler's own source drives no iterator by hand), 376
-# source.
-#
-# +38 a generator's walk over a bare iterator factory keeps the iterator in a
-# state field: 0 behaviour, 38 source.
-#
-# +2,326 a plain `for` binding is evaluated at every iteration: 0 behaviour (the
-# compiler's own walks all say `for each`), 2,326 source (the checker's split
-# readers, the emitter's plain loop and the tail it shares with the walk).
-#
-# +3,350 `for each` implies `.iterate`: 0 behaviour (the compiler's own walks
-# still write it), 3,347 source by ab.sh (the minted `E.iterate` node,
-# checkDotted split at its base, headerIsPlace); perf-strict reads 3 more than
-# the split, stable over two runs.
-#
-# +3 L029 and the corpus without its written `.iterate`: 0 behaviour, 3 source
-# (the rule's own code, against the calls the compiler's walks no longer spell).
-#
-# -2,509 `with it: X do for each e: it` collapses to `for each e: X`: 0
-# behaviour, -2,509 source (a `with` scope and binding fewer per walk).
-#
-# +519 a generator local bound to a comprehension is built in its field: 0
-# behaviour (the compiler has no generator), 519 source.
-#
-# +97 `return` declares no parameter: 0 behaviour, 97 source. Every small
-# program measured costs 40 FEWER (the dropped `as`/`in`); the self-compile's
-# +97 was not isolated.
-#
-# +784 OptionViewVal, the valtype twin of OptionView: 1 behaviour (the
-# emitter's one new origin row), 783 source (the declaration and the helpers
-# that recognise both origins).
-#
-# +199 the six valtype readers return OptionViewVal: 0 behaviour, 199 source
-# (the valtype iterators' instances are now OptionViewVal ones).
-#
-# -1,740 `Any` deleted: 0 behaviour, -1,740 source (checkAnyBounds and its
-# scan of every bound, the four resolution exemptions, the declaration).
-#
-# +3,792 a bound admits one family: 0 behaviour, 3,792 source (the family test,
-# the union bound's member refusal and the family reason in the report).
-#
-# +3,619 union payload access centralised (armCell*): +1,481 behaviour (the
-# helpers' own Strings while emitting), +2,138 source.
-#
-# +134 a match arm restores the narrowing it displaced: 0 behaviour, 134
-# source.
-#
-# +1,802 a match subject that is a call's owning result is freed: 0 behaviour
-# (the compiler matches on no owning call result), 1,802 source.
-#
-# +330 a borrowed union is a pointer: -167 behaviour (a match on a variable
-# reads it in place, with no copy and no per-arm slot text), +497 source.
-#
-# +460 `split` on a view call's result: +19 behaviour (the receiver's address
-# is built once per split call), +441 source.
-#
-# +14,993 a bare value-type union arm that fits the slot is stored in it: +191
-# behaviour (the arm-layout pass, the per-arm inline answer while emitting),
-# +14,800 source (the layout measure and the pass: DHAT spreads it over the
-# ordinary compile of the new code, no hotspot).
-#
-# +1,354 ResultVR, the platform.ptrbits answer, and an instance's wide arm
-# refused where it is instantiated: 0 behaviour, +1,354 source.
-#
-# -1,123 io, net and zls return ResultVR: +9 behaviour (the ptrbits fold row),
-# -1,132 source (no `Result (Box u64)` instance left to mint and emit).
-#
-# +901 `zc explain` reads only an E code: 0 behaviour, +901 source.
-#
-# +279 the emitter's origin and dispatch tables, zfmt's slot ranks and zdoc's
-# print modes are data blocks: 0 behaviour, +279 source (an element read
-# resolves through its block).
-#
-# +681 a data element may not take the name of one of the block's own members:
-# 0 behaviour, +681 source.
-#
-# +52 an integer past 65504 is no f16: 0 behaviour, +52 source.
-#
-# +1,299 a member used only after its owner walked is walked then: -609
-# behaviour (a method's label is composed once, not copied per member), +1,908
-# source (the deferred-member lists and the late walk).
-#
-# +99,208 integer constants are exact through math.BigInt: ab.sh +36 behaviour,
-# +99,147 source -- the compiler compiles math now (+90,931 for BigInt alone, measured
-# before: its methods are demanded by owner, so all of it), and the exact
-# reading, folding and landing checks.
-#
-# +178 a refused constant's conversion types its stand-in: 0 behaviour, +178
-# source.
-#
-# +748 an untyped shift is exact: 0 behaviour, +748 source.
-#
-# +758 a hex, octal or binary literal is a u64: +3 behaviour, +755 source.
-#
-# +2,042 a constant closed range of 2^64 values is refused: 0 behaviour,
-# +2,042 source (the recorded calls and the span check).
-#
-# +459 a public block's re-export is followed when a use reaches it: -12
-# behaviour, +471 source.
-#
-# +3,245 BigRat, and BigInt's product and binomial: 0 behaviour, +3,245 source
-# (the compiler compiles math's bigint subunit, which gains the two and the
-# radix-point scan; BigRat is not compiled into it).
-#
-# +143 a receiver-less member auto-called through a unit's type path: 0
-# behaviour, +143 source.
-#
-# +1,633 an arm default through a unit's path is a default: -3 behaviour,
-# +1,636 source.
-#
-# +2,693 BigFloat: 0 behaviour, +2,693 source (the compiler parses math's
-# subunits, bigfloat among them, and resolves none of it).
-#
-# +115 a view a call hands back, re-pointing a borrow, is kept in its
-# companion: +18 behaviour (zc's own such re-points mint one), +97 source.
-#
-# +24 BigRat.ieeeBits: 0 behaviour, +24 source.
-#
-# +254 `1e3` is a float literal: 0 behaviour, +254 source.
-#
-# +300 a named untyped float converts as its literal does: ab.sh reads -903
-# behaviour and +306 source, this ratchet's build +300 overall; the two
-# measurements disagree on this change, and the gap is not yet explained.
-#
-# +65,585 untyped floats are exact: +897 behaviour, +64,672 source (the
-# compiler compiles math's BigRat and BigFloat, which its constants now use,
-# as phase 5's BigInt cost +90,931).
-#
-# +922 float constants reach C as their landed bits: +984 behaviour, -60
-# source.
-#
-# +1,260 the dump's const_rat and const_bigfloat tables, exact float text:
-# 0 behaviour, +1,260 source.
-#
-# +265 another unit's constant converts as written there: +32 behaviour,
-# +233 source.
-#
-# +789 math's constants (pi, e, ln2 ...) and the float conversion docs: 0
-# behaviour, +789 source.
-#
-# +112 each re-point companion's C name carries its id: +4 behaviour, +108
-# source.
-#
-# +35 math's divBasic returns at once on a dividend shorter than its divisor:
-# 0 behaviour, +35 source.
-#
-# -1,422 a native free function is keyed by the unit that declares it, and
-# collections.stringJoin is called like any other fragment native: +202
-# behaviour, -1,624 source.
-#
-# -5,046 math's word-vector kernels are C natives, their zerolang bodies gone:
-# 0 behaviour, -5,046 source.
-#
-# +8 f128 is refused for a target other than x86-64: 0 behaviour, +8 source.
-#
-# +1 the Z_WORD_PORTABLE switch in z_hash.inc, a runtime file every compile
-# reads: 0 behaviour, +1 source.
-#
-# +81 natMul squares equal operands: zc's own constant folding demands math,
-# so the self-compile checks the new branch: 0 behaviour, +81 source.
-#
-# +49 a method returning `type` returns the instance when the instance was
-# minted through an alias: 0 behaviour, +49 source.
-#
-# +152 an array's window read through a view drops the const of its inline
-# storage: 0 behaviour, +152 source.
-#
-# +47 a template walk defers an argument whose type a generic parameter
-# leaves partial to the instance's walk: 0 behaviour, +47 source.
-#
-# +151 a generic instance's alias reached through its unit's path names the
-# instance: 0 behaviour, +151 source.
-#
-# +1,788 a name in a type's own body that names nothing is refused there --
-# `meta`'s other members, a bare field or method, a method through a generic's
-# bare name: 0 behaviour, +1,788 source.
-#
-# +51 a numeric generic argument written as a pun reads its name: 0
-# behaviour, +51 source.
-#
-# +145 an error is reported at the node it names, any kind: 0 behaviour, +145
-# source.
-#
-# +854 a public block's instance alias is resolved when a use reaches it: 0
-# behaviour, +854 source.
-#
-# +831 math's fixed-width integers, the self-compile parsing them: 0
-# behaviour, +831 source.
-#
-# +1,989 math's fixed decimals, the self-compile parsing them: 0 behaviour,
-# +1,989 source.
-#
-# +20 math's fixed binary float, net of a typedef's print format read by its
-# base type's name: 0 behaviour, +20 source.
-#
-# -18 a walk over every type id is bounded by the next id, not a count: 0
-# behaviour, -18 source.
-#
-# +1,173 an open-stack position is its own type (openpos): 0 behaviour, +1,170
-# source, all of it the `ListVal openpos` instance the self-compile mints (one
-# such list alone on the old tree measures +1,220).
-#
-# +190 a guard after a guard reads the arm off the payload: 0 behaviour, +190
-# source.
-#
-# -185 a lock holder is a variant of a variable or a call, and node, variable
-# and name ids are held as their types: 0 behaviour, -185 source.
-#
-# +678 the dentry table and its names are indexed by fsno: 0 behaviour, +675
-# source, the self-compile minting `List String i: fsno` beside `List String`.
-#
-# +58 a zls position is a line and a column, ordered: 0 behaviour, +58 source.
-#
-# +495 --readable-names keys a (function, name) pair by a record: 0
-# behaviour, +494 source, the self-compile minting `SetVal fnname`.
-#
-# +518 a function named as a parameter or field default is asked of the type
-# the declaration resolved to, and walked where a construction uses it: 0
-# behaviour, +518 source.
-#
-# -3,514 the type checker answers platform's values from its own table: zc no
-# longer reads natives.tbl to find the six `fold` rows before type checking:
-# -1,986 behaviour, -1,527 source (the readers deleted from the self-compile).
-#
-# -53 natives.tbl loses the six `fold` rows the self-compile's emitter loaded:
-# 0 behaviour, -53 source.
-#
-# +34 a float -> integer conversion checks its fraction in the source type: 0
-# behaviour, +34 source.
-#
-# +894 a default written as a converted constant expression folds, and one
-# that does not fold is refused: 0 behaviour, +894 source.
-#
-# +5,215 i128 and u128 go through the int128 helpers: +234 behaviour (the 101
-# table rows now carry `needs=prelude.int128`, read on every compile, and the
-# prelude's typedefs), +4,981 source.
-#
-# +2,357 f16 goes through the f16 helpers: +90 behaviour (its rows' `needs=`
-# and the prelude's typedef), +2,267 source.
-#
-# -108 an answered member the unit does not declare is not answered, rather
-# than reported: 0 behaviour, -108 source.
-#
-# +3,160 the C toolchain leaves the front end: the C backend reads what a reached
-# unit needs of it from natives.tbl's `@unit.` rows, and zc reads its link line
-# back off the emitted C: -7 behaviour, +3,161 source (the backend's unit rows
-# and family in the self-compile).
-#
-# -449 a union's slot is 8 bytes on every target and platform.ptrbits goes:
-# -4 behaviour, -445 source.
-#
-# -19 the C keyword mangling moves from ztypes into the emitter: 0 behaviour,
-# -19 source.
-#
-# +270 the --target triple's vocabulary and parse move to ztarget, and the
-# drivers hand the checker the resolved os and arch: +4 behaviour (each compile
-# resolves the host's names), +266 source.
-#
-# +836 zvfs mounts a single file: a file root is a provider of one entry, and a
-# bind hangs it at a name. 0 behaviour, +836 source (zc compiles the new
-# provider constructor and bind path; no run of zc takes them).
-#
-# +10,626 zproject: the drivers find the nearest project.z and read its
-# settings, and zc, zcheck and zsource share one VFS builder: +77 behaviour
-# (every compile looks for a project.z from where it starts), +10,547 source
-# (ab.sh; the new unit and the drivers' use of it).
-#
-# +259 an arm predicate on a unit's value alias (`u.k.a`, `u.sub.k2.a`) tests
-# the arm instead of constructing it: 0 behaviour, +224 source (ab.sh; the
-# checker's value-alias test on a path and the emitter's predicate gate).
-#
-# +51 an interpolation built inline as a call's argument frees the temporaries
-# its parts hoisted: 0 behaviour, +16 source (ab.sh).
-#
-# +13,321 the generated `z` unit: every build makes z.z and z/build.z from its
-# values, writes them to .zerolang/ (or the cache dir) when they changed, and
-# mounts them from memory between src and the stdlib: +562 behaviour (the
-# text, the compare with the copy on disk, the in-memory provider), +12,722
-# source (ab.sh).
-#
-# +565 a constant read through a subunit (`z.build.os`, `u.sub.K`) folds, and a
-# definition naming a subunit's arm resolves: 0 behaviour, +428 source (ab.sh).
-#
-# -3,981 `platform` goes, and with it the checker's answer machinery and its
-# target fields: -10 behaviour, -4,108 source (ab.sh).
-#
-# +231 a project's executable goes to the project directory: +66 behaviour
-# (build.z's outputDir is made relative to the project), +28 source (ab.sh).
-#
-# +3,566 `zc init`: +5 behaviour, +3,399 source (ab.sh; init's templates and the
-# verb table zc now reads as data).
-#
-# -241 the repository is a project: the measured self-compile runs inside it, so
-# its generated `z` unit is the project's .zerolang rather than a cache
-# directory found through $HOME and named by a hash of the path. ab.sh: 0
-# behaviour, +28 source (the trees ab.sh compares each run in their own copy).
-#
-# +2,441 an alias whose target is reached through a subunit (`T: u.sub.duo`)
-# resolves, and a missing member there is reported: 0 behaviour, +2,315 source
-# (ab.sh).
-#
-# +342 a deferred type-ref spelled with its unit (`zproject.BuildFacts`) is
-# stamped by its path, not looked up by its leaf name: +17 behaviour (the
-# self-compile's own such refs now stamp), +199 source (ab.sh).
-#
-# +338 a type is named by the path of units that declares it (unitPathOfTid):
-# 0 behaviour, +338 source (ab.sh, now staging its trees at equal depth --
-# behaviour + source equals perf-strict's delta).
-#
-# -65 a union arm collapses only when its callee resolves to the builtin Box,
-# not when it is spelled `Box`: 0 behaviour, -65 source (ab.sh).
-#
-# +79 only the system unit's `null` / `never` declarations are the empty types
-# (defTypetypeOf takes whether the definition is the system's): 0 behaviour,
-# +79 source (ab.sh).
-#
-# +28 a loop and `return` demand the system unit's `never` by its unit, not by
-# a lookup where they are written: -1 behaviour, +29 source (ab.sh).
-#
-# -210 a type reference spelled `null` / `never` resolves through scope, with no
-# short-circuit to the system's types: 0 behaviour, -210 source (ab.sh).
-#
-# -452 sums whose names differ only in case are renamed apart before their tag
-# enumerators are spelled (the stem hash folds case, byte by byte), and cUpperOf
-# reserves its buffer: -767 behaviour, +315 source (ab.sh).
-#
-# +879 an opt-out (`create: null`, `==: null`) and a payload-less sum arm ask
-# whether the operand's nearest declaration is the system's `null`
-# (namesNullType), not whether it is spelled `null`: 0 behaviour, +879 source
-# (ab.sh).
-#
-# +940 a clause body that is the system's null value alone is empty
-# (isEmptyBody, by declaration), and the null value as a statement emits
-# nothing (stampIsNullType): 0 behaviour, +940 source (ab.sh).
-#
-# -1,077 the parser no longer desugars a `null` clause body (each `then null` is
-# now a statement line holding the atom): +22 behaviour, -1,099 source (ab.sh).
-#
-# +975 an unlabelled leading argument binds a numeric first parameter
-# (numericLeadingParam, leadingArgIsValue): 0 behaviour, +975 source (ab.sh).
-#
-# +366 L003 moves to the linter's full tier (elideCall reads the resolved
-# template), and the standard library elides the 294 first-argument labels it
-# then reports: 0 behaviour, +366 source (ab.sh).
-#
-# +2 ztypecheck exports envLookup / scopeFor / unitdefNodeId for zls's
-# shadow-aware hover: 0 behaviour, +2 source (ab.sh).
-#
-# +14 a data block's element kind is asked of its type through its typedefs
-# (baseNumKind, wideConstKind): -2 behaviour, +16 source (ab.sh).
-#
-# -3,761 the type-ref walk answers from the nearest scope that holds the name and
-# demands its declaration there (nearestScopeOf); the wait and the custom-tag
-# and member-check fixups go: -28 behaviour, -3,733 source (ab.sh).
-#
-# +3,987 a union or variant bound is read off its declaration and resolves only
-# the arms its instance can be (sumBoundDeclAdmits); bounds read from the
-# template's scope: +2 behaviour, +3,985 source (ab.sh).
-#
-# -10,832 the emitter names arms and members by id (memberCNamed, tagConstNamed,
-# variantArms and the space-joined exclusion text gone): -9,726 behaviour,
-# -1,106 source (ab.sh).
+# perf-strict -- the allocation ratchet: heap blocks for one self-compile of
+# $(PERFBIN), bit-identical run to run. It refuses a clang-built binary (LLVM
+# deletes write-only allocations; perf-elision measures that), a failed run and
+# allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
+# its message, and one lowering the count lowers it here.
 ALLOC_BASELINE := 2165702
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
@@ -2521,27 +714,12 @@ perf-strict: $(PERFBIN)
 	  perf stat -e instructions -r 3 $(PERFRUN) 2>&1 | grep -E 'instructions' | sed 's/^ */  /'; \
 	else echo "  (perf stat unavailable -- instructions not measured)"; fi
 
-# pre-push -- what a commit must pass before it leaves the machine: the fast
-# gates plus the allocation ratchet, without waiting for the heavy corpus.
-# perf-strict is IN ci as well: the allocation count is bit-identical run to
-# run, so a shared runner's noisy core cannot move it -- only the advisory
-# `perf stat` line at the end of that recipe reads a clock, and it is allowed
-# to be missing. Keeping it out of ci cost 83,275 allocations of unnoticed
-# drift between 2026-09-11 00:34 and 2026-09-11 17:30.
+# pre-push -- check, test and the allocation ratchet.
 pre-push: check test perf-strict
 	@echo "PRE-PUSH GREEN: check + test + perf-strict (allocations <= $(ALLOC_BASELINE))"
 
-# perf-elision -- how much of the emitted code's allocation the C compiler
-# throws away for us. LLVM deletes an allocation whose bytes are written but
-# never read and whose pointer never escapes; gcc keeps it, because the memcpy
-# into the buffer counts as a use. Building bin/zc.c TWICE WITH THE SAME clang
-# -- once with -fno-builtin-malloc, which stops LLVM recognising the allocator
-# and changes nothing else -- isolates that pool exactly: the no-builtin build
-# has matched a gcc build to within 4 allocations. The delta is emitted code
-# that allocates, fills a buffer, and frees it unread, so it belongs at zero;
-# a growing one means a new write-only allocation crept in. Both builds are
-# scratch, glibc-only (no mimalloc, so valgrind counts every block), built at
-# PERFOPT so the pool stays comparable with the series, and land in $(BUILDDIR).
+# perf-elision -- allocations LLVM deletes as write-only: bin/zc.c built twice by
+# one clang, once with -fno-builtin-malloc. The difference belongs at zero.
 ELIDECC   ?= clang
 NOBUILTIN := -fno-builtin-malloc -fno-builtin-free -fno-builtin-calloc -fno-builtin-realloc
 perf-elision: bin/zc.c
@@ -2559,19 +737,7 @@ perf-elision: bin/zc.c
 	  printf "  after LLVM deletion:   %s allocs\n" "$$left"; \
 	  printf "  write-only pool:       %s\n" "$$((kept - left))"
 
-# shadow-guard -- ratchet against the user-shadow miscompile class. The C emitter
-# must derive a type's C type from its canonical type id (typeRefC / scalarCTypeFor
-# / cTypeForNameTid), never from the type NAME (cTypeOf / cTypeForName) directly --
-# otherwise a user type shadowing a builtin scalar (i64: record {...}) emits the C
-# scalar instead of its struct. The baselines pin the known-safe remaining by-name
-# sites (numeric casts, userFnId-first dispatch, control-flow checks, and the
-# head-gated assignment / fnSignature / typeRefC sites); a new by-name site grows
-# the count and fails. New type emission must go through the id-based helpers.
-# any-guard -- there is no `Any`: every generic parameter names the one family
-# it takes (anyval, AnyRef, a hashable bound, StringLike or a width), and no
-# bound admits both. The guard keeps lib/system from growing one back; a user
-# spelling needs none, being the standard unknown-type error
-# (any_bound_retired, any_bound_position).
+# any-guard -- there is no `Any`: lib/system must not declare it or bound by it.
 any-guard:
 	@n=$$(grep -nE '^[[:space:]]*Any:|Any\.generic' lib/system/*.z lib/system/system/*.z lib/system/math/*.z | grep -vE ':[0-9]+: *#' | wc -l); \
 	if [ "$$n" -gt 0 ]; then \
@@ -2582,68 +748,10 @@ any-guard:
 	fi; \
 	echo "any-guard OK: lib/system neither declares Any nor bounds by it"
 
-# shadow-guard -- a C type resolved from a NAME can pick up a builtin's spelling
-# for a user type that shadows it; the id-based forms re-check. The two sites in
-# convBodyOf are the standing exception: it generates natives.tbl from a fixed
-# list of builtin numeric names the compiler owns, with no program in hand and
-# so no tid to re-check, and nothing a user writes can reach it.
-shadow-guard:
-	@n1=$$(grep -c 'cTypeOf name:' src/zemitterc.z); \
-	n2=$$(grep -c 'cTypeForName symtab:' src/zemitterc.z); \
-	n3=$$(grep -c 'isStdlibUnitName' src/zemitterc.z); \
-	n4=$$(cat src/*.z | grep -c 'isStdlibUnitName'); \
-	n5=$$(cat src/*.z | grep -c 'crossUnitDemand\|recordDemand\|isDemanded'); \
-	fail=0; \
-	chk() { if [ "$$2" -gt "$$3" ]; then echo "shadow-guard FAIL: $$1 = $$2 (baseline $$3)"; fail=1; \
-	  elif [ "$$2" -lt "$$3" ]; then echo "shadow-guard: $$1 = $$2 < baseline $$3 -- lower the baseline here"; fi; }; \
-	chk "'cTypeOf name:'" "$$n1" 0; \
-	chk "'cTypeForName symtab:'" "$$n2" 0; \
-	chk "'isStdlibUnitName'" "$$n3" 0; \
-	chk "'isStdlibUnitName (any src)'" "$$n4" 0; \
-	chk "'crossUnitDemand / recordDemand / isDemanded'" "$$n5" 0; \
-	if [ "$$fail" = "1" ]; then \
-	  echo "  A type's C type must come from its canonical id, never from its NAME, or a"; \
-	  echo "  user type shadowing a builtin scalar emits the C scalar instead of its struct."; \
-	  echo "  A site holding a tid asks scalarCTypeFor / cTypeForNameTid / typeRefC, all of"; \
-	  echo "  which route through scalarTidIsBuiltin -- the DECLARATION (`is native`), not a"; \
-	  echo "  list of unit names. Hence isStdlibUnitName is banned from this file outright."; \
-	  echo "  The cTypeOf sites that remain have no tid to ask: convBodyOf GENERATES the"; \
-	  echo "  natives.tbl conversion rows, two are scalar-NAME predicates rather than C-type"; \
-	  echo "  lookups, and the rest start from a typedef base or an AST name. If you have a"; \
-	  echo "  tid, you are not one of them."; \
-	  echo "  A reference demands the DECLARATION the environment walk finds for it, never a"; \
-	  echo "  bare name: there is no unit-name list and no name-keyed demand set left to"; \
-	  echo "  consult, and none may come back."; \
-	  echo "  (If a site was legitimately removed, lower the baseline here instead.)"; \
-	  exit 1; \
-	fi; \
-	echo "shadow-guard OK: cTypeOf name:=$$n1 (<=0)  cTypeForName symtab:=$$n2 (<=0)  isStdlibUnitName=$$n3/$$n4 (<=0)  demand set=$$n5 (<=0)"
-
-# emitter-guard -- ratchet against name-resolution creep in the C emitter: the
-# emitter reads typechecker stamps and canonical ids, and every remaining
-# by-name resolution is a counted residual (template re-emission, probe-chain
-# legs). A rising count means a new name-resolved site -- resolve from
-# stamps/ids instead, or lower the baseline when a residual is legitimately
-# removed. The sanctioned name lookups go through scalarCTypeFor /
-# cTypeForNameTid, which re-check the tid for a user shadow. The last two
-# counts pin where C names are BUILT: the type checker composes none, and the
-# emitter spells the z_t{id} shape only inside its one composer, which the
-# per-program table in emitC calls once per type.
-# typename-guard -- a type is identified by its declaration, never by the name it
-# is spelled with: a program's own `String`, `List`, `Box` or `u64` is its own
-# type. A comparison of a name id against one of zast.wellKnown's ty* slots is
-# therefore allowed only where it is not a type identity: below are the
-# functions that may make one, each with why. Anything else fails, which is how
-# the ~47 such tests the ids-not-names arc removed stay removed.
-#   system-gated: the system unit's own declaration, or a declaration
-#     declaredBySystem confirms --
-#     resolveClass, resolveProtocol, defTypetypeOf, resolveObjectDef,
-#     paramIsBorrowReftype, isBoxTemplate
-#   member and suffix vocabulary: `.array`, `.str`, a `c8`/`c32` suffix --
-#     checkDataBlockMember, checkMarkerMember, emitDataMember,
-#     emitStrConvCall, bareZeroTypeName
-#   bound-family vocabulary, whose declaration familyNameTaken checks --
-#     constraintKindForId
+# typename-guard -- a type is identified by its declaration, never by its spelling:
+# a comparison against a zast.wellKnown ty* name is allowed only in TYPENAME_OK,
+# each where the name is not a type identity (system-gated declarations, member and
+# suffix vocabulary, bound families).
 TYPENAME_OK := src/ztypecheck.z:resolveClass src/ztypecheck.z:resolveProtocol \
 	src/ztypecheck.z:defTypetypeOf src/ztypecheck.z:resolveObjectDef \
 	src/ztypecheck.z:paramIsBorrowReftype src/ztypecheck.z:isBoxTemplate \
@@ -2664,35 +772,26 @@ typename-guard:
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
 	echo "typename-guard OK: $$n functions compare a wellKnown type name, each sanctioned"
 
+# emitter-guard -- the emitter reads the checker's stamps and ids; each count is a
+# remaining name-based site (lower the baseline as one goes). z_t{ literals are
+# allowed only in the one C-name composer.
 emitter-guard:
-	@e1=$$(grep -c 'ztypecheck.resolvedByKey' src/zemitterc.z); \
-	e2=$$(grep -c 'ztypecheck.walkLookupTyperef' src/zemitterc.z); \
-	e3=$$(grep -c 'resolveTypeIdByName' src/zemitterc.z); \
-	e4=$$(grep -c 'userFnId' src/zemitterc.z); \
-	e5=$$(grep -c 'childOwnershipText' src/zemitterc.z); \
+	@e2=$$(grep -c 'ztypecheck.walkLookupTyperef' src/zemitterc.z); \
 	e6=$$(grep -c 'regNameOf' src/zemitterc.z); \
 	e7=$$(grep -c 'mangleVarName :name' src/zemitterc.z); \
 	e8=$$(grep -cF 'io.readText' src/zemitterc.z); \
-	e9=$$(grep -c 'monoOriginName' src/zemitterc.z); \
 	e10=$$(grep -vE '^[[:space:]]*#' src/zemitterc.z | grep -cE '\.data\.[a-z]'); \
 	e11=$$(grep -c 'poolFind' src/zemitterc.z); \
 	e12=$$(grep -cE 'aliasChildName :ast|aliasOrChild :ast' src/zemitterc.z); \
-	g1=$$(grep -c 'composeCname' src/ztypes.z); \
 	g2=$$(grep -cF 'z_t\{' src/zemitterc.z); \
 	fail=0; \
 	chk() { if [ "$$2" -gt "$$3" ]; then echo "emitter-guard FAIL: $$1 = $$2 (baseline $$3)"; fail=1; \
 	  elif [ "$$2" -lt "$$3" ]; then echo "emitter-guard: $$1 = $$2 < baseline $$3 -- lower the baseline here"; fi; }; \
-	chk "composeCname in src/ztypes.z" "$$g1" 0; \
 	chk "'z_t{' literals in src/zemitterc.z" "$$g2" 3; \
-	chk "ztypecheck.resolvedByKey" "$$e1" 0; \
 	chk "ztypecheck.walkLookupTyperef" "$$e2" 1; \
-	chk "resolveTypeIdByName" "$$e3" 0; \
-	chk "userFnId" "$$e4" 0; \
-	chk "childOwnershipText" "$$e5" 0; \
 	chk "regNameOf" "$$e6" 5; \
 	chk "mangleVarName (both inside varCName)" "$$e7" 2; \
 	chk "io.readText" "$$e8" 3; \
-	chk "monoOriginName" "$$e9" 0; \
 	chk "literal arm members (.data.<arm>; memberC spells them)" "$$e10" 0; \
 	chk "poolFind (a re-intern of a name the emitter held as an id, or table text)" "$$e11" 12; \
 	chk "member-name TEXT (C spelling and natives.tbl keys only; look members up by aliasChildNameId)" "$$e12" 18; \
@@ -2702,17 +801,10 @@ emitter-guard:
 	  echo "  ctxCname instead of resolving by name."; \
 	  exit 1; \
 	fi; \
-	echo "emitter-guard OK: resolvedByKey=$$e1 walkLookup=$$e2 resolveByName=$$e3 userFnId=$$e4 ownText=$$e5 nameOf=$$e6 mangleVar=$$e7 readText=$$e8 monoOrigin=$$e9 armLiteral=$$e10 poolFind=$$e11 memberText=$$e12"
+	echo "emitter-guard OK: zt=$$g2 walkLookup=$$e2 nameOf=$$e6 mangleVar=$$e7 readText=$$e8 armLiteral=$$e10 poolFind=$$e11 memberText=$$e12"
 
-# frontend-guard -- the front end knows no backend. Everything before emission
-# -- the lexer, parser and AST, the type checker and its model, the symbol table
-# and the generator lowering -- holds no C spelling in its code (a C type, a C
-# compiler, the C table, a link line, a C keyword list), parses no --target
-# triple (ztarget is the drivers'), and names no target at all: what the build
-# is for is the generated `z` unit's constants. A backend's facts
-# live in that backend (src/zemitterc.z, natives.tbl); a rise here is one
-# leaking forward. Comments are not counted: explaining what the C backend
-# does with a decision is not depending on it.
+# frontend-guard -- the front end names no backend: no C spelling, no triple parse,
+# no target (that is the generated `z` unit's). Comments are not counted.
 FRONTEND_SRCS := src/ztypecheck.z src/ztyping.z src/ztypes.z src/zenv.z src/zgenerator.z \
 	lib/system/zparser.z lib/system/zlexer.z lib/system/zast.z
 frontend-guard:
@@ -2732,38 +824,15 @@ frontend-guard:
 	fi; \
 	echo "frontend-guard OK: no C spelling, no triple parse and no target in the front end's code"
 
-# lifetime-guard -- ratchet on the emitter's own decisions about what dies when:
-# the checker records every scope end's and every exit's destroy list, with each
-# variable's state (scopeDestroy, exitDestroy, scopeTempDestroy), and the emitter
-# comes to print them. Each count here is a place the emitter still re-derives a
-# lifetime -- registering a scope destroy, deciding whether a local is referenced
-# by a return, guessing an lvalue from C text, reading a binding's borrow off its
-# shape, reading a HOIST's off the expression under it, spelling an argument
-# hoist -- and each falls to zero as the stage that replaces it lands. A rising
-# count is a new re-derivation.
-#
-# paramTakesArg is deliberately NOT counted: it answers which C form a parameter
-# takes, the value or a pointer to it, as well as whether it takes ownership, and
-# the first of those is the signature's to say and is not going anywhere.
-#
-# isNonLvalueArg IS counted and is the row that does not belong with the rest:
-# "can C take the address of this text" is a question about C, not about when a
-# value dies, and it has no checker answer to defer to. It rises when a site
-# that addresses a value learns to bind a non-lvalue first, which is a fix
-# (29 -> 30: `split` on a view call's result, viewRecvAddr).
-#
-# bindingRhsIsBorrow's residue is the same shape. Its four LIFETIME callers are
-# gone -- each reads the checker now -- and the one call left feeds
-# controlValueOwnsArms, which two sites ask to pick an EMITTER: which collection
-# binder runs, and which return shape a heap collection yielded from arms takes.
-# Neither decides when anything dies, so the row is a floor, not a target.
+# lifetime-guard -- places the emitter still decides a lifetime itself rather than
+# reading the checker's destroy lists. isNonLvalueArg and bindingRhsIsBorrow are
+# floors, not targets: both answer C-shape questions, not when anything dies.
 lifetime-guard:
 	@l1=$$(grep -c 'registerScopeDestroy' src/zemitterc.z); \
 	l2=$$(grep -c 'refsLocal' src/zemitterc.z); \
 	l3=$$(grep -c 'isNonLvalueArg' src/zemitterc.z); \
 	l4=$$(grep -c 'bindingRhsIsBorrow' src/zemitterc.z); \
 	l5=$$(grep -cF '_ah\{' src/zemitterc.z); \
-	l6=$$(grep -c 'hoistExprIsBorrowRooted' src/zemitterc.z); \
 	fail=0; \
 	chk() { if [ "$$2" -gt "$$3" ]; then echo "lifetime-guard FAIL: $$1 = $$2 (baseline $$3)"; fail=1; \
 	  elif [ "$$2" -lt "$$3" ]; then echo "lifetime-guard: $$1 = $$2 < baseline $$3 -- lower the baseline here"; fi; }; \
@@ -2772,36 +841,16 @@ lifetime-guard:
 	chk "isNonLvalueArg" "$$l3" 30; \
 	chk "bindingRhsIsBorrow" "$$l4" 6; \
 	chk "'_ah{' argument hoists" "$$l5" 0; \
-	chk "hoistExprIsBorrowRooted" "$$l6" 0; \
 	if [ "$$fail" = "1" ]; then \
 	  echo "  The emitter decided a lifetime on its own again. Read the checker's destroy"; \
 	  echo "  lists (scopeDestroy, exitDestroy) and the variable's recorded state instead."; \
 	  exit 1; \
 	fi; \
-	echo "lifetime-guard OK: registerScopeDestroy=$$l1 refsLocal=$$l2 isNonLvalueArg=$$l3 bindingRhsIsBorrow=$$l4 argHoists=$$l5 hoistBorrowRooted=$$l6"
+	echo "lifetime-guard OK: registerScopeDestroy=$$l1 refsLocal=$$l2 isNonLvalueArg=$$l3 bindingRhsIsBorrow=$$l4 argHoists=$$l5"
 
-# deadcode-guard -- emitted statements that no path can reach. clang's
-# -Wunreachable-code family is the oracle; gcc accepts the flag but never warns.
-# Every example and corpus program is emitted and counted, so a new dead-code
-# shape anywhere raises the number, not just one in the dedicated fixture
-# (tests/fixtures/emitc_corpus/deadcode_shapes.z). The baseline is ZERO and a
-# rise is a regression, not a number to bump. The two ways it happens: a site
-# appended a statement after a block that had already diverged (ask
-# blockDiverges in src/zemitterc.z about the block you just emitted -- never
-# read a flag left over from someone else's block), or a constant-condition
-# branch was emitted that docs/spec.pdoc promises not to emit (fold it; the
-# typechecker stamps the winning clause). Divergence is the typechecker's
-# `never` stamp and nothing else.
-#
-# user-native-guard -- a unit OUTSIDE src/runtime, shipping its own natives.tbl
-# rows and its own fragments, compiles AND LINKS AND RUNS (a fragment a hardcoded
-# per-unit loader would miss emits its call correctly and fails at link with an
-# implicit declaration). One native lives in a hidden subunit and is called
-# through the subunit's name, so its row must be found under the parent unit
-# that declares it; its fragment needs system's word primitives, which only the
-# row's qualified `needs=` demands. The runtime dir is BUILT here rather than committed -- src/runtime
-# plus the fixture's one row and one fragment -- so it cannot drift from the real
-# one, and the guard fails if the fragment stops loading.
+# user-native-guard -- a unit outside src/runtime with its own natives.tbl rows and
+# fragments compiles, links and runs, one native in a hidden subunit. The runtime
+# dir is built from src/runtime plus the fixture's row and fragment.
 user-native-guard: bin/zc
 	@d=$$(mktemp -d); fail=0; \
 	mkdir -p $$d/rt; cp -r src/runtime/. $$d/rt/; \
@@ -2824,12 +873,8 @@ user-native-guard: bin/zc
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
 	echo "user-native-guard OK: a unit outside src/runtime links and runs its own natives, a hidden subunit's among them"
 
-# case-guard: a program declaring `main` is an entry point, so some case list has to
-# compile it -- run_cases (build + compare a golden), smoke_cases (build, output not
-# compared) or dump_cases. A unit with NO main exists to be opened by another program and
-# is compiled through its dependant, so it is exempt by construction rather than by a list.
-# record_method_ref_default was in no list at all: it emitted C that gcc rejected, and
-# nothing noticed until a backend sweep compiled every emitted file by hand.
+# case-guard -- every program declaring `main` is in a case list (run, smoke or
+# dump), so something compiles it. A unit with no main is reached through others.
 case-guard:
 	@fail=0; \
 	for f in examples/*.z tests/fixtures/emitc_corpus/*.z; do \
@@ -2846,16 +891,8 @@ case-guard:
 	fi; \
 	echo "case-guard OK: every program declaring main is in a case list"
 
-# require-guard -- zlink-guard's other half. That one pins which programs a
-# unit CONTRIBUTES a library to; this pins which programs it is allowed to
-# REJECT. Both read the same rule -- what a unit needs of the toolchain, in its
-# `require:` block or in the C backend's `@unit.` row, speaks only for a program
-# that reaches the unit -- and only a toolchain a unit cannot be built with
-# exercises this side, so it is measured under `--cc tcc`: the C backend
-# refuses quadfloat there (E0601 is a `require:` block's own refusal). A rise
-# means a unit now rejects programs that never touch it (which is what made
-# `--cc tcc` reject the entire corpus); a fall means a refusal stopped firing
-# for a program that does touch it.
+# require-guard -- how many programs are refused under --cc tcc: a unit's toolchain
+# needs speak only for programs that reach it. zlink-guard is the other half.
 REQUIRE_TCC_BASELINE := 8
 
 require-guard: bin/zc
@@ -2874,25 +911,9 @@ require-guard: bin/zc
 	fi; \
 	echo "require-guard OK: $$n programs rejected under --cc tcc (baseline $(REQUIRE_TCC_BASELINE))"
 
-# mode-parity -- `--cc-mode inproc` must be a faster way to reach the same
-# program, not a different backend. It compares program OUTPUT and exit code,
-# never the binaries: the two link paths legitimately produce different bytes
-# (libtcc links through the state that compiled; the driver re-reads the
-# object), and diffing those would fail for no reason anyone could act on.
-# The run cases are the sample -- they are the ones with a golden to be wrong
-# against. The programs tcc rejects are compared too: a REFUSAL has to match
-# in both modes as much as a result does, which is what proves the in-process
-# error callback reports what the driver prints. Only the pid in the temp path
-# zc names is normalised away; it differs between two runs of the same mode.
-# Every run case is compared: no program can report which mode built it, since
-# the C toolchain is the backend's and nothing a program reads names it.
-#
-# --ldflags is the one flag whose meaning is deliberately NOT mode-invariant,
-# so it cannot be a parity row: spawn hands it to a linker and inproc has no
-# linker to hand it to, and zc refuses rather than dropping it. The stanza at
-# the end asserts that asymmetry directly -- both halves, so a regression in
-# either direction reds this gate. Without it the loop above passes --ldflags
-# nowhere and the whole class is invisible to CI.
+# mode-parity -- --cc-mode inproc builds the same PROGRAM as spawn: every run case
+# is built both ways and its output and exit code compared (never the bytes).
+# Refusals must match too. Only zc's temp-path pid is normalised.
 mode-parity: bin/zc $(BUILDDIR)/tcc
 	@mkdir -p $(BUILDDIR)/parity; n=0; bad=0; \
 	while read -r name dir rest; do \
@@ -2927,38 +948,8 @@ mode-parity: bin/zc $(BUILDDIR)/tcc
 	  exit 1; \
 	fi; \
 	echo "mode-parity OK: $$n run cases identical under --cc-mode spawn and inproc (output and exit code, not bytes)"
-	@p=$(BUILDDIR)/parity; rm -f $$p/ldf.spawn $$p/ldf.inproc; \
-	bin/zc build hello --src examples --system lib/system --cc tcc --cc-mode spawn \
-	  --ldflags "-Wl,--as-needed" -o $$p/ldf.spawn > $$p/ldf.spawn.log 2>&1; sp=$$?; \
-	bin/zc build hello --src examples --system lib/system --cc tcc --cc-mode inproc \
-	  --ldflags "-Wl,--as-needed" -o $$p/ldf.inproc > $$p/ldf.inproc.log 2>&1; ip=$$?; \
-	if [ $$sp -ne 0 ] || [ ! -x $$p/ldf.spawn ] || [ "$$($$p/ldf.spawn)" != "Hello, World!" ]; then \
-	  echo "mode-parity FAIL: --ldflags did not reach the linker under spawn (exit $$sp)"; \
-	  cat $$p/ldf.spawn.log; exit 1; \
-	fi; \
-	if [ $$ip -ne 2 ] || [ -e $$p/ldf.inproc ]; then \
-	  echo "mode-parity FAIL: --ldflags under inproc must be refused with exit 2, got $$ip"; \
-	  cat $$p/ldf.inproc.log; exit 1; \
-	fi; \
-	if ! grep -q -- '--ldflags' $$p/ldf.inproc.log || ! grep -q inproc $$p/ldf.inproc.log; then \
-	  echo "mode-parity FAIL: the inproc --ldflags refusal must name the flag and the mode"; \
-	  cat $$p/ldf.inproc.log; exit 1; \
-	fi; \
-	echo "mode-parity OK: --ldflags honoured under spawn, refused under inproc (a deliberate asymmetry, not a parity row)"
 
-# zlink-rules-guard -- every rule that LINKS a zerolang-emitted C file takes its
-# -l set from that file's own `zlink:` header, rather than hardcoding one.
-#
-# The seed rules did not. bootstrap/zc.c declares `dl` and makes two dlopen
-# calls, and the rules that build it asked for -lm alone -- latent only because
-# glibc >= 2.34 folded dlopen into libc, and load-bearing below that and on
-# musl. Nothing noticed for as long as the rule existed, because a missing -l
-# that the libc happens to supply looks exactly like a correct build.
-#
-# A grep, because a grep is the thing that would have caught it: a recipe line
-# that names a .c and passes an -l is linking, and it must go through ZLINKOF.
-# Compile-only lines carry -c and are not linking; `zc emit -o foo.c` lines
-# pass no -l. Both fall out without an exemption list.
+# zlink-rules-guard -- every rule that links emitted C takes its -l set via ZLINKOF.
 zlink-rules-guard:
 	@off=$$(grep -n -- '-l' Makefile | grep -v '^[0-9]*:#' | grep -vE ' -c ' \
 	         | grep -E '\.c\b' | grep -v ZLINKOF); \
@@ -2970,39 +961,11 @@ zlink-rules-guard:
 	fi; \
 	echo "zlink-rules-guard OK: every rule linking emitted C reads its -l set from the artifact"
 
-
-# refusal-guard -- zc says so and exits non-zero when it cannot honour what it
-# was asked for. Each pair below pins a REFUSAL together with the DELIVERY that
-# makes the refusal meaningful: a flag zc rejects in one mode has to be doing
-# something in the other, or the refusal is a missing feature wearing an error
-# message. Both halves, so a regression in either direction reds this gate.
-#
-# These cannot be errors/ fixtures. That runner's command always ends in
-# --emit-c (zcArgv, src/ztestrunner.z), so it never enters the compile/link
-# branch where the mode and the compiler are resolved and these refusals live.
-#
-# The last case is the other half of the same rule: a value-taking flag that
-# ends the command line is a usage error. It used to read one past argv and
-# abort in the allocator's index check, which names no flag and exits 1.
-#
-# `zc explain` refuses a code it does not own the same way. It used to read only
-# a code's digits, so `zc explain A001` -- a zl rule -- printed E0001's
-# "internal compiler error"; a zl rule code now points at `zl explain`, any
-# other non-E spelling is no error code, and E0200 / e0200 / 0200 / 200 all
-# still explain E0200.
-#
-# A unit that does not exist is reported as the parser reports it, exit 1, by
-# every command that parses: emit, build, run and dump. The error's location is
-# read from the tree the parser hands back; its own tree is empty by then, and a
-# lookup there aborts in the index check with a zpanic that names no unit.
-#
-# A system directory or a src root that is not a directory is refused, exit 2,
-# naming it: the source filesystem panics on such a root, so zc asks first.
-#
-# f128 for a target other than x86-64 is refused by the C backend
-# (natives.tbl's @unit.system.quadfloat row), exit 1, before any C is written:
-# __float128 and libquadmath are x86-64's, and gcc for aarch64 would reject
-# the emitted C over a type the program never wrote.
+# refusal-guard -- zc refuses what it cannot honour, exit 2 and naming it, and the
+# honoured counterpart still works: --ldflags under inproc, bad or ambiguous
+# --target, tcc cross, f128 off x86-64, a trailing value flag, `zc explain` of a
+# foreign code, a missing root, a missing unit. Not error fixtures: those only
+# ever run --emit-c, which never reaches these paths.
 refusal-guard: bin/zc $(BUILDDIR)/tcc
 	@d=$(BUILDDIR)/refusal; rm -rf $$d; mkdir -p $$d; bad=0; \
 	bin/zc build hello --src examples --system lib/system --cc tcc --cc-mode spawn \
@@ -3106,15 +1069,8 @@ refusal-guard: bin/zc $(BUILDDIR)/tcc
 	fi; \
 	echo "refusal-guard OK: every unhonourable flag combination is refused, and its honoured counterpart still works"
 
-
-# static-tcc-guard -- the vendored tinycc is LGPL-2.1 inside a dual MIT/Apache
-# tree, so it may be reached by dlopen and by nothing else: linking it, static
-# or dynamic, is what makes zc a combined work and triggers LGPL section 6's
-# relink obligation. dlopen names its entry points as STRINGS, so a compliant
-# zc has no tcc symbol at all -- a static link leaves `T tcc_new`, a `-ltcc`
-# link leaves `U tcc_new`, and this catches both. The leading space keeps our
-# own natives (z_tcc_compileToExe and friends) from matching. A licence posture
-# that lives only in a comment rots; this one is mechanised.
+# static-tcc-guard -- the vendored tinycc is LGPL-2.1, so the drivers may only
+# dlopen it: no libtcc symbol may appear in them (see vendor/tinycc/VERSION.md).
 static-tcc-guard: bin/zc bin/zl bin/zls
 	@fail=0; \
 	for b in bin/zc bin/zl bin/zls; do \
@@ -3130,13 +1086,8 @@ static-tcc-guard: bin/zc bin/zl bin/zls
 	fi; \
 	echo "static-tcc-guard OK: no libtcc symbols in the driver binaries"
 
-# zlink-guard -- a library a unit needs linked -- in its `require:` block, or in
-# the C backend's `@unit.` row -- earns its keep only if it applies to the
-# programs that reach the declaring unit and to no others. Nothing else can
-# catch a mistake here: gcc always has libquadmath, so a backend that linked
-# "quadmath" unconditionally would link fine and pass every other gate. A rise
-# means something now reaches a unit it did not; a fall means a program lost a
-# need it had.
+# zlink-guard -- how many programs declare a link library: a unit's library goes to
+# the programs that reach it and no others.
 ZLINK_BASELINE := 8
 
 zlink-guard: bin/zc
@@ -3154,13 +1105,9 @@ zlink-guard: bin/zc
 	fi; \
 	echo "zlink-guard OK: $$n programs declare a link library (baseline $(ZLINK_BASELINE))"
 
-# emit-set / ident-set -- the byte-identity oracle for compiler refactors.
-# `make emit-set OUT=dir [ZC=bin/zc]` emits every example, every corpus program
-# and the three drivers (zc, zl, zls) as C into OUT. `make ident-set A=dir B=dir`
-# normalises every renumbering id form (z_t{N}, _t{N}_ mid-symbol, Z_T{N}_,
-# _i{N}, _zs{N}, z_v{N}) in both trees and diffs them; what remains is a
-# semantic difference to explain, or a bug. A partial normaliser reports
-# phantom content changes -- widen it before concluding a diff is semantic.
+# emit-set / ident-set -- the byte-identity oracle for refactors. `make emit-set
+# OUT=dir [ZC=...]` emits every example, corpus program and driver; `make
+# ident-set A=dir B=dir` diffs two sets with every minted id normalised away.
 EMITSET_ZC ?= bin/zc
 emit-set:
 	@test -n "$(OUT)" || { echo "usage: make emit-set OUT=dir [ZC=bin/zc]"; exit 1; }; \
@@ -3193,20 +1140,9 @@ ident-set:
 	  sed 's/^/  /' "$$rep" | head -60; rm -rf "$$na" "$$nb" "$$rep"; exit 1; \
 	fi
 
-# const-row-guard -- a natives.tbl row carrying `const=<positions>` answers only
-# when those ARGUMENT positions are compile-time constants; the ordinary row
-# answers otherwise. Both directions are checked, because either failure is
-# silent. A variant that stops being selected costs nothing visible -- the
-# guarded form is still correct, just branchier, and no golden would move. A
-# variant selected for a RUNTIME operand is worse and just as quiet: the
-# variant names its hole more than once, and holes fill VERBATIM, so a call on
-# the right would be evaluated once per mention. Binding the operand into `_l`
-# / `_r` is what the ordinary rows do to prevent exactly that, so the presence
-# of an `_r` binding is what tells the two forms apart in the emitted C.
-#
-# const_shift_form is the sample: six constant counts, which must bind no `_r`,
-# and three that are not constant -- two locals and a CALL -- which must each
-# bind one. The fixture answers for the values; this answers for the form.
+# const-row-guard -- a natives.tbl `const=` row is chosen exactly when its operand
+# is a compile-time constant: const_shift_form has three non-constant shifts, each
+# of which must bind an `_r` operand (a variant names its hole more than once).
 CONST_ROW_VARIABLE := 3
 
 const-row-guard: bin/zc
@@ -3223,8 +1159,8 @@ const-row-guard: bin/zc
 	fi; \
 	echo "const-row-guard OK: $$n non-constant shift operands bound, the rest fold"
 
-# Lower the baseline as each folder gap is closed. Skipped when clang is absent -- clang is
-# not a build requirement.
+# deadcode-guard -- no emitted statement is unreachable (clang's
+# -Wunreachable-code; gcc never warns). Skipped without clang.
 DEADCODE_BASELINE := 0
 
 deadcode-guard: bin/zc
@@ -3250,37 +1186,9 @@ deadcode-guard: bin/zc
 	  echo "deadcode-guard OK: $$n unreachable statements (baseline $(DEADCODE_BASELINE))"; \
 	fi
 
-# eager-guard -- `--eager` resolves every definition of every unit, not only the
-# ones a use site demands, so an error inside a definition nothing references is
-# still reported. Nothing else exercises the mode; without this it would rot.
-# Every corpus program must be clean in BOTH modes.
-#
-# IT COMPILES WHAT IT EMITS. It used to write the C to /dev/null and judge by
-# zc's exit status, which is not the same question: zc emitted happily for
-# every program in the corpus while the C it produced did not compile for ANY
-# of them -- `Any` and `AnyRef` are arm-less generic bounds, and an empty C
-# enum is invalid. A gate that never reads its own output cannot see that, and
-# this one printed "clean under --eager" for as long as it existed.
-#
-# Judged on its own, never against a non-eager run: `--eager` does not require
-# a `main` (it is not asking what a root reaches), so a library fixture emits
-# here and is E0039 without it. The two sides are not comparable and the
-# difference is not the signal.
-# alias-label-guard -- one type, ONE label. A mono's label head is its
-# TEMPLATE'S DECLARED name, never the alias a use site reached it by.
-# lib/system/core.z binds collections.ListRef under both `List` and `ListRef`
-# (likewise Map/MapRR and Set/SetRef), and a user may alias anything; while the
-# head came from the source text, whichever mint site ran first decided the
-# spelling. That is what made the two modes disagree and broke the hardcoded
-# tag in src/runtime/natives/_Z_IO_LIST_DIR.inc under --eager. Composing the
-# head at the mint funnel (getOrMintSpec) took this corpus from 7811
-# alias-headed labels to 0.
-#
-# A program that DECLARES its own List/Map/Set -- usershadow.z does -- keeps
-# that head legitimately, because then it IS the declared name. The check reads
-# each program's source for such a declaration rather than carrying a skip
-# list, so a new shadow fixture needs no edit here and cannot silently weaken
-# it.
+# alias-label-guard -- a mono is labelled by its template's declared name, never by
+# the alias a use reached it through. A program declaring its own List/Map/Set
+# keeps that head.
 alias-label-guard: bin/zc
 	@d=$$(mktemp -d); bad=""; \
 	for f in examples/*.z tests/fixtures/emitc_corpus/*.z; do \
@@ -3301,24 +1209,9 @@ alias-label-guard: bin/zc
 	fi; \
 	echo "alias-label-guard OK: no mono carries an alias head (both modes, examples + corpus)"
 
-# fwd-shape-guard -- a struct type is emitted in ONE of two shapes, and which
-# one is decided by whether something forward-declared it first: a tagged body
-# `struct X_t { ... };` when it did, an ANONYMOUS `typedef struct { ... } X_t;`
-# when it did not. A forward declaration written AFTER an anonymous body names
-# a struct tag that does not exist, so the two must never both happen to one
-# type.
-#
-# They did, for a user generic class or record mono passed to a function:
-# emitMainFwdDecls forward-declares a mono only when it needs a destructor or
-# is a container, so `Slot i64` took the anonymous shape -- and ensureFwdStruct
-# then forward-declared it for the function-pointer typedef, having asked only
-# whether a forward existed and never whether the BODY was already out. zc
-# emitted that C and exited 0; the C compiler rejected it.
-#
-# The scan pairs each `typedef struct {` with the FIRST following line that
-# starts with `}`. Resetting on any such line is the load-bearing part: a state
-# machine that stays open past its own block mis-reads the next TAGGED block's
-# closing line and invents collisions that are not there.
+# fwd-shape-guard -- no struct is both emitted untagged and forward-declared (a
+# forward of an anonymous struct names nothing). The scan closes each
+# `typedef struct {` at the first following line starting with `}`.
 fwd-shape-guard: bin/zc
 	@d=$$(mktemp -d); bad=""; \
 	for f in examples/*.z tests/fixtures/emitc_corpus/*.z; do \
@@ -3346,27 +1239,12 @@ fwd-shape-guard: bin/zc
 	fi; \
 	echo "fwd-shape-guard OK: no type is both emitted untagged and forward-declared (both modes, examples + corpus)"
 
-# EAGER_KNOWN -- the programs still bad under `--eager`. Empty, and a name
-# added here needs the cause written beside it.
-#
-# Movement in EITHER direction fails: a new name means a regression, a lost one
-# means it was fixed and the row must go in the same commit.
-#
-# unused_definition_not_demanded, unused_method_not_demanded,
-# generic_member_not_demanded and generic_unit_member_not_demanded are bad under
-# `--eager` BY DESIGN: they pin that an unused definition, an unused method and
-# an instance's unused method or function are never checked, so their unused
-# ones are wrong and `--eager` checks every definition and refuses them.
-# user_never_not_demanded is the same by design: it pins that a loop demands the
-# SYSTEM's `never`, never a user's, so its unused user `never` is wrong.
-# user_unit_public_instance_lazy, user_unit_public_reexport_lazy and
-# user_unit_namespace_lazy are the same for another unit's definitions: what the
-# program never reaches through a unit's public names is never checked.
+# eager-guard -- every example, corpus program and user-units case emits C that
+# compiles under --eager. EAGER_KNOWN is bad by design: each pins that an unused
+# definition is never checked, which --eager then checks and refuses. A move
+# either way fails.
 EAGER_KNOWN := unused_definition_not_demanded unused_method_not_demanded generic_member_not_demanded generic_unit_member_not_demanded user_never_not_demanded user_unit_public_instance_lazy user_unit_public_reexport_lazy user_unit_namespace_lazy
 
-# The user_units run cases are programs over SEVERAL units, where the order the
-# units resolve in is an input: a signature naming another unit's instance type
-# resolves before that unit's own instantiations under `--eager` alone.
 eager-guard: bin/zc
 	@d=$$(mktemp -d); bad=""; \
 	uu=$$(awk '$$2 == "tests/fixtures/user_units" { print $$2 "/" $$1 ".z" }' tests/fixtures/run_cases.txt); \
@@ -3400,32 +1278,11 @@ eager-guard: bin/zc
 	fi; \
 	echo "eager-guard OK: examples + corpus + user units emit AND compile under --eager ($(words $(EAGER_KNOWN)) known)"
 
-# EAGER_LIB_KNOWN -- the library / compiler units still bad under `--eager`.
-# Empty, and a name added here needs the cause written beside it. Movement in
-# either direction fails, same rule as EAGER_KNOWN.
+# eager-lib-guard -- the same for lib/system and src, whose unused definitions
+# nothing else checks. Subunits (lib/system/system/) are reached only through
+# their parent, so they are no compilation root.
 EAGER_LIB_KNOWN :=
 
-# eager-lib-guard -- eager-guard's other half: the same question asked of the
-# STANDARD LIBRARY and the COMPILER'S OWN SOURCE. eager-guard reads examples +
-# emitc_corpus, and for a long time that was the whole of what ran under
-# `--eager` -- so a definition in src/ or lib/system/ that nothing demands was
-# checked by nothing at all. Not the self-compile, which is demand-driven from
-# zc's own `main`; not eager-guard, pointed at another tree; not the linter,
-# whose unused-private-def evidence counts a recursive self-call as a use. Two
-# dead emitter helpers carried a wrong return type for three months that way.
-#
-# A library unit has no `main` and is judged ONLY under `--eager`: without it
-# every one of these is E0039, so there is no non-eager run to compare against
-# and the difference would not be the signal. IT COMPILES WHAT IT EMITS, for
-# eager-guard's reason -- zc exiting 0 is not the same question as the C being
-# valid.
-#
-# lib/system/system/*.z is deliberately absent. Those are SUBUNITS: their
-# natives are registered under the PARENT unit's name (i128's operators are
-# `system.i128.+`, declared in wideint.z), so a subunit compiled standalone
-# misses every one of its own rows. A subunit is reached through system.z and
-# is never a compilation root -- exempt by construction, the way a unit with no
-# `main` is exempt from case-guard.
 eager-lib-guard: bin/zc
 	@d=$$(mktemp -d); bad=""; \
 	for f in lib/system/*.z src/*.z; do \
@@ -3458,60 +1315,9 @@ eager-lib-guard: bin/zc
 	fi; \
 	echo "eager-lib-guard OK: lib/system + src emit AND compile under --eager ($(words $(EAGER_LIB_KNOWN)) known)"
 
-# member-guard -- ratchet against declaration-bypassing member special-cases in
-# the type checker. TWO spellings carry them and the guard counts both:
-# `cn.stringView == "..."` where the name is an owned String, and `cn == "..."`
-# where it is already a view -- 24 in all. The `.drop` marker used to add four
-# of the second kind; they now route through isDropMarker, so its spelling
-# lives in one place.
-#
-# THE OWNERSHIP VOCABULARY IS NO LONGER HERE. lock / borrow / take / view /
-# hold are interned as well-known ids (zast.names) and compared as ids
-# in pathOwnership, so this guard no longer catches a new marker word. What
-# catches one instead is the type system: zparamownership is matched
-# EXHAUSTIVELY in four places, so a new arm is a compile error rather than a
-# silent miss.
-#
-# The sanctioned markers are, exhaustively, what the baseline still counts:
-# access (private / public), the conversions (copy / str), the container
-# markers (tag / array / index), the definition keywords (return / create /
-# error / panic), and the `Iterator` protocol marker. A rising count means a new hardcoded
-# string-keyed special-case -- resolve members through their declared childOf
-# edges instead (the system units are the source of truth). Bump the baseline
-# here only for a genuinely-sanctioned marker.
-#
-# TWICE now this ratchet has been loose with nobody noticing. It was 37 against
-# an actual 18. Then `3fae8cdb lib+src: the view conversions are camelCase`
-# renamed .stringview to .stringView, the pattern here still spelled it
-# lowercase, and from that commit until this one it matched NOTHING -- counting
-# zero against a baseline of 18 and printing OK every run, because the
-# under-baseline branch only advises. A guard that names a spelling dies when
-# the spelling moves, and it dies silently.
-member-guard:
-	@m1=$$(grep -cE '[a-z]*cn\.stringView ==|[a-z]*cn == "' src/ztypecheck.z); \
-	if [ "$$m1" -gt 0 ]; then \
-	  echo "member-guard FAIL: string-keyed member compares = $$m1 (baseline 0)"; \
-	  echo "  A new hardcoded string-keyed member/marker special-case was added to the"; \
-	  echo "  type checker. Resolve members through their declared childOf edges (the"; \
-	  echo "  system units are the source of truth); bump the baseline only for a"; \
-	  echo "  genuinely-sanctioned marker."; \
-	  exit 1; \
-	fi; \
-	if [ "$$m1" -lt 0 ]; then \
-	  echo "member-guard: string-keyed member compares = $$m1 < baseline 0 -- lower the baseline here"; \
-	fi; \
-	echo "member-guard OK: string-keyed member compares = $$m1 (<=0)"
-
-# highlight-guard -- the two syntax highlighters must carry the language's
-# actual vocabulary. THE LANGUAGE IS THE SOURCE OF TRUTH, never the lists:
-# predeclared names come from lib/system/core.z, keywords and reserved words
-# from zlexer.z's kwOfId and isReservedId (their wellKnown labels).
-#
-# Three renames in a row missed these files -- `.release` -> `.drop`, the
-# camelCase view rename, and the arc that added `drop` -- because nothing
-# checked. The visible result was `view` listed as BOTH reserved and
-# predeclared, reserved winning, and every `.view` in the documentation
-# rendering black on red.
+# highlight-guard -- the spec and the three highlighters (prism, nvim, rouge) carry
+# the language's vocabulary: keywords and reserved words from zlexer, predeclared
+# names from core.z.
 define HIGHLIGHT_GUARD_SH
 set -e
 LC_ALL=C; export LC_ALL
@@ -3542,11 +1348,8 @@ print('\n'.join(sorted(set(m.group(1).split()))))" "$$1"
 }
 
 grep -oE '^[A-Za-z_][A-Za-z0-9_]*:' lib/system/core.z | sed 's/:$$//' | sort -u > "$$D/core"
-# the keyword set is read from the CONSTRUCTION rather than from a function
-# range: the lexer classifies by id, one function per keyword family, and a
-# guard that had to name them would go stale the next time a family is added.
-# Each `zast.wellKnown.slot.LABEL` a kw*Id function returns a keyword for is
-# spelled beside its label in zast's wellKnown block.
+# the keywords are what each kw*Id function returns, spelled beside its label in
+# zast's wellKnown block (read from the construction, so a new family needs no edit).
 wkspell() {
   sed -n '/^wellKnown: data {/,/^}/p' lib/system/zast.z | awk -v want="$$1" '
     BEGIN { n = split(want, a, " "); for (i = 1; i <= n; i++) w[a[i]] = 1 }
@@ -3563,10 +1366,7 @@ rslabels=$$(sed -n '/^isReservedId: function/,/^}/p' lib/system/zlexer.z \
   | grep -oE 'slot\.[A-Za-z0-9_]+' | sed 's/slot\.//' | tr '\n' ' ')
 wkspell "$$rslabels" > "$$D/lexres"
 
-# the SPEC's two tables. Nothing gated them against the lexer, which is how
-# `yield` sat in kwlookup while the spec called it a builtin function and both
-# highlighters listed it as a predeclared identifier -- three sources agreeing
-# and the implementation the odd one out, for as long as nobody looked.
+# the spec's Keywords and Reserved Words tables.
 specset() {
   awk -v h="$$1" '
     $$0 == "#---: " h { inh=1; next }
@@ -3614,66 +1414,16 @@ export HIGHLIGHT_GUARD_SH
 highlight-guard:
 	@sh -c "$$HIGHLIGHT_GUARD_SH"
 
-# view-guard -- a native receiver marked `.view` asserts that the C never writes
-# through it, and the compiler cannot check that: there is no body. So the C
-# compiler proves it instead -- the receiver is declared `const`, and (with
-# -Werror=discarded-qualifiers) any write, direct or through a helper or a
-# vtable, fails the build. This guard keeps the two halves from drifting: a
-# `.view` declaration must have a const receiver in its backing, and a const
-# receiver must be declared `.view` so the marker does not go unused.
-#
-# Backings come in four shapes: one fragment per method under
-# src/runtime/natives, many functions in one file (z_String.inc), the @@NAME@@
-# container templates, and C the emitter builds from string literals (ListRef.get,
-# .contains, .listview, .sort, .iterate, ListIter.call, MapRR.getv). So a receiver
-# is found by TYPE rather than by parameter name -- the first parameter whose
-# struct is the function's own prefix, which covers self / _this / _it / _e /
-# s / a alike. VIEW_GUARD_PLACEHOLDER names the type each template placeholder
-# stands for; an unmapped placeholder names a user type or a valtype (array,
-# str, the protocol vtable, meta.create), whose C the guard does not read --
-# a valtype's marker is judged from the other side, below.
-# An emitter-built function names a runtime mono rather than a type the guard
-# can read, so VIEW_GUARD_EMITTED says which declaration each one backs; `-`
-# marks the ones backing no reference-type method at all (array / str value
-# equality, a union destructor).
-#
-# A receiver-bearing C function that resolves to no declaration is an ERROR,
-# not a skip -- a silently unchecked backing is exactly what the guard exists
-# to prevent. One C function backing several declarations is spelt out in
-# VIEW_GUARD_BACKS; a helper with no zerolang declaration at all goes in
-# VIEW_GUARD_INTERNAL.
-#
-# The other direction closes the same hole from the declaration end: a native
-# receiver that reaches no C function the guard can read would otherwise carry
-# an unchecked marker, so every one of them is registered in VIEW_GUARD_INLINE
-# with the reason it cannot be const-checked --
-#   inline      the receiver is read in place (a field read or a compound
-#               literal); no C function receives it
-#   byvalue     the C receives a copy, so it cannot write through to the source
-#   unemitted   declared, but nothing emits a call to it
-#   ondemand    emitted only for an instance whose program CALLS it, so the
-#               program this guard reads has no C function for it. Not the same
-#               as unemitted: a program that calls it does get one, and if the
-#               guard's own program ever starts calling it the entry becomes a
-#               staleness error, which is the right way to be told
-#   Type.method the receiver is projected and handed to another declared
-#               method, which must itself be `.view` before this one may be
-# A registered entry that turns out to HAVE a backing is an error too, so the
-# register cannot go stale. String's comparisons are the reason the last kind
-# exists: `s1 == s2` does not call z_String_eq (which nothing calls) -- it
-# converts both sides to by-value views and calls z_StringView_eq.
-#
-# A VALTYPE native (a record / variant / facet receiver: the scalars, bool,
-# the literal types, optionval, resultval, array, str) has no C function to
-# read: its body is an expression in src/runtime/natives.tbl with the receiver
-# as the @V@ / @L@ hole. So the ROW is the proof -- a body that never writes
-# through its receiver hole cannot mutate, and one that does must not be
-# `.view`. A row with no body is compiler-built and is registered in
-# VIEW_GUARD_INLINE like any other unreadable backing, with `writes` as the
-# reason for the ones that mutate (array.set) or lend their storage to be
-# written (array.mutView, array.mutSlice); a `Type.*` entry covers every
-# member of a type, a `*.method` entry a member every scalar declares.
-
+# view-guard -- a native receiver marked `.view` must be const in its C backing,
+# and a const receiver must be marked `.view`. The C compiler then proves no
+# write. Receivers are found by type (the first parameter whose struct is the
+# function's prefix). Valtype natives are judged by their natives.tbl row.
+#   PLACEHOLDER  the type each template placeholder stands for
+#   EMITTED      the declarations each emitter-built function backs (- for none)
+#   BACKS        one C function backing several declarations
+#   INTERNAL     C helpers with no declaration
+#   INLINE       receivers no readable C function receives, with why:
+#                inline / byvalue / unemitted / ondemand / writes / Type.method
 VIEW_GUARD_PLACEHOLDER := z_List.c.tmpl=@@NAME@@:ListRef z_Map.c.tmpl=@@NAME@@:MapRR \
   z_MapIter.c.tmpl=@@NAME@@:MapRR,@@MAPKEYITER@@:MapKeyIter,@@MAPITEMITER@@:MapItemIter,@@MAPENTRY@@:MapEntry \
   z_Set.c.tmpl=@@NAME@@:SetRef,@@SETITER@@:SetIter \
@@ -4090,55 +1840,11 @@ view-guard:
 	  src/runtime/natives/*.inc src/runtime/*.inc src/runtime/*.c.tmpl \
 	  src/runtime/natives.tbl
 
-# fallback-guard -- the emitter must never silently degrade: a construct it
-# cannot emit leaves a "/* zemitterc: ... */" marker in the C and records an
-# emitFail, so zc exits nonzero and writes nothing. Leg 1: no example emit
-# outside the known baseline may carry a marker (the baseline holds the known
-# gaps and shrinks to empty as they are fixed). Leg 2: the emitted driver C
-# (bin/zc.c, out/zl.c, out/zls.c) must carry ZERO live markers. The drivers
-# compile the emitter, so its own message strings appear there as literals;
-# those are excluded by content -- a marker opening a C string is the
-# emitter quoting itself, whereas a live one is emitted bare, either as its
-# own comment line or inline as `= /* ... */0`. Matching on the literal (not
-# on a helper's C name) keeps the leg working whichever naming scheme
-# --readable-names selects.
-#
-# BOTH FILE LEGS MATCH THE MARKER PREFIX, NOT THE WORD "unhandled". They used
-# to grep 'zemitterc: unhandled', which five marker texts do not contain -- the
-# two 'no native implementation' legs, 'unresolved operator', the two missing-
-# fragment legs, and the yield hint that deliberately REPLACES the unhandled-
-# callee wording. Each of those could have shipped in an emission unseen.
-#
-# Leg 3: a source ratchet on the emitFail line count in src/zemitterc.z.
-# Leg 4: a source ratchet on the marker-SITE count. The file legs can only ever
-# fire for a marker whose site forgot its emitFail, since a site that records
-# one means no C is written at all -- so the count of sites is what actually
-# holds the invariant, and a new one must be deliberate.
-#
-# Two kinds of leg share that count, and they move in opposite directions. A
-# FALLBACK leg is a construct the emitter cannot render: it may only DECREASE,
-# and the baseline drops in the same commit that resolves one. A REFUSAL leg is
-# the emitter declining to emit something that must never have reached it -- the
-# `is native` declaration with no row, and the `fold` native nothing folded --
-# which is the opposite of a silent degradation and is legitimately ADDED. A
-# raise is therefore allowed only for a refusal, only with the leg named in the
-# commit message, and the guard cannot tell the two apart: the prose is the
-# check, so say which one it is.
-FALLBACK_BASELINE :=
-# 38: nativeBoxCall's refusal -- a native conformer boxed as a protocol whose
-# member it has no C spelling for (only Text.stringView has one).
-# 39: conformanceArgText's refusal -- a conformer boxed for an owning (`.take`)
-# parameter, which the checker refuses first.
-# 39: applyUnitReqs's refusal -- a reached unit the C toolchain cannot build
-# (natives.tbl's `@unit.` rows: f128 under tcc or off x86-64).
-# 38: the refusal of a `platform` member nothing folded goes with the checker's
-# answers: no native is answered by the checker any more.
-# 37: checkTagStem's refusal -- two monos of one name -- goes with tag
-# constants spelled from names.
-# 38: withValueCType's refusal -- a `with` value the checker gave no type, which
-# a lookup of its stamped NAME used to answer instead (names-to-ids-2 Part C).
-# 39: protoParamCtype's refusal -- an interface slot's parameter whose type the
-# backend cannot spell, which used to be declared `int64_t` in silence.
+# fallback-guard -- the emitter never degrades silently: no example or driver C
+# carries a live `/* zemitterc: */` marker (the emitter quoting itself in a string
+# is not live), and the emitFail and marker-site counts in src/zemitterc.z are
+# ratchets. A new refusal leg may raise EMITFAIL_BASELINE (say so in the commit);
+# a new fallback leg may not.
 EMITFAIL_BASELINE := 39
 MARKER_BASELINE := 24
 EXCS := $(NAMES:%=$(EXDIR)/%.c)
@@ -4146,11 +1852,7 @@ fallback-guard: $(EXCS) bin/zc bin/zl bin/zls
 	@fail=0; \
 	for f in $(EXCS); do \
 	  if grep -q '/\* zemitterc: ' $$f; then \
-	    name=$$(basename $$f .c); \
-	    case " $(FALLBACK_BASELINE) " in \
-	      *" $$name "*) ;; \
-	      *) echo "fallback-guard FAIL: $$name.c carries an emitter marker"; fail=1;; \
-	    esac; \
+	    echo "fallback-guard FAIL: $$(basename $$f) carries an emitter marker"; fail=1; \
 	  fi; \
 	done; \
 	for d in bin/zc.c $(BUILDDIR)/zl.c $(BUILDDIR)/zls.c; do \
@@ -4174,52 +1876,21 @@ fallback-guard: $(EXCS) bin/zc bin/zl bin/zls
 	  echo "fallback-guard: marker sites = $$m < baseline $(MARKER_BASELINE) -- lower MARKER_BASELINE"; \
 	fi; \
 	if [ "$$fail" = "1" ]; then \
-	  echo "  The emitter hit a construct it cannot emit. Fix the emission gap (or,"; \
-	  echo "  for a known example gap being tracked, add it to FALLBACK_BASELINE)."; \
+	  echo "  The emitter hit a construct it cannot emit. Fix the emission gap."; \
 	  exit 1; \
 	fi; \
-	echo "fallback-guard OK: no emitter markers outside the baseline ($(words $(FALLBACK_BASELINE)) known; emitFail legs $$n, marker sites $$m)"
+	echo "fallback-guard OK: no emitter markers (emitFail legs $$n, marker sites $$m)"
 
 clean:
 	rm -rf $(BUILDDIR) bin
 
-# native-guard -- the io/os/cli/net/tcc/math natives are declaration-driven:
-# the unified emitter derives the C symbol z_<unit>_<name> from the resolved
-# declaration, and the C implementation lives in a conventionally-named
-# fragment _Z_<UNIT>_<UPPER_SNAKE(name)>.inc under src/runtime/natives.
-# Leg 1: every top-level 'is native' free function in the convention units,
-# their hidden subunits (lib/system/<unit>/*.z) included, has its fragment on
-# disk, or is a known exception (print is the
-# statement-special; stdin/stdout/stderr live in the stream fragments;
-# env->GET_ENV and pollReadable->POLL are renamed). Bodied free functions
-# emit generically and are exempt. Leg 2: every _Z_* fragment name the
-# emitter references exists on disk, and no fragment on disk is unreferenced --
-# a convention fragment is reached through the (unit, member) demand pair, so
-# the member half alone counts as a reference, and a natives.tbl row naming the
-# fragment in its `frag=` list counts as one too: that is where the names live
-# now, so a guard reading only the emitter would call every renamed fragment an
-# orphan. Leg 3: every `z_@Name@` hole a fragment
-# spells names a canon the loader can actually fill -- a type declared in the
-# convention units (core.z carries the io/system aliases: File, IoError,
-# Reader, Writer, openmode, seekorigin, TextReader, Splitter, LinesIter,
-# CpIter), an ioCanonTid arm (the generic instances, declared nowhere), or a
-# name a loader binds explicitly (the mono/parse/codepoint stems). Derived
-# from the declarations rather than a list, so a new fragment-backed type is
-# legal the moment it is declared. Leg 4: every `@ARM_<canon>.<arm>@` hole (a
-# tag constant, named by its type and arm) names a known canon, and an arm the
-# canon's declaration -- its template's, for an instance -- declares; and no
-# fragment spells a tag constant (`Z_..._TAG_...`) literally, the emitter's
-# spelling being the emitter's to choose. Leg 5: every `@MEMBER_<canon>.<name>@`
-# hole (a member of a struct the compiler generates) names a known canon and a
-# member -- a field, an arm or a vtable slot -- its declaration declares; and no
-# fragment spells an arm in `data`, an inline arm or a vtable slot literally,
-# those spellings being the emitter's. A literal field is not refused: its text
-# cannot be told from a runtime-owned layout's field (StringView's `size`).
+# native-guard -- natives are declaration-driven. Every `is native` free function
+# in io/os/cli/net/tcc/math has its _Z_<UNIT>_<NAME>.inc fragment (bar the
+# exceptions); every fragment is referenced (by the emitter or a natives.tbl
+# frag= list); and every z_@Name@, @ARM_canon.arm@ and @MEMBER_canon.name@ hole a
+# fragment spells names a declared type, arm or member. No fragment spells a tag
+# constant or a generated struct's member literally.
 NATIVE_GUARD_EXCEPTIONS := io.print io.stdin io.stdout io.stderr os.env net.pollReadable
-# reached by something other than a per-member demand: the statement-special and
-# the three streams have no fragment of their own, and os.args is a bundle its
-# emitter loads by hand (argv globals first).
-CONVENTION_EXCEPTIONS := io.print io.stdin io.stdout io.stderr os.args
 
 native-guard:
 	@fail=0; conv=""; \
@@ -4307,16 +1978,8 @@ native-guard:
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
 	echo "native-guard OK: native declarations and runtime fragments consistent (incl. no orphans, $$nh fragment holes known, $$na tag-constant holes name declared arms, $$nm member holes name declared members)"
 
-# generic-param-guard -- L023 (a generic parameter's case follows its bound's)
-# over the trees the linter is not pointed at. ZLSCOPE covers src/ and
-# lib/system/, where L023 is a WARNING and `make check` already pins it at zero;
-# examples/ and tests/fixtures/ are outside every lint gate, so a parameter
-# renamed back there would regress in silence. This runs the SAME rule rather
-# than restating it in grep -- one implementation, one place it can be wrong --
-# and greps for the code because those trees carry other, pre-existing findings
-# (32 L003s in examples/ alone) that would swamp an exit-status test.
-# tests/fixtures/lsp_ws/lintgeneric is excluded BY DESIGN: it is L023's own
-# fixture and has to contain violations for the rule to be pinned firing.
+# generic-param-guard -- L023 (a parameter's case follows its bound's) over the
+# examples and fixtures, which no lint gate reads.
 generic-param-guard: bin/zl
 	@n=$$(bin/zl lint examples/*.z tests/fixtures/emitc_corpus/*.z \
 	        tests/fixtures/errors/*.z 2>&1 | grep -c 'L023' || true); \
@@ -4329,27 +1992,10 @@ generic-param-guard: bin/zl
 	fi; \
 	echo "generic-param-guard OK: examples + corpus + error fixtures clean (baseline 0)"
 
-# zl-full-guard -- `zl lint --full` never passes a file it did not check. Run
-# from a directory holding no project, with no flags, on a fixture outside it,
-# the pass still runs: the file's own directory is a src root and the stdlib is
-# found as zc finds it, so the fixture's L030 is reported. A --system that does
-# not exist and a --src the unit is not under are each reported as the reason
-# the pass did not run, and exit non-zero. The pass needs no runtime directory:
-# the C runtime is the build's, not the type checker's, so it runs with none.
-# An error the pass finds in a
-# dependency unit is shown at THAT unit's path and line, with its source line.
-# A finding in a generic body is reported once, not once per instance's copy.
-# A subunit file is linted as the subunit it is, reading its parent, and its
-# finding is at its own path and line; linting the PARENT reports none of the
-# subunit's findings, which are its file's, not the parent's; a subunit file its
-# parent never names is reported as unchecked. A hidden subunit named only from
-# its parent's public block is used by that naming, not reported unused (L012).
-# L003 reads the template the checker resolved: the fixture's six labelled first
-# arguments (stdlib list/map/option, a user template, one nested) are reported,
-# and the plain `zl lint` tier, which has no checker, reports none. L011 offers
-# a bare system type name only where it reaches the system's type: both shapes
-# are reported in bare_zero.z, neither in bare_zero_shadow.z, whose unit
-# declares its own `String` and `u64`; the plain tier reports none.
+# zl-full-guard -- `zl lint --full` never passes a file it did not check: it runs
+# with no flags from a foreign cwd and with no runtime dir, says why when it
+# cannot, reports a dependency's error at that file, reports a generic body once,
+# lints a subunit as itself, and places L003/L011 only in the --full tier.
 ZLFULL_FIX := tests/fixtures/zl_full/tiered.z
 ZLFULL_DEP := tests/fixtures/zl_full/depunit/depmain.z
 ZLFULL_ONCE := tests/fixtures/zl_full/generic_once.z
@@ -4420,30 +2066,10 @@ zl-full-guard: bin/zl
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
 	echo "zl-full-guard OK: --full runs without flags from a foreign cwd and without a runtime, says why when it cannot, places a dependency's error in its own file, and lints a subunit as itself"
 
-# natives-tbl-guard -- src/runtime/natives.tbl answers "which implementation"
-# for every operator the system units declare `is native`, keyed by qualified
-# path. Both directions are checked: a declaration with no row would be found
-# only by whichever program happens to use that operator, and a row naming no
-# declaration is dead weight nothing can ever reach. Two-segment paths are the
-# synthesised structural cases, which no unit declares, so they are exempt from
-# the second leg by construction -- the check only looks at three-segment rows.
-# LC_ALL=C throughout: the default collation ignores punctuation, so `sort -u`
-# silently folds `.+`, `.-`, `.*` and `./` into one entry and the guard then
-# compares 148 paths believing it compared 208.
-#
-# An operator is a punctuation name or one of the three word operators the
-# compiler keys by well-known name (`and`, `or`, `not`). A row's path ends at
-# `]` or at the space before its attributes, and that terminator is what keeps
-# a word from matching the front of a longer name (`orPanic`).
-#
-# A fourth leg read every lib/system file and required a row for each `is
-# native` it found. The compiler does that itself now, at the declaration and
-# for every unit a program loads -- measured, not assumed: instrumented to
-# report each path it checks, the corpus and the three drivers between them
-# cover all 874, the same set this leg derived from the files. The one hole
-# that measurement found was the check reading only a type's `as` block, so
-# io.File's five natives -- declared in the class body -- were checked by this
-# leg and by nothing else. It reads both blocks now.
+# natives-tbl-guard -- every native operator the system units declare has exactly
+# one natives.tbl row and every row a declaration; the generated conversions
+# section is `zc natives` output and matches each declared return; every frag=
+# names a fragment on disk. LC_ALL=C: other collations fold punctuation in sort.
 natives-tbl-guard: bin/zc
 	@fail=0; d=$$(mktemp -d); \
 	for f in lib/system/system.z lib/system/system/*.z lib/system/collections.z; do \
