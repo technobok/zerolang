@@ -29283,7 +29283,7 @@ fnReturnPointerC: function {
 # fnReturnC -- a user function's C return type: what the registry records it
 # returns (an instance's own, for a function minted from a template), else its
 # return node's stamp; `void` when neither names one. The pointer forms apply
-# last. methodReturnC asks a method the same two questions.
+# last.
 fnReturnC: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -42272,13 +42272,10 @@ emitOneRecord: function {
     }
 }
 
-# emitClassMonoMethods -- emit every specialization's bodied methods for a
-# generic class template: the clone's FUNCTION id supplies the substituted
-# signature and the template item supplies the body (the unit-mono pattern).
 # emitMonoMethodAt -- one member of a template's body, emitted for the mono
-# `monoId`: a declaration under `declOnly` and a definition otherwise. Anything
-# that is not a method with a body, or whose declaration the mono does not
-# carry, is skipped.
+# `monoId` from the mono's own copy of it (emitOneMethod): a declaration under
+# `declOnly` and a definition otherwise. Anything that is not a method with a
+# body, or whose declaration the mono does not carry, is skipped.
 emitMonoMethodAt: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
@@ -42291,83 +42288,26 @@ emitMonoMethodAt: function {
     site: zast.namedSiteAt :ast :nid
     if site.operation.isZero then return
     if (ztypecheck.isFunctionDefWithBody o: (ast.nodes.get i: site.operation)).not then return
-    # the instance's own copy of the method
-    opId: instanceOpAt :symtab mono: monoId op: site.operation
-    mid: ztypes.tid
-    {
-        co: (symtab.typing.declChildOfId
-            parentTypeId: monoId
-            nameId: site.name
-        )
-        mid = co.or d: ztypes.tid.zero
-    }
-    if mid.isZero then return
-    fid: mid
+    co: symtab.typing.declChildOfId parentTypeId: monoId nameId: site.name
+    fid: co.or d: ztypes.tid.zero
+    if fid.isZero then return
     if (symtab.reg.typetypeOf typeId: fid) != ztypes.ztypetype.functionType then return
     # an instance's method is written when its instance walk took it, which is
-    # where the program uses it
+    # where the program uses it; a method with type parameters of its own is
+    # written per instance of it
     imd: symtab.typing.declMemberIdOf parentTypeId: monoId nameId: site.name
     took: imd.isZero or (symtab.typing.declIsWalked declId: imd)
     if took.not when (isGenericFnTid :symtab tid: fid).not then return
-    if (isGenericFnTid :symtab tid: fid) then {
-        # a method with type parameters of its own: each of its instances, from
-        # its own copy of the body
-        (emitMethodOrInstances
-            :ast
-            :symtab
-            :ctx
-            mid: fid
-            thisTid: monoId
-            op: (ast.nodes.get i: site.operation)
-            :declOnly
-            :buf
-        )
-        return
-    }
-    # the whole method is the instance's (emitUnitMonoFn)
-    symtab.typing.emitMono = monoId
-    if declOnly then {
-        (appendFnSignature
-            :ast
-            :symtab
-            :ctx
-            :fid
-            op: (ast.nodes.get i: opId)
-            :buf
-            tail: ";\n"
-        )
-        symtab.typing.emitMono = ztypes.tid.zero
-        return
-    }
-    (appendFnSignature
+    (emitMethodOrInstances
         :ast
         :symtab
         :ctx
-        :fid
-        op: (ast.nodes.get i: opId)
-        :buf
-        tail: " {\n"
-    )
-    resetFnEmitState :ctx
-    (registerReftypeParams
-        :ast
-        :symtab
-        :ctx
-        :fid
-        op: (ast.nodes.get i: opId)
-    )
-    ctx.curThisTid = monoId
-    (emitFnBody
-        :ast
-        :symtab
-        :ctx
-        op: (ast.nodes.get i: opId)
-        :fid
+        mid: fid
+        thisTid: monoId
+        op: (ast.nodes.get i: site.operation)
+        :declOnly
         :buf
     )
-    symtab.typing.emitMono = ztypes.tid.zero
-    ctx.curThisTid = ztypes.tid.zero
-    buf.append "}\n\n"
 }
 
 # emitMonoMethodsIn -- emitMonoMethodAt over every member of `span`. The is
@@ -42708,6 +42648,19 @@ setupGenCtx: function {
         if pcnt > 1 then hasVal = true
     }
     ctx.genHasValue = hasVal
+    # the C names the state machine reads the receiver and the input through
+    gids: ListVal ztypes.tid
+    gnm: ListVal zast.nameid
+    recFieldIds :symtab tid: mid ids: gids nameIds: gnm
+    gpi: u64
+    for gpi < gnm.length loop {
+        gv: paramVidByNameId :ast :symtab :op nameId: (gnm.get i: gpi)
+        gnB: zast.poolTextAt pool: ast.names ref: (gnm.get i: gpi)
+        gc: varCName :ctx vid: gv name: gnB.stringView
+        if gpi == 0 then ctx.genRecvC = gc.copy
+        if gpi == 1 then ctx.genValC = gc.copy
+        gpi = gpi + 1
+    }
     return true
 }
 
@@ -43178,212 +43131,10 @@ emitSpillReloads: function {ctx: Ctx.view ind: StringView buf: String.borrow} is
     }
 }
 
-# methodReturnC -- a method's C return type. The registry knows it for a plain
-# return; a generic-mono return (optionval/Option/resultval) carries no
-# returnTypeId and resolves through the return-node stamp; a `void` that is
-# really a constructor answers the receiver; and a heap-pointer collection or a
-# borrowed-reference return takes a `*` the declared type does not carry.
-methodReturnC: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    mid: ztypes.tid
-    thisTid: ztypes.tid
-    op: astnode.view
-} out String is {
-    # empty until something names the return type: the method returns nothing
-    ret: String
-    {
-        rto: fnReturnTidOf :symtab tid: mid
-        if rto.isZero.not then {
-            rr: (typeRefC
-                :ast
-                :symtab
-                :ctx
-                tid: rto
-            )
-            if rr.length > 0 then ret = rr.take
-        }
-    }
-    if ret.length == 0 then {
-        # generic-mono returns (optionval/Option/resultval) carry no registry
-        # returnTypeId; the return-type node stamp resolves the mono id.
-        mro: ztypecheck.methodReturnOf st: symtab :mid
-        match (
-            mro
-        ) case some then {
-            mrr: typeRefC :ast :symtab :ctx tid: mro
-            if mrr.length > 0 then ret = mrr.take
-        } case none then null
-    }
-    if ret.length == 0 when thisTid.isZero.not when (
-        (ztypecheck.fnReturnBaseNameIdOf :ast :op) == zast.wellKnown.slot.wkThis
-    ) then {
-        tcb: ctxCname :ctx tid: thisTid
-        ret = "\{tcb}_t"
-    }
-    # a Set/Map return is a heap pointer (like a Set/Map param), so the
-    # value-typed ret gets a `*`. Mirrors isSetMapPtrParam at the param sites.
-    if ret.length > 0 then {
-        retColId: ztypes.tid
-        rtoR: symtab.reg.returnTypeOf tid: mid
-        if rtoR.isZero.not then retColId = rtoR
-        if retColId.isZero then {
-            mroR: ztypecheck.methodReturnOf st: symtab :mid
-            match (
-                mroR
-            ) case some then {
-                retColId = mroR
-            } case none then null
-        }
-        if retColId.isZero.not when (isHeapPtrCollection
-            :symtab
-            :ctx
-            tid: retColId
-        ) then ret = "\{ret}*"
-        if (fnReturnsRefBorrow
-            :symtab
-            :ctx
-            fid: mid
-            retTid: retColId
-        ) then {
-            retP: refPtrC :symtab tid: mid base: ret.stringView
-            ret = retP.take
-        }
-    }
-    if ret.length == 0 then return "void"
-    return ret
-}
-
-# classParamByPointer -- whether a CLASS method's non-receiver parameter is
-# passed by pointer: a non-TAKE class param borrows the container (LOCK/BORROW,
-# or the borrow-default whose ownership a cross-unit shell records as "none");
-# a `.take` (owning) class param stays by value, since a create/meta_create
-# moves it into the struct. A borrowed String, a marked valtype reference, a
-# List, a Set or a Map are pointers too.
-classParamByPointer: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    mid: ztypes.tid
-    pnameId: zast.nameid
-    pid: ztypes.tid
-} out bool is {
-    pt: pid
-    takesArg: paramTakesArg :symtab fid: mid :pnameId
-    if takesArg.not when (isReftypeParam :symtab :ctx tid: pt) then return true
-    if (isBorrowStringParam :symtab :ctx fid: mid :pnameId pid: pt) then return true
-    if (markedValtypeRefParam :symtab fid: mid :pnameId :pid) then return true
-    if (isListPtrParam :symtab :ctx fid: mid :pnameId tid: pt) then return true
-    return (isSetMapPtrParam :ast :symtab :ctx fid: mid :pnameId tid: pt)
-}
-
-# pointerParamC -- a parameter passed by pointer: its C type gains the `*`
-# (`const` for a `.view`), and its vid is registered so the body reads it
-# through `->`.
-pointerParamC: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    mid: ztypes.tid
-    # the parameter's pool index, which names its vid
-    nameId: zast.nameid
-    # the by-value C type
-    pt: StringView
-    op: astnode.view
-} out String is {
-    ctx.ptrVids.append (paramVidByNameId
-        :ast
-        :symtab
-        :op
-        :nameId
-    )
-    if (symtab.typing.declOwnershipIs
-        parentTypeId: mid
-        :nameId
-        own: ztypes.zparamownership.viewMode
-    ) then return "const \{pt}*"
-    return "\{pt}*"
-}
-
-# emitMethodParams -- one C parameter per declared field, in declaration order:
-# the receiver by pointer, then each parameter passed the way its declaration
-# says it is taken. Appends to `params`.
-emitMethodParams: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    mid: ztypes.tid
-    pnames: (List String).view
-    pids: (ListVal ztypes.tid).view
-    pidsNm: (ListVal zast.nameid).view
-    op: astnode.view
-    params: String.borrow
-} is {
-    # The receiver is identified by its PARAMETER name -- `this` for the
-    # `:this` shorthand, or the spelled name for `{a: this}` -- exactly as
-    # the call site names it. Keying on the parameter's TYPE instead would
-    # also catch a same-typed sibling (`add: function {a: this b: point}`
-    # takes two points), which classes hid by making both pointers anyway.
-    recvNm: "this".string
-    tpnR: zast.poolTextAt pool: ast.names ref: (symtab.reg.thisParamNameIdOf tid: mid)
-    if tpnR.length > 0 then recvNm = tpnR.copy
-    pi: u64
-    pn: pnames.length
-    for pi < pn loop {
-        pname: pnames.get i: pi
-        pid: pids.get i: pi
-        pt: (typeRefC
-            :ast
-            :symtab
-            :ctx
-            tid: pid
-        )
-        if pt.length == 0 then pt = "int64_t"
-        # The receiver is a reference in BOTH families: a record method acts on
-        # the caller's instance, not on a copy of it. The other parameters are
-        # passed as a call passes them, whatever the receiver's family.
-        isRecv: pname.stringView == recvNm
-        byPtr: isRecv
-        if isRecv.not when (classParamByPointer
-            :ast
-            :symtab
-            :ctx
-            :mid
-            pnameId: (pidsNm.get i: pi)
-            :pid
-        ) then byPtr = true
-        if byPtr then {
-            pt = (pointerParamC
-                :ast
-                :symtab
-                :ctx
-                :mid
-                nameId: (pidsNm.get i: pi)
-                pt: pt.stringView
-                :op
-            )
-        }
-        if pi > 0 then params.append ", "
-        params.append pt
-        params.append " "
-        pmnV9b: (paramVidByNameId
-            :ast
-            :symtab
-            :op
-            nameId: (pidsNm.get i: pi)
-        )
-        pmnDecl: varCName :ctx vid: pmnV9b name: pname.stringView
-        if pi == 0 then ctx.genRecvC = pmnDecl.copy
-        if pi == 1 then ctx.genValC = pmnDecl.copy
-        params.append pmnDecl
-        pi = pi + 1
-    }
-}
-
-
-# emit one method of a type: its signature, its body, and the receiver
-# parameter the C form needs but the source does not write
+# emitOneMethod -- one method of a type or of a generic type's instance, as a
+# static C function: the signature every function has (appendFnSignature, the
+# receiver a pointer parameter), its body, and for a generator's `call` the
+# state machine around it
 emitOneMethod: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
@@ -43397,7 +43148,6 @@ emitOneMethod: function {
     # emitted from; 0 -- a method like any other
     mono: ztypes.tid
 } is {
-    mc: ctxCname :ctx tid: mid
     if mono.isZero.not then {
         symtab.typing.emitMono = mono
     } else if (symtab.reg.genericOriginOf tid: thisTid).isZero.not then {
@@ -43420,35 +43170,13 @@ emitOneMethod: function {
             return
         }
     }
-    ret: methodReturnC :ast :symtab :ctx :mid :thisTid :op
-    params: String
-    pnames: List String
-    pids: ListVal ztypes.tid
-    pidsNm: ListVal zast.nameid
-    recFieldLists :ast :symtab tid: mid names: pnames ids: pids nameIds: pidsNm
-    # a method takes its receiver by pointer (reference semantics): the
-    # receiver param gets a `*` and its name is recorded so the body emits
-    # `c->field`. Reset for this method (names must not leak into other bodies).
     resetFnEmitState :ctx
-    (emitMethodParams
-        :ast
-        :symtab
-        :ctx
-        :mid
-        :pnames
-        :pids
-        :pidsNm
-        :op
-        :params
-    )
-    pn: pnames.length
-    if pn == 0 then params.append "void"
+    buf.append "static "
     if declOnly then {
-        ld: "static \{ret} \{mc}(\{params});\n"
-        buf.append ld
+        appendFnSignature :ast :symtab :ctx fid: mid :op :buf tail: ";\n"
     } else {
-        lo: "static \{ret} \{mc}(\{params}) {\n"
-        buf.append lo
+        appendFnSignature :ast :symtab :ctx fid: mid :op :buf tail: " {\n"
+        registerReftypeParams :ast :symtab :ctx fid: mid :op
         isGen: setupGenCtx :ast :symtab :ctx :mid :op owner: thisTid
         if isGen then emitGenPrologue :ast :symtab :ctx :buf
         ctx.curThisTid = thisTid
