@@ -5317,9 +5317,10 @@ svNativeCall: function {
 }
 
 # svRecvAddressable -- a view receiver `&` applies to: anything but a call, and a
-# compound literal.
+# compound literal. A ternary `((c) ? (a) : (b))` and a cast `((T)x)` also open
+# with `((` and are no lvalues.
 svRecvAddressable: function {recv: StringView} out bool is {
-    if (recv.startsWith prefix: "((") then return true
+    if (isCompoundLiteralText s: recv) then return true
     return (isNonLvalueArg s: recv).not
 }
 
@@ -6490,8 +6491,11 @@ stringAppendViewText: function {
 # spelled; a literal, a local and a deref projection are names.
 singleReadNeedsTemp: function {s: StringView} out bool is {
     if (isCompoundLiteralText :s) then return false
-    # a reference control value's pointer runs its conditions and arms
+    # a reference control value's pointer runs its conditions and arms: a
+    # ternary's, and a statement expression's (`(*({ ... }))`, a match or a
+    # non-ternary `if` that yields a place)
     if (s.startsWith prefix: "(*") when (s.contains needle: "?") then return true
+    if (s.startsWith prefix: "(*({") then return true
     return (isNonLvalueArg :s)
 }
 
@@ -17792,7 +17796,7 @@ emitDottedRead: function {
                 # `&` needs an lvalue. A compound literal is one; a call is
                 # not, so it binds to a temp the statement flush declares.
                 nbH: isNonLvalueArg s: nbX.stringView
-                if nbX.stringView.startsWith "((" then nbH = false
+                if (isCompoundLiteralText s: nbX.stringView) then nbH = false
                 if nbH then {
                     # the receiver is a view, whose temp frees nothing
                     nbTmp: (hoistForAddress
@@ -18660,7 +18664,7 @@ emitDeclaredOperator: function {
         # receiver is (receiverOnceAt), so an OWNED result is released with it;
         # a compound literal already is an lvalue.
         lv: operandValueC :ast :symtab :ctx nid: lhsNid
-        if (lv.startsWith prefix: "((") then {
+        if (isCompoundLiteralText s: lv.stringView) then {
             recv = "&\{lv}"
         } else {
             lf: receiverOnceAt :ast :symtab :ctx baseNid: lhsNid text: lv.stringView tid: owner
@@ -18849,7 +18853,7 @@ listOperandAddr: function {
         return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: nid))
     }
     lv: operandValueC :ast :symtab :ctx :nid
-    if (lv.startsWith prefix: "((") then return "&\{lv}"
+    if (isCompoundLiteralText s: lv.stringView) then return "&\{lv}"
     lf: receiverOnceAt :ast :symtab :ctx baseNid: nid text: lv.stringView :tid
     return "&\{lf}"
 }
@@ -39529,7 +39533,7 @@ fileFromArgAddr: function {
     fvc: fileFromArgCoerce :ast :symtab :ctx :call av: fv.stringView
     # a compound literal (the String coercion's `(StringView){..}`) already has an
     # address; anything else is passed by reference as any argument is
-    if (fvc.stringView.startsWith prefix: "((") then return "&\{fvc}"
+    if (isCompoundLiteralText s: fvc.stringView) then return "&\{fvc}"
     fnid: ctorArgNodeByLabel :ast :call label: "from"
     vt: (stampIdOf
         :symtab
