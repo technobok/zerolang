@@ -124,6 +124,12 @@ isReservedMemberName: function {id: zast.nameid} out bool is {
     return id == zast.wellKnown.slot.wkPublic
 }
 
+# isCondTok -- the tokens that open an `if` or a `match`: a value whose
+# unbraced arms end with their line, wherever it is bound.
+isCondTok: function {tt: zlexer.toktype} out bool is {
+    return (tt == zlexer.toktype.ifTok) or (tt == zlexer.toktype.matchTok)
+}
+
 # isFriendNarrowTok -- the markers that may follow `private.`: a friend handle
 # is a reference, so only `borrow` or `view` narrows it.
 isFriendNarrowTok: function {tt: zlexer.toktype} out bool is {
@@ -348,6 +354,72 @@ Parser: class {
             return (this.mkErrorAt :pos code: zast.err.badToken msg: em9)
         }
         return (this.mkErrorAt :pos :code :msg)
+    }
+
+    # bareFlowWord -- the name of `return`, `yield` or `break` when a block line
+    # is that word alone; the zero id for any other line. Each takes its value
+    # as a call's argument, and an `if` or `match` is one only in parentheses.
+    bareFlowWord: function {this: this.view sl: astnode.view} out zast.nameid is {
+        none: zast.nameid.zero
+        match (
+            sl
+        ) case statementline then {
+            e: this.ast.nodes.get i: sl.statementline
+            match (
+                e
+            ) case atomid then {
+                if e.name == zast.wellKnown.slot.wkReturn then return e.name
+                if e.name == zast.wellKnown.slot.wkYield then return e.name
+                if e.name == zast.wellKnown.slot.wkBreak then return e.name
+                return none
+            } else {
+                return none
+            }
+        } else {
+            return none
+        }
+    }
+
+    # statementEndError -- a block line runs on past where a statement ends: the
+    # token after it is neither a separator nor `}`. `flowWord` is the line's
+    # `return`, `yield` or `break` when it is that word alone (bareFlowWord).
+    statementEndError: function {:this lex: zlexer.Lexer flowWord: zast.nameid} out astnode is {
+        if flowWord.isZero.not when (isCondTok tt: lex.peekType) then {
+            return (this.flowCondError :lex :flowWord)
+        }
+        extra: lex.acceptAny pool: this.ast.names
+        return (this.mkError
+            tok: extra
+            code: zast.err.badStatement
+            msg: "Expected ';', a new line or '}' after a statement"
+        )
+    }
+
+    # flowCondError -- `return if c then a else b`: the `if` (or `match`) is no
+    # argument until it is parenthesised, so the statement ends before it. The
+    # error says so, at the `if`, with the parenthesised form as its hint.
+    flowCondError: function {:this lex: zlexer.Lexer flowWord: zast.nameid} out astnode is {
+        bad: lex.acceptAny pool: this.ast.names
+        em: String
+        hn: String
+        {
+            wTxt: zast.poolTextAt pool: this.ast.names ref: flowWord
+            kTxt: zast.poolTextAt pool: this.ast.names ref: bad.text
+            em = "a bare `\{kTxt}` is no argument to `\{wTxt}`"
+            hn = "wrap it in parentheses: `\{wTxt} (\{kTxt} ...)`"
+        }
+        return (astnode.error (zast.errorrow
+            nodeid: this.nextId
+            lineno: bad.lineno
+            colno: bad.colno
+            width: bad.width
+            err: zast.err.badStatement
+            msg: (zast.poolSet pool: this.ast.names text: em.stringView)
+            fsno: bad.fsno
+            note: zast.nameid
+            hint: (zast.poolSet pool: this.ast.names text: hn.stringView)
+        )
+        )
     }
 
     # Error node at a token span. The caller that only needs to report where
@@ -1671,17 +1743,13 @@ Parser: class {
                     lex.setFilterEol enabled: prevFilter pool: this.ast.names
                     return sl
                 }
+                flowWord: this.bareFlowWord :sl
                 statements.append (this.intern n: sl)
                 if (this.atSeparator :lex).not when (
                     lex.peekType != zlexer.toktype.braceCloseTok
                 ) then {
                     lex.setFilterEol enabled: prevFilter pool: this.ast.names
-                    extra: lex.acceptAny pool: this.ast.names
-                    return (this.mkError
-                        tok: extra
-                        code: zast.err.badStatement
-                        msg: "Expected ';', a new line or '}' after a statement"
-                    )
+                    return (this.statementEndError :lex :flowWord)
                 }
             } else {
                 break
@@ -3268,7 +3336,12 @@ Parser: class {
         opName: lblTok.text
         mKind: unitKindForLabel id: lblTok.text unitBody: false
         lex.accept tt: zlexer.toktype.eolTok pool: this.ast.names
+        # a bare `if` or `match` reads as it does at unit level, where it reads
+        # as a body binding's does: its unbraced arms end with their line
+        prevFilter: lex.filterEolState
+        if (isCondTok tt: lex.peekType) then lex.setFilterEol enabled: false pool: this.ast.names
         member: this.objectBodyMember :lex unitKind: mKind
+        lex.setFilterEol enabled: prevFilter pool: this.ast.names
         mErr: Parser.isError node: member
         if mErr then {
             items.append (this.intern n: member)
@@ -3575,7 +3648,10 @@ Parser: class {
                     opName: lblTok.text
                     dKind: unitKindForLabel id: lblTok.text unitBody: true
                     lex.accept tt: zlexer.toktype.eolTok pool: this.ast.names
-                    lex.setFilterEol enabled: true pool: this.ast.names
+                    # a bare `if` or `match` reads as a body binding's does:
+                    # newlines stay, so an unbraced arm ends with its line
+                    # instead of taking the next definition as its argument
+                    lex.setFilterEol enabled: (isCondTok tt: lex.peekType).not pool: this.ast.names
                     defNode: this.acceptTypeDefinition :lex unitKind: dKind
                     lex.setFilterEol enabled: false pool: this.ast.names
                     dErr: Parser.isError node: defNode
