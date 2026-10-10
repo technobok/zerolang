@@ -1374,6 +1374,9 @@ ZTyping: class {
     # the rest of the run. Keyed by (parent, name), last write wins, a handful
     # of entries.
     pendWrites: ListVal pendwrite
+    # the parents pendWrites holds a row for: a member read of any other type,
+    # which is nearly every read, answers without scanning the rows
+    pendParents: IdSet ztypes.tid
     # whether anything failed, so a caller can stop before reading results that
     # were never produced
     isError: bool
@@ -1770,6 +1773,7 @@ ZTyping: class {
         }
         pw: pendwrite parent: parentTypeId name: nameId type: typeId
         this.pendWrites.append pw
+        this.pendParents.add item: parentTypeId
     }
 
     # declPendMemberType -- the type a pended write recorded for
@@ -1779,6 +1783,7 @@ ZTyping: class {
         parentTypeId: ztypes.tid
         nameId: zast.nameid
     } out ztypes.tid is {
+        if (t.pendParents.has item: parentTypeId).not then return ztypes.tid.zero
         i: u64
         n: t.pendWrites.length
         for i < n loop {
@@ -1794,6 +1799,7 @@ ZTyping: class {
     # declPendCount -- how many pended pre-index writes `parentTypeId` holds.
     declPendCount: function {this: this.view parentTypeId: ztypes.tid} out u64 is {
         c: u64
+        if (this.pendParents.has item: parentTypeId).not then return c
         i: u64
         n: this.pendWrites.length
         for i < n loop {
@@ -2210,6 +2216,9 @@ ZTyping: class {
     # before anything declared the owner, so there is no kind to filter on and
     # the write IS the type. Every such row therefore answers `keep`.
     declPendRowAt: function {this: this.view parentTypeId: ztypes.tid slot: u64} out declrow is {
+        if (this.pendParents.has item: parentTypeId).not then {
+            return (declrow name: zast.nameid.zero tid: ztypes.tid.zero keep: false)
+        }
         c: u64
         i: u64
         n: this.pendWrites.length
@@ -3301,6 +3310,7 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         typerefPassRan: false
         typerefRetry: ListVal zast.nodeid
         pendWrites: ListVal pendwrite
+        pendParents: IdSet ztypes.tid
         errors: List zast.ErrorData
         currentReturnTypeId: ztypes.tid
         currentYieldInputTid: ztypes.tid
