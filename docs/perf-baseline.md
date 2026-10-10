@@ -243,7 +243,39 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-10-02 | f2716a9d | [P7.3: a list takes an index type; the id tables migrate](#r-f2716a9d) | 0.67s | -- | 121MB / -- | 87 / 325 / 259 (total 671) | 2,074,323 | 343MB | -- | 153,990 |
 | 2026-10-10 | 68f77871 | [re-baseline after 408 commits: one quadratic, the rest is input](#r-68f77871) | 0.79s | 0.86s | 152MB / 118MB | 102 / 437 / 299 (total 848) | 2,153,863 | 447MB | 38.4s | 170,186 |
 | 2026-10-11 | 7936e2a7 | [a unit's row records whether it is generic](#r-7936e2a7) | 0.75s | 0.80s | 152MB / 119MB | 114 / 388 / 274 (total 776) | 2,154,121 | 447MB | 39.3s | 170,194 |
+| 2026-10-11 | c8473d57 | [review P2-P3: four defects, three scans, itoa](#r-c8473d57) | 0.72s | 0.75s | 154MB / 118MB | 100 / 363 / 255 (total 718) | 2,152,945 | 447MB | 36.6s | 170,272 |
 
+
+<a id="r-c8473d57"></a>
+**Review P2-P3: four defects, three scans, itoa** (`7936e2a7` -> `c8473d57`, nine
+commits; `make ci` green at the P2 and P3 gates). Instructions 8,174M ->
+7,838M (-4.1%), fixed input 2,508M -> 1,999M (-20%), allocations 2,154,121 ->
+2,152,945. Wall 0.72s, load average falling from a `make ci`.
+
+What the numbers are made of:
+- `0f9cebb8`: the fixed input's largest checker cost after the b350cf15 fix.
+  recordUnitConformerContexts walked `main`'s body once per unit member,
+  matching names as text; one walk now collects the mentioned name ids
+  (collectMentions). Fixed input -19%; -5,176 allocations.
+- `a3140f15` + the seed bump `c8473d57`: an interpolated integer is formatted
+  by a digit loop (z_fmt_i64 / z_fmt_u64, a prelude fragment) instead of
+  snprintf -- -1.4% on the self-compile, and on any program that builds text
+  from numbers. Output is byte-identical.
+- `1b919db7`: the constant pools intern through a hash index instead of a
+  scan. A 20,000-element float data block emits in 0.15s, was 0.77s; on the
+  self-compile it is -14M, so `2f44e2e4`'s +74M (see r-68f77871) was mostly
+  not this. +2,260 allocations: the index and its map instance, compiled.
+- `ddff2a6f`: the pended pre-index member writes are scanned only for a parent
+  that has one (pendParents). -22M.
+- P2 (`6ed4a29c`, `f38ba0a7`, `4fef8596`, `18806c95`) fixed D1-D4 of the
+  review: +1,523 allocations net, all source, most of it the parser's new
+  legs and messages (D4 +1,454).
+
+Measured and dropped: pre-sizing the Ast node and Decl tables (capacity
+1.3M / 300k) took peak RSS 156MB -> 242MB for -9M instructions, since the
+capacity is touched and mimalloc's large realloc is already cheap. The
+conformance-table, emitter mono-scan and typeRefC caches the review proposed
+each profile under 0.2% of the self-compile.
 
 <a id="r-7936e2a7"></a>
 **A unit's row records whether it is generic** (`7936e2a7`, the fix for the
