@@ -19312,21 +19312,23 @@ emitInterpPart: function {
         interpBoolPart :ast :symtab :ctx val: val.stringView :sNm :bN :ind :buf
     } else if (interpPartIsInt :symtab tid: pt :nk) then {
         # u64 is the one integer width whose range does not fit in
-        # int64_t, so the signed conversion specifier turns its top half
-        # negative -- u64 max printed as -1. The kind answers this: unsigned
-        # and 64 bits wide is the case, and i128 / u128 have already taken
-        # their own branches above. A tag prints as its number.
-        conv: "%ld"
-        cast: "(long)(int64_t)"
+        # int64_t, so it is formatted unsigned -- signed, u64 max would print
+        # as -1. The kind answers this: unsigned and 64 bits wide is the case,
+        # and i128 / u128 have already taken their own branches above. A tag
+        # prints as its number. The digits come from z_fmt_i64 / z_fmt_u64,
+        # not snprintf, whose format parse costs more than the digits.
+        needsAddM :ctx uname: "prelude" memb: "fmt64"
+        fmtFn: "z_fmt_i64"
+        cast: "int64_t"
         if nk.has when (kindSigned k: nk.kind).not when (kindBits k: nk.kind) == 64 then {
-            conv = "%lu"
-            cast = "(unsigned long)(uint64_t)"
+            fmtFn = "z_fmt_u64"
+            cast = "uint64_t"
         }
         (appendFormattedNum
             :ctx
             :sNm
             :bN
-            stmt: "char _b\{bN}[32]; int _b\{bN}_n = snprintf(_b\{bN}, 32, \"\{conv}\", \{cast}\{val})"
+            stmt: "char _b\{bN}[32]; int _b\{bN}_n = \{fmtFn}(_b\{bN}, (\{cast})\{val})"
             :ind
             :buf
         )
