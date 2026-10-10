@@ -242,7 +242,25 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-10-02 | eeb543f6 | [recovery P7: four language changes, two lints; the arc's end](#r-eeb543f6) | 0.74s | -- | 120MB / -- | 81 / 354 / 296 (total 731) | 2,086,585 | 343MB | -- | 153,396 |
 | 2026-10-02 | f2716a9d | [P7.3: a list takes an index type; the id tables migrate](#r-f2716a9d) | 0.67s | -- | 121MB / -- | 87 / 325 / 259 (total 671) | 2,074,323 | 343MB | -- | 153,990 |
 | 2026-10-10 | 68f77871 | [re-baseline after 408 commits: one quadratic, the rest is input](#r-68f77871) | 0.79s | 0.86s | 152MB / 118MB | 102 / 437 / 299 (total 848) | 2,153,863 | 447MB | 38.4s | 170,186 |
+| 2026-10-11 | 7936e2a7 | [a unit's row records whether it is generic](#r-7936e2a7) | 0.75s | 0.80s | 152MB / 119MB | 114 / 388 / 274 (total 776) | 2,154,121 | 447MB | 39.3s | 170,194 |
 
+
+<a id="r-7936e2a7"></a>
+**A unit's row records whether it is generic** (`7936e2a7`, the fix for the
+`b350cf15` regression in [r-68f77871](#r-68f77871)). Fixed input 4,003M ->
+2,508M instructions, under `3da44f40`'s 2,511M; self-compile 9,009M -> 8,174M
+(-9.3%). Allocations +258 (2,154,121): 0 behaviour, the row's new field and
+helper compiled. Wall 0.75s, load average falling from a `make ci` (4.7).
+
+The parser already scanned an inline unit's body once, to mark a template; every
+unit row now keeps that answer (`unitrow.isGeneric`, read by
+`zast.unitIsGeneric`), the file root's included, so `declIsGenericFileUnit` is
+O(1) where it rescanned the file unit's body on every type query. The old and
+new compilers emit identical C for the old tree. `isGenericParamOp` and
+`itemsHaveGenericParam` leave the profile. Its new top on the fixed input is
+`nodeMentionsName` (~6.5%): `recordUnitConformerContexts` rescans `main`'s body
+by text once per unit member, the next quadratic, queued for the follow-up
+perf phase.
 
 <a id="r-68f77871"></a>
 **Re-baseline after 408 commits: one quadratic, the rest is input**
