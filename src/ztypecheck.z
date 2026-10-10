@@ -76,7 +76,6 @@ public: unit {
     :surfaceDeclOfTypeId
     :declTypeIdOf
     :publicNsOf
-    :declParentIdOf
     :declDeclaresUnit
     :declOfUnitDefIds
     :unitDeclOfName
@@ -2473,7 +2472,7 @@ familyNameTaken: function {
     nameId: zast.nameid
 } out bool is {
     if nameId.isZero then return false
-    d: declInScope :st scopeDeclId: (declParentIdOf :st declId: tdecl) :nameId
+    d: declInScope :st scopeDeclId: (st.typing.declParentOf declId: tdecl) :nameId
     if d.isZero then return false
     ur: unitRootOfDecl :st declId: d
     if (ur == st.typing.systemUnitRoot) or (ur == st.typing.coreUnitRoot) then return false
@@ -2603,7 +2602,7 @@ unitNestedSelf: function {
     if (st.reg.isGenericOf :tid).not then return none
     td: declOfTypeId :st :tid
     if td.isZero then return none
-    ud: declParentIdOf :st declId: td
+    ud: st.typing.declParentOf declId: td
     if ud.isZero then return none
     if (declIsUnitTemplate :st :ast declId: ud).not then return none
     cur: st.curScope
@@ -2629,7 +2628,7 @@ nestedTemplateUnit: function {
     none: ztypes.declid
     td: declOfUnitDef :st :unitDecl :scope :nameId
     if td.isZero then return none
-    pd: declParentIdOf :st declId: td
+    pd: st.typing.declParentOf declId: td
     if pd.isZero then return none
     if (declIsUnitTemplate :st :ast declId: pd) then return pd
     return none
@@ -2664,7 +2663,7 @@ scopeInUnitTemplate: function {
     cur: scope
     for cur.isZero.not and (cur != st.typing.programRoot) loop {
         if (declIsUnitTemplate :st :ast declId: cur) then return true
-        cur = declParentIdOf :st declId: cur
+        cur = st.typing.declParentOf declId: cur
     }
     return false
 }
@@ -2677,7 +2676,7 @@ declIsGenericFileUnit: function {
     ast: Ast.view
     declId: ztypes.declid
 } out bool is {
-    if (declParentIdOf :st :declId) != st.typing.programRoot then return false
+    if (st.typing.declParentOf :declId) != st.typing.programRoot then return false
     dn: (st.typing.decls.get i: declId).node
     if dn.isZero then return false
     ar: argRefAt :ast nid: dn
@@ -2944,7 +2943,7 @@ ownsTypeParams: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool i
     tdecl: declOfTypeId :st :tid
     own: st.reg.genericParamCountOf :tdecl
     if own == 0 then return false
-    ud: declParentIdOf :st declId: tdecl
+    ud: st.typing.declParentOf declId: tdecl
     if ud.isZero then return true
     return own > (st.reg.genericParamCountOf tdecl: ud)
 }
@@ -6263,7 +6262,7 @@ declaredFunctionNode: function {
             if (ast.nodes.get i: op).functiondef then return op
             return zast.nodeid
         }
-        cur = declParentIdOf :st declId: cur
+        cur = st.typing.declParentOf declId: cur
     }
     return zast.nodeid
 }
@@ -8108,7 +8107,7 @@ valueMayNameType: function {
     headId = bareAtomNameId n: (ast.nodes.get i: n.callable)
     td: declOfTypeId :st tid: parentId
     if td.isZero then return false
-    sc: declParentIdOf :st declId: td
+    sc: st.typing.declParentOf declId: td
     # a head that is a path names a type when it reaches one through a unit
     # (`(pr.Getter v: i64)`); an infix call's path (`cap * 2`) reaches none
     if pathHead.isZero.not then {
@@ -8181,7 +8180,7 @@ namesNullType: function {
         :st
         :ast
         unitDecl: (unitRootOfDecl :st declId: ownerDecl)
-        scope: (declParentIdOf :st declId: ownerDecl)
+        scope: (st.typing.declParentOf declId: ownerDecl)
         :nameId
     )
 }
@@ -12569,7 +12568,7 @@ nestedQualifiedTid: function {
     if memberId.isZero then return ztypes.tid.zero
     ud: qualifierUnitDecl :st :scope :ast nid: qualNid
     if ud.isZero then return ztypes.tid.zero
-    owner: declParentIdOf :st declId: ud
+    owner: st.typing.declParentOf declId: ud
     if owner == st.typing.programRoot then return ztypes.tid.zero
     return (nestedUnitMemberTid
         :st
@@ -14933,7 +14932,7 @@ declOfUnitDef: function {
             pd: st.typing.declFindChild parentDeclId: pb :nameId
             if pd.isZero.not then return pd
         }
-        cur = unitScopeOf :st declId: (declParentIdOf :st declId: cur)
+        cur = unitScopeOf :st declId: (st.typing.declParentOf declId: cur)
     }
     return ztypes.declid.zero
 }
@@ -14959,7 +14958,7 @@ typedefBaseDecl: function {
     if hdn.dottedpath then {
         segs: ListVal zast.nameid
         instCallablePath :ast op: (ast.nodes.get i: headNid) :segs
-        pd: instTemplateDecl :st scopeDeclId: (declParentIdOf :st :declId) :segs
+        pd: instTemplateDecl :st scopeDeclId: (st.typing.declParentOf :declId) :segs
         if pd.isZero.not then return pd
     }
     dk: dottedDefTargetIds :ast n: bn
@@ -14970,7 +14969,7 @@ typedefBaseDecl: function {
     }
     hn: paramTypeBaseNameId :ast op: bn
     if hn.isZero then return zd
-    scope: declParentIdOf :st :declId
+    scope: st.typing.declParentOf :declId
     ud: unitScopeOf :st declId: scope
     site: definingSiteForId :st :ast unitDecl: ud :scope nameId: hn
     if site.defUnit.isZero then return zd
@@ -15261,7 +15260,7 @@ unitNestedCopyNamed: function {
     td: declOfTypeId :st tid: og
     if td.isZero then return false
     if ((declNameIdOf :st declId: td) == nameId).not then return false
-    return (declIsUnitTemplate :st :ast declId: (declParentIdOf :st declId: td))
+    return (declIsUnitTemplate :st :ast declId: (st.typing.declParentOf declId: td))
 }
 
 # preludeAliasNamesType -- whether core aliases the name `nameId` to type `tid`
@@ -15350,7 +15349,7 @@ aliasTargetOwner: function {
     for cur.isZero.not and (cur != st.typing.programRoot) loop {
         sub: st.typing.declFindChild parentDeclId: cur nameId: nestedNameId
         if (declDeclaresUnit :st :ast declId: sub) then return cur
-        cur = declParentIdOf :st declId: cur
+        cur = st.typing.declParentOf declId: cur
     }
     return scopeDeclId
 }
@@ -15450,7 +15449,7 @@ aliasTargetMintedTid: function {
     nestedNameId: zast.nameid
     defName: zast.nameid
 } out ztypes.tid is {
-    aParent: declParentIdOf :st :declId
+    aParent: st.typing.declParentOf :declId
     tgt: ztypes.declid
     sub: (st.typing.declFindChild
         parentDeclId: (aliasTargetOwner :st :ast scopeDeclId: aParent :nestedNameId)
@@ -15471,7 +15470,7 @@ aliasTargetMintedTid: function {
     ) case some then {
         # declared in the TARGET's scope -- its parent unit -- so the id is
         # the one the target's own resolution declares (keyed on that unit)
-        rf: declParentIdOf :st declId: tgt
+        rf: st.typing.declParentOf declId: tgt
         unitDecl93: unitDeclOfNameOrOwn :st scope: rf nameId: nestedNameId
         r: (declareCanonicalTypeId
             :st
@@ -15501,7 +15500,7 @@ resolveAliasKey: function {
     declId: ztypes.declid
 } out ztypes.tid is {
     # an alias resolves in the scope it is written in
-    ascope: declParentIdOf :st :declId
+    ascope: st.typing.declParentOf :declId
     # THE VALUE DECIDES WHETHER THIS IS AN ALIAS AT ALL. `X: <something>` is
     # recorded as a re-export during indexing, a pass that runs before anything
     # resolves and so has only the text to go on. Here the target CAN be asked,
@@ -15556,7 +15555,7 @@ resolveDeepAlias: function {
     }
     atid: descendNamedId :st :scope :ast unitDecl: pu nameId: cn
     if atid.isZero then return ztypes.tid.zero
-    ownTid: declTypeIdOf :st declId: (declParentIdOf :st :declId)
+    ownTid: declTypeIdOf :st declId: (st.typing.declParentOf :declId)
     if ownTid.isZero.not then {
         (st.typing.setMemberType
             parentTypeId: ownTid
@@ -15740,7 +15739,7 @@ constValueOfDecl: function {
 } out ztypes.cval is {
     ast.drop
     if declId.isZero then return ztypes.noConst
-    own: declParentIdOf :st :declId
+    own: st.typing.declParentOf :declId
     if own.isZero then return ztypes.noConst
     nm: declNameIdOf :st :declId
     if nm.isZero then return ztypes.noConst
@@ -15975,7 +15974,8 @@ reportUnknownBareAliasTarget: function {
 } out bool is {
     # a name the alias's own scope declares -- a generic unit's parameter, a
     # namespace's sibling -- is claimed wherever the resolution was asked from
-    if (nameDeclaredOutward :st from: (declParentIdOf :st declId: adecl) :nameId) then return false
+    adp: st.typing.declParentOf declId: adecl
+    if (nameDeclaredOutward :st from: adp :nameId) then return false
     unknown: unresolvedBareName :ast :st :unitDecl :nameId
     if unknown.length == 0 then return false
     at: aliasValueSite :st :ast :adecl
@@ -16422,7 +16422,7 @@ descendNamedId: function {
     # `unitDecl.name` resolves in unitDecl's scope, whatever asked for it
     ddec: declOfUnitDef :st :scope :unitDecl :nameId
     rf: scope
-    if ddec.isZero.not then rf = declParentIdOf :st declId: ddec
+    if ddec.isZero.not then rf = st.typing.declParentOf declId: ddec
     if st.typing.defNodeIndexBuilt.not then return ztypes.tid.zero
     if unitDecl == st.typing.coreUnitRoot then return ztypes.tid.zero
     # a CONSTANT declares itself when it is read: its type is the one its value
@@ -16796,10 +16796,7 @@ resolveDef: function {
     if ehd.isZero then ehd = scope
     ensureUnitRequire :st :scope :ast declId: ehd
     rf: scope
-    if resolvedDecl.isZero.not then rf = (declParentIdOf
-        :st
-        declId: resolvedDecl
-    )
+    if resolvedDecl.isZero.not then rf = st.typing.declParentOf declId: resolvedDecl
     # a definition that declares a unit -- an inline namespace, a hidden
     # subunit, a template -- resolves as the unit it is, which the demand path
     # does. The dispatch below has no leg for one, and its defined mark left the
@@ -17590,7 +17587,7 @@ demandUnitMember: function {
                 # a definition the block itself makes resolves with the
                 # block, a nested unit (its constants key on the block's
                 # id); an edge names a sibling of the unit, demanded as such
-                ep: declParentIdOf :st declId: e
+                ep: st.typing.declParentOf declId: e
                 if ep == pub then {
                     demandDecl :st declId: pub
                 } else {
@@ -17825,7 +17822,7 @@ resolveDemandedDecl: function {
     ensureUnitRequire :st :scope :ast :declId
     # a demanded declaration resolves in the scope it is written in -- its
     # parent -- whatever scope the demand came from
-    rf: declParentIdOf :st :declId
+    rf: st.typing.declParentOf :declId
     dName: zast.nameid
     dParent: ztypes.declid
     dNode: zast.nodeid
@@ -18371,14 +18368,6 @@ unitRootOfDecl: function {st: zenv.ZSymbolTable.view declId: ztypes.declid} out 
     return ztypes.declid.zero
 }
 
-# declParentIdOf -- a declaration's enclosing declaration (0 at the program root).
-declParentIdOf: function {st: zenv.ZSymbolTable.view declId: ztypes.declid} out ztypes.declid is {
-    r: ztypes.declid
-    decl: st.typing.decls.get i: declId
-    r = decl.parent
-    return r
-}
-
 # declAtProgramTop -- is this parent id the top of the declaration tree: no
 # parent at all, or the program root whose children are the file units? The
 # question every walk out of a file unit asks.
@@ -18398,7 +18387,7 @@ declInScope: function {
     for probe.isZero.not loop {
         c: st.typing.declFindChild parentDeclId: probe :nameId
         if c.isZero.not then return c
-        probe = declParentIdOf :st declId: probe
+        probe = st.typing.declParentOf declId: probe
     }
     return (st.typing.declFindChild parentDeclId: st.typing.programRoot :nameId)
 }
@@ -18771,7 +18760,7 @@ resolveOrdinaryMember: function {
     # a `public:` block's reference entry (`:x`, `alias: x`) is an edge to a
     # sibling of the enclosing unit, which resolves as that unit's definition,
     # not as a member here
-    mdp: declParentIdOf :st declId: md
+    mdp: st.typing.declParentOf declId: md
     if md.isZero.not when mdp != ownerDeclId then return
     isRx: false
     isDone: false
@@ -19357,7 +19346,7 @@ unitTemplateKeyOf: function {
     if pn.isZero.not then return pn
     d: declOfTypeId :st :tid
     if d.isZero then return zast.nameid
-    if (declParentIdOf :st declId: d) != tdecl then return zast.nameid
+    if (st.typing.declParentOf declId: d) != tdecl then return zast.nameid
     return (st.typing.decls.get i: d).name
 }
 
@@ -20209,7 +20198,7 @@ completeOneInstance: function {
     # namespace -- `outer.intmath` -- and a qualified read finds it on
     # the namespace's own type id. A top-level binding has no such
     # owner: the file unit's members are not indexed that way.
-    rsp: declParentIdOf :st declId: rscope
+    rsp: st.typing.declParentOf declId: rscope
     if (declAtProgramTop :st parentDeclId: rsp).not then {
         sTid: declTypeIdOf :st declId: rscope
         if sTid.isZero.not then {
@@ -20599,7 +20588,7 @@ resolveMainUnitInstantiations: function {
         # template's name, not an inline template: registerUnitRoots has
         # already minted it.
         {
-            tpd: declParentIdOf :st declId: r.tmplDeclId
+            tpd: st.typing.declParentOf declId: r.tmplDeclId
             tu: r.tmplUnit
             if (declAtProgramTop :st parentDeclId: tpd).not when r.tmplOpId.isZero.not then {
                 {
@@ -20859,23 +20848,8 @@ stdTidOpt: function {ast: Ast st: zenv.ZSymbolTable wk: zast.nameid} out optionv
 # comparison against a tid that already exists is exact, because the stdlib type
 # it could equal is resolved whenever that tid is.
 stdTidRo: function {ast: Ast.view st: zenv.ZSymbolTable wk: zast.nameid} out ztypes.tid is {
-    m: st.typing.stdTidMemo.get key: wk
-    match (
-        m
-    ) case some then {
-        return m
-    } case none then null
-    r: ((walkLookupTyperefByIdRo
-        :ast
-        :st
-        unitDecl: ztypes.declid
-        scope: ztypes.declid
-        baseId: wk
-    ).or
-        d: ztypes.tid.zero
-    )
-    if r.isZero then return r
-    st.typing.stdTidMemo.set key: wk value: r
+    r: stdTidPeek :ast :st :wk
+    if r.isZero.not then st.typing.stdTidMemo.set key: wk value: r
     return r
 }
 
@@ -21528,7 +21502,7 @@ unitSiblingReturn: function {
     none: ztypes.tid
     td: declOfTypeId :st tid: tplClassId
     if td.isZero then return none
-    ud: declParentIdOf :st declId: td
+    ud: st.typing.declParentOf declId: td
     if ud.isZero or (declIsUnitTemplate :st :ast declId: ud).not then return none
     bn: baseTypeNameId :ast n: (ast.nodes.get i: rn)
     if bn.isZero then return none
@@ -22195,7 +22169,9 @@ siblingKeyOf: function {
     if pn.isZero.not then return pn
     d: declOfTypeId :st :tid
     if d.isZero then return zast.nameid
-    if (declParentIdOf :st declId: d) != (declParentIdOf :st declId: td) then return zast.nameid
+    if (
+        (st.typing.declParentOf declId: d) != (st.typing.declParentOf declId: td)
+    ) then return zast.nameid
     return (st.typing.decls.get i: d).name
 }
 
@@ -23354,7 +23330,7 @@ sumBoundDeclAdmits: function {
     og: st.reg.genericOriginOf tid: argTid
     if og.isZero.not then argDecl = declOfTypeId :st tid: og
     if argDecl == bd then return true
-    sc: declParentIdOf :st declId: bd
+    sc: st.typing.declParentOf declId: bd
     ud: unitRootOfDecl :st declId: bd
     opId: declOperationOf :st :ast declId: bd
     if opId.isZero or (objRefAt :ast nid: opId).nid.isZero then return false
@@ -26338,7 +26314,7 @@ enclosingTypeDecl: function {st: zenv.ZSymbolTable.view scope: ztypes.declid} ou
         k: (st.typing.decls.get i: d).kind
         if k.typeDecl then return d
         if k.funcDecl or k.unitDecl then return ztypes.declid
-        d = declParentIdOf :st declId: d
+        d = st.typing.declParentOf declId: d
     }
     return d
 }
@@ -28218,7 +28194,7 @@ pathNamesType: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid} out bo
     # one, so `u.k.b` is the arm predicate and not a construction of `kind.b`
     pcv: (constValueOfMemberId
         :st
-        scope: (declParentIdOf :st declId: rd)
+        scope: (st.typing.declParentOf declId: rd)
         :ast
         unitDecl: (owningUnitDecl :st declId: rd)
         nameId: (declNameIdOf :st declId: rd)
@@ -31100,7 +31076,7 @@ refuseTemplateOnlyConstant: function {
     if (st.reg.genericParamCountOf :tdecl) == 0 then return false
     if (activeConstMono :st ownerDecl: tdecl).isZero.not then return false
     # inside the template each instance's walk values it
-    if (scopeWithinDecl :st scope: st.curScope decl: tdecl) then return false
+    if (scopeIsWithin :st scope: st.curScope root: tdecl) then return false
     cd: st.typing.declFindChild parentDeclId: tdecl nameId: cnId
     if cd.isZero then return false
     opId: zast.nodeid
@@ -31124,18 +31100,6 @@ refuseTemplateOnlyConstant: function {
         width: cn.length.u32.orPanic
     )
     return true
-}
-
-# scopeWithinDecl -- whether `scope` is `decl` or nested inside it.
-scopeWithinDecl: function {
-    st: zenv.ZSymbolTable.view scope: ztypes.declid decl: ztypes.declid
-} out bool is {
-    cur: scope
-    for cur.isZero.not loop {
-        if cur == decl then return true
-        cur = st.typing.declParentOf declId: cur
-    }
-    return false
 }
 
 # constReadsNumericParam -- whether a constant's value expression names a
@@ -44942,7 +44906,7 @@ nameDeclaredOutward: function {
     for cur.isZero.not and (cur != st.typing.programRoot) loop {
         fc: st.typing.declFindChild parentDeclId: cur :nameId
         if fc.isZero.not when (declIsTypeMember :st declId: fc).not then return true
-        cur = declParentIdOf :st declId: cur
+        cur = st.typing.declParentOf declId: cur
     }
     return false
 }
@@ -52395,7 +52359,7 @@ walkDeclaredDef: function {
     memId: (st.typing.decls.get i: dd).node
     if memId.isZero then return
     # a template's member is checked per instance, from the instance's copy
-    if (declIsUnitTemplate :st :ast declId: (declParentIdOf :st declId: dd)) then return
+    if (declIsUnitTemplate :st :ast declId: (st.typing.declParentOf declId: dd)) then return
     # The mark means BODY WALKED, so it is never set for a definition this is
     # not about to walk. Claiming one and declining is what made a free function
     # -- and then a namespace -- vanish: the unit's own walk skipped it as done.
@@ -56619,7 +56583,7 @@ declaredBySystem: function {st: zenv.ZSymbolTable.view declId: ztypes.declid} ou
     cur: declId
     for cur.isZero.not loop {
         if cur == st.typing.systemUnitRoot then return true
-        cur = declParentIdOf :st declId: cur
+        cur = st.typing.declParentOf declId: cur
     }
     return false
 }
@@ -57722,7 +57686,7 @@ constOwnerDeclForId: function {
                 ct: declTypeIdOf :st declId: cur
                 if ct.isZero.not then return cur
             }
-            cur = unitScopeOf :st declId: (declParentIdOf :st declId: cur)
+            cur = unitScopeOf :st declId: (st.typing.declParentOf declId: cur)
         }
     }
     # CORE IS THE ROOT SCOPE, and the scope chain does not run through it -- it
@@ -59518,7 +59482,7 @@ constOfNamedBase: function {
             sro: unitScopeOf :st declId: scope
             # a public block's definitions read the unit's own names
             # (`seven: inner.seven`), its subunits among them
-            if (declIsPublicBlock :st declId: sro) then sro = declParentIdOf :st declId: sro
+            if (declIsPublicBlock :st declId: sro) then sro = st.typing.declParentOf declId: sro
             nestedNameId9: ptId
             sst: (nestedUnitTidOf
                 :st
@@ -60987,7 +60951,7 @@ instantiatedAliasFold: function {
     arm: rowArmAt :ast nid: opId
     if arm.call then isCall = true
     if isCall.not then return false
-    own: declParentIdOf :st :declId
+    own: st.typing.declParentOf :declId
     if own.isZero then return false
     unm: unitRootOfDecl :st :declId
     if unm.isZero then return false
@@ -61069,7 +61033,7 @@ constFoldDecl: function {
 } is {
     if declId.isZero then return
     if (instantiatedAliasFold :ast :st :declId) then return
-    own: declParentIdOf :st :declId
+    own: st.typing.declParentOf :declId
     if own.isZero then return
     nmNode: declNameIdOf :st :declId
     if nmNode.isZero then return
@@ -61800,7 +61764,7 @@ resolveConstantDefsIn: function {
                     # sibling, whose own unit resolves it
                     isEdge: false
                     ed: st.typing.declFindChild parentDeclId: ownerDeclId nameId: bmNode.name
-                    edp: declParentIdOf :st declId: ed
+                    edp: st.typing.declParentOf declId: ed
                     if ed.isZero.not when edp != ownerDeclId then isEdge = true
                     # a `public:` block's re-export (`Circle: impl.Circle`) is
                     # followed when a use reaches it: resolved here it demanded
@@ -62594,7 +62558,7 @@ unitDeclOfNameOrOwn: function {
     nameId: zast.nameid
 } out ztypes.declid is {
     if nameId.isZero then return ztypes.declid.zero
-    r: st.typing.declFindChild parentDeclId: st.typing.programRoot :nameId
+    r: unitDeclOfName :st :nameId
     if r.isZero then return (unitRootOfDecl :st declId: scope)
     return r
 }
@@ -62684,7 +62648,7 @@ unitScopeOf: function {
         # a body, a function, a local is not a unit scope, and no walk touches
         # the node
         if (st.typing.declIsUnitScope declId: cur) then return cur
-        cur = declParentIdOf :st declId: cur
+        cur = st.typing.declParentOf declId: cur
     }
     return ztypes.declid.zero
 }
@@ -62773,7 +62737,7 @@ scopeIsWithin: function {
     cur: scope
     for cur.isZero.not loop {
         if cur == root then return true
-        cur = declParentIdOf :st declId: cur
+        cur = st.typing.declParentOf declId: cur
     }
     return false
 }
@@ -62797,7 +62761,7 @@ envLookup: function {
             declId: ztypes.declid
             scope: ztypes.declid
         )
-        cur = unitScopeOf :st declId: (declParentIdOf :st declId: cur)
+        cur = unitScopeOf :st declId: (st.typing.declParentOf declId: cur)
     }
     if st.typing.coreUnitRoot.isZero.not then {
         h8: st.typing.declFindChild parentDeclId: st.typing.coreUnitRoot :nameId
@@ -63189,20 +63153,68 @@ childOfWalkIds: function {
     return (optionval.none ztypes.tid)
 }
 
-# resolvedByIds -- resolve a `unit.name` id pair to its type id: the
-# childOf walk, then the on-demand alias follow (which lays the
-# unit->alias edge so later probes resolve through childOf).
+# unitchildhit -- resolvedByIdsRo's answer, and whether it was reached by
+# following a re-export: that answer is the one resolvedByIds lays on the unit's
+# member index.
+unitchildhit: record {
+    # the type `unit.name` resolves to; none on a miss
+    tid: optionval ztypes.tid
+    # reached through a re-export of another unit's definition
+    viaReexport: bool
+}
+
+# resolvedByIds -- resolve a `unit.name` id pair to its type id: resolvedByIdsRo,
+# and where the answer came through a re-export, the unit->alias edge laid so
+# later probes resolve through childOf.
 resolvedByIds: function {
     ast: Ast.view
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     name: zast.nameid
 } out optionval ztypes.tid is {
+    h: unitChildHit :st :ast :unitDecl :name
+    if h.viaReexport then {
+        tgo: h.tid
+        match (
+            tgo
+        ) case some then {
+            uro: declTypeIdOf :st declId: unitDecl
+            if uro.isZero.not when name.isZero.not then (st.typing.setMemberType
+                parentTypeId: uro
+                nameId: name
+                childTypeId: tgo
+            )
+        } case none then null
+    }
+    return h.tid
+}
+
+# resolvedByIdsRo -- resolve a `unit.name` id pair to its type id without
+# writing: the member-index walk, the public-block surface, then the re-export
+# target read. The post-typecheck readers hold views and never lay the edge.
+resolvedByIdsRo: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable.view
+    unitDecl: ztypes.declid
+    name: zast.nameid
+} out optionval ztypes.tid is {
+    return (unitChildHit :st :ast :unitDecl :name).tid
+}
+
+# unitChildHit -- the one read both resolvedByIds forms make: the member-index
+# walk, the public-block surface, then the re-export target.
+unitChildHit: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable.view
+    unitDecl: ztypes.declid
+    name: zast.nameid
+} out unitchildhit is {
+    none: unitchildhit tid: optionval.none ztypes.tid viaReexport: false
     wo: childOfWalkIds :st :unitDecl :name
     match (
         wo
     ) case some then {
-        return (optionval.some wo)
+        return (unitchildhit tid: optionval.some wo viaReexport: false)
     } case none then null
     alDecl: declOfUnitDefIds :st :unitDecl nameId: name
     # a definition the unit's `public:` block makes: on the unit's surface,
@@ -63211,11 +63223,11 @@ resolvedByIds: function {
     # block's definitions are reached from there by `public.name` alone
     {
         alT: declTypeIdOf :st declId: alDecl
-        alP: declParentIdOf :st declId: alDecl
+        alP: st.typing.declParentOf declId: alDecl
         alRoot: ztypes.declid
         if unitDecl.isZero.not then alRoot = unitDecl
         if alT.isZero.not when alP.isZero.not when alP != alRoot then {
-            return (optionval.some alT)
+            return (unitchildhit tid: optionval.some alT viaReexport: false)
         }
     }
     alTgt: reexportTargetIdsOf :st :ast declId: alDecl
@@ -63228,61 +63240,10 @@ resolvedByIds: function {
         match (
             tgo
         ) case some then {
-            uro: (declTypeIdOf
-                :st
-                declId: unitDecl
-            )
-            if uro.isZero.not when name.isZero.not then (st.typing.setMemberType
-                parentTypeId: uro
-                nameId: name
-                childTypeId: tgo
-            )
-            return (optionval.some tgo)
+            return (unitchildhit tid: optionval.some tgo viaReexport: true)
         } case none then null
     }
-    return (optionval.none ztypes.tid)
-}
-
-
-# resolvedByIdsRo -- resolvedByIds minus its one write (the re-export member
-# memo): the member-index walk, the public-block surface, then the re-export
-# target read. The post-typecheck readers hold views and never lay the edge.
-resolvedByIdsRo: function {
-    ast: Ast.view
-    st: zenv.ZSymbolTable.view
-    unitDecl: ztypes.declid
-    name: zast.nameid
-} out optionval ztypes.tid is {
-    wo: childOfWalkIds :st :unitDecl :name
-    match (
-        wo
-    ) case some then {
-        return (optionval.some wo)
-    } case none then null
-    alDecl: declOfUnitDefIds :st :unitDecl nameId: name
-    {
-        alT: declTypeIdOf :st declId: alDecl
-        alP: declParentIdOf :st declId: alDecl
-        alRoot: ztypes.declid
-        if unitDecl.isZero.not then alRoot = unitDecl
-        if alT.isZero.not when alP.isZero.not when alP != alRoot then {
-            return (optionval.some alT)
-        }
-    }
-    alTgt: reexportTargetIdsOf :st :ast declId: alDecl
-    if alTgt.unitName.isZero.not then {
-        tgo: (childOfWalkIds
-            :st
-            unitDecl: (unitDeclOfName :st nameId: alTgt.unitName)
-            name: alTgt.defName
-        )
-        match (
-            tgo
-        ) case some then {
-            return (optionval.some tgo)
-        } case none then null
-    }
-    return (optionval.none ztypes.tid)
+    return none
 }
 
 # resolvedByIdsMember -- `unit.def.member` from ids: the unit-level
@@ -63372,7 +63333,7 @@ nearestScopeOf: function {
             cur = ztypes.declid
         } else {
             if (scopeHoldsName :st root: cur nameId: baseId) then return cur
-            cur = unitScopeOf :st declId: (declParentIdOf :st declId: cur)
+            cur = unitScopeOf :st declId: (st.typing.declParentOf declId: cur)
         }
     }
     core: st.typing.coreUnitRoot
