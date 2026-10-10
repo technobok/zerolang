@@ -2609,11 +2609,9 @@ genericBoundAtomId: function {ast: Ast.view n: astnode.view} out zast.nodeid is 
     }
 }
 
-# hasGenericParam -- true when any item in the block is a generic-param declaration.
-# Takes the list by value so its iterator's lock is released on return (the scan is
-# sequenced before any persistent iterator over the same list).
-# hasGenericParam / registerGenericParams -- id-list flavors for
-# converted unit bodies (declaration lists stay embedded until S4).
+# hasGenericParam -- true when any item in a type's `as` or `is` block is a
+# generic-param declaration. A unit's answer is recorded on its row
+# (zast.unitIsGeneric), not rescanned.
 hasGenericParam: function {ast: Ast.view items: zast.kidspan} out bool is {
     return (zast.itemsHaveGenericParam :ast :items)
 }
@@ -2726,7 +2724,7 @@ declIsGenericFileUnit: function {
     if dn.isZero then return false
     ar: argRefAt :ast nid: dn
     if ar.operation.isZero then return false
-    return (unitDefIsGeneric :ast oId: ar.operation)
+    return (zast.unitIsGeneric :ast unitId: ar.operation)
 }
 
 # registerUnitParamsOn -- a type nested in a generic unit takes the unit's
@@ -2756,14 +2754,6 @@ registerUnitParamsOn: function {
         ut: genericParamTidMint :st :ast tdecl: unitTmpl nameId: pn
         st.reg.setGenericParamTid :tdecl paramName: pn tid: ut
     }
-}
-
-# unitDefIsGeneric -- a unit definition is generic when its body declares a generic
-# param. Mirrors objectdefIsGeneric; gates dep-signature-stamp suppression off generic
-# units, whose template signatures resolve differently.
-unitDefIsGeneric: function {ast: Ast.view oId: zast.nodeid} out bool is {
-    bodyIds: zast.unitBodyIdsAt :ast unitId: oId
-    return (hasGenericParam :ast items: bodyIds)
 }
 
 # pathOwnership -- the ownership a param/field/return type expr declares via a
@@ -16960,7 +16950,7 @@ registerUnitGenericParams: function {
     unitdefId: zast.nodeid
 } is {
     bodyIds: zast.unitBodyIdsAt :ast unitId: unitdefId
-    if (hasGenericParam :ast items: bodyIds) then {
+    if (zast.unitIsGeneric :ast unitId: unitdefId) then {
         urd0: ztypes.declid
         uro0: unitDecl
         if uro0.isZero.not then urd0 = uro0
@@ -17164,7 +17154,7 @@ registerUnitRoots: function {st: zenv.ZSymbolTable program: Ast.view} is {
                     uid: st.reg.newType name: nmNode.stringView typetype: ztypes.ztypetype.unitType
                     # a file unit whose body declares a generic parameter is a
                     # template, as a nested `unit as` is
-                    if (unitDefIsGeneric ast: program oId: opId) then {
+                    if (zast.unitIsGeneric ast: program unitId: opId) then {
                         st.reg.setGeneric typeId: uid value: true
                     }
                     opid: unitdefNodeId ast: program nId: opId
@@ -18529,7 +18519,7 @@ instTemplateOpOf: function {
     if (zast.unitOpKindIs :ast opId: opNode k: zast.unitkind.template) then return opNode
     udn: unitdefNodeId :ast nId: opNode
     if udn.isZero then return none
-    if (unitDefIsGeneric :ast oId: udn) then return opNode
+    if (zast.unitIsGeneric :ast unitId: udn) then return opNode
     return none
 }
 
@@ -19151,7 +19141,7 @@ resolveInlineGenericUnit: function {
         uid: st.reg.newType name: defName typetype: ztypes.ztypetype.unitType
         did: uid
         rid: uid
-        if (hasGenericParam :ast items: bodyIds) then {
+        if (zast.unitIsGeneric :ast unitId: unitOpId) then {
             st.reg.setGeneric typeId: uid value: true
             registerGenericParams :st :ast tdecl: tdl5 items: bodyIds
             # the unit node and each bare generic-param def stamp, and the
@@ -19198,7 +19188,7 @@ resolveInlineGenericUnit: function {
         # A non-generic inline unit is a real type; lay its unit->def childOf edge
         # (a generic template must NOT get one -- its id is the pre-instantiation
         # template, which would shadow instance lookups).
-        if (hasGenericParam :ast items: bodyIds).not when parentTid.isZero.not then {
+        if (zast.unitIsGeneric :ast unitId: unitOpId).not when parentTid.isZero.not then {
             (st.typing.setMemberType
                 parentTypeId: parentTid
                 nameId: nRef5
@@ -53794,7 +53784,7 @@ walkGenericUnitTemplates: function {st: zenv.ZSymbolTable scope: ztypes.declid p
                 un = zast.poolTextCopy pool: program.names ref: u.name
             }
             if uop.isZero.not then {
-                if (unitDefIsGeneric ast: program oId: uop) then {
+                if (zast.unitIsGeneric ast: program unitId: uop) then {
                     hUnitDecl2: (unitDeclOfNameOrOwn
                         :st
                         :scope
@@ -53825,7 +53815,7 @@ walkGenericUnitTemplates: function {st: zenv.ZSymbolTable scope: ztypes.declid p
                             bop = bm.operation
                         }
                     }
-                    if isU when (unitDefIsGeneric ast: program oId: bop) then {
+                    if isU when (zast.unitIsGeneric ast: program unitId: bop) then {
                         # an INLINE template's members resolve in the FILE unit
                         # it is written in -- its own name is no file unit, and
                         # naming it only ever meant "the scope of the walk",
@@ -54877,7 +54867,7 @@ stampUnitMonoMembers: function {
             }
         }
         if imOp.isZero.not then {
-            if (unitDefIsGeneric ast: program oId: imOp) then {
+            if (zast.unitIsGeneric ast: program unitId: imOp) then {
                 (stampMonoTemplateUnit
                     :st
                     :scope
@@ -55222,7 +55212,7 @@ stampUnitMonoRound: function {
                     :scope
                     nameId: uNm
                 )
-                if (unitDefIsGeneric ast: program oId: uOp) then {
+                if (zast.unitIsGeneric ast: program unitId: uOp) then {
                     (stampMonoTemplateUnit
                         :st
                         :scope
