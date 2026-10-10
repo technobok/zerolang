@@ -436,3 +436,71 @@ split would rewrite every one of those signatures to remove 17 copies, so
 it was not made there. Open: whether a later restructuring of the emitter
 takes it on, and whether the checker's #~"st" / #~"ast" pair, which sees
 the same pattern, is worth it on its own.
+
+#--: one emitted function for identically shaped ones
+
+Two functions whose checked bodies are identical -- the same statements, the
+same types, the same variable and parameter names -- could be emitted once and
+shared. Normalising names away (alpha-equivalence) is deliberately out of
+scope: too much work for what it would add. The duplicates come from two
+places: a user writing the same function twice, and generic instances that
+come out identical. Arrays are the case in mind: each order of an
+#~"array" is its own instance, and code meant to apply across orders is
+multiplied with them.
+
+Measured 2026-10-10 on the C the compiler emits:
+
+#ul:
+  [#*: functions identical apart from their own name: 1.7% of the
+    self-compile's 6,770 (13 KB of C), 3.2% across the corpus -- mostly
+    small collection helpers;]
+  [#*: comparing the callees too, Merkle-style (a function's identity
+    includes the identities of the functions it calls, by partition
+    refinement so that mutual recursion works): no gain over plain text;]
+  [#*: with type identities blanked as well: 26% of the self-compile's
+    functions (12% of the corpus). That is an upper bound: it is mostly a
+    container's methods per element type, which differ in layout
+    (#~"List i64" against #~"List u8"), so only layout-identical types could
+    really share.]
+
+The C backend gets this today from the C compiler. gcc's identical-code
+folding (#~"-fipa-icf", on at #~"-O2") finds 1,114 equal functions in
+#~"bin/zc.c", working after compilation where type names no longer matter.
+Other backends will not have that, so the question is whether the compiler
+should do it itself, ahead of every backend.
+
+Array orders are not caught by any hashing: the order is part of each
+instance's code (#~"data[3]" and #~"if (_idx >= 3)" against #~"data[5]").
+What makes one function serve every order is #_*"size erasure": the function
+takes a view, which carries its length at run time, and is instantiated once
+per element type. That works today:
+
+#code language=zerolang: """
+  total: function {xs: (ListViewVal i64).view} out i64 is {
+      s: 0
+      for each x: xs loop s = s + x
+      return s
+  }
+
+  a: array t: i64 to: 3
+  b: array t: i64 to: 5
+  # one `total`, emitted once, for both orders
+  print "\{total xs: a.listView} \{total xs: b.listView}"
+  """
+
+Open:
+
+#ul:
+  [#*: whether to build the deduplication in the compiler. If built, it
+    belongs between the checker and the emitters, so every backend benefits.
+    It would key on the checked body (types by identity, or by layout so that
+    layout-identical instances share) and use the callee-aware partition
+    refinement above.]
+  [#*: whether it is always on or opted into by a command-line setting. An
+    always-on pass cannot change what a program does, and every setting
+    doubles what the tests must cover; an opt-in keeps debug builds simple.]
+  [#*: whether an array may be passed directly where a view of its element
+    type is expected, rather than through #~".listView" -- today that is a
+    type mismatch.]
+  [#*: whether a method of #~"array" that never reads its order should be
+    compiled once against the view automatically.]
