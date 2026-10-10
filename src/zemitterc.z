@@ -3087,15 +3087,14 @@ dataBlockTid: function {symtab: zenv.ZSymbolTable.view nid: zast.nodeid} out zty
     if (symtab.reg.typetypeOf typeId: dt) != ztypes.ztypetype.dataType then return ztypes.tid.zero
     # read by a generic unit instance's function, the declaration is the
     # template's block and the instance's own copy is the block read
+    # (or of an instance enclosing it, for a nested unit's function)
     em: symtab.typing.emitMono
-    if em.isZero then return dt
-    cp: ((symtab.typing.declChildOfId
-        parentTypeId: em
-        nameId: (symtab.typing.decls.get i: rd).name
-    ).or
-        d: ztypes.tid.zero
-    )
-    if cp.isZero.not when (symtab.reg.genericOriginOf tid: cp) == dt then return cp
+    nm: (symtab.typing.decls.get i: rd).name
+    for em.isZero.not loop {
+        cp: (symtab.typing.declChildOfId parentTypeId: em nameId: nm).or d: ztypes.tid.zero
+        if cp.isZero.not when (symtab.reg.genericOriginOf tid: cp) == dt then return cp
+        em = symtab.reg.ownerTidOf tid: em
+    }
     return dt
 }
 
@@ -31117,6 +31116,7 @@ emitUnitMonoMembers: function {
         vx = vx + 1
         fm9Node: ast.nodes.get i: fm
         emitUnitNestedMethods :ast :symtab :ctx member: fm9Node :t :declOnly :buf
+        emitNestedUnitMonoMembers :ast :symtab :ctx member: fm9Node :t :declOnly :buf
         if fm9Node.namedoperation when (ztypecheck.isFunctionDefWithBody
             o: (ast.nodes.get i: fm9Node.operation)
         ) then {
@@ -31178,6 +31178,22 @@ templateMonos: function {
     return r
 }
 
+# unitMonoNestedInstance -- the instance `mono` owns of the `unit { ... }` its
+# template's body member declares; 0 when the member declares no unit.
+unitMonoNestedInstance: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    # the member's name and its definition
+    nameId: zast.nameid
+    opId: zast.nodeid
+    mono: ztypes.tid
+} out ztypes.tid is {
+    if opId.isZero or (zast.unitOpDeclaresUnit :ast :opId).not then return ztypes.tid.zero
+    ni: (symtab.typing.declChildOfId parentTypeId: mono :nameId).or d: ztypes.tid.zero
+    if ni.isZero or (originTidOf :symtab tid: ni).isZero then return ztypes.tid.zero
+    return ni
+}
+
 # fillTemplateDataElems -- the element tables of every instance of the generic
 # unit template `tplId`, whose body is `bodyIds`.
 fillTemplateDataElems: function {
@@ -31206,6 +31222,14 @@ fillUnitMonoDataElems: function {
         bm: ast.nodes.get i: (zast.kidAt kids: ast.kids span: bodyIds i: di)
         di = di + 1
         if bm.namedoperation.not then continue
+        nui: unitMonoNestedInstance :ast :symtab nameId: bm.name opId: bm.operation mono: monoId
+        if nui.isZero.not then (fillUnitMonoDataElems
+            :symtab
+            :ctx
+            :ast
+            bodyIds: (zast.unitBodyIdsAt :ast unitId: bm.operation)
+            monoId: nui
+        )
         cp: (symtab.typing.declChildOfId parentTypeId: monoId nameId: bm.name).or d: ztypes.tid.zero
         if cp.isZero.not when (symtab.reg.typetypeOf typeId: cp) == ztypes.ztypetype.dataType then {
             fillDataElemFor :ast :symtab :ctx op: (ast.nodes.get i: bm.operation) dtid: cp
@@ -31244,11 +31268,49 @@ emitUnitMonoDataBlocks: function {
         bm: ast.nodes.get i: (zast.kidAt kids: ast.kids span: bodyIds i: di)
         di = di + 1
         if bm.namedoperation.not then continue
+        nui: unitMonoNestedInstance :ast :symtab nameId: bm.name opId: bm.operation mono: monoId
+        if nui.isZero.not then (emitUnitMonoDataBlocks
+            :ast
+            :symtab
+            :ctx
+            bodyIds: (zast.unitBodyIdsAt :ast unitId: bm.operation)
+            monoId: nui
+            :buf
+        )
         cp: (symtab.typing.declChildOfId parentTypeId: monoId nameId: bm.name).or d: ztypes.tid.zero
         if cp.isZero.not when (symtab.reg.typetypeOf typeId: cp) == ztypes.ztypetype.dataType then {
             emitDataBlockFor :symtab :ctx op: (ast.nodes.get i: bm.operation) ridtid: cp :buf
         }
     }
+}
+
+# emitNestedUnitMonoMembers -- the functions of the instance `t` owns of a unit
+# its template's body member `member` declares: emitUnitMonoMembers over the
+# nested unit's body, at any depth. Nothing for a member that declares none.
+emitNestedUnitMonoMembers: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    member: astnode.view
+    t: ztypes.tid
+    declOnly: bool
+    buf: String.borrow
+} is {
+    match (
+        member
+    ) case namedoperation then {
+        nui: unitMonoNestedInstance :ast :symtab nameId: member.name opId: member.operation mono: t
+        if nui.isZero then return
+        (emitUnitMonoMembers
+            :ast
+            :symtab
+            :ctx
+            bodyIds: (zast.unitBodyIdsAt :ast unitId: member.operation)
+            t: nui
+            :declOnly
+            :buf
+        )
+    } else null
 }
 
 # emitUnitMonoInstances -- emit the monomorphized methods of a generic file unit

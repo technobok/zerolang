@@ -5,7 +5,11 @@
 # instance (`wi.elem`). A zero value through an alias (`nothing`), or of the
 # parameter itself (`t`), is the argument's zero. A data block is the instance's
 # own copy: read inside the unit and through the instance, its elements typed by
-# the instance's `out intdata t` and evaluated over its numeric parameter.
+# the instance's `out intdata t` and evaluated over its numeric parameter. A
+# nested `unit { ... }` is the instance's own instance of it, at any depth: its
+# signatures read the argument, its functions read the enclosing instance's
+# block and types, and it has blocks and types of its own, read inside and
+# through the instance (`wi.inner.same`, `s3.inner.Rec`).
 wrap: unit as {
     t: anyval.generic
     primes: data { 2 3 5 7 }
@@ -17,6 +21,21 @@ wrap: unit as {
     get: function {v: elem} out elem is { return v }
     zero: function out t is { return nothing }
     zeroT: function out t is { return t }
+    inner: unit {
+        sq: data { 1 4 9 } out intdata u64
+        same: function {v: t} out t is { return v }
+        mkp: function {v: t} out pt is { return (pt x: v) }
+        outer: function out i64 is { return (primes.index i: 3) }
+        deep: unit {
+            twice: function {v: t} out t is { return v + v }
+            viaOuter: function out i64 is { return (primes.index i: 1) + inner.outer }
+        }
+    }
+    viaInner: function {v: t} out t is {
+        p: inner.mkp v: v
+        print "\{inner.outer} \{inner.sq.index i: 2} \{inner.deep.viaOuter}"
+        return (inner.deep.twice v: p.x)
+    }
     first: function out i64 is { return (primes.index i: 0) + primes.length }
     mk: function {v: t} out P is { return (P x: v) }
     pair: function {v: t} out Vals is {
@@ -47,6 +66,11 @@ sq: unit as {
     n: u64.generic
     vals: data { n (n * n) (n * 3) } out intdata u64
     get: function {i: u64} out u64 is { return (vals.index :i) }
+    inner: unit {
+        k: n * 2
+        Rec: record { a: u64 }
+        mk: function out Rec is { return (Rec a: k + (vals.index i: 1)) }
+    }
 }
 s3: (sq n: 3)
 s5: (sq n: 5)
@@ -57,6 +81,9 @@ twice: function {v: wi.elem} out wi.elem is { return v * 2 }
 # xOf -- the instance's record, named through its alias
 xOf: function {p: wi.P} out i64 is { return p.x }
 
+# aOf -- a record the instance's nested unit declares, named through both
+aOf: function {r: s3.inner.Rec} out u64 is { return r.a }
+
 main: function is {
     print "\{wi.get v: 4} \{wf.get v: 2.5} \{wi.zero} \{wf.zero} \{wi.zeroT}"
     print "\{twice v: 21} \{wf.nothing} \{xOf p: (wi.mk v: 3)} \{(wf.mk v: 1.5).x}"
@@ -66,4 +93,7 @@ main: function is {
     print "\{ci.get i: 2} \{cu.get i: 1} \{ci.sum} \{cu.vals.length} \{ci.vals.index i: 0}"
     for each v: cu.all.iterate loop print "\{v}"
     print "\{s3.get i: 1} \{s5.get i: 2} \{s5.vals.index i: 0} \{s3.vals.length}"
+    print "\{wi.viaInner v: 5} \{wf.viaInner v: 1.25}"
+    print "\{wi.inner.same v: 4} \{wf.inner.deep.twice v: 2.5} \{wi.inner.sq.length}"
+    print "\{(wf.inner.mkp v: 0.5).x} \{aOf r: s3.inner.mk} \{s5.inner.mk.a} \{s5.inner.k}"
 }
