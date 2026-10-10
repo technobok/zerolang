@@ -556,7 +556,7 @@ tagStorageCType: function {
         if tb.isZero then return ""
         # BIND the name: regNameOf hands back an OWNED copy, and taking a
         # view of it inline leaves the copy with no owner to free it.
-        # scalarCTypeFor, not cTypeOf: the tid is in hand, so a user type
+        # scalarCTypeFor, not a lookup by name: the tid is in hand, so a user type
         # shadowing a numeric name must not pick up that numeric's C spelling
         return (scalarCTypeFor
             :symtab
@@ -1056,8 +1056,8 @@ convIntToInt: function {srcK: ztypes.numkind dstK: ztypes.numkind okSet: StringV
 }
 
 # convBodyOf -- the C natives.tbl gives for the conversion `<src>.<dst>`, as a
-# row body. This is the SAME derivation emitNumericCast and emitNumericCastResult
-# run -- numBits, numSigned, numLoStr, numHiStr -- so the checked-in rows cannot
+# row body. This is the SAME derivation emitNumericCast runs -- kindBits,
+# kindSigned, kindLoStr, kindHiStr -- so the checked-in rows cannot
 # say anything the rule does not; natives-tbl-guard regenerates and diffs to keep
 # it that way. `lossy` follows the DECLARATION: a conversion the units declare as
 # returning `resultval` builds one, and one returning the type directly is a
@@ -3278,7 +3278,7 @@ ifDiverges: function {
 }
 
 # builtinTidInU -- the canonical registry id of a stdlib builtin DECLARED IN
-# `unitName`: currentUnit is walkLookupTyperef's first probe, so naming the unit
+# `unitName`: the unit is walkLookupTyperef's first probe, so naming the unit
 # is the qualified lookup, for the builtins `core` does not re-export (a
 # natives.tbl canonical part spelled `unit.name`).
 builtinTidInU: function {
@@ -4030,7 +4030,7 @@ nodeIsBareAtom: function {n: astnode.view} out bool is {
     }
 }
 
-# pathIsPointer -- does the expression evaluate to a C pointer? A ptrVar atom
+# pathIsPointer -- does the expression evaluate to a C pointer? A pointer variable
 # (pointer receiver / borrow param) or a dotted read of a borrowed field both do,
 # so field access on them chains with `->`.
 pathIsPointer: function {
@@ -5918,7 +5918,7 @@ emitDottedCall: function {
     # the receiver's C text: the expression's, or the base atom's local name
     bn: String
     if (bn0.length == 0) or baseIsCall then {
-        # nested/projected base ((zast.poolTextAt pool: ast.names ref: el.text).stringView.stripPrefix): no base atom, but
+        # nested/projected base (`(x.y).stripPrefix`): no base atom, but
         # the base is a stamped String/StringView -- emit it as an expression (a
         # compound-literal lvalue, so the `&base` SV-native legs stay valid C).
         # a typedef over String or StringView (`Path`) is its base here: it
@@ -9401,7 +9401,7 @@ emitEmptyColCreate: function {
 }
 
 # colRecvRef -- a collection (List) receiver as a C lvalue for a method call: a
-# ptrVar List (a by-pointer param) is already a pointer and passes directly; a
+# by-pointer List (a by-pointer param) is already a pointer and passes directly; a
 # value List passes its address.
 colRecvRef: function {ctx: Ctx.view bn: StringView vid: ztypes.vid} out String is {
     if (isPtrVid :ctx :vid) then return bn.string
@@ -12848,10 +12848,6 @@ emitFnCallWithFid: function {
     return (orderClose prefix: oprefix9g callee: fc.stringView args: argTids.stringView)
 }
 
-# emitUnitMethodCall -- a generic-unit-instance method call (intmath.add a: 3
-# b: 5): the receiver is stamped to a monomorphized UNIT type; the method is a
-# concrete FUNCTION child of it. Emit that mono fn's cname applied to the args.
-
 # emitGenericFnCall -- a generic free-function call (identity 42): the callable
 # atom is stamped to the mono FUNCTION id by checkGenericCall. Emit that mono's
 # cname applied to the args. "" when the callable does not resolve to a mono fn,
@@ -15729,7 +15725,7 @@ emitDottedNestedBase: function {
     eUi: unitInstanceMemberRead :ast :symtab :ctx :n
     if eUi.length > 0 then return eUi
     # a nested base (e.g. it.target.a): emit the base expression, then chain
-    # `.`/`->` by whether the base resolves to a pointer (ptrVar / lock field).
+    # `.`/`->` by whether the base resolves to a pointer (a pointer variable or a lock field).
     baseAtom: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent)
     {
         bh: (ownedReceiverHoist
@@ -17800,7 +17796,7 @@ emitDottedRead: function {
     # the parenthesised `(mkList).length` does
     if (baseAtomReadsAsValue :symtab n: (ast.nodes.get i: n.parent)) then bn2 = ""
     # a base with no atom NAME still has a stamped type. Every native leg
-    # below sits behind `bn2.length > 0`, so a projection ((zast.poolTextAt pool: ast.names ref: h.text).stringView)
+    # below sits behind `bn2.length > 0`, so a projection (`(x.y).stringView`)
     # or a call (s.trim, (mk s: s)) skipped the lot and fell through to the
     # user-method path, which renders the callee as the method's
     # function-type id -- a symbol nothing defines. emitDottedCall already
@@ -25965,7 +25961,7 @@ isCountRangeMemberId: function {id: zast.nameid} out bool is {
 }
 
 # isClosedRangeMemberId -- `upto` or `downto`, by INTERNED ID. SEPARATE from
-# isRangeMemberId deliberately: that one's callers read the receiver as the
+# isCountRangeMemberId deliberately: that one's callers read the receiver as the
 # range's BOUND, and a closed range's receiver is its START. Teaching the two
 # names to it would emit `for (T i = 0; i < start; i++)` and walk the wrong
 # values with no diagnostic -- the mirror of the failure recorded above, where
@@ -26065,7 +26061,7 @@ closedRangeCountExpr: function {from: StringView to: StringView down: bool} out 
 #
 # There is no other shape to read. Integers are not iterable, so no bare
 # `for each x: N loop` makes an operand its own bound, and `times` takes no arguments,
-# so it is never a call. A CLOSED range is read by rangeStartExpr/rangeToExpr
+# so it is never a call. A CLOSED range is read by closedRangeMemberOf/rangeToExpr
 # instead -- its receiver is the range's start, not its bound.
 rangeBoundExpr: function {
     ast: Ast.view
@@ -27054,10 +27050,6 @@ classifyInnerFact: function {
     }
 }
 
-# classifyCondFact -- one condition operation as an arm predicate, by the same
-# legs the chain facts have always used: the bare stamped form, a `.true` /
-# `.false` suffix whose side comes from the arm ORDER, and `== true` / `== false`
-# against bool. Answers without building any text.
 # eqcondfact -- classifyEqualityCond's answer: whether the condition WAS an
 # equality against a bool arm, and the fact it classifies to if so.
 eqcondfact: record {
@@ -27640,7 +27632,7 @@ emitIfClause: function {
                 kId: zast.kidAt kids: ast.kids span: n.conditions i: cox1309
                 cox1309 = cox1309 + 1
                 appendCondText :ast :symtab :ctx :kId :cond
-                # the checker's twin of this ordering is checkClause
+                # the checker's twin of this ordering is checkClauseConditions
                 (seedAndLayerCond
                     :ast
                     :symtab
@@ -29910,8 +29902,8 @@ noteFnptrUse: function {ctx: Ctx tid: ztypes.tid} is {
     )
 }
 
-# variantArmIds -- variantArms without the names: the arm payload ids and name
-# ids, for the callers that never spell an arm.
+# variantArmIds -- a variant's arm payload ids and arm name ids, for the callers
+# that never spell an arm.
 variantArmIds: function {
     symtab: zenv.ZSymbolTable.view
     tid: ztypes.tid
@@ -36639,10 +36631,10 @@ isCollectionPassMono: function {
 }
 
 # userDefnRefsUnemitted -- does the user type have a by-value field whose type is
-# in groupList but not yet in emittedList? Map/Set fields are heap pointers in the
+# in `group` but not yet in `emitted`? Map/Set fields are heap pointers in the
 # port (fwd-decl suffices) so they impose no ordering edge; a UNION's cell arms
 # are behind its pointer, and only its inline arms (unionInlineArmTids) are held
-# by value. Passing an empty emittedList answers the plain "references any group
+# by value. Passing an empty `emitted` answers the plain "references any group
 # member" question used by the late-type closure.
 userDefnRefsUnemitted: function {
     symtab: zenv.ZSymbolTable.view
@@ -38823,7 +38815,7 @@ emitOneFacet: function {
         pn: pnames.length
         for pi < pn loop {
             pid: pids.get i: pi
-            # spec receivers are dropped by resolveSpecFn; a MARKED one is
+            # spec receivers are dropped when the spec resolves; a MARKED one is
             # found by the registry below. A parameter of the interface's OWN
             # type is not the receiver -- reading it as one is what dropped it
             # from the slot while the wrapper still passed it.

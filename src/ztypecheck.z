@@ -1550,9 +1550,9 @@ definingSiteForId: function {
 
 # declareCanonicalType -- get-or-declare the ONE canonical id for `unit.name` as a
 # childOf edge under its unit, linked to its Decl. The single convergence point for both a
-# reference (resolveAtomType) and the definition (the resolveX resolvers): whoever
-# runs first mints; the rest reuse the same id. Does NOT touch definedKeys (the
-# body-resolved marker), so demanded bodies still resolve lazily.
+# reference (resolveAtomType) and the definition (resolveRecord and the other
+# definition resolvers): whoever runs first mints; the rest reuse the same id. It
+# declares the name only, so a demanded body still resolves lazily.
 declareCanonicalType: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -1719,8 +1719,9 @@ declareCanonicalTypeId: function {
     return id
 }
 
-# dottedDefTargetIds -- dottedDefTarget as an id pair: the parent atom's name
-# id and the child's; an absent pair when the definition is not a dotted alias.
+# dottedDefTargetIds -- the (unit, member) pair a dotted alias value names: the
+# parent atom's name id and the child's; an absent pair when the definition is
+# not a dotted alias.
 dottedDefTargetIds: function {ast: Ast.view n: astnode.view} out ztypes.deftarget is {
     match (
         n
@@ -1748,7 +1749,7 @@ bareDefTargetNameId: function {n: astnode.view} out zast.nameid is {
 }
 
 # resolveNamedType -- resolve a bare type NAME to its canonical id via the
-# declare-before-bind index (definingUnitFor -> declareCanonicalType), minting a
+# declare-before-bind index (definingSiteForId -> declareCanonicalTypeId), minting a
 # RECORD shell only for a numeric-literal default or an unresolved/forward name.
 # `thisName` scopes the enclosing type's generic params. resolveAtomType aliases
 # the self-type keywords `this`/`type` to the enclosing type name and calls here,
@@ -4422,7 +4423,7 @@ returnParamTid: function {
 
 # partialTyperefTid -- resolve a composite parameterized typeref inside a
 # template method signature to a spec through the shared disassembly
-# (resolveMonoRefParts with the template's enclKey). Returns the spec only
+# (resolveMonoRefParts with the template's enclDecl). Returns the spec only
 # when it is PARTIAL (an argument named a generic param); a fully-concrete
 # composite stays 0, preserving the caller's eager-path behavior.
 # `stampNid` is the OUTERMOST typeref node and stays fixed while `nid` descends
@@ -4856,8 +4857,8 @@ demandTyperefNames: function {
 # MEMBER name (ztypes.zparamownership -> zparamownership) so the shell's mono name
 # matches the construction path's nameOf-based name. Without this the dotted
 # arg's atomName is "" and the shell mints `Map_u64_` (empty value), a distinct id
-# from the constructed `Map_u64_zparamownership` -- the emitter's fieldMonoId
-# canonicalizes by name, so divergent names leave a field/create type mismatch.
+# from the constructed `Map_u64_zparamownership`, and the field and its create
+# would disagree on the type.
 typeArgSuffixName: function {
     st: zenv.ZSymbolTable.view
     scope: ztypes.declid
@@ -7920,8 +7921,9 @@ asDeclaresMemberId: function {
     return result
 }
 
-# whether an as-block opts a member OUT with `null`, which is how a type
-# declines a member its family would otherwise synthesise
+# memberNullOptOut -- true when a type's `as {}` block defines `member` as
+# `null`, the language's way of striking a compiler-provided member off a type:
+# how a type declines a member its family would otherwise synthesise.
 memberNullOptOut: function {
     # the declarations an opt-out's `null` is looked up in
     st: zenv.ZSymbolTable.view
@@ -7948,10 +7950,6 @@ memberNullOptOut: function {
     return result
 }
 
-# eqNullOptOut -- true when a type's `as {}` block opts out of equality by
-# declaring `==: null` or `!=: null` (mirrors the `create: null` opt-out): the
-# record / variant synthetic `==` / `!=` is then suppressed, so a comparison on
-# the type resolves no method and is a hard error.
 # refuseValtypeCopy -- a value type's `.copy` is the compiler's byte copy: a
 # valtype holds no reftype, so copying its bytes copies the whole value, and
 # the copy can be neither written in the `as` block nor struck off with `copy:
@@ -7983,8 +7981,10 @@ refuseValtypeCopy: function {
     }
 }
 
-# memberNullOptOut -- true when a type's `as {}` block defines `member` as
-# `null`, the language's way of striking a compiler-provided member off a type.
+# eqNullOptOut -- true when a type's `as {}` block opts out of equality by
+# declaring `==: null` or `!=: null` (mirrors the `create: null` opt-out): the
+# record / variant synthetic `==` / `!=` is then suppressed, so a comparison on
+# the type resolves no method and is a hard error.
 eqNullOptOut: function {
     # the declarations the `==: null` operand is looked up in
     st: zenv.ZSymbolTable.view
@@ -14893,15 +14893,6 @@ registerEmptyType: function {
     return nid
 }
 
-# descendNamed -- reference-level DFS entry: resolve a named top-level def's
-# body by descending into its AST node (located via its Decl's node) so a
-# reference's dependency resolves before the
-# referrer continues. Returns the canonical forward-decl id; a grey
-# (in-progress) or already-resolved target returns it without re-descending.
-# Returns 0 when the name is not an indexed top-level def, so the caller keeps
-# its shell behavior.
-
-
 # defWasResolved -- has this definition's body already been resolved? The mark
 # lives on its Decl, so a definition with no Decl of its own has not been.
 defWasResolved: function {
@@ -15113,7 +15104,7 @@ declDefTypetype: function {
     return (optionval.none ztypes.ztypetype)
 }
 
-# reexportTargetIdsOf -- reexportTargetOf as an id pair (root id, member id);
+# reexportTargetIdsOf -- the (unit, member) pair a re-export Decl names, as ids;
 # an absent pair when the Decl is absent or not a re-export.
 reexportTargetIdsOf: function {
     st: zenv.ZSymbolTable.view
@@ -21772,7 +21763,7 @@ cloneMethodInto: function {
         childTypeId: fid5
     )
     # The clone answers call-site questions the same way the template does:
-    # isNative gates arg validation, thisParamName drives receiver auto-fill
+    # isNative gates arg validation, the recorded receiver name drives receiver auto-fill
     # and the no-paren auto-call, funcReturnsBorrow carries the `.borrow`
     # return marker, and funcReturnNode backs methodReturnOf for concrete
     # (non-generic) returns.
@@ -26190,7 +26181,7 @@ mintCollectionChildren: function {
     isSized: isSizedTemplate :ast :st tid: templateId
     # str/array are PERMANENT materializer arms: sized RECORDs are keyed by
     # a numeric value parameter that rides the trie as a literal VALUE key
-    # (genericArgIsValue marks the ordinal); it never enters idSubs, so
+    # (a `valueArg` genericarg marks the ordinal); it never enters idSubs, so
     # produce+clone has nothing to substitute. Their templates resolve from source (record
     # attachMethods runs regardless of genericity) and copy their children
     # at mint time; the branches below REPLACE the value-dependent members
@@ -28064,11 +28055,6 @@ isOptionViewValOrigin: function {
     }
 }
 
-# methodHasNoUserArgs -- true when a method type has no user-visible parameters
-# beyond the implicit receiver: no children at all (synthesized collection
-# methods), or a single child that IS the receiver -- `this`, or the long-form
-# receiver recorded in thisParamName (`stringView: function {t: this.view}`).
-
 # createDottedBaseId -- the base atom's node id when a dotted path's child is
 # `create` (explicit construction: `T.create` is bare-name construction).
 createDottedBaseId: function {ast: Ast.view n: astnode.view} out optionval zast.nodeid is {
@@ -29258,7 +29244,11 @@ methodHasThisReceiver: function {st: zenv.ZSymbolTable.view mid: ztypes.tid} out
     return (st.reg.hasThisParamName tid: mid)
 }
 
-# true when method `mid` takes no user arguments (only the receiver).
+# methodHasNoUserArgs -- true when a method type has no user-visible parameters
+# beyond the implicit receiver: no children at all (synthesized collection
+# methods), or a single child that IS the receiver -- `this`, or the long-form
+# receiver the registry records (thisParamNameIs: `stringView: function {t:
+# this.view}`).
 methodHasNoUserArgs: function {
     st: zenv.ZSymbolTable.view
     mid: ztypes.tid
@@ -34506,9 +34496,6 @@ truthyCondArmOf: function {st: zenv.ZSymbolTable.view nid: zast.nodeid} out zast
     return ((st.typing.truthyCondArm.get key: nid).or d: zast.nameid)
 }
 
-# predFactOf -- recognize an if-condition operation as an arm predicate:
-# bare `x.a`, trailing-bool `x.a.true` / `x.a.false`, or the comparison
-# `(x.a) == true` / `(x.a) == false`. none otherwise.
 # equalityArmFact -- the arm fact `== true` / `== false` states, in EITHER
 # spelling. binRefAt answers for the infix call and for the binop alike, so the
 # comparison is read through one seam and this walk never learns which way it
@@ -39741,7 +39728,7 @@ ctorSelfRecursionAt: function {
 
 # positionalParamNameId -- the funcId's parameter name at `idx` (declaration
 # order), zero when absent. Positional call args map to it. With
-# skipRecv, receiver rows (`this` or the fn's thisParamName) are excluded
+# skipRecv, receiver rows (`this` or the fn's recorded receiver name) are excluded
 # from the count: a dotted method call supplies the receiver implicitly, so
 # its positional args map onto the remaining params.
 positionalParamNameId: function {
@@ -41519,8 +41506,6 @@ checkWriteLock: function {
     )
 }
 
-# isLiteralTypeId -- a literal-typed value: one of the registry's two reserved
-# literal rows. Bare numeric literals and data-block elements wear them.
 # isOperatorName -- an operator is spelled in PUNCTUATION, so the name itself
 # says which members these are. A word-named member is never one, whatever it
 # does: `bool.or` is an operator by its natives.tbl row, not by its spelling.
@@ -42796,8 +42781,8 @@ holdStandIn: function {ast: Ast st: zenv.ZSymbolTable su: ztyping.specstandin} i
     if su.value != su.spec then st.typing.standInOf.set key: su.valueNid value: su
 }
 
-# checkBareGenericReturns -- a function's declared return that names a generic
-# type without its arguments (refuseBareGenericType). The typeref pass alone
+# checkBareGenericReturns -- refuse a function's declared return that names a
+# generic type without its arguments. The typeref pass alone
 # stamps a return, and it stamps an application's head the same way, so the
 # return node is asked here itself: a name, marked or not, never an application;
 # `this` and `type` name the type being declared.
@@ -49479,7 +49464,7 @@ checkGenericCall: function {
         :subs
     )
     healGenericReturn :st :unitDecl :ast :funcId :mid :gparams :subs
-    # The arg walk above (checkValue per value arg) can leave a pending
+    # The arg walk above (bindCallParams) can leave a pending
     # borrow from a projection argument (s.stringView): drain it -- the
     # call's result is an OWNED value, so a binding of it must not borrow
     # the argument's source. A view-returning generic native would need to
@@ -54123,19 +54108,6 @@ walkOwedNamespaceBodies: function {st: zenv.ZSymbolTable scope: ztypes.declid as
     }
 }
 
-# walkLateResolvedOwners -- complete the demand walk. A type can resolve AFTER
-# its unit's walk has already run -- zvfs.ZVfs and DentryTable do it in astdemo,
-# and a typedef constant does it in its own unit -- and nothing re-walks that
-# unit, so its methods would be emitted with nothing stamped (E0500, "unhandled
-# binding type"). The walk is what stamps a body, so the completion pass is not
-# optional; it is the price of walking a unit once rather than to a fixpoint.
-# A type NOTHING reached is not checked here: a definition the program cannot
-# reach is not the compiler's to spend time on, and reporting on it is a LINT
-# concern. So the keep test is `resolved` alone.
-# the target unit's own owners is gone, which is the whole of the dead-code job.
-#
-# Template owners are skipped: their bodies check per instantiation.
-# Deterministic: unit load order, declaration order.
 # walkLateOwnerMember -- one member the demand walk never reached. It is walked
 # only when it is an owner with method bodies AND this compile has a reason to
 # care about its dead code; the walked mark is set last, because it is what
@@ -54207,8 +54179,17 @@ walkLateOwnersInUnit: function {
     }
 }
 
-# walkLateResolvedOwners -- the owners a demand-driven walk left unwalked, unit
-# by unit.
+# walkLateResolvedOwners -- complete the demand walk: the owners it left
+# unwalked, unit by unit. A type can resolve AFTER its unit's walk has already
+# run -- zvfs.ZVfs and DentryTable do it in astdemo, and a typedef constant does
+# it in its own unit -- and nothing re-walks that unit, so its methods would be
+# emitted with nothing stamped (E0500, "unhandled binding type"). The walk is
+# what stamps a body, so the completion pass is not optional; it is the price of
+# walking a unit once rather than to a fixpoint. A type NOTHING reached is not
+# checked here: a definition the program cannot reach is not the compiler's to
+# spend time on, and reporting on it is a LINT concern. So the keep test is
+# `resolved` alone. Template owners are skipped: their bodies check per
+# instantiation. Deterministic: unit load order, declaration order.
 walkLateResolvedOwners: function {st: zenv.ZSymbolTable scope: ztypes.declid ast: Ast} is {
     swN: ast.units.length
     swI: u64
@@ -62496,7 +62477,7 @@ declLinkTemplateMethod: function {
 
 # declMonoType -- give a monomorphisation its own type declaration, cloned
 # from its template's, so its members carry the instantiated types rather than
-# resolving back through genericOrigin to the template's.
+# resolving back through genericOriginOf to the template's.
 declMonoType: function {
     st: zenv.ZSymbolTable
     monoTid: ztypes.tid
@@ -63352,7 +63333,7 @@ resolveUnitChild: function {
 
 # --- id-keyed resolution twins: same shape as the text resolvers above, but
 # the child name arrives as an already-interned Ast.names pool id, so each
-# probe is a childOfId (no per-stage StringPool.find). The composed-key miss
+# probe is a declChildOfId (no per-stage StringPool.find). The composed-key miss
 # path materialises the name text once via poolTextCopy (rare). ---
 
 # walkLookupTyperefById -- walkLookupTyperef for a caller holding the base
@@ -63837,8 +63818,8 @@ declMemberIsPrivate: function {
     po: st.typing.decls.get i: pn
     od = po.parent
     md: st.typing.declFindChild parentDeclId: od :nameId
-    # not private if `nameId` is not a declared member (isChildPrivate is false
-    # for a missing member edge), nor the publicNs block pseudo-member itself
+    # not private if `nameId` is not a declared member, nor the publicNs block
+    # pseudo-member itself
     if md.isZero then return false
     if md == pn then return false
     fcP: st.typing.declFindChild parentDeclId: pn :nameId
