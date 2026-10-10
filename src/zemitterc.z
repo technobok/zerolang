@@ -3070,24 +3070,33 @@ dottedTagReadTid: function {symtab: zenv.ZSymbolTable.view nid: zast.nodeid} out
     return ((symtab.typing.dpTagRead.get key: nid).or d: ztypes.tid.zero)
 }
 
-# dataBlockTid -- the DATA type a data-block reference resolved to: a bare
-# name's by the refDecl stamp on it, the reference's own declaration in
-# whichever unit wrote it, and any other shape (`inl.primes`, a block another
-# unit or a nested unit declares) by the type stamped on the node. 0 when the
-# node names no block.
+# dataBlockTid -- the DATA type a data-block reference resolved to: the type
+# stamped on the node -- any shape (`inl.primes`, a block another unit or a
+# nested unit declares), and in a generic unit instance's walk the instance's
+# own copy -- else, for a bare name restamped with the block's value type, its
+# refDecl's: the reference's own declaration in whichever unit wrote it, which in
+# an instance's function is the instance's copy of it. 0 when the node names no
+# block.
 dataBlockTid: function {symtab: zenv.ZSymbolTable.view nid: zast.nodeid} out ztypes.tid is {
     if nid.isZero then return ztypes.tid.zero
-    t: ztypes.tid
+    t: stampIdOf :symtab :nid
+    if (symtab.reg.typetypeOf typeId: t) == ztypes.ztypetype.dataType then return t
     rd: (symtab.typing.refDecl.get key: nid).or d: ztypes.declid
-    if rd.isZero.not then {
-        d: symtab.typing.decls.get i: rd
-        t = d.typeId
-    } else {
-        t = stampIdOf :symtab :nid
-    }
-    if t.isZero then return ztypes.tid.zero
-    if (symtab.reg.typetypeOf typeId: t) != ztypes.ztypetype.dataType then return ztypes.tid.zero
-    return t
+    if rd.isZero then return ztypes.tid.zero
+    dt: (symtab.typing.decls.get i: rd).typeId
+    if (symtab.reg.typetypeOf typeId: dt) != ztypes.ztypetype.dataType then return ztypes.tid.zero
+    # read by a generic unit instance's function, the declaration is the
+    # template's block and the instance's own copy is the block read
+    em: symtab.typing.emitMono
+    if em.isZero then return dt
+    cp: ((symtab.typing.declChildOfId
+        parentTypeId: em
+        nameId: (symtab.typing.decls.get i: rd).name
+    ).or
+        d: ztypes.tid.zero
+    )
+    if cp.isZero.not when (symtab.reg.genericOriginOf tid: cp) == dt then return cp
+    return dt
 }
 
 # matchDiverges -- true when a match node is stamped `never` (the typechecker's
@@ -15100,6 +15109,7 @@ dataValueText: function {
     nid: zast.nodeid
 } out String is {
     dt: dataBlockTid :symtab :nid
+
     if dt.isZero then return ""
     vt: symtab.reg.dataValueTypeOf tid: dt
     if vt.isZero then return ""
@@ -30436,14 +30446,29 @@ fillDataElems: function {program: Ast.view symtab: zenv.ZSymbolTable.view ctx: C
             uId: program.units.get i: uIdx9a
             uIdx9a = uIdx9a + 1
             opId: zast.nodeid
+            uNm: zast.nameid
             u: program.nodes.get i: uId
-            if u.namedoperation then opId = u.operation
+            if u.namedoperation then {
+                opId = u.operation
+                uNm = u.name
+            }
             if opId.isZero.not then {
                 (fillDataElemsIn
                     :symtab
                     :ctx
                     ast: program
                     mainOpId: opId
+                )
+                # a generic file unit's instances own copies of its blocks
+                if (isGenericTemplateUnitOp ast: program :opId) then (fillTemplateDataElems
+                    :symtab
+                    :ctx
+                    ast: program
+                    bodyIds: (zast.unitBodyIdsAt ast: program unitId: opId)
+                    tplId: (ztypecheck.declTypeIdOf
+                        st: symtab
+                        declId: (ztypecheck.unitDeclOfName st: symtab nameId: uNm)
+                    )
                 )
             }
         }
@@ -30478,6 +30503,14 @@ fillDataElemsIn: function {
                 :ast
                 mainOpId: bmNode.operation
             )
+            # and a generic unit's instances own copies of its blocks
+            if (isGenericTemplateUnitOp :ast opId: bmNode.operation) then (fillTemplateDataElems
+                :symtab
+                :ctx
+                :ast
+                bodyIds: (zast.unitBodyIdsAt :ast unitId: bmNode.operation)
+                tplId: (nestedTemplateTid :symtab opId: bmNode.operation)
+            )
         }
     }
 }
@@ -30489,10 +30522,21 @@ fillOneDataElem: function {
     ctx: Ctx
     op: astnode.view
 } is {
+    fillDataElemFor :ast :symtab :ctx :op dtid: (stampIdOf :symtab nid: (zast.nodeIdOf n: op))
+}
+
+# fillDataElemFor -- populate the element table of data block `op` as the data
+# type `dtid`: the block's own, or a generic unit instance's copy of it.
+fillDataElemFor: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    op: astnode.view
+    dtid: ztypes.tid
+} is {
     match (
         op
     ) case datablock then {
-        dtid: stampIdOf :symtab nid: op.nodeid
         ctx.dataElems.add item: dtid
         idx: u64
         hasLen: false
@@ -31112,6 +31156,97 @@ emitUnitMonoMembers: function {
                     :buf
                 )
             }
+        }
+    }
+}
+
+# templateMonos -- the instances of the generic unit template `tplId`, in the
+# order the registry minted them.
+templateMonos: function {
+    symtab: zenv.ZSymbolTable.view tplId: ztypes.tid
+} out ListVal ztypes.tid is {
+    r: ListVal ztypes.tid
+    if tplId.isZero then return r
+    last: symtab.reg.nextTid
+    t: ztypes.tid
+    for t < last loop {
+        if (symtab.reg.typetypeOf typeId: t) == ztypes.ztypetype.unitType when (
+            (originTidOf :symtab tid: t) == tplId
+        ) then r.append t
+        t = t.next
+    }
+    return r
+}
+
+# fillTemplateDataElems -- the element tables of every instance of the generic
+# unit template `tplId`, whose body is `bodyIds`.
+fillTemplateDataElems: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    ast: Ast.view
+    bodyIds: zast.kidspan
+    tplId: ztypes.tid
+} is {
+    for each m: (templateMonos :symtab :tplId) loop {
+        fillUnitMonoDataElems :symtab :ctx :ast :bodyIds monoId: m
+    }
+}
+
+# fillUnitMonoDataElems -- the element tables of the data blocks a generic unit's
+# instance `monoId` owns: its copies of the blocks in the template's body.
+fillUnitMonoDataElems: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    ast: Ast.view
+    bodyIds: zast.kidspan
+    monoId: ztypes.tid
+} is {
+    di: u64
+    for di < bodyIds.count loop {
+        bm: ast.nodes.get i: (zast.kidAt kids: ast.kids span: bodyIds i: di)
+        di = di + 1
+        if bm.namedoperation.not then continue
+        cp: (symtab.typing.declChildOfId parentTypeId: monoId nameId: bm.name).or d: ztypes.tid.zero
+        if cp.isZero.not when (symtab.reg.typetypeOf typeId: cp) == ztypes.ztypetype.dataType then {
+            fillDataElemFor :ast :symtab :ctx op: (ast.nodes.get i: bm.operation) dtid: cp
+        }
+    }
+}
+
+# emitTemplateDataBlocks -- the data blocks of every instance of the generic unit
+# template `tplId`, whose body is `bodyIds`: the template's own are never
+# written.
+emitTemplateDataBlocks: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    bodyIds: zast.kidspan
+    tplId: ztypes.tid
+    buf: String.borrow
+} is {
+    for each m: (templateMonos :symtab :tplId) loop {
+        emitUnitMonoDataBlocks :ast :symtab :ctx :bodyIds monoId: m :buf
+    }
+}
+
+# emitUnitMonoDataBlocks -- the static arrays of the data blocks a generic unit's
+# instance `monoId` owns, as emitUnitDataBlocks writes a unit's own.
+emitUnitMonoDataBlocks: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    bodyIds: zast.kidspan
+    monoId: ztypes.tid
+    buf: String.borrow
+} is {
+    di: u64
+    for di < bodyIds.count loop {
+        bm: ast.nodes.get i: (zast.kidAt kids: ast.kids span: bodyIds i: di)
+        di = di + 1
+        if bm.namedoperation.not then continue
+        cp: (symtab.typing.declChildOfId parentTypeId: monoId nameId: bm.name).or d: ztypes.tid.zero
+        if cp.isZero.not when (symtab.reg.typetypeOf typeId: cp) == ztypes.ztypetype.dataType then {
+            emitDataBlockFor :symtab :ctx op: (ast.nodes.get i: bm.operation) ridtid: cp :buf
         }
     }
 }
@@ -40853,6 +40988,15 @@ emitRecordDefsIn: function {
         :phase
         :buf
     )
+    # its instances' data blocks are written with the other data blocks
+    if phase == 1 when isTpl then (emitTemplateDataBlocks
+        :ast
+        :symtab
+        :ctx
+        :bodyIds
+        tplId: (ztypecheck.declTypeIdOf st: symtab declId: ctx.mainUnitId)
+        :buf
+    )
     # its instances' functions are declared with the other forward
     # declarations
     if phase == 2 when isTpl then {
@@ -40910,8 +41054,19 @@ emitNestedRecordDefs: function {
         nm: ast.nodes.get i: nmId
         if nm.namedoperation.not then continue
         nOp: nm.operation
+        if (isGenericTemplateUnitOp :ast opId: nOp) then {
+            # its instances' data blocks, with the other data blocks
+            if phase == 1 then (emitTemplateDataBlocks
+                :ast
+                :symtab
+                :ctx
+                bodyIds: (zast.unitBodyIdsAt :ast unitId: nOp)
+                tplId: (nestedTemplateTid :symtab opId: nOp)
+                :buf
+            )
+            continue
+        }
         if (zast.unitOpDeclaresUnit :ast opId: nOp).not then continue
-        if (isGenericTemplateUnitOp :ast opId: nOp) then continue
         nsTid: unitMemberTid :symtab :ctx :ownerTid nameId: nm.name
         if nsTid.isZero then continue
         sns: ctx.nsTid
@@ -40953,10 +41108,21 @@ emitDataBlock: function {
     op: astnode.view
     buf: String.borrow
 } is {
+    emitDataBlockFor :symtab :ctx :op ridtid: (stampIdOf :symtab nid: (zast.nodeIdOf n: op)) :buf
+}
+
+# emitDataBlockFor -- emitDataBlock as the data type `ridtid`: the block's own,
+# or a generic unit instance's copy of it, whose elements are its own.
+emitDataBlockFor: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    op: astnode.view
+    ridtid: ztypes.tid
+    buf: String.borrow
+} is {
     match (
         op
     ) case datablock then {
-        ridtid: stampIdOf :symtab nid: op.nodeid
         ri: false
         runtimeIndexed9v: symtab.reg.isRuntimeIndexedOf tid: ridtid
         ri = runtimeIndexed9v

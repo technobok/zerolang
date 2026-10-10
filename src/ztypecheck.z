@@ -2693,6 +2693,22 @@ declIsUnitTemplate: function {
     return (declIsGenericFileUnit :st :ast :declId)
 }
 
+# scopeInUnitTemplate -- `scope` is a generic unit template or lies inside one:
+# what is resolved there is resolved for the template, and each instance has its
+# own.
+scopeInUnitTemplate: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    scope: ztypes.declid
+} out bool is {
+    cur: scope
+    for cur.isZero.not and (cur != st.typing.programRoot) loop {
+        if (declIsUnitTemplate :st :ast declId: cur) then return true
+        cur = declParentIdOf :st declId: cur
+    }
+    return false
+}
+
 # declIsGenericFileUnit -- the declaration is a FILE unit (a child of the program
 # root) whose body declares a generic parameter: a template like a nested
 # `unit as { ... }`, with its parameters on its root declaration.
@@ -9448,6 +9464,13 @@ dataElemValue: function {
         renderConstFail :st f: got
         return ztypes.noConst
     }
+    # a generic unit's block, resolved for the template, has no value for an
+    # element over a numeric parameter (`n * n`): each instance's copy evaluates
+    # it, and refuses it there when it has none
+    if cv.kind.none when st.typing.constMono.isZero when (scopeInUnitTemplate :st :ast :scope
+    ) then {
+        return ztypes.noConst
+    }
     msg: "a data element must be a compile-time constant".string
     hint: "an element is a literal, a unit constant, or an expression over them".string
     if cv.kind.none.not then {
@@ -10029,13 +10052,51 @@ resolveData: function {
         name: defName
         typetype: ztypes.ztypetype.dataType
     )
+    noSubs: IdMapV zast.nameid v: ztypes.tid
+    return (resolveDataInto
+        :ast
+        :st
+        :unitDecl
+        :scope
+        :defName
+        :dnode
+        :did
+        monoId: ztypes.tid
+        tplId: ztypes.tid
+        subs: noSubs
+    )
+}
+
+# resolveDataInto -- resolveData's work over the data type `did`: the block's
+# own type, or a generic unit instance's copy of it (mintUnitDataInstances). A
+# copy evaluates the template's elements for the instance `monoId` -- a numeric
+# parameter reads its value -- and reads the `out` type as the instance sees it
+# (unitMonoTypeOf), so each element is checked against the instance's own
+# element type.
+resolveDataInto: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    scope: ztypes.declid
+    defName: StringView
+    dnode: dataref
+    did: ztypes.tid
+    # the instance whose copy `did` is, and its template; 0 for the block itself
+    monoId: ztypes.tid
+    tplId: ztypes.tid
+    # the instance's substitutions (buildUnitMono's)
+    subs: (IdMapV zast.nameid v: ztypes.tid).view
+} out ztypes.tid is {
     st.reg.setValtype typeId: did value: false
     litId: st.reg.literalIntTid
     # the block's elements are evaluating: a read of the block from one of
     # them is a cycle (constDataMember)
     lk: st.typing.memberConstKey parentTypeId: did nameId: zast.wellKnown.slot.wkLength
     st.typing.constEvalState.set key: lk value: 1.u8
+    prevMono: st.typing.constMono
+    if monoId.isZero.not then st.typing.constMono = monoId
     vals: dataElemValues :ast :st :unitDecl :scope :dnode
+    st.typing.constMono = prevMono
     st.typing.constEvalState.set key: lk value: 2.u8
     # whether `out` names the block's VALUE type (`out intdata u8`) rather than
     # its element type (`out u8`, read until every block says its value type)
@@ -10057,9 +10118,13 @@ resolveData: function {
         # `out T` is a type written in the block's scope and resolved as any
         # written type is: a user type spelled like a builtin is the user's
         ot = resolveTyperefShell :st :scope :ast :unitDecl nid: dnode.outType thisName: defName
-        # recorded as any signature's type is, so a name that resolves to
-        # nothing is reported as an unknown type where it is written
-        recordTyperef :st :scope :ast :unitDecl thisName: defName nid: dnode.outType
+        if monoId.isZero then {
+            # recorded as any signature's type is, so a name that resolves to
+            # nothing is reported as an unknown type where it is written
+            recordTyperef :st :scope :ast :unitDecl thisName: defName nid: dnode.outType
+        } else {
+            ot = unitMonoTypeOf :st :ast rf: scope :tplId :monoId :subs tid: ot
+        }
         vparts = dataOutParts :ast :st :scope :unitDecl valueTid: ot outId: dnode.outType
     }
     # a typed value type names the element type the elements' own tags are
@@ -10078,6 +10143,12 @@ resolveData: function {
         valueOut = vparts.elemLiteral.not
         elemTid = vparts.elem
         etName = st.reg.nameOf tid: elemTid
+        # a generic unit's block over its parameter (`out intdata t`) is a value
+        # of the type its `out` names, which no element type selects: each
+        # instance's copy is a value of its own
+        if (st.reg.typetypeOf typeId: elemTid) == ztypes.ztypetype.genericParam then {
+            st.reg.setDataValueType typeId: did value: ot
+        }
     } else {
         # an element's suffix (`0.u8`) or the untyped default names the
         # prelude's type whatever the unit declares, as a literal's suffix
@@ -19705,6 +19776,68 @@ mintUnitAliasInstances: function {
     }
 }
 
+# mintUnitDataInstances -- each data block a generic unit declares, as the
+# instance's own: a data type of the instance's whose generic origin is the
+# template's block, so the instance's walk reads it in the block's place
+# (bindUnitNestedTypes) and a read through the instance finds it as a member.
+# Its elements are the template's, evaluated and range-checked for the instance
+# (resolveDataInto): an element the instance cannot hold is an error that names
+# the instance.
+mintUnitDataInstances: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    rf: ztypes.declid
+    tmplUnitName: ztypes.declid
+    monoId: ztypes.tid
+    tplId: ztypes.tid
+    bodyIds: zast.kidspan
+    allSubs: (IdMapV zast.nameid v: ztypes.tid).view
+} is {
+    vi: u64
+    for vi < bodyIds.count loop {
+        nm: argRefAt :ast nid: (zast.kidAt kids: ast.kids span: bodyIds i: vi)
+        vi = vi + 1
+        if nm.nid.isZero or (ast.nodes.get i: nm.operation).datablock.not then continue
+        td: st.typing.declFindChild parentDeclId: rf nameId: nm.name
+        if td.isZero then continue
+        if (declTypeIdOf :st declId: td).isZero then (resolveDemandedDecl
+            :st
+            scope: rf
+            :ast
+            declId: td
+        )
+        blk: declTypeIdOf :st declId: td
+        if blk.isZero then continue
+        dn: zast.nameTextCopy :ast ref: nm.name
+        did: (st.reg.newType
+            name: dn.stringView
+            typetype: ztypes.ztypetype.dataType
+            ownerTid: monoId
+        )
+        st.reg.setGenericOrigin typeId: did value: blk
+        from: st.typing.errors.length
+        (resolveDataInto
+            :ast
+            :st
+            unitDecl: tmplUnitName
+            scope: rf
+            defName: dn.stringView
+            dnode: (dataRefAt :ast nid: nm.operation)
+            :did
+            :monoId
+            :tplId
+            subs: allSubs
+        )
+        noteInstanceErrors :st :ast mono: monoId :from
+        (st.typing.declSynthMember
+            parentTypeId: monoId
+            nameId: nm.name
+            kind: ztyping.declkind.dataDecl
+        )
+        st.typing.setMemberType parentTypeId: monoId nameId: nm.name childTypeId: did
+    }
+}
+
 # retargetNestedSignatures -- a copy's methods, cloned before its siblings
 # existed, name a sibling type by its template: they name this unit instance's
 # copy of it instead.
@@ -19831,6 +19964,7 @@ buildUnitMono: function {
     {
         mintUnitNestedInstances :st :ast :rf :tmplUnitName :monoId :bodyIds :allSubs
         mintUnitAliasInstances :st :ast :rf :monoId :tplId :bodyIds :allSubs
+        mintUnitDataInstances :st :ast :rf :tmplUnitName :monoId :tplId :bodyIds :allSubs
         vx179: u64
         for vx179 < bodyIds.count loop {
             fm: zast.kidAt kids: ast.kids span: bodyIds i: vx179
@@ -29284,6 +29418,10 @@ markDataRuntimeIndexed: function {st: zenv.ZSymbolTable tid: ztypes.tid} is {
     if tid >= st.reg.nextTid then return
     to: st.reg.typeById.getMut i: tid
     to.runtimeIndexed = true
+    to.drop
+    # read by an instance's walk, the block is the instance's own copy
+    it: monoSubstTid :st :tid
+    if it != tid then markDataRuntimeIndexed :st tid: it
 }
 
 # baseIsPrivateCapable -- may a private member be read through this base? True
@@ -30506,6 +30644,15 @@ checkDataBlockMember: function {
         if isArray then markDataRuntimeIndexed :st tid: bt
         if isArray.not when (st.typing.declChildOfId parentTypeId: bt nameId: cnId).none then {
             dv: dataValueTypeFor :st :ast :unitDecl dataTid: bt
+            # a generic unit's block over its parameter is a value of a partial,
+            # whose members its template answers while the template's body is
+            # checked; each instance reads its own copy's
+            if (st.reg.isPartialOf tid: dv) then {
+                return (callleg
+                    handled: true
+                    tid: (checkDottedOn :st :unitDecl :ast :dp bt: dv :coerce)
+                )
+            }
             forceMemberOf :st :ast parentTypeId: dv nameId: cnId
             vmo: st.typing.declChildOfId parentTypeId: dv nameId: cnId
             match (
