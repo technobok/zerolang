@@ -45179,32 +45179,26 @@ walkOwnerMono: function {st: zenv.ZSymbolTable.view} out ztypes.tid is {
 }
 
 # monoMemberOf -- inside a unit mono's instance walk (walkOwnerMono), the mono's
-# own member for a bare callee that resolved to the TEMPLATE's method of that
-# name; any other id passes through unchanged.
+# own member -- or an owning mono's -- for a bare callee that resolved to the
+# TEMPLATE's method of that name; any other id passes through unchanged.
 monoMemberOf: function {
     st: zenv.ZSymbolTable.view
     templateFnTid: ztypes.tid
     nameId: zast.nameid
 } out ztypes.tid is {
+    # the walked instance, then each instance owning it: a nested unit's
+    # function calls its enclosing unit's functions as that instance's
     owner: walkOwnerMono :st
-    org: st.reg.genericOriginOf tid: owner
-    if org.isZero then return templateFnTid
-    tm: st.typing.declChildOfId parentTypeId: org :nameId
-    match (
-        tm
-    ) case some then {
-        if tm != templateFnTid then return templateFnTid
-    } case none then {
-        return templateFnTid
+    for owner.isZero.not loop {
+        org: st.reg.genericOriginOf tid: owner
+        if org.isZero then return templateFnTid
+        tm: (st.typing.declChildOfId parentTypeId: org :nameId).or d: ztypes.tid.zero
+        if tm == templateFnTid then {
+            return ((st.typing.declChildOfId parentTypeId: owner :nameId).or d: templateFnTid)
+        }
+        owner = st.reg.ownerTidOf tid: owner
     }
-    mm: st.typing.declChildOfId parentTypeId: owner :nameId
-    match (
-        mm
-    ) case some then {
-        return mm
-    } case none then {
-        return templateFnTid
-    }
+    return templateFnTid
 }
 
 # yieldIsInScope -- `yield` here names the binding a generator body's scope
@@ -48334,7 +48328,11 @@ bareCalleeKind: function {
             templateFnTid: funcId
             nameId: cnId
         )
-        markMemberUsed :st ownerTid: (walkOwnerMono :st) nameId: cnId
+        # used on the instance whose member it is: the walked one, or an
+        # instance owning it
+        usedOn: st.reg.ownerTidOf tid: funcId
+        if (st.reg.genericOriginOf tid: usedOn).isZero then usedOn = walkOwnerMono :st
+        markMemberUsed :st ownerTid: usedOn nameId: cnId
     }
     if funcId.isZero then {
         return (calleekind fid: funcId isUser: false isGen: false isCtor: false unknown: false)
@@ -58092,18 +58090,30 @@ constValueOfMemberAt: function {
 
 # activeConstMono -- the instantiation a constant of `ownerDecl` is evaluated
 # for: the owner's own type when that is an instantiation, else the one a read
-# is for (constMono) or the one being walked (curMonoStamp), when its template
-# is the owner. 0 when the constant is the template's alone.
+# is for (constMono) or the one being walked (curMonoStamp), or an instance
+# owning either, when its template is the owner. 0 when the constant is the
+# template's alone.
 activeConstMono: function {st: zenv.ZSymbolTable.view ownerDecl: ztypes.declid} out ztypes.tid is {
     own: declTypeIdOf :st declId: ownerDecl
     if own.isZero then return ztypes.tid
     if (st.reg.genericOriginOf tid: own).isZero.not then return own
     if (st.reg.genericParamCountOf tdecl: ownerDecl) == 0 then return ztypes.tid
-    if (monoOfTemplate :st mono: st.typing.constMono :ownerDecl) then {
-        return st.typing.constMono
+    cm: instanceOfTemplateFrom :st mono: st.typing.constMono :ownerDecl
+    if cm.isZero.not then return cm
+    return (instanceOfTemplateFrom :st mono: (walkOwnerMono :st) :ownerDecl)
+}
+
+# instanceOfTemplateFrom -- `mono` when it instantiates the template `ownerDecl`
+# declares, else the instance owning it that does: a nested unit's instance
+# reads its enclosing unit's constants as that unit's instance. 0 when none does.
+instanceOfTemplateFrom: function {
+    st: zenv.ZSymbolTable.view mono: ztypes.tid ownerDecl: ztypes.declid
+} out ztypes.tid is {
+    m: mono
+    for m.isZero.not loop {
+        if (monoOfTemplate :st mono: m :ownerDecl) then return m
+        m = st.reg.ownerTidOf tid: m
     }
-    wom: walkOwnerMono :st
-    if (monoOfTemplate :st mono: wom :ownerDecl) then return wom
     return ztypes.tid
 }
 

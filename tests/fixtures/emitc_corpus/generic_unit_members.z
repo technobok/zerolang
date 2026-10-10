@@ -9,7 +9,9 @@
 # nested `unit { ... }` is the instance's own instance of it, at any depth: its
 # signatures read the argument, its functions read the enclosing instance's
 # block and types, and it has blocks and types of its own, read inside and
-# through the instance (`wi.inner.same`, `s3.inner.Rec`).
+# through the instance (`wi.inner.same`, `s3.inner.Rec`). A nested unit calls
+# its enclosing unit's functions and reads its constants as that instance's,
+# and a type it declares shadows the enclosing unit's of the same name.
 wrap: unit as {
     t: anyval.generic
     primes: data { 2 3 5 7 }
@@ -78,6 +80,32 @@ s5: (sq n: 5)
 # twice -- an i64 through the instance's alias, in a parameter and a return
 twice: function {v: wi.elem} out wi.elem is { return v * 2 }
 
+shade: unit as {
+    t: anyval.generic
+    n: u64.generic
+    base: 10
+    scale: n * 3
+    pt: record { x: t }
+    outerPt: function {v: t} out pt is { return (pt x: v) }
+    dbl: function {v: t} out t is { return v + v }
+    inner: unit {
+        pt: record { y: t z: t }
+        mk: function {v: t} out pt is { return (pt y: v z: v) }
+        fromOuter: function {v: t} out t is { return (outerPt v: v).x }
+        readBase: function out i64 is { return base }
+        readScale: function out u64 is { return scale + n }
+        deep: unit {
+            viaOuter: function {v: t} out t is { return (dbl v: v) }
+        }
+    }
+    go: function {v: t} out t is {
+        p: inner.mk v: v
+        return p.y + p.z + (inner.fromOuter v: v) + (inner.deep.viaOuter v: v)
+    }
+}
+hi: (shade t: i64 n: 2)
+hf: (shade t: f64 n: 4)
+
 # xOf -- the instance's record, named through its alias
 xOf: function {p: wi.P} out i64 is { return p.x }
 
@@ -96,4 +124,6 @@ main: function is {
     print "\{wi.viaInner v: 5} \{wf.viaInner v: 1.25}"
     print "\{wi.inner.same v: 4} \{wf.inner.deep.twice v: 2.5} \{wi.inner.sq.length}"
     print "\{(wf.inner.mkp v: 0.5).x} \{aOf r: s3.inner.mk} \{s5.inner.mk.a} \{s5.inner.k}"
+    print "\{hi.go v: 2} \{hf.go v: 0.25} \{hi.inner.readBase} \{hi.inner.readScale} \{hf.inner.readScale}"
+    print "\{(hi.inner.mk v: 3).z} \{(hf.outerPt v: 1.5).x} \{hi.inner.deep.viaOuter v: 7}"
 }
