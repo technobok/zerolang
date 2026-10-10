@@ -3070,17 +3070,20 @@ dottedTagReadTid: function {symtab: zenv.ZSymbolTable.view nid: zast.nodeid} out
     return ((symtab.typing.dpTagRead.get key: nid).or d: ztypes.tid.zero)
 }
 
-# dataBlockTid -- the DATA type a data-block reference resolved to, read off
-# the refDecl stamp on the access base: the reference's own declaration, in
-# whichever unit wrote it.
+# dataBlockTid -- the DATA type a data-block reference resolved to: a bare
+# name's by the refDecl stamp on it, the reference's own declaration in
+# whichever unit wrote it, and any other shape (`inl.primes`, a block another
+# unit or a nested unit declares) by the type stamped on the node. 0 when the
+# node names no block.
 dataBlockTid: function {symtab: zenv.ZSymbolTable.view nid: zast.nodeid} out ztypes.tid is {
     if nid.isZero then return ztypes.tid.zero
-    rd: (symtab.typing.refDecl.get key: nid).or d: ztypes.declid
-    if rd.u64 == 0 then return ztypes.tid.zero
     t: ztypes.tid
-    {
+    rd: (symtab.typing.refDecl.get key: nid).or d: ztypes.declid
+    if rd.isZero.not then {
         d: symtab.typing.decls.get i: rd
         t = d.typeId
+    } else {
+        t = stampIdOf :symtab :nid
     }
     if t.isZero then return ztypes.tid.zero
     if (symtab.reg.typetypeOf typeId: t) != ztypes.ztypetype.dataType then return ztypes.tid.zero
@@ -6010,19 +6013,12 @@ emitDataIndexCall: function {
     call: zast.callrow.view
 } out String is {
     mnId: aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable)
-    # the block is the base's: a bare name (`primes`) by its reference, any
-    # other shape (`inl.primes`, a block a nested unit declares) by its stamp
+    # the block is the base's
     dtid: ztypes.tid
     {
         cn: ast.nodes.get i: call.callable
         if cn.dottedpath.not then return ""
-        dtid = dataBlockTid :symtab nid: (atomNodeId n: (ast.nodes.get i: cn.parent))
-        if dtid.isZero then {
-            bst: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: cn.parent))
-            if bst.isZero.not when (
-                (symtab.reg.typetypeOf typeId: bst) == ztypes.ztypetype.dataType
-            ) then dtid = bst
-        }
+        dtid = dataBlockTid :symtab nid: (interpPartNodeId n: (ast.nodes.get i: cn.parent))
     }
     if dtid.isZero then return ""
     isData: ctx.dataElems.has item: dtid
@@ -15341,14 +15337,11 @@ callBaseTemp: function {
     baseNid: zast.nodeid
 } out String is {
     if nstPtr then return ""
-    # a view is a stack struct its walks take by address too
-    if (stackCollectionTid :symtab :ctx tid: nlid).not when (isListViewOriginOf
-        :symtab
-        :ctx
-        tid: nlid
-    ).not then {
-        return ""
-    }
+    # a view -- a list's, a data block's -- is a stack struct its walks take by
+    # address too
+    isView: isListViewOriginOf :symtab :ctx tid: nlid
+    if (dataValueFamilyOf :symtab :ctx tid: nlid).isZero.not then isView = true
+    if (stackCollectionTid :symtab :ctx tid: nlid).not when isView.not then return ""
     if (svRecvAddressable recv: base) then return ""
     return (hoistForAddress
         :ast
@@ -16041,7 +16034,6 @@ fnptrSlotCallC: function {
 # own length, and the mono's walk over it. A block's name as the base is its
 # value, the view of its array. "" for any other read.
 dataValueMemberRead: function {
-    ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     baseNid: zast.nodeid
@@ -16053,7 +16045,7 @@ dataValueMemberRead: function {
     if (dataValueFamilyOf :symtab :ctx tid: bstamp).isZero then return ""
     isLen: mnId == zast.wellKnown.slot.wkLength
     if isLen.not when mnId != zast.wellKnown.slot.wkIterate then return ""
-    base: dataValueText :symtab :ctx nid: (atomNodeId n: (ast.nodes.get i: baseNid))
+    base: dataValueText :symtab :ctx nid: baseNid
     if base.length == 0 then base = bn2.string
     acc: "."
     if (isPtrVid :ctx vid: bn2v) then acc = "->"
@@ -16081,7 +16073,7 @@ emitResolvedMemberRead: function {
     # the read is the member's own function (a `.take` of it), not a call
     readIsRef: bool
 } out String is {
-    dvr: dataValueMemberRead :ast :symtab :ctx :baseNid :mnId :bn2 :bn2v :bstamp
+    dvr: dataValueMemberRead :symtab :ctx :baseNid :mnId :bn2 :bn2v :bstamp
     if dvr.length > 0 then return dvr
     mtt: symtab.reg.typetypeOf typeId: mco
     if mtt.isInterface then {
@@ -17005,6 +16997,9 @@ emitDottedUnitRead: function {
     # text, exactly as a bare reference to a constant of this unit does
     ucv: unitConstTextOf :ast :symtab :ctx :n
     if ucv.length > 0 then return ucv
+    # `unit.block` -- another unit's data block reads as its value
+    udv: dataValueText :symtab :ctx nid: n.nodeid
+    if udv.length > 0 then return udv
     # a stamped implicit zero-create on a unit-qualified type path
     # (`unit.Conf`) constructs like the bare-atom legs
     izd: symtab.typing.implicitCreate.get key: n.nodeid
