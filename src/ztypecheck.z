@@ -41050,8 +41050,9 @@ dottedMemberId: function {
 }
 
 # memberReadIsField -- the member `nameId` read off the node `parentNid` is a
-# field its owner stores: not a function, which a read calls, not an `as`
-# constant, and not a conformance label (`fr.Closer` converts the owner to the
+# field its owner stores, by its declaration: not a function, which a read
+# calls, nor a unit's constant or data block, which no instance stores, nor an
+# `as` constant, nor a conformance label (`fr.Closer` converts the owner to the
 # protocol; it reads no field).
 memberReadIsField: function {
     st: zenv.ZSymbolTable.view
@@ -41064,18 +41065,10 @@ memberReadIsField: function {
     if (zenv.isConformanceLabelOf ty: st.typing reg: st.reg tid: pt :nameId) then {
         return false
     }
-    mo: st.typing.declChildOfId parentTypeId: pt :nameId
-    match (
-        mo
-    ) case some then {
-        if (st.reg.typetypeOf typeId: mo) == ztypes.ztypetype.functionType then {
-            return false
-        }
-        md: st.typing.declMemberIdOf parentTypeId: pt :nameId
-        return (st.typing.isAsConstDecl declId: md).not
-    } case none then {
-        return false
-    }
+    md: st.typing.declMemberIdOf parentTypeId: pt :nameId
+    if md.isZero then return false
+    if (st.typing.decls.get i: md).kind.fieldDecl.not then return false
+    return (st.typing.isAsConstDecl declId: md).not
 }
 
 # isMarkedMove -- `n` ends in a move marker.
@@ -44476,8 +44469,8 @@ callableDottedResultAt: function {
     }
 }
 
-# returnedBareFieldName -- `return <base>.<field>` where the member is a
-# non-FUNCTION field whose type is a reftype, or generic and may instantiate to
+# returnedBareFieldName -- `return <base>.<field>` where the member is a field
+# (memberReadIsField) whose type is a reftype, or generic and may instantiate to
 # one: the bare read escapes a shallow copy of storage the owner still frees.
 # Returns the field name for the diagnostic; "" when the return shape is fine.
 returnedBareFieldName: function {
@@ -44501,6 +44494,7 @@ returnedBareFieldName: function {
             parentTypeId: bft
             nameId: bfcId
         )
+        if (memberReadIsField :st parentNid: dr.parent nameId: bfcId).not then return ""
         bfo: (st.typing.declChildOfId
             parentTypeId: bft
             nameId: bfcId
@@ -44508,7 +44502,6 @@ returnedBareFieldName: function {
         match (
             bfo
         ) case some then {
-            if (st.reg.typetypeOf typeId: bfo) == ztypes.ztypetype.functionType then return ""
             if (st.reg.typetypeOf typeId: bfo) == ztypes.ztypetype.genericParam then {
                 if (genericFieldMayBeReftype
                     :ast
