@@ -241,7 +241,59 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-10-02 | 059ef68f | [recovery P6: pin-only blocks flattened, dead code out](#r-059ef68f) | 0.71s | -- | 121MB / -- | 92 / 335 / 284 (total 711) | 2,094,311 | 346MB | -- | 152,805 |
 | 2026-10-02 | eeb543f6 | [recovery P7: four language changes, two lints; the arc's end](#r-eeb543f6) | 0.74s | -- | 120MB / -- | 81 / 354 / 296 (total 731) | 2,086,585 | 343MB | -- | 153,396 |
 | 2026-10-02 | f2716a9d | [P7.3: a list takes an index type; the id tables migrate](#r-f2716a9d) | 0.67s | -- | 121MB / -- | 87 / 325 / 259 (total 671) | 2,074,323 | 343MB | -- | 153,990 |
+| 2026-10-10 | 68f77871 | [re-baseline after 408 commits: one quadratic, the rest is input](#r-68f77871) | 0.79s | 0.86s | 152MB / 118MB | 102 / 437 / 299 (total 848) | 2,153,863 | 447MB | 38.4s | 170,186 |
 
+
+<a id="r-68f77871"></a>
+**Re-baseline after 408 commits: one quadratic, the rest is input**
+(`f2716a9d` -> `68f77871`: the math arc, project.z and the `z` unit, ids not
+names, nearest declarations, data blocks as values, generic units, generators
+and members). Allocations 2,074,323 -> 2,153,863 (+3.8%), instructions 7,355M
+-> 9,009M (+22%), fixed input 2,555M -> 4,003M (+57%), peak RSS 121MB -> 152MB.
+Wall 0.79s, load average near 1.3; `make test` 38.4s, green.
+
+Method: every sampled commit's own seed compiles its own `src`, built as
+`out/zc-perf` is (gcc -O1 + mimalloc); instructions are `perf stat` user
+instructions pinned to cpu0, allocations memcheck totals. The script and the
+series live outside the repo (`claude/work/zerolang/perf/2026-10-10/`:
+`bis.sh`, `series.txt`, `bis{1,2,3}-measured.txt`, `census-head.txt`).
+
+| commit | zc.c lines | self instr | allocs | bytes | peak RSS (bis.sh) | fixed input |
+|---|---|---|---|---|---|---|
+| `f2716a9d` (last row) | 154,217 | 7,355M | 2,074,040 | 342MB | 118MB | 2,555M |
+| `ad69cfa0` BigInt constants | 167,166 | 7,643M | 2,139,817 | 360MB | 119MB | 2,562M |
+| `8d3e5264` BigFloat | 171,802 | 7,946M | 2,217,988 | 413MB | 124MB | 2,586M |
+| `e3ae1ad4` the `z` unit | 175,933 | 8,310M | 2,237,578 | 425MB | 142MB | 2,588M |
+| `32ea563f` data blocks as values | 177,972 | 8,701M | 2,264,070 | 450MB | 149MB | 2,614M |
+| `3da44f40` | 176,510 | 8,253M | -- | -- | -- | 2,511M |
+| **`b350cf15`** | 176,543 | **9,083M** | -- | -- | -- | **4,008M** |
+| `68f77871` | 176,504 | 9,009M | 2,153,968 | 447MB | 151MB | 4,003M |
+
+What the numbers are made of:
+- **One regression: `b350cf15`** ("a generic FILE unit's types are generic
+  over its parameters"): fixed input +60%, self-compile +830M. Its
+  `declIsGenericFileUnit` answered by scanning the file unit's whole body for a
+  generic parameter, and it is asked on every type query (`unitNestedSelf`,
+  `nestedTemplateUnit`, the scope walk of `scopeInUnitTemplate`): quadratic in
+  the file's size, so the one-file fixed input paid the most. The scan
+  (`isGenericParamOp` + `itemsHaveGenericParam`) was the profile's largest
+  self time outside the container accessors, ~3.8%. The next row removes it.
+- **The rest is input.** zc.c grew 14.5%. The BigInt and BigFloat steps are
+  the compiler now compiling `lib/system/math`; the fixed input is flat across
+  them, constant folding is under 0.1% of allocations, and a small integer
+  literal still takes the i64 path. Leaving `b350cf15` out, instructions per
+  emitted C line fell slightly, and the fixed input fell 2,555M -> ~2,515M.
+- The data-values arc (`5c398e12`..`32ea563f`) is +300M spread over its
+  commits, but `2f44e2e4` (ztarget's spellings become five small string data
+  blocks) is +74M alone, out of proportion: constant interning is a linear
+  scan. The generic-unit commits of 2026-10-10 add 23-61M each
+  (`780d0db8` +61M, `e937e6e2` +34M, `7b564518` +27M, `047b1df4` +23M), all on
+  the same owner-chain questions; the fixed input is flat across them.
+- Peak RSS rose in steps: the `z` unit +15MB, data blocks +10MB. DHAT: the Ast
+  node table grows by realloc 29 times to 44MB (132MB churned), the Decl table
+  25 times to 22MB.
+- The allocation ratchet moved 2,074,323 -> 2,153,863 (+3.8%), every step
+  accounted for by its commit's own ab.sh row.
 
 <a id="r-f2716a9d"></a>
 **P7.3: a list takes an index type; the id tables migrate** (`6c55cee9` ->
