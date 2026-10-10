@@ -19612,7 +19612,28 @@ buildUnitMonoMember: function {
             fnId: newFnId
             :subs
         )
+        if srcId.isZero.not then keepMonoFnGeneric :st :srcId :newFnId
     }
+}
+
+# keepMonoFnGeneric -- a unit function with type parameters of its own stays a
+# template on the unit's instance, as a generic method does on a type's
+# instance (cloneGenericMemberInto): its calls mint instances of the instance's
+# copy, over the parameters the template function declares. The copy's
+# declaration is the template function's, through which its instances bind
+# their arguments, and so is its written return, which each call substitutes.
+# A copy with no parameters of its own keeps neither: read back through the
+# template's declaration it would name the template's own function.
+keepMonoFnGeneric: function {st: zenv.ZSymbolTable srcId: ztypes.tid newFnId: ztypes.tid} is {
+    srcDecl: declOfTypeId :st tid: srcId
+    if (st.reg.genericParamCountOf tdecl: srcDecl) == 0 then return
+    newDecl: st.typing.declIdOfType typeId: newFnId
+    if newDecl.isZero then return
+    st.reg.setGeneric typeId: newFnId value: true
+    st.reg.copyGenericParams from: srcDecl to: newDecl
+    st.reg.setDef typeId: newFnId declId: srcDecl
+    frn: (st.typing.funcReturnNode.get key: srcId).or d: zast.nodeid
+    if frn.isZero.not then st.typing.funcReturnNode.set key: newFnId value: frn
 }
 
 
@@ -44711,7 +44732,20 @@ reportUnresolvedValue: function {
     )
 }
 
-# monoMemberOf -- inside a unit mono's instance walk (curMonoStamp), the mono's
+# walkOwnerMono -- the instance whose members the current instance walk reads
+# its bare names from: the walked instance, or -- for an instance of a unit
+# function with type parameters of its own -- the unit instance that owns the
+# function. 0 outside an instance walk.
+walkOwnerMono: function {st: zenv.ZSymbolTable.view} out ztypes.tid is {
+    m: st.typing.curMonoStamp
+    if (st.reg.typetypeOf typeId: m) != ztypes.ztypetype.functionType then return m
+    own: st.reg.ownerTidOf tid: (st.reg.genericOriginOf tid: m)
+    if (st.reg.typetypeOf typeId: own) != ztypes.ztypetype.unitType then return m
+    if (st.reg.genericOriginOf tid: own).isZero then return m
+    return own
+}
+
+# monoMemberOf -- inside a unit mono's instance walk (walkOwnerMono), the mono's
 # own member for a bare callee that resolved to the TEMPLATE's method of that
 # name; any other id passes through unchanged.
 monoMemberOf: function {
@@ -44719,7 +44753,8 @@ monoMemberOf: function {
     templateFnTid: ztypes.tid
     nameId: zast.nameid
 } out ztypes.tid is {
-    org: st.reg.genericOriginOf tid: st.typing.curMonoStamp
+    owner: walkOwnerMono :st
+    org: st.reg.genericOriginOf tid: owner
     if org.isZero then return templateFnTid
     tm: st.typing.declChildOfId parentTypeId: org :nameId
     match (
@@ -44729,10 +44764,7 @@ monoMemberOf: function {
     } case none then {
         return templateFnTid
     }
-    mm: (st.typing.declChildOfId
-        parentTypeId: st.typing.curMonoStamp
-        :nameId
-    )
+    mm: st.typing.declChildOfId parentTypeId: owner :nameId
     match (
         mm
     ) case some then {
@@ -47869,7 +47901,7 @@ bareCalleeKind: function {
             templateFnTid: funcId
             nameId: cnId
         )
-        markMemberUsed :st ownerTid: st.typing.curMonoStamp nameId: cnId
+        markMemberUsed :st ownerTid: (walkOwnerMono :st) nameId: cnId
     }
     if funcId.isZero then {
         return (calleekind fid: funcId isUser: false isGen: false isCtor: false unknown: false)
@@ -48744,8 +48776,6 @@ genericCallNumericArg: function {
 # keeps the return it already has.
 substituteGenericReturn: function {
     st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    ast: Ast
     funcId: ztypes.tid
     mid: ztypes.tid
     subs: (IdMapV zast.nameid v: ztypes.tid).view
@@ -48768,19 +48798,10 @@ substituteGenericReturn: function {
             ) case some then {
                 st.reg.setReturnType typeId: mid value: rgot2
             } case none then {
-                rk2T: zast.nameTextCopy :ast ref: rk2
-                rconc: (walkLookupTyperef
-                    :st
-                    scope: st.curScope
-                    :ast
-                    :unitDecl
-                    base: rk2T.stringView
-                )
-                match (
-                    rconc
-                ) case some then {
-                    st.reg.setReturnType typeId: mid value: rconc
-                } case none then null
+                # a return naming none of the call's own parameters is the
+                # function's declared return, as concrete as the function is
+                ownR: (methodReturnOf :st mid: funcId).or d: ztypes.tid.zero
+                if ownR.isZero.not then st.reg.setReturnType typeId: mid value: ownR
             }
         }
     } case none then null
@@ -49105,8 +49126,6 @@ checkGenericCall: function {
     noteMonoSite :st mono: mid :call :unitDecl
     (substituteGenericReturn
         :st
-        :unitDecl
-        :ast
         :funcId
         :mid
         :subs
@@ -54200,7 +54219,7 @@ stampOneClassMono: function {
             if mgen.isZero.not when (st.reg.isGenericOf tid: mgen) then {
                 # a method with type parameters of its own is walked per instance
                 # of it, the instance's own arguments bound beside the type's
-                (stampClassMonoMethodMonos
+                (stampMemberFnMonos
                     :st
                     :scope
                     :ast
@@ -54247,15 +54266,17 @@ stampOneClassMono: function {
     recordMintedBy :st :monoId :minted
 }
 
-# stampClassMonoMethodMonos -- inside a class instance's walk, walk each
-# instance of its generic method `methodTid`: the type's arguments are bound
-# already, the method instance's own are bound beside them, and `this` is the
-# class instance.
-stampClassMonoMethodMonos: function {
+# stampMemberFnMonos -- inside the walk of a class's or a unit's instance, walk
+# each instance of its member function `methodTid` that has type parameters of
+# its own: the owner's arguments are bound already, the member instance's own
+# are bound beside them, and `this` is the class instance (none for a unit's
+# function).
+stampMemberFnMonos: function {
     st: zenv.ZSymbolTable
     scope: ztypes.declid
     ast: Ast
     unitDecl: ztypes.declid
+    # the class instance a method's `this` is, 0 for a unit's function
     monoId: ztypes.tid
     monoNm: StringView
     mop: zast.nodeid
@@ -54950,6 +54971,24 @@ walkUnitMonoFns: function {
                     st.typing.curMonoFnTid = mfo
                 } case none then {
                     st.typing.curMonoFnTid = ztypes.tid.zero
+                }
+                ugen: st.typing.curMonoFnTid
+                if ugen.isZero.not when (st.reg.isGenericOf tid: ugen) then {
+                    # a function with type parameters of its own is walked per
+                    # instance of it, the instance's own arguments bound beside
+                    # the unit's
+                    (stampMemberFnMonos
+                        :st
+                        :scope
+                        :ast
+                        :unitDecl
+                        monoId: ztypes.tid
+                        monoNm: ""
+                        mop: bm2.operation
+                        methodTid: ugen
+                    )
+                    st.typing.curMonoStamp = monoId
+                    continue
                 }
                 tplDecl49Org: st.reg.genericOriginOf tid: monoId
                 unitTemplateDecl: declOfTypeId :st tid: tplDecl49Org
@@ -57597,9 +57636,8 @@ activeConstMono: function {st: zenv.ZSymbolTable.view ownerDecl: ztypes.declid} 
     if (monoOfTemplate :st mono: st.typing.constMono :ownerDecl) then {
         return st.typing.constMono
     }
-    if (monoOfTemplate :st mono: st.typing.curMonoStamp :ownerDecl) then {
-        return st.typing.curMonoStamp
-    }
+    wom: walkOwnerMono :st
+    if (monoOfTemplate :st mono: wom :ownerDecl) then return wom
     return ztypes.tid
 }
 
@@ -59651,14 +59689,26 @@ numericParamThroughValue: function {
 }
 
 # monoNumericParamValue -- a bare name's value in a mono's walk when it names a
-# numeric generic parameter of the mono's template: the argument the mono was
-# made with, recorded on it at mint. none for any other name or walk.
+# numeric generic parameter of the mono's template, or -- in the walk of a unit
+# function's own instance -- of the unit's (walkOwnerMono): the argument the
+# mono was made with, recorded on it at mint. none for any other name or walk.
 monoNumericParamValue: function {
     st: zenv.ZSymbolTable.view nameId: zast.nameid
 } out ztypes.cval is {
     m: st.typing.constMono
     if m.isZero then m = st.typing.curMonoStamp
-    mono: m
+    v: monoNumericArg :st mono: m :nameId
+    if v.kind.none.not or st.typing.constMono.isZero.not then return v
+    own: walkOwnerMono :st
+    if own == m then return v
+    return (monoNumericArg :st mono: own :nameId)
+}
+
+# monoNumericArg -- the value mono `mono` was made with for its template's
+# numeric generic parameter `nameId`; none when that is no such parameter.
+monoNumericArg: function {
+    st: zenv.ZSymbolTable.view mono: ztypes.tid nameId: zast.nameid
+} out ztypes.cval is {
     origin: st.reg.genericOriginOf tid: mono
     if origin.isZero then return ztypes.noConst
     tdecl: declOfTypeId :st tid: origin
