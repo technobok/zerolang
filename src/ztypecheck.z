@@ -45,6 +45,7 @@ public: unit {
     :bareNameReaches
     :unitdefNodeId
     :stdTidPeek
+    :isOperatorName
     :instanceCopyOf
     :dataFieldIds
     :isNullTid
@@ -7890,64 +7891,44 @@ specTypetypeOf: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out ztypes
     return (st.reg.typetypeOf typeId: tid)
 }
 
-# asDeclaresMemberId -- the as-block declares the member named by `nameId` as a
-# real definition (not the `member: null` opt-out shell). Read from the SOURCE
-# because the synthesised defaults must yield to it, and the decl tree does not
-# carry the author's as-block members yet at that point.
-#
-# Keyed by NAME ID, not by spelling: `==`, `!=` and `hash` all have well-known
-# pool ids, so this compares what the pool already interned rather than the
-# text it interned from.
-asDeclaresMemberId: function {
-    # the declarations the as-block's operands are looked up in
+# asbinding -- how a type's `as {}` block binds one member name: to `null`,
+# which strikes a compiler-provided member off the type, and to anything else,
+# which declares it.
+asbinding: record {
+    # an item of the name is bound to something other than `null`
+    declared: bool
+    # an item of the name is bound to `null`
+    struck: bool
+}
+
+# asBindingOf -- how the as-block `asItems` binds `nameId`. Keyed by NAME ID:
+# `==`, `!=`, `hash`, `create` all have well-known pool ids, so this compares
+# what the pool already interned rather than the text it interned from. The
+# `null` is looked up from `ownerDecl`, so a user type named `null` is not one.
+asBindingOf: function {
+    # the declarations an operand is looked up in
     st: zenv.ZSymbolTable.view
     ast: Ast.view
-    # the declaration whose as-block may declare the member
+    # the declaration whose as-block it is
     ownerDecl: ztypes.declid
     asItems: zast.kidspan
     nameId: zast.nameid
-} out bool is {
-    result: false
-    h18x9: u64
-    for h18x9 < asItems.count loop {
-        amId: zast.kidAt kids: ast.kids span: asItems i: h18x9
-        h18x9 = h18x9 + 1
-        am: ast.nodes.get i: amId
+} out asbinding is {
+    r: asbinding declared: false struck: false
+    i: u64
+    for i < asItems.count loop {
+        am: ast.nodes.get i: (zast.kidAt kids: ast.kids span: asItems :i)
+        i = i + 1
         if am.namedoperation when am.name == nameId then {
             vn: atomNameId :ast n: (ast.nodes.get i: am.operation)
-            if (namesNullType :st :ast :ownerDecl nameId: vn).not then result = true
-        }
-    }
-    return result
-}
-
-# memberNullOptOut -- true when a type's `as {}` block defines `member` as
-# `null`, the language's way of striking a compiler-provided member off a type:
-# how a type declines a member its family would otherwise synthesise.
-memberNullOptOut: function {
-    # the declarations an opt-out's `null` is looked up in
-    st: zenv.ZSymbolTable.view
-    ast: Ast.view
-    # the declaration whose as-block may strike the member off
-    ownerDecl: ztypes.declid
-    asItems: zast.kidspan
-    member: StringView
-} out bool is {
-    result: false
-    h19x9: u64
-    for h19x9 < asItems.count loop {
-        amId: zast.kidAt kids: ast.kids span: asItems i: h19x9
-        h19x9 = h19x9 + 1
-        am: ast.nodes.get i: amId
-        if am.namedoperation then {
-            mn: zast.nameTextAt :ast ref: am.name
-            if mn.stringView == member then {
-                vn: atomNameId :ast n: (ast.nodes.get i: am.operation)
-                if (namesNullType :st :ast :ownerDecl nameId: vn) then result = true
+            if (namesNullType :st :ast :ownerDecl nameId: vn) then {
+                r.struck = true
+            } else {
+                r.declared = true
             }
         }
     }
-    return result
+    return r
 }
 
 # refuseValtypeCopy -- a value type's `.copy` is the compiler's byte copy: a
@@ -7995,21 +7976,9 @@ eqNullOptOut: function {
     # the as-block's items
     asItems: zast.kidspan
 } out bool is {
-    result: false
-    h20x9: u64
-    for h20x9 < asItems.count loop {
-        amId: zast.kidAt kids: ast.kids span: asItems i: h20x9
-        h20x9 = h20x9 + 1
-        am: ast.nodes.get i: amId
-        if am.namedoperation then {
-            isEqNe: (cmpOpOf opnId: am.name).eq or (cmpOpOf opnId: am.name).ne
-            if isEqNe then {
-                vn: atomNameId :ast n: (ast.nodes.get i: am.operation)
-                if (namesNullType :st :ast :ownerDecl nameId: vn) then result = true
-            }
-        }
-    }
-    return result
+    eq: asBindingOf :st :ast :ownerDecl :asItems nameId: zast.wellKnown.slot.wkOpEq
+    if eq.struck then return true
+    return (asBindingOf :st :ast :ownerDecl :asItems nameId: zast.wellKnown.slot.wkOpNe).struck
 }
 
 # attachAsConstant -- an `as`-section member that is not a function is a constant
@@ -11417,25 +11386,25 @@ synthRecordHash: function {
     hshOptR: false
     onHshOptR: ast.nodes.get i: rnode.nid
     if onHshOptR.objectdef then {
-        hshOptR = (memberNullOptOut
+        hshOptR = (asBindingOf
             :st
             :ast
             ownerDecl: (declOfTypeId :st tid: rid)
             asItems: onHshOptR.asItems
-            member: "hash"
-        )
+            nameId: zast.wellKnown.slot.wkHash
+        ).struck
     }
     hshAsR: false
     {
         onHshAsR: ast.nodes.get i: rnode.nid
         if onHshAsR.objectdef then {
-            hshAsR = (asDeclaresMemberId
+            hshAsR = (asBindingOf
                 :st
                 :ast
                 ownerDecl: (declOfTypeId :st tid: rid)
                 asItems: onHshAsR.asItems
                 nameId: zast.wellKnown.slot.wkHash
-            )
+            ).declared
         }
     }
     if isgen.not when hshOptR.not when hshAsR.not then synthHashMember :st :rid
@@ -11795,22 +11764,23 @@ resolveRecord: function {
     # synthesised the pair, so a type writing only `!=` had its own operator
     # replaced by the synth shell -- and one writing only `==` got no `!=`
     # MEMBER at all, only the emitter's derived negation.
-    eqAsR: (asDeclaresMemberId
+    eqAsR: (asBindingOf
         :st
         :ast
         ownerDecl: ridDecl
         :asItems
         nameId: zast.wellKnown.slot.wkOpEq
-    )
-    neAsR: (asDeclaresMemberId
+    ).declared
+    neAsR: (asBindingOf
         :st
         :ast
         ownerDecl: ridDecl
         :asItems
         nameId: zast.wellKnown.slot.wkOpNe
-    )
+    ).declared
     refuseValtypeCopy :st :ast :asItems :defName
-    if (memberNullOptOut :st :ast ownerDecl: ridDecl :asItems member: "create") then {
+    crB: asBindingOf :st :ast ownerDecl: ridDecl :asItems nameId: zast.wellKnown.slot.wkCreate
+    if crB.struck then {
         st.typing.createOptOut.add item: rid
     }
     if isgen then {
@@ -11956,25 +11926,25 @@ synthVariantEqHash: function {
     hshOptV: false
     onHshOptV: ast.nodes.get i: vnode.nid
     if onHshOptV.objectdef then {
-        hshOptV = (memberNullOptOut
+        hshOptV = (asBindingOf
             :st
             :ast
             ownerDecl: (declOfTypeId :st tid: variantTid)
             asItems: onHshOptV.asItems
-            member: "hash"
-        )
+            nameId: zast.wellKnown.slot.wkHash
+        ).struck
     }
     hshAsV: false
     {
         onHshAsV: ast.nodes.get i: vnode.nid
         if onHshAsV.objectdef then {
-            hshAsV = (asDeclaresMemberId
+            hshAsV = (asBindingOf
                 :st
                 :ast
                 ownerDecl: (declOfTypeId :st tid: variantTid)
                 asItems: onHshAsV.asItems
                 nameId: zast.wellKnown.slot.wkHash
-            )
+            ).declared
         }
     }
     if isgen.not when hshOptV.not when hshAsV.not then synthHashMember :st rid: variantTid
@@ -12207,20 +12177,20 @@ resolveVariant: function {
     {
         onEqAsV: ast.nodes.get i: vnode.nid
         if onEqAsV.objectdef then {
-            eqAsV = (asDeclaresMemberId
+            eqAsV = (asBindingOf
                 :st
                 :ast
                 ownerDecl: vDecl
                 asItems: onEqAsV.asItems
                 nameId: zast.wellKnown.slot.wkOpEq
-            )
-            neAsV = (asDeclaresMemberId
+            ).declared
+            neAsV = (asBindingOf
                 :st
                 :ast
                 ownerDecl: vDecl
                 asItems: onEqAsV.asItems
                 nameId: zast.wellKnown.slot.wkOpNe
-            )
+            ).declared
         }
     }
     vAsItems: zast.kidspan first: 0 count: 0
@@ -13231,8 +13201,8 @@ refuseLiteralMember: function {st: zenv.ZSymbolTable ast: Ast.view nid: zast.nod
     }
     cn: atomNameId :ast n: (ast.nodes.get i: childId)
     if cn.isZero then return
+    if (isScalarNameId id: cn) then return
     ct: zast.nameTextAt :ast ref: cn
-    if (ztypes.numkindByName name: ct.stringView).has then return
     # the literal's own type: a decimal integer reads as an i64, any other
     # spelling as a u64
     lex: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: parentId))
@@ -14484,13 +14454,13 @@ finishClassDef: function {
     needsDtor: needsDtorIn
     resolveClassAsMethods :st :ast :unitDecl :scope :defName :cid :isgen :cnode
     cobj: ast.nodes.get i: cnode.nid
-    if cobj.objectdef when (memberNullOptOut
+    if cobj.objectdef when (asBindingOf
         :st
         :ast
         ownerDecl: (declOfTypeId :st tid: cid)
         asItems: cobj.asItems
-        member: "create"
-    ) then {
+        nameId: zast.wellKnown.slot.wkCreate
+    ).struck then {
         st.typing.createOptOut.add item: cid
     }
     if (resolveClassCreate
@@ -22790,7 +22760,8 @@ synthInstanceValueMembers: function {
     )
     if (st.typing.declChildOfId parentTypeId: mt nameId: zast.wellKnown.slot.wkHash
     ).some then return
-    if (memberNullOptOut :st :ast ownerDecl: tmplDecl asItems: items member: "hash") then return
+    hB: asBindingOf :st :ast ownerDecl: tmplDecl asItems: items nameId: zast.wellKnown.slot.wkHash
+    if hB.struck then return
     synthHashMember :st rid: mid
 }
 
@@ -32979,8 +32950,7 @@ typedefHidesMember: function {
     if nop.namedoperation.not then return false
     op: ast.nodes.get i: nop.operation
     if op.objectdef then {
-        nm: zast.nameTextAt :ast ref: cnId
-        return (memberNullOptOut :st :ast ownerDecl: td asItems: op.asItems member: nm.stringView)
+        return (asBindingOf :st :ast ownerDecl: td asItems: op.asItems nameId: cnId).struck
     }
     return false
 }
@@ -59150,8 +59120,9 @@ typedefOverNumericDecl: function {
     if o.nid.isZero then return false
     b: objectTypedefBaseId :ast onode: o
     if b.isZero then return false
-    bt: zast.nameTextAt :ast ref: b
-    return (ztypes.numkindByName name: bt.stringView).has
+    # by the base's written name, the shape the parse answers;
+    # numericTypedefNamed then asks the resolved base itself
+    return (isScalarNameId id: b)
 }
 
 # numericTypedefNamed -- the typedef over a numeric type the callee `callableId`
