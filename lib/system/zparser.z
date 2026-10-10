@@ -132,8 +132,8 @@ isFriendNarrowTok: function {tt: zlexer.toktype} out bool is {
 
 # The kind a `unit` body carries, from the label that introduces it. This is
 # the one place a unit's meaning is read from a name; every later reader asks
-# `zast.unitrow.kind`. `require:` is a unit-level block only, so a type-body
-# member of that name is an ordinary namespace.
+# `zast.unitrow.kind`. `require:` is a unit-level block only: in a type's or
+# a function's `as` block, a `require:` unit is refused (objectLabelItem).
 unitKindForLabel: function {id: zast.nameid unitBody: bool} out zast.unitkind is {
     if id == zast.wellKnown.slot.wkPublic then return zast.unitkind.publicNs
     if unitBody when id == zast.wellKnown.slot.wkRequire then return zast.unitkind.requirement
@@ -3272,6 +3272,15 @@ Parser: class {
         mErr: Parser.isError node: member
         if mErr then {
             items.append (this.intern n: member)
+            return true
+        }
+        if lblTok.text == zast.wellKnown.slot.wkRequire when (Parser.isUnitDef node: member) then {
+            items.append (this.intern n: (this.mkError
+                tok: lblTok
+                code: zast.err.requireBlock
+                msg: "'require:' is written in a unit body: it states what the unit needs from the host toolchain"
+            )
+            )
             return true
         }
         if typeBody when (isReservedMemberName id: lblTok.text) then {
