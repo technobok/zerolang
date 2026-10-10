@@ -5084,7 +5084,7 @@ svValueFormAt: function {
     # the view reads a String operand twice, for its data and its size: one that
     # is not an lvalue -- a call's result -- is bound to a temp first, so the
     # call runs once, and an owned result is released
-    if isStr when (isNonLvalueArg s: expr) then {
+    if isStr when (factsOfText s: expr).place.not then {
         hv: (hoistBorrowValArg
             :ast
             :symtab
@@ -5098,7 +5098,7 @@ svValueFormAt: function {
     }
     # a reference control value (`(*p)`) runs its arms where it is spelt: it is
     # read once, into a temp that owns nothing
-    if isStr when (singleReadNeedsTemp s: expr) then {
+    if isStr when (factsOfText s: expr).once then {
         rv: hoistForAddress :ast :symtab :ctx av: expr tid: ctx.strTid argNid: zast.nodeid
         return (svValueForm :ctx expr: rv.stringView :isStr vid: ztypes.vid)
     }
@@ -5308,20 +5308,12 @@ svNativeCall: function {
     recv: StringView
     args: StringView
 } out String is {
-    if (svRecvAddressable :recv) then {
+    if (canTakeAddress f: (factsOfText s: recv)) then {
         direct: "\{ctx.svC}_\{m}(&\{recv}\{args})"
         return direct
     }
     wrapped: "({ \{ctx.svC}_t _svr = \{recv}; \{ctx.svC}_\{m}(&_svr\{args}); })"
     return wrapped
-}
-
-# svRecvAddressable -- a view receiver `&` applies to: anything but a call, and a
-# compound literal. A ternary `((c) ? (a) : (b))` and a cast `((T)x)` also open
-# with `((` and are no lvalues.
-svRecvAddressable: function {recv: StringView} out bool is {
-    if (isCompoundLiteralText s: recv) then return true
-    return (isNonLvalueArg s: recv).not
 }
 
 # svArgAddr -- the &-form of a StringView native argument (pooled
@@ -5515,7 +5507,7 @@ emitSvSubstringCall: function {
         if recvp.length > 0 then {
             needsAddM :ctx uname: "system" memb: "substring"
             # a receiver that is a call is bound first, as svNativeCall binds it
-            addressable: svRecvAddressable recv: recvp.stringView
+            addressable: canTakeAddress f: (factsOfText s: recvp.stringView)
             lead: "&_svr".string
             if addressable then lead = "&\{recvp}"
             svc: ctx.svC.copy
@@ -5554,6 +5546,7 @@ svNativeArgFrag: function {
     sav: svArgAddr :ast :symtab :ctx :n
     if sav.length > 0 then return sav
     sx: emitExpr :ast :symtab :ctx :n
+    sxF: factsOfText s: sx.stringView
     stampTid: stampIdOf :symtab nid: (interpPartNodeId :n)
     if stampTid == ctx.strTid then {
         sxh: (hoistBorrowValArg
@@ -5580,7 +5573,7 @@ svNativeArgFrag: function {
     # binds to a temp whose address the call can take. Passing it by value was
     # an argument of the wrong C type.
     if stampTid == ctx.svTid then {
-        if (isNonLvalueArg s: sx.stringView) then {
+        if sxF.place.not then {
             # the view owns nothing: the temp only gives it an address
             svb: (hoistForAddress
                 :ast
@@ -5612,8 +5605,8 @@ viewRecvAddr: function {
     tid: ztypes.tid
 } out String is {
     if tid != ctx.svTid then return "&\{recv}"
-    if (isNonLvalueArg s: recv).not then return "&\{recv}"
-    if (isCompoundLiteralText s: recv) then return "&\{recv}"
+    if (factsOfText s: recv).place then return "&\{recv}"
+    if (factsOfText s: recv).literal then return "&\{recv}"
     svb: hoistForAddress :ast :symtab :ctx av: recv :tid argNid: zast.nodeid
     return "&\{svb}"
 }
@@ -5950,7 +5943,7 @@ emitDottedCall: function {
     # size: one that is a call's result is bound once, and dropped again when no
     # leg takes the call
     rmark: pendingHoistMark :ctx
-    if btIsStr when dcbV.isZero when (isNonLvalueArg s: bn.stringView) then {
+    if btIsStr when dcbV.isZero when (factsOfText s: bn.stringView).place.not then {
         bn = (receiverOnce
             :ast
             :symtab
@@ -6437,6 +6430,44 @@ emitStringArgMethod: function {
     return r
 }
 
+# cfacts -- what the producer of an expression's C text knows about it, so a
+# reader decides from facts rather than from the text's shape. Until every
+# producer states its own, factsOfText supplies them from the text; a producer
+# that states them is the authority.
+cfacts: record {
+    # `&` may be taken of it as it stands: a name, a field path, a deref
+    place: bool
+    # a compound literal `((T){..})`: an lvalue as well, which place does not
+    # yet say
+    literal: bool
+    # reading it twice would repeat work or effects: it is bound to a temp
+    # before a reader spells it twice
+    once: bool
+    # evaluating it only reads: no call, no write, no statement expression
+    pure: bool
+    # a plain place path: a name and `.` / `->` member reads off it, reading
+    # nothing through a pointer a call could replace
+    path: bool
+}
+
+# factsOfText -- the facts the text's shape implies: the one place the emitter
+# still reads them off C text, for the producers that do not yet state them.
+factsOfText: function {s: StringView} out cfacts is {
+    return (cfacts
+        place: (isNonLvalueArg :s).not
+        literal: (isCompoundLiteralText :s)
+        once: (singleReadNeedsTemp :s)
+        pure: (isPureCText :s)
+        path: (isPlainCPath :s)
+    )
+}
+
+# canTakeAddress -- whether `&` applies to the text as it stands: a place, or a
+# compound literal, which is an lvalue too.
+canTakeAddress: function {f: cfacts} out bool is {
+    return f.place or f.literal
+}
+
 # isNonLvalueArg -- true when an emitted arg expression is a non-addressable
 # rvalue (a call/cast result, e.g. `String_from_view(...)`) so `&expr` is invalid
 # C and the arg must be hoisted to a named temp first. A deref projection
@@ -6474,7 +6505,7 @@ stringAppendViewText: function {
     argval: StringView
     argTid: ztypes.tid
 } out String is {
-    if argTid == ctx.svTid when (singleReadNeedsTemp s: argval) then {
+    if argTid == ctx.svTid when (factsOfText s: argval).once then {
         # a view read twice is bound once, and frees nothing
         ah: hoistForAddress :ast :symtab :ctx av: argval tid: argTid argNid: zast.nodeid
         rh: "\{ctx.strC}_append(\{recvAddr}, (\{ah}).data, (\{ah}).size)"
@@ -6599,7 +6630,7 @@ orderPart: function {
     # the node whose value the text is, which types a scalar's temp; 0 for none
     valueNid: zast.nodeid.zero
 } is {
-    pure: constant.not and (isPureCText s: text.stringView)
+    pure: constant.not and (factsOfText s: text.stringView).pure
     if st.live then {
         if (hoistsWithValues :ctx :mark) or (constant.not and pure.not) then {
             orderSettleWaiting :ast :symtab :ctx :st all: true
@@ -6865,10 +6896,10 @@ orderConstant: function {
     }
     if text.startsWith "&" then {
         addr: text.substring from: 1 to: text.length
-        if (isPlainCPath s: addr) then return true
+        if (factsOfText s: addr).path then return true
     }
     if byPtr.not then return false
-    return (isPlainCPath s: text)
+    return (factsOfText s: text).path
 }
 
 # isCNumberLiteral -- C text that is one number literal: a digit first, after an
@@ -7224,7 +7255,7 @@ hoistBorrowValArg: function {
     # an lvalue needs no temp -- unless it is a typedef built from a consumed
     # local (`(Path s)`), spelled as that local, whose own free the consumption
     # dropped: the checker's temporary owns it
-    if (isNonLvalueArg s: av).not when (ownedTypedefArg :symtab :argNid).not then return ""
+    if (factsOfText s: av).place when (ownedTypedefArg :symtab :argNid).not then return ""
     if paramTake then return ""
     # a value whose type frees nothing needs no temp to free it
     if (destroyTargetTid :symtab :ctx tid: pid).isZero then return ""
@@ -7258,7 +7289,7 @@ receiverOnceAt: function {
     text: StringView
     tid: ztypes.tid
 } out String is {
-    if (isNonLvalueArg s: text).not then return text.string
+    if (factsOfText s: text).place then return text.string
     return (hoistForAddress :ast :symtab :ctx av: text :tid argNid: baseNid)
 }
 
@@ -7365,7 +7396,7 @@ stringViewBinopOperand: function {
     expr: StringView
 } out String is {
     src: expr.string
-    if (isNonLvalueArg s: expr) then {
+    if (factsOfText s: expr).place.not then {
         pid9: stampIdDeep :symtab :n
         hv: (hoistBorrowValArg
             :ast
@@ -7379,7 +7410,7 @@ stringViewBinopOperand: function {
         if hv.length > 0 then src = hv.copy
     }
     isStrT: operandIsStr :symtab :ctx :n
-    if isStrT.not when (singleReadNeedsTemp s: src.stringView) then {
+    if isStrT.not when (factsOfText s: src.stringView).once then {
         # the operand is a view: bound so it is read once; it frees nothing
         src = hoistForAddress :ast :symtab :ctx av: expr tid: ctx.svTid argNid: zast.nodeid
     }
@@ -9035,12 +9066,13 @@ emitBorrowAliasBind: function {
     base: ast.nodes.get i: ab.node
     hmk: pendingHoistMark :ctx
     rvm: emitExpr :ast :symtab :ctx n: base
+    rvmF: factsOfText s: rvm.stringView
     # a member read that lowers to a CALL names no storage: a protocol or facet
     # field builds a fat pointer out of its base rather than reading a place, so
     # there is no address to alias and the binding owns what it gets. Only the
     # field leg can reach one -- the other two shapes are a marker on a value and
     # an element the container hands back by pointer, both already lvalues.
-    if placeLeg when (isNonLvalueArg s: rvm.stringView) then {
+    if placeLeg when rvmF.place.not then {
         dropHoistsTo :ctx mark: hmk
         return false
     }
@@ -9248,7 +9280,7 @@ emitStrConvCall: function {
     ptid: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: call.callable)
     # the receiver is read twice, for data and length. An owned String call is
     # bound to a temp the statement flush frees, a view call to a plain one
-    if ptid == ctx.strTid when (isNonLvalueArg s: pv.stringView) then {
+    if ptid == ctx.strTid when (factsOfText s: pv.stringView).place.not then {
         sh: (hoistBorrowValArg
             :ast
             :symtab
@@ -9260,7 +9292,7 @@ emitStrConvCall: function {
         )
         if sh.length > 0 then pv = sh.copy
     }
-    if ptid == ctx.svTid when (singleReadNeedsTemp s: pv.stringView) then {
+    if ptid == ctx.svTid when (factsOfText s: pv.stringView).once then {
         # a view, bound so the call runs once; there is nothing to free
         pv = hoistForAddress :ast :symtab :ctx av: pv.stringView tid: ptid argNid: zast.nodeid
     }
@@ -9459,7 +9491,7 @@ emitCollectionMethodCall: function {
     # the temp owns the receiver only when the call handed over a new value; an
     # element or other borrow still belongs to its container. A Set or a Map is
     # held as its pointer.
-    if rcvIsCreate.not when (svRecvAddressable recv: bn.stringView).not then {
+    if rcvIsCreate.not when (canTakeAddress f: (factsOfText s: bn.stringView)).not then {
         bh9: (hoistForAddress
             :ast
             :symtab
@@ -10028,7 +10060,7 @@ stringKeyArgPointer: function {
     # pointer already; addressing it again hands the runtime a `String_t**`,
     # which the C compiler rejects
     if (argIsPointerByLabel :ast :symtab :ctx :call :label) then return expr.string
-    if (isNonLvalueArg s: expr) then {
+    if (factsOfText s: expr).place.not then {
         nmK: (hoistForAddress
             :ast
             :symtab
@@ -10057,7 +10089,7 @@ ownedReceiverHoist: function {
     expr: StringView
     n: astnode.view
 } out String is {
-    if (isNonLvalueArg s: expr).not then return ""
+    if (factsOfText s: expr).place then return ""
     rtid: stampIdOf :symtab nid: (interpPartNodeId :n)
     if rtid.isZero then return ""
     if (symtab.reg.needsDestructor typeId: rtid).not then return ""
@@ -10475,7 +10507,8 @@ emitColInterpArg: function {
         # what this spelling hoisted is dropped with it
         hmk: pendingHoistMark :ctx
         ex: emitExpr :ast :symtab :ctx :n
-        if (isNonLvalueArg s: ex.stringView).not then {
+        exF: factsOfText s: ex.stringView
+        if exF.place then {
             dropHoistsTo :ctx mark: hmk
             return ""
         }
@@ -12701,7 +12734,7 @@ emitByrefArg: function {
 } out String is {
     # as for a by-value argument: a typedef built inline from a consumed local
     # is hoisted, so the temporary's free runs
-    if (isNonLvalueArg s: av).not when (ownedTypedefArg :symtab :argNid).not then return "&\{av}"
+    if (factsOfText s: av).place when (ownedTypedefArg :symtab :argNid).not then return "&\{av}"
     nmH: hoistForAddress :ast :symtab :ctx :av tid: pid :argNid
     return "&\{nmH}"
 }
@@ -13580,7 +13613,7 @@ conformanceArgText: function {
     aRcv: "&\{av}"
     if (isPtrVid :ctx vid: avVid) then {
         aRcv = "\{av}"
-    } else if (isNonLvalueArg s: av) then {
+    } else if (factsOfText s: av).place.not then {
         # AN INLINE CONSTRUCTION IS NOT AN LVALUE: C rejects `&z_t109_create(40)`,
         # so it is bound to a temp first, as a `P.create from: (Cat k: 40)` source is
         ahv: hoistForAddress :ast :symtab :ctx :av tid: su.value argNid: nid
@@ -15340,7 +15373,7 @@ callBaseTemp: function {
     isView: isListViewOriginOf :symtab :ctx tid: nlid
     if (dataValueFamilyOf :symtab :ctx tid: nlid).isZero.not then isView = true
     if (stackCollectionTid :symtab :ctx tid: nlid).not when isView.not then return ""
-    if (svRecvAddressable recv: base) then return ""
+    if (canTakeAddress f: (factsOfText s: base)) then return ""
     return (hoistForAddress
         :ast
         :symtab
@@ -15602,7 +15635,7 @@ nestedFnptrFieldRead: function {
     if (pathIsPointer :ast :symtab :ctx n: (ast.nodes.get i: n.parent)) then {
         nfacc = "->"
         nfrcv = baseAtom.string
-    } else if (isNonLvalueArg s: baseAtom) then {
+    } else if (factsOfText s: baseAtom).place.not then {
         # a call's result is read through ONE hoisted temporary: the
         # slot and the receiver it is handed are the same value
         nfrcv = emitByrefArg :ast :symtab :ctx av: baseAtom pid: nlid argNid: n.parent
@@ -17091,7 +17124,8 @@ emitResolvedCopy: function {
     }
     if cvstr then {
         cvpv: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent)
-        if (isNonLvalueArg s: cvpv.stringView).not then {
+        cvpvF: factsOfText s: cvpv.stringView
+        if cvpvF.place then {
             cvpn: ast.nodes.get i: n.parent
             cvan2: atomTextOf :ast n: cvpn
             cvav: atomVid :symtab nid: (atomNodeId n: cvpn)
@@ -17792,11 +17826,11 @@ emitDottedRead: function {
         # evaluation when the expression is a call.
         if nbT == ctx.svTid then {
             nbX: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent)
+            nbXF: factsOfText s: nbX.stringView
             if nbX.length > 0 then {
                 # `&` needs an lvalue. A compound literal is one; a call is
                 # not, so it binds to a temp the statement flush declares.
-                nbH: isNonLvalueArg s: nbX.stringView
-                if (isCompoundLiteralText s: nbX.stringView) then nbH = false
+                nbH: nbXF.place.not and nbXF.literal.not
                 if nbH then {
                     # the receiver is a view, whose temp frees nothing
                     nbTmp: (hoistForAddress
@@ -18664,7 +18698,7 @@ emitDeclaredOperator: function {
         # receiver is (receiverOnceAt), so an OWNED result is released with it;
         # a compound literal already is an lvalue.
         lv: operandValueC :ast :symtab :ctx nid: lhsNid
-        if (isCompoundLiteralText s: lv.stringView) then {
+        if (factsOfText s: lv.stringView).literal then {
             recv = "&\{lv}"
         } else {
             lf: receiverOnceAt :ast :symtab :ctx baseNid: lhsNid text: lv.stringView tid: owner
@@ -18853,7 +18887,7 @@ listOperandAddr: function {
         return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: nid))
     }
     lv: operandValueC :ast :symtab :ctx :nid
-    if (isCompoundLiteralText s: lv.stringView) then return "&\{lv}"
+    if (factsOfText s: lv.stringView).literal then return "&\{lv}"
     lf: receiverOnceAt :ast :symtab :ctx baseNid: nid text: lv.stringView :tid
     return "&\{lf}"
 }
@@ -19128,7 +19162,7 @@ appendViewPart: function {
     tmp: TmpCtr
     buf: String.borrow
 } is {
-    if (singleReadNeedsTemp s: val) then {
+    if (factsOfText s: val).once then {
         svh: tmpNext :ctx :tmp
         buf.append "\{ind}\{ctx.svC}_t _h\{svh} = \{val};\n"
         buf.append "\{ind}\{ctx.strC}_append(&\{sNm}, _h\{svh}.data, _h\{svh}.size);\n"
@@ -19772,8 +19806,9 @@ emitPrintValueExpr: function {
         return
     }
     es: emitExpr :ast :symtab :ctx :n
+    esF: factsOfText s: es.stringView
     flushArgHoists :ctx :ind :tmp :buf
-    if (isNonLvalueArg s: es.stringView) then {
+    if esF.place.not then {
         hps: tmpNext :ctx :tmp
         lsa: "\{ind}\{ctx.strC}_t _h\{hps} = \{es};\n"
         buf.append lsa
@@ -19973,7 +20008,8 @@ copyRvalueHoist: function {
         # what this spelling hoisted is dropped with it
         hmk: pendingHoistMark :ctx
         pv: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent)
-        if (isNonLvalueArg s: pv.stringView).not then {
+        pvF: factsOfText s: pv.stringView
+        if pvF.place then {
             dropHoistsTo :ctx mark: hmk
             return ""
         }
@@ -20040,8 +20076,9 @@ emitStringBindValue: function {
                 # so what this spelling hoisted is dropped with it
                 hmk: pendingHoistMark :ctx
                 pv: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent)
-                if (isNonLvalueArg s: pv.stringView).not then dropHoistsTo :ctx mark: hmk
-                if (isNonLvalueArg s: pv.stringView) then {
+                pvF: factsOfText s: pv.stringView
+                if pvF.place then dropHoistsTo :ctx mark: hmk
+                if pvF.place.not then {
                     tnm: (copyReceiverTemp
                         :ast
                         :symtab
@@ -21952,7 +21989,7 @@ emitStoreTo: function {
     flushArgHoists :ctx :ind :tmp :buf
     rdrop: (stampIsStr :symtab :ctx nid: rtnid) or (symtab.reg.needsDestructor typeId: rtsid)
     ran: false
-    if rdrop when (isNonLvalueArg s: rv2.stringView) then {
+    if rdrop when (factsOfText s: rv2.stringView).place.not then {
         rrt: reassignTargetC :ast :symtab :ctx :rtnid :rtsid
         rrn: tmpNext :ctx :tmp
         buf.append "\{ind}\{rrt} _rr\{rrn} = \{rv2};\n"
@@ -25066,6 +25103,7 @@ emitObjIterRecv: function {
         ownGit = true
     } else {
         ivex: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: cOp)
+        ivexF: factsOfText s: ivex.stringView
         # A construction written as a bare TYPE NAME is an atom in the AST and a
         # call in the emitted C: the shape test reads `Counter` as an lvalue,
         # while what it becomes is `<T>_create(...)`, and the loop then asks for
@@ -25075,7 +25113,7 @@ emitObjIterRecv: function {
         # before the loop label like the instance
         flushArgHoists :ctx :ind :tmp :buf
         hoistIt: isForIterCall :ast :symtab n: (ast.nodes.get i: cOp)
-        if hoistIt.not then hoistIt = isNonLvalueArg s: ivex.stringView
+        if hoistIt.not then hoistIt = ivexF.place.not
         if hoistIt then {
             lgi: "\{ind}\{itCb}_t _git\{mN} = \{ivex};\n"
             buf.append lgi
@@ -39533,7 +39571,7 @@ fileFromArgAddr: function {
     fvc: fileFromArgCoerce :ast :symtab :ctx :call av: fv.stringView
     # a compound literal (the String coercion's `(StringView){..}`) already has an
     # address; anything else is passed by reference as any argument is
-    if (isCompoundLiteralText s: fvc.stringView) then return "&\{fvc}"
+    if (factsOfText s: fvc.stringView).literal then return "&\{fvc}"
     fnid: ctorArgNodeByLabel :ast :call label: "from"
     vt: (stampIdOf
         :symtab
@@ -40551,6 +40589,7 @@ dispatchArgText: function {
     n: astnode.view
 } out String is {
     av: emitExpr :ast :symtab :ctx :n
+    avF: factsOfText s: av.stringView
     if (symtab.typing.standInOf.has key: (zast.nodeIdOf :n)) then {
         return (standInText :ast :symtab :ctx :n text: av.take)
     }
@@ -40565,7 +40604,7 @@ dispatchArgText: function {
     if (pathIsPointer :ast :symtab :ctx :n) then apfx = ""
     # a value a call returns has no address: it is bound to a temp first, freed
     # when the checker's temporary owns it (a view it does not)
-    if apfx.length > 0 when (isNonLvalueArg s: av.stringView) then {
+    if apfx.length > 0 when avF.place.not then {
         hv: (hoistForAddress
             :ast
             :symtab
@@ -40816,9 +40855,10 @@ emitProtocolCreateCall: function {
             # value, and bind it where its address cannot be taken.
             if (fromBase.length == 0) or valueVid.isZero then {
                 fvx: emitExpr :ast :symtab :ctx n: fop
+                fvxF: factsOfText s: fvx.stringView
                 valVarC = fvx.copy
                 refPfx = "&"
-                if (isNonLvalueArg s: fvx.stringView) then valVarC = (hoistForAddress
+                if fvxF.place.not then valVarC = (hoistForAddress
                     :ast
                     :symtab
                     :ctx
@@ -43222,7 +43262,7 @@ emitYieldStmt: function {
     emitValueTakeInvalidations :ast :symtab :ctx n: yx :ind :buf
     # a boxed yield MOVES an lvalue operand (a local the instance keeps):
     # zero the source so the instance destructor does not double-free it
-    if ctx.genPayC.length > 0 when (isNonLvalueArg s: ve.stringView).not then {
+    if ctx.genPayC.length > 0 when (factsOfText s: ve.stringView).place then {
         lzv: movedZeroC :symtab :ctx tid: (stampIdOf :symtab nid: (interpPartNodeId n: yx))
         if lzv.length > 0 then buf.append "\{ind}\{ve} = \{lzv};\n"
     }

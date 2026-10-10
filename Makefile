@@ -689,7 +689,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2151712
+ALLOC_BASELINE := 2152269
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -825,12 +825,14 @@ frontend-guard:
 	echo "frontend-guard OK: no C spelling, no triple parse and no target in the front end's code"
 
 # lifetime-guard -- places the emitter still decides a lifetime itself rather than
-# reading the checker's destroy lists. isNonLvalueArg and bindingRhsIsBorrow are
-# floors, not targets: both answer C-shape questions, not when anything dies.
+# reading the checker's destroy lists. bindingRhsIsBorrow is a floor, not a
+# target: it answers a C-shape question, not when anything dies. factsOfText
+# counts the readers that still take an expression's facts from its C text
+# rather than from its producer (P4.4); the target is zero.
 lifetime-guard:
 	@l1=$$(grep -c 'registerScopeDestroy' src/zemitterc.z); \
 	l2=$$(grep -c 'refsLocal' src/zemitterc.z); \
-	l3=$$(grep -c 'isNonLvalueArg' src/zemitterc.z); \
+	l3=$$(grep -c 'factsOfText' src/zemitterc.z); \
 	l4=$$(grep -c 'bindingRhsIsBorrow' src/zemitterc.z); \
 	l5=$$(grep -cF '_ah\{' src/zemitterc.z); \
 	fail=0; \
@@ -838,7 +840,7 @@ lifetime-guard:
 	  elif [ "$$2" -lt "$$3" ]; then echo "lifetime-guard: $$1 = $$2 < baseline $$3 -- lower the baseline here"; fi; }; \
 	chk "registerScopeDestroy" "$$l1" 5; \
 	chk "refsLocal" "$$l2" 4; \
-	chk "isNonLvalueArg" "$$l3" 30; \
+	chk "factsOfText" "$$l3" 44; \
 	chk "bindingRhsIsBorrow" "$$l4" 6; \
 	chk "'_ah{' argument hoists" "$$l5" 0; \
 	if [ "$$fail" = "1" ]; then \
@@ -846,7 +848,7 @@ lifetime-guard:
 	  echo "  lists (scopeDestroy, exitDestroy) and the variable's recorded state instead."; \
 	  exit 1; \
 	fi; \
-	echo "lifetime-guard OK: registerScopeDestroy=$$l1 refsLocal=$$l2 isNonLvalueArg=$$l3 bindingRhsIsBorrow=$$l4 argHoists=$$l5"
+	echo "lifetime-guard OK: registerScopeDestroy=$$l1 refsLocal=$$l2 factsOfText=$$l3 bindingRhsIsBorrow=$$l4 argHoists=$$l5"
 
 # user-native-guard -- a unit outside src/runtime with its own natives.tbl rows and
 # fragments compiles, links and runs, one native in a hidden subunit. The runtime
