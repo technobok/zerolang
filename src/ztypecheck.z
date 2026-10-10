@@ -1921,6 +1921,13 @@ resolveNamedTypeId: function {
         # canonical GENERIC_PARAM id, not a forward record of that name
         e7: envTypeIdOf :st :scope :nameId
         if e7.isZero.not then return e7
+        # an alias the chain reaches before it resolved -- a generic unit's
+        # `elem: t`, read by a sibling's signature -- is followed to its target
+        eh7: envLookup :st :scope :nameId
+        if eh7.declId.isZero.not when (st.typing.decls.get i: eh7.declId).kind.reexportDecl then {
+            ea7: resolveAliasKey :st :ast declId: eh7.declId
+            if ea7.isZero.not then return ea7
+        }
         nT10: zast.nameTextAt :ast ref: nameId
         return (st.reg.newType name: nT10.stringView typetype: ztypes.ztypetype.recordType)
     }
@@ -15936,6 +15943,9 @@ reportUnknownBareAliasTarget: function {
     unitDecl: ztypes.declid
     nameId: zast.nameid
 } out bool is {
+    # a name the alias's own scope declares -- a generic unit's parameter, a
+    # namespace's sibling -- is claimed wherever the resolution was asked from
+    if (nameDeclaredOutward :st from: (declParentIdOf :st declId: adecl) :nameId) then return false
     unknown: unresolvedBareName :ast :st :unitDecl :nameId
     if unknown.length == 0 then return false
     at: aliasValueSite :st :ast :adecl
@@ -19348,6 +19358,31 @@ fnDeclaresGeneric: function {ast: Ast.view op: astnode.view nameId: zast.nameid}
     }
 }
 
+# unitMonoTypeOf -- a type a generic unit's template names, as the instance
+# `monoId` sees it: a partial completed with the instance's arguments, and a
+# parameter, or a type or alias the template declares, replaced by the
+# instance's own (`subs`). The type itself when nothing substitutes.
+unitMonoTypeOf: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    rf: ztypes.declid
+    tplId: ztypes.tid
+    monoId: ztypes.tid
+    subs: (IdMapV zast.nameid v: ztypes.tid).view
+    tid: ztypes.tid
+} out ztypes.tid is {
+    tdecl: declOfTypeId :st tid: tplId
+    r: tid
+    if (st.reg.isPartialOf :tid) then {
+        idSubs: IdMapV ztypes.tid v: ztypes.genericarg
+        unitMonoIdSubs :st :tdecl :monoId :subs :idSubs
+        r = completeUnitMonoPartial :st :ast :rf partialTid: tid :idSubs
+    }
+    k: unitTemplateKeyOf :st :tdecl :tid
+    if k.isZero.not then r = (subs.get key: k).or d: r
+    return r
+}
+
 # fillMonoMethodSignature -- copy a template method's parameters and return type
 # into the mono's method, with the instantiation's arguments substituted for the
 # generic parameters the template names.
@@ -19365,10 +19400,7 @@ fillMonoMethodSignature: function {
     monoId: ztypes.tid
     tplId: ztypes.tid
 } is {
-    tdeclU: declOfTypeId :st tid: tplId
     otBm: srcId
-    idSubs: IdMapV ztypes.tid v: ztypes.genericarg
-    idSubsBuilt: false
     ci: u64
     cn3: st.typing.declRowSlots ownerTid: otBm
     for ci < cn3 loop {
@@ -19376,21 +19408,7 @@ fillMonoMethodSignature: function {
         ci = ci + 1
         if rwBm.keep then {
             chName: rwBm.name
-            chId: rwBm.tid
-            target: chId
-            if (st.reg.isPartialOf tid: chId) then {
-                if idSubsBuilt.not then (unitMonoIdSubs
-                    :st
-                    tdecl: (declOfTypeId :st tid: tplId)
-                    :monoId
-                    :subs
-                    :idSubs
-                )
-                idSubsBuilt = true
-                target = completeUnitMonoPartial :st :ast :rf partialTid: chId :idSubs
-            }
-            ctn: unitTemplateKeyOf :st tdecl: tdeclU tid: chId
-            if ctn.isZero.not then target = (subs.get key: ctn).or d: target
+            target: unitMonoTypeOf :st :ast :rf :tplId :monoId :subs tid: rwBm.tid
             (st.typing.setMemberType
                 parentTypeId: newFnId
                 nameId: chName
@@ -19422,21 +19440,7 @@ fillMonoMethodSignature: function {
     }
     rto: st.reg.returnTypeOf tid: srcId
     if rto.isZero.not then {
-        rtv: rto
-        if (st.reg.isPartialOf tid: rto) then {
-            if idSubsBuilt.not then (unitMonoIdSubs
-                :st
-                tdecl: (declOfTypeId :st tid: tplId)
-                :monoId
-                :subs
-                :idSubs
-            )
-            idSubsBuilt = true
-            rtFull: completeUnitMonoPartial :st :ast :rf partialTid: rto :idSubs
-            rtv = rtFull
-        }
-        rtn: unitTemplateKeyOf :st tdecl: tdeclU tid: rtv
-        if rtn.isZero.not then rtv = (subs.get key: rtn).or d: rtv
+        rtv: unitMonoTypeOf :st :ast :rf :tplId :monoId :subs tid: rto
         st.reg.setReturnType typeId: newFnId value: rtv
     } else {
         # template return unresolved at signature time
@@ -19658,6 +19662,49 @@ mintUnitNestedInstances: function {
     }
 }
 
+# mintUnitAliasInstances -- each alias a generic unit declares (`elem: t`), as
+# the instance's own member: its target as the instance sees it, which is also
+# the substitution the instance's signatures take for the alias's name. A
+# constant is no alias: it is evaluated for each instance where it is read.
+mintUnitAliasInstances: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    rf: ztypes.declid
+    monoId: ztypes.tid
+    tplId: ztypes.tid
+    bodyIds: zast.kidspan
+    allSubs: (IdMapV zast.nameid v: ztypes.tid)
+} is {
+    vi: u64
+    for vi < bodyIds.count loop {
+        nm: argRefAt :ast nid: (zast.kidAt kids: ast.kids span: bodyIds i: vi)
+        vi = vi + 1
+        if nm.nid.isZero then continue
+        ad: st.typing.declFindChild parentDeclId: rf nameId: nm.name
+        if ad.isZero or (isBareGenericParam :ast op: (ast.nodes.get i: nm.operation)) then continue
+        # an alias of a type, bare or dotted, or one whose value instantiates
+        # a generic (`Vals: (ListVal t: t)`), as bareNameDenotesType asks
+        isAl: aliasNamesType :st :ast declId: ad
+        if isAl.not when (instantiatedAliasFold :ast :st declId: ad) then isAl = true
+        if isAl.not then continue
+        at: declTypeIdOf :st declId: ad
+        if at.isZero when (st.typing.decls.get i: ad).kind.reexportDecl then at = (resolveAliasKey
+            :st
+            :ast
+            declId: ad
+        )
+        if at.isZero or (constValueOfDecl :st :ast declId: ad).kind.none.not then continue
+        inst: unitMonoTypeOf :st :ast :rf :tplId :monoId subs: allSubs tid: at
+        (st.typing.declSynthMember
+            parentTypeId: monoId
+            nameId: nm.name
+            kind: ztyping.declkind.typeDecl
+        )
+        st.typing.setMemberType parentTypeId: monoId nameId: nm.name childTypeId: inst
+        allSubs.set key: nm.name value: inst
+    }
+}
+
 # retargetNestedSignatures -- a copy's methods, cloned before its siblings
 # existed, name a sibling type by its template: they name this unit instance's
 # copy of it instead.
@@ -19783,6 +19830,7 @@ buildUnitMono: function {
     for each se: subs.iterateItems loop allSubs.set key: se.key value: se.value
     {
         mintUnitNestedInstances :st :ast :rf :tmplUnitName :monoId :bodyIds :allSubs
+        mintUnitAliasInstances :st :ast :rf :monoId :tplId :bodyIds :allSubs
         vx179: u64
         for vx179 < bodyIds.count loop {
             fm: zast.kidAt kids: ast.kids span: bodyIds i: vx179
@@ -33165,15 +33213,18 @@ typeOfBareName: function {
         if isAutoFn when st.typing.suppressFnAutoCall.not then {
             result = bareFnCall :st :ast :node fid: fo
         }
-        if st.typing.suppressBareCtor.not then {
-            (checkBareTypeValue
-                :st
-                :unitDecl
-                :ast
-                :node
-                :fo
-            )
-        }
+        # a type read as its zero value is the instance's: a generic unit's
+        # parameter, or an alias of it, is the instance's argument, and the
+        # construction is checked as that argument's
+        if isAutoFn.not when isGenFn.not then result = instanceTypeOf :st :ast :unitDecl tid: result
+        if st.typing.suppressBareCtor.not then (checkBareNameValue
+            :st
+            :unitDecl
+            :ast
+            :node
+            :fo
+            instTid: result
+        )
         setu: result
         stampGate :st nid: node.nid tid: setu
         # atom-use def reference: the DEF's declaration (nodeType
@@ -33193,6 +33244,38 @@ typeOfBareName: function {
     return result
 }
 
+
+# checkBareNameValue -- a bare name read as a value, checked as the
+# construction it is: a generic parameter as the instance's argument
+# (`instTid`), which the template's own walk does not check; any other type as
+# itself (checkBareTypeValue).
+checkBareNameValue: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    node: atomref
+    fo: ztypes.tid
+    instTid: ztypes.tid
+} is {
+    if (st.reg.typetypeOf typeId: fo) != ztypes.ztypetype.genericParam then {
+        checkBareTypeValue :st :unitDecl :ast :node :fo
+        return
+    }
+    if instTid == fo then return
+    wdt: u32
+    nm: zast.nameTextAt :ast ref: node.name
+    wdt = nm.length.u32.orPanic
+    nm.drop
+    (checkBareTypeValueAt
+        :ast
+        :st
+        nodeid: node.nid
+        lineno: node.lineno
+        colno: node.colno
+        width: wdt
+        tid: instTid
+    )
+}
 
 # exprRootNameId -- the root name of an expression: a `:name` label-value
 # shorthand names its local directly, any other shape its path's root.
@@ -44628,12 +44711,7 @@ unresolvedBareName: function {
     # A type's fields and methods are no names in its methods' scope -- they
     # are reached through `this`, a value or the type -- so a type on the way
     # out claims only its constants and parameters, as resolution does.
-    cur: st.curScope
-    for cur.isZero.not and (cur != st.typing.programRoot) loop {
-        fc: st.typing.declFindChild parentDeclId: cur :nameId
-        if fc.isZero.not when (declIsTypeMember :st declId: fc).not then return ""
-        cur = declParentIdOf :st declId: cur
-    }
+    if (nameDeclaredOutward :st from: st.curScope :nameId) then return ""
     ubw: walkLookupTyperefById :st scope: st.curScope :ast :unitDecl baseId: nameId
     match (
         ubw
@@ -44641,6 +44719,24 @@ unresolvedBareName: function {
         return ""
     } case none then null
     return (zast.nameTextCopy :ast ref: nameId)
+}
+
+# nameDeclaredOutward -- a scope from `from` out to the program root declares
+# `nameId` as a name its body reads bare: a definition, a constant, a generic
+# parameter. A type's fields and methods are no such names -- they are reached
+# through `this`, a value or the type.
+nameDeclaredOutward: function {
+    st: zenv.ZSymbolTable.view
+    from: ztypes.declid
+    nameId: zast.nameid
+} out bool is {
+    cur: from
+    for cur.isZero.not and (cur != st.typing.programRoot) loop {
+        fc: st.typing.declFindChild parentDeclId: cur :nameId
+        if fc.isZero.not when (declIsTypeMember :st declId: fc).not then return true
+        cur = declParentIdOf :st declId: cur
+    }
+    return false
 }
 
 # declIsTypeMember -- a field or method of a type: reached through a value or the
@@ -62196,6 +62292,8 @@ declSurfaceOfName: function {
     tid: ztypes.tid
 } out ztypes.declid is {
     if nameId.isZero.not then {
+        se: nestedScopeSurface :st :ast :unitDecl :nameId :tid
+        if se.isZero.not then return se
         ro: unitDecl
         if ro.isZero.not then {
             cd: st.typing.declFindChild parentDeclId: ro :nameId
@@ -62213,6 +62311,25 @@ declSurfaceOfName: function {
         }
     }
     return (declOfTypeId :st :tid)
+}
+
+# nestedScopeSurface -- declSurfaceOfName's first answer: a scope nested in the
+# unit, from the reference outward. A name a generic unit or a namespace
+# declares -- a parameter, an alias of it -- lands on that declaration, which
+# the unit itself does not hold. 0 when the name is found no nearer than the
+# unit.
+nestedScopeSurface: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    nameId: zast.nameid
+    tid: ztypes.tid
+} out ztypes.declid is {
+    eh: envLookup :st scope: st.curScope :nameId
+    if (eh.scope == unitDecl) or (scopeIsWithin :st scope: eh.scope root: unitDecl).not then {
+        return ztypes.declid.zero
+    }
+    return (declSurfaceEnsure :st :ast declId: eh.declId want: tid)
 }
 
 # declSurfaceEnsure -- accept a candidate surface Decl only when its
