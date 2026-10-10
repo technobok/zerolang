@@ -18,6 +18,7 @@
 public: unit {
     :SynthNode
     :GenFields
+    :ConstIndex
     :defaultval
     :foldedbranch
     :specstandin
@@ -167,6 +168,17 @@ GenFields: class {
     forCounters: ListVal zast.nameid
     # and its trip count
     forCounts: ListVal zast.nameid
+}
+
+# ConstIndex -- a constant pool's hash index, so interning a value compares
+# the rows that share its hash rather than scanning the pool. `heads` maps a
+# hash to the newest row holding it; `next` links each row to the previous row
+# of its hash, and row 0 -- the pool's sentinel -- ends every chain.
+ConstIndex: class {
+    # the newest row of each hash
+    heads: (MapVV u64 v: u32)
+    # row by row, the previous row of the same hash; row 0 is the sentinel's
+    next: ListVal u32
 }
 
 # a node the checker made rather than the parser: it has no source position
@@ -1120,6 +1132,11 @@ ZTyping: class {
     # the 512-bit values untyped float constants hold once a fraction outgrows
     # 4096-bit parts; cval.floatId indexes it 1-based
     constBigFloats: List math.BigFloat
+    # each pool's hash index, row for row with it
+    constStringIndex: ConstIndex
+    constBigIntIndex: ConstIndex
+    constRatIndex: ConstIndex
+    constBigFloatIndex: ConstIndex
     # ifexpr nodeid -> the clause the fold selected
     foldedBranch: (IdMapV zast.nodeid v: foldedbranch)
     # the pending evaluation failure, recorded by the evaluator and rendered by
@@ -3216,6 +3233,10 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         constBigInts: List math.BigInt
         constRats: List math.BigRat
         constBigFloats: List math.BigFloat
+        constStringIndex: (ConstIndex heads: (MapVV u64 v: u32) next: ListVal u32)
+        constBigIntIndex: (ConstIndex heads: (MapVV u64 v: u32) next: ListVal u32)
+        constRatIndex: (ConstIndex heads: (MapVV u64 v: u32) next: ListVal u32)
+        constBigFloatIndex: (ConstIndex heads: (MapVV u64 v: u32) next: ListVal u32)
         foldedBranch: (IdMapV zast.nodeid v: foldedbranch)
         constFail: ztypes.noConstFail
         conformance: (List ztypes.ZConformance i: ztypes.confid)
@@ -3320,6 +3341,10 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
     childTid.constBigInts.append (math.BigInt from: 0)
     childTid.constRats.append (math.BigRat from: 0)
     childTid.constBigFloats.append math.BigFloat.zero
+    childTid.constStringIndex.next.append 0
+    childTid.constBigIntIndex.next.append 0
+    childTid.constRatIndex.next.append 0
+    childTid.constBigFloatIndex.next.append 0
     # the program root, DeclId 1: the file units are parented to it, so every
     # declaration but this one has a parent. Minted with parent 0, so it takes
     # no name edge and lands in no namespace; it carries no unit-scope bit and

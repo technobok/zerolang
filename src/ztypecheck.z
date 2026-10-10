@@ -56365,25 +56365,37 @@ literalRadix: function {lex: StringView at: u64} out u64 is {
 untypedIntBits: 512.u64
 
 # constInternRow -- the row of `item` in a constant pool whose row 0 is its
-# sentinel: an equal value's when one is there, else a new one. Scanned
-# linearly, as constStrings is: a program holds few such values
+# sentinel: an equal value's when one is there, else a new one. `index` finds
+# the rows that share `h`, the value's hash, and only those are compared: a
+# data block of 20,000 floats interns each element once.
 constInternRow: function as { T: AnyRef.generic } in {
-    rows: (List T).borrow item: T.view
+    rows: (List T).borrow
+    index: ztyping.ConstIndex.borrow
+    item: T.view
+    h: u64
 } out u32 is {
-    i: 1.u64
-    n: rows.length
-    for i < n loop {
-        e: rows.get :i
-        if e == item then return i.u32.orPanic
-        i = i + 1
+    head: (index.heads.get key: h).or d: 0
+    r: head
+    for r != 0 loop {
+        e: rows.get i: r.u64
+        if e == item then return r
+        r = index.next.get i: r.u64
     }
+    id: rows.length.u32.orPanic
     rows.append item.copy
-    return n.u32.orPanic
+    index.next.append head
+    index.heads.set key: h value: id
+    return id
 }
 
 # constInternBig -- the row of `b` in ZTyping.constBigInts
 constInternBig: function {st: zenv.ZSymbolTable b: math.BigInt.view} out u32 is {
-    return (constInternRow rows: st.typing.constBigInts item: b)
+    return (constInternRow
+        rows: st.typing.constBigInts
+        index: st.typing.constBigIntIndex
+        item: b
+        h: b.hash
+    )
 }
 
 # constOfBig -- the integer `b` as a constant: inline when it lies inside i64,
@@ -56405,21 +56417,24 @@ constFloatPrec: 512.u32
 
 # constInternRat -- the row of `r` in ZTyping.constRats
 constInternRat: function {st: zenv.ZSymbolTable r: math.BigRat.view} out u32 is {
-    return (constInternRow rows: st.typing.constRats item: r)
+    return (constInternRow
+        rows: st.typing.constRats
+        index: st.typing.constRatIndex
+        item: r
+        h: r.hash
+    )
 }
 
 # constInternBigFloat -- the row of `f` in ZTyping.constBigFloats, a zero's sign
-# told apart, which `==` does not
+# told apart, which `==` does not: the hash is the nearest f64's bits, and the
+# two zeros' bits differ, so they never share a chain to be compared on
 constInternBigFloat: function {st: zenv.ZSymbolTable f: math.BigFloat.view} out u32 is {
-    i: 1.u64
-    n: st.typing.constBigFloats.length
-    for i < n loop {
-        e: st.typing.constBigFloats.get :i
-        if e == f when e.negative == f.negative then return i.u32.orPanic
-        i = i + 1
-    }
-    st.typing.constBigFloats.append f.copy
-    return n.u32.orPanic
+    return (constInternRow
+        rows: st.typing.constBigFloats
+        index: st.typing.constBigFloatIndex
+        item: f
+        h: f.roundF64.bits
+    )
 }
 
 # constOfRat -- the untyped float `r`: its fraction, exactly, or past 4096-bit
@@ -56592,21 +56607,24 @@ constBigOf: function {st: zenv.ZSymbolTable.view v: ztypes.cval} out math.BigInt
     return e.copy
 }
 
-# constInternString -- the id of `text` in ZTyping.constStrings. The scan
-# starts past the sentinel row, so 0 keeps meaning "no string" and a genuine
-# empty constant gets a row of its own. Interned rather than stored inline
-# because a cval is a valtype and owns no heap; deduplicated by a linear scan,
-# which is right for a table that holds a handful of entries.
+# constInternString -- the id of `text` in ZTyping.constStrings. The sentinel
+# row is in no chain, so 0 keeps meaning "no string" and a genuine empty
+# constant gets a row of its own. Interned rather than stored inline because a
+# cval is a valtype and owns no heap; found through the pool's hash index, as
+# the other pools' values are (constInternRow).
 constInternString: function {st: zenv.ZSymbolTable text: StringView} out u32 is {
-    i: 1.u64
-    n: st.typing.constStrings.length
-    for i < n loop {
-        e: st.typing.constStrings.get :i
-        if e.stringView == text then return i.u32.orPanic
-        i = i + 1
+    h: text.hash
+    head: (st.typing.constStringIndex.heads.get key: h).or d: 0
+    r: head
+    for r != 0 loop {
+        e: st.typing.constStrings.get i: r.u64
+        if e.stringView == text then return r
+        r = st.typing.constStringIndex.next.get i: r.u64
     }
     id: st.typing.constStrings.length.u32.orPanic
     st.typing.constStrings.append text.string
+    st.typing.constStringIndex.next.append head
+    st.typing.constStringIndex.heads.set key: h value: id
     return id
 }
 
