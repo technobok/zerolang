@@ -6601,21 +6601,44 @@ canTakeAddress: function {f: cfacts} out bool is {
 # element or a unit constant -- reaches an emitter site as its bare value, and
 # a receiver typed by a record method then asked for `&10`, which C rejects.
 isNonLvalueArg: function {s: StringView} out bool is {
-    b0: s.byteAt 0.u64
-    match (
-        b0
-    ) case some then {
-        if b0 >= 48 when b0 <= 57 then return true
-        if b0 == 45 then {
-            b1: s.byteAt 1.u64
-            match (
-                b1
-            ) case some then {
-                if b1 >= 48 when b1 <= 57 then return true
-            } case none then null
+    if (opensNumber :s) then return true
+    if (s.contains needle: "(").not then return false
+    if (s.startsWith prefix: "(*").not then return true
+    return (callsAfterDeref :s)
+}
+
+# opensNumber -- the text opens with a number: a digit, or `-` and a digit.
+opensNumber: function {s: StringView} out bool is {
+    b0: (s.byteAt 0.u64).or d: 0
+    if b0 >= 48 when b0 <= 57 then return true
+    if b0 != 45 then return false
+    b1: (s.byteAt 1.u64).or d: 0
+    return (b1 >= 48) and (b1 <= 57)
+}
+
+# callsAfterDeref -- for a text opening with a deref `(*..)`: whether anything
+# after the deref is called. A deref is a place, and so is a member read off
+# one; `(*b).vtable->m((*b).data)` is the call's value.
+callsAfterDeref: function {s: StringView} out bool is {
+    tail: s.substring from: (derefGroupEnd :s) to: s.length
+    return (tail.contains needle: "(")
+}
+
+# derefGroupEnd -- the index just past the parenthesis that closes the `(*`
+# group opening `s`; the length when none does.
+derefGroupEnd: function {s: StringView} out u64 is {
+    depth: u64
+    i: u64
+    for i < s.length loop {
+        c: (s.byteAt :i).or d: 0
+        if c == 40 then depth = depth + 1
+        if c == 41 then {
+            depth = depth - 1
+            if depth == 0 then return i + 1
         }
-    } case none then null
-    return (s.contains needle: "(") and (s.startsWith prefix: "(*").not
+        i = i + 1
+    }
+    return s.length
 }
 
 # stringAppendViewText -- `recv.append arg` for an argument that is not an owned
