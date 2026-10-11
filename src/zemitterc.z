@@ -40506,37 +40506,97 @@ implMethodCname: function {
     return (ctxCname :ctx tid: implMid)
 }
 
-# emitProtocolImpl -- the per-(impl,label) conformance helpers: one wrapper per
-# spec method (casts void* -> impl, calls the impl method), the static vtable
-# instance, the borrowed create (data=val, no destroy), and the owned
-# create/destroy (heap-box the value, free + impl-destroy on drop).
-emitProtocolImpl: function {
+# emitConformanceImplsForType -- the conformance helpers one impl type owes a
+# family: every row of the conformance table naming it, each emitted once.
+# The families differ in which impls they accept and which helper they emit,
+# and in nothing else.
+emitConformanceImplsForType: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     implTid: ztypes.tid
-    protoTid: ztypes.tid
-    label: StringView
+    # which family to emit for: a facet's helpers, or a protocol's
+    isFacet: bool
     buf: String.borrow
 } is {
-    implOrig: originTidOf :symtab tid: implTid
+    # a reftype impl is skipped for a facet: one copied into an inline union
+    # would break the valtype guarantee, and catching that is front-end work
+    implTT: symtab.reg.typetypeOf typeId: implTid
+    if isFacet when implTT.isValueData.not then return
+    if (typeStructEmitted :ctx tid: implTid).not then return
+    want: ztypes.ztypetype.protocolType
+    if isFacet then want = ztypes.ztypetype.facetType
+    ri: ztypes.confid
+    for ri.next < symtab.typing.nextConf loop {
+        ri = ri.next
+        hit: false
+        tid: ztypes.tid
+        label: String
+        {
+            row: symtab.typing.conformance.get i: ri
+            if row.implTypeId == implTid then {
+                hit = true
+                tid = row.specTypeId
+                label = row.label.copy
+            }
+        }
+        if hit.not then continue
+        if (symtab.reg.typetypeOf typeId: tid) == want when (conformanceRowEmitted
+            :ctx
+            row: ri
+        ).not then {
+            conformanceRowMark :ctx row: ri
+            (emitConformanceImpl
+                :ast
+                :symtab
+                :ctx
+                :implTid
+                specTid: tid
+                label: label.stringView
+                :isFacet
+                :buf
+            )
+        }
+    }
+}
+
+# emitConformanceImpl -- one conformance row's helper set: a wrapper per spec
+# method (casts the `void*` data to the impl and calls the impl's method), the
+# static vtable, and the creates. A protocol's are a borrowed create (the data
+# is the value, no destroy) and an owned create/destroy (the value heap-boxed,
+# freed with the impl's destroy on drop). A facet's is one copy-create, serving
+# `.create` and `.borrow` alike: a facet copies its source, and its impls are
+# valtypes, so it has no heap and no destroy.
+emitConformanceImpl: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    implTid: ztypes.tid
+    specTid: ztypes.tid
+    label: StringView
+    isFacet: bool
+    buf: String.borrow
+} is {
     # a native mono (str) is boxed per instance, on demand (boxLabelFor); any
-    # other instance conforms by a row of its own (emitInstanceConformanceImpls)
+    # other instance conforms by a row of its own (emitInstanceConformanceImpls).
+    # A facet has no native conformer: only a type declaring it conforms.
     isNat: (nativeConformerRow :symtab tid: implTid).isZero.not
-    if implOrig.isZero.not when isNat.not then {
-        ownLbl: conformanceLabelFor :symtab :implTid :protoTid
+    if isFacet then {
+        if (isGenericType :symtab tid: implTid) then return
+    } else if (originTidOf :symtab tid: implTid).isZero.not when isNat.not then {
+        ownLbl: conformanceLabelFor :symtab :implTid protoTid: specTid
         if ownLbl.length == 0 then return
     }
     implBase: ctxCname :ctx tid: implTid
     implCtype: implStructC :symtab :ctx tid: implTid
-    protoBase: ctxCname :ctx tid: protoTid
-    protoCtype: "\{protoBase}_t"
-    vtableCtype: "\{protoBase}_vtable_t"
+    specBase: ctxCname :ctx tid: specTid
+    specCtype: "\{specBase}_t"
+    vtableCtype: "\{specBase}_vtable_t"
     wbase: "\{implBase}_\{label}"
     mnames: List String
     mids: ListVal ztypes.tid
     midsNm: ListVal zast.nameid
-    protoChildMethods :ast :symtab tid: protoTid names: mnames ids: mids nameIds: midsNm
+    protoChildMethods :ast :symtab tid: specTid names: mnames ids: mids nameIds: midsNm
     mi: u64
     mn: mnames.length
     for mi < mn loop {
@@ -40548,7 +40608,7 @@ emitProtocolImpl: function {
         if (specMemberIsSelfTyped
             :ast
             :symtab
-            ifaceTid: protoTid
+            ifaceTid: specTid
             :smid
         ) then {
             mi = mi + 1
@@ -40621,7 +40681,7 @@ emitProtocolImpl: function {
             retkw = ""
             ret = "void"
         }
-        wslot: memberC :ast :symtab :ctx owner: protoTid kind: memberkind.slot nameId: mnameId
+        wslot: memberC :ast :symtab :ctx owner: specTid kind: memberkind.slot nameId: mnameId
         w0: "static \{ret} \{wbase}_\{wslot}_wrapper(\{wparams}) {\n"
         buf.append w0
         w1: "    \{implCtype}* _self = (\{implCtype}*)_data;\n"
@@ -40653,7 +40713,7 @@ emitProtocolImpl: function {
         if (specMemberIsSelfTyped
             :ast
             :symtab
-            ifaceTid: protoTid
+            ifaceTid: specTid
             smid: (mids.get i: mj)
         ) then {
             mj = mj + 1
@@ -40663,7 +40723,7 @@ emitProtocolImpl: function {
             :ast
             :symtab
             :ctx
-            owner: protoTid
+            owner: specTid
             kind: memberkind.slot
             nameId: (midsNm.get i: mj)
         )
@@ -40672,7 +40732,12 @@ emitProtocolImpl: function {
         mj = mj + 1
     }
     buf.append "};\n\n"
-    bc0: "static \{protoCtype} \{wbase}_create(const \{implCtype}* val) {\n    \{protoCtype} proto = {0};\n    proto.data = (void*)val;\n    proto.vtable = &\{wbase}_vtable;\n    proto.destroy = NULL;\n    return proto;\n}\n\n"
+    if isFacet then {
+        fc0: "static \{specCtype} \{wbase}_create(const \{implCtype}* val) {\n    \{specCtype} facet = {0};\n    facet.vtable = &\{wbase}_vtable;\n    facet.data._i\{implTid} = *val;\n    return facet;\n}\n\n"
+        buf.append fc0
+        return
+    }
+    bc0: "static \{specCtype} \{wbase}_create(const \{implCtype}* val) {\n    \{specCtype} proto = {0};\n    proto.data = (void*)val;\n    proto.vtable = &\{wbase}_vtable;\n    proto.destroy = NULL;\n    return proto;\n}\n\n"
     buf.append bc0
     od0: "static void \{wbase}_owned_destroy(void* p) {\n"
     buf.append od0
@@ -40683,231 +40748,8 @@ emitProtocolImpl: function {
         buf.append "((\{implCtype}*)p);\n"
     }
     buf.append "    free(p);\n}\n\n"
-    oc0: "static \{protoCtype} \{wbase}_create_owned(\{implCtype}* val) {\n    \{protoCtype} proto = {0};\n    \{implCtype}* boxed = (\{implCtype}*)z_xmalloc(sizeof(\{implCtype}));\n    *boxed = *val;\n    proto.data = boxed;\n    proto.vtable = &\{wbase}_vtable;\n    proto.destroy = \{wbase}_owned_destroy;\n    return proto;\n}\n\n"
+    oc0: "static \{specCtype} \{wbase}_create_owned(\{implCtype}* val) {\n    \{specCtype} proto = {0};\n    \{implCtype}* boxed = (\{implCtype}*)z_xmalloc(sizeof(\{implCtype}));\n    *boxed = *val;\n    proto.data = boxed;\n    proto.vtable = &\{wbase}_vtable;\n    proto.destroy = \{wbase}_owned_destroy;\n    return proto;\n}\n\n"
     buf.append oc0
-}
-
-# emitFacetImpl -- the per-(impl,label) facet conformance helpers: one
-# wrapper per spec method (casts void* -> impl, calls the impl method), the
-# static vtable instance, and a single copy-create (serves `.create` and
-# `.borrow` -- a facet copies its source; borrow differs only at typecheck
-# time). No owned variant, no heap, no destroy: impls are valtypes.
-emitFacetImpl: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    implTid: ztypes.tid
-    facetTid: ztypes.tid
-    label: StringView
-    buf: String.borrow
-} is {
-    if (isGenericType :symtab tid: implTid) then return
-    implBase: ctxCname :ctx tid: implTid
-    implCtype: implStructC :symtab :ctx tid: implTid
-    facetBase: ctxCname :ctx tid: facetTid
-    facetCtype: "\{facetBase}_t"
-    vtableCtype: "\{facetBase}_vtable_t"
-    wbase: "\{implBase}_\{label}"
-    mnames: List String
-    mids: ListVal ztypes.tid
-    midsNm: ListVal zast.nameid
-    protoChildMethods :ast :symtab tid: facetTid names: mnames ids: mids nameIds: midsNm
-    mi: u64
-    mn: mnames.length
-    for mi < mn loop {
-        mname: mnames.get i: mi
-        mnameId: midsNm.get i: mi
-        smid: mids.get i: mi
-        # the slot this wrapper would fill was omitted: a member naming the
-        # interface's own type is not dispatchable
-        if (specMemberIsSelfTyped
-            :ast
-            :symtab
-            ifaceTid: facetTid
-            :smid
-        ) then {
-            mi = mi + 1
-            continue
-        }
-        ret: (methodRetCtype
-            :ast
-            :symtab
-            :ctx
-            mid: smid
-        )
-        wparams: "void* _data".string
-        cargs: "_self".string
-        pnames: List String
-        pids: ListVal ztypes.tid
-        pidsNm: ListVal zast.nameid
-        (recFieldLists
-            :ast
-            :symtab
-            tid: smid
-            names: pnames
-            ids: pids
-            nameIds: pidsNm
-        )
-        pi: u64
-        pn: pnames.length
-        for pi < pn loop {
-            pid: pids.get i: pi
-            isThis: false
-            if (pidsNm.get i: pi) == zast.wellKnown.slot.wkThis then isThis = true
-            # A marked receiver is an ALIAS (`{t: this.view}`), so neither its
-            # name nor its type says `this`. The registry records which
-            # parameter IS the receiver; that is the question to ask, and it is
-            # the same one methodReceiverIsView asks.
-            rpnW: symtab.reg.thisParamNameIdOf tid: smid
-            if rpnW.isZero.not when (pidsNm.get i: pi) == rpnW then isThis = true
-            if isThis.not then {
-                pct: (protoParamCtype
-                    :ast
-                    :symtab
-                    :ctx
-                    :pid
-                )
-                pnmFP: (memberC
-                    :ast
-                    :symtab
-                    :ctx
-                    owner: smid
-                    kind: memberkind.param
-                    nameId: (pidsNm.get i: pi)
-                )
-                wparams.append ", "
-                wparams.append pct
-                wparams.append " "
-                wparams.append pnmFP
-                cargs.append ", "
-                cargs.append pnmFP
-            }
-            pi = pi + 1
-        }
-        implMc: (implMethodCname
-            :symtab
-            :ctx
-            :implTid
-            :mnameId
-            mname: mname.stringView
-        )
-        retkw: "return ".string
-        if ret.length == 0 then {
-            retkw = ""
-            ret = "void"
-        }
-        wslot: memberC :ast :symtab :ctx owner: facetTid kind: memberkind.slot nameId: mnameId
-        w0: "static \{ret} \{wbase}_\{wslot}_wrapper(\{wparams}) {\n"
-        buf.append w0
-        w1: "    \{implCtype}* _self = (\{implCtype}*)_data;\n"
-        buf.append w1
-        w2: "    \{retkw}\{implMc}(\{cargs});\n"
-        buf.append w2
-        buf.append "}\n\n"
-        mi = mi + 1
-    }
-    vi0: "static \{vtableCtype} \{wbase}_vtable = {\n"
-    buf.append vi0
-    mj: u64
-    for mj < mn loop {
-        # the row for a member with no slot: there is nothing to point at
-        if (specMemberIsSelfTyped
-            :ast
-            :symtab
-            ifaceTid: facetTid
-            smid: (mids.get i: mj)
-        ) then {
-            mj = mj + 1
-            continue
-        }
-        rslot: (memberC
-            :ast
-            :symtab
-            :ctx
-            owner: facetTid
-            kind: memberkind.slot
-            nameId: (midsNm.get i: mj)
-        )
-        vrow: "    .\{rslot} = \{wbase}_\{rslot}_wrapper,\n"
-        buf.append vrow
-        mj = mj + 1
-    }
-    buf.append "};\n\n"
-    fc0: "static \{facetCtype} \{wbase}_create(const \{implCtype}* val) {\n    \{facetCtype} facet = {0};\n    facet.vtable = &\{wbase}_vtable;\n    facet.data._i\{implTid} = *val;\n    return facet;\n}\n\n"
-    buf.append fc0
-}
-
-# emitConformanceImplsForType -- the conformance helpers one impl type owes a
-# family: every row of the conformance table naming it, each emitted once.
-# The families differ in which impls they accept and which helper they emit,
-# and in nothing else.
-emitConformanceImplsForType: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    implTid: ztypes.tid
-    # which family to emit for: a facet's helpers, or a protocol's
-    isFacet: bool
-    buf: String.borrow
-} is {
-    # a reftype impl is skipped for a facet: one copied into an inline union
-    # would break the valtype guarantee, and catching that is front-end work
-    implTT: symtab.reg.typetypeOf typeId: implTid
-    if isFacet when implTT.isValueData.not then return
-    if (typeStructEmitted :ctx tid: implTid).not then return
-    want: ztypes.ztypetype.protocolType
-    if isFacet then want = ztypes.ztypetype.facetType
-    ri: ztypes.confid
-    for ri.next < symtab.typing.nextConf loop {
-        ri = ri.next
-        hit: false
-        tid: ztypes.tid
-        label: String
-        {
-            row: symtab.typing.conformance.get i: ri
-            if row.implTypeId == implTid then {
-                hit = true
-                tid = row.specTypeId
-                label = row.label.copy
-            }
-        }
-        if hit.not then continue
-        if (symtab.reg.typetypeOf typeId: tid) == want when (conformanceRowEmitted
-            :ctx
-            row: ri
-        ).not then {
-            conformanceRowMark :ctx row: ri
-            (emitConformanceImpl
-                :ast
-                :symtab
-                :ctx
-                :implTid
-                specTid: tid
-                label: label.stringView
-                :isFacet
-                :buf
-            )
-        }
-    }
-}
-
-# emitConformanceImpl -- one conformance row's helper set: a facet's or a
-# protocol's, as `isFacet` says
-emitConformanceImpl: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    implTid: ztypes.tid
-    specTid: ztypes.tid
-    label: StringView
-    isFacet: bool
-    buf: String.borrow
-} is {
-    if isFacet then {
-        emitFacetImpl :ast :symtab :ctx :implTid facetTid: specTid :label :buf
-    } else {
-        emitProtocolImpl :ast :symtab :ctx :implTid protoTid: specTid :label :buf
-    }
 }
 
 # nativeConformerRow -- the type a NATIVE conformer's conformance rows name:
@@ -40992,13 +40834,14 @@ emitNativeConformanceImpls: function {
         ni = ni + 1
         nrow: nativeConformerRow :symtab tid: implT
         lbl: conformanceLabelFor :symtab implTid: nrow protoTid: protoT
-        (emitProtocolImpl
+        (emitConformanceImpl
             :ast
             :symtab
             :ctx
             implTid: implT
-            protoTid: protoT
+            specTid: protoT
             label: lbl.stringView
+            isFacet: false
             :buf
         )
     }
