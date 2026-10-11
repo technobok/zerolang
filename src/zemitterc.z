@@ -6804,14 +6804,6 @@ stateFacts: function {facts: cfacts.borrow from: cfacts} is {
     facts.stated = from.stated
 }
 
-# guessing -- `text`, with the facts its shape implies stated into the caller's
-# slot: a producer's return whose facts are not yet its own to state. Nothing
-# ("") states nothing.
-guessing: function {facts: cfacts.borrow text: String.take} out String is {
-    if text.length > 0 then stateFacts :facts from: (factsOfText s: text.stringView)
-    return text
-}
-
 # constFacts -- a constant's value: a number, a cast of one, a macro, a tag. No
 # storage, nothing evaluated, nothing repeated when read twice.
 constFacts: function {} out cfacts is {
@@ -7986,6 +7978,7 @@ instanceMethodArgValue: function {
     pnameL: zast.nameTextAt :ast ref: posParamNameId
     ca: ctorArgFor :ast :call label: pnameL.stringView posIdx: positionalIdx
     isLbl9b: ca.labelled
+    iiF: cfacts
     iiVal: (ctorInterpArgAt
         :ast
         :symtab
@@ -7994,6 +7987,7 @@ instanceMethodArgValue: function {
         fid: mco
         pnameId: posParamNameId
         pid: posParamId
+        facts: iiF
     )
     atomVarId: String
     usedInterp: false
@@ -8004,13 +7998,13 @@ instanceMethodArgValue: function {
     avNd: zast.nodeid
     if iiVal.length > 0 then {
         atomVarId = iiVal.take
-        stateFacts facts: avF from: (factsOfText s: atomVarId.stringView)
+        stateFacts facts: avF from: iiF
         usedInterp = true
         if isLbl9b.not then positionalIdx = positionalIdx + 1
     } else {
         avNd = ctorArgNodeByLabel :ast :call label: pnameL.stringView
         if avNd.isZero then {
-            atomVarId = guessing facts: avF text: "0"
+            atomVarId = stating facts: avF from: constFacts text: "0"
         } else {
             atomVarId = ctorArgTextAt :ast :symtab :ctx aid: avNd facts: avF
         }
@@ -8167,6 +8161,7 @@ passMethodArg: function {
             :ctx
             argOpNode: avn
             av: av.stringView
+            :avF
             avVid: (atomVidIfPlain :ast :symtab :ctx n: avn text: av.stringView)
         )
         if bx.length > 0 then {
@@ -8176,12 +8171,12 @@ passMethodArg: function {
                     :symtab
                     :ctx
                     av: bx.stringView
-                    avF: (factsOfText s: bx.stringView)
+                    avF: callFacts
                     pid: posParamId
                     argNid: zast.nodeid
                     :facts
                 )
-            } else args.append (guessing :facts text: bx.take)
+            } else args.append (stating :facts from: callFacts text: bx.take)
             return
         }
     }
@@ -8235,7 +8230,6 @@ appendArgValue: function {
         :ctx
         n: (ast.nodes.get i: avNd)
     ) then {
-        # a load's facts are read off its text (see userFnArgTextWith)
         ld: "(*\{av})"
         (appendArgValueText
             :ast
@@ -8245,7 +8239,7 @@ appendArgValue: function {
             :usedInterp
             :posParamId
             av: ld.stringView
-            avF: (factsOfText s: ld.stringView)
+            avF: (operandFacts e: avF place: true)
             argNid: avNd
             :args
             :facts
@@ -11838,16 +11832,23 @@ emitQualRecvMethodCall: function {
     )
     if tpq.length > 0 then recvNmQ = tpq.copy
     recvExQ: String
+    recvQF: cfacts
     recvPtrQ: false
     posStartQ: u64
     if (fnTypeTakesThis :symtab tid: mtid) then {
         recvNdQ: zast.nodeid
         if (ctorHasLabel :ast :call label: recvNmQ.stringView) then {
-            recvExQ = ctorArgByLabel :ast :symtab :ctx :call label: recvNmQ.stringView
+            recvExQ = (ctorArgByLabelWith
+                :ast
+                :symtab
+                :ctx
+                :call
+                label: recvNmQ.stringView
+                facts: recvQF
+            )
             recvNdQ = ctorArgNodeByLabel :ast :call label: recvNmQ.stringView
         } else {
-            rqF: cfacts
-            recvExQ = ctorArgByPosition :ast :symtab :ctx :call idx: 0 facts: rqF
+            recvExQ = ctorArgByPosition :ast :symtab :ctx :call idx: 0 facts: recvQF
             recvNdQ = ctorArgNodeByPosition :ast :call idx: 0
             posStartQ = 1
         }
@@ -11857,7 +11858,7 @@ emitQualRecvMethodCall: function {
         if recvNdQ.isZero.not then {
             recvPtrQ = receiverNodeIsPtr :ast :symtab :ctx n: (ast.nodes.get i: recvNdQ)
             if recvPtrQ when (ptrHeldValtype :ast :symtab :ctx n: (ast.nodes.get i: recvNdQ)) then {
-                recvExQ = emitExpr :ast :symtab :ctx n: (ast.nodes.get i: recvNdQ)
+                recvExQ = emitExprWith :ast :symtab :ctx n: (ast.nodes.get i: recvNdQ) facts: recvQF
             }
         }
         # no receiver supplied at all: the checker reports the missing
@@ -11873,7 +11874,7 @@ emitQualRecvMethodCall: function {
         :call
         mco: mtid
         recvExpr: recvExQ.stringView
-        recvF: (factsOfText s: recvExQ.stringView)
+        recvF: recvQF
         recvIsPtr: recvPtrQ
         posStart: posStartQ
         :facts
@@ -12840,7 +12841,7 @@ ctorArgTextAt: function {
 } out String is {
     n: ast.nodes.get i: aid
     iv: emitInterpArgExpr :ast :symtab :ctx :n
-    if iv.length > 0 then return (guessing :facts text: iv)
+    if iv.length > 0 then return (stating :facts from: callFacts text: iv)
     return (valueExprC :ast :symtab :ctx :n :facts)
 }
 
@@ -12948,9 +12949,9 @@ ctorInterpArgAt: function {
     fid: ztypes.tid
     pnameId: zast.nameid
     pid: ztypes.tid
+    facts: cfacts.borrow
 } out String is {
     if aid.isZero then return ""
-    facts: cfacts
     return (emitInterpArgForParam
         :ast
         :symtab
@@ -14471,6 +14472,7 @@ conformanceArgText: function {
     ctx: Ctx
     argOpNode: astnode.view
     av: StringView
+    avF: cfacts
     avVid: ztypes.vid
 } out String is {
     nid: zast.nodeIdOf n: argOpNode
@@ -14489,7 +14491,7 @@ conformanceArgText: function {
     aRcv: "&\{av}"
     if (isPtrVid :ctx vid: avVid) then {
         aRcv = "\{av}"
-    } else if (factsOfText s: av).place.not then {
+    } else if avF.place.not then {
         # AN INLINE CONSTRUCTION IS NOT AN LVALUE: C rejects `&z_t109_create(40)`,
         # so it is bound to a temp first, as a `P.create from: (Cat k: 40)` source is
         ahv: hoistForAddress :ast :symtab :ctx :av tid: su.value argNid: nid
@@ -14516,9 +14518,10 @@ standInText: function {
         :ctx
         argOpNode: n
         av: text.stringView
+        avF: facts
         avVid: (atomVidIfPlain :ast :symtab :ctx :n text: text.stringView)
     )
-    if bx.length > 0 then return (guessing :facts text: bx)
+    if bx.length > 0 then return (stating :facts from: callFacts text: bx)
     return text
 }
 
@@ -14632,6 +14635,7 @@ userFnArgTextWith: function {
             :ctx
             :argOpNode
             av: atomVarId.stringView
+            avF: (if projd then projF else avF)
             avVid: avq
         )
         if spec.length > 0 then {
@@ -16677,7 +16681,7 @@ emitNestedMonoMethodBase: function {
             return (stating
                 :facts
                 from: callFacts
-                text: (nestedFnptrFieldRead :ast :symtab :ctx :n :mnId :nlid :baseAtom)
+                text: (nestedFnptrFieldRead :ast :symtab :ctx :n :mnId :nlid :baseAtom :baseAtomF)
             )
         }
         if nDisp then {
@@ -16783,6 +16787,7 @@ nestedFnptrFieldRead: function {
     nlid: ztypes.tid
     # the base's C expression
     baseAtom: StringView
+    baseAtomF: cfacts
 } out String is {
     nfbase: baseAtom.string
     nfacc: ".".string
@@ -16790,10 +16795,20 @@ nestedFnptrFieldRead: function {
     if (pathIsPointer :ast :symtab :ctx n: (ast.nodes.get i: n.parent)) then {
         nfacc = "->"
         nfrcv = baseAtom.string
-    } else if (factsOfText s: baseAtom).place.not then {
+    } else if baseAtomF.place.not then {
         # a call's result is read through ONE hoisted temporary: the
         # slot and the receiver it is handed are the same value
-        nfrcv = emitByrefArg :ast :symtab :ctx av: baseAtom pid: nlid argNid: n.parent
+        nfF: cfacts
+        nfrcv = (emitByrefArgWith
+            :ast
+            :symtab
+            :ctx
+            av: baseAtom
+            avF: baseAtomF
+            pid: nlid
+            argNid: n.parent
+            facts: nfF
+        )
         nfbase = "(\{nfrcv})"
         nfacc = "->"
     }
@@ -17994,7 +18009,9 @@ emitSvAtomBase: function {
             # String, so the view's address is a readonly String
             accA: "&".string
             if (isPtrVid :ctx vid: bn2v) then accA = ""
-            return (guessing :facts text: "((const \{ctx.strC}_t*)\{accA}\{bn2})")
+            avsF: operandFacts e: bn2F place: false
+            if accA.length > 0 then avsF = addrFacts e: bn2F
+            return (stating :facts from: avsF text: "((const \{ctx.strC}_t*)\{accA}\{bn2})")
         }
         if mnId == zast.wellKnown.slot.wkCount then {
             needsAddM :ctx uname: "system" memb: "count"
