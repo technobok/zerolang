@@ -6331,13 +6331,14 @@ orderNativeArgs: function {
                 mk: pendingHoistMark :ctx
                 avF: cfacts
                 av: valueExprC :ast :symtab :ctx n: (ast.nodes.get i: a.operation) facts: avF
-                (orderArgAt
+                (orderArgAtWith
                     :ast
                     :symtab
                     :ctx
                     st: ord
                     mark: mk
                     text: av
+                    tf: avF
                     nid: a.operation
                     byPtr: false
                     :slot
@@ -10871,6 +10872,7 @@ colArg: function {
                     :ctx
                     n: (ast.nodes.get i: a.operation)
                     text: (valueExprC :ast :symtab :ctx n: (ast.nodes.get i: a.operation) facts: tF)
+                    facts: tF
                 )
             }
             if an.length == 0 when havePos.not then {
@@ -10893,6 +10895,7 @@ colArg: function {
                         :ctx
                         n: aOpNode
                         text: (valueExprC :ast :symtab :ctx n: aOpNode facts: tF)
+                        facts: tF
                     )
                 }
             }
@@ -10928,6 +10931,7 @@ listArg: function {
                     :ctx
                     n: (ast.nodes.get i: a.operation)
                     text: (valueExprC :ast :symtab :ctx n: (ast.nodes.get i: a.operation) facts: tF)
+                    facts: tF
                 )
             }
             if an.length == 0 when havePos.not then {
@@ -10940,6 +10944,7 @@ listArg: function {
                     :ctx
                     n: aOpNode
                     text: (valueExprC :ast :symtab :ctx n: aOpNode facts: tF)
+                    facts: tF
                 )
             }
         }
@@ -11898,10 +11903,10 @@ fieldArgText: function {
     nameId: zast.nameid
     # the field's type
     fid: ztypes.tid
+    facts: cfacts.borrow
 } out String is {
     if ca.nid.isZero.not then {
-        tF: cfacts
-        t: ctorArgTextAt :ast :symtab :ctx aid: ca.nid facts: tF
+        t: ctorArgTextAt :ast :symtab :ctx aid: ca.nid :facts
         if ca.labelled or (t.length > 0) then {
             return (standInText
                 :ast
@@ -11909,11 +11914,12 @@ fieldArgText: function {
                 :ctx
                 n: (ast.nodes.get i: ca.nid)
                 text: t.take
+                :facts
             )
         }
     }
-    if ca.labelled then return "0"
-    return (fieldDefaultText :ast :symtab :ctx :tid :nameId :fid)
+    if ca.labelled then return (stating :facts from: constFacts text: "0")
+    return (guessing :facts text: (fieldDefaultText :ast :symtab :ctx :tid :nameId :fid))
 }
 
 # userCreateCtor -- a construction routed through the user `create` `cco`:
@@ -12063,25 +12069,30 @@ orderRecordField: function {
 } is {
     mk: pendingHoistMark :ctx
     ca: ctorArgFor :ast :call label: fname :posIdx
-    av: fieldArgText :ast :symtab :ctx :tid :ca nameId: fnameId fid: ffid
+    avF: cfacts
+    av: fieldArgText :ast :symtab :ctx :tid :ca nameId: fnameId fid: ffid facts: avF
     # a borrowed reftype field is a pointer; a source stored INLINE (the
     # receiver's own field, a field of a parameter) is passed by address
     # the field is a pointer: whatever passes it hands on an address
     byref: fieldIsReftypePtr :symtab :ctx owner: tid :fnameId :ffid
     if byref when ca.labelled when (argIsPointerByLabel :ast :symtab :ctx :call label: fname
     ).not then {
-        av = (emitByrefArg
+        bF: cfacts
+        av = (emitByrefArgWith
             :ast
             :symtab
             :ctx
             av: av.stringView
+            :avF
             pid: ffid
             argNid: ca.nid
+            facts: bF
         )
+        avF = bF
     }
     constant: true
     if written > 0 then {
-        constant = (orderConstant
+        constant = (orderConstantWith
             :ast
             :symtab
             :ctx
@@ -12089,6 +12100,7 @@ orderRecordField: function {
                 i: (writtenArgNode :ast :call pos: written - 1)
             )
             text: av.stringView
+            tf: avF
             byPtr: byref
         )
     }
@@ -12098,13 +12110,14 @@ orderRecordField: function {
         heap: isHeapPtrCollection :symtab :ctx tid: ffid
         if byref or heap when ct.length > 0 then ct.append "*"
     }
-    (orderPart
+    (orderPartWith
         :ast
         :symtab
         :ctx
         st: ord
         mark: mk
         text: av
+        tf: avF
         :constant
         fid: ztypes.tid
         pid: ztypes.tid.zero
@@ -12220,22 +12233,42 @@ orderArgAt: function {
     byPtr: bool
     slot: u64
 } is {
+    tf: factsOfText s: text.stringView
+    orderArgAtWith :ast :symtab :ctx :st :mark :text :tf :nid :byPtr :slot
+}
+
+# orderArgAtWith -- orderArgAt for an argument whose facts are `tf`.
+orderArgAtWith: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    st: orderstate.borrow
+    mark: hoistmark
+    text: String.take
+    tf: cfacts
+    nid: zast.nodeid
+    # the parameter takes the argument by pointer
+    byPtr: bool
+    slot: u64
+} is {
     constant: true
-    if nid.isZero.not then constant = (orderConstant
+    if nid.isZero.not then constant = (orderConstantWith
         :ast
         :symtab
         :ctx
         n: (ast.nodes.get i: nid)
         text: text.stringView
+        :tf
         :byPtr
     )
-    (orderPart
+    (orderPartWith
         :ast
         :symtab
         :ctx
         :st
         :mark
         :text
+        :tf
         :constant
         fid: ztypes.tid
         pid: ztypes.tid.zero
@@ -13948,6 +13981,8 @@ standInText: function {
     ctx: Ctx
     n: astnode.view
     text: String.take
+    # holds `text`'s facts, and is left holding the result's
+    facts: cfacts.borrow
 } out String is {
     if (symtab.typing.standInOf.has key: (zast.nodeIdOf :n)).not then return text
     bx: (conformanceArgText
@@ -13958,7 +13993,7 @@ standInText: function {
         av: text.stringView
         avVid: (atomVidIfPlain :ast :symtab :ctx :n text: text.stringView)
     )
-    if bx.length > 0 then return bx
+    if bx.length > 0 then return (guessing :facts text: bx)
     return text
 }
 
@@ -22518,12 +22553,17 @@ emitStoreTo: function {
     tmp: TmpCtr
     buf: String.borrow
 } is {
+    rv2F: cfacts
     rv2: (standInText
         :ast
         :symtab
         :ctx
         n: valueNode
-        text: (reassignRhsText :ast :symtab :ctx :valueNode :ind :tmp :buf)
+        text: (guessing
+            facts: rv2F
+            text: (reassignRhsText :ast :symtab :ctx :valueNode :ind :tmp :buf)
+        )
+        facts: rv2F
     )
     # the RHS walk may have recorded _ah arg hoists: declare them HERE,
     # before the assignment line that uses them (they would otherwise
@@ -22531,7 +22571,7 @@ emitStoreTo: function {
     flushArgHoists :ctx :ind :tmp :buf
     rdrop: (stampIsStr :symtab :ctx nid: rtnid) or (symtab.reg.needsDestructor typeId: rtsid)
     ran: false
-    if rdrop when (factsOfText s: rv2.stringView).place.not then {
+    if rdrop when rv2F.place.not then {
         rrt: reassignTargetC :ast :symtab :ctx :rtnid :rtsid
         rrn: tmpNext :ctx :tmp
         buf.append "\{ind}\{rrt} _rr\{rrn} = \{rv2};\n"
@@ -28568,12 +28608,14 @@ emitPlainReturn: function {
     tmp: TmpCtr
     buf: String.borrow
 } is {
+    rvF: cfacts
     rv: (standInText
         :ast
         :symtab
         :ctx
         n: (ast.nodes.get i: vid)
-        text: (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: vid))
+        text: (emitExprWith :ast :symtab :ctx n: (ast.nodes.get i: vid) facts: rvF)
+        facts: rvF
     )
     flushArgHoists :ctx :ind :tmp :buf
     clProbe: String
@@ -40360,12 +40402,20 @@ wrapperCreateArg: function {
                     # a conformer is boxed as the protocol it stands in for, as at
                     # any other slot (standInText); a value that already is the
                     # protocol passes as it stands, a header by value
+                    aF: cfacts
                     return (standInText
                         :ast
                         :symtab
                         :ctx
                         n: (ast.nodes.get i: a.operation)
-                        text: (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: a.operation))
+                        text: (emitExprWith
+                            :ast
+                            :symtab
+                            :ctx
+                            n: (ast.nodes.get i: a.operation)
+                            facts: aF
+                        )
+                        facts: aF
                     )
                 }
                 if (symtab.reg.typetypeOf typeId: prtid) == ztypes.ztypetype.classType then {
@@ -41164,7 +41214,7 @@ dispatchArgText: function {
     avF: cfacts
     av: emitExprWith :ast :symtab :ctx :n facts: avF
     if (symtab.typing.standInOf.has key: (zast.nodeIdOf :n)) then {
-        return (standInText :ast :symtab :ctx :n text: av.take)
+        return (standInText :ast :symtab :ctx :n text: av.take facts: avF)
     }
     atid: stampIdOf :symtab nid: (interpPartNodeId :n)
     apfx: String
