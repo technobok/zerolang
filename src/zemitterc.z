@@ -23856,6 +23856,7 @@ emitIfStmt: function {
     chT: ListVal ztypes.tid
     chN: ListVal bool
     chR: List String
+    chRF: ListVal cfacts
     (chainFactsOfClauses
         :ast
         :symtab
@@ -23867,6 +23868,7 @@ emitIfStmt: function {
         tids: chT
         negs: chN
         recvs: chR
+        recvFs: chRF
     )
     (emitElse
         :ast
@@ -23882,6 +23884,7 @@ emitIfStmt: function {
         chTids: chT
         chNegs: chN
         chRecvs: chR
+        chRecvFs: chRF
         :buf
     )
     le: "\{ind}}\n"
@@ -26360,6 +26363,7 @@ emitIfBindValue: function {
         chT: ListVal ztypes.tid
         chN: ListVal bool
         chR: List String
+        chRF: ListVal cfacts
         (chainFactsOfClauses
             :ast
             :symtab
@@ -26371,6 +26375,7 @@ emitIfBindValue: function {
             tids: chT
             negs: chN
             recvs: chR
+            recvFs: chRF
         )
         (emitElse
             :ast
@@ -26386,6 +26391,7 @@ emitIfBindValue: function {
             chTids: chT
             chNegs: chN
             chRecvs: chR
+            chRecvFs: chRF
             :buf
         )
         le: "\{ind}}\n"
@@ -28477,49 +28483,30 @@ chainFactsOfClauses: function {
     tids: ListVal ztypes.tid
     negs: ListVal bool
     recvs: List String
+    recvFs: ListVal cfacts
 } is {
     h8x9: u64
     for h8x9 < clauses.count loop {
         c9Id: zast.kidAt kids: ast.kids span: clauses i: h8x9
         h8x9 = h8x9 + 1
         c: ast.nodes.get i: c9Id
+        # a clause of ONE condition: the fact it records, if any, is the
+        # clause's
         if c.ifclause when c.conditions.count.u64 == 1 then {
-            tS: List String
-            tV: ListVal ztypes.vid
-            tA: ListVal zast.nameid
-            tT: ListVal ztypes.tid
-            tN: ListVal bool
-            tR: List String
-            cox1299: u64
-            for cox1299 < c.conditions.count loop {
-                k9Id: zast.kidAt kids: ast.kids span: c.conditions i: cox1299
-                cox1299 = cox1299 + 1
-                k: ast.nodes.get i: k9Id
-                if k.namedoperation then {
-                    (chainCondFact
-                        :ast
-                        :symtab
-                        :ctx
-                        n: (ast.nodes.get i: k.operation)
-                        subjects: tS
-                        svids: tV
-                        arms: tA
-                        tids: tT
-                        negs: tN
-                        recvs: tR
-                    )
-                }
-            }
-            if tS.length == 1 then {
-                ms: tS.pop
-                subjects.append ms
-                svids.append (tV.get i: 0)
-                arms.append (tA.get i: 0)
-                tids.append (tT.get i: 0)
-                negs.append (tN.get i: 0)
-                mr: tR.pop
-                recvs.append mr
-            }
+            k: ast.nodes.get i: (zast.kidAt kids: ast.kids span: c.conditions i: 0)
+            if k.namedoperation then (chainCondFact
+                :ast
+                :symtab
+                :ctx
+                n: (ast.nodes.get i: k.operation)
+                :subjects
+                :svids
+                :arms
+                :tids
+                :negs
+                :recvs
+                :recvFs
+            )
         }
     }
 }
@@ -28727,18 +28714,21 @@ chainCondFact: function {
     tids: ListVal ztypes.tid
     negs: ListVal bool
     recvs: List String
+    recvFs: ListVal cfacts
 } is {
     f: classifyCondFact :ast :symtab :n
     if f.ok.not then return
     parent: ast.nodes.get i: f.parentNid
     subj: atomTextOf :ast n: parent
-    rv: emitExpr :ast :symtab :ctx n: parent
+    rvF: cfacts
+    rv: emitExprWith :ast :symtab :ctx n: parent facts: rvF
     subjects.append subj.string
     svids.append f.svid
     arms.append f.armRef
     tids.append f.owner
     negs.append f.neg
     recvs.append rv
+    recvFs.append rvF
 }
 
 # wrappedInOneParen -- whether the text is one parenthesised group: it opens
@@ -29303,6 +29293,7 @@ seedElseSubject: function {
     subjVid: ztypes.vid
     owner: ztypes.tid
     recv: StringView
+    recvF: cfacts
     negArm: zast.nameid
     ind: StringView
     svids: ListVal ztypes.vid
@@ -29324,7 +29315,7 @@ seedElseSubject: function {
         tid: owner
         arm: fArm
         :recv
-        recvF: (factsOfText s: recv)
+        :recvF
         acc: acc.stringView
         facts: aliasF
     )
@@ -29356,6 +29347,7 @@ seedElseNarrows: function {
     tids: (ListVal ztypes.tid).view
     negs: (ListVal bool).view
     recvs: (List String).view
+    recvFs: (ListVal cfacts).view
     ind: StringView
     svids: ListVal ztypes.vid
     prevV: List String
@@ -29380,6 +29372,7 @@ seedElseNarrows: function {
                 subjVid: gv
                 owner: (tids.get i: gi)
                 recv: grecv.stringView
+                recvF: (recvFs.get i: gi)
                 negArm: na
                 :ind
                 :svids
@@ -29408,6 +29401,7 @@ emitElse: function {
     chTids: (ListVal ztypes.tid).view
     chNegs: (ListVal bool).view
     chRecvs: (List String).view
+    chRecvFs: (ListVal cfacts).view
     buf: String.borrow
 } is {
     if oId.isZero then return
@@ -29437,6 +29431,7 @@ emitElse: function {
         tids: chTids
         negs: chNegs
         recvs: chRecvs
+        recvFs: chRecvFs
         :ind
         svids: sVid
         prevV: sPrevV
