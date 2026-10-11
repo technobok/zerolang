@@ -6473,6 +6473,13 @@ pathFacts: function {} out cfacts is {
     return (cfacts place: true literal: false once: false pure: true path: true stated: true)
 }
 
+# literalFacts -- a compound literal `((T){ .. })`: an lvalue, though no name, and
+# nothing to repeat when read twice. Not counted pure: the evaluation-order scan
+# has always kept a temp for one.
+literalFacts: function {} out cfacts is {
+    return (cfacts place: false literal: true once: false pure: false path: false stated: true)
+}
+
 # stateFacts -- fill the caller's slot. A slot is a reference parameter, written
 # through its fields, never replaced whole.
 stateFacts: function {facts: cfacts.borrow from: cfacts} is {
@@ -15231,11 +15238,14 @@ emitAtom: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     n: zast.atomidrow.view
+    # its facts, where a leg knows them; a leg that does not leaves the slot
+    # unfilled for its caller to read off the text
+    facts: cfacts.borrow
 } out String is {
     avC: ast.names.texts.get i: n.name
     av: avC.stringView
     dv: dataValueText :symtab :ctx nid: n.nodeid
-    if dv.length > 0 then return dv
+    if dv.length > 0 then return (stating :facts from: literalFacts text: dv)
     # a literal landing in an i128, u128 or f16 is that type's value
     if (symtab.typing.helperScalarTarget.has key: n.nodeid) then {
         wa: nodeConstText :ast :symtab :ctx nid: n.nodeid
@@ -15269,9 +15279,9 @@ emitAtom: function {
         avo
     ) case some then {
         if (narrowingEndedAt :symtab :ctx nid: n.nodeid vid: avo) then {
-            return (wholeLocalName :ctx name: av vid: avo)
+            return (wholeLocalNameWith :ctx name: av vid: avo :facts)
         }
-        return (emitLocalAtomName :ctx name: av vid: avo)
+        return (emitLocalAtomNameWith :ctx name: av vid: avo :facts)
     } case none then null
     # a name written inside a namespace resolves against that namespace
     # first, then the file unit -- the chain spec.pdoc gives an inline unit.
@@ -15352,12 +15362,13 @@ emitAtom: function {
     ) case some then {
         if iso == ctx.strTid then return (emitExprStrZero :ctx)
     } case none then null
-    return (emitLocalAtomNameAt
+    return (emitLocalAtomNameAtWith
         :symtab
         :ctx
         nid: n.nodeid
         name: av
         vid: (atomVid :symtab nid: n.nodeid)
+        :facts
     )
 }
 
@@ -18055,7 +18066,7 @@ emitExprArms: function {
         emitFail :ctx what: "unhandled expr (multi-statement)" line: n.lineno
         return "/* zemitterc: unhandled expr */0"
     } case atomid then {
-        return (emitAtom :ast :symtab :ctx :n)
+        return (emitAtom :ast :symtab :ctx :n :facts)
     } case labelvalue then {
         lvC: ast.names.texts.get i: n.name
         lvv: atomVid :symtab nid: n.nodeid
