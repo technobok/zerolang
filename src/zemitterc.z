@@ -6141,6 +6141,7 @@ emitDataIndexCall: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
+    facts: cfacts.borrow
 } out String is {
     mnId: aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable)
     # the block is the base's
@@ -6167,7 +6168,7 @@ emitDataIndexCall: function {
         }
         dsym0: ctxCname :ctx tid: dtid
         e0: "\{dsym0}_at(\{ax})"
-        return e0
+        return (stating :facts from: callFacts text: e0)
     }
     return ""
 }
@@ -9744,6 +9745,7 @@ emitStrConvCall: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
+    facts: cfacts.borrow
 } out String is {
     mnId: aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable)
     if mnId != zast.wellKnown.slot.tyStr then return ""
@@ -9783,7 +9785,11 @@ emitStrConvCall: function {
     lenAcc: "len".string
     if ptid == ctx.strTid then lenAcc = "size"
     if ptid == ctx.svTid then lenAcc = "size"
-    return "\{ctx.strC}_to_\{rnm}(\{pv}.data, \{pv}.\{lenAcc})"
+    return (stating
+        :facts
+        from: callFacts
+        text: "\{ctx.strC}_to_\{rnm}(\{pv}.data, \{pv}.\{lenAcc})"
+    )
 }
 
 # allDigits -- true when s is non-empty and every byte is an ASCII digit 0-9.
@@ -9818,6 +9824,7 @@ emitBoxCreate: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
+    facts: cfacts.borrow
 } out String is {
     cko: symtab.typing.callKind.get key: call.nodeid
     isBoxC: false
@@ -9840,7 +9847,11 @@ emitBoxCreate: function {
     ctx.argHoistVals.append String
     ctx.argHoistTypes.append "\{binner}*"
     ctx.argHoistDtors.append String
-    return "(\{bnm} = (\{binner}*)z_xmalloc(sizeof(\{binner})), *\{bnm} = \{bval}, \{bnm})"
+    return (stating
+        :facts
+        from: callFacts
+        text: "(\{bnm} = (\{binner}*)z_xmalloc(sizeof(\{binner})), *\{bnm} = \{bval}, \{bnm})"
+    )
 }
 
 # emitEmptyColCreate -- an empty collection construction `(List of: T)` /
@@ -9851,6 +9862,7 @@ emitEmptyColCreate: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
+    facts: cfacts.borrow
 } out String is {
     # a sized array or str: the callable's stamp is the instance, whatever
     # name -- the family's own or an alias of it -- spelled it
@@ -9868,7 +9880,7 @@ emitEmptyColCreate: function {
         )
         if isSized when zo.isZero.not then {
             zcb: ctxCname :ctx tid: zmid
-            return "\{zcb}_create()"
+            return (stating :facts from: callFacts text: "\{zcb}_create()")
         }
     }
     # the container leg is keyed on the stamped construction kind and the
@@ -9895,7 +9907,7 @@ emitEmptyColCreate: function {
     if isCol.not then return ""
     cb: ctxCname :ctx tid: mid
     ccap: listCapArg :ast :symtab :ctx n: (ast.nodes.get i: call.nodeid)
-    return "\{cb}_create((uint64_t)\{ccap})"
+    return (stating :facts from: callFacts text: "\{cb}_create((uint64_t)\{ccap})")
 }
 
 # colRecvRef -- a collection (List) receiver as a C lvalue for a method call: a
@@ -11474,6 +11486,7 @@ emitTypedefCreateCall: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
+    facts: cfacts.borrow
 } out String is {
     # the call's stamped return IS the typedef (covers the unit-qualified
     # head, whose base atom is the unit name). Gated on the stamped callKind --
@@ -11494,10 +11507,10 @@ emitTypedefCreateCall: function {
             arx329 = arx329 + 1
             aS: ast.nodes.get i: aIdS
             if aS.namedoperation then {
-                return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: aS.operation))
+                return (emitExprWith :ast :symtab :ctx n: (ast.nodes.get i: aS.operation) :facts)
             }
         }
-        return "0"
+        return (stating :facts from: constFacts text: "0")
     }
     return ""
 }
@@ -12034,8 +12047,8 @@ renderedMethodDefaultArgs: function {
 
 # emitExprStrZero -- the empty owned String value: the zero struct needs
 # no allocation and no free.
-emitExprStrZero: function {ctx: Ctx.view} out String is {
-    return "((\{ctx.strC}_t){0})"
+emitExprStrZero: function {ctx: Ctx.view facts: cfacts.borrow} out String is {
+    return (stating :facts from: literalFacts text: "((\{ctx.strC}_t){0})")
 }
 
 # userCreateFn -- the user-written `create` that overrides a type's field-wise
@@ -12104,6 +12117,7 @@ emitCtorDefaultsFill: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     tid: ztypes.tid
+    facts: cfacts.borrow
 } out String is {
     cco: userCreateFn :symtab :tid
     if cco.isZero.not then {
@@ -12127,7 +12141,7 @@ emitCtorDefaultsFill: function {
             cargs.append cav
         }
         ccb: ctxCname :ctx tid: cco
-        return "\{ccb}(\{cargs})"
+        return (stating :facts from: callFacts text: "\{ccb}(\{cargs})")
     }
     fids: ListVal ztypes.tid
     fidsNm: ListVal zast.nameid
@@ -12149,7 +12163,7 @@ emitCtorDefaultsFill: function {
         args.append av
     }
     rcb: ctxCname :ctx :tid
-    return "\{rcb}_create(\{args})"
+    return (stating :facts from: callFacts text: "\{rcb}_create(\{args})")
 }
 
 # createArgText -- one argument of a construction routed through a user
@@ -13178,6 +13192,7 @@ emitMetaCreateCall: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
+    facts: cfacts.borrow
 } out String is {
     mcb: ztypecheck.metaCreateBaseId :ast n: (ast.nodes.get i: call.callable)
     match (
@@ -13267,7 +13282,11 @@ emitMetaCreateCall: function {
         orderEnd :ctx st: ord
         ecb: ctxCname :ctx tid: et
         ecb.append "_meta_create"
-        return (orderClose prefix: oprefix callee: ecb.stringView args: args.stringView)
+        return (stating
+            :facts
+            from: callFacts
+            text: (orderClose prefix: oprefix callee: ecb.stringView args: args.stringView)
+        )
     } case none then {
         return ""
     }
@@ -13545,6 +13564,7 @@ emitUnitMethodCall: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
+    facts: cfacts.borrow
 } out String is {
     rsid: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: call.callable)
     if rsid.isZero then return ""
@@ -13565,7 +13585,6 @@ emitUnitMethodCall: function {
     } case none then null
     if calleeTid.isZero then return ""
     if (symtab.reg.typetypeOf typeId: calleeTid) != ztypes.ztypetype.functionType then return ""
-    facts: cfacts
     return (emitFnCallWithFid :ast :symtab :ctx :call fid: calleeTid :facts)
 }
 
@@ -14723,6 +14742,7 @@ emitNamedCalleeChain: function {
         :symtab
         :ctx
         :call
+        :facts
     )
     if ecc.length > 0 then return ecc
     fid: namedCalleeFnId :ast :symtab :ctx :call
@@ -14791,27 +14811,27 @@ emitCallProbeChain: function {
     call: zast.callrow.view
     facts: cfacts.borrow
 } out String is {
-    mcc: emitMetaCreateCall :ast :symtab :ctx :call
+    mcc: emitMetaCreateCall :ast :symtab :ctx :call :facts
     if mcc.length > 0 then return mcc
-    fmc: emitFileMethodCall :ast :symtab :ctx :call
+    fmc: emitFileMethodCall :ast :symtab :ctx :call :facts
     if fmc.length > 0 then return fmc
-    clisc: emitCliSpecCreate :ast :symtab :ctx :call
+    clisc: emitCliSpecCreate :ast :symtab :ctx :call :facts
     if clisc.length > 0 then return clisc
-    rcc: emitResultCombinator :ast :symtab :ctx :call
+    rcc: emitResultCombinator :ast :symtab :ctx :call :facts
     if rcc.length > 0 then return rcc
-    pmc: emitParsedMethodCall :ast :symtab :ctx :call
+    pmc: emitParsedMethodCall :ast :symtab :ctx :call :facts
     if pmc.length > 0 then return pmc
-    scv: emitStrConvCall :ast :symtab :ctx :call
+    scv: emitStrConvCall :ast :symtab :ctx :call :facts
     if scv.length > 0 then return scv
     dc: emitDottedCall :ast :symtab :ctx :call :facts
     if dc.length > 0 then return dc
-    umc: emitUnitMethodCall :ast :symtab :ctx :call
+    umc: emitUnitMethodCall :ast :symtab :ctx :call :facts
     if umc.length > 0 then return umc
     gfc: emitGenericFnCall :ast :symtab :ctx :call :facts
     if gfc.length > 0 then return gfc
     xuc: emitCrossUnitSumCtor :ast :symtab :ctx :call :facts
     if xuc.length > 0 then return xuc
-    ddq: emitDataIndexCall :ast :symtab :ctx :call
+    ddq: emitDataIndexCall :ast :symtab :ctx :call :facts
     if ddq.length > 0 then return ddq
     cufc: emitCrossUnitFnCall :ast :symtab :ctx :call :facts
     if cufc.length > 0 then return cufc
@@ -15093,11 +15113,11 @@ emitCallValue: function {
     ) case some then {
         isTdk: (ckh == zast.callkind.typedefCreate) or (ckh == zast.callkind.typedefBorrow)
         if isTdk then {
-            tdh: emitTypedefCreateCall :ast :symtab :ctx :call
+            tdh: emitTypedefCreateCall :ast :symtab :ctx :call :facts
             if tdh.length > 0 then return tdh
         }
         if ckh == zast.callkind.boxCreate then {
-            bxh: emitBoxCreate :ast :symtab :ctx :call
+            bxh: emitBoxCreate :ast :symtab :ctx :call :facts
             if bxh.length > 0 then return bxh
         }
         isPjk: (
@@ -15107,7 +15127,7 @@ emitCallValue: function {
             (ckh == zast.callkind.facetBorrow)
         )
         if isPjk then {
-            pch: emitProtocolCreateCall :ast :symtab :ctx :call
+            pch: emitProtocolCreateCall :ast :symtab :ctx :call :facts
             if pch.length > 0 then return pch
         }
     } case none then null
@@ -15145,6 +15165,7 @@ emitCallValue: function {
                     :symtab
                     :ctx
                     :call
+                    :facts
                 )
                 if cec.length > 0 then return cec
                 # a generic typedef's instance applied to its type arguments
@@ -15155,6 +15176,7 @@ emitCallValue: function {
                         :symtab
                         :ctx
                         tid: ctid
+                        :facts
                     )
                 }
                 ctt: symtab.reg.typetypeOf typeId: ctid
@@ -15749,18 +15771,19 @@ implicitZeroValue: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     tid: ztypes.tid
+    facts: cfacts.borrow
 } out String is {
     zc: scalarCTypeFor :symtab :tid
-    if zc.length > 0 then return (scalarZeroC :symtab cType: zc.stringView :tid)
-    if tid == ctx.strTid then return (emitExprStrZero :ctx)
+    if zc.length > 0 then return (scalarZeroC :symtab cType: zc.stringView :tid :facts)
+    if tid == ctx.strTid then return (emitExprStrZero :ctx :facts)
     # a typedef is its base's zero: a scalar base's cast zero (meters -> i64),
     # and otherwise whatever the base builds -- the String struct for Path, a
     # record's create with its defaults
     zb: ztypecheck.typedefChaseTid st: symtab :tid
     if zb != tid then {
         zt: scalarCTypeFor :symtab tid: zb
-        if zt.length > 0 then return (scalarZeroC :symtab cType: zt.stringView :tid)
-        return (implicitZeroValue :ast :symtab :ctx tid: zb)
+        if zt.length > 0 then return (scalarZeroC :symtab cType: zt.stringView :tid :facts)
+        return (implicitZeroValue :ast :symtab :ctx tid: zb :facts)
     }
     # The collection is asked BEFORE the scalar chase, and the order is not a
     # preference: a typedef over a collection names its base `ListVal`, which
@@ -15775,7 +15798,7 @@ implicitZeroValue: function {
         isSized: (zso == strO) or (zso == arrO)
         if isSized when zso.isZero.not then {
             zsc: ctxCname :ctx tid: zm
-            return "\{zsc}_create()"
+            return (stating :facts from: callFacts text: "\{zsc}_create()")
         }
     }
     if (isCollectionOriginTid
@@ -15791,10 +15814,10 @@ implicitZeroValue: function {
             (isMapOriginOf :symtab :ctx tid: zmt) or
             (isIdCollectionOriginOf :symtab :ctx tid: zmt)
         )
-        if takesCap then return "\{zmc}_create((uint64_t)0)"
-        return "\{zmc}_create()"
+        if takesCap then return (stating :facts from: callFacts text: "\{zmc}_create((uint64_t)0)")
+        return (stating :facts from: callFacts text: "\{zmc}_create()")
     }
-    return (emitCtorDefaultsFill :ast :symtab :ctx :tid)
+    return (emitCtorDefaultsFill :ast :symtab :ctx :tid :facts)
 }
 
 # scalarZeroC -- the zero of a scalar whose C type is `cType`. A 128-bit
@@ -15802,14 +15825,15 @@ implicitZeroValue: function {
 # own type and for the struct that stands in for it alike; every other scalar's
 # is a cast 0.
 scalarZeroC: function {
-    symtab: zenv.ZSymbolTable.view cType: StringView tid: ztypes.tid
+    symtab: zenv.ZSymbolTable.view
+    cType: StringView
+    tid: ztypes.tid
+    facts: cfacts.borrow
 } out String is {
     if (partIsHelperScalar :symtab :tid) then {
-        w: "((\{cType}){0})"
-        return w
+        return (stating :facts from: literalFacts text: "((\{cType}){0})")
     }
-    z: "((\{cType})0)"
-    return z
+    return (stating :facts from: constFacts text: "((\{cType})0)")
 }
 
 # partIsHelperScalar -- the type is i128, u128 or f16, or a scalar typedef over
@@ -15842,19 +15866,23 @@ emitDefRefAtom: function {
         match (
             izr
         ) case some then {
+            facts3: cfacts
             return (implicitZeroValue
                 :ast
                 :symtab
                 :ctx
                 tid: izr
+                facts: facts3
             )
         } case none then null
         # unstamped: a scalar is its zero, any other record its zero struct
+        facts2: cfacts
         if (scalarCTypeFor :symtab tid: brid).length > 0 then return (implicitZeroValue
             :ast
             :symtab
             :ctx
             tid: brid
+            facts: facts2
         )
         brc: ctxCname :ctx tid: brid
         be0: "((\{brc}_t){0})"
@@ -15869,11 +15897,13 @@ emitDefRefAtom: function {
         match (
             izc
         ) case some then {
+            facts: cfacts
             return (implicitZeroValue
                 :ast
                 :symtab
                 :ctx
                 tid: izc
+                :facts
             )
         } case none then null
     }
@@ -15913,6 +15943,40 @@ dataValueText: function {
     n: (symtab.typing.memberConstOf parentTypeId: dt nameId: zast.wellKnown.slot.wkLength).ival
     if n == 0 then return "((\{vc}_t){ .length = 0, .data = NULL })"
     return "((\{vc}_t){ .length = \{n}, .data = \{ac} })"
+}
+
+# namespaceConstText -- a constant named `nameId` written inside a namespace:
+# resolved against that namespace first -- the chain spec.pdoc gives an inline
+# unit -- and then each unit enclosing it, innermost outward. A generic unit's
+# mono method is written in the TEMPLATE, whose Decl the mono's id points at, so
+# its chain starts there. "" when no enclosing namespace declares it.
+namespaceConstText: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    nameId: zast.nameid
+    facts: cfacts.borrow
+} out String is {
+    nsAt: ctx.nsTid
+    if nsAt.isZero when ctx.curThisTid.isZero.not when (
+        (symtab.reg.typetypeOf typeId: ctx.curThisTid) == ztypes.ztypetype.unitType
+    ) then nsAt = ctx.curThisTid
+    if nsAt.isZero then return ""
+    nsCur: ztypecheck.declOfTypeId st: symtab tid: nsAt
+    for nsCur.isZero.not loop {
+        nsFt: ztypecheck.declTypeIdOf st: symtab declId: nsCur
+        if nsFt.isZero.not then {
+            nsca: memberConstText :ast :symtab :ctx unitTid: nsFt :nameId :facts
+            if nsca.length > 0 then return nsca
+            nscs: memberConstStringText :symtab :ctx unitTid: nsFt :nameId
+            if nscs.length > 0 then return nscs
+        }
+        nsNx: symtab.typing.declParentOf declId: nsCur
+        nsCur = ztypes.declid
+        if nsNx.isZero.not when (ztypecheck.declDeclaresUnit st: symtab :ast declId: nsNx
+        ) then nsCur = nsNx
+    }
+    return ""
 }
 
 # emitAtom -- the C text of a bare identifier. A STAMPED atom is a local and is
@@ -15973,41 +16037,8 @@ emitAtom: function {
         }
         return (emitLocalAtomNameWith :ctx name: av vid: avo :facts)
     } case none then null
-    # a name written inside a namespace resolves against that namespace
-    # first, then the file unit -- the chain spec.pdoc gives an inline unit.
-    # A generic unit's mono method is written in the TEMPLATE, whose Decl
-    # the mono's id points at, so its chain starts there.
-    nsAt: ctx.nsTid
-    if nsAt.isZero when ctx.curThisTid.isZero.not when (
-        (symtab.reg.typetypeOf typeId: ctx.curThisTid) == ztypes.ztypetype.unitType
-    ) then nsAt = ctx.curThisTid
-    if nsAt.isZero.not then {
-        # the nested scopes, innermost outward: the unit the name is
-        # written in, then each unit enclosing it. Asking only the
-        # innermost inlined nothing for a constant of an enclosing inline
-        # unit, and the bare source name reached the C.
-        nsCur: ztypecheck.declOfTypeId st: symtab tid: nsAt
-        for nsCur.isZero.not loop {
-            nsFt: ztypecheck.declTypeIdOf st: symtab declId: nsCur
-            if nsFt.isZero.not then {
-                nsca: (memberConstText
-                    :ast
-                    :symtab
-                    :ctx
-                    unitTid: nsFt
-                    nameId: n.name
-                    :facts
-                )
-                if nsca.length > 0 then return nsca
-                nscs: memberConstStringText :symtab :ctx unitTid: nsFt nameId: n.name
-                if nscs.length > 0 then return nscs
-            }
-            nsNx: symtab.typing.declParentOf declId: nsCur
-            nsCur = ztypes.declid
-            if nsNx.isZero.not when (ztypecheck.declDeclaresUnit st: symtab :ast declId: nsNx
-            ) then nsCur = nsNx
-        }
-    }
+    nsc: namespaceConstText :ast :symtab :ctx nameId: n.name :facts
+    if nsc.length > 0 then return nsc
     mutd: mainUnitTid :symtab :ctx
     mca: (memberConstText
         :ast
@@ -16041,7 +16072,12 @@ emitAtom: function {
         (symtab.reg.typetypeOf typeId: brid) == ztypes.ztypetype.genericParam
     ) then {
         pzt: stampIdOf :symtab nid: n.nodeid
-        if pzt.isZero.not when pzt != brid then return (implicitZeroValue :ast :symtab :ctx tid: pzt
+        if pzt.isZero.not when pzt != brid then return (implicitZeroValue
+            :ast
+            :symtab
+            :ctx
+            tid: pzt
+            :facts
         )
     }
     dra: emitDefRefAtom :ast :symtab :ctx :n :brid :bdec
@@ -16052,7 +16088,7 @@ emitAtom: function {
     match (
         iso
     ) case some then {
-        if iso == ctx.strTid then return (emitExprStrZero :ctx)
+        if iso == ctx.strTid then return (emitExprStrZero :ctx :facts)
     } case none then null
     # a numeric lexeme no leg above respelled is C text as written: identifiers
     # never start with a digit
@@ -16792,7 +16828,8 @@ typeNameCreateZero: function {
     symtab: zenv.ZSymbolTable.view ctx: Ctx bstamp: ztypes.tid
 } out String is {
     zsc: scalarCTypeFor :symtab tid: bstamp
-    if zsc.length > 0 then return (scalarZeroC :symtab cType: zsc.stringView tid: bstamp)
+    facts: cfacts
+    if zsc.length > 0 then return (scalarZeroC :symtab cType: zsc.stringView tid: bstamp :facts)
     if bstamp == ctx.strTid then return "((\{ctx.strC}_t){0})"
     return String
 }
@@ -17975,11 +18012,13 @@ emitDottedUnitRead: function {
     match (
         izd
     ) case some then {
+        facts: cfacts
         return (implicitZeroValue
             :ast
             :symtab
             :ctx
             tid: izd
+            :facts
         )
     } case none then null
     # the unit the checker resolved the base to: a file unit's zero-argument
@@ -18705,12 +18744,17 @@ orPanicExprC: function {
     # the resultval instance
     tid: ztypes.tid
     recv: StringView
+    facts: cfacts.borrow
 } out String is {
     rcT: ctxCname :ctx :tid
     okTag: tagConstOf :ast :ctx :symtab :tid armId: zast.wellKnown.slot.wkOk
     okC: memberC :ast :symtab :ctx owner: tid kind: memberkind.arm nameId: zast.wellKnown.slot.wkOk
     pnc: "z_panic(\"orPanic: result is err\")"
-    return "({ \{rcT}_t _rc = (\{recv}); if (_rc.tag != \{okTag}) \{pnc}; _rc.data.\{okC}; })"
+    return (stating
+        :facts
+        from: callFacts
+        text: "({ \{rcT}_t _rc = (\{recv}); if (_rc.tag != \{okTag}) \{pnc}; _rc.data.\{okC}; })"
+    )
 }
 
 # emitDottedRead -- the C text of a dotted PATH read (the call form is
@@ -18742,7 +18786,7 @@ emitDottedRead: function {
         if isRcc then {
             rcRecvF: cfacts
             rcRecv: valueExprC :ast :symtab :ctx n: (ast.nodes.get i: n.parent) facts: rcRecvF
-            return (orPanicExprC :ast :symtab :ctx tid: pMono recv: rcRecv.stringView)
+            return (orPanicExprC :ast :symtab :ctx tid: pMono recv: rcRecv.stringView :facts)
         }
     }
     dur: emitDottedUnitRead :ast :symtab :ctx :n
@@ -40780,6 +40824,7 @@ emitFileMethodCall: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
+    facts: cfacts.borrow
 } out String is {
     bn: dottedBaseAtom :ast n: (ast.nodes.get i: call.callable)
     if bn.length == 0 then return ""
@@ -40819,15 +40864,27 @@ emitFileMethodCall: function {
     }
     if mnId == zast.wellKnown.slot.wkAccept then {
         if isNet.not then return ""
-        return "\{fc}_accept(\{recvExpr})"
+        return (stating :facts from: callFacts text: "\{fc}_accept(\{recvExpr})")
     }
-    if mnId == zast.wellKnown.slot.wkClose then return "\{fc}_close(\{recvExpr})"
-    if mnId == zast.wellKnown.slot.wkFlush then return "\{fc}_flush(\{recvExpr})"
+    if mnId == zast.wellKnown.slot.wkClose then return (stating
+        :facts
+        from: callFacts
+        text: "\{fc}_close(\{recvExpr})"
+    )
+    if mnId == zast.wellKnown.slot.wkFlush then return (stating
+        :facts
+        from: callFacts
+        text: "\{fc}_flush(\{recvExpr})"
+    )
     if mnId == zast.wellKnown.slot.wkWrite then {
-        return "\{fc}_write(\{recvExpr}, \{fileFromArgAddr :ast :symtab :ctx :call})"
+        return (stating
+            :facts
+            from: callFacts
+            text: "\{fc}_write(\{recvExpr}, \{fileFromArgAddr :ast :symtab :ctx :call})"
+        )
     }
     if mnId == zast.wellKnown.slot.wkRead then {
-        return (emitOrderedPair
+        return (stating :facts from: callFacts text: (emitOrderedPair
             :ast
             :symtab
             :ctx
@@ -40840,9 +40897,10 @@ emitFileMethodCall: function {
             b: "max"
             bForm: argform.labelled
         )
+        )
     }
     if mnId == zast.wellKnown.slot.wkSeek then {
-        return (emitOrderedPair
+        return (stating :facts from: callFacts text: (emitOrderedPair
             :ast
             :symtab
             :ctx
@@ -40855,9 +40913,14 @@ emitFileMethodCall: function {
             b: "from"
             bForm: argform.labelled
         )
+        )
     }
     if mnId == zast.wellKnown.slot.wkWriteLine then {
-        return "\{fc}_writeLine(\{recvExpr}, \{fileFromArgAddr :ast :symtab :ctx :call})"
+        return (stating
+            :facts
+            from: callFacts
+            text: "\{fc}_writeLine(\{recvExpr}, \{fileFromArgAddr :ast :symtab :ctx :call})"
+        )
     }
     return ""
 }
@@ -41364,6 +41427,7 @@ emitCliSpecCreate: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
+    facts: cfacts.borrow
 } out String is {
     cn: (unitCreateMemberId
         :ast
@@ -41432,7 +41496,11 @@ emitCliSpecCreate: function {
     needsAddM :ctx uname: "cli" memb: "spec_create"
     ccb: ctxCname :ctx tid: cid
     ccb.append "_create"
-    return (orderClose prefix: oprefix callee: ccb.stringView args: args.stringView)
+    return (stating
+        :facts
+        from: callFacts
+        text: (orderClose prefix: oprefix callee: ccb.stringView args: args.stringView)
+    )
 }
 
 # emitResultCombinator -- inline lowering of the built-in combinators `.orPanic`
@@ -41446,6 +41514,7 @@ emitResultCombinator: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
+    facts: cfacts.borrow
 } out String is {
     mnId: aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable)
     isP: false
@@ -41473,7 +41542,7 @@ emitResultCombinator: function {
     if recvExpr.length == 0 then return ""
     okTag: tagConstOf :ast :ctx :symtab tid: rtid armId: payArmId
     rcT: ctxCname :ctx tid: rtid
-    if isP then return (orPanicExprC :ast :symtab :ctx tid: rtid recv: recvExpr.stringView)
+    if isP then return (orPanicExprC :ast :symtab :ctx tid: rtid recv: recvExpr.stringView :facts)
     argN: call.arguments.count.u64
     if argN == 0 then return ""
     firstArgId: zast.kidAt kids: ast.kids span: call.arguments i: 0
@@ -41486,7 +41555,7 @@ emitResultCombinator: function {
     if dExpr.length == 0 then return ""
     payC: memberC :ast :symtab :ctx owner: rtid kind: memberkind.arm nameId: payArmId
     ro: "({ \{rcT}_t _rc = (\{recvExpr.stringView}); (_rc.tag == \{okTag.stringView}) ? _rc.data.\{payC} : (\{dExpr.stringView}); })"
-    return ro
+    return (stating :facts from: callFacts text: ro)
 }
 
 # emitParsedMethodCall -- a Parsed accessor (hasFlag/option/positional), native,
@@ -41497,6 +41566,7 @@ emitParsedMethodCall: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
+    facts: cfacts.borrow
 } out String is {
     bn: dottedBaseAtom :ast n: (ast.nodes.get i: call.callable)
     if bn.length == 0 then return ""
@@ -41527,7 +41597,7 @@ emitParsedMethodCall: function {
     needsAddM :ctx uname: "cli" memb: "@unit"
     needsAddM :ctx uname: "cli" memb: mn
     nameArg: ctorArgByLabel :ast :symtab :ctx :call label: "name"
-    return "\{pc}_\{mn}(\{recvExpr}, &\{nameArg})"
+    return (stating :facts from: callFacts text: "\{pc}_\{mn}(\{recvExpr}, &\{nameArg})")
 }
 
 # iterCallValueArg -- the C text of `.call`'s one argument, the per-call
@@ -41974,6 +42044,7 @@ emitProtocolCreateCall: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
+    facts: cfacts.borrow
 } out String is {
     # the projection and whether it borrows are the checker's: the call's
     # stamp is the protocol or facet, its kind whether the source borrows --
@@ -42050,7 +42121,7 @@ emitProtocolCreateCall: function {
                 )
             }
             ce: "\{implBase}_\{label}_\{suffix}(\{refPfx}\{valVarC})"
-            return ce
+            return (stating :facts from: callFacts text: ce)
         }
     }
     return ""
