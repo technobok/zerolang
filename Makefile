@@ -689,7 +689,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2172654
+ALLOC_BASELINE := 2174649
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1452,8 +1452,9 @@ VIEW_GUARD_INTERNAL := String.cat String.print String.free String.eq String.cmp 
   IdMapR.destroy IdMapR.grow IdMapR.find IdMapR.slot IdMapR.entries_cap \
   IdSet.destroy IdSet.grow IdSet.find IdSet.slot IdSet.items_cap
 VIEW_GUARD_INLINE := Bytes.byteView:unemitted \
-  array.listView:inline array.slice:inline array.mutView:writes array.mutSlice:writes \
-  ListVal.mutView:inline ListVal.mutSlice:inline ListVal.resize:ondemand \
+  array.listView:inline array.slice:inline array.span:writes array.spanSlice:writes array.mutView:writes array.mutSlice:writes \
+  ListVal.span:inline ListVal.spanSlice:inline ListVal.mutView:inline ListVal.mutSlice:inline \
+  ListVal.resize:ondemand \
   SpanVal.length:inline SpanVal.split:inline SpanVal.listView:inline SpanVal.copyFrom:inline \
   SpanVal.set:ondemand SpanVal.slice:ondemand SpanVal.fill:ondemand SpanVal.clear:ondemand \
   ListRef.insert:ondemand ListRef.extend:ondemand \
