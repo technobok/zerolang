@@ -10038,7 +10038,7 @@ emitFamilyMethodCall: function {
 }
 
 # emitListValLendCall -- the ListVal members that lend or resize its storage:
-# `mutSlice`, a window over part of it, and `resize`. "" for any other member.
+# `spanSlice`, a window over part of it, and `resize`. "" for any other member.
 emitListValLendCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -10051,9 +10051,7 @@ emitListValLendCall: function {
     facts: cfacts.borrow
 } out String is {
     isResize: mnId == zast.wellKnown.slot.wkResize
-    isSpanSlice: (
-        (mnId == zast.wellKnown.slot.wkSpanSlice) or (mnId == zast.wellKnown.slot.wkMutSlice)
-    )
+    isSpanSlice: mnId == zast.wellKnown.slot.wkSpanSlice
     if isResize.not when isSpanSlice.not then return ""
     cb: ctxCname :ctx tid: bt
     recvR: colRecvRef :ctx bn: bn.stringView vid: bvid
@@ -10071,7 +10069,7 @@ emitListValLendCall: function {
         recvR: recvR.stringView
         recvT: recvT.stringView
         len: "_zw->length"
-        what: "ListVal mutSlice"
+        what: "ListVal spanSlice"
         inline: false
     )
     )
@@ -10314,11 +10312,7 @@ emitArrayMethodCall: function {
         )
         )
     }
-    isSlice: (
-        (mnId == zast.wellKnown.slot.wkSlice) or
-        (mnId == zast.wellKnown.slot.wkSpanSlice) or
-        (mnId == zast.wellKnown.slot.wkMutSlice)
-    )
+    isSlice: (mnId == zast.wellKnown.slot.wkSlice) or (mnId == zast.wellKnown.slot.wkSpanSlice)
     if isSlice then {
         recvA: colRecvRef :ctx bn: bn.stringView vid: bvid
         recvTa: "const \{cb}_t*"
@@ -10326,7 +10320,7 @@ emitArrayMethodCall: function {
         whatA: "array slice"
         if (
             mnId == zast.wellKnown.slot.wkSlice
-        ) then whatA = "array slice" else whatA = "array mutSlice"
+        ) then whatA = "array slice" else whatA = "array spanSlice"
         return (stating :facts from: callFacts text: (emitWindowSlice
             :ast
             :symtab
@@ -17400,7 +17394,7 @@ emitIdCollectionMemberRead: function {
 }
 
 # windowMemberRead -- a no-argument member that lends a window or a view -- a
-# list's or an array's `mutView`, an array's or a window's `listView` -- written
+# list's or an array's `span`, an array's or a window's `listView` -- written
 # as the window's {length, data}, and a window's `length` and `clear`. `base`
 # is the receiver as a value, a pointer when `recvIsPtr`, held by `vid`. ""
 # when `mnId` is none of those on `tid`.
@@ -17435,9 +17429,7 @@ windowMemberRead: function {
     }
     lendsView: isArr or isSpan and (mnId == zast.wellKnown.slot.wkListView)
     lendsWindow: (
-        isArr or
-        (fam == family.slot.listVal) and
-        ((mnId == zast.wellKnown.slot.wkSpan) or (mnId == zast.wellKnown.slot.wkMutView))
+        isArr or (fam == family.slot.listVal) and (mnId == zast.wellKnown.slot.wkSpan)
     )
     if (lendsView or lendsWindow).not then return ""
     co: symtab.typing.declChildOfId parentTypeId: tid nameId: mnId
@@ -39570,7 +39562,7 @@ emitCollectionMonos: function {
         )
         tlv = tlv + 1
     }
-    # windows next: a window is a list view's layout, and a list's mutView
+    # windows next: a window is a list view's layout, and a list's span
     # companion builds one by value
     twin: u64
     for twin < work.wSpan.length loop {
