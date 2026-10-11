@@ -7883,30 +7883,37 @@ stringViewBinopOperand: function {
     ctx: Ctx
     n: astnode.view
     expr: StringView
+    exprF: cfacts
+    facts: cfacts.borrow
 } out String is {
     src: expr.string
-    if (factsOfText s: expr).place.not then {
+    srcF: exprF
+    if exprF.place.not then {
         pid9: stampIdDeep :symtab :n
-        hv: (hoistBorrowValArg
+        hv: (hoistBorrowValArgWith
             :ast
             :symtab
             :ctx
             argNid: (zast.nodeIdOf :n)
             av: expr
+            avF: exprF
             pid: pid9
             paramTake: false
         )
-        if hv.length > 0 then src = hv.copy
+        if hv.length > 0 then {
+            src = hv.copy
+            srcF = pathFacts
+        }
     }
     isStrT: operandIsStr :symtab :ctx :n
-    if isStrT.not when (factsOfText s: src.stringView).once then {
+    if isStrT.not when srcF.once then {
         # the operand is a view: bound so it is read once; it frees nothing
         src = hoistForAddress :ast :symtab :ctx av: expr tid: ctx.svTid argNid: zast.nodeid
+        srcF = pathFacts
     }
     valueVid: atomVidIfPlain :ast :symtab :ctx :n text: src.stringView
     vf: String
     if src.stringView == expr then {
-        facts2: cfacts
         vfa: (svValueFormAt
             :ast
             :symtab
@@ -7915,17 +7922,23 @@ stringViewBinopOperand: function {
             expr: src.stringView
             isStr: isStrT
             vid: valueVid
-            facts: facts2
+            facts: srcF
         )
         vf = vfa.take
     } else {
         # a hoisted operand is the temp, not the node
-        facts: cfacts
-        vfh: svValueForm :ast :symtab :ctx expr: src.stringView isStr: isStrT vid: valueVid :facts
+        vfh: (svValueForm
+            :ast
+            :symtab
+            :ctx
+            expr: src.stringView
+            isStr: isStrT
+            vid: valueVid
+            facts: srcF
+        )
         vf = vfh.take
     }
-    r: "&\{vf}"
-    return r
+    return (stating :facts from: (addrFacts e: srcF) text: "&\{vf}")
 }
 
 # instargval -- what resolving one argument's VALUE answers. The text itself is
@@ -8309,7 +8322,7 @@ emitInstanceMethodBody: function {
     recvExpr: StringView
     recvF: cfacts
     # whether recvExpr is ALREADY a C pointer, so the receiver slot takes it as
-    # it stands rather than through emitByrefArg. The two call forms read this
+    # it stands rather than through emitByrefArgWith. The two call forms read this
     # from different places -- a dotted base from the path it was reached by, a
     # receiver passed as an argument from the expression it was written as -- so
     # the caller answers it and this stays one emission for both
@@ -8453,7 +8466,7 @@ orderMethodParam: function {
             stateFacts facts: oneF from: recvF
         } else {
             # same rule as the auto-call base: a receiver that IS a call has no
-            # address, so emitByrefArg hoists it into a temp -- the checker's
+            # address, so emitByrefArgWith hoists it into a temp -- the checker's
             # temp for the receiver node, freed when the checker says it owns
             one.append (emitByrefArgWith
                 :ast
@@ -8469,8 +8482,7 @@ orderMethodParam: function {
     } else if written == 0 when (symtab.typing.declHasDefaultId parentTypeId: mco nameId: pname
     ) then {
         # a parameter the call leaves out is its declared default
-        facts: cfacts
-        one.append (paramDefaultText :ast :symtab :ctx cco: mco nameId: pname :pid :facts)
+        one.append (paramDefaultText :ast :symtab :ctx cco: mco nameId: pname :pid facts: oneF)
     } else {
         (instanceMethodArg
             :ast
@@ -8498,7 +8510,7 @@ orderMethodParam: function {
             )
         }
     }
-    tf: knownFacts f: oneF s: one.stringView
+    tf: oneF
     (orderPartWith
         :ast
         :symtab
@@ -10658,12 +10670,13 @@ stringKeyArgPointer: function {
     call: zast.callrow.view
     label: StringView
     expr: StringView
+    exprF: cfacts
 } out String is {
     # a String `.view`/`.borrow` PARAMETER, or a borrowed field, arrives as a
     # pointer already; addressing it again hands the runtime a `String_t**`,
     # which the C compiler rejects
     if (argIsPointerByLabel :ast :symtab :ctx :call :label) then return expr.string
-    if (factsOfText s: expr).place.not then {
+    if exprF.place.not then {
         nmK: (hoistForAddress
             :ast
             :symtab
@@ -10718,7 +10731,8 @@ emitSetMethodCall: function {
 } out String is {
     cb: ctxCname :ctx tid: bt
     if mnId == zast.wellKnown.slot.wkAdd then {
-        v: colArg :ast :symtab :ctx :call label: "item" consumes: true
+        vF: cfacts
+        v: colArgWith :ast :symtab :ctx :call facts: vF label: "item" consumes: true
         e0: "\{cb}_add(\{bn}, \{v})"
         return (stating :facts from: callFacts text: e0)
     }
@@ -10729,7 +10743,8 @@ emitSetMethodCall: function {
             from: callFacts
             text: "\{cb}_hasv(\{bn}, \{viv})"
         )
-        v: colArg :ast :symtab :ctx :call label: "item" consumes: false
+        vF: cfacts
+        v: colArgWith :ast :symtab :ctx :call facts: vF label: "item" consumes: false
         if (setElemIsString :symtab :ctx monoId: bt) then {
             return (stating :facts from: callFacts text: "\{cb}_has(\{bn}, \{(stringKeyArgPointer
                 :ast
@@ -10738,6 +10753,7 @@ emitSetMethodCall: function {
                 :call
                 label: "item"
                 expr: v.stringView
+                exprF: vF
             )})"
             )
         }
@@ -10751,7 +10767,8 @@ emitSetMethodCall: function {
             from: callFacts
             text: "\{cb}_deletev(\{bn}, \{viv})"
         )
-        v: colArg :ast :symtab :ctx :call label: "item" consumes: false
+        vF: cfacts
+        v: colArgWith :ast :symtab :ctx :call facts: vF label: "item" consumes: false
         if (setElemIsString :symtab :ctx monoId: bt) then {
             return (stating :facts from: callFacts text: "\{cb}_delete(\{bn}, \{(stringKeyArgPointer
                 :ast
@@ -10760,6 +10777,7 @@ emitSetMethodCall: function {
                 :call
                 label: "item"
                 expr: v.stringView
+                exprF: vF
             )})"
             )
         }
@@ -10806,7 +10824,8 @@ emitMapMethodCall: function {
             from: callFacts
             text: "\{cb}_getv(\{bn}, \{vkv})"
         )
-        vk: colArg :ast :symtab :ctx :call label: "key" consumes: false
+        vkF: cfacts
+        vk: colArgWith :ast :symtab :ctx :call facts: vkF label: "key" consumes: false
         if (mapKeyIsString :symtab :ctx monoId: bt) then {
             return (stating :facts from: callFacts text: "\{cb}_get(\{bn}, \{(stringKeyArgPointer
                 :ast
@@ -10815,6 +10834,7 @@ emitMapMethodCall: function {
                 :call
                 label: "key"
                 expr: vk.stringView
+                exprF: vkF
             )})"
             )
         }
@@ -10828,7 +10848,8 @@ emitMapMethodCall: function {
             from: callFacts
             text: "\{cb}_hasv(\{bn}, \{vkv})"
         )
-        vk: colArg :ast :symtab :ctx :call label: "key" consumes: false
+        vkF: cfacts
+        vk: colArgWith :ast :symtab :ctx :call facts: vkF label: "key" consumes: false
         if (mapKeyIsString :symtab :ctx monoId: bt) then {
             return (stating :facts from: callFacts text: "\{cb}_has(\{bn}, \{(stringKeyArgPointer
                 :ast
@@ -10837,6 +10858,7 @@ emitMapMethodCall: function {
                 :call
                 label: "key"
                 expr: vk.stringView
+                exprF: vkF
             )})"
             )
         }
@@ -10844,7 +10866,8 @@ emitMapMethodCall: function {
         return (stating :facts from: callFacts text: e2)
     }
     if mnId == zast.wellKnown.slot.wkRemove then {
-        vk: colArg :ast :symtab :ctx :call label: "key" consumes: false
+        vkF: cfacts
+        vk: colArgWith :ast :symtab :ctx :call facts: vkF label: "key" consumes: false
         if (mapKeyIsString :symtab :ctx monoId: bt) then {
             return (stating :facts from: callFacts text: "\{cb}_remove(\{bn}, \{(stringKeyArgPointer
                 :ast
@@ -10853,6 +10876,7 @@ emitMapMethodCall: function {
                 :call
                 label: "key"
                 expr: vk.stringView
+                exprF: vkF
             )})"
             )
         }
@@ -13555,22 +13579,10 @@ metaCreateFieldText: function {
     return (stating :facts from: avF text: av)
 }
 
-# emitByrefArg -- an argument passed BY REFERENCE. A non-lvalue has no address
-# to take, so it is hoisted (hoistForAddress) into a temp of the parameter's own
-# C type and the temp's address goes to the call instead.
-emitByrefArg: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    av: StringView
-    pid: ztypes.tid
-    argNid: zast.nodeid
-} out String is {
-    facts: cfacts
-    return (emitByrefArgWith :ast :symtab :ctx :av avF: (factsOfText s: av) :pid :argNid :facts)
-}
-
-# emitByrefArgWith -- emitByrefArg for an argument whose facts are `avF`.
+# emitByrefArgWith -- an argument whose facts are `avF`, passed BY REFERENCE. A
+# non-lvalue has no address to take, so it is hoisted (hoistForAddress) into a
+# temp of the parameter's own C type and the temp's address goes to the call
+# instead.
 emitByrefArgWith: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -16739,7 +16751,7 @@ emitNestedMonoMethodBase: function {
                         if (pathIsPointer :ast :symtab :ctx n: dpu).not then {
                             # the receiver is passed by address, and a base
                             # that IS a call is not an lvalue -- `&f(x)` is C
-                            # the compiler rejects. emitByrefArg hoists such a
+                            # the compiler rejects. emitByrefArgWith hoists such a
                             # value into the `_ahN` temp an argument gets; a
                             # plain name still emits as `&name`.
                             nmrF: cfacts
@@ -20106,8 +20118,11 @@ orderRowOperand: function {
         return
     }
     if (nativePtrArgsOf :ctx path: key) then {
-        pf: stringViewBinopOperand :ast :symtab :ctx :n expr: v.stringView
-        v = pf.take
+        pfF: cfacts
+        pf: stringViewBinopOperand :ast :symtab :ctx :n expr: v.stringView exprF: vF facts: pfF
+        stateFacts facts: opF from: callFacts
+        orderArgAtWith :ast :symtab :ctx st: ord mark: mk text: pf tf: pfF :nid byPtr: false :slot
+        return
     } else {
         q: atomVidIfPlain :ast :symtab :ctx :n text: v.stringView
         vf: (svValueFormAt
@@ -41251,18 +41266,30 @@ fileFromArgAddr: function {
     ctx: Ctx
     call: zast.callrow.view
 } out String is {
-    fv: ctorArgByLabel :ast :symtab :ctx :call label: "from"
-    fvc: fileFromArgCoerce :ast :symtab :ctx :call av: fv.stringView
+    fvF: cfacts
+    fv: ctorArgByLabelWith :ast :symtab :ctx :call label: "from" facts: fvF
+    fvcF: cfacts
+    fvc: fileFromArgCoerce :ast :symtab :ctx :call av: fv.stringView avF: fvF facts: fvcF
     # a compound literal (the String coercion's `(StringView){..}`) already has an
     # address; anything else is passed by reference as any argument is
-    if (factsOfText s: fvc.stringView).literal then return "&\{fvc}"
+    if fvcF.literal then return "&\{fvc}"
     fnid: ctorArgNodeByLabel :ast :call label: "from"
     vt: (stampIdOf
         :symtab
         nid: (interpPartNodeId n: (ast.nodes.get i: fnid))
     )
     if vt == ctx.strTid then vt = ctx.svTid
-    return (emitByrefArg :ast :symtab :ctx av: fvc.stringView pid: vt argNid: zast.nodeid)
+    byF: cfacts
+    return (emitByrefArgWith
+        :ast
+        :symtab
+        :ctx
+        av: fvc.stringView
+        avF: fvcF
+        pid: vt
+        argNid: zast.nodeid
+        facts: byF
+    )
 }
 
 # fileFromArgCoerce -- the emitted `from:` argument of a file-method call,
@@ -41275,6 +41302,8 @@ fileFromArgCoerce: function {
     ctx: Ctx
     call: zast.callrow.view
     av: StringView
+    avF: cfacts
+    facts: cfacts.borrow
 } out String is {
     arx569: u64
     for arx569 < call.arguments.count loop {
@@ -41289,19 +41318,23 @@ fileFromArgCoerce: function {
                     nid: (interpPartNodeId n: (ast.nodes.get i: fa.operation))
                 )
                 if stampTid == ctx.strTid then {
-                    fh: (hoistBorrowValArg
+                    fh: (hoistBorrowValArgWith
                         :ast
                         :symtab
                         :ctx
                         argNid: (zast.nodeIdOf n: faOpNode)
                         :av
+                        :avF
                         pid: ctx.strTid
                         paramTake: false
                     )
                     fb: av.string
-                    if fh.length > 0 then fb = fh.take
+                    stateFacts :facts from: avF
+                    if fh.length > 0 then {
+                        fb = fh.take
+                        stateFacts :facts from: pathFacts
+                    }
                     fbq: atomVidIfPlain :ast :symtab :ctx n: faOpNode text: fb.stringView
-                    facts: cfacts
                     return (svValueForm
                         :ast
                         :symtab
@@ -41315,7 +41348,7 @@ fileFromArgCoerce: function {
             }
         }
     }
-    return av.string
+    return (stating :facts from: avF text: av.string)
 }
 
 # emitFileMethodCall -- a File method (close/read/write/seek/flush), native,
@@ -41777,7 +41810,7 @@ lowerNativeArg: function {
     av1F: cfacts
     av1: emitExprWith :ast :symtab :ctx n: op facts: av1F
     # by reference: a value with no address (`outbuf.byteView`) is hoisted first,
-    # as every by-reference argument is (emitByrefArg)
+    # as every by-reference argument is (emitByrefArgWith)
     if needAmp when (pathIsPointer :ast :symtab :ctx n: op).not then {
         return (emitByrefArgWith
             :ast
@@ -45016,8 +45049,9 @@ emitYieldStmt: function {
     # expression (emitExpr :ast cannot emit the chain)
     yopId: zast.yieldCallOperandAt :ast nid: callId
     yx: ast.nodes.get i: yopId
+    veF: cfacts
     ve: emitInterpArgExpr :ast :symtab :ctx n: yx
-    if ve.length == 0 then ve = emitExpr :ast :symtab :ctx n: yx
+    if ve.length == 0 then ve = emitExprWith :ast :symtab :ctx n: yx facts: veF
     # what the value hoisted is declared ahead of it and released once the value
     # is in the box, before the suspension
     ytmp: TmpCtr n: 0 frees: List OwedFree listFrees: List OwedFree
@@ -45043,7 +45077,7 @@ emitYieldStmt: function {
     emitValueTakeInvalidations :ast :symtab :ctx n: yx :ind :buf
     # a boxed yield MOVES an lvalue operand (a local the instance keeps):
     # zero the source so the instance destructor does not double-free it
-    if ctx.genPayC.length > 0 when (factsOfText s: ve.stringView).place then {
+    if ctx.genPayC.length > 0 when veF.place then {
         lzv: movedZeroC :symtab :ctx tid: (stampIdOf :symtab nid: (interpPartNodeId n: yx))
         if lzv.length > 0 then buf.append "\{ind}\{ve} = \{lzv};\n"
     }
