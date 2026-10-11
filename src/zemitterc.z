@@ -6440,7 +6440,8 @@ emitStringArgMethod: function {
 # reader decides from facts rather than from the text's shape. A producer
 # states them into its caller's slot (`facts: cfacts.borrow`) as it returns.
 # Until every producer states its own, factsOfText supplies them from the text;
-# a producer that states them is the authority.
+# a producer that states them is the authority. Beside a text `x`, `xF` holds
+# its facts.
 cfacts: record {
     # `&` may be taken of it as it stands: a name, a field path, a deref
     place: false
@@ -6488,6 +6489,12 @@ pathFacts: function {} out cfacts is {
 # has always kept a temp for one.
 literalFacts: function {} out cfacts is {
     return (cfacts place: false literal: true once: false pure: false path: false stated: true)
+}
+
+# callFacts -- a call's result: a value, no storage, and work (and effects) a
+# second spelling would repeat.
+callFacts: function {} out cfacts is {
+    return (cfacts place: false literal: false once: true pure: false path: false stated: true)
 }
 
 # derefFacts -- a pointer read through, `(*p)`: a place, read twice at no cost,
@@ -16607,10 +16614,12 @@ emitUserTypeMemberRead: function {
     mn2: StringView
     mnId: zast.nameid
     bn2: StringView
+    bn2F: cfacts
     bn2v: ztypes.vid
     bstamp: ztypes.tid
     # handed to emitResolvedMemberRead: the read names the function, not its call
     readIsRef: bool
+    facts: cfacts.borrow
 } out String is {
     baseIsType: false
     if bn2v.isZero when (symtab.typing.dpTypeBase.has item: baseNid) then baseIsType = true
@@ -16666,7 +16675,7 @@ emitUserTypeMemberRead: function {
         }
         frecv: "&\{bn2}"
         if (isPtrVid :ctx vid: bn2v) then frecv = "\{bn2}"
-        return "\{ffc}_\{mn2}(\{frecv})"
+        return (stating :facts from: callFacts text: "\{ffc}_\{mn2}(\{frecv})")
     }
     mco: (symtab.typing.declChildOfId
         parentTypeId: bstamp
@@ -16696,11 +16705,9 @@ emitUserTypeMemberRead: function {
     ).none then return ""
     mnUtC: memberC :ast :symtab :ctx owner: bstamp kind: memberkind.field nameId: mnId
     if (isPtrVid :ctx vid: bn2v) then {
-        e5p: "\{bn2}->\{mnUtC}"
-        return e5p
+        return (stating :facts from: (memberFacts b: bn2F) text: "\{bn2}->\{mnUtC}")
     }
-    e5: "\{bn2}.\{mnUtC}"
-    return e5
+    return (stating :facts from: (memberFacts b: bn2F) text: "\{bn2}.\{mnUtC}")
 }
 
 # emitIdCollectionMemberRead -- a counter or no-arg method on the id-keyed pair,
@@ -17133,6 +17140,7 @@ dottedAtomRecClsBase: function {
     ctx: Ctx
     baseNid: zast.nodeid
     bn2: StringView
+    bn2F: cfacts
     mn2: StringView
     mnId: zast.nameid
     bn2v: ztypes.vid
@@ -17140,6 +17148,7 @@ dottedAtomRecClsBase: function {
     rtt: ztypes.ztypetype
     # handed to emitUserTypeMemberRead: whether the read is a function reference
     readIsRef: bool
+    facts: cfacts.borrow
 } out String is {
     isRecOrCls: false
     # array/str monos are RECORD typetype but keep their own legs
@@ -17175,9 +17184,11 @@ dottedAtomRecClsBase: function {
             :mn2
             :mnId
             :bn2
+            :bn2F
             :bn2v
             :bstamp
             :readIsRef
+            :facts
         )
         if utm.length > 0 then return utm
     }
@@ -17196,7 +17207,6 @@ emitDottedAtomBase: function {
     mn2: StringView
     mnId: zast.nameid
     bn2: StringView
-    # the facts of `bn2`
     bn2F: cfacts
     bn2v: ztypes.vid
     # the base is a Box and the member is its element's: the element's type,
@@ -17284,12 +17294,14 @@ emitDottedAtomBase: function {
         :ctx
         baseNid: n.parent
         :bn2
+        :bn2F
         :mn2
         :mnId
         :bn2v
         :bstamp
         :rtt
         :readIsRef
+        :facts
     )
     if eRc.length > 0 then return eRc
     # a UNION reads its payload through legs further down, but the question of
