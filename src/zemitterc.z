@@ -2746,17 +2746,21 @@ ternaryClause: function {
     isFirst: bool
     # the chain is a reference: the arm yields an address (armRefLeaf)
     ref: false
+    facts: cfacts.borrow
 } out String is {
     match (
         c
     ) case ifclause then {
-        cond: ternaryConds :ast :symtab :ctx :c :isFirst
+        condF: cfacts
+        cond: ternaryConds :ast :symtab :ctx :c :isFirst facts: condF
         if cond.length == 0 then return cond
-        vx: armInPlace :ast :symtab :ctx n: (ast.nodes.get i: c.statement) :ref
+        vxF: cfacts
+        vx: armInPlace :ast :symtab :ctx n: (ast.nodes.get i: c.statement) :ref facts: vxF
         if vx.length == 0 then return vx
-        t0: "((\{cond}) ? (\{vx}) : "
-        return t0
+        stateFacts :facts from: (valueFacts a: condF b: vxF)
+        return "((\{cond}) ? (\{vx}) : "
     } else {
+        stateFacts :facts from: constFacts
         return "(0 ? 0 : "
     }
 }
@@ -2769,8 +2773,10 @@ ternaryConds: function {
     ctx: Ctx
     c: zast.ifclauserow
     isFirst: bool
+    facts: cfacts.borrow
 } out String is {
     cond: String
+    condF: constFacts
     cox1249: u64
     for cox1249 < c.conditions.count loop {
         kId: zast.kidAt kids: ast.kids span: c.conditions i: cox1249
@@ -2778,13 +2784,16 @@ ternaryConds: function {
         cox1249 = cox1249 + 1
         k: ast.nodes.get i: kId
         if k.namedoperation then {
-            cv: ternaryCondPart :ast :symtab :ctx op: k.operation :guarded
+            cvF: cfacts
+            cv: ternaryCondPart :ast :symtab :ctx op: k.operation :guarded facts: cvF
             if cv.length == 0 then return cv
+            # one condition is the text itself; each further one joins it with `&&`
+            if cond.length == 0 then condF = cvF else condF = valueFacts a: condF b: cvF
             if cond.length > 0 then cond.append " && "
             cond.append cv
         }
     }
-    return cond
+    return (stating :facts from: condF text: cond)
 }
 
 # ternaryCondPart -- one condition of a ternary clause. A guarded one -- a later
@@ -2797,19 +2806,24 @@ ternaryCondPart: function {
     # the condition's operation node
     op: zast.nodeid
     guarded: bool
+    facts: cfacts.borrow
 } out String is {
     mk: openInPlace :ctx
     cvF: cfacts
     cv: valueExprC :ast :symtab :ctx n: (ast.nodes.get i: op) facts: cvF
     tw: truthyCondText :ast :symtab :ctx n: (ast.nodes.get i: op) raw: cv.stringView
-    if tw.length > 0 then cv = tw.take
-    if guarded when (hoistsGrew :ctx mark: mk) then return (assignInPlace
-        :ctx
-        mark: mk
-        text: cv.stringView
+    # a truthiness test written around the condition is a value computed from it
+    if tw.length > 0 when tw.stringView != cv then {
+        cv = tw.take
+        cvF = operandFacts e: cvF place: false
+    }
+    if guarded when (hoistsGrew :ctx mark: mk) then return (stating
+        :facts
+        from: callFacts
+        text: (assignInPlace :ctx mark: mk text: cv.stringView)
     )
     closeInPlace :ctx mark: mk
-    return cv
+    return (stating :facts from: cvF text: cv)
 }
 
 # armInPlace -- a ternary arm's value, its hoists assigned where the arm runs;
@@ -2821,17 +2835,19 @@ armInPlace: function {
     n: astnode.view
     # the arm of a reference chain: its address is the answer (armRefLeaf)
     ref: false
+    facts: cfacts.borrow
 } out String is {
     mk: openInPlace :ctx
-    vx: armValueExpr :ast :symtab :ctx :n
+    vxF: cfacts
+    vx: armValueExpr :ast :symtab :ctx :n facts: vxF
     if (hoistsGrew :ctx mark: mk) then {
         av: assignInPlace :ctx mark: mk text: vx.stringView
-        if ref.not or (av.length == 0) then return av
-        return (armRefLeaf :ast :symtab :ctx :n text: av.stringView)
+        if ref.not or (av.length == 0) then return (stating :facts from: callFacts text: av)
+        return (armRefLeaf :ast :symtab :ctx :n text: av.stringView textF: callFacts :facts)
     }
     closeInPlace :ctx mark: mk
-    if ref then return (armRefLeaf :ast :symtab :ctx :n text: vx.stringView)
-    return vx
+    if ref then return (armRefLeaf :ast :symtab :ctx :n text: vx.stringView textF: vxF :facts)
+    return (stating :facts from: vxF text: vx)
 }
 
 # emitTernaryChain -- an if used as a value whose arms are single values, as a
@@ -2843,15 +2859,18 @@ emitTernaryChain: function {
     n: zast.ifrow.view
     # a reference chain: every arm yields an address (emitControlRef)
     ref: false
+    facts: cfacts.borrow
 } out String is {
     tx: String
+    txF: constFacts
     depth: u64
     tm: pendingHoistMark :ctx
     clx959: u64
     for clx959 < n.clauses.count loop {
         cId: zast.kidAt kids: ast.kids span: n.clauses i: clx959
         c9r: ast.nodes.get i: cId
-        cx: ternaryClause :ast :symtab :ctx c: c9r isFirst: clx959 == 0 :ref
+        cxF: cfacts
+        cx: ternaryClause :ast :symtab :ctx c: c9r isFirst: clx959 == 0 :ref facts: cxF
         clx959 = clx959 + 1
         if cx.length == 0 then return (ternaryAsStatements
             :ast
@@ -2860,11 +2879,14 @@ emitTernaryChain: function {
             nid: n.nodeid
             mark: tm
             :ref
+            :facts
         )
         tx.append cx
+        txF = valueFacts a: txF b: cxF
         depth = depth + 1
     }
-    ex: ternaryElse :ast :symtab :ctx oId: n.elseclause :ref
+    exF: cfacts
+    ex: ternaryElse :ast :symtab :ctx oId: n.elseclause :ref facts: exF
     if ex.length == 0 then return (ternaryAsStatements
         :ast
         :symtab
@@ -2872,14 +2894,29 @@ emitTernaryChain: function {
         nid: n.nodeid
         mark: tm
         :ref
+        :facts
     )
     tx.append ex
+    txF = valueFacts a: txF b: exF
     dk: u64
     for dk < depth loop {
         tx.append ")"
         dk = dk + 1
     }
-    return tx
+    # a value, read only where every part only reads; reading it twice reruns
+    # its condition
+    return (stating
+        :facts
+        from: (cfacts
+            place: false
+            literal: false
+            once: true
+            pure: txF.pure
+            path: false
+            stated: true
+        )
+        text: tx
+    )
 }
 
 # dropHoistsTo -- forget the hoists recorded since `mark`: the text that would
@@ -2907,12 +2944,21 @@ ternaryAsStatements: function {
     mark: hoistmark
     # the chain was a reference: so is the statement expression
     ref: false
+    facts: cfacts.borrow
 } out String is {
     dropHoistsTo :ctx :mark
-    if ref then return (emitControlPtrExpr :ast :symtab :ctx n: (ast.nodes.get i: nid))
+    if ref then return (stating
+        :facts
+        from: callFacts
+        text: (emitControlPtrExpr :ast :symtab :ctx n: (ast.nodes.get i: nid))
+    )
     icx: emitControlExpr :ast :symtab :ctx n: (ast.nodes.get i: nid)
-    if icx.length > 0 then return icx
-    return (unhandledExpr :ctx line: (ztypecheck.nodeLine n: (ast.nodes.get i: nid)))
+    if icx.length > 0 then return (stating :facts from: callFacts text: icx)
+    return (stating
+        :facts
+        from: constFacts
+        text: (unhandledExpr :ctx line: (ztypecheck.nodeLine n: (ast.nodes.get i: nid)))
+    )
 }
 
 # emit the else-arm of a C ternary expression.
@@ -2923,13 +2969,16 @@ ternaryElse: function {
     oId: zast.nodeid
     # the arm of a reference chain (armRefLeaf)
     ref: false
+    facts: cfacts.borrow
 } out String is {
     if oId.isZero.not then {
-        ev: armInPlace :ast :symtab :ctx n: (ast.nodes.get i: oId) :ref
+        evF: cfacts
+        ev: armInPlace :ast :symtab :ctx n: (ast.nodes.get i: oId) :ref facts: evF
         if ev.length == 0 then return ev
-        e0: "(\{ev})"
-        return e0
+        stateFacts :facts from: evF
+        return "(\{ev})"
     } else {
+        stateFacts :facts from: constFacts
         return "(0)"
     }
 }
@@ -4638,22 +4687,23 @@ armValueExpr: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     n: astnode.view
+    facts: cfacts.borrow
 } out String is {
-    vx: emitExpr :ast :symtab :ctx :n
+    vxF: cfacts
+    vx: emitExprWith :ast :symtab :ctx :n facts: vxF
     tn: armTakeLeaf :ast :symtab :n
-    if tn.isZero then return vx
+    if tn.isZero then return (stating :facts from: vxF text: vx)
     if (movedSourceNeedsZero
         :ast
         :symtab
         n: (ast.nodes.get i: tn)
-    ).not then return vx
+    ).not then return (stating :facts from: vxF text: vx)
     tt: stampIdOf :symtab nid: tn
     tz: movedZeroC :symtab :ctx tid: tt
-    if tz.length == 0 then return vx
+    if tz.length == 0 then return (stating :facts from: vxF text: vx)
     tc: typeRefC :ast :symtab :ctx tid: tt
     if (isHeapPtrCollection :symtab :ctx tid: tt) then tc = "\{tc}*"
-    mv: "({ \{tc} _mv = \{vx}; \{vx} = \{tz}; _mv; })"
-    return mv
+    return (stating :facts from: callFacts text: "({ \{tc} _mv = \{vx}; \{vx} = \{tz}; _mv; })")
 }
 
 # emitArmTakeZero -- after an arm assigned its value `rv` to the target: an arm
@@ -19409,7 +19459,7 @@ emitExprArms: function {
             return (emitExprArms :ast :symtab :ctx n: (ast.nodes.get i: s0Id) :facts)
         }
         emitFail :ctx what: "unhandled expr (multi-statement)" line: n.lineno
-        return "/* zemitterc: unhandled expr */0"
+        return (stating :facts from: constFacts text: "/* zemitterc: unhandled expr */0")
     } case atomid then {
         return (emitAtom :ast :symtab :ctx :n :facts)
     } case labelvalue then {
@@ -19439,9 +19489,9 @@ emitExprArms: function {
         # an interpolation is an owned String rvalue, built where it is
         # evaluated -- the same shape as a call returning one
         ie: emitInterpArgExpr :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid)
-        if ie.length > 0 then return ie
+        if ie.length > 0 then return (stating :facts from: callFacts text: ie)
         emitFail :ctx what: "unhandled atomstring expr" line: n.lineno
-        return "/* zemitterc: unhandled atomstring expr */0"
+        return (stating :facts from: constFacts text: "/* zemitterc: unhandled atomstring expr */0")
     } case ifexpr then {
         # a chain whose every condition folds has ONE live branch: emit its
         # value alone. spec.pdoc, Conditional Compilation, promises the false
@@ -19449,17 +19499,17 @@ emitExprArms: function {
         # position.
         vfb: foldedBranchOf :symtab :ctx nid: n.nodeid
         if vfb.known when vfb.stmt.isZero.not then {
-            return (armValueExpr :ast :symtab :ctx n: (ast.nodes.get i: vfb.stmt))
+            return (armValueExpr :ast :symtab :ctx n: (ast.nodes.get i: vfb.stmt) :facts)
         }
         if (controlValueIsReference :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid)) then {
-            return (emitControlRef :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid))
+            return (emitControlRef :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid) :facts)
         }
         if (ifIsTernary :ast n: (ast.nodes.get i: n.nodeid)).not then {
             icx: emitControlExpr :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid)
-            if icx.length > 0 then return icx
-            return (unhandledExpr :ctx line: n.lineno)
+            if icx.length > 0 then return (stating :facts from: callFacts text: icx)
+            return (stating :facts from: constFacts text: (unhandledExpr :ctx line: n.lineno))
         }
-        return (emitTernaryChain :ast :symtab :ctx :n)
+        return (emitTernaryChain :ast :symtab :ctx :n :facts)
     } case call then {
         cve: emitCallValue :ast :symtab :ctx call: n :facts
         return (loadValueStructRef
@@ -19472,20 +19522,24 @@ emitExprArms: function {
         )
     } case caseexpr then {
         if (controlValueIsReference :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid)) then {
-            return (emitControlRef :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid))
+            return (emitControlRef :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid) :facts)
         }
         mcx: emitControlExpr :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid)
-        if mcx.length > 0 then return mcx
-        return (unhandledExpr :ctx line: n.lineno)
+        if mcx.length > 0 then return (stating :facts from: callFacts text: mcx)
+        return (stating :facts from: constFacts text: (unhandledExpr :ctx line: n.lineno))
     } case withexpr then {
         # grammar.pdoc: "`with` can be used as an expression. The result will be
         # the value of the `do` expression." It reaches C the way an `if` or a
         # `match` does -- no C expression spells a scope with a binding in it
         wcx: emitControlExpr :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid)
-        if wcx.length > 0 then return wcx
-        return (unhandledExpr :ctx line: n.lineno)
+        if wcx.length > 0 then return (stating :facts from: callFacts text: wcx)
+        return (stating :facts from: constFacts text: (unhandledExpr :ctx line: n.lineno))
     } else {
-        return (unhandledExpr :ctx line: (ztypecheck.nodeLine :n))
+        return (stating
+            :facts
+            from: constFacts
+            text: (unhandledExpr :ctx line: (ztypecheck.nodeLine :n))
+        )
     }
 }
 
@@ -19625,22 +19679,31 @@ emitControlRef: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     n: astnode.view
+    facts: cfacts.borrow
 } out String is {
     ptr: String
+    ptrF: callFacts
     match (
         n
     ) case ifexpr then {
         if (ifIsTernary :ast n: (ast.nodes.get i: n.nodeid)) then {
-            ptr = emitTernaryChain :ast :symtab :ctx :n ref: true
+            ptr = emitTernaryChain :ast :symtab :ctx :n ref: true facts: ptrF
         }
     } else null
-    if ptr.length == 0 then ptr = emitControlPtrExpr :ast :symtab :ctx :n
-    if ptr.length == 0 then return (unhandledExpr :ctx line: (ztypecheck.nodeLine :n))
+    if ptr.length == 0 then {
+        # a statement expression
+        ptr = emitControlPtrExpr :ast :symtab :ctx :n
+        ptrF = callFacts
+    }
+    if ptr.length == 0 then return (stating
+        :facts
+        from: constFacts
+        text: (unhandledExpr :ctx line: (ztypecheck.nodeLine :n))
+    )
     # a Set or Map value already is the pointer to what it holds
     vt: bindingStampOf :symtab :ctx nid: (zast.nodeIdOf :n)
-    if (isHeapPtrCollection :symtab :ctx tid: vt) then return ptr
-    r: "(*\{ptr})"
-    return r
+    if (isHeapPtrCollection :symtab :ctx tid: vt) then return (stating :facts from: ptrF text: ptr)
+    return (stating :facts from: (operandFacts e: ptrF place: true) text: "(*\{ptr})")
 }
 
 # armRefLeaf -- an arm of a reference control value, as the address its pointer
@@ -19654,6 +19717,8 @@ armRefLeaf: function {
     ctx: Ctx
     n: astnode.view
     text: StringView
+    textF: cfacts
+    facts: cfacts.borrow
 } out String is {
     lf: armValueNode :ast :n
     lt: (bindingStampOf
@@ -19665,18 +19730,24 @@ armRefLeaf: function {
     # a Set or Map value is its own reference: a place arm yields the pointer, an
     # owned one parks it
     heap: isHeapPtrCollection :symtab :ctx tid: lt
-    if heap when (armLeafIsPlace :ast :symtab :ctx :n) then return text.string
+    if heap when (armLeafIsPlace :ast :symtab :ctx :n) then return (stating
+        :facts
+        from: textF
+        text: text.string
+    )
     if (armLeafIsPlace :ast :symtab :ctx :n) then {
         pv: (atomVid
             :symtab
             nid: (atomNodeId n: (ast.nodes.get i: lf))
         )
         if pv.isZero.not when (isPtrVid :ctx vid: pv) then {
-            pa: "((\{ct}*)(\{text}))"
-            return pa
+            return (stating
+                :facts
+                from: (operandFacts e: textF place: false)
+                text: "((\{ct}*)(\{text}))"
+            )
         }
-        ra: "((\{ct}*)&(\{text}))"
-        return ra
+        return (stating :facts from: (addrFacts e: textF) text: "((\{ct}*)&(\{text}))")
     }
     # declared zero by the statement and assigned where the arm runs
     nm: argHoistName :symtab :ctx argNid: lf fallback: "_ah"
@@ -19698,11 +19769,9 @@ armRefLeaf: function {
         ctx.argHoistDtors.append dt
     }
     if heap then {
-        ho: "(\{nm} = \{text}, \{nm})"
-        return ho
+        return (stating :facts from: callFacts text: "(\{nm} = \{text}, \{nm})")
     }
-    oa: "(\{nm} = \{text}, &\{nm})"
-    return oa
+    return (stating :facts from: callFacts text: "(\{nm} = \{text}, &\{nm})")
 }
 
 # appendArmAssign -- an arm's value assigned to the local its control value binds,
@@ -19715,13 +19784,15 @@ appendArmAssign: function {
     n: astnode.view
     target: StringView
     vx: StringView
+    vxF: cfacts
     ind: StringView
     buf: String.borrow
 } is {
     if ctx.armRefCv > 0 then {
         rn: "_cv\{ctx.armRefCv - 1}"
         if target == rn then {
-            ra: armRefLeaf :ast :symtab :ctx :n text: vx
+            raF: cfacts
+            ra: armRefLeaf :ast :symtab :ctx :n text: vx textF: vxF facts: raF
             buf.append "\{ind}\{target} = \{ra};\n"
             return
         }
@@ -30107,13 +30178,14 @@ emitBranchAssign: function {
             emitStmt :ast :symtab :ctx :n :ind :tmp :buf
             return
         }
-        vx2: emitExpr :ast :symtab :ctx :n
+        vx2F: cfacts
+        vx2: emitExprWith :ast :symtab :ctx :n facts: vx2F
         # an argument the value hoisted is declared in the arm, which runs it
         # only when selected, and freed at the arm's end
         fL2: tmp.frees.length
         lL2: tmp.listFrees.length
         flushArgHoists :ctx :ind :tmp :buf
-        appendArmAssign :ast :symtab :ctx :n :target vx: vx2.stringView :ind :buf
+        appendArmAssign :ast :symtab :ctx :n :target vx: vx2.stringView vxF: vx2F :ind :buf
         emitArmTakeZero :ast :symtab :ctx :n rv: vx2.stringView :ind :buf
         emitValueTakeInvalidations :ast :symtab :ctx :n :ind :buf
         flushBlockFrees :ctx :tmp fL: fL2 lL: lL2 diverged: false :buf
@@ -30142,11 +30214,12 @@ emitBranchLastAssign: function {
         return true
     }
     if (emitNestedMatchAssign :ast :symtab :ctx line: sx :target :ind :tmp :buf) then return false
-    vx: emitExpr :ast :symtab :ctx n: sx
+    vxF: cfacts
+    vx: emitExprWith :ast :symtab :ctx n: sx facts: vxF
     # an argument the value hoisted is declared here, inside the branch; the
     # block's flush frees it
     flushArgHoists :ctx :ind :tmp :buf
-    appendArmAssign :ast :symtab :ctx n: sx :target vx: vx.stringView :ind :buf
+    appendArmAssign :ast :symtab :ctx n: sx :target vx: vx.stringView :vxF :ind :buf
     emitArmTakeZero :ast :symtab :ctx n: sx rv: vx.stringView :ind :buf
     emitValueTakeInvalidations :ast :symtab :ctx n: sx :ind :buf
     zeroBranchLocalMove :ast :symtab :ctx line: sx :fL :lL :ind :tmp :buf
