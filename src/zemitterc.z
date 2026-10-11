@@ -9842,6 +9842,7 @@ emitCollectionMethodCall: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
+    facts: cfacts.borrow
 } out String is {
     bnF: cfacts
     bn: emitDottedReceiver :ast :symtab :ctx callable: (ast.nodes.get i: call.callable) facts: bnF
@@ -9919,7 +9920,7 @@ emitCollectionMethodCall: function {
         )
         bn = bh9.copy
     }
-    return (emitFamilyMethodCall :ast :symtab :ctx :call :mnId :bn :bt :bvid)
+    return (emitFamilyMethodCall :ast :symtab :ctx :call :mnId :bn :bt :bvid :facts)
 }
 
 # emitFamilyMethodCall -- a collection method call, dispatched on the receiver's
@@ -9935,17 +9936,18 @@ emitFamilyMethodCall: function {
     bn: String
     bt: ztypes.tid
     bvid: ztypes.vid
+    facts: cfacts.borrow
 } out String is {
     fam: monoFamilyOf :symtab :ctx tid: bt
     isArr: fam == family.slot.fixedArray
-    if isArr then return (emitArrayMethodCall :ast :symtab :ctx :call :mnId :bn :bt :bvid)
+    if isArr then return (emitArrayMethodCall :ast :symtab :ctx :call :mnId :bn :bt :bvid :facts)
     if (dataValueFamilyOf :symtab :ctx tid: bt).isZero.not then {
-        return (emitDataValueMethodCall :ast :symtab :ctx :call :mnId :bn :bt)
+        return (emitDataValueMethodCall :ast :symtab :ctx :call :mnId :bn :bt :facts)
     }
     isSpan: fam == family.slot.spanVal
-    if isSpan then return (emitSpanMethodCall :ast :symtab :ctx :call :mnId :bn :bt :bvid)
+    if isSpan then return (emitSpanMethodCall :ast :symtab :ctx :call :mnId :bn :bt :bvid :facts)
     if fam == family.slot.listVal then {
-        lend: emitListValLendCall :ast :symtab :ctx :call :mnId :bn :bt :bvid
+        lend: emitListValLendCall :ast :symtab :ctx :call :mnId :bn :bt :bvid :facts
         if lend.length > 0 then return lend
     }
     isList: (
@@ -9963,9 +9965,10 @@ emitFamilyMethodCall: function {
         :bn
         :bt
         :bvid
+        :facts
     )
     isSet: (fam == family.slot.set) or (fam == family.slot.setVal)
-    if isSet then return (emitSetMethodCall :ast :symtab :ctx :call :mnId :bn :bt)
+    if isSet then return (emitSetMethodCall :ast :symtab :ctx :call :mnId :bn :bt :facts)
     if (isMapOriginOf :symtab :ctx tid: bt) then return (emitMapMethodCall
         :ast
         :symtab
@@ -9974,11 +9977,12 @@ emitFamilyMethodCall: function {
         :mnId
         :bn
         :bt
+        :facts
     )
     isIdMap: (fam == family.slot.idMapR) or (fam == family.slot.idMapV)
-    if isIdMap then return (emitIdMapMethodCall :ast :symtab :ctx :call :mnId :bn :bt :bvid)
+    if isIdMap then return (emitIdMapMethodCall :ast :symtab :ctx :call :mnId :bn :bt :bvid :facts)
     isIdSet: fam == family.slot.idSet
-    if isIdSet then return (emitIdSetMethodCall :ast :symtab :ctx :call :mnId :bn :bt :bvid)
+    if isIdSet then return (emitIdSetMethodCall :ast :symtab :ctx :call :mnId :bn :bt :bvid :facts)
     return ""
 }
 
@@ -9993,6 +9997,7 @@ emitListValLendCall: function {
     bn: String
     bt: ztypes.tid
     bvid: ztypes.vid
+    facts: cfacts.borrow
 } out String is {
     isResize: mnId == zast.wellKnown.slot.wkResize
     if isResize.not when (mnId == zast.wellKnown.slot.wkMutSlice).not then return ""
@@ -10001,10 +10006,10 @@ emitListValLendCall: function {
     if isResize then {
         vr: listArg :ast :symtab :ctx :call label: "to"
         er: "\{cb}_resize(\{recvR}, \{vr})"
-        return er
+        return (stating :facts from: callFacts text: er)
     }
     recvT: "\{cb}_t*"
-    return (emitWindowSlice
+    return (stating :facts from: callFacts text: (emitWindowSlice
         :ast
         :symtab
         :ctx
@@ -10014,6 +10019,7 @@ emitListValLendCall: function {
         len: "_zw->length"
         what: "ListVal mutSlice"
         inline: false
+    )
     )
 }
 
@@ -10059,13 +10065,18 @@ emitListMethodCall: function {
     bn: String
     bt: ztypes.tid
     bvid: ztypes.vid
+    facts: cfacts.borrow
 } out String is {
     cb: ctxCname :ctx tid: bt
     recvR: colRecvRef :ctx bn: bn.stringView vid: bvid
     if mnId == zast.wellKnown.slot.wkAppend then {
         v: colArg :ast :symtab :ctx :call label: "from" consumes: true
         e0: "\{cb}_append(\{recvR}, \{v})"
-        return (narrowListIndex :ast :symtab :ctx :call pos: e0)
+        return (stating
+            :facts
+            from: callFacts
+            text: (narrowListIndex :ast :symtab :ctx :call pos: e0)
+        )
     }
     if mnId == zast.wellKnown.slot.wkGet then {
         v: listArg :ast :symtab :ctx :call label: "i"
@@ -10074,8 +10085,8 @@ emitListMethodCall: function {
             :symtab
             :ctx
             monoId: bt
-        ) then return "(*\{e1})"
-        return e1
+        ) then return (guessing :facts text: "(*\{e1})")
+        return (stating :facts from: callFacts text: e1)
     }
     if mnId == zast.wellKnown.slot.wkGetMut then {
         vm: listArg :ast :symtab :ctx :call label: "i"
@@ -10084,11 +10095,11 @@ emitListMethodCall: function {
             :symtab
             :ctx
             monoId: bt
-        ) then return "(*\{e1m})"
-        return e1m
+        ) then return (guessing :facts text: "(*\{e1m})")
+        return (stating :facts from: callFacts text: e1m)
     }
     if mnId == zast.wellKnown.slot.wkSlice then {
-        return (emitOrderedPair
+        return (stating :facts from: callFacts text: (emitOrderedPair
             :ast
             :symtab
             :ctx
@@ -10101,14 +10112,15 @@ emitListMethodCall: function {
             b: "to"
             bForm: argform.value
         )
+        )
     }
     if mnId == zast.wellKnown.slot.wkExtendView then {
         vw9: listArg :ast :symtab :ctx :call label: "from"
         e1e: "\{cb}_extendView(\{recvR}, \{vw9})"
-        return e1e
+        return (stating :facts from: callFacts text: e1e)
     }
     if mnId == zast.wellKnown.slot.wkSet then {
-        return (emitOrderedPair
+        return (stating :facts from: callFacts text: (emitOrderedPair
             :ast
             :symtab
             :ctx
@@ -10121,13 +10133,14 @@ emitListMethodCall: function {
             b: "val"
             bForm: argform.moved
         )
+        )
     }
     if mnId == zast.wellKnown.slot.wkPop then {
         e3: "\{cb}_pop(\{recvR})"
-        return e3
+        return (stating :facts from: callFacts text: e3)
     }
     if mnId == zast.wellKnown.slot.wkInsert then {
-        return (emitOrderedPair
+        return (stating :facts from: callFacts text: (emitOrderedPair
             :ast
             :symtab
             :ctx
@@ -10140,22 +10153,23 @@ emitListMethodCall: function {
             b: "at"
             bForm: argform.value
         )
+        )
     }
     if mnId == zast.wellKnown.slot.wkExtend then {
         eaa: listTakeArgBase :ast :call label: "from"
         eaV: atomVid :symtab nid: (listTakeArgBaseNid :ast :call label: "from")
         ea: emitLocalAtomName :ctx name: eaa vid: eaV
         e5: "\{cb}_extend(\{recvR}, &\{ea})"
-        return e5
+        return (stating :facts from: callFacts text: e5)
     }
     if mnId == zast.wellKnown.slot.wkContains then {
         vc: containsNeedleC :ast :symtab :ctx :call
         e6: "\{cb}_contains(\{recvR}, \{vc})"
-        return e6
+        return (stating :facts from: callFacts text: e6)
     }
     if mnId == zast.wellKnown.slot.wkSort then {
         e7: "\{cb}_sort(\{recvR})"
-        return e7
+        return (stating :facts from: callFacts text: e7)
     }
     return ""
 }
@@ -10219,15 +10233,16 @@ emitArrayMethodCall: function {
     bn: String
     bt: ztypes.tid
     bvid: ztypes.vid
+    facts: cfacts.borrow
 } out String is {
     cb: ctxCname :ctx tid: bt
     if mnId == zast.wellKnown.slot.wkGet then {
         vi: listArg :ast :symtab :ctx :call label: "i"
-        return "\{cb}_get(\{bn}, \{vi})"
+        return (stating :facts from: callFacts text: "\{cb}_get(\{bn}, \{vi})")
     }
     if mnId == zast.wellKnown.slot.wkSet then {
         recvR: colRecvRef :ctx bn: bn.stringView vid: bvid
-        return (emitOrderedPair
+        return (stating :facts from: callFacts text: (emitOrderedPair
             :ast
             :symtab
             :ctx
@@ -10240,6 +10255,7 @@ emitArrayMethodCall: function {
             b: "item"
             bForm: argform.value
         )
+        )
     }
     isSlice: (mnId == zast.wellKnown.slot.wkSlice) or (mnId == zast.wellKnown.slot.wkMutSlice)
     if isSlice then {
@@ -10250,7 +10266,7 @@ emitArrayMethodCall: function {
         if (
             mnId == zast.wellKnown.slot.wkSlice
         ) then whatA = "array slice" else whatA = "array mutSlice"
-        return (emitWindowSlice
+        return (stating :facts from: callFacts text: (emitWindowSlice
             :ast
             :symtab
             :ctx
@@ -10260,6 +10276,7 @@ emitArrayMethodCall: function {
             len: lenA.stringView
             what: whatA
             inline: true
+        )
         )
     }
     return ""
@@ -10275,11 +10292,12 @@ emitDataValueMethodCall: function {
     mnId: zast.nameid
     bn: String
     bt: ztypes.tid
+    facts: cfacts.borrow
 } out String is {
     if (mnId == zast.wellKnown.slot.wkIndex).not then return ""
     cb: ctxCname :ctx tid: bt
     vi: listArg :ast :symtab :ctx :call label: "i"
-    return "\{cb}_index(\{bn}, \{vi})"
+    return (stating :facts from: callFacts text: "\{cb}_index(\{bn}, \{vi})")
 }
 
 # emitSpanMethodCall -- a window's members that take arguments. get, set and
@@ -10294,6 +10312,7 @@ emitSpanMethodCall: function {
     bn: String
     bt: ztypes.tid
     bvid: ztypes.vid
+    facts: cfacts.borrow
 } out String is {
     cb: ctxCname :ctx tid: bt
     recvR: colRecvRef :ctx bn: bn.stringView vid: bvid
@@ -10304,11 +10323,11 @@ emitSpanMethodCall: function {
             :symtab
             :ctx
             monoId: bt
-        ) then return "(*\{e1})"
-        return e1
+        ) then return (guessing :facts text: "(*\{e1})")
+        return (stating :facts from: callFacts text: e1)
     }
     if mnId == zast.wellKnown.slot.wkSet then {
-        return (emitOrderedPair
+        return (stating :facts from: callFacts text: (emitOrderedPair
             :ast
             :symtab
             :ctx
@@ -10321,9 +10340,10 @@ emitSpanMethodCall: function {
             b: "item"
             bForm: argform.value
         )
+        )
     }
     if mnId == zast.wellKnown.slot.wkSlice then {
-        return (emitOrderedPair
+        return (stating :facts from: callFacts text: (emitOrderedPair
             :ast
             :symtab
             :ctx
@@ -10336,11 +10356,12 @@ emitSpanMethodCall: function {
             b: "to"
             bForm: argform.value
         )
+        )
     }
     if mnId == zast.wellKnown.slot.wkFill then {
         vf: listArg :ast :symtab :ctx :call label: "item"
         ef: "\{cb}_fill(\{recvR}, \{vf})"
-        return ef
+        return (stating :facts from: callFacts text: ef)
     }
     if mnId == zast.wellKnown.slot.wkSplit then {
         needsAddM :ctx uname: "collections" memb: "window"
@@ -10368,7 +10389,7 @@ emitSpanMethodCall: function {
         es.append "z_coll_window_check(0, _za, _zs->length, \"SpanVal split\"); "
         es.append "(\{pc}_t){ .\{loC} = { .length = _za, .data = _zs->data }, "
         es.append ".\{hiC} = { .length = _zs->length - _za, .data = _zs->data + _za } }; })"
-        return es
+        return (stating :facts from: callFacts text: es)
     }
     if mnId == zast.wellKnown.slot.wkCopyFrom then {
         vc: listArg :ast :symtab :ctx :call label: "from"
@@ -10382,7 +10403,7 @@ emitSpanMethodCall: function {
         ec.append "z_coll_window_check(0, _zf.length, _zd->length, \"SpanVal copyFrom\"); "
         ec.append "if (_zf.length > 0) memmove(_zd->data, _zf.data, _zf.length * sizeof(*_zd->data)); })"
         needsAddM :ctx uname: "collections" memb: "window"
-        return ec
+        return (stating :facts from: callFacts text: ec)
     }
     return ""
 }
@@ -10525,19 +10546,24 @@ emitSetMethodCall: function {
     mnId: zast.nameid
     bn: String
     bt: ztypes.tid
+    facts: cfacts.borrow
 } out String is {
     cb: ctxCname :ctx tid: bt
     if mnId == zast.wellKnown.slot.wkAdd then {
         v: colArg :ast :symtab :ctx :call label: "item" consumes: true
         e0: "\{cb}_add(\{bn}, \{v})"
-        return e0
+        return (stating :facts from: callFacts text: e0)
     }
     if mnId == zast.wellKnown.slot.wkHas then {
         viv: colArgAsStringViewExpr :ast :symtab :ctx :call label: "item"
-        if viv.length > 0 then return "\{cb}_hasv(\{bn}, \{viv})"
+        if viv.length > 0 then return (stating
+            :facts
+            from: callFacts
+            text: "\{cb}_hasv(\{bn}, \{viv})"
+        )
         v: colArg :ast :symtab :ctx :call label: "item" consumes: false
         if (setElemIsString :symtab :ctx monoId: bt) then {
-            return "\{cb}_has(\{bn}, \{(stringKeyArgPointer
+            return (stating :facts from: callFacts text: "\{cb}_has(\{bn}, \{(stringKeyArgPointer
                 :ast
                 :symtab
                 :ctx
@@ -10545,16 +10571,21 @@ emitSetMethodCall: function {
                 label: "item"
                 expr: v.stringView
             )})"
+            )
         }
         e1: "\{cb}_has(\{bn}, \{v})"
-        return e1
+        return (stating :facts from: callFacts text: e1)
     }
     if mnId == zast.wellKnown.slot.wkDelete then {
         viv: colArgAsStringViewExpr :ast :symtab :ctx :call label: "item"
-        if viv.length > 0 then return "\{cb}_deletev(\{bn}, \{viv})"
+        if viv.length > 0 then return (stating
+            :facts
+            from: callFacts
+            text: "\{cb}_deletev(\{bn}, \{viv})"
+        )
         v: colArg :ast :symtab :ctx :call label: "item" consumes: false
         if (setElemIsString :symtab :ctx monoId: bt) then {
-            return "\{cb}_delete(\{bn}, \{(stringKeyArgPointer
+            return (stating :facts from: callFacts text: "\{cb}_delete(\{bn}, \{(stringKeyArgPointer
                 :ast
                 :symtab
                 :ctx
@@ -10562,9 +10593,10 @@ emitSetMethodCall: function {
                 label: "item"
                 expr: v.stringView
             )})"
+            )
         }
         e2: "\{cb}_delete(\{bn}, \{v})"
-        return e2
+        return (stating :facts from: callFacts text: e2)
     }
     return ""
 }
@@ -10580,10 +10612,11 @@ emitMapMethodCall: function {
     mnId: zast.nameid
     bn: String
     bt: ztypes.tid
+    facts: cfacts.borrow
 } out String is {
     cb: ctxCname :ctx tid: bt
     if mnId == zast.wellKnown.slot.wkSet then {
-        return (emitOrderedPair
+        return (stating :facts from: callFacts text: (emitOrderedPair
             :ast
             :symtab
             :ctx
@@ -10596,13 +10629,18 @@ emitMapMethodCall: function {
             b: "value"
             bForm: argform.moved
         )
+        )
     }
     if mnId == zast.wellKnown.slot.wkGet then {
         vkv: colArgAsStringViewExpr :ast :symtab :ctx :call label: "key"
-        if vkv.length > 0 then return "\{cb}_getv(\{bn}, \{vkv})"
+        if vkv.length > 0 then return (stating
+            :facts
+            from: callFacts
+            text: "\{cb}_getv(\{bn}, \{vkv})"
+        )
         vk: colArg :ast :symtab :ctx :call label: "key" consumes: false
         if (mapKeyIsString :symtab :ctx monoId: bt) then {
-            return "\{cb}_get(\{bn}, \{(stringKeyArgPointer
+            return (stating :facts from: callFacts text: "\{cb}_get(\{bn}, \{(stringKeyArgPointer
                 :ast
                 :symtab
                 :ctx
@@ -10610,16 +10648,21 @@ emitMapMethodCall: function {
                 label: "key"
                 expr: vk.stringView
             )})"
+            )
         }
         e1: "\{cb}_get(\{bn}, \{vk})"
-        return e1
+        return (stating :facts from: callFacts text: e1)
     }
     if mnId == zast.wellKnown.slot.wkHas then {
         vkv: colArgAsStringViewExpr :ast :symtab :ctx :call label: "key"
-        if vkv.length > 0 then return "\{cb}_hasv(\{bn}, \{vkv})"
+        if vkv.length > 0 then return (stating
+            :facts
+            from: callFacts
+            text: "\{cb}_hasv(\{bn}, \{vkv})"
+        )
         vk: colArg :ast :symtab :ctx :call label: "key" consumes: false
         if (mapKeyIsString :symtab :ctx monoId: bt) then {
-            return "\{cb}_has(\{bn}, \{(stringKeyArgPointer
+            return (stating :facts from: callFacts text: "\{cb}_has(\{bn}, \{(stringKeyArgPointer
                 :ast
                 :symtab
                 :ctx
@@ -10627,14 +10670,15 @@ emitMapMethodCall: function {
                 label: "key"
                 expr: vk.stringView
             )})"
+            )
         }
         e2: "\{cb}_has(\{bn}, \{vk})"
-        return e2
+        return (stating :facts from: callFacts text: e2)
     }
     if mnId == zast.wellKnown.slot.wkRemove then {
         vk: colArg :ast :symtab :ctx :call label: "key" consumes: false
         if (mapKeyIsString :symtab :ctx monoId: bt) then {
-            return "\{cb}_remove(\{bn}, \{(stringKeyArgPointer
+            return (stating :facts from: callFacts text: "\{cb}_remove(\{bn}, \{(stringKeyArgPointer
                 :ast
                 :symtab
                 :ctx
@@ -10642,9 +10686,10 @@ emitMapMethodCall: function {
                 label: "key"
                 expr: vk.stringView
             )})"
+            )
         }
         e: "\{cb}_remove(\{bn}, \{vk})"
-        return e
+        return (stating :facts from: callFacts text: e)
     }
     return ""
 }
@@ -10663,11 +10708,12 @@ emitIdMapMethodCall: function {
     bn: String
     bt: ztypes.tid
     bvid: ztypes.vid
+    facts: cfacts.borrow
 } out String is {
     cb: ctxCname :ctx tid: bt
     recvR: colRecvRef :ctx bn: bn.stringView vid: bvid
     if mnId == zast.wellKnown.slot.wkSet then {
-        return (emitOrderedPair
+        return (stating :facts from: callFacts text: (emitOrderedPair
             :ast
             :symtab
             :ctx
@@ -10680,31 +10726,32 @@ emitIdMapMethodCall: function {
             b: "value"
             bForm: argform.moved
         )
+        )
     }
     if mnId == zast.wellKnown.slot.wkGet then {
         vk: colArg :ast :symtab :ctx :call label: "key" consumes: false
         e1: "\{cb}_get(\{recvR}, \{vk})"
-        return e1
+        return (stating :facts from: callFacts text: e1)
     }
     if mnId == zast.wellKnown.slot.wkGetMut then {
         vkm: colArg :ast :symtab :ctx :call label: "key" consumes: false
         e1m: "\{cb}_getMut(\{recvR}, \{vkm})"
-        return e1m
+        return (stating :facts from: callFacts text: e1m)
     }
     if mnId == zast.wellKnown.slot.wkHas then {
         vk: colArg :ast :symtab :ctx :call label: "key" consumes: false
         e2: "\{cb}_has(\{recvR}, \{vk})"
-        return e2
+        return (stating :facts from: callFacts text: e2)
     }
     if mnId == zast.wellKnown.slot.wkKeyAt then {
         vi: colArg :ast :symtab :ctx :call label: "i" consumes: false
         e3: "\{cb}_keyAt(\{recvR}, \{vi})"
-        return e3
+        return (stating :facts from: callFacts text: e3)
     }
     if mnId == zast.wellKnown.slot.wkValueAt then {
         vi2: colArg :ast :symtab :ctx :call label: "i" consumes: false
         e4: "\{cb}_valueAt(\{recvR}, \{vi2})"
-        return e4
+        return (stating :facts from: callFacts text: e4)
     }
     return ""
 }
@@ -10719,18 +10766,19 @@ emitIdSetMethodCall: function {
     bn: String
     bt: ztypes.tid
     bvid: ztypes.vid
+    facts: cfacts.borrow
 } out String is {
     cb: ctxCname :ctx tid: bt
     recvR: colRecvRef :ctx bn: bn.stringView vid: bvid
     if mnId == zast.wellKnown.slot.wkAdd then {
         v: colArg :ast :symtab :ctx :call label: "item" consumes: false
         e0: "\{cb}_add(\{recvR}, \{v})"
-        return e0
+        return (stating :facts from: callFacts text: e0)
     }
     if mnId == zast.wellKnown.slot.wkHas then {
         v: colArg :ast :symtab :ctx :call label: "item" consumes: false
         e1: "\{cb}_has(\{recvR}, \{v})"
-        return e1
+        return (stating :facts from: callFacts text: e1)
     }
     return ""
 }
@@ -14778,7 +14826,7 @@ emitMethodDeclCall: function {
     ownerFam: originTidOf :symtab tid: ownerTid
     if ownerFam.isZero then ownerFam = ownerTid
     if (ownerIsCollectionFamily :ctx fam: ownerFam) then {
-        rcol: emitCollectionMethodCall :ast :symtab :ctx :call
+        rcol: emitCollectionMethodCall :ast :symtab :ctx :call :facts
         if rcol.length > 0 then return rcol
     }
     rstr: emitStringFamilyCall :ast :symtab :ctx :call :ownerTid
