@@ -8172,6 +8172,7 @@ emitInstanceMethodBody: function {
     # dotted receiver consumes no argument and leaves it at 0; a receiver
     # supplied as the call's one unlabelled argument has already taken slot 0
     posStart: u64
+    facts: cfacts.borrow
 } out String is {
     pids: ListVal ztypes.tid
     pidsNm: ListVal zast.nameid
@@ -8234,10 +8235,11 @@ emitInstanceMethodBody: function {
     oprefix: orderFinish :ctx st: ord
     args: orderJoinSlots :ctx st: ord count: pn
     orderEnd :ctx st: ord
-    return (orderClose
+    return (stating :facts from: callFacts text: (orderClose
         prefix: oprefix
         callee: (ctxCnameView :ctx tid: mco)
         args: args.stringView
+    )
     )
 }
 
@@ -8720,6 +8722,7 @@ emitInstanceMethodCall: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
+    facts: cfacts.borrow
 } out String is {
     mn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable)
     if mn.length == 0 then return ""
@@ -8819,6 +8822,7 @@ emitInstanceMethodCall: function {
                 :recvF
                 recvIsPtr: rIsPtr
                 posStart: 0
+                :facts
             )
         }
     } case none then null
@@ -11425,6 +11429,7 @@ emitInlineVariantCtor: function {
     call: zast.callrow.view
     tid: ztypes.tid
     arm: zast.nameid
+    facts: cfacts.borrow
 } out String is {
     pc: armPayloadC :ast :symtab :ctx :tid :arm
     tg: tagConstOf :ast :ctx :symtab :tid armId: arm
@@ -11445,13 +11450,15 @@ emitInlineVariantCtor: function {
             }
         }
         armCiC: memberC :ast :symtab :ctx owner: tid kind: memberkind.arm nameId: arm
-        e0: "((\{vc}_t){ .tag = \{tg}, .data.\{armCiC} = (\{av}) })"
-        return e0
+        return (stating
+            :facts
+            from: literalFacts
+            text: "((\{vc}_t){ .tag = \{tg}, .data.\{armCiC} = (\{av}) })"
+        )
     } else {
         armValue: armValueC :ast :ctx :symtab :tid :arm
-        if armValue.length > 0 then return armValue
-        e1: "((\{vc}_t){ .tag = \{tg} })"
-        return e1
+        if armValue.length > 0 then return (stating :facts from: constFacts text: armValue)
+        return (stating :facts from: literalFacts text: "((\{vc}_t){ .tag = \{tg} })")
     }
 }
 
@@ -11466,6 +11473,7 @@ emitArmCtorCall: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
+    facts: cfacts.borrow
 } out String is {
     arm: aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable)
     if arm.isZero then return ""
@@ -11473,15 +11481,14 @@ emitArmCtorCall: function {
     if stid.isZero then return ""
     tt: symtab.reg.typetypeOf typeId: stid
     if tt == ztypes.ztypetype.variantType then {
-        return (emitInlineVariantCtor :ast :symtab :ctx :call tid: stid :arm)
+        return (emitInlineVariantCtor :ast :symtab :ctx :call tid: stid :arm :facts)
     }
     if tt != ztypes.ztypetype.unionType then return ""
     vc: ctxCname :ctx tid: stid
     tg: tagConstOf :ast :ctx :symtab tid: stid armId: arm
     payC: armPayloadC :ast :symtab :ctx tid: stid :arm
     if payC.length == 0 then {
-        en: "((\{vc}_t){ .tag = \{tg}, .data = NULL })"
-        return en
+        return (stating :facts from: literalFacts text: "((\{vc}_t){ .tag = \{tg}, .data = NULL })")
     }
     av: "0".string
     got: false
@@ -11504,8 +11511,8 @@ emitArmCtorCall: function {
         slot: usl.stringView
         inline: inl
     )
-    e: "({ \{vc}_t _u = {0}; _u.tag = \{tg}; \{st} _u; })"
-    return e
+    return (stating :facts from: callFacts text: "({ \{vc}_t _u = {0}; _u.tag = \{tg}; \{st} _u; })"
+    )
 }
 
 # userCreateCallC -- a user `create` (one with a body, so an emitted function)
@@ -11518,6 +11525,7 @@ userCreateCallC: function {
     ctx: Ctx
     call: zast.callrow.view
     fid: ztypes.tid
+    facts: cfacts.borrow
 } out String is {
     pnames: List String
     pids: ListVal ztypes.tid
@@ -11573,7 +11581,11 @@ userCreateCallC: function {
     args: orderJoinSlots :ctx st: ord count: pn
     orderEnd :ctx st: ord
     mc3: ctxCname :ctx tid: fid
-    return (orderClose prefix: oprefix callee: mc3.stringView args: args.stringView)
+    return (stating
+        :facts
+        from: callFacts
+        text: (orderClose prefix: oprefix callee: mc3.stringView args: args.stringView)
+    )
 }
 
 # emitQualRecvMethodCall -- the ordinary method emission for a type-qualified
@@ -11596,6 +11608,7 @@ emitQualRecvMethodCall: function {
     ctx: Ctx
     call: zast.callrow.view
     mtid: ztypes.tid
+    facts: cfacts.borrow
 } out String is {
     if (symtab.typing.callBaseNamesType.has item: call.nodeid).not then return ""
     recvNmQ: "this".string
@@ -11643,6 +11656,7 @@ emitQualRecvMethodCall: function {
         recvF: (factsOfText s: recvExQ.stringView)
         recvIsPtr: recvPtrQ
         posStart: posStartQ
+        :facts
     )
 }
 
@@ -11666,6 +11680,7 @@ emitTypeQualCall: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
+    facts: cfacts.borrow
 } out String is {
     # the checker decided whether the base names a type (callBaseNamesType); the
     # type is the base's stamp -- an instance's own, inside a generic body
@@ -11709,12 +11724,12 @@ emitTypeQualCall: function {
     # create fn -- route it to the type's field-wise ctor, the path bare-name
     # construction uses; a user create (a body) is called.
     if isCreate when (symtab.typing.funcReturnNode.has key: mtid).not then {
-        return (emitRecordCtor :ast :symtab :ctx :call tid: btid)
+        return (emitRecordCtor :ast :symtab :ctx :call tid: btid :facts)
     }
     if isCreate then {
-        return (userCreateCallC :ast :symtab :ctx :call fid: mtid)
+        return (userCreateCallC :ast :symtab :ctx :call fid: mtid :facts)
     }
-    return (emitQualRecvMethodCall :ast :symtab :ctx :call :mtid)
+    return (emitQualRecvMethodCall :ast :symtab :ctx :call :mtid :facts)
 }
 
 # literalC -- a numeric literal lexeme as C text. `0b`, `0o` and `0c` are
@@ -12129,6 +12144,7 @@ userCreateCtor: function {
     ctx: Ctx
     call: zast.callrow.view
     cco: ztypes.tid
+    facts: cfacts.borrow
 } out String is {
     cpn: List String
     cpi: ListVal ztypes.tid
@@ -12193,7 +12209,11 @@ userCreateCtor: function {
     cargs: orderJoinSlots :ctx st: ord count: ccn
     orderEnd :ctx st: ord
     ccb: ctxCname :ctx tid: cco
-    return (orderClose prefix: oprefix callee: ccb.stringView args: cargs.stringView)
+    return (stating
+        :facts
+        from: callFacts
+        text: (orderClose prefix: oprefix callee: ccb.stringView args: cargs.stringView)
+    )
 }
 
 # emitRecordCtor -- a record construction call: args reordered to field
@@ -12206,9 +12226,10 @@ emitRecordCtor: function {
     ctx: Ctx
     call: zast.callrow.view
     tid: ztypes.tid
+    facts: cfacts.borrow
 } out String is {
     cco: userCreateFn :symtab :tid
-    if cco.isZero.not then return (userCreateCtor :ast :symtab :ctx :call :cco)
+    if cco.isZero.not then return (userCreateCtor :ast :symtab :ctx :call :cco :facts)
     fnames: List String
     fids: ListVal ztypes.tid
     fidsNm: ListVal zast.nameid
@@ -12243,7 +12264,11 @@ emitRecordCtor: function {
     orderEnd :ctx st: ord
     rc: ctxCname :ctx :tid
     rc.append "_create"
-    return (orderClose prefix: oprefix callee: rc.stringView args: args.stringView)
+    return (stating
+        :facts
+        from: callFacts
+        text: (orderClose prefix: oprefix callee: rc.stringView args: args.stringView)
+    )
 }
 
 # orderRecordField -- one field of a field-wise construction, its argument built
@@ -13699,6 +13724,7 @@ emitCrossUnitSumCtor: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
+    facts: cfacts.borrow
 } out String is {
     pcId: dottedParentChildId :ast :symtab n: (ast.nodes.get i: call.callable)
     if pcId.isZero then return ""
@@ -13736,6 +13762,7 @@ emitCrossUnitSumCtor: function {
         :call
         tid: utid
         arm: ctorArmName
+        :facts
     )
     if ttx != ztypes.ztypetype.unionType then return ""
     vc: ctxCname :ctx tid: utid
@@ -13778,11 +13805,17 @@ emitCrossUnitSumCtor: function {
             slot: usl.stringView
             inline: inl
         )
-        e: "({ \{vc}_t _u = {0}; _u.tag = \{tg}; \{st} _u; })"
-        return e
+        return (stating
+            :facts
+            from: callFacts
+            text: "({ \{vc}_t _u = {0}; _u.tag = \{tg}; \{st} _u; })"
+        )
     } else {
-        e2: "({ \{vc}_t _u = {0}; _u.tag = \{tg}; _u.data = NULL; _u; })"
-        return e2
+        return (stating
+            :facts
+            from: callFacts
+            text: "({ \{vc}_t _u = {0}; _u.tag = \{tg}; _u.data = NULL; _u; })"
+        )
     }
 }
 
@@ -13795,6 +13828,7 @@ emitCrossUnitCtor: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
+    facts: cfacts.borrow
 } out String is {
     tid: dottedMemberTidOf :ast :symtab callableId: call.callable
     if tid.isZero then return ""
@@ -13806,7 +13840,7 @@ emitCrossUnitCtor: function {
     tt: symtab.reg.typetypeOf typeId: tid
     isRc: tt.isFieldwise
     if isRc.not then return ""
-    return (emitRecordCtor :ast :symtab :ctx :call :tid)
+    return (emitRecordCtor :ast :symtab :ctx :call :tid :facts)
 }
 
 # emitCrossUnitTag -- a 3-segment cross-unit variant/enum tag value
@@ -13869,6 +13903,7 @@ emitFnptrFieldCall: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
+    facts: cfacts.borrow
 } out String is {
     mnId: aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable)
     if mnId.isZero then return ""
@@ -13877,8 +13912,8 @@ emitFnptrFieldCall: function {
     if rtid.isZero then return ""
     if (symtab.typing.declIsFnptrFieldId parentTypeId: rtid nameId: mnId).not then return ""
     callableNode: ast.nodes.get i: call.callable
-    facts: cfacts
-    recvText: emitDottedReceiver :ast :symtab :ctx callable: callableNode :facts
+    recvF: cfacts
+    recvText: emitDottedReceiver :ast :symtab :ctx callable: callableNode facts: recvF
     if recvText.length == 0 then return ""
     # the slot is read through the receiver and the receiver is passed to it
     recvExpr: (receiverOnce
@@ -13887,7 +13922,7 @@ emitFnptrFieldCall: function {
         :ctx
         callable: callableNode
         text: recvText.stringView
-        textF: facts
+        textF: recvF
         tid: rtid
     )
     rptr: dottedReceiverIsPtr :ast :symtab :ctx callable: (ast.nodes.get i: call.callable)
@@ -13978,7 +14013,7 @@ emitFnptrFieldCall: function {
             callArgs.append args
         }
     }
-    return (orderWrap
+    return (stating :facts from: callFacts text: (orderWrap
         prefix: oprefix
         call: (fnptrSlotCallC
             :ast
@@ -13990,6 +14025,7 @@ emitFnptrFieldCall: function {
             :mnId
             recv: callArgs.stringView
         )
+    )
     )
 }
 
@@ -14611,15 +14647,15 @@ emitNamedCalleeChain: function {
     fid: namedCalleeFnId :ast :symtab :ctx :call
     ctorTid: namedCalleeCtorTid :ast :symtab :call :fid
     if (isFieldwiseCtorTid :symtab tid: ctorTid) then {
-        return (emitRecordCtor :ast :symtab :ctx :call tid: ctorTid)
+        return (emitRecordCtor :ast :symtab :ctx :call tid: ctorTid :facts)
     }
     iwc: emitIoWrapperCreate :ast :symtab :ctx :call
     if iwc.length > 0 then return iwc
     xcc: emitCrossUnitExplicitCreate :ast :symtab :ctx :call
     if xcc.length > 0 then return xcc
-    tq: emitTypeQualCall :ast :symtab :ctx :call
+    tq: emitTypeQualCall :ast :symtab :ctx :call :facts
     if tq.length > 0 then return tq
-    fpfc: emitFnptrFieldCall :ast :symtab :ctx :call
+    fpfc: emitFnptrFieldCall :ast :symtab :ctx :call :facts
     if fpfc.length > 0 then return fpfc
     if fid.isZero.not then return (emitUserFnCall :ast :symtab :ctx :call :fid :facts)
     cnV: atomVid :symtab nid: (atomNodeId n: (ast.nodes.get i: call.callable))
@@ -14692,13 +14728,13 @@ emitCallProbeChain: function {
     if umc.length > 0 then return umc
     gfc: emitGenericFnCall :ast :symtab :ctx :call :facts
     if gfc.length > 0 then return gfc
-    xuc: emitCrossUnitSumCtor :ast :symtab :ctx :call
+    xuc: emitCrossUnitSumCtor :ast :symtab :ctx :call :facts
     if xuc.length > 0 then return xuc
     ddq: emitDataIndexCall :ast :symtab :ctx :call
     if ddq.length > 0 then return ddq
     cufc: emitCrossUnitFnCall :ast :symtab :ctx :call :facts
     if cufc.length > 0 then return cufc
-    cuct: emitCrossUnitCtor :ast :symtab :ctx :call
+    cuct: emitCrossUnitCtor :ast :symtab :ctx :call :facts
     if cuct.length > 0 then return cuct
     return (emitNamedCalleeChain :ast :symtab :ctx :call :facts)
 }
@@ -14778,16 +14814,17 @@ emitUserMethodLeg: function {
     ctx: Ctx
     call: zast.callrow.view
     fnptrField: bool
+    facts: cfacts.borrow
 } out String is {
-    ruic: emitUserIterCall :ast :symtab :ctx :call
+    ruic: emitUserIterCall :ast :symtab :ctx :call :facts
     if ruic.length > 0 then return ruic
-    rtq: emitTypeQualCall :ast :symtab :ctx :call
+    rtq: emitTypeQualCall :ast :symtab :ctx :call :facts
     if rtq.length > 0 then return rtq
     if fnptrField then {
-        rfp: emitFnptrFieldCall :ast :symtab :ctx :call
+        rfp: emitFnptrFieldCall :ast :symtab :ctx :call :facts
         if rfp.length > 0 then return rfp
     }
-    return (emitInstanceMethodCall :ast :symtab :ctx :call)
+    return (emitInstanceMethodCall :ast :symtab :ctx :call :facts)
 }
 
 # calleeHasBody -- the member this call names on `ownerTid` is written in
@@ -14837,7 +14874,7 @@ emitMethodDeclCall: function {
     if rnam.length > 0 then return rnam
     ott: symtab.reg.typetypeOf typeId: ownerTid
     isSpec: ott.isInterface
-    if isSpec then return (emitProtocolDispatch :ast :symtab :ctx :call)
+    if isSpec then return (emitProtocolDispatch :ast :symtab :ctx :call :facts)
     # A NATIVE OWNER MAY DECLARE A BODIED MEMBER, and its body is emitted like
     # any other -- `u8.upto` is one. The bail below is for members the RUNTIME
     # owns, which answer from their natives.tbl row above; a member with a body
@@ -14855,7 +14892,7 @@ emitMethodDeclCall: function {
     )
     if isIoNat then return ""
     if isCreate then return ""
-    return (emitUserMethodLeg :ast :symtab :ctx :call :fnptrField)
+    return (emitUserMethodLeg :ast :symtab :ctx :call :fnptrField :facts)
 }
 
 # emitSiblingFnCall -- a bare call of a function declared in the unit at hand.
@@ -14890,7 +14927,7 @@ emitFuncDeclCall: function {
     facts: cfacts.borrow
 } out String is {
     if rtid.isZero.not when (symtab.reg.isNativeOf tid: rtid) then {
-        return (emitNativeFreeFnCall :ast :symtab :ctx :call fid: rtid)
+        return (emitNativeFreeFnCall :ast :symtab :ctx :call fid: rtid :facts)
     }
     if rtid.isZero.not when (isGenericType :symtab tid: rtid) then {
         rgf: emitGenericFnCall :ast :symtab :ctx :call :facts
@@ -14912,9 +14949,10 @@ emitCtorDeclCall: function {
     ctx: Ctx
     call: zast.callrow.view
     isArm: bool
+    facts: cfacts.borrow
 } out String is {
-    if isArm then return (emitArmCtorCall :ast :symtab :ctx :call)
-    return (emitCrossUnitCtor :ast :symtab :ctx :call)
+    if isArm then return (emitArmCtorCall :ast :symtab :ctx :call :facts)
+    return (emitCrossUnitCtor :ast :symtab :ctx :call :facts)
 }
 
 # emitCallByDecl -- route by the callee's DECLARATION: its kind and its owner's
@@ -14948,8 +14986,8 @@ emitCallByDecl: function {
         )
     }
     if rkind.funcDecl then return (emitFuncDeclCall :ast :symtab :ctx :call :rtid :facts)
-    if rkind.armDecl then return (emitCtorDeclCall :ast :symtab :ctx :call isArm: true)
-    if rkind.typeDecl then return (emitCtorDeclCall :ast :symtab :ctx :call isArm: false)
+    if rkind.armDecl then return (emitCtorDeclCall :ast :symtab :ctx :call isArm: true :facts)
+    if rkind.typeDecl then return (emitCtorDeclCall :ast :symtab :ctx :call isArm: false :facts)
     return ""
 }
 
@@ -15044,6 +15082,7 @@ emitCallValue: function {
                     :ctx
                     :call
                     tid: ctid
+                    :facts
                 )
                 if ctt == ztypes.ztypetype.classType then return (emitRecordCtor
                     :ast
@@ -15051,6 +15090,7 @@ emitCallValue: function {
                     :ctx
                     :call
                     tid: ctid
+                    :facts
                 )
             }
         }
@@ -41122,6 +41162,7 @@ emitNativeFreeFnCall: function {
     ctx: Ctx
     call: zast.callrow.view
     fid: ztypes.tid
+    facts: cfacts.borrow
 } out String is {
     calr: ast.nodes.get i: call.callable
     mn: ""
@@ -41185,7 +41226,11 @@ emitNativeFreeFnCall: function {
     args: orderJoinSlots :ctx st: ord count: m
     orderEnd :ctx st: ord
     callee: "z_\{un}_\{mn}"
-    return (orderClose prefix: oprefix callee: callee.stringView args: args.stringView)
+    return (stating
+        :facts
+        from: callFacts
+        text: (orderClose prefix: oprefix callee: callee.stringView args: args.stringView)
+    )
 }
 
 # emitCliSpecCreate -- `cli.Spec.create programName: ... summary: ...` ->
@@ -41395,6 +41440,7 @@ emitUserIterCall: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
+    facts: cfacts.borrow
 } out String is {
     bn: dottedBaseAtom :ast n: (ast.nodes.get i: call.callable)
     if bn.length == 0 then return ""
@@ -41437,10 +41483,10 @@ emitUserIterCall: function {
                 :ctx
                 vop: (ast.nodes.get i: atomVarId.operation)
             )
-            return "\{callC}(\{recvExpr}, \{valArg})"
+            return (stating :facts from: callFacts text: "\{callC}(\{recvExpr}, \{valArg})")
         }
     }
-    return "\{callC}(\{recvExpr})"
+    return (stating :facts from: callFacts text: "\{callC}(\{recvExpr})")
 }
 
 # isDispatchableTid -- a vtable-dispatch receiver type: protocol or facet.
@@ -41749,6 +41795,7 @@ emitProtocolDispatch: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
+    facts: cfacts.borrow
 } out String is {
     mn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable)
     mnId: aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable)
@@ -41759,8 +41806,8 @@ emitProtocolDispatch: function {
     callableNode: ast.nodes.get i: call.callable
     rtid: dispatchReceiverTid :ast :symtab :ctx callable: callableNode :mnId
     if (isDispatchableTid :symtab tid: rtid).not then return ""
-    facts: cfacts
-    recvText: emitDottedReceiver :ast :symtab :ctx callable: callableNode :facts
+    recvF: cfacts
+    recvText: emitDottedReceiver :ast :symtab :ctx callable: callableNode facts: recvF
     if recvText.length == 0 then return ""
     # the table and the data are both read through the receiver
     recv: (receiverOnce
@@ -41769,7 +41816,7 @@ emitProtocolDispatch: function {
         :ctx
         callable: callableNode
         text: recvText.stringView
-        textF: facts
+        textF: recvF
         tid: rtid
     )
     acc: ".".string
@@ -41787,7 +41834,11 @@ emitProtocolDispatch: function {
         prefix = appendPlainDispatchArgs :ast :symtab :ctx :call :dargs
     }
     dslot: memberC :ast :symtab :ctx owner: rtid kind: memberkind.slot nameId: mnId
-    return (orderWrap :prefix call: "\{recv}\{acc}vtable->\{dslot}(\{dargs})")
+    return (stating
+        :facts
+        from: callFacts
+        text: (orderWrap :prefix call: "\{recv}\{acc}vtable->\{dslot}(\{dargs})")
+    )
 }
 
 # emitProtocolCreateCall -- `Reader g.take` / `Reader.create from: g.take`
