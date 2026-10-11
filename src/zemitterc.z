@@ -8638,6 +8638,7 @@ emitInstanceMethodCall: function {
                     :ast
                     :symtab
                     :ctx
+                    exprF: (factsOfText s: recvExpr.stringView)
                     expr: recvExpr.stringView
                     n: (ast.nodes.get i: bxBase)
                 )
@@ -10326,9 +10327,10 @@ ownedReceiverHoist: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     expr: StringView
+    exprF: cfacts
     n: astnode.view
 } out String is {
-    if (factsOfText s: expr).place then return ""
+    if exprF.place then return ""
     rtid: stampIdOf :symtab nid: (interpPartNodeId :n)
     if rtid.isZero then return ""
     if (symtab.reg.needsDestructor typeId: rtid).not then return ""
@@ -15094,10 +15096,7 @@ localNameText: function {
     facts: cfacts.borrow
 } out String is {
     t: varCName :ctx :vid :name
-    if vid.isZero then {
-        stateFacts :facts from: (factsOfText s: t.stringView)
-        return t
-    }
+    if vid.isZero then return (guessing :facts text: t)
     return (stating :facts from: pathFacts text: t)
 }
 
@@ -16131,6 +16130,22 @@ nestedStringMember: function {
     return ""
 }
 
+# nestedBaseText -- a nested read's base expression, and its facts: read off the
+# checker's temporary when it is a call's owning result, which the temporary
+# frees.
+nestedBaseText: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: astnode.view
+    facts: cfacts.borrow
+} out String is {
+    b: emitExprWith :ast :symtab :ctx :n :facts
+    bh: ownedReceiverHoist :ast :symtab :ctx expr: b.stringView exprF: facts :n
+    if bh.length > 0 then return (stating :facts from: pathFacts text: bh)
+    return b
+}
+
 # emitDottedNestedBase -- a read whose base is itself a path (`it.target.a`,
 # `this.field.pop`): emit the base expression, then chain `.` or `->` by whether
 # the base resolves to a pointer. The collection legs repeat here because the
@@ -16151,17 +16166,8 @@ emitDottedNestedBase: function {
     if eUi.length > 0 then return eUi
     # a nested base (e.g. it.target.a): emit the base expression, then chain
     # `.`/`->` by whether the base resolves to a pointer (a pointer variable or a lock field).
-    baseAtom: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent)
-    {
-        bh: (ownedReceiverHoist
-            :ast
-            :symtab
-            :ctx
-            expr: baseAtom.stringView
-            n: (ast.nodes.get i: n.parent)
-        )
-        if bh.length > 0 then baseAtom = bh.take
-    }
+    baseAtomF: cfacts
+    baseAtom: nestedBaseText :ast :symtab :ctx n: (ast.nodes.get i: n.parent) facts: baseAtomF
     bs9vid: (atomVidIfPlain
         :ast
         :symtab
@@ -17802,7 +17808,8 @@ armPredicateC: function {
     mnc0Id: zast.nameid
 } out String is {
     pn: ast.nodes.get i: n.parent
-    recvP: emitExpr :ast :symtab :ctx n: pn
+    recvPF: cfacts
+    recvP: emitExprWith :ast :symtab :ctx n: pn facts: recvPF
     valP: recvP.copy
     # a Box receiver is the pointer to the variant it holds
     bxP: (boxMemberElem :ast :symtab :ctx :n).isZero.not
@@ -17820,7 +17827,7 @@ armPredicateC: function {
     if bxP then accP = "->"
     # a receiver that is a call's owning result is read off the checker's
     # temporary, which frees it
-    recvO: ownedReceiverHoist :ast :symtab :ctx expr: recvP.stringView n: pn
+    recvO: ownedReceiverHoist :ast :symtab :ctx expr: recvP.stringView exprF: recvPF n: pn
     if recvO.length > 0 then recvP = recvO.take
     return "((\{recvP})\{accP}tag == \{tgP})"
 }
@@ -17837,7 +17844,8 @@ tagAccessorReadC: function {
     dtr: ztypes.tid
 } out String is {
     pn: ast.nodes.get i: n.parent
-    recvT: emitExpr :ast :symtab :ctx n: pn
+    recvTF: cfacts
+    recvT: emitExprWith :ast :symtab :ctx n: pn facts: recvTF
     tatE: ((symtab.typing.tagAccessorTid.get key: (ztypecheck.tagAccessorOwner st: symtab tid: dtr)
     ).or
         d: ztypes.tid
@@ -17851,7 +17859,7 @@ tagAccessorReadC: function {
     }
     accT: receiverTagAccess :ast :symtab :ctx :pn
     if bxT then accT = "->"
-    recvO: ownedReceiverHoist :ast :symtab :ctx expr: recvT.stringView n: pn
+    recvO: ownedReceiverHoist :ast :symtab :ctx expr: recvT.stringView exprF: recvTF n: pn
     if recvO.length > 0 then recvT = recvO.take
     return "((\{castT})(\{recvT})\{accT}tag)"
 }
@@ -24270,7 +24278,7 @@ emitMatchSubjectTemp: function {
         buf.append "\{ind}\{gfM} = \{sxM};\n"
         sxM = gfM.take
     } else {
-        hoM: ownedReceiverHoist :ast :symtab :ctx expr: sx n: subjT
+        hoM: ownedReceiverHoist :ast :symtab :ctx expr: sx exprF: (factsOfText s: sx) n: subjT
         if hoM.length > 0 then sxM = hoM.take
     }
     flushArgHoists :ctx :ind :tmp :buf
