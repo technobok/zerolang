@@ -8191,8 +8191,7 @@ namesNullTypeAt: function {
 # attachInterfaceAsConstants -- a protocol's or a facet's `as` constants. An
 # interface declares its specs in the `is` block, so nothing else walks its
 # `as` items; each one that is not a function is asked as any type's is. A
-# generic parameter is no constant: an interface declares its parameters in
-# the `is` block, beside the specs they type, and one written here is refused.
+# generic parameter is no constant: registerInterfaceGenerics has it.
 attachInterfaceAsConstants: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -8206,17 +8205,14 @@ attachInterfaceAsConstants: function {
         item: argRefAt :ast nid: itemId
         if item.nid.isZero or item.operation.isZero then continue
         if (ast.nodes.get i: item.operation).functiondef then continue
-        if (zast.isGenericParamOp :ast opId: item.operation) then {
-            refuseInterfaceAsParam :st :ast :parentId :item
-            continue
-        }
+        if (zast.isGenericParamOp :ast opId: item.operation) then continue
         attachAsConstant :st :ast :parentId :item
     }
 }
 
-# refuseInterfaceAsParam -- a generic parameter in a protocol's or a facet's
-# `as` block, reported at its name.
-refuseInterfaceAsParam: function {
+# refuseInterfaceBodyParam -- a generic parameter in a protocol's or a facet's
+# body, reported at its name.
+refuseInterfaceBodyParam: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
     parentId: ztypes.tid
@@ -8231,7 +8227,7 @@ refuseInterfaceAsParam: function {
         lineno: item.lineno
         colno: item.colno
         e: zast.err.genericError
-        msg: "'\{pn}' is a generic parameter: a \{kind} declares its parameters in its body, beside its methods"
+        msg: "'\{pn}' is a generic parameter: a \{kind} declares its parameters in its `as` block, as every type does, and its body holds only its specs"
     )
 }
 
@@ -14503,11 +14499,11 @@ markInstanceSpecMethod: function {st: zenv.ZSymbolTable fnId: ztypes.tid} is {
     st.reg.setGeneric typeId: fnId value: true
 }
 
-# registerInterfaceGenerics -- a protocol or a facet declares its generic
-# parameters in the IS block, beside the spec methods, where every other
-# declaring kind uses `as`. They are registered here, so isGenericParamOf
-# answers for a spec member typed by one rather than resolving it as an
-# ordinary name. True, with the type marked generic, when it declares any.
+# registerInterfaceGenerics -- a protocol's or a facet's generic parameters,
+# declared in its `as` block as every type's are, registered so
+# isGenericParamOf answers for a spec member typed by one rather than resolving
+# it as an ordinary name; one written in the body, which holds only the specs,
+# is refused. True, with the type marked generic, when it declares any.
 registerInterfaceGenerics: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -14520,9 +14516,18 @@ registerInterfaceGenerics: function {
     tdecl: declOfUnitDef :st :scope :unitDecl nameId: (nameIdOf :ast name: defName)
     od: ast.nodes.get i: fnode.nid
     if od.objectdef.not then return false
-    if (hasGenericParam :ast items: od.isItems).not then return false
+    k: u64
+    for k < fnode.nis loop {
+        itemId: zast.objIsItemAt :ast nid: fnode.nid i: k
+        k = k + 1
+        item: argRefAt :ast nid: itemId
+        if item.nid.isZero.not when (zast.isGenericParamOp :ast opId: item.operation) then {
+            refuseInterfaceBodyParam :st :ast parentId: tid :item
+        }
+    }
+    if (hasGenericParam :ast items: od.asItems).not then return false
     st.reg.setGeneric typeId: tid value: true
-    registerGenericParams :st :ast :tdecl items: od.isItems
+    registerGenericParams :st :ast :tdecl items: od.asItems
     return true
 }
 
