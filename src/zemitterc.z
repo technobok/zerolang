@@ -18884,8 +18884,9 @@ orPanicExprC: function {
 
 # emitDottedRead -- the C text of a dotted PATH read (the call form is
 # emitDottedCall). The legs run in the order the checker's stamps settle them:
-# built-in combinators, unit-qualified reads, the conversions, the tagged-type
-# stamps, the markers, and only then the member families.
+# the built-in `.orPanic`, the tagged-type stamps, then -- unless the member is
+# a field -- unit-qualified reads, the conversions and type constants, and
+# last the member read itself.
 emitDottedRead: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -18914,10 +18915,6 @@ emitDottedRead: function {
             return (orPanicExprC :ast :symtab :ctx tid: pMono recv: rcRecv.stringView :facts)
         }
     }
-    dur: emitDottedUnitRead :ast :symtab :ctx :n :facts
-    if dur.length > 0 then return dur
-    dcr: emitDottedConversionRead :ast :symtab :ctx :n :facts
-    if dcr.length > 0 then return dcr
     dtg: (emitDottedTagRead
         :ast
         :symtab
@@ -18927,8 +18924,37 @@ emitDottedRead: function {
         :facts
     )
     if dtg.length > 0 then return dtg
-    dtc: dottedTypeConstRead :ast :symtab :ctx :n :facts
-    if dtc.length > 0 then return dtc
+    # a FIELD is read off its base: the unit, conversion and constant legs
+    # read none, so it goes straight to the member legs
+    if (memberDeclIsField :symtab nid: n.nodeid).not then {
+        dur: emitDottedUnitRead :ast :symtab :ctx :n :facts
+        if dur.length > 0 then return dur
+        dcr: emitDottedConversionRead :ast :symtab :ctx :n :facts
+        if dcr.length > 0 then return dcr
+        dtc: dottedTypeConstRead :ast :symtab :ctx :n :facts
+        if dtc.length > 0 then return dtc
+    }
+    return (emitDottedMemberRead :ast :symtab :ctx :n :facts)
+}
+
+# memberDeclIsField -- the member a dotted path names is declared as a FIELD.
+memberDeclIsField: function {symtab: zenv.ZSymbolTable.view nid: zast.nodeid} out bool is {
+    mdo: symtab.typing.refDecl.get key: nid
+    if mdo.none then return false
+    return (symtab.typing.decls.get i: mdo).kind.fieldDecl
+}
+
+# emitDottedMemberRead -- a dotted read of a MEMBER of its base's value: the
+# base is emitted (or its alias, or a view's temporary), then the markers and
+# native no-argument reads, and the families' member legs by whether the base
+# is an atom or itself a path.
+emitDottedMemberRead: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: zast.dottedpathrow.view
+    facts: cfacts.borrow
+} out String is {
     bn2r: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.parent))
     baseAtomNid: atomNodeId n: (ast.nodes.get i: n.parent)
     baseAtomVid: atomVid :symtab nid: baseAtomNid
