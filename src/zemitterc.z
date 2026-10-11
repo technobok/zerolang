@@ -11145,6 +11145,7 @@ emitInterpArgForParam: function {
     fid: ztypes.tid
     pnameId: zast.nameid
     pid: ztypes.tid
+    facts: cfacts.borrow
 } out String is {
     sx: emitInterpArgExpr :ast :symtab :ctx :n
     if sx.length == 0 then return ""
@@ -11159,18 +11160,19 @@ emitInterpArgForParam: function {
         argNid: (zast.nodeIdOf :n)
     )
     retx: String
+    retF: pathFacts
     if pid == ctx.strTid then {
         if isTake then {
             retx = nmH.copy
         } else {
             retx = "&\{nmH}"
+            retF = addrFacts e: pathFacts
         }
     } else if (symtab.typing.standInOf.has key: (zast.nodeIdOf :n)) then {
         # the String stands in for a spec the parameter is typed as (`Text`):
         # the temporary itself, which conformanceArgText boxes
         retx = nmH.copy
     } else {
-        facts: cfacts
         retx = (svValueForm
             :ast
             :symtab
@@ -11178,10 +11180,10 @@ emitInterpArgForParam: function {
             expr: nmH.stringView
             isStr: true
             vid: ztypes.vid.zero
-            :facts
+            facts: retF
         )
     }
-    return retx
+    return (stating :facts from: retF text: retx)
 }
 
 # colArg -- a collection-method argument: the interp-string hoist when the arg is
@@ -11937,6 +11939,7 @@ renderDefault: function {
     ctx: Ctx
     dv: ztyping.defaultval
     targetTid: ztypes.tid
+    facts: cfacts.borrow
 } out String is {
     dl: dv
     if dl.literal then {
@@ -11948,11 +11951,15 @@ renderDefault: function {
             fk: constScalarKindForTid :symtab tid: targetTid
             k: ztypes.numkind.f64Type
             if fk.has when (ztypes.isFloatKind k: fk.kind) then k = fk.kind
-            return (floatBitsC bits: (ztypecheck.floatLexemeBits lex: lt.stringView :k) :k)
+            return (stating
+                :facts
+                from: constFacts
+                text: (floatBitsC bits: (ztypecheck.floatLexemeBits lex: lt.stringView :k) :k)
+            )
         }
         wlD: wideLiteralOf lex: lt.stringView k: (constScalarKindForTid :symtab tid: targetTid)
-        if wlD.length > 0 then return wlD
-        return (literalDefaultC lex: lt.stringView)
+        if wlD.length > 0 then return (stating :facts from: constFacts text: wlD)
+        return (stating :facts from: constFacts text: (literalDefaultC lex: lt.stringView))
     }
     {
         dk: dv
@@ -11965,19 +11972,22 @@ renderDefault: function {
             kOwner = ko.parent
             kUnit: ztypecheck.declTypeIdOf st: symtab declId: kOwner
             # a string default is the `_zcsN` view of its static bytes
-            facts: cfacts
             ks: memberConstStringText :symtab :ctx unitTid: kUnit nameId: kName :facts
             if ks.length > 0 then return ks
-            kF: cfacts
-            return (memberConstText :ast :symtab :ctx unitTid: kUnit nameId: kName facts: kF)
+            return (memberConstText :ast :symtab :ctx unitTid: kUnit nameId: kName :facts)
         }
     }
     {
         df: dv
         if df.func then {
             cf: targetTid
-            if cf.isZero.not then return (ctxCname :ctx tid: cf)
-            return (ctxCname :ctx tid: targetTid)
+            # the function's name, a designator
+            if cf.isZero.not then return (stating
+                :facts
+                from: pathFacts
+                text: (ctxCname :ctx tid: cf)
+            )
+            return (stating :facts from: pathFacts text: (ctxCname :ctx tid: targetTid))
         }
     }
     {
@@ -12003,8 +12013,8 @@ renderDefault: function {
                 tid: vtarget
                 arm: armId
             )
-            if avd.length > 0 then return avd
-            return "(\{tc}){ .tag = \{tg} }"
+            if avd.length > 0 then return (stating :facts from: constFacts text: avd)
+            return (stating :facts from: literalFacts text: "(\{tc}){ .tag = \{tg} }")
         }
     }
     return ""
@@ -12068,7 +12078,8 @@ emitAllDefaultedCall: function {
             parentTypeId: fnTid
             nameId: pnkId
         )
-        rv: renderDefault :ast :symtab :ctx dv: dt targetTid: pik
+        facts: cfacts
+        rv: renderDefault :ast :symtab :ctx dv: dt targetTid: pik :facts
         if k > 0 then args.append ", "
         args.append rv
         k = k + 1
@@ -12122,7 +12133,8 @@ renderedMethodDefaultArgs: function {
                 parentTypeId: fnTid
                 nameId: pnjId
             )
-            rv: renderDefault :ast :symtab :ctx dv: dt targetTid: pij
+            facts: cfacts
+            rv: renderDefault :ast :symtab :ctx dv: dt targetTid: pij :facts
             if args.length > 0 then args.append ", "
             args.append rv
         }
@@ -12167,7 +12179,8 @@ paramDefaultText: function {
     nm: nameId
     if (symtab.typing.declHasDefaultId parentTypeId: cco nameId: nm).not then return "0"
     cdt: symtab.typing.declDefaultOfId parentTypeId: cco nameId: nm
-    return (renderDefault :ast :symtab :ctx dv: cdt targetTid: pid)
+    facts: cfacts
+    return (renderDefault :ast :symtab :ctx dv: cdt targetTid: pid :facts)
 }
 
 # fieldDefaultText -- a field the construction left unsupplied: its registered
@@ -12181,16 +12194,18 @@ fieldDefaultText: function {
     nameId: zast.nameid
     # the field's type
     fid: ztypes.tid
+    facts: cfacts.borrow
 } out String is {
     nm: nameId
     if (symtab.typing.declHasDefaultId parentTypeId: tid nameId: nm) then {
         cdt: symtab.typing.declDefaultOfId parentTypeId: tid nameId: nm
-        return (renderDefault :ast :symtab :ctx dv: cdt targetTid: fid)
+        return (renderDefault :ast :symtab :ctx dv: cdt targetTid: fid :facts)
     }
     if (symtab.typing.declIsFnptrFieldId parentTypeId: tid nameId: nm) then {
-        return (ctxCname :ctx tid: fid)
+        # the method's name, a designator
+        return (stating :facts from: pathFacts text: (ctxCname :ctx tid: fid))
     }
-    return "0"
+    return (stating :facts from: constFacts text: "0")
 }
 
 # emitCtorDefaultsFill -- the zero-argument construction of a record/class
@@ -12236,6 +12251,7 @@ emitCtorDefaultsFill: function {
     fi: u64
     fn0: fids.length
     for fi < fn0 loop {
+        facts2: cfacts
         av: (fieldDefaultText
             :ast
             :symtab
@@ -12243,6 +12259,7 @@ emitCtorDefaultsFill: function {
             :tid
             nameId: (fidsNm.get i: fi)
             fid: (fids.get i: fi)
+            facts: facts2
         )
         fi = fi + 1
         if args.length > 0 then args.append ", "
@@ -12316,7 +12333,7 @@ fieldArgText: function {
         }
     }
     if ca.labelled then return (stating :facts from: constFacts text: "0")
-    return (guessing :facts text: (fieldDefaultText :ast :symtab :ctx :tid :nameId :fid))
+    return (fieldDefaultText :ast :symtab :ctx :tid :nameId :fid :facts)
 }
 
 # userCreateCtor -- a construction routed through the user `create` `cco`:
@@ -12884,7 +12901,17 @@ ctorInterpArgAt: function {
     pid: ztypes.tid
 } out String is {
     if aid.isZero then return ""
-    return (emitInterpArgForParam :ast :symtab :ctx n: (ast.nodes.get i: aid) :fid :pnameId :pid)
+    facts: cfacts
+    return (emitInterpArgForParam
+        :ast
+        :symtab
+        :ctx
+        n: (ast.nodes.get i: aid)
+        :fid
+        :pnameId
+        :pid
+        :facts
+    )
 }
 
 # argSlotList -- per call-argument (in call order), the index of the parameter
@@ -14521,6 +14548,7 @@ userFnArgTextWith: function {
     facts: cfacts.borrow
 } out String is {
     ctx.lastArgByPtr = false
+    projF: cfacts
     iavb: (emitInterpArgForParam
         :ast
         :symtab
@@ -14529,6 +14557,7 @@ userFnArgTextWith: function {
         :fid
         pnameId: pinNmId
         pid: pinId
+        facts: projF
     )
     atomVarId: String
     # the facts of atomVarId while it is the argument's own expression
@@ -14560,13 +14589,17 @@ userFnArgTextWith: function {
         if spec.length > 0 then {
             atomVarId = spec.take
             projd = true
+            # a conformance box is built by a call
+            projF = callFacts
             if (markedValtypeRefParam :symtab :fid pnameId: pinNmId pid: ppid) then {
                 atomVarId = boxAddressArg :ast :symtab :ctx box: atomVarId.stringView tid: ppid
+                # the address of the box's own temp
+                projF = addrFacts e: pathFacts
                 ctx.lastArgByPtr = true
             }
         }
     }
-    if projd then return (guessing :facts text: atomVarId)
+    if projd then return (stating :facts from: projF text: atomVarId)
     # the parameter's mode: by pointer (addressed unless already one), or a
     # borrow hoist of the value
     pTake8: paramTakesArg :symtab :fid pnameId: pinNmId
@@ -14685,12 +14718,14 @@ emitUserFnCall: function {
                     nameId: pdpn9Id
                 )
                 pdpid: fpIds.get i: pp
+                facts2: cfacts
                 pdrv: (renderDefault
                     :ast
                     :symtab
                     :ctx
                     dv: pddt
                     targetTid: pdpid
+                    facts: facts2
                 )
                 if emitted > 0 then args.append ", "
                 args.append pdrv
@@ -15607,7 +15642,7 @@ emitLocalAtomNameWith: function {
 
 # localNameText -- a local's own C spelling, and its facts: a variable's name is
 # a path. With no variable behind it (vid 0) the spelling is the text the
-# caller handed in -- a literal, or nothing -- and its facts are read off it.
+# caller handed in -- a literal, a definition's name, or nothing.
 localNameText: function {
     ctx: Ctx.view
     vid: ztypes.vid
@@ -15615,7 +15650,16 @@ localNameText: function {
     facts: cfacts.borrow
 } out String is {
     t: varCName :ctx :vid :name
-    if vid.isZero then return (guessing :facts text: t)
+    if vid.isZero then {
+        # a number literal is a constant; any other name with no variable behind
+        # it is a definition's -- a unit, a function, a type -- a designator
+        if ((t.stringView.byteAt i: 0).or d: 0) <= 57 then return (stating
+            :facts
+            from: constFacts
+            text: t
+        )
+        return (stating :facts from: pathFacts text: t)
+    }
     return (stating :facts from: pathFacts text: t)
 }
 
