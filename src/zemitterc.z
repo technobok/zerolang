@@ -17,6 +17,17 @@ astnode: zast.astnode
 Ast: zast.Ast
 
 
+# ArgHoist -- one statement temporary awaiting its declaration where the
+# statement is flushed: its name, its initialiser (empty for one assigned where
+# its part runs, which starts zero), its C type, and the destroy it owes (empty
+# for none). One row, so the four cannot drift apart when a statement pops them.
+ArgHoist: class {
+    name: String
+    val: String
+    ctype: String
+    dtor: String
+}
+
 # OwedFree -- one destructor owed at the end of a block: the C name of the
 # local it destroys, the statement that destroys it (empty for a plain String,
 # whose free is composed where it is emitted so it can take that site's
@@ -2922,12 +2933,7 @@ emitTernaryChain: function {
 # dropHoistsTo -- forget the hoists recorded since `mark`: the text that would
 # have read them is not being emitted.
 dropHoistsTo: function {ctx: Ctx mark: hoistmark} is {
-    for ctx.argHoistNames.length > mark.names loop {
-        ctx.argHoistNames.pop
-        ctx.argHoistVals.pop
-        ctx.argHoistTypes.pop
-        ctx.argHoistDtors.pop
-    }
+    for ctx.argHoists.length > mark.names loop ctx.argHoists.pop
     for ctx.argHoistRaw.length > mark.raw loop ctx.argHoistRaw.pop
 }
 
@@ -3859,14 +3865,8 @@ Ctx: class {
     # the units the table orders, in that order. A unit with rows that is not
     # named here runs after those that are.
     unitOrder: List String
-    # the `_ah` temp names awaiting declaration
-    argHoistNames: List String
-    # their initialisers, parallel to the names
-    argHoistVals: List String
-    # their C types, parallel again
-    argHoistTypes: List String
-    # the destructor each needs at block end, empty when it needs none
-    argHoistDtors: List String
+    # the statement temporaries awaiting declaration
+    argHoists: List ArgHoist
     # raw declarations a fragment asked to be emitted alongside
     argHoistRaw: List String
     # the next `_ah` number
@@ -3922,9 +3922,7 @@ Ctx: class {
     # a temporary an arm parks its value in waits here until the outermost one
     # is done, since the statement around it declares and releases it
     armRefDepth: u64
-    armParkNames: List String
-    armParkTypes: List String
-    armParkDtors: List String
+    armParks: List ArgHoist
     # the temporaries the statement being emitted declares live as long as the
     # binding it builds, not as long as the statement
     hoistsToBlock: bool
@@ -7108,11 +7106,14 @@ orderPartWith: function {
             orderSettleWaiting :ast :symtab :ctx :st all: false
         }
         i: mark.names
-        for i < ctx.argHoistNames.length loop {
-            if (ctx.argHoistVals.get :i).length > 0 then {
-                ctx.orderPieceNames.append (ctx.argHoistNames.get :i).copy
+        for i < ctx.argHoists.length loop {
+            ph: ctx.argHoists.getMut :i
+            if ph.val.length > 0 then {
+                ctx.orderPieceNames.append ph.name.copy
                 ctx.orderPieceTemps.append 0
-                ctx.orderPieceVals.append (ctx.argHoistVals.set :i val: String)
+                pv: String
+                pv swap ph.val
+                ctx.orderPieceVals.append pv
             }
             i = i + 1
         }
@@ -7175,8 +7176,8 @@ orderDropWaiting: function {ctx: Ctx st: orderstate.view} is {
 # still initialised where the statement declares it.
 hoistsWithValues: function {ctx: Ctx.view mark: hoistmark} out bool is {
     i: mark.names
-    for i < ctx.argHoistNames.length loop {
-        if (ctx.argHoistVals.get :i).length > 0 then return true
+    for i < ctx.argHoists.length loop {
+        if (ctx.argHoists.get :i).val.length > 0 then return true
         i = i + 1
     }
     return false
@@ -7230,10 +7231,7 @@ orderSettle: function {
     ctx.orderPieceNames.append String
     ctx.orderPieceTemps.append tnum + 1
     ctx.orderPieceVals.append text
-    ctx.argHoistNames.append tn.copy
-    ctx.argHoistVals.append String
-    ctx.argHoistTypes.append ct
-    ctx.argHoistDtors.append String
+    ctx.argHoists.append (ArgHoist name: tn.copy val: String ctype: ct dtor: String)
     # the ordered temp's name
     orderSetSlot :ctx :st :slot text: tn tf: pathFacts
 }
@@ -7355,11 +7353,12 @@ flushArgHoists: function {
     if ctx.argHoistRawFloor > rfl then rfl = ctx.argHoistRawFloor
     lf0: tmp.listFrees.length
     i: fl
-    n: ctx.argHoistNames.length
+    n: ctx.argHoists.length
     for i < n loop {
-        nmo: ctx.argHoistNames.get :i
-        vlo: ctx.argHoistVals.get :i
-        cty: ctx.argHoistTypes.get :i
+        ah: ctx.argHoists.get :i
+        nmo: ah.name.stringView
+        vlo: ah.val.stringView
+        cty: ah.ctype.stringView
         # a hoist assigned where its part runs has no initialiser: it starts zero
         buf.append ind
         buf.append cty
@@ -7372,11 +7371,11 @@ flushArgHoists: function {
             buf.append vlo
         }
         buf.append ";\n"
-        dto: ctx.argHoistDtors.get :i
+        dto: ah.dtor.stringView
         if dto.length > 0 when ctx.hoistsToBlock then {
-            tmp.oweList stmt: dto.copy name: nmo.copy vid: ztypes.vid.zero
+            tmp.oweList stmt: ah.dtor.copy name: ah.name.copy vid: ztypes.vid.zero
         } else if dto.length > 0 then {
-            tmp.oweTemp stmt: dto.copy name: nmo.copy
+            tmp.oweTemp stmt: ah.dtor.copy name: ah.name.copy
         }
         i = i + 1
     }
@@ -7389,12 +7388,7 @@ flushArgHoists: function {
         ri = ri + 1
     }
     # drop what was just emitted, back to the floor -- not to empty
-    for ctx.argHoistNames.length > fl loop {
-        ctx.argHoistNames.pop
-        ctx.argHoistVals.pop
-        ctx.argHoistTypes.pop
-        ctx.argHoistDtors.pop
-    }
+    for ctx.argHoists.length > fl loop ctx.argHoists.pop
     for ctx.argHoistRaw.length > rfl loop ctx.argHoistRaw.pop
 }
 
@@ -7410,7 +7404,7 @@ hoistmark: record {
 # pendingHoistMark -- where the pending hoists and their floors stand now.
 pendingHoistMark: function {ctx: Ctx.view} out hoistmark is {
     return (hoistmark
-        names: ctx.argHoistNames.length
+        names: ctx.argHoists.length
         raw: ctx.argHoistRaw.length
         floor: ctx.argHoistFloor
         rawFloor: ctx.argHoistRawFloor
@@ -7430,7 +7424,7 @@ openInPlace: function {ctx: Ctx} out hoistmark is {
 
 # hoistsGrew -- whether the condition begun at `mark` recorded a hoist of its own.
 hoistsGrew: function {ctx: Ctx.view mark: hoistmark} out bool is {
-    if ctx.argHoistNames.length > mark.names then return true
+    if ctx.argHoists.length > mark.names then return true
     return ctx.argHoistRaw.length > mark.raw
 }
 
@@ -7466,13 +7460,14 @@ assignInPlace: function {ctx: Ctx mark: hoistmark text: StringView} out String i
     }
     r: "(".string
     i: mark.names
-    for i < ctx.argHoistNames.length loop {
+    for i < ctx.argHoists.length loop {
         # an inner part already assigns its own hoists where it runs, and left
         # no initialiser
-        if (ctx.argHoistVals.get :i).length > 0 then {
-            nm: ctx.argHoistNames.get :i
-            vl: ctx.argHoistVals.set :i val: String
-            r.append "\{nm} = \{vl}, "
+        ph: ctx.argHoists.getMut :i
+        if ph.val.length > 0 then {
+            vl: String
+            vl swap ph.val
+            r.append "\{ph.name} = \{vl}, "
         }
         i = i + 1
     }
@@ -7746,10 +7741,12 @@ hoistForAddress: function {
     if tag.isZero.not when owes then ctx.hoistTags.set key: nm.copy value: tag
     dt: String
     if owes then dt = hoistDestroyLine :symtab :ctx :tid nm: nm.stringView
-    ctx.argHoistVals.append av.string
-    ctx.argHoistTypes.append (hoistCtype :ast :symtab :ctx :tid :ptr)
-    ctx.argHoistDtors.append dt
-    ctx.argHoistNames.append nm.copy
+    ctx.argHoists.append (ArgHoist
+        name: nm.copy
+        val: av.string
+        ctype: (hoistCtype :ast :symtab :ctx :tid :ptr)
+        dtor: dt
+    )
     return nm
 }
 
@@ -9805,10 +9802,7 @@ emitBoxCreate: function {
     bnm: "_Box\{bN}"
     # declared zero by the enclosing statement, assigned here; the box moves
     # into the value it builds, so it is no address hoist and owes no destroy
-    ctx.argHoistNames.append bnm.copy
-    ctx.argHoistVals.append String
-    ctx.argHoistTypes.append "\{binner}*"
-    ctx.argHoistDtors.append String
+    ctx.argHoists.append (ArgHoist name: bnm.copy val: String ctype: "\{binner}*" dtor: String)
     return (stating
         :facts
         from: callFacts
@@ -10867,7 +10861,7 @@ emitInterpArgExpr: function {
             # this interpolation emits into its OWN `({ ... })` scope, so hoists
             # already pending from the enclosing argument list must stay pending:
             # they are declared and used at the call, outside this block.
-            hf: ctx.argHoistNames.length
+            hf: ctx.argHoists.length
             hr: ctx.argHoistRaw.length
             sM: (emitInterpBuild
                 :ast
@@ -19380,15 +19374,16 @@ armRefLeaf: function {
         tid: lt
         nm: nm.stringView
     )
+    ph: (ArgHoist
+        name: nm.copy
+        val: String
+        ctype: (hoistCtype :ast :symtab :ctx tid: lt ptr: false)
+        dtor: dt
+    )
     if ctx.armRefDepth > 0 then {
-        ctx.armParkNames.append nm.copy
-        ctx.armParkTypes.append (hoistCtype :ast :symtab :ctx tid: lt ptr: false)
-        ctx.armParkDtors.append dt
+        ctx.armParks.append ph
     } else {
-        ctx.argHoistNames.append nm.copy
-        ctx.argHoistVals.append String
-        ctx.argHoistTypes.append (hoistCtype :ast :symtab :ctx tid: lt ptr: false)
-        ctx.argHoistDtors.append dt
+        ctx.argHoists.append ph
     }
     if heap then {
         return (stating :facts from: callFacts text: "(\{nm} = \{text}, \{nm})")
@@ -19444,7 +19439,7 @@ emitControlPtrExpr: function {
     outerFloor: ctx.argHoistFloor
     outerRawFloor: ctx.argHoistRawFloor
     outerCv: ctx.armRefCv
-    ctx.argHoistFloor = ctx.argHoistNames.length
+    ctx.argHoistFloor = ctx.argHoists.length
     ctx.argHoistRawFloor = ctx.argHoistRaw.length
     ctx.armRefCv = cvN + 1
     ctx.armRefDepth = ctx.armRefDepth + 1
@@ -19466,12 +19461,7 @@ emitControlPtrExpr: function {
     ctx.argHoistFloor = outerFloor
     ctx.argHoistRawFloor = outerRawFloor
     if ctx.armRefDepth == 0 then {
-        for ctx.armParkNames.length > 0 loop {
-            ctx.argHoistNames.append ctx.armParkNames.pop
-            ctx.argHoistVals.append String
-            ctx.argHoistTypes.append ctx.armParkTypes.pop
-            ctx.argHoistDtors.append ctx.armParkDtors.pop
-        }
+        for ctx.armParks.length > 0 loop ctx.argHoists.append ctx.armParks.pop
     }
     r: "({\{lbuf} \{cv}; })"
     return r
@@ -19507,7 +19497,7 @@ emitControlExpr: function {
     lbuf: String
     outerFloor: ctx.argHoistFloor
     outerRawFloor: ctx.argHoistRawFloor
-    ctx.argHoistFloor = ctx.argHoistNames.length
+    ctx.argHoistFloor = ctx.argHoists.length
     ctx.argHoistRawFloor = ctx.argHoistRaw.length
     (emitControlBindValue
         :ast
@@ -34216,10 +34206,7 @@ emitC: function {
         emittedConformance: IdSet ztypes.confid
         emittedListIters: IdSet ztypes.tid
         unitOrder: List String
-        argHoistNames: List String
-        argHoistVals: List String
-        argHoistTypes: List String
-        argHoistDtors: List String
+        argHoists: List ArgHoist
         argHoistRaw: List String
         argHoistCtr: 0
         orderPieceVals: List String
@@ -34246,9 +34233,7 @@ emitC: function {
         argHoistRawFloor: 0
         armRefCv: 0
         armRefDepth: 0
-        armParkNames: List String
-        armParkTypes: List String
-        armParkDtors: List String
+        armParks: List ArgHoist
         hoistsToBlock: false
         whenGuardCtr: 0
         breakLabels: ListVal u64
