@@ -5089,9 +5089,15 @@ isStringyTid: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
 }
 
 # svValueForm -- a String/StringView operand as a by-value StringView C
-# expression (a String operand view-converts via a compound literal).
+# expression (a String operand view-converts via a compound literal). The
+# literal reads a String operand twice, for its data and its size: a place that
+# is not free to read twice -- a load of a call's result, `(*get(..))`, or a
+# field read off one -- is bound to a temp first, which owns nothing, so the
+# call runs once.
 svValueForm: function {
-    ctx: Ctx.view
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
     expr: StringView
     isStr: bool
     vid: ztypes.vid
@@ -5107,6 +5113,20 @@ svValueForm: function {
         rex: aliasResolve :ctx name: expr :vid
         valueVid: vid
         if rex.stringView != expr then valueVid = ztypes.vid.zero
+        rexF: cfacts
+        if rex.stringView == expr then stateFacts facts: rexF from: facts
+        rf: knownFacts f: rexF s: rex.stringView
+        if rf.once when rf.place then {
+            rex = (hoistForAddress
+                :ast
+                :symtab
+                :ctx
+                av: rex.stringView
+                tid: ctx.strTid
+                argNid: zast.nodeid
+            )
+            valueVid = ztypes.vid.zero
+        }
         acc: ".".string
         if (isPtrVid :ctx vid: valueVid) then acc = "->"
         v1: "((\{ctx.svC}_t){ .data = \{rex}\{acc}data, .size = \{rex}\{acc}size })"
@@ -5140,7 +5160,7 @@ svValueFormAt: function {
     facts: cfacts.borrow
 } out String is {
     # a view is its own value form, as it stands
-    if isStr.not then return (svValueForm :ctx :expr :isStr :vid :facts)
+    if isStr.not then return (svValueForm :ast :symtab :ctx :expr :isStr :vid :facts)
     if (pathIsPointer :ast :symtab :ctx :n) then return (guessing
         :facts
         text: (svValueFormPtr :ctx :expr)
@@ -5160,21 +5180,15 @@ svValueFormAt: function {
             pid: ctx.strTid
             paramTake: false
         )
-        if hv.length > 0 then return (svValueForm
-            :ctx
-            expr: hv.stringView
-            :isStr
-            vid: ztypes.vid
-            :facts
-        )
+        if hv.length > 0 then {
+            stateFacts :facts from: pathFacts
+            return (svValueForm :ast :symtab :ctx expr: hv.stringView :isStr vid: ztypes.vid :facts)
+        }
     }
-    # a reference control value (`(*p)`) runs its arms where it is spelt: it is
-    # read once, into a temp that owns nothing
-    if ef.once then {
-        rv: hoistForAddress :ast :symtab :ctx av: expr tid: ctx.strTid argNid: zast.nodeid
-        return (svValueForm :ctx expr: rv.stringView :isStr vid: ztypes.vid :facts)
-    }
-    return (svValueForm :ctx :expr :isStr :vid :facts)
+    # a place read once -- a load of a call's result, a reference control
+    # value's `(*p)` -- svValueForm binds itself
+    stateFacts :facts from: ef
+    return (svValueForm :ast :symtab :ctx :expr :isStr :vid :facts)
 }
 
 # the base atom of a dotted path, which is the sanctioned discriminator the
@@ -5434,7 +5448,15 @@ svArgAddr: function {
         anE: emitLocalAtomNameAt :symtab :ctx nid: n.nodeid name: an vid: anV
         if (stampIsStr :symtab :ctx nid: n.nodeid) then {
             facts3: cfacts
-            svs: svValueForm :ctx expr: anE.stringView isStr: true vid: anV facts: facts3
+            svs: (svValueForm
+                :ast
+                :symtab
+                :ctx
+                expr: anE.stringView
+                isStr: true
+                vid: anV
+                facts: facts3
+            )
             a2s: "&\{svs}"
             return a2s
         }
@@ -5454,7 +5476,15 @@ svArgAddr: function {
         anlE: emitLocalAtomNameAt :symtab :ctx nid: n.nodeid name: anl vid: anlV
         if (stampIsStr :symtab :ctx nid: n.nodeid) then {
             facts2: cfacts
-            svl: svValueForm :ctx expr: anlE.stringView isStr: true vid: anlV facts: facts2
+            svl: (svValueForm
+                :ast
+                :symtab
+                :ctx
+                expr: anlE.stringView
+                isStr: true
+                vid: anlV
+                facts: facts2
+            )
             a2ls: "&\{svl}"
             return a2ls
         }
@@ -5516,7 +5546,7 @@ emitSvCompareCall: function {
     ) when mnId == zast.wellKnown.slot.wkCompare then {
         # compare maps to the by-value cmp in the base fragment
         facts2: cfacts
-        bf: svValueForm :ctx expr: bnv isStr: btIsStr vid: dcbV facts: facts2
+        bf: svValueForm :ast :symtab :ctx expr: bnv isStr: btIsStr vid: dcbV facts: facts2
         cargs: String
         arx189: u64
         for arx189 < call.arguments.count loop {
@@ -5578,7 +5608,7 @@ emitSvSubstringCall: function {
         } else {
             if btIsStr then {
                 recvF: cfacts
-                bfs: svValueForm :ctx expr: bnv isStr: true vid: dcbV facts: recvF
+                bfs: svValueForm :ast :symtab :ctx expr: bnv isStr: true vid: dcbV facts: recvF
                 recvp = bfs.copy
             } else {
                 sacc: ".".string
@@ -5647,7 +5677,7 @@ svNativeArgFrag: function {
         if sxh.length > 0 then sx = sxh.take
         sxq: atomVidIfPlain :ast :symtab :ctx :n text: sx.stringView
         facts: cfacts
-        svx: svValueForm :ctx expr: sx.stringView isStr: true vid: sxq :facts
+        svx: svValueForm :ast :symtab :ctx expr: sx.stringView isStr: true vid: sxq :facts
         r: "&\{svx}"
         return r
     }
@@ -5756,6 +5786,8 @@ emitSvLinesCall: function {
 # emitSvParseCall -- `s.toU64` and friends: a no-argument parse native on a
 # receiver projected to a view value.
 emitSvParseCall: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     bnv: StringView
     mnv: StringView
@@ -5770,7 +5802,7 @@ emitSvParseCall: function {
         tid: btid
     ) when (svCallOf :ctx nameId: mnId).parse then {
         recvF: cfacts
-        bfp: svValueForm :ctx expr: bnv isStr: btIsStr vid: dcbV facts: recvF
+        bfp: svValueForm :ast :symtab :ctx expr: bnv isStr: btIsStr vid: dcbV facts: recvF
         needsAddM :ctx uname: "system" memb: mnv
         epn: "\{ctx.svC}_\{mnv}(&\{bfp})"
         return (stating :facts from: callFacts text: epn)
@@ -5867,7 +5899,7 @@ emitSvSimpleCall: function {
         recvS: bnv.string
         if btIsStr then {
             recvF: cfacts
-            bfs2: svValueForm :ctx expr: bnv isStr: true vid: dcbV facts: recvF
+            bfs2: svValueForm :ast :symtab :ctx expr: bnv isStr: true vid: dcbV facts: recvF
             recvS = bfs2.copy
         }
         args: String
@@ -6095,7 +6127,7 @@ emitSvCallLegs: function {
     if eSpl.length > 0 then return eSpl
     eLin: emitSvLinesCall :ctx :bnv :mnId :btid :facts
     if eLin.length > 0 then return eLin
-    ePar: emitSvParseCall :ctx :bnv :mnv :mnId :btid :btIsStr :dcbV :facts
+    ePar: emitSvParseCall :ast :symtab :ctx :bnv :mnv :mnId :btid :btIsStr :dcbV :facts
     if ePar.length > 0 then return ePar
     eArg: emitSvArgNativeCall :ast :symtab :ctx :call :bnv :mnv :mnId :btid :facts
     if eArg.length > 0 then return eArg
@@ -6531,7 +6563,20 @@ emitStringArgMethod: function {
                 paramTake: false
                 argNid: argNode
             )
-            if aph.length > 0 then argval = aph.take
+            if aph.length > 0 then {
+                argval = aph.take
+            } else if argPtr.not when argvalF.once when argvalF.place then {
+                # a load of a call's result is read for its data and its size:
+                # bound once, into a temp that owns nothing
+                argval = (hoistForAddress
+                    :ast
+                    :symtab
+                    :ctx
+                    av: argval.stringView
+                    tid: ctx.strTid
+                    argNid: zast.nodeid
+                )
+            }
             aacc: "."
             if argPtr then aacc = "->"
             rapps: "\{ctx.strC}_append(\{recvAddr}, (\{argval})\{aacc}data, (\{argval})\{aacc}size)"
@@ -6808,14 +6853,15 @@ stringAppendViewText: function {
 # data and its size) must be bound to a temp first: a call, or a conditional
 # holding one, whose second spelling would run it again. A compound literal
 # over a name (`((T){ .data = s.data, ... })`) runs nothing however often it is
-# spelled; a literal, a local and a deref projection are names.
+# spelled; a literal, a local and a load of a name are names.
 singleReadNeedsTemp: function {s: StringView} out bool is {
     if (isCompoundLiteralText :s) then return false
-    # a reference control value's pointer runs its conditions and arms: a
-    # ternary's, and a statement expression's (`(*({ ... }))`, a match or a
-    # non-ternary `if` that yields a place)
+    # a load runs whatever it reads through: a call's result (`(*get(..))`), a
+    # reference control value's conditions and arms (a ternary, or a statement
+    # expression `(*({ ... }))` for a match or a non-ternary `if` that yields a
+    # place)
     if (s.startsWith prefix: "(*") when (s.contains needle: "?") then return true
-    if (s.startsWith prefix: "(*({") then return true
+    if (s.startsWith prefix: "(*") when (isPureCText :s).not then return true
     return (isNonLvalueArg :s)
 }
 
@@ -7800,7 +7846,7 @@ stringViewBinopOperand: function {
     } else {
         # a hoisted operand is the temp, not the node
         facts: cfacts
-        vfh: svValueForm :ctx expr: src.stringView isStr: isStrT vid: valueVid :facts
+        vfh: svValueForm :ast :symtab :ctx expr: src.stringView isStr: isStrT vid: valueVid :facts
         vf = vfh.take
     }
     r: "&\{vf}"
@@ -11063,7 +11109,15 @@ emitInterpArgForParam: function {
         retx = nmH.copy
     } else {
         facts: cfacts
-        retx = svValueForm :ctx expr: nmH.stringView isStr: true vid: ztypes.vid.zero :facts
+        retx = (svValueForm
+            :ast
+            :symtab
+            :ctx
+            expr: nmH.stringView
+            isStr: true
+            vid: ztypes.vid.zero
+            :facts
+        )
     }
     return retx
 }
@@ -15131,8 +15185,11 @@ emitCallValue: function {
 # the cname is canonical (not a per-shell receiver id). `recv` is the receiver C
 # expression; recvIsPtr picks `->`/no-`&`. "" for an unrecognized method.
 emitStringMethod: function {
-    ctx: Ctx.view
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
     recv: StringView
+    recvF: cfacts
     recvIsPtr: bool
     # the method's name id, which picks the String member it emits
     mnId: zast.nameid
@@ -15153,7 +15210,8 @@ emitStringMethod: function {
     }
     if (ztypecheck.isStringViewMember nameId: mnId) then {
         if recvIsPtr then return (guessing :facts text: (svValueFormPtr :ctx expr: recv))
-        return (svValueForm :ctx expr: recv isStr: true vid: recvVid :facts)
+        stateFacts :facts from: recvF
+        return (svValueForm :ast :symtab :ctx expr: recv isStr: true vid: recvVid :facts)
     }
     if mnId == zast.wellKnown.slot.wkShrink then {
         if recvIsPtr then return (stating :facts from: callFacts text: "\{ctx.strC}_shrink(\{recv})"
@@ -16024,7 +16082,8 @@ emitNestedStringViewBase: function {
         ppid: interpPartNodeId n: (ast.nodes.get i: n.parent)
         parentStampTid: stampIdOf :symtab nid: ppid
         if parentStampTid == ctx.strTid then {
-            pbv: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent)
+            pbvF: cfacts
+            pbv: emitExprWith :ast :symtab :ctx n: (ast.nodes.get i: n.parent) facts: pbvF
             pbq: (atomVidIfPlain
                 :ast
                 :symtab
@@ -16032,7 +16091,6 @@ emitNestedStringViewBase: function {
                 n: (ast.nodes.get i: n.parent)
                 text: pbv.stringView
             )
-            facts: cfacts
             sv: (svValueFormAt
                 :ast
                 :symtab
@@ -16041,7 +16099,7 @@ emitNestedStringViewBase: function {
                 expr: pbv.stringView
                 isStr: true
                 vid: pbq
-                :facts
+                facts: pbvF
             )
             return sv
         }
@@ -16304,6 +16362,8 @@ emitNestedMonoMethodBase: function {
                         needsAddM :ctx uname: "system" memb: mn2
                         facts: cfacts
                         svfn: (svValueForm
+                            :ast
+                            :symtab
                             :ctx
                             expr: baseAtom
                             isStr: nlid == ctx.strTid
@@ -16452,6 +16512,7 @@ nestedStringMember: function {
     ctx: Ctx
     parent: astnode.view
     base: StringView
+    baseF: cfacts
     mn2: StringView
     mnId: zast.nameid
     bs9vid: ztypes.vid
@@ -16460,8 +16521,11 @@ nestedStringMember: function {
     if nptT == ctx.strTid then {
         facts: cfacts
         nsm: (emitStringMethod
+            :ast
+            :symtab
             :ctx
             recv: base
+            recvF: baseF
             recvIsPtr: (pathIsPointer :ast :symtab :ctx n: parent)
             :mnId
             recvVid: bs9vid
@@ -16471,8 +16535,17 @@ nestedStringMember: function {
     }
     if (isStringyTid :ctx tid: nptT) when (svCallOf :ctx nameId: mnId).parse then {
         needsAddM :ctx uname: "system" memb: mn2
-        facts: cfacts
-        pnv: svValueForm :ctx expr: base isStr: nptT == ctx.strTid vid: bs9vid :facts
+        pnvF: cfacts
+        stateFacts facts: pnvF from: baseF
+        pnv: (svValueForm
+            :ast
+            :symtab
+            :ctx
+            expr: base
+            isStr: nptT == ctx.strTid
+            vid: bs9vid
+            facts: pnvF
+        )
         return "\{ctx.svC}_\{mn2}(&\{pnv})"
     }
     return ""
@@ -16534,6 +16607,7 @@ emitDottedNestedBase: function {
         :ctx
         parent: (ast.nodes.get i: n.parent)
         base: baseAtom.stringView
+        baseF: baseAtomF
         :mn2
         :mnId
         :bs9vid
@@ -16775,7 +16849,15 @@ methodAutoCallRead: function {
     if (svCallOf :ctx nameId: mnId).noarg when (isStringyTid :ctx tid: bstamp) then {
         needsAddM :ctx uname: "system" memb: mn2
         svfaF: cfacts
-        svfa: svValueForm :ctx expr: bn2 isStr: bstamp == ctx.strTid vid: bn2v facts: svfaF
+        svfa: (svValueForm
+            :ast
+            :symtab
+            :ctx
+            expr: bn2
+            isStr: bstamp == ctx.strTid
+            vid: bn2v
+            facts: svfaF
+        )
         return (stating :facts from: callFacts text: "\{ctx.svC}_\{mn2}(&\{svfa})")
     }
     mt: mco
@@ -17077,8 +17159,11 @@ emitUserTypeMemberRead: function {
     if bstamp == ctx.strTid then {
         sptr: isPtrVid :ctx vid: bn2v
         sm: (emitStringMethod
+            :ast
+            :symtab
             :ctx
             recv: bn2
+            recvF: bn2F
             recvIsPtr: sptr
             :mnId
             recvVid: bn2v
@@ -17671,7 +17756,7 @@ emitDottedAtomBase: function {
         # natives, mirroring the chained/auto-call legs
         needsAddM :ctx uname: "system" memb: mn2
         svfbF: cfacts
-        svfb: svValueForm :ctx expr: bn2 isStr: true vid: bn2v facts: svfbF
+        svfb: svValueForm :ast :symtab :ctx expr: bn2 isStr: true vid: bn2v facts: svfbF
         return (stating :facts from: callFacts text: "\{ctx.svC}_\{mn2}(&\{svfb})")
     }
     # `.stringView` of a view is the view: a generic body wrote it for a type
@@ -40671,7 +40756,15 @@ fileFromArgCoerce: function {
                     if fh.length > 0 then fb = fh.take
                     fbq: atomVidIfPlain :ast :symtab :ctx n: faOpNode text: fb.stringView
                     facts: cfacts
-                    return (svValueForm :ctx expr: fb.stringView isStr: true vid: fbq :facts)
+                    return (svValueForm
+                        :ast
+                        :symtab
+                        :ctx
+                        expr: fb.stringView
+                        isStr: true
+                        vid: fbq
+                        :facts
+                    )
                 }
             }
         }
@@ -41061,6 +41154,8 @@ lowerNativeArg: function {
         avh: emitColInterpArg :ast :symtab :ctx n: op consumes: false
         facts2: cfacts
         if avh.length > 0 then return (svValueForm
+            :ast
+            :symtab
             :ctx
             expr: avh.stringView
             isStr: true
@@ -41081,7 +41176,7 @@ lowerNativeArg: function {
             if hb.length > 0 then av0 = hb.take
             av0q: atomVidIfPlain :ast :symtab :ctx n: op text: av0.stringView
             facts: cfacts
-            return (svValueForm :ctx expr: av0.stringView isStr: true vid: av0q :facts)
+            return (svValueForm :ast :symtab :ctx expr: av0.stringView isStr: true vid: av0q :facts)
         }
         return av0
     }
