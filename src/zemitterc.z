@@ -16173,13 +16173,15 @@ nestedCounterRead: function {
     mnId: zast.nameid
     nlid: ztypes.tid
     baseAtom: StringView
+    baseAtomF: cfacts
     recvIsPtr: bool
+    facts: cfacts.borrow
 } out String is {
     isLength: mnId == zast.wellKnown.slot.wkLength
     arrO: ctx.origins.get i: family.slot.fixedArray
     if isLength when (originIsTid :symtab tid: nlid originTid: arrO) then {
         acnb: ctxCname :ctx tid: nlid
-        return "\{acnb}_length"
+        return (stating :facts from: constFacts text: "\{acnb}_length")
     }
     isCounted: (
         (isListOriginOf :symtab :ctx tid: nlid) or
@@ -16192,8 +16194,16 @@ nestedCounterRead: function {
     if isCounted.not then return ""
     accN: ".".string
     if recvIsPtr then accN = "->"
-    if isLength then return "\{baseAtom}\{accN}length"
-    if mnId == zast.wellKnown.slot.wkCapacity then return "\{baseAtom}\{accN}capacity"
+    if isLength then return (stating
+        :facts
+        from: (memberFacts b: baseAtomF)
+        text: "\{baseAtom}\{accN}length"
+    )
+    if mnId == zast.wellKnown.slot.wkCapacity then return (stating
+        :facts
+        from: (memberFacts b: baseAtomF)
+        text: "\{baseAtom}\{accN}capacity"
+    )
     return ""
 }
 
@@ -16249,10 +16259,12 @@ emitNestedCollectionBase: function {
     mnId: zast.nameid
     nlid: ztypes.tid
     baseAtom: StringView
+    baseAtomF: cfacts
     bs9vid: ztypes.vid
     recvIsPtr: bool
+    facts: cfacts.borrow
 } out String is {
-    eCt: nestedCounterRead :symtab :ctx :mnId :nlid :baseAtom :recvIsPtr
+    eCt: nestedCounterRead :symtab :ctx :mnId :nlid :baseAtom :baseAtomF :recvIsPtr :facts
     if eCt.length > 0 then return eCt
     wmn: (windowMemberRead
         :symtab
@@ -16260,8 +16272,10 @@ emitNestedCollectionBase: function {
         :mnId
         tid: nlid
         base: baseAtom
+        baseF: baseAtomF
         :recvIsPtr
         vid: bs9vid
+        :facts
     )
     if wmn.length > 0 then return wmn
     if mnId == zast.wellKnown.slot.wkCopy then {
@@ -16274,27 +16288,56 @@ emitNestedCollectionBase: function {
                 :fam
                 stackRecv: crv.stringView
                 heapRecv: baseAtom
+                :facts
             )
         }
     }
     if (originIsTid :symtab tid: nlid originTid: (ctx.origins.get i: family.slot.str)) then {
         nstrcb: ctxCname :ctx tid: nlid
-        if mnId == zast.wellKnown.slot.wkLength then return "\{baseAtom}.len"
-        if mnId == zast.wellKnown.slot.wkSize then return "\{nstrcb}_size"
-        if mnId == zast.wellKnown.slot.wkString then return "\{nstrcb}_string(\{baseAtom})"
+        if mnId == zast.wellKnown.slot.wkLength then return (stating
+            :facts
+            from: (memberFacts b: baseAtomF)
+            text: "\{baseAtom}.len"
+        )
+        if mnId == zast.wellKnown.slot.wkSize then return (stating
+            :facts
+            from: constFacts
+            text: "\{nstrcb}_size"
+        )
+        if mnId == zast.wellKnown.slot.wkString then return (stating
+            :facts
+            from: callFacts
+            text: "\{nstrcb}_string(\{baseAtom})"
+        )
         if (ztypecheck.isStringViewMember nameId: mnId) then {
-            return "(\{ctx.svC}_t){ .data = \{baseAtom}.data, .size = \{baseAtom}.len }"
+            return (stating
+                :facts
+                from: literalFacts
+                text: "(\{ctx.svC}_t){ .data = \{baseAtom}.data, .size = \{baseAtom}.len }"
+            )
         }
     }
     if (isListOriginOf :symtab :ctx tid: nlid) then {
         nlcb: ctxCname :ctx tid: nlid
         recvB: colRecvRef :ctx bn: baseAtom vid: bs9vid
-        if mnId == zast.wellKnown.slot.wkPop then return "\{nlcb}_pop(\{recvB})"
-        if mnId == zast.wellKnown.slot.wkSort then return "\{nlcb}_sort(\{recvB})"
-        if (ztypecheck.isListViewMember nameId: mnId) then return "\{nlcb}_listView(\{recvB})"
+        if mnId == zast.wellKnown.slot.wkPop then return (stating
+            :facts
+            from: callFacts
+            text: "\{nlcb}_pop(\{recvB})"
+        )
+        if mnId == zast.wellKnown.slot.wkSort then return (stating
+            :facts
+            from: callFacts
+            text: "\{nlcb}_sort(\{recvB})"
+        )
+        if (ztypecheck.isListViewMember nameId: mnId) then return (stating
+            :facts
+            from: callFacts
+            text: "\{nlcb}_listView(\{recvB})"
+        )
         if (isListWalkMember name: mn2) then {
             w9: "_\{mn2}("
-            return "\{nlcb}\{w9}\{recvB})"
+            return (stating :facts from: callFacts text: "\{nlcb}\{w9}\{recvB})")
         }
     }
     if (dataValueFamilyOf :symtab :ctx tid: nlid).isZero.not when (
@@ -16302,7 +16345,7 @@ emitNestedCollectionBase: function {
     ) then {
         ndcb: ctxCname :ctx tid: nlid
         recvD: colRecvRef :ctx bn: baseAtom vid: bs9vid
-        return "\{ndcb}_iterate(\{recvD})"
+        return (stating :facts from: callFacts text: "\{ndcb}_iterate(\{recvD})")
     }
     # a view walks too: its read walks reached through a field or off a call's
     # result (`l.listView.iterate`, the iterable of `for each w: l.listView`)
@@ -16310,7 +16353,7 @@ emitNestedCollectionBase: function {
         nvcb: ctxCname :ctx tid: nlid
         recvV: colRecvRef :ctx bn: baseAtom vid: bs9vid
         wv9: "_\{mn2}("
-        return "\{nvcb}\{wv9}\{recvV})"
+        return (stating :facts from: callFacts text: "\{nvcb}\{wv9}\{recvV})")
     }
     # Set/Map are heap-pointer collections; their methods are emitted by the
     # collection template, not as registry children a CLASS dispatch would
@@ -16318,22 +16361,38 @@ emitNestedCollectionBase: function {
     # (no `&`).
     if (isSetOriginOf :symtab :ctx tid: nlid) then {
         nscb: ctxCname :ctx tid: nlid
-        if mnId == zast.wellKnown.slot.wkIterate then return "\{nscb}_iterate(\{baseAtom})"
+        if mnId == zast.wellKnown.slot.wkIterate then return (stating
+            :facts
+            from: callFacts
+            text: "\{nscb}_iterate(\{baseAtom})"
+        )
     }
     if (isMapOriginOf :symtab :ctx tid: nlid) then {
         nmpcb: ctxCname :ctx tid: nlid
-        if mnId == zast.wellKnown.slot.wkIterate then return "\{nmpcb}_iterate(\{baseAtom})"
+        if mnId == zast.wellKnown.slot.wkIterate then return (stating
+            :facts
+            from: callFacts
+            text: "\{nmpcb}_iterate(\{baseAtom})"
+        )
         if (
             mnId == zast.wellKnown.slot.wkIterateItems
-        ) then return "\{nmpcb}_iterateItems(\{baseAtom})"
+        ) then return (stating :facts from: callFacts text: "\{nmpcb}_iterateItems(\{baseAtom})")
     }
     # the id-keyed pair reached through a FIELD. They are stack structs, so
     # the receiver goes by address where a Map's field is already a pointer.
     if (isIdCollectionOriginOf :symtab :ctx tid: nlid) then {
         nidcb: ctxCname :ctx tid: nlid
         nidrv: colRecvRef :ctx bn: baseAtom vid: bs9vid
-        if mnId == zast.wellKnown.slot.wkIterate then return "\{nidcb}_iterate(\{nidrv})"
-        if mnId == zast.wellKnown.slot.wkIterateItems then return "\{nidcb}_iterateItems(\{nidrv})"
+        if mnId == zast.wellKnown.slot.wkIterate then return (stating
+            :facts
+            from: callFacts
+            text: "\{nidcb}_iterate(\{nidrv})"
+        )
+        if mnId == zast.wellKnown.slot.wkIterateItems then return (stating
+            :facts
+            from: callFacts
+            text: "\{nidcb}_iterateItems(\{nidrv})"
+        )
     }
     return ""
 }
@@ -16775,8 +16834,10 @@ nestedBaseMember: function {
         :mnId
         :nlid
         baseAtom: base
+        :baseAtomF
         :bs9vid
         recvIsPtr: nstPtr
+        :facts
     )
     if eCo.length > 0 then return eCo
     eMo: (emitNestedMonoMethodBase
@@ -17314,62 +17375,53 @@ emitIdCollectionMemberRead: function {
     mn2: StringView
     mnId: zast.nameid
     bn2: StringView
+    bn2F: cfacts
     bstamp: ztypes.tid
     accB2: StringView
     recvB2: StringView
+    facts: cfacts.borrow
 } out String is {
     if (isIdCollectionOriginOf :symtab :ctx tid: bstamp) then {
         if mnId == zast.wellKnown.slot.wkLength then {
-            eidl: "\{bn2}\{accB2}length"
-            return eidl
+            return (stating :facts from: (memberFacts b: bn2F) text: "\{bn2}\{accB2}length")
         }
         if mnId == zast.wellKnown.slot.wkCapacity then {
-            eidc: "\{bn2}\{accB2}capacity"
-            return eidc
+            return (stating :facts from: (memberFacts b: bn2F) text: "\{bn2}\{accB2}capacity")
         }
         if mnId == zast.wellKnown.slot.wkIterate then {
             idcb: ctxCname :ctx tid: bstamp
-            eidi: "\{idcb}_iterate(\{recvB2})"
-            return eidi
+            return (stating :facts from: callFacts text: "\{idcb}_iterate(\{recvB2})")
         }
         if mnId == zast.wellKnown.slot.wkIterateItems then {
             idcb8: ctxCname :ctx tid: bstamp
-            eidii: "\{idcb8}_iterateItems(\{recvB2})"
-            return eidii
+            return (stating :facts from: callFacts text: "\{idcb8}_iterateItems(\{recvB2})")
         }
     }
     if (isSetOriginOf :symtab :ctx tid: bstamp) then {
         if mnId == zast.wellKnown.slot.wkLength then {
-            esl: "\{bn2}->length"
-            return esl
+            return (stating :facts from: (memberFacts b: bn2F) text: "\{bn2}->length")
         }
         if mnId == zast.wellKnown.slot.wkCapacity then {
-            esc: "\{bn2}->capacity"
-            return esc
+            return (stating :facts from: (memberFacts b: bn2F) text: "\{bn2}->capacity")
         }
         scb2: ctxCname :ctx tid: bstamp
         if mnId == zast.wellKnown.slot.wkIterate then {
-            esi: "\{scb2}_iterate(\{bn2})"
-            return esi
+            return (stating :facts from: callFacts text: "\{scb2}_iterate(\{bn2})")
         }
     }
     if (isMapOriginOf :symtab :ctx tid: bstamp) then {
         if mnId == zast.wellKnown.slot.wkLength then {
-            eml: "\{bn2}->length"
-            return eml
+            return (stating :facts from: (memberFacts b: bn2F) text: "\{bn2}->length")
         }
         if mnId == zast.wellKnown.slot.wkCapacity then {
-            emc: "\{bn2}->capacity"
-            return emc
+            return (stating :facts from: (memberFacts b: bn2F) text: "\{bn2}->capacity")
         }
         mcb2: ctxCname :ctx tid: bstamp
         if mnId == zast.wellKnown.slot.wkIterate then {
-            emi: "\{mcb2}_iterate(\{bn2})"
-            return emi
+            return (stating :facts from: callFacts text: "\{mcb2}_iterate(\{bn2})")
         }
         if mnId == zast.wellKnown.slot.wkIterateItems then {
-            emii: "\{mcb2}_iterateItems(\{bn2})"
-            return emii
+            return (stating :facts from: callFacts text: "\{mcb2}_iterateItems(\{bn2})")
         }
     }
     isAnyEntry: isMapEntryOriginOf :symtab :ctx tid: bstamp
@@ -17383,12 +17435,10 @@ emitIdCollectionMemberRead: function {
         dpt: ast.nodes.get i: n.parent
         if (pathIsPointer :ast :symtab :ctx n: dpt) then entryAcc = "->"
         if mnId == zast.wellKnown.slot.wkKey then {
-            eek: "\{bn2}\{entryAcc}key"
-            return eek
+            return (stating :facts from: (memberFacts b: bn2F) text: "\{bn2}\{entryAcc}key")
         }
         if mnId == zast.wellKnown.slot.wkValue then {
-            eev: "\{bn2}\{entryAcc}value"
-            return eev
+            return (stating :facts from: (memberFacts b: bn2F) text: "\{bn2}\{entryAcc}value")
         }
     }
     dbt: (dataBlockTid
@@ -17413,8 +17463,10 @@ windowMemberRead: function {
     mnId: zast.nameid
     tid: ztypes.tid
     base: StringView
+    baseF: cfacts
     recvIsPtr: bool
     vid: ztypes.vid
+    facts: cfacts.borrow
 } out String is {
     fam: monoFamilyOf :symtab :ctx :tid
     isArr: fam == family.slot.fixedArray
@@ -17422,11 +17474,15 @@ windowMemberRead: function {
     if (isArr or isSpan or (fam == family.slot.listVal)).not then return ""
     acc: "."
     if recvIsPtr then acc = "->"
-    if isSpan when mnId == zast.wellKnown.slot.wkLength then return "\{base}\{acc}length"
+    if isSpan when mnId == zast.wellKnown.slot.wkLength then return (stating
+        :facts
+        from: (memberFacts b: baseF)
+        text: "\{base}\{acc}length"
+    )
     if isSpan when mnId == zast.wellKnown.slot.wkClear then {
         sc: ctxCname :ctx :tid
         rr: colRecvRef :ctx bn: base :vid
-        return "\{sc}_clear(\{rr})"
+        return (stating :facts from: callFacts text: "\{sc}_clear(\{rr})")
     }
     lendsView: isArr or isSpan and (mnId == zast.wellKnown.slot.wkListView)
     lendsWindow: (
@@ -17447,8 +17503,16 @@ windowMemberRead: function {
     if isArr then len = "\{rc}_length"
     # an array's storage is inline, const through a view receiver: the window
     # takes it without the qualifier, as emitWindowSlice says
-    if isArr then return "((\{wc}_t){ .length = \{len}, .data = (void*)\{base}\{acc}data })"
-    return "((\{wc}_t){ .length = \{len}, .data = \{base}\{acc}data })"
+    if isArr then return (stating
+        :facts
+        from: literalFacts
+        text: "((\{wc}_t){ .length = \{len}, .data = (void*)\{base}\{acc}data })"
+    )
+    return (stating
+        :facts
+        from: literalFacts
+        text: "((\{wc}_t){ .length = \{len}, .data = \{base}\{acc}data })"
+    )
 }
 
 # emitCollectionMemberRead -- a counter or no-arg method on a builtin collection
@@ -17463,8 +17527,10 @@ emitCollectionMemberRead: function {
     mn2: StringView
     mnId: zast.nameid
     bn2: StringView
+    bn2F: cfacts
     bn2v: ztypes.vid
     bstamp: ztypes.tid
+    facts: cfacts.borrow
 } out String is {
     accB2: ".".string
     if (isPtrVid :ctx vid: bn2v) then accB2 = "->"
@@ -17484,8 +17550,10 @@ emitCollectionMemberRead: function {
         :mnId
         tid: bstamp
         base: bn2
+        baseF: bn2F
         recvIsPtr: (isPtrVid :ctx vid: bn2v)
         vid: bn2v
+        :facts
     )
     if wmr.length > 0 then return wmr
     if mnId == zast.wellKnown.slot.wkCopy then {
@@ -17496,37 +17564,40 @@ emitCollectionMemberRead: function {
             fam: fam9
             stackRecv: recvB2.stringView
             heapRecv: bn2
+            :facts
         )
     }
     if (originIsTid :symtab tid: bstamp originTid: (ctx.origins.get i: family.slot.fixedArray)
     ) then {
         acba: ctxCname :ctx tid: bstamp
         if mnId == zast.wellKnown.slot.wkLength then {
-            eal: "\{acba}_length"
-            return eal
+            return (stating :facts from: constFacts text: "\{acba}_length")
         }
         if (allDigits s: mn2) then {
-            eai: "\{bn2}\{accB2}data[\{mn2}]"
-            return eai
+            return (stating
+                :facts
+                from: (operandFacts e: bn2F place: true)
+                text: "\{bn2}\{accB2}data[\{mn2}]"
+            )
         }
     }
     if (originIsTid :symtab tid: bstamp originTid: (ctx.origins.get i: family.slot.str)) then {
         scba: ctxCname :ctx tid: bstamp
         if mnId == zast.wellKnown.slot.wkLength then {
-            esl: "\{bn2}\{accB2}len"
-            return esl
+            return (stating :facts from: (memberFacts b: bn2F) text: "\{bn2}\{accB2}len")
         }
         if mnId == zast.wellKnown.slot.wkSize then {
-            ess: "\{scba}_size"
-            return ess
+            return (stating :facts from: constFacts text: "\{scba}_size")
         }
         if mnId == zast.wellKnown.slot.wkString then {
-            estr: "\{scba}_string(\{bn2})"
-            return estr
+            return (stating :facts from: callFacts text: "\{scba}_string(\{bn2})")
         }
         if (ztypecheck.isStringViewMember nameId: mnId) then {
-            esvw: "(\{ctx.svC}_t){ .data = \{bn2}\{accB2}data, .size = \{bn2}\{accB2}len }"
-            return esvw
+            return (stating
+                :facts
+                from: literalFacts
+                text: "(\{ctx.svC}_t){ .data = \{bn2}\{accB2}data, .size = \{bn2}\{accB2}len }"
+            )
         }
     }
     # a List and a window into one answer these the same way: the window IS
@@ -17537,37 +17608,30 @@ emitCollectionMemberRead: function {
     )
     if isListy9 then {
         if mnId == zast.wellKnown.slot.wkLength then {
-            el0: "\{bn2}\{accB2}length"
-            return el0
+            return (stating :facts from: (memberFacts b: bn2F) text: "\{bn2}\{accB2}length")
         }
         if (isListReadWalkMember name: mn2) then {
             lcb9: ctxCname :ctx tid: bstamp
             w8: "_\{mn2}("
-            epLi: "\{lcb9}\{w8}\{recvB2})"
-            return epLi
+            return (stating :facts from: callFacts text: "\{lcb9}\{w8}\{recvB2})")
         }
     }
     if (isListOriginOf :symtab :ctx tid: bstamp) then {
         if mnId == zast.wellKnown.slot.wkCapacity then {
-            el1: "\{bn2}\{accB2}capacity"
-            return el1
+            return (stating :facts from: (memberFacts b: bn2F) text: "\{bn2}\{accB2}capacity")
         }
         lcb2: ctxCname :ctx tid: bstamp
         if mnId == zast.wellKnown.slot.wkPop then {
-            ep0: "\{lcb2}_pop(\{recvB2})"
-            return ep0
+            return (stating :facts from: callFacts text: "\{lcb2}_pop(\{recvB2})")
         }
         if mnId == zast.wellKnown.slot.wkSort then {
-            ep1: "\{lcb2}_sort(\{recvB2})"
-            return ep1
+            return (stating :facts from: callFacts text: "\{lcb2}_sort(\{recvB2})")
         }
         if (ztypecheck.isListViewMember nameId: mnId) then {
-            ep2: "\{lcb2}_listView(\{recvB2})"
-            return ep2
+            return (stating :facts from: callFacts text: "\{lcb2}_listView(\{recvB2})")
         }
         if mnId == zast.wellKnown.slot.wkIterateMut then {
-            epLiM: "\{lcb2}_iterateMut(\{recvB2})"
-            return epLiM
+            return (stating :facts from: callFacts text: "\{lcb2}_iterateMut(\{recvB2})")
         }
     }
     # the id-keyed pair are STACK structs, so their counters are read
@@ -17581,9 +17645,11 @@ emitCollectionMemberRead: function {
         :mn2
         :mnId
         :bn2
+        :bn2F
         :bstamp
         accB2: accB2.stringView
         recvB2: recvB2.stringView
+        :facts
     )
     if icm.length > 0 then return icm
     return ""
@@ -17920,8 +17986,10 @@ emitDottedAtomBase: function {
         :mn2
         :mnId
         :bn2
+        :bn2F
         :bn2v
         :bstamp
+        :facts
     )
     if cmr.length > 0 then return cmr
     return ""
@@ -18171,12 +18239,14 @@ colCopyCall: function {
     cpvid9: atomVid :symtab nid: (atomNodeId n: cpn9)
     cpa9: "&\{cpv9}"
     if (isPtrVid :ctx vid: cpvid9) then cpa9 = cpv9.copy
+    facts: cfacts
     return (containerCopyText
         :ctx
         :tid
         fam: fam9
         stackRecv: cpa9.stringView
         heapRecv: cpv9.stringView
+        :facts
     )
 }
 
@@ -18204,10 +18274,11 @@ containerCopyText: function {
     fam: u64
     stackRecv: StringView
     heapRecv: StringView
+    facts: cfacts.borrow
 } out String is {
     cb: ctxCname :ctx :tid
-    if fam == 2 then return "\{cb}_copy(\{heapRecv})"
-    return "\{cb}_copy(\{stackRecv})"
+    if fam == 2 then return (stating :facts from: callFacts text: "\{cb}_copy(\{heapRecv})")
+    return (stating :facts from: callFacts text: "\{cb}_copy(\{stackRecv})")
 }
 
 # emitCopyConversion -- `.copy`, whose shape depends on the receiver family. A
