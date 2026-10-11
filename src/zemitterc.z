@@ -3956,9 +3956,6 @@ Ctx: class {
     # variables that borrow rather than own, so scope exit frees nothing for
     # them
     borrowedVars: (IdMapV ztypes.vid v: bool)
-    # whether a collection `get` is being emitted from code rather than from a
-    # fragment, which changes the borrow it takes
-    colGetFromCode: bool
     # String's type id
     strTid: ztypes.tid
     # StringView's type id
@@ -9598,14 +9595,7 @@ rhsIsBorrowGet: function {
         isC: (isListOriginOf :symtab :ctx tid: bt) or (isListViewOriginOf :symtab :ctx tid: bt)
         if isC.not then return false
         if isMut then {
-            return (
-                ctx.colGetFromCode and
-                (elemRefByPtr
-                    :symtab
-                    :ctx
-                    tid: (listElemType :symtab monoId: bt)
-                )
-            )
+            return (elemRefByPtr :symtab :ctx tid: (listElemType :symtab monoId: bt))
         }
         return (listGetIsPtr :symtab :ctx monoId: bt)
     } else {
@@ -30519,16 +30509,13 @@ elemRefByPtr: function {
     return tt == ztypes.ztypetype.variantType
 }
 
-# listGetIsPtr -- the `get` of this List/ListView mono returns a pointer. False
-# while the runtime templates still carry their own by-value `get` (the
-# emitted C must agree with whichever compiler read the template), so the
-# lowering flips atomically when `get` moves into emitColGet.
+# listGetIsPtr -- the `get` of this List/ListView mono returns a pointer: its
+# element borrows by pointer (emitColGet writes it so).
 listGetIsPtr: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     monoId: ztypes.tid
 } out bool is {
-    if ctx.colGetFromCode.not then return false
     return (elemBorrowsByPtr :symtab :ctx tid: (listElemType :symtab :monoId))
 }
 
@@ -34319,21 +34306,12 @@ emitC: function {
         breakLabelCleanupVar: List String
         breakLabelCleanupRaw: ListVal ztypes.vid
         borrowedVars: (IdMapV ztypes.vid v: bool)
-        colGetFromCode: false
         strTid: strId
         svTid: svId
         converrorTid: cerrId
         boolTid: boolId
         :origins
     )
-    {
-        lgp: "\{runtimeDir}/z_List.c.tmpl"
-        lgt: readTemplateCached :ctx path: lgp.stringView
-        lgv: lgt.stringView
-        if lgv.length > 0 when (lgv.contains needle: "_get(").not then {
-            ctx.colGetFromCode = true
-        }
-    }
     loadNativeTbl :ctx ast: program :runtimeDir
     linkLibs: List String
     for each lb: libs loop linkLibs.append from: lb.copy
@@ -34916,7 +34894,7 @@ emitListMono: function {
     )
     useGet: monoMemberUsed :symtab :monoId nameId: zast.wellKnown.slot.wkGet
     useMut: monoMemberUsed :symtab :monoId nameId: zast.wellKnown.slot.wkGetMut
-    if ctx.colGetFromCode when useGet or useMut then {
+    if useGet or useMut then {
         (emitColGet
             nm: nm.stringView
             ect: ect.stringView
@@ -35463,11 +35441,7 @@ emitListViewMono: function {
         buf.append t2
         buf.append "\n"
     }
-    if ctx.colGetFromCode when (monoMemberUsed
-        :symtab
-        :monoId
-        nameId: zast.wellKnown.slot.wkGet
-    ) then {
+    if (monoMemberUsed :symtab :monoId nameId: zast.wellKnown.slot.wkGet) then {
         (emitColGet
             nm: nm.stringView
             ect: ect.stringView
