@@ -127,6 +127,10 @@ reference to another type's object, so only #~"borrow" or #~"view" narrows it:
 
 #---: ownership_marker
 
+#~"drop" ends a value term only -- #~"x.drop" is a statement that ends a
+borrow or destroys what #~"x" owns. A declaration that writes it
+(#~"s: String.drop") is refused: it is no declaration marker.
+
 #code:
   : "take" | "borrow" | "view" | "hold" | "drop"
 
@@ -151,8 +155,11 @@ literals themselves are also identifiers.
 #~"dot" (".") has special limitations. It may only be used once and only in
 floating point style numeric literals.
 
-Floats optionally start with a sign, then a numeric digit must follow. After
-the dot a numeric digit is also required.
+Floats optionally start with a sign, then a numeric digit must follow. A float
+is written with a decimal point, a digit required on each side of it, or with a
+decimal exponent: #~"e" or #~"E" and an optionally signed power of ten
+(#~"1e15", #~"2.0E-2"). A hexadecimal or binary literal's #~"e" is a digit,
+never an exponent.
 
 In the rare case where a numeric method name is called on a numeric identifier,
 parentheses can be used to force the call (and prevent the compiler from
@@ -160,6 +167,7 @@ interpreting as a single float identifier): #~"(123).456"
 
 #code:
   : \[ "+" | "-" \] ( "0" . "9" ) { #>"id-char" } "." ( "0" . "9" ) { #>"id-char" }
+  | \[ "+" | "-" \] ( "0" . "9" ) { "0" . "9" } ( "e" | "E" ) \[ "+" | "-" \] ( "0" . "9" ) { "0" . "9" }
 
 #---: id_char
 
@@ -226,8 +234,8 @@ evaluate both operands.
 
 At least one #~"when" + #~"then" #_*"must" appear before an #~"else".
 
-#~"else" is optional. When used as a statement, a missing #~"else" simply
-means the #~"if" produces no value on the false path.
+#~"else" is optional when the #~"if" is a statement: a missing #~"else"
+simply means nothing runs on the false path.
 
 #~"if" can be used as an expression. When used as an expression, every
 completing #~"then" / #~"else" branch contributes to the result type.
@@ -235,12 +243,12 @@ Non-completing branches (#~"return", #~"break", #~"continue") are excluded
 from type unification.
 
 #ul:
-  [#*: If #~"else" is present and every completing branch produces the
-    same type #~"T", the expression's type is #~"T".]
-  [#*: If #~"else" is absent, or branch types do not unify, the compiler
-    cannot prove the expression is exhaustive and lifts the result into an
-    optional: the expression's type becomes #~"optional(T)", with #~"null"
-    on any uncovered path.]
+  [#*: Every completing branch produces the same type #~"T", and the
+    expression's type is #~"T".]
+  [#*: An #~"if" used as a value needs an #~"else": without one it yields
+    nothing when no condition holds, and it is refused.]
+  [#*: Branches that yield different types are refused: an #~"if" used as a
+    value yields one type.]
 
 A #~"then" clause is required. So is a condition: #~"if then ..." is rejected
 with #_*"Expected operation (condition) for 'if'".
@@ -502,9 +510,10 @@ read the same way: a branch written without braces ends with its line.
 
 #---: data_definition
 
-Create a constant array of data. A reftype. A homogenous block of numeric
-valtype items only (no records). Value and length is known at compile time.
-Length is stored within data by the compiler.
+Create a constant block of data: one static array the program holds, read
+through the block's name as a value -- an #~"intdata", #~"floatdata" or
+#~"stringdata" view of it. Its elements are numbers or strings, one kind per
+block (no records). Value and length are known at compile time.
 
 A #~"data" block with no elements #**"must" give its value type with
 #~"out" (#~"data {} out intdata u8").
@@ -753,7 +762,7 @@ Note that #~"with" uses a bare expression for the #~"do" argument (eg. #~"for",
 flow control expression (#~"if", #~"for").
 
 #code:
-: "with" #>"label" #>"operation" "do" #>"expression"
+  : "with" #>"label" #>"operation" "do" #>"expression"
 
 #---: expression
 

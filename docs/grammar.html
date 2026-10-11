@@ -239,6 +239,9 @@ reference to another type's object, so only <code>borrow</code> or <code>view</c
 <code>h: T.private.view</code>.</p>
 <pre><code>: ( "private" [ "." ( "borrow" | "view" ) ] ) | <a href="#ownership-marker">ownership_marker</a></code></pre>
 <h3 id="ownership-marker"><a href="#ownership-marker">2.7. ownership_marker</a></h3>
+<p><code>drop</code> ends a value term only -- <code>x.drop</code> is a statement that ends a
+borrow or destroys what <code>x</code> owns. A declaration that writes it
+(<code>s: String.drop</code>) is refused: it is no declaration marker.</p>
 <pre><code>: "take" | "borrow" | "view" | "hold" | "drop"</code></pre>
 <h3 id="bound"><a href="#bound">2.8. bound</a></h3>
 <p>The bound of a generic parameter, <code>T: anyval.generic</code>.</p>
@@ -251,12 +254,16 @@ literals themselves are also identifiers.</p>
 <h3 id="id-float"><a href="#id-float">2.10. id_float</a></h3>
 <p><code>dot</code> (".") has special limitations. It may only be used once and only in
 floating point style numeric literals.</p>
-<p>Floats optionally start with a sign, then a numeric digit must follow. After
-the dot a numeric digit is also required.</p>
+<p>Floats optionally start with a sign, then a numeric digit must follow. A float
+is written with a decimal point, a digit required on each side of it, or with a
+decimal exponent: <code>e</code> or <code>E</code> and an optionally signed power of ten
+(<code>1e15</code>, <code>2.0E-2</code>). A hexadecimal or binary literal's <code>e</code> is a digit,
+never an exponent.</p>
 <p>In the rare case where a numeric method name is called on a numeric identifier,
 parentheses can be used to force the call (and prevent the compiler from
 interpreting as a single float identifier): <code>(123).456</code></p>
-<pre><code>: [ "+" | "-" ] ( "0" . "9" ) { <a href="#id-char">id_char</a> } "." ( "0" . "9" ) { <a href="#id-char">id_char</a> }</code></pre>
+<pre><code>: [ "+" | "-" ] ( "0" . "9" ) { <a href="#id-char">id_char</a> } "." ( "0" . "9" ) { <a href="#id-char">id_char</a> }
+| [ "+" | "-" ] ( "0" . "9" ) { "0" . "9" } ( "e" | "E" ) [ "+" | "-" ] ( "0" . "9" ) { "0" . "9" }</code></pre>
 <h3 id="id-char"><a href="#id-char">2.11. id_char</a></h3>
 <p>Allowable characters in an identifier. The set below is the full inclusion
 list. Any character that is not in this list, including the structural
@@ -308,19 +315,19 @@ Order matters; <code>when</code> conditions short-circuit when false. This is th
 short-circuit form: <code>bool</code>'s <code>and</code> / <code>or</code> are ordinary operations and
 evaluate both operands.</p>
 <p>At least one <code>when</code> + <code>then</code> <em><strong>must</strong></em> appear before an <code>else</code>.</p>
-<p><code>else</code> is optional. When used as a statement, a missing <code>else</code> simply
-means the <code>if</code> produces no value on the false path.</p>
+<p><code>else</code> is optional when the <code>if</code> is a statement: a missing <code>else</code>
+simply means nothing runs on the false path.</p>
 <p><code>if</code> can be used as an expression. When used as an expression, every
 completing <code>then</code> / <code>else</code> branch contributes to the result type.
 Non-completing branches (<code>return</code>, <code>break</code>, <code>continue</code>) are excluded
 from type unification.</p>
 <ul>
-<li>If <code>else</code> is present and every completing branch produces the
-    same type <code>T</code>, the expression's type is <code>T</code>.</li>
-<li>If <code>else</code> is absent, or branch types do not unify, the compiler
-    cannot prove the expression is exhaustive and lifts the result into an
-    optional: the expression's type becomes <code>optional(T)</code>, with <code>null</code>
-    on any uncovered path.</li>
+<li>Every completing branch produces the same type <code>T</code>, and the
+    expression's type is <code>T</code>.</li>
+<li>An <code>if</code> used as a value needs an <code>else</code>: without one it yields
+    nothing when no condition holds, and it is refused.</li>
+<li>Branches that yield different types are refused: an <code>if</code> used as a
+    value yields one type.</li>
 </ul>
 <p>A <code>then</code> clause is required. So is a condition: <code>if then ...</code> is rejected
 with <em><strong>Expected operation (condition) for 'if'</strong></em>.</p>
@@ -524,9 +531,10 @@ read the same way: a branch written without braces ends with its line.</p>
 | <a href="#match-expression">match_expression</a>
 | <a href="#operation">operation</a></code></pre>
 <h3 id="data-definition"><a href="#data-definition">2.21. data_definition</a></h3>
-<p>Create a constant array of data. A reftype. A homogenous block of numeric
-valtype items only (no records). Value and length is known at compile time.
-Length is stored within data by the compiler.</p>
+<p>Create a constant block of data: one static array the program holds, read
+through the block's name as a value -- an <code>intdata</code>, <code>floatdata</code> or
+<code>stringdata</code> view of it. Its elements are numbers or strings, one kind per
+block (no records). Value and length are known at compile time.</p>
 <p>A <code>data</code> block with no elements <strong>must</strong> give its value type with
 <code>out</code> (<code>data {} out intdata u8</code>).</p>
 <p>When refering to <code>data</code> the compiler can convert element access, length and
