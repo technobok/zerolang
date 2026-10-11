@@ -83,9 +83,17 @@ Table of Contents</div>
 <ul>
 <li><a href="#units">Units</a>
 </li>
-<li><a href="#runtime-backed-stdlib-units">Runtime-backed stdlib units</a>
+<li><a href="#finding-a-unit">Finding a unit</a>
 </li>
-<li><a href="#implementation-status">Implementation status</a>
+<li><a href="#visibility">Visibility</a>
+</li>
+<li><a href="#generic-units">Generic units</a>
+</li>
+<li><a href="#toolchain-requirements">Toolchain requirements</a>
+</li>
+<li><a href="#the-project-unit">The project unit </a>
+</li>
+<li><a href="#runtime-backed-stdlib-units">Runtime-backed stdlib units</a>
 </li>
 </ul>
 </li>
@@ -94,75 +102,65 @@ Table of Contents</div>
 </nav>
 <main id="content">
 <h2 id="units"><a href="#units">1. Units</a></h2>
-<ul>
-<li>modules are files and packages are directories
-<ul>
-<li>one file, one module.  Cannot spread a module over multiple files, no
-        include
-<ul>
-<li>but can make a module that exports submodules, so you can control
-            structure and expose it with a single exported var</li>
-<li>can have a file (with extension) and a directory with the same name but:
-<ul>
-<li>the file is the one that is loaded from 'outside', ie. the public
-                part</li>
-<li>the dir is only accessable from the file.  It contains private
-                modules so the module can be split up into files but the top level
-                file controls what is exposed to the outside world</li>
-<li>submodules are searched in the dir first before looking in the global
-                file tree</li>
-</ul>
-</li>
-</ul>
-</li>
-</ul>
-</li>
-<li>packages (dirs) can only contain modules (files)</li>
-<li>a name written in a module resolves outward: the module itself, then each
-    module enclosing it up to the file unit, then core. A submodule sees its
-    parents; the restriction is the other way (see privacy below)</li>
-<li>modules (and packages) 'own' the namespace where they are located</li>
-<li>modules can shadow vars in other files and dirs (but only within themselves)
-<ul>
-<li>to find a var definition, look in current module, if not found, go look
-      in the directory tree (first relative, then from the top level module path)</li>
-</ul>
-</li>
-<li>a unit's top-level definitions are all public by default. A
-    'public: unit { ... }' block restricts the unit's public interface to the
-    listed definitions; an unlisted definition is private and unreachable from
-    another unit (E0101). An entry may rename what it exposes -- ':name' exposes
-    'name' as itself, 'alias: internal' exposes 'internal' under the name 'alias'
-    (see the Visibility section of the language spec).</li>
-<li>a 'require:' block states what the unit needs from the host toolchain:
-    'require: unit { library: "quadmath" }'. It is an ordinary inline unit, so
-    it is written and parsed like any other; what is layered over it is a
-    schema. Every entry must be a key the compiler consumes -- today only
-    'library:', whose value is a compile-time string naming a link library --
-    and the block must declare at least one requirement, because a key nothing
-    reads would be silently ignored (error E0038). The requirement applies only
-    when the declaring unit is actually reached: a program that never uses the
-    unit does not link its library.</li>
-<li>modules and packages are never capitalised (to cope with case insensitive
-filesystems). So they are always public (but see private submodules above)
-<ul>
-<li>there are other restrictions on module and package names because they
-        must be valid identifiers (up to the extension) eg. can't start with a
-        number</li>
-</ul>
-</li>
-<li>modules have no initialisation
-<ul>
-<li>so they don't need to be imported</li>
-<li>can't have any special data structures (just static, readonly simple vars
-        and arrays (and dicts, but special simplified dict that are arrays inside
-          and are not O(1) on access ?....)</li>
-<li>any special state must be provided by an api.  Eg. an init function or
-        similar</li>
-</ul>
-</li>
-</ul>
-<h2 id="runtime-backed-stdlib-units"><a href="#runtime-backed-stdlib-units">2. Runtime-backed stdlib units</a></h2>
+<p>A program is built from units. A <em><strong>unit</strong></em> is a namespace of definitions:
+constants, data blocks, types, functions and other units. Every source file is
+one unit, named by its file name without the extension -- <code>geom.z</code> is the unit
+<code>geom</code> -- and a unit written inside another (<code>inner: unit { ... }</code>) is an
+<em><strong>inline unit</strong></em>, an ordinary definition of the unit around it. A unit has no
+initialisation and is never imported: a name that reaches it loads it, and
+only what the program reaches is checked and emitted.</p>
+<p>A unit's name is written in lowercase ASCII letters, digits and <code>_</code>, so that
+it is the same file name on every filesystem; a file named otherwise is not
+found as a unit.</p>
+<h2 id="finding-a-unit"><a href="#finding-a-unit">2. Finding a unit</a></h2>
+<p>A name the program writes is resolved outward: the unit it is written in, each
+unit enclosing that one up to the file unit, then <code>core</code>. A file unit is
+found on the <em><strong>source roots</strong></em> -- the project's <code>sourceDirs</code> when a
+<code>project.z</code> names them, else the <code>--src</code> directories, else the current
+directory -- the first root searched first, and then in the standard library
+(<code>--system</code>). See <a href="./zc.html">zc</a> (Projects) for <code>project.z</code> and its
+settings.</p>
+<p>A file unit may keep <em><strong>implementation subunits</strong></em> in a directory of its own
+name: <code>geom.z</code> beside <code>geom/</code> whose files are <code>geom</code>'s subunits. A name
+written in <code>geom</code> looks in <code>geom/</code> before the roots, so a subunit can
+shadow a unit of the same name elsewhere -- but only within <code>geom</code>. A
+subunit sees its parents as every unit does: it resolves outward through them.</p>
+<h2 id="visibility"><a href="#visibility">3. Visibility</a></h2>
+<p>A unit's top-level definitions are public by default. A
+<code>public: unit { ... }</code> block restricts the unit's surface to what it lists;
+an unlisted definition is private and unreachable from another unit (E0101).
+An entry may rename what it exposes: <code>:name</code> exposes <code>name</code> as itself,
+<code>alias: internal</code> exposes <code>internal</code> as <code>alias</code>. An implementation
+subunit is private to its parent unless the parent's <code>public:</code> block lists
+it (<code>public: unit { :impl }</code>), which is also what loads it for others.
+Privacy governs who may reach <em><strong>into</strong></em> a unit; it says nothing about what the
+unit sees. See the Visibility section of
+<a href="./spec.html">the language specification</a>.</p>
+<h2 id="generic-units"><a href="#generic-units">4. Generic units</a></h2>
+<p>A unit may be generic over types or values. An inline unit declares its
+parameters in its <code>as</code> block (<code>mathops: unit as { t: anyval.generic ... }</code>);
+a file unit declares them at the top of the file, beside its other
+definitions (<code>t: anyval.generic</code> in <code>cells.z</code>). An instance is named by
+applying the unit to its arguments -- <code>(cells t: i64)</code>, at unit level
+<code>ic: (cells t: i64)</code> -- and is a namespace, not a value: the same arguments
+name the same instance wherever they are written, and a type the unit
+declares is named through it (<code>ic.Cell</code>). See the Generic Units section of
+the specification.</p>
+<h2 id="toolchain-requirements"><a href="#toolchain-requirements">5. Toolchain requirements</a></h2>
+<p>A <code>require:</code> block states what a unit needs from the host toolchain:
+<code>require: unit { library: "quadmath" }</code>. It is an ordinary inline unit with
+a schema layered over it: every entry must be a key the compiler consumes --
+today only <code>library:</code>, a compile-time string naming a link library -- and the
+block must declare at least one (E0038). A requirement applies only when its
+unit is reached: a program that never uses the unit does not link the library.</p>
+<h2 id="the-project-unit"><a href="#the-project-unit">6. The project unit <code>z</code></a></h2>
+<p>Every program can read the generated unit <code>z</code>: <code>z.build</code> describes the
+build (the target's architecture and operating system, the triple) and
+<code>z.project</code> the project's own <code>project.z</code> settings, such as
+<code>z.project.sourceDirs</code>. It is served by the compiler, with a copy on disk
+under <code>.zerolang/</code> for people and editors. See
+<a href="./z_unit.html">the z unit</a>.</p>
+<h2 id="runtime-backed-stdlib-units"><a href="#runtime-backed-stdlib-units">7. Runtime-backed stdlib units</a></h2>
 <p>The core stdlib units (<code>system</code>, <code>core</code>, <code>collections</code>,
 <code>io</code>, <code>os</code>, <code>cli</code>) are declaration surfaces for the C runtime:
 their types and <code>is native</code> functions are implemented under
@@ -170,34 +168,12 @@ their types and <code>is native</code> functions are implemented under
 compiled zerolang (demand-gated). Type methods there cannot carry
 <code>.z</code> bodies. Details in the compiler doc's "Runtime-backed stdlib
 units" section.</p>
-<h2 id="implementation-status"><a href="#implementation-status">3. Implementation status</a></h2>
-<p>The parser (<code>lib/system/zparser.z</code> -- <code>loadUnit</code> / <code>parse</code>) implements the search
-path above: <code>core</code> is loaded first, and a referenced name's submodules in a
-same-named directory are searched before the top-level tree. The type checker's
-bare-name resolution mirrors the same precedence (current unit first, then the
-stdlib units) and locks each definition to one canonical type id -- see
-<code>typechecker.pdoc:Type-name resolution and the canonical-id rule</code>. Most
-programs (the test corpus and the self-hosted compiler) use flat units with
-<em><strong>dotted</strong></em> cross-unit references (<code>zast.Node</code>); the same-named-directory
-submodule form is what the standard library uses for <code>system</code>'s gated
-numerics (<code>lib/system/system/</code>), and it is exercised by
-<code>tests/fixtures/emitc_corpus/hidden_subunit.z</code> and <code>subunit_depth.z</code>, a
-subunit with a subunit of its own.</p>
-<p>Two visibility rules follow from how each form is reached. An
-<em><strong>inline unit</strong></em> is an ordinary top-level definition and so is public by
-default, subject to its unit's <code>public:</code> block. An
-<em><strong>implementation subunit</strong></em> is private to the unit that owns it by default:
-its file is read only because that unit named it, so it is not on the default
-surface, and reaching past a unit into one is an error (E0101). A
-<code>public:</code> block is the one visibility mechanism: when the unit has one, the
-block is the surface, and a subunit listed there (<code>public: unit { :impl }</code>)
-is public -- the listing is what loads it
-(<code>tests/fixtures/emitc_corpus/public_subunit_listed.z</code>). Privacy governs who may
-reference <em><strong>into</strong></em> a subunit; it says nothing about what the subunit sees. A
-subunit resolves outward like every other unit: its own definitions, then its
-parent's, up through the file unit, then <code>core</code>
-(<code>tests/fixtures/emitc_corpus/subunit_parent_read.z</code> and
-<code>subunit_grandparent_read.z</code>).</p>
+<p>The fixtures that pin these rules: <code>hidden_subunit.z</code> and
+<code>subunit_depth.z</code> (subunits, and a subunit's own subunit),
+<code>public_subunit_listed.z</code> (a subunit a <code>public:</code> block lists),
+<code>subunit_parent_read.z</code> and <code>subunit_grandparent_read.z</code> (a subunit
+reading outward), <code>gfu_cells.z</code> with <code>generic_file_unit_types.z</code> (a
+generic file unit), all under <code>tests/fixtures/emitc_corpus</code>.</p>
 </main>
 </body>
 </html>

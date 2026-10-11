@@ -33,72 +33,76 @@
 
 #--: Units
 
-#ul:
-  [#*:
-    modules are files and packages are directories
-    #ul:
-      [#*: one file, one module.  Cannot spread a module over multiple files, no
-        include
-        #ul:
-          [#*: but can make a module that exports submodules, so you can control
-            structure and expose it with a single exported var]
-          [#*:
-            can have a file (with extension) and a directory with the same name but:
-            #ul:
-              [#*: the file is the one that is loaded from 'outside', ie. the public
-                part]
-              [#*: the dir is only accessable from the file.  It contains private
-                modules so the module can be split up into files but the top level
-                file controls what is exposed to the outside world]
-              [#*: submodules are searched in the dir first before looking in the global
-                file tree]
-            ]
-          ]
-        ]
-  [#*: packages (dirs) can only contain modules (files)]
-  [#*: a name written in a module resolves outward: the module itself, then each
-    module enclosing it up to the file unit, then core. A submodule sees its
-    parents; the restriction is the other way (see privacy below)]
-  [#*: modules (and packages) 'own' the namespace where they are located]
-  [#*: modules can shadow vars in other files and dirs (but only within themselves)
-    #ul:
-      [#*: to find a var definition, look in current module, if not found, go look
-      in the directory tree (first relative, then from the top level module path)]
-    ]
-  [#*: a unit's top-level definitions are all public by default. A
-    'public: unit { ... }' block restricts the unit's public interface to the
-    listed definitions; an unlisted definition is private and unreachable from
-    another unit (E0101). An entry may rename what it exposes -- ':name' exposes
-    'name' as itself, 'alias: internal' exposes 'internal' under the name 'alias'
-    (see the Visibility section of the language spec).]
-  [#*: a 'require:' block states what the unit needs from the host toolchain:
-    'require: unit { library: "quadmath" }'. It is an ordinary inline unit, so
-    it is written and parsed like any other; what is layered over it is a
-    schema. Every entry must be a key the compiler consumes -- today only
-    'library:', whose value is a compile-time string naming a link library --
-    and the block must declare at least one requirement, because a key nothing
-    reads would be silently ignored (error E0038). The requirement applies only
-    when the declaring unit is actually reached: a program that never uses the
-    unit does not link its library.]
-  [#*:
-    modules and packages are never capitalised (to cope with case insensitive
-    filesystems). So they are always public (but see private submodules above)
-    #ul:
-      [#*: there are other restrictions on module and package names because they
-        must be valid identifiers (up to the extension) eg. can't start with a
-        number]
-      ]
-  [#*:
-    modules have no initialisation
-    #ul:
-      [#*: so they don't need to be imported]
-      [#*: can't have any special data structures (just static, readonly simple vars
-        and arrays (and dicts, but special simplified dict that are arrays inside
-          and are not O(1) on access ?....)]
-      [#*: any special state must be provided by an api.  Eg. an init function or
-        similar]
-    ]
+A program is built from units. A #_*"unit" is a namespace of definitions:
+constants, data blocks, types, functions and other units. Every source file is
+one unit, named by its file name without the extension -- #~"geom.z" is the unit
+#~"geom" -- and a unit written inside another (#~"inner: unit { ... }") is an
+#_*"inline unit", an ordinary definition of the unit around it. A unit has no
+initialisation and is never imported: a name that reaches it loads it, and
+only what the program reaches is checked and emitted.
 
+A unit's name is written in lowercase ASCII letters, digits and #~"_", so that
+it is the same file name on every filesystem; a file named otherwise is not
+found as a unit.
+
+#--: Finding a unit
+
+A name the program writes is resolved outward: the unit it is written in, each
+unit enclosing that one up to the file unit, then #~"core". A file unit is
+found on the #_*"source roots" -- the project's #~"sourceDirs" when a
+#~"project.z" names them, else the #~"--src" directories, else the current
+directory -- the first root searched first, and then in the standard library
+(#~"--system"). See [#> to=./zc.html: zc] (Projects) for #~"project.z" and its
+settings.
+
+A file unit may keep #_*"implementation subunits" in a directory of its own
+name: #~"geom.z" beside #~"geom/" whose files are #~"geom"'s subunits. A name
+written in #~"geom" looks in #~"geom/" before the roots, so a subunit can
+shadow a unit of the same name elsewhere -- but only within #~"geom". A
+subunit sees its parents as every unit does: it resolves outward through them.
+
+#--: Visibility
+
+A unit's top-level definitions are public by default. A
+#~"public: unit { ... }" block restricts the unit's surface to what it lists;
+an unlisted definition is private and unreachable from another unit (E0101).
+An entry may rename what it exposes: #~":name" exposes #~"name" as itself,
+#~"alias: internal" exposes #~"internal" as #~"alias". An implementation
+subunit is private to its parent unless the parent's #~"public:" block lists
+it (#~"public: unit { :impl }"), which is also what loads it for others.
+Privacy governs who may reach #_*"into" a unit; it says nothing about what the
+unit sees. See the Visibility section of
+[#> to=./spec.html: the language specification].
+
+#--: Generic units
+
+A unit may be generic over types or values. An inline unit declares its
+parameters in its #~"as" block (#~"mathops: unit as { t: anyval.generic ... }");
+a file unit declares them at the top of the file, beside its other
+definitions (#~"t: anyval.generic" in #~"cells.z"). An instance is named by
+applying the unit to its arguments -- #~"(cells t: i64)", at unit level
+#~"ic: (cells t: i64)" -- and is a namespace, not a value: the same arguments
+name the same instance wherever they are written, and a type the unit
+declares is named through it (#~"ic.Cell"). See the Generic Units section of
+the specification.
+
+#--: Toolchain requirements
+
+A #~"require:" block states what a unit needs from the host toolchain:
+#~"require: unit { library: \"quadmath\" }". It is an ordinary inline unit with
+a schema layered over it: every entry must be a key the compiler consumes --
+today only #~"library:", a compile-time string naming a link library -- and the
+block must declare at least one (E0038). A requirement applies only when its
+unit is reached: a program that never uses the unit does not link the library.
+
+#--: The project unit #~"z"
+
+Every program can read the generated unit #~"z": #~"z.build" describes the
+build (the target's architecture and operating system, the triple) and
+#~"z.project" the project's own #~"project.z" settings, such as
+#~"z.project.sourceDirs". It is served by the compiler, with a copy on disk
+under #~".zerolang/" for people and editors. See
+[#> to=./z_unit.html: the z unit].
 
 #--: Runtime-backed stdlib units
 
@@ -110,34 +114,9 @@ compiled zerolang (demand-gated). Type methods there cannot carry
 #~".z" bodies. Details in the compiler doc's "Runtime-backed stdlib
 units" section.
 
-#--: Implementation status
-
-The parser (#~"lib/system/zparser.z" -- #~"loadUnit" / #~"parse") implements the search
-path above: #~"core" is loaded first, and a referenced name's submodules in a
-same-named directory are searched before the top-level tree. The type checker's
-bare-name resolution mirrors the same precedence (current unit first, then the
-stdlib units) and locks each definition to one canonical type id -- see
-#~"typechecker.pdoc:Type-name resolution and the canonical-id rule". Most
-programs (the test corpus and the self-hosted compiler) use flat units with
-#_*"dotted" cross-unit references (#~"zast.Node"); the same-named-directory
-submodule form is what the standard library uses for #~"system"'s gated
-numerics (#~"lib/system/system/"), and it is exercised by
-#~"tests/fixtures/emitc_corpus/hidden_subunit.z" and #~"subunit_depth.z", a
-subunit with a subunit of its own.
-
-Two visibility rules follow from how each form is reached. An
-#_*"inline unit" is an ordinary top-level definition and so is public by
-default, subject to its unit's #~"public:" block. An
-#_*"implementation subunit" is private to the unit that owns it by default:
-its file is read only because that unit named it, so it is not on the default
-surface, and reaching past a unit into one is an error (E0101). A
-#~"public:" block is the one visibility mechanism: when the unit has one, the
-block is the surface, and a subunit listed there (#~"public: unit { :impl }")
-is public -- the listing is what loads it
-(#~"tests/fixtures/emitc_corpus/public_subunit_listed.z"). Privacy governs who may
-reference #_*"into" a subunit; it says nothing about what the subunit sees. A
-subunit resolves outward like every other unit: its own definitions, then its
-parent's, up through the file unit, then #~"core"
-(#~"tests/fixtures/emitc_corpus/subunit_parent_read.z" and
-#~"subunit_grandparent_read.z").
-
+The fixtures that pin these rules: #~"hidden_subunit.z" and
+#~"subunit_depth.z" (subunits, and a subunit's own subunit),
+#~"public_subunit_listed.z" (a subunit a #~"public:" block lists),
+#~"subunit_parent_read.z" and #~"subunit_grandparent_read.z" (a subunit
+reading outward), #~"gfu_cells.z" with #~"generic_file_unit_types.z" (a
+generic file unit), all under #~"tests/fixtures/emitc_corpus".
