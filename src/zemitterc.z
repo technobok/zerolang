@@ -10607,6 +10607,54 @@ ownedReceiverHoist: function {
     return (hoistForAddress :ast :symtab :ctx av: expr tid: rtid argNid: rnid)
 }
 
+# emitKeyedProbe -- a Set's or Map's keyed probe, `fnC(recv, key)`: the
+# view-keyed form `fnCv` for a key that arrives as a view (viewForm, where the
+# family has one), a String key by pointer (stringKeyArgPointer), any other key
+# as it stands. A probe only reads its key.
+emitKeyedProbe: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    call: zast.callrow.view
+    # the probe's C function: the collection's C name and the member
+    fnC: String.view
+    bn: StringView
+    label: StringView
+    viewForm: bool
+    stringKey: bool
+    facts: cfacts.borrow
+} out String is {
+    if viewForm then {
+        kv: colArgAsStringViewExpr :ast :symtab :ctx :call :label
+        if kv.length > 0 then {
+            fnV: "\{fnC}v"
+            vargs: "\{bn}, \{kv}"
+            return (stating
+                :facts
+                from: callFacts
+                text: (orderClose prefix: String callee: fnV.stringView args: vargs.stringView)
+            )
+        }
+    }
+    kF: cfacts
+    k: colArgWith :ast :symtab :ctx :call facts: kF :label consumes: false
+    if stringKey then k = (stringKeyArgPointer
+        :ast
+        :symtab
+        :ctx
+        :call
+        :label
+        expr: k.stringView
+        exprF: kF
+    )
+    args: "\{bn}, \{k}"
+    return (stating
+        :facts
+        from: callFacts
+        text: (orderClose prefix: String callee: fnC.stringView args: args.stringView)
+    )
+}
+
 # emitSetMethodCall -- an arg-taking method on a Set-mono receiver (a heap
 # pointer, so the receiver passes directly without `&`). "" when not a Set
 # call; the no-arg `.length`/`.iterate` reads ride the dottedpath leg.
@@ -10627,54 +10675,30 @@ emitSetMethodCall: function {
         e0: "\{cb}_add(\{bn}, \{v})"
         return (stating :facts from: callFacts text: e0)
     }
-    if mnId == zast.wellKnown.slot.wkHas then {
-        viv: colArgAsStringViewExpr :ast :symtab :ctx :call label: "item"
-        if viv.length > 0 then return (stating
-            :facts
-            from: callFacts
-            text: "\{cb}_hasv(\{bn}, \{viv})"
-        )
-        vF: cfacts
-        v: colArgWith :ast :symtab :ctx :call facts: vF label: "item" consumes: false
-        if (setElemIsString :symtab :ctx monoId: bt) then {
-            return (stating :facts from: callFacts text: "\{cb}_has(\{bn}, \{(stringKeyArgPointer
-                :ast
-                :symtab
-                :ctx
-                :call
-                label: "item"
-                expr: v.stringView
-                exprF: vF
-            )})"
-            )
-        }
-        e1: "\{cb}_has(\{bn}, \{v})"
-        return (stating :facts from: callFacts text: e1)
-    }
-    if mnId == zast.wellKnown.slot.wkDelete then {
-        viv: colArgAsStringViewExpr :ast :symtab :ctx :call label: "item"
-        if viv.length > 0 then return (stating
-            :facts
-            from: callFacts
-            text: "\{cb}_deletev(\{bn}, \{viv})"
-        )
-        vF: cfacts
-        v: colArgWith :ast :symtab :ctx :call facts: vF label: "item" consumes: false
-        if (setElemIsString :symtab :ctx monoId: bt) then {
-            return (stating :facts from: callFacts text: "\{cb}_delete(\{bn}, \{(stringKeyArgPointer
-                :ast
-                :symtab
-                :ctx
-                :call
-                label: "item"
-                expr: v.stringView
-                exprF: vF
-            )})"
-            )
-        }
-        e2: "\{cb}_delete(\{bn}, \{v})"
-        return (stating :facts from: callFacts text: e2)
-    }
+    if mnId == zast.wellKnown.slot.wkHas then return (emitKeyedProbe
+        :ast
+        :symtab
+        :ctx
+        :call
+        fnC: "\{cb}_has"
+        bn: bn.stringView
+        label: "item"
+        viewForm: true
+        stringKey: (setElemIsString :symtab :ctx monoId: bt)
+        :facts
+    )
+    if mnId == zast.wellKnown.slot.wkDelete then return (emitKeyedProbe
+        :ast
+        :symtab
+        :ctx
+        :call
+        fnC: "\{cb}_delete"
+        bn: bn.stringView
+        label: "item"
+        viewForm: true
+        stringKey: (setElemIsString :symtab :ctx monoId: bt)
+        :facts
+    )
     return ""
 }
 
@@ -10708,72 +10732,42 @@ emitMapMethodCall: function {
         )
         )
     }
-    if mnId == zast.wellKnown.slot.wkGet then {
-        vkv: colArgAsStringViewExpr :ast :symtab :ctx :call label: "key"
-        if vkv.length > 0 then return (stating
-            :facts
-            from: callFacts
-            text: "\{cb}_getv(\{bn}, \{vkv})"
-        )
-        vkF: cfacts
-        vk: colArgWith :ast :symtab :ctx :call facts: vkF label: "key" consumes: false
-        if (mapKeyIsString :symtab :ctx monoId: bt) then {
-            return (stating :facts from: callFacts text: "\{cb}_get(\{bn}, \{(stringKeyArgPointer
-                :ast
-                :symtab
-                :ctx
-                :call
-                label: "key"
-                expr: vk.stringView
-                exprF: vkF
-            )})"
-            )
-        }
-        e1: "\{cb}_get(\{bn}, \{vk})"
-        return (stating :facts from: callFacts text: e1)
-    }
-    if mnId == zast.wellKnown.slot.wkHas then {
-        vkv: colArgAsStringViewExpr :ast :symtab :ctx :call label: "key"
-        if vkv.length > 0 then return (stating
-            :facts
-            from: callFacts
-            text: "\{cb}_hasv(\{bn}, \{vkv})"
-        )
-        vkF: cfacts
-        vk: colArgWith :ast :symtab :ctx :call facts: vkF label: "key" consumes: false
-        if (mapKeyIsString :symtab :ctx monoId: bt) then {
-            return (stating :facts from: callFacts text: "\{cb}_has(\{bn}, \{(stringKeyArgPointer
-                :ast
-                :symtab
-                :ctx
-                :call
-                label: "key"
-                expr: vk.stringView
-                exprF: vkF
-            )})"
-            )
-        }
-        e2: "\{cb}_has(\{bn}, \{vk})"
-        return (stating :facts from: callFacts text: e2)
-    }
-    if mnId == zast.wellKnown.slot.wkRemove then {
-        vkF: cfacts
-        vk: colArgWith :ast :symtab :ctx :call facts: vkF label: "key" consumes: false
-        if (mapKeyIsString :symtab :ctx monoId: bt) then {
-            return (stating :facts from: callFacts text: "\{cb}_remove(\{bn}, \{(stringKeyArgPointer
-                :ast
-                :symtab
-                :ctx
-                :call
-                label: "key"
-                expr: vk.stringView
-                exprF: vkF
-            )})"
-            )
-        }
-        e: "\{cb}_remove(\{bn}, \{vk})"
-        return (stating :facts from: callFacts text: e)
-    }
+    if mnId == zast.wellKnown.slot.wkGet then return (emitKeyedProbe
+        :ast
+        :symtab
+        :ctx
+        :call
+        fnC: "\{cb}_get"
+        bn: bn.stringView
+        label: "key"
+        viewForm: true
+        stringKey: (mapKeyIsString :symtab :ctx monoId: bt)
+        :facts
+    )
+    if mnId == zast.wellKnown.slot.wkHas then return (emitKeyedProbe
+        :ast
+        :symtab
+        :ctx
+        :call
+        fnC: "\{cb}_has"
+        bn: bn.stringView
+        label: "key"
+        viewForm: true
+        stringKey: (mapKeyIsString :symtab :ctx monoId: bt)
+        :facts
+    )
+    if mnId == zast.wellKnown.slot.wkRemove then return (emitKeyedProbe
+        :ast
+        :symtab
+        :ctx
+        :call
+        fnC: "\{cb}_remove"
+        bn: bn.stringView
+        label: "key"
+        viewForm: false
+        stringKey: (mapKeyIsString :symtab :ctx monoId: bt)
+        :facts
+    )
     return ""
 }
 
