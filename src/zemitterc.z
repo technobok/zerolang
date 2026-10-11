@@ -5088,6 +5088,26 @@ isStringyTid: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
     return tid == ctx.svTid
 }
 
+# readOnce -- `text`, which its caller spells more than once, as it may be
+# spelled: bound to a temp first when reading it twice would repeat work (its
+# facts say `once`). A place -- a load of a call's result, `(*get(..))`, or a
+# member read off one -- is storage something else owns, so its temp owns
+# nothing; a value's temp owns what the checker's temporary for `nid` owns.
+readOnce: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    text: StringView
+    textF: cfacts
+    tid: ztypes.tid
+    # the value's node, 0 for none
+    nid: zast.nodeid
+} out String is {
+    if textF.once.not then return text.string
+    if textF.place then return (hoistForAddress :ast :symtab :ctx av: text :tid argNid: zast.nodeid)
+    return (hoistForAddress :ast :symtab :ctx av: text :tid argNid: nid)
+}
+
 # svValueForm -- a String/StringView operand as a by-value StringView C
 # expression (a String operand view-converts via a compound literal). The
 # literal reads a String operand twice, for its data and its size: a place that
@@ -5117,13 +5137,14 @@ svValueForm: function {
         if rex.stringView == expr then stateFacts facts: rexF from: facts
         rf: knownFacts f: rexF s: rex.stringView
         if rf.once when rf.place then {
-            rex = (hoistForAddress
+            rex = (readOnce
                 :ast
                 :symtab
                 :ctx
-                av: rex.stringView
+                text: rex.stringView
+                textF: rf
                 tid: ctx.strTid
-                argNid: zast.nodeid
+                nid: zast.nodeid
             )
             valueVid = ztypes.vid.zero
         }
@@ -6580,13 +6601,14 @@ emitStringArgMethod: function {
             } else if argPtr.not when argvalF.once when argvalF.place then {
                 # a load of a call's result is read for its data and its size:
                 # bound once, into a temp that owns nothing
-                argval = (hoistForAddress
+                argval = (readOnce
                     :ast
                     :symtab
                     :ctx
-                    av: argval.stringView
+                    text: argval.stringView
+                    textF: argvalF
                     tid: ctx.strTid
-                    argNid: zast.nodeid
+                    nid: zast.nodeid
                 )
             }
             aacc: "."
@@ -16248,18 +16270,72 @@ callBaseTemp: function {
     )
 }
 
+# nestedStrMember -- a sized str's member read through a field: its length, its
+# size constant, its String, and its view, which reads the base twice. "" for
+# any other member.
+nestedStrMember: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    mnId: zast.nameid
+    nlid: ztypes.tid
+    baseAtom: StringView
+    baseAtomF: cfacts
+    baseNid: zast.nodeid
+    facts: cfacts.borrow
+} out String is {
+    nstrcb: ctxCname :ctx tid: nlid
+    if mnId == zast.wellKnown.slot.wkLength then return (stating
+        :facts
+        from: (memberFacts b: baseAtomF)
+        text: "\{baseAtom}.len"
+    )
+    if mnId == zast.wellKnown.slot.wkSize then return (stating
+        :facts
+        from: constFacts
+        text: "\{nstrcb}_size"
+    )
+    if mnId == zast.wellKnown.slot.wkString then return (stating
+        :facts
+        from: callFacts
+        text: "\{nstrcb}_string(\{baseAtom})"
+    )
+    if (ztypecheck.isStringViewMember nameId: mnId) then {
+        bound: String
+        if baseAtomF.once then bound = (readOnce
+            :ast
+            :symtab
+            :ctx
+            text: baseAtom
+            textF: baseAtomF
+            tid: nlid
+            nid: baseNid
+        )
+        sb: baseAtom
+        if bound.length > 0 then sb = bound.stringView
+        return (stating
+            :facts
+            from: literalFacts
+            text: "(\{ctx.svC}_t){ .data = \{sb}.data, .size = \{sb}.len }"
+        )
+    }
+    return ""
+}
+
 # emitNestedCollectionBase -- a str or collection mono reached through a FIELD.
 # Set and Map are heap pointers and pass directly; the id-keyed pair are stack
 # structs and go by address. `recvIsPtr` is whether the base expression is
 # already a pointer, which picks the accessor a counter reads through.
 emitNestedCollectionBase: function {
+    ast: Ast.view
     symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
+    ctx: Ctx
     mn2: StringView
     mnId: zast.nameid
     nlid: ztypes.tid
     baseAtom: StringView
     baseAtomF: cfacts
+    baseNid: zast.nodeid
     bs9vid: ztypes.vid
     recvIsPtr: bool
     facts: cfacts.borrow
@@ -16267,12 +16343,14 @@ emitNestedCollectionBase: function {
     eCt: nestedCounterRead :symtab :ctx :mnId :nlid :baseAtom :baseAtomF :recvIsPtr :facts
     if eCt.length > 0 then return eCt
     wmn: (windowMemberRead
+        :ast
         :symtab
         :ctx
         :mnId
         tid: nlid
         base: baseAtom
         baseF: baseAtomF
+        :baseNid
         :recvIsPtr
         vid: bs9vid
         :facts
@@ -16293,29 +16371,8 @@ emitNestedCollectionBase: function {
         }
     }
     if (originIsTid :symtab tid: nlid originTid: (ctx.origins.get i: family.slot.str)) then {
-        nstrcb: ctxCname :ctx tid: nlid
-        if mnId == zast.wellKnown.slot.wkLength then return (stating
-            :facts
-            from: (memberFacts b: baseAtomF)
-            text: "\{baseAtom}.len"
-        )
-        if mnId == zast.wellKnown.slot.wkSize then return (stating
-            :facts
-            from: constFacts
-            text: "\{nstrcb}_size"
-        )
-        if mnId == zast.wellKnown.slot.wkString then return (stating
-            :facts
-            from: callFacts
-            text: "\{nstrcb}_string(\{baseAtom})"
-        )
-        if (ztypecheck.isStringViewMember nameId: mnId) then {
-            return (stating
-                :facts
-                from: literalFacts
-                text: "(\{ctx.svC}_t){ .data = \{baseAtom}.data, .size = \{baseAtom}.len }"
-            )
-        }
+        nsm: nestedStrMember :ast :symtab :ctx :mnId :nlid :baseAtom :baseAtomF :baseNid :facts
+        if nsm.length > 0 then return nsm
     }
     if (isListOriginOf :symtab :ctx tid: nlid) then {
         nlcb: ctxCname :ctx tid: nlid
@@ -16828,6 +16885,7 @@ nestedBaseMember: function {
     facts: cfacts.borrow
 } out String is {
     eCo: (emitNestedCollectionBase
+        :ast
         :symtab
         :ctx
         :mn2
@@ -16835,6 +16893,7 @@ nestedBaseMember: function {
         :nlid
         baseAtom: base
         :baseAtomF
+        baseNid: n.parent
         :bs9vid
         recvIsPtr: nstPtr
         :facts
@@ -17458,12 +17517,14 @@ emitIdCollectionMemberRead: function {
 # is the receiver as a value, a pointer when `recvIsPtr`, held by `vid`. ""
 # when `mnId` is none of those on `tid`.
 windowMemberRead: function {
+    ast: Ast.view
     symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
+    ctx: Ctx
     mnId: zast.nameid
     tid: ztypes.tid
     base: StringView
     baseF: cfacts
+    baseNid: zast.nodeid
     recvIsPtr: bool
     vid: ztypes.vid
     facts: cfacts.borrow
@@ -17499,19 +17560,33 @@ windowMemberRead: function {
     if rt.isZero then return ""
     wc: ctxCname :ctx tid: rt
     rc: ctxCname :ctx :tid
-    len: "\{base}\{acc}length"
+    # the length and the data both read the base: bound first when that repeats
+    # work
+    bound: String
+    if isArr.not when baseF.once then bound = (readOnce
+        :ast
+        :symtab
+        :ctx
+        text: base
+        textF: baseF
+        :tid
+        nid: baseNid
+    )
+    wb: base
+    if bound.length > 0 then wb = bound.stringView
+    len: "\{wb}\{acc}length"
     if isArr then len = "\{rc}_length"
     # an array's storage is inline, const through a view receiver: the window
     # takes it without the qualifier, as emitWindowSlice says
     if isArr then return (stating
         :facts
         from: literalFacts
-        text: "((\{wc}_t){ .length = \{len}, .data = (void*)\{base}\{acc}data })"
+        text: "((\{wc}_t){ .length = \{len}, .data = (void*)\{wb}\{acc}data })"
     )
     return (stating
         :facts
         from: literalFacts
-        text: "((\{wc}_t){ .length = \{len}, .data = \{base}\{acc}data })"
+        text: "((\{wc}_t){ .length = \{len}, .data = \{wb}\{acc}data })"
     )
 }
 
@@ -17545,12 +17620,14 @@ emitCollectionMemberRead: function {
     # A dict is heap-held and its local already IS the pointer the body wants;
     # a list or an id container is a stack struct, so the local's ADDRESS is.
     wmr: (windowMemberRead
+        :ast
         :symtab
         :ctx
         :mnId
         tid: bstamp
         base: bn2
         baseF: bn2F
+        baseNid: n.parent
         recvIsPtr: (isPtrVid :ctx vid: bn2v)
         vid: bn2v
         :facts
