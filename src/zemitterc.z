@@ -5754,9 +5754,9 @@ emitSvSubstringCall: function {
                 cb: svc.stringView
                 m: "substring"
                 lead: lead.stringView
-                a: "from"
+                a: zast.wellKnown.slot.wkFrom
                 aForm: argform.labelled
-                b: "to"
+                b: zast.wellKnown.slot.wkTo
                 bForm: argform.labelled
             )
             if addressable then return (stating :facts from: callFacts text: esb)
@@ -7885,11 +7885,7 @@ instanceMethodArgValue: function {
     avF: cfacts.borrow
 } out instargval is {
     positionalIdx: posIdx0
-    # the label and the parameter name are the same text, but a reftype argument
-    # may appear only once in a call -- projecting `.stringView` at each site
-    # would cost two temporaries.
-    pnameL: zast.nameTextAt :ast ref: posParamNameId
-    ca: ctorArgFor :ast :call label: pnameL.stringView posIdx: positionalIdx
+    ca: ctorArgFor :ast :call label: posParamNameId posIdx: positionalIdx
     isLbl9b: ca.labelled
     iiF: cfacts
     iiVal: (ctorInterpArgAt
@@ -7915,7 +7911,7 @@ instanceMethodArgValue: function {
         usedInterp = true
         if isLbl9b.not then positionalIdx = positionalIdx + 1
     } else {
-        avNd = ctorArgNodeByLabel :ast :call label: pnameL.stringView
+        avNd = ctorArgNodeByLabel :ast :call label: posParamNameId
         if avNd.isZero then {
             atomVarId = stating facts: avF from: constFacts text: "0"
         } else {
@@ -8240,12 +8236,8 @@ emitInstanceMethodBody: function {
     # (`this` for the `:this` shorthand, or the spelled name for a
     # `b: this.borrow` receiver) -- matching how the definition site names
     # it. Matching the literal "this" alone drops a renamed receiver.
-    recvNm: "this".string
-    tpnm: (zast.poolTextAt
-        pool: ast.names
-        ref: (symtab.reg.thisParamNameIdOf tid: mco)
-    )
-    if tpnm.length > 0 then recvNm = tpnm.copy
+    recvNm: symtab.reg.thisParamNameIdOf tid: mco
+    if recvNm.isZero then recvNm = zast.wellKnown.slot.wkThis
     pn: pidsNm.length
     # where each parameter's argument is written, and the positional cursor it
     # is read with: the arguments are built in the order they are written
@@ -8254,7 +8246,7 @@ emitInstanceMethodBody: function {
         :ast
         :call
         :pidsNm
-        recvNm: recvNm.stringView
+        :recvNm
         :posStart
         writ: ctx.orderWrit
         posAt: ctx.orderPosAt
@@ -8266,12 +8258,7 @@ emitInstanceMethodBody: function {
     for k < pn loop {
         pi = orderNextParam :ctx base: wbase
         k = k + 1
-        isR: false
-        pnT: (zast.poolTextAt
-            pool: ast.names
-            ref: (pidsNm.get i: pi)
-        )
-        isR = pnT == recvNm
+        isR: (pidsNm.get i: pi) == recvNm
         (orderMethodParam
             :ast
             :symtab
@@ -8310,7 +8297,8 @@ methodArgPositions: function {
     call: zast.callrow.view
     pidsNm: (ListVal zast.nameid).view
     # the receiver parameter's name
-    recvNm: StringView
+    # the receiver parameter's name, which no argument fills
+    recvNm: zast.nameid
     posStart: u64
     writ: ListVal u64
     posAt: ListVal u64
@@ -8318,15 +8306,12 @@ methodArgPositions: function {
     positionalIdx: posStart
     pi: u64
     for pi < pidsNm.length loop {
-        pnB: (zast.poolTextAt
-            pool: ast.names
-            ref: (pidsNm.get i: pi)
-        )
+        pnB: pidsNm.get i: pi
         posAt.append positionalIdx
-        if pnB.stringView == recvNm then {
+        if pnB == recvNm then {
             writ.append 0
         } else {
-            ca: ctorArgFor :ast :call label: pnB.stringView posIdx: positionalIdx
+            ca: ctorArgFor :ast :call label: pnB posIdx: positionalIdx
             writ.append (writtenArgPosition :ast :call nid: ca.nid)
             if ca.labelled.not then positionalIdx = positionalIdx + 1
         }
@@ -9168,22 +9153,19 @@ colArgAsStringViewExpr: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
-    label: StringView
+    label: zast.nameid
 } out String is {
     arx289: u64
     for arx289 < call.arguments.count loop {
         aId: zast.kidAt kids: ast.kids span: call.arguments i: arx289
         arx289 = arx289 + 1
         a: ast.nodes.get i: aId
-        if a.namedoperation then {
-            an: zast.nameTextAt :ast ref: a.name
-            if an.stringView == label then {
-                opn: ast.nodes.get i: a.operation
-                if (isSvAsStringNode :ast :symtab :ctx n: opn) then {
-                    return (svBaseExprOfAsString :ast :symtab :ctx n: opn)
-                }
-                return ""
+        if a.namedoperation when a.name == label then {
+            opn: ast.nodes.get i: a.operation
+            if (isSvAsStringNode :ast :symtab :ctx n: opn) then {
+                return (svBaseExprOfAsString :ast :symtab :ctx n: opn)
             }
+            return ""
         }
     }
     return ""
@@ -9817,7 +9799,7 @@ emitBoxCreate: function {
     bmid: stampIdOf :symtab nid: call.nodeid
     beid: symtab.reg.genericTypeArgAt specId: bmid ordinal: 0
     binner: typeRefC :ast :symtab :ctx tid: beid
-    bval: ctorArgByLabel :ast :symtab :ctx :call label: "from"
+    bval: ctorArgByLabel :ast :symtab :ctx :call label: zast.wellKnown.slot.wkFrom
     bN: ctx.argHoistCtr
     ctx.argHoistCtr = ctx.argHoistCtr + 1
     bnm: "_Box\{bN}"
@@ -10069,7 +10051,7 @@ emitListValLendCall: function {
     cb: ctxCname :ctx tid: bt
     recvR: colRecvRef :ctx bn: bn.stringView vid: bvid
     if isResize then {
-        vr: listArg :ast :symtab :ctx :call label: "to"
+        vr: listArg :ast :symtab :ctx :call label: zast.wellKnown.slot.wkTo
         er: "\{cb}_resize(\{recvR}, \{vr})"
         return (stating :facts from: callFacts text: er)
     }
@@ -10135,7 +10117,7 @@ emitListMethodCall: function {
     cb: ctxCname :ctx tid: bt
     recvR: colRecvRef :ctx bn: bn.stringView vid: bvid
     if mnId == zast.wellKnown.slot.wkAppend then {
-        v: colArg :ast :symtab :ctx :call label: "from" consumes: true
+        v: colArg :ast :symtab :ctx :call label: zast.wellKnown.slot.wkFrom consumes: true
         e0: "\{cb}_append(\{recvR}, \{v})"
         return (stating
             :facts
@@ -10144,7 +10126,7 @@ emitListMethodCall: function {
         )
     }
     if mnId == zast.wellKnown.slot.wkGet then {
-        v: listArg :ast :symtab :ctx :call label: "i"
+        v: listArg :ast :symtab :ctx :call label: zast.wellKnown.slot.wkI
         e1: "\{cb}_get(\{recvR}, \{v})"
         if (listGetIsPtr
             :symtab
@@ -10155,7 +10137,7 @@ emitListMethodCall: function {
         return (stating :facts from: callFacts text: e1)
     }
     if mnId == zast.wellKnown.slot.wkGetMut then {
-        vm: listArg :ast :symtab :ctx :call label: "i"
+        vm: listArg :ast :symtab :ctx :call label: zast.wellKnown.slot.wkI
         e1m: "\{cb}_getMut(\{recvR}, \{vm})"
         if (listGetIsPtr
             :symtab
@@ -10177,15 +10159,15 @@ emitListMethodCall: function {
             cb: cb.stringView
             m: "slice"
             lead: recvR.stringView
-            a: "from"
+            a: zast.wellKnown.slot.wkFrom
             aForm: argform.value
-            b: "to"
+            b: zast.wellKnown.slot.wkTo
             bForm: argform.value
         )
         )
     }
     if mnId == zast.wellKnown.slot.wkExtendView then {
-        vw9: listArg :ast :symtab :ctx :call label: "from"
+        vw9: listArg :ast :symtab :ctx :call label: zast.wellKnown.slot.wkFrom
         e1e: "\{cb}_extendView(\{recvR}, \{vw9})"
         return (stating :facts from: callFacts text: e1e)
     }
@@ -10198,9 +10180,9 @@ emitListMethodCall: function {
             cb: cb.stringView
             m: "set"
             lead: recvR.stringView
-            a: "i"
+            a: zast.wellKnown.slot.wkI
             aForm: argform.value
-            b: "val"
+            b: zast.wellKnown.slot.wkVal
             bForm: argform.moved
         )
         )
@@ -10218,16 +10200,16 @@ emitListMethodCall: function {
             cb: cb.stringView
             m: "insert"
             lead: recvR.stringView
-            a: "from"
+            a: zast.wellKnown.slot.wkFrom
             aForm: argform.moved
-            b: "at"
+            b: zast.wellKnown.slot.wkAt
             bForm: argform.value
         )
         )
     }
     if mnId == zast.wellKnown.slot.wkExtend then {
-        eaa: listTakeArgBase :ast :call label: "from"
-        eaV: atomVid :symtab nid: (listTakeArgBaseNid :ast :call label: "from")
+        eaa: listTakeArgBase :ast :call label: zast.wellKnown.slot.wkFrom
+        eaV: atomVid :symtab nid: (listTakeArgBaseNid :ast :call label: zast.wellKnown.slot.wkFrom)
         ea: emitLocalAtomName :ctx name: eaa vid: eaV
         e5: "\{cb}_extend(\{recvR}, &\{ea})"
         return (stating :facts from: callFacts text: e5)
@@ -10252,8 +10234,9 @@ containsNeedleC: function {
     ctx: Ctx
     call: zast.callrow.view
 } out String is {
-    vc: colArg :ast :symtab :ctx :call label: "item" consumes: false
-    if (colArgHeldByPtr :ast :symtab :ctx :call label: "item") then return "(*\{vc})"
+    vc: colArg :ast :symtab :ctx :call label: zast.wellKnown.slot.wkItem consumes: false
+    if (colArgHeldByPtr :ast :symtab :ctx :call label: zast.wellKnown.slot.wkItem
+    ) then return "(*\{vc})"
     return vc
 }
 
@@ -10265,20 +10248,17 @@ colArgHeldByPtr: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
-    label: StringView
+    label: zast.nameid
 } out bool is {
     ax: u64
     for ax < call.arguments.count loop {
         aId: zast.kidAt kids: ast.kids span: call.arguments i: ax
         ax = ax + 1
         a: ast.nodes.get i: aId
-        if a.namedoperation then {
-            an: zast.nameTextAt :ast ref: a.name
-            if (an.stringView == label) or (an.length == 0) then {
-                op: ast.nodes.get i: a.operation
-                if (pathIsPointer :ast :symtab :ctx n: op).not then return false
-                return (ptrHeldValtype :ast :symtab :ctx n: op).not
-            }
+        if a.namedoperation when (a.name == label) or a.name.isZero then {
+            op: ast.nodes.get i: a.operation
+            if (pathIsPointer :ast :symtab :ctx n: op).not then return false
+            return (ptrHeldValtype :ast :symtab :ctx n: op).not
         }
     }
     return false
@@ -10307,7 +10287,7 @@ emitArrayMethodCall: function {
 } out String is {
     cb: ctxCname :ctx tid: bt
     if mnId == zast.wellKnown.slot.wkGet then {
-        vi: listArg :ast :symtab :ctx :call label: "i"
+        vi: listArg :ast :symtab :ctx :call label: zast.wellKnown.slot.wkI
         return (stating :facts from: callFacts text: "\{cb}_get(\{bn}, \{vi})")
     }
     if mnId == zast.wellKnown.slot.wkSet then {
@@ -10320,9 +10300,9 @@ emitArrayMethodCall: function {
             cb: cb.stringView
             m: "set"
             lead: recvR.stringView
-            a: "i"
+            a: zast.wellKnown.slot.wkI
             aForm: argform.value
-            b: "item"
+            b: zast.wellKnown.slot.wkItem
             bForm: argform.value
         )
         )
@@ -10366,7 +10346,7 @@ emitDataValueMethodCall: function {
 } out String is {
     if (mnId == zast.wellKnown.slot.wkIndex).not then return ""
     cb: ctxCname :ctx tid: bt
-    vi: listArg :ast :symtab :ctx :call label: "i"
+    vi: listArg :ast :symtab :ctx :call label: zast.wellKnown.slot.wkI
     return (stating :facts from: callFacts text: "\{cb}_index(\{bn}, \{vi})")
 }
 
@@ -10387,7 +10367,7 @@ emitSpanMethodCall: function {
     cb: ctxCname :ctx tid: bt
     recvR: colRecvRef :ctx bn: bn.stringView vid: bvid
     if mnId == zast.wellKnown.slot.wkGet then {
-        v: listArg :ast :symtab :ctx :call label: "i"
+        v: listArg :ast :symtab :ctx :call label: zast.wellKnown.slot.wkI
         e1: "\{cb}_get(\{recvR}, \{v})"
         if (listGetIsPtr
             :symtab
@@ -10406,9 +10386,9 @@ emitSpanMethodCall: function {
             cb: cb.stringView
             m: "set"
             lead: recvR.stringView
-            a: "i"
+            a: zast.wellKnown.slot.wkI
             aForm: argform.value
-            b: "item"
+            b: zast.wellKnown.slot.wkItem
             bForm: argform.value
         )
         )
@@ -10422,21 +10402,21 @@ emitSpanMethodCall: function {
             cb: cb.stringView
             m: "slice"
             lead: recvR.stringView
-            a: "from"
+            a: zast.wellKnown.slot.wkFrom
             aForm: argform.value
-            b: "to"
+            b: zast.wellKnown.slot.wkTo
             bForm: argform.value
         )
         )
     }
     if mnId == zast.wellKnown.slot.wkFill then {
-        vf: listArg :ast :symtab :ctx :call label: "item"
+        vf: listArg :ast :symtab :ctx :call label: zast.wellKnown.slot.wkItem
         ef: "\{cb}_fill(\{recvR}, \{vf})"
         return (stating :facts from: callFacts text: ef)
     }
     if mnId == zast.wellKnown.slot.wkSplit then {
         needsAddM :ctx uname: "collections" memb: "window"
-        va: listArg :ast :symtab :ctx :call label: "at"
+        va: listArg :ast :symtab :ctx :call label: zast.wellKnown.slot.wkAt
         pairTid: chaseAggregateTypedef :symtab :ctx tid: (stampIdOf :symtab nid: call.nodeid)
         pc: ctxCname :ctx tid: pairTid
         loC: (memberC
@@ -10463,8 +10443,8 @@ emitSpanMethodCall: function {
         return (stating :facts from: callFacts text: es)
     }
     if mnId == zast.wellKnown.slot.wkCopyFrom then {
-        vc: listArg :ast :symtab :ctx :call label: "from"
-        vn: labelArgNode :ast :call label: "from" form: argform.value
+        vc: listArg :ast :symtab :ctx :call label: zast.wellKnown.slot.wkFrom
+        vn: labelArgNode :ast :call label: zast.wellKnown.slot.wkFrom form: argform.value
         lc: (ctxCname
             :ctx
             tid: (chaseAggregateTypedef :symtab :ctx tid: (stampIdOf :symtab nid: vn))
@@ -10520,9 +10500,9 @@ emitWindowSlice: function {
         :ctx
         :call
         lead: recvR
-        a: "from"
+        a: zast.wellKnown.slot.wkFrom
         aForm: argform.value
-        b: "to"
+        b: zast.wellKnown.slot.wkTo
         bForm: argform.value
         tmpl: tmpl.stringView
     )
@@ -10559,7 +10539,7 @@ stringKeyArgPointer: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
-    label: StringView
+    label: zast.nameid
     expr: StringView
     exprF: cfacts
 } out String is {
@@ -10619,7 +10599,7 @@ emitKeyedProbe: function {
     # the probe's C function: the collection's C name and the member
     fnC: String.view
     bn: StringView
-    label: StringView
+    label: zast.nameid
     viewForm: bool
     stringKey: bool
     facts: cfacts.borrow
@@ -10671,7 +10651,15 @@ emitSetMethodCall: function {
     cb: ctxCname :ctx tid: bt
     if mnId == zast.wellKnown.slot.wkAdd then {
         vF: cfacts
-        v: colArgWith :ast :symtab :ctx :call facts: vF label: "item" consumes: true
+        v: (colArgWith
+            :ast
+            :symtab
+            :ctx
+            :call
+            facts: vF
+            label: zast.wellKnown.slot.wkItem
+            consumes: true
+        )
         e0: "\{cb}_add(\{bn}, \{v})"
         return (stating :facts from: callFacts text: e0)
     }
@@ -10682,7 +10670,7 @@ emitSetMethodCall: function {
         :call
         fnC: "\{cb}_has"
         bn: bn.stringView
-        label: "item"
+        label: zast.wellKnown.slot.wkItem
         viewForm: true
         stringKey: (setElemIsString :symtab :ctx monoId: bt)
         :facts
@@ -10694,7 +10682,7 @@ emitSetMethodCall: function {
         :call
         fnC: "\{cb}_delete"
         bn: bn.stringView
-        label: "item"
+        label: zast.wellKnown.slot.wkItem
         viewForm: true
         stringKey: (setElemIsString :symtab :ctx monoId: bt)
         :facts
@@ -10725,9 +10713,9 @@ emitMapMethodCall: function {
             cb: cb.stringView
             m: "set"
             lead: bn.stringView
-            a: "key"
+            a: zast.wellKnown.slot.wkKey
             aForm: argform.moved
-            b: "value"
+            b: zast.wellKnown.slot.wkValue
             bForm: argform.moved
         )
         )
@@ -10739,7 +10727,7 @@ emitMapMethodCall: function {
         :call
         fnC: "\{cb}_get"
         bn: bn.stringView
-        label: "key"
+        label: zast.wellKnown.slot.wkKey
         viewForm: true
         stringKey: (mapKeyIsString :symtab :ctx monoId: bt)
         :facts
@@ -10751,7 +10739,7 @@ emitMapMethodCall: function {
         :call
         fnC: "\{cb}_has"
         bn: bn.stringView
-        label: "key"
+        label: zast.wellKnown.slot.wkKey
         viewForm: true
         stringKey: (mapKeyIsString :symtab :ctx monoId: bt)
         :facts
@@ -10763,7 +10751,7 @@ emitMapMethodCall: function {
         :call
         fnC: "\{cb}_remove"
         bn: bn.stringView
-        label: "key"
+        label: zast.wellKnown.slot.wkKey
         viewForm: false
         stringKey: (mapKeyIsString :symtab :ctx monoId: bt)
         :facts
@@ -10798,35 +10786,35 @@ emitIdMapMethodCall: function {
             cb: cb.stringView
             m: "set"
             lead: recvR.stringView
-            a: "key"
+            a: zast.wellKnown.slot.wkKey
             aForm: argform.read
-            b: "value"
+            b: zast.wellKnown.slot.wkValue
             bForm: argform.moved
         )
         )
     }
     if mnId == zast.wellKnown.slot.wkGet then {
-        vk: colArg :ast :symtab :ctx :call label: "key" consumes: false
+        vk: colArg :ast :symtab :ctx :call label: zast.wellKnown.slot.wkKey consumes: false
         e1: "\{cb}_get(\{recvR}, \{vk})"
         return (stating :facts from: callFacts text: e1)
     }
     if mnId == zast.wellKnown.slot.wkGetMut then {
-        vkm: colArg :ast :symtab :ctx :call label: "key" consumes: false
+        vkm: colArg :ast :symtab :ctx :call label: zast.wellKnown.slot.wkKey consumes: false
         e1m: "\{cb}_getMut(\{recvR}, \{vkm})"
         return (stating :facts from: callFacts text: e1m)
     }
     if mnId == zast.wellKnown.slot.wkHas then {
-        vk: colArg :ast :symtab :ctx :call label: "key" consumes: false
+        vk: colArg :ast :symtab :ctx :call label: zast.wellKnown.slot.wkKey consumes: false
         e2: "\{cb}_has(\{recvR}, \{vk})"
         return (stating :facts from: callFacts text: e2)
     }
     if mnId == zast.wellKnown.slot.wkKeyAt then {
-        vi: colArg :ast :symtab :ctx :call label: "i" consumes: false
+        vi: colArg :ast :symtab :ctx :call label: zast.wellKnown.slot.wkI consumes: false
         e3: "\{cb}_keyAt(\{recvR}, \{vi})"
         return (stating :facts from: callFacts text: e3)
     }
     if mnId == zast.wellKnown.slot.wkValueAt then {
-        vi2: colArg :ast :symtab :ctx :call label: "i" consumes: false
+        vi2: colArg :ast :symtab :ctx :call label: zast.wellKnown.slot.wkI consumes: false
         e4: "\{cb}_valueAt(\{recvR}, \{vi2})"
         return (stating :facts from: callFacts text: e4)
     }
@@ -10848,12 +10836,12 @@ emitIdSetMethodCall: function {
     cb: ctxCname :ctx tid: bt
     recvR: colRecvRef :ctx bn: bn.stringView vid: bvid
     if mnId == zast.wellKnown.slot.wkAdd then {
-        v: colArg :ast :symtab :ctx :call label: "item" consumes: false
+        v: colArg :ast :symtab :ctx :call label: zast.wellKnown.slot.wkItem consumes: false
         e0: "\{cb}_add(\{recvR}, \{v})"
         return (stating :facts from: callFacts text: e0)
     }
     if mnId == zast.wellKnown.slot.wkHas then {
-        v: colArg :ast :symtab :ctx :call label: "item" consumes: false
+        v: colArg :ast :symtab :ctx :call label: zast.wellKnown.slot.wkItem consumes: false
         e1: "\{cb}_has(\{recvR}, \{v})"
         return (stating :facts from: callFacts text: e1)
     }
@@ -11132,7 +11120,7 @@ colArg: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
-    label: StringView
+    label: zast.nameid
     consumes: bool
 } out String is {
     facts: cfacts
@@ -11145,7 +11133,7 @@ colArgWith: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
-    label: StringView
+    label: zast.nameid
     consumes: bool
     facts: cfacts.borrow
 } out String is {
@@ -11158,8 +11146,7 @@ colArgWith: function {
         arx299 = arx299 + 1
         a: ast.nodes.get i: aId
         if a.namedoperation then {
-            an: zast.nameTextAt :ast ref: a.name
-            if an.stringView == label then {
+            if a.name == label then {
                 ic: (emitColInterpArg
                     :ast
                     :symtab
@@ -11178,7 +11165,7 @@ colArgWith: function {
                     :facts
                 )
             }
-            if an.length == 0 when havePos.not then {
+            if a.name.isZero when havePos.not then {
                 havePos = true
                 icp: (emitColInterpArg
                     :ast
@@ -11215,7 +11202,7 @@ listArg: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
-    label: StringView
+    label: zast.nameid
 } out String is {
     facts: cfacts
     return (listArgWith :ast :symtab :ctx :call :label :facts)
@@ -11227,7 +11214,7 @@ listArgWith: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
-    label: StringView
+    label: zast.nameid
     facts: cfacts.borrow
 } out String is {
     posFirst: String
@@ -11239,8 +11226,7 @@ listArgWith: function {
         arx309 = arx309 + 1
         a: ast.nodes.get i: aId
         if a.namedoperation then {
-            an: zast.nameTextAt :ast ref: a.name
-            if an.stringView == label then {
+            if a.name == label then {
                 return (standInText
                     :ast
                     :symtab
@@ -11250,7 +11236,7 @@ listArgWith: function {
                     :facts
                 )
             }
-            if an.length == 0 when havePos.not then {
+            if a.name.isZero when havePos.not then {
                 havePos = true
                 aOpNode: ast.nodes.get i: a.operation
                 posFirst = (standInText
@@ -11298,9 +11284,9 @@ emitOrderedPair: function {
     cb: StringView
     m: StringView
     lead: StringView
-    a: StringView
+    a: zast.nameid
     aForm: argform
-    b: StringView
+    b: zast.nameid
     bForm: argform
 } out String is {
     ord: orderPairArgs :ast :symtab :ctx :call :a :aForm :b :bForm
@@ -11330,9 +11316,9 @@ emitOrderedPairInto: function {
     ctx: Ctx
     call: zast.callrow.view
     lead: StringView
-    a: StringView
+    a: zast.nameid
     aForm: argform
-    b: StringView
+    b: zast.nameid
     bForm: argform
     tmpl: StringView
 } out String is {
@@ -11355,9 +11341,9 @@ orderPairArgs: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
-    a: StringView
+    a: zast.nameid
     aForm: argform
-    b: StringView
+    b: zast.nameid
     bForm: argform
 } out orderstate is {
     na: labelArgNode :ast :call label: a form: aForm
@@ -11387,7 +11373,7 @@ orderLabelArg: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
-    label: StringView
+    label: zast.nameid
     form: argform
     # the argument's value node, 0 when the call writes none
     nid: zast.nodeid
@@ -11417,7 +11403,7 @@ labelArgText: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
-    label: StringView
+    label: zast.nameid
     form: argform
     facts: cfacts.borrow
 } out String is {
@@ -11446,7 +11432,7 @@ labelArgText: function {
 # labelArgNode -- the value node of the argument `form` binds to `label`, 0 when
 # the call writes none.
 labelArgNode: function {
-    ast: Ast.view call: zast.callrow.view label: StringView form: argform
+    ast: Ast.view call: zast.callrow.view label: zast.nameid form: argform
 } out zast.nodeid is {
     byLabel: ctorArgNodeByLabel :ast :call :label
     if byLabel.isZero.not then return byLabel
@@ -11461,20 +11447,17 @@ labelArgNode: function {
 listTakeArgBaseNid: function {
     ast: Ast.view
     call: zast.callrow.view
-    label: StringView
+    label: zast.nameid
 } out zast.nodeid is {
     arx319: u64
     for arx319 < call.arguments.count loop {
         aId: zast.kidAt kids: ast.kids span: call.arguments i: arx319
         arx319 = arx319 + 1
         a: ast.nodes.get i: aId
-        if a.namedoperation then {
-            an: zast.nameTextAt :ast ref: a.name
-            if an.stringView == label then return (takeArgBaseNid
-                :ast
-                n: (ast.nodes.get i: a.operation)
-            )
-        }
+        if a.namedoperation when a.name == label then return (takeArgBaseNid
+            :ast
+            n: (ast.nodes.get i: a.operation)
+        )
     }
     return zast.nodeid
 }
@@ -11484,7 +11467,7 @@ listTakeArgBaseNid: function {
 listTakeArgBase: function {
     ast: Ast.view
     call: zast.callrow.view
-    label: StringView
+    label: zast.nameid
 } outx StringView is {
     lid: listTakeArgBaseNid :ast :call :label
     if lid.isZero then return "0"
@@ -11660,14 +11643,13 @@ userCreateCallC: function {
         nameIds: pidsNm
     )
     pn: pnames.length
-    wbase: orderPositions :ast :ctx :call names: pnames labelsOnly: true
+    wbase: orderPositions :ast :ctx :call nameIds: pidsNm labelsOnly: true
     ord: orderBegin :ctx slots: pn
     k: u64
     for k < pn loop {
         pi: orderNextParam :ctx base: wbase
         k = k + 1
-        pname: pnames.get i: pi
-        aNid: ctorArgNodeByLabel :ast :call label: pname.stringView
+        aNid: ctorArgNodeByLabel :ast :call label: (pidsNm.get i: pi)
         if aNid.isZero.not then {
             (orderUserFnArg
                 :ast
@@ -11730,28 +11712,24 @@ emitQualRecvMethodCall: function {
     facts: cfacts.borrow
 } out String is {
     if (symtab.typing.callBaseNamesType.has item: call.nodeid).not then return ""
-    recvNmQ: "this".string
-    tpq: (zast.poolTextAt
-        pool: ast.names
-        ref: (symtab.reg.thisParamNameIdOf tid: mtid)
-    )
-    if tpq.length > 0 then recvNmQ = tpq.copy
+    recvNmQ: symtab.reg.thisParamNameIdOf tid: mtid
+    if recvNmQ.isZero then recvNmQ = zast.wellKnown.slot.wkThis
     recvExQ: String
     recvQF: cfacts
     recvPtrQ: false
     posStartQ: u64
     if (fnTypeTakesThis :symtab tid: mtid) then {
         recvNdQ: zast.nodeid
-        if (ctorHasLabel :ast :call label: recvNmQ.stringView) then {
+        if (ctorHasLabel :ast :call label: recvNmQ) then {
             recvExQ = (ctorArgByLabelWith
                 :ast
                 :symtab
                 :ctx
                 :call
-                label: recvNmQ.stringView
+                label: recvNmQ
                 facts: recvQF
             )
-            recvNdQ = ctorArgNodeByLabel :ast :call label: recvNmQ.stringView
+            recvNdQ = ctorArgNodeByLabel :ast :call label: recvNmQ
         } else {
             recvExQ = ctorArgByPosition :ast :symtab :ctx :call idx: 0 facts: recvQF
             recvNdQ = ctorArgNodeByPosition :ast :call idx: 0
@@ -12301,18 +12279,17 @@ userCreateCtor: function {
     cpiNm: ListVal zast.nameid
     recFieldLists :ast :symtab tid: cco names: cpn ids: cpi nameIds: cpiNm
     ccn: cpn.length
-    wbase: orderPositions :ast :ctx :call names: cpn labelsOnly: false
+    wbase: orderPositions :ast :ctx :call nameIds: cpiNm labelsOnly: false
     ord: orderBegin :ctx slots: ccn
     k: u64
     for k < ccn loop {
         ci: orderNextParam :ctx base: wbase
         k = k + 1
-        cpname: cpn.get i: ci
         mk: pendingHoistMark :ctx
         ca: (ctorArgFor
             :ast
             :call
-            label: cpname.stringView
+            label: (cpiNm.get i: ci)
             posIdx: (ctx.orderPosAt.get i: wbase + ci)
         )
         cavF: cfacts
@@ -12391,20 +12368,18 @@ emitRecordCtor: function {
     recFieldLists :ast :symtab :tid names: fnames ids: fids nameIds: fidsNm
     fn0: fnames.length
     # the fields' arguments are built in the order they are written
-    wbase: orderPositions :ast :ctx :call names: fnames labelsOnly: false
+    wbase: orderPositions :ast :ctx :call nameIds: fidsNm labelsOnly: false
     ord: orderBegin :ctx slots: fn0
     k: u64
     for k < fn0 loop {
         fi: orderNextParam :ctx base: wbase
         k = k + 1
-        fname: fnames.get i: fi
         (orderRecordField
             :ast
             :symtab
             :ctx
             :call
             :tid
-            fname: fname.stringView
             ffid: (fids.get i: fi)
             fnameId: (fidsNm.get i: fi)
             posIdx: (ctx.orderPosAt.get i: wbase + fi)
@@ -12435,7 +12410,6 @@ orderRecordField: function {
     ctx: Ctx
     call: zast.callrow.view
     tid: ztypes.tid
-    fname: StringView
     # the field's type and name id
     ffid: ztypes.tid
     fnameId: zast.nameid
@@ -12447,14 +12421,14 @@ orderRecordField: function {
     ord: orderstate.borrow
 } is {
     mk: pendingHoistMark :ctx
-    ca: ctorArgFor :ast :call label: fname :posIdx
+    ca: ctorArgFor :ast :call label: fnameId :posIdx
     avF: cfacts
     av: fieldArgText :ast :symtab :ctx :tid :ca nameId: fnameId fid: ffid facts: avF
     # a borrowed reftype field is a pointer; a source stored INLINE (the
     # receiver's own field, a field of a parameter) is passed by address
     # the field is a pointer: whatever passes it hands on an address
     byref: fieldIsReftypePtr :symtab :ctx owner: tid :fnameId :ffid
-    if byref when ca.labelled when (argIsPointerByLabel :ast :symtab :ctx :call label: fname
+    if byref when ca.labelled when (argIsPointerByLabel :ast :symtab :ctx :call label: fnameId
     ).not then {
         bF: cfacts
         av = (emitByrefArgWith
@@ -12527,24 +12501,24 @@ fieldIsReftypePtr: function {
 ctorArgPositions: function {
     ast: Ast.view
     call: zast.callrow.view
-    names: (List String).view
+    nameIds: (ListVal zast.nameid).view
     labelsOnly: bool
     writ: ListVal u64
     posAt: ListVal u64
 } is {
     positionalIdx: u64
     i: u64
-    for i < names.length loop {
-        nm: names.get :i
+    for i < nameIds.length loop {
+        nm: nameIds.get :i
         posAt.append positionalIdx
         if labelsOnly then {
             writ.append (writtenArgPosition
                 :ast
                 :call
-                nid: (ctorArgNodeByLabel :ast :call label: nm.stringView)
+                nid: (ctorArgNodeByLabel :ast :call label: nm)
             )
         } else {
-            ca: ctorArgFor :ast :call label: nm.stringView posIdx: positionalIdx
+            ca: ctorArgFor :ast :call label: nm posIdx: positionalIdx
             writ.append (writtenArgPosition :ast :call nid: ca.nid)
             if ca.labelled.not then positionalIdx = positionalIdx + 1
         }
@@ -12560,19 +12534,19 @@ orderPositions: function {
     ast: Ast.view
     ctx: Ctx
     call: zast.callrow.view
-    names: (List String).view
+    nameIds: (ListVal zast.nameid).view
     labelsOnly: bool
 } out u64 is {
     wbase: ctx.orderWrit.length
     (ctorArgPositions
         :ast
         :call
-        :names
+        :nameIds
         :labelsOnly
         writ: ctx.orderWrit
         posAt: ctx.orderPosAt
     )
-    for ctx.orderDone.length < (wbase + names.length) loop ctx.orderDone.append false
+    for ctx.orderDone.length < (wbase + nameIds.length) loop ctx.orderDone.append false
     return wbase
 }
 
@@ -12662,7 +12636,7 @@ ctorarg: record {
 ctorArgFor: function {
     ast: Ast.view
     call: zast.callrow.view
-    label: StringView
+    label: zast.nameid
     posIdx: u64
 } out ctorarg is {
     if (ctorHasLabel :ast :call :label) then {
@@ -12673,17 +12647,14 @@ ctorArgFor: function {
 
 # the constructor-argument node matching a field label.
 ctorArgNodeByLabel: function {
-    ast: Ast.view call: zast.callrow.view label: StringView
+    ast: Ast.view call: zast.callrow.view label: zast.nameid
 } out zast.nodeid is {
     arx389: u64
     for arx389 < call.arguments.count loop {
         aId: zast.kidAt kids: ast.kids span: call.arguments i: arx389
         arx389 = arx389 + 1
         a: ast.nodes.get i: aId
-        if a.namedoperation then {
-            an: zast.nameTextAt :ast ref: a.name
-            if an.stringView == label then return a.operation
-        }
+        if a.namedoperation when a.name == label then return a.operation
     }
     return zast.nodeid
 }
@@ -12695,7 +12666,7 @@ ctorArgByLabel: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
-    label: StringView
+    label: zast.nameid
 } out String is {
     facts: cfacts
     return (ctorArgByLabelWith :ast :symtab :ctx :call :label :facts)
@@ -12707,7 +12678,7 @@ ctorArgByLabelWith: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
-    label: StringView
+    label: zast.nameid
     facts: cfacts.borrow
 } out String is {
     aid: ctorArgNodeByLabel :ast :call :label
@@ -12761,22 +12732,19 @@ argIsPointerByLabel: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
-    label: StringView
+    label: zast.nameid
 } out bool is {
     arx399: u64
     for arx399 < call.arguments.count loop {
         aId: zast.kidAt kids: ast.kids span: call.arguments i: arx399
         arx399 = arx399 + 1
         a: ast.nodes.get i: aId
-        if a.namedoperation then {
-            an: zast.nameTextAt :ast ref: a.name
-            if an.stringView == label then return (pathIsPointer
-                :ast
-                :symtab
-                :ctx
-                n: (ast.nodes.get i: a.operation)
-            )
-        }
+        if a.namedoperation when a.name == label then return (pathIsPointer
+            :ast
+            :symtab
+            :ctx
+            n: (ast.nodes.get i: a.operation)
+        )
     }
     return false
 }
@@ -13231,16 +13199,13 @@ mainUnitTid: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view} out ztypes.
 }
 
 # ctorHasLabel -- whether a call carries a named argument with this label.
-ctorHasLabel: function {ast: Ast.view call: zast.callrow.view label: StringView} out bool is {
+ctorHasLabel: function {ast: Ast.view call: zast.callrow.view label: zast.nameid} out bool is {
     arx429: u64
     for arx429 < call.arguments.count loop {
         aId: zast.kidAt kids: ast.kids span: call.arguments i: arx429
         arx429 = arx429 + 1
         a: ast.nodes.get i: aId
-        if a.namedoperation then {
-            an: zast.nameTextAt :ast ref: a.name
-            if an.stringView == label then return true
-        }
+        if a.namedoperation when a.name == label then return true
     }
     return false
 }
@@ -13268,13 +13233,12 @@ emitMetaCreateCall: function {
         recFieldLists :ast :symtab tid: et names: fnames ids: fids nameIds: fidsNm
         fn0: fnames.length
         # the fields' arguments are built in the order they are written
-        wbase: orderPositions :ast :ctx :call names: fnames labelsOnly: true
+        wbase: orderPositions :ast :ctx :call nameIds: fidsNm labelsOnly: true
         ord: orderBegin :ctx slots: fn0
         k: u64
         for k < fn0 loop {
             fi: orderNextParam :ctx base: wbase
             k = k + 1
-            fname: fnames.get i: fi
             wr: ctx.orderWrit.get i: wbase + fi
             mk: pendingHoistMark :ctx
             avF: cfacts
@@ -13284,7 +13248,6 @@ emitMetaCreateCall: function {
                 :ctx
                 :call
                 :et
-                fname: fname.stringView
                 fnameId: (fidsNm.get i: fi)
                 :fids
                 :fi
@@ -13366,7 +13329,6 @@ metaCreateFieldText: function {
     ctx: Ctx
     call: zast.callrow.view
     et: ztypes.tid
-    fname: StringView
     # the field's name, interned
     fnameId: zast.nameid
     fids: (ListVal ztypes.tid).view
@@ -13375,8 +13337,8 @@ metaCreateFieldText: function {
 } out String is {
     av: String
     avF: cfacts
-    if (ctorHasLabel :ast :call label: fname) then {
-        av = ctorArgByLabelWith :ast :symtab :ctx :call label: fname facts: avF
+    if (ctorHasLabel :ast :call label: fnameId) then {
+        av = ctorArgByLabelWith :ast :symtab :ctx :call label: fnameId facts: avF
         # a borrowed reftype field is a pointer; a source stored INLINE
         # (the receiver's own field, a field of a parameter) is passed
         # by address
@@ -13388,7 +13350,7 @@ metaCreateFieldText: function {
             :symtab
             :ctx
             fid: ffidL
-        ) when (argIsPointerByLabel :ast :symtab :ctx :call label: fname).not then {
+        ) when (argIsPointerByLabel :ast :symtab :ctx :call label: fnameId).not then {
             avMF: cfacts
             avM: (emitByrefArgWith
                 :ast
@@ -13397,7 +13359,7 @@ metaCreateFieldText: function {
                 av: av.stringView
                 :avF
                 pid: ffidL
-                argNid: (ctorArgNodeByLabel :ast :call label: fname)
+                argNid: (ctorArgNodeByLabel :ast :call label: fnameId)
                 facts: avMF
             )
             av = avM.take
@@ -40902,13 +40864,13 @@ fileFromArgAddr: function {
     call: zast.callrow.view
 } out String is {
     fvF: cfacts
-    fv: ctorArgByLabelWith :ast :symtab :ctx :call label: "from" facts: fvF
+    fv: ctorArgByLabelWith :ast :symtab :ctx :call label: zast.wellKnown.slot.wkFrom facts: fvF
     fvcF: cfacts
     fvc: fileFromArgCoerce :ast :symtab :ctx :call av: fv.stringView avF: fvF facts: fvcF
     # a compound literal (the String coercion's `(StringView){..}`) already has an
     # address; anything else is passed by reference as any argument is
     if fvcF.literal then return "&\{fvc}"
-    fnid: ctorArgNodeByLabel :ast :call label: "from"
+    fnid: ctorArgNodeByLabel :ast :call label: zast.wellKnown.slot.wkFrom
     vt: (stampIdOf
         :symtab
         nid: (interpPartNodeId n: (ast.nodes.get i: fnid))
@@ -41062,9 +41024,9 @@ emitFileMethodCall: function {
             cb: fc.stringView
             m: "read"
             lead: recvExpr.stringView
-            a: "into"
+            a: zast.wellKnown.slot.wkInto
             aForm: argform.addressed
-            b: "max"
+            b: zast.wellKnown.slot.wkMax
             bForm: argform.labelled
         )
         )
@@ -41078,9 +41040,9 @@ emitFileMethodCall: function {
             cb: fc.stringView
             m: "seek"
             lead: recvExpr.stringView
-            a: "to"
+            a: zast.wellKnown.slot.wkTo
             aForm: argform.labelled
-            b: "from"
+            b: zast.wellKnown.slot.wkFrom
             bForm: argform.labelled
         )
         )
@@ -41153,7 +41115,7 @@ wrapperCreateArg: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
-    label: StringView
+    label: zast.nameid
     ptid: ztypes.tid
     facts: cfacts.borrow
 } out String is {
@@ -41163,53 +41125,49 @@ wrapperCreateArg: function {
         aId: zast.kidAt kids: ast.kids span: call.arguments i: arx579
         arx579 = arx579 + 1
         a: ast.nodes.get i: aId
-        if a.namedoperation then {
-            al: zast.nameTextAt :ast ref: a.name
-            if al.stringView == label then {
-                if (symtab.reg.typetypeOf typeId: prtid) == ztypes.ztypetype.protocolType then {
-                    # a conformer is boxed as the protocol it stands in for, as at
-                    # any other slot (standInText); a value that already is the
-                    # protocol passes as it stands, a header by value
-                    aF: cfacts
-                    sit: (standInText
+        if a.namedoperation when a.name == label then {
+            if (symtab.reg.typetypeOf typeId: prtid) == ztypes.ztypetype.protocolType then {
+                # a conformer is boxed as the protocol it stands in for, as at
+                # any other slot (standInText); a value that already is the
+                # protocol passes as it stands, a header by value
+                aF: cfacts
+                sit: (standInText
+                    :ast
+                    :symtab
+                    :ctx
+                    n: (ast.nodes.get i: a.operation)
+                    text: (emitExprWith
                         :ast
                         :symtab
                         :ctx
                         n: (ast.nodes.get i: a.operation)
-                        text: (emitExprWith
-                            :ast
-                            :symtab
-                            :ctx
-                            n: (ast.nodes.get i: a.operation)
-                            facts: aF
-                        )
                         facts: aF
                     )
-                    return (stating :facts from: aF text: sit)
-                }
-                if (symtab.reg.typetypeOf typeId: prtid) == ztypes.ztypetype.classType then {
-                    a2op: ast.nodes.get i: a.operation
-                    ab2: argBaseAtom :ast n: a2op
-                    abn2: argBaseNodeId :ast n: a2op
-                    argBaseVid: atomVid :symtab nid: abn2
-                    abr2: aliasResolveAt :symtab :ctx nid: abn2 name: ab2 vid: argBaseVid
-                    ab2v: ztypes.vid
-                    if abr2.stringView == ab2 then ab2v = argBaseVid
-                    abr2F: cfacts
-                    abr2C: (emitLocalAtomNameAtWith
-                        :symtab
-                        :ctx
-                        nid: abn2
-                        name: ab2
-                        vid: argBaseVid
-                        facts: abr2F
-                    )
-                    if (isPtrVid :ctx vid: ab2v) then return (stating :facts from: abr2F text: abr2C
-                    )
-                    return (stating :facts from: (addrFacts e: abr2F) text: "&\{abr2C}")
-                }
-                return (emitExprWith :ast :symtab :ctx n: (ast.nodes.get i: a.operation) :facts)
+                    facts: aF
+                )
+                return (stating :facts from: aF text: sit)
             }
+            if (symtab.reg.typetypeOf typeId: prtid) == ztypes.ztypetype.classType then {
+                a2op: ast.nodes.get i: a.operation
+                ab2: argBaseAtom :ast n: a2op
+                abn2: argBaseNodeId :ast n: a2op
+                argBaseVid: atomVid :symtab nid: abn2
+                abr2: aliasResolveAt :symtab :ctx nid: abn2 name: ab2 vid: argBaseVid
+                ab2v: ztypes.vid
+                if abr2.stringView == ab2 then ab2v = argBaseVid
+                abr2F: cfacts
+                abr2C: (emitLocalAtomNameAtWith
+                    :symtab
+                    :ctx
+                    nid: abn2
+                    name: ab2
+                    vid: argBaseVid
+                    facts: abr2F
+                )
+                if (isPtrVid :ctx vid: ab2v) then return (stating :facts from: abr2F text: abr2C)
+                return (stating :facts from: (addrFacts e: abr2F) text: "&\{abr2C}")
+            }
+            return (emitExprWith :ast :symtab :ctx n: (ast.nodes.get i: a.operation) :facts)
         }
     }
     return (stating :facts from: constFacts text: "0")
@@ -41266,13 +41224,12 @@ emitIoWrapperCreate: function {
         nameIds: pidsNm
     )
     pn: pnames.length
-    wbase: orderPositions :ast :ctx :call names: pnames labelsOnly: true
+    wbase: orderPositions :ast :ctx :call nameIds: pidsNm labelsOnly: true
     ord: orderBegin :ctx slots: pn
     k: u64
     for k < pn loop {
         pi: orderNextParam :ctx base: wbase
         k = k + 1
-        pnm: pnames.get i: pi
         mk: pendingHoistMark :ctx
         astrF: cfacts
         astr: (wrapperCreateArg
@@ -41280,11 +41237,11 @@ emitIoWrapperCreate: function {
             :symtab
             :ctx
             :call
-            label: pnm.stringView
+            label: (pidsNm.get i: pi)
             ptid: (pids.get i: pi)
             facts: astrF
         )
-        anid: ctorArgNodeByLabel :ast :call label: pnm.stringView
+        anid: ctorArgNodeByLabel :ast :call label: (pidsNm.get i: pi)
         (orderArgAtWith
             :ast
             :symtab
@@ -41578,13 +41535,12 @@ emitNativeFreeFnCall: function {
     pidlNm: ListVal zast.nameid
     recFieldLists :ast :symtab tid: fid names: pn ids: pidl nameIds: pidlNm
     m: pn.length
-    wbase: orderPositions :ast :ctx :call names: pn labelsOnly: false
+    wbase: orderPositions :ast :ctx :call nameIds: pidlNm labelsOnly: false
     ord: orderBegin :ctx slots: m
     k: u64
     for k < m loop {
         j: orderNextParam :ctx base: wbase
         k = k + 1
-        pname: pn.get i: j
         mk: pendingHoistMark :ctx
         avF: cfacts
         av: (emitNativeArg
@@ -41595,7 +41551,7 @@ emitNativeFreeFnCall: function {
             :fid
             pnameId: (pidlNm.get i: j)
             pid: (pidl.get i: j)
-            usePos: (ctorHasLabel :ast :call label: pname.stringView).not
+            usePos: (ctorHasLabel :ast :call label: (pidlNm.get i: j)).not
             posIdx: (ctx.orderPosAt.get i: wbase + j)
             facts: avF
         )
@@ -41673,17 +41629,16 @@ emitCliSpecCreate: function {
         nameIds: pidsNm
     )
     pn: pnames.length
-    wbase: orderPositions :ast :ctx :call names: pnames labelsOnly: true
+    wbase: orderPositions :ast :ctx :call nameIds: pidsNm labelsOnly: true
     ord: orderBegin :ctx slots: pn
     k: u64
     for k < pn loop {
         pi: orderNextParam :ctx base: wbase
         k = k + 1
-        pnm: pnames.get i: pi
         mk: pendingHoistMark :ctx
         astrF: cfacts
-        astr: ctorArgByLabelWith :ast :symtab :ctx :call label: pnm.stringView facts: astrF
-        anid: ctorArgNodeByLabel :ast :call label: pnm.stringView
+        astr: ctorArgByLabelWith :ast :symtab :ctx :call label: (pidsNm.get i: pi) facts: astrF
+        anid: ctorArgNodeByLabel :ast :call label: (pidsNm.get i: pi)
         (orderArgAtWith
             :ast
             :symtab
@@ -41805,7 +41760,7 @@ emitParsedMethodCall: function {
     if (isPtrVid :ctx vid: recvV) then recvExpr = recvC.take
     needsAddM :ctx uname: "cli" memb: "@unit"
     needsAddM :ctx uname: "cli" memb: mn
-    nameArg: ctorArgByLabel :ast :symtab :ctx :call label: "name"
+    nameArg: ctorArgByLabel :ast :symtab :ctx :call label: zast.wellKnown.slot.wkName
     return (stating :facts from: callFacts text: "\{pc}_\{mn}(\{recvExpr}, &\{nameArg})")
 }
 
