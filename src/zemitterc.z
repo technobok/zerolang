@@ -8475,7 +8475,8 @@ orderMethodParam: function {
     } else if written == 0 when (symtab.typing.declHasDefaultId parentTypeId: mco nameId: pname
     ) then {
         # a parameter the call leaves out is its declared default
-        one.append (paramDefaultText :ast :symtab :ctx cco: mco nameId: pname :pid)
+        facts: cfacts
+        one.append (paramDefaultText :ast :symtab :ctx cco: mco nameId: pname :pid :facts)
     } else {
         (instanceMethodArg
             :ast
@@ -11778,6 +11779,7 @@ userCreateCallC: function {
                 :ord
             )
         } else {
+            facts2: cfacts
             (orderSetSlot
                 :ctx
                 st: ord
@@ -11789,6 +11791,7 @@ userCreateCallC: function {
                     cco: fid
                     nameId: (pidsNm.get i: pi)
                     pid: (pids.get i: pi)
+                    facts: facts2
                 )
             )
         }
@@ -12209,11 +12212,15 @@ paramDefaultText: function {
     nameId: zast.nameid
     # the parameter's type
     pid: ztypes.tid
+    facts: cfacts.borrow
 } out String is {
     nm: nameId
-    if (symtab.typing.declHasDefaultId parentTypeId: cco nameId: nm).not then return "0"
+    if (symtab.typing.declHasDefaultId parentTypeId: cco nameId: nm).not then return (stating
+        :facts
+        from: constFacts
+        text: "0"
+    )
     cdt: symtab.typing.declDefaultOfId parentTypeId: cco nameId: nm
-    facts: cfacts
     return (renderDefault :ast :symtab :ctx dv: cdt targetTid: pid :facts)
 }
 
@@ -12263,6 +12270,7 @@ emitCtorDefaultsFill: function {
         ci: u64
         ccn: cpi.length
         for ci < ccn loop {
+            facts2: cfacts
             cav: (paramDefaultText
                 :ast
                 :symtab
@@ -12270,6 +12278,7 @@ emitCtorDefaultsFill: function {
                 :cco
                 nameId: (cpiNm.get i: ci)
                 pid: (cpi.get i: ci)
+                facts: facts2
             )
             ci = ci + 1
             if cargs.length > 0 then cargs.append ", "
@@ -12306,7 +12315,7 @@ emitCtorDefaultsFill: function {
 # createArgText -- one argument of a construction routed through a user
 # `create`. The create's own parameters decide how each argument is passed,
 # exactly as they do for any other call of it: a non-`take` user class is a
-# `T*`, so a bare local has to be addressed. userFnArgText is the same answer
+# `T*`, so a bare local has to be addressed. userFnArgTextWith is the same answer
 # the direct-call path uses -- asking it here is what keeps a `create` reached
 # by construction agreeing with one reached by name. An unsupplied parameter
 # takes its default.
@@ -12323,9 +12332,10 @@ createArgText: function {
     # the parameter's type
     pid: ztypes.tid
     pnameId: zast.nameid
+    facts: cfacts.borrow
 } out String is {
-    if ca.nid.isZero then return (paramDefaultText :ast :symtab :ctx :cco :nameId :pid)
-    return (userFnArgText
+    if ca.nid.isZero then return (paramDefaultText :ast :symtab :ctx :cco :nameId :pid :facts)
+    return (userFnArgTextWith
         :ast
         :symtab
         :ctx
@@ -12333,6 +12343,7 @@ createArgText: function {
         pinId: pid
         pinNmId: pnameId
         argOpNode: (ast.nodes.get i: ca.nid)
+        :facts
     )
 }
 
@@ -12399,6 +12410,7 @@ userCreateCtor: function {
             label: cpname.stringView
             posIdx: (ctx.orderPosAt.get i: wbase + ci)
         )
+        cavF: cfacts
         cav: (createArgText
             :ast
             :symtab
@@ -12408,11 +12420,12 @@ userCreateCtor: function {
             nameId: (cpiNm.get i: ci)
             pid: (cpi.get i: ci)
             pnameId: (cpiNm.get i: ci)
+            facts: cavF
         )
         wr: ctx.orderWrit.get i: wbase + ci
         constant: true
         if wr > 0 then {
-            constant = (orderConstant
+            constant = (orderConstantWith
                 :ast
                 :symtab
                 :ctx
@@ -12420,16 +12433,18 @@ userCreateCtor: function {
                     i: (writtenArgNode :ast :call pos: wr - 1)
                 )
                 text: cav.stringView
+                tf: cavF
                 byPtr: cav.stringView.startsWith "&"
             )
         }
-        (orderPart
+        (orderPartWith
             :ast
             :symtab
             :ctx
             st: ord
             mark: mk
             text: cav
+            tf: cavF
             :constant
             fid: cco
             pid: (cpi.get i: ci)
@@ -13375,6 +13390,7 @@ emitMetaCreateCall: function {
             fname: fnames.get i: fi
             wr: ctx.orderWrit.get i: wbase + fi
             mk: pendingHoistMark :ctx
+            avF: cfacts
             av: (metaCreateFieldText
                 :ast
                 :symtab
@@ -13385,6 +13401,7 @@ emitMetaCreateCall: function {
                 fnameId: (fidsNm.get i: fi)
                 :fids
                 :fi
+                facts: avF
             )
             ptrField: (fieldIsReftypePtr
                 :symtab
@@ -13396,7 +13413,7 @@ emitMetaCreateCall: function {
             constant: true
             ct: String
             if wr > 0 then {
-                constant = (orderConstant
+                constant = (orderConstantWith
                     :ast
                     :symtab
                     :ctx
@@ -13404,6 +13421,7 @@ emitMetaCreateCall: function {
                         i: (writtenArgNode :ast :call pos: wr - 1)
                     )
                     text: av.stringView
+                    tf: avF
                     byPtr: ptrField
                 )
                 if constant.not then {
@@ -13421,13 +13439,14 @@ emitMetaCreateCall: function {
                     if ptrField or heapM when ct.length > 0 then ct.append "*"
                 }
             }
-            (orderPart
+            (orderPartWith
                 :ast
                 :symtab
                 :ctx
                 st: ord
                 mark: mk
                 text: av
+                tf: avF
                 :constant
                 fid: ztypes.tid
                 pid: ztypes.tid.zero
@@ -13466,10 +13485,12 @@ metaCreateFieldText: function {
     fnameId: zast.nameid
     fids: (ListVal ztypes.tid).view
     fi: u64
+    facts: cfacts.borrow
 } out String is {
     av: String
+    avF: cfacts
     if (ctorHasLabel :ast :call label: fname) then {
-        av = ctorArgByLabel :ast :symtab :ctx :call label: fname
+        av = ctorArgByLabelWith :ast :symtab :ctx :call label: fname facts: avF
         # a borrowed reftype field is a pointer; a source stored INLINE
         # (the receiver's own field, a field of a parameter) is passed
         # by address
@@ -13482,15 +13503,19 @@ metaCreateFieldText: function {
             :ctx
             fid: ffidL
         ) when (argIsPointerByLabel :ast :symtab :ctx :call label: fname).not then {
-            avM: (emitByrefArg
+            avMF: cfacts
+            avM: (emitByrefArgWith
                 :ast
                 :symtab
                 :ctx
                 av: av.stringView
+                :avF
                 pid: ffidL
                 argNid: (ctorArgNodeByLabel :ast :call label: fname)
+                facts: avMF
             )
             av = avM.take
+            avF = avMF
         }
     } else {
         # a field absent from the meta.create args (a generator's state: a
@@ -13524,8 +13549,9 @@ metaCreateFieldText: function {
             ffct = ffctP.take
         }
         av = "(\{ffct}){0}"
+        avF = literalFacts
     }
-    return av
+    return (stating :facts from: avF text: av)
 }
 
 # emitByrefArg -- an argument passed BY REFERENCE. A non-lvalue has no address
@@ -13595,7 +13621,8 @@ appendSlotOrDefault: function {
     nm: nameId
     if (symtab.typing.declHasDefaultId parentTypeId: fid nameId: nm).not then return
     if args.length > 0 then args.append ", "
-    args.append (paramDefaultText :ast :symtab :ctx cco: fid :nameId :pid)
+    facts: cfacts
+    args.append (paramDefaultText :ast :symtab :ctx cco: fid :nameId :pid :facts)
 }
 
 # receiverCallText -- `callee(recv)` for a method called with its receiver
@@ -14554,23 +14581,10 @@ boxAddressArg: function {
     return "&\{bx}"
 }
 
-# userFnArgText -- the C text of one argument of a user-function call, for
-# the parameter it binds: the interpolation / conformance projections, then
-# the by-reference or borrow hoist the parameter's mode asks for.
-userFnArgText: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    fid: ztypes.tid
-    pinId: ztypes.tid
-    pinNmId: zast.nameid
-    argOpNode: astnode.view
-} out String is {
-    facts: cfacts
-    return (userFnArgTextWith :ast :symtab :ctx :fid :pinId :pinNmId :argOpNode :facts)
-}
-
-# userFnArgTextWith -- userFnArgText, its facts stated into `facts`.
+# userFnArgTextWith -- the C text of one argument of a user-function call, for
+# the parameter it binds, its facts stated into `facts`: the interpolation /
+# conformance projections, then the by-reference or borrow hoist the
+# parameter's mode asks for.
 userFnArgTextWith: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -42315,11 +42329,13 @@ dispatchArgText: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     n: astnode.view
+    facts: cfacts.borrow
 } out String is {
     avF: cfacts
     av: emitExprWith :ast :symtab :ctx :n facts: avF
     if (symtab.typing.standInOf.has key: (zast.nodeIdOf :n)) then {
-        return (standInText :ast :symtab :ctx :n text: av.take facts: avF)
+        sit: standInText :ast :symtab :ctx :n text: av.take facts: avF
+        return (stating :facts from: avF text: sit)
     }
     atid: stampIdOf :symtab nid: (interpPartNodeId :n)
     apfx: String
@@ -42341,9 +42357,10 @@ dispatchArgText: function {
             tid: atid
             argNid: (zast.nodeIdOf :n)
         )
-        return "&\{hv}"
+        return (stating :facts from: (addrFacts e: pathFacts) text: "&\{hv}")
     }
-    return "\{apfx}\{av}"
+    if apfx.length > 0 then return (stating :facts from: (addrFacts e: avF) text: "&\{av}")
+    return (stating :facts from: avF text: av)
 }
 
 # appendSlottedDispatchArgs -- the arguments in the vtable method's PARAMETER
@@ -42447,22 +42464,25 @@ orderDispatchArg: function {
     ord: orderstate.borrow
 } is {
     mk: pendingHoistMark :ctx
-    txt: dispatchArgText :ast :symtab :ctx n: op
-    constant: (orderConstant
+    txtF: cfacts
+    txt: dispatchArgText :ast :symtab :ctx n: op facts: txtF
+    constant: (orderConstantWith
         :ast
         :symtab
         :ctx
         n: op
         text: txt.stringView
+        tf: txtF
         byPtr: txt.stringView.startsWith "&"
     )
-    (orderPart
+    (orderPartWith
         :ast
         :symtab
         :ctx
         st: ord
         mark: mk
         text: txt
+        tf: txtF
         :constant
         fid: ztypes.tid
         pid: ztypes.tid.zero
