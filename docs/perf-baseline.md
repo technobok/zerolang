@@ -244,7 +244,42 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-10-10 | 68f77871 | [re-baseline after 408 commits: one quadratic, the rest is input](#r-68f77871) | 0.79s | 0.86s | 152MB / 118MB | 102 / 437 / 299 (total 848) | 2,153,863 | 447MB | 38.4s | 170,186 |
 | 2026-10-11 | 7936e2a7 | [a unit's row records whether it is generic](#r-7936e2a7) | 0.75s | 0.80s | 152MB / 119MB | 114 / 388 / 274 (total 776) | 2,154,121 | 447MB | 39.3s | 170,194 |
 | 2026-10-11 | c8473d57 | [review P2-P3: four defects, three scans, itoa](#r-c8473d57) | 0.72s | 0.75s | 154MB / 118MB | 100 / 363 / 255 (total 718) | 2,152,945 | 447MB | 36.6s | 170,272 |
+| 2026-10-12 | 17175e8d | [review P4-P5: facts slot, one call router, row records, three spellings](#r-17175e8d) | 0.72s | 0.76s | 153MB / 120MB | 107 / 364 / 257 (total 728) | 2,172,858 | 453MB | 36.6s | 171,555 |
 
+
+<a id="r-17175e8d"></a>
+**Review P4-P5: facts slot, one call router, row records, three spellings**
+(`c8473d57` -> `17175e8d`, 102 commits since the arc's re-baseline `68f77871`;
+`make ci` green at every sub-phase gate and last at `a16b4ee9`, in the main
+tree). Instructions 7,838M -> 7,823M on each compiler's own source, which grew
+by 1,283 lines; from `018ab4ae`, where P4.4 began, 8,094M -> 7,823M (-3.3%),
+fixed input 2,045M -> 1,995M (-2.4%). Allocations 2,152,945 -> 2,172,858.
+Against the arc's start (`68f77871`): -13.2% instructions, fixed input
+4,003M -> 1,995M (-50%), allocations +0.9% on 1,369 more lines.
+
+What the numbers are made of:
+- P4.4 (47 slices): an expression's facts -- place, literal, once, pure,
+  path, constant, failed -- are stated by the producer that builds its text
+  (a `facts: cfacts.borrow` slot) instead of re-derived from the C text by
+  six guessers. factsOfText answered 179,281 calls a self-compile and is
+  gone; -1.58% instructions on the fixed input, and the ordering pass drops
+  94 temps it no longer needs.
+- P4.5: one call router -- the callee's declaration (emitCallByDecl,
+  emitNativeMemberCall, emitAliasCall), then emitUndeclaredCall -- replaces
+  two probe chains of a dozen legs; a field read goes straight to the member
+  legs (-0.6%).
+- P4.6: argument labels by name id (-6,536 allocations: no label spelled per
+  lookup), one emitConformanceImpl, one keyed probe, Ctx rows (ArgHoist,
+  OrderPend, LoopFrame).
+- P5: data blocks read with `.get i:`, windows are `span` / `spanSlice`,
+  protocol and facet parameters live in `as`; the allocation count moves
+  with the source the self-compile reads, not with how it compiles.
+
+Measured and dropped: a NeedRow class for the runtime demands cost ~500
+allocations to compile and bought back two lists. `make ci` now runs
+perf-strict alone first: beside the parallel gates its count moved by six
+allocations, the self-compile rewriting the project's generated `z` unit copy
+that every concurrent zc rewrites too.
 
 <a id="r-c8473d57"></a>
 **Review P2-P3: four defects, three scans, itoa** (`7936e2a7` -> `c8473d57`, nine
