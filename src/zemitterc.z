@@ -6523,10 +6523,17 @@ stateFacts: function {facts: cfacts.borrow from: cfacts} is {
 }
 
 # guessing -- `text`, with the facts its shape implies stated into the caller's
-# slot: a producer's return whose facts are not yet its own to state.
+# slot: a producer's return whose facts are not yet its own to state. Nothing
+# ("") states nothing.
 guessing: function {facts: cfacts.borrow text: String.take} out String is {
-    stateFacts :facts from: (factsOfText s: text.stringView)
+    if text.length > 0 then stateFacts :facts from: (factsOfText s: text.stringView)
     return text
+}
+
+# constFacts -- a constant's value: a number, a cast of one, a macro, a tag. No
+# storage, nothing evaluated, nothing repeated when read twice.
+constFacts: function {} out cfacts is {
+    return (cfacts place: false literal: false once: false pure: true path: false stated: true)
 }
 
 # addrFacts -- `&e`, the address of an operand whose facts are `e`: a value, no
@@ -6545,9 +6552,10 @@ addrFacts: function {e: cfacts} out cfacts is {
 }
 
 # stating -- `text`, with its facts stated into the caller's slot: a producer's
-# return in one line.
+# return in one line. Nothing ("") -- a probe that declines -- states nothing,
+# so the slot never holds facts for text its caller did not take.
 stating: function {facts: cfacts.borrow from: cfacts text: String.take} out String is {
-    stateFacts :facts :from
+    if text.length > 0 then stateFacts :facts :from
     return text
 }
 
@@ -11524,7 +11532,8 @@ renderDefault: function {
             # a string default is the `_zcsN` view of its static bytes
             ks: memberConstStringText :symtab :ctx unitTid: kUnit nameId: kName
             if ks.length > 0 then return ks
-            return (memberConstText :ast :symtab :ctx unitTid: kUnit nameId: kName)
+            kF: cfacts
+            return (memberConstText :ast :symtab :ctx unitTid: kUnit nameId: kName facts: kF)
         }
     }
     {
@@ -12544,9 +12553,16 @@ cvalText: function {
     ctx: Ctx.view
     tid: ztypes.tid
     v: ztypes.cval
+    facts: cfacts.borrow
 } out String is {
-    if v.kind.ivalKind then return (intCvalText :symtab :tid :v)
-    if v.kind.fvalKind then return (floatCvalText :symtab :tid :v)
+    if v.kind.ivalKind then return (stating
+        :facts
+        from: constFacts
+        text: (intCvalText :symtab :tid :v)
+    )
+    if v.kind.fvalKind then {
+        return (stating :facts from: constFacts text: (floatCvalText :symtab :tid :v))
+    }
     if v.kind.armKind then {
         if v.armTid.isZero then return ""
         if v.armName.isZero then return ""
@@ -12554,12 +12570,12 @@ cvalText: function {
         # scalar; anything else is the payload-less compound literal
         # emitInlineVariantCtor builds for the same arm written as a call
         atomVarId: armValueC :ast :ctx :symtab tid: v.armTid arm: v.armName
-        if atomVarId.length > 0 then return atomVarId
+        if atomVarId.length > 0 then return (stating :facts from: constFacts text: atomVarId)
         tg: tagConstOf :ast :ctx :symtab tid: v.armTid armId: v.armName
         if tg.length == 0 then return ""
         vc: ctxCname :ctx tid: v.armTid
         if vc.length == 0 then return ""
-        return "((\{vc}_t){ .tag = \{tg} })"
+        return (stating :facts from: literalFacts text: "((\{vc}_t){ .tag = \{tg} })")
     }
     return ""
 }
@@ -12683,6 +12699,7 @@ nodeConstText: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     nid: zast.nodeid
+    facts: cfacts.borrow
 } out String is {
     if nid.isZero then return ""
     g: symtab.typing.nodeConstIn mono: ctx.curThisTid :nid
@@ -12699,9 +12716,10 @@ nodeConstText: function {
     if g.kind.svalKind when (chaseStrTypedef :symtab :ctx tid: tv) == ctx.strTid then {
         return ""
     }
-    sc: cvalText :ast :symtab :ctx tid: tv v: g
+    sc: cvalText :ast :symtab :ctx tid: tv v: g :facts
     if sc.length > 0 then return sc
-    return (cvalStrText :symtab :ctx v: g)
+    # a folded string is its pooled static, `_zcsN`
+    return (stating :facts from: pathFacts text: (cvalStrText :symtab :ctx v: g))
 }
 
 # memberConstTid -- the declared type of a unit constant, 0 when it has none.
@@ -12731,13 +12749,14 @@ memberConstText: function {
     ctx: Ctx.view
     unitTid: ztypes.tid
     nameId: zast.nameid
+    facts: cfacts.borrow
 } out String is {
     if unitTid.isZero then return ""
     if nameId.isZero then return ""
     mv: symtab.typing.memberConstOf parentTypeId: unitTid :nameId
     if mv.kind.none then return ""
     mt: memberConstTid :symtab :unitTid :nameId
-    return (cvalText :ast :symtab :ctx tid: mt v: mv)
+    return (cvalText :ast :symtab :ctx tid: mt v: mv :facts)
 }
 
 # memberConstStringText -- the `_zcsN` a STRING constant renders as: the string
@@ -15495,14 +15514,14 @@ emitAtom: function {
     if dv.length > 0 then return (stating :facts from: literalFacts text: dv)
     # a literal landing in an i128, u128 or f16 is that type's value
     if (symtab.typing.helperScalarTarget.has key: n.nodeid) then {
-        wa: nodeConstText :ast :symtab :ctx nid: n.nodeid
+        wa: nodeConstText :ast :symtab :ctx nid: n.nodeid :facts
         if wa.length > 0 then return wa
     }
     # an integer literal outside i64 is spelled by its value, which the checker
     # settled in the type it landed in: C has no token for one past u64, and
     # none in binary or octal at all
     if av.length >= 19 when ((av.byteAt i: 0).or d: 0) <= 57 then {
-        wc: nodeConstText :ast :symtab :ctx nid: n.nodeid
+        wc: nodeConstText :ast :symtab :ctx nid: n.nodeid :facts
         if wc.length > 0 then return wc
     }
     # a `0b` / `0o` / `0c` literal has no C token behind it, so decode it here
@@ -15510,7 +15529,11 @@ emitAtom: function {
     # start with a digit)
     if av.startsWith "0" then {
         cl: literalC lex: av
-        if cl.length > 0 when cl.stringView != av then return cl
+        if cl.length > 0 when cl.stringView != av then return (stating
+            :facts
+            from: constFacts
+            text: cl
+        )
         if cl.length == 0 then {
             emitFail :ctx what: "invalid numeric literal \{av}" line: n.lineno
             return "/* zemitterc: unhandled numeric literal \{av} */0"
@@ -15553,6 +15576,7 @@ emitAtom: function {
                     :ctx
                     unitTid: nsFt
                     nameId: n.name
+                    :facts
                 )
                 if nsca.length > 0 then return nsca
                 nscs: memberConstStringText :symtab :ctx unitTid: nsFt nameId: n.name
@@ -15571,6 +15595,7 @@ emitAtom: function {
         :ctx
         unitTid: mutd
         nameId: n.name
+        :facts
     )
     if mca.length > 0 then return mca
     mcsa: memberConstStringText :symtab :ctx unitTid: mutd nameId: n.name
@@ -15609,6 +15634,10 @@ emitAtom: function {
     ) case some then {
         if iso == ctx.strTid then return (emitExprStrZero :ctx)
     } case none then null
+    # a numeric lexeme no leg above respelled is C text as written: identifiers
+    # never start with a digit
+    if ((av.byteAt i: 0).or d: 0) <= 57 then return (stating :facts from: constFacts text: av.string
+    )
     return (emitLocalAtomNameAtWith
         :symtab
         :ctx
@@ -17015,7 +17044,8 @@ dottedTypeConstRead: function {
     if isSlot.not when (symtab.typing.isAsConstDecl
         declId: (symtab.typing.declMemberIdOf parentTypeId: bt nameId: cid)
     ).not then return ""
-    ct: memberConstText :ast :symtab :ctx unitTid: bt nameId: cid
+    ctF: cfacts
+    ct: memberConstText :ast :symtab :ctx unitTid: bt nameId: cid facts: ctF
     if ct.length > 0 then return ct
     return (memberConstStringText :symtab :ctx unitTid: bt nameId: cid)
 }
@@ -18317,6 +18347,7 @@ emitExprArms: function {
         :symtab
         :ctx
         nid: (interpPartNodeId :n)
+        :facts
     )
     if cv.length > 0 then return cv
     match (
@@ -30701,12 +30732,14 @@ unitConstTextOf: function {
         if utd8.isZero.not then {
             # the VALUE is the only source: a constant is never rendered to
             # text ahead of time and re-read.
+            mct8F: cfacts
             mct8: (memberConstText
                 :ast
                 :symtab
                 :ctx
                 unitTid: utd8
                 nameId: cn8
+                facts: mct8F
             )
             if mct8.length > 0 then return mct8
             mcs8: memberConstStringText :symtab :ctx unitTid: utd8 nameId: cn8
@@ -30716,12 +30749,14 @@ unitConstTextOf: function {
             pbd8: ztypecheck.publicNsOf st: symtab tid: utd8
             pbt8: ztypecheck.declTypeIdOf st: symtab declId: pbd8
             if pbt8.isZero.not then {
+                mcp8F: cfacts
                 mcp8: (memberConstText
                     :ast
                     :symtab
                     :ctx
                     unitTid: pbt8
                     nameId: cn8
+                    facts: mcp8F
                 )
                 if mcp8.length > 0 then return mcp8
                 mcq8: memberConstStringText :symtab :ctx unitTid: pbt8 nameId: cn8
@@ -41706,7 +41741,8 @@ dataSlotText: function {
         r.append " }"
         return r
     }
-    return (cvalText :ast :symtab :ctx tid: (symtab.reg.dataElemTypeOf tid: dataTid) :v)
+    facts: cfacts
+    return (cvalText :ast :symtab :ctx tid: (symtab.reg.dataElemTypeOf tid: dataTid) :v :facts)
 }
 
 # armTagValueText -- the declared discriminator of the arm named `armNameId`
