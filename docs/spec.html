@@ -2912,7 +2912,7 @@ so the lock cannot be duplicated.</p>
   target: container.private.view
 } as {
   create: function {target: container.private.view} outx this is {
-    return meta.create pos: 0 target: target
+    return (meta.create pos: 0 target: target)
   }
 }</code></pre>
 <p><code>.borrow</code> and <code>.view</code> are the only field-type modifiers permitted
@@ -3950,8 +3950,7 @@ variable, and cannot drop a top-level definition.</p>
 <h4 id="private-method"><a href="#private-method">5.5.7. private (method)</a></h4>
 <p><code>private</code> is the compiler-generated friend-access intrinsic.
 <code>&lt;receiver&gt;.private</code> yields the receiver at the same type but with the
-type's private members (those whose names start with an underscore
-or that the type marks as private through a <code>.private</code> field type)
+type's private members -- those its <code>public:</code> block leaves out --
 visible. A user-defined <code>.private</code> member on the receiver type shadows
 the intrinsic.</p>
 <p>Only code internal to the receiver type's methods, or code in a
@@ -4936,7 +4935,7 @@ level by passing a generic variable at the call site into the constructor.</p>
     b: String
 
     create: function {a: 0.u32 b: String} out this is {
-        return meta.create :a :b      # no stuttering... can use default args
+        return (meta.create :a :b)      # no stuttering... can use default args
     }
 }</code></pre>
 <p>Class constructors whose type carries non-owned fields simply return
@@ -5038,7 +5037,7 @@ at the subtype construction form.</p>
     create: null
 
     build: function {seed: i64} out this is {
-        return meta.create value: seed * 7
+        return (meta.create value: seed * 7)
     }
 }
 
@@ -5228,33 +5227,24 @@ layouts, and the compiler's own markers (<code>null</code>, <code>never</code>, 
 <tr><td>as</td><td>Yes</td><td>Block of static types, generic parameters and associated methods</td></tr>
 </tbody>
 </table>
-<p>Private members (having names with a leading '_') can only be modified within
-the record's namespace.</p>
-<p>The body can include <code>is</code> clauses that indicate instances of this record
-implement that protocol.</p>
-<p>A constructor can be provided (and must be if there are private subtypes
-without default values). The constructor is given a preinitialised record --
-<code>this</code> (NOPE). It can accept no other parameters. All private parameters must be given
-a value and any invariants can be established. No other methods can be called
-on <code>this</code> because it is incomplete. Additional constructors can be written as
-normal methods, but all will receive their base instance from this constructor.</p>
-<pre><code class="language-zerolang"># private member with default value
-myrec: record {
-    a: u32
-    b: u8
-    _c: 0ca.c32
-}
-
-# with constructor:
+<p>A record's members are public unless its <code>as</code> block holds a
+<code>public:</code> block, which then lists exactly the ones it exposes (see
+<a href="#public">public</a>); a name's spelling, a leading underscore included,
+makes nothing private.</p>
+<p>A record declares the facets it conforms to in its <code>as</code> block, as every
+type declares its conformances (see <a href="#facet">facet</a>).</p>
+<p>A record may define its own <code>create</code> in its <code>as</code> block. It builds the
+instance through <code>meta.create</code>, the one raw constructor, which takes the
+record's fields; its own parameters are whatever it asks for, and it may
+establish any invariant before it returns.</p>
+<pre><code class="language-zerolang"># a constructor that fills a field itself
 myrec: record {
     a: u32
     b: u8
     c: c32
-
-    # TODO: don't do this? See constructors above, rust style...
+} as {
     create: function {a: u32 b: u8} out this is {
-        this.c = 0ca.c32
-        return this
+        return (meta.create :a :b c: 0ca.c32)
     }
 }</code></pre>
 <p>A record may inline other valtypes, including other records, but may never
@@ -5297,7 +5287,7 @@ and <a href="./ownership.html">ownership</a>.</p>
     target: bag.private.view
 } as {
     create: function {target: bag.private.view} outx this is {
-        return meta.create pos: 0 target: target
+        return (meta.create pos: 0 target: target)
     }
 }</code></pre>
 <h3 id="class"><a href="#class">11.3. class</a></h3>
@@ -5316,21 +5306,15 @@ and <a href="./ownership.html">ownership</a>.</p>
 </tbody>
 </table>
 <p>Defines a user defined reference type.</p>
-<p>The body can include <code>is</code> clauses that indicate instances of this class
-implement that protocol.</p>
-<p>How to do this?</p>
-<pre><code>class Node&lt;T&gt; {
-    val   T
-    left  &amp;Node
-    right &amp;Node
-}
-
-# the zerolang equivalent
-mynode: class {
-    t: generic any
+<p>A class declares the protocols it conforms to in its <code>as</code> block, as every
+type declares its conformances (see <a href="#protocol">protocol</a>).</p>
+<p>A generic class declares its parameters in its <code>as</code> block, and may name an
+instance of itself in a field:</p>
+<pre><code class="language-zerolang">Node: class {
     val: t
-    left: (this t)
-    right: (this t)
+    next: Option (Node :t)
+} as {
+    t: anyval.generic
 }</code></pre>
 <h3 id="is-and-as-sections"><a href="#is-and-as-sections">11.4. 'is' and 'as' Sections</a></h3>
 <p>Records, classes, unions and variants have two sections: <code>is</code> (instance
@@ -5340,7 +5324,6 @@ single namespace -- the same name cannot appear in both sections.</p>
 <ul>
 <li>Fields (data stored in each instance)</li>
 <li>Function pointer fields (stored per-instance, can be replaced)</li>
-<li>Protocol implementation declarations</li>
 </ul>
 <p>The <code>as</code> section contains type-level static members:</p>
 <ul>
@@ -5351,8 +5334,8 @@ single namespace -- the same name cannot appear in both sections.</p>
 <li>Computed constant expressions (e.g., <code>max: 2 * 1024</code>)</li>
 <li>Compile-time <code>if</code> and <code>match</code> expressions (e.g., <code>mode: if max &gt; 10 then { 1 } else { 2 }</code>)</li>
 <li>References to other constants (e.g., <code>alias: some_constant</code>)</li>
-<li>Protocol/facet conformance labels</li>
-<li>Visibility declarations (<code>public</code>, <code>private</code>)</li>
+<li>Protocol/facet conformances (<code>:Speaker</code>, <code>m: (sized n: u32)</code>)</li>
+<li>The visibility declaration, a <code>public:</code> block</li>
 </ul>
 <p>Functions defined in the <code>is</code> section are stored as function pointer fields
 in the instance struct. Each instance carries its own copy and these can be

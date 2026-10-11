@@ -3172,7 +3172,7 @@ so the lock cannot be duplicated.
     target: container.private.view
   } as {
     create: function {target: container.private.view} outx this is {
-      return meta.create pos: 0 target: target
+      return (meta.create pos: 0 target: target)
     }
   }
   """
@@ -4450,8 +4450,7 @@ See also [#> to=./ownership.html: ownership].
 
 #~"private" is the compiler-generated friend-access intrinsic.
 #~"<receiver>.private" yields the receiver at the same type but with the
-type's #_+"private members" (those whose names start with an underscore
-or that the type marks as private through a #~".private" field type)
+type's #_+"private members" -- those its #~"public:" block leaves out --
 visible. A user-defined #~".private" member on the receiver type shadows
 the intrinsic.
 
@@ -5595,7 +5594,7 @@ level by passing a generic variable at the call site into the constructor.
       b: String
 
       create: function {a: 0.u32 b: String} out this is {
-          return meta.create :a :b      # no stuttering... can use default args
+          return (meta.create :a :b)      # no stuttering... can use default args
       }
   }
   """
@@ -5720,7 +5719,7 @@ at the subtype construction form.
       create: null
 
       build: function {seed: i64} out this is {
-          return meta.create value: seed * 7
+          return (meta.create value: seed * 7)
       }
   }
 
@@ -5944,37 +5943,28 @@ Arguments for #~"record":
   is         |Yes     |Block of child types and generic parameters
   as         |Yes     |Block of static types, generic parameters and associated methods
 
-Private members (having names with a leading '_') can only be modified within
-the record's namespace.
+A record's members are public unless its #~"as" block holds a
+#~"public:" block, which then lists exactly the ones it exposes (see
+[#> to=public: public]); a name's spelling, a leading underscore included,
+makes nothing private.
 
-The body can include #~"is" clauses that indicate instances of this record
-implement that protocol.
+A record declares the facets it conforms to in its #~"as" block, as every
+type declares its conformances (see [#> to=facet: facet]).
 
-A constructor can be provided (and must be if there are private subtypes
-without default values). The constructor is given a preinitialised record --
-#~"this" (NOPE). It can accept no other parameters. All private parameters must be given
-a value and any invariants can be established. No other methods can be called
-on #~"this" because it is incomplete. Additional constructors can be written as
-normal methods, but all will receive their base instance from this constructor.
+A record may define its own #~"create" in its #~"as" block. It builds the
+instance through #~"meta.create", the one raw constructor, which takes the
+record's fields; its own parameters are whatever it asks for, and it may
+establish any invariant before it returns.
 
 #code language=zerolang: """
-  # private member with default value
-  myrec: record {
-      a: u32
-      b: u8
-      _c: 0ca.c32
-  }
-
-  # with constructor:
+  # a constructor that fills a field itself
   myrec: record {
       a: u32
       b: u8
       c: c32
-
-      # TODO: don't do this? See constructors above, rust style...
+  } as {
       create: function {a: u32 b: u8} out this is {
-          this.c = 0ca.c32
-          return this
+          return (meta.create :a :b c: 0ca.c32)
       }
   }
   """
@@ -6027,7 +6017,7 @@ and [#> to=./ownership.html: ownership].
       target: bag.private.view
   } as {
       create: function {target: bag.private.view} outx this is {
-          return meta.create pos: 0 target: target
+          return (meta.create pos: 0 target: target)
       }
   }
   """
@@ -6042,24 +6032,18 @@ Arguments for #~"class":
 
 Defines a user defined reference type.
 
-The body can include #~"is" clauses that indicate instances of this class
-implement that protocol.
+A class declares the protocols it conforms to in its #~"as" block, as every
+type declares its conformances (see [#> to=protocol: protocol]).
 
-How to do this?
+A generic class declares its parameters in its #~"as" block, and may name an
+instance of itself in a field:
 
-#code: """
-  class Node<T> {
-      val   T
-      left  &Node
-      right &Node
-  }
-
-  # the zerolang equivalent
-  mynode: class {
-      t: generic any
+#code language=zerolang: """
+  Node: class {
       val: t
-      left: (this t)
-      right: (this t)
+      next: Option (Node :t)
+  } as {
+      t: anyval.generic
   }
   """
 
@@ -6075,7 +6059,6 @@ The #~"is" section contains per-instance data:
 #ul:
   [#*: Fields (data stored in each instance)]
   [#*: Function pointer fields (stored per-instance, can be replaced)]
-  [#*: Protocol implementation declarations]
 
 The #~"as" section contains type-level static members:
 
@@ -6087,8 +6070,8 @@ The #~"as" section contains type-level static members:
   [#*: Computed constant expressions (e.g., #~"max: 2 * 1024")]
   [#*: Compile-time #~"if" and #~"match" expressions (e.g., #~"mode: if max > 10 then { 1 } else { 2 }")]
   [#*: References to other constants (e.g., #~"alias: some_constant")]
-  [#*: Protocol/facet conformance labels]
-  [#*: Visibility declarations (#~"public", #~"private")]
+  [#*: Protocol/facet conformances (#~":Speaker", #~"m: (sized n: u32)")]
+  [#*: The visibility declaration, a #~"public:" block]
 
 Functions defined in the #~"is" section are stored as function pointer fields
 in the instance struct. Each instance carries its own copy and these can be
