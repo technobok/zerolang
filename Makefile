@@ -58,7 +58,7 @@ SKIP     := mathutil genmath dissectlib
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: all check complexity-report style-lint-fast style-lint test ci ci-corpus \
+.PHONY: all check complexity-report style-lint-fast style-lint test ci ci-gates ci-corpus \
 	test-math-arm64 test-math-noasm test-portable-scalars docs-link-guard math-asm-guard \
 	bench-math bench-math-kernels test-clang test-tcc test-tcc-heavy readable-check build \
 	tcc zc zl zls regen-goldens regen-fmt-goldens regen-matrix matrix-guard regen-math-asm \
@@ -127,11 +127,20 @@ $(BUILDDIR)/ztestrunner: bin/zc src/ztestrunner.z $(wildcard lib/system/*.z) $(w
 test: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --jobs $(NPROC)
 
-# ci -- every gate: the guards, the heavy corpus (self-host ASan and the
-# fixpoint) and the seed bootstrap under gcc, clang and tcc, last and serial.
-ci: style-lint zl-full-guard complexity-report warn-check emitter-guard typename-guard frontend-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard highlight-guard any-guard deadcode-guard eager-guard eager-lib-guard case-guard user-native-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard readable-check perf-strict test-tcc-heavy test-clang test-math-arm64 test-math-noasm test-portable-scalars math-asm-guard matrix-guard docs-link-guard mode-parity ci-corpus
+# ci -- every gate: the allocation ratchet first and alone, then the guards and
+# the heavy corpus (self-host ASan and the fixpoint) in parallel, then the seed
+# bootstrap under gcc, clang and tcc, last and serial. perf-strict runs alone
+# because its self-compile reads and rewrites the project's generated copy of the
+# `z` unit (.zerolang/), which every zc run in the repository root rewrites too:
+# beside them its count moved by a few allocations, with the binary unchanged.
+ci:
+	$(MAKE) --no-print-directory perf-strict
+	$(MAKE) --no-print-directory ci-gates
 	$(MAKE) --no-print-directory test-bootstrap BOOTSTRAP_CCS="$(CI_BOOTSTRAP_CCS)"
 	@echo "CI GATE GREEN: style-lint + corpus(--heavy: +selfhost-asan +fixpoint) + bootstrap"
+
+# ci-gates -- the gates ci runs in parallel, after perf-strict.
+ci-gates: style-lint zl-full-guard complexity-report warn-check emitter-guard typename-guard frontend-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard highlight-guard any-guard deadcode-guard eager-guard eager-lib-guard case-guard user-native-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard readable-check test-tcc-heavy test-clang test-math-arm64 test-math-noasm test-portable-scalars math-asm-guard matrix-guard docs-link-guard mode-parity ci-corpus
 
 ci-corpus: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --heavy --jobs $(NPROC)
