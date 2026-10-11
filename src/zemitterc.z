@@ -5427,9 +5427,10 @@ svNativeCall: function {
     ctx: Ctx.view
     m: StringView
     recv: StringView
+    recvF: cfacts
     args: StringView
 } out String is {
-    if (canTakeAddress f: (factsOfText s: recv)) then {
+    if (canTakeAddress f: recvF) then {
         direct: "\{ctx.svC}_\{m}(&\{recv}\{args})"
         return direct
     }
@@ -5569,6 +5570,7 @@ emitSvCompareCall: function {
     ctx: Ctx
     call: zast.callrow.view
     bnv: StringView
+    bnvF: cfacts
     mnId: zast.nameid
     btid: ztypes.tid
     btIsStr: bool
@@ -5580,7 +5582,7 @@ emitSvCompareCall: function {
         tid: btid
     ) when mnId == zast.wellKnown.slot.wkCompare then {
         # compare maps to the by-value cmp in the base fragment
-        facts2: cfacts
+        facts2: bnvF
         bf: svValueForm :ast :symtab :ctx expr: bnv isStr: btIsStr vid: dcbV facts: facts2
         cargs: String
         arx189: u64
@@ -5630,6 +5632,7 @@ emitSvSubstringCall: function {
     ctx: Ctx
     call: zast.callrow.view
     bnv: StringView
+    bnvF: cfacts
     mnId: zast.nameid
     btid: ztypes.tid
     btIsStr: bool
@@ -5638,14 +5641,15 @@ emitSvSubstringCall: function {
 } out String is {
     if mnId == zast.wellKnown.slot.wkSubstring then {
         recvp: String
+        recvpF: bnvF
         if btid == ctx.svTid then {
             recvp = bnv.string
         } else {
             if btIsStr then {
-                recvF: cfacts
-                bfs: svValueForm :ast :symtab :ctx expr: bnv isStr: true vid: dcbV facts: recvF
+                bfs: svValueForm :ast :symtab :ctx expr: bnv isStr: true vid: dcbV facts: recvpF
                 recvp = bfs.copy
             } else {
+                recvpF = literalFacts
                 sacc: ".".string
                 if (isPtrVid :ctx vid: dcbV) then sacc = "->"
                 recvp = "((\{ctx.svC}_t){ .data = \{bnv}\{sacc}data, .size = \{bnv}\{sacc}len })"
@@ -5654,7 +5658,7 @@ emitSvSubstringCall: function {
         if recvp.length > 0 then {
             needsAddM :ctx uname: "system" memb: "substring"
             # a receiver that is a call is bound first, as svNativeCall binds it
-            addressable: canTakeAddress f: (factsOfText s: recvp.stringView)
+            addressable: canTakeAddress f: recvpF
             lead: "&_svr".string
             if addressable then lead = "&\{recvp}"
             svc: ctx.svC.copy
@@ -5754,11 +5758,11 @@ viewRecvAddr: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     recv: StringView
+    recvF: cfacts
     tid: ztypes.tid
 } out String is {
     if tid != ctx.svTid then return "&\{recv}"
-    if (factsOfText s: recv).place then return "&\{recv}"
-    if (factsOfText s: recv).literal then return "&\{recv}"
+    if (canTakeAddress f: recvF) then return "&\{recv}"
     svb: hoistForAddress :ast :symtab :ctx av: recv :tid argNid: zast.nodeid
     return "&\{svb}"
 }
@@ -5770,6 +5774,7 @@ emitSvSplitCall: function {
     ctx: Ctx
     call: zast.callrow.view
     bnv: StringView
+    bnvF: cfacts
     mnId: zast.nameid
     btid: ztypes.tid
     facts: cfacts.borrow
@@ -5793,7 +5798,14 @@ emitSvSplitCall: function {
                 }
             }
         }
-        es: "\{ctx.svC}_split(\{viewRecvAddr :ast :symtab :ctx recv: bnv tid: btid}, \{sepx})"
+        es: "\{ctx.svC}_split(\{(viewRecvAddr
+            :ast
+            :symtab
+            :ctx
+            recv: bnv
+            recvF: bnvF
+            tid: btid
+        )}, \{sepx})"
         return (stating :facts from: callFacts text: es)
     }
     return ""
@@ -5825,6 +5837,7 @@ emitSvParseCall: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     bnv: StringView
+    bnvF: cfacts
     mnv: StringView
     mnId: zast.nameid
     btid: ztypes.tid
@@ -5836,7 +5849,7 @@ emitSvParseCall: function {
         :ctx
         tid: btid
     ) when (svCallOf :ctx nameId: mnId).parse then {
-        recvF: cfacts
+        recvF: bnvF
         bfp: svValueForm :ast :symtab :ctx expr: bnv isStr: btIsStr vid: dcbV facts: recvF
         needsAddM :ctx uname: "system" memb: mnv
         epn: "\{ctx.svC}_\{mnv}(&\{bfp})"
@@ -5853,6 +5866,7 @@ emitSvArgNativeCall: function {
     ctx: Ctx
     call: zast.callrow.view
     bnv: StringView
+    bnvF: cfacts
     mnv: StringView
     mnId: zast.nameid
     btid: ztypes.tid
@@ -5881,6 +5895,7 @@ emitSvArgNativeCall: function {
                 :ctx
                 m: "byteAt"
                 recv: bnv
+                recvF: bnvF
                 args: bargs.stringView
             )
             return (stating :facts from: callFacts text: eb)
@@ -5904,6 +5919,7 @@ emitSvArgNativeCall: function {
             :ctx
             m: mnv
             recv: bnv
+            recvF: bnvF
             args: aargs.stringView
         )
         return (stating :facts from: callFacts text: ea)
@@ -5919,6 +5935,7 @@ emitSvSimpleCall: function {
     ctx: Ctx
     call: zast.callrow.view
     bnv: StringView
+    bnvF: cfacts
     mnv: StringView
     mnId: zast.nameid
     btid: ztypes.tid
@@ -5932,9 +5949,9 @@ emitSvSimpleCall: function {
         # a String receiver projects to a view value, like the
         # substring/parse legs (a StringView receiver is one already)
         recvS: bnv.string
+        recvSF: bnvF
         if btIsStr then {
-            recvF: cfacts
-            bfs2: svValueForm :ast :symtab :ctx expr: bnv isStr: true vid: dcbV facts: recvF
+            bfs2: svValueForm :ast :symtab :ctx expr: bnv isStr: true vid: dcbV facts: recvSF
             recvS = bfs2.copy
         }
         args: String
@@ -5954,6 +5971,7 @@ emitSvSimpleCall: function {
             :ctx
             m: mnv
             recv: recvS.stringView
+            recvF: recvSF
             args: args.stringView
         )
         return (stating :facts from: callFacts text: e1)
@@ -6051,6 +6069,7 @@ emitSvNativeInfix: function {
         :ctx
         m: op
         recv: (orderSlotText t: ctx st: ord slot: 0)
+        recvF: (factsOfText s: (orderSlotText t: ctx st: ord slot: 0))
         args: aargs.stringView
     )
     orderEnd :ctx st: ord
@@ -6138,6 +6157,7 @@ emitDottedCall: function {
         :ctx
         :call
         bnv: bn.stringView
+        bnvF: bnF
         mnv: mn
         :mnId
         :btid
@@ -6158,6 +6178,7 @@ emitSvCallLegs: function {
     call: zast.callrow.view
     # the receiver's C text
     bnv: StringView
+    bnvF: cfacts
     mnv: StringView
     mnId: zast.nameid
     btid: ztypes.tid
@@ -6165,19 +6186,32 @@ emitSvCallLegs: function {
     dcbV: ztypes.vid
     facts: cfacts.borrow
 } out String is {
-    eCmp: emitSvCompareCall :ast :symtab :ctx :call :bnv :mnId :btid :btIsStr :dcbV :facts
+    eCmp: emitSvCompareCall :ast :symtab :ctx :call :bnv :bnvF :mnId :btid :btIsStr :dcbV :facts
     if eCmp.length > 0 then return eCmp
-    eSub: emitSvSubstringCall :ast :symtab :ctx :call :bnv :mnId :btid :btIsStr :dcbV :facts
+    eSub: emitSvSubstringCall :ast :symtab :ctx :call :bnv :bnvF :mnId :btid :btIsStr :dcbV :facts
     if eSub.length > 0 then return eSub
-    eSpl: emitSvSplitCall :ast :symtab :ctx :call :bnv :mnId :btid :facts
+    eSpl: emitSvSplitCall :ast :symtab :ctx :call :bnv :bnvF :mnId :btid :facts
     if eSpl.length > 0 then return eSpl
     eLin: emitSvLinesCall :ctx :bnv :mnId :btid :facts
     if eLin.length > 0 then return eLin
-    ePar: emitSvParseCall :ast :symtab :ctx :bnv :mnv :mnId :btid :btIsStr :dcbV :facts
+    ePar: emitSvParseCall :ast :symtab :ctx :bnv :bnvF :mnv :mnId :btid :btIsStr :dcbV :facts
     if ePar.length > 0 then return ePar
-    eArg: emitSvArgNativeCall :ast :symtab :ctx :call :bnv :mnv :mnId :btid :facts
+    eArg: emitSvArgNativeCall :ast :symtab :ctx :call :bnv :bnvF :mnv :mnId :btid :facts
     if eArg.length > 0 then return eArg
-    return (emitSvSimpleCall :ast :symtab :ctx :call :bnv :mnv :mnId :btid :btIsStr :dcbV :facts)
+    return (emitSvSimpleCall
+        :ast
+        :symtab
+        :ctx
+        :call
+        :bnv
+        :bnvF
+        :mnv
+        :mnId
+        :btid
+        :btIsStr
+        :dcbV
+        :facts
+    )
 }
 
 # emitDataIndexCall -- `primes.index i`: a data-block element read,
