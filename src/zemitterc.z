@@ -3884,6 +3884,8 @@ Ctx: class {
     # argument is written, the positional cursor it is read with, and whether it
     # has been built
     orderVals: List String
+    # the facts of each slot's text
+    orderValFacts: ListVal cfacts
     orderWrit: ListVal u64
     orderPosAt: ListVal u64
     orderDone: ListVal bool
@@ -3895,8 +3897,10 @@ Ctx: class {
     orderPendName: ListVal zast.nameid
     # the value node a waiting scalar part's temp is typed from, 0 for none
     orderPendNid: ListVal zast.nodeid
-    # whether a waiting part only reads (isPureCText)
+    # whether a waiting part only reads
     orderPendPure: ListVal bool
+    # a waiting part's facts
+    orderPendFacts: ListVal cfacts
     # the next `_o` number, the function's own
     orderCtr: u64
     # whether the argument just built was passed by pointer
@@ -6145,7 +6149,7 @@ emitSvNativeInfix: function {
         :ctx
         m: op
         recv: (orderSlotText t: ctx st: ord slot: 0)
-        recvF: (factsOfText s: (orderSlotText t: ctx st: ord slot: 0))
+        recvF: (orderSlotFacts t: ctx st: ord slot: 0)
         args: aargs.stringView
     )
     orderEnd :ctx st: ord
@@ -7059,6 +7063,7 @@ orderstate: record {
 orderBegin: function {ctx: Ctx slots: u64} out orderstate is {
     base: ctx.orderVals.length
     for ctx.orderVals.length < (base + slots) loop ctx.orderVals.append String
+    for ctx.orderValFacts.length < (base + slots) loop ctx.orderValFacts.append cfacts
     return (orderstate
         pieceMark: ctx.orderPieceVals.length
         valBase: base
@@ -7070,6 +7075,7 @@ orderBegin: function {ctx: Ctx slots: u64} out orderstate is {
 # orderEnd -- a call's argument slots are read: release them.
 orderEnd: function {ctx: Ctx st: orderstate} is {
     for ctx.orderVals.length > st.valBase loop ctx.orderVals.pop
+    for ctx.orderValFacts.length > st.valBase loop ctx.orderValFacts.pop
 }
 
 # orderSlotText -- the argument text in slot `slot` of the call `st` opened, ""
@@ -7080,10 +7086,20 @@ orderSlotText: function {t: Ctx.view st: orderstate slot: u64} outx StringView i
     return got.stringView
 }
 
-# orderSetSlot -- fill slot `slot` of the call `st` opened.
-orderSetSlot: function {ctx: Ctx st: orderstate slot: u64 text: String.take} is {
+# orderSlotFacts -- the facts of the text in slot `slot` of the call `st`
+# opened; none stated when no argument fills it.
+orderSlotFacts: function {t: Ctx.view st: orderstate slot: u64} out cfacts is {
+    if (st.valBase + slot) >= t.orderValFacts.length then return cfacts
+    return (t.orderValFacts.get i: st.valBase + slot)
+}
+
+# orderSetSlot -- fill slot `slot` of the call `st` opened with `text`, whose
+# facts are `tf`.
+orderSetSlot: function {ctx: Ctx st: orderstate slot: u64 text: String.take tf: cfacts} is {
     for ctx.orderVals.length <= (st.valBase + slot) loop ctx.orderVals.append String
+    for ctx.orderValFacts.length <= (st.valBase + slot) loop ctx.orderValFacts.append cfacts
     ctx.orderVals.set i: st.valBase + slot val: text
+    ctx.orderValFacts.set i: st.valBase + slot val: tf
 }
 
 # orderPartWith -- one part of a call, whose facts are `tf`, just built from `mark`, placed in evaluation
@@ -7138,7 +7154,7 @@ orderPartWith: function {
         }
     }
     if constant then {
-        orderSetSlot :ctx :st :slot :text
+        orderSetSlot :ctx :st :slot :text :tf
         return
     }
     st.live = true
@@ -7150,6 +7166,7 @@ orderPartWith: function {
     ctx.orderPendName.append pname
     ctx.orderPendNid.append valueNid
     ctx.orderPendPure.append pure
+    ctx.orderPendFacts.append tf
 }
 
 # isPureCText -- the emitted C text of a part reads and does nothing else: no
@@ -7227,6 +7244,7 @@ orderDropWaiting: function {ctx: Ctx st: orderstate.view} is {
         ctx.orderPendName.pop
         ctx.orderPendNid.pop
         ctx.orderPendPure.pop
+        ctx.orderPendFacts.pop
     }
 }
 
@@ -7257,6 +7275,7 @@ orderSettle: function {
     fid: ctx.orderPendFid.get :i
     pid: ctx.orderPendPid.get :i
     vnid: ctx.orderPendNid.get :i
+    pf: ctx.orderPendFacts.get :i
     # a part no declared parameter types is typed as its own expression, read
     # through a comma so a `const` source still gives an assignable temp. A
     # scalar is spelled with its C type: typed as its own expression, the
@@ -7277,7 +7296,7 @@ orderSettle: function {
     )
     if given.length > 0 then ct = given.take
     if ct.length == 0 then {
-        orderSetSlot :ctx :st :slot :text
+        orderSetSlot :ctx :st :slot :text tf: pf
         return
     }
     tnum: ctx.orderCtr
@@ -7292,7 +7311,8 @@ orderSettle: function {
     ctx.argHoistVals.append String
     ctx.argHoistTypes.append ct
     ctx.argHoistDtors.append String
-    orderSetSlot :ctx :st :slot text: tn
+    # the ordered temp's name
+    orderSetSlot :ctx :st :slot text: tn tf: pathFacts
 }
 
 # orderFinish -- a call's parts are built: the opening of the comma expression
@@ -7305,7 +7325,7 @@ orderFinish: function {ctx: Ctx st: orderstate} out String is {
     for wi < ctx.orderPendText.length loop {
         wslot: ctx.orderPendSlot.get i: wi
         wtext: ctx.orderPendText.set i: wi val: String
-        orderSetSlot :ctx :st slot: wslot text: wtext
+        orderSetSlot :ctx :st slot: wslot text: wtext tf: (ctx.orderPendFacts.get i: wi)
         wi = wi + 1
     }
     orderDropWaiting :ctx :st
@@ -11799,21 +11819,17 @@ userCreateCallC: function {
                 :ord
             )
         } else {
-            facts2: cfacts
-            (orderSetSlot
+            dvF: cfacts
+            dv: (paramDefaultText
+                :ast
+                :symtab
                 :ctx
-                st: ord
-                slot: pi
-                text: (paramDefaultText
-                    :ast
-                    :symtab
-                    :ctx
-                    cco: fid
-                    nameId: (pidsNm.get i: pi)
-                    pid: (pids.get i: pi)
-                    facts: facts2
-                )
+                cco: fid
+                nameId: (pidsNm.get i: pi)
+                pid: (pids.get i: pi)
+                facts: dvF
             )
+            orderSetSlot :ctx st: ord slot: pi text: dv tf: dvF
         }
     }
     orderDropPositions :ctx base: wbase
@@ -34542,6 +34558,7 @@ emitC: function {
         orderPieceNames: List String
         orderPieceTemps: ListVal u64
         orderVals: List String
+        orderValFacts: ListVal cfacts
         orderWrit: ListVal u64
         orderPosAt: ListVal u64
         orderDone: ListVal bool
@@ -34553,6 +34570,7 @@ emitC: function {
         orderPendName: ListVal zast.nameid
         orderPendNid: ListVal zast.nodeid
         orderPendPure: ListVal bool
+        orderPendFacts: ListVal cfacts
         orderCtr: 0
         lastArgByPtr: false
         tmpHigh: 0
