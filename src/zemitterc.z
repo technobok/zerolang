@@ -20477,18 +20477,19 @@ appendFormattedNum: function {
 
 # appendViewPart -- append a StringView-typed part, a by-value operand (a
 # pointer-passed view would need the String leg's accessor treatment). The
-# value is read twice, for its data and its size, so a call is bound to a temp
-# first and runs once.
+# value is read twice, for its data and its size, so one whose facts say a
+# second read repeats work is bound to a temp first and read once.
 appendViewPart: function {
     ctx: Ctx
     # the part's C text
     val: StringView
+    valF: cfacts
     sNm: StringView
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
 } is {
-    if (factsOfText s: val).once then {
+    if valF.once then {
         svh: tmpNext :ctx :tmp
         buf.append "\{ind}\{ctx.svC}_t _h\{svh} = \{val};\n"
         buf.append "\{ind}\{ctx.strC}_append(&\{sNm}, _h\{svh}.data, _h\{svh}.size);\n"
@@ -20497,9 +20498,35 @@ appendViewPart: function {
     buf.append "\{ind}\{ctx.strC}_append(&\{sNm}, \{val}.data, \{val}.size);\n"
 }
 
+# appendStrPart -- append a sized str part, read for its data and its length:
+# bound to a temp first when a second read repeats work (a call's result).
+appendStrPart: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: astnode.view
+    val: StringView
+    valF: cfacts
+    sNm: StringView
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} is {
+    if valF.once then {
+        sth: tmpNext :ctx :tmp
+        stT: chaseAggregateTypedef :symtab :ctx tid: (stampIdOf :symtab nid: (interpPartNodeId :n))
+        stC: typeRefC :ast :symtab :ctx tid: stT
+        buf.append "\{ind}\{stC} _h\{sth} = \{val};\n"
+        buf.append "\{ind}\{ctx.strC}_append(&\{sNm}, _h\{sth}.data, _h\{sth}.len);\n"
+        return
+    }
+    buf.append "\{ind}\{ctx.strC}_append(&\{sNm}, \{val}.data, \{val}.len);\n"
+}
+
 # appendStringPart -- append a String-typed part. An atom (a borrowed String
 # param is a pointer, so isBorrowStringParam's raw name reads through `->`),
-# a map-entry deref or an owned struct field appends in place; a
+# a map-entry deref or an owned struct field appends in place, unless reading it
+# twice repeats work -- a field read off a load of a call's result; a
 # borrow-returning call result (a shared element view) is hoisted for single
 # evaluation and appended, the container owning the storage (the MapEntry
 # exemption, generalized by the declared signature); an owned call result is
@@ -20511,6 +20538,7 @@ appendStringPart: function {
     n: astnode.view
     # the part's C text
     val: StringView
+    valF: cfacts
     sNm: StringView
     ind: StringView
     buf: String.borrow
@@ -20524,7 +20552,7 @@ appendStringPart: function {
         (interpBaseIsMapEntry :ast :symtab :n) or
         (interpBaseIsOwnedStructField :ast :symtab :n)
     )
-    if isAtomP then {
+    if isAtomP when valF.once.not then {
         sAcc: ".".string
         if an0.length > 0 when (isPtrVid :ctx vid: (atomVid :symtab nid: (atomNodeId :n))) then {
             sAcc = "->"
@@ -20698,15 +20726,15 @@ emitInterpPart: function {
             :buf
         )
     } else if pt.isZero.not when pt == ctx.svTid then {
-        appendViewPart :ctx val: val.stringView :sNm :ind :tmp :buf
+        appendViewPart :ctx val: val.stringView :valF :sNm :ind :tmp :buf
     } else if pt.isZero.not when pt == ctx.strTid then {
-        appendStringPart :ast :symtab :ctx :n val: val.stringView :sNm :ind :buf
+        appendStringPart :ast :symtab :ctx :n val: val.stringView :valF :sNm :ind :buf
     } else if (originIsTid
         :symtab
         tid: (stampIdOf :symtab nid: (interpPartNodeId :n))
         originTid: (ctx.origins.get i: family.slot.str)
     ) then {
-        buf.append "\{ind}\{ctx.strC}_append(&\{sNm}, \{val}.data, \{val}.len);\n"
+        appendStrPart :ast :symtab :ctx :n val: val.stringView :valF :sNm :ind :tmp :buf
     } else {
         tn: regNameView :symtab tid: pt
         emitFail :ctx what: "unhandled interp part type \{tn}" line: (ztypecheck.nodeLine :n)
