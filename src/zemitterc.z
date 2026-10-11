@@ -6480,6 +6480,26 @@ literalFacts: function {} out cfacts is {
     return (cfacts place: false literal: true once: false pure: false path: false stated: true)
 }
 
+# derefFacts -- a pointer read through, `(*p)`: a place, read twice at no cost,
+# and no path: what it reads sits behind a pointer.
+derefFacts: function {} out cfacts is {
+    return (cfacts place: true literal: false once: false pure: true path: false stated: true)
+}
+
+# memberFacts -- `base.f` or `base->f`, read off a base whose facts are `b`: a
+# place wherever the base is one or is a compound literal, and a path, pure or
+# repeated work exactly as the base is.
+memberFacts: function {b: cfacts} out cfacts is {
+    return (cfacts
+        place: b.place or b.literal
+        literal: false
+        once: b.once
+        pure: b.pure
+        path: b.path
+        stated: true
+    )
+}
+
 # stateFacts -- fill the caller's slot. A slot is a reference parameter, written
 # through its fields, never replaced whole.
 stateFacts: function {facts: cfacts.borrow from: cfacts} is {
@@ -16919,10 +16939,14 @@ emitDottedAtomBase: function {
     mn2: StringView
     mnId: zast.nameid
     bn2: StringView
+    # the facts of `bn2`
+    bn2F: cfacts
     bn2v: ztypes.vid
     # the base is a Box and the member is its element's: the element's type,
     # read through the dereferenced cell `bn2` already spells
     boxElem: ztypes.tid.zero
+    # its facts, where a leg knows them
+    facts: cfacts.borrow
 } out String is {
     eNum: dottedAtomNumericBase :bn2 :mn2
     if eNum.length > 0 then return eNum
@@ -16941,14 +16965,15 @@ emitDottedAtomBase: function {
     # `.stringView` of a view is the view: a generic body wrote it for a type
     # parameter a StringView fills
     childNameId: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
-    if bareSv when childNameId == zast.wellKnown.slot.wkStringView then return bn2.string
+    if bareSv when childNameId == zast.wellKnown.slot.wkStringView then {
+        return (stating :facts from: bn2F text: bn2.string)
+    }
     eSv: emitSvAtomBase :ctx :bn2 :mn2 :mnId :bn2v :bareSv
     if eSv.length > 0 then return eSv
     if bareTid == ctx.strTid when mnId == zast.wellKnown.slot.wkLength then {
         sacc3: ".".string
         if (isPtrVid :ctx vid: bn2v) then sacc3 = "->"
-        e3: "\{bn2}\{sacc3}size"
-        return e3
+        return (stating :facts from: (memberFacts b: bn2F) text: "\{bn2}\{sacc3}size")
     }
     # Inside a generic template's body the receiver stamps as the TEMPLATE in
     # the plain table, so a member read on it resolved the TEMPLATE's member and
@@ -17020,8 +17045,7 @@ emitDottedAtomBase: function {
         eSm: sumMemberMethodRead :ast :symtab :ctx baseNid: n.parent :mn2 :mnId :bn2 :bn2v :bstamp
         if eSm.length > 0 then return eSm
         armDaC: memberC :ast :symtab :ctx owner: bstamp kind: memberkind.arm nameId: mnId
-        e: "\{bn2}.data.\{armDaC}"
-        return e
+        return (stating :facts from: (memberFacts b: bn2F) text: "\{bn2}.data.\{armDaC}")
     }
     cmr: (emitCollectionMemberRead
         :ast
@@ -17857,6 +17881,8 @@ emitDottedRead: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     n: zast.dottedpathrow.view
+    # its facts, where a leg knows them
+    facts: cfacts.borrow
 } out String is {
     # built-in `.orPanic` on a resultval/Result receiver -- any base
     # (a bound var, or a chained call/conversion), emitted via emitExpr so
@@ -17902,12 +17928,14 @@ emitDottedRead: function {
     if bn2a.stringView == bn2r then {
         bn2v = atomVid :symtab nid: (atomNodeId n: (ast.nodes.get i: n.parent))
     }
-    bn2: (emitLocalAtomNameAt
+    bn2F: cfacts
+    bn2: (emitLocalAtomNameAtWith
         :symtab
         :ctx
         nid: baseAtomNid
         name: bn2r.stringView
         vid: baseAtomVid
+        facts: bn2F
     )
     # a base atom that names a FUNCTION auto-calls, so the receiver is what the
     # call returns (`mkList.length`), and a string constant is its static: neither
@@ -17943,9 +17971,13 @@ emitDottedRead: function {
                         tid: nbT
                         argNid: zast.nodeid
                     )
-                    if nbTmp.length > 0 then nbX = nbTmp.copy
+                    if nbTmp.length > 0 then {
+                        nbX = nbTmp.copy
+                        nbXF = pathFacts
+                    }
                 }
                 bn2 = nbX.copy
+                bn2F = nbXF
             }
         }
     }
@@ -17963,6 +17995,7 @@ emitDottedRead: function {
         bxE: boxMemberElem :ast :symtab :ctx :n
         if bxE.isZero.not then {
             bn2 = "(*\{bn2})"
+            bn2F = derefFacts
             bn2v = ztypes.vid
         }
         aba: (emitDottedAtomBase
@@ -17973,8 +18006,10 @@ emitDottedRead: function {
             :mn2
             :mnId
             bn2: bn2.stringView
+            :bn2F
             :bn2v
             boxElem: bxE
+            :facts
         )
         if aba.length > 0 then return aba
     }
@@ -17991,11 +18026,13 @@ loadValueStructRef: function {
     ctx: Ctx
     n: astnode.view
     e: String.take
+    # the facts `e`'s producer stated, kept when `e` is handed back as it is
+    facts: cfacts.borrow
 } out String is {
     if (valueStructRefNode :ast :symtab :ctx :n).isZero then return e
     rt: stampIdOf :symtab nid: (interpPartNodeId :n)
     ph: hoistForAddress :ast :symtab :ctx av: e.stringView tid: rt argNid: zast.nodeid ptr: true
-    return "(*\{ph})"
+    return (stating :facts from: derefFacts text: "(*\{ph})")
 }
 
 # unloadValueStructRef -- the pointer behind a loaded reference call's text:
@@ -18079,8 +18116,15 @@ emitExprArms: function {
             :facts
         )
     } case dottedpath then {
-        dre: emitDottedRead :ast :symtab :ctx :n
-        return (loadValueStructRef :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid) e: dre.take)
+        dre: emitDottedRead :ast :symtab :ctx :n :facts
+        return (loadValueStructRef
+            :ast
+            :symtab
+            :ctx
+            n: (ast.nodes.get i: n.nodeid)
+            e: dre.take
+            :facts
+        )
     } case atomstring then {
         li: litIndexOf :ctx nid: n.nodeid
         if li > 0 then return (stating :facts from: pathFacts text: "_zs\{li}")
@@ -18110,7 +18154,14 @@ emitExprArms: function {
         return (emitTernaryChain :ast :symtab :ctx :n)
     } case call then {
         cve: emitCallValue :ast :symtab :ctx call: n
-        return (loadValueStructRef :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid) e: cve.take)
+        return (loadValueStructRef
+            :ast
+            :symtab
+            :ctx
+            n: (ast.nodes.get i: n.nodeid)
+            e: cve.take
+            :facts
+        )
     } case caseexpr then {
         if (controlValueIsReference :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid)) then {
             return (emitControlRef :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid))
@@ -19974,12 +20025,14 @@ emitPrintCallValue: function {
     tmp: TmpCtr
     buf: String.borrow
 } is {
+    ceF: cfacts
     ce: (loadValueStructRef
         :ast
         :symtab
         :ctx
         n: (ast.nodes.get i: call.nodeid)
         e: (emitCallValue :ast :symtab :ctx :call)
+        facts: ceF
     )
     flushArgHoists :ctx :ind :tmp :buf
     if (stampIsSv :symtab :ctx nid: call.nodeid) then {
