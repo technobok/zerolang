@@ -5545,8 +5545,8 @@ svNativeArgFrag: function {
 } out String is {
     sav: svArgAddr :ast :symtab :ctx :n
     if sav.length > 0 then return sav
-    sx: emitExpr :ast :symtab :ctx :n
-    sxF: factsOfText s: sx.stringView
+    sxF: cfacts
+    sx: emitExprWith :ast :symtab :ctx :n facts: sxF
     stampTid: stampIdOf :symtab nid: (interpPartNodeId :n)
     if stampTid == ctx.strTid then {
         sxh: (hoistBorrowValArg
@@ -6431,23 +6431,27 @@ emitStringArgMethod: function {
 }
 
 # cfacts -- what the producer of an expression's C text knows about it, so a
-# reader decides from facts rather than from the text's shape. Until every
-# producer states its own, factsOfText supplies them from the text; a producer
-# that states them is the authority.
+# reader decides from facts rather than from the text's shape. A producer
+# states them into its caller's slot (`facts: cfacts.borrow`) as it returns.
+# Until every producer states its own, factsOfText supplies them from the text;
+# a producer that states them is the authority.
 cfacts: record {
     # `&` may be taken of it as it stands: a name, a field path, a deref
-    place: bool
+    place: false
     # a compound literal `((T){..})`: an lvalue as well, which place does not
     # yet say
-    literal: bool
+    literal: false
     # reading it twice would repeat work or effects: it is bound to a temp
     # before a reader spells it twice
-    once: bool
+    once: false
     # evaluating it only reads: no call, no write, no statement expression
-    pure: bool
+    pure: false
     # a plain place path: a name and `.` / `->` member reads off it, reading
     # nothing through a pointer a call could replace
-    path: bool
+    path: false
+    # the facts were filled in; a fresh slot holds none, and no reader acts on
+    # a slot nobody filled
+    stated: false
 }
 
 # factsOfText -- the facts the text's shape implies: the one place the emitter
@@ -6459,7 +6463,32 @@ factsOfText: function {s: StringView} out cfacts is {
         once: (singleReadNeedsTemp :s)
         pure: (isPureCText :s)
         path: (isPlainCPath :s)
+        stated: true
     )
+}
+
+# pathFacts -- a plain place path: an identifier, and `.` / `->` member reads off
+# it. A place that only reads, read twice at no cost.
+pathFacts: function {} out cfacts is {
+    return (cfacts place: true literal: false once: false pure: true path: true stated: true)
+}
+
+# stateFacts -- fill the caller's slot. A slot is a reference parameter, written
+# through its fields, never replaced whole.
+stateFacts: function {facts: cfacts.borrow from: cfacts} is {
+    facts.place = from.place
+    facts.literal = from.literal
+    facts.once = from.once
+    facts.pure = from.pure
+    facts.path = from.path
+    facts.stated = from.stated
+}
+
+# stating -- `text`, with its facts stated into the caller's slot: a producer's
+# return in one line.
+stating: function {facts: cfacts.borrow from: cfacts text: String.take} out String is {
+    stateFacts :facts :from
+    return text
 }
 
 # canTakeAddress -- whether `&` applies to the text as it stands: a place, or a
@@ -9065,8 +9094,8 @@ emitBorrowAliasBind: function {
     if placeLeg when (symtab.reg.isReftypeOf tid: btid).not then return false
     base: ast.nodes.get i: ab.node
     hmk: pendingHoistMark :ctx
-    rvm: emitExpr :ast :symtab :ctx n: base
-    rvmF: factsOfText s: rvm.stringView
+    rvmF: cfacts
+    rvm: emitExprWith :ast :symtab :ctx n: base facts: rvmF
     # a member read that lowers to a CALL names no storage: a protocol or facet
     # field builds a fat pointer out of its base rather than reading a place, so
     # there is no address to alias and the binding owns what it gets. Only the
@@ -10506,8 +10535,8 @@ emitColInterpArg: function {
         # the argument is spelled again by the caller when this declines, so
         # what this spelling hoisted is dropped with it
         hmk: pendingHoistMark :ctx
-        ex: emitExpr :ast :symtab :ctx :n
-        exF: factsOfText s: ex.stringView
+        exF: cfacts
+        ex: emitExprWith :ast :symtab :ctx :n facts: exF
         if exF.place then {
             dropHoistsTo :ctx mark: hmk
             return ""
@@ -14729,14 +14758,50 @@ slotOrdinalOf: function {
 # cast in scope for it, else its own identifier. Shared by the atomid and
 # labelvalue (:name shorthand) value legs.
 emitLocalAtomName: function {ctx: Ctx.view name: StringView vid: ztypes.vid} out String is {
+    facts: cfacts
+    return (emitLocalAtomNameWith :ctx :name :vid :facts)
+}
+
+# emitLocalAtomNameWith -- emitLocalAtomName, its facts stated into `facts`.
+emitLocalAtomNameWith: function {
+    ctx: Ctx.view
+    name: StringView
+    vid: ztypes.vid
+    facts: cfacts.borrow
+} out String is {
     # Probed directly rather than through aliasResolve: that would synthesize a
     # copy of `name` for the no-alias case, which is the common one, only for the
     # comparison below to discard it.
     nb: vidFind xs: ctx.narrowBox :vid
-    if nb > 0 then return (ctx.narrowBox.get i: nb - 1).val.copy
+    if nb > 0 then return (entryText xs: ctx.narrowBox at: nb - 1 :facts)
     al: vidFind xs: ctx.aliases :vid
-    if al > 0 then return (ctx.aliases.get i: al - 1).val.copy
-    return (varCName :ctx :vid :name)
+    if al > 0 then return (entryText xs: ctx.aliases at: al - 1 :facts)
+    return (localNameText :ctx :vid :name :facts)
+}
+
+# localNameText -- a local's own C spelling, and its facts: a variable's name is
+# a path. With no variable behind it (vid 0) the spelling is the text the
+# caller handed in -- a literal, or nothing -- and its facts are read off it.
+localNameText: function {
+    ctx: Ctx.view
+    vid: ztypes.vid
+    name: StringView
+    facts: cfacts.borrow
+} out String is {
+    t: varCName :ctx :vid :name
+    if vid.isZero then {
+        stateFacts :facts from: (factsOfText s: t.stringView)
+        return t
+    }
+    return (stating :facts from: pathFacts text: t)
+}
+
+# entryText -- the text an alias or narrowing entry records for a variable, and
+# its facts.
+entryText: function {xs: (List VidVal).view at: u64 facts: cfacts.borrow} out String is {
+    e: xs.get i: at
+    stateFacts :facts from: (factsOfText s: e.val.stringView)
+    return e.val.copy
 }
 
 # narrowingEndedAt -- whether the read at `nid` sees the WHOLE local although a
@@ -14761,9 +14826,20 @@ narrowingEndedAt: function {
 # wholeLocalName -- the local's own storage: a take alias where one stands,
 # never the payload a narrowing aliased it to.
 wholeLocalName: function {ctx: Ctx.view name: StringView vid: ztypes.vid} out String is {
+    facts: cfacts
+    return (wholeLocalNameWith :ctx :name :vid :facts)
+}
+
+# wholeLocalNameWith -- wholeLocalName, its facts stated into `facts`.
+wholeLocalNameWith: function {
+    ctx: Ctx.view
+    name: StringView
+    vid: ztypes.vid
+    facts: cfacts.borrow
+} out String is {
     al: vidFind xs: ctx.aliases :vid
-    if al > 0 then return (ctx.aliases.get i: al - 1).val.copy
-    return (varCName :ctx :vid :name)
+    if al > 0 then return (entryText xs: ctx.aliases at: al - 1 :facts)
+    return (localNameText :ctx :vid :name :facts)
 }
 
 # emitLocalAtomNameAt -- emitLocalAtomName for the read at `nid`, which sees the
@@ -14775,8 +14851,23 @@ emitLocalAtomNameAt: function {
     name: StringView
     vid: ztypes.vid
 } out String is {
-    if (narrowingEndedAt :symtab :ctx :nid :vid) then return (wholeLocalName :ctx :name :vid)
-    return (emitLocalAtomName :ctx :name :vid)
+    facts: cfacts
+    return (emitLocalAtomNameAtWith :symtab :ctx :nid :name :vid :facts)
+}
+
+# emitLocalAtomNameAtWith -- emitLocalAtomNameAt, its facts stated into `facts`.
+emitLocalAtomNameAtWith: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    nid: zast.nodeid
+    name: StringView
+    vid: ztypes.vid
+    facts: cfacts.borrow
+} out String is {
+    if (narrowingEndedAt :symtab :ctx :nid :vid) then {
+        return (wholeLocalNameWith :ctx :name :vid :facts)
+    }
+    return (emitLocalAtomNameWith :ctx :name :vid :facts)
 }
 
 # localAtomNameIsAt -- whether `text` is exactly emitLocalAtomNameAt's spelling
@@ -17123,8 +17214,8 @@ emitResolvedCopy: function {
         return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent))
     }
     if cvstr then {
-        cvpv: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent)
-        cvpvF: factsOfText s: cvpv.stringView
+        cvpvF: cfacts
+        cvpv: emitExprWith :ast :symtab :ctx n: (ast.nodes.get i: n.parent) facts: cvpvF
         if cvpvF.place then {
             cvpn: ast.nodes.get i: n.parent
             cvan2: atomTextOf :ast n: cvpn
@@ -17825,8 +17916,8 @@ emitDottedRead: function {
         # twice, once for .data and once for .size, and twice is a second
         # evaluation when the expression is a call.
         if nbT == ctx.svTid then {
-            nbX: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent)
-            nbXF: factsOfText s: nbX.stringView
+            nbXF: cfacts
+            nbX: emitExprWith :ast :symtab :ctx n: (ast.nodes.get i: n.parent) facts: nbXF
             if nbX.length > 0 then {
                 # `&` needs an lvalue. A compound literal is one; a call is
                 # not, so it binds to a temp the statement flush declares.
@@ -17917,6 +18008,34 @@ emitExpr: function {
     ctx: Ctx
     n: astnode.view
 } out String is {
+    facts: cfacts
+    return (emitExprArms :ast :symtab :ctx :n :facts)
+}
+
+# emitExprWith -- emitExpr, its facts stated into `facts`. An arm that does not
+# yet state them has them read off its text.
+emitExprWith: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: astnode.view
+    facts: cfacts.borrow
+} out String is {
+    stateFacts :facts from: cfacts
+    t: emitExprArms :ast :symtab :ctx :n :facts
+    if facts.stated.not then stateFacts :facts from: (factsOfText s: t.stringView)
+    return t
+}
+
+# emitExprArms -- emitExpr's legs, by node kind; an arm that knows its text's
+# facts states them into `facts`.
+emitExprArms: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: astnode.view
+    facts: cfacts.borrow
+} out String is {
     cv: (nodeConstText
         :ast
         :symtab
@@ -17927,11 +18046,11 @@ emitExpr: function {
     match (
         n
     ) case statementline then {
-        return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.statementline))
+        return (emitExprArms :ast :symtab :ctx n: (ast.nodes.get i: n.statementline) :facts)
     } case statement then {
         if n.statements.count.u64 == 1 then {
             s0Id: zast.kidAt kids: ast.kids span: n.statements i: 0
-            return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: s0Id))
+            return (emitExprArms :ast :symtab :ctx n: (ast.nodes.get i: s0Id) :facts)
         }
         emitFail :ctx what: "unhandled expr (multi-statement)" line: n.lineno
         return "/* zemitterc: unhandled expr */0"
@@ -17940,16 +18059,20 @@ emitExpr: function {
     } case labelvalue then {
         lvC: ast.names.texts.get i: n.name
         lvv: atomVid :symtab nid: n.nodeid
-        return (emitLocalAtomNameAt :symtab :ctx nid: n.nodeid name: lvC.stringView vid: lvv)
+        return (emitLocalAtomNameAtWith
+            :symtab
+            :ctx
+            nid: n.nodeid
+            name: lvC.stringView
+            vid: lvv
+            :facts
+        )
     } case dottedpath then {
         dre: emitDottedRead :ast :symtab :ctx :n
         return (loadValueStructRef :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid) e: dre.take)
     } case atomstring then {
         li: litIndexOf :ctx nid: n.nodeid
-        if li > 0 then {
-            se: "_zs\{li}"
-            return se
-        }
+        if li > 0 then return (stating :facts from: pathFacts text: "_zs\{li}")
         # an interpolation is an owned String rvalue, built where it is
         # evaluated -- the same shape as a call returning one
         ie: emitInterpArgExpr :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid)
@@ -19805,8 +19928,8 @@ emitPrintValueExpr: function {
         buf.append "    /* zemitterc: unhandled print argument */\n"
         return
     }
-    es: emitExpr :ast :symtab :ctx :n
-    esF: factsOfText s: es.stringView
+    esF: cfacts
+    es: emitExprWith :ast :symtab :ctx :n facts: esF
     flushArgHoists :ctx :ind :tmp :buf
     if esF.place.not then {
         hps: tmpNext :ctx :tmp
@@ -20007,8 +20130,8 @@ copyRvalueHoist: function {
         # the receiver is spelled again by the caller when this declines, so
         # what this spelling hoisted is dropped with it
         hmk: pendingHoistMark :ctx
-        pv: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent)
-        pvF: factsOfText s: pv.stringView
+        pvF: cfacts
+        pv: emitExprWith :ast :symtab :ctx n: (ast.nodes.get i: n.parent) facts: pvF
         if pvF.place then {
             dropHoistsTo :ctx mark: hmk
             return ""
@@ -20075,8 +20198,8 @@ emitStringBindValue: function {
                 # the value is spelled again by the caller when this declines,
                 # so what this spelling hoisted is dropped with it
                 hmk: pendingHoistMark :ctx
-                pv: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent)
-                pvF: factsOfText s: pv.stringView
+                pvF: cfacts
+                pv: emitExprWith :ast :symtab :ctx n: (ast.nodes.get i: n.parent) facts: pvF
                 if pvF.place then dropHoistsTo :ctx mark: hmk
                 if pvF.place.not then {
                     tnm: (copyReceiverTemp
@@ -25102,8 +25225,8 @@ emitObjIterRecv: function {
         iterRecv = "_git\{mN}"
         ownGit = true
     } else {
-        ivex: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: cOp)
-        ivexF: factsOfText s: ivex.stringView
+        ivexF: cfacts
+        ivex: emitExprWith :ast :symtab :ctx n: (ast.nodes.get i: cOp) facts: ivexF
         # A construction written as a bare TYPE NAME is an atom in the AST and a
         # call in the emitted C: the shape test reads `Counter` as an lvalue,
         # while what it becomes is `<T>_create(...)`, and the loop then asks for
@@ -40588,8 +40711,8 @@ dispatchArgText: function {
     ctx: Ctx
     n: astnode.view
 } out String is {
-    av: emitExpr :ast :symtab :ctx :n
-    avF: factsOfText s: av.stringView
+    avF: cfacts
+    av: emitExprWith :ast :symtab :ctx :n facts: avF
     if (symtab.typing.standInOf.has key: (zast.nodeIdOf :n)) then {
         return (standInText :ast :symtab :ctx :n text: av.take)
     }
@@ -40854,8 +40977,8 @@ emitProtocolCreateCall: function {
             # no variable, which emitted `&fn`. Both are calls: emit the
             # value, and bind it where its address cannot be taken.
             if (fromBase.length == 0) or valueVid.isZero then {
-                fvx: emitExpr :ast :symtab :ctx n: fop
-                fvxF: factsOfText s: fvx.stringView
+                fvxF: cfacts
+                fvx: emitExprWith :ast :symtab :ctx n: fop facts: fvxF
                 valVarC = fvx.copy
                 refPfx = "&"
                 if fvxF.place.not then valVarC = (hoistForAddress
