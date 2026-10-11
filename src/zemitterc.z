@@ -6557,6 +6557,13 @@ isPathAddrText: function {s: StringView} out bool is {
     return (isPlainCPath s: (s.substring from: 1 to: s.length))
 }
 
+# knownFacts -- `f` when a producer filled it, else the facts `s`'s shape implies:
+# for a reader some of whose sources do not yet state facts.
+knownFacts: function {f: cfacts s: StringView} out cfacts is {
+    if f.stated then return f
+    return (factsOfText :s)
+}
+
 # canTakeAddress -- whether `&` applies to the text as it stands: a place, or a
 # compound literal, which is an lvalue too.
 canTakeAddress: function {f: cfacts} out bool is {
@@ -7648,6 +7655,8 @@ instanceMethodArgValue: function {
     posParamId: ztypes.tid
     posIdx0: u64
     av: String.borrow
+    # the facts of what is appended to `av`
+    avF: cfacts.borrow
 } out instargval is {
     positionalIdx: posIdx0
     # the label and the parameter name are the same text, but a reftype argument
@@ -7674,21 +7683,22 @@ instanceMethodArgValue: function {
     avNd: zast.nodeid
     if iiVal.length > 0 then {
         atomVarId = iiVal.take
+        stateFacts facts: avF from: (factsOfText s: atomVarId.stringView)
         usedInterp = true
         if isLbl9b.not then positionalIdx = positionalIdx + 1
     } else {
-        atomVarId = (ctorArgByLabel
-            :ast
-            :symtab
-            :ctx
-            :call
-            label: pnameL.stringView
-        )
         avNd = ctorArgNodeByLabel :ast :call label: pnameL.stringView
+        if avNd.isZero then {
+            atomVarId = guessing facts: avF text: "0"
+        } else {
+            atomVarId = ctorArgTextAt :ast :symtab :ctx aid: avNd facts: avF
+        }
         if isLbl9b.not then {
-            pv: ctorArgByPosition :ast :symtab :ctx :call idx: positionalIdx
+            pF: cfacts
+            pv: ctorArgByPosition :ast :symtab :ctx :call idx: positionalIdx facts: pF
             if pv.length > 0 then {
                 atomVarId = pv.take
+                stateFacts facts: avF from: pF
                 avNd = ctorArgNodeByPosition :ast :call idx: positionalIdx
             }
             positionalIdx = positionalIdx + 1
@@ -7753,8 +7763,10 @@ instanceMethodArg: function {
     posParamId: ztypes.tid
     posIdx0: u64
     args: String.borrow
+    facts: cfacts.borrow
 } out u64 is {
     atomVarId: String
+    avF: cfacts
     avr: (instanceMethodArgValue
         :ast
         :symtab
@@ -7765,6 +7777,7 @@ instanceMethodArg: function {
         :posParamId
         :posIdx0
         av: atomVarId
+        :avF
     )
     ptr: (instanceMethodArgPtr
         :ast
@@ -7786,7 +7799,9 @@ instanceMethodArg: function {
         usedInterp: avr.usedInterp
         :posParamId
         av: atomVarId
+        :avF
         :args
+        :facts
     )
     return avr.posIdx
 }
@@ -7804,7 +7819,9 @@ passMethodArg: function {
     usedInterp: bool
     posParamId: ztypes.tid
     av: String.take
+    avF: cfacts
     args: String.borrow
+    facts: cfacts.borrow
 } is {
     ctx.lastArgByPtr = ptr.byref
     # the value text LOADED a pointer-held valtype (valueExprC); a parameter
@@ -7815,7 +7832,7 @@ passMethodArg: function {
         :ctx
         n: (ast.nodes.get i: avNd)
     ) then {
-        av = emitExpr :ast :symtab :ctx n: (ast.nodes.get i: avNd)
+        av = emitExprWith :ast :symtab :ctx n: (ast.nodes.get i: avNd) facts: avF
     }
     # a conformer standing in for a spec parameter is passed as its box: its
     # source's own temporary is spelled inside it, so it takes no other hoist,
@@ -7833,26 +7850,30 @@ passMethodArg: function {
         )
         if bx.length > 0 then {
             if ptr.byref then {
-                args.append (emitByrefArg
+                args.append (emitByrefArgWith
                     :ast
                     :symtab
                     :ctx
                     av: bx.stringView
+                    avF: (factsOfText s: bx.stringView)
                     pid: posParamId
                     argNid: zast.nodeid
+                    :facts
                 )
-            } else args.append bx
+            } else args.append (guessing :facts text: bx.take)
             return
         }
     }
     if ptr.byref then {
-        args.append (emitByrefArg
+        args.append (emitByrefArgWith
             :ast
             :symtab
             :ctx
             av: av.stringView
+            :avF
             pid: posParamId
             argNid: avNd
+            :facts
         )
     } else {
         (appendArgValue
@@ -7864,7 +7885,9 @@ passMethodArg: function {
             :usedInterp
             :posParamId
             av: av.stringView
+            :avF
             :args
+            :facts
         )
     }
 }
@@ -7881,7 +7904,9 @@ appendArgValue: function {
     usedInterp: bool
     posParamId: ztypes.tid
     av: StringView
+    avF: cfacts
     args: String.borrow
+    facts: cfacts.borrow
 } is {
     if ptr.ptra.not when avNd.isZero.not when (refValtypeResult
         :ast
@@ -7889,6 +7914,7 @@ appendArgValue: function {
         :ctx
         n: (ast.nodes.get i: avNd)
     ) then {
+        # a load's facts are read off its text (see userFnArgTextWith)
         ld: "(*\{av})"
         (appendArgValueText
             :ast
@@ -7898,12 +7924,26 @@ appendArgValue: function {
             :usedInterp
             :posParamId
             av: ld.stringView
+            avF: (factsOfText s: ld.stringView)
             argNid: avNd
             :args
+            :facts
         )
         return
     }
-    appendArgValueText :ast :symtab :ctx :ptr :usedInterp :posParamId :av argNid: avNd :args
+    (appendArgValueText
+        :ast
+        :symtab
+        :ctx
+        :ptr
+        :usedInterp
+        :posParamId
+        :av
+        :avF
+        argNid: avNd
+        :args
+        :facts
+    )
 }
 
 # appendArgValueText -- appendArgValue's text, hoisted when a borrow of the value
@@ -7916,24 +7956,29 @@ appendArgValueText: function {
     usedInterp: bool
     posParamId: ztypes.tid
     av: StringView
+    avF: cfacts
     argNid: zast.nodeid
     args: String.borrow
+    facts: cfacts.borrow
 } is {
     if ptr.ptra.not when usedInterp.not then {
-        vbhm: (hoistBorrowValArg
+        vbhm: (hoistBorrowValArgWith
             :ast
             :symtab
             :ctx
             :av
+            :avF
             :argNid
             pid: posParamId
             paramTake: ptr.pTake
         )
         if vbhm.length > 0 then {
+            stateFacts :facts from: pathFacts
             args.append vbhm
             return
         }
     }
+    stateFacts :facts from: avF
     args.append av
 }
 
@@ -8080,6 +8125,7 @@ orderMethodParam: function {
 } is {
     mk: pendingHoistMark :ctx
     one: String
+    oneF: cfacts
     constant: true
     if isRecv then {
         if recvIsPtr then {
@@ -8112,9 +8158,10 @@ orderMethodParam: function {
             posParamId: pid
             posIdx0: posIdx
             args: one
+            facts: oneF
         )
         if written > 0 then {
-            constant = (orderConstant
+            constant = (orderConstantWith
                 :ast
                 :symtab
                 :ctx
@@ -8122,17 +8169,20 @@ orderMethodParam: function {
                     i: (writtenArgNode :ast :call pos: written - 1)
                 )
                 text: one.stringView
+                tf: oneF
                 byPtr: ctx.lastArgByPtr
             )
         }
     }
-    (orderPart
+    tf: knownFacts f: oneF s: one.stringView
+    (orderPartWith
         :ast
         :symtab
         :ctx
         st: ord
         mark: mk
         text: one
+        :tf
         :constant
         fid: mco
         :pid
@@ -11317,7 +11367,8 @@ emitQualRecvMethodCall: function {
             recvExQ = ctorArgByLabel :ast :symtab :ctx :call label: recvNmQ.stringView
             recvNdQ = ctorArgNodeByLabel :ast :call label: recvNmQ.stringView
         } else {
-            recvExQ = ctorArgByPosition :ast :symtab :ctx :call idx: 0
+            rqF: cfacts
+            recvExQ = ctorArgByPosition :ast :symtab :ctx :call idx: 0 facts: rqF
             recvNdQ = ctorArgNodeByPosition :ast :call idx: 0
             posStartQ = 1
         }
@@ -11805,7 +11856,8 @@ fieldArgText: function {
     fid: ztypes.tid
 } out String is {
     if ca.nid.isZero.not then {
-        t: ctorArgTextAt :ast :symtab :ctx aid: ca.nid
+        tF: cfacts
+        t: ctorArgTextAt :ast :symtab :ctx aid: ca.nid facts: tF
         if ca.labelled or (t.length > 0) then {
             return (standInText
                 :ast
@@ -12210,7 +12262,8 @@ ctorArgByLabel: function {
 } out String is {
     aid: ctorArgNodeByLabel :ast :call :label
     if aid.isZero then return "0"
-    return (ctorArgTextAt :ast :symtab :ctx :aid)
+    facts: cfacts
+    return (ctorArgTextAt :ast :symtab :ctx :aid :facts)
 }
 
 # ctorArgTextAt -- one argument node's emitted text. An interpolated argument
@@ -12221,11 +12274,11 @@ ctorArgTextAt: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     aid: zast.nodeid
+    facts: cfacts.borrow
 } out String is {
     n: ast.nodes.get i: aid
     iv: emitInterpArgExpr :ast :symtab :ctx :n
-    if iv.length > 0 then return iv
-    facts: cfacts
+    if iv.length > 0 then return (guessing :facts text: iv)
     return (valueExprC :ast :symtab :ctx :n :facts)
 }
 
@@ -12313,10 +12366,11 @@ ctorArgByPosition: function {
     ctx: Ctx
     call: zast.callrow.view
     idx: u64
+    facts: cfacts.borrow
 } out String is {
     posParamId: ctorArgNodeByPosition :ast :call :idx
     if posParamId.isZero then return ""
-    return (ctorArgTextAt :ast :symtab :ctx aid: posParamId)
+    return (ctorArgTextAt :ast :symtab :ctx aid: posParamId :facts)
 }
 
 # ctorInterpArgAt -- the interp-arg form (emitInterpArgForParam) for one
@@ -19142,6 +19196,7 @@ operatorOperandText: function {
             avNd: rhsNid
         )
         txt: String
+        txtF: cfacts
         (passMethodArg
             :ast
             :symtab
@@ -19151,7 +19206,9 @@ operatorOperandText: function {
             usedInterp: false
             posParamId: rw.tid
             :av
+            :avF
             args: txt
+            facts: txtF
         )
         return txt
     }
