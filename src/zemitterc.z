@@ -14866,14 +14866,6 @@ emitNamedCalleeChain: function {
         :facts
     )
     if fplc.length > 0 then return fplc
-    # AN OPERATOR IS THE SAME METHOD IN EITHER FORM. `a + b` and `a.+ rhs: b`
-    # resolve to one declaration, and the infix form has emitted through the
-    # natives.tbl leg since the single-source arc. A user-declared operator
-    # already worked both ways -- its body is an ordinary method the dotted-call
-    # legs above reach -- but a NATIVE one is nobody's dispatcher to emit, so
-    # the call form arrived here.
-    opc: emitOperatorCallForm :ast :symtab :ctx :call :facts
-    if opc.length > 0 then return opc
     # a yield hoisted out of expression position: the suspension has already
     # run as its own statement and left the resume value in a temp, so what is
     # left here is a plain read
@@ -14913,26 +14905,16 @@ emitCallProbeChain: function {
 } out String is {
     mcc: emitMetaCreateCall :ast :symtab :ctx :call :facts
     if mcc.length > 0 then return mcc
-    fmc: emitFileMethodCall :ast :symtab :ctx :call :facts
-    if fmc.length > 0 then return fmc
     clisc: emitCliSpecCreate :ast :symtab :ctx :call :facts
     if clisc.length > 0 then return clisc
-    rcc: emitResultCombinator :ast :symtab :ctx :call :facts
-    if rcc.length > 0 then return rcc
-    pmc: emitParsedMethodCall :ast :symtab :ctx :call :facts
-    if pmc.length > 0 then return pmc
     scv: emitStrConvCall :ast :symtab :ctx :call :facts
     if scv.length > 0 then return scv
-    dc: emitDottedCall :ast :symtab :ctx :call :facts
-    if dc.length > 0 then return dc
     umc: emitUnitMethodCall :ast :symtab :ctx :call :facts
     if umc.length > 0 then return umc
     gfc: emitGenericFnCall :ast :symtab :ctx :call :facts
     if gfc.length > 0 then return gfc
     xuc: emitCrossUnitSumCtor :ast :symtab :ctx :call :facts
     if xuc.length > 0 then return xuc
-    ddq: emitDataIndexCall :ast :symtab :ctx :call :facts
-    if ddq.length > 0 then return ddq
     cufc: emitCrossUnitFnCall :ast :symtab :ctx :call :facts
     if cufc.length > 0 then return cufc
     cuct: emitCrossUnitCtor :ast :symtab :ctx :call :facts
@@ -15029,33 +15011,67 @@ emitUserMethodLeg: function {
     return (emitInstanceMethodCall :ast :symtab :ctx :call :facts)
 }
 
-# calleeHasBody -- the member this call names on `ownerTid` is written in
-# zerolang rather than supplied by the runtime. A native OWNER says nothing
-# about its individual members: the scalars are native and `times` / `upto` /
-# `downto` on them have bodies.
-calleeHasBody: function {
+# emitNativeMemberCall -- a NATIVE method: it has no body to call, so its
+# owner's family lowers it -- the result and option combinators, a data block's
+# element read, a str's substring, a native collection's empty `create`, a
+# class's fragment call (the cli Parsed accessors, the io handles), and
+# otherwise its natives.tbl operator row (`a.or rhs: b`). "" when the family's
+# leg declines.
+emitNativeMemberCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
     call: zast.callrow.view
     ownerTid: ztypes.tid
-} out bool is {
-    mnB: aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable)
-    if mnB.isZero then return false
-    co: symtab.typing.declChildOfId parentTypeId: ownerTid nameId: mnB
-    if co.none then return false
-    return (fnIsNativeId :symtab fid: co).not
+    ownerFam: ztypes.tid
+    isCreate: bool
+    facts: cfacts.borrow
+} out String is {
+    isComb: (
+        (ownerFam == (ctx.origins.get i: family.slot.resultval)) or
+        (ownerFam == (ctx.origins.get i: family.slot.optionval))
+    )
+    if isComb then return (emitResultCombinator :ast :symtab :ctx :call :facts)
+    if (isDataValueFamily :ctx fam: ownerFam) then return (emitDataIndexCall
+        :ast
+        :symtab
+        :ctx
+        :call
+        :facts
+    )
+    if ownerFam == (ctx.origins.get i: family.slot.str) then return (emitDottedCall
+        :ast
+        :symtab
+        :ctx
+        :call
+        :facts
+    )
+    if isCreate then return (emitEmptyColCreate :ast :symtab :ctx :call :facts)
+    if (symtab.reg.typetypeOf typeId: ownerTid) == ztypes.ztypetype.classType then {
+        if (
+            ownerTid ==
+            (unitClassTid :symtab unitDecl: ctx.cliUnitDecl nameId: zast.wellKnown.slot.tyParsed)
+        ) then {
+            return (emitParsedMethodCall :ast :symtab :ctx :call :facts)
+        }
+        return (emitFileMethodCall :ast :symtab :ctx :call :facts)
+    }
+    return (emitOperatorCallForm :ast :symtab :ctx :call :facts)
 }
 
 # emitMethodDeclCall -- a callee declared as a METHOD, routed by its owner's
 # family: a native collection, the two string types, a native that takes
-# arguments, a protocol or facet, and otherwise the compiler's own emission. A
-# native, a spec, an io/net handle and a `create` never reach that last leg.
+# arguments, a protocol or facet, any other native member, and otherwise the
+# compiler's own emission. An io/net handle and a `create` never reach that
+# last leg.
 emitMethodDeclCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
     ownerTid: ztypes.tid
+    # the method's own type: whether it is native
+    method: ztypes.tid
     fnptrField: bool
     isCreate: bool
     facts: cfacts.borrow
@@ -15078,15 +15094,18 @@ emitMethodDeclCall: function {
     isSpec: ott.isInterface
     if isSpec then return (emitProtocolDispatch :ast :symtab :ctx :call :facts)
     # A NATIVE OWNER MAY DECLARE A BODIED MEMBER, and its body is emitted like
-    # any other -- `u8.upto` is one. The bail below is for members the RUNTIME
-    # owns, which answer from their natives.tbl row above; a member with a body
-    # has no row to answer from and belongs on the ordinary method leg.
-    if (symtab.reg.isNativeOf tid: ownerTid) when (calleeHasBody
+    # any other -- `u8.upto` is one. It is the METHOD's nativeness that sends a
+    # call to its family's lowering, not the owner's.
+    if (fnIsNativeId :symtab fid: method) then return (emitNativeMemberCall
         :ast
         :symtab
+        :ctx
         :call
         :ownerTid
-    ).not then return ""
+        :ownerFam
+        :isCreate
+        :facts
+    )
     isIoNat: (
         (ownerTid == ctx.ioFileTid) or
         (ownerTid == ctx.netListenerTid) or
@@ -15182,6 +15201,7 @@ emitCallByDecl: function {
             :ctx
             :call
             :ownerTid
+            method: rtid
             fnptrField: rdecl.fnptrField
             isCreate: rdecl.name == zast.wellKnown.slot.wkCreate
             :facts
