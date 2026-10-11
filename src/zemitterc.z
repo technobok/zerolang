@@ -5428,19 +5428,6 @@ stmtFormNameId: function {
     return zid
 }
 
-# the middle segment's name id of a LEFT-nested `(a.B).c` path (0 otherwise).
-dottedParentChildId: function {
-    ast: Ast.view symtab: zenv.ZSymbolTable.view n: astnode.view
-} out zast.nameid is {
-    match (
-        n
-    ) case dottedpath then {
-        return (aliasChildNameId :ast :symtab n: (ast.nodes.get i: n.parent))
-    } else {
-        return zast.nameid.zero
-    }
-}
-
 # aliasChildName's pool id: the internal (renamed) member id when a rename
 # stamp exists, else the child atom's own name id.
 aliasChildNameId: function {
@@ -13646,38 +13633,6 @@ emitGenericFnCall: function {
     return (emitFnCallWithFid :ast :symtab :ctx :call fid: gmf :facts)
 }
 
-# emitUnitMethodCall -- a generic-unit-instance method call (intmath.add a: 3
-# b: 5): the receiver is stamped to a monomorphized UNIT type; the method is a
-# concrete FUNCTION child of it. Emit that mono fn's cname applied to the args.
-emitUnitMethodCall: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    call: zast.callrow.view
-    facts: cfacts.borrow
-} out String is {
-    rsid: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: call.callable)
-    if rsid.isZero then return ""
-    if (symtab.reg.typetypeOf typeId: rsid) != ztypes.ztypetype.unitType then return ""
-    rmo: originTidOf :symtab tid: rsid
-    if rmo.isZero then return ""
-    child: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable)
-    if child.length == 0 then return ""
-    co: (symtab.typing.declChildOfId
-        parentTypeId: rsid
-        nameId: (aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable))
-    )
-    calleeTid: ztypes.tid
-    match (
-        co
-    ) case some then {
-        calleeTid = co
-    } case none then null
-    if calleeTid.isZero then return ""
-    if (symtab.reg.typetypeOf typeId: calleeTid) != ztypes.ztypetype.functionType then return ""
-    return (emitFnCallWithFid :ast :symtab :ctx :call fid: calleeTid :facts)
-}
-
 # dottedMemberTidOf -- the type id a dotted callable's `base.child` names. A
 # file-unit base answers through the unit-name index, which also follows
 # re-exports; a namespace base is absent from that index by design, so it
@@ -13814,111 +13769,6 @@ outerBaseNodeId: function {ast: Ast.view n: astnode.view} out zast.nodeid is {
     }
 }
 
-
-# emitCrossUnitSumCtor -- a three-segment qualified sum-arm construction
-# (`json.Value.text s`, `zvfs.dentry.file d`): the in-unit form resolves the
-# type by bare name, so the qualified middle segment needs its own leg,
-# resolved through the defining unit's key like the create legs. A variant is
-# a valtype and carries its payload inline; only a union boxes one.
-emitCrossUnitSumCtor: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    call: zast.callrow.view
-    facts: cfacts.borrow
-} out String is {
-    pcId: dottedParentChildId :ast :symtab n: (ast.nodes.get i: call.callable)
-    if pcId.isZero then return ""
-    ud4x: (baseFileUnitDecl
-        :symtab
-        baseId: (outerBaseNodeId :ast n: (ast.nodes.get i: call.callable))
-    )
-    if ud4x.isZero then return ""
-    ctorArmName: aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable)
-    if ctorArmName.isZero then return ""
-    if (
-        (aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable)) ==
-        zast.wellKnown.slot.wkCreate
-    ) then return ""
-    ctorMk: zast.markerKindOf :ast n: (ast.nodes.get i: call.callable)
-    if ctorMk.borrowMarker then return ""
-    go: (ztypecheck.resolvedByIdsRo
-        :ast
-        st: symtab
-        unitDecl: ud4x
-        name: pcId
-    )
-    utid: ztypes.tid
-    match (
-        go
-    ) case some then {
-        utid = go
-    } case none then null
-    if utid.isZero then return ""
-    ttx: symtab.reg.typetypeOf typeId: utid
-    if ttx == ztypes.ztypetype.variantType then return (emitInlineVariantCtor
-        :ast
-        :symtab
-        :ctx
-        :call
-        tid: utid
-        arm: ctorArmName
-        :facts
-    )
-    if ttx != ztypes.ztypetype.unionType then return ""
-    vc: ctxCname :ctx tid: utid
-    tg: tagConstOf :ast :ctx :symtab tid: utid armId: ctorArmName
-    payC: (armPayloadC
-        :ast
-        :symtab
-        :ctx
-        tid: utid
-        arm: ctorArmName
-    )
-    if payC.length > 0 then {
-        av: String
-        got: false
-        arx449: u64
-        for arx449 < call.arguments.count loop {
-            aId: zast.kidAt kids: ast.kids span: call.arguments i: arx449
-            arx449 = arx449 + 1
-            a: ast.nodes.get i: aId
-            if a.namedoperation when got.not then {
-                got = true
-                aOpNode: ast.nodes.get i: a.operation
-                av = emitInterpArgExpr :ast :symtab :ctx n: aOpNode
-                if av.length == 0 then {
-                    aOpNode: ast.nodes.get i: a.operation
-                    av = emitExpr :ast :symtab :ctx n: aOpNode
-                }
-            }
-        }
-        inl: (armIsInlineC
-            :symtab
-            tid: utid
-            arm: ctorArmName
-        )
-        usl: armSlotC :ast :symtab :ctx tid: utid recv: "_u" acc: "." arm: ctorArmName inline: inl
-        st: (armCellStore
-            pc: payC.stringView
-            box: "_b"
-            value: av.stringView
-            slot: usl.stringView
-            inline: inl
-        )
-        return (stating
-            :facts
-            from: callFacts
-            text: "({ \{vc}_t _u = {0}; _u.tag = \{tg}; \{st} _u; })"
-        )
-    } else {
-        return (stating
-            :facts
-            from: callFacts
-            text: "({ \{vc}_t _u = {0}; _u.tag = \{tg}; _u.data = NULL; _u; })"
-        )
-    }
-}
 
 # emitCrossUnitCtor -- construction of a cross-unit record/class
 # `unit.TypeName field: val ...` (e.g. a astnode arm's zast.ErrorData payload):
@@ -14728,46 +14578,72 @@ namedCalleeCtorTid: function {
     return fid
 }
 
-# emitNamedCalleeChain -- the probe legs that need the callee's NAME or its resolved
-# function id: the constructor shapes, the user function call, and the fn-pointer
-# local. The name is consulted only after the checker's stamps have declined, and
-# never for a callee the checker stamped as a local.
-emitNamedCalleeChain: function {
+# emitUndeclaredCall -- a call the declaration route did not take: its callee
+# has no declaration of its own -- `meta.create`, a sized conversion (`"hi".str
+# to: 8`), a type written as an application (`(Pair t: u64).create a: 1`,
+# `(sized t: i64 size: 4) val: 1`), a function reached through a template
+# instance's or a generic call's stamp, a yield -- or is a LOCAL holding a
+# function. Each is told by what the checker stamped. One that is none of these
+# is an emitter defect, reported where it is found.
+emitUndeclaredCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
     facts: cfacts.borrow
 } out String is {
-    cn0: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: call.callable))
-    ecc: (emitEmptyColCreate
-        :ast
-        :symtab
-        :ctx
-        :call
-        :facts
-    )
-    if ecc.length > 0 then return ecc
+    callableNode: ast.nodes.get i: call.callable
+    mcb: ztypecheck.metaCreateBaseId :ast n: callableNode
+    match (
+        mcb
+    ) case some then {
+        return (emitMetaCreateCall :ast :symtab :ctx :call :facts)
+    } case none then null
     fid: namedCalleeFnId :ast :symtab :ctx :call
-    ctorTid: namedCalleeCtorTid :ast :symtab :call :fid
-    if (isFieldwiseCtorTid :symtab tid: ctorTid) then {
-        return (emitRecordCtor :ast :symtab :ctx :call tid: ctorTid :facts)
+    ck: symtab.typing.callKind.get key: call.nodeid
+    isCtor: false
+    match (
+        ck
+    ) case some then {
+        isCtor = (ck == zast.callkind.recordCreate) or (ck == zast.callkind.classCreate)
+    } case none then null
+    if isCtor then {
+        # a sized conversion (`.str to: 8`) is the conversion leg's to recognise
+        scv: emitStrConvCall :ast :symtab :ctx :call :facts
+        if scv.length > 0 then return scv
+        mnId: aliasChildNameId :ast :symtab n: callableNode
+        if mnId == zast.wellKnown.slot.wkCreate then return (emitTypeQualCall
+            :ast
+            :symtab
+            :ctx
+            :call
+            :facts
+        )
+        ecc: emitEmptyColCreate :ast :symtab :ctx :call :facts
+        if ecc.length > 0 then return ecc
+        ctorTid: namedCalleeCtorTid :ast :symtab :call :fid
+        if (isFieldwiseCtorTid :symtab tid: ctorTid) then {
+            return (emitRecordCtor :ast :symtab :ctx :call tid: ctorTid :facts)
+        }
     }
-    tq: emitTypeQualCall :ast :symtab :ctx :call :facts
-    if tq.length > 0 then return tq
+    gfc: emitGenericFnCall :ast :symtab :ctx :call :facts
+    if gfc.length > 0 then return gfc
     if fid.isZero.not then return (emitUserFnCall :ast :symtab :ctx :call :fid :facts)
-    cnV: atomVid :symtab nid: (atomNodeId n: (ast.nodes.get i: call.callable))
-    fplc: (emitFnptrLocalCall
-        :ast
-        :symtab
-        :ctx
-        :call
-        :fid
-        cn0: cn0.stringView
-        cnVid: cnV
-        :facts
-    )
-    if fplc.length > 0 then return fplc
+    cn0: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: callableNode)
+    cnV: atomVid :symtab nid: (atomNodeId n: callableNode)
+    if cnV.isZero.not then {
+        fplc: (emitFnptrLocalCall
+            :ast
+            :symtab
+            :ctx
+            :call
+            :fid
+            cn0: cn0.stringView
+            cnVid: cnV
+            :facts
+        )
+        if fplc.length > 0 then return fplc
+    }
     # a yield hoisted out of expression position: the suspension has already
     # run as its own statement and left the resume value in a temp, so what is
     # left here is a plain read
@@ -14793,29 +14669,6 @@ emitNamedCalleeChain: function {
     }
     emitFail :ctx what: what8 line: call.lineno
     return (stating :facts from: failedFacts text: "/* zemitterc: \{what8} */0")
-}
-
-# emitCallProbeChain -- the residual probe chain: every handler that the stamped
-# routes above did not claim, asked in order until one answers. It retires leg by
-# leg as each becomes reachable from a callKind arm instead.
-emitCallProbeChain: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    call: zast.callrow.view
-    facts: cfacts.borrow
-} out String is {
-    mcc: emitMetaCreateCall :ast :symtab :ctx :call :facts
-    if mcc.length > 0 then return mcc
-    scv: emitStrConvCall :ast :symtab :ctx :call :facts
-    if scv.length > 0 then return scv
-    umc: emitUnitMethodCall :ast :symtab :ctx :call :facts
-    if umc.length > 0 then return umc
-    gfc: emitGenericFnCall :ast :symtab :ctx :call :facts
-    if gfc.length > 0 then return gfc
-    xuc: emitCrossUnitSumCtor :ast :symtab :ctx :call :facts
-    if xuc.length > 0 then return xuc
-    return (emitNamedCalleeChain :ast :symtab :ctx :call :facts)
 }
 
 # ownerIsCollectionFamily -- is `fam` one of the native container families?
@@ -15252,7 +15105,7 @@ emitCallValue: function {
             }
         }
     } case none then null
-    return (emitCallProbeChain :ast :symtab :ctx :call :facts)
+    return (emitUndeclaredCall :ast :symtab :ctx :call :facts)
 }
 
 # emitStringMethod -- a String value-context method call. String is a native
