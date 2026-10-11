@@ -1070,11 +1070,13 @@ supplied reftype argument in the function body. The variable supplied to a
 <code>.take</code> parameter is not valid after the call returns. Ownership transfer
 is performed implicitly; the caller does not need to call <code>.take</code> explicitly
 (though it may do so for clarity).</p>
-<p>Parameters with no ownership annotation are borrowed by default
-(equivalent to writing <code>.borrow</code> explicitly). For valtypes the borrow is a
-copy; for reftypes (string, file, bufreader, user classes) it is a
-pointer-pass at the C ABI &#x2014; mutations through the parameter are visible to
-the caller, and the caller retains ownership at scope exit. The implicit-take
+<p>Parameters with no ownership annotation are borrowed by default. For
+reftypes (string, file, bufreader, user classes) that is <code>.borrow</code>: a
+pointer-pass at the C ABI -- mutations through the parameter are visible to
+the caller, and the caller retains ownership at scope exit. For valtypes it is
+a copy: the callee reads and writes its own value. Writing <code>.borrow</code> on a
+valtype parameter passes the caller's value by reference instead, so the
+callee's writes are the caller's; <code>.view</code> passes it by reference, readonly. The implicit-take
 logic at call sites correctly skips these. Native functions
 (<code>is native</code> body) follow the same convention: each native is annotated
 based on what its body does with the input &#x2014; read-only natives take
@@ -2797,10 +2799,10 @@ out of scope.</p>
     one owner. Reftype constructors return owned instances. For valtypes,
     every copy is a new owned instance.</li>
 <li>Borrowed - the instance at this location has been borrowed. All function
-    parameters borrow by default (<code>borrow</code> is the default for all <code>in</code>
-    parameters). For reftypes, borrowing passes a reference. For valtypes,
-    borrowing passes a copy (the copy is treated as borrowed by the compiler
-    for uniform ownership tracking).</li>
+    parameters borrow by default. For reftypes, borrowing passes a
+    reference. For valtypes, an unmarked parameter is a copy (treated as
+    borrowed by the compiler for uniform ownership tracking), and a
+    <code>.borrow</code> parameter is the caller's value, passed by reference.</li>
 </ul>
 <p><code>this</code> within object methods is always borrowed (you cannot own yourself).</p>
 <p>Instance fields are always borrowed even if the parent is owned. Valtype fields
@@ -2845,10 +2847,10 @@ the value before it returns. For return types, <code>.take</code> is the default
 to be specified.</li>
 <li><code>type.borrow</code> - for <code>in</code> parameters, ownership is not taken. The
 function can call methods on the parameter but cannot store or destroy it.
-<code>.borrow</code> is the default for all <code>in</code> parameters (both valtypes and
-reftypes) and does not need to be specified. For valtypes, borrowing means
-a copy is passed (source not invalidated). For reftypes, borrowing means
-a reference is passed. Generic type parameters are exempt from type-family
+For reftypes <code>.borrow</code> is the default for <code>in</code> parameters and does not
+need to be specified: a reference is passed. For valtypes an unmarked
+parameter is a copy (the source not invalidated), and <code>.borrow</code> passes
+the caller's value by reference, so the callee's writes are the caller's. Generic type parameters are exempt from type-family
 restrictions. A reference return is written <code>outx type.borrow</code>: the
 returned instance lives inside a <code>.borrow</code>/<code>.view</code> parameter or the
 receiver, which <code>outx</code> keeps locked. <code>out type.borrow</code> is refused.</li>
@@ -2883,8 +2885,10 @@ expression that is not used (not assigned or passed) destroys the
 instance.</li>
 <li><code>x.borrow</code> - valid on all types. For reftypes, returns a borrowed
 reference to <code>x</code> and exclusively pins <code>x</code> for the lifetime of the
-borrowed reference. For valtypes, returns a copy of <code>x</code> without locking
-(valtypes have no identity to lock).</li>
+borrowed reference. For valtypes, handed to a <code>.borrow</code> parameter it
+passes <code>x</code> by reference; a binding of it (<code>b: p.borrow</code>) would borrow
+nothing -- a binding copies a value -- and is refused (valtypes have no
+identity to lock).</li>
 <li><code>x.hold</code> - owned and readonly: ownership transfers but only
 reading members may be called on the binding. As with <code>.take</code>, a
 valtype's <code>.hold</code> copies it and <code>x</code> stays usable; the binding is still
@@ -3376,9 +3380,10 @@ copies it and leaves the name usable. See <a href="#take-method">take (method)</
 <h4 id="borrow"><a href="#borrow">5.4.8. borrow</a></h4>
 <p><code>borrow</code> is a predefined type attribute on all types. When used as a dotted
 path on a type in function parameter declarations, it specifies that ownership
-is not taken. <code>.borrow</code> is the default for all <code>in</code> parameters. For
-valtypes, borrowing means a copy is passed (source not invalidated). For
-reftypes, borrowing means a reference is passed.</p>
+is not taken. For reftypes <code>.borrow</code> is the default for <code>in</code> parameters,
+and a reference is passed. For valtypes the default is a copy (source not
+invalidated), and a <code>.borrow</code> parameter is passed by reference: the
+callee's writes are the caller's.</p>
 <p>As a return type attribute (<code>outx type.borrow</code>): the function returns a
 reference into a non-owned <code>in</code> parameter -- marked <code>.view</code> (readonly)
 or <code>.borrow</code> (mutable) -- or the receiver, which <code>outx</code> keeps locked for
@@ -3865,8 +3870,10 @@ error unless every path after the take leaves the loop (<code>break</code>,
 <p><code>borrow</code> is a compiler-generated method predefined on variable names that
 refer to a reftype (class, union) or a generic type parameter. It returns a
 borrowed reference to the receiver. The receiver is exclusively locked for the
-lifetime of the borrowed reference. <code>.borrow</code> on a known valtype (record,
-variant, integer, enum) is a compile error.</p>
+lifetime of the borrowed reference. On a known valtype (record, variant,
+integer, enum) <code>.borrow</code> is accepted only where it is handed to a
+<code>.borrow</code> parameter, which takes the value by reference; a binding of it
+borrows nothing and is a compile error.</p>
 <p>The <code>borrow</code> method is zero overhead -- it is a manipulation of the compile
 time type system only. Use of the <code>.borrow</code> method is optional when passing
 to function parameters (parameters are borrowed by default).</p>
@@ -4733,9 +4740,9 @@ a non-owned field.</p>
 <strong>element</strong> type -- what each <code>yield</code> hands back -- not the return type: the
 compiler wraps it. Falling off the end, or a bare <code>return</code>, means exhausted;
 <code>return &lt;value&gt;</code> is a compile error.</p>
-<p>The shape of the wrapper follows the element's ownership form. Like every other
-argument position in zerolang, a generic argument defaults to <code>.borrow</code>;
-<code>.take</code> is explicit.</p>
+<p>The shape of the wrapper follows the element's family. Each <code>yield</code> hands
+back an OWNED element: a reftype's moves out in an <code>Option(T)</code>, a valtype's
+is copied out in an <code>optionval(T)</code>. <code>T.take</code> spells the same thing.</p>
 <table>
 <colgroup>
 <col style="width: 22%">
@@ -4744,18 +4751,21 @@ argument position in zerolang, a generic argument defaults to <code>.borrow</cod
 <col style="width: 33%">
 </colgroup>
 <thead>
-<tr><th style="text-align: left">out form</th><th style="text-align: left">Reftype T</th><th style="text-align: left">Valtype T</th><th style="text-align: left">Yielded value ownership</th></tr>
+<tr><th style="text-align: left">out form</th><th style="text-align: left">Reftype T</th><th style="text-align: left">Valtype T</th><th style="text-align: left">Yielded value</th></tr>
 </thead>
 <tbody>
-<tr><td>bare <code>T</code></td><td><code>OptionView(T)</code></td><td><code>optionval(T)</code></td><td>Borrowed view (ref) / copy (val)</td></tr>
-<tr><td><code>T.borrow</code></td><td><code>OptionView(T)</code></td><td><code>optionval(T)</code></td><td>Same as bare</td></tr>
-<tr><td><code>T.take</code></td><td><code>Option(T)</code></td><td><code>optionval(T)</code></td><td>Owned out (ref) / copy (val)</td></tr>
+<tr><td>bare <code>T</code></td><td><code>Option(T)</code></td><td><code>optionval(T)</code></td><td>Owned (ref) / copy (val)</td></tr>
+<tr><td><code>T.take</code></td><td><code>Option(T)</code></td><td><code>optionval(T)</code></td><td>Same as bare</td></tr>
+<tr><td><code>T.borrow</code>, <code>T.view</code></td><td>refused</td><td><code>optionval(T)</code></td><td>-- (ref) / copy (val)</td></tr>
 </tbody>
 </table>
-<p>For valtype <code>T</code>, ownership annotations are physical no-ops (<code>.borrow</code>
-copies, <code>.take</code> is identical), so all three forms collapse to
-<code>optionval(T)</code>. For reftype <code>T</code>, bare and <code>.borrow</code> both yield
-<code>OptionView(T)</code>; an owned reftype yield requires explicit <code>T.take</code>.</p>
+<p>A reference yield -- <code>.borrow</code> or <code>.view</code> on a reftype element -- is
+refused ("a generator cannot yield a reference"): a view into what the
+generator captured has no wrapper to carry it yet (see
+<a href="./Design-OPEN.html">Design-OPEN</a>, reference yields from generators). A
+reference into the generator's state is exposed through an ordinary
+<code>outx</code> method instead. On a valtype element the marker changes nothing: the
+element is copied out either way.</p>
 <p>See the Ownership on Generic Arguments section of
 <a href="./ownership.html">the ownership document</a> for the broader rule that
 governs ownership specifiers on generic arguments at use sites.</p>

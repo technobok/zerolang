@@ -1018,11 +1018,13 @@ supplied reftype argument in the function body. The variable supplied to a
 is performed implicitly; the caller does not need to call #~".take" explicitly
 (though it may do so for clarity).
 
-Parameters with no ownership annotation are #_+"borrowed" by default
-(equivalent to writing #~".borrow" explicitly). For valtypes the borrow is a
-copy; for reftypes (string, file, bufreader, user classes) it is a
-pointer-pass at the C ABI — mutations through the parameter are visible to
-the caller, and the caller retains ownership at scope exit. The implicit-take
+Parameters with no ownership annotation are #_+"borrowed" by default. For
+reftypes (string, file, bufreader, user classes) that is #~".borrow": a
+pointer-pass at the C ABI -- mutations through the parameter are visible to
+the caller, and the caller retains ownership at scope exit. For valtypes it is
+a copy: the callee reads and writes its own value. Writing #~".borrow" on a
+valtype parameter passes the caller's value by reference instead, so the
+callee's writes are the caller's; #~".view" passes it by reference, readonly. The implicit-take
 logic at call sites correctly skips these. Native functions
 (#~"is native" body) follow the same convention: each native is annotated
 based on what its body does with the input — read-only natives take
@@ -3044,10 +3046,10 @@ Ownership states:
     one owner. Reftype constructors return owned instances. For valtypes,
     every copy is a new owned instance.]
   [#*: Borrowed - the instance at this location has been borrowed. All function
-    parameters borrow by default (#~"borrow" is the default for all #~"in"
-    parameters). For reftypes, borrowing passes a reference. For valtypes,
-    borrowing passes a copy (the copy is treated as borrowed by the compiler
-    for uniform ownership tracking).]
+    parameters borrow by default. For reftypes, borrowing passes a
+    reference. For valtypes, an unmarked parameter is a copy (treated as
+    borrowed by the compiler for uniform ownership tracking), and a
+    #~".borrow" parameter is the caller's value, passed by reference.]
 
 #~"this" within object methods is always borrowed (you cannot own yourself).
 
@@ -3100,10 +3102,10 @@ it lives. A function declares one or the other, never both.
     to be specified.]
   [#*: #~"type.borrow" - for #~"in" parameters, ownership is not taken. The
     function can call methods on the parameter but cannot store or destroy it.
-    #~".borrow" is the default for all #~"in" parameters (both valtypes and
-    reftypes) and does not need to be specified. For valtypes, borrowing means
-    a copy is passed (source not invalidated). For reftypes, borrowing means
-    a reference is passed. Generic type parameters are exempt from type-family
+    For reftypes #~".borrow" is the default for #~"in" parameters and does not
+    need to be specified: a reference is passed. For valtypes an unmarked
+    parameter is a copy (the source not invalidated), and #~".borrow" passes
+    the caller's value by reference, so the callee's writes are the caller's. Generic type parameters are exempt from type-family
     restrictions. A reference return is written #~"outx type.borrow": the
     returned instance lives inside a #~".borrow"/#~".view" parameter or the
     receiver, which #~"outx" keeps locked. #~"out type.borrow" is refused.]
@@ -3140,8 +3142,10 @@ a value cannot be viewed"):
     instance.]
   [#*: #~"x.borrow" - valid on all types. For reftypes, returns a borrowed
     reference to #~"x" and exclusively pins #~"x" for the lifetime of the
-    borrowed reference. For valtypes, returns a copy of #~"x" without locking
-    (valtypes have no identity to lock).]
+    borrowed reference. For valtypes, handed to a #~".borrow" parameter it
+    passes #~"x" by reference; a binding of it (#~"b: p.borrow") would borrow
+    nothing -- a binding copies a value -- and is refused (valtypes have no
+    identity to lock).]
   [#*: #~"x.hold" - owned and readonly: ownership transfers but only
     reading members may be called on the binding. As with #~".take", a
     valtype's #~".hold" copies it and #~"x" stays usable; the binding is still
@@ -3753,9 +3757,10 @@ copies it and leaves the name usable. See [#> to=take-method: take (method)].
 
 #~"borrow" is a predefined type attribute on all types. When used as a dotted
 path on a type in function parameter declarations, it specifies that ownership
-is not taken. #~".borrow" is the default for all #~"in" parameters. For
-valtypes, borrowing means a copy is passed (source not invalidated). For
-reftypes, borrowing means a reference is passed.
+is not taken. For reftypes #~".borrow" is the default for #~"in" parameters,
+and a reference is passed. For valtypes the default is a copy (source not
+invalidated), and a #~".borrow" parameter is passed by reference: the
+callee's writes are the caller's.
 
 As a return type attribute (#~"outx type.borrow"): the function returns a
 reference into a non-owned #~"in" parameter -- marked #~".view" (readonly)
@@ -4335,8 +4340,10 @@ See also [#> to=./ownership.html: ownership].
 #~"borrow" is a compiler-generated method predefined on variable names that
 refer to a reftype (class, union) or a generic type parameter. It returns a
 borrowed reference to the receiver. The receiver is exclusively locked for the
-lifetime of the borrowed reference. #~".borrow" on a known valtype (record,
-variant, integer, enum) is a compile error.
+lifetime of the borrowed reference. On a known valtype (record, variant,
+integer, enum) #~".borrow" is accepted only where it is handed to a
+#~".borrow" parameter, which takes the value by reference; a binding of it
+borrows nothing and is a compile error.
 
 The #~"borrow" method is zero overhead -- it is a manipulation of the compile
 time type system only. Use of the #~".borrow" method is optional when passing
@@ -5376,20 +5383,23 @@ a non-owned field.
 compiler wraps it. Falling off the end, or a bare #~"return", means exhausted;
 #~"return <value>" is a compile error.
 
-The shape of the wrapper follows the element's ownership form. Like every other
-argument position in zerolang, a generic argument defaults to #~".borrow";
-#~".take" is explicit.
+The shape of the wrapper follows the element's family. Each #~"yield" hands
+back an OWNED element: a reftype's moves out in an #~"Option(T)", a valtype's
+is copied out in an #~"optionval(T)". #~"T.take" spells the same thing.
 
 #table cols="2 2 2 3":
-  out form           |Reftype T            |Valtype T            |Yielded value ownership
-  bare #~"T"         |#~"OptionView(T)"    |#~"optionval(T)"     |Borrowed view (ref) / copy (val)
-  #~"T.borrow"       |#~"OptionView(T)"    |#~"optionval(T)"     |Same as bare
-  #~"T.take"         |#~"Option(T)"        |#~"optionval(T)"     |Owned out (ref) / copy (val)
+  out form                    |Reftype T          |Valtype T           |Yielded value
+  bare #~"T"                  |#~"Option(T)"      |#~"optionval(T)"    |Owned (ref) / copy (val)
+  #~"T.take"                  |#~"Option(T)"      |#~"optionval(T)"    |Same as bare
+  #~"T.borrow", #~"T.view"    |refused            |#~"optionval(T)"    |-- (ref) / copy (val)
 
-For valtype #~"T", ownership annotations are physical no-ops (#~".borrow"
-copies, #~".take" is identical), so all three forms collapse to
-#~"optionval(T)". For reftype #~"T", bare and #~".borrow" both yield
-#~"OptionView(T)"; an owned reftype yield requires explicit #~"T.take".
+A reference yield -- #~".borrow" or #~".view" on a reftype element -- is
+refused ("a generator cannot yield a reference"): a view into what the
+generator captured has no wrapper to carry it yet (see
+[#> to=./Design-OPEN.html: Design-OPEN], reference yields from generators). A
+reference into the generator's state is exposed through an ordinary
+#~"outx" method instead. On a valtype element the marker changes nothing: the
+element is copied out either way.
 
 See the Ownership on Generic Arguments section of
 [#> to=./ownership.html: the ownership document] for the broader rule that
