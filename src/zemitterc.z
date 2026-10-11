@@ -6547,11 +6547,13 @@ derefFacts: function {} out cfacts is {
     return (cfacts place: true literal: false once: false pure: true path: false stated: true)
 }
 
-# derefOf -- `(*e)`, read through an operand whose facts are `e`: a place, no
-# path, and evaluated exactly as the operand is.
-derefOf: function {e: cfacts} out cfacts is {
+
+# operandFacts -- a text computed from one operand whose facts are `e`,
+# evaluated exactly as the operand is, and no path: a deref `(*e)` is a place,
+# a value computed from it -- a comparison, a negation, an arm test -- is not.
+operandFacts: function {e: cfacts place: bool} out cfacts is {
     return (cfacts
-        place: true
+        :place
         literal: false
         once: e.once
         pure: e.pure
@@ -14947,27 +14949,28 @@ emitStringMethod: function {
     # the method's name id, which picks the String member it emits
     mnId: zast.nameid
     recvVid: ztypes.vid
+    facts: cfacts.borrow
 } out String is {
     if mnId == zast.wellKnown.slot.wkCopy then {
-        if recvIsPtr then return "\{ctx.strC}_copy(\{recv})"
-        return "\{ctx.strC}_copy(&\{recv})"
+        if recvIsPtr then return (stating :facts from: callFacts text: "\{ctx.strC}_copy(\{recv})")
+        return (stating :facts from: callFacts text: "\{ctx.strC}_copy(&\{recv})")
     }
     if mnId == zast.wellKnown.slot.wkLength then {
-        if recvIsPtr then return "\{recv}->size"
-        return "\{recv}.size"
+        if recvIsPtr then return (guessing :facts text: "\{recv}->size")
+        return (guessing :facts text: "\{recv}.size")
     }
     if mnId == zast.wellKnown.slot.wkCapacity then {
-        if recvIsPtr then return "\{recv}->capacity"
-        return "\{recv}.capacity"
+        if recvIsPtr then return (guessing :facts text: "\{recv}->capacity")
+        return (guessing :facts text: "\{recv}.capacity")
     }
     if (ztypecheck.isStringViewMember nameId: mnId) then {
-        if recvIsPtr then return (svValueFormPtr :ctx expr: recv)
-        facts: cfacts
+        if recvIsPtr then return (guessing :facts text: (svValueFormPtr :ctx expr: recv))
         return (svValueForm :ctx expr: recv isStr: true vid: recvVid :facts)
     }
     if mnId == zast.wellKnown.slot.wkShrink then {
-        if recvIsPtr then return "\{ctx.strC}_shrink(\{recv})"
-        return "\{ctx.strC}_shrink(&\{recv})"
+        if recvIsPtr then return (stating :facts from: callFacts text: "\{ctx.strC}_shrink(\{recv})"
+        )
+        return (stating :facts from: callFacts text: "\{ctx.strC}_shrink(&\{recv})")
     }
     return ""
 }
@@ -16267,12 +16270,14 @@ nestedStringMember: function {
 } out String is {
     nptT: chaseStrTypedef :symtab :ctx tid: (stampIdDeep :symtab n: parent)
     if nptT == ctx.strTid then {
+        facts: cfacts
         nsm: (emitStringMethod
             :ctx
             recv: base
             recvIsPtr: (pathIsPointer :ast :symtab :ctx n: parent)
             :mnId
             recvVid: bs9vid
+            :facts
         )
         if nsm.length > 0 then return nsm
     }
@@ -16373,7 +16378,7 @@ emitDottedNestedBase: function {
         tid: nlid
     ) then {
         baseAtom = "(*\{baseAtom})"
-        baseAtomF = derefOf e: baseAtomF
+        baseAtomF = operandFacts e: baseAtomF place: true
         bs9vid = ztypes.vid
         nstPtr = false
     }
@@ -16381,7 +16386,7 @@ emitDottedNestedBase: function {
     nbxE: boxMemberElem :ast :symtab :ctx :n
     if nbxE.isZero.not then {
         baseAtom = "(*\{baseAtom})"
-        baseAtomF = derefOf e: baseAtomF
+        baseAtomF = operandFacts e: baseAtomF place: true
         nlid = nbxE
         bs9vid = ztypes.vid
         nstPtr = false
@@ -16889,6 +16894,7 @@ emitUserTypeMemberRead: function {
             recvIsPtr: sptr
             :mnId
             recvVid: bn2v
+            :facts
         )
         if sm.length > 0 then return sm
     }
@@ -17323,69 +17329,60 @@ dottedTypeConstRead: function {
 emitSvAtomBase: function {
     ctx: Ctx
     bn2: StringView
+    bn2F: cfacts
     mn2: StringView
     mnId: zast.nameid
     bn2v: ztypes.vid
     bareSv: bool
+    facts: cfacts.borrow
 } out String is {
     if bareSv then {
         if mnId == zast.wellKnown.slot.wkLength then {
-            e2: "\{bn2}.size"
-            return e2
+            return (stating :facts from: (memberFacts b: bn2F) text: "\{bn2}.size")
         }
         if mnId == zast.wellKnown.slot.wkAsString then {
             # the cast IS the emission: {size, data} is a prefix of
             # String, so the view's address is a readonly String
             accA: "&".string
             if (isPtrVid :ctx vid: bn2v) then accA = ""
-            ea2: "((const \{ctx.strC}_t*)\{accA}\{bn2})"
-            return ea2
+            return (guessing :facts text: "((const \{ctx.strC}_t*)\{accA}\{bn2})")
         }
         if mnId == zast.wellKnown.slot.wkCount then {
             needsAddM :ctx uname: "system" memb: "count"
-            ec2: "\{ctx.svC}_count(&\{bn2})"
-            return ec2
+            return (stating :facts from: callFacts text: "\{ctx.svC}_count(&\{bn2})")
         }
         if mnId == zast.wellKnown.slot.wkCodepoints then {
             needsAddM :ctx uname: "system" memb: "codepoints"
-            ecp: "\{ctx.svC}_codepoints(&\{bn2})"
-            return ecp
+            return (stating :facts from: callFacts text: "\{ctx.svC}_codepoints(&\{bn2})")
         }
         if mnId == zast.wellKnown.slot.wkParseI64 then {
             needsAddM :ctx uname: "system" memb: "parseI64"
-            epi: "\{ctx.svC}_parseI64(&\{bn2})"
-            return epi
+            return (stating :facts from: callFacts text: "\{ctx.svC}_parseI64(&\{bn2})")
         }
         if mnId == zast.wellKnown.slot.wkParseU64 then {
             needsAddM :ctx uname: "system" memb: "parseU64"
-            epu: "\{ctx.svC}_parseU64(&\{bn2})"
-            return epu
+            return (stating :facts from: callFacts text: "\{ctx.svC}_parseU64(&\{bn2})")
         }
         if mnId == zast.wellKnown.slot.wkParseF64 then {
             needsAddM :ctx uname: "system" memb: "parseF64"
-            epf: "\{ctx.svC}_parseF64(&\{bn2})"
-            return epf
+            return (stating :facts from: callFacts text: "\{ctx.svC}_parseF64(&\{bn2})")
         }
         if mnId == zast.wellKnown.slot.wkParseF16 then {
             needsAddM :ctx uname: "system" memb: "parseF16"
-            eph: "\{ctx.svC}_parseF16(&\{bn2})"
-            return eph
+            return (stating :facts from: callFacts text: "\{ctx.svC}_parseF16(&\{bn2})")
         }
         if mnId == zast.wellKnown.slot.wkParseF128 then {
             needsAddM :ctx uname: "system" memb: "parseF128"
-            epq: "\{ctx.svC}_parseF128(&\{bn2})"
-            return epq
+            return (stating :facts from: callFacts text: "\{ctx.svC}_parseF128(&\{bn2})")
         }
         if (svCallOf :ctx nameId: mnId).simple then {
             # a no-paren method reference auto-calls
             needsAddM :ctx uname: "system" memb: mn2
-            e4: "\{ctx.svC}_\{mn2}(&\{bn2})"
-            return e4
+            return (stating :facts from: callFacts text: "\{ctx.svC}_\{mn2}(&\{bn2})")
         }
         if mnId == zast.wellKnown.slot.wkLines then {
             needsAddM :ctx uname: "sviter" memb: "sv_lines"
-            eln2: "\{ctx.svC}_lines(&\{bn2})"
-            return eln2
+            return (stating :facts from: callFacts text: "\{ctx.svC}_lines(&\{bn2})")
         }
     }
     return ""
@@ -17495,7 +17492,7 @@ emitDottedAtomBase: function {
     if bareSv when childNameId == zast.wellKnown.slot.wkStringView then {
         return (stating :facts from: bn2F text: bn2.string)
     }
-    eSv: emitSvAtomBase :ctx :bn2 :mn2 :mnId :bn2v :bareSv
+    eSv: emitSvAtomBase :ctx :bn2 :bn2F :mn2 :mnId :bn2v :bareSv :facts
     if eSv.length > 0 then return eSv
     if bareTid == ctx.strTid when mnId == zast.wellKnown.slot.wkLength then {
         sacc3: ".".string
@@ -17935,12 +17932,13 @@ emitDottedStringConversion: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     n: zast.dottedpathrow.view
+    facts: cfacts.borrow
 } out String is {
     scl: bindLitIndex :ast :ctx n: (ast.nodes.get i: n.parent)
-    if scl > 0 then return "\{ctx.strC}_from_view(_zs\{scl})"
+    if scl > 0 then return (stating :facts from: callFacts text: "\{ctx.strC}_from_view(_zs\{scl})")
     if (stampIsSv :symtab :ctx nid: n.parent).not then return ""
     sbv0: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent)
-    return "\{ctx.strC}_from_view(\{sbv0})"
+    return (stating :facts from: callFacts text: "\{ctx.strC}_from_view(\{sbv0})")
 }
 
 # emitDottedConversionRead -- a cross-unit bare construction, and the two deep
@@ -17964,7 +17962,7 @@ emitDottedConversionRead: function {
         if cpc.length > 0 then return cpc
     }
     if mnc0Id == zast.wellKnown.slot.wkString then {
-        stc: emitDottedStringConversion :ast :symtab :ctx :n
+        stc: emitDottedStringConversion :ast :symtab :ctx :n :facts
         if stc.length > 0 then return stc
     }
     # an arm PREDICATE on a unit's constant (`u.k.a`, `k: kind.a`) has the
@@ -18039,6 +18037,7 @@ armPredicateC: function {
     # the receiver's type
     dap: ztypes.tid
     mnc0Id: zast.nameid
+    facts: cfacts.borrow
 } out String is {
     pn: ast.nodes.get i: n.parent
     recvPF: cfacts
@@ -18050,19 +18049,34 @@ armPredicateC: function {
     if (isOrdinalPair :symtab tid: dap) then {
         fa: ordinalPairFirstArmId :symtab tid: dap
         # the arm NAME resolved through any alias, as an id
-        if fa.isZero.not when mnc0Id == fa then return "(!(\{valP}))"
-        return "(\{valP})"
+        if fa.isZero.not when mnc0Id == fa then return (stating
+            :facts
+            from: (operandFacts e: recvPF place: false)
+            text: "(!(\{valP}))"
+        )
+        return (stating :facts from: (operandFacts e: recvPF place: false) text: "(\{valP})")
     }
     tgP: tagConstOf :ast :ctx :symtab tid: dap armId: mnc0Id
     # an ordinal IS its discriminator: compare the value, not a field
-    if (isOrdinalVariant :symtab tid: dap) then return "((\{valP}) == \{tgP})"
+    if (isOrdinalVariant :symtab tid: dap) then return (stating
+        :facts
+        from: (operandFacts e: recvPF place: false)
+        text: "((\{valP}) == \{tgP})"
+    )
     accP: receiverTagAccess :ast :symtab :ctx :pn
     if bxP then accP = "->"
     # a receiver that is a call's owning result is read off the checker's
     # temporary, which frees it
     recvO: ownedReceiverHoist :ast :symtab :ctx expr: recvP.stringView exprF: recvPF n: pn
-    if recvO.length > 0 then recvP = recvO.take
-    return "((\{recvP})\{accP}tag == \{tgP})"
+    if recvO.length > 0 then {
+        recvP = recvO.take
+        recvPF = pathFacts
+    }
+    return (stating
+        :facts
+        from: (operandFacts e: recvPF place: false)
+        text: "((\{recvP})\{accP}tag == \{tgP})"
+    )
 }
 
 # tagAccessorReadC -- an explicit tag-accessor read: the discriminator cast to
@@ -18128,6 +18142,7 @@ emitDottedTagRead: function {
         :n
         :dap
         :mnc0Id
+        :facts
     )
     dtr: dottedTagReadTid :symtab nid: n.nodeid
     if dtr.isZero.not then return (tagAccessorReadC
