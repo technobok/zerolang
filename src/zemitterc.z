@@ -4301,6 +4301,9 @@ VidVal: class {
     val: String
     # the text's facts, stated by whoever recorded it
     facts: cfacts
+    # the pointer a borrow alias reads through (bindBorrowAlias), "" for any other
+    # entry
+    ptr: String
 }
 
 # a variable paired with a type, for the side lists that record what a
@@ -4387,13 +4390,43 @@ vvFactsOf: function {xs: (List VidVal).view vid: ztypes.vid} out cfacts is {
 
 # vvSet -- replace-or-append: one entry per variable (map.set semantics).
 vvSet: function {xs: List VidVal vid: ztypes.vid val: StringView facts: cfacts} is {
+    vvPut :xs :vid :val :facts ptr: String
+}
+
+# vvPut -- vvSet for an entry that records the pointer `ptr` it reads through.
+vvPut: function {
+    xs: List VidVal vid: ztypes.vid val: StringView facts: cfacts ptr: String.take
+} is {
     if vid.isZero then return
     f: vidFind :xs :vid
     if f > 0 then {
-        xs.set i: f - 1 val: (VidVal :vid val: val.string :facts)
+        xs.set i: f - 1 val: (VidVal :vid val: val.string :facts :ptr)
     } else {
-        xs.append (VidVal :vid val: val.string :facts)
+        xs.append (VidVal :vid val: val.string :facts :ptr)
     }
+}
+
+# vvHasPtr -- `vid`'s entry reads through a pointer (a borrow alias).
+vvHasPtr: function {xs: (List VidVal).view vid: ztypes.vid} out bool is {
+    f: vidFind :xs :vid
+    if f == 0 then return false
+    return (xs.get i: f - 1).ptr.length > 0
+}
+
+# vvPtrOf -- the pointer `vid`'s entry reads through, "" when it has none.
+vvPtrOf: function {xs: (List VidVal).view vid: ztypes.vid} out String is {
+    f: vidFind :xs :vid
+    if f == 0 then return ""
+    return (xs.get i: f - 1).ptr.copy
+}
+
+# bindBorrowAlias -- read `nm`, a borrow the C holds as the pointer
+# `__borrow_<nm>`, as the place it points at: its alias is the pointer's deref, a
+# place read twice at no cost, and records the pointer a re-point assigns.
+bindBorrowAlias: function {ctx: Ctx vid: ztypes.vid nm: StringView} is {
+    p: "__borrow_\{nm}"
+    bal: "(*\{p})"
+    vvPut xs: ctx.aliases :vid val: bal.stringView facts: derefFacts ptr: p.take
 }
 
 # vidRemove -- drop `vid`'s entry from an assoc list keyed by variable id
@@ -9542,8 +9575,7 @@ emitBorrowAliasBind: function {
     }
     lb1: "\{ind}/* alias: \{nm} => (*__borrow_\{nm}) */\n"
     buf.append lb1
-    bal: "(*__borrow_\{nm})"
-    vvSet xs: ctx.aliases vid: nameVid val: bal.stringView facts: derefFacts
+    bindBorrowAlias :ctx vid: nameVid :nm
     return true
 }
 
@@ -22539,9 +22571,7 @@ emitNarrowedTakeBind: function {
 # variable that is out of scope here. Drop it before the binding legs
 # re-establish one; anything that is not a borrow alias is left alone.
 dropStaleBorrowAlias: function {ctx: Ctx vid: ztypes.vid} is {
-    sab: vvGet xs: ctx.aliases :vid
-    if sab.length == 0 then return
-    if (sab.stringView.startsWith prefix: "(*__borrow_") then vidRemove xs: ctx.aliases :vid
+    if (vvHasPtr xs: ctx.aliases :vid) then vidRemove xs: ctx.aliases :vid
 }
 
 # bindingStampOf -- the type a binding was stamped with, as the body being
@@ -22820,8 +22850,7 @@ emitReferenceBind: function {
     }
     buf.append "\{ind}\{ct}* __borrow_\{nm} = &\{rv};\n"
     buf.append "\{ind}/* alias: \{nm} => (*__borrow_\{nm}) */\n"
-    bal: "(*__borrow_\{nm})"
-    vvSet xs: ctx.aliases vid: nameVid val: bal.stringView facts: derefFacts
+    bindBorrowAlias :ctx vid: nameVid :nm
     return true
 }
 
@@ -23376,8 +23405,10 @@ emitRepointStmt: function {
     xv: atomVid :symtab nid: (atomNodeId n: topathNode)
     ptr: String
     tv: tgt.stringView
-    if (tv.startsWith prefix: "(*") when (tv.endsWith suffix: ")") then {
-        ptr.append (tv.substring from: 2 to: tv.length - 1)
+    # a borrow alias re-points the pointer it reads through
+    ap: vvPtrOf xs: ctx.aliases vid: xv
+    if ap.length > 0 then {
+        ptr.append ap
     } else if (isPtrVid :ctx vid: xv) then {
         ptr.append tv
     }
@@ -24099,13 +24130,7 @@ emitWithLocal: function {
         buf.append lw0
         lw1: "\{ind}/* alias: \{wnm} => (*__borrow_\{wnm}) */\n"
         buf.append lw1
-        walias: "(*__borrow_\{wnm})"
-        (vvSet
-            xs: ctx.aliases
-            vid: (defVid :symtab nid: n.nodeid)
-            val: walias.stringView
-            facts: derefFacts
-        )
+        bindBorrowAlias :ctx vid: (defVid :symtab nid: n.nodeid) nm: wnm
         return
     }
     # `with v: src` over a name the checker made a borrow: a second name for the
@@ -24119,8 +24144,7 @@ emitWithLocal: function {
         buf.append lp0
         lp1: "\{ind}/* alias: \{wnm} => (*__borrow_\{wnm}) */\n"
         buf.append lp1
-        palias: "(*__borrow_\{wnm})"
-        vvSet xs: ctx.aliases vid: wvid val: palias.stringView facts: derefFacts
+        bindBorrowAlias :ctx vid: wvid nm: wnm
         return
     }
     wvC: wv.string
@@ -26809,8 +26833,7 @@ emitObjIterPayload: function {
             buf.append l3p
             l3pa: "\{ind}    /* alias: \{lbl} => (*__borrow_\{lbl}) */\n"
             buf.append l3pa
-            av3p: "(*__borrow_\{lbl})"
-            vvSet xs: ctx.aliases vid: lblV val: av3p.stringView facts: derefFacts
+            bindBorrowAlias :ctx vid: lblV nm: lbl
             return spillkind.viewPtr
         }
     } else if (originIsTid
@@ -44844,8 +44867,7 @@ emitExprFormYield: function {
         buf.append lp0
         lp1: "\{ind}/* alias: \{nm} => (*__borrow_\{nm}) */\n"
         buf.append lp1
-        atomVarId: "(*__borrow_\{nm})"
-        vvSet xs: ctx.aliases vid: nmVid val: atomVarId.stringView facts: derefFacts
+        bindBorrowAlias :ctx vid: nmVid :nm
     } else {
         # bind the name TO ITS SLOT rather than copying it into a C local.
         # `a: yield 1` used after a later suspension read a dead local before
