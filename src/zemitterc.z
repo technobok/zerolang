@@ -14579,12 +14579,13 @@ namedCalleeCtorTid: function {
 }
 
 # emitUndeclaredCall -- a call the declaration route did not take: its callee
-# has no declaration of its own -- `meta.create`, a sized conversion (`"hi".str
-# to: 8`), a type written as an application (`(Pair t: u64).create a: 1`,
-# `(sized t: i64 size: 4) val: 1`), a function reached through a template
-# instance's or a generic call's stamp, a yield -- or is a LOCAL holding a
-# function. Each is told by what the checker stamped. One that is none of these
-# is an emitter defect, reported where it is found.
+# has no declaration of its own -- `meta.create`, a construction by a bare type
+# name or by a type written as an application (`(sized t: i64 size: 4) val:
+# 1`, `(Pair t: u64).create a: 1`), a sized conversion (`"hi".str to: 8`), a
+# function reached through a template instance's or a generic call's stamp, a
+# yield -- or is a LOCAL holding a function. Each is told by what the checker
+# stamped. One that is none of these is an emitter defect, reported where it is
+# found.
 emitUndeclaredCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -14608,6 +14609,33 @@ emitUndeclaredCall: function {
         isCtor = (ck == zast.callkind.recordCreate) or (ck == zast.callkind.classCreate)
     } case none then null
     if isCtor then {
+        # a construction by bare type name: the call's type is the type built
+        if callableNode.atomid when (symtab.typing.refDecl.has key: call.callable).not then {
+            ctid: stampIdOf :symtab nid: call.nodeid
+            cec: (emitEmptyColCreate
+                :ast
+                :symtab
+                :ctx
+                :call
+                :facts
+            )
+            if cec.length > 0 then return cec
+            # a generic typedef's instance applied to its type arguments
+            # alone (`Label n: 4`) is its base's empty value
+            if (isTypedefType :symtab tid: ctid) then {
+                return (implicitZeroValue
+                    :ast
+                    :symtab
+                    :ctx
+                    tid: ctid
+                    :facts
+                )
+            }
+            ctt: symtab.reg.typetypeOf typeId: ctid
+            if (ctt == ztypes.ztypetype.recordType) or (ctt == ztypes.ztypetype.classType) then {
+                return (emitRecordCtor :ast :symtab :ctx :call tid: ctid :facts)
+            }
+        }
         # a sized conversion (`.str to: 8`) is the conversion leg's to recognise
         scv: emitStrConvCall :ast :symtab :ctx :call :facts
         if scv.length > 0 then return scv
@@ -14999,8 +15027,10 @@ emitCallByDecl: function {
     return ""
 }
 
-# emitCallValue -- the C expression for a call (the dispatch chain:
-# dotted/list/typedef/data/record-ctor/type-qual/variant/user-fn).
+# emitCallValue -- the C expression for a call: the construction kinds the
+# checker stamped (typedef, box, protocol and facet), the operator forms, the
+# callee's declaration (emitCallByDecl), and what that leaves
+# (emitUndeclaredCall).
 # Shared by emitExpr's call arm and the statement-position call leg
 # so neither clones the node (clones lose the type stamps).
 emitCallValue: function {
@@ -15057,54 +15087,6 @@ emitCallValue: function {
     if sopc.length > 0 then return sopc
     cbd: emitCallByDecl :ast :symtab :ctx :call :facts
     if cbd.length > 0 then return cbd
-    # a construction by bare type name: the call's type is the type built
-    match (
-        ckh
-    ) case some then {
-        isCtorKind: (ckh == zast.callkind.recordCreate) or (ckh == zast.callkind.classCreate)
-        if isCtorKind then {
-            ccal: ast.nodes.get i: call.callable
-            if ccal.atomid when (symtab.typing.refDecl.has key: call.callable).not then {
-                ctid: stampIdOf :symtab nid: call.nodeid
-                cec: (emitEmptyColCreate
-                    :ast
-                    :symtab
-                    :ctx
-                    :call
-                    :facts
-                )
-                if cec.length > 0 then return cec
-                # a generic typedef's instance applied to its type arguments
-                # alone (`Label n: 4`) is its base's empty value
-                if (isTypedefType :symtab tid: ctid) then {
-                    return (implicitZeroValue
-                        :ast
-                        :symtab
-                        :ctx
-                        tid: ctid
-                        :facts
-                    )
-                }
-                ctt: symtab.reg.typetypeOf typeId: ctid
-                if ctt == ztypes.ztypetype.recordType then return (emitRecordCtor
-                    :ast
-                    :symtab
-                    :ctx
-                    :call
-                    tid: ctid
-                    :facts
-                )
-                if ctt == ztypes.ztypetype.classType then return (emitRecordCtor
-                    :ast
-                    :symtab
-                    :ctx
-                    :call
-                    tid: ctid
-                    :facts
-                )
-            }
-        }
-    } case none then null
     return (emitUndeclaredCall :ast :symtab :ctx :call :facts)
 }
 
