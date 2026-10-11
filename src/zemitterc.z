@@ -5506,6 +5506,7 @@ emitSvCompareCall: function {
     btid: ztypes.tid
     btIsStr: bool
     dcbV: ztypes.vid
+    facts: cfacts.borrow
 } out String is {
     if (isStringyTid
         :ctx
@@ -5534,7 +5535,7 @@ emitSvCompareCall: function {
                     n: (ast.nodes.get i: ca.operation)
                     text: cae.stringView
                 )
-                facts: cfacts
+                argF: cfacts
                 caf: (svValueFormAt
                     :ast
                     :symtab
@@ -5543,13 +5544,13 @@ emitSvCompareCall: function {
                     expr: cae.stringView
                     isStr: caIsStr
                     vid: cav
-                    :facts
+                    facts: argF
                 )
                 if cargs.length == 0 then cargs.append caf
             }
         }
         ce: "\{ctx.svC}_cmp(\{bf}, \{cargs})"
-        return ce
+        return (stating :facts from: callFacts text: ce)
     }
     return ""
 }
@@ -5566,6 +5567,7 @@ emitSvSubstringCall: function {
     btid: ztypes.tid
     btIsStr: bool
     dcbV: ztypes.vid
+    facts: cfacts.borrow
 } out String is {
     if mnId == zast.wellKnown.slot.wkSubstring then {
         recvp: String
@@ -5573,8 +5575,8 @@ emitSvSubstringCall: function {
             recvp = bnv.string
         } else {
             if btIsStr then {
-                facts: cfacts
-                bfs: svValueForm :ctx expr: bnv isStr: true vid: dcbV :facts
+                recvF: cfacts
+                bfs: svValueForm :ctx expr: bnv isStr: true vid: dcbV facts: recvF
                 recvp = bfs.copy
             } else {
                 sacc: ".".string
@@ -5602,8 +5604,12 @@ emitSvSubstringCall: function {
                 b: "to"
                 bForm: argform.labelled
             )
-            if addressable then return esb
-            return "({ \{ctx.svC}_t _svr = \{recvp}; \{esb}; })"
+            if addressable then return (stating :facts from: callFacts text: esb)
+            return (stating
+                :facts
+                from: callFacts
+                text: "({ \{ctx.svC}_t _svr = \{recvp}; \{esb}; })"
+            )
         }
     }
     return ""
@@ -5699,6 +5705,7 @@ emitSvSplitCall: function {
     bnv: StringView
     mnId: zast.nameid
     btid: ztypes.tid
+    facts: cfacts.borrow
 } out String is {
     if (isStringyTid
         :ctx
@@ -5720,7 +5727,7 @@ emitSvSplitCall: function {
             }
         }
         es: "\{ctx.svC}_split(\{viewRecvAddr :ast :symtab :ctx recv: bnv tid: btid}, \{sepx})"
-        return es
+        return (stating :facts from: callFacts text: es)
     }
     return ""
 }
@@ -5731,6 +5738,7 @@ emitSvLinesCall: function {
     bnv: StringView
     mnId: zast.nameid
     btid: ztypes.tid
+    facts: cfacts.borrow
 } out String is {
     if (isStringyTid
         :ctx
@@ -5738,7 +5746,7 @@ emitSvLinesCall: function {
     ) when mnId == zast.wellKnown.slot.wkLines then {
         needsAddM :ctx uname: "sviter" memb: "sv_lines"
         el: "\{ctx.svC}_lines(&\{bnv})"
-        return el
+        return (stating :facts from: callFacts text: el)
     }
     return ""
 }
@@ -5753,16 +5761,17 @@ emitSvParseCall: function {
     btid: ztypes.tid
     btIsStr: bool
     dcbV: ztypes.vid
+    facts: cfacts.borrow
 } out String is {
     if (isStringyTid
         :ctx
         tid: btid
     ) when (svCallOf :ctx nameId: mnId).parse then {
-        facts: cfacts
-        bfp: svValueForm :ctx expr: bnv isStr: btIsStr vid: dcbV :facts
+        recvF: cfacts
+        bfp: svValueForm :ctx expr: bnv isStr: btIsStr vid: dcbV facts: recvF
         needsAddM :ctx uname: "system" memb: mnv
         epn: "\{ctx.svC}_\{mnv}(&\{bfp})"
-        return epn
+        return (stating :facts from: callFacts text: epn)
     }
     return ""
 }
@@ -5778,6 +5787,7 @@ emitSvArgNativeCall: function {
     mnv: StringView
     mnId: zast.nameid
     btid: ztypes.tid
+    facts: cfacts.borrow
 } out String is {
     if (isStringyTid
         :ctx
@@ -5804,7 +5814,7 @@ emitSvArgNativeCall: function {
                 recv: bnv
                 args: bargs.stringView
             )
-            return eb
+            return (stating :facts from: callFacts text: eb)
         }
         argx: String
         arx209: u64
@@ -5827,7 +5837,7 @@ emitSvArgNativeCall: function {
             recv: bnv
             args: aargs.stringView
         )
-        return ea
+        return (stating :facts from: callFacts text: ea)
     }
     return ""
 }
@@ -5845,6 +5855,7 @@ emitSvSimpleCall: function {
     btid: ztypes.tid
     btIsStr: bool
     dcbV: ztypes.vid
+    facts: cfacts.borrow
 } out String is {
     svRecvOk: (btid == ctx.svTid) or btIsStr
     if svRecvOk when (svCallOf :ctx nameId: mnId).simple then {
@@ -5853,8 +5864,8 @@ emitSvSimpleCall: function {
         # substring/parse legs (a StringView receiver is one already)
         recvS: bnv.string
         if btIsStr then {
-            facts: cfacts
-            bfs2: svValueForm :ctx expr: bnv isStr: true vid: dcbV :facts
+            recvF: cfacts
+            bfs2: svValueForm :ctx expr: bnv isStr: true vid: dcbV facts: recvF
             recvS = bfs2.copy
         }
         args: String
@@ -5876,7 +5887,7 @@ emitSvSimpleCall: function {
             recv: recvS.stringView
             args: args.stringView
         )
-        return e1
+        return (stating :facts from: callFacts text: e1)
     }
     return ""
 }
@@ -5973,6 +5984,7 @@ emitDottedCall: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
+    facts: cfacts.borrow
 } out String is {
     bn0: dottedBaseAtom :ast n: (ast.nodes.get i: call.callable)
     # a base atom that names a FUNCTION auto-calls, and a string constant is its
@@ -5989,6 +6001,7 @@ emitDottedCall: function {
     dcbV: ztypes.vid
     # the receiver's C text: the expression's, or the base atom's local name
     bn: String
+    bnF: cfacts
     if (bn0.length == 0) or baseIsCall then {
         # nested/projected base (`(x.y).stripPrefix`): no base atom, but
         # the base is a stamped String/StringView -- emit it as an expression (a
@@ -6006,8 +6019,7 @@ emitDottedCall: function {
         )
         if (isStringyTid :ctx tid: rsid) then {
             callableNode: ast.nodes.get i: call.callable
-            facts: cfacts
-            bn = emitDottedReceiver :ast :symtab :ctx callable: callableNode :facts
+            bn = emitDottedReceiver :ast :symtab :ctx callable: callableNode facts: bnF
             btid = rsid
         } else {
             return ""
@@ -6022,14 +6034,13 @@ emitDottedCall: function {
         baseVid: atomVid :symtab nid: bnid
         bnA: aliasResolveAt :symtab :ctx nid: bnid name: bn0 vid: baseVid
         if bnA.stringView == bn0 then dcbV = atomVid :symtab nid: bnid
-        bn = emitLocalAtomNameAt :symtab :ctx nid: bnid name: bn0 vid: baseVid
+        bn = emitLocalAtomNameAtWith :symtab :ctx nid: bnid name: bn0 vid: baseVid facts: bnF
     }
     btIsStr: btid == ctx.strTid
     # the view legs read a String receiver more than once, for its data and its
     # size: one that is a call's result is bound once, and dropped again when no
     # leg takes the call
     rmark: pendingHoistMark :ctx
-    bnF: factsOfText s: bn.stringView
     if btIsStr when dcbV.isZero when bnF.place.not then {
         bn = (receiverOnce
             :ast
@@ -6052,6 +6063,7 @@ emitDottedCall: function {
         :btid
         :btIsStr
         :dcbV
+        :facts
     )
     if sv.length == 0 then dropHoistsTo :ctx mark: rmark
     return sv
@@ -6071,20 +6083,21 @@ emitSvCallLegs: function {
     btid: ztypes.tid
     btIsStr: bool
     dcbV: ztypes.vid
+    facts: cfacts.borrow
 } out String is {
-    eCmp: emitSvCompareCall :ast :symtab :ctx :call :bnv :mnId :btid :btIsStr :dcbV
+    eCmp: emitSvCompareCall :ast :symtab :ctx :call :bnv :mnId :btid :btIsStr :dcbV :facts
     if eCmp.length > 0 then return eCmp
-    eSub: emitSvSubstringCall :ast :symtab :ctx :call :bnv :mnId :btid :btIsStr :dcbV
+    eSub: emitSvSubstringCall :ast :symtab :ctx :call :bnv :mnId :btid :btIsStr :dcbV :facts
     if eSub.length > 0 then return eSub
-    eSpl: emitSvSplitCall :ast :symtab :ctx :call :bnv :mnId :btid
+    eSpl: emitSvSplitCall :ast :symtab :ctx :call :bnv :mnId :btid :facts
     if eSpl.length > 0 then return eSpl
-    eLin: emitSvLinesCall :ctx :bnv :mnId :btid
+    eLin: emitSvLinesCall :ctx :bnv :mnId :btid :facts
     if eLin.length > 0 then return eLin
-    ePar: emitSvParseCall :ctx :bnv :mnv :mnId :btid :btIsStr :dcbV
+    ePar: emitSvParseCall :ctx :bnv :mnv :mnId :btid :btIsStr :dcbV :facts
     if ePar.length > 0 then return ePar
-    eArg: emitSvArgNativeCall :ast :symtab :ctx :call :bnv :mnv :mnId :btid
+    eArg: emitSvArgNativeCall :ast :symtab :ctx :call :bnv :mnv :mnId :btid :facts
     if eArg.length > 0 then return eArg
-    return (emitSvSimpleCall :ast :symtab :ctx :call :bnv :mnv :mnId :btid :btIsStr :dcbV)
+    return (emitSvSimpleCall :ast :symtab :ctx :call :bnv :mnv :mnId :btid :btIsStr :dcbV :facts)
 }
 
 # emitDataIndexCall -- `primes.index i`: a data-block element read,
@@ -6447,6 +6460,7 @@ emitStringArgMethod: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
+    facts: cfacts.borrow
 } out String is {
     mnId: aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable)
     nativeM: String
@@ -6455,8 +6469,8 @@ emitStringArgMethod: function {
     if mnId == zast.wellKnown.slot.wkAppend then nativeM = "append"
     if nativeM.length == 0 then return ""
     callableNode: ast.nodes.get i: call.callable
-    facts: cfacts
-    recvExpr: emitDottedReceiver :ast :symtab :ctx callable: callableNode :facts
+    recvF: cfacts
+    recvExpr: emitDottedReceiver :ast :symtab :ctx callable: callableNode facts: recvF
     if recvExpr.length == 0 then return ""
     rtid0: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: call.callable)
     rtid: chaseAggregateTypedef :symtab :ctx tid: rtid0
@@ -6466,6 +6480,7 @@ emitStringArgMethod: function {
     recvAddr: "&\{recvExpr}"
     if rptr then recvAddr = "\{recvExpr}"
     argval: String
+    argvalF: cfacts
     argTid: ztypes.tid
     argPtr: false
     # the argument's node, 0 until the loop finds it
@@ -6488,9 +6503,10 @@ emitStringArgMethod: function {
             )
             if iv.length > 0 then {
                 argval = iv.take
+                argvalF = pathFacts
                 argTid = ctx.strTid
             } else {
-                av: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: a.operation)
+                av: emitExprWith :ast :symtab :ctx n: (ast.nodes.get i: a.operation) facts: argvalF
                 argval = av.take
                 argNode = a.operation
                 argOpNode: ast.nodes.get i: a.operation
@@ -6517,7 +6533,7 @@ emitStringArgMethod: function {
             aacc: "."
             if argPtr then aacc = "->"
             rapps: "\{ctx.strC}_append(\{recvAddr}, (\{argval})\{aacc}data, (\{argval})\{aacc}size)"
-            return rapps
+            return (stating :facts from: callFacts text: rapps)
         }
         return (stringAppendViewText
             :ast
@@ -6525,11 +6541,13 @@ emitStringArgMethod: function {
             :ctx
             recvAddr: recvAddr.stringView
             argval: argval.stringView
+            :argvalF
             :argTid
+            :facts
         )
     }
     r: "\{ctx.strC}_\{nativeM}(\{recvAddr}, \{argval})"
-    return r
+    return (stating :facts from: callFacts text: r)
 }
 
 # cfacts -- what the producer of an expression's C text knows about it, so a
@@ -6769,16 +6787,18 @@ stringAppendViewText: function {
     ctx: Ctx
     recvAddr: StringView
     argval: StringView
+    argvalF: cfacts
     argTid: ztypes.tid
+    facts: cfacts.borrow
 } out String is {
-    if argTid == ctx.svTid when (factsOfText s: argval).once then {
+    if argTid == ctx.svTid when argvalF.once then {
         # a view read twice is bound once, and frees nothing
         ah: hoistForAddress :ast :symtab :ctx av: argval tid: argTid argNid: zast.nodeid
         rh: "\{ctx.strC}_append(\{recvAddr}, (\{ah}).data, (\{ah}).size)"
-        return rh
+        return (stating :facts from: callFacts text: rh)
     }
     r: "\{ctx.strC}_append(\{recvAddr}, (\{argval}).data, (\{argval}).size)"
-    return r
+    return (stating :facts from: callFacts text: r)
 }
 
 # singleReadNeedsTemp -- an emitted StringView expression that is read twice (its
@@ -14722,7 +14742,7 @@ emitCallProbeChain: function {
     if pmc.length > 0 then return pmc
     scv: emitStrConvCall :ast :symtab :ctx :call
     if scv.length > 0 then return scv
-    dc: emitDottedCall :ast :symtab :ctx :call
+    dc: emitDottedCall :ast :symtab :ctx :call :facts
     if dc.length > 0 then return dc
     umc: emitUnitMethodCall :ast :symtab :ctx :call
     if umc.length > 0 then return umc
@@ -14795,14 +14815,15 @@ emitStringFamilyCall: function {
     ctx: Ctx
     call: zast.callrow.view
     ownerTid: ztypes.tid
+    facts: cfacts.borrow
 } out String is {
     if ownerTid == ctx.strTid then {
-        rsa: emitStringArgMethod :ast :symtab :ctx :call
+        rsa: emitStringArgMethod :ast :symtab :ctx :call :facts
         if rsa.length > 0 then return rsa
-        return (emitDottedCall :ast :symtab :ctx :call)
+        return (emitDottedCall :ast :symtab :ctx :call :facts)
     }
     if ownerTid != ctx.svTid then return ""
-    return (emitDottedCall :ast :symtab :ctx :call)
+    return (emitDottedCall :ast :symtab :ctx :call :facts)
 }
 
 # emitUserMethodLeg -- a method on a type the compiler emits itself: the
@@ -14866,7 +14887,7 @@ emitMethodDeclCall: function {
         rcol: emitCollectionMethodCall :ast :symtab :ctx :call :facts
         if rcol.length > 0 then return rcol
     }
-    rstr: emitStringFamilyCall :ast :symtab :ctx :call :ownerTid
+    rstr: emitStringFamilyCall :ast :symtab :ctx :call :ownerTid :facts
     if rstr.length > 0 then return rstr
     # a native that takes arguments answers from its own row, before the
     # receiver-only and operator legs get a chance to not know it
