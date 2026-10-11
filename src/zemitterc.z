@@ -3995,10 +3995,12 @@ valueExprC: function {
     n: astnode.view
     facts: cfacts.borrow
 } out String is {
-    e: emitExprWith :ast :symtab :ctx :n :facts
-    # a load's facts are read off its text (see userFnArgTextWith)
-    if (ptrHeldValtype :ast :symtab :ctx :n) then return (guessing :facts text: "(*\{e})")
-    return e
+    eF: cfacts
+    e: emitExprWith :ast :symtab :ctx :n facts: eF
+    if (ptrHeldValtype :ast :symtab :ctx :n) then {
+        return (stating :facts from: (operandFacts e: eF place: true) text: "(*\{e})")
+    }
+    return (stating :facts from: eF text: e)
 }
 
 # ptrHeldValtype -- a bare atom that is a C pointer to a value of a BY-VALUE
@@ -6619,8 +6621,9 @@ derefFacts: function {} out cfacts is {
 
 
 # operandFacts -- a text computed from one operand whose facts are `e`,
-# evaluated exactly as the operand is, and no path: a deref `(*e)` is a place,
-# a value computed from it -- a comparison, a negation, an arm test -- is not.
+# evaluated exactly as the operand is, and no path: a load `(*e)` is a place,
+# read twice at no cost exactly when `e` is; a value computed from an operand --
+# a comparison, a negation, an arm test -- is not a place.
 operandFacts: function {e: cfacts place: bool} out cfacts is {
     return (cfacts
         :place
@@ -10109,7 +10112,8 @@ emitListMethodCall: function {
             :symtab
             :ctx
             monoId: bt
-        ) then return (guessing :facts text: "(*\{e1})")
+        ) then return (stating :facts from: (operandFacts e: callFacts place: true) text: "(*\{e1})"
+        )
         return (stating :facts from: callFacts text: e1)
     }
     if mnId == zast.wellKnown.slot.wkGetMut then {
@@ -10119,7 +10123,11 @@ emitListMethodCall: function {
             :symtab
             :ctx
             monoId: bt
-        ) then return (guessing :facts text: "(*\{e1m})")
+        ) then return (stating
+            :facts
+            from: (operandFacts e: callFacts place: true)
+            text: "(*\{e1m})"
+        )
         return (stating :facts from: callFacts text: e1m)
     }
     if mnId == zast.wellKnown.slot.wkSlice then {
@@ -10347,7 +10355,8 @@ emitSpanMethodCall: function {
             :symtab
             :ctx
             monoId: bt
-        ) then return (guessing :facts text: "(*\{e1})")
+        ) then return (stating :facts from: (operandFacts e: callFacts place: true) text: "(*\{e1})"
+        )
         return (stating :facts from: callFacts text: e1)
     }
     if mnId == zast.wellKnown.slot.wkSet then {
@@ -14415,13 +14424,11 @@ userFnArgTextWith: function {
     # a pointer-held valtype handed to a BY-VALUE parameter is loaded, and so
     # is a reference-returning call's valtype result; every parameter that
     # wants the pointer has answered above
-    # a load's facts are read off its text: the text guesser takes `(*f(x))` to
-    # be read twice at no cost, which the operand's facts deny
     if (ptrHeldValtype :ast :symtab :ctx n: argOpNode) then {
-        return (guessing :facts text: "(*\{atomVarId})")
+        return (stating :facts from: (operandFacts e: avF place: true) text: "(*\{atomVarId})")
     }
     if (refValtypeResult :ast :symtab :ctx n: argOpNode) then {
-        return (guessing :facts text: "(*\{atomVarId})")
+        return (stating :facts from: (operandFacts e: avF place: true) text: "(*\{atomVarId})")
     }
     vbh8: (hoistBorrowValArgWith
         :ast
@@ -19543,17 +19550,18 @@ operandValueC: function {
     facts: cfacts.borrow
 } out String is {
     n: ast.nodes.get i: nid
-    v: valueExprC :ast :symtab :ctx :n :facts
+    vF: cfacts
+    v: valueExprC :ast :symtab :ctx :n facts: vF
     if (nodeIsAtomBox :symtab :n) then {
         # a by-pointer PARAMETER holds the box through a second pointer, so its
         # value is two derefs away: one for the parameter, one for the box. With
         # one, `b + 0` added to an address and `b == 7` compared one.
         if (isPtrVid :ctx vid: (atomVid :symtab :nid)) then {
-            return (guessing :facts text: "(*(*\{v}))")
+            return (stating :facts from: (operandFacts e: vF place: true) text: "(*(*\{v}))")
         }
-        return (guessing :facts text: "(*\{v})")
+        return (stating :facts from: (operandFacts e: vF place: true) text: "(*\{v})")
     }
-    return v
+    return (stating :facts from: vF text: v)
 }
 
 # orderRowOperand -- one operand of an operator's natives.tbl row, in the form
