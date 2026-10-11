@@ -14755,8 +14755,6 @@ emitNamedCalleeChain: function {
     }
     tq: emitTypeQualCall :ast :symtab :ctx :call :facts
     if tq.length > 0 then return tq
-    fpfc: emitFnptrFieldCall :ast :symtab :ctx :call :facts
-    if fpfc.length > 0 then return fpfc
     if fid.isZero.not then return (emitUserFnCall :ast :symtab :ctx :call :fid :facts)
     cnV: atomVid :symtab nid: (atomNodeId n: (ast.nodes.get i: call.callable))
     fplc: (emitFnptrLocalCall
@@ -14817,10 +14815,6 @@ emitCallProbeChain: function {
     if gfc.length > 0 then return gfc
     xuc: emitCrossUnitSumCtor :ast :symtab :ctx :call :facts
     if xuc.length > 0 then return xuc
-    cufc: emitCrossUnitFnCall :ast :symtab :ctx :call :facts
-    if cufc.length > 0 then return cufc
-    cuct: emitCrossUnitCtor :ast :symtab :ctx :call :facts
-    if cuct.length > 0 then return cuct
     return (emitNamedCalleeChain :ast :symtab :ctx :call :facts)
 }
 
@@ -15082,9 +15076,27 @@ emitCtorDeclCall: function {
     return (emitCrossUnitCtor :ast :symtab :ctx :call :facts)
 }
 
+# emitAliasCall -- a callee reached through another name: a re-export
+# (`math.BigInt v: 3`, a name a unit's `public:` block re-exports) or a unit
+# constant naming a type instance (`F2: (fx n: 2)`). The call is stamped with
+# the TARGET, so a function is called as one and a type constructed.
+emitAliasCall: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    call: zast.callrow.view
+    facts: cfacts.borrow
+} out String is {
+    rxT: dottedMemberTidOf :ast :symtab callableId: call.callable
+    if (symtab.reg.typetypeOf typeId: rxT) == ztypes.ztypetype.functionType then {
+        return (emitCrossUnitFnCall :ast :symtab :ctx :call :facts)
+    }
+    return (emitCrossUnitCtor :ast :symtab :ctx :call :facts)
+}
+
 # emitCallByDecl -- route by the callee's DECLARATION: its kind and its owner's
 # family name the handler outright, with no name lookup and no probe. A
-# declaration has ONE kind, so the four legs below are alternatives and the
+# declaration has ONE kind, so the legs below are alternatives and the
 # first that matches is the answer, "" when it declines.
 emitCallByDecl: function {
     ast: Ast.view
@@ -15122,6 +15134,15 @@ emitCallByDecl: function {
     if rkind.funcDecl then return (emitFuncDeclCall :ast :symtab :ctx :call :rtid :facts)
     if rkind.armDecl then return (emitCtorDeclCall :ast :symtab :ctx :call isArm: true :facts)
     if rkind.typeDecl then return (emitCtorDeclCall :ast :symtab :ctx :call isArm: false :facts)
+    if rkind.reexportDecl or rkind.constDecl then return (emitAliasCall
+        :ast
+        :symtab
+        :ctx
+        :call
+        :facts
+    )
+    # a function-pointer FIELD, called through the record that holds it
+    if rkind.fieldDecl then return (emitFnptrFieldCall :ast :symtab :ctx :call :facts)
     return ""
 }
 
