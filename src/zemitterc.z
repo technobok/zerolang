@@ -1224,7 +1224,7 @@ emitNumericCast: function {
     body: nativeImplOf :ctx path: key
     if body.length == 0 then {
         emitFail :ctx what: "no native implementation for '\{key}'" line: 0
-        return "/* zemitterc: no native implementation */0"
+        return (stating :facts from: failedFacts text: "/* zemitterc: no native implementation */0")
     }
     rowNeedAdd :ctx :key
     # a lossy conversion builds a `resultval`; the row spells the tags and the
@@ -2956,7 +2956,7 @@ ternaryAsStatements: function {
     if icx.length > 0 then return (stating :facts from: callFacts text: icx)
     return (stating
         :facts
-        from: constFacts
+        from: failedFacts
         text: (unhandledExpr :ctx line: (ztypecheck.nodeLine n: (ast.nodes.get i: nid)))
     )
 }
@@ -6838,6 +6838,9 @@ cfacts: record {
     fixedAddr: false
     # a constant: a number, a cast of one, a macro, a tag -- nothing evaluated
     constant: false
+    # the expression could not be spelled: the text is a marker, and the failure
+    # was reported where the marker was made
+    failed: false
     # the facts were filled in; a fresh slot holds none, and no reader acts on
     # a slot nobody filled
     stated: false
@@ -6924,6 +6927,7 @@ stateFacts: function {facts: cfacts.borrow from: cfacts} is {
     facts.path = from.path
     facts.fixedAddr = from.fixedAddr
     facts.constant = from.constant
+    facts.failed = from.failed
     facts.stated = from.stated
 }
 
@@ -6937,6 +6941,21 @@ constFacts: function {} out cfacts is {
         pure: true
         path: false
         constant: true
+        stated: true
+    )
+}
+
+# failedFacts -- an expression the emitter could not spell: its marker, a
+# constant 0 behind a comment, with the failure recorded where it was made.
+failedFacts: function {} out cfacts is {
+    return (cfacts
+        place: false
+        literal: false
+        once: false
+        pure: true
+        path: false
+        constant: true
+        failed: true
         stated: true
     )
 }
@@ -14865,7 +14884,7 @@ emitNamedCalleeChain: function {
         what8 = "this `yield` is not split out of its expression; bind it first (`v: yield e`) and use `v`"
     }
     emitFail :ctx what: what8 line: call.lineno
-    return (stating :facts from: constFacts text: "/* zemitterc: \{what8} */0")
+    return (stating :facts from: failedFacts text: "/* zemitterc: \{what8} */0")
 }
 
 # emitCallProbeChain -- the residual probe chain: every handler that the stamped
@@ -16105,7 +16124,11 @@ emitAtom: function {
         )
         if cl.length == 0 then {
             emitFail :ctx what: "invalid numeric literal \{av}" line: n.lineno
-            return "/* zemitterc: unhandled numeric literal \{av} */0"
+            return (stating
+                :facts
+                from: failedFacts
+                text: "/* zemitterc: unhandled numeric literal \{av} */0"
+            )
         }
     }
     wl: wideLiteralC lex: av
@@ -16837,9 +16860,9 @@ emitDottedNestedBase: function {
         n: (ast.nodes.get i: n.parent)
         text: baseAtom.stringView
     )
-    if (baseAtom.stringView.startsWith prefix: "/*") then {
+    if baseAtomF.failed then {
         emitFail :ctx what: "unhandled dotted" line: n.lineno
-        return "/* zemitterc: unhandled dotted */0"
+        return (stating :facts from: failedFacts text: "/* zemitterc: unhandled dotted */0")
     }
     nsm: (nestedStringMember
         :ast
@@ -18403,7 +18426,7 @@ emitResolvedCopy: function {
             what: "unsupported .copy of type \{cvtn} in a generic body"
             line: n.lineno
         )
-        return (stating :facts from: constFacts text: "/* zemitterc: unhandled copy */0")
+        return (stating :facts from: failedFacts text: "/* zemitterc: unhandled copy */0")
     }
     return ""
 }
@@ -18512,7 +18535,7 @@ emitCopyConversion: function {
             what: "unresolved .copy receiver in a generic body"
             line: n.lineno
         )
-        return (stating :facts from: constFacts text: "/* zemitterc: unhandled copy */0")
+        return (stating :facts from: failedFacts text: "/* zemitterc: unhandled copy */0")
     }
     return ""
 }
@@ -19292,7 +19315,7 @@ emitExprArms: function {
             return (emitExprArms :ast :symtab :ctx n: (ast.nodes.get i: s0Id) :facts)
         }
         emitFail :ctx what: "unhandled expr (multi-statement)" line: n.lineno
-        return (stating :facts from: constFacts text: "/* zemitterc: unhandled expr */0")
+        return (stating :facts from: failedFacts text: "/* zemitterc: unhandled expr */0")
     } case atomid then {
         return (emitAtom :ast :symtab :ctx :n :facts)
     } case labelvalue then {
@@ -19324,7 +19347,8 @@ emitExprArms: function {
         ie: emitInterpArgExpr :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid)
         if ie.length > 0 then return (stating :facts from: callFacts text: ie)
         emitFail :ctx what: "unhandled atomstring expr" line: n.lineno
-        return (stating :facts from: constFacts text: "/* zemitterc: unhandled atomstring expr */0")
+        return (stating :facts from: failedFacts text: "/* zemitterc: unhandled atomstring expr */0"
+        )
     } case ifexpr then {
         # a chain whose every condition folds has ONE live branch: emit its
         # value alone. spec.pdoc, Conditional Compilation, promises the false
@@ -19340,7 +19364,7 @@ emitExprArms: function {
         if (ifIsTernary :ast n: (ast.nodes.get i: n.nodeid)).not then {
             icx: emitControlExpr :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid)
             if icx.length > 0 then return (stating :facts from: callFacts text: icx)
-            return (stating :facts from: constFacts text: (unhandledExpr :ctx line: n.lineno))
+            return (stating :facts from: failedFacts text: (unhandledExpr :ctx line: n.lineno))
         }
         return (emitTernaryChain :ast :symtab :ctx :n :facts)
     } case call then {
@@ -19359,18 +19383,18 @@ emitExprArms: function {
         }
         mcx: emitControlExpr :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid)
         if mcx.length > 0 then return (stating :facts from: callFacts text: mcx)
-        return (stating :facts from: constFacts text: (unhandledExpr :ctx line: n.lineno))
+        return (stating :facts from: failedFacts text: (unhandledExpr :ctx line: n.lineno))
     } case withexpr then {
         # grammar.pdoc: "`with` can be used as an expression. The result will be
         # the value of the `do` expression." It reaches C the way an `if` or a
         # `match` does -- no C expression spells a scope with a binding in it
         wcx: emitControlExpr :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid)
         if wcx.length > 0 then return (stating :facts from: callFacts text: wcx)
-        return (stating :facts from: constFacts text: (unhandledExpr :ctx line: n.lineno))
+        return (stating :facts from: failedFacts text: (unhandledExpr :ctx line: n.lineno))
     } else {
         return (stating
             :facts
-            from: constFacts
+            from: failedFacts
             text: (unhandledExpr :ctx line: (ztypecheck.nodeLine :n))
         )
     }
@@ -19530,7 +19554,7 @@ emitControlRef: function {
     }
     if ptr.length == 0 then return (stating
         :facts
-        from: constFacts
+        from: failedFacts
         text: (unhandledExpr :ctx line: (ztypecheck.nodeLine :n))
     )
     # a Set or Map value already is the pointer to what it holds
@@ -19771,7 +19795,7 @@ emitOperatorAt: function {
 } out String is {
     if owner.isZero then {
         emitFail :ctx what: "operator '\{op}' resolved no declaring type" line: lineno
-        return "/* zemitterc: unresolved operator */0"
+        return (stating :facts from: failedFacts text: "/* zemitterc: unresolved operator */0")
     }
     # a local: the derived-comparison leg below reassigns it
     call: method
@@ -19863,7 +19887,7 @@ emitOperatorAt: function {
     body: nativeImplOf :ctx path: key.stringView
     if body.length == 0 then {
         emitFail :ctx what: "no native implementation for '\{key}'" line: lineno
-        return "/* zemitterc: no native implementation */0"
+        return (stating :facts from: failedFacts text: "/* zemitterc: no native implementation */0")
     }
     # A CONSTANT ARGUMENT MAY SELECT A DIFFERENT ROW. The table says which
     # positions a variant needs to be constant and the checker's value channel
@@ -21089,6 +21113,7 @@ emitErrorStmt: function {
     buf: String.borrow
 } is {
     av: String
+    avF: cfacts
     lit: String
     got: false
     arx509: u64
@@ -21099,12 +21124,12 @@ emitErrorStmt: function {
         if a.namedoperation when got.not then {
             got = true
             opn: ast.nodes.get i: a.operation
-            av = emitExpr :ast :symtab :ctx n: opn
+            av = emitExprWith :ast :symtab :ctx n: opn facts: avF
             lit = plainStringLiteral :ast n: opn
         }
     }
     okArg: false
-    if got when (av.stringView.startsWith prefix: "/*").not then okArg = true
+    if got when avF.failed.not then okArg = true
     if okArg then {
         flushArgHoists :ctx :ind :tmp :buf
         el: "\{ind}z_panic((const char*)\{av}.data);\n"
@@ -21133,6 +21158,7 @@ emitPanicStmt: function {
     buf: String.borrow
 } is {
     av: String
+    avF: cfacts
     got: false
     arx519: u64
     for arx519 < call.arguments.count loop {
@@ -21142,11 +21168,11 @@ emitPanicStmt: function {
         if a.namedoperation when got.not then {
             got = true
             aOpNode: ast.nodes.get i: a.operation
-            av = emitExpr :ast :symtab :ctx n: aOpNode
+            av = emitExprWith :ast :symtab :ctx n: aOpNode facts: avF
         }
     }
     okArg: false
-    if got when (av.stringView.startsWith prefix: "/*").not then okArg = true
+    if got when avF.failed.not then okArg = true
     if okArg then {
         flushArgHoists :ctx :ind :tmp :buf
         pl: "\{ind}z_panic((const char*)\{av}.data);\n"
@@ -22280,9 +22306,10 @@ emitStringBind: function {
             buf.append lsv4
             return true
         }
-        vx: emitExpr :ast :symtab :ctx n: avn
+        vxF: cfacts
+        vx: emitExprWith :ast :symtab :ctx n: avn facts: vxF
         flushArgHoists :ctx :ind :tmp :buf
-        if (vx.stringView.startsWith prefix: "/*") then {
+        if vxF.failed then {
             emitFail :ctx what: "unhandled StringView binding \{nm}" line: n.lineno
             lsv3: "\{ind}/* zemitterc: unhandled StringView binding \{nm} */\n"
             buf.append lsv3
@@ -22312,9 +22339,10 @@ emitStringBind: function {
             :buf
         )
         if did then return true
-        sx: emitExpr :ast :symtab :ctx n: avn
+        sxF: cfacts
+        sx: emitExprWith :ast :symtab :ctx n: avn facts: sxF
         flushArgHoists :ctx :ind :tmp :buf
-        if (sx.stringView.startsWith prefix: "/*") then {
+        if sxF.failed then {
             emitFail :ctx what: "unhandled String binding \{nm}" line: n.lineno
             lst2: "\{ind}/* zemitterc: unhandled String binding \{nm} */\n"
             buf.append lst2
@@ -22907,9 +22935,10 @@ emitDottedAutoCallStmt: function {
         return
     }
     if (readsNullField :ast :symtab :n) then return
-    de: emitExpr :ast :symtab :ctx :n
+    deF: cfacts
+    de: emitExprWith :ast :symtab :ctx :n facts: deF
     flushArgHoists :ctx :ind :tmp :buf
-    if (de.stringView.startsWith prefix: "/*") then {
+    if deF.failed then {
         emitFail :ctx what: "unhandled statement" line: (ztypecheck.nodeLine :n)
         lud: "\{ind}/* zemitterc: unhandled statement */\n"
         buf.append lud
@@ -23018,9 +23047,10 @@ emitContinueStmt: function {
             buf.append lct
         }
     } else {
-        ue: emitExpr :ast :symtab :ctx :n
+        ueF: cfacts
+        ue: emitExprWith :ast :symtab :ctx :n facts: ueF
         flushArgHoists :ctx :ind :tmp :buf
-        if (ue.stringView.startsWith prefix: "/*") then {
+        if ueF.failed then {
             (emitFail
                 :ctx
                 what: "unhandled statement"
@@ -23102,9 +23132,10 @@ emitReturnStmt: function {
     if ffid.isZero.not when (
         (symtab.reg.typetypeOf typeId: ffid) == ztypes.ztypetype.functionType
     ) when (fnIsNativeId :symtab fid: ffid).not then {
-        fce: emitExpr :ast :symtab :ctx :n
+        fceF: cfacts
+        fce: emitExprWith :ast :symtab :ctx :n facts: fceF
         flushArgHoists :ctx :ind :tmp :buf
-        if (fce.stringView.startsWith prefix: "/*").not then {
+        if fceF.failed.not then {
             artid: stampIdOf :symtab nid: (interpPartNodeId :n)
             (emitDiscardedResult
                 :ast
@@ -27324,11 +27355,13 @@ emitCountedRangeFor: function {
 } out bool is {
     bound: rangeBoundExpr :ast :symtab :ctx :n
     if bound.length == 0 then return false
-    ctR: rangeCType :ast :symtab :n
+    rtR: rangeTid :ast :symtab :n
+    ctR: intScalarCTypeOf :symtab tid: rtR
     if ctR.length == 0 then return false
     mN: tmpNext :ctx :tmp
     fn: "_fn\{mN}"
-    cnt: countRangeCountExpr ct: ctR.stringView bound: bound.stringView
+    rk: ztypecheck.numKindOfTid st: symtab tid: rtR
+    cnt: countRangeCountExpr signed: rk.has and (kindSigned k: rk.kind) bound: bound.stringView
     d0: "\{ind}uint64_t \{fn} = \{cnt};\n"
     buf.append d0
     lidR: pushLoopLabel :ctx :tmp isDo: false
@@ -27630,8 +27663,8 @@ rangeToExpr: function {
 # `(v.u64.or d: 0)`: a negative count walks nothing, and reinterpreting one as
 # u64 would walk 1.8e19. An unsigned receiver needs no test, and emitting one
 # would be a comparison the C compiler is right to warn about.
-countRangeCountExpr: function {ct: StringView bound: StringView} out String is {
-    if ct.startsWith "uint" then {
+countRangeCountExpr: function {signed: bool bound: StringView} out String is {
+    if signed.not then {
         cu: "(uint64_t)(\{bound})"
         return cu
     }
@@ -27712,6 +27745,37 @@ intScalarCTypeOf: function {
     return (scalarCTypeFor :symtab :tid)
 }
 
+# rangeTid -- the type a counted range's induction variable takes: its
+# RECEIVER's, the numeric type the range yields. 0 for a node that is no
+# counted range.
+rangeTid: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    n: astnode.view
+} out ztypes.tid is {
+    match (
+        n
+    ) case call then {
+        # the CLOSED family: only it takes an argument, so only it is a call
+        callableNode: ast.nodes.get i: n.callable
+        if (isClosedRangeMemberId id: (aliasChildNameId :ast :symtab n: callableNode)) then {
+            rsid: dottedReceiverStampId :ast :symtab callable: callableNode
+            return (tidDeep :symtab sid: rsid)
+        }
+        return ztypes.tid.zero
+    } case dottedpath then {
+        # the COUNT family, whose receiver rangeBoundExpr reads as the bound
+        cmnId: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
+        if (isCountRangeMemberId id: cmnId) then {
+            rt2: stampTidDeep :symtab n: (ast.nodes.get i: n.parent)
+            return rt2
+        }
+        return ztypes.tid.zero
+    } else {
+        return ztypes.tid.zero
+    }
+}
+
 # rangeCType -- the C type a counted range's induction variable takes: the
 # RECEIVER's, which is what the range yields and so what the loop name binds.
 # "" when the operand drives no counted range, and the arms are
@@ -27727,27 +27791,7 @@ rangeCType: function {
     symtab: zenv.ZSymbolTable.view
     n: astnode.view
 } out String is {
-    match (
-        n
-    ) case call then {
-        # the CLOSED family: only it takes an argument, so only it is a call
-        callableNode: ast.nodes.get i: n.callable
-        if (isClosedRangeMemberId id: (aliasChildNameId :ast :symtab n: callableNode)) then {
-            rsid: dottedReceiverStampId :ast :symtab callable: callableNode
-            return (intScalarCTypeOf :symtab tid: (tidDeep :symtab sid: rsid))
-        }
-        return ""
-    } case dottedpath then {
-        # the COUNT family, whose receiver rangeBoundExpr reads as the bound
-        cmnId: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
-        if (isCountRangeMemberId id: cmnId) then {
-            rt2: stampTidDeep :symtab n: (ast.nodes.get i: n.parent)
-            return (intScalarCTypeOf :symtab tid: rt2)
-        }
-        return ""
-    } else {
-        return ""
-    }
+    return (intScalarCTypeOf :symtab tid: (rangeTid :ast :symtab :n))
 }
 
 # emitForCond -- one `while:` arm of a for-header, joined into the loop
