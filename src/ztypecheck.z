@@ -46,7 +46,6 @@ public: unit {
     :unitdefNodeId
     :stdTidPeek
     :isOperatorName
-    :isDataElementRead
     :instanceCopyOf
     :dataFieldIds
     :isNullTid
@@ -29337,7 +29336,7 @@ bareFnRefErrorFor: function {
     )
 }
 
-# markDataRuntimeIndexed -- a data block accessed via `.index` / `.array` needs
+# markDataRuntimeIndexed -- a data block accessed via `.get` / `.array` needs
 # its static array emitted; label accesses fold to constants and don't.
 markDataRuntimeIndexed: function {st: zenv.ZSymbolTable tid: ztypes.tid} is {
     if tid >= st.reg.nextTid then return
@@ -30528,7 +30527,7 @@ checkUnitQualifiedMember: function {
 
 # checkDataBlockMember -- a member of a data block that no element names, read
 # through the block's name: a member of its value type (`index`, `iterate`),
-# and `.array`. `.index` reads the block's own array, which markDataIndexRead
+# and `.array`. `.get` reads the block's own array, which markDataIndexRead
 # keeps when the read does not fold; every other value member reads the value,
 # which keeps the array always. `.array` copies the elements into the sized
 # array instance (array_{elem}_{count}), minting it on first access. Through a
@@ -30585,7 +30584,7 @@ checkDataBlockMember: function {
             ) case some then {
                 # `get` reads the block's own array; any other member reads
                 # the block as its value
-                if (isDataElementRead nameId: cnId).not then {
+                if cnId != zast.wellKnown.slot.wkGet then {
                     markDataRuntimeIndexed :st tid: bt
                     stampGate :st nid: dp.parent tid: dv
                 }
@@ -44579,7 +44578,7 @@ checkBoxConstruction: function {
 # callableDottedResultAt -- a dotted callable resolves through the dotted-path
 # walk (no auto-call coercion -- callable position wants the function itself);
 # the base is typed and stamped there. none = the callable is not a dotted
-# path; some 0 = dotted but unresolved (e.g. a data block's `.index`), which
+# path; some 0 = dotted but unresolved (e.g. a data block's `.get`), which
 # leaves the call untyped with its arguments unwalked.
 callableDottedResultAt: function {
     st: zenv.ZSymbolTable
@@ -46759,7 +46758,7 @@ checkResolvedValueCall: function {
                 return (callleg handled: true tid: dct)
             }
             # a record-typed callable that names no type is read off a
-            # receiver: off a data block it is `.index`, which walks its
+            # receiver: off a data block it is `.get`, which walks its
             # arguments as that record's and stays untyped; off anything else
             # it is a value, whatever its type
             if call.nargs > 0 when (callableReadsDataBlock :st :ast :call).not then {
@@ -46804,7 +46803,7 @@ checkResolvedValueCall: function {
 }
 
 # callableReadsDataBlock -- the call's callable is a member read off a data
-# block (`tab.index`).
+# block (`tab.get`).
 callableReadsDataBlock: function {
     st: zenv.ZSymbolTable.view ast: Ast.view call: callref
 } out bool is {
@@ -47847,7 +47846,7 @@ checkExplicitConstruction: function {
 }
 
 # checkDottedCallableCall -- the callable resolved through a dotted path.
-# An unresolved one (a data block's `.index`) still walks its arguments so
+# An unresolved one (a data block's `.get`) still walks its arguments so
 # their atoms stamp; a resolved one dispatches as a method or a value call.
 checkDottedCallableCall: function {
     st: zenv.ZSymbolTable
@@ -47870,7 +47869,7 @@ checkDottedCallableCall: function {
     }
     result: ztypes.tid
     if dro.isZero then {
-        # unresolved dotted callable (a data block's `.index`): the
+        # unresolved dotted callable (a data block's `.get`): the
         # call stays untyped, but its args are still values -- check
         # them so their atoms stamp (atomVariableId / refDecl)
         kU: u64
@@ -51524,7 +51523,7 @@ checkValueAt: function {
     return t
 }
 
-# markDataIndexRead -- a `blk.index i` the fold did not answer reads the block's
+# markDataIndexRead -- a `blk.get i` the fold did not answer reads the block's
 # static array at run time, so the emitter must keep it. A constant index folds
 # to its element and needs no array.
 markDataIndexRead: function {st: zenv.ZSymbolTable ast: Ast.view nid: zast.nodeid} is {
@@ -51534,7 +51533,7 @@ markDataIndexRead: function {st: zenv.ZSymbolTable ast: Ast.view nid: zast.nodei
     markDataRuntimeIndexed :st tid: dataTid
 }
 
-# dataIndexedAt -- the data block a `blk.index i` call at `nid` reads, as the
+# dataIndexedAt -- the data block a `blk.get i` call at `nid` reads, as the
 # walk typed its base; 0 for any other node.
 dataIndexedAt: function {
     st: zenv.ZSymbolTable.view ast: Ast.view nid: zast.nodeid
@@ -51556,13 +51555,7 @@ dataIndexedAt: function {
 # atomIsIndex -- node `nid` is the atom naming the member a data block reads an
 # element by position through.
 atomIsIndex: function {ast: Ast.view nid: zast.nodeid} out bool is {
-    return (isDataElementRead nameId: (atomNameId :ast n: (ast.nodes.get i: nid)))
-}
-
-# isDataElementRead -- `nameId` is the member a data block reads an element by
-# position through: `get`, or `index`, its former spelling.
-isDataElementRead: function {nameId: zast.nameid} out bool is {
-    return (nameId == zast.wellKnown.slot.wkGet) or (nameId == zast.wellKnown.slot.wkIndex)
+    return (atomNameId :ast n: (ast.nodes.get i: nid)) == zast.wellKnown.slot.wkGet
 }
 
 # checkValueArmAt -- the arm dispatch: each handler takes its row as plain
@@ -59228,7 +59221,7 @@ constOfErrorCall: function {
     return ztypes.noConst
 }
 
-# constOfDataIndex -- `blk.index K` with a constant K: the element at slot K,
+# constOfDataIndex -- `blk.get K` with a constant K: the element at slot K,
 # read through the declaration as a label is. noConst for any other call, for a
 # K that does not fold, and for an element with no value; a K outside the block
 # is recorded as an indexRange failure, a constant with no value.
@@ -60519,7 +60512,7 @@ resolveCalledConstantDef: function {
             )
             if crv.kind.svalKind then cbu = true
         }
-        # `blk.index K` reads an element by position, a value the value
+        # `blk.get K` reads an element by position, a value the value
         # channel folds and range-checks
         if cbu.not when ccn.dottedpath when (atomIsIndex :ast nid: ccn.child) then {
             dbt: (typeNamedFrom
