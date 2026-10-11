@@ -15787,6 +15787,7 @@ tagAliasArmC: function {
     ctx: Ctx
     brid: ztypes.tid
     bdec: ztypes.declid
+    facts: cfacts.borrow
 } out String is {
     if brid.isZero then return ""
     if bdec.isZero then return ""
@@ -15802,11 +15803,11 @@ tagAliasArmC: function {
     ctorArmName: atk.defName
     if ctorArmName.isZero then return ""
     ava: armValueC :ast :ctx :symtab tid: brid arm: ctorArmName
-    if ava.length > 0 then return ava
+    if ava.length > 0 then return (stating :facts from: constFacts text: ava)
     atg: tagConstOf :ast :ctx :symtab tid: brid armId: ctorArmName
     if atg.length == 0 then return ""
     avc: ctxCname :ctx tid: brid
-    return "((\{avc}_t){ .tag = \{atg} })"
+    return (stating :facts from: literalFacts text: "((\{avc}_t){ .tag = \{atg} })")
 }
 
 # implicitZeroValue -- the C text a stamped implicit zero-create builds for the
@@ -15904,8 +15905,9 @@ emitDefRefAtom: function {
     n: zast.atomidrow.view
     brid: ztypes.tid
     bdec: ztypes.declid
+    facts: cfacts.borrow
 } out String is {
-    taa: tagAliasArmC :ast :symtab :ctx :brid :bdec
+    taa: tagAliasArmC :ast :symtab :ctx :brid :bdec :facts
     if taa.length > 0 then return taa
     if brid.isZero.not when (
         (symtab.reg.typetypeOf typeId: brid) == ztypes.ztypetype.recordType
@@ -15914,27 +15916,24 @@ emitDefRefAtom: function {
         match (
             izr
         ) case some then {
-            facts3: cfacts
             return (implicitZeroValue
                 :ast
                 :symtab
                 :ctx
                 tid: izr
-                facts: facts3
+                :facts
             )
         } case none then null
         # unstamped: a scalar is its zero, any other record its zero struct
-        facts2: cfacts
         if (scalarCTypeFor :symtab tid: brid).length > 0 then return (implicitZeroValue
             :ast
             :symtab
             :ctx
             tid: brid
-            facts: facts2
+            :facts
         )
         brc: ctxCname :ctx tid: brid
-        be0: "((\{brc}_t){0})"
-        return be0
+        return (stating :facts from: literalFacts text: "((\{brc}_t){0})")
     }
     if brid.isZero.not when (
         (symtab.reg.typetypeOf typeId: brid) == ztypes.ztypetype.classType
@@ -15945,7 +15944,6 @@ emitDefRefAtom: function {
         match (
             izc
         ) case some then {
-            facts: cfacts
             return (implicitZeroValue
                 :ast
                 :symtab
@@ -15959,7 +15957,6 @@ emitDefRefAtom: function {
         (symtab.reg.typetypeOf typeId: brid) == ztypes.ztypetype.functionType
     ) then {
         fbcn: ctxCname :ctx tid: brid
-        facts: cfacts
         return (fnRefOrCallC
             :ast
             :symtab
@@ -16130,7 +16127,7 @@ emitAtom: function {
             :facts
         )
     }
-    dra: emitDefRefAtom :ast :symtab :ctx :n :brid :bdec
+    dra: emitDefRefAtom :ast :symtab :ctx :n :brid :bdec :facts
     if dra.length > 0 then return dra
     # a stamped implicit zero-create on a String atom is the empty
     # owned string: the zero struct needs no allocation and no free
@@ -16163,6 +16160,7 @@ emitNestedStringViewBase: function {
     ctx: Ctx
     n: zast.dottedpathrow.view
     mnId: zast.nameid
+    facts: cfacts.borrow
 } out String is {
     if (ztypecheck.isStringViewMember nameId: mnId) then {
         ppid: interpPartNodeId n: (ast.nodes.get i: n.parent)
@@ -16187,10 +16185,10 @@ emitNestedStringViewBase: function {
                 vid: pbq
                 facts: pbvF
             )
-            return sv
+            return (stating :facts from: pbvF text: sv)
         }
         if parentStampTid == ctx.svTid then {
-            return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent))
+            return (emitExprWith :ast :symtab :ctx n: (ast.nodes.get i: n.parent) :facts)
         }
     }
     return ""
@@ -16664,6 +16662,7 @@ unitInstanceMemberRead: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     n: zast.dottedpathrow.view
+    facts: cfacts.borrow
 } out String is {
     bst: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.parent))
     if (symtab.reg.typetypeOf typeId: bst) != ztypes.ztypetype.unitType then return ""
@@ -16678,12 +16677,13 @@ unitInstanceMemberRead: function {
         (symtab.reg.typetypeOf typeId: (stampIdOf :symtab nid: n.nodeid)) ==
         ztypes.ztypetype.functionType
     ) then {
-        return cn
+        # the function's name, a designator
+        return (stating :facts from: pathFacts text: cn)
     }
     cn.append "("
     cn.append (renderedMethodDefaultArgs :ast :symtab :ctx fnTid: fid)
     cn.append ")"
-    return cn
+    return (stating :facts from: callFacts text: cn)
 }
 
 # nestedStringMember -- a String or StringView member read through a FIELD: a
@@ -16700,10 +16700,10 @@ nestedStringMember: function {
     mn2: StringView
     mnId: zast.nameid
     bs9vid: ztypes.vid
+    facts: cfacts.borrow
 } out String is {
     nptT: chaseStrTypedef :symtab :ctx tid: (stampIdDeep :symtab n: parent)
     if nptT == ctx.strTid then {
-        facts: cfacts
         nsm: (emitStringMethod
             :ast
             :symtab
@@ -16730,7 +16730,7 @@ nestedStringMember: function {
             vid: bs9vid
             facts: pnvF
         )
-        return "\{ctx.svC}_\{mn2}(&\{pnv})"
+        return (stating :facts from: callFacts text: "\{ctx.svC}_\{mn2}(&\{pnv})")
     }
     return ""
 }
@@ -16766,9 +16766,9 @@ emitDottedNestedBase: function {
 } out String is {
     # `.stringView` on a String/StringView projects an inline view, not a
     # field access (matches the simple-base svValueForm path).
-    eSv: emitNestedStringViewBase :ast :symtab :ctx :n :mnId
+    eSv: emitNestedStringViewBase :ast :symtab :ctx :n :mnId :facts
     if eSv.length > 0 then return eSv
-    eUi: unitInstanceMemberRead :ast :symtab :ctx :n
+    eUi: unitInstanceMemberRead :ast :symtab :ctx :n :facts
     if eUi.length > 0 then return eUi
     # a nested base (e.g. it.target.a): emit the base expression, then chain
     # `.`/`->` by whether the base resolves to a pointer (a pointer variable or a lock field).
@@ -16795,6 +16795,7 @@ emitDottedNestedBase: function {
         :mn2
         :mnId
         :bs9vid
+        :facts
     )
     if nsm.length > 0 then return nsm
     # a no-arg List method on a nested receiver (this.field.pop): the bsmn
@@ -16940,6 +16941,7 @@ nestedBaseMember: function {
             bn2F: baseAtomF
             bn2v: bs9vid
             bstamp: nlid
+            :facts
         )
         if eSmN.length > 0 then return eSmN
     }
@@ -17289,6 +17291,7 @@ sumMemberMethodRead: function {
     bn2F: cfacts
     bn2v: ztypes.vid
     bstamp: ztypes.tid
+    facts: cfacts.borrow
 } out String is {
     mco: (symtab.typing.declChildOfId
         parentTypeId: bstamp
@@ -17305,7 +17308,6 @@ sumMemberMethodRead: function {
             (mtt == ztypes.ztypetype.protocolType) or
             (mtt == ztypes.ztypetype.facetType)
         ).not then return ""
-        facts: cfacts
         return (emitResolvedMemberRead
             :ast
             :symtab
@@ -18065,6 +18067,7 @@ emitDottedAtomBase: function {
             :bn2F
             :bn2v
             :bstamp
+            :facts
         )
         if eSm.length > 0 then return eSm
     }
@@ -18188,7 +18191,7 @@ emitDottedUnitRead: function {
     if ucv.length > 0 then return ucv
     # `unit.block` -- another unit's data block reads as its value
     udv: dataValueText :symtab :ctx nid: n.nodeid
-    if udv.length > 0 then return udv
+    if udv.length > 0 then return (stating :facts from: literalFacts text: udv)
     # a stamped implicit zero-create on a unit-qualified type path
     # (`unit.Conf`) constructs like the bare-atom legs
     izd: symtab.typing.implicitCreate.get key: n.nodeid
