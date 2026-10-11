@@ -5986,13 +5986,15 @@ emitDottedCall: function {
     # size: one that is a call's result is bound once, and dropped again when no
     # leg takes the call
     rmark: pendingHoistMark :ctx
-    if btIsStr when dcbV.isZero when (factsOfText s: bn.stringView).place.not then {
+    bnF: factsOfText s: bn.stringView
+    if btIsStr when dcbV.isZero when bnF.place.not then {
         bn = (receiverOnce
             :ast
             :symtab
             :ctx
             callable: (ast.nodes.get i: call.callable)
             text: bn.stringView
+            textF: bnF
             tid: btid
         )
     }
@@ -7545,9 +7547,10 @@ receiverOnce: function {
     # the call's dotted callable, whose parent is the receiver
     callable: astnode.view
     text: StringView
+    textF: cfacts
     tid: ztypes.tid
 } out String is {
-    return (receiverOnceAt :ast :symtab :ctx baseNid: (dottedBaseNid n: callable) :text :tid)
+    return (receiverOnceAt :ast :symtab :ctx baseNid: (dottedBaseNid n: callable) :text :textF :tid)
 }
 
 # receiverOnceAt -- receiverOnce for a receiver known by its own node: a
@@ -7559,9 +7562,10 @@ receiverOnceAt: function {
     # the receiver's node
     baseNid: zast.nodeid
     text: StringView
+    textF: cfacts
     tid: ztypes.tid
 } out String is {
-    if (factsOfText s: text).place then return text.string
+    if textF.place then return text.string
     return (hoistForAddress :ast :symtab :ctx av: text :tid argNid: baseNid)
 }
 
@@ -13763,6 +13767,7 @@ emitFnptrFieldCall: function {
         :ctx
         callable: callableNode
         text: recvText.stringView
+        textF: facts
         tid: rtid
     )
     rptr: dottedReceiverIsPtr :ast :symtab :ctx callable: (ast.nodes.get i: call.callable)
@@ -16064,7 +16069,15 @@ emitNestedMonoMethodBase: function {
                 :ctx
                 n: (ast.nodes.get i: n.parent)
             ) then nacc = "->"
-            nrecv: receiverOnceAt :ast :symtab :ctx baseNid: n.parent text: baseAtom tid: nlid
+            nrecv: (receiverOnceAt
+                :ast
+                :symtab
+                :ctx
+                baseNid: n.parent
+                text: baseAtom
+                textF: (factsOfText s: baseAtom)
+                tid: nlid
+            )
             return (vtableAutoCallC
                 :ast
                 :symtab
@@ -16468,6 +16481,7 @@ nestedBaseMember: function {
             :mn2
             :mnId
             bn2: base
+            bn2F: baseAtomF
             bn2v: bs9vid
             bstamp: nlid
         )
@@ -16554,6 +16568,7 @@ methodAutoCallRead: function {
     mn2: StringView
     mnId: zast.nameid
     bn2: StringView
+    bn2F: cfacts
     bn2v: ztypes.vid
     bstamp: ztypes.tid
     # the method
@@ -16593,7 +16608,17 @@ methodAutoCallRead: function {
         # a base that is not an lvalue -- an arm constant (`Dir.up`), a call's
         # result -- has no address: it is hoisted into the `_ah` temp an
         # argument gets, and a name still emits as `&name`
-        methodRecv = emitByrefArg :ast :symtab :ctx av: bn2 pid: bstamp argNid: baseNid
+        mrF: cfacts
+        methodRecv = (emitByrefArgWith
+            :ast
+            :symtab
+            :ctx
+            av: bn2
+            avF: bn2F
+            pid: bstamp
+            argNid: baseNid
+            facts: mrF
+        )
     }
     ida: renderedMethodDefaultArgs :ast :symtab :ctx fnTid: mt
     if ida.length > 0 then return (stating
@@ -16707,6 +16732,7 @@ emitResolvedMemberRead: function {
     mn2: StringView
     mnId: zast.nameid
     bn2: StringView
+    bn2F: cfacts
     bn2v: ztypes.vid
     bstamp: ztypes.tid
     mco: ztypes.tid
@@ -16747,6 +16773,7 @@ emitResolvedMemberRead: function {
         :mn2
         :mnId
         :bn2
+        :bn2F
         :bn2v
         :bstamp
         :mco
@@ -16794,6 +16821,7 @@ sumMemberMethodRead: function {
     mn2: StringView
     mnId: zast.nameid
     bn2: StringView
+    bn2F: cfacts
     bn2v: ztypes.vid
     bstamp: ztypes.tid
 } out String is {
@@ -16821,6 +16849,7 @@ sumMemberMethodRead: function {
             :mn2
             :mnId
             :bn2
+            :bn2F
             :bn2v
             :bstamp
             :mco
@@ -16921,6 +16950,7 @@ emitUserTypeMemberRead: function {
             :mn2
             :mnId
             :bn2
+            :bn2F
             :bn2v
             :bstamp
             :mco
@@ -17502,7 +17532,7 @@ emitDottedAtomBase: function {
     if (isDispatchableTid :symtab tid: bstamp) when viaVtable then {
         pacc: ".".string
         if (isPtrVid :ctx vid: bn2v) then pacc = "->"
-        precv: receiverOnceAt :ast :symtab :ctx baseNid: n.parent text: bn2 tid: bstamp
+        precv: receiverOnceAt :ast :symtab :ctx baseNid: n.parent text: bn2 textF: bn2F tid: bstamp
         return (stating
             :facts
             from: callFacts
@@ -17538,15 +17568,24 @@ emitDottedAtomBase: function {
         :facts
     )
     if eRc.length > 0 then return eRc
-    # a UNION reads its payload through legs further down, but the question of
-    # whether the member is a METHOD at all is the same one the variant leg asks
-    if rtt == ztypes.ztypetype.unionType then {
-        eSmU: sumMemberMethodRead :ast :symtab :ctx baseNid: n.parent :mn2 :mnId :bn2 :bn2v :bstamp
-        if eSmU.length > 0 then return eSmU
+    # a sum's member may be a METHOD; a UNION reads its payload through legs
+    # further down, a variant's arm is its payload
+    if (rtt == ztypes.ztypetype.unionType) or (rtt == ztypes.ztypetype.variantType) then {
+        eSm: (sumMemberMethodRead
+            :ast
+            :symtab
+            :ctx
+            baseNid: n.parent
+            :mn2
+            :mnId
+            :bn2
+            :bn2F
+            :bn2v
+            :bstamp
+        )
+        if eSm.length > 0 then return eSm
     }
     if rtt == ztypes.ztypetype.variantType then {
-        eSm: sumMemberMethodRead :ast :symtab :ctx baseNid: n.parent :mn2 :mnId :bn2 :bn2v :bstamp
-        if eSm.length > 0 then return eSm
         armDaC: memberC :ast :symtab :ctx owner: bstamp kind: memberkind.arm nameId: mnId
         return (stating :facts from: (memberFacts b: bn2F) text: "\{bn2}.data.\{armDaC}")
     }
@@ -19390,8 +19429,9 @@ emitDeclaredOperator: function {
     ord: orderBegin :ctx slots: 2
     mk: pendingHoistMark :ctx
     recv: String
+    recvF: cfacts
     if (pathIsPointer :ast :symtab :ctx n: (ast.nodes.get i: lhsNid)) then {
-        recv = emitExpr :ast :symtab :ctx n: (ast.nodes.get i: lhsNid)
+        recv = emitExprWith :ast :symtab :ctx n: (ast.nodes.get i: lhsNid) facts: recvF
     } else {
         # `&` needs an LVALUE, and a receiver that is itself a call is not one --
         # `&f(x)` is rejected by C. It is bound to a temp as a method call's
@@ -19399,14 +19439,35 @@ emitDeclaredOperator: function {
         # a compound literal already is an lvalue.
         lvF: cfacts
         lv: operandValueC :ast :symtab :ctx nid: lhsNid facts: lvF
-        if (factsOfText s: lv.stringView).literal then {
+        if lvF.literal then {
             recv = "&\{lv}"
+            recvF = addrFacts e: lvF
         } else {
-            lf: receiverOnceAt :ast :symtab :ctx baseNid: lhsNid text: lv.stringView tid: owner
+            lf: (receiverOnceAt
+                :ast
+                :symtab
+                :ctx
+                baseNid: lhsNid
+                text: lv.stringView
+                textF: lvF
+                tid: owner
+            )
             recv = "&\{lf}"
+            recvF = addrFacts e: (if lvF.place then lvF else pathFacts)
         }
     }
-    orderArgAt :ast :symtab :ctx st: ord mark: mk text: recv nid: lhsNid byPtr: true slot: 0
+    (orderArgAtWith
+        :ast
+        :symtab
+        :ctx
+        st: ord
+        mark: mk
+        text: recv
+        tf: recvF
+        nid: lhsNid
+        byPtr: true
+        slot: 0
+    )
     mkR: pendingHoistMark :ctx
     rv: operatorOperandText :ast :symtab :ctx :call :rhsNid
     (orderArgAt
@@ -19593,8 +19654,8 @@ listOperandAddr: function {
     }
     lvF: cfacts
     lv: operandValueC :ast :symtab :ctx :nid facts: lvF
-    if (factsOfText s: lv.stringView).literal then return "&\{lv}"
-    lf: receiverOnceAt :ast :symtab :ctx baseNid: nid text: lv.stringView :tid
+    if lvF.literal then return "&\{lv}"
+    lf: receiverOnceAt :ast :symtab :ctx baseNid: nid text: lv.stringView textF: lvF :tid
     return "&\{lf}"
 }
 
@@ -41528,7 +41589,15 @@ emitProtocolDispatch: function {
     recvText: emitDottedReceiver :ast :symtab :ctx callable: callableNode :facts
     if recvText.length == 0 then return ""
     # the table and the data are both read through the receiver
-    recv: receiverOnce :ast :symtab :ctx callable: callableNode text: recvText.stringView tid: rtid
+    recv: (receiverOnce
+        :ast
+        :symtab
+        :ctx
+        callable: callableNode
+        text: recvText.stringView
+        textF: facts
+        tid: rtid
+    )
     acc: ".".string
     if (dottedReceiverIsPtr :ast :symtab :ctx callable: callableNode) then acc = "->"
     dargs: (vtableDataArg
