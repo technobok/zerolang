@@ -6449,6 +6449,9 @@ cfacts: record {
     # a plain place path: a name and `.` / `->` member reads off it, reading
     # nothing through a pointer a call could replace
     path: false
+    # the address of a plain place path, `&p`: nothing evaluated around it can
+    # move it
+    fixedAddr: false
     # the facts were filled in; a fresh slot holds none, and no reader acts on
     # a slot nobody filled
     stated: false
@@ -6463,6 +6466,7 @@ factsOfText: function {s: StringView} out cfacts is {
         once: (singleReadNeedsTemp :s)
         pure: (isPureCText :s)
         path: (isPlainCPath :s)
+        fixedAddr: (isPathAddrText :s)
         stated: true
     )
 }
@@ -6508,7 +6512,30 @@ stateFacts: function {facts: cfacts.borrow from: cfacts} is {
     facts.once = from.once
     facts.pure = from.pure
     facts.path = from.path
+    facts.fixedAddr = from.fixedAddr
     facts.stated = from.stated
+}
+
+# guessing -- `text`, with the facts its shape implies stated into the caller's
+# slot: a producer's return whose facts are not yet its own to state.
+guessing: function {facts: cfacts.borrow text: String.take} out String is {
+    stateFacts :facts from: (factsOfText s: text.stringView)
+    return text
+}
+
+# addrFacts -- `&e`, the address of an operand whose facts are `e`: a value, no
+# place, evaluated exactly as the operand is, and fixed when the operand is a
+# path.
+addrFacts: function {e: cfacts} out cfacts is {
+    return (cfacts
+        place: false
+        literal: false
+        once: e.once
+        pure: e.pure
+        path: false
+        fixedAddr: e.path
+        stated: true
+    )
 }
 
 # stating -- `text`, with its facts stated into the caller's slot: a producer's
@@ -6516,6 +6543,12 @@ stateFacts: function {facts: cfacts.borrow from: cfacts} is {
 stating: function {facts: cfacts.borrow from: cfacts text: String.take} out String is {
     stateFacts :facts :from
     return text
+}
+
+# isPathAddrText -- the text is `&p` for a plain place path `p`.
+isPathAddrText: function {s: StringView} out bool is {
+    if (s.startsWith "&").not then return false
+    return (isPlainCPath s: (s.substring from: 1 to: s.length))
 }
 
 # canTakeAddress -- whether `&` applies to the text as it stands: a place, or a
@@ -6686,7 +6719,49 @@ orderPart: function {
     # the node whose value the text is, which types a scalar's temp; 0 for none
     valueNid: zast.nodeid.zero
 } is {
-    pure: constant.not and (factsOfText s: text.stringView).pure
+    tf: factsOfText s: text.stringView
+    (orderPartWith
+        :ast
+        :symtab
+        :ctx
+        :st
+        :mark
+        :text
+        :tf
+        :constant
+        :fid
+        :pid
+        :pname
+        :ctype
+        :slot
+        :valueNid
+    )
+}
+
+# orderPartWith -- orderPart for a part whose facts are `tf`.
+orderPartWith: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    st: orderstate.borrow
+    # where the pending hoists stood before the part was built
+    mark: hoistmark
+    text: String.take
+    tf: cfacts
+    # a literal, a folded constant, or an address no part can move
+    constant: bool
+    # the function and parameter a temp's C type is spelled from
+    fid: ztypes.tid
+    pid: ztypes.tid
+    pname: zast.nameid
+    # the temp's C type when the caller spells it, "" to spell it from the above
+    ctype: StringView
+    # the parameter slot the part fills
+    slot: u64
+    # the node whose value the text is, which types a scalar's temp; 0 for none
+    valueNid: zast.nodeid.zero
+} is {
+    pure: constant.not and tf.pure
     if st.live then {
         if (hoistsWithValues :ctx :mark) or (constant.not and pure.not) then {
             orderSettleWaiting :ast :symtab :ctx :st all: true
@@ -6937,6 +7012,20 @@ orderConstant: function {
     # the parameter takes the part by pointer
     byPtr: bool
 } out bool is {
+    return (orderConstantWith :ast :symtab :ctx :n :text tf: (factsOfText s: text) :byPtr)
+}
+
+# orderConstantWith -- orderConstant for a part whose facts are `tf`.
+orderConstantWith: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: astnode.view
+    text: StringView
+    tf: cfacts
+    # the parameter takes the part by pointer
+    byPtr: bool
+} out bool is {
     cv: symtab.typing.nodeConstIn mono: ctx.curThisTid nid: (interpPartNodeId :n)
     if cv.kind.none.not then return true
     # a constant a unit or a data block names reaches the C as its literal
@@ -6950,12 +7039,9 @@ orderConstant: function {
             return (bindLitIndex :ast :ctx n: (ast.nodes.get i: n.parent)) > 0
         }
     }
-    if text.startsWith "&" then {
-        addr: text.substring from: 1 to: text.length
-        if (factsOfText s: addr).path then return true
-    }
+    if tf.fixedAddr then return true
     if byPtr.not then return false
-    return (factsOfText s: text).path
+    return tf.path
 }
 
 # isCNumberLiteral -- C text that is one number literal: a digit first, after an
@@ -12812,7 +12898,8 @@ emitByrefArg: function {
     pid: ztypes.tid
     argNid: zast.nodeid
 } out String is {
-    return (emitByrefArgWith :ast :symtab :ctx :av avF: (factsOfText s: av) :pid :argNid)
+    facts: cfacts
+    return (emitByrefArgWith :ast :symtab :ctx :av avF: (factsOfText s: av) :pid :argNid :facts)
 }
 
 # emitByrefArgWith -- emitByrefArg for an argument whose facts are `avF`.
@@ -12824,12 +12911,16 @@ emitByrefArgWith: function {
     avF: cfacts
     pid: ztypes.tid
     argNid: zast.nodeid
+    # the facts of the address handed back
+    facts: cfacts.borrow
 } out String is {
     # as for a by-value argument: a typedef built inline from a consumed local
     # is hoisted, so the temporary's free runs
-    if avF.place when (ownedTypedefArg :symtab :argNid).not then return "&\{av}"
+    if avF.place when (ownedTypedefArg :symtab :argNid).not then {
+        return (stating :facts from: (addrFacts e: avF) text: "&\{av}")
+    }
     nmH: hoistForAddress :ast :symtab :ctx :av tid: pid :argNid
-    return "&\{nmH}"
+    return (stating :facts from: (addrFacts e: pathFacts) text: "&\{nmH}")
 }
 
 # fnIsNativeId -- the fn id's isNative flag (a mono inherits it from its
@@ -13808,6 +13899,21 @@ userFnArgText: function {
     pinNmId: zast.nameid
     argOpNode: astnode.view
 } out String is {
+    facts: cfacts
+    return (userFnArgTextWith :ast :symtab :ctx :fid :pinId :pinNmId :argOpNode :facts)
+}
+
+# userFnArgTextWith -- userFnArgText, its facts stated into `facts`.
+userFnArgTextWith: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    fid: ztypes.tid
+    pinId: ztypes.tid
+    pinNmId: zast.nameid
+    argOpNode: astnode.view
+    facts: cfacts.borrow
+} out String is {
     ctx.lastArgByPtr = false
     iavb: (emitInterpArgForParam
         :ast
@@ -13854,7 +13960,7 @@ userFnArgText: function {
             }
         }
     }
-    if projd then return atomVarId
+    if projd then return (guessing :facts text: atomVarId)
     # the parameter's mode: by pointer (addressed unless already one), or a
     # borrow hoist of the value
     pTake8: paramTakesArg :symtab :fid pnameId: pinNmId
@@ -13867,7 +13973,9 @@ userFnArgText: function {
         takesArg: pTake8
     )
     if ctx.lastArgByPtr then {
-        if (argAlreadyPointer :ast :symtab :ctx n: argOpNode vid: avq) then return atomVarId
+        if (argAlreadyPointer :ast :symtab :ctx n: argOpNode vid: avq) then {
+            return (stating :facts from: avF text: atomVarId)
+        }
         return (emitByrefArgWith
             :ast
             :symtab
@@ -13876,13 +13984,20 @@ userFnArgText: function {
             :avF
             pid: pinId
             argNid: (zast.nodeIdOf n: argOpNode)
+            :facts
         )
     }
     # a pointer-held valtype handed to a BY-VALUE parameter is loaded, and so
     # is a reference-returning call's valtype result; every parameter that
     # wants the pointer has answered above
-    if (ptrHeldValtype :ast :symtab :ctx n: argOpNode) then return "(*\{atomVarId})"
-    if (refValtypeResult :ast :symtab :ctx n: argOpNode) then return "(*\{atomVarId})"
+    # a load's facts are read off its text: the text guesser takes `(*f(x))` to
+    # be read twice at no cost, which the operand's facts deny
+    if (ptrHeldValtype :ast :symtab :ctx n: argOpNode) then {
+        return (guessing :facts text: "(*\{atomVarId})")
+    }
+    if (refValtypeResult :ast :symtab :ctx n: argOpNode) then {
+        return (guessing :facts text: "(*\{atomVarId})")
+    }
     vbh8: (hoistBorrowValArgWith
         :ast
         :symtab
@@ -13893,8 +14008,8 @@ userFnArgText: function {
         pid: pinId
         paramTake: pTake8
     )
-    if vbh8.length > 0 then return vbh8
-    return atomVarId
+    if vbh8.length > 0 then return (stating :facts from: pathFacts text: vbh8)
+    return (stating :facts from: avF text: atomVarId)
 }
 
 # emitUserFnCall -- a call of a user-declared function `fid` (a free function
@@ -13999,22 +14114,25 @@ orderUserFnArg: function {
     ord: orderstate.borrow
 } is {
     mk: pendingHoistMark :ctx
-    txt: userFnArgText :ast :symtab :ctx :fid :pinId :pinNmId :argOpNode
-    constant: (orderConstant
+    txtF: cfacts
+    txt: userFnArgTextWith :ast :symtab :ctx :fid :pinId :pinNmId :argOpNode facts: txtF
+    constant: (orderConstantWith
         :ast
         :symtab
         :ctx
         n: argOpNode
         text: txt.stringView
+        tf: txtF
         byPtr: ctx.lastArgByPtr
     )
-    (orderPart
+    (orderPartWith
         :ast
         :symtab
         :ctx
         st: ord
         mark: mk
         text: txt
+        tf: txtF
         :constant
         :fid
         pid: pinId
