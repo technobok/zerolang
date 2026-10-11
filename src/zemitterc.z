@@ -6510,6 +6510,19 @@ derefFacts: function {} out cfacts is {
     return (cfacts place: true literal: false once: false pure: true path: false stated: true)
 }
 
+# derefOf -- `(*e)`, read through an operand whose facts are `e`: a place, no
+# path, and evaluated exactly as the operand is.
+derefOf: function {e: cfacts} out cfacts is {
+    return (cfacts
+        place: true
+        literal: false
+        once: e.once
+        pure: e.pure
+        path: false
+        stated: true
+    )
+}
+
 # memberFacts -- `base.f` or `base->f`, read off a base whose facts are `b`: a
 # place wherever the base is one or is a compound literal, and a path, pure or
 # repeated work exactly as the base is.
@@ -15855,6 +15868,7 @@ callBaseTemp: function {
     ctx: Ctx
     nlid: ztypes.tid
     base: StringView
+    baseF: cfacts
     nstPtr: bool
     baseNid: zast.nodeid
 } out String is {
@@ -15864,7 +15878,7 @@ callBaseTemp: function {
     isView: isListViewOriginOf :symtab :ctx tid: nlid
     if (dataValueFamilyOf :symtab :ctx tid: nlid).isZero.not then isView = true
     if (stackCollectionTid :symtab :ctx tid: nlid).not when isView.not then return ""
-    if (canTakeAddress f: (factsOfText s: base)) then return ""
+    if (canTakeAddress f: baseF) then return ""
     return (hoistForAddress
         :ast
         :symtab
@@ -16240,6 +16254,7 @@ emitDottedNestedBase: function {
     n: zast.dottedpathrow.view
     mn2: StringView
     mnId: zast.nameid
+    facts: cfacts.borrow
 } out String is {
     # `.stringView` on a String/StringView projects an inline view, not a
     # field access (matches the simple-base svValueForm path).
@@ -16300,6 +16315,7 @@ emitDottedNestedBase: function {
         tid: nlid
     ) then {
         baseAtom = "(*\{baseAtom})"
+        baseAtomF = derefOf e: baseAtomF
         bs9vid = ztypes.vid
         nstPtr = false
     }
@@ -16307,6 +16323,7 @@ emitDottedNestedBase: function {
     nbxE: boxMemberElem :ast :symtab :ctx :n
     if nbxE.isZero.not then {
         baseAtom = "(*\{baseAtom})"
+        baseAtomF = derefOf e: baseAtomF
         nlid = nbxE
         bs9vid = ztypes.vid
         nstPtr = false
@@ -16322,21 +16339,65 @@ emitDottedNestedBase: function {
         n: (ast.nodes.get i: n.parent)
     ) then {
         baseAtom = hoistedBorrowDeref :ast :symtab :ctx av: baseAtom.stringView tid: nlid
+        baseAtomF = derefFacts
         bs9vid = ztypes.vid
         nstPtr = false
     }
-    cbt: callBaseTemp :ast :symtab :ctx :nlid base: baseAtom.stringView :nstPtr baseNid: n.parent
+    cbt: (callBaseTemp
+        :ast
+        :symtab
+        :ctx
+        :nlid
+        base: baseAtom.stringView
+        baseF: baseAtomF
+        :nstPtr
+        baseNid: n.parent
+    )
     if cbt.length > 0 then {
         baseAtom = cbt.take
+        baseAtomF = pathFacts
         bs9vid = ztypes.vid
     }
+    return (nestedBaseMember
+        :ast
+        :symtab
+        :ctx
+        :n
+        :mn2
+        :mnId
+        :nlid
+        base: baseAtom.stringView
+        :baseAtomF
+        :bs9vid
+        :nstPtr
+        :facts
+    )
+}
+
+# nestedBaseMember -- member `mnId` read off a nested read's base `base`, of type
+# `nlid` (a pointer when `nstPtr`): a collection's or a mono's method, a sum's
+# method, else the field, with its facts; "" when the owner has none.
+nestedBaseMember: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: zast.dottedpathrow.view
+    mn2: StringView
+    mnId: zast.nameid
+    nlid: ztypes.tid
+    base: StringView
+    baseAtomF: cfacts
+    bs9vid: ztypes.vid
+    nstPtr: bool
+    facts: cfacts.borrow
+} out String is {
     eCo: (emitNestedCollectionBase
         :symtab
         :ctx
         :mn2
         :mnId
         :nlid
-        baseAtom: baseAtom.stringView
+        baseAtom: base
         :bs9vid
         recvIsPtr: nstPtr
     )
@@ -16349,7 +16410,7 @@ emitDottedNestedBase: function {
         :mn2
         :mnId
         :nlid
-        baseAtom: baseAtom.stringView
+        baseAtom: base
         :bs9vid
     )
     if eMo.length > 0 then return eMo
@@ -16361,7 +16422,7 @@ emitDottedNestedBase: function {
             baseNid: n.parent
             :mn2
             :mnId
-            bn2: baseAtom.stringView
+            bn2: base
             bn2v: bs9vid
             bstamp: nlid
         )
@@ -16372,7 +16433,7 @@ emitDottedNestedBase: function {
     mnNbC: memberC :ast :symtab :ctx owner: nlid kind: memberkind.field nameId: mnId
     acc: "."
     if nstPtr then acc = "->"
-    return "\{baseAtom}\{acc}\{mnNbC}"
+    return (stating :facts from: (memberFacts b: baseAtomF) text: "\{base}\{acc}\{mnNbC}")
 }
 
 # protocolProjectionRead -- a borrowed conformance projection: f.myreader ->
@@ -18413,7 +18474,7 @@ emitDottedRead: function {
         )
         if aba.length > 0 then return aba
     }
-    return (emitDottedNestedBase :ast :symtab :ctx :n :mn2 :mnId)
+    return (emitDottedNestedBase :ast :symtab :ctx :n :mn2 :mnId :facts)
 }
 
 # loadValueStructRef -- a call's text `e`, loaded when the call hands back a
