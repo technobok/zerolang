@@ -6588,11 +6588,12 @@ emitStringArgMethod: function {
         # an owned String reads .data/.size (through the pointer for a
         # borrowed param); a StringView reads .data/.length.
         if argTid == ctx.strTid then {
-            aph: (hoistBorrowValArg
+            aph: (hoistBorrowValArgWith
                 :ast
                 :symtab
                 :ctx
                 av: argval.stringView
+                avF: argvalF
                 pid: ctx.strTid
                 paramTake: false
                 argNid: argNode
@@ -16477,6 +16478,7 @@ emitNestedMonoMethodBase: function {
     mnId: zast.nameid
     nlid: ztypes.tid
     baseAtom: StringView
+    baseAtomF: cfacts
     bs9vid: ztypes.vid
 } out String is {
     readIsRef: (
@@ -16579,13 +16581,16 @@ emitNestedMonoMethodBase: function {
                             # the compiler rejects. emitByrefArg hoists such a
                             # value into the `_ahN` temp an argument gets; a
                             # plain name still emits as `&name`.
-                            nmrecv = (emitByrefArg
+                            nmrF: cfacts
+                            nmrecv = (emitByrefArgWith
                                 :ast
                                 :symtab
                                 :ctx
                                 av: baseAtom
+                                avF: baseAtomF
                                 pid: nlid
                                 argNid: n.parent
+                                facts: nmrF
                             )
                         }
                     }
@@ -16919,6 +16924,7 @@ nestedBaseMember: function {
         :mnId
         :nlid
         baseAtom: base
+        :baseAtomF
         :bs9vid
     )
     if eMo.length > 0 then return eMo
@@ -25108,6 +25114,7 @@ emitMatchSubjectTemp: function {
     ctx: Ctx
     m: zast.caserow.view
     sx: StringView
+    sxF: cfacts
     vtid: ztypes.tid
     isUni: bool
     vc: StringView
@@ -25130,7 +25137,7 @@ emitMatchSubjectTemp: function {
         buf.append "\{ind}\{gfM} = \{sxM};\n"
         sxM = gfM.take
     } else {
-        hoM: ownedReceiverHoist :ast :symtab :ctx expr: sx exprF: (factsOfText s: sx) n: subjT
+        hoM: ownedReceiverHoist :ast :symtab :ctx expr: sx exprF: sxF n: subjT
         if hoM.length > 0 then sxM = hoM.take
     }
     flushArgHoists :ctx :ind :tmp :buf
@@ -25149,7 +25156,8 @@ emitMatchStmt: function {
     tmp: TmpCtr
     buf: String.borrow
 } is {
-    sx: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: m.subject)
+    sxF: cfacts
+    sx: emitExprWith :ast :symtab :ctx n: (ast.nodes.get i: m.subject) facts: sxF
     if (matchOrdinalPairRoute
         :ast
         :symtab
@@ -25209,6 +25217,7 @@ emitMatchStmt: function {
             :ctx
             :m
             sx: sx.stringView
+            :sxF
             :vtid
             :isUni
             vc: vc.stringView
