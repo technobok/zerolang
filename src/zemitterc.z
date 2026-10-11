@@ -12348,6 +12348,8 @@ userCreateCtor: function {
             pnameId: (cpiNm.get i: ci)
             facts: cavF
         )
+        # the parameter takes the argument by pointer; an unsupplied default never
+        cavPtr: ca.nid.isZero.not and ctx.lastArgByPtr
         wr: ctx.orderWrit.get i: wbase + ci
         constant: true
         if wr > 0 then {
@@ -12360,7 +12362,7 @@ userCreateCtor: function {
                 )
                 text: cav.stringView
                 tf: cavF
-                byPtr: cav.stringView.startsWith "&"
+                byPtr: cavPtr
             )
         }
         (orderPartWith
@@ -20158,6 +20160,8 @@ emitDeclaredOperator: function {
     mk: pendingHoistMark :ctx
     recv: String
     recvF: cfacts
+    # the place `recv` addresses, "" when the receiver is a pointer already
+    recvPlace: String
     if (pathIsPointer :ast :symtab :ctx n: (ast.nodes.get i: lhsNid)) then {
         recv = emitExprWith :ast :symtab :ctx n: (ast.nodes.get i: lhsNid) facts: recvF
     } else {
@@ -20170,6 +20174,7 @@ emitDeclaredOperator: function {
         if lvF.literal then {
             recv = "&\{lv}"
             recvF = addrFacts e: lvF
+            recvPlace = lv.take
         } else {
             lf: (receiverOnceAt
                 :ast
@@ -20182,6 +20187,7 @@ emitDeclaredOperator: function {
             )
             recv = "&\{lf}"
             recvF = addrFacts e: (if lvF.place then lvF else pathFacts)
+            recvPlace = lf.take
         }
     }
     (orderArgAtWith
@@ -20217,9 +20223,14 @@ emitDeclaredOperator: function {
     if (isDispatchableTid :symtab tid: owner) then {
         isFacet: (symtab.reg.typetypeOf typeId: owner) == ztypes.ztypetype.facetType
         sl: memberC :ast :symtab :ctx :owner kind: memberkind.slot nameId: callName
+        # the ordering pass kept the address as written, or read it into a temp,
+        # whose name is a place
+        rs0: orderSlotText t: ctx st: ord slot: 0
+        if (orderSlotFacts t: ctx st: ord slot: 0).place then recvPlace = ""
         (appendVtableOperator
             buf: r
-            recv: (orderSlotText t: ctx st: ord slot: 0)
+            recv: rs0
+            place: recvPlace.stringView
             arg: (orderSlotText t: ctx st: ord slot: 1)
             slot: sl.stringView
             :isFacet
@@ -20404,30 +20415,32 @@ listOperandAddr: function {
 }
 
 # appendVtableOperator -- an operator dispatched through an interface's vtable,
-# whose receiver arrives as an address: `&place` is read through the place, any
-# other pointer through `->`. The slot is named by the member that resolved, not
+# whose receiver arrives as an address: the address of `place`, when the caller
+# names it, is read through the place, any other pointer through `->`. The slot is named by the member that resolved, not
 # by the operator as written: a derived `!=` dispatches `==`.
 appendVtableOperator: function {
     buf: String.borrow
     recv: StringView
+    # the place `recv` is the address of, "" when it is a pointer
+    place: StringView
     arg: StringView
     # the slot's C name (memberC)
     slot: StringView
     isFacet: bool
 } is {
-    place: String
+    rp: String
     acc: "->"
-    if recv.startsWith "&" then {
-        place.append (recv.substring from: 1 to: recv.length)
+    if place.length > 0 then {
+        rp.append place
         acc = "."
     } else {
-        place.append "("
-        place.append recv
-        place.append ")"
+        rp.append "("
+        rp.append recv
+        rp.append ")"
     }
     tail: ", \{arg}"
     buf.append (vtableCallC
-        recv: place.stringView
+        recv: rp.stringView
         :acc
         :slot
         :isFacet
@@ -42371,7 +42384,8 @@ dispatchSlotNames: function {
 
 # dispatchArgText -- one dispatched argument's C text. A collection argument is
 # passed by address, unless the path already yields a pointer; a call's value is
-# bound to a temp so it has one.
+# bound to a temp so it has one. Sets ctx.lastArgByPtr: whether the slot takes
+# the argument by pointer.
 dispatchArgText: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -42379,6 +42393,7 @@ dispatchArgText: function {
     n: astnode.view
     facts: cfacts.borrow
 } out String is {
+    ctx.lastArgByPtr = false
     avF: cfacts
     av: emitExprWith :ast :symtab :ctx :n facts: avF
     if (symtab.typing.standInOf.has key: (zast.nodeIdOf :n)) then {
@@ -42393,6 +42408,7 @@ dispatchArgText: function {
         :ctx
         originTid: (originTidOf :symtab tid: atid)
     ) then apfx = "&"
+    ctx.lastArgByPtr = apfx.length > 0
     if (pathIsPointer :ast :symtab :ctx :n) then apfx = ""
     # a value a call returns has no address: it is bound to a temp first, freed
     # when the checker's temporary owns it (a view it does not)
@@ -42521,7 +42537,7 @@ orderDispatchArg: function {
         n: op
         text: txt.stringView
         tf: txtF
-        byPtr: txt.stringView.startsWith "&"
+        byPtr: ctx.lastArgByPtr
     )
     (orderPartWith
         :ast
