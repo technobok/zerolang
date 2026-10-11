@@ -6836,6 +6836,8 @@ cfacts: record {
     # the address of a plain place path, `&p`: nothing evaluated around it can
     # move it
     fixedAddr: false
+    # a constant: a number, a cast of one, a macro, a tag -- nothing evaluated
+    constant: false
     # the facts were filled in; a fresh slot holds none, and no reader acts on
     # a slot nobody filled
     stated: false
@@ -6921,13 +6923,22 @@ stateFacts: function {facts: cfacts.borrow from: cfacts} is {
     facts.pure = from.pure
     facts.path = from.path
     facts.fixedAddr = from.fixedAddr
+    facts.constant = from.constant
     facts.stated = from.stated
 }
 
 # constFacts -- a constant's value: a number, a cast of one, a macro, a tag. No
 # storage, nothing evaluated, nothing repeated when read twice.
 constFacts: function {} out cfacts is {
-    return (cfacts place: false literal: false once: false pure: true path: false stated: true)
+    return (cfacts
+        place: false
+        literal: false
+        once: false
+        pure: true
+        path: false
+        constant: true
+        stated: true
+    )
 }
 
 # addrFacts -- `&e`, the address of an operand whose facts are `e`: a value, no
@@ -6980,15 +6991,6 @@ stringAppendViewText: function {
     }
     r: "\{ctx.strC}_append(\{recvAddr}, (\{argval}).data, (\{argval}).size)"
     return (stating :facts from: callFacts text: r)
-}
-
-# isCNameByte -- a byte a C identifier may hold: a letter, a digit or `_`.
-isCNameByte: function {c: u8} out bool is {
-    if c == 95 then return true
-    if c >= 48 when c <= 57 then return true
-    if c >= 65 when c <= 90 then return true
-    if c >= 97 when c <= 122 then return true
-    return false
 }
 
 # orderstate -- where one call's parts began in the evaluation-order lists,
@@ -7291,7 +7293,6 @@ orderConstantWith: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     n: astnode.view
-    text: StringView
     tf: cfacts
     # the parameter takes the part by pointer
     byPtr: bool
@@ -7299,7 +7300,7 @@ orderConstantWith: function {
     cv: symtab.typing.nodeConstIn mono: ctx.curThisTid nid: (interpPartNodeId :n)
     if cv.kind.none.not then return true
     # a constant a unit or a data block names reaches the C as its literal
-    if (isCNumberLiteral s: text) then return true
+    if tf.constant then return true
     if n.atomstring when (litIndexOf :ctx nid: n.nodeid) > 0 then return true
     if n.dottedpath then {
         # an arm without a payload named on its type, and a literal's own String
@@ -7312,31 +7313,6 @@ orderConstantWith: function {
     if tf.fixedAddr then return true
     if byPtr.not then return false
     return tf.path
-}
-
-# isCNumberLiteral -- C text that is one number literal: a digit first, after an
-# optional sign, then digits, letters and points, with a sign only where an
-# exponent allows one.
-isCNumberLiteral: function {s: StringView} out bool is {
-    i: u64
-    if ((s.byteAt i: 0).or d: 0) == 45 then i = 1
-    first: (s.byteAt :i).or d: 0
-    if (first < 48) or (first > 57) then return false
-    prev: first
-    for i < s.length loop {
-        c: (s.byteAt :i).or d: 0
-        sign: (c == 43) or (c == 45)
-        if sign then {
-            if (
-                (prev == 101) or (prev == 69) or (prev == 112) or (prev == 80)
-            ).not then return false
-        } else if c != 46 when (isCNameByte :c).not then {
-            return false
-        }
-        prev = c
-        i = i + 1
-    }
-    return true
 }
 
 # flushArgHoists -- emit the `String_t _ahN = <rvalue>;` declarations recorded by
@@ -8411,7 +8387,6 @@ orderMethodParam: function {
                 n: (ast.nodes.get
                     i: (writtenArgNode :ast :call pos: written - 1)
                 )
-                text: one.stringView
                 tf: oneF
                 byPtr: ctx.lastArgByPtr
             )
@@ -12360,7 +12335,6 @@ userCreateCtor: function {
                 n: (ast.nodes.get
                     i: (writtenArgNode :ast :call pos: wr - 1)
                 )
-                text: cav.stringView
                 tf: cavF
                 byPtr: cavPtr
             )
@@ -12500,7 +12474,6 @@ orderRecordField: function {
             n: (ast.nodes.get
                 i: (writtenArgNode :ast :call pos: written - 1)
             )
-            text: av.stringView
             tf: avF
             byPtr: byref
         )
@@ -12641,7 +12614,6 @@ orderArgAtWith: function {
         :symtab
         :ctx
         n: (ast.nodes.get i: nid)
-        text: text.stringView
         :tf
         :byPtr
     )
@@ -13331,7 +13303,6 @@ emitMetaCreateCall: function {
                     n: (ast.nodes.get
                         i: (writtenArgNode :ast :call pos: wr - 1)
                     )
-                    text: av.stringView
                     tf: avF
                     byPtr: ptrField
                 )
@@ -14256,7 +14227,7 @@ orderFnptrArg: function {
     mk: pendingHoistMark :ctx
     avF: cfacts
     av: emitExprWith :ast :symtab :ctx n: op facts: avF
-    constant: orderConstantWith :ast :symtab :ctx n: op text: av.stringView tf: avF byPtr: false
+    constant: orderConstantWith :ast :symtab :ctx n: op tf: avF byPtr: false
     (orderPartWith
         :ast
         :symtab
@@ -14724,7 +14695,6 @@ orderUserFnArg: function {
         :symtab
         :ctx
         n: argOpNode
-        text: txt.stringView
         tf: txtF
         byPtr: ctx.lastArgByPtr
     )
@@ -20073,7 +20043,7 @@ orderRowOperand: function {
     n: ast.nodes.get i: nid
     if (isStringyTid :ctx tid: owner).not then {
         stateFacts facts: opF from: vF
-        constant: orderConstantWith :ast :symtab :ctx :n text: v.stringView tf: vF byPtr: false
+        constant: orderConstantWith :ast :symtab :ctx :n tf: vF byPtr: false
         (orderPartWith
             :ast
             :symtab
@@ -42535,7 +42505,6 @@ orderDispatchArg: function {
         :symtab
         :ctx
         n: op
-        text: txt.stringView
         tf: txtF
         byPtr: ctx.lastArgByPtr
     )
