@@ -13086,6 +13086,7 @@ emitFnCallWithFid: function {
     ctx: Ctx
     call: zast.callrow.view
     fid: ztypes.tid
+    facts: cfacts.borrow
 } out String is {
     fc: ctxCname :ctx tid: fid
     fpNames: List String
@@ -13138,7 +13139,11 @@ emitFnCallWithFid: function {
         pp9g = pp9g + 1
     }
     orderEnd :ctx st: ord
-    return (orderClose prefix: oprefix9g callee: fc.stringView args: argTids.stringView)
+    return (stating
+        :facts
+        from: callFacts
+        text: (orderClose prefix: oprefix9g callee: fc.stringView args: argTids.stringView)
+    )
 }
 
 # emitGenericFnCall -- a generic free-function call (identity 42): the callable
@@ -13151,6 +13156,7 @@ emitGenericFnCall: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
+    facts: cfacts.borrow
 } out String is {
     gdc: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable)
     if gdc.length > 0 then return ""
@@ -13160,7 +13166,7 @@ emitGenericFnCall: function {
     gmo: originTidOf :symtab tid: gmf
     if gmo.isZero then return ""
     if (fnIsNativeId :symtab fid: gmf) then return ""
-    return (emitFnCallWithFid :ast :symtab :ctx :call fid: gmf)
+    return (emitFnCallWithFid :ast :symtab :ctx :call fid: gmf :facts)
 }
 
 # emitUnitMethodCall -- a generic-unit-instance method call (intmath.add a: 3
@@ -13191,7 +13197,8 @@ emitUnitMethodCall: function {
     } case none then null
     if calleeTid.isZero then return ""
     if (symtab.reg.typetypeOf typeId: calleeTid) != ztypes.ztypetype.functionType then return ""
-    return (emitFnCallWithFid :ast :symtab :ctx :call fid: calleeTid)
+    facts: cfacts
+    return (emitFnCallWithFid :ast :symtab :ctx :call fid: calleeTid :facts)
 }
 
 # dottedMemberTidOf -- the type id a dotted callable's `base.child` names. A
@@ -13258,6 +13265,7 @@ emitCrossUnitFnCall: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
+    facts: cfacts.borrow
 } out String is {
     fid: dottedMemberTidOf :ast :symtab callableId: call.callable
     if fid.isZero then return ""
@@ -13268,6 +13276,7 @@ emitCrossUnitFnCall: function {
         :ctx
         :call
         fid: (calledInstanceOf :ast :symtab :call :fid)
+        :facts
     )
 }
 
@@ -13367,12 +13376,14 @@ emitCrossUnitExplicitCreate: function {
             # cannot ask it: a class field handed across the unit boundary
             # arrived by value where the callee wanted a pointer
             if ccBody then {
+                facts: cfacts
                 return (emitFnCallWithFid
                     :ast
                     :symtab
                     :ctx
                     :call
                     fid: cco
+                    :facts
                 )
             }
             # no body: the synthesised create, whose arguments are the fields
@@ -14115,6 +14126,7 @@ emitUserFnCall: function {
     ctx: Ctx
     call: zast.callrow.view
     fid: ztypes.tid
+    facts: cfacts.borrow
 } out String is {
     fpIds: ListVal ztypes.tid
     fpIdsNm: ListVal zast.nameid
@@ -14189,7 +14201,12 @@ emitUserFnCall: function {
         pp = pp + 1
     }
     orderEnd :ctx st: ord
-    return (orderClose prefix: oprefix callee: (ctxCnameView :ctx tid: fid) args: args.stringView)
+    return (stating
+        :facts
+        from: callFacts
+        text: (orderClose prefix: oprefix callee: (ctxCnameView :ctx tid: fid) args: args.stringView
+        )
+    )
 }
 
 # orderUserFnArg -- one written argument of a user-function call, built and
@@ -14317,6 +14334,7 @@ emitNamedCalleeChain: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
+    facts: cfacts.borrow
 } out String is {
     cn0: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: call.callable))
     ecc: (emitEmptyColCreate
@@ -14339,7 +14357,7 @@ emitNamedCalleeChain: function {
     if tq.length > 0 then return tq
     fpfc: emitFnptrFieldCall :ast :symtab :ctx :call
     if fpfc.length > 0 then return fpfc
-    if fid.isZero.not then return (emitUserFnCall :ast :symtab :ctx :call :fid)
+    if fid.isZero.not then return (emitUserFnCall :ast :symtab :ctx :call :fid :facts)
     cnV: atomVid :symtab nid: (atomNodeId n: (ast.nodes.get i: call.callable))
     fplc: (emitFnptrLocalCall
         :ast
@@ -14390,6 +14408,7 @@ emitCallProbeChain: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
+    facts: cfacts.borrow
 } out String is {
     mcc: emitMetaCreateCall :ast :symtab :ctx :call
     if mcc.length > 0 then return mcc
@@ -14407,17 +14426,17 @@ emitCallProbeChain: function {
     if dc.length > 0 then return dc
     umc: emitUnitMethodCall :ast :symtab :ctx :call
     if umc.length > 0 then return umc
-    gfc: emitGenericFnCall :ast :symtab :ctx :call
+    gfc: emitGenericFnCall :ast :symtab :ctx :call :facts
     if gfc.length > 0 then return gfc
     xuc: emitCrossUnitSumCtor :ast :symtab :ctx :call
     if xuc.length > 0 then return xuc
     ddq: emitDataIndexCall :ast :symtab :ctx :call
     if ddq.length > 0 then return ddq
-    cufc: emitCrossUnitFnCall :ast :symtab :ctx :call
+    cufc: emitCrossUnitFnCall :ast :symtab :ctx :call :facts
     if cufc.length > 0 then return cufc
     cuct: emitCrossUnitCtor :ast :symtab :ctx :call
     if cuct.length > 0 then return cuct
-    return (emitNamedCalleeChain :ast :symtab :ctx :call)
+    return (emitNamedCalleeChain :ast :symtab :ctx :call :facts)
 }
 
 # ownerIsCollectionFamily -- is `fam` one of the native container families?
@@ -14584,13 +14603,14 @@ emitSiblingFnCall: function {
     ctx: Ctx
     call: zast.callrow.view
     rtid: ztypes.tid
+    facts: cfacts.borrow
 } out String is {
     rcal: ast.nodes.get i: call.callable
     if rcal.atomid.not then return ""
     if (symtab.typing.atomVariableId.get key: call.callable).none.not then return ""
     mfid: monoStampIdOf :symtab :ctx nid: call.callable
     if mfid.isZero then mfid = rtid
-    return (emitUserFnCall :ast :symtab :ctx :call fid: mfid)
+    return (emitUserFnCall :ast :symtab :ctx :call fid: mfid :facts)
 }
 
 # emitFuncDeclCall -- a callee declared as a free FUNCTION: a native, a generic
@@ -14602,18 +14622,19 @@ emitFuncDeclCall: function {
     ctx: Ctx
     call: zast.callrow.view
     rtid: ztypes.tid
+    facts: cfacts.borrow
 } out String is {
     if rtid.isZero.not when (symtab.reg.isNativeOf tid: rtid) then {
         return (emitNativeFreeFnCall :ast :symtab :ctx :call fid: rtid)
     }
     if rtid.isZero.not when (isGenericType :symtab tid: rtid) then {
-        rgf: emitGenericFnCall :ast :symtab :ctx :call
+        rgf: emitGenericFnCall :ast :symtab :ctx :call :facts
         if rgf.length > 0 then return rgf
     }
-    rcu: emitCrossUnitFnCall :ast :symtab :ctx :call
+    rcu: emitCrossUnitFnCall :ast :symtab :ctx :call :facts
     if rcu.length > 0 then return rcu
     if rtid.isZero.not when (isGenericType :symtab tid: rtid).not then {
-        return (emitSiblingFnCall :ast :symtab :ctx :call :rtid)
+        return (emitSiblingFnCall :ast :symtab :ctx :call :rtid :facts)
     }
     return ""
 }
@@ -14640,6 +14661,7 @@ emitCallByDecl: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
+    facts: cfacts.borrow
 } out String is {
     rdo: symtab.typing.refDecl.get key: call.callable
     if rdo.none then return ""
@@ -14659,7 +14681,7 @@ emitCallByDecl: function {
             isCreate: rdecl.name == zast.wellKnown.slot.wkCreate
         )
     }
-    if rkind.funcDecl then return (emitFuncDeclCall :ast :symtab :ctx :call :rtid)
+    if rkind.funcDecl then return (emitFuncDeclCall :ast :symtab :ctx :call :rtid :facts)
     if rkind.armDecl then return (emitCtorDeclCall :ast :symtab :ctx :call isArm: true)
     if rkind.typeDecl then return (emitCtorDeclCall :ast :symtab :ctx :call isArm: false)
     return ""
@@ -14674,6 +14696,7 @@ emitCallValue: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
+    facts: cfacts.borrow
 } out String is {
     # stamped-kind dispatch head: a call whose kind names its owning handler
     # routes there directly; an empty result or an unstamped / chain-owned
@@ -14720,7 +14743,7 @@ emitCallValue: function {
     }
     sopc: emitSynthOperatorCallForm :ast :symtab :ctx :call
     if sopc.length > 0 then return sopc
-    cbd: emitCallByDecl :ast :symtab :ctx :call
+    cbd: emitCallByDecl :ast :symtab :ctx :call :facts
     if cbd.length > 0 then return cbd
     # a construction by bare type name: the call's type is the type built
     match (
@@ -14766,7 +14789,7 @@ emitCallValue: function {
             }
         }
     } case none then null
-    return (emitCallProbeChain :ast :symtab :ctx :call)
+    return (emitCallProbeChain :ast :symtab :ctx :call :facts)
 }
 
 # emitStringMethod -- a String value-context method call. String is a native
@@ -18424,7 +18447,7 @@ emitExprArms: function {
         }
         return (emitTernaryChain :ast :symtab :ctx :n)
     } case call then {
-        cve: emitCallValue :ast :symtab :ctx call: n
+        cve: emitCallValue :ast :symtab :ctx call: n :facts
         return (loadValueStructRef
             :ast
             :symtab
@@ -20310,7 +20333,7 @@ emitPrintCallValue: function {
         :symtab
         :ctx
         n: (ast.nodes.get i: call.nodeid)
-        e: (emitCallValue :ast :symtab :ctx :call)
+        e: (emitCallValue :ast :symtab :ctx :call facts: ceF)
         facts: ceF
     )
     flushArgHoists :ctx :ind :tmp :buf
@@ -20786,7 +20809,8 @@ emitCallStmt: function {
         ctx.exitNode = outerExit
         return
     }
-    ce: emitCallValue :ast :symtab :ctx :call
+    facts: cfacts
+    ce: emitCallValue :ast :symtab :ctx :call :facts
     flushArgHoists :ctx :ind :tmp :buf
     dcrtid: stampIdOf :symtab nid: call.nodeid
     (emitDiscardedResult
