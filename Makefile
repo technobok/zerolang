@@ -689,7 +689,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2189044
+ALLOC_BASELINE := 2186495
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -827,13 +827,12 @@ frontend-guard:
 # lifetime-guard -- places the emitter still decides a lifetime itself rather than
 # reading the checker's destroy lists. bindingRhsIsBorrow is a floor, not a
 # target: it answers a C-shape question, not when anything dies. factsOfText
-# counts the places that still take an expression's facts from its C text
-# rather than from its producer (P4.4): factsOfText, and a producer's
-# `guessing` return; the target is zero.
+# counts the places that read an expression's facts off its C text rather than
+# from its producer: none do, and the row keeps it so.
 lifetime-guard:
 	@l1=$$(grep -c 'registerScopeDestroy' src/zemitterc.z); \
 	l2=$$(grep -c 'refsLocal' src/zemitterc.z); \
-	l3=$$(grep -cE 'factsOfText|\(guessing :facts' src/zemitterc.z); \
+	l3=$$(grep -c 'factsOfText' src/zemitterc.z); \
 	l4=$$(grep -c 'bindingRhsIsBorrow' src/zemitterc.z); \
 	l5=$$(grep -cF '_ah\{' src/zemitterc.z); \
 	fail=0; \
@@ -841,7 +840,7 @@ lifetime-guard:
 	  elif [ "$$2" -lt "$$3" ]; then echo "lifetime-guard: $$1 = $$2 < baseline $$3 -- lower the baseline here"; fi; }; \
 	chk "registerScopeDestroy" "$$l1" 5; \
 	chk "refsLocal" "$$l2" 4; \
-	chk "factsOfText" "$$l3" 5; \
+	chk "factsOfText" "$$l3" 0; \
 	chk "bindingRhsIsBorrow" "$$l4" 6; \
 	chk "'_ah{' argument hoists" "$$l5" 0; \
 	if [ "$$fail" = "1" ]; then \
@@ -1848,7 +1847,7 @@ view-guard:
 # is not live), and the emitFail and marker-site counts in src/zemitterc.z are
 # ratchets. A new refusal leg may raise EMITFAIL_BASELINE (say so in the commit);
 # a new fallback leg may not.
-EMITFAIL_BASELINE := 39
+EMITFAIL_BASELINE := 42
 MARKER_BASELINE := 24
 EXCS := $(NAMES:%=$(EXDIR)/%.c)
 fallback-guard: $(EXCS) bin/zc bin/zl bin/zls

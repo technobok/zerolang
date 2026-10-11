@@ -4508,6 +4508,18 @@ aliasResolvesToSelf: function {ctx: Ctx.view name: StringView vid: ztypes.vid} o
     return true
 }
 
+# aliasResolveWith -- aliasResolve, the entry's facts stated into `facts`; none
+# stated when no table has an entry for the variable.
+aliasResolveWith: function {
+    ctx: Ctx.view name: StringView vid: ztypes.vid facts: cfacts.borrow
+} out String is {
+    nb: vidFind xs: ctx.narrowBox :vid
+    if nb > 0 then return (entryText xs: ctx.narrowBox at: nb - 1 :facts)
+    al: vidFind xs: ctx.aliases :vid
+    if al > 0 then return (entryText xs: ctx.aliases at: al - 1 :facts)
+    return name.string
+}
+
 # aliasResolve -- a `.take` alias's base C name, or the name itself if none.
 aliasResolve: function {ctx: Ctx.view name: StringView vid: ztypes.vid} out String is {
     # A match-arm narrowing (narrowBox) takes priority: inside the arm the
@@ -5197,12 +5209,17 @@ svValueForm: function {
         # declaration. The pointer question is asked of `vid`, not of that text
         # -- but only when no alias intervened, since an alias means the value
         # being read is the projection and not the binding.
-        rex: aliasResolve :ctx name: expr :vid
+        rf: cfacts
+        rex: aliasResolveWith :ctx name: expr :vid facts: rf
         valueVid: vid
         if rex.stringView != expr then valueVid = ztypes.vid.zero
-        rexF: cfacts
-        if rex.stringView == expr then stateFacts facts: rexF from: facts
-        rf: knownFacts f: rexF s: rex.stringView
+        # no entry: the operand as the caller handed it, with the caller's facts
+        if rf.stated.not then stateFacts facts: rf from: facts
+        if rf.stated.not then (emitFail
+            :ctx
+            what: "internal: svValueForm was handed no facts"
+            line: 0
+        )
         if rf.once when rf.place then {
             rex = (readOnce
                 :ast
@@ -5253,7 +5270,8 @@ svValueFormAt: function {
         from: literalFacts
         text: (svValueFormPtr :ctx :expr)
     )
-    ef: knownFacts f: facts s: expr
+    ef: facts
+    if ef.stated.not then emitFail :ctx what: "internal: svValueFormAt was handed no facts" line: 0
     # the view reads a String operand twice, for its data and its size: one that
     # is not an lvalue -- a call's result -- is bound to a temp first, so the
     # call runs once, and an owned result is released
@@ -6765,9 +6783,9 @@ emitStringArgMethod: function {
 # cfacts -- what the producer of an expression's C text knows about it, so a
 # reader decides from facts rather than from the text's shape. A producer
 # states them into its caller's slot (`facts: cfacts.borrow`) as it returns.
-# Until every producer states its own, factsOfText supplies them from the text;
-# a producer that states them is the authority. Beside a text `x`, `xF` holds
-# its facts.
+# Every producer states them; an expression emitted with none stated is an
+# internal error (emitExprWith), never a guess from the text. Beside a text `x`,
+# `xF` holds its facts.
 cfacts: record {
     # `&` may be taken of it as it stands: a name, a field path, a deref
     place: false
@@ -6788,20 +6806,6 @@ cfacts: record {
     # the facts were filled in; a fresh slot holds none, and no reader acts on
     # a slot nobody filled
     stated: false
-}
-
-# factsOfText -- the facts the text's shape implies: the one place the emitter
-# still reads them off C text, for the producers that do not yet state them.
-factsOfText: function {s: StringView} out cfacts is {
-    return (cfacts
-        place: (isNonLvalueArg :s).not
-        literal: (isCompoundLiteralText :s)
-        once: (singleReadNeedsTemp :s)
-        pure: (isPureCText :s)
-        path: (isPlainCPath :s)
-        fixedAddr: (isPathAddrText :s)
-        stated: true
-    )
 }
 
 # pathFacts -- a plain place path: an identifier, and `.` / `->` member reads off
@@ -6916,72 +6920,10 @@ stating: function {facts: cfacts.borrow from: cfacts text: String.take} out Stri
     return text
 }
 
-# isPathAddrText -- the text is `&p` for a plain place path `p`.
-isPathAddrText: function {s: StringView} out bool is {
-    if (s.startsWith "&").not then return false
-    return (isPlainCPath s: (s.substring from: 1 to: s.length))
-}
-
-# knownFacts -- `f` when a producer filled it, else the facts `s`'s shape implies:
-# for a reader some of whose sources do not yet state facts.
-knownFacts: function {f: cfacts s: StringView} out cfacts is {
-    if f.stated then return f
-    return (factsOfText :s)
-}
-
 # canTakeAddress -- whether `&` applies to the text as it stands: a place, or a
 # compound literal, which is an lvalue too.
 canTakeAddress: function {f: cfacts} out bool is {
     return f.place or f.literal
-}
-
-# isNonLvalueArg -- true when an emitted arg expression is a non-addressable
-# rvalue (a call/cast result, e.g. `String_from_view(...)`) so `&expr` is invalid
-# C and the arg must be hoisted to a named temp first. A deref projection
-# `(*__borrow_x)` IS an lvalue, so it is excluded.
-#
-# A NUMERIC LITERAL is not an lvalue either. A folded constant -- a data
-# element or a unit constant -- reaches an emitter site as its bare value, and
-# a receiver typed by a record method then asked for `&10`, which C rejects.
-isNonLvalueArg: function {s: StringView} out bool is {
-    if (opensNumber :s) then return true
-    if (s.contains needle: "(").not then return false
-    if (s.startsWith prefix: "(*").not then return true
-    return (callsAfterDeref :s)
-}
-
-# opensNumber -- the text opens with a number: a digit, or `-` and a digit.
-opensNumber: function {s: StringView} out bool is {
-    b0: (s.byteAt 0.u64).or d: 0
-    if b0 >= 48 when b0 <= 57 then return true
-    if b0 != 45 then return false
-    b1: (s.byteAt 1.u64).or d: 0
-    return (b1 >= 48) and (b1 <= 57)
-}
-
-# callsAfterDeref -- for a text opening with a deref `(*..)`: whether anything
-# after the deref is called. A deref is a place, and so is a member read off
-# one; `(*b).vtable->m((*b).data)` is the call's value.
-callsAfterDeref: function {s: StringView} out bool is {
-    tail: s.substring from: (derefGroupEnd :s) to: s.length
-    return (tail.contains needle: "(")
-}
-
-# derefGroupEnd -- the index just past the parenthesis that closes the `(*`
-# group opening `s`; the length when none does.
-derefGroupEnd: function {s: StringView} out u64 is {
-    depth: u64
-    i: u64
-    for i < s.length loop {
-        c: (s.byteAt :i).or d: 0
-        if c == 40 then depth = depth + 1
-        if c == 41 then {
-            depth = depth - 1
-            if depth == 0 then return i + 1
-        }
-        i = i + 1
-    }
-    return s.length
 }
 
 # stringAppendViewText -- `recv.append arg` for an argument that is not an owned
@@ -7005,36 +6947,6 @@ stringAppendViewText: function {
     }
     r: "\{ctx.strC}_append(\{recvAddr}, (\{argval}).data, (\{argval}).size)"
     return (stating :facts from: callFacts text: r)
-}
-
-# singleReadNeedsTemp -- an emitted StringView expression that is read twice (its
-# data and its size) must be bound to a temp first: a call, or a conditional
-# holding one, whose second spelling would run it again. A compound literal
-# over a name (`((T){ .data = s.data, ... })`) runs nothing however often it is
-# spelled; a literal, a local and a load of a name are names.
-singleReadNeedsTemp: function {s: StringView} out bool is {
-    if (isCompoundLiteralText :s) then return false
-    # a load runs whatever it reads through: a call's result (`(*get(..))`), a
-    # reference control value's conditions and arms (a ternary, or a statement
-    # expression `(*({ ... }))` for a match or a non-ternary `if` that yields a
-    # place)
-    if (s.startsWith prefix: "(*") when (s.contains needle: "?") then return true
-    if (s.startsWith prefix: "(*") when (isPureCText :s).not then return true
-    return (isNonLvalueArg :s)
-}
-
-# isCompoundLiteralText -- the emitted text is one parenthesised compound
-# literal, `((T){ ... })`: a type name in the inner parentheses, then a brace.
-isCompoundLiteralText: function {s: StringView} out bool is {
-    if (s.startsWith prefix: "((").not then return false
-    i: 2.u64
-    for i < s.length loop {
-        c: (s.byteAt :i).or d: 0
-        if c == 41 then return ((s.byteAt i: i + 1).or d: 0) == 123
-        if (isCNameByte :c).not then return false
-        i = i + 1
-    }
-    return false
 }
 
 # isCNameByte -- a byte a C identifier may hold: a letter, a digit or `_`.
@@ -7167,47 +7079,6 @@ orderPartWith: function {
     ctx.orderPendNid.append valueNid
     ctx.orderPendPure.append pure
     ctx.orderPendFacts.append tf
-}
-
-# isPureCText -- the emitted C text of a part reads and does nothing else: no
-# call, no assignment, no increment, no comma, no block. Its value can change
-# only if something evaluated around it writes, which is what orderPartWith asks of
-# the parts after it. Anything the scan cannot vouch for is not pure, and keeps
-# its temp.
-isPureCText: function {s: StringView} out bool is {
-    if s.length == 0 then return false
-    i: u64
-    prev: u8
-    for i < s.length loop {
-        c: (s.byteAt :i).or d: 0
-        e: cByteEffect :c :prev nxt: ((s.byteAt i: i + 1).or d: 0)
-        if e == 1 then return false
-        # the second byte of `==` says nothing
-        if e == 2 then i = i + 1
-        prev = c
-        i = i + 1
-    }
-    return true
-}
-
-# cByteEffect -- what byte `c` of emitted C text, between `prev` and `nxt`,
-# says about evaluating the text: 0 nothing, 1 it may call or write, 2 it opens
-# `==`. A `(` after a name is a call, after anything else a cast or a group; a
-# comma, a brace or a quote is more than the scan vouches for; `=` alone
-# assigns while `==`, `!=`, `<=` and `>=` compare; `++` and `--` write.
-cByteEffect: function {c: u8 prev: u8 nxt: u8} out u8 is {
-    if c == 40 then {
-        if (isCNameByte c: prev) then return 1
-        return 0
-    }
-    if (c == 44) or (c == 123) or (c == 34) or (c == 39) then return 1
-    if c == 61 then {
-        if nxt == 61 then return 2
-        if (prev == 33) or (prev == 60) or (prev == 62) then return 0
-        return 1
-    }
-    if (c == 43) or (c == 45) when nxt == c then return 1
-    return 0
 }
 
 # orderSettleWaiting -- a part follows the call's waiting parts that decides
@@ -7431,25 +7302,6 @@ isCNumberLiteral: function {s: StringView} out bool is {
         }
         prev = c
         i = i + 1
-    }
-    return true
-}
-
-# isPlainCPath -- C text that names a place and reads nothing through a pointer a
-# call could replace: an identifier, and member reads `.` and `->` off it.
-isPlainCPath: function {s: StringView} out bool is {
-    if s.length == 0 then return false
-    i: u64
-    for i < s.length loop {
-        c: (s.byteAt :i).or d: 0
-        if c == 46 then {
-            i = i + 1
-        } else if c == 45 when ((s.byteAt i: i + 1).or d: 0) == 62 then {
-            i = i + 2
-        } else {
-            if (isCNameByte :c).not then return false
-            i = i + 1
-        }
     }
     return true
 }
@@ -18201,7 +18053,7 @@ emitDottedAtomBase: function {
         # String receivers project to a view for the no-arg SV
         # natives, mirroring the chained/auto-call legs
         needsAddM :ctx uname: "system" memb: mn2
-        svfbF: cfacts
+        svfbF: bn2F
         svfb: svValueForm :ast :symtab :ctx expr: bn2 isStr: true vid: bn2v facts: svfbF
         return (stating :facts from: callFacts text: "\{ctx.svC}_\{mn2}(&\{svfb})")
     }
@@ -19401,7 +19253,11 @@ emitExprWith: function {
 } out String is {
     stateFacts :facts from: cfacts
     t: emitExprArms :ast :symtab :ctx :n :facts
-    if facts.stated.not then stateFacts :facts from: (factsOfText s: t.stringView)
+    if t.length > 0 when facts.stated.not then (emitFail
+        :ctx
+        what: "internal: an expression emitted with no facts stated"
+        line: 0
+    )
     return t
 }
 
