@@ -7308,10 +7308,34 @@ hoistBorrowValArg: function {
     paramTake: bool
     argNid: zast.nodeid
 } out String is {
+    return (hoistBorrowValArgWith
+        :ast
+        :symtab
+        :ctx
+        :av
+        avF: (factsOfText s: av)
+        :pid
+        :paramTake
+        :argNid
+    )
+}
+
+# hoistBorrowValArgWith -- hoistBorrowValArg for an argument whose facts are
+# `avF`.
+hoistBorrowValArgWith: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    av: StringView
+    avF: cfacts
+    pid: ztypes.tid
+    paramTake: bool
+    argNid: zast.nodeid
+} out String is {
     # an lvalue needs no temp -- unless it is a typedef built from a consumed
     # local (`(Path s)`), spelled as that local, whose own free the consumption
     # dropped: the checker's temporary owns it
-    if (factsOfText s: av).place when (ownedTypedefArg :symtab :argNid).not then return ""
+    if avF.place when (ownedTypedefArg :symtab :argNid).not then return ""
     if paramTake then return ""
     # a value whose type frees nothing needs no temp to free it
     if (destroyTargetTid :symtab :ctx tid: pid).isZero then return ""
@@ -12788,9 +12812,22 @@ emitByrefArg: function {
     pid: ztypes.tid
     argNid: zast.nodeid
 } out String is {
+    return (emitByrefArgWith :ast :symtab :ctx :av avF: (factsOfText s: av) :pid :argNid)
+}
+
+# emitByrefArgWith -- emitByrefArg for an argument whose facts are `avF`.
+emitByrefArgWith: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    av: StringView
+    avF: cfacts
+    pid: ztypes.tid
+    argNid: zast.nodeid
+} out String is {
     # as for a by-value argument: a typedef built inline from a consumed local
     # is hoisted, so the temporary's free runs
-    if (factsOfText s: av).place when (ownedTypedefArg :symtab :argNid).not then return "&\{av}"
+    if avF.place when (ownedTypedefArg :symtab :argNid).not then return "&\{av}"
     nmH: hoistForAddress :ast :symtab :ctx :av tid: pid :argNid
     return "&\{nmH}"
 }
@@ -13782,12 +13819,14 @@ userFnArgText: function {
         pid: pinId
     )
     atomVarId: String
+    # the facts of atomVarId while it is the argument's own expression
+    avF: cfacts
     projd: false
     if iavb.length > 0 then {
         atomVarId = iavb.take
         projd = true
     } else {
-        atomVarId = emitExpr :ast :symtab :ctx n: argOpNode
+        atomVarId = emitExprWith :ast :symtab :ctx n: argOpNode facts: avF
     }
     avq: (atomVidIfPlain
         :ast
@@ -13829,11 +13868,12 @@ userFnArgText: function {
     )
     if ctx.lastArgByPtr then {
         if (argAlreadyPointer :ast :symtab :ctx n: argOpNode vid: avq) then return atomVarId
-        return (emitByrefArg
+        return (emitByrefArgWith
             :ast
             :symtab
             :ctx
             av: atomVarId.stringView
+            :avF
             pid: pinId
             argNid: (zast.nodeIdOf n: argOpNode)
         )
@@ -13843,12 +13883,13 @@ userFnArgText: function {
     # wants the pointer has answered above
     if (ptrHeldValtype :ast :symtab :ctx n: argOpNode) then return "(*\{atomVarId})"
     if (refValtypeResult :ast :symtab :ctx n: argOpNode) then return "(*\{atomVarId})"
-    vbh8: (hoistBorrowValArg
+    vbh8: (hoistBorrowValArgWith
         :ast
         :symtab
         :ctx
         argNid: (zast.nodeIdOf n: argOpNode)
         av: atomVarId.stringView
+        :avF
         pid: pinId
         paramTake: pTake8
     )
