@@ -11182,7 +11182,22 @@ colArg: function {
     label: StringView
     consumes: bool
 } out String is {
+    facts: cfacts
+    return (colArgWith :ast :symtab :ctx :call :label :consumes :facts)
+}
+
+# colArgWith -- colArg, its facts stated into `facts`.
+colArgWith: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    call: zast.callrow.view
+    label: StringView
+    consumes: bool
+    facts: cfacts.borrow
+} out String is {
     posFirst: String
+    posF: cfacts
     havePos: false
     arx299: u64
     for arx299 < call.arguments.count loop {
@@ -11199,15 +11214,15 @@ colArg: function {
                     n: (ast.nodes.get i: a.operation)
                     :consumes
                 )
-                if ic.length > 0 then return ic
-                tF: cfacts
+                # an interpolation, hoisted to its temp
+                if ic.length > 0 then return (stating :facts from: pathFacts text: ic)
                 return (standInText
                     :ast
                     :symtab
                     :ctx
                     n: (ast.nodes.get i: a.operation)
-                    text: (valueExprC :ast :symtab :ctx n: (ast.nodes.get i: a.operation) facts: tF)
-                    facts: tF
+                    text: (valueExprC :ast :symtab :ctx n: (ast.nodes.get i: a.operation) :facts)
+                    :facts
                 )
             }
             if an.length == 0 when havePos.not then {
@@ -11221,23 +11236,23 @@ colArg: function {
                 )
                 if icp.length > 0 then {
                     posFirst = icp.take
+                    posF = pathFacts
                 } else {
                     aOpNode: ast.nodes.get i: a.operation
-                    tF: cfacts
                     posFirst = (standInText
                         :ast
                         :symtab
                         :ctx
                         n: aOpNode
-                        text: (valueExprC :ast :symtab :ctx n: aOpNode facts: tF)
-                        facts: tF
+                        text: (valueExprC :ast :symtab :ctx n: aOpNode facts: posF)
+                        facts: posF
                     )
                 }
             }
         }
     }
-    if havePos then return posFirst
-    return "0"
+    if havePos then return (stating :facts from: posF text: posFirst)
+    return (stating :facts from: constFacts text: "0")
 }
 
 # listArg -- the C expression for a labeled list-method argument ("0" if
@@ -11249,7 +11264,21 @@ listArg: function {
     call: zast.callrow.view
     label: StringView
 } out String is {
+    facts: cfacts
+    return (listArgWith :ast :symtab :ctx :call :label :facts)
+}
+
+# listArgWith -- listArg, its facts stated into `facts`.
+listArgWith: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    call: zast.callrow.view
+    label: StringView
+    facts: cfacts.borrow
+} out String is {
     posFirst: String
+    posF: cfacts
     havePos: false
     arx309: u64
     for arx309 < call.arguments.count loop {
@@ -11259,35 +11288,33 @@ listArg: function {
         if a.namedoperation then {
             an: zast.nameTextAt :ast ref: a.name
             if an.stringView == label then {
-                tF: cfacts
                 return (standInText
                     :ast
                     :symtab
                     :ctx
                     n: (ast.nodes.get i: a.operation)
-                    text: (valueExprC :ast :symtab :ctx n: (ast.nodes.get i: a.operation) facts: tF)
-                    facts: tF
+                    text: (valueExprC :ast :symtab :ctx n: (ast.nodes.get i: a.operation) :facts)
+                    :facts
                 )
             }
             if an.length == 0 when havePos.not then {
                 havePos = true
                 aOpNode: ast.nodes.get i: a.operation
-                tF: cfacts
                 posFirst = (standInText
                     :ast
                     :symtab
                     :ctx
                     n: aOpNode
-                    text: (valueExprC :ast :symtab :ctx n: aOpNode facts: tF)
-                    facts: tF
+                    text: (valueExprC :ast :symtab :ctx n: aOpNode facts: posF)
+                    facts: posF
                 )
             }
         }
     }
     # a single positional arg binds to the (sole) labelless call site, e.g.
     # `xs.get i2` -> the `i` param.
-    if havePos then return posFirst
-    return "0"
+    if havePos then return (stating :facts from: posF text: posFirst)
+    return (stating :facts from: constFacts text: "0")
 }
 
 # argform -- how a native leg spells one of its labelled arguments.
@@ -11415,14 +11442,16 @@ orderLabelArg: function {
     ord: orderstate.borrow
 } is {
     mk: pendingHoistMark :ctx
-    text: labelArgText :ast :symtab :ctx :call :label :form
-    (orderArgAt
+    tF: cfacts
+    text: labelArgText :ast :symtab :ctx :call :label :form facts: tF
+    (orderArgAtWith
         :ast
         :symtab
         :ctx
         st: ord
         mark: mk
         :text
+        tf: tF
         :nid
         byPtr: false
         :slot
@@ -11437,21 +11466,27 @@ labelArgText: function {
     call: zast.callrow.view
     label: StringView
     form: argform
+    facts: cfacts.borrow
 } out String is {
     match (
         form
     ) case value then {
-        return (listArg :ast :symtab :ctx :call :label)
+        return (listArgWith :ast :symtab :ctx :call :label :facts)
     } case moved then {
-        return (colArg :ast :symtab :ctx :call :label consumes: true)
+        return (colArgWith :ast :symtab :ctx :call :label consumes: true :facts)
     } case read then {
-        return (colArg :ast :symtab :ctx :call :label consumes: false)
+        return (colArgWith :ast :symtab :ctx :call :label consumes: false :facts)
     } case labelled then {
-        return (ctorArgByLabel :ast :symtab :ctx :call :label)
+        return (ctorArgByLabelWith :ast :symtab :ctx :call :label :facts)
     } case addressed then {
-        av: ctorArgByLabel :ast :symtab :ctx :call :label
-        if (argIsPointerByLabel :ast :symtab :ctx :call :label) then return av
-        return "&\{av}"
+        avF: cfacts
+        av: ctorArgByLabelWith :ast :symtab :ctx :call :label facts: avF
+        if (argIsPointerByLabel :ast :symtab :ctx :call :label) then return (stating
+            :facts
+            from: avF
+            text: av
+        )
+        return (stating :facts from: (addrFacts e: avF) text: "&\{av}")
     }
 }
 
@@ -12696,9 +12731,21 @@ ctorArgByLabel: function {
     call: zast.callrow.view
     label: StringView
 } out String is {
-    aid: ctorArgNodeByLabel :ast :call :label
-    if aid.isZero then return "0"
     facts: cfacts
+    return (ctorArgByLabelWith :ast :symtab :ctx :call :label :facts)
+}
+
+# ctorArgByLabelWith -- ctorArgByLabel, its facts stated into `facts`.
+ctorArgByLabelWith: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    call: zast.callrow.view
+    label: StringView
+    facts: cfacts.borrow
+} out String is {
+    aid: ctorArgNodeByLabel :ast :call :label
+    if aid.isZero then return (stating :facts from: constFacts text: "0")
     return (ctorArgTextAt :ast :symtab :ctx :aid :facts)
 }
 
