@@ -1475,29 +1475,19 @@ used in subsequent code. If no arm takes the variable, it remains valid.
 A #~"match" is used to dissect a union, variant, enum or generic parameter type
 into its child types. See also [#> to=type-narrowing: type narrowing].
 
-Parameters:
+#code language=zerolang: """
+  match (subject) case arm then body case arm then body else body
+  """
 
-#table cols="2 2 4":
-  Argument |Default |Value/Description
-  on       |Yes     |Target variable to be dissected: union/variant/enum/generic
-  case     |No      |Existence test. Value must be subcomponent id of the target variable
-  then     |No      |Statement or block of code (executed after successful match)
-  else     |No      |Statement or block of code (executed if no previous matches)
+The #_*"subject" follows #~"match", parenthesised or bare (#~"match (x)",
+#~"match x", or #~"match on x"); it is any expression that yields a union, variant or enum
+value, or names a generic parameter (see Generic dissection below). It is
+evaluated once.
 
-The #~"case" argument specifies the specific child type being tested. #~"case" is
-the default argument and the argument name can be omitted if it is the first
-argument.
-
-An assignment expression may be specified. This will then become the target
-variable and all #~"case" clauses will specify subitems (ids) relative to this
-variable. The expression must evaluate to a union/variant/enum instance #_*"or"
-must refer to a generic parameter. If the expression (RHS) is a named variable,
-that name will be unavailable in the #~"match" body to prevent aliasing or
-locking issues. The prepended colon #~":" syntax may be used to nominate an
-existing variable name as a target within the #~"match". The label in the
-assignment expression is within scope only within the #~"match" expression. If a
-labelled expression is provided, it must be the first argument to #~"match".
-There can only be at most one labelled expression in a #~"match".
+Each #~"case" names one ARM of the subject's type -- or, for a generic
+parameter, one type or value -- by its bare name (#~"case some", never
+#~"case x.some"), and takes its own #~"then" with the arm's body. Two clauses
+may not share a #~"then", and no arm may be named by two clauses.
 
 Every #~"match" #_*"must" be exhaustive, whether its value is used or it
 stands as a statement: each subtype its subject can still hold needs a
@@ -1505,25 +1495,14 @@ stands as a statement: each subtype its subject can still hold needs a
 one could leave an arm such as #~"none" or #~"err" unhandled without a word, so
 an arm with nothing to do is written, with a #~"null" body.
 
-If an assignment expression is not specified, all #~"case" clauses must specify
-the target variable and the subitem id as a single dottedid. All #~"case" clauses
-must specify the same target variable.
-
-Each #~"case" clause takes its own #~"then"; two clauses may not share one, and
-no arm may be named by two clauses.
-
-A #~"then" clause must be specified after each group of #~"case" clauses. This
-clause will execute if the preceding #~"case" clauses match the subtype of the
-target variable. Within the #~"then" clause, the type of the target variable will
-be narrowed to the type(s) matched in the related #~"of". If the matched type is
-a union/variant that has no type associated with it (#>"null") then the
-narrowed type is 'null' and it is forbidden to use the target variable.
+Within a #~"then" body, a subject that is a named variable is narrowed to the
+arm its #~"case" names. If that arm carries no type (#>"null"), the narrowed
+type is 'null' and it is forbidden to use the variable.
 
 A #~"then" clause that terminates (with a #~"return", #~"break", #~"continue")
-will narrow the target variable type (if a named variable) for the
-#_*"remainder" of the scope #_*"after" the #~"match" completes ie. that
-terminated subtype is excluded from the type definition of that variable going
-forward.
+will narrow the subject variable's type for the #_*"remainder" of the scope
+#_*"after" the #~"match" completes ie. that terminated subtype is excluded from
+the type definition of that variable going forward.
 
 An #~"else" clause can be specified and will be executed if no previous #~"case"
 clause matches. It must be the final clause if present.
@@ -3399,7 +3378,7 @@ keyword after an identifier definition.
       ZERO: 0
       ONE: 1
       myfunc: function is {
-          io.write "hello"
+          print "hello"
       }
   }
 
@@ -5316,7 +5295,7 @@ paths as any hand-written iterator. What the compiler adds is #~"call"'s
 implicit receiver, the option wrapper around its element type, the #~"create"
 its #~"is" fields describe, and the fields the state machine needs.
 
-#--: The is-block
+#-----: The is-block
 
 The #~"is" block declares the construction state: zero or more fields, with
 ownership markers and default values allowed, read in the body as #~"this.x".
@@ -5330,7 +5309,7 @@ same thing:
   Lits: generator is {} as { call: function out i64 is { yield 1 } }
   """
 
-#--: Construction
+#-----: Construction
 
 #~".create" is #b:"generated" from the #~"is" fields, in order, and writing one
 by hand is a compile error. Each parameter's ownership follows the field it
@@ -5377,7 +5356,7 @@ The #~"outx" on #~"walk" is what carries the pin out to the caller's
 argument; a plain #~"out" is refused there, since the result's type declares
 a non-owned field.
 
-#--: The call member
+#-----: The call member
 
 #~"call" is required, and it is the generator's body. Its #~"out" type is the
 #b:"element" type -- what each #~"yield" hands back -- not the return type: the
@@ -5412,7 +5391,7 @@ as #~"this.x". It is never written in the parameter list.
 
 Every other member of the #~"as" block is support for #~"call".
 
-#--: yield
+#-----: yield
 
 #~"yield" is an ordinary name that the compiler defines into a generator's
 #~"call" and nowhere else -- the way #~"break" and #~"continue" are defined
@@ -5443,7 +5422,7 @@ owned-field destruction happen on class destruction along both paths.
 Generators have no explicit cleanup block; cleanup is RAII -- hold the resource
 as a field of an object whose destructor handles it.
 
-#--: The per-call input
+#-----: The per-call input
 
 #~"call"'s parameter list declares the #b:"per-call input": at most one, and
 what it declares is the input's type, its ownership, and the label its call
@@ -5479,13 +5458,13 @@ next #~"yield" is a compile error. To persist the resumed value across yields,
 declare the input #~".take".
 
 #code language=zerolang: """
-  # the caller sends a bool back after each yielded line
-  Grep: generator { pat: String } as {
+  # the caller sends a bool back after each yielded word
+  Grep: generator { pat: String  words: List String } as {
       call: function {keep: bool} out String is {
-          for each line: stdin.lines loop {
-              if line contains: this.pat then {
-                  wanted: yield line.copy
-                  if wanted then store_match line
+          for each w: this.words loop {
+              if (w.contains needle: this.pat) then {
+                  wanted: yield w.copy
+                  if wanted then print "kept \{w}"
               }
           }
       }
@@ -5493,15 +5472,15 @@ declare the input #~".take".
 
   # driven by the plain form: the call is evaluated at every iteration,
   # with the input the body just decided
-  with g: (Grep pat: "foo".string) do {
+  with g: (Grep pat: "foo".string words: ws.take) do {
       k: false
-      for line: (g.call keep: k) loop {
-          k = my_check line
+      for w: (g.call keep: k) loop {
+          k = w.length > 3
       }
   }
   """
 
-#--: Composition
+#-----: Composition
 
 Generators compose through existing constructs:
 
@@ -7549,7 +7528,5 @@ TODO: metadata about identifiers exposed via #~"meta" namespace.
       SECOND: 1
   }
 
-  # TODO: need some general way to get back to the name of a constant. And to
-  # list all definitions in a unit
-  io.write "First is \{myconstants.FIRST}"
+  print "First is \{myconstants.FIRST}"
   """
