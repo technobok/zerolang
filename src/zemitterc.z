@@ -13802,98 +13802,6 @@ emitCrossUnitBareCreate: function {
     return ""
 }
 
-# emitCrossUnitExplicitCreate -- an explicit cross-unit construction
-# `unit.Type.create args`: resolve `unit.Type` and emit the user `create` call
-# `<Type>_create(args)` (no receiver). "" when not such a 3-segment create.
-emitCrossUnitExplicitCreate: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    call: zast.callrow.view
-    facts: cfacts.borrow
-} out String is {
-    armId: aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable)
-    if armId != zast.wellKnown.slot.wkCreate then return ""
-    pcId: dottedParentChildId :ast :symtab n: (ast.nodes.get i: call.callable)
-    if pcId.isZero then return ""
-    ud3x: (baseFileUnitDecl
-        :symtab
-        baseId: (outerBaseNodeId :ast n: (ast.nodes.get i: call.callable))
-    )
-    if ud3x.isZero then return ""
-    go: (ztypecheck.resolvedByIdsRo
-        :ast
-        st: symtab
-        unitDecl: ud3x
-        name: pcId
-    )
-    tid: ztypes.tid
-    match (
-        go
-    ) case some then {
-        tid = go
-    } case none then null
-    if tid.isZero then return ""
-    # a generic template's create resolves through the callable's mono
-    # stamp (the constructor leg below); this leg handles concrete types only
-    if (isGenericType :symtab :tid) then return ""
-    cco: symtab.typing.declChildOfId parentTypeId: tid nameId: zast.wellKnown.slot.wkCreate
-    match (
-        cco
-    ) case some then {
-        if (symtab.reg.typetypeOf typeId: cco) == ztypes.ztypetype.functionType then {
-            ccBody: false
-            ccrn: symtab.typing.funcReturnNode.get key: cco
-            match (
-                ccrn
-            ) case some then {
-                ccBody = true
-            } case none then null
-            # a user create with a body is a function like any other, so its
-            # arguments take the pointer / byref / hoist question the
-            # parameter's own ownership answers. A list of argument texts
-            # cannot ask it: a class field handed across the unit boundary
-            # arrived by value where the callee wanted a pointer
-            if ccBody then {
-                return (emitFnCallWithFid
-                    :ast
-                    :symtab
-                    :ctx
-                    :call
-                    fid: cco
-                    :facts
-                )
-            }
-            # no body: the synthesised create, whose arguments are the fields
-            # moved in
-            cpn: List String
-            cpi: ListVal ztypes.tid
-            cpiNm: ListVal zast.nameid
-            (recFieldLists
-                :ast
-                :symtab
-                tid: cco
-                names: cpn
-                ids: cpi
-                nameIds: cpiNm
-            )
-            cargs: String
-            ci: u64
-            ccn: cpn.length
-            for ci < ccn loop {
-                cpname: cpn.get i: ci
-                cav: ctorArgByLabel :ast :symtab :ctx :call label: cpname.stringView
-                if ci > 0 then cargs.append ", "
-                cargs.append cav
-                ci = ci + 1
-            }
-            fwcb: ctxCname :ctx :tid
-            return (stating :facts from: callFacts text: "\{fwcb}_create(\{cargs})")
-        }
-    } case none then null
-    return ""
-}
-
 # outerBaseNodeId -- the node of a LEFT-nested `(a.B).c` path's outer base `a`
 # (0 otherwise).
 outerBaseNodeId: function {ast: Ast.view n: astnode.view} out zast.nodeid is {
@@ -14845,10 +14753,6 @@ emitNamedCalleeChain: function {
     if (isFieldwiseCtorTid :symtab tid: ctorTid) then {
         return (emitRecordCtor :ast :symtab :ctx :call tid: ctorTid :facts)
     }
-    iwc: emitIoWrapperCreate :ast :symtab :ctx :call :facts
-    if iwc.length > 0 then return iwc
-    xcc: emitCrossUnitExplicitCreate :ast :symtab :ctx :call :facts
-    if xcc.length > 0 then return xcc
     tq: emitTypeQualCall :ast :symtab :ctx :call :facts
     if tq.length > 0 then return tq
     fpfc: emitFnptrFieldCall :ast :symtab :ctx :call :facts
@@ -14905,8 +14809,6 @@ emitCallProbeChain: function {
 } out String is {
     mcc: emitMetaCreateCall :ast :symtab :ctx :call :facts
     if mcc.length > 0 then return mcc
-    clisc: emitCliSpecCreate :ast :symtab :ctx :call :facts
-    if clisc.length > 0 then return clisc
     scv: emitStrConvCall :ast :symtab :ctx :call :facts
     if scv.length > 0 then return scv
     umc: emitUnitMethodCall :ast :symtab :ctx :call :facts
@@ -15014,9 +14916,9 @@ emitUserMethodLeg: function {
 # emitNativeMemberCall -- a NATIVE method: it has no body to call, so its
 # owner's family lowers it -- the result and option combinators, a data block's
 # element read, a str's substring, a native collection's empty `create`, a
-# class's fragment call (the cli Parsed accessors, the io handles), and
-# otherwise its natives.tbl operator row (`a.or rhs: b`). "" when the family's
-# leg declines.
+# class's fragment call by its unit (cli's Parsed accessors and Spec create,
+# the io and net handles and wrappers), and otherwise its natives.tbl operator
+# row (`a.or rhs: b`). "" when the family's leg declines.
 emitNativeMemberCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -15024,6 +14926,8 @@ emitNativeMemberCall: function {
     call: zast.callrow.view
     ownerTid: ztypes.tid
     ownerFam: ztypes.tid
+    # the unit that declares the owner
+    ownerUnit: ztypes.declid
     isCreate: bool
     facts: cfacts.borrow
 } out String is {
@@ -15046,14 +14950,19 @@ emitNativeMemberCall: function {
         :call
         :facts
     )
-    if isCreate then return (emitEmptyColCreate :ast :symtab :ctx :call :facts)
+    if isCreate when (ownerIsCollectionFamily :ctx fam: ownerFam) then return (emitEmptyColCreate
+        :ast
+        :symtab
+        :ctx
+        :call
+        :facts
+    )
     if (symtab.reg.typetypeOf typeId: ownerTid) == ztypes.ztypetype.classType then {
-        if (
-            ownerTid ==
-            (unitClassTid :symtab unitDecl: ctx.cliUnitDecl nameId: zast.wellKnown.slot.tyParsed)
-        ) then {
+        if ownerUnit == ctx.cliUnitDecl then {
+            if isCreate then return (emitCliSpecCreate :ast :symtab :ctx :call :facts)
             return (emitParsedMethodCall :ast :symtab :ctx :call :facts)
         }
+        if isCreate then return (emitIoWrapperCreate :ast :symtab :ctx :call :facts)
         return (emitFileMethodCall :ast :symtab :ctx :call :facts)
     }
     return (emitOperatorCallForm :ast :symtab :ctx :call :facts)
@@ -15061,9 +14970,8 @@ emitNativeMemberCall: function {
 
 # emitMethodDeclCall -- a callee declared as a METHOD, routed by its owner's
 # family: a native collection, the two string types, a native that takes
-# arguments, a protocol or facet, any other native member, and otherwise the
-# compiler's own emission. An io/net handle and a `create` never reach that
-# last leg.
+# arguments, a protocol or facet, any other native member, a bodied `create`
+# (called through its type), and otherwise the compiler's own emission.
 emitMethodDeclCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -15072,6 +14980,8 @@ emitMethodDeclCall: function {
     ownerTid: ztypes.tid
     # the method's own type: whether it is native
     method: ztypes.tid
+    # the unit that declares the owner
+    ownerUnit: ztypes.declid
     fnptrField: bool
     isCreate: bool
     facts: cfacts.borrow
@@ -15103,16 +15013,12 @@ emitMethodDeclCall: function {
         :call
         :ownerTid
         :ownerFam
+        :ownerUnit
         :isCreate
         :facts
     )
-    isIoNat: (
-        (ownerTid == ctx.ioFileTid) or
-        (ownerTid == ctx.netListenerTid) or
-        (ownerTid == ctx.netConnTid)
-    )
-    if isIoNat then return ""
-    if isCreate then return ""
+    # a `create` with a body is the type's own function, called through the type
+    if isCreate then return (emitTypeQualCall :ast :symtab :ctx :call :facts)
     return (emitUserMethodLeg :ast :symtab :ctx :call :fnptrField :facts)
 }
 
@@ -15193,7 +15099,12 @@ emitCallByDecl: function {
     rkind: rdecl.kind
     rtid: rdecl.typeId
     ownerTid: ztypes.tid
-    if rdecl.parent.isZero.not then ownerTid = (symtab.typing.decls.get i: rdecl.parent).typeId
+    ownerUnit: ztypes.declid
+    if rdecl.parent.isZero.not then {
+        ownerDecl: symtab.typing.decls.get i: rdecl.parent
+        ownerTid = ownerDecl.typeId
+        ownerUnit = ownerDecl.parent
+    }
     if rkind.methodDecl when ownerTid.isZero.not then {
         return (emitMethodDeclCall
             :ast
@@ -15202,6 +15113,7 @@ emitCallByDecl: function {
             :call
             :ownerTid
             method: rtid
+            :ownerUnit
             fnptrField: rdecl.fnptrField
             isCreate: rdecl.name == zast.wellKnown.slot.wkCreate
             :facts
