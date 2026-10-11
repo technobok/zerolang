@@ -4201,6 +4201,8 @@ VidVal: class {
     vid: ztypes.vid
     # the text recorded for it
     val: String
+    # the text's facts, stated by whoever recorded it
+    facts: cfacts
 }
 
 # a variable paired with a type, for the side lists that record what a
@@ -4279,13 +4281,13 @@ vvHas: function {xs: (List VidVal).view vid: ztypes.vid} out bool is {
 }
 
 # vvSet -- replace-or-append: one entry per variable (map.set semantics).
-vvSet: function {xs: List VidVal vid: ztypes.vid val: StringView} is {
+vvSet: function {xs: List VidVal vid: ztypes.vid val: StringView facts: cfacts} is {
     if vid.isZero then return
     f: vidFind :xs :vid
     if f > 0 then {
-        xs.set i: f - 1 val: (VidVal :vid val: val.string)
+        xs.set i: f - 1 val: (VidVal :vid val: val.string :facts)
     } else {
-        xs.append (VidVal :vid val: val.string)
+        xs.append (VidVal :vid val: val.string :facts)
     }
 }
 
@@ -4316,7 +4318,7 @@ restoreNarrow: function {
     prevTid: ztypes.tid
 } is {
     if prevVal.length > 0 then {
-        vvSet xs: ctx.narrowBox :vid val: prevVal
+        vvSet xs: ctx.narrowBox :vid val: prevVal facts: (factsOfText s: prevVal)
     } else {
         vidRemove xs: ctx.narrowBox :vid
     }
@@ -4341,7 +4343,7 @@ pushNarrow: function {
     pv: vvGet xs: ctx.narrowBox :vid
     prevV.append pv
     prevT.append ((vtGet xs: ctx.narrowTid :vid).or d: ztypes.tid.zero)
-    vvSet xs: ctx.narrowBox :vid :val
+    vvSet xs: ctx.narrowBox :vid :val facts: (factsOfText s: val)
     vtSet xs: ctx.narrowTid :vid :tid
 }
 
@@ -9337,7 +9339,7 @@ emitBorrowAliasBind: function {
     lb1: "\{ind}/* alias: \{nm} => (*__borrow_\{nm}) */\n"
     buf.append lb1
     bal: "(*__borrow_\{nm})"
-    vvSet xs: ctx.aliases vid: nameVid val: bal.stringView
+    vvSet xs: ctx.aliases vid: nameVid val: bal.stringView facts: derefFacts
     return true
 }
 
@@ -15103,8 +15105,7 @@ localNameText: function {
 # its facts.
 entryText: function {xs: (List VidVal).view at: u64 facts: cfacts.borrow} out String is {
     e: xs.get i: at
-    stateFacts :facts from: (factsOfText s: e.val.stringView)
-    return e.val.copy
+    return (stating :facts from: e.facts text: e.val.copy)
 }
 
 # narrowingEndedAt -- whether the read at `nid` sees the WHOLE local although a
@@ -21812,7 +21813,7 @@ emitReferenceBind: function {
     buf.append "\{ind}\{ct}* __borrow_\{nm} = &\{rv};\n"
     buf.append "\{ind}/* alias: \{nm} => (*__borrow_\{nm}) */\n"
     bal: "(*__borrow_\{nm})"
-    vvSet xs: ctx.aliases vid: nameVid val: bal.stringView
+    vvSet xs: ctx.aliases vid: nameVid val: bal.stringView facts: derefFacts
     return true
 }
 
@@ -23083,7 +23084,12 @@ emitWithLocal: function {
         lw1: "\{ind}/* alias: \{wnm} => (*__borrow_\{wnm}) */\n"
         buf.append lw1
         walias: "(*__borrow_\{wnm})"
-        vvSet xs: ctx.aliases vid: (defVid :symtab nid: n.nodeid) val: walias.stringView
+        (vvSet
+            xs: ctx.aliases
+            vid: (defVid :symtab nid: n.nodeid)
+            val: walias.stringView
+            facts: derefFacts
+        )
         return
     }
     # `with v: src` over a name the checker made a borrow: a second name for the
@@ -23098,7 +23104,7 @@ emitWithLocal: function {
         lp1: "\{ind}/* alias: \{wnm} => (*__borrow_\{wnm}) */\n"
         buf.append lp1
         palias: "(*__borrow_\{wnm})"
-        vvSet xs: ctx.aliases vid: wvid val: palias.stringView
+        vvSet xs: ctx.aliases vid: wvid val: palias.stringView facts: derefFacts
         return
     }
     wvC: wv.string
@@ -23157,7 +23163,12 @@ emitWithField: function {
     }
     la: "\{ind}\{fld} = \{wv};\n"
     buf.append la
-    vvSet xs: ctx.aliases vid: (defVid :symtab nid: n.nodeid) val: fld.stringView
+    (vvSet
+        xs: ctx.aliases
+        vid: (defVid :symtab nid: n.nodeid)
+        val: fld.stringView
+        facts: (memberFacts b: pathFacts)
+    )
 }
 
 # genSubjectFieldC -- the instance field a generator body's match subject is
@@ -23174,7 +23185,7 @@ genSubjectFieldC: function {
     gf: symtab.typing.genLocalFieldOf.get key: tv
     if gf.none then return ""
     fld: genFieldC :ast :symtab :ctx nameId: gf
-    vvSet xs: ctx.aliases vid: tv val: fld.stringView
+    vvSet xs: ctx.aliases vid: tv val: fld.stringView facts: (memberFacts b: pathFacts)
     return fld
 }
 
@@ -23218,7 +23229,7 @@ emitGenLocalBind: function {
             :tmp
             :buf
         )
-        vvSet xs: ctx.aliases vid: nameVid val: fld.stringView
+        vvSet xs: ctx.aliases vid: nameVid val: fld.stringView facts: (memberFacts b: pathFacts)
         return
     }
     (emitStoreTo
@@ -23235,7 +23246,7 @@ emitGenLocalBind: function {
         :tmp
         :buf
     )
-    vvSet xs: ctx.aliases vid: nameVid val: fld.stringView
+    vvSet xs: ctx.aliases vid: nameVid val: fld.stringView facts: (memberFacts b: pathFacts)
 }
 
 # emitWithStmt -- `with x: <value> do <body>` as a statement.
@@ -24414,7 +24425,12 @@ emitMatchStmt: function {
         ).or
             d: ztypes.tid.zero
         )
-        vvSet xs: ctx.narrowBox vid: snameV val: meV.stringView
+        (vvSet
+            xs: ctx.narrowBox
+            vid: snameV
+            val: meV.stringView
+            facts: (factsOfText s: meV.stringView)
+        )
         vtSet xs: ctx.narrowTid vid: snameV tid: meT
     }
     mdvg: matchDiverges :symtab nid: m.nodeid
@@ -24923,7 +24939,12 @@ emitMatchClause: function {
                 nbv: armCellRef pc: pc.stringView slot: msl.stringView inline: inl
                 cmt: "\{ind}    /* alias: \{sname} => \{nbv} */\n"
                 buf.append cmt
-                vvSet xs: ctx.narrowBox vid: snameVid val: nbv.stringView
+                (vvSet
+                    xs: ctx.narrowBox
+                    vid: snameVid
+                    val: nbv.stringView
+                    facts: (factsOfText s: nbv.stringView)
+                )
                 co: symtab.typing.declChildOfId parentTypeId: vtid nameId: arm
                 match (
                     co
@@ -24938,7 +24959,7 @@ emitMatchClause: function {
                 # by its stamp
                 armMV: memberC :ast :symtab :ctx owner: vtid kind: memberkind.arm nameId: arm
                 nbvV: "_m\{mN}.data.\{armMV}"
-                vvSet xs: ctx.narrowBox vid: snameVid val: nbvV.stringView
+                vvSet xs: ctx.narrowBox vid: snameVid val: nbvV.stringView facts: pathFacts
                 cov: symtab.typing.declChildOfId parentTypeId: vtid nameId: arm
                 match (
                     cov
@@ -25739,7 +25760,7 @@ emitObjIterPayload: function {
             l3pa: "\{ind}    /* alias: \{lbl} => (*__borrow_\{lbl}) */\n"
             buf.append l3pa
             av3p: "(*__borrow_\{lbl})"
-            vvSet xs: ctx.aliases vid: lblV val: av3p.stringView
+            vvSet xs: ctx.aliases vid: lblV val: av3p.stringView facts: derefFacts
             return spillkind.viewPtr
         }
     } else if (originIsTid
@@ -43572,7 +43593,7 @@ emitExprFormYield: function {
         lp1: "\{ind}/* alias: \{nm} => (*__borrow_\{nm}) */\n"
         buf.append lp1
         atomVarId: "(*__borrow_\{nm})"
-        vvSet xs: ctx.aliases vid: nmVid val: atomVarId.stringView
+        vvSet xs: ctx.aliases vid: nmVid val: atomVarId.stringView facts: derefFacts
     } else {
         # bind the name TO ITS SLOT rather than copying it into a C local.
         # `a: yield 1` used after a later suspension read a dead local before
@@ -43588,7 +43609,7 @@ emitExprFormYield: function {
         if slotted then {
             lp3: "\{ind}/* alias: \{nm} => \{srcC} */\n"
             buf.append lp3
-            vvSet xs: ctx.aliases vid: nmVid val: srcC.stringView
+            vvSet xs: ctx.aliases vid: nmVid val: srcC.stringView facts: (memberFacts b: pathFacts)
         } else {
             lp2: "\{ind}\{cTypeText} \{nm} = \{srcC};\n"
             buf.append lp2
