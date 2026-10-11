@@ -28,6 +28,24 @@ ArgHoist: class {
     dtor: String
 }
 
+# OrderPend -- one part of a call waiting to learn whether a part evaluated
+# after it needs it read into a temp first: its text, the C type its temp is
+# given (empty to spell it from the parameter or the value), the slot it
+# fills, the function, parameter type and parameter name the temp's type is
+# spelled from, the value node a scalar part's temp is typed from (0 for none),
+# whether it only reads, and its facts.
+OrderPend: class {
+    text: String
+    ctype: String
+    slot: u64
+    fid: ztypes.tid
+    pid: ztypes.tid
+    pname: zast.nameid
+    nid: zast.nodeid
+    pure: bool
+    facts: cfacts
+}
+
 # OwedFree -- one destructor owed at the end of a block: the C name of the
 # local it destroys, the statement that destroys it (empty for a plain String,
 # whose free is composed where it is emitted so it can take that site's
@@ -3889,18 +3907,8 @@ Ctx: class {
     orderWrit: ListVal u64
     orderPosAt: ListVal u64
     orderDone: ListVal bool
-    orderPendText: List String
-    orderPendType: List String
-    orderPendSlot: ListVal u64
-    orderPendFid: ListVal ztypes.tid
-    orderPendPid: ListVal ztypes.tid
-    orderPendName: ListVal zast.nameid
-    # the value node a waiting scalar part's temp is typed from, 0 for none
-    orderPendNid: ListVal zast.nodeid
-    # whether a waiting part only reads
-    orderPendPure: ListVal bool
-    # a waiting part's facts
-    orderPendFacts: ListVal cfacts
+    # the open calls' parts still waiting on what follows them
+    orderPends: List OrderPend
     # the next `_o` number, the function's own
     orderCtr: u64
     # whether the argument just built was passed by pointer
@@ -7030,7 +7038,7 @@ orderBegin: function {ctx: Ctx slots: u64} out orderstate is {
         pieceMark: ctx.orderPieceVals.length
         valBase: base
         live: false
-        pendMark: ctx.orderPendText.length
+        pendMark: ctx.orderPends.length
     )
 }
 
@@ -7123,15 +7131,17 @@ orderPartWith: function {
         return
     }
     st.live = true
-    ctx.orderPendText.append text
-    ctx.orderPendType.append ctype.string
-    ctx.orderPendSlot.append slot
-    ctx.orderPendFid.append fid
-    ctx.orderPendPid.append pid
-    ctx.orderPendName.append pname
-    ctx.orderPendNid.append valueNid
-    ctx.orderPendPure.append pure
-    ctx.orderPendFacts.append tf
+    ctx.orderPends.append (OrderPend
+        :text
+        ctype: ctype.string
+        :slot
+        :fid
+        :pid
+        :pname
+        nid: valueNid
+        :pure
+        facts: tf
+    )
 }
 
 # orderSettleWaiting -- a part follows the call's waiting parts that decides
@@ -7146,9 +7156,9 @@ orderSettleWaiting: function {
     st: orderstate.view
     all: bool
 } is {
-    n: ctx.orderPendText.length
+    n: ctx.orderPends.length
     if n == st.pendMark then return
-    if all.not when (ctx.orderPendPure.get i: st.pendMark) then return
+    if all.not when (ctx.orderPends.get i: st.pendMark).pure then return
     i: st.pendMark
     for i < n loop {
         orderSettle :ast :symtab :ctx :st :i
@@ -7157,19 +7167,9 @@ orderSettleWaiting: function {
     orderDropWaiting :ctx :st
 }
 
-# orderDropWaiting -- the call's waiting parts, decided: off the orderPend lists.
+# orderDropWaiting -- the call's waiting parts, decided: off orderPends.
 orderDropWaiting: function {ctx: Ctx st: orderstate.view} is {
-    for ctx.orderPendText.length > st.pendMark loop {
-        ctx.orderPendText.pop
-        ctx.orderPendType.pop
-        ctx.orderPendSlot.pop
-        ctx.orderPendFid.pop
-        ctx.orderPendPid.pop
-        ctx.orderPendName.pop
-        ctx.orderPendNid.pop
-        ctx.orderPendPure.pop
-        ctx.orderPendFacts.pop
-    }
+    for ctx.orderPends.length > st.pendMark loop ctx.orderPends.pop
 }
 
 # hoistsWithValues -- whether a part built from `mark` recorded a hoist that is
@@ -7193,13 +7193,25 @@ orderSettle: function {
     st: orderstate.view
     i: u64
 } is {
-    text: ctx.orderPendText.set :i val: String
-    given: ctx.orderPendType.set :i val: String
-    slot: ctx.orderPendSlot.get :i
-    fid: ctx.orderPendFid.get :i
-    pid: ctx.orderPendPid.get :i
-    vnid: ctx.orderPendNid.get :i
-    pf: ctx.orderPendFacts.get :i
+    text: String
+    given: String
+    slot: u64
+    fid: ztypes.tid
+    pid: ztypes.tid
+    pnm: zast.nameid
+    vnid: zast.nodeid
+    pf: cfacts
+    {
+        op: ctx.orderPends.getMut :i
+        text swap op.text
+        given swap op.ctype
+        slot = op.slot
+        fid = op.fid
+        pid = op.pid
+        pnm = op.pname
+        vnid = op.nid
+        pf = op.facts
+    }
     # a part no declared parameter types is typed as its own expression, read
     # through a comma so a `const` source still gives an assignable temp. A
     # scalar is spelled with its C type: typed as its own expression, the
@@ -7215,7 +7227,7 @@ orderSettle: function {
         :symtab
         :ctx
         :fid
-        pnameId: (ctx.orderPendName.get :i)
+        pnameId: pnm
         :pid
     )
     if given.length > 0 then ct = given.take
@@ -7243,10 +7255,17 @@ orderSettle: function {
 # in the call.
 orderFinish: function {ctx: Ctx st: orderstate} out String is {
     wi: st.pendMark
-    for wi < ctx.orderPendText.length loop {
-        wslot: ctx.orderPendSlot.get i: wi
-        wtext: ctx.orderPendText.set i: wi val: String
-        orderSetSlot :ctx :st slot: wslot text: wtext tf: (ctx.orderPendFacts.get i: wi)
+    for wi < ctx.orderPends.length loop {
+        wtext: String
+        wslot: u64
+        wf: cfacts
+        {
+            wp: ctx.orderPends.getMut i: wi
+            wtext swap wp.text
+            wslot = wp.slot
+            wf = wp.facts
+        }
+        orderSetSlot :ctx :st slot: wslot text: wtext tf: wf
         wi = wi + 1
     }
     orderDropWaiting :ctx :st
@@ -34217,15 +34236,7 @@ emitC: function {
         orderWrit: ListVal u64
         orderPosAt: ListVal u64
         orderDone: ListVal bool
-        orderPendText: List String
-        orderPendType: List String
-        orderPendSlot: ListVal u64
-        orderPendFid: ListVal ztypes.tid
-        orderPendPid: ListVal ztypes.tid
-        orderPendName: ListVal zast.nameid
-        orderPendNid: ListVal zast.nodeid
-        orderPendPure: ListVal bool
-        orderPendFacts: ListVal cfacts
+        orderPends: List OrderPend
         orderCtr: 0
         lastArgByPtr: false
         tmpHigh: 0
