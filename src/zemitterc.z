@@ -4325,6 +4325,13 @@ vvHas: function {xs: (List VidVal).view vid: ztypes.vid} out bool is {
     return (vidFind :xs :vid) > 0
 }
 
+# vvFactsOf -- the facts recorded for `vid`'s value; none stated when absent.
+vvFactsOf: function {xs: (List VidVal).view vid: ztypes.vid} out cfacts is {
+    f: vidFind :xs :vid
+    if f == 0 then return cfacts
+    return (xs.get i: f - 1).facts
+}
+
 # vvSet -- replace-or-append: one entry per variable (map.set semantics).
 vvSet: function {xs: List VidVal vid: ztypes.vid val: StringView facts: cfacts} is {
     if vid.isZero then return
@@ -4360,10 +4367,11 @@ restoreNarrow: function {
     ctx: Ctx
     vid: ztypes.vid
     prevVal: StringView
+    prevFacts: cfacts
     prevTid: ztypes.tid
 } is {
     if prevVal.length > 0 then {
-        vvSet xs: ctx.narrowBox :vid val: prevVal facts: (factsOfText s: prevVal)
+        vvSet xs: ctx.narrowBox :vid val: prevVal facts: prevFacts
     } else {
         vidRemove xs: ctx.narrowBox :vid
     }
@@ -4381,14 +4389,17 @@ pushNarrow: function {
     ctx: Ctx
     vid: ztypes.vid
     val: StringView
+    valF: cfacts
     tid: ztypes.tid
     prevV: List String
+    prevF: ListVal cfacts
     prevT: ListVal ztypes.tid
 } is {
     pv: vvGet xs: ctx.narrowBox :vid
     prevV.append pv
+    prevF.append (vvFactsOf xs: ctx.narrowBox :vid)
     prevT.append ((vtGet xs: ctx.narrowTid :vid).or d: ztypes.tid.zero)
-    vvSet xs: ctx.narrowBox :vid :val facts: (factsOfText s: val)
+    vvSet xs: ctx.narrowBox :vid :val facts: valF
     vtSet xs: ctx.narrowTid :vid :tid
 }
 
@@ -4398,6 +4409,7 @@ restoreNarrowSeeds: function {
     ctx: Ctx
     svids: (ListVal ztypes.vid).view
     prevV: (List String).view
+    prevF: (ListVal cfacts).view
     prevT: (ListVal ztypes.tid).view
 } is {
     ri: u64
@@ -4407,6 +4419,7 @@ restoreNarrowSeeds: function {
         (restoreNarrow
             :ctx
             vid: (svids.get i: ri)
+            prevFacts: (prevF.get i: ri)
             prevVal: rv.stringView
             prevTid: rt
         )
@@ -25099,8 +25112,11 @@ matchElseNarrowing: function {
     covA: (ListVal zast.nameid).view
     # the subject's storage, and the access its fields are read with
     recv: StringView
+    recvF: cfacts
     acc: StringView
     meV: String.borrow
+    # left holding the alias's facts
+    meVF: cfacts.borrow
 } out matchelse is {
     meT: ztypes.tid
     meSeed: false
@@ -25135,7 +25151,9 @@ matchElseNarrowing: function {
                 tid: vtid
                 arm: armME
                 :recv
+                :recvF
                 :acc
+                facts: meVF
             )
             if aliasText.length > 0 then {
                 meV.append aliasText
@@ -25255,10 +25273,12 @@ emitMatchStmt: function {
     # then reaches the variable, and in a generator the variable is a state
     # field that a suspension inside the arm does not lose.
     mRecv: String
+    mRecvF: cfacts
     mAcc: "."
     subjM: ast.nodes.get i: m.subject
     if isUni when (nodeIsBareAtom n: subjM) when snameV.isZero.not then {
         mRecv = sx.take
+        mRecvF = sxF
         if (pathIsPointer :ast :symtab :ctx n: subjM) then mAcc = "->"
     } else {
         (emitMatchSubjectTemp
@@ -25277,6 +25297,7 @@ emitMatchStmt: function {
             :buf
         )
         mRecv = "_m\{mN}"
+        mRecvF = pathFacts
     }
     if (isOrdinalVariant :symtab tid: vtid) then {
         buf.append "\{ind}switch (\{mRecv}) {\n"
@@ -25298,6 +25319,7 @@ emitMatchStmt: function {
             :isUni
             :mN
             slotRecv: mRecv.stringView
+            slotRecvF: mRecvF
             slotAcc: mAcc
             :sname
             snameVid: snameV
@@ -25319,6 +25341,7 @@ emitMatchStmt: function {
         }
     }
     meV: String
+    meVF: cfacts
     men: (matchElseNarrowing
         :ast
         :symtab
@@ -25328,16 +25351,20 @@ emitMatchStmt: function {
         :sname
         :covA
         recv: mRecv.stringView
+        recvF: mRecvF
         acc: mAcc
         :meV
+        :meVF
     )
     meT: men.meT
     meSeed: men.meSeed
     mePrevV: String
+    mePrevF: cfacts
     mePrevT: ztypes.tid
     if meSeed then {
         pv: vvGet xs: ctx.narrowBox vid: snameV
         mePrevV = pv.take
+        mePrevF = vvFactsOf xs: ctx.narrowBox vid: snameV
         mePrevT = ((vtGet
             xs: ctx.narrowTid
             vid: snameV
@@ -25348,7 +25375,7 @@ emitMatchStmt: function {
             xs: ctx.narrowBox
             vid: snameV
             val: meV.stringView
-            facts: (factsOfText s: meV.stringView)
+            facts: meVF
         )
         vtSet xs: ctx.narrowTid vid: snameV tid: meT
     }
@@ -25365,7 +25392,13 @@ emitMatchStmt: function {
         :buf
     )
     if meSeed then {
-        restoreNarrow :ctx vid: snameV prevVal: mePrevV.stringView prevTid: mePrevT
+        (restoreNarrow
+            :ctx
+            vid: snameV
+            prevVal: mePrevV.stringView
+            prevFacts: mePrevF
+            prevTid: mePrevT
+        )
     }
     l: "\{ind}}\n"
     buf.append l
@@ -25820,6 +25853,7 @@ emitMatchClause: function {
     mN: u64
     # a union subject's storage and the access its slot is read with
     slotRecv: StringView
+    slotRecvF: cfacts
     slotAcc: StringView
     sname: StringView
     snameVid: ztypes.vid
@@ -25841,6 +25875,7 @@ emitMatchClause: function {
         # arm ends: a match on a name an `if` narrowed must not end that `if`'s
         # narrowing for the statements after the match
         prevV: vvGet xs: ctx.narrowBox vid: snameVid
+        prevF: vvFactsOf xs: ctx.narrowBox vid: snameVid
         prevT: (vtGet xs: ctx.narrowTid vid: snameVid).or d: ztypes.tid.zero
         if pc.length > 0 when sname.length > 0 then {
             if isUni then {
@@ -25862,7 +25897,7 @@ emitMatchClause: function {
                     xs: ctx.narrowBox
                     vid: snameVid
                     val: nbv.stringView
-                    facts: (factsOfText s: nbv.stringView)
+                    facts: (armCellFacts recvF: slotRecvF inline: inl)
                 )
                 co: symtab.typing.declChildOfId parentTypeId: vtid nameId: arm
                 match (
@@ -25931,7 +25966,13 @@ emitMatchClause: function {
             closeScopeBlock :symtab :ctx :tmp :fL :lL diverged: dv node: c.nodeid :buf
         }
         if didSeed then {
-            restoreNarrow :ctx vid: snameVid prevVal: prevV.stringView prevTid: prevT
+            (restoreNarrow
+                :ctx
+                vid: snameVid
+                prevVal: prevV.stringView
+                prevFacts: prevF
+                prevTid: prevT
+            )
         }
         if unptr then ctx.ptrVids.append from: snameVid
         if dv.not then {
@@ -27648,6 +27689,14 @@ exprNodeId: function {n: astnode.view} out zast.nodeid is {
     return (interpPartNodeId :n)
 }
 
+# armCellFacts -- the facts of an arm's payload read off a subject whose facts
+# are `recvF`: an inline payload is a member of it, a boxed one is loaded
+# through the pointer a member of it holds.
+armCellFacts: function {recvF: cfacts inline: bool} out cfacts is {
+    if inline then return (memberFacts b: recvF)
+    return (operandFacts e: (memberFacts b: recvF) place: true)
+}
+
 # armAliasText -- the C lvalue for `recv`'s payload of `arm` on sum type
 # `tid`: the inline union member for variants, the heap cast for unions.
 # "" when the arm carries no payload.
@@ -27658,17 +27707,23 @@ armAliasText: function {
     tid: ztypes.tid
     arm: zast.nameid
     recv: StringView
+    recvF: cfacts
     acc: StringView
+    facts: cfacts.borrow
 } out String is {
     pc: armPayloadC :ast :symtab :ctx :tid :arm
     if pc.length == 0 then return ""
     if (symtab.reg.typetypeOf typeId: tid) == ztypes.ztypetype.unionType then {
         inl: armIsInlineC :symtab :tid :arm
         rsl: armSlotC :ast :symtab :ctx :tid :recv :acc :arm inline: inl
-        return (armCellRef pc: pc.stringView slot: rsl.stringView inline: inl)
+        return (stating
+            :facts
+            from: (armCellFacts :recvF inline: inl)
+            text: (armCellRef pc: pc.stringView slot: rsl.stringView inline: inl)
+        )
     }
     armC: memberC :ast :symtab :ctx owner: tid kind: memberkind.arm nameId: arm
-    return "\{recv}\{acc}data.\{armC}"
+    return (stating :facts from: (memberFacts b: recvF) text: "\{recv}\{acc}data.\{armC}")
 }
 
 # A union arm's payload lives in a heap cell that the union's `data` slot
@@ -27899,6 +27954,7 @@ seedFromPredicate: function {
     names: List String
     svids: ListVal ztypes.vid
     vals: List String
+    valFs: ListVal cfacts
     tids: ListVal ztypes.tid
 } is {
     match (
@@ -27916,6 +27972,7 @@ seedFromPredicate: function {
             :names
             :svids
             :vals
+            :valFs
             :tids
         )
     } else null
@@ -27933,18 +27990,21 @@ seedPositiveCore: function {
     names: List String
     svids: ListVal ztypes.vid
     vals: List String
+    valFs: ListVal cfacts
     tids: ListVal ztypes.tid
 } is {
     if tid.isZero then return
     if (isOrdinalVariant :symtab :tid) then return
     subj: atomTextOf :ast n: parent
     if subj.length == 0 then return
-    recvText: emitExpr :ast :symtab :ctx n: parent
+    recvF: cfacts
+    recvText: emitExprWith :ast :symtab :ctx n: parent facts: recvF
     accessOp: ".".string
     if (isPtrVid
         :ctx
         vid: (atomVid :symtab nid: (atomNodeId n: parent))
     ) then accessOp = "->"
+    aliasF: cfacts
     aliasText: (armAliasText
         :ast
         :symtab
@@ -27952,12 +28012,15 @@ seedPositiveCore: function {
         :tid
         arm: childName
         recv: recvText.stringView
+        :recvF
         acc: accessOp.stringView
+        facts: aliasF
     )
     if aliasText.length == 0 then return
     names.append subj.string
     svids.append (atomVid :symtab nid: (atomNodeId n: parent))
     vals.append aliasText
+    valFs.append aliasF
     pt: ((symtab.typing.declChildOfId parentTypeId: tid nameId: childName).or
         d: ztypes.tid.zero
     )
@@ -27975,6 +28038,7 @@ seedNegatedFromPredicate: function {
     names: List String
     svids: ListVal ztypes.vid
     vals: List String
+    valFs: ListVal cfacts
     tids: ListVal ztypes.tid
 } is {
     match (
@@ -27995,9 +28059,11 @@ seedNegatedFromPredicate: function {
             extra: ctorArmName
         )
         if rem.isZero then return
-        recvText: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent)
+        recvF: cfacts
+        recvText: emitExprWith :ast :symtab :ctx n: (ast.nodes.get i: n.parent) facts: recvF
         accessOp: ".".string
         if (isPtrVid :ctx vid: snv) then accessOp = "->"
+        aliasF: cfacts
         aliasText: (armAliasText
             :ast
             :symtab
@@ -28005,12 +28071,15 @@ seedNegatedFromPredicate: function {
             tid: dap
             arm: rem
             recv: recvText.stringView
+            :recvF
             acc: accessOp.stringView
+            facts: aliasF
         )
         if aliasText.length == 0 then return
         names.append subj.string
         svids.append snv
         vals.append aliasText
+        valFs.append aliasF
         pt: ((symtab.typing.declChildOfId parentTypeId: dap nameId: rem).or
             d: ztypes.tid.zero
         )
@@ -28090,6 +28159,7 @@ seedEqualityCond: function {
     names: List String
     svids: ListVal ztypes.vid
     vals: List String
+    valFs: ListVal cfacts
     tids: ListVal ztypes.tid
 } out bool is {
     ipS: zast.infixPartsOf :ast :n
@@ -28103,22 +28173,22 @@ seedEqualityCond: function {
     rsdS: boolArmSideOf :symtab n: (ast.nodes.get i: ipS.rhs)
     if rsdS.truthy then {
         blS: ast.nodes.get i: ipS.lhs
-        seedFromPredicate :ast :symtab :ctx n: blS :names :svids :vals :tids
+        seedFromPredicate :ast :symtab :ctx n: blS :names :svids :vals :valFs :tids
         return true
     }
     if rsdS.falsy then {
         lnS: ast.nodes.get i: ipS.lhs
-        seedNegatedFromPredicate :ast :symtab :ctx n: lnS :names :svids :vals :tids
+        seedNegatedFromPredicate :ast :symtab :ctx n: lnS :names :svids :vals :valFs :tids
         return true
     }
     if lsdS.truthy then {
         brS: ast.nodes.get i: ipS.rhs
-        seedFromPredicate :ast :symtab :ctx n: brS :names :svids :vals :tids
+        seedFromPredicate :ast :symtab :ctx n: brS :names :svids :vals :valFs :tids
         return true
     }
     if lsdS.falsy then {
         rnS: ast.nodes.get i: ipS.rhs
-        seedNegatedFromPredicate :ast :symtab :ctx n: rnS :names :svids :vals :tids
+        seedNegatedFromPredicate :ast :symtab :ctx n: rnS :names :svids :vals :valFs :tids
         return true
     }
     return false
@@ -28134,6 +28204,7 @@ seedCondOp: function {
     names: List String
     svids: ListVal ztypes.vid
     vals: List String
+    valFs: ListVal cfacts
     tids: ListVal ztypes.tid
 } is {
     # a bare 2-arm sum condition IS `x.<arm>` with the arm left implicit, so
@@ -28152,12 +28223,13 @@ seedCondOp: function {
                 :names
                 :svids
                 :vals
+                :valFs
                 :tids
             )
             return
         }
     }
-    if (seedEqualityCond :ast :symtab :ctx :n :names :svids :vals :tids) then return
+    if (seedEqualityCond :ast :symtab :ctx :n :names :svids :vals :valFs :tids) then return
     match (
         n
     ) case dottedpath then {
@@ -28173,12 +28245,12 @@ seedCondOp: function {
         )
         if sd.truthy then {
             dpp: ast.nodes.get i: n.parent
-            seedFromPredicate :ast :symtab :ctx n: dpp :names :svids :vals :tids
+            seedFromPredicate :ast :symtab :ctx n: dpp :names :svids :vals :valFs :tids
             return
         }
         if sd.falsy then {
             dpq: ast.nodes.get i: n.parent
-            seedNegatedFromPredicate :ast :symtab :ctx n: dpq :names :svids :vals :tids
+            seedNegatedFromPredicate :ast :symtab :ctx n: dpq :names :svids :vals :valFs :tids
             return
         }
         tid94: dottedArmPredicateTid :symtab nid: n.nodeid
@@ -28192,6 +28264,7 @@ seedCondOp: function {
             :names
             :svids
             :vals
+            :valFs
             :tids
         )
     } else null
@@ -28208,6 +28281,7 @@ seedCondOne: function {
     names: List String
     svids: ListVal ztypes.vid
     vals: List String
+    valFs: ListVal cfacts
     tids: ListVal ztypes.tid
 } is {
     k: ast.nodes.get i: condId
@@ -28220,6 +28294,7 @@ seedCondOne: function {
             :names
             :svids
             :vals
+            :valFs
             :tids
         )
     }
@@ -28237,8 +28312,10 @@ seedAndLayerCond: function {
     names: List String
     svids: ListVal ztypes.vid
     vals: List String
+    valFs: ListVal cfacts
     tids: ListVal ztypes.tid
     prevV: List String
+    prevF: ListVal cfacts
     prevT: ListVal ztypes.tid
 } is {
     had: svids.length
@@ -28250,9 +28327,10 @@ seedAndLayerCond: function {
         :names
         :svids
         :vals
+        :valFs
         :tids
     )
-    installNarrowSeeds :ctx :svids :vals :tids :prevV :prevT from: had
+    installNarrowSeeds :ctx :svids :vals :valFs :tids :prevV :prevF :prevT from: had
     layerCondExclusion :ast :symtab :ctx :condId
 }
 
@@ -28326,8 +28404,10 @@ installNarrowSeeds: function {
     ctx: Ctx
     svids: (ListVal ztypes.vid).view
     vals: (List String).view
+    valFs: (ListVal cfacts).view
     tids: (ListVal ztypes.tid).view
     prevV: List String
+    prevF: ListVal cfacts
     prevT: ListVal ztypes.tid
     from: u64
 } is {
@@ -28339,8 +28419,10 @@ installNarrowSeeds: function {
             :ctx
             vid: (svids.get i: si)
             val: svv.stringView
+            valF: (valFs.get i: si)
             tid: stt
             :prevV
+            :prevF
             :prevT
         )
         si = si + 1
@@ -28357,6 +28439,7 @@ ifPredicateSeeds: function {
     names: List String
     svids: ListVal ztypes.vid
     vals: List String
+    valFs: ListVal cfacts
     tids: ListVal ztypes.tid
 } is {
     h2x9: u64
@@ -28373,6 +28456,7 @@ ifPredicateSeeds: function {
                 :names
                 :svids
                 :vals
+                :valFs
                 :tids
             )
         }
@@ -29069,8 +29153,10 @@ emitIfClause: function {
         sN: List String
         sVid: ListVal ztypes.vid
         sV: List String
+        sVF: ListVal cfacts
         sT: ListVal ztypes.tid
         sPrevV: List String
+        sPrevF: ListVal cfacts
         sPrevT: ListVal ztypes.tid
         xMark: ctx.exSaveVid.length
         suspends: whenCondSuspends :ast :ctx :n
@@ -29087,14 +29173,17 @@ emitIfClause: function {
                 names: sN
                 svids: sVid
                 vals: sV
+                valFs: sVF
                 tids: sT
             )
             (installNarrowSeeds
                 :ctx
                 svids: sVid
                 vals: sV
+                valFs: sVF
                 tids: sT
                 prevV: sPrevV
+                prevF: sPrevF
                 prevT: sPrevT
                 from: 0
             )
@@ -29113,8 +29202,10 @@ emitIfClause: function {
                     names: sN
                     svids: sVid
                     vals: sV
+                    valFs: sVF
                     tids: sT
                     prevV: sPrevV
+                    prevF: sPrevF
                     prevT: sPrevT
                 )
             }
@@ -29149,7 +29240,7 @@ emitIfClause: function {
             dvF: blockDiverges :ast :symtab :ctx n: cst
             closeScopeBlock :symtab :ctx :tmp fL: fLi lL: lLi diverged: dvF node: n.nodeid :buf
         }
-        restoreNarrowSeeds :ctx svids: sVid prevV: sPrevV prevT: sPrevT
+        restoreNarrowSeeds :ctx svids: sVid prevV: sPrevV prevF: sPrevF prevT: sPrevT
         restoreCondExclusions :ctx mark: xMark
         return opened
     }
@@ -29216,6 +29307,7 @@ seedElseSubject: function {
     ind: StringView
     svids: ListVal ztypes.vid
     prevV: List String
+    prevF: ListVal cfacts
     prevT: ListVal ztypes.tid
     buf: String.borrow
 } is {
@@ -29224,6 +29316,7 @@ seedElseSubject: function {
     if fArm.isZero then return
     acc: ".".string
     if (isPtrVid :ctx vid: subjVid) then acc = "->"
+    aliasF: cfacts
     aliasText: (armAliasText
         :ast
         :symtab
@@ -29231,15 +29324,19 @@ seedElseSubject: function {
         tid: owner
         arm: fArm
         :recv
+        recvF: (factsOfText s: recv)
         acc: acc.stringView
+        facts: aliasF
     )
     if aliasText.length == 0 then return
     (pushNarrow
         :ctx
         vid: subjVid
         val: aliasText.stringView
+        valF: aliasF
         tid: (armMemberTid :symtab :owner arm: fArm)
         :prevV
+        :prevF
         :prevT
     )
     svids.append subjVid
@@ -29262,6 +29359,7 @@ seedElseNarrows: function {
     ind: StringView
     svids: ListVal ztypes.vid
     prevV: List String
+    prevF: ListVal cfacts
     prevT: ListVal ztypes.tid
     buf: String.borrow
 } is {
@@ -29286,6 +29384,7 @@ seedElseNarrows: function {
                 :ind
                 :svids
                 :prevV
+                :prevF
                 :prevT
                 :buf
             )
@@ -29326,6 +29425,7 @@ emitElse: function {
     )
     sVid: ListVal ztypes.vid
     sPrevV: List String
+    sPrevF: ListVal cfacts
     sPrevT: ListVal ztypes.tid
     (seedElseNarrows
         :ast
@@ -29340,6 +29440,7 @@ emitElse: function {
         :ind
         svids: sVid
         prevV: sPrevV
+        prevF: sPrevF
         prevT: sPrevT
         :buf
     )
@@ -29362,7 +29463,7 @@ emitElse: function {
         dvF: blockDiverges :ast :symtab :ctx n: o
         closeScopeBlock :symtab :ctx :tmp fL: fLe lL: lLe diverged: dvF node: oId :buf
     }
-    restoreNarrowSeeds :ctx svids: sVid prevV: sPrevV prevT: sPrevT
+    restoreNarrowSeeds :ctx svids: sVid prevV: sPrevV prevF: sPrevF prevT: sPrevT
     restoreCondExclusions :ctx mark: xMark
 }
 
@@ -29994,6 +30095,7 @@ seedPostGuardAlias: function {
     names: List String
     svids: ListVal ztypes.vid
     prevV: List String
+    prevF: ListVal cfacts
     prevT: ListVal ztypes.tid
     buf: String.borrow
 } is {
@@ -30010,7 +30112,8 @@ seedPostGuardAlias: function {
     if owner.isZero then return
     armId: (symtab.typing.postGuardArm.get key: pgid).or d: zast.nameid
     if armId.isZero then return
-    pgRecv: wholeLocalName :ctx vid: pgrv name: pgRawN.stringView
+    pgRecvF: cfacts
+    pgRecv: wholeLocalNameWith :ctx vid: pgrv name: pgRawN.stringView facts: pgRecvF
     acc: ".".string
     if (isPtrVid :ctx vid: pgrv) then acc = "->"
     # a subject an enclosing narrowing still holds at the guard's type -- an
@@ -30021,10 +30124,12 @@ seedPostGuardAlias: function {
         nb: vvGet xs: ctx.narrowBox vid: pgrv
         if nb.length > 0 then {
             pgRecv = nb.take
+            pgRecvF = vvFactsOf xs: ctx.narrowBox vid: pgrv
             acc = "."
         }
     }
     if pgRecv.length == 0 then return
+    aliasF: cfacts
     aliasText: (armAliasText
         :ast
         :symtab
@@ -30032,15 +30137,19 @@ seedPostGuardAlias: function {
         tid: owner
         arm: armId
         recv: pgRecv.stringView
+        recvF: pgRecvF
         acc: acc.stringView
+        facts: aliasF
     )
     if aliasText.length == 0 then return
     (pushNarrow
         :ctx
         vid: pgrv
         val: aliasText.stringView
+        valF: aliasF
         tid: (armMemberTid :symtab :owner arm: armId)
         :prevV
+        :prevF
         :prevT
     )
     cmt: "\{ind}/* post-guard alias: \{pgRawN} => \{aliasText} */\n"
@@ -30057,6 +30166,7 @@ restoreBlockAliases: function {
     ctx: Ctx
     svids: (ListVal ztypes.vid).view
     prevV: (List String).view
+    prevF: (ListVal cfacts).view
     prevT: (ListVal ztypes.tid).view
 } is {
     zi: svids.length
@@ -30067,6 +30177,7 @@ restoreBlockAliases: function {
         (restoreNarrow
             :ctx
             vid: (svids.get i: zi)
+            prevFacts: (prevF.get i: zi)
             prevVal: zv.stringView
             prevTid: zt
         )
@@ -30091,6 +30202,7 @@ emitStatementBlock: function {
     pgN: List String
     pgVid: ListVal ztypes.vid
     pgPrevV: List String
+    pgPrevF: ListVal cfacts
     pgPrevT: ListVal ztypes.tid
     i: u64
     nst: stmts.count.u64
@@ -30120,6 +30232,7 @@ emitStatementBlock: function {
             names: pgN
             svids: pgVid
             prevV: pgPrevV
+            prevF: pgPrevF
             prevT: pgPrevT
             :buf
         )
@@ -30130,6 +30243,7 @@ emitStatementBlock: function {
         :ctx
         svids: pgVid
         prevV: pgPrevV
+        prevF: pgPrevF
         prevT: pgPrevT
     )
 }
