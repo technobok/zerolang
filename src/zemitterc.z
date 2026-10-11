@@ -5928,7 +5928,8 @@ emitDottedCall: function {
         )
         if (isStringyTid :ctx tid: rsid) then {
             callableNode: ast.nodes.get i: call.callable
-            bn = emitDottedReceiver :ast :symtab :ctx callable: callableNode
+            facts: cfacts
+            bn = emitDottedReceiver :ast :symtab :ctx callable: callableNode :facts
             btid = rsid
         } else {
             return ""
@@ -6111,11 +6112,12 @@ emitDottedReceiver: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     callable: astnode.view
+    facts: cfacts.borrow
 } out String is {
     match (
         callable
     ) case dottedpath then {
-        return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: callable.parent))
+        return (emitExprWith :ast :symtab :ctx n: (ast.nodes.get i: callable.parent) :facts)
     } else {
         return ""
     }
@@ -6213,7 +6215,8 @@ emitNativeArgMethod: function {
     if (body.stringView.contains needle: "@A1@").not then return ""
     rowNeedAdd :ctx key: key.stringView
     mk: pendingHoistMark :ctx
-    recv: emitDottedReceiver :ast :symtab :ctx callable: (ast.nodes.get i: call.callable)
+    facts: cfacts
+    recv: emitDottedReceiver :ast :symtab :ctx callable: (ast.nodes.get i: call.callable) :facts
     if recv.length == 0 then return ""
     if (dottedReceiverIsPtr
         :ast
@@ -6362,7 +6365,8 @@ emitStringArgMethod: function {
     if mnId == zast.wellKnown.slot.wkAppend then nativeM = "append"
     if nativeM.length == 0 then return ""
     callableNode: ast.nodes.get i: call.callable
-    recvExpr: emitDottedReceiver :ast :symtab :ctx callable: callableNode
+    facts: cfacts
+    recvExpr: emitDottedReceiver :ast :symtab :ctx callable: callableNode :facts
     if recvExpr.length == 0 then return ""
     rtid0: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: call.callable)
     rtid: chaseAggregateTypedef :symtab :ctx tid: rtid0
@@ -8009,6 +8013,7 @@ emitInstanceMethodBody: function {
     call: zast.callrow.view
     mco: ztypes.tid
     recvExpr: StringView
+    recvF: cfacts
     # whether recvExpr is ALREADY a C pointer, so the receiver slot takes it as
     # it stands rather than through emitByrefArg. The two call forms read this
     # from different places -- a dotted base from the path it was reached by, a
@@ -8069,6 +8074,7 @@ emitInstanceMethodBody: function {
             pid: (pids.get i: pi)
             isRecv: isR
             :recvExpr
+            :recvF
             :recvIsPtr
             posIdx: (ctx.orderPosAt.get i: wbase + pi)
             written: (ctx.orderWrit.get i: wbase + pi)
@@ -8132,6 +8138,7 @@ orderMethodParam: function {
     pid: ztypes.tid
     isRecv: bool
     recvExpr: StringView
+    recvF: cfacts
     recvIsPtr: bool
     # the positional cursor the parameter's value is read with
     posIdx: u64
@@ -8147,17 +8154,20 @@ orderMethodParam: function {
     if isRecv then {
         if recvIsPtr then {
             one.append recvExpr
+            stateFacts facts: oneF from: recvF
         } else {
             # same rule as the auto-call base: a receiver that IS a call has no
             # address, so emitByrefArg hoists it into a temp -- the checker's
             # temp for the receiver node, freed when the checker says it owns
-            one.append (emitByrefArg
+            one.append (emitByrefArgWith
                 :ast
                 :symtab
                 :ctx
                 av: recvExpr
+                avF: recvF
                 :pid
                 argNid: (dottedBaseNid n: (ast.nodes.get i: call.callable))
+                facts: oneF
             )
         }
     } else if written == 0 when (symtab.typing.declHasDefaultId parentTypeId: mco nameId: pname
@@ -8624,7 +8634,8 @@ emitInstanceMethodCall: function {
     ) case some then {
         if (symtab.reg.typetypeOf typeId: mco) == ztypes.ztypetype.functionType then {
             mci: methodInstanceOf :symtab mid: mco callable: call.callable
-            recvExpr: emitDottedReceiver :ast :symtab :ctx callable: callableNode
+            recvF: cfacts
+            recvExpr: emitDottedReceiver :ast :symtab :ctx callable: callableNode facts: recvF
             if recvExpr.length == 0 then return ""
             rIsPtr: dottedReceiverIsPtr :ast :symtab :ctx callable: callableNode
             if bxEl.isZero.not then {
@@ -8638,11 +8649,14 @@ emitInstanceMethodCall: function {
                     :ast
                     :symtab
                     :ctx
-                    exprF: (factsOfText s: recvExpr.stringView)
+                    exprF: recvF
                     expr: recvExpr.stringView
                     n: (ast.nodes.get i: bxBase)
                 )
-                if bxRh.length > 0 then recvExpr = bxRh.take
+                if bxRh.length > 0 then {
+                    recvExpr = bxRh.take
+                    recvF = pathFacts
+                }
             }
             return (emitInstanceMethodBody
                 :ast
@@ -8651,6 +8665,7 @@ emitInstanceMethodCall: function {
                 :call
                 mco: mci
                 recvExpr: recvExpr.stringView
+                :recvF
                 recvIsPtr: rIsPtr
                 posStart: 0
             )
@@ -9516,23 +9531,28 @@ emitStrConvCall: function {
         originTid: (ctx.origins.get i: family.slot.str)
     ).not then return ""
     rnm: cbaseNoPrefix :ctx tid: rid
-    pv: emitDottedReceiver :ast :symtab :ctx callable: (ast.nodes.get i: call.callable)
+    pvF: cfacts
+    pv: emitDottedReceiver :ast :symtab :ctx callable: (ast.nodes.get i: call.callable) facts: pvF
     ptid: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: call.callable)
     # the receiver is read twice, for data and length. An owned String call is
     # bound to a temp the statement flush frees, a view call to a plain one
-    if ptid == ctx.strTid when (factsOfText s: pv.stringView).place.not then {
-        sh: (hoistBorrowValArg
+    if ptid == ctx.strTid when pvF.place.not then {
+        sh: (hoistBorrowValArgWith
             :ast
             :symtab
             :ctx
             argNid: (dottedBaseNid n: (ast.nodes.get i: call.callable))
             av: pv.stringView
+            avF: pvF
             pid: ptid
             paramTake: false
         )
-        if sh.length > 0 then pv = sh.copy
+        if sh.length > 0 then {
+            pv = sh.copy
+            pvF = pathFacts
+        }
     }
-    if ptid == ctx.svTid when (factsOfText s: pv.stringView).once then {
+    if ptid == ctx.svTid when pvF.once then {
         # a view, bound so the call runs once; there is nothing to free
         pv = hoistForAddress :ast :symtab :ctx av: pv.stringView tid: ptid argNid: zast.nodeid
     }
@@ -9672,7 +9692,8 @@ emitCollectionMethodCall: function {
     ctx: Ctx
     call: zast.callrow.view
 } out String is {
-    bn: emitDottedReceiver :ast :symtab :ctx callable: (ast.nodes.get i: call.callable)
+    bnF: cfacts
+    bn: emitDottedReceiver :ast :symtab :ctx callable: (ast.nodes.get i: call.callable) facts: bnF
     if bn.length == 0 then return ""
     bvid: (atomVidIfPlain
         :ast
@@ -9723,15 +9744,17 @@ emitCollectionMethodCall: function {
             ptr: true
         )
         bn = "(*\{bp9})"
+        bnF = derefFacts
     } else if recvNode.dottedpath when (borrowedFieldPath :ast :symtab :ctx n: recvNode) then {
         # a borrowed field (`c.l` on `l: (ListVal t: i64).borrow`) holds its
         # container by pointer and has no variable for colRecvRef to ask
         bn = "(*\{bn})"
+        bnF = derefFacts
     }
     # the temp owns the receiver only when the call handed over a new value; an
     # element or other borrow still belongs to its container. A Set or a Map is
     # held as its pointer.
-    if rcvIsCreate.not when (canTakeAddress f: (factsOfText s: bn.stringView)).not then {
+    if rcvIsCreate.not when (canTakeAddress f: bnF).not then {
         bh9: (hoistForAddress
             :ast
             :symtab
@@ -11413,6 +11436,7 @@ emitQualRecvMethodCall: function {
         :call
         mco: mtid
         recvExpr: recvExQ.stringView
+        recvF: (factsOfText s: recvExQ.stringView)
         recvIsPtr: recvPtrQ
         posStart: posStartQ
     )
@@ -13621,7 +13645,8 @@ emitFnptrFieldCall: function {
     if rtid.isZero then return ""
     if (symtab.typing.declIsFnptrFieldId parentTypeId: rtid nameId: mnId).not then return ""
     callableNode: ast.nodes.get i: call.callable
-    recvText: emitDottedReceiver :ast :symtab :ctx callable: callableNode
+    facts: cfacts
+    recvText: emitDottedReceiver :ast :symtab :ctx callable: callableNode :facts
     if recvText.length == 0 then return ""
     # the slot is read through the receiver and the receiver is passed to it
     recvExpr: (receiverOnce
@@ -21872,12 +21897,14 @@ emitDottedAutoCallStmt: function {
         if isDrop when (namedDestroyOwes :symtab nid: dropNid).not then {
             # read once, so a name whose only use is its drop is still used
             # in the C
-            drv: emitDottedReceiver :ast :symtab :ctx callable: n
+            facts2: cfacts
+            drv: emitDottedReceiver :ast :symtab :ctx callable: n facts: facts2
             buf.append "\{ind}(void)(\{drv});\n"
             emitDropReleasedTemps :symtab :tmp :dropNid :ind :buf
             return
         }
-        rcvV: emitDottedReceiver :ast :symtab :ctx callable: n
+        facts: cfacts
+        rcvV: emitDottedReceiver :ast :symtab :ctx callable: n :facts
         dsl: (destroyLineC
             :symtab
             :ctx
@@ -26404,11 +26431,13 @@ emitClosedRangeFor: function {
     match (
         n
     ) case call then {
+        facts: cfacts
         startx: (emitDottedReceiver
             :ast
             :symtab
             :ctx
             callable: (ast.nodes.get i: n.callable)
+            :facts
         )
         if startx.length == 0 then return false
         mN: tmpNext :ctx :tmp
@@ -41305,7 +41334,8 @@ emitProtocolDispatch: function {
     callableNode: ast.nodes.get i: call.callable
     rtid: dispatchReceiverTid :ast :symtab :ctx callable: callableNode :mnId
     if (isDispatchableTid :symtab tid: rtid).not then return ""
-    recvText: emitDottedReceiver :ast :symtab :ctx callable: callableNode
+    facts: cfacts
+    recvText: emitDottedReceiver :ast :symtab :ctx callable: callableNode :facts
     if recvText.length == 0 then return ""
     # the table and the data are both read through the receiver
     recv: receiverOnce :ast :symtab :ctx callable: callableNode text: recvText.stringView tid: rtid
