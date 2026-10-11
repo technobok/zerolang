@@ -41646,42 +41646,52 @@ lowerNativeArg: function {
     pnameId: zast.nameid
     pid: ztypes.tid
     op: astnode.view
+    facts: cfacts.borrow
 } out String is {
     isViewP: (
         (pid == ctx.svTid) or ((symtab.reg.typetypeOf typeId: pid) == ztypes.ztypetype.genericParam)
     )
     if isViewP then {
         avh: emitColInterpArg :ast :symtab :ctx n: op consumes: false
-        facts2: cfacts
-        if avh.length > 0 then return (svValueForm
-            :ast
-            :symtab
-            :ctx
-            expr: avh.stringView
-            isStr: true
-            vid: ztypes.vid.zero
-            facts: facts2
-        )
-        av0: emitExpr :ast :symtab :ctx n: op
+        if avh.length > 0 then {
+            # the interpolation's hoisted temp, viewed
+            stateFacts :facts from: pathFacts
+            return (svValueForm
+                :ast
+                :symtab
+                :ctx
+                expr: avh.stringView
+                isStr: true
+                vid: ztypes.vid.zero
+                :facts
+            )
+        }
+        av0F: cfacts
+        av0: emitExprWith :ast :symtab :ctx n: op facts: av0F
         if (stampIsStr :symtab :ctx nid: (interpPartNodeId n: op)) then {
-            hb: (hoistBorrowValArg
+            hb: (hoistBorrowValArgWith
                 :ast
                 :symtab
                 :ctx
                 argNid: (zast.nodeIdOf n: op)
                 av: av0.stringView
+                avF: av0F
                 pid: ctx.strTid
                 paramTake: false
             )
-            if hb.length > 0 then av0 = hb.take
+            if hb.length > 0 then {
+                av0 = hb.take
+                av0F = pathFacts
+            }
             av0q: atomVidIfPlain :ast :symtab :ctx n: op text: av0.stringView
-            facts: cfacts
+            stateFacts :facts from: av0F
             return (svValueForm :ast :symtab :ctx expr: av0.stringView isStr: true vid: av0q :facts)
         }
-        return av0
+        return (stating :facts from: av0F text: av0)
     }
     iv: emitInterpArgExpr :ast :symtab :ctx n: op
-    if iv.length > 0 then return iv
+    # an interpolation built where it is evaluated, as a call's result is
+    if iv.length > 0 then return (stating :facts from: callFacts text: iv)
     isTake: paramTakesArg :symtab :fid :pnameId
     needAmp: false
     if isTake.not then {
@@ -41699,20 +41709,23 @@ lowerNativeArg: function {
         ) then needAmp = true
         if (markedValtypeRefParam :symtab :fid :pnameId :pid) then needAmp = true
     }
-    av1: emitExpr :ast :symtab :ctx n: op
+    av1F: cfacts
+    av1: emitExprWith :ast :symtab :ctx n: op facts: av1F
     # by reference: a value with no address (`outbuf.byteView`) is hoisted first,
     # as every by-reference argument is (emitByrefArg)
     if needAmp when (pathIsPointer :ast :symtab :ctx n: op).not then {
-        return (emitByrefArg
+        return (emitByrefArgWith
             :ast
             :symtab
             :ctx
             av: av1.stringView
+            avF: av1F
             :pid
             argNid: (zast.nodeIdOf n: op)
+            :facts
         )
     }
-    return av1
+    return (stating :facts from: av1F text: av1)
 }
 
 # emitNativeArg -- find one native-call argument by label, else by the
@@ -41727,6 +41740,7 @@ emitNativeArg: function {
     pid: ztypes.tid
     usePos: bool
     posIdx: u64
+    facts: cfacts.borrow
 } out String is {
     seen: u64
     arx589: u64
@@ -41747,6 +41761,7 @@ emitNativeArg: function {
                             :pnameId
                             :pid
                             op: (ast.nodes.get i: a.operation)
+                            :facts
                         )
                     }
                     seen = seen + 1
@@ -41761,12 +41776,13 @@ emitNativeArg: function {
                         :pnameId
                         :pid
                         op: (ast.nodes.get i: a.operation)
+                        :facts
                     )
                 }
             }
         }
     }
-    return "0"
+    return (stating :facts from: constFacts text: "0")
 }
 
 # emitNativeFreeFnCall -- ANY call (dotted `io.remove ...`, a bare sibling
@@ -41819,6 +41835,7 @@ emitNativeFreeFnCall: function {
         k = k + 1
         pname: pn.get i: j
         mk: pendingHoistMark :ctx
+        avF: cfacts
         av: (emitNativeArg
             :ast
             :symtab
@@ -41829,17 +41846,19 @@ emitNativeFreeFnCall: function {
             pid: (pidl.get i: j)
             usePos: (ctorHasLabel :ast :call label: pname.stringView).not
             posIdx: (ctx.orderPosAt.get i: wbase + j)
+            facts: avF
         )
         wr: ctx.orderWrit.get i: wbase + j
         anid: zast.nodeid
         if wr > 0 then anid = writtenArgNode :ast :call pos: wr - 1
-        (orderArgAt
+        (orderArgAtWith
             :ast
             :symtab
             :ctx
             st: ord
             mark: mk
             text: av
+            tf: avF
             nid: anid
             byPtr: false
             slot: j
