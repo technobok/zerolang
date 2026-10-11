@@ -5949,6 +5949,7 @@ emitSvNativeInfix: function {
     op: StringView
     # the operator's name id
     opId: zast.nameid
+    facts: cfacts.borrow
 } out String is {
     if (isStringyTid :ctx tid: owner).not then return ""
     if (svCallOf :ctx nameId: opId).simple.not then return ""
@@ -5959,7 +5960,6 @@ emitSvNativeInfix: function {
     recvF: cfacts
     recv: operandValueC :ast :symtab :ctx nid: lhsNid facts: recvF
     if owner == ctx.strTid then {
-        facts: cfacts
         rf: (svValueFormAt
             :ast
             :symtab
@@ -5968,11 +5968,22 @@ emitSvNativeInfix: function {
             expr: recv.stringView
             isStr: true
             vid: (atomVid :symtab nid: lhsNid)
-            :facts
+            facts: recvF
         )
         recv = rf.take
     }
-    orderArgAt :ast :symtab :ctx st: ord mark: mk text: recv nid: lhsNid byPtr: false slot: 0
+    (orderArgAtWith
+        :ast
+        :symtab
+        :ctx
+        st: ord
+        mark: mk
+        text: recv
+        tf: recvF
+        nid: lhsNid
+        byPtr: false
+        slot: 0
+    )
     mkA: pendingHoistMark :ctx
     # a folded string constant is a static view, and its address is what the
     # native takes
@@ -6008,7 +6019,7 @@ emitSvNativeInfix: function {
         args: aargs.stringView
     )
     orderEnd :ctx st: ord
-    return (orderWrap prefix: oprefix call: ecall)
+    return (stating :facts from: callFacts text: (orderWrap prefix: oprefix call: ecall))
 }
 
 # emitDottedCall -- a method call on a stamped String/StringView base:
@@ -11880,7 +11891,8 @@ renderDefault: function {
             kOwner = ko.parent
             kUnit: ztypecheck.declTypeIdOf st: symtab declId: kOwner
             # a string default is the `_zcsN` view of its static bytes
-            ks: memberConstStringText :symtab :ctx unitTid: kUnit nameId: kName
+            facts: cfacts
+            ks: memberConstStringText :symtab :ctx unitTid: kUnit nameId: kName :facts
             if ks.length > 0 then return ks
             kF: cfacts
             return (memberConstText :ast :symtab :ctx unitTid: kUnit nameId: kName facts: kF)
@@ -13037,7 +13049,9 @@ floatCvalText: function {
 #
 # Deduplicated by TEXT, not by origin: two constants that fold to the same bytes
 # are one static, and a folded value has no node identity to key on anyway.
-cvalStrText: function {symtab: zenv.ZSymbolTable.view ctx: Ctx v: ztypes.cval} out String is {
+cvalStrText: function {
+    symtab: zenv.ZSymbolTable.view ctx: Ctx v: ztypes.cval facts: cfacts.borrow
+} out String is {
     if v.kind.svalKind.not then return ""
     if v.strId == 0 then return ""
     t: symtab.typing.constStrings.get i: v.strId
@@ -13052,12 +13066,10 @@ cvalStrText: function {symtab: zenv.ZSymbolTable.view ctx: Ctx v: ztypes.cval} o
         i = i + 1
     }
     if hit > 0 then {
-        rh: "_zcs\{hit}"
-        return rh
+        return (stating :facts from: pathFacts text: "_zcs\{hit}")
     }
     ctx.constLits.append t.copy
-    r0: "_zcs\{ctx.constLits.length}"
-    return r0
+    return (stating :facts from: pathFacts text: "_zcs\{ctx.constLits.length}")
 }
 
 # foldedBranchOf -- the clause the typechecker's constant fold selected for an
@@ -13108,7 +13120,7 @@ nodeConstText: function {
     sc: cvalText :ast :symtab :ctx tid: tv v: g :facts
     if sc.length > 0 then return sc
     # a folded string is its pooled static, `_zcsN`
-    return (stating :facts from: pathFacts text: (cvalStrText :symtab :ctx v: g))
+    return (cvalStrText :symtab :ctx v: g :facts)
 }
 
 # memberConstTid -- the declared type of a unit constant, 0 when it has none.
@@ -13155,11 +13167,12 @@ memberConstStringText: function {
     ctx: Ctx
     unitTid: ztypes.tid
     nameId: zast.nameid
+    facts: cfacts.borrow
 } out String is {
     if unitTid.isZero then return ""
     if nameId.isZero then return ""
     mv: symtab.typing.memberConstOf parentTypeId: unitTid :nameId
-    return (cvalStrText :symtab :ctx v: mv)
+    return (cvalStrText :symtab :ctx v: mv :facts)
 }
 
 # mainUnitTid -- the type id of the unit being emitted: its declaration's type,
@@ -15713,20 +15726,21 @@ fnRefOrCallC: function {
     fnTid: ztypes.tid
     cname: StringView
     requireNoParams: bool
+    facts: cfacts.borrow
 } out String is {
     fst: stampIdOf :symtab :nid
     if fst.isZero.not when (
         (symtab.reg.typetypeOf typeId: fst) == ztypes.ztypetype.functionType
-    ) then return cname.string
+    ) then return (stating :facts from: pathFacts text: cname.string)
     fad: emitAllDefaultedCall :ast :symtab :ctx :fnTid fcn: cname
-    if fad.length > 0 then return fad
+    if fad.length > 0 then return (stating :facts from: callFacts text: fad)
     if requireNoParams then {
         fpi: ListVal ztypes.tid
         fpiNm: ListVal zast.nameid
         recFieldIds :symtab tid: fnTid ids: fpi nameIds: fpiNm
         if fpi.length > 0 then return ""
     }
-    return "\{cname}()"
+    return (stating :facts from: callFacts text: "\{cname}()")
 }
 
 # tagAliasArmC -- the C text for a VALUE alias naming one arm of a tagged type
@@ -15911,6 +15925,7 @@ emitDefRefAtom: function {
         (symtab.reg.typetypeOf typeId: brid) == ztypes.ztypetype.functionType
     ) then {
         fbcn: ctxCname :ctx tid: brid
+        facts: cfacts
         return (fnRefOrCallC
             :ast
             :symtab
@@ -15919,6 +15934,7 @@ emitDefRefAtom: function {
             fnTid: brid
             cname: fbcn.stringView
             requireNoParams: true
+            :facts
         )
     }
     return ""
@@ -15968,7 +15984,7 @@ namespaceConstText: function {
         if nsFt.isZero.not then {
             nsca: memberConstText :ast :symtab :ctx unitTid: nsFt :nameId :facts
             if nsca.length > 0 then return nsca
-            nscs: memberConstStringText :symtab :ctx unitTid: nsFt :nameId
+            nscs: memberConstStringText :symtab :ctx unitTid: nsFt :nameId :facts
             if nscs.length > 0 then return nscs
         }
         nsNx: symtab.typing.declParentOf declId: nsCur
@@ -16049,7 +16065,7 @@ emitAtom: function {
         :facts
     )
     if mca.length > 0 then return mca
-    mcsa: memberConstStringText :symtab :ctx unitTid: mutd nameId: n.name
+    mcsa: memberConstStringText :symtab :ctx unitTid: mutd nameId: n.name :facts
     if mcsa.length > 0 then return mcsa
     # stamped unit-def reference: the RECORD / FUNCTION legs run off the
     # stamped declaration; an atom with none names no definition
@@ -17617,6 +17633,7 @@ dottedTypeConstRead: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     n: zast.dottedpathrow.view
+    facts: cfacts.borrow
 } out String is {
     bt: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.parent))
     if bt.isZero then return ""
@@ -17627,10 +17644,9 @@ dottedTypeConstRead: function {
     if isSlot.not when (symtab.typing.isAsConstDecl
         declId: (symtab.typing.declMemberIdOf parentTypeId: bt nameId: cid)
     ).not then return ""
-    ctF: cfacts
-    ct: memberConstText :ast :symtab :ctx unitTid: bt nameId: cid facts: ctF
+    ct: memberConstText :ast :symtab :ctx unitTid: bt nameId: cid :facts
     if ct.length > 0 then return ct
-    return (memberConstStringText :symtab :ctx unitTid: bt nameId: cid)
+    return (memberConstStringText :symtab :ctx unitTid: bt nameId: cid :facts)
 }
 
 # emitSvAtomBase -- a StringView base: `.length`, the pointer/one-past ends, the
@@ -17921,6 +17937,7 @@ unitFnMemberC: function {
     n: zast.dottedpathrow.view
     # the file unit the base resolved to
     ud6x: ztypes.declid
+    facts: cfacts.borrow
 } out String is {
     dpUfo: (ztypecheck.resolvedByIdsRo
         :ast
@@ -17950,6 +17967,7 @@ unitFnMemberC: function {
         fnTid: fid
         cname: dpUfc.stringView
         requireNoParams: false
+        :facts
     )
 }
 
@@ -17962,6 +17980,7 @@ nsFnMemberC: function {
     ctx: Ctx
     n: zast.dottedpathrow.view
     nsTid: ztypes.tid
+    facts: cfacts.borrow
 } out String is {
     nfo: (symtab.typing.declChildOfId
         parentTypeId: nsTid
@@ -17986,6 +18005,7 @@ nsFnMemberC: function {
         fnTid: nftid
         cname: nfcn.stringView
         requireNoParams: false
+        :facts
     )
 }
 
@@ -17998,10 +18018,11 @@ emitDottedUnitRead: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     n: zast.dottedpathrow.view
+    facts: cfacts.borrow
 } out String is {
     # `unit.CONST` -- a constant of another unit inlines its rendered C
     # text, exactly as a bare reference to a constant of this unit does
-    ucv: unitConstTextOf :ast :symtab :ctx :n
+    ucv: unitConstTextOf :ast :symtab :ctx :n :facts
     if ucv.length > 0 then return ucv
     # `unit.block` -- another unit's data block reads as its value
     udv: dataValueText :symtab :ctx nid: n.nodeid
@@ -18012,7 +18033,6 @@ emitDottedUnitRead: function {
     match (
         izd
     ) case some then {
-        facts: cfacts
         return (implicitZeroValue
             :ast
             :symtab
@@ -18026,13 +18046,13 @@ emitDottedUnitRead: function {
     # reads as a dotted path, not a call
     dpFile: baseFileUnitDecl :symtab baseId: n.parent
     if dpFile.isZero.not then {
-        ufm: unitFnMemberC :ast :symtab :ctx :n ud6x: dpFile
+        ufm: unitFnMemberC :ast :symtab :ctx :n ud6x: dpFile :facts
         if ufm.length > 0 then return ufm
         return ""
     }
     dpNsTid: pathUnitTidOf :symtab baseId: n.parent
     if dpNsTid.isZero.not then {
-        return (nsFnMemberC :ast :symtab :ctx :n nsTid: dpNsTid)
+        return (nsFnMemberC :ast :symtab :ctx :n nsTid: dpNsTid :facts)
     }
     return ""
 }
@@ -18789,7 +18809,7 @@ emitDottedRead: function {
             return (orPanicExprC :ast :symtab :ctx tid: pMono recv: rcRecv.stringView :facts)
         }
     }
-    dur: emitDottedUnitRead :ast :symtab :ctx :n
+    dur: emitDottedUnitRead :ast :symtab :ctx :n :facts
     if dur.length > 0 then return dur
     dcr: emitDottedConversionRead :ast :symtab :ctx :n :facts
     if dcr.length > 0 then return dcr
@@ -18802,7 +18822,7 @@ emitDottedRead: function {
         :facts
     )
     if dtg.length > 0 then return dtg
-    dtc: dottedTypeConstRead :ast :symtab :ctx :n
+    dtc: dottedTypeConstRead :ast :symtab :ctx :n :facts
     if dtc.length > 0 then return dtc
     bn2r: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.parent))
     baseAtomNid: atomNodeId n: (ast.nodes.get i: n.parent)
@@ -19500,6 +19520,7 @@ emitOperatorAt: function {
             :lhsNid
             :rhsNid
             neg: opId == zast.wellKnown.slot.wkOpNe
+            :facts
         )
     }
     if call.isZero.not when isNat.not when isSyn.not then {
@@ -19513,6 +19534,7 @@ emitOperatorAt: function {
             :lhsNid
             :rhsNid
             :neg
+            :facts
         )
     }
     # A NATIVE NAMED METHOD IS NOT AN OPERATOR. The table holds inline bodies
@@ -19530,6 +19552,7 @@ emitOperatorAt: function {
             :rhsNid
             :op
             :opId
+            :facts
         )
         if eNi.length > 0 then return eNi
     }
@@ -19796,6 +19819,7 @@ emitDeclaredOperator: function {
     lhsNid: zast.nodeid
     rhsNid: zast.nodeid
     neg: bool
+    facts: cfacts.borrow
 } out String is {
     ord: orderBegin :ctx slots: 2
     mk: pendingHoistMark :ctx
@@ -19876,7 +19900,7 @@ emitDeclaredOperator: function {
     }
     if opened then r.append ")"
     orderEnd :ctx st: ord
-    return r
+    return (stating :facts from: callFacts text: r)
 }
 
 # operatorOperandText -- a declared operator's right operand, passed as its
@@ -19956,6 +19980,7 @@ emitListEqOperator: function {
     lhsNid: zast.nodeid
     rhsNid: zast.nodeid
     neg: bool
+    facts: cfacts.borrow
 } out String is {
     ord: orderBegin :ctx slots: 2
     mk: pendingHoistMark :ctx
@@ -20007,7 +20032,7 @@ emitListEqOperator: function {
     r.append ")"
     if opened then r.append ")"
     orderEnd :ctx st: ord
-    return r
+    return (stating :facts from: callFacts text: r)
 }
 
 # listOperandAddr -- the address of a list operand; a list already held by
@@ -20877,11 +20902,13 @@ emitPrintAtom: function {
         alo: symtab.typing.atomVariableId.get key: n.nodeid
         if alo.none then {
             unitTid9: mainUnitTid :symtab :ctx
+            facts: cfacts
             cst: (memberConstStringText
                 :symtab
                 :ctx
                 unitTid: unitTid9
                 nameId: n.name
+                :facts
             )
             if cst.length > 0 then anmE = cst.copy
         }
@@ -31442,6 +31469,7 @@ unitConstTextOf: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     n: zast.dottedpathrow.view
+    facts: cfacts.borrow
 } out String is {
     cn8: zast.nameid
     ca8: ast.nodes.get i: n.child
@@ -31451,34 +31479,32 @@ unitConstTextOf: function {
         if utd8.isZero.not then {
             # the VALUE is the only source: a constant is never rendered to
             # text ahead of time and re-read.
-            mct8F: cfacts
             mct8: (memberConstText
                 :ast
                 :symtab
                 :ctx
                 unitTid: utd8
                 nameId: cn8
-                facts: mct8F
+                :facts
             )
             if mct8.length > 0 then return mct8
-            mcs8: memberConstStringText :symtab :ctx unitTid: utd8 nameId: cn8
+            mcs8: memberConstStringText :symtab :ctx unitTid: utd8 nameId: cn8 :facts
             if mcs8.length > 0 then return mcs8
             # a constant the unit's `public:` block DEFINES is on the unit's
             # surface, keyed on the block (a nested unit named `public`)
             pbd8: ztypecheck.publicNsOf st: symtab tid: utd8
             pbt8: ztypecheck.declTypeIdOf st: symtab declId: pbd8
             if pbt8.isZero.not then {
-                mcp8F: cfacts
                 mcp8: (memberConstText
                     :ast
                     :symtab
                     :ctx
                     unitTid: pbt8
                     nameId: cn8
-                    facts: mcp8F
+                    :facts
                 )
                 if mcp8.length > 0 then return mcp8
-                mcq8: memberConstStringText :symtab :ctx unitTid: pbt8 nameId: cn8
+                mcq8: memberConstStringText :symtab :ctx unitTid: pbt8 nameId: cn8 :facts
                 if mcq8.length > 0 then return mcq8
             }
         }
