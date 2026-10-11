@@ -5494,6 +5494,7 @@ svArgAddr: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     n: astnode.view
+    facts: cfacts.borrow
 } out String is {
     match (
         n
@@ -5542,11 +5543,9 @@ svArgAddr: function {
                 vid: anV
                 facts: anEF
             )
-            a2s: "&\{svs}"
-            return a2s
+            return (stating :facts from: (addrFacts e: anEF) text: "&\{svs}")
         }
-        a2: "&\{anE}"
-        return a2
+        return (stating :facts from: (addrFacts e: anEF) text: "&\{anE}")
     } case labelvalue then {
         anlC: ast.names.texts.get i: n.name
         anl: anlC.stringView
@@ -5570,11 +5569,9 @@ svArgAddr: function {
                 vid: anlV
                 facts: anlEF
             )
-            a2ls: "&\{svl}"
-            return a2ls
+            return (stating :facts from: (addrFacts e: anlEF) text: "&\{svl}")
         }
-        a2l: "&\{anlE}"
-        return a2l
+        return (stating :facts from: (addrFacts e: anlEF) text: "&\{anlE}")
     } case dottedpath then {
         dpm: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
         if (ztypecheck.isStringViewMember nameId: dpm) then {
@@ -5602,8 +5599,7 @@ svArgAddr: function {
                 vid: pev
                 facts: peF
             )
-            a3: "&\{sv}"
-            return a3
+            return (stating :facts from: (addrFacts e: peF) text: "&\{sv}")
         }
         return ""
     } else {
@@ -5746,8 +5742,9 @@ svNativeArgFrag: function {
     ctx: Ctx
     n: astnode.view
     addrAlways: bool
+    facts: cfacts.borrow
 } out String is {
-    sav: svArgAddr :ast :symtab :ctx :n
+    sav: svArgAddr :ast :symtab :ctx :n :facts
     if sav.length > 0 then return sav
     sxF: cfacts
     sx: emitExprWith :ast :symtab :ctx :n facts: sxF
@@ -5769,12 +5766,10 @@ svNativeArgFrag: function {
         }
         sxq: atomVidIfPlain :ast :symtab :ctx :n text: sx.stringView
         svx: svValueForm :ast :symtab :ctx expr: sx.stringView isStr: true vid: sxq facts: sxF
-        r: "&\{svx}"
-        return r
+        return (stating :facts from: (addrFacts e: sxF) text: "&\{svx}")
     }
     if addrAlways then {
-        ra: "&\{sx}"
-        return ra
+        return (stating :facts from: (addrFacts e: sxF) text: "&\{sx}")
     }
     # a VIEW-typed value reaching here is not a plain place -- a call's result,
     # a projection -- and these natives take their argument by pointer, so it
@@ -5791,13 +5786,11 @@ svNativeArgFrag: function {
                 tid: ctx.svTid
                 argNid: zast.nodeid
             )
-            rvh: "&\{svb}"
-            return rvh
+            return (stating :facts from: (addrFacts e: pathFacts) text: "&\{svb}")
         }
-        rv9: "&\{sx}"
-        return rv9
+        return (stating :facts from: (addrFacts e: sxF) text: "&\{sx}")
     }
-    return sx
+    return (stating :facts from: sxF text: sx)
 }
 
 
@@ -5845,7 +5838,15 @@ emitSvSplitCall: function {
             if sa.namedoperation then {
                 saOpNode: ast.nodes.get i: sa.operation
                 if sepx.length == 0 then {
-                    sfrag: svNativeArgFrag :ast :symtab :ctx n: saOpNode addrAlways: true
+                    facts2: cfacts
+                    sfrag: (svNativeArgFrag
+                        :ast
+                        :symtab
+                        :ctx
+                        n: saOpNode
+                        addrAlways: true
+                        facts: facts2
+                    )
                     sepx.append sfrag
                 }
             }
@@ -5961,7 +5962,15 @@ emitSvArgNativeCall: function {
             if a.namedoperation then {
                 aOpNode: ast.nodes.get i: a.operation
                 if argx.length == 0 then {
-                    afrag: svNativeArgFrag :ast :symtab :ctx n: aOpNode addrAlways: false
+                    facts2: cfacts
+                    afrag: (svNativeArgFrag
+                        :ast
+                        :symtab
+                        :ctx
+                        n: aOpNode
+                        addrAlways: false
+                        facts: facts2
+                    )
                     argx.append afrag
                 }
             }
@@ -6015,7 +6024,8 @@ emitSvSimpleCall: function {
             if a.namedoperation then {
                 aOpNode: ast.nodes.get i: a.operation
                 args.append ", "
-                cfrag: svNativeArgFrag :ast :symtab :ctx n: aOpNode addrAlways: false
+                facts2: cfacts
+                cfrag: svNativeArgFrag :ast :symtab :ctx n: aOpNode addrAlways: false facts: facts2
                 args.append cfrag
             }
         }
@@ -6093,6 +6103,7 @@ emitSvNativeInfix: function {
     # a folded string constant is a static view, and its address is what the
     # native takes
     afrag: String
+    afragF: cfacts
     {
         cg: symtab.typing.nodeConst.get key: rhsNid
         match (
@@ -6102,6 +6113,7 @@ emitSvNativeInfix: function {
                 cvF: cfacts
                 cv: operandValueC :ast :symtab :ctx nid: rhsNid facts: cvF
                 afrag = "&\{cv}"
+                afragF = addrFacts e: cvF
             }
         } case none then null
     }
@@ -6112,9 +6124,21 @@ emitSvNativeInfix: function {
             :ctx
             n: (ast.nodes.get i: rhsNid)
             addrAlways: false
+            facts: afragF
         )
     }
-    orderArgAt :ast :symtab :ctx st: ord mark: mkA text: afrag nid: rhsNid byPtr: true slot: 1
+    (orderArgAtWith
+        :ast
+        :symtab
+        :ctx
+        st: ord
+        mark: mkA
+        text: afrag
+        tf: afragF
+        nid: rhsNid
+        byPtr: true
+        slot: 1
+    )
     oprefix: orderFinish :ctx st: ord
     aargs: ", \{orderSlotText t: ctx st: ord slot: 1}"
     ecall: (svNativeCall
@@ -6493,6 +6517,7 @@ emitNativeArgMethod: function {
     ) then {
         rd: "(*\{recv})"
         recv = rd.copy
+        recvF = operandFacts e: recvF place: true
     }
     mtid: ((symtab.typing.declChildOfId
         parentTypeId: ownerTid
@@ -6509,13 +6534,14 @@ emitNativeArgMethod: function {
     # the receiver is evaluated first, then the arguments as written
     ord: orderBegin :ctx slots: pNames.length
     recvNid: dottedParentNodeId n: (ast.nodes.get i: call.callable)
-    (orderArgAt
+    (orderArgAtWith
         :ast
         :symtab
         :ctx
         st: ord
         mark: mk
         text: recv
+        tf: recvF
         nid: recvNid
         byPtr: true
         slot: 0
@@ -7060,59 +7086,18 @@ orderSetSlot: function {ctx: Ctx st: orderstate slot: u64 text: String.take} is 
     ctx.orderVals.set i: st.valBase + slot val: text
 }
 
-# orderPart -- one part of a call, just built from `mark`, placed in evaluation
+# orderPartWith -- one part of a call, whose facts are `tf`, just built from `mark`, placed in evaluation
 # order. Parts are evaluated in the order they are written. C leaves a call's
 # arguments and an operator's operands unsequenced, so a part that is not
 # constant is read into an ordered temp first when something evaluated after it
 # could change what it reads or see what it does: a later part that may write,
-# or a later part's hoists. A part that only READS (isPureCText) needs no temp
+# or a later part's hoists. A part that only READS (its facts say so) needs no temp
 # when every part after it only reads too -- nothing can change what it read --
 # and a part that may write needs one only when anything not constant follows
 # it. So a part waits until what follows decides: the last one stays in the
 # call, and so does every reading part after the last writing one. The first
 # such part's hoists stay where the statement declares them: nothing is
 # evaluated before them.
-orderPart: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    st: orderstate.borrow
-    # where the pending hoists stood before the part was built
-    mark: hoistmark
-    text: String.take
-    # a literal, a folded constant, or an address no part can move
-    constant: bool
-    # the function and parameter a temp's C type is spelled from
-    fid: ztypes.tid
-    pid: ztypes.tid
-    pname: zast.nameid
-    # the temp's C type when the caller spells it, "" to spell it from the above
-    ctype: StringView
-    # the parameter slot the part fills
-    slot: u64
-    # the node whose value the text is, which types a scalar's temp; 0 for none
-    valueNid: zast.nodeid.zero
-} is {
-    tf: factsOfText s: text.stringView
-    (orderPartWith
-        :ast
-        :symtab
-        :ctx
-        :st
-        :mark
-        :text
-        :tf
-        :constant
-        :fid
-        :pid
-        :pname
-        :ctype
-        :slot
-        :valueNid
-    )
-}
-
-# orderPartWith -- orderPart for a part whose facts are `tf`.
 orderPartWith: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -7169,7 +7154,7 @@ orderPartWith: function {
 
 # isPureCText -- the emitted C text of a part reads and does nothing else: no
 # call, no assignment, no increment, no comma, no block. Its value can change
-# only if something evaluated around it writes, which is what orderPart asks of
+# only if something evaluated around it writes, which is what orderPartWith asks of
 # the parts after it. Anything the scan cannot vouch for is not pure, and keeps
 # its temp.
 isPureCText: function {s: StringView} out bool is {
@@ -7374,22 +7359,9 @@ orderClose: function {prefix: String.take callee: StringView args: StringView} o
     return r
 }
 
-# orderConstant -- a part whose evaluation no other part can observe or affect:
+# orderConstantWith -- a part, whose facts are `tf`, whose evaluation no other part can observe or affect:
 # a literal or a folded constant, an address of a plain place, or a pointer a
 # pointer parameter is handed on.
-orderConstant: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    n: astnode.view
-    text: StringView
-    # the parameter takes the part by pointer
-    byPtr: bool
-} out bool is {
-    return (orderConstantWith :ast :symtab :ctx :n :text tf: (factsOfText s: text) :byPtr)
-}
-
-# orderConstantWith -- orderConstant for a part whose facts are `tf`.
 orderConstantWith: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -12745,26 +12717,9 @@ orderJoinSlots: function {ctx: Ctx.view st: orderstate count: u64} out String is
     return args
 }
 
-# orderArgAt -- an argument whose value is node `nid` (0 for none), just built
+# orderArgAtWith -- an argument whose facts are `tf` and whose value is node `nid` (0 for none), just built
 # from `mark`, placed in evaluation order into `slot`. A temp is typed as its own
 # expression.
-orderArgAt: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    st: orderstate.borrow
-    mark: hoistmark
-    text: String.take
-    nid: zast.nodeid
-    # the parameter takes the argument by pointer
-    byPtr: bool
-    slot: u64
-} is {
-    tf: factsOfText s: text.stringView
-    orderArgAtWith :ast :symtab :ctx :st :mark :text :tf :nid :byPtr :slot
-}
-
-# orderArgAtWith -- orderArgAt for an argument whose facts are `tf`.
 orderArgAtWith: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -14397,15 +14352,17 @@ orderFnptrArg: function {
         return
     }
     mk: pendingHoistMark :ctx
-    av: emitExpr :ast :symtab :ctx n: op
-    constant: orderConstant :ast :symtab :ctx n: op text: av.stringView byPtr: false
-    (orderPart
+    avF: cfacts
+    av: emitExprWith :ast :symtab :ctx n: op facts: avF
+    constant: orderConstantWith :ast :symtab :ctx n: op text: av.stringView tf: avF byPtr: false
+    (orderPartWith
         :ast
         :symtab
         :ctx
         st: ord
         mark: mk
         text: av
+        tf: avF
         :constant
         fid: fnTid
         pid: ztypes.tid.zero
@@ -20251,8 +20208,6 @@ orderRowOperand: function {
         orderArgAtWith :ast :symtab :ctx st: ord mark: mk text: vf tf: vF :nid byPtr: false :slot
         return
     }
-    stateFacts facts: opF from: callFacts
-    orderArgAt :ast :symtab :ctx st: ord mark: mk text: v :nid byPtr: false :slot
 }
 
 # operandIsStr -- a string operand is a String, not a view: a String typedef
@@ -20461,39 +20416,45 @@ emitListEqOperator: function {
 } out String is {
     ord: orderBegin :ctx slots: 2
     mk: pendingHoistMark :ctx
+    laF: cfacts
     la: (listOperandAddr
         :ast
         :symtab
         :ctx
         nid: lhsNid
         tid: owner
+        facts: laF
     )
-    (orderArgAt
+    (orderArgAtWith
         :ast
         :symtab
         :ctx
         st: ord
         mark: mk
         text: la
+        tf: laF
         nid: lhsNid
         byPtr: true
         slot: 0
     )
     mkR: pendingHoistMark :ctx
+    raF: cfacts
     ra: (listOperandAddr
         :ast
         :symtab
         :ctx
         nid: rhsNid
         tid: owner
+        facts: raF
     )
-    (orderArgAt
+    (orderArgAtWith
         :ast
         :symtab
         :ctx
         st: ord
         mark: mkR
         text: ra
+        tf: raF
         nid: rhsNid
         byPtr: true
         slot: 1
@@ -20521,15 +20482,21 @@ listOperandAddr: function {
     ctx: Ctx
     nid: zast.nodeid
     tid: ztypes.tid
+    facts: cfacts.borrow
 } out String is {
     if (pathIsPointer :ast :symtab :ctx n: (ast.nodes.get i: nid)) then {
-        return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: nid))
+        return (emitExprWith :ast :symtab :ctx n: (ast.nodes.get i: nid) :facts)
     }
     lvF: cfacts
     lv: operandValueC :ast :symtab :ctx :nid facts: lvF
-    if lvF.literal then return "&\{lv}"
+    if lvF.literal then return (stating :facts from: (addrFacts e: lvF) text: "&\{lv}")
     lf: receiverOnceAt :ast :symtab :ctx baseNid: nid text: lv.stringView textF: lvF :tid
-    return "&\{lf}"
+    # the operand's own place, or the temp a value was bound to
+    return (stating
+        :facts
+        from: (addrFacts e: (if lvF.place then lvF else pathFacts))
+        text: "&\{lf}"
+    )
 }
 
 # appendVtableOperator -- an operator dispatched through an interface's vtable,
@@ -41634,6 +41601,7 @@ wrapperCreateArg: function {
     call: zast.callrow.view
     label: StringView
     ptid: ztypes.tid
+    facts: cfacts.borrow
 } out String is {
     prtid: canonTypeId :symtab tid: ptid
     arx579: u64
@@ -41649,7 +41617,7 @@ wrapperCreateArg: function {
                     # any other slot (standInText); a value that already is the
                     # protocol passes as it stands, a header by value
                     aF: cfacts
-                    return (standInText
+                    sit: (standInText
                         :ast
                         :symtab
                         :ctx
@@ -41663,6 +41631,7 @@ wrapperCreateArg: function {
                         )
                         facts: aF
                     )
+                    return (stating :facts from: aF text: sit)
                 }
                 if (symtab.reg.typetypeOf typeId: prtid) == ztypes.ztypetype.classType then {
                     a2op: ast.nodes.get i: a.operation
@@ -41672,16 +41641,24 @@ wrapperCreateArg: function {
                     abr2: aliasResolveAt :symtab :ctx nid: abn2 name: ab2 vid: argBaseVid
                     ab2v: ztypes.vid
                     if abr2.stringView == ab2 then ab2v = argBaseVid
-                    abr2C: emitLocalAtomNameAt :symtab :ctx nid: abn2 name: ab2 vid: argBaseVid
-                    ab2pfx: "&".string
-                    if (isPtrVid :ctx vid: ab2v) then ab2pfx = ""
-                    return "\{ab2pfx}\{abr2C}"
+                    abr2F: cfacts
+                    abr2C: (emitLocalAtomNameAtWith
+                        :symtab
+                        :ctx
+                        nid: abn2
+                        name: ab2
+                        vid: argBaseVid
+                        facts: abr2F
+                    )
+                    if (isPtrVid :ctx vid: ab2v) then return (stating :facts from: abr2F text: abr2C
+                    )
+                    return (stating :facts from: (addrFacts e: abr2F) text: "&\{abr2C}")
                 }
-                return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: a.operation))
+                return (emitExprWith :ast :symtab :ctx n: (ast.nodes.get i: a.operation) :facts)
             }
         }
     }
-    return "0"
+    return (stating :facts from: constFacts text: "0")
 }
 
 # emitIoWrapperCreate -- `io.BufWriter.create to: w.borrow capacity: 16` ->
@@ -41743,6 +41720,7 @@ emitIoWrapperCreate: function {
         k = k + 1
         pnm: pnames.get i: pi
         mk: pendingHoistMark :ctx
+        astrF: cfacts
         astr: (wrapperCreateArg
             :ast
             :symtab
@@ -41750,15 +41728,17 @@ emitIoWrapperCreate: function {
             :call
             label: pnm.stringView
             ptid: (pids.get i: pi)
+            facts: astrF
         )
         anid: ctorArgNodeByLabel :ast :call label: pnm.stringView
-        (orderArgAt
+        (orderArgAtWith
             :ast
             :symtab
             :ctx
             st: ord
             mark: mk
             text: astr
+            tf: astrF
             nid: anid
             byPtr: false
             slot: pi
@@ -42147,15 +42127,17 @@ emitCliSpecCreate: function {
         k = k + 1
         pnm: pnames.get i: pi
         mk: pendingHoistMark :ctx
-        astr: ctorArgByLabel :ast :symtab :ctx :call label: pnm.stringView
+        astrF: cfacts
+        astr: ctorArgByLabelWith :ast :symtab :ctx :call label: pnm.stringView facts: astrF
         anid: ctorArgNodeByLabel :ast :call label: pnm.stringView
-        (orderArgAt
+        (orderArgAtWith
             :ast
             :symtab
             :ctx
             st: ord
             mark: mk
             text: astr
+            tf: astrF
             nid: anid
             byPtr: false
             slot: pi
