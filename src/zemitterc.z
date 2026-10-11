@@ -1109,6 +1109,33 @@ convBodyOf: function {srcK: ztypes.numkind dstK: ztypes.numkind lossy: bool} out
     return r
 }
 
+# convRowHead -- a conversion row's head, `[system.<src>.<dst> ...]`: the
+# helpers the row calls, and whether it is a value, go inside the bracket.
+convRowHead: function {srcK: ztypes.numkind dstK: ztypes.numkind lossy: bool} out String is {
+    sn: ztypes.numkindName k: srcK
+    dn: ztypes.numkindName k: dstK
+    head: "[system.\{sn}.\{dn}"
+    nds: convNeeds :srcK :dstK
+    if nds.length > 0 then {
+        head.append " needs="
+        head.append nds
+    }
+    if (convIsValue :srcK :dstK :lossy) then head.append " form=value"
+    head.append "]"
+    return head
+}
+
+# convIsValue -- whether the conversion's row is a value (`form=value`): a
+# lossless cast, or the same value handed back. The f16 and 128-bit helpers are
+# calls, and a lossy conversion builds its result in a statement expression.
+convIsValue: function {srcK: ztypes.numkind dstK: ztypes.numkind lossy: bool} out bool is {
+    if lossy then return false
+    if srcK == dstK then return true
+    half: (srcK == ztypes.numkind.f16Type) or (dstK == ztypes.numkind.f16Type)
+    wide: ((kindBits k: srcK) == 128) or ((kindBits k: dstK) == 128)
+    return (half or wide).not
+}
+
 # convNeeds -- the helper fragments a conversion row calls, as its `needs=`
 # list: the int128 helpers for a 128-bit integer on either side, the f16 ones
 # for an f16. "" for a row that needs neither.
@@ -1162,18 +1189,7 @@ nativeConvRows: function out String is {
             di = di + 1
             lo: convIsLossy srcK: s dstK: d
             bd: convBodyOf srcK: s dstK: d lossy: lo
-            dn: ztypes.numkindName k: d
-            key: "[system.\{sn}.\{dn}]"
-            nds: convNeeds srcK: s dstK: d
-            if nds.length > 0 then {
-                # the helpers the row calls: the attribute goes inside the
-                # head's bracket
-                kw: (key.stringView.substring from: 0 to: key.length - 1).string
-                kw.append " needs="
-                kw.append nds
-                kw.append "]"
-                key = kw.take
-            }
+            key: convRowHead srcK: s dstK: d lossy: lo
             pad: key.copy
             for pad.length < 30 loop pad.append " "
             row: "\{pad} \{bd}\n"
@@ -1199,9 +1215,11 @@ emitNumericCast: function {
     ast: Ast.view
     ctx: Ctx
     val: StringView
+    valF: cfacts
     symtab: zenv.ZSymbolTable.view
     retTid: ztypes.tid
     key: StringView
+    facts: cfacts.borrow
 } out String is {
     body: nativeImplOf :ctx path: key
     if body.length == 0 then {
@@ -1270,7 +1288,7 @@ emitNumericCast: function {
             bv.append from: (ctxCname :ctx tid: retTid)
         }
     }
-    return (fillHolesForCtx
+    filled: (fillHolesForCtx
         :ast
         :symtab
         :ctx
@@ -1281,6 +1299,10 @@ emitNumericCast: function {
         rawNames: rn
         rawVals: rv
     )
+    if (nativeValueRowOf :ctx path: key) then {
+        return (stating :facts from: (operandFacts e: valF place: false) text: filled)
+    }
+    return (stating :facts from: callFacts text: filled)
 }
 
 
@@ -1901,11 +1923,13 @@ UnitReq: class {
 }
 
 # nativeWord -- the words natives.tbl and the runtime fragments spell that the
-# loader acts on: the pointer-arguments flag, the unit-order row, the two
-# runtime units it orders specially, and the two type holes the emitter fills
-# itself. Read through a zast.Vocab (ctx.nativeWords), never compared as text.
+# loader acts on: the pointer-arguments and value-form flags, the unit-order
+# row, the two runtime units it orders specially, and the two type holes the
+# emitter fills itself. Read through a zast.Vocab (ctx.nativeWords), never
+# compared as text.
 nativeWord: data {
     argsPtr: "args=ptr"
+    formValue: "form=value"
     unitsRow: "@units"
     unitIo: "io"
     unitPrelude: "prelude"
@@ -1935,6 +1959,8 @@ NativeHead: class {
     spec: String
     # `args=ptr`: the arguments arrive as pointers
     ptr: bool
+    # `form=value`: the body is a value computed from its holes
+    value: bool
     # `call=`: on a StringView row, how a call of the member is emitted (svcall)
     call: String
     # `pulls=`: the other units' members demanding this one demands
@@ -1958,6 +1984,7 @@ NativeHead: class {
             cst: String
             spec: String
             ptr: false
+            value: false
             call: String
             pulls: String
             link: String
@@ -1982,7 +2009,9 @@ NativeHead: class {
     # architecture rules count against this file. A word it does not know is
     # ignored.
     setAttr: function {:this f: StringView words: zast.Vocab.view} is {
-        if (words.slotOf text: f) == nativeWord.slot.argsPtr then this.ptr = true
+        w: words.slotOf text: f
+        if w == nativeWord.slot.argsPtr then this.ptr = true
+        if w == nativeWord.slot.formValue then this.value = true
         fo: f.stripPrefix p: "frag="
         match (
             fo
@@ -2184,8 +2213,8 @@ recordFragmentRow: function {ctx: Ctx key: StringView frag: StringView dem: Stri
 
 # recordRowBodies -- the row's tables: its body, under `const=` a
 # constant-operand variant with its position and otherwise the plain body,
-# then the runtime it needs, pointer arguments and folding, each keyed by the
-# path
+# then the runtime it needs, pointer arguments, value form and folding, each
+# keyed by the path
 recordRowBodies: function {ctx: Ctx h: NativeHead.view body: StringView} is {
     if body.length > 0 then {
         kb: h.key.copy
@@ -2208,6 +2237,10 @@ recordRowBodies: function {ctx: Ctx h: NativeHead.view body: StringView} is {
     if h.ptr then {
         kp: h.key.copy
         ctx.nativePtrArgs.set key: kp value: true
+    }
+    if h.value then {
+        kv: h.key.copy
+        ctx.nativeValueRows.set key: kv value: true
     }
 }
 
@@ -2475,6 +2508,13 @@ rowNeedAddOne: function {ctx: Ctx key: StringView need: StringView} is {
 # they must be projected as lvalues rather than values.
 nativePtrArgsOf: function {ctx: Ctx.view path: StringView} out bool is {
     return ((ctx.nativePtrArgs.get key: path.asString).or d: false)
+}
+
+# nativeValueRowOf -- true when a row's body is a value computed from its holes
+# (`form=value`): its facts are its operands', where any other row's are a
+# call's.
+nativeValueRowOf: function {ctx: Ctx.view path: StringView} out bool is {
+    return ((ctx.nativeValueRows.get key: path.asString).or d: false)
 }
 
 # emitFail -- record an emission failure for an unhandled construct. The
@@ -3699,6 +3739,9 @@ Ctx: class {
     nativePulls: (Map String V: String)
     # which natives take their arguments by pointer
     nativePtrArgs: (MapRV String v: bool)
+    # which rows are values computed from their holes (`form=value`); a
+    # `const=` variant is marked as its plain row is
+    nativeValueRows: (MapRV String v: bool)
     # a row that answers only when named ARGUMENTS are compile-time constants,
     # kept beside the ordinary body rather than in it: `nativeTbl` is keyed by
     # path alone, so a second row of the same path would overwrite the first
@@ -6227,6 +6270,7 @@ emitNativeArgMethod: function {
     ctx: Ctx
     call: zast.callrow.view
     ownerTid: ztypes.tid
+    facts: cfacts.borrow
 } out String is {
     if call.arguments.count.u64 == 0 then return ""
     # the member name decides whether to look at all, and it is read through a
@@ -6252,8 +6296,14 @@ emitNativeArgMethod: function {
     if (body.stringView.contains needle: "@A1@").not then return ""
     rowNeedAdd :ctx key: key.stringView
     mk: pendingHoistMark :ctx
-    facts: cfacts
-    recv: emitDottedReceiver :ast :symtab :ctx callable: (ast.nodes.get i: call.callable) :facts
+    recvF: cfacts
+    recv: (emitDottedReceiver
+        :ast
+        :symtab
+        :ctx
+        callable: (ast.nodes.get i: call.callable)
+        facts: recvF
+    )
     if recv.length == 0 then return ""
     if (dottedReceiverIsPtr
         :ast
@@ -6320,7 +6370,9 @@ emitNativeArgMethod: function {
         rawNames: rn
         rawVals: rv
     )
-    return (orderWrap prefix: oprefix call: filled)
+    # a call's facts even for a value row: the arguments' own are not kept
+    # here, and call facts cost at most a temp
+    return (stating :facts from: callFacts text: (orderWrap prefix: oprefix call: filled))
 }
 
 # nativeHoleValues -- @V@, @A1@, @A2@, ... and the texts in the slots of the call
@@ -6557,6 +6609,21 @@ operandFacts: function {e: cfacts place: bool} out cfacts is {
         literal: false
         once: e.once
         pure: e.pure
+        path: false
+        stated: true
+    )
+}
+
+# valueFacts -- a value computed from two operands whose facts are `a` and `b`,
+# by a natives.tbl `form=value` row: no storage, evaluated exactly as the
+# operands are -- repeated work where either repeats it, only reading where
+# both only read.
+valueFacts: function {a: cfacts b: cfacts} out cfacts is {
+    return (cfacts
+        place: false
+        literal: false
+        once: a.once or b.once
+        pure: a.pure and b.pure
         path: false
         stated: true
     )
@@ -8451,6 +8518,7 @@ emitOperatorCallForm: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
+    facts: cfacts.borrow
 } out String is {
     mnO: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable)
     if mnO.length == 0 then return ""
@@ -8581,6 +8649,7 @@ emitOperatorCallForm: function {
         :lhsNid
         :rhsNid
         op: mnO
+        :facts
     )
 }
 
@@ -8600,6 +8669,7 @@ emitSynthOperatorCallForm: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
+    facts: cfacts.borrow
 } out String is {
     mnS: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable)
     if mnS.length == 0 then return ""
@@ -8620,7 +8690,7 @@ emitSynthOperatorCallForm: function {
         parentTypeId: ownerS
         nameId: nidS
     ).not then return ""
-    return (emitOperatorCallForm :ast :symtab :ctx :call)
+    return (emitOperatorCallForm :ast :symtab :ctx :call :facts)
 }
 
 # callableBoxElem -- boxMemberElem of a dotted callable: the element type a
@@ -14521,7 +14591,7 @@ emitNamedCalleeChain: function {
     # already worked both ways -- its body is an ordinary method the dotted-call
     # legs above reach -- but a NATIVE one is nobody's dispatcher to emit, so
     # the call form arrived here.
-    opc: emitOperatorCallForm :ast :symtab :ctx :call
+    opc: emitOperatorCallForm :ast :symtab :ctx :call :facts
     if opc.length > 0 then return opc
     # a yield hoisted out of expression position: the suspension has already
     # run as its own statement and left the resume value in a temp, so what is
@@ -14701,6 +14771,7 @@ emitMethodDeclCall: function {
     ownerTid: ztypes.tid
     fnptrField: bool
     isCreate: bool
+    facts: cfacts.borrow
 } out String is {
     # the owner is the TEMPLATE for a native collection's method (the mono's
     # methods are the template's); its family is its own id
@@ -14714,7 +14785,7 @@ emitMethodDeclCall: function {
     if rstr.length > 0 then return rstr
     # a native that takes arguments answers from its own row, before the
     # receiver-only and operator legs get a chance to not know it
-    rnam: emitNativeArgMethod :ast :symtab :ctx :call :ownerTid
+    rnam: emitNativeArgMethod :ast :symtab :ctx :call :ownerTid :facts
     if rnam.length > 0 then return rnam
     ott: symtab.reg.typetypeOf typeId: ownerTid
     isSpec: ott.isInterface
@@ -14825,6 +14896,7 @@ emitCallByDecl: function {
             :ownerTid
             fnptrField: rdecl.fnptrField
             isCreate: rdecl.name == zast.wellKnown.slot.wkCreate
+            :facts
         )
     }
     if rkind.funcDecl then return (emitFuncDeclCall :ast :symtab :ctx :call :rtid :facts)
@@ -14884,10 +14956,10 @@ emitCallValue: function {
     eopN9: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable)
     isOp9: ztypecheck.isOperatorName name: eopN9
     if call.arguments.count.u64 == 1 when isOp9 then {
-        eopc: emitOperatorCallForm :ast :symtab :ctx :call
+        eopc: emitOperatorCallForm :ast :symtab :ctx :call :facts
         if eopc.length > 0 then return eopc
     }
-    sopc: emitSynthOperatorCallForm :ast :symtab :ctx :call
+    sopc: emitSynthOperatorCallForm :ast :symtab :ctx :call :facts
     if sopc.length > 0 then return sopc
     cbd: emitCallByDecl :ast :symtab :ctx :call :facts
     if cbd.length > 0 then return cbd
@@ -18273,6 +18345,7 @@ emitDottedNativeMarker: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     n: zast.dottedpathrow.view
+    facts: cfacts.borrow
 } out String is {
     mn2Id: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
     # a data block's element read (`codes.ht`, `consts.codes.ht`, `primes.0`):
@@ -18297,16 +18370,16 @@ emitDottedNativeMarker: function {
         mn2n: zast.nameTextAt :ast ref: mn2Id
         needsAddM :ctx uname: nnu.stringView memb: "@unit"
         needsAddM :ctx uname: nnu.stringView memb: mn2n.stringView
-        return "z_\{nnu}_\{mn2n}()"
+        return (stating :facts from: callFacts text: "z_\{nnu}_\{mn2n}()")
     }
     # `.private` is a compile-time friend marker -- it emits the receiver itself.
     if (zast.markerKindOfName id: mn2Id).privateMarker then {
-        return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent))
+        return (emitExprWith :ast :symtab :ctx n: (ast.nodes.get i: n.parent) :facts)
     }
     # `.borrow` on a value is the ownership marker, and the checker accepts it
     # as one; it emits the receiver itself.
     if (zast.markerKindOfName id: mn2Id).borrowMarker then {
-        return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent))
+        return (emitExprWith :ast :symtab :ctx n: (ast.nodes.get i: n.parent) :facts)
     }
     # `.take` / `.hold` hands on the base itself (markerHandsOnBase)
     if (ztypecheck.isMoveMarkerId nameId: mn2Id) when (markerHandsOnBase
@@ -18315,15 +18388,17 @@ emitDottedNativeMarker: function {
         :ctx
         pnid: n.parent
     ) then {
-        return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent))
+        return (emitExprWith :ast :symtab :ctx n: (ast.nodes.get i: n.parent) :facts)
     }
     # a runtime numeric conversion `<expr>.<numtype>`
     ncKey: convRowKeyOf :ast :symtab :ctx :n :mn2Id
     if ncKey.length > 0 then {
-        ncVal: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent)
+        ncValF: cfacts
+        ncVal: emitExprWith :ast :symtab :ctx n: (ast.nodes.get i: n.parent) facts: ncValF
         if (pathIsPointer :ast :symtab :ctx n: (ast.nodes.get i: n.parent)) then {
             ncDeref: "(*\{ncVal})"
             ncVal = ncDeref.copy
+            ncValF = operandFacts e: ncValF place: true
         }
         ncRet: stampIdOf :symtab nid: n.nodeid
         ncRetM: chaseAggregateTypedef :symtab :ctx tid: ncRet
@@ -18331,9 +18406,11 @@ emitDottedNativeMarker: function {
             :ast
             :ctx
             val: ncVal.stringView
+            valF: ncValF
             :symtab
             retTid: ncRetM
             key: ncKey.stringView
+            :facts
         )
     }
     return ""
@@ -18551,6 +18628,7 @@ emitDottedRead: function {
         :symtab
         :ctx
         :n
+        :facts
     )
     if dnm.length > 0 then return dnm
     mn2: aliasOrChild :ast :symtab aliasId: n.nodeid childId: n.child
@@ -19121,6 +19199,7 @@ emitOperatorAt: function {
     lhsNid: zast.nodeid
     rhsNid: zast.nodeid
     op: StringView
+    facts: cfacts.borrow
 } out String is {
     if owner.isZero then {
         emitFail :ctx what: "operator '\{op}' resolved no declaring type" line: lineno
@@ -19230,8 +19309,27 @@ emitOperatorAt: function {
             if (constPosIsFirstOnly pos: cpos.stringView) then body = cbody.copy
         }
     }
+    return (emitOperatorRow :ast :symtab :ctx :owner :key :body :lhsNid :rhsNid :facts)
+}
+
+# emitOperatorRow -- a native operator's natives.tbl row `body`, keyed `key`:
+# its two operands built in written order, in the form the row takes them, its
+# holes filled, and its facts stated -- a value row's from its operands, any
+# other row's a call's.
+emitOperatorRow: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    owner: ztypes.tid
+    key: String
+    body: String
+    lhsNid: zast.nodeid
+    rhsNid: zast.nodeid
+    facts: cfacts.borrow
+} out String is {
     rowNeedAdd :ctx key: key.stringView
     ord: orderBegin :ctx slots: 2
+    lhsF: cfacts
     (orderRowOperand
         :ast
         :symtab
@@ -19241,7 +19339,9 @@ emitOperatorAt: function {
         nid: lhsNid
         slot: 0
         :ord
+        opF: lhsF
     )
+    rhsF: cfacts
     (orderRowOperand
         :ast
         :symtab
@@ -19251,6 +19351,7 @@ emitOperatorAt: function {
         nid: rhsNid
         slot: 1
         :ord
+        opF: rhsF
     )
     oprefix: orderFinish :ctx st: ord
     # a typedef emits no helper of its own: the chain end owns it
@@ -19259,7 +19360,11 @@ emitOperatorAt: function {
         tcnTid = ztypecheck.typedefChaseTid st: symtab tid: owner
     }
     filled: fillOperatorRow :ast :symtab :ctx :ord :body :key :tcnTid
-    return (orderWrap prefix: oprefix call: filled)
+    # a value row with no temps ahead of it reads as its operands do
+    if oprefix.length == 0 when (nativeValueRowOf :ctx path: key.stringView) then {
+        return (stating :facts from: (valueFacts a: lhsF b: rhsF) text: filled)
+    }
+    return (stating :facts from: callFacts text: (orderWrap prefix: oprefix call: filled))
 }
 
 # fillOperatorRow -- a native operator row's C: its holes filled from the
@@ -19356,12 +19461,16 @@ orderRowOperand: function {
     nid: zast.nodeid
     slot: u64
     ord: orderstate.borrow
+    # the operand's facts as the slot holds it: a string operand's projection
+    # is taken for a call's result
+    opF: cfacts.borrow
 } is {
     mk: pendingHoistMark :ctx
     vF: cfacts
     v: operandValueC :ast :symtab :ctx :nid facts: vF
     n: ast.nodes.get i: nid
     if (isStringyTid :ctx tid: owner).not then {
+        stateFacts facts: opF from: vF
         constant: orderConstantWith :ast :symtab :ctx :n text: v.stringView tf: vF byPtr: false
         (orderPartWith
             :ast
@@ -19399,6 +19508,7 @@ orderRowOperand: function {
         )
         v = vf.take
     }
+    stateFacts facts: opF from: callFacts
     orderArgAt :ast :symtab :ctx st: ord mark: mk text: v :nid byPtr: false :slot
 }
 
@@ -33557,6 +33667,7 @@ emitC: function {
         nativeNeed: (Map String V: String)
         nativePulls: (Map String V: String)
         nativePtrArgs: (MapRV String v: bool)
+        nativeValueRows: (MapRV String v: bool)
         nativeKeys: (MapRV String v: bool)
         cWords: (zast.Vocab.create block: cReserved)
         opWords: (zast.Vocab.create block: opSpelling)

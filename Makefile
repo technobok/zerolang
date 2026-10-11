@@ -689,7 +689,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2166544
+ALLOC_BASELINE := 2168795
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1892,7 +1892,9 @@ clean:
 # exceptions); every fragment is referenced (by the emitter or a natives.tbl
 # frag= list); and every z_@Name@, @ARM_canon.arm@ and @MEMBER_canon.name@ hole a
 # fragment spells names a declared type, arm or member. No fragment spells a tag
-# constant or a generated struct's member literally.
+# constant or a generated struct's member literally. A natives.tbl `form=value`
+# row's body calls nothing and opens no statement expression (its facts are its
+# operands'), and a `const=` variant is a value exactly when its plain row is.
 NATIVE_GUARD_EXCEPTIONS := io.print io.stdin io.stdout io.stderr os.env net.pollReadable
 
 native-guard:
@@ -1978,8 +1980,23 @@ native-guard:
 	    echo "native-guard: $$f spells a member of a generated struct literally (an arm in \`data\`, an inline arm, a vtable slot); name it @MEMBER_<canon>.<name>@ (or @OKMEMBER@/@ERRMEMBER@ in a conversion row)"; fail=1; \
 	  fi; \
 	done; \
+	nv=$$(grep -cE '^\[[^]]* form=value[] ]' src/runtime/natives.tbl); \
+	badv=$$(grep -E '^\[[^]]* form=value[] ]' src/runtime/natives.tbl \
+	  | awk '{ b = $$0; sub(/^\[[^]]*\] */, "", b); gsub(/\(\([A-Za-z_][A-Za-z0-9_ ]*\*?\)/, "((", b); \
+	      if (b ~ /\(\{/ || b ~ /[A-Za-z_][A-Za-z0-9_]* *\(/) print "    " $$0 }'); \
+	if [ -n "$$badv" ]; then \
+	  echo "native-guard: a form=value row's body calls or opens a statement expression -- drop the mark, and its result is taken for a call's:"; \
+	  echo "$$badv"; fail=1; \
+	fi; \
+	badc=$$(awk '/^\[/ { h = $$0; sub(/\].*/, "", h); sub(/^\[/, "", h); split(h, w, " "); \
+	      v = (h ~ / form=value( |$$)/); if (h ~ / const=/) cf[w[1]] = v; else pf[w[1]] = v } \
+	    END { for (k in cf) if ((k in pf) && cf[k] != pf[k]) print "    " k }' src/runtime/natives.tbl); \
+	if [ -n "$$badc" ]; then \
+	  echo "native-guard: a const= variant and its plain row disagree on form=value (the loader keys the mark by path):"; \
+	  echo "$$badc"; fail=1; \
+	fi; \
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
-	echo "native-guard OK: native declarations and runtime fragments consistent (incl. no orphans, $$nh fragment holes known, $$na tag-constant holes name declared arms, $$nm member holes name declared members)"
+	echo "native-guard OK: native declarations and runtime fragments consistent (incl. no orphans, $$nh fragment holes known, $$na tag-constant holes name declared arms, $$nm member holes name declared members, $$nv form=value rows call nothing)"
 
 # generic-param-guard -- L023 (a parameter's case follows its bound's) over the
 # examples and fixtures, which no lint gate reads.
