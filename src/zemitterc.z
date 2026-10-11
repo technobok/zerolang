@@ -46,6 +46,22 @@ OrderPend: class {
     facts: cfacts
 }
 
+# LoopFrame -- one loop, or do{}while(0) block, open around the code being
+# emitted: its break label's number, whether it is a do-block (whose
+# `continue` targets the loop around it), the frees marks at its entry (so a
+# jump out frees exactly the body's locals, and its collections), and the
+# per-iteration cleanup a jump out runs -- an owned payload's destroy, empty
+# for none -- with the variable it destroys.
+LoopFrame: class {
+    id: u64
+    isDo: bool
+    freesMark: u64
+    listMark: u64
+    cleanup: String
+    cleanupVar: String
+    cleanupVid: ztypes.vid
+}
+
 # OwedFree -- one destructor owed at the end of a block: the C name of the
 # local it destroys, the statement that destroys it (empty for a plain String,
 # whose free is composed where it is emitted so it can take that site's
@@ -3937,10 +3953,8 @@ Ctx: class {
     # the next `_wc` number: the guard a suspending `when` condition computes
     # into, since its value has to outlive the `if` that computes it
     whenGuardCtr: u64
-    # the enclosing loops' break labels, innermost last
-    breakLabels: ListVal u64
-    # whether each is a do-while, whose continue target differs
-    breakLabelIsDo: ListVal bool
+    # the enclosing loops and do-blocks, innermost last
+    loops: List LoopFrame
     # which continue labels were actually jumped to, so an unused one is not
     # emitted
     contLabelUsed: (IdMapV u64 v: bool)
@@ -3948,17 +3962,6 @@ Ctx: class {
     breakLabelCtr: u64
     # which break labels were actually used
     breakLabelUsed: (IdMapV u64 v: bool)
-    # the frees mark at each loop's entry, so a break frees exactly the body's
-    # locals
-    breakFreesMarks: ListVal u64
-    # the same for collection frees
-    breakListMarks: ListVal u64
-    # the cleanup a break must run before jumping
-    breakLabelCleanup: List String
-    # the variable each cleanup entry destroys
-    breakLabelCleanupVar: List String
-    # variables for breakLabelCleanupVar, for the same reason as TmpCtr's
-    breakLabelCleanupRaw: ListVal ztypes.vid
     # variables that borrow rather than own, so scope exit frees nothing for
     # them
     borrowedVars: (IdMapV ztypes.vid v: bool)
@@ -7529,18 +7532,16 @@ tmpNext: function {ctx: Ctx tmp: TmpCtr} out u64 is {
 pushLoopLabel: function {ctx: Ctx tmp: TmpCtr.view isDo: bool} out u64 is {
     id: ctx.breakLabelCtr
     ctx.breakLabelCtr = id + 1
-    ctx.breakLabels.append id
-    isDoC: isDo
-    ctx.breakLabelIsDo.append isDoC
-    ctx.breakFreesMarks.append tmp.frees.length
-    ctx.breakListMarks.append tmp.listFrees.length
-    cl: String
-    ctx.breakLabelCleanup.append cl
-    cv: String
-    ctx.breakLabelCleanupVar.append cv
-    cvr: ztypes.vid
-    ctx.breakLabelCleanupRaw.append cvr
-    return ctx.breakLabelCtr - 1
+    ctx.loops.append (LoopFrame
+        :id
+        :isDo
+        freesMark: tmp.frees.length
+        listMark: tmp.listFrees.length
+        cleanup: String
+        cleanupVar: String
+        cleanupVid: ztypes.vid
+    )
+    return id
 }
 
 # emitContLabel -- the loop-body continue target: a `continue` inside a
@@ -7559,17 +7560,7 @@ emitContLabel: function {ctx: Ctx.view id: u64 ind: StringView buf: String.borro
 
 # emit the C label that closes loop `id`.
 popLoopLabel: function {ctx: Ctx id: u64 ind: StringView buf: String.borrow} is {
-    if ctx.breakLabels.length > 0 then ctx.breakLabels.pop
-    if ctx.breakLabelIsDo.length > 0 then ctx.breakLabelIsDo.pop
-    if ctx.breakFreesMarks.length > 0 then {
-        ctx.breakFreesMarks.pop
-        ctx.breakListMarks.pop
-    }
-    if ctx.breakLabelCleanup.length > 0 then {
-        ctx.breakLabelCleanup.pop
-        ctx.breakLabelCleanupVar.pop
-        ctx.breakLabelCleanupRaw.pop
-    }
+    if ctx.loops.length > 0 then ctx.loops.pop
     uo: ctx.breakLabelUsed.get key: id
     match (
         uo
@@ -22742,15 +22733,18 @@ emitBreakStmt: function {
     buf: String.borrow
 } is {
     emitBreakFrees :symtab :ctx :tmp :ind :buf
-    if ctx.breakLabels.length > 0 then {
-        bid: ctx.breakLabels.get i: ctx.breakLabels.length - 1
-        # an owned-payload loop's per-iteration dtor: the jump
-        # skips the fall-through line, so emit its copy here (a
-        # do-block entry carries an empty cleanup).
-        bcl: ctx.breakLabelCleanup.get i: ctx.breakLabels.length - 1
-        if bcl.length > 0 then {
-            lbc: "\{ind}\{bcl}"
-            buf.append lbc
+    if ctx.loops.length > 0 then {
+        bid: u64
+        {
+            bf: ctx.loops.get i: ctx.loops.length - 1
+            bid = bf.id
+            # an owned-payload loop's per-iteration dtor: the jump
+            # skips the fall-through line, so emit its copy here (a
+            # do-block entry carries an empty cleanup).
+            if bf.cleanup.length > 0 then {
+                lbc: "\{ind}\{bf.cleanup}"
+                buf.append lbc
+            }
         }
         lbkg: "\{ind}goto __zbrk_\{bid};\n"
         buf.append lbkg
@@ -22782,13 +22776,13 @@ emitContinueStmt: function {
         inDo: false
         loopIdx: u64
         hasLoop: false
-        li: ctx.breakLabelIsDo.length
+        li: ctx.loops.length
         if li > 0 then {
-            if (ctx.breakLabelIsDo.get i: li - 1) then inDo = true
+            if (ctx.loops.get i: li - 1).isDo then inDo = true
             sj: li
             for sj > 0 loop {
                 sj = sj - 1
-                if (ctx.breakLabelIsDo.get i: sj).not when hasLoop.not then {
+                if (ctx.loops.get i: sj).isDo.not when hasLoop.not then {
                     loopIdx = sj
                     hasLoop = true
                 }
@@ -22796,24 +22790,25 @@ emitContinueStmt: function {
         }
         if inDo when hasLoop then {
             emitContinueFrees :symtab :ctx :tmp idx: loopIdx :ind :buf
-            ccl: ctx.breakLabelCleanup.get i: loopIdx
-            if ccl.length > 0 then {
-                lcc: "\{ind}\{ccl}"
-                buf.append lcc
+            cid: u64
+            {
+                cf: ctx.loops.get i: loopIdx
+                cid = cf.id
+                if cf.cleanup.length > 0 then {
+                    lcc: "\{ind}\{cf.cleanup}"
+                    buf.append lcc
+                }
             }
-            cid: ctx.breakLabels.get i: loopIdx
             lcg: "\{ind}goto __zcont_\{cid};\n"
             buf.append lcg
             ucn: true
             ctx.contLabelUsed.set key: cid value: ucn
         } else {
             emitBreakFrees :symtab :ctx :tmp :ind :buf
-            if ctx.breakLabelCleanup.length > 0 then {
-                pcl0: (ctx.breakLabelCleanup.get
-                    i: ctx.breakLabelCleanup.length - 1
-                )
-                if pcl0.length > 0 then {
-                    lpc: "\{ind}\{pcl0}"
+            if ctx.loops.length > 0 then {
+                pf0: ctx.loops.get i: ctx.loops.length - 1
+                if pf0.cleanup.length > 0 then {
+                    lpc: "\{ind}\{pf0.cleanup}"
                     buf.append lpc
                 }
             }
@@ -25623,8 +25618,8 @@ emitBreakFrees: function {
     ind: StringView
     buf: String.borrow
 } is {
-    if ctx.breakFreesMarks.length == 0 then return
-    emitContinueFrees :symtab :ctx :tmp idx: ctx.breakFreesMarks.length - 1 :ind :buf
+    if ctx.loops.length == 0 then return
+    emitContinueFrees :symtab :ctx :tmp idx: ctx.loops.length - 1 :ind :buf
 }
 
 # emitContinueFrees -- the destroys owed where an exit leaves the scopes since
@@ -25647,8 +25642,8 @@ emitContinueFrees: function {
         what: "an exit whose destroys the checker did not record"
         line: 0
     )
-    fMark: ctx.breakFreesMarks.get i: idx
-    lMark: ctx.breakListMarks.get i: idx
+    fMark: (ctx.loops.get i: idx).freesMark
+    lMark: (ctx.loops.get i: idx).listMark
     i: tmp.listFrees.length
     for i > lMark loop {
         i = i - 1
@@ -26724,14 +26719,10 @@ objIterPayCleanup: function {
         if pfree.length > 0 then payCleanup = "\{pfree}(&\{lbl});\n"
     }
     if payCleanup.length > 0 then {
-        ctx.breakLabelCleanup.pop
-        pcl: payCleanup.copy
-        ctx.breakLabelCleanup.append pcl
-        ctx.breakLabelCleanupVar.pop
-        ctx.breakLabelCleanupRaw.pop
-        pcv: lbl.string
-        ctx.breakLabelCleanupVar.append pcv
-        ctx.breakLabelCleanupRaw.append lblV
+        lf: ctx.loops.getMut i: ctx.loops.length - 1
+        lf.cleanup = payCleanup.copy
+        lf.cleanupVar = lbl.string
+        lf.cleanupVid = lblV
     }
     return payCleanup
 }
@@ -33416,19 +33407,17 @@ emitReturnCleanup: function {
     # per-iteration cleanup (empty for plain loops and do entries), unless
     # the payload is part of the return value or a non-owning alias.
     ci: u64
-    cn: ctx.breakLabelCleanup.length
+    cn: ctx.loops.length
     for ci < cn loop {
-        ccl0: ctx.breakLabelCleanup.get i: ci
-        ccv0: ctx.breakLabelCleanupVar.get i: ci
-        cRaw: ctx.breakLabelCleanupRaw.get i: ci
-        if ccl0.length > 0 when (exitKeeps
+        cf0: ctx.loops.get i: ci
+        if cf0.cleanup.length > 0 when (exitKeeps
             :ctx
-            vid: cRaw
-            name: ccv0.stringView
+            vid: cf0.cleanupVid
+            name: cf0.cleanupVar.stringView
             :retExpr
             :keepRefd
         ).not then {
-            lcr: "\{ind}\{ccl0}"
+            lcr: "\{ind}\{cf0.cleanup}"
             buf.append lcr
         }
         ci = ci + 1
@@ -34247,16 +34236,10 @@ emitC: function {
         armParks: List ArgHoist
         hoistsToBlock: false
         whenGuardCtr: 0
-        breakLabels: ListVal u64
-        breakLabelIsDo: ListVal bool
+        loops: List LoopFrame
         contLabelUsed: (IdMapV u64 v: bool)
         breakLabelCtr: 0
         breakLabelUsed: (IdMapV u64 v: bool)
-        breakFreesMarks: ListVal u64
-        breakListMarks: ListVal u64
-        breakLabelCleanup: List String
-        breakLabelCleanupVar: List String
-        breakLabelCleanupRaw: ListVal ztypes.vid
         borrowedVars: (IdMapV ztypes.vid v: bool)
         strTid: strId
         svTid: svId
