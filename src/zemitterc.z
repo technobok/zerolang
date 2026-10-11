@@ -5182,8 +5182,9 @@ svValueFormAt: function {
 } out String is {
     # a view is its own value form, as it stands
     if isStr.not then return (svValueForm :ast :symtab :ctx :expr :isStr :vid :facts)
-    if (pathIsPointer :ast :symtab :ctx :n) then return (guessing
+    if (pathIsPointer :ast :symtab :ctx :n) then return (stating
         :facts
+        from: literalFacts
         text: (svValueFormPtr :ctx :expr)
     )
     ef: knownFacts f: facts s: expr
@@ -10980,6 +10981,7 @@ emitInterpStmtValue: function {
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
+    facts: cfacts.borrow
 } out String is {
     match (
         n
@@ -10995,18 +10997,19 @@ emitInterpStmtValue: function {
                 :buf
                 strNid: n.nodeid
             )
-            return sB
+            # the built String's temp
+            return (stating :facts from: pathFacts text: sB)
         }
         return ""
     } case dottedpath then {
         cm: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
         if cm == zast.wellKnown.slot.wkString then {
             dpr: ast.nodes.get i: n.parent
-            return (emitInterpStmtValue :ast :symtab :ctx n: dpr :ind :tmp :buf)
+            return (emitInterpStmtValue :ast :symtab :ctx n: dpr :ind :tmp :buf :facts)
         }
         if (ztypecheck.isStringViewMember nameId: cm) then {
             dpr: ast.nodes.get i: n.parent
-            return (emitInterpStmtValue :ast :symtab :ctx n: dpr :ind :tmp :buf)
+            return (emitInterpStmtValue :ast :symtab :ctx n: dpr :ind :tmp :buf :facts)
         }
         return ""
     } else {
@@ -15258,15 +15261,23 @@ emitStringMethod: function {
         return (stating :facts from: callFacts text: "\{ctx.strC}_copy(&\{recv})")
     }
     if mnId == zast.wellKnown.slot.wkLength then {
-        if recvIsPtr then return (guessing :facts text: "\{recv}->size")
-        return (guessing :facts text: "\{recv}.size")
+        if recvIsPtr then return (stating :facts from: (memberFacts b: recvF) text: "\{recv}->size")
+        return (stating :facts from: (memberFacts b: recvF) text: "\{recv}.size")
     }
     if mnId == zast.wellKnown.slot.wkCapacity then {
-        if recvIsPtr then return (guessing :facts text: "\{recv}->capacity")
-        return (guessing :facts text: "\{recv}.capacity")
+        if recvIsPtr then return (stating
+            :facts
+            from: (memberFacts b: recvF)
+            text: "\{recv}->capacity"
+        )
+        return (stating :facts from: (memberFacts b: recvF) text: "\{recv}.capacity")
     }
     if (ztypecheck.isStringViewMember nameId: mnId) then {
-        if recvIsPtr then return (guessing :facts text: (svValueFormPtr :ctx expr: recv))
+        if recvIsPtr then return (stating
+            :facts
+            from: literalFacts
+            text: (svValueFormPtr :ctx expr: recv)
+        )
         stateFacts :facts from: recvF
         return (svValueForm :ast :symtab :ctx expr: recv isStr: true vid: recvVid :facts)
     }
@@ -21313,6 +21324,7 @@ copyRvalueHoist: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     n: astnode.view
+    facts: cfacts.borrow
 } out String is {
     match (
         n
@@ -21336,7 +21348,7 @@ copyRvalueHoist: function {
             argNid: (zast.nodeIdOf n: (ast.nodes.get i: n.parent))
             pv: pv.stringView
         )
-        return "\{ctx.strC}_copy(&\{tnm})"
+        return (stating :facts from: callFacts text: "\{ctx.strC}_copy(&\{tnm})")
     } else {
         return ""
     }
@@ -22945,12 +22957,12 @@ reassignRhsText: function {
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
+    facts: cfacts.borrow
 } out String is {
-    rcph: copyRvalueHoist :ast :symtab :ctx n: valueNode
+    rcph: copyRvalueHoist :ast :symtab :ctx n: valueNode :facts
     if rcph.length > 0 then return rcph
-    rvi: emitInterpStmtValue :ast :symtab :ctx n: valueNode :ind :tmp :buf
+    rvi: emitInterpStmtValue :ast :symtab :ctx n: valueNode :ind :tmp :buf :facts
     if rvi.length > 0 then return rvi
-    facts: cfacts
     return (valueExprC :ast :symtab :ctx n: valueNode :facts)
 }
 
@@ -23251,7 +23263,8 @@ emitOwnedRepoint: function {
     )
     cn: companionCName :ctx :cv
     valueNode: ast.nodes.get i: n.value
-    rv: reassignRhsText :ast :symtab :ctx :valueNode :ind :tmp :buf
+    facts: cfacts
+    rv: reassignRhsText :ast :symtab :ctx :valueNode :ind :tmp :buf :facts
     flushArgHoists :ctx :ind :tmp :buf
     rrn: tmpNext :ctx :tmp
     ct: companionCType :ast :symtab :ctx :tid
@@ -23302,10 +23315,7 @@ emitStoreTo: function {
         :symtab
         :ctx
         n: valueNode
-        text: (guessing
-            facts: rv2F
-            text: (reassignRhsText :ast :symtab :ctx :valueNode :ind :tmp :buf)
-        )
+        text: (reassignRhsText :ast :symtab :ctx :valueNode :ind :tmp :buf facts: rv2F)
         facts: rv2F
     )
     # the RHS walk may have recorded _ah arg hoists: declare them HERE,
