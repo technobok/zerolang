@@ -2759,7 +2759,8 @@ ternaryCondPart: function {
     guarded: bool
 } out String is {
     mk: openInPlace :ctx
-    cv: valueExprC :ast :symtab :ctx n: (ast.nodes.get i: op)
+    cvF: cfacts
+    cv: valueExprC :ast :symtab :ctx n: (ast.nodes.get i: op) facts: cvF
     tw: truthyCondText :ast :symtab :ctx n: (ast.nodes.get i: op) raw: cv.stringView
     if tw.length > 0 then cv = tw.take
     if guarded when (hoistsGrew :ctx mark: mk) then return (assignInPlace
@@ -3949,9 +3950,11 @@ valueExprC: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     n: astnode.view
+    facts: cfacts.borrow
 } out String is {
-    e: emitExpr :ast :symtab :ctx :n
-    if (ptrHeldValtype :ast :symtab :ctx :n) then return "(*\{e})"
+    e: emitExprWith :ast :symtab :ctx :n :facts
+    # a load's facts are read off its text (see userFnArgTextWith)
+    if (ptrHeldValtype :ast :symtab :ctx :n) then return (guessing :facts text: "(*\{e})")
     return e
 }
 
@@ -5830,7 +5833,8 @@ emitSvNativeInfix: function {
     ord: orderBegin :ctx slots: 2
     mk: pendingHoistMark :ctx
     # a String receiver projects to a view value; a StringView already is one
-    recv: operandValueC :ast :symtab :ctx nid: lhsNid
+    recvF: cfacts
+    recv: operandValueC :ast :symtab :ctx nid: lhsNid facts: recvF
     if owner == ctx.strTid then {
         rf: (svValueFormAt
             :ast
@@ -5854,7 +5858,8 @@ emitSvNativeInfix: function {
             cg
         ) case some then {
             if cg.kind.svalKind then {
-                cv: operandValueC :ast :symtab :ctx nid: rhsNid
+                cvF: cfacts
+                cv: operandValueC :ast :symtab :ctx nid: rhsNid facts: cvF
                 afrag = "&\{cv}"
             }
         } case none then null
@@ -6319,7 +6324,8 @@ orderNativeArgs: function {
             slot: slots.get i: ai
             if slot > 0 when slot < fpNameIds.length then {
                 mk: pendingHoistMark :ctx
-                av: valueExprC :ast :symtab :ctx n: (ast.nodes.get i: a.operation)
+                avF: cfacts
+                av: valueExprC :ast :symtab :ctx n: (ast.nodes.get i: a.operation) facts: avF
                 (orderArgAt
                     :ast
                     :symtab
@@ -10766,12 +10772,13 @@ colArg: function {
                     :consumes
                 )
                 if ic.length > 0 then return ic
+                tF: cfacts
                 return (standInText
                     :ast
                     :symtab
                     :ctx
                     n: (ast.nodes.get i: a.operation)
-                    text: (valueExprC :ast :symtab :ctx n: (ast.nodes.get i: a.operation))
+                    text: (valueExprC :ast :symtab :ctx n: (ast.nodes.get i: a.operation) facts: tF)
                 )
             }
             if an.length == 0 when havePos.not then {
@@ -10787,12 +10794,13 @@ colArg: function {
                     posFirst = icp.take
                 } else {
                     aOpNode: ast.nodes.get i: a.operation
+                    tF: cfacts
                     posFirst = (standInText
                         :ast
                         :symtab
                         :ctx
                         n: aOpNode
-                        text: (valueExprC :ast :symtab :ctx n: aOpNode)
+                        text: (valueExprC :ast :symtab :ctx n: aOpNode facts: tF)
                     )
                 }
             }
@@ -10820,22 +10828,26 @@ listArg: function {
         a: ast.nodes.get i: aId
         if a.namedoperation then {
             an: zast.nameTextAt :ast ref: a.name
-            if an.stringView == label then return (standInText
-                :ast
-                :symtab
-                :ctx
-                n: (ast.nodes.get i: a.operation)
-                text: (valueExprC :ast :symtab :ctx n: (ast.nodes.get i: a.operation))
-            )
+            if an.stringView == label then {
+                tF: cfacts
+                return (standInText
+                    :ast
+                    :symtab
+                    :ctx
+                    n: (ast.nodes.get i: a.operation)
+                    text: (valueExprC :ast :symtab :ctx n: (ast.nodes.get i: a.operation) facts: tF)
+                )
+            }
             if an.length == 0 when havePos.not then {
                 havePos = true
                 aOpNode: ast.nodes.get i: a.operation
+                tF: cfacts
                 posFirst = (standInText
                     :ast
                     :symtab
                     :ctx
                     n: aOpNode
-                    text: (valueExprC :ast :symtab :ctx n: aOpNode)
+                    text: (valueExprC :ast :symtab :ctx n: aOpNode facts: tF)
                 )
             }
         }
@@ -11132,7 +11144,8 @@ emitInlineVariantCtor: function {
             if a.namedoperation when got.not then {
                 got = true
                 aOpNode: ast.nodes.get i: a.operation
-                av = valueExprC :ast :symtab :ctx n: aOpNode
+                avF: cfacts
+                av = valueExprC :ast :symtab :ctx n: aOpNode facts: avF
             }
         }
         armCiC: memberC :ast :symtab :ctx owner: tid kind: memberkind.arm nameId: arm
@@ -12212,7 +12225,8 @@ ctorArgTextAt: function {
     n: ast.nodes.get i: aid
     iv: emitInterpArgExpr :ast :symtab :ctx :n
     if iv.length > 0 then return iv
-    return (valueExprC :ast :symtab :ctx :n)
+    facts: cfacts
+    return (valueExprC :ast :symtab :ctx :n :facts)
 }
 
 # argAlreadyPointer -- does this argument expression already evaluate to the C
@@ -18058,7 +18072,8 @@ emitDottedRead: function {
             originTid: (ctx.origins.get i: family.slot.resultval)
         )
         if isRcc then {
-            rcRecv: valueExprC :ast :symtab :ctx n: (ast.nodes.get i: n.parent)
+            rcRecvF: cfacts
+            rcRecv: valueExprC :ast :symtab :ctx n: (ast.nodes.get i: n.parent) facts: rcRecvF
             return (orPanicExprC :ast :symtab :ctx tid: pMono recv: rcRecv.stringView)
         }
     }
@@ -18919,19 +18934,18 @@ operandValueC: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     nid: zast.nodeid
+    facts: cfacts.borrow
 } out String is {
     n: ast.nodes.get i: nid
-    v: valueExprC :ast :symtab :ctx :n
+    v: valueExprC :ast :symtab :ctx :n :facts
     if (nodeIsAtomBox :symtab :n) then {
         # a by-pointer PARAMETER holds the box through a second pointer, so its
         # value is two derefs away: one for the parameter, one for the box. With
         # one, `b + 0` added to an address and `b == 7` compared one.
         if (isPtrVid :ctx vid: (atomVid :symtab :nid)) then {
-            bpv: "(*(*\{v}))"
-            return bpv
+            return (guessing :facts text: "(*(*\{v}))")
         }
-        bxv: "(*\{v})"
-        return bxv
+        return (guessing :facts text: "(*\{v})")
     }
     return v
 }
@@ -18952,17 +18966,19 @@ orderRowOperand: function {
     ord: orderstate.borrow
 } is {
     mk: pendingHoistMark :ctx
-    v: operandValueC :ast :symtab :ctx :nid
+    vF: cfacts
+    v: operandValueC :ast :symtab :ctx :nid facts: vF
     n: ast.nodes.get i: nid
     if (isStringyTid :ctx tid: owner).not then {
-        constant: orderConstant :ast :symtab :ctx :n text: v.stringView byPtr: false
-        (orderPart
+        constant: orderConstantWith :ast :symtab :ctx :n text: v.stringView tf: vF byPtr: false
+        (orderPartWith
             :ast
             :symtab
             :ctx
             st: ord
             mark: mk
             text: v
+            tf: vF
             :constant
             fid: ztypes.tid
             pid: ztypes.tid.zero
@@ -19041,7 +19057,8 @@ emitDeclaredOperator: function {
         # `&f(x)` is rejected by C. It is bound to a temp as a method call's
         # receiver is (receiverOnceAt), so an OWNED result is released with it;
         # a compound literal already is an lvalue.
-        lv: operandValueC :ast :symtab :ctx nid: lhsNid
+        lvF: cfacts
+        lv: operandValueC :ast :symtab :ctx nid: lhsNid facts: lvF
         if (factsOfText s: lv.stringView).literal then {
             recv = "&\{lv}"
         } else {
@@ -19100,7 +19117,8 @@ operatorOperandText: function {
     call: ztypes.tid
     rhsNid: zast.nodeid
 } out String is {
-    av: operandValueC :ast :symtab :ctx nid: rhsNid
+    avF: cfacts
+    av: operandValueC :ast :symtab :ctx nid: rhsNid facts: avF
     ctx.lastArgByPtr = false
     # the receiver by its name id, `this` for the `:this` shorthand; every other
     # row of a function type is a parameter
@@ -19230,7 +19248,8 @@ listOperandAddr: function {
     if (pathIsPointer :ast :symtab :ctx n: (ast.nodes.get i: nid)) then {
         return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: nid))
     }
-    lv: operandValueC :ast :symtab :ctx :nid
+    lvF: cfacts
+    lv: operandValueC :ast :symtab :ctx :nid facts: lvF
     if (factsOfText s: lv.stringView).literal then return "&\{lv}"
     lf: receiverOnceAt :ast :symtab :ctx baseNid: nid text: lv.stringView :tid
     return "&\{lf}"
@@ -19633,7 +19652,8 @@ emitInterpPart: function {
     }
     pt: interpPartTid :symtab :ctx :n
     nk: ztypecheck.numKindOfTid st: symtab tid: pt
-    val: valueExprC :ast :symtab :ctx :n
+    valF: cfacts
+    val: valueExprC :ast :symtab :ctx :n facts: valF
     # a call fragment may have hoisted non-lvalue args to _ah temps:
     # declare them before the fragment uses them (mirrors the direct
     # print path's flush after emitCallValue)
@@ -21977,7 +21997,8 @@ reassignRhsText: function {
     if rcph.length > 0 then return rcph
     rvi: emitInterpStmtValue :ast :symtab :ctx n: valueNode :ind :tmp :buf
     if rvi.length > 0 then return rvi
-    return (valueExprC :ast :symtab :ctx n: valueNode)
+    facts: cfacts
+    return (valueExprC :ast :symtab :ctx n: valueNode :facts)
 }
 
 # reassignTargetC -- the C type a reassignment target is held as: the String
@@ -22549,7 +22570,8 @@ doWhileCondText: function {
         if pkn.namedoperation then pkop = pkn.operation
         # the trailing test runs at every iteration, so it is evaluated in place
         mk8: openInPlace :ctx
-        pcv: valueExprC :ast :symtab :ctx n: pkn
+        pcvF: cfacts
+        pcv: valueExprC :ast :symtab :ctx n: pkn facts: pcvF
         tw8: (truthyCondText
             :ast
             :symtab
@@ -26524,7 +26546,8 @@ emitForCond: function {
         if (zast.nameTextAt :ast ref: n.name).length > 0 then return
         # a loop's test runs at every iteration, so it is evaluated in place
         mk7: openInPlace :ctx
-        cv: valueExprC :ast :symtab :ctx n: (ast.nodes.get i: n.operation)
+        cvF: cfacts
+        cv: valueExprC :ast :symtab :ctx n: (ast.nodes.get i: n.operation) facts: cvF
         tw7: (truthyCondText
             :ast
             :symtab
@@ -27612,7 +27635,8 @@ appendCondText: function {
     guarded: cond.length > 0
     mk: openInPlace :ctx
     {
-        cv: valueExprC :ast :symtab :ctx n: (ast.nodes.get i: opId)
+        cvF: cfacts
+        cv: valueExprC :ast :symtab :ctx n: (ast.nodes.get i: opId) facts: cvF
         tw: (truthyCondText
             :ast
             :symtab
@@ -40649,7 +40673,8 @@ emitResultCombinator: function {
     if isP when isRes.not then return ""
     payArmId: zast.wellKnown.slot.wkOk
     if isOpt then payArmId = zast.wellKnown.slot.wkSome
-    recvExpr: valueExprC :ast :symtab :ctx n: (ast.nodes.get i: bnid)
+    recvExprF: cfacts
+    recvExpr: valueExprC :ast :symtab :ctx n: (ast.nodes.get i: bnid) facts: recvExprF
     if recvExpr.length == 0 then return ""
     okTag: tagConstOf :ast :ctx :symtab tid: rtid armId: payArmId
     rcT: ctxCname :ctx tid: rtid
@@ -40661,7 +40686,8 @@ emitResultCombinator: function {
     a: ast.nodes.get i: firstArgId
     if a.namedoperation then opId = a.operation
     if opId.isZero then return ""
-    dExpr: valueExprC :ast :symtab :ctx n: (ast.nodes.get i: opId)
+    dExprF: cfacts
+    dExpr: valueExprC :ast :symtab :ctx n: (ast.nodes.get i: opId) facts: dExprF
     if dExpr.length == 0 then return ""
     payC: memberC :ast :symtab :ctx owner: rtid kind: memberkind.arm nameId: payArmId
     ro: "({ \{rcT}_t _rc = (\{recvExpr.stringView}); (_rc.tag == \{okTag.stringView}) ? _rc.data.\{payC} : (\{dExpr.stringView}); })"
