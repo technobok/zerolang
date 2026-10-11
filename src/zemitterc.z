@@ -5849,10 +5849,7 @@ svNativeArgFrag: function {
 }
 
 
-# viewRecvAddr -- the address a native view method takes its receiver by. A
-# view with no address of its own -- a call's result -- binds to a temp the
-# call can address; the view owns nothing, so the temp frees nothing. A
-# compound literal is an lvalue already, and a String is a place.
+# viewRecvAddr -- the address a native view method takes its receiver by.
 viewRecvAddr: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -5861,10 +5858,8 @@ viewRecvAddr: function {
     recvF: cfacts
     tid: ztypes.tid
 } out String is {
-    if tid != ctx.svTid then return "&\{recv}"
-    if (canTakeAddress f: recvF) then return "&\{recv}"
-    svb: hoistForAddress :ast :symtab :ctx av: recv :tid argNid: zast.nodeid
-    return "&\{svb}"
+    raF: cfacts
+    return "&\{addressableText :ast :symtab :ctx e: recv eF: recvF :tid facts: raF}"
 }
 
 # emitSvSplitCall -- `s.split sep`, the separator passed by address.
@@ -6987,6 +6982,25 @@ stating: function {facts: cfacts.borrow from: cfacts text: String.take} out Stri
 # compound literal, which is an lvalue too.
 canTakeAddress: function {f: cfacts} out bool is {
     return f.place or f.literal
+}
+
+# addressableText -- `e` as text `&` applies to: itself when it is a place or a
+# compound literal, otherwise a statement temporary it is bound to, since C
+# takes no address of a call (`&f(x)`). The temporary frees nothing: a value
+# that owns its storage is bound where it is made (ownedReceiverHoist), so what
+# arrives here is a view or a borrow.
+addressableText: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    e: StringView
+    eF: cfacts
+    tid: ztypes.tid
+    facts: cfacts.borrow
+} out String is {
+    if (canTakeAddress f: eF) then return (stating :facts from: eF text: e.string)
+    t: hoistForAddress :ast :symtab :ctx av: e :tid argNid: zast.nodeid
+    return (stating :facts from: pathFacts text: t)
 }
 
 # stringAppendViewText -- `recv.append arg` for an argument that is not an owned
@@ -15306,7 +15320,9 @@ emitStringMethod: function {
 } out String is {
     if mnId == zast.wellKnown.slot.wkCopy then {
         if recvIsPtr then return (stating :facts from: callFacts text: "\{ctx.strC}_copy(\{recv})")
-        return (stating :facts from: callFacts text: "\{ctx.strC}_copy(&\{recv})")
+        rhF: cfacts
+        rh: addressableText :ast :symtab :ctx e: recv eF: recvF tid: ctx.strTid facts: rhF
+        return (stating :facts from: callFacts text: "\{ctx.strC}_copy(&\{rh})")
     }
     if mnId == zast.wellKnown.slot.wkLength then {
         if recvIsPtr then return (stating :facts from: (memberFacts b: recvF) text: "\{recv}->size")
@@ -19166,26 +19182,15 @@ emitDottedRead: function {
             nbXF: cfacts
             nbX: emitExprWith :ast :symtab :ctx n: (ast.nodes.get i: n.parent) facts: nbXF
             if nbX.length > 0 then {
-                # `&` needs an lvalue. A compound literal is one; a call is
-                # not, so it binds to a temp the statement flush declares.
-                nbH: nbXF.place.not and nbXF.literal.not
-                if nbH then {
-                    # the receiver is a view, whose temp frees nothing
-                    nbTmp: (hoistForAddress
-                        :ast
-                        :symtab
-                        :ctx
-                        av: nbX.stringView
-                        tid: nbT
-                        argNid: zast.nodeid
-                    )
-                    if nbTmp.length > 0 then {
-                        nbX = nbTmp.copy
-                        nbXF = pathFacts
-                    }
-                }
-                bn2 = nbX.copy
-                bn2F = nbXF
+                bn2 = (addressableText
+                    :ast
+                    :symtab
+                    :ctx
+                    e: nbX.stringView
+                    eF: nbXF
+                    tid: nbT
+                    facts: bn2F
+                )
             }
         }
     }
