@@ -5154,6 +5154,34 @@ addTypeMembersIn: function {
     }
 }
 
+# addHeadUnitMembers -- the definitions of the unit a single head names: the
+# top-level unit by its file, else the unit a bare name reaches from the
+# document's unit -- its own subunit, which no top-level file of the name holds.
+addHeadUnitMembers: function {
+    snap: zcheck.CheckResult.view
+    docRel: StringView
+    srcDir: StringView
+    name: StringView
+    sink: (MapRV String v: u8)
+} is {
+    if (unitFsnoByName :snap :name).isZero.not then {
+        addUnitMembers prog: snap.prog :name :sink
+        return
+    }
+    d: (bareDeclOf
+        o: snap.st
+        site: (docUnitDecl r: snap rel: docRel :srcDir)
+        nameId: (zast.poolFind pool: snap.prog.names text: name)
+    )
+    if d.isZero then return
+    o: snap.st
+    match (
+        o
+    ) case some then {
+        addDeclUnitDefs prog: snap.prog st: o declId: d :sink
+    } case none then null
+}
+
 # addUnitMembers -- the top-level symbols of the file-unit named `name`.
 addUnitMembers: function {prog: Ast.view name: StringView sink: (MapRV String v: u8)} is {
     {
@@ -5964,7 +5992,52 @@ dotHeadOf: function {
     if (unitFsnoByName :snap name: firstSeg.stringView).isZero.not then {
         return (unitHeadOf :snap :base unitName: firstSeg.stringView :dotPos)
     }
-    return (bareHeadOf :snap :docRel :srcDir :l1u name: firstSeg.stringView next: dotPos + 1)
+    h: bareHeadOf :snap :docRel :srcDir :l1u name: firstSeg.stringView next: dotPos + 1
+    # a name nothing reaches may be a unit the program does not use: load it
+    # into the snapshot, and the head resolves as it would for a loaded one
+    if h.kind.unknown when (loadUnitNamed :snap :docRel :srcDir name: firstSeg.stringView) then {
+        if (unitFsnoByName :snap name: firstSeg.stringView).isZero.not then {
+            return (unitHeadOf :snap :base unitName: firstSeg.stringView :dotPos)
+        }
+        return (bareHeadOf :snap :docRel :srcDir :l1u name: firstSeg.stringView next: dotPos + 1)
+    }
+    return h
+}
+
+# loadUnitNamed -- load the unit `name` into the snapshot when a reference
+# written in the document's unit would find a file of that name the program
+# has not loaded: a subunit in the unit's own folder first, then a top-level
+# unit on the roots, the order resolution searches them in. The unit and the
+# units it names that are not loaded yet are parsed and indexed; nothing is
+# re-checked. They live in the snapshot until the next good check replaces
+# it. True when a unit was added.
+loadUnitNamed: function {
+    snap: zcheck.CheckResult
+    docRel: StringView
+    srcDir: StringView
+    name: StringView
+} out bool is {
+    if (zparser.isValidUnitName :name).not then return false
+    file: "\{name}.z"
+    docFs: docFsnoOf r: snap rel: docRel :srcDir
+    ownerOp: docUnitOp r: snap rel: docRel :srcDir
+    if docFs.isZero.not when ownerOp.isZero.not then {
+        un: zsource.unitNameOf path: docRel
+        own: snap.vfs.siblingDir fileid: docFs name: un.stringView
+        hit: snap.vfs.walk parent: own name: file.stringView
+        if (snap.vfs.arm dentryid: hit) == zvfs.nodekind.file then {
+            return (zcheck.addSubunit
+                r: snap
+                dirid: own
+                :ownerOp
+                ownerDecl: (docUnitDecl r: snap rel: docRel :srcDir)
+                :name
+            )
+        }
+    }
+    top: snap.vfs.walk parent: snap.vfs.rootid name: file.stringView
+    if (snap.vfs.arm dentryid: top) == zvfs.nodekind.file then return (zcheck.addUnit r: snap :name)
+    return false
 }
 
 # unitHeadOf -- a head that opens with a file unit: the unit alone, or the unit
@@ -6191,7 +6264,7 @@ addMemberCompletions: function {
     db: resolveDotBase :snap :docRel :srcDir :l1u :base
     if db.kind.unitBase then {
         if db.single then {
-            addUnitMembers prog: snap.prog name: base :sink
+            addHeadUnitMembers :snap :docRel :srcDir name: base :sink
         } else addUnitDeclMembers prog: snap.prog o: snap.st unitTid: db.tid :sink
         return
     }

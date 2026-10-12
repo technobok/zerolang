@@ -30,6 +30,8 @@ public: unit {
     :buildRoots
     :GenLayer
     :noLayer
+    :addUnit
+    :addSubunit
 }
 
 astnode: zast.astnode
@@ -89,7 +91,8 @@ CheckResult: class {
     # the filesystem the sources were read through, kept so a later lookup
     # resolves the same way
     vfs: zvfs.ZVfs
-    # the parser, kept because the tree's name pool lives in it
+    # the parser, kept so zls can load a unit the program does not use into
+    # the tree later (Parser.loadUnits / loadSubunit)
     parser: zparser.Parser
 }
 
@@ -225,6 +228,73 @@ bindLayer: function {vfs: zvfs.ZVfs layer: GenLayer.view} out zvfs.fsno is {
         vfs.bind parentid: zdir name: "project.z" newid: pz kind: zvfs.bindkind.instead
     }
     return root
+}
+
+# addUnit -- add the top-level unit `name`, which the check did not load, to
+# the checked tree, with the units it names that the tree does not hold yet:
+# parsed (Parser.loadUnits, the tree lent back to the parser for it) and
+# indexed (ztypecheck.indexAddedUnits), nothing re-checked. False, the tree
+# unchanged, when there is no such unit or it does not load.
+addUnit: function {r: CheckResult name: StringView} out bool is {
+    fileFrom: r.prog.files.length
+    units: ListVal zast.nodeid
+    r.parser.ast swap r.prog
+    ok: r.parser.loadUnits vfs: r.vfs rootid: r.vfs.rootid :name outUnits: units
+    r.parser.ast swap r.prog
+    if ok then indexAdded :r :units owner: ztypes.declid members: ListVal zast.nodeid :fileFrom
+    return ok
+}
+
+# addSubunit -- add `name`, a subunit file in the folder `dirid` that the check
+# did not load, to the checked tree as a member of the unit `ownerOp` (declared
+# by `ownerDecl`), as addUnit adds a top-level unit (Parser.loadSubunit).
+addSubunit: function {
+    r: CheckResult
+    dirid: zvfs.fsno
+    ownerOp: zast.nodeid
+    ownerDecl: ztypes.declid
+    name: StringView
+} out bool is {
+    fileFrom: r.prog.files.length
+    units: ListVal zast.nodeid
+    members: ListVal zast.nodeid
+    r.parser.ast swap r.prog
+    ok: (r.parser.loadSubunit
+        vfs: r.vfs
+        rootid: r.vfs.rootid
+        :dirid
+        :ownerOp
+        unitname: name
+        outMembers: members
+        outUnits: units
+    )
+    r.parser.ast swap r.prog
+    if ok then indexAdded :r :units owner: ownerDecl :members :fileFrom
+    return ok
+}
+
+# indexAdded -- index what a load added to the checked tree
+indexAdded: function {
+    r: CheckResult
+    units: (ListVal zast.nodeid).view
+    owner: ztypes.declid
+    members: (ListVal zast.nodeid).view
+    fileFrom: u64
+} is {
+    o: r.st
+    match (
+        o
+    ) case some then {
+        (ztypecheck.indexAddedUnits
+            st: o
+            program: r.prog
+            vfs: r.vfs
+            :units
+            ownerDecl: owner
+            :members
+            :fileFrom
+        )
+    } case none then null
 }
 
 # check -- parse + typecheck(full) `mainUnit` against `srcdirs` layered

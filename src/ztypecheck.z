@@ -22,6 +22,7 @@
 # other top-level definitions are private to this unit.
 public: unit {
     :generatorCallOf
+    :indexAddedUnits
     :stringLitIsPlain
     :constBigOf
     :constIntText
@@ -823,49 +824,7 @@ indexUnitDefs: function {st: zenv.ZSymbolTable scope: ztypes.declid program: Ast
         for uIdx9b < uCnt9b loop {
             ruId: program.units.get i: uIdx9b
             uIdx9b = uIdx9b + 1
-            opId: zast.nodeid
-            unmRef: zast.nameid
-            ru: program.nodes.get i: ruId
-            if ru.namedoperation then {
-                opId = ru.operation
-                unmRef = ru.name
-            }
-            if opId.isZero.not then {
-                # registerUnitRoots minted the unit's TYPE and keyed it on the
-                # unitdef node; the declaration binds to it here. Read by node,
-                # not by name: the name lookup would find this very Decl, whose
-                # type is what we are about to set. A unit with no type there
-                # is a repeated unit name registerUnitRoots already rejected --
-                # it gets no declaration, so the program root keeps one child
-                # per name.
-                utl: (st.typing.unitTypesById.get
-                    key: (unitdefNodeId ast: program nId: opId)
-                )
-                match (
-                    utl
-                ) case some then {
-                    # a file unit is a NAMED child of the program root, which
-                    # is what makes declFindChild(programRoot, name) the
-                    # unit-root lookup. The root carries no unit-scope bit, so
-                    # no bare-name walk reaches these children -- unitScopeOf
-                    # climbs through it.
-                    udid: (st.typing.declNew
-                        name: unmRef
-                        parent: st.typing.programRoot
-                        kind: ztyping.declkind.unitDecl
-                        node: ruId
-                    )
-                    st.typing.declSetUnitScope declId: udid
-                    st.typing.declSetType declId: udid typeId: utl
-                    st.reg.setDef typeId: utl declId: udid
-                    (indexUnitBody
-                        :st
-                        ast: program
-                        unitopId: opId
-                        unitDeclId: udid
-                    )
-                } case none then null
-            }
+            indexOneUnitDef :st :program :ruId
         }
         st.typing.defNodeIndexBuilt = true
         cro: (st.typing.declFindChild
@@ -915,6 +874,110 @@ indexUnitDefs: function {st: zenv.ZSymbolTable scope: ztypes.declid program: Ast
             }
             cu = cu.next
         }
+    }
+}
+
+# indexOneUnitDef -- declare the file unit `ruId` (its namedoperation) under
+# the program root and index its body.
+indexOneUnitDef: function {st: zenv.ZSymbolTable program: Ast ruId: zast.nodeid} is {
+    opId: zast.nodeid
+    unmRef: zast.nameid
+    {
+        ru: program.nodes.get i: ruId
+        if ru.namedoperation then {
+            opId = ru.operation
+            unmRef = ru.name
+        }
+    }
+    if opId.isZero then return
+    # registerUnitRoots minted the unit's TYPE and keyed it on the unitdef
+    # node; the declaration binds to it here. Read by node, not by name: the
+    # name lookup would find this very Decl, whose type is what we are about to
+    # set. A unit with no type there is a repeated unit name registerUnitRoots
+    # already rejected -- it gets no declaration, so the program root keeps one
+    # child per name.
+    utl: st.typing.unitTypesById.get key: (unitdefNodeId ast: program nId: opId)
+    match (
+        utl
+    ) case some then {
+        # a file unit is a NAMED child of the program root, which is what makes
+        # declFindChild(programRoot, name) the unit-root lookup. The root
+        # carries no unit-scope bit, so no bare-name walk reaches these
+        # children -- unitScopeOf climbs through it.
+        udid: (st.typing.declNew
+            name: unmRef
+            parent: st.typing.programRoot
+            kind: ztyping.declkind.unitDecl
+            node: ruId
+        )
+        st.typing.declSetUnitScope declId: udid
+        st.typing.declSetType declId: udid typeId: utl
+        st.reg.setDef typeId: utl declId: udid
+        indexUnitBody :st ast: program unitopId: opId unitDeclId: udid
+    } case none then null
+}
+
+# indexAddedUnits -- index units loaded into a checked tree after its check
+# ran (zls loads one the program does not use when completion names it, with
+# the units it names): `units` are new top-level units, `members` new members
+# of the unit declared by `ownerDecl`. Each is indexed as the check indexes a
+# unit -- generators lowered, unit type minted, declarations made, `public:`
+# block scanned -- and nothing is demanded: a later lookup resolves what it
+# reaches. A unit whose name the program root already holds is skipped. The
+# tree's files from `fileFrom` on get their display paths.
+indexAddedUnits: function {
+    st: zenv.ZSymbolTable
+    program: Ast
+    vfs: zvfs.ZVfs.view
+    units: (ListVal zast.nodeid).view
+    ownerDecl: ztypes.declid
+    members: (ListVal zast.nodeid).view
+    fileFrom: u64
+} is {
+    fresh: ListVal zast.nodeid
+    for each ruId: units loop {
+        ru: program.nodes.get i: ruId
+        if ru.namedoperation then {
+            held: st.typing.declFindChild parentDeclId: st.typing.programRoot nameId: ru.name
+            if held.isZero then fresh.append ruId
+        }
+    }
+    for each ruId: fresh loop {
+        (lowerDeclaredGeneratorsInUnit
+            :st
+            ast: program
+            unitdefId: (argRefAt ast: program nid: ruId).operation
+        )
+    }
+    seen: IdSet zast.nameid
+    for each ruId: fresh loop registerOneUnitRoot :st :program :ruId seenUnits: seen
+    for each ruId: fresh loop {
+        indexOneUnitDef :st :program :ruId
+        scanUnitVisibility :st ast: program unitdefId: (argRefAt ast: program nid: ruId).operation
+    }
+    if ownerDecl.isZero.not then {
+        for each mId: members loop {
+            m: argRefAt ast: program nid: mId
+            if m.nid.isZero.not then {
+                isUnit: (program.nodes.get i: m.operation).unitdef
+                if isUnit then lowerDeclaredGeneratorsInUnit :st ast: program unitdefId: m.operation
+                (indexDeclDef
+                    :st
+                    ast: program
+                    parentDeclId: ownerDecl
+                    nameRef: m.name
+                    nopNodeId: m.nid
+                    opNodeId: m.operation
+                )
+                if isUnit then scanUnitVisibility :st ast: program unitdefId: m.operation
+            }
+        }
+    }
+    fi: fileFrom
+    for fi < program.files.length loop {
+        f: program.files.get i: fi
+        st.typing.filePaths.set key: f value: (vfs.displayPath dentryid: f)
+        fi = fi + 1
     }
 }
 
@@ -16933,50 +16996,61 @@ registerUnitRoots: function {st: zenv.ZSymbolTable program: Ast.view} is {
         for uIdx9c < uCnt9c loop {
             ruId: program.units.get i: uIdx9c
             uIdx9c = uIdx9c + 1
-            opId: zast.nodeid
-            nmNode: String
-            nmRef: zast.nameid
-            uNode: zast.nodeid
-            uLine: u32
-            uCol: u32
-            {
-                ru: program.nodes.get i: ruId
-                if ru.namedoperation then {
-                    nm: zast.poolTextAt pool: program.names ref: ru.name
-                    opId = ru.operation
-                    nmNode = nm.copy
-                    nmRef = ru.name
-                    uNode = ru.nodeid
-                    uLine = ru.lineno
-                    uCol = ru.colno
-                }
-            }
-            if opId.isZero.not then {
-                if (seenUnits.has item: nmRef) then {
-                    dupm: "duplicate unit '\{nmNode}': a unit name is one identity, and another file already declares it"
-                    (addResolveErrorH
-                        :st
-                        nodeid: uNode
-                        lineno: uLine
-                        colno: uCol
-                        e: zast.err.duplicateDef
-                        msg: dupm
-                        width: nmNode.length.u32.orPanic
-                    )
-                } else {
-                    seenUnits.add item: nmRef
-                    uid: st.reg.newType name: nmNode.stringView typetype: ztypes.ztypetype.unitType
-                    # a file unit whose body declares a generic parameter is a
-                    # template, as a nested `unit as` is
-                    if (zast.unitIsGeneric ast: program unitId: opId) then {
-                        st.reg.setGeneric typeId: uid value: true
-                    }
-                    opid: unitdefNodeId ast: program nId: opId
-                    st.typing.unitTypesById.set key: opid value: uid
-                }
-            }
+            registerOneUnitRoot :st :program :ruId :seenUnits
         }
     }
+}
+
+# registerOneUnitRoot -- mint the unit type of the file unit `ruId` (its
+# namedoperation) and key it on the unitdef node; a name `seenUnits` already
+# holds is a duplicate unit, rejected here.
+registerOneUnitRoot: function {
+    st: zenv.ZSymbolTable
+    program: Ast.view
+    ruId: zast.nodeid
+    seenUnits: IdSet zast.nameid
+} is {
+    opId: zast.nodeid
+    nmNode: String
+    nmRef: zast.nameid
+    uNode: zast.nodeid
+    uLine: u32
+    uCol: u32
+    {
+        ru: program.nodes.get i: ruId
+        if ru.namedoperation then {
+            nm: zast.poolTextAt pool: program.names ref: ru.name
+            opId = ru.operation
+            nmNode = nm.copy
+            nmRef = ru.name
+            uNode = ru.nodeid
+            uLine = ru.lineno
+            uCol = ru.colno
+        }
+    }
+    if opId.isZero then return
+    if (seenUnits.has item: nmRef) then {
+        dupm: "duplicate unit '\{nmNode}': a unit name is one identity, and another file already declares it"
+        (addResolveErrorH
+            :st
+            nodeid: uNode
+            lineno: uLine
+            colno: uCol
+            e: zast.err.duplicateDef
+            msg: dupm
+            width: nmNode.length.u32.orPanic
+        )
+        return
+    }
+    seenUnits.add item: nmRef
+    uid: st.reg.newType name: nmNode.stringView typetype: ztypes.ztypetype.unitType
+    # a file unit whose body declares a generic parameter is a template, as a
+    # nested `unit as` is
+    if (zast.unitIsGeneric ast: program unitId: opId) then {
+        st.reg.setGeneric typeId: uid value: true
+    }
+    opid: unitdefNodeId ast: program nId: opId
+    st.typing.unitTypesById.set key: opid value: uid
 }
 
 # demandAllUnitDefs -- demand every top-level definition of a unit (the

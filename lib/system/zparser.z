@@ -4230,41 +4230,17 @@ Parser: class {
                     if item.namedoperation then tried.add item.name
                 }
             }
-            # the subunit folder answers first, for every name -- a core name
-            # included -- and only what it does not hold goes on up
-            for raw.length > 0 loop {
-                rname: raw.pop
-                if hasSubdir then {
-                    rid: zast.poolFind pool: this.ast.names text: rname.stringView
-                    if rid.isZero.not then {
-                        if (tried.has item: rid) then continue
-                        tried.add rid
-                    }
-                }
-                handled: false
-                if hasSubdir then {
-                    subNames: ListVal zast.nameid
-                    sub: (this.loadUnit
-                        :vfs
-                        parentid: dirid
-                        unitname: rname
-                        kind: zast.unitkind.subunit
-                        :coreNames
-                        outBody: body
-                        outExterns: raw
-                        outNames: subNames
-                    )
-                    subErr: Parser.isError node: sub
-                    if subErr then {
-                        nf: Parser.isFileNotFound node: sub
-                        if nf.not then return sub
-                    } else {
-                        handled = true
-                    }
-                }
-                inCore: coreNames.contains item: rname
-                if handled.not when inCore.not then outExterns.append rname.copy
-            }
+            folded: (this.loadFromFolder
+                :vfs
+                :dirid
+                :hasSubdir
+                :coreNames
+                :raw
+                :body
+                :tried
+                :outExterns
+            )
+            if (Parser.isError node: folded) then return folded
             # the unit's own node and its wrapper sit at the file's first
             # token, so they report from the unit's file, not the loader's
             this.curFile = fsid
@@ -4306,6 +4282,362 @@ Parser: class {
             hint: zast.nameid
         )
         )
+    }
+
+    # loadQueued -- drain `queue`: load each name `defNames` does not hold yet as
+    # a top-level unit under `rootid`, appending it to `units`, and queue the
+    # units it names. A name with no unit file is recorded and left for the
+    # checker to report at its uses -- but for `required`, whose absence is the
+    # load's error, as is any other failure. Answers the `error` node, or an
+    # unminted `atomid` when every load went through.
+    loadQueued: function {
+        :this
+        vfs: zvfs.ZVfs
+        rootid: zvfs.fsno
+        coreNames: (List String).view
+        defNames: List String
+        queue: List String
+        units: ListVal zast.nodeid
+        required: StringView
+    } out astnode is {
+        for queue.length > 0 loop {
+            name: queue.pop
+            if (defNames.contains item: name).not then {
+                res: (this.loadQueuedName
+                    :vfs
+                    :rootid
+                    :coreNames
+                    :defNames
+                    :queue
+                    :units
+                    :required
+                    :name
+                )
+                if (Parser.isError node: res) then return res
+            }
+        }
+        return okNode
+    }
+
+    # loadQueuedName -- one name of loadQueued's queue, which `defNames` does
+    # not hold yet: load it, record it, and queue the units it names
+    loadQueuedName: function {
+        :this
+        vfs: zvfs.ZVfs
+        rootid: zvfs.fsno
+        coreNames: (List String).view
+        defNames: List String
+        queue: List String
+        units: ListVal zast.nodeid
+        required: StringView
+        name: String
+    } out astnode is {
+        unitExterns: List String
+        throwNames: ListVal zast.nameid
+        res: (this.loadUnit
+            :vfs
+            parentid: rootid
+            unitname: name
+            kind: zast.unitkind.namespace
+            :coreNames
+            outBody: units
+            outExterns: unitExterns
+            outNames: throwNames
+        )
+        if (Parser.isError node: res) then {
+            if (Parser.isFileNotFound node: res).not then return res
+            if name.stringView == required then {
+                return (astnode.error (zast.errorrow
+                    nodeid: this.nextId
+                    lineno: 0
+                    colno: 0
+                    width: 1
+                    err: zast.err.badReference
+                    msg: (zast.poolSet
+                        pool: this.ast.names
+                        text: "Unknown reference '\{name}'".stringView
+                    )
+                    fsno: zvfs.fsno
+                    note: zast.nameid
+                    hint: zast.nameid
+                )
+                )
+            }
+            # a free name with no unit file behind it is not a load failure:
+            # leave it unresolved -- the checker reports unknown references at
+            # their use sites (with positions) and keeps checking the rest of
+            # the unit
+            defNames.append name.copy
+            return okNode
+        }
+        defNames.append name.copy
+        for each e: unitExterns loop enqueueUnit :queue :defNames name: e.copy
+        return okNode
+    }
+
+    # loadFromFolder -- resolve the names `raw` holds against a unit's subunit
+    # folder `dirid`: the folder answers first, for every name -- a core name
+    # included -- loading a subunit it holds into `body`, and only what it does
+    # not hold goes on up to `outExterns` (a core name stays put). A loaded
+    # subunit's own references fold back into `raw`. `tried` holds the names
+    # already resolved for this unit. Answers the `error` node of a failed
+    # subunit load, or an unminted `atomid`.
+    loadFromFolder: function {
+        :this
+        vfs: zvfs.ZVfs
+        dirid: zvfs.fsno
+        hasSubdir: bool
+        coreNames: (List String).view
+        raw: List String
+        body: ListVal zast.nodeid
+        tried: IdSet zast.nameid
+        outExterns: List String
+    } out astnode is {
+        for raw.length > 0 loop {
+            rname: raw.pop
+            fresh: true
+            if hasSubdir then {
+                rid: zast.poolFind pool: this.ast.names text: rname.stringView
+                if rid.isZero.not then {
+                    fresh = (tried.has item: rid).not
+                    tried.add rid
+                }
+            }
+            if fresh then {
+                res: (this.loadFolderName
+                    :vfs
+                    :dirid
+                    :hasSubdir
+                    :coreNames
+                    :raw
+                    :body
+                    :outExterns
+                    name: rname
+                )
+                if (Parser.isError node: res) then return res
+            }
+        }
+        return okNode
+    }
+
+    # loadFolderName -- one name of loadFromFolder's: the subunit of that name
+    # when the folder holds one, else a name that goes on up
+    loadFolderName: function {
+        :this
+        vfs: zvfs.ZVfs
+        dirid: zvfs.fsno
+        hasSubdir: bool
+        coreNames: (List String).view
+        raw: List String
+        body: ListVal zast.nodeid
+        outExterns: List String
+        name: String
+    } out astnode is {
+        if hasSubdir then {
+            subNames: ListVal zast.nameid
+            sub: (this.loadUnit
+                :vfs
+                parentid: dirid
+                unitname: name
+                kind: zast.unitkind.subunit
+                :coreNames
+                outBody: body
+                outExterns: raw
+                outNames: subNames
+            )
+            if (Parser.isError node: sub).not then return okNode
+            if (Parser.isFileNotFound node: sub).not then return sub
+        }
+        if (coreNames.contains item: name).not then outExterns.append name.copy
+        return okNode
+    }
+
+    # loadUnits -- load the top-level unit `name` into the finished tree the
+    # parser holds (zcheck lends a checked tree back to it), with every unit it
+    # names that the tree does not hold yet, as `parse` loads them; nothing
+    # already in the tree is touched. The added units are
+    # appended to the tree's units and to `outUnits`. False, with the units as
+    # they were, when `name` has no unit file or a load fails.
+    loadUnits: function {
+        :this
+        vfs: zvfs.ZVfs
+        rootid: zvfs.fsno
+        name: StringView
+        outUnits: ListVal zast.nodeid
+    } out bool is {
+        coreNames: this.unitDefNames unitName: "core"
+        defNames: this.loadedUnitNames
+        queue: List String
+        queue.append name.string
+        units: ListVal zast.nodeid
+        res: (this.loadQueued
+            :vfs
+            :rootid
+            :coreNames
+            :defNames
+            :queue
+            :units
+            required: name
+        )
+        ok: (Parser.isError node: res).not
+        if ok then {
+            for each u: units loop {
+                this.ast.units.append u
+                outUnits.append u
+            }
+        }
+        return ok
+    }
+
+    # loadSubunit -- load `unitname`, a subunit file in the folder `dirid`, into
+    # the finished tree the parser holds as a member of the unit `ownerOp`, as that unit's
+    # own load would have: a sibling it names is loaded beside it, and every
+    # other unit it names that the tree does not hold yet is loaded at
+    # `rootid`. The new members go to the end of the owner's body and to
+    # `outMembers`, the new top-level units to the tree's units and
+    # `outUnits`. False, with the tree's units as they were, when the file is
+    # missing or a load fails.
+    loadSubunit: function {
+        :this
+        vfs: zvfs.ZVfs
+        rootid: zvfs.fsno
+        dirid: zvfs.fsno
+        ownerOp: zast.nodeid
+        unitname: StringView
+        outMembers: ListVal zast.nodeid
+        outUnits: ListVal zast.nodeid
+    } out bool is {
+        coreNames: this.unitDefNames unitName: "core"
+        tried: IdSet zast.nameid
+        {
+            span: zast.unitBodyIdsAt ast: this.ast unitId: ownerOp
+            i: u64
+            for i < span.count loop {
+                item: this.ast.nodes.get i: (zast.kidAt kids: this.ast.kids :span :i)
+                if item.namedoperation then tried.add item.name
+                i = i + 1
+            }
+        }
+        raw: List String
+        raw.append unitname.string
+        body: ListVal zast.nodeid
+        externs: List String
+        res: (this.loadFromFolder
+            :vfs
+            :dirid
+            hasSubdir: true
+            :coreNames
+            :raw
+            :body
+            :tried
+            outExterns: externs
+        )
+        ok: (Parser.isError node: res).not and (body.length > 0)
+        units: ListVal zast.nodeid
+        if ok then {
+            defNames: this.loadedUnitNames
+            queue: List String
+            for each e: externs loop enqueueUnit :queue :defNames name: e.copy
+            r2: (this.loadQueued
+                :vfs
+                :rootid
+                :coreNames
+                :defNames
+                :queue
+                :units
+                required: ""
+            )
+            ok = (Parser.isError node: r2).not
+        }
+        if ok then {
+            this.appendToUnit unitId: ownerOp extra: body
+            for each m: body loop outMembers.append m
+            for each u: units loop {
+                this.ast.units.append u
+                outUnits.append u
+            }
+        }
+        return ok
+    }
+
+    # appendToUnit -- add the members `extra` to the end of unit `unitId`'s
+    # body. A body is one run of the shared kids list, so the row gets a new
+    # run holding the old members and then the new.
+    appendToUnit: function {:this unitId: zast.nodeid extra: (ListVal zast.nodeid).view} is {
+        ids: ListVal zast.nodeid
+        nid: zast.nodeid
+        line: u32
+        col: u32
+        kind: zast.unitkind.namespace
+        {
+            u: this.ast.nodes.get i: unitId
+            match (
+                u
+            ) case unitdef then {
+                nid = u.nodeid
+                line = u.lineno
+                col = u.colno
+                kind = u.kind
+                i: u64
+                for i < u.body.count loop {
+                    ids.append (zast.kidAt kids: this.ast.kids span: u.body :i)
+                    i = i + 1
+                }
+            } else {
+                return
+            }
+        }
+        for each x: extra loop ids.append x
+        span: zast.kidsAdd kids: this.ast.kids xs: ids
+        (zast.tableSet
+            ast: this.ast
+            id: unitId
+            child: astnode.unitdef (zast.unitrow
+                nodeid: nid
+                lineno: line
+                colno: col
+                :kind
+                body: span
+                isGeneric: (zast.itemsHaveGenericParam ast: this.ast items: span)
+            )
+        )
+    }
+
+    # loadedUnitNames -- the names of the top-level units the tree holds
+    loadedUnitNames: function {this: this.view} out List String is {
+        names: List String
+        for each u: this.ast.units loop {
+            n: this.ast.nodes.get i: u
+            if n.namedoperation then names.append (zast.poolTextCopy
+                pool: this.ast.names
+                ref: n.name
+            )
+        }
+        return names
+    }
+
+    # unitDefNames -- the names the top-level unit `unitName` defines, as
+    # `parse` keeps core's to tell a core name from a reference to a unit
+    unitDefNames: function {this: this.view unitName: StringView} out List String is {
+        names: List String
+        for each u: this.ast.units loop {
+            n: this.ast.nodes.get i: u
+            if n.namedoperation when (
+                (zast.poolTextAt pool: this.ast.names ref: n.name).stringView == unitName
+            ) then {
+                span: zast.unitBodyIdsAt ast: this.ast unitId: n.operation
+                items: ListVal zast.nodeid
+                i: u64
+                for i < span.count loop {
+                    items.append (zast.kidAt kids: this.ast.kids :span :i)
+                    i = i + 1
+                }
+                ids: ListVal zast.nameid
+                ewBindNameList ast: this.ast scope: ids :items
+                for each id: ids loop names.append (zast.poolTextCopy pool: this.ast.names ref: id)
+            }
+        }
+        return names
     }
 
     # Top-level entry: load the main unit and every transitively-referenced
@@ -4351,58 +4683,16 @@ Parser: class {
         loadQueue.append mainUnitName.copy
         ceIt: coreExterns.iterate
         for ce: ceIt loop enqueueUnit queue: loadQueue :defNames name: ce.copy
-        for loadQueue.length > 0 loop {
-            name: loadQueue.pop
-            already: defNames.contains item: name
-            if already.not then {
-                unitExterns: List String
-                throwNames: ListVal zast.nameid
-                res: (this.loadUnit
-                    :vfs
-                    parentid: rootid
-                    unitname: name
-                    kind: zast.unitkind.namespace
-                    :coreNames
-                    outBody: units
-                    outExterns: unitExterns
-                    outNames: throwNames
-                )
-                rErr: Parser.isError node: res
-                if rErr then {
-                    nf: Parser.isFileNotFound node: res
-                    if nf then {
-                        if name.stringView == mainUnitName then {
-                            return (this.errorTree e: astnode.error (zast.errorrow
-                                nodeid: this.nextId
-                                lineno: 0
-                                colno: 0
-                                width: 1
-                                err: zast.err.badReference
-                                msg: (zast.poolSet
-                                    pool: this.ast.names
-                                    text: "Unknown reference '\{name}'".stringView
-                                )
-                                fsno: zvfs.fsno
-                                note: zast.nameid
-                                hint: zast.nameid
-                            )
-                            )
-                        }
-                        # a free name with no unit file behind it is not a
-                        # load failure: leave it unresolved -- the checker
-                        # reports unknown references at their use sites (with
-                        # positions) and keeps checking the rest of the unit
-                        defNames.append name.copy
-                    } else {
-                        return (this.errorTree e: res)
-                    }
-                } else {
-                    defNames.append name.copy
-                    eIt: unitExterns.iterate
-                    for e: eIt loop enqueueUnit queue: loadQueue :defNames name: e.copy
-                }
-            }
-        }
+        res: (this.loadQueued
+            :vfs
+            :rootid
+            :coreNames
+            :defNames
+            queue: loadQueue
+            :units
+            required: mainUnitName.stringView
+        )
+        if (Parser.isError node: res) then return (this.errorTree e: res)
         pid: this.nextId
         units swap this.ast.units
         tbl: Ast
@@ -4769,6 +5059,18 @@ collectExterns: function {ast: Ast.view body: (ListVal zast.nodeid).view} out Li
         externs.append (zast.poolTextCopy pool: ast.names ref: eid)
     }
     return externs
+}
+
+# okNode -- the result a load answers when it went through: an `atomid` that
+# takes no row, so answering it numbers no node.
+okNode: function out astnode is {
+    return (astnode.atomid (zast.atomidrow
+        nodeid: zast.nodeid
+        lineno: 0
+        colno: 0
+        name: zast.nameid
+    )
+    )
 }
 
 # Enqueue `name` as a unit to load unless it is already loaded
