@@ -676,7 +676,8 @@ layerBaseOf: function {pf: ProjectFile.view facts: BuildFacts.view} out String i
 
 # zerolangDirOf -- the compiler's own directory for this build: `.zerolang`
 # beside project.z, or with no project one under the user's cache directory
-# keyed by the main file's directory; "" when there is no cache directory
+# keyed by the main file's directory -- the same key on every run, so each
+# directory keeps one folder; "" when there is no cache directory
 zerolangDirOf: function {pf: ProjectFile.view facts: BuildFacts.view} out String is {
     if pf.found then return (zcheck.joinPath a: pf.dir.stringView b: ".zerolang")
     cache: String
@@ -697,9 +698,24 @@ zerolangDirOf: function {pf: ProjectFile.view facts: BuildFacts.view} out String
     if cache.length == 0 then return ""
     base: layerBaseOf :pf :facts
     abs: cleanAbsolute p: base.stringView
-    h: abs.hash
+    h: stableHash s: abs.stringView
     sub: "zerolang/\{h}"
     return (zcheck.joinPath a: cache.stringView b: sub.stringView)
+}
+
+# stableHash -- the 64-bit FNV-1a hash of `s`'s bytes. String.hash is seeded
+# per process to keep a Map's buckets unguessable, so it names a different
+# folder on every run; a cache key must be the same on each.
+stableHash: function {s: StringView} out u64 is {
+    # the FNV offset basis and prime
+    h: 0xcbf29ce484222325
+    i: u64
+    for i < s.length loop {
+        b: (s.byteAt :i).or d: 0
+        h = (h ^ b) * 0x100000001b3
+        i = i + 1
+    }
+    return h
 }
 
 # writeLayer -- put the layer's files on disk, each only when its text
