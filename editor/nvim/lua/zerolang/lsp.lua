@@ -13,12 +13,13 @@
 --     cmd = { "/path/to/zls", "--stdio" },
 --     systemDir = "/path/to/lib/system",
 --     srcDir = "/path/to/program",   -- optional; else auto-detected
---     completion = false,            -- optional; disable built-in autotrigger
+--     completion = false,            -- optional; built-in autotrigger off (true forces it on)
 --   })
 --
 -- By default setup() turns on Neovim's built-in LSP completion with autotrigger,
--- so typing `.` opens a member-completion popup. Pass `completion = false` to
--- leave completion to your own engine (nvim-cmp, blink.cmp, ...).
+-- so typing `.` opens a member-completion popup -- unless nvim-cmp or blink.cmp
+-- is loaded, which then drives completion alone. `completion = false` leaves it
+-- off and `completion = true` turns it on regardless.
 --
 -- setup() also shows a signature-help popup (the current call's parameters, with
 -- the active one highlighted) automatically when a `:` or a space is typed, and
@@ -38,6 +39,12 @@ local here = debug.getinfo(1, "S").source:sub(2)
 local checkout = vim.fn.fnamemodify(here, ":h:h:h:h:h")
 
 local uv = vim.uv or vim.loop
+
+-- other_engine_loaded -- whether a completion engine that drives LSP completion
+-- itself (nvim-cmp, blink.cmp) is already loaded in this session.
+local function other_engine_loaded()
+  return package.loaded["cmp"] ~= nil or package.loaded["blink.cmp"] ~= nil
+end
 
 local function is_dir(path)
   local st = uv.fs_stat(path)
@@ -92,7 +99,14 @@ function M.setup(opts)
           -- labels), so the popup opens as you type. The server advertises the
           -- triggers, so no client change is needed to pick up the space fire.
           -- Opt out with `completion = false` if you drive completion yourself.
-          if opts.completion ~= false and client:supports_method("textDocument/completion") then
+          -- Left unset, it stays off when another completion engine is loaded:
+          -- two engines answering the same trigger draw two menus, each sorted
+          -- its own way, and the one on screen flips as they redraw.
+          local builtin = opts.completion
+          if builtin == nil then
+            builtin = not other_engine_loaded()
+          end
+          if builtin and client:supports_method("textDocument/completion") then
             vim.lsp.completion.enable(true, client.id, bufnr, { autotrigger = true })
             -- `noselect` so autotrigger opens the menu without inserting the
             -- first item (and further typing filters rather than appending);

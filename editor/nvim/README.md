@@ -80,9 +80,12 @@ Completion autotriggers on `.`: typing a member access opens a popup of the
 value's fields and methods (or a unit's top-level symbols), driven by Neovim's
 built-in LSP completion. `setup()` sets `completeopt` to `menuone,noselect,popup`
 buffer-locally (the global default is left alone) so the menu opens without
-auto-selecting the first item and further typing filters it. Pass
-`completion = false` to `setup()` to leave completion — and `completeopt` — to
-your own engine (nvim-cmp, blink.cmp, …).
+auto-selecting the first item and further typing filters it. When nvim-cmp or
+blink.cmp is loaded, `setup()` leaves completion — and `completeopt` — to it:
+two engines answering the same `.` draw two menus, sorted differently, and the
+one on screen flips as you move. Pass `completion = false` to leave completion to
+another engine `setup()` does not recognise, or `completion = true` to turn the
+built-in one on regardless.
 
 Signature help pops up automatically as you type a call — a floating window with
 the callee's parameters and the active one highlighted — when you type a `:` or a
