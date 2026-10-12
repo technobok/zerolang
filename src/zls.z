@@ -477,6 +477,7 @@ zlsWord: data {
     mHover: "textDocument/hover"
     mReferences: "textDocument/references"
     mCompletion: "textDocument/completion"
+    mResolve: "completionItem/resolve"
     mSignatureHelp: "textDocument/signatureHelp"
     mFormatting: "textDocument/formatting"
     mDocumentSymbol: "textDocument/documentSymbol"
@@ -687,6 +688,8 @@ Server: class {
                 this.handleNav :msg mode: 3
             } else if mv == zlsWord.slot.mCompletion then {
                 this.handleNav :msg mode: 4
+            } else if mv == zlsWord.slot.mResolve then {
+                this.handleResolve :msg
             } else if mv == zlsWord.slot.mSignatureHelp then {
                 this.handleNav :msg mode: 5
             } else if mv == zlsWord.slot.mFormatting then {
@@ -779,6 +782,8 @@ Server: class {
         ctc.items.append (Value.text ".".string)
         ctc.items.append (Value.text " ".string)
         comp.set key: "triggerCharacters" value: Value.array ctc
+        # an item's signature and doc come on request, for the one highlighted
+        comp.set key: "resolveProvider" value: Value.boolean true
         caps.set key: "completionProvider" value: Value.object comp
         sig: newObj
         stc: newArr
@@ -1422,6 +1427,7 @@ Server: class {
                         if mode == 4 then {
                             res = (completionAnswer
                                 snap: sno
+                                docUri: uo.stringView
                                 docRel: drel.stringView
                                 srcDir: this.srcDir.stringView
                                 docText: dtext.stringView
@@ -1461,6 +1467,118 @@ Server: class {
             }
         } case none then null
         sendResult id: idv result: answer tp: this.transport
+    }
+
+    # handleResolve -- completionItem/resolve: the item back with the hover card
+    # of what it names (`documentation`) and its signature's first line
+    # (`detail`), found again by name from where the completion was asked (the
+    # item's `data`). An item with no data, or one that no longer names
+    # anything, comes back as it was.
+    handleResolve: function {:this msg: Value.view} is {
+        if this.debounce when this.hasDirty then this.flushDirty
+        idv: idValueOf :msg
+        it: newObj
+        lbl: String
+        lbo: json.textAt v: msg path: "params/label"
+        match (
+            lbo
+        ) case some then {
+            lbl = lbo.copy
+        } case none then null
+        it.set key: "label" value: Value.text lbl.copy
+        ko: json.intAt v: msg path: "params/kind"
+        match (
+            ko
+        ) case some then {
+            it.set key: "kind" value: Value.intval ko
+        } case none then null
+        copyParamText :msg :it key: "detail"
+        copyParamText :msg :it key: "sortText"
+        base: String
+        bo: json.textAt v: msg path: "params/data/base"
+        match (
+            bo
+        ) case some then {
+            base = bo.copy
+        } case none then null
+        uo: json.textAt v: msg path: "params/data/uri"
+        lo: json.intAt v: msg path: "params/data/line"
+        match (
+            uo
+        ) case some then {
+            match (
+                lo
+            ) case some then {
+                (it.set
+                    key: "data"
+                    value: (completionData uri: uo.stringView line0: lo base: base.stringView)
+                )
+                (this.resolveInto
+                    :it
+                    uri: uo.stringView
+                    line0: lo
+                    base: base.stringView
+                    label: lbl.stringView
+                )
+            } case none then null
+        } case none then null
+        sendResult id: idv result: Value.object it tp: this.transport
+    }
+
+    # resolveInto -- fill `it` with the card of `label` as completed at `line0`
+    # of the document `uri`, after the member base `base` ("" for a bare name)
+    resolveInto: function {
+        :this
+        it: Obj
+        uri: StringView
+        line0: i64
+        base: StringView
+        label: StringView
+    } is {
+        drel: String
+        dsrc: String
+        found: false
+        {
+            dgo: this.docs.get key: uri.string
+            match (
+                dgo
+            ) case some then {
+                drel = dgo.relpath.copy
+                dsrc = dgo.srcDir.copy
+                found = true
+            } case none then null
+        }
+        if found.not then return
+        this.srcDir = dsrc.take
+        ck: this.checkKeyOf :uri
+        sno: this.snapshots.get key: ck
+        match (
+            sno
+        ) case some then {
+            card: (completionCard
+                snap: sno
+                docRel: drel.stringView
+                srcDir: this.srcDir.stringView
+                :line0
+                :base
+                :label
+            )
+            md: String
+            mo: json.textAt v: card path: "contents/value"
+            match (
+                mo
+            ) case some then {
+                md = mo.copy
+            } case none then null
+            if md.length > 0 then {
+                sig: fenceFirstLine md: md.stringView
+                if sig.length > 0 then it.set key: "detail" value: Value.text sig
+                doc: newObj
+                doc.set key: "kind" value: Value.text "markdown".string
+                doc.set key: "value" value: Value.text md.copy
+                it.set key: "documentation" value: Value.object doc
+            }
+        } case none then null
     }
 
     # answer a document-symbol request with the file's definitions, which is
@@ -5466,8 +5584,7 @@ descendUnitType: function {
                 st: o
                 nameId: (zast.poolFind pool: prog.names text: unitName)
             )
-            result = (ztypecheck.descendNamed
-                scope: ztypes.declid
+            result = (ztypecheck.resolveUnitMemberLate
                 st: o
                 ast: prog
                 unitDecl: ud
@@ -7101,6 +7218,8 @@ signatureHelpAnswer: function {
 # position -> the base's members.
 completionAnswer: function {
     snap: zcheck.CheckResult
+    # the document's uri, which each item's `data` carries for its resolve
+    docUri: StringView
     docRel: StringView
     srcDir: StringView
     docText: StringView
@@ -7137,6 +7256,8 @@ completionAnswer: function {
     # the markers a member position allows, offered after the members
     marks: ListVal zast.markerkind
     memberMode: false
+    # the base before the `.` in member position, which a resolve re-reads
+    memberBase: String
     # member position: a '.' before the prefix -> complete the base's members
     if ps > 0 then {
         pb: ltv.byteAt i: ps - 1
@@ -7148,6 +7269,7 @@ completionAnswer: function {
                 be: ps - 1
                 br: memberBaseOf :ltv dot: be
                 base: ltv.substring from: br.lo to: br.hi
+                memberBase = base.string
                 (addMemberCompletions
                     :snap
                     :docRel
@@ -7225,11 +7347,278 @@ completionAnswer: function {
         ) case some then {
             it.set key: "sortText" value: Value.text "\{ro.u64}\{lb}"
         } case none then null
+        (it.set
+            key: "data"
+            value: (completionData uri: docUri :line0 base: memberBase.stringView)
+        )
         arr.items.append (Value.object it)
         li = li + 1
     }
     appendMarkers :arr :marks prefix: prefix.stringView
     return (Value.array arr)
+}
+
+# completionData -- an item's `data`: where its completion was asked, and the
+# member base before the `.` ("" for a bare name), which is all a resolve
+# needs to find the item again by name in the snapshot it then holds.
+completionData: function {uri: StringView line0: i64 base: StringView} out Value is {
+    d: newObj
+    d.set key: "uri" value: Value.text uri.string
+    d.set key: "line" value: Value.intval line0
+    d.set key: "base" value: Value.text base.string
+    return (Value.object d)
+}
+
+# copyParamText -- copy the resolve request's item field `key` into `it`, when
+# it is there as text
+copyParamText: function {msg: Value.view it: Obj key: StringView} is {
+    p: "params/\{key}"
+    fo: json.textAt v: msg path: p.stringView
+    match (
+        fo
+    ) case some then {
+        it.set key: key.string value: Value.text fo.copy
+    } case none then null
+}
+
+# fenceFirstLine -- the first line of the code fence a hover card opens with:
+# the signature or type line an item's `detail` shows. "" when there is none.
+fenceFirstLine: function {md: StringView} out String is {
+    nl: md.indexOf needle: "\n"
+    match (
+        nl
+    ) case some then {
+        rest: md.substring from: nl + 1 to: md.length
+        e: rest.indexOf needle: "\n"
+        match (
+            e
+        ) case some then {
+            return (rest.substring from: 0 to: e).string
+        } case none then null
+    } case none then null
+    return ""
+}
+
+# completionCard -- the hover card of the completion item `label`, completed
+# at `line0` after the member base `base` ("" for a bare name): found again by
+# name the way the completion found it -- a local, a member of the base, a
+# unit-level name the document's unit chain or the prelude reaches, or a unit
+# by its file, read without parsing it. Nul when it names nothing now.
+completionCard: function {
+    snap: zcheck.CheckResult
+    docRel: StringView
+    srcDir: StringView
+    line0: i64
+    base: StringView
+    label: StringView
+} out Value is {
+    l1u: (line0 + 1).u32.orPanic
+    site: docUnitDecl r: snap rel: docRel :srcDir
+    if base.length == 0 then {
+        throwaway: MapRV String v: u8
+        ds: (enclosingDefStart
+            prog: snap.prog
+            unitOp: (docUnitOp r: snap rel: docRel :srcDir)
+            :l1u
+            sink: throwaway
+        )
+        lt: baseTypeInScope :snap :docRel :srcDir defStart: ds :l1u base: label
+        # a local reads as hover reads its binding: the name and its type
+        if lt.isZero.not then {
+            lc: label.string
+            lc.append ": "
+            lc.append (displayTypeNameOfOpt o: snap.st tid: lt :site)
+            return (hoverMarkdown code: lc.stringView doc: "")
+        }
+    }
+    hit: itemHit :snap :docRel :srcDir :l1u :site :base :label
+    if hit.declId.isZero when hit.tid.isZero when hit.unitFsno.isZero then return Value.nul
+    sp: (Spans
+        rows: ListVal spanrow
+        names: List String
+        pos: (IdMapV zast.nodeid v: zast.nodepos)
+        ranges: ListVal rangerow
+        lastPos: (zast.nodepos line: 0 col: 0)
+    )
+    sp.walkProgram prog: snap.prog
+    return (navHoverAnswer :snap :sp :hit hname: label.string :site)
+}
+
+# itemHit -- what the completion item `label` names, as a hover hit: a member
+# of the base's type, a definition of the unit the base or the unit chain
+# reaches, or a unit by its file. Every id zero when it names nothing.
+itemHit: function {
+    snap: zcheck.CheckResult
+    docRel: StringView
+    srcDir: StringView
+    l1u: u32
+    site: ztypes.declid
+    base: StringView
+    label: StringView
+} out navhit is {
+    hit: (navhit
+        idx: 0
+        kind: 6
+        width: 0
+        nodeid: zast.nodeid
+        vid: ztypes.vid
+        tid: ztypes.tid
+        owner: ztypes.tid
+        declId: ztypes.declid
+        unitFsno: zvfs.fsno
+    )
+    o: snap.st
+    match (
+        o
+    ) case some then {
+        nameId: zast.poolFind pool: snap.prog.names text: label
+        holder: ztypes.declid
+        if base.length == 0 then {
+            holder = chainUnitHolding st: o :site :nameId
+            if holder.isZero then hit.unitFsno = unitFileFsno :snap :docRel :srcDir name: label
+        } else {
+            db: resolveDotBase :snap :docRel :srcDir :l1u :base
+            if db.kind.unitBase then {
+                holder = unitBaseHolder :snap :site :base :db
+            } else if db.tid.isZero.not then {
+                hit.owner = db.tid
+                hit.declId = o.typing.declMemberIdOf parentTypeId: db.tid :nameId
+                hit.tid = childOfIn prog: snap.prog o: snap.st parent: db.tid name: label
+            }
+        }
+        if holder.isZero.not then hit = unitDefHit :snap :hit :holder :nameId :label
+    } case none then null
+    return hit
+}
+
+# unitDefHit -- `hit` naming the definition `label` of the unit `holder`: a
+# subunit by its file, anything else by its declaration and type
+unitDefHit: function {
+    snap: zcheck.CheckResult
+    hit: navhit
+    holder: ztypes.declid
+    nameId: zast.nameid
+    label: StringView
+} out navhit is {
+    h: hit
+    o: snap.st
+    match (
+        o
+    ) case some then {
+        h.declId = ztypecheck.declOfUnitDefIds st: o unitDecl: holder :nameId
+        if (o.typing.decls.get i: h.declId).kind.unitDecl then {
+            h.unitFsno = unitFsnoOfDecl :snap declId: h.declId
+        } else {
+            h.tid = unitMemberTid :snap :holder declId: h.declId :label
+        }
+    } case none then null
+    return h
+}
+
+# unitBaseHolder -- the unit a member base names: a path's unit by its type, a
+# single head by its file, else the subunit the document's unit reaches
+unitBaseHolder: function {
+    snap: zcheck.CheckResult
+    site: ztypes.declid
+    base: StringView
+    db: dotbase
+} out ztypes.declid is {
+    o: snap.st
+    match (
+        o
+    ) case some then {
+        if db.single.not then return (o.reg.defOf tid: db.tid)
+        bn: zast.poolFind pool: snap.prog.names text: base
+        if (unitFsnoByName :snap name: base).isZero.not then {
+            return (ztypecheck.unitDeclOfName st: o nameId: bn)
+        }
+        return (bareDeclOf o: snap.st :site nameId: bn)
+    } case none then null
+    return ztypes.declid.zero
+}
+
+# unitMemberTid -- the type of the unit definition `declId` (named `label` in
+# the unit `holder`), resolved now if the check has not. A re-export (core's
+# `print: io.print`) keeps its own Decl, whose doc line the card reads, and
+# types as its target.
+unitMemberTid: function {
+    snap: zcheck.CheckResult
+    holder: ztypes.declid
+    declId: ztypes.declid
+    label: StringView
+} out ztypes.tid is {
+    o: snap.st
+    match (
+        o
+    ) case some then {
+        tHolder: holder
+        tName: label.string
+        if (o.typing.decls.get i: declId).kind.reexportDecl then {
+            tgt: reexportTargetDecl prog: snap.prog :o :declId
+            if tgt.isZero.not then {
+                tHolder = o.typing.declParentOf declId: tgt
+                tName = (zast.nameTextAt
+                    ast: snap.prog
+                    ref: (o.typing.decls.get i: tgt).name
+                ).copy
+            }
+        }
+        return (ztypecheck.resolveUnitMemberLate
+            st: o
+            ast: snap.prog
+            unitDecl: tHolder
+            name: tName.stringView
+        )
+    } case none then null
+    return ztypes.tid.zero
+}
+
+# chainUnitHolding -- the unit declaration that holds the unit-level name
+# `nameId` as written in unit `site`: the unit itself or the nearest unit
+# enclosing it, else the prelude. 0 when none does.
+chainUnitHolding: function {
+    st: zenv.ZSymbolTable.view
+    site: ztypes.declid
+    nameId: zast.nameid
+} out ztypes.declid is {
+    if nameId.isZero then return ztypes.declid.zero
+    cur: site
+    for cur.isZero.not loop {
+        if (st.typing.declIsUnitScope declId: cur) when (ztypecheck.declOfUnitDefIds
+            :st
+            unitDecl: cur
+            :nameId
+        ).isZero.not then return cur
+        cur = st.typing.declParentOf declId: cur
+    }
+    cr: st.typing.coreUnitRoot
+    if cr.isZero.not when (ztypecheck.declOfUnitDefIds :st unitDecl: cr :nameId).isZero.not then {
+        return cr
+    }
+    return ztypes.declid.zero
+}
+
+# unitFileFsno -- the file of the unit `name` as completion lists it -- in the
+# document unit's own folder, else on the roots -- loaded or not, so its
+# header comment can be read without parsing it. 0 when there is none.
+unitFileFsno: function {
+    snap: zcheck.CheckResult
+    docRel: StringView
+    srcDir: StringView
+    name: StringView
+} out zvfs.fsno is {
+    if (zparser.isValidUnitName :name).not then return zvfs.fsno
+    file: "\{name}.z"
+    docFs: docFsnoOf r: snap rel: docRel :srcDir
+    if docFs.isZero.not then {
+        un: zsource.unitNameOf path: docRel
+        own: snap.vfs.siblingDir fileid: docFs name: un.stringView
+        hit: snap.vfs.walk parent: own name: file.stringView
+        if (snap.vfs.arm dentryid: hit) == zvfs.nodekind.file then return hit
+    }
+    top: snap.vfs.walk parent: snap.vfs.rootid name: file.stringView
+    if (snap.vfs.arm dentryid: top) == zvfs.nodekind.file then return top
+    return zvfs.fsno
 }
 
 # appendMarkers -- the markers `prefix` opens, as keyword items that sort after
