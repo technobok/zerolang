@@ -1469,60 +1469,55 @@ Server: class {
         sendResult id: idv result: answer tp: this.transport
     }
 
-    # handleResolve -- completionItem/resolve: the item back with the hover card
-    # of what it names (`documentation`) and its signature's first line
-    # (`detail`), found again by name from where the completion was asked (the
-    # item's `data`). An item with no data, or one that no longer names
-    # anything, comes back as it was.
+    # handleResolve -- completionItem/resolve: the item back exactly as the
+    # client sent it, with the hover card of what it names as `documentation`,
+    # found again by name from where the completion was asked (the item's
+    # `data`). Nothing the menu already shows changes -- a field that did would
+    # redraw the highlighted row, and could re-sort the list under the cursor.
+    # An item with no data, or one that no longer names anything, comes back
+    # as it was.
     handleResolve: function {:this msg: Value.view} is {
         if this.debounce when this.hasDirty then this.flushDirty
         idv: idValueOf :msg
-        it: newObj
+        item: paramsCopy :msg
         lbl: String
-        lbo: json.textAt v: msg path: "params/label"
-        match (
-            lbo
-        ) case some then {
-            lbl = lbo.copy
-        } case none then null
-        it.set key: "label" value: Value.text lbl.copy
-        ko: json.intAt v: msg path: "params/kind"
-        match (
-            ko
-        ) case some then {
-            it.set key: "kind" value: Value.intval ko
-        } case none then null
-        copyParamText :msg :it key: "detail"
-        copyParamText :msg :it key: "sortText"
         base: String
-        bo: json.textAt v: msg path: "params/data/base"
-        match (
-            bo
-        ) case some then {
-            base = bo.copy
-        } case none then null
+        {
+            lbo: json.textAt v: msg path: "params/label"
+            match (
+                lbo
+            ) case some then {
+                lbl = lbo.copy
+            } case none then null
+            bo: json.textAt v: msg path: "params/data/base"
+            match (
+                bo
+            ) case some then {
+                base = bo.copy
+            } case none then null
+        }
         uo: json.textAt v: msg path: "params/data/uri"
         lo: json.intAt v: msg path: "params/data/line"
         match (
-            uo
-        ) case some then {
+            item
+        ) case object then {
             match (
-                lo
+                uo
             ) case some then {
-                (it.set
-                    key: "data"
-                    value: (completionData uri: uo.stringView line0: lo base: base.stringView)
-                )
-                (this.resolveInto
-                    :it
-                    uri: uo.stringView
-                    line0: lo
-                    base: base.stringView
-                    label: lbl.stringView
-                )
+                match (
+                    lo
+                ) case some then {
+                    (this.resolveInto
+                        it: item
+                        uri: uo.stringView
+                        line0: lo
+                        base: base.stringView
+                        label: lbl.stringView
+                    )
+                } case none then null
             } case none then null
-        } case none then null
-        sendResult id: idv result: Value.object it tp: this.transport
+        } else null
+        sendResult id: idv result: item tp: this.transport
     }
 
     # resolveInto -- fill `it` with the card of `label` as completed at `line0`
@@ -1571,8 +1566,6 @@ Server: class {
                 md = mo.copy
             } case none then null
             if md.length > 0 then {
-                sig: fenceFirstLine md: md.stringView
-                if sig.length > 0 then it.set key: "detail" value: Value.text sig
                 doc: newObj
                 doc.set key: "kind" value: Value.text "markdown".string
                 doc.set key: "value" value: Value.text md.copy
@@ -2421,6 +2414,8 @@ displayTypeNameSt: function {
 } out String is {
     disp: st.reg.nameOf :tid
     if disp.length == 0 then return disp
+    inst: instanceSpelling :st :tid :site
+    if inst.length > 0 then return inst
     base: tid
     go: st.reg.genericOriginOf :tid
     if go.isZero.not then base = go
@@ -2435,6 +2430,72 @@ displayTypeNameSt: function {
         if (coreReexports :st :base) then path = "core"
     }
     return "\{path}.\{disp.stringView}"
+}
+
+# instanceSpelling -- an instance of a generic type as a program writes it: the
+# template's name, its first argument, then each further one labelled with its
+# parameter's name, an argument its parameter's default supplies left out --
+# `optionval i64`, `(MapRR String V: json.Value)`, `ListRef String`. More than
+# one argument is parenthesised, as a program must write it, and so is an
+# argument that is itself an instance. "" when `tid` is no instance, or a
+# parameter's name is not known yet, which leaves the registry's name.
+instanceSpelling: function {
+    st: zenv.ZSymbolTable.view
+    tid: ztypes.tid
+    site: ztypes.declid
+} out String is {
+    go: st.reg.genericOriginOf :tid
+    n: st.reg.genericArgCount specId: tid
+    if go.isZero or (n == 0) then return ""
+    tdecl: st.reg.defOf tid: go
+    # the trailing arguments their defaults supply are not written
+    shown: n
+    for shown > 1 loop {
+        last: st.reg.genericTypeArgAt specId: tid ordinal: shown - 1
+        dflt: st.reg.genericParamDefaultTidAt :tdecl i: shown - 1
+        if last.isZero or dflt.isZero or (last == dflt).not then break
+        shown = shown - 1
+    }
+    s: displayTypeNameSt :st tid: go :site
+    i: u64
+    for i < shown loop {
+        s.append " "
+        if i > 0 then {
+            ptid: ((st.reg.genericParamTidOf
+                :tdecl
+                paramName: (st.reg.genericParamNameAt :tdecl :i)
+            ).or
+                d: ztypes.tid.zero
+            )
+            pn: st.reg.nameOf tid: ptid
+            if pn.length == 0 then return ""
+            s.append pn
+            s.append ": "
+        }
+        s.append (instanceArgSpelling :st arg: (st.reg.genericArgAt specId: tid ordinal: i) :site)
+        i = i + 1
+    }
+    if shown > 1 then return "(\{s})"
+    return s
+}
+
+# instanceArgSpelling -- one argument of an instance as a program writes it.
+# An instance that prints with one argument prints bare, so as an argument it
+# takes the parentheses a longer one already carries.
+instanceArgSpelling: function {
+    st: zenv.ZSymbolTable.view
+    arg: ztypes.genericarg
+    site: ztypes.declid
+} out String is {
+    match (
+        arg
+    ) case typeArg then {
+        at: displayTypeNameSt :st tid: arg :site
+        if at.stringView.contains " " when (at.stringView.startsWith "(").not then return "(\{at})"
+        return at
+    } case valueArg then {
+        return "\{arg}"
+    }
 }
 
 # coreReexports -- core names the type under its own name, so `core.<name>`
@@ -7312,25 +7373,32 @@ completionAnswer: function {
         addScopeCompletions :snap :docRel :srcDir :l1u sink: cands :rank
     }
 
+    # each label kept, behind its sortText's group digit when it has one, so
+    # the array is in the order sortText gives and a client sorting by either
+    # keeps it
     labels: List String
     for each ce: cands.iterateItems loop {
-        pv: prefix.stringView
-        if pv.length == 0 then {
-            lc: ce.key.copy
-            labels.append lc
-        } else {
-            kv: ce.key.stringView
-            if kv.startsWith pv then {
-                lc2: ce.key.copy
-                labels.append lc2
-            }
+        if ce.key.stringView.startsWith prefix then {
+            lk: String
+            ro0: rank.get key: ce.key
+            match (
+                ro0
+            ) case some then {
+                lk = "\{ro0.u64}"
+            } case none then null
+            lk.append ce.key
+            labels.append lk
         }
     }
     labels.sort
     li: u64
     ln: labels.length
     for li < ln loop {
-        lb: labels.get i: li
+        lk: labels.get i: li
+        # every candidate is ranked or none is; a ranked key leads with a digit
+        skip: u64
+        if rank.length > 0 then skip = 1
+        lb: (lk.stringView.substring from: skip to: lk.length).string
         ko: cands.get key: lb
         kind: 6.u8
         match (
@@ -7369,34 +7437,52 @@ completionData: function {uri: StringView line0: i64 base: StringView} out Value
     return (Value.object d)
 }
 
-# copyParamText -- copy the resolve request's item field `key` into `it`, when
-# it is there as text
-copyParamText: function {msg: Value.view it: Obj key: StringView} is {
-    p: "params/\{key}"
-    fo: json.textAt v: msg path: p.stringView
+# paramsCopy -- a deep copy of a request's `params`: a resolve answers the
+# item it was sent
+paramsCopy: function {msg: Value.view} out Value is {
     match (
-        fo
-    ) case some then {
-        it.set key: key.string value: Value.text fo.copy
-    } case none then null
+        msg
+    ) case object then {
+        po: msg.entries.get key: "params"
+        match (
+            po
+        ) case some then {
+            return (valueCopy v: po)
+        } case none then null
+    } else null
+    return Value.nul
 }
 
-# fenceFirstLine -- the first line of the code fence a hover card opens with:
-# the signature or type line an item's `detail` shows. "" when there is none.
-fenceFirstLine: function {md: StringView} out String is {
-    nl: md.indexOf needle: "\n"
+# valueCopy -- a deep copy of a JSON value
+valueCopy: function {v: Value.view} out Value is {
     match (
-        nl
-    ) case some then {
-        rest: md.substring from: nl + 1 to: md.length
-        e: rest.indexOf needle: "\n"
-        match (
-            e
-        ) case some then {
-            return (rest.substring from: 0 to: e).string
-        } case none then null
-    } case none then null
-    return ""
+        v
+    ) case nul then {
+        return Value.nul
+    } case boolean then {
+        return (Value.boolean v)
+    } case intval then {
+        return (Value.intval v)
+    } case floatval then {
+        return (Value.floatval v)
+    } case text then {
+        return (Value.text v.copy)
+    } case array then {
+        a: newArr
+        for each x: v.items loop a.items.append (valueCopy v: x)
+        return (Value.array a)
+    } case object then {
+        o: newObj
+        for each k: v.keys loop {
+            e: v.entries.get key: k
+            match (
+                e
+            ) case some then {
+                o.set key: k.copy value: (valueCopy v: e)
+            } case none then null
+        }
+        return (Value.object o)
+    }
 }
 
 # completionCard -- the hover card of the completion item `label`, completed
@@ -7441,7 +7527,48 @@ completionCard: function {
         lastPos: (zast.nodepos line: 0 col: 0)
     )
     sp.walkProgram prog: snap.prog
+    if (declKindIs o: snap.st declId: hit.declId k: ztyping.declkind.fieldDecl) then {
+        return (fieldCard :snap :sp :hit :label :site)
+    }
     return (navHoverAnswer :snap :sp :hit hname: label.string :site)
+}
+
+# fieldCard -- a field as hover reads a use of it: `Owner.name: Type`, its
+# trailing comment, and the doc block above it -- never the card of its type
+fieldCard: function {
+    snap: zcheck.CheckResult
+    sp: Spans.view
+    hit: navhit
+    label: StringView
+    site: ztypes.declid
+} out Value is {
+    code: displayTypeNameOfOpt o: snap.st tid: hit.owner :site
+    code.append "."
+    code.append label
+    code.append ": "
+    code.append (displayTypeNameOfOpt o: snap.st tid: hit.tid :site)
+    doc: String
+    dn: declNodeOf o: snap.st declId: hit.declId
+    if dn.isZero.not then {
+        doc = hoverDoc :snap :sp nid: dn
+        appendTrailingDoc :snap :sp nid: dn body: code
+    }
+    return (hoverMarkdown code: code.stringView doc: doc.stringView)
+}
+
+# declKindIs -- whether the declaration `declId` is of kind `k`
+declKindIs: function {
+    o: (Option zenv.ZSymbolTable).view
+    declId: ztypes.declid
+    k: ztyping.declkind
+} out bool is {
+    if declId.isZero then return false
+    match (
+        o
+    ) case some then {
+        return (o.typing.decls.get i: declId).kind == k
+    } case none then null
+    return false
 }
 
 # itemHit -- what the completion item `label` names, as a hover hit: a member
