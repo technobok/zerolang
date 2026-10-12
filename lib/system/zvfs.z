@@ -216,13 +216,15 @@ DentryTable: class {
     }
 }
 
-# Open() result: a domain-specific non-generic union.
+# Open() result: what reading a node answers. A folder is read like a file,
+# and answers its entries rather than bytes.
 OpenResult: union {
-    # `ok` carries the opened file's contents as String. May
-    # become a TextReader once a Provider implementation needs
-    # stream semantics.
-    ok: String
-    # why the open failed
+    # a file's contents
+    file: String
+    # a folder's entry names, sorted. A mount's are the union of its roots, the
+    # earlier root winning a name, and a name bound there is included
+    dir: List String
+    # why it could not be read
     err: IoError
 }
 
@@ -235,7 +237,8 @@ ZVfsProvider: protocol {
     # resolve one path component `name` under `parent`, answering this
     # provider's own node id, or 0 for NOTFOUND
     walk: function {:this name: StringView parent: u32} out u32
-    # read the item's contents, or say why it could not be read
+    # read the item: a file's contents, a folder's entry names, or why it could
+    # not be read
     open: function {t: this.view item: u32} out OpenResult
     # what the item is, without reading it
     stat: function {t: this.view item: u32} out nodekind
@@ -247,7 +250,7 @@ ZVfsProvider: protocol {
 }
 
 # NullProvider -- the stateless default. walk always returns
-# NOTFOUND, open always errors, stat returns dir for the root
+# NOTFOUND, open lists the empty root and errors elsewhere, stat returns dir for the root
 # item / notfound elsewhere, path returns the static [NULL]
 # marker. `_unused: bool` is a placeholder field so the class is not
 # zero-field.
@@ -262,9 +265,13 @@ NullProvider: class {
         parent.drop
         return 1
     }
-    # always an error: there is nothing here to read
+    # the root folder, which is empty; anything else is an error, there being
+    # nothing here to read
     open: function {t: this.view item: u32} out OpenResult is {
-        item.drop
+        if item == 0 then {
+            none: List String
+            return (OpenResult.dir none.take)
+        }
         e: IoError.other "NullProvider cannot open for read".string
         return (OpenResult.err e.take)
     }
@@ -317,7 +324,7 @@ ProviderTable: class {
     # register an in-memory StringProvider and answer its id
     registerString: function {:this} out u32 is {
         sp: StringProvider nodes: List StringNode children: (MapRV String v: u32)
-        root: StringNode path: "" kind: nodekind.dir content: ""
+        root: StringNode path: "" kind: nodekind.dir content: "" kids: ListVal u32
         sp.nodes.append root.take
         prov: ZVfsProvider.create from: sp.take
         box: ProviderBox p: prov
@@ -348,6 +355,9 @@ StringNode: class {
     kind: nodekind
     # the file's bytes; empty for a directory
     content: String
+    # a directory's children by node id, in the order they were first walked
+    # or added; a cached absence among them is not an entry
+    kids: ListVal u32
 }
 
 # StringProvider -- in-memory file store. `nodes` is the flat node
@@ -365,16 +375,17 @@ StringProvider: class {
     # Internal: append a node, return its assigned id.
     appendNode: function {:this fpath: String.take k: nodekind c: String.take} out u32 is {
         idx: this.nodes.length.u32.orPanic
-        n: StringNode path: fpath.take kind: k content: c.take
+        n: StringNode path: fpath.take kind: k content: c.take kids: ListVal u32
         this.nodes.append n.take
         return idx
     }
 
-    # Internal: record a parent->child edge in the children map.
-    # Builds the composite "<parentid>:<name>" key directly.
+    # Internal: record a parent->child edge in the children map and the
+    # parent's kids. Builds the composite "<parentid>:<name>" key directly.
     addChild: function {:this parentid: u32 name: StringView childid: u32.take} is {
         key: "\{parentid.u64}:\{name}"
         this.children.set key: key.take value: childid
+        (this.nodes.getMut i: parentid).kids.append childid
     }
 
     # resolve `name` under `parent` through the children map -- no filesystem is
@@ -403,10 +414,16 @@ StringProvider: class {
             n.kind
         ) case file then {
             c: n.content.copy
-            return (OpenResult.ok c.take)
+            return (OpenResult.file c.take)
         } case dir then {
-            e: IoError.other "is a directory".string
-            return (OpenResult.err e.take)
+            names: List String
+            for each kid: n.kids loop {
+                kn: t.nodes.get i: kid
+                if kn.kind != nodekind.notfound then names.append (baseName path: kn.path.stringView
+                )
+            }
+            names.sort
+            return (OpenResult.dir names.take)
         } case notfound then {
             e: IoError.notfound
             return (OpenResult.err e.take)
@@ -483,7 +500,7 @@ FSNode: class {
 
 # FSProvider -- a provider that wraps a real filesystem. Walks issue
 # `io.stat` on the joined rootpath/relpath; opens read the file via
-# `io.readText`. `pathtable` indexes nodes by NodeID (= list index);
+# `io.readText`, or list the folder via `io.listDir`. `pathtable` indexes nodes by NodeID (= list index);
 # `pathcache` maps the relative path back to its assigned NodeID so
 # repeat walks are O(1). addFile panics: FSProvider is read-only from
 # the VFS view.
@@ -554,13 +571,22 @@ FSProvider: class {
             match (
                 rr
             ) case ok then {
-                return (OpenResult.ok rr.take)
+                return (OpenResult.file rr.take)
             } case err then {
                 return (OpenResult.err rr.take)
             }
         } case dir then {
-            e: IoError.other "is a directory".string
-            return (OpenResult.err e.take)
+            full: joinPath parent: t.rootpath.stringView name: n.path.stringView
+            lr: io.listDir full
+            match (
+                lr
+            ) case ok then {
+                names: lr.take
+                names.sort
+                return (OpenResult.dir names.take)
+            } case err then {
+                return (OpenResult.err lr.take)
+            }
         } case notfound then {
             e: IoError.notfound
             return (OpenResult.err e.take)
@@ -661,6 +687,9 @@ ZVfs: class {
     rootid: fsno
     # the overlay a sibling lookup treats as one tree with what it shadows
     shadow: shadowpair
+    # the names bound under each entry by `bind`, which a walk finds through
+    # the walk cache alone and a folder read must list too
+    bound: (IdMapR fsno V: List String)
 } as {
     # registerNull -- append a NullProvider to the provider list and
     # create its root directory dentry. Returns the new dentryid.
@@ -684,7 +713,7 @@ ZVfs: class {
     # currently goes through ProviderTable, not ZVfs.providers.
     registerString: function {:this} out fsno is {
         sp: StringProvider nodes: List StringNode children: (MapRV String v: u32)
-        root: StringNode path: "" kind: nodekind.dir content: ""
+        root: StringNode path: "" kind: nodekind.dir content: "" kids: ListVal u32
         sp.nodes.append root.take
         prov: ZVfsProvider.create from: sp.take
         box: ProviderBox p: prov
@@ -1107,13 +1136,9 @@ ZVfs: class {
         return false
     }
 
-    # open -- match on the dentry arm; file delegates to the underlying
-    # provider's open. Non-file arms construct the appropriate IoError
-    # (directory and mount -> "is a directory", a mount being a union of
-    # directories; notfound -> notfound; root -> "[NULL]"),
-    # but returns OpenResult directly rather than wrapping in a
-    # ZVfsOpenFile (the wrapper is needless in zerolang: OpenResult is
-    # the value-returned result type, no with-block context manager).
+    # open -- read an entry. A file answers its provider's contents; a
+    # directory or a mount answers its entry names (`_openDir`); notfound and
+    # the bare root answer an IoError.
     open: function {this: this.view dentryid: fsno} out OpenResult is {
         e: this.entrytable.entries.get i: dentryid
         match (
@@ -1125,17 +1150,66 @@ ZVfs: class {
             ie: IoError.notfound
             return (OpenResult.err ie.take)
         } case directory then {
-            ie: IoError.other "is a directory".string
-            return (OpenResult.err ie.take)
+            return (this._openDir :dentryid)
         } case mount then {
-            ie: IoError.other "is a directory".string
-            return (OpenResult.err ie.take)
+            return (this._openDir :dentryid)
         } case file then {
             pid: e.providerid
             nid: e.nodeid
             box: this.providers.get i: pid
             return (box.p.open item: nid)
         }
+    }
+
+    # _openDir -- a directory-like entry's names, sorted, each once: the first
+    # root of a mount wins a name, and a name is the same text in every root
+    _openDir: function {this: this.view dentryid: fsno} out OpenResult is {
+        names: List String
+        this._listInto :dentryid :names
+        names.sort
+        once: List String
+        for each nm: names loop {
+            dup: false
+            if once.length > 0 then dup = (once.get i: once.length - 1).stringView == nm
+            if dup.not then once.append nm.copy
+        }
+        return (OpenResult.dir once.take)
+    }
+
+    # _listInto -- append the names under `dentryid` to `names`: a directory's
+    # provider entries, a mount's roots in turn, and whatever is bound at the
+    # entry. Anything else holds no names
+    _listInto: function {this: this.view dentryid: fsno names: List String} is {
+        mi: this._extractMount :dentryid
+        if mi.is_mount then {
+            this._listInto dentryid: mi.first :names
+            if mi.has_second then this._listInto dentryid: mi.second :names
+        } else {
+            this._providerNamesInto :dentryid :names
+        }
+        bn: this.bound.get key: dentryid
+        match (
+            bn
+        ) case some then {
+            for each nm: bn loop names.append nm.copy
+        } case none then null
+    }
+
+    # _providerNamesInto -- append a directory entry's names, as its provider
+    # lists them, to `names`. Any other entry adds none
+    _providerNamesInto: function {this: this.view dentryid: fsno names: List String} is {
+        e: this.entrytable.entries.get i: dentryid
+        match (
+            e
+        ) case directory then {
+            box: this.providers.get i: e.providerid
+            r: box.p.open item: e.nodeid
+            match (
+                r
+            ) case dir then {
+                for each nm: r loop names.append nm.copy
+            } case file then null case err then null
+        } case root then null case notfound then null case file then null case mount then null
     }
 
     # getline -- open the file, collect its lines into a List<String>,
@@ -1146,7 +1220,7 @@ ZVfs: class {
         r: this.open :dentryid
         match (
             r
-        ) case ok then {
+        ) case file then {
             sv: r.stringView
             all_lines: List String
             for each line: sv.lines loop all_lines.append line.string
@@ -1155,6 +1229,8 @@ ZVfs: class {
                 result: ln.copy
                 return (Option.some result.take)
             }
+            return (Option.none String)
+        } case dir then {
             return (Option.none String)
         } case err then {
             return (Option.none String)
@@ -1210,6 +1286,7 @@ ZVfs: class {
         new_id: this.entrytable.append entry: new_dentry
         this.file_names.append name.string
         this._cacheWalk parent: parentid :name at: new_id
+        this._noteBound parent: parentid :name
         return new_id
     }
 
@@ -1218,6 +1295,18 @@ ZVfs: class {
     _cacheWalk: function {:this parent: fsno name: StringView at: fsno} is {
         cachekey: "\{parent}:\{name}"
         this.walk_cache.set key: cachekey.take value: at
+    }
+
+    # _noteBound -- record `name` as bound under `parent`, so a read of the
+    # parent lists it
+    _noteBound: function {:this parent: fsno name: StringView} is {
+        if (this.bound.has key: parent).not then this.bound.set key: parent value: List String
+        got: this.bound.getMut key: parent
+        match (
+            got
+        ) case some then {
+            got.append name.string
+        } case none then null
     }
 
     # _bindFile -- hang a file root at parent/name. A file has no entries to
@@ -1245,6 +1334,7 @@ ZVfs: class {
         )
         this.file_names.set i: fileid val: name.string
         this._cacheWalk parent: parentid :name at: fileid
+        this._noteBound parent: parentid :name
         return fileid
     }
 }
@@ -1257,4 +1347,16 @@ joinPath: function {parent: StringView name: StringView} out String is {
     if parent.length == 0 then return name.string
     if name.length == 0 then return parent.string
     return "\{parent}/\{name}"
+}
+
+# baseName -- the last component of a "/"-separated path: the name an entry
+# is listed by in its folder.
+baseName: function {path: StringView} out String is {
+    cut: path.lastIndexOf needle: "/"
+    match (
+        cut
+    ) case some then {
+        return (path.substring from: cut + 1 to: path.length).string
+    } case none then null
+    return path.string
 }

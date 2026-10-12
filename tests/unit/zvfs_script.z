@@ -252,15 +252,20 @@ dispatchAddFile: function {tokens: (List String).view providers: ProviderTable} 
 }
 
 # printOpenResult -- format an OpenResult as one line on stdout:
-#   "ok: <content>"    for the ok arm (content interpolated)
+#   "ok: <content>"    for the file arm (content interpolated)
+#   "dir: <names>"     for the dir arm (names space-separated, "dir:" when none)
 #   "err: <arm-name>"  for the err arm (13 IoError arms enumerated)
 # Used by both the provider-level `dispatchOpen` and the engine-level
 # `vfs open` subverb in dispatchVfs. Consumes `r`.
 printOpenResult: function {r: OpenResult.take} is {
     match (
         r
-    ) case ok then {
+    ) case file then {
         print "ok: \{r}"
+    } case dir then {
+        line: "dir:".string
+        for each nm: r loop line.append s: " \{nm}"
+        print line
     } case err then {
         match (
             r
@@ -291,7 +296,7 @@ printOpenResult: function {r: OpenResult.take} is {
 }
 
 # Verb: open <providerid> <itemid>. Calls provider.open and prints
-# either "ok: <content>" or "err: <ioerror-tag>".
+# "ok: <content>", "dir: <names>" or "err: <ioerror-tag>".
 dispatchOpen: function {tokens: (List String).view providers: ProviderTable} is {
     n: tokens.length
     if n != 3 then panic "open expects 2 args"
@@ -619,6 +624,7 @@ main: function is {
             walk_cache: (MapRV String v: fsno)
             rootid: fsno
             shadow: (zvfs.shadowpair active: false top: zvfs.fsno base: zvfs.fsno)
+            bound: (IdMapR fsno V: List String)
         )
         runScript text: r.take :words :table :providers :vfs
     } case err then {
