@@ -4803,37 +4803,84 @@ defKindOf: function {op: zast.astnode.view} out u8 is {
         return 3
     } case objectdef then {
         return 7
+    } case unitdef then {
+        return 9
     } else {
         return 21
     }
 }
 
-# collectTopDefs -- every loaded unit's name (Module) and top-level
-# definition labels (Function / Class / Constant).
-collectTopDefs: function {prog: Ast.view sink: (MapRV String v: u8)} is {
-    {
-        uCnt9z: prog.units.length
-        uIdx9z: u64
-        for uIdx9z < uCnt9z loop {
-            u9Id: prog.units.get i: uIdx9z
-            uIdx9z = uIdx9z + 1
-            (collectUnitDefs
-                ast: prog
-                wId: u9Id
-                :sink
-            )
-        }
+# rankNew -- stamp `group` onto every candidate in the sink that no earlier
+# group claimed, so a name keeps the nearest group it was found in.
+rankNew: function {sink: (MapRV String v: u8) rank: (MapRV String v: u8) group: u8} is {
+    for each ce: sink.iterateItems loop {
+        if (rank.has key: ce.key).not then rank.set key: ce.key.copy value: group
     }
 }
 
-# add a unit's top-level definition names to a completion sink.
-collectUnitDefs: function {ast: Ast.view wId: zast.nodeid sink: (MapRV String v: u8)} is {
-    w: ast.nodes.get i: wId
-    if w.namedoperation then {
-        ul: zast.nameTextAt :ast ref: w.name
-        addCand :sink name: ul.stringView kind: 9
-        collectUnitDefsIn :ast ud: (ast.nodes.get i: w.operation) :sink
-    }
+# addUnitChainDefs -- the unit-level definitions a bare name written in unit
+# `site` reaches: the unit's own, then each unit enclosing it, nearest first.
+addUnitChainDefs: function {
+    snap: zcheck.CheckResult.view
+    site: ztypes.declid
+    sink: (MapRV String v: u8)
+} is {
+    o: snap.st
+    match (
+        o
+    ) case some then {
+        cur: site
+        for cur.isZero.not loop {
+            if (o.typing.declIsUnitScope declId: cur) then {
+                addDeclUnitDefs prog: snap.prog st: o declId: cur :sink
+            }
+            cur = o.typing.declParentOf declId: cur
+        }
+    } case none then null
+}
+
+# addCoreDefs -- the prelude's definitions, which a bare name reaches from
+# every unit.
+addCoreDefs: function {snap: zcheck.CheckResult.view sink: (MapRV String v: u8)} is {
+    o: snap.st
+    match (
+        o
+    ) case some then {
+        cr: o.typing.coreUnitRoot
+        if cr.isZero.not then addDeclUnitDefs prog: snap.prog st: o declId: cr :sink
+    } case none then null
+}
+
+# addDeclUnitDefs -- the definitions of the unit declaration `declId`.
+addDeclUnitDefs: function {
+    prog: Ast.view
+    st: zenv.ZSymbolTable.view
+    declId: ztypes.declid
+    sink: (MapRV String v: u8)
+} is {
+    dn: (st.typing.decls.get i: declId).node
+    if dn.isZero then return
+    np: prog.nodes.get i: dn
+    if np.namedoperation then collectUnitDefsIn ast: prog ud: (prog.nodes.get i: np.operation) :sink
+}
+
+# addUnitFiles -- the units the folder `dirid` holds, as Module candidates:
+# each `<name>.z` entry whose name is a unit name. Nothing is parsed, so a unit
+# the program has not loaded is offered too.
+addUnitFiles: function {vfs: zvfs.ZVfs.view dirid: zvfs.fsno sink: (MapRV String v: u8)} is {
+    r: vfs.open dentryid: dirid
+    match (
+        r
+    ) case dir then {
+        for each nm: r loop {
+            stem: nm.stringView.stripSuffix s: ".z"
+            match (
+                stem
+            ) case some then {
+                if (zparser.isValidUnitName name: stem) then addCand :sink name: stem kind: 9
+            } case none then null
+        }
+    } case file then null case err then null
 }
 
 # add a unit node's definition names to a completion sink.
@@ -4950,14 +4997,19 @@ addParamLabel: function {ast: Ast.view pm: zast.astnode.view sink: (MapRV String
     }
 }
 
-# addScopeCompletions -- the enclosing def's params/locals, every loaded
-# unit's top-level defs and unit names, and keywords.
+# addScopeCompletions -- the bare-name candidates, each stamped in `rank` with
+# its group, which orders them: 0 the enclosing def's params and locals, 1 the
+# document's unit and the units enclosing it, 2 core, 3 the subunits in the
+# document unit's own folder, 4 the top-level units on the roots, 5 keywords.
+# Groups 3 and 4 are read from the folders, so a unit the program does not use
+# is offered too; a subunit of any other unit is not, being out of reach.
 addScopeCompletions: function {
     snap: zcheck.CheckResult
     docRel: StringView
     srcDir: StringView
     l1u: u32
     sink: (MapRV String v: u8)
+    rank: (MapRV String v: u8)
 } is {
     defStart: (enclosingDefStart
         prog: snap.prog
@@ -4989,8 +5041,22 @@ addScopeCompletions: function {
             ri = ri + 1
         }
     }
-    collectTopDefs prog: snap.prog :sink
+    rankNew :sink :rank group: 0
+    addUnitChainDefs :snap site: (docUnitDecl r: snap rel: docRel :srcDir) :sink
+    rankNew :sink :rank group: 1
+    addCoreDefs :snap :sink
+    rankNew :sink :rank group: 2
+    docFs: docFsnoOf r: snap rel: docRel :srcDir
+    if docFs.isZero.not then {
+        un: zsource.unitNameOf path: docRel
+        own: snap.vfs.siblingDir fileid: docFs name: un.stringView
+        addUnitFiles vfs: snap.vfs dirid: own :sink
+    }
+    rankNew :sink :rank group: 3
+    addUnitFiles vfs: snap.vfs dirid: snap.vfs.rootid :sink
+    rankNew :sink :rank group: 4
     addKeywords :sink
+    rankNew :sink :rank group: 5
 }
 
 # addTypeMembers -- a type's fields (kind 5) and methods (kind 2), the
@@ -6956,10 +7022,10 @@ signatureHelpAnswer: function {
 }
 
 # completionAnswer -- scope-based completion from the last-good
-# snapshot: the enclosing definition's params and preceding bindings,
-# every loaded unit's top-level defs and unit names, and keywords --
-# filtered by the identifier prefix on the LIVE line. A '.' before the
-# prefix is member position -> the base's members.
+# snapshot (addScopeCompletions: locals, the unit chain, core, the units that
+# could be named, keywords, in that order by `sortText`), filtered by the
+# identifier prefix on the LIVE line. A '.' before the prefix is member
+# position -> the base's members.
 completionAnswer: function {
     snap: zcheck.CheckResult
     docRel: StringView
@@ -6993,6 +7059,8 @@ completionAnswer: function {
         ps = ps - 1
     }
     cands: MapRV String v: u8
+    # each bare-name candidate's group, which its sortText leads with
+    rank: MapRV String v: u8
     # the markers a member position allows, offered after the members
     marks: ListVal zast.markerkind
     memberMode: false
@@ -7046,7 +7114,7 @@ completionAnswer: function {
         )
         if handledAL then return (Value.array arr)
         if (words.slotOf text: trig) == zlsWord.slot.trigSpace then return (Value.array arr)
-        addScopeCompletions :snap :docRel :srcDir :l1u sink: cands
+        addScopeCompletions :snap :docRel :srcDir :l1u sink: cands :rank
     }
 
     labels: List String
@@ -7078,6 +7146,12 @@ completionAnswer: function {
         it: newObj
         it.set key: "label" value: Value.text lb.copy
         it.set key: "kind" value: Value.intval kind.i64
+        ro: rank.get key: lb
+        match (
+            ro
+        ) case some then {
+            it.set key: "sortText" value: Value.text "\{ro.u64}\{lb}"
+        } case none then null
         arr.items.append (Value.object it)
         li = li + 1
     }
