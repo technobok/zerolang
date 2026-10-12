@@ -4793,13 +4793,6 @@ addKeywords: function {sink: (MapRV String v: u8)} is {
     addCand :sink name: "typedef" kind: 14
     addCand :sink name: "outx" kind: 14
     addCand :sink name: "swap" kind: 14
-    addCand :sink name: "take" kind: 14
-    addCand :sink name: "borrow" kind: 14
-    addCand :sink name: "view" kind: 14
-    addCand :sink name: "hold" kind: 14
-    addCand :sink name: "drop" kind: 14
-    addCand :sink name: "private" kind: 14
-    addCand :sink name: "generic" kind: 14
 }
 
 # defKindOf -- the CompletionItemKind of a top-level definition.
@@ -5087,6 +5080,8 @@ addTypeMembersIn: function {
             if (
                 (o.reg.typetypeOf typeId: (pt8.get i: mk8)) == ztypes.ztypetype.functionType
             ) then k = 2
+            md: o.typing.declMemberIdOf parentTypeId: tid nameId: (pi8.get i: mk8)
+            if md.isZero.not when (o.typing.decls.get i: md).kind.armDecl then k = 20
             addCand :sink name: cn.stringView kind: k
         }
         mk8 = mk8 + 1
@@ -5114,9 +5109,10 @@ addUnitMembers: function {prog: Ast.view name: StringView sink: (MapRV String v:
     }
 }
 
-# baseTypeInScope -- the type id of the local/binding `base` visible in the
-# enclosing def (kind-1 use or kind-3 binding rows in scope); 0
-# when not found.
+# baseTypeInScope -- the type id of the local `base` visible in the enclosing
+# def: a kind-3 binding row, or a kind-1 use row that reads a variable (a
+# parameter's uses are its only rows there). A use of a unit-level name -- a
+# function, a type -- is no local; 0 when none is found.
 baseTypeInScope: function {
     snap: zcheck.CheckResult
     docRel: StringView
@@ -5138,21 +5134,33 @@ baseTypeInScope: function {
     ri: u64
     for ri < nr loop {
         row: sp.rows.get i: ri
-        kindok: (row.kind == 3) or (row.kind == 1)
-        if kindok when row.line >= defStart when row.line <= l1u then {
+        if row.line >= defStart when row.line <= l1u then {
             nm: sp.names.get i: ri
             if nm.stringView == base then {
-                fs: zcheck.fsnoFor r: snap nodeid: row.nodeid
-                pp: snap.vfs.pathfromprovider dentryid: fs
-                if (pathMatches pv: pp.stringView rel: docRel :srcDir) then {
-                    tt: nodeTypeAt o: snap.st nid: row.nodeid
-                    if tt.isZero.not then result = tt
-                }
+                tt: localRowType :snap :row :docRel :srcDir
+                if tt.isZero.not then result = tt
             }
         }
         ri = ri + 1
     }
     return result
+}
+
+# localRowType -- the type of the local a span row of the document names: a
+# binding row, or a use row that reads a variable; 0 for any other row
+localRowType: function {
+    snap: zcheck.CheckResult
+    row: spanrow
+    docRel: StringView
+    srcDir: StringView
+} out ztypes.tid is {
+    isLocal: row.kind == 3
+    if row.kind == 1 then isLocal = (useVarId o: snap.st nid: row.nodeid).isZero.not
+    if isLocal.not then return ztypes.tid.zero
+    fs: zcheck.fsnoFor r: snap nodeid: row.nodeid
+    pp: snap.vfs.pathfromprovider dentryid: fs
+    if (pathMatches pv: pp.stringView rel: docRel :srcDir).not then return ztypes.tid.zero
+    return (nodeTypeAt o: snap.st nid: row.nodeid)
 }
 
 # parenOpenOf -- index of the `(` matching the `)` at `close`, by a backward
@@ -5482,20 +5490,630 @@ addLiteralHead: function {
     )
 }
 
-# addMemberCompletions -- members of the base expression before a `.`. A bare
-# unit lists its top-level symbols; otherwise the base is resolved one segment
-# at a time -- a `unit.Type` head via the compiler's descendNamed (declaring on
-# demand), a scope value via baseTypeInScope, each further segment via `childOf`
-# -- and the final type's fields/methods are listed.
+# dotplace -- the block a `.` being completed is written in. It decides which
+# markers may follow a TYPE there; in a body the `.` follows a value instead.
+dotplace: variant {
+    # a function body or a unit's definitions, where a value is read
+    body: null
+    # a parameter list: `function {`, `in {` or `generator {`
+    params: null
+    # an `as { }` block, where a generic parameter names its bound
+    asItems: null
+    # a class's fields
+    classFields: null
+    # a union's arms
+    unionArms: null
+    # an `outx` return, which keeps the inputs it is built from locked
+    outxReturn: null
+    # a record, variant, facet, protocol or data body, or an `out` return: no
+    # marker follows a type there
+    unmarked: null
+} as { tag: u8.tag }
+
+# dotsite -- where a `.` being completed sits, read off the live text
+dotsite: record {
+    # the innermost block around it
+    place: dotplace
+    # the path before the `.` opens a statement, so `.drop` may end it
+    stmtStart: bool
+    # the path is the value of a statement-level binding, `b: p.`
+    binding: bool
+}
+
+# placeOpenedBy -- the block a `{` opens, named by the token before it
+placeOpenedBy: function {prev: zlexer.toktype} out dotplace is {
+    match (
+        prev
+    ) case functionTok then {
+        return dotplace.params
+    } case inTok then {
+        return dotplace.params
+    } case generatorTok then {
+        return dotplace.params
+    } case asTok then {
+        return dotplace.asItems
+    } case classTok then {
+        return dotplace.classFields
+    } case unionTok then {
+        return dotplace.unionArms
+    } case recordTok then {
+        return dotplace.unmarked
+    } case variantTok then {
+        return dotplace.unmarked
+    } case facetTok then {
+        return dotplace.unmarked
+    } case protocolTok then {
+        return dotplace.unmarked
+    } case dataTok then {
+        return dotplace.unmarked
+    } else {
+        return dotplace.body
+    }
+}
+
+# opensStatement -- a statement may begin right after token `tt`
+opensStatement: function {tt: zlexer.toktype} out bool is {
+    match (
+        tt
+    ) case bofTok then {
+        return true
+    } case eolTok then {
+        return true
+    } case semicolonTok then {
+        return true
+    } case braceOpenTok then {
+        return true
+    } case thenTok then {
+        return true
+    } case elseTok then {
+        return true
+    } case doTok then {
+        return true
+    } case loopTok then {
+        return true
+    } else {
+        return false
+    }
+}
+
+# DotScan -- the blocks open at each point of a token walk, and the tokens just
+# behind it: what dotSiteOf reads a `.`'s site from
+DotScan: class {
+    # the open blocks, innermost last
+    places: ListVal dotplace
+    # beside each place: it was opened by a `(`, where a line end is no
+    # statement boundary
+    parens: ListVal bool
+    # the last token taken
+    prev: zlexer.toktype
+    # the one before it
+    prev2: zlexer.toktype
+    # the last token that is not a line end, which is what names a block
+    prevCode: zlexer.toktype
+} as {
+    # take one token that is not whitespace, a comment or a label's colon. A
+    # `{` opens the place its keyword names -- an interpolation's `\{` lexes as
+    # one too, opening a body -- and a `(` keeps the place around it
+    step: function {:this tt: zlexer.toktype} is {
+        match (
+            tt
+        ) case braceOpenTok then {
+            this.places.append (placeOpenedBy prev: this.prevCode)
+            this.parens.append false
+        } case parenOpenTok then {
+            this.places.append this.innermost
+            this.parens.append true
+        } case braceCloseTok then {
+            this.close
+        } case parenCloseTok then {
+            this.close
+        } else null
+        this.prev2 = this.prev
+        this.prev = tt
+        if tt.eolTok.not then this.prevCode = tt
+    }
+
+    # end the innermost block, ignoring a stray closer
+    close: function {:this} is {
+        if this.places.length == 0 then return
+        this.places.pop
+        this.parens.pop
+    }
+
+    # the innermost open place; a body when none is open
+    innermost: function {t: this.view} out dotplace is {
+        if t.places.length == 0 then return dotplace.body
+        return (t.places.get i: t.places.length - 1)
+    }
+
+    # the innermost block was opened by a `(`
+    inParen: function {t: this.view} out bool is {
+        if t.parens.length == 0 then return false
+        return (t.parens.get i: t.parens.length - 1)
+    }
+}
+
+# dotSiteOf -- the site of a `.` whose base starts at (line, col), found by
+# lexing the live text up to it. The block being written has usually not parsed
+# since its `{` was typed, so the last-good snapshot cannot place it; the lexer
+# already tells a string or a comment from code.
+dotSiteOf: function {docText: StringView line: u32 col: u32} out dotsite is {
+    pool: zast.StringPool.create
+    tk: zlexer.Tokenizer.create source: docText.string fsno: zvfs.fsno
+    tk.keepTrivia = false
+    sc: (DotScan
+        places: ListVal dotplace
+        parens: ListVal bool
+        prev: zlexer.toktype.bofTok
+        prev2: zlexer.toktype.bofTok
+        prevCode: zlexer.toktype.bofTok
+    )
+    for true loop {
+        t: tk.nextToken :pool
+        if t.toktype.eofTok or (t.lineno > line) then break
+        if t.lineno == line when t.colno >= col then break
+        if (t.toktype.wsTok or t.toktype.commentTok or t.toktype.colonTok).not then (sc.step
+            tt: t.toktype
+        )
+    }
+    place: sc.innermost
+    if sc.prevCode.outxTok then place = dotplace.outxReturn
+    if sc.prevCode.outTok then place = dotplace.unmarked
+    inParen: sc.inParen
+    return (dotsite
+        :place
+        stmtStart: inParen.not and (opensStatement tt: sc.prev)
+        binding: inParen.not and sc.prev.labelTok and (opensStatement tt: sc.prev2)
+    )
+}
+
+# basekind -- what the text before a `.` names, which decides what may follow it
+basekind: variant {
+    # nothing the snapshot resolves
+    unknown: null
+    # a unit, whose definitions follow
+    unitBase: null
+    # a type spelled by its name
+    typeBase: null
+    # a variable or parameter, or a field reached through one: storage a marker
+    # may move or lend
+    storage: null
+    # any other value -- a constant, an arm, a call's result -- which no marker
+    # applies to
+    value: null
+    # a function's name, which only `.copy` turns into a reference
+    fnName: null
+} as { tag: u8.tag }
+
+# dotbase -- the resolved base of a `.`
+dotbase: record {
+    # its type; 0 when the snapshot knows none (a unit named by its file)
+    tid: ztypes.tid
+    # what the base names
+    kind: basekind
+    # the base is one name rather than a path
+    single: bool
+}
+
+# declBaseKind -- what declaration `d` makes of a base that names it, following
+# a re-export to what it names
+declBaseKind: function {
+    prog: Ast.view
+    o: (Option zenv.ZSymbolTable).view
+    d: ztypes.declid
+    throughStorage: bool
+} out basekind is {
+    match (
+        o
+    ) case some then {
+        cur: d
+        hops: u32
+        for hops < 8 loop {
+            if cur.isZero then return basekind.unknown
+            k: (o.typing.decls.get i: cur).kind
+            if k.reexportDecl.not then return (baseKindOfDecl :k :throughStorage)
+            cur = reexportTargetDecl :prog :o declId: cur
+            if cur.isZero then return basekind.value
+            hops = hops + 1
+        }
+    } case none then null
+    return basekind.unknown
+}
+
+# baseKindOfDecl -- what a declaration of kind `k` names. A field is storage
+# only when it is reached through storage.
+baseKindOfDecl: function {k: ztyping.declkind throughStorage: bool} out basekind is {
+    match (
+        k
+    ) case unitDecl then {
+        return basekind.unitBase
+    } case publicNs then {
+        return basekind.unitBase
+    } case typeDecl then {
+        return basekind.typeBase
+    } case funcDecl then {
+        return basekind.fnName
+    } case fieldDecl then {
+        if throughStorage then return basekind.storage
+        return basekind.value
+    } case paramDecl then {
+        return basekind.storage
+    } case localDecl then {
+        return basekind.storage
+    } else {
+        return basekind.value
+    }
+}
+
+# reexportTargetDecl -- the declaration a re-export names, through the unit it
+# names it in; 0 when that is no unit -- `true: bool.true` names a member of a
+# TYPE, which is a value
+reexportTargetDecl: function {
+    prog: Ast.view
+    o: zenv.ZSymbolTable.view
+    declId: ztypes.declid
+} out ztypes.declid is {
+    tg: ztypecheck.reexportTargetIdsOf st: o ast: prog :declId
+    ud: ztypecheck.unitDeclOfName st: o nameId: tg.unitName
+    if ud.isZero then return ud
+    return (ztypecheck.declOfUnitDefIds st: o unitDecl: ud nameId: tg.defName)
+}
+
+# bareDeclOf -- the declaration a bare name written in unit `site` reaches at
+# unit level: the unit's own, else the prelude's. Locals are baseTypeInScope's.
+bareDeclOf: function {
+    o: (Option zenv.ZSymbolTable).view
+    site: ztypes.declid
+    nameId: zast.nameid
+} out ztypes.declid is {
+    match (
+        o
+    ) case some then {
+        d: ztypecheck.declOfUnitDefIds st: o unitDecl: site :nameId
+        if d.isZero then d = (ztypecheck.declOfUnitDefIds
+            st: o
+            unitDecl: o.typing.coreUnitRoot
+            :nameId
+        )
+        return d
+    } case none then null
+    return ztypes.declid.zero
+}
+
+# unitChildDecl -- the declaration of the file unit `unitId`'s definition
+# `nameId`
+unitChildDecl: function {
+    o: (Option zenv.ZSymbolTable).view
+    unitId: zast.nameid
+    nameId: zast.nameid
+} out ztypes.declid is {
+    match (
+        o
+    ) case some then {
+        ud: ztypecheck.unitDeclOfName st: o nameId: unitId
+        return (ztypecheck.declOfUnitDefIds st: o unitDecl: ud :nameId)
+    } case none then null
+    return ztypes.declid.zero
+}
+
+# memberDeclOf -- the declaration of `parent`'s member named `nameId`: a unit's
+# definition, or a type's field, method or arm
+memberDeclOf: function {
+    o: (Option zenv.ZSymbolTable).view
+    parent: ztypes.tid
+    nameId: zast.nameid
+} out ztypes.declid is {
+    match (
+        o
+    ) case some then {
+        if (o.reg.typetypeOf typeId: parent) == ztypes.ztypetype.unitType then {
+            return (ztypecheck.declOfUnitDefIds st: o unitDecl: (o.reg.defOf tid: parent) :nameId)
+        }
+        return (o.typing.declMemberIdOf parentTypeId: parent :nameId)
+    } case none then null
+    return ztypes.declid.zero
+}
+
+# bareTypeOf -- the type a bare name written in unit `site` names, from what the
+# check already minted
+bareTypeOf: function {
+    prog: Ast.view
+    o: (Option zenv.ZSymbolTable).view
+    site: ztypes.declid
+    name: StringView
+} out ztypes.tid is {
+    match (
+        o
+    ) case some then {
+        r: (ztypecheck.walkLookupTyperefRo
+            ast: prog
+            st: o
+            unitDecl: site
+            scope: site
+            base: name
+        )
+        return (r.or d: ztypes.tid.zero)
+    } case none then null
+    return ztypes.tid.zero
+}
+
+# dothead -- what a base's head resolves to, and where the segments after it
+# begin
+dothead: record {
+    # the head's type; 0 when the snapshot knows none
+    tid: ztypes.tid
+    # what the head names
+    kind: basekind
+    # the byte offset of the first segment after the head
+    next: u64
+}
+
+# resolveDotBase -- what the base before a `.` names and its type: the head,
+# then each later segment as a member of the type so far
+resolveDotBase: function {
+    snap: zcheck.CheckResult
+    docRel: StringView
+    srcDir: StringView
+    l1u: u32
+    base: StringView
+} out dotbase is {
+    n: base.length
+    dotPos: dotFrom :base start: 0
+    single: dotPos >= n
+    h: dotHeadOf :snap :docRel :srcDir :l1u :base :dotPos
+    cur: h.tid
+    kind: h.kind
+    next: h.next
+    for next <= n loop {
+        de: dotFrom :base start: next
+        # an owned copy: the descent lends the base
+        seg: (base.substring from: next to: de).string
+        if seg.length > 0 then {
+            if cur.isZero then return (dotbase tid: cur kind: basekind.unknown :single)
+            md: (memberDeclOf
+                o: snap.st
+                parent: cur
+                nameId: (zast.poolFind pool: snap.prog.names text: seg.stringView)
+            )
+            kind = declBaseKind prog: snap.prog o: snap.st d: md throughStorage: kind.storage
+            cur = childOfIn prog: snap.prog o: snap.st parent: cur name: seg.stringView
+        }
+        next = de + 1
+    }
+    return (dotbase tid: cur :kind :single)
+}
+
+# dotHeadOf -- the head of a base whose first segment ends at `dotPos`: a unit
+# by its file (with the definition after it), else one bare name
+dotHeadOf: function {
+    snap: zcheck.CheckResult
+    docRel: StringView
+    srcDir: StringView
+    l1u: u32
+    base: StringView
+    dotPos: u64
+} out dothead is {
+    # an owned copy: the lookups below lend the base
+    firstSeg: (base.substring from: 0 to: dotPos).string
+    if (unitFsnoByName :snap name: firstSeg.stringView).isZero.not then {
+        return (unitHeadOf :snap :base unitName: firstSeg.stringView :dotPos)
+    }
+    return (bareHeadOf :snap :docRel :srcDir :l1u name: firstSeg.stringView next: dotPos + 1)
+}
+
+# unitHeadOf -- a head that opens with a file unit: the unit alone, or the unit
+# and the definition named after it
+unitHeadOf: function {
+    snap: zcheck.CheckResult
+    base: StringView
+    unitName: StringView
+    dotPos: u64
+} out dothead is {
+    n: base.length
+    if dotPos >= n then return (dothead tid: ztypes.tid.zero kind: basekind.unitBase next: n + 1)
+    next: dotPos + 1
+    nextDot: dotFrom :base start: next
+    # an owned copy: the descent lends the base
+    secondSeg: (base.substring from: next to: nextDot).string
+    tid: (descendUnitType
+        prog: snap.prog
+        :unitName
+        name: secondSeg.stringView
+        o: snap.st
+    )
+    memberD: (unitChildDecl
+        o: snap.st
+        unitId: (zast.poolFind pool: snap.prog.names text: unitName)
+        nameId: (zast.poolFind pool: snap.prog.names text: secondSeg.stringView)
+    )
+    return (dothead
+        :tid
+        kind: (declBaseKind prog: snap.prog o: snap.st d: memberD throughStorage: false)
+        next: nextDot + 1
+    )
+}
+
+# bareHeadOf -- a head that is one bare name: a local of the enclosing
+# definition, else a unit-level name of the document's unit or the prelude
+bareHeadOf: function {
+    snap: zcheck.CheckResult
+    docRel: StringView
+    srcDir: StringView
+    l1u: u32
+    name: StringView
+    # where the segments after the head begin
+    next: u64
+} out dothead is {
+    throwaway: MapRV String v: u8
+    ds: (enclosingDefStart
+        prog: snap.prog
+        unitOp: (docUnitOp r: snap rel: docRel :srcDir)
+        :l1u
+        sink: throwaway
+    )
+    lt: baseTypeInScope :snap :docRel :srcDir defStart: ds :l1u base: name
+    if lt.isZero.not then return (dothead tid: lt kind: basekind.storage :next)
+    site: docUnitDecl r: snap rel: docRel :srcDir
+    d: bareDeclOf o: snap.st :site nameId: (zast.poolFind pool: snap.prog.names text: name)
+    kind: declBaseKind prog: snap.prog o: snap.st :d throughStorage: false
+    if kind.typeBase then return (dothead
+        tid: (bareTypeOf prog: snap.prog o: snap.st :site :name)
+        :kind
+        :next
+    )
+    return (dothead tid: (declTypeIdOf o: snap.st declId: d) :kind :next)
+}
+
+# addUnitDeclMembers -- the definitions of the unit whose type is `unitTid`,
+# and of its `public:` block: a subunit reached through a path, which has no
+# file of the name to list.
+addUnitDeclMembers: function {
+    prog: Ast.view
+    o: (Option zenv.ZSymbolTable).view
+    unitTid: ztypes.tid
+    sink: (MapRV String v: u8)
+} is {
+    match (
+        o
+    ) case some then {
+        ud: o.reg.defOf tid: unitTid
+        if ud.isZero then return
+        addDeclChildren :prog :o declId: ud :sink
+        pb: ztypecheck.publicNsOf st: o tid: unitTid
+        if pb.isZero.not then addDeclChildren :prog :o declId: pb :sink
+    } case none then null
+}
+
+# addDeclChildren -- each child of declaration `declId` as a completion, its
+# kind by what it declares
+addDeclChildren: function {
+    prog: Ast.view
+    o: zenv.ZSymbolTable.view
+    declId: ztypes.declid
+    sink: (MapRV String v: u8)
+} is {
+    n: o.typing.declChildSlots :declId
+    i: u64
+    for i < n loop {
+        nid: zast.nameid
+        cd: ztypes.declid
+        {
+            dd: o.typing.decls.get i: declId
+            nid = dd.children.keyAt :i
+            cv: dd.children.valueAt :i
+            match (
+                cv
+            ) case some then {
+                cd = cv
+            } case none then null
+        }
+        i = i + 1
+        k: 21.u8
+        ck: (o.typing.decls.get i: cd).kind
+        if ck.funcDecl then k = 3
+        if ck.typeDecl then k = 7
+        if ck.unitDecl then k = 9
+        if ck.publicNs.not then {
+            nm: zast.nameTextAt ast: prog ref: nid
+            addCand :sink name: nm.stringView kind: k
+        }
+    }
+}
+
+# markerLabel -- the keyword a marker is written as
+markerLabel: function {k: zast.markerkind} out StringView is {
+    match (
+        k
+    ) case takeMarker then {
+        return "take"
+    } case borrowMarker then {
+        return "borrow"
+    } case viewMarker then {
+        return "view"
+    } case holdMarker then {
+        return "hold"
+    } case dropMarker then {
+        return "drop"
+    } case privateMarker then {
+        return "private"
+    } case genericBound then {
+        return "generic"
+    } else {
+        return ""
+    }
+}
+
+# markerDetail -- the one line a completion shows beside a marker
+markerDetail: function {k: zast.markerkind} out StringView is {
+    match (
+        k
+    ) case takeMarker then {
+        return "owned and mutable: the value moves out of its path"
+    } case borrowMarker then {
+        return "not owned, mutable: a reference that may write through"
+    } case viewMarker then {
+        return "not owned, readonly: a reference that may only read"
+    } case holdMarker then {
+        return "owned and readonly: moved in, then frozen"
+    } case dropMarker then {
+        return "ends the name now: destroys what it owns, releases what it borrows"
+    } case privateMarker then {
+        return "the friend handle: reaches the type's non-public members"
+    } case genericBound then {
+        return "the bound of a generic parameter"
+    } else {
+        return ""
+    }
+}
+
+# addTypeMarkers -- the markers a TYPE may carry in `place`
+addTypeMarkers: function {place: dotplace marks: ListVal zast.markerkind} is {
+    match (
+        place
+    ) case params then {
+        marks.append zast.markerkind.takeMarker
+        marks.append zast.markerkind.borrowMarker
+        marks.append zast.markerkind.viewMarker
+        marks.append zast.markerkind.holdMarker
+        marks.append zast.markerkind.privateMarker
+    } case classFields then {
+        marks.append zast.markerkind.borrowMarker
+        marks.append zast.markerkind.viewMarker
+        marks.append zast.markerkind.privateMarker
+    } case unionArms then {
+        marks.append zast.markerkind.borrowMarker
+        marks.append zast.markerkind.viewMarker
+        marks.append zast.markerkind.holdMarker
+    } case outxReturn then {
+        marks.append zast.markerkind.borrowMarker
+        marks.append zast.markerkind.viewMarker
+    } case asItems then {
+        marks.append zast.markerkind.genericBound
+    } else null
+}
+
+# addMemberCompletions -- what may follow the `.` after `base`: members, and
+# the markers the place allows. A path that ends in a marker ends there, but
+# for `private.`, which a `borrow` or `view` narrows. A unit lists its
+# definitions anywhere; outside a body the base is otherwise a TYPE, and the
+# block decides its markers.
 addMemberCompletions: function {
     snap: zcheck.CheckResult
     docRel: StringView
     srcDir: StringView
     l1u: u32
     base: StringView
+    site: dotsite
     sink: (MapRV String v: u8)
+    marks: ListVal zast.markerkind
 } is {
-    n: base.length
+    leaf: leafMarkerOf prog: snap.prog :base
+    if leaf.privateMarker then {
+        marks.append zast.markerkind.borrowMarker
+        marks.append zast.markerkind.viewMarker
+        return
+    }
+    if leaf.unmarked.not then return
     # a numeric head resolves by its TYPE, never by name: baseTypeInScope matches
     # a span row by SPELLING, so `65.` would otherwise complete off whatever a
     # same-spelled literal elsewhere in the enclosing def happens to be.
@@ -5504,63 +6122,91 @@ addMemberCompletions: function {
         addLiteralHead :snap :base :numEnd :sink
         return
     }
-    dotPos: dotFrom :base start: 0
-    if dotPos >= n then {
-        if (unitFsnoByName :snap name: base).isZero.not then {
+    db: resolveDotBase :snap :docRel :srcDir :l1u :base
+    if db.kind.unitBase then {
+        if db.single then {
             addUnitMembers prog: snap.prog name: base :sink
-        } else {
-            throwaway: MapRV String v: u8
-            ds: (enclosingDefStart
-                prog: snap.prog
-                unitOp: (docUnitOp r: snap rel: docRel :srcDir)
-                :l1u
-                sink: throwaway
-            )
-            bt: baseTypeInScope :snap :docRel :srcDir defStart: ds :l1u :base
-            if bt.isZero.not then (addTypeMembers
-                prog: snap.prog
-                o: snap.st
-                tid: bt
-                :sink
-                skipNumeric: false
-            )
-        }
+        } else addUnitDeclMembers prog: snap.prog o: snap.st unitTid: db.tid :sink
         return
     }
-    # an owned copy: the scans below lend the base
-    firstSeg: (base.substring from: 0 to: dotPos).string
-    cur: ztypes.tid
-    startSeg: dotPos + 1
-    if (unitFsnoByName :snap name: firstSeg.stringView).isZero.not then {
-        nextDot: dotFrom :base start: dotPos + 1
-        secondSeg: base.substring from: dotPos + 1 to: nextDot
-        cur = (descendUnitType
-            prog: snap.prog
-            unitName: firstSeg.stringView
-            name: secondSeg
-            o: snap.st
-        )
-        startSeg = nextDot + 1
-    } else {
-        throwaway: MapRV String v: u8
-        ds: (enclosingDefStart
-            prog: snap.prog
-            unitOp: (docUnitOp r: snap rel: docRel :srcDir)
-            :l1u
-            sink: throwaway
-        )
-        cur = baseTypeInScope :snap :docRel :srcDir defStart: ds :l1u base: firstSeg.stringView
+    if site.place.body then {
+        addValueCompletions :snap :db :site :sink :marks
+        return
     }
-    if cur.isZero then return
-    cur = descendSegments :snap :base start: startSeg tid0: cur
-    if cur.isZero then return
+    addTypeMarkers place: site.place :marks
+    if site.place.asItems when (tagCarrier o: snap.st tid: db.tid) then (addCand
+        :sink
+        name: "tag"
+        kind: 7
+    )
+}
+
+# leafMarkerOf -- the marker the last segment of `base` spells
+leafMarkerOf: function {prog: Ast.view base: StringView} out zast.markerkind is {
+    lastDot: base.length
+    for lastDot > 0 loop {
+        if (byteIs s: base i: lastDot - 1 b: 46) then break
+        lastDot = lastDot - 1
+    }
+    leaf: base.substring from: lastDot to: base.length
+    return (zast.markerKindOfName id: (zast.poolFind pool: prog.names text: leaf))
+}
+
+# addValueCompletions -- what may follow a `.` in a body, by what the base
+# names: a type's members; a value's members, and `copy` on a valtype; storage
+# may also be moved, lent, held or -- opening a statement -- dropped, but a
+# valtype is never borrowed into a binding; a function's name only copies.
+addValueCompletions: function {
+    snap: zcheck.CheckResult
+    db: dotbase
+    site: dotsite
+    sink: (MapRV String v: u8)
+    marks: ListVal zast.markerkind
+} is {
+    if db.kind.fnName then {
+        addCand :sink name: "copy" kind: 2
+        return
+    }
+    if db.tid.isZero then return
     (addTypeMembers
         prog: snap.prog
         o: snap.st
-        tid: cur
+        tid: db.tid
         :sink
         skipNumeric: false
     )
+    if db.kind.typeBase then return
+    valtype: isValtypeOpt o: snap.st tid: db.tid
+    if valtype then addCand :sink name: "copy" kind: 2
+    if db.kind.storage.not then return
+    marks.append zast.markerkind.takeMarker
+    if (valtype and site.binding).not then marks.append zast.markerkind.borrowMarker
+    marks.append zast.markerkind.viewMarker
+    marks.append zast.markerkind.holdMarker
+    if db.single when site.stmtStart then marks.append zast.markerkind.dropMarker
+}
+
+# tagCarrier -- a type whose `.tag` names a discriminator type: a data block's
+# element type or a numeric type
+tagCarrier: function {o: (Option zenv.ZSymbolTable).view tid: ztypes.tid} out bool is {
+    if tid.isZero then return false
+    match (
+        o
+    ) case some then {
+        if (o.reg.typetypeOf typeId: tid) == ztypes.ztypetype.dataType then return true
+        return (ztypecheck.numKindOfTid st: o :tid).has
+    } case none then null
+    return false
+}
+
+# isValtypeOpt -- the type is known to be a valtype
+isValtypeOpt: function {o: (Option zenv.ZSymbolTable).view tid: ztypes.tid} out bool is {
+    match (
+        o
+    ) case some then {
+        return (o.reg.isValtypeOf :tid)
+    } case none then null
+    return false
 }
 
 # completionItem -- a completion item object (label + kind, optional detail).
@@ -6347,6 +6993,8 @@ completionAnswer: function {
         ps = ps - 1
     }
     cands: MapRV String v: u8
+    # the markers a member position allows, offered after the members
+    marks: ListVal zast.markerkind
     memberMode: false
     # member position: a '.' before the prefix -> complete the base's members
     if ps > 0 then {
@@ -6365,7 +7013,9 @@ completionAnswer: function {
                     :srcDir
                     :l1u
                     :base
+                    site: (dotSiteOf :docText line: l1u col: (cpColOfByte s: ltv i: br.lo))
                     sink: cands
+                    :marks
                 )
             }
         } case none then null
@@ -6431,7 +7081,37 @@ completionAnswer: function {
         arr.items.append (Value.object it)
         li = li + 1
     }
+    appendMarkers :arr :marks prefix: prefix.stringView
     return (Value.array arr)
+}
+
+# appendMarkers -- the markers `prefix` opens, as keyword items that sort after
+# every member: `~` follows each identifier byte
+appendMarkers: function {arr: Arr marks: (ListVal zast.markerkind).view prefix: StringView} is {
+    for each mk: marks loop {
+        ml: markerLabel k: mk
+        if ml.startsWith prefix then {
+            mi: newObj
+            mi.set key: "label" value: Value.text ml.string
+            mi.set key: "kind" value: Value.intval 14
+            mi.set key: "detail" value: Value.text (markerDetail k: mk).string
+            mi.set key: "sortText" value: Value.text "~\{ml}"
+            arr.items.append (Value.object mi)
+        }
+    }
+}
+
+# cpColOfByte -- the 1-based codepoint column of byte `i` of a line, the
+# lexer's column numbering
+cpColOfByte: function {s: StringView i: u64} out u32 is {
+    col: u32
+    j: u64
+    for j < i loop {
+        b: byteOr :s i: j d: 0
+        if (b < 128) or (b >= 192) then col = col + 1
+        j = j + 1
+    }
+    return col + 1
 }
 
 # ---- main ------------------------------------------------------------
