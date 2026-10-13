@@ -24,6 +24,8 @@ public: unit {
     :generatorCallOf
     :indexAddedUnits
     :resolveUnitMemberLate
+    :constValueOfDeclLate
+    :dataValueTypeLate
     :stringLitIsPlain
     :constBigOf
     :constIntText
@@ -994,6 +996,46 @@ resolveUnitMemberLate: function {
     t: descendNamed :st scope: ztypes.declid :ast :unitDecl :name
     stampResolvedOnDemand :st :ast
     return t
+}
+
+# constValueOfDeclLate -- the value the constant `declId` declares, for a reader
+# after the check (zls's card for a constant): the memo when a read already
+# folded it, else folded now, as a lookup folds one it meets unfolded. A
+# re-export is asked as resolveAliasKey asks one: `os: oskind.linux` folds to
+# its arm. noConst when the declaration is neither or its value does not fold.
+constValueOfDeclLate: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    declId: ztypes.declid
+} out ztypes.cval is {
+    if declId.isZero then return ztypes.noConst
+    dk: (st.typing.decls.get i: declId).kind
+    if (dk.constDecl or dk.reexportDecl).not then return ztypes.noConst
+    otid: declTypeIdOf :st declId: (st.typing.declParentOf :declId)
+    if otid.isZero then return ztypes.noConst
+    k: st.typing.memberConstKey parentTypeId: otid nameId: (declNameIdOf :st :declId)
+    if ((st.typing.constEvalState.get key: k).or d: 0) != 2 then {
+        constFoldDecl :ast :st :declId
+        stampResolvedOnDemand :st :ast
+    }
+    return (constValueOfDecl :st :ast :declId)
+}
+
+# dataValueTypeLate -- the type data block `dataTid`'s name has as a value, for
+# a reader after the check (zls's card for a block no use read as one): minted
+# now when no use did, as dataBlockAsValue mints it. 0 when it has none.
+dataValueTypeLate: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    dataTid: ztypes.tid
+} out ztypes.tid is {
+    have: st.reg.dataValueTypeOf tid: dataTid
+    if have.isZero.not then return have
+    unm: unitRootOfDecl :st declId: (declOfTypeId :st tid: dataTid)
+    if unm.isZero then return ztypes.tid.zero
+    vt: dataValueTypeFor :st :ast unitDecl: unm :dataTid
+    stampResolvedOnDemand :st :ast
+    return vt
 }
 
 # indexUnitBody -- index one unit's top-level defs, in body order.

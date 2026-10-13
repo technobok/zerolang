@@ -4016,6 +4016,57 @@ hitReadsConstOpt: function {
     }
 }
 
+# hitIsConst -- the hit names a constant: one a use read (hitReadsConstOpt), or
+# a declaration that folds to a value -- a member read through a unit path
+# (`z.build.os`), a declaration's own name, a completion item. A label (`on:
+# true`) carries its VALUE's Decl, under a name that is not the Decl's own.
+hitIsConst: function {snap: zcheck.CheckResult hit: navhit name: StringView} out bool is {
+    if (hitReadsConstOpt o: snap.st :hit :name) then return true
+    if hit.vid.isZero.not then return false
+    # a literal is no constant's name, whatever Decl its spelling reaches
+    if (ztypecheck.isNumericLiteralName :name) then return false
+    if (declNamed o: snap.st prog: snap.prog declId: hit.declId :name).not then return false
+    isConst: declKindIs o: snap.st declId: hit.declId k: ztyping.declkind.constDecl
+    isAlias: declKindIs o: snap.st declId: hit.declId k: ztyping.declkind.reexportDecl
+    if (isConst or isAlias).not then return false
+    return (constValueOfHit :snap :hit).kind.none.not
+}
+
+# declNamed -- the declaration's own name is `name`.
+declNamed: function {
+    o: (Option zenv.ZSymbolTable).view
+    prog: Ast.view
+    declId: ztypes.declid
+    name: StringView
+} out bool is {
+    if declId.isZero then return false
+    match (
+        o
+    ) case some then {
+        nm: (o.typing.decls.get i: declId).name
+        if nm.isZero then return false
+        return nm == (zast.poolFind pool: prog.names text: name)
+    } case none then null
+    return false
+}
+
+# constValueOfHit -- the value a constant's card shows: what the use site read,
+# when the check folded it there, else what its declaration folds to.
+constValueOfHit: function {snap: zcheck.CheckResult hit: navhit} out ztypes.cval is {
+    o: snap.st
+    match (
+        o
+    ) case some then {
+        if hit.nodeid.isZero.not then {
+            g: o.typing.nodeConst.get key: hit.nodeid
+            if g.some then return g
+        }
+        return (ztypecheck.constValueOfDeclLate st: o ast: snap.prog declId: hit.declId)
+    } case none then {
+        return ztypes.noConst
+    }
+}
+
 # ownerIsDataOpt -- `tid` is a data block's type, over the LSP's optional
 # snapshot.
 ownerIsDataOpt: function {o: (Option zenv.ZSymbolTable).view tid: ztypes.tid} out bool is {
@@ -4029,42 +4080,30 @@ ownerIsDataOpt: function {o: (Option zenv.ZSymbolTable).view tid: ztypes.tid} ou
     }
 }
 
-# untypedConstTypeName -- `intliteral` or `floatliteral` when the value a use
-# site reads is an untyped number (a unit constant `K: 10`, an element of a data
-# block that names no type), "" for anything else.
-untypedConstTypeName: function {o: (Option zenv.ZSymbolTable).view nid: zast.nodeid} out String is {
-    match (
-        o
-    ) case some then {
-        cvo: o.typing.nodeConst.get key: nid
-        if cvo.none then return ""
-        v: cvo
-        if v.numTid.isZero.not then return ""
-        if v.kind.ivalKind then return "intliteral"
-        if v.kind.fvalKind then return "floatliteral"
-        return ""
-    } case none then {
-        return ""
-    }
+# untypedConstTypeName -- `intliteral` or `floatliteral` when a constant's value
+# is an untyped number (a unit constant `K: 10`, an element of a data block that
+# names no type), "" for anything else.
+untypedConstTypeName: function {v: ztypes.cval} out String is {
+    if v.numTid.isZero.not then return ""
+    if v.kind.ivalKind then return "intliteral"
+    if v.kind.fvalKind then return "floatliteral"
+    return ""
 }
 
-# constHoverText -- the compile-time value a use site reads, as source spells it:
-# an untyped number bare (`10`), a typed one with its type (`5.u8`), a typedef's
-# as its construction (`rid 0`), a quoted string, an arm by its type's full path
-# (`nav.mode.slow`). "" when the node has none.
+# constHoverText -- a compile-time value as source spells it: an untyped number
+# bare (`10`), a typed one with its type (`5.u8`), a typedef's as its
+# construction (`rid 0`), a quoted string, an arm by its type's full path
+# (`nav.mode.slow`). "" for no value.
 constHoverText: function {
     o: (Option zenv.ZSymbolTable).view
     prog: Ast.view
-    nid: zast.nodeid
+    v: ztypes.cval
     # the unit the constant's value is shown in
     site: ztypes.declid
 } out String is {
     match (
         o
     ) case some then {
-        cvo: o.typing.nodeConst.get key: nid
-        if cvo.none then return ""
-        v: cvo
         if v.kind.ivalKind then return (typedNumberText
             st: o
             :v
@@ -4114,8 +4153,9 @@ typedNumberText: function {
 
 # constCard -- a constant's card in source syntax, by its full path: `nav.K: 10
 # # intliteral`, `nav.LIMIT: 5.u8`, `nav.M: nav.mode.slow`, `nav.primes.0: 2
-# # intliteral` -- the binding a program could write, with an untyped value's
-# literal type as the comment. "" when the value cannot be spelled.
+# # intliteral`, `nav.NAME: "zed"  # StringView` -- the binding a program could
+# write, with its type as the comment where the value's spelling names none. ""
+# when the value cannot be spelled.
 constCard: function {
     # the snapshot a constant's card reads
     snap: zcheck.CheckResult
@@ -4126,7 +4166,8 @@ constCard: function {
     # the constant card's unit
     site: ztypes.declid
 } out String is {
-    cv: constHoverText o: snap.st prog: snap.prog nid: hit.nodeid :site
+    v: constValueOfHit :snap :hit
+    cv: constHoverText o: snap.st prog: snap.prog :v :site
     if cv.length == 0 then return ""
     card: String
     pre: constPathPrefix :snap :hit :site
@@ -4137,7 +4178,10 @@ constCard: function {
     card.append hname
     card.append ": "
     card.append cv
-    ut: untypedConstTypeName o: snap.st nid: hit.nodeid
+    ut: untypedConstTypeName :v
+    if v.kind.svalKind when hit.tid.isZero.not then {
+        ut = displayTypeNameOfOpt o: snap.st tid: hit.tid :site
+    }
     if ut.length > 0 then {
         card.append "  # "
         card.append ut
@@ -4181,7 +4225,7 @@ hoverTypeFence: function {
 } out String is {
     # a CONSTANT's hit carries its value's type: the card names the constant,
     # its type and its value, not the type
-    isConst: hitReadsConstOpt o: snap.st :hit name: hname.stringView
+    isConst: hitIsConst :snap :hit name: hname.stringView
     tk: String
     if isConst.not then tk = typeKindTextOpt o: snap.st tid: hit.tid :site
     if tk.length > 0 then {
@@ -4273,6 +4317,8 @@ navHoverAnswer: function {
         return (hoverMarkdown code: ub.stringView doc: udoc.stringView)
     }
     t: nodeTypeAt o: snap.st nid: hit.nodeid
+    # a completion item has no node: its type is its declaration's
+    if hit.nodeid.isZero then t = itemValueTid :snap tid: hit.tid
     sigTid: hoverSigTid :snap :hit
     body: (fnSigTextOpt
         vfs: snap.vfs
@@ -4309,10 +4355,8 @@ navHoverAnswer: function {
     }
     # a constant with no doc of its own takes none: the fallback is its
     # value's TYPE, whose doc describes something else
-    if docBody.length == 0 when legacyDnd.isZero.not when (
-        legacyDnd == dnd
-    ).not when (hitReadsConstOpt
-        o: snap.st
+    if docBody.length == 0 when legacyDnd.isZero.not when (legacyDnd == dnd).not when (hitIsConst
+        :snap
         :hit
         name: hname.stringView
     ).not then {
@@ -4333,6 +4377,20 @@ navHoverAnswer: function {
     )
     appendNote :docBody note: ln9.stringView
     return (hoverMarkdown code: body.stringView doc: docBody.stringView)
+}
+
+# itemValueTid -- the type a completion item's name has as a value: a data
+# block's is its view (`stringdata u64`), as a use reads it; any other its own.
+itemValueTid: function {snap: zcheck.CheckResult tid: ztypes.tid} out ztypes.tid is {
+    if (ownerIsDataOpt o: snap.st :tid).not then return tid
+    o: snap.st
+    match (
+        o
+    ) case some then {
+        vt: ztypecheck.dataValueTypeLate st: o ast: snap.prog dataTid: tid
+        if vt.isZero.not then return vt
+    } case none then null
+    return tid
 }
 
 # appendNote -- add a paragraph to a hover's doc text: a blank line between
