@@ -1792,8 +1792,9 @@ Spans: class {
         }
     }
 
-    # innerRangeOfKind -- the innermost recorded range of `kind` whose
-    # [startPos, endPos + slack lines] contains `curPos`, or 0.
+    # innerRangeOfKind -- the innermost recorded range of `kind` in the file
+    # `wantFsno` whose [startPos, endPos + slack lines] contains `curPos`, or 0
+    # (always 0 for no file).
     innerRangeOfKind: function {
         t: this.view
         curPos: zast.nodepos
@@ -1803,6 +1804,7 @@ Spans: class {
         wantFsno: zvfs.fsno
     } out zast.nodeid is {
         best: zast.nodeid
+        if wantFsno.isZero then return best
         bestStart: zast.nodepos line: 0 col: 0
         ri: u64
         for ri < t.ranges.length loop {
@@ -1816,9 +1818,7 @@ Spans: class {
             # range in ANOTHER file at the same line and a later column reads
             # as the innermost one. Every operator is a call now, so those
             # ranges are everywhere and the collision stopped being rare.
-            if hit when wantFsno.isZero.not when (
-                (prog.fsnoForNode nodeid: rr.nodeid) != wantFsno
-            ) then hit = false
+            if hit when (prog.fsnoForNode nodeid: rr.nodeid) != wantFsno then hit = false
             if hit then {
                 shouldTake: best.isZero or (rr.startPos > bestStart)
                 if shouldTake then {
@@ -4520,12 +4520,13 @@ hoverCallNotes: function {
     site: ztypes.declid
 } is {
     hpos: (sp.pos.get key: hit.nodeid).or d: (zast.nodepos line: 0 col: 0)
+    # the call around a node is in the node's own file
     callId: (sp.innerRangeOfKind
         curPos: hpos
         kind: 4
         slack: 0
         prog: snap.prog
-        wantFsno: zvfs.fsno
+        wantFsno: (snap.prog.fsnoForNode nodeid: hit.nodeid)
     )
     if callId.isZero then return
     callPos: (sp.pos.get key: callId).or d: (zast.nodepos line: 0 col: 0)
@@ -6775,6 +6776,8 @@ caseArmComplete: function {
     ps: u64
     prefix: StringView
     cursorPos: zast.nodepos
+    # the document's own file, where the enclosing match is looked up
+    docFs: zvfs.fsno
 } out bool is {
     if (caseWordBefore :prog :ltv :ps).not then return false
     sp: (Spans
@@ -6790,7 +6793,7 @@ caseArmComplete: function {
         kind: 5
         slack: 1
         :prog
-        wantFsno: zvfs.fsno
+        wantFsno: docFs
     )
     if caseId.isZero then return false
     clauseIds: ListVal zast.nodeid
@@ -6878,25 +6881,28 @@ leafFuncIdAt: function {
 # function id, anything else (a value arg, a keyword, an unresolved leaf) 0.
 bareCalleeFuncId: function {
     o: (Option zenv.ZSymbolTable).view
+    prog: Ast.view
     ltv: StringView
     ws: u64
     cursorPos: zast.nodepos
     sp: Spans.view
+    docFs: zvfs.fsno
 } out ztypes.tid is {
-    leaf9: cursorLeafNid :ltv :ws :cursorPos :sp
+    leaf9: cursorLeafNid :prog :ltv :ws :cursorPos :sp :docFs
     if leaf9.isZero then return ztypes.tid.zero
     return (resolveCalleeFuncId :o nid: leaf9)
 }
 
 # cursorLeafNid -- the node id of the identifier immediately before the
-# trailing whitespace at the cursor, or 0. The walk spans every unit and span
-# rows carry no file id, so a same-line/column row from ANOTHER file can
-# collide; the identifier text disambiguates.
+# trailing whitespace at the cursor, or 0. The walk spans every unit, so only
+# a row in the document's own file `docFs` counts.
 cursorLeafNid: function {
+    prog: Ast.view
     ltv: StringView
     ws: u64
     cursorPos: zast.nodepos
     sp: Spans.view
+    docFs: zvfs.fsno
 } out zast.nodeid is {
     scan: ws
     for scan > 0 loop {
@@ -6924,10 +6930,9 @@ cursorLeafNid: function {
     rix: u64
     for rix < sp.rows.length loop {
         row: sp.rows.get i: rix
-        if row.line == l1u when row.colLo <= idCol when idCol < row.colHi then {
-            # the walk spans every unit and rows carry no file id, so a
-            # same-line/column row from another file can collide; the
-            # identifier text disambiguates
+        if row.line == l1u when row.colLo <= idCol when idCol < row.colHi when (
+            (prog.fsnoForNode nodeid: row.nodeid) == docFs
+        ) then {
             nmR: sp.names.get i: rix
             if nmR.stringView == idTxt then {
                 shouldTake: found.not
@@ -7021,6 +7026,8 @@ argLabelComplete: function {
     cursorPos: zast.nodepos
     # the unit the completion is asked in
     site: ztypes.declid
+    # the document's own file, where the enclosing call is looked up
+    docFs: zvfs.fsno
 } out bool is {
     ws: ps
     for ws > 0 loop {
@@ -7054,17 +7061,12 @@ argLabelComplete: function {
         lastPos: (zast.nodepos line: 0 col: 0)
     )
     sp.walkProgram :prog
-    # the cursor's OWN file: the leaf just before it names the unit whose call
-    # this must be, and without that a same-line call in any other unit wins
-    wantFs9: zvfs.fsno
-    lf9: cursorLeafNid :ltv :ws :cursorPos :sp
-    if lf9.isZero.not then wantFs9 = prog.fsnoForNode nodeid: lf9
     callId: (sp.innerRangeOfKind
         curPos: cursorPos
         kind: 4
         slack: 1
         :prog
-        wantFsno: wantFs9
+        wantFsno: docFs
     )
     supplied: List String
     # a bare function/method name (no label yet) has no call node; on a fresh
@@ -7073,7 +7075,7 @@ argLabelComplete: function {
     # empty-prefix case so typing a value still falls through to scope
     # completion; given priority since a slack-matched call node may be nearby.
     if prefix.length == 0 then {
-        bfid: bareCalleeFuncId :o :ltv :ws :cursorPos :sp
+        bfid: bareCalleeFuncId :o :prog :ltv :ws :cursorPos :sp :docFs
         if bfid.isZero.not then {
             empty: List String
             return (emitLabels
@@ -7491,6 +7493,7 @@ completionAnswer: function {
     prefix: (ltv.substring from: ps to: cur).string
     if memberMode.not then {
         curPos: zast.nodepos line: l1u col: cp1
+        docFs: docFsnoOf r: snap rel: docRel :srcDir
         handledCA: (caseArmComplete
             :arr
             o: snap.st
@@ -7499,6 +7502,7 @@ completionAnswer: function {
             :ps
             prefix: prefix.stringView
             cursorPos: curPos
+            :docFs
         )
         if handledCA then return (Value.array arr)
         handledAL: (argLabelComplete
@@ -7510,6 +7514,7 @@ completionAnswer: function {
             prefix: prefix.stringView
             cursorPos: curPos
             site: (docUnitDecl r: snap rel: docRel :srcDir)
+            :docFs
         )
         if handledAL then return (Value.array arr)
         if (words.slotOf text: trig) == zlsWord.slot.trigSpace then return (Value.array arr)
