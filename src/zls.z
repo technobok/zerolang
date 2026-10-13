@@ -3795,6 +3795,77 @@ navTargetByKind: function {snap: zcheck.CheckResult hnid: zast.nodeid kind: u8} 
     )
 }
 
+# defOwnTarget -- a definition's hit as its own Decl: one whose value carries no
+# stamp (`S: "top"`, which a fold reads without walking), or one whose value
+# names another declaration (`START: mode.slow`, an arm) when it holds a value.
+# `t` as it is otherwise, and for any hit but a definition's.
+defOwnTarget: function {
+    snap: zcheck.CheckResult
+    # the definition's value node, which its row is keyed on
+    hnid: zast.nodeid
+    # the definition's name
+    hnm: StringView
+    # the hit's row kind; 6 is a definition's
+    kind: u8
+    t: navtarget
+} out navtarget is {
+    if kind != 6 then return t
+    if t.vid.isZero.not then return t
+    dd: declOfDefOp o: snap.st prog: snap.prog opId: hnid name: hnm
+    if dd.isZero then return t
+    if dd == t.declId then return t
+    if t.declId.isZero when t.tid.isZero then {
+        return (navtarget vid: t.vid tid: t.tid owner: t.owner declId: dd)
+    }
+    if (declHoldsValue :snap declId: dd).not then return t
+    return (navtarget
+        vid: t.vid
+        tid: (declTypeIdOf o: snap.st declId: dd)
+        owner: t.owner
+        declId: dd
+    )
+}
+
+# declHoldsValue -- the declaration holds a compile-time value.
+declHoldsValue: function {snap: zcheck.CheckResult declId: ztypes.declid} out bool is {
+    o: snap.st
+    match (
+        o
+    ) case some then {
+        return (ztypecheck.constValueOfDeclLate st: o ast: snap.prog :declId).kind.none.not
+    } case none then {
+        return false
+    }
+}
+
+# declOfDefOp -- the Decl a definition declares, by its name and the value node
+# its declaration row is keyed on; 0 when none does. A scan, names compared
+# first: no table maps a definition back to its Decl, and only a definition
+# whose value carries no stamp asks -- a unit constant (`S: "top"`), which a
+# fold reads without walking.
+declOfDefOp: function {
+    o: (Option zenv.ZSymbolTable).view
+    prog: Ast.view
+    opId: zast.nodeid
+    name: StringView
+} out ztypes.declid is {
+    nm: zast.poolFind pool: prog.names text: name
+    if nm.isZero then return ztypes.declid.zero
+    match (
+        o
+    ) case some then {
+        k: u64
+        for each d: o.typing.decls loop {
+            if d.name == nm when d.node.isZero.not then {
+                arm: prog.nodes.get i: d.node
+                if arm.namedoperation when arm.operation == opId then return (ztypes.declid k)
+            }
+            k = k + 1
+        }
+    } case none then null
+    return ztypes.declid.zero
+}
+
 # memberNavTarget -- what a member hit names: its owner, or, for a
 # unit-qualified member with no owner stamp, its def tid. A data block's own
 # `length` has no declaration of its own: the block owns it, and is where it is
@@ -3884,6 +3955,15 @@ navTargetRefine: function {
     refTid: base.tid
     refDeclId: base.declId
     if kind == 6 when refDeclId.isZero then refDeclId = genericParamDeclOf o: snap.st nid: hnid
+    own: (defOwnTarget
+        :snap
+        :hnid
+        :hnm
+        :kind
+        t: (navtarget vid: base.vid tid: refTid owner: base.owner declId: refDeclId)
+    )
+    refDeclId = own.declId
+    refTid = own.tid
     if kind == 6 when refDeclId.isZero.not then {
         dt9: declTypeIdOf o: snap.st declId: refDeclId
         if (isLiteralTid o: snap.st tid: dt9) then refTid = dt9
@@ -4017,18 +4097,16 @@ hitReadsConstOpt: function {
 }
 
 # hitIsConst -- the hit names a constant: one a use read (hitReadsConstOpt), or
-# a declaration that folds to a value -- a member read through a unit path
-# (`z.build.os`), a declaration's own name, a completion item. A label (`on:
-# true`) carries its VALUE's Decl, under a name that is not the Decl's own.
+# a declaration that holds a value -- a member read through a unit path
+# (`z.build.os`), a declaration's own name, a data block's element, a
+# completion item. A label (`on: true`) carries its VALUE's Decl, under a name
+# that is not the Decl's own.
 hitIsConst: function {snap: zcheck.CheckResult hit: navhit name: StringView} out bool is {
     if (hitReadsConstOpt o: snap.st :hit :name) then return true
     if hit.vid.isZero.not then return false
     # a literal is no constant's name, whatever Decl its spelling reaches
     if (ztypecheck.isNumericLiteralName :name) then return false
     if (declNamed o: snap.st prog: snap.prog declId: hit.declId :name).not then return false
-    isConst: declKindIs o: snap.st declId: hit.declId k: ztyping.declkind.constDecl
-    isAlias: declKindIs o: snap.st declId: hit.declId k: ztyping.declkind.reexportDecl
-    if (isConst or isAlias).not then return false
     return (constValueOfHit :snap :hit).kind.none.not
 }
 
@@ -4179,8 +4257,10 @@ constCard: function {
     card.append ": "
     card.append cv
     ut: untypedConstTypeName :v
-    if v.kind.svalKind when hit.tid.isZero.not then {
-        ut = displayTypeNameOfOpt o: snap.st tid: hit.tid :site
+    if v.kind.svalKind then {
+        st9: hit.tid
+        if st9.isZero then st9 = declTypeIdOf o: snap.st declId: hit.declId
+        if st9.isZero.not then ut = displayTypeNameOfOpt o: snap.st tid: st9 :site
     }
     if ut.length > 0 then {
         card.append "  # "
@@ -4204,6 +4284,11 @@ constPathPrefix: function {
     match (
         o
     ) case some then {
+        # an element named where its block declares it
+        blk: ztypecheck.declTypeIdOf st: o declId: (o.typing.declParentOf declId: hit.declId)
+        if blk.isZero.not when (o.reg.typetypeOf typeId: blk) == ztypes.ztypetype.dataType then {
+            return (displayTypeNameSt st: o tid: blk :site)
+        }
         return (ztypecheck.unitPathOfDecl st: o declId: hit.declId)
     } case none then {
         return ""
