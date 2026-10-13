@@ -1706,7 +1706,8 @@ codeOf: function {n: u32} out String is {
 # [colLo, colHi) in 1-based codepoint columns. Row kinds: 1 = bare atom
 # use, 2 = member access (nodeid is the DOTTED PATH's id, the
 # refDecl member declaration; the name is the child atom's), 3 = binding name.
-# `pos` records every node's start for def-target positioning.
+# A table covers one unit's file, or every file for references. A node's own
+# position is read off the node (nodePosOf), never from the table.
 
 # one hit-testable span: a source range mapped to a resolvable reference.
 spanrow: record {
@@ -1738,7 +1739,7 @@ spanKindRank: function {kind: u8} out u8 is {
 }
 
 # rangerow -- an enclosing-node span, start..end as source positions; kind
-# 4 = call, 5 = caseexpr. endPos is the last descendant's start (a subtree
+# 4 = call, 5 = caseexpr. endPos is the latest start in the node's subtree (an
 # extent good enough to find the node enclosing a cursor).
 rangerow: record {
     # the node this range belongs to
@@ -1751,29 +1752,37 @@ rangerow: record {
     kind: u8
 }
 
-# the per-file table of hit-testable spans built for goto-def / hover / references.
+# the table of hit-testable spans a request builds: fileSpans for one unit's
+# file, programSpans for every file.
 Spans: class {
     # the line/column spans, which is what a position lookup searches
     rows: ListVal spanrow
     # the names those rows refer to, kept beside them so a row stays a fixed-
     # size value
     names: List String
-    # node id to its position, for the lookups that go the other way
-    pos: (IdMapV zast.nodeid v: zast.nodepos)
     # the enclosing calls and matches, which a cursor lookup searches
     ranges: ListVal rangerow
-    # the last position recorded, so an append can tell whether it is moving
-    # forward
+    # the latest position seen inside the call or match being walked: its
+    # range's end
     lastPos: zast.nodepos
+    # the walk descends into subunits, whose bodies are other files
+    wholeProgram: bool
 } as {
-    # record a node's position without a name, for the nodes a lookup finds but
-    # never renders
-    note: function {:this id: zast.nodeid line: u32 col: u32} is {
-        if id.isZero.not then {
-            v: zast.nodepos :line :col
-            this.pos.set key: id value: v
-            if v > this.lastPos then this.lastPos = v
-        }
+    # an empty table
+    create: function {} out this is {
+        return (meta.create
+            rows: ListVal spanrow
+            names: List String
+            ranges: ListVal rangerow
+            lastPos: (zast.nodepos line: 0 col: 0)
+            wholeProgram: false
+        )
+    }
+
+    # a node's position was seen, so the enclosing range reaches at least that far
+    note: function {:this line: u32 col: u32} is {
+        v: zast.nodepos :line :col
+        if v > this.lastPos then this.lastPos = v
     }
 
     # record a node's span and the name to show for it
@@ -1831,31 +1840,17 @@ Spans: class {
         return best
     }
 
-    # walkProgram -- root entry: notes the root row, then walks each unit
-    # wrapper. A loaded unit's wrapper (here, or a subunit's in its parent's
-    # body) holds the FILE's name at the file's first token, where no such
-    # text is written, so it adds no row: the first definition's own name sits
-    # there. The tree is the parameter; `root` names the row inside it.
+    # walkProgram -- every file: each top-level unit, and the subunits inside
+    # them. A loaded unit's wrapper (here, or a subunit's in its parent's body)
+    # holds the FILE's name at the file's first token, where no such text is
+    # written, so it adds no row: the first definition's own name sits there.
     walkProgram: function {:this prog: Ast.view} is {
-        {
-            pr9: prog.nodes.get i: prog.root
-            pp9: zast.posOf n: pr9
-            (this.note
-                id: (zast.nodeIdOf n: pr9)
-                line: pp9.line
-                col: pp9.col
-            )
-            wpi: u64
-            wpn: prog.units.length
-            for wpi < wpn loop {
-                wpid: prog.units.get i: wpi
-                wp: prog.nodes.get i: wpid
-                if wp.namedoperation then {
-                    this.note id: wpid line: wp.lineno col: wp.colno
-                    this.walkAt ast: prog nId: wp.operation
-                } else this.walk ast: prog n: wp
-                wpi = wpi + 1
-            }
+        this.wholeProgram = true
+        for each wpid: prog.units loop {
+            wp: prog.nodes.get i: wpid
+            if wp.namedoperation then {
+                this.walkAt ast: prog nId: wp.operation
+            } else this.walk ast: prog n: wp
         }
     }
 
@@ -1872,8 +1867,7 @@ Spans: class {
     walk: function {:this ast: Ast.view n: zast.astnode.view} is {
         if n.placeholder then return
         pos: zast.posOf :n
-        nid: zast.nodeIdOf :n
-        this.note id: nid line: pos.line col: pos.col
+        this.note line: pos.line col: pos.col
         kids: zast.childIds :ast :n
         match (
             n
@@ -1889,24 +1883,10 @@ Spans: class {
             this.memberRow :ast dpid: n.nodeid c: (ast.nodes.get i: n.child)
             return
         } case call then {
-            csp: zast.nodepos line: n.lineno col: n.colno
-            this.walkIds :ast ids: kids
-            this.ranges.append (rangerow
-                nodeid: n.nodeid
-                startPos: csp
-                endPos: this.lastPos
-                kind: 4
-            )
+            this.walkRange :ast nodeid: n.nodeid startPos: pos :kids kind: 4
             return
         } case caseexpr then {
-            xsp: zast.nodepos line: n.lineno col: n.colno
-            this.walkIds :ast ids: kids
-            this.ranges.append (rangerow
-                nodeid: n.nodeid
-                startPos: xsp
-                endPos: this.lastPos
-                kind: 5
-            )
+            this.walkRange :ast nodeid: n.nodeid startPos: pos :kids kind: 5
             return
         } case assignment then {
             anmL: zast.poolTextAt pool: ast.names ref: n.name
@@ -1920,11 +1900,13 @@ Spans: class {
             # mostly declarations, which every lib/system unit is, therefore
             # read as though navigation were dead. Kind 6 is ranked last in
             # navAnswer so it can only fill an answer, never displace one.
-            if n.name.isZero.not when (zast.unitOpKindIs
+            isSub: (zast.unitOpKindIs
                 :ast
                 opId: n.operation
                 k: zast.unitkind.subunit
-            ).not then {
+            )
+            if isSub when this.wholeProgram.not then return
+            if n.name.isZero.not when isSub.not then {
                 nmD: zast.nameTextAt :ast ref: n.name
                 # keyed by the OPERATION node, not the arm: the arm carries
                 # the name and the position, the operation carries the
@@ -1935,12 +1917,50 @@ Spans: class {
         this.walkIds :ast ids: kids
     }
 
+    # walkRange -- walk a call's or a match's children and record its range,
+    # which ends at the latest position inside it
+    walkRange: function {
+        :this
+        ast: Ast.view
+        nodeid: zast.nodeid
+        startPos: zast.nodepos
+        kids: (ListVal zast.nodeid).view
+        kind: u8
+    } is {
+        outer: this.lastPos
+        this.lastPos = startPos
+        this.walkIds :ast ids: kids
+        this.ranges.append (rangerow :nodeid :startPos endPos: this.lastPos :kind)
+        if outer > this.lastPos then this.lastPos = outer
+    }
+
     # record spans for a list of child nodes in order
     walkIds: function {:this ast: Ast.view ids: (ListVal zast.nodeid).view} is {
         for each c: ids loop this.walk :ast n: (ast.nodes.get i: c)
     }
 }
 
+# fileSpans -- the spans of the unit whose body is the file `fsno`, without its
+# subunits (other files); empty when no unit's body is that file.
+fileSpans: function {prog: Ast.view fsno: zvfs.fsno} out Spans is {
+    sp: Spans.create
+    op: (zsource.lintedUnitOf :prog self: fsno).op
+    if op.isZero.not then sp.walkAt ast: prog nId: op
+    return sp
+}
+
+# programSpans -- the spans of every file the program loaded, for a lookup that
+# searches them all.
+programSpans: function {prog: Ast.view} out Spans is {
+    sp: Spans.create
+    sp.walkProgram :prog
+    return sp
+}
+
+# nodePosOf -- where the node `nid` starts; line 0 for no node.
+nodePosOf: function {prog: Ast.view nid: zast.nodeid} out zast.nodepos is {
+    return (zast.posOf n: (prog.nodes.get i: nid))
+}
 
 # docLine -- 1-based line `lineno` of `text` (without the newline).
 docLine: function {text: StringView lineno: u32} out String is {
@@ -3213,7 +3233,6 @@ defNodeInfo: function {
 # locationValue -- an LSP Location for a target node ({} miss -> nul).
 locationValue: function {
     snap: zcheck.CheckResult
-    sp: Spans.view
     nid: zast.nodeid
     width: u32
     docRel: StringView
@@ -3223,59 +3242,53 @@ locationValue: function {
     docText: StringView
     utf32: bool
 } out Value is {
-    pg: sp.pos.get key: nid
-    match (
-        pg
-    ) case some then {
-        line: pg.line
-        col: pg.col
-        if line == 0 then return Value.nul
-        fs: zcheck.fsnoFor r: snap nodeid: nid
-        if fs.isZero then return Value.nul
-        pp: snap.vfs.pathfromprovider dentryid: fs
-        own: pathMatches pv: pp.stringView rel: docRel :srcDir
-        uri: String
-        lineText: String
-        if own then {
-            uri = docUri.string
-            lineText = docLine text: docText lineno: line
-        } else {
-            absp: snap.vfs.pathfromproviderNative dentryid: fs
-            if absp.length == 0 then {
-                st0: u64
-                if pp.startsWith "/" then st0 = 1
-                rel0: pp.substring from: st0 to: pp.length
-                absp = absRelPath :rel0 :srcDir :systemDir
-            }
-            uri = pathToUri path: absp.stringView
-            lg: snap.vfs.getline dentryid: fs lineno: line - 1
-            match (
-                lg
-            ) case some then {
-                lineText = lg.copy
-            } case none then null
+    pg: nodePosOf prog: snap.prog :nid
+    line: pg.line
+    col: pg.col
+    if line == 0 then return Value.nul
+    fs: zcheck.fsnoFor r: snap nodeid: nid
+    if fs.isZero then return Value.nul
+    pp: snap.vfs.pathfromprovider dentryid: fs
+    own: pathMatches pv: pp.stringView rel: docRel :srcDir
+    uri: String
+    lineText: String
+    if own then {
+        uri = docUri.string
+        lineText = docLine text: docText lineno: line
+    } else {
+        absp: snap.vfs.pathfromproviderNative dentryid: fs
+        if absp.length == 0 then {
+            st0: u64
+            if pp.startsWith "/" then st0 = 1
+            rel0: pp.substring from: st0 to: pp.length
+            absp = absRelPath :rel0 :srcDir :systemDir
         }
-        w: width
-        if w == 0 then w = 1
-        c0: encodedCol lineText: lineText.stringView cpCol1: col :utf32
-        c1: encodedCol lineText: lineText.stringView cpCol1: col + w :utf32
-        if c1 <= c0 then c1 = c0 + 1
-        st: newObj
-        st.set key: "line" value: Value.intval (line - 1).i64
-        st.set key: "character" value: Value.intval c0.i64
-        en: newObj
-        en.set key: "line" value: Value.intval (line - 1).i64
-        en.set key: "character" value: Value.intval c1.i64
-        rg: newObj
-        rg.set key: "start" value: Value.object st
-        rg.set key: "end" value: Value.object en
-        lo: newObj
-        lo.set key: "uri" value: Value.text uri
-        lo.set key: "range" value: Value.object rg
-        return (Value.object lo)
-    } case none then {
-        return Value.nul
+        uri = pathToUri path: absp.stringView
+        lg: snap.vfs.getline dentryid: fs lineno: line - 1
+        match (
+            lg
+        ) case some then {
+            lineText = lg.copy
+        } case none then null
     }
+    w: width
+    if w == 0 then w = 1
+    c0: encodedCol lineText: lineText.stringView cpCol1: col :utf32
+    c1: encodedCol lineText: lineText.stringView cpCol1: col + w :utf32
+    if c1 <= c0 then c1 = c0 + 1
+    st: newObj
+    st.set key: "line" value: Value.intval (line - 1).i64
+    st.set key: "character" value: Value.intval c0.i64
+    en: newObj
+    en.set key: "line" value: Value.intval (line - 1).i64
+    en.set key: "character" value: Value.intval c1.i64
+    rg: newObj
+    rg.set key: "start" value: Value.object st
+    rg.set key: "end" value: Value.object en
+    lo: newObj
+    lo.set key: "uri" value: Value.text uri
+    lo.set key: "range" value: Value.object rg
+    return (Value.object lo)
 }
 
 # defNodeOf -- the def-node id a resolved hit points at: a variable binding
@@ -4351,18 +4364,12 @@ hoverTypeFence: function {
     return fence
 }
 
-# posLine -- the 1-based line a node sits on, from the span table; 0 when the
-# node has no recorded position.
-posLine: function {sp: Spans.view nid: zast.nodeid} out u32 is {
-    p: (sp.pos.get key: nid).or d: (zast.nodepos line: 0 col: 0)
-    return p.line
-}
 
 # hoverDoc -- the `#` doc block above a definition node, "" when the node has
 # no position, sits on the first line, or carries none.
-hoverDoc: function {snap: zcheck.CheckResult sp: Spans.view nid: zast.nodeid} out String is {
+hoverDoc: function {snap: zcheck.CheckResult nid: zast.nodeid} out String is {
     fs: zcheck.fsnoFor r: snap nodeid: nid
-    ln: posLine :sp :nid
+    ln: (nodePosOf prog: snap.prog :nid).line
     none: String
     if fs.isZero then return none
     if ln < 2 then return none
@@ -4435,8 +4442,8 @@ navHoverAnswer: function {
     dnd: declNodeOf o: snap.st declId: hit.declId
     if dnd.isZero then dnd = legacyDnd
     if dnd.isZero.not then {
-        docBody = hoverDoc :snap :sp nid: dnd
-        if hit.owner.isZero.not then appendTrailingDoc :snap :sp nid: dnd :body
+        docBody = hoverDoc :snap nid: dnd
+        if hit.owner.isZero.not then appendTrailingDoc :snap nid: dnd :body
     }
     # a constant with no doc of its own takes none: the fallback is its
     # value's TYPE, whose doc describes something else
@@ -4445,7 +4452,7 @@ navHoverAnswer: function {
         :hit
         name: hname.stringView
     ).not then {
-        docBody = hoverDoc :snap :sp nid: legacyDnd
+        docBody = hoverDoc :snap nid: legacyDnd
     }
     hoverCallNotes :snap :sp :hit :body :docBody :site
     # a data block's ordinal (`primes.0`) is spelled like a literal, and is none
@@ -4493,12 +4500,11 @@ appendNote: function {docBody: String.borrow note: StringView} is {
 # joins the signature fence, when the definition has a line and a comment.
 appendTrailingDoc: function {
     snap: zcheck.CheckResult
-    sp: Spans.view
     nid: zast.nodeid
     body: String.borrow
 } is {
     dfs: zcheck.fsnoFor r: snap nodeid: nid
-    dln: posLine :sp :nid
+    dln: (nodePosOf prog: snap.prog :nid).line
     if dfs.isZero then return
     if dln < 2 then return
     tc: trailingDocOf vfs: snap.vfs fsno: dfs line1: dln
@@ -4519,7 +4525,7 @@ hoverCallNotes: function {
     # the unit the call's notes are shown in
     site: ztypes.declid
 } is {
-    hpos: (sp.pos.get key: hit.nodeid).or d: (zast.nodepos line: 0 col: 0)
+    hpos: nodePosOf prog: snap.prog nid: hit.nodeid
     # the call around a node is in the node's own file
     callId: (sp.innerRangeOfKind
         curPos: hpos
@@ -4529,7 +4535,7 @@ hoverCallNotes: function {
         wantFsno: (snap.prog.fsnoForNode nodeid: hit.nodeid)
     )
     if callId.isZero then return
-    callPos: (sp.pos.get key: callId).or d: (zast.nodepos line: 0 col: 0)
+    callPos: nodePosOf prog: snap.prog nid: callId
     if callPos == hpos then {
         gl: inferredGenericLines o: snap.st prog: snap.prog :callId :site
         if gl.length > 0 then {
@@ -4546,7 +4552,6 @@ hoverCallNotes: function {
 # a unit, otherwise the node that declares it.
 navDefinitionAnswer: function {
     snap: zcheck.CheckResult
-    sp: Spans.view
     hit: navhit
     hname: String
     docRel: StringView
@@ -4573,7 +4578,6 @@ navDefinitionAnswer: function {
     if dn.isZero then return Value.nul
     return (locationValue
         :snap
-        :sp
         nid: dn
         width: hit.width
         :docRel
@@ -4628,7 +4632,6 @@ navReferencesAnswer: function {
         if add then {
             lv2: (locationValue
                 :snap
-                :sp
                 nid: n2
                 width: row2.colHi - row2.colLo
                 :docRel
@@ -4663,14 +4666,13 @@ navAnswer: function {
     l1u: l1.u32.orPanic
     lt: docLine text: docText lineno: l1u
     cp1: cpColOf lineText: lt.stringView :ch :utf32
-    sp: (Spans
-        rows: ListVal spanrow
-        names: List String
-        pos: (IdMapV zast.nodeid v: zast.nodepos)
-        ranges: ListVal rangerow
-        lastPos: (zast.nodepos line: 0 col: 0)
-    )
-    sp.walkProgram prog: snap.prog
+    # references search every file; the rest read the document's own
+    sp: Spans.create
+    if mode == 3 then {
+        sp = programSpans prog: snap.prog
+    } else {
+        sp = fileSpans prog: snap.prog fsno: (docFsnoOf r: snap rel: docRel :srcDir)
+    }
     hitOpt: navResolve :snap :sp :docRel :srcDir :l1u :cp1
     if hitOpt.none then return Value.nul
     hit: hitOpt
@@ -4685,7 +4687,6 @@ navAnswer: function {
     if mode == 1 then {
         return (navDefinitionAnswer
             :snap
-            :sp
             :hit
             :hname
             :docRel
@@ -5341,14 +5342,7 @@ addScopeCompletions: function {
         :sink
     )
     if defStart > 0 then {
-        sp: (Spans
-            rows: ListVal spanrow
-            names: List String
-            pos: (IdMapV zast.nodeid v: zast.nodepos)
-            ranges: ListVal rangerow
-            lastPos: (zast.nodepos line: 0 col: 0)
-        )
-        sp.walkProgram prog: snap.prog
+        sp: fileSpans prog: snap.prog fsno: (docFsnoOf r: snap rel: docRel :srcDir)
         nr: sp.rows.length
         ri: u64
         for ri < nr loop {
@@ -5539,14 +5533,7 @@ baseTypeInScope: function {
     base: StringView
 } out ztypes.tid is {
     result: ztypes.tid
-    sp: (Spans
-        rows: ListVal spanrow
-        names: List String
-        pos: (IdMapV zast.nodeid v: zast.nodepos)
-        ranges: ListVal rangerow
-        lastPos: (zast.nodepos line: 0 col: 0)
-    )
-    sp.walkProgram prog: snap.prog
+    sp: fileSpans prog: snap.prog fsno: (docFsnoOf r: snap rel: docRel :srcDir)
     nr: sp.rows.length
     ri: u64
     for ri < nr loop {
@@ -6780,14 +6767,7 @@ caseArmComplete: function {
     docFs: zvfs.fsno
 } out bool is {
     if (caseWordBefore :prog :ltv :ps).not then return false
-    sp: (Spans
-        rows: ListVal spanrow
-        names: List String
-        pos: (IdMapV zast.nodeid v: zast.nodepos)
-        ranges: ListVal rangerow
-        lastPos: (zast.nodepos line: 0 col: 0)
-    )
-    sp.walkProgram :prog
+    sp: fileSpans :prog fsno: docFs
     caseId: (sp.innerRangeOfKind
         curPos: cursorPos
         kind: 5
@@ -7032,14 +7012,7 @@ argLabelComplete: function {
         if pvb == 46 then badPos = true
     } case none then null
     if badPos then return false
-    sp: (Spans
-        rows: ListVal spanrow
-        names: List String
-        pos: (IdMapV zast.nodeid v: zast.nodepos)
-        ranges: ListVal rangerow
-        lastPos: (zast.nodepos line: 0 col: 0)
-    )
-    sp.walkProgram :prog
+    sp: fileSpans :prog fsno: docFs
     callId: (sp.innerRangeOfKind
         curPos: cursorPos
         kind: 4
@@ -7361,14 +7334,7 @@ signatureHelpAnswer: function {
     hsub: hstv.substring from: 0 to: nm.segStart
     segCp = hsub.count
     idCol: segCp.u32.orPanic + 1
-    sp: (Spans
-        rows: ListVal spanrow
-        names: List String
-        pos: (IdMapV zast.nodeid v: zast.nodepos)
-        ranges: ListVal rangerow
-        lastPos: (zast.nodepos line: 0 col: 0)
-    )
-    sp.walkProgram prog: snap.prog
+    sp: fileSpans prog: snap.prog fsno: (docFsnoOf r: snap rel: docRel :srcDir)
     leafNid: (leafNidAt
         :sp
         prog: snap.prog
@@ -7665,16 +7631,9 @@ completionCard: function {
     }
     hit: itemHit :snap :docRel :srcDir :l1u :site :base :label
     if hit.declId.isZero when hit.tid.isZero when hit.unitFsno.isZero then return Value.nul
-    sp: (Spans
-        rows: ListVal spanrow
-        names: List String
-        pos: (IdMapV zast.nodeid v: zast.nodepos)
-        ranges: ListVal rangerow
-        lastPos: (zast.nodepos line: 0 col: 0)
-    )
-    sp.walkProgram prog: snap.prog
+    sp: Spans.create
     if (declKindIs o: snap.st declId: hit.declId k: ztyping.declkind.fieldDecl) then {
-        return (fieldCard :snap :sp :hit :label :site)
+        return (fieldCard :snap :hit :label :site)
     }
     return (navHoverAnswer :snap :sp :hit hname: label.string :site)
 }
@@ -7683,7 +7642,6 @@ completionCard: function {
 # trailing comment, and the doc block above it -- never the card of its type
 fieldCard: function {
     snap: zcheck.CheckResult
-    sp: Spans.view
     hit: navhit
     label: StringView
     site: ztypes.declid
@@ -7696,8 +7654,8 @@ fieldCard: function {
     doc: String
     dn: declNodeOf o: snap.st declId: hit.declId
     if dn.isZero.not then {
-        doc = hoverDoc :snap :sp nid: dn
-        appendTrailingDoc :snap :sp nid: dn body: code
+        doc = hoverDoc :snap nid: dn
+        appendTrailingDoc :snap nid: dn body: code
     }
     return (hoverMarkdown code: code.stringView doc: doc.stringView)
 }
