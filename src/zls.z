@@ -6836,44 +6836,6 @@ resolveCalleeFuncId: function {
     return result
 }
 
-# leafFuncIdAt -- the innermost leaf span at (line1u, idCol) resolved to a
-# function tid, preferring a kind-2 member row so a dotted method's callable
-# resolves; 0 when nothing there names a function. Shared by the bare-name
-# arg-label lookup and signature help.
-leafFuncIdAt: function {
-    snap: zcheck.CheckResult
-    sp: Spans.view
-    docRel: StringView
-    srcDir: StringView
-    line1u: u32
-    idCol: u32
-} out ztypes.tid is {
-    o: snap.st
-    leafNid: zast.nodeid
-    bk: u8
-    found: false
-    rix: u64
-    for rix < sp.rows.length loop {
-        row: sp.rows.get i: rix
-        if row.line == line1u when row.colLo <= idCol when idCol < row.colHi then {
-            fs: zcheck.fsnoFor r: snap nodeid: row.nodeid
-            pp: snap.vfs.pathfromprovider dentryid: fs
-            if (pathMatches pv: pp.stringView rel: docRel :srcDir) then {
-                shouldTake: found.not
-                if (spanKindRank kind: row.kind) > (spanKindRank kind: bk) then shouldTake = true
-                if shouldTake then {
-                    leafNid = row.nodeid
-                    bk = row.kind
-                    found = true
-                }
-            }
-        }
-        rix = rix + 1
-    }
-    if found.not then return ztypes.tid.zero
-    return (resolveCalleeFuncId :o nid: leafNid)
-}
-
 # bareCalleeFuncId -- a lone function/method name with no label yet parses as
 # an atom/dotted-path, not a call node, so the arg-label path has nothing to sit
 # inside. Resolve the identifier just before the trailing whitespace via the
@@ -6894,8 +6856,7 @@ bareCalleeFuncId: function {
 }
 
 # cursorLeafNid -- the node id of the identifier immediately before the
-# trailing whitespace at the cursor, or 0. The walk spans every unit, so only
-# a row in the document's own file `docFs` counts.
+# trailing whitespace at the cursor, or 0.
 cursorLeafNid: function {
     prog: Ast.view
     ltv: StringView
@@ -6923,30 +6884,48 @@ cursorLeafNid: function {
     sub: ltv.substring from: 0 to: scan
     cc: sub.count
     idCol: cc.u32.orPanic + 1
-    l1u: cursorPos.line
+    return (leafNidAt
+        :sp
+        :prog
+        :docFs
+        line1u: cursorPos.line
+        :idCol
+        name: idTxt
+    )
+}
+
+# leafNidAt -- the node of the span row in the document's file `docFs` that
+# covers (line1u, idCol) and names `name`, the highest-ranked kind when several
+# do, or 0. The walk spans every unit, so a row of another file at the same line
+# and column must not answer; the name refuses a row of a snapshot older than
+# the text being read.
+leafNidAt: function {
+    sp: Spans.view
+    prog: Ast.view
+    docFs: zvfs.fsno
+    line1u: u32
+    idCol: u32
+    name: StringView
+} out zast.nodeid is {
     leafNid: zast.nodeid
     bk: u8
     found: false
     rix: u64
     for rix < sp.rows.length loop {
         row: sp.rows.get i: rix
-        if row.line == l1u when row.colLo <= idCol when idCol < row.colHi when (
+        if row.line == line1u when row.colLo <= idCol when idCol < row.colHi when (
             (prog.fsnoForNode nodeid: row.nodeid) == docFs
-        ) then {
-            nmR: sp.names.get i: rix
-            if nmR.stringView == idTxt then {
-                shouldTake: found.not
-                if (spanKindRank kind: row.kind) > (spanKindRank kind: bk) then shouldTake = true
-                if shouldTake then {
-                    leafNid = row.nodeid
-                    bk = row.kind
-                    found = true
-                }
+        ) when (sp.names.get i: rix).stringView == name then {
+            shouldTake: found.not
+            if (spanKindRank kind: row.kind) > (spanKindRank kind: bk) then shouldTake = true
+            if shouldTake then {
+                leafNid = row.nodeid
+                bk = row.kind
+                found = true
             }
         }
         rix = rix + 1
     }
-    if found.not then return zast.nodeid
     return leafNid
 }
 
@@ -7390,7 +7369,15 @@ signatureHelpAnswer: function {
         lastPos: (zast.nodepos line: 0 col: 0)
     )
     sp.walkProgram prog: snap.prog
-    funcId: leafFuncIdAt :snap :sp :docRel :srcDir line1u: head.line :idCol
+    leafNid: (leafNidAt
+        :sp
+        prog: snap.prog
+        docFs: (docFsnoOf r: snap rel: docRel :srcDir)
+        line1u: head.line
+        :idCol
+        name: nmS
+    )
+    funcId: resolveCalleeFuncId o: snap.st nid: leafNid
     if funcId.isZero then return Value.nul
     label: (fnSigTextOpt
         vfs: snap.vfs
