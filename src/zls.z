@@ -1773,6 +1773,10 @@ Spans: class {
     # value node, which its rows are keyed on. A call and its labels sit in one
     # file, so a file's walk has them all.
     argCall: (IdMapV zast.nodeid v: zast.nodeid)
+    # each `for` binding's arm, keyed by its value node, which its row is keyed
+    # on: the checker binds the loop variable on that node, or on the
+    # `E.iterate` node it mints for the arm
+    forArm: (IdMapV zast.nodeid v: zast.nodeid)
 } as {
     # an empty table
     create: function {} out this is {
@@ -1783,6 +1787,7 @@ Spans: class {
             lastPos: (zast.nodepos line: 0 col: 0)
             wholeProgram: false
             argCall: (IdMapV zast.nodeid v: zast.nodeid)
+            forArm: (IdMapV zast.nodeid v: zast.nodeid)
         )
     }
 
@@ -1900,6 +1905,8 @@ Spans: class {
         } case caseexpr then {
             this.walkRange :ast nodeid: n.nodeid startPos: pos :kids kind: 5
             return
+        } case forexpr then {
+            this.noteBindings :ast conds: n.conditions
         } case assignment then {
             this.addRow :ast id: n.nodeid line: n.lineno col: n.colno name: n.name kind: 3
         } case namedoperation then {
@@ -1938,6 +1945,32 @@ Spans: class {
                 key: arm.operation
                 value: callId
             )
+        }
+    }
+
+    # noteBindings -- record the arm of each of a `for`'s named conditions
+    noteBindings: function {:this ast: Ast.view conds: zast.kidspan} is {
+        ci: u64
+        for ci < conds.count loop {
+            arm: ast.nodes.get i: (zast.kidAt kids: ast.kids span: conds i: ci)
+            ci = ci + 1
+            if arm.namedoperation when arm.name.isZero.not then (this.forArm.set
+                key: arm.operation
+                value: arm.nodeid
+            )
+        }
+    }
+
+    # bindingArmOf -- the arm of the `for` binding whose value node is `nid`, which
+    # sits at the loop variable's name; `nid` itself for any other node
+    bindingArmOf: function {t: this.view nid: zast.nodeid} out zast.nodeid is {
+        a: t.forArm.get key: nid
+        match (
+            a
+        ) case some then {
+            return a
+        } case none then {
+            return nid
         }
     }
 
@@ -3764,8 +3797,9 @@ navhit: record {
     # the node the hit resolves through: the row's own, or, for a call label,
     # the operation of the parameter or field it names
     nodeid: zast.nodeid
-    # the node the row belongs to: for a call label, the argument's value, whose
-    # passing a hover notes
+    # the node whose passing a hover notes: the row's own, which for a call
+    # label is the argument's value; a `for` binding's arm, which is passed
+    # nowhere
     argNode: zast.nodeid
     # the variable the reference resolved to, zero when it is not one
     vid: ztypes.vid
@@ -4132,6 +4166,13 @@ navResolve: function {
     w: hit.colHi - hit.colLo
     hnid: labelSubject :snap :sp row: hit
     base: navTargetByKind :snap :hnid kind: hit.kind
+    # a `for` binding is its variable, as its uses are
+    lv: loopVarOf :snap :sp row: hit
+    argNode: hit.nodeid
+    if lv.isZero.not then {
+        base = navtarget vid: lv tid: ztypes.tid owner: ztypes.tid declId: ztypes.declid
+        argNode = sp.bindingArmOf nid: hit.nodeid
+    }
     t: navTargetRefine :snap :hnid hnm: hnm.stringView kind: hit.kind :base
     # a unit's name answers with its FILE: a top-level unit's by name, a
     # subunit's through the declaration the checker resolved it to
@@ -4146,7 +4187,7 @@ navResolve: function {
         kind: hit.kind
         width: w
         nodeid: hnid
-        argNode: hit.nodeid
+        :argNode
         vid: t.vid
         tid: t.tid
         owner: t.owner
@@ -4154,6 +4195,30 @@ navResolve: function {
         :unitFsno
     )
     return (optionval.some found)
+}
+
+# loopVarOf -- the variable the `for` binding row `row` binds, or 0 when the row
+# binds none. The checker binds it on the binding's value node, or, for a value
+# walked through its type's `iterate`, on the `E.iterate` node it mints for the
+# binding's arm; the value node's own stamps are the collection's.
+loopVarOf: function {snap: zcheck.CheckResult sp: Spans.view row: spanrow} out ztypes.vid is {
+    if row.kind != 6 then return ztypes.vid.zero
+    arm: sp.bindingArmOf nid: row.nodeid
+    if arm == row.nodeid then return ztypes.vid.zero
+    v: defVarIdOf o: snap.st nid: row.nodeid
+    if v.isZero.not then return v
+    o: snap.st
+    match (
+        o
+    ) case some then {
+        mi: o.typing.forImplicitIterate.get key: arm
+        match (
+            mi
+        ) case some then {
+            return (defVarIdOf o: snap.st nid: mi)
+        } case none then null
+    } case none then null
+    return v
 }
 
 # labelSubject -- the node a hit on span row `row` resolves through: a call
@@ -4506,7 +4571,10 @@ hoverDoc: function {snap: zcheck.CheckResult nid: zast.nodeid} out String is {
 # tid when the hit is a callable or unit member (a function hovers as its
 # signature, not its return value), the instance when a generic call
 # resolved to one, and the Decl's type when only the Decl layer resolved the hit.
+# A declaration that binds a variable shows the variable's: a `for` binding's
+# node is the collection.
 hoverSigTid: function {snap: zcheck.CheckResult hit: navhit} out ztypes.tid is {
+    if hit.kind == 6 when hit.vid.isZero.not then return (variableTypeOpt o: snap.st vid: hit.vid)
     t: nodeTypeAt o: snap.st nid: hit.nodeid
     ud: useUnitDef o: snap.st nid: hit.nodeid
     sigTid: t
@@ -4596,17 +4664,31 @@ navHoverAnswer: function {
 }
 
 # hoverValueTid -- the type a hover card gives its hit's name: its node's stamp.
-# A completion item has no node, so its type is its declaration's. A parameter
+# A completion item has no node, so its type is its declaration's. A
+# declaration that binds a variable is of the variable's type: a `for`
+# binding's node is the collection. A parameter
 # or a member is of its declared type where its node has no stamp, and where it
 # is declared with a literal type, which the fold rewrote the stamp from.
 hoverValueTid: function {snap: zcheck.CheckResult hit: navhit} out ztypes.tid is {
     if hit.nodeid.isZero then return (itemValueTid :snap tid: hit.tid)
+    if hit.kind == 6 when hit.vid.isZero.not then return (variableTypeOpt o: snap.st vid: hit.vid)
     nt: nodeTypeAt o: snap.st nid: hit.nodeid
     if hit.kind == 6 when hit.tid.isZero then {
         dt: declTypeIdOf o: snap.st declId: hit.declId
         if nt.isZero or (isLiteralTid o: snap.st tid: dt) then return dt
     }
     return nt
+}
+
+# variableTypeOpt -- variable `vid`'s type, over the LSP's optional snapshot.
+variableTypeOpt: function {o: (Option zenv.ZSymbolTable).view vid: ztypes.vid} out ztypes.tid is {
+    match (
+        o
+    ) case some then {
+        return (o.reg.variableTypeOf id: vid)
+    } case none then {
+        return ztypes.tid.zero
+    }
 }
 
 # itemValueTid -- the type a completion item's name has as a value: a data
@@ -4688,9 +4770,11 @@ hoverCallNotes: function {
 
 # navDefinitionAnswer -- the Location a resolved hit points at: the file top for
 # a unit, otherwise the node that declares it. A parameter is declared at its
-# name; its variable's node is the type it is declared with.
+# name; its variable's node is the type it is declared with. A `for` binding's
+# variable is at its arm; its node is the collection.
 navDefinitionAnswer: function {
     snap: zcheck.CheckResult
+    sp: Spans.view
     hit: navhit
     hname: String
     # the hit row's name
@@ -4721,7 +4805,7 @@ navDefinitionAnswer: function {
     if dn.isZero then return Value.nul
     return (locationValue
         :snap
-        nid: dn
+        nid: (sp.bindingArmOf nid: dn)
         width: hit.width
         :docRel
         :docUri
@@ -4764,6 +4848,7 @@ referencesTargetOf: function {
     }
     if hit.kind == 6 then {
         vid = defVarIdOf o: snap.st nid: hit.nodeid
+        if vid.isZero then vid = loopVarOf :snap :sp row: (sp.rows.get i: hit.idx)
         owner = ztypes.tid.zero
         hnm: zast.nameTextAt ast: snap.prog ref: name
         dd = declOfDefOp o: snap.st prog: snap.prog opId: hit.nodeid name: hnm.stringView
@@ -5051,7 +5136,13 @@ RefFile: class {
 rowRefersTo: function {
     snap: zcheck.CheckResult sp: Spans.view tg: reftarget row: spanrow
 } out bool is {
-    if tg.vid.isZero.not when (rowReadsVar :snap :row vid: tg.vid name: tg.name) then return true
+    if tg.vid.isZero.not when (rowReadsVar
+        :snap
+        :sp
+        :row
+        vid: tg.vid
+        name: tg.name
+    ) then return true
     if row.name != tg.name then return false
     if tg.vid.isZero then {
         if row.kind == 2 when tg.owner.isZero.not then {
@@ -5070,13 +5161,15 @@ rowRefersTo: function {
 # shares its declaration's node and is spelled otherwise.
 rowReadsVar: function {
     snap: zcheck.CheckResult
+    sp: Spans.view
     row: spanrow
     vid: ztypes.vid
     name: zast.nameid
 } out bool is {
     if row.kind == 1 when (useVarId o: snap.st nid: row.nodeid) == vid then return true
     if (row.kind == 2) or (row.name != name) then return false
-    return (defVarIdOf o: snap.st nid: row.nodeid) == vid
+    if (defVarIdOf o: snap.st nid: row.nodeid) == vid then return true
+    return (loopVarOf :snap :sp :row) == vid
 }
 
 # navReferencesAnswer -- every span row that names the hit's target, as an
@@ -5181,6 +5274,7 @@ navAnswer: function {
     if mode == 1 then {
         return (navDefinitionAnswer
             :snap
+            :sp
             :hit
             :hname
             name: (sp.rows.get i: hit.idx).name
