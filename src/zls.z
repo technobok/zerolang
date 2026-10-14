@@ -1716,6 +1716,8 @@ spanrow: record {
     # the source line the span sits on, in the compiler's own numbering. The
     # conversion to what LSP wants happens at the protocol boundary, not here
     line: u32
+    # the name written there, by its interned id
+    name: zast.nameid
     # the first column it covers
     colLo: u32
     # one past the last, so the pair is a half-open range
@@ -1785,20 +1787,26 @@ Spans: class {
         if v > this.lastPos then this.lastPos = v
     }
 
-    # record a node's span and the name to show for it
-    addRow: function {:this id: zast.nodeid line: u32 col: u32 name: StringView kind: u8} is {
-        w: name.count
-        this.rows.append (spanrow nodeid: id :line colLo: col colHi: col + w.u32.orPanic :kind)
-        this.names.append name.string
+    # record a node's span and the name written there
+    addRow: function {
+        :this
+        ast: Ast.view
+        id: zast.nodeid
+        line: u32
+        col: u32
+        name: zast.nameid
+        kind: u8
+    } is {
+        txt: zast.nameTextAt :ast ref: name
+        hi: col + txt.count.u32.orPanic
+        this.rows.append (spanrow nodeid: id :line :name colLo: col colHi: hi :kind)
+        this.names.append txt.copy
     }
 
     # record the span of a dotted path's MEMBER half, so hovering `a.b` answers
     # about `b` and not about `a`
     memberRow: function {:this ast: Ast.view dpid: zast.nodeid c: zast.astnode.view} is {
-        if c.atomid then {
-            cAr: zast.nameTextAt :ast ref: c.name
-            this.addRow id: dpid line: c.lineno col: c.colno name: cAr.stringView kind: 2
-        }
+        if c.atomid then this.addRow :ast id: dpid line: c.lineno col: c.colno name: c.name kind: 2
     }
 
     # innerRangeOfKind -- the innermost recorded range of `kind` in the file
@@ -1872,11 +1880,9 @@ Spans: class {
         match (
             n
         ) case atomid then {
-            nAr: zast.nameTextAt :ast ref: n.name
-            this.addRow id: n.nodeid line: n.lineno col: n.colno name: nAr.stringView kind: 1
+            this.addRow :ast id: n.nodeid line: n.lineno col: n.colno name: n.name kind: 1
         } case labelvalue then {
-            nLb: zast.nameTextAt :ast ref: n.name
-            this.addRow id: n.nodeid line: n.lineno col: n.colno name: nLb.stringView kind: 1
+            this.addRow :ast id: n.nodeid line: n.lineno col: n.colno name: n.name kind: 1
         } case dottedpath then {
             # the member selector is a row of its own, not a node walk
             this.walk :ast n: (ast.nodes.get i: n.parent)
@@ -1889,8 +1895,7 @@ Spans: class {
             this.walkRange :ast nodeid: n.nodeid startPos: pos :kids kind: 5
             return
         } case assignment then {
-            anmL: zast.poolTextAt pool: ast.names ref: n.name
-            this.addRow id: n.nodeid line: n.lineno col: n.colno name: anmL.stringView kind: 3
+            this.addRow :ast id: n.nodeid line: n.lineno col: n.colno name: n.name kind: 3
         } case namedoperation then {
             # the DECLARATION's own name. A definition's name lives on the
             # namedoperation arm that holds it -- functionrow and
@@ -1907,11 +1912,10 @@ Spans: class {
             )
             if isSub when this.wholeProgram.not then return
             if n.name.isZero.not when isSub.not then {
-                nmD: zast.nameTextAt :ast ref: n.name
                 # keyed by the OPERATION node, not the arm: the arm carries
                 # the name and the position, the operation carries the
                 # definition's stamps. Same split memberRow makes.
-                this.addRow id: n.operation line: n.lineno col: n.colno name: nmD.stringView kind: 6
+                this.addRow :ast id: n.operation line: n.lineno col: n.colno name: n.name kind: 6
             }
         } else null
         this.walkIds :ast ids: kids
@@ -2268,13 +2272,18 @@ declTypeIdOf: function {
 # the owner type id of the member referenced at node `nid` (the member
 # declaration's parent type or data block, via refDecl), or 0.
 memberOwnerOf: function {o: (Option zenv.ZSymbolTable).view nid: zast.nodeid} out ztypes.tid is {
-    rd: refDeclOf :o :nid
-    if rd.isZero then return ztypes.tid.zero
+    return (declOwnerOf :o declId: (refDeclOf :o :nid))
+}
+
+# declOwnerOf -- the type or data block declaration `declId` is a member of, or
+# 0 when it is no member.
+declOwnerOf: function {o: (Option zenv.ZSymbolTable).view declId: ztypes.declid} out ztypes.tid is {
+    if declId.isZero then return ztypes.tid.zero
     par: ztypes.declid
     match (
         o
     ) case some then {
-        d: o.typing.decls.get i: rd
+        d: o.typing.decls.get i: declId
         par = d.parent
     } case none then null
     if par.isZero then return ztypes.tid.zero
@@ -3991,17 +4000,26 @@ navTargetRefine: function {
     if base.vid.isZero when refTid.isZero when base.owner.isZero when refDeclId.isZero.not then {
         refTid = declTypeIdOf o: snap.st declId: refDeclId
     }
-    # a TYPE named in callable position (`Dog n: 7`, `Path s`): the checker
-    # stamps the name with the type it builds and keeps its refDecl free for the
-    # emitter, so the declaration is the type's own
     if kind == 1 when base.vid.isZero when refDeclId.isZero then {
-        ct9: nodeTypeAt o: snap.st nid: hnid
-        if ct9.isZero.not when (typeNamedAs o: snap.st tid: ct9 name: hnm) then {
+        ct9: calleeTypeOf :snap nid: hnid name: hnm
+        if ct9.isZero.not then {
             refTid = ct9
             refDeclId = surfaceDeclOfType o: snap.st prog: snap.prog tid: ct9
         }
     }
     return (navtarget vid: base.vid tid: refTid owner: base.owner declId: refDeclId)
+}
+
+# calleeTypeOf -- the TYPE a name in callable position names (`Dog n: 7`, `Path
+# s`), or 0 when the name at `nid` is not one. The checker stamps the name with
+# the type it builds and keeps its refDecl free for the emitter, so the stamp is
+# what says which type it is.
+calleeTypeOf: function {
+    snap: zcheck.CheckResult.view nid: zast.nodeid name: StringView
+} out ztypes.tid is {
+    ct: nodeTypeAt o: snap.st :nid
+    if ct.isZero.not when (typeNamedAs o: snap.st tid: ct :name) then return ct
+    return ztypes.tid.zero
 }
 
 # navResolve -- hit-test a cursor against the span index and resolve what it
@@ -4589,13 +4607,135 @@ navDefinitionAnswer: function {
     )
 }
 
-# navReferencesAnswer -- every span row that resolves to the same target as the
-# hit, as an array of Locations. One pass over the rows.
+# reftarget -- what the references to a hit are, each zero when the hit is not
+# one: the variable, the declaration, and the owner whose members are matched by
+# name
+reftarget: record {
+    vid: ztypes.vid
+    # at the origin of its same-name re-exports
+    declId: ztypes.declid
+    owner: ztypes.tid
+    # the hit's name. A row spelled otherwise names none of the hit's
+    # declarations: `this` and the `view` of `Box.view` resolve to Box as well
+    name: zast.nameid
+}
+
+# referencesTargetOf -- what the references to a hit are. A declaration row
+# answers what it declares -- a parameter's variable, a field's owner, a
+# definition's Decl -- and never the type it is declared with, which is what
+# the row's node carries. A label that binds (the `:this` of a signature) is its
+# variable; a parameter's TYPE shares the parameter's node and binds nothing.
+referencesTargetOf: function {
+    snap: zcheck.CheckResult hit: navhit name: zast.nameid
+} out reftarget is {
+    vid: hit.vid
+    owner: hit.owner
+    dd: hit.declId
+    if hit.kind == 1 when vid.isZero when (snap.prog.nodes.get i: hit.nodeid).labelvalue then {
+        vid = defVarIdOf o: snap.st nid: hit.nodeid
+    }
+    if hit.kind == 6 then {
+        vid = defVarIdOf o: snap.st nid: hit.nodeid
+        owner = ztypes.tid.zero
+        hnm: zast.nameTextAt ast: snap.prog ref: name
+        dd = declOfDefOp o: snap.st prog: snap.prog opId: hit.nodeid name: hnm.stringView
+        if dd.isZero then dd = genericParamDeclOf o: snap.st nid: hit.nodeid
+    }
+    if vid.isZero.not then return (reftarget :vid declId: ztypes.declid owner: ztypes.tid :name)
+    od: spelledOrigin :snap declId: dd :name
+    if owner.isZero then owner = declOwnerOf o: snap.st declId: od
+    return (reftarget :vid declId: od :owner :name)
+}
+
+# spelledOrigin -- declaration `declId` at the origin of its same-name
+# re-exports, or 0 when it is not spelled `name`.
+spelledOrigin: function {
+    snap: zcheck.CheckResult declId: ztypes.declid name: zast.nameid
+} out ztypes.declid is {
+    if declId.isZero then return declId
+    o: snap.st
+    match (
+        o
+    ) case some then {
+        if (o.typing.decls.get i: declId).name != name then return ztypes.declid.zero
+        return (sameNameOrigin prog: snap.prog :o :declId)
+    } case none then null
+    return ztypes.declid.zero
+}
+
+# sameNameOrigin -- the declaration a chain of same-name re-exports starts from:
+# core's `File: io.File` is io's File. A re-export under another name (`os:
+# oskind.linux`) is a declaration of its own, as go-to-definition has it.
+sameNameOrigin: function {
+    prog: Ast.view o: zenv.ZSymbolTable.view declId: ztypes.declid
+} out ztypes.declid is {
+    cur: declId
+    hops: u32
+    for hops < 8 loop {
+        d: o.typing.decls.get i: cur
+        if d.kind.reexportDecl.not then return cur
+        nx: reexportOriginStep :prog :o declId: cur
+        if nx.isZero then return cur
+        if (o.typing.decls.get i: nx).name != d.name then return cur
+        cur = nx
+        hops = hops + 1
+    }
+    return cur
+}
+
+# reexportOriginStep -- the declaration re-export `declId` names: a unit's
+# definition, or a type's member (`true: bool.true`), the type read as the
+# re-export's own unit reads it; 0 when it names neither.
+reexportOriginStep: function {
+    prog: Ast.view o: zenv.ZSymbolTable.view declId: ztypes.declid
+} out ztypes.declid is {
+    ud: reexportTargetDecl :prog :o :declId
+    if ud.isZero.not then return ud
+    tg: ztypecheck.reexportTargetIdsOf st: o ast: prog :declId
+    if tg.unitName.isZero then return ud
+    site: o.typing.declParentOf :declId
+    ty: ztypecheck.declOfUnitDefIds st: o unitDecl: site nameId: tg.unitName
+    if ty.isZero then ty = (ztypecheck.declOfUnitDefIds
+        st: o
+        unitDecl: o.typing.coreUnitRoot
+        nameId: tg.unitName
+    )
+    if ty.isZero then return ty
+    ty = sameNameOrigin :prog :o declId: ty
+    if (o.typing.decls.get i: ty).kind.typeDecl.not then return ztypes.declid.zero
+    return (o.typing.declFindChild parentDeclId: ty nameId: tg.defName)
+}
+
+# rowNamesDecl -- span row `row`, spelled as declaration `declId` is, names it:
+# through its refDecl, at the origin of the same-name re-exports that goes
+# through, or as a type in callable position.
+rowNamesDecl: function {snap: zcheck.CheckResult row: spanrow declId: ztypes.declid} out bool is {
+    o: snap.st
+    rd: refDeclOf :o nid: row.nodeid
+    if rd.isZero when row.kind == 1 when (useVarId :o nid: row.nodeid).isZero then {
+        nm: zast.nameTextAt ast: snap.prog ref: row.name
+        ct: calleeTypeOf :snap nid: row.nodeid name: nm.stringView
+        if ct.isZero.not then rd = surfaceDeclOfType :o prog: snap.prog tid: ct
+    }
+    if rd.isZero then return false
+    if rd == declId then return true
+    match (
+        o
+    ) case some then {
+        return (sameNameOrigin prog: snap.prog :o declId: rd) == declId
+    } case none then {
+        return false
+    }
+}
+
+# navReferencesAnswer -- every span row that names the hit's target, as an
+# array of Locations. One pass over the rows: a variable's uses and bindings by
+# its id, a member row by its owner when the target has one, and any other row
+# spelled as the target is by the declaration it resolves to.
 navReferencesAnswer: function {
     snap: zcheck.CheckResult
     sp: Spans.view
     hit: navhit
-    hname: String
     docRel: StringView
     docUri: StringView
     srcDir: StringView
@@ -4603,33 +4743,35 @@ navReferencesAnswer: function {
     docText: StringView
     utf32: bool
 } out Value is {
-    # references: one pass over the span rows
+    tg: referencesTargetOf :snap :hit name: (sp.rows.get i: hit.idx).name
     arr: newArr
+    # the last row taken: a `:this` parameter's declaration row and its use row
+    # are one node and one span, which is one reference
+    lastNid: zast.nodeid
+    lastCol: u32
     rj: u64
     for rj < sp.rows.length loop {
         row2: sp.rows.get i: rj
         n2: row2.nodeid
         add: false
-        if hit.vid.isZero.not then {
-            if row2.kind == 1 then {
-                uvN: useVarId o: snap.st nid: n2
-                if uvN == hit.vid then add = true
+        if tg.vid.isZero.not then {
+            if row2.kind == 1 then add = (useVarId o: snap.st nid: n2) == tg.vid
+            # a binding: a local's, a parameter's declaration, a `:this`. A
+            # parameter's type shares its declaration's node
+            if add.not when row2.kind != 2 when row2.name == tg.name then {
+                add = (defVarIdOf o: snap.st nid: n2) == tg.vid
             }
-            if row2.kind == 3 then {
-                dvN: defVarIdOf o: snap.st nid: n2
-                if dvN == hit.vid then add = true
+        } else if row2.name == tg.name then {
+            if row2.kind == 2 when tg.owner.isZero.not then {
+                add = (memberOwnerOf o: snap.st nid: n2) == tg.owner
+            } else if (row2.kind == 1) or (row2.kind == 2) when tg.declId.isZero.not then {
+                add = rowNamesDecl :snap row: row2 declId: tg.declId
             }
         }
-        if hit.tid.isZero.not when row2.kind == 1 when (
-            (useUnitDef o: snap.st nid: n2) == hit.tid
-        ) then add = true
-        if hit.owner.isZero.not when row2.kind == 2 when (
-            (memberOwnerOf o: snap.st nid: n2) == hit.owner
-        ) then {
-            nm2: sp.names.get i: rj
-            if nm2.stringView == hname then add = true
-        }
+        if add when n2 == lastNid when row2.colLo == lastCol then add = false
         if add then {
+            lastNid = n2
+            lastCol = row2.colLo
             lv2: (locationValue
                 :snap
                 nid: n2
@@ -4701,7 +4843,6 @@ navAnswer: function {
         :snap
         :sp
         :hit
-        :hname
         :docRel
         :docUri
         :srcDir
