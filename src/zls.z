@@ -2496,6 +2496,12 @@ displayTypeNameSt: function {
 } out String is {
     disp: st.reg.nameOf :tid
     if disp.length == 0 then return disp
+    # a block's `slot` is named after its block: `main.words.slot`
+    if (st.typing.dataSlotTypes.has item: tid) then {
+        blk: displayTypeNameSt :st tid: (st.reg.ownerTidOf :tid) :site
+        if blk.length > 0 then return "\{blk.stringView}.slot"
+        return disp
+    }
     inst: instanceSpelling :st :tid :site
     if inst.length > 0 then return inst
     base: tid
@@ -4008,7 +4014,8 @@ declOfDefOp: function {
 # memberNavTarget -- what a member hit names: its owner, or, for a
 # unit-qualified member with no owner stamp, its def tid. A data block's own
 # `length` has no declaration of its own: the block owns it, and is where it is
-# declared.
+# declared. A label's position, `blk.slot.label`, is owned by the block's
+# `slot` and declared by the label: the element's declaration.
 memberNavTarget: function {snap: zcheck.CheckResult hnid: zast.nodeid} out navtarget is {
     refTid: ztypes.tid
     refDecl: refDeclOf o: snap.st nid: hnid
@@ -4016,6 +4023,8 @@ memberNavTarget: function {snap: zcheck.CheckResult hnid: zast.nodeid} out navta
     if refOwner.isZero then {
         refOwner = dataBaseOfOpt :snap dpid: hnid
         if refOwner.isZero.not then refDecl = declOfTidOpt o: snap.st tid: refOwner
+        sl: slotLabelDecl :snap dpid: hnid
+        if sl.isZero.not then refDecl = sl
     }
     if refOwner.isZero then refTid = useUnitDef o: snap.st nid: hnid
     return (navtarget vid: ztypes.vid tid: refTid owner: refOwner declId: refDecl)
@@ -4045,6 +4054,70 @@ dataBaseOfOpt: function {snap: zcheck.CheckResult dpid: zast.nodeid} out ztypes.
     bt: nodeTypeAt o: snap.st nid: baseId
     if (ownerIsDataOpt o: snap.st tid: bt) then return bt
     return ztypes.tid.zero
+}
+
+# slotLabelDecl -- the declaration dotted path `dpid` reads when it reads a
+# label's position, `blk.slot.label`: the label's member of the block's `slot`,
+# which holds the position. The checker records no declaration on such a path;
+# 0 for any other.
+slotLabelDecl: function {snap: zcheck.CheckResult dpid: zast.nodeid} out ztypes.declid is {
+    baseId: zast.nodeid
+    nm: zast.nameid
+    {
+        n: snap.prog.nodes.get i: dpid
+        if n.dottedpath then {
+            c: snap.prog.nodes.get i: n.child
+            if c.atomid then {
+                baseId = n.parent
+                nm = c.name
+            }
+        }
+    }
+    if baseId.isZero then return ztypes.declid.zero
+    bt: nodeTypeAt o: snap.st nid: baseId
+    o: snap.st
+    match (
+        o
+    ) case some then {
+        if (o.typing.dataSlotTypes.has item: bt).not then return ztypes.declid.zero
+        bd: o.typing.declIdOfType typeId: (o.reg.ownerTidOf tid: bt)
+        if bd.isZero then return bd
+        sd: o.typing.declFindChild parentDeclId: bd nameId: zast.wellKnown.slot.wkSlot
+        if sd.isZero then return sd
+        return (o.typing.declFindChild parentDeclId: sd nameId: nm)
+    } case none then null
+    return ztypes.declid.zero
+}
+
+# slotElementOf -- the element a label's member of a block's `slot` is the
+# position of: the block's declaration of the same label, which is where the
+# label is written. 0 for a declaration that is no slot's label.
+slotElementOf: function {
+    o: (Option zenv.ZSymbolTable).view declId: ztypes.declid
+} out ztypes.declid is {
+    if declId.isZero then return declId
+    match (
+        o
+    ) case some then {
+        d: o.typing.decls.get i: declId
+        if d.parent.isZero then return ztypes.declid.zero
+        sd: o.typing.decls.get i: d.parent
+        if (o.typing.dataSlotTypes.has item: sd.typeId).not then return ztypes.declid.zero
+        if sd.parent.isZero then return ztypes.declid.zero
+        return (o.typing.declFindChild parentDeclId: sd.parent nameId: d.name)
+    } case none then null
+    return ztypes.declid.zero
+}
+
+# writtenDeclOf -- the declaration `declId` is written as: a label's member of
+# a block's `slot` is written at its element, which documents it; any other is
+# its own.
+writtenDeclOf: function {
+    o: (Option zenv.ZSymbolTable).view declId: ztypes.declid
+} out ztypes.declid is {
+    se: slotElementOf :o :declId
+    if se.isZero.not then return se
+    return declId
 }
 
 # isUnitTidOpt -- `tid` is a unit's type, over the LSP's optional snapshot.
@@ -4466,6 +4539,14 @@ constCard: function {
         if st9.isZero then st9 = declTypeIdOf o: snap.st declId: hit.declId
         if st9.isZero.not then ut = displayTypeNameOfOpt o: snap.st tid: st9 :site
     }
+    # a label's position in a block indexed by an id type is a value of that
+    # type, which the number the checker folded does not carry
+    if ut.length > 0 when (slotElementOf o: snap.st declId: hit.declId).isZero.not then {
+        dt: declTypeIdOf o: snap.st declId: hit.declId
+        if dt.isZero.not when (isLiteralTid o: snap.st tid: dt).not then {
+            ut = displayTypeNameOfOpt o: snap.st tid: dt :site
+        }
+    }
     if ut.length > 0 then {
         card.append "  # "
         card.append ut
@@ -4631,7 +4712,7 @@ navHoverAnswer: function {
         refOwner: hit.owner
         member: hname.stringView
     )
-    dnd: declNodeOf o: snap.st declId: hit.declId
+    dnd: declNodeOf o: snap.st declId: (writtenDeclOf o: snap.st declId: hit.declId)
     if dnd.isZero then dnd = legacyDnd
     if dnd.isZero.not then {
         docBody = hoverDoc :snap nid: dnd
@@ -4791,7 +4872,7 @@ navDefinitionAnswer: function {
     }
     dd: hit.declId
     if dd.isZero when hit.vid.isZero.not then dd = paramDeclOfVar :snap vid: hit.vid :name
-    dn: declNodeOf o: snap.st declId: dd
+    dn: declNodeOf o: snap.st declId: (writtenDeclOf o: snap.st declId: dd)
     if dn.isZero then {
         dn = (defNodeOf
             o: snap.st
@@ -4846,13 +4927,17 @@ referencesTargetOf: function {
     if hit.kind == 1 when vid.isZero when (snap.prog.nodes.get i: hit.nodeid).labelvalue then {
         vid = defVarIdOf o: snap.st nid: hit.nodeid
     }
-    if hit.kind == 6 then {
-        vid = defVarIdOf o: snap.st nid: hit.nodeid
-        if vid.isZero then vid = loopVarOf :snap :sp row: (sp.rows.get i: hit.idx)
+    # a label's position is its element's, which the block owns
+    se: slotElementOf o: snap.st declId: dd
+    if se.isZero.not then {
+        dd = se
         owner = ztypes.tid.zero
-        hnm: zast.nameTextAt ast: snap.prog ref: name
-        dd = declOfDefOp o: snap.st prog: snap.prog opId: hit.nodeid name: hnm.stringView
-        if dd.isZero then dd = genericParamDeclOf o: snap.st nid: hit.nodeid
+    }
+    if hit.kind == 6 then {
+        dr: declRowTarget :snap :sp :hit :name
+        vid = dr.vid
+        dd = dr.declId
+        owner = ztypes.tid.zero
     }
     # a `:x` that reads no variable labels its callee's parameter, or the field
     # it builds; a written label resolved through what it names already
@@ -4871,6 +4956,22 @@ referencesTargetOf: function {
     od: spelledOrigin :snap declId: dd :name
     if owner.isZero then owner = declOwnerOf o: snap.st declId: od
     return (reftarget :vid declId: od :owner :name)
+}
+
+# declRowTarget -- what declaration row `hit` declares: the variable it binds
+# (a parameter, a local, a `for` binding), else its Decl.
+declRowTarget: function {
+    snap: zcheck.CheckResult
+    sp: Spans.view
+    hit: navhit
+    name: zast.nameid
+} out reftarget is {
+    vid: defVarIdOf o: snap.st nid: hit.nodeid
+    if vid.isZero then vid = loopVarOf :snap :sp row: (sp.rows.get i: hit.idx)
+    hnm: zast.nameTextAt ast: snap.prog ref: name
+    dd: declOfDefOp o: snap.st prog: snap.prog opId: hit.nodeid name: hnm.stringView
+    if dd.isZero then dd = genericParamDeclOf o: snap.st nid: hit.nodeid
+    return (reftarget :vid declId: dd owner: ztypes.tid :name)
 }
 
 # spelledOrigin -- declaration `declId` at the origin of its same-name
@@ -5146,7 +5247,13 @@ rowRefersTo: function {
     if row.name != tg.name then return false
     if tg.vid.isZero then {
         if row.kind == 2 when tg.owner.isZero.not then {
-            return (memberOwnerOf o: snap.st nid: row.nodeid) == tg.owner
+            ow: memberOwnerOf o: snap.st nid: row.nodeid
+            # `blk.slot.label` is owned as its element is, by the block
+            if ow.isZero then ow = (declOwnerOf
+                o: snap.st
+                declId: (slotElementOf o: snap.st declId: (slotLabelDecl :snap dpid: row.nodeid))
+            )
+            return ow == tg.owner
         }
         use: (row.kind == 1) or (row.kind == 2)
         d: tg.declId
