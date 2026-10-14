@@ -1764,6 +1764,13 @@ rangerow: record {
     kind: u8
 }
 
+# casearm -- where the arm a `case` clause writes is matched: its match's
+# subject, and the function the match is written in (0 outside one)
+casearm: record {
+    subject: zast.nodeid
+    fn: zast.nodeid
+}
+
 # the table of hit-testable spans a request builds: fileSpans for one unit's
 # file, programSpans for every file.
 Spans: class {
@@ -1787,6 +1794,12 @@ Spans: class {
     # on: the checker binds the loop variable on that node, or on the
     # `E.iterate` node it mints for the arm
     forArm: (IdMapV zast.nodeid v: zast.nodeid)
+    # each `case` clause's arm, its written name, keyed to where it is
+    # matched: the checker resolves the arm by name through the subject's type
+    # and records nothing on it
+    caseArm: (IdMapV zast.nodeid v: casearm)
+    # the function the walk is in, 0 outside one
+    curFn: zast.nodeid
 } as {
     # an empty table
     create: function {} out this is {
@@ -1798,6 +1811,8 @@ Spans: class {
             wholeProgram: false
             argCall: (IdMapV zast.nodeid v: zast.nodeid)
             forArm: (IdMapV zast.nodeid v: zast.nodeid)
+            caseArm: (IdMapV zast.nodeid v: casearm)
+            curFn: zast.nodeid
         )
     }
 
@@ -1912,7 +1927,14 @@ Spans: class {
             this.noteArguments :ast callId: n.nodeid args: n.arguments
             this.walkRange :ast nodeid: n.nodeid startPos: pos :kids kind: 4
             return
+        } case functiondef then {
+            outerFn: this.curFn
+            this.curFn = n.nodeid
+            this.walkIds :ast ids: kids
+            this.curFn = outerFn
+            return
         } case caseexpr then {
+            this.noteCaseArms :ast subject: n.subject clauses: n.clauses
             this.walkRange :ast nodeid: n.nodeid startPos: pos :kids kind: 5
             return
         } case forexpr then {
@@ -1967,6 +1989,19 @@ Spans: class {
             if arm.namedoperation when arm.name.isZero.not then (this.forArm.set
                 key: arm.operation
                 value: arm.nodeid
+            )
+        }
+    }
+
+    # noteCaseArms -- record each clause's arm against its match's subject
+    noteCaseArms: function {:this ast: Ast.view subject: zast.nodeid clauses: zast.kidspan} is {
+        ci: u64
+        for ci < clauses.count loop {
+            cl: ast.nodes.get i: (zast.kidAt kids: ast.kids span: clauses i: ci)
+            ci = ci + 1
+            if cl.caseclause when cl.matcharm.isZero.not then (this.caseArm.set
+                key: cl.matcharm
+                value: (casearm :subject fn: this.curFn)
             )
         }
     }
@@ -4256,6 +4291,14 @@ navResolve: function {
         base = navtarget vid: lv tid: ztypes.tid owner: ztypes.tid declId: ztypes.declid
         argNode = sp.bindingArmOf nid: hit.nodeid
     }
+    # the arm a `case` names answers as its declaration does
+    ca: caseArmDecl :snap :sp nid: hit.nodeid
+    if ca.isZero.not then base = (navtarget
+        vid: ztypes.vid
+        tid: ztypes.tid
+        owner: (declOwnerOf o: snap.st declId: ca)
+        declId: ca
+    )
     t: navTargetRefine :snap :hnid hnm: hnm.stringView kind: hit.kind :base
     # a unit's name answers with its FILE: a top-level unit's by name, a
     # subunit's through the declaration the checker resolved it to
@@ -4278,6 +4321,98 @@ navResolve: function {
         :unitFsno
     )
     return (optionval.some found)
+}
+
+# caseArmDecl -- the declaration the arm a `case` clause writes (`nid`) names:
+# the subject's arm, for a union or a variant -- a typedef's base's, an
+# instance's generic's -- or, for a match over a generic parameter, the type
+# the name resolves to where the template writes it. 0 for a value match and
+# any node that is no clause's arm. The checker resolves it by name too
+# (checkCaseClause, dissectArmByType) and records nothing.
+caseArmDecl: function {
+    snap: zcheck.CheckResult sp: Spans.view nid: zast.nodeid
+} out ztypes.declid is {
+    subj: zast.nodeid
+    fn: zast.nodeid
+    sj: sp.caseArm.get key: nid
+    match (
+        sj
+    ) case some then {
+        subj = sj.subject
+        fn = sj.fn
+    } case none then {
+        return ztypes.declid.zero
+    }
+    nm: zast.nameid
+    {
+        an: snap.prog.nodes.get i: nid
+        if an.atomid then nm = an.name
+    }
+    t: nodeTypeAt o: snap.st nid: subj
+    o: snap.st
+    match (
+        o
+    ) case some then {
+        if t.isZero or nm.isZero then return ztypes.declid.zero
+        if (o.reg.isTypeParamOf tid: t) then return (dissectArmDecl :snap :o :fn name: nm)
+        sum: caseSumOf :o :t
+        tt: o.reg.typetypeOf typeId: sum
+        isSum: (tt == ztypes.ztypetype.unionType) or (tt == ztypes.ztypetype.variantType)
+        td: ztypecheck.declOfTypeId st: o tid: sum
+        if isSum.not or td.isZero then return ztypes.declid.zero
+        return (o.typing.declFindChild parentDeclId: td nameId: nm)
+    } case none then null
+    return ztypes.declid.zero
+}
+
+# caseSumOf -- the sum a match on a `t` value dissects: a typedef's base, and a
+# partial's generic, whose declaration holds the arms.
+caseSumOf: function {o: zenv.ZSymbolTable.view t: ztypes.tid} out ztypes.tid is {
+    cur: t
+    hops: u32
+    for hops < 64 loop {
+        nx: (o.typing.typedefBaseTid.get key: cur).or d: ztypes.tid
+        if nx.isZero then break
+        cur = nx
+        hops = hops + 1
+    }
+    if (o.reg.isPartialOf tid: cur) then {
+        og: o.reg.genericOriginOf tid: cur
+        if og.isZero.not then return og
+    }
+    return cur
+}
+
+# dissectArmDecl -- the type a clause of a match over a generic parameter
+# names, looked up as dissection looks it up: from the template the match is
+# written in, function `fn`, in its unit.
+dissectArmDecl: function {
+    snap: zcheck.CheckResult o: zenv.ZSymbolTable.view fn: zast.nodeid name: zast.nameid
+} out ztypes.declid is {
+    if fn.isZero then return ztypes.declid.zero
+    scope: ztypecheck.declOfTypeId st: o tid: (nodeTypeAt o: snap.st nid: fn)
+    ud: scope
+    hops: u32
+    for ud.isZero.not and (hops < 64) loop {
+        if (o.typing.decls.get i: ud).kind.unitDecl then break
+        ud = o.typing.declParentOf declId: ud
+        hops = hops + 1
+    }
+    if ud.isZero then return ud
+    nm: zast.nameTextAt ast: snap.prog ref: name
+    at: (ztypecheck.walkLookupTyperefRo
+        ast: snap.prog
+        st: o
+        unitDecl: ud
+        :scope
+        base: nm.stringView
+    )
+    match (
+        at
+    ) case some then {
+        return (ztypecheck.declOfTypeId st: o tid: at)
+    } case none then null
+    return ztypes.declid.zero
 }
 
 # loopVarOf -- the variable the `for` binding row `row` binds, or 0 when the row
@@ -4764,7 +4899,9 @@ hoverValueTid: function {snap: zcheck.CheckResult hit: navhit} out ztypes.tid is
     if hit.nodeid.isZero then return (itemValueTid :snap tid: hit.tid)
     if hit.kind == 6 when hit.vid.isZero.not then return (variableTypeOpt o: snap.st vid: hit.vid)
     nt: nodeTypeAt o: snap.st nid: hit.nodeid
-    if hit.kind == 6 when hit.tid.isZero then {
+    # a declaration, and a name with no stamp of its own -- a `case`'s arm --
+    # are what is declared
+    if (hit.kind == 6) or nt.isZero when hit.tid.isZero then {
         dt: declTypeIdOf o: snap.st declId: hit.declId
         if nt.isZero or (isLiteralTid o: snap.st tid: dt) then return dt
     }
@@ -5259,16 +5396,19 @@ rowRefersTo: function {
     }
     if row.name != tg.name then return 0
     if row.kind == 6 when (ops.contains item: row.nodeid) then return 2
-    if tg.vid.isZero when (rowUsesDecl :snap :tg :row) then return 1
+    if tg.vid.isZero when (rowUsesDecl :snap :sp :tg :row) then return 1
     if tg.declId.isZero or (sp.argCall.has key: row.nodeid).not then return 0
     if (labelDeclOf :snap :sp :row) == tg.declId then return 1
     return 0
 }
 
 # rowUsesDecl -- use or member row `row`, spelled as `tg`, names its
-# declaration: a member by its owner when the target has one, any other by the
-# declaration it resolves to.
-rowUsesDecl: function {snap: zcheck.CheckResult tg: reftarget row: spanrow} out bool is {
+# declaration: a member by its owner when the target has one, the arm a `case`
+# writes by the declaration it names, any other by the declaration it resolves
+# to.
+rowUsesDecl: function {
+    snap: zcheck.CheckResult sp: Spans.view tg: reftarget row: spanrow
+} out bool is {
     if row.kind == 2 when tg.owner.isZero.not then {
         ow: memberOwnerOf o: snap.st nid: row.nodeid
         # `blk.slot.label` is owned as its element is, by the block
@@ -5280,7 +5420,16 @@ rowUsesDecl: function {snap: zcheck.CheckResult tg: reftarget row: spanrow} out 
     }
     use: (row.kind == 1) or (row.kind == 2)
     if use.not or tg.declId.isZero then return false
-    return (rowNamesDecl :snap :row declId: tg.declId)
+    ca: caseArmDecl :snap :sp nid: row.nodeid
+    if ca.isZero then return (rowNamesDecl :snap :row declId: tg.declId)
+    o: snap.st
+    match (
+        o
+    ) case some then {
+        return (sameNameOrigin prog: snap.prog :o declId: ca) == tg.declId
+    } case none then {
+        return false
+    }
 }
 
 # declOpsOf -- the nodes `tg`'s declarations are rowed on: the operation of its
