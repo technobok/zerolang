@@ -15,6 +15,11 @@ on:
 permissions:
   contents: read
 
+# an explicit bash runs with -o pipefail, so `make ... | tee` fails when make does
+defaults:
+  run:
+    shell: bash
+
 jobs:
   bench:
     runs-on: ubuntu-24.04-arm
@@ -24,15 +29,17 @@ jobs:
       matrix:
         run: [1, 2, 3]
     steps:
-      - uses: actions/checkout@v4.2.2
+      - uses: actions/checkout@v7.0.1
 
       - name: machine
         run: |
           mkdir -p results
           { uname -a; lscpu; nproc; gcc --version | head -1; } | tee results/machine.txt
 
+      # no out/tcc: the vendored tinycc is a host-only linux-x86_64 build, and
+      # the bench targets leave out its tier on any other host.
       - name: build zc
-        run: make bin/zc bin/zl out/tcc
+        run: make bin/zc bin/zl
 
       # math_constants_wide uses f128, which zc refuses off x86-64.
       - name: math corpus, native
@@ -64,7 +71,7 @@ jobs:
       - name: bench math
         run: make -s bench-math BENCH_CPU=0 | tee results/math.txt
 
-      - uses: actions/upload-artifact@v4.6.2
+      - uses: actions/upload-artifact@v7.0.1
         if: always()
         with:
           name: arm64-bench-${{ matrix.run }}

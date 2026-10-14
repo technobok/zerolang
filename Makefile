@@ -18,6 +18,8 @@ OPTFLAGS := -O2 -fno-strict-aliasing -fwrapv
 # source); everything else keeps the SipHash default. The C is identical either way.
 ZCHASH   := --fast-hash
 BUILDDIR := out
+# the machine make runs on, as `uname -m` spells it
+HOST_ARCH := $(shell uname -m)
 # The -l flags an emitted C file declares in its `zlink:` header (searched in the
 # first lines, not pinned to one). Every rule linking emitted C uses ZLINKOF.
 ZLINKSED = sed -n '1,8s|^/\* zlink: \(.*\) \*/$$|\1|p'
@@ -241,21 +243,24 @@ math-asm-guard: out/asmgen
 BENCH_MATH_DIR := $(BUILDDIR)/bench-math
 # what the asm tier is built with: aarch64's asm kernels are still opt-in, so
 # without the flag its asm tier would be the builtins again.
-BENCH_ASM_CFLAGS ?= $(if $(filter aarch64 arm64,$(shell uname -m)),-DZ_MATH_ASM_ARM64)
-bench-math: bin/zc $(BUILDDIR)/tcc bench-math-kernels
+BENCH_ASM_CFLAGS ?= $(if $(filter aarch64 arm64,$(HOST_ARCH)),-DZ_MATH_ASM_ARM64)
+# the tcc tier needs the vendored tcc, which only an x86_64 host builds.
+BENCH_TCC := $(if $(filter x86_64,$(HOST_ARCH)),tcc)
+BENCH_TIERS := asm builtins portable $(BENCH_TCC)
+bench-math: bin/zc $(if $(BENCH_TCC),$(BUILDDIR)/tcc) bench-math-kernels
 	@mkdir -p $(BENCH_MATH_DIR)
 	@bin/zc build tests/bench/math_bench.z --release $(if $(BENCH_ASM_CFLAGS),--cflags "$(BENCH_ASM_CFLAGS)") -o $(BENCH_MATH_DIR)/asm
 	@bin/zc build tests/bench/math_bench.z --release --cflags -DZ_MATH_NOASM -o $(BENCH_MATH_DIR)/builtins
 	@bin/zc build tests/bench/math_bench.z --release --cflags -DZ_WORD_PORTABLE -o $(BENCH_MATH_DIR)/portable
-	@bin/zc build tests/bench/math_bench.z --cc $(BUILDDIR)/tcc --tcc-lib $(TCCLIB) -o $(BENCH_MATH_DIR)/tcc
+	@$(if $(BENCH_TCC),bin/zc build tests/bench/math_bench.z --cc $(BUILDDIR)/tcc --tcc-lib $(TCCLIB) -o $(BENCH_MATH_DIR)/tcc)
 	@pin=""; if command -v taskset >/dev/null 2>&1; then pin="taskset -c $(BENCH_CPU)"; fi; \
-	for v in asm builtins portable tcc; do echo "== $$v"; $$pin $(BENCH_MATH_DIR)/$$v; done
+	for v in $(BENCH_TIERS); do echo "== $$v"; $$pin $(BENCH_MATH_DIR)/$$v; done
 
 # bench-math-kernels -- the word-vector kernels timed alone, per tier; the median of
 # REPS runs, pinned to BENCH_CPU (the host mixes two kinds of core).
 REPS ?= 5
 BENCH_CPU ?= 0
-bench-math-kernels: $(BUILDDIR)/tcc
+bench-math-kernels: $(if $(BENCH_TCC),$(BUILDDIR)/tcc)
 	@mkdir -p $(BENCH_MATH_DIR)
 	@awk '/^\/\* 64x64 -> 128 multiply/,/^#endif/' src/runtime/z_hash.inc > $(BENCH_MATH_DIR)/mul128.h
 	@grep -q 'z_fh_mul128' $(BENCH_MATH_DIR)/mul128.h \
@@ -264,9 +269,9 @@ bench-math-kernels: $(BUILDDIR)/tcc
 	$(CC) -O2 -std=c17 -Wall -Wextra -Wno-unused-function $(BENCH_ASM_CFLAGS) $$inc -o $(BENCH_MATH_DIR)/k-asm tests/bench/math_kernels.c \
 	&& $(CC) -O2 -std=c17 -Wall -Wextra -Wno-unused-function -DZ_MATH_NOASM $$inc -o $(BENCH_MATH_DIR)/k-builtins tests/bench/math_kernels.c \
 	&& $(CC) -O2 -std=c17 -Wall -Wextra -Wno-unused-function -DZ_WORD_PORTABLE $$inc -o $(BENCH_MATH_DIR)/k-portable tests/bench/math_kernels.c \
-	&& $(BUILDDIR)/tcc -B $(TCCLIB) $$inc -o $(BENCH_MATH_DIR)/k-tcc tests/bench/math_kernels.c
+	$(if $(BENCH_TCC),&& $(BUILDDIR)/tcc -B $(TCCLIB) $$inc -o $(BENCH_MATH_DIR)/k-tcc tests/bench/math_kernels.c)
 	@pin=""; if command -v taskset >/dev/null 2>&1; then pin="taskset -c $(BENCH_CPU)"; fi; \
-	for v in asm builtins portable tcc; do echo "== kernels $$v"; $$pin $(BENCH_MATH_DIR)/k-$$v -r $(REPS); done
+	for v in $(BENCH_TIERS); do echo "== kernels $$v"; $$pin $(BENCH_MATH_DIR)/k-$$v -r $(REPS); done
 
 # test-clang -- the corpus under clang. Only clang shows an f128 helper the
 # prelude forgot to declare (gcc reads quadmath.h).
@@ -387,6 +392,8 @@ TCC_MAKE = $(MAKE) -C $(BUILDDIR)/tinycc -j1 GITHASH=no CPPFLAGS=-fPIC
 TCCLIB := $(BUILDDIR)/tcc-lib
 
 $(BUILDDIR)/tcc: $(TCC_SRC) $(TCC_CONFIGDIR)/config.h $(TCC_CONFIGDIR)/config.mak
+	@if [ "$(HOST_ARCH)" != x86_64 ]; then \
+	  echo "$@: the vendored tinycc is a host-only linux-x86_64 build; this host is $(HOST_ARCH)"; exit 1; fi
 	@mkdir -p $(BUILDDIR)
 	rm -rf $(BUILDDIR)/tinycc $(TCCLIB)
 	mkdir -p $(BUILDDIR)/tinycc $(TCCLIB)
