@@ -1770,8 +1770,8 @@ Spans: class {
     # the walk descends into subunits, whose bodies are other files
     wholeProgram: bool
     # the call each labelled argument is written in, keyed by the argument's
-    # value node, which its rows are keyed on; filled by the whole-program walk,
-    # which references read
+    # value node, which its rows are keyed on. A call and its labels sit in one
+    # file, so a file's walk has them all.
     argCall: (IdMapV zast.nodeid v: zast.nodeid)
 } as {
     # an empty table
@@ -1894,7 +1894,7 @@ Spans: class {
             this.memberRow :ast dpid: n.nodeid c: (ast.nodes.get i: n.child)
             return
         } case call then {
-            if this.wholeProgram then this.noteArguments :ast callId: n.nodeid args: n.arguments
+            this.noteArguments :ast callId: n.nodeid args: n.arguments
             this.walkRange :ast nodeid: n.nodeid startPos: pos :kids kind: 4
             return
         } case caseexpr then {
@@ -3761,8 +3761,12 @@ navhit: record {
     kind: u8
     # the hit span's width in columns, which a Location needs
     width: u32
-    # the node the row belongs to
+    # the node the hit resolves through: the row's own, or, for a call label,
+    # the operation of the parameter or field it names
     nodeid: zast.nodeid
+    # the node the row belongs to: for a call label, the argument's value, whose
+    # passing a hover notes
+    argNode: zast.nodeid
     # the variable the reference resolved to, zero when it is not one
     vid: ztypes.vid
     # the type the reference resolved to, zero when it is not one
@@ -4077,7 +4081,7 @@ navTargetRefine: function {
         )
     }
     if own.vid.isZero when refTid.isZero when own.owner.isZero when refDeclId.isZero.not then {
-        refTid = declTypeIdOf o: snap.st declId: refDeclId
+        refTid = declOnlyTid :snap declId: refDeclId
     }
     if kind == 1 when own.vid.isZero when refDeclId.isZero then {
         ct9: calleeTypeOf :snap nid: hnid name: hnm
@@ -4087,6 +4091,13 @@ navTargetRefine: function {
         }
     }
     return (navtarget vid: own.vid tid: refTid owner: own.owner declId: refDeclId)
+}
+
+# declOnlyTid -- the type a hit that only its Decl resolves takes: the Decl's.
+# A parameter is a value of its type, though a native's binds no variable.
+declOnlyTid: function {snap: zcheck.CheckResult declId: ztypes.declid} out ztypes.tid is {
+    if (declKindIsParam :snap :declId) then return ztypes.tid.zero
+    return (declTypeIdOf o: snap.st :declId)
 }
 
 # calleeTypeOf -- the TYPE a name in callable position names (`Dog n: 7`, `Path
@@ -4119,7 +4130,7 @@ navResolve: function {
     hit: sp.rows.get i: bi
     hnm: sp.names.get i: bi
     w: hit.colHi - hit.colLo
-    hnid: hit.nodeid
+    hnid: labelSubject :snap :sp row: hit
     base: navTargetByKind :snap :hnid kind: hit.kind
     t: navTargetRefine :snap :hnid hnm: hnm.stringView kind: hit.kind :base
     # a unit's name answers with its FILE: a top-level unit's by name, a
@@ -4134,7 +4145,8 @@ navResolve: function {
         idx: bi
         kind: hit.kind
         width: w
-        nodeid: hit.nodeid
+        nodeid: hnid
+        argNode: hit.nodeid
         vid: t.vid
         tid: t.tid
         owner: t.owner
@@ -4142,6 +4154,23 @@ navResolve: function {
         :unitFsno
     )
     return (optionval.some found)
+}
+
+# labelSubject -- the node a hit on span row `row` resolves through: a call
+# label's is the operation of the parameter or field it names, so the label
+# answers as that declaration's own row does; any other row's is its own.
+labelSubject: function {snap: zcheck.CheckResult sp: Spans.view row: spanrow} out zast.nodeid is {
+    if row.kind != 6 then return row.nodeid
+    lab: labelDeclOf :snap :sp :row
+    if lab.isZero then return row.nodeid
+    o: snap.st
+    match (
+        o
+    ) case some then {
+        arm: snap.prog.nodes.get i: (o.typing.decls.get i: lab).node
+        if arm.namedoperation then return arm.operation
+    } case none then null
+    return row.nodeid
 }
 
 # genericParamHoverCard -- the card for a hit on a generic PARAMETER, or nul
@@ -4568,15 +4597,16 @@ navHoverAnswer: function {
 
 # hoverValueTid -- the type a hover card gives its hit's name: its node's stamp.
 # A completion item has no node, so its type is its declaration's. A parameter
-# or a member declared with a literal type is of that type, where the fold
-# rewrote its node's stamp to the default.
+# or a member is of its declared type where its node has no stamp, and where it
+# is declared with a literal type, which the fold rewrote the stamp from.
 hoverValueTid: function {snap: zcheck.CheckResult hit: navhit} out ztypes.tid is {
     if hit.nodeid.isZero then return (itemValueTid :snap tid: hit.tid)
+    nt: nodeTypeAt o: snap.st nid: hit.nodeid
     if hit.kind == 6 when hit.tid.isZero then {
         dt: declTypeIdOf o: snap.st declId: hit.declId
-        if (isLiteralTid o: snap.st tid: dt) then return dt
+        if nt.isZero or (isLiteralTid o: snap.st tid: dt) then return dt
     }
-    return (nodeTypeAt o: snap.st nid: hit.nodeid)
+    return nt
 }
 
 # itemValueTid -- the type a completion item's name has as a value: a data
@@ -4633,14 +4663,14 @@ hoverCallNotes: function {
     # the unit the call's notes are shown in
     site: ztypes.declid
 } is {
-    hpos: nodePosOf prog: snap.prog nid: hit.nodeid
+    hpos: nodePosOf prog: snap.prog nid: hit.argNode
     # the call around a node is in the node's own file
     callId: (sp.innerRangeOfKind
         curPos: hpos
         kind: 4
         slack: 0
         prog: snap.prog
-        wantFsno: (snap.prog.fsnoForNode nodeid: hit.nodeid)
+        wantFsno: (snap.prog.fsnoForNode nodeid: hit.argNode)
     )
     if callId.isZero then return
     callPos: nodePosOf prog: snap.prog nid: callId
@@ -4652,7 +4682,7 @@ hoverCallNotes: function {
         }
         return
     }
-    dn9x: dispositionNote o: snap.st nid: hit.nodeid
+    dn9x: dispositionNote o: snap.st nid: hit.argNode
     appendNote :docBody note: dn9x.stringView
 }
 
@@ -4739,8 +4769,9 @@ referencesTargetOf: function {
         dd = declOfDefOp o: snap.st prog: snap.prog opId: hit.nodeid name: hnm.stringView
         if dd.isZero then dd = genericParamDeclOf o: snap.st nid: hit.nodeid
     }
-    # a labelled argument names its callee's parameter, or the field it builds
-    if vid.isZero when (hit.kind == 6) or (hit.kind == 1) then {
+    # a `:x` that reads no variable labels its callee's parameter, or the field
+    # it builds; a written label resolved through what it names already
+    if vid.isZero when hit.kind == 1 then {
         lab: labelDeclOf :snap :sp row: (sp.rows.get i: hit.idx)
         if lab.isZero.not then {
             dd = lab
@@ -8148,6 +8179,7 @@ itemHit: function {
         kind: 6
         width: 0
         nodeid: zast.nodeid
+        argNode: zast.nodeid
         vid: ztypes.vid
         tid: ztypes.tid
         owner: ztypes.tid
