@@ -1,0 +1,71 @@
+# arm64-bench -- the math kernels timed on arm64 hardware, to decide which of
+# the generated arm64 asm kernels (src/runtime/natives/_Z_MATH_ARITH_ARM64.inc,
+# still opt-in behind -DZ_MATH_ASM_ARM64) beat the builtins, and from what
+# length. qemu cannot answer that: it counts instructions, not cycles.
+#
+# Run by hand only (Actions tab, or `gh workflow run arm64-bench.yml`). Three
+# identical jobs land on three VMs; a ranking counts only when all three agree.
+# Each job also runs the math corpus natively against its goldens, on the
+# builtins and on the asm, since test-math-arm64 checks them only under qemu.
+name: arm64-bench
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        run: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@v4.2.2
+
+      - name: machine
+        run: |
+          mkdir -p results
+          { uname -a; lscpu; nproc; gcc --version | head -1; } | tee results/machine.txt
+
+      - name: build zc
+        run: make bin/zc bin/zl out/tcc
+
+      # math_constants_wide uses f128, which zc refuses off x86-64.
+      - name: math corpus, native
+        run: |
+          fail=0
+          for v in builtins asm; do
+            d=out/math-native/$v; mkdir -p $d; fl=""
+            if [ $v = asm ]; then fl="--cflags -DZ_MATH_ASM_ARM64"; fi
+            for f in tests/fixtures/emitc_corpus/math/*.z; do
+              b=$(basename $f .z)
+              [ $b = math_constants_wide ] && continue
+              if ! bin/zc build $f $fl -o $d/$b > $d/$b.build 2>&1; then
+                echo "FAIL ($v): $b does not build"; sed -n 1,5p $d/$b.build; fail=1; continue
+              fi
+              $d/$b > $d/$b.out 2>&1
+              cmp -s $d/$b.out tests/fixtures/run_golden/$b.out \
+                || { echo "FAIL ($v): $b differs from its golden"; diff $d/$b.out tests/fixtures/run_golden/$b.out | head -10; fail=1; }
+            done
+          done
+          [ $fail -eq 0 ] && echo "math corpus OK natively on aarch64 (builtins, asm)"
+          exit $fail
+
+      - name: bench kernels
+        run: |
+          for i in 1 2 3; do
+            make -s bench-math-kernels REPS=21 BENCH_CPU=0 | tee results/kernels-$i.txt
+          done
+
+      - name: bench math
+        run: make -s bench-math BENCH_CPU=0 | tee results/math.txt
+
+      - uses: actions/upload-artifact@v4.6.2
+        if: always()
+        with:
+          name: arm64-bench-${{ matrix.run }}
+          path: results/

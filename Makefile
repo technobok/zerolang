@@ -239,9 +239,12 @@ math-asm-guard: out/asmgen
 # bench-math -- math's operations timed per kernel tier (asm, builtins, portable,
 # tcc). Not in ci: wall time is no ratchet.
 BENCH_MATH_DIR := $(BUILDDIR)/bench-math
+# what the asm tier is built with: aarch64's asm kernels are still opt-in, so
+# without the flag its asm tier would be the builtins again.
+BENCH_ASM_CFLAGS ?= $(if $(filter aarch64 arm64,$(shell uname -m)),-DZ_MATH_ASM_ARM64)
 bench-math: bin/zc $(BUILDDIR)/tcc bench-math-kernels
 	@mkdir -p $(BENCH_MATH_DIR)
-	@bin/zc build tests/bench/math_bench.z --release -o $(BENCH_MATH_DIR)/asm
+	@bin/zc build tests/bench/math_bench.z --release $(if $(BENCH_ASM_CFLAGS),--cflags "$(BENCH_ASM_CFLAGS)") -o $(BENCH_MATH_DIR)/asm
 	@bin/zc build tests/bench/math_bench.z --release --cflags -DZ_MATH_NOASM -o $(BENCH_MATH_DIR)/builtins
 	@bin/zc build tests/bench/math_bench.z --release --cflags -DZ_WORD_PORTABLE -o $(BENCH_MATH_DIR)/portable
 	@bin/zc build tests/bench/math_bench.z --cc $(BUILDDIR)/tcc --tcc-lib $(TCCLIB) -o $(BENCH_MATH_DIR)/tcc
@@ -258,7 +261,7 @@ bench-math-kernels: $(BUILDDIR)/tcc
 	@grep -q 'z_fh_mul128' $(BENCH_MATH_DIR)/mul128.h \
 	  || { echo "bench-math-kernels: z_hash.inc has no z_fh_mul128 block"; exit 1; }
 	@inc="-I$(BENCH_MATH_DIR) -Isrc/runtime/natives"; \
-	$(CC) -O2 -std=c17 -Wall -Wextra -Wno-unused-function $$inc -o $(BENCH_MATH_DIR)/k-asm tests/bench/math_kernels.c \
+	$(CC) -O2 -std=c17 -Wall -Wextra -Wno-unused-function $(BENCH_ASM_CFLAGS) $$inc -o $(BENCH_MATH_DIR)/k-asm tests/bench/math_kernels.c \
 	&& $(CC) -O2 -std=c17 -Wall -Wextra -Wno-unused-function -DZ_MATH_NOASM $$inc -o $(BENCH_MATH_DIR)/k-builtins tests/bench/math_kernels.c \
 	&& $(CC) -O2 -std=c17 -Wall -Wextra -Wno-unused-function -DZ_WORD_PORTABLE $$inc -o $(BENCH_MATH_DIR)/k-portable tests/bench/math_kernels.c \
 	&& $(BUILDDIR)/tcc -B $(TCCLIB) $$inc -o $(BENCH_MATH_DIR)/k-tcc tests/bench/math_kernels.c
