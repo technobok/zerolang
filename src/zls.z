@@ -1764,6 +1764,19 @@ rangerow: record {
     kind: u8
 }
 
+# namesGenericBound -- `op` declares a generic parameter: `X.generic`, or the
+# call `(X.generic default: ...)`.
+namesGenericBound: function {ast: Ast.view op: zast.nodeid} out bool is {
+    o: ast.nodes.get i: op
+    dp: op
+    if o.call then dp = o.callable
+    d: ast.nodes.get i: dp
+    if d.dottedpath.not then return false
+    c: ast.nodes.get i: d.child
+    if c.atomid.not then return false
+    return c.name == zast.wellKnown.slot.wkGeneric
+}
+
 # casearm -- where the arm a `case` clause writes is matched: its match's
 # subject, and the function the match is written in (0 outside one)
 casearm: record {
@@ -1800,6 +1813,14 @@ Spans: class {
     caseArm: (IdMapV zast.nodeid v: casearm)
     # the function the walk is in, 0 outside one
     curFn: zast.nodeid
+    # the generic parameters the walk is inside the template of, innermost
+    # last: each one's name, and its declaring arm's operation
+    genNames: ListVal zast.nameid
+    genOps: ListVal zast.nodeid
+    # each atom spelled as a generic parameter in scope, keyed to that
+    # parameter's declaring operation, which genericParamDecl keys. The checker
+    # notes only the spellings the paths that read them stop for.
+    genUse: (IdMapV zast.nodeid v: zast.nodeid)
 } as {
     # an empty table
     create: function {} out this is {
@@ -1813,6 +1834,9 @@ Spans: class {
             forArm: (IdMapV zast.nodeid v: zast.nodeid)
             caseArm: (IdMapV zast.nodeid v: casearm)
             curFn: zast.nodeid
+            genNames: ListVal zast.nameid
+            genOps: ListVal zast.nodeid
+            genUse: (IdMapV zast.nodeid v: zast.nodeid)
         )
     }
 
@@ -1916,6 +1940,7 @@ Spans: class {
             n
         ) case atomid then {
             this.addRow :ast id: n.nodeid line: n.lineno col: n.colno name: n.name kind: 1
+            this.noteGenericUse id: n.nodeid name: n.name
         } case labelvalue then {
             this.addRow :ast id: n.nodeid line: n.lineno col: n.colno name: n.name kind: 1
         } case dottedpath then {
@@ -1929,9 +1954,24 @@ Spans: class {
             return
         } case functiondef then {
             outerFn: this.curFn
+            mark: this.genNames.length
+            this.pushGenerics :ast items: n.asItems
             this.curFn = n.nodeid
             this.walkIds :ast ids: kids
             this.curFn = outerFn
+            this.popGenerics to: mark
+            return
+        } case objectdef then {
+            mark: this.genNames.length
+            this.pushGenerics :ast items: n.asItems
+            this.walkIds :ast ids: kids
+            this.popGenerics to: mark
+            return
+        } case unitdef then {
+            mark: this.genNames.length
+            if n.isGeneric then this.pushGenerics :ast items: n.body
+            this.walkIds :ast ids: kids
+            this.popGenerics to: mark
             return
         } case caseexpr then {
             this.noteCaseArms :ast subject: n.subject clauses: n.clauses
@@ -1990,6 +2030,47 @@ Spans: class {
                 key: arm.operation
                 value: arm.nodeid
             )
+        }
+    }
+
+    # pushGenerics -- bring into scope the generic parameters a template's
+    # `as` block declares: each arm whose operation is `X.generic`, or the call
+    # `(X.generic default: ...)`
+    pushGenerics: function {:this ast: Ast.view items: zast.kidspan} is {
+        ii: u64
+        for ii < items.count loop {
+            arm: ast.nodes.get i: (zast.kidAt kids: ast.kids span: items i: ii)
+            ii = ii + 1
+            if arm.namedoperation when arm.name.isZero.not when (namesGenericBound
+                :ast
+                op: arm.operation
+            ) then {
+                this.genNames.append arm.name
+                this.genOps.append arm.operation
+            }
+        }
+    }
+
+    # popGenerics -- leave the template whose parameters were pushed after
+    # `to` were in scope
+    popGenerics: function {:this to: u64} is {
+        for this.genNames.length > to loop {
+            this.genNames.pop
+            this.genOps.pop
+        }
+    }
+
+    # noteGenericUse -- an atom spelled as a generic parameter in scope, the
+    # innermost first, names it
+    noteGenericUse: function {:this id: zast.nodeid name: zast.nameid} is {
+        gi: this.genNames.length
+        for gi > 0 loop {
+            gi = gi - 1
+            if (this.genNames.get i: gi) == name then {
+                op: this.genOps.get i: gi
+                if op != id then this.genUse.set key: id value: op
+                return
+            }
         }
     }
 
@@ -2278,24 +2359,23 @@ genericParamBoundOf: function {
     }
 }
 
-# genericParamCard -- a generic parameter rendered as it was declared,
-# `t: anyval.generic`. "" when `nid` does not spell one.
+# genericParamCard -- generic parameter `gpd` rendered as it was declared,
+# `t: anyval.generic`. "" when it has no name.
 #
 # A parameter's Decl carries no type id -- nothing links one -- and its node no
 # stamp, so every signature and type-kind fallback hover has answers nothing for
-# it. The name it was declared under and the bound beside it are what there is.
+# it. The name it was declared under and the bound beside it are what there is;
+# the bound is read from the declaration's own node.
 genericParamCard: function {
     o: (Option zenv.ZSymbolTable).view
     prog: Ast.view
-    nid: zast.nodeid
+    gpd: ztypes.declid
     # the unit the generic parameter's card is shown in
     site: ztypes.declid
 } out String is {
-    gpd: genericParamDeclOf :o :nid
     if gpd.isZero then return ""
-    # the bound answers through the channel that already resolves it
     bnm: String
-    btid: useUnitDef :o nid: (genericParamBoundOf :o :nid)
+    btid: useUnitDef :o nid: (genericParamBoundOf :o nid: (declOperationOf :o :prog declId: gpd))
     if btid.isZero.not then bnm = displayTypeNameOfOpt :o tid: btid :site
     card: String
     {
@@ -2316,14 +2396,13 @@ genericParamCard: function {
     return card
 }
 
-# genericParamOwner -- the name of the head that declares the generic parameter
-# at `nid`, or "". The parameter's Decl is a child of the template's.
+# genericParamOwner -- the name of the head that declares generic parameter
+# `gpd`, or "". The parameter's Decl is a child of the template's.
 genericParamOwner: function {
     o: (Option zenv.ZSymbolTable).view
     prog: Ast.view
-    nid: zast.nodeid
+    gpd: ztypes.declid
 } out String is {
-    gpd: genericParamDeclOf :o :nid
     if gpd.isZero then return ""
     own: String
     {
@@ -2339,6 +2418,44 @@ genericParamOwner: function {
         } case none then null
     }
     return own
+}
+
+# declOperationOf -- the operation of the arm declaration `declId` is written
+# as, 0 when it is written as none.
+declOperationOf: function {
+    o: (Option zenv.ZSymbolTable).view prog: Ast.view declId: ztypes.declid
+} out zast.nodeid is {
+    dn: declNodeOf :o :declId
+    if dn.isZero then return dn
+    arm: prog.nodes.get i: dn
+    if arm.namedoperation then return arm.operation
+    return zast.nodeid.zero
+}
+
+# genericUseDecl -- the generic parameter use row node `nid`, spelled `name`,
+# names: one the checker noted, else one in scope where it is written
+# (Spans.genUse). 0 when it names none, or when the declaration spelled
+# otherwise shares the node -- a parameter typed by one, `v: t`.
+genericUseDecl: function {
+    snap: zcheck.CheckResult sp: Spans.view nid: zast.nodeid name: zast.nameid
+} out ztypes.declid is {
+    d: genericParamDeclOf o: snap.st :nid
+    if d.isZero then {
+        op: sp.genUse.get key: nid
+        match (
+            op
+        ) case some then {
+            d = genericParamDeclOf o: snap.st nid: op
+        } case none then null
+    }
+    if d.isZero then return d
+    o: snap.st
+    match (
+        o
+    ) case some then {
+        if (o.typing.decls.get i: d).name == name then return d
+    } case none then null
+    return ztypes.declid.zero
 }
 
 # a declaration's defining AST node id, or 0.
@@ -3974,15 +4091,16 @@ defOwnTarget: function {
     t: navtarget
 } out navtarget is {
     if kind != 6 then return t
-    if t.vid.isZero.not then return t
     dd: declOfDefOp o: snap.st prog: snap.prog opId: hnid name: hnm
-    if dd.isZero then return t
+    # a parameter's own declaration, never the Decl its type's node resolves
+    # to -- a generic parameter's, at `v: t`
     if (declKindIsParam :snap declId: dd) then return (navtarget
         vid: (defVarIdOf o: snap.st nid: hnid)
         tid: ztypes.tid
         owner: ztypes.tid
         declId: dd
     )
+    if t.vid.isZero.not or dd.isZero then return t
     if (declIsMember :snap declId: dd) then return (navtarget
         vid: ztypes.vid
         tid: ztypes.tid
@@ -4291,6 +4409,16 @@ navResolve: function {
         base = navtarget vid: lv tid: ztypes.tid owner: ztypes.tid declId: ztypes.declid
         argNode = sp.bindingArmOf nid: hit.nodeid
     }
+    # a generic parameter's use is the parameter
+    if hit.kind == 1 when base.vid.isZero then {
+        gp: genericUseDecl :snap :sp nid: hit.nodeid name: hit.name
+        if gp.isZero.not then base = (navtarget
+            vid: ztypes.vid
+            tid: ztypes.tid
+            owner: ztypes.tid
+            declId: gp
+        )
+    }
     # the arm a `case` names answers as its declaration does
     ca: caseArmDecl :snap :sp nid: hit.nodeid
     if ca.isZero.not then base = (navtarget
@@ -4467,14 +4595,21 @@ genericParamHoverCard: function {
     snap: zcheck.CheckResult
     # the generic parameter under the cursor
     hit: navhit
+    # the name under the cursor
+    hname: StringView
     # the card's site
     site: ztypes.declid
 } out Value is {
-    if hit.kind == 2 then return Value.nul
-    gcard: genericParamCard o: snap.st prog: snap.prog nid: hit.nodeid :site
+    if (hit.kind == 2) or hit.vid.isZero.not then return Value.nul
+    gpd: hit.declId
+    if gpd.isZero then return Value.nul
+    gop: declOperationOf o: snap.st prog: snap.prog declId: gpd
+    if (genericParamDeclOf o: snap.st nid: gop) != gpd then return Value.nul
+    if (declNamed o: snap.st prog: snap.prog declId: gpd name: hname).not then return Value.nul
+    gcard: genericParamCard o: snap.st prog: snap.prog :gpd :site
     if gcard.length == 0 then return Value.nul
     gdoc: String
-    gown: genericParamOwner o: snap.st prog: snap.prog nid: hit.nodeid
+    gown: genericParamOwner o: snap.st prog: snap.prog :gpd
     if gown.length > 0 then {
         gdoc.append "generic parameter of `"
         gdoc.append gown
@@ -4773,6 +4908,9 @@ hoverTypeFence: function {
     fence.append tn
     # a data block's element or length is a constant, which nothing owns
     if (ownerIsDataOpt o: snap.st tid: hit.owner) then return fence
+    # a native's parameter binds no variable, and the Decl its node resolves
+    # to is its type's -- `:i`, of the generic `i`, read as that constant
+    if hit.vid.isZero when (declKindIsParam :snap declId: hit.declId) then return fence
     annot: refAnnotation prog: snap.prog o: snap.st vid: hit.vid nid: hit.nodeid
     if annot.length > 0 then {
         fence.append "  # "
@@ -4839,7 +4977,7 @@ navHoverAnswer: function {
         :site
     )
     if body.length == 0 then {
-        gc: genericParamHoverCard :snap :hit :site
+        gc: genericParamHoverCard :snap :hit hname: hname.stringView :site
         if gc.nul.not then return gc
         tf: hoverTypeFence :snap :hit :hname :t :site
         if tf.length == 0 then return Value.nul
@@ -5421,6 +5559,12 @@ rowUsesDecl: function {
     use: (row.kind == 1) or (row.kind == 2)
     if use.not or tg.declId.isZero then return false
     ca: caseArmDecl :snap :sp nid: row.nodeid
+    if ca.isZero when row.kind == 1 then ca = (genericUseDecl
+        :snap
+        :sp
+        nid: row.nodeid
+        name: row.name
+    )
     if ca.isZero then return (rowNamesDecl :snap :row declId: tg.declId)
     o: snap.st
     match (
