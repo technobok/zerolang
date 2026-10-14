@@ -1418,6 +1418,15 @@ Server: class {
                     ) case some then {
                         res: Value.nul
                         trigCh: String
+                        # a client that sends no context asks for every
+                        # reference, as Find References does
+                        inclDecl: true
+                        ido: json.boolAt v: msg path: "params/context/includeDeclaration"
+                        match (
+                            ido
+                        ) case some then {
+                            inclDecl = ido
+                        } case none then null
                         tco: json.textAt v: msg path: "params/context/triggerCharacter"
                         match (
                             tco
@@ -1459,6 +1468,7 @@ Server: class {
                                 ch: ch0
                                 utf32: this.encUtf32
                                 :mode
+                                :inclDecl
                             )
                         }
                         answer = res.take
@@ -5230,53 +5240,104 @@ RefFile: class {
     }
 }
 
-# rowRefersTo -- span row `row` is a reference to `tg`: a variable's use or
-# binding by its id; otherwise a row spelled as the target is -- a member by
-# its owner when the target has one, a use by the declaration it resolves to, a
-# labelled argument by the parameter or field it names.
+# rowRefersTo -- what span row `row` is to `tg`: 0 nothing, 1 a reference, 2 a
+# declaration. A variable's uses and bindings by its id; otherwise a row spelled
+# as the target is -- a declaration by the node it is rowed on (`ops`), a member
+# by its owner when the target has one, a use by the declaration it resolves
+# to, a labelled argument by the parameter or field it names.
 rowRefersTo: function {
-    snap: zcheck.CheckResult sp: Spans.view tg: reftarget row: spanrow
-} out bool is {
-    if tg.vid.isZero.not when (rowReadsVar
-        :snap
-        :sp
-        :row
-        vid: tg.vid
-        name: tg.name
-    ) then return true
-    if row.name != tg.name then return false
-    if tg.vid.isZero then {
-        if row.kind == 2 when tg.owner.isZero.not then {
-            ow: memberOwnerOf o: snap.st nid: row.nodeid
-            # `blk.slot.label` is owned as its element is, by the block
-            if ow.isZero then ow = (declOwnerOf
-                o: snap.st
-                declId: (slotElementOf o: snap.st declId: (slotLabelDecl :snap dpid: row.nodeid))
-            )
-            return ow == tg.owner
-        }
-        use: (row.kind == 1) or (row.kind == 2)
-        d: tg.declId
-        if use when d.isZero.not when (rowNamesDecl :snap :row declId: d) then return true
+    snap: zcheck.CheckResult
+    sp: Spans.view
+    tg: reftarget
+    row: spanrow
+    # declOpsOf the target
+    ops: (ListVal zast.nodeid).view
+} out u8 is {
+    if tg.vid.isZero.not then {
+        rv: rowReadsVar :snap :sp :row vid: tg.vid name: tg.name
+        if rv > 0 then return rv
     }
-    if tg.declId.isZero or (sp.argCall.has key: row.nodeid).not then return false
-    return (labelDeclOf :snap :sp :row) == tg.declId
+    if row.name != tg.name then return 0
+    if row.kind == 6 when (ops.contains item: row.nodeid) then return 2
+    if tg.vid.isZero when (rowUsesDecl :snap :tg :row) then return 1
+    if tg.declId.isZero or (sp.argCall.has key: row.nodeid).not then return 0
+    if (labelDeclOf :snap :sp :row) == tg.declId then return 1
+    return 0
 }
 
-# rowReadsVar -- span row `row` uses variable `vid`, or binds it as `name`: a
-# local's binding, a parameter's declaration, a `:this`. A parameter's type
-# shares its declaration's node and is spelled otherwise.
+# rowUsesDecl -- use or member row `row`, spelled as `tg`, names its
+# declaration: a member by its owner when the target has one, any other by the
+# declaration it resolves to.
+rowUsesDecl: function {snap: zcheck.CheckResult tg: reftarget row: spanrow} out bool is {
+    if row.kind == 2 when tg.owner.isZero.not then {
+        ow: memberOwnerOf o: snap.st nid: row.nodeid
+        # `blk.slot.label` is owned as its element is, by the block
+        if ow.isZero then ow = (declOwnerOf
+            o: snap.st
+            declId: (slotElementOf o: snap.st declId: (slotLabelDecl :snap dpid: row.nodeid))
+        )
+        return ow == tg.owner
+    }
+    use: (row.kind == 1) or (row.kind == 2)
+    if use.not or tg.declId.isZero then return false
+    return (rowNamesDecl :snap :row declId: tg.declId)
+}
+
+# declOpsOf -- the nodes `tg`'s declarations are rowed on: the operation of its
+# Decl's arm, and of each same-name re-export of it (core's `true: bool.true`).
+# One scan of the Decls, names compared first. None for a variable, whose
+# bindings rowReadsVar finds.
+declOpsOf: function {snap: zcheck.CheckResult tg: reftarget} out ListVal zast.nodeid is {
+    ops: ListVal zast.nodeid
+    if tg.declId.isZero or tg.vid.isZero.not then return ops
+    o: snap.st
+    match (
+        o
+    ) case some then {
+        k: u64
+        for each d: o.typing.decls loop {
+            if d.name == tg.name when d.node.isZero.not when (declIsOrReexports
+                prog: snap.prog
+                :o
+                declId: ztypes.declid k
+                target: tg.declId
+            ) then {
+                arm: snap.prog.nodes.get i: d.node
+                if arm.namedoperation then ops.append arm.operation
+            }
+            k = k + 1
+        }
+    } case none then null
+    return ops
+}
+
+# declIsOrReexports -- declaration `declId` is `target`, or a same-name
+# re-export of it.
+declIsOrReexports: function {
+    prog: Ast.view o: zenv.ZSymbolTable.view declId: ztypes.declid target: ztypes.declid
+} out bool is {
+    if declId == target then return true
+    if (o.typing.decls.get i: declId).kind.reexportDecl.not then return false
+    return (sameNameOrigin :prog :o :declId) == target
+}
+
+# rowReadsVar -- what span row `row` is to variable `vid`, named `name`: 0
+# nothing, 1 a use, 2 a binding -- a local's, a parameter's declaration, a `for`
+# binding, a `:this`, whichever kind of row it is. A parameter's type shares its
+# declaration's node and is spelled otherwise.
 rowReadsVar: function {
     snap: zcheck.CheckResult
     sp: Spans.view
     row: spanrow
     vid: ztypes.vid
     name: zast.nameid
-} out bool is {
-    if row.kind == 1 when (useVarId o: snap.st nid: row.nodeid) == vid then return true
-    if (row.kind == 2) or (row.name != name) then return false
-    if (defVarIdOf o: snap.st nid: row.nodeid) == vid then return true
-    return (loopVarOf :snap :sp :row) == vid
+} out u8 is {
+    if row.kind != 2 when row.name == name then {
+        if (defVarIdOf o: snap.st nid: row.nodeid) == vid then return 2
+        if (loopVarOf :snap :sp :row) == vid then return 2
+    }
+    if row.kind == 1 when (useVarId o: snap.st nid: row.nodeid) == vid then return 1
+    return 0
 }
 
 # navReferencesAnswer -- every span row that names the hit's target, as an
@@ -5295,8 +5356,11 @@ navReferencesAnswer: function {
     systemDir: StringView
     docText: StringView
     utf32: bool
+    # the target's declarations are listed too
+    inclDecl: bool
 } out Value is {
     tg: referencesTargetOf :snap :sp :hit name: (sp.rows.get i: hit.idx).name
+    ops: declOpsOf :snap :tg
     arr: newArr
     # the last row taken: a `:this` parameter's declaration row and its use row
     # are one node and one span, which is one reference
@@ -5309,7 +5373,8 @@ navReferencesAnswer: function {
     for rj < sp.rows.length loop {
         row2: sp.rows.get i: rj
         n2: row2.nodeid
-        add: rowRefersTo :snap :sp :tg row: row2
+        rk: rowRefersTo :snap :sp :tg row: row2 :ops
+        add: (rk == 1) or ((rk == 2) and inclDecl)
         if add when n2 == lastNid when row2.colLo == lastCol then add = false
         fs: zvfs.fsno
         if add then fs = zcheck.fsnoFor r: snap nodeid: n2
@@ -5355,6 +5420,8 @@ navAnswer: function {
     ch: i64
     utf32: bool
     mode: u8
+    # references: list the target's declarations too
+    inclDecl: bool
 } out Value is {
     l1: line0 + 1
     l1u: l1.u32.orPanic
@@ -5403,6 +5470,7 @@ navAnswer: function {
         :systemDir
         :docText
         :utf32
+        :inclDecl
     )
 }
 
