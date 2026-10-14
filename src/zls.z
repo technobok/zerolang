@@ -553,6 +553,19 @@ Server: class {
     snapshots: (Map String V: zcheck.CheckResult)
     # each open document's group: the key of the check that answers for it
     docCheck: (Map String V: String)
+    # each group's check by the unit it is rooted at
+    snapMain: (Map String V: String)
+    # the entry unit project.z names, when the project in hand holds the
+    # document being checked or answered for; "" otherwise
+    projMain: String
+    # each open document's project entry, as projMain read when it was checked
+    docEntry: (Map String V: String)
+    # the generated `z` unit as the entry's program reads it
+    entryLayer: zcheck.GenLayer
+    # the entry's program, checked when a reference search needs it and no
+    # open document's check is rooted there; dropped by the next recheck or
+    # close, as any edit may change it. Keyed by the entry unit.
+    entrySnap: (Map String V: zcheck.CheckResult)
 } as {
     # ---- framed reader over the BufReader ----
 
@@ -852,6 +865,17 @@ Server: class {
         facts.triple = pf.target.copy
         this.layer = zproject.zLayer :pf :facts
         zproject.writeLayer layer: this.layer
+        this.projMain = ""
+        if pf.found when pf.main.length > 0 when (pf.holdsSource :path) then {
+            this.projMain = pf.main.copy
+            ef: (zproject.BuildFacts.create
+                srcdirs: this.srcDirs
+                systemdir: this.systemDir.stringView
+                main: pf.main.stringView
+            )
+            ef.triple = pf.target.copy
+            this.entryLayer = zproject.zLayer :pf facts: ef
+        }
     }
 
     # ---- document sync (full text) ----
@@ -954,19 +978,7 @@ Server: class {
             match (
                 rem
             ) case some then null case none then null
-            # the group's check goes with its last open document
-            gone: this.docCheck.remove key: uo.copy
-            match (
-                gone
-            ) case some then {
-                gk: gone.take
-                if (this.groupInUse key: gk.stringView).not then {
-                    dropped: this.snapshots.remove key: gk
-                    match (
-                        dropped
-                    ) case some then null case none then null
-                }
-            } case none then null
+            this.forgetChecks uri: uo.stringView
             # clear this uri's diagnostics
             empty: newArr
             p: newObj
@@ -979,6 +991,33 @@ Server: class {
                 tp: this.transport
             )
         } case none then null
+    }
+
+    # forgetChecks -- closing document `uri`: its group's check goes with the
+    # group's last open document, and the entry's program, which read its
+    # buffer, goes too
+    forgetChecks: function {:this uri: StringView} is {
+        gone: this.docCheck.remove key: uri.string
+        match (
+            gone
+        ) case some then {
+            gk: gone.take
+            if (this.groupInUse key: gk.stringView).not then {
+                dropped: this.snapshots.remove key: gk.copy
+                match (
+                    dropped
+                ) case some then null case none then null
+                dm: this.snapMain.remove key: gk
+                match (
+                    dm
+                ) case some then null case none then null
+            }
+        } case none then null
+        this.entrySnap = Map String V: zcheck.CheckResult
+        de: this.docEntry.remove key: uri.string
+        match (
+            de
+        ) case some then null case none then null
     }
 
     # ---- diagnostics ----
@@ -1058,20 +1097,9 @@ Server: class {
         }
         if found.not then return
         this.enterProjectOf path: mp.stringView
-        # the open buffers of the same project -- in any of its source roots --
-        # shadow its files on disk, each under its own root
-        ovs: List (Map String V: String)
-        for each r: this.srcDirs loop {
-            ov: Map String V: String
-            for each e: this.docs.iterateItems loop {
-                if e.value.relpath.length > 0 when e.value.srcDir.stringView == r then {
-                    k: e.value.relpath.copy
-                    v: e.value.text.copy
-                    ov.set key: k value: v
-                }
-            }
-            ovs.append from: ov.take
-        }
+        this.entrySnap = Map String V: zcheck.CheckResult
+        this.docEntry.set key: uri.string value: this.projMain.copy
+        ovs: this.overlaysOf
         # a subunit's document is checked inside its topmost unit, which the
         # parse starts from; that unit's relpath keys the group's shared check
         topRel: (this.topRelOf
@@ -1097,7 +1125,26 @@ Server: class {
             # edit to any of them refreshes navigation for all
             this.bindGroup :uri topRel: topRel.stringView key: gk.stringView
             this.snapshots.set key: gk.copy value: r
+            this.snapMain.set key: gk.copy value: mu.copy
         }
+    }
+
+    # overlaysOf -- the open buffers of the project in hand -- in any of its
+    # source roots -- which shadow its files on disk, each under its own root
+    overlaysOf: function {:this} out List (Map String V: String) is {
+        ovs: List (Map String V: String)
+        for each r: this.srcDirs loop {
+            ov: Map String V: String
+            for each e: this.docs.iterateItems loop {
+                if e.value.relpath.length > 0 when e.value.srcDir.stringView == r then {
+                    k: e.value.relpath.copy
+                    v: e.value.text.copy
+                    ov.set key: k value: v
+                }
+            }
+            ovs.append from: ov.take
+        }
+        return ovs
     }
 
     # topRelOf -- the relpath of the topmost unit the file at `rel` belongs to.
@@ -1215,14 +1262,7 @@ Server: class {
     # checkKeyOf -- the key of the check that answers for `uri`, "" when none
     # has run for it.
     checkKeyOf: function {this: this.view uri: StringView} out String is {
-        g: this.docCheck.get key: uri.asString
-        match (
-            g
-        ) case some then {
-            return g.copy
-        } case none then {
-            return String
-        }
+        return (textAtKey m: this.docCheck key: uri)
     }
 
     # groupInUse -- whether any open document is still answered by the check
@@ -1394,6 +1434,7 @@ Server: class {
                 drel: String
                 dsrc: String
                 dsys: String
+                dpath: String
                 found: false
                 {
                     dgo: this.docs.get key: uo
@@ -1404,6 +1445,7 @@ Server: class {
                         drel = dgo.relpath.copy
                         dsrc = dgo.srcDir.copy
                         dsys = dgo.systemDir.copy
+                        dpath = dgo.path.copy
                         found = true
                     } case none then null
                 }
@@ -1412,71 +1454,224 @@ Server: class {
                     this.srcDir = dsrc.take
                     this.systemDir = dsys.take
                     ck: this.checkKeyOf uri: uo.stringView
-                    sno: this.snapshots.get key: ck
-                    match (
-                        sno
-                    ) case some then {
-                        res: Value.nul
-                        trigCh: String
-                        # a client that sends no context asks for every
-                        # reference, as Find References does
-                        inclDecl: true
-                        ido: json.boolAt v: msg path: "params/context/includeDeclaration"
+                    {
+                        sno: this.snapshots.get key: ck
                         match (
-                            ido
+                            sno
                         ) case some then {
-                            inclDecl = ido
+                            res: Value.nul
+                            trigCh: String
+                            # a client that sends no context asks for every
+                            # reference, as Find References does
+                            inclDecl: true
+                            ido: json.boolAt v: msg path: "params/context/includeDeclaration"
+                            match (
+                                ido
+                            ) case some then {
+                                inclDecl = ido
+                            } case none then null
+                            tco: json.textAt v: msg path: "params/context/triggerCharacter"
+                            match (
+                                tco
+                            ) case some then {
+                                trigCh = tco.copy
+                            } case none then null
+                            if mode == 4 then {
+                                res = (completionAnswer
+                                    snap: sno
+                                    docUri: uo.stringView
+                                    docRel: drel.stringView
+                                    srcDir: this.srcDir.stringView
+                                    docText: dtext.stringView
+                                    :line0
+                                    ch: ch0
+                                    utf32: this.encUtf32
+                                    trig: trigCh.stringView
+                                    words: this.words
+                                )
+                            } else if mode == 5 then {
+                                res = (signatureHelpAnswer
+                                    snap: sno
+                                    docRel: drel.stringView
+                                    srcDir: this.srcDir.stringView
+                                    docText: dtext.stringView
+                                    :line0
+                                    ch: ch0
+                                    utf32: this.encUtf32
+                                )
+                            } else {
+                                res = (navAnswer
+                                    snap: sno
+                                    docRel: drel.stringView
+                                    docUri: uo.stringView
+                                    srcDir: this.srcDir.stringView
+                                    systemDir: this.systemDir.stringView
+                                    docText: dtext.stringView
+                                    :line0
+                                    ch: ch0
+                                    utf32: this.encUtf32
+                                    :mode
+                                    :inclDecl
+                                )
+                            }
+                            answer = res.take
                         } case none then null
-                        tco: json.textAt v: msg path: "params/context/triggerCharacter"
-                        match (
-                            tco
-                        ) case some then {
-                            trigCh = tco.copy
-                        } case none then null
-                        if mode == 4 then {
-                            res = (completionAnswer
-                                snap: sno
-                                docUri: uo.stringView
-                                docRel: drel.stringView
-                                srcDir: this.srcDir.stringView
-                                docText: dtext.stringView
-                                :line0
-                                ch: ch0
-                                utf32: this.encUtf32
-                                trig: trigCh.stringView
-                                words: this.words
-                            )
-                        } else if mode == 5 then {
-                            res = (signatureHelpAnswer
-                                snap: sno
-                                docRel: drel.stringView
-                                srcDir: this.srcDir.stringView
-                                docText: dtext.stringView
-                                :line0
-                                ch: ch0
-                                utf32: this.encUtf32
-                            )
-                        } else {
-                            res = (navAnswer
-                                snap: sno
-                                docRel: drel.stringView
-                                docUri: uo.stringView
-                                srcDir: this.srcDir.stringView
-                                systemDir: this.systemDir.stringView
-                                docText: dtext.stringView
-                                :line0
-                                ch: ch0
-                                utf32: this.encUtf32
-                                :mode
-                                :inclDecl
-                            )
-                        }
-                        answer = res.take
-                    } case none then null
+                    }
+                    if mode == 3 when (this.searchesElsewhere uri: uo.stringView ck: ck.stringView
+                    ) then {
+                        m3: (this.referencesElsewhere
+                            :msg
+                            own: answer
+                            ck: ck.stringView
+                            uri: uo.stringView
+                            docPath: dpath.stringView
+                            docRel: drel.stringView
+                            docUri: uo.stringView
+                            docText: dtext.stringView
+                            :line0
+                            ch: ch0
+                        )
+                        answer = m3.take
+                    }
                 }
             }
         } case none then null
         sendResult id: idv result: answer tp: this.transport
+    }
+
+    # referencesElsewhere -- the references `own` answered from the document's
+    # check, with those every other program that loads its file answers: each
+    # other open document's check, and the project's entry, checked when no
+    # open check is rooted there. A library unit is checked from itself, so its
+    # own program holds none of the units that use it. A program without the
+    # file answers nothing; a location already listed is listed once.
+    referencesElsewhere: function {
+        :this
+        msg: Value.view
+        own: Value.view
+        # the document's own check
+        ck: StringView
+        uri: StringView
+        docPath: StringView
+        docRel: StringView
+        docUri: StringView
+        docText: StringView
+        line0: i64
+        ch: i64
+    } out Value is {
+        acc: mergeLocations a: own b: Value.nul
+        inclDecl: true
+        ido: json.boolAt v: msg path: "params/context/includeDeclaration"
+        match (
+            ido
+        ) case some then {
+            inclDecl = ido
+        } case none then null
+        ent: this.entryOf :uri
+        keys: List String
+        for each k: this.snapshots loop {
+            if k.stringView != ck then keys.append from: k.copy
+        }
+        for each k: keys loop {
+            so: this.snapshots.get key: k
+            match (
+                so
+            ) case some then {
+                r: (navAnswer
+                    snap: so
+                    :docRel
+                    :docUri
+                    srcDir: this.srcDir.stringView
+                    systemDir: this.systemDir.stringView
+                    :docText
+                    :line0
+                    :ch
+                    utf32: this.encUtf32
+                    mode: 3
+                    :inclDecl
+                )
+                acc = mergeLocations a: acc b: r
+            } case none then null
+        }
+        if (this.entryOpen entry: ent.stringView) or (ent.length == 0) then return acc
+        this.checkEntry entry: ent.stringView :docPath
+        eo: this.entrySnap.get key: ent
+        match (
+            eo
+        ) case some then {
+            r: (navAnswer
+                snap: eo
+                :docRel
+                :docUri
+                srcDir: this.srcDir.stringView
+                systemDir: this.systemDir.stringView
+                :docText
+                :line0
+                :ch
+                utf32: this.encUtf32
+                mode: 3
+                :inclDecl
+            )
+            acc = mergeLocations a: acc b: r
+        } case none then null
+        return acc
+    }
+
+    # snapMainIs -- the group check `key` is rooted at unit `unitName`
+    snapMainIs: function {this: this.view key: StringView unitName: StringView} out bool is {
+        if unitName.length == 0 then return false
+        g: this.snapMain.get key: key.string
+        match (
+            g
+        ) case some then {
+            return g.stringView == unitName
+        } case none then {
+            return false
+        }
+    }
+
+    # searchesElsewhere -- a references request on `uri`, answered from check
+    # `ck`, has another program to search: another open document's check, or
+    # the project's entry that no open check is rooted at
+    searchesElsewhere: function {this: this.view uri: StringView ck: StringView} out bool is {
+        for each k: this.snapshots loop {
+            if k.stringView != ck then return true
+        }
+        ent: this.entryOf :uri
+        if ent.length == 0 then return false
+        return (this.entryOpen entry: ent.stringView).not
+    }
+
+    # entryOf -- the project entry of open document `uri`, "" for none
+    entryOf: function {this: this.view uri: StringView} out String is {
+        return (textAtKey m: this.docEntry key: uri)
+    }
+
+    # entryOpen -- an open document's check is rooted at unit `entry`
+    entryOpen: function {this: this.view entry: StringView} out bool is {
+        for each k: this.snapshots loop {
+            if (this.snapMainIs key: k.stringView unitName: entry) then return true
+        }
+        return false
+    }
+
+    # checkEntry -- check the project's entry program, the open buffers
+    # shadowing the disk, unless it is checked already. The project is entered
+    # from the document asking, which the entry's layer is read for.
+    checkEntry: function {:this entry: StringView docPath: StringView} is {
+        if (this.entrySnap.has key: entry.string) then return
+        this.enterProjectOf path: docPath
+        if this.projMain.stringView != entry then return
+        ovs: this.overlaysOf
+        em: this.projMain.copy
+        r: (zcheck.check
+            srcdirs: this.srcDirs
+            systemdir: this.systemDir.stringView
+            mainUnit: em.stringView
+            overlays: ovs
+            layer: this.entryLayer
+        )
+        if r.parseOk then this.entrySnap.set key: this.projMain.copy value: r
     }
 
     # handleResolve -- completionItem/resolve: the item back exactly as the
@@ -5700,6 +5895,61 @@ navReferencesAnswer: function {
     return (Value.array arr)
 }
 
+# textAtKey -- the text map `m` holds at `key`, "" when it holds none
+textAtKey: function {m: (Map String V: String).view key: StringView} out String is {
+    g: m.get key: key.string
+    match (
+        g
+    ) case some then {
+        return g.copy
+    } case none then {
+        return String
+    }
+}
+
+# mergeLocations -- the references answers `a` and `b` as one: `a`'s, then
+# `b`'s in the files `a` lists none in. Two programs that load a file read the
+# same source and find the same rows in it, so a file is answered once; null
+# when neither is an array.
+mergeLocations: function {a: Value.view b: Value.view} out Value is {
+    if a.array.not when b.array.not then return Value.nul
+    arr: newArr
+    had: Set String
+    appendLocations :arr :had from: a skipHad: false
+    appendLocations :arr :had from: b skipHad: true
+    return (Value.array arr)
+}
+
+# appendLocations -- append to `arr` each Location of answer `from`, rebuilt
+# from its uri and range, and note its uri in `had`; with `skipHad`, only those
+# in a file `had` held before
+appendLocations: function {arr: Arr had: Set String from: Value.view skipHad: bool} is {
+    match (
+        from
+    ) case array then {
+        before: Set String
+        if skipHad then for each h: had loop before.add item: h.copy
+        for each l: from.items loop {
+            us: String
+            u: json.textAt v: l path: "uri"
+            match (
+                u
+            ) case some then {
+                us = u.copy
+            } case none then null
+            if (before.has item: us).not then {
+                had.add item: us.copy
+                arr.items.append (locationObj
+                    uri: us.stringView
+                    line0: ((json.intAt v: l path: "range/start/line").or d: 0).u32.orPanic
+                    c0: ((json.intAt v: l path: "range/start/character").or d: 0).u32.orPanic
+                    c1: ((json.intAt v: l path: "range/end/character").or d: 0).u32.orPanic
+                )
+            }
+        }
+    } else null
+}
+
 # navAnswer -- definition (1), hover (2), references (3) from the
 # last-good snapshot.
 navAnswer: function {
@@ -9043,6 +9293,11 @@ main: function is {
         dirty: (MapRV String v: bool)
         snapshots: (Map String V: zcheck.CheckResult)
         docCheck: (Map String V: String)
+        snapMain: (Map String V: String)
+        projMain: ""
+        docEntry: (Map String V: String)
+        entryLayer: zcheck.noLayer
+        entrySnap: (Map String V: zcheck.CheckResult)
     )
     if listenArg.length > 0 then {
         pr: listenArg.stringView.parseU64
