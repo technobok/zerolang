@@ -3823,15 +3823,13 @@ navtarget: record {
 # navTargetByKind -- what a hit's kind says it names: a use is a variable or a
 # unit; a member has an owner (a unit-qualified member has no owner stamp and
 # falls back to its def tid); a binding is its variable; a declaration is its
-# type, then a unit, then its own variable. The Decl comes from refDecl.
+# type, then a unit, then its own variable, until defOwnTarget makes a
+# parameter, a field or an arm its own. The Decl comes from refDecl.
 navTargetByKind: function {snap: zcheck.CheckResult hnid: zast.nodeid kind: u8} out navtarget is {
     if kind == 2 then return (memberNavTarget :snap :hnid)
+    if kind == 1 then return (useNavTarget :snap :hnid)
     refVid: ztypes.vid
     refTid: ztypes.tid
-    if kind == 1 then {
-        refVid = useVarId o: snap.st nid: hnid
-        if refVid.isZero then refTid = useUnitDef o: snap.st nid: hnid
-    }
     if kind == 3 then refVid = defVarIdOf o: snap.st nid: hnid
     if kind == 6 then {
         refTid = nodeTypeAt o: snap.st nid: hnid
@@ -3846,10 +3844,36 @@ navTargetByKind: function {snap: zcheck.CheckResult hnid: zast.nodeid kind: u8} 
     )
 }
 
+# useNavTarget -- what a use row names: a variable, or a unit's definition. A
+# label that binds (the `:this` of a signature) is its variable, not the type
+# its refDecl names.
+useNavTarget: function {snap: zcheck.CheckResult hnid: zast.nodeid} out navtarget is {
+    rd: refDeclOf o: snap.st nid: hnid
+    rv: useVarId o: snap.st nid: hnid
+    if rv.isZero.not then return (navtarget vid: rv tid: ztypes.tid owner: ztypes.tid declId: rd)
+    if (snap.prog.nodes.get i: hnid).labelvalue then {
+        bv: defVarIdOf o: snap.st nid: hnid
+        if bv.isZero.not then return (navtarget
+            vid: bv
+            tid: ztypes.tid
+            owner: ztypes.tid
+            declId: ztypes.declid
+        )
+    }
+    return (navtarget
+        vid: rv
+        tid: (useUnitDef o: snap.st nid: hnid)
+        owner: ztypes.tid
+        declId: rd
+    )
+}
+
 # defOwnTarget -- a definition's hit as its own Decl: one whose value carries no
 # stamp (`S: "top"`, which a fold reads without walking), or one whose value
 # names another declaration (`START: mode.slow`, an arm) when it holds a value.
-# `t` as it is otherwise, and for any hit but a definition's.
+# A parameter, a field or an arm is its own declaration too, never the type it
+# is declared with, which its row's node carries. `t` as it is otherwise, and
+# for any hit but a definition's.
 defOwnTarget: function {
     snap: zcheck.CheckResult
     # the definition's value node, which its row is keyed on
@@ -3864,6 +3888,18 @@ defOwnTarget: function {
     if t.vid.isZero.not then return t
     dd: declOfDefOp o: snap.st prog: snap.prog opId: hnid name: hnm
     if dd.isZero then return t
+    if (declKindIsParam :snap declId: dd) then return (navtarget
+        vid: (defVarIdOf o: snap.st nid: hnid)
+        tid: ztypes.tid
+        owner: ztypes.tid
+        declId: dd
+    )
+    if (declIsMember :snap declId: dd) then return (navtarget
+        vid: ztypes.vid
+        tid: ztypes.tid
+        owner: (declOwnerOf o: snap.st declId: dd)
+        declId: dd
+    )
     if dd == t.declId then return t
     if t.declId.isZero when t.tid.isZero then {
         return (navtarget vid: t.vid tid: t.tid owner: t.owner declId: dd)
@@ -3875,6 +3911,20 @@ defOwnTarget: function {
         owner: t.owner
         declId: dd
     )
+}
+
+# declIsMember -- declaration `declId` is a field or an arm of its type.
+declIsMember: function {snap: zcheck.CheckResult.view declId: ztypes.declid} out bool is {
+    if declId.isZero then return false
+    o: snap.st
+    match (
+        o
+    ) case some then {
+        k: (o.typing.decls.get i: declId).kind
+        return k.fieldDecl or k.armDecl
+    } case none then {
+        return false
+    }
 }
 
 # declHoldsValue -- the declaration holds a compile-time value.
@@ -4015,7 +4065,7 @@ navTargetRefine: function {
     )
     refDeclId = own.declId
     refTid = own.tid
-    if kind == 6 when refDeclId.isZero.not then {
+    if kind == 6 when own.vid.isZero when own.owner.isZero when refDeclId.isZero.not then {
         dt9: declTypeIdOf o: snap.st declId: refDeclId
         if (isLiteralTid o: snap.st tid: dt9) then refTid = dt9
     }
@@ -4026,17 +4076,17 @@ navTargetRefine: function {
             tid: (nodeTypeAt o: snap.st nid: hnid)
         )
     }
-    if base.vid.isZero when refTid.isZero when base.owner.isZero when refDeclId.isZero.not then {
+    if own.vid.isZero when refTid.isZero when own.owner.isZero when refDeclId.isZero.not then {
         refTid = declTypeIdOf o: snap.st declId: refDeclId
     }
-    if kind == 1 when base.vid.isZero when refDeclId.isZero then {
+    if kind == 1 when own.vid.isZero when refDeclId.isZero then {
         ct9: calleeTypeOf :snap nid: hnid name: hnm
         if ct9.isZero.not then {
             refTid = ct9
             refDeclId = surfaceDeclOfType o: snap.st prog: snap.prog tid: ct9
         }
     }
-    return (navtarget vid: base.vid tid: refTid owner: base.owner declId: refDeclId)
+    return (navtarget vid: own.vid tid: refTid owner: own.owner declId: refDeclId)
 }
 
 # calleeTypeOf -- the TYPE a name in callable position names (`Dog n: 7`, `Path
@@ -4455,9 +4505,7 @@ navHoverAnswer: function {
         udoc: unitDocComment :snap fsno: hit.unitFsno
         return (hoverMarkdown code: ub.stringView doc: udoc.stringView)
     }
-    t: nodeTypeAt o: snap.st nid: hit.nodeid
-    # a completion item has no node: its type is its declaration's
-    if hit.nodeid.isZero then t = itemValueTid :snap tid: hit.tid
+    t: hoverValueTid :snap :hit
     sigTid: hoverSigTid :snap :hit
     body: (fnSigTextOpt
         vfs: snap.vfs
@@ -4516,6 +4564,19 @@ navHoverAnswer: function {
     )
     appendNote :docBody note: ln9.stringView
     return (hoverMarkdown code: body.stringView doc: docBody.stringView)
+}
+
+# hoverValueTid -- the type a hover card gives its hit's name: its node's stamp.
+# A completion item has no node, so its type is its declaration's. A parameter
+# or a member declared with a literal type is of that type, where the fold
+# rewrote its node's stamp to the default.
+hoverValueTid: function {snap: zcheck.CheckResult hit: navhit} out ztypes.tid is {
+    if hit.nodeid.isZero then return (itemValueTid :snap tid: hit.tid)
+    if hit.kind == 6 when hit.tid.isZero then {
+        dt: declTypeIdOf o: snap.st declId: hit.declId
+        if (isLiteralTid o: snap.st tid: dt) then return dt
+    }
+    return (nodeTypeAt o: snap.st nid: hit.nodeid)
 }
 
 # itemValueTid -- the type a completion item's name has as a value: a data
@@ -4596,11 +4657,14 @@ hoverCallNotes: function {
 }
 
 # navDefinitionAnswer -- the Location a resolved hit points at: the file top for
-# a unit, otherwise the node that declares it.
+# a unit, otherwise the node that declares it. A parameter is declared at its
+# name; its variable's node is the type it is declared with.
 navDefinitionAnswer: function {
     snap: zcheck.CheckResult
     hit: navhit
     hname: String
+    # the hit row's name
+    name: zast.nameid
     docRel: StringView
     docUri: StringView
     srcDir: StringView
@@ -4611,7 +4675,9 @@ navDefinitionAnswer: function {
     if hit.unitFsno.isZero.not then {
         return (locationAtFileTop :snap fsno: hit.unitFsno :docRel :docUri :srcDir :systemDir)
     }
-    dn: declNodeOf o: snap.st declId: hit.declId
+    dd: hit.declId
+    if dd.isZero when hit.vid.isZero.not then dd = paramDeclOfVar :snap vid: hit.vid :name
+    dn: declNodeOf o: snap.st declId: dd
     if dn.isZero then {
         dn = (defNodeOf
             o: snap.st
@@ -5086,6 +5152,7 @@ navAnswer: function {
             :snap
             :hit
             :hname
+            name: (sp.rows.get i: hit.idx).name
             :docRel
             :docUri
             :srcDir
