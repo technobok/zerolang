@@ -8,7 +8,8 @@
    themselves: _Z_SYSTEM_WORD.inc, the wide multiply cut out of z_hash.inc into
    mul128.h, the generated asm kernels and _Z_MATH_ARITH.inc. A row repeats its kernel until 20 ms have
    passed, R times (-r R, default 5), and prints the median time per call;
-   tiers are compared on those medians. */
+   tiers are compared on those medians. -n N,N,... times the given lengths in
+   place of Go's series, to find where an asm kernel starts to win. */
 #define _POSIX_C_SOURCE 199309L
 #include <stdint.h>
 #include <stdio.h>
@@ -27,9 +28,9 @@ static void z_panic(const char* msg) {
 #include "_Z_MATH_ARITH_ARM64.inc"
 #include "_Z_MATH_ARITH.inc"
 
-/* the lengths a row is timed at, Go's series */
-static const uint64_t sizes[] = {1, 10, 16, 100, 1000, 10000, 100000};
-#define NSIZES (sizeof sizes / sizeof sizes[0])
+/* the lengths a row is timed at: Go's series unless -n names others */
+static uint64_t sizes[64] = {1, 10, 16, 100, 1000, 10000, 100000};
+static size_t nsizes = 7;
 #define MAXN 100000
 
 static uint64_t* vx;
@@ -80,6 +81,20 @@ static double run(enum kernel k, uint64_t n) {
     }
 }
 
+/* parseSizes -- "N,N,..." into sizes; 0 when an entry is not a length 1..MAXN */
+static int parseSizes(const char* list) {
+    nsizes = 0;
+    for (const char* p = list; *p;) {
+        char* end;
+        unsigned long long n = strtoull(p, &end, 10);
+        if (end == p || n < 1 || n > MAXN || nsizes == sizeof sizes / sizeof sizes[0]) return 0;
+        sizes[nsizes++] = n;
+        p = *end == ',' ? end + 1 : end;
+        if (*end != ',' && *end != '\0') return 0;
+    }
+    return nsizes > 0;
+}
+
 static int cmpd(const void* a, const void* b) {
     double x = *(const double*)a;
     double y = *(const double*)b;
@@ -88,9 +103,14 @@ static int cmpd(const void* a, const void* b) {
 
 int main(int argc, char** argv) {
     int reps = 5;
-    if (argc == 3 && strcmp(argv[1], "-r") == 0) reps = atoi(argv[2]);
-    if (reps < 1 || reps > 101) {
-        fprintf(stderr, "usage: math_kernels [-r REPS]\n");
+    int ok = argc % 2 == 1;
+    for (int i = 1; ok && i + 1 < argc; i += 2) {
+        if (strcmp(argv[i], "-r") == 0) reps = atoi(argv[i + 1]);
+        else if (strcmp(argv[i], "-n") == 0) ok = parseSizes(argv[i + 1]);
+        else ok = 0;
+    }
+    if (!ok || reps < 1 || reps > 101) {
+        fprintf(stderr, "usage: math_kernels [-r REPS] [-n WORDS,WORDS,...]\n");
         return 2;
     }
     vx = malloc(MAXN * sizeof(uint64_t));
@@ -108,7 +128,7 @@ int main(int argc, char** argv) {
     double* t = malloc((size_t)reps * sizeof(double));
     if (!t) return 1;
     for (int k = 0; k < kCount; k++) {
-        for (size_t j = 0; j < NSIZES; j++) {
+        for (size_t j = 0; j < nsizes; j++) {
             for (int r = 0; r < reps; r++) t[r] = run((enum kernel)k, sizes[j]);
             qsort(t, (size_t)reps, sizeof(double), cmpd);
             printf("%s words=%llu %.2f ns/op\n", names[k], (unsigned long long)sizes[j], t[reps / 2]);

@@ -257,9 +257,11 @@ bench-math: bin/zc $(if $(BENCH_TCC),$(BUILDDIR)/tcc) bench-math-kernels
 	for v in $(BENCH_TIERS); do echo "== $$v"; $$pin $(BENCH_MATH_DIR)/$$v; done
 
 # bench-math-kernels -- the word-vector kernels timed alone, per tier; the median of
-# REPS runs, pinned to BENCH_CPU (the host mixes two kinds of core).
+# REPS runs, pinned to BENCH_CPU (the host mixes two kinds of core). BENCH_WORDS
+# (N,N,...) times those lengths in place of Go's series.
 REPS ?= 5
 BENCH_CPU ?= 0
+BENCH_WORDS ?=
 bench-math-kernels: $(if $(BENCH_TCC),$(BUILDDIR)/tcc)
 	@mkdir -p $(BENCH_MATH_DIR)
 	@awk '/^\/\* 64x64 -> 128 multiply/,/^#endif/' src/runtime/z_hash.inc > $(BENCH_MATH_DIR)/mul128.h
@@ -271,7 +273,7 @@ bench-math-kernels: $(if $(BENCH_TCC),$(BUILDDIR)/tcc)
 	&& $(CC) -O2 -std=c17 -Wall -Wextra -Wno-unused-function -DZ_WORD_PORTABLE $$inc -o $(BENCH_MATH_DIR)/k-portable tests/bench/math_kernels.c \
 	$(if $(BENCH_TCC),&& $(BUILDDIR)/tcc -B $(TCCLIB) $$inc -o $(BENCH_MATH_DIR)/k-tcc tests/bench/math_kernels.c)
 	@pin=""; if command -v taskset >/dev/null 2>&1; then pin="taskset -c $(BENCH_CPU)"; fi; \
-	for v in $(BENCH_TIERS); do echo "== kernels $$v"; $$pin $(BENCH_MATH_DIR)/k-$$v -r $(REPS); done
+	for v in $(BENCH_TIERS); do echo "== kernels $$v"; $$pin $(BENCH_MATH_DIR)/k-$$v -r $(REPS) $(if $(BENCH_WORDS),-n $(BENCH_WORDS)); done
 
 # test-clang -- the corpus under clang. Only clang shows an f128 helper the
 # prelude forgot to declare (gcc reads quadmath.h).
