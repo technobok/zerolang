@@ -3257,45 +3257,79 @@ locationValue: function {
     if line == 0 then return Value.nul
     fs: zcheck.fsnoFor r: snap nodeid: nid
     if fs.isZero then return Value.nul
-    pp: snap.vfs.pathfromprovider dentryid: fs
-    own: pathMatches pv: pp.stringView rel: docRel :srcDir
-    uri: String
+    own: fileIsDoc :snap :fs :docRel :srcDir
     lineText: String
-    if own then {
-        uri = docUri.string
-        lineText = docLine text: docText lineno: line
-    } else {
-        absp: snap.vfs.pathfromproviderNative dentryid: fs
-        if absp.length == 0 then {
-            st0: u64
-            if pp.startsWith "/" then st0 = 1
-            rel0: pp.substring from: st0 to: pp.length
-            absp = absRelPath :rel0 :srcDir :systemDir
+    # a utf-32 column is the codepoint column, which needs no line
+    if utf32.not then {
+        if own then {
+            lineText = docLine text: docText lineno: line
+        } else {
+            lg: snap.vfs.getline dentryid: fs lineno: line - 1
+            match (
+                lg
+            ) case some then {
+                lineText = lg.copy
+            } case none then null
         }
-        uri = pathToUri path: absp.stringView
-        lg: snap.vfs.getline dentryid: fs lineno: line - 1
-        match (
-            lg
-        ) case some then {
-            lineText = lg.copy
-        } case none then null
     }
     w: width
     if w == 0 then w = 1
     c0: encodedCol lineText: lineText.stringView cpCol1: col :utf32
     c1: encodedCol lineText: lineText.stringView cpCol1: col + w :utf32
     if c1 <= c0 then c1 = c0 + 1
+    uri: fileUri :snap :fs :own :docUri :srcDir :systemDir
+    return (locationObj uri: uri.stringView line0: line - 1 :c0 :c1)
+}
+
+# fileIsDoc -- file `fs` is the open document's, whose text is the buffer the
+# editor holds rather than what is on disk.
+fileIsDoc: function {
+    snap: zcheck.CheckResult
+    fs: zvfs.fsno
+    docRel: StringView
+    srcDir: StringView
+} out bool is {
+    pp: snap.vfs.pathfromprovider dentryid: fs
+    return (pathMatches pv: pp.stringView rel: docRel :srcDir)
+}
+
+# fileUri -- the uri a Location in file `fs` carries: the document's own, or the
+# file's path on disk.
+fileUri: function {
+    snap: zcheck.CheckResult
+    fs: zvfs.fsno
+    # the file is the document's
+    own: bool
+    docUri: StringView
+    srcDir: StringView
+    systemDir: StringView
+} out String is {
+    if own then return docUri.string
+    absp: snap.vfs.pathfromproviderNative dentryid: fs
+    if absp.length == 0 then {
+        pp: snap.vfs.pathfromprovider dentryid: fs
+        st0: u64
+        if pp.startsWith "/" then st0 = 1
+        rel0: pp.substring from: st0 to: pp.length
+        absp = absRelPath :rel0 :srcDir :systemDir
+    }
+    return (pathToUri path: absp.stringView)
+}
+
+# locationObj -- an LSP Location: `uri`, on 0-based line `line0`, from column
+# `c0` up to `c1`.
+locationObj: function {uri: StringView line0: u32 c0: u32 c1: u32} out Value is {
     st: newObj
-    st.set key: "line" value: Value.intval (line - 1).i64
+    st.set key: "line" value: Value.intval line0.i64
     st.set key: "character" value: Value.intval c0.i64
     en: newObj
-    en.set key: "line" value: Value.intval (line - 1).i64
+    en.set key: "line" value: Value.intval line0.i64
     en.set key: "character" value: Value.intval c1.i64
     rg: newObj
     rg.set key: "start" value: Value.object st
     rg.set key: "end" value: Value.object en
     lo: newObj
-    lo.set key: "uri" value: Value.text uri
+    lo.set key: "uri" value: Value.text uri.string
     lo.set key: "range" value: Value.object rg
     return (Value.object lo)
 }
@@ -3544,34 +3578,9 @@ locationAtFileTop: function {
     systemDir: StringView
 } out Value is {
     if fsno.isZero then return Value.nul
-    pp: snap.vfs.pathfromprovider dentryid: fsno
-    own: pathMatches pv: pp.stringView rel: docRel :srcDir
-    uri: String
-    if own then {
-        uri = docUri.string
-    } else {
-        absp: snap.vfs.pathfromproviderNative dentryid: fsno
-        if absp.length == 0 then {
-            st0: u64
-            if pp.startsWith "/" then st0 = 1
-            rel0: pp.substring from: st0 to: pp.length
-            absp = absRelPath :rel0 :srcDir :systemDir
-        }
-        uri = pathToUri path: absp.stringView
-    }
-    st: newObj
-    st.set key: "line" value: Value.intval 0.i64
-    st.set key: "character" value: Value.intval 0.i64
-    en: newObj
-    en.set key: "line" value: Value.intval 0.i64
-    en.set key: "character" value: Value.intval 0.i64
-    rg: newObj
-    rg.set key: "start" value: Value.object st
-    rg.set key: "end" value: Value.object en
-    lo: newObj
-    lo.set key: "uri" value: Value.text uri
-    lo.set key: "range" value: Value.object rg
-    return (Value.object lo)
+    own: fileIsDoc :snap fs: fsno :docRel :srcDir
+    uri: fileUri :snap fs: fsno :own :docUri :srcDir :systemDir
+    return (locationObj uri: uri.stringView line0: 0 c0: 0 c1: 0)
 }
 
 # dispositionNote -- a call argument's disposition (from the argDisposition
@@ -4728,10 +4737,92 @@ rowNamesDecl: function {snap: zcheck.CheckResult row: spanrow declId: ztypes.dec
     }
 }
 
+# RefFile -- a file a references answer lands in: its uri, and, when columns
+# are counted in utf-16, its text and where each of its lines starts.
+RefFile: class {
+    fsno: zvfs.fsno
+    uri: String
+    # the document's buffer for the document, the loaded file otherwise; empty
+    # under utf-32
+    text: String
+    # the byte offset each line starts at, line 1 first
+    starts: ListVal u64
+} as {
+    # the file `fs` as references read it: its text and line starts only when
+    # utf-16 columns need them
+    create: function {
+        snap: zcheck.CheckResult
+        fs: zvfs.fsno
+        docRel: StringView
+        docUri: StringView
+        srcDir: StringView
+        systemDir: StringView
+        docText: StringView
+        utf32: bool
+    } out this is {
+        own: fileIsDoc :snap :fs :docRel :srcDir
+        f: (meta.create
+            fsno: fs
+            uri: (fileUri :snap :fs :own :docUri :srcDir :systemDir)
+            text: String
+            starts: ListVal u64
+        )
+        if utf32 then return f
+        if own then {
+            f.text = docText.string
+        } else {
+            r: snap.vfs.open dentryid: fs
+            match (
+                r
+            ) case file then {
+                f.text = r.stringView.string
+            } case dir then null case err then null
+        }
+        f.starts.append 0
+        tv: f.text.stringView
+        n: tv.length
+        i: u64
+        for i < n loop {
+            b: tv.byteAt :i
+            match (
+                b
+            ) case some then {
+                if b == 10 then f.starts.append i + 1
+            } case none then null
+            i = i + 1
+        }
+        return f
+    }
+
+    # a Location over span row `row`, which sits in this file
+    locationOf: function {t: this.view row: spanrow utf32: bool} out Value is {
+        if utf32 then return (locationObj
+            uri: t.uri.stringView
+            line0: row.line - 1
+            c0: row.colLo - 1
+            c1: row.colHi - 1
+        )
+        ln: (row.line - 1).u64
+        lo: t.text.length
+        hi: t.text.length
+        if ln < t.starts.length then lo = t.starts.get i: ln
+        if (ln + 1) < t.starts.length then hi = (t.starts.get i: ln + 1) - 1
+        lt: t.text.substring from: lo to: hi
+        return (locationObj
+            uri: t.uri.stringView
+            line0: row.line - 1
+            c0: (encodedCol lineText: lt cpCol1: row.colLo :utf32)
+            c1: (encodedCol lineText: lt cpCol1: row.colHi :utf32)
+        )
+    }
+}
+
 # navReferencesAnswer -- every span row that names the hit's target, as an
 # array of Locations. One pass over the rows: a variable's uses and bindings by
 # its id, a member row by its owner when the target has one, and any other row
-# spelled as the target is by the declaration it resolves to.
+# spelled as the target is by the declaration it resolves to. A Location is the
+# row's own span: a member row's node is the dotted path, which starts at the
+# receiver.
 navReferencesAnswer: function {
     snap: zcheck.CheckResult
     sp: Spans.view
@@ -4749,6 +4840,9 @@ navReferencesAnswer: function {
     # are one node and one span, which is one reference
     lastNid: zast.nodeid
     lastCol: u32
+    # the files the answer has landed in, and which one the last row was in
+    files: List RefFile
+    fi: u64
     rj: u64
     for rj < sp.rows.length loop {
         row2: sp.rows.get i: rj
@@ -4769,21 +4863,31 @@ navReferencesAnswer: function {
             }
         }
         if add when n2 == lastNid when row2.colLo == lastCol then add = false
-        if add then {
+        fs: zvfs.fsno
+        if add then fs = zcheck.fsnoFor r: snap nodeid: n2
+        if fs.isZero.not then {
             lastNid = n2
             lastCol = row2.colLo
-            lv2: (locationValue
-                :snap
-                nid: n2
-                width: row2.colHi - row2.colLo
-                :docRel
-                :docUri
-                :srcDir
-                :systemDir
-                :docText
-                :utf32
-            )
-            appendIfObject :arr v: lv2
+            stale: fi >= files.length
+            if stale.not then stale = (files.get i: fi).fsno != fs
+            if stale then {
+                fi = 0
+                for fi < files.length loop {
+                    if (files.get i: fi).fsno == fs then break
+                    fi = fi + 1
+                }
+                if fi == files.length then files.append (RefFile.create
+                    :snap
+                    :fs
+                    :docRel
+                    :docUri
+                    :srcDir
+                    :systemDir
+                    :docText
+                    :utf32
+                )
+            }
+            arr.items.append ((files.get i: fi).locationOf row: row2 :utf32)
         }
         rj = rj + 1
     }
@@ -4850,13 +4954,6 @@ navAnswer: function {
         :docText
         :utf32
     )
-}
-
-# appendIfObject -- append `v` when it is a real Location (drop nul).
-appendIfObject: function {arr: Arr v: Value.take} is {
-    keep: false
-    if v.object then keep = true
-    if keep then arr.items.append v
 }
 
 # symbolsAnswer -- flat DocumentSymbol list for the document's unit, the unitdef
