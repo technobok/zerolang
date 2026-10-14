@@ -9,7 +9,7 @@
    C compiler. Each z_mathasm_<name> keeps Go's contract -- the vectors share
    the length n, z may be x itself, a shift count is 1 to 63 -- and
    _Z_MATH_ARITH.inc calls one where Z_MATHASM_<NAME>(n) is true. */
-#if defined(__aarch64__) && defined(Z_MATH_ASM_ARM64) && !defined(__TINYC__) && !defined(Z_MATH_NOASM) && !defined(Z_WORD_PORTABLE)
+#if defined(__aarch64__) && !defined(__TINYC__) && !defined(Z_MATH_NOASM) && !defined(Z_WORD_PORTABLE)
 
 /* func addVV(z, x, y []Word) (c Word) */
 static uint64_t z_mathasm_addVV(uint64_t* z, const uint64_t* x, const uint64_t* y, uint64_t n) {
@@ -104,7 +104,7 @@ static uint64_t z_mathasm_subVV(uint64_t* z, const uint64_t* x, const uint64_t* 
         : "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11", "cc", "memory");
     return r_x1;
 }
-#define Z_MATHASM_SUBVV(n) ((n) >= 1)
+#define Z_MATHASM_SUBVV(n) ((n) >= 3)
 
 /* func lshVU(z, x []Word, s uint) (c Word) */
 static uint64_t z_mathasm_lshVU(uint64_t* z, const uint64_t* x, uint64_t s, uint64_t n) {
@@ -175,7 +175,7 @@ static uint64_t z_mathasm_lshVU(uint64_t* z, const uint64_t* x, uint64_t s, uint
         : "x4", "x5", "x7", "x8", "x9", "x10", "x11", "cc", "memory");
     return r_x6;
 }
-#define Z_MATHASM_LSHVU(n) ((n) >= 1)
+#define Z_MATHASM_LSHVU(n) ((n) >= 13)
 
 /* func rshVU(z, x []Word, s uint) (c Word) */
 static uint64_t z_mathasm_rshVU(uint64_t* z, const uint64_t* x, uint64_t s, uint64_t n) {
@@ -243,7 +243,7 @@ static uint64_t z_mathasm_rshVU(uint64_t* z, const uint64_t* x, uint64_t s, uint
         : "x4", "x5", "x7", "x8", "x9", "x10", "x11", "cc", "memory");
     return r_x6;
 }
-#define Z_MATHASM_RSHVU(n) ((n) >= 1)
+#define Z_MATHASM_RSHVU(n) ((n) >= 9)
 
 /* func mulAddVWW(z, x []Word, m, a Word) (c Word) */
 static uint64_t z_mathasm_mulAddVWW(uint64_t* z, const uint64_t* x, uint64_t m, uint64_t a, uint64_t n) {
@@ -316,7 +316,7 @@ static uint64_t z_mathasm_mulAddVWW(uint64_t* z, const uint64_t* x, uint64_t m, 
         : "x5", "x6", "x7", "x8", "x9", "x10", "x11", "x12", "x13", "x14", "cc", "memory");
     return r_x1;
 }
-#define Z_MATHASM_MULADDVWW(n) ((n) >= 1)
+#define Z_MATHASM_MULADDVWW(n) ((n) >= 8)
 
 /* func addMulVVWW(z, x, y []Word, m, a Word) (c Word) */
 static uint64_t z_mathasm_addMulVVWW(uint64_t* z, const uint64_t* x, const uint64_t* y, uint64_t m, uint64_t a, uint64_t n) {
@@ -408,6 +408,6 @@ static uint64_t z_mathasm_addMulVVWW(uint64_t* z, const uint64_t* x, const uint6
         : "x6", "x7", "x8", "x9", "x10", "x11", "x12", "x13", "x14", "x15", "x16", "x17", "x19", "x20", "x21", "x22", "x23", "x24", "cc", "memory");
     return r_x1;
 }
-#define Z_MATHASM_ADDMULVVWW(n) ((n) >= 1)
+#define Z_MATHASM_ADDMULVVWW(n) ((n) >= 8)
 
 #endif

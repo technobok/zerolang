@@ -159,7 +159,7 @@ test-math-arm64: bin/zc
 	fail=0; n=0; \
 	for v in builtins asm; do \
 	  d=$(MATH_ARM64_DIR)/$$v; mkdir -p $$d; fl=""; \
-	  if [ $$v = asm ]; then fl="--cflags -DZ_MATH_ASM_ARM64"; fi; \
+	  if [ $$v = builtins ]; then fl="--cflags -DZ_MATH_NOASM"; fi; \
 	  for f in tests/fixtures/emitc_corpus/math/*.z; do \
 	    b=$$(basename $$f .z); n=$$((n + 1)); \
 	    bin/zc build $$f --target aarch64-linux-gnu $$fl -o $$d/$$b > $$d/$$b.build 2>&1; rc=$$?; \
@@ -241,15 +241,12 @@ math-asm-guard: out/asmgen
 # bench-math -- math's operations timed per kernel tier (asm, builtins, portable,
 # tcc). Not in ci: wall time is no ratchet.
 BENCH_MATH_DIR := $(BUILDDIR)/bench-math
-# what the asm tier is built with: aarch64's asm kernels are still opt-in, so
-# without the flag its asm tier would be the builtins again.
-BENCH_ASM_CFLAGS ?= $(if $(filter aarch64 arm64,$(HOST_ARCH)),-DZ_MATH_ASM_ARM64)
 # the tcc tier needs the vendored tcc, which only an x86_64 host builds.
 BENCH_TCC := $(if $(filter x86_64,$(HOST_ARCH)),tcc)
 BENCH_TIERS := asm builtins portable $(BENCH_TCC)
 bench-math: bin/zc $(if $(BENCH_TCC),$(BUILDDIR)/tcc) bench-math-kernels
 	@mkdir -p $(BENCH_MATH_DIR)
-	@bin/zc build tests/bench/math_bench.z --release $(if $(BENCH_ASM_CFLAGS),--cflags "$(BENCH_ASM_CFLAGS)") -o $(BENCH_MATH_DIR)/asm
+	@bin/zc build tests/bench/math_bench.z --release -o $(BENCH_MATH_DIR)/asm
 	@bin/zc build tests/bench/math_bench.z --release --cflags -DZ_MATH_NOASM -o $(BENCH_MATH_DIR)/builtins
 	@bin/zc build tests/bench/math_bench.z --release --cflags -DZ_WORD_PORTABLE -o $(BENCH_MATH_DIR)/portable
 	@$(if $(BENCH_TCC),bin/zc build tests/bench/math_bench.z --cc $(BUILDDIR)/tcc --tcc-lib $(TCCLIB) -o $(BENCH_MATH_DIR)/tcc)
@@ -268,7 +265,7 @@ bench-math-kernels: $(if $(BENCH_TCC),$(BUILDDIR)/tcc)
 	@grep -q 'z_fh_mul128' $(BENCH_MATH_DIR)/mul128.h \
 	  || { echo "bench-math-kernels: z_hash.inc has no z_fh_mul128 block"; exit 1; }
 	@inc="-I$(BENCH_MATH_DIR) -Isrc/runtime/natives"; \
-	$(CC) -O2 -std=c17 -Wall -Wextra -Wno-unused-function $(BENCH_ASM_CFLAGS) $$inc -o $(BENCH_MATH_DIR)/k-asm tests/bench/math_kernels.c \
+	$(CC) -O2 -std=c17 -Wall -Wextra -Wno-unused-function $$inc -o $(BENCH_MATH_DIR)/k-asm tests/bench/math_kernels.c \
 	&& $(CC) -O2 -std=c17 -Wall -Wextra -Wno-unused-function -DZ_MATH_NOASM $$inc -o $(BENCH_MATH_DIR)/k-builtins tests/bench/math_kernels.c \
 	&& $(CC) -O2 -std=c17 -Wall -Wextra -Wno-unused-function -DZ_WORD_PORTABLE $$inc -o $(BENCH_MATH_DIR)/k-portable tests/bench/math_kernels.c \
 	$(if $(BENCH_TCC),&& $(BUILDDIR)/tcc -B $(TCCLIB) $$inc -o $(BENCH_MATH_DIR)/k-tcc tests/bench/math_kernels.c)
