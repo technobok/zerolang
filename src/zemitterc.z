@@ -34497,7 +34497,9 @@ appendLinkOnce: function {libs: List String lib: StringView} is {
 }
 
 # unitPathReached -- the program reaches the unit a dotted path names: some
-# declaration in it was demanded (ZTyping.requireSeen).
+# declaration in it was demanded (ZTyping.requireSeen), and it declares
+# something native, as the unit the row was written for does and a user unit of
+# the same name does not
 unitPathReached: function {
     ast: Ast.view symtab: zenv.ZSymbolTable.view path: StringView
 } out bool is {
@@ -34514,7 +34516,7 @@ unitPathReached: function {
         }
         if cur.isZero then return false
     }
-    return (symtab.typing.requireSeen.has item: cur)
+    return (symtab.typing.requireSeen.has item: cur) and (declaresNative :ast :symtab did: cur)
 }
 
 # true when the program defines a `main`.
@@ -37292,6 +37294,48 @@ isHeapPtrCollection: function {
     )
 }
 
+# rowTypeTid -- the type a natives.tbl row names by its unit and its name,
+# asked of that unit by id; 0 when the program has no such type, or when the
+# type declares nothing native: a user type that shadows a stdlib one by name
+# is not the type the row implements
+rowTypeTid: function {
+    ast: Ast.view symtab: zenv.ZSymbolTable.view uname: StringView tname: StringView
+} out ztypes.tid is {
+    uid: unitDeclByName :symtab :ast name: uname
+    if uid.isZero then return ztypes.tid.zero
+    nid: poolIdOf :ast text: tname
+    did: symtab.typing.declFindChild parentDeclId: uid nameId: nid
+    if (declaresNative :ast :symtab :did).not then return ztypes.tid.zero
+    found: ztypecheck.resolveUnitChildRo :ast st: symtab unitDecl: uid nameId: nid
+    return (found.or d: ztypes.tid.zero)
+}
+
+# declaresNative -- declaration `did` is an `is native` function, or a unit or
+# type with one among its members, however deep: what a natives.tbl row naming
+# it by spelling is written for
+declaresNative: function {
+    ast: Ast.view symtab: zenv.ZSymbolTable.view did: ztypes.declid
+} out bool is {
+    if did.isZero then return false
+    d: symtab.typing.decls.get i: did
+    if d.kind.funcDecl or d.kind.methodDecl then {
+        nn: ast.nodes.get i: d.node
+        if nn.namedoperation then {
+            op: ast.nodes.get i: nn.operation
+            if op.functiondef when op.isNative then return true
+        }
+        return false
+    }
+    if (d.kind.unitDecl or d.kind.typeDecl).not then return false
+    k: u64
+    for k < d.children.length loop {
+        child: symtab.typing.declChildAt declId: did index: k
+        if (declaresNative :ast :symtab did: child) then return true
+        k = k + 1
+    }
+    return false
+}
+
 # bindFragTypeTids -- resolve each row's `uses_<Type>` demand to a type id.
 # Runs after buildDefUnitIndex so the defining unit is an id question too; a
 # name that resolves to nothing leaves 0, and the row keeps its member path.
@@ -37305,17 +37349,7 @@ bindFragTypeTids: function {symtab: zenv.ZSymbolTable.view ctx: Ctx ast: Ast.vie
         found: ztypes.tid
         if tn.length > 0 then {
             unitNameText: ctx.fragUnits.get :i
-            uid: unitDeclByName :symtab :ast name: unitNameText.stringView
-            # the table names the type by its unit and its name: asked of that
-            # unit, by id
-            if uid.isZero.not then found = ((ztypecheck.resolveUnitChildRo
-                :ast
-                st: symtab
-                unitDecl: uid
-                nameId: (poolIdOf :ast text: tn.stringView)
-            ).or
-                d: ztypes.tid.zero
-            )
+            found = rowTypeTid :ast :symtab uname: unitNameText.stringView tname: tn.stringView
         }
         ctx.fragTypeTids.append found
         if found.isZero.not then ctx.demandGatedTids.add item: found
@@ -37513,20 +37547,11 @@ emitIoStdStreams: function {
 }
 
 # bindClassRows -- each `.@class` row's class, by id (ctx.classRowTids, parallel
-# to ctx.classRows); 0 when the program has no such unit or class
+# to ctx.classRows); 0 when the program has no such class (rowTypeTid)
 bindClassRows: function {symtab: zenv.ZSymbolTable.view ctx: Ctx ast: Ast.view} is {
     for each r: ctx.classRows loop {
-        found: ztypes.tid
-        uid: unitDeclByName :symtab :ast name: r.uname.stringView
-        if uid.isZero.not then found = ((ztypecheck.resolveUnitChildRo
-            :ast
-            st: symtab
-            unitDecl: uid
-            nameId: (poolIdOf :ast text: r.cls.stringView)
-        ).or
-            d: ztypes.tid.zero
-        )
-        ctx.classRowTids.append found
+        cid: rowTypeTid :ast :symtab uname: r.uname.stringView tname: r.cls.stringView
+        ctx.classRowTids.append cid
     }
 }
 
@@ -40942,22 +40967,13 @@ bindMethodRow: function {
     mname: StringView
     path: StringView
 } is {
-    uid: unitDeclByName :symtab :ast name: uname
-    if uid.isZero then return
-    cid: ((ztypecheck.resolveUnitChildRo
-        :ast
-        st: symtab
-        unitDecl: uid
-        nameId: (poolIdOf :ast text: cls)
-    ).or
-        d: ztypes.tid.zero
-    )
+    cid: rowTypeTid :ast :symtab :uname tname: cls
     if cid.isZero then return
     mo: symtab.typing.declChildOfId parentTypeId: cid nameId: (poolIdOf :ast text: mname)
     match (
         mo
     ) case some then {
-        rows.set key: mo value: path.string
+        if (fnIsNativeId :symtab fid: mo) then rows.set key: mo value: path.string
     } case none then null
 }
 

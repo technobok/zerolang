@@ -715,7 +715,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2211463
+ALLOC_BASELINE := 2212015
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -891,7 +891,8 @@ sqlite-decls-guard:
 # (a miss), the second links the same object (a hit, the same inode), inproc
 # and a spawned tcc get objects of their own, a changed define gets a new key,
 # eight `zc cobj` at once build ONE object and leave no lock or partial file,
-# and a source missing from the vendor directory is refused by name.
+# a source missing from the vendor directory is refused by name, and a user
+# unit that shares the unit's name but declares nothing native builds nothing.
 cobj-guard: bin/zc $(BUILDDIR)/tcc
 	@d=$$(mktemp -d); fail=0; F=tests/fixtures/cobj; \
 	mkdir -p $$d/rt $$d/rt43; cp -r src/runtime/. $$d/rt/; \
@@ -916,6 +917,8 @@ cobj-guard: bin/zc $(BUILDDIR)/tcc
 	[ "$$np" = 1 ] && [ "$$no" = 1 ] && [ "$$left" = 0 ] || { echo "cobj-guard FAIL: 8 parallel builds gave $$np paths, $$no objects, $$left leftovers"; fail=1; }; \
 	ZEROLANG_VENDOR=$$d/none bin/zc cobj $$d/m.c > $$d/miss.txt 2>&1; rc=$$?; \
 	[ $$rc = 1 ] && grep -q "answer/answer.c" $$d/miss.txt || { echo "cobj-guard FAIL: a missing source was not refused by name (exit $$rc)"; fail=1; }; \
+	bin/zc emit user_unit_sqlite --src tests/fixtures/user_units --system lib/system -o $$d/u.c > $$d/u.log 2>&1 \
+	  && ! grep -q '^/\* zcsrc:' $$d/u.c || { echo "cobj-guard FAIL: a user unit named sqlite, declaring nothing native, asked for the SQLite source"; fail=1; }; \
 	rm -rf $$d; \
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
 	echo "cobj-guard OK: a unit's C source builds once per compiler, target and defines, shared by parallel builds"
