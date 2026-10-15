@@ -17,8 +17,14 @@
 public: unit {
     :Connection
     :Database
+    :Statement
+    :Step
+    :Row
+    :Value
     :SqliteError
     :errorcode
+    :columntype
+    :columnerror
     :openmode
     :open
     :openMemory
@@ -111,6 +117,47 @@ openmode: variant {
     readOnly: null
 }
 
+# columntype -- what a column of a row holds: SQLite's storage classes
+columntype: variant {
+    # SQL NULL
+    null: system.null
+    # a signed 64-bit integer
+    integer: system.null
+    # an IEEE 64-bit float
+    real: system.null
+    # a string of text
+    text: system.null
+    # a blob of bytes, stored as given
+    blob: system.null
+}
+
+# columnerror -- why a Row's typed getter could not answer: the getters are
+# strict, as rusqlite's are, and convert only what cannot lose
+columnerror: variant {
+    # the column holds SQL NULL
+    null: system.null
+    # the column holds another storage class than the getter reads
+    mismatch: system.null
+    # the row has no such column
+    range: system.null
+    # the column holds TEXT that is not valid UTF-8
+    encoding: system.null
+}
+
+# Value -- a column's value, owned: whatever storage class the column holds
+Value: union {
+    # SQL NULL
+    null: system.null
+    # what an INTEGER column holds: SQLite stores at most 64 bits, signed
+    integer: i64
+    # what a REAL column holds: SQLite stores an IEEE 754 double, nothing wider
+    real: f64
+    # TEXT, as UTF-8
+    text: String
+    # a BLOB column's bytes, copied out of the row, which the Value outlives
+    blob: Bytes
+}
+
 # Connection -- what a statement runs against: a Database, and, inside a
 # transaction, the Transaction pinning it
 Connection: protocol {
@@ -118,6 +165,149 @@ Connection: protocol {
     # of them succeeded. The first failure stops the rest. Any result rows are
     # discarded: this is for schema and data changes
     executeBatch: function {t: this.view sql: StringView} out (Result null E: SqliteError)
+    # compile `sql`, exactly one statement, into a Statement that keeps the
+    # connection pinned while it lives. SQL with a second statement after the
+    # first is refused; a trailing comment is not one
+    prepare: function {t: this.view sql: StringView} outx (Result Statement E: SqliteError)
+}
+
+# Step -- what stepping a statement answers: the next row, the end, or why it
+# failed. A row pins its statement until the Step goes out of scope, so the
+# next step waits for it
+Step: union {
+    # the next result row
+    row: Row
+    # the statement ran to completion
+    done: null
+    # why the step failed
+    err: SqliteError
+}
+
+# Row -- one result row of a stepped statement, read by column, 0-based. Its
+# getters are strict: an integer is read from INTEGER only, a real from REAL or
+# INTEGER, text from TEXT and a blob from BLOB; NULL answers `null`
+Row: class {
+    # SQLite's statement pointer the row is read from
+    handle: u64
+} as {
+    public: unit {
+        :integer
+        :real
+        :text
+        :blob
+        :value
+        :columnType
+        :columnCount
+        :columnName
+    }
+    # the INTEGER in `column`. A REAL is `mismatch`, not truncated: nothing
+    # converts that could lose the value
+    integer: function {t: this.view column: u64} out (resultval i64 e: columnerror) is native
+    # the REAL in `column`, or its INTEGER converted
+    real: function {t: this.view column: u64} out (resultval f64 e: columnerror) is native
+    # the TEXT in `column`, checked to be UTF-8: a view into the row that lives
+    # as long as the row does
+    text: function {t: this.view column: u64} outx (ResultRV StringView e: columnerror) is native
+    # the BLOB in `column`: a view into the row that lives as long as the row
+    # does
+    blob: function {t: this.view column: u64} outx (ResultRV ByteView e: columnerror) is native
+    # whatever `column` holds, copied out
+    value: function {t: this.view column: u64} out (ResultRV Value e: columnerror) is native
+    # the storage class `column` holds
+    columnType: function {t: this.view column: u64} out (resultval columntype e: columnerror
+    ) is native
+    # how many columns the row has
+    columnCount: function {t: this.view} out u64 is native
+    # the name of `column`: its `AS` alias, else what SQLite names it
+    columnName: function {t: this.view column: u64} outx (ResultRV StringView e: columnerror
+    ) is native
+}
+
+# Statement -- a compiled SQL statement, owned, pinning the connection it was
+# prepared on. Parameters are bound 1-based (`?1`, or by `parameterIndex` for
+# `:name`) and stay bound across executions until rebound or cleared; an
+# unbound parameter is NULL. A bind on a statement that has been stepped resets
+# it first. A bind that fails -- no such parameter -- is reported by the next
+# `step` or `execute`, naming the parameter
+Statement: class {
+    # SQLite's statement pointer; 0 for SQL that holds no statement
+    handle: u64
+    # SQLite's connection pointer, for its errors
+    db: u64
+    # the first failed bind's result code since the last step, 0 when none
+    bindRc: i32
+    # the parameter that failed
+    bindParam: u64
+} as {
+    public: unit {
+        :bindInteger
+        :bindReal
+        :bindText
+        :bindBlob
+        :bindNull
+        :bindValue
+        :parameterIndex
+        :parameterCount
+        :columnCount
+        :columnName
+        :columnDeclaredType
+        :columnTableName
+        :columnOriginName
+        :columnDatabaseName
+        :step
+        :execute
+        :reset
+        :clearBindings
+        :sql
+    }
+    # bind `value` to the 1-based `parameter` as a 64-bit INTEGER
+    bindInteger: function {:this parameter: u64 value: i64} is native
+    # bind `value` to `parameter` as a REAL, which SQLite keeps a double
+    bindReal: function {:this parameter: u64 value: f64} is native
+    # bind TEXT to `parameter`, copied
+    bindText: function {:this parameter: u64 value: StringView} is native
+    # bind a BLOB to `parameter`, copied
+    bindBlob: function {:this parameter: u64 value: ByteView} is native
+    # set `parameter` to SQL NULL, as an unbound or cleared parameter already is
+    bindNull: function {:this parameter: u64} is native
+    # bind whatever `value` holds to `parameter`, copied
+    bindValue: function {:this parameter: u64 value: Value.view} is native
+    # the index of the parameter named `name` (`:id`, `@id`, `$id`, the prefix
+    # included), none when the statement has no such parameter
+    parameterIndex: function {t: this.view name: StringView} out optionval u64 is native
+    # how many parameters the statement takes: its largest index
+    parameterCount: function {t: this.view} out u64 is native
+    # how many columns its rows have
+    columnCount: function {t: this.view} out u64 is native
+    # the name of `column`: its `AS` alias, else what SQLite names it
+    columnName: function {t: this.view column: u64} outx (ResultRV StringView e: columnerror
+    ) is native
+    # the type `column` was declared with in its table; `null` for an
+    # expression, which has none
+    columnDeclaredType: function {t: this.view column: u64} outx (ResultRV StringView e: columnerror
+    ) is native
+    # the table `column` reads, `null` for an expression
+    columnTableName: function {t: this.view column: u64} outx (ResultRV StringView e: columnerror
+    ) is native
+    # the table column `column` reads, unaliased; `null` for an expression
+    columnOriginName: function {t: this.view column: u64} outx (ResultRV StringView e: columnerror
+    ) is native
+    # the database (`main`, `temp`, an attached name) `column` reads; `null`
+    # for an expression
+    columnDatabaseName: function {t: this.view column: u64} outx (ResultRV StringView e: columnerror
+    ) is native
+    # run the statement to its next row. The row pins the statement: the next
+    # step is taken once the Step answered goes out of scope
+    step: function {:this} outx Step is native
+    # run the statement to completion for its effect, answering how many rows
+    # it changed. A statement that yields a row is refused: step through it
+    execute: function {:this} out (ResultVR u64 E: SqliteError) is native
+    # rewind the statement to run again from the start, keeping its bindings
+    reset: function {:this} is native
+    # set every parameter back to NULL
+    clearBindings: function {:this} is native
+    # the SQL the statement was compiled from
+    sql: function {t: this.view} outx StringView is native
 }
 
 # Database -- an open SQLite database connection. Owned: it closes when it goes
@@ -134,12 +324,17 @@ Database: class {
     public: unit {
         :Connection
         :executeBatch
+        :prepare
         :close
     }
     :Connection
     # run `sql`, one or more statements separated by `;`, answering whether all
     # of them succeeded (Connection)
     executeBatch: function {t: this.view sql: StringView} out (Result null E: SqliteError) is native
+    # compile `sql`, exactly one statement, into a Statement that keeps this
+    # Database pinned while it lives (Connection)
+    prepare: function {t: this.view sql: StringView} outx (Result Statement E: SqliteError
+    ) is native
     # close the connection now, answering what closing reported. Closing an
     # already closed Database answers ok
     close: function {:this} out (Result null E: SqliteError) is native

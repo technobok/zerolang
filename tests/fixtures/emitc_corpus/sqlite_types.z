@@ -1,0 +1,154 @@
+# sqlite_types -- a Row's strict getters and the Value union, their behaviours
+# ported from rusqlite's tests (MIT; types/*.rs and row.rs): integers round-trip
+# at i64's limits, a real reads REAL and INTEGER, text round-trips UTF-8, an
+# embedded NUL and the empty string, blobs round-trip including the empty one,
+# NULL answers `null`, another storage class `mismatch`, a missing column
+# `range` and invalid UTF-8 `encoding`; `value` copies whatever the column
+# holds, `columnType` names it, and a UTF-16 database's text arrives as UTF-8.
+describe: function {e: sqlite.columnerror} out String is {
+    match (
+        e
+    ) case null then {
+        return "null".string
+    } case mismatch then {
+        return "mismatch".string
+    } case range then {
+        return "range".string
+    } case encoding then {
+        return "encoding".string
+    }
+}
+
+valueOf: function {r: sqlite.Row.view c: u64} out String is {
+    v: r.value column: c
+    match (
+        v
+    ) case ok then {
+        match (
+            v
+        ) case null then {
+            return "null".string
+        } case integer then {
+            return "integer \{v}"
+        } case real then {
+            return "real \{v}"
+        } case text then {
+            return "text '\{v}'"
+        } case blob then {
+            return "blob of \{v.length}"
+        }
+    } case err then {
+        return "err \{describe e: v}"
+    }
+}
+
+typeOf: function {r: sqlite.Row.view c: u64} out String is {
+    t: r.columnType column: c
+    match (
+        t
+    ) case ok then {
+        match (
+            t
+        ) case null then {
+            return "null".string
+        } case integer then {
+            return "integer".string
+        } case real then {
+            return "real".string
+        } case text then {
+            return "text".string
+        } case blob then {
+            return "blob".string
+        }
+    } case err then {
+        return "err \{describe e: t}"
+    }
+}
+
+textOf: function {r: sqlite.Row.view c: u64} out String is {
+    v: r.text column: c
+    match (v) case ok then return "'\{v}' (\{v.length} bytes)" case err then return "err \{describe e: v}"
+}
+
+blobOf: function {r: sqlite.Row.view c: u64} out String is {
+    v: r.blob column: c
+    match (v) case ok then return "\{v.length} bytes" case err then return "err \{describe e: v}"
+}
+
+integerOf: function {r: sqlite.Row.view c: u64} out String is {
+    v: r.integer column: c
+    match (v) case ok then return "\{v}" case err then return "err \{describe e: v}"
+}
+
+realOf: function {r: sqlite.Row.view c: u64} out String is {
+    v: r.real column: c
+    match (v) case ok then return "\{v}" case err then return "err \{describe e: v}"
+}
+
+showRow: function {db: sqlite.Database.view sql: StringView} is {
+    q: db.prepare :sql
+    match (
+        q
+    ) case ok then {
+        s: q.step
+        match (
+            s
+        ) case row then {
+            n: s.columnCount
+            i: u64
+            for i < n loop {
+                print "  [\{i}] \{typeOf r: s c: i}: integer=\{integerOf r: s c: i} real=\{realOf r: s c: i} text=\{textOf r: s c: i} blob=\{blobOf r: s c: i} value=\{valueOf r: s c: i}"
+                i = i + 1
+            }
+            print "  [\{n}] past the end: \{integerOf r: s c: n}"
+        } else {
+            print "  no row"
+        }
+    } case err then {
+        print "  prepare: \{q.message}"
+    }
+}
+
+main: function is {
+    db: sqlite.openMemory
+    if db.err then return
+    print "limits"
+    showRow :db sql: "select 9223372036854775807, -9223372036854775808, 0"
+    print "reals"
+    showRow :db sql: "select 1.5, -0.25, 3"
+    print "text"
+    showRow :db sql: "select 'héllo ☃', ''"
+    {
+        nul: db.prepare sql: "select 'a' || char(0) || 'b'"
+        if nul.err then return
+        s: nul.step
+        match (
+            s
+        ) case row then {
+            t: s.text column: 0
+            match (t) case ok then print "embedded NUL: \{t.length} bytes, middle byte \{(t.byteAt i: 1).or d: 99}" case err then print "embedded NUL: err"
+        } else print "no row"
+    }
+    print "blobs and null"
+    showRow :db sql: "select x'00ff10', zeroblob(0), null"
+    print "invalid UTF-8"
+    showRow :db sql: "select cast(x'ff61' as text)"
+    {
+        ins: db.prepare sql: "select ?1, ?2"
+        if ins.err then return
+        bs: Bytes
+        bs.append 0
+        bs.append 255
+        bs.append 7
+        ins.bindBlob parameter: 1 value: bs.byteView
+        ins.bindText parameter: 2 value: ""
+        s: ins.step
+        match (s) case row then print "bound blob \{blobOf r: s c: 0}, bound empty text \{textOf r: s c: 1}" else print "no row"
+    }
+    u16: sqlite.openMemory
+    if u16.err then return
+    e: u16.executeBatch sql: "pragma encoding = 'UTF-16le'; create table t(s text); insert into t values ('naïve')"
+    if e.err then print "utf16: \{e.message}"
+    print "UTF-16 database"
+    showRow db: u16 sql: "select s from t"
+}

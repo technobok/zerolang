@@ -1,0 +1,131 @@
+# sqlite_statement -- prepared statements, their behaviours ported from
+# rusqlite's tests (MIT; lib.rs and statement.rs): binding by index and by
+# name, unbound parameters are NULL, bindings persist across executions, a
+# failed bind is reported by the next execute naming the parameter, execute
+# counts and refuses a statement that returns rows, a second statement is
+# refused but a trailing comment is not, SQL holding no statement steps to
+# done, parameter and column counts, column names with aliases, reset and
+# clearBindings, the SQL text, INSERT ... RETURNING, 34 positional parameters,
+# and a prepare failure naming the table.
+# emptySql -- SQL that holds no statement at all
+emptySql: data { "" "-- only a comment" ";" "  " } out stringdata
+
+nameOf: function {s: sqlite.Statement.view c: u64} out String is {
+    r: s.columnName column: c
+    match (r) case ok then return r.string case err then return "<err>".string
+}
+
+firstInteger: function {db: sqlite.Database.view sql: StringView} out i64 is {
+    q: db.prepare :sql
+    if q.err then return -1
+    s: q.step
+    match (
+        s
+    ) case row then {
+        return ((s.integer column: 0).or d: -2)
+    } else {
+        return -3
+    }
+}
+
+stepsOf: function {q: sqlite.Statement} out String is {
+    seen: String
+    going: true
+    for going loop {
+        s: q.step
+        match (
+            s
+        ) case row then {
+            v: s.integer column: 0
+            match (
+                v
+            ) case ok then {
+                seen.append "\{v} "
+            } case err then {
+                seen.append "null "
+            }
+        } case done then {
+            going = false
+        } case err then {
+            seen.append "err(\{s.message}) "
+            going = false
+        }
+    }
+    return seen
+}
+
+main: function is {
+    db: sqlite.openMemory
+    if db.err then return
+    c0: db.executeBatch sql: "create table t(x integer, y text)"
+    if c0.err then print "create: \{c0.message}"
+    {
+        ins: db.prepare sql: "insert into t values (?1, :y)"
+        if ins.err then return
+        yAt: ins.parameterIndex name: ":y"
+        zAt: ins.parameterIndex name: ":z"
+        print "parameters \{ins.parameterCount} :y at \{yAt.or d: 0} :z none=\{zAt.none}"
+        ins.bindInteger parameter: 1 value: 10
+        ins.bindText parameter: 2 value: "ten"
+        e1: ins.execute
+        match (e1) case ok then print "execute changed \{e1}" case err then print "execute: \{e1.message}"
+        ins.bindInteger parameter: 1 value: 20
+        e2: ins.execute
+        match (e2) case ok then print "bindings persist: changed \{e2}" case err then print "execute: \{e2.message}"
+        ins.clearBindings
+        e3: ins.execute
+        match (e3) case ok then print "cleared: changed \{e3}" case err then print "execute: \{e3.message}"
+        ins.bindInteger parameter: 7 value: 1
+        e4: ins.execute
+        match (e4) case ok then print "unexpected" case err then print "deferred bind: range=\{e4.code == sqlite.errorcode.range} \{e4.message}"
+        print "sql: \{ins.sql}"
+    }
+    q: db.prepare sql: "select x from t order by rowid"
+    if q.err then return
+    print "rows: \{stepsOf q: q}"
+    q.reset
+    print "rows again: \{stepsOf q: q}"
+    sel: db.prepare sql: "select 1"
+    match (
+        sel
+    ) case ok then {
+        ex: sel.execute
+        match (ex) case ok then print "unexpected" case err then print "execute on select: \{ex.message}"
+    } case err then print "prepare select: \{sel.message}"
+    two: db.prepare sql: "select 1; select 2"
+    match (two) case ok then print "unexpected" case err then print "second statement refused"
+    trailing: db.prepare sql: "select 1; -- done"
+    match (trailing) case ok then print "trailing comment accepted" case err then print "trailing: \{trailing.message}"
+    for each sqlText: emptySql loop {
+        e: db.prepare sql: sqlText
+        match (
+            e
+        ) case ok then {
+            st: e.step
+            match (st) case done then print "empty statement done" else print "empty statement not done"
+        } case err then print "empty statement: \{e.message}"
+    }
+    lead: firstInteger :db sql: "-- hello\nselect 42"
+    print "leading comment: \{lead}"
+    names: db.prepare sql: "select x as first, y, x + 1 from t"
+    match (
+        names
+    ) case ok then {
+        print "columns \{names.columnCount}: \{nameOf s: names c: 0} \{nameOf s: names c: 1} \{nameOf s: names c: 2} \{nameOf s: names c: 3}"
+    } case err then print "names: \{names.message}"
+    ret: db.prepare sql: "insert into t values (99, 'r') returning x * 2"
+    match (ret) case ok then print "returning: \{stepsOf q: ret}" case err then print "returning: \{ret.message}"
+    many: db.prepare sql: "select ?1+?2+?3+?4+?5+?6+?7+?8+?9+?10+?11+?12+?13+?14+?15+?16+?17+?18+?19+?20+?21+?22+?23+?24+?25+?26+?27+?28+?29+?30+?31+?32+?33+?34"
+    match (
+        many
+    ) case ok then {
+        i: 1.u64
+        for i <= 34 loop {
+            many.bindInteger parameter: i value: 1
+            i = i + 1
+        }
+        print "34 parameters: \{stepsOf q: many}"
+    } case err then print "many: \{many.message}"
+    bad: db.prepare sql: "select * from nosuchtable"
+    match (bad) case ok then print "unexpected" case err then print "prepare failure: \{bad.message}"
+}
