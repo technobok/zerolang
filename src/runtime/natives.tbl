@@ -689,6 +689,30 @@
 #   demand=@unit  the unit ITSELF was demanded. `@` marks a demand outside the
 #               member space, as it marks a path outside the declaration space
 #
+# A class's NATIVE METHOD is `[<unit>.<Class>.<method> ...]`. Its fragment
+# defines the `<Class>_<method>` function, called `(&receiver, args...)` --
+# the METHOD ABI, one rule decided by each parameter's type: the receiver by
+# pointer; a value view (StringView, a StringLike's `.view`, ByteView, ListView)
+# BY VALUE; an owned collection (List, Map, Bytes) by pointer; anything else by
+# value. A protocol slot takes the same, so a native method fills a vtable as it
+# is. The row is demanded wherever the method is called or read (`f.close`), and
+# when its class is live for each method its declared conformances name.
+#
+# A runtime-owned CLASS is `[<unit>.<Class>.@class live=A,B destroy=F]`. Its
+# struct is laid out from its declaration as a record's is, written in table
+# order ahead of the fragments that dereference it, when the class is live or
+# used:
+#   live=A,B    the canons whose instances must ALL exist for the class to be
+#               LIVE. A live class is used, and the native methods its declared
+#               conformances name are demanded: their vtables take those
+#               addresses whether or not anything calls them. The gate is
+#               order-independent -- true exactly when what the fragments
+#               reference exists -- so the C always compiles.
+#   destroy=F   the fragment defining the class's `_destroy(<Class>_t* p)`:
+#               what a declaration cannot say (an fd closed once, a handle
+#               released). A fragment's text is emitted verbatim, so this one
+#               carries no comment of its own -- the row says it.
+#
 # ROW ORDER IS LOAD ORDER within a unit, and the units run in the order the
 # directive gives. A unit the directive does not name runs after those it does,
 # which is how a unit shipping its own rows gets a slot. `prelude` is not among
@@ -735,6 +759,10 @@
 [io.stat frag=_Z_IO_STAT]
 [io.symlink frag=_Z_IO_SYMLINK]
 [io.writeText frag=_Z_IO_WRITE_TEXT]
+# a File is runtime-owned: its struct is its declaration's, its destructor closes
+# the fd once, and it is live -- its Reader/Writer/Closer/Seeker natives demanded
+# -- once the byte-buffer monos its read and write take exist
+[io.File.@class live=ListVal_u8,ListViewVal_u8 destroy=_Z_FILE_DESTROY]
 [io.File.close demand=file_close frag=_Z_FILE_CLOSE]
 [io.File.write demand=file_write frag=_Z_FILE_WRITE]
 [io.File.read demand=file_read frag=_Z_FILE_READ]
@@ -807,6 +835,10 @@
 # Conn itself (`uses_Conn`): its declared Reader/Writer conformance takes the
 # addresses of read, write, flush and close whether or not anything calls them,
 # and a Conn the program never makes is not emitted at all.
+# the fd holders: live once listen, accept or connect minted their Result; a
+# Conn's read and write also dereference the byte-buffer monos
+[net.Listener.@class live=Result_Listener_IoError destroy=_Z_NET_LISTENER_DESTROY]
+[net.Conn.@class live=Result_Conn_IoError,ListVal_u8,ListViewVal_u8 destroy=_Z_NET_CONN_DESTROY]
 [net.listen frag=_Z_NET_LISTEN]
 [net.Listener.accept demand=listener_accept frag=_Z_NET_ACCEPT]
 [net.Listener.close demand=listener_close frag=_Z_NET_LISTENER_CLOSE]

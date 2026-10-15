@@ -1951,6 +1951,22 @@ ccFamilyName: function {f: ccfamily} out StringView is {
     return "other"
 }
 
+# ClassRow -- a `<unit>.<Class>.@class` row: a class whose C the runtime owns.
+# Its struct is laid out from its declaration as a record's is; the row adds
+# what a declaration cannot say -- the fragment that destroys one (an fd closed
+# once, a handle released) and the canons whose presence makes it LIVE, the
+# moment its declared conformances need their native methods' addresses.
+ClassRow: class {
+    # the unit's name, `io`
+    uname: String
+    # the class's name, `File`
+    cls: String
+    # comma-separated canons, all of which must exist for the class to be live
+    live: String
+    # the destructor fragment
+    destroy: String
+}
+
 # UnitReq -- an `@unit.<path>` row: what a unit needs from the C toolchain when
 # a program reaches it. The facts are this backend's, so they live in its table
 # rather than in the unit, which says nothing about how it is built.
@@ -2016,6 +2032,10 @@ NativeHead: class {
     cfeature: String
     nocc: String
     arch: String
+    # `live=`, `destroy=`: on a `<unit>.<Class>.@class` row, the canons whose
+    # presence makes the class live, and the fragment that destroys one
+    live: String
+    destroy: String
 } as {
     # create -- the head between `[` and `]`, split on spaces: the first word
     # is the key, every other word an attribute
@@ -2036,6 +2056,8 @@ NativeHead: class {
             cfeature: String
             nocc: String
             arch: String
+            live: String
+            destroy: String
         )
         for each f: (head.split sep: " ") loop {
             if f.length > 0 then {
@@ -2106,6 +2128,23 @@ NativeHead: class {
             this.pulls = plo.string
         } case none then null
         this.setUnitAttr :f
+        this.setClassAttr :f
+    }
+
+    # setClassAttr -- a `.@class` row's attribute word (ClassRow)
+    setClassAttr: function {:this f: StringView} is {
+        lvo: f.stripPrefix p: "live="
+        match (
+            lvo
+        ) case some then {
+            this.live = lvo.string
+        } case none then null
+        dso: f.stripPrefix p: "destroy="
+        match (
+            dso
+        ) case some then {
+            this.destroy = dso.string
+        } case none then null
     }
 
     # setUnitAttr -- an `@unit.` row's attribute word (UnitReq)
@@ -2355,6 +2394,13 @@ recordNativeRow: function {ctx: Ctx ast: Ast.view h: NativeHead.view body: Strin
         recordCanonRow :ctx key: h.key.stringView spec: h.spec.stringView
         return
     }
+    cr: h.key.stringView.stripSuffix s: ".@class"
+    match (
+        cr
+    ) case some then {
+        recordClassRow :ctx path: cr :h
+        return
+    } case none then null
     kk: h.key.copy
     ctx.nativeKeys.set key: kk value: true
     if h.call.length > 0 then recordSvCall :ctx :ast key: h.key.stringView call: h.call.stringView
@@ -2370,6 +2416,22 @@ recordNativeRow: function {ctx: Ctx ast: Ast.view h: NativeHead.view body: Strin
         )
     }
     recordRowBodies :ctx :h :body
+}
+
+# recordClassRow -- a `.@class` row for the class `path` (`io.File`), kept in
+# table order: the order the structs are written in
+recordClassRow: function {ctx: Ctx path: StringView h: NativeHead.view} is {
+    dot: path.lastIndexOf needle: "."
+    match (
+        dot
+    ) case some then {
+        ctx.classRows.append (ClassRow
+            uname: (path.substring from: 0 to: dot).string
+            cls: (path.substring from: dot + 1 to: path.length).string
+            live: h.live.copy
+            destroy: h.destroy.copy
+        )
+    } case none then null
 }
 
 # loadNativeTbl -- parse natives.tbl into the three row tables. A row is
@@ -3440,26 +3502,9 @@ builtinTid: function {
     return (ztypecheck.stdTidPeek :ast st: symtab wk: nameId)
 }
 
-# specStemTid -- the minted instance of a stdlib template over one concrete
-# argument, both well-known names (`ListVal` over `u8`). A runtime fragment's
-# text still carries the mangled spelling, but the identity comes off the spec
-# trie. 0 when that instance was never demanded.
-specStemTid: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    base: zast.nameid
-    arg: zast.nameid
-} out ztypes.tid is {
-    return (specTidArgs
-        :symtab
-        templateTid: (builtinTid :ast :symtab nameId: base)
-        a1: (builtinTid :ast :symtab nameId: arg)
-        a2: ztypes.tid.zero
-    )
-}
-
-# specTidArgs -- specStemTid's core, taking the argument TYPE IDS directly so a
-# nested instance (Result over List_String) can be composed one level at a time.
+# specTidArgs -- the minted instance of a stdlib template over the argument TYPE
+# IDS, so a nested instance (Result over List_String) can be composed one level
+# at a time; 0 when that instance was never demanded.
 specTidArgs: function {
     symtab: zenv.ZSymbolTable.view
     templateTid: ztypes.tid
@@ -3761,14 +3806,11 @@ Ctx: class {
     osUnitDecl: ztypes.declid
     # the cli unit's declaration, cached for the same reason
     cliUnitDecl: ztypes.declid
-    # the net unit's declaration, cached for the same reason
-    netUnitDecl: ztypes.declid
-    # the three fixed (unit, class) hooks, resolved once through the unit
-    ioFileTid: ztypes.tid
-    # net.Listener's type, needed to route its natives
-    netListenerTid: ztypes.tid
-    # net.Conn's type, needed to route its natives
-    netConnTid: ztypes.tid
+    # the `.@class` rows in table order, each class's id once bound
+    # (bindClassRows), and the ones the program made live (markLiveClasses)
+    classRows: List ClassRow
+    classRowTids: ListVal ztypes.tid
+    liveClasses: IdSet ztypes.tid
     # where each record's or class's data-field list starts in fieldNameIds, read
     # once per type (fieldOrdinalOf)
     fieldListAt: (IdMapV ztypes.tid v: u64)
@@ -34001,26 +34043,13 @@ emitCodeBody: function {
 } is {
     codeBuf.reserve n: nodeEstE * 8
     {
-        # An fd-holder class's methods are demanded by the class being
-        # REACHABLE rather than by a call: a DECLARED Reader/Writer conformance
-        # needs the native's address whether or not anything calls it, and net's
-        # `Conn` declares one that nothing in the tree constructs. Both
-        # injections run ahead of every consultation -- emitMonos asks one, for
-        # the fd structs the net fragments dereference.
-        if (ioFileLive ast: program :symtab :ctx) then {
-            needsAddM :ctx uname: "io" memb: "@unit"
-            needsAddM :ctx uname: "io" memb: "file_close"
-            needsAddM :ctx uname: "io" memb: "file_read"
-            needsAddM :ctx uname: "io" memb: "file_write"
-            needsAddM :ctx uname: "io" memb: "file_seek"
-            needsAddM :ctx uname: "io" memb: "file_flush"
-        }
-        if (netListenerLive ast: program :symtab :ctx) then {
-            typeUseAdd :ctx tid: ctx.netListenerTid
-        }
-        if (netConnLive ast: program :symtab :ctx) then {
-            typeUseAdd :ctx tid: ctx.netConnTid
-        }
+        # A runtime-owned class's methods are demanded by the class being LIVE
+        # rather than by a call: a DECLARED Reader/Writer conformance needs the
+        # native's address whether or not anything calls it, and net's `Conn`
+        # declares one that nothing in the tree constructs. This runs ahead of
+        # every consultation -- emitMonos asks it, for the structs the
+        # fragments dereference.
+        markLiveClasses ast: program :symtab :ctx
         emitMonos ast: program :symtab :ctx :runtimeDir buf: codeBuf
         # the split / lines iterator types, ahead of the typedefs of the function
         # types that spell them; they reach nothing the passes below write
@@ -34141,10 +34170,9 @@ emitC: function {
         ioUnitDecl: ztypes.declid.zero
         osUnitDecl: ztypes.declid.zero
         cliUnitDecl: ztypes.declid.zero
-        netUnitDecl: ztypes.declid.zero
-        ioFileTid: ztypes.tid.zero
-        netListenerTid: ztypes.tid.zero
-        netConnTid: ztypes.tid.zero
+        classRows: List ClassRow
+        classRowTids: ListVal ztypes.tid
+        liveClasses: IdSet ztypes.tid
         fieldListAt: (IdMapV ztypes.tid v: u64)
         fieldNameIds: ListVal zast.nameid
         mainUnitId: ztypes.declid
@@ -34276,6 +34304,7 @@ emitC: function {
         buildDefUnitIndex :symtab :ctx
         bindFragTypeTids :symtab :ctx ast: program
         bindFragUnitDecls :symtab :ctx ast: program
+        bindClassRows :symtab :ctx ast: program
         rmn: ctx.realMain.copy
         (ctxBindMain
             :ctx
@@ -35659,22 +35688,6 @@ buildDefUnitIndex: function {symtab: zenv.ZSymbolTable.view ctx: Ctx} is {
     ctx.ioUnitDecl = ztypecheck.unitDeclOfName st: symtab nameId: zast.wellKnown.slot.unIo
     ctx.osUnitDecl = ztypecheck.unitDeclOfName st: symtab nameId: zast.wellKnown.slot.unOs
     ctx.cliUnitDecl = ztypecheck.unitDeclOfName st: symtab nameId: zast.wellKnown.slot.unCli
-    ctx.netUnitDecl = ztypecheck.unitDeclOfName st: symtab nameId: zast.wellKnown.slot.unNet
-    ctx.ioFileTid = (unitClassTid
-        :symtab
-        unitDecl: ctx.ioUnitDecl
-        nameId: zast.wellKnown.slot.tyFile
-    )
-    ctx.netListenerTid = (unitClassTid
-        :symtab
-        unitDecl: ctx.netUnitDecl
-        nameId: zast.wellKnown.slot.tyListener
-    )
-    ctx.netConnTid = (unitClassTid
-        :symtab
-        unitDecl: ctx.netUnitDecl
-        nameId: zast.wellKnown.slot.tyConn
-    )
 }
 
 # ctxBindMain -- rebind the emission main unit: mainName plus its unit
@@ -37182,76 +37195,6 @@ ioFileId: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view} out ztypes.tid
     )
 }
 
-# ioFileLive -- the File class is present AND its read/write param monos (the
-# byte buffer's element mono / ListView_u8) exist, i.e. a File is actually live
-# (constructed / io.open / a file method called). This is the order-independent
-# gate for emitting File's natives + Reader/Writer conformance: it is true
-# exactly when that emitted code's referenced monos have been demanded, so it
-# always compiles.
-ioFileLive: function {ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx.view} out bool is {
-    calleeTid: ioFileId :symtab :ctx
-    if calleeTid.isZero then return false
-    listValU8Tid: (specStemTid
-        :ast
-        :symtab
-        base: zast.wellKnown.slot.tyListVal
-        arg: zast.wellKnown.slot.tyU8
-    )
-    if listValU8Tid.isZero then return false
-    listViewValU8Tid: (specStemTid
-        :ast
-        :symtab
-        base: zast.wellKnown.slot.tyListViewVal
-        arg: zast.wellKnown.slot.tyU8
-    )
-    if listViewValU8Tid.isZero then return false
-    return true
-}
-
-# netListenerLive / netConnLive -- a net fd-holder type is in the program: the
-# Result its constructor hands back has been minted, which only a listen, an
-# accept or a connect does. The net analogue of ioFileLive, and the same
-# order-independent gate. A Conn's read and write fragments also dereference the
-# byte-buffer monos, so a Conn is live only once those exist too.
-netListenerLive: function {ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx.view} out bool is {
-    return (netResultOf :ast :symtab tid: ctx.netListenerTid).isZero.not
-}
-
-# netConnLive -- see netListenerLive.
-netConnLive: function {ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx.view} out bool is {
-    if (netResultOf :ast :symtab tid: ctx.netConnTid).isZero then return false
-    listValU8Tid: (specStemTid
-        :ast
-        :symtab
-        base: zast.wellKnown.slot.tyListVal
-        arg: zast.wellKnown.slot.tyU8
-    )
-    if listValU8Tid.isZero then return false
-    listViewValU8Tid: (specStemTid
-        :ast
-        :symtab
-        base: zast.wellKnown.slot.tyListViewVal
-        arg: zast.wellKnown.slot.tyU8
-    )
-    if listViewValU8Tid.isZero then return false
-    return true
-}
-
-# netResultOf -- the `Result <T> E: IoError` instance over net type `tid`, 0 when
-# the program never minted it (or `tid` is absent). The net type is passed by id:
-# an unqualified name lookup does not reach the net unit.
-netResultOf: function {
-    ast: Ast.view symtab: zenv.ZSymbolTable.view tid: ztypes.tid
-} out ztypes.tid is {
-    if tid.isZero then return ztypes.tid.zero
-    return (specTidArgs
-        :symtab
-        templateTid: (ztypecheck.stdTidPeek :ast st: symtab wk: zast.wellKnown.slot.tyResult)
-        a1: tid
-        a2: (ztypecheck.stdTidPeek :ast st: symtab wk: zast.wellKnown.slot.tyIoError)
-    )
-}
-
 # cliClassTypeId -- the type id of a cli-unit CLASS named `name` (0 absent).
 cliClassTypeId: function {
     symtab: zenv.ZSymbolTable.view
@@ -37438,12 +37381,11 @@ isIoUnitClass: function {symtab: zenv.ZSymbolTable.view ctx: Ctx tid: ztypes.tid
     return (duId == ctx.ioUnitDecl) or (duId == ctx.osUnitDecl) or (duId == ctx.cliUnitDecl)
 }
 
-# ioClassIsLive -- whether an io-unit class needs its conformance impls: File
-# when the program touches it, any other when its type is used.
-ioClassIsLive: function {
-    ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx tid: ztypes.tid
-} out bool is {
-    if tid == ctx.ioFileTid then return (ioFileLive :ast :symtab :ctx)
+# ioClassIsLive -- whether an io-unit class needs its conformance impls: a
+# class with a `.@class` row when its row made it live (File), any other when
+# its type is used.
+ioClassIsLive: function {ctx: Ctx tid: ztypes.tid} out bool is {
+    if (ctx.classRowTids.contains item: tid) then return (ctx.liveClasses.has item: tid)
     return (typeIsUsed :ctx :tid)
 }
 
@@ -37461,7 +37403,7 @@ emitIoFileConformance: function {
     for ti < last loop {
         tid: ti
         ti = ti.next
-        if (isIoUnitClass :symtab :ctx :tid) when (ioClassIsLive :ast :symtab :ctx :tid) then {
+        if (isIoUnitClass :symtab :ctx :tid) when (ioClassIsLive :ctx :tid) then {
             emitConformanceImplsForType :ast :symtab :ctx implTid: tid isFacet: false :buf
         }
     }
@@ -37500,126 +37442,153 @@ emitIoStdStreams: function {
     }
 }
 
-# emitIoFileClass -- the io.File value rep, emitted only when File is reachable
-# (in the demand-driven registry). The generic record path can't produce the
-# close-fd destructor, so File gets this dedicated emitter (emitFdClass). The type
-# is marked in ctx.emittedUserTypes so every other path skips it -- without that
-# mark a by-value use of File would emit a second struct carrying a generic
-# destructor that never closes the fd.
-emitIoFileClass: function {
-    # the File class's field names
-    ast: Ast.view
-    # the checked program declaring File
-    symtab: zenv.ZSymbolTable.view
-    # the emission context holding ctx.ioFileTid
-    ctx: Ctx
-    # the type section File's struct joins
-    buf: String.borrow
-} is {
-    fid: ctx.ioFileTid
-    if fid.isZero then return
-    if (ctx.emittedUserTypes.has item: fid) then return
-    ctx.emittedUserTypes.add item: fid
-    emitFdClass :ast :symtab :ctx tid: fid :buf
+# bindClassRows -- each `.@class` row's class, by id (ctx.classRowTids, parallel
+# to ctx.classRows); 0 when the program has no such unit or class
+bindClassRows: function {symtab: zenv.ZSymbolTable.view ctx: Ctx ast: Ast.view} is {
+    for each r: ctx.classRows loop {
+        found: ztypes.tid
+        uid: unitDeclByName :symtab :ast name: r.uname.stringView
+        if uid.isZero.not then found = ((ztypecheck.resolveUnitChildRo
+            :ast
+            st: symtab
+            unitDecl: uid
+            nameId: (poolIdOf :ast text: r.cls.stringView)
+        ).or
+            d: ztypes.tid.zero
+        )
+        ctx.classRowTids.append found
+    }
 }
 
-# emitNetFdClass -- one net fd-holder class (emitFdClass) when the program made
-# one, the net analogue of emitIoFileClass. The net runtime fragments
-# dereference the fields, so the body is pre-emitted here and the type marked in
-# ctx.emittedUserTypes so the ordered user-struct pass skips it (that pass runs
-# after the fragments -- too late).
-emitNetFdClass: function {
-    # the net class's field names
-    ast: Ast.view
-    # the checked program declaring it
-    symtab: zenv.ZSymbolTable.view
-    # the emission context recording what was emitted
-    ctx: Ctx
-    # Listener or Conn
-    tid: ztypes.tid
-    # the type section its struct joins
-    buf: String.borrow
-} is {
-    if tid.isZero then return
-    if (typeIsUsed :ctx :tid).not then return
-    if (ctx.emittedUserTypes.has item: tid) then return
-    ctx.emittedUserTypes.add item: tid
-    emitFdClass :ast :symtab :ctx :tid :buf
+# markLiveClasses -- each row's class is LIVE once every canon its `live=`
+# names exists: the instances its constructor hands back or its methods take,
+# which only a program that makes one mints. A live class is used, and the
+# native methods its declared conformances name are demanded, since their
+# vtables take those addresses whether or not anything calls them. The gate is
+# order-independent: it is true exactly when what the fragments reference has
+# been demanded, so the C always compiles.
+markLiveClasses: function {ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx} is {
+    i: u64
+    n: ctx.classRows.length
+    for i < n loop {
+        cid: ctx.classRowTids.get :i
+        if cid.isZero.not then {
+            lv: (ctx.classRows.get :i).live.copy
+            live: true
+            for each c: (lv.stringView.split sep: ",") loop {
+                if c.length > 0 when (ioCanonTidAny :ast :symtab :ctx canon: c
+                ).isZero then live = false
+            }
+            if live then {
+                ctx.liveClasses.add item: cid
+                typeUseAdd :ctx tid: cid
+                demandConformedNatives :ast :symtab :ctx :cid
+            }
+        }
+        i = i + 1
+    }
 }
 
-# emitFdClass -- a file-descriptor holder (io.File, net.Listener, net.Conn): its
-# struct, laid out from its declaration as a record's is (emitRecordStructBody),
-# and a destructor that closes the fd once (RAII).
-emitFdClass: function {
-    # the fd holder's field names
+# demandConformedNatives -- the native methods a fragment row implements that
+# the protocols class `cid` declares name: each one's row is demanded, as a call
+# of it would (demandSpecNatives)
+demandConformedNatives: function {
+    ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx cid: ztypes.tid
+} is {
+    ri: ztypes.confid
+    for ri.next < symtab.typing.nextConf loop {
+        ri = ri.next
+        spec: ztypes.tid
+        {
+            row: symtab.typing.conformance.get i: ri
+            if row.implTypeId == cid then spec = row.specTypeId
+        }
+        if spec.isZero.not then demandSpecNatives :ast :symtab :ctx :cid :spec
+    }
+}
+
+# demandSpecNatives -- each method protocol `spec` names, as class `cid`
+# implements it, demanded through its fragment row when one implements it
+demandSpecNatives: function {
+    ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx cid: ztypes.tid spec: ztypes.tid
+} is {
+    mnames: List String
+    mids: ListVal ztypes.tid
+    midsNm: ListVal zast.nameid
+    protoChildMethods :ast :symtab tid: spec names: mnames ids: mids nameIds: midsNm
+    for each mnId: midsNm loop {
+        mo: symtab.typing.declChildOfId parentTypeId: cid nameId: mnId
+        match (
+            mo
+        ) case some then {
+            key: methodRowPath :ast :symtab :ctx mfid: mo
+            row: nativeFragRow :ctx path: key.stringView
+            if row > 0 then demandNativeRow :ctx :row key: key.stringView
+        } case none then null
+    }
+}
+
+# emitClassRowStructs -- each `.@class` row's struct and destructor, in table
+# order, when the program has the class live or uses it. The struct is laid
+# out from the declaration as a record's is (emitRecordStructBody); the
+# destructor is the row's `destroy=` fragment. The type is marked in
+# ctx.emittedUserTypes so every other path skips it -- a by-value use would
+# otherwise emit a second struct with a generic destructor -- and it is written
+# here, ahead of the fragments that dereference its fields.
+emitClassRowStructs: function {
     ast: Ast.view
-    # the checked program its declaration is read from
     symtab: zenv.ZSymbolTable.view
-    # the emission context its C names come from
     ctx: Ctx
-    # the class
-    tid: ztypes.tid
-    # where its struct and destructor are written
+    runtimeDir: StringView
     buf: String.borrow
 } is {
-    fc: ctxCname :ctx :tid
+    i: u64
+    n: ctx.classRows.length
+    for i < n loop {
+        cid: ctx.classRowTids.get :i
+        emit: cid.isZero.not
+        if emit when (ctx.emittedUserTypes.has item: cid) then emit = false
+        if emit when (ctx.liveClasses.has item: cid).not when (typeIsUsed :ctx tid: cid).not then {
+            emit = false
+        }
+        if emit then {
+            ctx.emittedUserTypes.add item: cid
+            emitClassRowStruct :ast :symtab :ctx :cid :buf
+            dfr: (ctx.classRows.get :i).destroy.copy
+            if dfr.length > 0 then ioFrag :ast :symtab :ctx :runtimeDir frag: dfr.stringView :buf
+        }
+        i = i + 1
+    }
+}
+
+# emitClassRowStruct -- a runtime-owned class's struct, laid out from its
+# declaration as a record's is
+emitClassRowStruct: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    cid: ztypes.tid
+    buf: String.borrow
+} is {
+    fc: ctxCname :ctx tid: cid
     fnames: List String
     fids: ListVal ztypes.tid
     fidsNm: ListVal zast.nameid
-    recFieldLists :ast :symtab :tid names: fnames ids: fids nameIds: fidsNm
-    fwd: isFwdDeclared :ctx :tid
+    recFieldLists :ast :symtab tid: cid names: fnames ids: fids nameIds: fidsNm
+    fwd: isFwdDeclared :ctx tid: cid
     if fwd then {
         lo: "struct \{fc}_t {\n"
         buf.append lo
     } else {
         buf.append "typedef struct {\n"
     }
-    emitRecordStructBody :ast :symtab :ctx :tid names: fnames ids: fids nameIds: fidsNm :buf
+    emitRecordStructBody :ast :symtab :ctx tid: cid names: fnames ids: fids nameIds: fidsNm :buf
     if fwd then {
         buf.append "};\n"
     } else {
         lc: "} \{fc}_t;\n"
         buf.append lc
     }
-    fdC: (memberC
-        :ast
-        :symtab
-        :ctx
-        owner: tid
-        kind: memberkind.field
-        nameId: zast.wellKnown.slot.wkFd
-    )
-    clC: (memberC
-        :ast
-        :symtab
-        :ctx
-        owner: tid
-        kind: memberkind.field
-        nameId: zast.wellKnown.slot.wkClosed
-    )
-    d0: "static void \{fc}_destroy(\{fc}_t* p) {\n    if (!p) return;\n"
-    buf.append d0
-    d1: "    if (p->\{clC}) return;\n"
-    buf.append d1
-    d2: "    close(p->\{fdC});\n"
-    buf.append d2
-    d3: "    p->\{clC} = true;\n}\n\n"
-    buf.append d3
-}
-
-# emitNetClasses -- the net fd-holder value reps (Listener/Conn).
-emitNetClasses: function {
-    # the net classes' field names
-    ast: Ast.view
-    # the checked program declaring net
-    symtab: zenv.ZSymbolTable.view
-    # the emission context naming Listener and Conn
-    ctx: Ctx
-    # the type section both structs join
-    buf: String.borrow
-} is {
-    emitNetFdClass :ast :symtab :ctx tid: ctx.netListenerTid :buf
-    emitNetFdClass :ast :symtab :ctx tid: ctx.netConnTid :buf
 }
 
 # maybePreEmitElem -- a user type (variant/record/class/union) used as a
@@ -39868,8 +39837,7 @@ emitMonos: function {
         emitBoxMono :symtab :ctx monoId: boxId :buf
         tbox = tbox + 1
     }
-    emitIoFileClass :ast :symtab :ctx :buf
-    emitNetClasses :ast :symtab :ctx :buf
+    emitClassRowStructs :ast :symtab :ctx :runtimeDir :buf
     # reachable non-mono system VARIANTs (parseerror, seekorigin, ...) --
     # payloads of the variant monos / used directly.
     tsv: u64

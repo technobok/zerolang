@@ -707,7 +707,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2198463
+ALLOC_BASELINE := 2200076
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1468,7 +1468,8 @@ VIEW_GUARD_INTERNAL := String.cat String.print String.free String.eq String.cmp 
   ListRef.destroy ListRef.grow MapRR.destroy MapRR.grow MapRR.find \
   SetRef.destroy SetRef.grow SetRef.find \
   IdMapR.destroy IdMapR.grow IdMapR.find IdMapR.slot IdMapR.entries_cap \
-  IdSet.destroy IdSet.grow IdSet.find IdSet.slot IdSet.items_cap
+  IdSet.destroy IdSet.grow IdSet.find IdSet.slot IdSet.items_cap \
+  File.destroy Listener.destroy Conn.destroy
 VIEW_GUARD_INLINE := Bytes.byteView:unemitted \
   array.listView:inline array.slice:inline array.span:writes array.spanSlice:writes \
   ListVal.span:inline ListVal.spanSlice:inline \
@@ -1908,7 +1909,8 @@ clean:
 # native-guard -- natives are declaration-driven. The units it covers are the
 # ones natives.tbl has rows for, read off the table, and every top-level `is
 # native` function such a unit declares has its own `[<unit>.<name> ...]` row;
-# every fragment is referenced (by the emitter or a natives.tbl frag= list); and
+# every fragment is referenced (by the emitter, a natives.tbl frag= list or a
+# `.@class` row's destroy=); and
 # every z_@Name@, @ARM_canon.arm@ and @MEMBER_canon.name@ hole a fragment spells
 # names a declared type, arm or member. A plain z_@Name@ that no @canon row and
 # no loader binds must be declared by the system unit or by exactly ONE row
@@ -1939,7 +1941,7 @@ native-guard:
 	  ref=0; \
 	  grep -qF "\"$$stem\"" src/zemitterc.z && ref=1; \
 	  grep -qF "\"$$need\"" src/zemitterc.z && ref=1; \
-	  grep -qE "frag=([A-Z0-9_]+,)*$$stem(,|\]| )" src/runtime/natives.tbl && ref=1; \
+	  grep -qE "(frag|destroy)=([A-Z0-9_]+,)*$$stem(,|\]| )" src/runtime/natives.tbl && ref=1; \
 	  for u in $$rowunits; do \
 	    case "$$need" in "$$u"_*) \
 	      grep -qF "memb: \"$${need#$$u\_}\"" src/zemitterc.z && ref=1;; \
@@ -2181,8 +2183,10 @@ natives-tbl-guard: bin/zc
 	rm -rf $$d2; \
 	echo "natives-tbl-guard OK: $$cn generated conversion rows, each matching its declared return"; \
 	d3=$$(mktemp -d); fail=0; \
-	grep -oE '^\[[^]]*frag=[A-Z0-9_,]+' src/runtime/natives.tbl \
-	  | sed -E 's/^\[([^ ]+).*frag=([A-Z0-9_,]+)/\1 \2/' > $$d3/fr; \
+	{ grep -oE '^\[[^]]*frag=[A-Z0-9_,]+' src/runtime/natives.tbl \
+	  | sed -E 's/^\[([^ ]+).*frag=([A-Z0-9_,]+)/\1 \2/'; \
+	  grep -oE '^\[[^]]*destroy=[A-Z0-9_]+' src/runtime/natives.tbl \
+	  | sed -E 's/^\[([^ ]+).*destroy=([A-Z0-9_]+)/\1 \2/'; } > $$d3/fr; \
 	while read path frags; do \
 	  for f in $$(echo "$$frags" | tr ',' ' '); do \
 	    test -f src/runtime/natives/$$f.inc || { \
