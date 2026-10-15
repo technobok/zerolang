@@ -2209,7 +2209,7 @@ recordConvMember: function {ctx: Ctx key: StringView body: StringView} is {
 # `make perf-elision`'s pool.
 recordFragmentRow: function {ctx: Ctx key: StringView frag: StringView dem: StringView} is {
     fp: key.string
-    ctx.nativeFragPaths.set key: fp value: true
+    ctx.nativeFragPaths.set key: fp value: ctx.fragUnits.length + 1
     du: String
     {
         fd: key.indexOf needle: "."
@@ -2428,7 +2428,13 @@ nativeIsConvMembOf: function {ctx: Ctx.view memb: StringView} out bool is {
 # whether the runtime supplies its body, and a user unit that ships a fragment
 # answers yes on the same terms as io does.
 nativeIsFragBacked: function {ctx: Ctx.view path: StringView} out bool is {
-    return ((ctx.nativeFragPaths.get key: path.asString).or d: false)
+    return (nativeFragRow :ctx :path) > 0
+}
+
+# nativeFragRow -- the fragment row that implements this path, as its index in
+# the parallel frag lists plus one; 0 when no fragment does
+nativeFragRow: function {ctx: Ctx.view path: StringView} out u64 is {
+    return ((ctx.nativeFragPaths.get key: path.asString).or d: 0)
 }
 
 # nativeHasRow -- the table has a row for this path, whatever the row says. A
@@ -3857,8 +3863,14 @@ Ctx: class {
     # the StringView natives' call kinds (natives.tbl `call=`), by member name id
     svCalls: (IdMapV zast.nameid v: svcall)
     # the paths a FRAGMENT implements: a native whose C the runtime supplies
-    # under the `z_<unit>_<name>` convention, whoever declares it
-    nativeFragPaths: (MapRV String v: bool)
+    # under the `z_<unit>_<name>` convention, whoever declares it -- each to its
+    # row's index in the parallel frag lists, plus one (0 is no row)
+    nativeFragPaths: (MapRV String v: u64)
+    # the fragment rows that implement a class's native METHOD, by the method's
+    # type id: the row's path, bound once from nativeFragPaths the first time a
+    # native method is called (bindMethodRows)
+    methodRowPaths: (IdMapR ztypes.tid V: String)
+    methodRowsBound: bool
     # which natives are conversion members, whose routing differs
     nativeConvMemb: (MapRV String v: bool)
     # the member NAMES of rows that take ARGUMENTS -- the cheap filter that
@@ -11280,6 +11292,9 @@ argform: variant {
     # the address of the argument bound by its label, unless it is a pointer
     # already
     addressed: null
+    # a value view bound by its label, by address: a String is projected to its
+    # view first (viewArgAddr)
+    viewed: null
 }
 
 # emitOrderedPair -- `<cb>_<m>(lead, a, b)`: a native leg whose two labelled
@@ -11435,6 +11450,8 @@ labelArgText: function {
             text: av
         )
         return (stating :facts from: (addrFacts e: avF) text: "&\{av}")
+    } case viewed then {
+        return (viewArgAddr :ast :symtab :ctx :call :label :facts)
     }
 }
 
@@ -11447,7 +11464,7 @@ labelArgNode: function {
     if byLabel.isZero.not then return byLabel
     match (
         form
-    ) case labelled then return zast.nodeid case addressed then return zast.nodeid case value then null case moved then null case read then null
+    ) case labelled then return zast.nodeid case addressed then return zast.nodeid case viewed then return zast.nodeid case value then null case moved then null case read then null
     return (ctorArgNodeByPosition :ast :call idx: 0)
 }
 
@@ -14793,7 +14810,7 @@ emitNativeMemberCall: function {
             return (emitParsedMethodCall :ast :symtab :ctx :call :facts)
         }
         if isCreate then return (emitIoWrapperCreate :ast :symtab :ctx :call :facts)
-        return (emitFileMethodCall :ast :symtab :ctx :call :facts)
+        return (emitClassNativeCall :ast :symtab :ctx :call :facts)
     }
     return (emitOperatorCallForm :ast :symtab :ctx :call :facts)
 }
@@ -17230,49 +17247,6 @@ emitUserTypeMemberRead: function {
         )
         if sm.length > 0 then return sm
     }
-    isFN: (
-        (mnId == zast.wellKnown.slot.wkClose) or
-        (mnId == zast.wellKnown.slot.wkFlush) or
-        (mnId == zast.wellKnown.slot.wkReadLine) or
-        (mnId == zast.wellKnown.slot.wkAccept)
-    )
-    isFile: false
-    isNetU: false
-    if isFN then {
-        # the member's OWN DECLARATION decides. A native member has no body to
-        # emit, which is exactly what makes the read a fragment call; the
-        # unit's name admitted every type declared in it instead, so a user
-        # unit spelled `cli`, `os` or `net` handed its own bodied methods to a
-        # fragment that never defined them -- `z_t13_close` was called and
-        # never emitted, at exit 0. Being declared native also subsumes the
-        # receiver test `accept` would otherwise need.
-        mcoF: (symtab.typing.declChildOfId
-            parentTypeId: bstamp
-            nameId: mnId
-        )
-        match (
-            mcoF
-        ) case some then {
-            if (fnIsNativeId
-                :symtab
-                fid: mcoF
-            ) then isFile = true
-        } case none then null
-    }
-    if isFile then {
-        if (isNetUnitTid :symtab :ctx tid: bstamp) then isNetU = true
-        ffc: ctxCname :ctx tid: bstamp
-        if isNetU then {
-            demandNetMember :ctx tid: bstamp member: mn2
-        } else {
-            needsAddM :ctx uname: "io" memb: "@unit"
-            ffm: "file_\{mn2}"
-            needsAddM :ctx uname: "io" memb: ffm.stringView
-        }
-        frecv: "&\{bn2}"
-        if (isPtrVid :ctx vid: bn2v) then frecv = "\{bn2}"
-        return (stating :facts from: callFacts text: "\{ffc}_\{mn2}(\{frecv})")
-    }
     mco: (symtab.typing.declChildOfId
         parentTypeId: bstamp
         nameId: mnId
@@ -17280,6 +17254,23 @@ emitUserTypeMemberRead: function {
     match (
         mco
     ) case some then {
+        # a native method taking only its receiver, read as a member: the
+        # member's OWN DECLARATION decides, since a native member has no body to
+        # emit, and its fragment row is the call (emitClassNativeRead)
+        if (fnIsNativeId :symtab fid: mco) then {
+            nr: (emitClassNativeRead
+                :ast
+                :symtab
+                :ctx
+                cid: bstamp
+                :mnId
+                mfid: mco
+                recv: bn2
+                recvVid: bn2v
+                :facts
+            )
+            if nr.length > 0 then return nr
+        }
         rmr: (emitResolvedMemberRead
             :ast
             :symtab
@@ -24633,13 +24624,6 @@ genericOriginTid: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out 
     go: symtab.reg.genericOriginOf :tid
     if go.isZero.not then g = go
     return g
-}
-
-# isNetUnitTid -- `tid` is declared in the net unit, asked of the unit's
-# declaration (unitDeclOfTid) and never of its name
-isNetUnitTid: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.tid} out bool is {
-    if ctx.netUnitDecl.isZero then return false
-    return (ztypecheck.unitDeclOfTid st: symtab :tid) == ctx.netUnitDecl
 }
 
 # definedInUnitName -- the defining unit's name for `tid`, BORROWED, and "" when
@@ -34231,7 +34215,9 @@ emitC: function {
         opWords: (zast.Vocab.create block: opSpelling)
         nativeWords: (zast.Vocab.create block: nativeWord)
         svCalls: (IdMapV zast.nameid v: svcall)
-        nativeFragPaths: (MapRV String v: bool)
+        nativeFragPaths: (MapRV String v: u64)
+        methodRowPaths: (IdMapR ztypes.tid V: String)
+        methodRowsBound: false
         nativeConvMemb: (MapRV String v: bool)
         nativeArgMemb: (MapRV String v: bool)
         fragUnits: List String
@@ -37311,7 +37297,7 @@ bindFragTypeTids: function {symtab: zenv.ZSymbolTable.view ctx: Ctx ast: Ast.vie
                 :ast
                 st: symtab
                 unitDecl: uid
-                nameId: (zast.poolFind pool: ast.names text: tn.stringView)
+                nameId: (poolIdOf :ast text: tn.stringView)
             ).or
                 d: ztypes.tid.zero
             )
@@ -37632,15 +37618,6 @@ emitNetClasses: function {
 } is {
     emitNetFdClass :ast :symtab :ctx tid: ctx.netListenerTid :buf
     emitNetFdClass :ast :symtab :ctx tid: ctx.netConnTid :buf
-}
-
-# demandNetMember -- load the fragment of a Listener's native method, demanded as
-# `listener_<name>`. A Conn's methods load on the Conn itself (netConnLive), so a
-# Conn call demands nothing here.
-demandNetMember: function {ctx: Ctx tid: ztypes.tid member: StringView} is {
-    if tid != ctx.netListenerTid then return
-    lm: "listener_\{member}"
-    needsAddM :ctx uname: "net" memb: lm.stringView
 }
 
 # maybePreEmitElem -- a user type (variant/record/class/union) used as a
@@ -40838,12 +40815,13 @@ conformanceLabelFor: function {
     return res
 }
 
-# fileTypeIdOf -- the class type id `nid` stamps to when that class supplies
-# `mname` as a NATIVE member, else 0. A native member has no body to emit,
-# which is what makes the call a fragment call; the defining unit's name used
-# to stand in for that and admitted every type declared in the unit, so a user
-# unit spelled `cli` or `os` had its own bodied methods called as fragments.
-fileTypeIdOf: function {
+# nativeMethodOwnerOf -- the class type id `nid` stamps to when that class
+# supplies `mname` as a NATIVE member, else 0. A native member has no body to
+# emit, which is what makes the call a fragment call; the defining unit's name
+# used to stand in for that and admitted every type declared in the unit, so a
+# user unit spelled `cli` or `os` had its own bodied methods called as
+# fragments.
+nativeMethodOwnerOf: function {
     symtab: zenv.ZSymbolTable.view
     nid: zast.nodeid
     mnId: zast.nameid
@@ -40868,31 +40846,312 @@ fileTypeIdOf: function {
     return ztypes.tid.zero
 }
 
-# fileFromArgAddr -- the address of a file write's `from:` view, coerced from a
-# String where it is one (fileFromArgCoerce). A view with no address of its own
-# -- a call's result, `outbuf.byteView` -- is bound to a temporary first; a view
-# owns nothing, and a String source's own temporary is the coercion's, so this
-# one takes no node and owes no destroy.
-fileFromArgAddr: function {
+# poolIdOf -- the interned id of `text` in the program's name pool, 0 when the
+# program spells no such name
+poolIdOf: function {ast: Ast.view text: StringView} out zast.nameid is {
+    return (zast.poolFind pool: ast.names :text)
+}
+
+# bindMethodRows -- each fragment row whose path is `<unit>.<Class>.<method>`,
+# by the method's type id (ctx.methodRowPaths). Resolved once, the first time a
+# native method is called, so a call asks by id and never composes a key; a
+# path naming no unit, class or method in this program binds nothing.
+bindMethodRows: function {ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx} is {
+    if ctx.methodRowsBound then return
+    ctx.methodRowsBound = true
+    for each e: ctx.nativeFragPaths.iterateItems loop {
+        # split by position, viewing the key: every compile that reads a native
+        # member binds the table once, and copies only the rows it keeps
+        k: e.key.stringView
+        d1o: k.indexOf needle: "."
+        match (
+            d1o
+        ) case some then {
+            rest: k.substring from: d1o + 1 to: k.length
+            d2o: rest.indexOf needle: "."
+            match (
+                d2o
+            ) case some then {
+                mname: rest.substring from: d2o + 1 to: rest.length
+                if (mname.contains needle: ".").not then {
+                    (bindMethodRow
+                        :ast
+                        :symtab
+                        rows: ctx.methodRowPaths
+                        uname: (k.substring from: 0 to: d1o)
+                        cls: (rest.substring from: 0 to: d2o)
+                        :mname
+                        path: k
+                    )
+                }
+            } case none then null
+        } case none then null
+    }
+}
+
+# bindMethodRow -- one `<unit>.<Class>.<method>` row path, bound under the
+# method's type id when the program has that unit, class and method
+bindMethodRow: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    # the binding the row joins (ctx.methodRowPaths)
+    rows: (IdMapR ztypes.tid V: String).borrow
+    uname: StringView
+    cls: StringView
+    mname: StringView
+    path: StringView
+} is {
+    uid: unitDeclByName :symtab :ast name: uname
+    if uid.isZero then return
+    cid: ((ztypecheck.resolveUnitChildRo
+        :ast
+        st: symtab
+        unitDecl: uid
+        nameId: (poolIdOf :ast text: cls)
+    ).or
+        d: ztypes.tid.zero
+    )
+    if cid.isZero then return
+    mo: symtab.typing.declChildOfId parentTypeId: cid nameId: (poolIdOf :ast text: mname)
+    match (
+        mo
+    ) case some then {
+        rows.set key: mo value: path.string
+    } case none then null
+}
+
+# methodRowPath -- the path of the fragment row implementing method `mfid`
+# (bindMethodRows), "" when no fragment does
+methodRowPath: function {
+    ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx mfid: ztypes.tid
+} out String is {
+    bindMethodRows :ast :symtab :ctx
+    po: ctx.methodRowPaths.get key: mfid
+    match (
+        po
+    ) case some then {
+        return po.copy
+    } case none then null
+    return ""
+}
+
+# nativeMethodCallOpen -- `<class>_<method>(<receiver>`, the open call of a
+# native method's fragment function, which the caller closes after its
+# arguments
+nativeMethodCallOpen: function {fc: StringView mn: StringView recv: StringView} out String is {
+    return "\{fc}_\{mn}(\{recv}"
+}
+
+# demandNativeRow -- what calling the method the fragment row `row` (keyed
+# `key`) implements demands: its unit's runtime, and the row's own demands --
+# none for a `uses_<Type>` row, which loads with its type -- plus the runtime
+# its body `needs=`
+demandNativeRow: function {ctx: Ctx row: u64 key: StringView} is {
+    i: row - 1
+    u: (ctx.fragUnits.get :i).copy
+    needsAddM :ctx uname: u.stringView memb: "@unit"
+    if (ctx.fragTypeTids.get :i).isZero then {
+        dl: (ctx.fragMembs.get :i).copy
+        for each dm: (dl.stringView.split sep: ",") loop {
+            if dm.length > 0 then needsAddM :ctx uname: u.stringView memb: dm
+        }
+    }
+    rowNeedAdd :ctx :key
+}
+
+# nativeMethodArgForm -- how a native method's fragment takes a parameter of type
+# `pid`: a value view (a StringView, a ByteView or ListView, a StringLike
+# generic's view) by address, an owned collection by address, anything else by
+# value
+nativeMethodArgForm: function {
+    symtab: zenv.ZSymbolTable.view ctx: Ctx pid: ztypes.tid
+} out argform is {
+    if pid == ctx.svTid then return argform.viewed
+    if (
+        (symtab.reg.typetypeOf typeId: pid) == ztypes.ztypetype.genericParam
+    ) then return argform.viewed
+    ccm: chaseAggregateTypedef :symtab :ctx tid: pid
+    fam: originTidOf :symtab tid: ccm
+    if fam.isZero.not then {
+        if fam == (ctx.origins.get i: family.slot.listViewVal) then return argform.viewed
+        if fam == (ctx.origins.get i: family.slot.listView) then return argform.viewed
+        if (isCollectionOriginTid :ctx originTid: fam) then return argform.addressed
+    }
+    return argform.labelled
+}
+
+# emitClassNativeCall -- a call of a class's NATIVE method that a natives.tbl
+# fragment row implements: `<class>_<method>(&recv, args...)`, the receiver by
+# pointer and each argument as its parameter's type says (nativeMethodArgForm),
+# built in the order the arguments are written. The row decides, not the
+# member's name: a unit gaining a native method is a declaration, a row and a
+# fragment. "" for any other callee.
+emitClassNativeCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
+    facts: cfacts.borrow
+} out String is {
+    calr: ast.nodes.get i: call.callable
+    bn: dottedBaseAtom :ast n: calr
+    if bn.length == 0 then return ""
+    mnId: aliasChildNameId :ast :symtab n: calr
+    bnid: dottedBaseNodeId :ast n: calr
+    cid: nativeMethodOwnerOf :symtab nid: bnid :mnId
+    if cid.isZero then return ""
+    mtid: (symtab.typing.declChildOfId parentTypeId: cid nameId: mnId).or d: ztypes.tid.zero
+    if mtid.isZero then return ""
+    key: methodRowPath :ast :symtab :ctx mfid: mtid
+    row: nativeFragRow :ctx path: key.stringView
+    if row == 0 then return ""
+    demandNativeRow :ctx :row key: key.stringView
+    fc: ctxCname :ctx tid: cid
+    recvV0: atomVid :symtab nid: bnid
+    recv: aliasResolveAt :symtab :ctx nid: bnid name: bn vid: recvV0
+    recvV: ztypes.vid
+    if recv.stringView == bn then recvV = recvV0
+    recvC: emitLocalAtomNameAt :symtab :ctx nid: bnid name: bn vid: recvV0
+    recvExpr: "&\{recvC}"
+    if (isPtrVid :ctx vid: recvV) then recvExpr = recvC.take
+    pNames: List String
+    pIds: ListVal ztypes.tid
+    pNameIds: ListVal zast.nameid
+    recFieldLists :ast :symtab tid: mtid names: pNames ids: pIds nameIds: pNameIds
+    mn: zast.nameTextAt :ast ref: mnId
+    # the receiver is parameter 0; a method taking nothing else is a plain call
+    np: pNames.length
+    if np < 2 then {
+        c0: nativeMethodCallOpen fc: fc.stringView mn: mn.stringView recv: recvExpr.stringView
+        c0.append ")"
+        return (stating :facts from: callFacts text: c0)
+    }
+    # each argument into its parameter's slot, in the order they are written
+    na: np - 1
+    ord: orderBegin :ctx slots: na
+    nids: ListVal zast.nodeid
+    pos: ListVal u64
+    k: u64
+    for k < na loop {
+        lnid: ctorArgNodeByLabel :ast :call label: (pNameIds.get i: k + 1)
+        nids.append lnid
+        pos.append (writtenArgPosition :ast :call nid: lnid)
+        k = k + 1
+    }
+    placed: ListVal bool
+    k = 0
+    for k < na loop {
+        placed.append false
+        k = k + 1
+    }
+    done: u64
+    for done < na loop {
+        best: na
+        j: u64
+        for j < na loop {
+            if (placed.get i: j).not then {
+                if best == na then {
+                    best = j
+                } else if (pos.get i: j) < (pos.get i: best) then {
+                    best = j
+                }
+            }
+            j = j + 1
+        }
+        placed.set i: best val: true
+        (orderLabelArg
+            :ast
+            :symtab
+            :ctx
+            :call
+            label: (pNameIds.get i: best + 1)
+            form: (nativeMethodArgForm :symtab :ctx pid: (pIds.get i: best + 1))
+            nid: (nids.get i: best)
+            slot: best
+            :ord
+        )
+        done = done + 1
+    }
+    r: orderFinish :ctx st: ord
+    opened: r.length > 0
+    r.append (nativeMethodCallOpen fc: fc.stringView mn: mn.stringView recv: recvExpr.stringView)
+    s9: u64
+    for s9 < na loop {
+        r.append ", "
+        r.append (orderSlotText t: ctx st: ord slot: s9)
+        s9 = s9 + 1
+    }
+    r.append ")"
+    if opened then r.append ")"
+    orderEnd :ctx st: ord
+    return (stating :facts from: callFacts text: r)
+}
+
+# emitClassNativeRead -- a native method taking only its receiver, written as a
+# member read (`f.close`), that a fragment row implements:
+# `<class>_<method>(&recv)`. cli's classes keep their own legs. "" otherwise.
+emitClassNativeRead: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    cid: ztypes.tid
+    mnId: zast.nameid
+    # the method's own type
+    mfid: ztypes.tid
+    recv: StringView
+    recvVid: ztypes.vid
+    facts: cfacts.borrow
+} out String is {
+    if (symtab.reg.typetypeOf typeId: cid) != ztypes.ztypetype.classType then return ""
+    if (originTidOf :symtab tid: cid).isZero.not then return ""
+    if (defUnitIdOf :ctx tid: cid) == ctx.cliUnitDecl then return ""
+    key: methodRowPath :ast :symtab :ctx :mfid
+    row: nativeFragRow :ctx path: key.stringView
+    if row == 0 then return ""
+    pNames: List String
+    pIds: ListVal ztypes.tid
+    pNameIds: ListVal zast.nameid
+    recFieldLists :ast :symtab tid: mfid names: pNames ids: pIds nameIds: pNameIds
+    if pNames.length > 1 then return ""
+    demandNativeRow :ctx :row key: key.stringView
+    fc: ctxCname :ctx tid: cid
+    rexp: "&\{recv}"
+    if (isPtrVid :ctx vid: recvVid) then rexp = recv.string
+    c1: (nativeMethodCallOpen
+        fc: fc.stringView
+        mn: (zast.nameTextAt :ast ref: mnId).stringView
+        recv: rexp.stringView
+    )
+    c1.append ")"
+    return (stating :facts from: callFacts text: c1)
+}
+
+# viewArgAddr -- the address of a native method's value-view argument bound by
+# `label`, coerced from a String where it is one (viewArgCoerce). A view with no address of its own
+# -- a call's result, `outbuf.byteView` -- is bound to a temporary first; a view
+# owns nothing, and a String source's own temporary is the coercion's, so this
+# one takes no node and owes no destroy.
+viewArgAddr: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    call: zast.callrow.view
+    label: zast.nameid
+    facts: cfacts.borrow
 } out String is {
     fvF: cfacts
-    fv: ctorArgByLabelWith :ast :symtab :ctx :call label: zast.wellKnown.slot.wkFrom facts: fvF
+    fv: ctorArgByLabelWith :ast :symtab :ctx :call :label facts: fvF
     fvcF: cfacts
-    fvc: fileFromArgCoerce :ast :symtab :ctx :call av: fv.stringView avF: fvF facts: fvcF
+    fvc: viewArgCoerce :ast :symtab :ctx :call :label av: fv.stringView avF: fvF facts: fvcF
     # a compound literal (the String coercion's `(StringView){..}`) already has an
     # address; anything else is passed by reference as any argument is
-    if fvcF.literal then return "&\{fvc}"
-    fnid: ctorArgNodeByLabel :ast :call label: zast.wellKnown.slot.wkFrom
+    if fvcF.literal then return (stating :facts from: (addrFacts e: fvcF) text: "&\{fvc}")
+    fnid: ctorArgNodeByLabel :ast :call :label
     vt: (stampIdOf
         :symtab
         nid: (interpPartNodeId n: (ast.nodes.get i: fnid))
     )
     if vt == ctx.strTid then vt = ctx.svTid
-    byF: cfacts
     return (emitByrefArgWith
         :ast
         :symtab
@@ -40901,19 +41160,20 @@ fileFromArgAddr: function {
         avF: fvcF
         pid: vt
         argNid: zast.nodeid
-        facts: byF
+        :facts
     )
 }
 
-# fileFromArgCoerce -- the emitted `from:` argument of a file-method call,
-# projected to a by-value view when the arg is an owned String (TextWriter's
-# StringLike param; ByteView args pass through unchanged). A non-lvalue
+# viewArgCoerce -- the emitted value-view argument bound by `label`, projected
+# to a by-value view when the arg is an owned String (TextWriter's StringLike
+# param; ByteView args pass through unchanged). A non-lvalue
 # String temp hoists for scope-exit free.
-fileFromArgCoerce: function {
+viewArgCoerce: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
+    label: zast.nameid
     av: StringView
     avF: cfacts
     facts: cfacts.borrow
@@ -40925,7 +41185,7 @@ fileFromArgCoerce: function {
         fa: ast.nodes.get i: fa9Id
         if fa.namedoperation then {
             faOpNode: ast.nodes.get i: fa.operation
-            if fa.name == zast.wellKnown.slot.wkFrom then {
+            if fa.name == label then {
                 stampTid: (stampIdOf
                     :symtab
                     nid: (interpPartNodeId n: (ast.nodes.get i: fa.operation))
@@ -40962,115 +41222,6 @@ fileFromArgCoerce: function {
         }
     }
     return (stating :facts from: avF text: av.string)
-}
-
-# emitFileMethodCall -- a File method (close/read/write/seek/flush), native,
-# taking the receiver by pointer and collection args (Bytes/ByteView) by
-# pointer. "" for any non-File receiver.
-emitFileMethodCall: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    call: zast.callrow.view
-    facts: cfacts.borrow
-} out String is {
-    bn: dottedBaseAtom :ast n: (ast.nodes.get i: call.callable)
-    if bn.length == 0 then return ""
-    mn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable)
-    mnId: aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable)
-    isFM: (
-        (mnId == zast.wellKnown.slot.wkClose) or
-        (mnId == zast.wellKnown.slot.wkRead) or
-        (mnId == zast.wellKnown.slot.wkWrite) or
-        (mnId == zast.wellKnown.slot.wkSeek) or
-        (mnId == zast.wellKnown.slot.wkFlush) or
-        (mnId == zast.wellKnown.slot.wkWriteLine) or
-        (mnId == zast.wellKnown.slot.wkAccept)
-    )
-    if isFM.not then return ""
-    bnid: dottedBaseNodeId :ast n: (ast.nodes.get i: call.callable)
-    fid: fileTypeIdOf :symtab nid: bnid :mnId
-    if fid.isZero then return ""
-    fc: ctxCname :ctx tid: fid
-    recvV0: atomVid :symtab nid: bnid
-    recv: aliasResolveAt :symtab :ctx nid: bnid name: bn vid: recvV0
-    recvV: ztypes.vid
-    if recv.stringView == bn then recvV = recvV0
-    recvC: emitLocalAtomNameAt :symtab :ctx nid: bnid name: bn vid: recvV0
-    recvExpr: "&\{recvC}"
-    if (isPtrVid :ctx vid: recvV) then recvExpr = recvC.take
-    isNet: false
-    {
-        if (isNetUnitTid :symtab :ctx tid: fid) then isNet = true
-    }
-    if isNet then {
-        demandNetMember :ctx tid: fid member: mn
-    } else {
-        needsAddM :ctx uname: "io" memb: "@unit"
-        fmm: "file_\{mn}"
-        needsAddM :ctx uname: "io" memb: fmm.stringView
-    }
-    if mnId == zast.wellKnown.slot.wkAccept then {
-        if isNet.not then return ""
-        return (stating :facts from: callFacts text: "\{fc}_accept(\{recvExpr})")
-    }
-    if mnId == zast.wellKnown.slot.wkClose then return (stating
-        :facts
-        from: callFacts
-        text: "\{fc}_close(\{recvExpr})"
-    )
-    if mnId == zast.wellKnown.slot.wkFlush then return (stating
-        :facts
-        from: callFacts
-        text: "\{fc}_flush(\{recvExpr})"
-    )
-    if mnId == zast.wellKnown.slot.wkWrite then {
-        return (stating
-            :facts
-            from: callFacts
-            text: "\{fc}_write(\{recvExpr}, \{fileFromArgAddr :ast :symtab :ctx :call})"
-        )
-    }
-    if mnId == zast.wellKnown.slot.wkRead then {
-        return (stating :facts from: callFacts text: (emitOrderedPair
-            :ast
-            :symtab
-            :ctx
-            :call
-            cb: fc.stringView
-            m: "read"
-            lead: recvExpr.stringView
-            a: zast.wellKnown.slot.wkInto
-            aForm: argform.addressed
-            b: zast.wellKnown.slot.wkMax
-            bForm: argform.labelled
-        )
-        )
-    }
-    if mnId == zast.wellKnown.slot.wkSeek then {
-        return (stating :facts from: callFacts text: (emitOrderedPair
-            :ast
-            :symtab
-            :ctx
-            :call
-            cb: fc.stringView
-            m: "seek"
-            lead: recvExpr.stringView
-            a: zast.wellKnown.slot.wkTo
-            aForm: argform.labelled
-            b: zast.wellKnown.slot.wkFrom
-            bForm: argform.labelled
-        )
-        )
-    }
-    if mnId == zast.wellKnown.slot.wkWriteLine then {
-        return (stating
-            :facts
-            from: callFacts
-            text: "\{fc}_writeLine(\{recvExpr}, \{fileFromArgAddr :ast :symtab :ctx :call})"
-        )
-    }
-    return ""
 }
 
 # unitCreateMemberId -- the member X of a `<unit>.X.create` callable whose base
@@ -41759,7 +41910,7 @@ emitParsedMethodCall: function {
     )
     if isPM.not then return ""
     bnid: dottedBaseNodeId :ast n: (ast.nodes.get i: call.callable)
-    pid: fileTypeIdOf :symtab nid: bnid :mnId
+    pid: nativeMethodOwnerOf :symtab nid: bnid :mnId
     if pid.isZero then return ""
     if (
         pid != (unitClassTid :symtab unitDecl: ctx.cliUnitDecl nameId: zast.wellKnown.slot.tyParsed)
