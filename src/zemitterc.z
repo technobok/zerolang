@@ -11292,9 +11292,12 @@ argform: variant {
     # the address of the argument bound by its label, unless it is a pointer
     # already
     addressed: null
-    # a value view bound by its label, by address: a String is projected to its
-    # view first (viewArgAddr)
+    # a value view bound by its label, BY VALUE: a 16-byte {size, data} view is
+    # two registers, and a String is projected to its view (viewArgCoerce)
     viewed: null
+    # a ListView bound by its label, by address, a String projected first
+    # (viewArgAddr): the Writer protocol's ABI, until it takes views by value
+    viewAddressed: null
 }
 
 # emitOrderedPair -- `<cb>_<m>(lead, a, b)`: a native leg whose two labelled
@@ -11451,6 +11454,10 @@ labelArgText: function {
         )
         return (stating :facts from: (addrFacts e: avF) text: "&\{av}")
     } case viewed then {
+        vF: cfacts
+        v: ctorArgByLabelWith :ast :symtab :ctx :call :label facts: vF
+        return (viewArgCoerce :ast :symtab :ctx :call :label av: v.stringView avF: vF :facts)
+    } case viewAddressed then {
         return (viewArgAddr :ast :symtab :ctx :call :label :facts)
     }
 }
@@ -11464,7 +11471,7 @@ labelArgNode: function {
     if byLabel.isZero.not then return byLabel
     match (
         form
-    ) case labelled then return zast.nodeid case addressed then return zast.nodeid case viewed then return zast.nodeid case value then null case moved then null case read then null
+    ) case labelled then return zast.nodeid case addressed then return zast.nodeid case viewed then return zast.nodeid case viewAddressed then return zast.nodeid case value then null case moved then null case read then null
     return (ctorArgNodeByPosition :ast :call idx: 0)
 }
 
@@ -40960,9 +40967,11 @@ demandNativeRow: function {ctx: Ctx row: u64 key: StringView} is {
 }
 
 # nativeMethodArgForm -- how a native method's fragment takes a parameter of type
-# `pid`: a value view (a StringView, a ByteView or ListView, a StringLike
-# generic's view) by address, an owned collection by address, anything else by
-# value
+# `pid`. ONE C RULE, decided by the type: a value view (a StringView, a
+# StringLike generic's view) BY VALUE, as a free function's is -- `.view` is an
+# ownership marker, not a C convention; a ByteView or ListView by address until
+# the Writer protocol takes it by value; an owned collection by address;
+# anything else by value
 nativeMethodArgForm: function {
     symtab: zenv.ZSymbolTable.view ctx: Ctx pid: ztypes.tid
 } out argform is {
@@ -40973,8 +40982,8 @@ nativeMethodArgForm: function {
     ccm: chaseAggregateTypedef :symtab :ctx tid: pid
     fam: originTidOf :symtab tid: ccm
     if fam.isZero.not then {
-        if fam == (ctx.origins.get i: family.slot.listViewVal) then return argform.viewed
-        if fam == (ctx.origins.get i: family.slot.listView) then return argform.viewed
+        if fam == (ctx.origins.get i: family.slot.listViewVal) then return argform.viewAddressed
+        if fam == (ctx.origins.get i: family.slot.listView) then return argform.viewAddressed
         if (isCollectionOriginTid :ctx originTid: fam) then return argform.addressed
     }
     return argform.labelled
