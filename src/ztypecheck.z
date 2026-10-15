@@ -3753,6 +3753,8 @@ typeApplicationTemplate: function {
     callableNid: zast.nodeid
 } out ztypes.tid is {
     if (ast.nodes.get i: callableNid).dottedpath then {
+        im: instanceMemberTemplate :st :ast :unitDecl :scope :callableNid
+        if im.isZero.not then return im
         return (resolveDottedArgTid :st :scope :ast nid: callableNid)
     }
     return (monoRefTemplateTidById
@@ -3762,6 +3764,44 @@ typeApplicationTemplate: function {
         :unitDecl
         nameId: (typeApplicationHeadNameId :ast :callableNid)
     )
+}
+
+# instanceMemberTemplate -- a type application's head written through an
+# instance of a generic unit (`wi.pairs`, `(wrap t: i64).Cell`): the template
+# the instance's member names, whose application takes the unit's parameters
+# from that instance (bindInheritedParams). Written through the generic unit
+# itself (`wrap.pairs`), the template its own member names, which the
+# application refuses. 0 for any other head.
+instanceMemberTemplate: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    scope: ztypes.declid
+    callableNid: zast.nodeid
+} out ztypes.tid is {
+    q: applicationQualifier :st :ast :unitDecl :scope at: callableNid
+    # an instance (an origin, no parameters) or the generic unit itself
+    if q.isZero then return ztypes.tid.zero
+    isInstance: (st.reg.genericOriginOf tid: q).isZero.not
+    if (st.reg.isGenericOf tid: q) == isInstance then return ztypes.tid.zero
+    dr: dpRefAt :ast nid: callableNid
+    mn: atomNameId :ast n: (ast.nodes.get i: dr.child)
+    m: (st.typing.declChildOfId parentTypeId: q nameId: mn).or d: ztypes.tid.zero
+    # a unit the template declares is its declaration's member, resolved on
+    # demand
+    if m.isZero then {
+        qd: declOfTypeId :st tid: q
+        md: st.typing.declFindChild parentDeclId: qd nameId: mn
+        if md.isZero.not when (declTypeIdOf :st declId: md).isZero then (resolveDemandedDecl
+            :st
+            scope: qd
+            :ast
+            declId: md
+        )
+        m = declTypeIdOf :st declId: md
+    }
+    if m.isZero or (st.reg.isGenericOf tid: m).not then return ztypes.tid.zero
+    return m
 }
 
 # monoRefTemplateTid -- the template a mono type-reference names: a name the
@@ -3981,13 +4021,6 @@ bindInheritedParams: function {
 } out bool is {
     ud: st.typing.declParentOf declId: (declOfTypeId :st tid: tplId)
     if ud.isZero or (declIsUnitTemplate :st :ast declId: ud).not then return true
-    inherited: st.reg.genericParamNamesOf tdecl: ud
-    for each pw: inherited loop {
-        if (typeSubs.has key: pw) or (valSubs.has key: pw) then {
-            refuseInheritedParamWritten :st :ast :tplId :ud param: pw :at
-            return false
-        }
-    }
     via: applicationQualifier :st :ast :unitDecl :scope :at
     if via.isZero.not when (st.reg.genericOriginOf tid: via).isZero then {
         if (st.reg.isGenericOf tid: via) then {
@@ -3995,6 +4028,13 @@ bindInheritedParams: function {
             return false
         }
         via = ztypes.tid.zero
+    }
+    inherited: st.reg.genericParamNamesOf tdecl: ud
+    for each pw: inherited loop {
+        if (typeSubs.has key: pw) or (valSubs.has key: pw) then {
+            refuseInheritedParamWritten :st :ast :tplId :ud param: pw :at
+            return false
+        }
     }
     for each pn: inherited loop {
         bound: bindInheritedParam :st :ast :ud param: pn :via :walked :typeSubs :valSubs :sfx
@@ -4087,6 +4127,18 @@ qualifierUnitTid: function {
     ) case atomid then {
         nm: n.name
         n.drop
+        # only a name that may stand for a unit is resolved: an infix call's
+        # receiver (`B + 1`) is a value, and resolving a constant here would
+        # evaluate it out of turn
+        h: envLookup :st :scope nameId: nm
+        if h.declId.isZero.not then {
+            hk: (st.typing.decls.get i: h.declId).kind
+            if hk.unitDecl.not and hk.typeDecl.not when (declBindsUnitInstance
+                :st
+                :ast
+                declId: h.declId
+            ).not then return ztypes.tid.zero
+        }
         q = resolveAtomType :st :ast :unitDecl :scope nameId: nm thisName: ""
     } case dottedpath then {
         par: n.parent
@@ -4096,7 +4148,13 @@ qualifierUnitTid: function {
         if pq.isZero then return ztypes.tid.zero
         q = (st.typing.declChildOfId parentTypeId: pq nameId: chn).or d: ztypes.tid.zero
     } case call then {
+        ccal: n.callable
         n.drop
+        # only a call that applies a unit template names an instance
+        segs: ListVal zast.nameid
+        instCallablePath :ast op: (ast.nodes.get i: ccal) :segs
+        ctd: instTemplateDecl :st scopeDeclId: (unitScopeOf :st declId: scope) :segs
+        if ctd.isZero or (st.typing.decls.get i: ctd).kind.unitDecl.not then return ztypes.tid.zero
         q = (resolveMonoRefInline
             :st
             :ast
@@ -4110,6 +4168,30 @@ qualifierUnitTid: function {
     } else return ztypes.tid.zero
     if (st.reg.typetypeOf typeId: q) != ztypes.ztypetype.unitType then return ztypes.tid.zero
     return q
+}
+
+# declBindsUnitInstance -- a definition whose value instantiates a unit template
+# (`wi: (wrap t: i64)`), told by its shape as the instantiation collector tells
+# it, without resolving anything.
+declBindsUnitInstance: function {
+    st: zenv.ZSymbolTable.view ast: Ast.view declId: ztypes.declid
+} out bool is {
+    callable: zast.nodeid
+    {
+        dn: ast.nodes.get i: (st.typing.decls.get i: declId).node
+        if dn.namedoperation.not then return false
+        op: ast.nodes.get i: dn.operation
+        match (
+            op
+        ) case call then {
+            callable = op.callable
+        } else return false
+    }
+    segs: ListVal zast.nameid
+    instCallablePath :ast op: (ast.nodes.get i: callable) :segs
+    td: instTemplateDecl :st scopeDeclId: (st.typing.declParentOf :declId) :segs
+    if td.isZero then return false
+    return (st.typing.decls.get i: td).kind.unitDecl
 }
 
 # refuseInheritedLabel -- a construction of a template written in a generic unit
@@ -18900,6 +18982,14 @@ collectMainInstantiations: function {
                     segs: ListVal zast.nameid
                     callableInstPath :ast op: mop :segs
                     tdecl: instTemplateDecl :st :scopeDeclId :segs
+                    # a template written in a generic unit takes the unit's
+                    # parameters from the instance it is reached through, so it
+                    # is applied as a type is (bindInheritedParams)
+                    if tdecl.isZero.not when (declIsUnitTemplate
+                        :st
+                        :ast
+                        declId: (st.typing.declParentOf declId: tdecl)
+                    ) then continue
                     topId: instTemplateOpOf :st :ast declId: tdecl
                     tnId: zast.nameid
                     if segs.length > 0 then {
@@ -30947,6 +31037,48 @@ checkUnitMemberValue: function {
     return result
 }
 
+# readsUnboundGenericUnit -- a member read through the generic unit `tid`
+# itself, not an instance of it, from outside the declaration that owns its
+# parameters: nothing binds them there. A unit's own body, and a unit nested
+# in it (generic through it), read its members bare.
+readsUnboundGenericUnit: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
+    if (st.reg.isGenericOf :tid).not or (st.reg.genericOriginOf :tid).isZero.not then return false
+    owner: declOfTypeId :st :tid
+    for owner.isZero.not while (ownsTypeParams :st tid: (declTypeIdOf :st declId: owner)).not loop {
+        owner = st.typing.declParentOf declId: owner
+    }
+    if owner.isZero then return false
+    cur: st.curScope
+    for cur.isZero.not loop {
+        if cur == owner then return false
+        cur = st.typing.declParentOf declId: cur
+    }
+    return true
+}
+
+# refuseGenericUnitMemberRead -- a member read through the unit `bt` that
+# readsUnboundGenericUnit refuses, reported. True once reported.
+refuseGenericUnitMemberRead: function {
+    st: zenv.ZSymbolTable ast: Ast.view dp: dpref bt: ztypes.tid
+} out bool is {
+    if (st.reg.typetypeOf typeId: bt) != ztypes.ztypetype.unitType then return false
+    if (readsUnboundGenericUnit :st tid: bt).not then return false
+    un: st.reg.nameOf tid: bt
+    mn: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: dp.child))
+    (addErrorH
+        :st
+        nodeid: dp.parent
+        lineno: dp.lineno
+        colno: dp.colno
+        e: zast.err.genericError
+        msg: "'\{un}' is a generic unit: its contents are used through an instance of it"
+        note: ""
+        hint: "instantiate it first -- 'w: (\{un} ...)' -- and write 'w.\{mn}'"
+        width: un.length.u32.orPanic
+    )
+    return true
+}
+
 # checkUnitQualifiedMember -- `io.stdout`: the member resolves in that unit's
 # namespace, under the name the public interface exposes it by. Answers
 # handled: false when the base is not a unit type at all.
@@ -33077,6 +33209,7 @@ checkDottedOn: function {
     if aix.handled then return aix.tid
     dbm: checkDataBlockMember :st :unitDecl :ast :dp :bt :cnId :coerce
     if dbm.handled then return dbm.tid
+    if (refuseGenericUnitMemberRead :st :ast :dp :bt) then return ztypes.tid.zero
     uqm: checkUnitQualifiedMember :st :unitDecl :ast :dp :bt :cnId :coerce
     if uqm.handled then return uqm.tid
     # public-interface rename: from OUTSIDE the type, a public alias resolves
@@ -61105,7 +61238,13 @@ resolveCalledConstantDef: function {
             csg: ListVal zast.nameid
             instCallablePath :ast op: (ast.nodes.get i: defn.callable) segs: csg
             cdc: instTemplateDecl :st scopeDeclId: cscp segs: csg
-            if cdc.isZero.not then {
+            # a unit template written in a generic unit is applied as a type
+            # is, below (collectMainInstantiations)
+            if cdc.isZero.not when (declIsUnitTemplate
+                :st
+                :ast
+                declId: (st.typing.declParentOf declId: cdc)
+            ).not then {
                 cdo: st.typing.decls.get i: cdc
                 if cdo.kind.unitDecl then cbu = true
             }
