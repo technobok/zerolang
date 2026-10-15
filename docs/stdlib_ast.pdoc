@@ -92,10 +92,11 @@ Accessed via qualified names only -- #~"ast.parseSource ...",
 #--: parsesource
 
 
-Parse a single source string into a #~"Node" tree, in memory --
-no #~"ZVfs", no filesystem, no type checking. The result is a
-#~"Node.program" carrying the tree's #~"Ast" (the master node table
-plus the interned name pool) and wrapping one parsed unit.
+Parse a single source string into an #~"Ast", in memory -- no
+#~"ZVfs", no filesystem, no type checking. The #~"Ast" holds the
+master node table plus the interned name pool; its #~"root" names
+the #~"program" row, which wraps one parsed unit. A node is read
+from the table by id with #~"tree.nodes.get i: id".
 
 A #b:"syntax error does not fail" the call: the parser embeds a
 #~"Node.error" arm at the point of failure and keeps going, so a
@@ -103,8 +104,9 @@ tool can report every error in one pass. Walk the tree and collect
 the #~"error" arms to find them.
 
 #code language=zerolang: """
-  root: ast.parseSource source: src.copy
-  match (root) case program then { print "parsed" } else {}
+  tree: ast.parseSource source: src.copy
+  root: tree.nodes.get i: tree.root
+  match root case program then print "parsed" else null
 """
 
 
@@ -132,11 +134,16 @@ a #b:"name pool id" ([#> to=names: see Names]), not as text. Match on
 it to dispatch:
 
 #code language=zerolang: """
-  match (n)
-  case call then { ... n.callable ... n.arguments ... }
-  case dottedpath then { ... n.parent ... n.child ... }
-  case error then { ... n.msg ... n.err ... }
-  else {}
+  n: tree.nodes.get i: id
+  match (
+      n
+  ) case call then {
+      print "call with \{n.arguments.count} arguments"    # n.callable is the callee
+  } case dottedpath then {
+      print "path at line \{n.lineno}"    # n.parent / n.child are its two sides
+  } case error then {
+      print "syntax error at line \{n.lineno}"    # n.err is the kind, n.msg the text
+  } else null
 """
 
 
@@ -151,7 +158,7 @@ never carries either, so a #~"(ListVal u32)" of child ids mints at the
 read.
 
 
-The #~"program" node carries the tree's #~"Ast". Identifier text is
+The #~"Ast" holds the tree's name pool. Identifier text is
 #b:"interned": #~"atomid" / #~"labelvalue" arms hold a #~"nameid"
 pool id in #~"name" (the id indexes the pool; #~"0" is a sentinel row
 holding the empty text, so it reads as absent), and equal ids always
@@ -163,16 +170,16 @@ BORROWED view of the text -- allocation-free, and the binding pins its
 source for the scope.
 
 #code language=zerolang: """
-  root: ast.parseSource source: src.copy
-  match (root) case program then {
-      n: root.ast.nodes.get i: id.u64
-      match (n) case atomid then {
-          if (ast.nameTextEq ast: root.ast ref: n.name s: "main") then {
-              nm: ast.nameTextCopy ast: root.ast ref: n.name
-              print "found \{nm}"
-          }
-      } else {}
-  } else {}
+  tree: ast.parseSource source: src.copy
+  n: tree.nodes.get i: id
+  match (
+      n
+  ) case atomid then {
+      if (ast.nameTextEq ast: tree ref: n.name s: "main") then {
+          nm: ast.nameTextCopy ast: tree ref: n.name
+          print "found \{nm}"
+      }
+  } else null
 """
 
 Pool ids are #b:"per-parse": the pool hashes with a per-process

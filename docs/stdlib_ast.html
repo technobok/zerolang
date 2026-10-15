@@ -150,16 +150,18 @@ syntactic and does not resolve names or types.</p>
 <li><a href="#errors"><strong>errCode</strong></a> -- <code>function {c: err} out u32</code></li>
 </ul>
 <h2 id="parsesource"><a href="#parsesource">3. parsesource</a></h2>
-<p>Parse a single source string into a <code>Node</code> tree, in memory --
-no <code>ZVfs</code>, no filesystem, no type checking. The result is a
-<code>Node.program</code> carrying the tree's <code>Ast</code> (the master node table
-plus the interned name pool) and wrapping one parsed unit.</p>
+<p>Parse a single source string into an <code>Ast</code>, in memory -- no
+<code>ZVfs</code>, no filesystem, no type checking. The <code>Ast</code> holds the
+master node table plus the interned name pool; its <code>root</code> names
+the <code>program</code> row, which wraps one parsed unit. A node is read
+from the table by id with <code>tree.nodes.get i: id</code>.</p>
 <p>A <strong>syntax error does not fail</strong> the call: the parser embeds a
 <code>Node.error</code> arm at the point of failure and keeps going, so a
 tool can report every error in one pass. Walk the tree and collect
 the <code>error</code> arms to find them.</p>
-<pre><code class="language-zerolang">  root: ast.parseSource source: src.copy
-  match (root) case program then { print "parsed" } else {}</code></pre>
+<pre><code class="language-zerolang">  tree: ast.parseSource source: src.copy
+  root: tree.nodes.get i: tree.root
+  match root case program then print "parsed" else null</code></pre>
 <h2 id="parser"><a href="#parser">4. parser</a></h2>
 <p>The full parser. <code>parse</code> loads <code>mainUnitName</code> and every unit
 it references from the <code>vfs</code> and returns a <code>Node.program</code>
@@ -177,11 +179,16 @@ definitions (<code>program</code>, <code>unitdef</code>, <code>functiondef</code
 operand arms (<code>atomid</code>, <code>labelvalue</code>) store their identifier as
 a <strong>name pool id</strong> (<a href="#names">see Names</a>), not as text. Match on
 it to dispatch:</p>
-<pre><code class="language-zerolang">  match (n)
-  case call then { ... n.callable ... n.arguments ... }
-  case dottedpath then { ... n.parent ... n.child ... }
-  case error then { ... n.msg ... n.err ... }
-  else {}</code></pre>
+<pre><code class="language-zerolang">  n: tree.nodes.get i: id
+  match (
+      n
+  ) case call then {
+      print "call with \{n.arguments.count} arguments"    # n.callable is the callee
+  } case dottedpath then {
+      print "path at line \{n.lineno}"    # n.parent / n.child are its two sides
+  } case error then {
+      print "syntax error at line \{n.lineno}"    # n.err is the kind, n.msg the text
+  } else null</code></pre>
 <h2 id="names"><a href="#names">6. names</a></h2>
 <p>Two zero-overhead typedefs name the tree's id spaces, so one cannot
 stand in for the other: <code>nodeid</code> (a <code>u32</code> over the single monotonic
@@ -190,7 +197,7 @@ node space -- a <code>nodeid</code> indexes <code>Ast.nodes</code> directly, and
 same-space only and read their sentinel with <code>isZero</code>; a container
 never carries either, so a <code>(ListVal u32)</code> of child ids mints at the
 read.</p>
-<p>The <code>program</code> node carries the tree's <code>Ast</code>. Identifier text is
+<p>The <code>Ast</code> holds the tree's name pool. Identifier text is
 <strong>interned</strong>: <code>atomid</code> / <code>labelvalue</code> arms hold a <code>nameid</code>
 pool id in <code>name</code> (the id indexes the pool; <code>0</code> is a sentinel row
 holding the empty text, so it reads as absent), and equal ids always
@@ -200,16 +207,16 @@ allocating; <code>nameTextCopy</code> and <code>StringPool.get</code> return an 
 of the text (<code></code>'""' for ref 0); <code>nameTextAt</code> / <code>poolTextAt</code> return a
 BORROWED view of the text -- allocation-free, and the binding pins its
 source for the scope.</p>
-<pre><code class="language-zerolang">  root: ast.parseSource source: src.copy
-  match (root) case program then {
-      n: root.ast.nodes.get i: id.u64
-      match (n) case atomid then {
-          if (ast.nameTextEq ast: root.ast ref: n.name s: "main") then {
-              nm: ast.nameTextCopy ast: root.ast ref: n.name
-              print "found \{nm}"
-          }
-      } else {}
-  } else {}</code></pre>
+<pre><code class="language-zerolang">  tree: ast.parseSource source: src.copy
+  n: tree.nodes.get i: id
+  match (
+      n
+  ) case atomid then {
+      if (ast.nameTextEq ast: tree ref: n.name s: "main") then {
+          nm: ast.nameTextCopy ast: tree ref: n.name
+          print "found \{nm}"
+      }
+  } else null</code></pre>
 <p>Pool ids are <strong>per-parse</strong>: the pool hashes with a per-process
 seed, so ids must never be persisted or compared across two parses
 -- serialize the text instead.</p>

@@ -166,12 +166,22 @@ underlying #~"errno"; user code pattern-matches the specific
 arms it cares about and treats the rest as #~"other":
 
 #code language=zerolang: """
-  match (io.readText path: p)
-  case ok then handle ok
-  case err then match (err)
-      case notfound         then ...
-      case permissiondenied then ...
-      case other            then ...    # err.string available here
+  r: io.readText path: p
+  match (
+      r
+  ) case ok then {
+      print r
+  } case err then {
+      match (
+          r
+      ) case notfound then {
+          print "no such file"
+      } case permissiondenied then {
+          print "permission denied"
+      } case other then {
+          print r    # the error text
+      } else null
+  }
 """
 
 #b:"Arms summary."
@@ -319,20 +329,31 @@ across the protocol boundary.
 directly and rely on RAII:
 
 #code language=zerolang: """
-  match (io.open path: "in.txt" mode: (openmode.read null))
-  case ok then {
-      # use ok.read / ok.write / ok.seek ...
+  fr: io.open path: "in.txt" mode: openmode.read null
+  match (
+      fr
+  ) case ok then {
+      print "opened"    # read, write and seek through fr here
+  } case err then {
+      io.eprintln "cannot open in.txt"
   }
-  case err then ...
-  # destructor runs here; fd is closed
+  # fr's destructor runs here and closes the fd
 """
 
 Or make the close error surface explicit:
 
 #code language=zerolang: """
-  with f: io.open path: ... mode: ... do {
-      ...
-      match (f.close) case ok then {} case err then io.eprintln ...
+  fr: io.open path: "out.txt" mode: openmode.write
+  match (
+      fr
+  ) case ok then {
+      msg: Bytes
+      msg.append from: 104.u8    # 'h'
+      msg.append from: 105.u8    # 'i'
+      fr.write from: msg.byteView
+      match (fr.close) case ok then null case err then io.eprintln "close failed"
+  } case err then {
+      io.eprintln "cannot open out.txt"
   }
 """
 
@@ -344,12 +365,20 @@ Acquire a #~"File" handle at #~"Path" in the requested mode.
 The returned file owns its fd.
 
 #code language=zerolang: """
-  match (io.open path: "config.toml" mode: (openmode.read null))
-  case ok then parse ok
-  case err then match (err)
-      case notfound         then default config
-      case permissiondenied then ...
-      case other            then io.eprintln ...
+  fr: io.open path: "config.toml" mode: openmode.read null
+  match (
+      fr
+  ) case ok then {
+      print "parse it"
+  } case err then {
+      match (
+          fr
+      ) case notfound then {
+          print "using the default config"
+      } case permissiondenied then {
+          io.eprintln "config.toml is not readable"
+      } else null
+  }
 """
 
 
@@ -550,9 +579,13 @@ access at the source -- though it stays readable.
 
 #code language=zerolang: """
   w: io.stdout
-  bw: io.BufWriter.create to: w.borrow capacity: 16.u64
-  bw.write from: "hello, world\n".byteView
-  match (bw.flush) case ok then {} case err then io.eprintln "flush failed".stringView
+  bw: io.BufWriter.create to: w capacity: 16
+  msg: Bytes
+  msg.append from: 104.u8    # 'h'
+  msg.append from: 105.u8    # 'i'
+  msg.append from: 10.u8    # newline
+  bw.write from: msg.byteView
+  match (bw.flush) case ok then null case err then io.eprintln "flush failed"
 """
 
 

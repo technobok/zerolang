@@ -268,12 +268,22 @@ carry a <code>String</code> payload, and variants cannot hold reftypes.</p>
 <p>The runtime constructs the appropriate variant from the
 underlying <code>errno</code>; user code pattern-matches the specific
 arms it cares about and treats the rest as <code>other</code>:</p>
-<pre><code class="language-zerolang">  match (io.readText path: p)
-  case ok then handle ok
-  case err then match (err)
-      case notfound         then ...
-      case permissiondenied then ...
-      case other            then ...    # err.string available here</code></pre>
+<pre><code class="language-zerolang">  r: io.readText path: p
+  match (
+      r
+  ) case ok then {
+      print r
+  } case err then {
+      match (
+          r
+      ) case notfound then {
+          print "no such file"
+      } case permissiondenied then {
+          print "permission denied"
+      } case other then {
+          print r    # the error text
+      } else null
+  }</code></pre>
 <p><strong>Arms summary.</strong></p>
 <ul>
 <li><code>notfound</code> -- file / path does not exist (ENOENT)</li>
@@ -374,26 +384,45 @@ through the vtable by pointer so in-place mutation stays visible
 across the protocol boundary.</p>
 <p><strong>Lifetime.</strong> The typical idiom is to hold the <code>File</code>
 directly and rely on RAII:</p>
-<pre><code class="language-zerolang">  match (io.open path: "in.txt" mode: (openmode.read null))
-  case ok then {
-      # use ok.read / ok.write / ok.seek ...
+<pre><code class="language-zerolang">  fr: io.open path: "in.txt" mode: openmode.read null
+  match (
+      fr
+  ) case ok then {
+      print "opened"    # read, write and seek through fr here
+  } case err then {
+      io.eprintln "cannot open in.txt"
   }
-  case err then ...
-  # destructor runs here; fd is closed</code></pre>
+  # fr's destructor runs here and closes the fd</code></pre>
 <p>Or make the close error surface explicit:</p>
-<pre><code class="language-zerolang">  with f: io.open path: ... mode: ... do {
-      ...
-      match (f.close) case ok then {} case err then io.eprintln ...
+<pre><code class="language-zerolang">  fr: io.open path: "out.txt" mode: openmode.write
+  match (
+      fr
+  ) case ok then {
+      msg: Bytes
+      msg.append from: 104.u8    # 'h'
+      msg.append from: 105.u8    # 'i'
+      fr.write from: msg.byteView
+      match (fr.close) case ok then null case err then io.eprintln "close failed"
+  } case err then {
+      io.eprintln "cannot open out.txt"
   }</code></pre>
 <h2 id="open"><a href="#open">13. open</a></h2>
 <p>Acquire a <code>File</code> handle at <code>Path</code> in the requested mode.
 The returned file owns its fd.</p>
-<pre><code class="language-zerolang">  match (io.open path: "config.toml" mode: (openmode.read null))
-  case ok then parse ok
-  case err then match (err)
-      case notfound         then default config
-      case permissiondenied then ...
-      case other            then io.eprintln ...</code></pre>
+<pre><code class="language-zerolang">  fr: io.open path: "config.toml" mode: openmode.read null
+  match (
+      fr
+  ) case ok then {
+      print "parse it"
+  } case err then {
+      match (
+          fr
+      ) case notfound then {
+          print "using the default config"
+      } case permissiondenied then {
+          io.eprintln "config.toml is not readable"
+      } else null
+  }</code></pre>
 <h2 id="standard-streams"><a href="#standard-streams">14. Standard streams</a></h2>
 <p>Borrowed protocol handles over the three static POSIX fds (0 /
 1 / 2). Each call returns a fresh handle but the underlying fd
@@ -508,9 +537,13 @@ source writer cannot be written to, moved or dropped while
 the bufwriter is alive -- path-scoped locking rejects such
 access at the source -- though it stays readable.</p>
 <pre><code class="language-zerolang">  w: io.stdout
-  bw: io.BufWriter.create to: w.borrow capacity: 16.u64
-  bw.write from: "hello, world\n".byteView
-  match (bw.flush) case ok then {} case err then io.eprintln "flush failed".stringView</code></pre>
+  bw: io.BufWriter.create to: w capacity: 16
+  msg: Bytes
+  msg.append from: 104.u8    # 'h'
+  msg.append from: 105.u8    # 'i'
+  msg.append from: 10.u8    # newline
+  bw.write from: msg.byteView
+  match (bw.flush) case ok then null case err then io.eprintln "flush failed"</code></pre>
 <h2 id="bufreader"><a href="#bufreader">32. bufreader</a></h2>
 <p>Buffered adapter over any <code>Reader</code>. Issues exactly one source
 <code>read</code> per <code>capacity</code> bytes of data, regardless of how many
