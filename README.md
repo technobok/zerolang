@@ -246,6 +246,7 @@ file names the source file and commit it came from.
 |---|---|---|
 | [mimalloc](vendor/mimalloc) | MIT | statically, into the driver binaries; `make MIMALLOC=0` builds without it |
 | [Go math/big](lib/system/math/LICENSE-GO), ported to `lib/system/math/` | BSD-3-Clause | compiled into programs that reach `math` |
+| [SQLite](vendor/sqlite) | public domain | statically, into programs that reach `sqlite`; `zc` compiles it on demand into its object cache |
 | [tinycc](vendor/tinycc) | LGPL-2.1 | never. `zc` reaches `libtcc.so` through `dlopen` only, so no binary here is a combined work; `make static-tcc-guard` fails the build if a libtcc symbol appears in one |
 
 These licenses govern those components, not the rest of the project.

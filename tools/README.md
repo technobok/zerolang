@@ -15,4 +15,5 @@ says why.
 | Tool | Writes | Regenerate | Check |
 |---|---|---|---|
 | [asmgen](asmgen/asmgen.z) | `src/runtime/natives/_Z_MATH_ARITH_<ARCH>.inc`, math's word-vector kernels as GNU inline asm | `make regen-math-asm` | `make math-asm-guard` |
+| [vendor-sqlite](vendor-sqlite/vendor-sqlite.sh) | `vendor/sqlite/sqlite3.c` and `sqlite3.h`, a SQLite release's amalgamation, checked against its published SHA3-256 | `tools/vendor-sqlite/vendor-sqlite.sh VERSION YEAR SHA3` (vendor/sqlite/VERSION.md) | `make ci` (the sqlite drift guard and programs) |
 | [testgen](testgen/README.md) | math's table-driven fixtures under `tests/fixtures/emitc_corpus/math/`, their expected values from Python's exact arithmetic and Go's math/big tests | the script, by hand (testgen/README.md) | the fixtures are the corpus's own run cases |
