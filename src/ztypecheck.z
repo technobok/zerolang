@@ -32788,11 +32788,11 @@ checkTransferMarker: function {
                 blocked: relBlocked
             )
             if relBlocked.not then {
-                # a `.take` moved whole into a binding or a reassignment
-                # keeps its locks for that site to transfer; a `.drop`,
-                # and a take consumed anywhere else, releases them
-                keepL: false
-                if (isMoveMarkerId nameId: cnId) when st.typing.takeIntoBinding then keepL = true
+                # a `.take` moved whole into a place that disposes of its
+                # locks (takeKeepsLocksAt) keeps them for that place; a
+                # `.drop`, and a take consumed anywhere else, releases them
+                keepAt: st.typing.takeKeepsLocksAt
+                keepL: (isMoveMarkerId nameId: cnId) and keepAt.isZero.not and (dp.nid == keepAt)
                 if keepL.not then {
                     mh: ztypes.zlockholder.var mvo
                     st.releaseHeldLocks holder: mh
@@ -34318,11 +34318,15 @@ checkReturnCarries: function {
     if (typeIsReftype :st tid: argT).not then return
     an: ast.nodes.get i: arg.operation
     rbn: bareAtomNameId n: an
+    rvo: ztypes.vid
+    if rbn.isZero.not then rvo = (st.lookupVarId nameId: rbn).or d: ztypes.vid
+    # `return w.take`: the take kept w's locks for this check (checkMovedValueAt)
+    if rbn.isZero then {
+        rbn = takenBareName :ast nid: (valueCoreNid :ast nid: arg.operation)
+        if rbn.isZero.not then rvo = takenLocalVar :st :ast nid: arg.operation
+    }
     if rbn.isZero.not then {
-        rvo: st.lookupVarId nameId: rbn
-        match (
-            rvo
-        ) case some then {
+        if rvo.isZero.not then {
             held: List ztyping.PinPath
             (st.heldLockPaths
                 holder: ztypes.zlockholder.var rvo
@@ -34369,7 +34373,7 @@ checkReturnCarries: function {
                 # the callee's pins, which name these very parameters
                 st.releaseHeldLocks holder: ztypes.zlockholder.var rvo
             }
-        } case none then null
+        }
         return
     }
     if (reportReturnKeepsDyingStorage :st :ast :arg :an) then return
@@ -35567,14 +35571,9 @@ transferTakeIntoBinding: function {
     # the new binding's variable
     vid2: ztypes.vid
 } is {
-    if (pathLeafIsTake :ast n: (ast.nodes.get i: asgn.value)).not then return
     if (typeIsReftype :st tid: vt).not then return
-    tb5: markerPeeledBase :ast n: (ast.nodes.get i: asgn.value)
-    if tb5.length == 0 then return
-    td5: st.findLocal nameId: (nameIdOf :ast name: tb5.stringView)
-    if td5.isZero then return
-    tv5: st.typing.declLocalVarOf declId: td5
-    if tv5.u64 == 0 then return
+    tv5: takenLocalVar :st :ast nid: asgn.value
+    if tv5.isZero then return
     (transferHeldLocks
         :st
         :ast
@@ -35839,10 +35838,13 @@ stashArmValuePins: function {st: zenv.ZSymbolTable ast: Ast.view lineId: zast.no
     )
 }
 
-# checkMovedValueAt -- type the value of a binding or a reassignment. A
-# `w.take` written as the whole value keeps its locks for the site to
-# transfer rather than releasing them, which the take marker reads off
-# takeIntoBinding.
+# checkMovedValueAt -- type the value a place moves in whole: a binding or a
+# reassignment, or an owning place (a taking argument, an arm payload, a
+# returned value), walked as checkOwnedValueAt walks one. A `w.take` written as
+# the whole value keeps its locks for the place to move on -- transferHeldLocks
+# for a binding, moveHeldLocksIntoSlot for the others -- exactly as it would a
+# bare `w`'s, which the take marker reads off takeKeepsLocksAt: a take that
+# released them would let the value outlive what they lock.
 checkMovedValueAt: function {
     # the symbol table the moved value's locks are kept in
     st: zenv.ZSymbolTable
@@ -35852,12 +35854,45 @@ checkMovedValueAt: function {
     ast: Ast
     # the value node
     nid: zast.nodeid
+    # the place owns what it is handed (checkOwnedValueAt)
+    owning: bool
 } out ztypes.tid is {
-    prev: st.typing.takeIntoBinding
-    st.typing.takeIntoBinding = pathLeafIsTake :ast n: (ast.nodes.get i: nid)
-    vt: checkValueAt :st :unitDecl :ast :nid
-    st.typing.takeIntoBinding = prev
+    prev: st.typing.takeKeepsLocksAt
+    st.typing.takeKeepsLocksAt = takeNodeOf :ast :nid
+    vt: ztypes.tid
+    if owning then {
+        vt = checkOwnedValueAt :st :unitDecl :ast :nid
+    } else {
+        vt = checkValueAt :st :unitDecl :ast :nid
+    }
+    st.typing.takeKeepsLocksAt = prev
     return vt
+}
+
+# takeNodeOf -- the `w.take` node a value is, under its parentheses; zero when
+# the value is no whole-binding take
+takeNodeOf: function {ast: Ast.view nid: zast.nodeid} out zast.nodeid is {
+    cn: valueCoreNid :ast :nid
+    if (pathLeafIsTake :ast n: (ast.nodes.get i: cn)).not then return zast.nodeid
+    return cn
+}
+
+# takenNameText -- the name `w` of a value written `w.take`, as a report spells
+# it
+takenNameText: function {ast: Ast.view nid: zast.nodeid} out String is {
+    return (zast.nameTextCopy :ast ref: (takenBareName :ast nid: (valueCoreNid :ast :nid)))
+}
+
+# takenLocalVar -- the local a value written `w.take` moves out of, zero when
+# the value is not one: the variable whose locks the take kept for its place.
+takenLocalVar: function {
+    st: zenv.ZSymbolTable.view ast: Ast.view nid: zast.nodeid
+} out ztypes.vid is {
+    tn: takenBareName :ast nid: (valueCoreNid :ast :nid)
+    if tn.isZero then return ztypes.vid
+    td: st.findLocal nameId: tn
+    if td.isZero then return ztypes.vid
+    return (st.typing.declLocalVarOf declId: td)
 }
 
 # refuseValueBorrow -- `.borrow` on a VALUE type where the value is copied: a
@@ -36011,7 +36046,7 @@ checkAssignment: function {
     # arms may leave
     outerForm: st.typing.formValueNid
     st.typing.formValueNid = asgn.value
-    vt: checkMovedValueAt :st :unitDecl :ast nid: asgn.value
+    vt: checkMovedValueAt :st :unitDecl :ast nid: asgn.value owning: false
     st.typing.formValueNid = outerForm
     mvt: materialiseLiteral :ast :st t: vt
     vt = mvt
@@ -36499,7 +36534,7 @@ checkReassignment: function {
     addressable: isAddressableTarget :ast :st nid: rasgn.topath
     if st.typing.errors.length == errL0 when addressable.not then {
         reportNotAddressable :st :ast target: rasgn.topath write: "reassignment"
-        checkMovedValueAt :st :unitDecl :ast nid: rasgn.value
+        checkMovedValueAt :st :unitDecl :ast nid: rasgn.value owning: false
         return
     }
     # `h = y.hold`: a hold binding rebinds only when the marker is written
@@ -36561,7 +36596,7 @@ checkReassignment: function {
     owPrev: st.typing.owningValueNid
     st.typing.owningValueNid = valueCoreNid :ast nid: rasgn.value
     promoteStringLiteral :st :ast nid: rasgn.value destTid: lvt
-    rvt: checkMovedValueAt :st :unitDecl :ast nid: rasgn.value
+    rvt: checkMovedValueAt :st :unitDecl :ast nid: rasgn.value owning: false
     st.typing.owningValueNid = owPrev
     # a value that resolved to nothing and raised nothing: an unresolvable
     # root name is an unknown reference, as at a binding
@@ -38631,6 +38666,25 @@ forValueNode: function {
     }
 }
 
+# forTakeNode -- the `w.take` a `for` body ends on, read off the tree before the
+# walk types it (forValueNode asks the types); zero when it ends on anything
+# else
+forTakeNode: function {ast: Ast.view block: astnode.view} out zast.nodeid is {
+    match (
+        block
+    ) case statement then {
+        ne: block.statements.count.u64
+        if ne == 0 then return zast.nodeid
+        last: ast.nodes.get i: (zast.kidAt kids: ast.kids span: block.statements i: ne - 1)
+        innerId: zast.nodeid
+        if last.statementline then innerId = last.statementline
+        if innerId.isZero then return innerId
+        return (takeNodeOf :ast nid: innerId)
+    } else {
+        return (takeNodeOf :ast nid: (nodeId n: block))
+    }
+}
+
 # checkComprehensionValue -- A FOR-EXPRESSION APPENDS ITS BODY'S VALUE, so that
 # value answers to `.append`'s own contract: a reftype element is TAKEN
 # (`ListRef.append from: T.take`) and a valtype is COPIED (`ListVal.append
@@ -38684,6 +38738,26 @@ checkComprehensionValue: function {
             )
             return
         } case none then null
+    }
+    # a `w.take` kept its locks for this place (forTakeNode): they have nowhere
+    # to go, as a bare `w`'s have none
+    tkv9: takenLocalVar :st :ast nid: vnid9
+    if tkv9.isZero.not then {
+        tkn9: takenNameText :ast nid: vnid9
+        tkrecv9: ztypes.vid
+        tkpins9: List ztyping.PinPath
+        (moveHeldLocksIntoSlot
+            :st
+            :ast
+            name: tkn9.stringView
+            vid: tkv9
+            recvVid: tkrecv9
+            calleePins: false
+            pins: tkpins9
+            nodeid: vnid9
+            lineno: (nodeLine n: vn9)
+            colno: (nodeCol n: vn9)
+        )
     }
     errM9: st.typing.errors.length
     refuseBorrowedTake :st :ast n: vn9 vt: elemT
@@ -38865,7 +38939,14 @@ checkFor: function {
     # inside the header's C extent -- the header's destroys are emitted after
     # it -- so listing the header's locals at the break frees them twice.
     st.openBreakScope
+    # a comprehension APPENDS its element, so a `w.take` there keeps its locks
+    # for checkComprehensionValue to dispose of as a bare `w`'s
+    keepPrev: st.typing.takeKeepsLocksAt
+    if fornode.body.isZero.not when (st.typing.stmtBlocks.has item: fornode.body).not then {
+        st.typing.takeKeepsLocksAt = forTakeNode :ast block: (ast.nodes.get i: fornode.body)
+    }
     walkBodyAt :st :unitDecl :ast bodyId: fornode.body
+    st.typing.takeKeepsLocksAt = keepPrev
     elemT: ztypes.tid
     # a body whose last statement DIVERGES -- a bare `return`, a return call,
     # a panic -- yields nothing, and the loop is a statement, not a
@@ -40525,38 +40606,69 @@ consumeBareArgOwnership: function {
                 msg: mb7
             )
         } else {
-            # the value's locks follow it: into the receiver when there is
-            # one, into the result when the callee's result holds the value,
-            # and nowhere otherwise -- which refuses the move
-            if recvVid.isZero.not then {
-                (transferHeldLocks
-                    :st
-                    :ast
-                    from: vid
-                    to: recvVid
-                    verb: "into a taking argument"
-                    :nodeid
-                    :lineno
-                    :colno
-                )
-            } else if calleePins then {
-                carryHeldLocks :st from: vid :pins
-            } else {
-                heldN: List ztyping.PinPath
-                (st.heldLockPaths
-                    holder: ztypes.zlockholder.var vid
-                    dst: heldN
-                )
-                if heldN.length > 0 then {
-                    rn7: zast.nameTextAt :ast ref: (pinRootAt pins: heldN i: 0)
-                    m7: "Cannot move '\{name}' into a taking argument: it holds locks on '\{rn7}' and the callee is not `outx`, so the locks have nowhere to go; copy it first (`.copy`)"
-                    addError :st :nodeid :lineno :colno e: zast.err.ownerError msg: m7
-                }
-            }
+            (moveHeldLocksIntoSlot
+                :st
+                :ast
+                :name
+                :vid
+                :recvVid
+                :calleePins
+                :pins
+                :nodeid
+                :lineno
+                :colno
+            )
             (st.invalidate
                 nameId: (nameIdOf :ast :name)
                 loc: takenHere
             )
+        }
+    }
+}
+
+# moveHeldLocksIntoSlot -- a value moving into an owning place takes the locks
+# it holds along: into the receiver when there is one, into the result when
+# the callee's result holds the value, and nowhere otherwise -- which refuses
+# the move. A bare `w` and a `w.take` (whose take kept them) both come here.
+moveHeldLocksIntoSlot: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    # the moved value's name, as the report spells it
+    name: StringView
+    vid: ztypes.vid
+    # the receiver the value moves into (`xs.append w`), zero when none
+    recvVid: ztypes.vid
+    # the callee's result will hold the value (an `outx` callee, a construction)
+    calleePins: bool
+    # the call's pins, which locks the value carries join
+    pins: List ztyping.PinPath
+    nodeid: zast.nodeid
+    lineno: u32
+    colno: u32
+} is {
+    if recvVid.isZero.not then {
+        (transferHeldLocks
+            :st
+            :ast
+            from: vid
+            to: recvVid
+            verb: "into a taking argument"
+            :nodeid
+            :lineno
+            :colno
+        )
+    } else if calleePins then {
+        carryHeldLocks :st from: vid :pins
+    } else {
+        heldN: List ztyping.PinPath
+        (st.heldLockPaths
+            holder: ztypes.zlockholder.var vid
+            dst: heldN
+        )
+        if heldN.length > 0 then {
+            rn7: zast.nameTextAt :ast ref: (pinRootAt pins: heldN i: 0)
+            m7: "Cannot move '\{name}' into a taking argument: it holds locks on '\{rn7}' and the callee is not `outx`, so the locks have nowhere to go; copy it first (`.copy`)"
+            addError :st :nodeid :lineno :colno e: zast.err.ownerError msg: m7
         }
     }
 }
@@ -41410,20 +41522,26 @@ pinCallResult: function {
         }
     } else {
         # the locks a moved-in argument carried travel to the result whatever
-        # the callee declares: the value that held them lives in it now
-        anyC: false
-        for each p2: pins loop {
-            if p2.carried then {
-                pinsPush :st path: p2.path shared: p2.shared mutable: p2.mutable alias: p2.alias
-                anyC = true
-            }
-        }
-        if anyC then st.typing.pendingBorrowOwned = true
+        # the callee declares
+        pushCarriedPins :st :pins
     }
     # `hold`: owned and READONLY with no pin, so it is set after the drain
     if ((st.typing.funcReturnsFrozen.get key: funcId).or d: false) then {
         st.typing.pendingBorrowFrozen = true
     }
+}
+
+# pushCarriedPins -- the locks moved-in values carried travel to the result
+# being built: the value that held them lives in it now.
+pushCarriedPins: function {st: zenv.ZSymbolTable pins: (List ztyping.PinPath).view} is {
+    anyC: false
+    for each p2: pins loop {
+        if p2.carried then {
+            pinsPush :st path: p2.path shared: p2.shared mutable: p2.mutable alias: p2.alias
+            anyC = true
+        }
+    }
+    if anyC then st.typing.pendingBorrowOwned = true
 }
 
 # installBorrowLocks -- SHARED on every path prefix, the pin's own strength on
@@ -44472,6 +44590,24 @@ checkTypedCallArg: function {
         }
     }
     if isTake then moveArmLeavesIntoArgument :st :ast :arg :recvVid :calleePins :pins
+    # a `w.take` kept its locks for this place (checkMovedValueAt): they go
+    # where a bare `w`'s go
+    tkv: takenLocalVar :st :ast nid: arg.operation
+    if tkv.isZero.not then {
+        tkn: takenNameText :ast nid: arg.operation
+        (moveHeldLocksIntoSlot
+            :st
+            :ast
+            name: tkn.stringView
+            vid: tkv
+            :recvVid
+            :calleePins
+            :pins
+            nodeid: arg.nid
+            lineno: arg.lineno
+            colno: arg.colno
+        )
+    }
     (hoistAndLockArg
         :st
         :ast
@@ -44590,7 +44726,7 @@ walkOneCallArg: function {
             )
             st.typing.suppressBareCtor = isTypeArg
             if (argSlotOwns :st :effId :funcId :isCtor :recvImplicit :argIdx :arg) then {
-                vt = checkOwnedValueAt :st :unitDecl :ast nid: arg.operation
+                vt = checkMovedValueAt :st :unitDecl :ast nid: arg.operation owning: true
             } else {
                 vt = checkValueAt :st :unitDecl :ast nid: arg.operation
             }
@@ -46241,7 +46377,7 @@ checkReturnedValue: function {
     if st.typing.currentReturnsBorrow then {
         argT = checkValueAt :st :unitDecl :ast nid: arg.operation
     } else {
-        argT = checkOwnedValueAt :st :unitDecl :ast nid: arg.operation
+        argT = checkMovedValueAt :st :unitDecl :ast nid: arg.operation owning: true
     }
     # A returned value that typed to nothing and raised nothing is an
     # unresolvable name -- but ONLY where this walk knows the enclosing
@@ -47088,45 +47224,18 @@ checkGenericTypeCall: function {
                         from: (typeArgTid :st :ast :unitDecl opId: farg.operation baseId: etn)
                     )
                 } else {
-                    avt2: checkValueAt :st :unitDecl :ast nid: farg.operation
+                    avt2: checkMovedValueAt :st :unitDecl :ast nid: farg.operation owning: true
                     mvt2: materialiseLiteral :ast :st t: avt2
                     subT = mvt2
-                    fpbn: (bareAtomName
-                        :ast
-                        n: (ast.nodes.get i: farg.operation)
-                    )
-                    if fpbn.length > 0 when (typeIsReftype
+                    (movePayloadIntoArm
                         :st
-                        tid: mvt2
-                    ) then {
-                        fpvo: st.lookupVarId nameId: (nameIdOf
-                            :ast
-                            name: fpbn.stringView
-                        )
-                        match (
-                            fpvo
-                        ) case some then {
-                            carryF: List ztyping.PinPath
-                            (consumeBareArgOwnership
-                                :st
-                                :ast
-                                name: fpbn.stringView
-                                vid: fpvo
-                                recvVid: ztypes.vid
-                                calleePins: true
-                                pins: carryF
-                                nodeid: farg.nid
-                                lineno: farg.lineno
-                                colno: farg.colno
-                            )
-                            (stampArgDisposition
-                                :st
-                                :ast
-                                op: farg.operation
-                                own: ztypes.zparamownership.takeMode
-                            )
-                        } case none then null
-                    }
+                        :ast
+                        op: farg.operation
+                        vt: mvt2
+                        nodeid: farg.nid
+                        lineno: farg.lineno
+                        colno: farg.colno
+                    )
                 }
             }
         }
@@ -47159,6 +47268,52 @@ checkGenericTypeCall: function {
     return (callleg handled: false tid: result)
 }
 
+# movePayloadIntoArm -- an arm stores its payload OWNED: a bare-name reftype
+# payload moves in, and a `w.take` one has already moved. Either way the locks
+# the value held now belong to the value being built, which keeps them as a
+# construction keeps a moved-in field's (pushCarriedPins).
+movePayloadIntoArm: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    # the payload's value node
+    op: zast.nodeid
+    # the payload's type
+    vt: ztypes.tid
+    nodeid: zast.nodeid
+    lineno: u32
+    colno: u32
+} is {
+    if vt.isZero then return
+    if (typeIsReftype :st tid: vt).not then return
+    carry: List ztyping.PinPath
+    bn: bareAtomNameId n: (ast.nodes.get i: op)
+    if bn.isZero.not then {
+        bvo: st.lookupVarId nameId: bn
+        match (
+            bvo
+        ) case some then {
+            bnT: zast.nameTextAt :ast ref: bn
+            (consumeBareArgOwnership
+                :st
+                :ast
+                name: bnT.stringView
+                vid: bvo
+                recvVid: ztypes.vid
+                calleePins: true
+                pins: carry
+                :nodeid
+                :lineno
+                :colno
+            )
+            stampArgDisposition :st :ast :op own: ztypes.zparamownership.takeMode
+        } case none then null
+    } else {
+        tkv: takenLocalVar :st :ast nid: op
+        if tkv.isZero.not then carryHeldLocks :st from: tkv pins: carry
+    }
+    pushCarriedPins :st pins: carry
+}
+
 # checkTaggedCtorArg -- one argument of a tagged-type constructor: check it
 # against the field or arm it fills, and take the ownership that field declares.
 checkTaggedCtorArg: function {
@@ -47185,45 +47340,16 @@ checkTaggedCtorArg: function {
                 msg: uum
             )
         }
-        uvt: checkOwnedValueAt :st :unitDecl :ast nid: arg2.operation
-        # the arm stores its payload OWNED: a
-        # bare-name reftype payload transfers
-        upbn: (bareAtomName
-            :ast
-            n: (ast.nodes.get i: arg2.operation)
-        )
-        if upbn.length > 0 when uvt.isZero.not when (typeIsReftype
+        uvt: checkMovedValueAt :st :unitDecl :ast nid: arg2.operation owning: true
+        (movePayloadIntoArm
             :st
-            tid: uvt
-        ) then {
-            upvo: st.lookupVarId nameId: (nameIdOf
-                :ast
-                name: upbn.stringView
-            )
-            match (
-                upvo
-            ) case some then {
-                carryU: List ztyping.PinPath
-                (consumeBareArgOwnership
-                    :st
-                    :ast
-                    name: upbn.stringView
-                    vid: upvo
-                    recvVid: ztypes.vid
-                    calleePins: true
-                    pins: carryU
-                    nodeid: arg2.nid
-                    lineno: arg2.lineno
-                    colno: arg2.colno
-                )
-                (stampArgDisposition
-                    :st
-                    :ast
-                    op: arg2.operation
-                    own: ztypes.zparamownership.takeMode
-                )
-            } case none then null
-        }
+            :ast
+            op: arg2.operation
+            vt: uvt
+            nodeid: arg2.nid
+            lineno: arg2.lineno
+            colno: arg2.colno
+        )
         uparmo: (st.typing.declChildOfId
             parentTypeId: dtp
             nameId: unionCtorArmId
