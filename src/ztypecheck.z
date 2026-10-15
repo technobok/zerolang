@@ -21089,6 +21089,12 @@ mintUnitMonoOf: function {
     tplT9: zast.poolTextAt pool: ast.names ref: r.tmplId
     unitMonoJoinTrie :st tplTid: templateTid tplName: tplT9.stringView :args monoId: mono
     tplT9.drop
+    # sited at the instantiation, which an error in its walk names
+    if r.callId.isZero.not then {
+        n: ast.nodes.get i: r.callId
+        ms: ztyping.monosite lineno: (nodeLine :n) colno: (nodeCol :n) unitDecl: r.declUnit
+        st.typing.monoSite.set key: mono value: ms
+    }
     # the numeric arguments are recorded where they are keyed: a constant of the
     # instance may be read before its completion pass records the rest
     for each a: args loop st.reg.appendGenericArg specId: mono arg: a
@@ -55575,8 +55581,8 @@ noteInstanceErrors: function {st: zenv.ZSymbolTable ast: Ast.view mono: ztypes.t
 }
 
 # instanceNote -- "in the instance of `edgeOf` with T = Circ, instantiated at
-# app.z line 14": the template, each type argument, and the first
-# instantiating call when a call made it.
+# app.z line 14": the template, each argument -- a type or a numeric value --
+# and the first instantiating call when a call made it.
 instanceNote: function {st: zenv.ZSymbolTable.view ast: Ast.view mono: ztypes.tid} out String is {
     org: st.reg.genericOriginOf tid: mono
     tn: specWrittenName :st :ast tid: org
@@ -55585,13 +55591,18 @@ instanceNote: function {st: zenv.ZSymbolTable.view ast: Ast.view mono: ztypes.ti
     n: st.reg.genericArgCount specId: mono
     i: u64
     sep: " with ".string
-    for i < n loop {
-        at: st.reg.genericTypeArgAt specId: mono ordinal: i
-        if at.isZero.not when i < pnames.length then {
-            pn: zast.nameTextAt :ast ref: (pnames.get :i)
-            an: st.reg.nameOf tid: at
+    tdecl: declOfTypeId :st tid: org
+    for i < n while i < pnames.length loop {
+        pnm: pnames.get :i
+        an: (instanceArgText
+            :st
+            :mono
+            ordinal: i
+            cd: (st.reg.genericParamConstraintOf :tdecl paramName: pnm)
+        )
+        if an.length > 0 then {
             r.append sep
-            r.append pn
+            r.append (zast.nameTextAt :ast ref: pnm)
             r.append " = "
             r.append an
             sep = ", "
@@ -55608,6 +55619,30 @@ instanceNote: function {st: zenv.ZSymbolTable.view ast: Ast.view mono: ztypes.ti
         r.append at
     } case none then null
     return r
+}
+
+# instanceArgText -- the argument the instance `mono` took at `ordinal`, whose
+# parameter's constraint is `cd`, as instanceNote spells it: a type by its name,
+# a numeric value in decimal, with its sign when the parameter's kind has one.
+# "" for none.
+instanceArgText: function {
+    st: zenv.ZSymbolTable.view
+    mono: ztypes.tid
+    ordinal: u64
+    cd: ztypes.constraintdesc
+} out String is {
+    vg: st.reg.genericValueArgAt specId: mono :ordinal
+    match (
+        vg
+    ) case some then {
+        if cd.numKind.has when (ztypes.isSignedIntKind k: cd.numKind.kind) when (
+            vg > 9223372036854775807
+        ) then return "-\{ztypes.absI64 v: (ztypes.bitsI64 b: vg)}"
+        return "\{vg}"
+    } case none then null
+    at: st.reg.genericTypeArgAt specId: mono :ordinal
+    if at.isZero then return ""
+    return (st.reg.nameOf tid: at)
 }
 
 # recordMintedBy -- every type id minted since `minted` was minted by the walk
@@ -55879,6 +55914,7 @@ walkUnitMonoFns: function {
     monoId: ztypes.tid
 } is {
     minted: st.reg.nextTid
+    errU0: st.typing.errors.length
     monoNm: st.reg.nameOf tid: monoId
     prevSup: st.typing.suppressParamStamps
     st.typing.suppressParamStamps = true
@@ -55964,6 +56000,7 @@ walkUnitMonoFns: function {
     st.typing.monoParamSubst = IdMapV ztypes.tid v: ztypes.tid
     st.pop
     recordMintedBy :st :monoId :minted
+    noteInstanceErrors :st :ast mono: monoId from: errU0
 }
 
 # stampUnitNestedMethods -- the instance walk of the methods each type a generic
