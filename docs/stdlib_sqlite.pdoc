@@ -1,0 +1,488 @@
+#doc.lang: en
+
+#//: Zerolang Standard Library: sqlite
+
+#doc.title: Zerolang Standard Library -- sqlite
+#doc.content type=main id=content
+#doc.heading.number level=4
+#doc.heading.anchor level=4
+#doc.link rel=stylesheet href=style/zerolang.css
+#doc.link rel=icon type=image/png sizes=192x192 href=style/favicon-192x192.png
+#doc.link rel=icon type=image/x-icon href=style/favicon-48x48.ico
+#doc.link rel=icon type=image/png sizes=32x32 href=style/favicon-32x32.png
+#doc.link rel=icon type=image/png sizes=16x16 href=style/favicon-16x16.png
+
+#doc.script src=style/tocbot.min.js
+#doc.script src=style/init.js
+#doc.script src=style/prism.min.js
+#doc.script src=style/prism-zerolang.js
+#doc.author: pw <p@zerolang.org>
+#doc.datecreated: 2026-10-16
+#doc.version: v0.1
+
+#doc.body class=toc-sidebar
+#nav id=nav: [#include literal=true: style/nav.html]
+
+#header:
+  #-: sqlite
+
+#nav id=toc class=toc-sidebar:
+  #div id=tocfile: Table of Contents
+  #doc.toc
+
+
+#--: Overview
+
+The declarations themselves live in #~"lib/system/sqlite.z", which is the one
+place they are written. Every definition, field, arm and parameter there
+carries its own doc comment, and #~"zls" surfaces each on hover. This page is
+the prose and the worked examples -- read it for how the unit is meant to be
+used, and the source for the exact surface.
+
+The #~"sqlite" unit is SQLite -- the library, version 3.54.0, vendored in
+#~"vendor/sqlite" -- with an API modelled on Rust's #~"rusqlite": a
+#~"Database" you open, #~"Statement"s you prepare on it, the #~"Row"s they
+step through, and #~"Transaction"s. A program that reaches the unit has the
+library compiled into it and linked statically (see
+[#> to=building: Building]), so nothing need be installed to
+build or run it.
+
+Accessed via qualified names only -- #~"sqlite.openMemory",
+#~"sqlite.Database"; there is no unqualified re-export.
+
+#code language=zerolang: """
+  main: function is {
+      db: sqlite.openMemory
+      if db.err then return
+      r: db.executeBatch sql: "create table person(id integer primary key, name text not null, age integer)"
+      if r.err then return
+      ins: db.prepare sql: "insert into person(name, age) values (?1, ?2)"
+      if ins.err then return
+      ins.bindText parameter: 1 value: "Ada"
+      ins.bindInteger parameter: 2 value: 36
+      n: ins.execute
+      if n.ok then print "inserted \{n} row, rowid \{db.lastInsertRowid}"
+      ins.bindText parameter: 1 value: "Grace"
+      ins.bindNull parameter: 2
+      n2: ins.execute
+      if n2.err then print "insert failed: \{n2.message}"
+      q: db.prepare sql: "select name, age from person order by id"
+      if q.err then return
+      going: true
+      for going loop {
+          s: q.step
+          match (
+              s
+          ) case row then {
+              name: s.text column: 0
+              age: s.integer column: 1
+              match (
+                  name
+              ) case ok then {
+                  match (age) case ok then print "\{name} is \{age}" case err then print "\{name}, age unknown"
+              } case err then print "no name"
+          } case done then {
+              going = false
+          } case err then {
+              print "step failed: \{s.message}"
+              going = false
+          }
+      }
+  }
+"""
+
+which prints
+
+#code: """
+  inserted 1 row, rowid 1
+  Ada is 36
+  Grace, age unknown
+"""
+
+#b:"Errors are values." Every call that can fail answers a #~"Result" or a
+#~"Step" whose error is a [#> to=sqliteerror: #~"SqliteError"]: SQLite's
+result code as an #~"errorcode" arm, its extended code, its message, and for
+a syntax or name error the byte offset in the SQL. Nothing panics.
+
+
+#--: Ownership
+
+The rules that keep a C library's pointers valid are the language's own
+locks, checked at compile time, as #~"rusqlite"'s are Rust's lifetimes. Each
+handle that borrows from another keeps it #b:"pinned" while it lives:
+
+#table cols="3 4 5":
+  Handle           |Pins                          |So
+  #~"Database"     |nothing; it is owned          |it closes when it goes out of scope
+  #~"Statement"    |its connection, shared        |any number may live at once; #~"close" waits for them
+  #~"Step" (a row) |its statement, exclusively    |the next #~"step" waits for the row to go
+  #~"Transaction"  |its Database, exclusively     |statements run on the Transaction, not the Database
+  #~"text" / #~"blob" views |their row               |a view never outlives the row it reads
+
+Each of these is refused when it is written, not found at run time:
+
+#code language=zerolang: """
+  q: db.prepare sql: "select 1"
+  if q.err then return
+  c: db.close            # error: Cannot take exclusive lock on 'db':
+                         #        already has shared lock held by 'q'
+  print "\{q.columnCount}"
+"""
+
+#code language=zerolang: """
+  with tx: db.transaction do {
+      if tx.err then return
+      r: db.executeBatch sql: "select 1"   # error: Cannot take shared lock on 'db':
+                                          #        already has exclusive lock held by 'tx'
+  }
+"""
+
+A #~"Statement" cannot be moved somewhere that outlives its #~"Database",
+nor a #~"Row" somewhere that outlives its #~"Statement"; a getter on a
+#~"Statement" (#~"q.integer") does not exist -- values are read from the row
+a #~"step" answers.
+
+#b:"Closing." A #~"Database" closes when it goes out of scope, as a #~"File"
+does; every #~"Statement" prepared on it has gone by then, since each pins
+it. An explicit #~"close" is how a program hears
+what closing reported; a second #~"close" answers ok, and a #~"Database" used
+after it answers #~"misuse". A #~"Statement" is finalized when it goes out of
+scope.
+
+
+#--: Transactions
+
+#~"db.transaction" begins one and answers the #~"Transaction" that pins the
+#~"Database" until it ends. It ends three ways: #~"commit", #~"rollback", or
+going out of scope -- which #b:"rolls back". So the natural form is a
+#~"with" block, and any #~"return" or error that leaves it before
+#~"commit" undoes the work:
+
+#code language=zerolang: """
+  # transfer -- move `amount` between two accounts, all or nothing
+  transfer: function {db: sqlite.Database from: i64 to: i64 amount: i64} out bool is {
+      with tx: (db.transaction mode: sqlite.transactionmode.immediate) do {
+          if tx.err then return false
+          q: tx.prepare sql: "update account set balance = balance + ?2 where id = ?1"
+          if q.err then return false
+          q.bindInteger parameter: 1 value: from
+          q.bindInteger parameter: 2 value: 0 - amount
+          a: q.execute
+          if a.err then return false          # rolled back
+          q.bindInteger parameter: 1 value: to
+          q.bindInteger parameter: 2 value: amount
+          b: q.execute
+          if b.err then return false          # rolled back
+          q.drop
+          c: tx.commit
+          return c.ok
+      }
+  }
+"""
+
+The parentheses around a #~"transaction" call with arguments are required:
+#~"with" reads its value up to #~"do", and a bare
+#~"db.transaction mode: ..." would leave #~"mode:" to the #~"with". A call
+with no arguments needs none: #~"with tx: db.transaction do".
+
+A #~"Statement" prepared on the #~"Transaction" pins it, so #~"commit" waits
+for it -- #~"q.drop" above ends it first. A #~"COMMIT" that fails (#~"busy",
+a deferred foreign-key violation) leaves the transaction open, to retry or
+roll back; once ended, the #~"Transaction"'s #~"executeBatch", #~"prepare",
+#~"commit" and #~"rollback" answer #~"misuse". A second #~"BEGIN" inside one
+is SQLite's error, reported as such. The [#> to=transactionmode: mode] says
+when the write lock is taken.
+
+#b:"Code that runs either way." #~"Database" and #~"Transaction" both conform
+to the [#> to=connection: #~"Connection"] protocol, so a function written
+against #~"Connection.view" runs on either:
+
+#code language=zerolang: """
+  count: function {c: sqlite.Connection.view} out i64 is {
+      q: c.prepare sql: "select count(*) from account"
+      if q.err then return -1
+      s: q.step
+      match (s) case row then return ((s.integer column: 0).or d: -1) else return -1
+  }
+"""
+
+
+#--: Index
+
+#p: #b:"Types"
+
+#ul:
+  [#*: [#> to=database: #b:"Database"] -- #~"class as { :Connection  executeBatch  prepare  changes  totalChanges  lastInsertRowid  isAutocommit  busyTimeout  transaction  close }"]
+  [#*: [#> to=transaction: #b:"Transaction"] -- #~"class as { :Connection  executeBatch  prepare  changes  totalChanges  lastInsertRowid  isAutocommit  commit  rollback }"]
+  [#*: [#> to=connection: #b:"Connection"] -- #~"protocol { executeBatch  prepare  changes  totalChanges  lastInsertRowid  isAutocommit }"]
+  [#*: [#> to=statement: #b:"Statement"] -- #~"class as { bind...  parameterIndex  parameterCount  column...  step  execute  reset  clearBindings  sql }"]
+  [#*: [#> to=step: #b:"Step"] -- #~"union { row: Row  done: null  err: SqliteError }"]
+  [#*: [#> to=row: #b:"Row"] -- #~"class as { integer  real  text  blob  value  columnType  columnCount  columnName }"]
+  [#*: [#> to=value: #b:"Value"] -- #~"union { null  integer: i64  real: f64  text: String  blob: Bytes }"]
+  [#*: [#> to=sqliteerror: #b:"SqliteError"] -- #~"class { code: errorcode  extendedCode: i32  message: String  offset: optionval u64 }"]
+  [#*: [#> to=errorcode: #b:"errorcode"] -- SQLite's primary result codes]
+  [#*: [#> to=columntype: #b:"columntype"] / [#> to=columnerror: #b:"columnerror"] -- a column's storage class; why a getter could not answer]
+  [#*: [#> to=openmode: #b:"openmode"] / [#> to=transactionmode: #b:"transactionmode"] -- how to open a file; how a transaction locks]
+
+#p: #b:"Functions"
+
+#ul:
+  [#*: [#> to=open: #b:"sqlite.open"] -- #~"function {path: StringView mode: openmode.create} out (Result Database E: SqliteError)"]
+  [#*: [#> to=openmemory: #b:"sqlite.openMemory"] -- #~"function out (Result Database E: SqliteError)"]
+  [#*: [#> to=version: #b:"sqlite.version"] -- #~"function out String"]
+
+
+#--: database
+
+
+An open connection, owned: it closes when it goes out of scope. #~"open"
+gives it SQLite's extended result codes and a 5 second busy timeout.
+
+#ul:
+  [#*: #~"executeBatch sql:" -- runs one or more statements separated by
+    #~";", stopping at the first failure; result rows are discarded]
+  [#*: #~"prepare sql:" -- compiles exactly one statement into a
+    #~"Statement" pinning the #~"Database". SQL with a second statement after
+    the first is refused (a trailing comment is not one); SQL holding no
+    statement at all -- empty, a comment, a lone #~";" -- prepares and steps
+    straight to #~"done"]
+  [#*: #~"changes" / #~"totalChanges" -- rows the last INSERT, UPDATE or
+    DELETE changed; rows changed since the connection opened, triggers'
+    included]
+  [#*: #~"lastInsertRowid" -- the rowid of the last row inserted, 0 before any]
+  [#*: #~"isAutocommit" -- true when no transaction is open]
+  [#*: #~"busyTimeout milliseconds:" -- how long a statement meeting
+    another connection's lock waits before failing with #~"busy"; 0 fails at
+    once]
+  [#*: #~"transaction mode:" -- begins a [#> to=transaction: #~"Transaction"]]
+  [#*: #~"close" -- closes now and answers what closing reported]
+
+
+#--: transaction
+
+
+An open transaction, pinning its #~"Database" exclusively. It runs
+statements as the #~"Database" does (it is a #~"Connection"), and ends with
+#~"commit", #~"rollback", or going out of scope, which rolls back. See
+[#> to=transactions: Transactions].
+
+
+#--: connection
+
+
+The protocol #~"Database" and #~"Transaction" conform to:
+#~"executeBatch", #~"prepare", #~"changes", #~"totalChanges",
+#~"lastInsertRowid" and #~"isAutocommit". Write a helper against
+#~"Connection.view" and it runs inside a transaction or outside one.
+
+
+#--: statement
+
+
+A compiled statement, owned, pinning the connection it was prepared on.
+Parameters are 1-based -- #~"?1", or a named #~":id" / #~"@id" / #~"$id"
+whose index #~"parameterIndex" finds -- and columns 0-based.
+
+#ul:
+  [#*: #b:"Binding." #~"bindInteger", #~"bindReal", #~"bindText",
+    #~"bindBlob", #~"bindNull" and #~"bindValue" (a #~"Value") set one
+    parameter; text and blobs are copied. A binding stays until rebound or
+    #~"clearBindings"; an unbound parameter is NULL. Binding a statement
+    that has run resets it first. A bind that fails -- no such parameter --
+    is reported by the next #~"step" or #~"execute", naming the parameter]
+  [#*: #b:"Lists." #~"bindIntegerList", #~"bindRealList",
+    #~"bindTextList" and #~"bindBlobList" bind a whole list as the rows of
+    SQLite's #~"carray" table: #~"where id in carray(?1)" tests membership
+    with one statement, however long the list. An empty list matches
+    nothing. #~"bindTextList" passes each string as a C string, so one
+    holding a NUL byte ends there]
+  [#*: #b:"Running." #~"step" answers the next [#> to=step: #~"Step"];
+    #~"execute" runs to completion and answers how many rows changed,
+    refusing a statement that yields a row; #~"reset" rewinds it, keeping
+    its bindings]
+  [#*: #b:"Describing." #~"parameterCount", #~"columnCount",
+    #~"columnName" (the #~"AS" alias, else SQLite's name), and the column
+    metadata #~"columnDeclaredType", #~"columnTableName",
+    #~"columnOriginName", #~"columnDatabaseName" -- each #~"null" for an
+    expression column; #~"sql" is the statement's text]
+
+#code language=zerolang: """
+  ids: ListVal i64
+  ids.append 1
+  ids.append 2
+  sel: db.prepare sql: "select count(*) from person where id in carray(?1)"
+  if sel.err then return
+  sel.bindIntegerList parameter: 1 values: ids
+"""
+
+
+#--: step
+
+
+What #~"step" answers: #~"row" with the next [#> to=row: #~"Row"],
+#~"done" when the statement has run to completion, or #~"err" with the
+[#> to=sqliteerror: #~"SqliteError"]. The row pins the statement
+exclusively: the next #~"step" is taken once this #~"Step" has gone.
+
+
+#--: row
+
+
+One result row, read by column. Its getters are #b:"strict", as
+#~"rusqlite"'s are, and convert only what cannot lose:
+
+#ul:
+  [#*: #~"integer" -- INTEGER only; a REAL is #~"mismatch", not truncated]
+  [#*: #~"real" -- REAL, or an INTEGER converted]
+  [#*: #~"text" -- TEXT, checked to be UTF-8 (#~"encoding" when it is
+    not), as a #~"StringView" into the row]
+  [#*: #~"blob" -- BLOB, as a #~"ByteView" into the row]
+  [#*: #~"value" -- whatever the column holds, copied out as a
+    [#> to=value: #~"Value"]]
+  [#*: #~"columnType", #~"columnCount", #~"columnName"]
+
+NULL answers #~"columnerror.null", another storage class #~"mismatch", a
+column the row lacks #~"range". The #~"text" and #~"blob" views live as long
+as the row; copy one (#~".copy") to keep it.
+
+
+#--: value
+
+
+A column's value, owned: #~"null", #~"integer" (#~"i64"), #~"real"
+(#~"f64"), #~"text" (#~"String") or #~"blob" (#~"Bytes") -- SQLite's five
+storage classes. #~"Row.value" copies one out; #~"Statement.bindValue" binds
+one.
+
+
+#--: sqliteerror
+
+
+Why an SQLite call failed: #~"code", the primary result code as an
+[#> to=errorcode: #~"errorcode"] arm; #~"extendedCode", SQLite's extended
+code, which refines it (a UNIQUE violation within #~"constraint");
+#~"message", SQLite's own description; and #~"offset", the byte offset into
+the SQL of a syntax or name error -- #~"select nosuchfunction(1)" fails at 7.
+
+
+#--: errorcode
+
+
+SQLite's primary result codes, each arm the code of the same name
+(#~"busy" is #~"SQLITE_BUSY"): #~"error", #~"internal", #~"permission",
+#~"abort", #~"busy", #~"locked", #~"noMemory", #~"readOnly",
+#~"interrupt", #~"ioError", #~"corrupt", #~"notFound", #~"full",
+#~"cannotOpen", #~"lockProtocol" (SQLITE_PROTOCOL; #~"protocol" is a
+keyword), #~"schema", #~"tooBig", #~"constraint", #~"mismatch",
+#~"misuse", #~"noLargeFileSupport", #~"authorization", #~"format",
+#~"range", #~"notADatabase", #~"notice", #~"warning".
+
+
+#--: columntype
+
+
+A column's storage class: #~"null", #~"integer", #~"real", #~"text",
+#~"blob".
+
+
+#--: columnerror
+
+
+Why a #~"Row" getter could not answer: #~"null" (the column is NULL),
+#~"mismatch" (another storage class), #~"range" (no such column),
+#~"encoding" (TEXT that is not UTF-8).
+
+
+#--: openmode
+
+
+How [#> to=open: #~"open"] opens a file: #~"create" (read and write,
+creating it; the default), #~"readWrite" (an existing file), #~"readOnly".
+
+
+#--: transactionmode
+
+
+When a transaction takes its locks -- SQLite's #~"BEGIN DEFERRED",
+#~"IMMEDIATE", #~"EXCLUSIVE". #~"deferred" (the default) locks as it first
+reads and then writes, so a write can still meet #~"busy";
+#~"immediate" takes the write lock at #~"BEGIN"; #~"exclusive" also keeps
+readers out outside WAL mode.
+
+
+#--: open
+
+
+Open the database file at #~"path", creating it in #~"create" mode. A file
+that cannot be opened as #~"mode" asks fails with #~"cannotOpen", the
+message naming it.
+
+
+#--: openmemory
+
+
+A new, empty database in memory, gone when it closes.
+
+
+#--: version
+
+
+The SQLite library's version, #~"3.54.0".
+
+
+#--: Building
+
+#---: The object cache
+
+SQLite is one C file of about 9.5 MB. A program that reaches the unit
+records it on a #~"zcsrc:" header line of its emitted C, and #~"zc build" /
+#~"zc run" compile it once into the #b:"object cache" -- keyed by the
+source, the compiler that links, the target and the flags -- and link that
+object from then on. The first build pays the compile: about 15 s under
+gcc -O2, well under a second under tcc. A cross build (#~"--target
+aarch64-linux-gnu") compiles its own object with the cross compiler. A user
+unit that happens to be named #~"sqlite" builds nothing: the rows that
+bring SQLite in apply only to the unit that declares its natives.
+
+The cache is #~"$ZC_OBJ_CACHE", else #~"zerolang/obj" under the user's
+cache directory; deleting it is always safe. #~"zc cobj <file.c>" builds
+the objects a hand-run compiler needs and prints their paths. See
+[#> to=./zc.html: zc], C sources a unit builds.
+
+#---: Compile options
+
+The library is compiled #~"-O2 -DNDEBUG -w" with the same options on every
+target, whatever the program is built with:
+
+#ul:
+  [#*: #~"SQLITE_THREADSAFE=0" -- zerolang has no threads yet]
+  [#*: #~"SQLITE_DQS=0" -- a double-quoted string is an identifier, never
+    a string literal]
+  [#*: #~"SQLITE_OMIT_LOAD_EXTENSION", #~"SQLITE_OMIT_DEPRECATED",
+    #~"SQLITE_OMIT_SHARED_CACHE", #~"SQLITE_OMIT_PROGRESS_CALLBACK"]
+  [#*: #~"SQLITE_DEFAULT_MEMSTATUS=0", #~"SQLITE_DEFAULT_WAL_SYNCHRONOUS=1",
+    #~"SQLITE_LIKE_DOESNT_MATCH_BLOBS", #~"SQLITE_MAX_EXPR_DEPTH=0",
+    #~"SQLITE_STRICT_SUBTYPE=1"]
+  [#*: enabled: FTS5, R*Tree, the math functions, percentile, the
+    #~"dbstat" table, column metadata, #~"carray"; JSON and deserialize are
+    on by default]
+
+Every other behaviour is SQLite's default -- foreign keys, for one, are off
+until a program runs #~"pragma foreign_keys = on". Each option's reason is
+in #~"vendor/sqlite/VERSION.md".
+
+#---: Upgrading
+
+#~"vendor/sqlite/VERSION.md" holds the procedure: read the release's
+change log, run #~"tools/vendor-sqlite/vendor-sqlite.sh <version> <year>
+<sha3-256>" (which refuses a download whose hash does not match), update
+the version record, and run #~"make ci" -- its #~"sqlite-decls-guard"
+compiles the unit's C declarations against the new #~"sqlite3.h", and every
+sqlite program runs under gcc, clang, tcc and an aarch64 build. One commit.
+
+#---: Not yet
+
+SQL functions, collations and hooks written in zerolang need calls from C
+into zerolang, which the language does not have yet. Savepoints, cached
+statements, column access by name, and the backup, blob and serialize APIs
+are not bound yet.

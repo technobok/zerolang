@@ -12,7 +12,7 @@ Nothing in `make` builds it. `zc` compiles sqlite3.c ON DEMAND, the first time a
 program that reaches the `sqlite` unit is linked, with the compiler that links
 that program, and keeps the object in its cache keyed by the source's hash, the
 compiler, the target and the flags. The object is linked statically. The flags
-are fixed -- `-O2 -DNDEBUG` plus the options below -- whatever the program is
+are fixed -- `-O2 -DNDEBUG -w` plus the options below -- whatever the program is
 built with: a debug build of a program does not rebuild a 9.5 MB library, and
 the defines must match between every object that includes sqlite3.h.
 
