@@ -1,0 +1,64 @@
+# What an `outx` call's result keeps locked when an argument is a path that
+# ends in a call: a call returning a value of its own (`b.mk`, `k.string`,
+# `k.copy`) hands over a fresh value the result pins as an unnamed local, so
+# the path's root stays free; a call returning a view of its base (`b.sv`)
+# pins that base.
+
+Box: class {
+    s: String
+} as {
+    # a view of the field: the result reads b
+    sv: function {this: this.view} outx String.view is {
+        return this.s
+    }
+    # a fresh string: the result reads nothing of b
+    mk: function {this: this.view} out String is {
+        return this.s.copy
+    }
+}
+
+# keep -- hands back the view it was given
+keep: function {v: String.view} outx String.view is {
+    return v
+}
+
+# size -- reads a string through a borrow
+size: function {s: String} out u64 is {
+    return s.length
+}
+
+# lookConverted -- the key is a conversion of k, so k stays free to lend
+lookConverted: function {m: (Map String V: String).view k: StringView} out u64 is {
+    g: m.get key: k.string
+    match (
+        g
+    ) case some then {
+        return k.length + g.length
+    } case none then null
+    return 0
+}
+
+# lookCopied -- the key is a copy of k, so k stays free to lend
+lookCopied: function {m: (Map String V: String).view k: String} out u64 is {
+    g: m.get key: k.copy
+    match (
+        g
+    ) case some then {
+        return (size s: k) + g.length
+    } case none then null
+    return 0
+}
+
+main: function is {
+    b: Box s: "a".string
+    fresh: keep v: b.mk
+    b.s.append "x"
+    print "fresh=\{fresh} box=\{b.s}"
+    seen: keep v: b.sv
+    print "seen=\{seen}"
+    m: Map String V: String
+    m.set key: "k".string value: "vv".string
+    print "converted=\{lookConverted :m k: "k"}"
+    kk: "k".string
+    print "copied=\{lookCopied :m k: kk}"
+}

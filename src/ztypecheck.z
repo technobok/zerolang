@@ -40576,6 +40576,77 @@ appendValueTuple: function {ast: Ast.view n: astnode.view dst: ListVal zast.name
     } else null
 }
 
+# valueTupleRoot -- the first name appendValueTuple would append for `n`,
+# zero when it would append none
+valueTupleRoot: function {ast: Ast.view n: astnode.view} out zast.nameid is {
+    match (
+        n
+    ) case atomid then {
+        return n.name
+    } case dottedpath then {
+        r: valueTupleRoot :ast n: (ast.nodes.get i: n.parent)
+        if r.isZero.not then return r
+        cid: atomNameId :ast n: (ast.nodes.get i: n.child)
+        if cid.isZero.not when (isStripMarkerId nameId: cid).not then return cid
+        return zast.nameid
+    } else {
+        return zast.nameid
+    }
+}
+
+# argPinTuple -- what a value node passed to a locking parameter reads
+# through, root first, appended onto dst: its names up to the last field, as
+# appendValueTuple spells them, while each member past the root is a field. A
+# member that is a call returning a view of its base (`b.sv`) reads that base,
+# so the path stops there; one that hands back a value of its own (`b.mk`,
+# `k.string`, `k.copy`) reads nothing a name holds, and answers true with dst
+# left empty: the argument is a fresh value, the hoisted temporary its storage.
+argPinTuple: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    n: astnode.view
+    dst: ListVal zast.nameid
+} out bool is {
+    match (
+        n
+    ) case atomid then {
+        dst.append n.name
+        return false
+    } case dottedpath then {
+        cid: dottedMemberId :st :ast nid: n.nodeid child: n.child
+        if cid.isZero or (isStripMarkerId nameId: cid) then {
+            return (argPinTuple :st :ast n: (ast.nodes.get i: n.parent) :dst)
+        }
+        if (argPinTuple :st :ast n: (ast.nodes.get i: n.parent) :dst) then return true
+        if (memberReadIsField :st parentNid: n.parent nameId: cid) then {
+            dst.append cid
+            return false
+        }
+        if (readReturnsBorrow :st nid: n.nodeid) then return false
+        for dst.length > 0 loop dst.pop
+        return true
+    } else {
+        return false
+    }
+}
+
+# argIsFresh -- argument `nid` is a fresh value at the end of a path
+# (argPinTuple): a value of its own, which nothing names
+argIsFresh: function {st: zenv.ZSymbolTable.view ast: Ast.view nid: zast.nodeid} out bool is {
+    tup: ListVal zast.nameid
+    return (argPinTuple :st :ast n: (ast.nodes.get i: nid) dst: tup)
+}
+
+# readReturnsBorrow -- the dotted read `nid` calls a function whose result
+# keeps what it was handed locked: a view of its base, not a value of its own
+readReturnsBorrow: function {st: zenv.ZSymbolTable.view nid: zast.nodeid} out bool is {
+    rdo: st.typing.refDecl.get key: nid
+    if rdo.none then return false
+    fid: declTypeIdOf :st declId: rdo
+    if (st.reg.typetypeOf typeId: fid) != ztypes.ztypetype.functionType then return false
+    return (resultPins :st funcId: fid)
+}
+
 # drainPendingBorrow / takePendingPins -- clear the pin side-channel / move
 # its pins into a local list (call order preserved: the receiver's pin first,
 # then the arguments' in order).
@@ -42758,15 +42829,16 @@ lockBorrowedArgPath: function {
     calleePins: bool
 } is {
     an: ast.nodes.get i: arg.operation
+    seen: valueTupleRoot :ast n: an
+    if seen.isZero then return
+    # residue left by an EARLIER argument of this call must not stand in for
+    # THIS argument's source: keep a pending path only when it is rooted at
+    # this argument's own base
+    if st.typing.pendingPins.length > 0 when (pinsRoot :st) != seen then drainPendingBorrow :st
     src: ListVal zast.nameid
-    appendValueTuple :ast n: an dst: src
-    if src.length > 0 then {
+    fresh: argPinTuple :st :ast n: an dst: src
+    if fresh.not when src.length > 0 then {
         rt: src.get i: 0
-        # residue left by an EARLIER argument of this call
-        # must not stand in for THIS argument's source:
-        # keep a pending path only when it is rooted at
-        # this argument's own base
-        if st.typing.pendingPins.length > 0 when (pinsRoot :st) != rt then drainPendingBorrow :st
         if st.typing.pendingPins.length == 0 then {
             rvo: st.lookupVarId nameId: rt
             match (
@@ -42787,7 +42859,27 @@ lockBorrowedArgPath: function {
                     )
                 }
             } case none then null
-        }
+        } else if calleePins then pinsFromPending :st :pins :isViewArg
+    }
+}
+
+# pinsFromPending -- the pins an argument's own read left pending (a call
+# returning a view of its base, `b.sv`), onto `pins`: the call's result keeps
+# them as it would the argument's path
+pinsFromPending: function {
+    st: zenv.ZSymbolTable.view
+    pins: List ztyping.PinPath
+    isViewArg: bool
+} is {
+    for each pp: st.typing.pendingPins loop {
+        (pinsAppend
+            :pins
+            path: pp.path
+            shared: true
+            mutable: isViewArg.not
+            alias: true
+            carried: false
+        )
     }
 }
 
@@ -42876,7 +42968,14 @@ lockNonTrivialArg: function {
     # root that names no variable (`mkList`, auto-called) holds nothing either.
     argRoot: rootNameIdOf :ast n: (ast.nodes.get i: arg.operation)
     rootIsVar: argRoot.isZero.not and (st.lookupVarId nameId: argRoot).some
-    if calleePins when isLockish when pinsLike when hadPending.not when rootIsVar.not then {
+    pinTemp: false
+    if calleePins when isLockish when pinsLike when hadPending.not then {
+        # a fresh value at the end of a variable's path is the unnamed local,
+        # not the path
+        pinTemp = rootIsVar.not
+        if rootIsVar then pinTemp = argIsFresh :st :ast nid: arg.operation
+    }
+    if pinTemp then {
         tnId: nameIdOf :ast name: tnm.stringView
         pinsAppendOne :pins nameId: tnId shared: isViewArg mutable: isViewArg.not alias: false
         tvo: st.lookupVarId nameId: tnId
