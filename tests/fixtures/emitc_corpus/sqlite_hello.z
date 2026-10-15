@@ -1,0 +1,50 @@
+# sqlite_hello -- the sqlite unit end to end: the library's version, an
+# in-memory database, a batch that succeeds and two that fail with their code,
+# message and syntax-error offset, a batch run through the Connection protocol
+# (the Database's vtable), close and a use after it, and an open that fails
+# naming its file. The library is compiled into the object cache and linked.
+count: function {c: sqlite.Connection.view sql: StringView} out bool is {
+    r: c.executeBatch :sql
+    return r.ok
+}
+
+main: function is {
+    print "version \{sqlite.version}"
+    db: sqlite.openMemory
+    if db.err then {
+        print "open failed"
+        return
+    }
+    r: db.executeBatch sql: "create table t(x integer); insert into t values (1), (2)"
+    match (r) case ok then print "batch ok" case err then print "batch err \{r.message}"
+    bad: db.executeBatch sql: "insert into nosuch values (1)"
+    match (
+        bad
+    ) case ok then {
+        print "unexpected ok"
+    } case err then {
+        print "error=\{bad.code == sqlite.errorcode.error} ext=\{bad.extendedCode} \{bad.message}"
+    }
+    syn: db.executeBatch sql: "select 1 frm t"
+    match (syn) case ok then print "unexpected ok" case err then print "syntax at \{syn.offset.or d: 999}"
+    viaProtocol: count c: db sql: "insert into t values (3)"
+    print "through Connection \{viaProtocol}"
+    c: db.close
+    if c.ok then print "closed"
+    again: db.executeBatch sql: "select 1"
+    match (
+        again
+    ) case ok then {
+        print "unexpected ok"
+    } case err then {
+        print "misuse=\{again.code == sqlite.errorcode.misuse} \{again.message}"
+    }
+    ro: sqlite.open path: "/nonexistent/dir/x.db" mode: sqlite.openmode.readOnly
+    match (
+        ro
+    ) case ok then {
+        print "unexpected ok"
+    } case err then {
+        print "cannotOpen=\{ro.code == sqlite.errorcode.cannotOpen} \{ro.message}"
+    }
+}

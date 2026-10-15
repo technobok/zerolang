@@ -4916,6 +4916,7 @@ Analysis: class {
         if typeTid.isZero then return
         tnm: zast.poolTextAt pool: prog.names ref: site.name
         items: zast.objItemIds ast: prog nid: site.operation
+        natRead: fieldsReadNatively :prog :st :typeTid :site
         j: u64
         for j < items.length loop {
             member: zast.namedSiteAt ast: prog nid: (items.get i: j)
@@ -4925,7 +4926,10 @@ Analysis: class {
                     parentTypeId: typeTid
                     nameId: member.name
                 )
-                if tmdi.isZero.not when (ev.usedE.has item: tmdi
+                natField: (
+                    natRead and tmdi.isZero.not and (st.typing.decls.get i: tmdi).kind.fieldDecl
+                )
+                if tmdi.isZero.not when natField.not when (ev.usedE.has item: tmdi
                 ).not when (ztypecheck.declMemberIsPrivate
                     :st
                     tid: typeTid
@@ -6495,4 +6499,27 @@ matchingOpenParen: function {sv: StringView close: u64} out u64 is {
         }
     }
     return 0
+}
+
+# fieldsReadNatively -- the type `site` defines declares a native method: its
+# private fields are read by that method's C body, which no recorded reference
+# can show, so none is unused for want of one (a handle only the runtime reads)
+fieldsReadNatively: function {
+    prog: Ast.view st: zenv.ZSymbolTable.view typeTid: ztypes.tid site: zast.namedsite
+} out bool is {
+    items: zast.objItemIds ast: prog nid: site.operation
+    j: u64
+    for j < items.length loop {
+        member: zast.namedSiteAt ast: prog nid: (items.get i: j)
+        j = j + 1
+        if member.name.isZero.not then {
+            md: st.typing.declTypedMemberIdOf parentTypeId: typeTid nameId: member.name
+            if md.isZero.not then {
+                mt: (st.typing.decls.get i: md).typeId
+                isFn: (st.reg.typetypeOf typeId: mt) == ztypes.ztypetype.functionType
+                if isFn when (st.reg.isNativeOf tid: mt) then return true
+            }
+        }
+    }
+    return false
 }

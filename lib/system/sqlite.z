@@ -1,0 +1,180 @@
+# sqlite -- SQLite databases: open one, run SQL against it, close it. The
+# library is SQLite 3.54.0 (vendor/sqlite), compiled into the program that
+# reaches this unit -- zc builds it once per C compiler into its object cache
+# and links it statically, so a program needs no SQLite installed.
+#
+# Lifetimes are the type system's, as in Rust's rusqlite: a Database is owned
+# and closes when it goes out of scope (an explicit `close` reports what that
+# would swallow), and what borrows from it keeps it pinned while it lives.
+#
+#     db: sqlite.openMemory
+#     if db.err then return
+#     r: db.executeBatch sql: "create table t(x); insert into t values (1)"
+#     if r.err then print "failed: \{r.message}"
+
+# Public interface -- the definitions other units may reference; all
+# other top-level definitions are private to this unit.
+public: unit {
+    :Connection
+    :Database
+    :SqliteError
+    :errorcode
+    :openmode
+    :open
+    :openMemory
+    :version
+}
+
+# SqliteError -- why an SQLite call failed: the primary result code, the
+# extended one SQLite reports beside it, its message and, for an SQL syntax
+# error, the byte offset into the SQL where it was found
+SqliteError: class {
+    # what kind of failure, SQLite's primary result code
+    code: errorcode
+    # SQLite's extended result code, which refines `code` (SQLITE_CONSTRAINT_UNIQUE
+    # within constraint, say); its documented numbers
+    extendedCode: i32
+    # SQLite's own description of the failure
+    message: String
+    # where in the SQL a syntax or name error was found, as a byte offset; none
+    # when the error is not about a position
+    offset: optionval u64
+}
+
+# errorcode -- SQLite's primary result codes, the kinds of failure. Each arm is
+# the code of the same name in SQLite's documentation (busy is SQLITE_BUSY)
+errorcode: variant {
+    # a generic SQL error or missing database
+    error: null
+    # an internal logic error in SQLite
+    internal: null
+    # the access permission the operation needs is denied
+    permission: null
+    # a callback asked for the operation to abort
+    abort: null
+    # the database file is locked by another connection
+    busy: null
+    # a table in the database is locked by this connection
+    locked: null
+    # an allocation failed
+    noMemory: null
+    # an attempt to write a read-only database
+    readOnly: null
+    # the operation was interrupted
+    interrupt: null
+    # a disk I/O error
+    ioError: null
+    # the database file is malformed
+    corrupt: null
+    # an unknown opcode or file-control operation
+    notFound: null
+    # the database or disk is full
+    full: null
+    # the database file cannot be opened
+    cannotOpen: null
+    # a database lock protocol error (SQLITE_PROTOCOL; `protocol` is a
+    # keyword)
+    lockProtocol: null
+    # the database schema changed under a statement
+    schema: null
+    # a string or blob exceeds the size limit
+    tooBig: null
+    # a constraint was violated: NOT NULL, UNIQUE, CHECK, a foreign key
+    constraint: null
+    # a datatype mismatch
+    mismatch: null
+    # the library was used incorrectly
+    misuse: null
+    # the host lacks large-file support
+    noLargeFileSupport: null
+    # an authorization callback refused
+    authorization: null
+    # not used by current SQLite
+    format: null
+    # a parameter or column index is out of range
+    range: null
+    # the file opened is not a database
+    notADatabase: null
+    # a notification from the log, not an error
+    notice: null
+    # a warning from the log, not an error
+    warning: null
+}
+
+# openmode -- how `open` opens a database file
+openmode: variant {
+    # read and write, creating the file when it does not exist
+    create: null
+    # read and write an existing file
+    readWrite: null
+    # read an existing file, never writing it
+    readOnly: null
+}
+
+# Connection -- what a statement runs against: a Database, and, inside a
+# transaction, the Transaction pinning it
+Connection: protocol {
+    # run `sql`, one or more statements separated by `;`, answering whether all
+    # of them succeeded. The first failure stops the rest. Any result rows are
+    # discarded: this is for schema and data changes
+    executeBatch: function {t: this.view sql: StringView} out (Result null E: SqliteError)
+}
+
+# Database -- an open SQLite database connection. Owned: it closes when it goes
+# out of scope, and an explicit `close` answers what closing reported. A
+# connection has a 5 second busy timeout from `open`: a write that meets
+# another connection's lock waits that long before failing with `busy`.
+Database: class {
+    # SQLite's connection pointer
+    handle: u64
+    # whether close has run, which makes the destructor and a second close
+    # no-ops
+    closed: bool
+} as {
+    public: unit {
+        :Connection
+        :executeBatch
+        :close
+    }
+    :Connection
+    # run `sql`, one or more statements separated by `;`, answering whether all
+    # of them succeeded (Connection)
+    executeBatch: function {t: this.view sql: StringView} out (Result null E: SqliteError) is native
+    # close the connection now, answering what closing reported. Closing an
+    # already closed Database answers ok
+    close: function {:this} out (Result null E: SqliteError) is native
+}
+
+# open -- open the database file at `path`, creating it when `mode` is
+# `create` (the default) and it does not exist. Fails with `cannotOpen`, naming
+# the file, when it cannot be opened as `mode` asks
+open: function {path: StringView mode: openmode.create} out (Result Database E: SqliteError) is {
+    return (openPath :path flags: (openFlags :mode))
+}
+
+# openMemory -- a new, empty database that lives in memory and is gone when it
+# closes
+openMemory: function out (Result Database E: SqliteError) is {
+    return (openPath path: ":memory:" flags: (openFlags mode: openmode.create))
+}
+
+# openFlags -- SQLite's sqlite3_open_v2 flags for `mode`: SQLITE_OPEN_READONLY
+# 1, READWRITE 2, CREATE 4
+openFlags: function {mode: openmode} out i32 is {
+    match (
+        mode
+    ) case create then {
+        return 6
+    } case readWrite then {
+        return 2
+    } case readOnly then {
+        return 1
+    }
+}
+
+# openPath -- open `path` with sqlite3_open_v2's `flags` and the connection's
+# defaults: extended result codes, a 5 second busy timeout
+openPath: function {path: StringView flags: i32} out (Result Database E: SqliteError) is native
+
+# version -- the SQLite library's version, `3.54.0`
+version: function out String is native
