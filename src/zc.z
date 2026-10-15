@@ -124,6 +124,7 @@ zcWord: data {
     vNatives: "natives"
     vExplain: "explain"
     vEnv: "env"
+    vCobj: "cobj"
     vVersion: "version"
     vHelp: "help"
     vInit: "init"
@@ -166,6 +167,7 @@ isPipelineVerb: function {w: u64} out bool is {
     if w == zcWord.slot.vBuild then return true
     if w == zcWord.slot.vRun then return true
     if w == zcWord.slot.vEmit then return true
+    if w == zcWord.slot.vCobj then return true
     return (w == zcWord.slot.vDump) or (w == zcWord.slot.vEnv)
 }
 
@@ -189,6 +191,8 @@ printUsage: function is {
     io.eprintln ""
     io.eprintln "info:"
     io.eprintln "  env                  print resolved tool paths and settings"
+    io.eprintln "  cobj <file.c>        build the C sources an emitted file's units need, print"
+    io.eprintln "                       their cached objects"
     io.eprintln "  version              print the version"
     io.eprintln "  help [command]       print usage, or help for one command"
     io.eprintln ""
@@ -238,6 +242,12 @@ printCommandHelp: function {zv: zast.Vocab.view cmd: StringView} is {
         io.eprintln "usage: zc env"
         io.eprintln "Print resolved tool paths and settings: system, runtime and tcc dirs,"
         io.eprintln "the C compiler, the target triple, and the version."
+    } else if w == zcWord.slot.vCobj then {
+        io.eprintln "usage: zc cobj <file.c> [--cc CC] [--target TRIPLE] [--cc-mode MODE] [--tcc-lib DIR]"
+        io.eprintln "Compile each C source the emitted file's `/* zcsrc: */` header names (a unit's"
+        io.eprintln "vendored library) with the compiler that will link it, into the object cache,"
+        io.eprintln "and print each object's path: link them after the .c file. Cached by source,"
+        io.eprintln "compiler, target and defines; $ZC_OBJ_CACHE moves the cache."
     } else if w == zcWord.slot.vVersion then {
         io.eprintln "usage: zc version"
         io.eprintln "Print the compiler version."
@@ -341,6 +351,10 @@ printEnv: function {
     buf.append tccd
     buf.append "\nZC_TARGET="
     buf.append targetTriple
+    buf.append "\nZEROLANG_VENDOR="
+    buf.append zcheck.resolveVendorDir
+    buf.append "\nZC_OBJ_CACHE="
+    buf.append zcobj.objectCacheDir
     buf.append "\nZC_PROJECT="
     if project.length > 0 then buf.append (zcheck.joinPath a: project b: "project.z")
     buf.append "\nZC_VERSION="
@@ -441,6 +455,8 @@ buildExe: function {
     cflags: StringView
     ldflags: StringView
     libs: (List String).view
+    # objects linked in after the C (the reached units' compiled C sources)
+    objs: (List String).view
     tccDir: StringView
     inproc: bool
 } out i32 is {
@@ -456,6 +472,7 @@ buildExe: function {
             :release
             :cflags
             :libs
+            :objs
         )
     }
     a: List String
@@ -492,6 +509,7 @@ buildExe: function {
     a.append from: "-o".string
     a.append from: exe.string
     a.append from: tempC.string
+    for each ob: objs loop a.append from: ob.copy
     for each lb9c: libs loop {
         la9c: "-l".string
         la9c.append lb9c
@@ -1371,6 +1389,14 @@ buildAndRun: function {
         :tccDir
         ldflags: cf.ldflags.stringView
     )
+    objs: (objectsForBuild
+        :csrc
+        :cc
+        :ccMode
+        :tccDir
+        targetTriple: cf.targetTriple.stringView
+        :zv
+    )
     rc: (buildExe
         :cc
         ccKind: cka
@@ -1380,6 +1406,7 @@ buildAndRun: function {
         cflags: cf.cflags.stringView
         ldflags: cf.ldflags.stringView
         :libs
+        :objs
         tccDir: ccTcc.stringView
         :inproc
     )
@@ -1391,6 +1418,85 @@ buildAndRun: function {
     }
     reportBuildFailure :rc :inproc :cc ccTcc: ccTcc.stringView
     if isRun then runBuiltProgram exe: exe.stringView progArgs: cf.progArgs
+}
+
+# objectsForBuild -- the objects of the C sources an emitted file's header names
+# (zcobj), built with the compiler that links it: a spawned compiler is known
+# by its real path, libtcc by its library. A source that cannot be built stops
+# zc with the reason.
+objectsForBuild: function {
+    csrc: StringView
+    cc: StringView
+    ccMode: StringView
+    tccDir: StringView
+    targetTriple: StringView
+    zv: zast.Vocab.view
+} out List String is {
+    none: List String
+    if (zcobj.csrcsOf :csrc).length == 0 then return none
+    ccReal: ccRealPath name: cc
+    fam: zemitterc.ccFamilyOf ccPath: ccReal.stringView
+    inproc: (zv.slotOf text: ccMode) == zcWord.slot.mInproc
+    ccId: ccReal.copy
+    if inproc then ccId = zcheck.joinPath a: tccDir b: "libtcc.so"
+    payload: String
+    if fam.tcc when (io.exists path: tccDir) then payload = tccDir.string
+    if inproc then payload = tccDir.string
+    r: (zcobj.objectsFor
+        :csrc
+        :cc
+        ccId: ccId.stringView
+        family: (zemitterc.ccFamilyName f: fam)
+        isTcc: fam.tcc
+        triple: targetTriple
+        tccDir: payload.stringView
+        :inproc
+    )
+    match (
+        r
+    ) case ok then {
+        return r.take
+    } case err then {
+        io.eprintln r
+        os.exit code: 1
+    }
+    return none
+}
+
+# printObjectsAndExit -- `zc cobj <file.c>`: the cached object of each C source
+# the emitted file's header names, built first where needed, one path a line
+# (stdout), then stop
+printObjectsAndExit: function {cf: ZcFlags.view zv: zast.Vocab.view} is {
+    text: String
+    rd: io.readText path: cf.unitname
+    match (
+        rd
+    ) case ok then {
+        text = rd.take
+    } case err then {
+        m: "zc cobj: cannot read '\{cf.unitname}'"
+        io.eprintln m
+        os.exit code: 2
+    }
+    cc: (zcheck.pickCc
+        ccFlag: cf.ccFlag.stringView
+        targetTriple: cf.targetTriple.stringView
+    )
+    objs: (objectsForBuild
+        csrc: text.stringView
+        cc: cc.stringView
+        ccMode: (zcheck.pickCcMode modeFlag: cf.ccModeFlag.stringView).stringView
+        tccDir: (zcheck.resolveTccDir flagVal: cf.tccLibFlag.stringView).stringView
+        targetTriple: cf.targetTriple.stringView
+        :zv
+    )
+    lines: String
+    for each o: objs loop {
+        if lines.length > 0 then lines.append "\n"
+        lines.append o
+    }
+    if lines.length > 0 then print lines
+    os.exit code: 0
 }
 
 # refuseBadTarget -- validated here, not at the flag, because `--target` and
@@ -1540,6 +1646,7 @@ main: function is {
     applyProjectOrExit :cf :zv :pf
     refuseBadTarget targetTriple: cf.targetTriple.stringView
     if subW == zcWord.slot.vEnv then printEnvAndExit :cf :pf
+    if subW == zcWord.slot.vCobj then printObjectsAndExit :cf :zv
     mode: (resolveOutMode
         sub: sub.stringView
         :subW

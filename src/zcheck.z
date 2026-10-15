@@ -25,6 +25,9 @@ public: unit {
     :resolveRuntimeDir
     :resolveSystemDir
     :resolveTccDir
+    :resolveVendorDir
+    :cacheRoot
+    :stableHash
     :vendoredTcc
     :newVfs
     :buildRoots
@@ -515,6 +518,66 @@ exeRoot: function out String is {
     } case err then {
         return ""
     }
+}
+
+# stableHash -- the 64-bit FNV-1a hash of `s`'s bytes. String.hash is seeded
+# per process to keep a Map's buckets unguessable, so it names a different
+# folder on every run; a cache key must be the same on each.
+stableHash: function {s: StringView} out u64 is {
+    # the FNV offset basis and prime
+    h: 0xcbf29ce484222325
+    i: u64
+    for i < s.length loop {
+        b: (s.byteAt :i).or d: 0
+        h = (h ^ b) * 0x100000001b3
+        i = i + 1
+    }
+    return h
+}
+
+# cacheRoot -- the user's cache directory: $XDG_CACHE_HOME, else ~/.cache; ""
+# when there is neither
+cacheRoot: function out String is {
+    xc: os.env key: "XDG_CACHE_HOME"
+    match (
+        xc
+    ) case some then {
+        if xc.length > 0 then return xc.copy
+    } case none then null
+    hm: os.env key: "HOME"
+    match (
+        hm
+    ) case some then {
+        if hm.length > 0 then return (joinPath a: hm.stringView b: ".cache")
+    } case none then null
+    return ""
+}
+
+# resolveVendorDir -- the vendored C sources a unit's `csrc=` row names a file
+# under (sqlite/sqlite3.c): $ZEROLANG_VENDOR, else $ZEROLANG_ROOT/lib/vendor,
+# else <exe root>/lib/vendor (an installed tree), else <exe root>/vendor (the
+# development tree), else vendor
+resolveVendorDir: function out String is {
+    ev: os.env key: "ZEROLANG_VENDOR"
+    match (
+        ev
+    ) case some then {
+        if ev.length > 0 then return ev.copy
+    } case none then null
+    rv: os.env key: "ZEROLANG_ROOT"
+    match (
+        rv
+    ) case some then {
+        return (joinPath a: rv.stringView b: "lib/vendor")
+    } case none then null
+    root: exeRoot
+    if root.length > 0 then {
+        libV: joinPath a: root.stringView b: "lib/vendor"
+        if (io.exists path: libV) then return libV
+        devV: joinPath a: root.stringView b: "vendor"
+        if (io.exists path: devV) then return devV
+    }
+    return "vendor"
 }
 
 # pickRuntimeUnder -- <root>/lib/runtime if it exists (installed tree),

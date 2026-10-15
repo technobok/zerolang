@@ -10,7 +10,8 @@
    fixed when tcc is configured, so a relocated one cannot resolve even
    stddef.h until it is told. `cflags` is parsed by tcc itself (the same
    spelling as the command line); `libs` are the `-l` names the emitted C
-   declared, with -lm appended the way the spawned path appends it.
+   declared, with -lm appended the way the spawned path appends it; `objs`
+   are object files linked in after the source.
 
    Returns 0 on success, 1 when tcc rejected the program or the link
    failed, and 127 when libtcc could not be loaded -- the code os.spawn
@@ -18,11 +19,13 @@
    both through one path rather than growing a second. */
 static int32_t z_tcc_compileToExe(
     z_@StringView@_t csrc, z_@StringView@_t exe, z_@StringView@_t tccDir,
-    bool release, z_@StringView@_t cflags, const z_@List_String@_t* libs
+    bool release, z_@StringView@_t cflags, const z_@List_String@_t* libs,
+    const z_@List_String@_t* objs
 );
 static int32_t z_tcc_compileToExe(
     z_@StringView@_t csrc, z_@StringView@_t exe, z_@StringView@_t tccDir,
-    bool release, z_@StringView@_t cflags, const z_@List_String@_t* libs
+    bool release, z_@StringView@_t cflags, const z_@List_String@_t* libs,
+    const z_@List_String@_t* objs
 ) {
     z_tcc_api_t a;
     if (!z_tcc_open(&a, tccDir)) return 127;
@@ -54,6 +57,14 @@ static int32_t z_tcc_compileToExe(
         char* src_c = z_sv_to_cstr(csrc);
         if (a.add_file(s, src_c) == -1) rc = 1;
         free(src_c);
+    }
+    if (rc == 0) {
+        for (uint64_t i = 0; i < objs->length; i++) {
+            if (a.add_file(s, objs->data[i].data) == -1) {
+                rc = 1;
+                break;
+            }
+        }
     }
     if (rc == 0) {
         for (uint64_t i = 0; i < libs->length; i++) {

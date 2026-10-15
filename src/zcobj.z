@@ -1,0 +1,313 @@
+# zcobj -- the object cache for the C sources a reached unit needs built and
+# linked. A natives.tbl `@unit.` row's `csrc=` names a file under the vendor
+# directory (zcheck.resolveVendorDir), and the emitted C records each one in its
+# header, `/* zcsrc: sqlite/sqlite3.c SQLITE_THREADSAFE=0 ... */`, with the
+# defines it is compiled with. The OBJECT is decided here, by whoever links:
+# it depends on the compiler that links the program, which emitting C does not
+# know.
+#
+# An object is compiled once per (source, compiler, family, target, flags) and
+# kept in the cache directory under that key's hash -- always `-O2 -DNDEBUG -w`
+# and the row's defines, whatever the program is built with, so a debug build
+# does not rebuild a library and every object agrees on the defines. Builds
+# running at once share one compile: `mkdir <key>.lock` is the atomic claim,
+# the winner compiles to a name of its own and renames it into place, and the
+# others wait for the object.
+
+# Public interface -- the definitions other units may reference; all
+# other top-level definitions are private to this unit.
+public: unit {
+    :csrcsOf
+    :objectsFor
+    :objectCacheDir
+}
+
+# headerLines -- how many leading lines of an emitted C file hold its header
+headerLines: 8
+
+# staleLockSeconds -- how old a lock may be before a waiter takes it over: a
+# compile that died left it, since a live one finishes in far less
+staleLockSeconds: 600
+
+# csrcsOf -- the `zcsrc:` lines of an emitted C file's header, each the source
+# path under the vendor directory followed by its defines, space-separated.
+# Only the header is read: these files reach megabytes.
+csrcsOf: function {csrc: StringView} out List String is {
+    r: List String
+    n: u64
+    for each ln: csrc.lines loop {
+        n = n + 1
+        if n > headerLines then break
+        lo: ln.stripPrefix p: "/* zcsrc: "
+        match (
+            lo
+        ) case some then {
+            body: lo.stripSuffix s: " */"
+            match (
+                body
+            ) case some then {
+                r.append from: body.string
+            } case none then null
+        } case none then null
+    }
+    return r
+}
+
+# objectCacheDir -- where objects are kept: $ZC_OBJ_CACHE, else
+# <cache>/zerolang/obj under the user's cache directory; "" when there is
+# neither
+objectCacheDir: function out String is {
+    ev: os.env key: "ZC_OBJ_CACHE"
+    match (
+        ev
+    ) case some then {
+        if ev.length > 0 then return ev.copy
+    } case none then null
+    root: zcheck.cacheRoot
+    if root.length == 0 then return ""
+    return (zcheck.joinPath a: root.stringView b: "zerolang/obj")
+}
+
+# objectsFor -- the object file of every C source an emitted C file's header
+# names, compiled into the cache first where it is not there yet; err with the
+# reason, which names the source, when one cannot be had
+objectsFor: function {
+    # the emitted C, read for its header
+    csrc: StringView
+    # the C compiler that links the program, as it is run
+    cc: StringView
+    # who that compiler is: its real path, or libtcc.so's under inproc
+    ccId: StringView
+    # its family (gcc, clang, tcc, other), a part of the key
+    family: StringView
+    # the compiler is tcc, which takes `-B` for its payload
+    isTcc: bool
+    # the target triple, "" for the host
+    triple: StringView
+    # tcc's runtime payload: `-B` for a spawned tcc, the library under inproc
+    tccDir: StringView
+    # build through libtcc in this process rather than spawning `cc`
+    inproc: bool
+} out (Result (List String) E: String) is {
+    objs: List String
+    for each line: (csrcsOf :csrc) loop {
+        o: objectFor line: line.stringView :cc :ccId :family :isTcc :triple :tccDir :inproc
+        match (
+            o
+        ) case ok then {
+            objs.append from: o.copy
+        } case err then {
+            return ((Result (List String) E: String).err o.copy)
+        }
+    }
+    return ((Result (List String) E: String).ok objs.take)
+}
+
+# objectFor -- the cached object for one `zcsrc:` line, compiled first when it
+# is not cached yet
+objectFor: function {
+    line: StringView
+    cc: StringView
+    ccId: StringView
+    family: StringView
+    isTcc: bool
+    triple: StringView
+    tccDir: StringView
+    inproc: bool
+} out (Result String E: String) is {
+    rel: csrcPathOf :line
+    flags: csrcFlagsOf :line
+    vdir: zcheck.resolveVendorDir
+    src: zcheck.joinPath a: vdir.stringView b: rel.stringView
+    rt: io.readText path: src
+    if rt.err then {
+        m0: "zc: the C source '\{rel}' a unit needs is not in the vendor directory '\{vdir}'; set ZEROLANG_VENDOR"
+        return ((Result String E: String).err m0)
+    }
+    dir: objectCacheDir
+    if dir.length == 0 then {
+        return ((Result String E: String
+        ).err "zc: no cache directory for compiled C sources; set ZC_OBJ_CACHE or HOME".string
+        )
+    }
+    mk: io.mkdirp path: dir
+    if mk.err then {
+        m1: "zc: could not create the object cache '\{dir}'"
+        return ((Result String E: String).err m1)
+    }
+    key: (objectKey
+        srcText: rt.stringView
+        :ccId
+        :family
+        :triple
+        flags: flags.stringView
+    )
+    objName: "\{key}.o"
+    obj: zcheck.joinPath a: dir.stringView b: objName.stringView
+    lockName: "\{key}.lock"
+    lock: zcheck.joinPath a: dir.stringView b: lockName.stringView
+    return (claimObject
+        obj: obj.stringView
+        lock: lock.stringView
+        dir: dir.stringView
+        src: src.stringView
+        flags: flags.stringView
+        :cc
+        :isTcc
+        :tccDir
+        :inproc
+    )
+}
+
+# csrcPathOf -- a `zcsrc:` line's source, its first word
+csrcPathOf: function {line: StringView} out String is {
+    for each w: (line.split sep: " ") loop {
+        if w.length > 0 then return w.string
+    }
+    return ""
+}
+
+# csrcFlagsOf -- the flags a `zcsrc:` line's source is compiled with: the fixed
+# ones, then a `-D` for each define after the source
+csrcFlagsOf: function {line: StringView} out String is {
+    flags: "-O2 -DNDEBUG -w".string
+    first: true
+    for each w: (line.split sep: " ") loop {
+        if w.length > 0 then {
+            if first.not then {
+                flags.append " -D"
+                flags.append w
+            }
+            first = false
+        }
+    }
+    return flags
+}
+
+# objectKey -- the cache key of an object: the FNV-1a hash continued over each
+# thing the object depends on in turn -- the source's content, the compiler,
+# its family, the target and the flags -- with a separator between them
+objectKey: function {
+    srcText: StringView
+    ccId: StringView
+    family: StringView
+    triple: StringView
+    flags: StringView
+} out u64 is {
+    h: hashMore h: 0xcbf29ce484222325 s: "zcobj1"
+    h = hashMore :h s: srcText
+    h = hashMore :h s: ccId
+    h = hashMore :h s: family
+    h = hashMore :h s: triple
+    return (hashMore :h s: flags)
+}
+
+# hashMore -- FNV-1a continued from `h` over `s`'s bytes and then a 0
+# separator, so two splits of the same bytes hash apart
+hashMore: function {h: u64 s: StringView} out u64 is {
+    r: h
+    i: u64
+    for i < s.length loop {
+        r = (r ^ ((s.byteAt :i).or d: 0)) * 0x100000001b3
+        i = i + 1
+    }
+    return r * 0x100000001b3
+}
+
+# claimObject -- the object at `obj`, built by whichever build claims `lock`
+# first: the claimant compiles, the others wait for its object, and a lock
+# older than staleLockSeconds -- its claimant died -- is taken over
+claimObject: function {
+    obj: StringView
+    lock: StringView
+    dir: StringView
+    src: StringView
+    flags: StringView
+    cc: StringView
+    isTcc: bool
+    tccDir: StringView
+    inproc: bool
+} out (Result String E: String) is {
+    for true loop {
+        if (io.exists path: obj) then return ((Result String E: String).ok obj.string)
+        claim: io.mkdir path: lock
+        if claim.ok then {
+            built: buildObject :src :obj :flags :cc :isTcc :tccDir :inproc
+            rm: io.remove path: lock
+            rm.drop
+            return built
+        }
+        if (lockIsStale :lock :dir) then {
+            rs: io.remove path: lock
+            rs.drop
+        } else {
+            os.sleepMillis ms: 100
+        }
+    }
+    return ((Result String E: String).err "zc: unreachable".string)
+}
+
+# buildObject -- compile `src` to `obj`: to a name of this process's own first,
+# renamed into place once whole, so a reader never sees half an object
+buildObject: function {
+    src: StringView
+    obj: StringView
+    flags: StringView
+    cc: StringView
+    # the compiler is tcc, which takes `-B` for its payload
+    isTcc: bool
+    tccDir: StringView
+    inproc: bool
+} out (Result String E: String) is {
+    tmp: "\{obj}.tmp.\{os.pid}"
+    rc: i32
+    if inproc then {
+        rc = tcc.compileToObject csrc: src obj: tmp.stringView :tccDir cflags: flags
+    } else {
+        a: List String
+        a.append from: cc.string
+        # tcc cannot find its own headers once its tree has moved
+        if isTcc when tccDir.length > 0 then {
+            a.append from: "-B".string
+            a.append from: tccDir.string
+        }
+        for each f: (flags.split sep: " ") loop {
+            if f.length > 0 then a.append from: f.string
+        }
+        a.append from: "-c".string
+        a.append from: src.string
+        a.append from: "-o".string
+        a.append from: tmp.copy
+        rc = os.spawn argv: a cwd: "" outPath: "" errPath: "" timeoutSecs: 0
+    }
+    if rc != 0 then {
+        rt: io.remove path: tmp
+        rt.drop
+        m0: "zc: compiling '\{src}' with \{cc} failed (exit \{rc})"
+        return ((Result String E: String).err m0)
+    }
+    mv: io.rename from: tmp to: obj
+    if mv.err then {
+        m1: "zc: could not move the compiled '\{src}' into the cache as '\{obj}'"
+        return ((Result String E: String).err m1)
+    }
+    return ((Result String E: String).ok obj.string)
+}
+
+# lockIsStale -- the lock `lock` was taken longer ago than staleLockSeconds. Its
+# age is read against a file written now beside it, so both times come from
+# the filesystem's own clock. False when either cannot be read: a lock that
+# vanished is the next claim's to take.
+lockIsStale: function {lock: StringView dir: StringView} out bool is {
+    ls: io.stat path: lock
+    if ls.err then return false
+    probeName: ".now.\{os.pid}"
+    probe: zcheck.joinPath a: dir b: probeName.stringView
+    wr: io.writeText path: probe content: ""
+    if wr.err then return false
+    ps: io.stat path: probe
+    rm: io.remove path: probe
+    rm.drop
+    if ps.err then return false
+    return ps.mtimeSeconds > (ls.mtimeSeconds + staleLockSeconds)
+}

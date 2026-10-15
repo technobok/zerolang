@@ -20,10 +20,16 @@ ZCHASH   := --fast-hash
 BUILDDIR := out
 # the machine make runs on, as `uname -m` spells it
 HOST_ARCH := $(shell uname -m)
-# The -l flags an emitted C file declares in its `zlink:` header (searched in the
-# first lines, not pinned to one). Every rule linking emitted C uses ZLINKOF.
+# What an emitted C file links, read off its header (searched in the first
+# lines, not pinned to one): the objects of the C sources its `zcsrc:` lines name
+# -- built by `bin/zc cobj` with the compiler that links, $(2) or $(CC), and
+# asked only when there are any, so the seed's own C never needs bin/zc -- then
+# the -l flags its `zlink:` line declares. Every rule linking emitted C uses
+# ZLINKOF.
 ZLINKSED = sed -n '1,8s|^/\* zlink: \(.*\) \*/$$|\1|p'
-ZLINKOF = $$($(ZLINKSED) $(1) | tr ' ' '\n' | sed -e '/^$$/d' -e 's|^|-l|')
+ZCSRCSED = sed -n '1,8s|^/\* zcsrc: \(.*\) \*/$$|\1|p'
+ZLINKOF = $$($(ZCSRCSED) $(1) | grep -q . && bin/zc cobj $(1) --cc $(or $(2),$(CC))) \
+  $$($(ZLINKSED) $(1) | tr ' ' '\n' | sed -e '/^$$/d' -e 's|^|-l|')
 # The drivers link the vendored mimalloc ahead of libc; MIMALLOC=0 builds them on
 # glibc. Nothing else uses it, and it never changes emitted C.
 MIMALLOC ?= 1
@@ -66,7 +72,7 @@ NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 	tcc zc zl zls regen-goldens regen-fmt-goldens regen-matrix matrix-guard regen-math-asm \
 	fmt-raw-guard regen-lsp-goldens bump-seed test-bootstrap install docs warn-check perf \
 	perf-strict pre-push perf-elision any-guard typename-guard emitter-guard frontend-guard \
-	lifetime-guard user-native-guard case-guard require-guard mode-parity zlink-rules-guard \
+	lifetime-guard user-native-guard cobj-guard case-guard require-guard mode-parity zlink-rules-guard \
 	refusal-guard static-tcc-guard zlink-guard emit-set ident-set const-row-guard \
 	deadcode-guard alias-label-guard fwd-shape-guard eager-guard eager-lib-guard \
 	highlight-guard view-guard fallback-guard clean native-guard generic-param-guard \
@@ -142,7 +148,7 @@ ci:
 	@echo "CI GATE GREEN: style-lint + corpus(--heavy: +selfhost-asan +fixpoint) + bootstrap"
 
 # ci-gates -- the gates ci runs in parallel, after perf-strict.
-ci-gates: style-lint zl-full-guard complexity-report warn-check emitter-guard typename-guard frontend-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard highlight-guard any-guard deadcode-guard eager-guard eager-lib-guard case-guard user-native-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard readable-check test-tcc-heavy test-clang test-math-arm64 test-math-noasm test-portable-scalars math-asm-guard matrix-guard docs-link-guard mode-parity ci-corpus
+ci-gates: style-lint zl-full-guard complexity-report warn-check emitter-guard typename-guard frontend-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard highlight-guard any-guard deadcode-guard eager-guard eager-lib-guard case-guard user-native-guard cobj-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard readable-check test-tcc-heavy test-clang test-math-arm64 test-math-noasm test-portable-scalars math-asm-guard matrix-guard docs-link-guard mode-parity ci-corpus
 
 ci-corpus: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --heavy --jobs $(NPROC)
@@ -631,9 +637,11 @@ install: bin/zc bin/zl bin/zls $(BUILDDIR)/tcc
 	cp bin/zc $(ROOT)/bin/zc
 	cp bin/zl $(ROOT)/bin/zl
 	cp bin/zls $(ROOT)/bin/zls
-	rm -rf $(ROOT)/lib/system $(ROOT)/lib/runtime $(ROOT)/lib/tcc $(ROOT)/docs $(ROOT)/src
+	rm -rf $(ROOT)/lib/system $(ROOT)/lib/runtime $(ROOT)/lib/tcc $(ROOT)/lib/vendor $(ROOT)/docs $(ROOT)/src
 	cp -r lib/system $(ROOT)/lib/system
 	cp -r src/runtime $(ROOT)/lib/runtime
+	mkdir -p $(ROOT)/lib/vendor
+	cp -r vendor/sqlite $(ROOT)/lib/vendor/sqlite
 	cp $(BUILDDIR)/tcc $(ROOT)/bin/tcc
 	cp -r $(TCCLIB) $(ROOT)/lib/tcc
 	cp -r docs $(ROOT)/docs
@@ -707,7 +715,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2200076
+ALLOC_BASELINE := 2209502
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -867,6 +875,40 @@ lifetime-guard:
 	  exit 1; \
 	fi; \
 	echo "lifetime-guard OK: registerScopeDestroy=$$l1 refsLocal=$$l2 factsOfText=$$l3 bindingRhsIsBorrow=$$l4 argHoists=$$l5"
+
+# cobj-guard -- a unit whose runtime is a C source of its own (a natives.tbl
+# `csrc=` row) builds through the object cache: the first build compiles it
+# (a miss), the second links the same object (a hit, the same inode), inproc
+# and a spawned tcc get objects of their own, a changed define gets a new key,
+# eight `zc cobj` at once build ONE object and leave no lock or partial file,
+# and a source missing from the vendor directory is refused by name.
+cobj-guard: bin/zc $(BUILDDIR)/tcc
+	@d=$$(mktemp -d); fail=0; F=tests/fixtures/cobj; \
+	mkdir -p $$d/rt $$d/rt43; cp -r src/runtime/. $$d/rt/; \
+	cat $$F/cobjdemo.tbl >> $$d/rt/natives.tbl; cp $$F/_Z_COBJDEMO_ANSWER.inc $$d/rt/natives/; \
+	cp -r $$d/rt/. $$d/rt43/; sed -i 's/COBJ_ANSWER=42/COBJ_ANSWER=43/' $$d/rt43/natives.tbl; \
+	export ZEROLANG_VENDOR=$$PWD/$$F/vendor ZC_OBJ_CACHE=$$d/cache; \
+	run() { bin/zc run cobjmain --src $$F --system lib/system --runtime "$$@" 2>&1 | tr '\n' ' '; }; \
+	got=$$(run $$d/rt); [ "$$got" = "answer 42 " ] || { echo "cobj-guard FAIL: first build printed '$$got'"; fail=1; }; \
+	n1=$$(ls $$d/cache/*.o 2>/dev/null | wc -l); i1=$$(ls -i $$d/cache/*.o 2>/dev/null); \
+	[ "$$n1" = 1 ] || { echo "cobj-guard FAIL: the miss left $$n1 objects, want 1"; fail=1; }; \
+	got=$$(run $$d/rt); i2=$$(ls -i $$d/cache/*.o 2>/dev/null); \
+	[ "$$got" = "answer 42 " ] && [ "$$i1" = "$$i2" ] || { echo "cobj-guard FAIL: the second build did not reuse the object ('$$got')"; fail=1; }; \
+	got=$$(run $$d/rt --cc $(BUILDDIR)/tcc --cc-mode inproc); [ "$$got" = "answer 42 " ] || { echo "cobj-guard FAIL: inproc printed '$$got'"; fail=1; }; \
+	got=$$(run $$d/rt --cc $(BUILDDIR)/tcc); [ "$$got" = "answer 42 " ] || { echo "cobj-guard FAIL: a spawned tcc printed '$$got'"; fail=1; }; \
+	got=$$(run $$d/rt43); [ "$$got" = "answer 43 " ] || { echo "cobj-guard FAIL: a changed define printed '$$got'"; fail=1; }; \
+	n2=$$(ls $$d/cache/*.o | wc -l); [ "$$n2" = 4 ] || { echo "cobj-guard FAIL: $$n2 objects after four distinct keys, want 4"; fail=1; }; \
+	bin/zc emit cobjmain --src $$F --system lib/system --runtime $$d/rt -o $$d/m.c; \
+	grep -q '^/\* zcsrc: answer/answer.c COBJ_ANSWER=42 \*/' $$d/m.c || { echo "cobj-guard FAIL: the emitted header names no zcsrc"; fail=1; }; \
+	export ZC_OBJ_CACHE=$$d/par; \
+	for i in 1 2 3 4 5 6 7 8; do bin/zc cobj $$d/m.c > $$d/p$$i.txt 2>&1 & done; wait; \
+	np=$$(cat $$d/p*.txt | sort -u | wc -l); no=$$(ls $$d/par/*.o | wc -l); left=$$(ls -a $$d/par | grep -cE 'lock|tmp'); \
+	[ "$$np" = 1 ] && [ "$$no" = 1 ] && [ "$$left" = 0 ] || { echo "cobj-guard FAIL: 8 parallel builds gave $$np paths, $$no objects, $$left leftovers"; fail=1; }; \
+	ZEROLANG_VENDOR=$$d/none bin/zc cobj $$d/m.c > $$d/miss.txt 2>&1; rc=$$?; \
+	[ $$rc = 1 ] && grep -q "answer/answer.c" $$d/miss.txt || { echo "cobj-guard FAIL: a missing source was not refused by name (exit $$rc)"; fail=1; }; \
+	rm -rf $$d; \
+	if [ $$fail -ne 0 ]; then exit 1; fi; \
+	echo "cobj-guard OK: a unit's C source builds once per compiler, target and defines, shared by parallel builds"
 
 # user-native-guard -- a unit outside src/runtime with its own natives.tbl rows and
 # fragments compiles, links and runs, one native in a hidden subunit. The runtime

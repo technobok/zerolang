@@ -29,6 +29,7 @@ typedef struct {
 } z_tcc_api_t;
 
 #define Z_TCC_OUTPUT_EXE 2
+#define Z_TCC_OUTPUT_OBJ 3
 
 /* diagnostics go to stderr verbatim, so a program reports the same text
    whichever mode built it. */

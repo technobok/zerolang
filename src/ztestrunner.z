@@ -261,15 +261,59 @@ zlinkArgs: function {csrc: StringView} out List String is {
     return flags9k
 }
 
-# withZlink -- `argv` plus the `-l` flags `csrc` declares. The emitted C must
-# already exist, so a pipeline step whose C is written by an earlier step
-# resolves this at spawn time instead (PoolStep.zlinkFrom).
-withZlink: function {argv: (List String).take csrc: StringView} out List String is {
+# withZlink -- `argv` plus the objects of the C sources `csrc` declares
+# (cobjArgs) and the `-l` flags it declares. The emitted C must already exist,
+# so a pipeline step whose C is written by an earlier step resolves this at
+# spawn time instead (PoolStep.zlinkFrom).
+withZlink: function {argv: (List String).take csrc: StringView zc: StringView} out List String is {
+    ob9m: cobjArgs :argv :csrc :zc
+    for each o9m: ob9m loop argv.append from: o9m.copy
     zl9m: zlinkArgs :csrc
     for each zf9m: zl9m loop {
         argv.append from: zf9m.copy
     }
     return argv
+}
+
+# cobjArgs -- the objects of the C sources the emitted C's `zcsrc:` header
+# names, built by `zc cobj` with the compiler `argv` runs (argv[0], and the
+# `-B` payload a tcc is handed) -- the objects a program built that way links.
+# Nothing is spawned for C that names none; a failed `zc cobj` answers no
+# objects, and the link then fails on the symbols, naming them.
+cobjArgs: function {argv: (List String).view csrc: StringView zc: StringView} out List String is {
+    objs: List String
+    if (zc.length == 0) or (argv.length == 0) then return objs
+    head: slurp path: csrc
+    end: head.length
+    if end > 1024 then end = 1024
+    if ((head.stringView.substring from: 0 to: end).contains needle: "/* zcsrc: "
+    ).not then return objs
+    ca: List String
+    ca.append from: zc.string
+    ca.append from: "cobj".string
+    ca.append from: csrc.string
+    ca.append from: "--cc".string
+    ca.append from: (argv.get i: 0).copy
+    words: zast.Vocab.create block: runnerWord
+    i: u64
+    for (i + 1) < argv.length loop {
+        if (words.slotOf text: (argv.get :i).stringView) == runnerWord.slot.ccPayload then {
+            ca.append from: "--tcc-lib".string
+            ca.append from: (argv.get i: i + 1).copy
+        }
+        i = i + 1
+    }
+    outp: "\{csrc}.cobj"
+    rc: os.spawn argv: ca cwd: "" outPath: outp.stringView errPath: "" timeoutSecs: 0
+    if rc == 0 then {
+        txt: slurp path: outp.stringView
+        for each ln: txt.stringView.lines loop {
+            if ln.length > 0 then objs.append from: ln.string
+        }
+    }
+    rm: io.remove path: outp
+    rm.drop
+    return objs
 }
 
 # withExtraArgs -- `argv` plus one element per non-empty line of `file`. An
@@ -323,6 +367,7 @@ buildTool: function {
     ga: (withZlink
         argv: (gccArgv cc: r.cc.stringView ccflags: r.ccflags.stringView :bin :csrc :asan)
         :csrc
+        zc: r.zc.stringView
     )
     if (
         (os.spawn argv: ga cwd: "" outPath: "/dev/null" errPath: "/dev/null" timeoutSecs: 0) != 0
@@ -426,6 +471,8 @@ PoolStep: class {
     # the emitted C whose declared link libraries this step must add, resolved
     # when the step runs because an earlier step in the pipeline writes it
     zlinkFrom: String
+    # the zc that resolves that C's `zcsrc:` sources to objects (zc cobj)
+    zc: String
 }
 
 # build one pipeline step (a named command) for a test job.
@@ -437,6 +484,8 @@ mkStep: function {
     timeoutSecs: i32
     allowFail: bool
     zlinkFrom: StringView
+    # the zc a zlinkFrom step resolves objects with; "" for any other step
+    zc: ""
 } out PoolStep is {
     return (PoolStep
         :argv
@@ -446,6 +495,7 @@ mkStep: function {
         :timeoutSecs
         :allowFail
         zlinkFrom: zlinkFrom.string
+        zc: zc.string
     )
 }
 
@@ -457,7 +507,7 @@ stepArgv: function {step: PoolStep.view} out List String is {
         a9n.append from: e9n.copy
     }
     if step.zlinkFrom.length == 0 then return a9n
-    return (withZlink argv: a9n csrc: step.zlinkFrom.stringView)
+    return (withZlink argv: a9n csrc: step.zlinkFrom.stringView zc: step.zc.stringView)
 }
 
 # PoolJob -- a test case's sequential spawn pipeline (immutable; the
@@ -729,6 +779,8 @@ deframeLsp: function {raw: StringView} out String is {
 # LSP frame header and the emitted C's `zlink:` comment. A word is classified by
 # its slot here (zast.Vocab), never by comparing its text.
 runnerWord: data {
+    # a C compiler's flag naming tcc's runtime payload
+    ccPayload: "-B"
     fCcForward: "--cc-forward"
     fReport: "--report"
     fHeavy: "--heavy"
@@ -1221,6 +1273,7 @@ runRunCases: function {r: Runner} is {
                     timeoutSecs: 0
                     allowFail: false
                     zlinkFrom: cpath.stringView
+                    zc: r.zc.stringView
                 )
                 ba: binArgv bin: bpath.stringView argsFile: argsFile.stringView
                 steps.append (mkStep
@@ -1634,6 +1687,7 @@ runLeakCases: function {r: Runner} is {
                 timeoutSecs: 0
                 allowFail: false
                 zlinkFrom: lc.stringView
+                zc: r.zc.stringView
             )
             ba2: binArgv bin: lb.stringView argsFile: argsFile2.stringView
             steps.append (mkStep
@@ -2270,6 +2324,7 @@ runSmokeCases: function {r: Runner} is {
                     timeoutSecs: 0
                     allowFail: false
                     zlinkFrom: cpath.stringView
+                    zc: r.zc.stringView
                 )
                 ba: binArgv bin: bpath.stringView argsFile: ""
                 steps.append (mkStep
