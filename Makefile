@@ -67,7 +67,7 @@ EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
 .PHONY: all check complexity-report style-lint-fast style-lint test ci ci-gates ci-corpus \
-	test-math-arm64 test-math-noasm test-portable-scalars docs-link-guard math-asm-guard \
+	test-math-arm64 test-sqlite-arm64 test-math-noasm test-portable-scalars docs-link-guard math-asm-guard \
 	bench-math bench-math-kernels test-clang test-tcc test-tcc-heavy readable-check build \
 	tcc zc zl zls regen-goldens regen-fmt-goldens regen-matrix matrix-guard regen-math-asm \
 	fmt-raw-guard regen-lsp-goldens bump-seed test-bootstrap install docs warn-check perf \
@@ -148,7 +148,7 @@ ci:
 	@echo "CI GATE GREEN: style-lint + corpus(--heavy: +selfhost-asan +fixpoint) + bootstrap"
 
 # ci-gates -- the gates ci runs in parallel, after perf-strict.
-ci-gates: style-lint zl-full-guard complexity-report warn-check emitter-guard typename-guard frontend-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard highlight-guard any-guard deadcode-guard eager-guard eager-lib-guard case-guard user-native-guard cobj-guard sqlite-decls-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard readable-check test-tcc-heavy test-clang test-math-arm64 test-math-noasm test-portable-scalars math-asm-guard matrix-guard docs-link-guard mode-parity ci-corpus
+ci-gates: style-lint zl-full-guard complexity-report warn-check emitter-guard typename-guard frontend-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard highlight-guard any-guard deadcode-guard eager-guard eager-lib-guard case-guard user-native-guard cobj-guard sqlite-decls-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard readable-check test-tcc-heavy test-clang test-math-arm64 test-sqlite-arm64 test-math-noasm test-portable-scalars math-asm-guard matrix-guard docs-link-guard mode-parity ci-corpus
 
 ci-corpus: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --heavy --jobs $(NPROC)
@@ -183,6 +183,27 @@ test-math-arm64: bin/zc
 	done; \
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
 	echo "test-math-arm64 OK: $$n math builds on aarch64 (builtins, asm), golden or refused as f128"
+
+# test-sqlite-arm64 -- the sqlite corpus cross-built for aarch64 and run under
+# qemu against the same goldens: the vendored library compiled by the cross
+# compiler into the object cache and linked. Each program runs in the build
+# directory, since one writes and removes a database file in its working
+# directory. Skipped without the cross tools.
+SQLITE_ARM64_DIR := $(BUILDDIR)/sqlite-arm64
+test-sqlite-arm64: bin/zc
+	@if ! command -v aarch64-linux-gnu-gcc >/dev/null 2>&1 || ! command -v qemu-aarch64 >/dev/null 2>&1; then \
+	  echo "test-sqlite-arm64: skipped (needs aarch64-linux-gnu-gcc and qemu-aarch64)"; exit 0; fi; \
+	fail=0; n=0; d=$(SQLITE_ARM64_DIR); mkdir -p $$d; \
+	for f in tests/fixtures/emitc_corpus/sqlite_*.z; do \
+	  b=$$(basename $$f .z); n=$$((n + 1)); \
+	  bin/zc build $$f --target aarch64-linux-gnu -o $$d/$$b > $$d/$$b.build 2>&1 \
+	    || { echo "test-sqlite-arm64 FAIL: $$b does not build"; sed -n 1,3p $$d/$$b.build; fail=1; continue; }; \
+	  (cd $$d && qemu-aarch64 -L /usr/aarch64-linux-gnu ./$$b) > $$d/$$b.out 2>&1; \
+	  cmp -s $$d/$$b.out tests/fixtures/run_golden/$$b.out \
+	    || { echo "test-sqlite-arm64 FAIL: $$b differs from its golden"; fail=1; }; \
+	done; \
+	if [ $$fail -ne 0 ]; then exit 1; fi; \
+	echo "test-sqlite-arm64 OK: $$n sqlite programs built for aarch64 match their goldens"
 
 # test-math-noasm -- the math corpus on math's C kernels (-DZ_MATH_NOASM).
 MATH_NOASM_DIR := $(BUILDDIR)/math-noasm

@@ -6,8 +6,9 @@
 # refused but a trailing comment is not, SQL holding no statement steps to
 # done, parameter and column counts, column names with aliases, reset and
 # clearBindings, a bind after a statement ran to its end, the SQL text, INSERT
-# ... RETURNING, 34 positional parameters, and a prepare failure naming the
-# table.
+# ... RETURNING, 34 positional parameters, ALTER TABLE renaming a table and
+# adding a defaulted column, a prepare failure naming the table, and one
+# naming an unknown function at its offset.
 # emptySql -- SQL that holds no statement at all
 emptySql: data { "" "-- only a comment" ";" "  " } out stringdata
 
@@ -138,4 +139,16 @@ main: function is {
     } case err then print "many: \{many.message}"
     bad: db.prepare sql: "select * from nosuchtable"
     match (bad) case ok then print "unexpected" case err then print "prepare failure: \{bad.message}"
+    nofn: db.prepare sql: "select nosuchfunction(1)"
+    match (
+        nofn
+    ) case ok then {
+        print "unexpected"
+    } case err then {
+        print "unknown function at \{nofn.offset.or d: 999}: \{nofn.message}"
+    }
+    alter: db.executeBatch sql: "create table x(t); alter table x rename to y; alter table y add column u default 7; insert into y(t) values (1)"
+    if alter.err then print "alter: \{alter.message}"
+    altered: db.prepare sql: "select t + u from y"
+    match (altered) case ok then print "altered: \{stepsOf q: altered}" case err then print "altered: \{altered.message}"
 }
