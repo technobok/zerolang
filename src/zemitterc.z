@@ -7663,9 +7663,21 @@ destroyTargetTid: function {
     tid: ztypes.tid
 } out ztypes.tid is {
     dt: chaseStrTypedef :symtab :ctx tid: (chaseAggregateTypedef :symtab :ctx :tid)
-    if (dt == ctx.strTid) or (symtab.reg.needsDestructor typeId: dt) then return dt
+    if (dt == ctx.strTid) or (ownsResources :symtab :ctx tid: dt) then return dt
     if (isHeapPtrCollection :symtab :ctx tid: dt) then return dt
     return ztypes.tid
+}
+
+# ownsResources -- a value of `tid` owns something its destructor releases: the
+# checker's verdict from its fields and conformances, or a runtime-owned class
+# (a `.@class` row) whose destructor the runtime supplies -- an fd, a database
+# handle -- which no field of its declaration shows, in a program that has
+# the class (live or used, as emitClassRowStructs writes it). Every question
+# of whether the C must destroy a value asks this.
+ownsResources: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.tid} out bool is {
+    if (symtab.reg.needsDestructor typeId: tid) then return true
+    if (ctx.classRowTids.contains item: tid).not then return false
+    return (ctx.liveClasses.has item: tid) or (typeIsUsed :ctx :tid)
 }
 
 # destroyFnC -- the C function that frees a value of tid, handed destroyOperand's
@@ -10667,7 +10679,7 @@ ownedReceiverHoist: function {
     if exprF.place then return ""
     rtid: stampIdOf :symtab nid: (interpPartNodeId :n)
     if rtid.isZero then return ""
-    if (symtab.reg.needsDestructor typeId: rtid).not then return ""
+    if (ownsResources :symtab :ctx tid: rtid).not then return ""
     rnid: zast.nodeIdOf :n
     if (scopeOwnsTemp :symtab argNid: rnid).not then return ""
     if (typeRefC :ast :symtab :ctx tid: rtid).length == 0 then return ""
@@ -18173,7 +18185,7 @@ emitValtypeCopy: function {
     ) case some then {
         return ""
     } case none then null
-    if (symtab.reg.needsDestructor typeId: tid) then return ""
+    if (ownsResources :symtab :ctx :tid) then return ""
     # the value itself -- but a POINTER receiver is not one yet. Asked BEFORE
     # the expression is built so the common path keeps handing emitExpr's
     # result straight back: binding it to a local first costs a String on every
@@ -18213,7 +18225,7 @@ emitResolvedCopy: function {
         originTid: (ctx.origins.get i: family.slot.str)
     ) then cvstr = true
     cvref: cvtt.isReferenceFamily or cvstr
-    if cvref.not when (symtab.reg.needsDestructor typeId: tid).not then {
+    if cvref.not when (ownsResources :symtab :ctx :tid).not then {
         return (emitExprWith :ast :symtab :ctx n: (ast.nodes.get i: n.parent) :facts)
     }
     if cvstr then {
@@ -18677,7 +18689,7 @@ markerCopiesValue: function {
     pt: stampIdOf :symtab nid: pnid
     if pt.isZero then return false
     if (symtab.reg.typetypeOf typeId: pt) == ztypes.ztypetype.functionType then return false
-    if (symtab.reg.needsDestructor typeId: pt) then return false
+    if (ownsResources :symtab :ctx tid: pt) then return false
     return (isHeapPtrCollection :symtab :ctx tid: pt).not
 }
 
@@ -19279,7 +19291,7 @@ controlValueIsReference: function {
     if vt.isZero then return false
     owns: vt == ctx.strTid
     if owns.not then owns = isHeapPtrCollection :symtab :ctx tid: vt
-    if owns.not then owns = symtab.reg.needsDestructor typeId: vt
+    if owns.not then owns = ownsResources :symtab :ctx tid: vt
     if owns.not then return false
     blocks: ListVal zast.nodeid
     ztypecheck.controlArmBlocks :ast :nid into: blocks
@@ -20422,13 +20434,14 @@ interpBaseIsMapEntry: function {
 interpBaseIsOwnedStructField: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
     n: astnode.view
 } out bool is {
     match (
         n
     ) case statementline then {
         sln: ast.nodes.get i: n.statementline
-        return (interpBaseIsOwnedStructField :ast :symtab n: sln)
+        return (interpBaseIsOwnedStructField :ast :symtab :ctx n: sln)
     } case dottedpath then {
         pnd: ast.nodes.get i: n.parent
         bnid: atomNodeId n: pnd
@@ -20442,7 +20455,7 @@ interpBaseIsOwnedStructField: function {
         bo: originTidOf :symtab tid: bt
         # a user-generic mono owns its fields once it carries a destructor;
         # other monos (views, collections) keep the owned-call-result legs
-        if bo.isZero.not when (symtab.reg.needsDestructor typeId: bt).not then return false
+        if bo.isZero.not when (ownsResources :symtab :ctx tid: bt).not then return false
         btt: symtab.reg.typetypeOf typeId: bt
         isUC: btt.isFieldwise
         if isUC.not then return false
@@ -20571,7 +20584,7 @@ appendStringPart: function {
     isAtomP: (
         localAtom or
         (interpBaseIsMapEntry :ast :symtab :n) or
-        (interpBaseIsOwnedStructField :ast :symtab :n)
+        (interpBaseIsOwnedStructField :ast :symtab :ctx :n)
     )
     if isAtomP when valF.once.not then {
         sAcc: ".".string
@@ -23385,7 +23398,7 @@ emitStoreTo: function {
     # before the assignment line that uses them (they would otherwise
     # flush at a later statement, after -- and outside -- this scope)
     flushArgHoists :ctx :ind :tmp :buf
-    rdrop: (stampIsStr :symtab :ctx nid: rtnid) or (symtab.reg.needsDestructor typeId: rtsid)
+    rdrop: (stampIsStr :symtab :ctx nid: rtnid) or (ownsResources :symtab :ctx tid: rtsid)
     ran: false
     if rdrop when rv2F.place.not then {
         rrt: reassignTargetC :ast :symtab :ctx :rtnid :rtsid
@@ -33523,11 +33536,11 @@ takeParamDestroyTid: function {
 } out ztypes.tid is {
     pt: ppid
     puse: chaseAggregateTypedef :symtab :ctx tid: pt
-    if (symtab.reg.needsDestructor typeId: puse).not then {
+    if (ownsResources :symtab :ctx tid: puse).not then {
         prbn: canonTypeId :symtab tid: pt
         if prbn.isZero.not then puse = prbn
     }
-    if (symtab.reg.needsDestructor typeId: puse).not then return ztypes.tid
+    if (ownsResources :symtab :ctx tid: puse).not then return ztypes.tid
     return puse
 }
 
@@ -37772,7 +37785,7 @@ emitDeclaredFwdDecl: function {
     l0: "typedef struct \{cn}_t \{cn}_t;\n"
     buf.append l0
     needDtor: (symtab.reg.typetypeOf typeId: tid) == ztypes.ztypetype.unionType
-    if (symtab.reg.needsDestructor typeId: tid) then needDtor = true
+    if (ownsResources :symtab :ctx :tid) then needDtor = true
     if needDtor then {
         l1: "static void \{cn}_destroy(\{cn}_t* p);\n"
         buf.append l1
@@ -37788,7 +37801,7 @@ monoNeedsFwdDecl: function {
     ctx: Ctx.view
     tid: ztypes.tid
 } out bool is {
-    if (symtab.reg.needsDestructor typeId: tid) then return true
+    if (ownsResources :symtab :ctx :tid) then return true
     if (originIsTid :symtab :tid originTid: (ctx.origins.get i: family.slot.fixedArray)
     ) then return true
     if (isListOriginOf :symtab :ctx :tid) then return true
@@ -37814,7 +37827,7 @@ emitMonoFwdDecl: function {
     lx0: "typedef struct \{cnX}_t \{cnX}_t;\n"
     buf.append lx0
     fwdDtor: (
-        (symtab.reg.needsDestructor typeId: tid) or
+        (ownsResources :symtab :ctx :tid) or
         (isMapOriginOf :symtab :ctx :tid) or
         (isSetOriginOf :symtab :ctx :tid)
     )
@@ -43153,7 +43166,7 @@ structDestroyNontrivial: function {
             if fid == ctx.strTid then return true
             if (fieldIsBox :symtab :fid).isZero.not then return true
             fmid: chaseAggregateTypedef :symtab :ctx tid: fid
-            if (symtab.reg.needsDestructor typeId: fmid) then return true
+            if (ownsResources :symtab :ctx tid: fmid) then return true
             if (isHeapPtrCollection
                 :symtab
                 :ctx
@@ -44117,7 +44130,7 @@ emitOneRecord: function {
         ids: fids
         :buf
     )
-    if (symtab.reg.needsDestructor typeId: tid) then {
+    if (ownsResources :symtab :ctx :tid) then {
         emitStructDestructor :ast :symtab :ctx :tid :fnames :fids fnameIds: fidsNm :buf
     }
 }
