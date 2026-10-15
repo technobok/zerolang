@@ -112,8 +112,8 @@ This page is the prose and the worked examples -- read it for how the unit
 is meant to be used, and the source for the exact surface.</p>
 <p>The <code>ast</code> unit exposes the compiler's parser and syntax-tree
 types as a public API -- the analogue of Python's <code>ast</code> module.
-<code>ast.parseSource</code> turns a source string into a <code>Node</code> tree,
-entirely in memory; <code>ast.Parser</code> drives a full cross-unit parse
+<code>ast.parseSource</code> turns a source string into an <code>Ast</code> -- a
+table of <code>astnode</code> rows plus a name pool -- entirely in memory; <code>ast.Parser</code> drives a full cross-unit parse
 against a <code>zvfs.ZVfs</code>.</p>
 <p><strong>Stability: preview.</strong> This surface ships alongside the <code>zl</code>
 linter/formatter and may change. It is a thin re-export of the
@@ -125,27 +125,30 @@ syntactic and does not resolve names or types.</p>
 <h2 id="index"><a href="#index">2. Index</a></h2>
 <p><strong>Parsing</strong></p>
 <ul>
-<li><a href="#parsesource"><strong>ast.parseSource</strong></a> -- <code>function {source: String.take} out Node</code></li>
-<li><a href="#parser"><strong>Parser</strong></a> -- <code>class as { create: function out this  parse: function {:this vfs: zvfs.ZVfs rootid: u32 mainUnitName: String} out Node }</code></li>
+<li><a href="#parsesource"><strong>ast.parseSource</strong></a> -- <code>function {source: String.take} out Ast</code></li>
+<li><a href="#parser"><strong>Parser</strong></a> -- <code>class as { create: function out this  parse: function {:this vfs: zvfs.ZVfs rootid: zvfs.fsno mainUnitName: String.view} out Ast }</code></li>
 </ul>
 <p><strong>Tree</strong></p>
 <ul>
-<li><a href="#node"><strong>Node</strong></a> -- <code>variant { ...27 arms: program, unitdef, functiondef, objectdef, call, dottedpath, ifexpr, statement, error, ... }</code></li>
-<li><a href="#node"><strong>UnitData</strong></a> -- <code>class { nodeid: nodeid  lineno: u32  colno: u32  body: (ListVal u32) }</code> (the <code>unitdef</code> arm's payload)</li>
+<li><a href="#node"><strong>astnode</strong></a> -- <code>variant { ...26 arms: program, unitdef, functiondef, objectdef, call, dottedpath, ifexpr, statement, error, ... }</code></li>
+<li><a href="#node"><strong>unitrow</strong></a> -- <code>record { nodeid: nodeid  lineno: u32  colno: u32  kind: unitkind  body: kidspan  isGeneric: bool }</code> (the <code>unitdef</code> arm's payload)</li>
 <li><a href="#pos"><strong>nodepos</strong></a> -- <code>record { line: u32  col: u32 }</code></li>
-<li><a href="#pos"><strong>posOf</strong></a> -- <code>function {n: Node} out nodepos</code></li>
+<li><a href="#pos"><strong>posOf</strong></a> -- <code>function {n: astnode.view} out nodepos</code></li>
 </ul>
 <p><strong>Names</strong></p>
 <ul>
-<li><a href="#names"><strong>Ast</strong></a> -- <code>class { nodes: List Node  names: StringPool  ... }</code></li>
-<li><a href="#names"><strong>StringPool</strong></a> -- <code>class as { set  setOwned  get  eq  length }</code></li>
-<li><a href="#names"><strong>nameTextEq</strong></a> -- <code>function {ast: Ast ref: nameid s: StringView} out bool</code></li>
-<li><a href="#names"><strong>nameTextCopy</strong></a> -- <code>function {ast: Ast ref: nameid} out String</code></li>
-<li><a href="#names"><strong>nameTextAt</strong></a> -- <code>function {ast: Ast.view ref: nameid} outx String.borrow</code></li>
+<li><a href="#names"><strong>Ast</strong></a> -- <code>class { nodes: (ListVal astnode i: nodeid)  names: StringPool  root: nodeid  ... }</code></li>
+<li><a href="#names"><strong>nodeid</strong></a> / <a href="#names"><strong>nameid</strong></a> -- <code>typedef u32</code> each</li>
+<li><a href="#names"><strong>StringPool</strong></a> -- <code>class as { set  setOwned  find  get  eq  length }</code></li>
+<li><a href="#names"><strong>nameTextEq</strong></a> -- <code>function {ast: Ast.view ref: nameid s: StringView} out bool</code></li>
+<li><a href="#names"><strong>nameTextCopy</strong></a> -- <code>function {ast: Ast.view ref: nameid} out String</code></li>
+<li><a href="#names"><strong>nameTextAt</strong></a> -- <code>function {ast: Ast.view ref: nameid} outx String.view</code></li>
+<li><a href="#names"><strong>poolTextAt</strong></a> -- <code>function {pool: StringPool.view ref: nameid} outx String.view</code></li>
 </ul>
 <p><strong>Errors</strong></p>
 <ul>
 <li><a href="#errors"><strong>ErrorData</strong></a> -- <code>class { nodeid: nodeid  lineno: u32  colno: u32  width: u32  err: err  msg: String  ... }</code></li>
+<li><a href="#errors"><strong>errorrow</strong></a> -- <code>record { ... err: err  msg: nameid  note: nameid  hint: nameid }</code> (the <code>error</code> arm's payload)</li>
 <li><a href="#errors"><strong>err</strong></a> -- <code>variant { ...one arm per error kind }</code></li>
 <li><a href="#errors"><strong>errCode</strong></a> -- <code>function {c: err} out u32</code></li>
 </ul>
@@ -155,8 +158,8 @@ syntactic and does not resolve names or types.</p>
 master node table plus the interned name pool; its <code>root</code> names
 the <code>program</code> row, which wraps one parsed unit. A node is read
 from the table by id with <code>tree.nodes.get i: id</code>.</p>
-<p>A <strong>syntax error does not fail</strong> the call: the parser embeds a
-<code>Node.error</code> arm at the point of failure and keeps going, so a
+<p>A <strong>syntax error does not fail</strong> the call: the parser embeds an
+<code>astnode.error</code> row at the point of failure and keeps going, so a
 tool can report every error in one pass. Walk the tree and collect
 the <code>error</code> arms to find them.</p>
 <pre><code class="language-zerolang">  tree: ast.parseSource source: src.copy
@@ -164,12 +167,12 @@ the <code>error</code> arms to find them.</p>
   match root case program then print "parsed" else null</code></pre>
 <h2 id="parser"><a href="#parser">4. parser</a></h2>
 <p>The full parser. <code>parse</code> loads <code>mainUnitName</code> and every unit
-it references from the <code>vfs</code> and returns a <code>Node.program</code>
-spanning them all -- the entry point the compiler itself uses.
+it references from the <code>vfs</code> and returns an <code>Ast</code> whose
+<code>program</code> root spans them all -- the entry point the compiler itself uses.
 Use this (rather than <code>parseSource</code>) when the input references
 other units and cross-file positions must resolve.</p>
 <h2 id="node"><a href="#node">5. node</a></h2>
-<p><code>Node</code> is the syntax-tree <code>variant</code> -- 27 arms covering
+<p><code>astnode</code> is the syntax-tree <code>variant</code> -- 26 arms covering
 definitions (<code>program</code>, <code>unitdef</code>, <code>functiondef</code>,
 <code>objectdef</code>), expressions (<code>call</code>, <code>atomid</code>,
 <code>dottedpath</code>, <code>atomstring</code>, ...), control flow (<code>ifexpr</code>,
@@ -177,8 +180,8 @@ definitions (<code>program</code>, <code>unitdef</code>, <code>functiondef</code
 (<code>statement</code>, <code>assignment</code>, <code>reassignment</code>, ...), and
 <code>error</code>. Every arm carries <code>lineno</code> / <code>colno</code>. Name-bearing
 operand arms (<code>atomid</code>, <code>labelvalue</code>) store their identifier as
-a <strong>name pool id</strong> (<a href="#names">see Names</a>), not as text. Match on
-it to dispatch:</p>
+a <strong>name pool id</strong> (<a href="#names">see Names</a>), not as text. A row is
+read from <code>Ast.nodes</code> by its <code>nodeid</code>; match on it to dispatch:</p>
 <pre><code class="language-zerolang">  n: tree.nodes.get i: id
   match (
       n
@@ -227,9 +230,12 @@ statement, and clause arms are not operand-position and return
 <code>(0, 0)</code> -- read their <code>lineno</code> / <code>colno</code> fields directly
 instead.</p>
 <h2 id="errors"><a href="#errors">8. errors</a></h2>
-<p>The payload of a <code>Node.error</code> arm. <code>msg</code> is the human
-message; <code>err</code> is the classifying <code>variant</code> and <code>errCode</code>
-maps it to its numeric <code>E####</code> code (parser/syntax errors are
+<p>The payload of an <code>astnode.error</code> row is an <code>errorrow</code>: its
+<code>msg</code> (the human message), <code>note</code> and <code>hint</code> are pool ids,
+read with <code>nameTextCopy</code> or <code>nameTextAt</code>. <code>ErrorData</code> carries
+the same failure with owned <code>String</code> texts. In both, <code>err</code> is
+the classifying <code>variant</code> and <code>errCode</code> maps it to its numeric
+<code>E####</code> code (parser/syntax errors are
 <code>E0001</code>.. <code>E0099</code>). <code>lineno</code> / <code>colno</code> / <code>width</code> locate
 and underline the offending span.</p>
 </main>

@@ -42,8 +42,8 @@ is meant to be used, and the source for the exact surface.
 
 The #~"ast" unit exposes the compiler's parser and syntax-tree
 types as a public API -- the analogue of Python's #~"ast" module.
-#~"ast.parseSource" turns a source string into a #~"Node" tree,
-entirely in memory; #~"ast.Parser" drives a full cross-unit parse
+#~"ast.parseSource" turns a source string into an #~"Ast" -- a
+table of #~"astnode" rows plus a name pool -- entirely in memory; #~"ast.Parser" drives a full cross-unit parse
 against a #~"zvfs.ZVfs".
 
 #b:"Stability: preview." This surface ships alongside the #~"zl"
@@ -61,30 +61,33 @@ Accessed via qualified names only -- #~"ast.parseSource ...",
 #p: #b:"Parsing"
 
 #ul:
-  [#*: [#> to=parsesource: #b:"ast.parseSource"] -- #~"function {source: String.take} out Node"]
-  [#*: [#> to=parser: #b:"Parser"] -- #~"class as { create: function out this  parse: function {:this vfs: zvfs.ZVfs rootid: u32 mainUnitName: String} out Node }"]
+  [#*: [#> to=parsesource: #b:"ast.parseSource"] -- #~"function {source: String.take} out Ast"]
+  [#*: [#> to=parser: #b:"Parser"] -- #~"class as { create: function out this  parse: function {:this vfs: zvfs.ZVfs rootid: zvfs.fsno mainUnitName: String.view} out Ast }"]
 
 #p: #b:"Tree"
 
 #ul:
-  [#*: [#> to=node: #b:"Node"] -- #~"variant { ...27 arms: program, unitdef, functiondef, objectdef, call, dottedpath, ifexpr, statement, error, ... }"]
-  [#*: [#> to=node: #b:"UnitData"] -- #~"class { nodeid: nodeid  lineno: u32  colno: u32  body: (ListVal u32) }" (the #~"unitdef" arm's payload)]
+  [#*: [#> to=node: #b:"astnode"] -- #~"variant { ...26 arms: program, unitdef, functiondef, objectdef, call, dottedpath, ifexpr, statement, error, ... }"]
+  [#*: [#> to=node: #b:"unitrow"] -- #~"record { nodeid: nodeid  lineno: u32  colno: u32  kind: unitkind  body: kidspan  isGeneric: bool }" (the #~"unitdef" arm's payload)]
   [#*: [#> to=pos: #b:"nodepos"] -- #~"record { line: u32  col: u32 }"]
-  [#*: [#> to=pos: #b:"posOf"] -- #~"function {n: Node} out nodepos"]
+  [#*: [#> to=pos: #b:"posOf"] -- #~"function {n: astnode.view} out nodepos"]
 
 #p: #b:"Names"
 
 #ul:
-  [#*: [#> to=names: #b:"Ast"] -- #~"class { nodes: List Node  names: StringPool  ... }"]
-  [#*: [#> to=names: #b:"StringPool"] -- #~"class as { set  setOwned  get  eq  length }"]
-  [#*: [#> to=names: #b:"nameTextEq"] -- #~"function {ast: Ast ref: nameid s: StringView} out bool"]
-  [#*: [#> to=names: #b:"nameTextCopy"] -- #~"function {ast: Ast ref: nameid} out String"]
-  [#*: [#> to=names: #b:"nameTextAt"] -- #~"function {ast: Ast.view ref: nameid} outx String.borrow"]
+  [#*: [#> to=names: #b:"Ast"] -- #~"class { nodes: (ListVal astnode i: nodeid)  names: StringPool  root: nodeid  ... }"]
+  [#*: [#> to=names: #b:"nodeid"] / [#> to=names: #b:"nameid"] -- #~"typedef u32" each]
+  [#*: [#> to=names: #b:"StringPool"] -- #~"class as { set  setOwned  find  get  eq  length }"]
+  [#*: [#> to=names: #b:"nameTextEq"] -- #~"function {ast: Ast.view ref: nameid s: StringView} out bool"]
+  [#*: [#> to=names: #b:"nameTextCopy"] -- #~"function {ast: Ast.view ref: nameid} out String"]
+  [#*: [#> to=names: #b:"nameTextAt"] -- #~"function {ast: Ast.view ref: nameid} outx String.view"]
+  [#*: [#> to=names: #b:"poolTextAt"] -- #~"function {pool: StringPool.view ref: nameid} outx String.view"]
 
 #p: #b:"Errors"
 
 #ul:
   [#*: [#> to=errors: #b:"ErrorData"] -- #~"class { nodeid: nodeid  lineno: u32  colno: u32  width: u32  err: err  msg: String  ... }"]
+  [#*: [#> to=errors: #b:"errorrow"] -- #~"record { ... err: err  msg: nameid  note: nameid  hint: nameid }" (the #~"error" arm's payload)]
   [#*: [#> to=errors: #b:"err"] -- #~"variant { ...one arm per error kind }"]
   [#*: [#> to=errors: #b:"errCode"] -- #~"function {c: err} out u32"]
 
@@ -98,8 +101,8 @@ master node table plus the interned name pool; its #~"root" names
 the #~"program" row, which wraps one parsed unit. A node is read
 from the table by id with #~"tree.nodes.get i: id".
 
-A #b:"syntax error does not fail" the call: the parser embeds a
-#~"Node.error" arm at the point of failure and keeps going, so a
+A #b:"syntax error does not fail" the call: the parser embeds an
+#~"astnode.error" row at the point of failure and keeps going, so a
 tool can report every error in one pass. Walk the tree and collect
 the #~"error" arms to find them.
 
@@ -114,15 +117,15 @@ the #~"error" arms to find them.
 
 
 The full parser. #~"parse" loads #~"mainUnitName" and every unit
-it references from the #~"vfs" and returns a #~"Node.program"
-spanning them all -- the entry point the compiler itself uses.
+it references from the #~"vfs" and returns an #~"Ast" whose
+#~"program" root spans them all -- the entry point the compiler itself uses.
 Use this (rather than #~"parseSource") when the input references
 other units and cross-file positions must resolve.
 
 
 #--: node
 
-#~"Node" is the syntax-tree #~"variant" -- 27 arms covering
+#~"astnode" is the syntax-tree #~"variant" -- 26 arms covering
 definitions (#~"program", #~"unitdef", #~"functiondef",
 #~"objectdef"), expressions (#~"call", #~"atomid",
 #~"dottedpath", #~"atomstring", ...), control flow (#~"ifexpr",
@@ -130,8 +133,8 @@ definitions (#~"program", #~"unitdef", #~"functiondef",
 (#~"statement", #~"assignment", #~"reassignment", ...), and
 #~"error". Every arm carries #~"lineno" / #~"colno". Name-bearing
 operand arms (#~"atomid", #~"labelvalue") store their identifier as
-a #b:"name pool id" ([#> to=names: see Names]), not as text. Match on
-it to dispatch:
+a #b:"name pool id" ([#> to=names: see Names]), not as text. A row is
+read from #~"Ast.nodes" by its #~"nodeid"; match on it to dispatch:
 
 #code language=zerolang: """
   n: tree.nodes.get i: id
@@ -200,8 +203,11 @@ instead.
 #--: errors
 
 
-The payload of a #~"Node.error" arm. #~"msg" is the human
-message; #~"err" is the classifying #~"variant" and #~"errCode"
-maps it to its numeric #~"E####" code (parser/syntax errors are
+The payload of an #~"astnode.error" row is an #~"errorrow": its
+#~"msg" (the human message), #~"note" and #~"hint" are pool ids,
+read with #~"nameTextCopy" or #~"nameTextAt". #~"ErrorData" carries
+the same failure with owned #~"String" texts. In both, #~"err" is
+the classifying #~"variant" and #~"errCode" maps it to its numeric
+#~"E####" code (parser/syntax errors are
 #~"E0001".. #~"E0099"). #~"lineno" / #~"colno" / #~"width" locate
 and underline the offending span.
