@@ -25762,7 +25762,8 @@ buildSpecIdSubs: function {
 # single missing parameter), walk the generic-child edges, and return the existing
 # spec on a full-path hit. A parameter absent from subs with no fallback (a
 # numeric value parameter -- str/array's `to`) skips the tree entirely, so
-# nothing dedups it. On a miss the leaf materializes via mintMono; multi-level
+# nothing dedups it. On a miss the leaf materializes via mintMono, a unit
+# template's through ensureUnitInstanceMono, which builds it; multi-level
 # paths mint intermediate nodes (genericOriginId = template, genericArgs =
 # the key prefix) that cache partial paths without being emitted.
 # checkConstraintSat -- a specialization argument against its parameter's
@@ -25880,6 +25881,22 @@ getOrMintSpec: function {
                 ) then hasParamKey8 = true
             } case valueArg then null
         }
+    }
+    # a unit template's instance is minted and built where every unit instance
+    # is: an instance without its members owes walks no visit can settle
+    if trieOk8 when hasParamKey8.not when (
+        (templateTypetypeOf :st :templateId) == ztypes.ztypetype.unitType
+    ) then {
+        return (ensureUnitInstanceMono
+            :st
+            :scope
+            :ast
+            tplId: templateId
+            tdecl: tk8
+            :subs
+            :valSubs
+            label: mn8
+        )
     }
     mid8: ztypes.tid
     if hasParamKey8 then {
@@ -55218,6 +55235,15 @@ collectOwedUnitFns: function {
         bm: argRefAt :ast nid: (zast.kidAt kids: ast.kids span: bodyIds i: di)
         if bm.nid.isZero.not when (isFunctionDefWithBody o: (ast.nodes.get i: bm.operation)
         ) when (instanceMemberOwed :st :monoId nameId: bm.name) then {
+            # an instance's walk marks the member it takes; one the instance
+            # does not declare would be owed again by every visit
+            if (st.typing.declMemberIdOf parentTypeId: monoId nameId: bm.name).isZero then {
+                mn: st.reg.nameOf tid: monoId
+                fnm: zast.nameTextAt :ast ref: bm.name
+                (panic
+                    msg: "ztypecheck: unit instance '\{mn}' does not declare its template's function '\{fnm}'"
+                )
+            }
             markInstanceMemberWalked :st :monoId nameId: bm.name
             idxs.append from: di
         }
