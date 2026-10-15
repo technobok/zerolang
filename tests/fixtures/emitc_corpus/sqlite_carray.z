@@ -1,0 +1,90 @@
+# sqlite_carray -- lists bound as the rows of SQLite's carray() table-valued
+# function, one statement for a whole list (`where x in carray(?1)`): each
+# element type, an empty list, and a list rebound between runs. The analogue
+# of rusqlite's vtab/array.rs tests.
+collect: function {q: sqlite.Statement} out String is {
+    seen: String
+    going: true
+    for going loop {
+        s: q.step
+        match (
+            s
+        ) case row then {
+            v: s.value column: 0
+            match (
+                v
+            ) case ok then {
+                match (
+                    v
+                ) case integer then {
+                    seen.append "\{v} "
+                } case real then {
+                    seen.append "\{v} "
+                } case text then {
+                    seen.append "'\{v}' "
+                } case blob then {
+                    seen.append "blob(\{v.length}) "
+                } case null then {
+                    seen.append "null "
+                }
+            } case err then {
+                seen.append "err "
+            }
+        } case done then {
+            going = false
+        } case err then {
+            seen.append "error: \{s.message}"
+            going = false
+        }
+    }
+    return seen
+}
+
+main: function is {
+    db: sqlite.openMemory
+    if db.err then return
+    q: db.prepare sql: "select value from carray(?1)"
+    if q.err then {
+        print "prepare: \{q.message}"
+        return
+    }
+    ints: ListVal i64
+    ints.append 3
+    ints.append -1
+    ints.append 9223372036854775807
+    q.bindIntegerList parameter: 1 values: ints
+    print "integers: \{collect :q}"
+    reals: ListVal f64
+    reals.append 1.5
+    reals.append -2.25
+    q.bindRealList parameter: 1 values: reals
+    print "reals: \{collect :q}"
+    words: List String
+    words.append "alpha".string
+    words.append "".string
+    words.append "γ".string
+    q.bindTextList parameter: 1 values: words
+    print "text: \{collect :q}"
+    blobs: List Bytes
+    b1: Bytes
+    b1.append 1
+    b1.append 2
+    blobs.append b1.take
+    b2: Bytes
+    blobs.append b2.take
+    q.bindBlobList parameter: 1 values: blobs
+    print "blobs: \{collect :q}"
+    none: ListVal i64
+    q.bindIntegerList parameter: 1 values: none
+    print "empty: [\{collect :q}]"
+    f: db.prepare sql: "select count(*) from (select 1 as x union all select 2 union all select 3) where x in carray(?1)"
+    match (
+        f
+    ) case ok then {
+        pick: ListVal i64
+        pick.append 1
+        pick.append 3
+        f.bindIntegerList parameter: 1 values: pick
+        print "in carray: \{collect q: f}"
+    } case err then print "prepare: \{f.message}"
+}

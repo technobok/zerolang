@@ -3352,6 +3352,9 @@ blockDiverges: function {
             ) then return true
         }
         return false
+    } case doexpr then {
+        # a `do` body (a `with`'s) is the block it wraps
+        return (blockDiverges :ast :symtab :ctx n: (ast.nodes.get i: n.statement))
     } else {
         return false
     }
@@ -41114,17 +41117,48 @@ emitClassNativeCall: function {
             j = j + 1
         }
         placed.set i: best val: true
-        (orderLabelArg
-            :ast
-            :symtab
-            :ctx
-            :call
-            label: (pNameIds.get i: best + 1)
-            form: (nativeMethodArgForm :symtab :ctx pid: (pIds.get i: best + 1))
-            nid: (nids.get i: best)
-            slot: best
-            :ord
-        )
+        pnb: pNameIds.get i: best + 1
+        if (nids.get i: best).isZero when (symtab.typing.declHasDefaultId
+            parentTypeId: mtid
+            nameId: pnb
+        ) then {
+            # an argument the call leaves out is its declared default
+            dmk: pendingHoistMark :ctx
+            dF: cfacts
+            dt: (paramDefaultText
+                :ast
+                :symtab
+                :ctx
+                cco: mtid
+                nameId: pnb
+                pid: (pIds.get i: best + 1)
+                facts: dF
+            )
+            (orderArgAtWith
+                :ast
+                :symtab
+                :ctx
+                st: ord
+                mark: dmk
+                text: dt
+                tf: dF
+                nid: zast.nodeid
+                byPtr: false
+                slot: best
+            )
+        } else {
+            (orderLabelArg
+                :ast
+                :symtab
+                :ctx
+                :call
+                label: pnb
+                form: (nativeMethodArgForm :symtab :ctx pid: (pIds.get i: best + 1))
+                nid: (nids.get i: best)
+                slot: best
+                :ord
+            )
+        }
         done = done + 1
     }
     r: orderFinish :ctx st: ord
@@ -41142,9 +41176,10 @@ emitClassNativeCall: function {
     return (stating :facts from: callFacts text: r)
 }
 
-# emitClassNativeRead -- a native method taking only its receiver, written as a
-# member read (`f.close`), that a fragment row implements:
-# `<class>_<method>(&recv)`. cli's classes keep their own legs. "" otherwise.
+# emitClassNativeRead -- a native method written as a member read (`f.close`,
+# `db.transaction`) that a fragment row implements: `<class>_<method>(&recv)`,
+# each parameter past the receiver its declared default. cli's classes keep
+# their own legs. "" otherwise.
 emitClassNativeRead: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -41167,7 +41202,14 @@ emitClassNativeRead: function {
     pIds: ListVal ztypes.tid
     pNameIds: ListVal zast.nameid
     recFieldLists :ast :symtab tid: mfid names: pNames ids: pIds nameIds: pNameIds
-    if pNames.length > 1 then return ""
+    # every parameter past the receiver must have a default, which the read
+    # passes: `db.transaction` begins in transaction's default mode
+    k: 1.u64
+    for k < pNames.length loop {
+        if (symtab.typing.declHasDefaultId parentTypeId: mfid nameId: (pNameIds.get i: k)
+        ).not then return ""
+        k = k + 1
+    }
     demandNativeRow :ctx :row key: key.stringView
     fc: ctxCname :ctx tid: cid
     rexp: "&\{recv}"
@@ -41177,6 +41219,21 @@ emitClassNativeRead: function {
         mn: (zast.nameTextAt :ast ref: mnId).stringView
         recv: rexp.stringView
     )
+    k = 1
+    for k < pNames.length loop {
+        dF: cfacts
+        c1.append ", "
+        c1.append (paramDefaultText
+            :ast
+            :symtab
+            :ctx
+            cco: mfid
+            nameId: (pNameIds.get i: k)
+            pid: (pIds.get i: k)
+            facts: dF
+        )
+        k = k + 1
+    }
     c1.append ")"
     return (stating :facts from: callFacts text: c1)
 }

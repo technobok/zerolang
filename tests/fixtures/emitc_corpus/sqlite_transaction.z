@@ -1,0 +1,107 @@
+# sqlite_transaction -- transactions and the connection's counters, their
+# behaviours ported from rusqlite's tests (MIT; transaction.rs and lib.rs): a
+# transaction that goes out of scope rolls back, including one left by an early
+# `return`; commit and rollback end it, and a second ending is misuse; each
+# mode begins; autocommit holds outside one only; changes, totalChanges through
+# a trigger and lastInsertRowid; a file database persists across a reopen; a
+# second connection meets `busy` at once with a 0 timeout; a nested BEGIN and a
+# NOT NULL violation answer SQLite's errors.
+countOf: function {c: sqlite.Connection.view} out i64 is {
+    q: c.prepare sql: "select count(*) from t"
+    if q.err then return -1
+    s: q.step
+    match (
+        s
+    ) case row then {
+        return ((s.integer column: 0).or d: -2)
+    } else {
+        return -3
+    }
+}
+
+# insertThenLeave -- a transaction left by `return` before it commits
+insertThenLeave: function {db: sqlite.Database} out bool is {
+    with tx: (db.transaction mode: sqlite.transactionmode.immediate) do {
+        if tx.err then return false
+        r: tx.executeBatch sql: "insert into t values (100)"
+        if r.err then return false
+        return true
+    }
+    return false
+}
+
+main: function is {
+    path: "sqlite_transaction.db"
+    gone: io.remove :path
+    gone.drop
+    {
+        db: sqlite.open :path
+        if db.err then {
+            print "open: \{db.message}"
+            return
+        }
+        setup: db.executeBatch sql: "create table t(x integer not null); create table log(n integer); create trigger tr after insert on t begin insert into log values (new.x); end"
+        if setup.err then print "setup: \{setup.message}"
+        print "autocommit before: \{db.isAutocommit}"
+        with tx: db.transaction do {
+            if tx.err then return
+            r: tx.executeBatch sql: "insert into t values (1), (2)"
+            if r.err then print "insert: \{r.message}"
+            print "inside: autocommit \{tx.isAutocommit}, count \{countOf c: tx}"
+        }
+        print "dropped: count \{countOf c: db}, autocommit \{db.isAutocommit}"
+        with tx: (db.transaction mode: sqlite.transactionmode.exclusive) do {
+            if tx.err then return
+            r: tx.executeBatch sql: "insert into t values (3)"
+            if r.err then print "insert: \{r.message}"
+            print "rowid \{tx.lastInsertRowid}, changes \{tx.changes}"
+            c: tx.commit
+            print "committed \{c.ok}"
+            again: tx.commit
+            match (again) case ok then print "unexpected" case err then print "second commit: misuse=\{again.code == sqlite.errorcode.misuse}"
+        }
+        print "after commit: count \{countOf c: db}"
+        with tx: db.transaction do {
+            if tx.err then return
+            r: tx.executeBatch sql: "insert into t values (4)"
+            if r.err then print "insert: \{r.message}"
+            b: tx.rollback
+            print "rolled back \{b.ok}"
+            nested: tx.executeBatch sql: "select 1"
+            match (nested) case ok then print "unexpected" case err then print "after rollback: misuse=\{nested.code == sqlite.errorcode.misuse}"
+        }
+        print "after rollback: count \{countOf c: db}"
+        print "left by return: \{insertThenLeave :db}, count \{countOf c: db}"
+        with tx: db.transaction do {
+            if tx.err then return
+            n: tx.executeBatch sql: "begin"
+            match (n) case ok then print "unexpected" case err then print "nested begin: \{n.message}"
+        }
+        nn: db.executeBatch sql: "insert into t values (null)"
+        match (nn) case ok then print "unexpected" case err then print "not null: constraint=\{nn.code == sqlite.errorcode.constraint} ext=\{nn.extendedCode}"
+        print "total changes \{db.totalChanges} (the trigger's included)"
+        c: db.close
+        print "closed \{c.ok}"
+    }
+    reopened: sqlite.open :path
+    match (reopened) case ok then print "reopened: count \{countOf c: reopened}" case err then print "reopen: \{reopened.message}"
+    first: sqlite.open :path
+    second: sqlite.open :path
+    match (
+        first
+    ) case ok then {
+        match (
+            second
+        ) case ok then {
+            to: second.busyTimeout milliseconds: 0
+            print "timeout set \{to.ok}"
+            with tx: (first.transaction mode: sqlite.transactionmode.immediate) do {
+                if tx.err then return
+                w: second.executeBatch sql: "insert into t values (9)"
+                match (w) case ok then print "unexpected" case err then print "second connection: busy=\{w.code == sqlite.errorcode.busy}"
+            }
+        } case err then print "second: \{second.message}"
+    } case err then print "first: \{first.message}"
+    done: io.remove :path
+    done.drop
+}

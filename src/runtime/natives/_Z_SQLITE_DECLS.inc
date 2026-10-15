@@ -21,9 +21,12 @@ int sqlite3_finalize(sqlite3_stmt *pStmt);
 int sqlite3_step(sqlite3_stmt*);
 int sqlite3_reset(sqlite3_stmt *pStmt);
 int sqlite3_clear_bindings(sqlite3_stmt*);
-int sqlite3_stmt_busy(sqlite3_stmt*);
 const char *sqlite3_sql(sqlite3_stmt *pStmt);
 sqlite3_int64 sqlite3_changes64(sqlite3*);
+sqlite3_int64 sqlite3_total_changes64(sqlite3*);
+sqlite3_int64 sqlite3_last_insert_rowid(sqlite3*);
+int sqlite3_get_autocommit(sqlite3*);
+int sqlite3_carray_bind(sqlite3_stmt *pStmt, int i, void *aData, int nData, int mFlags, void (*xDel)(void*));
 int sqlite3_bind_int64(sqlite3_stmt*, int, sqlite3_int64);
 int sqlite3_bind_double(sqlite3_stmt*, int, double);
 int sqlite3_bind_null(sqlite3_stmt*, int);
@@ -46,6 +49,7 @@ const char *sqlite3_column_origin_name(sqlite3_stmt*,int);
 #define SQLITE_OK           0
 #define SQLITE_ERROR        1
 #define SQLITE_MISUSE      21
+#define SQLITE_TOOBIG      18
 #define SQLITE_RANGE       25
 #define SQLITE_ROW         100
 #define SQLITE_DONE        101
@@ -55,5 +59,9 @@ const char *sqlite3_column_origin_name(sqlite3_stmt*,int);
 #define SQLITE_NULL     5
 #define SQLITE3_TEXT     3
 #define SQLITE_UTF8           1
+#define SQLITE_CARRAY_INT64     1
+#define SQLITE_CARRAY_DOUBLE    2
+#define SQLITE_CARRAY_TEXT      3
+#define SQLITE_CARRAY_BLOB      4
 #define SQLITE_OPEN_EXRESCODE        0x02000000
 

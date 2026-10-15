@@ -20,7 +20,8 @@ static void z_sqlite_bind_failed(z_@Statement@_t* t, int rc, uint64_t parameter)
     t->@MEMBER_Statement.bindParam@ = parameter;
 }
 
-/* the statement a bind may write to: rewound when it has been stepped, so a
+/* the statement a bind may write to, rewound first: one stepped -- mid-way or
+   to its end, which leaves it halted rather than ready -- takes no bind, so a
    bind never meets SQLITE_MISUSE; NULL, with the failure recorded, when it
    holds no statement or the parameter cannot be an index */
 static sqlite3_stmt* z_sqlite_bind_target(z_@Statement@_t* t, uint64_t parameter) {
@@ -29,7 +30,7 @@ static sqlite3_stmt* z_sqlite_bind_target(z_@Statement@_t* t, uint64_t parameter
         z_sqlite_bind_failed(t, SQLITE_RANGE, parameter);
         return NULL;
     }
-    if (sqlite3_stmt_busy(st)) sqlite3_reset(st);
+    sqlite3_reset(st);
     return st;
 }
 

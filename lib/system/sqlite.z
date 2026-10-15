@@ -18,6 +18,8 @@ public: unit {
     :Connection
     :Database
     :Statement
+    :Transaction
+    :transactionmode
     :Step
     :Row
     :Value
@@ -158,6 +160,18 @@ Value: union {
     blob: Bytes
 }
 
+# transactionmode -- how a transaction takes its locks: SQLite's BEGIN DEFERRED,
+# IMMEDIATE or EXCLUSIVE
+transactionmode: variant {
+    # take locks as the transaction first reads, then first writes: SQLite's
+    # default, and a write can still fail with busy
+    deferred: null
+    # take the write lock at BEGIN, so a later write cannot fail with busy
+    immediate: null
+    # take the write lock at BEGIN and, outside WAL mode, keep readers out too
+    exclusive: null
+}
+
 # Connection -- what a statement runs against: a Database, and, inside a
 # transaction, the Transaction pinning it
 Connection: protocol {
@@ -169,6 +183,15 @@ Connection: protocol {
     # connection pinned while it lives. SQL with a second statement after the
     # first is refused; a trailing comment is not one
     prepare: function {t: this.view sql: StringView} outx (Result Statement E: SqliteError)
+    # how many rows the last INSERT, UPDATE or DELETE changed
+    changes: function {t: this.view} out u64
+    # how many rows were changed since the connection opened, triggers' changes
+    # included
+    totalChanges: function {t: this.view} out u64
+    # the rowid of the last row inserted, 0 before any
+    lastInsertRowid: function {t: this.view} out i64
+    # whether no transaction is open: every statement commits as it runs
+    isAutocommit: function {t: this.view} out bool
 }
 
 # Step -- what stepping a statement answers: the next row, the end, or why it
@@ -246,6 +269,10 @@ Statement: class {
         :bindBlob
         :bindNull
         :bindValue
+        :bindIntegerList
+        :bindRealList
+        :bindTextList
+        :bindBlobList
         :parameterIndex
         :parameterCount
         :columnCount
@@ -272,6 +299,17 @@ Statement: class {
     bindNull: function {:this parameter: u64} is native
     # bind whatever `value` holds to `parameter`, copied
     bindValue: function {:this parameter: u64 value: Value.view} is native
+    # bind `values` to the parameter that is carray()'s first argument, as that
+    # table's rows: `where id in carray(?1)`. The list is copied
+    bindIntegerList: function {:this parameter: u64 values: (ListVal i64).view} is native
+    # the REAL list for carray(), each double its own row: measurements tested
+    # with `x in carray(?1)`
+    bindRealList: function {:this parameter: u64 values: (ListVal f64).view} is native
+    # the TEXT list for carray(). Each String goes as a C string, so one holding
+    # a NUL byte ends there
+    bindTextList: function {:this parameter: u64 values: (List String).view} is native
+    # the BLOB list for carray(), one row per Bytes, an empty one included
+    bindBlobList: function {:this parameter: u64 values: (List Bytes).view} is native
     # the index of the parameter named `name` (`:id`, `@id`, `$id`, the prefix
     # included), none when the statement has no such parameter
     parameterIndex: function {t: this.view name: StringView} out optionval u64 is native
@@ -325,6 +363,12 @@ Database: class {
         :Connection
         :executeBatch
         :prepare
+        :changes
+        :totalChanges
+        :lastInsertRowid
+        :isAutocommit
+        :busyTimeout
+        :transaction
         :close
     }
     :Connection
@@ -335,9 +379,78 @@ Database: class {
     # Database pinned while it lives (Connection)
     prepare: function {t: this.view sql: StringView} outx (Result Statement E: SqliteError
     ) is native
+    # rows the last INSERT, UPDATE or DELETE changed (Connection)
+    changes: function {t: this.view} out u64 is native
+    # rows changed since the connection opened, triggers' included (Connection)
+    totalChanges: function {t: this.view} out u64 is native
+    # the rowid of the last row inserted, 0 before any (Connection)
+    lastInsertRowid: function {t: this.view} out i64 is native
+    # whether no transaction is open on the connection (Connection)
+    isAutocommit: function {t: this.view} out bool is native
+    # how long a statement meeting another connection's lock waits before
+    # failing with busy; `open` sets 5000, 0 fails at once
+    busyTimeout: function {:this milliseconds: i32} out (Result null E: SqliteError) is native
+    # begin a transaction, answering the Transaction that pins this Database
+    # until it ends: commit it, roll it back, or let it go out of scope, which
+    # rolls it back. Run its statements on the Transaction
+    #
+    #     with tx: (db.transaction mode: sqlite.transactionmode.immediate) do {
+    #         if tx.err then return
+    #         r: tx.executeBatch sql: "update account set balance = balance - 10"
+    #         if r.err then return
+    #         c: tx.commit
+    #     }
+    transaction: function {:this mode: transactionmode.deferred} outx (Result
+        Transaction
+        E: SqliteError
+    ) is native
     # close the connection now, answering what closing reported. Closing an
     # already closed Database answers ok
     close: function {:this} out (Result null E: SqliteError) is native
+}
+
+# Transaction -- an open transaction, pinning its Database exclusively until it
+# goes out of scope: statements run on it, and `commit` or `rollback` ends it.
+# One that ends neither way rolls back when it goes out of scope -- a `return`
+# or an error leaving its `with` undoes it. After it ends, executeBatch,
+# prepare, commit and rollback answer misuse
+Transaction: class {
+    # SQLite's connection pointer, the Database's
+    db: u64
+    # whether commit or rollback has run
+    finished: bool
+} as {
+    public: unit {
+        :Connection
+        :executeBatch
+        :prepare
+        :changes
+        :totalChanges
+        :lastInsertRowid
+        :isAutocommit
+        :commit
+        :rollback
+    }
+    :Connection
+    # run `sql`, one or more statements, inside the transaction (Connection)
+    executeBatch: function {t: this.view sql: StringView} out (Result null E: SqliteError) is native
+    # compile `sql` into a Statement inside the transaction, pinning it: commit
+    # waits for the statement to go (Connection)
+    prepare: function {t: this.view sql: StringView} outx (Result Statement E: SqliteError
+    ) is native
+    # rows the last INSERT, UPDATE or DELETE changed (Connection)
+    changes: function {t: this.view} out u64 is native
+    # rows changed since the connection opened, triggers' included (Connection)
+    totalChanges: function {t: this.view} out u64 is native
+    # the rowid of the last row inserted, 0 before any (Connection)
+    lastInsertRowid: function {t: this.view} out i64 is native
+    # whether no transaction is open: false until this one ends (Connection)
+    isAutocommit: function {t: this.view} out bool is native
+    # make the transaction's changes permanent, ending it. A COMMIT that fails
+    # -- busy, a deferred constraint -- leaves it open, to roll back
+    commit: function {:this} out (Result null E: SqliteError) is native
+    # undo the transaction's changes, ending it
+    rollback: function {:this} out (Result null E: SqliteError) is native
 }
 
 # open -- open the database file at `path`, creating it when `mode` is
