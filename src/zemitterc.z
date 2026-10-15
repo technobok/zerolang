@@ -11295,9 +11295,6 @@ argform: variant {
     # a value view bound by its label, BY VALUE: a 16-byte {size, data} view is
     # two registers, and a String is projected to its view (viewArgCoerce)
     viewed: null
-    # a ListView bound by its label, by address, a String projected first
-    # (viewArgAddr): the Writer protocol's ABI, until it takes views by value
-    viewAddressed: null
 }
 
 # emitOrderedPair -- `<cb>_<m>(lead, a, b)`: a native leg whose two labelled
@@ -11457,8 +11454,6 @@ labelArgText: function {
         vF: cfacts
         v: ctorArgByLabelWith :ast :symtab :ctx :call :label facts: vF
         return (viewArgCoerce :ast :symtab :ctx :call :label av: v.stringView avF: vF :facts)
-    } case viewAddressed then {
-        return (viewArgAddr :ast :symtab :ctx :call :label :facts)
     }
 }
 
@@ -11471,7 +11466,7 @@ labelArgNode: function {
     if byLabel.isZero.not then return byLabel
     match (
         form
-    ) case labelled then return zast.nodeid case addressed then return zast.nodeid case viewed then return zast.nodeid case viewAddressed then return zast.nodeid case value then null case moved then null case read then null
+    ) case labelled then return zast.nodeid case addressed then return zast.nodeid case viewed then return zast.nodeid case value then null case moved then null case read then null
     return (ctorArgNodeByPosition :ast :call idx: 0)
 }
 
@@ -40141,8 +40136,9 @@ methodRetCtype: function {
 }
 
 # protoParamCtype -- a protocol spec-method param's C type: typeRefC, with a
-# `*` for collection params (List/ListView/Map and the Bytes/ByteView typedefs),
-# which the vtable function pointers and wrappers pass by pointer.
+# `*` for an owned collection param (List/Map and the Bytes typedef), which the
+# vtable function pointers and wrappers pass by pointer. A value view
+# (ListView, the ByteView typedef) goes by value, as everywhere else.
 protoParamCtype: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -40172,7 +40168,7 @@ protoParamCtype: function {
         :ctx
         originTid: (originTidOf :symtab tid: cpid)
     ) then isCol = true
-    if isCol then return "\{pct}*"
+    if isCol when (isValueViewTid :symtab :ctx tid: cpid).not then return "\{pct}*"
     return pct
 }
 
@@ -40968,10 +40964,9 @@ demandNativeRow: function {ctx: Ctx row: u64 key: StringView} is {
 
 # nativeMethodArgForm -- how a native method's fragment takes a parameter of type
 # `pid`. ONE C RULE, decided by the type: a value view (a StringView, a
-# StringLike generic's view) BY VALUE, as a free function's is -- `.view` is an
-# ownership marker, not a C convention; a ByteView or ListView by address until
-# the Writer protocol takes it by value; an owned collection by address;
-# anything else by value
+# StringLike generic's view, a ByteView or ListView) BY VALUE, as a free
+# function's and a protocol slot's are -- `.view` is an ownership marker, not a
+# C convention; an owned collection by address; anything else by value
 nativeMethodArgForm: function {
     symtab: zenv.ZSymbolTable.view ctx: Ctx pid: ztypes.tid
 } out argform is {
@@ -40979,14 +40974,30 @@ nativeMethodArgForm: function {
     if (
         (symtab.reg.typetypeOf typeId: pid) == ztypes.ztypetype.genericParam
     ) then return argform.viewed
-    ccm: chaseAggregateTypedef :symtab :ctx tid: pid
-    fam: originTidOf :symtab tid: ccm
-    if fam.isZero.not then {
-        if fam == (ctx.origins.get i: family.slot.listViewVal) then return argform.viewAddressed
-        if fam == (ctx.origins.get i: family.slot.listView) then return argform.viewAddressed
-        if (isCollectionOriginTid :ctx originTid: fam) then return argform.addressed
+    if (isValueViewTid :symtab :ctx tid: pid) then return argform.viewed
+    if (isCollectionOriginTid
+        :ctx
+        originTid: (originTidOf :symtab tid: (chaseAggregateTypedef :symtab :ctx tid: pid))
+    ) then {
+        return argform.addressed
     }
     return argform.labelled
+}
+
+# isValueViewTid -- `tid`, through a typedef (ByteView), is a ListView: a
+# 16-byte {length, data} view of storage something else owns, which C takes by
+# value wherever it is passed
+isValueViewTid: function {
+    symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.tid
+} out bool is {
+    # a spec or core alias param is a SHELL named after the system type, which
+    # canonicalises before it chases (protoParamCtype)
+    c: tid
+    if (definedInUnitTid :symtab :tid).isZero then {
+        rc: canonTypeId :symtab :tid
+        if rc.isZero.not then c = rc
+    }
+    return (isListViewOriginOf :symtab :ctx tid: (chaseAggregateTypedef :symtab :ctx tid: c))
 }
 
 # emitClassNativeCall -- a call of a class's NATIVE method that a natives.tbl
@@ -41133,44 +41144,6 @@ emitClassNativeRead: function {
     )
     c1.append ")"
     return (stating :facts from: callFacts text: c1)
-}
-
-# viewArgAddr -- the address of a native method's value-view argument bound by
-# `label`, coerced from a String where it is one (viewArgCoerce). A view with no address of its own
-# -- a call's result, `outbuf.byteView` -- is bound to a temporary first; a view
-# owns nothing, and a String source's own temporary is the coercion's, so this
-# one takes no node and owes no destroy.
-viewArgAddr: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    call: zast.callrow.view
-    label: zast.nameid
-    facts: cfacts.borrow
-} out String is {
-    fvF: cfacts
-    fv: ctorArgByLabelWith :ast :symtab :ctx :call :label facts: fvF
-    fvcF: cfacts
-    fvc: viewArgCoerce :ast :symtab :ctx :call :label av: fv.stringView avF: fvF facts: fvcF
-    # a compound literal (the String coercion's `(StringView){..}`) already has an
-    # address; anything else is passed by reference as any argument is
-    if fvcF.literal then return (stating :facts from: (addrFacts e: fvcF) text: "&\{fvc}")
-    fnid: ctorArgNodeByLabel :ast :call :label
-    vt: (stampIdOf
-        :symtab
-        nid: (interpPartNodeId n: (ast.nodes.get i: fnid))
-    )
-    if vt == ctx.strTid then vt = ctx.svTid
-    return (emitByrefArgWith
-        :ast
-        :symtab
-        :ctx
-        av: fvc.stringView
-        avF: fvcF
-        pid: vt
-        argNid: zast.nodeid
-        :facts
-    )
 }
 
 # viewArgCoerce -- the emitted value-view argument bound by `label`, projected
@@ -42157,8 +42130,9 @@ dispatchSlotNames: function {
     return vpn
 }
 
-# dispatchArgText -- one dispatched argument's C text. A collection argument is
-# passed by address, unless the path already yields a pointer; a call's value is
+# dispatchArgText -- one dispatched argument's C text. An owned collection
+# argument is passed by address, unless the path already yields a pointer, and
+# a value view by value; a call's value is
 # bound to a temp so it has one. Sets ctx.lastArgByPtr: whether the slot takes
 # the argument by pointer.
 dispatchArgText: function {
@@ -42183,6 +42157,8 @@ dispatchArgText: function {
         :ctx
         originTid: (originTidOf :symtab tid: atid)
     ) then apfx = "&"
+    # a value view goes by value, as the slot takes it (protoParamCtype)
+    if (isValueViewTid :symtab :ctx tid: atid) then apfx = ""
     ctx.lastArgByPtr = apfx.length > 0
     if (pathIsPointer :ast :symtab :ctx :n) then apfx = ""
     # a value a call returns has no address: it is bound to a temp first, freed

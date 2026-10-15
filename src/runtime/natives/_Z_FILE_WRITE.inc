@@ -2,14 +2,14 @@
    retries on EINTR. Returns total bytes written on success.
    `src` is a listview (layout: length, data*), matching byteview. */
 static z_@ResultVR_u64_IoError@_t z_@File@_write(
-    z_@File@_t* f, z_@ListViewVal_u8@_t* src
+    z_@File@_t* f, z_@ListViewVal_u8@_t src
 );
 static z_@ResultVR_u64_IoError@_t z_@File@_write(
-    z_@File@_t* f, z_@ListViewVal_u8@_t* src
+    z_@File@_t* f, z_@ListViewVal_u8@_t src
 ) {
     uint64_t total = 0;
-    while (total < src->length) {
-        long n = write(f->@MEMBER_File.fd@, src->data + total, src->length - total);
+    while (total < src.length) {
+        long n = write(f->@MEMBER_File.fd@, src.data + total, src.length - total);
         if (n < 0) {
             if (errno == EINTR) continue;
             return z_io_u64_err(errno);

@@ -12,7 +12,7 @@ static z_@Result_null_IoError@_t z_@BufWriter@_flush(z_@BufWriter@_t* self) {
     }
     z_@ListViewVal_u8@_t view = { self->@MEMBER_BufWriter.buf@.length, self->@MEMBER_BufWriter.buf@.data };
     z_@ResultVR_u64_IoError@_t wr =
-        self->@MEMBER_BufWriter.sink@.vtable->@MEMBER_Writer.write@(self->@MEMBER_BufWriter.sink@.data, &view);
+        self->@MEMBER_BufWriter.sink@.vtable->@MEMBER_Writer.write@(self->@MEMBER_BufWriter.sink@.data, view);
     if (wr.tag == @ARM_ResultVR_u64_IoError.ok@) {
         self->@MEMBER_BufWriter.buf@.length = 0;
         result.tag = @ARM_Result_null_IoError.ok@;
