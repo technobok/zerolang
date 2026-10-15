@@ -73,7 +73,9 @@ an error — use #~"zc build <src>".
   [#*: #b:"build" #~"<src>" — compile to a native executable; output is
     #~"-o OUT", else #~"<unit>" in the project's directory (or its
     #~"outputDir"), or outside a project in #~"./". In a project whose
-    #~"project.z" sets #~"main", #~"<src>" may be left out.]
+    #~"project.z" lists #~"programs", #~"<src>" may be left out: every
+    program is built, in the order listed, stopping at the first that
+    fails.]
   [#*: #b:"run" #~"<src> [args...]" — build to a temporary file, then run it
     with an inherited terminal, forwarding the trailing #~"args" and
     propagating the program's exit code.]
@@ -132,27 +134,35 @@ projects.
 
 #code language=zerolang: """
   # project.z
-  sourceDirs: data { "src" } out stringdata
-  main: "app"
+  sourceDirs: data { "src" }
+  programs: data { "app" "tool" }
   release: true
 """
 
 The settings are read #b:"before" anything is built, since they say where the
 source and the stdlib are, so each one is a literal: a string, #~"true" /
-#~"false", or -- for #~"sourceDirs" -- a data block of string literals. A setting the file does not know, a value that is not a literal and
+#~"false", or -- for #~"sourceDirs" and #~"programs" -- a data block of
+string literals. A setting the file does not know, a value that is not a literal and
 a literal of the wrong kind are each an error at the line, and stop the
 driver. A path is relative to the project directory. A #b:"flag fully
 overrides" the file's value; a unit named by its file is its own source root.
 
 #ul:
   [#*: #~"sourceDirs" -- the source roots, the first searched first (each a
-    #~"--src"): always a data block, #~"data { \"src\" \"lib\" } out stringdata",
-    even with one root. Unset is the project directory itself; an empty block
-    is no source root at all]
+    #~"--src"): always a data block, #~"data { \"src\" \"lib\" }", even with
+    one root. Unset is the project directory itself; an empty block
+    (#~"data {} out stringdata") is no source root at all]
   [#*: #~"systemDir" -- the stdlib (#~"--system")]
   [#*: #~"runtimeDir" -- the C runtime (#~"--runtime")]
-  [#*: #~"main" -- the unit #~"build" / #~"run" / #~"emit" / #~"dump" compile
-    when none is named]
+  [#*: #~"programs" -- the project's programs, each a unit declaring
+    #~"main": always a data block, #~"data { \"app\" }", even with one. A
+    #~"build" that names no unit builds them all; #~"run" / #~"emit" /
+    #~"dump" naming none compile the one listed, and are refused, naming
+    them, when several are -- as is a bare #~"build -o", since #~"-o" names
+    one file. A unit the list leaves out still builds when named: the list
+    says what the project's programs are, for a bare #~"build" and for
+    #~"zls", which searches each of them for references. A program named
+    twice is an error]
   [#*: #~"target" -- the triple to build for (#~"--target")]
   [#*: #~"outputDir" -- where #~"build" writes the executable when #~"-o"
     names no file; unset is the project directory]
@@ -172,8 +182,8 @@ the user's cache directory instead.
 
 #~"zc init [dir]" makes a directory a project: it writes #~"project.z" with
 every setting commented out at its default, and #~".zerolang/". In a directory
-with no #~".z" file it also writes #~"main.z", printing a greeting, and sets
-#~"main" to it, so #~"zc build && ./main" works at once. It refuses a directory
+with no #~".z" file it also writes #~"main.z", printing a greeting, and lists
+it in #~"programs", so #~"zc build && ./main" works at once. It refuses a directory
 that already holds a #~"project.z".
 
 The zerolang repository is itself a project: its #~"project.z" names

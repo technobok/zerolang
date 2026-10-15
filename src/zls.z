@@ -555,16 +555,17 @@ Server: class {
     docCheck: (Map String V: String)
     # each group's check by the unit it is rooted at
     snapMain: (Map String V: String)
-    # the entry unit project.z names, when the project in hand holds the
-    # document being checked or answered for; "" otherwise
-    projMain: String
-    # each open document's project entry, as projMain read when it was checked
-    docEntry: (Map String V: String)
-    # the generated `z` unit as the entry's program reads it
-    entryLayer: zcheck.GenLayer
-    # the entry's program, checked when a reference search needs it and no
-    # open document's check is rooted there; dropped by the next recheck or
-    # close, as any edit may change it. Keyed by the entry unit.
+    # the programs project.z lists, when the project in hand holds the
+    # document being checked or answered for; none otherwise
+    projPrograms: List String
+    # each open document's project programs, as projPrograms read when it was
+    # checked
+    docPrograms: (Map String V: List String)
+    # the generated `z` unit as each of projPrograms reads it, by program
+    entryLayers: (Map String V: zcheck.GenLayer)
+    # each program, checked when a reference search needs it and no open
+    # document's check is rooted there; dropped by the next recheck or close,
+    # as any edit may change it. Keyed by the program's unit.
     entrySnap: (Map String V: zcheck.CheckResult)
 } as {
     # ---- framed reader over the BufReader ----
@@ -865,16 +866,24 @@ Server: class {
         facts.triple = pf.target.copy
         this.layer = zproject.zLayer :pf :facts
         zproject.writeLayer layer: this.layer
-        this.projMain = ""
-        if pf.found when pf.main.length > 0 when (pf.holdsSource :path) then {
-            this.projMain = pf.main.copy
+        this.enterPrograms :pf :path
+    }
+
+    # enterPrograms -- the programs project `pf` lists, and the `z` layer each
+    # reads, when the project holds the file at `path`; none otherwise
+    enterPrograms: function {:this pf: zproject.ProjectFile.view path: StringView} is {
+        this.projPrograms = List String
+        this.entryLayers = Map String V: zcheck.GenLayer
+        if pf.found.not or (pf.holdsSource :path).not then return
+        for each pg: pf.programs loop {
+            this.projPrograms.append from: pg.copy
             ef: (zproject.BuildFacts.create
                 srcdirs: this.srcDirs
                 systemdir: this.systemDir.stringView
-                main: pf.main.stringView
+                main: pg.stringView
             )
             ef.triple = pf.target.copy
-            this.entryLayer = zproject.zLayer :pf facts: ef
+            this.entryLayers.set key: pg.copy value: (zproject.zLayer :pf facts: ef)
         }
     }
 
@@ -1014,7 +1023,7 @@ Server: class {
             }
         } case none then null
         this.entrySnap = Map String V: zcheck.CheckResult
-        de: this.docEntry.remove key: uri.string
+        de: this.docPrograms.remove key: uri.string
         match (
             de
         ) case some then null case none then null
@@ -1098,7 +1107,9 @@ Server: class {
         if found.not then return
         this.enterProjectOf path: mp.stringView
         this.entrySnap = Map String V: zcheck.CheckResult
-        this.docEntry.set key: uri.string value: this.projMain.copy
+        pgs: List String
+        for each pg: this.projPrograms loop pgs.append from: pg.copy
+        this.docPrograms.set key: uri.string value: pgs.take
         ovs: this.overlaysOf
         # a subunit's document is checked inside its topmost unit, which the
         # parse starts from; that unit's relpath keys the group's shared check
@@ -1541,8 +1552,8 @@ Server: class {
 
     # referencesElsewhere -- the references `own` answered from the document's
     # check, with those every other program that loads its file answers: each
-    # other open document's check, and the project's entry, checked when no
-    # open check is rooted there. A library unit is checked from itself, so its
+    # other open document's check, and each program project.z lists, checked
+    # when no open check is rooted there. A library unit is checked from itself, so its
     # own program holds none of the units that use it. A program without the
     # file answers nothing; a location already listed is listed once.
     referencesElsewhere: function {
@@ -1567,7 +1578,6 @@ Server: class {
         ) case some then {
             inclDecl = ido
         } case none then null
-        ent: this.entryOf :uri
         keys: List String
         for each k: this.snapshots loop {
             if k.stringView != ck then keys.append from: k.copy
@@ -1593,27 +1603,30 @@ Server: class {
                 acc = mergeLocations a: acc b: r
             } case none then null
         }
-        if (this.entryOpen entry: ent.stringView) or (ent.length == 0) then return acc
-        this.checkEntry entry: ent.stringView :docPath
-        eo: this.entrySnap.get key: ent
-        match (
-            eo
-        ) case some then {
-            r: (navAnswer
-                snap: eo
-                :docRel
-                :docUri
-                srcDir: this.srcDir.stringView
-                systemDir: this.systemDir.stringView
-                :docText
-                :line0
-                :ch
-                utf32: this.encUtf32
-                mode: 3
-                :inclDecl
-            )
-            acc = mergeLocations a: acc b: r
-        } case none then null
+        for each ent: (this.programsOf :uri) loop {
+            if (this.entryOpen entry: ent.stringView).not then {
+                this.checkEntry entry: ent.stringView :docPath
+                eo: this.entrySnap.get key: ent.copy
+                match (
+                    eo
+                ) case some then {
+                    r: (navAnswer
+                        snap: eo
+                        :docRel
+                        :docUri
+                        srcDir: this.srcDir.stringView
+                        systemDir: this.systemDir.stringView
+                        :docText
+                        :line0
+                        :ch
+                        utf32: this.encUtf32
+                        mode: 3
+                        :inclDecl
+                    )
+                    acc = mergeLocations a: acc b: r
+                } case none then null
+            }
+        }
         return acc
     }
 
@@ -1632,19 +1645,27 @@ Server: class {
 
     # searchesElsewhere -- a references request on `uri`, answered from check
     # `ck`, has another program to search: another open document's check, or
-    # the project's entry that no open check is rooted at
+    # a program project.z lists that no open check is rooted at
     searchesElsewhere: function {this: this.view uri: StringView ck: StringView} out bool is {
         for each k: this.snapshots loop {
             if k.stringView != ck then return true
         }
-        ent: this.entryOf :uri
-        if ent.length == 0 then return false
-        return (this.entryOpen entry: ent.stringView).not
+        for each ent: (this.programsOf :uri) loop {
+            if (this.entryOpen entry: ent.stringView).not then return true
+        }
+        return false
     }
 
-    # entryOf -- the project entry of open document `uri`, "" for none
-    entryOf: function {this: this.view uri: StringView} out String is {
-        return (textAtKey m: this.docEntry key: uri)
+    # programsOf -- the project programs of open document `uri`, none for none
+    programsOf: function {this: this.view uri: StringView} out List String is {
+        r: List String
+        g: this.docPrograms.get key: uri.string
+        match (
+            g
+        ) case some then {
+            for each pg: g loop r.append from: pg.copy
+        } case none then null
+        return r
     }
 
     # entryOpen -- an open document's check is rooted at unit `entry`
@@ -1655,23 +1676,27 @@ Server: class {
         return false
     }
 
-    # checkEntry -- check the project's entry program, the open buffers
-    # shadowing the disk, unless it is checked already. The project is entered
-    # from the document asking, which the entry's layer is read for.
+    # checkEntry -- check program `entry`, the open buffers shadowing the
+    # disk, unless it is checked already. The project is entered from the
+    # document asking, which the program's layer is read for.
     checkEntry: function {:this entry: StringView docPath: StringView} is {
         if (this.entrySnap.has key: entry.string) then return
         this.enterProjectOf path: docPath
-        if this.projMain.stringView != entry then return
         ovs: this.overlaysOf
-        em: this.projMain.copy
-        r: (zcheck.check
-            srcdirs: this.srcDirs
-            systemdir: this.systemDir.stringView
-            mainUnit: em.stringView
-            overlays: ovs
-            layer: this.entryLayer
-        )
-        if r.parseOk then this.entrySnap.set key: this.projMain.copy value: r
+        ek: entry.string
+        lo: this.entryLayers.get key: ek
+        match (
+            lo
+        ) case some then {
+            r: (zcheck.check
+                srcdirs: this.srcDirs
+                systemdir: this.systemDir.stringView
+                mainUnit: entry
+                overlays: ovs
+                layer: lo
+            )
+            if r.parseOk then this.entrySnap.set key: entry.string value: r
+        } case none then null
     }
 
     # handleResolve -- completionItem/resolve: the item back exactly as the
@@ -9294,9 +9319,9 @@ main: function is {
         snapshots: (Map String V: zcheck.CheckResult)
         docCheck: (Map String V: String)
         snapMain: (Map String V: String)
-        projMain: ""
-        docEntry: (Map String V: String)
-        entryLayer: zcheck.noLayer
+        projPrograms: List String
+        docPrograms: (Map String V: List String)
+        entryLayers: (Map String V: zcheck.GenLayer)
         entrySnap: (Map String V: zcheck.CheckResult)
     )
     if listenArg.length > 0 then {

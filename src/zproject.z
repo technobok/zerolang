@@ -35,15 +35,15 @@ projectFileName: "project.z"
 
 # stringSettings -- the settings that take a string
 stringSettings: data {
-    "systemDir" "runtimeDir" "main" "target" "outputDir" "cCompiler" "cCompilerMode" "cFlags"
-    "linkFlags" "tccLibDir"
+    "systemDir" "runtimeDir" "target" "outputDir" "cCompiler" "cCompilerMode" "cFlags" "linkFlags"
+    "tccLibDir"
 } out stringdata
 
 # switchSettings -- the settings that take true or false
 switchSettings: data { "release" "fastHash" "readableNames" "eager" } out stringdata
 
 # listSettings -- the settings that take a data block of string literals
-listSettings: data { "sourceDirs" } out stringdata
+listSettings: data { "sourceDirs" "programs" } out stringdata
 
 # ProjectFile -- what a project.z says, as read before the build. A string
 # setting the file leaves out is "", a switch it leaves out is false: both mean
@@ -65,8 +65,9 @@ ProjectFile: class {
     systemDir: String
     # the C runtime directory, relative to `dir`
     runtimeDir: String
-    # the unit a build compiles when it names none
-    main: String
+    # the project's programs, each a unit declaring `main`: what a build that
+    # names no unit compiles, and what the language server searches
+    programs: List String
     # the triple to build for
     target: String
     # where a build writes its executable, relative to `dir`
@@ -99,7 +100,7 @@ ProjectFile: class {
             sourceDirsGiven: false
             systemDir: String
             runtimeDir: String
-            main: String
+            programs: List String
             target: String
             outputDir: String
             cCompiler: String
@@ -174,18 +175,16 @@ ProjectFile: class {
         } else if k == 2 then {
             this.runtimeDir = value.take
         } else if k == 3 then {
-            this.main = value.take
-        } else if k == 4 then {
             this.target = value.take
-        } else if k == 5 then {
+        } else if k == 4 then {
             this.outputDir = value.take
-        } else if k == 6 then {
+        } else if k == 5 then {
             this.cCompiler = value.take
-        } else if k == 7 then {
+        } else if k == 6 then {
             this.cCompilerMode = value.take
-        } else if k == 8 then {
+        } else if k == 7 then {
             this.cFlags = value.take
-        } else if k == 9 then {
+        } else if k == 8 then {
             this.linkFlags = value.take
         } else {
             this.tccLibDir = value.take
@@ -430,9 +429,8 @@ readSetting: function {
     ) case error then {
         return (parseProblem :ast row: v :shown)
     } else null
-    if (settingIn names: listSettings name: nm.stringView) > 0 then {
-        return (readListSetting :ast :id :v :shown :into)
-    }
+    kl: settingIn names: listSettings name: nm.stringView
+    if kl > 0 then return (readListSetting :ast :id :v :shown name: nm.stringView which: kl :into)
     ks: settingIn names: stringSettings name: nm.stringView
     kb: settingIn names: switchSettings name: nm.stringView
     if ks == 0 when kb == 0 then {
@@ -468,19 +466,22 @@ readSetting: function {
     return (located :ast at: id :shown msg: why2.take)
 }
 
-# readListSetting -- `sourceDirs: data { "src" "lib" } out stringdata` into
-# `into`: a data block, possibly empty, of string literals, read before any unit
-# loads; the problem with it as a diagnostic, "" when there is none
+# readListSetting -- list setting `name`, its place in listSettings from 1
+# (`sourceDirs: data { "src" "lib" }`), into `into`: a data block, possibly
+# empty, of string literals, read before any unit loads; the problem with it as
+# a diagnostic, "" when there is none
 readListSetting: function {
     ast: Ast.view
     id: zast.nodeid
     v: astnode.view
     shown: StringView
+    name: StringView
+    which: u64
     into: ProjectFile
 } out String is {
-    why: "'sourceDirs' must be a data block of string literals -- `data { \"src\" } out stringdata` -- since project.z is read before any unit loads".string
+    why: "'\{name}' must be a data block of string literals -- `data { \"a\" \"b\" }` -- since project.z is read before any unit loads"
     if v.datablock.not then return (located :ast at: id :shown msg: why.take)
-    dirs: List String
+    items: List String
     k: u64
     for k < v.elements.count loop {
         en: ast.nodes.get i: (zast.kidAt kids: ast.kids span: v.elements i: k)
@@ -490,13 +491,37 @@ readListSetting: function {
         match (
             ev
         ) case some then {
-            dirs.append from: ev.take
+            items.append from: ev.take
         } case none then {
             return (located :ast at: id :shown msg: why.take)
         }
     }
-    into.sourceDirs = dirs.take
-    into.sourceDirsGiven = true
+    if which == 1 then {
+        into.sourceDirs = items.take
+        into.sourceDirsGiven = true
+        return ""
+    }
+    twice: namedTwice :items
+    if twice.length > 0 then {
+        return (located :ast at: id :shown msg: "'programs' names '\{twice}' twice")
+    }
+    into.programs = items.take
+    return ""
+}
+
+# namedTwice -- the first entry of `items` an earlier one repeats, "" when each
+# is named once
+namedTwice: function {items: (List String).view} out String is {
+    i: u64
+    for i < items.length loop {
+        a: items.get :i
+        j: u64
+        for j < i loop {
+            if (items.get i: j).stringView == a then return a.copy
+            j = j + 1
+        }
+        i = i + 1
+    }
     return ""
 }
 
@@ -1043,7 +1068,7 @@ dirHoldsUnits: function {dir: StringView} out bool is {
 }
 
 # projectTemplate -- the project.z `zc init` writes: every setting, commented
-# out at its default; `main` set to main.z's unit when init wrote that too
+# out at its default; `programs` set to main.z's unit when init wrote that too
 projectTemplate: function {withMain: bool} out String is {
     t: String
     t.append "# project.z -- this directory is a zerolang project. zc, zl and zls\n"
@@ -1052,12 +1077,13 @@ projectTemplate: function {withMain: bool} out String is {
     t.append "# outright. A path is relative to this directory.\n"
     t.append "\n# the directories holding the project's units, the first searched first\n"
     t.append "# (--src)\n"
-    t.append "# sourceDirs: data { \".\" } out stringdata\n"
-    t.append "\n# the unit `zc build` and `zc run` compile when none is named\n"
+    t.append "# sourceDirs: data { \".\" }\n"
+    t.append "\n# the project's programs, each a unit declaring `main`: `zc build` builds\n"
+    t.append "# them all when it names no unit, and `zc run` runs the one listed\n"
     if withMain then {
-        t.append "main: \"main\"\n"
+        t.append "programs: data { \"main\" }\n"
     } else {
-        t.append "# main: \"main\"\n"
+        t.append "# programs: data { \"main\" }\n"
     }
     t.append "\n# where `zc build` writes the executable (-o names a file instead)\n"
     t.append "# outputDir: \".\"\n"

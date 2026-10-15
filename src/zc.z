@@ -1010,7 +1010,8 @@ ZcFlags: class {
         return d
     }
 
-    # applyProject -- each setting no flag gave, from project.z. A flag
+    # applyProject -- each setting no flag gave, from project.z (its programs
+    # are unitsToCompile's). A flag
     # replaces the file's value outright, and a unit named by its file is its
     # own source root; a switch the file turns on stays on. Paths the file gives
     # are relative to the project directory.
@@ -1019,7 +1020,6 @@ ZcFlags: class {
         if this.srcdirs.length == 0 when this.unitIsPath.not then {
             for each sr: pf.sourceRoots loop this.srcdirs.append from: sr.copy
         }
-        if this.unitname.length == 0 then this.unitname = pf.main.copy
         this.applyProjectPaths :pf
         this.applyProjectTools :zv :pf
         if pf.release then this.release = true
@@ -1548,10 +1548,61 @@ main: function is {
         emitTarget: cf.emitTarget.stringView
         dumpSqlTarget: cf.dumpSqlTarget.stringView
     )
-    if cf.unitname.length == 0 then {
+    units: unitsToCompile :cf :pf :subW
+    for each u: units loop {
+        cf.unitname = u.copy
+        compileUnit :cf :pf :zv :mode :isRun
+    }
+}
+
+# unitsToCompile -- the unit the command line names, else the project's
+# programs: all of them for `build`, the one listed for any other command.
+# Several programs for a command that makes one thing, or for one -o file, is
+# refused, naming them.
+unitsToCompile: function {
+    cf: ZcFlags.view
+    pf: zproject.ProjectFile.view
+    # the subcommand's slot in zcWord
+    subW: u64
+} out List String is {
+    r: List String
+    if cf.unitname.length > 0 then {
+        r.append from: cf.unitname.copy
+        return r
+    }
+    if pf.programs.length == 0 then {
         io.eprintln "zc: no unit specified"
         os.exit code: 2
     }
+    if pf.programs.length > 1 then {
+        names: String
+        for each pg: pf.programs loop {
+            if names.length > 0 then names.append ", "
+            names.append pg
+        }
+        if subW != zcWord.slot.vBuild then {
+            io.eprintln "zc: project.z lists several programs (\{names}); name the one to use"
+            os.exit code: 2
+        }
+        if cf.outPath.length > 0 then {
+            io.eprintln "zc: -o names one file, and project.z lists several programs (\{names}); name the one to build"
+            os.exit code: 2
+        }
+    }
+    for each pg: pf.programs loop r.append from: pg.copy
+    return r
+}
+
+# compileUnit -- the pipeline for `cf.unitname`: parse, check, then the C, the
+# dump or the executable `mode` asks for, run when `run` asked for it. Any
+# error is reported and stops zc.
+compileUnit: function {
+    cf: ZcFlags
+    pf: zproject.ProjectFile.view
+    zv: zast.Vocab.view
+    mode: outmode
+    isRun: bool
+} is {
     cf.resolveRoots
     systemdir: zcheck.resolveSystemDir flagVal: cf.systemFlag.stringView
     runtimeDir: zcheck.resolveRuntimeDir flagVal: cf.runtimeFlag.stringView
