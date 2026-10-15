@@ -59,7 +59,7 @@ Accessed via qualified names only -- #~"cli.Spec.create",
   -o value            short option
   -xvf                bundled short flags
   -ofile              short option with embedded value
-  --                  end-of-options; rest go to extras
+  --                  end-of-options; rest go to extraArgs
   -                   positional (stdin convention)
 """
 
@@ -69,9 +69,11 @@ Accessed via qualified names only -- #~"cli.Spec.create",
   [#*: #b:"Register-then-parse." Setup is a sequence of
     declarative calls against a mutable spec; the whole parse is
     one function call. No stateful builder objects to juggle]
-  [#*: #b:"One argv shape." #~"os.args" is the only argv source.
-    Callers who want to parse a different token vector
-    synthesise a #~"List of: String" and pass it in place]
+  [#*: #b:"One argv shape." #~"cli.parse" takes the whole vector
+    as #~"os.args" returns it and skips position 0, the program
+    name. Callers who want to parse a different token vector
+    build a #~"List String" with a stand-in at position 0 and pass
+    it in place]
   [#*: #b:"Fail fast, fail whole." Parse either returns a fully
     validated #~"Parsed" or an early #~"err" with a descriptive
     payload. No partial results; no mutable error list]
@@ -118,8 +120,8 @@ Accessed via qualified names only -- #~"cli.Spec.create",
 #p: #b:"Parse + render"
 
 #ul:
-  [#*: [#> to=parse: #b:"cli.parse"] -- #~"function {spec: Spec.borrow args: (List T: String).take} out (Result T: Parsed E: CliError)"]
-  [#*: [#> to=help-text: #b:"cli.helpText"] -- #~"function {Spec: Spec.borrow} out String"]
+  [#*: [#> to=parse: #b:"cli.parse"] -- #~"function {spec: Spec.borrow args: (List String).take} out (Result Parsed E: CliError)"]
+  [#*: [#> to=help-text: #b:"cli.helpText"] -- #~"function {spec: Spec.borrow} out String"]
 
 
 #--: flagdef
@@ -151,7 +153,8 @@ via #~"cli.addPositional".
 
 
 Parser registration state. Built incrementally via
-#~"cli.Spec.create" then the #~"cli.add_*" helpers. All string
+#~"cli.Spec.create" then the #~"cli.addFlag" / #~"cli.addOption" /
+#~"cli.addPositional" helpers. All string
 fields are owned; list fields hold the registered defs in
 insertion order (which is also help-text output order).
 
@@ -174,17 +177,18 @@ methods.
   [#*: #~"hasFlag name" -- was this flag present? Look up by the
     registered long name (e.g. #~"--verbose"), not the short
     alias]
-  [#*: #~"Option name" -- value of this option, or
+  [#*: #~"option name" -- value of this option, or
     #~"Option.none" if absent]
   [#*: #~"positional name" -- value of this positional, or
     #~"Option.none" if absent]
 
-#b:"#~\"extra_args\"" contains all argv tokens following a bare
-#~"--" (the end-of-options terminator). v1 does not expose an
-accessor -- read the field directly.
+#b:"#~\"extraArgs\"" holds every token after a bare #~"--" (the
+end-of-options terminator) and every token beyond the declared
+positionals, in order. There is no accessor -- read the field
+directly.
 
-#b:"Ownership." #~"Option" / #~"positional" each return a
-fresh #~"Option(String)" -- scope-exit frees the boxed string.
+#b:"Ownership." #~"option" / #~"positional" each return a
+fresh #~"Option String" -- scope-exit frees the boxed string.
 
 
 #--: clierror
@@ -199,15 +203,16 @@ reftype payload.
 
 #ul:
   [#*: #~"unknownFlag" -- an argv token starts with #~"-" or
-    #~"--" but no registered flag / option matches. Payload is
+    #~"--" but no registered flag / option matches, or a bundle
+    such as #~"-vq" holds a letter that none does. Payload is
     the offending token]
   [#*: #~"missingValue" -- an option's expected value was
     absent (e.g. #~"--output" with no following token). Payload
-    is the option name]
+    is the option token as given (#~"--output" or #~"-o")]
   [#*: #~"missingRequired" -- an option or positional marked
     #~"required: true" had no value. Payload is the name]
-  [#*: #~"unexpectedArg" -- catch-all for shapes the grammar
-    rejected. Payload is the token]
+  [#*: #~"unexpectedArg" -- a flag given an embedded value
+    (#~"--verbose=1"); flags take none. Payload is the token]
 
 
 #--: add_flag
@@ -250,8 +255,9 @@ consumed in registration order as argv tokens arrive.
 #--: parse
 
 
-Parse #~"args" against the registered #~"Spec". Typical call
-site:
+Parse #~"args" against the registered #~"Spec". #~"args" is the
+whole argument vector as #~"os.args" returns it; position 0, the
+program name, is skipped. Typical call site:
 
 #code language=zerolang: """
   pr: cli.parse spec: sp args: os.args
@@ -296,7 +302,7 @@ freshly-allocated #~"String".
 
   Positionals:
     pattern    regex
-    file       input
+    file    input
 """
 
 Layout is deterministic: registration order is preserved.

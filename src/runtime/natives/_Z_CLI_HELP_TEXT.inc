@@ -15,7 +15,7 @@ static z_@String@_t z_cli_helpText(z_@Spec@_t* spec) {
         z_@String@_append(&out, spec->@MEMBER_Spec.summary@.data, spec->@MEMBER_Spec.summary@.size);
     }
     if (spec->@MEMBER_Spec.flags@.length > 0) {
-        z_@String@_append(&out, "\n\nFlags:", 9);
+        z_@String@_append(&out, "\n\nFlags:", 8);
         for (uint64_t i = 0; i < spec->@MEMBER_Spec.flags@.length; i++) {
             z_@FlagDef@_t* f = &spec->@MEMBER_Spec.flags@.data[i];
             z_@String@_append(&out, "\n  ", 3);
@@ -31,7 +31,7 @@ static z_@String@_t z_cli_helpText(z_@Spec@_t* spec) {
         }
     }
     if (spec->@MEMBER_Spec.options@.length > 0) {
-        z_@String@_append(&out, "\n\nOptions:", 11);
+        z_@String@_append(&out, "\n\nOptions:", 10);
         for (uint64_t i = 0; i < spec->@MEMBER_Spec.options@.length; i++) {
             z_@OptionDef@_t* o = &spec->@MEMBER_Spec.options@.data[i];
             z_@String@_append(&out, "\n  ", 3);
@@ -47,7 +47,7 @@ static z_@String@_t z_cli_helpText(z_@Spec@_t* spec) {
         }
     }
     if (spec->@MEMBER_Spec.positionals@.length > 0) {
-        z_@String@_append(&out, "\n\nPositionals:", 15);
+        z_@String@_append(&out, "\n\nPositionals:", 14);
         for (uint64_t i = 0; i < spec->@MEMBER_Spec.positionals@.length; i++) {
             z_@PositionalDef@_t* p = &spec->@MEMBER_Spec.positionals@.data[i];
             z_@String@_append(&out, "\n  ", 3);

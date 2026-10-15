@@ -62,4 +62,14 @@ static z_@Result_Parsed_CliError@_t z_cli_wrap_err(z_@CliError@_t e) {
     return r;
 }
 
+/* fail the parse on token tok: the error copies tok before the partial
+   result and the consumed args (which tok may point into) are freed */
+static z_@Result_Parsed_CliError@_t z_cli_fail(z_@Parsed@_t* parsed, z_@List_String@_t* args, z_@CliError@_tag_t tag, const char* tok, uint64_t tlen);
+static z_@Result_Parsed_CliError@_t z_cli_fail(z_@Parsed@_t* parsed, z_@List_String@_t* args, z_@CliError@_tag_t tag, const char* tok, uint64_t tlen) {
+    z_@CliError@_t e = z_cli_err(tag, tok, tlen);
+    z_@Parsed@_destroy(parsed); free(parsed);
+    z_@List_String@_destroy(args);
+    return z_cli_wrap_err(e);
+}
+
 

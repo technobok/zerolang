@@ -27,10 +27,7 @@ static z_@Result_Parsed_CliError@_t z_cli_parse(z_@Spec@_t* spec, z_@List_String
             int64_t fi = z_cli_find_flag_long(&spec->@MEMBER_Spec.flags@, a->data, name_len);
             if (fi >= 0) {
                 if (eq) {
-                    z_@Parsed@_destroy(parsed); free(parsed); z_@List_String@_destroy(&args);
-                    return z_cli_wrap_err(
-                        z_cli_err(@ARM_CliError.unexpectedArg@,
-                                  a->data, a->size));
+                    return z_cli_fail(parsed, &args, @ARM_CliError.unexpectedArg@, a->data, a->size);
                 }
                 z_@List_String@_append(
                     &parsed->@MEMBER_Parsed.flagSet@,
@@ -51,10 +48,7 @@ static z_@Result_Parsed_CliError@_t z_cli_parse(z_@Spec@_t* spec, z_@List_String
                 } else {
                     if (i + 1 >= args.length) {
                         z_@String@_free(&key);
-                        z_@Parsed@_destroy(parsed); free(parsed); z_@List_String@_destroy(&args);
-                        return z_cli_wrap_err(
-                            z_cli_err(@ARM_CliError.missingValue@,
-                                      a->data, a->size));
+                        return z_cli_fail(parsed, &args, @ARM_CliError.missingValue@, a->data, a->size);
                     }
                     val = z_@String@_new(args.data[i + 1].data);
                     i++;
@@ -64,10 +58,7 @@ static z_@Result_Parsed_CliError@_t z_cli_parse(z_@Spec@_t* spec, z_@List_String
                 i++;
                 continue;
             }
-            z_@Parsed@_destroy(parsed); free(parsed); z_@List_String@_destroy(&args);
-            return z_cli_wrap_err(
-                z_cli_err(@ARM_CliError.unknownFlag@,
-                          a->data, a->size));
+            return z_cli_fail(parsed, &args, @ARM_CliError.unknownFlag@, a->data, a->size);
         }
         /* short form `-x[yz...]` */
         if (a->size >= 2 && a->data[0] == '-') {
@@ -85,10 +76,7 @@ static z_@Result_Parsed_CliError@_t z_cli_parse(z_@Spec@_t* spec, z_@List_String
                 &spec->@MEMBER_Spec.options@, a->data, a->size);
             if (oi >= 0) {
                 if (i + 1 >= args.length) {
-                    z_@Parsed@_destroy(parsed); free(parsed); z_@List_String@_destroy(&args);
-                    return z_cli_wrap_err(
-                        z_cli_err(@ARM_CliError.missingValue@,
-                                  a->data, a->size));
+                    return z_cli_fail(parsed, &args, @ARM_CliError.missingValue@, a->data, a->size);
                 }
                 z_@String@_t key = z_@String@_new(spec->@MEMBER_Spec.options@.data[oi].@MEMBER_OptionDef.name@.data);
                 z_@String@_t val = z_@String@_new(args.data[i + 1].data);
@@ -128,17 +116,14 @@ static z_@Result_Parsed_CliError@_t z_cli_parse(z_@Spec@_t* spec, z_@List_String
                     ok = false;
                 }
                 if (!ok) {
-                    z_@Parsed@_destroy(parsed); free(parsed); z_@List_String@_destroy(&args);
-                    return z_cli_wrap_err(
-                        z_cli_err(@ARM_CliError.unknownFlag@,
-                                  a->data, a->size));
+                    return z_cli_fail(parsed, &args, @ARM_CliError.unknownFlag@, a->data, a->size);
                 }
                 i++;
                 continue;
             }
-            /* `-` alone or unrecognised short: fall through to positional */
+            return z_cli_fail(parsed, &args, @ARM_CliError.unknownFlag@, a->data, a->size);
         }
-        /* positional */
+        /* positional; `-` alone lands here (the stdin convention) */
         if (next_pos < spec->@MEMBER_Spec.positionals@.length) {
             z_@String@_t key = z_@String@_new(
                 spec->@MEMBER_Spec.positionals@.data[next_pos].@MEMBER_PositionalDef.name@.data);

@@ -1,0 +1,68 @@
+# cli_errors.z -- cli.parse over argument lists built in the program.
+# A token that starts with `-` and matches no registered flag or option is
+# unknownFlag whatever its length (`-q` as much as `--quiet` or `-vq`), and
+# every error arm carries the offending token: it is copied before the
+# consumed argument list is freed. Position 0 stands for the program name and
+# is never parsed. The help text closes the run, one section per kind.
+
+report: function {sp: cli.Spec.borrow args: (List String).take} is {
+    pr: cli.parse spec: sp :args
+    match (
+        pr
+    ) case ok then {
+        v: pr.hasFlag name: "--verbose"
+        o: pr.option name: "--output"
+        match (
+            o
+        ) case some then {
+            print "ok verbose=\{v} output=\{o}"
+        } case none then {
+            print "ok verbose=\{v}"
+        }
+    } case err then {
+        match (
+            pr
+        ) case unknownFlag then {
+            print "unknownFlag \{pr}"
+        } case missingValue then {
+            print "missingValue \{pr}"
+        } case missingRequired then {
+            print "missingRequired \{pr}"
+        } case unexpectedArg then {
+            print "unexpectedArg \{pr}"
+        }
+    }
+}
+
+# the program name plus one token
+tokens: function {a: StringView} out List String is {
+    xs: List String
+    xs.append "prog".string
+    xs.append a.string
+    return xs
+}
+
+main: function is {
+    sp: cli.Spec.create programName: "prog".string summary: "tokens".string
+    cli.addFlag spec: sp name: "--verbose".string shortName: "-v".string help: "chatty".string
+    (cli.addOption
+        spec: sp
+        name: "--output".string
+        shortName: "-o".string
+        help: "out file".string
+        required: false
+    )
+    cli.addPositional spec: sp name: "file".string help: "input".string required: false
+    report :sp args: (tokens a: "-v")
+    report :sp args: (tokens a: "--verbose")
+    report :sp args: (tokens a: "-ofile")
+    report :sp args: (tokens a: "--output=x")
+    report :sp args: (tokens a: "-")
+    report :sp args: (tokens a: "-q")
+    report :sp args: (tokens a: "--quiet")
+    report :sp args: (tokens a: "-vq")
+    report :sp args: (tokens a: "--verbose=1")
+    report :sp args: (tokens a: "--output")
+    report :sp args: (tokens a: "-o")
+    print (cli.helpText spec: sp)
+}
