@@ -32556,7 +32556,8 @@ emitUnitMonoFn: function {
 }
 
 # emitUnitNestedMethods -- the methods of the unit mono `t`'s own copy of a type
-# its template declares.
+# its template declares, or of each of its instances of one with parameters of
+# its own.
 emitUnitNestedMethods: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
@@ -32572,9 +32573,17 @@ emitUnitNestedMethods: function {
     io: symtab.typing.declChildOfId parentTypeId: t nameId: member.name
     inst: io.or d: ztypes.tid.zero
     if inst.isZero then return
-    if (symtab.reg.genericOriginOf tid: inst).isZero then return
-    emitMonoMethodsIn :ast :symtab :ctx span: op.isItems monoId: inst :declOnly :buf
-    emitMonoMethodsIn :ast :symtab :ctx span: op.asItems monoId: inst :declOnly :buf
+    if (symtab.reg.genericOriginOf tid: inst).isZero.not then {
+        emitMonoMethodsIn :ast :symtab :ctx span: op.isItems monoId: inst :declOnly :buf
+        emitMonoMethodsIn :ast :symtab :ctx span: op.asItems monoId: inst :declOnly :buf
+        return
+    }
+    if (symtab.reg.isGenericOf tid: inst).not then return
+    # a type with parameters of its own: each instance of it `t` has
+    for each ci: (ztypecheck.instancesWithin st: symtab owner: t tplId: inst) loop {
+        emitMonoMethodsIn :ast :symtab :ctx span: op.isItems monoId: ci :declOnly :buf
+        emitMonoMethodsIn :ast :symtab :ctx span: op.asItems monoId: ci :declOnly :buf
+    }
 }
 
 # emitUnitMonoMembers -- every body-carrying function the template declares,
@@ -32671,6 +32680,23 @@ unitMonoNestedInstance: function {
     ni: (symtab.typing.declChildOfId parentTypeId: mono :nameId).or d: ztypes.tid.zero
     if ni.isZero or (originTidOf :symtab tid: ni).isZero then return ztypes.tid.zero
     return ni
+}
+
+# nestedUnitTemplate -- the unit template the instance `mono` reaches through its
+# template's body member, when that member declares a unit with parameters of
+# its own; 0 otherwise.
+nestedUnitTemplate: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    nameId: zast.nameid
+    opId: zast.nodeid
+    mono: ztypes.tid
+} out ztypes.tid is {
+    if opId.isZero or (zast.unitOpHasBody :ast :opId).not then return ztypes.tid.zero
+    nt: (symtab.typing.declChildOfId parentTypeId: mono :nameId).or d: ztypes.tid.zero
+    if nt.isZero or (originTidOf :symtab tid: nt).isZero.not then return ztypes.tid.zero
+    if (symtab.reg.isGenericOf tid: nt).not then return ztypes.tid.zero
+    return nt
 }
 
 # fillTemplateDataElems -- the element tables of every instance of the generic
@@ -32778,17 +32804,18 @@ emitNestedUnitMonoMembers: function {
     match (
         member
     ) case namedoperation then {
+        nbody: zast.unitBodyIdsAt :ast unitId: member.operation
         nui: unitMonoNestedInstance :ast :symtab nameId: member.name opId: member.operation mono: t
-        if nui.isZero then return
-        (emitUnitMonoMembers
-            :ast
-            :symtab
-            :ctx
-            bodyIds: (zast.unitBodyIdsAt :ast unitId: member.operation)
-            t: nui
-            :declOnly
-            :buf
-        )
+        if nui.isZero.not then {
+            emitUnitMonoMembers :ast :symtab :ctx bodyIds: nbody t: nui :declOnly :buf
+            return
+        }
+        # a template with parameters of its own: each instance of it `t` owns
+        ntpl: nestedUnitTemplate :ast :symtab nameId: member.name opId: member.operation mono: t
+        if ntpl.isZero then return
+        for each oi: (ztypecheck.instancesWithin st: symtab owner: t tplId: ntpl) loop {
+            emitUnitMonoMembers :ast :symtab :ctx bodyIds: nbody t: oi :declOnly :buf
+        }
     } else null
 }
 

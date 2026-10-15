@@ -1,0 +1,46 @@
+# generic_unit_nested_template -- a template written in a generic unit, a unit
+# or a type with parameters of its own, takes the unit's parameters after its
+# own, and an application names only its own: inside the unit the unit's are
+# the instance's (`pu: (pairs u: f64)` in `wrap t: i64` is pairs over f64 and
+# i64), and outside the template is reached through an instance
+# (`wi.Cell a: 5 b: 2.5`), which binds them. An instance of the nested unit
+# template is its enclosing instance's, walked and emitted with it. Each was
+# wrong: a nested unit's instance never saw `t` ("expects i64, got t", or C
+# calling a function nothing emitted), `(Cell u: f64)` was "applied without its
+# parameter 't'", and `wi.Cell` left `u` unbound.
+wrap: unit as {
+    t: anyval.generic
+    pairs: unit as {
+        u: anyval.generic
+        both: function {a: t b: u} out t is { return a }
+        second: function {a: t b: u} out u is { return b }
+    }
+    Cell: record {
+        a: t
+        b: u
+    } as {
+        u: anyval.generic
+        getb: function {c: this} out u is { return c.b }
+    }
+    pu: (pairs u: f64)
+    pv: (pairs u: bool)
+    CF: (Cell u: f64)
+    go: function {v: t} out t is { return (pv.both a: (pu.both a: v b: 1.5) b: true) }
+    half: function {v: t} out f64 is { return (pu.second a: v b: 0.5) }
+    mk: function {v: t} out t is {
+        c: Cell a: v b: 2.5
+        d: CF a: c.a b: c.getb
+        return d.a
+    }
+}
+
+wi: (wrap t: i64)
+wb: (wrap t: bool)
+
+main: function is {
+    print "go \{wi.go v: 5} \{wb.go v: true}"
+    print "half \{wi.half v: 5} \{wb.half v: false}"
+    print "mk \{wi.mk v: 7} \{wb.mk v: true}"
+    c: wi.Cell a: 3 b: false
+    print "cell \{c.a} \{c.getb}"
+}
