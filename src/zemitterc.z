@@ -3887,6 +3887,10 @@ Ctx: class {
     fragTypeNames: List String
     # their owning types, parallel again
     fragTypeTids: ListVal ztypes.tid
+    # the units the rows belong to, each once, in the order the table first
+    # names them: where a fragment's plain type-name hole is looked up after
+    # the system unit (ioCanonTidAny). The system unit itself is not listed
+    fragUnitDecls: ListVal ztypes.declid
     # the type ids those rows gate, and the ones the program actually built
     demandGatedTids: IdSet ztypes.tid
     # the types something actually referenced, which is what decides emission
@@ -34237,6 +34241,7 @@ emitC: function {
         fragNames: List String
         fragTypeNames: List String
         fragTypeTids: ListVal ztypes.tid
+        fragUnitDecls: ListVal ztypes.declid
         demandGatedTids: IdSet ztypes.tid
         usedTypeIds: IdSet ztypes.tid
         emittedConformance: IdSet ztypes.confid
@@ -34282,6 +34287,7 @@ emitC: function {
     {
         buildDefUnitIndex :symtab :ctx
         bindFragTypeTids :symtab :ctx ast: program
+        bindFragUnitDecls :symtab :ctx ast: program
         rmn: ctx.realMain.copy
         (ctxBindMain
             :ctx
@@ -37037,8 +37043,10 @@ ioCanonTidAny: function {
     st: ioCanonTid :ast :symtab :ctx :canon
     if st.isZero.not then return st
     # a plain source-name stem (File, IoError, Reader): the system unit first,
-    # then each unit that brings runtime fragments, by id. A generic instance's
-    # stem is a natives.tbl @canon row, resolved above.
+    # then each unit the table's rows belong to, in table order, by id. A
+    # generic instance's stem is a natives.tbl @canon row, resolved above, and
+    # native-guard holds every other stem to one declaring unit, so the order
+    # never decides between two.
     nameId94: zast.poolFind pool: ast.names text: canon
     mo: (ztypecheck.resolveUnitChildRo
         :ast
@@ -37051,26 +37059,11 @@ ioCanonTidAny: function {
     ) case some then {
         return mo
     } case none then null
-    found: fragUnitChild :ast :symtab unitDecl: ctx.ioUnitDecl nameId: nameId94
-    if found.isZero then found = (fragUnitChild
-        :ast
-        :symtab
-        unitDecl: ctx.cliUnitDecl
-        nameId: nameId94
-    )
-    if found.isZero then found = (fragUnitChild
-        :ast
-        :symtab
-        unitDecl: ctx.netUnitDecl
-        nameId: nameId94
-    )
-    if found.isZero then found = (fragUnitChild
-        :ast
-        :symtab
-        unitDecl: ctx.osUnitDecl
-        nameId: nameId94
-    )
-    return found
+    for each ud: ctx.fragUnitDecls loop {
+        found: fragUnitChild :ast :symtab unitDecl: ud nameId: nameId94
+        if found.isZero.not then return found
+    }
+    return ztypes.tid.zero
 }
 
 # fragUnitChild -- the type `nameId` a runtime-fragment unit declares, 0 when the
@@ -37326,6 +37319,22 @@ bindFragTypeTids: function {symtab: zenv.ZSymbolTable.view ctx: Ctx ast: Ast.vie
         ctx.fragTypeTids.append found
         if found.isZero.not then ctx.demandGatedTids.add item: found
         i = i + 1
+    }
+}
+
+# bindFragUnitDecls -- the units the table's rows belong to, each once, in the
+# order the table first names them (ctx.fragUnitDecls). A row path's first
+# segment that names no unit in scope (`sviter`, a unit the program does not
+# reach) lists nothing.
+bindFragUnitDecls: function {symtab: zenv.ZSymbolTable.view ctx: Ctx ast: Ast.view} is {
+    sysU: symtab.typing.systemUnitRoot
+    for each un: ctx.fragUnits loop {
+        uid: unitDeclByName :symtab :ast name: un.stringView
+        seen: uid.isZero or (uid == sysU)
+        for each d: ctx.fragUnitDecls loop {
+            if d == uid then seen = true
+        }
+        if seen.not then ctx.fragUnitDecls.append uid
     }
 }
 

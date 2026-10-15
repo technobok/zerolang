@@ -707,7 +707,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2195411
+ALLOC_BASELINE := 2195761
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1905,25 +1905,29 @@ fallback-guard: $(EXCS) bin/zc bin/zl bin/zls
 clean:
 	rm -rf $(BUILDDIR) bin
 
-# native-guard -- natives are declaration-driven. Every `is native` free function
-# in io/os/cli/net/tcc/math has its _Z_<UNIT>_<NAME>.inc fragment (bar the
-# exceptions); every fragment is referenced (by the emitter or a natives.tbl
-# frag= list); and every z_@Name@, @ARM_canon.arm@ and @MEMBER_canon.name@ hole a
-# fragment spells names a declared type, arm or member. No fragment spells a tag
-# constant or a generated struct's member literally. A natives.tbl `form=value`
-# row's body calls nothing and opens no statement expression (its facts are its
-# operands'), and a `const=` variant is a value exactly when its plain row is.
-NATIVE_GUARD_EXCEPTIONS := io.print io.stdin io.stdout io.stderr os.env net.pollReadable
+# native-guard -- natives are declaration-driven. The units it covers are the
+# ones natives.tbl has rows for, read off the table, and every top-level `is
+# native` function such a unit declares has its own `[<unit>.<name> ...]` row;
+# every fragment is referenced (by the emitter or a natives.tbl frag= list); and
+# every z_@Name@, @ARM_canon.arm@ and @MEMBER_canon.name@ hole a fragment spells
+# names a declared type, arm or member. A plain z_@Name@ that no @canon row and
+# no loader binds must be declared by the system unit or by exactly ONE row
+# unit: the loader looks it up in table order, and two declarers would make
+# that order decide. No fragment spells a tag constant or a generated struct's
+# member literally. A natives.tbl `form=value` row's body calls nothing and
+# opens no statement expression (its facts are its operands'), and a `const=`
+# variant is a value exactly when its plain row is.
+NATIVE_GUARD_SYSTEM := lib/system/system.z lib/system/system/*.z lib/system/core.z
 
 native-guard:
-	@fail=0; conv=""; \
-	for u in io os cli net tcc math; do \
+	@fail=0; \
+	rowunits=""; \
+	for u in $$(sed -nE 's/^\[@?([a-z][a-zA-Z0-9]*)[]. ].*/\1/p' src/runtime/natives.tbl | awk '!s[$$0]++'); do \
+	  test -f lib/system/$$u.z && rowunits="$$rowunits $$u"; \
+	done; \
+	for u in $$rowunits; do \
 	  for n in $$(awk '/^[a-zA-Z][a-zA-Z0-9]*: function/ {name=$$1; sub(/:.*/,"",name); pending=1} pending && /is native/ {print name; pending=0} pending && /is \{/ {pending=0}' lib/system/$$u.z $$(ls lib/system/$$u/*.z 2>/dev/null)); do \
-	    case " $(NATIVE_GUARD_EXCEPTIONS) " in *" $$u.$$n "*) continue;; esac; \
-	    snake=$$(echo "$$n" | sed 's/\([A-Z]\)/_\1/g' | tr 'a-z' 'A-Z'); \
-	    frag="_Z_$$(echo $$u | tr 'a-z' 'A-Z')_$$snake"; \
-	    conv="$$conv $$frag"; \
-	    test -f src/runtime/natives/$$frag.inc || { echo "native-guard: $$u.$$n declared native but $$frag.inc missing (add the fragment or an exceptions entry)"; fail=1; }; \
+	    grep -qE "^\[$$u\.$$n[] ]" src/runtime/natives.tbl || { echo "native-guard: $$u.$$n is declared native but natives.tbl has no [$$u.$$n ...] row (add the row)"; fail=1; }; \
 	  done; \
 	done; \
 	for f in $$(grep -oE '"_Z_[A-Z0-9_]+"' src/zemitterc.z | tr -d '"' | sort -u); do \
@@ -1931,28 +1935,35 @@ native-guard:
 	done; \
 	for f in src/runtime/natives/*.inc; do \
 	  stem=$$(basename $$f .inc); \
-	  case " $$conv " in *" $$stem "*) continue;; esac; \
 	  need=$$(echo "$$stem" | sed 's/^_Z_//' | tr 'A-Z' 'a-z'); \
 	  ref=0; \
 	  grep -qF "\"$$stem\"" src/zemitterc.z && ref=1; \
 	  grep -qF "\"$$need\"" src/zemitterc.z && ref=1; \
 	  grep -qE "frag=([A-Z0-9_]+,)*$$stem(,|\]| )" src/runtime/natives.tbl && ref=1; \
-	  for u in io os cli net tcc math; do \
+	  for u in $$rowunits; do \
 	    case "$$need" in "$$u"_*) \
 	      grep -qF "memb: \"$${need#$$u\_}\"" src/zemitterc.z && ref=1;; \
 	    esac; \
 	  done; \
 	  [ "$$ref" = 1 ] || { echo "native-guard: $$stem.inc on disk but nothing references it (orphan -- delete it or load it)"; fail=1; }; \
 	done; \
-	known=$$({ sed -nE 's/^\[@canon\.([A-Za-z_][A-Za-z0-9_]*) .*/"\1"/p' src/runtime/natives.tbl; \
+	bound=$$({ sed -nE 's/^\[@canon\.([A-Za-z_][A-Za-z0-9_]*) .*/"\1"/p' src/runtime/natives.tbl; \
 	    grep -oE 'mono: "[A-Za-z_][A-Za-z0-9_]*"' src/zemitterc.z; \
 	    grep -ohE 'bn\.append from: "[A-Za-z_][A-Za-z0-9_]*"' src/zemitterc.z; \
-	  } | sed 's/.*"\(.*\)"/\1/'; \
-	  sed -nE 's/^([A-Za-z_][A-Za-z0-9_]*):.*/\1/p' \
-	    lib/system/core.z lib/system/io.z lib/system/os.z lib/system/net.z \
-	    lib/system/cli.z lib/system/tcc.z lib/system/system.z; \
-	  printf 'String\nStringView\n'); \
+	  } | sed 's/.*"\(.*\)"/\1/'; printf 'String\nStringView\n'); \
+	bound=" $$(echo "$$bound" | sort -u | tr '\n' ' ') "; \
+	known=$$(echo "$$bound" | tr ' ' '\n'; \
+	  sed -nE 's/^([A-Za-z_][A-Za-z0-9_]*):.*/\1/p' lib/system/*.z lib/system/*/*.z); \
 	known=" $$(echo "$$known" | sort -u | tr '\n' ' ') "; \
+	for h in $$(grep -ohE 'z_@[A-Za-z_][A-Za-z0-9_]*@' src/runtime/natives/*.inc src/runtime/*.inc src/runtime/*.c.tmpl src/runtime/*.tbl | sed -e 's/^z_@//' -e 's/@$$//' | sort -u); do \
+	  case "$$bound" in *" $$h "*) continue;; esac; \
+	  grep -qE "^$$h:" $(NATIVE_GUARD_SYSTEM) && continue; \
+	  decl=""; \
+	  for u in $$rowunits; do \
+	    grep -qE "^$$h:" lib/system/$$u.z $$(ls lib/system/$$u/*.z 2>/dev/null) && decl="$$decl $$u"; \
+	  done; \
+	  case "$$decl" in " "*" "*) echo "native-guard: hole @$$h@ is declared by more than one unit ($$decl); give it an @canon row naming the one it means"; fail=1;; esac; \
+	done; \
 	nh=0; \
 	for f in src/runtime/natives/*.inc src/runtime/*.inc src/runtime/*.c.tmpl src/runtime/*.tbl; do \
 	  for h in $$(grep -ohE 'z_@[A-Za-z_][A-Za-z0-9_]*@' $$f | sed -e 's/^z_@//' -e 's/@$$//' | sort -u); do \
