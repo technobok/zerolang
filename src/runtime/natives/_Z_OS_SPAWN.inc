@@ -1,15 +1,17 @@
-/* os.spawn -- fork/exec argv as a child. argv[0] is resolved via
-   PATH (execvp). stdout->outPath, stderr->errPath (each
-   O_WRONLY|O_CREAT|O_TRUNC); an empty out/err path inherits the
-   parent's fd, and empty out+err inherits stdin too (else stdin is
-   /dev/null). A non-empty cwd chdirs
-   the child. The redirection files are opened in the parent before
-   fork so the child's chdir cannot change their resolution. argv
-   element buffers are NUL-terminated (z_@String@), borrowed directly;
-   only the three view paths need z_sv_to_cstr. Returns the child's
-   exit status; 127 on exec/setup failure; 124 if timeoutSecs > 0 and
-   the child outlived it (SIGKILLed). timeoutSecs <= 0 waits forever. */
-static void z_os_spawn_on_alarm(int sig) { (void)sig; }
+/* os.spawn -- start argv as a child (z_os_spawn_start: PATH resolution,
+   redirections, cwd) and wait for it. Returns the child's exit status; 127
+   on exec/setup failure; 124 if timeoutSecs > 0 and the child outlived it
+   (SIGKILLed). timeoutSecs <= 0 waits forever.
+
+   The timeout waits on a pidfd with poll, so it touches no process-wide
+   state (no signal handler, no alarm) and another thread's spawn is not
+   disturbed. A kernel without pidfd_open (ENOSYS) is polled with WNOHANG
+   every 10ms instead. */
+#include <time.h>
+static int32_t z_os_spawn_status(int wst) {
+    if (WIFEXITED(wst)) return (int32_t)WEXITSTATUS(wst);
+    return 127;
+}
 static int32_t z_os_spawn(
     z_@List_String@_t* argv, z_@StringView@_t cwd, z_@StringView@_t outPath,
     z_@StringView@_t errPath, int32_t timeoutSecs
@@ -18,74 +20,55 @@ static int32_t z_os_spawn(
     z_@List_String@_t* argv, z_@StringView@_t cwd, z_@StringView@_t outPath,
     z_@StringView@_t errPath, int32_t timeoutSecs
 ) {
-    if (argv->length == 0) return 127;
-    char** c_argv = (char**)z_xmalloc((argv->length + 1) * sizeof(char*));
-    for (uint64_t i = 0; i < argv->length; i++) {
-        c_argv[i] = argv->data[i].data;
-    }
-    c_argv[argv->length] = NULL;
-    char* cwd_c = z_sv_to_cstr(cwd);
-    /* An empty outPath/errPath inherits the parent's fd 1/2 (skip the
-       open+dup2). When both are empty (the `zc run` case) inherit stdin
-       too; otherwise stdin is /dev/null. Non-empty callers unaffected. */
-    int inherit_out = (outPath.size == 0);
-    int inherit_err = (errPath.size == 0);
-    int inherit_in = (inherit_out && inherit_err);
-    char* out_c = inherit_out ? NULL : z_sv_to_cstr(outPath);
-    char* err_c = inherit_err ? NULL : z_sv_to_cstr(errPath);
-    int out_fd = inherit_out ? -1 : open(out_c, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    int err_fd = inherit_err ? -1 : open(err_c, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    int null_fd = inherit_in ? -1 : open("/dev/null", O_RDONLY);
-    int32_t status = 127;
-    int setup_ok = (inherit_out || out_fd >= 0) && (inherit_err || err_fd >= 0)
-                   && (inherit_in || null_fd >= 0);
-    if (setup_ok) {
-        pid_t pid = fork();
-        if (pid == 0) {
-            if (cwd.size > 0 && chdir(cwd_c) != 0) _exit(127);
-            if (!inherit_in) dup2(null_fd, 0);
-            if (!inherit_out) dup2(out_fd, 1);
-            if (!inherit_err) dup2(err_fd, 2);
-            if (null_fd >= 0) close(null_fd);
-            if (out_fd >= 0) close(out_fd);
-            if (err_fd >= 0) close(err_fd);
-            execvp(c_argv[0], c_argv);
-            _exit(127);
-        } else if (pid > 0) {
-            int wst = 0;
-            if (timeoutSecs > 0) {
-                struct sigaction sa, old_sa;
-                memset(&sa, 0, sizeof(sa));
-                sa.sa_handler = z_os_spawn_on_alarm;
-                sigemptyset(&sa.sa_mask);
-                sigaction(SIGALRM, &sa, &old_sa);
-                alarm((unsigned int)timeoutSecs);
-                pid_t r = waitpid(pid, &wst, 0);
-                int e = errno;
-                alarm(0);
-                sigaction(SIGALRM, &old_sa, NULL);
-                if (r == pid) {
-                    if (WIFEXITED(wst)) status = (int32_t)WEXITSTATUS(wst);
-                } else if (r < 0 && e == EINTR) {
-                    kill(pid, SIGKILL);
-                    waitpid(pid, &wst, 0);
-                    status = 124;
-                }
-            } else {
-                if (waitpid(pid, &wst, 0) == pid && WIFEXITED(wst)) {
-                    status = (int32_t)WEXITSTATUS(wst);
-                }
-            }
+    pid_t pid = z_os_spawn_start(argv, cwd, outPath, errPath);
+    if (pid < 0) return 127;
+    int wst = 0;
+    if (timeoutSecs <= 0) {
+        while (waitpid(pid, &wst, 0) < 0) {
+            if (errno != EINTR) return 127;
         }
+        return z_os_spawn_status(wst);
     }
-    if (out_fd >= 0) close(out_fd);
-    if (err_fd >= 0) close(err_fd);
-    if (null_fd >= 0) close(null_fd);
-    free(cwd_c);
-    free(out_c);
-    free(err_c);
-    free(c_argv);
-    return status;
+    int64_t budget = (int64_t)timeoutSecs * 1000;
+    int pfd = -1;
+#ifdef SYS_pidfd_open
+    pfd = (int)syscall(SYS_pidfd_open, pid, 0);
+#endif
+    if (pfd >= 0) {
+        struct pollfd p = { pfd, POLLIN, 0 };
+        struct timespec t0;
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        int ready = 0;
+        for (;;) {
+            struct timespec t1;
+            clock_gettime(CLOCK_MONOTONIC, &t1);
+            int64_t spent = (int64_t)(t1.tv_sec - t0.tv_sec) * 1000
+                          + (int64_t)(t1.tv_nsec - t0.tv_nsec) / 1000000;
+            if (spent >= budget) break;
+            int r = poll(&p, 1, (int)(budget - spent));
+            if (r > 0) { ready = 1; break; }
+            if (r < 0 && errno != EINTR) break;
+        }
+        close(pfd);
+        if (!ready) {
+            kill(pid, SIGKILL);
+            while (waitpid(pid, &wst, 0) < 0 && errno == EINTR) {}
+            return 124;
+        }
+        while (waitpid(pid, &wst, 0) < 0) {
+            if (errno != EINTR) return 127;
+        }
+        return z_os_spawn_status(wst);
+    }
+    for (int64_t waited = 0; ; waited += 10) {
+        pid_t r = waitpid(pid, &wst, WNOHANG);
+        if (r == pid) return z_os_spawn_status(wst);
+        if (r < 0 && errno != EINTR) return 127;
+        if (waited >= budget) break;
+        struct timespec ts = { 0, 10 * 1000000L };
+        nanosleep(&ts, NULL);
+    }
+    kill(pid, SIGKILL);
+    while (waitpid(pid, &wst, 0) < 0 && errno == EINTR) {}
+    return 124;
 }
-
-

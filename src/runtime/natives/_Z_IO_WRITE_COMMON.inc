@@ -19,7 +19,7 @@ static z_@Result_null_IoError@_t z_io_write_common(
 ) {
     z_@Result_null_IoError@_t result = {0};
     char* path_cstr = z_sv_to_cstr(path);
-    int fd = open(path_cstr, flags, 0644);
+    int fd = open(path_cstr, flags | O_CLOEXEC, 0644);
     free(path_cstr);
     if (fd < 0) {
         int e = errno;

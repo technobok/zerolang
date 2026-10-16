@@ -2,7 +2,7 @@
    SO_REUSEADDR; backlog 16. */
 static z_@Result_Listener_IoError@_t z_net_listen(uint16_t port) {
     z_@Result_Listener_IoError@_t result = {0};
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    int fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
     if (fd < 0) {
         z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
         *boxed = z_io_errno_to_IoError(errno);

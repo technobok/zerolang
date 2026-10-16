@@ -1,0 +1,70 @@
+# os_spawn_child_state.z -- what a spawned child receives and what its status
+# means: an exit code, 127 for a program that cannot run or a directory it
+# cannot enter, 124 for a child that outlives its timeout. The child sees
+# only its three standard streams: a file this process holds open is not
+# inherited (every runtime fd is close-on-exec). waitAny reaps only the
+# children it is given.
+
+argvOf: function {a: StringView b: StringView c: StringView} out (List String) is {
+    xs: List String
+    xs.append a.string
+    if b.length > 0 then xs.append b.string
+    if c.length > 0 then xs.append c.string
+    return xs
+}
+
+run: function {a: StringView b: StringView c: StringView cwd: StringView timeoutSecs: i32} out i32 is {
+    return (os.spawn
+        argv: (argvOf :a :b :c)
+        :cwd
+        outPath: "/dev/null"
+        errPath: "/dev/null"
+        :timeoutSecs
+    )
+}
+
+main: function is {
+    print "exit code: \{run a: "sh" b: "-c" c: "exit 3" cwd: "" timeoutSecs: 0}"
+    print "no such program: \{run a: "z-no-such-program" b: "" c: "" cwd: "" timeoutSecs: 0}"
+    print "no such directory: \{run a: "true" b: "" c: "" cwd: "/z/no/such/dir" timeoutSecs: 0}"
+    print "timed out: \{run a: "sleep" b: "5" c: "" cwd: "" timeoutSecs: 1}"
+    print "within its timeout: \{run a: "sh" b: "-c" c: "exit 0" cwd: "" timeoutSecs: 5}"
+    held: io.open path: "z_spawn_held.txt" mode: io.openmode.write
+    match (
+        held
+    ) case ok then {
+        # the shell lists where each of its own fds points; the held file is
+        # not among them
+        n: (os.spawn
+            argv: (argvOf a: "sh" b: "-c" c: "for f in /proc/$$/fd/*; do readlink $f; done | grep -c z_spawn_held > z_spawn_fds.txt")
+            cwd: ""
+            outPath: "/dev/null"
+            errPath: "/dev/null"
+            timeoutSecs: 0
+        )
+        print "lister: \{n}"
+        seen: io.readText path: "z_spawn_fds.txt"
+        match (
+            seen
+        ) case ok then print "held file in the child: \{seen.stringView.trim}" case err then print "no report"
+    } case err then print "open failed"
+    a: os.spawnAsync argv: (argvOf a: "sh" b: "-c" c: "exit 7") cwd: "" outPath: "/dev/null" errPath: "/dev/null"
+    b: os.spawnAsync argv: (argvOf a: "sh" b: "-c" c: "exit 9") cwd: "" outPath: "/dev/null" errPath: "/dev/null"
+    only: ListVal i32
+    only.append 0
+    only.append a
+    r: os.waitAny pids: only.listView
+    for r.pid == 0 loop {
+        os.sleepMillis ms: 5
+        r = os.waitAny pids: only.listView
+    }
+    print "reaped the one asked for: \{r.pid == a} \{r.status}"
+    rest: ListVal i32
+    rest.append b
+    r2: os.waitAny pids: rest.listView
+    for r2.pid == 0 loop {
+        os.sleepMillis ms: 5
+        r2 = os.waitAny pids: rest.listView
+    }
+    print "then the other: \{r2.pid == b} \{r2.status}"
+}

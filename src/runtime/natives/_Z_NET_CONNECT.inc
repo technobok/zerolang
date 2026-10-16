@@ -1,7 +1,7 @@
 /* net.connect — open a client connection to 127.0.0.1:port. */
 static z_@Result_Conn_IoError@_t z_net_connect(uint16_t port) {
     z_@Result_Conn_IoError@_t result = {0};
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    int fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
     if (fd >= 0) {
         struct sockaddr_in addr = {0};
         addr.sin_family = AF_INET;

@@ -12,7 +12,7 @@ static z_@Result_File_IoError@_t z_io_open(
         default:                    flags = O_RDONLY; break;
     }
     char* path_cstr = z_sv_to_cstr(path);
-    int fd = open(path_cstr, flags, perm);
+    int fd = open(path_cstr, flags | O_CLOEXEC, perm);
     int e = errno;
     free(path_cstr);
     if (fd < 0) {

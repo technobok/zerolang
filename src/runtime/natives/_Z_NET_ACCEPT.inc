@@ -1,9 +1,12 @@
-/* listener.accept — block for one connection; EINTR retries. */
+/* listener.accept — block for one connection; EINTR retries. accept4 sets
+   close-on-exec atomically, so a child spawned meanwhile never inherits the
+   connection; it is reached through syscall() because its libc declaration
+   needs _GNU_SOURCE, which the prelude does not define. */
 static z_@Result_Conn_IoError@_t z_@Listener@_accept(z_@Listener@_t* l) {
     z_@Result_Conn_IoError@_t result = {0};
     int fd;
     for (;;) {
-        fd = accept(l->@MEMBER_Listener.fd@, NULL, NULL);
+        fd = (int)syscall(SYS_accept4, l->@MEMBER_Listener.fd@, NULL, NULL, SOCK_CLOEXEC);
         if (fd >= 0) break;
         if (errno == EINTR) continue;
         z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));

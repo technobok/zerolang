@@ -48,7 +48,8 @@ cwd: function out (Result String E: IoError) is native
 exePath: function out (Result String E: IoError) is native
 
 # setCwd -- chdir to `path`. Affects subsequent relative-path io
-# calls. Fails with the usual IoError variants (notfound, notdir,
+# calls -- in every thread: the working directory is the process's, not a
+# thread's. Fails with the usual IoError variants (notfound, notdir,
 # permissiondenied).
 setCwd: function {path: StringView} out (Result null E: IoError) is native
 
@@ -69,12 +70,13 @@ ppid: function out i32 is native
 # differences are meaningful (the epoch is arbitrary). Infallible.
 monotonicMillis: function out i64 is native
 
-# spawn -- fork/exec `argv` as a child process; `argv[0]` is resolved
-# via PATH (execvp). The child's stdin is /dev/null; its stdout goes to
+# spawn -- start `argv` as a child process (posix_spawnp); `argv[0]` is
+# resolved via PATH. The child's stdin is /dev/null; its stdout goes to
 # `outPath` and stderr to `errPath` (each opened O_WRONLY|O_CREAT|
-# O_TRUNC -- pass "/dev/null" to discard a stream). A non-empty `cwd`
-# chdirs the child. The redirection files are opened in the parent
-# before fork, so the child's chdir cannot change their resolution.
+# O_TRUNC -- pass "/dev/null" to discard a stream). A non-empty `cwd` is
+# the child's working directory. The redirection files are opened in the
+# parent before the child starts, so its cwd cannot change their resolution,
+# and close-on-exec, so no other child inherits them.
 # Returns the child's exit status; 127 if exec or any setup step failed;
 # 124 if it timed out. `timeoutSecs` > 0 kills the child (SIGKILL) after
 # that many seconds; 0 waits indefinitely. Read captured output back with
@@ -103,8 +105,8 @@ procexit: record {
     status: i32
 }
 
-# spawnAsync -- fork/exec `argv` like `spawn` but return immediately
-# with the child's pid (-1 if setup or fork failed). Redirection and
+# spawnAsync -- start `argv` like `spawn` but return immediately
+# with the child's pid (-1 if setup or the start failed). Redirection and
 # cwd behave exactly as in `spawn`; there is no timeout -- reap with
 # `waitAny` and enforce deadlines with `monotonicMillis` + `kill`.
 spawnAsync: function {
@@ -118,9 +120,14 @@ spawnAsync: function {
     errPath: StringView
 } out i32 is native
 
-# waitAny -- reap one exited child without blocking. pid 0 = nothing
-# has exited right now (or no children exist).
-waitAny: function out procexit is native
+# waitAny -- reap one exited child of `pids` without blocking: pid 0 when
+# none of them has exited yet. Only the children named are reaped -- never
+# another part of the program's -- and a 0 in `pids` is skipped, so a table of
+# job slots can be passed whole.
+waitAny: function {
+    # the children to wait for
+    pids: ListViewVal i32
+} out procexit is native
 
 # kill -- SIGKILL a child by pid (reap it with waitAny afterwards).
 # No-op on pid <= 0.

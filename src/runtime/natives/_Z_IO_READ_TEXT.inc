@@ -2,7 +2,7 @@ static z_@Result_String_IoError@_t z_io_readText(z_@StringView@_t path) {
     /* path is a borrowed view; caller retains ownership */
     z_@Result_String_IoError@_t result = {0};
     char* path_cstr = z_sv_to_cstr(path);
-    int fd = open(path_cstr, O_RDONLY);
+    int fd = open(path_cstr, O_RDONLY | O_CLOEXEC);
     free(path_cstr);
     if (fd < 0) {
         int e = errno;
