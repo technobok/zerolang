@@ -157,7 +157,9 @@ build or run it.</p>
 <pre><code class="language-zerolang">  main: function is {
       db: sqlite.openMemory
       if db.err then return
-      r: db.executeBatch sql: "create table person(id integer primary key, name text not null, age integer)"
+      r: (db.executeBatch
+          sql: "create table person(id integer primary key, name text not null, age integer)"
+      )
       if r.err then return
       ins: db.prepare sql: "insert into person(name, age) values (?1, ?2)"
       if ins.err then return
@@ -182,7 +184,13 @@ build or run it.</p>
               match (
                   name
               ) case ok then {
-                  match (age) case ok then print "\{name} is \{age}" case err then print "\{name}, age unknown"
+                  match (
+                      age
+                  ) case ok then {
+                      print "\{name} is \{age}"
+                  } case err then {
+                      print "\{name}, age unknown"
+                  }
               } case err then print "no name"
           } case done then {
               going = false
@@ -222,15 +230,19 @@ handle that borrows from another keeps it <strong>pinned</strong> while it lives
 </tbody>
 </table>
 <p>Each of these is refused when it is written, not found at run time:</p>
-<pre><code class="language-zerolang">  q: db.prepare sql: "select 1"
+<pre><code class="language-zerolang">  db: sqlite.openMemory
+  if db.err then return
+  q: db.prepare sql: "select 1"
   if q.err then return
-  c: db.close            # error: Cannot take exclusive lock on 'db':
-                         #        already has shared lock held by 'q'
+  # refused: close locks db exclusively, and q still holds it shared
+  c: db.close
   print "\{q.columnCount}"</code></pre>
-<pre><code class="language-zerolang">  with tx: db.transaction do {
+<pre><code class="language-zerolang">  db: sqlite.openMemory
+  if db.err then return
+  with tx: db.transaction do {
       if tx.err then return
-      r: db.executeBatch sql: "select 1"   # error: Cannot take shared lock on 'db':
-                                          #        already has exclusive lock held by 'tx'
+      # refused: tx holds db exclusively, so db cannot run a statement itself
+      r: db.executeBatch sql: "select 1"
   }</code></pre>
 <p>A <code>Statement</code> cannot be moved somewhere that outlives its <code>Database</code>,
 nor a <code>Row</code> somewhere that outlives its <code>Statement</code>; a getter on a
@@ -285,7 +297,7 @@ against <code>Connection.view</code> runs on either:</p>
       q: c.prepare sql: "select count(*) from account"
       if q.err then return -1
       s: q.step
-      match (s) case row then return ((s.integer column: 0).or d: -1) else return -1
+      match s case row then return ((s.integer column: 0).or d: -1) else return -1
   }</code></pre>
 <h2 id="index"><a href="#index">4. Index</a></h2>
 <p><strong>Types</strong></p>
@@ -367,7 +379,9 @@ metadata <code>columnDeclaredType</code>, <code>columnTableName</code>,
 <code>columnOriginName</code>, <code>columnDatabaseName</code> -- each <code>null</code> for an
 expression column; <code>sql</code> is the statement's text</li>
 </ul>
-<pre><code class="language-zerolang">  ids: ListVal i64
+<pre><code class="language-zerolang">  db: sqlite.openMemory
+  if db.err then return
+  ids: ListVal i64
   ids.append 1
   ids.append 2
   sel: db.prepare sql: "select count(*) from person where id in carray(?1)"

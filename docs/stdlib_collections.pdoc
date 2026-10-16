@@ -212,7 +212,7 @@ change.
 
 #code language=zerolang: """
   # Zero-initialised array of 8 i64s
-  a: (array t: i64 to: 8)
+  a: array t: i64 to: 8
 
   # Initialise from a data block (one entry per element)
   block_of_ten: data { 0 1 2 3 4 5 6 7 8 9 }
@@ -340,12 +340,12 @@ Whole-element replacement is #~"set".
 
 #b:"Construction."
 
-#code language=zerolang: """
-  xs: (List String)               # empty list of reftype elements
-  ns: (ListVal t: i64)           # empty list of valtype elements
-  ys: (ListVal t: i64 capacity: 10)   # preallocated
-  zs: (ListVal t: i64) capacity: 10   # the same, after the type
-  ws: (ListVal t: i64) 10             # the same, unlabelled
+#code language=zerolang name=lists: """
+  xs: List String                           # empty list of reftype elements
+  ns: ListVal t: i64                        # empty list of valtype elements
+  ys: ListVal t: i64 capacity: 10           # preallocated
+  zs: (ListVal t: i64) capacity: 10         # the same, after the type
+  ws: (ListVal t: i64) 10                   # the same, unlabelled
   vs: (ListVal t: i64).create capacity: 10  # the same, explicitly
   us: (MapVV k: i64 v: i64).create          # an empty map
 """
@@ -374,15 +374,16 @@ A typedef parameter takes no bare base value and no literal, so a row of
 #~"i: u64" is left out of an instance's name: #~"(ListVal u8 i: u64)"
 and #~"(ListVal u8)" are one type, spelled the second way.
 
-#code language=zerolang check=none: """
+#code language=zerolang: """
   rowid: typedef u32
+  row: record { id: u64 }
 
   Table: class {
       rows: (ListVal row i: rowid)
   }
 
   first: function {t: Table.view} out row is {
-      return t.rows.get i: (rowid from: 0.u32)
+      return (t.rows.get i: (rowid from: 0.u32))
   }
 """
 
@@ -438,7 +439,7 @@ and #~"(ListVal u8)" are one type, spelled the second way.
 
 #b:"Iteration."
 
-#code language=zerolang check=none: """
+#code language=zerolang after=lists: """
   for each x: xs loop print "\{x}"
 
   # last element first
@@ -494,8 +495,8 @@ lifetime. Other readers, further windows included, stay legal; a
 writer is refused, because #~"append" may reallocate and leave the
 window pointing at freed storage:
 
-#code language=zerolang: """
-  nums: (ListVal t: i64)
+#code language=zerolang name=nums: """
+  nums: ListVal t: i64
   nums.append from: 1
   with v: nums.listView do {
       print "\{v.get i: 0}"
@@ -506,7 +507,7 @@ window pointing at freed storage:
 #b:"Walking a window." Both view templates declare #~"iterate",
 so a window is walked exactly as its source is:
 
-#code language=zerolang check=none: """
+#code language=zerolang after=nums: """
   mid: nums.slice from: 1 to: 3
   for each e: mid loop print "\{e}"
 """
@@ -557,7 +558,7 @@ read and written at once, which is what an algorithm working on two parts
 of one buffer needs. The window that was split is borrowed while the
 pair lives.
 
-#code language=zerolang check=none: """
+#code language=zerolang: """
   # add `x` into `z`, element by element
   addInto: function {z: (SpanVal u64).borrow x: (SpanVal u64).view} is {
       i: 0.u64
@@ -568,7 +569,11 @@ pair lives.
   }
 
   buf: ListVal u64
-  ...
+  n: 0.u64
+  for n < 6 loop {
+      buf.append from: n
+      n = n + 1
+  }
   w: buf.span
   p: w.split at: 3
   addInto z: p.lo x: p.hi       # both halves of one buffer, one call
@@ -611,11 +616,11 @@ differ exactly where the family shows:
 
 #b:"Construction."
 
-#code language=zerolang: """
-  ages: (Map String V: String)          # MapRR via the alias
-  grades: (MapRV K: String v: i64)
-  names: (MapVR u64 V: String)
-  counts: (MapVV u64 v: u64)
+#code language=zerolang name=maps: """
+  ages: Map String V: String  # MapRR via the alias
+  grades: MapRV K: String v: i64
+  names: MapVR u64 V: String
+  counts: MapVV u64 v: u64
 """
 
 #b:"Layout and iteration order." A map is a compact dict: a
@@ -626,7 +631,7 @@ reclaimed).
 
 #b:"Iteration."
 
-#code language=zerolang check=none: """
+#code language=zerolang after=maps: """
   for each k: counts loop print "key \{k}"
   for each e: counts.iterateItems loop print "\{e.key}=\{e.value}"
 """
@@ -650,7 +655,7 @@ for valtypes). #~"add" and #~"delete" return whether the set
 changed.
 
 #code language=zerolang: """
-  seen: (SetVal k: i64)
+  seen: SetVal k: i64
   seen.add item: 42
   if (seen.has item: 42) then print "present"
 """
@@ -708,10 +713,10 @@ populate a join input list directly. Callers holding views
 materialise owned strings first.
 
 #code language=zerolang: """
-  parts: (List String)
+  parts: List String
   parts.append from: "alpha".string
   parts.append from: "beta".string
   parts.append from: "gamma".string
-  s: stringJoin parts: parts sep: ", "
+  s: stringJoin :parts sep: ", "
   # s == "alpha, beta, gamma"
 """

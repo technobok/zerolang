@@ -187,7 +187,7 @@ a negative count answers the same way an over-wide one does rather
 than reaching undefined behaviour.
 
 #code language=zerolang: """
-  a: (0.i64 - 8.i64)
+  a: -8
   b: a >> 1           # -4   -- arithmetic, fills with the sign
   c: a.bits >> 1      # 9223372036854775804 -- logical
   d: a << 64          # 0    -- at the width, defined
@@ -224,7 +224,7 @@ runtime" for the full rule.
 #code language=zerolang: """
   x: 65.u8
   y: x.i64            # widens u8 -> i64, stays i64
-  z: (1000.u64).u8.orPanic  # u64 -> u8 is lossy: resultval, abort on overflow
+  z: 1000.u64.u8.orPanic  # u64 -> u8 is lossy: resultval, abort on overflow
   f: 3.14.f64
   n: f.i32.orPanic    # f64 -> i32 is lossy: resultval, abort if inexact/out of range
 """
@@ -248,10 +248,11 @@ unambiguous: #~"i64.bits" can only mean #~"u64". Nothing is added to
 the unsigned types, where it would be the identity.
 
 #code language=zerolang: """
-  a: (0.i64 - 8.i64)
+  a: -8
   b: a.bits           # 18446744073709551608 -- cannot fail
-  z: (-0.0.f32).bits  # 2147483648: +0.0 and -0.0 compare EQUAL and
-                      # differ in bits, so no value conversion sees it
+  # 2147483648: +0.0 and -0.0 compare EQUAL and differ in bits, so no value
+  # conversion sees it
+  z: -0.0.f32.bits
 """
 
 #b:"Counting." An integer is #_*"not" iterable: it declares no
@@ -326,10 +327,10 @@ two without one either.
 #code language=zerolang: """
   x: 3.0
   u: x.scaleB n: 4          # 48.0, exactly
-  d: x.scaleB n: (0 - 4)    # 0.1875, exactly
+  d: x.scaleB n: -4         # 0.1875, exactly
   e: x.logB                 # 1 -- 3.0 lies in [2, 4)
-  m: x.scaleB n: (0.i32 - x.logB)   # 1.5 -- normalised to [1, 2)
-  p: 1.0.scaleB n: (0 - 24) # 2^-24, with no rounding to reason about
+  m: x.scaleB n: 0.i32 - x.logB    # 1.5 -- normalised to [1, 2)
+  p: 1.0.scaleB n: -24      # 2^-24, with no rounding to reason about
 """
 
 #b:"Word primitives." #~"u64" carries the operations a number wider
@@ -517,7 +518,8 @@ expression whose type is #~"bool". Consumed by #~"if" /
 #b:"Match." Because #~"bool" is a variant with arm names
 #~"false" and #~"true", pattern-matching works directly:
 
-#code language=zerolang check=none: """
+#code language=zerolang: """
+  cond: 3 > 2
   match (
       cond
   ) case true then {
@@ -553,11 +555,14 @@ infix form (#~"a or b or c"): the dotted form does not chain. The
 arm predicates every 2-arm sum has, #~".true" / #~".false", remain
 valid on a bool; #~"x.not" is the idiom.
 
-#code language=zerolang check=none: """
+#code language=zerolang: """
+  n: 4
+  c: 32.u8
+  total: 60
   inRange: (n > 0) and (n < 10)
   if inRange.not then return
-  if (c == 32) or (c == 9) then skip     # both sides evaluated
-  if n > 0 when (total / n) > 10 then    # short-circuit: `when`
+  if (c == 32) or (c == 9) then print "blank"    # both sides evaluated
+  if n > 0 when (total / n) > 10 then print "big"    # short-circuit: `when`
 """
 
 
@@ -767,9 +772,12 @@ on the receiver's ownership, #~"a + b" reads the same whether
 To accumulate WITHOUT allocating, use #~"append", which writes into
 the receiver's own buffer and yields nothing:
 
-#code language=zerolang check=none: """
-  out: "".string
-  for each p: parts loop out.append p
+#code language=zerolang: """
+  parts: List String
+  parts.append from: "ab".string
+  parts.append from: "cd".string
+  joined: "".string
+  for each p: parts loop joined.append p
   """
 
 Building a string with #~"+" in a loop reallocates at every step;
@@ -819,9 +827,9 @@ is public. Each #~".call" yields the next item:
 Rarely constructed directly: #~"for" over the source is the
 usual form.
 
-#code language=zerolang check=none: """
-  s: "alpha,beta,gamma".stringView
-  for piece: s.split ",".stringView loop {
+#code language=zerolang: """
+  s: "alpha,beta,gamma"
+  for each piece: s.split "," loop {
       print piece
   }
 """
@@ -873,14 +881,14 @@ and differ only in their bound.
 
 #b:"Construction." Via the arm accessors:
 
-#code language=zerolang: """
+#code language=zerolang name=options: """
   someResult: Option.some "hi".string
   noResult: Option.none null
 """
 
 #b:"Pattern matching." Exhaustive #~"match":
 
-#code language=zerolang check=none: """
+#code language=zerolang after=options: """
   match (
       someResult
   ) case some then {
@@ -1091,11 +1099,14 @@ compilation. Used in generic bodies and conditional code paths
 that must be statically dead; the #~"never" return type lets
 #~"error" occupy any expression position.
 
-#code language=zerolang check=none: """
-  f: function as { T: anyval.generic } in { x: T } is {
-      if (is T: never) {
-          error msg: "never-valued T".string
-      }
+#code language=zerolang: """
+  LIMIT: 4
+
+  main: function is {
+      # a constant condition is decided at compile time: this branch is dead,
+      # so its error never fires (with LIMIT: 9 compilation would fail)
+      if LIMIT > 8 then error msg: "LIMIT must be at most 8"
+      print "LIMIT is \{LIMIT}"
   }
 """
 

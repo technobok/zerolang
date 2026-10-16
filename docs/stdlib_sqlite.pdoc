@@ -54,7 +54,9 @@ Accessed via qualified names only -- #~"sqlite.openMemory",
   main: function is {
       db: sqlite.openMemory
       if db.err then return
-      r: db.executeBatch sql: "create table person(id integer primary key, name text not null, age integer)"
+      r: (db.executeBatch
+          sql: "create table person(id integer primary key, name text not null, age integer)"
+      )
       if r.err then return
       ins: db.prepare sql: "insert into person(name, age) values (?1, ?2)"
       if ins.err then return
@@ -79,7 +81,13 @@ Accessed via qualified names only -- #~"sqlite.openMemory",
               match (
                   name
               ) case ok then {
-                  match (age) case ok then print "\{name} is \{age}" case err then print "\{name}, age unknown"
+                  match (
+                      age
+                  ) case ok then {
+                      print "\{name} is \{age}"
+                  } case err then {
+                      print "\{name}, age unknown"
+                  }
               } case err then print "no name"
           } case done then {
               going = false
@@ -121,19 +129,23 @@ handle that borrows from another keeps it #b:"pinned" while it lives:
 
 Each of these is refused when it is written, not found at run time:
 
-#code language=zerolang check=none: """
+#code language=zerolang expect=E0200: """
+  db: sqlite.openMemory
+  if db.err then return
   q: db.prepare sql: "select 1"
   if q.err then return
-  c: db.close            # error: Cannot take exclusive lock on 'db':
-                         #        already has shared lock held by 'q'
+  # refused: close locks db exclusively, and q still holds it shared
+  c: db.close
   print "\{q.columnCount}"
 """
 
-#code language=zerolang check=none: """
+#code language=zerolang expect=E0200: """
+  db: sqlite.openMemory
+  if db.err then return
   with tx: db.transaction do {
       if tx.err then return
-      r: db.executeBatch sql: "select 1"   # error: Cannot take shared lock on 'db':
-                                          #        already has exclusive lock held by 'tx'
+      # refused: tx holds db exclusively, so db cannot run a statement itself
+      r: db.executeBatch sql: "select 1"
   }
 """
 
@@ -202,7 +214,7 @@ against #~"Connection.view" runs on either:
       q: c.prepare sql: "select count(*) from account"
       if q.err then return -1
       s: q.step
-      match (s) case row then return ((s.integer column: 0).or d: -1) else return -1
+      match s case row then return ((s.integer column: 0).or d: -1) else return -1
   }
 """
 
@@ -306,7 +318,9 @@ whose index #~"parameterIndex" finds -- and columns 0-based.
     #~"columnOriginName", #~"columnDatabaseName" -- each #~"null" for an
     expression column; #~"sql" is the statement's text]
 
-#code language=zerolang check=none: """
+#code language=zerolang: """
+  db: sqlite.openMemory
+  if db.err then return
   ids: ListVal i64
   ids.append 1
   ids.append 2
