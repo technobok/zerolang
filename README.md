@@ -29,15 +29,17 @@ main: function is {
 
 ### Functions
 
-Functions use `in`/`out`/`is` keywords. The first parameter is unnamed;
-additional parameters are named:
+A function's parameters are a block of named fields; `out` gives the
+result type and `is` opens the body. A call names its arguments
+(`fib n: 10`), and the first may be written bare (`fib 10`):
 
-```zerolang check=none
+```zerolang
 fib: function {n: i64} out i64 is {
     if n < 2 then return n
     a: 0
     b: 1
-    for i: 2 while i <= n loop {
+    i: 2
+    for i <= n loop {
         temp: a + b
         a = b
         b = temp
@@ -51,48 +53,49 @@ fib: function {n: i64} out i64 is {
 
 Variables are declared with `:` and reassigned with `=`:
 
-```zerolang
+```zerolang name=vars
 x: 42        # declaration (type inferred)
-x = x + 1   # reassignment
+x = x + 1    # reassignment
 ```
 
 ### Control Flow
 
-```zerolang check=none
+```zerolang after=vars
 # if/when/then/else
 if x > 0 when x < 100 then print "in range" else print "out of range"
 
-# for/while/loop
-for i: 0 while i < 10 loop {
+# for/loop: the loop runs while its condition holds
+i: 0
+for i < 10 loop {
     print "\{i}"
     i = i + 1
 }
 
 # with/do (scoped binding)
-with y: abs -5 do print "abs(-5) = \{y}"
+with y: -5.5.abs do print "abs(-5.5) = \{y}"
 ```
 
 ### Records
 
-Records are value types (zero-initialized, no constructors):
+Records are value types, copied when passed or assigned. One is built by
+naming its fields; a field with a default may be left out, and a record
+whose fields all have one is built by its bare name (`origin: point`):
 
-```zerolang check=none
+```zerolang
 point: record {
-    x: f64
-    y: f64
+    x: 0.0
+    y: 0.0
 } as {
     add: function {a: this b: point} out point is {
-        result: point
-        result.x = a.x + b.x
-        result.y = a.y + b.y
-        return result
+        return (point x: a.x + b.x y: a.y + b.y)
     }
 }
 ```
 
 ### Strings
 
-Strings are immutable. Interpolation uses `\{expr}`:
+A string literal is a `StringView`; a `String` is the owned kind, which
+`append` grows. Interpolation uses `\{expr}`:
 
 ```zerolang
 name: "Zerolang"
@@ -101,7 +104,10 @@ print "Hello, \{name}!"
 
 ### Types
 
-v1 numeric types: `u8` `u16` `u32` `u64` `i8` `i16` `i32` `i64` `f32` `f64`
+Numeric types: `u8` `u16` `u32` `u64` `u128`, `i8` `i16` `i32` `i64`
+`i128`, `f16` `f32` `f64` `f128`, and the characters `c8` `c32`; plus `bool`.
+The `math` unit adds arbitrary precision (`BigInt`, `BigRat`, `BigFloat`)
+and fixed decimals.
 
 ## Quick Start
 
@@ -190,7 +196,7 @@ its own executable path).
 
 ## Example Programs
 
-The `examples/` directory contains v1 target programs:
+The `examples/` directory holds small programs, among them:
 
 | Program | Demonstrates |
 |---------|-------------|
@@ -200,10 +206,10 @@ The `examples/` directory contains v1 target programs:
 | `records.z` | Record types, methods, field access |
 | `strings.z` | String interpolation |
 | `control.z` | if/when/then/else, for/while/loop, with/do |
-| `case.z` | Match expressions on enums |
-| `swap.z` | Swap keyword, reassignment |
+| `case.z` | Match expressions on a variant |
+| `swap.z` | `swap`, reassignment |
 | `data.z` | Constant data arrays |
-| `multimod.z` | Multi-module imports |
+| `multimod.z` | A program over two units |
 
 ## License
 

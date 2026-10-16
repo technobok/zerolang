@@ -106,15 +106,14 @@ treatment. The following rules cover wrapping in code:
   parameter lists), introduce newlines wherever they improve readability --
   for example, one parameter per line.]
 
-#code language=zerolang check=none: """
+#code language=zerolang: """
   # single-line clause: no padding inside the parens
-  result: (format value: 42 width: 6)
+  width: ("-".repeated n: 6).length
 
   # multi-line clause: contents indented one step beyond the delimiters
-  result: (format
-      value: 42
-      width: 6
-      pad: "0"
+  spec: (cli.Spec.create
+      programName: "zgrep".string
+      summary: "search files for a pattern".string
   )
   """
 
@@ -124,7 +123,9 @@ A single space separates identifiers that would otherwise abut and parse as a
 single identifier. The numeric, comparison and logical (#~"and", #~"or")
 operators are ordinary identifiers and #_+"must" be surrounded by whitespace.
 
-#code language=zerolang check=none: """
+#code language=zerolang: """
+  a: 1
+  b: 2
   total: a + b           # correct
   # totaL: a+b           # parses as a single identifier 'a+b'
   """
@@ -185,12 +186,12 @@ reports a chain written without them (L032). Within one kind the leftmost
 operand takes none: #~"a + b * c" is #~"(a + b) * c" by the fold, as every
 chain of one kind is. The spelling of a chain is therefore not a choice.
 
-#code language=zerolang check=none: """
+#code language=zerolang: """
   # bare top-level call: no parentheses needed
   print "hello"
 
   # nested named-arg call: inner call parenthesised
-  print (format value: 42 width: 6)
+  print ("-".repeated n: 6)
   """
 
 #---: Numeric Literals
@@ -225,14 +226,27 @@ spellings divide differently: #~"width: u64" declares a required,
 default-less slot, while #~"width: 0.u64" declares the type #_*"and"
 the default -- choose by whether callers may omit the argument.
 
-#code language=zerolang check=none: """
-  # context fixes the type -- leave the literal bare
-  this.n = this.n + 1        # this.n is u64, so 1 is u64
-  return 0                   # function is 'out u64', so 0 is u64
-  if count < 2 then ...      # count is u64, so 2 is u64
-  resize cap: 8              # parameter 'cap' is usize, so 8 is usize
+#code language=zerolang: """
+  Counter: class { n: u64 name: String } as {
+      # context fixes the type -- leave the literal bare
+      bump: function {c: this} out u64 is {
+          c.n = c.n + 1              # c.n is u64, so 1 is u64
+          if c.n < 2 then return 0   # c.n is u64 and the function 'out u64'
+          c.name = "fixed"           # the field is String: no '.string'
+          return c.n
+      }
+  }
+
+  resize: function {cap: u64} is {
+      print "\{cap}"
+  }
+
+  greet: function {who: String} is {
+      print who
+  }
+
+  resize cap: 8              # parameter 'cap' is u64, so 8 is u64
   greet who: "bob"           # parameter 'who' is String, so "bob" is one
-  this.name = "fixed"        # the field is String: no '.string'
 
   # zero origin -- the bare type name IS the zero value
   seq: u64                   # 0.u64; preferred over 'seq: 0.u64'
@@ -240,9 +254,9 @@ the default -- choose by whether callers may omit the argument.
 
   # genuine non-zero origin -- the suffix carries the type
   offset: 7.u64              # a bare '7' binding would default to i64
-  total: 60.u32 * 60 * 24    # all-literal expression: one suffix anchors
-                             # the whole expression (the bare operands
-                             # coerce to u32); with none it folds to i64
+  # all-literal expression: one suffix anchors the whole expression (the bare
+  # operands coerce to u32); with none it folds to i64
+  total: 60.u32 * 60 * 24
   """
 
 A bare binding (#~"x: 0") defaults to #~"i64", and an all-literal expression
@@ -266,8 +280,8 @@ coerce per use.
 #code language=zerolang: """
   # Preferred: out carries the type, elements stay bare.
   bytemask: data {
-      LOW:  0
-      MID:  64
+      LOW: 0
+      MID: 64
       HIGH: 250
   } out intdata u8
 
@@ -286,7 +300,8 @@ When the entire #~"match" fits comfortably on one line, write it on one
 line and omit the parentheses around the subject. Use this form only when
 every arm is a short statement.
 
-#code language=zerolang check=none: """
+#code language=zerolang: """
+  r: Option.some "x".string
   match r case some then print "found" case none then print "missing"
   """
 
@@ -296,13 +311,14 @@ align with the case arms below it. Each #~"case" and the optional #~"else"
 sits at the parent indent, immediately after the closing delimiter of the
 previous arm.
 
-#code language=zerolang check=none: """
+#code language=zerolang: """
+  result: io.readText path: "notes.txt"
   match (
       result
   ) case ok then {
-      print "value=\{result.value}"
+      print "text=\{result}"    # result narrows to the String payload
   } case err then {
-      print "failed: \{result.detail}"
+      print "failed"
   }
   """
 
@@ -320,16 +336,18 @@ forms instead: #~"if n > 0 when (total / n) > 10 then", or
 #~"for i < n while ok loop" in a loop head. A flag set by a chain of #~"if"
 statements is a disjunction in disguise; write the disjunction.
 
-#code language=zerolang check=none: """
-  # avoid: a flag accumulator
-  identB: false
-  if bo >= 97 when bo <= 122 then identB = true
-  if bo == 95 then identB = true
-  # prefer: the disjunction
-  identB: ((bo >= 97) and (bo <= 122)) or (bo == 95)
+#code language=zerolang: """
+  bo: 97.u8
+  found: true
 
-  # avoid: comparing with a literal
-  if found == false then return
+  # avoid: a flag accumulator
+  identA: false
+  if bo >= 97 when bo <= 122 then identA = true
+  if bo == 95 then identA = true
+  # prefer: the disjunction
+  identB: (bo >= 97) and (bo <= 122) or (bo == 95)
+
+  # avoid, comparing with a literal: `if found == false then return`
   # prefer: the negation method
   if found.not then return
   """
@@ -351,19 +369,26 @@ usually signal that the control flow can be expressed more directly.
   on what #~"null" names where it is written. When several arms are no-ops,
   collapse them into one #~"else null" rather than listing each.]
 
-#code language=zerolang check=none: """
-  # avoid: empty else on a statement if
-  if name == "i8" then { return "int8_t" } else {}
-  # prefer: drop the empty else
-  if name == "i8" then return "int8_t"
+#code language=zerolang: """
+  cName: function {name: StringView} out StringView is {
+      # avoid: empty else on a statement if
+      if name == "i8" then { return "int8_t" } else {}
+      # prefer: drop the empty else
+      if name == "i8" then return "int8_t"
+      return "void"
+  }
 
-  # avoid: empty then, with the work in else
-  if isC then {} else { return true }
-  # prefer: negate the condition, work in then
-  if isC.not then return true
+  notC: function {isC: bool} out bool is {
+      # avoid: empty then, with the work in else
+      if isC then {} else { return true }
+      # prefer: negate the condition, work in then
+      if isC.not then return true
+      return false
+  }
 
   # acceptable: a union match's one required no-op arm
-  match (o) case some then { collect n: o } case none then null
+  o: Option.some "x".string
+  match o case some then print o case none then null
   """
 
 
@@ -406,10 +431,14 @@ The predefined reftypes built into the language follow the same rule:
 #~"Text", and the generic bounds #~"AnyRef", #~"anyval",
 #~"RefHashable", #~"valhashable".
 
-#code language=zerolang check=none: """
-  File: class { ... }
-  ListView: class { ... }
-  ReadStream: protocol { ... }
+#code language=zerolang: """
+  File: class { fd: i32 }
+
+  LineView: class { first: u64 count: u64 }
+
+  ReadStream: protocol {
+      read: function {t: this} out u64
+  }
   """
 
 #---: Typedef Definitions
@@ -431,11 +460,13 @@ A generic parameter names the type it stands for, so it is cased like a type:
 #_+"its case matches the case of its bound". Every bound's own name already
 follows the rule above, so this is a one-glance check with no exception.
 
-#code language=zerolang check=none: """
-  t: anyval.generic
-  T: AnyRef.generic
-  K: RefHashable.generic
-  k: valhashable.generic
+#code language=zerolang: """
+  Shelf: class { a: t b: T c: K d: k } as {
+      t: anyval.generic
+      T: AnyRef.generic
+      K: RefHashable.generic
+      k: valhashable.generic
+  }
   """
 
 A bound that admits both families is cased by its own declaration kind, not by
@@ -453,8 +484,10 @@ copies or moves, without scrolling back to the #~"as" clause to find out.
 A value (non-type) parameter is bound by a numeric type, which is lowercase, so
 it is lowercase too, and needs no carve-out:
 
-#code language=zerolang check=none: """
-  to: u64.generic
+#code language=zerolang: """
+  Ring: record { slots: (array t: u8 :to) } as {
+      to: u64.generic
+  }
   """
 
 #---: Variant Tags
@@ -484,12 +517,17 @@ Aim for a single lowercase word. If the name needs more than one word, use
   [#*: Predicate methods returning #~"bool" may be prefixed with #~"is" or
   #~"has".]
 
-#code language=zerolang check=none: """
-  # correct
-  f.size # not f.getSize
-  user.setName name: "alice"
-  conn.isOpen
-  doc.hasErrors
+#code language=zerolang: """
+  File: class { bytes: u64 name: String open: bool } as {
+      size: function {f: this.view} out u64 is { return f.bytes }
+      setName: function {f: this name: String} is { f.name = name.copy }
+      isOpen: function {f: this.view} out bool is { return f.open }
+  }
+
+  f: File bytes: 3 name: "a.txt" open: true
+  n: f.size    # correct; not f.getSize
+  f.setName name: "b.txt"
+  ok: f.isOpen
   """
 
 #---: Constants
@@ -535,16 +573,15 @@ acronym is acceptable.
   #*: All methods on the same type must use the same receiver name.
   #*: The #~":this" shorthand is permitted but a short type-relevant name is preferred.
 
-#code language=zerolang check=none: """
-  File: class { ... } as {
-      open: function {f: this name: StringView} out File is { ... }
-      close: function {f: this} is { ... }
-      size: function {f: this} out u64 is { ... }
+#code language=zerolang: """
+  File: class { fd: i32 bytes: u64 } as {
+      close: function {f: this} is { f.fd = -1 }
+      size: function {f: this} out u64 is { return f.bytes }
   }
 
-  ListView: class { ... } as {
-      length: function {lv: this} out u64 is { ... }
-      first: function {lv: this} out (Option T: of) is { ... }
+  LineView: class { first: u64 count: u64 } as {
+      length: function {lv: this} out u64 is { return lv.count }
+      last: function {lv: this} out u64 is { return lv.first + lv.count }
   }
   """
 
@@ -569,7 +606,8 @@ in-language consistency cost.
 When a function or method call has exactly one argument and that argument is
 the leading parameter, omit the argument name.
 
-#code language=zerolang check=none: """
+#code language=zerolang: """
+  outbuf: Bytes
   print "hello"
   outbuf.append 65.u8
   """
@@ -579,12 +617,17 @@ intent at the call site. The judgement applies most often to native or
 generic methods where a bare argument's role is not obvious from the
 receiver and method name.
 
-#code language=zerolang check=none: """
+#code language=zerolang: """
+  names: List String
+  item: "ada".string
+  w: io.stdout
+  chunk: Bytes
+
   # clear from receiver and method name -- omit
   names.append item
 
   # bare argument's role is not obvious -- name it
-  buf.write from: chunk
+  w.write from: chunk.byteView
   """
 
 The same rule covers control-flow builtins whose clauses read like call
@@ -593,12 +636,16 @@ arguments. A #~"for" loop's leading condition is its first argument, named
 the subsequent conditions of a multi-condition loop (they are not the first
 argument).
 
-#code language=zerolang check=none: """
+#code language=zerolang: """
+  i: 0
+  n: 3
+  ok: true
+
   # leading condition -- omit 'while'
-  for i < n loop { ... }
+  for i < n loop i = i + 1
 
   # subsequent conditions keep 'while'
-  for i < n while ok loop { ... }
+  for i < n while ok loop i = i + 1
   """
 
 
@@ -629,12 +676,14 @@ Use #~"if" guards with early return to handle errors and edge cases up
 front. The remaining body is then the happy path with one less indent
 level.
 
-#code language=zerolang check=none: """
-  read: function {f: this} out (Result T: String) is {
-      if not f.isOpen then return Result.err detail: "not open"
-      if f.atEnd     then return Result.err detail: "eof"
-      ...
-      return Result.ok value: data
+#code language=zerolang: """
+  Source: class { open: bool atEnd: bool text: String } as {
+      read: function {s: this} out (Result String E: String) is {
+          if s.open.not then return ((Result String E: String).err "not open".string)
+          if s.atEnd then return ((Result String E: String).err "eof".string)
+          # the happy path, one indent level
+          return ((Result String E: String).ok s.text.copy)
+      }
   }
   """
 
@@ -654,13 +703,13 @@ For short functions, return the last expression and omit the explicit
 Prefer #~"if" and #~"for" as expressions to produce values. Avoid
 side-effecting an accumulator when an expression form is available.
 
-#code language=zerolang check=none: """
+#code language=zerolang: """
   # prefer
   squares: for each x: 5.times loop { x * x }
 
   # avoid
-  squares: (ListVal i64)
-  for each x: 5.times loop { squares.append x * x }
+  built: ListVal i64
+  for each x: 5.times loop { built.append x * x }
   """
 
 #---: Loops
@@ -688,7 +737,11 @@ lifetime there, destroying what the binding owns. A binding that owns nothing
 -- a parameter the caller still owns, a borrow, a scalar -- lowers to
 #~"(void)(x);" in the emitted C, so it costs nothing at runtime.
 
-#code language=zerolang check=none: """
+#code language=zerolang: """
+  dispatch: function {kind: u64} is {
+      print "event \{kind}"
+  }
+
   onEvent: function {kind: u64 payload: u64} is {
       payload.drop  # required by the handler signature, not used here
       dispatch :kind
@@ -731,12 +784,16 @@ inline code. The two are covered separately below.
   wrapper-constructor shape: #~"outx this"), and refused when nothing is
   there to pin.]
 
-#code language=zerolang check=none: """
+#code language=zerolang: """
+  point: record { x: f64 y: f64 }
+
   # in: borrow is implicit; out: take is implicit
-  area: function {p: point} out f64 is { ... }
+  area: function {p: point} out f64 is { return p.x * p.y }
 
   # reference return: outx, explicit .borrow on the type, a non-owned parent
-  first: function as { t: AnyRef.generic } in {l: (List t).borrow} outx t.borrow is { ... }
+  first: function as { t: AnyRef.generic } in {l: (List t).borrow} outx t.borrow is {
+      return (l.get i: 0)
+  }
   """
 
 #---: Inline Code
@@ -781,7 +838,17 @@ inline code. The two are covered separately below.
   [#*: #~".drop" on a borrowed variable, written as a standalone
   statement, ends the borrow.]
 
-#code language=zerolang check=none: """
+#code language=zerolang: """
+  provider: protocol {
+      use: function {t: this}
+  }
+
+  Scaler: class { factor: i64 } as {
+      :provider
+      use: function {s: this} is { print "scaling by \{s.factor}" }
+  }
+
+  m2: Scaler factor: 3
   borrowed: provider m2.borrow
   borrowed.use
   borrowed.drop
@@ -831,7 +898,7 @@ The first line of a definition's block is the declared identifier, two dashes,
 and a one-sentence gloss; further lines carry the contract a caller cannot see
 — ownership, locking, failure modes.
 
-#code language=zerolang check=none: """
+#code language=zerolang expect=E0501: """
   # env -- look up environment variable `key`. Returns Option.none if
   # the variable is not set; Option.some with the value otherwise.
   env: function {key: StringView} out (Option T: String) is native
@@ -894,10 +961,14 @@ its runtime counterpart. Apply the same phrasing rules to both:
   #*: Present tense, declarative.
   #*: State the failed condition, not a stack-trace narrative.
 
-#code language=zerolang check=none: """
+#code language=zerolang: """
+  size: 64
+  limit: 1024
+  closed: false
+
   if size > limit then error msg: "buffer exceeds maximum capacity"
 
-  if conn.closed then panic msg: "write on closed connection"
+  if closed then panic msg: "write on closed connection"
   """
 
 

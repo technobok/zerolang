@@ -257,19 +257,20 @@ treatment. The following rules cover wrapping in code:</p>
   for example, one parameter per line.</li>
 </ul>
 <pre><code class="language-zerolang"># single-line clause: no padding inside the parens
-result: (format value: 42 width: 6)
+width: ("-".repeated n: 6).length
 
 # multi-line clause: contents indented one step beyond the delimiters
-result: (format
-    value: 42
-    width: 6
-    pad: "0"
+spec: (cli.Spec.create
+    programName: "zgrep".string
+    summary: "search files for a pattern".string
 )</code></pre>
 <h3 id="whitespace-around-identifiers"><a href="#whitespace-around-identifiers">1.7. Whitespace Around Identifiers</a></h3>
 <p>A single space separates identifiers that would otherwise abut and parse as a
 single identifier. The numeric, comparison and logical (<code>and</code>, <code>or</code>)
 operators are ordinary identifiers and must be surrounded by whitespace.</p>
-<pre><code class="language-zerolang">total: a + b           # correct
+<pre><code class="language-zerolang">a: 1
+b: 2
+total: a + b           # correct
 # totaL: a+b           # parses as a single identifier 'a+b'</code></pre>
 <h3 id="definitions-and-the-colon"><a href="#definitions-and-the-colon">1.8. Definitions and the Colon</a></h3>
 <p>Definitions are a label, then <code>:</code>, then an expression or definition. A
@@ -319,7 +320,7 @@ chain of one kind is. The spelling of a chain is therefore not a choice.</p>
 print "hello"
 
 # nested named-arg call: inner call parenthesised
-print (format value: 42 width: 6)</code></pre>
+print ("-".repeated n: 6)</code></pre>
 <h3 id="numeric-literals"><a href="#numeric-literals">1.10. Numeric Literals</a></h3>
 <p>Numeric literals may use underscores to group digits for readability:</p>
 <ul>
@@ -343,13 +344,26 @@ In a <em><strong>declaration</strong></em> (parameter block or field list) the s
 spellings divide differently: <code>width: u64</code> declares a required,
 default-less slot, while <code>width: 0.u64</code> declares the type <em><strong>and</strong></em>
 the default -- choose by whether callers may omit the argument.</p>
-<pre><code class="language-zerolang"># context fixes the type -- leave the literal bare
-this.n = this.n + 1        # this.n is u64, so 1 is u64
-return 0                   # function is 'out u64', so 0 is u64
-if count &lt; 2 then ...      # count is u64, so 2 is u64
-resize cap: 8              # parameter 'cap' is usize, so 8 is usize
+<pre><code class="language-zerolang">Counter: class { n: u64 name: String } as {
+    # context fixes the type -- leave the literal bare
+    bump: function {c: this} out u64 is {
+        c.n = c.n + 1              # c.n is u64, so 1 is u64
+        if c.n &lt; 2 then return 0   # c.n is u64 and the function 'out u64'
+        c.name = "fixed"           # the field is String: no '.string'
+        return c.n
+    }
+}
+
+resize: function {cap: u64} is {
+    print "\{cap}"
+}
+
+greet: function {who: String} is {
+    print who
+}
+
+resize cap: 8              # parameter 'cap' is u64, so 8 is u64
 greet who: "bob"           # parameter 'who' is String, so "bob" is one
-this.name = "fixed"        # the field is String: no '.string'
 
 # zero origin -- the bare type name IS the zero value
 seq: u64                   # 0.u64; preferred over 'seq: 0.u64'
@@ -357,9 +371,9 @@ buf: String                # empty owned string; preferred over '"".string'
 
 # genuine non-zero origin -- the suffix carries the type
 offset: 7.u64              # a bare '7' binding would default to i64
-total: 60.u32 * 60 * 24    # all-literal expression: one suffix anchors
-                           # the whole expression (the bare operands
-                           # coerce to u32); with none it folds to i64</code></pre>
+# all-literal expression: one suffix anchors the whole expression (the bare
+# operands coerce to u32); with none it folds to i64
+total: 60.u32 * 60 * 24</code></pre>
 <p>A bare binding (<code>x: 0</code>) defaults to <code>i64</code>, and an all-literal expression
 with no typed operand folds to <code>i64</code>. In those positions the suffix is
 load-bearing, not noise. Inside a <code>data</code> block, prefer an <code>out</code> value
@@ -375,8 +389,8 @@ intended to coerce at each call site, omit <code>out</code> and let the literals
 coerce per use.</p>
 <pre><code class="language-zerolang"># Preferred: out carries the type, elements stay bare.
 bytemask: data {
-    LOW:  0
-    MID:  64
+    LOW: 0
+    MID: 64
     HIGH: 250
 } out intdata u8
 
@@ -390,18 +404,20 @@ bytemask_noisy: data { LOW: 0.u8 MID: 64.u8 HIGH: 250.u8 }</code></pre>
 <p>When the entire <code>match</code> fits comfortably on one line, write it on one
 line and omit the parentheses around the subject. Use this form only when
 every arm is a short statement.</p>
-<pre><code class="language-zerolang">match r case some then print "found" case none then print "missing"</code></pre>
+<pre><code class="language-zerolang">r: Option.some "x".string
+match r case some then print "found" case none then print "missing"</code></pre>
 <p>When the match spans multiple lines so each arm sits on its own line, place
 the subject in parentheses on its own line. The parentheses let the subject
 align with the case arms below it. Each <code>case</code> and the optional <code>else</code>
 sits at the parent indent, immediately after the closing delimiter of the
 previous arm.</p>
-<pre><code class="language-zerolang">match (
+<pre><code class="language-zerolang">result: io.readText path: "notes.txt"
+match (
     result
 ) case ok then {
-    print "value=\{result.value}"
+    print "text=\{result}"    # result narrows to the String payload
 } case err then {
-    print "failed: \{result.detail}"
+    print "failed"
 }</code></pre>
 <h2 id="boolean-expressions"><a href="#boolean-expressions">3. Boolean Expressions</a></h2>
 <p>Negate with <code>.not</code>: <code>if found.not then return</code>,
@@ -414,15 +430,17 @@ before the division, an arm tested before its payload -- use the short-circuit
 forms instead: <code>if n &gt; 0 when (total / n) &gt; 10 then</code>, or
 <code>for i &lt; n while ok loop</code> in a loop head. A flag set by a chain of <code>if</code>
 statements is a disjunction in disguise; write the disjunction.</p>
-<pre><code class="language-zerolang"># avoid: a flag accumulator
-identB: false
-if bo &gt;= 97 when bo &lt;= 122 then identB = true
-if bo == 95 then identB = true
-# prefer: the disjunction
-identB: ((bo &gt;= 97) and (bo &lt;= 122)) or (bo == 95)
+<pre><code class="language-zerolang">bo: 97.u8
+found: true
 
-# avoid: comparing with a literal
-if found == false then return
+# avoid: a flag accumulator
+identA: false
+if bo &gt;= 97 when bo &lt;= 122 then identA = true
+if bo == 95 then identA = true
+# prefer: the disjunction
+identB: (bo &gt;= 97) and (bo &lt;= 122) or (bo == 95)
+
+# avoid, comparing with a literal: `if found == false then return`
 # prefer: the negation method
 if found.not then return</code></pre>
 <h2 id="empty-clauses"><a href="#empty-clauses">4. Empty Clauses</a></h2>
@@ -440,18 +458,25 @@ usually signal that the control flow can be expressed more directly.</p>
   on what <code>null</code> names where it is written. When several arms are no-ops,
   collapse them into one <code>else null</code> rather than listing each.</li>
 </ul>
-<pre><code class="language-zerolang"># avoid: empty else on a statement if
-if name == "i8" then { return "int8_t" } else {}
-# prefer: drop the empty else
-if name == "i8" then return "int8_t"
+<pre><code class="language-zerolang">cName: function {name: StringView} out StringView is {
+    # avoid: empty else on a statement if
+    if name == "i8" then { return "int8_t" } else {}
+    # prefer: drop the empty else
+    if name == "i8" then return "int8_t"
+    return "void"
+}
 
-# avoid: empty then, with the work in else
-if isC then {} else { return true }
-# prefer: negate the condition, work in then
-if isC.not then return true
+notC: function {isC: bool} out bool is {
+    # avoid: empty then, with the work in else
+    if isC then {} else { return true }
+    # prefer: negate the condition, work in then
+    if isC.not then return true
+    return false
+}
 
 # acceptable: a union match's one required no-op arm
-match (o) case some then { collect n: o } case none then null</code></pre>
+o: Option.some "x".string
+match o case some then print o case none then null</code></pre>
 <h2 id="naming"><a href="#naming">5. Naming</a></h2>
 <h3 id="units"><a href="#units">5.1. Units</a></h3>
 <p>Unit names are lowercase printable ASCII with no whitespace; this is mandated
@@ -480,9 +505,13 @@ names split on word boundaries: <code>BufWriter</code>, not <code>Bufwriter</cod
 <code>String</code>, <code>StringView</code>, <code>Option</code>, <code>OptionView</code>, <code>Result</code>,
 <code>Text</code>, and the generic bounds <code>AnyRef</code>, <code>anyval</code>,
 <code>RefHashable</code>, <code>valhashable</code>.</p>
-<pre><code class="language-zerolang">File: class { ... }
-ListView: class { ... }
-ReadStream: protocol { ... }</code></pre>
+<pre><code class="language-zerolang">File: class { fd: i32 }
+
+LineView: class { first: u64 count: u64 }
+
+ReadStream: protocol {
+    read: function {t: this} out u64
+}</code></pre>
 <h3 id="typedef-definitions"><a href="#typedef-definitions">5.4. Typedef Definitions</a></h3>
 <p>A <code>typedef</code> takes its base's family, so its name is cased as its base's
 is: lowercase over a valtype, PascalCase over a reftype. <code>zl</code> reads
@@ -495,10 +524,12 @@ Bytes: typedef ListVal u8</code></pre>
 <p>A generic parameter names the type it stands for, so it is cased like a type:
 its case matches the case of its bound. Every bound's own name already
 follows the rule above, so this is a one-glance check with no exception.</p>
-<pre><code class="language-zerolang">t: anyval.generic
-T: AnyRef.generic
-K: RefHashable.generic
-k: valhashable.generic</code></pre>
+<pre><code class="language-zerolang">Shelf: class { a: t b: T c: K d: k } as {
+    t: anyval.generic
+    T: AnyRef.generic
+    K: RefHashable.generic
+    k: valhashable.generic
+}</code></pre>
 <p>A bound that admits both families is cased by its own declaration kind, not by
 what it admits: <code>StringLike</code> is a <code>union</code>, so its parameter is <code>T</code>.</p>
 <p>Prefer very short names where readability is clear &#x2014; <code>K</code> and <code>V</code> for a
@@ -510,7 +541,9 @@ behaviour, so the case tells a reader whether a binding of that parameter
 copies or moves, without scrolling back to the <code>as</code> clause to find out.</p>
 <p>A value (non-type) parameter is bound by a numeric type, which is lowercase, so
 it is lowercase too, and needs no carve-out:</p>
-<pre><code class="language-zerolang">to: u64.generic</code></pre>
+<pre><code class="language-zerolang">Ring: record { slots: (array t: u8 :to) } as {
+    to: u64.generic
+}</code></pre>
 <h3 id="variant-tags"><a href="#variant-tags">5.6. Variant Tags</a></h3>
 <p>Variant arm names are values, not types, and are written lowercase. Aim for
 a single word; if more is needed, use <code>lowerCamelCase</code>.</p>
@@ -531,11 +564,16 @@ a single word; if more is needed, use <code>lowerCamelCase</code>.</p>
 <li>Predicate methods returning <code>bool</code> may be prefixed with <code>is</code> or
   <code>has</code>.</li>
 </ul>
-<pre><code class="language-zerolang"># correct
-f.size # not f.getSize
-user.setName name: "alice"
-conn.isOpen
-doc.hasErrors</code></pre>
+<pre><code class="language-zerolang">File: class { bytes: u64 name: String open: bool } as {
+    size: function {f: this.view} out u64 is { return f.bytes }
+    setName: function {f: this name: String} is { f.name = name.copy }
+    isOpen: function {f: this.view} out bool is { return f.open }
+}
+
+f: File bytes: 3 name: "a.txt" open: true
+n: f.size    # correct; not f.getSize
+f.setName name: "b.txt"
+ok: f.isOpen</code></pre>
 <h3 id="constants"><a href="#constants">5.8. Constants</a></h3>
 <p>Top-level value definitions use <code>lowerCamelCase</code>. Do not use uppercase or
 shouting snake case.</p>
@@ -566,15 +604,14 @@ acronym is acceptable.</p>
 <li>All methods on the same type must use the same receiver name.</li>
 <li>The <code>:this</code> shorthand is permitted but a short type-relevant name is preferred.</li>
 </ul>
-<pre><code class="language-zerolang">File: class { ... } as {
-    open: function {f: this name: StringView} out File is { ... }
-    close: function {f: this} is { ... }
-    size: function {f: this} out u64 is { ... }
+<pre><code class="language-zerolang">File: class { fd: i32 bytes: u64 } as {
+    close: function {f: this} is { f.fd = -1 }
+    size: function {f: this} out u64 is { return f.bytes }
 }
 
-ListView: class { ... } as {
-    length: function {lv: this} out u64 is { ... }
-    first: function {lv: this} out (Option T: of) is { ... }
+LineView: class { first: u64 count: u64 } as {
+    length: function {lv: this} out u64 is { return lv.count }
+    last: function {lv: this} out u64 is { return lv.first + lv.count }
 }</code></pre>
 <h3 id="platform-and-architecture-identifiers"><a href="#platform-and-architecture-identifiers">5.11. Platform and Architecture Identifiers</a></h3>
 <p>Platform and architecture identifiers may use their conventional external
@@ -589,27 +626,37 @@ in-language consistency cost.</p>
 <h2 id="calls"><a href="#calls">6. Calls</a></h2>
 <p>When a function or method call has exactly one argument and that argument is
 the leading parameter, omit the argument name.</p>
-<pre><code class="language-zerolang">print "hello"
+<pre><code class="language-zerolang">outbuf: Bytes
+print "hello"
 outbuf.append 65.u8</code></pre>
 <p>Re-introduce the argument name when omitting it would obscure the call's
 intent at the call site. The judgement applies most often to native or
 generic methods where a bare argument's role is not obvious from the
 receiver and method name.</p>
-<pre><code class="language-zerolang"># clear from receiver and method name -- omit
+<pre><code class="language-zerolang">names: List String
+item: "ada".string
+w: io.stdout
+chunk: Bytes
+
+# clear from receiver and method name -- omit
 names.append item
 
 # bare argument's role is not obvious -- name it
-buf.write from: chunk</code></pre>
+w.write from: chunk.byteView</code></pre>
 <p>The same rule covers control-flow builtins whose clauses read like call
 arguments. A <code>for</code> loop's leading condition is its first argument, named
 <code>while</code>; omit that name when the condition leads. Keep <code>while</code> only on
 the subsequent conditions of a multi-condition loop (they are not the first
 argument).</p>
-<pre><code class="language-zerolang"># leading condition -- omit 'while'
-for i &lt; n loop { ... }
+<pre><code class="language-zerolang">i: 0
+n: 3
+ok: true
+
+# leading condition -- omit 'while'
+for i &lt; n loop i = i + 1
 
 # subsequent conditions keep 'while'
-for i &lt; n while ok loop { ... }</code></pre>
+for i &lt; n while ok loop i = i + 1</code></pre>
 <h2 id="item-definitions"><a href="#item-definitions">7. Item Definitions</a></h2>
 <p>When an item is generic, declare each generic parameter in the <code>as</code>
 section as <code>name: &lt;Constraint&gt;.generic</code>. Place the generic declarations
@@ -628,11 +675,13 @@ names directly.</p>
 <p>Use <code>if</code> guards with early return to handle errors and edge cases up
 front. The remaining body is then the happy path with one less indent
 level.</p>
-<pre><code class="language-zerolang">read: function {f: this} out (Result T: String) is {
-    if not f.isOpen then return Result.err detail: "not open"
-    if f.atEnd     then return Result.err detail: "eof"
-    ...
-    return Result.ok value: data
+<pre><code class="language-zerolang">Source: class { open: bool atEnd: bool text: String } as {
+    read: function {s: this} out (Result String E: String) is {
+        if s.open.not then return ((Result String E: String).err "not open".string)
+        if s.atEnd then return ((Result String E: String).err "eof".string)
+        # the happy path, one indent level
+        return ((Result String E: String).ok s.text.copy)
+    }
 }</code></pre>
 <h3 id="last-expression-return"><a href="#last-expression-return">8.2. Last-Expression Return</a></h3>
 <p>For short functions, return the last expression and omit the explicit
@@ -647,8 +696,8 @@ side-effecting an accumulator when an expression form is available.</p>
 squares: for each x: 5.times loop { x * x }
 
 # avoid
-squares: (ListVal i64)
-for each x: 5.times loop { squares.append x * x }</code></pre>
+built: ListVal i64
+for each x: 5.times loop { built.append x * x }</code></pre>
 <h3 id="loops"><a href="#loops">8.4. Loops</a></h3>
 <p>Walk a container with <code>for each e: xs</code>, not <code>for each e: xs.iterate</code>:
 <code>each</code> calls <code>iterate</code> itself (L029 rewrites the long form). Other walks
@@ -669,7 +718,11 @@ ending it with <code>x.drop</code>. A <code>.drop</code> is a use: it ends the b
 lifetime there, destroying what the binding owns. A binding that owns nothing
 -- a parameter the caller still owns, a borrow, a scalar -- lowers to
 <code>(void)(x);</code> in the emitted C, so it costs nothing at runtime.</p>
-<pre><code class="language-zerolang">onEvent: function {kind: u64 payload: u64} is {
+<pre><code class="language-zerolang">dispatch: function {kind: u64} is {
+    print "event \{kind}"
+}
+
+onEvent: function {kind: u64 payload: u64} is {
     payload.drop  # required by the handler signature, not used here
     dispatch :kind
 }</code></pre>
@@ -704,11 +757,15 @@ required when an owned result's type carries a non-owned field (the
 wrapper-constructor shape: <code>outx this</code>), and refused when nothing is
 there to pin.</li>
 </ul>
-<pre><code class="language-zerolang"># in: borrow is implicit; out: take is implicit
-area: function {p: point} out f64 is { ... }
+<pre><code class="language-zerolang">point: record { x: f64 y: f64 }
+
+# in: borrow is implicit; out: take is implicit
+area: function {p: point} out f64 is { return p.x * p.y }
 
 # reference return: outx, explicit .borrow on the type, a non-owned parent
-first: function as { t: AnyRef.generic } in {l: (List t).borrow} outx t.borrow is { ... }</code></pre>
+first: function as { t: AnyRef.generic } in {l: (List t).borrow} outx t.borrow is {
+    return (l.get i: 0)
+}</code></pre>
 <h3 id="inline-code"><a href="#inline-code">10.2. Inline Code</a></h3>
 <ul>
 <li>Do not write <code>.borrow</code> in function bodies or on call arguments.
@@ -749,7 +806,17 @@ protocol creation.</li>
 <li><code>.drop</code> on a borrowed variable, written as a standalone
 statement, ends the borrow.</li>
 </ul>
-<pre><code class="language-zerolang">borrowed: provider m2.borrow
+<pre><code class="language-zerolang">provider: protocol {
+    use: function {t: this}
+}
+
+Scaler: class { factor: i64 } as {
+    :provider
+    use: function {s: this} is { print "scaling by \{s.factor}" }
+}
+
+m2: Scaler factor: 3
+borrowed: provider m2.borrow
 borrowed.use
 borrowed.drop
 print "m2 still alive: factor=\{m2.factor}"</code></pre>
@@ -835,9 +902,13 @@ its runtime counterpart. Apply the same phrasing rules to both:</p>
 <li>Present tense, declarative.</li>
 <li>State the failed condition, not a stack-trace narrative.</li>
 </ul>
-<pre><code class="language-zerolang">if size &gt; limit then error msg: "buffer exceeds maximum capacity"
+<pre><code class="language-zerolang">size: 64
+limit: 1024
+closed: false
 
-if conn.closed then panic msg: "write on closed connection"</code></pre>
+if size &gt; limit then error msg: "buffer exceeds maximum capacity"
+
+if closed then panic msg: "write on closed connection"</code></pre>
 <h2 id="file-hygiene"><a href="#file-hygiene">13. File Hygiene</a></h2>
 <ul>
 <li>One trailing newline at end of file.</li>
