@@ -32644,8 +32644,8 @@ checkMarkerMember: function {
     }
     if cnId == zast.wellKnown.slot.wkBorrow then {
         # a `.borrow` VALUE bound by a binding or a `with` is a second name for
-        # what it names: the alias pins the source SHARED and may write through
-        # itself. An ARGUMENT position locks through the call's own leg
+        # what it names: the alias may write through itself, so it pins the
+        # source EXCLUSIVE. An ARGUMENT position locks through the call's own leg
         # instead, so the pin is left to it.
         if dp.nid != st.typing.callArgNode when (typeIsReftype :st tid: bt) then {
             btup: ListVal zast.nameid
@@ -37719,8 +37719,8 @@ checkWith: function {
     if vt.isZero.not then {
         own: withValueOwnership :ast :st v: (ast.nodes.get i: withnode.value)
         # The borrow target: a BORROW-returning auto-call reported the receiver
-        # source; a plain-path value pins its full dotted tuple SHARED -- the
-        # owner may still read it -- and the alias may write through itself.
+        # source; a plain-path value pins its full dotted tuple, EXCLUSIVE since
+        # the alias may write through itself.
         # Valtype borrows are copies -- no lock.
         wpins: List ztyping.PinPath
         takePendingPins :st dst: wpins
@@ -40521,10 +40521,10 @@ markVarRebound: function {st: zenv.ZSymbolTable nameId: zast.nameid} is {
 
 # lockCallArg -- the call-scoped lock a parameter or receiver takes on its
 # argument's root for the call's duration (the symtab appends the lock overlay
-# entry in the open call scope; it vanishes when the scope pops): SHARED for
-# any argument, EXCLUSIVE for a `{:this}` receiver. `mutable` says the callee
-# may write through the reference, whatever the strength. An argument's lock is
-# `queued`: it starts with the call, once every argument is walked (layArgLocks).
+# entry in the open call scope; it vanishes when the scope pops): SHARED when
+# `shared` asks it and the callee only reads, EXCLUSIVE when it may write
+# through the reference (`mutable`). An argument's lock is `queued`: it starts
+# with the call, once every argument is walked (layArgLocks).
 lockCallArg: function {
     st: zenv.ZSymbolTable
     pool: zast.StringPool.view
@@ -40718,8 +40718,8 @@ reportPathConflict: function {
 
 # lockCallArgPath -- the call-scoped lock an argument that is a field path
 # (`o.s`) takes for the call's duration: SHARED intent on each strict prefix,
-# SHARED on the leaf, held by the CALL, so a later argument that moves or passes
-# the same value meets it. Unlike a nested receiver's lockCallPath it stops at
+# and on the leaf EXCLUSIVE, or SHARED when the callee only reads, held by the
+# CALL, so a later argument that moves or passes the same value meets it. Unlike a nested receiver's lockCallPath it stops at
 # the first conflict, which names both arguments once.
 lockCallArgPath: function {
     st: zenv.ZSymbolTable
@@ -42625,7 +42625,8 @@ hoistArg: function {
     # its source path for the call scope (SHARED prefixes, leaf kind from
     # the side channel), so aliasing between arguments -- or with a live
     # view of the source -- conflicts exactly as the call-scoped locking
-    # algorithm in ownership.pdoc requires
+    # algorithm in ownership.pdoc requires. A path the call holds itself
+    # (`callHolds`) is the argument's one lock, and the temp lays none
     # install only when the consumed side-channel path belongs to THIS
     # argument (its root atom): a stale residue from receiver evaluation
     # must stay drained-without-locks, or it would double the call's own
@@ -43318,8 +43319,8 @@ lockNonTrivialArg: function {
     if isTake then consumes = true
     # a plain field-path argument behaves as its user-
     # written hoist would: seed the borrow side channel with
-    # the real source tuple so the synth temp installs the
-    # spec's SHARED-prefix + EXCLUSIVE-leaf locks on it
+    # the real source tuple, which the call's own lock on the
+    # path (lockFieldArgForCall) or the hoisted temp holds
     byRef: isRecvArg or (typeIsReftype :st tid: vt)
     # what the result of an `outx` callee keeps locked is every borrow and view
     # argument, whatever its family
@@ -47608,8 +47609,9 @@ movePayloadIntoArm: function {
 
 # pinPayloadOfArm -- a non-owned arm (`some: T.borrow`, `some: t.view`) holds a
 # reference into its payload's source, as a non-owned field does: a bare-name
-# payload is pinned SHARED for the life of the value built, its owner keeps it
-# and may still read it, and nothing is moved. Any other payload (a path, a
+# payload is pinned for the life of the value built at the arm's strength --
+# EXCLUSIVE for `.borrow`, SHARED for `.view` -- its owner keeps it, and nothing
+# is moved. Any other payload (a path, a
 # call) brings the pins its own expression took.
 pinPayloadOfArm: function {
     st: zenv.ZSymbolTable

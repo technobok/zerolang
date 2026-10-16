@@ -442,8 +442,8 @@ is not a destination that declares ownership: it borrows.</p>
 <h3 id="a-bare-bind-borrows"><a href="#a-bare-bind-borrows">3.3. A bare bind borrows</a></h3>
 <p>Binding a reftype to a new name with no ownership method (<code>q: p</code>) is
 the same as <code>q: p.borrow</code>: the new name is a second name for <code>p</code>'s
-storage. <code>p</code> stays readable, a write through <code>q</code> reaches it, <code>p</code>
-cannot be written or moved while <code>q</code> lives, and <code>q</code> cannot be
+storage. A write through <code>q</code> reaches <code>p</code>, <code>p</code> cannot be used by its
+own name -- read, written or moved -- while <code>q</code> lives, and <code>q</code> cannot be
 swapped or returned as an owned result -- reassigned, it re-points (see A
 reassignment keeps the mode). <code>q: p.take</code> moves:
 the new name owns the value, the old one is invalidated, and a later
@@ -813,11 +813,11 @@ valtype passed to an <code>unmarked</code> parameter is a copy: the result canno
 point into it, and nothing is pinned. A node or record the result never
 points into is best taken by copy, which leaves only what it does point
 into locked.</li>
-<li>Strength per input. Every non-owned argument pins
-SHARED, <code>.borrow</code> and <code>.view</code> alike: the caller keeps reading the
-source and may not write, move or drop it while the result lives. Whether
-the result may write through its reference is the parameter's marker,
-not the pin's strength. The receiver pins at the strength the method
+<li>Strength per input. Every non-owned argument pins at its
+parameter's strength: a <code>.borrow</code> (or unmarked) one EXCLUSIVE --
+the caller reaches the source only through the result while it lives --
+and a <code>.view</code> one SHARED: the caller keeps reading the source and
+may not write, move or drop it. The receiver pins at the strength the method
 declares: a bare <code>:this</code> EXCLUSIVE, a <code>{t: this.view}</code> receiver
 SHARED. <code>listView</code> and <code>slice</code> declare that receiver on both list
 forms; <code>get</code> and <code>Map.get</code> cannot, and are whitelisted readers that pin
@@ -901,8 +901,8 @@ destination, invalidating the source) and inline <code>.borrow</code> (alias the
 source via a lock, no allocation). Bound to a name -- <code>b: src.borrow</code>, or
 <code>with v: src.borrow</code> -- the alias is a pointer to the source, not a
 copy: a write through <code>b</code> is a write to <code>src</code>, and the source is pinned
-SHARED for as long as <code>b</code> lives, so its owner may read it but not write,
-move or drop it.</p>
+EXCLUSIVE for as long as <code>b</code> lives, so its owner reaches it only through
+<code>b</code> until then.</p>
 <h4 id="which-types-have-a-copy"><a href="#which-types-have-a-copy">6.7.1. Which types have a .copy</a></h4>
 <p>Whether <code>x.copy</code> exists depends on the type's family, and it is a
 deliberate split -- not a gap waiting to be filled.</p>
@@ -1014,42 +1014,44 @@ and is valid only for one yield window; using <code>name</code> past the next
 yields, declare the input <code>U.take</code> -- the generator then owns the value
 for its lifetime.</p>
 <h2 id="pinning-and-locks"><a href="#pinning-and-locks">8. Pinning and Locks</a></h2>
-<p>A non-owned binding or argument pins its source: SHARED for every
-reference -- a <code>.view</code> and a <code>.borrow</code> alike -- and EXCLUSIVE only for the
-receiver of a mutating method. Pinning is an orthogonal compile-time
+<p>A non-owned binding or argument pins its source, at the strength its
+marker says: EXCLUSIVE when the reference may write through itself, SHARED
+when it only reads. Pinning is an orthogonal compile-time
 mechanism that prevents aliasing and enforces mutation-safety for
 outstanding borrows, with zero runtime overhead. The machinery that
 enforces pins is called locking, and "lock" is the word compiler
-diagnostics use (e.g. "shared lock held by 'it'"); this chapter uses "pin"
+diagnostics use (e.g. "exclusive lock held by 'b'"); this chapter uses "pin"
 for the relationship a view or borrow establishes, and "lock" for the
 enforcement records the compiler tracks.</p>
 <p>The whole model is three rules. Everything below is these worked out in
 detail; if the detail ever seems to say something else, these win.</p>
 <ol>
-<li>Every call pins its receiver -- SHARED for
-<code>this.view</code>, EXCLUSIVE for <code>this.borrow</code> (and a bare <code>:this</code> is
-<code>this.borrow</code>). A field write or a swap is the same thing at statement
-scope. There is no separate rule for mutation: a mutator is simply a call
-with an exclusive receiver, and no carve-out for readers.</li>
-<li>Every other reference pins SHARED -- a <code>.borrow</code> or <code>.view</code>
-field, a <code>with</code> alias, a <code>.borrow</code> parameter during its call. The owner
-may still read the source beside it (<code>src.length</code>, an interpolation,
-passing it to another call) and may not write, move or drop it while
-the reference lives. Whether the reference may write through itself is
-its own marker's business, not the pin's.</li>
-<li>The pin is released on return -- unless the function is declared
-<code>outx</code>, in which case it transfers to the binding and lives exactly as
-long as it does.</li>
+<li>Every reference pins its source at its marker's strength.
+EXCLUSIVE for a reference that may write -- a <code>.borrow</code> binding or a bare
+one (<code>b: a</code> borrows), a <code>with</code> alias, a <code>.borrow</code> field or union arm,
+a <code>.borrow</code> or unmarked parameter during its call, the receiver of a
+<code>this.borrow</code> method (a bare <code>:this</code> is <code>this.borrow</code>), and an
+<code>outx</code> result over any of these. SHARED for one that only reads -- a
+<code>.view</code> parameter, field or arm, a <code>this.view</code> receiver, an
+<code>outx</code> result over only those. A field write or a swap is an exclusive
+use at statement scope. The rule is the marker's: no type is an exception
+(a bare <code>StringView</code> parameter borrows too, so a callee that only reads
+says <code>StringView.view</code>).</li>
+<li>A pin lasts as long as its reference.
+A binding's pins last its scope (or until it is dropped or moved). A call's
+pins start when the call starts -- after every argument is evaluated,
+in order -- and end when it returns: a call nested in an argument takes and
+releases its own pins first, so <code>f :st n: (count :st)</code> is fine. An
+<code>outx</code> call's pins transfer to its result and live exactly as long as the
+result does; a result held as an argument of an enclosing call keeps them
+until that call ends.</li>
 <li>Shared and shared coexist. Exclusive coexists with nothing. A
-  holder never conflicts with itself. Two refinements keep the shared pins
-honest: one value may not reach a call twice -- as two arguments, or as an
-argument and the receiver -- when either reference may write, since the
-callee holds both at once; and a reference a call handed back (an
-element <code>get</code>, a <code>.stringView</code>, an <code>outx</code> result) may point
-inside its source, so it coexists with no reference that may write to
-that source, whichever came first. An alias of the source's own slot -- a
-<code>with</code> alias, a non-owned field, an argument, an <code>outx this</code> -- survives
-writes through the other name and takes no such rule.</li>
+  holder never conflicts with itself. While an exclusive reference lives,
+its source is not used by any other name -- not read, written, moved,
+dropped or passed -- the owner included: read through the reference, or
+after it ends. One value reaching a call twice (two arguments, or an
+argument and the receiver) is two references, so it is refused when either
+may write.</li>
 </ol>
 <p>This is Rust's discipline applied to references, and it was chosen
 deliberately over a more permissive alternative that would have needed two
@@ -1142,15 +1144,18 @@ across suspensions: it moves as any local does.</p>
 <p>When a function is called, locks are taken on argument paths and the
 receiver path, then released when the call returns:</p>
 <ol>
-<li>Each argument is processed left to right.</li>
+<li>Each argument is evaluated left to right, and the locks it asks for
+  are queued; they are laid, in argument order, when the call starts --
+  after the last argument -- and checked then against what is live.</li>
 <li>If the argument is a top-level <code>data</code> item, no lock is taken
   (immutable, freely shared).</li>
 <li>For an argument whose source is a path <code>(root, f1, ..., fn)</code>
   resolving to a reftype leaf, or to a valtype leaf passed by pointer, a
   shared lock is taken on every
   intermediate prefix (<code>(root,)</code>, <code>(root, f1)</code>, ...,
-  <code>(root, f1, ..., fn-1)</code>) and an exclusive lock is taken on
-  the leaf <code>(root, f1, ..., fn)</code>. The intent-shared ancestors permit
+  <code>(root, f1, ..., fn-1)</code>) and the parameter's lock on the leaf
+  <code>(root, f1, ..., fn)</code>: exclusive, or shared for a <code>.view</code>
+  parameter. The intent-shared ancestors permit
   sibling paths to be locked independently by later arguments.</li>
 <li>For an argument written as <code>x.borrow</code> (and
   similarly for stringView/listView), the call-scoped lock targets the
@@ -1164,9 +1169,10 @@ receiver path, then released when the call returns:</p>
   are markers.</li>
 <li>If the requested lock conflicts with an outstanding lock on an
   overlapping path (see Conflict rule above), it is an error.</li>
-<li>If the argument is a sub-call, locking is applied recursively.
-  After the sub-call, its argument locks are cleared or assigned to the
-  sub-call result.</li>
+<li>If the argument is a sub-call, locking is applied recursively, and
+  the sub-call takes and releases its own locks before the enclosing call
+  starts: after it, its argument locks are cleared or assigned to its
+  result, which holds them until the enclosing call ends.</li>
 <li>After all arguments are processed, locks are taken on the receiver
   path -- shared on each intermediate prefix, exclusive on the leaf.
   For a bare-receiver call <code>x.method</code>, this is exclusive on <code>(x,)</code>.
@@ -1260,9 +1266,12 @@ classes. The lock targets the source path:</p>
 <ul>
 <li>shared on every intermediate prefix of the source path.
 For <code>v: rec.field.stringView</code> the intermediate is <code>(rec,)</code>.</li>
-<li>exclusive on the leaf of the source path. For
-<code>v: rec.field.stringView</code> the leaf is <code>(rec, field)</code>; for
-<code>v: s.stringView</code> the leaf is <code>(s,)</code>.</li>
+<li>the reference's own strength on the leaf of the source path:
+  exclusive for one that may write (<code>.borrow</code>, a bare binding, a
+  <code>with</code> alias, a <code>span</code>), shared for a view (<code>.stringView</code>,
+  <code>.substring</code>, <code>.listView</code>, <code>.slice</code>). For
+  <code>v: rec.field.stringView</code> the leaf is <code>(rec, field)</code>; for
+  <code>v: s.stringView</code> the leaf is <code>(s,)</code>.</li>
 <li>held for the full scope of the borrowing variable; released
   automatically on scope exit or via <code>.drop</code>.</li>
 </ul>
@@ -1489,9 +1498,11 @@ MyIter: class {
         return (meta.create state: 0 :target)
     }
 }</code></pre>
-<p>The field stores a locked reference to external data, pinned SHARED for the
-entire lifetime of the class instance: the owner keeps reading the source, and
-may not write, move or drop it while the instance lives. When the instance falls out of
+<p>The field stores a locked reference to external data, pinned for the entire
+lifetime of the class instance at the field's strength: a <code>.borrow</code> field
+EXCLUSIVE -- the owner reaches the source only through the instance while it
+lives -- and a <code>.view</code> field SHARED: the owner keeps reading the source, and
+may not write, move or drop it. When the instance falls out of
 scope, the locks held by its non-owned fields are released together with the
 instance itself.</p>
 <p>A non-owned field holds its source the way a parameter of its type is passed
@@ -1501,10 +1512,11 @@ a header sharing the conformer it points at. A value type's <code>.borrow</code>
 field is refused: the class holds a copy of it, as a <code>.borrow</code> binding of one
 would, so the marker names a borrow that does not happen.</p>
 <p>Classes are single-owner: they cannot be copied, only moved via <code>.take</code>.
-This is what makes non-owned fields safe on classes -- there is no way to
-duplicate the handle that holds the lock, so there is no way for two live
-instances to share (and race on) the same locked target. No separate
-separate mechanism is needed.</p>
+With the pin rule, this is what makes non-owned fields safe on classes: the
+handle that holds the pin cannot be duplicated, and a second instance
+borrowing the same source is refused while the first lives, since a
+<code>.borrow</code> field pins EXCLUSIVE. Several instances share one source only
+through <code>.view</code> fields, which only read. No separate mechanism is needed.</p>
 <h3 id="rules-for-non-owned-fields"><a href="#rules-for-non-owned-fields">10.1. Rules for Non-Owned Fields</a></h3>
 <p>A field marker sets two independent things, and they are checked in
 different places.</p>

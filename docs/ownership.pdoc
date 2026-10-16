@@ -263,8 +263,8 @@ is not a destination that declares ownership: it borrows.
 
 Binding a reftype to a new name with no ownership method (#~"q: p") is
 the same as #~"q: p.borrow": the new name is a second name for #~"p"'s
-storage. #~"p" stays readable, a write through #~"q" reaches it, #~"p"
-cannot be written or moved while #~"q" lives, and #~"q" cannot be
+storage. A write through #~"q" reaches #~"p", #~"p" cannot be used by its
+own name -- read, written or moved -- while #~"q" lives, and #~"q" cannot be
 swapped or returned as an owned result -- reassigned, it re-points (see A
 reassignment keeps the mode). #~"q: p.take" moves:
 the new name owns the value, the old one is invalidated, and a later
@@ -695,11 +695,11 @@ and on the receiver, for as long as the result lives:
   point into it, and nothing is pinned. A node or record the result never
   points into is best taken by copy, which leaves only what it does point
   into locked.]
-  [#*: #_+"Strength per input." Every non-owned #_+"argument" pins
-  #_+"SHARED", #~".borrow" and #~".view" alike: the caller keeps reading the
-  source and may not write, move or drop it while the result lives. Whether
-  the result may #_+"write" through its reference is the parameter's marker,
-  not the pin's strength. The #_+"receiver" pins at the strength the method
+  [#*: #_+"Strength per input." Every non-owned #_+"argument" pins at its
+  parameter's strength: a #~".borrow" (or unmarked) one #_+"EXCLUSIVE" --
+  the caller reaches the source only through the result while it lives --
+  and a #~".view" one #_+"SHARED": the caller keeps reading the source and
+  may not write, move or drop it. The #_+"receiver" pins at the strength the method
   declares: a bare #~":this" #_+"EXCLUSIVE", a #~"{t: this.view}" receiver
   #_+"SHARED". #~"listView" and #~"slice" declare that receiver on both list
   forms; #~"get" and #~"Map.get" cannot, and are whitelisted readers that pin
@@ -797,8 +797,8 @@ destination, invalidating the source) and inline #~".borrow" (alias the
 source via a lock, no allocation). Bound to a name -- #~"b: src.borrow", or
 #~"with v: src.borrow" -- the alias is a #_+"pointer" to the source, not a
 copy: a write through #~"b" is a write to #~"src", and the source is pinned
-SHARED for as long as #~"b" lives, so its owner may read it but not write,
-move or drop it.
+EXCLUSIVE for as long as #~"b" lives, so its owner reaches it only through
+#~"b" until then.
 
 #----: Which types have a .copy
 
@@ -937,13 +937,13 @@ for its lifetime.
 
 #--: Pinning and Locks
 
-A non-owned binding or argument #_+"pins" its source: SHARED for every
-reference -- a #~".view" and a #~".borrow" alike -- and EXCLUSIVE only for the
-receiver of a mutating method. Pinning is an orthogonal compile-time
+A non-owned binding or argument #_+"pins" its source, at the strength its
+marker says: EXCLUSIVE when the reference may write through itself, SHARED
+when it only reads. Pinning is an orthogonal compile-time
 mechanism that prevents aliasing and enforces mutation-safety for
 outstanding borrows, with zero runtime overhead. The machinery that
 enforces pins is called #_+"locking", and "lock" is the word compiler
-diagnostics use (e.g. "shared lock held by 'it'"); this chapter uses "pin"
+diagnostics use (e.g. "exclusive lock held by 'b'"); this chapter uses "pin"
 for the relationship a view or borrow establishes, and "lock" for the
 enforcement records the compiler tracks.
 
@@ -951,30 +951,32 @@ enforcement records the compiler tracks.
 detail; if the detail ever seems to say something else, these win.
 
 #ol:
-  [#*: #_+"Every call pins its receiver" -- SHARED for
-  #~"this.view", EXCLUSIVE for #~"this.borrow" (and a bare #~":this" is
-  #~"this.borrow"). A field write or a swap is the same thing at statement
-  scope. There is no separate rule for mutation: a mutator is simply a call
-  with an exclusive receiver, and no carve-out for readers.]
-  [#*: #_+"Every other reference pins SHARED" -- a #~".borrow" or #~".view"
-  field, a #~"with" alias, a #~".borrow" parameter during its call. The owner
-  may still #_+"read" the source beside it (#~"src.length", an interpolation,
-  passing it to another call) and may not #_+"write, move or drop" it while
-  the reference lives. Whether the reference may write #_+"through itself" is
-  its own marker's business, not the pin's.]
-  [#*: #_+"The pin is released on return" -- unless the function is declared
-  #~"outx", in which case it transfers to the binding and lives exactly as
-  long as it does.]
+  [#*: #_+"Every reference pins its source at its marker's strength."
+  EXCLUSIVE for a reference that may write -- a #~".borrow" binding or a bare
+  one (#~"b: a" borrows), a #~"with" alias, a #~".borrow" field or union arm,
+  a #~".borrow" or unmarked parameter during its call, the receiver of a
+  #~"this.borrow" method (a bare #~":this" is #~"this.borrow"), and an
+  #~"outx" result over any of these. SHARED for one that only reads -- a
+  #~".view" parameter, field or arm, a #~"this.view" receiver, an
+  #~"outx" result over only those. A field write or a swap is an exclusive
+  use at statement scope. The rule is the marker's: no type is an exception
+  (a bare #~"StringView" parameter borrows too, so a callee that only reads
+  says #~"StringView.view").]
+  [#*: #_+"A pin lasts as long as its reference."
+  A binding's pins last its scope (or until it is dropped or moved). A call's
+  pins start #_+"when the call starts" -- after every argument is evaluated,
+  in order -- and end when it returns: a call nested in an argument takes and
+  releases its own pins first, so #~"f :st n: (count :st)" is fine. An
+  #~"outx" call's pins transfer to its result and live exactly as long as the
+  result does; a result held as an argument of an enclosing call keeps them
+  until that call ends.]
   [#*: #_+"Shared and shared coexist. Exclusive coexists with nothing. A
-  holder never conflicts with itself." Two refinements keep the shared pins
-  honest: one value may not reach a call twice -- as two arguments, or as an
-  argument and the receiver -- when either reference may write, since the
-  callee holds both at once; and a reference a call #_+"handed back" (an
-  element #~"get", a #~".stringView", an #~"outx" result) may point
-  #_+"inside" its source, so it coexists with no reference that may write to
-  that source, whichever came first. An alias of the source's own slot -- a
-  #~"with" alias, a non-owned field, an argument, an #~"outx this" -- survives
-  writes through the other name and takes no such rule.]
+  holder never conflicts with itself." While an exclusive reference lives,
+  its source is not used by any other name -- not read, written, moved,
+  dropped or passed -- the owner included: read through the reference, or
+  after it ends. One value reaching a call twice (two arguments, or an
+  argument and the receiver) is two references, so it is refused when either
+  may write.]
 
 This is Rust's discipline applied to references, and it was chosen
 deliberately over a more permissive alternative that would have needed two
@@ -1082,15 +1084,18 @@ When a function is called, locks are taken on argument paths and the
 receiver path, then released when the call returns:
 
 #ol:
-  [#*: Each argument is processed left to right.]
+  [#*: Each argument is evaluated left to right, and the locks it asks for
+  are queued; they are laid, in argument order, when the call starts --
+  after the last argument -- and checked then against what is live.]
   [#*: If the argument is a top-level #~"data" item, no lock is taken
   (immutable, freely shared).]
   [#*: For an argument whose source is a path #~"(root, f1, ..., fn)"
   resolving to a reftype leaf, or to a valtype leaf passed by pointer, a
   #_+"shared" lock is taken on every
   intermediate prefix (#~"(root,)", #~"(root, f1)", ...,
-  #~"(root, f1, ..., fn-1)") and an #_+"exclusive" lock is taken on
-  the leaf #~"(root, f1, ..., fn)". The intent-shared ancestors permit
+  #~"(root, f1, ..., fn-1)") and the parameter's lock on the leaf
+  #~"(root, f1, ..., fn)": #_+"exclusive", or #_+"shared" for a #~".view"
+  parameter. The intent-shared ancestors permit
   sibling paths to be locked independently by later arguments.]
   [#*: For an argument written as #~"x.borrow" (and
   similarly for stringView/listView), the call-scoped lock targets the
@@ -1104,9 +1109,10 @@ receiver path, then released when the call returns:
   are markers.]
   [#*: If the requested lock conflicts with an outstanding lock on an
   overlapping path (see Conflict rule above), it is an error.]
-  [#*: If the argument is a sub-call, locking is applied recursively.
-  After the sub-call, its argument locks are cleared or assigned to the
-  sub-call result.]
+  [#*: If the argument is a sub-call, locking is applied recursively, and
+  the sub-call takes and releases its own locks before the enclosing call
+  starts: after it, its argument locks are cleared or assigned to its
+  result, which holds them until the enclosing call ends.]
   [#*: After all arguments are processed, locks are taken on the receiver
   path -- shared on each intermediate prefix, exclusive on the leaf.
   For a bare-receiver call #~"x.method", this is exclusive on #~"(x,)".
@@ -1207,7 +1213,10 @@ classes. The lock targets the #_+"source path":
 #ul:
   [#*: #_+"shared" on every intermediate prefix of the source path.
   For #~"v: rec.field.stringView" the intermediate is #~"(rec,)".]
-  [#*: #_+"exclusive" on the leaf of the source path. For
+  [#*: the reference's own strength on the leaf of the source path:
+  #_+"exclusive" for one that may write (#~".borrow", a bare binding, a
+  #~"with" alias, a #~"span"), #_+"shared" for a view (#~".stringView",
+  #~".substring", #~".listView", #~".slice"). For
   #~"v: rec.field.stringView" the leaf is #~"(rec, field)"; for
   #~"v: s.stringView" the leaf is #~"(s,)".]
   [#*: held for the full scope of the borrowing variable; released
@@ -1487,9 +1496,11 @@ express this:
   }
   """
 
-The field stores a locked reference to external data, pinned SHARED for the
-entire lifetime of the class instance: the owner keeps reading the source, and
-may not write, move or drop it while the instance lives. When the instance falls out of
+The field stores a locked reference to external data, pinned for the entire
+lifetime of the class instance at the field's strength: a #~".borrow" field
+EXCLUSIVE -- the owner reaches the source only through the instance while it
+lives -- and a #~".view" field SHARED: the owner keeps reading the source, and
+may not write, move or drop it. When the instance falls out of
 scope, the locks held by its non-owned fields are released together with the
 instance itself.
 
@@ -1501,10 +1512,11 @@ field is refused: the class holds a copy of it, as a #~".borrow" binding of one
 would, so the marker names a borrow that does not happen.
 
 Classes are single-owner: they cannot be copied, only moved via #~".take".
-This is what makes non-owned fields safe on classes -- there is no way to
-duplicate the handle that holds the lock, so there is no way for two live
-instances to share (and race on) the same locked target. No separate
-separate mechanism is needed.
+With the pin rule, this is what makes non-owned fields safe on classes: the
+handle that holds the pin cannot be duplicated, and a second instance
+borrowing the same source is refused while the first lives, since a
+#~".borrow" field pins EXCLUSIVE. Several instances share one source only
+through #~".view" fields, which only read. No separate mechanism is needed.
 
 #---: Rules for Non-Owned Fields
 
