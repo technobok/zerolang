@@ -381,9 +381,9 @@ dot followed by a valid non-decimal identifier initial character will indicate
 method syntax on that integer. For floating point receivers and for method
 names that do not start with a non-decimal, brackets can be used to enforce the
 correct interpretation.</p>
-<pre><code class="language-zerolang">0.size      # 'size' method on the integer literal '0'
-(0.1).size  # size method on a floating point literal
-(0).0method # calling a hypothetical '0method' method on an int</code></pre>
+<pre><code class="language-zerolang">a: 0.u8           # the 'u8' method on the integer literal '0'
+b: 0.1.round    # the 'round' method on a floating point literal
+# (0).0method     -- a method whose name starts with a digit, bracketed</code></pre>
 <p>Integer identifiers have the following methods, provided they can losslessly be
 stored in the resulting format. This table IS the surface: it is what the
 <code>intliteral</code> type declares (see
@@ -463,9 +463,9 @@ that rounds to an infinity, or a nonzero one that rounds to zero, is refused:</p
 </table>
 <p>Examples:</p>
 <pre><code class="language-zerolang">0.0          # 64 bit floating point
-(1.0).f128
-(1.0e15).f128
-(1e15).f128</code></pre>
+1.0.f128
+1.0e15.f128
+1e15.f128</code></pre>
 <p>A float constant reaches C as the value its type holds nearest it, rounded
 once by the compiler from the exact value and written in hexadecimal at the
 type's own width, so every C compiler reads the same value: an <code>f128</code>
@@ -584,14 +584,12 @@ folds to a <code>bool</code> without landing its operands anywhere.</p>
 <p>The inline-suffix form (<code>100u8</code> with no dot) is not accepted; use the
 dotted form (<code>100.u8</code>) instead.</p>
 <p>Examples:</p>
-<pre><code class="language-zerolang">push_byte: function {b: u8} is { }
+<pre><code class="language-zerolang">push_byte: function {b: u8} is {}
 small_value: function out u8 is { 200 + 100 - 250 }  # returns 50
-
 main: function is {
     push_byte b: 100              # 100 coerces to u8
     push_byte b: 50 + 25 + 25     # folded to 100, fits u8
     push_byte b: 100.u8           # explicit suffix still works
-
     a: 10.u8                       # a is u8
     a = 100                        # bare 100 coerces to a's u8
 }</code></pre>
@@ -619,10 +617,11 @@ a float to a narrower float (<code>f64</code> -&gt; <code>f32</code>, <code>f128
 does not fit the target) or <code>precisionLoss</code> (the value is in range but not
 exactly representable). Unwrap the result with the <code>resultval</code> combinators
 (<code>.orPanic</code>, <code>.or d:</code>) or with <code>match</code>:</p>
-<pre><code class="language-zerolang">count: xs.length          # length is u64
+<pre><code class="language-zerolang">xs: List String
+value: 0.1
+count: xs.length          # length is u64
 n: count.u32.orPanic      # abort if it does not fit u32
 m: count.u32.or d: 0      # or fall back to a default
-
 r: value.f32              # f64 -&gt; f32 may lose precision
 match (
     r
@@ -785,7 +784,6 @@ must match exactly (number and combination of tabs and spaces) to be stripped.</
 <pre><code class="language-zerolang">"
 the leading newline is not included
 in this string"
-
 """
 the leading and trailing newline is not included
 in this string
@@ -880,14 +878,19 @@ key or the value may be omitted.</p>
 <p>A shortened form of key and value is permitted when a variable of the same name
 as the required key holds the value. In this case, the identifier with a
 leading colon can be used to represent both the key and the value.</p>
-<pre><code class="language-zerolang"># Given:
+<pre><code class="language-zerolang">myfunc: function {arg: i64} is {
+    print "\{arg}"
+}
+
+# Given:
+
 arg: 0
 
 # then:
 myfunc :arg
 
 # is equivalent to:
-myfunc arg: arg</code></pre>
+myfunc :arg</code></pre>
 <p>Each item in the block body ends with the beginning of the next item (the next
 key) or by a delimiter or a newline or EOF.</p>
 <p>Blocks of code also define a unit of scope.</p>
@@ -1003,10 +1006,11 @@ held, and both stay valid.</p>
 <li>A swap writes both names, so narrowing on either ends, as it does
   at a reassignment. A narrowed name swaps as its whole declared type.</li>
 </ul>
-<pre><code class="language-zerolang">a: "left".string
+<pre><code class="language-zerolang">point: record { x: i64 y: i64 }
+
+a: "left".string
 b: "right".string
 a swap b            # a is "right", b is "left"; both still owned
-
 p: point x: 1 y: 2
 p.x swap p.y        # two fields of one record</code></pre>
 <h3 id="calls"><a href="#calls">4.4. Calls</a></h3>
@@ -1105,7 +1109,8 @@ both answered from the <em><strong>environment</strong></em> rather than from th
 <p>When the table names a parameter the callee does not have -- a method whose
 only parameter is its receiver, called through a value -- the unlabelled
 argument binds nothing, and the call is an error rather than a dropped value:</p>
-<pre><code class="language-zerolang">n: (xs.length 3)
+<pre><code class="language-zerolang">xs: List String
+n: xs.length 3
 # error[E0300]: too many arguments: 'length' takes no parameter besides its receiver</code></pre>
 <p>Nothing here reads the spelling of a name or counts the segments of a path.
 <code>io.open "f" mode: _.READ</code> needs no special case: <code>open</code> declares no
@@ -1153,6 +1158,18 @@ argument that names an arm of its parameter's type, or constructs one, without
 spelling the type writes <code>_</code> for it -- <code>mode: _.READ</code> -- see
 <a href="#underscore">Underscore</a>.</p>
 <h4 id="call-examples"><a href="#call-examples">4.4.2. Call Examples</a></h4>
+<p>The examples call these declarations: a function <code>f</code> whose parameters have
+defaults, a type <code>parenttype</code> with a method <code>f</code> whose receiver is declared
+<code>r: this</code>, an instance <code>parent</code> of it, and two values:</p>
+<pre><code class="language-zerolang">f: function {a: 0 b: 0} out i64 is { return a + b }
+
+parenttype: class { n: i64 } as {
+    f: function {r: this a: 0 b: 0} out i64 is { return r.n + a + b }
+}
+
+parent: parenttype n: 1
+arg1: 2
+arg2: 3</code></pre>
 <p>Basic function call (no argument):</p>
 <pre><code class="language-zerolang">result: f</code></pre>
 <p>Basic function call (single unnamed argument):</p>
@@ -1166,14 +1183,14 @@ base resolves to a type, so the unlabelled argument is the receiver:</p>
 <p>Or with the receiver under its declared name, which frees it to be written in
 any position. <code>f</code> declares its receiver <code>r: this</code> here:</p>
 <pre><code class="language-zerolang">result: parenttype.f r: parent a: arg1 b: arg2
-result: parenttype.f a: arg1 r: parent b: arg2</code></pre>
+result = parenttype.f a: arg1 r: parent b: arg2</code></pre>
 <p>Or, <em><strong>method call syntax</strong></em> (<code>parent</code> will be passed as the first <code>this</code>
 argument):</p>
 <pre><code class="language-zerolang">result: parent.f a: arg1 b: arg2</code></pre>
 <p>Operator syntax. Names cannot be specified. Must always be a binary operation
-(the receiver and one argument). The methodname would tend to usually be one of
-the operator names.</p>
-<pre><code class="language-zerolang">result: f methodname arg1</code></pre>
+(the receiver and one argument): here <code>parent</code>, the method <code>f</code>, and
+<code>arg1</code>. The method would tend to usually be one of the operator names.</p>
+<pre><code class="language-zerolang">result: parent f arg1</code></pre>
 <p>An error; the dot already supplied the receiver, so naming it as well supplies
 it twice:</p>
 <pre><code class="language-zerolang">result: parent.f r: parent a: arg1 b: arg2
@@ -1181,33 +1198,30 @@ it twice:</p>
 <p>An error for the same reason, from the other side &#x2014; the unlabelled argument of
 a function-style call <em><strong>is</strong></em> the receiver:</p>
 <pre><code class="language-zerolang">result: parenttype.f parent r: parent a: arg1
-# error[E0300]: the receiver is supplied twice: by the unlabelled argument
-#               and by 'r:'</code></pre>
+# error[E0300]: the receiver is supplied twice: by the unlabelled argument and by 'r:'</code></pre>
 <p>Naming an arm of the argument's type:</p>
-<pre><code class="language-zerolang"># ----- in unit file "io"
+<pre><code class="language-zerolang">mode: variant { READ: null WRITE: null }    # an enumeration
+filehandle: class { name: String }
 
-mode: variant { READ: null  WRITE: null }  # an enumeration
 open: function {name: String mode: mode} out filehandle is {
-    # ...
+    return (filehandle name: name.copy)
 }
-
-# ----- in client unit file
-
-open: io.open
 
 # `_` in an argument is the type of the parameter it fills, so an arm
 # of the parameter's type is written `_.READ`
 fh: open "MyFile.txt" mode: _.READ
 
-# same as line above...
-mode: io.mode
-fh: open "MyFile.txt" mode: mode.READ
-# or, fully qualified
-fh: open "MyFile.txt" mode: io.mode.READ</code></pre>
+# same as line above; from another unit, fully qualified, `io.mode.READ`
+fh2: open "MyFile.txt" mode: mode.READ</code></pre>
 <p>A <code>.take</code> argument needs no parameter name of its own: the unlabelled slot
 takes an argument whatever its ownership. The move is tracked either way, so a
 later use of the source is rejected:</p>
-<pre><code class="language-zerolang">taker m          # moves m
+<pre><code class="language-zerolang">taker: function {m: String.take} is {
+    print m
+}
+
+m: "moved".string
+taker m          # moves m
 print m          # error[E0200]: cannot use 'm' after ownership transfer</code></pre>
 <p>Write <code>.take</code> at the call site when you want the transfer visible there &#x2014;
 <code>taker m.take</code> &#x2014; since a parameter name alone cannot show it: <code>taker arg: m</code>
@@ -1267,7 +1281,14 @@ valid after the <code>do</code> ends. An inline <code>.take</code> moves ownersh
 the binding and invalidates the source. A call or constructor on the
 right-hand side produces a fresh value that the binding owns.
 <code>.drop</code> is not a valid right-hand side; use <code>.take</code> instead.</p>
-<pre><code class="language-zerolang"># borrow (default for a bare name): c is still valid after the do
+<pre><code class="language-zerolang">pair: class { first: String second: String }
+
+c: "c".string
+p: pair first: "a" second: "b"
+xs: List String
+xs.append from: "x".string
+
+# borrow (default for a bare name): c is still valid after the do
 with a: c do print a
 
 # explicit take: c is invalidated
@@ -1277,10 +1298,10 @@ with a: c.take do print a
 with v: p.first do print v
 
 # call right-hand side: the with binding owns the returned value.
-# The call (bag.iterate b: b) is the single initialization expression
-# for the one binding 'iter' -- the named argument 'b:' belongs to
+# The call (xs.iterate) is the single initialization expression
+# for the one binding 'iter'; any argument it took would belong to
 # the call, not to with itself.
-with iter: (bag.iterate b: b) do for x: iter loop { print x }</code></pre>
+with iter: xs.iterate do for x: iter loop { print x }</code></pre>
 <p>When the RHS is a plain path reference the compiler may emit the
 binding as an alias for the source -- no stack slot is allocated. See
 the "Binding Aliases" section of <a href="./ownership.html">ownership</a> for the exact
@@ -1299,12 +1320,15 @@ both into its scope; each block introduces only <code>break</code>. A <code>brea
 always binds to the innermost enclosing scope that defines it, so a
 <code>break</code> in a bare block inside a loop leaves the block, not the loop.
 Outside of a loop or a block, <code>break</code> and <code>continue</code> are undefined.</p>
-<pre><code class="language-zerolang">x: {
+<pre><code class="language-zerolang">compute_value: function out i64 is { return 42 }
+
+should_skip: false
+x: {
     if should_skip then { break }
     compute_value
 }
 # x is optionval &#x2014; match to extract
-match (x) case some then { use_value } case none then { handle_skip }</code></pre>
+match x case some then print "\{x}" case none then print "skipped"</code></pre>
 <table>
 <colgroup>
 <col style="width: 25%">
@@ -1395,7 +1419,25 @@ right of an assignment, a return value, or another value position) &#x2014; the 
 need not evaluate to a common type; the arm-type unification above applies only
 to the expression form.</p>
 <p><code>if</code> may only have one <code>else</code> argument and it must be the last argument.</p>
-<pre><code class="language-zerolang"># statement if
+<pre><code class="language-zerolang">mode: variant { fast: null slow: null }
+
+add: function {a: i64 b: i64} out i64 is { return a + b }
+
+# branches ending in return/break/continue are exempt from type matching
+clamp: function {n: i64} out i64 is {
+    v: if n &lt; 0 then { return 0 } else n
+    return v
+}
+
+x: 1
+n: 4
+total: 60
+a: 3
+b: 5
+m: mode.fast
+big: true
+
+# statement if
 if x == 1 then {
     # will match if 'true'
 }
@@ -1417,23 +1459,27 @@ result: if x &lt; 0 then {
     x
 }
 
-# branches ending in return/break/continue are exempt from type matching
-x: if n &lt; 0 then { return 0 } else n
-
 # an if or a match inside an expression; none of its arms may leave
-print "mode \{match (m) case fast then "fast" case slow then "slow"}"
-total: add a: 1 b: (if big then 10 else 1)</code></pre>
+print "mode \{match m case fast then "fast" case slow then "slow"}"
+sum: add a: 1 b: (if big then 10 else 1)</code></pre>
 <p>If <code>.take</code> is called on an owned variable (one with a destructor, or any
 reftype) inside any arm of an <code>if</code> or <code>match</code>, the compiler ensures the
 variable is consumed in all arms. The sibling arms still see it live. Arms where
 the programmer does not take the variable have it auto-destroyed after the
 block. The variable is invalidated after the <code>if</code> or <code>match</code> and cannot be
 used in subsequent code. If no arm takes the variable, it remains valid.</p>
-<pre><code class="language-zerolang">conn: connection.open "db"
+<pre><code class="language-zerolang">Conn: class { name: String }
+
+process: function {c: Conn.take} is {
+    print c.name
+}
+
+ready: true
+conn: Conn name: "db".string
 if ready then {
-    process from: conn.take     # takes ownership
+    process c: conn.take    # takes ownership
 } else {
-    log "not ready"             # conn auto-destroyed after if
+    print "not ready"       # conn auto-destroyed after if
 }
 # conn is invalid here &#x2014; compile error if accessed</code></pre>
 <h4 id="match"><a href="#match">4.6.4. match</a></h4>
@@ -1471,8 +1517,12 @@ arms are mutually exclusive and the subject is evaluated once. This means
 invalidated after the match and cannot be used in subsequent code. Arms that do
 not explicitly take ownership will have the subject automatically destroyed
 after the match completes.</p>
-<pre><code class="language-zerolang">u: MyUnion.ok 42
-match (u) case ok then {
+<pre><code class="language-zerolang">MyUnion: union { ok: String err: String }
+
+u: MyUnion.ok "fine".string
+match (
+    u
+) case ok then {
     x: u.take               # takes ownership
 } case err then {
     print "error"           # u destroyed after match
@@ -1517,7 +1567,9 @@ fails at the offending instantiation &#x2014; there is no arm to run.</p>
 <pre><code class="language-zerolang">Holder: class {
     val: t
     describe: function {:this} out StringView is {
-        match t case i32 then {
+        match (
+            t
+        ) case i32 then {
             return "i32"
         } case i64 then {
             return "i64"
@@ -1530,7 +1582,9 @@ fails at the offending instantiation &#x2014; there is no arm to run.</p>
 Buffer: class {
     used: u32
     describe: function {:this} out StringView is {
-        match cap case 0 then {
+        match (
+            cap
+        ) case 0 then {
             return "empty"
         } case 8 then {
             return "small"
@@ -1546,7 +1600,31 @@ main: function is {
     b: (Buffer cap: 8) used: 0
     print b.describe            # "small" &#x2014; only this arm is compiled
 }</code></pre>
-<pre><code class="language-zerolang">match optionalthing1 case some then {
+<pre><code class="language-zerolang">filekind: variant { WRITE: null READ: null READWRITE: null OTHER: null }
+
+sink: class { name: String } as {
+    write: function {s: this text: StringView} is { print text }
+}
+
+open: function {filename: StringView} out (Result sink E: String) is {
+    return ((Result sink E: String).ok (sink name: filename.string))
+}
+
+# match as implicit return: the last expression is the value
+describe: function {filetype: filekind} out i64 is {
+    match filetype case WRITE then 0 case READ then 1 case READWRITE then 2 else 3
+}
+
+optionalthing1: Option.some "one".string
+optionalthing2: Option.some "two".string
+thing1: Option.some "three".string
+filetype: filekind.READ
+filename: "out.txt"
+payload: "payload"
+
+match (
+    optionalthing1
+) case some then {
     # optionalthing1 is narrowed to the 'some' side
     # if this is a reftype, it is borrowed
 } case none then {
@@ -1554,66 +1632,51 @@ main: function is {
 }
 
 # 'on' arg name is optional
-match on optionalthing1 case some then {
+match on (
+    optionalthing1
+) case some then {
     # ..
 } case none then {
     # ..
 }
 
-
-match take optionalthing2 case some then {
-    # optionalthing2 is narrowed to the 'some' side
-    # optionalthing2 is owned within this block and can be used in any way
-    # ...
+match (
+    optionalthing2
+) case some then {
+    # optionalthing2 is narrowed to the 'some' side; taking it here makes
+    # the compiler take it after every arm
+    owned: optionalthing2.take
+    print owned
 } case none then {
     # optionalthing2 is narrowed to null
-    # ...
 }
 # .. optionalthing2 has been destroyed...
-
 
 # formatting using parens for condition statement alignment... nicer?
 match (
     thing1
 ) case some then {
-    # x is narrowed to the 'some' side
+    # thing1 is narrowed to the 'some' side
     # if this is a reftype, it is borrowed
-    # ...
 } case none then {
-    # ...
+    # thing1 is narrowed to null
 }
-
 
 # matching on an enum &#x2014; match as expression
 # x is an int
 # filetype is the target but we don't reference it in the bodies
-x: (match filetype
-    case WRITE then 0
-    case READ then 1
-    case READWRITE then 2
-    else 3
-)
+x: match filetype case WRITE then 0 case READ then 1 case READWRITE then 2 else 3
 
-# match as implicit return: parenthesised, so its clauses may span lines
-describe: function {filetype: i64} out i64 is {
-    (match filetype
-        case WRITE then 0
-        case READ then 1
-        case READWRITE then 2
-        else 3
-    )
-}
-
-
-with f: (open filename) do match f case ok then {
-    # f is ok (filehandle)
-    f.write data
+with f: open filename do match (
+    f
+) case ok then {
+    # f is ok (the sink)
+    f.write text: payload
 } else {
     # f is err
     print "Could not open. Error: \{f}"
 }   # 'f' is closed (destroyed) here (or was never opened)
-
-
+thing: open filename
 if thing.err then return
 # type of 'thing' has been narrowed to exclude 'err'</code></pre>
 <h4 id="for"><a href="#for">4.6.5. for</a></h4>
@@ -1705,7 +1768,21 @@ iterator it evaluates to answers <code>none</code>; <code>for loop { ... }</code
 unconditionally and indefinitely.</p>
 <p><code>for</code> can be used as an expression. The result will be a list of the final
 values of the <code>loop</code> statement.</p>
-<pre><code class="language-zerolang"># normal while
+<pre><code class="language-zerolang">Counter: generator { n: i64 } as {
+    call: function out i64 is { yield this.n }
+}
+
+supplier: function out (optionval t: i64) is {
+    return (optionval.none i64)
+}
+
+x: 1
+y: 2
+xs: ListVal t: i64
+xs.append from: 1
+m: MapVR i64 V: String
+
+# normal while
 # (precondition)
 for x == y loop {
     # ...
@@ -1790,7 +1867,7 @@ written.</li>
 is iterator-shaped and has no <code>iterate</code>. E is evaluated once and is
 the iterator; <code>T.call</code> is invoked per iteration. This is the shape
 of an expression that produces an iterator: a construction such as
-<code>(TextReader file: f)</code>, <code>xs.iterate</code>, and <code>5.times</code> /
+<code>(TextReader from: br)</code>, <code>xs.iterate</code>, and <code>5.times</code> /
 <code>2.upto to: 5</code>. A variable holding an iterator is called when read
 bare, and is walked by Rule 3 instead (<code>for x: it</code>), or kept with a
 marker (<code>for each x: it.borrow</code>).</li>
@@ -1834,7 +1911,7 @@ Acc: generator { total: i64 } as {
 
 with g: (Acc total: 0) do {
     step: 1
-    for r: (g.call step: step) loop {
+    for r: (g.call :step) loop {
         if r &gt; 10 then break
         step = step * 2
     }
@@ -1892,6 +1969,7 @@ mk: function out ListVal i64 is {
     r.append 1
     return r
 }
+
 T: record {
     n: i64
 } as {
@@ -1963,7 +2041,7 @@ type.</p>
 <p>A sum value is built through an arm: <code>kind.a 5</code>. The type's own name
 constructs nothing -- bare, given a value, or through <code>create</code>, named directly
 or through its type arguments:</p>
-<pre><code class="language-zerolang">kind: variant { a: i64  z: null }
+<pre><code class="language-zerolang">kind: variant { a: i64 z: null }
 x: kind.a 5          # the arm a, holding 5
 y: kind 5            # error[E0300]: cannot construct 'kind': a union/variant selects an arm
 z: kind.create a: 5  # the same error: `create` is a construction by the name</code></pre>
@@ -2031,7 +2109,11 @@ pre- and post-conditions of a <a href="#for">for</a> -- may be a value of any 2-
 type whose arms carry discriminators 0 and 1, not only a <code>bool</code>. The
 condition holds when the value does <em><strong>not</strong></em> hold the arm whose
 discriminator is <em><strong>0</strong></em>:</p>
-<pre><code class="language-zerolang">mood: variant { sad: null  happy: null }
+<pre><code class="language-zerolang">mood: variant { sad: null happy: null }
+
+table: MapVR i64 V: String
+k: 1
+wide: 300.u64
 
 m: mood.happy
 if m then print "cheerful"          # true: `happy` is not the first arm
@@ -2040,7 +2122,6 @@ if m then print "cheerful"          # true: `happy` is not the first arm
 # convention, so each reads as its own success test
 hit: table.get key: k
 if hit then print "present"         # true when the arm is not `none`
-
 narrowed: wide.u32
 if narrowed then print "converted"  # true when the arm is not `err`</code></pre>
 <p><code>bool</code> is the stdlib instance of the shape --
@@ -2058,8 +2139,8 @@ every stdlib pair does, and what the falsy-first convention is for.</p>
 and there the position says nothing at all. Such a type is a condition
 when its two discriminators <em><strong>are</strong></em> 0 and 1 -- in either written order,
 with the arm carrying 0 as the falsy one:</p>
-<pre><code class="language-zerolang">flag_values: data { ON: 1  OFF: 0 }
-Flag: union { ON: null  OFF: null } as { tag: flag_values.tag }
+<pre><code class="language-zerolang">flag_values: data { ON: 1 OFF: 0 }
+Flag: union { ON: null OFF: null } as { tag: flag_values.tag }
 
 f: Flag.OFF
 if f then print "on" else print "off"   # off: OFF carries 0</code></pre>
@@ -2073,11 +2154,13 @@ implicit, so it narrows exactly as the explicit form does. In the
 <code>then</code> branch the bare name <em><strong>is</strong></em> the payload; in the <code>else</code>
 branch the arm is excluded and the name keeps its sum type unless what
 remains carries a payload of its own:</p>
-<pre><code class="language-zerolang">hit: table.get key: k
+<pre><code class="language-zerolang">table: MapVR i64 V: String
+k: 1
+hit: table.get key: k
 if hit then {
     print "found \{hit}"        # `hit` IS the some-payload here
 } else {
-    match (hit) case some then null case none then print "absent"
+    match hit case some then null case none then print "absent"
 }                                # ... and still the optionval here</code></pre>
 <p>See <a href="#type-narrowing">type narrowing</a> for the general rule.</p>
 <h5 id="non-owned-union-arms">Non-owned union arms</h5>
@@ -2109,7 +2192,8 @@ valtypes. A borrowed arm holds a pointer to external data, which inherently
 introduces ownership/lifetime tracking that valtypes deliberately exclude.</p>
 <p><strong>Construction:</strong> the borrowed arm is constructed by passing <code>from:</code>
 with a borrowed source:</p>
-<pre><code class="language-zerolang">with v: my_borrow_source do {
+<pre><code class="language-zerolang">source: "text".string
+with v: source do {
     ov: OptionView.some from: v
     # ov.some is borrowed from v; ov cannot outlive this 'do' block
 }</code></pre>
@@ -2183,13 +2267,15 @@ every point the write can reach, not only for the rest of its own block:</p>
 </ul>
 <p>After the narrowing ends, the name has its declared type again, and a <a href="#match">match</a>
 over it must cover every arm the type has.</p>
-<pre><code class="language-zerolang">match (
+<pre><code class="language-zerolang">o: Option.some "abc".string
+retry: true
+match (
     o
 ) case some then {
     if retry then {
-        o = Opt.none
+        o = Option.none String
     }
-    n: o.length       # error: o may no longer hold `some`; it is `Opt` here
+    n: o.length       # error: o may no longer hold `some`; it is an `Option` here
 } case none then null</code></pre>
 <p>An <code>else</code> clause of a <code>match</code> sees the union/variant type with all explicit
 <code>case</code> subtypes excluded; when exactly one payload arm remains, the
@@ -2339,7 +2425,7 @@ vs <code>myrec_20</code>). Negative values use a "neg" prefix in mangled names (
       a: (sized t: i64 size: 10) val: 42
   }</p>
 <p>Generic function example:</p>
-<pre><code>identity: function as { t: anyval.generic } in { val: t } out t is {
+<pre><code>identity: function as { t: anyval.generic } in {val: t} out t is {
     return val
 }</code></pre>
 <p>Note that when passing a generic argument, the type itself is passed to the generic
@@ -2396,17 +2482,17 @@ is emitted</li>
 <p>If both an explicit generic argument and a concrete value argument are provided,
 they must be consistent. A conflict produces a compilation error.</p>
 <p>Generic function example with inference:</p>
-<pre><code class="language-zerolang">identity: function as { t: anyval.generic } in { val: t } out t is {
+<pre><code class="language-zerolang">identity: function as { t: anyval.generic } in {val: t} out t is {
     return val
 }
 
 main: function is {
     x: identity 42          # t inferred as i64
-    y: identity "hello"     # t inferred as string
+    y: identity 2.5         # t inferred as f64
     z: identity t: i64 val: 99   # explicit t=i64
 }</code></pre>
 <p>Generic parameter with default type:</p>
-<pre><code class="language-zerolang">myfn: function as { t: (anyval.generic default: i64) } in { val: t } out t is {
+<pre><code class="language-zerolang">myfn: function as { t: (anyval.generic default: i64) } in {val: t} out t is {
     return val
 }</code></pre>
 <p>Note that attempting to store a reference type into a value type via a generic
@@ -2438,7 +2524,7 @@ optionval: variant {
 # usage:
 
 # Option wraps reference types (classes, unions, strings, lists, maps)
-x0: Option.some "hello"
+x0: Option.some "hello".string
 x1: Option.none String
 
 # optionval wraps value types (records, integers, variants)
@@ -2487,6 +2573,7 @@ OptionView: union {
 } as {
     T: AnyRef.generic
 }
+
 OptionViewVal: union {
     none: null
     some: t.borrow
@@ -2498,7 +2585,8 @@ OptionViewVal: union {
 # borrowed view. The view's lifetime is tied to the pin on the source;
 # the OptionView cannot be stored in an aggregate that outlives
 # the source.
-with v: my_borrow_source do {
+source: "text".string
+with v: source do {
     v0: OptionView.some from: v
     v1: OptionViewVal.none i64
 }</code></pre>
@@ -2518,18 +2606,23 @@ it:</p>
 <pre><code class="language-zerolang">measurable: facet {
     measure: function {t: this.view} out i64
 }
+
 pt: record { x: i64 } as {
     m: measurable
     measure: function {t: this.view} out i64 is { return t.x }
     extra: function {t: this.view} out i64 is { return 7 }
 }
+
 # `extra` is not measurable's: pt has it, so `g v: p` compiles; a second
 # conformer without it would be refused in its own instance
 g: function as { t: measurable.generic } in {v: t} out i64 is { return v.extra }</code></pre>
 <p>A union bound admits exactly its members, and each instance is checked on
 its own:</p>
-<pre><code class="language-zerolang">Fig: union { :Sq :Circ }
+<pre><code class="language-zerolang">Sq: class { edge: u64 }
+Circ: class { radius: u64 }
+Fig: union { :Sq :Circ }
 edgeOf: function as { T: Fig.generic } in {s: T} out u64 is { return s.edge }
+
 # edgeOf s: sq   -- compiles: Sq has `edge`
 # edgeOf s: c    -- error: type 'Circ' has no member 'edge'
 #                   note: in the instance of `edgeOf` with T = Circ,
@@ -2580,7 +2673,7 @@ Text: protocol {
 }
 
 # heterogeneous union: one concrete type + one protocol
-StringLike: union { :stringView :Text }
+StringLike: union { :StringView :Text }
 
 # String declares `:Text` in its `as` clause, so it satisfies
 # `StringLike` via the protocol member; StringView satisfies via the
@@ -2628,6 +2721,8 @@ See <a href="#union">union</a>.</p>
 <pre><code class="language-zerolang"># Given:
 
 genericRec: record {
+    x: a
+    y: b
 } as {
     a: anyval.generic
     b: anyval.generic
@@ -2641,25 +2736,24 @@ genericRec2: record {
     bb: (genericRec a: aa b: aa)       # generic types 'passed down'
     cc: (genericRec a: u32 b: u64)     # they can also be concrete types
     dd: (genericRec a: aa b: u64)      # ..or could be a combination
-
 } as {
     aa: anyval.generic
 }</code></pre>
 <p>Example generic protocol:</p>
 <pre><code class="language-zerolang">GenericFactory: protocol {
-    next: function { :this } out t
+    next: function {:this} out t
 } as {
     t: AnyRef.generic
 }</code></pre>
 <p>Example generic record based on an enum generic parameter:</p>
-<pre><code class="language-zerolang">myenum: variant {A: null B: null}
+<pre><code class="language-zerolang">myenum: variant { A: null B: null }
 
 myrec: record {
     x: t   # always A or B
 } as {
     t: myenum.generic
 
-    mymethod: function {:this p: t } out i64 is {
+    mymethod: function {:this p: t} out i64 is {
         # generic field -- the test is a compile-time one
         if this.x.A then {
             # ...
@@ -2676,17 +2770,24 @@ myrec: record {
     }
 }</code></pre>
 <p>Example generic function accepting an instance that implements a protocol:</p>
-<pre><code class="language-zerolang">myfunc: function {t: myprotocol.generic arg: t} is {
-  # ...
+<pre><code class="language-zerolang">myprotocol: protocol {
+    size: function {t: this} out u64
 }
 
-somecode: {
-    myref: #... # myref type implements myprotocol
+Sized: class { n: u64 } as {
+    :myprotocol
+    size: function {s: this} out u64 is { return s.n }
+}
 
-    # NO conversion to myref is performed
-    # compiler generates a specialised function for the type of myref
-    myfunc myref
-}</code></pre>
+myfunc: function as { T: myprotocol.generic } in {arg: T} is {
+    print "size \{arg.size}"
+}
+
+myref: Sized n: 3    # myref's type implements myprotocol
+
+# NO conversion to myprotocol is performed
+# compiler generates a specialised function for the type of myref
+myfunc myref</code></pre>
 <h4 id="visibility"><a href="#visibility">5.1.8. Visibility</a></h4>
 <p>Definitions within blocks defining: <a href="#facet">facets</a>, <a href="#protocol">protocols</a>,
 <a href="#variant">variants</a>, <a href="#union">unions</a>, <a href="#record">records</a>,
@@ -2861,13 +2962,15 @@ the variable holds, then destroys the value if the variable owns it. See
 a locked reference to external data; the reference is locked for the
 instance's entire lifetime. Classes are single-owner and cannot be copied,
 so the lock cannot be duplicated.</p>
-<pre><code class="language-zerolang">Iter: class {
-  pos: i64
-  target: container.private.view
+<pre><code class="language-zerolang">container: class { x: i64 }
+
+Iter: class {
+    pos: i64
+    target: container.private.view
 } as {
-  create: function {target: container.private.view} outx this is {
-    return (meta.create pos: 0 target: target)
-  }
+    create: function {target: container.private.view} outx this is {
+        return (meta.create pos: 0 :target)
+    }
 }</code></pre>
 <p><code>.borrow</code> and <code>.view</code> are the only field-type modifiers permitted
 (<code>.take</code> on a field type is rejected). non-owned fields are only
@@ -3145,7 +3248,9 @@ arguments as for any generic type:</p>
         return (pu.both a: c.a b: c.b)
     }
 }
+
 wi: (wrap t: i64)
+
 # the instance wi.pu is
 wp: (wi.pairs u: f64)
 
@@ -3236,7 +3341,7 @@ names the system's as <code>system.null</code> there.</p>
 <p>It is also useful for undefining methods that would otherwise be available.
 Such as the default <code>create</code> constructor or for hiding methods in a
 <a href="#typedef">typedef</a> that would be exposed from the underlying type.</p>
-<pre><code class="language-zerolang">MyClass: class {
+<pre><code class="language-zerolang">MyClass: class { n: i64 } as {
     # 'undefine' the default create constructor
     create: null
 }</code></pre>
@@ -3260,16 +3365,25 @@ code and is raised as a compiler error during the type checking phase.</p>
 <p>A <code>for loop {}</code> that cannot be left is of type <code>never</code>, as is any loop
 whose conditions are always true at compile time. A function may declare
 <code>out never</code> -- an infinite server loop is the usual reason.</p>
-<pre><code class="language-zerolang">x: makesomething
-match x case err then return  # return is of type 'never'
+<pre><code class="language-zerolang">makesomething: function out (Result String E: String) is {
+    return ((Result String E: String).ok "made".string)
+}
+
+getvalue: function out i64 is { return 3 }
+
+x: makesomething
+match x case err then return else null  # return is of type 'never'
 # the type of x is narrowed from this point to exclude the possibility of 'err'
 
+for true loop {
+    y: getvalue     # y is an int
 
-y: getvalue     # y is an int
-
-# the type of z is int (the break/never type is not considered
-# when determining the resulting type)
-z: if y == 0 then break else y</code></pre>
+    # the type of z is int (the break/never type is not considered
+    # when determining the resulting type)
+    z: if y == 0 then break else y
+    print "\{z}"
+    break
+}</code></pre>
 <h4 id="any"><a href="#any">5.4.3. any</a></h4>
 <p>Compiler created union type that contains all types except itself. Can
 <em><strong>only</strong></em> be used as a generic field type.</p>
@@ -3320,11 +3434,11 @@ _.read</code>) as readily as one of the caller's own. A type that has no name --
 instance of a generic, such as <code>(List i64)</code> -- cannot be spelled by <code>_</code>,
 and is an error at the <code>_</code>. A bare <code>_</code> with nothing after it names no
 member, and is an unknown reference.</p>
-<pre><code class="language-zerolang">mode: variant {READ: null WRITE: null}
-pt: record {x: i64 y: i64}
+<pre><code class="language-zerolang">mode: variant { READ: null WRITE: null }
+pt: record { x: i64 y: i64 }
 
-openit: function {name: StringView m: mode} out i64 is { ... }
-dist: function {p: pt} out i64 is { ... }
+openit: function {name: StringView m: mode} out i64 is { return 0 }
+dist: function {p: pt} out i64 is { return p.x + p.y }
 
 a: openit name: "f" m: _.READ          # mode.READ
 b: dist p: (_.create x: 3 y: 4)        # pt x: 3 y: 4</code></pre>
@@ -3398,6 +3512,7 @@ block of its own members:</p>
       ==: function {t: this.view rhs: tid} out bool is { return t.u64 == rhs.u64 }
       hash: function {t: this.view} out u64 is { return t.u64 }
   }
+
   Path: typedef String
   ShapeAlias: typedef Shape</code></pre>
 <p>The typedef's family is its base's: a typedef over a valtype (a record, a
@@ -3479,14 +3594,17 @@ and keys as its base instance does.</p>
 <p>A generic typedef's unlabelled argument is <code>from</code>, the value of its base,
 and its type arguments are always labelled, in expressions and in type
 positions alike:</p>
-<pre><code class="language-zerolang">  Bag: typedef (List T) as { T: AnyRef.generic }
+<pre><code class="language-zerolang">  Bag: typedef List T as { T: AnyRef.generic }
 
-  l: List String
-  b: Bag l                  # from: l, T inferred: String
-  b2: Bag from: l           # the same
-  c: Bag l T: String        # pinned; must agree with l
-  e: Bag T: String          # the type application: an empty Bag
   count: function {x: (Bag T: String).view} out u64 is { return x.length }
+
+  l1: List String
+  l2: List String
+  l3: List String
+  b: Bag l1                 # from: l1, T inferred: String
+  b2: Bag from: l2          # the same
+  c: Bag l3 T: String       # pinned; must agree with l3
+  e: Bag T: String          # the type application: an empty Bag
   x: Bag String             # error: 'from' takes a value, and 'String' is a type</code></pre>
 <p>The type arguments are inferred from the value's type, which <em><strong>MUST</strong></em> be an
 instance of the base's template, and a labelled one <em><strong>MUST</strong></em> agree with it.
@@ -3497,7 +3615,8 @@ non-generic typedef has no type arguments and takes its value as above
 <p>A typedef parameter's bound need not be its base parameter's. The
 declaration is accepted, and an instance whose argument the base's parameter
 refuses is an error at the line that names the instance:</p>
-<pre><code class="language-zerolang">  Nums: typedef (List t) as { t: anyval.generic }   # accepted
+<pre><code class="language-zerolang">  Nums: typedef List t as { t: anyval.generic }   # accepted
+
   n: Nums t: i64
   # error[E0400]: generic argument 'i64' does not satisfy constraint 'AnyRef'
   #   on parameter 'T' of 'collections.ListRef' (the base of 'app.Nums')</code></pre>
@@ -3537,6 +3656,7 @@ type is expected.</p>
       twice: function {t: this.view} out u64 is { return t.n * 2 }
       bump: function {:this} is { this.n = this.n + 1 }
   }
+
   Loud: typedef Box as {
       twice: function {t: this.view} out u64 is { return t.n * 20 }
       bump: null
@@ -3584,13 +3704,16 @@ constant array).</p>
 <pre><code class="language-zerolang">priority_values: data { LOW: 0 MEDIUM: 1 HIGH: 2 CRITICAL: 10 }
 
 Priority: union {
-    LOW: null  MEDIUM: null  HIGH: null  CRITICAL: null
+    LOW: null
+    MEDIUM: null
+    HIGH: null
+    CRITICAL: null
 } as {
     tag: priority_values.tag
 }
 
 # using a numeric type tag (auto-generate sequential values):
-MyUnion: union { a: i64  b: null } as { tag: u16.tag }</code></pre>
+MyUnion: union { a: i64 b: null } as { tag: u16.tag }</code></pre>
 <h4 id="break"><a href="#break">5.4.11. break</a></h4>
 <p>The builtin break function. Breaks out of the innermost <a href="#for">for</a> loop or block
 expression. Syntax error if not within a <code>for</code> or block expression. (TODO: only
@@ -3613,18 +3736,19 @@ defined (on the call stack) within a for or in a block expression?)</p>
 </table>
 <pre><code class="language-zerolang"># effective signature
 break: function {result: T} out never     # T: the block's value type</code></pre>
-<pre><code class="language-zerolang">for loop {
-    # ...
+<pre><code class="language-zerolang">sometest: true
+
+for loop {
+    print "once"
     if sometest then break
 }
 
-
 # a block:
 {
-    step1
-    step2
+    print "step1"
+    print "step2"
     if sometest then break
-    step3
+    print "step3"
 }</code></pre>
 <h4 id="continue"><a href="#continue">5.4.12. continue</a></h4>
 <p>The builtin continue function. Abandons the current loop execution and resets
@@ -3650,9 +3774,13 @@ argument for the current iteration.</p>
 </table>
 <pre><code class="language-zerolang"># effective signature
 continue: function {result: T} out never  # T: the iteration's value type</code></pre>
-<pre><code class="language-zerolang">for each x: xs loop {
+<pre><code class="language-zerolang">xs: ListVal t: i64
+xs.append from: 0
+xs.append from: 5
+
+for each x: xs loop {
     if x == 0 then continue
-    #...
+    print "\{x}"
 }</code></pre>
 <h4 id="yield"><a href="#yield">5.4.13. yield</a></h4>
 <p>The builtin yield function. Like <code>return</code>, <code>break</code> and <code>continue</code> it is
@@ -3717,7 +3845,9 @@ return: function {result: T} out never    # T: the function's out type</code></p
 <tr><td>is</td><td>Yes</td><td>Return expression</td></tr>
 </tbody>
 </table>
-<pre><code class="language-zerolang">return 0</code></pre>
+<pre><code class="language-zerolang">: answer: function out i64 is {
+:     return 0
+: }</code></pre>
 <h4 id="public"><a href="#public">5.4.15. public</a></h4>
 <p>Defaults to all contents of the current item.</p>
 <h4 id="private"><a href="#private">5.4.16. private</a></h4>
@@ -3784,15 +3914,17 @@ two are deliberately separate &#x2014; a protocol matches on types, and a call s
 names parameters &#x2014; but the consequence is worth knowing before renaming one.</p>
 <pre><code class="language-zerolang"># define a method of the 'Parent' object
 Parent: class {
+    n: i32
     method: function {t: this arg: i32} out i32 is {
-        # ...
+        return t.n + arg
     }
 }
 
 # :this syntax is allowed here
-Parent: class {
+Parent2: class {
+    n: i32
     method: function {:this arg: i32} out i32 is {
-        # ...
+        return this.n + arg
     }
 }</code></pre>
 <h4 id="meta"><a href="#meta">5.4.20. meta</a></h4>
@@ -3805,9 +3937,10 @@ true constuctor) for the current object.</p>
 <pre><code class="language-zerolang"># define a constructor for a class that calls the true constructor on 'meta'
 
 MyObject: class {
+    arg: i32
+    arg2: i32
     myconstructor: function {arg: i32 arg2: i32} out this is {
-        # ...
-        meta.create arg: arg arg2: arg2
+        return (meta.create :arg :arg2)
     }
 }</code></pre>
 <h3 id="predefined-methods-on-types"><a href="#predefined-methods-on-types">5.5. Predefined Methods on Types</a></h3>
@@ -3883,8 +4016,12 @@ them is what may be called, not only what may be assigned. A <code>.borrow</code
 is not owned but still mutable, so a mutating method may be called through
 it; a <code>.view</code> admits only the receiver's <code>.view</code> methods, and nothing may
 be written through it.</p>
-<pre><code class="language-zerolang">viaBorrow: function {c: C.borrow} is { c.bump }   # mutating method: allowed
-viaView:   function {c: C.view}   is { c.bump }   # refused -- 'c' is readonly</code></pre>
+<pre><code class="language-zerolang">C: class { n: i64 } as {
+    bump: function {:this} is { this.n = this.n + 1 }
+}
+
+viaBorrow: function {c: C.borrow} is { c.bump }   # mutating method: allowed
+viaView: function {c: C.view} is { c.bump }   # refused -- 'c' is readonly</code></pre>
 <p>The pin a view takes is shared, so several views of one source may be live
 at once and the source stays readable. It is valid on valtypes as well as
 reftypes: the freeze is a lock on the name, which a record has as much as a
@@ -4075,10 +4212,13 @@ mydata_lbl: data { 1 2 4: 4 }
 
 # an array with text keys
 mydata_key: data { FIRST: 1 SECOND: 2 THIRD: 3 }
+
 # which can be used as a tag in a sum-type, using these values for
 #  the descriminator
 myvariant: variant {
-    FIRST: null SECOND: null THIRD: null
+    FIRST: null
+    SECOND: null
+    THIRD: null
 } as {
     tag: mydata_key.tag
 }
@@ -4090,8 +4230,7 @@ take_u8: function {b: u8} out u8 is { return b }
 result: take_u8 b: mydata_byte.FIRST
 
 # can also use elements as constants in top level or in code:
-One: mydata_key.FIRST   # same as..
-One: 1
+One: mydata_key.FIRST   # same as `One: 1`
 
 # a vocabulary of strings indexed by its own id type: `words.slot.lf` is
 # the id 1, and `words.get i: words.slot.lf` is "line feed"
@@ -4107,7 +4246,7 @@ be a valtype that can be constructed with zero arguments (numeric types are
 zero-initialized, records must have a default constructor), and <code>size</code> is
 the number of elements.</p>
 <pre><code class="language-zerolang"># create a zero-initialized array of 4 i64 values
-a: (array t: i64 to: 4)
+a: array t: i64 to: 4
 
 # compile-time indexed access (bounds checked at compile time)
 x: a.0        # read element 0
@@ -4120,9 +4259,9 @@ old: a.set i: 2 item: 99  # replaces element, returns old value
 # length
 n: a.length   # u64 constant, equals 4
 
-# a read-only view, and a writable window, over the elements
-v: a.listView             # (ListViewVal t: i64)
-w: a.spanSlice from: 1 to: 3   # (SpanVal t: i64), [1, 3)
+# a read-only view over the elements, and a writable window
+with v: a.listView do print "\{v.length}"    # (ListViewVal t: i64)
+w: a.spanSlice from: 1 to: 3                  # (SpanVal t: i64), [1, 3)
 
 # copy from data
 primes: data { 2 3 5 7 11 }
@@ -4145,7 +4284,7 @@ variants, passed by value, and requires no ownership tracking or cleanup.
 number of bytes. An optional <code>from:</code> argument accepts a <code>String</code> value to
 initialize content; if the source exceeds capacity, it is silently truncated.</p>
 <pre><code class="language-zerolang"># create an empty str with 32-byte capacity
-s: (str to: 32)
+s: str to: 32
 
 # create from a string literal
 greeting: (str to: 32) from: "hello"
@@ -4156,8 +4295,8 @@ n: greeting.length     # u64, current content length (5)
 # convert to a string (heap-allocated data buffer)
 heap: greeting.string   # returns string
 
-# print directly
-print greeting
+# print through its view: print takes reference types alone
+print greeting.stringView
 
 # string interpolation
 print "value: \{greeting}"
@@ -4186,7 +4325,7 @@ call of the family's <code>create: function {capacity: 0.u64}</code>: its argume
 <code>capacity:</code> after the type, inside the type application, or as the one
 unlabelled argument -- are checked as that call's, the same for maps and sets.</p>
 <pre><code class="language-zerolang"># create an empty list (i64 is a valtype, so the valtype family)
-nums: (ListVal i64)
+nums: ListVal i64
 
 # create with pre-allocated capacity
 big: (ListVal i64) capacity: 100.u64
@@ -4208,7 +4347,7 @@ last: nums.pop
 nums.insert from: 50 at: 0.u64
 
 # extend from another list (takes ownership of source)
-other: (ListVal i64)
+other: ListVal i64
 other.append from: 1
 nums.extend from: other.take
 
@@ -4258,24 +4397,24 @@ the bound is, naming why.</p>
 map, or <code>(Map K: &lt;key_type&gt; V: &lt;value_type&gt;) capacity: &lt;u64&gt;</code> to
 pre-allocate buckets.</p>
 <pre><code class="language-zerolang"># create an empty map (reftype key, valtype value)
-ages: (MapRV K: String v: i64)
+ages: MapRV K: String v: i64
 
 # set entries (insert or replace)
-ages.set key: "alice" value: 30
-ages.set key: "bob" value: 25
+ages.set key: "alice".string value: 30
+ages.set key: "bob".string value: 25
 
 # get returns (OptionView value) on the reftype-value forms (MapRR /
 # MapVR) and (optionval value) -- a copy, no pin -- on MapRV / MapVV
 r: ages.get key: "alice"
-match (r) case some then { print "found" } case none then { print "missing" }
+match r case some then { print "found" } case none then { print "missing" }
 
 # check if key exists
-k: "alice"
+k: "alice".string
 print "\{ages.has key: k}"    # prints true
 
 # remove entry, taking its owned value
 removed: ages.remove key: "bob"
-match (removed) case some then { print "was \{removed}" } case none then { print "absent" }
+match removed case some then { print "was \{removed}" } case none then { print "absent" }
 
 # field access
 n: ages.length     # u64, current entry count
@@ -4308,7 +4447,7 @@ compact-dict layout with <code>Map</code>, with the value column excised &#x2014
 <p>The constructor is <code>(Set K: &lt;element_type&gt;)</code> for an empty set, or
 <code>(Set K: T) capacity: &lt;u64&gt;</code> to pre-allocate buckets.</p>
 <pre><code class="language-zerolang">  # create an empty set (i64 is a valtype, so the valtype family)
-  s: (SetVal i64)
+  s: SetVal i64
 
   # add elements; .add returns true on first insert, false on duplicate
   s.add item: 1
@@ -4316,7 +4455,7 @@ compact-dict layout with <code>Map</code>, with the value column excised &#x2014
   s.add item: 1        # returns false; caller's copy is destroyed
 
   # has / delete (both return bool)
-  print s.has item: 1
+  print "\{s.has item: 1}"
   deleted: s.delete item: 1
 
   # field access
@@ -4326,7 +4465,7 @@ compact-dict layout with <code>Map</code>, with the value column excised &#x2014
   # `for each` walks through iterate, the READONLY walk (a .view
   # receiver, SHARED): the set stays readable while it runs
   for each x: s loop {
-      print "x: \\{x}"
+      print "x: \{x}"
   }</code></pre>
 <p>A set element must satisfy its family's hashable bound (<code>RefHashable</code>
 for <code>SetRef</code>, <code>valhashable</code> for <code>SetVal</code> -- it declares <code>hash</code> and
@@ -4436,7 +4575,7 @@ binding, a write or an expression with no value is an error. Iterator results
 are specified by using the <code>yield</code> statement.</p>
 <pre><code class="language-zerolang"># function takes an int and has no return value
 myfunc0: function {a: u32} is {
-    print a  # return value of call is ignored
+    print "\{a}"  # return value of call is ignored
 }
 
 # function takes an int and returns an int (implicit return)
@@ -4483,37 +4622,36 @@ in the first place &#x2014; <code>taker arg: m</code> and <code>borrower v: m</c
 the move is tracked regardless, so using the source afterwards is an error.
 Write <code>.take</code> at the call site (<code>taker m.take</code>) when you want the transfer
 visible where it happens.</p>
-<pre><code class="language-zerolang">taker: function {arg: reftype.take} is {
+<pre><code class="language-zerolang">Item: class { n: i64 }
+Outer: class { child: Item }
+
+taker: function {arg: Item.take} is {
     # arg is owned in this scope
+    print "\{arg.n}"
+}
+
+# a non-owned parameter, and a reference into it returned under `outx`:
+getter: function {t: Outer.borrow} outx Item.borrow is {
+    return t.child
 }
 
 # call site:
-taker arg: MyRefType
-# MyRefType is unavailable in the current scope from this point
-
-# a non-owned parameter, and a reference into it returned under `outx`:
-getter: function {t: MyClass.borrow} outx refchild.borrow is {
-    return t.myrefchild
-}</code></pre>
+myitem: Item n: 1
+taker arg: myitem
+# myitem is unavailable in the current scope from this point</code></pre>
 <p>Generic function example:</p>
 <pre><code class="language-zerolang"># generic identity function
-identity: function as { t: AnyRef.generic } in { val: t } out t is {
+identity: function as { t: AnyRef.generic } in {val: t} out t is {
     return val
 }
 
 # generic function with multiple type parameters
-map: function
-    as { t: AnyRef.generic
-         u: AnyRef.generic }
-    in { val: t
-         f: function in { x: t } out u }
-    out u
-is {
-    f x: val
+pick: function as { t: AnyRef.generic u: AnyRef.generic } in {first: t second: u} out t is {
+    return first
 }
 
 # numeric generic parameter
-times: function as { n: u64.generic } in { val: i64 } out i64 is {
+times: function as { n: u64.generic } in {val: i64} out i64 is {
     result: 0
     i: 0.u64
     for i &lt; n loop {
@@ -4634,10 +4772,14 @@ use <code>.copy</code> first).</li>
 </ul>
 <p>An iterator constructed as the <code>for each</code> binding's value lives as long as
 the loop -- the dispatch creates a hidden binding with that lifetime:</p>
-<pre><code class="language-zerolang">for each line: (textreader file: f) loop { ... }</code></pre>
+<pre><code class="language-zerolang">: printLines: function {br: io.BufReader.borrow} is {
+:     for each line: (io.TextReader from: br) loop print line
+: }</code></pre>
 <p>An iterator the body must also name -- to read it, or to hand it on -- is bound
 with <code>with</code>, whose scope is the loop's:</p>
-<pre><code class="language-zerolang">with iter: (textreader file: f) do for line: iter loop { ... }</code></pre>
+<pre><code class="language-zerolang">: printLines: function {br: io.BufReader.borrow} is {
+:     with iter: (io.TextReader from: br) do for line: iter loop print line
+: }</code></pre>
 <p>The recommended container-iterator form is a <code>class</code> with a non-owned
 field referencing the container's private members. The container is pinned
 for the iterator's lifetime -- shared for a readonly walk, exclusive for a
@@ -4651,7 +4793,7 @@ See <code>examples/listiter.z</code> for the canonical pattern and
 state it is constructed with, and its <code>call</code> member is a body that
 <strong>suspends</strong>: each <code>yield</code> hands a value back to the caller and resumes
 where it left off on the next call.</p>
-<pre><code class="language-zerolang">IntRange: generator { lo: i64  hi: i64 } as {
+<pre><code class="language-zerolang">IntRange: generator { lo: i64 hi: i64 } as {
     call: function out i64 is {
         i: this.lo
         for i &lt; this.hi loop {
@@ -4662,6 +4804,7 @@ where it left off on the next call.</p>
 }
 
 # a generator is a TYPE: this is ordinary construction
+
 for each x: (IntRange lo: 0 hi: 3) loop { print "\{x}" }</code></pre>
 <p>A generator is a reftype and is named like one, in PascalCase. It compiles to
 an ordinary class -- its <code>is</code> fields are the class's fields, its <code>call</code> is
@@ -4675,9 +4818,11 @@ ownership markers and default values allowed, read in the body as <code>this.x</
 It is the only kind whose is-block may be omitted entirely -- a generator that
 captures nothing has none to write -- so all three spellings below parse to the
 same thing:</p>
-<pre><code class="language-zerolang">Lits: generator { } as { call: function out i64 is { yield 1 } }
-Lits: generator as { call: function out i64 is { yield 1 } }
-Lits: generator is {} as { call: function out i64 is { yield 1 } }</code></pre>
+<pre><code class="language-zerolang">Lits1: generator {} as { call: function out i64 is { yield 1 } }
+
+Lits2: generator as { call: function out i64 is { yield 1 } }
+
+Lits3: generator is {} as { call: function out i64 is { yield 1 } }</code></pre>
 <h5 id="construction">Construction</h5>
 <p><code>.create</code> is <strong>generated</strong> from the <code>is</code> fields, in order, and writing one
 by hand is a compile error. Each parameter's ownership follows the field it
@@ -4710,10 +4855,10 @@ pins exclusively.</p>
 type definition is refused there, for a generator exactly as for a class.
 Declare it at unit level and, where the construction needs privileged access,
 reach it through a method that is itself declared <code>outx</code>:</p>
-<pre><code class="language-zerolang">Bag: class { a: i64  b: i64 } as {
+<pre><code class="language-zerolang">Bag: class { a: i64 b: i64 } as {
     public: unit { :walk }
     walk: function {b: this.private.view} outx BagWalk is {
-        return (BagWalk b: b)
+        return (BagWalk :b)
     }
 }
 
@@ -4831,7 +4976,7 @@ live value. The name is valid only for one yield window -- using it past the
 next <code>yield</code> is a compile error. To persist the resumed value across yields,
 declare the input <code>.take</code>.</p>
 <pre><code class="language-zerolang"># the caller sends a bool back after each yielded word
-Grep: generator { pat: String  words: List String } as {
+Grep: generator { pat: String words: List String } as {
     call: function {keep: bool} out String is {
         for each w: this.words loop {
             if (w.contains needle: this.pat) then {
@@ -4841,6 +4986,10 @@ Grep: generator { pat: String  words: List String } as {
         }
     }
 }
+
+ws: List String
+ws.append from: "food".string
+ws.append from: "bar".string
 
 # driven by the plain form: the call is evaluated at every iteration,
 # with the input the body just decided
@@ -4856,12 +5005,20 @@ with g: (Grep pat: "foo".string words: ws.take) do {
 <li><strong>Delegation</strong> -- relay a sub-generator through a for-loop inside the
 outer one's body. Both forms work:
 
-<pre><code class="language-zerolang">  # inline
-  for each x: (SubGen ...) loop { yield x }
+<pre><code class="language-zerolang">  SubGen: generator { n: i64 } as {
+      call: function out i64 is { yield this.n }
+  }
 
-  # explicit binding: a named generator is walked by the plain form
-  inner: (SubGen ...)
-  for x: inner loop { yield x }</code></pre>
+  Outer: generator as {
+      call: function out i64 is {
+          # inline
+          for each x: (SubGen n: 1) loop { yield x }
+
+          # explicit binding: a named generator is walked by the plain form
+          inner: SubGen n: 2
+          for x: inner loop { yield x }
+      }
+  }</code></pre>
 
 A <code>for each</code> iterable that is a construction is hoisted to a temp
 before the loop, and that temp crosses the enclosing generator's
@@ -4924,7 +5081,7 @@ level by passing a generic variable at the call site into the constructor.</p>
     a: u32
     b: String
 
-    create: function {a: 0.u32 b: String} out this is {
+    create: function {a: 0.u32 b: String.take} out this is {
         return (meta.create :a :b)      # no stuttering... can use default args
     }
 }</code></pre>
@@ -5039,6 +5196,7 @@ main: function is {
 <pre><code class="language-zerolang"># constructor will not be run on copy-by-value creation
 
 MyObj: class {
+    c: i64
     _privatemethod: function {s: this a: "string" b: 1} is {
         # no return, returns nothing
         # s is of type MyObj.
@@ -5062,18 +5220,19 @@ MyRefType: class {
 # constructor
 
 MyObject: class {
+    n: i64
     mycopyconstructor: function {other: type} out this is {
-        # ...
+        return (meta.create n: other.n)
     }
 }
 
-
-# alternatively, a method can be defined (on #~"this") that returns an instance
+# alternatively, a method can be defined (on 'this') that returns an instance
 # with the same type (ie. 'type')
 
-MyObject: class {
+MyObject2: class {
+    n: i64
     mycopyconstructor: function {this: this} out type is {
-        # ...
+        return (meta.create n: this.n)
     }
 }</code></pre>
 <h4 id="finalizer"><a href="#finalizer">5.13.9. Finalizer</a></h4>
@@ -5112,19 +5271,20 @@ declarations are immutable).</p>
 subtract: function {a: i64 b: i64} out i64 is { return a - b }
 
 main: function is {
-  ref: add.copy                # local function reference
-  result: ref a: 1 b: 2       # call through reference
-  ref = subtract.copy          # reassign to another compatible function
+    ref: add.copy                # local function reference
+    result: ref a: 1 b: 2       # call through reference
+    ref = subtract.copy          # reassign to another compatible function
 }</code></pre>
 <p>A function-typed parameter, field or return with <em><strong>no default</strong></em> is declared
 by a spec, and the caller passes a function with a body of that signature. A
 function with a body declares both the type and the default (<code>f: add</code>):</p>
 <pre><code class="language-zerolang">binop: function {a: i64 b: i64} out i64       # a spec: the type alone
+add: function {a: i64 b: i64} out i64 is { return a + b }
 
 apply: function {f: binop a: i64 b: i64} out i64 is { return (f :a :b) }
 
 main: function is {
-  print "\{apply f: add.copy a: 1 b: 2}"
+    print "\{apply f: add.copy a: 1 b: 2}"
 }</code></pre>
 <p>A marker on a function's name in a declaration is refused
 (<code>'add.take' marks a function in a declaration: a function-typed slot with
@@ -5272,12 +5432,14 @@ carry a non-owned field; such a field is refused where it is declared
 external data are <em><strong>classes</strong></em> -- see
 <a href="#non-owned-fields-on-classes">Non-Owned Fields on Classes</a>
 and <a href="./ownership.html">ownership</a>.</p>
-<pre><code class="language-zerolang">BagIter: class {
+<pre><code class="language-zerolang">bag: class { items: List String }
+
+BagIter: class {
     pos: i64
     target: bag.private.view
 } as {
     create: function {target: bag.private.view} outx this is {
-        return (meta.create pos: 0 target: target)
+        return (meta.create pos: 0 :target)
     }
 }</code></pre>
 <h3 id="class"><a href="#class">5.16. class</a></h3>
@@ -5330,18 +5492,22 @@ single namespace -- the same name cannot appear in both sections.</p>
 <p>Functions defined in the <code>is</code> section are stored as function pointer fields
 in the instance struct. Each instance carries its own copy and these can be
 replaced with any function of the same signature:</p>
-<pre><code class="language-zerolang">calculator: record {
+<pre><code class="language-zerolang">add: function {a: i64 b: i64} out i64 is { return a + b }
+mul: function {a: i64 b: i64} out i64 is { return a * b }
+
+calculator: record {
     op: function {a: i64 b: i64} out i64
 }
+
 main: function is {
     c: calculator op: add.copy
     c.op = mul.copy    # replace the function pointer
 }</code></pre>
 <p>Functions defined in the <code>as</code> section are compiled as standalone functions
 shared by all instances. They are called via <code>TypeName.method instance</code>:</p>
-<pre><code class="language-zerolang">point: record { x: f64  y: f64 } as {
+<pre><code class="language-zerolang">point: record { x: f64 y: f64 } as {
     distance: function {p: this} out f64 is {
-        return (p.x * p.x) + (p.y * p.y)
+        return p.x * p.x + (p.y * p.y)
     }
 }</code></pre>
 <p>Constants in the <code>as</code> section are type-level values, evaluated at compile
@@ -5369,10 +5535,11 @@ config: record { x: i64 } as {
     limit: page_size             # reference to unit-level constant
     doubled: later + 1           # forward reference to a sibling
     later: max_val * 2           # the type's max_val, not the unit's
-    mode: if max_val &gt; 10 then { 1 } else { 2 }
+    mode: (if max_val &gt; 10 then { 1 } else { 2 })
     greeting: "hello"
     # extra: i64                 # compile error: a field belongs in `is`
 }
+
 main: function is {
     print "\{config.max_val}"    # prints 100
     print "\{config.pi}"         # prints 3.14159
@@ -5472,7 +5639,7 @@ default type, while a reftype VALUE is never a valid default. See
   # Function-reference default (callback)
   add: function {a: i64 b: i64} out i64 is { return a + b }
   apply: function {a: i64 b: i64 f: add} out i64 is {
-      return f a: a b: b
+      return (f :a :b)
   }
 
   # Variant subtype default on a field
@@ -5482,6 +5649,7 @@ default type, while a reftype VALUE is never a valid default. See
       east: null
       west: null
   } as { tag: u8.tag }
+
   state: record {
       dir: direction.north    # default arm (qualified)
       enabled: false          # bare alias of `bool.false`
@@ -5499,6 +5667,10 @@ default type, while a reftype VALUE is never a valid default. See
       method1: function {t: this} out i64 is { return t.val + 1 }
       method2: function {t: this} out i64 is { return t.val * 10 }
       instancemethod: method1    # default hook; reassignable later
+  }
+
+  main: function is {
+      print "\{inc} \{scaled} \{apply a: 1 b: 2}"
   }</code></pre>
 <p><strong>Restrictions.</strong> Default values must be expressible without
 constructor arguments. A reftype value (an owned <code>String</code>, a
@@ -5626,7 +5798,13 @@ main: function is {
 <p>The generic spec itself names no interface a type can implement: a marker
 naming it, as a label or by name, is refused at the marker, and nothing is
 inferred from the conformer's methods.</p>
-<pre><code class="language-zerolang">Cell: class {
+<pre><code class="language-zerolang">Getter: protocol {
+    get: function {t: this.view} out v
+} as {
+    v: anyval.generic
+}
+
+Cell: class {
     n: i64
 } as {
     :Getter
@@ -5644,11 +5822,11 @@ inferred from the conformer's methods.</p>
   instance creation</a>.
 - as generic constraints: see <a href="#generic-types">Generic types</a></p>
 <pre><code class="language-zerolang">Reader: protocol {
-    read: function {:this b: buffer} out boolean
+    read: function {:this b: Bytes} out bool
 }
 
 Writer: protocol {
-    write: function {:this b: buffer} out boolean
+    write: function {:this b: Bytes} out bool
 }
 
 # (V1b: protocol composition/inheritance deferred)
@@ -5668,7 +5846,11 @@ destructor pointer (NULL for borrowed instances, set for owned instances).</p>
 <p>An instance -- a protocol's or a facet's -- reaches exactly the members its
 interface declares. A method the conformer adds is not one of them, and any
 other name is refused as on every declared type:</p>
-<pre><code class="language-zerolang">show: function {r: Reader} is {
+<pre><code class="language-zerolang">Reader: protocol {
+    read: function {:this b: Bytes} out bool
+}
+
+show: function {r: Reader} is {
     r.flush   # error[E0100]: type 'Reader' has no member 'flush'
 }</code></pre>
 <p>There are three ways to create a protocol instance:</p>
@@ -5787,7 +5969,7 @@ protocol (see <a href="#protocol">protocol</a>):</p>
     n: anyval.generic
 }
 
-span: record { lo: u32  hi: u32 } as {
+span: record { lo: u32 hi: u32 } as {
     m: (sized n: u32)
     size: function {s: this.view} out u32 is {
         return s.hi - s.lo
@@ -5821,7 +6003,8 @@ parameter -- is copied the same way at the call. <code>take</code> and <code>bor
 not facet constructors. The copy keeps no reference to <code>p</code>, so the
 source's <code>.borrow</code> marker, which makes a protocol's instance a borrow of
 it, has nothing to borrow here and is refused:</p>
-<pre><code class="language-zerolang">d: measurable p.borrow
+<pre><code class="language-zerolang">p: point x: 1
+d: measurable p.borrow
 
 # error[E0200]: 'measurable' is a facet, which holds a copy of its source: `.borrow` has nothing to borrow
 #   = hint: drop the marker -- the projection copies either way</code></pre>
@@ -5836,7 +6019,8 @@ it, has nothing to borrow here and is refused:</p>
 </ul>
 <p>No heap allocation or destructor is needed. Method dispatch goes through
 the vtable, the same as protocols.</p>
-<pre><code class="language-zerolang">f: measurable.create from: p
+<pre><code class="language-zerolang">p: point x: 2
+f: measurable.create from: p
 r: f.measure b: 10    # dispatches through vtable</code></pre>
 <h4 id="facets-as-generic-constraints"><a href="#facets-as-generic-constraints">5.20.4. Facets as generic constraints</a></h4>
 <p>Facets can be used as generic constraints, the same as protocols. A
@@ -5917,9 +6101,11 @@ declared tag label, when present, reads the discriminator &#x2014; see
 providing a name and a type.</p>
 <p>If there is no associated type for a subtype, the type is specified with a
 <code>null</code>.</p>
-<pre><code class="language-zerolang">MyUnion: union {
+<pre><code class="language-zerolang">MyClass: class { n: i64 }
+
+MyUnion: union {
     u1: null       # no user stored value. Discriminator only
-    u2: (Box u32)  # a boxed valtype arm; matches bind the bare u32
+    u2: Box u32  # a boxed valtype arm; matches bind the bare u32
     u4: String
     u5: MyClass    # a class defined elsewhere
 }</code></pre>
@@ -5930,16 +6116,17 @@ Each subtype automatically gets a constructor. Null subtypes take no argument.
 Valtype arguments are copied (boxed) into the union. Reftype arguments require
 ownership transfer via <code>.take</code> or by passing an anonymous/literal value.</p>
 <pre><code class="language-zerolang">Outcome: union {
-    ok: (Box i64)
+    ok: Box i64
     err: String
     none: null
 }
 
 a: Outcome.ok 42                     # construction takes the bare value; the arm is spelled Box
-b: Outcome.err "something went wrong" # reftype: string literal, ownership taken
+b: Outcome.err "something went wrong".string    # reftype: ownership taken
 c: Outcome.none                      # null subtype: no argument
 
 # named argument form
+mystr: "failed".string
 d: Outcome.err from: mystr.take      # explicit .take transfers ownership</code></pre>
 <h4 id="ownership-2"><a href="#ownership-2">5.21.2. Ownership</a></h4>
 <p>Union instances are owned reference types. The same ownership rules that apply
@@ -5959,7 +6146,9 @@ the appropriate destructor for reftype payloads, and nothing for null subtypes.<
 covered by case clauses, or an <code>else</code> clause must be present. Inside a case
 clause the union variable is narrowed: its name IS the arm's payload.</p>
 <pre><code class="language-zerolang">describe: function {r: Outcome} out String is {
-    match (r) case ok then {
+    match (
+        r
+    ) case ok then {
         # r is narrowed: here it is the i64 payload (unboxed)
         print "value = \{r}"
         return "ok".string
@@ -5977,7 +6166,7 @@ narrow it first, with a <code>match</code> or an arm predicate in an <code>if</c
 condition.</p>
 <h4 id="creating-sum-type-instances"><a href="#creating-sum-type-instances">5.21.4. Creating sum-type instances</a></h4>
 <p>Creating/setting a union value:</p>
-<pre><code class="language-zerolang">MyClass: class {a: u32 b: u32}
+<pre><code class="language-zerolang">MyClass: class { a: u32 b: u32 }
 
 MyUnion2: union {
     t1: null      # discriminator only
@@ -5988,7 +6177,7 @@ MyUnion2: union {
 
 v1: MyUnion2.t1                       # null subtype, no argument
 v2: MyUnion2.t2 0                     # valtype, boxed
-v3: MyUnion2.t3 "hello"              # string literal, ownership taken
+v3: MyUnion2.t3 "hello".string       # a String, ownership taken
 myclassi: MyClass a: 1 b: 2
 v4: MyUnion2.t5 myclassi.take        # .take transfers ownership
 v5: MyUnion2.t5 (MyClass a: 1 b: 2)  # anonymous instance, no .take needed
@@ -6097,7 +6286,8 @@ stack-allocated value type with no allocation overhead.</p>
 system unit, falsy arm first. Its values may be created directly by name
 or indirectly via the comparison operators.</p>
 <pre><code class="language-zerolang"># lib/system/system.z, with its operator members elided
-bool: variant { false: null  true: null }
+bool: variant { false: null true: null }
+
 # lib/system/core.z
 false: bool.false
 true: bool.true</code></pre>
@@ -6114,31 +6304,27 @@ followed by a question mark. The method returns a boolean.</p>
     t3: null
 }
 
-x: MyUnion t2: "hello"
+x: MyUnion.t2 "hello".string
 
 if x.t3 then {
     print "x is an instance of subtype 't3'"
 }</code></pre>
-<p>To use submember data from a union instance, it must be narrowed (or
-destroyed?). Assignment to a union's subtype may only be attempted in an <code>if</code>
-expression. If successful, the subtype can be used in that body specified in
-<code>do</code>.</p>
-<p>Note that subtypes with no associated data cannot be assigned in this way.</p>
+<p>To use an arm's payload, narrow the union with a <a href="#match">match</a>: inside the arm the
+union's own name is the payload. An arm with no associated data has none to
+read; its test is the predicate form above.</p>
 <pre><code class="language-zerolang">MyUnion: union {
     t1: u32
     t2: String
-    t3: _
+    t3: null
 }
 
-x: MyUnion t2: "hello"
+x: MyUnion.t2 "hello".string
 
-if y: x.t2 then {
-    print y     # y is a string ("hello") here
-}
-
-if y: x.t3 then {    # ERROR: syntax error, cannot assign MyUnion.t3 to y
-    # ...
-}</code></pre>
+match (
+    x
+) case t2 then {
+    print x     # x is the String ("hello") here
+} else null</code></pre>
 <h3 id="operations-2"><a href="#operations-2">5.23. Operations</a></h3>
 <h4 id="constants-and-variables"><a href="#constants-and-variables">5.23.1. Constants and Variables</a></h4>
 <p>Literals
@@ -6197,19 +6383,20 @@ so each is reachable by name: <code>a.== rhs: b</code> is the same method as
 respect. Only comparing it is an error, and it is the error any missing
 member gives:</p>
 <pre><code class="language-zerolang">opaque: record { val: i64 } as { ==: null }
-holder: record { o: opaque  n: i64 }
+holder: record { o: opaque n: i64 }
+
 # h == h  --&gt; error: type 'holder' has no member '=='</code></pre>
 <p><strong>User Override.</strong></p>
 <p>Define <code>==</code> or <code>!=</code> in the <code>as</code> section to replace the auto-generated
 version. The other is generated as its negation:</p>
-<pre><code class="language-zerolang">point: record { x: i64  y: i64 } as {
+<pre><code class="language-zerolang">point: record { x: i64 y: i64 } as {
     ==: function {a: this b: point} out bool is {
         return a.x == b.x    # ignores y field
     }
 }
 
 # `!=` may be the one you write; `==` is then its negation
-span: record { lo: i64  hi: i64 } as {
+span: record { lo: i64 hi: i64 } as {
     !=: function {a: this rhs: span} out bool is {
         return (a.hi - a.lo) != (rhs.hi - rhs.lo)
     }
@@ -6220,6 +6407,7 @@ and <code>!=</code> entirely -- the same shape as the <code>create: null</code> 
 Attempting to compare such a type, or any value holding one, is a typecheck
 error:</p>
 <pre><code class="language-zerolang">opaque: record { val: i64 } as { ==: null }
+
 # opaque == opaque  --&gt; error: type 'opaque' has no member '=='</code></pre>
 <p><strong>Hash.</strong></p>
 <p>A value type's <code>hash</code> follows its <code>==</code>. The generated <code>hash</code> combines
@@ -6232,10 +6420,14 @@ for equal values. A float has no <code>hash</code> (a NaN is unequal to itself),
 neither does anything holding one:</p>
 <pre><code class="language-zerolang">lower: function {c: u8} out u8 is { if c &gt;= 65 when c &lt;= 90 then return c + 32 else return c }
 letter: record { code: u8 } as {
-    ==: function {:this rhs: letter} out bool is { return (lower c: this.code) == (lower c: rhs.code) }
+    ==: function {:this rhs: letter} out bool is {
+        return (lower c: this.code) == (lower c: rhs.code)
+    }
     hash: function {t: this.view} out u64 is { return (lower c: t.code).u64 }
 }
-entry: record { l: letter  n: i64 }   # generated == and hash, built from letter's
+
+entry: record { l: letter n: i64 }   # generated == and hash, built from letter's
+
 # (MapVV entry v: i64) finds an entry stored under 'A' when asked for 'a'</code></pre>
 <p><strong>Floats.</strong></p>
 <p>A float part is compared with the float's own <code>==</code>, which is IEEE 754 --
@@ -6270,7 +6462,6 @@ shorter prefix loses the length tie-break:</p>
 <pre><code class="language-zerolang">a: "hello"
 b: "hello"
 if a == b then print "equal"   # prints "equal"
-
 if "app".string &lt; "apple".string then print "shorter wins"
 c: "apple".string.compare rhs: "banana".string
 # c == -1.i32</code></pre>
@@ -6358,7 +6549,8 @@ does not fold -- a float <code>%</code>, a comparison of a number with a string 
 <code>E0600</code>:</p>
 <pre><code class="language-zerolang">FLAGS: 1 &lt;&lt; 3        # 8
 FREM: 7.5 % 2.0      # E0600: '%' has no compile-time value for f64 and f64
-LIMIT: GHOST + 1     # E0023: Unknown reference 'GHOST'</code></pre>
+LIMIT: GHOST + 1     # E0023: Unknown reference 'GHOST'
+main: function is {}</code></pre>
 <p>A compile-time <code>match</code> folds as a compile-time <code>if</code> does. Its subject
 must be an arm constant (<code>M: mode.slow</code>, <code>ON: 3 &gt; 2</code>), and its value is
 the selected arm's, typed by that arm; an arm that is not selected is never
@@ -6366,9 +6558,10 @@ evaluated, so its <code>error</code> goes unreported. The arms are checked as a 
 checks them: each names an arm of the subject's type, and names it once, and
 a match with no <code>else</code> covers every arm (<code>E0036</code>). A number or a string
 is no subject, as it is not in a body.</p>
-<pre><code class="language-zerolang">mode: variant { fast: null  slow: null }
+<pre><code class="language-zerolang">mode: variant { fast: null slow: null }
+
 M: mode.slow
-SIZE: match (M) case fast then { 64 } else { 32 }   # folded to 32</code></pre>
+SIZE: match M case fast then { 64 } else { 32 }   # folded to 32</code></pre>
 <p>A string constant is a <code>StringView</code> receiver like any other. Five of its
 methods fold: <code>length</code>, <code>startsWith</code>, <code>endsWith</code>, <code>contains</code> and
 <code>substring</code>. Each answer is computed by calling the same method the program
@@ -6384,7 +6577,6 @@ N: NAME.length                         # folded to 8
 HEAD: (NAME.substring from: 0 to: 4)   # folded to "zero"
 TAIL: (NAME.substring from: 4)         # E0300: missing required argument 'to' (type: u64)
 WIDE: NAME.count                       # E0600: 'count' has no compile-time value
-
 main: function is {
     c: NAME.count                      # run time, on the constant's static view
 }</code></pre>
@@ -6399,7 +6591,6 @@ extensible for future operations.</p>
 SCALE: 3
 COMBINED: OFFSET + SCALE    # folded to 13 at compile time
 TAU: 3.14159 * 2.0          # f64 folded to 6.28318 at compile time
-
 main: function is {
     x: 1 + 2                # folded to 3
     y: COMBINED * 2          # folded to 26
@@ -6429,13 +6620,20 @@ At the unit level, as in a type's <code>as</code> block, an <code>if</code> read
 binding's does: a branch written without braces ends with its line, and a
 branch that spans lines takes braces.</p>
 <pre><code class="language-zerolang">A: 10
+
 # unit-level if: selects branch at compile time
-x: if A &gt; 5 then { A } else { 0 }
+x: (if A &gt; 5 then { A } else { 0 })
+
 # unbraced branches end with the line, as in a body
-w: if A &gt; 5 then A else 0
+w: (if A &gt; 5 then A else 0)
+
 # the first branch is never evaluated, so GHOST need not exist, and y is
 # the selected branch's StringView
-y: if A &gt; 50 then { GHOST } else { "small" }</code></pre>
+y: (if A &gt; 50 then { GHOST } else { "small" })
+
+main: function is {
+    print "\{x} \{w} \{y}"
+}</code></pre>
 <h3 id="compile-time-error"><a href="#compile-time-error">6.3. Compile-Time Error</a></h3>
 <p>The <code>error</code> builtin produces a compile-time error. When the compiler
 can prove that an <code>error</code> call is reachable, compilation fails and the
@@ -6501,10 +6699,12 @@ type-specific code paths and compile-time validation of supported types. When
 the parameter is generic over a numeric or character type, the <code>case</code> arms
 are the numeric/character values.</p>
 <pre><code class="language-zerolang">Container: class { val: t } as {
-    t: AnyRef.generic
+    t: anyval.generic
 
     typecheck: function {c: this} is {
-        match t case i32 then {
+        match (
+            t
+        ) case i32 then {
             print "i32 Container"
         } case i64 then {
             print "i64 Container"
@@ -6516,7 +6716,7 @@ are the numeric/character values.</p>
 
 main: function is {
     c: Container val: 42        # t = i64: i64 arm selected
-    c.typecheck c
+    c.typecheck
 
     # d: Container val: "hello"  # t = string: would fail with
     #                            # "Container: unsupported element type"
@@ -6530,7 +6730,7 @@ compiler.</p>
 This would usually be within a conditionally compiled section (otherwise
 compilation will always fail).</p>
 <pre><code class="language-zerolang">error "Constant error string"   # "stack" with lineno's and filenames will
-                                # also be shown</code></pre>
+# also be shown</code></pre>
 <h3 id="identifier-metadata"><a href="#identifier-metadata">6.4. Identifier Metadata</a></h3>
 <p>TODO: metadata about identifiers exposed via <code>meta</code> namespace.</p>
 <pre><code class="language-zerolang">myconstants: unit {
