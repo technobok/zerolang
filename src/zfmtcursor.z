@@ -356,6 +356,45 @@ Cursor: class {
         return k
     }
 
+    # holeSpansLines -- the interpolation hole whose `{` is the next raw token
+    # holds a line break or a comment before its matching `}`
+    holeSpansLines: function {this: this.view} out bool is {
+        k: this.i
+        depth: u64
+        for k < this.toks.length loop {
+            tt: (this.toks.get i: k).toktype
+            if tt == zlexer.toktype.braceOpenTok then depth = depth + 1
+            if tt == zlexer.toktype.braceCloseTok then {
+                if depth <= 1 then return false
+                depth = depth - 1
+            }
+            if (tt == zlexer.toktype.eolTok) or (tt == zlexer.toktype.commentTok) then return true
+            if tt == zlexer.toktype.eofTok then return false
+            k = k + 1
+        }
+        return false
+    }
+
+    # takeHoleRaw -- consume the interpolation hole at the cursor raw, through
+    # its matching `}`: the caller copies it as written, so the comments in it
+    # are placed, not lost. Answers the `}`'s index
+    takeHoleRaw: function {:this} out u64 is {
+        depth: u64
+        last: this.i
+        for this.i < this.toks.length loop {
+            tt: (this.toks.get i: this.i).toktype
+            last = this.takeRaw
+            if tt == zlexer.toktype.braceOpenTok then depth = depth + 1
+            if tt == zlexer.toktype.braceCloseTok then {
+                if depth <= 1 then break
+                depth = depth - 1
+            }
+            if tt == zlexer.toktype.eofTok then break
+        }
+        this.reported = this.i
+        return last
+    }
+
     # expect -- consume the next significant token, which must be `tt`; on a
     # mismatch the failure is recorded and the EOF index answers, so the
     # builder can finish and the caller can refuse the file

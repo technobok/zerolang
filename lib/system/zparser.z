@@ -814,12 +814,16 @@ Parser: class {
                     )
                 }
                 lex.advance pool: this.ast.names
+                # an interpolated block may span lines: `\{`, then the
+                # expression on lines of its own, comments among them, then `}`
+                this.skipEols :lex
                 eLook: this.exprLookahead :lex
                 if eLook then {
                     expr: this.parseExpression :lex
                     eErr: Parser.isError node: expr
                     if eErr then return expr
                     parts.append (this.intern n: expr)
+                    this.skipEols :lex
                     ctPos: lex.peekPos
                     if lex.peekType != zlexer.toktype.braceCloseTok then {
                         return (this.mkErrorAt
@@ -1610,6 +1614,11 @@ Parser: class {
         } else {
             return false
         }
+    }
+
+    # skipEols -- step over any line breaks at the cursor.
+    skipEols: function {:this lex: zlexer.Lexer} is {
+        for lex.peekType == zlexer.toktype.eolTok loop lex.advance pool: this.ast.names
     }
 
     # True when the current token is an EOL (a unit-body definition
