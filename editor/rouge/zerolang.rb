@@ -84,11 +84,11 @@ module Rouge
           AnyRef Box ByteView Bytes Closer
           CpIter File IdMapEntryR IdMapEntryV IdMapItemIterR IdMapItemIterV
           IdMapR IdMapV IdSet IdSetIter IoError
-          LinesIter List ListIter ListIterVal ListRef ListVal
+          LinesIter List ListIter ListIterVal ListIterMut ListIterMutVal ListRef ListVal
           ListView ListViewVal Map MapEntry MapEntryRV MapEntryVR
           MapEntryVV MapItemIter MapItemIterRV MapItemIterVR MapItemIterVV MapKeyIter
           MapKeyIterRV MapKeyIterVR MapKeyIterVV MapRR MapRV MapVR
-          MapVV Option OptionView OptionViewVal Path PathView Reader
+          MapVV Option OptionView OptionViewVal OptionMut OptionMutVal Path PathView Reader
           RefHashable Result ResultRV ResultVR Seeker Set SetIter SetIterVal
           SetRef SetVal SpanPair SpanVal Splitter String StringLike StringView
           Text TextReader Writer _ anyfloat anyint anyval array

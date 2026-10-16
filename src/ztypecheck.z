@@ -620,14 +620,16 @@ isViewFamilyTid: function {ast: Ast st: zenv.ZSymbolTable tid: ztypes.tid} out b
     return false
 }
 
-# isMutableViewTid -- a view that WRITES: a SpanVal window, or the SpanPair of
-# two a split answers. It borrows like every view, but the storage it reaches is
-# written through it.
+# isMutableViewTid -- a view that WRITES: a SpanVal window, the SpanPair of two
+# a split answers, or an OptionMut (either family) a writable reader hands back.
+# It borrows like every view, but the storage it reaches is written through it.
 isMutableViewTid: function {ast: Ast st: zenv.ZSymbolTable tid: ztypes.tid} out bool is {
     if tid.isZero then return false
     vog: st.reg.genericOriginOf :tid
     if vog.isZero then return false
     if vog == (stdTid :ast :st wk: zast.wellKnown.slot.tySpanVal) then return true
+    if vog == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyOptionMut) then return true
+    if vog == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyOptionMutVal) then return true
     return vog == (stdTid :ast :st wk: zast.wellKnown.slot.tySpanPair)
 }
 
@@ -7653,7 +7655,7 @@ resolveFunction: function {
 # takes, asked of its resolved type: a class or an owning union borrows, as
 # String and the borrow-default collections do, whichever unit declared it and
 # however the parameter spells it (an application, a typedef, a dotted path).
-# StringView, the view unions, a native class and every valtype do not. A
+# StringView, the view unions (OptionView, OptionMut), a native class and every valtype do not. A
 # typedef answers as the end of its chain, an instance as its template.
 paramIsBorrowReftype: function {
     ast: Ast
@@ -7670,6 +7672,8 @@ paramIsBorrowReftype: function {
     if o.isZero.not then cid = o
     if cid == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyOptionView) then return false
     if cid == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyOptionViewVal) then return false
+    if cid == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyOptionMut) then return false
+    if cid == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyOptionMutVal) then return false
     if (st.reg.isNativeOf tid: cid) then return false
     tt: st.reg.typetypeOf typeId: cid
     return (tt == ztypes.ztypetype.classType) or (tt == ztypes.ztypetype.unionType)
@@ -22890,8 +22894,8 @@ templateNeedsMonoDtor: function {
 
 # unionMonoNeedsDtor -- an instance of a generic union owns the cell each arm is
 # held in, as its template does (resolveUnion flags every union with a
-# non-null arm), so it takes the template's flag. OptionView and its valtype
-# twin are the exception: a view's arm points at a value it does not own.
+# non-null arm), so it takes the template's flag. The view unions are the
+# exception (isViewUnionOrigin): their arm points at a value they do not own.
 unionMonoNeedsDtor: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -22900,8 +22904,7 @@ unionMonoNeedsDtor: function {
 } out bool is {
     if tt != ztypes.ztypetype.unionType then return false
     if (st.reg.needsDestructor typeId: templateId).not then return false
-    if templateId == (stdTid :ast :st wk: zast.wellKnown.slot.tyOptionView) then return false
-    return templateId != (stdTid :ast :st wk: zast.wellKnown.slot.tyOptionViewVal)
+    return (isViewUnionOrigin :ast :st origin: templateId).not
 }
 
 # mintMonoTagShape -- give a monomorphised sum type its discriminator: the tag
@@ -26599,6 +26602,9 @@ templateIsCollection: function {
     arrayTid: stdTid :ast :st wk: zast.wellKnown.slot.tyArray
     listIterTid: stdTid :ast :st wk: zast.wellKnown.slot.tyListIter
     listIterValTid: stdTid :ast :st wk: zast.wellKnown.slot.tyListIterVal
+    # read, not resolved: a template no program named cannot be this one
+    listIterMutTid: stdTidRo :ast :st wk: zast.wellKnown.slot.tyListIterMut
+    listIterMutValTid: stdTidRo :ast :st wk: zast.wellKnown.slot.tyListIterMutVal
     setIterTid: stdTid :ast :st wk: zast.wellKnown.slot.tySetIter
     setIterValTid: stdTid :ast :st wk: zast.wellKnown.slot.tySetIterVal
     idSetIterTid: stdTid :ast :st wk: zast.wellKnown.slot.tyIdSetIter
@@ -26620,6 +26626,8 @@ templateIsCollection: function {
     isIter: (
         (templateId == listIterTid) or
         (templateId == listIterValTid) or
+        (templateId == listIterMutTid) or
+        (templateId == listIterMutValTid) or
         (templateId == setIterTid) or
         (templateId == setIterValTid) or
         (templateId == idSetIterTid) or
@@ -28546,8 +28554,8 @@ methodReturnOf: function {st: zenv.ZSymbolTable.view mid: ztypes.tid} out option
     return (optionval.none ztypes.tid)
 }
 
-# iterWrapperElem -- when a type is an Option / optionval / OptionView /
-# OptionViewVal instance, its element (`some` child) type id.
+# iterWrapperElem -- when a type is an Option / optionval instance or one of the
+# view unions (isViewUnionOrigin), its element (`some` child) type id.
 iterWrapperElem: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -28570,13 +28578,7 @@ iterWrapperElem: function {
     ) case some then {
         if origin == vo then isWrapper = true
     } case none then null
-    wo: stdTidOpt :ast :st wk: zast.wellKnown.slot.tyOptionView
-    match (
-        wo
-    ) case some then {
-        if origin == wo then isWrapper = true
-    } case none then null
-    if (isOptionViewValOrigin :ast :st :origin) then isWrapper = true
+    if (isViewUnionOrigin :ast :st :origin) then isWrapper = true
     forceMemberOf :st :ast parentTypeId: wid nameId: zast.wellKnown.slot.wkSome
     if isWrapper then return (st.typing.declChildOfId
         parentTypeId: wid
@@ -28585,9 +28587,9 @@ iterWrapperElem: function {
     return (optionval.none ztypes.tid)
 }
 
-# isOptionViewMono -- true when a type is an OptionView or OptionViewVal instance
-# (its per-iteration values are borrowed views, so the loop var binds BORROWED).
-isOptionViewMono: function {
+# isViewUnionMono -- true when a type is an instance of a view union (its
+# per-iteration values are borrowed references, so the loop var binds BORROWED).
+isViewUnionMono: function {
     ast: Ast
     st: zenv.ZSymbolTable
     wid: ztypes.tid
@@ -28596,32 +28598,24 @@ isOptionViewMono: function {
     goo: st.reg.genericOriginOf tid: wid
     if goo.isZero.not then origin = goo
     if origin.isZero then return false
-    if (isOptionViewValOrigin :ast :st :origin) then return true
-    wo: stdTidOpt :ast :st wk: zast.wellKnown.slot.tyOptionView
-    match (
-        wo
-    ) case some then {
-        return origin == wo
-    } case none then {
-        return false
-    }
+    return (isViewUnionOrigin :ast :st :origin)
 }
 
-# isOptionViewValOrigin -- `origin` is the OptionViewVal template, looked up as
-# its OptionView twin is at the two sites that ask.
-isOptionViewValOrigin: function {
+# isViewUnionOrigin -- `origin` is one of the four view unions: OptionView and
+# OptionMut, each with its valtype twin. Their arm points at a value they do
+# not own; they differ only in what that arm lets the holder do. `origin` is
+# never 0, so a template the program lacks (stdTid 0) matches nothing. The
+# OptionMut pair is READ (stdTidRo), not resolved: a template no program named
+# cannot be `origin`, and resolving it would mint it into every program.
+isViewUnionOrigin: function {
     ast: Ast
     st: zenv.ZSymbolTable
     origin: ztypes.tid
 } out bool is {
-    wv: stdTidOpt :ast :st wk: zast.wellKnown.slot.tyOptionViewVal
-    match (
-        wv
-    ) case some then {
-        return origin == wv
-    } case none then {
-        return false
-    }
+    if origin == (stdTid :ast :st wk: zast.wellKnown.slot.tyOptionView) then return true
+    if origin == (stdTid :ast :st wk: zast.wellKnown.slot.tyOptionViewVal) then return true
+    if origin == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyOptionMut) then return true
+    return origin == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyOptionMutVal)
 }
 
 # createDottedBaseId -- the base atom's node id when a dotted path's child is
@@ -38263,7 +38257,7 @@ forOptionElementOf: function {
         w1
     ) case some then {
         fe.elem = w1
-        fe.isView = isOptionViewMono :ast :st wid: vt
+        fe.isView = isViewUnionMono :ast :st wid: vt
     } case none then null
     return fe
 }
@@ -38291,7 +38285,7 @@ forIteratorElementOf: function {
             ) case some then {
                 fe.elem = w2
                 fe.wrapper = rv
-                fe.isView = isOptionViewMono :ast :st wid: rv
+                fe.isView = isViewUnionMono :ast :st wid: rv
             } case none then null
         } case none then null
     }
@@ -38329,7 +38323,7 @@ partialForElement: function {
     ) case some then {
         fe.elem = st.reg.genericTypeArgAt specId: vt ordinal: ordo
         fe.wrapper = rv
-        fe.isView = isOptionViewMono :ast :st wid: rv
+        fe.isView = isViewUnionMono :ast :st wid: rv
     } case none then null
     return fe
 }
