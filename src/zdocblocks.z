@@ -385,22 +385,51 @@ wrapProgram: function {code: (List String).view} out String is {
 }
 
 # splitDecls -- the top-level declarations (and the lines that continue them)
-# into `top`; every other line into `inner`, indented as `main`'s body.
+# into `top`; every other line into `inner`, indented as `main`'s body. Two
+# declarations the block separates with statements are separated in `top` by a
+# blank line, as the block's own layout would have them; two it writes back
+# to back stay back to back.
 splitDecls: function {code: (List String).view top: List String inner: List String} is {
     words: zast.Vocab.create block: docWord
     inDecl: false
+    # a statement line came after the last declaration line
+    stmtSince: false
     for each l: code loop {
         lv: l.stringView
-        starts: (lv.length > 0) and (isLineStart b: ((lv.byteAt 0).or d: 32.u8))
-        if starts then inDecl = isDeclLine line: lv :words
+        if (startsTopItem line: lv) then {
+            inDecl = isDeclLine line: lv :words
+            if inDecl when stmtSince when (endsInBlank lines: top).not then (top.append
+                from: "".string
+            )
+            if inDecl then stmtSince = false
+        }
         if inDecl then {
             top.append from: l.copy
-        } else if lv.length == 0 then {
-            inner.append from: "".string
         } else {
-            inner.append from: "    \{lv}"
+            stmtSince = stmtSince or (lv.trim.length > 0)
+            inner.append from: (bodyLine line: lv)
         }
     }
+}
+
+# startsTopItem -- the line begins a new top-level item rather than continuing
+# the one before (see isLineStart).
+startsTopItem: function {line: StringView} out bool is {
+    if line.length == 0 then return false
+    return (isLineStart b: ((line.byteAt 0).or d: 32.u8))
+}
+
+# bodyLine -- a line as `main`'s body holds it: indented one level, a blank
+# line left blank.
+bodyLine: function {line: StringView} out String is {
+    if line.length == 0 then return ""
+    return "    \{line}"
+}
+
+# endsInBlank -- the list is empty or its last line is blank.
+endsInBlank: function {lines: (List String).view} out bool is {
+    if lines.length == 0 then return true
+    return (lines.get i: lines.length - 1).stringView.trim.length == 0
 }
 
 # isLineStart -- a line beginning with this byte starts a new top-level item:

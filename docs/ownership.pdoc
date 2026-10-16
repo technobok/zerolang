@@ -455,7 +455,7 @@ storage -- each is its value wherever it is written, with nothing to move,
 lend or freeze -- so a marker on one is refused (#~"E0100"). Write the value
 without it: a constant passes to a #~".take" parameter as #~"eat s: GREETING".
 
-#code language=zerolang check=none: """
+#code language=zerolang expect=E0100: """
   LIMIT: 9
   primes: data { 2 3 5 7 }
 
@@ -502,12 +502,19 @@ variable is consumed in #_*"all" arms:
 If #_*"no" arm takes the variable, it remains valid after the #~"if"/#~"match"
 and no auto-destroy is inserted.
 
-#code language=zerolang check=none: """
-  conn: connection.open "db"
+#code language=zerolang: """
+  Conn: class { name: String }
+
+  process: function {c: Conn.take} is {
+      print c.name
+  }
+
+  ready: true
+  conn: Conn name: "db".string
   if ready then {
-      process from: conn.take     # programmer takes ownership
+      process c: conn.take    # programmer takes ownership
   } else {
-      log "not ready"             # compiler auto-destroys conn
+      print "not ready"       # compiler auto-destroys conn
   }
   # conn is invalid here
   """
@@ -587,14 +594,16 @@ inside another loop, whose next iteration enters it again. A plain binding
 (#~"for r: E loop") runs at every iteration, so a move inside #~"E" is a move
 in the loop and is refused as one.
 
-#code language=zerolang check=none: """
-  a: Crate value: 1
+#code language=zerolang expect=E0200: """
+  Crate: class { label: String value: i64 }
+
+  a: Crate label: "a" value: 1
   for each i: 3.times loop {
       a.take              # ERROR: outer-scope variable, next iteration reached
-      b: Crate value: 2
+      b: Crate label: "b" value: 2
       c: b.take           # OK: b is body-local
   }
-  d: Crate value: 3
+  d: Crate label: "d" value: 3
   for each j: 3.times loop {
       if j == 1 then {
           e: d.take       # OK: this path leaves the loop
@@ -710,7 +719,10 @@ argument, so the argument must outlive the result; #~"outx" is what keeps it
 locked, and #~"outx this" is what a constructor of any class with a
 non-owned field declares.
 
-#code language=zerolang check=none:
+#code language=zerolang:
+  : Src: class { n: i64 }
+  : W: class { s: Src.view }
+  :
   : mk: function {from: Src.view} outx W.hold is {
   :     return (W s: from)
   : }
@@ -770,11 +782,13 @@ each for a reason stated where it is declared -- see the roster below.
 hand an owned value to a destination that requires ownership (a
 constructor field, a list/map insert) but only have a borrowed source:
 
-#code language=zerolang check=none: """
-  store: function {s: String} out Crate.bag is {
-      # `s` is borrowed from the caller; the box wants to own its label,
+#code language=zerolang: """
+  Crate: class { label: String value: i64 }
+
+  store: function {s: String} out Crate is {
+      # `s` is borrowed from the caller; the crate wants to own its label,
       # so clone the data into a fresh allocation.
-      return Crate label: s.copy
+      return (Crate label: s.copy value: 0)
   }
   """
 
@@ -873,7 +887,9 @@ Error conditions:
 
 Example -- early cleanup without nesting:
 
-#code language=zerolang check=none: """
+#code language=zerolang: """
+  Crate: class { label: String value: i64 }
+
   h: Crate label: "hotel" value: 8
   print "h alive: \{h.label}"
   h.drop
@@ -960,12 +976,13 @@ the alias. Unit-level instantiation creates a compile-time alias
 (see the generic-units section of
 [#> to=./spec.html: the language specification]).
 
-#code language=zerolang check=none: """
+#code language=zerolang: """
   Gen1: generator as {
       call: function out String.take is { yield "a".string }
   }
+
   Gen2: generator { n: i64 } as {
-      call: function out String.take is { ... }
+      call: function out String.take is { yield "n=\{this.n}" }
   }
   """
 
@@ -1346,16 +1363,25 @@ condition guards, a #~"for" condition's at the end of EACH evaluation, because
 the condition runs again and builds it again, and any other at the end of the
 statement that made it.
 
-#code language=zerolang check=none: """
-  v: (mks n: 1).stringView       # v reads the String: it lives to block end
+#code language=zerolang: """
+  mks: function {n: i64} out String is {
+      return "n=\{n}"
+  }
+
+  len: function {a: StringView} out u64 is {
+      return a.length
+  }
+
+  k: 7
+  v: (mks n: 1).stringView         # v reads the String: it lives to block end
   n: len a: (mks n: 2).stringView  # released after this statement
 
   # the first is the same as
   s: mks n: 1
-  v: s.stringView
+  v1: s.stringView
 
-  if "n=\{k}".length > 2 then { ... }  # released at the end of the if
-  for "n=\{k}".length < 4 loop { ... }  # built and released EVERY test
+  if "n=\{k}".length > 2 then print "long"    # released at the end of the if
+  for "n=\{k}".length < 4 loop break          # built and released EVERY test
   """
 
 A temporary whose result was itself borrowed -- #~"(list.get i: 0).stringView"
@@ -1452,7 +1478,7 @@ held.
 A function declared #~"out T" returns an owned value. Returning a
 borrowed parameter directly would alias the caller's heap data:
 
-#code language=zerolang check=none: """
+#code language=zerolang expect=E0200: """
   identity: function {s: String} out String is {
       return s          # error: 's' is borrowed; the caller still owns it
   }
@@ -1479,9 +1505,11 @@ A constructor field declared with no #~".borrow" annotation expects an
 owned value. Storing a borrowed parameter into it would alias the
 caller's heap data the same way:
 
-#code language=zerolang check=none: """
+#code language=zerolang expect=E0200: """
+  Crate: class { label: String value: i64 }
+
   make_box: function {name: String} out Crate is {
-      return Crate label: name    # error: 'name' is borrowed
+      return (Crate label: name value: 0)    # error: 'name' is borrowed
   }
   """
 
@@ -1498,14 +1526,16 @@ Some classes need to hold a locked reference to another object -- most commonly
 iterators and views. A class field can be declared #_+"non-owned" -- #~".borrow" or #~".view" -- to
 express this:
 
-#code language=zerolang check=none: """
+#code language=zerolang: """
+  container: class { x: i64 }
+
   MyIter: class {
-    state: i64
-    target: container.private.view
+      state: i64
+      target: container.private.view
   } as {
-    create: function {target: container.private.view} outx this is {
-      return (meta.create state: 0 target: target)
-    }
+      create: function {target: container.private.view} outx this is {
+          return (meta.create state: 0 :target)
+      }
   }
   """
 
@@ -1674,31 +1704,36 @@ For a reference return, the returned expression must be rooted at a
 The compiler traces the return expression back through field accesses to
 verify it.
 
-#code language=zerolang check=none: """
+#code language=zerolang expect=E0200: """
+  grandchild: class { n: i64 }
+  child: class { grandchild: grandchild }
+
+  MyClass: class { child: child } as {
+      # OK -- what a view can lend is a view
+      peek: function {t: this.view} outx child.view is {
+          return t.child
+      }
+
+      # ERROR -- a `.borrow` result lent through a `.view` receiver
+      bad3: function {t: this.view} outx child.borrow is {
+          return t.child
+      }
+  }
+
   # OK -- return value is a field of the locked parameter
   get_child: function {t: MyClass.borrow} outx child.borrow is {
-    return t.child
+      return t.child
   }
 
   # ERROR -- a local dies with this call
   bad: function {t: MyClass.borrow} outx child.borrow is {
-    c: child
-    return c
+      c: child grandchild: (grandchild n: 1)
+      return c
   }
 
   # ERROR -- a `.take` parameter is owned here and dies with this call
   bad2: function {t: MyClass.take} outx child.borrow is {
-    return t.child
-  }
-
-  # ERROR -- a `.borrow` result lent through a `.view` receiver
-  bad3: function {t: this.view} outx child.borrow is {
-    return t.child
-  }
-
-  # OK -- what a view can lend is a view
-  peek: function {t: this.view} outx child.view is {
-    return t.child
+      return t.child
   }
   """
 
@@ -1715,16 +1750,20 @@ an owned value is declared #~"outx", and must initialise the non-owned field
 from a #~".borrow"/#~".view" parameter or the receiver. The compiler verifies
 the construction arguments of the returned instance trace back to one.
 
-#code language=zerolang check=none: """
-  # OK -- target field traces to b, a non-owned parameter
-  iterate: function {b: this.borrow} outx MyIter is {
-    return MyIter target: b.private
-  }
+#code language=zerolang expect=E0200: """
+  MyIter: class { target: container.private.view }
 
-  # ERROR -- a local is stored in a non-owned field
-  bad_iterate: function {b: this.borrow} outx MyIter is {
-    tmp: container x: 1
-    return MyIter target: tmp.private
+  container: class { x: i64 } as {
+      # OK -- target field traces to b, a non-owned parameter
+      iterate: function {b: this.borrow} outx MyIter is {
+          return (MyIter target: b.private)
+      }
+
+      # ERROR -- a local is stored in a non-owned field
+      bad_iterate: function {b: this.borrow} outx MyIter is {
+          tmp: container x: 1
+          return (MyIter target: tmp.private)
+      }
   }
   """
 
@@ -1739,16 +1778,20 @@ that value on, the pin chain must be maintained. Each link is an #~"outx"
 declaration, and the compiler verifies that each connects to a non-owned
 parameter.
 
-#code language=zerolang check=none: """
+#code language=zerolang: """
+  grandchild: class { n: i64 }
+  child: class { grandchild: grandchild }
+  MyClass: class { child: child }
+
   # OK -- both functions lock their input and return a reference
   inner: function {t: MyClass.borrow} outx child.borrow is {
-    return t.child
+      return t.child
   }
 
   outer: function {t: MyClass.borrow} outx grandchild.borrow is {
-    x: inner t         # x borrows from t, pin on t
-    y: x.grandchild    # y borrows from x
-    return y            # OK: pin chain traces to t which is non-owned
+      x: inner t         # x borrows from t, pin on t
+      y: x.grandchild    # y borrows from x
+      return y           # OK: pin chain traces to t which is non-owned
   }
   """
 
@@ -1770,7 +1813,7 @@ that cover most code.
 
   # Passing to a function: borrowed (copied) by default
   print_point: function {pt: point} is {
-    print "\{pt.x}, \{pt.y}"
+      print "\{pt.x}, \{pt.y}"
   }
   print_point p        # p is copied into the function, p still valid
   """
@@ -1784,13 +1827,13 @@ that cover most code.
 
   # Reftype default: borrow. peek does not take ownership.
   peek: function {b: Crate} out i64 is {
-    return b.value
+      return b.value
   }
   v: peek a                        # a is borrowed, still valid after call
 
   # Explicit .take transfers ownership. a is invalid after this line.
   consume: function {b: Crate.take} is {
-    print b.label
+      print b.label
   }
   consume a                        # a is implicitly taken (ownership transferred)
   # a is invalid here -- compile error if used
@@ -1801,11 +1844,12 @@ that cover most code.
 
   # Borrow with lock: return a reference into the locked parameter
   peek_label: function {b: Crate.borrow} outx String.borrow is {
-    return b.label
+      return b.label
   }
   c: Crate label: "gamma" value: 3
   s: peek_label c                  # s borrows from c, c is locked
   print s                          # OK
+
   # c cannot be used here (locked by s)
   # when s falls out of scope, c is unlocked
   """
@@ -1867,22 +1911,22 @@ An iterator system has three components:
 The canonical class-based iterator (also in
 #~"examples/listiter.z"):
 
-#code language=zerolang check=none: """
+#code language=zerolang: """
   # --- Container ---
   Bag: class {
-    a: i64
-    b: i64
-    c: i64
-    count: i64
+      a: i64
+      b: i64
+      c: i64
+      count: i64
   } as {
-    public: unit { :count :iterate }
+      public: unit { :count :iterate }
 
-    # Factory method: locks 'this', returns an owned iterator.
-    # `outx` moves the lock on 'this' to the returned iterator, whose
-    # non-owned field points into it.
-    iterate: function {b: this.borrow} outx BagIter is {
-      return BagIter target: b.private
-    }
+      # Factory method: locks 'this', returns an owned iterator.
+      # `outx` moves the lock on 'this' to the returned iterator, whose
+      # non-owned field points into it.
+      iterate: function {b: this.borrow} outx BagIter is {
+          return (BagIter.create target: b.private)
+      }
   }
 
   # --- Iterator (class) ---
@@ -1890,48 +1934,48 @@ The canonical class-based iterator (also in
   # to the container's private namespace for the iterator's lifetime.
   # The class is single-owner: nobody can copy it, so the lock is safe.
   BagIter: class {
-    pos: i64
-    max: i64
-    target: Bag.private.view
+      pos: i64
+      max: i64
+      target: Bag.private.view
   } as {
-    create: function {target: Bag.private.view} outx this is {
-      return (meta.create pos: 0 max: 3 target: target)
-    }
-
-    # Returns an owned i64 (copy from container).
-    call: function {it: this} out (optionval t: i64) is {
-      if it.pos < it.max then {
-        if it.pos == 0 then {
-          it.pos = it.pos + 1
-          return (optionval.some it.target.a)
-        }
-        if it.pos == 1 then {
-          it.pos = it.pos + 1
-          return (optionval.some it.target.b)
-        }
-        it.pos = it.pos + 1
-        return (optionval.some it.target.c)
+      create: function {target: Bag.private.view} outx this is {
+          return (meta.create pos: 0 max: 3 :target)
       }
-      return (optionval.none i64)
-    }
+
+      # Returns an owned i64 (copy from container).
+      call: function {it: this} out (optionval t: i64) is {
+          if it.pos < it.max then {
+              if it.pos == 0 then {
+                  it.pos = it.pos + 1
+                  return (optionval.some it.target.a)
+              }
+              if it.pos == 1 then {
+                  it.pos = it.pos + 1
+                  return (optionval.some it.target.b)
+              }
+              it.pos = it.pos + 1
+              return (optionval.some it.target.c)
+          }
+          return (optionval.none i64)
+      }
   }
 
   # --- Usage ---
   main: function is {
-    b: Bag a: 10 b: 20 c: 30 count: 3
+      b: Bag a: 10 b: 20 c: 30 count: 3
 
-    # 'with' creates the iterator and scopes its lifetime.
-    # The plain 'for' binding calls it on each iteration: read bare,
-    # an iterator is its call.
-    with iter: Bag.iterate b: b do for x: iter loop {
-      print "iter: \{x}"
-    }
+      # 'with' creates the iterator and scopes its lifetime.
+      # The plain 'for' binding calls it on each iteration: read bare,
+      # an iterator is its call.
+      with iter: b.iterate do for x: iter loop {
+          print "iter: \{x}"
+      }
 
-    # After the with/for:
-    # - iter fell out of scope (class destroyed)
-    # - lock on b released
-    # - b is available again
-    print "Bag count: \{b.count}"
+      # After the with/for:
+      # - iter fell out of scope (class destroyed)
+      # - lock on b released
+      # - b is available again
+      print "Bag count: \{b.count}"
   }
   """
 
@@ -1943,37 +1987,42 @@ loop, and is then walked by the plain binding, which calls it every iteration
 answers one, or a container whose #~"iterate" it calls (it creates the hidden
 binding itself). The explicit form is:
 
-#code language=zerolang check=none:
-  with iter: container.iterate c: c do for x: iter loop { ... }
+#code language=zerolang: """
+  xs: ListVal t: i64
+  xs.append from: 1
+  with iter: xs.iterate do for x: iter loop print "\{x}"
+  """
 
 The pin lifecycle step by step, for a readonly stdlib walk over a list
 #~"xs":
 
-#code language=zerolang check=none: """
+#code language=zerolang: """
+  xs: List String
+  xs.append from: "a".string
   with iter: xs.iterate do {
-    # iter: OWNED iterator on caller's stack
-    # xs: pinned SHARED by iter (via its non-owned field)
-    # readers on xs (length, get, another iterate) stay legal
-    # while iter is alive; writers are refused
+      # iter: OWNED iterator on caller's stack
+      # xs: pinned SHARED by iter (via its non-owned field)
+      # readers on xs (length, get, another iterate) stay legal
+      # while iter is alive; writers are refused
 
-    for x: iter loop {
-      # Entry:
-      #   iter.call is invoked (iter is the receiver: read bare, the
-      #     iterator is its call)
-      #   exclusive lock on iter during the call
-      #   result checked -- the call returns (OptionView of), a
-      #     borrowed view; none terminates the loop
-      #   x: READONLY borrowed view of the container's element,
-      #     pinning iter while it lives (for a valtype element x
-      #     reads as the value, but stays readonly)
-      #   call-scoped lock on iter released (call complete)
+      for x: iter loop {
+          # Entry:
+          #   iter.call is invoked (iter is the receiver: read bare, the
+          #     iterator is its call)
+          #   exclusive lock on iter during the call
+          #   result checked -- the call returns (OptionView of), a
+          #     borrowed view; none terminates the loop
+          #   x: READONLY borrowed view of the container's element,
+          #     pinning iter while it lives (for a valtype element x
+          #     reads as the value, but stays readonly)
+          #   call-scoped lock on iter released (call complete)
 
-      print x
+          print x
 
-      # End of loop body:
-      #   x falls out of scope -- its pin on iter is released
-      #   next iteration begins -- iter.call invoked again
-    }
+          # End of loop body:
+          #   x falls out of scope -- its pin on iter is released
+          #   next iteration begins -- iter.call invoked again
+      }
   }
   # iter falls out of scope:
   #   class is destroyed
@@ -2070,7 +2119,7 @@ writable borrow into the container, and a readonly receiver must not hand
 out a writable alias.
 
 #code language=zerolang: """
-  m: (Map String V: String)
+  m: Map String V: String
   m.set key: "a".string value: "x".string
   m.set key: "b".string value: "y".string
 
@@ -2082,12 +2131,15 @@ out a writable alias.
   ) case some then {
       kept: g1.copy                # OK: copy to keep
       alias: g1                    # OK: a second name, borrowed
+
       # stolen: g1.take            # E0200: cannot move payload out of a view
   } case none then {}
   # m.set key: "c" ...             # E0200: writer while g1/g2 live
   """
 
-#code language=zerolang check=none: """
+#code language=zerolang expect=E0200: """
+  m: Map String V: String
+  m.set key: "a".string value: "x".string
   with it: m.iterateItems do for e: it loop {
       v: m.get key: e.key.copy     # E0200: m is exclusively locked by 'it'
   }
