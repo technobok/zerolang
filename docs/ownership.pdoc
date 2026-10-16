@@ -902,23 +902,19 @@ variables (ending the borrow), whereas #~".take" on a borrowed variable is alway
 an error.
 
 
-#--: Ownership on Generic Arguments
+#--: Ownership and Generic Types
 
-Ownership specifiers apply uniformly to every argument position in
-zerolang, including #b:"generic arguments at type-use sites". When
-you write #~"(Foo of: T.take)" or a generator's #~"out T.take",
-the #~".take" is a real ownership annotation -- not silently
-stripped.
+A type argument names a type and nothing more: it carries no ownership
+marker. Write #~"(List T: String)"; a marked argument such as
+#~"(List T: String.take)" is refused (#~"E0400": the argument does not name a
+type). How an instance holds or lends a value of its parameter is the
+template's to say, with the markers on its own members -- #~"item: T.borrow",
+#~"out T.take" -- and every instance follows them.
 
-#---: Default rule
-
-Generic arguments follow the same default-borrow rule as ordinary
-function parameters: a generic argument with no ownership suffix
-defaults to #~".borrow". #~".take" must be explicit.
-
-For valtypes, ownership annotations are no-ops at the physical
-level: #~".borrow" copies and #~".take" is the same operation, so
-all three forms (bare, #~".borrow", #~".take") behave identically.
+#code language=zerolang expect=E0400: """
+  # refused: a type argument carries no ownership marker
+  count: function {xs: (List T: String.take)} out u64 is { return xs.length }
+  """
 
 #---: A generator's element and per-call input
 
@@ -937,54 +933,6 @@ and is valid only for one yield window; using #~"name" past the next
 #~"yield" is a compile error. To persist the resumed value across
 yields, declare the input #~"U.take" -- the generator then owns the value
 for its lifetime.
-
-#---: Strict consistency for user-defined generic types
-
-When you specify an ownership suffix on a generic argument of a
-user-defined generic type, the compiler checks that every body-use
-of that generic parameter has the same effective ownership. The
-walk inspects each method's parameter and return type. If any use
-disagrees with the user-specified annotation, the call is a compile
-error pointing at the suffix and listing the conflicting uses.
-
-#code language=zerolang check=none: """
-  # Single-use generic: 'T' appears only in .borrow position
-  Sink: class { tag: i64 } as {
-      T: AnyRef.generic
-      inspect: function {item: T.borrow} is { }
-  }
-
-  use_ok: function {s: (Sink T: String.borrow)} is { }
-                            # ^ matches Sink.inspect's .borrow — OK
-
-  use_err: function {s: (Sink T: String.take)} is { }
-                            # ^ conflicts with Sink.inspect's .borrow — error
-  """
-
-For heterogeneous-use generics (a type whose generic parameter
-appears in both #~".borrow" and #~".take" positions inside the
-body), no annotation passes the check. Users write the bare form
-and each use site applies its own default. The stdlib #~"List" and
-#~"Map" fall into this category -- write #~"(List T: String)",
-not #~"(List T: String.take)".
-
-#---: Aliasing for repeated patterns
-
-When the same ownership-annotated iterator return type appears in
-multiple generator signatures, give it a unit-level name and reuse
-the alias. Unit-level instantiation creates a compile-time alias
-(see the generic-units section of
-[#> to=./spec.html: the language specification]).
-
-#code language=zerolang: """
-  Gen1: generator as {
-      call: function out String.take is { yield "a".string }
-  }
-
-  Gen2: generator { n: i64 } as {
-      call: function out String.take is { yield "n=\{this.n}" }
-  }
-  """
 
 
 #--: Pinning and Locks

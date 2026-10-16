@@ -139,15 +139,9 @@ Table of Contents</div>
 </li>
 </ul>
 </li>
-<li><a href="#ownership-on-generic-arguments">Ownership on Generic Arguments</a>
+<li><a href="#ownership-and-generic-types">Ownership and Generic Types</a>
 <ul>
-<li><a href="#default-rule">Default rule</a>
-</li>
 <li><a href="#a-generator-s-element-and-per-call-input">A generator's element and per-call input</a>
-</li>
-<li><a href="#strict-consistency-for-user-defined-generic-types">Strict consistency for user-defined generic types</a>
-</li>
-<li><a href="#aliasing-for-repeated-patterns">Aliasing for repeated patterns</a>
 </li>
 </ul>
 </li>
@@ -995,20 +989,16 @@ print "h dropped -- no 'with' nesting needed"</code></pre>
 for destroying an owned value. <code>.drop</code> additionally works on borrowed
 variables (ending the borrow), whereas <code>.take</code> on a borrowed variable is always
 an error.</p>
-<h2 id="ownership-on-generic-arguments"><a href="#ownership-on-generic-arguments">7. Ownership on Generic Arguments</a></h2>
-<p>Ownership specifiers apply uniformly to every argument position in
-zerolang, including <strong>generic arguments at type-use sites</strong>. When
-you write <code>(Foo of: T.take)</code> or a generator's <code>out T.take</code>,
-the <code>.take</code> is a real ownership annotation -- not silently
-stripped.</p>
-<h3 id="default-rule"><a href="#default-rule">7.1. Default rule</a></h3>
-<p>Generic arguments follow the same default-borrow rule as ordinary
-function parameters: a generic argument with no ownership suffix
-defaults to <code>.borrow</code>. <code>.take</code> must be explicit.</p>
-<p>For valtypes, ownership annotations are no-ops at the physical
-level: <code>.borrow</code> copies and <code>.take</code> is the same operation, so
-all three forms (bare, <code>.borrow</code>, <code>.take</code>) behave identically.</p>
-<h3 id="a-generator-s-element-and-per-call-input"><a href="#a-generator-s-element-and-per-call-input">7.2. A generator's element and per-call input</a></h3>
+<h2 id="ownership-and-generic-types"><a href="#ownership-and-generic-types">7. Ownership and Generic Types</a></h2>
+<p>A type argument names a type and nothing more: it carries no ownership
+marker. Write <code>(List T: String)</code>; a marked argument such as
+<code>(List T: String.take)</code> is refused (<code>E0400</code>: the argument does not name a
+type). How an instance holds or lends a value of its parameter is the
+template's to say, with the markers on its own members -- <code>item: T.borrow</code>,
+<code>out T.take</code> -- and every instance follows them.</p>
+<pre><code class="language-zerolang"># refused: a type argument carries no ownership marker
+count: function {xs: (List T: String.take)} out u64 is { return xs.length }</code></pre>
+<h3 id="a-generator-s-element-and-per-call-input"><a href="#a-generator-s-element-and-per-call-input">7.1. A generator's element and per-call input</a></h3>
 <p>A generator reads ownership off its <code>call</code>. Its element is yielded
 OWNED -- a reftype's moved out in an <code>Option</code>, a valtype's copied -- for
 a bare <code>out T</code> and an <code>out T.take</code> alike; a <code>.borrow</code> or <code>.view</code>
@@ -1023,43 +1013,6 @@ and is valid only for one yield window; using <code>name</code> past the next
 <code>yield</code> is a compile error. To persist the resumed value across
 yields, declare the input <code>U.take</code> -- the generator then owns the value
 for its lifetime.</p>
-<h3 id="strict-consistency-for-user-defined-generic-types"><a href="#strict-consistency-for-user-defined-generic-types">7.3. Strict consistency for user-defined generic types</a></h3>
-<p>When you specify an ownership suffix on a generic argument of a
-user-defined generic type, the compiler checks that every body-use
-of that generic parameter has the same effective ownership. The
-walk inspects each method's parameter and return type. If any use
-disagrees with the user-specified annotation, the call is a compile
-error pointing at the suffix and listing the conflicting uses.</p>
-<pre><code class="language-zerolang"># Single-use generic: 'T' appears only in .borrow position
-Sink: class { tag: i64 } as {
-    T: AnyRef.generic
-    inspect: function {item: T.borrow} is { }
-}
-
-use_ok: function {s: (Sink T: String.borrow)} is { }
-                          # ^ matches Sink.inspect's .borrow &#x2014; OK
-
-use_err: function {s: (Sink T: String.take)} is { }
-                          # ^ conflicts with Sink.inspect's .borrow &#x2014; error</code></pre>
-<p>For heterogeneous-use generics (a type whose generic parameter
-appears in both <code>.borrow</code> and <code>.take</code> positions inside the
-body), no annotation passes the check. Users write the bare form
-and each use site applies its own default. The stdlib <code>List</code> and
-<code>Map</code> fall into this category -- write <code>(List T: String)</code>,
-not <code>(List T: String.take)</code>.</p>
-<h3 id="aliasing-for-repeated-patterns"><a href="#aliasing-for-repeated-patterns">7.4. Aliasing for repeated patterns</a></h3>
-<p>When the same ownership-annotated iterator return type appears in
-multiple generator signatures, give it a unit-level name and reuse
-the alias. Unit-level instantiation creates a compile-time alias
-(see the generic-units section of
-<a href="./spec.html">the language specification</a>).</p>
-<pre><code class="language-zerolang">Gen1: generator as {
-    call: function out String.take is { yield "a".string }
-}
-
-Gen2: generator { n: i64 } as {
-    call: function out String.take is { yield "n=\{this.n}" }
-}</code></pre>
 <h2 id="pinning-and-locks"><a href="#pinning-and-locks">8. Pinning and Locks</a></h2>
 <p>A non-owned binding or argument pins its source: SHARED for every
 reference -- a <code>.view</code> and a <code>.borrow</code> alike -- and EXCLUSIVE only for the
