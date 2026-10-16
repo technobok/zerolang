@@ -3658,7 +3658,8 @@ family: data {
     result: "Result"
     optionval: "optionval"
     resultval: "resultval"
-    # the view unions, adjacent: isViewUnionOriginOf tests the span
+    # the view unions, adjacent: isViewUnionOriginOf tests the span, and the
+    # two writable ones close it
     optionView: "OptionView"
     optionViewVal: "OptionViewVal"
     optionMut: "OptionMut"
@@ -10852,6 +10853,18 @@ emitMapMethodCall: function {
         bn: bn.stringView
         label: zast.wellKnown.slot.wkKey
         viewForm: true
+        stringKey: (mapKeyIsString :symtab :ctx monoId: bt)
+        :facts
+    )
+    if mnId == zast.wellKnown.slot.wkGetMut then return (emitKeyedProbe
+        :ast
+        :symtab
+        :ctx
+        :call
+        fnC: "\{cb}_getMut"
+        bn: bn.stringView
+        label: zast.wellKnown.slot.wkKey
+        viewForm: false
         stringKey: (mapKeyIsString :symtab :ctx monoId: bt)
         :facts
     )
@@ -26712,9 +26725,9 @@ emitObjIterPayload: function {
     buf: String.borrow
 } out spillkind is {
     if (isViewUnionOriginOf :symtab :ctx tid: ovid) then {
-        # borrowed-view yield: scalar payloads copy by value; aggregate
-        # payloads bind a borrowed pointer (no copy -> the shared fields
-        # are never double-freed).
+        # borrowed-view yield: a readonly view of a scalar or valtype copies
+        # by value; everything else binds a borrowed pointer (no copy -> the
+        # shared fields are never double-freed).
         payElemTid: ((symtab.typing.declChildOfId
             parentTypeId: ovid
             nameId: zast.wellKnown.slot.wkSome
@@ -26736,7 +26749,12 @@ emitObjIterPayload: function {
         if payElemTid.isZero.not then payRef = (symtab.reg.isReftypeOf
             tid: payElemTid
         )
-        if payScalarC.length > 0 when payRef.not then {
+        # An OptionMut yield (`iterateMut`) is written through, so even a
+        # valtype payload aliases: a copy would take the writes. Its two rows
+        # close the view-union span.
+        payWrites: (monoFamilyOf :symtab :ctx tid: ovid) >= family.slot.optionMut
+        copyOut: payRef.not and payWrites.not
+        if payScalarC.length > 0 when copyOut then {
             vsl: "_iter\{mN}.data"
             dv: armCellDeref pc: payC slot: vsl.stringView
             l3v: "\{ind}    \{payC} \{lbl} = \{dv};\n"
@@ -36809,6 +36827,18 @@ emitMapMono: function {
         t15: applyTmpl text: t14 key: "REMOVE_BODY" val: removeBody.stringView
         buf.append t15
         buf.append "\n"
+        (emitMapGetMut
+            :ast
+            :symtab
+            :ctx
+            :monoId
+            :runtimeDir
+            file: "z_MapMut.c.tmpl"
+            nm: nm.stringView
+            keyHole: "KEY_ARG_T"
+            keyT: keyArgT.stringView
+            :buf
+        )
     }
     if kkind == 1 then {
         # String-keyed maps: a view-keyed get. The temporary String header
@@ -36939,13 +36969,15 @@ emitIdMapMono: function {
     t: applyTmpl text: t7 key: "GET_BODY" val: getBody.stringView
     buf.append t
     buf.append "\n"
-    (emitIdMapGetMut
+    (emitMapGetMut
         :ast
         :symtab
         :ctx
         :monoId
         :runtimeDir
+        file: "z_IdMapMut.c.tmpl"
         nm: nm.stringView
+        keyHole: "KEY_T"
         keyT: keyT.stringView
         :buf
     )
@@ -36975,18 +37007,21 @@ emitIdMapMono: function {
     )
 }
 
-# emitIdMapGetMut -- the in-place value reference, from its own template.
-# `getMut` has no well-known name id, so its declared return -- an OptionView
-# over the VALUE in both families, where `get`'s differs between them -- is
-# resolved through the interned name.
-emitIdMapGetMut: function {
+# emitMapGetMut -- a map's in-place value reference, from its own template
+# (`file`, z_MapMut or z_IdMapMut): emitted only when `getMut` resolved. Its
+# declared return -- an OptionMut over the VALUE in both value families, where
+# `get`'s differs between them -- names the C type; `keyHole` is the template's
+# key placeholder, filled with `keyT`.
+emitMapGetMut: function {
     # the arm names
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     monoId: ztypes.tid
     runtimeDir: StringView
+    file: StringView
     nm: StringView
+    keyHole: StringView
     keyT: StringView
     buf: String.borrow
 } is {
@@ -36997,13 +37032,13 @@ emitIdMapGetMut: function {
     )
     if gmId.isZero then return
     gmv: cbaseNoPrefix :ctx tid: gmId
-    pm: "\{runtimeDir}/z_IdMapMut.c.tmpl"
+    pm: "\{runtimeDir}/\{file}"
     rawm: readTemplateCached :ctx path: pm.stringView
     if rawm.length == 0 then return
     m1: applyTmpl text: rawm key: "NAME" val: nm
-    m2: applyTmpl text: m1 key: "KEY_T" val: keyT
-    m3: applyTmpl text: m2 key: "OPTIONVIEW_V" val: gmv.stringView
-    m4: applyOptionTags :ast :ctx :symtab text: m3 key: "OPTIONVIEW_V" tid: gmId
+    m2: applyTmpl text: m1 key: keyHole val: keyT
+    m3: applyTmpl text: m2 key: "OPTIONMUT_V" val: gmv.stringView
+    m4: applyOptionTags :ast :ctx :symtab text: m3 key: "OPTIONMUT_V" tid: gmId
     buf.append m4
     buf.append "\n"
 }

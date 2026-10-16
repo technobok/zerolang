@@ -240,7 +240,7 @@ ListRef: class is native as {
     iterateReverse: function {t: this.view} outx (ListIter :T) is native
     # the mutable walk: an exclusive receiver, so the elements it yields may
     # be written through. `iterate` is the readonly twin (see getMut/get).
-    iterateMut: function {t: this.borrow} outx (ListIter :T) is native
+    iterateMut: function {t: this.borrow} outx (ListIterMut :T) is native
     # an empty ListRef, reserving `capacity` elements up front when one is given
     create: function {capacity: 0.u64} out type is native
 }
@@ -332,7 +332,7 @@ ListVal: class is native as {
     iterateReverse: function {t: this.view} outx (ListIterVal :t) is native
     # the mutable walk over a ListVal: an exclusive receiver, so a COMPOUND
     # element's children may be written in place through it
-    iterateMut: function {t: this.borrow} outx (ListIterVal :t) is native
+    iterateMut: function {t: this.borrow} outx (ListIterMutVal :t) is native
     # an owned duplicate: a fresh buffer holding the same elements, sharing no
     # storage with the source, and each frees its own. Every element is a
     # VALTYPE, so the elements copy as bytes and nothing is left shared --
@@ -535,6 +535,10 @@ MapRR: class is native as {
     # the value for `key` as a borrowed OptionView into the entry, so it PINS
     # the MapRR until the view dies
     get: function {t: this.view key: K.view} outx OptionView V is native
+    # the value for `key` as a WRITABLE reference into the entry, so it pins
+    # the MapRR exclusively until the reference dies. Only the value is reached:
+    # the key, whose hash places the entry, is not
+    getMut: function {t: this.borrow key: K.view} outx OptionMut V is native
     # insert or overwrite the entry for `key` in a MapRR; the key is TAKEN
     set: function {:this key: K.take value: V.take} is native
     # whether `key` has an entry in the MapRR, without producing the value or
@@ -576,6 +580,10 @@ MapRV: class is native as {
     # the value for `key` as an optionval -- a COPY, so it takes no lock on the
     # MapRV at all
     get: function {t: this.view key: K.view} out optionval v is native
+    # the value for `key` as a WRITABLE reference into the entry, so it pins
+    # the MapRV exclusively until the reference dies. Only the value is reached:
+    # the key, whose hash places the entry, is not
+    getMut: function {t: this.borrow key: K.view} outx OptionMutVal v is native
     # insert or overwrite the entry for `key` in a MapRV; the key is TAKEN
     set: function {:this key: K.take value: v} is native
     # whether `key` has an entry in the MapRV, without producing the value or
@@ -611,6 +619,10 @@ MapVR: class is native as {
     # the value for `key` as a borrowed OptionView into the entry, so it PINS
     # the MapVR until the view dies
     get: function {t: this.view key: k} outx OptionView V is native
+    # the value for `key` as a WRITABLE reference into the entry, so it pins
+    # the MapVR exclusively until the reference dies. Only the value is reached:
+    # the key, whose hash places the entry, is not
+    getMut: function {t: this.borrow key: k} outx OptionMut V is native
     # insert or overwrite the entry for `key` in a MapVR; the key is copied in,
     # being a valtype
     set: function {:this key: k value: V.take} is native
@@ -646,6 +658,10 @@ MapVV: class is native as {
     # the value for `key` as an optionval -- a COPY, so it takes no lock on the
     # MapVV at all
     get: function {t: this.view key: k} out optionval v is native
+    # the value for `key` as a WRITABLE reference into the entry, so it pins
+    # the MapVV exclusively until the reference dies. Only the value is reached:
+    # the key, whose hash places the entry, is not
+    getMut: function {t: this.borrow key: k} outx OptionMutVal v is native
     # insert or overwrite the entry for `key` in a MapVV; the key is copied in,
     # being a valtype
     set: function {:this key: k value: v} is native
@@ -986,13 +1002,11 @@ IdMapR: class is native as {
     get: function {t: this.view key: k} outx OptionView V is native
     # insert or overwrite the entry for the scalar `key` in an IdMapR
     set: function {:this key: k value: V.take} is native
-    # the mutable twin of `get`, and the reason a Map has none: a Map's slot
-    # depends on a hash OF the key, so writing through a view would strand the
-    # entry in the wrong bucket. Here the slot depends on the key alone, which
-    # a mutable view of the VALUE does not touch. What it buys is the value
-    # family: `get` there copies out, so an update needs `set`; through this
-    # the entry is written in place.
-    getMut: function {t: this.borrow key: k} outx OptionView V is native
+    # the mutable twin of `get`: a WRITABLE reference to the VALUE, which the
+    # slot does not depend on. What it buys is the value family: `get` there
+    # copies out, so an update needs `set`; through this the entry is written
+    # in place.
+    getMut: function {t: this.borrow key: k} outx OptionMut V is native
     # whether the scalar `key` has an entry in the IdMapR
     has: function {t: this.view key: k} out bool is native
     # positional reads over the dense, insertion-ordered entries. Position is a
@@ -1031,13 +1045,11 @@ IdMapV: class is native as {
     get: function {t: this.view key: k} out optionval v is native
     # insert or overwrite the entry for the scalar `key` in an IdMapV
     set: function {:this key: k value: v} is native
-    # the mutable twin of `get`, and the reason a Map has none: a Map's slot
-    # depends on a hash OF the key, so writing through a view would strand the
-    # entry in the wrong bucket. Here the slot depends on the key alone, which
-    # a mutable view of the VALUE does not touch. What it buys is the value
-    # family: `get` there copies out, so an update needs `set`; through this
-    # the entry is written in place.
-    getMut: function {t: this.borrow key: k} outx OptionViewVal v is native
+    # the mutable twin of `get`: a WRITABLE reference to the VALUE, which the
+    # slot does not depend on. What it buys is the value family: `get` there
+    # copies out, so an update needs `set`; through this the entry is written
+    # in place.
+    getMut: function {t: this.borrow key: k} outx OptionMutVal v is native
     # whether the scalar `key` has an entry in the IdMapV
     has: function {t: this.view key: k} out bool is native
     # the positional pair, as IdMapR declares them; only `valueAt`'s return

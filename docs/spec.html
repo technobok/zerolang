@@ -1730,8 +1730,9 @@ again. A variable holding an iterator (a <code>call</code> and no
 <code>iterate</code>), read bare, is called (once, here), so it is walked by
 the plain form.</li>
 <li><code>for x: E</code> -- E is evaluated at <em><strong>every</strong></em> iteration, and must itself
-answer <code>Option(t)</code>, <code>optionval(t)</code>, <code>OptionView(t)</code> or
-<code>OptionViewVal(t)</code>. A named
+answer <code>Option(t)</code>, <code>optionval(t)</code> or a view union
+(<code>OptionView(t)</code>, <code>OptionViewVal(t)</code>, <code>OptionMut(t)</code>,
+<code>OptionMutVal(t)</code>). A named
 iterator read bare is its <code>call</code>, so the plain form walks it:
 <code>with it: xs.iterate do for x: it loop</code>.</li>
 </ul>
@@ -1746,10 +1747,13 @@ The ownership of 'var' depends on the wrapper kind:</p>
 <ul>
 <li><code>Option(t).some</code> - 'var' is the owned reftype <code>t</code></li>
 <li><code>optionval(t).some</code> - 'var' is the owned valtype <code>t</code> (copied)</li>
-<li><code>OptionView(t).some</code> / <code>OptionViewVal(t).some</code> - 'var' is a borrowed view of <code>t</code>,
+<li><code>OptionView(t).some</code> / <code>OptionViewVal(t).some</code> - 'var' is a readonly view of <code>t</code>,
 lifetime-tied to the lock its producer holds on its source. Storing
 'var' to an aggregate field or returning it from the loop is a
 compile error; use <code>.copy</code> first.</li>
+<li><code>OptionMut(t).some</code> / <code>OptionMutVal(t).some</code> - the same, but
+writable: 'var' refers to the element in place (an <code>iterateMut</code>
+walk), so a write through it reaches the container.</li>
 </ul>
 <p>A single <code>loop</code> clause may then follow. The body of this clause will be
 executed if all conditions succeed. The <code>loop</code> may contain a <code>continue</code> (early
@@ -1849,8 +1853,8 @@ with it: xs.iterate do for it.call loop {
 <p>The header says how a binding's value is evaluated; the compiler never
 chooses by the value's type. Call a type "iterator-shaped" if it has a
 <code>.call</code> method whose only required parameter is <code>:this</code> and whose return
-type is <code>Option(t)</code>, <code>optionval(t)</code>, <code>OptionView(t)</code> or
-<code>OptionViewVal(t)</code> for some <code>t</code>.
+type is <code>Option(t)</code>, <code>optionval(t)</code> or a view union (<code>OptionView(t)</code>,
+<code>OptionViewVal(t)</code>, <code>OptionMut(t)</code>, <code>OptionMutVal(t)</code>) for some <code>t</code>.
 Let T be the type the binding's value evaluates to.</p>
 <ol>
 <li><strong>Rule 1 (each, through iterate):</strong> <code>for each x: E</code> where T
@@ -1872,7 +1876,7 @@ of an expression that produces an iterator: a construction such as
 bare, and is walked by Rule 3 instead (<code>for x: it</code>), or kept with a
 marker (<code>for each x: it.borrow</code>).</li>
 <li><strong>Rule 3 (plain):</strong> <code>for x: E</code> where T is <code>Option(t)</code>,
-<code>optionval(t)</code>, <code>OptionView(t)</code> or <code>OptionViewVal(t)</code>. E is evaluated at every
+<code>optionval(t)</code> or a view union. E is evaluated at every
 iteration and its value is the per-iteration value. A function name
 is a call there as anywhere, and so is a function <em><strong>reference</strong></em> read
 bare, so <code>for n: supplier loop</code> invokes <code>supplier</code> before each
@@ -2563,18 +2567,34 @@ resultval: variant {
     e: anyval.generic
 }
 
-# OptionView types for borrowed views (used by container iterators),
-# one per family: a view of a valtype is still a reference, so the two
-# share a layout and differ only in their bound. Built on top of
+# OptionView types for readonly borrowed views (used by container readers
+# and iterators), one per family: a view of a valtype is still a reference,
+# so the two share a layout and differ only in their bound. Built on top of
 # non-owned union arms &#x2014; see "Non-owned union arms" above.
 OptionView: union {
+    none: null
+    some: T.view
+} as {
+    T: AnyRef.generic
+}
+
+OptionViewVal: union {
+    none: null
+    some: t.view
+} as {
+    t: anyval.generic
+}
+
+# their writable twins, handed back by the readers that may write in place
+# (getMut, the iterateMut walks): the same layout, a `.borrow` arm
+OptionMut: union {
     none: null
     some: T.borrow
 } as {
     T: AnyRef.generic
 }
 
-OptionViewVal: union {
+OptionMutVal: union {
     none: null
     some: t.borrow
 } as {
@@ -4432,7 +4452,11 @@ or <code>none</code> if absent -- the value's ownership transfers to the caller 
 key is destroyed. <code>get</code> differs by value family: on the reference-valued
 forms (<code>MapRR</code> / <code>MapVR</code>) it returns <code>(OptionView value)</code>, a borrowed
 view that pins the map; on the value-valued forms (<code>MapRV</code> / <code>MapVV</code>)
-it returns <code>(optionval value)</code>, a copy, with no pin.</p>
+it returns <code>(optionval value)</code>, a copy, with no pin. <code>getMut</code> is the same
+lookup for writing: every form returns <code>(OptionMut value)</code> /
+<code>(OptionMutVal value)</code>, a writable reference to the stored value that pins
+the map exclusively. The key is not reachable through it, so a write cannot
+move the entry's hash.</p>
 <p>Different key/value type combinations produce different monomorphized types.</p>
 <p>Iteration is in insertion order, and stable across runs. Hashing is seeded
 per process, which moves entries between buckets from run to run, but iteration
@@ -4730,7 +4754,8 @@ calls it.</p>
 <h4 id="iterators"><a href="#iterators">5.13.5. Iterators</a></h4>
 <p>An <strong>iterator</strong> in Zerolang is any type whose <code>.call</code> method takes only
 <code>:this</code> and returns one of <code>Option(t)</code>, <code>optionval(t)</code>,
-<code>OptionView(t)</code> or <code>OptionViewVal(t)</code>. <code>for each</code> drives an iterator by repeatedly
+<code>OptionView(t)</code>, <code>OptionViewVal(t)</code>, <code>OptionMut(t)</code> or <code>OptionMutVal(t)</code>.
+<code>for each</code> drives an iterator by repeatedly
 invoking <code>.call</code> until the result's tag is <code>none</code>.</p>
 <p>An iterator -- like any value whose type has a <code>.call</code> -- is <em><strong>called</strong></em>
 when read bare, as a function's name is: <code>v: it</code> binds its next value, a
@@ -4762,12 +4787,15 @@ Each iteration produces a fresh value and the loop body owns
 it for the iteration's duration.</li>
 <li><strong>Container iterators</strong> yield non-owning views into a source
 collection via <code>OptionView(t)</code> (<code>OptionViewVal(t)</code> over valtype
-elements). A plain <code>iterate</code> holds a
+elements), readonly. A plain <code>iterate</code> holds a
 <code>.view</code> (shared) reference into the source, so the container
 stays readable; <code>iterateMut</code> / <code>iterateItems</code> hold <code>.borrow</code>
-(exclusive). Each yielded value is a borrowed view, lifetime-tied
+(exclusive), and <code>iterateMut</code> yields through <code>OptionMut(t)</code>
+(<code>OptionMutVal(t)</code>), whose elements may be written in place. Each
+yielded value is a borrowed reference, lifetime-tied
 to the iterator's pin. Each container family has its own iterator
-template (<code>ListIter</code> / <code>ListIterVal</code>, <code>SetIter</code> /
+template (<code>ListIter</code> / <code>ListIterVal</code> and the <code>iterateMut</code>
+cursors <code>ListIterMut</code> / <code>ListIterMutVal</code>, <code>SetIter</code> /
 <code>SetIterVal</code>, the Map key/item iterators per form). The loop body
 cannot transfer ownership of a borrowed value (compile error;
 use <code>.copy</code> first).</li>

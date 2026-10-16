@@ -744,7 +744,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2223104
+ALLOC_BASELINE := 2229274
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1533,7 +1533,7 @@ VIEW_GUARD_PLACEHOLDER := z_List.c.tmpl=@@NAME@@:ListRef z_Map.c.tmpl=@@NAME@@:M
   z_Set.c.tmpl=@@NAME@@:SetRef,@@SETITER@@:SetIter \
   z_IdMap.c.tmpl=@@NAME@@:IdMapR \
   z_IdMapIter.c.tmpl=@@NAME@@:IdMapR,@@IDMAPITEMITER@@:IdMapItemIterR,@@IDMAPENTRY@@:IdMapEntryR \
-  z_IdMapMut.c.tmpl=@@NAME@@:IdMapR \
+  z_IdMapMut.c.tmpl=@@NAME@@:IdMapR z_MapMut.c.tmpl=@@NAME@@:MapRR \
   z_IdSet.c.tmpl=@@NAME@@:IdSet,@@IDSETITER@@:IdSetIter
 VIEW_GUARD_EMITTED := get:ListRef.get,ListView.get,SpanVal.get getMut:ListRef.getMut \
   slice:ListRef.slice,ListView.slice \
@@ -1586,15 +1586,15 @@ VIEW_GUARD_INLINE := Bytes.byteView:unemitted \
   MapEntryVR.key:MapEntry.key MapEntryVR.value:MapEntry.value \
   MapEntryVV.key:MapEntry.key MapEntryVV.value:MapEntry.value \
   IdMapEntryV.key:IdMapEntryR.key IdMapEntryV.value:IdMapEntryR.value \
-  MapRV.get:MapRR.get MapRV.set:MapRR.set MapRV.has:MapRR.has \
+  MapRV.get:MapRR.get MapRV.getMut:MapRR.getMut MapRV.set:MapRR.set MapRV.has:MapRR.has \
   MapRV.remove:MapRR.remove MapRV.iterate:MapRR.iterate \
   MapRV.iterateItems:MapRR.iterateItems \
   MapRV.length:inline MapRV.capacity:inline \
-  MapVR.get:MapRR.get MapVR.set:MapRR.set MapVR.has:MapRR.has \
+  MapVR.get:MapRR.get MapVR.getMut:MapRR.getMut MapVR.set:MapRR.set MapVR.has:MapRR.has \
   MapVR.remove:MapRR.remove MapVR.iterate:MapRR.iterate \
   MapVR.iterateItems:MapRR.iterateItems \
   MapVR.length:inline MapVR.capacity:inline \
-  MapVV.get:MapRR.get MapVV.set:MapRR.set MapVV.has:MapRR.has \
+  MapVV.get:MapRR.get MapVV.getMut:MapRR.getMut MapVV.set:MapRR.set MapVV.has:MapRR.has \
   MapVV.remove:MapRR.remove MapVV.iterate:MapRR.iterate \
   MapVV.iterateItems:MapRR.iterateItems \
   MapVV.length:inline MapVV.capacity:inline \
