@@ -66,7 +66,7 @@ SKIP     := mathutil genmath dissectlib
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: all check complexity-report style-lint-fast style-lint test ci ci-gates ci-corpus \
+.PHONY: all check complexity-report style-lint-fast style-lint test doc-check ci ci-gates ci-corpus \
 	test-math-arm64 test-sqlite-arm64 test-math-noasm test-portable-scalars docs-link-guard math-asm-guard \
 	bench-math bench-math-kernels test-clang test-tcc test-tcc-heavy readable-check build \
 	tcc zc zl zls regen-goldens regen-fmt-goldens regen-matrix matrix-guard regen-math-asm \
@@ -124,8 +124,9 @@ style-lint: bin/zl
 	  bin/zl lint --full --src $$d --system lib/system $$d/*.z || exit 1; done
 	bin/zl format --check $(FMTSCOPE)
 
-# out/ztestrunner -- the corpus runner (src/ztestrunner.z).
-$(BUILDDIR)/ztestrunner: bin/zc src/ztestrunner.z $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z)
+# out/ztestrunner -- the corpus runner (src/ztestrunner.z, and src/zdocblocks.z
+# for the doccode kind).
+$(BUILDDIR)/ztestrunner: bin/zc src/ztestrunner.z src/zdocblocks.z $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z)
 	@mkdir -p $(BUILDDIR)
 	bin/zc ztestrunner --src src --system lib/system --emit-c $(BUILDDIR)/ztestrunner.c
 	$(CC) $(CFLAGS) -o $(BUILDDIR)/ztestrunner $(BUILDDIR)/ztestrunner.c $(call ZLINKOF,$(BUILDDIR)/ztestrunner.c) -lm
@@ -134,6 +135,13 @@ $(BUILDDIR)/ztestrunner: bin/zc src/ztestrunner.z $(wildcard lib/system/*.z) $(w
 # built: without it those kinds count nothing and every ratchet reads zero.
 test: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --jobs $(NPROC)
+
+# doc-check -- the doccode kind alone: every zerolang example in docs/*.pdoc and
+# README.md emits with `zc emit --eager` (or fails as its expect= says) and is
+# laid out as zl fmt lays it, with check=none and unformatted blocks ratcheted in
+# tests/fixtures/doccode_baseline.txt. `make test` runs it too.
+doc-check: bin/zc bin/zl $(BUILDDIR)/ztestrunner
+	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --jobs $(NPROC) --doccode-only
 
 # ci -- every gate: the allocation ratchet first and alone, then the guards and
 # the heavy corpus (self-host ASan and the fixpoint) in parallel, then the seed

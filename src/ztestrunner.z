@@ -797,6 +797,7 @@ runnerWord: data {
     fHeavy: "--heavy"
     fSaveTemps: "--save-temps"
     fRegenLsp: "--regen-lsp"
+    fDoccodeOnly: "--doccode-only"
     fZc: "--zc"
     fCc: "--cc"
     fCcflags: "--ccflags"
@@ -845,6 +846,8 @@ Runner: class {
     saveTemps: bool
     # rewrite the LSP goldens from this run's answers instead of comparing
     regenLsp: bool
+    # run the doccode kind alone (`make doc-check`)
+    doccodeOnly: bool
     # the error-case directory
     errors: String
     # where the RUN cases' expected output lives
@@ -983,6 +986,340 @@ runArchCases: function {r: Runner} is {
     } else {
         r.passN = r.passN + 1
     }
+}
+
+# runDoccodeCases -- the DOCCODE kind: every zerolang example of docs/*.pdoc and
+# README.md (zdocblocks) is wrapped into a program and emitted with `zc emit
+# --eager`. An unmarked block must compile; an `expect=` block must fail, its
+# first error that code; a `check=none` block is not compiled. A checked block
+# that parses -- every one but an expect= of a syntax error (E00xx) -- must also
+# be laid out as `zl fmt` lays it. The skipped and the unformatted are counted
+# per page and ratcheted, exactly, against tests/fixtures/doccode_baseline.txt
+# as the arch kind's findings are. It never runs the C compiler, so it runs
+# once and not again under --cc-forward (test-clang, test-tcc).
+runDoccodeCases: function {r: Runner} is {
+    if r.ccFwdOn then return
+    # owned: a view into r would lock r for the whole kind
+    rootS: r.root.copy
+    root: rootS.stringView
+    pages: List String
+    docPages :root into: pages
+    blocks: List zdocblocks.DocBlock
+    for each pg: pages loop {
+        pgPath: "\{root}/\{pg.stringView}"
+        txt: slurp path: pgPath.stringView
+        zdocblocks.scanPage page: pg.stringView text: txt.stringView into: blocks
+    }
+    naming: zdocblocks.checkNames :blocks
+    dir: "\{r.tmp.stringView}/doccode"
+    io.mkdirp path: dir
+    pool: List PoolJob
+    # per block, the pool index of its emit and of its format check (-1: none)
+    emitAt: ListVal i64
+    fmtAt: ListVal i64
+    doccodeJobs :r :blocks :naming dir: dir.stringView :pool :emitAt :fmtAt
+    statuses: ListVal i32
+    failSteps: ListVal i64
+    runJobs jobs: pool maxJobs: r.jobsMax :statuses :failSteps
+    # per page: blocks skipped, blocks not laid out as zl fmt lays them
+    noneN: ListVal u64
+    fmtN: ListVal u64
+    for each pg: pages loop {
+        pg.drop
+        noneN.append from: 0
+        fmtN.append from: 0
+    }
+    bi: u64
+    for bi < blocks.length loop {
+        b: blocks.get i: bi
+        pi: pageIndex :pages page: b.page.stringView
+        if b.check.length > 0 when b.problem.length == 0 when (naming.get i: bi).length == 0 then {
+            noneN.set i: pi val: (noneN.get i: pi) + 1
+        } else {
+            (doccodeVerdict
+                :r
+                :b
+                naming: (naming.get i: bi).stringView
+                emitAt: (emitAt.get i: bi)
+                :statuses
+                dir: dir.stringView
+                :bi
+            )
+        }
+        fj: fmtAt.get i: bi
+        if fj >= 0 when (statuses.get i: fj.u64.orPanic) != 0 then {
+            fmtN.set i: pi val: (fmtN.get i: pi) + 1
+        }
+        bi = bi + 1
+    }
+    if (doccodeRatchet :pages :blocks :noneN :fmtN :fmtAt :statuses :root) then {
+        r.fails = r.fails + 1
+    } else {
+        r.passN = r.passN + 1
+    }
+}
+
+# doccodeJobs -- write each checked block's program, and the job that emits it
+# and the one that checks its layout, into the pool. A block that is skipped,
+# or whose arguments or names are wrong, gets neither.
+doccodeJobs: function {
+    r: Runner.view
+    blocks: (List zdocblocks.DocBlock).view
+    naming: (List String).view
+    dir: StringView
+    pool: List PoolJob
+    emitAt: ListVal i64
+    fmtAt: ListVal i64
+} is {
+    zl: "\{r.root.stringView}/bin/zl"
+    bi: u64
+    for bi < blocks.length loop {
+        b: blocks.get i: bi
+        emitAt.append from: -1
+        fmtAt.append from: -1
+        if b.problem.length == 0 when (naming.get i: bi).length == 0 when b.check.length == 0 then {
+            stem: doccodeStem :dir page: b.page.stringView :bi
+            prog: zdocblocks.wrapProgram code: (zdocblocks.programOf :blocks at: bi)
+            emitAt.set i: bi val: pool.length.i64.orPanic
+            progPath: stem.stringView.concat ".z"
+            pool.append (doccodeJob
+                :r
+                path: progPath.stringView
+                content: prog.stringView
+                tool: "emit"
+            )
+            # a syntax error lays nothing out
+            if (b.expect.stringView.startsWith "E00").not then {
+                own: zdocblocks.wrapProgram code: b.code
+                fmtAt.set i: bi val: pool.length.i64.orPanic
+                ownPath: stem.stringView.concat "_fmt.z"
+                pool.append (doccodeJob
+                    :r
+                    path: ownPath.stringView
+                    content: own.stringView
+                    tool: zl.stringView
+                )
+            }
+        }
+        bi = bi + 1
+    }
+}
+
+# doccodeStem -- the path a block's files start with: a unit name made of its
+# page and its place among all the blocks (`<dir>/spec_42`).
+doccodeStem: function {dir: StringView page: StringView bi: u64} out String is {
+    s: dir.string
+    s.append "/"
+    s.append (pageStem :page)
+    s.append "_"
+    s.append "\{bi}"
+    return s
+}
+
+# blockAt -- where a block is, as its FAIL line names it: page and line.
+blockAt: function {b: zdocblocks.DocBlock.view} out String is {
+    s: b.page.copy
+    s.append ":"
+    s.append "\{b.line}"
+    return s
+}
+
+# doccodeJob -- write `content` to `path` and the one-step job that checks it:
+# `zc emit --eager` when tool is "emit", else the zl at `tool` as `fmt --check`.
+# Either step's exit is data, read by the verdicts.
+doccodeJob: function {
+    r: Runner.view path: StringView content: StringView tool: StringView
+} out PoolJob is {
+    wr: io.writeText :path :content
+    if wr.err then print "FAIL(doccode) could not write \{path}"
+    argv: List String
+    errPath: "\{path}.err"
+    if tool.endsWith "emit" then {
+        argv.append from: r.zc.copy
+        argv.append from: "emit".string
+        argv.append from: path.string
+        argv.append from: "--eager".string
+        argv.append from: "--system".string
+        argv.append from: r.sys.copy
+        argv.append from: "-o".string
+        argv.append from: "/dev/null".string
+    } else {
+        argv.append from: tool.string
+        argv.append from: "fmt".string
+        argv.append from: "--check".string
+        argv.append from: path.string
+    }
+    steps: List PoolStep
+    steps.append (mkStep
+        :argv
+        cwd: ""
+        outPath: "/dev/null"
+        errPath: errPath.stringView
+        timeoutSecs: r.timeoutSecs
+        allowFail: true
+        zlinkFrom: ""
+    )
+    return (mkJob name: path :steps)
+}
+
+# doccodeVerdict -- one block that is not skipped: its argument or naming
+# problem, else its emit's verdict, reported as a FAIL or counted as a pass.
+doccodeVerdict: function {
+    r: Runner
+    b: zdocblocks.DocBlock.view
+    # what checkNames found, "" for nothing
+    naming: StringView
+    # the pool index of its emit
+    emitAt: i64
+    statuses: (ListVal i32).view
+    dir: StringView
+    bi: u64
+} is {
+    at: blockAt :b
+    problem: b.problem.copy
+    if problem.length == 0 then problem = naming.string
+    if problem.length == 0 then {
+        stem: doccodeStem :dir page: b.page.stringView :bi
+        errPath: stem.stringView.concat ".z.err"
+        errText: slurp path: errPath.stringView
+        problem = (emitVerdict
+            status: (statuses.get i: emitAt.u64.orPanic)
+            errText: errText.stringView
+            expect: b.expect.stringView
+        )
+    }
+    if problem.length > 0 then {
+        print "FAIL(doccode) \{at.stringView}: \{problem.stringView}"
+        r.fails = r.fails + 1
+    } else {
+        r.passN = r.passN + 1
+    }
+}
+
+# emitVerdict -- what is wrong with a checked block's emit, "" when nothing: an
+# unmarked block must compile, an expect= block must fail with that code as its
+# first error.
+emitVerdict: function {status: i32 errText: StringView expect: StringView} out String is {
+    first: String
+    for each el: errText.lines loop {
+        if first.length == 0 when el.startsWith "error[" then first = el.string
+    }
+    if expect.length == 0 then {
+        if status == 0 then return ""
+        if first.length == 0 then return "zc emit failed (status \{status}) with no error line"
+        return first
+    }
+    if status == 0 then return "it compiles, but expect=\{expect}"
+    got: first.stringView.substring from: 6 to: 11
+    if got != expect then return "its first error is \{first.stringView}, but expect=\{expect}"
+    return ""
+}
+
+# doccodeRatchet -- the per-page counts of skipped and unformatted blocks
+# against tests/fixtures/doccode_baseline.txt (rows `none <page> N` and `fmt
+# <page> N`), exactly. A page whose fmt count moved lists its unformatted
+# blocks. True when anything failed.
+doccodeRatchet: function {
+    pages: (List String).view
+    blocks: (List zdocblocks.DocBlock).view
+    noneN: (ListVal u64).view
+    fmtN: (ListVal u64).view
+    fmtAt: (ListVal i64).view
+    statuses: (ListVal i32).view
+    root: StringView
+} out bool is {
+    basePath: "\{root}/tests/fixtures/doccode_baseline.txt"
+    baseKeys: List String
+    baseCounts: ListVal u64
+    readRatchetBaseline path: basePath.stringView keys: baseKeys counts: baseCounts
+    seen: ListVal bool
+    for each bk: baseKeys loop {
+        bk.drop
+        seen.append from: false
+    }
+    anyFail: false
+    pi: u64
+    for pi < pages.length loop {
+        pg: (pages.get i: pi).stringView
+        kn: "none \{pg}"
+        if (ratchetCheck
+            kind: "doccode"
+            key: kn.stringView
+            c: (noneN.get i: pi)
+            :baseKeys
+            :baseCounts
+            :seen
+            above: "a new check=none block; make it compile, or justify raising the baseline"
+        ) then anyFail = true
+        kf: "fmt \{pg}"
+        if (ratchetCheck
+            kind: "doccode"
+            key: kf.stringView
+            c: (fmtN.get i: pi)
+            :baseKeys
+            :baseCounts
+            :seen
+            above: "a block zl fmt would lay out differently; format it as zl fmt does"
+        ) then {
+            anyFail = true
+            listUnformatted :blocks :fmtAt :statuses page: pg
+        }
+        pi = pi + 1
+    }
+    if (ratchetStale kind: "doccode" :baseKeys :baseCounts :seen) then anyFail = true
+    return anyFail
+}
+
+# listUnformatted -- each block of `page` whose format check failed.
+listUnformatted: function {
+    blocks: (List zdocblocks.DocBlock).view
+    fmtAt: (ListVal i64).view
+    statuses: (ListVal i32).view
+    page: StringView
+} is {
+    bi: u64
+    for bi < blocks.length loop {
+        b: blocks.get i: bi
+        fj: fmtAt.get i: bi
+        if b.page.stringView == page when fj >= 0 when (statuses.get i: fj.u64.orPanic) != 0 then {
+            at: blockAt :b
+            print "  needs zl fmt: \{at.stringView}"
+        }
+        bi = bi + 1
+    }
+}
+
+# docPages -- the pages the doccode kind reads: docs/*.pdoc in name order, then
+# README.md.
+docPages: function {root: StringView into: List String} is {
+    docsDir: "\{root}/docs"
+    names: fixtureNames dir: docsDir.stringView suffix: ".pdoc"
+    names.sort
+    for each n: names loop into.append from: "docs/\{n.stringView}.pdoc"
+    into.append from: "README.md".string
+}
+
+# pageIndex -- the slot of `page` in the kind's page order, which the per-page
+# counts are kept by. Every block's page was listed, so it is always found.
+pageIndex: function {pages: (List String).view page: StringView} out u64 is {
+    i: u64
+    for i < pages.length loop {
+        if (pages.get :i).stringView == page then return i
+        i = i + 1
+    }
+    return 0
+}
+
+# pageStem -- a page as the start of a unit name: its file name without the
+# extension, lowercased, `-` as `_` (`docs/Design-OPEN.pdoc` -> design_open).
+pageStem: function {page: StringView} out String is {
+    base: page
+    sl: page.lastIndexOf "/"
+    match sl case some then base = page.substring from: sl + 1 to: page.length case none then null
+    dot: base.indexOf "."
+    match dot case some then base = base.substring from: 0 to: dot case none then null
+    low: base.toLowerAscii
+    return (low.stringView.replace needle: "-" replacement: "_")
 }
 
 # archUnitFiles -- the `.z` files under `<root>/<sub>`, as `<sub>/<file>`.
@@ -2765,6 +3102,7 @@ newRunner: function out Runner is {
         report: false
         saveTemps: false
         regenLsp: false
+        doccodeOnly: false
         errors: String
         rungold: String
         runcases: String
@@ -2803,6 +3141,10 @@ takeFlag: function {r: Runner w: u64} out bool is {
     }
     if w == runnerWord.slot.fRegenLsp then {
         r.regenLsp = true
+        return true
+    }
+    if w == runnerWord.slot.fDoccodeOnly then {
+        r.doccodeOnly = true
         return true
     }
     return false
@@ -2913,20 +3255,25 @@ main: function is {
     # symbols come from the binaries' own DWARF.
     os.setEnv key: "DEBUGINFOD_URLS" value: ""
 
-    runRunCases :r
-    runLspCases :r
-    runLeakCases :r
-    runErrorCases :r
-    runDumpCases :r
-    runDifferentialCases :r
-    runVfsCases :r
-    runProjectCases :r
-    runSmokeCases :r
-    runFmtCases :r
-    runSelfhostAsan :r
-    runFixpoint :r
-    runArchCases :r
-    runDocCases :r
+    if r.doccodeOnly then {
+        runDoccodeCases :r
+    } else {
+        runRunCases :r
+        runLspCases :r
+        runLeakCases :r
+        runErrorCases :r
+        runDumpCases :r
+        runDifferentialCases :r
+        runVfsCases :r
+        runProjectCases :r
+        runSmokeCases :r
+        runFmtCases :r
+        runDoccodeCases :r
+        runSelfhostAsan :r
+        runFixpoint :r
+        runArchCases :r
+        runDocCases :r
+    }
 
     # ---------------- summary ----------------
     if r.saveTemps then {

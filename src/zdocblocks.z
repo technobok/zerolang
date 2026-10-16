@@ -1,0 +1,515 @@
+# zdocblocks -- the zerolang examples in the documentation, as the test
+# runner's doccode kind checks them: every `#code language=zerolang` block of a
+# docs/*.pdoc page and every ```zerolang fence of README.md, with the
+# arguments that say how each is checked, and the program each one is wrapped
+# into. The arguments ride on the block and the renderer ignores them, so a
+# reader never sees them:
+#   (none)          the block must compile
+#   expect=E0400    it must fail, and its first error is E0400
+#   check=none      it is not compiled (a proposal, a grammar outline)
+#   name=x          later blocks on the page may build on it
+#   after=x         the program is block x's code (and its own after= chain)
+#                   followed by this block's
+# Pure text in, text out: reading the files and running the compiler are the
+# runner's.
+
+public: unit {
+    :DocBlock
+    :scanPage
+    :checkNames
+    :programOf
+    :wrapProgram
+}
+
+# DocBlock -- one example: where it is, its arguments, and its code as the
+# reader sees it (dedented). `problem` is set when the block could not be read
+# or its arguments break the rules; such a block is reported, not compiled.
+DocBlock: class {
+    # the page, as the runner names it (`docs/spec.pdoc`, `README.md`)
+    page: String
+    # the 1-based line of its `#code` or fence line
+    line: u64
+    # `check=`: "none" skips it, "" checks it
+    check: String
+    # `expect=`: the code its first error must be, "" when it must compile
+    expect: String
+    # `name=`: the label later blocks build on, "" for none
+    name: String
+    # `after=`: the earlier block on the page whose code comes first, "" for none
+    after: String
+    # the code, one entry per line
+    code: List String
+    # what is wrong with the block itself, "" when nothing is
+    problem: String
+}
+
+# scanPage -- every zerolang block of one page, in reading order. A page whose
+# name ends in `.md` is read for ```zerolang fences; any other as picodoc, for
+# `#code language=zerolang` blocks in either form: a `"""` body, or the lines
+# indented under a header that ends at its colon.
+scanPage: function {page: StringView text: StringView into: List DocBlock} is {
+    lines: List String
+    for each ln: text.lines loop lines.append from: ln.string
+    isMd: page.endsWith ".md"
+    i: u64
+    for i < lines.length loop {
+        ln: (lines.get :i).copy
+        if isMd then {
+            i = scanFence :page :lines at: i :into
+        } else if ln.stringView.trimStart.startsWith "#code " then {
+            i = scanCode :page :lines at: i :into
+        } else {
+            i = i + 1
+        }
+    }
+}
+
+# scanFence -- a README fence at `at`: ```zerolang and its arguments open it,
+# ``` closes it. Answers the line after the block (after `at` when it is not
+# a zerolang fence).
+scanFence: function {
+    page: StringView
+    lines: (List String).view
+    at: u64
+    into: List DocBlock
+} out u64 is {
+    head: lines.get i: at
+    hv: head.stringView
+    if (hv.startsWith "```zerolang").not then return at + 1
+    rest: hv.substring from: 11 to: hv.length
+    # ```zerolanguage is some other language
+    if rest.length > 0 when (rest.startsWith " ").not then return at + 1
+    b: newBlock :page line: at + 1
+    readArgs :b args: rest
+    j: at + 1
+    closed: false
+    for (j < lines.length) and closed.not loop {
+        lj: lines.get i: j
+        if lj.stringView.startsWith "```" then {
+            closed = true
+        } else {
+            b.code.append from: lj.copy
+        }
+        j = j + 1
+    }
+    if closed.not then b.problem = "the fence is never closed"
+    into.append from: b
+    return j
+}
+
+# scanCode -- a picodoc `#code` at `at`. Only `language=zerolang` is taken;
+# answers the line after the block.
+scanCode: function {
+    page: StringView
+    lines: (List String).view
+    at: u64
+    into: List DocBlock
+} out u64 is {
+    head: lines.get i: at
+    hv: head.stringView.trimStart
+    colon: hv.indexOf ":"
+    match colon case some then null case none then return at + 1
+    args: hv.substring from: 5 to: colon
+    if (hasWord text: args word: "language=zerolang").not then return at + 1
+    tail: (hv.substring from: colon + 1 to: hv.length).trim
+    b: newBlock :page line: at + 1
+    readArgs :b :args
+    next: at + 1
+    if tail.startsWith "\"\"\"" then {
+        next = readQuoted :b :lines from: at + 1
+    } else if tail.length == 0 then {
+        next = readIndented :b :lines from: at + 1
+    } else {
+        b.problem = "a zerolang block is a \"\"\" body or indented lines"
+    }
+    into.append from: b
+    return next
+}
+
+# readQuoted -- the lines up to the one holding the closing `"""`, dedented by
+# their common indent. Answers the line after the closer.
+readQuoted: function {b: DocBlock lines: (List String).view from: u64} out u64 is {
+    raw: List String
+    j: from
+    closed: false
+    for (j < lines.length) and closed.not loop {
+        lj: lines.get i: j
+        if lj.stringView.contains "\"\"\"" then {
+            closed = true
+        } else {
+            raw.append from: lj.copy
+        }
+        j = j + 1
+    }
+    if closed.not then b.problem = "the \"\"\" body is never closed"
+    ind: commonIndent lines: raw
+    for each rl: raw loop {
+        if rl.length >= ind then {
+            b.code.append from: (rl.stringView.substring from: ind to: rl.length).string
+        } else {
+            b.code.append from: "".string
+        }
+    }
+    return j
+}
+
+# readIndented -- the lines indented two spaces under the header, each with an
+# optional `: ` marker after the indent (a lone `:` is a blank line). The block
+# ends at the first line not so indented.
+readIndented: function {b: DocBlock lines: (List String).view from: u64} out u64 is {
+    j: from
+    for j < lines.length loop {
+        lj: lines.get i: j
+        lv: lj.stringView
+        if (lv.startsWith "  ").not then return j
+        body: lv.substring from: 2 to: lv.length
+        if body.startsWith ": " then {
+            b.code.append from: (body.substring from: 2 to: body.length).string
+        } else if body.length == 1 when body.startsWith ":" then {
+            b.code.append from: "".string
+        } else {
+            b.code.append from: body.string
+        }
+        j = j + 1
+    }
+    return j
+}
+
+# commonIndent -- the fewest leading spaces of any non-blank line.
+commonIndent: function {lines: (List String).view} out u64 is {
+    best: u64
+    seen: false
+    for each l: lines loop {
+        lv: l.stringView
+        if lv.trim.length > 0 then {
+            n: lv.length - lv.trimStart.length
+            if seen.not or (n < best) then best = n
+            seen = true
+        }
+    }
+    return best
+}
+
+# newBlock -- an empty block of `page` at `line`.
+newBlock: function {page: StringView line: u64} out DocBlock is {
+    return (DocBlock
+        page: page.string
+        :line
+        check: ""
+        expect: ""
+        name: ""
+        after: ""
+        code: List String
+        problem: ""
+    )
+}
+
+# hasWord -- `word` is one of the space-separated words of `text`.
+hasWord: function {text: StringView word: StringView} out bool is {
+    for each w: (text.split sep: " ") loop {
+        if w == word then return true
+    }
+    return false
+}
+
+# readArgs -- the block's `key=value` words. `language` is the renderer's; an
+# unknown key, a check other than none, or an expect that is no error code is
+# the block's problem.
+readArgs: function {b: DocBlock args: StringView} is {
+    words: zast.Vocab.create block: docWord
+    for each w: (args.split sep: " ") loop {
+        if w.length > 0 then readArg :b :words :w
+    }
+    if b.check.length > 0 when b.expect.length > 0 then {
+        b.problem = "check=none and expect= together: a skipped block expects nothing"
+    }
+}
+
+# readArg -- one `key=value` word onto the block.
+readArg: function {b: DocBlock words: zast.Vocab.view w: StringView} is {
+    eq: w.splitOnce sep: "="
+    match (
+        eq
+    ) case some then null case none then {
+        b.problem = "an argument is key=value, not '\{w}'"
+        return
+    }
+    k: words.slotOf text: (w.substring from: 0 to: eq)
+    v: w.substring from: eq + 1 to: w.length
+    if k == docWord.slot.aLanguage then return
+    if k == docWord.slot.aCheck then {
+        b.check = v.string
+        isNone: (words.slotOf text: v) == docWord.slot.vNone
+        if isNone.not then b.problem = "check= takes none alone, not '\{v}'"
+    } else if k == docWord.slot.aExpect then {
+        b.expect = v.string
+        isCode: isErrorCode text: v
+        if isCode.not then b.problem = "expect= takes an error code such as E0400, not '\{v}'"
+    } else if k == docWord.slot.aName then {
+        b.name = v.string
+        isName: isLabel text: v
+        if isName.not then b.problem = "name= takes a lowercase identifier, not '\{v}'"
+    } else if k == docWord.slot.aAfter then {
+        b.after = v.string
+        isAfter: isLabel text: v
+        if isAfter.not then b.problem = "after= takes a lowercase identifier, not '\{v}'"
+    } else {
+        b.problem = "unknown argument '\{w}'"
+    }
+}
+
+# isErrorCode -- `E` and four digits.
+isErrorCode: function {text: StringView} out bool is {
+    if text.length != 5 then return false
+    if (text.startsWith "E").not then return false
+    i: 1.u64
+    for i < 5 loop {
+        c: (text.byteAt i).or d: 0.u8
+        if (c < 48) or (c > 57) then return false
+        i = i + 1
+    }
+    return true
+}
+
+# isLabel -- a lowercase identifier: a letter, then letters, digits and `_`.
+isLabel: function {text: StringView} out bool is {
+    if text.length == 0 then return false
+    i: u64
+    for i < text.length loop {
+        c: (text.byteAt i).or d: 0.u8
+        lower: (c >= 97) and (c <= 122)
+        digit: (c >= 48) and (c <= 57)
+        if i == 0 when lower.not then return false
+        if lower.not when digit.not when c != 95 then return false
+        i = i + 1
+    }
+    return true
+}
+
+# checkNames -- the naming rules over the blocks, one answer per block ("" when
+# it keeps them): a name is unique on its page, and `after=` names a block
+# EARLIER on the same page -- which also rules out a cycle, and keeps an edit to
+# one page from breaking another.
+checkNames: function {blocks: (List DocBlock).view} out List String is {
+    problems: List String
+    i: u64
+    for i < blocks.length loop {
+        bi: blocks.get :i
+        p: duplicateName :blocks at: i
+        if p.length == 0 when bi.after.length > 0 when (earlierNamed :blocks before: i).not then {
+            p = "after=\{bi.after} names no earlier block on this page"
+        }
+        problems.append from: p
+        i = i + 1
+    }
+    return problems
+}
+
+# duplicateName -- the report for the block at `at` when an earlier block on its
+# page has its name, "" otherwise.
+duplicateName: function {blocks: (List DocBlock).view at: u64} out String is {
+    b: blocks.get i: at
+    if b.name.length == 0 then return ""
+    j: u64
+    for j < at loop {
+        bj: blocks.get i: j
+        if bj.page == b.page when bj.name == b.name then {
+            return "name=\{b.name} is already the block at line \{bj.line}"
+        }
+        j = j + 1
+    }
+    return ""
+}
+
+# earlierNamed -- some block before `before`, on its page, is named what the
+# block at `before` is after.
+earlierNamed: function {blocks: (List DocBlock).view before: u64} out bool is {
+    b: blocks.get i: before
+    j: u64
+    for j < before loop {
+        bj: blocks.get i: j
+        if bj.page == b.page when bj.name == b.after then return true
+        j = j + 1
+    }
+    return false
+}
+
+# programOf -- the lines the block at `at` compiles as: its `after=` chain's,
+# oldest first, then its own.
+programOf: function {blocks: (List DocBlock).view at: u64} out List String is {
+    prog: List String
+    b: blocks.get i: at
+    if b.after.length > 0 then {
+        j: at
+        found: false
+        for (j > 0) and found.not loop {
+            j = j - 1
+            bj: blocks.get i: j
+            if bj.page == b.page when bj.name == b.after then found = true
+        }
+        if found then {
+            for each l: (programOf :blocks at: j) loop prog.append from: l.copy
+        }
+    }
+    for each l: b.code loop prog.append from: l.copy
+    return prog
+}
+
+# wrapProgram -- the program a block's lines compile as. A block that declares
+# `main:` is a whole program as written. Otherwise its top-level declarations
+# (a name bound to a function, class, record, ... -- see isDeclLine) stay at
+# top level, and every other run of lines goes into `main`, in order; a blank
+# line separates the two, and the result is laid out as `zl fmt` would.
+wrapProgram: function {code: (List String).view} out String is {
+    top: List String
+    inner: List String
+    whole: false
+    for each l: code loop {
+        if l.stringView.startsWith "main:" then whole = true
+    }
+    if whole then return (joinLines lines: code)
+    splitDecls :code :top :inner
+    topT: trimBlankEnds lines: top
+    innerT: trimBlankEnds lines: inner
+    prog: List String
+    for each t: topT loop prog.append from: t.copy
+    if topT.length > 0 then prog.append from: "".string
+    if innerT.length == 0 then {
+        prog.append from: "main: function is {}".string
+    } else {
+        prog.append from: "main: function is {".string
+        for each n: innerT loop prog.append from: n.copy
+        prog.append from: "}".string
+    }
+    return (joinLines lines: prog)
+}
+
+# splitDecls -- the top-level declarations (and the lines that continue them)
+# into `top`; every other line into `inner`, indented as `main`'s body.
+splitDecls: function {code: (List String).view top: List String inner: List String} is {
+    words: zast.Vocab.create block: docWord
+    inDecl: false
+    for each l: code loop {
+        lv: l.stringView
+        starts: (lv.length > 0) and (isLineStart b: ((lv.byteAt 0).or d: 32.u8))
+        if starts then inDecl = isDeclLine line: lv :words
+        if inDecl then {
+            top.append from: l.copy
+        } else if lv.length == 0 then {
+            inner.append from: "".string
+        } else {
+            inner.append from: "    \{lv}"
+        }
+    }
+}
+
+# isLineStart -- a line beginning with this byte starts a new top-level item:
+# not indentation, a comment, or a closing bracket (which continue the one
+# before).
+isLineStart: function {b: u8} out bool is {
+    # space, tab, `#`, `}`, `)`
+    return (b != 32) and (b != 9) and (b != 35) and (b != 125) and (b != 41)
+}
+
+# isDeclLine -- `name: <kind>` where kind is one of the declaration keywords
+# (docWord's k- words): function, class, record, union, variant, facet,
+# protocol, unit, typedef, generator, data, alias.
+isDeclLine: function {line: StringView words: zast.Vocab.view} out bool is {
+    colon: line.indexOf ":"
+    match colon case some then null case none then return false
+    if (isIdentifier text: (line.substring from: 0 to: colon)).not then return false
+    rest: (line.substring from: colon + 1 to: line.length).trimStart
+    e: u64
+    for (e < rest.length) and (isIdentByte b: ((rest.byteAt e).or d: 32.u8)) loop e = e + 1
+    k: words.slotOf text: (rest.substring from: 0 to: e)
+    return (
+        (k == docWord.slot.kFunction) or
+        (k == docWord.slot.kClass) or
+        (k == docWord.slot.kRecord) or
+        (k == docWord.slot.kUnion) or
+        (k == docWord.slot.kVariant) or
+        (k == docWord.slot.kFacet) or
+        (k == docWord.slot.kProtocol) or
+        (k == docWord.slot.kUnit) or
+        (k == docWord.slot.kTypedef) or
+        (k == docWord.slot.kGenerator) or
+        (k == docWord.slot.kData) or
+        (k == docWord.slot.kAlias)
+    )
+}
+
+# docWord -- every word read off a block: its argument keys, the one value
+# check= takes, and the keywords that make `name: <word>` a declaration. A word
+# is classified by its slot here (zast.Vocab), never by comparing its text.
+docWord: data {
+    aLanguage: "language"
+    aCheck: "check"
+    aExpect: "expect"
+    aName: "name"
+    aAfter: "after"
+    vNone: "none"
+    kFunction: "function"
+    kClass: "class"
+    kRecord: "record"
+    kUnion: "union"
+    kVariant: "variant"
+    kFacet: "facet"
+    kProtocol: "protocol"
+    kUnit: "unit"
+    kTypedef: "typedef"
+    kGenerator: "generator"
+    kData: "data"
+    kAlias: "alias"
+}
+
+# isIdentifier -- letters, digits and `_`, not starting with a digit.
+isIdentifier: function {text: StringView} out bool is {
+    if text.length == 0 then return false
+    i: u64
+    for i < text.length loop {
+        c: (text.byteAt i).or d: 0.u8
+        if (isIdentByte b: c).not then return false
+        if i == 0 when c >= 48 when c <= 57 then return false
+        i = i + 1
+    }
+    return true
+}
+
+# isIdentByte -- a letter, a digit or `_`.
+isIdentByte: function {b: u8} out bool is {
+    upper: (b >= 65) and (b <= 90)
+    lower: (b >= 97) and (b <= 122)
+    digit: (b >= 48) and (b <= 57)
+    return upper or lower or digit or (b == 95)
+}
+
+# trimBlankEnds -- the lines without the blank ones at either end.
+trimBlankEnds: function {lines: (List String).view} out List String is {
+    first: u64
+    for first < lines.length loop {
+        if (lines.get i: first).stringView.trim.length > 0 then break
+        first = first + 1
+    }
+    end: lines.length
+    for end > first loop {
+        if (lines.get i: end - 1).stringView.trim.length > 0 then break
+        end = end - 1
+    }
+    kept: List String
+    k: first
+    for k < end loop {
+        kept.append from: (lines.get i: k).copy
+        k = k + 1
+    }
+    return kept
+}
+
+# joinLines -- the lines, each ended by a newline.
+joinLines: function {lines: (List String).view} out String is {
+    s: String
+    for each l: lines loop {
+        s.append l
+        s.append "\n"
+    }
+    return s
+}

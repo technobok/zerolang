@@ -21,7 +21,7 @@ binary operations evaluate left-to-right).
 
 ### Hello World
 
-```
+```zerolang
 main: function is {
     print "Hello, World!"
 }
@@ -32,7 +32,7 @@ main: function is {
 Functions use `in`/`out`/`is` keywords. The first parameter is unnamed;
 additional parameters are named:
 
-```
+```zerolang check=none
 fib: function {n: i64} out i64 is {
     if n < 2 then return n
     a: 0
@@ -51,14 +51,14 @@ fib: function {n: i64} out i64 is {
 
 Variables are declared with `:` and reassigned with `=`:
 
-```
+```zerolang
 x: 42        # declaration (type inferred)
 x = x + 1   # reassignment
 ```
 
 ### Control Flow
 
-```
+```zerolang check=none
 # if/when/then/else
 if x > 0 when x < 100 then print "in range" else print "out of range"
 
@@ -76,7 +76,7 @@ with y: abs -5 do print "abs(-5) = \{y}"
 
 Records are value types (zero-initialized, no constructors):
 
-```
+```zerolang check=none
 point: record {
     x: f64
     y: f64
@@ -94,7 +94,7 @@ point: record {
 
 Strings are immutable. Interpolation uses `\{expr}`:
 
-```
+```zerolang
 name: "Zerolang"
 print "Hello, \{name}!"
 ```
@@ -151,7 +151,7 @@ make test-bootstrap    # rebuild the compiler from the seed, check the fixpoint
 
 Create `hello.z`:
 
-```
+```zerolang
 main: function is {
     print "Hello, World!"
 }
