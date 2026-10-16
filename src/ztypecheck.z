@@ -37341,7 +37341,8 @@ borrowedMoveError: function {
 
 # consumeReassignPins -- a pinning call on the right of `x = ...` keeps its
 # pins under the TARGET, exactly as a binding would. The value the target held
-# is destroyed by the assignment, so the locks it held go first.
+# is destroyed by the assignment, so the locks it held go first. An owned value's
+# pins must be locks the target may hold (refuseLockHolder).
 consumeReassignPins: function {
     # the symbol table holding the pending pins
     st: zenv.ZSymbolTable
@@ -37354,16 +37355,37 @@ consumeReassignPins: function {
     # the assigned value's type; nothing is consumed for an untyped value
     rvt: ztypes.tid
 } is {
-    if hbNmId.isZero then return
     if rvt.isZero then return
     if st.typing.pendingPins.length == 0 then return
+    # An OWNED value holding locks -- a construction or an `outx` result over a
+    # moved lock-holder -- lands in the target, so the target must be able to
+    # hold them; a field store (`h.w = Option.some w`) keeps them under the
+    # target's root, as a moved local's are kept (moveLocksToTarget).
+    owned: st.typing.pendingBorrowOwned
+    tgtNm: hbNmId
+    if tgtNm.isZero then {
+        if owned.not then return
+        tgtNm = rootNameIdOf :ast n: (ast.nodes.get i: rasgn.topath)
+        if tgtNm.isZero then return
+    }
     rpins: List ztyping.PinPath
     takePendingPins :st dst: rpins
-    tvo: st.lookupVarId nameId: hbNmId
+    tvo: st.lookupVarId nameId: tgtNm
     match (
         tvo
     ) case some then {
-        st.releaseHeldLocks holder: ztypes.zlockholder.var tvo
+        if owned when (refuseLockHolder
+            :st
+            :ast
+            held: rpins
+            fromNm: ""
+            to: tvo
+            verb: "by reassignment"
+            nodeid: rasgn.nid
+            lineno: rasgn.lineno
+            colno: rasgn.colno
+        ) then return
+        if hbNmId.isZero.not then st.releaseHeldLocks holder: ztypes.zlockholder.var tvo
         (installPins
             :st
             pool: ast.names
@@ -40866,7 +40888,8 @@ consumeBareArgOwnership: function {
 # moveHeldLocksIntoSlot -- a value moving into an owning place takes the locks
 # it holds along: into the receiver when there is one, into the result when
 # the callee's result holds the value, and nowhere otherwise -- which refuses
-# the move. A bare `w` and a `w.take` (whose take kept them) both come here.
+# the move. A bare `w`, a `w.take` (whose take kept them) and the hoisted
+# temporary of an unnamed value (`name` empty) all come here.
 moveHeldLocksIntoSlot: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
@@ -40904,7 +40927,9 @@ moveHeldLocksIntoSlot: function {
         )
         if heldN.length > 0 then {
             rn7: zast.nameTextAt :ast ref: (pinRootAt pins: heldN i: 0)
-            m7: "Cannot move '\{name}' into a taking argument: it holds locks on '\{rn7}' and the callee is not `outx`, so the locks have nowhere to go; copy it first (`.copy`)"
+            what7: "the value".string
+            if name.length > 0 then what7 = "'\{name}'"
+            m7: "Cannot move \{what7} into a taking argument: it holds locks on '\{rn7}' and the callee is not `outx`, so the locks have nowhere to go; copy it first (`.copy`)"
             addError :st :nodeid :lineno :colno e: zast.err.ownerError msg: m7
         }
     }
@@ -41063,12 +41088,9 @@ varNameText: function {st: zenv.ZSymbolTable.view ast: Ast.view vid: ztypes.vid}
 }
 
 # transferHeldLocks -- a lock-holding value moves from `from` to `to`, and its
-# locks move with it when `to` cannot outlive what they lock: every source that
-# is a local must be bound in a scope enclosing `to`'s; a source that is a
-# borrow/view parameter or the receiver imposes nothing, and `to` may not be a
-# parameter itself (its locks would be handed to the caller unseen). On success
-# the rows are held by `to`; on failure the move is refused. Answers whether
-# the move went through.
+# locks move with it when `to` may hold them (refuseLockHolder). On success the
+# rows are held by `to`; on failure the move is refused. Answers whether the
+# move went through.
 transferHeldLocks: function {
     # the symbol table the rows live in
     st: zenv.ZSymbolTable
@@ -41093,14 +41115,98 @@ transferHeldLocks: function {
         dst: held
     )
     if held.length == 0 then return true
-    fromNm: varNameText :st :ast vid: from
+    # a hoisted argument's temporary is no name the program wrote
+    fromNm: String
+    if (st.typing.tempVars.has item: from).not then fromNm = varNameText :st :ast vid: from
+    if (refuseLockHolder
+        :st
+        :ast
+        :held
+        fromNm: fromNm.stringView
+        :to
+        :verb
+        :nodeid
+        :lineno
+        :colno
+    ) then return false
+    st.reholdLocks :from :to
+    return true
+}
+
+# refuseLockHolder -- whether `to` may not hold the locks `held` names, which
+# a value moving into it carries: reported, and true, when it may not. A
+# parameter cannot hold them (they would be handed to the caller unseen); a
+# reference cannot (it owns nothing: the value lands in what it refers to,
+# whose owner may outlive the source, while the reference -- and a lock moved
+# onto it -- ends with its own scope); and every source that is a local must be
+# bound in a scope enclosing `to`'s. A source that is a borrow/view parameter
+# or the receiver imposes nothing. `fromNm` names the moving value, empty when
+# it is not a name (a construction).
+refuseLockHolder: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    held: (List ztyping.PinPath).view
+    fromNm: StringView
+    to: ztypes.vid
+    verb: StringView
+    nodeid: zast.nodeid
+    lineno: u32
+    colno: u32
+} out bool is {
+    what: "the value".string
+    if fromNm.length > 0 then what = "'\{fromNm}'"
     toNm: varNameText :st :ast vid: to
     firstRoot: zast.nameTextAt :ast ref: (pinRootAt pins: held i: 0)
     if (st.reg.variableOriginOf id: to) == ztypes.zvarorigin.param then {
-        mp: "Cannot move '\{fromNm}' \{verb}: it holds locks on '\{firstRoot}', and a parameter cannot take them; copy it first (`.copy`)"
+        mp: "Cannot move \{what} \{verb}: it holds locks on '\{firstRoot}', and a parameter cannot take them; copy it first (`.copy`)"
         addError :st :nodeid :lineno :colno e: zast.err.ownerError msg: mp
-        return false
+        return true
     }
+    if (isBorrowedVar :st vid: to) then {
+        mr: "Cannot move \{what} \{verb}: it holds locks on '\{firstRoot}', and '\{toNm}' does not own what it refers to, so the locks have nowhere to go; copy it first (`.copy`)"
+        hr: String
+        ow: st.reg.variableBorrowOriginOf id: to
+        if ow.isZero.not then {
+            own: zast.nameTextAt :ast ref: ow
+            hr = "'\{toNm}' refers into '\{own}', which owns the storage the value would land in"
+        }
+        (reportLockHolder
+            :st
+            :nodeid
+            :lineno
+            :colno
+            msg: mr.stringView
+            hint: hr.stringView
+            width: fromNm.length.u32.orPanic
+        )
+        return true
+    }
+    outlived: outlivedSource :st :held :to
+    if outlived.isZero then return false
+    rn: zast.nameTextAt :ast ref: outlived
+    mo: "Cannot move \{what} \{verb}: it holds locks on '\{rn}', and '\{toNm}' outlives '\{rn}'; copy it first (`.copy`)"
+    ho: "keep '\{toNm}' inside '\{rn}'s scope"
+    if fromNm.length > 0 then ho = "\{ho}, or end '\{fromNm}' before '\{rn}' does"
+    (reportLockHolder
+        :st
+        :nodeid
+        :lineno
+        :colno
+        msg: mo.stringView
+        hint: ho.stringView
+        width: fromNm.length.u32.orPanic
+    )
+    return true
+}
+
+# outlivedSource -- the first local `held` locks that `to` would outlive: one
+# bound in a scope that does not enclose `to`'s. A parameter source imposes
+# nothing. Zero when there is none.
+outlivedSource: function {
+    st: zenv.ZSymbolTable
+    held: (List ztyping.PinPath).view
+    to: ztypes.vid
+} out zast.nameid is {
     toScope: st.scopeOfVar vid: to
     for each hp: held loop {
         rootNm: hp.path.get i: 0
@@ -41108,31 +41214,39 @@ transferHeldLocks: function {
         match (
             rvo
         ) case some then {
-            if (st.reg.variableOriginOf id: rvo) != ztypes.zvarorigin.param then {
-                srcScope: st.scopeOfVar vid: rvo
-                if (st.scopeEncloses outer: srcScope inner: toScope).not then {
-                    rn: zast.nameTextAt :ast ref: rootNm
-                    mo: "Cannot move '\{fromNm}' \{verb}: it holds locks on '\{rn}', and '\{toNm}' outlives '\{rn}'; copy it first (`.copy`)"
-                    ho: "keep '\{toNm}' inside '\{rn}'s scope, or end '\{fromNm}' before '\{rn}' does"
-                    no: String
-                    (addErrorH
-                        :st
-                        :nodeid
-                        :lineno
-                        :colno
-                        e: zast.err.ownerError
-                        msg: mo
-                        note: no
-                        hint: ho
-                        width: fromNm.length.u32.orPanic
-                    )
-                    return false
-                }
-            }
+            isParam: (st.reg.variableOriginOf id: rvo) == ztypes.zvarorigin.param
+            if isParam.not when (st.scopeEncloses
+                outer: (st.scopeOfVar vid: rvo)
+                inner: toScope
+            ).not then return rootNm
         } case none then null
     }
-    st.reholdLocks :from :to
-    return true
+    return zast.nameid
+}
+
+# reportLockHolder -- refuseLockHolder's report, underlining the moving value
+# (`width` 0 when it has no name)
+reportLockHolder: function {
+    st: zenv.ZSymbolTable
+    nodeid: zast.nodeid
+    lineno: u32
+    colno: u32
+    msg: StringView
+    hint: StringView
+    width: u32
+} is {
+    no: String
+    (addErrorH
+        :st
+        :nodeid
+        :lineno
+        :colno
+        e: zast.err.ownerError
+        msg: msg.string
+        note: no
+        hint: hint.string
+        :width
+    )
 }
 
 # carryHeldLocks -- a lock-holding value moves into a call whose result will
@@ -42633,6 +42747,9 @@ hoistArg: function {
         # to: 4)` and `(pick :l i: 0)` hold their sources as `s.stringView`
         # does, and a later argument moving or writing them meets the temp
         isCallArg: (ast.nodes.get i: argId).call
+        # and every one of them is this argument's: a construction's root is
+        # its type, which names none of what it locks
+        if isCallArg then hrt = zast.nameid
         if hrt.isZero.not or isCallArg when callHolds.not then {
             # A `.view` parameter only reads its argument, so the hoisted temp
             # locks the source SHARED -- exactly as the bare-name leg already
@@ -43283,6 +43400,42 @@ lockFieldArgForCall: function {
     return true
 }
 
+# moveTakenTempLocks -- a taken value no name holds (a construction over a
+# lock-holder, an `outx` result) carries its locks into the slot as a moved
+# name's go. Its hoisted temporary `tnm` is already taken, so it is found by
+# its declaration.
+moveTakenTempLocks: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    tnm: String.view
+    # the argument is an owned value with locks, at a taking parameter
+    taken: bool
+    # the receiver the value moves into, zero when the call has none
+    recvVid: ztypes.vid
+    # the call's result holds the value
+    calleePins: bool
+    # the call's pins, which the value's locks join
+    pins: List ztyping.PinPath
+    arg: argref
+} is {
+    if taken.not then return
+    tkd: st.findLocal nameId: (nameIdOf :ast name: tnm.stringView)
+    tkv: st.typing.declLocalVarOf declId: tkd
+    if tkv.isZero then return
+    (moveHeldLocksIntoSlot
+        :st
+        :ast
+        name: ""
+        vid: tkv
+        :recvVid
+        :calleePins
+        :pins
+        nodeid: arg.nid
+        lineno: arg.lineno
+        colno: arg.colno
+    )
+}
+
 # lockNonTrivialArg -- an argument the call cannot hoist to a temp keeps its
 # source: take it, or lock the path it reads through for the call's duration.
 # A locked path joins `pins`, the locks the call's result may keep.
@@ -43302,6 +43455,7 @@ lockNonTrivialArg: function {
     # reftype's take
     valByPointer: bool
     pins: List ztyping.PinPath
+    recvVid: ztypes.vid
     # the call's result keeps the locks its arguments place
     calleePins: bool
     arg: argref
@@ -43328,6 +43482,9 @@ lockNonTrivialArg: function {
     }
     hadPending: false
     if st.typing.pendingPins.length > 0 then hadPending = true
+    # an OWNED value holding locks (a construction, an `outx` result); a
+    # borrowed one is refused at a taking slot on its own account
+    ownsPins: hadPending and st.typing.pendingBorrowOwned
     tnm: (hoistArg
         :ast
         :st
@@ -43337,6 +43494,16 @@ lockNonTrivialArg: function {
         :consumes
         viewParam: isViewArg
         :callHolds
+    )
+    (moveTakenTempLocks
+        :st
+        :ast
+        :tnm
+        taken: isTake and ownsPins
+        :recvVid
+        :calleePins
+        :pins
+        :arg
     )
     # an owned value no name holds, lent to a call whose result keeps it locked:
     # the result pins the temp, which outlives the call as an unnamed local. A
@@ -43605,6 +43772,7 @@ hoistAndLockArg: function {
             :isRecvArg
             :valByPointer
             :pins
+            :recvVid
             :calleePins
             :arg
         )

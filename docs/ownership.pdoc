@@ -755,13 +755,19 @@ Four rules keep a declaration honest, all reported at compile time:
 A lock-holding value that is moved -- into another binding (#~"b: w",
 #~"b: w.take"), reassigned (#~"x = w"), stored in a field or an arm payload,
 appended to a container, or handed to a #~".take" parameter, written bare or
-with #~".take" -- takes its locks with it,
-provided the new owner cannot outlive what the locks protect: a destination
+with #~".take" -- takes its locks with it. So does an #_+"owned" value no name
+holds that carries locks: a construction over a borrow (#~"W s: src", passed
+as an argument or reassigned as #~"x = Option.some w") or an #~"outx" result.
+The new owner must be able to hold them: a destination
 bound in an #_+"enclosing" scope is refused (within one scope the lock keeps
 the source alive and unwritten until the scope closes, whatever the
 declaration order), as is a destination that is a parameter (its locks would
-leave with the callee unseen), and a #~".take" parameter of a function that
-is not #~"outx" (the locks would have nowhere to go). #~"return
+leave with the callee unseen), a destination that is a #_+"reference" -- a
+#~"with" alias, a #~"getMut" result, a #~".borrow" binding, or a field reached
+through one (the value lands in storage the reference's owner holds, while the
+reference, and any lock moved onto it, ends with its own scope) -- and a
+#~".take" parameter of a function that is not #~"outx" (the locks would have
+nowhere to go). #~"return
 w" from an #~"outx" function carries them to the caller's binding when every
 source is a parameter or the receiver. The escape hatch is always
 #~".copy": an owned copy holds no locks.
@@ -2204,6 +2210,7 @@ the direct form.
   #~"b = z.take" into a borrowed #~"b"                       |Cannot reassign borrowed 'b' with an owned value: a reassignment keeps the ownership its target was bound with |Re-point it at #~"z" (#~"b = z"), or bind an owned name
   #~"b = e" where #~"c: b" borrows through #~"b"             |Cannot re-point 'b': 'c' borrows through it |End #~"c"'s scope first
   #~"x = w.take" where #~"x" outlives what #~"w" locks        |Cannot move 'w' by reassignment: it holds locks on 'a', and 'x' outlives 'a' |Keep 'x' inside 'a's scope, or #~"w.copy"
+  #~"inner.append from: w" where #~"inner" is a #~"with" alias or a #~"getMut" result and #~"w" holds locks |Cannot move 'w' into a taking argument: it holds locks on 'a', and 'inner' does not own what it refers to, so the locks have nowhere to go |Move it through the owner within 'a's scope, or #~"w.copy"
   non-owned field on a record                               |non-owned fields only allowed on classes              |Change the enclosing type from #~"record" to #~"class"
   a reftype field on a record (#~"s: String")               |a record field holds valtypes; make 'R' a class to hold 'String' |Make #~"R" a #~"class"; a valtype that must live on the heap is a #~"Box from:" local, never a field
   a reftype payload on a variant arm                        |a variant arm holds valtypes; make 'V' a union to hold 'String' |Make #~"V" a #~"union"
