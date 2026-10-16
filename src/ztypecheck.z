@@ -47384,6 +47384,8 @@ checkGenericTypeCall: function {
                         nodeid: farg.nid
                         lineno: farg.lineno
                         colno: farg.colno
+                        :dtp
+                        armId: armnId
                     )
                 }
             }
@@ -47417,10 +47419,11 @@ checkGenericTypeCall: function {
     return (callleg handled: false tid: result)
 }
 
-# movePayloadIntoArm -- an arm stores its payload OWNED: a bare-name reftype
-# payload moves in, and a `w.take` one has already moved. Either way the locks
-# the value held now belong to the value being built, which keeps them as a
-# construction keeps a moved-in field's (pushCarriedPins).
+# movePayloadIntoArm -- an owned arm stores its payload OWNED: a bare-name
+# reftype payload moves in, and a `w.take` one has already moved. Either way the
+# locks the value held now belong to the value being built, which keeps them as
+# a construction keeps a moved-in field's (pushCarriedPins). A non-owned arm
+# pins its payload instead (pinPayloadOfArm).
 movePayloadIntoArm: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -47431,9 +47434,16 @@ movePayloadIntoArm: function {
     nodeid: zast.nodeid
     lineno: u32
     colno: u32
+    # the type built and the arm it selects
+    dtp: ztypes.tid
+    armId: zast.nameid
 } is {
     if vt.isZero then return
     if (typeIsReftype :st tid: vt).not then return
+    if (st.typing.declIsBorrowedFieldId parentTypeId: dtp nameId: armId) then {
+        pinPayloadOfArm :st :ast :op :nodeid :lineno :colno
+        return
+    }
     carry: List ztyping.PinPath
     bn: bareAtomNameId n: (ast.nodes.get i: op)
     if bn.isZero.not then {
@@ -47461,6 +47471,42 @@ movePayloadIntoArm: function {
         if tkv.isZero.not then carryHeldLocks :st from: tkv pins: carry
     }
     pushCarriedPins :st pins: carry
+}
+
+# pinPayloadOfArm -- a non-owned arm (`some: T.borrow`, `some: t.view`) holds a
+# reference into its payload's source, as a non-owned field does: a bare-name
+# payload is pinned SHARED for the life of the value built, its owner keeps it
+# and may still read it, and nothing is moved. Any other payload (a path, a
+# call) brings the pins its own expression took.
+pinPayloadOfArm: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    # the payload's value node
+    op: zast.nodeid
+    nodeid: zast.nodeid
+    lineno: u32
+    colno: u32
+} is {
+    pth: ListVal zast.nameid
+    {
+        pn: ast.nodes.get i: op
+        if pn.atomid or pn.dottedpath then appendValueTuple :ast n: pn dst: pth
+    }
+    if pth.length == 0 then {
+        (addError
+            :st
+            :nodeid
+            :lineno
+            :colno
+            e: zast.err.ownerError
+            msg: "a non-owned arm points into its payload's source, and a temporary has none that outlives the statement: bind the value to a name first"
+        )
+        return
+    }
+    if (st.lookupVarId nameId: (pth.get i: 0)).none then return
+    stampArgDisposition :st :ast :op own: ztypes.zparamownership.borrowMode
+    pinsPush :st path: pth shared: true mutable: true alias: true
+    st.typing.pendingBorrowOwned = true
 }
 
 # checkTaggedCtorArg -- one argument of a tagged-type constructor: check it
@@ -47498,6 +47544,8 @@ checkTaggedCtorArg: function {
             nodeid: arg2.nid
             lineno: arg2.lineno
             colno: arg2.colno
+            :dtp
+            armId: unionCtorArmId
         )
         uparmo: (st.typing.declChildOfId
             parentTypeId: dtp

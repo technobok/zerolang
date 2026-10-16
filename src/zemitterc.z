@@ -11721,6 +11721,7 @@ emitArmCtorCall: function {
     }
     av: "0".string
     got: false
+    payNid: zast.nodeid
     arx349: u64
     for arx349 < call.arguments.count loop {
         aId: zast.kidAt kids: ast.kids span: call.arguments i: arx349
@@ -11728,11 +11729,25 @@ emitArmCtorCall: function {
         a: ast.nodes.get i: aId
         if a.namedoperation when got.not then {
             got = true
+            payNid = a.operation
             av = emitExpr :ast :symtab :ctx n: (ast.nodes.get i: a.operation)
         }
     }
     inl: armIsInlineC :symtab tid: stid :arm
     usl: armSlotC :ast :symtab :ctx tid: stid recv: "_u" acc: "." :arm inline: inl
+    # a non-owned arm (`some: T.borrow`) points at its pinned source: the
+    # checker pinned it rather than moving it, and the arm frees nothing
+    if inl.not when (armPayloadNamesStorage :ast :symtab tid: stid :arm :payNid) then {
+        pn: ast.nodes.get i: payNid
+        ptr: "&(\{av})"
+        avq: atomVidIfPlain :ast :symtab :ctx n: pn text: av.stringView
+        if (argAlreadyPointer :ast :symtab :ctx n: pn vid: avq) then ptr = av.copy
+        return (stating
+            :facts
+            from: callFacts
+            text: "({ \{vc}_t _u = {0}; _u.tag = \{tg}; \{usl} = \{ptr}; _u; })"
+        )
+    }
     st: (armCellStore
         pc: payC.stringView
         box: "_b"
@@ -11742,6 +11757,23 @@ emitArmCtorCall: function {
     )
     return (stating :facts from: callFacts text: "({ \{vc}_t _u = {0}; _u.tag = \{tg}; \{st} _u; })"
     )
+}
+
+# armPayloadNamesStorage -- the arm is non-owned and the call's payload is a
+# name or a path, storage the checker pinned for the value built: the payload
+# is that storage's address, not a copy.
+armPayloadNamesStorage: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    tid: ztypes.tid
+    arm: zast.nameid
+    # the payload's value node, 0 when there is none
+    payNid: zast.nodeid
+} out bool is {
+    if payNid.isZero then return false
+    if (symtab.typing.declIsBorrowedFieldId parentTypeId: tid nameId: arm).not then return false
+    op: ast.nodes.get i: payNid
+    return op.atomid or op.dottedpath
 }
 
 # userCreateCallC -- a user `create` (one with a body, so an emitted function)
@@ -35921,8 +35953,10 @@ emitUnionMono: function {
     for pj < an loop {
         pname: aidsNm.get i: pj
         pc: armPayloadC :ast :symtab :ctx :tid arm: pname
-        # an inline payload is a value in the slot: nothing to destroy or free
-        if pc.length > 0 when (armIsInlineC :symtab :tid arm: pname).not then {
+        # an inline payload is a value in the slot, and a non-owned arm's
+        # points at its pinned source: nothing to destroy or free in either
+        owned: (symtab.typing.declIsBorrowedFieldId parentTypeId: tid nameId: pname).not
+        if pc.length > 0 when owned when (armIsInlineC :symtab :tid arm: pname).not then {
             ptg: tagConstOf :ast :ctx :symtab :tid armId: pname
             lcase: "        case \{ptg}:\n"
             buf.append lcase
