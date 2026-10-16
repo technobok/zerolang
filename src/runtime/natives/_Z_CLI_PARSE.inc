@@ -86,8 +86,8 @@ static z_@Result_Parsed_CliError@_t z_cli_parse(z_@Spec@_t* spec, z_@List_String
                 continue;
             }
             /* bundled short flags: every char after `-` must be
-               a short flag. A short option terminates and takes
-               the rest as its value. */
+               a short flag, until a short option ends the bundle and
+               takes the rest of the token, or the next token, as its value. */
             if (a->size > 2) {
                 bool ok = true;
                 for (uint64_t k = 1; k < a->size && ok; k++) {
@@ -104,13 +104,22 @@ static z_@Result_Parsed_CliError@_t z_cli_parse(z_@Spec@_t* spec, z_@List_String
                         &spec->@MEMBER_Spec.options@, buf, 2);
                     if (boi >= 0) {
                         uint64_t vlen = a->size - (k + 1);
+                        z_@String@_t val = {0};
+                        if (vlen > 0) {
+                            val = z_@String@_create(vlen);
+                            z_@String@_append(&val, a->data + k + 1, vlen);
+                        } else {
+                            /* the option ends the bundle (`-vo`): its value is the next token */
+                            if (i + 1 >= args.length) {
+                                return z_cli_fail(parsed, &args, @ARM_CliError.missingValue@, a->data, a->size);
+                            }
+                            val = z_@String@_new(args.data[i + 1].data);
+                            i++;
+                        }
                         z_@String@_t key = z_@String@_new(
                             spec->@MEMBER_Spec.options@.data[boi].@MEMBER_OptionDef.name@.data);
-                        z_@String@_t val = z_@String@_create(vlen);
-                        if (vlen > 0) z_@String@_append(&val, a->data + k + 1, vlen);
                         z_@Map_String_String@_set(
                             parsed->@MEMBER_Parsed.optionValues@, key, val);
-                        /* consume rest of arg as value */
                         break;
                     }
                     ok = false;
