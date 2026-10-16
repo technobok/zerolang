@@ -83,51 +83,6 @@ holderEq: function {a: ztypes.zlockholder b: ztypes.zlockholder} out bool is {
     return a == b
 }
 
-# sameCallConflict -- a second reference to one value inside ONE call -- two
-# arguments, or an argument and the receiver -- where either may write
-# through itself: the callee holds both at once. Shared rows coexist
-# everywhere else. An INTENT prefix is a step toward a leaf, not a reference:
-# one laid toward this very path is the argument's own step, and one being
-# requested is answered by the leaf it leads to, so two fields of one value
-# (`o.a`, `o.b`) are two references, not the same one twice.
-sameCallConflict: function {
-    e: ztypes.ZEntry.view
-    lockScope: ztypes.zlockscope
-    holder: ztypes.zlockholder
-    mutable: bool
-    path: ListViewVal zast.nameid
-} out bool is {
-    if lockScope == ztypes.zlockscope.intent then return false
-    if e.lockHolder.call.not then return false
-    if (holderEq a: e.lockHolder b: holder).not then return false
-    if (e.lockMutable or mutable).not then return false
-    ownStep: (
-        (e.lockScope == ztypes.zlockscope.intent) and (isPrefix p: e.lockPath.listView whole: path)
-    )
-    if ownStep then return false
-    return (pathsOverlap a: e.lockPath.listView b: path)
-}
-
-# interiorConflict -- a reference a CALL handed back may point inside its
-# source, at storage any write to the source can free: it coexists with no
-# reference that may write, whichever came first. An alias of the slot itself
-# survives such writes. Only TARGET rows are references; an intent prefix is
-# a step.
-interiorConflict: function {
-    e: ztypes.ZEntry.view
-    lockScope: ztypes.zlockscope
-    holder: ztypes.zlockholder
-    mutable: bool
-    alias: bool
-    path: ListViewVal zast.nameid
-} out bool is {
-    if (lockScope == ztypes.zlockscope.target).not then return false
-    if (e.lockScope == ztypes.zlockscope.target).not then return false
-    if (holderEq a: e.lockHolder b: holder) then return false
-    if (pathsOverlap a: e.lockPath.listView b: path).not then return false
-    return mutable and e.lockAlias.not or (e.lockMutable and alias.not)
-}
-
 # Multi-granularity conflict for a NEW lock acquisition. Both paths share
 # the same root (caller filters by entry name). Same path: conflict iff
 # either side is EXCLUSIVE. Strict-ancestor existing: conflict iff that
@@ -762,7 +717,6 @@ ZSymbolTable: class {
                     le.lockScope = e.lockScope
                     le.lockHolder = e.lockHolder
                     le.lockMutable = e.lockMutable
-                    le.lockAlias = e.lockAlias
                     for each seg: e.lockPath loop le.lockPath.append seg
                     mLocks.append le
                 }
@@ -1623,7 +1577,6 @@ ZSymbolTable: class {
                     path: p
                     shared: e.lockType == ztypes.zlockstate.shared
                     mutable: e.lockMutable
-                    alias: e.lockAlias
                     carried: false
                 )
             }
@@ -1704,26 +1657,6 @@ ZSymbolTable: class {
         return "Cannot take \{reqKind} lock on '\{rootView}'\{reqDetail}: already has \{heldKind} lock\{heldDetail} held by '\{holderName}'"
     }
 
-    # formatReferenceConflict -- a reference a call handed back against one
-    # that may write: what was wanted, who holds the other, and which way
-    # round the danger runs.
-    formatReferenceConflict: function {
-        this: this.view
-        pool: zast.StringPool.view
-        reqPath: ListViewVal zast.nameid
-        reqMutable: bool
-        existingPath: ListViewVal zast.nameid
-        existingHolder: ztypes.vid
-    } out String is {
-        rp: formatPath :pool path: reqPath
-        ep: formatPath :pool path: existingPath
-        hn: this.formatVarHolder :pool vid: existingHolder
-        if reqMutable then {
-            return "Cannot take a mutable reference to '\{rp}': '\{hn}' holds a reference into '\{ep}' that a write could free"
-        }
-        return "Cannot take a reference into '\{rp}': '\{hn}' may write '\{ep}' through its reference and free what it points at"
-    }
-
     # --- locks ---
 
     # Try to acquire a lock on `path` (segments; root is a variable name);
@@ -1738,9 +1671,6 @@ ZSymbolTable: class {
         holder: ztypes.zlockholder
         # the holder may write through the reference it is taking
         mutable: bool
-        # the reference is a second name for the slot itself, not one a call
-        # handed back that may point inside the value
-        alias: bool
         # only ask: run the conflict check and lay no row. For a lock its
         # holder would release before anything else is checked -- the row
         # could only ever be removed again.
@@ -1761,7 +1691,6 @@ ZSymbolTable: class {
         conflictAt: u64
         conflictFound: false
         conflictSelf: false
-        conflictRef: false
         ne: this.entries.length
         j: ne
         # A local with no overlay row has no lock to conflict with: the scan
@@ -1791,18 +1720,6 @@ ZSymbolTable: class {
                     conflictAt = j2
                     conflictFound = true
                     conflictSelf = holderEq a: e.lockHolder b: holder
-                    break
-                }
-                if (sameCallConflict :e :lockScope :holder :mutable :path) then {
-                    conflictAt = j2
-                    conflictFound = true
-                    conflictSelf = true
-                    break
-                }
-                if (interiorConflict :e :lockScope :holder :mutable :alias :path) then {
-                    conflictAt = j2
-                    conflictFound = true
-                    conflictRef = true
                     break
                 }
                 # a shared lock already on the same path covers this one while
@@ -1839,22 +1756,6 @@ ZSymbolTable: class {
                     sameCall: conflictSelf
                 )
             }
-            # a readonly self-lock keeps its own wording: the binding IS the
-            # reference, and "readonly here" says why a writer is refused
-            selfHeld: cHolder == dv
-            if conflictRef when selfHeld then {
-                roRoot: zast.poolTextAt :pool ref: (path.get i: 0)
-                return "Cannot take a mutable reference to '\{roRoot}': '\{roRoot}' is readonly here"
-            }
-            if conflictRef then {
-                return (this.formatReferenceConflict
-                    :pool
-                    reqPath: path
-                    reqMutable: mutable
-                    existingPath: cPath.listView
-                    existingHolder: cHolder
-                )
-            }
             return (this.formatLockConflict
                 :pool
                 reqPath: path
@@ -1865,7 +1766,7 @@ ZSymbolTable: class {
             )
         }
         if idempotent or probe then return ok
-        this.layLockRow :d :path :lockType :lockScope :holder :mutable :alias
+        this.layLockRow :d :path :lockType :lockScope :holder :mutable
         return ok
     }
 
@@ -1879,7 +1780,6 @@ ZSymbolTable: class {
         lockScope: ztypes.zlockscope
         holder: ztypes.zlockholder
         mutable: bool
-        alias: bool
     } is {
         le: this.reg.newEntry ztypeId: (this.typing.declLocalTypeOf declId: d)
         ro: this.rowOf declId: d
@@ -1900,7 +1800,6 @@ ZSymbolTable: class {
         le.lockScope = lockScope
         le.lockHolder = holder
         le.lockMutable = mutable
-        le.lockAlias = alias
         # the entry OWNS its copy of the path: one sized grow from the window
         # rather than an append per segment
         le.lockPath.extendView from: path
