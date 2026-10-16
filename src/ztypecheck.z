@@ -6148,7 +6148,24 @@ resolveTyperefCallShell: function {
     if hn9.length > 0 when argRefused.not then {
         hdG9 = shellHeadIsGeneric :st :scope :ast :unitDecl callableNid: callableId
     }
-    if hdG9 then {
+    unk9: zast.nodeid
+    if hdG9 then unk9 = unknownTypeArgAtom :st :ast :unitDecl :scope :argIds
+    if unk9.isZero.not then {
+        # the argument names nothing at all: say which, as a bare type-ref does
+        un9: ast.nodes.get i: unk9
+        ut9: (zast.nameTextAt :ast ref: (atomNameId :ast n: un9)).copy
+        (addErrorH
+            :st
+            nodeid: unk9
+            lineno: (nodeLine n: un9)
+            colno: (nodeCol n: un9)
+            e: zast.err.badReference
+            msg: "Unknown type '\{ut9}'"
+            note: String
+            hint: "a type argument names a type, or a generic parameter the enclosing declaration owns"
+            width: ut9.length.u32.orPanic
+        )
+    } else if hdG9 then {
         m9: "type argument of generic type '\{hn9}' does not name a type here"
         h9: "a `:name` argument is `name: name`, and the VALUE must name a type or a generic parameter the enclosing declaration owns".string
         nt9: String
@@ -21503,8 +21520,74 @@ stampQualifiedTyperef: function {
     uk: zast.nodeid
 } out bool is {
     if (ast.nodes.get i: uk).dottedpath.not then return false
+    # a bare name under strip markers (`Crate.private.view`) is not qualified:
+    # its base resolved nowhere, and forcing it would mint a shell of that
+    # name -- two such shells then meet as "expected Crate, got Crate"
+    if (markedBareAtom :ast nid: uk).isZero.not then return false
     stampForcedTyperef :st :ast :unitDecl :scope thisName: "" nid: uk
     return (ztyping.nodeTypeAt tbl: st.typing.nodeType nid: uk).isZero.not
+}
+
+# markedBareAtom -- the bare name a type-ref is, under any strip markers
+# (`T`, `T.view`, `T.private.borrow`): its atom's node, or 0 when peeling the
+# markers leaves a qualified path or anything else.
+markedBareAtom: function {ast: Ast.view nid: zast.nodeid} out zast.nodeid is {
+    cur: nid
+    for cur.isZero.not loop {
+        n: ast.nodes.get i: cur
+        if n.atomid or n.labelvalue then return cur
+        if n.dottedpath.not then return zast.nodeid.zero
+        leafId: atomNameId :ast n: (ast.nodes.get i: n.child)
+        if (isStripMarkerId nameId: leafId).not then return zast.nodeid.zero
+        cur = n.parent
+    }
+    return zast.nodeid.zero
+}
+
+# unknownTypeArgAtom -- the first type argument of a generic application whose
+# bare name resolves nowhere: no type, no generic parameter, no declaration in
+# scope or in any loaded unit. Its atom's node, or 0 when every argument names
+# something (which may still not fit the template).
+unknownTypeArgAtom: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    scope: ztypes.declid
+    argIds: (ListVal zast.nodeid).view
+} out zast.nodeid is {
+    for each argId: argIds loop {
+        opId: zast.nodeid
+        {
+            arg: ast.nodes.get i: argId
+            if arg.namedoperation then opId = arg.operation
+        }
+        atomNid: markedBareAtom :ast nid: opId
+        if atomNid.isZero.not then {
+            nameId: atomNameId :ast n: (ast.nodes.get i: atomNid)
+            if (typeNameResolvesNowhere :st :ast :unitDecl :scope :nameId) then return atomNid
+        }
+    }
+    return zast.nodeid.zero
+}
+
+# typeNameResolvesNowhere -- a bare type name no lookup answers: not a type in
+# scope, not a generic parameter, not a declaration in scope, and not a member
+# of any loaded unit (the closure-wide search typerefExcused makes too).
+typeNameResolvesNowhere: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    scope: ztypes.declid
+    nameId: zast.nameid
+} out bool is {
+    if nameId.isZero then return false
+    if (st.typing.gpNames.has item: nameId) then return false
+    if (walkLookupTyperefById :ast :st :unitDecl :scope baseId: nameId).some then return false
+    if (envLookup :st :scope :nameId).declId.isZero.not then return false
+    for each ud: (programUnitDecls :st) loop {
+        if (resolvedByIds :ast :st unitDecl: ud name: nameId).some then return false
+    }
+    return true
 }
 
 # stampPendingTyperefs -- stamp the type-ref nodes recorded since the last
