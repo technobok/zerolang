@@ -1,12 +1,12 @@
 # A local binding of a reftype BORROWS its source. `b: a` is a second name for
-# what `a` names, not a transfer of it: both names stay readable, a write
-# through either is visible through the other, and only the source is
-# destroyed -- the binding owns nothing, so nothing is freed twice. `.take` is
-# the one spelling that moves and `.copy` the one that duplicates.
+# what `a` names, not a transfer of it: a write through the binding is a write
+# to the source, and only the source is destroyed -- the binding owns nothing,
+# so nothing is freed twice. `.take` is the one spelling that moves and `.copy`
+# the one that duplicates.
 #
-# The pin lasts the binding's scope, which is why each case has a block of its
-# own: while `b` lives, `a` may be read but not written (see
-# binding_borrow_locks_source).
+# The borrow lasts the binding's scope and excludes every other use of the
+# source while it lives, which is why each case writes through `b` in a block
+# of its own and reads `a` after it (binding_borrow_locks_source).
 Box: class {
     s: String
 }
@@ -22,16 +22,21 @@ main: function is {
     # have reallocated and stranded the original
     {
         a: "one".string
-        b: a
-        b.append "-and-then-some-more-than-fits"
+        {
+            b: a
+            b.append "-and-then-some-more-than-fits"
+        }
         print "string=\{a}"
     }
     # a class: a field write through the binding lands in the source's instance
     {
         a: Box s: "x".string
-        b: a
-        b.s = "changed".string
-        print "class=\{a.s},\{b.s}"
+        {
+            b: a
+            b.s = "changed".string
+            print "class=\{b.s}"
+        }
+        print "class=\{a.s}"
     }
     # a union: the binding sees the arm the source holds
     {
@@ -43,16 +48,22 @@ main: function is {
     {
         a: List String
         a.append from: "x".string
-        b: a
-        b.append from: "y".string
-        print "list=\{a.length},\{b.length}"
+        {
+            b: a
+            b.append from: "y".string
+            print "list=\{b.length}"
+        }
+        print "list=\{a.length}"
     }
     {
         a: (Map String V: String)
         a.set key: "k".string value: "v".string
-        b: a
-        b.set key: "j".string value: "w".string
-        print "map=\{a.length},\{b.length}"
+        {
+            b: a
+            b.set key: "j".string value: "w".string
+            print "map=\{b.length}"
+        }
+        print "map=\{a.length}"
     }
     # the borrow is released at its block's end: the source is writable again
     {

@@ -31520,35 +31520,6 @@ checkDropMarkerVar: function {
 } out bool is {
     relBlocked: blocked
     if (isDropMarkerId nameId: cnId) then {
-        rpath: ListVal zast.nameid
-        rpath.append (nameIdOf :ast name: mkRoot)
-        elh: st.findExclusiveLock path: rpath
-        match (
-            elh
-        ) case some then {
-            relBlocked = true
-            ahn: st.formatLockHolder pool: ast.names holder: elh
-            macc: "Cannot access: '\{mkRoot}' has exclusive lock held by '\{ahn}'"
-            ahint: String
-            if elh.var then {
-                ahint = "read through '\{ahn}' instead, or end '\{ahn}'s scope first to release the lock"
-            }
-            aen: String
-            aid: nodeId n: (ast.nodes.get i: dp.parent)
-            aln: nodeLine n: (ast.nodes.get i: dp.parent)
-            acl: nodeCol n: (ast.nodes.get i: dp.parent)
-            (addErrorH
-                :st
-                nodeid: aid
-                lineno: aln
-                colno: acl
-                e: zast.err.ownerError
-                msg: macc
-                note: aen
-                hint: ahint
-                width: mkRoot.length.u32.orPanic
-            )
-        } case none then null
         # the name's own locks -- the readonly lock a `.view` result, a `view`
         # parameter or a `hold` binding keeps on itself -- end with it; only a
         # lock something else holds on it stops the drop
@@ -31556,10 +31527,12 @@ checkDropMarkerVar: function {
             d: ztypes.vid
         )
         rlk: st.findLockHeldByOther nameId: (nameIdOf :ast name: mkRoot) self: selfH
+        heldByOther: false
         match (
             rlk
         ) case some then {
             relBlocked = true
+            heldByOther = true
             rhn: st.formatLockHolder pool: ast.names holder: rlk.holder
             lsn: zenv.zlockstateNameLower t: rlk.state
             mrel: "Cannot drop '\{mkRoot}': \{lsn} lock held by '\{rhn}'"
@@ -31572,6 +31545,39 @@ checkDropMarkerVar: function {
                 msg: mrel
             )
         } case none then null
+        # a lock another holder has is what stops the drop, said once; failing
+        # that, an exclusive lock the name itself holds stops any access
+        if heldByOther.not then {
+            rpath: ListVal zast.nameid
+            rpath.append (nameIdOf :ast name: mkRoot)
+            elh: st.findExclusiveLock path: rpath
+            match (
+                elh
+            ) case some then {
+                relBlocked = true
+                ahn: st.formatLockHolder pool: ast.names holder: elh
+                macc: "Cannot access: '\{mkRoot}' has exclusive lock held by '\{ahn}'"
+                ahint: String
+                if elh.var then {
+                    ahint = "read through '\{ahn}' instead, or end '\{ahn}'s scope first to release the lock"
+                }
+                aen: String
+                aid: nodeId n: (ast.nodes.get i: dp.parent)
+                aln: nodeLine n: (ast.nodes.get i: dp.parent)
+                acl: nodeCol n: (ast.nodes.get i: dp.parent)
+                (addErrorH
+                    :st
+                    nodeid: aid
+                    lineno: aln
+                    colno: acl
+                    e: zast.err.ownerError
+                    msg: macc
+                    note: aen
+                    hint: ahint
+                    width: mkRoot.length.u32.orPanic
+                )
+            } case none then null
+        }
     }
     return relBlocked
 }
@@ -40551,7 +40557,7 @@ lockCallArg: function {
     pth.append nameId
     h: ztypes.zlockholder.call callId
     clk: ztypes.zlockstate.exclusive
-    if shared then clk = ztypes.zlockstate.shared
+    if shared when mutable.not then clk = ztypes.zlockstate.shared
     r: (st.tryLock
         :pool
         path: pth.listView
@@ -40644,25 +40650,38 @@ lockCallPath: function {
             :colno
         )
     }
+    he: ztypes.zlockholder.call callId
+    clk: ztypes.zlockstate.exclusive
+    if shared when mutable.not then clk = ztypes.zlockstate.shared
     end: 1.u64
     for end < n loop {
-        hs: ztypes.zlockholder.call callId
         rs: (st.tryLock
             :pool
             path: (path.slice from: 0 to: end)
             lockType: ztypes.zlockstate.shared
             lockScope: ztypes.zlockscope.intent
-            holder: hs
+            holder: he
             mutable: false
             alias: true
             :probe
         )
-        if rs.length > 0 then addError :st :nodeid :lineno :colno e: zast.err.ownerError msg: rs
+        if rs.length > 0 then {
+            (reportPathConflict
+                :st
+                :pool
+                :path
+                holder: he
+                lockType: clk
+                :mutable
+                :rs
+                :nodeid
+                :lineno
+                :colno
+            )
+            return
+        }
         end = end + 1
     }
-    he: ztypes.zlockholder.call callId
-    clk: ztypes.zlockstate.exclusive
-    if shared then clk = ztypes.zlockstate.shared
     re: (st.tryLock
         :pool
         path: path.listView
@@ -40674,6 +40693,38 @@ lockCallPath: function {
         :probe
     )
     if re.length > 0 then addError :st :nodeid :lineno :colno e: zast.err.ownerError msg: re
+}
+
+# reportPathConflict -- a call's lock on `path` met a conflict at one of its
+# prefixes: report it once, as the conflict of the whole path when the leaf's
+# own lock meets one (it names both paths), else as the prefix's message `rs`.
+reportPathConflict: function {
+    st: zenv.ZSymbolTable
+    pool: zast.StringPool.view
+    path: (ListVal zast.nameid).view
+    holder: ztypes.zlockholder
+    lockType: ztypes.zlockstate
+    mutable: bool
+    rs: String
+    nodeid: zast.nodeid
+    lineno: u32
+    colno: u32
+} is {
+    rw: (st.tryLock
+        :pool
+        path: path.listView
+        :lockType
+        lockScope: ztypes.zlockscope.target
+        :holder
+        :mutable
+        alias: true
+        probe: true
+    )
+    if rw.length > 0 then {
+        addError :st :nodeid :lineno :colno e: zast.err.ownerError msg: rw
+    } else {
+        addError :st :nodeid :lineno :colno e: zast.err.ownerError msg: rs
+    }
 }
 
 # lockCallArgPath -- the call-scoped lock an argument that is a field path
@@ -40712,29 +40763,41 @@ lockCallArgPath: function {
         )
         return
     }
+    he: ztypes.zlockholder.call callId
+    lk: ztypes.zlockstate.exclusive
+    if mutable.not then lk = ztypes.zlockstate.shared
     end: 1.u64
     for end < n loop {
-        hs: ztypes.zlockholder.call callId
         rs: (st.tryLock
             :pool
             path: (path.slice from: 0 to: end)
             lockType: ztypes.zlockstate.shared
             lockScope: ztypes.zlockscope.intent
-            holder: hs
+            holder: he
             mutable: false
             alias: true
         )
         if rs.length > 0 then {
-            addError :st :nodeid :lineno :colno e: zast.err.ownerError msg: rs
+            (reportPathConflict
+                :st
+                :pool
+                :path
+                holder: he
+                lockType: lk
+                :mutable
+                :rs
+                :nodeid
+                :lineno
+                :colno
+            )
             return
         }
         end = end + 1
     }
-    he: ztypes.zlockholder.call callId
     re: (st.tryLock
         :pool
         path: path.listView
-        lockType: ztypes.zlockstate.shared
+        lockType: lk
         lockScope: ztypes.zlockscope.target
         holder: he
         :mutable
@@ -40992,7 +41055,7 @@ pinsAppend: function {
     if path.length == 0 then return
     p: ListVal zast.nameid
     for each seg: path loop p.append seg
-    pins.append (ztyping.PinPath path: p :shared :mutable :alias :carried)
+    pins.append (ztyping.PinPath path: p shared: shared and mutable.not :mutable :alias :carried)
 }
 
 # pinsAppendOne -- pinsAppend for a one-segment path: a bare root name.
@@ -41005,7 +41068,13 @@ pinsAppendOne: function {
 } is {
     p: ListVal zast.nameid
     p.append nameId
-    pins.append (ztyping.PinPath path: p :shared :mutable :alias carried: false)
+    pins.append (ztyping.PinPath
+        path: p
+        shared: shared and mutable.not
+        :mutable
+        :alias
+        carried: false
+    )
 }
 
 # varNameText -- the name of the open local bound to `vid`, "" when none is.
@@ -41139,7 +41208,13 @@ pinsPush: function {
     if path.length == 0 then return
     p: ListVal zast.nameid
     for each seg: path loop p.append seg
-    st.typing.pendingPins.append (ztyping.PinPath path: p :shared :mutable :alias carried: false)
+    st.typing.pendingPins.append (ztyping.PinPath
+        path: p
+        shared: shared and mutable.not
+        :mutable
+        :alias
+        carried: false
+    )
 }
 
 # pinsPushOne -- pinsPush for a one-segment path: a bare root name.
@@ -41153,7 +41228,13 @@ pinsPushOne: function {
     if nameId.isZero then return
     p: ListVal zast.nameid
     p.append nameId
-    st.typing.pendingPins.append (ztyping.PinPath path: p :shared :mutable :alias carried: false)
+    st.typing.pendingPins.append (ztyping.PinPath
+        path: p
+        shared: shared and mutable.not
+        :mutable
+        :alias
+        carried: false
+    )
 }
 
 # pinsRoot -- the root of the first pending pin, zero when none is pending.
@@ -41785,7 +41866,7 @@ installBorrowLocks: function {
     }
     he: ztypes.zlockholder.var vid
     lk: ztypes.zlockstate.exclusive
-    if leafShared then lk = ztypes.zlockstate.shared
+    if leafShared when mutable.not then lk = ztypes.zlockstate.shared
     re: (st.tryLock
         :pool
         path: src.listView
@@ -47530,7 +47611,9 @@ movePayloadIntoArm: function {
     if vt.isZero then return
     if (typeIsReftype :st tid: vt).not then return
     if (st.typing.declIsBorrowedFieldId parentTypeId: dtp nameId: armId) then {
-        pinPayloadOfArm :st :ast :op :nodeid :lineno :colno
+        amd: st.typing.declMemberIdOf parentTypeId: dtp nameId: armId
+        armView: (st.typing.decls.get i: amd).ownership == ztypes.zparamownership.viewMode
+        pinPayloadOfArm :st :ast :op :armView :nodeid :lineno :colno
         return
     }
     carry: List ztyping.PinPath
@@ -47572,6 +47655,8 @@ pinPayloadOfArm: function {
     ast: Ast
     # the payload's value node
     op: zast.nodeid
+    # the arm is `.view`: it only reads what it points at
+    armView: bool
     nodeid: zast.nodeid
     lineno: u32
     colno: u32
@@ -47593,8 +47678,10 @@ pinPayloadOfArm: function {
         return
     }
     if (st.lookupVarId nameId: (pth.get i: 0)).none then return
-    stampArgDisposition :st :ast :op own: ztypes.zparamownership.borrowMode
-    pinsPush :st path: pth shared: true mutable: true alias: true
+    own: ztypes.zparamownership.borrowMode
+    if armView then own = ztypes.zparamownership.viewMode
+    stampArgDisposition :st :ast :op :own
+    pinsPush :st path: pth shared: true mutable: armView.not alias: true
     st.typing.pendingBorrowOwned = true
 }
 
