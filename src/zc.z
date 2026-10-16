@@ -90,13 +90,18 @@ errorMessage: function {
 }
 
 # failEmitErrors -- failures the emitter recorded: compile-time `error`
-# calls proved reachable and constructs it cannot emit. Report each in the
-# checker's format and exit non-zero (no C is written or compiled).
-failEmitErrors: function {errs: (List String).view} is {
+# calls proved reachable (E0601) and constructs it cannot emit (E0500). Report
+# each as reportTypeErrors does and exit non-zero (no C is written or compiled).
+failEmitErrors: function {
+    errs: (List zast.ErrorData).view
+    vfs: zvfs.ZVfs
+    prog: zast.Ast.view
+    mainFsno: zvfs.fsno
+} is {
     n: errs.length
     if n == 0 then return
     for each e: errs loop {
-        el: "error[E0500]: \{e.stringView}"
+        el: errorMessage :e :vfs ast: prog fallbackFsno: mainFsno
         io.eprintln el
     }
     if n == 1 then {
@@ -1547,6 +1552,10 @@ zlinkLibsOf: function {csrc: StringView} out List String is {
 emitCSource: function {
     prog: zast.Ast.view
     st: zenv.ZSymbolTable
+    # the files a reached `error` is shown from
+    vfs: zvfs.ZVfs
+    # the main unit's file, for a failure that carries no file of its own
+    mainFsno: zvfs.fsno
     runtimeDir: StringView
     cf: ZcFlags.view
     libs: (List String).view
@@ -1555,7 +1564,7 @@ emitCSource: function {
     t1: i64
     t2: i64
 } out String is {
-    emitErrs: List String
+    emitErrs: List zast.ErrorData
     csrc: (zemitterc.emitC
         program: prog
         symtab: st
@@ -1567,7 +1576,7 @@ emitCSource: function {
         :ccFamily
         targetArch: (ztarget.targetOrHostArch triple: cf.targetTriple.stringView).stringView
     )
-    failEmitErrors errs: emitErrs
+    failEmitErrors errs: emitErrs :vfs :prog :mainFsno
     if cf.timed then printPhases :t0 :t1 :t2 t3: os.monotonicMillis
     return csrc
 }
@@ -1786,6 +1795,8 @@ compileUnit: function {
     csrc: (emitCSource
         :prog
         :st
+        :vfs
+        :mainFsno
         runtimeDir: runtimeDir.stringView
         :cf
         libs: emitLibs

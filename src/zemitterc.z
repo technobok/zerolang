@@ -2658,13 +2658,30 @@ nativeValueRowOf: function {ctx: Ctx.view path: StringView} out bool is {
 # marker comment still lands in the emitted C for context, but zc reports
 # every recorded failure and exits nonzero without writing any output.
 emitFail: function {ctx: Ctx what: String line: u32} is {
+    ctx.emitErrors.append (emitterFailure :what :line)
+}
+
+# emitterFailure -- E0500, a construct the emitter cannot emit. It carries only
+# a line, written into the message, and no node: the driver prints no snippet
+# for it, since a bare line could name the wrong file.
+emitterFailure: function {what: String line: u32} out zast.ErrorData is {
     msg: String
     if line > 0 then {
         msg = "zemitterc: \{what} [line \{line}]"
     } else {
         msg = "zemitterc: \{what}"
     }
-    ctx.emitErrors.append from: msg
+    return (zast.ErrorData
+        nodeid: zast.nodeid
+        lineno: 0
+        colno: 0
+        width: 0
+        err: zast.err.emitterError
+        :msg
+        fsno: zvfs.fsno
+        note: ""
+        hint: ""
+    )
 }
 
 # loadFragment -- read a runtime fragment and fill its holes. Every fragment
@@ -2675,7 +2692,7 @@ loadFragment: function {
     path: StringView
     svC: StringView
     strC: StringView
-    fails: List String
+    fails: List zast.ErrorData
 } out String is {
     rd: io.readText :path
     match (
@@ -2703,14 +2720,12 @@ loadFragment: function {
         fn: ferr.length
         for fi < fn loop {
             m: ferr.get i: fi
-            fm: "zemitterc: \{m}"
-            fails.append from: fm
+            fails.append (emitterFailure what: m.copy line: 0)
             fi = fi + 1
         }
         return cur
     } case err then {
-        f: "zemitterc: missing runtime fragment \{path}"
-        fails.append from: f
+        fails.append (emitterFailure what: "missing runtime fragment \{path}" line: 0)
         m: "/* zemitterc: missing runtime fragment \{path} */\n"
         return m
     }
@@ -3848,9 +3863,10 @@ Ctx: class {
     # how deep in nested conditions the emit is, which decides whether a temp
     # can be hoisted out
     condDepth: u64
-    # the constructs the emitter could not handle, collected rather than thrown
-    # so one run reports all of them
-    emitErrors: List String
+    # the constructs the emitter could not handle and the `error` calls it
+    # proved reachable, collected rather than thrown so one run reports all of
+    # them
+    emitErrors: List zast.ErrorData
     # the user types whose struct is already out, so a second demand does not
     # emit it twice
     emittedUserTypes: IdSet ztypes.tid
@@ -20985,8 +21001,15 @@ emitErrorStmt: function {
     }
     if ctx.condDepth == 0 when ctx.genActive.not then {
         em: lit.copy
-        if em.length == 0 then em = "compile-time error reached"
-        ctx.emitErrors.append from: em
+        if em.length == 0 then em = "compile-time error"
+        cn: ast.nodes.get i: call.callable
+        ctx.emitErrors.append (ztypecheck.reachedErrorData
+            nodeid: call.callable
+            lineno: (ztypecheck.nodeLine n: cn)
+            colno: (zast.posOf n: cn).col
+            width: 5
+            msg: em.stringView
+        )
     }
 }
 
@@ -24907,7 +24930,7 @@ emitGenericDissect: function {
         subjDesc: ztypecheck.dissectedArgText st: symtab :darg
         pnmT: zast.poolTextAt pool: ast.names ref: paramName
         cnm: "generic match on '\{pnmT}' has no case for '\{subjDesc}' and no else"
-        ctx.emitErrors.append from: cnm.copy
+        ctx.emitErrors.append (emitterFailure what: cnm.copy line: 0)
         ef: "\{ind}z_panic(\"(compile-time error)\");\n"
         buf.append ef
     }
@@ -33852,7 +33875,6 @@ assembleEmitOutput: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     runtimeDir: StringView
-    errs: List String
     buf: String.borrow
     poolBuf: StringView
     codeBuf: StringView
@@ -33899,7 +33921,6 @@ assembleEmitOutput: function {
     buf.append "    z_main();\n"
     buf.append "    return 0;\n"
     buf.append "}\n"
-    for each ee: ctx.emitErrors loop errs.append from: ee.copy
 }
 
 # emitCHeader -- the file's fixed header: the link libraries the reached units
@@ -33913,7 +33934,7 @@ emitCHeader: function {
     # the C sources to build and link, one `zcsrc:` line each (applyUnitReqs)
     csrcs: (List String).view
     runtimeDir: StringView
-    errs: List String
+    errs: List zast.ErrorData
     buf: String.borrow
 } is {
     # the link libraries the reached units declared, so whatever drives the C
@@ -34063,7 +34084,7 @@ buildTypeCnames: function {
 # String typedef (Path) shares the String struct and its free (destroyFnC).
 emitStringFragments: function {
     runtimeDir: StringView
-    errs: List String
+    errs: List zast.ErrorData
     buf: String.borrow
     strC: StringView
     svC: StringView
@@ -34159,7 +34180,7 @@ emitC: function {
     runtimeDir: StringView
     fastHash: bool
     readableNames: bool
-    errs: List String
+    errs: List zast.ErrorData
     libs: (List String).view
     # the family of the C compiler the output is for: a unit the program
     # reaches may need something only some have
@@ -34228,7 +34249,7 @@ emitC: function {
         fieldNameIds: ListVal zast.nameid
         mainUnitId: ztypes.declid
         condDepth: 0
-        emitErrors: List String
+        emitErrors: List zast.ErrorData
         needUnits: List String
         needMembs: List String
         fnSigs: (IdMapR ztypes.tid V: String)
@@ -34408,12 +34429,16 @@ emitC: function {
         :symtab
         :ctx
         :runtimeDir
-        :errs
         :buf
         poolBuf: poolBuf.stringView
         codeBuf: codeBuf.stringView
         fnsBuf: fnsBuf.stringView
     )
+    # the Ctx's failures follow assembly's own, in the order recorded: popped
+    # twice, so each is moved rather than copied
+    rev: List zast.ErrorData
+    for ctx.emitErrors.length > 0 loop rev.append from: ctx.emitErrors.pop
+    for rev.length > 0 loop errs.append from: rev.pop
     # the header goes in front last: its link line holds what the reached
     # units need, which the table had to be read to know
     whole: String
