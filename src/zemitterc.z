@@ -31920,15 +31920,39 @@ checkNativeMembers: function {
             if mo.functiondef when mo.isNative then {
                 mk: "\{unitName}.\{typeName}.\{mn}"
                 if (nativeHasRow :ctx path: mk.stringView).not then {
-                    (emitFail
-                        :ctx
-                        what: "no native implementation for '\{mk}'"
-                        line: mo.lineno
-                    )
+                    ctx.emitErrors.append (noNativeImplFailure :ast nid: am key: mk.stringView)
                 }
             }
         }
     }
+}
+
+# noNativeImplFailure -- E0501 at the declaration `nid` names: it says
+# `is native` and natives.tbl has no row `key`. The program's error, not an
+# emitter gap, so it is shown where it was written.
+noNativeImplFailure: function {
+    ast: Ast.view
+    # the declaration's labelled row
+    nid: zast.nodeid
+    # the natives.tbl path it would have
+    key: StringView
+} out zast.ErrorData is {
+    dn: ast.nodes.get i: nid
+    pos: zast.posOf n: dn
+    # the declared name is what the caret marks
+    width: u32
+    if dn.namedoperation then width = (zast.nameTextAt :ast ref: dn.name).length.u32.orPanic
+    return (zast.ErrorData
+        nodeid: nid
+        lineno: pos.line
+        colno: pos.col
+        :width
+        err: zast.err.noNativeImpl
+        msg: "no native implementation for '\{key}'"
+        fsno: zvfs.fsno
+        note: ""
+        hint: "`is native` promises a body from natives.tbl: write the body, or add the row"
+    )
 }
 
 # checkNativesResolve -- every `is native` declaration in a loaded unit that the
@@ -31963,11 +31987,7 @@ checkNativesResolve: function {
                 if op.isNative then {
                     pk: "\{unitName}.\{nm}"
                     if (nativeHasRow :ctx path: pk.stringView).not then {
-                        (emitFail
-                            :ctx
-                            what: "no native implementation for '\{pk}'"
-                            line: op.lineno
-                        )
+                        ctx.emitErrors.append (noNativeImplFailure :ast nid: bm key: pk.stringView)
                     }
                 }
             } case objectdef then {
