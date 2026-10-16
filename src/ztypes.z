@@ -25,6 +25,7 @@ public: unit {
     :constraintkind
     :cval
     :isFloatLexeme
+    :literalShapeError
     :absI64
     :bitsI64
     :i64Bits
@@ -2827,20 +2828,129 @@ inRangeNumber: function {value: u64 kind: numkind} out ParsedNumber is {
     return (ParsedNumber :kind isFloat: false ival: value fval: 0.0 err: "")
 }
 
-# charLiteralNumber -- a `0c` lexeme, whose body must be exactly one byte. The
-# byte is in range by construction, so reading it cannot fail.
+# charLiteralNumber -- a `0c` lexeme: the prefix and one character
+# (charLiteralValue), in range for `kind`.
 charLiteralNumber: function {numstr: StringView kind: numkind coreLen: u64} out ParsedNumber is {
-    if (coreLen - 2) != 1 then {
-        return (ParsedNumber
-            :kind
-            isFloat: false
-            ival: 0
-            fval: 0.0
-            err: "Character literal must be exactly one character: ".concat numstr
-        )
+    cv: charLiteralValue body: (numstr.substring from: 2 to: coreLen)
+    match cv case some then return (inRangeNumber value: cv :kind) case none then null
+    return (ParsedNumber
+        :kind
+        isFloat: false
+        ival: 0
+        fval: 0.0
+        err: "Character literal must be exactly one character: ".concat numstr
+    )
+}
+
+# charLiteralValue -- the codepoint a `0c` lexeme's body (the bytes after the
+# prefix) names: one byte that is not a backslash, or one escape as a string
+# writes it -- `\n` `\t` `\b` `\\`, `\xHH` (a byte) or `\uHHHHHH` (a codepoint, at
+# most U+10FFFF). none for anything else: no body, two characters, an unknown
+# escape, or the wrong number of hex digits.
+charLiteralValue: function {body: StringView} out optionval u64 is {
+    if body.length == 0 then return (optionval.none u64)
+    b0: (body.byteAt 0).or d: 0.u8
+    if b0 != 92 then {
+        if body.length == 1 then return (optionval.some b0.u64)
+        return (optionval.none u64)
     }
-    cb: (numstr.byteAt 2.u64).or d: 0.u8
-    return (inRangeNumber value: cb :kind)
+    b1: (body.byteAt 1).or d: 0.u8
+    if body.length == 2 then return (simpleEscapeValue b: b1)
+    # \x takes two hex digits, \u six
+    hexN: u64
+    if b1 == 120 then hexN = 2
+    if b1 == 117 then hexN = 6
+    if (hexN == 0) or (body.length != (hexN + 2)) then return (optionval.none u64)
+    v: u64
+    i: 2.u64
+    for i < body.length loop {
+        dv: digitVal ((body.byteAt i).or d: 0.u8)
+        match dv case some then v = v * 16 + dv case none then return (optionval.none u64)
+        i = i + 1
+    }
+    if v > 1114111 then return (optionval.none u64)
+    return (optionval.some v)
+}
+
+# simpleEscapeValue -- the byte a one-letter escape stands for: `n` `t` `b`
+# and the backslash itself; none for any other.
+simpleEscapeValue: function {b: u8} out optionval u64 is {
+    if b == 110 then return (optionval.some 10.u64)
+    if b == 116 then return (optionval.some 9.u64)
+    if b == 98 then return (optionval.some 8.u64)
+    if b == 92 then return (optionval.some 92.u64)
+    return (optionval.none u64)
+}
+
+# literalShapeError -- why a numeric lexeme is no literal at all, "" when it is
+# one: a digit its base does not have, a prefix with no digits, a float the
+# parser cannot read, or a character literal that is not one character. How
+# large a value is, is a range question, answered where the literal lands.
+literalShapeError: function {lex: StringView} out String is {
+    mag: lex
+    if (lex.startsWith "-") or (lex.startsWith "+") then mag = lex.substring from: 1 to: lex.length
+    r: lexemeRadix numstr: mag
+    if r.isChar then {
+        cv: charLiteralValue body: (mag.substring from: 2 to: mag.length)
+        match cv case some then return "" case none then null
+        return ("Character literal must be exactly one character: ".concat lex)
+    }
+    if (isFloatLexeme numstr: mag) then {
+        if r.base != 10 then return ("Base must be 10 for float: ".concat lex)
+        if (isFloatShape numstr: mag).not then return ("Invalid numeric literal: ".concat lex)
+        return ""
+    }
+    dv: digitsRadix numstr: mag startIdx: r.startIdx coreLen: mag.length base: r.base
+    if dv.bad or (hasDigitFrom numstr: mag from: r.startIdx).not then {
+        return ("Invalid numeric literal: ".concat lex)
+    }
+    return ""
+}
+
+# isFloatShape -- a decimal float lexeme is digits, then `.` and digits, then
+# `e` or `E`, an optional sign and digits, each part but the first optional
+# and `_` allowed among digits. How large the value is, is not asked here.
+isFloatShape: function {numstr: StringView} out bool is {
+    i: digitRunEnd :numstr from: 0
+    if i == 0 then return false
+    if ((numstr.byteAt i).or d: 0.u8) == 46 then {
+        j: digitRunEnd :numstr from: i + 1
+        if j == (i + 1) then return false
+        i = j
+    }
+    eb: (numstr.byteAt i).or d: 0.u8
+    if (eb == 101) or (eb == 69) then {
+        i = i + 1
+        sb: (numstr.byteAt i).or d: 0.u8
+        if (sb == 43) or (sb == 45) then i = i + 1
+        j: digitRunEnd :numstr from: i
+        if j == i then return false
+        i = j
+    }
+    return i == numstr.length
+}
+
+# digitRunEnd -- the index past the run of decimal digits and `_` that starts
+# at `from`; `from` itself when there is none.
+digitRunEnd: function {numstr: StringView from: u64} out u64 is {
+    i: from
+    for i < numstr.length loop {
+        b: (numstr.byteAt i).or d: 0.u8
+        isDigit: (b >= 48) and (b <= 57)
+        if isDigit.not when b != 95 then return i
+        i = i + 1
+    }
+    return i
+}
+
+# hasDigitFrom -- some byte of `numstr` from `from` on is not the `_` separator.
+hasDigitFrom: function {numstr: StringView from: u64} out bool is {
+    i: from
+    for i < numstr.length loop {
+        if ((numstr.byteAt i).or d: 95.u8) != 95 then return true
+        i = i + 1
+    }
+    return false
 }
 
 # floatLiteralNumber -- a lexeme with a decimal point. The whole lexeme is the
