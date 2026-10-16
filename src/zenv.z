@@ -385,6 +385,32 @@ ZEntryDumpRow: class {
     excludedSubtypes: ListVal zast.nameid
 }
 
+# queuedarglock -- the lock one argument of a call holds for the call's
+# duration, asked for while the call's arguments are walked. A call's pins start
+# when the call starts, after every argument is evaluated: a call nested in a
+# later argument has finished by then, so it never meets them. The checker lays
+# the queue once the argument walk ends (layArgLocks).
+queuedarglock: record {
+    # the call that holds the lock
+    callId: zast.nodeid
+    # the local the path is rooted at, as the argument resolved it
+    declId: ztypes.declid
+    # the path, root first, as the range [segFrom, segTo) of the table's
+    # argLockSegs: one segment for a bare name
+    segFrom: u64
+    segTo: u64
+    # a field path (lockCallArgPath) rather than a bare name (lockCallArg)
+    isPath: bool
+    # the strength asked for
+    shared: bool
+    # the callee may write through the reference
+    mutable: bool
+    # where the argument is, for the report
+    nodeid: zast.nodeid
+    lineno: u32
+    colno: u32
+}
+
 # heldlock -- one lock row's strength and holder, read off the overlay.
 heldlock: record {
     # the lock's strength
@@ -487,6 +513,11 @@ ZSymbolTable: class {
     scopeHidden: IdSet ztypes.declid
     # the snapshot rows, appended as entries are popped rather than read live
     entryDump: List ZEntryDumpRow
+    # the argument locks of the calls whose arguments are being walked, in
+    # argument order: a call's run is from the length it found up. Their paths'
+    # segments, back to back
+    argLocks: ListVal queuedarglock
+    argLockSegs: ListVal zast.nameid
     # the type registry this table resolves against
     reg: ztypes.ZTypeRegistry
     # the stamp container everything checked here is recorded into
@@ -1914,6 +1945,58 @@ ZSymbolTable: class {
         return (optionval.none heldlock)
     }
 
+    # queueArgLock -- hold an argument's call lock until the call starts: the
+    # arguments after it are evaluated first, and a call nested in one has
+    # finished before this call begins. The caller has appended the path's
+    # segments to argLockSegs from `segFrom` up.
+    queueArgLock: function {
+        :this
+        callId: zast.nodeid
+        segFrom: u64
+        isPath: bool
+        shared: bool
+        mutable: bool
+        nodeid: zast.nodeid
+        lineno: u32
+        colno: u32
+    } is {
+        (this.argLocks.append
+            from: (queuedarglock
+                :callId
+                declId: (this.findLocal nameId: (this.argLockSegs.get i: segFrom))
+                :segFrom
+                segTo: this.argLockSegs.length
+                :isPath
+                :shared
+                :mutable
+                :nodeid
+                :lineno
+                :colno
+            )
+        )
+    }
+
+    # dropArgLocks -- forget the queued argument locks from `mark` up: their call
+    # has laid them.
+    dropArgLocks: function {:this mark: u64} is {
+        if this.argLocks.length <= mark then return
+        this.argLockSegs.resize to: (this.argLocks.get i: mark).segFrom
+        this.argLocks.resize to: mark
+    }
+
+    # argLockQueued -- an argument of a call whose arguments are still being
+    # walked passes the local `nameId`: the call starts after anything a later
+    # argument does, so it would read the local after a move out of it.
+    argLockQueued: function {this: this.view nameId: zast.nameid} out bool is {
+        if this.argLocks.length == 0 then return false
+        d: this.findLocal :nameId
+        if d.isZero then return false
+        for each q: this.argLocks loop {
+            if q.declId == d then return true
+        }
+        return false
+    }
+
     # Holder of the innermost lock on `name` (for the .drop-of-locked check).
     findLockHolder: function {
         this: this.view
@@ -2792,6 +2875,8 @@ newSymbolTable: function {reg: ztypes.ZTypeRegistry.take typing: ZTyping.take} o
         templateArmPreds: (IdMapV zast.nodeid v: ztypes.tid)
         scopeHidden: IdSet ztypes.declid
         entryDump: List ZEntryDumpRow
+        argLocks: ListVal queuedarglock
+        argLockSegs: ListVal zast.nameid
         :reg
         :typing
     )

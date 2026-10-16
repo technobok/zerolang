@@ -40524,7 +40524,8 @@ markVarRebound: function {st: zenv.ZSymbolTable nameId: zast.nameid} is {
 # argument's root for the call's duration (the symtab appends the lock overlay
 # entry in the open call scope; it vanishes when the scope pops): SHARED for
 # any argument, EXCLUSIVE for a `{:this}` receiver. `mutable` says the callee
-# may write through the reference, whatever the strength.
+# may write through the reference, whatever the strength. An argument's lock is
+# `queued`: it starts with the call, once every argument is walked (layArgLocks).
 lockCallArg: function {
     st: zenv.ZSymbolTable
     pool: zast.StringPool.view
@@ -40537,8 +40538,15 @@ lockCallArg: function {
     colno: u32
     # check the lock without laying it (zenv tryLock's `probe`)
     probe: false
+    queued: false
 } is {
     if mutable then markVarMutated :st :nameId
+    if queued then {
+        segFrom: st.argLockSegs.length
+        st.argLockSegs.append nameId
+        st.queueArgLock :callId :segFrom isPath: false :shared :mutable :nodeid :lineno :colno
+        return
+    }
     pth: ListVal zast.nameid
     pth.append nameId
     h: ztypes.zlockholder.call callId
@@ -40555,6 +40563,48 @@ lockCallArg: function {
         :probe
     )
     if r.length > 0 then addError :st :nodeid :lineno :colno e: zast.err.ownerError msg: r
+}
+
+# layArgLocks -- the call starts: lay the locks its arguments queued from
+# `mark` up, in argument order, each checked against what is live now -- the
+# pins of the values the arguments evaluated to, and the call's earlier
+# arguments.
+layArgLocks: function {st: zenv.ZSymbolTable pool: zast.StringPool.view mark: u64} is {
+    n: st.argLocks.length
+    if n <= mark then return
+    p: ListVal zast.nameid
+    k: mark
+    for k < n loop {
+        q: st.argLocks.get i: k
+        k = k + 1
+        if q.isPath then {
+            p.resize to: 0
+            p.extendView from: (st.argLockSegs.slice from: q.segFrom to: q.segTo)
+            (lockCallArgPath
+                :st
+                :pool
+                path: p
+                callId: q.callId
+                mutable: q.mutable
+                nodeid: q.nodeid
+                lineno: q.lineno
+                colno: q.colno
+            )
+        } else {
+            (lockCallArg
+                :st
+                :pool
+                nameId: (st.argLockSegs.get i: q.segFrom)
+                callId: q.callId
+                shared: q.shared
+                mutable: q.mutable
+                nodeid: q.nodeid
+                lineno: q.lineno
+                colno: q.colno
+            )
+        }
+    }
+    st.dropArgLocks :mark
 }
 
 # lockCallPath -- call-scoped path lock over a full receiver tuple: SHARED
@@ -40641,10 +40691,27 @@ lockCallArgPath: function {
     nodeid: zast.nodeid
     lineno: u32
     colno: u32
+    # an argument's lock, laid when the call starts (lockCallArg)
+    queued: false
 } is {
     n: path.length
     if n == 0 then return
     if mutable then markVarMutated :st nameId: (path.get i: 0)
+    if queued then {
+        segFrom: st.argLockSegs.length
+        st.argLockSegs.extendView from: path.listView
+        (st.queueArgLock
+            :callId
+            :segFrom
+            isPath: true
+            shared: true
+            :mutable
+            :nodeid
+            :lineno
+            :colno
+        )
+        return
+    }
     end: 1.u64
     for end < n loop {
         hs: ztypes.zlockholder.call callId
@@ -42059,23 +42126,32 @@ pinnedMoveError: function {
     pnid: nameIdOf :ast :name
     pvo: st.lookupVarId nameId: pnid
     if pvo.none then return false
-    plk: st.findLock nameId: pnid
-    if plk.none then return false
-    plh: st.findLockHolder nameId: pnid
-    if plh.none then return false
-    # A holder that is the binding itself is the readonly case, which
-    # readonlyMoveError words better.
-    if plh == (ztypes.zlockholder.var pvo) then return false
+    byCall: st.argLockQueued nameId: pnid
+    phn: String
+    plsn: String
+    if byCall.not then {
+        plk: st.findLock nameId: pnid
+        if plk.none then return false
+        plh: st.findLockHolder nameId: pnid
+        if plh.none then return false
+        # A holder that is the binding itself is the readonly case, which
+        # readonlyMoveError words better.
+        if plh == (ztypes.zlockholder.var pvo) then return false
+        if plh.call then {
+            byCall = true
+        } else {
+            phn = st.formatVarHolder pool: ast.names vid: plh
+            plsn = zenv.zlockstateNameLower t: plk
+        }
+    }
     pm: String
     pht: String
-    if plh.call then {
+    if byCall then {
         # the enclosing call already holds a reference to the value: the
         # callee would read it beside the moved-out copy
         pm = "Cannot move '\{name}' \{verb}: this call already passes '\{name}'"
         pht = "the callee would hold '\{name}' beside the value moved out of it; bind or copy the value first"
     } else {
-        phn: st.formatVarHolder pool: ast.names vid: plh
-        plsn: zenv.zlockstateNameLower t: plk
         pm = "Cannot move '\{name}' \{verb}: \{plsn} lock held by '\{phn}'"
         pht = "'\{phn}' reads '\{name}' -- moving it would leave '\{phn}' pointing at freed memory; end its scope first, or copy with '.copy'"
     }
@@ -42456,6 +42532,8 @@ hoistArg: function {
     paramType: ztypes.tid
     consumes: bool
     viewParam: bool
+    # the call holds the argument's path itself (lockFieldArgForCall)
+    callHolds: false
 } out String is {
     tn: st.typing.nextTempId
     st.typing.nextTempId = tn + 1
@@ -42515,7 +42593,7 @@ hoistArg: function {
         # to: 4)` and `(pick :l i: 0)` hold their sources as `s.stringView`
         # does, and a later argument moving or writing them meets the temp
         isCallArg: (ast.nodes.get i: argId).call
-        if hrt.isZero.not or isCallArg then {
+        if hrt.isZero.not or isCallArg when callHolds.not then {
             # A `.view` parameter only reads its argument, so the hoisted temp
             # locks the source SHARED -- exactly as the bare-name leg already
             # did via `isViewArg`. Without this a PATH-shaped argument
@@ -43136,22 +43214,23 @@ pinsFromPending: function {
 }
 
 # lockFieldArgForCall -- a field read through names (`o.it`) handed to a
-# locking parameter is also held by the CALL for its duration, so the
+# locking parameter is held by the CALL for its duration, so the
 # one-appearance rule sees it: the field's owner or the same field passed
-# again in this call is the same value twice. The hoisted temp's own lock is
-# held by the temp, which another argument's lock never meets as the call's.
+# again in this call is the same value twice. Answers whether the call holds
+# it: the argument's hoisted temp then lays no lock of its own on the path, so
+# the argument is one lock, the call's.
 lockFieldArgForCall: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
     call: callref
     arg: argref
     isViewArg: bool
-} is {
+} out bool is {
     opN: ast.nodes.get i: arg.operation
-    if (movedFieldPath :st :ast n: opN).not then return
+    if (movedFieldPath :st :ast n: opN).not then return false
     src: ListVal zast.nameid
     appendValueTuple :ast n: opN dst: src
-    if (st.lookupVarId nameId: (src.get i: 0)).none then return
+    if (st.lookupVarId nameId: (src.get i: 0)).none then return false
     (lockCallArgPath
         :st
         pool: ast.names
@@ -43161,7 +43240,9 @@ lockFieldArgForCall: function {
         nodeid: arg.nid
         lineno: arg.lineno
         colno: arg.colno
+        queued: true
     )
+    return true
 }
 
 # lockNonTrivialArg -- an argument the call cannot hoist to a temp keeps its
@@ -43200,10 +43281,13 @@ lockNonTrivialArg: function {
     # what the result of an `outx` callee keeps locked is every borrow and view
     # argument, whatever its family
     pinsLike: byRef or (valByPointer and calleePins)
+    callHolds: false
     if isLockish when pinsLike then {
         lockBorrowedArgPath :st :ast :arg :isViewArg :pins :calleePins
-        lockFieldArgForCall :st :ast :call :arg :isViewArg
-    } else if isLockish when valByPointer then lockFieldArgForCall :st :ast :call :arg :isViewArg
+        callHolds = lockFieldArgForCall :st :ast :call :arg :isViewArg
+    } else if isLockish when valByPointer then {
+        callHolds = lockFieldArgForCall :st :ast :call :arg :isViewArg
+    }
     hadPending: false
     if st.typing.pendingPins.length > 0 then hadPending = true
     tnm: (hoistArg
@@ -43214,6 +43298,7 @@ lockNonTrivialArg: function {
         paramType: pt
         :consumes
         viewParam: isViewArg
+        :callHolds
     )
     # an owned value no name holds, lent to a call whose result keeps it locked:
     # the result pins the temp, which outlives the call as an unnamed local. A
@@ -43249,6 +43334,7 @@ lockNonTrivialArg: function {
             nodeid: (zast.nodeIdOf n: (ast.nodes.get i: arg.operation))
             lineno: (nodeLine n: (ast.nodes.get i: arg.operation))
             colno: (nodeCol n: (ast.nodes.get i: arg.operation))
+            queued: true
         )
     }
 }
@@ -43331,6 +43417,7 @@ hoistTrivialArg: function {
                         nodeid: (zast.nodeIdOf n: (ast.nodes.get i: arg.operation))
                         lineno: (nodeLine n: (ast.nodes.get i: arg.operation))
                         colno: (nodeCol n: (ast.nodes.get i: arg.operation))
+                        queued: true
                     )
                     # the call's result keeps this pin
                     if calleePins when byRef or valByPointer then {
@@ -45338,6 +45425,7 @@ walkCallArgsHoist: function {
     calleePins: isCtor
     if ((st.typing.funcPins.get key: funcId).or d: false) then calleePins = true
     if ((st.typing.funcReturnsBorrow.get key: funcId).or d: false) then calleePins = true
+    lockMark: st.argLocks.length
     kAiter: u64
     for kAiter < call.nargs loop {
         argId: zast.callArgAt :ast nid: call.nid i: kAiter
@@ -45360,6 +45448,7 @@ walkCallArgsHoist: function {
         )
         argIdx = argIdx + 1
     }
+    layArgLocks :st pool: ast.names mark: lockMark
     return pins
 }
 
@@ -49766,10 +49855,10 @@ genericArgPreHoist: function {
 }
 
 # lockGenericValueArg -- what a generic call does to one value argument's
-# source, placed while the arguments are walked and in their order, exactly as a
-# concrete call's walk places it: a later argument that moves the same value
-# meets this one's lock, and one that reads a generator's local this one moved
-# out meets the move. The instance is not minted yet, so the TEMPLATE's
+# source, decided while the arguments are walked and in their order, exactly as
+# a concrete call's walk decides it: a later argument that moves the same value
+# meets this one's queued lock, and one that reads a generator's local this one
+# moved out meets the move. The instance is not minted yet, so the TEMPLATE's
 # parameter answers; each instance carries the same markers, copied at the mint.
 # It hands the argument to `hoistAndLockArg`, the hoist a concrete call's
 # argument gets, so a generic call holds, locks, consumes and pins its
@@ -49868,6 +49957,7 @@ inferGenericCallSubs: function {
     pHolderIds: (ListVal ztypes.tid).view
 } is {
     posIdx: u64
+    lockMark: st.argLocks.length
     kAiter: u64
     for kAiter < call.nargs loop {
         argId: zast.callArgAt :ast nid: call.nid i: kAiter
@@ -49936,6 +50026,7 @@ inferGenericCallSubs: function {
             )
         }
     }
+    layArgLocks :st pool: ast.names mark: lockMark
 }
 
 # bindValueArg -- what one value argument says about the call's generic
