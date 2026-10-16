@@ -34098,7 +34098,11 @@ exprRootNameId: function {ast: Ast.view n: astnode.view} out zast.nameid is {
 
 # rootIsBorrowedParam -- the expression is rooted at a `.borrow`/`.view`
 # parameter or the receiver: a name bound as a parameter that is BORROWED, or
-# a path through one. Such a root outlives the call; a local does not.
+# a path through one -- or a BORROWED local reading through one, as a bare
+# binding (`x: t.child`, `y: x.grandchild`) or a pinning call's reference
+# result (`x: inner t`) does: such a local is the expression it was bound from.
+# Such a root outlives the call; an owned local, or one whose pins reach
+# storage that dies with the call (pinRootDiesWithCall), does not.
 rootIsBorrowedParam: function {
     st: zenv.ZSymbolTable.view
     ast: Ast.view
@@ -34110,11 +34114,22 @@ rootIsBorrowedParam: function {
     match (
         vo
     ) case some then {
-        if (st.reg.variableOriginOf id: vo) != ztypes.zvarorigin.param then return false
-        return (st.reg.variableOwnershipOf id: vo) == ztypes.zownership.borrowed
+        if (st.reg.variableOwnershipOf id: vo) != ztypes.zownership.borrowed then return false
+        if (st.reg.variableOriginOf id: vo) == ztypes.zvarorigin.param then return true
+        if (localHasBorrowSource :st vid: vo).not then return false
+        return (pinRootDiesWithCall :st nameId: rn depth: 0).not
     } case none then {
         return false
     }
+}
+
+# localHasBorrowSource -- a borrowed local names what it reads: a lock row it
+# holds, or the variable it was bound to borrow.
+localHasBorrowSource: function {st: zenv.ZSymbolTable.view vid: ztypes.vid} out bool is {
+    held: List ztyping.PinPath
+    st.heldLockPaths holder: ztypes.zlockholder.var vid dst: held
+    if held.length > 0 then return true
+    return (st.reg.variableBorrowOriginOf id: vid).isZero.not
 }
 
 # pinsAllParamRooted -- every pending pin (a just-typed call's) is rooted at a
@@ -34437,7 +34452,7 @@ checkReturnCarries: function {
                     match (
                         svo
                     ) case some then {
-                        if (st.reg.variableOriginOf id: svo) != ztypes.zvarorigin.param then {
+                        if (pinRootDiesWithCall :st nameId: srcNm depth: 0) then {
                             sn: lockRootPhrase :st :ast nameId: srcNm
                             m2: "Cannot return '\{wn}': it holds locks on \{sn}, which dies with this call"
                             (addError
@@ -41075,16 +41090,24 @@ pinsRoot: function {st: zenv.ZSymbolTable.view} out zast.nameid is {
 }
 
 # pinRootDiesWithCall -- whether a returned value's pin rooted at `nameId` points
-# at storage that dies with this call. An owned local or temporary does and a
-# parameter does not; a borrowed local does only when what it borrows does --
+# at storage that dies with this call. An owned local, temporary or `.take`
+# parameter does and a borrowed parameter does not; a borrowed local does only
+# when what it borrows does --
 # the locks it holds, else the source it was borrowed from.
-pinRootDiesWithCall: function {st: zenv.ZSymbolTable nameId: zast.nameid depth: u64} out bool is {
+pinRootDiesWithCall: function {
+    st: zenv.ZSymbolTable.view
+    # the pin's root name
+    nameId: zast.nameid
+    # how many borrowed locals the walk has gone through
+    depth: u64
+} out bool is {
     if depth > 16 then return false
     vo: st.lookupVarId :nameId
     if vo.none then return false
     vid: vo
-    if (st.reg.variableOriginOf id: vid) == ztypes.zvarorigin.param then return false
+    # an owned value dies with the call: a local, or a `.take` parameter
     if (st.reg.variableOwnershipOf id: vid) != ztypes.zownership.borrowed then return true
+    if (st.reg.variableOriginOf id: vid) == ztypes.zvarorigin.param then return false
     held: List ztyping.PinPath
     (st.heldLockPaths
         holder: ztypes.zlockholder.var vid
@@ -41099,7 +41122,7 @@ pinRootDiesWithCall: function {st: zenv.ZSymbolTable nameId: zast.nameid depth: 
 # heldRootsDieWithCall -- whether any lock a borrowed local holds is rooted at
 # storage that dies with this call.
 heldRootsDieWithCall: function {
-    st: zenv.ZSymbolTable
+    st: zenv.ZSymbolTable.view
     held: (List ztyping.PinPath).view
     depth: u64
 } out bool is {

@@ -1,0 +1,37 @@
+# pin_chain_locals.z -- a reference return may go through borrowed locals: a
+# bare binding of a parameter's path (`x: t.child`), a binding of that
+# (`y: x.grandchild`), or a pinning call's reference result (`x: inner t`).
+# Each is the expression it was bound from, rooted at the borrowed parameter,
+# so returning it returns that. They used to be refused as "a local".
+
+grandchild: class { n: i64 }
+child: class { grandchild: grandchild }
+MyClass: class { child: child }
+
+inner: function {t: MyClass.borrow} outx child.borrow is {
+    return t.child
+}
+
+viaCall: function {t: MyClass.borrow} outx grandchild.borrow is {
+    x: inner t
+    y: x.grandchild
+    return y
+}
+
+viaPath: function {t: MyClass.borrow} outx grandchild.borrow is {
+    x: t.child
+    return x.grandchild
+}
+
+viaAlias: function {t: MyClass.borrow} outx grandchild.borrow is {
+    x: t.child
+    y: x
+    return y.grandchild
+}
+
+main: function is {
+    m: MyClass child: (child grandchild: (grandchild n: 7))
+    print "call: \{(viaCall t: m).n}"
+    print "path: \{(viaPath t: m).n}"
+    print "alias: \{(viaAlias t: m).n}"
+}
