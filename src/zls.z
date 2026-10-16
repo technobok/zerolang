@@ -4573,7 +4573,7 @@ navTargetRefine: function {
         refTid = declOnlyTid :snap declId: refDeclId
     }
     if kind == 1 when own.vid.isZero when refDeclId.isZero then {
-        ct9: calleeTypeOf :snap nid: hnid name: hnm
+        ct9: calleeTypeOf o: snap.st nid: hnid name: hnm
         if ct9.isZero.not then {
             refTid = ct9
             refDeclId = surfaceDeclOfType o: snap.st prog: snap.prog tid: ct9
@@ -4594,10 +4594,10 @@ declOnlyTid: function {snap: zcheck.CheckResult declId: ztypes.declid} out ztype
 # the type it builds and keeps its refDecl free for the emitter, so the stamp is
 # what says which type it is.
 calleeTypeOf: function {
-    snap: zcheck.CheckResult.view nid: zast.nodeid name: StringView
+    o: (Option zenv.ZSymbolTable).view nid: zast.nodeid name: StringView
 } out ztypes.tid is {
-    ct: nodeTypeAt o: snap.st :nid
-    if ct.isZero.not when (typeNamedAs o: snap.st tid: ct :name) then return ct
+    ct: nodeTypeAt :o :nid
+    if ct.isZero.not when (typeNamedAs :o tid: ct :name) then return ct
     return ztypes.tid.zero
 }
 
@@ -4701,7 +4701,7 @@ caseArmDecl: function {
         o
     ) case some then {
         if t.isZero or nm.isZero then return ztypes.declid.zero
-        if (o.reg.isTypeParamOf tid: t) then return (dissectArmDecl :snap :o :fn name: nm)
+        if (o.reg.isTypeParamOf tid: t) then return (dissectArmDecl prog: snap.prog :o :fn name: nm)
         sum: caseSumOf :o :t
         tt: o.reg.typetypeOf typeId: sum
         isSum: (tt == ztypes.ztypetype.unionType) or (tt == ztypes.ztypetype.variantType)
@@ -4734,10 +4734,10 @@ caseSumOf: function {o: zenv.ZSymbolTable.view t: ztypes.tid} out ztypes.tid is 
 # names, looked up as dissection looks it up: from the template the match is
 # written in, function `fn`, in its unit.
 dissectArmDecl: function {
-    snap: zcheck.CheckResult o: zenv.ZSymbolTable.view fn: zast.nodeid name: zast.nameid
+    prog: Ast.view o: zenv.ZSymbolTable.view fn: zast.nodeid name: zast.nameid
 } out ztypes.declid is {
     if fn.isZero then return ztypes.declid.zero
-    scope: ztypecheck.declOfTypeId st: o tid: (nodeTypeAt o: snap.st nid: fn)
+    scope: ztypecheck.declOfTypeId st: o tid: (ztyping.nodeTypeAt tbl: o.typing.nodeType nid: fn)
     ud: scope
     hops: u32
     for ud.isZero.not and (hops < 64) loop {
@@ -4746,9 +4746,9 @@ dissectArmDecl: function {
         hops = hops + 1
     }
     if ud.isZero then return ud
-    nm: zast.nameTextAt ast: snap.prog ref: name
+    nm: zast.nameTextAt ast: prog ref: name
     at: (ztypecheck.walkLookupTyperefRo
-        ast: snap.prog
+        ast: prog
         st: o
         unitDecl: ud
         :scope
@@ -4780,7 +4780,7 @@ loopVarOf: function {snap: zcheck.CheckResult sp: Spans.view row: spanrow} out z
         match (
             mi
         ) case some then {
-            return (defVarIdOf o: snap.st nid: mi)
+            return ((o.typing.defVariableId.get key: mi).or d: ztypes.vid.zero)
         } case none then null
     } case none then null
     return v
@@ -5585,7 +5585,7 @@ calleeDeclOf: function {snap: zcheck.CheckResult calNid: zast.nodeid} out ztypes
     caln: snap.prog.nodes.get i: calNid
     if caln.atomid.not then return cd
     cnm: zast.nameTextAt ast: snap.prog ref: caln.name
-    ct: calleeTypeOf :snap nid: calNid name: cnm.stringView
+    ct: calleeTypeOf o: snap.st nid: calNid name: cnm.stringView
     if ct.isZero then return cd
     return (surfaceDeclOfType o: snap.st prog: snap.prog tid: ct)
 }
@@ -5603,7 +5603,7 @@ paramVarOf: function {snap: zcheck.CheckResult declId: ztypes.declid} out ztypes
         if arm.namedoperation then opNid = arm.operation
     } case none then null
     if opNid.isZero then return ztypes.vid.zero
-    return (defVarIdOf o: snap.st nid: opNid)
+    return (defVarIdOf :o nid: opNid)
 }
 
 # paramDeclOfVar -- the parameter declaration that binds variable `vid`, named
@@ -5640,7 +5640,7 @@ rowNamesDecl: function {snap: zcheck.CheckResult row: spanrow declId: ztypes.dec
     rd: refDeclOf :o nid: row.nodeid
     if rd.isZero when row.kind == 1 when (useVarId :o nid: row.nodeid).isZero then {
         nm: zast.nameTextAt ast: snap.prog ref: row.name
-        ct: calleeTypeOf :snap nid: row.nodeid name: nm.stringView
+        ct: calleeTypeOf :o nid: row.nodeid name: nm.stringView
         if ct.isZero.not then rd = surfaceDeclOfType :o prog: snap.prog tid: ct
     }
     if rd.isZero then return false
@@ -6333,7 +6333,7 @@ byteIdxOfCp: function {s: StringView cp1: u32} out u64 is {
 # byteOr -- the byte at `i`, and `d` when `i` is past the end. The scans below
 # read a line right to left and treat "off the end" as "not the byte I want",
 # which is what `d` spells without a `match` around every read.
-byteOr: function {s: StringView i: u64 d: u8} out u8 is {
+byteOr: function {s: StringView.view i: u64 d: u8} out u8 is {
     got: s.byteAt :i
     match (
         got
@@ -7495,15 +7495,24 @@ bareDeclOf: function {
     match (
         o
     ) case some then {
-        d: ztypecheck.declOfUnitDefIds st: o unitDecl: site :nameId
-        if d.isZero then d = (ztypecheck.declOfUnitDefIds
-            st: o
-            unitDecl: o.typing.coreUnitRoot
-            :nameId
-        )
-        return d
+        return (bareDeclIn st: o :site :nameId)
     } case none then null
     return ztypes.declid.zero
+}
+
+# bareDeclIn -- bareDeclOf over a symbol table that is there.
+bareDeclIn: function {
+    st: zenv.ZSymbolTable.view
+    site: ztypes.declid
+    nameId: zast.nameid
+} out ztypes.declid is {
+    d: ztypecheck.declOfUnitDefIds :st unitDecl: site :nameId
+    if d.isZero then d = (ztypecheck.declOfUnitDefIds
+        :st
+        unitDecl: st.typing.coreUnitRoot
+        :nameId
+    )
+    return d
 }
 
 # unitChildDecl -- the declaration of the file unit `unitId`'s definition
@@ -9022,27 +9031,36 @@ itemHit: function {
         declId: ztypes.declid
         unitFsno: zvfs.fsno
     )
-    o: snap.st
-    match (
-        o
-    ) case some then {
-        nameId: zast.poolFind pool: snap.prog.names text: label
-        holder: ztypes.declid
-        if base.length == 0 then {
-            holder = chainUnitHolding st: o :site :nameId
-            if holder.isZero then hit.unitFsno = unitFileFsno :snap :docRel :srcDir name: label
-        } else {
-            db: resolveDotBase :snap :docRel :srcDir :l1u :base
-            if db.kind.unitBase then {
-                holder = unitBaseHolder :snap :site :base :db
-            } else if db.tid.isZero.not then {
-                hit.owner = db.tid
-                hit.declId = o.typing.declMemberIdOf parentTypeId: db.tid :nameId
-                hit.tid = childOfIn prog: snap.prog o: snap.st parent: db.tid name: label
-            }
+    nameId: zast.poolFind pool: snap.prog.names text: label
+    holder: ztypes.declid
+    {
+        o: snap.st
+        match (
+            o
+        ) case some then {
+            if base.length == 0 then holder = chainUnitHolding st: o :site :nameId
+        } case none then {
+            return hit
         }
-        if holder.isZero.not then hit = unitDefHit :snap :hit :holder :nameId :label
-    } case none then null
+    }
+    if base.length == 0 then {
+        if holder.isZero then hit.unitFsno = unitFileFsno :snap :docRel :srcDir name: label
+    } else {
+        db: resolveDotBase :snap :docRel :srcDir :l1u :base
+        if db.kind.unitBase then {
+            holder = unitBaseHolder :snap :site :base :db
+        } else if db.tid.isZero.not then {
+            hit.owner = db.tid
+            o: snap.st
+            match (
+                o
+            ) case some then {
+                hit.declId = o.typing.declMemberIdOf parentTypeId: db.tid :nameId
+            } case none then null
+            hit.tid = childOfIn prog: snap.prog :o parent: db.tid name: label
+        }
+    }
+    if holder.isZero.not then hit = unitDefHit :snap :hit :holder :nameId :label
     return hit
 }
 
@@ -9056,17 +9074,23 @@ unitDefHit: function {
     label: StringView
 } out navhit is {
     h: hit
-    o: snap.st
-    match (
-        o
-    ) case some then {
-        h.declId = ztypecheck.declOfUnitDefIds st: o unitDecl: holder :nameId
-        if (o.typing.decls.get i: h.declId).kind.unitDecl then {
-            h.unitFsno = unitFsnoOfDecl :snap declId: h.declId
-        } else {
-            h.tid = unitMemberTid :snap :holder declId: h.declId :label
+    isUnit: false
+    {
+        o: snap.st
+        match (
+            o
+        ) case some then {
+            h.declId = ztypecheck.declOfUnitDefIds st: o unitDecl: holder :nameId
+            isUnit = (o.typing.decls.get i: h.declId).kind.unitDecl
+        } case none then {
+            return h
         }
-    } case none then null
+    }
+    if isUnit then {
+        h.unitFsno = unitFsnoOfDecl :snap declId: h.declId
+    } else {
+        h.tid = unitMemberTid :snap :holder declId: h.declId :label
+    }
     return h
 }
 
@@ -9078,16 +9102,16 @@ unitBaseHolder: function {
     base: StringView
     db: dotbase
 } out ztypes.declid is {
+    bn: zast.poolFind pool: snap.prog.names text: base
+    named: false
+    if db.single then named = (unitFsnoByName :snap name: base).isZero.not
     o: snap.st
     match (
         o
     ) case some then {
         if db.single.not then return (o.reg.defOf tid: db.tid)
-        bn: zast.poolFind pool: snap.prog.names text: base
-        if (unitFsnoByName :snap name: base).isZero.not then {
-            return (ztypecheck.unitDeclOfName st: o nameId: bn)
-        }
-        return (bareDeclOf o: snap.st :site nameId: bn)
+        if named then return (ztypecheck.unitDeclOfName st: o nameId: bn)
+        return (bareDeclIn st: o :site nameId: bn)
     } case none then null
     return ztypes.declid.zero
 }
@@ -9194,7 +9218,7 @@ appendMarkers: function {arr: Arr marks: (ListVal zast.markerkind).view prefix: 
 
 # cpColOfByte -- the 1-based codepoint column of byte `i` of a line, the
 # lexer's column numbering
-cpColOfByte: function {s: StringView i: u64} out u32 is {
+cpColOfByte: function {s: StringView.view i: u64} out u32 is {
     col: u32
     j: u64
     for j < i loop {

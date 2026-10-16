@@ -42510,7 +42510,7 @@ literalTidOfLexeme: function {st: zenv.ZSymbolTable.view lex: StringView} out zt
 
 # isBitsLexeme -- the integer lexeme is written in hex, octal or binary: a `0x`,
 # `0o` or `0b` prefix after its sign.
-isBitsLexeme: function {lex: StringView} out bool is {
+isBitsLexeme: function {lex: StringView.view} out bool is {
     b: u64
     if lex.startsWith "-" then b = 1
     if ((lex.byteAt i: b).or d: 0) != 48 then return false
@@ -54328,16 +54328,7 @@ setSynthOwnerLabel: function {
     # live inside its TYPE's subtree, so the label is the type name.
     # Nested method walks save and restore it around their bodies.
     lblUnit: zast.poolTextAt pool: ast.names ref: (unitNameIdOf :st :unitDecl)
-    # the definition's spelling: the label's, else the interned name's
-    dnT: zast.nameTextAt :ast ref: defNameId
-    # the spelling is chosen first and composed once: a method's own name wins,
-    # then the label's, then the interned one
-    lblName: if thisName.length > 0 then thisName else if (
-        defName.length == 0
-    ) then dnT.stringView else defName
-    lbl: "\{lblUnit}.\{lblName}"
-    st.typing.synthLabel = lbl.take
-    # the same pair as ids: a method's owner is its TYPE, everything
+    # the label's pair as ids: a method's owner is its TYPE, everything
     # else owns itself. checkCase reads this instead of splitting the
     # label back apart.
     st.typing.synthOwnerUnit = unitDecl
@@ -54350,6 +54341,15 @@ setSynthOwnerLabel: function {
         )
         st.typing.synthOwnerName = soid
     }
+    # the definition's spelling: the label's, else the interned name's
+    dnT: zast.nameTextAt :ast ref: defNameId
+    # the spelling is chosen first and composed once: a method's own name wins,
+    # then the label's, then the interned one
+    lblName: if thisName.length > 0 then thisName else if (
+        defName.length == 0
+    ) then dnT.stringView else defName
+    lbl: "\{lblUnit}.\{lblName}"
+    st.typing.synthLabel = lbl.take
 }
 
 
@@ -57308,7 +57308,7 @@ constLiteralValue: function {st: zenv.ZSymbolTable name: StringView} out ztypes.
 # float. A fraction has no -0, so a negative zero is the binary float's, which
 # keeps its sign through the operators as IEEE 754's does. noConst for an
 # exponent past even the binary float's.
-constOfFloatLiteral: function {st: zenv.ZSymbolTable lex: StringView} out ztypes.cval is {
+constOfFloatLiteral: function {st: zenv.ZSymbolTable lex: StringView.view} out ztypes.cval is {
     r: floatLiteralRat :lex
     match r case some then return (constOfRat :st :r) case none then null
     f: floatLiteralFloat :lex
@@ -57333,7 +57333,7 @@ floatLexemeBits: function {lex: StringView k: ztypes.numkind} out math.BigInt is
 # floatLiteralRat -- a float literal's value as a fraction; none past a decimal
 # exponent of 1000, where the fraction would outgrow what one holds, and for a
 # negative zero, which no fraction spells
-floatLiteralRat: function {lex: StringView} out Option math.BigRat is {
+floatLiteralRat: function {lex: StringView.view} out Option math.BigRat is {
     if (decimalExponentPast :lex limit: 1000) then return (Option math.BigRat).none
     r: math.BigRat.parse text: lex
     match (
@@ -57347,7 +57347,7 @@ floatLiteralRat: function {lex: StringView} out Option math.BigRat is {
 
 # floatLiteralFloat -- a float literal's value as a 512-bit binary float, its
 # zero's sign kept; none past even that float's exponent
-floatLiteralFloat: function {lex: StringView} out Option math.BigFloat is {
+floatLiteralFloat: function {lex: StringView.view} out Option math.BigFloat is {
     f: math.BigFloat.parse text: lex prec: constFloatPrec
     match f case ok then return ((Option math.BigFloat).some f.take) case err then null
     return (Option math.BigFloat).none
@@ -57355,7 +57355,7 @@ floatLiteralFloat: function {lex: StringView} out Option math.BigFloat is {
 
 # decimalExponentPast -- a float lexeme's decimal exponent lies beyond
 # +-`limit`, where its fraction would outgrow what one holds anyway
-decimalExponentPast: function {lex: StringView limit: i64} out bool is {
+decimalExponentPast: function {lex: StringView.view limit: i64} out bool is {
     e: (lex.indexOf "e").or d: ((lex.indexOf "E").or d: lex.length)
     if e >= lex.length then return false
     digits: lex.substring from: e + 1 to: lex.length
@@ -57367,7 +57367,7 @@ decimalExponentPast: function {lex: StringView limit: i64} out bool is {
 # constOfWideLiteral -- an integer literal outside i64, exactly, in any radix,
 # up to the 512 bits an untyped integer holds; past them nothing is a constant.
 # A character literal is never one.
-constOfWideLiteral: function {st: zenv.ZSymbolTable lex: StringView} out ztypes.cval is {
+constOfWideLiteral: function {st: zenv.ZSymbolTable lex: StringView.view} out ztypes.cval is {
     if (lex.startsWith "0c") or (lex.startsWith "-0c") then return ztypes.noConst
     b: constLiteralBig :lex
     match b case some then return (constOfBig :st :b) case none then null
@@ -57377,7 +57377,7 @@ constOfWideLiteral: function {st: zenv.ZSymbolTable lex: StringView} out ztypes.
 # constLiteralBig -- an integer literal read exactly, in any radix the lexer
 # accepts: its digits, `_` aside, through a BigInt. none past the 512 bits an
 # untyped integer holds, or for a lexeme that is not an integer literal.
-constLiteralBig: function {lex: StringView} out Option math.BigInt is {
+constLiteralBig: function {lex: StringView.view} out Option math.BigInt is {
     neg: lex.startsWith "-"
     i: u64
     if neg then i = 1
@@ -57406,7 +57406,7 @@ constLiteralBig: function {lex: StringView} out Option math.BigInt is {
 
 # literalRadix -- the base an integer lexeme's digits are in, read from the
 # prefix at `at`: `0x` 16, `0o` 8, `0b` 2, and 10 without one.
-literalRadix: function {lex: StringView at: u64} out u64 is {
+literalRadix: function {lex: StringView.view at: u64} out u64 is {
     if ((lex.byteAt i: at).or d: 0) != 48 then return 10
     # 120 x, 111 o, 98 b: the letter after the leading 0
     p: (lex.byteAt i: at + 1).or d: 0
