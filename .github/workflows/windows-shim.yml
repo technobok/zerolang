@@ -1,0 +1,46 @@
+# windows-shim -- the C thread shim's Win32 backend (_Z_THREAD_SHIM.inc) built and
+# run on Windows itself: tests/c/zthread_shim_test.c under MSVC and under
+# mingw-w64 gcc. `make shim-guard` runs the mingw build under wine where both are
+# installed; MSVC, and a real Windows kernel, are this workflow's.
+#
+# Run by hand only (Actions tab, or `gh workflow run windows-shim.yml`), after a
+# change to the shim or its test.
+name: windows-shim
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  msvc:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: ilammy/msvc-dev-cmd@v1.13.0
+
+      # C11 atomics are behind /experimental:c11atomics (VS 2022 17.5 and later)
+      - name: build and run (MSVC)
+        shell: cmd
+        run: |
+          cl /nologo /std:c17 /experimental:c11atomics /W3 /O2 tests\c\zthread_shim_test.c /Fe:shim.exe
+          if errorlevel 1 exit /b 1
+          shim.exe
+
+  mingw:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: build and run (mingw-w64 gcc)
+        run: |
+          gcc --version | head -1
+          gcc -std=c17 -Wall -Wextra -Wno-unused-function -O2 -o shim.exe tests/c/zthread_shim_test.c
+          ./shim.exe

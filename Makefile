@@ -72,7 +72,7 @@ NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 	tcc zc zl zls regen-goldens regen-fmt-goldens regen-matrix matrix-guard regen-math-asm \
 	fmt-raw-guard regen-lsp-goldens bump-seed test-bootstrap install docs warn-check perf \
 	perf-strict pre-push perf-elision any-guard typename-guard emitter-guard frontend-guard \
-	lifetime-guard user-native-guard cobj-guard sqlite-decls-guard case-guard require-guard mode-parity zlink-rules-guard \
+	lifetime-guard user-native-guard shim-guard cobj-guard sqlite-decls-guard case-guard require-guard mode-parity zlink-rules-guard \
 	refusal-guard static-tcc-guard zlink-guard emit-set ident-set const-row-guard \
 	deadcode-guard alias-label-guard fwd-shape-guard eager-guard eager-lib-guard \
 	highlight-guard view-guard fallback-guard clean native-guard generic-param-guard \
@@ -156,7 +156,7 @@ ci:
 	@echo "CI GATE GREEN: style-lint + corpus(--heavy: +selfhost-asan +fixpoint) + bootstrap"
 
 # ci-gates -- the gates ci runs in parallel, after perf-strict.
-ci-gates: style-lint zl-full-guard complexity-report warn-check emitter-guard typename-guard frontend-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard highlight-guard any-guard deadcode-guard eager-guard eager-lib-guard case-guard user-native-guard cobj-guard sqlite-decls-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard readable-check test-tcc-heavy test-clang test-math-arm64 test-sqlite-arm64 test-math-noasm test-portable-scalars math-asm-guard matrix-guard docs-link-guard mode-parity ci-corpus
+ci-gates: style-lint zl-full-guard complexity-report warn-check emitter-guard typename-guard frontend-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard highlight-guard any-guard deadcode-guard eager-guard eager-lib-guard case-guard user-native-guard shim-guard cobj-guard sqlite-decls-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard readable-check test-tcc-heavy test-clang test-math-arm64 test-sqlite-arm64 test-math-noasm test-portable-scalars math-asm-guard matrix-guard docs-link-guard mode-parity ci-corpus
 
 ci-corpus: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --heavy --jobs $(NPROC)
@@ -744,7 +744,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2237348
+ALLOC_BASELINE := 2237364
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -998,6 +998,46 @@ user-native-guard: bin/zc
 	rm -rf $$d; \
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
 	echo "user-native-guard OK: a unit outside src/runtime links and runs its own natives, a hidden subunit's among them, a fact's variant chosen, a generic class from its template"
+
+# shim-guard -- the C thread shim (_Z_THREAD_SHIM.inc) passes its own test under
+# every compiler zc drives and under ThreadSanitizer: tests/c/zthread_shim_test.c
+# exercises each primitive under contention. TSan is proved first on a probe
+# that races on purpose: a sanitizer that reports nothing there would make a
+# clean shim run mean nothing. Where mingw-w64 and wine are installed the Win32
+# backend is built and run too (in a wine prefix kept under out/, which takes
+# seconds to create once); the OK line says which backends ran. MSVC is the
+# windows-shim workflow's.
+shim-guard: $(BUILDDIR)/tcc
+	@d=$$(mktemp -d); fail=0; t=tests/c/zthread_shim_test.c; pr=tests/c/tsan_probe.c; \
+	for cc in $(CC) clang; do \
+	  $$cc -std=c17 -Wall -Wextra -Wno-unused-function -O2 -o $$d/shim-$$cc $$t -lpthread > $$d/cc.log 2>&1 \
+	    || { echo "shim-guard FAIL: $$cc did not build the shim test"; grep -m3 error $$d/cc.log; fail=1; continue; }; \
+	  $$d/shim-$$cc > $$d/run.log 2>&1 || { echo "shim-guard FAIL: under $$cc"; cat $$d/run.log; fail=1; }; \
+	done; \
+	$(BUILDDIR)/tcc -B $(TCCLIB) -I $(TCCLIB)/include -o $$d/shim-tcc $$t -lpthread > $$d/cc.log 2>&1 \
+	  || { echo "shim-guard FAIL: tcc did not build the shim test"; grep -m3 error $$d/cc.log; fail=1; }; \
+	[ -x $$d/shim-tcc ] && { $$d/shim-tcc > $$d/run.log 2>&1 || { echo "shim-guard FAIL: under tcc"; cat $$d/run.log; fail=1; }; }; \
+	$(CC) -g -fsanitize=thread -o $$d/probe $$pr -lpthread > $$d/cc.log 2>&1; \
+	$$d/probe > /dev/null 2> $$d/probe.err; \
+	grep -q "data race" $$d/probe.err || { echo "shim-guard FAIL: ThreadSanitizer did not report the probe's race; a clean TSan run proves nothing"; fail=1; }; \
+	$(CC) -std=c17 -g -O1 -fsanitize=thread -o $$d/shim-tsan $$t -lpthread > $$d/cc.log 2>&1 \
+	  || { echo "shim-guard FAIL: the TSan build"; fail=1; }; \
+	[ -x $$d/shim-tsan ] && { $$d/shim-tsan > $$d/run.log 2>&1 || { echo "shim-guard FAIL: under ThreadSanitizer"; head -30 $$d/run.log; fail=1; }; }; \
+	win="; Win32 not run (no x86_64-w64-mingw32-gcc and wine)"; \
+	if command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1 && command -v wine >/dev/null 2>&1; then \
+	  x86_64-w64-mingw32-gcc -std=c17 -Wall -Wextra -Wno-unused-function -O2 -o $$d/shim.exe $$t > $$d/cc.log 2>&1 \
+	    || { echo "shim-guard FAIL: mingw-w64 did not build the shim test"; grep -m3 error $$d/cc.log; fail=1; }; \
+	  if [ -f $$d/shim.exe ]; then \
+	    mkdir -p $(BUILDDIR)/wineprefix; \
+	    DISPLAY= WINEDEBUG=-all WINEPREFIX=$(abspath $(BUILDDIR))/wineprefix timeout 300 wine $$d/shim.exe > $$d/run.log 2>&1 \
+	      || { echo "shim-guard FAIL: the Win32 backend under wine"; tail -20 $$d/run.log; fail=1; }; \
+	    grep -q "zthread shim OK" $$d/run.log || { echo "shim-guard FAIL: the Win32 run did not report OK"; fail=1; }; \
+	  fi; \
+	  win=", and the Win32 backend (mingw-w64 under wine)"; \
+	fi; \
+	rm -rf $$d; \
+	if [ $$fail -ne 0 ]; then exit 1; fi; \
+	echo "shim-guard OK: the thread shim's test passes under $(CC), clang, tcc and ThreadSanitizer (proved on a racy probe)$$win"
 
 # case-guard -- every program declaring `main` is in a case list (run, smoke or
 # dump), so something compiles it. A unit with no main is reached through others.
@@ -1576,7 +1616,11 @@ VIEW_GUARD_INTERNAL := String.cat String.print String.free String.eq String.cmp 
   IdMapR.destroy IdMapR.grow IdMapR.find IdMapR.slot IdMapR.entries_cap \
   IdSet.destroy IdSet.grow IdSet.find IdSet.slot IdSet.items_cap \
   File.destroy Listener.destroy Conn.destroy Database.destroy Statement.destroy Row.destroy \
-  Transaction.destroy
+  Transaction.destroy \
+  thread.start thread.join thread.detach \
+  mutex.init mutex.destroy mutex.lock mutex.trylock mutex.unlock \
+  rwlock.init rwlock.destroy rwlock.rdlock rwlock.wrlock rwlock.rdunlock rwlock.wrunlock \
+  cond.init cond.destroy cond.wait cond.timedwait cond.signal cond.broadcast
 VIEW_GUARD_INLINE := Bytes.byteView:unemitted \
   array.listView:inline array.slice:inline array.span:writes array.spanSlice:writes \
   ListVal.span:inline ListVal.spanSlice:inline \
