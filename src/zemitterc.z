@@ -36924,6 +36924,65 @@ mapValType: function {symtab: zenv.ZSymbolTable.view monoId: ztypes.tid} out zty
     return ztypes.tid.zero
 }
 
+# optionDeclC / optionNoneC / optionSomeC -- C that builds `_r`, an owned
+# option of `opt` (either family), one way for every native that answers
+# one: the declaration, the statements that make it none, and those that make
+# it some over `value` (C type `valT`) -- an optionval holds the payload in its
+# arm, an Option in a heap cell.
+optionDeclC: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view opt: ztypes.tid} out String is {
+    if (optionIsValFamily :symtab :ctx :opt) then return "z_\{cbaseNoPrefix :ctx tid: opt}_t _r;"
+    return "z_\{cbaseNoPrefix :ctx tid: opt}_t _r = {0};"
+}
+
+# optionNoneC -- the statements making `_r` none, each indented by `ind`
+optionNoneC: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    opt: ztypes.tid
+    ind: StringView
+} out String is {
+    nt: tagConstOf :ast :ctx :symtab tid: opt armId: zast.wellKnown.slot.wkNone
+    if (optionIsValFamily :symtab :ctx :opt) then return "\{ind}_r.tag = \{nt};\n"
+    return "\{ind}_r.tag = \{nt};\n\{ind}_r.data = NULL;\n"
+}
+
+# optionSomeC -- the statements making `_r` some over `value`, each indented
+# by `ind`
+optionSomeC: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    opt: ztypes.tid
+    valT: StringView
+    value: StringView
+    ind: StringView
+} out String is {
+    st: tagConstOf :ast :ctx :symtab tid: opt armId: zast.wellKnown.slot.wkSome
+    if (optionIsValFamily :symtab :ctx :opt) then {
+        rsC: (memberC
+            :ast
+            :symtab
+            :ctx
+            owner: opt
+            kind: memberkind.arm
+            nameId: zast.wellKnown.slot.wkSome
+        )
+        return "\{ind}_r.tag = \{st};\n\{ind}_r.data.\{rsC} = \{value};\n"
+    }
+    ral: armCellAlloc pc: valT box: "_box"
+    rfl: armCellFill box: "_box" :value
+    rat: armCellAttach slot: "_r.data" box: "_box"
+    return "\{ind}_r.tag = \{st};\n\{ind}\{ral}\n\{ind}\{rfl}\n\{ind}\{rat}\n"
+}
+
+# optionIsValFamily -- `opt` is an optionval, its payload held in its arm
+optionIsValFamily: function {
+    symtab: zenv.ZSymbolTable.view ctx: Ctx.view opt: ztypes.tid
+} out bool is {
+    return (originIsTid :symtab tid: opt originTid: (ctx.origins.get i: family.slot.optionval))
+}
+
 # emitMapMono -- substitute z_Map.c.tmpl for a Map instance (compact-dict +
 # set/get/has/delete). The value's optionval mono (get's return) supplies the
 # value type and the OPTIONVAL placeholders; the key name is the remainder.
@@ -37070,32 +37129,21 @@ emitMapMono: function {
         rmWrapId = symtab.reg.returnTypeOf tid: roMm
     } case none then null
     rmWrap: cbaseNoPrefix :ctx tid: rmWrapId
-    rmNone: tagConstOf :ast :ctx :symtab tid: rmWrapId armId: zast.wellKnown.slot.wkNone
-    rmSome: tagConstOf :ast :ctx :symtab tid: rmWrapId armId: zast.wellKnown.slot.wkSome
     kfDel: mapValFreeStmt :symtab :ctx valTid: kk slot: "_this->entries[idx].key"
     keyOnlyFree: mapFreeKeyDel keyFree: kfDel.stringView valFree: ""
     delTail: "\{keyOnlyFree}    _this->entries[idx].alive = 0;\n    _this->indices[slot] = Z_\{mcr}_INDEX_DELETED;\n    _this->length--;\n"
-    removeBody: String
-    if (originIsTid
+    rmDecl: optionDeclC :symtab :ctx opt: rmWrapId
+    rmNoneC: optionNoneC :ast :symtab :ctx opt: rmWrapId ind: "        "
+    rmSomeC: (optionSomeC
+        :ast
         :symtab
-        tid: rmWrapId
-        originTid: (ctx.origins.get i: family.slot.optionval)
-    ) then {
-        rsC: (memberC
-            :ast
-            :symtab
-            :ctx
-            owner: rmWrapId
-            kind: memberkind.arm
-            nameId: zast.wellKnown.slot.wkSome
-        )
-        removeBody = "    z_\{rmWrap}_t _r;\n    if (idx < 0) {\n        _r.tag = \{rmNone};\n        return _r;\n    }\n    _r.tag = \{rmSome};\n    _r.data.\{rsC} = _this->entries[idx].value;\n\{delTail}    return _r;"
-    } else {
-        ral: armCellAlloc pc: valT.stringView box: "_box"
-        rfl: armCellFill box: "_box" value: "_this->entries[idx].value"
-        rat: armCellAttach slot: "_r.data" box: "_box"
-        removeBody = "    z_\{rmWrap}_t _r = {0};\n    if (idx < 0) {\n        _r.tag = \{rmNone};\n        _r.data = NULL;\n        return _r;\n    }\n    _r.tag = \{rmSome};\n    \{ral}\n    \{rfl}\n    \{rat}\n\{delTail}    return _r;"
-    }
+        :ctx
+        opt: rmWrapId
+        valT: valT.stringView
+        value: "_this->entries[idx].value"
+        ind: "    "
+    )
+    removeBody: "    \{rmDecl}\n    if (idx < 0) {\n\{rmNoneC}        return _r;\n    }\n\{rmSomeC}\{delTail}    return _r;"
     p: "\{runtimeDir}/z_Map.c.tmpl"
     raw: readTemplateCached :ctx path: p.stringView
     if raw.length == 0 then return
@@ -38958,7 +39006,8 @@ sameTypeArgs: function {
 # in a class template: the C name of the type the instance's method answers
 # (tmplAnswerOf) or takes as that parameter (tmplArgOf), which a template needs
 # to build an answer of another templated class or a mono, or to read an
-# argument of one. A hole whose type the program does not have is left in
+# argument of one; `@@SOME.<method>@@` / `@@NONE.<method>@@` name a function
+# building the option the method answers (optionHelper). A hole whose type the program does not have is left in
 # place, and the function spelling it is dropped (dropUnmadeFns): nothing
 # calls it.
 applyAnswerHoles: function {
@@ -38967,6 +39016,10 @@ applyAnswerHoles: function {
     ctx: Ctx
     text: String.take
     inst: ztypes.tid
+    # the instance's C name
+    nm: StringView
+    # where an option helper is written, ahead of the template
+    buf: String.borrow
 } out String is {
     t: text.take
     sv: t.stringView
@@ -38983,18 +39036,83 @@ applyAnswerHoles: function {
             tail: sv.substring from: at + 2 to: sv.length
             en: (tail.indexOf needle: "@@").or d: tail.length
             res.append (sv.substring from: pos to: at)
-            ht: tmplHoleType :ast :symtab :ctx :inst hole: (tail.substring from: 0 to: en)
+            hole: tail.substring from: 0 to: en
             nx: sv.length
             if (at + 2 + en + 2) <= sv.length then nx = at + 2 + en + 2
-            if ht.isZero then {
+            ht: holeText :ast :symtab :ctx :inst :nm :hole :buf
+            if ht.length == 0 then {
                 res.append (sv.substring from: at to: nx)
             } else {
-                res.append (cbaseNoPrefix :ctx tid: ht)
+                res.append ht
             }
             pos = nx
         }
     }
     return res
+}
+
+# holeText -- what an answer hole (applyAnswerHoles) becomes: an option
+# helper's name, or the C name of the type it names; "" when the program does
+# not have the type
+holeText: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    inst: ztypes.tid
+    nm: StringView
+    hole: StringView
+    buf: String.borrow
+} out String is {
+    oh: optionHelper :ast :symtab :ctx :inst :nm :hole :buf
+    if oh.length > 0 then return oh
+    ht: tmplHoleType :ast :symtab :ctx :inst :hole
+    if ht.isZero then return ""
+    return (cbaseNoPrefix :ctx tid: ht)
+}
+
+# optionHelper -- a `SOME.<method>` or `NONE.<method>` hole: the name of a
+# function building the option `<method>` answers, some over its one argument
+# or none, written to `buf` the first time it is named. "" for any other hole,
+# and when the program never made the option (the function naming it is
+# dropped).
+optionHelper: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    inst: ztypes.tid
+    nm: StringView
+    hole: StringView
+    buf: String.borrow
+} out String is {
+    isSome: hole.startsWith prefix: "SOME."
+    if isSome.not when (hole.startsWith prefix: "NONE.").not then return ""
+    mn: hole.substring from: 5 to: hole.length
+    mid: tmplHoleNameId :ast text: mn
+    if mid.isZero then return ""
+    opt: tmplAnswerOf :symtab :inst mnId: mid
+    if (tmplTypeMade :symtab :ctx tid: opt).not then return ""
+    oc: cbaseNoPrefix :ctx tid: opt
+    decl: optionDeclC :symtab :ctx :opt
+    if isSome.not then {
+        fnn: "z_\{nm}_none_\{mn}"
+        if (buf.contains needle: "\{fnn}(void)").not then {
+            body: optionNoneC :ast :symtab :ctx :opt ind: "    "
+            buf.append "static z_\{oc}_t \{fnn}(void) {\n    \{decl}\n\{body}    return _r;\n}\n"
+        }
+        return fnn
+    }
+    fns: "z_\{nm}_some_\{mn}"
+    if (buf.contains needle: "\{fns}(").not then {
+        pt0: (cTypeForNameTid
+            :ast
+            :symtab
+            :ctx
+            tid: (symtab.reg.genericTypeArgAt specId: opt ordinal: 0)
+        )
+        body: optionSomeC :ast :symtab :ctx :opt valT: pt0.stringView value: "v" ind: "    "
+        buf.append "static z_\{oc}_t \{fns}(\{pt0} v) {\n    \{decl}\n\{body}    return _r;\n}\n"
+    }
+    return fns
 }
 
 # tmplHoleType -- the type an `OUT.<method>` or `ARG.<method>.<param>` hole
@@ -39140,7 +39258,8 @@ templateParamArgs: function {
 # native class, from the C template its row names: @@NAME@@ is the C name, and
 # for each type parameter P, @@P@@ is the C type of the argument as a slot holds
 # it and @@P_DESTROY@@ the name of a function `void (P* x)` destroying one in
-# place, written ahead of the template. A runtime fragment's own `@Name@` holes
+# place, written ahead of the template; @@P0@@ / @@P0_DESTROY@@ name the same
+# by position. A runtime fragment's own `@Name@` holes
 # fill as a fragment's do.
 emitTmplClassMono: function {
     ast: Ast.view
@@ -39179,10 +39298,16 @@ emitTmplClassMono: function {
         buf.append "    (void)x;\n}\n"
         dk: "\{pn}_DESTROY"
         t = applyTmpl text: t key: dk.stringView val: dfn.stringView
+        # by position too, so one template serves classes that name their
+        # parameter differently (Channel's T, ChannelVal's t)
+        pk: "P\{k}"
+        t = applyTmpl text: t key: pk.stringView val: sc.stringView
+        pdk: "P\{k}_DESTROY"
+        t = applyTmpl text: t key: pdk.stringView val: dfn.stringView
         t = applyMemberHoles :ast :symtab :ctx text: t param: pn.stringView arg: at
         k = k + 1
     }
-    t = applyAnswerHoles :ast :symtab :ctx text: t inst: monoId
+    t = applyAnswerHoles :ast :symtab :ctx text: t inst: monoId nm: nm.stringView :buf
     made: dropUnmadeFns text: t.stringView
     # what is left is a runtime fragment's own holes: a type by canon, a tag
     # constant, a member

@@ -1,0 +1,47 @@
+# sync_channel_val.z -- a ChannelVal carries valtypes by copy: a worker squares
+# each number it receives and sends it back on a second channel, until the
+# first is closed and drained.
+
+# Squarer -- answers each number with its square
+Squarer: class {
+    # where numbers come in
+    inbox: (sync.ChannelVal i64).view
+    # where squares go out
+    outbox: (sync.ChannelVal i64).view
+    # how many it answered
+    answered: i64
+} as {
+    task: thread.Task
+    call: function {:this} is {
+        done: false
+        for done.not loop {
+            r: this.inbox.receive
+            match (r) case some then {
+                this.outbox.send value: r * r
+                this.answered = this.answered + 1
+            } case none then done = true
+        }
+    }
+}
+
+main: function is {
+    inbox: (sync.ChannelVal i64).create
+    outbox: (sync.ChannelVal i64).create capacity: 2
+    h: thread.spawn task: (Squarer :inbox :outbox answered: 0)
+    i: 1.i64
+    for i <= 5 loop {
+        inbox.send value: i
+        i = i + 1
+    }
+    inbox.close
+    total: 0.i64
+    k: 0.i64
+    for k < 5 loop {
+        sq: outbox.receive
+        match (sq) case some then total = total + sq case none then null
+        k = k + 1
+    }
+    s: h.join
+    print "\{s.answered} squares, summing to \{total}"
+    print "outbox empty: \{(outbox.tryReceive).none}"
+}

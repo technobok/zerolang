@@ -192,6 +192,56 @@ is a reference type (#~"AnyRef"); wrap a plain value in a class.
   }
 """
 
+#--: Channels
+
+#ul:
+  [#*: #b:"Channel T" -- a queue threads send values through.
+    #~"create capacity: n" holds at most #~"n" values (#~"0", the default, has
+    no limit); #~"send value:" moves a value in and waits while the channel
+    is full; #~"receive" waits for a value and answers it as an
+    #~"Option T", #~"none" once the channel is closed and drained;
+    #~"tryReceive" answers #~"none" at once when nothing is waiting.
+    #~"close" says nothing more will come and wakes every receiver; sending
+    on a closed channel panics. #~"isClosed" and #~"capacity" read it.]
+  [#*: #b:"ChannelVal t" -- the same for a valtype: values are copied in,
+    and #~"receive" answers an #~"optionval t".]
+
+Each value goes to exactly one receiver, in the order sent. A value travels to
+another thread, so it may hold no borrow: #~"send" refuses one, as a taking
+argument with nowhere for its locks to go.
+
+#code language=zerolang name=channel: """
+  # Producer -- sends numbered messages
+  Producer: class {
+      # where it sends
+      ch: (sync.Channel String).view
+  } as {
+      task: thread.Task
+      call: function {:this} is {
+          i: 0.i64
+          for i < 3 loop {
+              this.ch.send value: "message \{i}"
+              i = i + 1
+          }
+      }
+  }
+
+  main: function is {
+      ch: (sync.Channel String).create capacity: 1
+      {
+          p: thread.spawn task: (Producer :ch)
+          n: 0.i64
+          for n < 3 loop {
+              got: ch.receive
+              match got case some then print got case none then null
+              n = n + 1
+          }
+      }
+      ch.close
+      print "after close: \{ch.receive.none}"
+  }
+"""
+
 #--: Building
 
 A program that uses #~"sync" links #~"pthread", like one that starts a thread;

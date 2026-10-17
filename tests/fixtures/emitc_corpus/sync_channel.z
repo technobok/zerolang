@@ -1,0 +1,50 @@
+# sync_channel.z -- two producers send owned messages through a bounded
+# Channel (they wait while it is full) to the main thread, which receives all
+# of them; after `close` a receive answers none. Values left in a channel when
+# it ends are freed with it.
+
+# Producer -- sends `count` messages tagged with its name
+Producer: class {
+    # where it sends
+    ch: (sync.Channel String).view
+    # its name
+    name: String
+    # how many it sends
+    count: i64
+} as {
+    task: thread.Task
+    call: function {:this} is {
+        i: 0.i64
+        for i < this.count loop {
+            this.ch.send value: "\{this.name}\{i}"
+            i = i + 1
+        }
+    }
+}
+
+main: function is {
+    ch: (sync.Channel String).create capacity: 4
+    print "capacity \{ch.capacity}"
+    {
+        a: thread.spawn task: (Producer :ch name: "a".string count: 50)
+        b: thread.spawn task: (Producer :ch name: "b".string count: 50)
+        fromA: 0.i64
+        n: 0.i64
+        for n < 100 loop {
+            got: ch.receive
+            match (got) case some then {
+                if (got.startsWith prefix: "a") then fromA = fromA + 1
+            } case none then null
+            n = n + 1
+        }
+        print "received \{n}, \{fromA} from a"
+    }
+    ch.close
+    print "closed: \{ch.isClosed}, receive answers none: \{(ch.receive).none}"
+    spare: (sync.Channel String).create
+    print "unbounded: \{spare.capacity}"
+    spare.send value: "first".string
+    spare.send value: "freed with the channel".string
+    first: spare.tryReceive
+    match (first) case some then print "first in, first out: \{first}" case none then print "empty"
+}

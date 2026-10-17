@@ -1,0 +1,126 @@
+/* Channel / ChannelVal -- a queue threads send values through (sync.z), one
+   copy per value type; both classes are this template, @@P0@@ their one type
+   parameter. The lock, two condition variables and a ring of values live in a
+   heap block. `cap` 0 is no limit: the ring grows when full. `receive` and
+   `tryReceive` answer an option built by the instance's own @@SOME.<m>@@ /
+   @@NONE.<m>@@ helpers. */
+typedef struct z_@@NAME@@_blk {
+    z_mutex_t m;
+    z_cond_t notEmpty;
+    z_cond_t notFull;
+    @@P0@@* ring;
+    uint64_t cap;
+    uint64_t size;
+    uint64_t head;
+    uint64_t len;
+    bool closed;
+} z_@@NAME@@_blk;
+
+typedef struct z_@@NAME@@_t {
+    z_@@NAME@@_blk* b;
+} z_@@NAME@@_t;
+
+static z_@@NAME@@_t z_@@NAME@@_create(uint64_t capacity) {
+    z_@@NAME@@_t ch;
+    z_@@NAME@@_blk* b = (z_@@NAME@@_blk*)z_xmalloc(sizeof(z_@@NAME@@_blk));
+    if (z_mutex_init(&b->m) != 0 || z_cond_init(&b->notEmpty) != 0 || z_cond_init(&b->notFull) != 0) {
+        z_panic("sync.Channel: the operating system could not make a lock");
+    }
+    b->cap = capacity;
+    b->size = capacity != 0 ? capacity : 16;
+    b->ring = (@@P0@@*)z_xmalloc(sizeof(@@P0@@) * b->size);
+    b->head = 0;
+    b->len = 0;
+    b->closed = false;
+    ch.b = b;
+    return ch;
+}
+
+static void z_@@NAME@@_destroy(z_@@NAME@@_t* ch) {
+    z_@@NAME@@_blk* b = ch->b;
+    if (b == NULL) return;
+    for (uint64_t i = 0; i < b->len; i++) @@P0_DESTROY@@(&b->ring[(b->head + i) % b->size]);
+    free(b->ring);
+    z_cond_destroy(&b->notFull);
+    z_cond_destroy(&b->notEmpty);
+    z_mutex_destroy(&b->m);
+    free(b);
+    ch->b = NULL;
+}
+
+/* the ring, twice as large, its values in order from the start */
+static void z_@@NAME@@_grow(z_@@NAME@@_blk* b) {
+    uint64_t n = b->size * 2;
+    @@P0@@* r = (@@P0@@*)z_xmalloc(sizeof(@@P0@@) * n);
+    for (uint64_t i = 0; i < b->len; i++) r[i] = b->ring[(b->head + i) % b->size];
+    free(b->ring);
+    b->ring = r;
+    b->size = n;
+    b->head = 0;
+}
+
+/* the oldest value, moved out; the lock is held and the ring is not empty */
+static @@P0@@ z_@@NAME@@_pop(z_@@NAME@@_blk* b) {
+    @@P0@@ v = b->ring[b->head];
+    b->head = (b->head + 1) % b->size;
+    b->len--;
+    z_cond_signal(&b->notFull);
+    return v;
+}
+
+static void z_@@NAME@@_send(const z_@@NAME@@_t* ch, @@P0@@ value) {
+    z_@@NAME@@_blk* b = ch->b;
+    z_mutex_lock(&b->m);
+    while (b->cap != 0 && b->len == b->cap && !b->closed) z_cond_wait(&b->notFull, &b->m);
+    if (b->closed) z_panic("sync.Channel: send on a closed channel");
+    if (b->len == b->size) z_@@NAME@@_grow(b);
+    b->ring[(b->head + b->len) % b->size] = value;
+    b->len++;
+    z_cond_signal(&b->notEmpty);
+    z_mutex_unlock(&b->m);
+}
+
+static z_@@OUT.receive@@_t z_@@NAME@@_receive(const z_@@NAME@@_t* ch) {
+    z_@@NAME@@_blk* b = ch->b;
+    z_mutex_lock(&b->m);
+    while (b->len == 0 && !b->closed) z_cond_wait(&b->notEmpty, &b->m);
+    if (b->len == 0) {
+        z_mutex_unlock(&b->m);
+        return @@NONE.receive@@();
+    }
+    @@P0@@ v = z_@@NAME@@_pop(b);
+    z_mutex_unlock(&b->m);
+    return @@SOME.receive@@(v);
+}
+
+static z_@@OUT.tryReceive@@_t z_@@NAME@@_tryReceive(const z_@@NAME@@_t* ch) {
+    z_@@NAME@@_blk* b = ch->b;
+    z_mutex_lock(&b->m);
+    if (b->len == 0) {
+        z_mutex_unlock(&b->m);
+        return @@NONE.tryReceive@@();
+    }
+    @@P0@@ v = z_@@NAME@@_pop(b);
+    z_mutex_unlock(&b->m);
+    return @@SOME.tryReceive@@(v);
+}
+
+static void z_@@NAME@@_close(const z_@@NAME@@_t* ch) {
+    z_@@NAME@@_blk* b = ch->b;
+    z_mutex_lock(&b->m);
+    b->closed = true;
+    z_cond_broadcast(&b->notEmpty);
+    z_cond_broadcast(&b->notFull);
+    z_mutex_unlock(&b->m);
+}
+
+static bool z_@@NAME@@_isClosed(const z_@@NAME@@_t* ch) {
+    z_mutex_lock(&ch->b->m);
+    bool c = ch->b->closed;
+    z_mutex_unlock(&ch->b->m);
+    return c;
+}
+
+static uint64_t z_@@NAME@@_capacity(const z_@@NAME@@_t* ch) {
+    return ch->b->cap;
+}

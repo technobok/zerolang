@@ -40886,6 +40886,24 @@ takenHere: function {} out optionval ztypes.zsrcpos is {
     return (optionval.some (ztypes.zsrcpos fsno: zvfs.fsno lineno: 0 colno: 0))
 }
 
+# takingReceiverVid -- the variable a value taken by a method call moves into,
+# with the locks it holds: the call's receiver, when the method takes it
+# writable (`xs.append w` stores `w` in `xs`). A `.view` receiver keeps
+# nothing of its own -- a Channel's `send` hands the value to another thread --
+# so there the locks have nowhere to go. 0 when there is no receiver variable.
+takingReceiverVid: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    call: callref
+    funcId: ztypes.tid
+} out ztypes.vid is {
+    if (methodReceiverIsView :st mid: funcId) then return ztypes.vid
+    rtup: ListVal zast.nameid
+    methodReceiverTuple :ast n: (ast.nodes.get i: call.callable) dst: rtup
+    if rtup.length == 0 then return ztypes.vid
+    return ((st.lookupVarId nameId: (rtup.get i: 0)).or d: ztypes.vid)
+}
+
 # consumeBareArgOwnership -- a bare-name reftype value at an OWNING slot (a
 # take parameter, a constructor field, a tagged-arm payload): refuse a
 # readonly / pinned / borrowed source, else transfer ownership out of it.
@@ -45073,19 +45091,7 @@ checkTypedCallArg: function {
     # the result when the callee's result holds the value. Only a taken
     # argument asks, so only then is the receiver's path built.
     recvVid: ztypes.vid
-    if isCtor.not when isTake then {
-        rtupT: ListVal zast.nameid
-        calT: ast.nodes.get i: call.callable
-        methodReceiverTuple :ast n: calT dst: rtupT
-        if rtupT.length > 0 then {
-            rvT: st.lookupVarId nameId: (rtupT.get i: 0)
-            match (
-                rvT
-            ) case some then {
-                recvVid = rvT
-            } case none then null
-        }
-    }
+    if isCtor.not when isTake then recvVid = takingReceiverVid :st :ast :call :funcId
     if isTake then moveArmLeavesIntoArgument :st :ast :arg :recvVid :calleePins :pins
     # a `w.take` kept its locks for this place (checkMovedValueAt): they go
     # where a bare `w`'s go
@@ -50118,6 +50124,7 @@ genericArgPreHoist: function {
     st: zenv.ZSymbolTable
     ast: Ast
     call: callref
+    funcId: ztypes.tid
     aow: argownership
     bnId: zast.nameid
     opN: astnode.view
@@ -50136,17 +50143,7 @@ genericArgPreHoist: function {
     recvVid: ztypes.vid
     if aow.isTake.not then return recvVid
     if bnId.isZero then moveGenericFieldArg :st :ast :arg :opN :vt
-    rtupG: ListVal zast.nameid
-    calG: ast.nodes.get i: call.callable
-    methodReceiverTuple :ast n: calG dst: rtupG
-    if rtupG.length > 0 then {
-        rvG: st.lookupVarId nameId: (rtupG.get i: 0)
-        match (
-            rvG
-        ) case some then {
-            recvVid = rvG
-        } case none then null
-    }
+    recvVid = takingReceiverVid :st :ast :call :funcId
     moveArmLeavesIntoArgument :st :ast :arg :recvVid :calleePins :pins
     return recvVid
 }
@@ -50184,7 +50181,7 @@ lockGenericValueArg: function {
     calleePins: resultPins :st :funcId
     opN: ast.nodes.get i: arg.operation
     bnId: atomNameId :ast n: opN
-    recvVid: genericArgPreHoist :st :ast :call :aow :bnId :opN :vt :pins :calleePins :arg
+    recvVid: genericArgPreHoist :st :ast :call :funcId :aow :bnId :opN :vt :pins :calleePins :arg
     # THE SAME HOIST A CONCRETE CALL'S ARGUMENT GETS. It splits trivial from
     # non-trivial itself, which is the split that matters here: a bare name and
     # a plain string literal are trivial and are locked where they stand, while

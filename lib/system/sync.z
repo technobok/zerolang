@@ -157,3 +157,48 @@ Barrier: class is native as {
     # wait for the round's other threads; answer whether this one is the leader
     wait: function {t: this.view} out bool is native
 }
+
+# Channel -- a queue threads send values through: `send` moves a value in,
+# `receive` hands each value to exactly one receiver, in the order sent. A
+# Channel of capacity 0 grows as it must; one with a capacity holds at most
+# that many, and `send` waits for room. `close` says nothing more will come:
+# `receive` drains what is left, then answers none. Shared by `.view`, as every
+# sync type is; ChannelVal is the twin for valtypes.
+Channel: class is native as {
+    T: AnyRef.generic
+    # an empty Channel holding at most `capacity` values; 0 for no limit
+    create: function {capacity: 0.u64} out type is native
+    # move `value` in, waiting while the Channel is full; sending on a closed
+    # Channel panics
+    send: function {t: this.view value: T.take} is native
+    # wait for a value and take it; none once the Channel is closed and empty
+    receive: function {t: this.view} out Option T is native
+    # take a value if one is waiting; none when the Channel is empty
+    tryReceive: function {t: this.view} out Option T is native
+    # say nothing more will be sent, and wake every waiting receiver
+    close: function {t: this.view} is native
+    # whether `close` was called
+    isClosed: function {t: this.view} out bool is native
+    # the most values it holds; 0 for no limit
+    capacity: function {t: this.view} out u64 is native
+}
+
+# ChannelVal -- Channel for a valtype: each value is copied in and out
+ChannelVal: class is native as {
+    t: anyval.generic
+    # an empty ChannelVal holding at most `capacity` values; 0 for no limit
+    create: function {capacity: 0.u64} out type is native
+    # copy `value` in, waiting while the ChannelVal is full; sending on a
+    # closed ChannelVal panics
+    send: function {t: this.view value: t} is native
+    # wait for a value and take it; none once it is closed and empty
+    receive: function {t: this.view} out optionval t is native
+    # take a value if one is waiting; none when it is empty
+    tryReceive: function {t: this.view} out optionval t is native
+    # say nothing more will be sent, and wake every waiting receiver
+    close: function {t: this.view} is native
+    # whether `close` was called
+    isClosed: function {t: this.view} out bool is native
+    # the most values it holds; 0 for no limit
+    capacity: function {t: this.view} out u64 is native
+}

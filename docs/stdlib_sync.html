@@ -89,6 +89,8 @@ Table of Contents</div>
 </li>
 <li><a href="#waiting">Waiting</a>
 </li>
+<li><a href="#channels">Channels</a>
+</li>
 <li><a href="#building">Building</a>
 </li>
 </ul>
@@ -241,7 +243,52 @@ round.</li>
       for g.value.ready.not loop g.wait cond: cv
       print "set to \{g.value.value}"
   }</code></pre>
-<h2 id="building"><a href="#building">5. Building</a></h2>
+<h2 id="channels"><a href="#channels">5. Channels</a></h2>
+<ul>
+<li><strong>Channel T</strong> -- a queue threads send values through.
+<code>create capacity: n</code> holds at most <code>n</code> values (<code>0</code>, the default, has
+no limit); <code>send value:</code> moves a value in and waits while the channel
+is full; <code>receive</code> waits for a value and answers it as an
+<code>Option T</code>, <code>none</code> once the channel is closed and drained;
+<code>tryReceive</code> answers <code>none</code> at once when nothing is waiting.
+<code>close</code> says nothing more will come and wakes every receiver; sending
+on a closed channel panics. <code>isClosed</code> and <code>capacity</code> read it.</li>
+<li><strong>ChannelVal t</strong> -- the same for a valtype: values are copied in,
+and <code>receive</code> answers an <code>optionval t</code>.</li>
+</ul>
+<p>Each value goes to exactly one receiver, in the order sent. A value travels to
+another thread, so it may hold no borrow: <code>send</code> refuses one, as a taking
+argument with nowhere for its locks to go.</p>
+<pre><code class="language-zerolang">  # Producer -- sends numbered messages
+  Producer: class {
+      # where it sends
+      ch: (sync.Channel String).view
+  } as {
+      task: thread.Task
+      call: function {:this} is {
+          i: 0.i64
+          for i &lt; 3 loop {
+              this.ch.send value: "message \{i}"
+              i = i + 1
+          }
+      }
+  }
+
+  main: function is {
+      ch: (sync.Channel String).create capacity: 1
+      {
+          p: thread.spawn task: (Producer :ch)
+          n: 0.i64
+          for n &lt; 3 loop {
+              got: ch.receive
+              match (got) case some then print got case none then null
+              n = n + 1
+          }
+      }
+      ch.close
+      print "after close: \{(ch.receive).none}"
+  }</code></pre>
+<h2 id="building"><a href="#building">6. Building</a></h2>
 <p>A program that uses <code>sync</code> links <code>pthread</code>, like one that starts a thread;
 every class is written from a C template over the shim
 <code>src/runtime/natives/_Z_THREAD_SHIM.inc</code> (pthreads, or Win32 on Windows).</p>
