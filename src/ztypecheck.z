@@ -36026,7 +36026,7 @@ stashArmValuePins: function {st: zenv.ZSymbolTable ast: Ast.view lineId: zast.no
 }
 
 # checkMovedValueAt -- type the value a place moves in whole: a binding or a
-# reassignment, or an owning place (a taking argument, an arm payload, a
+# reassignment, or an owning place (a `.take` parameter, an arm payload, a
 # returned value), walked as checkOwnedValueAt walks one. A `w.take` written as
 # the whole value keeps its locks for the place to move on -- transferHeldLocks
 # for a binding, moveHeldLocksIntoSlot for the others -- exactly as it would a
@@ -37366,7 +37366,7 @@ refuseBorrowedReassign: function {
 refuseBorrowedTake: function {
     st: zenv.ZSymbolTable ast: Ast.view n: astnode.view vt: ztypes.tid
 } is {
-    refuseBorrowedMove :st :ast :n :vt verb: "into a taking argument"
+    refuseBorrowedMove :st :ast :n :vt verb: "into a `.take` parameter"
 }
 
 # refuseBorrowedMove -- a borrowed value (borrowedValueText) moved `verb` into
@@ -38930,18 +38930,15 @@ checkComprehensionValue: function {
             bvo9
         ) case some then {
             bnt9: zast.nameTextAt :ast ref: bn9
-            # the list the value moves into has no variable yet -- the binding
-            # that receives it is minted from the type this walk returns -- so
-            # the locks a value carries have nowhere to go, and one that holds
-            # any is refused rather than followed to storage nothing names
-            norecv9: ztypes.vid
+            # the value moves into the list the loop builds, which could hand
+            # it out again without its locks: one that holds any is refused
             nopins9: List ztyping.PinPath
             (consumeBareArgOwnership
                 :st
                 :ast
                 name: bnt9.stringView
                 vid: bvo9
-                recvVid: norecv9
+                keeper: fornode.nid
                 calleePins: false
                 pins: nopins9
                 nodeid: vnid9
@@ -38951,19 +38948,18 @@ checkComprehensionValue: function {
             return
         } case none then null
     }
-    # a `w.take` kept its locks for this place (forTakeNode): they have nowhere
-    # to go, as a bare `w`'s have none
+    # a `w.take` kept its locks for this place (forTakeNode): they are
+    # refused, as a bare `w`'s are
     tkv9: takenLocalVar :st :ast nid: vnid9
     if tkv9.isZero.not then {
         tkn9: takenNameText :ast nid: vnid9
-        tkrecv9: ztypes.vid
         tkpins9: List ztyping.PinPath
         (moveHeldLocksIntoSlot
             :st
             :ast
             name: tkn9.stringView
             vid: tkv9
-            recvVid: tkrecv9
+            keeper: fornode.nid
             calleePins: false
             pins: tkpins9
             nodeid: vnid9
@@ -40886,22 +40882,33 @@ takenHere: function {} out optionval ztypes.zsrcpos is {
     return (optionval.some (ztypes.zsrcpos fsno: zvfs.fsno lineno: 0 colno: 0))
 }
 
-# takingReceiverVid -- the variable a value taken by a method call moves into,
-# with the locks it holds: the call's receiver, when the method takes it
-# writable (`xs.append w` stores `w` in `xs`). A `.view` receiver keeps
-# nothing of its own -- a Channel's `send` hands the value to another thread --
-# so there the locks have nowhere to go. 0 when there is no receiver variable.
-takingReceiverVid: function {
-    st: zenv.ZSymbolTable
-    ast: Ast.view
+# methodKeeperOf -- what could keep a value a call takes past the call: the
+# callable of a method call, whose receiver may store it (`xs.append w`) and
+# later hand it out (`xs.pop`) -- through a `.view` receiver too, as a
+# Channel's `send` does. Zero for a call that is no method's.
+methodKeeperOf: function {
+    st: zenv.ZSymbolTable.view
     call: callref
     funcId: ztypes.tid
-} out ztypes.vid is {
-    if (methodReceiverIsView :st mid: funcId) then return ztypes.vid
-    rtup: ListVal zast.nameid
-    methodReceiverTuple :ast n: (ast.nodes.get i: call.callable) dst: rtup
-    if rtup.length == 0 then return ztypes.vid
-    return ((st.lookupVarId nameId: (rtup.get i: 0)).or d: ztypes.vid)
+} out zast.nodeid is {
+    if (methodHasThisReceiver :st mid: funcId).not then return zast.nodeid
+    return call.callable
+}
+
+# keeperText -- how a report names what could keep a taken value: the list a
+# comprehension builds, or a method call's receiver path.
+keeperText: function {ast: Ast.view keeper: zast.nodeid} out String is {
+    kn: ast.nodes.get i: keeper
+    if kn.forexpr then return "the list this loop builds"
+    tup: ListVal zast.nameid
+    methodReceiverTuple :ast n: kn dst: tup
+    if tup.length == 0 then return "the receiver"
+    path: String
+    for each id: tup loop {
+        if path.length > 0 then path.append "."
+        path.append (zast.nameTextAt :ast ref: id)
+    }
+    return "'\{path}'"
 }
 
 # consumeBareArgOwnership -- a bare-name reftype value at an OWNING slot (a
@@ -40912,8 +40919,8 @@ consumeBareArgOwnership: function {
     ast: Ast.view
     name: StringView
     vid: ztypes.vid
-    # the receiver the value moves into (`xs.append w`), zero when none
-    recvVid: ztypes.vid
+    # what could keep the value past the call (methodKeeperOf); it refuses the value's locks
+    keeper: zast.nodeid
     # the callee's result will hold the value (an `outx` callee, a construction)
     calleePins: bool
     # the call's pins, which locks the value carries join
@@ -40931,7 +40938,7 @@ consumeBareArgOwnership: function {
             :lineno
             :colno
             :name
-            verb: "into a taking argument"
+            verb: "into a `.take` parameter"
         )
     } else {
         apin7: (pinnedMoveError
@@ -40941,10 +40948,10 @@ consumeBareArgOwnership: function {
             :lineno
             :colno
             :name
-            verb: "into a taking argument"
+            verb: "into a `.take` parameter"
         )
         if apin7 then null else if (isBorrowedVar :st :vid) then {
-            mb7: "Cannot move borrowed variable '\{name}' into a taking argument — borrowed names stay bound to their source for the full scope; copy with '.copy' to keep the source"
+            mb7: "Cannot move borrowed variable '\{name}' into a `.take` parameter — borrowed names stay bound to their source for the full scope; copy with '.copy' to keep the source"
             (addError
                 :st
                 :nodeid
@@ -40959,7 +40966,7 @@ consumeBareArgOwnership: function {
                 :ast
                 :name
                 :vid
-                :recvVid
+                :keeper
                 :calleePins
                 :pins
                 :nodeid
@@ -40975,18 +40982,21 @@ consumeBareArgOwnership: function {
 }
 
 # moveHeldLocksIntoSlot -- a value moving into an owning place takes the locks
-# it holds along: into the receiver when there is one, into the result when
-# the callee's result holds the value, and nowhere otherwise -- which refuses
-# the move. A bare `w`, a `w.take` (whose take kept them) and the hoisted
-# temporary of an unnamed value (`name` empty) all come here.
+# it holds along: into the call's result when the callee's result holds the
+# value (an `outx` callee, a construction), and refused otherwise. A method's
+# receiver never takes them: it could store the value and later hand it out
+# without them, so a lock-holding value cannot be moved into one. A bare `w`, a
+# `w.take` (whose take kept them) and the hoisted temporary of an unnamed value
+# (`name` empty) all come here.
 moveHeldLocksIntoSlot: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
     # the moved value's name, as the report spells it
     name: StringView
     vid: ztypes.vid
-    # the receiver the value moves into (`xs.append w`), zero when none
-    recvVid: ztypes.vid
+    # what could keep the value past the call: a method call's callable or a
+    # comprehension's for node, zero when nothing could
+    keeper: zast.nodeid
     # the callee's result will hold the value (an `outx` callee, a construction)
     calleePins: bool
     # the call's pins, which locks the value carries join
@@ -40995,33 +41005,25 @@ moveHeldLocksIntoSlot: function {
     lineno: u32
     colno: u32
 } is {
-    if recvVid.isZero.not then {
-        (transferHeldLocks
-            :st
-            :ast
-            from: vid
-            to: recvVid
-            verb: "into a taking argument"
-            :nodeid
-            :lineno
-            :colno
-        )
-    } else if calleePins then {
+    if calleePins when keeper.isZero then {
         carryHeldLocks :st from: vid :pins
-    } else {
-        heldN: List ztyping.PinPath
-        (st.heldLockPaths
-            holder: ztypes.zlockholder.var vid
-            dst: heldN
-        )
-        if heldN.length > 0 then {
-            rn7: zast.nameTextAt :ast ref: (pinRootAt pins: heldN i: 0)
-            what7: "the value".string
-            if name.length > 0 then what7 = "'\{name}'"
-            m7: "Cannot move \{what7} into a taking argument: it holds locks on '\{rn7}' and the callee is not `outx`, so the locks have nowhere to go; copy it first (`.copy`)"
-            addError :st :nodeid :lineno :colno e: zast.err.ownerError msg: m7
-        }
+        return
     }
+    held: List ztyping.PinPath
+    (st.heldLockPaths
+        holder: ztypes.zlockholder.var vid
+        dst: held
+    )
+    if held.length == 0 then return
+    root: zast.nameTextAt :ast ref: (pinRootAt pins: held i: 0)
+    what: "the value".string
+    if name.length > 0 then what = "'\{name}'"
+    msg: "Cannot move \{what} into a `.take` parameter: it holds a lock on '\{root}', and the callee is not `outx`, so nothing keeps '\{root}' locked once the call returns; copy it first (`.copy`)"
+    if keeper.isZero.not then {
+        into: keeperText :ast :keeper
+        msg = "Cannot move \{what} into \{into}: it holds a lock on '\{root}', and a value stored there could later be taken out without that lock; copy it first (`.copy`)"
+    }
+    addError :st :nodeid :lineno :colno e: zast.err.ownerError :msg
 }
 
 # appendValueTuple -- the source path of a value node (root first), appended onto
@@ -41247,12 +41249,12 @@ refuseLockHolder: function {
     toNm: varNameText :st :ast vid: to
     firstRoot: zast.nameTextAt :ast ref: (pinRootAt pins: held i: 0)
     if (st.reg.variableOriginOf id: to) == ztypes.zvarorigin.param then {
-        mp: "Cannot move \{what} \{verb}: it holds locks on '\{firstRoot}', and a parameter cannot take them; copy it first (`.copy`)"
+        mp: "Cannot move \{what} \{verb}: it holds a lock on '\{firstRoot}', and '\{toNm}' is a parameter, so the value would reach the caller without that lock; copy it first (`.copy`)"
         addError :st :nodeid :lineno :colno e: zast.err.ownerError msg: mp
         return true
     }
     if (isBorrowedVar :st vid: to) then {
-        mr: "Cannot move \{what} \{verb}: it holds locks on '\{firstRoot}', and '\{toNm}' does not own what it refers to, so the locks have nowhere to go; copy it first (`.copy`)"
+        mr: "Cannot move \{what} \{verb}: it holds a lock on '\{firstRoot}', and '\{toNm}' is a reference, so the value would land in storage it does not own, and the lock would end with it; copy it first (`.copy`)"
         hr: String
         ow: st.reg.variableBorrowOriginOf id: to
         if ow.isZero.not then {
@@ -41273,7 +41275,7 @@ refuseLockHolder: function {
     outlived: outlivedSource :st :held :to
     if outlived.isZero then return false
     rn: zast.nameTextAt :ast ref: outlived
-    mo: "Cannot move \{what} \{verb}: it holds locks on '\{rn}', and '\{toNm}' outlives '\{rn}'; copy it first (`.copy`)"
+    mo: "Cannot move \{what} \{verb}: it holds a lock on '\{rn}', and '\{toNm}' outlives '\{rn}'; copy it first (`.copy`)"
     ho: "keep '\{toNm}' inside '\{rn}'s scope"
     if fromNm.length > 0 then ho = "\{ho}, or end '\{fromNm}' before '\{rn}' does"
     (reportLockHolder
@@ -43499,8 +43501,8 @@ moveTakenTempLocks: function {
     tnm: String.view
     # the argument is an owned value with locks, at a taking parameter
     taken: bool
-    # the receiver the value moves into, zero when the call has none
-    recvVid: ztypes.vid
+    # the callable whose receiver could keep the temporary, zero when none
+    keeper: zast.nodeid
     # the call's result holds the value
     calleePins: bool
     # the call's pins, which the value's locks join
@@ -43516,7 +43518,7 @@ moveTakenTempLocks: function {
         :ast
         name: ""
         vid: tkv
-        :recvVid
+        :keeper
         :calleePins
         :pins
         nodeid: arg.nid
@@ -43544,7 +43546,8 @@ lockNonTrivialArg: function {
     # reftype's take
     valByPointer: bool
     pins: List ztyping.PinPath
-    recvVid: ztypes.vid
+    # what could keep a taken argument past the call, zero when none
+    keeper: zast.nodeid
     # the call's result keeps the locks its arguments place
     calleePins: bool
     arg: argref
@@ -43589,7 +43592,7 @@ lockNonTrivialArg: function {
         :ast
         :tnm
         taken: isTake and ownsPins
-        :recvVid
+        :keeper
         :calleePins
         :pins
         :arg
@@ -43651,8 +43654,8 @@ hoistTrivialArg: function {
     # and the pin a pinning (`outx`) callee's result keeps, as a reftype's does
     valByPointer: bool
     pins: List ztyping.PinPath
-    # the receiver a taken value moves into, zero when the call has none
-    recvVid: ztypes.vid
+    # what could keep a taken bare name past the call, zero when none
+    keeper: zast.nodeid
     # the call's result will hold a taken value (an `outx` callee, a construction)
     calleePins: bool
     arg: argref
@@ -43692,7 +43695,7 @@ hoistTrivialArg: function {
                     :ast
                     name: bnT.stringView
                     vid: bvo
-                    :recvVid
+                    :keeper
                     :calleePins
                     :pins
                     nodeid: (zast.nodeIdOf n: (ast.nodes.get i: arg.operation))
@@ -43736,8 +43739,8 @@ moveArmLeavesIntoArgument: function {
     st: zenv.ZSymbolTable
     ast: Ast
     arg: argref
-    # the receiver the value moves into, zero when the call has none
-    recvVid: ztypes.vid
+    # what could keep an arm's moved local past the call, zero when none
+    keeper: zast.nodeid
     # the call's result holds the value
     calleePins: bool
     # the call's pins, which the moved value's locks join
@@ -43760,7 +43763,7 @@ moveArmLeavesIntoArgument: function {
                 :ast
                 name: nm.stringView
                 vid: from
-                :recvVid
+                :keeper
                 :calleePins
                 :pins
                 nodeid: lf
@@ -43782,7 +43785,7 @@ moveArmFieldLeaves: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid} i
     for each lf: leaves loop {
         ln: ast.nodes.get i: lf
         lt: walkTypeOf :st nid: lf
-        refuseBorrowedMove :st :ast n: ln vt: lt verb: "into a taking argument"
+        refuseBorrowedMove :st :ast n: ln vt: lt verb: "into a `.take` parameter"
     }
 }
 
@@ -43821,8 +43824,8 @@ hoistAndLockArg: function {
     # lock a reftype argument takes, and pins no result
     valByPointer: bool
     pins: List ztyping.PinPath
-    # the receiver a taken value moves into, zero when the call has none
-    recvVid: ztypes.vid
+    # handed on to the hoist: what could keep a taken argument (methodKeeperOf)
+    keeper: zast.nodeid
     # the call's result will hold a taken value (an `outx` callee, a construction)
     calleePins: bool
     arg: argref
@@ -43844,7 +43847,7 @@ hoistAndLockArg: function {
             :isRecvArg
             :valByPointer
             :pins
-            :recvVid
+            :keeper
             :calleePins
             :arg
         )
@@ -43861,7 +43864,7 @@ hoistAndLockArg: function {
             :isRecvArg
             :valByPointer
             :pins
-            :recvVid
+            :keeper
             :calleePins
             :arg
         )
@@ -45087,12 +45090,11 @@ checkTypedCallArg: function {
             checkFieldMove :st :ast n: opN
         }
     }
-    # where a taken argument's locks go: the receiver when the call has one,
-    # the result when the callee's result holds the value. Only a taken
-    # argument asks, so only then is the receiver's path built.
-    recvVid: ztypes.vid
-    if isCtor.not when isTake then recvVid = takingReceiverVid :st :ast :call :funcId
-    if isTake then moveArmLeavesIntoArgument :st :ast :arg :recvVid :calleePins :pins
+    # where a taken argument's locks go: the call's result when it holds the
+    # value, refused when a method's receiver could keep it instead
+    keeper: zast.nodeid
+    if isCtor.not when isTake then keeper = methodKeeperOf :st :call :funcId
+    if isTake then moveArmLeavesIntoArgument :st :ast :arg :keeper :calleePins :pins
     # a `w.take` kept its locks for this place (checkMovedValueAt): they go
     # where a bare `w`'s go
     tkv: takenLocalVar :st :ast nid: arg.operation
@@ -45103,7 +45105,7 @@ checkTypedCallArg: function {
             :ast
             name: tkn.stringView
             vid: tkv
-            :recvVid
+            :keeper
             :calleePins
             :pins
             nodeid: arg.nid
@@ -45123,7 +45125,7 @@ checkTypedCallArg: function {
         :isRecvArg
         :valByPointer
         :pins
-        :recvVid
+        :keeper
         :calleePins
         :arg
     )
@@ -47844,7 +47846,7 @@ movePayloadIntoArm: function {
                 :ast
                 name: bnT.stringView
                 vid: bvo
-                recvVid: ztypes.vid
+                keeper: zast.nodeid
                 calleePins: true
                 pins: carry
                 :nodeid
@@ -50118,8 +50120,8 @@ checkConcreteGenericArg: function {
 # it hoists it, the same three things `checkTypedCallArg` decides: the
 # argument's disposition (which the emitter reads to zero a taken source and
 # the LSP to word it), the refusal a field handed to a taking parameter earns,
-# and where a taken argument's locks go -- the receiver, when the call has one.
-# Answers that receiver's variable, zero when there is none.
+# and what could keep a taken argument past the call (methodKeeperOf), which
+# it answers: zero when nothing could.
 genericArgPreHoist: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -50132,7 +50134,7 @@ genericArgPreHoist: function {
     pins: List ztyping.PinPath
     calleePins: bool
     arg: argref
-} out ztypes.vid is {
+} out zast.nodeid is {
     if aow.isTake or aow.isLockish or aow.isHold then {
         dispVal: ztypes.zparamownership.borrowMode
         if aow.isViewArg then dispVal = ztypes.zparamownership.viewMode
@@ -50140,12 +50142,12 @@ genericArgPreHoist: function {
         if aow.isTake then dispVal = ztypes.zparamownership.takeMode
         stampArgDisposition :st :ast op: arg.operation own: dispVal
     }
-    recvVid: ztypes.vid
-    if aow.isTake.not then return recvVid
+    keeper: zast.nodeid
+    if aow.isTake.not then return keeper
     if bnId.isZero then moveGenericFieldArg :st :ast :arg :opN :vt
-    recvVid = takingReceiverVid :st :ast :call :funcId
-    moveArmLeavesIntoArgument :st :ast :arg :recvVid :calleePins :pins
-    return recvVid
+    keeper = methodKeeperOf :st :call :funcId
+    moveArmLeavesIntoArgument :st :ast :arg :keeper :calleePins :pins
+    return keeper
 }
 
 # lockGenericValueArg -- what a generic call does to one value argument's
@@ -50181,7 +50183,7 @@ lockGenericValueArg: function {
     calleePins: resultPins :st :funcId
     opN: ast.nodes.get i: arg.operation
     bnId: atomNameId :ast n: opN
-    recvVid: genericArgPreHoist :st :ast :call :funcId :aow :bnId :opN :vt :pins :calleePins :arg
+    keeper: genericArgPreHoist :st :ast :call :funcId :aow :bnId :opN :vt :pins :calleePins :arg
     # THE SAME HOIST A CONCRETE CALL'S ARGUMENT GETS. It splits trivial from
     # non-trivial itself, which is the split that matters here: a bare name and
     # a plain string literal are trivial and are locked where they stand, while
@@ -50207,7 +50209,7 @@ lockGenericValueArg: function {
         isRecvArg: false
         valByPointer: valByPtr
         :pins
-        :recvVid
+        :keeper
         :calleePins
         :arg
     )

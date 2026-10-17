@@ -697,7 +697,7 @@ itself: the container dies as the arm ends ("Cannot bind this value: it keeps
 reassignment of an owned local, a return, or a taking slot is refused with the
 words that read gets alone: a field and an element a list still owns never move
 out (<code>keep s: (if c then h.p else made)</code> is "Cannot move borrowed variable
-'h.p' into a taking argument").</p>
+'h.p' into a `.take` parameter").</p>
 <h4 id="ownership-transfer-inside-loops"><a href="#ownership-transfer-inside-loops">6.1.2. Ownership Transfer Inside Loops</a></h4>
 <p>A <code>for</code> loop runs its conditions and its body zero or more times. Moving a
 variable declared <em><strong>outside</strong></em> the loop on a path that reaches the next
@@ -866,8 +866,8 @@ such a parameter, or is a pinning call on one -- never a local.</li>
 <h3 id="locks-move-with-the-value"><a href="#locks-move-with-the-value">6.6. Locks move with the value</a></h3>
 <p>A lock-holding value that is moved -- into another binding (<code>b: w</code>,
 <code>b: w.take</code>), reassigned (<code>x = w</code>), stored in a field or an arm payload,
-appended to a container, or handed to a <code>.take</code> parameter, written bare or
-with <code>.take</code> -- takes its locks with it. So does an owned value no name
+or handed to a <code>.take</code> parameter of a construction or an <code>outx</code> function,
+written bare or with <code>.take</code> -- takes its locks with it. So does an owned value no name
 holds that carries locks: a construction over a borrow (<code>W s: src</code>, passed
 as an argument or reassigned as <code>x = Option.some w</code>) or an <code>outx</code> result.
 The new owner must be able to hold them: a destination
@@ -878,11 +878,18 @@ leave with the callee unseen), a destination that is a reference -- a
 <code>with</code> alias, a <code>getMut</code> result, a <code>.borrow</code> binding, or a field reached
 through one (the value lands in storage the reference's owner holds, while the
 reference, and any lock moved onto it, ends with its own scope) -- and a
-<code>.take</code> parameter of a function that is not <code>outx</code> (the locks would have
-nowhere to go). <code>return
+<code>.take</code> parameter of a function that is not <code>outx</code> (nothing would keep
+the sources locked once the call returns). <code>return
 w</code> from an <code>outx</code> function carries them to the caller's binding when every
-source is a parameter or the receiver. The escape hatch is always
-<code>.copy</code>: an owned copy holds no locks.</p>
+source is a parameter or the receiver.</p>
+<p>A method's receiver never takes them. A container cannot tell which of its
+elements holds which lock, so a later call (<code>pop</code>, <code>remove</code>) could hand a
+value out with none, free to outlive what it points into; any object a method
+stores the value in could do the same. A lock-holding value handed to a
+method's <code>.take</code> parameter is therefore refused -- <code>xs.append w</code>, a user
+method, a <code>.view</code> receiver such as a channel's <code>send</code> -- and so is the
+element of a comprehension, which the loop appends to the list it builds.</p>
+<p>The escape hatch is always <code>.copy</code>: an owned copy holds no locks.</p>
 <h3 id="copy"><a href="#copy">6.7. .copy</a></h3>
 <p>An inline method only (not a parameter or return attribute). <code>x.copy</code>
 answers "a duplicate of the receiver, owned by the caller". What a
@@ -1450,7 +1457,7 @@ remediation (<code>.copy</code>, <code>.take</code>, or a non-owned destination)
 reassignment of an owned local or of a field (<code>r = h.p</code>, <code>h.q = h.p</code>), a
 return, a taking argument, a constructor field or a collection element. Both
 owners would free it. The refusal is the borrowed-name one: "Cannot move
-borrowed variable 'h.p' into a taking argument". A field is borrowed from its
+borrowed variable 'h.p' into a `.take` parameter". A field is borrowed from its
 owner whatever owns the owner, so <code>.take</code> on one that owns what it holds is
 refused the same way ("Cannot move borrowed variable 'h.p' with '.take'"); a
 field that owns nothing -- a number, a record, a view -- hands on a copy.
@@ -2111,8 +2118,9 @@ the direct form.</p>
 <tr><td><code>b = e</code> into a borrow <code>b</code> that outlives <code>e</code></td><td>Cannot re-point 'b' at 'e': 'b' outlives 'e'</td><td>Re-point <code>b</code> at storage of its own scope or an enclosing one</td></tr>
 <tr><td><code>b = z.take</code> into a borrowed <code>b</code></td><td>Cannot reassign borrowed 'b' with an owned value: a reassignment keeps the ownership its target was bound with</td><td>Re-point it at <code>z</code> (<code>b = z</code>), or bind an owned name</td></tr>
 <tr><td><code>b = e</code> where <code>c: b</code> borrows through <code>b</code></td><td>Cannot re-point 'b': 'c' borrows through it</td><td>End <code>c</code>'s scope first</td></tr>
-<tr><td><code>x = w.take</code> where <code>x</code> outlives what <code>w</code> locks</td><td>Cannot move 'w' by reassignment: it holds locks on 'a', and 'x' outlives 'a'</td><td>Keep 'x' inside 'a's scope, or <code>w.copy</code></td></tr>
-<tr><td><code>inner.append from: w</code> where <code>inner</code> is a <code>with</code> alias or a <code>getMut</code> result and <code>w</code> holds locks</td><td>Cannot move 'w' into a taking argument: it holds locks on 'a', and 'inner' does not own what it refers to, so the locks have nowhere to go</td><td>Move it through the owner within 'a's scope, or <code>w.copy</code></td></tr>
+<tr><td><code>x = w.take</code> where <code>x</code> outlives what <code>w</code> locks</td><td>Cannot move 'w' by reassignment: it holds a lock on 'a', and 'x' outlives 'a'</td><td>Keep 'x' inside 'a's scope, or <code>w.copy</code></td></tr>
+<tr><td><code>xs.append w</code> (or any method call) where <code>w</code> holds locks</td><td>Cannot move 'w' into 'xs': it holds a lock on 'a', and a value stored there could later be taken out without that lock</td><td>Append <code>w.copy</code>, or keep <code>w</code> in a named local or a field</td></tr>
+<tr><td><code>eat w: w</code> where <code>eat</code> is not <code>outx</code> and <code>w</code> holds locks</td><td>Cannot move 'w' into a `.take` parameter: it holds a lock on 'a', and the callee is not `outx`, so nothing keeps 'a' locked once the call returns</td><td>Pass <code>w.copy</code></td></tr>
 <tr><td>non-owned field on a record</td><td>non-owned fields only allowed on classes</td><td>Change the enclosing type from <code>record</code> to <code>class</code></td></tr>
 <tr><td>a reftype field on a record (<code>s: String</code>)</td><td>a record field holds valtypes; make 'R' a class to hold 'String'</td><td>Make <code>R</code> a <code>class</code>; a valtype that must live on the heap is a <code>Box from:</code> local, never a field</td></tr>
 <tr><td>a reftype payload on a variant arm</td><td>a variant arm holds valtypes; make 'V' a union to hold 'String'</td><td>Make <code>V</code> a <code>union</code></td></tr>

@@ -554,7 +554,7 @@ itself: the container dies as the arm ends ("Cannot bind this value: it keeps
 reassignment of an owned local, a return, or a taking slot is refused with the
 words that read gets alone: a field and an element a list still owns never move
 out (#~"keep s: (if c then h.p else made)" is "Cannot move borrowed variable
-'h.p' into a taking argument").
+'h.p' into a `.take` parameter").
 
 #----: Ownership Transfer Inside Loops
 
@@ -754,8 +754,8 @@ Four rules keep a declaration honest, all reported at compile time:
 
 A lock-holding value that is moved -- into another binding (#~"b: w",
 #~"b: w.take"), reassigned (#~"x = w"), stored in a field or an arm payload,
-appended to a container, or handed to a #~".take" parameter, written bare or
-with #~".take" -- takes its locks with it. So does an #_+"owned" value no name
+or handed to a #~".take" parameter of a construction or an #~"outx" function,
+written bare or with #~".take" -- takes its locks with it. So does an #_+"owned" value no name
 holds that carries locks: a construction over a borrow (#~"W s: src", passed
 as an argument or reassigned as #~"x = Option.some w") or an #~"outx" result.
 The new owner must be able to hold them: a destination
@@ -766,11 +766,20 @@ leave with the callee unseen), a destination that is a #_+"reference" -- a
 #~"with" alias, a #~"getMut" result, a #~".borrow" binding, or a field reached
 through one (the value lands in storage the reference's owner holds, while the
 reference, and any lock moved onto it, ends with its own scope) -- and a
-#~".take" parameter of a function that is not #~"outx" (the locks would have
-nowhere to go). #~"return
+#~".take" parameter of a function that is not #~"outx" (nothing would keep
+the sources locked once the call returns). #~"return
 w" from an #~"outx" function carries them to the caller's binding when every
-source is a parameter or the receiver. The escape hatch is always
-#~".copy": an owned copy holds no locks.
+source is a parameter or the receiver.
+
+A method's receiver never takes them. A container cannot tell which of its
+elements holds which lock, so a later call (#~"pop", #~"remove") could hand a
+value out with none, free to outlive what it points into; any object a method
+stores the value in could do the same. A lock-holding value handed to a
+method's #~".take" parameter is therefore refused -- #~"xs.append w", a user
+method, a #~".view" receiver such as a channel's #~"send" -- and so is the
+element of a comprehension, which the loop appends to the list it builds.
+
+The escape hatch is always #~".copy": an owned copy holds no locks.
 
 #---: .copy
 
@@ -1428,7 +1437,7 @@ A value read out of storage something else owns -- a reftype field
 reassignment of an owned local or of a field (#~"r = h.p", #~"h.q = h.p"), a
 return, a taking argument, a constructor field or a collection element. Both
 owners would free it. The refusal is the borrowed-name one: "Cannot move
-borrowed variable 'h.p' into a taking argument". A field is borrowed from its
+borrowed variable 'h.p' into a `.take` parameter". A field is borrowed from its
 owner whatever owns the owner, so #~".take" on one that owns what it holds is
 refused the same way ("Cannot move borrowed variable 'h.p' with '.take'"); a
 field that owns nothing -- a number, a record, a view -- hands on a copy.
@@ -2209,8 +2218,9 @@ the direct form.
   #~"b = e" into a borrow #~"b" that outlives #~"e"          |Cannot re-point 'b' at 'e': 'b' outlives 'e' |Re-point #~"b" at storage of its own scope or an enclosing one
   #~"b = z.take" into a borrowed #~"b"                       |Cannot reassign borrowed 'b' with an owned value: a reassignment keeps the ownership its target was bound with |Re-point it at #~"z" (#~"b = z"), or bind an owned name
   #~"b = e" where #~"c: b" borrows through #~"b"             |Cannot re-point 'b': 'c' borrows through it |End #~"c"'s scope first
-  #~"x = w.take" where #~"x" outlives what #~"w" locks        |Cannot move 'w' by reassignment: it holds locks on 'a', and 'x' outlives 'a' |Keep 'x' inside 'a's scope, or #~"w.copy"
-  #~"inner.append from: w" where #~"inner" is a #~"with" alias or a #~"getMut" result and #~"w" holds locks |Cannot move 'w' into a taking argument: it holds locks on 'a', and 'inner' does not own what it refers to, so the locks have nowhere to go |Move it through the owner within 'a's scope, or #~"w.copy"
+  #~"x = w.take" where #~"x" outlives what #~"w" locks        |Cannot move 'w' by reassignment: it holds a lock on 'a', and 'x' outlives 'a' |Keep 'x' inside 'a's scope, or #~"w.copy"
+  #~"xs.append w" (or any method call) where #~"w" holds locks |Cannot move 'w' into 'xs': it holds a lock on 'a', and a value stored there could later be taken out without that lock |Append #~"w.copy", or keep #~"w" in a named local or a field
+  #~"eat w: w" where #~"eat" is not #~"outx" and #~"w" holds locks |Cannot move 'w' into a `.take` parameter: it holds a lock on 'a', and the callee is not `outx`, so nothing keeps 'a' locked once the call returns |Pass #~"w.copy"
   non-owned field on a record                               |non-owned fields only allowed on classes              |Change the enclosing type from #~"record" to #~"class"
   a reftype field on a record (#~"s: String")               |a record field holds valtypes; make 'R' a class to hold 'String' |Make #~"R" a #~"class"; a valtype that must live on the heap is a #~"Box from:" local, never a field
   a reftype payload on a variant arm                        |a variant arm holds valtypes; make 'V' a union to hold 'String' |Make #~"V" a #~"union"
