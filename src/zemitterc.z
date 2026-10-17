@@ -2044,6 +2044,10 @@ NativeHead: class {
     # presence makes the class live, and the fragment that destroys one
     live: String
     destroy: String
+    # `when=`: the fact under which this row replaces the plain row of its key
+    whenFact: String
+    # `reach=`: on an `@fact.` row, the paths whose reaching makes the fact hold
+    reach: String
 } as {
     # create -- the head between `[` and `]`, split on spaces: the first word
     # is the key, every other word an attribute
@@ -2068,6 +2072,8 @@ NativeHead: class {
             cdefs: String
             live: String
             destroy: String
+            whenFact: String
+            reach: String
         )
         for each f: (head.split sep: " ") loop {
             if f.length > 0 then {
@@ -2139,6 +2145,24 @@ NativeHead: class {
         } case none then null
         this.setUnitAttr :f
         this.setClassAttr :f
+        this.setFactAttr :f
+    }
+
+    # setFactAttr -- a fact's attribute word: `when=` on a variant row, `reach=`
+    # on the `@fact.` row it names
+    setFactAttr: function {:this f: StringView} is {
+        wo: f.stripPrefix p: "when="
+        match (
+            wo
+        ) case some then {
+            this.whenFact = wo.string
+        } case none then null
+        ro: f.stripPrefix p: "reach="
+        match (
+            ro
+        ) case some then {
+            this.reach = ro.string
+        } case none then null
     }
 
     # setClassAttr -- a `.@class` row's attribute word (ClassRow)
@@ -2464,10 +2488,20 @@ recordClassRow: function {ctx: Ctx path: StringView h: NativeHead.view} is {
 # readTemplateCached, which caches it and reports a missing file as an
 # emission failure -- the table is not optional, so a program that cannot
 # find it fails rather than falling back to something.
-loadNativeTbl: function {ctx: Ctx ast: Ast.view runtimeDir: StringView} is {
+#
+# One pass, in table order (RowFacts): a fact is settled where its `@fact.` row
+# stands, and a `when=` variant is placed above the plain row of its key, so
+# whether the plain row was replaced is known when it is reached.
+loadNativeTbl: function {
+    ctx: Ctx
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    runtimeDir: StringView
+} is {
     p: "\{runtimeDir}/natives.tbl"
     txt: readTemplateCached :ctx path: p.stringView
     if txt.length == 0 then return
+    rf: RowFacts declared: Set String held: Set String replaced: Set String
     for each ln: txt.stringView.lines loop {
         t: ln.trim
         if (t.startsWith prefix: "[") then {
@@ -2483,10 +2517,72 @@ loadNativeTbl: function {ctx: Ctx ast: Ast.view runtimeDir: StringView} is {
                     (ctx.nativeWords.slotOf text: h.key.stringView) == nativeWord.slot.unitsRow
                 ) then {
                     recordUnitOrder :ctx order: h.ord.stringView
-                } else if h.key.length > 0 then {
+                } else if (rf.applies :ctx :ast :symtab :h) then {
                     recordNativeRow :ctx :ast :h :body
                 }
             } case none then null
+        }
+    }
+}
+
+# RowFacts -- the facts the table declared so far, which of them hold, and the
+# keys a held fact's variant replaced
+RowFacts: class {
+    # every `@fact.` row read so far, by name
+    declared: Set String
+    # the declared facts the program makes hold
+    held: Set String
+    # the keys a variant under a held fact took
+    replaced: Set String
+} as {
+    # applies -- whether a row is recorded: a fact row only decides (settled
+    # here); a `when=` variant when its fact holds; a plain row unless a variant
+    # of its key replaced it. A variant under a fact no row above declared, or
+    # below a plain row of its key that was already recorded, is refused.
+    applies: function {
+        :this
+        ctx: Ctx
+        ast: Ast.view
+        symtab: zenv.ZSymbolTable.view
+        h: NativeHead.view
+    } out bool is {
+        if h.key.length == 0 then return false
+        if (h.key.stringView.startsWith prefix: "@fact.") then {
+            this.settle :ast :symtab :h
+            return false
+        }
+        if h.whenFact.length == 0 then return (this.replaced.has item: h.key.stringView.asString
+        ).not
+        bad: String
+        if (this.declared.has item: h.whenFact.stringView.asString).not then {
+            bad = "'\{h.key}' is a variant under '\{h.whenFact}', which no @fact row above it declares"
+        } else if (nativeHasRow :ctx path: h.key.stringView) then {
+            bad = "the variant of '\{h.key}' under '\{h.whenFact}' stands below its plain row; place it above"
+        }
+        if bad.length > 0 then {
+            emitFail :ctx what: "natives.tbl: \{bad}" line: 0
+            return false
+        }
+        if (this.held.has item: h.whenFact.stringView.asString).not then return false
+        this.replaced.add item: h.key.copy
+        return true
+    }
+
+    # settle -- an `@fact.<name>` row: the fact is declared, and holds when any
+    # of its `reach=` paths is reached
+    settle: function {
+        :this
+        ast: Ast.view
+        symtab: zenv.ZSymbolTable.view
+        h: NativeHead.view
+    } is {
+        fp: "@fact."
+        nm: h.key.stringView.substring from: fp.length to: h.key.length
+        this.declared.add item: nm.string
+        for each rp: (h.reach.stringView.split sep: ",") loop {
+            if rp.length > 0 when (factPathReached :ast :symtab path: rp) then (this.held.add
+                item: nm.string
+            )
         }
     }
 }
@@ -34447,7 +34543,7 @@ emitC: function {
         boolTid: boolId
         :origins
     )
-    loadNativeTbl :ctx ast: program :runtimeDir
+    loadNativeTbl :ctx ast: program :symtab :runtimeDir
     linkLibs: List String
     for each lb: libs loop linkLibs.append from: lb.copy
     csrcs: List String
@@ -34607,20 +34703,49 @@ appendLinkOnce: function {libs: List String lib: StringView} is {
 unitPathReached: function {
     ast: Ast.view symtab: zenv.ZSymbolTable.view path: StringView
 } out bool is {
+    cur: pathDeclOf :ast :symtab :path
+    if cur.isZero then return false
+    if (symtab.typing.requireSeen.has item: cur).not then return false
+    return (declaresNative :ast :symtab did: cur)
+}
+
+# factPathReached -- the program reaches what a fact's `reach=` path names: a
+# free function or a type (`thread.spawn`) that was demanded -- a generic one
+# when any instance of it was -- in a unit that declares something native, so a
+# user unit of the same name does not make the fact hold. A method is not
+# marked on its own, so a path names the function or the type.
+factPathReached: function {
+    ast: Ast.view symtab: zenv.ZSymbolTable.view path: StringView
+} out bool is {
+    cur: pathDeclOf :ast :symtab :path
+    if cur.isZero then return false
+    if (symtab.typing.declIsDefined declId: cur).not then return false
+    uo: path.indexOf needle: "."
+    if uo.none then return false
+    ud: pathDeclOf :ast :symtab path: (path.substring from: 0 to: uo)
+    if ud.isZero then return false
+    return (declaresNative :ast :symtab did: ud)
+}
+
+# pathDeclOf -- the declaration a dotted path names, when every segment
+# resolves; 0 otherwise
+pathDeclOf: function {
+    ast: Ast.view symtab: zenv.ZSymbolTable.view path: StringView
+} out ztypes.declid is {
     cur: ztypes.declid
     first: true
     for each seg: (path.split sep: ".") loop {
         nid: zast.poolFind pool: ast.names text: seg
-        if nid.isZero then return false
+        if nid.isZero then return ztypes.declid
         if first then {
             cur = ztypecheck.unitDeclOfName st: symtab nameId: nid
             first = false
         } else {
             cur = symtab.typing.declFindChild parentDeclId: cur nameId: nid
         }
-        if cur.isZero then return false
+        if cur.isZero then return cur
     }
-    return (symtab.typing.requireSeen.has item: cur) and (declaresNative :ast :symtab did: cur)
+    return cur
 }
 
 # true when the program defines a `main`.

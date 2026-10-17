@@ -744,7 +744,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2231250
+ALLOC_BASELINE := 2233740
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -953,7 +953,8 @@ cobj-guard: bin/zc $(BUILDDIR)/tcc
 	echo "cobj-guard OK: a unit's C source builds once per compiler, target and defines, shared by parallel builds"
 
 # user-native-guard -- a unit outside src/runtime with its own natives.tbl rows and
-# fragments compiles, links and runs, one native in a hidden subunit. The runtime
+# fragments compiles, links and runs, one native in a hidden subunit, and a
+# `when=` variant replaces its plain row exactly when its fact holds. The runtime
 # dir is built from src/runtime plus the fixture's row and fragment.
 user-native-guard: bin/zc
 	@d=$$(mktemp -d); fail=0; \
@@ -969,13 +970,17 @@ user-native-guard: bin/zc
 	         grep -m1 error $$d/cc.log; fail=1; }; \
 	fi; \
 	if [ $$fail -eq 0 ]; then \
+	  grep -q '^/\* zlink:.*pthread' $$d/mystery.c \
+	    || { echo "user-native-guard FAIL: the held fact's @unit variant did not add its link= library"; fail=1; }; \
+	fi; \
+	if [ $$fail -eq 0 ]; then \
 	  got=$$($$d/mystery | tr '\n' ' '); \
-	  if [ "$$got" != "42 42 " ]; then \
-	    echo "user-native-guard FAIL: ran but printed '$$got', want '42 42 '"; fail=1; fi; \
+	  if [ "$$got" != "49 42 " ]; then \
+	    echo "user-native-guard FAIL: ran but printed '$$got', want '49 42 '"; fail=1; fi; \
 	fi; \
 	rm -rf $$d; \
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
-	echo "user-native-guard OK: a unit outside src/runtime links and runs its own natives, a hidden subunit's among them"
+	echo "user-native-guard OK: a unit outside src/runtime links and runs its own natives, a hidden subunit's among them, a fact's variant chosen"
 
 # case-guard -- every program declaring `main` is in a case list (run, smoke or
 # dump), so something compiles it. A unit with no main is reached through others.
@@ -1952,7 +1957,7 @@ view-guard:
 # is not live), and the emitFail and marker-site counts in src/zemitterc.z are
 # ratchets. A new refusal leg may raise EMITFAIL_BASELINE (say so in the commit);
 # a new fallback leg may not.
-EMITFAIL_BASELINE := 40
+EMITFAIL_BASELINE := 41
 MARKER_BASELINE := 24
 EXCS := $(NAMES:%=$(EXDIR)/%.c)
 fallback-guard: $(EXCS) bin/zc bin/zl bin/zls
