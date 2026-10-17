@@ -1,0 +1,43 @@
+# sync_atomic_counter.z -- four threads add to one counter they share by
+# `.view`; every add lands, so the total is exact. A ready set by one thread is
+# seen by the others, and compareExchange stores only over what it expects.
+
+# Adder -- adds to a shared counter
+Adder: class {
+    # the counter, shared with every other Adder
+    total: sync.AtomicI64.view
+    # the highest value it saw before its own add
+    seen: i64
+} as {
+    task: thread.Task
+    call: function {:this} is {
+        i: 0.i64
+        for i < 1000 loop {
+            prev: this.total.fetchAdd value: 1
+            if prev > this.seen then this.seen = prev
+            i = i + 1
+        }
+    }
+}
+
+main: function is {
+    total: sync.AtomicI64.create value: 0
+    {
+        a: thread.spawn task: (Adder total: total seen: 0)
+        b: thread.spawn task: (Adder total: total seen: 0)
+        c: thread.spawn task: (Adder total: total seen: 0)
+        d: thread.spawn task: (Adder total: total seen: 0)
+    }
+    print "total \{total.load}"
+    old: total.compareExchange current: 4000 new: 5
+    print "exchanged from \{old}, now \{total.load order: sync.memoryorder.acquire}"
+    old2: total.compareExchange current: 4000 new: 9
+    print "refused at \{old2}, still \{total.load}"
+    print "exchange answered \{total.exchange value: 7}, sub answered \{total.fetchSub value: 2}, now \{total.load}"
+    ready: sync.AtomicBool.create value: false
+    ready.store value: true order: sync.memoryorder.release
+    print "ready \{ready.load}"
+    u: sync.AtomicU32.create value: 0
+    u.fetchSub value: 1
+    print "u32 wraps to \{u.load}"
+}

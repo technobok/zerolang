@@ -744,7 +744,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2242442
+ALLOC_BASELINE := 2243496
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -992,12 +992,12 @@ user-native-guard: bin/zc
 	fi; \
 	if [ $$fail -eq 0 ]; then \
 	  got=$$($$d/cellar | tr '\n' ' '); \
-	  if [ "$$got" != "false true 1 true " ]; then \
-	    echo "user-native-guard FAIL: cellar printed '$$got', want 'false true 1 true '"; fail=1; fi; \
+	  if [ "$$got" != "42 false true 1 true " ]; then \
+	    echo "user-native-guard FAIL: cellar printed '$$got', want '42 false true 1 true '"; fail=1; fi; \
 	fi; \
 	rm -rf $$d; \
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
-	echo "user-native-guard OK: a unit outside src/runtime links and runs its own natives, a hidden subunit's among them, a fact's variant chosen, a generic class from its template"
+	echo "user-native-guard OK: a unit outside src/runtime links and runs its own natives, a hidden subunit's among them, a fact's variant chosen, a generic and a non-generic class from their templates"
 
 # shim-guard -- the C thread shim (_Z_THREAD_SHIM.inc) passes its own test under
 # every compiler zc drives and under ThreadSanitizer: tests/c/zthread_shim_test.c
@@ -1281,7 +1281,7 @@ static-tcc-guard: bin/zc bin/zl bin/zls
 
 # zlink-guard -- how many programs declare a link library: a unit's library goes to
 # the programs that reach it and no others.
-ZLINK_BASELINE := 11
+ZLINK_BASELINE := 13
 
 zlink-guard: bin/zc
 	@n=0; rep=""; \
@@ -1624,6 +1624,7 @@ VIEW_GUARD_PLACEHOLDER := z_List.c.tmpl=@@NAME@@:ListRef z_Map.c.tmpl=@@NAME@@:M
   z_IdMapIter.c.tmpl=@@NAME@@:IdMapR,@@IDMAPITEMITER@@:IdMapItemIterR,@@IDMAPENTRY@@:IdMapEntryR \
   z_IdMapMut.c.tmpl=@@NAME@@:IdMapR z_MapMut.c.tmpl=@@NAME@@:MapRR \
   z_JoinHandle.c.tmpl=@@NAME@@:JoinHandle \
+  z_Atomic.c.tmpl=@@NAME@@:Atomic z_AtomicBool.c.tmpl=@@NAME@@:AtomicBool \
   z_IdSet.c.tmpl=@@NAME@@:IdSet,@@IDSETITER@@:IdSetIter
 VIEW_GUARD_EMITTED := get:ListRef.get,ListView.get,SpanVal.get getMut:ListRef.getMut \
   slice:ListRef.slice,ListView.slice \
@@ -1644,7 +1645,7 @@ VIEW_GUARD_INTERNAL := String.cat String.print String.free String.eq String.cmp 
   IdMapR.destroy IdMapR.grow IdMapR.find IdMapR.slot IdMapR.entries_cap \
   IdSet.destroy IdSet.grow IdSet.find IdSet.slot IdSet.items_cap \
   File.destroy Listener.destroy Conn.destroy Database.destroy Statement.destroy Row.destroy \
-  Transaction.destroy JoinHandle.destroy \
+  Transaction.destroy JoinHandle.destroy Atomic.destroy AtomicBool.destroy \
   thread.start thread.join thread.detach \
   mutex.init mutex.destroy mutex.lock mutex.trylock mutex.unlock \
   rwlock.init rwlock.destroy rwlock.rdlock rwlock.wrlock rwlock.rdunlock rwlock.wrunlock \

@@ -40,6 +40,7 @@
 #define Z_RELEASE memory_order_release
 #define Z_ACQREL memory_order_acq_rel
 #define Z_SEQCST memory_order_seq_cst
+typedef memory_order z_order_t;
 
 /* threads started and not yet finished, the program's own count */
 static Z_ATOMIC(int64_t) z_thread_live_count;

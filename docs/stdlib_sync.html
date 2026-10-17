@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Zerolang Standard Library -- sync</title>
+<link rel="stylesheet" href="style/zerolang.css">
+<link rel="icon" href="style/favicon-192x192.png" type="image/png" sizes="192x192">
+<link rel="icon" href="style/favicon-48x48.ico" type="image/x-icon">
+<link rel="icon" href="style/favicon-32x32.png" type="image/png" sizes="32x32">
+<link rel="icon" href="style/favicon-16x16.png" type="image/png" sizes="16x16">
+<script src="style/tocbot.min.js"></script>
+<script src="style/init.js"></script>
+<script src="style/prism.min.js"></script>
+<script src="style/prism-zerolang.js"></script>
+<meta name="author" content="pw &lt;p@zerolang.org&gt;">
+<meta name="datecreated" content="2026-10-17">
+<meta name="version" content="v0.1">
+</head>
+<body class="toc-sidebar">
+<nav id="nav">
+  <div class="doc-wrapper">
+    <a title="Zerolang" href="./index.html">Zerolang</a>
+  </div>
+
+  <label>
+    <input id="mode-checkbox" class="mode-checkbox" type="checkbox" />
+    <div class="mode-slot">
+      <div class="sun-icon-wrapper">
+        <svg
+          class="sun-icon"
+          xmlns="http://www.w3.org/2000/svg"
+          width="24"
+          height="24"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <circle cx="12" cy="12" r="5"></circle>
+          <line x1="12" y1="1" x2="12" y2="3"></line>
+          <line x1="12" y1="21" x2="12" y2="23"></line>
+          <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+          <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+          <line x1="1" y1="12" x2="3" y2="12"></line>
+          <line x1="21" y1="12" x2="23" y2="12"></line>
+          <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+          <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+        </svg>
+      </div>
+      <div class="mode-button"></div>
+      <div class="moon-icon-wrapper">
+        <svg
+          class="moon-icon"
+          xmlns="http://www.w3.org/2000/svg"
+          width="24"
+          height="24"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+        </svg>
+      </div>
+    </div>
+  </label>
+
+
+</nav>
+<header>
+<h1 id="sync"><a href="#sync">sync</a></h1>
+</header>
+<nav class="toc-sidebar" id="toc">
+<div id="tocfile">
+Table of Contents</div>
+
+<ul>
+<li><a href="#sync">sync</a>
+<ul>
+<li><a href="#overview">Overview</a>
+</li>
+<li><a href="#atomics">Atomics</a>
+</li>
+<li><a href="#building">Building</a>
+</li>
+</ul>
+</li>
+</ul>
+
+</nav>
+<main id="content">
+<h2 id="overview"><a href="#overview">1. Overview</a></h2>
+<p>The declarations live in <code>lib/system/sync.z</code>, each with its own doc
+comment; this page is the prose and the worked examples.</p>
+<p>The <code>sync</code> unit is for data that threads really do share. A thread's own
+work is moved to it or borrowed by it (see <code>thread</code>); what several threads
+use at once is a <code>sync</code> value its owner keeps, and each task holds a
+<strong>view</strong> of it -- a <code>.view</code> field. Views coexist, so any number of tasks
+may hold one; the owner can neither drop nor move it while a task that views
+it lives. What may change through a shared view is exactly what the type does
+atomically or under its own lock.</p>
+<h2 id="atomics"><a href="#atomics">2. Atomics</a></h2>
+<ul>
+<li><strong>AtomicI32</strong>, <strong>AtomicI64</strong>, <strong>AtomicU32</strong>, <strong>AtomicU64</strong> --
+names for <code>Atomic t</code> over each integer type every target updates in one
+instruction: <code>load</code>, <code>store</code>, <code>exchange</code>, <code>compareExchange</code>,
+<code>fetchAdd</code> and <code>fetchSub</code>. Arithmetic wraps.</li>
+<li><strong>AtomicBool</strong> -- <code>load</code>, <code>store</code>, <code>exchange</code>,
+<code>compareExchange</code>.</li>
+<li><strong>memoryorder</strong> -- <code>relaxed</code>, <code>acquire</code>, <code>release</code>,
+<code>acqRel</code>, <code>seqCst</code>, as C11 and Rust name them. Every operation takes
+<code>order:</code>, default <code>seqCst</code> -- the one to reach for; the weaker orders
+are for code that has proved it needs them. A load cannot release and a
+store cannot acquire: either panics.</li>
+</ul>
+<p><code>exchange</code> is C11's name for Rust's <code>swap</code>, which is a zerolang
+statement. <code>compareExchange</code> stores <code>new</code> only if the atomic holds
+<code>current</code>, and answers what it held -- so it stored exactly when the answer
+is <code>current</code>:</p>
+<pre><code class="language-zerolang">  # Adder -- adds to a counter it shares
+  Adder: class {
+      # the counter every Adder shares
+      total: sync.AtomicI64.view
+  } as {
+      task: thread.Task
+      call: function {:this} is {
+          i: 0.i64
+          for i &lt; 1000 loop {
+              this.total.fetchAdd value: 1
+              i = i + 1
+          }
+      }
+  }
+
+  main: function is {
+      total: sync.AtomicI64.create value: 0
+      {
+          a: thread.spawn task: (Adder :total)
+          b: thread.spawn task: (Adder :total)
+      }
+      print "total \{total.load}"
+      seen: total.compareExchange current: 2000 new: 0
+      print "it held \{seen}, now \{total.load}"
+  }</code></pre>
+<h2 id="building"><a href="#building">3. Building</a></h2>
+<p>A program that uses <code>sync</code> links <code>pthread</code>, like one that starts a thread;
+every class is written from a C template over the shim
+<code>src/runtime/natives/_Z_THREAD_SHIM.inc</code> (pthreads, or Win32 on Windows).</p>
+</main>
+</body>
+</html>

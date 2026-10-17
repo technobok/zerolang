@@ -1,0 +1,99 @@
+#doc.lang: en
+
+#//: Zerolang Standard Library: sync
+
+#doc.title: Zerolang Standard Library -- sync
+#doc.content type=main id=content
+#doc.heading.number level=4
+#doc.heading.anchor level=4
+#doc.link rel=stylesheet href=style/zerolang.css
+#doc.link rel=icon type=image/png sizes=192x192 href=style/favicon-192x192.png
+#doc.link rel=icon type=image/x-icon href=style/favicon-48x48.ico
+#doc.link rel=icon type=image/png sizes=32x32 href=style/favicon-32x32.png
+#doc.link rel=icon type=image/png sizes=16x16 href=style/favicon-16x16.png
+
+#doc.script src=style/tocbot.min.js
+#doc.script src=style/init.js
+#doc.script src=style/prism.min.js
+#doc.script src=style/prism-zerolang.js
+#doc.author: pw <p@zerolang.org>
+#doc.datecreated: 2026-10-17
+#doc.version: v0.1
+
+#doc.body class=toc-sidebar
+#nav id=nav: [#include literal=true: style/nav.html]
+
+#header:
+  #-: sync
+
+#nav id=toc class=toc-sidebar:
+  #div id=tocfile: Table of Contents
+  #doc.toc
+
+
+#--: Overview
+
+The declarations live in #~"lib/system/sync.z", each with its own doc
+comment; this page is the prose and the worked examples.
+
+The #~"sync" unit is for data that threads really do share. A thread's own
+work is moved to it or borrowed by it (see #~"thread"); what several threads
+use at once is a #~"sync" value its owner keeps, and each task holds a
+#b:"view" of it -- a #~".view" field. Views coexist, so any number of tasks
+may hold one; the owner can neither drop nor move it while a task that views
+it lives. What may change through a shared view is exactly what the type does
+atomically or under its own lock.
+
+#--: Atomics
+
+#ul:
+  [#*: #b:"AtomicI32", #b:"AtomicI64", #b:"AtomicU32", #b:"AtomicU64" --
+    names for #~"Atomic t" over each integer type every target updates in one
+    instruction: #~"load", #~"store", #~"exchange", #~"compareExchange",
+    #~"fetchAdd" and #~"fetchSub". Arithmetic wraps.]
+  [#*: #b:"AtomicBool" -- #~"load", #~"store", #~"exchange",
+    #~"compareExchange".]
+  [#*: #b:"memoryorder" -- #~"relaxed", #~"acquire", #~"release",
+    #~"acqRel", #~"seqCst", as C11 and Rust name them. Every operation takes
+    #~"order:", default #~"seqCst" -- the one to reach for; the weaker orders
+    are for code that has proved it needs them. A load cannot release and a
+    store cannot acquire: either panics.]
+
+#~"exchange" is C11's name for Rust's #~"swap", which is a zerolang
+statement. #~"compareExchange" stores #~"new" only if the atomic holds
+#~"current", and answers what it held -- so it stored exactly when the answer
+is #~"current":
+
+#code language=zerolang name=counter: """
+  # Adder -- adds to a counter it shares
+  Adder: class {
+      # the counter every Adder shares
+      total: sync.AtomicI64.view
+  } as {
+      task: thread.Task
+      call: function {:this} is {
+          i: 0.i64
+          for i < 1000 loop {
+              this.total.fetchAdd value: 1
+              i = i + 1
+          }
+      }
+  }
+
+  main: function is {
+      total: sync.AtomicI64.create value: 0
+      {
+          a: thread.spawn task: (Adder :total)
+          b: thread.spawn task: (Adder :total)
+      }
+      print "total \{total.load}"
+      seen: total.compareExchange current: 2000 new: 0
+      print "it held \{seen}, now \{total.load}"
+  }
+"""
+
+#--: Building
+
+A program that uses #~"sync" links #~"pthread", like one that starts a thread;
+every class is written from a C template over the shim
+#~"src/runtime/natives/_Z_THREAD_SHIM.inc" (pthreads, or Win32 on Windows).

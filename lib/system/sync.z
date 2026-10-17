@@ -1,0 +1,83 @@
+# sync -- share data between threads safely.
+#
+# Every type here is shared by `.view`: a task holds `c: sync.AtomicI64.view`
+# (or a Mutex, a Channel...), several tasks may hold the same one, and the
+# owner keeps it alive -- it can neither drop nor move it while a task that
+# views it lives. What may change through a shared view is exactly what the
+# type does atomically or under its own lock.
+
+# memoryorder -- how an atomic operation orders the memory around it, as C11
+# and Rust name the orderings. `seqCst` is the default and the one to reach for:
+# the weaker orders are for code that has proved it needs them.
+memoryorder: variant {
+    # the operation alone is atomic; nothing around it is ordered
+    relaxed: null
+    # a load: what the thread that stored with release wrote before is seen after
+    acquire: null
+    # a store: what this thread wrote before is seen by an acquire load after
+    release: null
+    # a read-modify-write that is both acquire and release
+    acqRel: null
+    # acqRel, and every seqCst operation of every thread in one total order
+    seqCst: null
+}
+
+# atomicint -- the integer types an Atomic holds: those every target updates
+# in one instruction
+atomicint: variant { :i32 :i64 :u32 :u64 }
+
+# Atomic -- an integer every thread may read and change at once, each
+# operation whole. `load` with `release` or `acqRel`, or `store` with `acquire`
+# or `acqRel`, is no ordering C allows, and panics.
+Atomic: class is native as {
+    # the integer type
+    t: atomicint.generic
+    # an Atomic holding `value`
+    create: function {value: t} out type is native
+    # the value it holds
+    load: function {t: this.view order: memoryorder.seqCst} out t is native
+    # replace the value
+    store: function {t: this.view value: t order: memoryorder.seqCst} is native
+    # replace the value, and answer the one it held (C11's exchange: `swap` is
+    # zerolang's statement)
+    exchange: function {t: this.view value: t order: memoryorder.seqCst} out t is native
+    # store `new` if it holds `current`; answer what it held, so it stored
+    # exactly when the answer is `current`. `order` is the success ordering;
+    # a failure orders as `order`'s load half
+    compareExchange: function {
+        t: this.view current: t new: t order: memoryorder.seqCst
+    } out t is native
+    # add `value` (wrapping), and answer the value it held
+    fetchAdd: function {t: this.view value: t order: memoryorder.seqCst} out t is native
+    # subtract `value` (wrapping), and answer the value it held
+    fetchSub: function {t: this.view value: t order: memoryorder.seqCst} out t is native
+}
+
+# AtomicI32 -- an i32 every thread may read and change at once
+AtomicI32: Atomic i32
+
+# AtomicI64 -- an i64 every thread may read and change at once
+AtomicI64: Atomic i64
+
+# AtomicU32 -- a u32 every thread may read and change at once
+AtomicU32: Atomic u32
+
+# AtomicU64 -- a u64 every thread may read and change at once
+AtomicU64: Atomic u64
+
+# AtomicBool -- a flag every thread may read and change at once
+AtomicBool: class is native as {
+    # an AtomicBool holding `value`
+    create: function {value: bool} out type is native
+    # the value it holds
+    load: function {t: this.view order: memoryorder.seqCst} out bool is native
+    # replace the value
+    store: function {t: this.view value: bool order: memoryorder.seqCst} is native
+    # replace the value, and answer the one it held (C11's exchange: `swap` is
+    # zerolang's statement)
+    exchange: function {t: this.view value: bool order: memoryorder.seqCst} out bool is native
+    # store `new` if it holds `current`; answer what it held
+    compareExchange: function {
+        t: this.view current: bool new: bool order: memoryorder.seqCst
+    } out bool is native
+}

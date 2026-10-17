@@ -2726,31 +2726,27 @@ nativeNeedOf: function {ctx: Ctx.view path: StringView} out String is {
 rowNeedAdd: function {ctx: Ctx key: StringView} is {
     ndAll: nativeNeedOf :ctx path: key
     if ndAll.length == 0 then return
+    un: key.substring from: 0 to: ((key.indexOf needle: ".").or d: 0)
     for each nd: (ndAll.stringView.split sep: ",") loop {
-        if nd.length > 0 then rowNeedAddOne :ctx :key need: nd
+        if nd.length > 0 then rowNeedAddOne :ctx uname: un need: nd
     }
 }
 
-# rowNeedAddOne -- one need of a row's `needs=` list (rowNeedAdd).
-rowNeedAddOne: function {ctx: Ctx key: StringView need: StringView} is {
-    nd: need.string
-    qd: nd.stringView.indexOf needle: "."
+# rowNeedAddOne -- one need of a row's `needs=` list (rowNeedAdd): a member of
+# the row's own unit `uname`, or `<unit>.<member>`.
+rowNeedAddOne: function {ctx: Ctx uname: StringView need: StringView} is {
+    qd: need.indexOf needle: "."
     match (
         qd
     ) case some then {
         (needsAddM
             :ctx
-            uname: (nd.stringView.substring from: 0 to: qd)
-            memb: (nd.stringView.substring from: qd + 1 to: nd.length)
+            uname: (need.substring from: 0 to: qd)
+            memb: (need.substring from: qd + 1 to: need.length)
         )
-        return
-    } case none then null
-    dot: key.indexOf needle: "."
-    match (
-        dot
-    ) case some then {
-        needsAddM :ctx uname: (key.substring from: 0 to: dot) memb: nd.stringView
-    } case none then null
+    } case none then {
+        if uname.length > 0 then needsAddM :ctx :uname memb: need
+    }
 }
 
 # nativePtrArgsOf -- true when a row's body takes its operands by pointer, so
@@ -32391,16 +32387,23 @@ demandTmplClassNeeds: function {symtab: zenv.ZSymbolTable.view ctx: Ctx} is {
         {
             r: ctx.classRows.get i: ri
             tpl: ctx.classRowTids.get i: ri
-            if r.tmpl.length > 0 when tpl.isZero.not when (classHasInstance :symtab :tpl) then {
+            if r.tmpl.length > 0 when tpl.isZero.not when (tmplClassInProgram :symtab :tpl) then {
                 un = r.uname.copy
                 nd = r.need.copy
             }
         }
         for each n1: (nd.stringView.split sep: ",") loop {
-            if n1.length > 0 then rowNeedAddOne :ctx key: un.stringView need: n1
+            if n1.length > 0 then rowNeedAddOne :ctx uname: un.stringView need: n1
         }
         ri = ri + 1
     }
+}
+
+# tmplClassInProgram -- the templated class `tpl` is written into this
+# program: a generic one has an instance, a non-generic one is demanded
+tmplClassInProgram: function {symtab: zenv.ZSymbolTable.view tpl: ztypes.tid} out bool is {
+    if (isGenericType :symtab tid: tpl) then return (classHasInstance :symtab :tpl)
+    return (symtab.typing.declIsDefined declId: (ztypecheck.declOfTypeId st: symtab tid: tpl))
 }
 
 # classHasInstance -- some type is an instance of the template `tpl`
@@ -37540,11 +37543,8 @@ ioCanonCnameUncached: function {
     return (ctxCname :ctx tid: t)
 }
 
-# loadIoFragment -- read an io/cli runtime `.inc` and fill the `z_@Name@`
-# holes it spells. The holes found in the file ARE the demand: each name
-# resolves through StringView/String or the canon path, and a name that
-# resolves to nothing is fatal. A tag constant is an `@ARM_<canon>.<arm>@` hole,
-# which fillHolesForCtx binds.
+# loadIoFragment -- read an io/cli runtime `.inc` and fill its holes
+# (fillFragmentHoles).
 loadIoFragment: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -37555,77 +37555,94 @@ loadIoFragment: function {
     match (
         rd
     ) case ok then {
-        bn: List String
-        bv: List String
-        rwn: List String
-        rwv: List String
-        names: holeNames text: rd.stringView
-        ni: u64
-        nn: names.length
-        for ni < nn loop {
-            nm: names.get i: ni
-            nv: nm.stringView
-            # `@TAG_<type>@` -- how to reach that type's discriminator. A tagged
-            # struct is reached through `.tag`; a type the backend has unwrapped
-            # IS its discriminator, and the hole fills with nothing. A fragment
-            # spelling this stays correct across a change to the representation,
-            # which matters because this file is read by the running compiler
-            # AND by the committed seed, and they need not agree. An
-            # `@ARM_<canon>.<arm>@` tag constant and an `@MEMBER_<canon>.<name>@`
-            # member are fillHolesForCtx's to bind.
-            if (
-                (nv.startsWith prefix: "ARM_") or (nv.startsWith prefix: "MEMBER_")
-            ) then null else if (nv.startsWith prefix: "TAG_") then {
-                tn: nv.substring from: 4 to: nv.length
-                tt: ioCanonTidAny :ast :symtab :ctx canon: tn
-                rwn.append from: nv.string
-                if (isOrdinalVariant :symtab tid: tt) then {
-                    rwv.append from: "".string
-                } else {
-                    rwv.append from: ".tag".string
-                }
-            } else {
-                bn.append from: nv.string
-                hw: ctx.nativeWords.slotOf text: nv
-                if hw == nativeWord.slot.holeStringView then {
-                    sv: ctx.svC
-                    bv.append from: sv.copy
-                } else if hw == nativeWord.slot.holeString then {
-                    st: ctx.strC
-                    bv.append from: st.copy
-                } else {
-                    cc: ioCanonCname :ast :symtab :ctx canon: nv
-                    # a type-name hole that resolves to nothing used to fill
-                    # with nothing, so `z_@IoError@_t` became `z__t` and the
-                    # C compiler reported it instead of zc. The TAG channel
-                    # above is where an empty fill is legitimate.
-                    if cc.length == 0 then {
-                        (emitFail
-                            :ctx
-                            what: "fragment \{path}: hole @\{nv}@ names no type in this program"
-                            line: 0
-                        )
-                    }
-                    bv.append from: cc
-                }
-            }
-            ni = ni + 1
-        }
-        return (fillHolesForCtx
-            :ast
-            :symtab
-            :ctx
-            text: rd
-            :path
-            bindNames: bn
-            bindVals: bv
-            rawNames: rwn
-            rawVals: rwv
-        )
+        return (fillFragmentHoles :ast :symtab :ctx text: rd.take :path)
     } case err then {
         emitFail :ctx what: "missing io fragment \{path}" line: 0
         return "/* zemitterc: missing io fragment \{path} */\n"
     }
+}
+
+# fillFragmentHoles -- fill the `z_@Name@` holes a runtime fragment or an
+# instantiated class template spells. The holes found in the text ARE the
+# demand: each name resolves through StringView/String or the canon path, and a
+# name that resolves to nothing is fatal. A tag constant is an
+# `@ARM_<canon>.<arm>@` hole, which fillHolesForCtx binds.
+fillFragmentHoles: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    text: String.take
+    # where the text came from, for the messages
+    path: StringView
+} out String is {
+    rd: text.take
+    bn: List String
+    bv: List String
+    rwn: List String
+    rwv: List String
+    names: holeNames text: rd.stringView
+    ni: u64
+    nn: names.length
+    for ni < nn loop {
+        nm: names.get i: ni
+        nv: nm.stringView
+        # `@TAG_<type>@` -- how to reach that type's discriminator. A tagged
+        # struct is reached through `.tag`; a type the backend has unwrapped
+        # IS its discriminator, and the hole fills with nothing. A fragment
+        # spelling this stays correct across a change to the representation,
+        # which matters because this file is read by the running compiler
+        # AND by the committed seed, and they need not agree. An
+        # `@ARM_<canon>.<arm>@` tag constant and an `@MEMBER_<canon>.<name>@`
+        # member are fillHolesForCtx's to bind.
+        if (
+            (nv.startsWith prefix: "ARM_") or (nv.startsWith prefix: "MEMBER_")
+        ) then null else if (nv.startsWith prefix: "TAG_") then {
+            tn: nv.substring from: 4 to: nv.length
+            tt: ioCanonTidAny :ast :symtab :ctx canon: tn
+            rwn.append from: nv.string
+            if (isOrdinalVariant :symtab tid: tt) then {
+                rwv.append from: "".string
+            } else {
+                rwv.append from: ".tag".string
+            }
+        } else {
+            bn.append from: nv.string
+            hw: ctx.nativeWords.slotOf text: nv
+            if hw == nativeWord.slot.holeStringView then {
+                sv: ctx.svC
+                bv.append from: sv.copy
+            } else if hw == nativeWord.slot.holeString then {
+                st: ctx.strC
+                bv.append from: st.copy
+            } else {
+                cc: ioCanonCname :ast :symtab :ctx canon: nv
+                # a type-name hole that resolves to nothing used to fill
+                # with nothing, so `z_@IoError@_t` became `z__t` and the
+                # C compiler reported it instead of zc. The TAG channel
+                # above is where an empty fill is legitimate.
+                if cc.length == 0 then {
+                    (emitFail
+                        :ctx
+                        what: "fragment \{path}: hole @\{nv}@ names no type in this program"
+                        line: 0
+                    )
+                }
+                bv.append from: cc
+            }
+        }
+        ni = ni + 1
+    }
+    return (fillHolesForCtx
+        :ast
+        :symtab
+        :ctx
+        text: rd
+        :path
+        bindNames: bn
+        bindVals: bv
+        rawNames: rwn
+        rawVals: rwv
+    )
 }
 
 # ioFileId -- the io File class type id: the File io's own unit declares, by id
@@ -38014,7 +38031,8 @@ emitClassRowStructs: function {
     n: ctx.classRows.length
     for i < n loop {
         cid: ctx.classRowTids.get :i
-        emit: cid.isZero.not
+        # a class with a template is written from it (emitTmplClassMono)
+        emit: cid.isZero.not and ((ctx.classRows.get :i).tmpl.length == 0)
         if emit when (ctx.emittedUserTypes.has item: cid) then emit = false
         if emit when (ctx.liveClasses.has item: cid).not when (typeIsUsed :ctx tid: cid).not then {
             emit = false
@@ -38299,6 +38317,33 @@ monoMapKV: function {symtab: zenv.ZSymbolTable.view monoId: ztypes.tid acc: List
     } case none then null
 }
 
+# tmplInstArgIds -- a templated class's instance may hold any of its type
+# arguments by value (a JoinHandle's task): each is an ordering edge
+tmplInstArgIds: function {
+    symtab: zenv.ZSymbolTable.view monoId: ztypes.tid acc: ListVal ztypes.tid
+} is {
+    td: ztypecheck.declOfTypeId st: symtab tid: (originTidOf :symtab tid: monoId)
+    if td.isZero then return
+    k: u64
+    for k < (symtab.reg.genericParamNamesOf tdecl: td).length loop {
+        acc.append (symtab.reg.genericTypeArgAt specId: monoId ordinal: k)
+        k = k + 1
+    }
+}
+
+# isArmWrapMono -- a mono whose elements are its arms' payloads: an option or
+# result of either family, a view union, a variant
+isArmWrapMono: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.tid} out bool is {
+    return (
+        (originIsTid :symtab :tid originTid: (ctx.origins.get i: family.slot.optionval)) or
+        (originIsTid :symtab :tid originTid: (ctx.origins.get i: family.slot.resultval)) or
+        (originIsTid :symtab :tid originTid: (ctx.origins.get i: family.slot.option)) or
+        (originIsTid :symtab :tid originTid: (ctx.origins.get i: family.slot.result)) or
+        (isViewUnionOriginOf :symtab :ctx :tid) or
+        ((symtab.reg.typetypeOf typeId: tid) == ztypes.ztypetype.variantType)
+    )
+}
+
 # monoElemIdsOf -- the type ids a collection/wrapper mono references by its
 # element/key/value (array/List/ListView/Set/Map) or arm payloads (optionval/
 # resultval/Option/Result/OptionView), or its fields for a user-generic
@@ -38345,37 +38390,17 @@ monoElemIdsOf: function {
         monoMapKV :symtab :monoId :acc
         return
     }
-    isWrap: (
-        (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: family.slot.optionval)) or
-        (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: family.slot.resultval)) or
-        (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: family.slot.option)) or
-        (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: family.slot.result)) or
-        (isViewUnionOriginOf :symtab :ctx tid: monoId) or
-        ((symtab.reg.typetypeOf typeId: monoId) == ztypes.ztypetype.variantType)
-    )
-    if isWrap then {
-        aids: ListVal ztypes.tid
-        aidsNm: ListVal zast.nameid
-        variantArmIds :symtab tid: monoId ids: aids nameIds: aidsNm
-        ai: u64
-        an: aids.length
-        for ai < an loop {
-            av: aids.get i: ai
-            acc.append av
-            ai = ai + 1
-        }
+    if (tmplClassRowOf :symtab :ctx tid: monoId) > 0 then {
+        tmplInstArgIds :symtab :monoId :acc
         return
     }
-    fids: ListVal ztypes.tid
-    fidsNm: ListVal zast.nameid
-    recFieldIds :symtab tid: monoId ids: fids nameIds: fidsNm
-    fi: u64
-    fn: fids.length
-    for fi < fn loop {
-        fv: fids.get i: fi
-        acc.append fv
-        fi = fi + 1
+    # both append to `acc`
+    names: ListVal zast.nameid
+    if (isArmWrapMono :symtab :ctx tid: monoId) then {
+        variantArmIds :symtab tid: monoId ids: acc nameIds: names
+        return
     }
+    recFieldIds :symtab tid: monoId ids: acc nameIds: names
 }
 
 # buildUserTypeList -- every struct type whose C body this emitter writes:
@@ -38725,11 +38750,16 @@ emitMonoById: function {
     if tr > 0 then emitTmplClassMono :ast :symtab :ctx :runtimeDir :monoId row: tr - 1 :buf
 }
 
-# tmplClassRowOf -- the `.@class` row whose `tmpl=` instantiates `tid`'s
-# template, as its index plus one; 0 when `tid` is no instance of such a class
+# tmplClassRowOf -- the `.@class` row whose `tmpl=` writes `tid`: an instance
+# of a generic templated class, or a non-generic class with a template of its
+# own; as its index plus one, 0 when `tid` is neither
 tmplClassRowOf: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.tid} out u64 is {
+    if tid.isZero then return 0
     o: originTidOf :symtab :tid
-    if o.isZero then return 0
+    if o.isZero then {
+        if (isGenericType :symtab :tid) then return 0
+        o = tid
+    }
     ri: u64
     for ri < ctx.classRows.length loop {
         if (ctx.classRowTids.get i: ri) == o when (
@@ -38808,11 +38838,12 @@ templateParamArgs: function {
     }
 }
 
-# emitTmplClassMono -- an instance of a generic native class, from the C
-# template its row names: @@NAME@@ is the instance's C name, and for each type
-# parameter P, @@P@@ is the C type of the argument as a slot holds it and
-# @@P_DESTROY@@ the name of a function `void (P* x)` destroying one in place,
-# written ahead of the template.
+# emitTmplClassMono -- an instance of a generic native class, or a non-generic
+# native class, from the C template its row names: @@NAME@@ is the C name, and
+# for each type parameter P, @@P@@ is the C type of the argument as a slot holds
+# it and @@P_DESTROY@@ the name of a function `void (P* x)` destroying one in
+# place, written ahead of the template. A runtime fragment's own `@Name@` holes
+# fill as a fragment's do.
 emitTmplClassMono: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -38853,7 +38884,10 @@ emitTmplClassMono: function {
         t = applyMemberHoles :ast :symtab :ctx text: t param: pn.stringView arg: at
         k = k + 1
     }
-    splitTmplText :ctx text: t.stringView :buf
+    # what is left is a runtime fragment's own holes: a type by canon, a tag
+    # constant, a member
+    filled: fillFragmentHoles :ast :symtab :ctx text: t.take path: p.stringView
+    splitTmplText :ctx text: filled.stringView :buf
 }
 
 # splitTmplText -- an instantiated class template, placed so its functions may
@@ -39501,9 +39535,10 @@ collectLateGroup: function {
     }
 }
 
-# collectTmplClassInstances -- every instance of a templated class
-# (tmplClassRowOf), in type-id order: emitted with the late group, after the
-# user structs an instance may hold, whether or not it holds one
+# collectTmplClassInstances -- every instance of a templated class, and every
+# non-generic templated class the program demands (tmplClassRowOf), in type-id
+# order: emitted with the late group, after the user structs an instance may
+# hold, whether or not it holds one
 collectTmplClassInstances: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
@@ -39512,7 +39547,10 @@ collectTmplClassInstances: function {
 } is {
     tm: ztypes.tid
     for tm < last loop {
-        if (tmplClassRowOf :symtab :ctx tid: tm) > 0 then acc.append tm
+        if (tmplClassRowOf :symtab :ctx tid: tm) > 0 then {
+            own: (originTidOf :symtab tid: tm).isZero
+            if own.not or (tmplClassInProgram :symtab tpl: tm) then acc.append tm
+        }
         tm = tm.next
     }
 }
@@ -39606,10 +39644,10 @@ emitEarlyUserStructs: function {
 lateMemberIsMono: function {
     symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.tid
 } out bool is {
-    if (originTidOf :symtab :tid).isZero then return false
-    # a templated class's instance is a user generic one, written from its
-    # template as the runtime's monos are
+    # a templated class -- an instance of a generic one or a class of its own
+    # -- is written from its template as the runtime's monos are
     if (tmplClassRowOf :symtab :ctx :tid) > 0 then return true
+    if (originTidOf :symtab :tid).isZero then return false
     return (isUserInstance :symtab :ctx tcl: tid).not
 }
 
@@ -41608,6 +41646,41 @@ isValueViewTid: function {
     return (isListViewOriginOf :symtab :ctx tid: (chaseAggregateTypedef :symtab :ctx tid: c))
 }
 
+# nativeCallRecvNode -- the node of a native method call's receiver: a variable
+# (`f.close`) or a field path (`this.c.load`); 0 for any other receiver, which
+# has no address to pass
+nativeCallRecvNode: function {ast: Ast.view calr: astnode.view} out zast.nodeid is {
+    if (dottedBaseAtom :ast n: calr).length > 0 then return (dottedBaseNodeId :ast n: calr)
+    rn: dottedParentNodeId n: calr
+    if rn.isZero or (ast.nodes.get i: rn).dottedpath.not then return zast.nodeid
+    return rn
+}
+
+# nativeCallRecvExpr -- the receiver a native method takes by pointer: the
+# variable `bn` (its C name, through an alias), or the field path's place
+nativeCallRecvExpr: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    calr: astnode.view
+    bn: StringView
+    bnid: zast.nodeid
+} out String is {
+    if bn.length == 0 then {
+        rF: cfacts
+        rt: emitDottedReceiver :ast :symtab :ctx callable: calr facts: rF
+        if (dottedReceiverIsPtr :ast :symtab :ctx callable: calr) then return rt
+        return "&(\{rt})"
+    }
+    recvV0: atomVid :symtab nid: bnid
+    recv: aliasResolveAt :symtab :ctx nid: bnid name: bn vid: recvV0
+    recvV: ztypes.vid
+    if recv.stringView == bn then recvV = recvV0
+    recvC: emitLocalAtomNameAt :symtab :ctx nid: bnid name: bn vid: recvV0
+    if (isPtrVid :ctx vid: recvV) then return recvC
+    return "&\{recvC}"
+}
+
 # emitClassNativeCall -- a call of a class's NATIVE method that a natives.tbl
 # fragment row implements: `<class>_<method>(&recv, args...)`, the receiver by
 # pointer and each argument as its parameter's type says (nativeMethodArgForm),
@@ -41623,9 +41696,9 @@ emitClassNativeCall: function {
 } out String is {
     calr: ast.nodes.get i: call.callable
     bn: dottedBaseAtom :ast n: calr
-    if bn.length == 0 then return ""
+    bnid: nativeCallRecvNode :ast :calr
+    if bnid.isZero then return ""
     mnId: aliasChildNameId :ast :symtab n: calr
-    bnid: dottedBaseNodeId :ast n: calr
     cid: nativeMethodOwnerOf :symtab nid: bnid :mnId
     # an instance of a templated class: its template defines every method
     # (emitTmplClassMono), under the instance's own name, with no row of its own
@@ -41638,6 +41711,8 @@ emitClassNativeCall: function {
         }
     }
     if cid.isZero then return ""
+    # a non-generic templated class owns its native methods as any class does
+    if tmplInst.not when (tmplClassRowOf :symtab :ctx tid: cid) > 0 then tmplInst = true
     mtid: (symtab.typing.declChildOfId parentTypeId: cid nameId: mnId).or d: ztypes.tid.zero
     if mtid.isZero then return ""
     if tmplInst.not then {
@@ -41647,13 +41722,7 @@ emitClassNativeCall: function {
         demandNativeRow :ctx :row key: key.stringView
     }
     fc: ctxCname :ctx tid: cid
-    recvV0: atomVid :symtab nid: bnid
-    recv: aliasResolveAt :symtab :ctx nid: bnid name: bn vid: recvV0
-    recvV: ztypes.vid
-    if recv.stringView == bn then recvV = recvV0
-    recvC: emitLocalAtomNameAt :symtab :ctx nid: bnid name: bn vid: recvV0
-    recvExpr: "&\{recvC}"
-    if (isPtrVid :ctx vid: recvV) then recvExpr = recvC.take
+    recvExpr: nativeCallRecvExpr :ast :symtab :ctx :calr :bn :bnid
     pNames: List String
     pIds: ListVal ztypes.tid
     pNameIds: ListVal zast.nameid

@@ -63,8 +63,10 @@
 #              gcc and clang do that at -O2 for the bound form too, but -O0 does
 #              not and tcc never does, and --cc tcc is a first-class path.
 #              make const-row-guard pins both directions.
-#   tmpl=<f>   on a `<unit>.<Class>.@class` row: the class is GENERIC, and each
-#              instance is written from the C template <f> in the runtime dir --
+#   tmpl=<f>   on a `<unit>.<Class>.@class` row: the class is written from the C
+#              template <f> in the runtime dir -- once per instance when it is
+#              GENERIC, once when it is not (a class holding OS state, whose
+#              layout no declaration can say) --
 #              @@NAME@@ the instance's C name, and per type parameter P, @@P@@
 #              the C type of its argument as a slot holds it and @@P_DESTROY@@ a
 #              function `void (P* x)` destroying one in place. The template
@@ -73,7 +75,10 @@
 #              by pointer; each method still has its (bodiless) row.
 #              @@P.<m>@@ names the function the argument declares as its member
 #              <m> (a bound's method, called with the receiver by pointer);
-#              @@String@@ / @@StringView@@ are those types' C names. The
+#              @@String@@ / @@StringView@@ are those types' C names, and the
+#              holes a fragment spells (a type by canon, a tag constant, a
+#              member) fill as in a fragment, so a lone at-sign opens a hole
+#              there too. The
 #              template's types come before its first function, and each
 #              function's signature is one `static ...) {` line: the types are
 #              written with the instance, the functions after the program's
@@ -752,7 +757,7 @@
 # which is how a unit shipping its own rows gets a slot. `prelude` is not among
 # them: emitC emits it into the header, ahead of the literal pool, because a
 # need registered inside a type method arrives after the pass has run.
-[@units order=sviter,collections,system,io,cli,os,net,tcc,thread]
+[@units order=sviter,collections,system,io,cli,os,net,tcc,thread,sync]
 
 # @sviter -- the split / lines iterator types. They are StringView natives, but
 # they DECLARE types the collections join and the rest of system go on to spell,
@@ -1113,6 +1118,26 @@
 [thread.JoinHandle.create]
 [thread.yieldNow needs=prelude.zthread frag=_Z_THREAD_YIELD_NOW]
 [thread.running needs=prelude.zthread frag=_Z_THREAD_RUNNING]
+
+# sync -- what threads share: each class is written from its template, over the
+# shim's atomics and locks, which need pthread at the link
+[@unit.sync link=pthread]
+# memoryorder to the C11 order, for every atomic's template
+[@sync.memory_order frag=_Z_SYNC_MEMORY_ORDER]
+[sync.Atomic.@class tmpl=z_Atomic.c.tmpl needs=prelude.zthread,memory_order]
+[sync.Atomic.create]
+[sync.Atomic.load]
+[sync.Atomic.store]
+[sync.Atomic.exchange]
+[sync.Atomic.compareExchange]
+[sync.Atomic.fetchAdd]
+[sync.Atomic.fetchSub]
+[sync.AtomicBool.@class tmpl=z_AtomicBool.c.tmpl needs=prelude.zthread,memory_order]
+[sync.AtomicBool.create]
+[sync.AtomicBool.load]
+[sync.AtomicBool.store]
+[sync.AtomicBool.exchange]
+[sync.AtomicBool.compareExchange]
 
 # what a reached unit needs from the C toolchain. `@unit.<path>` names a unit:
 # when a program reaches it -- some declaration in it is demanded, and it
