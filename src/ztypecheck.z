@@ -28563,6 +28563,24 @@ selfReturnOnInstance: function {
     return ret
 }
 
+# nativeReturnOnInstance -- a NATIVE method's answer read through an instance:
+# the method is the template's (natives are not cloned per instance), so an
+# answer built over the template's parameters (`lock: ... outx (MutexGuard T)`)
+# is respecialized with the instance's arguments; any other answer is itself
+nativeReturnOnInstance: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    recvTid: ztypes.tid
+    ret: ztypes.tid
+} out ztypes.tid is {
+    if recvTid.isZero or ret.isZero then return ret
+    if (st.reg.isPartialOf tid: ret).not then return ret
+    if (st.reg.genericOriginOf tid: recvTid).isZero then return ret
+    if (st.reg.isPartialOf tid: recvTid) then return ret
+    return (partialSubstituted :st :ast :unitDecl partial: recvTid tid: ret)
+}
+
 # methodReturnOf -- a method FUNCTION type's return type id: the synthesized
 # returnTypeId link when set, else the AST method's recorded `out T` ref node
 # (funcReturnNode) read through the post-demand stamp.
@@ -30479,6 +30497,7 @@ checkMemberAutoCall: function {
             ro
         ) case some then {
             result = selfReturnOnInstance :st recvTid: bt ret: ro
+            result = nativeReturnOnInstance :st :ast :unitDecl recvTid: bt ret: result
             # an auto-call's only input is its receiver: the pin its result
             # keeps, if any, is the receiver path at the strength the reader
             # took. Built locally, then pushed through the full field path (a

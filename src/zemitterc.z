@@ -9290,6 +9290,9 @@ fnReturnsRefBorrow: function {
     # into the storage, and binding that by value is the write loss `getMut`
     # exists to prevent.
     if (isColGetMutRef :symtab :ctx :fid) then return true
+    # a templated class's method answering a reference returns a pointer into
+    # what the class holds: its template writes it so (a guard's `value`)
+    if (tmplRowOfClass :ctx cls: (fnDeclScopeTid :symtab :fid)) > 0 then return true
     # a NATIVE callee's ABI is fixed by its hand-written `.inc` fragment, which
     # returns its struct by value (`List.iterate` -> ListIter). This emitter only
     # rewrites the bodies it generates itself.
@@ -9619,10 +9622,26 @@ aliasBaseOf: function {
     }
     vsr: valueStructRefNode :ast :symtab :ctx n: avn
     if vsr.isZero.not then return (aliasbase node: vsr place: false)
+    if (tmplRefResult :ast :symtab :ctx n: avn) then return (aliasbase node: n.value place: false)
     if (nodeIsBareAtom n: avn) when (bindingVarIsBorrowed :symtab :n) then {
         return (aliasbase node: n.value place: true)
     }
     return (aliasbase node: zast.nodeid place: false)
+}
+
+# tmplRefResult -- the value is a templated class's method answering a
+# reference (a guard's `value`): its C is a pointer the expression reads
+# through, so a binding of it is a second name for what it points at
+tmplRefResult: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: astnode.view
+} out bool is {
+    fid: refBorrowCalleeFid :ast :symtab :ctx :n
+    if fid.isZero then return false
+    if (tmplRowOfClass :ctx cls: (fnDeclScopeTid :symtab :fid)) == 0 then return false
+    return (nodeIsRefBorrowResult :ast :symtab :ctx :n)
 }
 
 # typedefBorrowSource -- the source node of a borrowed typedef (`Bytes xs.borrow`,
@@ -17015,6 +17034,8 @@ emitDottedNestedBase: function {
         baseAtomF = pathFacts
         bs9vid = ztypes.vid
     }
+    tnr: tmplNestedRead :ast :symtab :ctx :nlid :mnId base: baseAtom.stringView :nstPtr :facts
+    if tnr.length > 0 then return tnr
     return (nestedBaseMember
         :ast
         :symtab
@@ -17027,6 +17048,35 @@ emitDottedNestedBase: function {
         :baseAtomF
         :bs9vid
         :nstPtr
+        :facts
+    )
+}
+
+# tmplNestedRead -- a templated class's native method read off a nested base
+# (`this.m.lock`): its template's function, taking the place the base names;
+# "" for any other member
+tmplNestedRead: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    nlid: ztypes.tid
+    mnId: zast.nameid
+    base: StringView
+    # the base is a pointer to the place
+    nstPtr: bool
+    facts: cfacts.borrow
+} out String is {
+    if (tmplClassRowOf :symtab :ctx tid: nlid) == 0 then return ""
+    tb: base.string
+    if nstPtr then tb = "(*\{base})"
+    return (tmplInstMemberRead
+        :ast
+        :symtab
+        :ctx
+        inst: nlid
+        :mnId
+        bn2: tb.stringView
+        bn2v: ztypes.vid
         :facts
     )
 }
@@ -38318,16 +38368,31 @@ monoMapKV: function {symtab: zenv.ZSymbolTable.view monoId: ztypes.tid acc: List
 }
 
 # tmplInstArgIds -- a templated class's instance may hold any of its type
-# arguments by value (a JoinHandle's task): each is an ordering edge
+# arguments by value (a JoinHandle's task), and answers other instances by
+# value (a Mutex's guard): each is an ordering edge
 tmplInstArgIds: function {
     symtab: zenv.ZSymbolTable.view monoId: ztypes.tid acc: ListVal ztypes.tid
 } is {
     td: ztypecheck.declOfTypeId st: symtab tid: (originTidOf :symtab tid: monoId)
-    if td.isZero then return
-    k: u64
-    for k < (symtab.reg.genericParamNamesOf tdecl: td).length loop {
-        acc.append (symtab.reg.genericTypeArgAt specId: monoId ordinal: k)
-        k = k + 1
+    if td.isZero.not then {
+        k: u64
+        for k < (symtab.reg.genericParamNamesOf tdecl: td).length loop {
+            acc.append (symtab.reg.genericTypeArgAt specId: monoId ordinal: k)
+            k = k + 1
+        }
+    }
+    # and each instance its methods answer (@@OUT.<m>@@): a prototype names it
+    slot: u64
+    for slot < (symtab.typing.declRowSlots ownerTid: monoId) loop {
+        rw: symtab.typing.declRowAt ownerTid: monoId membersOnly: true :slot
+        slot = slot + 1
+        if rw.keep when (
+            (symtab.reg.typetypeOf typeId: rw.tid) == ztypes.ztypetype.functionType
+        ) then {
+            ans: instTypeOf :symtab inst: monoId tid: (symtab.reg.returnTypeOf tid: rw.tid)
+            if ans.isZero.not when ans != monoId when (originTidOf :symtab tid: ans
+            ).isZero.not then acc.append ans
+        }
     }
 }
 
@@ -38760,14 +38825,165 @@ tmplClassRowOf: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztyp
         if (isGenericType :symtab :tid) then return 0
         o = tid
     }
+    return (tmplRowOfClass :ctx cls: o)
+}
+
+# tmplRowOfClass -- the `.@class` row with a `tmpl=` that the class `cls` (a
+# generic template, or a class of its own) declares, as its index plus one; 0
+# when it has none
+tmplRowOfClass: function {ctx: Ctx.view cls: ztypes.tid} out u64 is {
+    if cls.isZero then return 0
     ri: u64
     for ri < ctx.classRows.length loop {
-        if (ctx.classRowTids.get i: ri) == o when (
+        if (ctx.classRowTids.get i: ri) == cls when (
             (ctx.classRows.get i: ri).tmpl.length > 0
         ) then return ri + 1
         ri = ri + 1
     }
     return 0
+}
+
+# tmplAnswerOf -- the type method `mnId` of the templated instance `inst`
+# answers, as the instance sees it: the template's answer with each of its type
+# parameters replaced by the instance's argument, found among the types the
+# program made; 0 when the program never made it (nothing calls the method)
+tmplAnswerOf: function {
+    symtab: zenv.ZSymbolTable.view
+    inst: ztypes.tid
+    mnId: zast.nameid
+} out ztypes.tid is {
+    mt: (symtab.typing.declChildOfId parentTypeId: inst nameId: mnId).or d: ztypes.tid.zero
+    if mt.isZero then return mt
+    return (instTypeOf :symtab :inst tid: (symtab.reg.returnTypeOf tid: mt))
+}
+
+# instTypeOf -- `tid`, spelled in a template, as the instance `inst` sees it: a
+# type parameter is the instance's argument, and an instance of another
+# generic over them is that generic's instance over the arguments, when the
+# program made one (0 when it did not); any other type is itself
+instTypeOf: function {
+    symtab: zenv.ZSymbolTable.view
+    inst: ztypes.tid
+    tid: ztypes.tid
+} out ztypes.tid is {
+    if tid.isZero then return tid
+    # a partial wears GENERIC_PARAM too; it is an instance over parameters
+    if (
+        (symtab.reg.typetypeOf typeId: tid) == ztypes.ztypetype.genericParam
+    ) when (symtab.reg.isPartialOf :tid).not then {
+        return (instParamTid :symtab :inst pid: tid)
+    }
+    # a template spells its answer as a partial over its parameters, which
+    # originTidOf leaves out of every sweep: its origin is read directly
+    o: symtab.reg.genericOriginOf :tid
+    if o.isZero then return tid
+    td: ztypecheck.declOfTypeId st: symtab tid: o
+    if td.isZero then return ztypes.tid.zero
+    n: (symtab.reg.genericParamNamesOf tdecl: td).length
+    want: ListVal ztypes.tid
+    k: u64
+    for k < n loop {
+        want.append (instTypeOf
+            :symtab
+            :inst
+            tid: (symtab.reg.genericTypeArgAt specId: tid ordinal: k)
+        )
+        k = k + 1
+    }
+    c: ztypes.tid
+    last: symtab.reg.nextTid
+    for c < last loop {
+        if (originTidOf :symtab tid: c) == o when (sameTypeArgs :symtab inst: c :want) then return c
+        c = c.next
+    }
+    return ztypes.tid.zero
+}
+
+# sameTypeArgs -- the instance `inst`'s type arguments are `want`, in order
+sameTypeArgs: function {
+    symtab: zenv.ZSymbolTable.view
+    inst: ztypes.tid
+    want: (ListVal ztypes.tid).view
+} out bool is {
+    k: u64
+    for k < want.length loop {
+        if (
+            (symtab.reg.genericTypeArgAt specId: inst ordinal: k) != (want.get i: k)
+        ) then return false
+        k = k + 1
+    }
+    return true
+}
+
+# applyAnswerHoles -- each `@@OUT.<method>@@` in a class template: the C name of
+# the type that method of the instance answers (tmplAnswerOf), which a
+# template needs to build an answer of another templated class or a mono. A
+# hole whose type the program never made is left in place, and the function
+# spelling it is dropped (dropUnmadeFns): nothing calls it.
+applyAnswerHoles: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    text: String.take
+    inst: ztypes.tid
+} out String is {
+    t: text.take
+    sv: t.stringView
+    res: String
+    pos: u64
+    for pos < sv.length loop {
+        rest: sv.substring from: pos to: sv.length
+        ho: rest.indexOf needle: "@@OUT."
+        if ho.none then {
+            res.append rest
+            pos = sv.length
+        } else {
+            at: pos + ho
+            tail: sv.substring from: at + 6 to: sv.length
+            en: (tail.indexOf needle: "@@").or d: tail.length
+            res.append (sv.substring from: pos to: at)
+            mid: zast.poolFind pool: ast.names text: (tail.substring from: 0 to: en)
+            ans: ztypes.tid
+            if mid.isZero.not then ans = tmplAnswerOf :symtab :inst mnId: mid
+            nx: sv.length
+            if (at + 6 + en + 2) <= sv.length then nx = at + 6 + en + 2
+            if ans.isZero then {
+                res.append (sv.substring from: at to: nx)
+            } else {
+                res.append (cbaseNoPrefix :ctx tid: ans)
+            }
+            pos = nx
+        }
+    }
+    return res
+}
+
+# dropUnmadeFns -- a class template without the functions that still spell an
+# `@@OUT.` hole (applyAnswerHoles): each runs from its `static ...) {` line to
+# the `}` closing it at the start of a line
+dropUnmadeFns: function {text: StringView} out String is {
+    res: String
+    fn: String
+    inFn: false
+    for each ln: text.lines loop {
+        if (
+            (ln.startsWith prefix: "static ") and (ln.trimEnd.endsWith suffix: ") {")
+        ) then inFn = true
+        if inFn then {
+            fn.append ln
+            fn.append "\n"
+            if (ln.startsWith prefix: "}") then {
+                if (fn.contains needle: "@@OUT.").not then res.append fn
+                fn = ""
+                inFn = false
+            }
+        } else {
+            res.append ln
+            res.append "\n"
+        }
+    }
+    res.append fn
+    return res
 }
 
 # applyMemberHoles -- each `@@<param>.<member>@@` in a class template: the C
@@ -38884,9 +39100,11 @@ emitTmplClassMono: function {
         t = applyMemberHoles :ast :symtab :ctx text: t param: pn.stringView arg: at
         k = k + 1
     }
+    t = applyAnswerHoles :ast :symtab :ctx text: t inst: monoId
+    made: dropUnmadeFns text: t.stringView
     # what is left is a runtime fragment's own holes: a type by canon, a tag
     # constant, a member
-    filled: fillFragmentHoles :ast :symtab :ctx text: t.take path: p.stringView
+    filled: fillFragmentHoles :ast :symtab :ctx text: made.take path: p.stringView
     splitTmplText :ctx text: filled.stringView :buf
 }
 

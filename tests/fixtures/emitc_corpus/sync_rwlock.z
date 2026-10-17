@@ -1,0 +1,59 @@
+# sync_rwlock.z -- two readers and a writer share one list an RwLock owns. A
+# reader reads under a read lock (many at once), the writer appends under the
+# write lock; a reader never sees the list shrink, and the owner reads the
+# whole list back after.
+
+# Watcher -- reads the shared list's length, again and again
+Watcher: class {
+    # the list, shared by `.view`
+    rw: (sync.RwLock (ListVal i64)).view
+    # the longest list it saw
+    most: u64
+    # whether it ever saw the list shorter than before
+    shrank: bool
+} as {
+    task: thread.Task
+    call: function {:this} is {
+        i: 0.i64
+        for i < 300 loop {
+            g: this.rw.read
+            n: g.value.length
+            if n < this.most then this.shrank = true
+            if n > this.most then this.most = n
+            i = i + 1
+        }
+    }
+}
+
+# Appender -- appends 0 to 99 under the write lock
+Appender: class {
+    # the list, shared by `.view`
+    rw: (sync.RwLock (ListVal i64)).view
+} as {
+    task: thread.Task
+    call: function {:this} is {
+        i: 0.i64
+        for i < 100 loop {
+            g: this.rw.write
+            g.value.append i
+            i = i + 1
+        }
+    }
+}
+
+main: function is {
+    rw: (sync.RwLock (ListVal i64)).create value: (ListVal i64)
+    {
+        a: thread.spawn task: (Watcher :rw most: 0 shrank: false)
+        b: thread.spawn task: (Watcher :rw most: 0 shrank: false)
+        w: thread.spawn task: (Appender :rw)
+        da: a.join
+        db: b.join
+        print "readers saw it shrink: \{da.shrank or db.shrank}"
+        print "readers saw at most 100: \{(da.most <= 100) and (db.most <= 100)}"
+    }
+    g: rw.read
+    total: 0.i64
+    for each x: g.value loop total = total + x
+    print "\{g.value.length} values, summing to \{total}"
+}

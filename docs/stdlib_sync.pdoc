@@ -92,6 +92,52 @@ is #~"current":
   }
 """
 
+#--: Locks
+
+#ul:
+  [#*: #b:"Mutex T" -- owns a value one thread at a time reaches.
+    #~"create value:" moves the value in; #~"lock" waits for the lock and
+    answers a #b:"MutexGuard", whose #~"value" is the Mutex's value to read
+    and write. Destroying the guard unlocks.]
+  [#*: #b:"RwLock T" -- owns a value many threads may read at once, or one
+    write: #~"read" answers a #b:"ReadGuard" (its #~"value" is a view),
+    #~"write" a #b:"WriteGuard" (its #~"value" writes). A writer waits for
+    every reader.]
+
+The value is reached only through a guard, so it is never touched unlocked,
+and the lock model keeps the rest straight: a guard keeps its Mutex (the Mutex
+cannot be dropped or moved while one lives), #~"value" holds the guard for as
+long as what it answered lives, and a read guard's value cannot be written. T
+is a reference type (#~"AnyRef"); wrap a plain value in a class.
+
+#code language=zerolang name=mutex: """
+  # Filler -- appends to a list it shares
+  Filler: class {
+      # the list every Filler shares
+      m: (sync.Mutex (ListVal i64)).view
+  } as {
+      task: thread.Task
+      call: function {:this} is {
+          i: 0.i64
+          for i < 100 loop {
+              g: this.m.lock
+              g.value.append i
+              i = i + 1
+          }
+      }
+  }
+
+  main: function is {
+      m: (sync.Mutex (ListVal i64)).create value: ListVal i64
+      {
+          a: thread.spawn task: (Filler :m)
+          b: thread.spawn task: (Filler :m)
+      }
+      g: m.lock
+      print "\{g.value.length} appended"
+  }
+"""
+
 #--: Building
 
 A program that uses #~"sync" links #~"pthread", like one that starts a thread;

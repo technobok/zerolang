@@ -81,3 +81,51 @@ AtomicBool: class is native as {
         t: this.view current: bool new: bool order: memoryorder.seqCst
     } out bool is native
 }
+
+# Mutex -- a value of T that one thread at a time reaches. `lock` waits until
+# no other thread holds the lock, and answers the guard through which the value
+# is read and written; the lock is released when the guard ends. The Mutex owns
+# its value: it is moved in by `create`, and nothing reaches it but a guard.
+Mutex: class is native as {
+    T: AnyRef.generic
+    # a Mutex owning `value`
+    create: function {value: T.take} out type is native
+    # wait for the lock, and answer the guard that holds it. The guard keeps
+    # the Mutex, so it cannot be dropped while a guard lives
+    lock: function {t: this.view} outx MutexGuard T is native
+}
+
+# MutexGuard -- the lock on a Mutex, held: `value` reaches what the Mutex owns,
+# and destroying the guard unlocks
+MutexGuard: class is native as {
+    T: AnyRef.generic
+    # the Mutex's value, to read and write while the guard lives
+    value: function {:this} outx T.borrow is native
+}
+
+# RwLock -- a value of T that many threads may read at once, or one thread
+# write. `read` and `write` wait as a Mutex's `lock` does, and answer the guard
+# for each; a write waits for every reader to finish.
+RwLock: class is native as {
+    T: AnyRef.generic
+    # an RwLock owning `value`
+    create: function {value: T.take} out type is native
+    # wait until no thread writes, and answer a guard that reads
+    read: function {t: this.view} outx ReadGuard T is native
+    # wait until no thread reads or writes, and answer a guard that writes
+    write: function {t: this.view} outx WriteGuard T is native
+}
+
+# ReadGuard -- a read lock on an RwLock, held; destroying it unlocks
+ReadGuard: class is native as {
+    T: AnyRef.generic
+    # the RwLock's value, to read while the guard lives
+    value: function {t: this.view} outx T.view is native
+}
+
+# WriteGuard -- the write lock on an RwLock, held; destroying it unlocks
+WriteGuard: class is native as {
+    T: AnyRef.generic
+    # the RwLock's value, to read and write while the guard lives
+    value: function {:this} outx T.borrow is native
+}

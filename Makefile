@@ -744,7 +744,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2243686
+ALLOC_BASELINE := 2247848
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -848,7 +848,7 @@ emitter-guard:
 	chk "mangleVarName (both inside varCName)" "$$e7" 2; \
 	chk "io.readText" "$$e8" 3; \
 	chk "literal arm members (.data.<arm>; memberC spells them)" "$$e10" 0; \
-	chk "poolFind (a re-intern of a name the emitter held as an id, or table text)" "$$e11" 13; \
+	chk "poolFind (a re-intern of a name the emitter held as an id, or table text)" "$$e11" 14; \
 	chk "member-name TEXT (C spelling and natives.tbl keys only; look members up by aliasChildNameId)" "$$e12" 16; \
 	if [ "$$fail" = "1" ]; then \
 	  echo "  A new name-resolution site was added to the emitter. Read the typechecker"; \
@@ -1281,7 +1281,7 @@ static-tcc-guard: bin/zc bin/zl bin/zls
 
 # zlink-guard -- how many programs declare a link library: a unit's library goes to
 # the programs that reach it and no others.
-ZLINK_BASELINE := 13
+ZLINK_BASELINE := 15
 
 zlink-guard: bin/zc
 	@n=0; rep=""; \
@@ -1625,6 +1625,9 @@ VIEW_GUARD_PLACEHOLDER := z_List.c.tmpl=@@NAME@@:ListRef z_Map.c.tmpl=@@NAME@@:M
   z_IdMapMut.c.tmpl=@@NAME@@:IdMapR z_MapMut.c.tmpl=@@NAME@@:MapRR \
   z_JoinHandle.c.tmpl=@@NAME@@:JoinHandle \
   z_Atomic.c.tmpl=@@NAME@@:Atomic z_AtomicBool.c.tmpl=@@NAME@@:AtomicBool \
+  z_Mutex.c.tmpl=@@NAME@@:Mutex z_MutexGuard.c.tmpl=@@NAME@@:MutexGuard \
+  z_RwLock.c.tmpl=@@NAME@@:RwLock z_ReadGuard.c.tmpl=@@NAME@@:ReadGuard \
+  z_WriteGuard.c.tmpl=@@NAME@@:WriteGuard \
   z_IdSet.c.tmpl=@@NAME@@:IdSet,@@IDSETITER@@:IdSetIter
 VIEW_GUARD_EMITTED := get:ListRef.get,ListView.get,SpanVal.get getMut:ListRef.getMut \
   slice:ListRef.slice,ListView.slice \
@@ -1646,6 +1649,7 @@ VIEW_GUARD_INTERNAL := String.cat String.print String.free String.eq String.cmp 
   IdSet.destroy IdSet.grow IdSet.find IdSet.slot IdSet.items_cap \
   File.destroy Listener.destroy Conn.destroy Database.destroy Statement.destroy Row.destroy \
   Transaction.destroy JoinHandle.destroy Atomic.destroy AtomicBool.destroy \
+  Mutex.destroy MutexGuard.destroy RwLock.destroy ReadGuard.destroy WriteGuard.destroy \
   thread.start thread.join thread.detach \
   mutex.init mutex.destroy mutex.lock mutex.trylock mutex.unlock \
   rwlock.init rwlock.destroy rwlock.rdlock rwlock.wrlock rwlock.rdunlock rwlock.wrunlock \

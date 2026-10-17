@@ -85,6 +85,8 @@ Table of Contents</div>
 </li>
 <li><a href="#atomics">Atomics</a>
 </li>
+<li><a href="#locks">Locks</a>
+</li>
 <li><a href="#building">Building</a>
 </li>
 </ul>
@@ -146,7 +148,48 @@ is <code>current</code>:</p>
       seen: total.compareExchange current: 2000 new: 0
       print "it held \{seen}, now \{total.load}"
   }</code></pre>
-<h2 id="building"><a href="#building">3. Building</a></h2>
+<h2 id="locks"><a href="#locks">3. Locks</a></h2>
+<ul>
+<li><strong>Mutex T</strong> -- owns a value one thread at a time reaches.
+<code>create value:</code> moves the value in; <code>lock</code> waits for the lock and
+answers a <strong>MutexGuard</strong>, whose <code>value</code> is the Mutex's value to read
+and write. Destroying the guard unlocks.</li>
+<li><strong>RwLock T</strong> -- owns a value many threads may read at once, or one
+write: <code>read</code> answers a <strong>ReadGuard</strong> (its <code>value</code> is a view),
+<code>write</code> a <strong>WriteGuard</strong> (its <code>value</code> writes). A writer waits for
+every reader.</li>
+</ul>
+<p>The value is reached only through a guard, so it is never touched unlocked,
+and the lock model keeps the rest straight: a guard keeps its Mutex (the Mutex
+cannot be dropped or moved while one lives), <code>value</code> holds the guard for as
+long as what it answered lives, and a read guard's value cannot be written. T
+is a reference type (<code>AnyRef</code>); wrap a plain value in a class.</p>
+<pre><code class="language-zerolang">  # Filler -- appends to a list it shares
+  Filler: class {
+      # the list every Filler shares
+      m: (sync.Mutex (ListVal i64)).view
+  } as {
+      task: thread.Task
+      call: function {:this} is {
+          i: 0.i64
+          for i &lt; 100 loop {
+              g: this.m.lock
+              g.value.append i
+              i = i + 1
+          }
+      }
+  }
+
+  main: function is {
+      m: (sync.Mutex (ListVal i64)).create value: ListVal i64
+      {
+          a: thread.spawn task: (Filler :m)
+          b: thread.spawn task: (Filler :m)
+      }
+      g: m.lock
+      print "\{g.value.length} appended"
+  }</code></pre>
+<h2 id="building"><a href="#building">4. Building</a></h2>
 <p>A program that uses <code>sync</code> links <code>pthread</code>, like one that starts a thread;
 every class is written from a C template over the shim
 <code>src/runtime/natives/_Z_THREAD_SHIM.inc</code> (pthreads, or Win32 on Windows).</p>

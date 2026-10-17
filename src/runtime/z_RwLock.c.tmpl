@@ -1,0 +1,45 @@
+/* RwLock -- a value of @@T@@ that many threads read at once or one writes,
+   through the guards `read` and `write` answer (sync.z), one copy per value
+   type. The lock and the value live in a heap block, as a Mutex's do. A
+   ReadGuard and a WriteGuard are `{z_rwlock_t* l; T* value}`
+   (z_ReadGuard.c.tmpl, z_WriteGuard.c.tmpl): `read` and `write` fill one. */
+typedef struct z_@@NAME@@_blk {
+    z_rwlock_t l;
+    @@T@@ value;
+} z_@@NAME@@_blk;
+
+typedef struct z_@@NAME@@_t {
+    z_@@NAME@@_blk* b;
+} z_@@NAME@@_t;
+
+static z_@@NAME@@_t z_@@NAME@@_create(@@T@@ value) {
+    z_@@NAME@@_t rw;
+    rw.b = (z_@@NAME@@_blk*)z_xmalloc(sizeof(z_@@NAME@@_blk));
+    if (z_rwlock_init(&rw.b->l) != 0) z_panic("sync.RwLock: the operating system could not make a lock");
+    rw.b->value = value;
+    return rw;
+}
+
+static void z_@@NAME@@_destroy(z_@@NAME@@_t* rw) {
+    if (rw->b == NULL) return;
+    @@T_DESTROY@@(&rw->b->value);
+    z_rwlock_destroy(&rw->b->l);
+    free(rw->b);
+    rw->b = NULL;
+}
+
+static z_@@OUT.read@@_t z_@@NAME@@_read(const z_@@NAME@@_t* rw) {
+    z_@@OUT.read@@_t g;
+    if (z_rwlock_rdlock(&rw->b->l) != 0) z_panic("sync.RwLock: read lock failed");
+    g.l = &rw->b->l;
+    g.value = &rw->b->value;
+    return g;
+}
+
+static z_@@OUT.write@@_t z_@@NAME@@_write(const z_@@NAME@@_t* rw) {
+    z_@@OUT.write@@_t g;
+    if (z_rwlock_wrlock(&rw->b->l) != 0) z_panic("sync.RwLock: write lock failed");
+    g.l = &rw->b->l;
+    g.value = &rw->b->value;
+    return g;
+}
