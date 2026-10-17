@@ -744,7 +744,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2233740
+ALLOC_BASELINE := 2237348
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -954,13 +954,16 @@ cobj-guard: bin/zc $(BUILDDIR)/tcc
 
 # user-native-guard -- a unit outside src/runtime with its own natives.tbl rows and
 # fragments compiles, links and runs, one native in a hidden subunit, and a
-# `when=` variant replaces its plain row exactly when its fact holds. The runtime
-# dir is built from src/runtime plus the fixture's row and fragment.
+# `when=` variant replaces its plain row exactly when its fact holds; and a
+# generic native class (cellar.Cell) is instantiated per element type from the
+# C template its `@class` row names. The runtime dir is built from src/runtime
+# plus the fixture's rows, fragments and template.
 user-native-guard: bin/zc
 	@d=$$(mktemp -d); fail=0; \
 	mkdir -p $$d/rt; cp -r src/runtime/. $$d/rt/; \
 	cat tests/fixtures/user_native/mystery.tbl >> $$d/rt/natives.tbl; \
 	cp tests/fixtures/user_native/_Z_MYSTERY_*.inc $$d/rt/natives/; \
+	cp tests/fixtures/user_native/*.c.tmpl $$d/rt/; \
 	bin/zc mystery --src tests/fixtures/user_native --system lib/system \
 	  --runtime $$d/rt --emit-c $$d/mystery.c > $$d/emit.log 2>&1 \
 	  || { echo "user-native-guard FAIL: emit"; sed -n 1,5p $$d/emit.log; fail=1; }; \
@@ -978,9 +981,23 @@ user-native-guard: bin/zc
 	  if [ "$$got" != "49 42 " ]; then \
 	    echo "user-native-guard FAIL: ran but printed '$$got', want '49 42 '"; fail=1; fi; \
 	fi; \
+	if [ $$fail -eq 0 ]; then \
+	  bin/zc cellar --src tests/fixtures/user_native --system lib/system \
+	    --runtime $$d/rt --emit-c $$d/cellar.c > $$d/cemit.log 2>&1 \
+	    || { echo "user-native-guard FAIL: emit cellar"; sed -n 1,5p $$d/cemit.log; fail=1; }; \
+	fi; \
+	if [ $$fail -eq 0 ]; then \
+	  $(CC) $(CFLAGS) -o $$d/cellar $$d/cellar.c $(call ZLINKOF,$$d/cellar.c) -lm > $$d/ccc.log 2>&1 \
+	    || { echo "user-native-guard FAIL: the templated class did not compile"; grep -m3 error $$d/ccc.log; fail=1; }; \
+	fi; \
+	if [ $$fail -eq 0 ]; then \
+	  got=$$($$d/cellar | tr '\n' ' '); \
+	  if [ "$$got" != "false true 1 true " ]; then \
+	    echo "user-native-guard FAIL: cellar printed '$$got', want 'false true 1 true '"; fail=1; fi; \
+	fi; \
 	rm -rf $$d; \
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
-	echo "user-native-guard OK: a unit outside src/runtime links and runs its own natives, a hidden subunit's among them, a fact's variant chosen"
+	echo "user-native-guard OK: a unit outside src/runtime links and runs its own natives, a hidden subunit's among them, a fact's variant chosen, a generic class from its template"
 
 # case-guard -- every program declaring `main` is in a case list (run, smoke or
 # dump), so something compiles it. A unit with no main is reached through others.

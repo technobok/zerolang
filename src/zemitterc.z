@@ -1966,6 +1966,9 @@ ClassRow: class {
     live: String
     # the destructor fragment
     destroy: String
+    # `tmpl=`: the C template a GENERIC class is instantiated from, one copy per
+    # instance (emitTmplClassMono); "" for a class laid out from its declaration
+    tmpl: String
 }
 
 # UnitReq -- an `@unit.<path>` row: what a unit needs from the C toolchain when
@@ -2040,10 +2043,12 @@ NativeHead: class {
     arch: String
     csrc: String
     cdefs: String
-    # `live=`, `destroy=`: on a `<unit>.<Class>.@class` row, the canons whose
-    # presence makes the class live, and the fragment that destroys one
+    # `live=`, `destroy=`, `tmpl=`: on a `<unit>.<Class>.@class` row, the
+    # canons whose presence makes the class live, the fragment that destroys
+    # one, and the template a generic class is instantiated from
     live: String
     destroy: String
+    tmpl: String
     # `when=`: the fact under which this row replaces the plain row of its key
     whenFact: String
     # `reach=`: on an `@fact.` row, the paths whose reaching makes the fact hold
@@ -2072,6 +2077,7 @@ NativeHead: class {
             cdefs: String
             live: String
             destroy: String
+            tmpl: String
             whenFact: String
             reach: String
         )
@@ -2178,6 +2184,12 @@ NativeHead: class {
             dso
         ) case some then {
             this.destroy = dso.string
+        } case none then null
+        tpo: f.stripPrefix p: "tmpl="
+        match (
+            tpo
+        ) case some then {
+            this.tmpl = tpo.string
         } case none then null
     }
 
@@ -2478,6 +2490,7 @@ recordClassRow: function {ctx: Ctx path: StringView h: NativeHead.view} is {
             cls: (path.substring from: dot + 1 to: path.length).string
             live: h.live.copy
             destroy: h.destroy.copy
+            tmpl: h.tmpl.copy
         )
     } case none then null
 }
@@ -7793,10 +7806,13 @@ destroyTargetTid: function {
 # checker's verdict from its fields and conformances, or a runtime-owned class
 # (a `.@class` row) whose destructor the runtime supplies -- an fd, a database
 # handle -- which no field of its declaration shows, in a program that has
-# the class (live or used, as emitClassRowStructs writes it). Every question
-# of whether the C must destroy a value asks this.
+# the class (live or used, as emitClassRowStructs writes it), or an instance
+# of a templated class. Every question of whether the C must destroy a value
+# asks this.
 ownsResources: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.tid} out bool is {
     if (symtab.reg.needsDestructor typeId: tid) then return true
+    # an instance of a templated class: its template supplies the destructor
+    if (tmplClassRowOf :symtab :ctx :tid) > 0 then return true
     if (ctx.classRowTids.contains item: tid).not then return false
     return (ctx.liveClasses.has item: tid) or (typeIsUsed :ctx :tid)
 }
@@ -12544,6 +12560,9 @@ userCreateCtor: function {
     call: zast.callrow.view
     cco: ztypes.tid
     facts: cfacts.borrow
+    # the callee's C name when it is not cco's own: an instance of a templated
+    # class creates through its template's function (emitTmplClassMono)
+    named: ""
 } out String is {
     cpn: List String
     cpi: ListVal ztypes.tid
@@ -12611,7 +12630,8 @@ userCreateCtor: function {
     oprefix: orderFinish :ctx st: ord
     cargs: orderJoinSlots :ctx st: ord count: ccn
     orderEnd :ctx st: ord
-    ccb: ctxCname :ctx tid: cco
+    ccb: named.string
+    if ccb.length == 0 then ccb = ctxCname :ctx tid: cco
     return (stating
         :facts
         from: callFacts
@@ -12632,7 +12652,11 @@ emitRecordCtor: function {
     facts: cfacts.borrow
 } out String is {
     cco: userCreateFn :symtab :tid
-    if cco.isZero.not then return (userCreateCtor :ast :symtab :ctx :call :cco :facts)
+    if cco.isZero.not then {
+        named: String
+        if (tmplClassRowOf :symtab :ctx :tid) > 0 then named = "\{ctxCname :ctx :tid}_create"
+        return (userCreateCtor :ast :symtab :ctx :call :cco :facts named: named.stringView)
+    }
     fnames: List String
     fids: ListVal ztypes.tid
     fidsNm: ListVal zast.nameid
@@ -18142,6 +18166,8 @@ emitDottedAtomBase: function {
         (symtab.reg.typetypeOf typeId: (stampIdOf :symtab nid: n.nodeid)) ==
         ztypes.ztypetype.functionType
     )
+    tnr: tmplInstMemberRead :ast :symtab :ctx inst: bstamp :mnId :bn2 :bn2v :facts
+    if tnr.length > 0 then return tnr
     eRc: (dottedAtomRecClsBase
         :ast
         :symtab
@@ -38614,6 +38640,91 @@ emitMonoById: function {
         emitIdMapMono :ast :symtab :ctx :runtimeDir :monoId :buf
         return
     }
+    tr: tmplClassRowOf :symtab :ctx tid: monoId
+    if tr > 0 then emitTmplClassMono :ast :symtab :ctx :runtimeDir :monoId row: tr - 1 :buf
+}
+
+# tmplClassRowOf -- the `.@class` row whose `tmpl=` instantiates `tid`'s
+# template, as its index plus one; 0 when `tid` is no instance of such a class
+tmplClassRowOf: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.tid} out u64 is {
+    o: originTidOf :symtab :tid
+    if o.isZero then return 0
+    ri: u64
+    for ri < ctx.classRows.length loop {
+        if (ctx.classRowTids.get i: ri) == o when (
+            (ctx.classRows.get i: ri).tmpl.length > 0
+        ) then return ri + 1
+        ri = ri + 1
+    }
+    return 0
+}
+
+# templateParamArgs -- each type parameter of `template` by name, beside the
+# type argument `mono` bound it to, in declaration order (the order arguments
+# bind in)
+templateParamArgs: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    template: ztypes.tid
+    mono: ztypes.tid
+    names: List String
+    tids: ListVal ztypes.tid
+} is {
+    td: ztypecheck.declOfTypeId st: symtab tid: template
+    if td.isZero then return
+    pns: symtab.reg.genericParamNamesOf tdecl: td
+    k: u64
+    for k < pns.length loop {
+        names.append (zast.nameTextCopy :ast ref: (pns.get i: k))
+        tids.append (symtab.reg.genericTypeArgAt specId: mono ordinal: k)
+        k = k + 1
+    }
+}
+
+# emitTmplClassMono -- an instance of a generic native class, from the C
+# template its row names: @@NAME@@ is the instance's C name, and for each type
+# parameter P, @@P@@ is the C type of the argument as a slot holds it and
+# @@P_DESTROY@@ the name of a function `void (P* x)` destroying one in place,
+# written ahead of the template.
+emitTmplClassMono: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    runtimeDir: StringView
+    monoId: ztypes.tid
+    # the class row, by index
+    row: u64
+    buf: String.borrow
+} is {
+    tf: (ctx.classRows.get i: row).tmpl.copy
+    p: "\{runtimeDir}/\{tf}"
+    raw: readTemplateCached :ctx path: p.stringView
+    if raw.length == 0 then return
+    nm: cbaseNoPrefix :ctx tid: monoId
+    t: applyTmpl text: raw key: "NAME" val: nm.stringView
+    tpl: originTidOf :symtab tid: monoId
+    pNames: List String
+    pTids: ListVal ztypes.tid
+    templateParamArgs :ast :symtab template: tpl mono: monoId names: pNames tids: pTids
+    k: u64
+    for k < pNames.length loop {
+        pn: (pNames.get i: k).copy
+        at: pTids.get i: k
+        sc0: slotCType :ast :symtab :ctx tid: at
+        sc: ctypeOrI64 s: sc0.stringView
+        t = applyTmpl text: t key: pn.stringView val: sc.stringView
+        dfn: "z_\{nm}_destroy_\{pn}"
+        dl: destroyLineC :symtab :ctx tid: at nm: "(*x)" ind: "    "
+        buf.append "static void \{dfn}("
+        buf.append "\{sc}* x) {\n"
+        buf.append dl
+        buf.append "    (void)x;\n}\n"
+        dk: "\{pn}_DESTROY"
+        t = applyTmpl text: t key: dk.stringView val: dfn.stringView
+        k = k + 1
+    }
+    buf.append t
+    buf.append "\n"
 }
 
 # collectLateMonosKind -- append late monos of one origin to acc. Called in
@@ -39234,6 +39345,22 @@ collectLateGroup: function {
     }
 }
 
+# collectTmplClassInstances -- every instance of a templated class
+# (tmplClassRowOf), in type-id order: emitted with the late group, after the
+# user structs an instance may hold, whether or not it holds one
+collectTmplClassInstances: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    acc: ListVal ztypes.tid
+    last: ztypes.tid
+} is {
+    tm: ztypes.tid
+    for tm < last loop {
+        if (tmplClassRowOf :symtab :ctx tid: tm) > 0 then acc.append tm
+        tm = tm.next
+    }
+}
+
 # collectLateInstances -- the user instances the late group places, in type-id
 # order.
 collectLateInstances: function {
@@ -39324,6 +39451,9 @@ lateMemberIsMono: function {
     symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.tid
 } out bool is {
     if (originTidOf :symtab :tid).isZero then return false
+    # a templated class's instance is a user generic one, written from its
+    # template as the runtime's monos are
+    if (tmplClassRowOf :symtab :ctx :tid) > 0 then return true
     return (isUserInstance :symtab :ctx tcl: tid).not
 }
 
@@ -39530,6 +39660,7 @@ emitUserStructsOrdered: function {
     emitUserProtocols :ast :symtab :ctx :last :buf
     lateGroup: ListVal ztypes.tid
     collectLateGroup :ast :symtab :ctx :userList acc: lateGroup :last
+    collectTmplClassInstances :symtab :ctx acc: lateGroup :last
     collectLateInstances :ast :symtab :ctx :userList acc: lateGroup :last
     lateSet: IdSet ztypes.tid
     closeLateGroup :symtab :ctx :userList :lateGroup :lateSet
@@ -41340,13 +41471,25 @@ emitClassNativeCall: function {
     mnId: aliasChildNameId :ast :symtab n: calr
     bnid: dottedBaseNodeId :ast n: calr
     cid: nativeMethodOwnerOf :symtab nid: bnid :mnId
+    # an instance of a templated class: its template defines every method
+    # (emitTmplClassMono), under the instance's own name, with no row of its own
+    tmplInst: false
+    if cid.isZero then {
+        it: stampIdOf :symtab nid: bnid
+        if (tmplClassRowOf :symtab :ctx tid: it) > 0 then {
+            cid = it
+            tmplInst = true
+        }
+    }
     if cid.isZero then return ""
     mtid: (symtab.typing.declChildOfId parentTypeId: cid nameId: mnId).or d: ztypes.tid.zero
     if mtid.isZero then return ""
-    key: methodRowPath :ast :symtab :ctx mfid: mtid
-    row: nativeFragRow :ctx path: key.stringView
-    if row == 0 then return ""
-    demandNativeRow :ctx :row key: key.stringView
+    if tmplInst.not then {
+        key: methodRowPath :ast :symtab :ctx mfid: mtid
+        row: nativeFragRow :ctx path: key.stringView
+        if row == 0 then return ""
+        demandNativeRow :ctx :row key: key.stringView
+    }
     fc: ctxCname :ctx tid: cid
     recvV0: atomVid :symtab nid: bnid
     recv: aliasResolveAt :symtab :ctx nid: bnid name: bn vid: recvV0
@@ -41436,7 +41579,11 @@ emitClassNativeCall: function {
                 :ctx
                 :call
                 label: pnb
-                form: (nativeMethodArgForm :symtab :ctx pid: (pIds.get i: best + 1))
+                form: (nativeMethodArgForm
+                    :symtab
+                    :ctx
+                    pid: (instParamTid :symtab inst: cid pid: (pIds.get i: best + 1))
+                )
                 nid: (nids.get i: best)
                 slot: best
                 :ord
@@ -41459,6 +41606,61 @@ emitClassNativeCall: function {
     return (stating :facts from: callFacts text: r)
 }
 
+# tmplInstMemberRead -- a templated class's native method read as a member of
+# an instance: its template's function (emitClassNativeRead), ahead of the
+# class leg, which would name the template's member; "" for anything else
+tmplInstMemberRead: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    inst: ztypes.tid
+    mnId: zast.nameid
+    bn2: StringView
+    bn2v: ztypes.vid
+    facts: cfacts.borrow
+} out String is {
+    if (tmplClassRowOf :symtab :ctx tid: inst) == 0 then return ""
+    tmo: symtab.typing.declChildOfId parentTypeId: inst nameId: mnId
+    if tmo.none then return ""
+    if (fnIsNativeId :symtab fid: tmo).not then return ""
+    return (emitClassNativeRead
+        :ast
+        :symtab
+        :ctx
+        cid: inst
+        :mnId
+        mfid: tmo
+        recv: bn2
+        recvVid: bn2v
+        :facts
+    )
+}
+
+# instParamTid -- a native method's parameter type as an instance sees it: a
+# type parameter of the template is the instance's argument for it (a native
+# method is not cloned per instance, so its parameters keep the template's);
+# any other type is itself
+instParamTid: function {
+    symtab: zenv.ZSymbolTable.view
+    inst: ztypes.tid
+    pid: ztypes.tid
+} out ztypes.tid is {
+    if (symtab.reg.typetypeOf typeId: pid) != ztypes.ztypetype.genericParam then return pid
+    tpl: originTidOf :symtab tid: inst
+    if tpl.isZero then return pid
+    td: ztypecheck.declOfTypeId st: symtab tid: tpl
+    if td.isZero then return pid
+    pn: symtab.reg.genericParamNameOfTid tdecl: td ptid: pid
+    if pn.isZero then return pid
+    pns: symtab.reg.genericParamNamesOf tdecl: td
+    k: u64
+    for k < pns.length loop {
+        if (pns.get i: k) == pn then return (symtab.reg.genericTypeArgAt specId: inst ordinal: k)
+        k = k + 1
+    }
+    return pid
+}
+
 # emitClassNativeRead -- a native method written as a member read (`f.close`,
 # `db.transaction`) that a fragment row implements: `<class>_<method>(&recv)`,
 # each parameter past the receiver its declared default. cli's classes keep
@@ -41476,11 +41678,18 @@ emitClassNativeRead: function {
     facts: cfacts.borrow
 } out String is {
     if (symtab.reg.typetypeOf typeId: cid) != ztypes.ztypetype.classType then return ""
-    if (originTidOf :symtab tid: cid).isZero.not then return ""
-    if (defUnitIdOf :ctx tid: cid) == ctx.cliUnitDecl then return ""
-    key: methodRowPath :ast :symtab :ctx :mfid
-    row: nativeFragRow :ctx path: key.stringView
-    if row == 0 then return ""
+    # an instance of a templated class reads through its template's function,
+    # which no row of its own implements
+    tmplInst: (tmplClassRowOf :symtab :ctx tid: cid) > 0
+    if tmplInst.not when (originTidOf :symtab tid: cid).isZero.not then return ""
+    if ctx.cliUnitDecl.isZero.not when (defUnitIdOf :ctx tid: cid) == ctx.cliUnitDecl then return ""
+    key: String
+    row: u64
+    if tmplInst.not then {
+        key = methodRowPath :ast :symtab :ctx :mfid
+        row = nativeFragRow :ctx path: key.stringView
+        if row == 0 then return ""
+    }
     pNames: List String
     pIds: ListVal ztypes.tid
     pNameIds: ListVal zast.nameid
@@ -41493,7 +41702,7 @@ emitClassNativeRead: function {
         ).not then return ""
         k = k + 1
     }
-    demandNativeRow :ctx :row key: key.stringView
+    if tmplInst.not then demandNativeRow :ctx :row key: key.stringView
     fc: ctxCname :ctx tid: cid
     rexp: "&\{recv}"
     if (isPtrVid :ctx vid: recvVid) then rexp = recv.string
