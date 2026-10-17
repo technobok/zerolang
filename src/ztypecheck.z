@@ -47139,7 +47139,21 @@ checkResolvedMethodCall: function {
     # its value keeps locked is taken now, before the argument walk drains it
     rvPins: List ztyping.PinPath
     rvT: ztypes.tid
+    # a receiver that is a `.view` result is read-only: a method that writes its
+    # receiver cannot take one, as no `.borrow` can be lent from it. Read before
+    # the capture, which drains the flag with pins the call does not keep
+    rvRo: recvVal and st.typing.pendingBorrowReadonly
     if recvVal then rvT = captureValueReceiver :st :ast :unitDecl :call funcId: dro pins: rvPins
+    if rvRo when (callReadsReceiver :st mid: dro nid: call.nid).not then {
+        (addError
+            :st
+            nodeid: call.nid
+            lineno: call.lineno
+            colno: call.colno
+            e: zast.err.ownerError
+            msg: "a method that writes its receiver cannot be called on a `.view` result: a view converts to no other ownership"
+        )
+    }
     # a receiver rooted in a variable is locked through that root after the
     # arguments; any other holds its pins locked across them
     if rvPins.length > 0 when (receiverRootIsVar :st :ast :call).not then {
