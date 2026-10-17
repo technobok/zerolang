@@ -1,5 +1,5 @@
 /* f16: every operation the natives.tbl rows and the emitter need, as a function
-   over z_f16 (z_prelude.inc). Each computes in float and rounds once to f16,
+   over z_f16 (z_head.inc). Each computes in float and rounds once to f16,
    which float's 24 bits make exact for + - * / and sqrt, so the two
    representations give the same results: where the C compiler has _Float16 a
    value is one and the conversions are casts; where it has none (tcc), or

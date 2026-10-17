@@ -72,7 +72,7 @@ NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 	tcc zc zl zls regen-goldens regen-fmt-goldens regen-matrix matrix-guard regen-math-asm \
 	fmt-raw-guard regen-lsp-goldens bump-seed test-bootstrap install docs warn-check perf \
 	perf-strict pre-push perf-elision any-guard typename-guard emitter-guard frontend-guard \
-	lifetime-guard user-native-guard shim-guard cobj-guard sqlite-decls-guard case-guard require-guard mode-parity zlink-rules-guard \
+	lifetime-guard user-native-guard shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard case-guard require-guard mode-parity zlink-rules-guard \
 	refusal-guard static-tcc-guard zlink-guard emit-set ident-set const-row-guard \
 	deadcode-guard alias-label-guard fwd-shape-guard eager-guard eager-lib-guard \
 	highlight-guard view-guard fallback-guard clean native-guard generic-param-guard \
@@ -156,7 +156,7 @@ ci:
 	@echo "CI GATE GREEN: style-lint + corpus(--heavy: +selfhost-asan +fixpoint) + bootstrap"
 
 # ci-gates -- the gates ci runs in parallel, after perf-strict.
-ci-gates: style-lint zl-full-guard complexity-report warn-check emitter-guard typename-guard frontend-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard highlight-guard any-guard deadcode-guard eager-guard eager-lib-guard case-guard user-native-guard shim-guard cobj-guard sqlite-decls-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard readable-check test-tcc-heavy test-clang test-math-arm64 test-sqlite-arm64 test-math-noasm test-portable-scalars math-asm-guard matrix-guard docs-link-guard mode-parity ci-corpus
+ci-gates: style-lint zl-full-guard complexity-report warn-check emitter-guard typename-guard frontend-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard highlight-guard any-guard deadcode-guard eager-guard eager-lib-guard case-guard user-native-guard shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard readable-check test-tcc-heavy test-clang test-math-arm64 test-sqlite-arm64 test-math-noasm test-portable-scalars math-asm-guard matrix-guard docs-link-guard mode-parity ci-corpus
 
 ci-corpus: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --heavy --jobs $(NPROC)
@@ -744,7 +744,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2237364
+ALLOC_BASELINE := 2242424
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -848,7 +848,7 @@ emitter-guard:
 	chk "mangleVarName (both inside varCName)" "$$e7" 2; \
 	chk "io.readText" "$$e8" 3; \
 	chk "literal arm members (.data.<arm>; memberC spells them)" "$$e10" 0; \
-	chk "poolFind (a re-intern of a name the emitter held as an id, or table text)" "$$e11" 12; \
+	chk "poolFind (a re-intern of a name the emitter held as an id, or table text)" "$$e11" 13; \
 	chk "member-name TEXT (C spelling and natives.tbl keys only; look members up by aliasChildNameId)" "$$e12" 16; \
 	if [ "$$fail" = "1" ]; then \
 	  echo "  A new name-resolution site was added to the emitter. Read the typechecker"; \
@@ -1031,13 +1031,40 @@ shim-guard: $(BUILDDIR)/tcc
 	    mkdir -p $(BUILDDIR)/wineprefix; \
 	    DISPLAY= WINEDEBUG=-all WINEPREFIX=$(abspath $(BUILDDIR))/wineprefix timeout 300 wine $$d/shim.exe > $$d/run.log 2>&1 \
 	      || { echo "shim-guard FAIL: the Win32 backend under wine"; tail -20 $$d/run.log; fail=1; }; \
-	    grep -q "zthread shim OK" $$d/run.log || { echo "shim-guard FAIL: the Win32 run did not report OK"; fail=1; }; \
+	    grep -q "zthread shim OK" $$d/run.log || { echo "shim-guard FAIL: the Win32 run did not report OK"; tail -20 $$d/run.log; fail=1; }; \
 	  fi; \
 	  win=", and the Win32 backend (mingw-w64 under wine)"; \
 	fi; \
 	rm -rf $$d; \
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
 	echo "shim-guard OK: the thread shim's test passes under $(CC), clang, tcc and ThreadSanitizer (proved on a racy probe)$$win"
+
+# thread-tsan-guard -- every threaded run fixture (thread_*, sync_*) under
+# ThreadSanitizer, built by $(CC) and by clang: no report, and the stdout and exit
+# status its goldens hold. TSan is proved first on tests/c/tsan_probe.c, which
+# races on purpose, so a sanitizer that reports nothing cannot pass the rest.
+thread-tsan-guard: bin/zc
+	@d=$$(mktemp -d); fail=0; n=0; pr=tests/c/tsan_probe.c; \
+	$(CC) -g -fsanitize=thread -o $$d/probe $$pr -lpthread > $$d/cc.log 2>&1; \
+	$$d/probe > /dev/null 2> $$d/probe.err; \
+	grep -q "data race" $$d/probe.err || { echo "thread-tsan-guard FAIL: ThreadSanitizer did not report the probe's race"; fail=1; }; \
+	for f in tests/fixtures/emitc_corpus/thread_*.z tests/fixtures/emitc_corpus/sync_*.z; do \
+	  [ -f $$f ] || continue; b=$$(basename $$f .z); \
+	  bin/zc emit $$f --system lib/system -o $$d/$$b.c > $$d/emit.log 2>&1 \
+	    || { echo "thread-tsan-guard FAIL: $$b did not emit"; fail=1; continue; }; \
+	  want=0; [ -f tests/fixtures/run_golden/$$b.exit ] && want=$$(cat tests/fixtures/run_golden/$$b.exit); \
+	  for cc in $(CC) clang; do \
+	    $$cc -std=c17 -g -O1 -fsanitize=thread -w -o $$d/$$b-$$cc $$d/$$b.c $(call ZLINKOF,$$d/$$b.c) -lm > $$d/cc.log 2>&1 \
+	      || { echo "thread-tsan-guard FAIL: $$b did not build under $$cc"; grep -m3 error $$d/cc.log; fail=1; continue; }; \
+	    $$d/$$b-$$cc > $$d/out.txt 2> $$d/err.txt; rc=$$?; n=$$((n+1)); \
+	    if grep -q "ThreadSanitizer" $$d/err.txt; then echo "thread-tsan-guard FAIL: $$b under $$cc:"; head -20 $$d/err.txt; fail=1; fi; \
+	    [ "$$rc" = "$$want" ] || { echo "thread-tsan-guard FAIL: $$b under $$cc exited $$rc, want $$want"; fail=1; }; \
+	    cmp -s $$d/out.txt tests/fixtures/run_golden/$$b.out || { echo "thread-tsan-guard FAIL: $$b under $$cc printed other than its golden"; fail=1; }; \
+	  done; \
+	done; \
+	rm -rf $$d; \
+	if [ $$fail -ne 0 ]; then exit 1; fi; \
+	echo "thread-tsan-guard OK: $$n threaded fixture runs race-free under ThreadSanitizer ($(CC), clang), proved on a racy probe"
 
 # case-guard -- every program declaring `main` is in a case list (run, smoke or
 # dump), so something compiles it. A unit with no main is reached through others.
@@ -1254,7 +1281,7 @@ static-tcc-guard: bin/zc bin/zl bin/zls
 
 # zlink-guard -- how many programs declare a link library: a unit's library goes to
 # the programs that reach it and no others.
-ZLINK_BASELINE := 8
+ZLINK_BASELINE := 10
 
 zlink-guard: bin/zc
 	@n=0; rep=""; \
@@ -1596,6 +1623,7 @@ VIEW_GUARD_PLACEHOLDER := z_List.c.tmpl=@@NAME@@:ListRef z_Map.c.tmpl=@@NAME@@:M
   z_IdMap.c.tmpl=@@NAME@@:IdMapR \
   z_IdMapIter.c.tmpl=@@NAME@@:IdMapR,@@IDMAPITEMITER@@:IdMapItemIterR,@@IDMAPENTRY@@:IdMapEntryR \
   z_IdMapMut.c.tmpl=@@NAME@@:IdMapR z_MapMut.c.tmpl=@@NAME@@:MapRR \
+  z_JoinHandle.c.tmpl=@@NAME@@:JoinHandle \
   z_IdSet.c.tmpl=@@NAME@@:IdSet,@@IDSETITER@@:IdSetIter
 VIEW_GUARD_EMITTED := get:ListRef.get,ListView.get,SpanVal.get getMut:ListRef.getMut \
   slice:ListRef.slice,ListView.slice \
@@ -1616,7 +1644,7 @@ VIEW_GUARD_INTERNAL := String.cat String.print String.free String.eq String.cmp 
   IdMapR.destroy IdMapR.grow IdMapR.find IdMapR.slot IdMapR.entries_cap \
   IdSet.destroy IdSet.grow IdSet.find IdSet.slot IdSet.items_cap \
   File.destroy Listener.destroy Conn.destroy Database.destroy Statement.destroy Row.destroy \
-  Transaction.destroy \
+  Transaction.destroy JoinHandle.destroy \
   thread.start thread.join thread.detach \
   mutex.init mutex.destroy mutex.lock mutex.trylock mutex.unlock \
   rwlock.init rwlock.destroy rwlock.rdlock rwlock.wrlock rwlock.rdunlock rwlock.wrunlock \
@@ -2018,7 +2046,7 @@ view-guard:
 # is not live), and the emitFail and marker-site counts in src/zemitterc.z are
 # ratchets. A new refusal leg may raise EMITFAIL_BASELINE (say so in the commit);
 # a new fallback leg may not.
-EMITFAIL_BASELINE := 41
+EMITFAIL_BASELINE := 43
 MARKER_BASELINE := 24
 EXCS := $(NAMES:%=$(EXDIR)/%.c)
 fallback-guard: $(EXCS) bin/zc bin/zl bin/zls

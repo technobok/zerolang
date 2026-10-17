@@ -1,9 +1,9 @@
 /* i128 and u128: every operation the natives.tbl rows and the emitter need, as
-   a function over z_i128 / z_u128 (z_prelude.inc). Where the C compiler has a
+   a function over z_i128 / z_u128 (z_head.inc). Where the C compiler has a
    128-bit integer type each one is the operator it names; where it has none
    (tcc), or under -DZ_INT128_PORTABLE, the values are two 64-bit words and each
    function computes on them. The emitted C is the same for every compiler: it
-   is z_prelude.inc's preprocessor test that decides, not zc. Loaded only for
+   is z_head.inc's preprocessor test that decides, not zc. Loaded only for
    a program that operates on either type. */
 #if defined(Z_INT128_NATIVE)
 

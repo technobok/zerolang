@@ -1,0 +1,90 @@
+/* JoinHandle -- one started thread and the task it runs (thread.z), one copy
+   per task type. The task lives in a heap block whose address does not move
+   while the thread runs; the handle is a pointer to it. `join` waits and moves
+   the task out; destroy joins a thread nobody joined, then destroys a task
+   nobody took back. `detach` hands the block to the thread: of the thread
+   finishing and the handle letting go, whichever comes second (one atomic
+   `done` decides) destroys the task and frees the block. */
+typedef struct z_@@NAME@@_blk {
+    @@T@@ task;
+    z_thread_t th;
+    Z_ATOMIC(int) finished;
+    Z_ATOMIC(int) done;
+    Z_ATOMIC(uint64_t) tid;
+    bool joined;
+    bool taken;
+} z_@@NAME@@_blk;
+
+typedef struct z_@@NAME@@_t {
+    z_@@NAME@@_blk* b;
+} z_@@NAME@@_t;
+
+static void z_@@NAME@@_run(void* p) {
+    z_@@NAME@@_blk* b = (z_@@NAME@@_blk*)p;
+    Z_ATOMIC_STORE(&b->tid, z_thread_self_id(), Z_RELEASE);
+    @@T.call@@(&b->task);
+    Z_ATOMIC_STORE(&b->finished, 1, Z_RELEASE);
+    /* detached first: the handle let go, so the thread cleans up */
+    if (Z_ATOMIC_ADD(&b->done, 1, Z_ACQREL) == 1) {
+        @@T_DESTROY@@(&b->task);
+        free(b);
+    }
+}
+
+static z_@@NAME@@_t z_@@NAME@@_create(@@T@@ task, @@StringView@@_t name, uint64_t stackSize) {
+    z_@@NAME@@_t h;
+    h.b = (z_@@NAME@@_blk*)z_xmalloc(sizeof(z_@@NAME@@_blk));
+    memset(h.b, 0, sizeof(z_@@NAME@@_blk));
+    h.b->task = task;
+    char nm[16];
+    size_t n = name.size < 15 ? (size_t)name.size : 15;
+    memcpy(nm, name.data, n);
+    nm[n] = 0;
+    if (z_thread_start(&h.b->th, z_@@NAME@@_run, h.b, stackSize, nm) != 0) {
+        z_panic("thread.spawn: the operating system could not start a thread");
+    }
+    return h;
+}
+
+static void z_@@NAME@@_wait(z_@@NAME@@_blk* b) {
+    if (b->joined) return;
+    if (z_thread_join(&b->th) != 0) z_panic("thread: join failed");
+    b->joined = true;
+    Z_ATOMIC_STORE(&b->tid, 0, Z_RELEASE);
+}
+
+/* the task, moved out: destroy then leaves it to its new owner */
+static @@T@@ z_@@NAME@@_join(z_@@NAME@@_t* h) {
+    z_@@NAME@@_wait(h->b);
+    if (h->b->taken) z_panic("thread: join called twice on one handle");
+    h->b->taken = true;
+    return h->b->task;
+}
+
+static bool z_@@NAME@@_isFinished(const z_@@NAME@@_t* h) {
+    return Z_ATOMIC_LOAD(&h->b->finished, Z_ACQUIRE) != 0;
+}
+
+static uint64_t z_@@NAME@@_id(const z_@@NAME@@_t* h) {
+    return Z_ATOMIC_LOAD(&h->b->tid, Z_ACQUIRE);
+}
+
+/* let the thread run on its own: it destroys the task and frees the block
+   when it finishes, or this does now if it already has */
+static void z_@@NAME@@_detach(z_@@NAME@@_t* h) {
+    z_@@NAME@@_blk* b = h->b;
+    h->b = NULL;
+    if (z_thread_detach(&b->th) != 0) z_panic("thread: detach failed");
+    if (Z_ATOMIC_ADD(&b->done, 1, Z_ACQREL) == 1) {
+        @@T_DESTROY@@(&b->task);
+        free(b);
+    }
+}
+
+static void z_@@NAME@@_destroy(z_@@NAME@@_t* h) {
+    if (h->b == NULL) return;
+    z_@@NAME@@_wait(h->b);
+    if (!h->b->taken) @@T_DESTROY@@(&h->b->task);
+    free(h->b);
+    h->b = NULL;
+}

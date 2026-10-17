@@ -1969,6 +1969,8 @@ ClassRow: class {
     # `tmpl=`: the C template a GENERIC class is instantiated from, one copy per
     # instance (emitTmplClassMono); "" for a class laid out from its declaration
     tmpl: String
+    # `needs=`: what a templated class's instances call (demandTmplClassNeeds)
+    need: String
 }
 
 # UnitReq -- an `@unit.<path>` row: what a unit needs from the C toolchain when
@@ -2491,6 +2493,7 @@ recordClassRow: function {ctx: Ctx path: StringView h: NativeHead.view} is {
             live: h.live.copy
             destroy: h.destroy.copy
             tmpl: h.tmpl.copy
+            need: h.need.copy
         )
     } case none then null
 }
@@ -15029,6 +15032,28 @@ emitUserMethodLeg: function {
     return (emitInstanceMethodCall :ast :symtab :ctx :call :facts)
 }
 
+# tmplInstCreate -- `(C T).create ...` of a templated class: the instance's
+# template function, `z_<instance>_create`, its arguments as a create's; "" when
+# the call constructs anything else
+tmplInstCreate: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    call: zast.callrow.view
+    # the call is a `create`
+    isCreate: bool
+    facts: cfacts.borrow
+} out String is {
+    if isCreate.not then return ""
+    ct: monoStampIdOf :symtab :ctx nid: call.nodeid
+    if ct.isZero then ct = stampIdOf :symtab nid: call.nodeid
+    if (tmplClassRowOf :symtab :ctx tid: ct) == 0 then return ""
+    cco: userCreateFn :symtab tid: ct
+    if cco.isZero then return ""
+    named: "\{ctxCname :ctx tid: ct}_create"
+    return (userCreateCtor :ast :symtab :ctx :call :cco :facts named: named.stringView)
+}
+
 # emitNativeMemberCall -- a NATIVE method: it has no body to call, so its
 # owner's family lowers it -- the result and option combinators, a data block's
 # element read, a str's substring, a native collection's empty `create`, a
@@ -15073,6 +15098,8 @@ emitNativeMemberCall: function {
         :call
         :facts
     )
+    tc: tmplInstCreate :ast :symtab :ctx :call :isCreate :facts
+    if tc.length > 0 then return tc
     if (symtab.reg.typetypeOf typeId: ownerTid) == ztypes.ztypetype.classType then {
         if ownerUnit == ctx.cliUnitDecl then {
             if isCreate then return (emitCliSpecCreate :ast :symtab :ctx :call :facts)
@@ -15989,7 +16016,7 @@ scalarZeroC: function {
 
 # partIsHelperScalar -- the type is i128, u128 or f16, or a scalar typedef over
 # one: a value no C operator may touch, since where the C compiler lacks the
-# type it is a struct (z_prelude.inc).
+# type it is a struct (z_head.inc).
 partIsHelperScalar: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
     nk: constScalarKindForTid :symtab :tid
     if nk.has.not then return false
@@ -32353,6 +32380,40 @@ dataElemLabelId: function {n: astnode.view} out zast.nameid is {
     }
 }
 
+# demandTmplClassNeeds -- a templated class's row's `needs=`, demanded once the
+# program has an instance of it: the template calls what the row names, and no
+# method row is demanded on its behalf (their calls go to the template)
+demandTmplClassNeeds: function {symtab: zenv.ZSymbolTable.view ctx: Ctx} is {
+    ri: u64
+    for ri < ctx.classRows.length loop {
+        un: String
+        nd: String
+        {
+            r: ctx.classRows.get i: ri
+            tpl: ctx.classRowTids.get i: ri
+            if r.tmpl.length > 0 when tpl.isZero.not when (classHasInstance :symtab :tpl) then {
+                un = r.uname.copy
+                nd = r.need.copy
+            }
+        }
+        for each n1: (nd.stringView.split sep: ",") loop {
+            if n1.length > 0 then rowNeedAddOne :ctx key: un.stringView need: n1
+        }
+        ri = ri + 1
+    }
+}
+
+# classHasInstance -- some type is an instance of the template `tpl`
+classHasInstance: function {symtab: zenv.ZSymbolTable.view tpl: ztypes.tid} out bool is {
+    tm: ztypes.tid
+    last: symtab.reg.nextTid
+    for tm < last loop {
+        if (originTidOf :symtab tid: tm) == tpl then return true
+        tm = tm.next
+    }
+    return false
+}
+
 # scan the program for the runtime helpers it needs.
 fillNeeds: function {program: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx} is {
     {
@@ -34126,15 +34187,18 @@ assembleEmitOutput: function {
 
 # emitCHeader -- the file's fixed header: the link libraries the reached units
 # declared (so whatever drives the compiler reads them off the artifact instead
-# of being told separately), then the prelude fragment -- the feature macros,
-# the includes, and the allocator wrappers everything else is built on. The
-# prelude is the same bytes in every program, so it is a runtime fragment and
-# not a hundred appends.
+# of being told separately), then the prelude -- the feature macros and the
+# includes (z_head.inc), z_panic, and the allocator wrappers everything else is
+# built on (z_alloc.inc). The prelude is the same bytes in every program but
+# for z_panic, which is the `@prelude.panic` row's fragment: a threaded
+# program's differs.
 emitCHeader: function {
     libs: (List String).view
     # the C sources to build and link, one `zcsrc:` line each (applyUnitReqs)
     csrcs: (List String).view
     runtimeDir: StringView
+    # the fragment z_panic is written from
+    panicFrag: StringView
     errs: List zast.ErrorData
     buf: String.borrow
 } is {
@@ -34157,8 +34221,12 @@ emitCHeader: function {
         buf.append " */\n"
     }
     buf.append "\n"
-    p0: "\{runtimeDir}/z_prelude.inc"
+    p0: "\{runtimeDir}/z_head.inc"
     buf.append (loadFragment path: p0.stringView svC: "" strC: "" fails: errs)
+    p1: nativePath :runtimeDir frag: panicFrag
+    buf.append (loadFragment path: p1.stringView svC: "" strC: "" fails: errs)
+    p2: "\{runtimeDir}/z_alloc.inc"
+    buf.append (loadFragment path: p2.stringView svC: "" strC: "" fails: errs)
 }
 
 # the runtime types the emitter must name before anything else: String,
@@ -34589,6 +34657,7 @@ emitC: function {
     checkLoadedNatives :program :ctx
     fillDataElems :program :symtab :ctx
     fillNeeds :program :symtab :ctx
+    demandTmplClassNeeds :symtab :ctx
     nodeEstE: u64
     nodeEstE = program.nodes.length
     fnsBuf: String
@@ -34635,6 +34704,18 @@ emitC: function {
         codeBuf: codeBuf.stringView
         fnsBuf: fnsBuf.stringView
     )
+    # z_panic's fragment, chosen by the table (a threaded program's differs)
+    pr: nativeFragRow :ctx path: "@prelude.panic"
+    pf: String
+    if pr > 0 then pf = (ctx.fragNames.get i: pr - 1).copy
+    if pf.length == 0 then {
+        (emitFail
+            :ctx
+            what: "natives.tbl has no @prelude.panic row: z_panic has nothing to be written from"
+            line: 0
+        )
+        pf = "_Z_PANIC"
+    }
     # the Ctx's failures follow assembly's own, in the order recorded: popped
     # twice, so each is moved rather than copied
     rev: List zast.ErrorData
@@ -34644,7 +34725,7 @@ emitC: function {
     # units need, which the table had to be read to know
     whole: String
     whole.append "/* Generated by zerolang compiler */\n"
-    emitCHeader libs: linkLibs :csrcs :runtimeDir :errs buf: whole
+    emitCHeader libs: linkLibs :csrcs :runtimeDir panicFrag: pf.stringView :errs buf: whole
     whole.append buf
     return whole
 }
@@ -38659,6 +38740,52 @@ tmplClassRowOf: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztyp
     return 0
 }
 
+# applyMemberHoles -- each `@@<param>.<member>@@` in a class template: the C
+# name of the function the argument type `arg` declares as `member`, which the
+# template calls with the receiver by pointer (`@@T.call@@(&b->task)`). A
+# template only names members its parameter's bound requires, and conformance
+# to a bound is declared, so the function is emitted. A member `arg` lacks is
+# reported, not left as a hole.
+applyMemberHoles: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    text: String.take
+    param: StringView
+    arg: ztypes.tid
+} out String is {
+    t: text.take
+    open: "@@\{param}."
+    for (t.stringView.indexOf needle: open).some loop {
+        mname: String
+        head: String
+        tail: String
+        {
+            at: (t.stringView.indexOf needle: open).or d: 0
+            rest: t.stringView.substring from: at + open.length to: t.length
+            en: (rest.indexOf needle: "@@").or d: rest.length
+            mname = (rest.substring from: 0 to: en).string
+            head = (t.stringView.substring from: 0 to: at).string
+            tail = (rest.substring from: en + 2 to: rest.length).string
+        }
+        mid: zast.poolFind pool: ast.names text: mname.stringView
+        fid: ztypes.tid
+        if mid.isZero.not then fid = ((symtab.typing.declChildOfId parentTypeId: arg nameId: mid).or
+            d: ztypes.tid.zero
+        )
+        fc: ctxCname :ctx tid: fid
+        if fid.isZero or (fc.length == 0) then {
+            m: "a class template calls the member '\{mname}' of its parameter, which the argument does not declare"
+            emitFail :ctx what: m line: 0
+            fc = "0"
+        }
+        head.append fc
+        head.append tail
+        t = head.take
+    }
+    return t
+}
+
 # templateParamArgs -- each type parameter of `template` by name, beside the
 # type argument `mono` bound it to, in declaration order (the order arguments
 # bind in)
@@ -38702,6 +38829,8 @@ emitTmplClassMono: function {
     if raw.length == 0 then return
     nm: cbaseNoPrefix :ctx tid: monoId
     t: applyTmpl text: raw key: "NAME" val: nm.stringView
+    t = applyTmpl text: t key: "String" val: ctx.strC.stringView
+    t = applyTmpl text: t key: "StringView" val: ctx.svC.stringView
     tpl: originTidOf :symtab tid: monoId
     pNames: List String
     pTids: ListVal ztypes.tid
@@ -38721,10 +38850,37 @@ emitTmplClassMono: function {
         buf.append "    (void)x;\n}\n"
         dk: "\{pn}_DESTROY"
         t = applyTmpl text: t key: dk.stringView val: dfn.stringView
+        t = applyMemberHoles :ast :symtab :ctx text: t param: pn.stringView arg: at
         k = k + 1
     }
-    buf.append t
-    buf.append "\n"
+    splitTmplText :ctx text: t.stringView :buf
+}
+
+# splitTmplText -- an instantiated class template, placed so its functions may
+# call anything the program defines: the types ahead of its first function are
+# written here, then a prototype of each function (a `static ...` line ending in
+# ` {`), and the function bodies go after every function's prototype
+# (ctx.lateDefs) -- a body calls the element's methods (@@T.call@@), whose
+# prototypes come with the program's functions.
+splitTmplText: function {ctx: Ctx text: StringView buf: String.borrow} is {
+    inFns: false
+    for each ln: text.lines loop {
+        isFn: (ln.startsWith prefix: "static ") and (ln.trimEnd.endsWith suffix: ") {")
+        if isFn then inFns = true
+        if inFns then {
+            ctx.lateDefs.append ln
+            ctx.lateDefs.append "\n"
+            if isFn then {
+                sig: ln.trimEnd
+                buf.append (sig.substring from: 0 to: sig.length - 2)
+                buf.append ";\n"
+            }
+        } else {
+            buf.append ln
+            buf.append "\n"
+        }
+    }
+    ctx.lateDefs.append "\n"
 }
 
 # collectLateMonosKind -- append late monos of one origin to acc. Called in

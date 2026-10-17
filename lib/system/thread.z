@@ -1,0 +1,84 @@
+# thread -- run work on its own operating-system thread.
+#
+# A thread runs a `Task`: any class that declares it conforms (`task: Task`) and
+# has a `call` method. The task is MOVED to the thread when it starts, so
+# nothing else can touch it while it runs, and handed back by `join`:
+#
+#     h: thread.spawn task: (Counter n: 0) name: "counter"
+#     done: h.join
+#     print "\{done.n}"
+#
+# A task may hold borrows (a `.borrow` field). They stay locked for as long as
+# the handle -- or the task `join` hands back -- lives, so the owner of what a
+# running task borrows can neither change nor drop it, and two running tasks
+# cannot both write one source. Destroying a handle that was never joined joins
+# it: a scope cannot end while a thread it started still uses what the scope
+# owns. A panic on any thread ends the whole program.
+
+# Task -- the work a thread does: `call` runs once, on the new thread
+Task: protocol {
+    # the thread's body
+    call: function {:this}
+}
+
+# JoinHandle -- the thread `spawn` started, and the task it runs. `join` waits
+# for it and hands the task back; destroying a handle that was not joined
+# joins it first.
+JoinHandle: class is native as {
+    # the task the thread runs
+    T: Task.generic
+    # wait for the thread to finish, and answer the task. The handle keeps the
+    # task's locks, so it is locked while the answer lives
+    join: function {:this} outx T is native
+    # whether the thread has finished its task (join will not wait)
+    isFinished: function {t: this.view} out bool is native
+    # the thread's id, as the operating system numbers it; 0 once joined
+    id: function {t: this.view} out u64 is native
+    # let the thread run on without the handle: it frees its task when it
+    # finishes, and nothing waits for it
+    detach: function {:this} is native
+    # start `task` on a new thread named `name` with a stack of `stackSize`
+    # bytes (0: the default, 8 MiB)
+    create: function {task: T.take name: StringView.view stackSize: u64} out type is native
+}
+
+# spawn -- start `task` on a new thread. `name` labels it for debuggers and
+# `top` (15 bytes are kept); `stackSize` 0 is the default, 8 MiB. The handle
+# carries the task's borrows: what it borrows stays locked until the handle,
+# or the task `join` answers, ends.
+spawn: function {
+    # the work, moved to the thread
+    task: T.take
+    # the thread's name; empty leaves it unnamed
+    name: ""
+    # the thread's stack, in bytes; 0 is 8 MiB
+    stackSize: 0.u64
+} outx JoinHandle T is {
+    # `task.take`: a Task has a `call`, so read bare it would be called
+    return ((JoinHandle T).create task: task.take :name :stackSize)
+} as {
+    # the task's type
+    T: Task.generic
+}
+
+# spawnDetached -- start `task` on a new thread that nothing waits for: it runs
+# to the end on its own and frees its task. It is `out`, not `outx`, so a task
+# that holds borrows is refused -- nothing would keep what it borrows alive.
+# The program may end while it still runs.
+spawnDetached: function {
+    # the work, moved to the thread
+    task: T.take
+    # the thread's name; empty leaves it unnamed
+    name: ""
+    # the thread's stack, in bytes; 0 is 8 MiB
+    stackSize: 0.u64
+} is {
+    h: (JoinHandle T).create task: task.take :name :stackSize
+    h.detach
+} as {
+    # the task's type
+    T: Task.generic
+}
+
+# yieldNow -- let another thread run
+yieldNow: function is native

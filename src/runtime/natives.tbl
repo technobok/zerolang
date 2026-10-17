@@ -71,6 +71,13 @@
 #              defines the struct, `z_@@NAME@@_create`, `z_@@NAME@@_destroy` and
 #              `z_@@NAME@@_<method>` for each native method, taking the receiver
 #              by pointer; each method still has its (bodiless) row.
+#              @@P.<m>@@ names the function the argument declares as its member
+#              <m> (a bound's method, called with the receiver by pointer);
+#              @@String@@ / @@StringView@@ are those types' C names. The
+#              template's types come before its first function, and each
+#              function's signature is one `static ...) {` line: the types are
+#              written with the instance, the functions after the program's
+#              prototypes, so a body may call any of them.
 #   when=<f>   a VARIANT row, chosen over the plain row of the same key when
 #              the fact <f> holds, and dropped when it does not; it stands ABOVE
 #              that plain row, and a key may have a variant and no plain row
@@ -745,7 +752,7 @@
 # which is how a unit shipping its own rows gets a slot. `prelude` is not among
 # them: emitC emits it into the header, ahead of the literal pool, because a
 # need registered inside a type method arrives after the pass has run.
-[@units order=sviter,collections,system,io,cli,os,net,tcc]
+[@units order=sviter,collections,system,io,cli,os,net,tcc,thread]
 
 # @sviter -- the split / lines iterator types. They are StringView natives, but
 # they DECLARE types the collections join and the rest of system go on to spell,
@@ -1081,12 +1088,30 @@
 # declaration space, as the synthesised comparisons do. Its unit is `prelude`
 # because of WHERE it goes: emitC emits it into the header, ahead of the literal
 # pool, so that a need registered inside a type method is still in time.
+# threaded -- the program starts a thread: what is process-wide in it (a panic)
+# must hold with other threads running. Above every row that varies by it.
+[@fact.threaded reach=thread.spawn,thread.spawnDetached]
+# z_panic, written between the prelude's head (z_head.inc) and its allocators
+# (z_alloc.inc): a threaded program's reports once and ends with _exit
+[@prelude.panic when=threaded frag=_Z_PANIC_THREADED]
+[@prelude.panic frag=_Z_PANIC]
 [@prelude.int128 frag=_Z_INT128]
 [@prelude.f16 frag=_Z_F16]
 [@prelude.fmt64 frag=_Z_FMT64]
 # the thread shim: threads, locks, condition variables, once, atomics, demanded
 # by a row that names `needs=prelude.zthread`
 [@prelude.zthread frag=_Z_THREAD_SHIM]
+
+# thread -- a JoinHandle per task type, from its template; the shim's threads
+# need pthread at the link
+[@unit.thread link=pthread]
+[thread.JoinHandle.@class tmpl=z_JoinHandle.c.tmpl needs=prelude.zthread]
+[thread.JoinHandle.join]
+[thread.JoinHandle.isFinished]
+[thread.JoinHandle.id]
+[thread.JoinHandle.detach]
+[thread.JoinHandle.create]
+[thread.yieldNow needs=prelude.zthread frag=_Z_THREAD_YIELD_NOW]
 
 # what a reached unit needs from the C toolchain. `@unit.<path>` names a unit:
 # when a program reaches it -- some declaration in it is demanded, and it

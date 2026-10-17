@@ -8211,7 +8211,10 @@ forceAllMembers: function {
     ast: Ast
     tid: ztypes.tid
 } is {
-    if st.typing.eagerAll then return
+    # `--eager` resolved every declaration up front -- but a generic template a
+    # body first reaches is instantiated before its unit's turn, and the copy
+    # needs its members now
+    if st.typing.eagerAll when (st.reg.isGenericOf :tid).not then return
     od: st.typing.declIdOfType typeId: tid
     if od.isZero then return
     n: st.typing.declChildSlots declId: od
@@ -22932,6 +22935,33 @@ mintMonoTagShape: function {
     }
 }
 
+# completeIdSubs -- the substitutions of `mid` keyed by a template parameter id
+# that resolving the template's members minted after the instance's map was
+# built: under `--eager` a unit first reached from a body is instantiated
+# before its turn, and its members, resolved now, mint the ids they name
+completeIdSubs: function {
+    st: zenv.ZSymbolTable
+    templateId: ztypes.tid
+    mid: ztypes.tid
+    idSubs: (IdMapV ztypes.tid v: ztypes.genericarg)
+} is {
+    td: declOfTypeId :st tid: templateId
+    if td.isZero then return
+    pns: st.reg.genericParamNamesOf tdecl: td
+    k: u64
+    for k < pns.length loop {
+        po: st.reg.genericParamTidOf tdecl: td paramName: (pns.get i: k)
+        match (
+            po
+        ) case some then {
+            if (idSubs.has key: po).not when k < (st.reg.genericArgCount specId: mid) then {
+                idSubs.set key: po value: (st.reg.genericArgAt specId: mid ordinal: k)
+            }
+        } case none then null
+        k = k + 1
+    }
+}
+
 # mintMonoMembers -- give every member of a monomorphised type its substituted
 # type. True when any of them gives the mono a destructor.
 mintMonoMembers: function {
@@ -22950,6 +22980,7 @@ mintMonoMembers: function {
     cNameIds: ListVal zast.nameid
     cIds: ListVal ztypes.tid
     forceAllMembers :st :ast tid: templateId
+    completeIdSubs :st :templateId :mid :idSubs
     # a template resolved on demand is copied at once, and the copy reads its
     # members' signatures off their stamped type-refs
     stampResolvedOnDemand :st :ast
@@ -26238,7 +26269,9 @@ mintValuePartialSpec: function {
 }
 
 # buildSpecIdSubs -- the same substitutions the trie keys carry, keyed by the
-# template's generic-parameter DECLARATION ids rather than by name.
+# template's generic-parameter DECLARATION ids rather than by name. A parameter
+# whose id no member has minted yet is left out; completeIdSubs adds it once
+# the members are resolved.
 buildSpecIdSubs: function {
     st: zenv.ZSymbolTable.view
     pnames8: (ListVal zast.nameid).view
@@ -26250,15 +26283,13 @@ buildSpecIdSubs: function {
     pt8: pnames8.length
     for pi8 < pt8 loop {
         pnm8: pnames8.get i: pi8
+        # a numeric parameter's value substitutes too: a reference over the
+        # parameter inside the template completes with it
         pto8: st.reg.genericParamTidOf tdecl: tk8 paramName: pnm8
         match (
             pto8
         ) case some then {
-            # a numeric parameter's value substitutes too: a reference over the
-            # parameter inside the template completes with it
-            a8: args8.get i: pi8
-            pk8: pto8
-            idSubs8.set key: pk8 value: a8
+            idSubs8.set key: pto8 value: (args8.get i: pi8)
         } case none then null
         pi8 = pi8 + 1
     }
@@ -30506,6 +30537,10 @@ checkMemberProjections: function {
         :st
         tid: bt
     ).not then {
+        if (appliedTemplateBase :st :ast :bt base: dp.parent) then return (callleg
+            handled: true
+            tid: ztypes.tid.zero
+        )
         cn: zast.nameTextCopy :ast ref: cnId
         (checkBareTypeValueAt
             :ast
@@ -31905,6 +31940,21 @@ checkNumericParamMember: function {
     return (callleg handled: true tid: bound)
 }
 
+# appliedTemplateBase -- `(C U).create` in a template's own walk: the type
+# arguments ARE written (the base is an application), but they are the
+# template's parameters, so no instance is minted and the application stays the
+# generic template. Each instance's walk constructs its own instance; this one
+# has nothing to refuse, and its value's type is unknown here.
+appliedTemplateBase: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    bt: ztypes.tid
+    base: zast.nodeid
+} out bool is {
+    if (st.reg.isGenericOf tid: bt).not then return false
+    return (isCallNode n: (ast.nodes.get i: base))
+}
+
 # checkUnresolvedMember -- the member did not resolve on the base type. On a
 # type parameter nothing is diagnosed: every member use -- a method, a field,
 # an operator -- is the instance's to resolve; everything else is diagnosed
@@ -31922,6 +31972,8 @@ checkUnresolvedMember: function {
     # type, a generic sum template: the construction is refused by the rule it
     # breaks, in the words every other spelling of it uses, not as a missing
     # member
+    if cnId == zast.wellKnown.slot.wkCreate when (appliedTemplateBase :st :ast :bt base: dp.parent
+    ) then return ztypes.tid.zero
     if cnId == zast.wellKnown.slot.wkCreate when (refuseNameConstruction
         :ast
         :st

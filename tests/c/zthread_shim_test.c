@@ -16,6 +16,7 @@
 #if !defined(_WIN32)
 #include <unistd.h>
 #include <sys/syscall.h>
+#include <time.h>
 #endif
 
 static void z_panic(const char* msg) {
@@ -204,7 +205,16 @@ int main(void) {
 
     start_or_die(&ts[0], detached, "detached");
     CHECK(z_thread_detach(&ts[0]) == 0, "detach");
-    for (int spins = 0; z_thread_live() != 0 && spins < 100000; spins++) z_thread_yield();
+    /* a loaded machine may not run the detached thread for a while: wait up to
+       10 s, by the clock rather than a spin count */
+    for (int waited = 0; z_thread_live() != 0 && waited < 10000; waited++) {
+#if defined(_WIN32)
+        Sleep(1);
+#else
+        struct timespec ms = { 0, 1000000L };
+        nanosleep(&ms, NULL);
+#endif
+    }
     CHECK(Z_ATOMIC_LOAD(&detached_ran, Z_ACQUIRE) == 1, "detached thread ran");
     CHECK(z_thread_live() == 0, "live count back to zero");
     CHECK(z_thread_self_id() != 0, "a thread id");

@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Zerolang Standard Library -- thread</title>
+<link rel="stylesheet" href="style/zerolang.css">
+<link rel="icon" href="style/favicon-192x192.png" type="image/png" sizes="192x192">
+<link rel="icon" href="style/favicon-48x48.ico" type="image/x-icon">
+<link rel="icon" href="style/favicon-32x32.png" type="image/png" sizes="32x32">
+<link rel="icon" href="style/favicon-16x16.png" type="image/png" sizes="16x16">
+<script src="style/tocbot.min.js"></script>
+<script src="style/init.js"></script>
+<script src="style/prism.min.js"></script>
+<script src="style/prism-zerolang.js"></script>
+<meta name="author" content="pw &lt;p@zerolang.org&gt;">
+<meta name="datecreated" content="2026-10-17">
+<meta name="version" content="v0.1">
+</head>
+<body class="toc-sidebar">
+<nav id="nav">
+  <div class="doc-wrapper">
+    <a title="Zerolang" href="./index.html">Zerolang</a>
+  </div>
+
+  <label>
+    <input id="mode-checkbox" class="mode-checkbox" type="checkbox" />
+    <div class="mode-slot">
+      <div class="sun-icon-wrapper">
+        <svg
+          class="sun-icon"
+          xmlns="http://www.w3.org/2000/svg"
+          width="24"
+          height="24"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <circle cx="12" cy="12" r="5"></circle>
+          <line x1="12" y1="1" x2="12" y2="3"></line>
+          <line x1="12" y1="21" x2="12" y2="23"></line>
+          <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+          <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+          <line x1="1" y1="12" x2="3" y2="12"></line>
+          <line x1="21" y1="12" x2="23" y2="12"></line>
+          <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+          <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+        </svg>
+      </div>
+      <div class="mode-button"></div>
+      <div class="moon-icon-wrapper">
+        <svg
+          class="moon-icon"
+          xmlns="http://www.w3.org/2000/svg"
+          width="24"
+          height="24"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+        </svg>
+      </div>
+    </div>
+  </label>
+
+
+</nav>
+<header>
+<h1 id="thread"><a href="#thread">thread</a></h1>
+</header>
+<nav class="toc-sidebar" id="toc">
+<div id="tocfile">
+Table of Contents</div>
+
+<ul>
+<li><a href="#thread">thread</a>
+<ul>
+<li><a href="#overview">Overview</a>
+</li>
+<li><a href="#tasks-and-handles">Tasks and handles</a>
+</li>
+<li><a href="#borrowing-tasks">Borrowing tasks</a>
+</li>
+<li><a href="#panics">Panics</a>
+</li>
+<li><a href="#building">Building</a>
+</li>
+</ul>
+</li>
+</ul>
+
+</nav>
+<main id="content">
+<h2 id="overview"><a href="#overview">1. Overview</a></h2>
+<p>The declarations live in <code>lib/system/thread.z</code>, each with its own doc
+comment; this page is the prose and the worked examples.</p>
+<p>The <code>thread</code> unit runs work on its own operating-system thread. The work is
+a <code>Task</code> -- a class that declares it conforms (<code>task: thread.Task</code>) and
+has a <code>call</code> method. The task is <strong>moved</strong> to the thread when it starts, so
+nothing else can touch it while it runs, and <code>join</code> hands it back:</p>
+<pre><code class="language-zerolang">  # Counter -- counts on its own thread
+  Counter: class {
+      # how far it counted
+      n: i64
+  } as {
+      task: thread.Task
+      call: function {:this} is {
+          i: 0.i64
+          for i &lt; 1000 loop {
+              this.n = this.n + 1
+              i = i + 1
+          }
+      }
+  }
+
+  main: function is {
+      h: thread.spawn task: (Counter n: 0) name: "counter"
+      done: h.join
+      print "counted \{done.n}"
+  }</code></pre>
+<p>There are no shared mutable variables to protect by hand: what a thread uses is
+either moved to it or borrowed by it, and the lock model below keeps the owner
+away from what a running task borrows. The <code>sync</code> unit (<code>Mutex</code>,
+<code>Channel</code> and the rest) is for data that really is shared.</p>
+<h2 id="tasks-and-handles"><a href="#tasks-and-handles">2. Tasks and handles</a></h2>
+<ul>
+<li><strong>Task</strong> -- <code>protocol { call: function {:this} }</code>. The thread's body;
+it runs once. A task is any class that declares <code>task: thread.Task</code>.</li>
+<li><strong>spawn</strong> -- <code>function {task: T.take name: "" stackSize: 0} outx
+    (JoinHandle T)</code>. Starts the task. <code>name</code> labels the thread for
+debuggers and <code>top</code> (15 bytes are kept); a <code>stackSize</code> of <code>0</code> is the
+default, 8 MiB -- the main thread's usual size, so a program that recurses
+deeply on main recurses as deeply on a thread.</li>
+<li><strong>JoinHandle</strong> -- the started thread. <code>join</code> waits for it and answers
+the task; <code>isFinished</code> says whether <code>join</code> would wait; <code>id</code> is the
+thread's id as the operating system numbers it (<code>0</code> once joined).
+<strong>Destroying a handle that was never joined joins it</strong>: a scope cannot end
+while a thread it started still uses what the scope owns.</li>
+<li><strong>spawnDetached</strong> -- the same start with no handle: the thread runs to
+its end on its own and frees its task. The program may end while it still
+runs.</li>
+<li><strong>yieldNow</strong> -- let another thread run.</li>
+</ul>
+<p>Read bare, a value whose type has a <code>call</code> is <strong>called</strong> -- a task is an
+iterator-shaped value in that respect -- so a task held in a variable is passed
+with <code>.take</code>: <code>thread.spawn task: t.take</code>.</p>
+<h2 id="borrowing-tasks"><a href="#borrowing-tasks">3. Borrowing tasks</a></h2>
+<p>A task may hold borrows -- a <code>.borrow</code> field into data its owner keeps. The
+handle carries the task's locks (<code>spawn</code> is <code>outx</code>), so while the handle
+lives, or the task <code>join</code> answered, the owner can neither write nor read nor
+drop what the task borrows, and two running tasks cannot borrow one source:</p>
+<pre><code class="language-zerolang">  # Summer -- sums a list its owner lends it
+  Summer: class {
+      # the borrowed input
+      xs: (ListVal i64).borrow
+      # the answer
+      total: i64
+  } as {
+      task: thread.Task
+      call: function {:this} is {
+          for each x: this.xs loop this.total = this.total + x
+      }
+  }
+
+  main: function is {
+      xs: ListVal i64
+      xs.append 1
+      xs.append 2
+      {
+          h: thread.spawn task: (Summer :xs total: 0)
+          s: h.join
+          print "summed \{s.total}"
+      }
+      xs.append 3
+      print "the owner writes again: \{xs.length}"
+  }</code></pre>
+<p>Inside the inner block <code>xs.append 3</code> is refused (<code>exclusive lock held by
+'h'</code>); after it, the lock is gone. <code>join</code> is <code>{:this} outx T</code>: the task it
+answers keeps the handle locked, which is what keeps the task's borrows alive.</p>
+<p><code>spawnDetached</code> is <code>out</code>, not <code>outx</code>: nothing would keep what a detached
+task borrows alive, so a task holding a borrow is refused there.</p>
+<h2 id="panics"><a href="#panics">4. Panics</a></h2>
+<p>A panic on any thread ends the whole program, with status <code>1</code>: the panic is
+reported once, however many threads panic, and the process ends without running
+exit handlers under the other threads' feet. There is no catching it and no
+poisoned state to recover.</p>
+<h2 id="building"><a href="#building">5. Building</a></h2>
+<p>A program that starts a thread links <code>pthread</code> (the <code>zlink:</code> line of its C
+says so), and its C differs from a program that does not only where threads
+need it -- the panic above. Programs that start no thread compile exactly as
+they did. The C layer is <code>src/runtime/natives/_Z_THREAD_SHIM.inc</code>: pthreads
+on Linux and other POSIX systems, Win32 threads on Windows.</p>
+</main>
+</body>
+</html>

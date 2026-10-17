@@ -1,0 +1,57 @@
+# thread_spawn_join.z -- tasks on their own threads: spawn and join answer the
+# task back; a handle that is never joined joins as it is destroyed; a task that
+# borrows its input keeps it locked until the task joined back ends, and the
+# owner writes it again after.
+
+# Counter -- adds to its count on its thread
+Counter: class {
+    # how far it counted
+    n: i64
+    # which counter
+    label: String
+} as {
+    task: thread.Task
+    call: function {:this} is {
+        i: 0.i64
+        for i < 1000 loop {
+            this.n = this.n + 1
+            i = i + 1
+        }
+    }
+}
+
+# Summer -- sums a list its owner lends it
+Summer: class {
+    # the borrowed input
+    xs: (ListVal i64).borrow
+    # the answer
+    total: i64
+} as {
+    task: thread.Task
+    call: function {:this} is {
+        for each x: this.xs loop this.total = this.total + x
+    }
+}
+
+main: function is {
+    h: thread.spawn task: (Counter n: 0 label: "a".string) name: "counter"
+    done: h.join
+    print "\{done.label} counted \{done.n}"
+    {
+        unjoined: thread.spawn task: (Counter n: 5 label: "b".string)
+        thread.yieldNow
+    }
+    print "the unjoined handle joined as it ended"
+    xs: ListVal i64
+    xs.append 1
+    xs.append 2
+    xs.append 3
+    {
+        s: thread.spawn task: (Summer xs: xs total: 0)
+        sum: s.join
+        print "summed \{sum.total}"
+    }
+    xs.append 4
+    print "the owner writes again: \{xs.length}"
+    print "done"
+}

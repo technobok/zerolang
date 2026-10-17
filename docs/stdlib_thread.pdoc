@@ -1,0 +1,151 @@
+#doc.lang: en
+
+#//: Zerolang Standard Library: thread
+
+#doc.title: Zerolang Standard Library -- thread
+#doc.content type=main id=content
+#doc.heading.number level=4
+#doc.heading.anchor level=4
+#doc.link rel=stylesheet href=style/zerolang.css
+#doc.link rel=icon type=image/png sizes=192x192 href=style/favicon-192x192.png
+#doc.link rel=icon type=image/x-icon href=style/favicon-48x48.ico
+#doc.link rel=icon type=image/png sizes=32x32 href=style/favicon-32x32.png
+#doc.link rel=icon type=image/png sizes=16x16 href=style/favicon-16x16.png
+
+#doc.script src=style/tocbot.min.js
+#doc.script src=style/init.js
+#doc.script src=style/prism.min.js
+#doc.script src=style/prism-zerolang.js
+#doc.author: pw <p@zerolang.org>
+#doc.datecreated: 2026-10-17
+#doc.version: v0.1
+
+#doc.body class=toc-sidebar
+#nav id=nav: [#include literal=true: style/nav.html]
+
+#header:
+  #-: thread
+
+#nav id=toc class=toc-sidebar:
+  #div id=tocfile: Table of Contents
+  #doc.toc
+
+
+#--: Overview
+
+The declarations live in #~"lib/system/thread.z", each with its own doc
+comment; this page is the prose and the worked examples.
+
+The #~"thread" unit runs work on its own operating-system thread. The work is
+a #~"Task" -- a class that declares it conforms (#~"task: thread.Task") and
+has a #~"call" method. The task is #b:"moved" to the thread when it starts, so
+nothing else can touch it while it runs, and #~"join" hands it back:
+
+#code language=zerolang name=counter: """
+  # Counter -- counts on its own thread
+  Counter: class {
+      # how far it counted
+      n: i64
+  } as {
+      task: thread.Task
+      call: function {:this} is {
+          i: 0.i64
+          for i < 1000 loop {
+              this.n = this.n + 1
+              i = i + 1
+          }
+      }
+  }
+
+  main: function is {
+      h: thread.spawn task: (Counter n: 0) name: "counter"
+      done: h.join
+      print "counted \{done.n}"
+  }
+"""
+
+There are no shared mutable variables to protect by hand: what a thread uses is
+either moved to it or borrowed by it, and the lock model below keeps the owner
+away from what a running task borrows. The #~"sync" unit (#~"Mutex",
+#~"Channel" and the rest) is for data that really is shared.
+
+#--: Tasks and handles
+
+#ul:
+  [#*: #b:"Task" -- #~"protocol { call: function {:this} }". The thread's body;
+    it runs once. A task is any class that declares #~"task: thread.Task".]
+  [#*: #b:"spawn" -- #~"function {task: T.take name: \"\" stackSize: 0} outx
+    (JoinHandle T)". Starts the task. #~"name" labels the thread for
+    debuggers and #~"top" (15 bytes are kept); a #~"stackSize" of #~"0" is the
+    default, 8 MiB -- the main thread's usual size, so a program that recurses
+    deeply on main recurses as deeply on a thread.]
+  [#*: #b:"JoinHandle" -- the started thread. #~"join" waits for it and answers
+    the task; #~"isFinished" says whether #~"join" would wait; #~"id" is the
+    thread's id as the operating system numbers it (#~"0" once joined).
+    #b:"Destroying a handle that was never joined joins it": a scope cannot end
+    while a thread it started still uses what the scope owns.]
+  [#*: #b:"spawnDetached" -- the same start with no handle: the thread runs to
+    its end on its own and frees its task. The program may end while it still
+    runs.]
+  [#*: #b:"yieldNow" -- let another thread run.]
+
+Read bare, a value whose type has a #~"call" is #b:"called" -- a task is an
+iterator-shaped value in that respect -- so a task held in a variable is passed
+with #~".take": #~"thread.spawn task: t.take".
+
+#--: Borrowing tasks
+
+A task may hold borrows -- a #~".borrow" field into data its owner keeps. The
+handle carries the task's locks (#~"spawn" is #~"outx"), so while the handle
+lives, or the task #~"join" answered, the owner can neither write nor read nor
+drop what the task borrows, and two running tasks cannot borrow one source:
+
+#code language=zerolang name=summer: """
+  # Summer -- sums a list its owner lends it
+  Summer: class {
+      # the borrowed input
+      xs: (ListVal i64).borrow
+      # the answer
+      total: i64
+  } as {
+      task: thread.Task
+      call: function {:this} is {
+          for each x: this.xs loop this.total = this.total + x
+      }
+  }
+
+  main: function is {
+      xs: ListVal i64
+      xs.append 1
+      xs.append 2
+      {
+          h: thread.spawn task: (Summer :xs total: 0)
+          s: h.join
+          print "summed \{s.total}"
+      }
+      xs.append 3
+      print "the owner writes again: \{xs.length}"
+  }
+"""
+
+Inside the inner block #~"xs.append 3" is refused (#~"exclusive lock held by
+'h'"); after it, the lock is gone. #~"join" is #~"{:this} outx T": the task it
+answers keeps the handle locked, which is what keeps the task's borrows alive.
+
+#~"spawnDetached" is #~"out", not #~"outx": nothing would keep what a detached
+task borrows alive, so a task holding a borrow is refused there.
+
+#--: Panics
+
+A panic on any thread ends the whole program, with status #~"1": the panic is
+reported once, however many threads panic, and the process ends without running
+exit handlers under the other threads' feet. There is no catching it and no
+poisoned state to recover.
+
+#--: Building
+
+A program that starts a thread links #~"pthread" (the #~"zlink:" line of its C
+says so), and its C differs from a program that does not only where threads
+need it -- the panic above. Programs that start no thread compile exactly as
+they did. The C layer is #~"src/runtime/natives/_Z_THREAD_SHIM.inc": pthreads
+on Linux and other POSIX systems, Win32 threads on Windows.
