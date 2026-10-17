@@ -87,6 +87,8 @@ Table of Contents</div>
 </li>
 <li><a href="#locks">Locks</a>
 </li>
+<li><a href="#waiting">Waiting</a>
+</li>
 <li><a href="#building">Building</a>
 </li>
 </ul>
@@ -189,7 +191,57 @@ is a reference type (<code>AnyRef</code>); wrap a plain value in a class.</p>
       g: m.lock
       print "\{g.value.length} appended"
   }</code></pre>
-<h2 id="building"><a href="#building">4. Building</a></h2>
+<h2 id="waiting"><a href="#waiting">4. Waiting</a></h2>
+<ul>
+<li><strong>Condvar</strong> -- where a thread waits for a condition another makes
+true. Holding a Mutex's guard, the waiter calls <code>g.wait cond: cv</code>:
+it unlocks while it waits and locks again before it returns.
+<code>g.waitTimeout cond: cv ms: 50</code> gives up after the time and answers
+whether it did. The thread that changes the value under the lock calls
+<code>notifyOne</code> or <code>notifyAll</code>. A wait may return with nothing notified,
+so the waiter checks its condition in a loop.</li>
+<li><strong>Barrier</strong> -- <code>create count: n</code>; each <code>wait</code> returns once
+<code>n</code> threads have called it, and answers whether this thread is the
+round's leader (exactly one is). The barrier is then ready for the next
+round.</li>
+</ul>
+<pre><code class="language-zerolang">  # Slot -- a value and whether it is set
+  Slot: class {
+      # whether `value` is set
+      ready: bool
+      # the value
+      value: i64
+  }
+
+  # Setter -- sets the slot, then wakes the waiter
+  Setter: class {
+      # the slot, under its lock
+      m: (sync.Mutex Slot).view
+      # where the waiter waits
+      cv: sync.Condvar.view
+  } as {
+      task: thread.Task
+      call: function {:this} is {
+          {
+              g: this.m.lock
+              with s: g.value do {
+                  s.value = 7
+                  s.ready = true
+              }
+          }
+          this.cv.notifyAll
+      }
+  }
+
+  main: function is {
+      m: (sync.Mutex Slot).create value: (Slot ready: false value: 0)
+      cv: sync.Condvar.create
+      h: thread.spawn task: (Setter :m :cv)
+      g: m.lock
+      for g.value.ready.not loop g.wait cond: cv
+      print "set to \{g.value.value}"
+  }</code></pre>
+<h2 id="building"><a href="#building">5. Building</a></h2>
 <p>A program that uses <code>sync</code> links <code>pthread</code>, like one that starts a thread;
 every class is written from a C template over the shim
 <code>src/runtime/natives/_Z_THREAD_SHIM.inc</code> (pthreads, or Win32 on Windows).</p>

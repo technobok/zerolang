@@ -744,7 +744,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2247848
+ALLOC_BASELINE := 2249423
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1281,7 +1281,7 @@ static-tcc-guard: bin/zc bin/zl bin/zls
 
 # zlink-guard -- how many programs declare a link library: a unit's library goes to
 # the programs that reach it and no others.
-ZLINK_BASELINE := 15
+ZLINK_BASELINE := 17
 
 zlink-guard: bin/zc
 	@n=0; rep=""; \
@@ -1627,7 +1627,8 @@ VIEW_GUARD_PLACEHOLDER := z_List.c.tmpl=@@NAME@@:ListRef z_Map.c.tmpl=@@NAME@@:M
   z_Atomic.c.tmpl=@@NAME@@:Atomic z_AtomicBool.c.tmpl=@@NAME@@:AtomicBool \
   z_Mutex.c.tmpl=@@NAME@@:Mutex z_MutexGuard.c.tmpl=@@NAME@@:MutexGuard \
   z_RwLock.c.tmpl=@@NAME@@:RwLock z_ReadGuard.c.tmpl=@@NAME@@:ReadGuard \
-  z_WriteGuard.c.tmpl=@@NAME@@:WriteGuard \
+  z_WriteGuard.c.tmpl=@@NAME@@:WriteGuard z_Condvar.c.tmpl=@@NAME@@:Condvar \
+  z_Barrier.c.tmpl=@@NAME@@:Barrier \
   z_IdSet.c.tmpl=@@NAME@@:IdSet,@@IDSETITER@@:IdSetIter
 VIEW_GUARD_EMITTED := get:ListRef.get,ListView.get,SpanVal.get getMut:ListRef.getMut \
   slice:ListRef.slice,ListView.slice \
@@ -1650,6 +1651,7 @@ VIEW_GUARD_INTERNAL := String.cat String.print String.free String.eq String.cmp 
   File.destroy Listener.destroy Conn.destroy Database.destroy Statement.destroy Row.destroy \
   Transaction.destroy JoinHandle.destroy Atomic.destroy AtomicBool.destroy \
   Mutex.destroy MutexGuard.destroy RwLock.destroy ReadGuard.destroy WriteGuard.destroy \
+  Condvar.destroy Barrier.destroy \
   thread.start thread.join thread.detach \
   mutex.init mutex.destroy mutex.lock mutex.trylock mutex.unlock \
   rwlock.init rwlock.destroy rwlock.rdlock rwlock.wrlock rwlock.rdunlock rwlock.wrunlock \

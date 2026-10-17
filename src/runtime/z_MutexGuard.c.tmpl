@@ -1,6 +1,7 @@
 /* MutexGuard -- a Mutex's lock, held (sync.z), one copy per value type: the
    lock and the value it guards, both in the Mutex's block, which the guard's
-   pins keep alive. Destroying the guard unlocks. */
+   pins keep alive. Destroying the guard unlocks; `wait` unlocks while it
+   waits on a Condvar and locks again before it returns. */
 typedef struct z_@@NAME@@_t {
     z_mutex_t* m;
     @@T@@* value;
@@ -14,4 +15,14 @@ static void z_@@NAME@@_destroy(z_@@NAME@@_t* g) {
 
 static @@T@@* z_@@NAME@@_value(z_@@NAME@@_t* g) {
     return g->value;
+}
+
+static void z_@@NAME@@_wait(z_@@NAME@@_t* g, z_@@ARG.wait.cond@@_t cond) {
+    if (z_cond_wait(cond.c, g->m) != 0) z_panic("sync.Condvar: wait failed");
+}
+
+static bool z_@@NAME@@_waitTimeout(z_@@NAME@@_t* g, z_@@ARG.waitTimeout.cond@@_t cond, uint64_t ms) {
+    int e = z_cond_timedwait(cond.c, g->m, ms);
+    if (e != 0 && e != ETIMEDOUT) z_panic("sync.Condvar: wait failed");
+    return e == ETIMEDOUT;
 }

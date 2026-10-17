@@ -1,0 +1,45 @@
+# sync_condvar.z -- a thread waits on a Condvar until another sets a flag under
+# the same Mutex and notifies; a wait with nothing to notify it times out.
+
+# Slot -- a value and whether it has been filled
+Slot: class {
+    # whether `value` is set
+    ready: bool
+    # the value
+    value: i64
+}
+
+# Filler -- fills the shared slot, then wakes whoever waits
+Filler: class {
+    # the slot, under its lock
+    m: (sync.Mutex Slot).view
+    # where the waiter waits
+    cv: sync.Condvar.view
+} as {
+    task: thread.Task
+    call: function {:this} is {
+        {
+            g: this.m.lock
+            with s: g.value do {
+                s.value = 42
+                s.ready = true
+            }
+        }
+        this.cv.notifyAll
+    }
+}
+
+main: function is {
+    m: (sync.Mutex Slot).create value: (Slot ready: false value: 0)
+    cv: sync.Condvar.create
+    h: thread.spawn task: (Filler :m :cv)
+    {
+        g: m.lock
+        for g.value.ready.not loop g.wait cond: cv
+        print "filled with \{g.value.value}"
+    }
+    done: h.join
+    quiet: sync.Condvar.create
+    g: m.lock
+    print "timed out: \{g.waitTimeout cond: quiet ms: 20}"
+}

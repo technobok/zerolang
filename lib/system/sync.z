@@ -101,6 +101,10 @@ MutexGuard: class is native as {
     T: AnyRef.generic
     # the Mutex's value, to read and write while the guard lives
     value: function {:this} outx T.borrow is native
+    # unlock, wait until `cond` is notified, then lock again
+    wait: function {:this cond: Condvar.view} is native
+    # as `wait`, but for at most `ms` milliseconds; answer whether it timed out
+    waitTimeout: function {:this cond: Condvar.view ms: u64} out bool is native
 }
 
 # RwLock -- a value of T that many threads may read at once, or one thread
@@ -128,4 +132,28 @@ WriteGuard: class is native as {
     T: AnyRef.generic
     # the RwLock's value, to read and write while the guard lives
     value: function {:this} outx T.borrow is native
+}
+
+# Condvar -- where threads wait for a condition another thread makes true. A
+# thread holding a Mutex's guard waits with `guard.wait cond: cv`, which unlocks
+# while it waits and locks again before it returns; another thread changes the
+# value under the lock and calls `notifyOne` or `notifyAll`. A wait may return
+# with nothing notified, so the waiter checks its condition in a loop.
+Condvar: class is native as {
+    # a Condvar nothing waits on
+    create: function out type is native
+    # wake one waiting thread, if any waits
+    notifyOne: function {t: this.view} is native
+    # wake every waiting thread
+    notifyAll: function {t: this.view} is native
+}
+
+# Barrier -- where `count` threads wait for each other: each `wait` returns
+# once `count` threads have called it, and the barrier is ready for the next
+# round. One of each round's threads is told it is the leader.
+Barrier: class is native as {
+    # a barrier for `count` threads
+    create: function {count: u64} out type is native
+    # wait for the round's other threads; answer whether this one is the leader
+    wait: function {t: this.view} out bool is native
 }

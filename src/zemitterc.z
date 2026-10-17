@@ -12473,6 +12473,8 @@ emitCtorDefaultsFill: function {
             cargs.append cav
         }
         ccb: ctxCname :ctx tid: cco
+        # a templated class creates through its template's function
+        if (tmplClassRowOf :symtab :ctx :tid) > 0 then ccb = "\{ctxCname :ctx :tid}_create"
         return (stating :facts from: callFacts text: "\{ccb}(\{cargs})")
     }
     fids: ListVal ztypes.tid
@@ -32450,10 +32452,19 @@ demandTmplClassNeeds: function {symtab: zenv.ZSymbolTable.view ctx: Ctx} is {
 }
 
 # tmplClassInProgram -- the templated class `tpl` is written into this
-# program: a generic one has an instance, a non-generic one is demanded
+# program: a generic one has an instance, a non-generic one is made -- its
+# `create` is demanded. Naming the class (a parameter type of another's
+# method) makes none, so it is not enough.
 tmplClassInProgram: function {symtab: zenv.ZSymbolTable.view tpl: ztypes.tid} out bool is {
     if (isGenericType :symtab tid: tpl) then return (classHasInstance :symtab :tpl)
-    return (symtab.typing.declIsDefined declId: (ztypecheck.declOfTypeId st: symtab tid: tpl))
+    # `--eager` reaches every definition but resolves no native create: the
+    # class is written when it is
+    if symtab.typing.eagerAll then return (symtab.typing.declIsDefined
+        declId: (ztypecheck.declOfTypeId st: symtab tid: tpl)
+    )
+    cd: symtab.typing.declMemberIdOf parentTypeId: tpl nameId: zast.wellKnown.slot.wkCreate
+    if cd.isZero then return false
+    return (symtab.typing.declIsDefined declId: cd)
 }
 
 # classHasInstance -- some type is an instance of the template `tpl`
@@ -38371,7 +38382,7 @@ monoMapKV: function {symtab: zenv.ZSymbolTable.view monoId: ztypes.tid acc: List
 # arguments by value (a JoinHandle's task), and answers other instances by
 # value (a Mutex's guard): each is an ordering edge
 tmplInstArgIds: function {
-    symtab: zenv.ZSymbolTable.view monoId: ztypes.tid acc: ListVal ztypes.tid
+    symtab: zenv.ZSymbolTable.view ctx: Ctx.view monoId: ztypes.tid acc: ListVal ztypes.tid
 } is {
     td: ztypecheck.declOfTypeId st: symtab tid: (originTidOf :symtab tid: monoId)
     if td.isZero.not then {
@@ -38381,7 +38392,8 @@ tmplInstArgIds: function {
             k = k + 1
         }
     }
-    # and each instance its methods answer (@@OUT.<m>@@): a prototype names it
+    # and each templated class or mono its methods answer or take (@@OUT.<m>@@,
+    # @@ARG.<m>.<p>@@): a prototype names it
     slot: u64
     for slot < (symtab.typing.declRowSlots ownerTid: monoId) loop {
         rw: symtab.typing.declRowAt ownerTid: monoId membersOnly: true :slot
@@ -38389,11 +38401,24 @@ tmplInstArgIds: function {
         if rw.keep when (
             (symtab.reg.typetypeOf typeId: rw.tid) == ztypes.ztypetype.functionType
         ) then {
-            ans: instTypeOf :symtab inst: monoId tid: (symtab.reg.returnTypeOf tid: rw.tid)
-            if ans.isZero.not when ans != monoId when (originTidOf :symtab tid: ans
-            ).isZero.not then acc.append ans
+            sig: ListVal ztypes.tid
+            sig.append (symtab.reg.returnTypeOf tid: rw.tid)
+            names: ListVal zast.nameid
+            recFieldIds :symtab tid: rw.tid ids: sig nameIds: names
+            for each st: sig loop {
+                it: instTypeOf :symtab inst: monoId tid: st
+                if it != monoId when (tmplSigEdge :symtab :ctx tid: it) then acc.append it
+            }
         }
     }
+}
+
+# tmplSigEdge -- a type a templated class's signature names that orders the
+# class after it: a mono, or a templated class the program has
+tmplSigEdge: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.tid} out bool is {
+    if (tmplTypeMade :symtab :ctx :tid).not then return false
+    if (originTidOf :symtab :tid).isZero.not then return true
+    return (tmplClassRowOf :symtab :ctx :tid) > 0
 }
 
 # isArmWrapMono -- a mono whose elements are its arms' payloads: an option or
@@ -38456,7 +38481,7 @@ monoElemIdsOf: function {
         return
     }
     if (tmplClassRowOf :symtab :ctx tid: monoId) > 0 then {
-        tmplInstArgIds :symtab :monoId :acc
+        tmplInstArgIds :symtab :ctx :monoId :acc
         return
     }
     # both append to `acc`
@@ -38857,6 +38882,20 @@ tmplAnswerOf: function {
     return (instTypeOf :symtab :inst tid: (symtab.reg.returnTypeOf tid: mt))
 }
 
+# tmplArgOf -- the type parameter `pid` of the templated instance `inst`'s
+# method `mnId` takes, as the instance sees it (instTypeOf)
+tmplArgOf: function {
+    symtab: zenv.ZSymbolTable.view
+    inst: ztypes.tid
+    mnId: zast.nameid
+    pid: zast.nameid
+} out ztypes.tid is {
+    mt: (symtab.typing.declChildOfId parentTypeId: inst nameId: mnId).or d: ztypes.tid.zero
+    if mt.isZero then return mt
+    pt: (symtab.typing.declChildOfId parentTypeId: mt nameId: pid).or d: ztypes.tid.zero
+    return (instTypeOf :symtab :inst tid: pt)
+}
+
 # instTypeOf -- `tid`, spelled in a template, as the instance `inst` sees it: a
 # type parameter is the instance's argument, and an instance of another
 # generic over them is that generic's instance over the arguments, when the
@@ -38915,11 +38954,13 @@ sameTypeArgs: function {
     return true
 }
 
-# applyAnswerHoles -- each `@@OUT.<method>@@` in a class template: the C name of
-# the type that method of the instance answers (tmplAnswerOf), which a
-# template needs to build an answer of another templated class or a mono. A
-# hole whose type the program never made is left in place, and the function
-# spelling it is dropped (dropUnmadeFns): nothing calls it.
+# applyAnswerHoles -- each `@@OUT.<method>@@` and `@@ARG.<method>.<param>@@`
+# in a class template: the C name of the type the instance's method answers
+# (tmplAnswerOf) or takes as that parameter (tmplArgOf), which a template needs
+# to build an answer of another templated class or a mono, or to read an
+# argument of one. A hole whose type the program does not have is left in
+# place, and the function spelling it is dropped (dropUnmadeFns): nothing
+# calls it.
 applyAnswerHoles: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -38933,24 +38974,22 @@ applyAnswerHoles: function {
     pos: u64
     for pos < sv.length loop {
         rest: sv.substring from: pos to: sv.length
-        ho: rest.indexOf needle: "@@OUT."
+        ho: rest.indexOf needle: "@@"
         if ho.none then {
             res.append rest
             pos = sv.length
         } else {
             at: pos + ho
-            tail: sv.substring from: at + 6 to: sv.length
+            tail: sv.substring from: at + 2 to: sv.length
             en: (tail.indexOf needle: "@@").or d: tail.length
             res.append (sv.substring from: pos to: at)
-            mid: zast.poolFind pool: ast.names text: (tail.substring from: 0 to: en)
-            ans: ztypes.tid
-            if mid.isZero.not then ans = tmplAnswerOf :symtab :inst mnId: mid
+            ht: tmplHoleType :ast :symtab :ctx :inst hole: (tail.substring from: 0 to: en)
             nx: sv.length
-            if (at + 6 + en + 2) <= sv.length then nx = at + 6 + en + 2
-            if ans.isZero then {
+            if (at + 2 + en + 2) <= sv.length then nx = at + 2 + en + 2
+            if ht.isZero then {
                 res.append (sv.substring from: at to: nx)
             } else {
-                res.append (cbaseNoPrefix :ctx tid: ans)
+                res.append (cbaseNoPrefix :ctx tid: ht)
             }
             pos = nx
         }
@@ -38958,9 +38997,52 @@ applyAnswerHoles: function {
     return res
 }
 
-# dropUnmadeFns -- a class template without the functions that still spell an
-# `@@OUT.` hole (applyAnswerHoles): each runs from its `static ...) {` line to
-# the `}` closing it at the start of a line
+# tmplHoleType -- the type an `OUT.<method>` or `ARG.<method>.<param>` hole
+# names for the instance `inst`; 0 for another hole, and for a type the
+# program does not have (tmplTypeMade)
+tmplHoleType: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    inst: ztypes.tid
+    hole: StringView
+} out ztypes.tid is {
+    isOut: hole.startsWith prefix: "OUT."
+    if isOut.not when (hole.startsWith prefix: "ARG.").not then return ztypes.tid.zero
+    rest: hole.substring from: 4 to: hole.length
+    d2: (rest.indexOf needle: ".").or d: rest.length
+    mid: tmplHoleNameId :ast text: (rest.substring from: 0 to: d2)
+    if mid.isZero then return ztypes.tid.zero
+    t: ztypes.tid
+    if isOut when d2 == rest.length then t = tmplAnswerOf :symtab :inst mnId: mid
+    if isOut.not when d2 < rest.length then {
+        pid: tmplHoleNameId :ast text: (rest.substring from: d2 + 1 to: rest.length)
+        if pid.isZero.not then t = tmplArgOf :symtab :inst mnId: mid :pid
+    }
+    if (tmplTypeMade :symtab :ctx tid: t).not then return ztypes.tid.zero
+    return t
+}
+
+# tmplHoleNameId -- a name a template hole spells, as the program interned
+# it; 0 when no declaration uses it
+tmplHoleNameId: function {ast: Ast.view text: StringView} out zast.nameid is {
+    return (zast.poolFind pool: ast.names :text)
+}
+
+# tmplTypeMade -- the program has the type `tid`: a non-generic templated
+# class only when the program makes one (tmplClassInProgram); any other type
+# once it exists
+tmplTypeMade: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.tid} out bool is {
+    if tid.isZero then return false
+    if (originTidOf :symtab :tid).isZero.not then return true
+    if (tmplClassRowOf :symtab :ctx :tid) == 0 then return true
+    return (tmplClassInProgram :symtab tpl: tid)
+}
+
+# dropUnmadeFns -- a class template without the functions that still spell a
+# hole (applyAnswerHoles leaves those whose type the program does not have):
+# each runs from its `static ...) {` line to the `}` closing it at the start of
+# a line
 dropUnmadeFns: function {text: StringView} out String is {
     res: String
     fn: String
@@ -38973,7 +39055,7 @@ dropUnmadeFns: function {text: StringView} out String is {
             fn.append ln
             fn.append "\n"
             if (ln.startsWith prefix: "}") then {
-                if (fn.contains needle: "@@OUT.").not then res.append fn
+                if (fn.contains needle: "@@").not then res.append fn
                 fn = ""
                 inFn = false
             }
@@ -39754,7 +39836,7 @@ collectLateGroup: function {
 }
 
 # collectTmplClassInstances -- every instance of a templated class, and every
-# non-generic templated class the program demands (tmplClassRowOf), in type-id
+# non-generic templated class the program makes (tmplClassRowOf), in type-id
 # order: emitted with the late group, after the user structs an instance may
 # hold, whether or not it holds one
 collectTmplClassInstances: function {

@@ -138,6 +138,60 @@ is a reference type (#~"AnyRef"); wrap a plain value in a class.
   }
 """
 
+#--: Waiting
+
+#ul:
+  [#*: #b:"Condvar" -- where a thread waits for a condition another makes
+    true. Holding a Mutex's guard, the waiter calls #~"g.wait cond: cv":
+    it unlocks while it waits and locks again before it returns.
+    #~"g.waitTimeout cond: cv ms: 50" gives up after the time and answers
+    whether it did. The thread that changes the value under the lock calls
+    #~"notifyOne" or #~"notifyAll". A wait may return with nothing notified,
+    so the waiter checks its condition in a loop.]
+  [#*: #b:"Barrier" -- #~"create count: n"; each #~"wait" returns once
+    #~"n" threads have called it, and answers whether this thread is the
+    round's leader (exactly one is). The barrier is then ready for the next
+    round.]
+
+#code language=zerolang name=condvar: """
+  # Slot -- a value and whether it is set
+  Slot: class {
+      # whether `value` is set
+      ready: bool
+      # the value
+      value: i64
+  }
+
+  # Setter -- sets the slot, then wakes the waiter
+  Setter: class {
+      # the slot, under its lock
+      m: (sync.Mutex Slot).view
+      # where the waiter waits
+      cv: sync.Condvar.view
+  } as {
+      task: thread.Task
+      call: function {:this} is {
+          {
+              g: this.m.lock
+              with s: g.value do {
+                  s.value = 7
+                  s.ready = true
+              }
+          }
+          this.cv.notifyAll
+      }
+  }
+
+  main: function is {
+      m: (sync.Mutex Slot).create value: (Slot ready: false value: 0)
+      cv: sync.Condvar.create
+      h: thread.spawn task: (Setter :m :cv)
+      g: m.lock
+      for g.value.ready.not loop g.wait cond: cv
+      print "set to \{g.value.value}"
+  }
+"""
+
 #--: Building
 
 A program that uses #~"sync" links #~"pthread", like one that starts a thread;

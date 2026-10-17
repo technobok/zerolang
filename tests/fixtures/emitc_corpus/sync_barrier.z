@@ -1,0 +1,37 @@
+# sync_barrier.z -- three threads meet at a barrier twice: none passes a round
+# before all three arrive, and each round has exactly one leader.
+
+# Walker -- counts its arrivals at each round, and whether it led
+Walker: class {
+    # where the threads meet
+    b: sync.Barrier.view
+    # how many threads had finished round one when this one left it
+    arrived: sync.AtomicI64.view
+    # the count it saw after round one
+    seen: i64
+    # how many rounds it led
+    led: i64
+} as {
+    task: thread.Task
+    call: function {:this} is {
+        this.arrived.fetchAdd value: 1
+        if this.b.wait then this.led = this.led + 1
+        this.seen = this.arrived.load
+        if this.b.wait then this.led = this.led + 1
+    }
+}
+
+main: function is {
+    b: sync.Barrier.create count: 3
+    arrived: sync.AtomicI64.create value: 0
+    {
+        x: thread.spawn task: (Walker :b :arrived seen: 0 led: 0)
+        y: thread.spawn task: (Walker :b :arrived seen: 0 led: 0)
+        z: thread.spawn task: (Walker :b :arrived seen: 0 led: 0)
+        dx: x.join
+        dy: y.join
+        dz: z.join
+        print "each saw all three: \{(dx.seen == 3) and (dy.seen == 3) and (dz.seen == 3)}"
+        print "leaders: \{(dx.led + dy.led) + dz.led}"
+    }
+}

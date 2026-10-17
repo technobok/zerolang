@@ -1,0 +1,52 @@
+/* Barrier -- where a fixed number of threads wait for each other (sync.z).
+   One lock and one condition variable in a heap block: each round counts its
+   arrivals, the last one starts the next round and wakes the rest, and a
+   waiter waits until the round it arrived in has ended. */
+typedef struct z_@@NAME@@_blk {
+    z_mutex_t m;
+    z_cond_t c;
+    uint64_t count;
+    uint64_t waiting;
+    uint64_t round;
+} z_@@NAME@@_blk;
+
+typedef struct z_@@NAME@@_t {
+    z_@@NAME@@_blk* b;
+} z_@@NAME@@_t;
+
+static z_@@NAME@@_t z_@@NAME@@_create(uint64_t count) {
+    z_@@NAME@@_t br;
+    br.b = (z_@@NAME@@_blk*)z_xmalloc(sizeof(z_@@NAME@@_blk));
+    if (z_mutex_init(&br.b->m) != 0 || z_cond_init(&br.b->c) != 0) {
+        z_panic("sync.Barrier: the operating system could not make a lock");
+    }
+    br.b->count = count == 0 ? 1 : count;
+    br.b->waiting = 0;
+    br.b->round = 0;
+    return br;
+}
+
+static void z_@@NAME@@_destroy(z_@@NAME@@_t* br) {
+    if (br->b == NULL) return;
+    z_cond_destroy(&br->b->c);
+    z_mutex_destroy(&br->b->m);
+    free(br->b);
+    br->b = NULL;
+}
+
+static bool z_@@NAME@@_wait(const z_@@NAME@@_t* br) {
+    z_@@NAME@@_blk* b = br->b;
+    z_mutex_lock(&b->m);
+    uint64_t round = b->round;
+    b->waiting++;
+    if (b->waiting == b->count) {
+        b->waiting = 0;
+        b->round++;
+        z_cond_broadcast(&b->c);
+        z_mutex_unlock(&b->m);
+        return true;
+    }
+    while (b->round == round) z_cond_wait(&b->c, &b->m);
+    z_mutex_unlock(&b->m);
+    return false;
+}
