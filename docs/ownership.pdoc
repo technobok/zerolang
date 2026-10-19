@@ -1779,6 +1779,62 @@ parameter.
   """
 
 
+#--: Threads
+
+A value reaches another thread only inside a task handed to #~"thread.spawn",
+#~"spawnVal" or #~"spawnDetached" (see [#> to=./stdlib_thread.html: thread]).
+The rules above are what make that safe; threads add no ownership rule of
+their own:
+
+#ul:
+  [#*: an #_+"owned" field -- #~".take", #~".copy", #~".hold" -- moves to the
+    thread with the task and is the thread's own.]
+  [#*: a #~".view" field lends the thread a read. Building the task pins the
+    source, as any construction over a borrow does, and #~"spawn" is a native
+    #~"outx" function, so the pin moves into the #~"JoinHandle" (see
+    #>"locks-move-with-the-value"). While the handle lives the spawning scope
+    may read the source but not write, move or free it: two threads that only
+    read cannot race.]
+  [#*: a #~".borrow" field lends the thread the source exclusively, and the
+    handle's pin is exclusive: the spawning scope cannot touch the source until
+    the handle ends.]
+  [#*: a handle that was never joined is joined when it is destroyed, and the
+    handle lives in the scope that lent. So that scope cannot end -- and free
+    what it lent -- while the thread still uses it: a borrow outlives nothing
+    it borrows from, across threads as within one.]
+  [#*: #~"spawnDetached" keeps no handle, so nothing could hold such a pin; a
+    task that holds a borrow is refused there.]
+  [#*: a channel #~"Sender" takes owned values that hold no lock; a #~".hold"
+    value is sent as a #~".copy".]
+
+#code language=zerolang name=threads_lend: """
+  # Count -- counts the words it is lent, on its own thread
+  Count: class {
+      # the lent words
+      words: (List String).view
+  } as {
+      task: thread.TaskVal u64
+      call: function {:this} out u64 is { return this.words.length }
+  }
+
+  main: function is {
+      words: List String
+      words.append "one".string
+      {
+          h: thread.spawnVal task: (Count :words)
+          # reading the lent list is fine while the thread runs; appending is not
+          print "read here: \{words.length}"
+          print "counted there: \{h.join}"
+      }
+      words.append "two".string
+  }
+"""
+
+What may not cross at all is for the type to declare, not these rules: a lock
+guard (#~"thread.ThreadBound") never leaves its thread, and a SQLite connection
+(#~"thread.Unshareable") may be moved or lent exclusively, never viewed from two
+threads.
+
 #--: Simple Ownership Examples
 
 Before the advanced iterator pattern, here are the common ownership scenarios

@@ -203,6 +203,8 @@ Table of Contents</div>
 </li>
 </ul>
 </li>
+<li><a href="#threads">Threads</a>
+</li>
 <li><a href="#simple-ownership-examples">Simple Ownership Examples</a>
 <ul>
 <li><a href="#owned-valtypes-the-common-case">Owned Valtypes (the common case)</a>
@@ -1733,10 +1735,60 @@ outer: function {t: MyClass.borrow} outx grandchild.borrow is {
     y: x.grandchild    # y borrows from x
     return y           # OK: pin chain traces to t which is non-owned
 }</code></pre>
-<h2 id="simple-ownership-examples"><a href="#simple-ownership-examples">12. Simple Ownership Examples</a></h2>
+<h2 id="threads"><a href="#threads">12. Threads</a></h2>
+<p>A value reaches another thread only inside a task handed to <code>thread.spawn</code>,
+<code>spawnVal</code> or <code>spawnDetached</code> (see <a href="./stdlib_thread.html">thread</a>).
+The rules above are what make that safe; threads add no ownership rule of
+their own:</p>
+<ul>
+<li>an owned field -- <code>.take</code>, <code>.copy</code>, <code>.hold</code> -- moves to the
+    thread with the task and is the thread's own.</li>
+<li>a <code>.view</code> field lends the thread a read. Building the task pins the
+    source, as any construction over a borrow does, and <code>spawn</code> is a native
+    <code>outx</code> function, so the pin moves into the <code>JoinHandle</code> (see
+    <a href="#locks-move-with-the-value">Locks move with the value</a>). While the handle lives the spawning scope
+    may read the source but not write, move or free it: two threads that only
+    read cannot race.</li>
+<li>a <code>.borrow</code> field lends the thread the source exclusively, and the
+    handle's pin is exclusive: the spawning scope cannot touch the source until
+    the handle ends.</li>
+<li>a handle that was never joined is joined when it is destroyed, and the
+    handle lives in the scope that lent. So that scope cannot end -- and free
+    what it lent -- while the thread still uses it: a borrow outlives nothing
+    it borrows from, across threads as within one.</li>
+<li><code>spawnDetached</code> keeps no handle, so nothing could hold such a pin; a
+task that holds a borrow is refused there.</li>
+<li>a channel <code>Sender</code> takes owned values that hold no lock; a <code>.hold</code>
+    value is sent as a <code>.copy</code>.</li>
+</ul>
+<pre><code class="language-zerolang">  # Count -- counts the words it is lent, on its own thread
+  Count: class {
+      # the lent words
+      words: (List String).view
+  } as {
+      task: thread.TaskVal u64
+      call: function {:this} out u64 is { return this.words.length }
+  }
+
+  main: function is {
+      words: List String
+      words.append "one".string
+      {
+          h: thread.spawnVal task: (Count :words)
+          # reading the lent list is fine while the thread runs; appending is not
+          print "read here: \{words.length}"
+          print "counted there: \{h.join}"
+      }
+      words.append "two".string
+  }</code></pre>
+<p>What may not cross at all is for the type to declare, not these rules: a lock
+guard (<code>thread.ThreadBound</code>) never leaves its thread, and a SQLite connection
+(<code>thread.Unshareable</code>) may be moved or lent exclusively, never viewed from two
+threads.</p>
+<h2 id="simple-ownership-examples"><a href="#simple-ownership-examples">13. Simple Ownership Examples</a></h2>
 <p>Before the advanced iterator pattern, here are the common ownership scenarios
 that cover most code.</p>
-<h3 id="owned-valtypes-the-common-case"><a href="#owned-valtypes-the-common-case">12.1. Owned Valtypes (the common case)</a></h3>
+<h3 id="owned-valtypes-the-common-case"><a href="#owned-valtypes-the-common-case">13.1. Owned Valtypes (the common case)</a></h3>
 <pre><code class="language-zerolang">point: record { x: i64 y: i64 }
 
 # Valtype default: borrow (copy). Both p and q are independent owned values.
@@ -1749,7 +1801,7 @@ print_point: function {pt: point} is {
     print "\{pt.x}, \{pt.y}"
 }
 print_point p        # p is copied into the function, p still valid</code></pre>
-<h3 id="owned-and-borrowed-reftypes"><a href="#owned-and-borrowed-reftypes">12.2. Owned and Borrowed Reftypes</a></h3>
+<h3 id="owned-and-borrowed-reftypes"><a href="#owned-and-borrowed-reftypes">13.2. Owned and Borrowed Reftypes</a></h3>
 <pre><code class="language-zerolang">Crate: class { label: String value: i64 }
 
 a: Crate label: "alpha" value: 1   # a is OWNED
@@ -1781,7 +1833,7 @@ print s                          # OK
 
 # c cannot be used here (locked by s)
 # when s falls out of scope, c is unlocked</code></pre>
-<h3 id="compiler-error-messages"><a href="#compiler-error-messages">12.3. Compiler Error Messages</a></h3>
+<h3 id="compiler-error-messages"><a href="#compiler-error-messages">13.3. Compiler Error Messages</a></h3>
 <p>The compiler provides specific error messages for ownership violations,
 including the location of the conflicting operation and a hint suggesting how to
 fix it. For example:</p>
@@ -1798,7 +1850,7 @@ fix it. For example:</p>
 <li>Declaring a non-owned field on a record reports the specific field and
   suggests making the enclosing type a class.</li>
 </ul>
-<h2 id="iterator-pattern"><a href="#iterator-pattern">13. Iterator Pattern</a></h2>
+<h2 id="iterator-pattern"><a href="#iterator-pattern">14. Iterator Pattern</a></h2>
 <p>The iterator pattern is the most common complex use of the ownership system.
 It demonstrates non-owned fields on classes, pinning, private access, and
 scope-based pin lifecycle.</p>
@@ -1808,7 +1860,7 @@ the only legal form of construction inside the constructor body --
 writing <code>return BagIter pos: 0 target: target</code> would recurse into the
 user-defined <code>create</code> and is a compile-time error. See the spec's
 "Implicit Construction" section for the full dispatch rule.</p>
-<h3 id="components"><a href="#components">13.1. Components</a></h3>
+<h3 id="components"><a href="#components">14.1. Components</a></h3>
 <p>An iterator system has three components:</p>
 <ol>
 <li>Container -- the iterable object (typically a class). It has an
@@ -1825,7 +1877,7 @@ iterator and race on the container.</li>
 (a copy) or borrowed (a reference into the container that locks the
 iterator).</li>
 </ol>
-<h3 id="full-example"><a href="#full-example">13.2. Full Example</a></h3>
+<h3 id="full-example"><a href="#full-example">14.2. Full Example</a></h3>
 <p>The canonical class-based iterator (also in
 <code>examples/listiter.z</code>):</p>
 <pre><code class="language-zerolang"># --- Container ---
@@ -1893,7 +1945,7 @@ main: function is {
     # - b is available again
     print "Bag count: \{b.count}"
 }</code></pre>
-<h3 id="pin-lifecycle-in-the-for-loop"><a href="#pin-lifecycle-in-the-for-loop">13.3. Pin Lifecycle in the For-Loop</a></h3>
+<h3 id="pin-lifecycle-in-the-for-loop"><a href="#pin-lifecycle-in-the-for-loop">14.3. Pin Lifecycle in the For-Loop</a></h3>
 <p>The iterator may be created explicitly with <code>with</code> before the <code>for</code>
 loop, and is then walked by the plain binding, which calls it every iteration
 (read bare, an iterator is its <code>call</code>); <code>for each</code> accepts a call that
@@ -1943,7 +1995,7 @@ returns owned <code>optionval</code> copies rather than borrowed views, so each
 <code>call</code> that returns a borrowed view instead keeps a pin on the iterator,
 preventing the next call until the value falls out of scope at the end of
 each loop iteration.</p>
-<h3 id="views"><a href="#views">13.4. Views</a></h3>
+<h3 id="views"><a href="#views">14.4. Views</a></h3>
 <p>The same pattern underlies views. A view is a small class holding a
 <code>.private.borrow</code> field into its source -- for example the <code>StringView</code>
 and <code>ListView</code> types in the standard library. Both are readonly: a view
@@ -1952,7 +2004,7 @@ reads its source, and writing an element in place is the owner's job
 single-owner class, the source stays safely pinned for the view's lifetime
 and no copy of the view can outlive it. See <code>examples/listview.z</code>
 and <code>examples/borrowed_record.z</code> for worked examples.</p>
-<h2 id="container-views-and-pins"><a href="#container-views-and-pins">14. Container Views and Pins</a></h2>
+<h2 id="container-views-and-pins"><a href="#container-views-and-pins">15. Container Views and Pins</a></h2>
 <p>A <code>Map.get</code> over a reftype value does not copy the stored value out --
 it returns an <code>OptionView</code> whose payload is a readonly reference into
 the map's own storage (the valtype-value forms <code>MapRV</code> / <code>MapVV</code>
@@ -2043,7 +2095,7 @@ any function pins it exclusively for the call, because the compiler does
 not look into the callee's body. Read a value out first (scope the view in
 a bare <code>{ }</code> block and <code>.copy</code> what you need) when you must hold data
 across such a call.</p>
-<h2 id="protocol-objects"><a href="#protocol-objects">15. Protocol Objects</a></h2>
+<h2 id="protocol-objects"><a href="#protocol-objects">16. Protocol Objects</a></h2>
 <p>Protocol instances can be created in three ways, each with different ownership
 semantics:</p>
 <ul>
@@ -2100,7 +2152,7 @@ supported: <code>.create</code> already heap-allocates the owned copy
 internally, so composition is unnecessary. The conformance check rejects
 <code>proto.create from: (Box from: x)</code> with a hint steering the user to
 the direct form.</p>
-<h2 id="common-errors"><a href="#common-errors">16. Common Errors</a></h2>
+<h2 id="common-errors"><a href="#common-errors">17. Common Errors</a></h2>
 <table>
 <colgroup>
 <col style="width: 33%">
