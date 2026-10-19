@@ -16440,10 +16440,11 @@ stackCollectionTid: function {
     return (isIdCollectionOriginOf :symtab :ctx :tid)
 }
 
-# callBaseTemp -- the temporary a stack collection or view base that is a call's
-# result is bound to, "" when the base needs none. Every collection leg takes the
-# base's address, and a call's result has none: `(ls.get i: 0).listView` wrote
-# `&z_get(...)`, which C rejects. Bound as a method call's receiver is
+# callBaseTemp -- the temporary a stack collection, view or templated class base
+# that is a call's result is bound to, "" when the base needs none. Every
+# collection leg and every templated method takes the base's address, and a
+# call's result has none: `(ls.get i: 0).listView` wrote `&z_get(...)`, which C
+# rejects. Bound as a method call's receiver is
 callBaseTemp: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -16459,6 +16460,7 @@ callBaseTemp: function {
     # address too
     isView: isListViewOriginOf :symtab :ctx tid: nlid
     if (dataValueFamilyOf :symtab :ctx tid: nlid).isZero.not then isView = true
+    if (tmplClassRowOf :symtab :ctx tid: nlid) > 0 then isView = true
     if (stackCollectionTid :symtab :ctx tid: nlid).not when isView.not then return ""
     if (canTakeAddress f: baseF) then return ""
     return (hoistForAddress
@@ -42176,6 +42178,50 @@ nativeCallRecvExpr: function {
     return "&\{recvC}"
 }
 
+# nativeValueRecvNode -- the receiver of a native method call that is a
+# templated class's value a call computes, when the call has no variable or
+# field path receiver (`bnid` 0); 0 otherwise
+nativeValueRecvNode: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    calr: astnode.view
+    bnid: zast.nodeid
+} out zast.nodeid is {
+    if bnid.isZero.not then return zast.nodeid
+    rn: dottedParentNodeId n: calr
+    if rn.isZero then return zast.nodeid
+    if (tmplClassRowOf :symtab :ctx tid: (stampIdOf :symtab nid: rn)) == 0 then return zast.nodeid
+    return rn
+}
+
+# nativeValueRecvExpr -- the address a native method takes a receiver a call
+# computes by: the value bound to a temporary first (callBaseTemp); "" for no
+# such receiver (`recvNid` 0)
+nativeValueRecvExpr: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    # the receiver's class
+    cid: ztypes.tid
+    recvNid: zast.nodeid
+} out String is {
+    if recvNid.isZero then return ""
+    rvF: cfacts
+    rv: emitExprWith :ast :symtab :ctx n: (ast.nodes.get i: recvNid) facts: rvF
+    rvt: (callBaseTemp
+        :ast
+        :symtab
+        :ctx
+        nlid: cid
+        base: rv.stringView
+        baseF: rvF
+        nstPtr: false
+        baseNid: recvNid
+    )
+    if rvt.length > 0 then rv = rvt.take
+    return "&(\{rv})"
+}
+
 # emitClassNativeCall -- a call of a class's NATIVE method that a natives.tbl
 # fragment row implements: `<class>_<method>(&recv, args...)`, the receiver by
 # pointer and each argument as its parameter's type says (nativeMethodArgForm),
@@ -42192,6 +42238,8 @@ emitClassNativeCall: function {
     calr: ast.nodes.get i: call.callable
     bn: dottedBaseAtom :ast n: calr
     bnid: nativeCallRecvNode :ast :calr
+    valRecv: nativeValueRecvNode :symtab :ctx :calr :bnid
+    if bnid.isZero then bnid = valRecv
     if bnid.isZero then return ""
     mnId: aliasChildNameId :ast :symtab n: calr
     cid: nativeMethodOwnerOf :symtab nid: bnid :mnId
@@ -42217,7 +42265,8 @@ emitClassNativeCall: function {
         demandNativeRow :ctx :row key: key.stringView
     }
     fc: ctxCname :ctx tid: cid
-    recvExpr: nativeCallRecvExpr :ast :symtab :ctx :calr :bn :bnid
+    recvExpr: nativeValueRecvExpr :ast :symtab :ctx :cid recvNid: valRecv
+    if valRecv.isZero then recvExpr = nativeCallRecvExpr :ast :symtab :ctx :calr :bn :bnid
     pNames: List String
     pIds: ListVal ztypes.tid
     pNameIds: ListVal zast.nameid
