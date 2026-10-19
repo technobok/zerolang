@@ -9,7 +9,10 @@
 # An object is compiled once per (source, compiler, family, target, flags) and
 # kept in the cache directory under that key's hash -- always `-O2 -DNDEBUG -w`
 # and the row's defines, whatever the program is built with, so a debug build
-# does not rebuild a library and every object agrees on the defines. Builds
+# does not rebuild a library and every object agrees on the defines. The one
+# exception is a sanitizer (`-fsanitize=...` in the program's flags): it watches
+# only the code it instrumented -- ThreadSanitizer cannot see a race inside a
+# library built without it -- so it is added, and keys the object. Builds
 # running at once share one compile: `mkdir <key>.lock` is the atomic claim,
 # the winner compiles to a name of its own and renames it into place, and the
 # others wait for the object.
@@ -18,6 +21,7 @@
 # other top-level definitions are private to this unit.
 public: unit {
     :csrcsOf
+    :sanitizerFlags
     :objectsFor
     :objectCacheDir
 }
@@ -68,6 +72,20 @@ objectCacheDir: function out String is {
     return (zcheck.joinPath a: root.stringView b: "zerolang/obj")
 }
 
+# sanitizerFlags -- the words of a program's C flags that name a sanitizer
+# (`-fsanitize=...`, `-fno-sanitize...`), space-separated: the flags every
+# object it links is compiled with too
+sanitizerFlags: function {cflags: StringView} out String is {
+    r: String
+    for each w: (cflags.split sep: " ") loop {
+        if (w.startsWith prefix: "-fsanitize") or (w.startsWith prefix: "-fno-sanitize") then {
+            if r.length > 0 then r.append " "
+            r.append w
+        }
+    }
+    return r
+}
+
 # objectsFor -- the object file of every C source an emitted C file's header
 # names, compiled into the cache first where it is not there yet; err with the
 # reason, which names the source, when one cannot be had
@@ -88,10 +106,22 @@ objectsFor: function {
     tccDir: StringView
     # build through libtcc in this process rather than spawning `cc`
     inproc: bool
+    # the program's sanitizer flags (sanitizerFlags), added to every object's
+    sanitize: StringView
 } out (Result (List String) E: String) is {
     objs: List String
     for each line: (csrcsOf :csrc) loop {
-        o: objectFor line: line.stringView :cc :ccId :family :isTcc :triple :tccDir :inproc
+        o: (objectFor
+            line: line.stringView
+            :cc
+            :ccId
+            :family
+            :isTcc
+            :triple
+            :tccDir
+            :inproc
+            :sanitize
+        )
         match (
             o
         ) case ok then {
@@ -114,9 +144,14 @@ objectFor: function {
     triple: StringView
     tccDir: StringView
     inproc: bool
+    sanitize: StringView
 } out (Result String E: String) is {
     rel: csrcPathOf :line
     flags: csrcFlagsOf :line
+    if sanitize.length > 0 then {
+        flags.append " "
+        flags.append sanitize
+    }
     vdir: zcheck.resolveVendorDir
     src: zcheck.joinPath a: vdir.stringView b: rel.stringView
     rt: io.readText path: src

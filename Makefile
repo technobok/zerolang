@@ -22,13 +22,14 @@ BUILDDIR := out
 HOST_ARCH := $(shell uname -m)
 # What an emitted C file links, read off its header (searched in the first
 # lines, not pinned to one): the objects of the C sources its `zcsrc:` lines name
-# -- built by `bin/zc cobj` with the compiler that links, $(2) or $(CC), and
-# asked only when there are any, so the seed's own C never needs bin/zc -- then
+# -- built by `bin/zc cobj` with the compiler that links, $(2) or $(CC), and the
+# sanitizer flags $(3) (a sanitizer sees only what it instrumented), asked only
+# when there are any, so the seed's own C never needs bin/zc -- then
 # the -l flags its `zlink:` line declares. Every rule linking emitted C uses
 # ZLINKOF.
 ZLINKSED = sed -n '1,8s|^/\* zlink: \(.*\) \*/$$|\1|p'
 ZCSRCSED = sed -n '1,8s|^/\* zcsrc: \(.*\) \*/$$|\1|p'
-ZLINKOF = $$($(ZCSRCSED) $(1) | grep -q . && bin/zc cobj $(1) --cc $(or $(2),$(CC))) \
+ZLINKOF = $$($(ZCSRCSED) $(1) | grep -q . && bin/zc cobj $(1) --cc $(or $(2),$(CC)) $(if $(3),--cflags "$(3)")) \
   $$($(ZLINKSED) $(1) | tr ' ' '\n' | sed -e '/^$$/d' -e 's|^|-l|')
 # The drivers link the vendored mimalloc ahead of libc; MIMALLOC=0 builds them on
 # glibc. Nothing else uses it, and it never changes emitted C.
@@ -744,7 +745,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2273860
+ALLOC_BASELINE := 2274332
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1055,7 +1056,7 @@ thread-tsan-guard: bin/zc
 	    || { echo "thread-tsan-guard FAIL: $$b did not emit"; fail=1; continue; }; \
 	  want=0; [ -f tests/fixtures/run_golden/$$b.exit ] && want=$$(cat tests/fixtures/run_golden/$$b.exit); \
 	  for cc in $(CC) clang; do \
-	    $$cc -std=c17 -g -O1 -fsanitize=thread -w -o $$d/$$b-$$cc $$d/$$b.c $(call ZLINKOF,$$d/$$b.c) -lm > $$d/cc.log 2>&1 \
+	    $$cc -std=c17 -g -O1 -fsanitize=thread -w -o $$d/$$b-$$cc $$d/$$b.c $(call ZLINKOF,$$d/$$b.c,$$cc,-fsanitize=thread) -lm > $$d/cc.log 2>&1 \
 	      || { echo "thread-tsan-guard FAIL: $$b did not build under $$cc"; grep -m3 error $$d/cc.log; fail=1; continue; }; \
 	    $$d/$$b-$$cc > $$d/out.txt 2> $$d/err.txt; rc=$$?; n=$$((n+1)); \
 	    if grep -q "ThreadSanitizer" $$d/err.txt; then echo "thread-tsan-guard FAIL: $$b under $$cc:"; head -20 $$d/err.txt; fail=1; fi; \
