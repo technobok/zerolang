@@ -108,7 +108,8 @@ use at once is a <code>sync</code> value its owner keeps, and each task holds a
 <strong>view</strong> of it -- a <code>.view</code> field. Views coexist, so any number of tasks
 may hold one; the owner can neither drop nor move it while a task that views
 it lives. What may change through a shared view is exactly what the type does
-atomically or under its own lock.</p>
+atomically or under its own lock. A channel is the exception: its two ends
+are owned, and moved to the threads that use them.</p>
 <h2 id="atomics"><a href="#atomics">2. Atomics</a></h2>
 <ul>
 <li><strong>AtomicI32</strong>, <strong>AtomicI64</strong>, <strong>AtomicU32</strong>, <strong>AtomicU64</strong> --
@@ -247,50 +248,60 @@ round.</li>
       print "set to \{g.value.value}"
   }</code></pre>
 <h2 id="channels"><a href="#channels">5. Channels</a></h2>
+<p>A channel is two <strong>owned ends</strong>, each moved to the thread that uses it.</p>
 <ul>
-<li><strong>Channel T</strong> -- a queue threads send values through.
-<code>create capacity: n</code> holds at most <code>n</code> values (<code>0</code>, the default, has
-no limit); <code>send value:</code> moves a value in and waits while the channel
-is full; <code>receive</code> waits for a value and answers it as an
-<code>Option T</code>, <code>none</code> once the channel is closed and drained;
-<code>tryReceive</code> answers <code>none</code> at once when nothing is waiting.
-<code>close</code> says nothing more will come and wakes every receiver; sending
-on a closed channel panics. <code>isClosed</code> and <code>capacity</code> read it.</li>
-<li><strong>ChannelVal t</strong> -- the same for a valtype: values are copied in,
-and <code>receive</code> answers an <code>optionval t</code>.</li>
+<li><strong>Receiver T</strong> -- the one reading end, which owns the channel.
+<code>(sync.Receiver T).create capacity: n</code> holds at most <code>n</code> values
+(<code>0</code>, the default, has no limit). <code>receive</code> waits for a value and
+answers it as an <code>Option T</code>; <code>tryReceive</code> answers <code>none</code> at once
+when nothing is waiting; <code>for each x: rx</code> walks the values as they
+come. A Receiver has no copy: a second reader is a second channel.</li>
+<li><strong>Sender T</strong> -- a sending end. <code>rx.sender</code> makes one and
+<code>tx.copy</code> another. <code>send value:</code> moves a value in, waiting while the
+channel is full, and answers whether the Receiver still lives: when it
+does not, the value is destroyed where it was sent.</li>
+<li><strong>ReceiverVal t</strong> / <strong>SenderVal t</strong> -- the same for a value type:
+values are copied in, and <code>receive</code> answers an <code>optionval t</code>.</li>
+<li><strong>close</strong> -- <code>sync.close sender: tx.take</code> ends a Sender before its
+scope does.</li>
 </ul>
+<p><strong>How a channel ends</strong>: when the last Sender is gone, <code>receive</code> drains what
+is left and then answers <code>none</code>, and <code>for each</code> stops. A Sender held by a
+task ends when the task does -- as its <code>call</code> returns -- so a parent that
+walks a Receiver stops once its producers have returned. A Sender the walking
+thread itself holds would keep the channel open forever: close it first
+(<code>sync.close</code>), or never make one there. When the Receiver ends first, what
+it never took is destroyed with it, and every later <code>send</code> answers
+<code>false</code>.</p>
 <p>Each value goes to exactly one receiver, in the order sent. A value travels to
-another thread, so it may hold no borrow: <code>send</code> refuses one, as every
+another thread, so it may hold no borrow -- <code>send</code> refuses one, as every
 method refuses a lock-holding value (see Ownership, "Locks move with the
-value").</p>
-<pre><code class="language-zerolang">  # Producer -- sends numbered messages
+value") -- and no <code>thread.ThreadBound</code> value either. Two-way traffic is two
+channels: a request may carry a Sender for its own reply, an ordinary owned
+field. A channel with a capacity is bounded both ways: two threads each
+sending to the other's full channel before either receives wait for each
+other forever, so let one side receive before it sends, or leave a capacity
+of <code>0</code>.</p>
+<pre><code class="language-zerolang">  # Producer -- sends numbered messages, then ends, and its Sender with it
   Producer: class {
       # where it sends
-      ch: (sync.Channel String).view
+      tx: sync.Sender String
   } as {
       task: thread.Task null
       call: function {:this} is {
           i: 0.i64
           for i &lt; 3 loop {
-              this.ch.send value: "message \{i}"
+              this.tx.send value: "message \{i}"
               i = i + 1
           }
       }
   }
 
   main: function is {
-      ch: (sync.Channel String).create capacity: 1
-      {
-          p: thread.spawn task: (Producer :ch)
-          n: 0.i64
-          for n &lt; 3 loop {
-              got: ch.receive
-              match got case some then print got case none then null
-              n = n + 1
-          }
-      }
-      ch.close
-      print "after close: \{ch.receive.none}"
+      rx: (sync.Receiver String).create capacity: 1
+      p: thread.spawn task: (Producer tx: rx.sender)
+      for each got: rx loop print got
+      print "the producer is done: \{rx.receive.none}"
   }</code></pre>
 <h2 id="building"><a href="#building">6. Building</a></h2>
 <p>A program that uses <code>sync</code> links <code>pthread</code>, like one that starts a thread;

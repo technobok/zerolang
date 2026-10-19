@@ -862,6 +862,11 @@ indexUnitDefs: function {st: zenv.ZSymbolTable scope: ztypes.declid program: Ast
                 nameId: zast.wellKnown.slot.unThread
             )
             if tro.isZero.not then st.typing.threadUnitRoot = tro
+            syo: (st.typing.declFindChild
+                parentDeclId: st.typing.programRoot
+                nameId: zast.wellKnown.slot.unSync
+            )
+            if syo.isZero.not then st.typing.syncUnitRoot = syo
         }
         # a type minted before the def index existed has no def link; link any
         # still-unlinked named system def now
@@ -38403,6 +38408,7 @@ forOptionElementOf: function {
 forIteratorElementOf: function {
     st: zenv.ZSymbolTable
     ast: Ast
+    unitDecl: ztypes.declid
     vt: ztypes.tid
 } out forelem is {
     fe: forelem elem: ztypes.tid.zero wrapper: vt isView: false
@@ -38410,10 +38416,12 @@ forIteratorElementOf: function {
     # iterator's
     c1: objectCallOf :st :ast t: vt
     if c1.isZero.not then {
-        rv: methodReturnOf :st mid: c1
+        rv0: methodReturnOf :st mid: c1
         match (
-            rv
+            rv0
         ) case some then {
+            # a native's answer is its template's, read through the instance
+            rv: nativeReturnOnInstance :st :ast :unitDecl recvTid: vt ret: rv0
             w2: iterWrapperElem :ast :st wid: rv
             match (
                 w2
@@ -38582,7 +38590,7 @@ bindForIteration: function {
         if (isCallNode n: (ast.nodes.get i: cond.operation)) then {
             probeForCallIteration :st :ast :vt
         }
-        fe = forIteratorElementOf :st :ast :vt
+        fe = forIteratorElementOf :st :ast :unitDecl :vt
     } else {
         fe = forOptionElementOf :st :ast :vt
     }
@@ -47387,6 +47395,7 @@ checkResolvedMethodCall: function {
         path: rtupP
         :pins
     )
+    refuseThreadBoundSend :st :ast :call funcId: dro
     pinCallResult :st funcId: dro :pins recvPath: rtupP recvShared: recvShr
     st.typing.callKind.set key: call.nid value: zast.callkind.regular
     return mres
@@ -48234,7 +48243,53 @@ refuseThreadBoundCrossing: function {
             at: walkTypeOf :st nid: arg.operation
             seen: IdSet ztypes.tid
             bound: threadBoundIn :st :ast tid: at :tb :seen
-            if bound.isZero.not then threadBoundError :st :ast :arg :at :bound :fnId
+            fname: zast.nameTextCopy :ast ref: fnId
+            via: "`thread.\{fname}`"
+            if bound.isZero.not then threadBoundError :st :ast :arg :at :bound via: via.stringView
+        }
+    }
+}
+
+# refuseThreadBoundSend -- a Sender's `send` hands its value to whichever
+# thread receives it: a value holding a `thread.ThreadBound` type at any depth
+# is refused there, as at `thread.spawn`
+refuseThreadBoundSend: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    call: callref
+    funcId: ztypes.tid
+} is {
+    if st.typing.syncUnitRoot.isZero or st.typing.threadUnitRoot.isZero then return
+    fd: declOfTypeId :st tid: funcId
+    if fd.isZero then return
+    if (st.typing.decls.get i: fd).name != zast.wellKnown.slot.wkSend then return
+    sd: (st.typing.declFindChild
+        parentDeclId: st.typing.syncUnitRoot
+        nameId: zast.wellKnown.slot.tySender
+    )
+    if sd.isZero or ((st.typing.declParentOf declId: fd) != sd) then return
+    tbd: (st.typing.declFindChild
+        parentDeclId: st.typing.threadUnitRoot
+        nameId: zast.wellKnown.slot.tyThreadBound
+    )
+    if tbd.isZero then return
+    tb: declTypeIdOf :st declId: tbd
+    ai: u64
+    for ai < call.nargs loop {
+        arg: argRefAt :ast nid: (zast.callArgAt :ast nid: call.nid i: ai)
+        ai = ai + 1
+        if arg.nid.isZero.not then {
+            at: walkTypeOf :st nid: arg.operation
+            seen: IdSet ztypes.tid
+            bound: threadBoundIn :st :ast tid: at :tb :seen
+            if bound.isZero.not then (threadBoundError
+                :st
+                :ast
+                :arg
+                :at
+                :bound
+                via: "a Sender's `send`"
+            )
         }
     }
 }
@@ -48272,24 +48327,27 @@ threadBoundError: function {
     arg: argref
     at: ztypes.tid
     bound: ztypes.tid
-    fnId: zast.nameid
+    # the crossing, as the message names it (`thread.spawn`)
+    via: StringView
 } is {
-    an: specWrittenName :st :ast tid: at
     # an instance is named by its template: the guard, not its arguments
+    att: at
+    ao: st.reg.genericOriginOf tid: at
+    if ao.isZero.not then att = ao
+    an: specWrittenName :st :ast tid: att
     bt: bound
     bo: st.reg.genericOriginOf tid: bound
     if bo.isZero.not then bt = bo
     bn: specWrittenName :st :ast tid: bt
     held: "it holds '\{bn}'"
     if bound == at then held = "it is one"
-    fname: zast.nameTextCopy :ast ref: fnId
     (addError
         :st
         nodeid: arg.nid
         lineno: arg.lineno
         colno: arg.colno
         e: zast.err.ownerError
-        msg: "Cannot hand '\{an}' to another thread with `thread.\{fname}`: \{held}, and a `thread.ThreadBound` value never leaves the thread that made it; make it on the new thread instead"
+        msg: "Cannot hand '\{an}' to another thread with \{via}: \{held}, and a `thread.ThreadBound` value never leaves the thread that made it; make it on the new thread instead"
     )
 }
 

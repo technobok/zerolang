@@ -42,7 +42,8 @@ use at once is a #~"sync" value its owner keeps, and each task holds a
 #b:"view" of it -- a #~".view" field. Views coexist, so any number of tasks
 may hold one; the owner can neither drop nor move it while a task that views
 it lives. What may change through a shared view is exactly what the type does
-atomically or under its own lock.
+atomically or under its own lock. A channel is the exception: its two ends
+are owned, and moved to the threads that use them.
 
 #--: Atomics
 
@@ -197,52 +198,64 @@ unlocks on the thread that locked, so every guard conforms to
 
 #--: Channels
 
+A channel is two #b:"owned ends", each moved to the thread that uses it.
+
 #ul:
-  [#*: #b:"Channel T" -- a queue threads send values through.
-    #~"create capacity: n" holds at most #~"n" values (#~"0", the default, has
-    no limit); #~"send value:" moves a value in and waits while the channel
-    is full; #~"receive" waits for a value and answers it as an
-    #~"Option T", #~"none" once the channel is closed and drained;
-    #~"tryReceive" answers #~"none" at once when nothing is waiting.
-    #~"close" says nothing more will come and wakes every receiver; sending
-    on a closed channel panics. #~"isClosed" and #~"capacity" read it.]
-  [#*: #b:"ChannelVal t" -- the same for a valtype: values are copied in,
-    and #~"receive" answers an #~"optionval t".]
+  [#*: #b:"Receiver T" -- the one reading end, which owns the channel.
+    #~"(sync.Receiver T).create capacity: n" holds at most #~"n" values
+    (#~"0", the default, has no limit). #~"receive" waits for a value and
+    answers it as an #~"Option T"; #~"tryReceive" answers #~"none" at once
+    when nothing is waiting; #~"for each x: rx" walks the values as they
+    come. A Receiver has no copy: a second reader is a second channel.]
+  [#*: #b:"Sender T" -- a sending end. #~"rx.sender" makes one and
+    #~"tx.copy" another. #~"send value:" moves a value in, waiting while the
+    channel is full, and answers whether the Receiver still lives: when it
+    does not, the value is destroyed where it was sent.]
+  [#*: #b:"ReceiverVal t" / #b:"SenderVal t" -- the same for a value type:
+    values are copied in, and #~"receive" answers an #~"optionval t".]
+  [#*: #b:"close" -- #~"sync.close sender: tx.take" ends a Sender before its
+    scope does.]
+
+#b:"How a channel ends": when the last Sender is gone, #~"receive" drains what
+is left and then answers #~"none", and #~"for each" stops. A Sender held by a
+task ends when the task does -- as its #~"call" returns -- so a parent that
+walks a Receiver stops once its producers have returned. A Sender the walking
+thread itself holds would keep the channel open forever: close it first
+(#~"sync.close"), or never make one there. When the Receiver ends first, what
+it never took is destroyed with it, and every later #~"send" answers
+#~"false".
 
 Each value goes to exactly one receiver, in the order sent. A value travels to
-another thread, so it may hold no borrow: #~"send" refuses one, as every
+another thread, so it may hold no borrow -- #~"send" refuses one, as every
 method refuses a lock-holding value (see Ownership, "Locks move with the
-value").
+value") -- and no #~"thread.ThreadBound" value either. Two-way traffic is two
+channels: a request may carry a Sender for its own reply, an ordinary owned
+field. A channel with a capacity is bounded both ways: two threads each
+sending to the other's full channel before either receives wait for each
+other forever, so let one side receive before it sends, or leave a capacity
+of #~"0".
 
 #code language=zerolang name=channel: """
-  # Producer -- sends numbered messages
+  # Producer -- sends numbered messages, then ends, and its Sender with it
   Producer: class {
       # where it sends
-      ch: (sync.Channel String).view
+      tx: sync.Sender String
   } as {
       task: thread.Task null
       call: function {:this} is {
           i: 0.i64
           for i < 3 loop {
-              this.ch.send value: "message \{i}"
+              this.tx.send value: "message \{i}"
               i = i + 1
           }
       }
   }
 
   main: function is {
-      ch: (sync.Channel String).create capacity: 1
-      {
-          p: thread.spawn task: (Producer :ch)
-          n: 0.i64
-          for n < 3 loop {
-              got: ch.receive
-              match got case some then print got case none then null
-              n = n + 1
-          }
-      }
-      ch.close
-      print "after close: \{ch.receive.none}"
+      rx: (sync.Receiver String).create capacity: 1
+      p: thread.spawn task: (Producer tx: rx.sender)
+      for each got: rx loop print got
+      print "the producer is done: \{rx.receive.none}"
   }
 """
 

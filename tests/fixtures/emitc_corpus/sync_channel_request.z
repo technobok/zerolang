@@ -1,0 +1,62 @@
+# sync_channel_request.z -- two-way traffic is two channels: each request
+# carries a Sender for its own reply, an ordinary owned field. Two clients
+# share the server's channel through copies of one Sender; the server answers
+# every request until the last client's copy is gone.
+
+# Request -- a number to square, and where to answer
+Request: class {
+    # the number
+    n: i64
+    # where the answer goes
+    reply: sync.SenderVal i64
+}
+
+# Server -- answers every request until no client is left
+Server: class {
+    # the requests
+    rx: sync.Receiver Request
+} as {
+    task: thread.TaskVal i64
+    call: function {:this} out i64 is {
+        served: 0.i64
+        for each r: this.rx loop {
+            r.reply.send value: r.n * r.n
+            served = served + 1
+        }
+        return served
+    }
+}
+
+# Client -- asks two questions and sums the answers
+Client: class {
+    # where requests go
+    tx: sync.Sender Request
+    # its first number
+    base: i64
+} as {
+    task: thread.TaskVal i64
+    call: function {:this} out i64 is {
+        total: 0.i64
+        k: 0.i64
+        for k < 2 loop {
+            back: (sync.ReceiverVal i64).create capacity: 1
+            this.tx.send value: (Request n: this.base + k reply: back.sender)
+            a: back.receive
+            match (a) case some then total = total + a case none then null
+            k = k + 1
+        }
+        return total
+    }
+}
+
+main: function is {
+    requests: (sync.Receiver Request).create
+    tx: requests.sender
+    server: thread.spawnVal task: (Server rx: requests.take)
+    c1: thread.spawnVal task: (Client tx: tx.copy base: 1)
+    c2: thread.spawnVal task: (Client tx: tx.copy base: 10)
+    sync.close sender: tx.take
+    print "client 1: \{c1.join}"
+    print "client 2: \{c2.join}"
+    print "served \{server.join}"
+}

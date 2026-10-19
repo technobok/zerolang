@@ -1,10 +1,12 @@
 # sync -- share data between threads safely.
 #
-# Every type here is shared by `.view`: a task holds `c: sync.AtomicI64.view`
-# (or a Mutex, a Channel...), several tasks may hold the same one, and the
-# owner keeps it alive -- it can neither drop nor move it while a task that
-# views it lives. What may change through a shared view is exactly what the
-# type does atomically or under its own lock.
+# A Mutex, an RwLock, a Condvar, a Barrier and the atomics are shared by
+# `.view`: a task holds `c: sync.AtomicI64.view`, several tasks may hold the
+# same one, and the owner keeps it alive -- it can neither drop nor move it
+# while a task that views it lives. What may change through a shared view is
+# exactly what the type does atomically or under its own lock. A channel is
+# two owned ends instead: a Receiver, and the Senders it makes, each moved to
+# the thread that uses it.
 #
 # The lock guards conform to `thread.ThreadBound`: a guard unlocks on the thread
 # that locked, so it never reaches another thread.
@@ -171,49 +173,99 @@ Barrier: class is native as {
     wait: function {t: this.view} out bool is native
 }
 
-# Channel -- a queue threads send values through: `send` moves a value in,
-# `receive` hands each value to exactly one receiver, in the order sent. A
-# Channel of capacity 0 grows as it must; one with a capacity holds at most
-# that many, and `send` waits for room. `close` says nothing more will come:
-# `receive` drains what is left, then answers none. Shared by `.view`, as every
-# sync type is; ChannelVal is the twin for valtypes.
-Channel: class is native as {
+# Receiver -- the reading end of a channel, which owns the channel: threads
+# send values to it through Senders it makes (`rx.sender`, then `tx.copy`),
+# and it receives each value once, in the order sent. A Receiver of capacity 0
+# grows as it must; one with a capacity holds at most that many, and a send
+# waits for room. The channel ends when every Sender is gone: `receive` drains
+# what is left, then answers none, and `for each x: rx` stops. When the
+# Receiver ends first, a send answers false and the value is destroyed where
+# it was sent, and what was queued is destroyed with the Receiver.
+Receiver: class is native as {
+    # the values' type
     T: AnyRef.generic
     :Drop
-    # an empty Channel holding at most `capacity` values; 0 for no limit
+    # an empty channel holding at most `capacity` values; 0 for no limit
     create: function {capacity: 0.u64} out type is native
-    # move `value` in, waiting while the Channel is full; sending on a closed
-    # Channel panics
-    send: function {t: this.view value: T.take} is native
-    # wait for a value and take it; none once the Channel is closed and empty
-    receive: function {t: this.view} out Option T is native
-    # take a value if one is waiting; none when the Channel is empty
-    tryReceive: function {t: this.view} out Option T is native
-    # say nothing more will be sent, and wake every waiting receiver
-    close: function {t: this.view} is native
-    # whether `close` was called
-    isClosed: function {t: this.view} out bool is native
+    # a new sending end
+    sender: function {:this} out Sender T is native
+    # wait for a value and take it; none once every Sender is gone and the
+    # channel is empty
+    receive: function {:this} out Option T is native
+    # take a value if one is waiting; none when the channel is empty
+    tryReceive: function {:this} out Option T is native
+    # the values as they come, until every Sender is gone
+    iterate: function {:this} outx ReceiverIter T is native
     # the most values it holds; 0 for no limit
     capacity: function {t: this.view} out u64 is native
 }
 
-# ChannelVal -- Channel for a valtype: each value is copied in and out
-ChannelVal: class is native as {
+# Sending -- a marker: a sending end of a channel, which `close` ends
+Sending: protocol {}
+
+# Sender -- a sending end of a Receiver's channel. Copying it makes another;
+# the channel ends when the last one does.
+Sender: class is native as {
+    # the values' type
+    T: AnyRef.generic
+    :Drop
+    :Sending
+    # move `value` in, waiting while the channel is full; false, the value
+    # destroyed here, once the Receiver is gone
+    send: function {:this value: T.take} out bool is native
+    # another sending end of the same channel
+    copy: function {:this} out type is native
+}
+
+# ReceiverIter -- a Receiver walked by `for each`
+ReceiverIter: class is native as {
+    # the values' type
+    T: AnyRef.generic
+    # wait for the next value; none once every Sender is gone and the channel
+    # is empty
+    call: function {:this} out Option T is native
+}
+
+# ReceiverVal -- Receiver for a value type: each value is copied in and out
+ReceiverVal: class is native as {
     t: anyval.generic
     :Drop
-    # an empty ChannelVal holding at most `capacity` values; 0 for no limit
+    # an empty channel of values holding at most `capacity`; 0 for no limit
     create: function {capacity: 0.u64} out type is native
-    # copy `value` in, waiting while the ChannelVal is full; sending on a
-    # closed ChannelVal panics
-    send: function {t: this.view value: t} is native
-    # wait for a value and take it; none once it is closed and empty
-    receive: function {t: this.view} out optionval t is native
-    # take a value if one is waiting; none when it is empty
-    tryReceive: function {t: this.view} out optionval t is native
-    # say nothing more will be sent, and wake every waiting receiver
-    close: function {t: this.view} is native
-    # whether `close` was called
-    isClosed: function {t: this.view} out bool is native
-    # the most values it holds; 0 for no limit
+    # a new sending end for values
+    sender: function {:this} out SenderVal t is native
+    # wait for a value; none once every SenderVal is gone and nothing is left
+    receive: function {:this} out optionval t is native
+    # a value if one is waiting; none when nothing is
+    tryReceive: function {:this} out optionval t is native
+    # the values as they come
+    iterate: function {:this} outx ReceiverIterVal t is native
+    # the most values it holds, 0 for none
     capacity: function {t: this.view} out u64 is native
+}
+
+# SenderVal -- Sender for a value type
+SenderVal: class is native as {
+    t: anyval.generic
+    :Drop
+    :Sending
+    # copy `value` in, waiting for room; false once the ReceiverVal is gone
+    send: function {:this value: t} out bool is native
+    # another SenderVal of the same channel
+    copy: function {:this} out type is native
+}
+
+# ReceiverIterVal -- a ReceiverVal walked by `for each`
+ReceiverIterVal: class is native as {
+    t: anyval.generic
+    # wait for the next value, none at the end
+    call: function {:this} out optionval t is native
+}
+
+# close -- end a Sender (or a SenderVal) before its scope does: the channel
+# ends when the last one has, so a receiver waiting for more stops waiting
+close: function {sender: S.take} is {
+    sender.drop
+} as {
+    S: Sending.generic
 }

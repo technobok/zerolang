@@ -1,50 +1,70 @@
-# sync_channel.z -- two producers send owned messages through a bounded
-# Channel (they wait while it is full) to the main thread, which receives all
-# of them; after `close` a receive answers none. Values left in a channel when
-# it ends are freed with it.
+# sync_channel.z -- a channel is two owned ends: the Receiver, and the Senders
+# it makes. Two producers each move a Sender to their thread and send through a
+# bounded channel (waiting while it is full); the main thread walks the
+# Receiver with `for each`, which ends when both producers have returned and
+# their Senders with them. A consumer thread owns a Receiver the main thread
+# sends to, and stops when `sync.close` ends the last Sender. A Receiver that
+# ends first makes a send answer false, and what it never took is destroyed
+# with it.
 
 # Producer -- sends `count` messages tagged with its name
 Producer: class {
     # where it sends
-    ch: (sync.Channel String).view
+    tx: sync.Sender String
     # its name
     name: String
     # how many it sends
     count: i64
 } as {
-    task: (thread.Task null)
+    task: thread.Task null
     call: function {:this} is {
         i: 0.i64
         for i < this.count loop {
-            this.ch.send value: "\{this.name}\{i}"
+            this.tx.send value: "\{this.name}\{i}"
             i = i + 1
         }
     }
 }
 
+# Counter -- counts the words it receives until the channel ends
+Counter: class {
+    # where the words come from
+    rx: sync.Receiver String
+} as {
+    task: thread.TaskVal i64
+    call: function {:this} out i64 is {
+        n: 0.i64
+        for each w: this.rx loop n = n + 1
+        return n
+    }
+}
+
 main: function is {
-    ch: (sync.Channel String).create capacity: 4
-    print "capacity \{ch.capacity}"
+    rx: (sync.Receiver String).create capacity: 4
+    print "capacity \{rx.capacity}"
     {
-        a: thread.spawn task: (Producer :ch name: "a".string count: 50)
-        b: thread.spawn task: (Producer :ch name: "b".string count: 50)
+        a: thread.spawn task: (Producer tx: rx.sender name: "a".string count: 50)
+        b: thread.spawn task: (Producer tx: rx.sender name: "b".string count: 50)
         fromA: 0.i64
         n: 0.i64
-        for n < 100 loop {
-            got: ch.receive
-            match (got) case some then {
-                if (got.startsWith prefix: "a") then fromA = fromA + 1
-            } case none then null
+        for each got: rx loop {
+            if (got.startsWith prefix: "a") then fromA = fromA + 1
             n = n + 1
         }
         print "received \{n}, \{fromA} from a"
     }
-    ch.close
-    print "closed: \{ch.isClosed}, receive answers none: \{(ch.receive).none}"
-    spare: (sync.Channel String).create
-    print "unbounded: \{spare.capacity}"
-    spare.send value: "first".string
-    spare.send value: "freed with the channel".string
-    first: spare.tryReceive
-    match (first) case some then print "first in, first out: \{first}" case none then print "empty"
+    print "after every Sender, receive answers none: \{(rx.receive).none}"
+    words: (sync.Receiver String).create
+    tx: words.sender
+    c: thread.spawnVal task: (Counter rx: words.take)
+    tx.send value: "one".string
+    tx.send value: "two".string
+    sync.close sender: tx.take
+    print "the consumer counted \{c.join}"
+    gone: (sync.Receiver String).create
+    gtx: gone.sender
+    gtx.send value: "queued".string
+    print "queued behind the first: \{gtx.send value: "second".string}"
+    gone.drop
+    print "after the Receiver, send answers \{gtx.send value: "late".string}"
 }
