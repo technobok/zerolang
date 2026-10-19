@@ -38667,8 +38667,9 @@ monoDependsOnUser: function {
     return false
 }
 
-# monoIsLate -- the mono embeds a user type by value (a fresh seen per query), or
-# holds a mono the collection pass writes.
+# monoIsLate -- the mono embeds a user type by value (a fresh seen per query),
+# holds a mono the collection pass writes, or holds a templated class, which the
+# late group writes.
 monoIsLate: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -38678,7 +38679,24 @@ monoIsLate: function {
 } out bool is {
     seen: ListVal ztypes.tid
     if (monoDependsOnUser :ast :symtab :ctx :monoId :userList :seen) then return true
+    if (monoHoldsTmplClass :symtab :ctx :monoId) then return true
     return (monoHoldsCollectionPassMono :symtab :ctx :monoId)
+}
+
+# monoHoldsTmplClass -- an element, key or value of the mono is a templated
+# class (tmplClassRowOf), or a value sum over one
+monoHoldsTmplClass: function {
+    symtab: zenv.ZSymbolTable.view ctx: Ctx.view monoId: ztypes.tid
+} out bool is {
+    elems: ListVal ztypes.tid
+    monoElemIdsOf :symtab :ctx :monoId acc: elems
+    for each e: elems loop {
+        ce: chaseAggregateTypedef :symtab :ctx tid: e
+        if (tmplClassRowOf :symtab :ctx tid: ce) > 0 then return true
+        if (isValueSumMono :symtab :ctx tid: ce) when (monoHoldsTmplClass :symtab :ctx monoId: ce
+        ) then return true
+    }
+    return false
 }
 
 # monoHoldsCollectionPassMono -- an element, key or value of the mono is written
