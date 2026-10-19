@@ -1,12 +1,13 @@
 # sync -- share data between threads safely.
 #
-# A Mutex, an RwLock, a Condvar, a Barrier and the atomics are shared by
-# `.view`: a task holds `c: sync.AtomicI64.view`, several tasks may hold the
-# same one, and the owner keeps it alive -- it can neither drop nor move it
-# while a task that views it lives. What may change through a shared view is
-# exactly what the type does atomically or under its own lock. A channel is
-# two owned ends instead: a Receiver, and the Senders it makes, each moved to
-# the thread that uses it.
+# A Mutex, an RwLock, a Condvar, a Barrier and the atomics are HANDLES: each
+# is a pointer to one block of shared state, `x.share` makes another handle to
+# the same block, and the block lives until its last handle ends. Each thread
+# owns its own handle -- `c: x.share` moved into a task -- and changes the
+# shared state through a borrow of it; a `.view` of a handle only reads. A
+# guard keeps the handle it locked through, so a second lock through one
+# handle while a guard lives is refused. A channel is two owned ends instead: a
+# Receiver, and the Senders it makes, each moved to the thread that uses it.
 #
 # The lock guards conform to `thread.ThreadBound`: a guard unlocks on the thread
 # that locked, so it never reaches another thread.
@@ -37,25 +38,26 @@ atomicint: variant { :i32 :i64 :u32 :u64 }
 Atomic: class is native as {
     # the integer type
     t: atomicint.generic
+    :Drop
     # an Atomic holding `value`
     create: function {value: t} out type is native
+    # another handle to the same integer
+    share: function {:this} out type is native
     # the value it holds
     load: function {t: this.view order: memoryorder.seqCst} out t is native
     # replace the value
-    store: function {t: this.view value: t order: memoryorder.seqCst} is native
+    store: function {:this value: t order: memoryorder.seqCst} is native
     # replace the value, and answer the one it held (C11's exchange: `swap` is
     # zerolang's statement)
-    exchange: function {t: this.view value: t order: memoryorder.seqCst} out t is native
+    exchange: function {:this value: t order: memoryorder.seqCst} out t is native
     # store `new` if it holds `current`; answer what it held, so it stored
     # exactly when the answer is `current`. `order` is the success ordering;
     # a failure orders as `order`'s load half
-    compareExchange: function {
-        t: this.view current: t new: t order: memoryorder.seqCst
-    } out t is native
+    compareExchange: function {:this current: t new: t order: memoryorder.seqCst} out t is native
     # add `value` (wrapping), and answer the value it held
-    fetchAdd: function {t: this.view value: t order: memoryorder.seqCst} out t is native
+    fetchAdd: function {:this value: t order: memoryorder.seqCst} out t is native
     # subtract `value` (wrapping), and answer the value it held
-    fetchSub: function {t: this.view value: t order: memoryorder.seqCst} out t is native
+    fetchSub: function {:this value: t order: memoryorder.seqCst} out t is native
 }
 
 # AtomicI32 -- an i32 every thread may read and change at once
@@ -72,18 +74,21 @@ AtomicU64: Atomic u64
 
 # AtomicBool -- a flag every thread may read and change at once
 AtomicBool: class is native as {
+    :Drop
     # an AtomicBool holding `value`
     create: function {value: bool} out type is native
+    # another handle to the same flag
+    share: function {:this} out type is native
     # the value it holds
     load: function {t: this.view order: memoryorder.seqCst} out bool is native
     # replace the value
-    store: function {t: this.view value: bool order: memoryorder.seqCst} is native
+    store: function {:this value: bool order: memoryorder.seqCst} is native
     # replace the value, and answer the one it held (C11's exchange: `swap` is
     # zerolang's statement)
-    exchange: function {t: this.view value: bool order: memoryorder.seqCst} out bool is native
+    exchange: function {:this value: bool order: memoryorder.seqCst} out bool is native
     # store `new` if it holds `current`; answer what it held
     compareExchange: function {
-        t: this.view current: bool new: bool order: memoryorder.seqCst
+        :this current: bool new: bool order: memoryorder.seqCst
     } out bool is native
 }
 
@@ -96,9 +101,12 @@ Mutex: class is native as {
     :Drop
     # a Mutex owning `value`
     create: function {value: T.take} out type is native
+    # another handle to the same Mutex
+    share: function {:this} out type is native
     # wait for the lock, and answer the guard that holds it. The guard keeps
-    # the Mutex, so it cannot be dropped while a guard lives
-    lock: function {t: this.view} outx MutexGuard T is native
+    # this handle, so it can neither be dropped nor lock again while the guard
+    # lives
+    lock: function {:this} outx MutexGuard T is native
 }
 
 # MutexGuard -- the lock on a Mutex, held: `value` reaches what the Mutex owns,
@@ -110,9 +118,9 @@ MutexGuard: class is native as {
     # the Mutex's value, to read and write while the guard lives
     value: function {:this} outx T.borrow is native
     # unlock, wait until `cond` is notified, then lock again
-    wait: function {:this cond: Condvar.view} is native
+    wait: function {:this cond: Condvar} is native
     # as `wait`, but for at most `ms` milliseconds; answer whether it timed out
-    waitTimeout: function {:this cond: Condvar.view ms: u64} out bool is native
+    waitTimeout: function {:this cond: Condvar ms: u64} out bool is native
 }
 
 # RwLock -- a value of T that many threads may read at once, or one thread
@@ -123,10 +131,12 @@ RwLock: class is native as {
     :Drop
     # an RwLock owning `value`
     create: function {value: T.take} out type is native
+    # another handle to the same RwLock
+    share: function {:this} out type is native
     # wait until no thread writes, and answer a guard that reads
-    read: function {t: this.view} outx ReadGuard T is native
+    read: function {:this} outx ReadGuard T is native
     # wait until no thread reads or writes, and answer a guard that writes
-    write: function {t: this.view} outx WriteGuard T is native
+    write: function {:this} outx WriteGuard T is native
 }
 
 # ReadGuard -- a read lock on an RwLock, held; destroying it unlocks
@@ -156,10 +166,12 @@ Condvar: class is native as {
     :Drop
     # a Condvar nothing waits on
     create: function out type is native
+    # another handle to the same Condvar
+    share: function {:this} out type is native
     # wake one waiting thread, if any waits
-    notifyOne: function {t: this.view} is native
+    notifyOne: function {:this} is native
     # wake every waiting thread
-    notifyAll: function {t: this.view} is native
+    notifyAll: function {:this} is native
 }
 
 # Barrier -- where `count` threads wait for each other: each `wait` returns
@@ -169,8 +181,10 @@ Barrier: class is native as {
     :Drop
     # a barrier for `count` threads
     create: function {count: u64} out type is native
+    # another handle to the same barrier
+    share: function {:this} out type is native
     # wait for the round's other threads; answer whether this one is the leader
-    wait: function {t: this.view} out bool is native
+    wait: function {:this} out bool is native
 }
 
 # Receiver -- the reading end of a channel, which owns the channel: threads

@@ -1,10 +1,12 @@
 /* Mutex -- a value of @@T@@ that one thread at a time reaches, through the
    guard `lock` answers (sync.z), one copy per value type. The lock and the
-   value live in a heap block, so neither moves while a thread waits on it or
-   holds it; the Mutex is a pointer to the block. A MutexGuard is
-   `{z_mutex_t* m; T* value}` (z_MutexGuard.c.tmpl): `lock` fills one. */
+   value live in a heap block every handle shares (`share` makes another), so
+   neither moves while a thread waits on it or holds it; the last handle to
+   end frees it. A MutexGuard is `{z_mutex_t* m; T* value}`
+   (z_MutexGuard.c.tmpl): `lock` fills one. */
 typedef struct z_@@NAME@@_blk {
     z_mutex_t m;
+    Z_ATOMIC(uint64_t) refs;
     @@T@@ value;
 } z_@@NAME@@_blk;
 
@@ -16,19 +18,30 @@ static z_@@NAME@@_t z_@@NAME@@_create(@@T@@ value) {
     z_@@NAME@@_t mx;
     mx.b = (z_@@NAME@@_blk*)z_xmalloc(sizeof(z_@@NAME@@_blk));
     if (z_mutex_init(&mx.b->m) != 0) z_panic("sync.Mutex: the operating system could not make a lock");
+    atomic_init(&mx.b->refs, 1);
     mx.b->value = value;
     return mx;
 }
 
-static void z_@@NAME@@_destroy(z_@@NAME@@_t* mx) {
-    if (mx->b == NULL) return;
-    @@T_DESTROY@@(&mx->b->value);
-    z_mutex_destroy(&mx->b->m);
-    free(mx->b);
-    mx->b = NULL;
+static z_@@NAME@@_t z_@@NAME@@_share(z_@@NAME@@_t* h) {
+    Z_ATOMIC_ADD(&h->b->refs, 1, Z_RELAXED);
+    z_@@NAME@@_t s;
+    s.b = h->b;
+    return s;
 }
 
-static z_@@OUT.lock@@_t z_@@NAME@@_lock(const z_@@NAME@@_t* mx) {
+/* the last handle to end destroys what the block holds and frees it */
+static void z_@@NAME@@_destroy(z_@@NAME@@_t* h) {
+    if (h->b == NULL) return;
+    if (Z_ATOMIC_SUB(&h->b->refs, 1, Z_ACQREL) == 1) {
+        @@T_DESTROY@@(&h->b->value);
+        z_mutex_destroy(&h->b->m);
+        free(h->b);
+    }
+    h->b = NULL;
+}
+
+static z_@@OUT.lock@@_t z_@@NAME@@_lock(z_@@NAME@@_t* mx) {
     z_@@OUT.lock@@_t g;
     if (z_mutex_lock(&mx->b->m) != 0) z_panic("sync.Mutex: lock failed");
     g.m = &mx->b->m;

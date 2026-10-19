@@ -1,28 +1,45 @@
 /* Condvar -- where threads wait for a condition (sync.z). The condition
-   variable lives on the heap, so it holds still while threads wait on it; a
-   MutexGuard's `wait` waits on it with the guard's lock. */
+   variable lives in a heap block every handle shares, so it holds still while
+   threads wait on it; a MutexGuard's `wait` waits on it with the guard's
+   lock. */
+typedef struct z_@@NAME@@_blk {
+    z_cond_t c;
+    Z_ATOMIC(uint64_t) refs;
+} z_@@NAME@@_blk;
+
 typedef struct z_@@NAME@@_t {
-    z_cond_t* c;
+    z_@@NAME@@_blk* b;
 } z_@@NAME@@_t;
 
 static z_@@NAME@@_t z_@@NAME@@_create(void) {
     z_@@NAME@@_t cv;
-    cv.c = (z_cond_t*)z_xmalloc(sizeof(z_cond_t));
-    if (z_cond_init(cv.c) != 0) z_panic("sync.Condvar: the operating system could not make a condition variable");
+    cv.b = (z_@@NAME@@_blk*)z_xmalloc(sizeof(z_@@NAME@@_blk));
+    if (z_cond_init(&cv.b->c) != 0) z_panic("sync.Condvar: the operating system could not make a condition variable");
+    atomic_init(&cv.b->refs, 1);
     return cv;
 }
 
-static void z_@@NAME@@_destroy(z_@@NAME@@_t* cv) {
-    if (cv->c == NULL) return;
-    z_cond_destroy(cv->c);
-    free(cv->c);
-    cv->c = NULL;
+static z_@@NAME@@_t z_@@NAME@@_share(z_@@NAME@@_t* h) {
+    Z_ATOMIC_ADD(&h->b->refs, 1, Z_RELAXED);
+    z_@@NAME@@_t s;
+    s.b = h->b;
+    return s;
 }
 
-static void z_@@NAME@@_notifyOne(const z_@@NAME@@_t* cv) {
-    z_cond_signal(cv->c);
+/* the last handle to end destroys what the block holds and frees it */
+static void z_@@NAME@@_destroy(z_@@NAME@@_t* h) {
+    if (h->b == NULL) return;
+    if (Z_ATOMIC_SUB(&h->b->refs, 1, Z_ACQREL) == 1) {
+        z_cond_destroy(&h->b->c);
+        free(h->b);
+    }
+    h->b = NULL;
 }
 
-static void z_@@NAME@@_notifyAll(const z_@@NAME@@_t* cv) {
-    z_cond_broadcast(cv->c);
+static void z_@@NAME@@_notifyOne(z_@@NAME@@_t* cv) {
+    z_cond_signal(&cv->b->c);
+}
+
+static void z_@@NAME@@_notifyAll(z_@@NAME@@_t* cv) {
+    z_cond_broadcast(&cv->b->c);
 }

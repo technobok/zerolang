@@ -1,42 +1,59 @@
 /* Atomic -- one integer every thread reads and changes whole (sync.z), one
-   copy per integer type. The value sits in the struct: a thread reaches it
-   through a view of its owner's, so its address holds while any thread can. */
-typedef struct z_@@NAME@@_t {
+   copy per integer type. The value lives in a heap block every handle
+   shares (`share` makes another), so its address holds while any thread can
+   reach it; the last handle to end frees it. */
+typedef struct z_@@NAME@@_blk {
     Z_ATOMIC(@@t@@) v;
+    Z_ATOMIC(uint64_t) refs;
+} z_@@NAME@@_blk;
+
+typedef struct z_@@NAME@@_t {
+    z_@@NAME@@_blk* b;
 } z_@@NAME@@_t;
 
 static z_@@NAME@@_t z_@@NAME@@_create(@@t@@ value) {
     z_@@NAME@@_t a;
-    atomic_init(&a.v, value);
+    a.b = (z_@@NAME@@_blk*)z_xmalloc(sizeof(z_@@NAME@@_blk));
+    atomic_init(&a.b->v, value);
+    atomic_init(&a.b->refs, 1);
     return a;
 }
 
+static z_@@NAME@@_t z_@@NAME@@_share(z_@@NAME@@_t* a) {
+    Z_ATOMIC_ADD(&a->b->refs, 1, Z_RELAXED);
+    z_@@NAME@@_t s;
+    s.b = a->b;
+    return s;
+}
+
 static void z_@@NAME@@_destroy(z_@@NAME@@_t* a) {
-    (void)a;
+    if (a->b == NULL) return;
+    if (Z_ATOMIC_SUB(&a->b->refs, 1, Z_ACQREL) == 1) free(a->b);
+    a->b = NULL;
 }
 
 static @@t@@ z_@@NAME@@_load(const z_@@NAME@@_t* a, z_@memoryorder@_t order) {
-    return Z_ATOMIC_LOAD((Z_ATOMIC(@@t@@)*)&a->v, z_sync_load_order(order));
+    return Z_ATOMIC_LOAD(&a->b->v, z_sync_load_order(order));
 }
 
-static void z_@@NAME@@_store(const z_@@NAME@@_t* a, @@t@@ value, z_@memoryorder@_t order) {
-    Z_ATOMIC_STORE((Z_ATOMIC(@@t@@)*)&a->v, value, z_sync_store_order(order));
+static void z_@@NAME@@_store(z_@@NAME@@_t* a, @@t@@ value, z_@memoryorder@_t order) {
+    Z_ATOMIC_STORE(&a->b->v, value, z_sync_store_order(order));
 }
 
-static @@t@@ z_@@NAME@@_exchange(const z_@@NAME@@_t* a, @@t@@ value, z_@memoryorder@_t order) {
-    return Z_ATOMIC_XCHG((Z_ATOMIC(@@t@@)*)&a->v, value, z_sync_order(order));
+static @@t@@ z_@@NAME@@_exchange(z_@@NAME@@_t* a, @@t@@ value, z_@memoryorder@_t order) {
+    return Z_ATOMIC_XCHG(&a->b->v, value, z_sync_order(order));
 }
 
-static @@t@@ z_@@NAME@@_compareExchange(const z_@@NAME@@_t* a, @@t@@ current, @@t@@ next, z_@memoryorder@_t order) {
+static @@t@@ z_@@NAME@@_compareExchange(z_@@NAME@@_t* a, @@t@@ current, @@t@@ next, z_@memoryorder@_t order) {
     @@t@@ seen = current;
-    Z_ATOMIC_CAS((Z_ATOMIC(@@t@@)*)&a->v, &seen, next, z_sync_order(order), z_sync_fail_order(order));
+    Z_ATOMIC_CAS(&a->b->v, &seen, next, z_sync_order(order), z_sync_fail_order(order));
     return seen;
 }
 
-static @@t@@ z_@@NAME@@_fetchAdd(const z_@@NAME@@_t* a, @@t@@ value, z_@memoryorder@_t order) {
-    return Z_ATOMIC_ADD((Z_ATOMIC(@@t@@)*)&a->v, value, z_sync_order(order));
+static @@t@@ z_@@NAME@@_fetchAdd(z_@@NAME@@_t* a, @@t@@ value, z_@memoryorder@_t order) {
+    return Z_ATOMIC_ADD(&a->b->v, value, z_sync_order(order));
 }
 
-static @@t@@ z_@@NAME@@_fetchSub(const z_@@NAME@@_t* a, @@t@@ value, z_@memoryorder@_t order) {
-    return Z_ATOMIC_SUB((Z_ATOMIC(@@t@@)*)&a->v, value, z_sync_order(order));
+static @@t@@ z_@@NAME@@_fetchSub(z_@@NAME@@_t* a, @@t@@ value, z_@memoryorder@_t order) {
+    return Z_ATOMIC_SUB(&a->b->v, value, z_sync_order(order));
 }

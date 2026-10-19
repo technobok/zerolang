@@ -104,12 +104,16 @@ Table of Contents</div>
 comment; this page is the prose and the worked examples.</p>
 <p>The <code>sync</code> unit is for data that threads really do share. A thread's own
 work is moved to it or borrowed by it (see <code>thread</code>); what several threads
-use at once is a <code>sync</code> value its owner keeps, and each task holds a
-<strong>view</strong> of it -- a <code>.view</code> field. Views coexist, so any number of tasks
-may hold one; the owner can neither drop nor move it while a task that views
-it lives. What may change through a shared view is exactly what the type does
-atomically or under its own lock. A channel is the exception: its two ends
-are owned, and moved to the threads that use them.</p>
+use at once is a <code>sync</code> value, and each thread holds its own <strong>handle</strong> to
+it. An atomic, a <code>Mutex</code>, an <code>RwLock</code>, a <code>Condvar</code> and a <code>Barrier</code>
+are handles: <code>x.share</code> makes another handle to the same shared state, each
+task owns the one moved into it, and the state lives until the last handle
+ends. A thread changes the state through a <strong>borrow</strong> of its own handle --
+locking, storing, notifying, waiting -- so a <code>.view</code> of a handle only reads
+(<code>load</code> an atomic, ask a channel's <code>capacity</code>). A guard keeps the handle it
+locked through: a second lock through one handle while the guard lives is
+refused, where it would wait for itself forever. A channel is two owned ends
+instead, each moved to the thread that uses it.</p>
 <h2 id="atomics"><a href="#atomics">2. Atomics</a></h2>
 <ul>
 <li><strong>AtomicI32</strong>, <strong>AtomicI64</strong>, <strong>AtomicU32</strong>, <strong>AtomicU64</strong> --
@@ -130,8 +134,8 @@ statement. <code>compareExchange</code> stores <code>new</code> only if the atom
 is <code>current</code>:</p>
 <pre><code class="language-zerolang">  # Adder -- adds to a counter it shares
   Adder: class {
-      # the counter every Adder shares
-      total: sync.AtomicI64.view
+      # its handle to the counter every Adder shares
+      total: sync.AtomicI64
   } as {
       task: thread.Task null
       call: function {:this} is {
@@ -146,8 +150,8 @@ is <code>current</code>:</p>
   main: function is {
       total: sync.AtomicI64.create value: 0
       {
-          a: thread.spawn task: (Adder :total)
-          b: thread.spawn task: (Adder :total)
+          a: thread.spawn task: (Adder total: total.share)
+          b: thread.spawn task: (Adder total: total.share)
       }
       print "total \{total.load}"
       seen: total.compareExchange current: 2000 new: 0
@@ -165,17 +169,18 @@ write: <code>read</code> answers a <strong>ReadGuard</strong> (its <code>value</
 every reader.</li>
 </ul>
 <p>The value is reached only through a guard, so it is never touched unlocked,
-and the lock model keeps the rest straight: a guard keeps its Mutex (the Mutex
-cannot be dropped or moved while one lives), <code>value</code> holds the guard for as
-long as what it answered lives, and a read guard's value cannot be written. T
+and the lock model keeps the rest straight: a guard keeps the handle it locked
+through (the handle can be neither dropped, moved nor locked again while one
+lives), <code>value</code> holds the guard for as long as what it answered lives, and a
+read guard's value cannot be written. T
 is a reference type (<code>AnyRef</code>); wrap a plain value in a class. A guard
 unlocks on the thread that locked, so every guard conforms to
 <code>thread.ThreadBound</code>: it never reaches another thread (see
 <a href="./stdlib_thread.html">thread</a>).</p>
 <pre><code class="language-zerolang">  # Filler -- appends to a list it shares
   Filler: class {
-      # the list every Filler shares
-      m: (sync.Mutex (ListVal i64)).view
+      # its handle to the list every Filler shares
+      m: sync.Mutex (ListVal i64)
   } as {
       task: thread.Task null
       call: function {:this} is {
@@ -191,8 +196,8 @@ unlocks on the thread that locked, so every guard conforms to
   main: function is {
       m: (sync.Mutex (ListVal i64)).create value: ListVal i64
       {
-          a: thread.spawn task: (Filler :m)
-          b: thread.spawn task: (Filler :m)
+          a: thread.spawn task: (Filler m: m.share)
+          b: thread.spawn task: (Filler m: m.share)
       }
       g: m.lock
       print "\{g.value.length} appended"
@@ -221,10 +226,10 @@ round.</li>
 
   # Setter -- sets the slot, then wakes the waiter
   Setter: class {
-      # the slot, under its lock
-      m: (sync.Mutex Slot).view
-      # where the waiter waits
-      cv: sync.Condvar.view
+      # its handle to the slot, under its lock
+      m: sync.Mutex Slot
+      # its handle to where the waiter waits
+      cv: sync.Condvar
   } as {
       task: thread.Task null
       call: function {:this} is {
@@ -242,7 +247,7 @@ round.</li>
   main: function is {
       m: (sync.Mutex Slot).create value: (Slot ready: false value: 0)
       cv: sync.Condvar.create
-      h: thread.spawn task: (Setter :m :cv)
+      h: thread.spawn task: (Setter m: m.share cv: cv.share)
       g: m.lock
       for g.value.ready.not loop g.wait cond: cv
       print "set to \{g.value.value}"

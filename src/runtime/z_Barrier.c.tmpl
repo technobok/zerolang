@@ -1,13 +1,14 @@
 /* Barrier -- where a fixed number of threads wait for each other (sync.z).
-   One lock and one condition variable in a heap block: each round counts its
-   arrivals, the last one starts the next round and wakes the rest, and a
-   waiter waits until the round it arrived in has ended. */
+   One lock and one condition variable in a heap block every handle shares:
+   each round counts its arrivals, the last one starts the next round and
+   wakes the rest, and a waiter waits until the round it arrived in has ended. */
 typedef struct z_@@NAME@@_blk {
     z_mutex_t m;
     z_cond_t c;
     uint64_t count;
     uint64_t waiting;
     uint64_t round;
+    Z_ATOMIC(uint64_t) refs;
 } z_@@NAME@@_blk;
 
 typedef struct z_@@NAME@@_t {
@@ -23,18 +24,29 @@ static z_@@NAME@@_t z_@@NAME@@_create(uint64_t count) {
     br.b->count = count == 0 ? 1 : count;
     br.b->waiting = 0;
     br.b->round = 0;
+    atomic_init(&br.b->refs, 1);
     return br;
 }
 
-static void z_@@NAME@@_destroy(z_@@NAME@@_t* br) {
-    if (br->b == NULL) return;
-    z_cond_destroy(&br->b->c);
-    z_mutex_destroy(&br->b->m);
-    free(br->b);
-    br->b = NULL;
+static z_@@NAME@@_t z_@@NAME@@_share(z_@@NAME@@_t* h) {
+    Z_ATOMIC_ADD(&h->b->refs, 1, Z_RELAXED);
+    z_@@NAME@@_t s;
+    s.b = h->b;
+    return s;
 }
 
-static bool z_@@NAME@@_wait(const z_@@NAME@@_t* br) {
+/* the last handle to end destroys what the block holds and frees it */
+static void z_@@NAME@@_destroy(z_@@NAME@@_t* h) {
+    if (h->b == NULL) return;
+    if (Z_ATOMIC_SUB(&h->b->refs, 1, Z_ACQREL) == 1) {
+        z_cond_destroy(&h->b->c);
+        z_mutex_destroy(&h->b->m);
+        free(h->b);
+    }
+    h->b = NULL;
+}
+
+static bool z_@@NAME@@_wait(z_@@NAME@@_t* br) {
     z_@@NAME@@_blk* b = br->b;
     z_mutex_lock(&b->m);
     uint64_t round = b->round;
