@@ -50277,6 +50277,80 @@ checkConcreteGenericArg: function {
     checkArgTypeMismatch :st :ast :ptid :vt :pnId :arg
 }
 
+# recordArgType -- the walked type of the argument at position `at`; a position
+# no value fills (a type argument) stays zero
+recordArgType: function {argTypes: ListVal ztypes.tid at: u64 tid: ztypes.tid} is {
+    for argTypes.length <= at loop argTypes.append ztypes.tid.zero
+    argTypes.set i: at val: tid
+}
+
+# anyPartialType -- some type of `tids` is partial: declared over a generic
+# parameter
+anyPartialType: function {st: zenv.ZSymbolTable.view tids: (ListVal ztypes.tid).view} out bool is {
+    for each t: tids loop if (st.reg.isPartialOf tid: t) then return true
+    return false
+}
+
+# argParamSlot -- the declared parameter an argument fills: the one its label
+# names (the parameter count for a label naming none), else the `posIdx`th
+argParamSlot: function {arg: argref pNames: (ListVal zast.nameid).view posIdx: u64} out u64 is {
+    if arg.name.isZero then return posIdx
+    i: u64
+    for i < pNames.length loop {
+        if (pNames.get :i) == arg.name then return i
+        i = i + 1
+    }
+    return pNames.length
+}
+
+# checkPartialParamArgs -- an argument to a parameter declared over the
+# function's generic parameters (`j: (Job R).take`) is checked, once the call's
+# instance `mid` fixes the parameter's type, as a concrete call's argument is:
+# a conformer handed to an owned protocol parameter must be wrapped
+# (checkSpecStandIns), exactly as it must when the type is written out.
+checkPartialParamArgs: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    call: callref
+    funcId: ztypes.tid
+    mid: ztypes.tid
+    gparams: (ListVal zast.nameid).view
+    pNames: (ListVal zast.nameid).view
+    pHolderIds: (ListVal ztypes.tid).view
+    # each argument's walked type, by position (inferGenericCallSubs)
+    argTypes: (ListVal ztypes.tid).view
+} is {
+    instIds: ListVal ztypes.tid
+    instNames: ListVal zast.nameid
+    dataFieldIds :st tid: mid ids: instIds nameIds: instNames
+    posIdx: u64
+    k: u64
+    for k < call.nargs loop {
+        arg: argRefAt :ast nid: (zast.callArgAt :ast nid: call.nid i: k)
+        k = k + 1
+        if arg.nid.isZero or (isGenericParamLabel :gparams label: arg.name) then continue
+        slot: argParamSlot :arg :pNames :posIdx
+        posIdx = posIdx + 1
+        if (slot >= pHolderIds.length) or (slot >= instIds.length) then continue
+        if (st.reg.isPartialOf tid: (pHolderIds.get i: slot)).not then continue
+        ptid: instIds.get i: slot
+        vt: ztypes.tid.zero
+        if k <= argTypes.length then vt = argTypes.get i: k - 1
+        if vt.isZero or (typesCompatible :ast :st a: vt b: ptid) then continue
+        aow: argOwnershipOf :st :funcId isCtor: false pnId: (pNames.get i: slot) :vt
+        (noteSpecStandIn
+            :st
+            value: vt
+            spec: ptid
+            nid: arg.nid
+            lineno: arg.lineno
+            colno: arg.colno
+            valueNid: arg.operation
+            owning: aow.isTake
+        )
+    }
+}
+
 # genericArgPreHoist -- what a generic call decides about one argument BEFORE
 # it hoists it, the same three things `checkTypedCallArg` decides: the
 # argument's disposition (which the emitter reads to zero a taken source and
@@ -50412,6 +50486,10 @@ inferGenericCallSubs: function {
     funcId: ztypes.tid
     pHolders: (ListVal zast.nameid).view
     pHolderIds: (ListVal ztypes.tid).view
+    # each argument's walked type, by position (0 for a type argument), kept
+    # only when `wantTypes`
+    argTypes: ListVal ztypes.tid
+    wantTypes: bool
 } is {
     posIdx: u64
     lockMark: st.argLocks.length
@@ -50434,6 +50512,7 @@ inferGenericCallSubs: function {
         spellGenericArgUnderscore :st :ast :unitDecl :funcId :pNames :posIdx :arg
         promoteGenericArgLiteral :st :ast :funcId :pNames :posIdx :arg
         avt: checkValueAt :st :unitDecl :ast nid: arg.operation
+        if wantTypes then recordArgType :argTypes at: kAiter - 1 tid: avt
         # a value that did not type is reported HERE, as the concrete
         # argument walk reports it (walkOneCallArg): the generic leg used to
         # walk on, bind nothing, and let the emitter write the unresolved name
@@ -50885,6 +50964,10 @@ checkGenericCall: function {
     )
     subs: IdMapV zast.nameid v: ztypes.tid
     errI: st.typing.errors.length
+    argTypes: ListVal ztypes.tid
+    # a parameter declared over the generic parameters checks its argument
+    # once the instance exists (checkPartialParamArgs), and needs its type
+    wantTypes: anyPartialType :st tids: pHolderIds
     (inferGenericCallSubs
         :st
         :unitDecl
@@ -50897,6 +50980,8 @@ checkGenericCall: function {
         :funcId
         :pHolders
         :pHolderIds
+        :argTypes
+        :wantTypes
     )
     mname: st.reg.nameOf tid: funcId
     if mname.length == 0 then return ztypes.tid.zero
@@ -50951,6 +51036,17 @@ checkGenericCall: function {
         fallbackArg: ztypes.tid.zero
     )
     noteMonoSite :st mono: mid :call :unitDecl
+    if wantTypes then (checkPartialParamArgs
+        :st
+        :ast
+        :call
+        :funcId
+        :mid
+        :gparams
+        :pNames
+        :pHolderIds
+        :argTypes
+    )
     (substituteGenericReturn
         :st
         :funcId
