@@ -49978,7 +49978,9 @@ healGenericReturn: function {
 # where the name is buried one or more levels inside a composite, so there is no
 # holder to read. The two types must share an origin and an arity, and an
 # argument that is itself a partial recurses -- that is what makes
-# `(Pair t: (Cell :t))` bind at all.
+# `(Pair t: (Cell :t))` bind at all. A parameter over a generic PROTOCOL met by
+# a type that conforms to an instance of it (`(Job R)` met by a `Name` declaring
+# `job: (Job String)`) binds against that instance's arguments.
 bindPartialParamSubs: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -49989,9 +49991,12 @@ bindPartialParamSubs: function {
 } is {
     if (st.reg.isPartialOf tid: paramTid).not then return
     po9: st.reg.genericOriginOf tid: paramTid
-    ao9: st.reg.genericOriginOf tid: argTid
     if po9.isZero then return
-    if (po9 == ao9).not then return
+    if (st.reg.genericOriginOf tid: argTid) != po9 then {
+        conf: conformedInstanceOf :st impl: argTid origin: po9
+        if conf.isZero.not then bindPartialParamSubs :st :ast :gparams :paramTid argTid: conf :subs
+        return
+    }
     n9: st.reg.genericArgCount specId: paramTid
     if (st.reg.genericArgCount specId: argTid) != n9 then return
     i9: u64
@@ -50850,6 +50855,118 @@ reportUninferredCallParam: function {
     )
 }
 
+# inferThroughConformance -- a parameter the arguments did not bind, named as a
+# type argument of another parameter's bound (`J: (Job R).generic`): the
+# argument bound to that other parameter conforms to an instance of the bound's
+# protocol (`Name` declares `job: (Job String)`), and that instance's argument
+# in the same position binds it (R is String). Repeated while it binds more. An
+# argument conforming to no instance of the protocol is refused as any unmet
+# bound is, which is the reason R cannot be inferred.
+inferThroughConformance: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    call: callref
+    tdecl: ztypes.declid
+    gparams: (ListVal zast.nameid).view
+    subs: (IdMapV zast.nameid v: ztypes.tid)
+} is {
+    more: true
+    for more loop {
+        more = false
+        for each pn: gparams loop {
+            av: (subs.get key: pn).or d: ztypes.tid.zero
+            cd: st.reg.genericParamConstraintOf :tdecl paramName: pn
+            if av.isZero.not when cd.boundApp.isZero.not then {
+                bt: boundApplicationTid :ast :st :tdecl app: cd.boundApp
+                if (bindFromConformance :st :tdecl bound: bt arg: av :subs) then more = true
+            }
+        }
+    }
+    refuseNonConformingArgs :st :ast :call :tdecl :gparams :subs
+}
+
+# refuseNonConformingArgs -- an argument bound to a parameter whose bound is an
+# instance of a generic protocol over other parameters (`J: (Job R).generic`)
+# that conforms to no instance of the protocol: the bound is unmet, which is why
+# what it names cannot be inferred
+refuseNonConformingArgs: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    call: callref
+    tdecl: ztypes.declid
+    gparams: (ListVal zast.nameid).view
+    subs: (IdMapV zast.nameid v: ztypes.tid).view
+} is {
+    for each pn: gparams loop {
+        av: (subs.get key: pn).or d: ztypes.tid.zero
+        cd: st.reg.genericParamConstraintOf :tdecl paramName: pn
+        if av.isZero.not when cd.boundApp.isZero.not then {
+            bt: boundApplicationTid :ast :st :tdecl app: cd.boundApp
+            bo: st.reg.genericOriginOf tid: bt
+            if (st.reg.isPartialOf tid: bt) when (conformedInstanceOf :st impl: av origin: bo
+            ).isZero then {
+                an: specWrittenName :st :ast tid: av
+                sn: specWrittenName :st :ast tid: bo
+                pt: zast.nameTextAt :ast ref: pn
+                tdn: qualifiedTemplateName :st :tdecl
+                m: "generic argument '\{an}' does not satisfy constraint '\{sn}' on parameter '\{pt}' of '\{tdn}': it conforms to no instance of it"
+                reportConstraintUnmet :st at: call.nid lineno: call.lineno colno: call.colno msg: m
+            }
+        }
+    }
+}
+
+# bindFromConformance -- each type argument of the partial `bound` that is one
+# of `tdecl`'s unbound parameters, bound to the same argument of the instance of
+# `bound`'s protocol that `arg` conforms to. True when it bound any.
+bindFromConformance: function {
+    st: zenv.ZSymbolTable
+    tdecl: ztypes.declid
+    bound: ztypes.tid
+    arg: ztypes.tid
+    subs: (IdMapV zast.nameid v: ztypes.tid)
+} out bool is {
+    if bound.isZero or (st.reg.isPartialOf tid: bound).not then return false
+    origin: st.reg.genericOriginOf tid: bound
+    if origin.isZero then return false
+    inst: conformedInstanceOf :st impl: arg :origin
+    if inst.isZero then return false
+    bound2: false
+    k: u64
+    for k < (st.reg.genericArgCount specId: bound) loop {
+        ba: st.reg.genericTypeArgAt specId: bound ordinal: k
+        ia: st.reg.genericTypeArgAt specId: inst ordinal: k
+        k = k + 1
+        pn: st.reg.genericParamNameOfTid :tdecl ptid: ba
+        if pn.isZero.not when ia.isZero.not when (subs.has key: pn).not then {
+            subs.set key: pn value: ia
+            bound2 = true
+        }
+    }
+    return bound2
+}
+
+# conformedInstanceOf -- the instance of the generic protocol `origin` that
+# `impl` (or the template it was instantiated from) declares it conforms to;
+# zero for none.
+conformedInstanceOf: function {
+    st: zenv.ZSymbolTable.view impl: ztypes.tid origin: ztypes.tid
+} out ztypes.tid is {
+    og: st.reg.genericOriginOf tid: impl
+    cfId: ztypes.confid
+    for cfId.next < st.typing.nextConf loop {
+        cfId = cfId.next
+        crow: st.typing.conformance.get i: cfId
+        spec: ztypes.tid.zero
+        if crow.implTypeId == impl then spec = crow.specTypeId
+        if spec.isZero when og.isZero.not when crow.implTypeId == og then {
+            spec = instanceSpecOf :st mono: impl spec: crow.specTypeId labelNameId: crow.labelNameId
+        }
+        if spec.isZero.not when (st.reg.genericOriginOf tid: spec) == origin then return spec
+    }
+    return ztypes.tid.zero
+}
+
 # bindCallParams -- a generic call's parameters bound, in declaration order:
 # a numeric one from what the call writes or its default, any other from the
 # inference (`subs`, defaults filled) with its bound checked; each adds its
@@ -50988,6 +51105,7 @@ checkGenericCall: function {
     gsfx4: String
     allOk: true
     gtk4: declOfTypeId :st tid: funcId
+    inferThroughConformance :st :ast :call tdecl: gtk4 :gparams :subs
     vsI: IdMapV zast.nameid v: u64
     # a parameter no argument names takes its default; a numeric one only when
     # the call does not write it
