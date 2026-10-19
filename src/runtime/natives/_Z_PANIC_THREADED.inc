@@ -1,12 +1,16 @@
 #include <stdatomic.h>
-static _Noreturn void z_panic(const char* msg) {
-    /* a program that runs threads: one panic is reported, and the process ends
-       without running exit's handlers under the other threads' feet; a second
-       panicking thread waits here for the end */
-    static atomic_flag z_panicking = ATOMIC_FLAG_INIT;
-    if (atomic_flag_test_and_set(&z_panicking)) {
+/* a program that runs threads ends once: the first thread to end it -- a
+   panic, or os.exit -- flushes and leaves with _exit, so exit's handlers never
+   run under the other threads' feet, and any thread ending it meanwhile waits
+   here for that end */
+static atomic_flag z_ending = ATOMIC_FLAG_INIT;
+static void z_end_claim(void) {
+    if (atomic_flag_test_and_set(&z_ending)) {
         for (;;) pause();
     }
+}
+static _Noreturn void z_panic(const char* msg) {
+    z_end_claim();
     fprintf(stderr, "zpanic: %s\n", msg);
     fflush(NULL);
     _exit(1);

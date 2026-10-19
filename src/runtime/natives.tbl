@@ -124,6 +124,29 @@
 # of the declaration space: a free function's path is `<unit>.<name>`, two
 # segments just like theirs, and `io.readText` and a record's `==` must never be
 # able to name each other.
+#
+# THREADS. The checker moves values between threads and lets several threads
+# read one, so every native's C holds with other threads running:
+#   - a native method's `.view` receiver is a const pointer (view-guard), and
+#     the method writes nothing its object reaches -- no cache, count or cursor
+#     kept in the object (an iterator's cursor is the iterator's own) -- so any
+#     number of threads may read one object at once. A class whose reads drive
+#     C state declares `thread.Unshareable` (sqlite's: a read prepares on the
+#     connection); one whose value must stay on the thread that made it
+#     declares `thread.ThreadBound` (the lock guards).
+#   - what two values share (a sync handle's block) changes only atomically or
+#     under the block's own lock; everything else a value reaches is its own,
+#     and moves with it.
+#   - process-wide state is written before the program's main runs, or by a
+#     `when=threaded` variant that holds with threads running: the argv globals
+#     and the hash seed are set in C's main ahead of z_main; setEnv/unsetEnv
+#     refuse while threads run; a panic or os.exit ends the process once.
+#   - libc calls are the reentrant ones (getpwuid_r; no strerror, strtok or
+#     localtime). The lgamma family writes libc's `signgam`, which nothing here
+#     reads; the result is the call's own.
+#   - a C source a unit builds is built thread-safe in a program that starts
+#     threads (sqlite's THREADSAFE=2), by its `@unit.` row's `when=threaded`
+#     variant.
 
 
 # system.u8
@@ -870,6 +893,7 @@
 [os.cwd pulls=io.@errno frag=_Z_OS_CWD]
 [os.envNames frag=_Z_OS_ENV_NAMES]
 [os.exePath pulls=io.@errno frag=_Z_OS_EXE_PATH]
+[os.exit when=threaded frag=_Z_OS_EXIT_THREADED]
 [os.exit frag=_Z_OS_EXIT]
 [os.homeDir pulls=io.@errno frag=_Z_OS_HOME_DIR]
 [os.hostArchName frag=_Z_OS_HOST_ARCH_NAME]
