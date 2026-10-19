@@ -87,6 +87,8 @@ Table of Contents</div>
 </li>
 <li><a href="#transactions">Transactions</a>
 </li>
+<li><a href="#threads">Threads</a>
+</li>
 <li><a href="#index">Index</a>
 </li>
 <li><a href="#database">database</a>
@@ -299,7 +301,47 @@ against <code>Connection.view</code> runs on either:</p>
       s: q.step
       match s case row then return ((s.integer column: 0).or d: -1) else return -1
   }</code></pre>
-<h2 id="index"><a href="#index">4. Index</a></h2>
+<h2 id="threads"><a href="#threads">4. Threads</a></h2>
+<p>A connection is used by one thread at a time -- reads included, since SQLite
+keeps state on the connection for every statement -- so <code>Database</code>,
+<code>Transaction</code>, <code>Statement</code> and <code>Row</code> conform to
+<code>thread.Unshareable</code>. A connection may be moved to a thread
+(<code>db.take</code>), which owns it from then on, or borrowed by one
+(<code>db.borrow</code>), which keeps its owner off it until the join. A task holding a
+view of one is refused, as is one holding a Statement (which views its
+connection): the owner would go on using it beside the thread. To give
+several threads one database, give each its own connection -- <code>open</code> the
+same file on each -- or share one connection through a <code>sync.Mutex</code>,
+taking the lock for each turn. An <code>RwLock</code> will not do: its readers run at
+once.</p>
+<pre><code class="language-zerolang">  # Adder -- inserts through its handle to the shared connection
+  Adder: class {
+      # a handle to the lock that owns the connection
+      m: sync.Mutex sqlite.Database
+  } as {
+      task: thread.Task null
+      call: function {:this} is {
+          g: this.m.lock
+          r: g.value.executeBatch sql: "insert into t values (1)"
+          if r.err then print "insert failed"
+      }
+  }
+
+  main: function is {
+      db: sqlite.openMemory
+      if db.err then return
+      c: db.executeBatch sql: "create table t(x)"
+      m: (sync.Mutex sqlite.Database).create value: db.take
+      {
+          a: thread.spawn task: (Adder m: m.share)
+          b: thread.spawn task: (Adder m: m.share)
+      }
+      print "both inserted"
+  }</code></pre>
+<p>A program that starts a thread builds SQLite multi-thread
+(<code>SQLITE_THREADSAFE=2</code>): SQLite's own shared state is locked, and each
+connection is left to the one thread the types allow.</p>
+<h2 id="index"><a href="#index">5. Index</a></h2>
 <p><strong>Types</strong></p>
 <ul>
 <li><a href="#database"><strong>Database</strong></a> -- <code>class as { :Connection  executeBatch  prepare  changes  totalChanges  lastInsertRowid  isAutocommit  busyTimeout  transaction  close }</code></li>
@@ -320,7 +362,7 @@ against <code>Connection.view</code> runs on either:</p>
 <li><a href="#openmemory"><strong>sqlite.openMemory</strong></a> -- <code>function out (Result Database E: SqliteError)</code></li>
 <li><a href="#version"><strong>sqlite.version</strong></a> -- <code>function out String</code></li>
 </ul>
-<h2 id="database"><a href="#database">5. database</a></h2>
+<h2 id="database"><a href="#database">6. database</a></h2>
 <p>An open connection, owned: it closes when it goes out of scope. <code>open</code>
 gives it SQLite's extended result codes and a 5 second busy timeout.</p>
 <ul>
@@ -342,17 +384,17 @@ once</li>
 <li><code>transaction mode:</code> -- begins a <a href="#transaction"><code>Transaction</code></a></li>
 <li><code>close</code> -- closes now and answers what closing reported</li>
 </ul>
-<h2 id="transaction"><a href="#transaction">6. transaction</a></h2>
+<h2 id="transaction"><a href="#transaction">7. transaction</a></h2>
 <p>An open transaction, pinning its <code>Database</code> exclusively. It runs
 statements as the <code>Database</code> does (it is a <code>Connection</code>), and ends with
 <code>commit</code>, <code>rollback</code>, or going out of scope, which rolls back. See
 <a href="#transactions">Transactions</a>.</p>
-<h2 id="connection"><a href="#connection">7. connection</a></h2>
+<h2 id="connection"><a href="#connection">8. connection</a></h2>
 <p>The protocol <code>Database</code> and <code>Transaction</code> conform to:
 <code>executeBatch</code>, <code>prepare</code>, <code>changes</code>, <code>totalChanges</code>,
 <code>lastInsertRowid</code> and <code>isAutocommit</code>. Write a helper against
 <code>Connection.view</code> and it runs inside a transaction or outside one.</p>
-<h2 id="statement"><a href="#statement">8. statement</a></h2>
+<h2 id="statement"><a href="#statement">9. statement</a></h2>
 <p>A compiled statement, owned, pinning the connection it was prepared on.
 Parameters are 1-based -- <code>?1</code>, or a named <code>:id</code> / <code>@id</code> / <code>$id</code>
 whose index <code>parameterIndex</code> finds -- and columns 0-based.</p>
@@ -387,12 +429,12 @@ expression column; <code>sql</code> is the statement's text</li>
   sel: db.prepare sql: "select count(*) from person where id in carray(?1)"
   if sel.err then return
   sel.bindIntegerList parameter: 1 values: ids</code></pre>
-<h2 id="step"><a href="#step">9. step</a></h2>
+<h2 id="step"><a href="#step">10. step</a></h2>
 <p>What <code>step</code> answers: <code>row</code> with the next <a href="#row"><code>Row</code></a>,
 <code>done</code> when the statement has run to completion, or <code>err</code> with the
 <a href="#sqliteerror"><code>SqliteError</code></a>. The row pins the statement
 exclusively: the next <code>step</code> is taken once this <code>Step</code> has gone.</p>
-<h2 id="row"><a href="#row">10. row</a></h2>
+<h2 id="row"><a href="#row">11. row</a></h2>
 <p>One result row, read by column. Its getters are <strong>strict</strong>, as
 <code>rusqlite</code>'s are, and convert only what cannot lose:</p>
 <ul>
@@ -408,18 +450,18 @@ not), as a <code>StringView</code> into the row</li>
 <p>NULL answers <code>columnerror.null</code>, another storage class <code>mismatch</code>, a
 column the row lacks <code>range</code>. The <code>text</code> and <code>blob</code> views live as long
 as the row; copy one (<code>.copy</code>) to keep it.</p>
-<h2 id="value"><a href="#value">11. value</a></h2>
+<h2 id="value"><a href="#value">12. value</a></h2>
 <p>A column's value, owned: <code>null</code>, <code>integer</code> (<code>i64</code>), <code>real</code>
 (<code>f64</code>), <code>text</code> (<code>String</code>) or <code>blob</code> (<code>Bytes</code>) -- SQLite's five
 storage classes. <code>Row.value</code> copies one out; <code>Statement.bindValue</code> binds
 one.</p>
-<h2 id="sqliteerror"><a href="#sqliteerror">12. sqliteerror</a></h2>
+<h2 id="sqliteerror"><a href="#sqliteerror">13. sqliteerror</a></h2>
 <p>Why an SQLite call failed: <code>code</code>, the primary result code as an
 <a href="#errorcode"><code>errorcode</code></a> arm; <code>extendedCode</code>, SQLite's extended
 code, which refines it (a UNIQUE violation within <code>constraint</code>);
 <code>message</code>, SQLite's own description; and <code>offset</code>, the byte offset into
 the SQL of a syntax or name error -- <code>select nosuchfunction(1)</code> fails at 7.</p>
-<h2 id="errorcode"><a href="#errorcode">13. errorcode</a></h2>
+<h2 id="errorcode"><a href="#errorcode">14. errorcode</a></h2>
 <p>SQLite's primary result codes, each arm the code of the same name
 (<code>busy</code> is <code>SQLITE_BUSY</code>): <code>error</code>, <code>internal</code>, <code>permission</code>,
 <code>abort</code>, <code>busy</code>, <code>locked</code>, <code>noMemory</code>, <code>readOnly</code>,
@@ -428,32 +470,32 @@ the SQL of a syntax or name error -- <code>select nosuchfunction(1)</code> fails
 keyword), <code>schema</code>, <code>tooBig</code>, <code>constraint</code>, <code>mismatch</code>,
 <code>misuse</code>, <code>noLargeFileSupport</code>, <code>authorization</code>, <code>format</code>,
 <code>range</code>, <code>notADatabase</code>, <code>notice</code>, <code>warning</code>.</p>
-<h2 id="columntype"><a href="#columntype">14. columntype</a></h2>
+<h2 id="columntype"><a href="#columntype">15. columntype</a></h2>
 <p>A column's storage class: <code>null</code>, <code>integer</code>, <code>real</code>, <code>text</code>,
 <code>blob</code>.</p>
-<h2 id="columnerror"><a href="#columnerror">15. columnerror</a></h2>
+<h2 id="columnerror"><a href="#columnerror">16. columnerror</a></h2>
 <p>Why a <code>Row</code> getter could not answer: <code>null</code> (the column is NULL),
 <code>mismatch</code> (another storage class), <code>range</code> (no such column),
 <code>encoding</code> (TEXT that is not UTF-8).</p>
-<h2 id="openmode"><a href="#openmode">16. openmode</a></h2>
+<h2 id="openmode"><a href="#openmode">17. openmode</a></h2>
 <p>How <a href="#open"><code>open</code></a> opens a file: <code>create</code> (read and write,
 creating it; the default), <code>readWrite</code> (an existing file), <code>readOnly</code>.</p>
-<h2 id="transactionmode"><a href="#transactionmode">17. transactionmode</a></h2>
+<h2 id="transactionmode"><a href="#transactionmode">18. transactionmode</a></h2>
 <p>When a transaction takes its locks -- SQLite's <code>BEGIN DEFERRED</code>,
 <code>IMMEDIATE</code>, <code>EXCLUSIVE</code>. <code>deferred</code> (the default) locks as it first
 reads and then writes, so a write can still meet <code>busy</code>;
 <code>immediate</code> takes the write lock at <code>BEGIN</code>; <code>exclusive</code> also keeps
 readers out outside WAL mode.</p>
-<h2 id="open"><a href="#open">18. open</a></h2>
+<h2 id="open"><a href="#open">19. open</a></h2>
 <p>Open the database file at <code>path</code>, creating it in <code>create</code> mode. A file
 that cannot be opened as <code>mode</code> asks fails with <code>cannotOpen</code>, the
 message naming it.</p>
-<h2 id="openmemory"><a href="#openmemory">19. openmemory</a></h2>
+<h2 id="openmemory"><a href="#openmemory">20. openmemory</a></h2>
 <p>A new, empty database in memory, gone when it closes.</p>
-<h2 id="version"><a href="#version">20. version</a></h2>
+<h2 id="version"><a href="#version">21. version</a></h2>
 <p>The SQLite library's version, <code>3.54.0</code>.</p>
-<h2 id="building"><a href="#building">21. Building</a></h2>
-<h3 id="the-object-cache"><a href="#the-object-cache">21.1. The object cache</a></h3>
+<h2 id="building"><a href="#building">22. Building</a></h2>
+<h3 id="the-object-cache"><a href="#the-object-cache">22.1. The object cache</a></h3>
 <p>SQLite is one C file of about 9.5 MB. A program that reaches the unit
 records it on a <code>zcsrc:</code> header line of its emitted C, and <code>zc build</code> /
 <code>zc run</code> compile it once into the <strong>object cache</strong> -- keyed by the
@@ -467,11 +509,12 @@ bring SQLite in apply only to the unit that declares its natives.</p>
 cache directory; deleting it is always safe. <code>zc cobj &lt;file.c&gt;</code> builds
 the objects a hand-run compiler needs and prints their paths. See
 <a href="./zc.html">zc</a>, C sources a unit builds.</p>
-<h3 id="compile-options"><a href="#compile-options">21.2. Compile options</a></h3>
+<h3 id="compile-options"><a href="#compile-options">22.2. Compile options</a></h3>
 <p>The library is compiled <code>-O2 -DNDEBUG -w</code> with the same options on every
 target, whatever the program is built with:</p>
 <ul>
-<li><code>SQLITE_THREADSAFE=0</code> -- zerolang has no threads yet</li>
+<li><code>SQLITE_THREADSAFE=0</code> -- one thread; <code>SQLITE_THREADSAFE=2</code> in a
+program that starts a thread (see <a href="#threads">Threads</a>)</li>
 <li><code>SQLITE_DQS=0</code> -- a double-quoted string is an identifier, never
 a string literal</li>
 <li><code>SQLITE_OMIT_LOAD_EXTENSION</code>, <code>SQLITE_OMIT_DEPRECATED</code>,
@@ -486,14 +529,14 @@ a string literal</li>
 <p>Every other behaviour is SQLite's default -- foreign keys, for one, are off
 until a program runs <code>pragma foreign_keys = on</code>. Each option's reason is
 in <code>vendor/sqlite/VERSION.md</code>.</p>
-<h3 id="upgrading"><a href="#upgrading">21.3. Upgrading</a></h3>
+<h3 id="upgrading"><a href="#upgrading">22.3. Upgrading</a></h3>
 <p><code>vendor/sqlite/VERSION.md</code> holds the procedure: read the release's
 change log, run <code>tools/vendor-sqlite/vendor-sqlite.sh &lt;version&gt; &lt;year&gt;
 &lt;sha3-256&gt;</code> (which refuses a download whose hash does not match), update
 the version record, and run <code>make ci</code> -- its <code>sqlite-decls-guard</code>
 compiles the unit's C declarations against the new <code>sqlite3.h</code>, and every
 sqlite program runs under gcc, clang, tcc and an aarch64 build. One commit.</p>
-<h3 id="not-yet"><a href="#not-yet">21.4. Not yet</a></h3>
+<h3 id="not-yet"><a href="#not-yet">22.4. Not yet</a></h3>
 <p>SQL functions, collations and hooks written in zerolang need calls from C
 into zerolang, which the language does not have yet. Savepoints, cached
 statements, column access by name, and the backup, blob and serialize APIs

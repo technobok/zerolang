@@ -45234,6 +45234,7 @@ checkTypedCallArg: function {
     # value, refused when a method's receiver could keep it instead
     keeper: zast.nodeid
     if isCtor.not when isTake then keeper = methodKeeperOf :st :call :funcId
+    pinMark: pins.length
     if isTake then moveArmLeavesIntoArgument :st :ast :arg :keeper :calleePins :pins
     # a `w.take` kept its locks for this place (checkMovedValueAt): they go
     # where a bare `w`'s go
@@ -45269,6 +45270,7 @@ checkTypedCallArg: function {
         :calleePins
         :arg
     )
+    refuseUnshareablePins :st :ast :arg :pins from: pinMark
 }
 
 # ctorEffectiveTid -- for a constructor call, the type whose FIELDS are the
@@ -48286,11 +48288,8 @@ crossingProtocolOf: function {
     ptid: ztypes.tid
 } out ztypes.tid is {
     none: ztypes.tid.zero
-    root: st.typing.threadUnitRoot
-    if root.isZero or ptid.isZero then return none
-    crd: st.typing.declFindChild parentDeclId: root nameId: zast.wellKnown.slot.tyCrossing
-    if crd.isZero then return none
-    cr: declTypeIdOf :st declId: crd
+    if ptid.isZero then return none
+    cr: threadMarkerTid :st nameId: zast.wellKnown.slot.tyCrossing
     if cr.isZero then return none
     # an instance over the function's parameters (`(Task R)`) names its
     # protocol by its origin; a bare parameter (`T`) by its bound
@@ -48353,10 +48352,12 @@ crossingCallName: function {st: zenv.ZSymbolTable.view funcId: ztypes.tid} out S
 
 # refuseCrossingArg -- an argument of type `at` moved into a parameter of the
 # Crossing protocol `pro` goes to another thread. It is refused when it holds a
-# `thread.ThreadBound` type at any depth, and when the instance of `pro` it
-# conforms to names one -- a task's result, which `join` hands back across. The
-# argument is recorded (`crossingArgCallee`) so a lock it carries is refused in
-# a thread's words.
+# `thread.ThreadBound` type at any depth; when the instance of `pro` it
+# conforms to names one -- a task's result, which `join` hands back across;
+# and when it holds a `thread.SharedReads` type over a `thread.Unshareable`
+# one, which several threads would then use at once. The argument is recorded
+# (`crossingArgCallee`) so the locks it carries are checked, and refused, in a
+# thread's words.
 refuseCrossingArg: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -48366,20 +48367,45 @@ refuseCrossingArg: function {
     funcId: ztypes.tid
 } is {
     st.typing.crossingArgCallee.set key: arg.nid value: funcId
-    tbd: (st.typing.declFindChild
-        parentDeclId: st.typing.threadUnitRoot
-        nameId: zast.wellKnown.slot.tyThreadBound
-    )
-    if tbd.isZero then return
-    tb: declTypeIdOf :st declId: tbd
-    if tb.isZero or at.isZero then return
+    if at.isZero then return
     via: crossingCallName :st :funcId
+    quoted: "`\{via}`"
+    if (refuseThreadBoundArg :st :ast :arg :at :pro via: quoted.stringView) then return
+    sr: threadMarkerTid :st nameId: zast.wellKnown.slot.tySharedReads
+    un: threadMarkerTid :st nameId: zast.wellKnown.slot.tyUnshareable
+    if sr.isZero or un.isZero then return
     seen: IdSet ztypes.tid
-    bound: threadBoundIn :st :ast tid: at :tb :seen
+    holder: sharedReadsHolder :st :ast tid: at :sr :un :seen
+    if holder.isZero.not then (sharedReadsError
+        :st
+        :ast
+        :arg
+        :at
+        :holder
+        :un
+        via: quoted.stringView
+    )
+}
+
+# refuseThreadBoundArg -- refuseCrossingArg's ThreadBound half: the argument,
+# or the result its task answers, holding a `thread.ThreadBound` type. True
+# when it refused.
+refuseThreadBoundArg: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    arg: argref
+    at: ztypes.tid
+    pro: ztypes.tid
+    # the crossing call, quoted as the message names it
+    via: StringView
+} out bool is {
+    tb: threadMarkerTid :st nameId: zast.wellKnown.slot.tyThreadBound
+    if tb.isZero then return false
+    seen: IdSet ztypes.tid
+    bound: markedTypeIn :st :ast tid: at mk: tb :seen
     if bound.isZero.not then {
-        quoted: "`\{via}`"
-        threadBoundError :st :ast :arg :at :bound via: quoted.stringView
-        return
+        threadBoundError :st :ast :arg :at :bound :via
+        return true
     }
     inst: conformedInstanceOf :st impl: at origin: pro
     if inst.isZero when (st.reg.genericOriginOf tid: at) == pro then inst = at
@@ -48388,12 +48414,135 @@ refuseCrossingArg: function {
         ga: st.reg.genericTypeArgAt specId: inst ordinal: k
         k = k + 1
         rseen: IdSet ztypes.tid
-        rb: threadBoundIn :st :ast tid: ga :tb seen: rseen
+        rb: markedTypeIn :st :ast tid: ga mk: tb seen: rseen
         if rb.isZero.not then {
-            threadBoundResultError :st :ast :arg bound: rb via: via.stringView
-            return
+            threadBoundResultError :st :ast :arg bound: rb :via
+            return true
         }
     }
+    return false
+}
+
+# threadMarkerTid -- the type of the thread unit's marker `nameId`
+# (`ThreadBound`, `Crossing`, ...); zero when nothing in the program resolved
+# it, and then nothing conforms to it.
+threadMarkerTid: function {st: zenv.ZSymbolTable.view nameId: zast.nameid} out ztypes.tid is {
+    root: st.typing.threadUnitRoot
+    if root.isZero then return ztypes.tid.zero
+    d: st.typing.declFindChild parentDeclId: root :nameId
+    if d.isZero then return ztypes.tid.zero
+    return (declTypeIdOf :st declId: d)
+}
+
+# refuseUnshareablePins -- the locks a crossing argument added to `pins`, from
+# `from` on. A SHARED one on a value holding a `thread.Unshareable` type at any
+# depth would leave its owner and the new thread using that value at once, and
+# is refused; an exclusive one (`.borrow`) keeps the owner off it until the
+# join. An argument that crosses nothing has none to check.
+refuseUnshareablePins: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    arg: argref
+    pins: (List ztyping.PinPath).view
+    from: u64
+} is {
+    fid: (st.typing.crossingArgCallee.get key: arg.nid).or d: ztypes.tid.zero
+    if fid.isZero or (pins.length <= from) then return
+    un: threadMarkerTid :st nameId: zast.wellKnown.slot.tyUnshareable
+    if un.isZero then return
+    i: from
+    for i < pins.length loop {
+        pn: pins.get :i
+        i = i + 1
+        if pn.shared when pn.mutable.not then {
+            seen: IdSet ztypes.tid
+            hit: markedTypeIn :st :ast tid: (pinnedTypeOf :st pin: pn) mk: un :seen
+            if hit.isZero.not then {
+                unshareableViewError :st :ast :arg pin: pn :hit funcId: fid
+                return
+            }
+        }
+    }
+}
+
+# pinnedTypeOf -- the type of the place a pin locks: its root variable's,
+# then each field's along the path; zero where a step names nothing
+pinnedTypeOf: function {st: zenv.ZSymbolTable.view pin: ztyping.PinPath.view} out ztypes.tid is {
+    if pin.path.length == 0 then return ztypes.tid.zero
+    t: (st.lookup nameId: (pin.path.get i: 0)).or d: ztypes.tid.zero
+    k: 1.u64
+    for k < pin.path.length loop {
+        if t.isZero then return t
+        step: pin.path.get i: k
+        t = (st.typing.declChildOfId parentTypeId: t nameId: step).or d: ztypes.tid.zero
+        k = k + 1
+    }
+    return t
+}
+
+# unshareableViewError -- the refusal of a crossing argument that keeps the
+# place `pin` viewed, a place holding the `thread.Unshareable` type `hit`
+unshareableViewError: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    arg: argref
+    pin: ztyping.PinPath.view
+    hit: ztypes.tid
+    funcId: ztypes.tid
+} is {
+    root: zast.nameTextAt :ast ref: (pin.path.get i: 0)
+    hn: specWrittenName :st :ast tid: hit
+    via: crossingCallName :st :funcId
+    (addError
+        :st
+        nodeid: arg.nid
+        lineno: arg.lineno
+        colno: arg.colno
+        e: zast.err.ownerError
+        msg: "Cannot hand a view of '\{root}' to another thread with `\{via}`: it holds '\{hn}', a `thread.Unshareable` type, which one thread at a time may use, and the owner would go on using it beside the thread; move it to the thread (`.take`), give each thread its own, or share it through a `sync.Mutex`"
+    )
+}
+
+# sharedReadsError -- the refusal of a crossing argument of type `at` that
+# holds `holder`, a `thread.SharedReads` type over the `thread.Unshareable`
+# type `un`
+sharedReadsError: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    arg: argref
+    at: ztypes.tid
+    holder: ztypes.tid
+    un: ztypes.tid
+    # the crossing call, quoted as the message names it
+    via: StringView
+} is {
+    an: specWrittenName :st :ast tid: (originOrSelf :st tid: at)
+    hn: specWrittenName :st :ast tid: (originOrSelf :st tid: holder)
+    inner: un
+    k: u64
+    for k < (st.reg.genericArgCount specId: holder) loop {
+        ga: st.reg.genericTypeArgAt specId: holder ordinal: k
+        k = k + 1
+        seen: IdSet ztypes.tid
+        hit: markedTypeIn :st :ast tid: ga mk: un :seen
+        if hit.isZero.not then inner = hit
+    }
+    un2: specWrittenName :st :ast tid: (originOrSelf :st tid: inner)
+    (addError
+        :st
+        nodeid: arg.nid
+        lineno: arg.lineno
+        colno: arg.colno
+        e: zast.err.ownerError
+        msg: "Cannot hand '\{an}' to another thread with \{via}: it holds '\{hn}' over '\{un2}', whose readers run on several threads at once, and '\{un2}' is `thread.Unshareable` -- one thread at a time may use it; share it through a `sync.Mutex` instead"
+    )
+}
+
+# originOrSelf -- the template an instance was minted from, or the type itself
+originOrSelf: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out ztypes.tid is {
+    o: st.reg.genericOriginOf :tid
+    if o.isZero then return tid
+    return o
 }
 
 # refuseCrossingParamArg -- the argument `arg`, of type `vt`, bound to the
@@ -48428,7 +48577,7 @@ threadBoundResultError: function {
     ast: Ast
     arg: argref
     bound: ztypes.tid
-    # the crossing call, as the message names it (`thread.spawn`)
+    # the crossing call, quoted as the message names it
     via: StringView
 } is {
     bt: bound
@@ -48441,7 +48590,7 @@ threadBoundResultError: function {
         lineno: arg.lineno
         colno: arg.colno
         e: zast.err.ownerError
-        msg: "Cannot start a thread with `\{via}` whose result holds '\{bn}': `join` would hand it to another thread, and a `thread.ThreadBound` value never leaves the thread that made it"
+        msg: "Cannot start a thread with \{via} whose result holds '\{bn}': `join` would hand it to another thread, and a `thread.ThreadBound` value never leaves the thread that made it"
     )
 }
 
@@ -48477,30 +48626,22 @@ threadBoundError: function {
     )
 }
 
-# threadBoundIn -- the first type, `tid` itself or one it holds at any depth --
-# a field or an arm's payload by any marker, a type argument of an instance --
-# that conforms to the marker `tb`; zero for none. `seen` ends a walk that
-# meets a type again.
-threadBoundIn: function {
+# heldTypes -- the types `tid` holds one level down: each type argument of an
+# instance, and each field or arm payload by any marker. A conformance label
+# (`task: (thread.Task R)`) names a protocol the type conforms to and stores
+# nothing, so it is not one.
+heldTypes: function {
     st: zenv.ZSymbolTable
     ast: Ast
     tid: ztypes.tid
-    tb: ztypes.tid
-    seen: IdSet ztypes.tid
-} out ztypes.tid is {
-    if tid.isZero or (seen.has item: tid) then return ztypes.tid.zero
-    seen.add item: tid
-    if (typeConformsTo :st impl: tid spec: tb) then return tid
+    held: ListVal ztypes.tid
+} is {
     k: u64
     for k < (st.reg.genericArgCount specId: tid) loop {
-        ga: st.reg.genericTypeArgAt specId: tid ordinal: k
+        held.append (st.reg.genericTypeArgAt specId: tid ordinal: k)
         k = k + 1
-        inner: threadBoundIn :st :ast tid: ga :tb :seen
-        if inner.isZero.not then return inner
     }
     forceAllFields :st :ast :tid
-    # a conformance label (`task: (thread.Task R)`) names a protocol the type
-    # conforms to, and stores nothing
     labels: ListVal zast.nameid
     conformanceMarkerIds :st :tid ids: labels
     ri: u64
@@ -48509,10 +48650,59 @@ threadBoundIn: function {
         ri = ri + 1
         if rw.keep when (
             (st.reg.typetypeOf typeId: rw.tid) != ztypes.ztypetype.functionType
-        ) when (labels.contains rw.name).not then {
-            inner: threadBoundIn :st :ast tid: rw.tid :tb :seen
-            if inner.isZero.not then return inner
+        ) when (labels.contains rw.name).not then held.append rw.tid
+    }
+}
+
+# markedTypeIn -- the first type, `tid` itself or one it holds at any depth
+# (heldTypes), that conforms to the marker `mk`; zero for none. `seen` ends a
+# walk that meets a type again.
+markedTypeIn: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    tid: ztypes.tid
+    mk: ztypes.tid
+    seen: IdSet ztypes.tid
+} out ztypes.tid is {
+    if tid.isZero or (seen.has item: tid) then return ztypes.tid.zero
+    seen.add item: tid
+    if (typeConformsTo :st impl: tid spec: mk) then return tid
+    held: ListVal ztypes.tid
+    heldTypes :st :ast :tid :held
+    for each h: held loop {
+        inner: markedTypeIn :st :ast tid: h :mk :seen
+        if inner.isZero.not then return inner
+    }
+    return ztypes.tid.zero
+}
+
+# sharedReadsHolder -- the first type, `tid` itself or one it holds at any
+# depth, that conforms to `sr` -- several threads read its value at once --
+# over a type argument holding the marker `un` at any depth; zero for none
+sharedReadsHolder: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    tid: ztypes.tid
+    sr: ztypes.tid
+    un: ztypes.tid
+    seen: IdSet ztypes.tid
+} out ztypes.tid is {
+    if tid.isZero or (seen.has item: tid) then return ztypes.tid.zero
+    seen.add item: tid
+    if (typeConformsTo :st impl: tid spec: sr) then {
+        k: u64
+        for k < (st.reg.genericArgCount specId: tid) loop {
+            ga: st.reg.genericTypeArgAt specId: tid ordinal: k
+            k = k + 1
+            useen: IdSet ztypes.tid
+            if (markedTypeIn :st :ast tid: ga mk: un seen: useen).isZero.not then return tid
         }
+    }
+    held: ListVal ztypes.tid
+    heldTypes :st :ast :tid :held
+    for each h: held loop {
+        inner: sharedReadsHolder :st :ast tid: h :sr :un :seen
+        if inner.isZero.not then return inner
     }
     return ztypes.tid.zero
 }
@@ -50673,6 +50863,7 @@ lockGenericValueArg: function {
     calleePins: resultPins :st :funcId
     opN: ast.nodes.get i: arg.operation
     bnId: atomNameId :ast n: opN
+    pinMark: pins.length
     keeper: genericArgPreHoist :st :ast :call :funcId :aow :bnId :opN :vt :pins :calleePins :arg
     # THE SAME HOIST A CONCRETE CALL'S ARGUMENT GETS. It splits trivial from
     # non-trivial itself, which is the split that matters here: a bare name and
@@ -50703,6 +50894,7 @@ lockGenericValueArg: function {
         :calleePins
         :arg
     )
+    refuseUnshareablePins :st :ast :arg :pins from: pinMark
 }
 
 

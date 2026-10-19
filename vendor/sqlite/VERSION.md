@@ -22,7 +22,7 @@ The same for every target. Each one, and why:
 
 | Option | Why |
 |---|---|
-| SQLITE_THREADSAFE=0 | zerolang has no threads yet; a connection is used from one thread. Revisit with threads. |
+| SQLITE_THREADSAFE=0 | A program that starts no thread uses SQLite from one thread: no mutexes. A program that starts one builds with SQLITE_THREADSAFE=2 instead (natives.tbl, `when=threaded`): SQLite locks its own shared state, and a connection is used by one thread at a time, which `thread.Unshareable` on the sqlite types enforces. |
 | SQLITE_OMIT_LOAD_EXTENSION | no dlopen of extension libraries; the extensions we want are compiled in |
 | SQLITE_DQS=0 | a double-quoted string is an identifier, never a string literal (the documented misfeature, off) |
 | SQLITE_DEFAULT_MEMSTATUS=0 | no global memory-statistics bookkeeping on every allocation |

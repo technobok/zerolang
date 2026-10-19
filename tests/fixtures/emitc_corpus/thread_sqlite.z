@@ -1,0 +1,105 @@
+# thread_sqlite -- the ways a sqlite Database is used from threads: moved to a
+# thread that owns it from then on; borrowed by one thread while its owner
+# waits; shared by several through a `sync.Mutex`, each thread taking the lock
+# for its turn; and one connection per thread, each its own database.
+
+# Owner -- owns a database it was moved
+Owner: class {
+    # the connection, moved in
+    db: sqlite.Database
+} as {
+    task: (thread.TaskVal i64)
+    call: function {:this} out i64 is {
+        r: this.db.executeBatch sql: "create table t(x); insert into t values (1), (2), (3)"
+        if r.err then return -1
+        return (countRows db: this.db)
+    }
+}
+
+# Borrower -- writes through a borrow while the owner waits on the join
+Borrower: class {
+    # the owner's connection, borrowed
+    db: sqlite.Database.borrow
+} as {
+    task: (thread.Task null)
+    call: function {:this} is {
+        r: this.db.executeBatch sql: "insert into t values (4)"
+        if r.err then print "borrow insert failed"
+    }
+}
+
+# Adder -- inserts its tag through the shared lock
+Adder: class {
+    # a handle to the lock that owns the connection
+    m: sync.Mutex sqlite.Database
+    # what it inserts
+    tag: i64
+} as {
+    task: (thread.Task null)
+    call: function {:this} is {
+        i: 0
+        for i < 50 loop {
+            g: this.m.lock
+            sql: "insert into t values (\{this.tag})"
+            r: g.value.executeBatch sql: sql.stringView
+            if r.err then print "insert failed"
+            i = i + 1
+        }
+    }
+}
+
+# Solo -- opens its own database on its thread
+Solo: class {
+    # how many rows it writes
+    n: i64
+} as {
+    task: (thread.TaskVal i64)
+    call: function {:this} out i64 is {
+        db: sqlite.openMemory
+        if db.err then return -1
+        r: db.executeBatch sql: "create table t(x)"
+        if r.err then return -1
+        i: 0
+        for i < this.n loop {
+            w: db.executeBatch sql: "insert into t values (0)"
+            if w.err then return -1
+            i = i + 1
+        }
+        return (countRows :db)
+    }
+}
+
+# countRows -- the rows of table t
+countRows: function {db: sqlite.Database.view} out i64 is {
+    q: db.prepare sql: "select count(*) from t"
+    if q.err then return -1
+    s: q.step
+    match (s) case row then return ((s.integer column: 0).or d: -2) else return -3
+}
+
+main: function is {
+    moved: sqlite.openMemory
+    if moved.err then return
+    hm: thread.spawnVal task: (Owner db: moved.take)
+    print "moved: \{hm.join} rows"
+
+    db: sqlite.openMemory
+    if db.err then return
+    c: db.executeBatch sql: "create table t(x)"
+    {
+        hb: thread.spawn task: (Borrower db: db.borrow)
+    }
+    print "borrowed: \{countRows :db} rows"
+
+    m: (sync.Mutex sqlite.Database).create value: db.take
+    {
+        a: thread.spawn task: (Adder m: m.share tag: 1)
+        b: thread.spawn task: (Adder m: m.share tag: 2)
+    }
+    g: m.lock
+    print "shared: \{countRows db: g.value} rows"
+
+    s1: thread.spawnVal task: (Solo n: 10)
+    s2: thread.spawnVal task: (Solo n: 20)
+    print "solo: \{s1.join} and \{s2.join} rows"
+}

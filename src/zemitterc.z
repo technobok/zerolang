@@ -4123,6 +4123,9 @@ Ctx: class {
     usedTypeIds: IdSet ztypes.tid
     # conformance rows whose helper set is already in the buffer, by row id
     emittedConformance: IdSet ztypes.confid
+    # each marker protocol (one with no members) asked about, to whether the
+    # program makes a value of it (markerValueMade)
+    markerValues: (IdMapV ztypes.tid v: bool)
     # ListIter monos whose cursor is already in the buffer. A List and a view
     # of it resolve `iterate` to ONE mono, so both reach the same typedef
     emittedListIters: IdSet ztypes.tid
@@ -34759,6 +34762,7 @@ emitC: function {
         demandGatedTids: IdSet ztypes.tid
         usedTypeIds: IdSet ztypes.tid
         emittedConformance: IdSet ztypes.confid
+        markerValues: (IdMapV ztypes.tid v: bool)
         emittedListIters: IdSet ztypes.tid
         unitOrder: List String
         argHoists: List ArgHoist
@@ -41571,6 +41575,15 @@ vtableTypedefC: function {slots: StringView base: StringView} out String is {
     return "typedef struct {\n\{slots}} \{base}_vtable_t;\n\n"
 }
 
+# protocolEmitted -- the protocol `tid` needs no representation now: it is in
+# the buffer already, or it is a marker no value is made of (markerValueMade)
+protocolEmitted: function {
+    ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx tid: ztypes.tid
+} out bool is {
+    if (ctx.emittedUserTypes.has item: tid) then return true
+    return (markerValueMade :ast :symtab :ctx spec: tid).not
+}
+
 # emitOneProtocol -- the protocol value representation: vtable typedef (one
 # function pointer per spec method, `this` dropped for a leading void*),
 # the fat-pointer struct {data, vtable, destroy}, and the destroy helper.
@@ -41581,7 +41594,8 @@ emitOneProtocol: function {
     tid: ztypes.tid
     buf: String.borrow
 } is {
-    if (ctx.emittedUserTypes.has item: tid) then return
+    # a marker no value is made of has nothing in the program's C to name it
+    if (protocolEmitted :ast :symtab :ctx :tid) then return
     ctx.emittedUserTypes.add item: tid
     pbase: ctxCname :ctx :tid
     mnames: List String
@@ -41733,6 +41747,8 @@ emitConformanceImplsForType: function {
             }
         }
         if hit.not then continue
+        # a marker conformance needs helpers only to make a value of the marker
+        if (markerValueMade :ast :symtab :ctx spec: tid).not then continue
         if (symtab.reg.typetypeOf typeId: tid) == want when (conformanceRowEmitted
             :ctx
             row: ri
@@ -41750,6 +41766,58 @@ emitConformanceImplsForType: function {
             )
         }
     }
+}
+
+# markerValueMade -- false only for a marker protocol (one with no members)
+# that no value of is made: no call or label read is typed by it
+# (makesMarkerValue) and nothing stands in for it. A conformance to such a marker says something about the type and
+# needs no helpers. Answered once per protocol.
+markerValueMade: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    spec: ztypes.tid
+} out bool is {
+    if (symtab.reg.typetypeOf typeId: spec) != ztypes.ztypetype.protocolType then return true
+    known: ctx.markerValues.get key: spec
+    match (
+        known
+    ) case some then return known case none then null
+    names: List String
+    ids: ListVal ztypes.tid
+    nameIds: ListVal zast.nameid
+    protoChildMethods :ast :symtab tid: spec :names :ids :nameIds
+    made: ids.length > 0
+    nid: zast.nodeid
+    nn: symtab.typing.nodeType.length
+    for nid.u32.u64 < nn loop {
+        nid = nid.next
+        if made.not when (ztyping.nodeTypeAt tbl: symtab.typing.nodeType :nid) == spec then {
+            made = makesMarkerValue :ast :symtab :nid
+        }
+    }
+    if made.not then {
+        for each su: symtab.typing.standInOf.iterateItems loop {
+            if su.value.spec == spec then made = true
+        }
+    }
+    ctx.markerValues.set key: spec value: made
+    return made
+}
+
+# makesMarkerValue -- the node, typed by a marker protocol, makes a value of
+# it: a call (`Pinned.create from: g`) or a conformance label read (`g.pinned`).
+# A type written in a signature or an `as` block is typed by the marker too, and
+# makes nothing.
+makesMarkerValue: function {
+    ast: Ast.view symtab: zenv.ZSymbolTable.view nid: zast.nodeid
+} out bool is {
+    n: ast.nodes.get i: nid
+    if n.call then return true
+    if n.dottedpath.not then return false
+    pt: ztyping.nodeTypeAt tbl: symtab.typing.nodeType nid: n.parent
+    cn: atomNameIdOf :ast n: (ast.nodes.get i: n.child)
+    return (zenv.isConformanceLabelOf ty: symtab.typing reg: symtab.reg tid: pt nameId: cn)
 }
 
 # emitConformanceImpl -- one conformance row's helper set: a wrapper per spec

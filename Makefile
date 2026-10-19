@@ -744,7 +744,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2269330
+ALLOC_BASELINE := 2273860
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1282,7 +1282,7 @@ static-tcc-guard: bin/zc bin/zl bin/zls
 
 # zlink-guard -- how many programs declare a link library: a unit's library goes to
 # the programs that reach it and no others.
-ZLINK_BASELINE := 25
+ZLINK_BASELINE := 26
 
 zlink-guard: bin/zc
 	@n=0; rep=""; \

@@ -218,6 +218,52 @@ against #~"Connection.view" runs on either:
   }
 """
 
+#--: Threads
+
+A connection is used by one thread at a time -- reads included, since SQLite
+keeps state on the connection for every statement -- so #~"Database",
+#~"Transaction", #~"Statement" and #~"Row" conform to
+#~"thread.Unshareable". A connection may be moved to a thread
+(#~"db.take"), which owns it from then on, or borrowed by one
+(#~"db.borrow"), which keeps its owner off it until the join. A task holding a
+view of one is refused, as is one holding a Statement (which views its
+connection): the owner would go on using it beside the thread. To give
+several threads one database, give each its own connection -- #~"open" the
+same file on each -- or share one connection through a #~"sync.Mutex",
+taking the lock for each turn. An #~"RwLock" will not do: its readers run at
+once.
+
+#code language=zerolang: """
+  # Adder -- inserts through its handle to the shared connection
+  Adder: class {
+      # a handle to the lock that owns the connection
+      m: sync.Mutex sqlite.Database
+  } as {
+      task: thread.Task null
+      call: function {:this} is {
+          g: this.m.lock
+          r: g.value.executeBatch sql: "insert into t values (1)"
+          if r.err then print "insert failed"
+      }
+  }
+
+  main: function is {
+      db: sqlite.openMemory
+      if db.err then return
+      c: db.executeBatch sql: "create table t(x)"
+      m: (sync.Mutex sqlite.Database).create value: db.take
+      {
+          a: thread.spawn task: (Adder m: m.share)
+          b: thread.spawn task: (Adder m: m.share)
+      }
+      print "both inserted"
+  }
+"""
+
+A program that starts a thread builds SQLite multi-thread
+(#~"SQLITE_THREADSAFE=2"): SQLite's own shared state is locked, and each
+connection is left to the one thread the types allow.
+
 
 #--: Index
 
@@ -469,7 +515,8 @@ The library is compiled #~"-O2 -DNDEBUG -w" with the same options on every
 target, whatever the program is built with:
 
 #ul:
-  [#*: #~"SQLITE_THREADSAFE=0" -- zerolang has no threads yet]
+  [#*: #~"SQLITE_THREADSAFE=0" -- one thread; #~"SQLITE_THREADSAFE=2" in a
+    program that starts a thread (see [#> to=threads: Threads])]
   [#*: #~"SQLITE_DQS=0" -- a double-quoted string is an identifier, never
     a string literal]
   [#*: #~"SQLITE_OMIT_LOAD_EXTENSION", #~"SQLITE_OMIT_DEPRECATED",
