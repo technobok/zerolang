@@ -754,8 +754,9 @@ Four rules keep a declaration honest, all reported at compile time:
 
 A lock-holding value that is moved -- into another binding (#~"b: w",
 #~"b: w.take"), reassigned (#~"x = w"), stored in a field or an arm payload,
-or handed to a #~".take" parameter of a construction or an #~"outx" function,
-written bare or with #~".take" -- takes its locks with it. So does an #_+"owned" value no name
+or handed to a #~".take" parameter of a construction or of a native #~"outx"
+function (#~"thread.spawn"), written bare or with #~".take" -- takes its locks
+with it. So does an #_+"owned" value no name
 holds that carries locks: a construction over a borrow (#~"W s: src", passed
 as an argument or reassigned as #~"x = Option.some w") or an #~"outx" result.
 The new owner must be able to hold them: a destination
@@ -766,8 +767,10 @@ leave with the callee unseen), a destination that is a #_+"reference" -- a
 #~"with" alias, a #~"getMut" result, a #~".borrow" binding, or a field reached
 through one (the value lands in storage the reference's owner holds, while the
 reference, and any lock moved onto it, ends with its own scope) -- and a
-#~".take" parameter of a function that is not #~"outx" (nothing would keep
-the sources locked once the call returns). #~"return
+#~".take" parameter of any function with a body, #~"outx" or not (the body
+could store the value wherever it can write -- a list a #~".borrow" parameter
+lends, say -- and the locks would not follow it there; a native function's
+body is the runtime's, which keeps nothing it does not hand back). #~"return
 w" from an #~"outx" function carries them to the caller's binding when every
 source is a parameter or the receiver.
 
@@ -2225,6 +2228,7 @@ the direct form.
   #~"x = w.take" where #~"x" outlives what #~"w" locks        |Cannot move 'w' by reassignment: it holds a lock on 'a', and 'x' outlives 'a' |Keep 'x' inside 'a's scope, or #~"w.copy"
   #~"xs.append w" (or any method call) where #~"w" holds locks |Cannot move 'w' into 'xs': it holds a lock on 'a', and a value stored there could later be taken out without that lock |Append #~"w.copy", or keep #~"w" in a named local or a field
   #~"eat w: w" where #~"eat" is not #~"outx" and #~"w" holds locks |Cannot move 'w' into a `.take` parameter: it holds a lock on 'a', and the callee is not `outx`, so nothing keeps 'a' locked once the call returns |Pass #~"w.copy"
+  #~"keep w: w" where #~"keep" is an #~"outx" function with a body and #~"w" holds locks |Cannot move 'w' into a `.take` parameter of 'keep': it holds a lock on 'a', and the function's body could store it where that lock does not follow |Pass #~"w.copy", or construct the holder in place
   non-owned field on a record                               |non-owned fields only allowed on classes              |Change the enclosing type from #~"record" to #~"class"
   a reftype field on a record (#~"s: String")               |a record field holds valtypes; make 'R' a class to hold 'String' |Make #~"R" a #~"class"; a valtype that must live on the heap is a #~"Box from:" local, never a field
   a reftype payload on a variant arm                        |a variant arm holds valtypes; make 'V' a union to hold 'String' |Make #~"V" a #~"union"

@@ -40924,21 +40924,33 @@ takenHere: function {} out optionval ztypes.zsrcpos is {
 # methodKeeperOf -- what could keep a value a call takes past the call: the
 # callable of a method call, whose receiver may store it (`xs.append w`) and
 # later hand it out (`xs.pop`) -- through a `.view` receiver too, as a
-# Channel's `send` does. Zero for a call that is no method's.
+# Channel's `send` does; and the call itself of a function with a body, which
+# may store it wherever it can write, `outx` or not. A native function's body
+# is the runtime's, which keeps nothing it does not hand back: zero for one.
 methodKeeperOf: function {
     st: zenv.ZSymbolTable.view
     call: callref
     funcId: ztypes.tid
 } out zast.nodeid is {
-    if (methodHasThisReceiver :st mid: funcId).not then return zast.nodeid
-    return call.callable
+    if (methodHasThisReceiver :st mid: funcId) then return call.callable
+    fn: funcId
+    fo: st.reg.genericOriginOf tid: funcId
+    if fo.isZero.not then fn = fo
+    if (st.reg.isNativeOf tid: fn) then return zast.nodeid
+    return call.nid
 }
 
 # keeperText -- how a report names what could keep a taken value: the list a
-# comprehension builds, or a method call's receiver path.
+# comprehension builds, a function a call runs, or a method call's receiver
+# path.
 keeperText: function {ast: Ast.view keeper: zast.nodeid} out String is {
     kn: ast.nodes.get i: keeper
     if kn.forexpr then return "the list this loop builds"
+    if kn.call then {
+        fnText: String
+        exprTextOf :ast n: (ast.nodes.get i: kn.callable) dst: fnText
+        return "a `.take` parameter of '\{fnText}'"
+    }
     tup: ListVal zast.nameid
     methodReceiverTuple :ast n: kn dst: tup
     if tup.length == 0 then return "the receiver"
@@ -41058,7 +41070,13 @@ moveHeldLocksIntoSlot: function {
     what: "the value".string
     if name.length > 0 then what = "'\{name}'"
     msg: "Cannot move \{what} into a `.take` parameter: it holds a lock on '\{root}', and the callee is not `outx`, so nothing keeps '\{root}' locked once the call returns; copy it first (`.copy`)"
-    if keeper.isZero.not then {
+    # a function call keeps the value through its body; one that is not `outx`
+    # fails for the plainer reason above
+    keptByCall: keeper.isZero.not and (ast.nodes.get i: keeper).call
+    if keptByCall when calleePins then {
+        into: keeperText :ast :keeper
+        msg = "Cannot move \{what} into \{into}: it holds a lock on '\{root}', and the function's body could store it where that lock does not follow -- only a construction or a native `outx` call keeps a moved value's locks; copy it first (`.copy`)"
+    } else if keeper.isZero.not when keptByCall.not then {
         into: keeperText :ast :keeper
         msg = "Cannot move \{what} into \{into}: it holds a lock on '\{root}', and a value stored there could later be taken out without that lock; copy it first (`.copy`)"
     }
