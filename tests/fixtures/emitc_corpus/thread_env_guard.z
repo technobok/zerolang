@@ -1,0 +1,32 @@
+# thread_env_guard.z -- in a program that starts threads, os.setEnv and
+# os.unsetEnv refuse while another thread runs (an IoError.other saying why):
+# changing the environment may move it under a read on that thread. Alone --
+# before the first spawn, after the last join -- they work as ever.
+
+# Napper -- waits for a flag the main thread sets
+Napper: class {
+    # its handle to the flag
+    go: sync.AtomicBool
+} as {
+    task: thread.Task null
+    call: function {:this} is {
+        for this.go.load.not loop thread.yieldNow
+    }
+}
+
+main: function is {
+    before: os.setEnv key: "ZL_ONE" value: "1"
+    print "alone: \{before.ok}"
+    go: sync.AtomicBool.create value: false
+    h: thread.spawn task: (Napper go: go.share)
+    during: os.setEnv key: "ZL_TWO" value: "2"
+    match (during) case err then {
+        match (during) case other then print "with a thread running: \{during}" else print "another error"
+    } case ok then print "set"
+    gone: os.unsetEnv key: "ZL_ONE"
+    print "unset refused too: \{gone.err}"
+    go.store value: true
+    h.join
+    after: os.setEnv key: "ZL_THREE" value: "3"
+    print "after the join: \{after.ok}"
+}
