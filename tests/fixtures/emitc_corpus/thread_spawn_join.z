@@ -1,42 +1,52 @@
-# thread_spawn_join.z -- tasks on their own threads: spawn and join answer the
-# task back; a handle that is never joined joins as it is destroyed; a task that
-# borrows its input keeps it locked until the task joined back ends, and the
-# owner writes it again after.
+# thread_spawn_join.z -- tasks on their own threads: `join` answers what the
+# task's `call` answered -- a String, a number (spawnVal), or nothing (a `(Task
+# null)`) -- and the task is destroyed on its thread as `call` returns; a handle
+# that is never joined joins as it is destroyed; a task that borrows its input
+# keeps it locked until the handle ends, and the owner writes it again after.
 
-# Counter -- adds to its count on its thread
+# Counter -- counts on its thread and reports how far
 Counter: class {
-    # how far it counted
+    # where it starts
     n: i64
     # which counter
     label: String
 } as {
-    task: thread.Task
-    call: function {:this} is {
+    task: (thread.Task String)
+    call: function {:this} out String is {
         i: 0.i64
         for i < 1000 loop {
             this.n = this.n + 1
             i = i + 1
         }
+        return "\{this.label} counted \{this.n}"
     }
 }
 
 # Summer -- sums a list its owner lends it
 Summer: class {
     # the borrowed input
-    xs: (ListVal i64).borrow
-    # the answer
-    total: i64
+    xs: (ListVal i64).view
 } as {
-    task: thread.Task
-    call: function {:this} is {
-        for each x: this.xs loop this.total = this.total + x
+    task: (thread.TaskVal i64)
+    call: function {:this} out i64 is {
+        total: 0.i64
+        for each x: this.xs loop total = total + x
+        return total
     }
+}
+
+# Shout -- answers nothing
+Shout: class {
+    # what it shouts
+    word: String
+} as {
+    task: (thread.Task null)
+    call: function {:this} is { print "shouted \{this.word}" }
 }
 
 main: function is {
     h: thread.spawn task: (Counter n: 0 label: "a".string) name: "counter"
-    done: h.join
-    print "\{done.label} counted \{done.n}"
+    print h.join
     {
         unjoined: thread.spawn task: (Counter n: 5 label: "b".string)
         thread.yieldNow
@@ -47,11 +57,12 @@ main: function is {
     xs.append 2
     xs.append 3
     {
-        s: thread.spawn task: (Summer xs: xs total: 0)
-        sum: s.join
-        print "summed \{sum.total}"
+        s: thread.spawnVal task: (Summer :xs)
+        print "summed \{s.join}"
     }
     xs.append 4
     print "the owner writes again: \{xs.length}"
+    q: thread.spawn task: (Shout word: "hey".string)
+    q.join
     print "done"
 }

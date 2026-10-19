@@ -1,12 +1,20 @@
-/* JoinHandle -- one started thread and the task it runs (thread.z), one copy
-   per task type. The task lives in a heap block whose address does not move
-   while the thread runs; the handle is a pointer to it. `join` waits and moves
-   the task out; destroy joins a thread nobody joined, then destroys a task
-   nobody took back. `detach` hands the block to the thread: of the thread
-   finishing and the handle letting go, whichever comes second (one atomic
-   `done` decides) destroys the task and frees the block. */
+/* JoinHandle / JoinHandleVal -- one started thread and the result its task
+   answers (thread.z), one copy per result type; one template serves both
+   classes through positional holes. The task arrives boxed as a Task value: its
+   vtable calls it, and destroying the box destroys it -- on the thread, as soon
+   as `call` returns -- so the handle's type names the result alone. The result
+   lives in a heap block whose address does not move while the thread runs; the
+   handle is a pointer to it. A task answering nothing (R is null) stores
+   nothing. `join` waits and moves the result out; destroy joins a thread nobody
+   joined, then destroys a result nobody took. `detach` hands the block to the
+   thread: of the thread finishing and the handle letting go, whichever comes
+   second (one atomic `done` decides) destroys the result and frees the block. */
+#define Z_JH_STORE_0(dst, e) ((dst) = (e))
+#define Z_JH_STORE_1(dst, e) ((void)(e))
+
 typedef struct z_@@NAME@@_blk {
-    @@T@@ task;
+    z_@@ARG.create.task@@_t task;
+    @@P0@@ result;
     z_thread_t th;
     Z_ATOMIC(int) finished;
     Z_ATOMIC(int) done;
@@ -22,16 +30,17 @@ typedef struct z_@@NAME@@_t {
 static void z_@@NAME@@_run(void* p) {
     z_@@NAME@@_blk* b = (z_@@NAME@@_blk*)p;
     Z_ATOMIC_STORE(&b->tid, z_thread_self_id(), Z_RELEASE);
-    @@T.call@@(&b->task);
+    Z_JH_STORE_@@P0_NULL@@(b->result, b->task.vtable->@@SLOT.create.task.call@@(b->task.data));
+    z_@@ARG.create.task@@_destroy(&b->task);
     Z_ATOMIC_STORE(&b->finished, 1, Z_RELEASE);
     /* detached first: the handle let go, so the thread cleans up */
     if (Z_ATOMIC_ADD(&b->done, 1, Z_ACQREL) == 1) {
-        @@T_DESTROY@@(&b->task);
+        @@P0_DESTROY@@(&b->result);
         free(b);
     }
 }
 
-static z_@@NAME@@_t z_@@NAME@@_create(@@T@@ task, @@StringView@@_t name, uint64_t stackSize) {
+static z_@@NAME@@_t z_@@NAME@@_create(z_@@ARG.create.task@@_t task, @@StringView@@_t name, uint64_t stackSize) {
     z_@@NAME@@_t h;
     h.b = (z_@@NAME@@_blk*)z_xmalloc(sizeof(z_@@NAME@@_blk));
     memset(h.b, 0, sizeof(z_@@NAME@@_blk));
@@ -53,12 +62,12 @@ static void z_@@NAME@@_wait(z_@@NAME@@_blk* b) {
     Z_ATOMIC_STORE(&b->tid, 0, Z_RELEASE);
 }
 
-/* the task, moved out: destroy then leaves it to its new owner */
-static @@T@@ z_@@NAME@@_join(z_@@NAME@@_t* h) {
+/* the result, moved out: destroy then leaves it to its new owner */
+static @@P0@@ z_@@NAME@@_join(z_@@NAME@@_t* h) {
     z_@@NAME@@_wait(h->b);
     if (h->b->taken) z_panic("thread: join called twice on one handle");
     h->b->taken = true;
-    return h->b->task;
+    return h->b->result;
 }
 
 static bool z_@@NAME@@_isFinished(const z_@@NAME@@_t* h) {
@@ -69,14 +78,14 @@ static uint64_t z_@@NAME@@_id(const z_@@NAME@@_t* h) {
     return Z_ATOMIC_LOAD(&h->b->tid, Z_ACQUIRE);
 }
 
-/* let the thread run on its own: it destroys the task and frees the block
+/* let the thread run on its own: it destroys the result and frees the block
    when it finishes, or this does now if it already has */
 static void z_@@NAME@@_detach(z_@@NAME@@_t* h) {
     z_@@NAME@@_blk* b = h->b;
     h->b = NULL;
     if (z_thread_detach(&b->th) != 0) z_panic("thread: detach failed");
     if (Z_ATOMIC_ADD(&b->done, 1, Z_ACQREL) == 1) {
-        @@T_DESTROY@@(&b->task);
+        @@P0_DESTROY@@(&b->result);
         free(b);
     }
 }
@@ -84,7 +93,7 @@ static void z_@@NAME@@_detach(z_@@NAME@@_t* h) {
 static void z_@@NAME@@_destroy(z_@@NAME@@_t* h) {
     if (h->b == NULL) return;
     z_@@NAME@@_wait(h->b);
-    if (!h->b->taken) @@T_DESTROY@@(&h->b->task);
+    if (!h->b->taken) @@P0_DESTROY@@(&h->b->result);
     free(h->b);
     h->b = NULL;
 }

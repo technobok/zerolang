@@ -1,13 +1,13 @@
 # A `thread.ThreadBound` value never reaches another thread, by any marker, at
 # any depth: a lock guard unlocks on the thread that locked, and a task holding
 # one -- owned, viewed, borrowed, or nested in a list of another class -- is
-# refused at `thread.spawn` and `thread.spawnDetached`.
+# refused at `thread.spawn`, `thread.spawnVal` and `thread.spawnDetached`.
 
 # Owned -- a task that owns a guard
 Owned: class {
     g: (sync.MutexGuard (ListVal i64))
 } as {
-    task: thread.Task
+    task: (thread.Task null)
     call: function {:this} is { print "ran" }
 }
 
@@ -15,7 +15,7 @@ Owned: class {
 Viewed: class {
     g: (sync.MutexGuard (ListVal i64)).view
 } as {
-    task: thread.Task
+    task: (thread.Task null)
     call: function {:this} is { print "ran" }
 }
 
@@ -23,8 +23,16 @@ Viewed: class {
 Borrowed: class {
     g: (sync.MutexGuard (ListVal i64)).borrow
 } as {
-    task: thread.Task
+    task: (thread.Task null)
     call: function {:this} is { print "ran" }
+}
+
+# Counted -- a task with a value result that owns a guard
+Counted: class {
+    g: (sync.MutexGuard (ListVal i64))
+} as {
+    task: (thread.TaskVal i64)
+    call: function {:this} out i64 is { return 1 }
 }
 
 # Holder -- holds a read guard
@@ -36,7 +44,7 @@ Holder: class {
 Nested: class {
     hs: List Holder
 } as {
-    task: thread.Task
+    task: (thread.Task null)
     call: function {:this} is { print "ran" }
 }
 
@@ -53,6 +61,10 @@ main: function is {
     {
         g: m.lock
         h: thread.spawn task: (Borrowed :g)
+    }
+    {
+        g: m.lock
+        h: thread.spawnVal task: (Counted :g)
     }
     {
         hs: List Holder

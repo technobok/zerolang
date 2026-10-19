@@ -48213,13 +48213,19 @@ refuseThreadBoundCrossing: function {
     if fd.isZero then return
     sp: st.typing.declFindChild parentDeclId: root nameId: zast.wellKnown.slot.wkSpawn
     sd: st.typing.declFindChild parentDeclId: root nameId: zast.wellKnown.slot.wkSpawnDetached
-    if fd != sp when fd != sd then return
+    sv: st.typing.declFindChild parentDeclId: root nameId: zast.wellKnown.slot.wkSpawnVal
+    if fd != sp when fd != sd when fd != sv then return
     tbd: st.typing.declFindChild parentDeclId: root nameId: zast.wellKnown.slot.tyThreadBound
     if tbd.isZero then return
     tb: declTypeIdOf :st declId: tbd
     if tb.isZero then return
     fnId: zast.wellKnown.slot.wkSpawn
     if fd == sd then fnId = zast.wellKnown.slot.wkSpawnDetached
+    if fd == sv then fnId = zast.wellKnown.slot.wkSpawnVal
+    # the result crosses back on `join`: a handle over a ThreadBound result
+    rseen: IdSet ztypes.tid
+    rb: threadBoundIn :st :ast tid: (walkTypeOf :st nid: call.nid) :tb seen: rseen
+    if rb.isZero.not then threadBoundResultError :st :ast :call bound: rb :fnId
     ai: u64
     for ai < call.nargs loop {
         arg: argRefAt :ast nid: (zast.callArgAt :ast nid: call.nid i: ai)
@@ -48231,6 +48237,31 @@ refuseThreadBoundCrossing: function {
             if bound.isZero.not then threadBoundError :st :ast :arg :at :bound :fnId
         }
     }
+}
+
+# threadBoundResultError -- the refusal of a crossing call `fnId` whose task
+# answers a result holding the ThreadBound type `bound`, which `join` would
+# hand back across threads
+threadBoundResultError: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    call: callref
+    bound: ztypes.tid
+    fnId: zast.nameid
+} is {
+    bt: bound
+    bo: st.reg.genericOriginOf tid: bound
+    if bo.isZero.not then bt = bo
+    bn: specWrittenName :st :ast tid: bt
+    fname: zast.nameTextCopy :ast ref: fnId
+    (addError
+        :st
+        nodeid: call.nid
+        lineno: call.lineno
+        colno: call.colno
+        e: zast.err.ownerError
+        msg: "Cannot start a thread with `thread.\{fname}` whose result holds '\{bn}': `join` would hand it to another thread, and a `thread.ThreadBound` value never leaves the thread that made it"
+    )
 }
 
 # threadBoundError -- the refusal of argument `arg`, of type `at`, holding the

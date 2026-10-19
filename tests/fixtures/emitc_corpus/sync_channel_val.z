@@ -8,26 +8,26 @@ Squarer: class {
     inbox: (sync.ChannelVal i64).view
     # where squares go out
     outbox: (sync.ChannelVal i64).view
-    # how many it answered
-    answered: i64
 } as {
-    task: thread.Task
-    call: function {:this} is {
+    task: (thread.TaskVal i64)
+    call: function {:this} out i64 is {
+        answered: 0.i64
         done: false
         for done.not loop {
             r: this.inbox.receive
             match (r) case some then {
                 this.outbox.send value: r * r
-                this.answered = this.answered + 1
+                answered = answered + 1
             } case none then done = true
         }
+        return answered
     }
 }
 
 main: function is {
     inbox: (sync.ChannelVal i64).create
     outbox: (sync.ChannelVal i64).create capacity: 2
-    h: thread.spawn task: (Squarer :inbox :outbox answered: 0)
+    h: thread.spawnVal task: (Squarer :inbox :outbox)
     i: 1.i64
     for i <= 5 loop {
         inbox.send value: i
@@ -41,7 +41,6 @@ main: function is {
         match (sq) case some then total = total + sq case none then null
         k = k + 1
     }
-    s: h.join
-    print "\{s.answered} squares, summing to \{total}"
+    print "\{h.join} squares, summing to \{total}"
     print "outbox empty: \{(outbox.tryReceive).none}"
 }

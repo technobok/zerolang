@@ -744,7 +744,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2262874
+ALLOC_BASELINE := 2265980
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1661,6 +1661,8 @@ VIEW_GUARD_INLINE := Bytes.byteView:unemitted \
   ChannelVal.send:Channel.send ChannelVal.receive:Channel.receive \
   ChannelVal.tryReceive:Channel.tryReceive ChannelVal.close:Channel.close \
   ChannelVal.isClosed:Channel.isClosed ChannelVal.capacity:Channel.capacity \
+  JoinHandleVal.join:JoinHandle.join JoinHandleVal.isFinished:JoinHandle.isFinished \
+  JoinHandleVal.id:JoinHandle.id JoinHandleVal.detach:JoinHandle.detach \
   array.listView:inline array.slice:inline array.span:writes array.spanSlice:writes \
   ListVal.span:inline ListVal.spanSlice:inline \
   ListVal.resize:ondemand \

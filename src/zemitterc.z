@@ -39172,9 +39172,41 @@ holeText: function {
 } out String is {
     oh: optionHelper :ast :symtab :ctx :inst :nm :hole :buf
     if oh.length > 0 then return oh
+    sl: slotHole :ast :symtab :ctx :inst :hole
+    if sl.length > 0 then return sl
     ht: tmplHoleType :ast :symtab :ctx :inst :hole
     if ht.isZero then return ""
     return (cbaseNoPrefix :ctx tid: ht)
+}
+
+# slotHole -- a `SLOT.<method>.<param>.<member>` hole: the vtable slot through
+# which a value of the protocol type the instance's method `<method>` takes as
+# `<param>` calls its member `<member>` (`b->task.vtable->@@SLOT.create.task.call@@`);
+# "" for any other hole
+slotHole: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    inst: ztypes.tid
+    hole: StringView
+} out String is {
+    so: hole.stripPrefix p: "SLOT."
+    match (
+        so
+    ) case some then {
+        parts: List String
+        for each w: (so.split sep: ".") loop parts.append w.string
+        if parts.length != 3 then return ""
+        mid: tmplHoleNameId :ast text: (parts.get i: 0).stringView
+        pid: tmplHoleNameId :ast text: (parts.get i: 1).stringView
+        memb: tmplHoleNameId :ast text: (parts.get i: 2).stringView
+        if mid.isZero or pid.isZero or memb.isZero then return ""
+        pt: tmplArgOf :symtab :inst mnId: mid :pid
+        if (tmplTypeMade :symtab :ctx tid: pt).not then return ""
+        return (memberC :ast :symtab :ctx owner: pt kind: memberkind.slot nameId: memb)
+    } case none then {
+        return ""
+    }
 }
 
 # optionHelper -- a `SOME.<method>` or `NONE.<method>` hole: the name of a
@@ -39411,6 +39443,14 @@ emitTmplClassMono: function {
         t = applyTmpl text: t key: pk.stringView val: sc.stringView
         pdk: "P\{k}_DESTROY"
         t = applyTmpl text: t key: pdk.stringView val: dfn.stringView
+        # 1 when the argument is `null`, which a slot holds as a placeholder:
+        # a template must not store what a call answering nothing gives
+        isNull: "0"
+        if (symtab.reg.typetypeOf typeId: at) == ztypes.ztypetype.nullType then isNull = "1"
+        nk: "\{pn}_NULL"
+        t = applyTmpl text: t key: nk.stringView val: isNull
+        pnk: "P\{k}_NULL"
+        t = applyTmpl text: t key: pnk.stringView val: isNull
         t = applyMemberHoles :ast :symtab :ctx text: t param: pn.stringView arg: at
         k = k + 1
     }
@@ -43078,15 +43118,7 @@ emitNativeFreeFnCall: function {
     # a function a templated class implements is the template function of the
     # instance it answers
     callee: "z_\{un}_\{mn}"
-    viaMember: String
-    {
-        via: ctx.nativeVia.get :key
-        match (
-            via
-        ) case some then {
-            viaMember = via.copy
-        } case none then null
-    }
+    viaMember: nativeViaMember :ctx key: key.stringView
     if viaMember.length > 0 then {
         callee = "\{ctxCname :ctx tid: (stampIdOf :symtab nid: call.nodeid)}_\{viaMember}"
     } else if (nativeIsFragBacked :ctx path: key.stringView).not then return ""
@@ -43097,6 +43129,11 @@ emitNativeFreeFnCall: function {
     pidl: ListVal ztypes.tid
     pidlNm: ListVal zast.nameid
     recFieldLists :ast :symtab tid: fid names: pn ids: pidl nameIds: pidlNm
+    # a via function's parameter types, which an argument is lowered to
+    viaTids: ListVal ztypes.tid
+    if viaMember.length > 0 then {
+        viaParams :ast :symtab :call member: viaMember.stringView names: pidlNm tids: viaTids
+    }
     m: pn.length
     wbase: orderPositions :ast :ctx :call nameIds: pidlNm labelsOnly: false
     ord: orderBegin :ctx slots: m
@@ -43121,6 +43158,11 @@ emitNativeFreeFnCall: function {
         wr: ctx.orderWrit.get i: wbase + j
         anid: zast.nodeid
         if wr > 0 then anid = writtenArgNode :ast :call pos: wr - 1
+        vbx: viaArgText :ast :symtab :ctx :viaTids :pidl :j :anid av: av.stringView :avF
+        if vbx.length > 0 then {
+            av = vbx.take
+            avF = callFacts
+        }
         (orderArgAtWith
             :ast
             :symtab
@@ -43143,6 +43185,92 @@ emitNativeFreeFnCall: function {
         from: callFacts
         text: (orderClose prefix: oprefix callee: callee.stringView args: args.stringView)
     )
+}
+
+# nativeViaMember -- the member `via=` names for the native free function
+# `key`; "" when its row names none
+nativeViaMember: function {ctx: Ctx.view key: StringView} out String is {
+    via: ctx.nativeVia.get key: key.asString
+    match (
+        via
+    ) case some then {
+        return via.copy
+    } case none then {
+        return ""
+    }
+}
+
+# viaArgText -- argument `j`, of a call whose template function takes the types
+# `viaTids`, boxed where that function takes a protocol (viaBoxArg); "" when it
+# passes as it stands
+viaArgText: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    viaTids: (ListVal ztypes.tid).view
+    pidl: (ListVal ztypes.tid).view
+    j: u64
+    anid: zast.nodeid
+    av: StringView
+    avF: cfacts
+} out String is {
+    if j >= viaTids.length then return ""
+    # the argument's own type: a generic native arrives as its template
+    vat: pidl.get i: j
+    if anid.isZero.not then vat = stampIdOf :symtab nid: anid
+    return (viaBoxArg
+        :ast
+        :symtab
+        :ctx
+        paramTid: vat
+        targetTid: (viaTids.get i: j)
+        :av
+        :avF
+        argNid: anid
+    )
+}
+
+# viaParams -- the types the template function a `via=` native call runs takes
+# for the call's parameters `names`, as an `ARG.` hole names them: the member
+# `member` of the instance the call answers
+viaParams: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    call: zast.callrow.view
+    member: StringView
+    names: (ListVal zast.nameid).view
+    tids: ListVal ztypes.tid
+} is {
+    mid: tmplHoleNameId :ast text: member
+    if mid.isZero then return
+    inst: stampIdOf :symtab nid: call.nodeid
+    for each pn: names loop tids.append (tmplArgOf :symtab :inst mnId: mid pid: pn)
+}
+
+# viaBoxArg -- an argument of type `paramTid` a `via=` native passes where its
+# template function takes the protocol `targetTid`: boxed, owned, through the
+# argument's conformance (`spawn`'s task, which the handle's `create` takes as a
+# Task value). "" when the two types are one, or the target is no protocol.
+viaBoxArg: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    paramTid: ztypes.tid
+    targetTid: ztypes.tid
+    av: StringView
+    avF: cfacts
+    argNid: zast.nodeid
+} out String is {
+    if paramTid == targetTid then return ""
+    if (symtab.reg.typetypeOf typeId: targetTid) != ztypes.ztypetype.protocolType then return ""
+    lbl: boxLabelFor :symtab :ctx implTid: paramTid protoTid: targetTid
+    if lbl.length == 0 then return ""
+    addr: "&\{av}"
+    if avF.place.not then {
+        tmpNm: hoistForAddress :ast :symtab :ctx :av tid: paramTid :argNid
+        addr = "&\{tmpNm}"
+    }
+    return "\{ctxCname :ctx tid: paramTid}_\{lbl}_create_owned(\{addr})"
 }
 
 # emitCliSpecCreate -- `cli.Spec.create programName: ... summary: ...` ->

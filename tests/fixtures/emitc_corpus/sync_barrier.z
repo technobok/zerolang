@@ -2,22 +2,29 @@
 # before all three arrive, and each round has exactly one leader.
 
 # Walker -- counts its arrivals at each round, and whether it led
+# walk -- what one walker saw
+walk: record {
+    # the count it saw after round one
+    seen: i64
+    # how many rounds it led
+    led: i64
+}
+
+# Walker -- crosses the barrier twice, counting arrivals between
 Walker: class {
     # where the threads meet
     b: sync.Barrier.view
     # how many threads had finished round one when this one left it
     arrived: sync.AtomicI64.view
-    # the count it saw after round one
-    seen: i64
-    # how many rounds it led
-    led: i64
 } as {
-    task: thread.Task
-    call: function {:this} is {
+    task: (thread.TaskVal walk)
+    call: function {:this} out walk is {
+        led: 0.i64
         this.arrived.fetchAdd value: 1
-        if this.b.wait then this.led = this.led + 1
-        this.seen = this.arrived.load
-        if this.b.wait then this.led = this.led + 1
+        if this.b.wait then led = led + 1
+        seen: this.arrived.load
+        if this.b.wait then led = led + 1
+        return (walk :seen :led)
     }
 }
 
@@ -25,9 +32,9 @@ main: function is {
     b: sync.Barrier.create count: 3
     arrived: sync.AtomicI64.create value: 0
     {
-        x: thread.spawn task: (Walker :b :arrived seen: 0 led: 0)
-        y: thread.spawn task: (Walker :b :arrived seen: 0 led: 0)
-        z: thread.spawn task: (Walker :b :arrived seen: 0 led: 0)
+        x: thread.spawnVal task: (Walker :b :arrived)
+        y: thread.spawnVal task: (Walker :b :arrived)
+        z: thread.spawnVal task: (Walker :b :arrived)
         dx: x.join
         dy: y.join
         dz: z.join

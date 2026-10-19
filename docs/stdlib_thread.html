@@ -102,51 +102,61 @@ Table of Contents</div>
 <h2 id="overview"><a href="#overview">1. Overview</a></h2>
 <p>The declarations live in <code>lib/system/thread.z</code>, each with its own doc
 comment; this page is the prose and the worked examples.</p>
-<p>The <code>thread</code> unit runs work on its own operating-system thread. The work is
-a <code>Task</code> -- a class that declares it conforms (<code>task: thread.Task</code>) and
-has a <code>call</code> method. The task is <strong>moved</strong> to the thread when it starts, so
-nothing else can touch it while it runs, and <code>join</code> hands it back:</p>
+<p>The <code>thread</code> unit runs work on its own operating-system thread. The work is a
+<strong>task</strong>: a class that conforms to <code>(thread.Task R)</code> -- or <code>(thread.TaskVal
+r)</code> when its result is a value type -- whose <code>call</code> answers the result. The
+task is <strong>moved</strong> to the thread when it starts, so nothing else can touch it
+while it runs; it is destroyed <strong>on that thread</strong> as soon as <code>call</code>
+returns, and <code>join</code> answers what <code>call</code> answered:</p>
 <pre><code class="language-zerolang">  # Counter -- counts on its own thread
   Counter: class {
-      # how far it counted
+      # where it starts
       n: i64
   } as {
-      task: thread.Task
-      call: function {:this} is {
+      task: thread.TaskVal i64
+      call: function {:this} out i64 is {
           i: 0.i64
           for i &lt; 1000 loop {
               this.n = this.n + 1
               i = i + 1
           }
+          return this.n
       }
   }
 
   main: function is {
-      h: thread.spawn task: (Counter n: 0) name: "counter"
-      done: h.join
-      print "counted \{done.n}"
+      h: thread.spawnVal task: (Counter n: 0) name: "counter"
+      print "counted \{h.join}"
   }</code></pre>
+<p>A task with no result is a <code>(thread.Task null)</code> whose <code>call</code> declares no
+<code>out</code>; its <code>join</code> answers nothing and waits.</p>
 <p>There are no shared mutable variables to protect by hand: what a thread uses is
 either moved to it or borrowed by it, and the lock model below keeps the owner
 away from what a running task borrows. The <code>sync</code> unit (<code>Mutex</code>,
 <code>Channel</code> and the rest) is for data that really is shared.</p>
 <h2 id="tasks-and-handles"><a href="#tasks-and-handles">2. Tasks and handles</a></h2>
 <ul>
-<li><strong>Task</strong> -- <code>protocol { call: function {:this} }</code>. The thread's body;
-it runs once. A task is any class that declares <code>task: thread.Task</code>.</li>
+<li><strong>Task R</strong> -- <code>protocol { call: function {:this} out R }</code>, R a
+reference type (<code>null</code> for no result); <strong>TaskVal r</strong> its twin for a
+value-type result. The thread's body; it runs once. A task is any class
+that declares one (<code>task: thread.Task String</code>).</li>
 <li><strong>spawn</strong> -- <code>function {task: T.take name: "" stackSize: 0} outx
-    (JoinHandle T)</code>. Starts the task. <code>name</code> labels the thread for
+    (JoinHandle R)</code>, for a <code>(Task R)</code>; <strong>spawnVal</strong> the same for a
+<code>(TaskVal r)</code>, answering a <code>JoinHandleVal r</code>. R is inferred from the
+task's conformance. Starts the task. <code>name</code> labels the thread for
 debuggers and <code>top</code> (15 bytes are kept); a <code>stackSize</code> of <code>0</code> is the
 default, 8 MiB -- the main thread's usual size, so a program that recurses
 deeply on main recurses as deeply on a thread.</li>
-<li><strong>JoinHandle</strong> -- the started thread. <code>join</code> waits for it and answers
-the task; <code>isFinished</code> says whether <code>join</code> would wait; <code>id</code> is the
-thread's id as the operating system numbers it (<code>0</code> once joined).
-<strong>Destroying a handle that was never joined joins it</strong>: a scope cannot end
-while a thread it started still uses what the scope owns.</li>
-<li><strong>spawnDetached</strong> -- the same start with no handle: the thread runs to
-its end on its own and frees its task. The program may end while it still
-runs.</li>
+<li><strong>JoinHandle R</strong> / <strong>JoinHandleVal r</strong> -- the started thread, typed
+by its result alone, so one list may hold the handles of different tasks.
+<code>join</code> waits for it and answers the result; <code>isFinished</code> says whether
+<code>join</code> would wait; <code>id</code> is the thread's id as the operating system
+numbers it (<code>0</code> once joined). <strong>Destroying a handle that was never
+    joined joins it</strong>: a scope cannot end while a thread it started still uses
+what the scope owns.</li>
+<li><strong>spawnDetached</strong> -- start a <code>(Task R)</code> with no handle: the thread
+runs to its end on its own and destroys its task and its result. The
+program may end while it still runs.</li>
 <li><strong>yieldNow</strong> -- let another thread run.</li>
 <li><strong>running</strong> -- how many threads the program started that have not
 finished. A thread leaves the count after its task is destroyed, so a
@@ -157,21 +167,21 @@ program that must not end before its detached tasks waits for <code>0</code>:
 iterator-shaped value in that respect -- so a task held in a variable is passed
 with <code>.take</code>: <code>thread.spawn task: t.take</code>.</p>
 <h2 id="borrowing-tasks"><a href="#borrowing-tasks">3. Borrowing tasks</a></h2>
-<p>A task may hold borrows -- a <code>.borrow</code> field into data its owner keeps. The
-handle carries the task's locks (<code>spawn</code> is a native <code>outx</code> function, the
-one kind of call that may keep a moved value's locks), so while the handle
-lives, or the task <code>join</code> answered, the owner can neither write nor read nor
-drop what the task borrows, and two running tasks cannot borrow one source:</p>
+<p>A task may hold borrows -- a <code>.view</code> or <code>.borrow</code> field into data its
+owner keeps. The handle carries the task's locks (<code>spawn</code> is a native
+<code>outx</code> function, the one kind of call that may keep a moved value's locks),
+so while the handle lives the owner can neither write nor read nor drop what
+the task borrows, and two running tasks cannot write one source:</p>
 <pre><code class="language-zerolang">  # Summer -- sums a list its owner lends it
   Summer: class {
       # the borrowed input
-      xs: (ListVal i64).borrow
-      # the answer
-      total: i64
+      xs: (ListVal i64).view
   } as {
-      task: thread.Task
-      call: function {:this} is {
-          for each x: this.xs loop this.total = this.total + x
+      task: thread.TaskVal i64
+      call: function {:this} out i64 is {
+          total: 0.i64
+          for each x: this.xs loop total = total + x
+          return total
       }
   }
 
@@ -180,16 +190,14 @@ drop what the task borrows, and two running tasks cannot borrow one source:</p>
       xs.append 1
       xs.append 2
       {
-          h: thread.spawn task: (Summer :xs total: 0)
-          s: h.join
-          print "summed \{s.total}"
+          h: thread.spawnVal task: (Summer :xs)
+          print "summed \{h.join}"
       }
       xs.append 3
       print "the owner writes again: \{xs.length}"
   }</code></pre>
-<p>Inside the inner block <code>xs.append 3</code> is refused (<code>exclusive lock held by
-'h'</code>); after it, the lock is gone. <code>join</code> is <code>{:this} outx T</code>: the task it
-answers keeps the handle locked, which is what keeps the task's borrows alive.</p>
+<p>Inside the inner block <code>xs.append 3</code> is refused (the handle holds a lock on
+<code>xs</code>); after it, the lock is gone.</p>
 <p><code>spawnDetached</code> is <code>out</code>, not <code>outx</code>: nothing would keep what a detached
 task borrows alive, so a task holding a borrow is refused there.</p>
 <h2 id="what-may-cross-to-a-thread"><a href="#what-may-cross-to-a-thread">4. What may cross to a thread</a></h2>
@@ -197,7 +205,9 @@ task borrows alive, so a task holding a borrow is refused there.</p>
 conforms to <code>thread.ThreadBound</code> -- a marker protocol, with no methods --
 never makes that move: a value of it is refused as a task, and as anything a
 task holds at any depth, whether it is owned, viewed or borrowed, or sits in a
-list inside another class. The lock guards (<code>sync.MutexGuard</code>,
+list inside another class -- at <code>spawn</code>, <code>spawnVal</code> and <code>spawnDetached</code>
+alike -- and so is a task whose result holds one, which <code>join</code> would hand
+back across threads. The lock guards (<code>sync.MutexGuard</code>,
 <code>sync.ReadGuard</code>, <code>sync.WriteGuard</code>) are the stdlib's: a guard unlocks on
 the thread that locked, and unlocked on another the lock is undefined. Lock on
 the new thread instead -- the task holds the Mutex, by <code>.view</code>, and takes the
@@ -207,7 +217,7 @@ guard itself:</p>
       # the guard, locked on the owner's thread
       g: sync.MutexGuard (ListVal i64)
   } as {
-      task: thread.Task
+      task: thread.Task null
       call: function {:this} is {
           print "\{this.g.value.length}"
       }
