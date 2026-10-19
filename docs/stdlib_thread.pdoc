@@ -188,6 +188,55 @@ Refused: "Cannot hand 'Waiter' to another thread with #~"thread.spawn": it
 holds 'MutexGuard', and a #~"thread.ThreadBound" value never leaves the thread
 that made it".
 
+A task is the only way a value reaches another thread. A channel end, a Mutex
+handle and whatever they carry go over inside one, so a Sender of guards is
+refused where the task holding it is spawned, by the same check: the check
+reads a type's type arguments as part of what it holds.
+
+What makes a call a crossing is its parameter, not its name: a value moved
+into a parameter typed or bounded by a protocol that conforms to
+#~"thread.Crossing" is handed to another thread, and is checked there.
+#~"Task" and #~"TaskVal" conform, so #~"spawn", #~"spawnVal",
+#~"spawnDetached" and #~"JoinHandle.create" are all crossings. A protocol of
+your own declares it the same way -- the job protocol of a pool whose own code
+starts threads, say -- and its callers are then checked at the call:
+
+#code language=zerolang: """
+  # Job -- work a pool runs on one of its threads
+  Job: protocol {
+      # the work
+      run: function {:this}
+  } as {
+      crossing: thread.Crossing
+  }
+
+  # submit -- hand `job` to the pool (here it runs at once)
+  submit: function {job: J.take} is {
+      job.run
+  } as {
+      J: Job.generic
+  }
+
+  # Count -- a job that counts its items
+  Count: class {
+      # the items
+      items: ListVal i64
+  } as {
+      job: Job
+      run: function {:this} is { print "counted \{this.items.length}" }
+  }
+
+  main: function is {
+      xs: ListVal i64
+      xs.append 1
+      xs.append 2
+      xs.append 3
+      submit job: (Count items: xs.take)
+  }
+"""
+
+Only a protocol declares #~"thread.Crossing"; a class that does is refused.
+
 #--: Panics
 
 A panic on any thread ends the whole program, with status #~"1": the panic is

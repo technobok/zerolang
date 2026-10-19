@@ -1,9 +1,18 @@
-# A Sender's `send` hands its value to whichever thread receives it, so a
-# `thread.ThreadBound` value -- a lock guard -- is refused there.
+# A value reaches another thread only inside a task, so a channel end in a
+# task brings what its channel carries along: a Sender of lock guards is
+# refused where the task is handed to `thread.spawn`, since a guard never
+# leaves the thread that locked.
+
+# Feeder -- would send guards from the new thread
+Feeder: class {
+    # the sending end, moved to the thread
+    tx: sync.Sender (sync.MutexGuard (ListVal i64))
+} as {
+    task: (thread.Task null)
+    call: function {:this} is { print "started" }
+}
 
 main: function is {
-    m: (sync.Mutex (ListVal i64)).create value: ListVal i64
-    rx: (sync.Receiver (sync.MutexGuard (ListVal i64))).create
-    tx: rx.sender
-    tx.send value: m.lock
+    rx: (sync.Receiver (sync.MutexGuard (ListVal i64))).create capacity: 1.u64
+    h: thread.spawn task: (Feeder tx: rx.sender)
 }

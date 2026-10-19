@@ -862,11 +862,6 @@ indexUnitDefs: function {st: zenv.ZSymbolTable scope: ztypes.declid program: Ast
                 nameId: zast.wellKnown.slot.unThread
             )
             if tro.isZero.not then st.typing.threadUnitRoot = tro
-            syo: (st.typing.declFindChild
-                parentDeclId: st.typing.programRoot
-                nameId: zast.wellKnown.slot.unSync
-            )
-            if syo.isZero.not then st.typing.syncUnitRoot = syo
         }
         # a type minted before the def index existed has no def link; link any
         # still-unlinked named system def now
@@ -8904,6 +8899,9 @@ recordConformance: function {
         # and a marker that is no conformance reads as an ordinary FIELD, which
         # made the construction below it report a missing argument as well
     }
+    # a protocol's refused conformance is not recorded: it would be checked
+    # for members a protocol never implements
+    if recordIt when (refuseMarkerHolder :st :ast :implTypeId :specTypeId :markerOp) then return
     if recordIt then {
         st.typing.addConformance :implTypeId :specTypeId :label :labelNameId isFacet: isFacetC
         # a marker names no member: conforming to one demands nothing of the type
@@ -9836,6 +9834,45 @@ attachMarkers: function {
         }
     }
     return needsDtor
+}
+
+# refuseMarkerHolder -- a conformance its holder cannot declare: a protocol
+# implements no other protocol's members, so it conforms only to a marker (an
+# empty protocol); and `thread.Crossing` says a protocol's values are handed to
+# another thread, which a parameter's protocol type or bound is read for, so
+# only a protocol declares it. True when the holder is a protocol refused.
+refuseMarkerHolder: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    implTypeId: ztypes.tid
+    specTypeId: ztypes.tid
+    markerOp: zast.nodeid
+} out bool is {
+    isProto: (st.reg.typetypeOf typeId: implTypeId) == ztypes.ztypetype.protocolType
+    msg: String
+    if isProto when (specIsMarker :st spec: specTypeId).not then {
+        sn: specWrittenName :st :ast tid: specTypeId
+        msg = "a protocol cannot conform to '\{sn}': it implements no members of its own, so its `as` block names only markers (empty protocols)"
+    }
+    root: st.typing.threadUnitRoot
+    if isProto.not when root.isZero.not then {
+        crd: st.typing.declFindChild parentDeclId: root nameId: zast.wellKnown.slot.tyCrossing
+        if crd.isZero.not when (st.typing.declIdOfType typeId: specTypeId) == crd then {
+            hn: specWrittenName :st :ast tid: implTypeId
+            msg = "'\{hn}' cannot declare `thread.Crossing`: it marks a protocol, whose values a parameter typed or bounded by it hands to another thread"
+        }
+    }
+    if msg.length == 0 then return false
+    n: ast.nodes.get i: markerOp
+    (addError
+        :st
+        nodeid: markerOp
+        lineno: (nodeLine :n)
+        colno: (nodeCol :n)
+        e: zast.err.typeError
+        :msg
+    )
+    return isProto
 }
 
 # dataelem -- one data-block element dissected into the nodes carrying its
@@ -15258,6 +15295,8 @@ resolveProtocol: function {
             childTypeId: createId
         )
     }
+    # a protocol's own markers (`:Crossing`) hold for every value of it
+    attachMarkers :st :scope :ast :unitDecl parentId: pid objId: fnode.nid
     st.reg.setNeedsDestructor typeId: pid
     if pvExcl_ppid.length > 0 then st.typing.privacySeen = true
     applyGrantsPrivate :st parentId: ppid grants: pvGrants_ppid
@@ -41108,6 +41147,13 @@ moveHeldLocksIntoSlot: function {
         into: keeperText :ast :keeper
         msg = "Cannot move \{what} into \{into}: it holds a lock on '\{root}', and a value stored there could later be taken out without that lock; copy it first (`.copy`)"
     }
+    # a value handed to another thread by a call that keeps nothing: nothing
+    # waits for that thread, so nothing keeps the lock while it runs
+    xc: (st.typing.crossingArgCallee.get key: nodeid).or d: ztypes.tid.zero
+    if xc.isZero.not when calleePins.not then {
+        xn: crossingCallName :st funcId: xc
+        msg = "Cannot hand \{what} to another thread with `\{xn}`: it holds a lock on '\{root}', and the call keeps no handle that would hold that lock while the thread runs; copy it first (`.copy`)"
+    }
     addError :st :nodeid :lineno :colno e: zast.err.ownerError :msg
 }
 
@@ -44202,13 +44248,17 @@ checkSpecStandIns: function {ast: Ast st: zenv.ZSymbolTable} is {
         if (st.reg.genericOriginOf tid: su.spec).isZero.not then {
             hn = "a conformer declares `name: \{sn}` in its `as` block"
         }
+        why: "it does not conform to it".string
+        if (st.reg.typetypeOf typeId: su.value) == ztypes.ztypetype.protocolType then {
+            why = "a protocol value wraps its conformer and stands in for its own protocol only"
+        }
         (addErrorH
             :st
             nodeid: su.nid
             lineno: su.lineno
             colno: su.colno
             e: zast.err.typeError
-            msg: "\{vn} cannot stand in for \{sn}: it does not conform to it"
+            msg: "\{vn} cannot stand in for \{sn}: \{why}"
             note: String
             hint: hn
             width: 1
@@ -44384,14 +44434,18 @@ takenBareName: function {ast: Ast.view nid: zast.nodeid} out zast.nameid is {
     return (bareAtomNameId n: (ast.nodes.get i: vn.parent))
 }
 
-# specStandInHolds -- `value` may be written where `spec` is expected.
+# specStandInHolds -- `value` may be written where `spec` is expected. A
+# protocol value is itself the wrapper around its conformer, so it stands in for
+# its own protocol only, never for a marker it declares.
 specStandInHolds: function {
     st: zenv.ZSymbolTable.view
     value: ztypes.tid
     spec: ztypes.tid
 } out bool is {
     if value.isZero or (value == spec) then return true
-    if (st.reg.typetypeOf typeId: value) == ztypes.ztypetype.genericParam then return true
+    vtt: st.reg.typetypeOf typeId: value
+    if vtt == ztypes.ztypetype.genericParam then return true
+    if vtt == ztypes.ztypetype.protocolType then return false
     if (st.reg.isPartialOf tid: value) then return true
     return (typeConformsTo :st impl: value :spec)
 }
@@ -45133,6 +45187,7 @@ checkTypedCallArg: function {
     aow: argOwnershipOf :st funcId: ownFn isCtor: ownCtor :pnId :vt
     if aow.isTake then markSpecStandInOwned :st nid: arg.nid
     refusePlainPrivateArg :st :ast funcId: ownFn :isCtor :pnId :vt :arg
+    refuseCrossingParamArg :st :ast funcId: ownFn :pnId :arg :vt fieldCtor: ownCtor
     isTake: aow.isTake
     isLockish: aow.isLockish
     isViewArg: aow.isViewArg
@@ -47412,7 +47467,6 @@ checkResolvedMethodCall: function {
         path: rtupP
         :pins
     )
-    refuseThreadBoundSend :st :ast :call funcId: dro
     pinCallResult :st funcId: dro :pins recvPath: rtupP recvShared: recvShr
     st.typing.callKind.set key: call.nid value: zast.callkind.regular
     return mres
@@ -48210,7 +48264,6 @@ checkGenericFnCall: function {
     callableNode: ast.nodes.get i: call.callable
     midG: genericCallInstance :st :ast :call
     checkGenericCallMissingArgs :ast :st :call mid: midG recvImplicit: recvVal
-    refuseThreadBoundCrossing :st :ast :call funcId: dro
     rroG: methodReceiverRootId :ast n: callableNode
     # a generic method's receiver owns what it holds exactly as a concrete
     # method's does; the concrete leg reaches this through captureValueReceiver
@@ -48221,123 +48274,179 @@ checkGenericFnCall: function {
     return gfr
 }
 
-# refuseThreadBoundCrossing -- a call that hands its arguments to another
-# thread (`thread.spawn`, `thread.spawnDetached`) refuses an argument whose type
-# holds a `thread.ThreadBound` type at any depth (threadBoundIn): such a value
-# never leaves the thread that made it -- a lock guard unlocks on the thread
-# that locked, and on another the unlock is undefined.
-refuseThreadBoundCrossing: function {
+# crossingProtocolOf -- the protocol a parameter of type `ptid` is typed by --
+# or bounded by, when `ptid` is one of `funcId`'s generic parameters -- when
+# that protocol conforms to the marker `thread.Crossing`: a value moved into the
+# parameter is handed to another thread. Zero for any other parameter, and for
+# every parameter of a program in which nothing conforms to the marker.
+crossingProtocolOf: function {
     st: zenv.ZSymbolTable
     ast: Ast
-    call: callref
-    # the callee: the template of a generic call
     funcId: ztypes.tid
-} is {
+    ptid: ztypes.tid
+} out ztypes.tid is {
+    none: ztypes.tid.zero
     root: st.typing.threadUnitRoot
-    if root.isZero then return
-    fd: declOfTypeId :st tid: funcId
-    if fd.isZero then return
-    sp: st.typing.declFindChild parentDeclId: root nameId: zast.wellKnown.slot.wkSpawn
-    sd: st.typing.declFindChild parentDeclId: root nameId: zast.wellKnown.slot.wkSpawnDetached
-    sv: st.typing.declFindChild parentDeclId: root nameId: zast.wellKnown.slot.wkSpawnVal
-    if fd != sp when fd != sd when fd != sv then return
-    tbd: st.typing.declFindChild parentDeclId: root nameId: zast.wellKnown.slot.tyThreadBound
-    if tbd.isZero then return
-    tb: declTypeIdOf :st declId: tbd
-    if tb.isZero then return
-    fnId: zast.wellKnown.slot.wkSpawn
-    if fd == sd then fnId = zast.wellKnown.slot.wkSpawnDetached
-    if fd == sv then fnId = zast.wellKnown.slot.wkSpawnVal
-    # the result crosses back on `join`: a handle over a ThreadBound result
-    rseen: IdSet ztypes.tid
-    rb: threadBoundIn :st :ast tid: (walkTypeOf :st nid: call.nid) :tb seen: rseen
-    if rb.isZero.not then threadBoundResultError :st :ast :call bound: rb :fnId
-    ai: u64
-    for ai < call.nargs loop {
-        arg: argRefAt :ast nid: (zast.callArgAt :ast nid: call.nid i: ai)
-        ai = ai + 1
-        if arg.nid.isZero.not then {
-            at: walkTypeOf :st nid: arg.operation
-            seen: IdSet ztypes.tid
-            bound: threadBoundIn :st :ast tid: at :tb :seen
-            fname: zast.nameTextCopy :ast ref: fnId
-            via: "`thread.\{fname}`"
-            if bound.isZero.not then threadBoundError :st :ast :arg :at :bound via: via.stringView
-        }
+    if root.isZero or ptid.isZero then return none
+    crd: st.typing.declFindChild parentDeclId: root nameId: zast.wellKnown.slot.tyCrossing
+    if crd.isZero then return none
+    cr: declTypeIdOf :st declId: crd
+    if cr.isZero then return none
+    # an instance over the function's parameters (`(Task R)`) names its
+    # protocol by its origin; a bare parameter (`T`) by its bound
+    pro: st.reg.genericOriginOf tid: ptid
+    if pro.isZero then pro = ptid
+    if (st.reg.typetypeOf typeId: ptid) == ztypes.ztypetype.genericParam when pro == ptid then {
+        pro = paramBoundProtocol :st :ast :funcId :ptid
     }
+    if pro.isZero then return none
+    if (st.reg.typetypeOf typeId: pro) != ztypes.ztypetype.protocolType then return none
+    if (typeConformsTo :st impl: pro spec: cr) then return pro
+    return none
 }
 
-# refuseThreadBoundSend -- a Sender's `send` hands its value to whichever
-# thread receives it: a value holding a `thread.ThreadBound` type at any depth
-# is refused there, as at `thread.spawn`
-refuseThreadBoundSend: function {
+# paramBoundProtocol -- the template of the bound on `funcId`'s generic
+# parameter `ptid` (`Job` for `J: Job.generic`, `Task` for
+# `T: (Task R).generic`); zero for an unbounded one
+paramBoundProtocol: function {
     st: zenv.ZSymbolTable
     ast: Ast
-    call: callref
+    funcId: ztypes.tid
+    ptid: ztypes.tid
+} out ztypes.tid is {
+    none: ztypes.tid.zero
+    tdecl: declOfTypeId :st tid: funcId
+    if tdecl.isZero then return none
+    pn: st.reg.genericParamNameOfTid :tdecl :ptid
+    if pn.isZero then return none
+    cd: st.reg.genericParamConstraintOf :tdecl paramName: pn
+    bt: none
+    if cd.boundApp.isZero.not then {
+        bt = boundApplicationTid :ast :st :tdecl app: cd.boundApp
+    } else {
+        bd: boundDeclOf :st :ast :tdecl :cd
+        if bd.isZero then return none
+        bt = declTypeIdOf :st declId: bd
+    }
+    bo: st.reg.genericOriginOf tid: bt
+    if bo.isZero.not then return bo
+    return bt
+}
+
+# crossingCallName -- the callee a crossing report names: `thread.spawn` for a
+# function, `thread.JoinHandle.create` for a method
+crossingCallName: function {st: zenv.ZSymbolTable.view funcId: ztypes.tid} out String is {
+    f: funcId
+    fo: st.reg.genericOriginOf tid: funcId
+    if fo.isZero.not then f = fo
+    d: declOfTypeId :st tid: f
+    if d.isZero then return (st.reg.nameOf tid: f)
+    pd: st.typing.declParentOf declId: d
+    if pd.isZero.not when pd != (unitRootOfDecl :st declId: d) then {
+        r: qualifiedTemplateName :st tdecl: pd
+        r.append "."
+        r.append (st.reg.nameOf tid: f)
+        return r
+    }
+    return (qualifiedTemplateName :st tdecl: d)
+}
+
+# refuseCrossingArg -- an argument of type `at` moved into a parameter of the
+# Crossing protocol `pro` goes to another thread. It is refused when it holds a
+# `thread.ThreadBound` type at any depth, and when the instance of `pro` it
+# conforms to names one -- a task's result, which `join` hands back across. The
+# argument is recorded (`crossingArgCallee`) so a lock it carries is refused in
+# a thread's words.
+refuseCrossingArg: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    arg: argref
+    at: ztypes.tid
+    pro: ztypes.tid
     funcId: ztypes.tid
 } is {
-    if st.typing.syncUnitRoot.isZero or st.typing.threadUnitRoot.isZero then return
-    fd: declOfTypeId :st tid: funcId
-    if fd.isZero then return
-    if (st.typing.decls.get i: fd).name != zast.wellKnown.slot.wkSend then return
-    sd: (st.typing.declFindChild
-        parentDeclId: st.typing.syncUnitRoot
-        nameId: zast.wellKnown.slot.tySender
-    )
-    if sd.isZero or ((st.typing.declParentOf declId: fd) != sd) then return
+    st.typing.crossingArgCallee.set key: arg.nid value: funcId
     tbd: (st.typing.declFindChild
         parentDeclId: st.typing.threadUnitRoot
         nameId: zast.wellKnown.slot.tyThreadBound
     )
     if tbd.isZero then return
     tb: declTypeIdOf :st declId: tbd
-    ai: u64
-    for ai < call.nargs loop {
-        arg: argRefAt :ast nid: (zast.callArgAt :ast nid: call.nid i: ai)
-        ai = ai + 1
-        if arg.nid.isZero.not then {
-            at: walkTypeOf :st nid: arg.operation
-            seen: IdSet ztypes.tid
-            bound: threadBoundIn :st :ast tid: at :tb :seen
-            if bound.isZero.not then (threadBoundError
-                :st
-                :ast
-                :arg
-                :at
-                :bound
-                via: "a Sender's `send`"
-            )
+    if tb.isZero or at.isZero then return
+    via: crossingCallName :st :funcId
+    seen: IdSet ztypes.tid
+    bound: threadBoundIn :st :ast tid: at :tb :seen
+    if bound.isZero.not then {
+        quoted: "`\{via}`"
+        threadBoundError :st :ast :arg :at :bound via: quoted.stringView
+        return
+    }
+    inst: conformedInstanceOf :st impl: at origin: pro
+    if inst.isZero when (st.reg.genericOriginOf tid: at) == pro then inst = at
+    k: u64
+    for k < (st.reg.genericArgCount specId: inst) loop {
+        ga: st.reg.genericTypeArgAt specId: inst ordinal: k
+        k = k + 1
+        rseen: IdSet ztypes.tid
+        rb: threadBoundIn :st :ast tid: ga :tb seen: rseen
+        if rb.isZero.not then {
+            threadBoundResultError :st :ast :arg bound: rb via: via.stringView
+            return
         }
     }
 }
 
-# threadBoundResultError -- the refusal of a crossing call `fnId` whose task
+# refuseCrossingParamArg -- the argument `arg`, of type `vt`, bound to the
+# parameter `pnId` of `funcId`, checked as a crossing when the parameter's type
+# makes it one (crossingProtocolOf)
+refuseCrossingParamArg: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    funcId: ztypes.tid
+    pnId: zast.nameid
+    arg: argref
+    vt: ztypes.tid
+    # a field construction, which stores its argument; a declared `create` is
+    # a call like any other
+    fieldCtor: false
+} is {
+    if fieldCtor or pnId.isZero or st.typing.threadUnitRoot.isZero then return
+    po: st.typing.declChildOfId parentTypeId: funcId nameId: pnId
+    match (
+        po
+    ) case some then {
+        pro: crossingProtocolOf :st :ast :funcId ptid: po
+        if pro.isZero.not then refuseCrossingArg :st :ast :arg at: vt :pro :funcId
+    } case none then null
+}
+
+# threadBoundResultError -- the refusal of a crossing argument `arg` whose task
 # answers a result holding the ThreadBound type `bound`, which `join` would
 # hand back across threads
 threadBoundResultError: function {
     st: zenv.ZSymbolTable
     ast: Ast
-    call: callref
+    arg: argref
     bound: ztypes.tid
-    fnId: zast.nameid
+    # the crossing call, as the message names it (`thread.spawn`)
+    via: StringView
 } is {
     bt: bound
     bo: st.reg.genericOriginOf tid: bound
     if bo.isZero.not then bt = bo
     bn: specWrittenName :st :ast tid: bt
-    fname: zast.nameTextCopy :ast ref: fnId
     (addError
         :st
-        nodeid: call.nid
-        lineno: call.lineno
-        colno: call.colno
+        nodeid: arg.nid
+        lineno: arg.lineno
+        colno: arg.colno
         e: zast.err.ownerError
-        msg: "Cannot start a thread with `thread.\{fname}` whose result holds '\{bn}': `join` would hand it to another thread, and a `thread.ThreadBound` value never leaves the thread that made it"
+        msg: "Cannot start a thread with `\{via}` whose result holds '\{bn}': `join` would hand it to another thread, and a `thread.ThreadBound` value never leaves the thread that made it"
     )
 }
 
 # threadBoundError -- the refusal of argument `arg`, of type `at`, holding the
-# ThreadBound type `bound`, at the crossing call `fnId` names
+# ThreadBound type `bound`, at the crossing call `via` names
 threadBoundError: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -48390,11 +48499,17 @@ threadBoundIn: function {
         if inner.isZero.not then return inner
     }
     forceAllFields :st :ast :tid
+    # a conformance label (`task: (thread.Task R)`) names a protocol the type
+    # conforms to, and stores nothing
+    labels: ListVal zast.nameid
+    conformanceMarkerIds :st :tid ids: labels
     ri: u64
     for ri < (st.typing.declRowSlots ownerTid: tid) loop {
         rw: st.typing.declRowAt ownerTid: tid membersOnly: true slot: ri
         ri = ri + 1
-        if rw.keep when (st.reg.typetypeOf typeId: rw.tid) != ztypes.ztypetype.functionType then {
+        if rw.keep when (
+            (st.reg.typetypeOf typeId: rw.tid) != ztypes.ztypetype.functionType
+        ) when (labels.contains rw.name).not then {
             inner: threadBoundIn :st :ast tid: rw.tid :tb :seen
             if inner.isZero.not then return inner
         }
@@ -48786,7 +48901,6 @@ checkBareGenericCall: function {
     gr: checkGenericCall :st :unitDecl :ast :call :funcId pins: pinsB
     midB: genericCallInstance :st :ast :call
     checkGenericCallMissingArgs :ast :st :call mid: midB recvImplicit: false
-    refuseThreadBoundCrossing :st :ast :call :funcId
     st.popTo marker: mcmB
     pinGenericCallResult :st mid: midB pins: pinsB
     result = gr
@@ -48992,7 +49106,6 @@ checkUserFnCall: function {
         recvImplicit: false
     )
     checkMissingCallArgs :ast :st :call :funcId isCtor: false recvImplicit: false
-    refuseThreadBoundCrossing :st :ast :call :funcId
     st.popTo marker: cm
     st.typing.callKind.set key: call.nid value: zast.callkind.regular
     # what the function returns: a unit instance's copy of a template's
@@ -50547,6 +50660,7 @@ lockGenericValueArg: function {
     pins: List ztyping.PinPath
 } is {
     if pnId.isZero then return
+    refuseCrossingParamArg :st :ast :funcId :pnId :arg :vt
     # a valtype takes the lock, and an `outx` result's pin, only when its
     # parameter takes it by pointer; the TEMPLATE's marker answers, as below
     vow: valtypeArgOwn :st :funcId :pnId :vt
