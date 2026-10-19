@@ -41471,8 +41471,7 @@ emitOneFacet: function {
         vfuncs.append vline
         mi = mi + 1
     }
-    l0: "typedef struct {\n\{vfuncs}} \{pbase}_vtable_t;\n\n"
-    buf.append l0
+    buf.append (vtableTypedefC slots: vfuncs.stringView base: pbase.stringView)
     du: String
     for each itid: impls loop {
         icn: implStructC :symtab :ctx tid: itid
@@ -41490,6 +41489,14 @@ emitOneFacet: function {
     buf.append "_data_u data;\n"
     closeStructBody :ctx :tid cn: pbase.stringView :buf
     buf.append "\n"
+}
+
+# vtableTypedefC -- a protocol's or facet's vtable struct over its `slots`. A
+# marker has no slots, and a C17 struct needs a member, so it holds a
+# placeholder.
+vtableTypedefC: function {slots: StringView base: StringView} out String is {
+    if slots.length == 0 then return "typedef struct {\n    char none;\n} \{base}_vtable_t;\n\n"
+    return "typedef struct {\n\{slots}} \{base}_vtable_t;\n\n"
 }
 
 # emitOneProtocol -- the protocol value representation: vtable typedef (one
@@ -41571,8 +41578,7 @@ emitOneProtocol: function {
         vfuncs.append vline
         mi = mi + 1
     }
-    l0: "typedef struct {\n\{vfuncs}} \{pbase}_vtable_t;\n\n"
-    buf.append l0
+    buf.append (vtableTypedefC slots: vfuncs.stringView base: pbase.stringView)
     openStructBody :ctx :tid cn: pbase.stringView :buf
     buf.append "    void* data;\n    "
     buf.append pbase
@@ -41818,6 +41824,8 @@ emitConformanceImpl: function {
     }
     vi0: "static \{vtableCtype} \{wbase}_vtable = {\n"
     buf.append vi0
+    # a marker's vtable is its one placeholder member, initialised as C17 asks
+    if mn == 0 then buf.append "    0\n"
     mj: u64
     for mj < mn loop {
         # the row for a member with no slot: there is nothing to point at

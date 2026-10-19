@@ -857,6 +857,11 @@ indexUnitDefs: function {st: zenv.ZSymbolTable scope: ztypes.declid program: Ast
                 nameId: zast.wellKnown.slot.unSystem
             )
             if sro.isZero.not then st.typing.systemUnitRoot = sro
+            tro: (st.typing.declFindChild
+                parentDeclId: st.typing.programRoot
+                nameId: zast.wellKnown.slot.unThread
+            )
+            if tro.isZero.not then st.typing.threadUnitRoot = tro
         }
         # a type minted before the def index existed has no def link; link any
         # still-unlinked named system def now
@@ -17048,7 +17053,9 @@ resolveDottedDef: function {
 # A record or a class holds its data in fields, so members alone do not make
 # one: with none it has no layout, members or generic parameters or not. The
 # other kinds -- a generator, a union or variant (arms), a protocol, facet or
-# unit (members) -- declare what they are through their `as` block.
+# unit (members) -- declare what they are through their `as` block. A protocol
+# with no specs at all is a MARKER: a type conforms to say something about
+# itself (`thread.ThreadBound`), and nothing is ever called through it.
 #
 # `is native` is the exception, and the only one: the runtime owns those
 # layouts, and the markers the compiler declares this way -- `null`, `never`,
@@ -17061,6 +17068,7 @@ refuseEmptyObjectDef: function {
 } is {
     if defn.nis > 0 then return
     if defn.isNative then return
+    if defn.kind == zast.objectkind.protocolDef then return
     holdsData: (defn.kind == zast.objectkind.recordDef) or (defn.kind == zast.objectkind.classDef)
     if defn.nas > 0 when holdsData.not then return
     em9o: "'\{defName}' is an empty object definition — it declares no fields and no members"
@@ -48106,6 +48114,7 @@ checkGenericFnCall: function {
     callableNode: ast.nodes.get i: call.callable
     midG: genericCallInstance :st :ast :call
     checkGenericCallMissingArgs :ast :st :call mid: midG recvImplicit: recvVal
+    refuseThreadBoundCrossing :st :ast :call funcId: dro
     rroG: methodReceiverRootId :ast n: callableNode
     # a generic method's receiver owns what it holds exactly as a concrete
     # method's does; the concrete leg reaches this through captureValueReceiver
@@ -48114,6 +48123,107 @@ checkGenericFnCall: function {
     st.popTo marker: mcmG
     pinGenericCallResult :st mid: midG pins: pinsG
     return gfr
+}
+
+# refuseThreadBoundCrossing -- a call that hands its arguments to another
+# thread (`thread.spawn`, `thread.spawnDetached`) refuses an argument whose type
+# holds a `thread.ThreadBound` type at any depth (threadBoundIn): such a value
+# never leaves the thread that made it -- a lock guard unlocks on the thread
+# that locked, and on another the unlock is undefined.
+refuseThreadBoundCrossing: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    call: callref
+    # the callee: the template of a generic call
+    funcId: ztypes.tid
+} is {
+    root: st.typing.threadUnitRoot
+    if root.isZero then return
+    fd: declOfTypeId :st tid: funcId
+    if fd.isZero then return
+    sp: st.typing.declFindChild parentDeclId: root nameId: zast.wellKnown.slot.wkSpawn
+    sd: st.typing.declFindChild parentDeclId: root nameId: zast.wellKnown.slot.wkSpawnDetached
+    if fd != sp when fd != sd then return
+    tbd: st.typing.declFindChild parentDeclId: root nameId: zast.wellKnown.slot.tyThreadBound
+    if tbd.isZero then return
+    tb: declTypeIdOf :st declId: tbd
+    if tb.isZero then return
+    fnId: zast.wellKnown.slot.wkSpawn
+    if fd == sd then fnId = zast.wellKnown.slot.wkSpawnDetached
+    ai: u64
+    for ai < call.nargs loop {
+        arg: argRefAt :ast nid: (zast.callArgAt :ast nid: call.nid i: ai)
+        ai = ai + 1
+        if arg.nid.isZero.not then {
+            at: walkTypeOf :st nid: arg.operation
+            seen: IdSet ztypes.tid
+            bound: threadBoundIn :st :ast tid: at :tb :seen
+            if bound.isZero.not then threadBoundError :st :ast :arg :at :bound :fnId
+        }
+    }
+}
+
+# threadBoundError -- the refusal of argument `arg`, of type `at`, holding the
+# ThreadBound type `bound`, at the crossing call `fnId` names
+threadBoundError: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    arg: argref
+    at: ztypes.tid
+    bound: ztypes.tid
+    fnId: zast.nameid
+} is {
+    an: specWrittenName :st :ast tid: at
+    # an instance is named by its template: the guard, not its arguments
+    bt: bound
+    bo: st.reg.genericOriginOf tid: bound
+    if bo.isZero.not then bt = bo
+    bn: specWrittenName :st :ast tid: bt
+    held: "it holds '\{bn}'"
+    if bound == at then held = "it is one"
+    fname: zast.nameTextCopy :ast ref: fnId
+    (addError
+        :st
+        nodeid: arg.nid
+        lineno: arg.lineno
+        colno: arg.colno
+        e: zast.err.ownerError
+        msg: "Cannot hand '\{an}' to another thread with `thread.\{fname}`: \{held}, and a `thread.ThreadBound` value never leaves the thread that made it; make it on the new thread instead"
+    )
+}
+
+# threadBoundIn -- the first type, `tid` itself or one it holds at any depth --
+# a field or an arm's payload by any marker, a type argument of an instance --
+# that conforms to the marker `tb`; zero for none. `seen` ends a walk that
+# meets a type again.
+threadBoundIn: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    tid: ztypes.tid
+    tb: ztypes.tid
+    seen: IdSet ztypes.tid
+} out ztypes.tid is {
+    if tid.isZero or (seen.has item: tid) then return ztypes.tid.zero
+    seen.add item: tid
+    if (typeConformsTo :st impl: tid spec: tb) then return tid
+    k: u64
+    for k < (st.reg.genericArgCount specId: tid) loop {
+        ga: st.reg.genericTypeArgAt specId: tid ordinal: k
+        k = k + 1
+        inner: threadBoundIn :st :ast tid: ga :tb :seen
+        if inner.isZero.not then return inner
+    }
+    forceAllFields :st :ast :tid
+    ri: u64
+    for ri < (st.typing.declRowSlots ownerTid: tid) loop {
+        rw: st.typing.declRowAt ownerTid: tid membersOnly: true slot: ri
+        ri = ri + 1
+        if rw.keep when (st.reg.typetypeOf typeId: rw.tid) != ztypes.ztypetype.functionType then {
+            inner: threadBoundIn :st :ast tid: rw.tid :tb :seen
+            if inner.isZero.not then return inner
+        }
+    }
+    return ztypes.tid.zero
 }
 
 # genericCallInstance -- the function instance a generic call minted, read
@@ -48500,6 +48610,7 @@ checkBareGenericCall: function {
     gr: checkGenericCall :st :unitDecl :ast :call :funcId pins: pinsB
     midB: genericCallInstance :st :ast :call
     checkGenericCallMissingArgs :ast :st :call mid: midB recvImplicit: false
+    refuseThreadBoundCrossing :st :ast :call :funcId
     st.popTo marker: mcmB
     pinGenericCallResult :st mid: midB pins: pinsB
     result = gr
@@ -48705,6 +48816,7 @@ checkUserFnCall: function {
         recvImplicit: false
     )
     checkMissingCallArgs :ast :st :call :funcId isCtor: false recvImplicit: false
+    refuseThreadBoundCrossing :st :ast :call :funcId
     st.popTo marker: cm
     st.typing.callKind.set key: call.nid value: zast.callkind.regular
     # what the function returns: a unit instance's copy of a template's

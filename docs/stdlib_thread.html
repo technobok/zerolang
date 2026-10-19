@@ -87,6 +87,8 @@ Table of Contents</div>
 </li>
 <li><a href="#borrowing-tasks">Borrowing tasks</a>
 </li>
+<li><a href="#what-may-cross-to-a-thread">What may cross to a thread</a>
+</li>
 <li><a href="#panics">Panics</a>
 </li>
 <li><a href="#building">Building</a>
@@ -189,12 +191,42 @@ drop what the task borrows, and two running tasks cannot borrow one source:</p>
 answers keeps the handle locked, which is what keeps the task's borrows alive.</p>
 <p><code>spawnDetached</code> is <code>out</code>, not <code>outx</code>: nothing would keep what a detached
 task borrows alive, so a task holding a borrow is refused there.</p>
-<h2 id="panics"><a href="#panics">4. Panics</a></h2>
+<h2 id="what-may-cross-to-a-thread"><a href="#what-may-cross-to-a-thread">4. What may cross to a thread</a></h2>
+<p>A task moves to its thread whole, with everything it holds. A type that
+conforms to <code>thread.ThreadBound</code> -- a marker protocol, with no methods --
+never makes that move: a value of it is refused as a task, and as anything a
+task holds at any depth, whether it is owned, viewed or borrowed, or sits in a
+list inside another class. The lock guards (<code>sync.MutexGuard</code>,
+<code>sync.ReadGuard</code>, <code>sync.WriteGuard</code>) are the stdlib's: a guard unlocks on
+the thread that locked, and unlocked on another the lock is undefined. Lock on
+the new thread instead -- the task holds the Mutex, by <code>.view</code>, and takes the
+guard itself:</p>
+<pre><code class="language-zerolang">  # Waiter -- waits on a guard its owner locked
+  Waiter: class {
+      # the guard, locked on the owner's thread
+      g: sync.MutexGuard (ListVal i64)
+  } as {
+      task: thread.Task
+      call: function {:this} is {
+          print "\{this.g.value.length}"
+      }
+  }
+
+  main: function is {
+      m: (sync.Mutex (ListVal i64)).create value: ListVal i64
+      g: m.lock
+      h: thread.spawn task: (Waiter :g)
+      h.join
+  }</code></pre>
+<p>Refused: "Cannot hand 'Waiter' to another thread with #~"thread.spawn": it
+holds 'MutexGuard', and a <code>thread.ThreadBound</code> value never leaves the thread
+that made it".</p>
+<h2 id="panics"><a href="#panics">5. Panics</a></h2>
 <p>A panic on any thread ends the whole program, with status <code>1</code>: the panic is
 reported once, however many threads panic, and the process ends without running
 exit handlers under the other threads' feet. There is no catching it and no
 poisoned state to recover.</p>
-<h2 id="building"><a href="#building">5. Building</a></h2>
+<h2 id="building"><a href="#building">6. Building</a></h2>
 <p>A program that starts a thread links <code>pthread</code> (the <code>zlink:</code> line of its C
 says so), and its C differs from a program that does not only where threads
 need it -- the panic above. Programs that start no thread compile exactly as

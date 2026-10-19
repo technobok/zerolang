@@ -139,6 +139,42 @@ answers keeps the handle locked, which is what keeps the task's borrows alive.
 #~"spawnDetached" is #~"out", not #~"outx": nothing would keep what a detached
 task borrows alive, so a task holding a borrow is refused there.
 
+#--: What may cross to a thread
+
+A task moves to its thread whole, with everything it holds. A type that
+conforms to #~"thread.ThreadBound" -- a marker protocol, with no methods --
+never makes that move: a value of it is refused as a task, and as anything a
+task holds at any depth, whether it is owned, viewed or borrowed, or sits in a
+list inside another class. The lock guards (#~"sync.MutexGuard",
+#~"sync.ReadGuard", #~"sync.WriteGuard") are the stdlib's: a guard unlocks on
+the thread that locked, and unlocked on another the lock is undefined. Lock on
+the new thread instead -- the task holds the Mutex, by #~".view", and takes the
+guard itself:
+
+#code language=zerolang expect=E0200: """
+  # Waiter -- waits on a guard its owner locked
+  Waiter: class {
+      # the guard, locked on the owner's thread
+      g: sync.MutexGuard (ListVal i64)
+  } as {
+      task: thread.Task
+      call: function {:this} is {
+          print "\{this.g.value.length}"
+      }
+  }
+
+  main: function is {
+      m: (sync.Mutex (ListVal i64)).create value: ListVal i64
+      g: m.lock
+      h: thread.spawn task: (Waiter :g)
+      h.join
+  }
+"""
+
+Refused: "Cannot hand 'Waiter' to another thread with #~"thread.spawn": it
+holds 'MutexGuard', and a #~"thread.ThreadBound" value never leaves the thread
+that made it".
+
 #--: Panics
 
 A panic on any thread ends the whole program, with status #~"1": the panic is
