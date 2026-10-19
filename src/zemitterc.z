@@ -2053,6 +2053,9 @@ NativeHead: class {
     tmpl: String
     # `when=`: the fact under which this row replaces the plain row of its key
     whenFact: String
+    # `via=`: on a native free function's row, the member of the templated class
+    # the function answers whose template function implements it
+    via: String
     # `reach=`: on an `@fact.` row, the paths whose reaching makes the fact hold
     reach: String
 } as {
@@ -2082,6 +2085,7 @@ NativeHead: class {
             tmpl: String
             whenFact: String
             reach: String
+            via: String
         )
         for each f: (head.split sep: " ") loop {
             if f.length > 0 then {
@@ -2170,6 +2174,12 @@ NativeHead: class {
             ro
         ) case some then {
             this.reach = ro.string
+        } case none then null
+        vo: f.stripPrefix p: "via="
+        match (
+            vo
+        ) case some then {
+            this.via = vo.string
         } case none then null
     }
 
@@ -2469,6 +2479,7 @@ recordNativeRow: function {ctx: Ctx ast: Ast.view h: NativeHead.view body: Strin
     if body.length > 0 when h.cst.length == 0 then {
         recordConvMember :ctx key: h.key.stringView :body
     }
+    if h.via.length > 0 then ctx.nativeVia.set key: h.key.copy value: h.via.copy
     if h.frag.length > 0 then {
         (recordFragmentRow
             :ctx
@@ -4065,6 +4076,10 @@ Ctx: class {
     # under the `z_<unit>_<name>` convention, whoever declares it -- each to its
     # row's index in the parallel frag lists, plus one (0 is no row)
     nativeFragPaths: (MapRV String v: u64)
+    # the native free functions a templated class implements (natives.tbl
+    # `via=`), each to the member of the class it answers whose template
+    # function is its body
+    nativeVia: (MapRR String V: String)
     # the fragment rows that implement a class's native METHOD, by the method's
     # type id: the row's path, bound once from nativeFragPaths the first time a
     # native method is called (bindMethodRows)
@@ -34712,6 +34727,7 @@ emitC: function {
         nativeWords: (zast.Vocab.create block: nativeWord)
         svCalls: (IdMapV zast.nameid v: svcall)
         nativeFragPaths: (MapRV String v: u64)
+        nativeVia: (MapRR String V: String)
         methodRowPaths: (IdMapR ztypes.tid V: String)
         methodRowsBound: false
         nativeConvMemb: (MapRV String v: bool)
@@ -43007,6 +43023,10 @@ emitNativeArg: function {
             }
         }
     }
+    # an argument the call leaves out is its declared default
+    if (symtab.typing.declHasDefaultId parentTypeId: fid nameId: pnameId) then {
+        return (paramDefaultText :ast :symtab :ctx cco: fid nameId: pnameId :pid :facts)
+    }
     return (stating :facts from: constFacts text: "0")
 }
 
@@ -43043,7 +43063,21 @@ emitNativeFreeFnCall: function {
     if duo.length == 0 then return ""
     un: duo.string
     key: "\{un}.\{mn}"
-    if (nativeIsFragBacked :ctx path: key.stringView).not then return ""
+    # a function a templated class implements is the template function of the
+    # instance it answers
+    callee: "z_\{un}_\{mn}"
+    viaMember: String
+    {
+        via: ctx.nativeVia.get :key
+        match (
+            via
+        ) case some then {
+            viaMember = via.copy
+        } case none then null
+    }
+    if viaMember.length > 0 then {
+        callee = "\{ctxCname :ctx tid: (stampIdOf :symtab nid: call.nodeid)}_\{viaMember}"
+    } else if (nativeIsFragBacked :ctx path: key.stringView).not then return ""
     needsAddM :ctx uname: un.stringView memb: "@unit"
     needsAddM :ctx uname: un.stringView memb: mn
     rowNeedAdd :ctx key: key.stringView
@@ -43092,7 +43126,6 @@ emitNativeFreeFnCall: function {
     oprefix: orderFinish :ctx st: ord
     args: orderJoinSlots :ctx st: ord count: m
     orderEnd :ctx st: ord
-    callee: "z_\{un}_\{mn}"
     return (stating
         :facts
         from: callFacts

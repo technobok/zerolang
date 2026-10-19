@@ -744,7 +744,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2256229
+ALLOC_BASELINE := 2256841
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -956,7 +956,8 @@ cobj-guard: bin/zc $(BUILDDIR)/tcc
 # fragments compiles, links and runs, one native in a hidden subunit, and a
 # `when=` variant replaces its plain row exactly when its fact holds; and a
 # generic native class (cellar.Cell) is instantiated per element type from the
-# C template its `@class` row names. The runtime dir is built from src/runtime
+# C template its `@class` row names, and a generic native function (cellar.holding)
+# is the template function of the instance it answers. The runtime dir is built from src/runtime
 # plus the fixture's rows, fragments and template.
 user-native-guard: bin/zc
 	@d=$$(mktemp -d); fail=0; \
@@ -992,12 +993,12 @@ user-native-guard: bin/zc
 	fi; \
 	if [ $$fail -eq 0 ]; then \
 	  got=$$($$d/cellar | tr '\n' ' '); \
-	  if [ "$$got" != "42 false true 1 true " ]; then \
-	    echo "user-native-guard FAIL: cellar printed '$$got', want '42 false true 1 true '"; fail=1; fi; \
+	  if [ "$$got" != "42 false true 1 true true " ]; then \
+	    echo "user-native-guard FAIL: cellar printed '$$got', want '42 false true 1 true true '"; fail=1; fi; \
 	fi; \
 	rm -rf $$d; \
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
-	echo "user-native-guard OK: a unit outside src/runtime links and runs its own natives, a hidden subunit's among them, a fact's variant chosen, a generic and a non-generic class from their templates"
+	echo "user-native-guard OK: a unit outside src/runtime links and runs its own natives, a hidden subunit's among them, a fact's variant chosen, a generic and a non-generic class from their templates, a generic function from its result's"
 
 # shim-guard -- the C thread shim (_Z_THREAD_SHIM.inc) passes its own test under
 # every compiler zc drives and under ThreadSanitizer: tests/c/zthread_shim_test.c
