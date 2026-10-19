@@ -1,6 +1,7 @@
 # A user protocol may declare `thread.Crossing`: a parameter bounded by it
 # hands its argument to another thread (here a user's own thread pool would do
-# so), so a lock guard in the job is refused at the call.
+# so), so a lock guard in the job is refused at the call, whether the call is
+# a function or a method.
 
 # Job -- work a pool runs on one of its threads
 Job: protocol {
@@ -17,6 +18,20 @@ submit: function {job: J.take} is {
     J: Job.generic
 }
 
+# Pool -- a pool of threads, here of none
+Pool: class {
+    # how many jobs it has run
+    ran: i64
+} as {
+    # hand `job` to the pool
+    submit: function {p: this.borrow job: J.take} is {
+        job.run
+        p.ran = p.ran + 1
+    } as {
+        J: Job.generic
+    }
+}
+
 # Locker -- a job that holds a lock guard
 Locker: class {
     # the guard
@@ -29,4 +44,6 @@ Locker: class {
 main: function is {
     m: (sync.Mutex (ListVal i64)).create value: ListVal i64
     submit job: (Locker g: m.lock)
+    p: Pool ran: 0
+    p.submit job: (Locker g: m.lock)
 }

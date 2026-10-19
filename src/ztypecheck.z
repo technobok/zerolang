@@ -48333,7 +48333,7 @@ paramBoundProtocol: function {
 }
 
 # crossingCallName -- the callee a crossing report names: `thread.spawn` for a
-# function, `thread.JoinHandle.create` for a method
+# function, `pool.Pool.submit` for a method
 crossingCallName: function {st: zenv.ZSymbolTable.view funcId: ztypes.tid} out String is {
     f: funcId
     fo: st.reg.genericOriginOf tid: funcId
@@ -51316,7 +51316,7 @@ inferThroughConformance: function {
             cd: st.reg.genericParamConstraintOf :tdecl paramName: pn
             if av.isZero.not when cd.boundApp.isZero.not then {
                 bt: boundApplicationTid :ast :st :tdecl app: cd.boundApp
-                if (bindFromConformance :st :tdecl bound: bt arg: av :subs) then more = true
+                if (bindFromConformance :st :ast :tdecl bound: bt arg: av :subs) then more = true
             }
         }
     }
@@ -51326,7 +51326,8 @@ inferThroughConformance: function {
 # refuseNonConformingArgs -- an argument bound to a parameter whose bound is an
 # instance of a generic protocol over other parameters (`J: (Job R).generic`)
 # that conforms to no instance of the protocol: the bound is unmet, which is why
-# what it names cannot be inferred
+# what it names cannot be inferred. A generic parameter is admitted, as
+# constraintAdmits admits it: each instance is checked with its own argument.
 refuseNonConformingArgs: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -51338,7 +51339,9 @@ refuseNonConformingArgs: function {
     for each pn: gparams loop {
         av: (subs.get key: pn).or d: ztypes.tid.zero
         cd: st.reg.genericParamConstraintOf :tdecl paramName: pn
-        if av.isZero.not when cd.boundApp.isZero.not then {
+        if av.isZero.not when cd.boundApp.isZero.not when (
+            (st.reg.typetypeOf typeId: av) != ztypes.ztypetype.genericParam
+        ) then {
             bt: boundApplicationTid :ast :st :tdecl app: cd.boundApp
             bo: st.reg.genericOriginOf tid: bt
             if (st.reg.isPartialOf tid: bt) when (conformedInstanceOf :st impl: av origin: bo
@@ -51359,6 +51362,7 @@ refuseNonConformingArgs: function {
 # `bound`'s protocol that `arg` conforms to. True when it bound any.
 bindFromConformance: function {
     st: zenv.ZSymbolTable
+    ast: Ast
     tdecl: ztypes.declid
     bound: ztypes.tid
     arg: ztypes.tid
@@ -51368,6 +51372,9 @@ bindFromConformance: function {
     origin: st.reg.genericOriginOf tid: bound
     if origin.isZero then return false
     inst: conformedInstanceOf :st impl: arg :origin
+    if (st.reg.typetypeOf typeId: arg) == ztypes.ztypetype.genericParam then {
+        inst = boundInstanceInScope :st :ast ptid: arg :origin
+    }
     if inst.isZero then return false
     bound2: false
     k: u64
@@ -51382,6 +51389,28 @@ bindFromConformance: function {
         }
     }
     return bound2
+}
+
+# boundInstanceInScope -- the instance of the generic protocol `origin` that the
+# generic parameter `ptid` conforms to by its bound (`(Maker R)` for
+# `T: (Maker R).generic`), read on the declaration at or enclosing the current
+# scope that owns it; zero when its bound is no instance of `origin`.
+boundInstanceInScope: function {
+    st: zenv.ZSymbolTable ast: Ast ptid: ztypes.tid origin: ztypes.tid
+} out ztypes.tid is {
+    cur: st.curScope
+    for cur.isZero.not loop {
+        pn: st.reg.genericParamNameOfTid tdecl: cur :ptid
+        if pn.isZero.not then {
+            cd: st.reg.genericParamConstraintOf tdecl: cur paramName: pn
+            if cd.boundApp.isZero then return ztypes.tid.zero
+            bt: boundApplicationTid :ast :st tdecl: cur app: cd.boundApp
+            if (st.reg.genericOriginOf tid: bt) == origin then return bt
+            return ztypes.tid.zero
+        }
+        cur = st.typing.declParentOf declId: cur
+    }
+    return ztypes.tid.zero
 }
 
 # conformedInstanceOf -- the instance of the generic protocol `origin` that
