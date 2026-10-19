@@ -37380,16 +37380,22 @@ refuseBorrowedMove: function {
 } out bool is {
     bt: borrowedValueText :st :ast :n :vt
     if bt.length == 0 then return false
-    borrowedMoveError :st :n text: bt.stringView :verb
+    borrowedMoveError :st :ast :n text: bt.stringView :verb
     return true
 }
 
 # borrowedMoveError -- the refusal of moving the borrowed value `n`, spelt `text`,
-# `verb` into storage that owns what it holds.
+# `verb` into storage that owns what it holds. A field and a value a call lends
+# are not borrowed names, so each is refused for its own reason.
 borrowedMoveError: function {
-    st: zenv.ZSymbolTable n: astnode.view text: StringView verb: StringView
+    st: zenv.ZSymbolTable ast: Ast.view n: astnode.view text: StringView verb: StringView
 } is {
     mbv: "Cannot move borrowed variable '\{text}' \{verb} — borrowed names stay bound to their source for the full scope; copy with '.copy' to keep the source"
+    if (localFieldPath :st :ast :n) then {
+        mbv = "Cannot move field '\{text}' \{verb}: a field stays in its owner for as long as the owner lives; copy it (`.copy`), or exchange it for another value with `swap`"
+    } else if (callHandsBackBorrow :st :ast :n) then {
+        mbv = "Cannot move '\{text}' \{verb}: the call lends a value that its source still owns; copy it (`.copy`)"
+    }
     # a borrowed BOX is a call, not a name: what makes one that owns is the
     # source's marker
     bck: st.typing.callKind.get key: (nodeId :n)
@@ -46652,7 +46658,7 @@ reportReturnedBareField: function {
     fieldN: ast.nodes.get i: arg.operation
     txt: String
     exprTextOf :ast n: fieldN dst: txt
-    borrowedMoveError :st n: fieldN text: txt.stringView verb: "as an owned result"
+    borrowedMoveError :st :ast n: fieldN text: txt.stringView verb: "as an owned result"
 }
 
 # recordReturnedOwnedLocal -- a returned owned local is CONSUMED: record the
