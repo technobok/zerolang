@@ -8901,6 +8901,8 @@ recordConformance: function {
     }
     if recordIt then {
         st.typing.addConformance :implTypeId :specTypeId :label :labelNameId isFacet: isFacetC
+        # a marker names no member: conforming to one demands nothing of the type
+        if (specIsMarker :st spec: specTypeId) then return
         markSpecMembersUsed :st impl: implTypeId spec: specTypeId
         # the vtable wrapper names every member the spec names, and it is
         # emitted from the conformance row rather than from a use site, so
@@ -9809,6 +9811,7 @@ attachMarkers: function {
                         nameId: mmName
                         childTypeId: amlid
                     )
+                    if (st.reg.needsDestructor typeId: amlid) then needsDtor = true
                     # a LABEL marker (`:Text`) conforms without naming a spec
                     # member: the same row, and the same check, as a named one
                     (recordConformance
@@ -25354,6 +25357,25 @@ markMemberUsed: function {st: zenv.ZSymbolTable ownerTid: ztypes.tid nameId: zas
     }
     od: st.typing.declMemberIdOf parentTypeId: og :nameId
     if od.isZero.not then st.typing.usedMemberDecl.add item: od
+}
+
+# specIsMarker -- `spec` is a MARKER protocol: it specifies no method, so its
+# only member is the `create` every protocol is given
+specIsMarker: function {st: zenv.ZSymbolTable.view spec: ztypes.tid} out bool is {
+    if (st.reg.typetypeOf typeId: spec) != ztypes.ztypetype.protocolType then return false
+    sd: st.typing.declIdOfType typeId: spec
+    if sd.isZero then return false
+    i: u64
+    for i < (st.typing.declChildSlots declId: sd) loop {
+        did: st.typing.declChildAt declId: sd index: i
+        i = i + 1
+        if did.isZero.not when (
+            (st.typing.decls.get i: did).name != zast.wellKnown.slot.wkCreate
+        ) then {
+            return false
+        }
+    }
+    return true
 }
 
 # markSpecMembersUsed -- `impl` conforms to `spec`: the vtable wrapper calls

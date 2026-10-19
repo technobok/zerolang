@@ -1,0 +1,52 @@
+# sync_fields_destroyed.z -- a class holding a sync object, a lock guard or a
+# thread's handle destroys it with itself: each conforms to `Drop`, which is
+# how the checker knows the runtime frees it. A held guard unlocks, a held
+# handle joins, and nothing leaks.
+
+# Shared -- holds one of each sync object
+Shared: class {
+    m: sync.Mutex (ListVal i64)
+    cv: sync.Condvar
+    b: sync.Barrier
+    ch: sync.Channel String
+}
+
+# Held -- holds a guard
+Held: class {
+    g: sync.MutexGuard (ListVal i64)
+}
+
+# Counter -- a task
+Counter: class { n: i64 } as {
+    task: thread.Task
+    call: function {:this} is { this.n = this.n + 1 }
+}
+
+# Running -- holds a running thread's handle
+Running: class {
+    h: thread.JoinHandle Counter
+}
+
+main: function is {
+    {
+        s: (Shared
+            m: ((sync.Mutex (ListVal i64)).create value: ListVal i64)
+            cv: sync.Condvar.create
+            b: (sync.Barrier.create count: 1)
+            ch: ((sync.Channel String).create capacity: 2)
+        )
+        s.ch.send value: "queued".string
+        print "made"
+    }
+    m: (sync.Mutex (ListVal i64)).create value: ListVal i64
+    {
+        h: Held g: m.lock
+        h.g.value.append 1
+    }
+    g: m.lock
+    print "relocked \{g.value.length}"
+    {
+        r: Running h: (thread.spawn task: (Counter n: 1))
+    }
+    print "joined on drop"
+}
