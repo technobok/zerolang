@@ -9484,6 +9484,9 @@ checkConformanceReturn: function {
 } is {
     sRetT: (methodReturnOf :st mid: smid).or d: ztypes.tid
     iRetT: (methodReturnOf :st mid: imid).or d: ztypes.tid
+    # `out null` names the absence of a return: it and no `out` are one answer
+    if sRetT == st.typing.nullTypeId then sRetT = ztypes.tid.zero
+    if iRetT == st.typing.nullTypeId then iRetT = ztypes.tid.zero
     if sRetT != iRetT then {
         srn: "nothing".string
         if sRetT.isZero.not then srn = st.reg.nameOf tid: sRetT
@@ -46922,6 +46925,30 @@ checkReturnTypeMatch: function {
     )
 }
 
+# returnsNullValue -- the value `return` is handed types as `null`: the bare
+# `null`, or a call answering nothing. Walked here, where nothing else will
+# walk it.
+returnsNullValue: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    arg: argref
+} out bool is {
+    if (namesNullTypeAt
+        :st
+        :ast
+        :unitDecl
+        scope: st.curScope
+        nameId: (bareAtomNameId n: (ast.nodes.get i: arg.operation))
+    ) then {
+        stampGate :st nid: arg.operation tid: st.typing.nullTypeId
+        return true
+    }
+    errN: st.typing.errors.length
+    vt: checkValueAt :st :unitDecl :ast nid: arg.operation
+    return (st.typing.errors.length == errN) and vt.isZero.not and (vt == st.typing.nullTypeId)
+}
+
 # checkReturnedValue -- one value handed to `return`: its own type, then every
 # question the enclosing function's declaration asks of it.
 checkReturnedValue: function {
@@ -46930,6 +46957,9 @@ checkReturnedValue: function {
     ast: Ast
     arg: argref
 } is {
+    # a function answering nothing may hand on what a call answering nothing
+    # gives (`return j.call` where `call` is `out null`), as `null` itself
+    if st.typing.currentReturnsNothing when (returnsNullValue :st :unitDecl :ast :arg) then return
     if st.typing.currentReturnsNothing then {
         opn: ast.nodes.get i: arg.operation
         (addErrorH
@@ -54859,7 +54889,7 @@ checkImplicitReturn: function {
     bodyErrs: u64
 } is {
     expR: st.typing.currentReturnTypeId
-    if expR.isZero or defn.body.isZero then return
+    if expR.isZero or defn.body.isZero or st.typing.currentReturnsNothing then return
     # a generator's body yields its values; its synthesised `.call` returns none
     if (generatorCallOf :st nid: defn.nid).isZero.not then return
     lsid: lastStmtLineIdAt :ast oId: defn.body
@@ -54913,7 +54943,7 @@ recordTailExit: function {
 # implicitReturnValue -- the expression an `out`-typed function body's last line
 # hands back: the line's own expression when it yields a value. 0 for a line
 # that yields none -- a binding, a write, an exchange, an expression with no
-# type -- and for one that diverges, which leaves on every path itself. The
+# type or typed `null` -- and for one that diverges, which leaves on every path itself. The
 # emitter reads the same answer, so what is checked as a return is what is
 # emitted as one.
 implicitReturnValue: function {
@@ -54933,6 +54963,8 @@ implicitReturnValue: function {
     lt: walkTypeOf :st nid: lineId
     if lt.isZero then return zast.nodeid
     if (st.reg.typetypeOf typeId: lt) == ztypes.ztypetype.neverType then return zast.nodeid
+    # `null`, or a call answering nothing, is no value to hand back
+    if lt == st.typing.nullTypeId then return zast.nodeid
     return innerId
 }
 
@@ -55266,7 +55298,13 @@ checkFunctionBodyIn: function {
             :mono
         )
         prevRn: st.typing.currentReturnsNothing
-        st.typing.currentReturnsNothing = fn.returntype.isZero and isGenCall.not
+        # `out null` names the absence of a return, as no `out` does -- for an
+        # instance whose `out R` is null too
+        st.typing.currentReturnsNothing = (
+            fn.returntype.isZero or
+            (st.typing.currentReturnTypeId == st.typing.nullTypeId) and
+            isGenCall.not
+        )
         # `yield` enters scope for a generator's synth `.call` body and
         # nowhere else, the way `break`/`continue` enter a `for`. Legality
         # stops being a syntactic depth count and becomes a resolution
