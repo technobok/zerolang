@@ -4403,10 +4403,45 @@ markerEmitsBase: function {id: zast.nameid} out bool is {
 }
 
 # borrowedFieldPath -- the dotted path reads a NON-OWNED field (`c.l` on
-# `l: (ListVal t: i64).borrow`), which the C holds by pointer. The field is
-# asked of the parent's stamp whatever its shape: a borrowed field reached
-# through a nested owned field (`p.left.s`) is a pointer too.
+# `l: (ListVal t: i64).borrow`) off storage a variable names, so its text is the
+# pointer the C holds the field by. The field is asked of the parent's stamp
+# whatever its shape: a borrowed field reached through a nested owned field
+# (`p.left.s`) is a pointer too. Read off a value a call computes, the text is
+# the place the pointer reaches instead (emitDottedRead).
 borrowedFieldPath: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: zast.dottedpathrow.view
+} out bool is {
+    if (borrowedPointerField :ast :symtab :ctx :n).not then return false
+    return (fieldBaseIsPlace :ast :symtab n: (ast.nodes.get i: n.parent))
+}
+
+# fieldBaseIsPlace -- a field read off `n` reads storage a variable names: `n`
+# is that variable, or a field or marker path down to it. A call, a zero-arg
+# method that auto-calls and a type name all yield a value of their own.
+fieldBaseIsPlace: function {
+    ast: Ast.view symtab: zenv.ZSymbolTable.view n: astnode.view
+} out bool is {
+    match (
+        n
+    ) case atomid then {
+        return (atomVid :symtab nid: n.nodeid).isZero.not
+    } case dottedpath then {
+        cid: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
+        if (memberDeclIsField :symtab nid: n.nodeid).not when (markerEmitsBase id: cid).not then {
+            return false
+        }
+        return (fieldBaseIsPlace :ast :symtab n: (ast.nodes.get i: n.parent))
+    } else {
+        return false
+    }
+}
+
+# borrowedPointerField -- the dotted path reads a NON-OWNED field the C holds
+# by pointer, whatever it is read off.
+borrowedPointerField: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
@@ -9920,10 +9955,12 @@ bindingVarIsBorrowed: function {
 # method auto-call reads as a dotted path too and answers FALSE: it returns a
 # value of its own. The borrow decision is the CHECKER's, read off the binding's
 # own VARIABLE like the bare-name shape beside it, so the two cannot disagree.
+# A borrowed field the C holds by pointer is aliased whatever it is read off --
+# a call's result included: the binding is a second name for what it points at.
 rhsIsBorrowedFieldRead: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
+    ctx: Ctx
     # the binding, whose variable says whether it borrows
     abind: zast.assignmentrow.view
     n: astnode.view
@@ -9936,7 +9973,12 @@ rhsIsBorrowedFieldRead: function {
     } case dottedpath then {
         dn: ast.nodes.get i: n.nodeid
         rtn: ast.nodes.get i: n.parent
-        if (pathRootsAtVariable :ast :symtab n: rtn).not then return false
+        if (pathRootsAtVariable :ast :symtab n: rtn).not when (borrowedPointerField
+            :ast
+            :symtab
+            :ctx
+            :n
+        ).not then return false
         if (bindingVarIsBorrowed :symtab n: abind).not then return false
         fpid: interpPartNodeId n: (ast.nodes.get i: n.parent)
         fco: (symtab.typing.declChildOfId
@@ -19226,7 +19268,17 @@ emitDottedRead: function {
         dtc: dottedTypeConstRead :ast :symtab :ctx :n :facts
         if dtc.length > 0 then return dtc
     }
-    return (emitDottedMemberRead :ast :symtab :ctx :n :facts)
+    dmr: emitDottedMemberRead :ast :symtab :ctx :n :facts
+    # a borrowed field read off a value a call computes is the place its pointer
+    # reaches: no variable stands for the pointer for a reader to go through
+    if dmr.length > 0 when (borrowedPointerField :ast :symtab :ctx :n) when (fieldBaseIsPlace
+        :ast
+        :symtab
+        n: (ast.nodes.get i: n.parent)
+    ).not then {
+        return (stating :facts from: (operandFacts e: facts place: true) text: "(*\{dmr})")
+    }
+    return dmr
 }
 
 # memberDeclIsField -- the member a dotted path names is declared as a FIELD.
