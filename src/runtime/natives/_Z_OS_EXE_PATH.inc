@@ -15,6 +15,9 @@ static z_@Result_String_IoError@_t z_os_exePath(void) {
         z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
         z_@IoError@_t e = {0};
         e.tag = @ARM_IoError.other@;
+        z_@String@_t* sp = (z_@String@_t*)z_xmalloc(sizeof(z_@String@_t));
+        *sp = z_@String@_new("the executable's path is longer than 4095 bytes");
+        e.data = sp;
         *boxed = e;
         out.tag = @ARM_Result_String_IoError.err@;
         out.data = boxed;

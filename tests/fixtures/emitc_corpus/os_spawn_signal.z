@@ -1,0 +1,36 @@
+# os_spawn_signal.z -- a child that a signal ends reports 128 + signo, through
+# os.spawn as through os.waitAny: here SIGKILL, so 137. The child is this
+# program run again with a mode argument, so the test needs no shell.
+
+selfArgv: function {exe: StringView} out (List String) is {
+    xs: List String
+    xs.append exe.string
+    xs.append "die"
+    return xs
+}
+
+main: function is {
+    argv: os.args
+    if argv.length > 1 then {
+        # the child: end itself with SIGKILL
+        os.kill pid: os.pid
+        print "the child outlived its own kill"
+    } else {
+        me: os.exePath
+        match (
+            me
+        ) case ok then {
+            rc: os.spawn argv: (selfArgv exe: me.stringView) cwd: "" outPath: "" errPath: "" timeoutSecs: 0
+            print "spawn: \{rc}"
+            p: os.spawnAsync argv: (selfArgv exe: me.stringView) cwd: "" outPath: "" errPath: ""
+            only: ListVal i32
+            only.append p
+            r: os.waitAny pids: only.listView
+            for r.pid == 0 loop {
+                os.sleepMillis ms: 5
+                r = os.waitAny pids: only.listView
+            }
+            print "waitAny: \{r.status}"
+        } case err then print "no exePath"
+    }
+}

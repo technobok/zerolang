@@ -1,7 +1,8 @@
 /* os.spawn -- start argv as a child (z_os_spawn_start: PATH resolution,
-   redirections, cwd) and wait for it. Returns the child's exit status; 127
-   on exec/setup failure; 124 if timeoutSecs > 0 and the child outlived it
-   (SIGKILLed). timeoutSecs <= 0 waits forever.
+   redirections, cwd) and wait for it. Returns the child's exit status; 128 +
+   signo for a child a signal ended; 127 on exec/setup failure; 124 if
+   timeoutSecs > 0 and the child outlived it (SIGKILLed). timeoutSecs <= 0
+   waits forever.
 
    The timeout waits on a pidfd with poll, so it touches no process-wide
    state (no signal handler, no alarm) and another thread's spawn is not
@@ -10,6 +11,7 @@
 #include <time.h>
 static int32_t z_os_spawn_status(int wst) {
     if (WIFEXITED(wst)) return (int32_t)WEXITSTATUS(wst);
+    if (WIFSIGNALED(wst)) return 128 + (int32_t)WTERMSIG(wst);
     return 127;
 }
 static int32_t z_os_spawn(
