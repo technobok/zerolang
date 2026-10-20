@@ -248,19 +248,20 @@ dotsOnly: function {p: StringView n: u64} out bool is {
     return true
 }
 
-# isRootPath -- whether `p` is the filesystem root, `/`
+# isRootPath -- whether `p` is a root and nothing more: `/`, and on Windows
+# `C:\`, `\\server\share\` or `\`
 isRootPath: function {p: StringView} out bool is {
-    if p.length != 1 then return false
-    return (p.startsWith prefix: "/")
+    if p.length == 0 then return false
+    return (path.rootLength :p) == p.length
 }
 
 # inProject -- a path project.z gives, as the driver opens it: joined to the
 # project directory unless it is absolute. "" stays "" (unset).
 inProject: function {dir: StringView rel: StringView} out String is {
     if rel.length == 0 then return ""
-    if (rel.startsWith prefix: "/") then return rel.string
+    if (path.rootLength p: rel) > 0 then return rel.string
     if (dotsOnly p: dir n: 1) then return rel.string
-    return (zcheck.joinPath a: dir b: rel)
+    return (path.join a: dir b: rel)
 }
 
 # discoverProject -- the project `start` (a directory) belongs to: the nearest
@@ -282,7 +283,7 @@ findProjectDir: function {start: StringView} out String is {
     levels: depthOf p: (absoluteOf p: cand.stringView).stringView
     k: u64
     for k <= levels loop {
-        pz: zcheck.joinPath a: cand.stringView b: projectFileName
+        pz: path.join a: cand.stringView b: projectFileName
         if (zcheck.pathKindIs path: pz.stringView want: io.filekind.file) then return cand
         cand = upOne p: cand.stringView
         k = k + 1
@@ -290,52 +291,55 @@ findProjectDir: function {start: StringView} out String is {
     return ""
 }
 
-# trimSlash -- `p` without trailing slashes, the root `/` kept
+# trimSlash -- `p` without trailing separators, its root kept
 trimSlash: function {p: StringView} out String is {
-    r: p.string
-    for r.length > 1 while (r.stringView.endsWith suffix: "/") loop {
-        r = (r.stringView.substring from: 0 to: r.length - 1).string
-    }
-    return r
+    rl: path.rootLength :p
+    e: p.length
+    for e > rl while (path.isSeparator b: ((p.byteAt i: e - 1).or d: 0)) loop e = e - 1
+    if e == 0 then return p.string
+    return (p.substring from: 0 to: e).string
 }
 
 # absoluteOf -- `p` as an absolute path: itself when it is one, else under the
 # working directory
 absoluteOf: function {p: StringView} out String is {
-    if (p.startsWith prefix: "/") then return p.string
+    if (path.isAbsolute :p) then return p.string
     cw: os.cwd
     match (
         cw
     ) case ok then {
-        return (zcheck.joinPath a: cw.stringView b: p)
+        return (path.join a: cw.stringView b: p)
     } case err then null
     return p.string
 }
 
 # depthOf -- how many directories an absolute path climbs through to reach the
-# root: its non-empty components, `..` included, which only over-counts
+# root: its non-empty components after the root, `..` included, which only
+# over-counts
 depthOf: function {p: StringView} out u64 is {
     n: u64
-    for each piece: (p.split sep: "/") loop {
-        if piece.length > 0 then n = n + 1
+    inPiece: false
+    i: path.rootLength :p
+    for i < p.length loop {
+        sep: path.isSeparator b: ((p.byteAt :i).or d: 0)
+        if sep then inPiece = false
+        if sep.not when inPiece.not then {
+            n = n + 1
+            inPiece = true
+        }
+        i = i + 1
     }
     return n
 }
 
 # upOne -- the directory holding `p`, spelled lexically: `src` -> `.`,
-# `.` -> `..`, `..` -> `../..`, `/a` -> `/`
+# `.` -> `..`, `..` -> `../..`, `/a` -> `/` (native separators on Windows)
 upOne: function {p: StringView} out String is {
     if (dotsOnly :p n: 1) then return ".."
-    if (isRootPath :p) then return "/"
-    if (dotsOnly :p n: 2) or (p.endsWith suffix: "/..") then return (zcheck.joinPath a: p b: "..")
-    cut: p.lastIndexOf needle: "/"
-    match (
-        cut
-    ) case some then {
-        if cut == 0 then return "/"
-        return (p.substring from: 0 to: cut).string
-    } case none then null
-    return "."
+    if (isRootPath :p) then return p.string
+    last: path.baseName :p
+    if (dotsOnly p: last.stringView n: 2) then return (path.join a: p b: "..")
+    return (path.dirname :p)
 }
 
 # readProject -- the settings of `dir`/project.z. Every top-level definition
@@ -345,9 +349,9 @@ upOne: function {p: StringView} out String is {
 readProject: function {dir: StringView} out ProjectFile is {
     pf: ProjectFile.create
     pf.dir = dir.string
-    path: zcheck.joinPath a: dir b: projectFileName
-    shown: displayOf path: path.stringView
-    rd: io.readText :path
+    file: path.join a: dir b: projectFileName
+    shown: displayOf path: file.stringView
+    rd: io.readText path: file
     match (
         rd
     ) case ok then {
@@ -360,6 +364,7 @@ readProject: function {dir: StringView} out ProjectFile is {
 }
 
 # displayOf -- a path as a diagnostic names it: without a leading `./`
+# (`.\` on Windows)
 displayOf: function {path: StringView} out String is {
     rest: path.stripPrefix p: "./"
     match (
@@ -367,6 +372,10 @@ displayOf: function {path: StringView} out String is {
     ) case some then {
         return rest.string
     } case none then null
+    if z.build.os == z.build.oskind.windows then {
+        rw: path.stripPrefix p: ".\\"
+        match rw case some then return rw.string case none then null
+    }
     return path.string
 }
 
@@ -668,9 +677,9 @@ zLayer: function {pf: ProjectFile.view facts: BuildFacts.view} out zcheck.GenLay
     home: zerolangDirOf :pf :facts
     dir: String
     tsub: "targets/\{key}"
-    if home.length > 0 then dir = zcheck.joinPath a: home.stringView b: tsub.stringView
+    if home.length > 0 then dir = path.join a: home.stringView b: tsub.stringView
     projectFile: String
-    if pf.found then projectFile = zcheck.joinPath a: pf.dir.stringView b: projectFileName
+    if pf.found then projectFile = path.join a: pf.dir.stringView b: projectFileName
     layer: (zcheck.GenLayer
         :dir
         paths: List String
@@ -704,14 +713,14 @@ layerBaseOf: function {pf: ProjectFile.view facts: BuildFacts.view} out String i
 # keyed by the main file's directory -- the same key on every run, so each
 # directory keeps one folder; "" when there is no cache directory
 zerolangDirOf: function {pf: ProjectFile.view facts: BuildFacts.view} out String is {
-    if pf.found then return (zcheck.joinPath a: pf.dir.stringView b: ".zerolang")
+    if pf.found then return (path.join a: pf.dir.stringView b: ".zerolang")
     cache: zcheck.cacheRoot
     if cache.length == 0 then return ""
     base: layerBaseOf :pf :facts
     abs: cleanAbsolute p: base.stringView
     h: zcheck.stableHash s: abs.stringView
     sub: "zerolang/\{h}"
-    return (zcheck.joinPath a: cache.stringView b: sub.stringView)
+    return (path.join a: cache.stringView b: sub.stringView)
 }
 
 # writeLayer -- put the layer's files on disk, each only when its text
@@ -721,16 +730,16 @@ zerolangDirOf: function {pf: ProjectFile.view facts: BuildFacts.view} out String
 # when the directory cannot be written: the build reads the layer from memory.
 writeLayer: function {layer: zcheck.GenLayer.view} is {
     if layer.dir.length == 0 then return
-    zd: zcheck.dirname p: (zcheck.dirname p: layer.dir.stringView).stringView
+    zd: path.dirname p: (path.dirname p: layer.dir.stringView).stringView
     mk: io.mkdirp path: layer.dir
     if mk.err then return
-    gi: zcheck.joinPath a: zd.stringView b: ".gitignore"
+    gi: path.join a: zd.stringView b: ".gitignore"
     writeIfChanged path: gi.stringView text: "*\n"
     i: u64
     for i < layer.paths.length loop {
         rel: layer.paths.get :i
-        full: zcheck.joinPath a: layer.dir.stringView b: rel.stringView
-        sub: zcheck.dirname p: full.stringView
+        full: path.join a: layer.dir.stringView b: rel.stringView
+        sub: path.dirname p: full.stringView
         io.mkdirp path: sub
         writeIfChanged path: full.stringView text: (layer.texts.get :i).stringView
         i = i + 1
@@ -957,8 +966,8 @@ relativeTo: function {base: StringView p: StringView} out String is {
     ab: cleanAbsolute p: base
     ap: cleanAbsolute :p
     if ap == ab then return "."
-    pre: "\{ab}/"
-    if (isRootPath p: ab.stringView) then pre = "/"
+    pre: "\{ab}\{path.separator}"
+    if (isRootPath p: ab.stringView) then pre = ab.copy
     rest: ap.stringView.stripPrefix p: pre
     match (
         rest
@@ -969,23 +978,10 @@ relativeTo: function {base: StringView p: StringView} out String is {
 }
 
 # cleanAbsolute -- `p` as an absolute path with `.` and `..` resolved by name
+# (path.clean, which climbs no higher than the root)
 cleanAbsolute: function {p: StringView} out String is {
     abs: absoluteOf :p
-    parts: List String
-    for each piece: (abs.stringView.split sep: "/") loop {
-        if (dotsOnly p: piece n: 2) then {
-            if parts.length > 0 then parts.pop
-        } else if piece.length > 0 when (dotsOnly p: piece n: 1).not then {
-            parts.append piece.string
-        }
-    }
-    r: String
-    for each q: parts loop {
-        r.append "/"
-        r.append q
-    }
-    if r.length == 0 then return "/"
-    return r
+    return (path.clean p: abs.stringView)
 }
 
 # initProject -- `zc init`: make `dir` a project. Writes project.z with every
@@ -995,7 +991,7 @@ cleanAbsolute: function {p: StringView} out String is {
 # it, so `zc build` works at once. Refuses a directory that already holds a
 # project.z. Answers each path written, one per line, or the refusal.
 initProject: function {dir: StringView} out InitResult is {
-    pz: zcheck.joinPath a: dir b: projectFileName
+    pz: path.join a: dir b: projectFileName
     pzs: displayOf path: pz.stringView
     if (io.exists path: pz) then {
         return (InitResult ok: false text: "zc init: \{pzs} already exists")
@@ -1005,15 +1001,15 @@ initProject: function {dir: StringView} out InitResult is {
     if w.err then return (InitResult ok: false text: "zc init: cannot write \{pzs}")
     done: "wrote \{pzs}\n"
     if fresh then {
-        mz: zcheck.joinPath a: dir b: "main.z"
+        mz: path.join a: dir b: "main.z"
         mzs: displayOf path: mz.stringView
         wm: io.writeText path: mz content: mainTemplate
         if wm.err then return (InitResult ok: false text: "zc init: cannot write \{mzs}")
         done.append "wrote \{mzs}\n"
     }
-    zd: zcheck.joinPath a: dir b: ".zerolang"
+    zd: path.join a: dir b: ".zerolang"
     io.mkdirp path: zd
-    gi: zcheck.joinPath a: zd.stringView b: ".gitignore"
+    gi: path.join a: zd.stringView b: ".gitignore"
     writeIfChanged path: gi.stringView text: "*\n"
     gis: displayOf path: gi.stringView
     done.append "wrote \{gis}\n"
