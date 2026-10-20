@@ -532,31 +532,40 @@ Open:
   [#*: whether a method of #~"array" that never reads its order should be
     compiled once against the view automatically.]
 
-#--: threads: a closure as a task
+#--: threads: a task is a class (decided)
 
 A task is a class that declares #~"task: (thread.Task R)" and a #~"call"
 method; its fields are what it captures, each with its ownership written out
 (#~".view", #~".borrow", #~".take"), which is what lets the handle carry the
 right locks. A closure literal would save the class for one-off work, but the
-language has none, and a closure's captures would need the same per-capture
-ownership to be checked the same way. Open: whether closures come, and how a
-capture names its ownership.
+language has no closures and none are planned. Decided 2026-10-20: a task stays
+a class. Recorded here so the question is not reopened.
 
-#--: threads: one SQLite connection shared without a Mutex
+#--: threads: one SQLite connection shared without a Mutex (decided)
 
-A connection is #~"thread.Unshareable": threads share one through
-#~"sync.Mutex sqlite.Database", and each use holds the lock (SQLite is built
-#~"THREADSAFE=2", which keeps no lock per connection). The other shape
-considered was a second connection type opened in SQLite's SERIALIZED mode,
-handed out with #~"share" as the sync handles are, which locks inside each
-SQLite call instead. Open: whether that type is worth having beside the Mutex.
+A connection is #~"thread.Unshareable": it moves to a thread, or threads share
+one through #~"sync.Mutex sqlite.Database", each use holding the lock (SQLite
+is built #~"THREADSAFE=2", which keeps no lock per connection). A second
+connection type opened in SQLite's SERIALIZED mode, locking inside each SQLite
+call, was considered and dropped 2026-10-20: it is the same lock moved into
+SQLite, with no more parallelism and no safety the Mutex lacks. rusqlite takes
+the same line -- its #~"Connection" is #~"Send" and not #~"Sync" whatever the
+open flags. Recorded here so the question is not reopened.
 
-#--: threads: sending a held value
+Noted for later, if a need shows: a connection pool (#~"sqlite.Pool"), the
+shape threads that share a database usually want. It opens connections to one
+file and lends one to a thread for as long as the thread holds it; on a file
+in WAL mode, readers then run beside a writer. A connection per thread already
+gives that today; the pool would only reuse them.
+
+#--: threads: sending a held value (deferred)
 
 A #~"Sender" takes owned values that hold no lock. A #~".hold" value is not
-sendable -- receiving it would give the other thread a value it could change --
-so it is sent as #~".copy", written out. Open: whether a channel of held values,
-received as held, is wanted.
+sendable -- a held value is never moved out (#~"h.take" is refused), and
+receiving it would give the other thread a value it could change -- so it is
+sent as #~".copy", written out. A channel of held values, received as held,
+would need held twins of #~"Sender", #~"Receiver" and #~"ReceiverIter".
+Deferred 2026-10-20 until a program needs one.
 
 #--: a typedef's surface is its base's (decided)
 
