@@ -233,7 +233,7 @@ MINGW_CC := x86_64-w64-mingw32-gcc
 MINGW_KNOWN := tests/mingw-known-failures.txt
 test-mingw: bin/zc $(BUILDDIR)/ztestrunner $(BUILDDIR)/wineprefix/.ready
 	@if ! command -v $(MINGW_CC) >/dev/null 2>&1 || ! command -v wine >/dev/null 2>&1; then \
-	  echo "test-mingw: skipped (needs $(MINGW_CC) and wine)"; exit 0; fi; \
+	  echo "test-mingw: skipped (needs $(MINGW_CC) and wine: sudo apt install gcc-mingw-w64-x86-64 wine; see tools/windows/README.md)"; exit 0; fi; \
 	$(WINE_ENV) $(BUILDDIR)/ztestrunner --zc bin/zc --cc $(MINGW_CC) --target x86_64-w64-mingw32 \
 	   --exec wine --run-only --root . --jobs $(NPROC) > $(BUILDDIR)/mingw-run.log 2>&1; \
 	awk '/^FAIL/ { k = $$1; sub(/^FAIL\(/, "", k); sub(/\)$$/, "", k); \
@@ -256,7 +256,7 @@ test-mingw: bin/zc $(BUILDDIR)/ztestrunner $(BUILDDIR)/wineprefix/.ready
 MSVC_WINE ?=
 test-msvc-wine: $(BUILDDIR)/wineprefix/.ready
 	@if [ -z "$(MSVC_WINE)" ] || [ ! -x "$(MSVC_WINE)/cl" ] || ! command -v wine > /dev/null 2>&1; then \
-	  echo "test-msvc-wine: skipped (needs MSVC_WINE=<msvc-wine>/bin/x64 and wine)"; exit 0; fi; \
+	  echo "test-msvc-wine: skipped (needs wine and MSVC_WINE=<dir>/msvc/bin/x64 from tools/windows/msvc-wine.sh; see tools/windows/README.md)"; exit 0; fi; \
 	d=$(BUILDDIR)/msvc; rm -rf $$d; mkdir -p $$d; \
 	$(WINE_ENV) $(MSVC_WINE)/cl -nologo -std:c17 -experimental:c11atomics -W3 -O2 \
 	  tests/c/zthread_shim_test.c -Fe:$$d/shim.exe -Fo:$$d/ > $$d/cl.log 2>&1 \
@@ -272,25 +272,32 @@ test-msvc-wine: $(BUILDDIR)/wineprefix/.ready
 # binaries in $(WINDOWS_DIR)/build; the tracked tree and those binaries go to a
 # fresh directory there, `make windows-guest` runs in it, and its log comes
 # back to $(WINDOWS_DIR)/guest.log. Not in ci: it needs the machine. Skipped
-# when the host does not answer. A green run records the commit it tested in
-# $(WINDOWS_VERIFIED), which windows-due reads.
+# when the host does not answer; tools/windows/winvm.sh builds such a VM on a
+# Linux host with KVM (tools/windows/README.md), and WINDOWS_SSH_FLAGS passes
+# ssh options (winvm.sh ci names its own ssh config there). A green run records
+# the commit it tested in $(WINDOWS_VERIFIED), which windows-due reads.
 WINDOWS_SSH ?= zlwin
+WINDOWS_SSH_FLAGS ?=
+WINDOWS_SSH_CMD = ssh $(WINDOWS_SSH_FLAGS) -o BatchMode=yes -o ConnectTimeout=10 $(WINDOWS_SSH)
 WINDOWS_DIR := $(BUILDDIR)/windows
 ci-windows: bin/zc $(BUILDDIR)/ztestrunner $(BUILDDIR)/wineprefix/.ready
-	@if ! ssh -o BatchMode=yes -o ConnectTimeout=5 $(WINDOWS_SSH) true > /dev/null 2>&1; then \
-	  echo "ci-windows: skipped (no ssh to $(WINDOWS_SSH))"; exit 0; fi; \
+	@if ! $(WINDOWS_SSH_CMD) true > /dev/null 2>&1; then \
+	  echo "ci-windows: skipped (no ssh to $(WINDOWS_SSH); to bring up the zlwin VM, or set up another Windows host, see tools/windows/README.md)"; exit 0; fi; \
+	miss=$$($(WINDOWS_SSH_CMD) 'for c in make tar cl gcc; do command -v $$c > /dev/null || printf " %s" $$c; done'); \
+	if [ -n "$$miss" ]; then \
+	  echo "ci-windows FAIL: $(WINDOWS_SSH) has no$$miss on its ssh PATH -- the guest needs MSYS2 bash as sshd's shell with make, tar, UCRT64 gcc and MSVC's cl (vcvars64) on PATH; see tools/windows/README.md"; exit 1; fi; \
 	rm -rf $(WINDOWS_DIR); mkdir -p $(WINDOWS_DIR); \
 	$(WINE_ENV) $(BUILDDIR)/ztestrunner --zc bin/zc --cc $(MINGW_CC) --target x86_64-w64-mingw32 \
 	   --exec wine --run-only --root . --jobs $(NPROC) --save-temps --tmp $(abspath $(WINDOWS_DIR))/build \
 	   > $(WINDOWS_DIR)/build.log 2>&1; \
 	dest=/c/zl/run/$$(date +%Y%m%d-%H%M%S)-$(BUILDID); \
-	ssh $(WINDOWS_SSH) "mkdir -p $$dest" || { echo "ci-windows FAIL: cannot create $$dest on $(WINDOWS_SSH)"; exit 1; }; \
+	$(WINDOWS_SSH_CMD) "mkdir -p $$dest" || { echo "ci-windows FAIL: cannot create $$dest on $(WINDOWS_SSH)"; exit 1; }; \
 	{ git ls-files -co --exclude-standard | while IFS= read -r f; do [ -f "$$f" ] && printf '%s\n' "$$f"; done; \
 	  ls $(WINDOWS_DIR)/build/*.bin; } \
-	  | tar -cf - -T - | ssh $(WINDOWS_SSH) "tar -xf - -C $$dest" \
+	  | tar -cf - -T - | $(WINDOWS_SSH_CMD) "tar -xf - -C $$dest" \
 	  || { echo "ci-windows FAIL: copying the tree to $(WINDOWS_SSH)"; exit 1; }; \
-	rc=0; ssh $(WINDOWS_SSH) "cd $$dest && make --no-print-directory windows-guest" > $(WINDOWS_DIR)/guest.log 2>&1 || rc=$$?; \
-	ssh $(WINDOWS_SSH) "cat $$dest/$(WINDOWS_DIR)/guest-fails.txt" > $(WINDOWS_DIR)/guest-fails.txt 2> /dev/null || true; \
+	rc=0; $(WINDOWS_SSH_CMD) "cd $$dest && make --no-print-directory windows-guest" > $(WINDOWS_DIR)/guest.log 2>&1 || rc=$$?; \
+	$(WINDOWS_SSH_CMD) "cat $$dest/$(WINDOWS_DIR)/guest-fails.txt" > $(WINDOWS_DIR)/guest-fails.txt 2> /dev/null || true; \
 	cat $(WINDOWS_DIR)/guest.log; \
 	if [ $$rc -ne 0 ]; then echo "ci-windows FAIL on $(WINDOWS_SSH) in $$dest (log $(WINDOWS_DIR)/guest.log)"; exit 1; fi; \
 	{ echo "# the last green make ci-windows: commit, unix time, date (written by ci-windows; read by windows-due)"; \
@@ -351,14 +358,14 @@ WINDOWS_DUE_TOUCHED_DAYS := 2
 WINDOWS_PATHS := src/runtime src/zemitterc.z src/zc.z src/zcobj.z src/zcheck.z src/ztestrunner.z \
 	lib/system bootstrap/zc.c Makefile tests/c
 windows-due:
-	@if [ ! -f $(WINDOWS_VERIFIED) ]; then echo "windows-due: make ci-windows has never passed"; exit 0; fi; \
+	@if [ ! -f $(WINDOWS_VERIFIED) ]; then echo "windows-due: make ci-windows has never passed (tools/windows/README.md)"; exit 0; fi; \
 	set -- $$(grep -v '^#' $(WINDOWS_VERIFIED)); sha=$$1; at=$$2; day=$$3; \
 	age=$$(( ($$(date +%s) - at) / 86400 )); \
 	touched=$$(git log --oneline $$sha..HEAD -- $(WINDOWS_PATHS) 2> /dev/null | wc -l); \
 	if [ $$age -ge $(WINDOWS_DUE_DAYS) ]; then \
-	  echo "windows-due: make ci-windows last passed $$age days ago ($$day, $$(echo $$sha | cut -c1-8)) -- run it"; \
+	  echo "windows-due: make ci-windows last passed $$age days ago ($$day, $$(echo $$sha | cut -c1-8)) -- run it (tools/windows/README.md)"; \
 	elif [ $$age -ge $(WINDOWS_DUE_TOUCHED_DAYS) ] && [ $$touched -gt 0 ]; then \
-	  echo "windows-due: $$touched commit(s) touching Windows-relevant sources since make ci-windows last passed ($$day, $$(echo $$sha | cut -c1-8)) -- run it"; \
+	  echo "windows-due: $$touched commit(s) touching Windows-relevant sources since make ci-windows last passed ($$day, $$(echo $$sha | cut -c1-8)) -- run it (tools/windows/README.md)"; \
 	fi
 
 # test-math-noasm -- the math corpus on math's C kernels (-DZ_MATH_NOASM).
@@ -1172,7 +1179,7 @@ shim-guard: $(BUILDDIR)/tcc $(BUILDDIR)/wineprefix/.ready
 	$(CC) -std=c17 -g -O1 -fsanitize=thread -o $$d/shim-tsan $$t -lpthread > $$d/cc.log 2>&1 \
 	  || { echo "shim-guard FAIL: the TSan build"; fail=1; }; \
 	[ -x $$d/shim-tsan ] && { $$d/shim-tsan > $$d/run.log 2>&1 || { echo "shim-guard FAIL: under ThreadSanitizer"; head -30 $$d/run.log; fail=1; }; }; \
-	win="; Win32 not run (no x86_64-w64-mingw32-gcc and wine)"; \
+	win="; Win32 not run (no x86_64-w64-mingw32-gcc and wine: sudo apt install gcc-mingw-w64-x86-64 wine)"; \
 	if command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1 && command -v wine >/dev/null 2>&1; then \
 	  x86_64-w64-mingw32-gcc -std=c17 -Wall -Wextra -Wno-unused-function -O2 -o $$d/shim.exe $$t > $$d/cc.log 2>&1 \
 	    || { echo "shim-guard FAIL: mingw-w64 did not build the shim test"; grep -m3 error $$d/cc.log; fail=1; }; \

@@ -1,0 +1,91 @@
+<!-- zlwin: the Windows 11 Pro VM for zerolang's Windows legs (tools/windows).
+     winvm.sh fills in the placeholders (the disk is the golden image for an
+     install or update and a per-run overlay otherwise) and redefines the
+     domain; the UUID is fixed so the TPM state, which libvirt keeps per UUID,
+     survives every redefine. -->
+<domain type='kvm'>
+  <name>zlwin</name>
+  <uuid>5a4c7769-6e00-4b11-9d00-7a6c77696e31</uuid>
+  <memory unit='GiB'>@MEMORY_GIB@</memory>
+  <currentMemory unit='GiB'>@MEMORY_GIB@</currentMemory>
+  <vcpu placement='static'>@VCPUS@</vcpu>
+  <os>
+    <type arch='x86_64' machine='q35'>hvm</type>
+    <loader readonly='yes' secure='yes' type='pflash' format='raw'>/usr/share/OVMF/OVMF_CODE_4M.secboot.fd</loader>
+    <nvram format='raw'>@IMG@/run_VARS.fd</nvram>
+    <smbios mode='host'/>
+@ACPI@  </os>
+  <features>
+    <acpi/>
+    <apic/>
+    <smm state='on'/>
+    <hyperv mode='custom'>
+      <relaxed state='on'/>
+      <vapic state='on'/>
+      <spinlocks state='on' retries='8191'/>
+      <vpindex state='on'/>
+      <runtime state='on'/>
+      <synic state='on'/>
+      <stimer state='on'/>
+      <frequencies state='on'/>
+      <tlbflush state='on'/>
+      <ipi state='on'/>
+    </hyperv>
+    <vmport state='off'/>
+  </features>
+  <cpu mode='host-passthrough' check='none' migratable='on'>
+    <topology sockets='1' dies='1' clusters='1' cores='@CORES@' threads='2'/>
+  </cpu>
+  <clock offset='localtime'>
+    <timer name='rtc' tickpolicy='catchup'/>
+    <timer name='pit' tickpolicy='delay'/>
+    <timer name='hpet' present='no'/>
+    <timer name='hypervclock' present='yes'/>
+  </clock>
+  <on_poweroff>destroy</on_poweroff>
+  <on_reboot>restart</on_reboot>
+  <on_crash>destroy</on_crash>
+  <pm>
+    <suspend-to-mem enabled='no'/>
+    <suspend-to-disk enabled='no'/>
+  </pm>
+  <devices>
+    <emulator>/usr/bin/qemu-system-x86_64</emulator>
+    <disk type='file' device='disk'>
+      <driver name='qemu' type='qcow2' cache='none' io='native' discard='unmap'/>
+      <source file='@DISK@'/>
+      <target dev='vda' bus='virtio'/>
+      <boot order='2'/>
+    </disk>
+@CDROMS@
+    <controller type='usb' model='qemu-xhci' ports='15'/>
+    <controller type='sata' index='0'/>
+    <interface type='network'>
+      <source network='default'/>
+      <mac address='@MAC@'/>
+      <model type='virtio'/>
+    </interface>
+    <channel type='spicevmc'>
+      <target type='virtio' name='com.redhat.spice.0'/>
+    </channel>
+    <channel type='unix'>
+      <target type='virtio' name='org.qemu.guest_agent.0'/>
+    </channel>
+    <input type='tablet' bus='usb'/>
+    <input type='keyboard' bus='usb'/>
+    <tpm model='tpm-crb'>
+      <backend type='emulator' version='2.0'/>
+    </tpm>
+    <graphics type='spice' autoport='yes'>
+      <listen type='address' address='127.0.0.1'/>
+      <image compression='off'/>
+    </graphics>
+    <video>
+      <model type='virtio' heads='1' primary='yes'/>
+    </video>
+    <memballoon model='virtio'/>
+    <rng model='virtio'>
+      <backend model='random'>/dev/urandom</backend>
+    </rng>
+  </devices>
+</domain>
