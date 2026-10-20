@@ -4275,8 +4275,9 @@ needsValueDeref: function {
 # valueExprC -- an expression standing where a VALUE is wanted: a binop
 # operand, an argument to a by-value parameter, a payload, a condition, an
 # interpolation part, the right side of a reassignment. A pointer-held valtype
-# atom (a `.view` parameter, a pointer receiver) is loaded here; every other
-# expression is emitExpr's text unchanged. The positions that want the POINTER
+# atom (a `.view` parameter, a pointer receiver) and a reference-returning
+# call's valtype result (`xs.getMut i: 0` over a ListVal) are loaded here;
+# every other expression is emitExpr's text unchanged. The positions that want the POINTER
 # -- a receiver, a dotted base, an argument to a pointer parameter -- keep
 # asking emitExpr and pathIsPointer. The cheap tests come first so the common
 # case pays no stamp read.
@@ -4290,6 +4291,9 @@ valueExprC: function {
     eF: cfacts
     e: emitExprWith :ast :symtab :ctx :n facts: eF
     if (ptrHeldValtype :ast :symtab :ctx :n) then {
+        return (stating :facts from: (operandFacts e: eF place: true) text: "(*\{e})")
+    }
+    if (refValtypeResult :ast :symtab :ctx :n) then {
         return (stating :facts from: (operandFacts e: eF place: true) text: "(*\{e})")
     }
     return (stating :facts from: eF text: e)
@@ -8338,15 +8342,16 @@ passMethodArg: function {
     facts: cfacts.borrow
 } is {
     ctx.lastArgByPtr = ptr.byref
-    # the value text LOADED a pointer-held valtype (valueExprC); a parameter
-    # that takes the pointer reads the argument as written instead
-    if ptr.ptra when ptr.byref.not when avNd.isZero.not when (ptrHeldValtype
-        :ast
-        :symtab
-        :ctx
-        n: (ast.nodes.get i: avNd)
-    ) then {
-        av = emitExprWith :ast :symtab :ctx n: (ast.nodes.get i: avNd) facts: avF
+    # the value text LOADED a pointer-held valtype or a reference-returning
+    # call's valtype result (valueExprC); a parameter that takes the pointer
+    # reads the argument as written instead
+    if ptr.ptra when ptr.byref.not when avNd.isZero.not then {
+        avn: ast.nodes.get i: avNd
+        if (
+            (ptrHeldValtype :ast :symtab :ctx n: avn) or (refValtypeResult :ast :symtab :ctx n: avn)
+        ) then {
+            av = emitExprWith :ast :symtab :ctx n: avn facts: avF
+        }
     }
     # a conformer standing in for a spec parameter is passed as its box: its
     # source's own temporary is spelled inside it, so it takes no other hoist,
@@ -8396,73 +8401,20 @@ passMethodArg: function {
             :symtab
             :ctx
             :ptr
-            :avNd
             :usedInterp
             :posParamId
             av: av.stringView
             :avF
-            :args
-            :facts
-        )
-    }
-}
-
-# appendArgValue -- a method argument passed as its value (not addressed): a
-# by-value parameter handed a reference-returning call's valtype result takes
-# the value it points at, and a borrow of a value is hoisted where it must be.
-appendArgValue: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    ptr: instargptr
-    avNd: zast.nodeid
-    usedInterp: bool
-    posParamId: ztypes.tid
-    av: StringView
-    avF: cfacts
-    args: String.borrow
-    facts: cfacts.borrow
-} is {
-    if ptr.ptra.not when avNd.isZero.not when (refValtypeResult
-        :ast
-        :symtab
-        :ctx
-        n: (ast.nodes.get i: avNd)
-    ) then {
-        ld: "(*\{av})"
-        (appendArgValueText
-            :ast
-            :symtab
-            :ctx
-            :ptr
-            :usedInterp
-            :posParamId
-            av: ld.stringView
-            avF: (operandFacts e: avF place: true)
             argNid: avNd
             :args
             :facts
         )
-        return
     }
-    (appendArgValueText
-        :ast
-        :symtab
-        :ctx
-        :ptr
-        :usedInterp
-        :posParamId
-        :av
-        :avF
-        argNid: avNd
-        :args
-        :facts
-    )
 }
 
-# appendArgValueText -- appendArgValue's text, hoisted when a borrow of the value
-# has to be.
-appendArgValueText: function {
+# appendArgValue -- a method argument passed as its value (not addressed),
+# hoisted when a borrow of the value has to be.
+appendArgValue: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx

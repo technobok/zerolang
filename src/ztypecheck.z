@@ -36357,6 +36357,13 @@ checkAssignment: function {
         if bpins.length > 0 when (typeIsReftype :st tid: vt) then {
             if pboX.not then own = ztypes.zownership.borrowed
             if (isViewFamilyTid :ast :st tid: vt) then own = ztypes.zownership.borrowed
+        } else if bpins.length > 0 when pboX.not when (isPlainValue :st :ast tid: vt) then {
+            # a value-type element a call lends (`xs.getMut i: 0` over a
+            # ListVal) is bound as a second name for it: a write through the
+            # binding reaches the element, so the binding keeps its source
+            # locked
+            lent: callHandsBackBorrow :st :ast n: (ast.nodes.get i: asgn.value)
+            if lent then own = ztypes.zownership.borrowed
         }
         vid: st.reg.newVariable ztypeId: vt ownership: own
         if own == ztypes.zownership.borrowed then (st.reg.setVariableBorrowOrigin
@@ -36368,7 +36375,7 @@ checkAssignment: function {
         # a valtype field read, a comparison, an arithmetic result -- is a fresh
         # value that aliases nothing, so it must not inherit the restriction.
         # `own` already draws exactly that line: the pin transfers only to a
-        # reftype binding that the borrow actually flowed into.
+        # binding that the borrow actually flowed into.
         roRef: false
         if own == ztypes.zownership.borrowed then roRef = st.typing.pendingBorrowReadonly
         # An `out T.hold` result is readonly for a different reason: it is
@@ -36701,11 +36708,12 @@ checkNarrowedTargetWrite: function {
 }
 
 # refuseBorrowedWrite -- a swap of a bare name bound to a BORROWED variable, or
-# a reassignment of a value-type parameter passed by reference (`.borrow`,
-# `.view`) -- the writes a borrow does not re-point -- is refused: a swap
-# exchanges what two owners hold, and a borrow holds nothing; a reference
-# parameter is written through its fields, not replaced whole. An unmarked
-# value-type parameter is the callee's own copy, reassigned as a local is.
+# a reassignment of a value-type reference -- a parameter passed by reference
+# (`.borrow`, `.view`), or a local naming a value a call lent (`xs.getMut i: 0`)
+# -- the writes a borrow does not re-point -- is refused: a swap exchanges what
+# two owners hold, and a borrow holds nothing; a value-type reference is
+# written through its fields, not replaced whole. An unmarked value-type
+# parameter is the callee's own copy, reassigned as a local is.
 # true when it refused.
 refuseBorrowedWrite: function {
     st: zenv.ZSymbolTable
@@ -36726,6 +36734,9 @@ refuseBorrowedWrite: function {
     nm: zast.nameTextAt :ast ref: nmId
     ma: "Cannot reassign borrowed variable '\{nm}'"
     ena: "a parameter is not replaced whole".string
+    if (st.reg.variableOriginOf id: nvo) != ztypes.zvarorigin.param then {
+        ena = "it names a value a call lent, which is written through its fields, not replaced whole; replace it through what lent it (`set`)"
+    }
     if swapping then {
         ma = "Cannot swap borrowed variable '\{nm}'"
         ena = "a swap exchanges the values two owners hold, and a borrow owns none"
@@ -37513,6 +37524,13 @@ borrowedMoveError: function {
     )
 }
 
+# isPlainValue -- `tid` is a value type that is no view: a copy of one is a
+# value of its own, holding nothing of where it was read from.
+isPlainValue: function {st: zenv.ZSymbolTable ast: Ast tid: ztypes.tid} out bool is {
+    if (typeIsReftype :st :tid) then return false
+    return (isViewFamilyTid :ast :st :tid).not
+}
+
 # consumeReassignPins -- a pinning call on the right of `x = ...` keeps its
 # pins under the TARGET, exactly as a binding would. The value the target held
 # is destroyed by the assignment, so the locks it held go first. An owned value's
@@ -37536,9 +37554,13 @@ consumeReassignPins: function {
     # hold them; a field store (`h.w = Option.some w`) keeps them under the
     # target's root, as a moved local's are kept (moveLocksToTarget).
     owned: st.typing.pendingBorrowOwned
+    # a lent value keeps no pins in a field -- a plain one is copied there, any
+    # other refused (refuseBorrowedReassign) -- nor in a name when it is plain:
+    # it is copied into the name's own storage, or through it to the place the
+    # name was bound to, whose locks the name keeps
+    if owned.not when hbNmId.isZero or (isPlainValue :st :ast tid: rvt) then return
     tgtNm: hbNmId
     if tgtNm.isZero then {
-        if owned.not then return
         tgtNm = rootNameIdOf :ast n: (ast.nodes.get i: rasgn.topath)
         if tgtNm.isZero then return
     }
