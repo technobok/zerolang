@@ -1,5 +1,5 @@
 /* conn.read — read up to `max` bytes, appending to `buf`; 0 = peer
-   closed. EINTR retries. Mirrors file.read. */
+   closed. An interrupted read retries. Mirrors file.read. */
 static z_@ResultVR_u64_IoError@_t z_@Conn@_read(
     z_@Conn@_t* c, z_@ListVal_u8@_t* buf, uint64_t max
 ) {
@@ -8,13 +8,13 @@ static z_@ResultVR_u64_IoError@_t z_@Conn@_read(
         buf->data = (uint8_t*)z_xrealloc(buf->data, newcap);
         buf->capacity = newcap;
     }
-    long n;
+    int64_t n;
     for (;;) {
-        n = read(c->@MEMBER_Conn.fd@, buf->data + buf->length, max);
+        n = z_net_recv(c->@MEMBER_Conn.sock@, buf->data + buf->length, max);
         if (n >= 0) break;
-        if (errno != EINTR) return z_io_u64_err(errno);
+        int e = z_net_error();
+        if (!z_net_interrupted(e)) return z_io_u64_err(e);
     }
     buf->length += (uint64_t)n;
     return z_io_u64_ok((uint64_t)n);
 }
-

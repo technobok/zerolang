@@ -1,15 +1,19 @@
 # net -- TCP sockets on localhost plus readiness polling: the transport
 # for tool daemons (zls --listen). The v1 surface is deliberately small:
 # a loopback listener, accept/connect producing bidirectional
-# connections that satisfy the io Reader/Writer protocols, and
-# poll-based readiness with a millisecond timeout. A connection or listener
-# closes when its owner goes out of scope; `close` ends it early, and a second
-# close is a safe no-op.
+# connections that satisfy the io Reader/Writer protocols, and readiness
+# polling with a millisecond timeout (each handle's pollReadable). A
+# connection or listener closes when its owner goes out of scope; `close`
+# ends it early, and a second close is a safe no-op.
+
+# socket -- the operating system's socket: a descriptor on POSIX, a SOCKET on
+# Windows, which is a 64-bit handle. Opaque: nothing but the runtime reads it.
+socket: typedef i64
 
 # Listener -- a bound, listening TCP socket on 127.0.0.1.
 Listener: class {
-    # the POSIX socket descriptor. It is the whole of the handle
-    fd: i32
+    # the socket. It is the whole of the handle
+    sock: socket
     # whether it holds its socket: false once close has run, and in a Listener
     # whose value moved out, which makes the destructor idempotent
     open: bool
@@ -19,14 +23,18 @@ Listener: class {
     accept: function {:this} out (Result Conn E: IoError) is native
     # stop listening and release the socket. Calling it twice answers ok null
     close: function {:this} out (Result null E: IoError) is native
+    # whether a peer is waiting to be accepted within `timeoutMillis`; 0 asks
+    # without waiting. An interrupted wait reports not-ready
+    pollReadable: function {t: this.view timeoutMillis: i32} out (ResultVR bool E: IoError
+    ) is native
 }
 
 # Conn -- one bidirectional TCP connection. `read` appends up to `max`
 # bytes (0 read = the peer closed); `write` loops until every byte is
 # out.
 Conn: class {
-    # the POSIX socket descriptor for this connection
-    fd: i32
+    # the socket for this connection
+    sock: socket
     # whether it holds its socket: false once close has run, and in a Conn whose
     # value moved out, which makes the destructor idempotent
     open: bool
@@ -44,16 +52,17 @@ Conn: class {
     # shut the connection and release the socket. Calling it twice answers ok
     # null
     close: function {:this} out (Result null E: IoError) is native
+    # whether data (or the peer's close, to drain) is waiting within
+    # `timeoutMillis`; 0 asks without waiting. An interrupted wait reports
+    # not-readable
+    pollReadable: function {t: this.view timeoutMillis: i32} out (ResultVR bool E: IoError
+    ) is native
 }
 
-# listen -- bind + listen on 127.0.0.1:<port> (SO_REUSEADDR, backlog 16).
+# listen -- bind + listen on 127.0.0.1:<port>, backlog 16. A port another
+# socket holds is refused (on Windows SO_EXCLUSIVEADDRUSE says so; POSIX's
+# SO_REUSEADDR only lets a port in TIME_WAIT be taken again).
 listen: function {port: u16} out (Result Listener E: IoError) is native
 
 # connect -- open a client connection to 127.0.0.1:<port>.
 connect: function {port: u16} out (Result Conn E: IoError) is native
-
-# pollReadable -- true when `fd` has readable data (or a hangup to
-# drain) within `timeoutMillis`; 0 polls without blocking. Works on
-# sockets and standard input (fd 0). An interrupted wait reports
-# not-readable rather than an error.
-pollReadable: function {fd: i32 timeoutMillis: i32} out (ResultVR bool E: IoError) is native

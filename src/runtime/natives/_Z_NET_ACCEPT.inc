@@ -1,25 +1,21 @@
-/* listener.accept — block for one connection; EINTR retries. accept4 sets
-   close-on-exec atomically, so a child spawned meanwhile never inherits the
-   connection; it is reached through syscall() because its libc declaration
-   needs _GNU_SOURCE, which the prelude does not define. */
+/* listener.accept — block for one connection; an interrupted wait retries.
+   The connection is never inherited by a child (z_net_accept). */
 static z_@Result_Conn_IoError@_t z_@Listener@_accept(z_@Listener@_t* l) {
     z_@Result_Conn_IoError@_t result = {0};
-    int fd;
+    int64_t s;
     for (;;) {
-        fd = (int)syscall(SYS_accept4, l->@MEMBER_Listener.fd@, NULL, NULL, SOCK_CLOEXEC);
-        if (fd >= 0) break;
-        if (errno == EINTR) continue;
-        z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
-        *boxed = z_io_os_error(errno);
+        s = z_net_accept(l->@MEMBER_Listener.sock@);
+        if (s >= 0) break;
+        int e = z_net_error();
+        if (z_net_interrupted(e)) continue;
         result.tag = @ARM_Result_Conn_IoError.err@;
-        result.data = boxed;
+        result.data = z_net_boxed_error(e);
         return result;
     }
     z_@Conn@_t* boxed = (z_@Conn@_t*)z_xmalloc(sizeof(z_@Conn@_t));
-    boxed->@MEMBER_Conn.fd@ = (int32_t)fd;
+    boxed->@MEMBER_Conn.sock@ = s;
     boxed->@MEMBER_Conn.open@ = true;
     result.tag = @ARM_Result_Conn_IoError.ok@;
     result.data = boxed;
     return result;
 }
-

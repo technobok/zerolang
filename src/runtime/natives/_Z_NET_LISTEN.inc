@@ -1,35 +1,30 @@
-/* net.listen — bind + listen a TCP socket on 127.0.0.1:port with
-   SO_REUSEADDR; backlog 16. */
+/* net.listen — bind + listen a TCP socket on 127.0.0.1:port; backlog 16. A
+   port another socket holds is refused (z_net_exclusive). */
 static z_@Result_Listener_IoError@_t z_net_listen(uint16_t port) {
     z_@Result_Listener_IoError@_t result = {0};
-    int fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
-    if (fd < 0) {
-        z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
-        *boxed = z_io_os_error(errno);
+    int64_t s = z_net_socket();
+    if (s < 0) {
         result.tag = @ARM_Result_Listener_IoError.err@;
-        result.data = boxed;
+        result.data = z_net_boxed_error(z_net_error());
         return result;
     }
-    int one = 1;
-    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
-    struct sockaddr_in addr = {0};
+    z_net_exclusive(s);
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof addr);
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     addr.sin_port = htons(port);
-    if (bind(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0 || listen(fd, 16) < 0) {
-        int e = errno;
-        close(fd);
-        z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
-        *boxed = z_io_os_error(e);
+    if (bind(Z_NET_RAW(s), (struct sockaddr*)&addr, sizeof(addr)) != 0 || listen(Z_NET_RAW(s), 16) != 0) {
+        int e = z_net_error();
+        z_net_close(s);
         result.tag = @ARM_Result_Listener_IoError.err@;
-        result.data = boxed;
+        result.data = z_net_boxed_error(e);
         return result;
     }
     z_@Listener@_t* boxed = (z_@Listener@_t*)z_xmalloc(sizeof(z_@Listener@_t));
-    boxed->@MEMBER_Listener.fd@ = (int32_t)fd;
+    boxed->@MEMBER_Listener.sock@ = s;
     boxed->@MEMBER_Listener.open@ = true;
     result.tag = @ARM_Result_Listener_IoError.ok@;
     result.data = boxed;
     return result;
 }
-

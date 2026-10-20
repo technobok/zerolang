@@ -3,11 +3,9 @@ static z_@Result_null_IoError@_t z_@Conn@_close(z_@Conn@_t* c) {
     z_@Result_null_IoError@_t result = {0};
     if (c->@MEMBER_Conn.open@) {
         c->@MEMBER_Conn.open@ = false;
-        if (close(c->@MEMBER_Conn.fd@) < 0) {
-            z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
-            *boxed = z_io_os_error(errno);
+        if (z_net_close(c->@MEMBER_Conn.sock@) != 0) {
             result.tag = @ARM_Result_null_IoError.err@;
-            result.data = boxed;
+            result.data = z_net_boxed_error(z_net_error());
             return result;
         }
     }
@@ -15,4 +13,3 @@ static z_@Result_null_IoError@_t z_@Conn@_close(z_@Conn@_t* c) {
     result.data = NULL;
     return result;
 }
-
