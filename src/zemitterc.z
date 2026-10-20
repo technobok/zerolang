@@ -38304,8 +38304,31 @@ emitClassRowStructs: function {
     }
 }
 
+# emitMetaCreate -- a struct's field-wise constructor, `<rc>_meta_create`, and
+# when `alias` the `<rc>_create` name a construction calls
+emitMetaCreate: function {
+    buf: String.borrow
+    rc: StringView
+    params: StringView
+    inits: StringView
+    alias: bool
+} is {
+    l3: "static \{rc}_t \{rc}_meta_create(\{params}) {\n"
+    buf.append l3
+    l4: "    \{rc}_t _this = { \{inits} };\n"
+    buf.append l4
+    buf.append "    return _this;\n"
+    buf.append "}\n"
+    if alias then {
+        l5: "#define \{rc}_create \{rc}_meta_create\n"
+        buf.append l5
+    }
+}
+
 # emitClassRowStruct -- a runtime-owned class's struct, laid out from its
-# declaration as a record's is
+# declaration as a record's is, and the field-wise constructor a program
+# building one by its fields (`io.File fd: 0 open: false`) calls, unless the
+# class's own `create` is native
 emitClassRowStruct: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -38332,6 +38355,27 @@ emitClassRowStruct: function {
         lc: "} \{fc}_t;\n"
         buf.append lc
     }
+    if (typeHasNativeCreate :symtab tid: cid) then return
+    params: String
+    inits: String
+    (recordCreateArgs
+        :ast
+        :symtab
+        :ctx
+        tid: cid
+        names: fnames
+        ids: fids
+        nameIds: fidsNm
+        :params
+        :inits
+    )
+    (emitMetaCreate
+        :buf
+        rc: fc.stringView
+        params: params.stringView
+        inits: inits.stringView
+        alias: true
+    )
 }
 
 # maybePreEmitElem -- a user type (variant/record/class/union) used as a
@@ -45763,17 +45807,15 @@ emitOneRecord: function {
         :params
         :inits
     )
-    l3: "static \{rc}_t \{rc}_meta_create(\{params}) {\n"
-    buf.append l3
-    l4: "    \{rc}_t _this = { \{inits} };\n"
-    buf.append l4
-    buf.append "    return _this;\n"
-    buf.append "}\n"
     aliasOk: (definedInNonMain :symtab :ctx :tid).not
-    if aliasOk when (typeHasNativeCreate :symtab :tid).not then {
-        l5: "#define \{rc}_create \{rc}_meta_create\n"
-        buf.append l5
-    }
+    if aliasOk then aliasOk = (typeHasNativeCreate :symtab :tid).not
+    (emitMetaCreate
+        :buf
+        rc: rc.stringView
+        params: params.stringView
+        inits: inits.stringView
+        alias: aliasOk
+    )
     if (eqGenerated :ast :symtab :ctx :tid) then (emitRecordEq
         :ast
         :symtab
