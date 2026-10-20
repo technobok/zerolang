@@ -158,16 +158,17 @@ isLeak: function {bounds: bool s: StringView} out bool is {
     return (s.contains needle: " byte")
 }
 
-# zcArgv -- the zc emit command argv. `ccFwd`, when non-empty, names the
-# C compiler to zc ITSELF rather than only to the harness's compile step: the
-# C backend refuses a unit the compiler cannot build (f128 under tcc), so the
-# emit decides differently with it than without. Empty by default, which
-# leaves zc on its own resolution of the compiler.
+# zcArgv -- the zc emit command argv, one `--src` per entry of `srcdirs`, in
+# order. `ccFwd`, when non-empty, names the C compiler to zc ITSELF rather than
+# only to the harness's compile step: the C backend refuses a unit the
+# compiler cannot build (f128 under tcc), so the emit decides differently with
+# it than without. Empty by default, which leaves zc on its own resolution of
+# the compiler.
 zcArgv: function {
     zc: StringView
     ccFwd: StringView
     name: StringView
-    srcdir: StringView
+    srcdirs: (List String).view
     sys: StringView
     outc: StringView
 } out List String is {
@@ -178,17 +179,33 @@ zcArgv: function {
         a.append from: "--cc".string
         a.append from: ccFwd.string
     }
-    # the src column is a PATH LIST, colon separated: a program that lives under
-    # tests/unit still needs src on the roots, and zc searches them in order
-    for each d: (srcdir.split sep: ":") loop {
+    for each d: srcdirs loop {
         a.append from: "--src".string
-        a.append from: d.string
+        a.append from: d.copy
     }
     a.append from: "--system".string
     a.append from: sys.string
     a.append from: "--emit-c".string
     a.append from: outc.string
     return a
+}
+
+# oneDir -- a single source root, as zcArgv takes its roots
+oneDir: function {d: StringView} out List String is {
+    l: List String
+    l.append from: d.string
+    return l
+}
+
+# manifestDirs -- the source roots a case manifest's directory column names,
+# each under `root`. The column is a list joined by ":", the manifest's own
+# separator: a program that lives under tests/unit still needs src on the
+# roots, and zc searches them in order. It is split before the root is
+# joined, so a root with a drive letter (`C:\r`) stays one path.
+manifestDirs: function {root: StringView column: StringView} out List String is {
+    l: List String
+    for each d: (column.split sep: ":") loop l.append (path.join a: root b: d)
+    return l
 }
 
 # dumpArgv -- the canonical-state dump command argv (dump --canon).
@@ -345,17 +362,18 @@ fixtureNames: function {dir: StringView suffix: StringView} out List String is {
 # `name` with the zc at `zc` into `csrc`, then compile that C to `bin` with
 # the runner's C compiler. Answers which step failed -- 0 built, 1 the emit,
 # 2 the C compile -- so a kind names the stage in its own FAIL line, as each
-# did when it carried the ladder itself.
+# did when it carried the ladder itself. `srcdirs` are the source roots, in
+# order.
 buildTool: function {
     r: Runner.view
     zc: StringView
     name: StringView
-    srcdir: StringView
+    srcdirs: (List String).view
     csrc: StringView
     bin: StringView
     asan: bool
 } out u64 is {
-    ea: zcArgv :zc ccFwd: r.ccFwd.stringView :name :srcdir sys: r.sys.stringView outc: csrc
+    ea: zcArgv :zc ccFwd: r.ccFwd.stringView :name :srcdirs sys: r.sys.stringView outc: csrc
     if (
         (os.spawn
             argv: ea
@@ -1643,7 +1661,7 @@ runRunCases: function {r: Runner} is {
                 print "SKIP(run) \{nameStr} (posix)"
                 r.skip = r.skip + 1
             } else if idx >= 2 then {
-                srcAbs: "\{r.root.stringView}/\{dirStr.stringView}"
+                srcAbs: manifestDirs root: r.root.stringView column: dirStr.stringView
                 cpath: "\{r.tmp.stringView}/\{nameStr.stringView}.c"
                 bpath: "\{r.tmp.stringView}/\{nameStr.stringView}.bin"
                 opath: "\{r.tmp.stringView}/\{nameStr.stringView}.out"
@@ -1655,7 +1673,7 @@ runRunCases: function {r: Runner} is {
                     zc: r.zc.stringView
                     ccFwd: r.ccFwd.stringView
                     name: nameStr.stringView
-                    srcdir: srcAbs.stringView
+                    srcdirs: srcAbs
                     sys: r.sys.stringView
                     outc: cpath.stringView
                 )
@@ -1783,7 +1801,7 @@ runLspCases: function {r: Runner} is {
         :r
         zc: r.zc.stringView
         name: "zls"
-        srcdir: srcD.stringView
+        srcdirs: (oneDir d: srcD.stringView)
         csrc: zlsC.stringView
         bin: zlsB.stringView
         asan: false
@@ -2102,7 +2120,7 @@ runLeakCases: function {r: Runner} is {
                 zc: r.zc.stringView
                 ccFwd: r.ccFwd.stringView
                 name: nm
-                srcdir: ld.stringView
+                srcdirs: (oneDir d: ld.stringView)
                 sys: r.sys.stringView
                 outc: lc.stringView
             )
@@ -2219,7 +2237,7 @@ runErrorCases: function {r: Runner} is {
             zc: r.zc.stringView
             ccFwd: r.ccFwd.stringView
             name: enm
-            srcdir: r.errors.stringView
+            srcdirs: (oneDir d: r.errors.stringView)
             sys: r.sys.stringView
             outc: os.nullDevice.stringView
         )
@@ -2414,7 +2432,7 @@ runDifferentialCases: function {r: Runner} is {
             :r
             zc: r.zc.stringView
             name: "zlexer_dump"
-            srcdir: r.unitDir.stringView
+            srcdirs: (oneDir d: r.unitDir.stringView)
             csrc: zlxC.stringView
             bin: zlxB.stringView
             asan: false
@@ -2426,7 +2444,7 @@ runDifferentialCases: function {r: Runner} is {
             :r
             zc: r.zc.stringView
             name: "zparser_dump"
-            srcdir: r.unitDir.stringView
+            srcdirs: (oneDir d: r.unitDir.stringView)
             csrc: zpsC.stringView
             bin: zpsB.stringView
             asan: false
@@ -2544,7 +2562,7 @@ runVfsCases: function {r: Runner} is {
             :r
             zc: r.zc.stringView
             name: "zvfs_script"
-            srcdir: r.unitDir.stringView
+            srcdirs: (oneDir d: r.unitDir.stringView)
             csrc: zvfC.stringView
             bin: zvfB.stringView
             asan: false
@@ -2752,7 +2770,7 @@ runSmokeCases: function {r: Runner} is {
                 }
             }
             if idx >= 2 then {
-                srcAbs: "\{r.root.stringView}/\{dirStr.stringView}"
+                srcAbs: manifestDirs root: r.root.stringView column: dirStr.stringView
                 cpath: "\{r.tmp.stringView}/S_\{nameStr.stringView}.c"
                 bpath: "\{r.tmp.stringView}/S_\{nameStr.stringView}.bin"
                 opath: "\{r.tmp.stringView}/S_\{nameStr.stringView}.out"
@@ -2761,7 +2779,7 @@ runSmokeCases: function {r: Runner} is {
                     zc: r.zc.stringView
                     ccFwd: r.ccFwd.stringView
                     name: nameStr.stringView
-                    srcdir: srcAbs.stringView
+                    srcdirs: srcAbs
                     sys: r.sys.stringView
                     outc: cpath.stringView
                 )
@@ -2851,17 +2869,16 @@ runFmtCases: function {r: Runner} is {
     goldDir: "\{r.root.stringView}/tests/fixtures/fmt_golden"
     zfC: "\{r.tmp.stringView}/F_zfmt.c"
     zfB: "\{r.tmp.stringView}/F_zfmt.bin"
-    # the src column is a colon-joined path list, as a case file spells it
-    srcs: r.unitDir.copy
-    srcs.append ":"
-    srcs.append r.srcDir
+    # the unit's own directory first, then src, as a case file lists them
+    srcs: oneDir d: r.unitDir.stringView
+    srcs.append from: r.srcDir.copy
     built: false
     if (
         (buildTool
             :r
             zc: r.zc.stringView
             name: "zfmt_dump"
-            srcdir: srcs.stringView
+            srcdirs: srcs
             csrc: zfC.stringView
             bin: zfB.stringView
             asan: false
@@ -3066,7 +3083,7 @@ runSelfhostAsan: function {r: Runner} is {
                 :r
                 zc: r.zc.stringView
                 name: "zc"
-                srcdir: r.srcDir.stringView
+                srcdirs: (oneDir d: r.srcDir.stringView)
                 csrc: zcaC.stringView
                 bin: zcaB.stringView
                 asan: true
@@ -3162,7 +3179,7 @@ runFixpoint: function {r: Runner} is {
                 :r
                 zc: r.zc.stringView
                 name: "zc"
-                srcdir: r.srcDir.stringView
+                srcdirs: (oneDir d: r.srcDir.stringView)
                 csrc: fp1.stringView
                 bin: fp1bin.stringView
                 asan: false
@@ -3173,7 +3190,7 @@ runFixpoint: function {r: Runner} is {
                 zc: fp1bin.stringView
                 ccFwd: r.ccFwd.stringView
                 name: "zc"
-                srcdir: r.srcDir.stringView
+                srcdirs: (oneDir d: r.srcDir.stringView)
                 sys: r.sys.stringView
                 outc: fp2.stringView
             )
