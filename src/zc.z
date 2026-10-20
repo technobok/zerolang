@@ -464,6 +464,10 @@ buildExe: function {
     objs: (List String).view
     tccDir: StringView
     inproc: bool
+    # the build is for Windows, whose executables link the compiler's runtime
+    # libraries (libgcc, winpthreads, libquadmath) statically, so an .exe runs
+    # with no DLL beside it
+    staticRuntime: bool
 } out i32 is {
     if inproc then {
         # There is no ldflags parameter read here: libtcc links through the
@@ -489,6 +493,7 @@ buildExe: function {
         a.append from: "-g".string
     }
     a.append from: "-std=c17".string
+    if staticRuntime then a.append from: "-static".string
     # a `.view` receiver or parameter is `const` in the C, so a write through
     # one is a discarded qualifier: the checker refuses it first, and this
     # makes the C compiler refuse it too, should the checker ever miss one.
@@ -1415,6 +1420,7 @@ buildAndRun: function {
         :objs
         tccDir: ccTcc.stringView
         :inproc
+        staticRuntime: (ztarget.targetIsWindows triple: cf.targetTriple.stringView)
     )
     if cf.saveTemps then {
         kept: "zc: kept generated C at \{tmpc.stringView}"
@@ -1581,6 +1587,7 @@ emitCSource: function {
         :libs
         :ccFamily
         targetArch: (ztarget.targetOrHostArch triple: cf.targetTriple.stringView).stringView
+        targetOs: (ztarget.targetOrHostOs triple: cf.targetTriple.stringView).stringView
     )
     failEmitErrors errs: emitErrs :vfs :prog :mainFsno
     if cf.timed then printPhases :t0 :t1 :t2 t3: os.monotonicMillis

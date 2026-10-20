@@ -1985,6 +1985,9 @@ UnitReq: class {
     nocc: String
     # `arch=`: the one target architecture that can
     arch: String
+    # `os=`: the target operating systems the row speaks for, comma-separated
+    # oskind arm names; empty for every one
+    os: String
     # `link=`: the library its runtime links
     link: String
     # `csrc=`: a C source its runtime needs compiled and linked, a path under
@@ -1996,8 +1999,8 @@ UnitReq: class {
 
 # nativeWord -- the words natives.tbl and the runtime fragments spell that the
 # loader acts on: the pointer-arguments and value-form flags, the unit-order
-# row, the two runtime units it orders specially, and the two type holes the
-# emitter fills itself. Read through a zast.Vocab (ctx.nativeWords), never
+# row, the two runtime units it orders specially, the two type holes the
+# emitter fills itself, and the operating systems an `os=` may name. Read through a zast.Vocab (ctx.nativeWords), never
 # compared as text.
 nativeWord: data {
     argsPtr: "args=ptr"
@@ -2007,6 +2010,10 @@ nativeWord: data {
     unitPrelude: "prelude"
     holeString: "String"
     holeStringView: "StringView"
+    osLinux: "linux"
+    osDarwin: "darwin"
+    osWindows: "windows"
+    osOther: "other"
 } out stringdata
 
 # NativeHead -- a row's head, parsed: the path key and the attributes the
@@ -2037,12 +2044,13 @@ NativeHead: class {
     call: String
     # `pulls=`: the other units' members demanding this one demands
     pulls: String
-    # `link=`, `cfeature=`, `nocc=`, `arch=`, `csrc=`, `cdefs=`: on an `@unit.`
-    # row, the unit's requirements of the C toolchain (UnitReq)
+    # `link=`, `cfeature=`, `nocc=`, `arch=`, `os=`, `csrc=`, `cdefs=`: on an
+    # `@unit.` row, the unit's requirements of the C toolchain (UnitReq)
     link: String
     cfeature: String
     nocc: String
     arch: String
+    os: String
     csrc: String
     cdefs: String
     # `live=`, `destroy=`, `tmpl=`: on a `<unit>.<Class>.@class` row, the
@@ -2078,6 +2086,7 @@ NativeHead: class {
             cfeature: String
             nocc: String
             arch: String
+            os: String
             csrc: String
             cdefs: String
             live: String
@@ -2231,6 +2240,12 @@ NativeHead: class {
         ) case some then {
             this.arch = aro.string
         } case none then null
+        oso: f.stripPrefix p: "os="
+        match (
+            oso
+        ) case some then {
+            this.os = oso.string
+        } case none then null
         cso: f.stripPrefix p: "csrc="
         match (
             cso
@@ -2244,6 +2259,15 @@ NativeHead: class {
             this.cdefs = cdo.string
         } case none then null
     }
+}
+
+# isOsWord -- whether an `os=` word is an oskind arm name
+isOsWord: function {ctx: Ctx word: StringView} out bool is {
+    w: ctx.nativeWords.slotOf text: word
+    if w == nativeWord.slot.osLinux then return true
+    if w == nativeWord.slot.osDarwin then return true
+    if w == nativeWord.slot.osWindows then return true
+    return w == nativeWord.slot.osOther
 }
 
 # recordCanonRow -- a canonical-stem row, `[@canon.<stem> spec=...]`: the
@@ -2451,11 +2475,19 @@ recordNativeRow: function {ctx: Ctx ast: Ast.view h: NativeHead.view body: Strin
     match (
         up
     ) case some then {
+        for each osn: (h.os.stringView.split sep: ",") loop {
+            if osn.length > 0 when (isOsWord :ctx word: osn).not then (emitFail
+                :ctx
+                what: "natives.tbl: '\{h.key}' names '\{osn}' in os=, which is not an operating system (linux, darwin, windows, other)"
+                line: 0
+            )
+        }
         ctx.unitReqs.append (UnitReq
             path: up.string
             feature: h.cfeature.copy
             nocc: h.nocc.copy
             arch: h.arch.copy
+            os: h.os.copy
             link: h.link.copy
             csrc: h.csrc.copy
             cdefs: h.cdefs.copy
@@ -34570,6 +34602,9 @@ emitC: function {
     # the architecture the build is for (an archkind arm name), which a unit
     # the program reaches may require
     targetArch: StringView
+    # the operating system the build is for (an oskind arm name), which decides
+    # the units' per-OS rows
+    targetOs: StringView
 } out String is {
     buf: String
     rtids: resolveRuntimeTids :program :symtab
@@ -34756,7 +34791,16 @@ emitC: function {
     linkLibs: List String
     for each lb: libs loop linkLibs.append from: lb.copy
     csrcs: List String
-    applyUnitReqs ast: program :symtab :ctx :ccFamily libs: linkLibs :csrcs arch: targetArch
+    (applyUnitReqs
+        ast: program
+        :symtab
+        :ctx
+        :ccFamily
+        libs: linkLibs
+        :csrcs
+        arch: targetArch
+        os: targetOs
+    )
     {
         buildDefUnitIndex :symtab :ctx
         bindFragTypeTids :symtab :ctx ast: program
@@ -34849,7 +34893,8 @@ emitC: function {
 # (natives.tbl's `@unit.` rows): each one the program reaches adds its link
 # library and the C source it needs built, and refuses a C compiler or a target
 # architecture that cannot build it, by name, before any C is compiled. A unit
-# nothing reaches asks nothing.
+# nothing reaches asks nothing, and a row whose `os=` does not name the target
+# operating system speaks for another build.
 applyUnitReqs: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -34861,6 +34906,8 @@ applyUnitReqs: function {
     csrcs: List String
     # the architecture the build is for, as an archkind arm name
     arch: StringView
+    # the operating system the build is for, as an oskind arm name
+    os: StringView
 } is {
     if ctx.unitReqs.length == 0 then return
     fam: ccFamilyName f: ccFamily
@@ -34869,6 +34916,7 @@ applyUnitReqs: function {
     refusals: List String
     for each r: ctx.unitReqs loop {
         if (unitPathReached :ast :symtab path: r.path.stringView).not then continue
+        if (rowSpeaksForOs :r :os).not then continue
         why: unitReqRefusal :r :fam :arch
         if why.length > 0 then {
             refusals.append why.take
@@ -34878,6 +34926,16 @@ applyUnitReqs: function {
         }
     }
     for each m: refusals loop emitFail :ctx what: m.copy line: 0
+}
+
+# rowSpeaksForOs -- whether a unit row applies to a build for `os`: it names
+# no operating system, or names that one
+rowSpeaksForOs: function {r: UnitReq.view os: StringView} out bool is {
+    if r.os.length == 0 then return true
+    for each osn: (r.os.stringView.split sep: ",") loop {
+        if osn == os then return true
+    }
+    return false
 }
 
 # csrcLineOf -- the `zcsrc:` header line a unit's `csrc=` row makes: the

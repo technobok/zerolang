@@ -647,7 +647,7 @@
 [system.f128.bits]             ({ __float128 _v = @V@; z_u128 _b; memcpy(&_b, &_v, sizeof(_b)); _b; })
 [system.f128.scaleB]           scalbnq(@V@, @A1@)
 [system.f128.logB]             ((int32_t)ilogbq(@V@))
-[system.f128.sqrt]             sqrtq(@V@)
+[system.f128.sqrt needs=prelude.f128sqrt] z_f128_sqrt(@V@)
 [system.f128.cbrt]             cbrtq(@V@)
 [system.f128.hypot]            hypotq(@V@, @A1@)
 [system.f128.pow]              powq(@V@, @A1@)
@@ -923,6 +923,8 @@
 # Conn itself (`uses_Conn`): its declared Reader/Writer conformance takes the
 # addresses of read, write, flush and close whether or not anything calls them,
 # and a Conn the program never makes is not emitted at all.
+# Winsock is a library of its own on Windows.
+[@unit.net os=windows link=ws2_32]
 # the fd holders: live once listen, accept or connect minted their Result; a
 # Conn's read and write also dereference the byte-buffer monos
 [net.Listener.@class live=Result_Listener_IoError destroy=_Z_NET_LISTENER_DESTROY]
@@ -937,7 +939,9 @@
 [net.Conn.flush demand=uses_Conn frag=_Z_NET_CONN_FLUSH]
 [net.pollReadable frag=_Z_NET_POLL]
 
-# tcc -- the shared helpers, then the convention loads
+# tcc -- the shared helpers, then the convention loads. The loader's dlopen
+# needs libdl on POSIX.
+[@unit.tcc os=linux,darwin,other link=dl]
 [@tcc.helpers demand=@unit frag=_Z_TCC_HELPERS]
 [tcc.available frag=_Z_TCC_AVAILABLE]
 [tcc.compileToExe frag=_Z_TCC_COMPILE_TO_EXE]
@@ -974,7 +978,7 @@
 # threaded program builds it multi-thread (THREADSAFE=2: a connection is used
 # by one thread at a time, which `thread.Unshareable` on its types enforces);
 # the two rows differ in that define and the pthread link alone.
-[@unit.sqlite when=threaded link=pthread csrc=sqlite/sqlite3.c cdefs=SQLITE_THREADSAFE=2,SQLITE_OMIT_LOAD_EXTENSION,SQLITE_DQS=0,SQLITE_DEFAULT_MEMSTATUS=0,SQLITE_DEFAULT_WAL_SYNCHRONOUS=1,SQLITE_OMIT_DEPRECATED,SQLITE_OMIT_SHARED_CACHE,SQLITE_OMIT_PROGRESS_CALLBACK,SQLITE_LIKE_DOESNT_MATCH_BLOBS,SQLITE_MAX_EXPR_DEPTH=0,SQLITE_STRICT_SUBTYPE=1,SQLITE_ENABLE_FTS5,SQLITE_ENABLE_RTREE,SQLITE_ENABLE_MATH_FUNCTIONS,SQLITE_ENABLE_PERCENTILE,SQLITE_ENABLE_DBSTAT_VTAB,SQLITE_ENABLE_COLUMN_METADATA,SQLITE_ENABLE_CARRAY]
+[@unit.sqlite when=threaded csrc=sqlite/sqlite3.c cdefs=SQLITE_THREADSAFE=2,SQLITE_OMIT_LOAD_EXTENSION,SQLITE_DQS=0,SQLITE_DEFAULT_MEMSTATUS=0,SQLITE_DEFAULT_WAL_SYNCHRONOUS=1,SQLITE_OMIT_DEPRECATED,SQLITE_OMIT_SHARED_CACHE,SQLITE_OMIT_PROGRESS_CALLBACK,SQLITE_LIKE_DOESNT_MATCH_BLOBS,SQLITE_MAX_EXPR_DEPTH=0,SQLITE_STRICT_SUBTYPE=1,SQLITE_ENABLE_FTS5,SQLITE_ENABLE_RTREE,SQLITE_ENABLE_MATH_FUNCTIONS,SQLITE_ENABLE_PERCENTILE,SQLITE_ENABLE_DBSTAT_VTAB,SQLITE_ENABLE_COLUMN_METADATA,SQLITE_ENABLE_CARRAY]
 [@unit.sqlite csrc=sqlite/sqlite3.c cdefs=SQLITE_THREADSAFE=0,SQLITE_OMIT_LOAD_EXTENSION,SQLITE_DQS=0,SQLITE_DEFAULT_MEMSTATUS=0,SQLITE_DEFAULT_WAL_SYNCHRONOUS=1,SQLITE_OMIT_DEPRECATED,SQLITE_OMIT_SHARED_CACHE,SQLITE_OMIT_PROGRESS_CALLBACK,SQLITE_LIKE_DOESNT_MATCH_BLOBS,SQLITE_MAX_EXPR_DEPTH=0,SQLITE_STRICT_SUBTYPE=1,SQLITE_ENABLE_FTS5,SQLITE_ENABLE_RTREE,SQLITE_ENABLE_MATH_FUNCTIONS,SQLITE_ENABLE_PERCENTILE,SQLITE_ENABLE_DBSTAT_VTAB,SQLITE_ENABLE_COLUMN_METADATA,SQLITE_ENABLE_CARRAY]
 [@canon.Result_Database_SqliteError spec=Result,sqlite.Database,sqlite.SqliteError]
 [@canon.Result_null_SqliteError spec=Result,null,sqlite.SqliteError]
@@ -1151,6 +1155,8 @@
 [@prelude.int128 frag=_Z_INT128]
 [@prelude.f16 frag=_Z_F16]
 [@prelude.fmt64 frag=_Z_FMT64]
+# f128's square root, correctly rounded on every libquadmath
+[@prelude.f128sqrt frag=_Z_F128_SQRT]
 # the thread shim: threads, locks, condition variables, once, atomics, demanded
 # by a row that names `needs=prelude.zthread`
 [@prelude.zthread frag=_Z_THREAD_SHIM]
@@ -1162,7 +1168,7 @@
 # template; the shim's threads need pthread at the link. A program that only
 # names the unit's markers (a sqlite type is `thread.Unshareable`) starts no
 # thread and links nothing for it.
-[@unit.thread when=threaded link=pthread]
+[@unit.thread when=threaded os=linux,darwin,other link=pthread]
 [@unit.thread]
 [thread.JoinHandle.@class tmpl=z_JoinHandle.c.tmpl needs=prelude.zthread]
 [thread.JoinHandle.join]
@@ -1183,7 +1189,7 @@
 
 # sync -- what threads share: each class is written from its template, over the
 # shim's atomics and locks, which need pthread at the link
-[@unit.sync link=pthread]
+[@unit.sync os=linux,darwin,other link=pthread]
 # memoryorder to the C11 order, for every atomic's template
 [@sync.memory_order frag=_Z_SYNC_MEMORY_ORDER]
 [sync.Atomic.@class tmpl=z_Atomic.c.tmpl needs=prelude.zthread,memory_order]
@@ -1280,7 +1286,8 @@
 # not -- `link=`
 # adds a library to the link line, `nocc=` refuses a C compiler family that
 # cannot build it and `arch=` any target architecture but the one named, each
-# by name and before any C is compiled; `cfeature=` names the C feature for the
+# by name and before any C is compiled; `os=` limits the row to builds for the
+# operating systems it names (oskind arm names, comma-separated); `cfeature=` names the C feature for the
 # refusal. `csrc=` names a C source under the vendor directory that the unit's
 # runtime needs compiled and linked, and `cdefs=` the defines it is compiled
 # with, comma-separated: the emitted C records both on a `zcsrc:` header line,

@@ -899,7 +899,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2275351
+ALLOC_BASELINE := 2276466
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1112,7 +1112,8 @@ cobj-guard: bin/zc $(BUILDDIR)/tcc
 # `when=` variant replaces its plain row exactly when its fact holds; and a
 # generic native class (cellar.Cell) is instantiated per element type from the
 # C template its `@class` row names, and a generic native function (cellar.holding)
-# is the template function of the instance it answers. The runtime dir is built from src/runtime
+# is the template function of the instance it answers; and an `os=windows` @unit row links
+# for a windows target and nowhere else. The runtime dir is built from src/runtime
 # plus the fixture's rows, fragments and template.
 user-native-guard: bin/zc
 	@d=$$(mktemp -d); fail=0; \
@@ -1151,9 +1152,18 @@ user-native-guard: bin/zc
 	  if [ "$$got" != "42 false true 1 true true " ]; then \
 	    echo "user-native-guard FAIL: cellar printed '$$got', want '42 false true 1 true true '"; fail=1; fi; \
 	fi; \
+	if [ $$fail -eq 0 ]; then \
+	  bin/zc cellar --src tests/fixtures/user_native --system lib/system --runtime $$d/rt \
+	    --target x86_64-w64-mingw32 --emit-c $$d/cellar-win.c > $$d/wemit.log 2>&1 \
+	    || { echo "user-native-guard FAIL: emit cellar for windows"; sed -n 1,5p $$d/wemit.log; fail=1; }; \
+	fi; \
+	if [ $$fail -eq 0 ]; then \
+	  grep -q '^/\* zlink:.*zcellarwin' $$d/cellar-win.c && ! grep -q 'zcellarwin' $$d/cellar.c \
+	    || { echo "user-native-guard FAIL: an os=windows @unit row must link for a windows target and only there"; fail=1; }; \
+	fi; \
 	rm -rf $$d; \
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
-	echo "user-native-guard OK: a unit outside src/runtime links and runs its own natives, a hidden subunit's among them, a fact's variant chosen, a generic and a non-generic class from their templates, a generic function from its result's"
+	echo "user-native-guard OK: a unit outside src/runtime links and runs its own natives, a hidden subunit's among them, a fact's variant chosen, a generic and a non-generic class from their templates, a generic function from its result's, an os= row only for its OS"
 
 # shim-guard -- the C thread shim (_Z_THREAD_SHIM.inc) passes its own test under
 # every compiler zc drives and under ThreadSanitizer: tests/c/zthread_shim_test.c
@@ -2221,7 +2231,7 @@ view-guard:
 # is not live), and the emitFail and marker-site counts in src/zemitterc.z are
 # ratchets. A new refusal leg may raise EMITFAIL_BASELINE (say so in the commit);
 # a new fallback leg may not.
-EMITFAIL_BASELINE := 43
+EMITFAIL_BASELINE := 44
 MARKER_BASELINE := 24
 EXCS := $(NAMES:%=$(EXDIR)/%.c)
 fallback-guard: $(EXCS) bin/zc bin/zl bin/zls

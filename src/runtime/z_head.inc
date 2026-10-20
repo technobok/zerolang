@@ -17,7 +17,6 @@
 extern __float128 fmodq(__float128 x, __float128 y);
 extern __float128 strtoflt128(const char *s, char **sp);
 extern int quadmath_snprintf(char *s, size_t size, const char *format, ...);
-extern __float128 sqrtq(__float128 x);
 extern __float128 cbrtq(__float128 x);
 extern __float128 hypotq(__float128 x, __float128 y);
 extern __float128 powq(__float128 x, __float128 y);
