@@ -7,16 +7,24 @@
    axis, and splitmix64 is materially faster on 8 bytes than SipHash.
 
    Seed bytes are read once at program startup via `z_siphash_init`
-   (called from `main` before `z_main`). If `getrandom` and
-   `/dev/urandom` both fail, the seed stays zero -- hashes are
-   deterministic in that degenerate environment but the program runs
-   and Map / Set behaviour is unaffected. */
+   (called from `z_start`, z_start.inc): from `rand_s` on Windows,
+   else `getrandom`, else `/dev/urandom`. With no entropy source the
+   seed is a fixed pattern -- hashes are deterministic in that
+   degenerate environment but the program runs and Map / Set
+   behaviour is unaffected. */
 
 static uint64_t z_sip_k0 = 0;
 static uint64_t z_sip_k1 = 0;
 
 static void z_siphash_init(void) {
     uint8_t key[16] = {0};
+#if defined(_WIN32)
+    for (size_t i = 0; i < sizeof(key); i += sizeof(unsigned int)) {
+        unsigned int r = 0;
+        if (rand_s(&r) != 0) r = 0x5a5a5a5au;
+        memcpy(&key[i], &r, sizeof(r));
+    }
+#else
     ssize_t n = -1;
 #ifdef SYS_getrandom
     do {
@@ -36,6 +44,7 @@ static void z_siphash_init(void) {
            correct, only DoS resistance is lost) */
         if (got != sizeof(key)) memset(key, 0x5a, sizeof(key));
     }
+#endif
     memcpy(&z_sip_k0, &key[0], 8);
     memcpy(&z_sip_k1, &key[8], 8);
 }

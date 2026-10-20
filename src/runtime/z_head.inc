@@ -1,5 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #define _DEFAULT_SOURCE
+/* rand_s (the hash seed on Windows) is declared only under this */
+#define _CRT_RAND_S
 
 #include <stdio.h>
 #include <stdint.h>
@@ -62,17 +64,21 @@ extern int ilogbq(__float128 x);
 #endif
 #include <errno.h>
 #include <fcntl.h>
-#include <unistd.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#if !defined(_WIN32)
+#include <unistd.h>
 #include <dirent.h>
 #include <pwd.h>
 #include <sys/wait.h>
-#include <signal.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <poll.h>
 #include <sys/random.h>
 #include <sys/syscall.h>
+#else
+#include <io.h>
+#endif
+#include <signal.h>
 

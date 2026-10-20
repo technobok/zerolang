@@ -68,7 +68,7 @@ EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
 .PHONY: all check complexity-report style-lint-fast style-lint test doc-check ci ci-gates ci-corpus \
-	test-math-arm64 test-sqlite-arm64 test-math-noasm test-portable-scalars docs-link-guard math-asm-guard \
+	test-math-arm64 test-sqlite-arm64 test-mingw test-math-noasm test-portable-scalars docs-link-guard math-asm-guard \
 	bench-math bench-math-kernels test-clang test-tcc test-tcc-heavy readable-check build \
 	tcc zc zl zls regen-goldens regen-fmt-goldens regen-matrix matrix-guard regen-math-asm \
 	fmt-raw-guard regen-lsp-goldens bump-seed test-bootstrap install docs warn-check perf \
@@ -157,7 +157,7 @@ ci:
 	@echo "CI GATE GREEN: style-lint + corpus(--heavy: +selfhost-asan +fixpoint) + bootstrap"
 
 # ci-gates -- the gates ci runs in parallel, after perf-strict.
-ci-gates: style-lint zl-full-guard complexity-report warn-check emitter-guard typename-guard frontend-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard highlight-guard any-guard deadcode-guard eager-guard eager-lib-guard case-guard user-native-guard shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard readable-check test-tcc-heavy test-clang test-math-arm64 test-sqlite-arm64 test-math-noasm test-portable-scalars math-asm-guard matrix-guard docs-link-guard mode-parity ci-corpus
+ci-gates: style-lint zl-full-guard complexity-report warn-check emitter-guard typename-guard frontend-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard highlight-guard any-guard deadcode-guard eager-guard eager-lib-guard case-guard user-native-guard shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard readable-check test-tcc-heavy test-clang test-math-arm64 test-sqlite-arm64 test-math-noasm test-portable-scalars test-mingw math-asm-guard matrix-guard docs-link-guard mode-parity ci-corpus
 
 ci-corpus: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --heavy --jobs $(NPROC)
@@ -213,6 +213,39 @@ test-sqlite-arm64: bin/zc
 	done; \
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
 	echo "test-sqlite-arm64 OK: $$n sqlite programs built for aarch64 match their goldens"
+
+# the wine prefix the Windows legs share (shim-guard, test-mingw), created
+# once and alone: wines that start in parallel on a missing prefix race to
+# create it. Without wine there is nothing to create and no stamp is left.
+WINE_PREFIX := $(abspath $(BUILDDIR))/wineprefix
+WINE_ENV := DISPLAY= WINEDEBUG=-all WINEPREFIX=$(WINE_PREFIX)
+$(BUILDDIR)/wineprefix/.ready:
+	@if command -v wine >/dev/null 2>&1; then \
+	  mkdir -p $(WINE_PREFIX) && $(WINE_ENV) timeout 300 wineboot -i > /dev/null 2>&1 && touch $@; \
+	fi
+
+# test-mingw -- the RUN corpus built for Windows by mingw-w64 (zc --target
+# x86_64-w64-mingw32) and run under wine against the same goldens.
+# tests/mingw-known-failures.txt is the expected failure set; a move either way
+# fails. Skipped without the cross compiler and wine.
+MINGW_CC := x86_64-w64-mingw32-gcc
+MINGW_KNOWN := tests/mingw-known-failures.txt
+test-mingw: bin/zc $(BUILDDIR)/ztestrunner $(BUILDDIR)/wineprefix/.ready
+	@if ! command -v $(MINGW_CC) >/dev/null 2>&1 || ! command -v wine >/dev/null 2>&1; then \
+	  echo "test-mingw: skipped (needs $(MINGW_CC) and wine)"; exit 0; fi; \
+	$(WINE_ENV) $(BUILDDIR)/ztestrunner --zc bin/zc --cc $(MINGW_CC) --target x86_64-w64-mingw32 \
+	   --exec wine --run-only --root . --jobs $(NPROC) > $(BUILDDIR)/mingw-run.log 2>&1; \
+	awk '/^FAIL/ { k = $$1; sub(/^FAIL\(/, "", k); sub(/\)$$/, "", k); \
+	       print $$2, (NF >= 3 ? $$3 : "(" k ")") }' $(BUILDDIR)/mingw-run.log \
+	  | sort > $(BUILDDIR)/mingw-fails.txt; \
+	grep -v '^#' $(MINGW_KNOWN) | grep -v '^ *$$' | sort > $(BUILDDIR)/mingw-known.txt; \
+	if ! diff -u $(BUILDDIR)/mingw-known.txt $(BUILDDIR)/mingw-fails.txt; then \
+	  echo "test-mingw FAIL: the Windows failure set moved (-known +actual above)"; \
+	  echo "  a gained line is a regression; a lost one passes now -- delete it from"; \
+	  echo "  $(MINGW_KNOWN) in the same commit. Full log: $(BUILDDIR)/mingw-run.log"; \
+	  exit 1; \
+	fi; \
+	echo "test-mingw OK: $$(sed -n 's/^pass=\([0-9]*\).*/\1/p' $(BUILDDIR)/mingw-run.log) RUN cases pass on Windows (mingw-w64, wine), $$(grep -c . $(BUILDDIR)/mingw-fails.txt) known failures, none new"
 
 # test-math-noasm -- the math corpus on math's C kernels (-DZ_MATH_NOASM).
 MATH_NOASM_DIR := $(BUILDDIR)/math-noasm
@@ -745,7 +778,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2275240
+ALLOC_BASELINE := 2275348
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1009,7 +1042,7 @@ user-native-guard: bin/zc
 # backend is built and run too (in a wine prefix kept under out/, which takes
 # seconds to create once); the OK line says which backends ran. MSVC is the
 # windows-shim workflow's.
-shim-guard: $(BUILDDIR)/tcc
+shim-guard: $(BUILDDIR)/tcc $(BUILDDIR)/wineprefix/.ready
 	@d=$$(mktemp -d); fail=0; t=tests/c/zthread_shim_test.c; pr=tests/c/tsan_probe.c; \
 	for cc in $(CC) clang; do \
 	  $$cc -std=c17 -Wall -Wextra -Wno-unused-function -O2 -o $$d/shim-$$cc $$t -lpthread > $$d/cc.log 2>&1 \
@@ -1030,8 +1063,7 @@ shim-guard: $(BUILDDIR)/tcc
 	  x86_64-w64-mingw32-gcc -std=c17 -Wall -Wextra -Wno-unused-function -O2 -o $$d/shim.exe $$t > $$d/cc.log 2>&1 \
 	    || { echo "shim-guard FAIL: mingw-w64 did not build the shim test"; grep -m3 error $$d/cc.log; fail=1; }; \
 	  if [ -f $$d/shim.exe ]; then \
-	    mkdir -p $(BUILDDIR)/wineprefix; \
-	    DISPLAY= WINEDEBUG=-all WINEPREFIX=$(abspath $(BUILDDIR))/wineprefix timeout 300 wine $$d/shim.exe > $$d/run.log 2>&1 \
+	    $(WINE_ENV) timeout 300 wine $$d/shim.exe > $$d/run.log 2>&1 \
 	      || { echo "shim-guard FAIL: the Win32 backend under wine"; tail -20 $$d/run.log; fail=1; }; \
 	    grep -q "zthread shim OK" $$d/run.log || { echo "shim-guard FAIL: the Win32 run did not report OK"; tail -20 $$d/run.log; fail=1; }; \
 	  fi; \

@@ -798,12 +798,16 @@ runnerWord: data {
     fSaveTemps: "--save-temps"
     fRegenLsp: "--regen-lsp"
     fDoccodeOnly: "--doccode-only"
+    fRunOnly: "--run-only"
     fZc: "--zc"
     fCc: "--cc"
     fCcflags: "--ccflags"
     fRoot: "--root"
     fJobs: "--jobs"
     fTimeout: "--timeout"
+    fTarget: "--target"
+    fExec: "--exec"
+    fTmp: "--tmp"
     lspHeader: "Content-Length: "
     zlinkOpen: "zlink:"
     zlinkClose: "*/"
@@ -829,7 +833,8 @@ Runner: class {
     ccFwdOn: bool
     # the stdlib directory
     sys: String
-    # the scratch directory; kept when saveTemps is set, removed otherwise
+    # the scratch directory (--tmp, else a pid-named one under /tmp); kept when
+    # saveTemps is set, removed otherwise
     tmp: String
     # how many jobs run at once. It comes from the machine rather than a typed
     # number, a default of 1 being silently serial on a many-core box
@@ -848,6 +853,15 @@ Runner: class {
     regenLsp: bool
     # run the doccode kind alone (`make doc-check`)
     doccodeOnly: bool
+    # run the RUN kind alone (`make test-mingw`): the only kind whose programs
+    # can be built for another target
+    runOnly: bool
+    # the triple the RUN cases are built for (zc --target); empty builds for
+    # the host. Only with --run-only: every other kind runs what it builds
+    target: String
+    # the program each RUN case's binary is run under (wine for a Windows
+    # build); empty runs it directly
+    exec: String
     # the error-case directory
     errors: String
     # where the RUN cases' expected output lives
@@ -1599,6 +1613,10 @@ runRunCases: function {r: Runner} is {
                     sys: r.sys.stringView
                     outc: cpath.stringView
                 )
+                if r.target.length > 0 then {
+                    za.append from: "--target".string
+                    za.append from: r.target.copy
+                }
                 steps.append (mkStep
                     argv: za
                     cwd: ""
@@ -1626,6 +1644,12 @@ runRunCases: function {r: Runner} is {
                     zc: r.zc.stringView
                 )
                 ba: binArgv bin: bpath.stringView argsFile: argsFile.stringView
+                if r.exec.length > 0 then {
+                    under: List String
+                    under.append from: r.exec.copy
+                    for each a9e: ba loop under.append from: a9e.copy
+                    ba = under.take
+                }
                 steps.append (mkStep
                     argv: ba
                     cwd: rdir.stringView
@@ -3105,6 +3129,9 @@ newRunner: function out Runner is {
         saveTemps: false
         regenLsp: false
         doccodeOnly: false
+        runOnly: false
+        target: String
+        exec: String
         errors: String
         rungold: String
         runcases: String
@@ -3149,6 +3176,10 @@ takeFlag: function {r: Runner w: u64} out bool is {
         r.doccodeOnly = true
         return true
     }
+    if w == runnerWord.slot.fRunOnly then {
+        r.runOnly = true
+        return true
+    }
     return false
 }
 
@@ -3180,6 +3211,18 @@ takeValue: function {r: Runner w: u64 val: StringView} out bool is {
     if w == runnerWord.slot.fTimeout then {
         tv: val.parseI64
         if tv.ok then r.timeoutSecs = tv.i32.orPanic
+        return true
+    }
+    if w == runnerWord.slot.fTarget then {
+        r.target = val.string
+        return true
+    }
+    if w == runnerWord.slot.fExec then {
+        r.exec = val.string
+        return true
+    }
+    if w == runnerWord.slot.fTmp then {
+        r.tmp = val.string
         return true
     }
     return false
@@ -3246,19 +3289,27 @@ main: function is {
     r: newRunner
     parseRunnerArgs :r argv: os.args
     runnerPathsUnderRoot :r
-    mypid: os.pid
-    r.tmp = "/tmp/ztr_\{mypid}"
+    if r.tmp.length == 0 then {
+        mypid: os.pid
+        r.tmp = "/tmp/ztr_\{mypid}"
+        myPidS: "\{mypid}"
+        sweepStaleTmp myPidS: myPidS.stringView
+    }
     io.mkdirp path: r.tmp
-    myPidS: "\{mypid}"
-    sweepStaleTmp myPidS: myPidS.stringView
     # A sanitizer's symbolizer fetches debug info over the network where
     # DEBUGINFOD_URLS names a server, and a run waiting on it outlives its
     # timeout with its report unwritten. The runner never reaches the network:
     # symbols come from the binaries' own DWARF.
     os.setEnv key: "DEBUGINFOD_URLS" value: ""
 
+    if (r.target.length > 0) or (r.exec.length > 0) when r.runOnly.not then {
+        print "ztestrunner: --target and --exec need --run-only; no other kind runs a foreign binary"
+        os.exit code: 2
+    }
     if r.doccodeOnly then {
         runDoccodeCases :r
+    } else if r.runOnly then {
+        runRunCases :r
     } else {
         runRunCases :r
         runLspCases :r
