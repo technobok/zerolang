@@ -3,7 +3,7 @@
 # cannot enter, 124 for a child that outlives its timeout. The child sees
 # only its three standard streams: a file this process holds open is not
 # inherited (every runtime fd is close-on-exec). waitAny reaps only the
-# children it is given.
+# children it is given, each once; a Child that is killed reports 137.
 
 argvOf: function {a: StringView b: StringView c: StringView} out (List String) is {
     xs: List String
@@ -21,6 +21,27 @@ run: function {a: StringView b: StringView c: StringView cwd: StringView timeout
         errPath: "/dev/null"
         :timeoutSecs
     )
+}
+
+# startShell -- a Child running `sh -c code`
+startShell: function {code: StringView} out os.Child is {
+    s: (os.spawnAsync
+        argv: (argvOf a: "sh" b: "-c" c: code)
+        cwd: ""
+        outPath: "/dev/null"
+        errPath: "/dev/null"
+    )
+    match (s) case ok then return s.take case err then panic msg: "spawnAsync failed"
+}
+
+# waitFor -- poll until one of `children` has exited, and answer it
+waitFor: function {children: List os.Child} out os.procexit is {
+    r: os.waitAny :children
+    for r.pid == 0 loop {
+        os.sleepMillis ms: 5
+        r = os.waitAny :children
+    }
+    return r
 }
 
 main: function is {
@@ -48,23 +69,18 @@ main: function is {
             seen
         ) case ok then print "held file in the child: \{seen.stringView.trim}" case err then print "no report"
     } case err then print "open failed"
-    a: os.spawnAsync argv: (argvOf a: "sh" b: "-c" c: "exit 7") cwd: "" outPath: "/dev/null" errPath: "/dev/null"
-    b: os.spawnAsync argv: (argvOf a: "sh" b: "-c" c: "exit 9") cwd: "" outPath: "/dev/null" errPath: "/dev/null"
-    only: ListVal i32
-    only.append 0
-    only.append a
-    r: os.waitAny pids: only.listView
-    for r.pid == 0 loop {
-        os.sleepMillis ms: 5
-        r = os.waitAny pids: only.listView
-    }
-    print "reaped the one asked for: \{r.pid == a} \{r.status}"
-    rest: ListVal i32
-    rest.append b
-    r2: os.waitAny pids: rest.listView
-    for r2.pid == 0 loop {
-        os.sleepMillis ms: 5
-        r2 = os.waitAny pids: rest.listView
-    }
-    print "then the other: \{r2.pid == b} \{r2.status}"
+    only: List os.Child
+    only.append from: (startShell code: "exit 7")
+    others: List os.Child
+    others.append from: (startShell code: "exit 9")
+    r: waitFor children: only
+    print "reaped the one asked for: \{r.pid == (only.get i: 0).pid} \{r.status}"
+    print "then nothing more there: \{(os.waitAny children: only).pid}"
+    r2: waitFor children: others
+    print "then the other: \{r2.pid == (others.get i: 0).pid} \{r2.status}"
+    slow: List os.Child
+    slow.append from: (startShell code: "sleep 5")
+    (slow.getMut i: 0).kill
+    r3: waitFor children: slow
+    print "killed: \{r3.status}"
 }

@@ -548,22 +548,24 @@ mkJob: function {name: StringView steps: (List PoolStep).take} out PoolJob is {
     return (PoolJob name: name.string :steps)
 }
 
-# JobPool -- the pool's per-job state, indexed by job: the running child (0
-# when none), the step it is on, its deadline (0 when the step has none) and
-# whether it was killed, with the two running counts. The three scans that
-# read and write it take the pool; the caller's statuses and failSteps stay
-# the caller's.
+# JobPool -- the pool's state: per job, whether a child of it is running, the
+# step it is on, its deadline (0 when the step has none) and whether its child
+# was killed; the children in flight with the job each runs for; and how many
+# jobs have ended. The scans that read and write it take the pool; the caller's
+# statuses and failSteps stay the caller's.
 JobPool: class {
-    # the running child per job, 0 when none is in flight
-    pids: ListVal i32
+    # whether each job has a child in flight
+    busy: ListVal bool
     # the step each job is on
     stepIdxs: ListVal u64
     # each job's deadline in monotonic millis, 0 when its step has none
     deadlines: ListVal i64
-    # whether the running child was already sent SIGKILL
+    # whether each job's running child was already killed
     killeds: ListVal bool
-    # children in flight
-    inflight: u64
+    # the children in flight, in no order
+    children: List os.Child
+    # the job each child in `children` runs for, parallel to it
+    childJobs: ListVal u64
     # jobs that have ended, by success or by a failing step
     doneN: u64
 }
@@ -579,26 +581,26 @@ launchReady: function {
 } is {
     total: jobs.length
     ji: u64
-    for ji < total while pool.inflight < cap loop {
-        jpid: pool.pids.get i: ji
+    for ji < total while pool.children.length < cap loop {
+        jbusy: pool.busy.get i: ji
         jfail: failSteps.get i: ji
         jstep: pool.stepIdxs.get i: ji
         j: jobs.get i: ji
-        if jpid == 0 when jfail == -1 when jstep < j.steps.length then {
+        if jbusy.not when jfail == -1 when jstep < j.steps.length then {
             st: j.steps.get i: jstep
             sargv: stepArgv step: st
-            pid: (os.spawnAsync
+            started: (os.spawnAsync
                 argv: sargv
                 cwd: st.cwd.stringView
                 outPath: st.outPath.stringView
                 errPath: st.errPath.stringView
             )
-            if pid <= 0 then {
-                statuses.set i: ji val: 127
-                failSteps.set i: ji val: jstep.i64.orPanic
-                pool.doneN = pool.doneN + 1
-            } else {
-                pool.pids.set i: ji val: pid
+            match (
+                started
+            ) case ok then {
+                pool.children.append from: started.take
+                pool.childJobs.append ji
+                pool.busy.set i: ji val: true
                 pool.killeds.set i: ji val: false
                 if st.timeoutSecs > 0 then {
                     dl: os.monotonicMillis + (st.timeoutSecs.i64 * 1000)
@@ -606,11 +608,30 @@ launchReady: function {
                 } else {
                     pool.deadlines.set i: ji val: 0
                 }
-                pool.inflight = pool.inflight + 1
+            } case err then {
+                statuses.set i: ji val: 127
+                failSteps.set i: ji val: jstep.i64.orPanic
+                pool.doneN = pool.doneN + 1
             }
         }
         ji = ji + 1
     }
+}
+
+# dropChild -- take the reaped child at `k` out of the pool, the last one
+# moving into its place; dropping it closes its handle. Answers its job.
+dropChild: function {pool: JobPool k: u64} out u64 is {
+    job: pool.childJobs.get i: k
+    last: pool.children.length - 1
+    if k < last then {
+        moved: pool.children.pop
+        pool.children.set i: k val: moved
+        pool.childJobs.set i: k val: (pool.childJobs.get i: last)
+    } else {
+        pool.children.pop
+    }
+    pool.childJobs.pop
+    return job
 }
 
 # reapOne -- a child has exited: find its job, record the step's status (124
@@ -624,15 +645,14 @@ reapOne: function {
     statuses: ListVal i32
     failSteps: ListVal i64
 } is {
-    total: jobs.length
-    jk: u64
-    for jk < total loop {
-        if (pool.pids.get i: jk) != pid then {
-            jk = jk + 1
+    k: u64
+    for k < pool.children.length loop {
+        if (pool.children.get i: k).pid != pid then {
+            k = k + 1
             continue
         }
-        pool.pids.set i: jk val: 0
-        pool.inflight = pool.inflight - 1
+        jk: dropChild :pool :k
+        pool.busy.set i: jk val: false
         kstep: pool.stepIdxs.get i: jk
         j2: jobs.get i: jk
         stw: j2.steps.get i: kstep
@@ -653,25 +673,25 @@ reapOne: function {
     }
 }
 
-# killOverdue -- SIGKILL every running child past its deadline, once each;
+# killOverdue -- kill every running child past its job's deadline, once each;
 # reapOne records it as 124 when the child is collected.
 killOverdue: function {pool: JobPool} is {
     now: os.monotonicMillis
-    jm: u64
-    for jm < pool.pids.length loop {
-        mpid: pool.pids.get i: jm
+    k: u64
+    for k < pool.children.length loop {
+        jm: pool.childJobs.get i: k
         mdl: pool.deadlines.get i: jm
-        if mpid > 0 when mdl > 0 when now > mdl when (pool.killeds.get i: jm).false then {
-            os.kill pid: mpid
+        if mdl > 0 when now > mdl when (pool.killeds.get i: jm).false then {
+            (pool.children.getMut i: k).kill
             pool.killeds.set i: jm val: true
         }
-        jm = jm + 1
+        k = k + 1
     }
 }
 
 # runJobs -- drive every job through its steps with at most maxJobs
 # children in flight. Steps within a job stay sequential; jobs overlap.
-# A step past its deadline is SIGKILLed and recorded as 124 (spawn's
+# A step past its deadline is killed and recorded as 124 (spawn's
 # timeout convention). Results land in the caller's statuses/failSteps,
 # indexed by job: failStep -1 = every step ran (status = the LAST
 # step's exit); otherwise the index of the hard-failing step.
@@ -684,21 +704,24 @@ runJobs: function {
     cap: maxJobs
     if cap == 0 then cap = 1
     total: jobs.length
-    pidsL: ListVal i32
+    busyL: ListVal bool
     stepIdxsL: ListVal u64
     deadlinesL: ListVal i64
     killedsL: ListVal bool
+    childrenL: List os.Child
+    childJobsL: ListVal u64
     pool: (JobPool
-        pids: pidsL
+        busy: busyL
         stepIdxs: stepIdxsL
         deadlines: deadlinesL
         killeds: killedsL
-        inflight: 0
+        children: childrenL
+        childJobs: childJobsL
         doneN: 0
     )
     pi: u64
     for pi < total loop {
-        pool.pids.append 0
+        pool.busy.append false
         pool.stepIdxs.append 0.u64
         pool.deadlines.append 0.i64
         pool.killeds.append false
@@ -708,8 +731,8 @@ runJobs: function {
     }
     for pool.doneN < total loop {
         launchReady :jobs :pool :cap :statuses :failSteps
-        if pool.inflight == 0 then return
-        r: os.waitAny pids: pool.pids.listView
+        if pool.children.length == 0 then return
+        r: os.waitAny children: pool.children
         if r.pid > 0 then {
             # the shorthand arguments come first: `r.status :statuses` would
             # read as a call of the field

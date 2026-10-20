@@ -221,9 +221,9 @@ runtime splits it</li>
 <ul>
 <li><a href="#exit"><strong>os.exit</strong></a> -- <code>function {code: i32}</code></li>
 <li><a href="#spawn"><strong>os.spawn</strong></a> -- <code>function {argv: (List T: String) cwd: StringView outPath: StringView errPath: StringView timeoutSecs: i32} out i32</code></li>
-<li><a href="#spawn-async"><strong>os.spawnAsync</strong></a> -- <code>function {argv: (List T: String) cwd: StringView outPath: StringView errPath: StringView} out i32</code></li>
-<li><a href="#wait-any"><strong>os.waitAny</strong></a> -- <code>function {pids: ListViewVal i32} out procexit</code></li>
-<li><a href="#kill"><strong>os.kill</strong></a> -- <code>function {pid: i32}</code></li>
+<li><a href="#spawn-async"><strong>os.spawnAsync</strong></a> -- <code>function {argv: (List T: String) cwd: StringView outPath: StringView errPath: StringView} out (Result T: Child E: IoError)</code></li>
+<li><a href="#wait-any"><strong>os.waitAny</strong></a> -- <code>function {children: List Child} out procexit</code></li>
+<li><a href="#kill"><strong>Child.kill</strong></a> -- <code>function {:this}</code></li>
 <li><a href="#sleep-millis"><strong>os.sleepMillis</strong></a> -- <code>function {ms: i64}</code></li>
 <li><a href="#monotonic-millis"><strong>os.monotonicMillis</strong></a> -- <code>function out i64</code></li>
 </ul>
@@ -375,10 +375,10 @@ thread's.</p>
 explicit status. Prefer a normal return path for everyday
 success / failure so RAII cleanup fires.</p>
 <h2 id="spawn"><a href="#spawn">23. spawn</a></h2>
-<p>Start <code>argv</code> as a child process (<code>posix_spawnp</code>); <code>argv[0]</code> is
-resolved via <code>PATH</code>. stdout is redirected to <code>outPath</code> and
-stderr to <code>errPath</code> (each opened <code>O_WRONLY|O_CREAT|O_TRUNC</code> --
-pass <code>/dev/null</code> to discard a stream). An <strong>empty</strong> <code>outPath</code>
+<p>Start <code>argv</code> as a child process (<code>posix_spawnp</code>; <code>CreateProcessW</code>
+on Windows); <code>argv[0]</code> is resolved via <code>PATH</code>. stdout is redirected
+to <code>outPath</code> and stderr to <code>errPath</code> (each created or truncated --
+pass <code>/dev/null</code>, <code>NUL</code> on Windows, to discard a stream). An <strong>empty</strong> <code>outPath</code>
 or <code>errPath</code> inherits the parent's stdout / stderr instead; when
 <strong>both</strong> are empty the child also inherits stdin -- a live terminal,
 as used by <code>zc run</code> -- otherwise stdin is <code>/dev/null</code>. A
@@ -391,10 +391,18 @@ standard streams.</p>
 <p>The return value is the child's exit status; <code>128 + signo</code> for a
 child a signal ended; <code>127</code> if exec or any setup step failed;
 <code>124</code> if it timed out. <code>timeoutSecs</code>
-greater than zero kills the child (<code>SIGKILL</code>) after that many
-seconds; <code>0</code> (the default) waits indefinitely. The timeout touches no
-process-wide state -- it waits on the child's pidfd, not on a signal --
-so a spawn in one thread does not disturb another's. The model
+greater than zero kills the child (<code>SIGKILL</code>, <code>TerminateProcess</code>)
+after that many seconds; <code>0</code> (the default) waits indefinitely. The
+timeout touches no process-wide state -- it waits on the child's pidfd
+or process handle, not on a signal -- so a spawn in one thread does not
+disturb another's.</p>
+<p><strong>On Windows</strong> the command line is quoted so that the child's C
+runtime, and <code>CommandLineToArgvW</code>, split it back into exactly
+<code>argv</code>. A program named without an extension is looked for with
+<code>.exe</code> and <code>.com</code> in each <code>PATH</code> directory. A <code>.bat</code> or
+<code>.cmd</code> file is refused (<code>127</code>; <code>spawnAsync</code> says why): cmd.exe
+runs those, by quoting rules of its own, so spawn <code>cmd /c &lt;file&gt;</code>
+explicitly. Only the three standard handles are inherited. The model
 mirrors <code>subprocess.run(argv, timeout=...)</code> -- a single
 run-to-completion call, not a separate spawn / wait split.</p>
 <p>Captured output is read back with <code>io.readText</code>; the child
@@ -403,26 +411,29 @@ beforehand. There is no streaming / pipe interface in v1.</p>
 <h2 id="spawn-async"><a href="#spawn-async">24. spawn_async</a></h2>
 <p>Start <code>argv</code> like <a href="#spawn"><code>os.spawn</code></a> -- same
 <code>PATH</code> resolution, redirection and <code>cwd</code> rules -- but return
-immediately with the child's pid (<code>-1</code> on setup / start failure).
-There is no timeout parameter: reap with
-<a href="#wait-any"><code>os.waitAny</code></a> and enforce deadlines with
-<a href="#monotonic-millis"><code>os.monotonicMillis</code></a> plus
-<a href="#kill"><code>os.kill</code></a>. Together the four calls form a worker
-pool's primitive set (see <code>src/ztestrunner.z</code> for the canonical
-poll loop).</p>
+immediately with the <code>Child</code>: its <code>pid</code> and the system's handle on
+that very process (a pidfd on Linux where the kernel has them, the
+process handle on Windows). The error says why the start failed; a
+program that is not there is <code>notfound</code>. There is no timeout
+parameter: reap with <a href="#wait-any"><code>os.waitAny</code></a> and enforce
+deadlines with <a href="#monotonic-millis"><code>os.monotonicMillis</code></a> plus
+<a href="#kill"><code>Child.kill</code></a>. Together the calls form a worker pool's
+primitive set (see <code>src/ztestrunner.z</code> for the canonical poll loop).
+Dropping a <code>Child</code> closes its handle and leaves the process running.</p>
 <h2 id="wait-any"><a href="#wait-any">25. wait_any</a></h2>
-<p>Reap one exited child among <code>pids</code> without blocking (<code>waitpid(pid,
-WNOHANG)</code> for each). A <code>pid</code> of <code>0</code> means none of them has exited.
-Only the children named are reaped -- a child another part of the
-program started is never taken from it -- and a <code>0</code> in <code>pids</code> is
-skipped, so a table of job slots can be passed whole. <code>status</code> decodes like
-<code>os.spawn</code>: the exit code; <code>127</code> for exec / setup failure; a
-signalled child reports <code>128 + signo</code>.</p>
+<p>Reap one exited child among <code>children</code> without blocking, and mark it
+reaped. A <code>pid</code> of <code>0</code> means none of them has exited. Only the
+children given are reaped -- a child another part of the program
+started is never taken from it -- and one already reaped is skipped.
+<code>status</code> decodes like <code>os.spawn</code>: the exit code; a signalled child
+reports <code>128 + signo</code>; one <a href="#kill"><code>Child.kill</code></a> ended reports
+<code>137</code> on every system.</p>
 <h2 id="kill"><a href="#kill">26. kill</a></h2>
-<p><code>SIGKILL</code> a child by pid; reap it with
-<a href="#wait-any"><code>os.waitAny</code></a> afterwards. A <code>pid</code> of zero or
-below is a no-op, so a cleared handle can never signal a process
-group by accident.</p>
+<p><code>child.kill</code> ends the child now: <code>SIGKILL</code>, through its pidfd where
+there is one, so no process that came to reuse the pid can be reached;
+on Windows <code>TerminateProcess</code> with exit code <code>137</code>, the status a
+SIGKILLed child reports. It does nothing once the child is reaped.
+Reap it with <a href="#wait-any"><code>os.waitAny</code></a> afterwards.</p>
 <h2 id="sleep-millis"><a href="#sleep-millis">27. sleep_millis</a></h2>
 <p>Suspend the calling thread for <code>ms</code> milliseconds
 (<code>nanosleep</code>, restarted after <code>EINTR</code> so the full duration

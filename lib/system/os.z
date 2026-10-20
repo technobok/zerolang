@@ -74,18 +74,21 @@ ppid: function out i32 is native
 # differences are meaningful (the epoch is arbitrary). Infallible.
 monotonicMillis: function out i64 is native
 
-# spawn -- start `argv` as a child process (posix_spawnp); `argv[0]` is
-# resolved via PATH. The child's stdin is /dev/null; its stdout goes to
-# `outPath` and stderr to `errPath` (each opened O_WRONLY|O_CREAT|
-# O_TRUNC -- pass "/dev/null" to discard a stream). A non-empty `cwd` is
-# the child's working directory. The redirection files are opened in the
-# parent before the child starts, so its cwd cannot change their resolution,
-# and close-on-exec, so no other child inherits them.
-# Returns the child's exit status; 128 + signo for a child a signal ended; 127
-# if exec or any setup step failed; 124 if it timed out. `timeoutSecs` > 0 kills the child (SIGKILL) after
-# that many seconds; 0 waits indefinitely. Read captured output back with
-# `io.readText`; set the child's environment via `os.setEnv` beforehand
-# (it is inherited).
+# spawn -- start `argv` as a child process and wait for it. `argv[0]` is
+# resolved via PATH; on Windows a name without an extension is tried with .exe
+# and .com, and a .bat or .cmd file is refused -- cmd.exe runs those, so spawn
+# `cmd /c <file>` explicitly. The child's stdin is the null device (/dev/null,
+# NUL on Windows); its stdout goes to `outPath` and stderr to `errPath`, each
+# created or truncated (an empty path inherits this process's stream; empty
+# both inherits stdin too). A
+# non-empty `cwd` is the child's working directory. The redirection files are
+# opened in the parent before the child starts, so its cwd cannot change their
+# resolution, and no other child inherits them: a child sees only its three
+# standard streams. Returns the child's exit status; 128 + signo for a child a
+# signal ended; 127 if it could not be started; 124 if it outlived
+# `timeoutSecs` > 0 and was killed (0 waits indefinitely). Read captured output
+# back with `io.readText`; set the child's environment via `os.setEnv`
+# beforehand (it is inherited).
 spawn: function {
     # the program and its arguments; argv[0] is the program
     argv: List String
@@ -101,18 +104,43 @@ spawn: function {
 } out i32 is native
 
 # procexit -- one reaped child: its pid and the decoded exit status
-# (spawn's conventions: exit code; 128 + signo for a signalled child).
+# (spawn's conventions: the exit code; 128 + signo for a child a signal ended;
+# 137 for one `kill` ended, on every system).
 procexit: record {
-    # the child waited for
+    # the child waited for; 0 when none had exited
     pid: i32
     # its exit status
     status: i32
 }
 
-# spawnAsync -- start `argv` like `spawn` but return immediately
-# with the child's pid (-1 if setup or the start failed). Redirection and
-# cwd behave exactly as in `spawn`; there is no timeout -- reap with
-# `waitAny` and enforce deadlines with `monotonicMillis` + `kill`.
+# Child -- a child process `spawnAsync` started: its pid, and the operating
+# system's handle on that very process (a pidfd on Linux where the kernel has
+# them, the process handle on Windows), so a `kill` can never reach another
+# process that came to reuse the pid. Dropping a Child closes the handle and
+# leaves the process running; `waitAny` reaps it.
+Child: class {
+    # its process id
+    pid: i32
+    # the operating system's handle on the process: a pidfd or -1 on POSIX,
+    # the process HANDLE on Windows
+    handle: i64
+    # whether it holds the handle: false in a Child whose value moved out,
+    # which is all zeros, so its destructor releases nothing
+    open: bool
+    # whether waitAny has reaped it, after which kill does nothing
+    reaped: bool
+} as {
+    # kill -- end the child now (SIGKILL; TerminateProcess on Windows, whose
+    # exit status is then 137, as a SIGKILLed child's is). Nothing once it is
+    # reaped; reap it with `waitAny` afterwards.
+    kill: function {:this} is native
+}
+
+# spawnAsync -- start `argv` like `spawn` but return immediately with the
+# Child. Redirection and cwd behave exactly as in `spawn`; there is no timeout
+# -- reap with `waitAny` and enforce deadlines with `monotonicMillis` and
+# `Child.kill`. The error says why the start failed: a program that is not
+# there is `notfound`.
 spawnAsync: function {
     # the program and its arguments; argv[0] is the program
     argv: (List String).view
@@ -122,20 +150,16 @@ spawnAsync: function {
     outPath: StringView
     # the file the child's stderr is redirected to
     errPath: StringView
-} out i32 is native
+} out (Result Child E: IoError) is native
 
-# waitAny -- reap one exited child of `pids` without blocking: pid 0 when
-# none of them has exited yet. Only the children named are reaped -- never
-# another part of the program's -- and a 0 in `pids` is skipped, so a table of
-# job slots can be passed whole.
+# waitAny -- reap one exited child of `children` without blocking, marking it
+# reaped: pid 0 when none of them has exited yet. Only the children given are
+# reaped -- never another part of the program's -- and one already reaped is
+# skipped.
 waitAny: function {
     # the children to wait for
-    pids: ListViewVal i32
+    children: List Child
 } out procexit is native
-
-# kill -- SIGKILL a child by pid (reap it with waitAny afterwards).
-# No-op on pid <= 0.
-kill: function {pid: i32} is native
 
 # sleepMillis -- suspend the calling thread for `ms` milliseconds.
 sleepMillis: function {ms: i64} is native

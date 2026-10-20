@@ -1,36 +1,30 @@
 # os_spawn_signal.z -- a child that a signal ends reports 128 + signo, through
-# os.spawn as through os.waitAny: here SIGKILL, so 137. The child is this
-# program run again with a mode argument, so the test needs no shell.
+# os.spawn as through os.waitAny: here SIGKILL, so 137. The child is a shell
+# that kills itself. Signals are POSIX's: on Windows a child that Child.kill
+# ends reports the same 137 (os_spawn_child_state).
 
-selfArgv: function {exe: StringView} out (List String) is {
+selfKiller: function out (List String) is {
     xs: List String
-    xs.append exe.string
-    xs.append "die"
+    xs.append "sh"
+    xs.append "-c"
+    xs.append "kill -9 $$"
     return xs
 }
 
 main: function is {
-    argv: os.args
-    if argv.length > 1 then {
-        # the child: end itself with SIGKILL
-        os.kill pid: os.pid
-        print "the child outlived its own kill"
-    } else {
-        me: os.exePath
-        match (
-            me
-        ) case ok then {
-            rc: os.spawn argv: (selfArgv exe: me.stringView) cwd: "" outPath: "" errPath: "" timeoutSecs: 0
-            print "spawn: \{rc}"
-            p: os.spawnAsync argv: (selfArgv exe: me.stringView) cwd: "" outPath: "" errPath: ""
-            only: ListVal i32
-            only.append p
-            r: os.waitAny pids: only.listView
-            for r.pid == 0 loop {
-                os.sleepMillis ms: 5
-                r = os.waitAny pids: only.listView
-            }
-            print "waitAny: \{r.status}"
-        } case err then print "no exePath"
-    }
+    rc: os.spawn argv: selfKiller cwd: "" outPath: "" errPath: "" timeoutSecs: 0
+    print "spawn: \{rc}"
+    started: os.spawnAsync argv: selfKiller cwd: "" outPath: "" errPath: ""
+    match (
+        started
+    ) case ok then {
+        only: List os.Child
+        only.append from: started.take
+        r: os.waitAny children: only
+        for r.pid == 0 loop {
+            os.sleepMillis ms: 5
+            r = os.waitAny children: only
+        }
+        print "waitAny: \{r.status}"
+    } case err then print "spawnAsync failed"
 }

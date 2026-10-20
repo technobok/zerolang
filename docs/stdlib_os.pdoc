@@ -122,9 +122,9 @@ Accessed via qualified names only -- #~"os.args", #~"os.env
 #ul:
   [#*: [#> to=exit: #b:"os.exit"] -- #~"function {code: i32}"]
   [#*: [#> to=spawn: #b:"os.spawn"] -- #~"function {argv: (List T: String) cwd: StringView outPath: StringView errPath: StringView timeoutSecs: i32} out i32"]
-  [#*: [#> to=spawn-async: #b:"os.spawnAsync"] -- #~"function {argv: (List T: String) cwd: StringView outPath: StringView errPath: StringView} out i32"]
-  [#*: [#> to=wait-any: #b:"os.waitAny"] -- #~"function {pids: ListViewVal i32} out procexit"]
-  [#*: [#> to=kill: #b:"os.kill"] -- #~"function {pid: i32}"]
+  [#*: [#> to=spawn-async: #b:"os.spawnAsync"] -- #~"function {argv: (List T: String) cwd: StringView outPath: StringView errPath: StringView} out (Result T: Child E: IoError)"]
+  [#*: [#> to=wait-any: #b:"os.waitAny"] -- #~"function {children: List Child} out procexit"]
+  [#*: [#> to=kill: #b:"Child.kill"] -- #~"function {:this}"]
   [#*: [#> to=sleep-millis: #b:"os.sleepMillis"] -- #~"function {ms: i64}"]
   [#*: [#> to=monotonic-millis: #b:"os.monotonicMillis"] -- #~"function out i64"]
 
@@ -378,10 +378,10 @@ success / failure so RAII cleanup fires.
 #--: spawn
 
 
-Start #~"argv" as a child process (#~"posix_spawnp"); #~"argv[0]" is
-resolved via #~"PATH". stdout is redirected to #~"outPath" and
-stderr to #~"errPath" (each opened #~"O_WRONLY|O_CREAT|O_TRUNC" --
-pass #~"/dev/null" to discard a stream). An #b:"empty" #~"outPath"
+Start #~"argv" as a child process (#~"posix_spawnp"; #~"CreateProcessW"
+on Windows); #~"argv[0]" is resolved via #~"PATH". stdout is redirected
+to #~"outPath" and stderr to #~"errPath" (each created or truncated --
+pass #~"/dev/null", #~"NUL" on Windows, to discard a stream). An #b:"empty" #~"outPath"
 or #~"errPath" inherits the parent's stdout / stderr instead; when
 #b:"both" are empty the child also inherits stdin -- a live terminal,
 as used by #~"zc run" -- otherwise stdin is #~"/dev/null". A
@@ -395,10 +395,19 @@ standard streams.
 The return value is the child's exit status; #~"128 + signo" for a
 child a signal ended; #~"127" if exec or any setup step failed;
 #~"124" if it timed out. #~"timeoutSecs"
-greater than zero kills the child (#~"SIGKILL") after that many
-seconds; #~"0" (the default) waits indefinitely. The timeout touches no
-process-wide state -- it waits on the child's pidfd, not on a signal --
-so a spawn in one thread does not disturb another's. The model
+greater than zero kills the child (#~"SIGKILL", #~"TerminateProcess")
+after that many seconds; #~"0" (the default) waits indefinitely. The
+timeout touches no process-wide state -- it waits on the child's pidfd
+or process handle, not on a signal -- so a spawn in one thread does not
+disturb another's.
+
+#b:"On Windows" the command line is quoted so that the child's C
+runtime, and #~"CommandLineToArgvW", split it back into exactly
+#~"argv". A program named without an extension is looked for with
+#~".exe" and #~".com" in each #~"PATH" directory. A #~".bat" or
+#~".cmd" file is refused (#~"127"; #~"spawnAsync" says why): cmd.exe
+runs those, by quoting rules of its own, so spawn #~"cmd /c <file>"
+explicitly. Only the three standard handles are inherited. The model
 mirrors #~"subprocess.run(argv, timeout=...)" -- a single
 run-to-completion call, not a separate spawn / wait split.
 
@@ -411,32 +420,35 @@ beforehand. There is no streaming / pipe interface in v1.
 
 Start #~"argv" like [#> to=spawn: #~"os.spawn"] -- same
 #~"PATH" resolution, redirection and #~"cwd" rules -- but return
-immediately with the child's pid (#~"-1" on setup / start failure).
-There is no timeout parameter: reap with
-[#> to=wait-any: #~"os.waitAny"] and enforce deadlines with
-[#> to=monotonic-millis: #~"os.monotonicMillis"] plus
-[#> to=kill: #~"os.kill"]. Together the four calls form a worker
-pool's primitive set (see #~"src/ztestrunner.z" for the canonical
-poll loop).
+immediately with the #~"Child": its #~"pid" and the system's handle on
+that very process (a pidfd on Linux where the kernel has them, the
+process handle on Windows). The error says why the start failed; a
+program that is not there is #~"notfound". There is no timeout
+parameter: reap with [#> to=wait-any: #~"os.waitAny"] and enforce
+deadlines with [#> to=monotonic-millis: #~"os.monotonicMillis"] plus
+[#> to=kill: #~"Child.kill"]. Together the calls form a worker pool's
+primitive set (see #~"src/ztestrunner.z" for the canonical poll loop).
+Dropping a #~"Child" closes its handle and leaves the process running.
 
 #--: wait_any
 
 
-Reap one exited child among #~"pids" without blocking (#~"waitpid(pid,
-WNOHANG)" for each). A #~"pid" of #~"0" means none of them has exited.
-Only the children named are reaped -- a child another part of the
-program started is never taken from it -- and a #~"0" in #~"pids" is
-skipped, so a table of job slots can be passed whole. #~"status" decodes like
-#~"os.spawn": the exit code; #~"127" for exec / setup failure; a
-signalled child reports #~"128 + signo".
+Reap one exited child among #~"children" without blocking, and mark it
+reaped. A #~"pid" of #~"0" means none of them has exited. Only the
+children given are reaped -- a child another part of the program
+started is never taken from it -- and one already reaped is skipped.
+#~"status" decodes like #~"os.spawn": the exit code; a signalled child
+reports #~"128 + signo"; one [#> to=kill: #~"Child.kill"] ended reports
+#~"137" on every system.
 
 #--: kill
 
 
-#~"SIGKILL" a child by pid; reap it with
-[#> to=wait-any: #~"os.waitAny"] afterwards. A #~"pid" of zero or
-below is a no-op, so a cleared handle can never signal a process
-group by accident.
+#~"child.kill" ends the child now: #~"SIGKILL", through its pidfd where
+there is one, so no process that came to reuse the pid can be reached;
+on Windows #~"TerminateProcess" with exit code #~"137", the status a
+SIGKILLed child reports. It does nothing once the child is reaped.
+Reap it with [#> to=wait-any: #~"os.waitAny"] afterwards.
 
 #--: sleep_millis
 
