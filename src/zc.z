@@ -1009,15 +1009,27 @@ ZcFlags: class {
     }
 
     # takeOperand -- an argument naming no flag: the unit, and after it (under
-    # `run`) the program's own arguments.
+    # `run`) the program's own arguments. Anything else is refused, never
+    # dropped: an option zc does not know, or a second operand where one unit
+    # is all a command takes.
     takeOperand: function {:this arg: String.view isRun: bool} is {
-        if this.unitname.length == 0 then {
-            this.unitname = arg.copy
+        named: this.unitname.length > 0
+        if named when isRun then {
+            this.progArgs.append from: arg.copy
+            this.inProgArgs = true
             return
         }
-        if isRun.not then return
-        this.progArgs.append from: arg.copy
-        this.inProgArgs = true
+        if (arg.length > 1) and (arg.stringView.startsWith prefix: "-") then {
+            uo: "zc: unknown option '\{arg}'; `zc help` lists the options"
+            io.eprintln uo
+            os.exit code: 2
+        }
+        if named then {
+            ua: "zc: unexpected argument '\{arg}': the unit is already '\{this.unitname}'"
+            io.eprintln ua
+            os.exit code: 2
+        }
+        this.unitname = arg.copy
     }
 
     # unitIsPath -- the unit was named by its file (`hello.z`, `sub/hello`)

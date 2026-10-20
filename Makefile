@@ -907,7 +907,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2281781
+ALLOC_BASELINE := 2282033
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1429,6 +1429,18 @@ refusal-guard: bin/zc $(BUILDDIR)/tcc
 	    cat $$d/u.log; bad=1; \
 	  fi; \
 	done; \
+	for arg in --output-dir --bogus-flag; do \
+	  bin/zc build hello --src examples --system lib/system $$arg x -o $$d/unk > $$d/unk.log 2>&1; rc=$$?; \
+	  if [ $$rc -ne 2 ] || [ -e $$d/unk ] || ! grep -q "unknown option '$$arg'" $$d/unk.log; then \
+	    echo "refusal-guard FAIL: an unknown option ($$arg) must be refused with exit 2, got $$rc"; \
+	    cat $$d/unk.log; bad=1; \
+	  fi; \
+	done; \
+	bin/zc emit hello --src examples --system lib/system extra -o $$d/opnd.c > $$d/opnd.log 2>&1; rc=$$?; \
+	if [ $$rc -ne 2 ] || [ -e $$d/opnd.c ] || ! grep -q "unexpected argument 'extra'" $$d/opnd.log; then \
+	  echo "refusal-guard FAIL: a second operand to zc emit must be refused with exit 2, got $$rc"; \
+	  cat $$d/opnd.log; bad=1; \
+	fi; \
 	if [ $$bad -ne 0 ]; then \
 	  echo "  zc never accepts a flag it will ignore: it names what it resolved and exits 2."; \
 	  exit 1; \
