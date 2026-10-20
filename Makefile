@@ -46,9 +46,11 @@ PERFOPT  := -O1 -fno-strict-aliasing -fwrapv
 PERFCC   ?= gcc
 PERFBIN  := $(BUILDDIR)/zc-perf
 
-# The commit `zc --version` names. It is linked in as a symbol (out/buildstamp.o,
-# overriding a weak default) rather than passed as -D, which would recompile the
-# drivers' single large translation unit on every commit.
+# The commit `zc --version` names. It is linked in as a symbol (out/buildstamp.o)
+# rather than passed as -D, which would recompile the drivers' single large
+# translation unit on every commit: STAMPDEF, the same on every build, has the
+# runtime declare the stamp instead of defining it.
+STAMPDEF  := -DZC_BUILD_STAMP_LINKED
 BUILDID   := $(shell git rev-parse --short=8 HEAD 2>/dev/null)
 BUILDID   := $(if $(BUILDID),$(BUILDID)$(shell git diff --quiet 2>/dev/null && git diff --cached --quiet 2>/dev/null || echo .dirty))
 BUILDDATE := $(if $(BUILDID),$(shell git show -s --format=%cs HEAD 2>/dev/null))
@@ -529,7 +531,7 @@ readable-check: bin/zc $(BUILDDIR)/buildstamp.o
 	    || { echo "readable-check FAIL: $$n differs between naming schemes"; exit 1; }; \
 	done
 	bin/zc zc --src src --system lib/system --readable-names --emit-c $(BUILDDIR)/rn/zc-rn.c
-	$(CC) $(CFLAGS) -c $(BUILDDIR)/rn/zc-rn.c -o $(BUILDDIR)/rn/zc-rn.o
+	$(CC) $(CFLAGS) $(STAMPDEF) -c $(BUILDDIR)/rn/zc-rn.c -o $(BUILDDIR)/rn/zc-rn.o
 	$(CC) -o $(BUILDDIR)/rn/zc-rn $(BUILDDIR)/rn/zc-rn.o $(BUILDDIR)/buildstamp.o \
 	  $(call ZLINKOF,$(BUILDDIR)/rn/zc-rn.c) -lpthread -lm
 	@$(BUILDDIR)/rn/zc-rn hello --src examples --system lib/system --emit-c $(BUILDDIR)/rn/hello-by-rn.c
@@ -620,7 +622,7 @@ bin/zc.c: $(wildcard src/*.z) $(wildcard lib/system/*.z) $(wildcard lib/system/s
 
 $(BUILDDIR)/zc.o: bin/zc.c
 	@mkdir -p $(BUILDDIR)
-	$(CC) $(CFLAGS) $(OPTFLAGS) -c bin/zc.c -o $@
+	$(CC) $(CFLAGS) $(OPTFLAGS) $(STAMPDEF) -c bin/zc.c -o $@
 
 bin/zc: $(BUILDDIR)/zc.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ)
 	@mkdir -p bin
@@ -634,7 +636,7 @@ out/zl.c: $(BUILDDIR)/zc.o $(wildcard src/zl.z) $(wildcard src/zsource.z) $(wild
 	bin/zc zl --src src --system lib/system $(ZCHASH) --emit-c out/zl.c
 
 $(BUILDDIR)/zl.o: out/zl.c
-	$(CC) $(CFLAGS) $(OPTFLAGS) -c out/zl.c -o $@
+	$(CC) $(CFLAGS) $(OPTFLAGS) $(STAMPDEF) -c out/zl.c -o $@
 
 bin/zl: $(BUILDDIR)/zl.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ)
 	@mkdir -p bin
@@ -646,7 +648,7 @@ out/zls.c: $(BUILDDIR)/zc.o $(wildcard src/zls.z) $(wildcard src/zcheck.z) $(wil
 	bin/zc zls --src src --system lib/system $(ZCHASH) --emit-c out/zls.c
 
 $(BUILDDIR)/zls.o: out/zls.c
-	$(CC) $(CFLAGS) $(OPTFLAGS) -c out/zls.c -o $@
+	$(CC) $(CFLAGS) $(OPTFLAGS) $(STAMPDEF) -c out/zls.c -o $@
 
 bin/zls: $(BUILDDIR)/zls.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ)
 	@mkdir -p bin
@@ -885,7 +887,7 @@ PERFRUN  := $(PERFBIN) $(PERFARGS)
 
 # The series binary: bin/zc.c compiled by PERFCC at PERFOPT.
 $(PERFBIN): bin/zc.c $(MIMALLOC_OBJ) $(BUILDDIR)/buildstamp.o
-	@$(PERFCC) -std=c17 -w $(PERFOPT) -o $@ $(MIMALLOC_OBJ) $(BUILDDIR)/buildstamp.o bin/zc.c $(call ZLINKOF,bin/zc.c) -lpthread -lm
+	@$(PERFCC) -std=c17 -w $(PERFOPT) $(STAMPDEF) -o $@ $(MIMALLOC_OBJ) $(BUILDDIR)/buildstamp.o bin/zc.c $(call ZLINKOF,bin/zc.c) -lpthread -lm
 
 perf: $(PERFBIN)
 	@echo "== zerolang line count (.z) =="
