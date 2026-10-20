@@ -512,9 +512,8 @@ exeRoot: function out String is {
     match (
         er
     ) case ok then {
-        d1: dirname p: er.stringView
-        d2: dirname p: d1.stringView
-        return d2
+        d1: path.dirname p: er.stringView
+        return (path.dirname p: d1.stringView)
     } case err then {
         return ""
     }
@@ -535,9 +534,14 @@ stableHash: function {s: StringView} out u64 is {
     return h
 }
 
-# cacheRoot -- the user's cache directory: $XDG_CACHE_HOME, else ~/.cache; ""
-# when there is neither
+# cacheRoot -- the user's cache directory: on Windows %LOCALAPPDATA%, as Go's
+# os.UserCacheDir has it; elsewhere $XDG_CACHE_HOME, else ~/.cache. "" when
+# there is none
 cacheRoot: function out String is {
+    if z.build.os == z.build.oskind.windows then {
+        la: os.env key: "LOCALAPPDATA"
+        match la case some then return la.copy case none then return ""
+    }
     xc: os.env key: "XDG_CACHE_HOME"
     match (
         xc
@@ -548,7 +552,7 @@ cacheRoot: function out String is {
     match (
         hm
     ) case some then {
-        if hm.length > 0 then return (joinPath a: hm.stringView b: ".cache")
+        if hm.length > 0 then return (path.join a: hm.stringView b: ".cache")
     } case none then null
     return ""
 }
@@ -568,13 +572,13 @@ resolveVendorDir: function out String is {
     match (
         rv
     ) case some then {
-        return (joinPath a: rv.stringView b: "lib/vendor")
+        return (path.join a: rv.stringView b: "lib/vendor")
     } case none then null
     root: exeRoot
     if root.length > 0 then {
-        libV: joinPath a: root.stringView b: "lib/vendor"
+        libV: path.join a: root.stringView b: "lib/vendor"
         if (io.exists path: libV) then return libV
-        devV: joinPath a: root.stringView b: "vendor"
+        devV: path.join a: root.stringView b: "vendor"
         if (io.exists path: devV) then return devV
     }
     return "vendor"
@@ -583,14 +587,14 @@ resolveVendorDir: function out String is {
 # pickRuntimeUnder -- <root>/lib/runtime if it exists (installed tree),
 # else <root>/src/runtime (dev tree).
 pickRuntimeUnder: function {root: StringView} out String is {
-    libR: joinPath a: root b: "lib/runtime"
+    libR: path.join a: root b: "lib/runtime"
     if (io.exists path: libR) then return libR
-    return (joinPath a: root b: "src/runtime")
+    return (path.join a: root b: "src/runtime")
 }
 
 # pickTccUnder -- <root>/bin/tcc if it exists, else "".
 pickTccUnder: function {root: StringView} out String is {
-    cand: joinPath a: root b: "bin/tcc"
+    cand: path.join a: root b: "bin/tcc"
     if (io.exists path: cand) then return cand
     return ""
 }
@@ -614,7 +618,8 @@ ccWord: data {
     inproc: "inproc"
 } out stringdata
 
-# pickCc -- the C compiler this build will use: --cc > <target>-gcc > $CC > cc.
+# pickCc -- the C compiler this build will use: --cc > <target>-gcc > $CC > cc
+# (gcc on Windows, which has no `cc`).
 # A fact for the C backend and the build, which `zc env` reports too; no type
 # checking reads it, so the editor and the linter never resolve it.
 pickCc: function {ccFlag: StringView targetTriple: StringView} out String is {
@@ -643,6 +648,7 @@ pickCc: function {ccFlag: StringView targetTriple: StringView} out String is {
     ) case some then {
         if ce.length > 0 then return ce.copy
     } case none then null
+    if z.build.os == z.build.oskind.windows then return "gcc"
     return "cc"
 }
 
@@ -670,11 +676,11 @@ resolveSystemDir: function {flagVal: StringView} out String is {
     match (
         rv
     ) case some then {
-        return (joinPath a: rv.stringView b: "lib/system")
+        return (path.join a: rv.stringView b: "lib/system")
     } case none then null
     root: exeRoot
     if root.length > 0 then {
-        cand: joinPath a: root.stringView b: "lib/system"
+        cand: path.join a: root.stringView b: "lib/system"
         if (io.exists path: cand) then return cand
     }
     return "lib/system"
@@ -721,11 +727,11 @@ resolveTccDir: function {flagVal: StringView} out String is {
     match (
         rv
     ) case some then {
-        return (joinPath a: rv.stringView b: "lib/tcc")
+        return (path.join a: rv.stringView b: "lib/tcc")
     } case none then null
     root: exeRoot
     if root.length > 0 then {
-        cand: joinPath a: root.stringView b: "lib/tcc"
+        cand: path.join a: root.stringView b: "lib/tcc"
         if (io.exists path: cand) then return cand
     }
     return "out/tcc-lib"

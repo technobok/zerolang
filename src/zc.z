@@ -288,18 +288,10 @@ substr: function {p: StringView start: u64 end: u64} out String is {
     return r
 }
 
-# baseName -- the final path segment of p (everything after the last '/').
-baseName: function {p: StringView} out String is {
-    idxOpt: p.lastIndexOf needle: "/"
-    match (
-        idxOpt
-    ) case some then {
-        s: idxOpt + 1
-        pl: p.length
-        return (substr :p start: s end: pl)
-    } case none then {
-        return p.string
-    }
+# namesADirectory -- whether p has a directory part (`sub/hello`, and on
+# Windows `sub\hello` or `C:hello`), rather than being a bare name
+namesADirectory: function {p: StringView} out bool is {
+    return (path.baseName :p).length != p.length
 }
 
 # stripDotZ -- p without a trailing ".z" extension, if present.
@@ -361,7 +353,7 @@ printEnv: function {
     buf.append "\nZC_OBJ_CACHE="
     buf.append zcobj.objectCacheDir
     buf.append "\nZC_PROJECT="
-    if project.length > 0 then buf.append (zcheck.joinPath a: project b: "project.z")
+    if project.length > 0 then buf.append (path.join a: project b: "project.z")
     buf.append "\nZC_VERSION="
     buf.append ver
     buf.append "\nZC_COMMIT="
@@ -376,38 +368,42 @@ printEnv: function {
     print buf
 }
 
-# tempPath -- $TMPDIR (or /tmp) / zc-<pid>-<uname><ext>.
+# tempPath -- zc-<pid>-<uname><ext> in the temporary directory (os.tempDir:
+# $TMPDIR, else /tmp; Windows' own on Windows).
 tempPath: function {uname: StringView ext: StringView} out String is {
-    base: "/tmp".string
-    te: os.env key: "TMPDIR"
-    match (
-        te
-    ) case some then {
-        if te.length > 0 then base = te.copy
-    } case none then null
-    pid: os.pid
-    ps: "\{pid}"
-    r: String
-    r.append base
-    r.append "/zc-"
-    r.append ps
-    r.append "-"
-    r.append uname
-    r.append ext
-    return r
+    ps: "\{os.pid}"
+    name: String
+    name.append "zc-"
+    name.append ps
+    name.append "-"
+    name.append uname
+    name.append ext
+    tmp: os.tempDir
+    return (path.join a: tmp.stringView b: name.stringView)
 }
 
 # ccOnPath -- the file a bare compiler name (`cc`) resolves to through PATH,
-# the way the spawn will resolve it; a name with a directory in it is its own
-# answer. "" when nothing on PATH is that name.
+# the way the spawn will resolve it: PATH's entries split on path.listSeparator,
+# and on Windows a name with no extension tried as written, then with .exe and
+# .com. A name with a directory in it is its own answer. "" when nothing on
+# PATH is that name.
 ccOnPath: function {name: StringView} out String is {
-    if (name.contains needle: "/") then return name.string
+    if (namesADirectory p: name) then return name.string
     pe: os.env key: "PATH"
     if pe.none then return ""
-    for each d: (pe.stringView.split sep: ":") loop {
+    exts: List String
+    exts.append "".string
+    if z.build.os == z.build.oskind.windows when (name.contains needle: ".").not then {
+        exts.append ".exe".string
+        exts.append ".com".string
+    }
+    for each d: (pe.stringView.split sep: path.listSeparator) loop {
         if d.length > 0 then {
-            cand: "\{d}/\{name}"
-            if (io.exists path: cand) then return cand
+            for each x: exts loop {
+                file: "\{name}\{x}"
+                cand: path.join a: d b: file.stringView
+                if (io.exists path: cand) then return cand
+            }
         }
     }
     return ""
@@ -427,14 +423,12 @@ ccRealPath: function {name: StringView} out String is {
         rl: io.readlink path: cur
         if rl.err then return cur
         t: rl.take
-        if t.stringView.startsWith "/" then {
+        if (path.isAbsolute p: t.stringView) then {
             cur = t.take
         } else {
             # a relative target is relative to the LINK's directory
-            dir: String
-            slash: cur.stringView.lastIndexOf needle: "/"
-            if slash.some then dir = (cur.stringView.substring from: 0 to: slash).string
-            cur = "\{dir}/\{t}"
+            dir: path.dirname p: cur.stringView
+            cur = path.join a: dir.stringView b: t.stringView
         }
     }
     return cur
@@ -545,8 +539,8 @@ runZlShim: function {verb: StringView argv: (List String).borrow} out i32 is {
     match (
         ep
     ) case ok then {
-        d: zcheck.dirname p: ep.stringView
-        zlpath = zcheck.joinPath a: d.stringView b: "zl"
+        d: path.dirname p: ep.stringView
+        zlpath = path.join a: d.stringView b: "zl"
     } case err then {
         em: "zc \{verb}: cannot locate the zl binary (executable path unavailable)"
         io.eprintln em
@@ -1037,7 +1031,7 @@ ZcFlags: class {
     unitIsPath: function {this: this.view} out bool is {
         return (
             (this.unitname.stringView.endsWith suffix: ".z") or
-            (this.unitname.stringView.contains needle: "/")
+            (namesADirectory p: this.unitname.stringView)
         )
     }
 
@@ -1045,9 +1039,7 @@ ZcFlags: class {
     # a unit named by its file, else the working directory
     projectStart: function {this: this.view} out String is {
         if this.unitIsPath.not then return "."
-        d: zcheck.dirname p: this.unitname.stringView
-        if d.length == 0 then return "."
-        return d
+        return (path.dirname p: this.unitname.stringView)
     }
 
     # applyProject -- each setting no flag gave, from project.z (its programs
@@ -1138,8 +1130,8 @@ ZcFlags: class {
     resolveRoots: function {:this} is {
         if this.srcdirs.length == 0 when this.unitIsPath then {
             baseNoExt: stripDotZ p: this.unitname.stringView
-            d: zcheck.dirname p: baseNoExt.stringView
-            bn: baseName p: baseNoExt.stringView
+            d: path.dirname p: baseNoExt.stringView
+            bn: path.baseName p: baseNoExt.stringView
             this.srcdirs.append from: d
             this.unitname = bn.take
         }
@@ -1273,14 +1265,13 @@ chooseExePath: function {
 } out String is {
     if isRun then return (tempPath uname: unitname ext: ".bin")
     if outPath.length > 0 then return outPath.string
-    e2: "./".string
+    file: "\{unitname}\{ztarget.targetExeSuffix triple: targetTriple}"
     if outputDir.length > 0 then {
         io.mkdirp path: outputDir
-        e2 = zcheck.joinPath a: outputDir b: ""
+        return (path.join a: outputDir b: file.stringView)
     }
-    e2.append unitname
-    e2.append (ztarget.targetExeSuffix triple: targetTriple)
-    return e2
+    # in the working directory, spelled as a path (`./hello`, `.\hello.exe`)
+    return ".\{path.separator}\{file}"
 }
 
 # refuseCrossTarget -- a cross target is only as real as the compiler resolved
@@ -1292,7 +1283,7 @@ chooseExePath: function {
 # the documented cross path passes unchanged.
 refuseCrossTarget: function {targetTriple: StringView cc: StringView isTcc: bool} is {
     if (ztarget.targetIsHost triple: targetTriple) then return
-    cb: baseName p: cc
+    cb: path.baseName p: cc
     tp: targetTriple.string
     tp.append "-"
     if (cb.stringView.startsWith prefix: tp) then return
@@ -1469,7 +1460,7 @@ objectsForBuild: function {
     fam: zemitterc.ccFamilyOf ccPath: ccReal.stringView
     inproc: (zv.slotOf text: ccMode) == zcWord.slot.mInproc
     ccId: ccReal.copy
-    if inproc then ccId = zcheck.joinPath a: tccDir b: "libtcc.so"
+    if inproc then ccId = path.join a: tccDir b: "libtcc.so"
     payload: String
     if fam.tcc when (io.exists path: tccDir) then payload = tccDir.string
     if inproc then payload = tccDir.string
