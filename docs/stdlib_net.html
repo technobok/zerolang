@@ -141,14 +141,15 @@ the <code>u64</code>:</p>
 <h2 id="index"><a href="#index">2. Index</a></h2>
 <p><strong>Types</strong></p>
 <ul>
-<li><a href="#listener"><strong>Listener</strong></a> -- <code>class { fd: i32  open: bool } as { accept  close }</code></li>
-<li><a href="#conn"><strong>Conn</strong></a> -- <code>class { fd: i32  open: bool } as { :Reader  :Writer  read  write  flush  close }</code></li>
+<li><strong>socket</strong> -- <code>typedef i64</code>, the system's socket: a descriptor on POSIX, a 64-bit SOCKET on Windows</li>
+<li><a href="#listener"><strong>Listener</strong></a> -- <code>class { sock: socket  open: bool } as { accept  close  pollReadable }</code></li>
+<li><a href="#conn"><strong>Conn</strong></a> -- <code>class { sock: socket  open: bool } as { :Reader  :Writer  read  write  flush  close  pollReadable }</code></li>
 </ul>
 <p><strong>Functions</strong></p>
 <ul>
 <li><a href="#listen"><strong>net.listen</strong></a> -- <code>function {port: u16} out (Result Listener E: IoError)</code></li>
 <li><a href="#connect"><strong>net.connect</strong></a> -- <code>function {port: u16} out (Result Conn E: IoError)</code></li>
-<li><a href="#poll-readable"><strong>net.pollReadable</strong></a> -- <code>function {fd: i32 timeoutMillis: i32} out (ResultVR bool E: IoError)</code></li>
+<li><a href="#poll-readable"><strong>pollReadable</strong></a> -- <code>function {t: this.view timeoutMillis: i32} out (ResultVR bool E: IoError)</code>, on a Listener, a Conn, and io's File</li>
 </ul>
 <h2 id="listener"><a href="#listener">3. listener</a></h2>
 <p>A bound, listening TCP socket on 127.0.0.1, produced by
@@ -156,9 +157,8 @@ the <code>u64</code>:</p>
 connects and returns the <code>Conn</code> for that client. <code>close</code>
 releases the socket; closing an already-closed listener is a
 safe no-op.</p>
-<p>The <code>fd</code> field is the raw file descriptor -- usable with
-<a href="#poll-readable"><code>net.pollReadable</code></a> to wait for activity
-without blocking in <code>accept</code>.</p>
+<p><a href="#poll-readable"><code>pollReadable</code></a> says whether a client is
+waiting, so a loop can wait for one without blocking in <code>accept</code>.</p>
 <h2 id="conn"><a href="#conn">4. conn</a></h2>
 <p>One bidirectional TCP connection, produced by <code>Listener.accept</code>
 (server side) or <a href="#connect"><code>net.connect</code></a> (client side).
@@ -176,6 +176,8 @@ writes go through directly, so nothing is buffered here and
 the call always succeeds</li>
 <li><code>close</code> -- shuts the connection down; double closes are
 safe no-ops</li>
+<li><code>pollReadable timeoutMillis: n</code> -- whether data, or the
+peer's close, is waiting</li>
 </ul>
 <pre><code class="language-zerolang">  sayHi: function {c: net.Conn} is {
       msg: Bytes
@@ -192,9 +194,13 @@ safe no-ops</li>
       }
   }</code></pre>
 <h2 id="listen"><a href="#listen">5. listen</a></h2>
-<p>Bind + listen on <code>127.0.0.1:&lt;port&gt;</code> (<code>SO_REUSEADDR</code>, backlog
-16). The returned <code>Listener</code> accepts client connections; errors
-(port in use, permission denied) surface as <code>IoError</code>.</p>
+<p>Bind + listen on <code>127.0.0.1:&lt;port&gt;</code>, backlog 16. A port another
+socket holds is refused: Windows is told so with
+<code>SO_EXCLUSIVEADDRUSE</code>, and POSIX's <code>SO_REUSEADDR</code> only lets a
+port still in TIME_WAIT be taken again. The returned <code>Listener</code>
+accepts client connections; errors (port in use, permission denied)
+surface as <code>IoError</code>. On Windows the sockets are Winsock's, started
+on first use and never inherited by a child.</p>
 <pre><code class="language-zerolang">  lr: net.listen port: 8437
   match (
       lr
@@ -215,15 +221,19 @@ safe no-ops</li>
 <code>Conn</code> is ready for <code>read</code> / <code>write</code>; a refused or
 unreachable port surfaces as <code>IoError</code>.</p>
 <h2 id="poll-readable"><a href="#poll-readable">7. poll_readable</a></h2>
-<p>True when <code>fd</code> has readable data (or a hangup to drain) within
-<code>timeoutMillis</code>; <code>0</code> polls without blocking. Works on sockets
-and standard input (fd 0), which is how a daemon can multiplex a
-TCP transport with stdio. An interrupted wait reports
-not-readable rather than an error.</p>
+<p><code>pollReadable</code> is a method of each handle: a <code>Listener</code> (a
+client waiting to be accepted), a <code>Conn</code> (data, or the peer's
+close, to drain) and <code>io.File</code> (a pipe or terminal -- standard
+input, say -- with data waiting; a disk file is always ready). It
+answers within <code>timeoutMillis</code>; <code>0</code> polls without blocking. A
+daemon multiplexing a TCP transport with stdio polls the one its
+input comes through. An interrupted wait reports not-readable rather
+than an error. On Windows a socket waits in <code>WSAPoll</code>, a pipe is
+asked with <code>PeekNamedPipe</code> and a console is waited on.</p>
 <p>The result is the second <code>(Box T)</code> collapse in this unit: the
 match arm binds the bare <code>bool</code>.</p>
 <pre><code class="language-zerolang">  waiting: function {c: net.Conn} is {
-      pr: net.pollReadable fd: c.fd timeoutMillis: 100
+      pr: c.pollReadable timeoutMillis: 100
       match (
           pr
       ) case ok then {
