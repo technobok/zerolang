@@ -1,0 +1,40 @@
+# sync_channel_collection.z -- a channel of lists: a Sender's `send` takes the
+# list by value, as a template's function takes its type parameter, whether it
+# is moved from a name or built in the call. A producer thread sends three
+# lists; the main thread receives each and reads it.
+
+# Producer -- sends lists of growing length
+Producer: class {
+    # where the lists go
+    tx: sync.Sender (ListVal i64)
+} as {
+    task: (thread.Task null)
+    call: function {:this} is {
+        n: 1.i64
+        for n <= 3 loop {
+            l: ListVal i64
+            i: 0.i64
+            for i < n loop {
+                l.append i * 10
+                i = i + 1
+            }
+            this.tx.send value: l.take
+            n = n + 1
+        }
+    }
+}
+
+main: function is {
+    rx: (sync.Receiver (ListVal i64)).create
+    {
+        p: thread.spawn task: (Producer tx: rx.sender)
+    }
+    tx: rx.sender
+    tx.send value: (ListVal i64)
+    sync.close sender: tx.take
+    for each l: rx loop {
+        total: 0.i64
+        for each x: l loop total = total + x
+        print "a list of \{l.length}, summing to \{total}"
+    }
+}
