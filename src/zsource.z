@@ -5720,19 +5720,20 @@ isAnchor: function {
     }
 }
 
-# topUnitPathOf -- the file of the topmost unit `path` belongs to. A file in a
+# topUnitPathOf -- the file of the topmost unit `file` belongs to. A file in a
 # folder `<d>/<u>/` beside a unit file `<d>/<u>.z` is that unit's subunit, so
 # the walk steps up to `<d>/<u>.z`, and on while its folder is a subunit folder
-# too. The path as given when it is no subunit; a bare file name is looked up
-# from the working directory.
-topUnitPathOf: function {path: StringView} out String is {
-    cur: path.string
-    if (path.lastIndexOf needle: "/").none then {
+# too. Either separator counts on Windows (the path unit). The path as given
+# when it is no subunit; a bare file name is looked up from the working
+# directory.
+topUnitPathOf: function {file: StringView} out String is {
+    cur: file.string
+    if (path.baseName p: file).length == file.length then {
         wd: os.cwd
         match (
             wd
         ) case ok then {
-            cur = "\{wd}/\{path}"
+            cur = path.join a: wd.stringView b: file
         } case err then {
             return cur
         }
@@ -5741,46 +5742,25 @@ topUnitPathOf: function {path: StringView} out String is {
     stepping: true
     for stepping loop {
         stepping = false
-        slashOpt: cur.stringView.lastIndexOf needle: "/"
-        match (
-            slashOpt
-        ) case some then {
-            if slashOpt > 0 then {
-                parentFile: "\{cur.stringView.substring from: 0 to: slashOpt}.z"
-                if (zcheck.pathKindIs path: parentFile.stringView want: io.filekind.file) then {
-                    cur = parentFile.take
-                    stepping = true
-                    climbed = true
-                }
+        dir: path.dirname p: cur.stringView
+        # a root names no unit folder
+        if (path.baseName p: dir.stringView).length > 0 then {
+            parentFile: "\{dir}.z"
+            if (zcheck.pathKindIs path: parentFile.stringView want: io.filekind.file) then {
+                cur = parentFile.take
+                stepping = true
+                climbed = true
             }
-        } case none then null
+        }
     }
     # no subunit: the path as it was given
-    if climbed.not then return path.string
+    if climbed.not then return file.string
     return cur
 }
 
 # unitNameOf -- a file path's unit name: the final path segment without the ".z" suffix.
-unitNameOf: function {path: StringView} out String is {
-    base: path.string
-    slashOpt: path.lastIndexOf needle: "/"
-    match (
-        slashOpt
-    ) case some then {
-        r: String
-        i: slashOpt + 1
-        n: path.length
-        for i < n loop {
-            b: path.byteAt :i
-            match (
-                b
-            ) case some then {
-                r.appendByte :b
-            } case none then null
-            i = i + 1
-        }
-        base = r.take
-    } case none then null
+unitNameOf: function {file: StringView} out String is {
+    base: path.baseName p: file
     sfx: base.stringView.stripSuffix s: ".z"
     match (
         sfx
@@ -6316,8 +6296,8 @@ analyzeFileFull: function {
             docFields: opts.docFields
         )
         # a subunit file is parsed from its topmost unit, which names the parse
-        top: topUnitPathOf path: a.path.stringView
-        un: unitNameOf path: top.stringView
+        top: topUnitPathOf file: a.path.stringView
+        un: unitNameOf file: top.stringView
         a.checkSuffix :srcdirs :systemdir :layer uname: un.stringView
         a.checkLineLength width: opts.lineLength
         a.sortEditsInPlace

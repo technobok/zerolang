@@ -109,18 +109,18 @@ FileRoots: class {
     }
 }
 
-# rootsFor -- the roots `path` is checked against. The src roots are every
+# rootsFor -- the roots `file` is checked against. The src roots are every
 # --src as given; when none was, the source root of the project the file sits
 # in, when the file lies under it; otherwise the file's own directory and then
 # the working directory. The stdlib is --system, else the project's systemDir, else zc's
-# resolution. For a subunit, `path` is its topmost unit's file. The file's own
+# resolution. For a subunit, `file` is its topmost unit's file. The file's own
 # directory comes first, so the unit checked is the file named and not a
 # same-named unit where zl happens to run. Only a `discover` run looks for the
 # project: the fast tier reads no root.
 rootsFor: function {
     srcdirs: (List String).view
     systemFlag: StringView
-    path: StringView
+    file: StringView
     discover: bool
 } out FileRoots is {
     r: (FileRoots
@@ -132,15 +132,14 @@ rootsFor: function {
     for each d: srcdirs loop r.srcdirs.append from: d.copy
     pf: zproject.ProjectFile.create
     if discover then {
-        start: zcheck.dirname p: path
-        if start.length == 0 then start = "."
+        start: path.dirname p: file
         pf = zproject.discoverProject start: start.stringView
-        r.fromProject :pf :path
+        r.fromProject :pf path: file
     }
     r.systemdir = zcheck.resolveSystemDir flagVal: r.systemdir.stringView
-    if r.srcdirs.length == 0 then fileOwnRoots :path into: r.srcdirs
+    if r.srcdirs.length == 0 then fileOwnRoots :file into: r.srcdirs
     if discover then {
-        un: zsource.unitNameOf :path
+        un: zsource.unitNameOf :file
         facts: (zproject.BuildFacts.create
             srcdirs: r.srcdirs
             systemdir: r.systemdir.stringView
@@ -153,18 +152,11 @@ rootsFor: function {
     return r
 }
 
-# fileOwnRoots -- the roots of file `path` outside any project and with no
-# --src: its own directory, then the working directory
-fileOwnRoots: function {path: StringView into: List String} is {
-    slashOpt: path.lastIndexOf needle: "/"
-    match (
-        slashOpt
-    ) case some then {
-        # a file at the filesystem root keeps its `/`
-        cut: slashOpt
-        if cut == 0 then cut = 1
-        into.append from: (path.substring from: 0 to: cut).string
-    } case none then null
+# fileOwnRoots -- the roots of `file` outside any project and with no --src:
+# its own directory when it names one (either separator on Windows), then the
+# working directory
+fileOwnRoots: function {file: StringView into: List String} is {
+    if (path.baseName p: file).length < file.length then into.append (path.dirname p: file)
     into.append from: ".".string
 }
 
@@ -182,8 +174,8 @@ runLint: function {
     }
     total: u64
     for each p: paths loop {
-        top: zsource.topUnitPathOf path: p.stringView
-        roots: rootsFor :srcdirs systemFlag: systemdir path: top.stringView discover: opts.full
+        top: zsource.topUnitPathOf file: p.stringView
+        roots: rootsFor :srcdirs systemFlag: systemdir file: top.stringView discover: opts.full
         if roots.error.length > 0 then {
             io.eprintln roots.error
             return 2
@@ -291,8 +283,8 @@ formatOnePath: function {
 } out i32 is {
     fmtOpts: zsource.defaultOpts
     fmtOpts.full = full
-    top: zsource.topUnitPathOf path: p
-    roots: rootsFor :srcdirs systemFlag: systemdir path: top.stringView discover: full
+    top: zsource.topUnitPathOf file: p
+    roots: rootsFor :srcdirs systemFlag: systemdir file: top.stringView discover: full
     if roots.error.length > 0 then {
         io.eprintln roots.error
         return 2

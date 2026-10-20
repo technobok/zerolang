@@ -857,18 +857,17 @@ Server: class {
         this.initialized = true
     }
 
-    # enterProjectOf -- make the project the file at `path` belongs to the one
+    # enterProjectOf -- make the project `file` belongs to the one
     # in hand: the nearest project.z at or above its directory gives the src
     # and stdlib roots no flag or initializationOptions named, and its `z`
     # unit is generated -- the same writer zc uses, so the editor has the
     # unit, on disk, before any build. A file in no project takes the
     # session's roots and a cache-directory `z`.
-    enterProjectOf: function {:this path: StringView} is {
+    enterProjectOf: function {:this file: StringView} is {
         this.srcDir = this.baseSrcDir.copy
         this.srcDirs = List String
         this.systemDir = this.baseSystemDir.copy
-        start: zcheck.dirname p: path
-        if start.length == 0 then start = "."
+        start: path.dirname p: file
         pf: zproject.discoverProject start: start.stringView
         if pf.found when pf.error.length > 0 then {
             io.eprintln "zls: \{pf.error}"
@@ -878,7 +877,7 @@ Server: class {
             if this.srcExplicit.not then {
                 # the document's own root first: its relpath, and the open
                 # buffers, are relative to it
-                this.srcDirs = pf.sourceRootsFor :path
+                this.srcDirs = pf.sourceRootsFor path: file
                 if this.srcDirs.length > 0 then this.srcDir = (this.srcDirs.get i: 0).copy
             }
             sysp: zproject.inProject dir: pf.dir.stringView rel: pf.systemDir.stringView
@@ -887,7 +886,7 @@ Server: class {
             }
         }
         if this.srcDirs.length == 0 then this.srcDirs.append from: this.srcDir.copy
-        un: zsource.unitNameOf :path
+        un: zsource.unitNameOf :file
         facts: (zproject.BuildFacts.create
             srcdirs: this.srcDirs
             systemdir: this.systemDir.stringView
@@ -896,7 +895,7 @@ Server: class {
         facts.triple = pf.target.copy
         this.layer = zproject.zLayer :pf :facts
         zproject.writeLayer layer: this.layer
-        this.enterPrograms :pf :path
+        this.enterPrograms :pf path: file
     }
 
     # enterPrograms -- the programs project `pf` lists, and the `z` layer each
@@ -937,7 +936,7 @@ Server: class {
                 to
             ) case some then {
                 pth: uriToPath uri: uo.stringView
-                this.enterProjectOf path: pth.stringView
+                this.enterProjectOf file: pth.stringView
                 rel: (relPathBest
                     path: pth.stringView
                     srcDir: this.srcDir.stringView
@@ -953,7 +952,7 @@ Server: class {
                     # instead, under the name the parser will look the unit up
                     # by, so the overlay that shadows disk is the one the main
                     # unit resolves to.
-                    un9: zsource.unitNameOf path: pth.stringView
+                    un9: zsource.unitNameOf file: pth.stringView
                     rel = "\{un9}.z"
                     io.eprintln "zls: \{pth} is outside srcDir and systemDir; serving it from its open buffer"
                 }
@@ -1135,7 +1134,7 @@ Server: class {
             } case none then null
         }
         if found.not then return
-        this.enterProjectOf path: mp.stringView
+        this.enterProjectOf file: mp.stringView
         this.entrySnap = Map String V: zcheck.CheckResult
         pgs: List String
         for each pg: this.projPrograms loop pgs.append from: pg.copy
@@ -1148,8 +1147,8 @@ Server: class {
             srcDir: this.srcDir.stringView
             systemDir: this.systemDir.stringView
         )
-        mu: zsource.unitNameOf path: topRel.stringView
-        gk: zcheck.joinPath a: this.srcDir.stringView b: topRel.stringView
+        mu: zsource.unitNameOf file: topRel.stringView
+        gk: path.join a: this.srcDir.stringView b: topRel.stringView
         r: (zcheck.check
             srcdirs: this.srcDirs
             systemdir: this.systemDir.stringView
@@ -1240,8 +1239,8 @@ Server: class {
             } case none then null
         }
         if open then return true
-        if (io.exists path: (zcheck.joinPath a: srcDir b: rel)) then return true
-        return (io.exists path: (zcheck.joinPath a: systemDir b: rel))
+        if (io.exists path: (path.join a: srcDir b: rel)) then return true
+        return (io.exists path: (path.join a: systemDir b: rel))
     }
 
     # groupOf -- the group key of the open document `uri`: its topmost unit's
@@ -1263,7 +1262,7 @@ Server: class {
             }
         }
         top: this.topRelOf rel: rel.stringView srcDir: sd.stringView systemDir: syd.stringView
-        return (zcheck.joinPath a: sd.stringView b: top.stringView)
+        return (path.join a: sd.stringView b: top.stringView)
     }
 
     # bindGroup -- point every open document of the group `topRel` of the
@@ -1342,7 +1341,6 @@ Server: class {
             # a document of another project is not this check's to clear
             if e.value.srcDir.stringView != this.srcDir then continue
             drel: e.value.relpath
-            dfs: zcheck.joinPath a: this.srcDir.stringView b: drel.stringView
             dov: "/".string
             dov.append drel
             durl: e.value.uri.copy
@@ -1354,7 +1352,6 @@ Server: class {
                 hit: false
                 if drel.length > 0 then {
                     if pv.stringView == drel then hit = true
-                    if pv.stringView == dfs then hit = true
                     if pv.stringView == dov then hit = true
                 }
                 if hit then {
@@ -1377,7 +1374,7 @@ Server: class {
                 }
                 ri = ri + 1
             }
-            self: docFsnoOf :r rel: drel.stringView srcDir: this.srcDir.stringView
+            self: docFsnoOf :r rel: drel.stringView
             # a check that loaded no unit from the document it was run for did
             # not check it: say so rather than publish a clean file
             isMain: e.value.path.stringView == mainPath
@@ -1522,7 +1519,6 @@ Server: class {
                                     snap: sno
                                     docUri: uo.stringView
                                     docRel: drel.stringView
-                                    srcDir: this.srcDir.stringView
                                     docText: dtext.stringView
                                     :line0
                                     ch: ch0
@@ -1534,7 +1530,6 @@ Server: class {
                                 res = (signatureHelpAnswer
                                     snap: sno
                                     docRel: drel.stringView
-                                    srcDir: this.srcDir.stringView
                                     docText: dtext.stringView
                                     :line0
                                     ch: ch0
@@ -1711,7 +1706,7 @@ Server: class {
     # document asking, which the program's layer is read for.
     checkEntry: function {:this entry: StringView docPath: StringView} is {
         if (this.entrySnap.has key: entry.string) then return
-        this.enterProjectOf path: docPath
+        this.enterProjectOf file: docPath
         ovs: this.overlaysOf
         lo: this.entryLayers.get key: entry.string
         match (
@@ -1812,7 +1807,6 @@ Server: class {
             card: (completionCard
                 snap: sno
                 docRel: drel.stringView
-                srcDir: this.srcDir.stringView
                 :line0
                 :base
                 :label
@@ -1870,11 +1864,7 @@ Server: class {
                 ) case some then {
                     res: (symbolsAnswer
                         snap: sno
-                        unitOp: (docUnitOp
-                            r: sno
-                            rel: drel.stringView
-                            srcDir: this.srcDir.stringView
-                        )
+                        unitOp: (docUnitOp r: sno rel: drel.stringView)
                         docText: dtext.stringView
                         utf32: this.encUtf32
                     )
@@ -2439,13 +2429,11 @@ cpColOf: function {lineText: StringView ch: i64 utf32: bool} out u32 is {
     return idx + 1
 }
 
-# pathMatches -- whether a provider path names the request's document
-# (overlay "/rel", plain "rel", or "<srcDir>/rel" forms).
-pathMatches: function {pv: StringView rel: StringView srcDir: StringView} out bool is {
+# pathMatches -- whether a provider path names the request's document: a file
+# provider's path is relative to its root ("rel"), an overlay's is "/rel"
+pathMatches: function {pv: StringView rel: StringView} out bool is {
     if rel.length == 0 then return false
     if pv == rel then return true
-    fs: zcheck.joinPath a: srcDir b: rel
-    if pv == fs then return true
     ov: "/".string
     ov.append rel
     if pv == ov then return true
@@ -2455,15 +2443,13 @@ pathMatches: function {pv: StringView rel: StringView srcDir: StringView} out bo
 # docFsnoOf -- the file number the check gave the document at `rel`: the
 # parsed file whose provider path is the document's. 0 when the check parsed
 # no such file.
-docFsnoOf: function {
-    r: zcheck.CheckResult.view rel: StringView srcDir: StringView
-} out zvfs.fsno is {
+docFsnoOf: function {r: zcheck.CheckResult.view rel: StringView} out zvfs.fsno is {
     found: zvfs.fsno
     if r.parseOk.not then return found
     for each f: r.prog.files loop {
         if found.isZero then {
             pv: r.vfs.pathfromprovider dentryid: f
-            if (pathMatches pv: pv.stringView :rel :srcDir) then found = f
+            if (pathMatches pv: pv.stringView :rel) then found = f
         }
     }
     return found
@@ -2476,10 +2462,8 @@ docUnitDecl: function {
     r: zcheck.CheckResult.view
     # the document, relative to the workspace
     rel: StringView
-    # the workspace's source root
-    srcDir: StringView
 } out ztypes.declid is {
-    op: docUnitOp :r :rel :srcDir
+    op: docUnitOp :r :rel
     if op.isZero then return ztypes.declid
     o: r.st
     match (
@@ -2497,10 +2481,8 @@ docUnitDecl: function {
 # docUnitOp -- the unitdef node of the document's unit, found by its FILE: a
 # subunit's document is that subunit, never a top-level unit of the same name.
 # 0 when no loaded unit comes from the document.
-docUnitOp: function {
-    r: zcheck.CheckResult.view rel: StringView srcDir: StringView
-} out zast.nodeid is {
-    lu: zsource.lintedUnitOf prog: r.prog self: (docFsnoOf :r :rel :srcDir)
+docUnitOp: function {r: zcheck.CheckResult.view rel: StringView} out zast.nodeid is {
+    lu: zsource.lintedUnitOf prog: r.prog self: (docFsnoOf :r :rel)
     return lu.op
 }
 
@@ -3727,7 +3709,7 @@ locationValue: function {
     if line == 0 then return Value.nul
     fs: zcheck.fsnoFor r: snap nodeid: nid
     if fs.isZero then return Value.nul
-    own: fileIsDoc :snap :fs :docRel :srcDir
+    own: fileIsDoc :snap :fs :docRel
     lineText: String
     # a utf-32 column is the codepoint column, which needs no line
     if utf32.not then {
@@ -3757,10 +3739,9 @@ fileIsDoc: function {
     snap: zcheck.CheckResult
     fs: zvfs.fsno
     docRel: StringView
-    srcDir: StringView
 } out bool is {
     pp: snap.vfs.pathfromprovider dentryid: fs
-    return (pathMatches pv: pp.stringView rel: docRel :srcDir)
+    return (pathMatches pv: pp.stringView rel: docRel)
 }
 
 # fileUri -- the uri a Location in file `fs` carries: the document's own, or the
@@ -4048,7 +4029,7 @@ locationAtFileTop: function {
     systemDir: StringView
 } out Value is {
     if fsno.isZero then return Value.nul
-    own: fileIsDoc :snap fs: fsno :docRel :srcDir
+    own: fileIsDoc :snap fs: fsno :docRel
     uri: fileUri :snap fs: fsno :own :docUri :srcDir :systemDir
     return (locationObj uri: uri.stringView line0: 0 c0: 0 c1: 0)
 }
@@ -4236,7 +4217,6 @@ bestSpanRow: function {
     snap: zcheck.CheckResult
     sp: Spans.view
     docRel: StringView
-    srcDir: StringView
     l1u: u32
     cp1: u32
 } out i64 is {
@@ -4250,9 +4230,7 @@ bestSpanRow: function {
             fs: zcheck.fsnoFor r: snap nodeid: row.nodeid
             pp: snap.vfs.pathfromprovider dentryid: fs
             outranks: (spanKindRank kind: row.kind) > (spanKindRank kind: bestKind)
-            if (pathMatches pv: pp.stringView rel: docRel :srcDir) when (
-                (bestIdx < 0) or outranks
-            ) then {
+            if (pathMatches pv: pp.stringView rel: docRel) when (bestIdx < 0) or outranks then {
                 bestIdx = ri.i64.orPanic
                 bestKind = row.kind
             }
@@ -4639,11 +4617,10 @@ navResolve: function {
     snap: zcheck.CheckResult
     sp: Spans.view
     docRel: StringView
-    srcDir: StringView
     l1u: u32
     cp1: u32
 } out optionval navhit is {
-    bestIdx: bestSpanRow :snap :sp :docRel :srcDir :l1u :cp1
+    bestIdx: bestSpanRow :snap :sp :docRel :l1u :cp1
     if bestIdx < 0 then return (optionval.none navhit)
     bi: bestIdx.u64.orPanic
     hit: sp.rows.get i: bi
@@ -5707,7 +5684,7 @@ RefFile: class {
         docText: StringView
         utf32: bool
     } out this is {
-        own: fileIsDoc :snap :fs :docRel :srcDir
+        own: fileIsDoc :snap :fs :docRel
         f: (meta.create
             fsno: fs
             uri: (fileUri :snap :fs :own :docUri :srcDir :systemDir)
@@ -6029,9 +6006,9 @@ navAnswer: function {
     if mode == 3 then {
         sp = programSpans prog: snap.prog
     } else {
-        sp = fileSpans prog: snap.prog fsno: (docFsnoOf r: snap rel: docRel :srcDir)
+        sp = fileSpans prog: snap.prog fsno: (docFsnoOf r: snap rel: docRel)
     }
-    hitOpt: navResolve :snap :sp :docRel :srcDir :l1u :cp1
+    hitOpt: navResolve :snap :sp :docRel :l1u :cp1
     if hitOpt.none then return Value.nul
     hit: hitOpt
     hname: (sp.names.get i: hit.idx).copy
@@ -6040,7 +6017,7 @@ navAnswer: function {
         :sp
         :hit
         :hname
-        site: (docUnitDecl r: snap rel: docRel :srcDir)
+        site: (docUnitDecl r: snap rel: docRel)
     )
     if mode == 1 then {
         return (navDefinitionAnswer
@@ -6683,19 +6660,18 @@ addParamLabel: function {ast: Ast.view pm: zast.astnode.view sink: (MapRV String
 addScopeCompletions: function {
     snap: zcheck.CheckResult
     docRel: StringView
-    srcDir: StringView
     l1u: u32
     sink: (MapRV String v: u8)
     rank: (MapRV String v: u8)
 } is {
     defStart: (enclosingDefStart
         prog: snap.prog
-        unitOp: (docUnitOp r: snap rel: docRel :srcDir)
+        unitOp: (docUnitOp r: snap rel: docRel)
         :l1u
         :sink
     )
     if defStart > 0 then {
-        sp: fileSpans prog: snap.prog fsno: (docFsnoOf r: snap rel: docRel :srcDir)
+        sp: fileSpans prog: snap.prog fsno: (docFsnoOf r: snap rel: docRel)
         nr: sp.rows.length
         ri: u64
         for ri < nr loop {
@@ -6703,7 +6679,7 @@ addScopeCompletions: function {
             if row.kind == 3 when row.line >= defStart when row.line <= l1u then {
                 fs: zcheck.fsnoFor r: snap nodeid: row.nodeid
                 pp: snap.vfs.pathfromprovider dentryid: fs
-                if (pathMatches pv: pp.stringView rel: docRel :srcDir) then {
+                if (pathMatches pv: pp.stringView rel: docRel) then {
                     nm: sp.names.get i: ri
                     addCand :sink name: nm.stringView kind: 6
                 }
@@ -6712,13 +6688,13 @@ addScopeCompletions: function {
         }
     }
     rankNew :sink :rank group: 0
-    addUnitChainDefs :snap site: (docUnitDecl r: snap rel: docRel :srcDir) :sink
+    addUnitChainDefs :snap site: (docUnitDecl r: snap rel: docRel) :sink
     rankNew :sink :rank group: 1
     addCoreDefs :snap :sink
     rankNew :sink :rank group: 2
-    docFs: docFsnoOf r: snap rel: docRel :srcDir
+    docFs: docFsnoOf r: snap rel: docRel
     if docFs.isZero.not then {
-        un: zsource.unitNameOf path: docRel
+        un: zsource.unitNameOf file: docRel
         own: snap.vfs.siblingDir fileid: docFs name: un.stringView
         addUnitFiles vfs: snap.vfs dirid: own :sink
     }
@@ -6830,7 +6806,6 @@ addTypeMembersIn: function {
 addHeadUnitMembers: function {
     snap: zcheck.CheckResult.view
     docRel: StringView
-    srcDir: StringView
     name: StringView
     sink: (MapRV String v: u8)
 } is {
@@ -6840,7 +6815,7 @@ addHeadUnitMembers: function {
     }
     d: (bareDeclOf
         o: snap.st
-        site: (docUnitDecl r: snap rel: docRel :srcDir)
+        site: (docUnitDecl r: snap rel: docRel)
         nameId: (zast.poolFind pool: snap.prog.names text: name)
     )
     if d.isZero then return
@@ -6880,13 +6855,12 @@ addUnitMembers: function {prog: Ast.view name: StringView sink: (MapRV String v:
 baseTypeInScope: function {
     snap: zcheck.CheckResult
     docRel: StringView
-    srcDir: StringView
     defStart: u32
     l1u: u32
     base: StringView
 } out ztypes.tid is {
     result: ztypes.tid
-    sp: fileSpans prog: snap.prog fsno: (docFsnoOf r: snap rel: docRel :srcDir)
+    sp: fileSpans prog: snap.prog fsno: (docFsnoOf r: snap rel: docRel)
     nr: sp.rows.length
     ri: u64
     for ri < nr loop {
@@ -6894,7 +6868,7 @@ baseTypeInScope: function {
         if row.line >= defStart when row.line <= l1u then {
             nm: sp.names.get i: ri
             if nm.stringView == base then {
-                tt: localRowType :snap :row :docRel :srcDir
+                tt: localRowType :snap :row :docRel
                 if tt.isZero.not then result = tt
             }
         }
@@ -6909,14 +6883,13 @@ localRowType: function {
     snap: zcheck.CheckResult
     row: spanrow
     docRel: StringView
-    srcDir: StringView
 } out ztypes.tid is {
     isLocal: row.kind == 3
     if row.kind == 1 then isLocal = (useVarId o: snap.st nid: row.nodeid).isZero.not
     if isLocal.not then return ztypes.tid.zero
     fs: zcheck.fsnoFor r: snap nodeid: row.nodeid
     pp: snap.vfs.pathfromprovider dentryid: fs
-    if (pathMatches pv: pp.stringView rel: docRel :srcDir).not then return ztypes.tid.zero
+    if (pathMatches pv: pp.stringView rel: docRel).not then return ztypes.tid.zero
     return (nodeTypeAt o: snap.st nid: row.nodeid)
 }
 
@@ -7618,14 +7591,13 @@ dothead: record {
 resolveDotBase: function {
     snap: zcheck.CheckResult
     docRel: StringView
-    srcDir: StringView
     l1u: u32
     base: StringView
 } out dotbase is {
     n: base.length
     dotPos: dotFrom :base start: 0
     single: dotPos >= n
-    h: dotHeadOf :snap :docRel :srcDir :l1u :base :dotPos
+    h: dotHeadOf :snap :docRel :l1u :base :dotPos
     cur: h.tid
     kind: h.kind
     next: h.next
@@ -7653,7 +7625,6 @@ resolveDotBase: function {
 dotHeadOf: function {
     snap: zcheck.CheckResult
     docRel: StringView
-    srcDir: StringView
     l1u: u32
     base: StringView
     dotPos: u64
@@ -7663,14 +7634,14 @@ dotHeadOf: function {
     if (unitFsnoByName :snap name: firstSeg.stringView).isZero.not then {
         return (unitHeadOf :snap :base unitName: firstSeg.stringView :dotPos)
     }
-    h: bareHeadOf :snap :docRel :srcDir :l1u name: firstSeg.stringView next: dotPos + 1
+    h: bareHeadOf :snap :docRel :l1u name: firstSeg.stringView next: dotPos + 1
     # a name nothing reaches may be a unit the program does not use: load it
     # into the snapshot, and the head resolves as it would for a loaded one
-    if h.kind.unknown when (loadUnitNamed :snap :docRel :srcDir name: firstSeg.stringView) then {
+    if h.kind.unknown when (loadUnitNamed :snap :docRel name: firstSeg.stringView) then {
         if (unitFsnoByName :snap name: firstSeg.stringView).isZero.not then {
             return (unitHeadOf :snap :base unitName: firstSeg.stringView :dotPos)
         }
-        return (bareHeadOf :snap :docRel :srcDir :l1u name: firstSeg.stringView next: dotPos + 1)
+        return (bareHeadOf :snap :docRel :l1u name: firstSeg.stringView next: dotPos + 1)
     }
     return h
 }
@@ -7685,15 +7656,14 @@ dotHeadOf: function {
 loadUnitNamed: function {
     snap: zcheck.CheckResult
     docRel: StringView
-    srcDir: StringView
     name: StringView
 } out bool is {
     if (zparser.isValidUnitName :name).not then return false
     file: "\{name}.z"
-    docFs: docFsnoOf r: snap rel: docRel :srcDir
-    ownerOp: docUnitOp r: snap rel: docRel :srcDir
+    docFs: docFsnoOf r: snap rel: docRel
+    ownerOp: docUnitOp r: snap rel: docRel
     if docFs.isZero.not when ownerOp.isZero.not then {
-        un: zsource.unitNameOf path: docRel
+        un: zsource.unitNameOf file: docRel
         own: snap.vfs.siblingDir fileid: docFs name: un.stringView
         hit: snap.vfs.walk parent: own name: file.stringView
         if (snap.vfs.arm dentryid: hit) == zvfs.nodekind.file then {
@@ -7701,7 +7671,7 @@ loadUnitNamed: function {
                 r: snap
                 dirid: own
                 :ownerOp
-                ownerDecl: (docUnitDecl r: snap rel: docRel :srcDir)
+                ownerDecl: (docUnitDecl r: snap rel: docRel)
                 :name
             )
         }
@@ -7748,7 +7718,6 @@ unitHeadOf: function {
 bareHeadOf: function {
     snap: zcheck.CheckResult
     docRel: StringView
-    srcDir: StringView
     l1u: u32
     name: StringView
     # where the segments after the head begin
@@ -7757,13 +7726,13 @@ bareHeadOf: function {
     throwaway: MapRV String v: u8
     ds: (enclosingDefStart
         prog: snap.prog
-        unitOp: (docUnitOp r: snap rel: docRel :srcDir)
+        unitOp: (docUnitOp r: snap rel: docRel)
         :l1u
         sink: throwaway
     )
-    lt: baseTypeInScope :snap :docRel :srcDir defStart: ds :l1u base: name
+    lt: baseTypeInScope :snap :docRel defStart: ds :l1u base: name
     if lt.isZero.not then return (dothead tid: lt kind: basekind.storage :next)
-    site: docUnitDecl r: snap rel: docRel :srcDir
+    site: docUnitDecl r: snap rel: docRel
     d: bareDeclOf o: snap.st :site nameId: (zast.poolFind pool: snap.prog.names text: name)
     kind: declBaseKind prog: snap.prog o: snap.st :d throughStorage: false
     if kind.typeBase then return (dothead
@@ -7910,7 +7879,6 @@ addTypeMarkers: function {place: dotplace marks: ListVal zast.markerkind} is {
 addMemberCompletions: function {
     snap: zcheck.CheckResult
     docRel: StringView
-    srcDir: StringView
     l1u: u32
     base: StringView
     site: dotsite
@@ -7932,10 +7900,10 @@ addMemberCompletions: function {
         addLiteralHead :snap :base :numEnd :sink
         return
     }
-    db: resolveDotBase :snap :docRel :srcDir :l1u :base
+    db: resolveDotBase :snap :docRel :l1u :base
     if db.kind.unitBase then {
         if db.single then {
-            addHeadUnitMembers :snap :docRel :srcDir name: base :sink
+            addHeadUnitMembers :snap :docRel name: base :sink
         } else addUnitDeclMembers prog: snap.prog o: snap.st unitTid: db.tid :sink
         return
     }
@@ -8668,14 +8636,13 @@ signatureParams: function {pdisps: (List String).view} out Arr is {
 signatureHelpAnswer: function {
     snap: zcheck.CheckResult
     docRel: StringView
-    srcDir: StringView
     docText: StringView
     line0: i64
     ch: i64
     utf32: bool
 } out Value is {
     # the unit the signature is shown in, where a core type's bare name is read
-    site: docUnitDecl r: snap rel: docRel :srcDir
+    site: docUnitDecl r: snap rel: docRel
     l1: line0 + 1
     l1u: l1.u32.orPanic
     curLt: docLine text: docText lineno: l1u
@@ -8696,11 +8663,11 @@ signatureHelpAnswer: function {
     hsub: hstv.substring from: 0 to: nm.segStart
     segCp = hsub.count
     idCol: segCp.u32.orPanic + 1
-    sp: fileSpans prog: snap.prog fsno: (docFsnoOf r: snap rel: docRel :srcDir)
+    sp: fileSpans prog: snap.prog fsno: (docFsnoOf r: snap rel: docRel)
     leafNid: (leafNidAt
         :sp
         prog: snap.prog
-        docFs: (docFsnoOf r: snap rel: docRel :srcDir)
+        docFs: (docFsnoOf r: snap rel: docRel)
         line1u: head.line
         :idCol
         name: nmS
@@ -8742,7 +8709,6 @@ completionAnswer: function {
     # the document's uri, which each item's `data` carries for its resolve
     docUri: StringView
     docRel: StringView
-    srcDir: StringView
     docText: StringView
     line0: i64
     ch: i64
@@ -8794,7 +8760,6 @@ completionAnswer: function {
                 (addMemberCompletions
                     :snap
                     :docRel
-                    :srcDir
                     :l1u
                     :base
                     site: (dotSiteOf :docText line: l1u col: (cpColOfByte s: ltv i: br.lo))
@@ -8808,7 +8773,7 @@ completionAnswer: function {
     prefix: (ltv.substring from: ps to: cur).string
     if memberMode.not then {
         curPos: zast.nodepos line: l1u col: cp1
-        docFs: docFsnoOf r: snap rel: docRel :srcDir
+        docFs: docFsnoOf r: snap rel: docRel
         handledCA: (caseArmComplete
             :arr
             o: snap.st
@@ -8828,12 +8793,12 @@ completionAnswer: function {
             :ps
             prefix: prefix.stringView
             cursorPos: curPos
-            site: (docUnitDecl r: snap rel: docRel :srcDir)
+            site: (docUnitDecl r: snap rel: docRel)
             :docFs
         )
         if handledAL then return (Value.array arr)
         if (words.slotOf text: trig) == zlsWord.slot.trigSpace then return (Value.array arr)
-        addScopeCompletions :snap :docRel :srcDir :l1u sink: cands :rank
+        addScopeCompletions :snap :docRel :l1u sink: cands :rank
     }
 
     # each label kept, behind its sortText's group digit when it has one, so
@@ -8967,22 +8932,21 @@ valueCopy: function {v: Value.view} out Value is {
 completionCard: function {
     snap: zcheck.CheckResult
     docRel: StringView
-    srcDir: StringView
     line0: i64
     base: StringView
     label: StringView
 } out Value is {
     l1u: (line0 + 1).u32.orPanic
-    site: docUnitDecl r: snap rel: docRel :srcDir
+    site: docUnitDecl r: snap rel: docRel
     if base.length == 0 then {
         throwaway: MapRV String v: u8
         ds: (enclosingDefStart
             prog: snap.prog
-            unitOp: (docUnitOp r: snap rel: docRel :srcDir)
+            unitOp: (docUnitOp r: snap rel: docRel)
             :l1u
             sink: throwaway
         )
-        lt: baseTypeInScope :snap :docRel :srcDir defStart: ds :l1u base: label
+        lt: baseTypeInScope :snap :docRel defStart: ds :l1u base: label
         # a local reads as hover reads its binding: the name and its type
         if lt.isZero.not then {
             lc: label.string
@@ -8991,7 +8955,7 @@ completionCard: function {
             return (hoverMarkdown code: lc.stringView doc: "")
         }
     }
-    hit: itemHit :snap :docRel :srcDir :l1u :site :base :label
+    hit: itemHit :snap :docRel :l1u :site :base :label
     if hit.declId.isZero when hit.tid.isZero when hit.unitFsno.isZero then return Value.nul
     sp: Spans.create
     if (declKindIs o: snap.st declId: hit.declId k: ztyping.declkind.fieldDecl) then {
@@ -9043,7 +9007,6 @@ declKindIs: function {
 itemHit: function {
     snap: zcheck.CheckResult
     docRel: StringView
-    srcDir: StringView
     l1u: u32
     site: ztypes.declid
     base: StringView
@@ -9074,9 +9037,9 @@ itemHit: function {
         }
     }
     if base.length == 0 then {
-        if holder.isZero then hit.unitFsno = unitFileFsno :snap :docRel :srcDir name: label
+        if holder.isZero then hit.unitFsno = unitFileFsno :snap :docRel name: label
     } else {
-        db: resolveDotBase :snap :docRel :srcDir :l1u :base
+        db: resolveDotBase :snap :docRel :l1u :base
         if db.kind.unitBase then {
             holder = unitBaseHolder :snap :site :base :db
         } else if db.tid.isZero.not then {
@@ -9213,14 +9176,13 @@ chainUnitHolding: function {
 unitFileFsno: function {
     snap: zcheck.CheckResult
     docRel: StringView
-    srcDir: StringView
     name: StringView
 } out zvfs.fsno is {
     if (zparser.isValidUnitName :name).not then return zvfs.fsno
     file: "\{name}.z"
-    docFs: docFsnoOf r: snap rel: docRel :srcDir
+    docFs: docFsnoOf r: snap rel: docRel
     if docFs.isZero.not then {
-        un: zsource.unitNameOf path: docRel
+        un: zsource.unitNameOf file: docRel
         own: snap.vfs.siblingDir fileid: docFs name: un.stringView
         hit: snap.vfs.walk parent: own name: file.stringView
         if (snap.vfs.arm dentryid: hit) == zvfs.nodekind.file then return hit
