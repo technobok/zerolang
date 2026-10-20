@@ -2638,9 +2638,17 @@ projectFilesMissing: function {want: StringView work: StringView} out bool is {
     w: slurp path: want
     for each line: w.stringView.lines loop {
         p: line.trim
-        if p.length > 0 when (io.exists path: "\{work}/\{p}").not then return true
+        if p.length > 0 when (projectFileThere :work :p).not then return true
     }
     return false
+}
+
+# projectFileThere -- `p` under `work`, or on Windows `p` with the executable
+# suffix, which an executable carries there (`two` is two.exe)
+projectFileThere: function {work: StringView p: StringView} out bool is {
+    if (io.exists path: "\{work}/\{p}") then return true
+    if z.build.os != z.build.oskind.windows then return false
+    return (io.exists path: "\{work}/\{p}.exe")
 }
 
 # copyUnits -- every `.z` file of directory `from`, and of each directory under
@@ -2683,12 +2691,16 @@ projectArgv: function {r: Runner.view caseDir: StringView} out List String is {
 }
 
 # projectOutDiffers -- a project case printed other than its golden `want`
-# says; false when the case has no such golden
+# says; false when the case has no such golden. zc prints its paths natively
+# ("wrote .zerolang\.gitignore" on Windows) and the golden spells them with
+# "/", so what was printed is compared through path.toSlash: the comparison
+# adapts, the compiler does not print "/" to suit it
 projectOutDiffers: function {want: StringView got: StringView} out bool is {
     if (io.exists path: want).not then return false
     w: slurp path: want
     g: slurp path: got
-    return w.stringView != g
+    gs: path.toSlash p: g.stringView
+    return w.stringView != gs
 }
 
 # workingDir -- the directory the runner runs in, absolute

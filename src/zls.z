@@ -54,7 +54,11 @@ hexNibble: function {b: u8} out i64 is {
     return -1
 }
 
-# uriToPath -- "file:///a/b%20c.z" -> "/a/b c.z". Non-file URIs return "".
+# uriToPath -- "file:///a/b%20c.z" -> "/a/b c.z". Non-file URIs return "". On
+# Windows a drive path is native: "file:///C:/a/b.z" (or "file:///c%3A/...")
+# -> "C:\a\b.z". (A UNC host form, "file://srv/share/x", is not mapped to
+# "\\srv\share\x": the harness's relative pseudo-URIs, "file://tests/...",
+# have the same shape.)
 uriToPath: function {uri: StringView} out String is {
     if (uri.startsWith "file://").not then return ""
     r: String
@@ -92,24 +96,47 @@ uriToPath: function {uri: StringView} out String is {
         } case none then null
         i = i + 1
     }
+    if z.build.os == z.build.oskind.windows then return (windowsPathOfUri p: r.stringView)
     return r
+}
+
+# windowsPathOfUri -- a file URI's decoded path as Windows spells it: a drive
+# path "/C:/x" drops its leading "/" and path.clean writes the native
+# separators; any other is as written
+windowsPathOfUri: function {p: StringView} out String is {
+    if (p.startsWith "/").not then return p.string
+    if ((p.byteAt i: 2).or d: 0) != 58 then return p.string
+    drive: p.substring from: 1 to: p.length
+    return (path.clean p: drive)
 }
 
 # pathToUri -- absolute path -> file:// URI (no percent-encoding; the
-# workspace paths this serves are plain).
-pathToUri: function {path: StringView} out String is {
+# workspace paths this serves are plain). On Windows the separators become "/"
+# and a drive path gains the leading "/" (file:///C:/x).
+pathToUri: function {file: StringView} out String is {
     r: "file://".string
-    r.append path
+    if z.build.os == z.build.oskind.windows then {
+        fwd: path.toSlash p: file
+        if ((fwd.stringView.byteAt i: 1).or d: 0) == 58 then r.append "/"
+        r.append fwd
+        return r
+    }
+    r.append file
     return r
 }
 
-# relPathOf -- path relative to a provider root ("" when outside it).
-relPathOf: function {path: StringView srcDir: StringView} out String is {
+# relPathOf -- path relative to a provider root ("" when outside it), in
+# "/"-separated form, the provider's own
+relPathOf: function {file: StringView srcDir: StringView} out String is {
     if srcDir.length == 0 then return ""
-    pre: srcDir.string
+    pn: path.toSlash p: file
+    pre: path.toSlash p: srcDir
     pre.append "/"
     pv: pre.stringView
-    if path.startsWith pv then return (path.substring from: pre.length to: path.length).string
+    if pn.stringView.startsWith pv then return (pn.stringView.substring
+        from: pre.length
+        to: pn.length
+    ).string
     return ""
 }
 
@@ -126,8 +153,8 @@ relPathBest: function {
     srcDir: StringView
     systemDir: StringView
 } out String is {
-    a: relPathOf :path :srcDir
-    b: relPathOf :path srcDir: systemDir
+    a: relPathOf file: path :srcDir
+    b: relPathOf file: path srcDir: systemDir
     if a.length == 0 then return b
     if b.length == 0 then return a
     # both roots contain the file, so the deeper one owns it -- and the deeper
@@ -246,9 +273,9 @@ resolveRoots: function {
 # join when it exists on disk, else the systemDir join when that does,
 # else the srcDir join (unsaved new files).
 absRelPath: function {rel0: StringView srcDir: StringView systemDir: StringView} out String is {
-    sj: zcheck.joinPath a: srcDir b: rel0
+    sj: path.join a: srcDir b: rel0
     if (io.exists path: sj) then return sj
-    yj: zcheck.joinPath a: systemDir b: rel0
+    yj: path.join a: systemDir b: rel0
     if (io.exists path: yj) then return yj
     return sj
 }
@@ -3756,7 +3783,7 @@ fileUri: function {
         rel0: pp.substring from: st0 to: pp.length
         absp = absRelPath :rel0 :srcDir :systemDir
     }
-    return (pathToUri path: absp.stringView)
+    return (pathToUri file: absp.stringView)
 }
 
 # locationObj -- an LSP Location: `uri`, on 0-based line `line0`, from column
