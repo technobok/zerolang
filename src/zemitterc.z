@@ -15167,7 +15167,7 @@ emitNativeMemberCall: function {
             return (emitParsedMethodCall :ast :symtab :ctx :call :facts)
         }
         if isCreate then return (emitIoWrapperCreate :ast :symtab :ctx :call :facts)
-        return (emitClassNativeCall :ast :symtab :ctx :call :facts)
+        return (emitClassNativeCall :ast :symtab :ctx :call :ownerTid :facts)
     }
     return (emitOperatorCallForm :ast :symtab :ctx :call :facts)
 }
@@ -17084,6 +17084,8 @@ emitDottedNestedBase: function {
     }
     tnr: tmplNestedRead :ast :symtab :ctx :nlid :mnId base: baseAtom.stringView :nstPtr :facts
     if tnr.length > 0 then return tnr
+    cnr: classNestedRead :ast :symtab :ctx :nlid :mnId base: baseAtom.stringView :nstPtr :facts
+    if cnr.length > 0 then return cnr
     return (nestedBaseMember
         :ast
         :symtab
@@ -17098,6 +17100,42 @@ emitDottedNestedBase: function {
         :nstPtr
         :facts
     )
+}
+
+# classNestedRead -- a class's native method read off a nested or computed
+# base (`(files.getMut i: k).close`) that a fragment row implements: the row's
+# call, taking the place the base names (emitClassNativeRead); "" for any other
+# member
+classNestedRead: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    nlid: ztypes.tid
+    mnId: zast.nameid
+    base: StringView
+    # the base is a pointer to the place
+    nstPtr: bool
+    facts: cfacts.borrow
+} out String is {
+    mo: symtab.typing.declChildOfId parentTypeId: nlid nameId: mnId
+    match (
+        mo
+    ) case some then {
+        if (fnIsNativeId :symtab fid: mo).not then return ""
+        tb: base.string
+        if nstPtr then tb = "(*\{base})"
+        return (emitClassNativeRead
+            :ast
+            :symtab
+            :ctx
+            cid: nlid
+            :mnId
+            mfid: mo
+            recv: tb.stringView
+            recvVid: ztypes.vid
+            :facts
+        )
+    } case none then return ""
 }
 
 # tmplNestedRead -- a templated class's native method read off a nested base
@@ -42152,7 +42190,16 @@ nativeMethodOwnerOf: function {
     nid: zast.nodeid
     mnId: zast.nameid
 } out ztypes.tid is {
-    tid: stampIdOf :symtab :nid
+    return (nativeMethodOwnerOfTid :symtab tid: (stampIdOf :symtab :nid) :mnId)
+}
+
+# nativeMethodOwnerOfTid -- `tid` when it is a non-generic class whose member
+# `mnId` is native; 0 otherwise
+nativeMethodOwnerOfTid: function {
+    symtab: zenv.ZSymbolTable.view
+    tid: ztypes.tid
+    mnId: zast.nameid
+} out ztypes.tid is {
     if tid.isZero then return ztypes.tid.zero
     if (symtab.reg.typetypeOf typeId: tid) != ztypes.ztypetype.classType then return ztypes.tid.zero
     fileOrig: originTidOf :symtab :tid
@@ -42349,20 +42396,14 @@ nativeCallRecvExpr: function {
     return "&\{recvC}"
 }
 
-# nativeValueRecvNode -- the receiver of a native method call that is a
-# templated class's value a call computes, when the call has no variable or
-# field path receiver (`bnid` 0); 0 otherwise
-nativeValueRecvNode: function {
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    calr: astnode.view
-    bnid: zast.nodeid
-} out zast.nodeid is {
+# nativeValueRecvNode -- the receiver of a native method call that a call
+# computes -- `(xs.getMut i: k).close`, a templated class's value -- when the
+# call has no variable or field path receiver (`bnid` 0); 0 otherwise. Whether
+# the method is native is the caller's question (nativeMethodOwnerOf), as for
+# every other receiver.
+nativeValueRecvNode: function {calr: astnode.view bnid: zast.nodeid} out zast.nodeid is {
     if bnid.isZero.not then return zast.nodeid
-    rn: dottedParentNodeId n: calr
-    if rn.isZero then return zast.nodeid
-    if (tmplClassRowOf :symtab :ctx tid: (stampIdOf :symtab nid: rn)) == 0 then return zast.nodeid
-    return rn
+    return (dottedParentNodeId n: calr)
 }
 
 # nativeValueRecvExpr -- the address a native method takes a receiver a call
@@ -42393,6 +42434,27 @@ nativeValueRecvExpr: function {
     return "&(\{rv})"
 }
 
+# nativeCallOwner -- the class whose native method a call on receiver `bnid`
+# names: the receiver's own class; a templated class's instance, whose template
+# defines every method; or, for a receiver a call computes (`valRecv`), the
+# class that declares the method. 0 when the method is not a class's native.
+nativeCallOwner: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    bnid: zast.nodeid
+    valRecv: zast.nodeid
+    mnId: zast.nameid
+    # the class that declares the method
+    ownerTid: ztypes.tid
+} out ztypes.tid is {
+    cid: nativeMethodOwnerOf :symtab nid: bnid :mnId
+    if cid.isZero.not then return cid
+    it: stampIdOf :symtab nid: bnid
+    if (tmplClassRowOf :symtab :ctx tid: it) > 0 then return it
+    if valRecv.isZero then return ztypes.tid.zero
+    return (nativeMethodOwnerOfTid :symtab tid: ownerTid :mnId)
+}
+
 # emitClassNativeCall -- a call of a class's NATIVE method that a natives.tbl
 # fragment row implements: `<class>_<method>(&recv, args...)`, the receiver by
 # pointer and each argument as its parameter's type says (nativeMethodArgForm),
@@ -42404,29 +42466,23 @@ emitClassNativeCall: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
+    # the class that declares the method, for a receiver whose own stamp does
+    # not name it (a computed one: a borrow of an element)
+    ownerTid: ztypes.tid
     facts: cfacts.borrow
 } out String is {
     calr: ast.nodes.get i: call.callable
     bn: dottedBaseAtom :ast n: calr
     bnid: nativeCallRecvNode :ast :calr
-    valRecv: nativeValueRecvNode :symtab :ctx :calr :bnid
+    valRecv: nativeValueRecvNode :calr :bnid
     if bnid.isZero then bnid = valRecv
     if bnid.isZero then return ""
     mnId: aliasChildNameId :ast :symtab n: calr
-    cid: nativeMethodOwnerOf :symtab nid: bnid :mnId
-    # an instance of a templated class: its template defines every method
-    # (emitTmplClassMono), under the instance's own name, with no row of its own
-    tmplInst: false
-    if cid.isZero then {
-        it: stampIdOf :symtab nid: bnid
-        if (tmplClassRowOf :symtab :ctx tid: it) > 0 then {
-            cid = it
-            tmplInst = true
-        }
-    }
+    cid: nativeCallOwner :symtab :ctx :bnid :valRecv :mnId :ownerTid
     if cid.isZero then return ""
-    # a non-generic templated class owns its native methods as any class does
-    if tmplInst.not when (tmplClassRowOf :symtab :ctx tid: cid) > 0 then tmplInst = true
+    # a templated class's methods are its template's (emitTmplClassMono), under
+    # the instance's own name, with no row of their own
+    tmplInst: (tmplClassRowOf :symtab :ctx tid: cid) > 0
     mtid: (symtab.typing.declChildOfId parentTypeId: cid nameId: mnId).or d: ztypes.tid.zero
     if mtid.isZero then return ""
     if tmplInst.not then {
