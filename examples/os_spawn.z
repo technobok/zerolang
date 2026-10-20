@@ -1,20 +1,38 @@
-# os_spawn.z -- fork/exec child processes and read back exit codes.
+# os_spawn.z -- run a child process and read back its exit code.
 #
-# `os.spawn` runs `argv[0]` (PATH-resolved via execvp) as a child with
-# stdin from /dev/null and stdout/stderr redirected to the given paths;
-# it returns the child's exit status. Spawning `true` and `false` is a
-# deterministic 0 / 1 with no captured output to depend on. Letting main
-# return normally (no os.exit) runs the argv destructors, so the leak
-# gate stays clean.
+# `os.spawn` runs `argv[0]` (resolved via PATH) as a child with stdin from the
+# null device and stdout/stderr redirected to the given paths; it returns the
+# child's exit status. The child is this program run again with the code to
+# end with, so the example needs nothing else installed, on any system.
+# Letting main return normally (no os.exit) runs the argv destructors, so the
+# leak gate stays clean; the children end with os.exit, which skips them.
+
+runChild: function {exe: StringView code: StringView} out i32 is {
+    argv: List T: String
+    argv.append from: exe.string
+    argv.append from: code.string
+    discard: os.nullDevice
+    return (os.spawn
+        :argv
+        cwd: ""
+        outPath: discard.stringView
+        errPath: discard.stringView
+        timeoutSecs: 0
+    )
+}
 
 main: function is {
-    argvOk: List T: String
-    argvOk.append from: "true".string
-    c1: os.spawn argv: argvOk cwd: "" outPath: "/dev/null" errPath: "/dev/null" timeoutSecs: 0
-    print "\{c1}"
-
-    argvFail: List T: String
-    argvFail.append from: "false".string
-    c2: os.spawn argv: argvFail cwd: "" outPath: "/dev/null" errPath: "/dev/null" timeoutSecs: 0
-    print "\{c2}"
+    argv: os.args
+    if argv.length > 1 then {
+        # the child: end with the code it was given
+        if (argv.get i: 1) == "1" then os.exit code: 1
+        os.exit code: 0
+    }
+    me: os.exePath
+    match (
+        me
+    ) case ok then {
+        print "\{runChild exe: me.stringView code: "0"}"
+        print "\{runChild exe: me.stringView code: "1"}"
+    } case err then print "no exePath"
 }

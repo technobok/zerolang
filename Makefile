@@ -226,7 +226,9 @@ $(BUILDDIR)/wineprefix/.ready:
 	fi
 
 # test-mingw -- the RUN corpus built for Windows by mingw-w64 (zc --target
-# x86_64-w64-mingw32) and run under wine against the same goldens.
+# x86_64-w64-mingw32) and run under wine against the same goldens (Windows'
+# own `<name>.windows.out` where a case has one). A case marked `posix` in
+# run_cases.txt is listed as `(posix)` rather than run.
 # tests/mingw-known-failures.txt is the expected failure set; a move either way
 # fails. Skipped without the cross compiler and wine.
 MINGW_CC := x86_64-w64-mingw32-gcc
@@ -236,7 +238,7 @@ test-mingw: bin/zc $(BUILDDIR)/ztestrunner $(BUILDDIR)/wineprefix/.ready
 	  echo "test-mingw: skipped (needs $(MINGW_CC) and wine: sudo apt install gcc-mingw-w64-x86-64 wine; see tools/windows/README.md)"; exit 0; fi; \
 	$(WINE_ENV) $(BUILDDIR)/ztestrunner --zc bin/zc --cc $(MINGW_CC) --target x86_64-w64-mingw32 \
 	   --exec wine --run-only --root . --jobs $(NPROC) > $(BUILDDIR)/mingw-run.log 2>&1; \
-	awk '/^FAIL/ { k = $$1; sub(/^FAIL\(/, "", k); sub(/\)$$/, "", k); \
+	awk '/^FAIL/ || /^SKIP\(run\) .* \(posix\)$$/ { k = $$1; sub(/^FAIL\(/, "", k); sub(/\)$$/, "", k); \
 	       print $$2, (NF >= 3 ? $$3 : "(" k ")") }' $(BUILDDIR)/mingw-run.log \
 	  | sort > $(BUILDDIR)/mingw-fails.txt; \
 	grep -v '^#' $(MINGW_KNOWN) | grep -v '^ *$$' | sort > $(BUILDDIR)/mingw-known.txt; \
@@ -327,6 +329,7 @@ windows-guest:
 	'; \
 	while read -r name dir rest; do \
 	  [ -n "$$name" ] || continue; \
+	  if [ "$$rest" = posix ]; then echo "$$name (posix)" >> $$d/guest-fails.txt; continue; fi; \
 	  g=tests/fixtures/run_golden/$$name; \
 	  if [ ! -f $$d/build/$$name.bin ]; then echo "$$name (cc)" >> $$d/guest-fails.txt; continue; fi; \
 	  [ -f $$g.out ] || continue; \

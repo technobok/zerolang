@@ -1,35 +1,38 @@
-# os_spawn_child_state.z -- what a spawned child receives and what its status
-# means: an exit code, 127 for a program that cannot run or a directory it
-# cannot enter, 124 for a child that outlives its timeout. The child sees
-# only its three standard streams: a file this process holds open is not
-# inherited (every runtime fd is close-on-exec). waitAny reaps only the
-# children it is given, each once; a Child that is killed reports 137.
+# os_spawn_child_state.z -- what a spawned child's status means: an exit code,
+# 127 for a program that cannot run or a directory it cannot enter, 124 for a
+# child that outlives its timeout. waitAny reaps only the children it is
+# given, each once; a Child that is killed reports 137. The child is this
+# program run again with a mode -- the code to end with, or `sleep` -- so the
+# test needs nothing else installed, on any system. What a child inherits is
+# os_spawn_fds's (POSIX).
 
-argvOf: function {a: StringView b: StringView c: StringView} out (List String) is {
+argvOf: function {a: StringView b: StringView} out (List String) is {
     xs: List String
     xs.append a.string
     if b.length > 0 then xs.append b.string
-    if c.length > 0 then xs.append c.string
     return xs
 }
 
-run: function {a: StringView b: StringView c: StringView cwd: StringView timeoutSecs: i32} out i32 is {
+# run -- spawn `prog mode` and wait, its streams discarded
+run: function {prog: StringView mode: StringView cwd: StringView timeoutSecs: i32} out i32 is {
+    discard: os.nullDevice
     return (os.spawn
-        argv: (argvOf :a :b :c)
+        argv: (argvOf a: prog b: mode)
         :cwd
-        outPath: "/dev/null"
-        errPath: "/dev/null"
+        outPath: discard.stringView
+        errPath: discard.stringView
         :timeoutSecs
     )
 }
 
-# startShell -- a Child running `sh -c code`
-startShell: function {code: StringView} out os.Child is {
+# start -- a Child running this program in `mode`
+start: function {me: StringView mode: StringView} out os.Child is {
+    discard: os.nullDevice
     s: (os.spawnAsync
-        argv: (argvOf a: "sh" b: "-c" c: code)
+        argv: (argvOf a: me b: mode)
         cwd: ""
-        outPath: "/dev/null"
-        errPath: "/dev/null"
+        outPath: discard.stringView
+        errPath: discard.stringView
     )
     match (s) case ok then return s.take case err then panic msg: "spawnAsync failed"
 }
@@ -44,43 +47,41 @@ waitFor: function {children: List os.Child} out os.procexit is {
     return r
 }
 
+# child -- end the way `mode` says
+child: function {mode: StringView} is {
+    if mode == "sleep" then os.sleepMillis ms: 5000
+    if mode == "3" then os.exit code: 3
+    if mode == "7" then os.exit code: 7
+    if mode == "9" then os.exit code: 9
+    os.exit code: 0
+}
+
 main: function is {
-    print "exit code: \{run a: "sh" b: "-c" c: "exit 3" cwd: "" timeoutSecs: 0}"
-    print "no such program: \{run a: "z-no-such-program" b: "" c: "" cwd: "" timeoutSecs: 0}"
-    print "no such directory: \{run a: "true" b: "" c: "" cwd: "/z/no/such/dir" timeoutSecs: 0}"
-    print "timed out: \{run a: "sleep" b: "5" c: "" cwd: "" timeoutSecs: 1}"
-    print "within its timeout: \{run a: "sh" b: "-c" c: "exit 0" cwd: "" timeoutSecs: 5}"
-    held: io.open path: "z_spawn_held.txt" mode: io.openmode.write
+    args: os.args
+    if args.length > 1 then child mode: (args.get i: 1).stringView
+    meR: os.exePath
     match (
-        held
+        meR
     ) case ok then {
-        # the shell lists where each of its own fds points; the held file is
-        # not among them
-        n: (os.spawn
-            argv: (argvOf a: "sh" b: "-c" c: "for f in /proc/$$/fd/*; do readlink $f; done | grep -c z_spawn_held > z_spawn_fds.txt")
-            cwd: ""
-            outPath: "/dev/null"
-            errPath: "/dev/null"
-            timeoutSecs: 0
-        )
-        print "lister: \{n}"
-        seen: io.readText path: "z_spawn_fds.txt"
-        match (
-            seen
-        ) case ok then print "held file in the child: \{seen.stringView.trim}" case err then print "no report"
-    } case err then print "open failed"
-    only: List os.Child
-    only.append from: (startShell code: "exit 7")
-    others: List os.Child
-    others.append from: (startShell code: "exit 9")
-    r: waitFor children: only
-    print "reaped the one asked for: \{r.pid == (only.get i: 0).pid} \{r.status}"
-    print "then nothing more there: \{(os.waitAny children: only).pid}"
-    r2: waitFor children: others
-    print "then the other: \{r2.pid == (others.get i: 0).pid} \{r2.status}"
-    slow: List os.Child
-    slow.append from: (startShell code: "sleep 5")
-    (slow.getMut i: 0).kill
-    r3: waitFor children: slow
-    print "killed: \{r3.status}"
+        me: meR.stringView
+        print "exit code: \{run prog: me mode: "3" cwd: "" timeoutSecs: 0}"
+        print "no such program: \{run prog: "z-no-such-program" mode: "" cwd: "" timeoutSecs: 0}"
+        print "no such directory: \{run prog: me mode: "0" cwd: "z_no_such_dir/inner" timeoutSecs: 0}"
+        print "timed out: \{run prog: me mode: "sleep" cwd: "" timeoutSecs: 1}"
+        print "within its timeout: \{run prog: me mode: "0" cwd: "" timeoutSecs: 5}"
+        only: List os.Child
+        only.append from: (start :me mode: "7")
+        others: List os.Child
+        others.append from: (start :me mode: "9")
+        r: waitFor children: only
+        print "reaped the one asked for: \{r.pid == (only.get i: 0).pid} \{r.status}"
+        print "then nothing more there: \{(os.waitAny children: only).pid}"
+        r2: waitFor children: others
+        print "then the other: \{r2.pid == (others.get i: 0).pid} \{r2.status}"
+        slow: List os.Child
+        slow.append from: (start :me mode: "sleep")
+        (slow.getMut i: 0).kill
+        r3: waitFor children: slow
+        print "killed: \{r3.status}"
+    } case err then print "no exePath"
 }

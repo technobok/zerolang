@@ -1,0 +1,23 @@
+# os_spawn_fds.z -- a spawned child sees only its three standard streams: a
+# file this process holds open is not inherited (every runtime fd is
+# close-on-exec). The child is a shell listing where each of its own fds
+# points (/proc), so this is POSIX's; Windows gives a child only the three
+# standard handles by naming them (PROC_THREAD_ATTRIBUTE_HANDLE_LIST).
+
+main: function is {
+    held: io.open path: "z_spawn_held.txt" mode: io.openmode.write
+    match (
+        held
+    ) case ok then {
+        xs: List String
+        xs.append "sh"
+        xs.append "-c"
+        xs.append "for f in /proc/$$/fd/*; do readlink $f; done | grep -c z_spawn_held > z_spawn_fds.txt"
+        n: os.spawn argv: xs cwd: "" outPath: "/dev/null" errPath: "/dev/null" timeoutSecs: 0
+        print "lister: \{n}"
+        seen: io.readText path: "z_spawn_fds.txt"
+        match (
+            seen
+        ) case ok then print "held file in the child: \{seen.stringView.trim}" case err then print "no report"
+    } case err then print "open failed"
+}
