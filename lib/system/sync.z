@@ -117,6 +117,8 @@ MutexGuard: class is native as {
     bound: thread.ThreadBound
     # the Mutex's value, to read and write while the guard lives
     value: function {:this} outx T.borrow is native
+    # replace the Mutex's value with `value`, answering the one it held
+    set: function {:this value: T.take} out T is native
     # unlock, wait until `cond` is notified, then lock again
     wait: function {:this cond: Condvar} is native
     # as `wait`, but for at most `ms` milliseconds; answer whether it timed out
@@ -156,6 +158,74 @@ WriteGuard: class is native as {
     bound: thread.ThreadBound
     # the RwLock's value, to read and write while the guard lives
     value: function {:this} outx T.borrow is native
+    # replace the RwLock's value with `value`, answering the one it held
+    set: function {:this value: T.take} out T is native
+}
+
+# MutexVal -- Mutex for a value type: the value is copied in, and the guard's
+# `value` reaches it in place
+MutexVal: class is native as {
+    t: anyval.generic
+    :Drop
+    # a MutexVal holding `value`
+    create: function {value: t} out type is native
+    # another handle to the same MutexVal
+    share: function {:this} out type is native
+    # wait for the lock, and answer the guard that holds it, as Mutex's `lock`
+    lock: function {:this} outx MutexGuardVal t is native
+}
+
+# MutexGuardVal -- MutexGuard for a value type
+MutexGuardVal: class is native as {
+    t: anyval.generic
+    :Drop
+    bound: thread.ThreadBound
+    # the MutexVal's value, to read and write through its fields while the
+    # guard lives
+    value: function {:this} outx t.borrow is native
+    # replace the MutexVal's value with `value`, answering the one it held
+    set: function {:this value: t} out t is native
+    # unlock, wait until `cond` is notified, then lock again
+    wait: function {:this cond: Condvar} is native
+    # as `wait`, but for at most `ms` milliseconds; answer whether it timed out
+    waitTimeout: function {:this cond: Condvar ms: u64} out bool is native
+}
+
+# RwLockVal -- RwLock for a value type: the value is copied in, and the guards
+# reach it in place
+RwLockVal: class is native as {
+    t: anyval.generic
+    :Drop
+    shared: thread.SharedReads
+    # an RwLockVal holding `value`
+    create: function {value: t} out type is native
+    # another handle to the same RwLockVal
+    share: function {:this} out type is native
+    # wait until no thread writes, and answer a guard that reads
+    read: function {:this} outx ReadGuardVal t is native
+    # wait until no thread reads or writes, and answer a guard that writes
+    write: function {:this} outx WriteGuardVal t is native
+}
+
+# ReadGuardVal -- ReadGuard for a value type
+ReadGuardVal: class is native as {
+    t: anyval.generic
+    :Drop
+    bound: thread.ThreadBound
+    # the RwLockVal's value, to read while the guard lives
+    value: function {t: this.view} outx t.view is native
+}
+
+# WriteGuardVal -- WriteGuard for a value type
+WriteGuardVal: class is native as {
+    t: anyval.generic
+    :Drop
+    bound: thread.ThreadBound
+    # the RwLockVal's value, to read and write through its fields while the
+    # guard lives
+    value: function {:this} outx t.borrow is native
+    # replace the RwLockVal's value with `value`, answering the one it held
+    set: function {:this value: t} out t is native
 }
 
 # Condvar -- where threads wait for a condition another thread makes true. A

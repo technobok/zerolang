@@ -169,16 +169,45 @@ write: <code>read</code> answers a <strong>ReadGuard</strong> (its <code>value</
 every reader. Its readers run at once, so it conforms to
 <code>thread.SharedReads</code>, and one over a <code>thread.Unshareable</code> value (a
 sqlite connection) cannot reach another thread -- use a <code>Mutex</code>.</li>
+<li><strong>MutexVal t</strong> / <strong>RwLockVal t</strong> -- the same for a value type:
+<code>create value:</code> copies the value in, and the guards are
+<strong>MutexGuardVal</strong>, <strong>ReadGuardVal</strong> and <strong>WriteGuardVal</strong>.</li>
 </ul>
 <p>The value is reached only through a guard, so it is never touched unlocked,
 and the lock model keeps the rest straight: a guard keeps the handle it locked
 through (the handle can be neither dropped, moved nor locked again while one
 lives), <code>value</code> holds the guard for as long as what it answered lives, and a
-read guard's value cannot be written. T
-is a reference type (<code>AnyRef</code>); wrap a plain value in a class. A guard
-unlocks on the thread that locked, so every guard conforms to
+read guard's value cannot be written. A writing guard's <code>set value:</code>
+replaces the whole value and answers the one it held; a value type's
+<code>value</code> is written through its fields, so <code>set</code> is how a counter is
+changed. A guard unlocks on the thread that locked, so every guard conforms to
 <code>thread.ThreadBound</code>: it never reaches another thread (see
 <a href="./stdlib_thread.html">thread</a>).</p>
+<pre><code class="language-zerolang">  # Adder -- counts to 100 under the lock
+  Adder: class {
+      # its handle to the count every Adder shares
+      m: sync.MutexVal i64
+  } as {
+      task: thread.Task null
+      call: function {:this} is {
+          i: 0.i64
+          for i &lt; 100 loop {
+              g: this.m.lock
+              g.set value: g.value + 1
+              i = i + 1
+          }
+      }
+  }
+
+  main: function is {
+      m: (sync.MutexVal i64).create value: 0
+      {
+          a: thread.spawn task: (Adder m: m.share)
+          b: thread.spawn task: (Adder m: m.share)
+      }
+      g: m.lock
+      print "counted \{g.value}"
+  }</code></pre>
 <pre><code class="language-zerolang">  # Filler -- appends to a list it shares
   Filler: class {
       # its handle to the list every Filler shares

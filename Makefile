@@ -745,7 +745,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2275117
+ALLOC_BASELINE := 2275240
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1283,7 +1283,7 @@ static-tcc-guard: bin/zc bin/zl bin/zls
 
 # zlink-guard -- how many programs declare a link library: a unit's library goes to
 # the programs that reach it and no others.
-ZLINK_BASELINE := 28
+ZLINK_BASELINE := 30
 
 zlink-guard: bin/zc
 	@n=0; rep=""; \
@@ -1666,6 +1666,12 @@ VIEW_GUARD_INLINE := Bytes.byteView:unemitted \
   ReceiverIterVal.call:ReceiverIter.call \
   JoinHandleVal.join:JoinHandle.join JoinHandleVal.isFinished:JoinHandle.isFinished \
   JoinHandleVal.id:JoinHandle.id JoinHandleVal.detach:JoinHandle.detach \
+  MutexVal.share:Mutex.share MutexVal.lock:Mutex.lock \
+  MutexGuardVal.value:MutexGuard.value MutexGuardVal.set:MutexGuard.set \
+  MutexGuardVal.wait:MutexGuard.wait MutexGuardVal.waitTimeout:MutexGuard.waitTimeout \
+  RwLockVal.share:RwLock.share RwLockVal.read:RwLock.read RwLockVal.write:RwLock.write \
+  ReadGuardVal.value:ReadGuard.value WriteGuardVal.value:WriteGuard.value \
+  WriteGuardVal.set:WriteGuard.set \
   array.listView:inline array.slice:inline array.span:writes array.spanSlice:writes \
   ListVal.span:inline ListVal.spanSlice:inline \
   ListVal.resize:ondemand \

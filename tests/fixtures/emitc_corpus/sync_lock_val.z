@@ -1,0 +1,120 @@
+# sync_lock_val.z -- the value-type locks: four threads add to one i64 a
+# MutexVal holds; readers and a writer share a record an RwLockVal holds, the
+# writer changing both fields under one write lock so no reader sees them
+# apart; and a waiter on a MutexGuardVal wakes when the flag it waits for is
+# set.
+
+# Adder -- adds 1 to the shared total, under the lock each time: a guard's
+# `value` is written through its fields, and replaced whole with `set`
+Adder: class {
+    # its handle to the total
+    m: sync.MutexVal i64
+} as {
+    task: (thread.Task null)
+    call: function {:this} is {
+        i: 0.i64
+        for i < 1000 loop {
+            g: this.m.lock
+            g.set value: g.value + 1
+            i = i + 1
+        }
+    }
+}
+
+# span -- two ends a writer keeps a fixed distance apart
+span: record {
+    lo: i64
+    hi: i64
+}
+
+# Checker -- reads the span over and over; answers whether it ever saw the ends
+# apart from 10
+Checker: class {
+    # its handle to the span
+    rw: sync.RwLockVal span
+} as {
+    task: (thread.TaskVal bool)
+    call: function {:this} out bool is {
+        torn: false
+        i: 0.i64
+        for i < 300 loop {
+            g: this.rw.read
+            s: g.value
+            if s.hi - s.lo != 10 then torn = true
+            i = i + 1
+        }
+        return torn
+    }
+}
+
+# Mover -- moves the span up, both ends under one write lock
+Mover: class {
+    # its handle to the span
+    rw: sync.RwLockVal span
+} as {
+    task: (thread.Task null)
+    call: function {:this} is {
+        i: 0.i64
+        for i < 100 loop {
+            g: this.rw.write
+            s: g.value
+            s.lo = s.lo + 1
+            s.hi = s.hi + 1
+            i = i + 1
+        }
+    }
+}
+
+# Waiter -- waits until the flag is set, then answers it
+Waiter: class {
+    # its handle to the flag
+    m: sync.MutexVal bool
+    # where the setter signals
+    cv: sync.Condvar
+} as {
+    task: (thread.TaskVal bool)
+    call: function {:this} out bool is {
+        g: this.m.lock
+        for g.value.not loop g.wait cond: this.cv
+        return g.value
+    }
+}
+
+main: function is {
+    m: (sync.MutexVal i64).create value: 0
+    {
+        a: thread.spawn task: (Adder m: m.share)
+        b: thread.spawn task: (Adder m: m.share)
+        c: thread.spawn task: (Adder m: m.share)
+        d: thread.spawn task: (Adder m: m.share)
+    }
+    {
+        g: m.lock
+        print "total: \{g.value}"
+    }
+
+    rw: (sync.RwLockVal span).create value: (span lo: 0 hi: 10)
+    {
+        r1: thread.spawnVal task: (Checker rw: rw.share)
+        r2: thread.spawnVal task: (Checker rw: rw.share)
+        w: thread.spawn task: (Mover rw: rw.share)
+        t1: r1.join
+        t2: r2.join
+        print "readers saw the ends apart: \{t1 or t2}"
+    }
+    {
+        g: rw.read
+        s: g.value
+        print "span: \{s.lo} to \{s.hi}"
+    }
+
+    ready: (sync.MutexVal bool).create value: false
+    cv: sync.Condvar.create
+    h: thread.spawnVal task: (Waiter m: ready.share cv: cv.share)
+    {
+        g: ready.lock
+        g.set value: true
+    }
+    cv.notifyAll
+    print "waiter saw: \{h.join}"
+}

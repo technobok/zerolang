@@ -110,16 +110,48 @@ is #~"current":
     every reader. Its readers run at once, so it conforms to
     #~"thread.SharedReads", and one over a #~"thread.Unshareable" value (a
     sqlite connection) cannot reach another thread -- use a #~"Mutex".]
+  [#*: #b:"MutexVal t" / #b:"RwLockVal t" -- the same for a value type:
+    #~"create value:" copies the value in, and the guards are
+    #b:"MutexGuardVal", #b:"ReadGuardVal" and #b:"WriteGuardVal".]
 
 The value is reached only through a guard, so it is never touched unlocked,
 and the lock model keeps the rest straight: a guard keeps the handle it locked
 through (the handle can be neither dropped, moved nor locked again while one
 lives), #~"value" holds the guard for as long as what it answered lives, and a
-read guard's value cannot be written. T
-is a reference type (#~"AnyRef"); wrap a plain value in a class. A guard
-unlocks on the thread that locked, so every guard conforms to
+read guard's value cannot be written. A writing guard's #~"set value:"
+replaces the whole value and answers the one it held; a value type's
+#~"value" is written through its fields, so #~"set" is how a counter is
+changed. A guard unlocks on the thread that locked, so every guard conforms to
 #~"thread.ThreadBound": it never reaches another thread (see
 [#> to=./stdlib_thread.html: thread]).
+
+#code language=zerolang name=mutex_val: """
+  # Adder -- counts to 100 under the lock
+  Adder: class {
+      # its handle to the count every Adder shares
+      m: sync.MutexVal i64
+  } as {
+      task: thread.Task null
+      call: function {:this} is {
+          i: 0.i64
+          for i < 100 loop {
+              g: this.m.lock
+              g.set value: g.value + 1
+              i = i + 1
+          }
+      }
+  }
+
+  main: function is {
+      m: (sync.MutexVal i64).create value: 0
+      {
+          a: thread.spawn task: (Adder m: m.share)
+          b: thread.spawn task: (Adder m: m.share)
+      }
+      g: m.lock
+      print "counted \{g.value}"
+  }
+"""
 
 #code language=zerolang name=mutex: """
   # Filler -- appends to a list it shares
