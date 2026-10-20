@@ -10,8 +10,14 @@
    start.
 
    The library lives at <tccDir>/libtcc.so, the same directory that holds
-   the runtime payload tcc_set_lib_path needs. One directory, one answer. */
+   the runtime payload tcc_set_lib_path needs. One directory, one answer.
+
+   On Windows nothing is loaded: in-process tcc is a dlopen of libtcc.so,
+   so there z_tcc_open always fails, and tcc.available answers false and
+   compileToExe 127, as on a system with no tcc beside it. */
+#if !defined(_WIN32)
 #include <dlfcn.h>
+#endif
 typedef struct TCCState z_tcc_State;
 typedef void z_tcc_ErrorFunc(void* opaque, const char* msg);
 
@@ -51,8 +57,12 @@ static char* z_tcc_lib_path(z_@StringView@_t tccDir) {
 /* 1 when every entry point resolved. A partial load is a failed load: a
    libtcc missing one of these is not one this code can drive. */
 static int z_tcc_open(z_tcc_api_t* a, z_@StringView@_t tccDir) {
-    char* path = z_tcc_lib_path(tccDir);
     memset(a, 0, sizeof(*a));
+#if defined(_WIN32)
+    (void)tccDir;
+    return 0;
+#else
+    char* path = z_tcc_lib_path(tccDir);
     a->handle = dlopen(path, RTLD_NOW | RTLD_LOCAL);
     free(path);
     if (!a->handle) return 0;
@@ -73,10 +83,13 @@ static int z_tcc_open(z_tcc_api_t* a, z_@StringView@_t tccDir) {
     dlclose(a->handle);
     a->handle = NULL;
     return 0;
+#endif
 }
 
 static void z_tcc_close(z_tcc_api_t* a) {
+#if !defined(_WIN32)
     if (a->handle) dlclose(a->handle);
+#endif
     a->handle = NULL;
 }
 
