@@ -1,4 +1,17 @@
 CC       := gcc
+# Windows (MSYS2 make, UCRT64 gcc) is told apart by the OS variable Windows sets
+# for every process. There the drivers link everything statically, as zc links
+# a program built for Windows, so bin/zc.exe runs with no DLL beside it; and
+# they need no pthread (the thread shim is native Win32 there).
+ifeq ($(OS),Windows_NT)
+WINDOWS_HOST := 1
+DRIVERLINK   := -static
+THREADLIB    :=
+else
+WINDOWS_HOST :=
+DRIVERLINK   :=
+THREADLIB    := -lpthread
+endif
 # the gcc spelling of the discarded-qualifiers error; clang names it differently.
 QUALWERR := $(if $(findstring clang,$(shell $(CC) --version 2>/dev/null | head -1)),-Werror=incompatible-pointer-types-discards-qualifiers,-Werror=discarded-qualifiers)
 CFLAGS_BASE := -std=c17 -Wall -Wextra -Wno-unused-function -Wno-unused-parameter \
@@ -32,8 +45,9 @@ ZCSRCSED = sed -n '1,8s|^/\* zcsrc: \(.*\) \*/$$|\1|p'
 ZLINKOF = $$($(ZCSRCSED) $(1) | grep -q . && bin/zc cobj $(1) --cc $(or $(2),$(CC)) $(if $(3),--cflags "$(3)")) \
   $$($(ZLINKSED) $(1) | tr ' ' '\n' | sed -e '/^$$/d' -e 's|^|-l|')
 # The drivers link the vendored mimalloc ahead of libc; MIMALLOC=0 builds them on
-# glibc. Nothing else uses it, and it never changes emitted C.
-MIMALLOC ?= 1
+# glibc. Nothing else uses it, and it never changes emitted C. Off on Windows:
+# its static override of malloc is not safe with the UCRT.
+MIMALLOC ?= $(if $(WINDOWS_HOST),0,1)
 ifeq ($(MIMALLOC),1)
 MIMALLOC_OBJ := $(BUILDDIR)/mimalloc.o
 else
@@ -610,10 +624,12 @@ $(TCCLIB)/libtcc.so: $(BUILDDIR)/tcc ;
 tcc: $(BUILDDIR)/tcc $(TCCLIB)/libtcc.so
 	@echo "vendored tcc: $(BUILDDIR)/tcc (payload $(TCCLIB))"
 
-# out/zc-seed -- the bootstrap compiler, from the committed seed.
+# out/zc-seed -- the bootstrap compiler, from the committed seed. The seed is
+# emitted for Linux, so its zlink line is Linux's (dl, for the in-process tcc);
+# on Windows it links no library -- there is no in-process tcc there.
 $(BUILDDIR)/zc-seed: bootstrap/zc.c
 	@mkdir -p $(BUILDDIR)
-	$(CC) $(CFLAGS) -o $@ bootstrap/zc.c $(call ZLINKOF,bootstrap/zc.c) -lm
+	$(CC) $(CFLAGS) -o $@ bootstrap/zc.c $(if $(WINDOWS_HOST),$(DRIVERLINK),$(call ZLINKOF,bootstrap/zc.c)) -lm
 
 # bin/zc -- the self-hosted compiler, built by the seed.
 bin/zc.c: $(wildcard src/*.z) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z) $(ZC) $(RT_DEP)
@@ -626,7 +642,7 @@ $(BUILDDIR)/zc.o: bin/zc.c
 
 bin/zc: $(BUILDDIR)/zc.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ)
 	@mkdir -p bin
-	$(CC) -o bin/zc $(BUILDDIR)/zc.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ) $(call ZLINKOF,bin/zc.c) -lpthread -lm
+	$(CC) $(DRIVERLINK) -o bin/zc $(BUILDDIR)/zc.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ) $(call ZLINKOF,bin/zc.c) $(THREADLIB) -lm
 
 zc: bin/zc
 
@@ -640,7 +656,7 @@ $(BUILDDIR)/zl.o: out/zl.c
 
 bin/zl: $(BUILDDIR)/zl.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ)
 	@mkdir -p bin
-	$(CC) -o bin/zl $(BUILDDIR)/zl.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ) $(call ZLINKOF,$(BUILDDIR)/zl.c) -lpthread -lm
+	$(CC) $(DRIVERLINK) -o bin/zl $(BUILDDIR)/zl.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ) $(call ZLINKOF,$(BUILDDIR)/zl.c) $(THREADLIB) -lm
 
 # bin/zls -- the language server (src/zls.z); no emitter.
 out/zls.c: $(BUILDDIR)/zc.o $(wildcard src/zls.z) $(wildcard src/zcheck.z) $(wildcard src/ztarget.z) $(wildcard src/zproject.z) $(wildcard src/zsource.z) $(wildcard src/zdiag.z) $(wildcard src/zrule.z) $(wildcard src/zfix.z) $(wildcard src/ztypecheck.z) $(wildcard src/ztypes.z) $(wildcard src/zenv.z) $(wildcard src/ztyping.z) $(wildcard src/zgenerator.z) $(wildcard src/zfmt.z) $(wildcard src/zfmtcursor.z) $(wildcard src/zdoc.z) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z) $(RT_DEP) | bin/zc
@@ -652,7 +668,7 @@ $(BUILDDIR)/zls.o: out/zls.c
 
 bin/zls: $(BUILDDIR)/zls.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ)
 	@mkdir -p bin
-	$(CC) -o bin/zls $(BUILDDIR)/zls.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ) $(call ZLINKOF,$(BUILDDIR)/zls.c) -lpthread -lm
+	$(CC) $(DRIVERLINK) -o bin/zls $(BUILDDIR)/zls.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ) $(call ZLINKOF,$(BUILDDIR)/zls.c) $(THREADLIB) -lm
 
 zl: bin/zl
 
