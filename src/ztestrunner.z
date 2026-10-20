@@ -84,25 +84,6 @@ normErr: function {content: StringView} out String is {
     return buf
 }
 
-# ccBasename -- the last path component of a resolved compiler path.
-ccBasename: function {ccPath: StringView} outx StringView is {
-    cut: u64
-    i: ccPath.length
-    for i > 0 loop {
-        i = i - 1
-        ch: ccPath.byteAt i
-        match (
-            ch
-        ) case some then {
-            if ch == 47 then {
-                cut = i + 1
-                i = 0
-            }
-        } case none then null
-    }
-    return (ccPath.substring from: cut to: ccPath.length)
-}
-
 # ccKind -- the compiler family a resolved path names, by basename. A local
 # twin of zemitterc.ccFamilyOf, deliberately not a call to it: ztestrunner
 # reaches for `os` and `io` and nothing else, and naming the type checker here
@@ -110,7 +91,7 @@ ccBasename: function {ccPath: StringView} outx StringView is {
 # own. Keep the two in agreement -- same order, same spellings, same answers.
 # Used where the family NAME is the datum: the known-leaks key, and messages.
 ccKind: function {ccPath: StringView} out String is {
-    b: ccBasename :ccPath
+    b: path.baseName p: ccPath
     if (b.contains needle: "tcc") then return "tcc"
     if (b.contains needle: "clang") then return "clang"
     if (b.contains needle: "gcc") then return "gcc"
@@ -121,7 +102,7 @@ ccKind: function {ccPath: StringView} out String is {
 # checker rather than ASan. Everything that has to BRANCH asks this rather than
 # comparing a family name, so the question is asked once and in one spelling.
 usesBoundsChecker: function {ccPath: StringView} out bool is {
-    b: ccBasename :ccPath
+    b: path.baseName p: ccPath
     return (b.contains needle: "tcc")
 }
 
@@ -376,7 +357,14 @@ buildTool: function {
 } out u64 is {
     ea: zcArgv :zc ccFwd: r.ccFwd.stringView :name :srcdir sys: r.sys.stringView outc: csrc
     if (
-        (os.spawn argv: ea cwd: "" outPath: "/dev/null" errPath: "/dev/null" timeoutSecs: 0) != 0
+        (os.spawn
+            argv: ea
+            cwd: ""
+            outPath: os.nullDevice.stringView
+            errPath: os.nullDevice.stringView
+            timeoutSecs: 0
+        ) !=
+        0
     ) then return 1
     ga: (withZlink
         argv: (gccArgv
@@ -391,7 +379,14 @@ buildTool: function {
         zc: r.zc.stringView
     )
     if (
-        (os.spawn argv: ga cwd: "" outPath: "/dev/null" errPath: "/dev/null" timeoutSecs: 0) != 0
+        (os.spawn
+            argv: ga
+            cwd: ""
+            outPath: os.nullDevice.stringView
+            errPath: os.nullDevice.stringView
+            timeoutSecs: 0
+        ) !=
+        0
     ) then return 2
     return 0
 }
@@ -872,7 +867,7 @@ Runner: class {
     ccFwdOn: bool
     # the stdlib directory
     sys: String
-    # the scratch directory (--tmp, else a pid-named one under /tmp); kept when
+    # the scratch directory (--tmp, else a pid-named one under os.tempDir); kept when
     # saveTemps is set, removed otherwise
     tmp: String
     # how many jobs run at once. It comes from the machine rather than a typed
@@ -975,7 +970,7 @@ runArchCases: function {r: Runner} is {
         steps.append (mkStep
             :argv
             cwd: ""
-            outPath: "/dev/null"
+            outPath: os.nullDevice.stringView
             errPath: opath.stringView
             timeoutSecs: r.timeoutSecs
             allowFail: true
@@ -1195,7 +1190,7 @@ doccodeJob: function {
         argv.append from: "--system".string
         argv.append from: r.sys.copy
         argv.append from: "-o".string
-        argv.append from: "/dev/null".string
+        argv.append from: os.nullDevice
     } else {
         argv.append from: tool.string
         argv.append from: "fmt".string
@@ -1206,7 +1201,7 @@ doccodeJob: function {
     steps.append (mkStep
         :argv
         cwd: ""
-        outPath: "/dev/null"
+        outPath: os.nullDevice.stringView
         errPath: errPath.stringView
         timeoutSecs: r.timeoutSecs
         allowFail: true
@@ -1476,7 +1471,7 @@ runDocCases: function {r: Runner} is {
         steps.append (mkStep
             :argv
             cwd: ""
-            outPath: "/dev/null"
+            outPath: os.nullDevice.stringView
             errPath: opath.stringView
             timeoutSecs: r.timeoutSecs
             allowFail: true
@@ -1671,8 +1666,8 @@ runRunCases: function {r: Runner} is {
                 steps.append (mkStep
                     argv: za
                     cwd: ""
-                    outPath: "/dev/null"
-                    errPath: "/dev/null"
+                    outPath: os.nullDevice.stringView
+                    errPath: os.nullDevice.stringView
                     timeoutSecs: 0
                     allowFail: false
                     zlinkFrom: ""
@@ -1688,8 +1683,8 @@ runRunCases: function {r: Runner} is {
                 steps.append (mkStep
                     argv: ga
                     cwd: ""
-                    outPath: "/dev/null"
-                    errPath: "/dev/null"
+                    outPath: os.nullDevice.stringView
+                    errPath: os.nullDevice.stringView
                     timeoutSecs: 0
                     allowFail: false
                     zlinkFrom: cpath.stringView
@@ -1706,7 +1701,7 @@ runRunCases: function {r: Runner} is {
                     argv: ba
                     cwd: rdir.stringView
                     outPath: opath.stringView
-                    errPath: "/dev/null"
+                    errPath: os.nullDevice.stringView
                     timeoutSecs: r.timeoutSecs
                     allowFail: true
                     zlinkFrom: ""
@@ -1857,7 +1852,7 @@ lspCase: function {
         argv: ba
         cwd: ""
         outPath: outP.stringView
-        errPath: "/dev/null"
+        errPath: os.nullDevice.stringView
         timeoutSecs: r.timeoutSecs
     )
     goldP: "\{lspGold}/\{nm}.out"
@@ -1936,7 +1931,7 @@ buildAndRunProbe: function {
     bc9b: (os.spawn
         argv: ga9b
         cwd: ""
-        outPath: "/dev/null"
+        outPath: os.nullDevice.stringView
         errPath: err
         timeoutSecs: 0
     )
@@ -1951,7 +1946,7 @@ buildAndRunProbe: function {
     (os.spawn
         argv: ra9b
         cwd: r.tmp.stringView
-        outPath: "/dev/null"
+        outPath: os.nullDevice.stringView
         errPath: err
         timeoutSecs: r.timeoutSecs
     )
@@ -2064,6 +2059,13 @@ proveSanitizer: function {r: Runner bounds: bool kind: StringView} out bool is {
 # runLeakCases -- the LEAK cases kind.
 runLeakCases: function {r: Runner} is {
     # ---------------- LEAK cases ----------------
+    # the leak check is AddressSanitizer's (or tcc's bounds checker), which
+    # the Windows toolchain (UCRT64 gcc) does not have
+    if z.build.os == z.build.oskind.windows then {
+        print "SKIP(leak) all (Linux only: no AddressSanitizer on Windows)"
+        r.skip = r.skip + 1
+        return
+    }
     kind: ccKind ccPath: r.cc.stringView
     bounds: usesBoundsChecker ccPath: r.cc.stringView
     if (proveSanitizer :r :bounds kind: kind.stringView).not then {
@@ -2107,8 +2109,8 @@ runLeakCases: function {r: Runner} is {
             steps.append (mkStep
                 argv: za2
                 cwd: ""
-                outPath: "/dev/null"
-                errPath: "/dev/null"
+                outPath: os.nullDevice.stringView
+                errPath: os.nullDevice.stringView
                 timeoutSecs: 0
                 allowFail: false
                 zlinkFrom: ""
@@ -2124,7 +2126,7 @@ runLeakCases: function {r: Runner} is {
             steps.append (mkStep
                 argv: ga2
                 cwd: ""
-                outPath: "/dev/null"
+                outPath: os.nullDevice.stringView
                 errPath: lcerr.stringView
                 timeoutSecs: 0
                 allowFail: false
@@ -2135,7 +2137,7 @@ runLeakCases: function {r: Runner} is {
             steps.append (mkStep
                 argv: ba2
                 cwd: rdir2.stringView
-                outPath: "/dev/null"
+                outPath: os.nullDevice.stringView
                 errPath: lerr.stringView
                 timeoutSecs: r.timeoutSecs
                 allowFail: true
@@ -2219,13 +2221,13 @@ runErrorCases: function {r: Runner} is {
             name: enm
             srcdir: r.errors.stringView
             sys: r.sys.stringView
-            outc: "/dev/null"
+            outc: os.nullDevice.stringView
         )
         exf: "\{r.errors.stringView}/\{enm}.zcargs"
         steps.append (mkStep
             argv: (withExtraArgs argv: eza file: exf.stringView)
             cwd: ""
-            outPath: "/dev/null"
+            outPath: os.nullDevice.stringView
             errPath: epe.stringView
             timeoutSecs: 0
             allowFail: true
@@ -2318,7 +2320,7 @@ runDumpCases: function {r: Runner} is {
                     argv: (withExtraArgs argv: da file: dxf.stringView)
                     cwd: ""
                     outPath: dpath.stringView
-                    errPath: "/dev/null"
+                    errPath: os.nullDevice.stringView
                     timeoutSecs: r.timeoutSecs
                     allowFail: true
                     zlinkFrom: ""
@@ -2372,7 +2374,7 @@ lexGoldenCase: function {
         argv: la
         cwd: ""
         outPath: ltoks.stringView
-        errPath: "/dev/null"
+        errPath: os.nullDevice.stringView
         timeoutSecs: r.timeoutSecs
     )
     gL: slurp path: gold
@@ -2454,7 +2456,7 @@ runDifferentialCases: function {r: Runner} is {
                 argv: pa
                 cwd: ""
                 outPath: past.stringView
-                errPath: "/dev/null"
+                errPath: os.nullDevice.stringView
                 timeoutSecs: r.timeoutSecs
             )
             pgold: "\{parsegold}/\{dnm}.ast"
@@ -2502,7 +2504,7 @@ runDifferentialCases: function {r: Runner} is {
                 argv: ppa
                 cwd: ""
                 outPath: pout.stringView
-                errPath: "/dev/null"
+                errPath: os.nullDevice.stringView
                 timeoutSecs: r.timeoutSecs
             )
             pgold2: "\{proggold}/\{ptnm}.expected"
@@ -2566,7 +2568,7 @@ runVfsCases: function {r: Runner} is {
                 argv: va
                 cwd: ""
                 outPath: vout.stringView
-                errPath: "/dev/null"
+                errPath: os.nullDevice.stringView
                 timeoutSecs: r.timeoutSecs
             )
             vgold: "\{vfsdir}/\{vnm}.expected"
@@ -2701,11 +2703,12 @@ workingDir: function out String is {
 }
 
 # absoluteFrom -- `p` as a path that opens from any directory: unchanged when
-# it is absolute or a bare command name (no `/`), else joined to `base`
+# it is absolute or a bare command name (no directory part), else joined to
+# `base`
 absoluteFrom: function {base: StringView p: StringView} out String is {
-    if p.startsWith "/" then return p.string
-    if (p.contains needle: "/").not then return p.string
-    return "\{base}/\{p}"
+    if (path.isAbsolute :p) then return p.string
+    if (path.baseName :p).length == p.length then return p.string
+    return (path.join a: base b: p)
 }
 
 # runSmokeCases -- the SMOKE (per-unit no-arg golden) cases kind.
@@ -2745,8 +2748,8 @@ runSmokeCases: function {r: Runner} is {
                 steps.append (mkStep
                     argv: za
                     cwd: ""
-                    outPath: "/dev/null"
-                    errPath: "/dev/null"
+                    outPath: os.nullDevice.stringView
+                    errPath: os.nullDevice.stringView
                     timeoutSecs: 0
                     allowFail: false
                     zlinkFrom: ""
@@ -2762,8 +2765,8 @@ runSmokeCases: function {r: Runner} is {
                 steps.append (mkStep
                     argv: ga
                     cwd: ""
-                    outPath: "/dev/null"
-                    errPath: "/dev/null"
+                    outPath: os.nullDevice.stringView
+                    errPath: os.nullDevice.stringView
                     timeoutSecs: 0
                     allowFail: false
                     zlinkFrom: cpath.stringView
@@ -2774,7 +2777,7 @@ runSmokeCases: function {r: Runner} is {
                     argv: ba
                     cwd: ""
                     outPath: opath.stringView
-                    errPath: "/dev/null"
+                    errPath: os.nullDevice.stringView
                     timeoutSecs: r.timeoutSecs
                     allowFail: true
                     zlinkFrom: ""
@@ -2888,7 +2891,7 @@ fmtGoldenCase: function {
         argv: fa
         cwd: ""
         outPath: outP.stringView
-        errPath: "/dev/null"
+        errPath: os.nullDevice.stringView
         timeoutSecs: r.timeoutSecs
     )
     gC: slurp path: gold
@@ -2907,7 +2910,7 @@ fmtGoldenCase: function {
         argv: ga
         cwd: ""
         outPath: againP.stringView
-        errPath: "/dev/null"
+        errPath: os.nullDevice.stringView
         timeoutSecs: r.timeoutSecs
     )
     aC: slurp path: againP.stringView
@@ -2956,13 +2959,13 @@ addSelfhostJob: function {
         a9s.append from: "-".string
     } else {
         a9s.append from: "--emit-c".string
-        a9s.append from: "/dev/null".string
+        a9s.append from: os.nullDevice
     }
     st9s: List PoolStep
     st9s.append (mkStep
         argv: a9s
         cwd: ""
-        outPath: "/dev/null"
+        outPath: os.nullDevice.stringView
         errPath: ep9s.stringView
         timeoutSecs: r.timeoutSecs
         allowFail: true
@@ -3158,8 +3161,8 @@ runFixpoint: function {r: Runner} is {
                 (os.spawn
                     argv: e2
                     cwd: ""
-                    outPath: "/dev/null"
-                    errPath: "/dev/null"
+                    outPath: os.nullDevice.stringView
+                    errPath: os.nullDevice.stringView
                     timeoutSecs: 0
                 ) ==
                 0
@@ -3334,10 +3337,12 @@ runnerPathsUnderRoot: function {r: Runner} is {
     r.unitDir = "\{root}/tests/unit"
 }
 
-# sweepStaleTmp -- remove the scratch trees crashed prior runs left behind:
-# the names are pid-scoped, and a live owner still has /proc/<pid>.
-sweepStaleTmp: function {myPidS: StringView} is {
-    stale: io.listDir path: "/tmp"
+# sweepStaleTmp -- remove the scratch trees crashed prior runs left behind in
+# `tmp`: the names are pid-scoped, and a live owner still has /proc/<pid>. Not
+# on Windows, which has no /proc to ask: there a crashed run's tree stays.
+sweepStaleTmp: function {tmp: StringView myPidS: StringView} is {
+    if z.build.os == z.build.oskind.windows then return
+    stale: io.listDir path: tmp
     if stale.err then return
     for each se: stale loop {
         sv: se.stringView
@@ -3345,7 +3350,8 @@ sweepStaleTmp: function {myPidS: StringView} is {
             spid: sv.substring from: 4 to: sv.length
             proc: "/proc/\{spid}"
             if spid != myPidS when (io.exists path: proc).not then {
-                dead: "/tmp/ztr_\{spid}"
+                own: "ztr_\{spid}"
+                dead: path.join a: tmp b: own.stringView
                 io.removeTree path: dead.stringView
             }
         }
@@ -3360,9 +3366,11 @@ main: function is {
     runnerPathsUnderRoot :r
     if r.tmp.length == 0 then {
         mypid: os.pid
-        r.tmp = "/tmp/ztr_\{mypid}"
         myPidS: "\{mypid}"
-        sweepStaleTmp myPidS: myPidS.stringView
+        tdir: os.tempDir
+        own: "ztr_\{mypid}"
+        r.tmp = path.join a: tdir.stringView b: own.stringView
+        sweepStaleTmp tmp: tdir.stringView myPidS: myPidS.stringView
     }
     io.mkdirp path: r.tmp
     # A sanitizer's symbolizer fetches debug info over the network where
