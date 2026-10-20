@@ -321,21 +321,21 @@ Seeker: protocol {
 # need to surface close errors explicitly; otherwise let RAII clean
 # up.
 #
-# `closed` lets the destructor be idempotent across an explicit close
-# that happens earlier in the scope.
+# `open` makes the destructor idempotent across an explicit close earlier
+# in the scope, and a File whose value moved out (all zeros) release nothing.
 #
 # `close` releases the fd and returns a result so callers can surface
 # a delayed write error (the kernel may have buffered data whose
 # write fails only on close). Calling close twice is not a type
 # error: the second call returns `ok null` because the destructor
-# observes `closed = true` and does nothing.
+# observes `open = false` and does nothing.
 File: class {
     # the POSIX file descriptor. It is the whole of the handle -- a File owns
     # exactly this
     fd: i32
-    # whether close has already run. It is what makes the destructor idempotent
-    # across an explicit close earlier in the scope
-    closed: bool
+    # whether the File holds its fd: false once close has run, and in a File
+    # whose value moved out. It is what makes the destructor idempotent
+    open: bool
 } as {
     :Reader
     :Writer
@@ -343,7 +343,7 @@ File: class {
     :Seeker
     # release the fd, answering a result so a delayed write error can be
     # surfaced. Calling it twice is not an error: the second answers ok null,
-    # the destructor having seen `closed`
+    # the destructor having seen `open` false
     close: function {:this} out (Result null E: IoError) is native
     # read up to `max` bytes, appending them to `buf`. Returns the
     # actual count read; 0 indicates EOF. The caller owns `buf` and

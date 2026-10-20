@@ -24,7 +24,7 @@ static z_@Result_File_IoError@_t z_io_open(
     }
     z_@File@_t* boxed = (z_@File@_t*)z_xmalloc(sizeof(z_@File@_t));
     boxed->@MEMBER_File.fd@ = (int32_t)fd;
-    boxed->@MEMBER_File.closed@ = false;
+    boxed->@MEMBER_File.open@ = true;
     result.tag = @ARM_Result_File_IoError.ok@;
     result.data = boxed;
     return result;

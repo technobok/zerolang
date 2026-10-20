@@ -3,14 +3,14 @@
 static z_@Result_null_IoError@_t z_@File@_close(z_@File@_t* p);
 static z_@Result_null_IoError@_t z_@File@_close(z_@File@_t* p) {
     z_@Result_null_IoError@_t result = {0};
-    if (!p || p->@MEMBER_File.closed@) {
+    if (!p || !p->@MEMBER_File.open@) {
         result.tag = @ARM_Result_null_IoError.ok@;
         result.data = NULL;
         return result;
     }
     int rc = close(p->@MEMBER_File.fd@);
     int e = errno;
-    p->@MEMBER_File.closed@ = true;
+    p->@MEMBER_File.open@ = false;
     return z_io_wrap_null_Result(rc, e);
 }
 
