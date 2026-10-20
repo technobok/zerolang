@@ -54,15 +54,17 @@ hexNibble: function {b: u8} out i64 is {
     return -1
 }
 
-# uriToPath -- "file:///a/b%20c.z" -> "/a/b c.z". Non-file URIs return "". On
+# uriToPath -- "file:///a/b%20c.z" -> "/a/b c.z". Non-file URIs return "".
+# The host "localhost" is this machine: "file://localhost/a" -> "/a". On
 # Windows a drive path is native: "file:///C:/a/b.z" (or "file:///c%3A/...")
-# -> "C:\a\b.z". (A UNC host form, "file://srv/share/x", is not mapped to
-# "\\srv\share\x": the harness's relative pseudo-URIs, "file://tests/...",
-# have the same shape.)
+# -> "C:\a\b.z", and any other host is a share: "file://srv/share/x" ->
+# "\\srv\share\x", as VS Code and Rust's url crate read it. Elsewhere such
+# a host keeps its text, read from the working directory.
 uriToPath: function {uri: StringView} out String is {
     if (uri.startsWith "file://").not then return ""
     r: String
     i: 7.u64
+    if uri.startsWith "file://localhost/" then i = 16
     n: uri.length
     for i < n loop {
         bo: uri.byteAt :i
@@ -100,25 +102,52 @@ uriToPath: function {uri: StringView} out String is {
     return r
 }
 
-# windowsPathOfUri -- a file URI's decoded path as Windows spells it: a drive
-# path "/C:/x" drops its leading "/" and path.clean writes the native
-# separators; any other is as written
+# windowsPathOfUri -- a file URI's decoded path (what follows "file://") as
+# Windows spells it: a drive path "/C:/x" drops its leading "/", a host
+# "srv/share/x" is the share "\\srv\share\x", and path.clean writes the
+# native separators; any other is as written
 windowsPathOfUri: function {p: StringView} out String is {
-    if (p.startsWith "/").not then return p.string
+    if (p.startsWith "/").not then {
+        share: "//\{p}"
+        return (path.clean p: share.stringView)
+    }
     if ((p.byteAt i: 2).or d: 0) != 58 then return p.string
     drive: p.substring from: 1 to: p.length
     return (path.clean p: drive)
 }
 
 # pathToUri -- absolute path -> file:// URI (no percent-encoding; the
-# workspace paths this serves are plain). On Windows the separators become "/"
-# and a drive path gains the leading "/" (file:///C:/x).
+# workspace paths this serves are plain). On Windows the separators become "/",
+# a drive path gains the leading "/" (file:///C:/x), a share names its server
+# as the host (\\srv\share\x -> file://srv/share/x), and the verbatim prefix
+# is dropped (\\?\C:\x -> file:///C:/x, \\?\UNC\srv\share -> file://srv/share).
 pathToUri: function {file: StringView} out String is {
     r: "file://".string
     if z.build.os == z.build.oskind.windows then {
         fwd: path.toSlash p: file
-        if ((fwd.stringView.byteAt i: 1).or d: 0) == 58 then r.append "/"
-        r.append fwd
+        v: fwd.stringView
+        vb: v.stripPrefix p: "//?/"
+        match (
+            vb
+        ) case some then {
+            v = vb
+            un: v.stripPrefix p: "UNC/"
+            match (
+                un
+            ) case some then {
+                r.append un
+                return r
+            } case none then null
+        } case none then null
+        share: v.stripPrefix p: "//"
+        match (
+            share
+        ) case some then {
+            r.append share
+            return r
+        } case none then null
+        if ((v.byteAt i: 1).or d: 0) == 58 then r.append "/"
+        r.append v
         return r
     }
     r.append file

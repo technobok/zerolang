@@ -1850,10 +1850,14 @@ lspCase: function {
     cp: "\{lspCases}/\{cv}"
     caseC: slurp path: cp.stringView
     input: String
+    # a framed transcript speaks the URIs a client sends: absolute, under
+    # this run's root (lspAbsolute); the output is read back the same way
+    uris: lspUris root: r.root.stringView
     if isRaw then {
         input = caseC.copy
     } else {
-        input = frameLsp src: caseC.stringView
+        abs: lspAbsolute text: caseC.stringView :uris
+        input = frameLsp src: abs.stringView
     }
     inP: "\{r.tmp.stringView}/lsp_\{nm}.in"
     wri: io.writeText path: inP content: input
@@ -1876,7 +1880,8 @@ lspCase: function {
     goldP: "\{lspGold}/\{nm}.out"
     if r.regenLsp then {
         rawOut: slurp path: outP.stringView
-        norm: deframeLsp raw: rawOut.stringView
+        normA: deframeLsp raw: rawOut.stringView
+        norm: lspRelative text: normA.stringView :uris
         wrg: io.writeText path: goldP content: norm
         if wrg.err then {
             print "FAIL(lsp) \{nm} (write golden)"
@@ -1889,7 +1894,8 @@ lspCase: function {
         r.skip = r.skip + 1
     } else {
         rawOut: slurp path: outP.stringView
-        norm: deframeLsp raw: rawOut.stringView
+        normA: deframeLsp raw: rawOut.stringView
+        norm: lspRelative text: normA.stringView :uris
         goldC: slurp path: goldP.stringView
         sameOut: norm.stringView == goldC
         if sameOut when rc == 0 then {
@@ -1899,6 +1905,46 @@ lspCase: function {
             r.fails = r.fails + 1
         }
     }
+}
+
+# LspUris -- the run's root as a transcript spells it: `dir`, the absolute
+# root with "/" separators (a JSON-safe path on either system), and `prefix`,
+# the file URI naming it (file:///home/x, file:///C:/x)
+LspUris: class {
+    dir: String
+    prefix: String
+}
+
+# lspUris -- the LspUris of `root`, made absolute from the working directory
+lspUris: function {root: StringView} out LspUris is {
+    wd: workingDir
+    abs: path.join a: wd.stringView b: root
+    d: path.toSlash p: abs.stringView
+    pre: "file://".string
+    if (d.stringView.startsWith "/").not then pre.append "/"
+    pre.append d
+    return (LspUris dir: d.take prefix: pre.take)
+}
+
+# lspAbsolute -- a transcript as a client sends it. The cases spell the
+# repository's files from its root -- `file://tests/...`, `"srcDir":
+# "tests/..."` -- which a server cannot tell from a host URI
+# (`file://server/share/...`), so each is made absolute under the run's root
+lspAbsolute: function {text: StringView uris: LspUris.view} out String is {
+    t: text.replace needle: "\"file://tests/" replacement: "\"\{uris.prefix}/tests/"
+    t = t.stringView.replace needle: "\"file://lib/" replacement: "\"\{uris.prefix}/lib/"
+    sd: "\"srcDir\": \""
+    sy: "\"systemDir\": \""
+    t = t.stringView.replace needle: "\{sd}tests/" replacement: "\{sd}\{uris.dir}/tests/"
+    t = t.stringView.replace needle: "\{sy}tests/" replacement: "\{sy}\{uris.dir}/tests/"
+    t = t.stringView.replace needle: "\{sd}lib/" replacement: "\{sd}\{uris.dir}/lib/"
+    return (t.stringView.replace needle: "\{sy}lib/" replacement: "\{sy}\{uris.dir}/lib/")
+}
+
+# lspRelative -- the server's output with the run's root dropped from its
+# URIs again, so a golden reads the same from any root on any system
+lspRelative: function {text: StringView uris: LspUris.view} out String is {
+    return (text.replace needle: "\"\{uris.prefix}/" replacement: "\"file://")
 }
 
 # knownLeakers -- the programs recorded in tests/known-leaks.txt as expected to
