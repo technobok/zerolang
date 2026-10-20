@@ -7,7 +7,7 @@ cheapest to most real:
 |---|---|---|
 | `make test-mingw` | the whole run corpus, built for Windows by mingw-w64, run under wine | mingw-w64 + wine |
 | `make test-msvc-wine` | MSVC itself (`cl.exe` under wine) builds and runs the thread shim's test | wine + msvc-wine (below) |
-| `make ci-windows` | the shim under MSVC and UCRT64 gcc, and every corpus binary, on a real Windows machine | a Windows host over ssh, e.g. the VM below |
+| `make ci-windows` | the shim under MSVC and UCRT64 gcc, every corpus binary, and zc, zl and zls built natively there passing `make test`, on a real Windows machine | a Windows host over ssh, e.g. the VM below |
 
 The first two are part of `make ci` and print `skipped (needs ...)` without
 their tools. `make ci-windows` is not, since it needs the machine. Run it at
@@ -126,7 +126,7 @@ copy of it.
 ### Running
 
 ```bash
-tools/windows/winvm.sh ci        # up, make ci-windows, down (about 4 minutes)
+tools/windows/winvm.sh ci        # up, make ci-windows, down (about 12 minutes)
 git add tests/windows-verified.txt && git commit -m "windows: record a green ci-windows"
 ```
 

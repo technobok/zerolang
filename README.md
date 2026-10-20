@@ -157,7 +157,9 @@ Windows is tested three ways: `make test-mingw` (the run corpus built by
 mingw-w64, run under wine; `sudo apt install gcc-mingw-w64-x86-64 wine`) and
 `make test-msvc-wine` (MSVC itself under wine) are part of `make ci` and skip
 without their tools; `make ci-windows` runs the Windows legs on a real Windows
-machine, such as the VM `tools/windows/winvm.sh` builds. Setting each one up
+machine, such as the VM `tools/windows/winvm.sh` builds, ending with zc, zl and
+zls built there natively (MSYS2 make, UCRT64 gcc) and `make test` run with them.
+Setting each one up
 from scratch, and what to do when one reports something missing, is in
 [tools/windows/README.md](tools/windows/README.md).
 
