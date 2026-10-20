@@ -153,6 +153,16 @@ make test-bootstrap    # rebuild the compiler from the seed, check the fixpoint
                        #   (BOOTSTRAP_CCS="gcc clang out/tcc" for all three)
 ```
 
+Windows is tested three ways. `make test-mingw` builds the run corpus with
+mingw-w64 and runs it under wine, and `make test-msvc-wine` builds the thread
+shim's test with MSVC itself under wine (`MSVC_WINE=` names an
+[msvc-wine](https://github.com/mstorsjo/msvc-wine) `bin/x64`); both are in
+`make ci` and skip without their tools. `make ci-windows` runs the Windows legs
+on a real Windows machine over ssh (`WINDOWS_SSH`; MSYS2 make, MSVC `cl` and
+UCRT64 gcc on its PATH). A green run writes `tests/windows-verified.txt` —
+commit it — and `make ci` ends with `make windows-due`, one line saying when a
+real-Windows run is due again.
+
 ### Write and run a program
 
 Create `hello.z`:

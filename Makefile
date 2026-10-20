@@ -68,7 +68,7 @@ EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
 .PHONY: all check complexity-report style-lint-fast style-lint test doc-check ci ci-gates ci-corpus \
-	test-math-arm64 test-sqlite-arm64 test-mingw test-math-noasm test-portable-scalars docs-link-guard math-asm-guard \
+	test-math-arm64 test-sqlite-arm64 test-mingw test-msvc-wine ci-windows windows-guest windows-due test-math-noasm test-portable-scalars docs-link-guard math-asm-guard \
 	bench-math bench-math-kernels test-clang test-tcc test-tcc-heavy readable-check build \
 	tcc zc zl zls regen-goldens regen-fmt-goldens regen-matrix matrix-guard regen-math-asm \
 	fmt-raw-guard regen-lsp-goldens bump-seed test-bootstrap install docs warn-check perf \
@@ -155,9 +155,10 @@ ci:
 	$(MAKE) --no-print-directory ci-gates
 	$(MAKE) --no-print-directory test-bootstrap BOOTSTRAP_CCS="$(CI_BOOTSTRAP_CCS)"
 	@echo "CI GATE GREEN: style-lint + corpus(--heavy: +selfhost-asan +fixpoint) + bootstrap"
+	@$(MAKE) --no-print-directory windows-due
 
 # ci-gates -- the gates ci runs in parallel, after perf-strict.
-ci-gates: style-lint zl-full-guard complexity-report warn-check emitter-guard typename-guard frontend-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard highlight-guard any-guard deadcode-guard eager-guard eager-lib-guard case-guard user-native-guard shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard readable-check test-tcc-heavy test-clang test-math-arm64 test-sqlite-arm64 test-math-noasm test-portable-scalars test-mingw math-asm-guard matrix-guard docs-link-guard mode-parity ci-corpus
+ci-gates: style-lint zl-full-guard complexity-report warn-check emitter-guard typename-guard frontend-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard highlight-guard any-guard deadcode-guard eager-guard eager-lib-guard case-guard user-native-guard shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard readable-check test-tcc-heavy test-clang test-math-arm64 test-sqlite-arm64 test-math-noasm test-portable-scalars test-mingw test-msvc-wine math-asm-guard matrix-guard docs-link-guard mode-parity ci-corpus
 
 ci-corpus: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --heavy --jobs $(NPROC)
@@ -246,6 +247,119 @@ test-mingw: bin/zc $(BUILDDIR)/ztestrunner $(BUILDDIR)/wineprefix/.ready
 	  exit 1; \
 	fi; \
 	echo "test-mingw OK: $$(sed -n 's/^pass=\([0-9]*\).*/\1/p' $(BUILDDIR)/mingw-run.log) RUN cases pass on Windows (mingw-w64, wine), $$(grep -c . $(BUILDDIR)/mingw-fails.txt) known failures, none new"
+
+# test-msvc-wine -- MSVC itself, cl.exe run under wine (msvc-wine; MSVC_WINE
+# names its bin/x64 directory), builds the thread shim's test with the
+# windows-shim workflow's flags, and the result runs under wine. Paths stay
+# relative: link.exe reads an argument starting with / as an option. Skipped
+# without MSVC_WINE or wine.
+MSVC_WINE ?=
+test-msvc-wine: $(BUILDDIR)/wineprefix/.ready
+	@if [ -z "$(MSVC_WINE)" ] || [ ! -x "$(MSVC_WINE)/cl" ] || ! command -v wine > /dev/null 2>&1; then \
+	  echo "test-msvc-wine: skipped (needs MSVC_WINE=<msvc-wine>/bin/x64 and wine)"; exit 0; fi; \
+	d=$(BUILDDIR)/msvc; rm -rf $$d; mkdir -p $$d; \
+	$(WINE_ENV) $(MSVC_WINE)/cl -nologo -std:c17 -experimental:c11atomics -W3 -O2 \
+	  tests/c/zthread_shim_test.c -Fe:$$d/shim.exe -Fo:$$d/ > $$d/cl.log 2>&1 \
+	  || { echo "test-msvc-wine FAIL: cl did not build the shim test"; grep -m5 -E 'error|fatal' $$d/cl.log; exit 1; }; \
+	$(WINE_ENV) timeout 300 wine $$d/shim.exe > $$d/run.log 2>&1 && grep -q "zthread shim OK" $$d/run.log \
+	  || { echo "test-msvc-wine FAIL: the MSVC build of the shim test under wine"; tail -20 $$d/run.log; exit 1; }; \
+	echo "test-msvc-wine OK: MSVC $$($(WINE_ENV) $(MSVC_WINE)/cl 2>&1 | grep -m1 -o 'Version [0-9.]*') built the thread shim's test, which passes under wine"
+
+# ci-windows -- the Windows legs on a real Windows machine, reached over ssh as
+# WINDOWS_SSH (the zlwin VM by default; any Windows host whose ssh shell is
+# MSYS2 bash with make, MSVC's cl and UCRT64 gcc on PATH will do). The run
+# corpus is built for Windows here, as test-mingw builds it, keeping the
+# binaries in $(WINDOWS_DIR)/build; the tracked tree and those binaries go to a
+# fresh directory there, `make windows-guest` runs in it, and its log comes
+# back to $(WINDOWS_DIR)/guest.log. Not in ci: it needs the machine. Skipped
+# when the host does not answer. A green run records the commit it tested in
+# $(WINDOWS_VERIFIED), which windows-due reads.
+WINDOWS_SSH ?= zlwin
+WINDOWS_DIR := $(BUILDDIR)/windows
+ci-windows: bin/zc $(BUILDDIR)/ztestrunner $(BUILDDIR)/wineprefix/.ready
+	@if ! ssh -o BatchMode=yes -o ConnectTimeout=5 $(WINDOWS_SSH) true > /dev/null 2>&1; then \
+	  echo "ci-windows: skipped (no ssh to $(WINDOWS_SSH))"; exit 0; fi; \
+	rm -rf $(WINDOWS_DIR); mkdir -p $(WINDOWS_DIR); \
+	$(WINE_ENV) $(BUILDDIR)/ztestrunner --zc bin/zc --cc $(MINGW_CC) --target x86_64-w64-mingw32 \
+	   --exec wine --run-only --root . --jobs $(NPROC) --save-temps --tmp $(abspath $(WINDOWS_DIR))/build \
+	   > $(WINDOWS_DIR)/build.log 2>&1; \
+	dest=/c/zl/run/$$(date +%Y%m%d-%H%M%S)-$(BUILDID); \
+	ssh $(WINDOWS_SSH) "mkdir -p $$dest" || { echo "ci-windows FAIL: cannot create $$dest on $(WINDOWS_SSH)"; exit 1; }; \
+	{ git ls-files -co --exclude-standard | while IFS= read -r f; do [ -f "$$f" ] && printf '%s\n' "$$f"; done; \
+	  ls $(WINDOWS_DIR)/build/*.bin; } \
+	  | tar -cf - -T - | ssh $(WINDOWS_SSH) "tar -xf - -C $$dest" \
+	  || { echo "ci-windows FAIL: copying the tree to $(WINDOWS_SSH)"; exit 1; }; \
+	rc=0; ssh $(WINDOWS_SSH) "cd $$dest && make --no-print-directory windows-guest" > $(WINDOWS_DIR)/guest.log 2>&1 || rc=$$?; \
+	ssh $(WINDOWS_SSH) "cat $$dest/$(WINDOWS_DIR)/guest-fails.txt" > $(WINDOWS_DIR)/guest-fails.txt 2> /dev/null || true; \
+	cat $(WINDOWS_DIR)/guest.log; \
+	if [ $$rc -ne 0 ]; then echo "ci-windows FAIL on $(WINDOWS_SSH) in $$dest (log $(WINDOWS_DIR)/guest.log)"; exit 1; fi; \
+	{ echo "# the last green make ci-windows: commit, unix time, date (written by ci-windows; read by windows-due)"; \
+	  echo "$$(git rev-parse HEAD) $$(date +%s) $$(date +%F)"; } > $(WINDOWS_VERIFIED); \
+	echo "ci-windows OK on $(WINDOWS_SSH) in $$dest; recorded in $(WINDOWS_VERIFIED) -- commit it"
+
+# windows-guest -- what ci-windows runs on the Windows machine, in the copied
+# tree. The thread shim's test is built and run under MSVC (cl) and UCRT64
+# gcc. Then every run-corpus binary ci-windows built is run natively, in a
+# directory of its own, against its golden's stdout and exit code; the failure
+# set must equal $(MINGW_KNOWN), what fails under wine, and the report names
+# each program on which wine and Windows disagree. cl's flags are spelled
+# -flag: MSYS2 rewrites a /flag argument as a path.
+windows-guest:
+	@d=$(WINDOWS_DIR); fail=0; t=tests/c/zthread_shim_test.c; \
+	cl -nologo -std:c17 -experimental:c11atomics -W3 -O2 $$t -Fe:$$d/shim-msvc.exe -Fo:$$d/ > $$d/cl.log 2>&1 \
+	  || { echo "windows-guest FAIL: cl did not build the shim test"; tail -5 $$d/cl.log; fail=1; }; \
+	gcc -std=c17 -Wall -Wextra -Wno-unused-function -O2 -o $$d/shim-gcc.exe $$t > $$d/gcc.log 2>&1 \
+	  || { echo "windows-guest FAIL: UCRT64 gcc did not build the shim test"; tail -5 $$d/gcc.log; fail=1; }; \
+	for v in msvc gcc; do \
+	  [ -f $$d/shim-$$v.exe ] || continue; \
+	  timeout 300 $$d/shim-$$v.exe > $$d/shim-$$v.log 2>&1 && grep -q "zthread shim OK" $$d/shim-$$v.log \
+	    || { echo "windows-guest FAIL: the shim test under $$v"; tail -10 $$d/shim-$$v.log; fail=1; }; \
+	done; \
+	n=0; pass=0; : > $$d/guest-fails.txt; nl=' \
+	'; \
+	while read -r name dir rest; do \
+	  [ -n "$$name" ] || continue; \
+	  g=tests/fixtures/run_golden/$$name; \
+	  if [ ! -f $$d/build/$$name.bin ]; then echo "$$name (cc)" >> $$d/guest-fails.txt; continue; fi; \
+	  [ -f $$g.out ] || continue; \
+	  n=$$((n + 1)); rd=$$d/build/run_$$name; mkdir -p $$rd; cp $$d/build/$$name.bin $$rd/$$name.exe; \
+	  set -f; IFS="$$nl"; set -- $$( [ -f $$g.args ] && grep -v '^$$' $$g.args ); unset IFS; set +f; \
+	  (cd $$rd && timeout 60 ./$$name.exe "$$@" < /dev/null > $$name.out 2> /dev/null); rc=$$?; \
+	  want=0; [ -f $$g.exit ] && want=$$(tr -d ' \r\n' < $$g.exit); \
+	  if cmp -s $$rd/$$name.out $$g.out && [ "$$rc" = "$$want" ]; then pass=$$((pass + 1)); \
+	  else echo "$$name (run)" >> $$d/guest-fails.txt; fi; \
+	done < tests/fixtures/run_cases.txt; \
+	sort -o $$d/guest-fails.txt $$d/guest-fails.txt; \
+	grep -v '^#' $(MINGW_KNOWN) | grep -v '^ *$$' | sort > $$d/wine-fails.txt; \
+	if ! cmp -s $$d/wine-fails.txt $$d/guest-fails.txt; then \
+	  comm -13 $$d/wine-fails.txt $$d/guest-fails.txt | sed 's/^/  fails on Windows, not under wine: /'; \
+	  comm -23 $$d/wine-fails.txt $$d/guest-fails.txt | sed 's/^/  passes on Windows, not under wine: /'; \
+	  echo "windows-guest FAIL: the Windows failure set differs from $(MINGW_KNOWN)"; fail=1; \
+	fi; \
+	if [ $$fail -ne 0 ]; then exit 1; fi; \
+	echo "windows-guest OK: the thread shim under MSVC and UCRT64 gcc; $$pass of $$n run-corpus binaries match their goldens on Windows, the rest as under wine"
+
+# windows-due -- one line saying make ci-windows is due, nothing when it is not:
+# it has never passed, or its last green run ($(WINDOWS_VERIFIED)) is
+# WINDOWS_DUE_DAYS days old, or WINDOWS_DUE_TOUCHED_DAYS days old with a commit
+# since then touching WINDOWS_PATHS, the sources Windows behaviour depends on.
+# Never fails: ci ends with it, as a reminder rather than a gate, since ci runs
+# where no Windows host may be.
+WINDOWS_VERIFIED := tests/windows-verified.txt
+WINDOWS_DUE_DAYS := 14
+WINDOWS_DUE_TOUCHED_DAYS := 2
+WINDOWS_PATHS := src/runtime src/zemitterc.z src/zc.z src/zcobj.z src/zcheck.z src/ztestrunner.z \
+	lib/system bootstrap/zc.c Makefile tests/c
+windows-due:
+	@if [ ! -f $(WINDOWS_VERIFIED) ]; then echo "windows-due: make ci-windows has never passed"; exit 0; fi; \
+	set -- $$(grep -v '^#' $(WINDOWS_VERIFIED)); sha=$$1; at=$$2; day=$$3; \
+	age=$$(( ($$(date +%s) - at) / 86400 )); \
+	touched=$$(git log --oneline $$sha..HEAD -- $(WINDOWS_PATHS) 2> /dev/null | wc -l); \
+	if [ $$age -ge $(WINDOWS_DUE_DAYS) ]; then \
+	  echo "windows-due: make ci-windows last passed $$age days ago ($$day, $$(echo $$sha | cut -c1-8)) -- run it"; \
+	elif [ $$age -ge $(WINDOWS_DUE_TOUCHED_DAYS) ] && [ $$touched -gt 0 ]; then \
+	  echo "windows-due: $$touched commit(s) touching Windows-relevant sources since make ci-windows last passed ($$day, $$(echo $$sha | cut -c1-8)) -- run it"; \
+	fi
 
 # test-math-noasm -- the math corpus on math's C kernels (-DZ_MATH_NOASM).
 MATH_NOASM_DIR := $(BUILDDIR)/math-noasm
