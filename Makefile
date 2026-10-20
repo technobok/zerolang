@@ -307,7 +307,8 @@ ci-windows: bin/zc $(BUILDDIR)/ztestrunner $(BUILDDIR)/wineprefix/.ready
 # windows-guest -- what ci-windows runs on the Windows machine, in the copied
 # tree. The thread shim's test is built and run under MSVC (cl) and UCRT64
 # gcc. Then every run-corpus binary ci-windows built is run natively, in a
-# directory of its own, against its golden's stdout and exit code; the failure
+# directory of its own, against its golden's stdout and exit code (Windows' own
+# `<name>.windows.out` / `.exit` where the case has one); the failure
 # set must equal $(MINGW_KNOWN), what fails under wine, and the report names
 # each program on which wine and Windows disagree. cl's flags are spelled
 # -flag: MSYS2 rewrites a /flag argument as a path.
@@ -329,11 +330,13 @@ windows-guest:
 	  g=tests/fixtures/run_golden/$$name; \
 	  if [ ! -f $$d/build/$$name.bin ]; then echo "$$name (cc)" >> $$d/guest-fails.txt; continue; fi; \
 	  [ -f $$g.out ] || continue; \
+	  go=$$g.out; [ -f $$g.windows.out ] && go=$$g.windows.out; \
+	  ge=$$g.exit; [ -f $$g.windows.exit ] && ge=$$g.windows.exit; \
 	  n=$$((n + 1)); rd=$$d/build/run_$$name; mkdir -p $$rd; cp $$d/build/$$name.bin $$rd/$$name.exe; \
 	  set -f; IFS="$$nl"; set -- $$( [ -f $$g.args ] && grep -v '^$$' $$g.args ); unset IFS; set +f; \
 	  (cd $$rd && timeout 60 ./$$name.exe "$$@" < /dev/null > $$name.out 2> /dev/null); rc=$$?; \
-	  want=0; [ -f $$g.exit ] && want=$$(tr -d ' \r\n' < $$g.exit); \
-	  if cmp -s $$rd/$$name.out $$g.out && [ "$$rc" = "$$want" ]; then pass=$$((pass + 1)); \
+	  want=0; [ -f $$ge ] && want=$$(tr -d ' \r\n' < $$ge); \
+	  if cmp -s $$rd/$$name.out $$go && [ "$$rc" = "$$want" ]; then pass=$$((pass + 1)); \
 	  else echo "$$name (run)" >> $$d/guest-fails.txt; fi; \
 	done < tests/fixtures/run_cases.txt; \
 	sort -o $$d/guest-fails.txt $$d/guest-fails.txt; \

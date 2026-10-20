@@ -1,0 +1,251 @@
+# path -- file system paths as the operating system the program is built for
+# spells them, as Go's path/filepath does. On Windows `\` is the separator and
+# `/` is read as one too, and a path may begin with a drive (`C:\`), a share
+# (`\\server\share\`) or the verbatim prefix (`\\?\`); elsewhere `/` is the
+# only separator and the only root. join and clean write the native
+# separator. Every function is pure text: none asks the file system.
+
+# Public interface -- the definitions other units may reference; all other
+# top-level definitions are private to this unit.
+public: unit {
+    :separator
+    :isSeparator
+    :rootLength
+    :isAbsolute
+    :root
+    :clean
+    :join
+    :dirname
+    :baseName
+}
+
+# windows -- the build is for Windows
+windows: function out bool is {
+    return z.build.os == z.build.oskind.windows
+}
+
+# separator -- the native separator: "\" on Windows, "/" elsewhere
+separator: function out String is {
+    if windows then return "\\"
+    return "/"
+}
+
+# isSeparator -- `b` separates path components: `/`, and on Windows `\` too
+isSeparator: function {b: u8} out bool is {
+    if b == 47 then return true
+    if windows when b == 92 then return true
+    return false
+}
+
+# byteOf -- the byte of `p` at `i`, 0 past its end
+byteOf: function {p: StringView i: u64} out u8 is {
+    b: p.byteAt :i
+    match b case some then return b case none then return 0
+}
+
+# isLetter -- an ASCII letter, as a drive is named
+isLetter: function {b: u8} out bool is {
+    if b >= 65 when b <= 90 then return true
+    return (b >= 97) and (b <= 122)
+}
+
+# skipComponent -- the index past the component starting at `i`
+skipComponent: function {p: StringView i: u64} out u64 is {
+    j: i
+    for j < p.length loop {
+        if (isSeparator b: (byteOf :p i: j)) then break
+        j = j + 1
+    }
+    return j
+}
+
+# rootLength -- the bytes of `p` that are its root: "/" on POSIX; on Windows
+# windowsRootLength's; 0 for a relative path
+rootLength: function {p: StringView} out u64 is {
+    if p.length == 0 then return 0
+    if windows then return (windowsRootLength :p)
+    if (byteOf :p i: 0) == 47 then return 1
+    return 0
+}
+
+# windowsRootLength -- a Windows path's root: "\\?\C:\" and
+# "\\?\UNC\srv\share\" (verbatimRootLength), "\\srv\share\" (a share),
+# "C:\", "C:" (relative to that drive's current directory) and "\" (the
+# current drive's root)
+windowsRootLength: function {p: StringView} out u64 is {
+    n: p.length
+    b0: byteOf :p i: 0
+    b1: byteOf :p i: 1
+    if (isSeparator b: b0) when (isSeparator b: b1) then {
+        b2: byteOf :p i: 2
+        if n >= 4 when (b2 == 63) or (b2 == 46) when (isSeparator b: (byteOf :p i: 3)) then {
+            return (verbatimRootLength :p)
+        }
+        return (shareEnd :p from: 2)
+    }
+    if n >= 2 when b1 == 58 when (isLetter b: b0) then {
+        if n >= 3 when (isSeparator b: (byteOf :p i: 2)) then return 3
+        return 2
+    }
+    if (isSeparator b: b0) then return 1
+    return 0
+}
+
+# verbatimRootLength -- the root of a verbatim or device path, which starts
+# "\\?\" or "\\.\": a share's (`UNC\srv\share\`) or the next component's
+verbatimRootLength: function {p: StringView} out u64 is {
+    if (isUncAt :p i: 4) then return (shareEnd :p from: 8)
+    v: skipComponent :p i: 4
+    if v < p.length then return v + 1
+    return v
+}
+
+# isUncAt -- `p` spells "UNC" and a separator at `i`, in either case
+isUncAt: function {p: StringView i: u64} out bool is {
+    if p.length < (i + 4) then return false
+    if ((byteOf :p :i) | 32) != 117 then return false
+    if ((byteOf :p i: i + 1) | 32) != 110 then return false
+    if ((byteOf :p i: i + 2) | 32) != 99 then return false
+    return (isSeparator b: (byteOf :p i: i + 3))
+}
+
+# shareEnd -- the index past a share's `server\share\`, which starts at `from`
+shareEnd: function {p: StringView from: u64} out u64 is {
+    i: skipComponent :p i: from
+    if i < p.length then i = i + 1
+    i = skipComponent :p :i
+    if i < p.length then i = i + 1
+    return i
+}
+
+# isAbsolute -- `p` names the same place from any working directory: on POSIX
+# it starts with "/"; on Windows it has a drive and a separator, a share, or the
+# verbatim prefix ("\x" and "C:x" are relative to the current drive and that
+# drive's directory)
+isAbsolute: function {p: StringView} out bool is {
+    rl: rootLength :p
+    if rl == 0 then return false
+    if windows.not then return true
+    if rl == 1 then return false
+    return (isSeparator b: (byteOf :p i: rl - 1))
+}
+
+# root -- the root of `p` (rootLength's bytes) with native separators, "" for
+# a relative path
+root: function {p: StringView} out String is {
+    acc: String
+    appendNative :acc t: (p.substring from: 0 to: (rootLength :p))
+    return acc
+}
+
+# appendNative -- append `t` with every separator written natively
+appendNative: function {acc: String t: StringView} is {
+    sep: separator
+    i: u64
+    for i < t.length loop {
+        b: byteOf p: t :i
+        if (isSeparator :b) then acc.append sep else acc.appendByte :b
+        i = i + 1
+    }
+}
+
+# dots -- how many dots a component is when it is only dots (1 or 2), else 0
+dots: function {c: StringView} out u64 is {
+    if (c.length == 0) or (c.length > 2) then return 0
+    if (byteOf p: c i: 0) != 46 then return 0
+    if c.length == 2 when (byteOf p: c i: 1) != 46 then return 0
+    return c.length
+}
+
+# cleanParts -- the components after the root (`from`), "." dropped and each
+# ".." taking the component before it -- never past a root when `rooted`
+cleanParts: function {p: StringView from: u64 rooted: bool} out List String is {
+    parts: List String
+    i: from
+    for i < p.length loop {
+        if (isSeparator b: (byteOf :p :i)) then {
+            i = i + 1
+            continue
+        }
+        j: skipComponent :p :i
+        c: p.substring from: i to: j
+        i = j
+        d: dots :c
+        if d == 1 then continue
+        if d == 2 then {
+            last: parts.length
+            if last > 0 when (dots c: (parts.get i: last - 1).stringView) != 2 then {
+                parts.pop
+            } else if rooted.not then {
+                parts.append from: c.string
+            }
+            continue
+        }
+        parts.append from: c.string
+    }
+    return parts
+}
+
+# clean -- the shortest path naming the same place, by text alone: separators
+# made native and one between components, "." components dropped, ".." taking
+# the component before it (never past a root), no trailing separator; "." for
+# an empty result
+clean: function {p: StringView} out String is {
+    rl: rootLength :p
+    acc: String
+    appendNative :acc t: (p.substring from: 0 to: rl)
+    rooted: false
+    if rl > 0 then rooted = isSeparator b: (byteOf :p i: rl - 1)
+    parts: cleanParts :p from: rl :rooted
+    sep: separator
+    k: u64
+    for k < parts.length loop {
+        if k > 0 then acc.append sep
+        acc.append (parts.get i: k)
+        k = k + 1
+    }
+    if acc.length == 0 then return "."
+    return acc
+}
+
+# join -- `a` then `b` with one native separator between, cleaned; `b` alone
+# when it is absolute, and either alone when the other is empty
+join: function {a: StringView b: StringView} out String is {
+    if a.length == 0 then return (clean p: b)
+    if b.length == 0 then return (clean p: a)
+    if (isAbsolute p: b) then return (clean p: b)
+    t: a.string
+    t.append separator
+    t.append b
+    return (clean p: t.stringView)
+}
+
+# dirname -- `p` without its last component, cleaned: the root for a path in
+# it, "." for a relative path of one component
+dirname: function {p: StringView} out String is {
+    rl: rootLength :p
+    i: p.length
+    for i > rl loop {
+        if (isSeparator b: (byteOf :p i: i - 1)) then break
+        i = i - 1
+    }
+    if i == 0 then return "."
+    return (clean p: (p.substring from: 0 to: i))
+}
+
+# baseName -- the last component of `p`, trailing separators ignored: "" when
+# it has none (an empty path, or a root alone)
+baseName: function {p: StringView} out String is {
+    rl: rootLength :p
+    e: p.length
+    for e > rl loop {
+        if (isSeparator b: (byteOf :p i: e - 1)).not then break
+        e = e - 1
+    }
+    s: e
+    for s > rl loop {
+        if (isSeparator b: (byteOf :p i: s - 1)) then break
+        s = s - 1
+    }
+    return (p.substring from: s to: e).string
+}
