@@ -200,6 +200,9 @@ cleanParts: function {p: StringView from: u64 rooted: bool} out List String is {
 # the component before it (never past a root), no trailing separator; "." for
 # an empty result
 clean: function {p: StringView} out String is {
+    # a path that is clean already is its own answer, built without the parts
+    # (Go's lazybuf does the same)
+    if (alreadyClean :p) then return p.string
     rl: rootLength :p
     acc: String
     appendNative :acc t: (p.substring from: 0 to: rl)
@@ -217,15 +220,36 @@ clean: function {p: StringView} out String is {
     return acc
 }
 
+# alreadyClean -- whether clean would return `p` as written: not empty, only
+# native separators, one between components, no "." or ".." component and no
+# trailing separator after the root
+alreadyClean: function {p: StringView} out bool is {
+    if p.length == 0 then return false
+    if windows when p.contains "/" then return false
+    i: rootLength :p
+    for i < p.length loop {
+        if (isSeparator b: (byteOf :p :i)) then return false
+        j: skipComponent :p :i
+        if (dots c: (p.substring from: i to: j)) > 0 then return false
+        i = j
+        if i < p.length then {
+            i = i + 1
+            if i == p.length then return false
+        }
+    }
+    return true
+}
+
 # join -- `a` then `b` with one native separator between, cleaned; `b` alone
 # when it is absolute, and either alone when the other is empty
 join: function {a: StringView b: StringView} out String is {
     if a.length == 0 then return (clean p: b)
     if b.length == 0 then return (clean p: a)
     if (isAbsolute p: b) then return (clean p: b)
-    t: a.string
-    t.append separator
-    t.append b
+    # built in one piece, so a clean result is its only allocation
+    t: String
+    if windows then t = "\{a}\{separator}\{b}" else t = "\{a}/\{b}"
+    if (alreadyClean p: t.stringView) then return t
     return (clean p: t.stringView)
 }
 
