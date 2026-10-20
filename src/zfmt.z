@@ -549,7 +549,12 @@ Builder: class {
         if paired then inPair = true
         body: u32
         if isCall then {
-            body = this.visitCall :id inParens: needed
+            # a kept marker after the opener of a pair that stays keeps the call
+            # open: the call breaks as a call does, after its callable, where the
+            # next pass reads it as the call's own marker. A pair that goes takes
+            # its marker with it
+            kept: wp.before.marker and this.keepMarkers and needed
+            body = this.visitCall :id inParens: needed :kept
         } else {
             body = this.visitValueArm :id wrapped: inPair
         }
@@ -680,7 +685,7 @@ Builder: class {
             # between its operands and the dot was never typed, so the dotted
             # printer would both invent a `.` and desync the token cursor
             if n.infix then return (this.visitBinop :id :wrapped)
-            return (this.visitCall :id inParens: false)
+            return (this.visitCall :id inParens: false kept: false)
         } case dottedpath then {
             return (this.visitPath :id)
         } case atomid then {
@@ -828,7 +833,9 @@ Builder: class {
     } out u32 is {
         xs: ListVal u32
         xs.append open
-        if marker when this.keepMarkers then xs.append this.idBreak
+        # a call-shaped body takes the marker itself (visitCall's `kept`): the
+        # pair has no line after its opener to keep
+        if marker when this.keepMarkers when callShape.not then xs.append this.idBreak
         if before.trailing > 0 then xs.append before.trailing
         if callShape then {
             xs.append body
@@ -977,17 +984,18 @@ Builder: class {
     # visitCall -- a callable and its arguments: flat when they fit, else one
     # argument per line inside parentheses the printer inserts when the call
     # is bare (`inParens` says the caller supplies them). A newline after the
-    # callable is the author's keep-open marker. A last argument that breaks
+    # callable is the author's keep-open marker, and so is one after the
+    # written opener of a pair round the call (`kept`). A last argument that breaks
     # on its own (an expanded construction, a block) is hugged: the call stays
     # on its line and the argument breaks inside its own delimiters. The
     # callable continues the parenthesis budget of the chain
-    visitCall: function {:this id: zast.nodeid inParens: bool} out u32 is {
+    visitCall: function {:this id: zast.nodeid inParens: bool kept: bool} out u32 is {
         n: this.node :id
         if n.call.not then return 0
         callable: this.visitValue id: n.callable slot: slotkind.tight wrapped: false
         args: ListVal u32
         trails: ListVal u32
-        forced: false
+        forced: kept
         i: u64
         for i < n.arguments.count loop {
             aid: this.kid span: n.arguments :i
@@ -1599,7 +1607,7 @@ Builder: class {
         isCall: innerNode.call
         core: u32
         if isCall then {
-            core = this.visitCall :id inParens: true
+            core = this.visitCall :id inParens: true kept: false
         } else {
             core = this.visitValueArm :id wrapped: true
         }
