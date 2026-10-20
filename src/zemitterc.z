@@ -2340,7 +2340,10 @@ recordConvMember: function {ctx: Ctx key: StringView body: StringView} is {
 # the key: both are assigned on every path below, so a copy here would be
 # written and never read -- one per fragment row, which was the whole of
 # `make perf-elision`'s pool.
-recordFragmentRow: function {ctx: Ctx key: StringView frag: StringView dem: StringView} is {
+recordFragmentRow: function {
+    ctx: Ctx key: StringView frag: StringView dem: StringView need: StringView
+} is {
+    if need.length > 0 then ctx.fragNeeds.set key: ctx.fragUnits.length value: need.string
     fp: key.string
     ctx.nativeFragPaths.set key: fp value: ctx.fragUnits.length + 1
     du: String
@@ -2518,6 +2521,7 @@ recordNativeRow: function {ctx: Ctx ast: Ast.view h: NativeHead.view body: Strin
             key: h.key.stringView
             frag: h.frag.stringView
             dem: h.dem.stringView
+            need: h.need.stringView
         )
     }
     recordRowBodies :ctx :h :body
@@ -4145,6 +4149,10 @@ Ctx: class {
     fragTypeNames: List String
     # their owning types, parallel again
     fragTypeTids: ListVal ztypes.tid
+    # the `needs=` of the fragment rows that have one, by row: registered when
+    # the row is written, so a helper row loaded by its demand gets what its
+    # body calls as a called row does (the prelude is written after them all)
+    fragNeeds: (IdMapR u64 V: String)
     # the units the rows belong to, each once, in the order the table first
     # names them: where a fragment's plain type-name hole is looked up after
     # the system unit (ioCanonTidAny). The system unit itself is not listed
@@ -34785,6 +34793,7 @@ emitC: function {
         fragNames: List String
         fragTypeNames: List String
         fragTypeTids: ListVal ztypes.tid
+        fragNeeds: (IdMapR u64 V: String)
         fragUnitDecls: ListVal ztypes.declid
         demandGatedTids: IdSet ztypes.tid
         usedTypeIds: IdSet ztypes.tid
@@ -38061,6 +38070,7 @@ emitRuntimeUnit: function {
         u.drop
         if isU when (ctx.rowsWritten.has item: i).not when (rowDemandFired :ctx :i) then {
             ctx.rowsWritten.add item: i
+            rowNeedsOnWrite :ctx row: i :uname
             fl: (ctx.fragNames.get :i).copy
             for each fr: (fl.stringView.split sep: ",") loop {
                 if fr.length > 0 then {
@@ -38069,6 +38079,23 @@ emitRuntimeUnit: function {
             }
         }
         i = i + 1
+    }
+}
+
+# rowNeedsOnWrite -- register what fragment row `row` of unit `uname` needs
+# (its `needs=`, ctx.fragNeeds) as it is written
+rowNeedsOnWrite: function {ctx: Ctx row: u64 uname: StringView} is {
+    nd: String
+    {
+        ndo: ctx.fragNeeds.get key: row
+        match (
+            ndo
+        ) case some then {
+            nd = ndo.copy
+        } case none then null
+    }
+    for each n1: (nd.stringView.split sep: ",") loop {
+        if n1.length > 0 then rowNeedAddOne :ctx :uname need: n1
     }
 }
 

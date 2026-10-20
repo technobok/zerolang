@@ -38,6 +38,9 @@ static z_@String@_t z_@String@_from_f64(double n) {
 }
 
 static void z_@String@_print(const z_@String@_t* s) {
+#if defined(_WIN32)
+    if (z_win_console_write(1, s->data, s->size, 1)) return;
+#endif
     printf("%.*s\n", (int)s->size, s->data);
 }
 

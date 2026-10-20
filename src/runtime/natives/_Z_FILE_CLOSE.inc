@@ -8,8 +8,13 @@ static z_@Result_null_IoError@_t z_@File@_close(z_@File@_t* p) {
         result.data = NULL;
         return result;
     }
+#if defined(_WIN32)
+    int rc = z_win_close(p->@MEMBER_File.fd@);
+    int e = (int)GetLastError();
+#else
     int rc = close(p->@MEMBER_File.fd@);
     int e = errno;
+#endif
     p->@MEMBER_File.open@ = false;
     return z_io_wrap_null_Result(rc, e);
 }

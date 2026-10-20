@@ -77,6 +77,40 @@ the core types (#~"Reader", #~"Writer", #~"File", #~"openmode",
     a static fd; scope exit does not close the underlying fd]
 
 
+#--: Windows
+
+The unit behaves the same on Windows, with native paths and the system's own
+calls (UTF-16 Win32, never the C runtime's ANSI ones). Where Windows differs:
+
+#ul:
+  [#*: #b:"Paths." A path may use #~"/" or #~"\\" and may be a drive
+    (#~"C:\\x"), a share (#~"\\\\server\\share\\x") or verbatim
+    (#~"\\\\?\\C:\\x"). An absolute path too long for #~"MAX_PATH" is
+    given the #~"\\\\?\\" prefix inside the runtime, so long paths work.
+    Paths the runtime hands back are native: #~"readlink" returns the
+    target as stored]
+  [#*: #b:"Handles." Every file opens binary and is never inherited by a
+    child; a file stays open for others to read, write, rename or delete
+    while it is open, as on POSIX. Seeks are 64-bit]
+  [#*: #b:"Errors." The OS error code is a Win32 one, and #~"other" and
+    #~"invalidpath" carry its #~"FormatMessage" text, as in
+    #~"The directory is not empty. (os error 145)". Sharing and lock
+    violations are #~"permissiondenied"]
+  [#*: #b:"filestat." #~"mode" is synthesised in POSIX's spelling: the type
+    bits; #~"0o444" for a read-only file, else #~"0o666"; plus #~"0o111" for
+    a directory and for #~".exe", #~".com", #~".bat" and #~".cmd".
+    #~"device" is the volume's serial number, #~"inode" the file index,
+    #~"ctimeSeconds" the change time. A symbolic link and a junction are both
+    #~"symlink" under #~"lstat"; a directory's #~"nlink" is 1]
+  [#*: #b:"mkdir" ignores the mode: a new directory takes its parent's
+    access control]
+  [#*: #b:"rename" replaces an existing file, but never a directory]
+  [#*: #b:"symlink" makes a directory link when the target -- relative to
+    the link's folder when relative -- is a directory when it is made, and
+    stores the target with native separators. Windows lets a process make
+    one only with Developer Mode on or the privilege to; without, it fails
+    with #~"permissiondenied"]
+
 #--: Index
 
 #p: #b:"Error and status types"
@@ -234,10 +268,10 @@ valtype: copied on assignment.
     Test with bitwise operations]
   [#*: #~"device" / #~"inode" -- together uniquely identify the
     filesystem object]
-  [#*: #~"nlink" -- hard-link count. For directories this counts
-    #~"." and each child's #~".." so an empty directory has
+  [#*: #~"nlink" -- hard-link count. For directories on POSIX this
+    counts #~"." and each child's #~".." so an empty directory has
     #~"nlink == 2" and a directory with N subdirectories has
-    #~"nlink == 2 + N"]
+    #~"nlink == 2 + N"; Windows reports 1]
 
 
 #--: seekorigin
@@ -512,7 +546,7 @@ the process can't read it.
 
 
 Create a directory at #~"Path" with default permissions
-(#~"0755"). Fails with #~"IoError.exists" if the target already
+(#~"0755" on POSIX). Fails with #~"IoError.exists" if the target already
 exists, and with #~"IoError.notfound" if the parent directory
 is missing. Use #~"io.mkdirp" to create intermediate parents.
 
@@ -550,9 +584,9 @@ runtime-backed #~"io" unit -- see the compiler doc's
 
 
 Move the entity at #~"from" to #~"to". If #~"to" already
-exists, POSIX replaces it (file overwrites file; directory
-overwrites empty directory; otherwise #~"IoError"). Atomic on
-the same filesystem.
+exists, it is replaced (file overwrites file; on POSIX a
+directory overwrites an empty directory; otherwise
+#~"IoError"). Atomic on the same filesystem.
 
 
 #--: symlink

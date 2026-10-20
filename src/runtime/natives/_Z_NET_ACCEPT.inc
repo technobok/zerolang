@@ -10,7 +10,7 @@ static z_@Result_Conn_IoError@_t z_@Listener@_accept(z_@Listener@_t* l) {
         if (fd >= 0) break;
         if (errno == EINTR) continue;
         z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
-        *boxed = z_io_errno_to_IoError(errno);
+        *boxed = z_io_os_error(errno);
         result.tag = @ARM_Result_Conn_IoError.err@;
         result.data = boxed;
         return result;

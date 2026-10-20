@@ -65,10 +65,16 @@ Accessed via qualified names only -- #~"os.args", #~"os.env
   [#*: #b:"Caller owns returned heap." Every function returning
     a #~"String" or #~"List" yields freshly-allocated storage.
     Scope-exit runs the destructor]
-  [#*: #b:"POSIX first." Natives use libc: #~"setenv",
-    #~"unsetenv", #~"environ", #~"getcwd", #~"chdir",
-    #~"getpid", #~"getppid", #~"getpwuid_r", #~"gethostname".
-    Windows stubs are a v2 concern]
+  [#*: #b:"Native on each system." On POSIX the natives use libc
+    (#~"setenv", #~"environ", #~"getcwd", #~"posix_spawnp",
+    #~"getpwuid_r", ...); on Windows the Win32 calls, in UTF-16
+    (#~"GetEnvironmentVariableW", #~"CreateProcessW",
+    #~"GetUserNameW", ...). What a caller sees is the same, but where
+    the system's own notion differs: a path the runtime returns is
+    native (#~"C:\\Users\\x"), environment names match regardless
+    of case on Windows, #~"homeDir" is #~"%USERPROFILE%" there, and
+    #~"args" comes from the command line itself, split as the C
+    runtime splits it]
 
 
 #--: Index
@@ -92,6 +98,8 @@ Accessed via qualified names only -- #~"os.args", #~"os.env
   [#*: [#> to=cwd: #b:"os.cwd"] -- #~"function out (Result T: String E: IoError)"]
   [#*: [#> to=exe-path: #b:"os.exePath"] -- #~"function out (Result T: String E: IoError)"]
   [#*: [#> to=set-cwd: #b:"os.setCwd"] -- #~"function {Path: StringView} out (Result T: null E: IoError)"]
+  [#*: [#> to=temp-dir: #b:"os.tempDir"] -- #~"function out String"]
+  [#*: [#> to=null-device: #b:"os.nullDevice"] -- #~"function out String"]
 
 #p: #b:"Process identity"
 
@@ -225,7 +233,8 @@ permission to resolve it has been revoked.
 
 
 Absolute path of the running executable. On Linux this reads
-#~"/proc/self/exe"; on macOS, #~"_NSGetExecutablePath". Lets a
+#~"/proc/self/exe"; on macOS, #~"_NSGetExecutablePath"; on Windows,
+#~"GetModuleFileNameW", a native path. Lets a
 program locate its own install tree -- the compiler uses it to find
 its bundled stdlib and runtime when run from an arbitrary directory.
 Errors only if the platform link read fails.
@@ -238,6 +247,25 @@ Errors only if the platform link read fails.
 calls -- in #b:"every" thread: the working directory belongs to the
 process, not to a thread. Fails with the usual #~"IoError" variants
 (#~"notfound", #~"notdir", #~"permissiondenied").
+
+
+#--: temp_dir
+
+
+The directory for temporary files: #~"$TMPDIR", else #~"/tmp"; on
+Windows #~"GetTempPathW"'s (#~"%TMP%", #~"%TEMP%", #~"%USERPROFILE%",
+else the Windows directory), a native path such as
+#~"C:\\Users\\x\\AppData\\Local\\Temp". It never ends in a separator
+unless it is a root. Infallible.
+
+
+#--: null_device
+
+
+The device that discards what is written to it and reads as empty:
+#~"/dev/null", or #~"NUL" on Windows -- the path to hand
+#~"os.spawn" to throw a stream away. Answered at compile time, from
+#~"z.build.os".
 
 
 #--: cpu_count
@@ -258,14 +286,17 @@ narrowed to #~"i32". Infallible.
 #--: ppid
 
 
-Parent process id. Infallible.
+Parent process id. Infallible. Windows keeps no parent link to ask
+for, so there it is this process's entry in a Toolhelp snapshot, and
+#~"0" when no snapshot can be taken.
 
 
 #--: user_name
 
 
 Login name of the effective user, resolved via the passwd
-database (#~"getpwuid_r(geteuid())"). Errors when the uid has
+database (#~"getpwuid_r(geteuid())"); on Windows, the account the
+process runs as (#~"GetUserNameW"). Errors when the uid has
 no passwd entry or the database is unreadable.
 
 
@@ -273,15 +304,18 @@ no passwd entry or the database is unreadable.
 
 
 The effective user's home directory. Reads #~"$HOME" from the
-environment; errors with #~"IoError.other" when unset. Does not
-fall back to the passwd database -- set #~"$HOME" explicitly
-for portable behaviour across stripped environments.
+environment -- #~"%USERPROFILE%" on Windows, where #~"$HOME" is
+not the system's notion -- and errors with #~"IoError.other" when
+unset. Does not fall back to the passwd database -- set the
+variable explicitly for portable behaviour across stripped
+environments.
 
 
 #--: hostname
 
 
-Result of #~"gethostname(2)", truncated at #~"HOST_NAME_MAX".
+Result of #~"gethostname(2)", truncated at #~"HOST_NAME_MAX"; on
+Windows, the DNS host name (#~"GetComputerNameExW").
 Result-wrapped because the syscall can fail in rare cases.
 
 
@@ -407,9 +441,9 @@ group by accident.
 #--: sleep_millis
 
 
-Suspend the calling process for #~"ms" milliseconds
+Suspend the calling thread for #~"ms" milliseconds
 (#~"nanosleep", restarted after #~"EINTR" so the full duration
-always elapses). Non-positive #~"ms" returns immediately.
+always elapses; #~"Sleep" on Windows). Non-positive #~"ms" returns immediately.
 
 #--: monotonic_millis
 

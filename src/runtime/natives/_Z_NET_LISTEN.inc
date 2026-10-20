@@ -5,7 +5,7 @@ static z_@Result_Listener_IoError@_t z_net_listen(uint16_t port) {
     int fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
     if (fd < 0) {
         z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
-        *boxed = z_io_errno_to_IoError(errno);
+        *boxed = z_io_os_error(errno);
         result.tag = @ARM_Result_Listener_IoError.err@;
         result.data = boxed;
         return result;
@@ -20,7 +20,7 @@ static z_@Result_Listener_IoError@_t z_net_listen(uint16_t port) {
         int e = errno;
         close(fd);
         z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
-        *boxed = z_io_errno_to_IoError(e);
+        *boxed = z_io_os_error(e);
         result.tag = @ARM_Result_Listener_IoError.err@;
         result.data = boxed;
         return result;

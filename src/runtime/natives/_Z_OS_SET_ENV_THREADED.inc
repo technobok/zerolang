@@ -20,15 +20,20 @@ static z_@Result_null_IoError@_t z_os_setEnv(
         out.data = boxed;
         return out;
     }
+#if defined(_WIN32)
+    int rc = z_win_setenv(key.data, key.size, value.data, value.size);
+    int e = (int)GetLastError();
+#else
     char* key_cstr = z_sv_to_cstr(key);
     char* value_cstr = z_sv_to_cstr(value);
     int rc = setenv(key_cstr, value_cstr, 1);
     int e = errno;
     free(key_cstr);
     free(value_cstr);
+#endif
     if (rc != 0) {
         z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
-        *boxed = z_io_errno_to_IoError(e);
+        *boxed = z_io_os_error(e);
         out.tag = @ARM_Result_null_IoError.err@;
         out.data = boxed;
         return out;

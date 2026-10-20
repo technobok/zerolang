@@ -1,6 +1,21 @@
 # io_error_other.z -- an OS error no IoError arm names arrives as `other`,
-# carrying the C library's message and the error number: a file name longer
-# than the filesystem allows.
+# carrying the OS's message and the error number: a file name longer than the
+# filesystem allows. The message's wording is the system's (and its language),
+# so the test reads its shape: some text, then "(os error N)". Windows names
+# this failure, so its arm is `invalidpath` there, with the same payload.
+
+# shape -- "a message, (os error N)" for "<text> (os error N)"
+shape: function {text: StringView} out String is {
+    at: text.lastIndexOf needle: " (os error "
+    match (
+        at
+    ) case some then {
+        s: String
+        if at > 0 then s.append "a message, " else s.append "no message, "
+        s.append (text.substring from: at + 1 to: text.length)
+        return s
+    } case none then return "no os error number"
+}
 
 main: function is {
     name: "n".repeated n: 300
@@ -8,6 +23,12 @@ main: function is {
     match (
         r
     ) case ok then print "opened a 300-byte name" case err then {
-        match (r) case other then print "other: \{r}" else print "another error"
+        match (
+            r
+        ) case other then {
+            print "other: \{shape text: r.stringView}"
+        } case invalidpath then {
+            print "invalidpath: \{shape text: r.stringView}"
+        } else print "another error"
     }
 }

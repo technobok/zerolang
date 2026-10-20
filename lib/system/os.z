@@ -46,8 +46,9 @@ envNames: function out List String is native
 cwd: function out (Result String E: IoError) is native
 
 # exePath -- absolute path of the running executable (Linux reads
-# /proc/self/exe; macOS uses _NSGetExecutablePath). Lets a program
-# locate its own install tree. Errors only if reading the link fails.
+# /proc/self/exe; macOS uses _NSGetExecutablePath; Windows
+# GetModuleFileNameW, a native path). Lets a program locate its own install
+# tree. Errors only if reading the link fails.
 exePath: function out (Result String E: IoError) is native
 
 # setCwd -- chdir to `path`. Affects subsequent relative-path io
@@ -136,19 +137,32 @@ waitAny: function {
 # No-op on pid <= 0.
 kill: function {pid: i32} is native
 
-# sleepMillis -- suspend the calling process for `ms` milliseconds.
+# sleepMillis -- suspend the calling thread for `ms` milliseconds.
 sleepMillis: function {ms: i64} is native
 
 # userName -- login name of the effective user, resolved via the
-# passwd database (getpwuid_r(geteuid())). Errors when the uid has
-# no passwd entry or the database is unreadable.
+# passwd database (getpwuid_r(geteuid())), or on Windows the account the
+# process runs as (GetUserNameW). Errors when the uid has no passwd entry
+# or the database is unreadable.
 userName: function out (Result String E: IoError) is native
 
-# homeDir -- the effective user's home directory. Reads $HOME from
-# the environment; errors with `IoError.other` when it is unset.
-# Does not fall back to the passwd database — set $HOME explicitly
-# if you need portable behavior across stripped environments.
+# homeDir -- the effective user's home directory. Reads $HOME from the
+# environment (%USERPROFILE% on Windows); errors with `IoError.other` when it
+# is unset. Does not fall back to the passwd database — set the variable
+# explicitly if you need portable behavior across stripped environments.
 homeDir: function out (Result String E: IoError) is native
+
+# tempDir -- the directory for temporary files: $TMPDIR, else /tmp; on
+# Windows GetTempPathW's (%TMP%, %TEMP%, %USERPROFILE%, else the Windows
+# directory), a native path. Never ends in a separator but at a root.
+tempDir: function out String is native
+
+# nullDevice -- the device that discards what is written to it and reads as
+# empty: "/dev/null", or "NUL" on Windows
+nullDevice: function out String is {
+    if z.build.os == z.build.oskind.windows then return "NUL"
+    return "/dev/null"
+}
 
 # hostOsName -- the OS family this binary was compiled for, as one of
 # "linux" / "darwin" / "windows" / "other". A NAME rather than a variant so
@@ -176,8 +190,9 @@ buildDate: function out String is native
 # compiler's own predefined macros, not from the build.
 buildCompiler: function out String is native
 
-# hostname -- result of `gethostname(2)`, truncated at HOST_NAME_MAX.
-# Result-wrapped because the syscall can fail in rare cases.
+# hostname -- result of `gethostname(2)`, truncated at HOST_NAME_MAX; on
+# Windows the DNS host name (GetComputerNameExW). Result-wrapped because the
+# syscall can fail in rare cases.
 hostname: function out (Result String E: IoError) is native
 
 # exit -- terminate the process immediately with `code` as the

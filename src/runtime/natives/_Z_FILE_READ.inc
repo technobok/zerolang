@@ -13,12 +13,17 @@ static z_@ResultVR_u64_IoError@_t z_@File@_read(
         buf->data = (uint8_t*)z_xrealloc(buf->data, newcap);
         buf->capacity = newcap;
     }
-    long n;
+    int64_t n;
+#if defined(_WIN32)
+    n = z_win_read(f->@MEMBER_File.fd@, buf->data + buf->length, max);
+    if (n < 0) return z_io_u64_err((int)GetLastError());
+#else
     for (;;) {
         n = read(f->@MEMBER_File.fd@, buf->data + buf->length, max);
         if (n >= 0) break;
         if (errno != EINTR) return z_io_u64_err(errno);
     }
+#endif
     buf->length += (uint64_t)n;
     return z_io_u64_ok((uint64_t)n);
 }

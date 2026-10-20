@@ -1,5 +1,5 @@
-/* file.seek — reposition the fd head. Maps seekorigin to the
-   matching POSIX whence constant. Returns the new absolute
+/* file.seek — reposition the fd head, 64-bit on every system. Maps
+   seekorigin to the matching whence constant. Returns the new absolute
    position measured from the start of the file. */
 static z_@ResultVR_u64_IoError@_t z_@File@_seek(
     z_@File@_t* f, int64_t off, z_@seekorigin@_t origin
@@ -14,8 +14,13 @@ static z_@ResultVR_u64_IoError@_t z_@File@_seek(
         case @ARM_seekorigin.end@:     whence = SEEK_END; break;
         default:                       whence = SEEK_SET; break;
     }
+#if defined(_WIN32)
+    int64_t pos = z_win_seek(f->@MEMBER_File.fd@, off, whence);
+    if (pos < 0) return z_io_u64_err((int)GetLastError());
+#else
     off_t pos = lseek(f->@MEMBER_File.fd@, (off_t)off, whence);
     if (pos < 0) return z_io_u64_err(errno);
+#endif
     return z_io_u64_ok((uint64_t)pos);
 }
 

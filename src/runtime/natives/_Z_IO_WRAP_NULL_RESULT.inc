@@ -6,7 +6,7 @@ static z_@Result_null_IoError@_t z_io_wrap_null_Result(int rc, int saved_errno) 
         return result;
     }
     z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
-    *boxed = z_io_errno_to_IoError(saved_errno);
+    *boxed = z_io_os_error(saved_errno);
     result.tag = @ARM_Result_null_IoError.err@;
     result.data = boxed;
     return result;

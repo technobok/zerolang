@@ -2,6 +2,10 @@
 #define _DEFAULT_SOURCE
 /* rand_s (the hash seed on Windows) is declared only under this */
 #define _CRT_RAND_S
+/* windows.h, wherever a fragment includes it, without winsock 1 (net includes
+   winsock2.h) or the min/max macros */
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
 
 #include <stdio.h>
 #include <stdint.h>
@@ -78,6 +82,76 @@ extern int ilogbq(__float128 x);
 #include <sys/syscall.h>
 #else
 #include <io.h>
+#include <windows.h>
 #endif
 #include <signal.h>
+
+#if defined(_WIN32)
+/* z_win_console -- a write to a standard stream that is a console goes as
+   UTF-16 (WriteConsoleW): the console shows non-ASCII text that way whatever
+   its code page, where UTF-8 bytes would be read in that code page. A stream
+   that is a pipe or a file gets the bytes as written, by the caller. A UTF-8
+   sequence a write splits is held until the stream's next write completes
+   it; a byte no sequence explains shows as U+FFFD. */
+static int z_win_console_kind[3] = { -1, -1, -1 };
+static unsigned char z_win_console_held[3][4];
+static int z_win_console_nheld[3];
+
+/* 1 when fd 1 or 2 is a console */
+static int z_win_is_console(int fd) {
+    if (fd < 1 || fd > 2) return 0;
+    if (z_win_console_kind[fd] < 0) {
+        DWORD mode;
+        HANDLE h = GetStdHandle(fd == 1 ? STD_OUTPUT_HANDLE : STD_ERROR_HANDLE);
+        z_win_console_kind[fd] = (h != NULL && h != INVALID_HANDLE_VALUE && GetConsoleMode(h, &mode)) ? 1 : 0;
+    }
+    return z_win_console_kind[fd];
+}
+
+/* the bytes at the end of buf that begin a UTF-8 sequence not yet complete */
+static size_t z_win_utf8_tail(const char* buf, size_t n) {
+    for (size_t i = 1; i <= 3 && i <= n; i++) {
+        unsigned char c = (unsigned char)buf[n - i];
+        if ((c & 0xC0) == 0x80) continue;
+        if (c < 0xC0) return 0;
+        size_t need = c >= 0xF0 ? 4 : (c >= 0xE0 ? 3 : 2);
+        return need > i ? i : 0;
+    }
+    return 0;
+}
+
+/* write n bytes, and a line break when `nl`, to console fd as UTF-16; 0 when
+   fd is not a console, so the caller writes the bytes itself */
+static int z_win_console_write(int fd, const char* s, size_t n, int nl) {
+    if (!z_win_is_console(fd)) return 0;
+    fflush(fd == 1 ? stdout : stderr);
+    HANDLE h = GetStdHandle(fd == 1 ? STD_OUTPUT_HANDLE : STD_ERROR_HANDLE);
+    char buf[4096 + 8];
+    wchar_t wbuf[4096 + 8];
+    size_t at = 0;
+    do {
+        size_t bn = 0;
+        for (int k = 0; k < z_win_console_nheld[fd]; k++) buf[bn++] = (char)z_win_console_held[fd][k];
+        z_win_console_nheld[fd] = 0;
+        size_t take = n - at > 4096 ? 4096 : n - at;
+        if (take > 0) memcpy(buf + bn, s + at, take);
+        bn += take;
+        at += take;
+        int last = at == n;
+        if (last && nl) buf[bn++] = '\n';
+        size_t keep = (last && nl) ? 0 : z_win_utf8_tail(buf, bn);
+        if (keep > 0) {
+            memcpy(z_win_console_held[fd], buf + bn - keep, keep);
+            z_win_console_nheld[fd] = (int)keep;
+            bn -= keep;
+        }
+        if (bn > 0) {
+            int wn = MultiByteToWideChar(CP_UTF8, 0, buf, (int)bn, wbuf, 4096 + 8);
+            DWORD put = 0;
+            if (wn > 0) WriteConsoleW(h, wbuf, (DWORD)wn, &put, NULL);
+        }
+    } while (at < n);
+    return 1;
+}
+#endif
 
