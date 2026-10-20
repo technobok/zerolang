@@ -1,0 +1,53 @@
+# class_row_take_return.z -- a runtime-owned class (a `.@class` row: Listener,
+# Child) handed out of its Result by `return r.take` keeps what it holds: the
+# Result left behind releases nothing, and the caller's value is the one that
+# closes the socket or the process handle. Such a class is live through its
+# row's `live=` canons; the functions are written before the code body, so
+# that liveness must already be known when they are.
+
+listenOn: function {port: u16} out net.Listener is {
+    r: net.listen :port
+    match (r) case ok then return r.take case err then panic msg: "listen failed"
+}
+
+# start -- this program again, as a child that sleeps until it is killed
+start: function {me: StringView} out os.Child is {
+    discard: os.nullDevice
+    xs: List String
+    xs.append me.string
+    xs.append "sleep".string
+    s: (os.spawnAsync
+        argv: xs
+        cwd: ""
+        outPath: discard.stringView
+        errPath: discard.stringView
+    )
+    match (s) case ok then return s.take case err then panic msg: "spawnAsync failed"
+}
+
+main: function is {
+    args: os.args
+    if args.length > 1 then {
+        os.sleepMillis ms: 5000
+        os.exit code: 0
+    }
+    l: listenOn port: 49335
+    c: net.connect port: 49335
+    match (c) case ok then print "connected" case err then print "connect failed"
+    a: l.accept
+    match (a) case ok then print "accepted" case err then print "accept failed"
+    meR: os.exePath
+    match (
+        meR
+    ) case ok then {
+        children: List os.Child
+        children.append from: (start me: meR.stringView)
+        (children.getMut i: 0).kill
+        r: os.waitAny :children
+        for r.pid == 0 loop {
+            os.sleepMillis ms: 5
+            r = os.waitAny :children
+        }
+        print "killed: \{r.status}"
+    } case err then print "no exePath"
+}
