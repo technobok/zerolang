@@ -372,8 +372,7 @@ windows-guest:
 	  timeout 300 $$d/shim-$$v.exe > $$d/shim-$$v.log 2>&1 && grep -q "zthread shim OK" $$d/shim-$$v.log \
 	    || { echo "windows-guest FAIL: the shim test under $$v"; tail -10 $$d/shim-$$v.log; fail=1; }; \
 	done; \
-	n=0; pass=0; : > $$d/guest-fails.txt; nl=' \
-	'; \
+	n=0; pass=0; : > $$d/guest-fails.txt; nl=$$(printf '\nx'); nl=$${nl%x}; \
 	while read -r name dir rest; do \
 	  [ -n "$$name" ] || continue; \
 	  if [ "$$rest" = posix ]; then echo "$$name (posix)" >> $$d/guest-fails.txt; continue; fi; \
