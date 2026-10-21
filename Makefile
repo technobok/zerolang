@@ -1911,19 +1911,20 @@ vimset() {
     | sed 's/\\<//g; s/\\>//g; s/\\%(//g; s/)$$//' | tr '|' '\n' | sed 's/\\//g' \
     | grep -v '^ *$$' | tr -d ' ' | sort -u
 }
+# Python on Windows ends each printed line with \r\n; tr keeps the sets comparable.
 jsset() {
   python3 -c "
 import re,sys
 s=open('docs/style/prism-zerolang.js', encoding='utf-8').read()
 m=re.search(r'var '+sys.argv[1]+r' = \[(.*?)\];',s,re.S)
-print('\n'.join(sorted(set(re.findall(r\"'([^']*)'\",m.group(1))))))" "$$1"
+print('\n'.join(sorted(set(re.findall(r\"'([^']*)'\",m.group(1))))))" "$$1" | tr -d '\r'
 }
 rbset() {
   python3 -c "
 import re,sys
 s=open('editor/rouge/zerolang.rb', encoding='utf-8').read()
 m=re.search(r'def self\.'+sys.argv[1]+r'\b.*?%w\((.*?)\)',s,re.S)
-print('\n'.join(sorted(set(m.group(1).split()))))" "$$1"
+print('\n'.join(sorted(set(m.group(1).split()))))" "$$1" | tr -d '\r'
 }
 
 grep -oE '^[A-Za-z_][A-Za-z0-9_]*:' lib/system/core.z | sed 's/:$$//' | sort -u > "$$D/core"
