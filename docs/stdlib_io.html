@@ -204,11 +204,17 @@ calls (UTF-16 Win32, never the C runtime's ANSI ones). Where Windows differs:</p
 <ul>
 <li><strong>Paths.</strong> A path may use <code>/</code> or <code>\</code> and may be a drive
 (<code>C:\x</code>), a share (<code>\\server\share\x</code>) or verbatim
-(<code>\\?\C:\x</code>). An absolute path too long for <code>MAX_PATH</code> is
-given the <code>\\?\</code> prefix inside the runtime, so long paths work.
+(<code>\\?\C:\x</code>). A path too long for <code>MAX_PATH</code>, relative or
+absolute, is made absolute and given the <code>\\?\</code> prefix
+(<code>\\?\UNC\</code> for a share) inside the runtime, so long paths work.
 Paths the runtime hands back are native: <code>readlink</code> returns the
 target as stored</li>
-<li><strong>Handles.</strong> Every file opens binary and is never inherited by a
+<li><strong>Console.</strong> A standard stream that is a console is written as
+UTF-16 (<code>WriteConsoleW</code>), so non-ASCII text shows correctly whatever
+the console's code page; a stream that is a pipe or a file gets the
+UTF-8 bytes as written</li>
+<li><strong>Handles.</strong> A <code>File</code> holds a C runtime file descriptor over a
+Win32 handle. Every file opens binary and is never inherited by a
 child; a file stays open for others to read, write, rename or delete
 while it is open, as on POSIX. Seeks are 64-bit</li>
 <li><strong>Errors.</strong> The OS error code is a Win32 one, and <code>other</code> and
@@ -406,7 +412,8 @@ type-check stage by the standard ownership rules.</p>
 position measured from the start.</p>
 <p>Implementors: <code>File</code>.</p>
 <h2 id="file"><a href="#file">13. file</a></h2>
-<p>An open OS file handle. Wraps a POSIX file descriptor.
+<p>An open OS file handle. Wraps a file descriptor (on Windows, the C runtime's
+over a Win32 handle).
 Single-owner: scope exit runs the destructor, which closes the
 fd while <code>open</code> is true -- not after an explicit <code>.close</code>,
 and not in a File whose value moved out.</p>
@@ -459,8 +466,8 @@ The returned file owns its fd.</p>
       } else null
   }</code></pre>
 <h2 id="standard-streams"><a href="#standard-streams">15. Standard streams</a></h2>
-<p>Borrowed protocol handles over the three static POSIX fds (0 /
-1 / 2). Each call returns a fresh handle but the underlying fd
+<p>Borrowed protocol handles over the three standard streams (file
+descriptors 0 / 1 / 2). Each call returns a fresh handle but the underlying fd
 is shared; there is no RAII close -- scope exit does nothing to
 the fd.</p>
 <pre><code class="language-zerolang">  w: io.stdout

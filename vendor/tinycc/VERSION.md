@@ -61,7 +61,7 @@ Linux build is upstream's.
   nothing defined (`__umulh`, `__mulh`, `_umul128`, `_mul128`,
   `__shiftleft128`, `__shiftright128`): `win32/lib/winex.c` defines them in
   plain C, so a program using one (SQLite on `_WIN64`) links.
-- **`fabs` of -0.0** (an upstream bug, offered upstream):
+- **`fabs` of -0.0** (an upstream bug):
   `win32/include/tcc/tcc_libm.h` overrides `fabs`/`fabsf`/`fabsl` as
   `x < 0 ? -x : x`, which leaves -0.0 negative; they clear the sign bit.
 

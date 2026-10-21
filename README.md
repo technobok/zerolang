@@ -153,15 +153,17 @@ make test-bootstrap    # rebuild the compiler from the seed, check the fixpoint
                        #   (BOOTSTRAP_CCS="gcc clang out/tcc" for all three)
 ```
 
-Windows is tested three ways: `make test-mingw` (the run corpus built by
-mingw-w64, run under wine; `sudo apt install gcc-mingw-w64-x86-64 wine`) and
-`make test-msvc-wine` (MSVC itself under wine) are part of `make ci` and skip
-without their tools; `make ci-windows` runs the Windows legs on a real Windows
-machine, such as the VM `tools/windows/winvm.sh` builds, ending with zc, zl and
-zls built there natively (MSYS2 make, UCRT64 gcc) and `make test` run with them.
-Setting each one up
-from scratch, and what to do when one reports something missing, is in
-[tools/windows/README.md](tools/windows/README.md).
+Windows is tested four ways. `make test-mingw` (the run corpus built by
+mingw-w64, run under wine; `sudo apt install gcc-mingw-w64-x86-64 wine`),
+`make test-tcc-mingw` (the same corpus built by the vendored tcc for Windows,
+under wine) and `make test-msvc-wine` (MSVC itself under wine) are part of
+`make ci` and skip without their tools. `make ci-windows` runs the Windows legs
+on a real Windows machine, such as the VM `tools/windows/winvm.sh` builds: every
+corpus binary natively, a console, drive and long paths, then zc, zl and zls
+built there natively (MSYS2 make, UCRT64 gcc) passing `make test`, and the
+vendored tcc built there passing `make test-tcc` in both of its modes. Setting
+each one up from scratch, and what to do when one reports something missing, is
+in [tools/windows/README.md](tools/windows/README.md).
 
 ### Write and run a program
 
@@ -263,10 +265,12 @@ file names the source file and commit it came from.
 | [mimalloc](vendor/mimalloc) | MIT | statically, into the driver binaries; `make MIMALLOC=0` builds without it |
 | [Go math/big](lib/system/math/LICENSE-GO), ported to `lib/system/math/` | BSD-3-Clause | compiled into programs that reach `math` |
 | [SQLite](vendor/sqlite) | public domain | statically, into programs that reach `sqlite`; `zc` compiles it on demand into its object cache |
-| [tinycc](vendor/tinycc) | LGPL-2.1 | never. `zc` reaches `libtcc.so` through `dlopen` only, so no binary here is a combined work; `make static-tcc-guard` fails the build if a libtcc symbol appears in one |
+| [tinycc](vendor/tinycc) | LGPL-2.1 | never. `zc` reaches libtcc only at run time, `libtcc.so` through `dlopen` and on Windows `libtcc.dll` through `LoadLibraryW`, so no binary here is a combined work; `make static-tcc-guard` fails the build if a libtcc symbol appears in one |
 
 These licenses govern those components, not the rest of the project.
 
-`bin/tcc` and `lib/tcc/` in an installed tree are tinycc itself, unmodified and
-under its own license; `make install` places them, and `zc --cc tcc` invokes
+`bin/tcc` and `lib/tcc/` in an installed tree are tinycc, under its own
+license: upstream at the pinned commit, with the local patches listed in
+[vendor/tinycc/VERSION.md](vendor/tinycc/VERSION.md) (all for Windows), whose
+sources are in the tree. `make install` places them, and `zc --cc tcc` invokes
 them the way it would any other C compiler on the system.

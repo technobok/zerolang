@@ -85,11 +85,17 @@ calls (UTF-16 Win32, never the C runtime's ANSI ones). Where Windows differs:
 #ul:
   [#*: #b:"Paths." A path may use #~"/" or #~"\\" and may be a drive
     (#~"C:\\x"), a share (#~"\\\\server\\share\\x") or verbatim
-    (#~"\\\\?\\C:\\x"). An absolute path too long for #~"MAX_PATH" is
-    given the #~"\\\\?\\" prefix inside the runtime, so long paths work.
+    (#~"\\\\?\\C:\\x"). A path too long for #~"MAX_PATH", relative or
+    absolute, is made absolute and given the #~"\\\\?\\" prefix
+    (#~"\\\\?\\UNC\\" for a share) inside the runtime, so long paths work.
     Paths the runtime hands back are native: #~"readlink" returns the
     target as stored]
-  [#*: #b:"Handles." Every file opens binary and is never inherited by a
+  [#*: #b:"Console." A standard stream that is a console is written as
+    UTF-16 (#~"WriteConsoleW"), so non-ASCII text shows correctly whatever
+    the console's code page; a stream that is a pipe or a file gets the
+    UTF-8 bytes as written]
+  [#*: #b:"Handles." A #~"File" holds a C runtime file descriptor over a
+    Win32 handle. Every file opens binary and is never inherited by a
     child; a file stays open for others to read, write, rename or delete
     while it is open, as on POSIX. Seeks are 64-bit]
   [#*: #b:"Errors." The OS error code is a Win32 one, and #~"other" and
@@ -347,7 +353,8 @@ Implementors: #~"File".
 #--: file
 
 
-An open OS file handle. Wraps a POSIX file descriptor.
+An open OS file handle. Wraps a file descriptor (on Windows, the C runtime's
+over a Win32 handle).
 Single-owner: scope exit runs the destructor, which closes the
 fd while #~"open" is true -- not after an explicit #~".close",
 and not in a File whose value moved out.
@@ -420,8 +427,8 @@ The returned file owns its fd.
 #--: Standard streams
 
 
-Borrowed protocol handles over the three static POSIX fds (0 /
-1 / 2). Each call returns a fresh handle but the underlying fd
+Borrowed protocol handles over the three standard streams (file
+descriptors 0 / 1 / 2). Each call returns a fresh handle but the underlying fd
 is shared; there is no RAII close -- scope exit does nothing to
 the fd.
 
