@@ -2,16 +2,19 @@ CC       := gcc
 # Windows (MSYS2 make, UCRT64 gcc) is told apart by the OS variable Windows sets
 # for every process. There the drivers link everything statically, as zc links
 # a program built for Windows, so bin/zc.exe runs with no DLL beside it; and
-# they need no pthread (the thread shim is native Win32 there).
+# they need no pthread (the thread shim is native Win32 there) and no libm (the
+# C runtime holds the math functions; tcc has no libm to name).
 ifeq ($(OS),Windows_NT)
 WINDOWS_HOST := 1
 DRIVERLINK   := -static
 THREADLIB    :=
+LIBM         :=
 EXE          := .exe
 else
 WINDOWS_HOST :=
 DRIVERLINK   :=
 THREADLIB    := -lpthread
+LIBM         := -lm
 EXE          :=
 endif
 # the gcc spelling of the discarded-qualifiers error; clang names it differently.
@@ -913,13 +916,16 @@ CI_BOOTSTRAP_CCS ?= $(CC) clang $(BUILDDIR)/tcc
 # test-bootstrap -- per compiler: cc the seed, bootstrap twice and require the
 # fixpoint (b2 == b3), and check a seed-built zc compiles the ztypes smoke to its
 # golden. Then across compilers: b1 must be byte-identical whichever compiler
-# built the zc that emitted it. tcc gets -B and none of the -Werror pins.
+# built the zc that emitted it. tcc gets -B and none of the -Werror pins. On
+# Windows each build links as the drivers do (DRIVERLINK; tcc cannot link
+# statically), and the seed without its zlink set, which is the one of the
+# system it was emitted on.
 test-bootstrap:
 	@mkdir -p $(BUILDDIR)
 	@set -e; \
 	for cc in $(BOOTSTRAP_CCS); do \
 	  tag=$$(basename $$cc); \
-	  case "$$cc" in *tcc*) f="-B $(TCCLIB)";; *) f="$(CFLAGS)";; esac; \
+	  case "$$cc" in *tcc*) f="-B $(TCCLIB)"; l="";; *) f="$(CFLAGS)"; l="$(DRIVERLINK)";; esac; \
 	  if ! command -v $$cc >/dev/null 2>&1 && [ ! -x $$cc ]; then \
 	    echo "test-bootstrap FAIL: '$$cc' is not available"; \
 	    echo "  BOOTSTRAP_CCS names the toolchains this claim is proved against, so a"; \
@@ -928,11 +934,11 @@ test-bootstrap:
 	    exit 1; \
 	  fi; \
 	  echo "== bootstrap chain: $$cc =="; \
-	  $$cc $$f -o $(BUILDDIR)/zc-seed-$$tag bootstrap/zc.c $(call ZLINKOF,bootstrap/zc.c) -lm; \
+	  $$cc $$f -o $(BUILDDIR)/zc-seed-$$tag bootstrap/zc.c $(if $(WINDOWS_HOST),$$l,$(call ZLINKOF,bootstrap/zc.c)) $(LIBM); \
 	  $(BUILDDIR)/zc-seed-$$tag zc --src src --system lib/system --emit-c $(BUILDDIR)/b1-$$tag.c; \
-	  $$cc $$f -o $(BUILDDIR)/zc-b1-$$tag $(BUILDDIR)/b1-$$tag.c $(call ZLINKOF,$(BUILDDIR)/b1-$$tag.c) -lm; \
+	  $$cc $$f $$l -o $(BUILDDIR)/zc-b1-$$tag $(BUILDDIR)/b1-$$tag.c $(call ZLINKOF,$(BUILDDIR)/b1-$$tag.c) $(LIBM); \
 	  $(BUILDDIR)/zc-b1-$$tag zc --src src --system lib/system --emit-c $(BUILDDIR)/b2-$$tag.c; \
-	  $$cc $$f -o $(BUILDDIR)/zc-b2-$$tag $(BUILDDIR)/b2-$$tag.c $(call ZLINKOF,$(BUILDDIR)/b2-$$tag.c) -lm; \
+	  $$cc $$f $$l -o $(BUILDDIR)/zc-b2-$$tag $(BUILDDIR)/b2-$$tag.c $(call ZLINKOF,$(BUILDDIR)/b2-$$tag.c) $(LIBM); \
 	  $(BUILDDIR)/zc-b2-$$tag zc --src src --system lib/system --emit-c $(BUILDDIR)/b3-$$tag.c; \
 	  if cmp -s $(BUILDDIR)/b2-$$tag.c $(BUILDDIR)/b3-$$tag.c; then \
 	    echo "  fixpoint OK (b2 == b3) under $$tag"; \
@@ -941,7 +947,7 @@ test-bootstrap:
 	    diff $(BUILDDIR)/b2-$$tag.c $(BUILDDIR)/b3-$$tag.c | head -6; exit 1; \
 	  fi; \
 	  $(BUILDDIR)/zc-b1-$$tag ztypes_smoke --src tests/unit --src src --system lib/system --emit-c $(BUILDDIR)/zt-$$tag.c; \
-	  $$cc $$f -o $(BUILDDIR)/zt-$$tag $(BUILDDIR)/zt-$$tag.c $(call ZLINKOF,$(BUILDDIR)/zt-$$tag.c) -lm; \
+	  $$cc $$f $$l -o $(BUILDDIR)/zt-$$tag $(BUILDDIR)/zt-$$tag.c $(call ZLINKOF,$(BUILDDIR)/zt-$$tag.c) $(LIBM); \
 	  $(BUILDDIR)/zt-$$tag | diff - tests/fixtures/ztypes_smoke_z/smoke.expected; \
 	  echo "  correctness OK (seed-built zc compiles the ztypes smoke to golden) under $$tag"; \
 	done
