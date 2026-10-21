@@ -25,12 +25,6 @@ static z_@String@_t z_@String@_cat(z_@String@_t* a, z_@String@_t* b) {
     return z;
 }
 
-static z_@String@_t z_@String@_from_i64(int64_t n) {
-    char buf[32];
-    snprintf(buf, sizeof(buf), "%ld", (long)n);
-    return z_@String@_new(buf);
-}
-
 static z_@String@_t z_@String@_from_f64(double n) {
     char buf[64];
     snprintf(buf, sizeof(buf), "%g", n);

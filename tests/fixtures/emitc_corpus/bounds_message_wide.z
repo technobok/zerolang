@@ -1,0 +1,65 @@
+# bounds_message_wide.z -- a bounds panic names an index past 32 bits whole.
+# Each check runs in a child (this program again, given the check's name)
+# that panics; the parent prints the child's exit code and the message it
+# wrote. On Windows a C `long` is 32 bits, so a message printed through one
+# showed 5000000000 as 705032704.
+
+codes: data { 10 20 30 } out intdata u8
+
+child: function {what: StringView} is {
+    far: 5000000000.u64
+    xs: ListVal i64
+    xs.append from: 1
+    xs.append from: 2
+    xs.append from: 3
+    if what == "get" then print "\{xs.get i: far}"
+    if what == "set" then print "\{xs.set i: far val: 9}"
+    if what == "insert" then xs.insert from: 9 at: far
+    if what == "slice" then {
+        v: xs.slice from: 1 to: far
+        print "\{v.length}"
+    }
+    if what == "data" then print "\{codes.get i: far}"
+}
+
+# check -- run the child for `what` and print its exit code and message
+check: function {me: StringView errPath: StringView what: StringView} is {
+    av: (List String)
+    av.append from: me.string
+    av.append from: what.string
+    code: (os.spawn
+        argv: av
+        cwd: ""
+        outPath: os.nullDevice.stringView
+        :errPath
+        timeoutSecs: 0
+    )
+    got: io.readText path: errPath
+    match (
+        got
+    ) case ok then {
+        print "\{what}: exit \{code}: \{got.stringView.trimEnd}"
+    } case err then print "\{what}: exit \{code}: no stderr"
+}
+
+main: function is {
+    args: os.args
+    if args.length > 1 then {
+        child what: (args.get i: 1).stringView
+        os.exit code: 0
+    }
+    me: os.exePath
+    match (
+        me
+    ) case ok then {
+        tmp: os.tempDir
+        errName: "zbounds_\{os.pid}.err"
+        errPath: path.join a: tmp.stringView b: errName.stringView
+        check me: me.stringView errPath: errPath.stringView what: "get"
+        check me: me.stringView errPath: errPath.stringView what: "set"
+        check me: me.stringView errPath: errPath.stringView what: "insert"
+        check me: me.stringView errPath: errPath.stringView what: "slice"
+        check me: me.stringView errPath: errPath.stringView what: "data"
+        io.remove path: errPath.stringView
+    } case err then print "no exePath"
+}

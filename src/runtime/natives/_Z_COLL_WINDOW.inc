@@ -4,7 +4,7 @@ static void z_coll_window_check(uint64_t _from, uint64_t _to, uint64_t _len, con
 static void z_coll_window_check(uint64_t _from, uint64_t _to, uint64_t _len, const char* _who) {
     if (_from > _to || _to > _len) {
         char _zp_buf[160];
-        snprintf(_zp_buf, sizeof(_zp_buf), "%s: [%lu, %lu) out of bounds (length %lu)", _who, (unsigned long)_from, (unsigned long)_to, (unsigned long)_len);
+        snprintf(_zp_buf, sizeof(_zp_buf), "%s: [%llu, %llu) out of bounds (length %llu)", _who, (unsigned long long)_from, (unsigned long long)_to, (unsigned long long)_len);
         z_panic(_zp_buf);
     }
 }
