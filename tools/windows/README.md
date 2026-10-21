@@ -181,7 +181,7 @@ perf-strict`). Set `ZLWIN_BUSY_FILE` to a lock file your benchmark holds, and
 | `ZLWIN_STATE` | `~/.local/state/zerolang-winvm` | password, ssh key, known_hosts, ssh config |
 | `ZLWIN_IP`, `ZLWIN_MAC` | `192.168.122.50`, `52:54:00:5a:4c:01` | on libvirt's default network |
 | `ZLWIN_VCPUS`, `ZLWIN_MEMORY_GIB`, `ZLWIN_DISK_GB` | `8`, `8`, `120` | |
-| `ZLWIN_TIMEZONE` | `UTC` | a Windows zone name, e.g. `Pacific Standard Time` |
+| `ZLWIN_TIMEZONE` | `UTC` | a Windows zone name, e.g. `Pacific Standard Time` (the virtual hardware clock is UTC whatever the zone; a golden built before RealTimeIsUniversal was set needs `golden --force` for a zone other than UTC) |
 | `ZLWIN_BUSY_FILE` | none | `up`/`golden` refuse while this file exists |
 
 ### Another Windows machine instead of the VM

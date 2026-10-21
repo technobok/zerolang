@@ -71,6 +71,8 @@ Step 'power, updates, defender, smartscreen, telemetry' {
     $dc = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection'
     New-Item -Force $dc | Out-Null
     Set-ItemProperty $dc AllowTelemetry 1
+    # the domain's clock is UTC (win11.xml.in), whatever ZLWIN_TIMEZONE says
+    Set-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\TimeZoneInformation' RealTimeIsUniversal 1 -Type DWord
 }
 
 Step 'remove bundled apps' {
