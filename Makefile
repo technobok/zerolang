@@ -7,10 +7,12 @@ ifeq ($(OS),Windows_NT)
 WINDOWS_HOST := 1
 DRIVERLINK   := -static
 THREADLIB    :=
+EXE          := .exe
 else
 WINDOWS_HOST :=
 DRIVERLINK   :=
 THREADLIB    := -lpthread
+EXE          :=
 endif
 # the gcc spelling of the discarded-qualifiers error; clang names it differently.
 QUALWERR := $(if $(findstring clang,$(shell $(CC) --version 2>/dev/null | head -1)),-Werror=incompatible-pointer-types-discards-qualifiers,-Werror=discarded-qualifiers)
@@ -400,8 +402,16 @@ windows-guest:
 	    || { echo "windows-guest FAIL: make test with the native tools"; grep -E '^(FAIL|CORPUS)' $$d/native-test.log | head -20; fail=1; }; \
 	  nat=$$(grep -E '^pass=' $$d/native-test.log | tail -1); \
 	else echo "windows-guest FAIL: zc, zl, zls and the runner did not build natively"; tail -10 $$d/native-build.log; fail=1; fi; \
+	tcc=""; \
+	if $(MAKE) --no-print-directory tcc > $$d/native-tcc-build.log 2>&1; then \
+	  $(MAKE) --no-print-directory test-tcc > $$d/native-tcc-test.log 2>&1 \
+	    || { echo "windows-guest FAIL: make test-tcc with the native tcc"; tail -20 $$d/native-tcc-test.log; fail=1; }; \
+	  $(MAKE) --no-print-directory mode-parity cobj-guard > $$d/native-tcc-inproc.log 2>&1 \
+	    || { echo "windows-guest FAIL: the in-process tcc (mode-parity, cobj-guard)"; grep -E 'FAIL' $$d/native-tcc-inproc.log | head -20; fail=1; }; \
+	  tcc=$$(grep -E '^test-tcc' $$d/native-tcc-test.log | tail -1); \
+	else echo "windows-guest FAIL: the vendored tcc did not build natively"; tail -10 $$d/native-tcc-build.log; fail=1; fi; \
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
-	echo "windows-guest OK: the thread shim under MSVC and UCRT64 gcc; $$pass of $$n run-corpus binaries match their goldens on Windows, the rest as under wine; natively built zc, zl and zls pass make test ($$nat)"
+	echo "windows-guest OK: the thread shim under MSVC and UCRT64 gcc; $$pass of $$n run-corpus binaries match their goldens on Windows, the rest as under wine; natively built zc, zl and zls pass make test ($$nat); the native tcc: $$tcc, and its in-process mode matches spawn"
 
 # windows-due -- one line saying make ci-windows is due, nothing when it is not:
 # it has never passed, or its last green run ($(WINDOWS_VERIFIED)) is
@@ -529,16 +539,18 @@ TCC_RUN_DEPS := bin/zc bin/zl $(BUILDDIR)/tcc $(BUILDDIR)/ztestrunner
 
 # test-tcc -- the corpus under the vendored tcc, as a backend (--cc-forward), so
 # units tcc cannot build are refused by name. tests/tcc-known-failures.txt is
-# the expected failure set; a move either way fails.
-TCC_KNOWN := tests/tcc-known-failures.txt
+# the expected failure set; a move either way fails. On Windows (the native tcc,
+# in the VM's windows-guest) it is the Windows list test-tcc-mingw keeps, whose
+# `(posix)` cases the runner lists rather than runs.
+TCC_KNOWN := $(if $(WINDOWS_HOST),tests/tcc-mingw-known-failures.txt,tests/tcc-known-failures.txt)
 # empty for the fast tier; test-tcc-heavy overrides it.
 TCC_TIER ?=
 
 test-tcc: $(TCC_RUN_DEPS)
-	@$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(BUILDDIR)/tcc --cc-forward \
+	@$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(BUILDDIR)/tcc$(EXE) --cc-forward \
 	   --ccflags "-B $(TCCLIB)" --root . $(TCC_TIER) --jobs $(NPROC) \
 	   > $(BUILDDIR)/tcc-run.log 2>&1; \
-	awk '/^FAIL/ { k = $$1; sub(/^FAIL\(/, "", k); sub(/\)$$/, "", k); \
+	awk '/^FAIL/ || /^SKIP\(run\) .* \(posix\)$$/ { k = $$1; sub(/^FAIL\(/, "", k); sub(/\)$$/, "", k); \
 	       print $$2, (NF >= 3 ? $$3 : "(" k ")") }' $(BUILDDIR)/tcc-run.log \
 	  | sort > $(BUILDDIR)/tcc-fails.txt; \
 	grep -v '^#' $(TCC_KNOWN) | grep -v '^ *$$' | sort > $(BUILDDIR)/tcc-known.txt; \
@@ -629,22 +641,46 @@ $(BUILDDIR)/mimalloc.o: vendor/mimalloc/src/static.c vendor/mimalloc/zc_tune.c $
 # from a staged copy. GITHASH=no keeps our git state out of `tcc -v`;
 # CPPFLAGS=-fPIC gives the driver and libtcc.so one set of objects; -j1 because
 # libtcc1.a needs the built tcc. The payload dir holds everything zc needs.
-TCC_TRIPLE ?= linux-x86_64
+TCC_TRIPLE ?= $(if $(WINDOWS_HOST),windows-x86_64,linux-x86_64)
 TCC_CONFIGDIR := vendor/tinycc/config/$(TCC_TRIPLE)
 TCC_SRC := $(wildcard vendor/tinycc/src/*.c vendor/tinycc/src/*.h \
                       vendor/tinycc/src/Makefile vendor/tinycc/src/lib/* \
                       vendor/tinycc/src/include/*)
+# the Windows (PE) sources: the cross build's, and the native build's on Windows
+TCC_WIN_SRC := $(wildcard vendor/tinycc/src/win32/lib/* vendor/tinycc/src/win32/include/*.h \
+                          vendor/tinycc/src/win32/include/*/*.h)
 TCC_MAKE = $(MAKE) -C $(BUILDDIR)/tinycc -j1 GITHASH=no CPPFLAGS=-fPIC
 TCCLIB := $(BUILDDIR)/tcc-lib
+# On Windows (MSYS2 make, UCRT64 gcc) the same tree builds tcc.exe, which loads
+# libtcc.dll (LGPL: a DLL, never linked in), and the payload is laid out as a
+# Windows tcc reads it: include/ (win32/include, for the UCRT -- see
+# vendor/tinycc/VERSION.md -- and tcc's own headers), lib/ (libtcc1.a and the
+# .def import lists, generated by the built tcc's -impdef from System32; none
+# is vendored) and libtcc.dll. tcc.exe finds libtcc.dll beside it.
+LIBTCC := $(if $(WINDOWS_HOST),libtcc.dll,libtcc.so)
+TCC_WIN_DLLS := kernel32 advapi32 shell32 ws2_32 ucrtbase user32 gdi32
 
-$(BUILDDIR)/tcc: $(TCC_SRC) $(TCC_CONFIGDIR)/config.h $(TCC_CONFIGDIR)/config.mak
+$(BUILDDIR)/tcc: $(TCC_SRC) $(if $(WINDOWS_HOST),$(TCC_WIN_SRC)) $(TCC_CONFIGDIR)/config.h $(TCC_CONFIGDIR)/config.mak
 	@if [ "$(HOST_ARCH)" != x86_64 ]; then \
-	  echo "$@: the vendored tinycc is a host-only linux-x86_64 build; this host is $(HOST_ARCH)"; exit 1; fi
+	  echo "$@: the vendored tinycc is an x86_64 build; this host is $(HOST_ARCH)"; exit 1; fi
 	@mkdir -p $(BUILDDIR)
 	rm -rf $(BUILDDIR)/tinycc $(TCCLIB)
 	mkdir -p $(BUILDDIR)/tinycc $(TCCLIB)
 	cp -r vendor/tinycc/src/. $(BUILDDIR)/tinycc/
 	cp $(TCC_CONFIGDIR)/config.h $(TCC_CONFIGDIR)/config.mak $(BUILDDIR)/tinycc/
+ifdef WINDOWS_HOST
+	$(MAKE) -C $(BUILDDIR)/tinycc -j1 GITHASH=no tcc.exe
+	$(MAKE) -C $(BUILDDIR)/tinycc -j1 GITHASH=no libtcc1.a
+	mkdir -p $(TCCLIB)/lib
+	cp $(BUILDDIR)/tinycc/libtcc1.a $(TCCLIB)/lib/
+	cp $(BUILDDIR)/tinycc/libtcc.dll $(TCCLIB)/
+	cp -r vendor/tinycc/src/win32/include $(TCCLIB)/include
+	cp vendor/tinycc/src/include/*.h $(TCCLIB)/include/
+	for d in $(TCC_WIN_DLLS); do \
+	  $(BUILDDIR)/tinycc/tcc.exe -impdef "$$SYSTEMROOT/System32/$$d.dll" -o $(TCCLIB)/lib/$$d.def || exit 1; done
+	cp $(BUILDDIR)/tinycc/libtcc.dll $(BUILDDIR)/
+	cp $(BUILDDIR)/tinycc/tcc.exe $@.exe
+else
 	$(TCC_MAKE) tcc
 	$(TCC_MAKE) libtcc.so
 	$(TCC_MAKE) libtcc1.a
@@ -653,8 +689,9 @@ $(BUILDDIR)/tcc: $(TCC_SRC) $(TCC_CONFIGDIR)/config.h $(TCC_CONFIGDIR)/config.ma
 	   $(BUILDDIR)/tinycc/bt-log.o $(BUILDDIR)/tinycc/bcheck.o $(TCCLIB)/
 	cp -r vendor/tinycc/src/include $(TCCLIB)/include
 	cp $(BUILDDIR)/tinycc/tcc $@
+endif
 
-$(TCCLIB)/libtcc.so: $(BUILDDIR)/tcc ;
+$(TCCLIB)/$(LIBTCC): $(BUILDDIR)/tcc ;
 
 # out/x86_64-win32-tcc + out/tcc-win32-lib -- the vendored tinycc as a
 # Linux-hosted cross compiler for Windows (upstream's `make cross-x86_64-win32`
@@ -666,8 +703,6 @@ $(TCCLIB)/libtcc.so: $(BUILDDIR)/tcc ;
 # build generates them from System32; none is vendored.
 TCCW_LIB := $(BUILDDIR)/tcc-win32-lib
 TCCW_DLLS := kernel32 advapi32 shell32 ws2_32 ucrtbase user32 gdi32
-TCC_WIN_SRC := $(wildcard vendor/tinycc/src/win32/lib/* vendor/tinycc/src/win32/include/*.h \
-                          vendor/tinycc/src/win32/include/*/*.h)
 $(BUILDDIR)/x86_64-win32-tcc: $(TCC_SRC) $(TCC_WIN_SRC) $(TCC_CONFIGDIR)/config.h $(TCC_CONFIGDIR)/config.mak
 	@test -f $(WINE_PREFIX)/drive_c/windows/system32/ucrtbase.dll \
 	  || { echo "$@: needs the wine prefix (make $(BUILDDIR)/wineprefix/.ready) for its import lists"; exit 1; }
@@ -684,8 +719,8 @@ $(BUILDDIR)/x86_64-win32-tcc: $(TCC_SRC) $(TCC_WIN_SRC) $(TCC_CONFIGDIR)/config.
 	    -o $(TCCW_LIB)/lib/$$d.def || exit 1; done
 	cp $(BUILDDIR)/tinycc-win32/x86_64-win32-tcc $@
 
-tcc: $(BUILDDIR)/tcc $(TCCLIB)/libtcc.so
-	@echo "vendored tcc: $(BUILDDIR)/tcc (payload $(TCCLIB))"
+tcc: $(BUILDDIR)/tcc $(TCCLIB)/$(LIBTCC)
+	@echo "vendored tcc: $(BUILDDIR)/tcc$(EXE) (payload $(TCCLIB))"
 
 # out/zc-seed -- the bootstrap compiler, from the committed seed. The seed is
 # emitted for Linux, so its zlink line is Linux's (dl, for the in-process tcc);
@@ -986,7 +1021,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2286463
+ALLOC_BASELINE := 2286697
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1528,9 +1563,15 @@ refusal-guard: bin/zc $(BUILDDIR)/tcc
 
 # static-tcc-guard -- the vendored tinycc is LGPL-2.1, so the drivers may only
 # dlopen it: no libtcc symbol may appear in them (see vendor/tinycc/VERSION.md).
+# STATIC_TCC_BINS overrides the binaries checked, to falsify the guard. A binary
+# whose symbols cannot be read fails it: "found no libtcc symbol" proves nothing
+# about a file nm never opened (on Windows the drivers are bin/zc.exe ...).
+STATIC_TCC_BINS ?= bin/zc$(EXE) bin/zl$(EXE) bin/zls$(EXE)
 static-tcc-guard: bin/zc bin/zl bin/zls
 	@fail=0; \
-	for b in bin/zc bin/zl bin/zls; do \
+	for b in $(STATIC_TCC_BINS); do \
+	  if ! nm -A $$b > /dev/null 2>&1; then \
+	    echo "static-tcc-guard FAIL: cannot read the symbols of $$b"; fail=1; continue; fi; \
 	  if nm -A $$b 2>/dev/null | grep -qE ' tcc_(new|delete|set_lib_path|output_file|add_file)$$'; then \
 	    echo "static-tcc-guard FAIL: $$b names a libtcc symbol -- it must be dlopen'd, never linked"; \
 	    fail=1; \

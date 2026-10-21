@@ -307,7 +307,7 @@ before the environment. #~"--src" (user code) defaults to the project's
 which is how a program in one tree reaches units in another — the smoke
 harnesses under #~"tests/unit" reach the compiler's own units in #~"src" that
 way. The C compiler is chosen as #~"--cc" > #~"--target"-derived
-(#~"<triple>-gcc") > #~"$CC" > #~"cc".
+(#~"<triple>-gcc") > #~"$CC" > #~"cc" (#~"gcc" on Windows).
 
 tcc's runtime payload follows the same chain: #~"--tcc-lib" > #~"$ZEROLANG_TCC"
 > #~"$ZEROLANG_ROOT/lib/tcc" > #~"<root>/lib/tcc" > #~"out/tcc-lib".
@@ -321,6 +321,13 @@ lays it down as #~"bin/tcc" beside the three tools, with its runtime payload
 the install symlinks only #~"zc", #~"zl" and #~"zls" onto #~"PATH", so a
 plain lookup never would.
 
+On Windows the same tree builds #~"tcc.exe", which loads #~"libtcc.dll", and a
+payload laid out as a Windows tcc reads it: its headers and #~"libtcc1.a",
+plus import lists generated from the system's own DLLs. That tcc links the
+Universal CRT, as gcc and MSVC programs on Windows do, so a program prints
+the same whichever compiler built it (#~"vendor/tinycc/VERSION.md" lists
+what the vendored tree changes for it).
+
 tcc cannot locate that payload on its own. The directory is fixed when tcc is
 #b:"configured", so a tree that has moved has to be told, and until it is,
 tcc cannot resolve even #~"stddef.h". #~"zc" passes #~"-B" for you whenever
@@ -328,14 +335,13 @@ the compiler it resolved is a tcc and a payload directory exists; point
 #~"--tcc-lib" at a different one when you are using a tcc of your own.
 
 #~"--cc-mode inproc" loads that same tcc into #~"zc" rather than running it
-as a child, through #~"libtcc.so" in the payload directory. It applies to tcc
-and to nothing else, so #~"--cc gcc --cc-mode inproc" is an error naming the
-compiler it resolved, and an unloadable #~"libtcc.so" is an error naming the
+as a child, through #~"libtcc.so" in the payload directory (#~"libtcc.dll" on
+Windows). It applies to tcc and to nothing else, so #~"--cc gcc --cc-mode
+inproc" is an error naming the compiler it resolved, and an unloadable
+libtcc is an error naming the
 path it tried -- never a silent fall back to spawning. Only the #b:"compile"
 happens in-process: the executable is still written to disk and still run as
 its own process, so exit codes, signals and leaks are what they always were.
-On Windows there is no in-process tcc, and #~"--cc-mode inproc" is refused;
-#~"spawn" runs a tcc there as everywhere.
 
 tcc compiles the corpus in about a fifth of gcc's time and rejects a handful
 of programs that use a quad-precision float. The C backend knows what

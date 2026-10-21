@@ -374,7 +374,7 @@ before the environment. <code>--src</code> (user code) defaults to the project's
 which is how a program in one tree reaches units in another &#x2014; the smoke
 harnesses under <code>tests/unit</code> reach the compiler's own units in <code>src</code> that
 way. The C compiler is chosen as <code>--cc</code> &gt; <code>--target</code>-derived
-(<code>&lt;triple&gt;-gcc</code>) &gt; <code>$CC</code> &gt; <code>cc</code>.</p>
+(<code>&lt;triple&gt;-gcc</code>) &gt; <code>$CC</code> &gt; <code>cc</code> (<code>gcc</code> on Windows).</p>
 <p>tcc's runtime payload follows the same chain: <code>--tcc-lib</code> &gt; <code>$ZEROLANG_TCC</code>
 &gt; <code>$ZEROLANG_ROOT/lib/tcc</code> &gt; <code>&lt;root&gt;/lib/tcc</code> &gt; <code>out/tcc-lib</code>.</p>
 <h2 id="the-vendored-tcc"><a href="#the-vendored-tcc">8. The vendored tcc</a></h2>
@@ -383,20 +383,25 @@ lays it down as <code>bin/tcc</code> beside the three tools, with its runtime pa
 &#x2014; <code>libtcc1.a</code>, tcc's own headers &#x2014; in <code>lib/tcc</code>. <code>--cc tcc</code> finds it:
 the install symlinks only <code>zc</code>, <code>zl</code> and <code>zls</code> onto <code>PATH</code>, so a
 plain lookup never would.</p>
+<p>On Windows the same tree builds <code>tcc.exe</code>, which loads <code>libtcc.dll</code>, and a
+payload laid out as a Windows tcc reads it: its headers and <code>libtcc1.a</code>,
+plus import lists generated from the system's own DLLs. That tcc links the
+Universal CRT, as gcc and MSVC programs on Windows do, so a program prints
+the same whichever compiler built it (<code>vendor/tinycc/VERSION.md</code> lists
+what the vendored tree changes for it).</p>
 <p>tcc cannot locate that payload on its own. The directory is fixed when tcc is
 <strong>configured</strong>, so a tree that has moved has to be told, and until it is,
 tcc cannot resolve even <code>stddef.h</code>. <code>zc</code> passes <code>-B</code> for you whenever
 the compiler it resolved is a tcc and a payload directory exists; point
 <code>--tcc-lib</code> at a different one when you are using a tcc of your own.</p>
 <p><code>--cc-mode inproc</code> loads that same tcc into <code>zc</code> rather than running it
-as a child, through <code>libtcc.so</code> in the payload directory. It applies to tcc
-and to nothing else, so <code>--cc gcc --cc-mode inproc</code> is an error naming the
-compiler it resolved, and an unloadable <code>libtcc.so</code> is an error naming the
+as a child, through <code>libtcc.so</code> in the payload directory (<code>libtcc.dll</code> on
+Windows). It applies to tcc and to nothing else, so <code>--cc gcc --cc-mode
+inproc</code> is an error naming the compiler it resolved, and an unloadable
+libtcc is an error naming the
 path it tried -- never a silent fall back to spawning. Only the <strong>compile</strong>
 happens in-process: the executable is still written to disk and still run as
-its own process, so exit codes, signals and leaks are what they always were.
-On Windows there is no in-process tcc, and <code>--cc-mode inproc</code> is refused;
-<code>spawn</code> runs a tcc there as everywhere.</p>
+its own process, so exit codes, signals and leaks are what they always were.</p>
 <p>tcc compiles the corpus in about a fifth of gcc's time and rejects a handful
 of programs that use a quad-precision float. The C backend knows what
 <code>system</code>'s <code>quadfloat</code> subunit needs &#x2014; <code>__float128</code> &#x2014; so you get a

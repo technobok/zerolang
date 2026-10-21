@@ -1319,8 +1319,7 @@ refuseCrossTarget: function {targetTriple: StringView cc: StringView isTcc: bool
 # refuseInprocMisuse -- `--cc-mode inproc` means libtcc, so it means tcc.
 # Rejecting the combination here rather than letting the mode quietly apply to
 # a gcc build follows the rule everywhere: the resolved mode is the requested
-# one, or it is an error. On Windows there is no in-process tcc at all (the
-# runtime loads libtcc.so with dlopen), so the mode is refused outright.
+# one, or it is an error.
 refuseInprocMisuse: function {
     isTcc: bool
     cc: StringView
@@ -1328,10 +1327,6 @@ refuseInprocMisuse: function {
     tccDir: StringView
     ldflags: StringView
 } is {
-    if z.build.os == z.build.oskind.windows then {
-        io.eprintln "zc: --cc-mode inproc is not supported on Windows; use --cc-mode spawn to run tcc as a child process"
-        os.exit code: 2
-    }
     if isTcc.not then {
         nm: "zc: --cc-mode inproc needs a tcc compiler; --cc resolved to '\{cc}'"
         io.eprintln nm
@@ -1360,7 +1355,11 @@ reportBuildFailure: function {rc: i32 inproc: bool cc: StringView ccTcc: StringV
     if rc == 0 then return
     if rc == 127 then {
         cmsg: "zc: could not run C compiler '\{cc}' (not found?); set --cc or install it"
-        if inproc then cmsg = "zc: could not load libtcc from '\{ccTcc}/libtcc.so'; set --tcc-lib, or drop --cc-mode inproc to run tcc as a child process"
+        if inproc then {
+            lf: zcheck.libtccFile
+            lib: path.join a: ccTcc b: lf.stringView
+            cmsg = "zc: could not load libtcc from '\{lib}'; set --tcc-lib, or drop --cc-mode inproc to run tcc as a child process"
+        }
         io.eprintln cmsg
     }
     os.exit code: rc
@@ -1476,7 +1475,10 @@ objectsForBuild: function {
     fam: zemitterc.ccFamilyOf ccPath: ccReal.stringView
     inproc: (zv.slotOf text: ccMode) == zcWord.slot.mInproc
     ccId: ccReal.copy
-    if inproc then ccId = path.join a: tccDir b: "libtcc.so"
+    if inproc then {
+        lf: zcheck.libtccFile
+        ccId = path.join a: tccDir b: lf.stringView
+    }
     payload: String
     if fam.tcc when (io.exists path: tccDir) then payload = tccDir.string
     if inproc then payload = tccDir.string
