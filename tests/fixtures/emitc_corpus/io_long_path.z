@@ -1,0 +1,53 @@
+# io_long_path.z -- a file at the bottom of a directory chain longer than
+# Windows' MAX_PATH (260) is created, written, read, stat'ed, listed and
+# removed, and the chain removed with it, by the same calls as any other path.
+
+main: function is {
+    tmp: os.tempDir
+    name: "zlong_\{os.pid}"
+    base: path.join a: tmp.stringView b: name.stringView
+    seg: "a_directory_name_of_forty_characters_xx"
+    dir: path.join a: tmp.stringView b: name.stringView
+    top: io.mkdir path: dir.stringView
+    made: top.ok
+    depth: u64
+    for depth < 8 loop {
+        depth = depth + 1
+        next: path.join a: dir.stringView b: seg
+        dir = next.take
+        mk: io.mkdir path: dir.stringView
+        if mk.err then made = false
+    }
+    print "over 300 characters: \{dir.length > 300}"
+    print "mkdir: \{made}"
+    f: path.join a: dir.stringView b: "deep.txt"
+    wr: io.writeText path: f.stringView content: "hello"
+    print "write: \{wr.ok}"
+    rd: io.readText path: f.stringView
+    match (
+        rd
+    ) case ok then {
+        print "read: \{rd}"
+    } case err then {
+        print "read failed"
+    }
+    st: io.stat path: f.stringView
+    match (
+        st
+    ) case ok then {
+        print "size: \{st.size}"
+    } case err then {
+        print "stat failed"
+    }
+    ls: io.listDir path: dir.stringView
+    if ls.ok then {
+        for each e: ls loop {
+            print "listed: \{e}"
+        }
+    }
+    rm: io.remove path: f.stringView
+    print "remove: \{rm.ok}"
+    print "file gone: \{(io.exists path: f.stringView) == false}"
+    io.removeTree path: base.stringView
+    print "tree gone: \{(io.exists path: base.stringView) == false}"
+}

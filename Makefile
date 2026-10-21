@@ -357,10 +357,13 @@ ci-windows: bin/zc $(BUILDDIR)/ztestrunner $(BUILDDIR)/wineprefix/.ready
 # directory of its own, against its golden's stdout and exit code (Windows' own
 # `<name>.windows.out` / `.exit` where the case has one); the failure
 # set must equal $(MINGW_KNOWN), what fails under wine, and the report names
-# each program on which wine and Windows disagree. Last, the tools are built
-# natively (MSYS2 make, UCRT64 gcc) and `make test` runs with them: the corpus
-# gate on Windows itself. cl's flags are spelled -flag: MSYS2 rewrites a /flag
-# argument as a path.
+# each program on which wine and Windows disagree. os_unicode_text runs once
+# more on a console of its own, which tests/c/zconsole_read.c reads back: ssh
+# gives every program pipes. Then the tools are built natively (MSYS2 make,
+# UCRT64 gcc) and `make test` runs with them: the corpus gate on Windows itself;
+# zc and zl, given a file by its drive path from another directory, must name
+# it and the system unit natively, and zl must find the file's project. cl's
+# flags are spelled -flag: MSYS2 rewrites a /flag argument as a path.
 windows-guest:
 	@d=$(WINDOWS_DIR); fail=0; t=tests/c/zthread_shim_test.c; \
 	cl -nologo -std:c17 -experimental:c11atomics -W3 -O2 $$t -Fe:$$d/shim-msvc.exe -Fo:$$d/ > $$d/cl.log 2>&1 \
@@ -395,11 +398,24 @@ windows-guest:
 	  comm -23 $$d/wine-fails.txt $$d/guest-fails.txt | sed 's/^/  passes on Windows, not under wine: /'; \
 	  echo "windows-guest FAIL: the Windows failure set differs from $(MINGW_KNOWN)"; fail=1; \
 	fi; \
+	g=tests/fixtures/run_golden/os_unicode_text; c=tests/c/zconsole_read.c; set -f; IFS="$$nl"; set -- $$(grep -v '^$$' $$g.args); unset IFS; set +f; \
+	{ gcc -std=c17 -Wall -Wextra -O2 -o $$d/zconsole_read.exe $$c -lshell32 \
+	  && $$d/zconsole_read.exe "$$(cygpath -w $$g.out)" "$$(cygpath -w $$d/build/run_os_unicode_text/os_unicode_text.exe)" "$$@"; } \
+	  > $$d/console.log 2>&1 \
+	  || { echo "windows-guest FAIL: os_unicode_text on a console does not show its golden"; cat $$d/console.log; fail=1; }; \
 	nat=""; \
 	if $(MAKE) --no-print-directory zc bin/zl bin/zls $(BUILDDIR)/ztestrunner > $$d/native-build.log 2>&1; then \
 	  $(MAKE) --no-print-directory test > $$d/native-test.log 2>&1 \
 	    || { echo "windows-guest FAIL: make test with the native tools"; grep -E '^(FAIL|CORPUS)' $$d/native-test.log | head -20; fail=1; }; \
 	  nat=$$(grep -E '^pass=' $$d/native-test.log | tail -1); \
+	  r=$$PWD; w=$$(cygpath -w "$$r"); \
+	  (cd $$d && "$$r/bin/zc" build "$$w\\tests\\fixtures\\errors\\display_path_cleaned.z" -o drive.exe) > $$d/drive-zc.log 2>&1; \
+	  grep -qxF " --> $$w\\tests\\fixtures\\errors\\display_path_cleaned.z:5:23" $$d/drive-zc.log \
+	    && grep -qxF "     = note: unit 'io' is $$w\\lib\\system\\io.z" $$d/drive-zc.log \
+	    || { echo "windows-guest FAIL: zc given a drive path does not name the files natively"; cat $$d/drive-zc.log; fail=1; }; \
+	  (cd $$d && "$$r/bin/zl" lint --full "$$w\\src\\zsource.z") > $$d/drive-zl.log 2>&1 \
+	    && grep -qF " --> $$w\\src\\zsource.z:" $$d/drive-zl.log \
+	    || { echo "windows-guest FAIL: zl lint given a drive path does not find its project"; grep -m5 -E '^(error|warning)' $$d/drive-zl.log; fail=1; }; \
 	else echo "windows-guest FAIL: zc, zl, zls and the runner did not build natively"; tail -10 $$d/native-build.log; fail=1; fi; \
 	tcc=""; \
 	if $(MAKE) --no-print-directory tcc > $$d/native-tcc-build.log 2>&1; then \
@@ -410,7 +426,7 @@ windows-guest:
 	  tcc=$$(grep -E '^test-tcc' $$d/native-tcc-test.log | tail -1); \
 	else echo "windows-guest FAIL: the vendored tcc did not build natively"; tail -10 $$d/native-tcc-build.log; fail=1; fi; \
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
-	echo "windows-guest OK: the thread shim under MSVC and UCRT64 gcc; $$pass of $$n run-corpus binaries match their goldens on Windows, the rest as under wine; natively built zc, zl and zls pass make test ($$nat); the native tcc: $$tcc, and its in-process mode matches spawn"
+	echo "windows-guest OK: the thread shim under MSVC and UCRT64 gcc; $$pass of $$n run-corpus binaries match their goldens on Windows, the rest as under wine; non-ASCII text on a console; natively built zc, zl and zls pass make test ($$nat); the native tcc: $$tcc, and its in-process mode matches spawn"
 
 # windows-due -- one line saying make ci-windows is due, nothing when it is not:
 # it has never passed, or its last green run ($(WINDOWS_VERIFIED)) is
