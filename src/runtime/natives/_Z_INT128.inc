@@ -20,8 +20,14 @@ static inline uint64_t z_u128_to_u64(z_u128 x) { return (uint64_t)x; }
 static inline z_u128 z_u128_add(z_u128 a, z_u128 b) { return a + b; }
 static inline z_u128 z_u128_sub(z_u128 a, z_u128 b) { return a - b; }
 static inline z_u128 z_u128_mul(z_u128 a, z_u128 b) { return a * b; }
-static inline z_u128 z_u128_div(z_u128 a, z_u128 b) { return a / b; }
-static inline z_u128 z_u128_rem(z_u128 a, z_u128 b) { return a % b; }
+static inline z_u128 z_u128_div(z_u128 a, z_u128 b) {
+    if (b == 0) z_panic("division by zero");
+    return a / b;
+}
+static inline z_u128 z_u128_rem(z_u128 a, z_u128 b) {
+    if (b == 0) z_panic("division by zero");
+    return a % b;
+}
 static inline z_u128 z_u128_and(z_u128 a, z_u128 b) { return a & b; }
 static inline z_u128 z_u128_or(z_u128 a, z_u128 b) { return a | b; }
 static inline z_u128 z_u128_xor(z_u128 a, z_u128 b) { return a ^ b; }
@@ -34,8 +40,17 @@ static inline bool z_u128_lt(z_u128 a, z_u128 b) { return a < b; }
 static inline z_i128 z_i128_add(z_i128 a, z_i128 b) { return (z_i128)((z_u128)a + (z_u128)b); }
 static inline z_i128 z_i128_sub(z_i128 a, z_i128 b) { return (z_i128)((z_u128)a - (z_u128)b); }
 static inline z_i128 z_i128_mul(z_i128 a, z_i128 b) { return (z_i128)((z_u128)a * (z_u128)b); }
-static inline z_i128 z_i128_div(z_i128 a, z_i128 b) { return a / b; }
-static inline z_i128 z_i128_rem(z_i128 a, z_i128 b) { return a % b; }
+/* a zero divisor panics; the minimum divided by -1 wraps back to itself */
+static inline z_i128 z_i128_div(z_i128 a, z_i128 b) {
+    if (b == 0) z_panic("division by zero");
+    if (b == -1) return (z_i128)((z_u128)0 - (z_u128)a);
+    return a / b;
+}
+static inline z_i128 z_i128_rem(z_i128 a, z_i128 b) {
+    if (b == 0) z_panic("division by zero");
+    if (b == -1) return 0;
+    return a % b;
+}
 static inline z_i128 z_i128_and(z_i128 a, z_i128 b) { return a & b; }
 static inline z_i128 z_i128_or(z_i128 a, z_i128 b) { return a | b; }
 static inline z_i128 z_i128_xor(z_i128 a, z_i128 b) { return a ^ b; }
@@ -132,7 +147,7 @@ static inline int z_u128_clz(z_u128 a) {
    panics, where the native type traps. */
 static z_u128 z_u128_divmod(z_u128 a, z_u128 b, z_u128* rem) {
     z_u128 q = { 0, 0 };
-    if (b.lo == 0 && b.hi == 0) z_panic("integer division by zero");
+    if (b.lo == 0 && b.hi == 0) z_panic("division by zero");
     if (z_u128_lt(a, b)) { *rem = a; return q; }
     int shift = z_u128_clz(b) - z_u128_clz(a);
     b = z_u128_shl(b, (unsigned)shift);

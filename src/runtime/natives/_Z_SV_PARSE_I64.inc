@@ -20,8 +20,8 @@ static z_@resultval_i64_parseerror@_t z_@StringView@_parseI64(const z_@StringVie
     /* range check: fits in i64 */
     uint64_t bound = neg ? (uint64_t)1 << 63 : ((uint64_t)1 << 63) - 1;
     if (acc > bound) goto overflow;
-    int64_t v = neg ? -(int64_t)acc : (int64_t)acc;
-    if (neg && acc == ((uint64_t)1 << 63)) v = INT64_MIN;
+    /* negated in unsigned arithmetic, where 2^63 has a negation too */
+    int64_t v = neg ? (int64_t)(0 - acc) : (int64_t)acc;
     out.tag = @ARM_resultval_i64_parseerror.ok@;
     out.data.@MEMBER_resultval_i64_parseerror.ok@ = v;
     return out;

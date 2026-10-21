@@ -59710,8 +59710,8 @@ constArithI64: function {
     if op.mul then {
         if a == 0 then return (arithfast done: true v: ztypes.makeIntConst 0)
         if b == 0 then return (arithfast done: true v: ztypes.makeIntConst 0)
-        # -fwrapv makes the product defined, so dividing it back is a valid
-        # test; MIN * -1 wraps to itself and passes it, hence the pair below.
+        # the product wraps, so dividing it back is a valid test; MIN * -1
+        # wraps to itself and passes it, hence the pair below.
         bad: (a == (0 - 1)) and (b == mn) or ((b == (0 - 1)) and (a == mn))
         r: a * b
         if (r / a) != b then bad = true
@@ -62490,6 +62490,7 @@ stampConstAt: function {
     if nid.isZero then return
     plan: evalConstPlan :ast :nid
     if plan.arm == 0 then return
+    if plan.arm == 5 then refuseZeroDivisor :st :ast :nid
     if (useSiteAsks :st :ast :nid :plan).not then return
     held: st.typing.constFail
     constFailClear :st
@@ -62542,6 +62543,34 @@ markOperandsTaken: function {
     ) case dottedpath then {
         st.typing.wideConstTaken.set key: (ztyping.monostamp :mono node: n.parent) value: 1
     } else null
+}
+
+# refuseZeroDivisor -- an integer `/` or `%` at `nid` whose divisor is a
+# constant zero and whose dividend is not: it has no value at run time either,
+# so it is refused as the all-constant one is. A float one is IEEE's to answer
+# and runs, and an all-constant one is the fold's to report.
+refuseZeroDivisor: function {st: zenv.ZSymbolTable ast: Ast.view nid: zast.nodeid} is {
+    br: binRefAt :ast :nid
+    if br.nid.isZero then return
+    op: arithOpOf opnId: (atomNameId :ast n: (ast.nodes.get i: br.operator))
+    if (op.div or op.rem).not then return
+    mono: st.typing.curMonoStamp
+    if (st.typing.nodeConstIn :mono nid: br.lhs).kind.none.not then return
+    rv: st.typing.nodeConstIn :mono nid: br.rhs
+    if rv.kind.ivalKind.not then return
+    if (constIsZero :st v: rv).not then return
+    nk: numKindOfTid :st tid: (walkTypeOf :st nid: br.lhs)
+    if nk.has.not then return
+    if (ztypes.isFloatKind k: nk.kind) then return
+    (reportConstError
+        :st
+        nodeid: nid
+        lineno: br.lineno
+        colno: br.colno
+        width: 1
+        msg: "division by a constant zero"
+        hint: "the divisor is 0 wherever this runs, so the division never has a value"
+    )
 }
 
 # integerDivision -- the recorded division by zero divides integers. A float
