@@ -155,7 +155,7 @@ make test-bootstrap    # rebuild the compiler from the seed, check the fixpoint
 
 Windows is tested four ways. `make test-mingw` (the run corpus built by
 mingw-w64 against the Universal C Runtime, run under wine; `sudo apt install
-gcc-mingw-w64-x86-64 mingw-w64-ucrt64-dev wine`),
+gcc-mingw-w64-x86-64 wine`, gcc 14 or newer),
 `make test-tcc-mingw` (the same corpus built by the vendored tcc for Windows,
 under wine) and `make test-msvc-wine` (MSVC itself under wine) are part of
 `make ci` and skip without their tools. `make ci-windows` runs the Windows legs
