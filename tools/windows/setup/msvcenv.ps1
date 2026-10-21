@@ -7,6 +7,10 @@
 # /usr/bin, where MSYS2's coreutils `link` would otherwise shadow MSVC's
 # link.exe. Re-run after a Build Tools upgrade (winvm.sh update-golden does).
 $ErrorActionPreference = 'Stop'
+# Windows' own PATH: under ssh the inherited one starts with MSYS2's /usr/bin,
+# whose `cmd`, `find` and `sort` shadow the ones vcvars64.bat calls
+$env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' +
+    [Environment]::GetEnvironmentVariable('Path', 'User')
 $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
 $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
 if (-not $vs) { throw 'no Visual Studio install with the x64 C tools' }
@@ -14,9 +18,7 @@ $vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
 
 function EnvOf([string]$cmd) {
     $h = @{}
-    # cmd.exe by its path: under ssh MSYS2's /usr/bin, which has a `cmd` script,
-    # comes first on PATH
-    & "$env:SystemRoot\System32\cmd.exe" /c "$cmd >nul 2>&1 && set" | ForEach-Object {
+    cmd /c "$cmd >nul 2>&1 && set" | ForEach-Object {
         if ($_ -match '^([^=]+)=(.*)$') { $h[$matches[1]] = $matches[2] }
     }
     return $h
