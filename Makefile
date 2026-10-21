@@ -10,12 +10,16 @@ DRIVERLINK   := -static
 THREADLIB    :=
 LIBM         :=
 EXE          := .exe
+HOST_TARGET  := x86_64-w64-mingw32
+HOST_OSNAME  := windows
 else
 WINDOWS_HOST :=
 DRIVERLINK   :=
 THREADLIB    := -lpthread
 LIBM         := -lm
 EXE          :=
+HOST_TARGET  := x86_64-linux
+HOST_OSNAME  := linux
 endif
 # the gcc spelling of the discarded-qualifiers error; clang names it differently.
 QUALWERR := $(if $(findstring clang,$(shell $(CC) --version 2>/dev/null | head -1)),-Werror=incompatible-pointer-types-discards-qualifiers,-Werror=discarded-qualifiers)
@@ -255,7 +259,9 @@ $(BUILDDIR)/wineprefix/.ready:
 MINGW_CC := x86_64-w64-mingw32-gcc
 MINGW_KNOWN := tests/mingw-known-failures.txt
 test-mingw: bin/zc $(BUILDDIR)/ztestrunner $(BUILDDIR)/wineprefix/.ready
-	@if ! command -v $(MINGW_CC) >/dev/null 2>&1 || ! command -v wine >/dev/null 2>&1; then \
+	@if [ -n "$(WINDOWS_HOST)" ]; then \
+	  echo "test-mingw: skipped (Linux only: it runs Windows builds under wine; on Windows make test runs them natively)"; exit 0; fi; \
+	if ! command -v $(MINGW_CC) >/dev/null 2>&1 || ! command -v wine >/dev/null 2>&1; then \
 	  echo "test-mingw: skipped (needs $(MINGW_CC) and wine: sudo apt install gcc-mingw-w64-x86-64 wine; see tools/windows/README.md)"; exit 0; fi; \
 	$(WINE_ENV) $(BUILDDIR)/ztestrunner --zc bin/zc --cc $(MINGW_CC) --target x86_64-w64-mingw32 \
 	   --exec wine --run-only --root . --jobs $(NPROC) > $(BUILDDIR)/mingw-run.log 2>&1; \
@@ -279,7 +285,9 @@ test-mingw: bin/zc $(BUILDDIR)/ztestrunner $(BUILDDIR)/wineprefix/.ready
 # does not, each explained there. Skipped without wine.
 TCC_MINGW_KNOWN := tests/tcc-mingw-known-failures.txt
 test-tcc-mingw: bin/zc $(BUILDDIR)/ztestrunner $(BUILDDIR)/wineprefix/.ready
-	@if ! command -v wine >/dev/null 2>&1; then \
+	@if [ -n "$(WINDOWS_HOST)" ]; then \
+	  echo "test-tcc-mingw: skipped (Linux only: it runs Windows builds under wine; on Windows make test-tcc runs them natively)"; exit 0; fi; \
+	if ! command -v wine >/dev/null 2>&1; then \
 	  echo "test-tcc-mingw: skipped (needs wine: sudo apt install wine; see tools/windows/README.md)"; exit 0; fi; \
 	$(MAKE) --no-print-directory $(BUILDDIR)/x86_64-win32-tcc > $(BUILDDIR)/tcc-mingw-build.log 2>&1 \
 	  || { tail -20 $(BUILDDIR)/tcc-mingw-build.log; echo "test-tcc-mingw FAIL: the cross tcc did not build"; exit 1; }; \
@@ -305,7 +313,9 @@ test-tcc-mingw: bin/zc $(BUILDDIR)/ztestrunner $(BUILDDIR)/wineprefix/.ready
 # without MSVC_WINE or wine.
 MSVC_WINE ?=
 test-msvc-wine: $(BUILDDIR)/wineprefix/.ready
-	@if [ -z "$(MSVC_WINE)" ] || [ ! -x "$(MSVC_WINE)/cl" ] || ! command -v wine > /dev/null 2>&1; then \
+	@if [ -n "$(WINDOWS_HOST)" ]; then \
+	  echo "test-msvc-wine: skipped (Linux only: it runs MSVC under wine; on Windows windows-guest builds with cl itself)"; exit 0; fi; \
+	if [ -z "$(MSVC_WINE)" ] || [ ! -x "$(MSVC_WINE)/cl" ] || ! command -v wine > /dev/null 2>&1; then \
 	  echo "test-msvc-wine: skipped (needs wine and MSVC_WINE=<dir>/msvc/bin/x64 from tools/windows/msvc-wine.sh; see tools/windows/README.md)"; exit 0; fi; \
 	d=$(BUILDDIR)/msvc; rm -rf $$d; mkdir -p $$d; \
 	$(WINE_ENV) $(MSVC_WINE)/cl -nologo -std:c17 -experimental:c11atomics -W3 -O2 \
@@ -614,8 +624,8 @@ readable-check: bin/zc $(BUILDDIR)/buildstamp.o
 	done
 	bin/zc zc --src src --system lib/system --readable-names --emit-c $(BUILDDIR)/rn/zc-rn.c
 	$(CC) $(CFLAGS) $(STAMPDEF) -c $(BUILDDIR)/rn/zc-rn.c -o $(BUILDDIR)/rn/zc-rn.o
-	$(CC) -o $(BUILDDIR)/rn/zc-rn $(BUILDDIR)/rn/zc-rn.o $(BUILDDIR)/buildstamp.o \
-	  $(call ZLINKOF,$(BUILDDIR)/rn/zc-rn.c) -lpthread -lm
+	$(CC) $(DRIVERLINK) -o $(BUILDDIR)/rn/zc-rn $(BUILDDIR)/rn/zc-rn.o $(BUILDDIR)/buildstamp.o \
+	  $(call ZLINKOF,$(BUILDDIR)/rn/zc-rn.c) $(THREADLIB) $(LIBM)
 	@$(BUILDDIR)/rn/zc-rn hello --src examples --system lib/system --emit-c $(BUILDDIR)/rn/hello-by-rn.c
 	@bin/zc hello --src examples --system lib/system --emit-c $(BUILDDIR)/rn/hello-by-id.c
 	@cmp $(BUILDDIR)/rn/hello-by-id.c $(BUILDDIR)/rn/hello-by-rn.c \
@@ -1058,6 +1068,10 @@ ALLOC_BASELINE := 2285538
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
+ifdef WINDOWS_HOST
+perf-strict:
+	@echo "perf-strict: skipped (Linux only: it counts heap blocks under valgrind memcheck, which Windows does not have)"
+else
 perf-strict: $(PERFBIN)
 	@command -v valgrind >/dev/null 2>&1 \
 	  || { echo "perf-strict: valgrind is not installed -- the allocation ratchet cannot measure"; exit 1; }
@@ -1078,6 +1092,7 @@ perf-strict: $(PERFBIN)
 	@if command -v perf >/dev/null 2>&1 && perf stat -e instructions true >/dev/null 2>&1; then \
 	  perf stat -e instructions -r 3 $(PERFRUN) 2>&1 | grep -E 'instructions' | sed 's/^ */  /'; \
 	else echo "  (perf stat unavailable -- instructions not measured)"; fi
+endif
 
 # pre-push -- check, test and the allocation ratchet.
 pre-push: check test perf-strict
@@ -1308,12 +1323,14 @@ user-native-guard: bin/zc
 	    echo "user-native-guard FAIL: cellar printed '$$got', want '42 false true 1 true true '"; fail=1; fi; \
 	fi; \
 	if [ $$fail -eq 0 ]; then \
-	  bin/zc cellar --src tests/fixtures/user_native --system lib/system --runtime $$d/rt \
-	    --target x86_64-w64-mingw32 --emit-c $$d/cellar-win.c > $$d/wemit.log 2>&1 \
-	    || { echo "user-native-guard FAIL: emit cellar for windows"; sed -n 1,5p $$d/wemit.log; fail=1; }; \
+	  for t in x86_64-w64-mingw32:win x86_64-linux-gnu:lin; do \
+	    bin/zc cellar --src tests/fixtures/user_native --system lib/system --runtime $$d/rt \
+	      --target $${t%%:*} --emit-c $$d/cellar_$${t#*:}.c > $$d/temit.log 2>&1 \
+	      || { echo "user-native-guard FAIL: emit cellar for $${t%%:*}"; sed -n 1,5p $$d/temit.log; fail=1; }; \
+	  done; \
 	fi; \
 	if [ $$fail -eq 0 ]; then \
-	  grep -q '^/\* zlink:.*zcellarwin' $$d/cellar-win.c && ! grep -q 'zcellarwin' $$d/cellar.c \
+	  $(ZLINKSED) $$d/cellar_win.c | grep -qw winmm && ! $(ZLINKSED) $$d/cellar_lin.c | grep -qw winmm \
 	    || { echo "user-native-guard FAIL: an os=windows @unit row must link for a windows target and only there"; fail=1; }; \
 	fi; \
 	rm -rf $$d; \
@@ -1326,26 +1343,33 @@ user-native-guard: bin/zc
 # that races on purpose: a sanitizer that reports nothing there would make a
 # clean shim run mean nothing. Where mingw-w64 and wine are installed the Win32
 # backend is built and run too (in a wine prefix kept under out/, which takes
-# seconds to create once); the OK line says which backends ran. MSVC is the
-# windows-shim workflow's.
+# seconds to create once); the OK line says which backends ran. On a Windows
+# host gcc, clang and tcc build the Win32 backend natively, and TSan, which no
+# Windows toolchain has, is skipped. MSVC is ci-windows's.
 shim-guard: $(BUILDDIR)/tcc $(BUILDDIR)/wineprefix/.ready
 	@d=$$(mktemp -d); fail=0; t=tests/c/zthread_shim_test.c; pr=tests/c/tsan_probe.c; \
 	for cc in $(CC) clang; do \
-	  $$cc -std=c17 -Wall -Wextra -Wno-unused-function -O2 -o $$d/shim-$$cc $$t -lpthread > $$d/cc.log 2>&1 \
+	  $$cc -std=c17 -Wall -Wextra -Wno-unused-function -O2 -o $$d/shim-$$cc $$t $(THREADLIB) > $$d/cc.log 2>&1 \
 	    || { echo "shim-guard FAIL: $$cc did not build the shim test"; grep -m3 error $$d/cc.log; fail=1; continue; }; \
 	  $$d/shim-$$cc > $$d/run.log 2>&1 || { echo "shim-guard FAIL: under $$cc"; cat $$d/run.log; fail=1; }; \
 	done; \
-	$(BUILDDIR)/tcc -B $(TCCLIB) -I $(TCCLIB)/include -o $$d/shim-tcc $$t -lpthread > $$d/cc.log 2>&1 \
+	$(BUILDDIR)/tcc -B $(TCCLIB) -I $(TCCLIB)/include -o $$d/shim-tcc $$t $(THREADLIB) > $$d/cc.log 2>&1 \
 	  || { echo "shim-guard FAIL: tcc did not build the shim test"; grep -m3 error $$d/cc.log; fail=1; }; \
 	[ -x $$d/shim-tcc ] && { $$d/shim-tcc > $$d/run.log 2>&1 || { echo "shim-guard FAIL: under tcc"; cat $$d/run.log; fail=1; }; }; \
-	$(CC) -g -fsanitize=thread -o $$d/probe $$pr -lpthread > $$d/cc.log 2>&1; \
-	$$d/probe > /dev/null 2> $$d/probe.err; \
-	grep -q "data race" $$d/probe.err || { echo "shim-guard FAIL: ThreadSanitizer did not report the probe's race; a clean TSan run proves nothing"; fail=1; }; \
-	$(CC) -std=c17 -g -O1 -fsanitize=thread -o $$d/shim-tsan $$t -lpthread > $$d/cc.log 2>&1 \
-	  || { echo "shim-guard FAIL: the TSan build"; fail=1; }; \
-	[ -x $$d/shim-tsan ] && { $$d/shim-tsan > $$d/run.log 2>&1 || { echo "shim-guard FAIL: under ThreadSanitizer"; head -30 $$d/run.log; fail=1; }; }; \
+	tsan=" and ThreadSanitizer (proved on a racy probe)"; \
+	if [ -n "$(WINDOWS_HOST)" ]; then \
+	  tsan=" -- the Win32 backend, natively; ThreadSanitizer skipped (Linux only: no Windows toolchain has it)"; \
+	else \
+	  $(CC) -g -fsanitize=thread -o $$d/probe $$pr -lpthread > $$d/cc.log 2>&1; \
+	  $$d/probe > /dev/null 2> $$d/probe.err; \
+	  grep -q "data race" $$d/probe.err || { echo "shim-guard FAIL: ThreadSanitizer did not report the probe's race; a clean TSan run proves nothing"; fail=1; }; \
+	  $(CC) -std=c17 -g -O1 -fsanitize=thread -o $$d/shim-tsan $$t -lpthread > $$d/cc.log 2>&1 \
+	    || { echo "shim-guard FAIL: the TSan build"; fail=1; }; \
+	  [ -x $$d/shim-tsan ] && { $$d/shim-tsan > $$d/run.log 2>&1 || { echo "shim-guard FAIL: under ThreadSanitizer"; head -30 $$d/run.log; fail=1; }; }; \
+	fi; \
 	win="; Win32 not run (no x86_64-w64-mingw32-gcc and wine: sudo apt install gcc-mingw-w64-x86-64 wine)"; \
-	if command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1 && command -v wine >/dev/null 2>&1; then \
+	[ -n "$(WINDOWS_HOST)" ] && win=""; \
+	if [ -z "$(WINDOWS_HOST)" ] && command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1 && command -v wine >/dev/null 2>&1; then \
 	  x86_64-w64-mingw32-gcc -std=c17 -Wall -Wextra -Wno-unused-function -O2 -o $$d/shim.exe $$t > $$d/cc.log 2>&1 \
 	    || { echo "shim-guard FAIL: mingw-w64 did not build the shim test"; grep -m3 error $$d/cc.log; fail=1; }; \
 	  if [ -f $$d/shim.exe ]; then \
@@ -1357,12 +1381,16 @@ shim-guard: $(BUILDDIR)/tcc $(BUILDDIR)/wineprefix/.ready
 	fi; \
 	rm -rf $$d; \
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
-	echo "shim-guard OK: the thread shim's test passes under $(CC), clang, tcc and ThreadSanitizer (proved on a racy probe)$$win"
+	echo "shim-guard OK: the thread shim's test passes under $(CC), clang, tcc$$tsan$$win"
 
 # thread-tsan-guard -- every threaded run fixture (thread_*, sync_*) under
 # ThreadSanitizer, built by $(CC) and by clang: no report, and the stdout and exit
 # status its goldens hold. TSan is proved first on tests/c/tsan_probe.c, which
 # races on purpose, so a sanitizer that reports nothing cannot pass the rest.
+ifdef WINDOWS_HOST
+thread-tsan-guard:
+	@echo "thread-tsan-guard: skipped (Linux only: ThreadSanitizer, which no Windows toolchain has)"
+else
 thread-tsan-guard: bin/zc
 	@d=$$(mktemp -d); fail=0; n=0; pr=tests/c/tsan_probe.c; \
 	$(CC) -g -fsanitize=thread -o $$d/probe $$pr -lpthread > $$d/cc.log 2>&1; \
@@ -1385,6 +1413,7 @@ thread-tsan-guard: bin/zc
 	rm -rf $$d; \
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
 	echo "thread-tsan-guard OK: $$n threaded fixture runs race-free under ThreadSanitizer ($(CC), clang), proved on a racy probe"
+endif
 
 # case-guard -- every program declaring `main` is in a case list (run, smoke or
 # dump), so something compiles it. A unit with no main is reached through others.
@@ -1404,25 +1433,32 @@ case-guard:
 	fi; \
 	echo "case-guard OK: every program declaring main is in a case list"
 
-# require-guard -- how many programs are refused under --cc tcc: a unit's toolchain
-# needs speak only for programs that reach it. zlink-guard is the other half.
+# require-guard -- how many programs are refused under --cc tcc, for a Linux and
+# a Windows target whatever the host: a unit's toolchain needs speak only for
+# programs that reach it. zlink-guard is the other half. Windows refuses one
+# more, fold_guarded_f128, whose f128 arm only a Windows build reaches.
 REQUIRE_TCC_BASELINE := 8
+REQUIRE_TCC_BASELINE_WINDOWS := 9
 
 require-guard: bin/zc
-	@n=0; rep=""; \
-	for f in examples/*.z tests/fixtures/emitc_corpus/*.z; do \
-	  b=$$(basename $$f .z); \
-	  if bin/zc emit $$f --system lib/system --cc tcc -o /dev/null 2>&1 | grep -qE 'error\[E0601\]|from the C compiler, and tcc has none'; then \
-	    n=$$(($$n + 1)); rep="$$rep  $$b\n"; \
+	@fail=0; \
+	for tb in x86_64-linux-gnu:$(REQUIRE_TCC_BASELINE) x86_64-w64-mingw32:$(REQUIRE_TCC_BASELINE_WINDOWS); do \
+	  t=$${tb%%:*}; base=$${tb#*:}; n=0; rep=""; \
+	  for f in examples/*.z tests/fixtures/emitc_corpus/*.z; do \
+	    b=$$(basename $$f .z); \
+	    if bin/zc emit $$f --system lib/system --cc tcc --target $$t -o /dev/null 2>&1 | grep -qE 'error\[E0601\]|from the C compiler, and tcc has none'; then \
+	      n=$$(($$n + 1)); rep="$$rep  $$b\n"; \
+	    fi; \
+	  done; \
+	  if [ "$$n" -ne "$$base" ]; then \
+	    echo "require-guard FAIL: $$n program(s) rejected under --cc tcc for $$t (baseline $$base)"; \
+	    printf "$$rep"; \
+	    echo "  a unit's needs speak only for a program that REACHES it."; \
+	    fail=1; \
 	  fi; \
 	done; \
-	if [ "$$n" -ne $(REQUIRE_TCC_BASELINE) ]; then \
-	  echo "require-guard FAIL: $$n program(s) rejected under --cc tcc (baseline $(REQUIRE_TCC_BASELINE))"; \
-	  printf "$$rep"; \
-	  echo "  a unit's needs speak only for a program that REACHES it."; \
-	  exit 1; \
-	fi; \
-	echo "require-guard OK: $$n programs rejected under --cc tcc (baseline $(REQUIRE_TCC_BASELINE))"
+	if [ $$fail -ne 0 ]; then exit 1; fi; \
+	echo "require-guard OK: programs rejected under --cc tcc: $(REQUIRE_TCC_BASELINE) for Linux, $(REQUIRE_TCC_BASELINE_WINDOWS) for Windows (the baselines)"
 
 # mode-parity -- --cc-mode inproc builds the same PROGRAM as spawn: every run case
 # is built both ways and its output and exit code compared (never the bytes).
@@ -1531,8 +1567,8 @@ refusal-guard: bin/zc $(BUILDDIR)/tcc
 	  bin/zc env --target x86_64-w64-mingw32; bad=1; \
 	fi; \
 	bin/zc build os_platform --src examples --system lib/system --cc gcc \
-	  --target x86_64-linux -o $$d/g > $$d/g.log 2>&1; rc=$$?; \
-	if [ $$rc -ne 0 ] || [ "$$($$d/g | head -1)" != "os=linux" ]; then \
+	  --target $(HOST_TARGET) -o $$d/g > $$d/g.log 2>&1; rc=$$?; \
+	if [ $$rc -ne 0 ] || [ "$$($$d/g | head -1)" != "os=$(HOST_OSNAME)" ]; then \
 	  echo "refusal-guard FAIL: a HOST --target must still build and fold to the host (exit $$rc)"; \
 	  cat $$d/g.log; bad=1; \
 	fi; \
@@ -1617,24 +1653,31 @@ static-tcc-guard: bin/zc bin/zl bin/zls
 	fi; \
 	echo "static-tcc-guard OK: no libtcc symbols in the driver binaries"
 
-# zlink-guard -- how many programs declare a link library: a unit's library goes to
-# the programs that reach it and no others.
+# zlink-guard -- how many programs declare a link library, for a Linux and a
+# Windows target whatever the host: a unit's library goes to the programs that
+# reach it and no others. The sets differ by system -- pthread for sync and
+# thread on Linux; advapi32 and shell32 for os, ws2_32 for net on Windows.
 ZLINK_BASELINE := 31
+ZLINK_BASELINE_WINDOWS := 37
 
 zlink-guard: bin/zc
-	@n=0; rep=""; \
-	for f in examples/*.z tests/fixtures/emitc_corpus/*.z; do \
-	  b=$$(basename $$f .z); \
-	  l=$$(bin/zc emit $$f --system lib/system 2>/dev/null \
-	        | $(ZLINKSED)); \
-	  if [ -n "$$l" ]; then n=$$(($$n + 1)); rep="$$rep  $$b: $$l\n"; fi; \
+	@fail=0; \
+	for tb in x86_64-linux-gnu:$(ZLINK_BASELINE) x86_64-w64-mingw32:$(ZLINK_BASELINE_WINDOWS); do \
+	  t=$${tb%%:*}; base=$${tb#*:}; n=0; rep=""; \
+	  for f in examples/*.z tests/fixtures/emitc_corpus/*.z; do \
+	    b=$$(basename $$f .z); \
+	    l=$$(bin/zc emit $$f --system lib/system --target $$t 2>/dev/null \
+	          | $(ZLINKSED)); \
+	    if [ -n "$$l" ]; then n=$$(($$n + 1)); rep="$$rep  $$b: $$l\n"; fi; \
+	  done; \
+	  if [ "$$n" -ne "$$base" ]; then \
+	    echo "zlink-guard FAIL: $$n program(s) declare a link library for $$t (baseline $$base)"; \
+	    printf "$$rep"; \
+	    fail=1; \
+	  fi; \
 	done; \
-	if [ "$$n" -ne $(ZLINK_BASELINE) ]; then \
-	  echo "zlink-guard FAIL: $$n program(s) declare a link library (baseline $(ZLINK_BASELINE))"; \
-	  printf "$$rep"; \
-	  exit 1; \
-	fi; \
-	echo "zlink-guard OK: $$n programs declare a link library (baseline $(ZLINK_BASELINE))"
+	if [ $$fail -ne 0 ]; then exit 1; fi; \
+	echo "zlink-guard OK: programs declaring a link library: $(ZLINK_BASELINE) for Linux, $(ZLINK_BASELINE_WINDOWS) for Windows (the baselines)"
 
 # emit-set / ident-set -- the byte-identity oracle for refactors. `make emit-set
 # OUT=dir [ZC=...]` emits every example, corpus program and driver; `make
@@ -1866,14 +1909,14 @@ vimset() {
 jsset() {
   python3 -c "
 import re,sys
-s=open('docs/style/prism-zerolang.js').read()
+s=open('docs/style/prism-zerolang.js', encoding='utf-8').read()
 m=re.search(r'var '+sys.argv[1]+r' = \[(.*?)\];',s,re.S)
 print('\n'.join(sorted(set(re.findall(r\"'([^']*)'\",m.group(1))))))" "$$1"
 }
 rbset() {
   python3 -c "
 import re,sys
-s=open('editor/rouge/zerolang.rb').read()
+s=open('editor/rouge/zerolang.rb', encoding='utf-8').read()
 m=re.search(r'def self\.'+sys.argv[1]+r'\b.*?%w\((.*?)\)',s,re.S)
 print('\n'.join(sorted(set(m.group(1).split()))))" "$$1"
 }
@@ -2611,7 +2654,7 @@ zl-full-guard: bin/zl
 	  echo "zl-full-guard FAIL: a unit under no --src root was not reported (rc=$$rc):"; \
 	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
 	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full $(CURDIR)/$(ZLFULL_DEP) 2>&1); \
-	if ! printf '%s\n' "$$out" | grep -q 'depunit/dep.z:3:10' || ! printf '%s\n' "$$out" | grep -q 'bad: "x" + n'; then \
+	if ! printf '%s\n' "$$out" | grep -qE 'depunit[/\\]dep\.z:3:10' || ! printf '%s\n' "$$out" | grep -q 'bad: "x" + n'; then \
 	  echo "zl-full-guard FAIL: an error in a dependency unit was not shown at its own path and line:"; \
 	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
 	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full $(CURDIR)/$(ZLFULL_ONCE) 2>&1); \
