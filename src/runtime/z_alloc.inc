@@ -1,4 +1,4 @@
-__attribute__((noreturn)) static void z_unreachable(void) { z_panic("unreachable"); }
+static Z_NORETURN void z_unreachable(void) { z_panic("unreachable"); }
 static void* z_xmalloc(size_t n) {
     void* p = malloc(n);
     if (!p) z_panic("out of memory");
@@ -24,8 +24,8 @@ static void* z_xrealloc(void* p, size_t n) {
    the two representations part. */
 #if defined(__SIZEOF_INT128__) && !defined(Z_INT128_PORTABLE)
 #define Z_INT128_NATIVE 1
-typedef __int128 z_i128;
-typedef unsigned __int128 z_u128;
+__extension__ typedef __int128 z_i128;
+__extension__ typedef unsigned __int128 z_u128;
 #define Z_U128_C(hi, lo) ((z_u128)(((z_u128)(uint64_t)(hi) << 64) | (z_u128)(uint64_t)(lo)))
 #define Z_I128_C(hi, lo) ((z_i128)Z_U128_C(hi, lo))
 #define Z_I128_I64(v) ((z_i128)(int64_t)(v))
@@ -48,7 +48,7 @@ typedef struct { uint64_t lo; uint64_t hi; } z_i128;
    for every compiler. */
 #if defined(__FLT16_MANT_DIG__) && !defined(Z_F16_PORTABLE)
 #define Z_F16_NATIVE 1
-typedef _Float16 z_f16;
+__extension__ typedef _Float16 z_f16;
 #define Z_F16_C(lit, bits) ((z_f16)(lit))
 #else
 typedef struct { uint16_t bits; } z_f16;

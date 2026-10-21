@@ -16,6 +16,11 @@ static z_@String@_t z_os_buildCompiler(void) {
     return z_@String@_new("gcc " Z_BUILDCC_STR(__GNUC__) "."
                         Z_BUILDCC_STR(__GNUC_MINOR__) "."
                         Z_BUILDCC_STR(__GNUC_PATCHLEVEL__));
+#elif defined(_MSC_VER)
+    /* _MSC_VER is 1951 for MSVC 19.51, and _MSC_FULL_VER adds the build */
+    char v[48];
+    snprintf(v, sizeof v, "msvc %d.%d.%d", _MSC_VER / 100, _MSC_VER % 100, _MSC_FULL_VER % 100000);
+    return z_@String@_new(v);
 #else
     return z_@String@_new("cc");
 #endif

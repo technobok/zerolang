@@ -86,6 +86,44 @@ extern int ilogbq(__float128 x);
 #endif
 #include <signal.h>
 
+/* Z_NORETURN -- a function that never returns. ISO C spells it _Noreturn,
+   which gcc, clang and MSVC act on; tcc acts only on its attribute form, and
+   without it reports a value-returning function that ends in a call of one. */
+#if defined(__TINYC__)
+#define Z_NORETURN __attribute__((noreturn))
+#else
+#define Z_NORETURN _Noreturn
+#endif
+
+/* z_clz64, z_ctz64, z_popcount64 -- the leading zeros, trailing zeros and set
+   bits of a 64-bit word. v must not be 0 for the first two, as for the
+   builtins they stand for. gcc, clang and tcc take their builtins; MSVC has
+   none, and takes the bit-scan intrinsics and a portable count of set bits
+   (__popcnt64 needs a processor with POPCNT, which MSVC does not test for). */
+#if defined(_MSC_VER) && !defined(__clang__)
+#include <intrin.h>
+static inline int z_clz64(uint64_t v) {
+    unsigned long i;
+    _BitScanReverse64(&i, v);
+    return 63 - (int)i;
+}
+static inline int z_ctz64(uint64_t v) {
+    unsigned long i;
+    _BitScanForward64(&i, v);
+    return (int)i;
+}
+static inline int z_popcount64(uint64_t v) {
+    v = v - ((v >> 1) & 0x5555555555555555u);
+    v = (v & 0x3333333333333333u) + ((v >> 2) & 0x3333333333333333u);
+    v = (v + (v >> 4)) & 0x0F0F0F0F0F0F0F0Fu;
+    return (int)((v * 0x0101010101010101u) >> 56);
+}
+#else
+#define z_clz64(v) __builtin_clzll(v)
+#define z_ctz64(v) __builtin_ctzll(v)
+#define z_popcount64(v) __builtin_popcountll(v)
+#endif
+
 #if defined(_WIN32)
 /* z_win_console -- a write to a standard stream that is a console goes as
    UTF-16 (WriteConsoleW): the console shows non-ASCII text that way whatever

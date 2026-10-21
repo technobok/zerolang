@@ -336,7 +336,8 @@ test-msvc-wine: $(BUILDDIR)/wineprefix/.ready
 	echo "test-msvc-wine OK: MSVC $$($(WINE_ENV) $(MSVC_WINE)/cl 2>&1 | grep -m1 -o 'Version [0-9.]*') built the thread shim's test, which passes under wine"
 
 # test-msvc-corpus -- the RUN corpus built for Windows by MSVC itself (cl under
-# wine, MSVC_WINE as test-msvc-wine names it) and run under wine against the same
+# wine, MSVC_WINE as test-msvc-wine names it) as a backend (--cc-forward, so units
+# cl cannot build are refused by name) and run under wine against the same
 # goldens. cl runs in each case's directory and is handed file names alone, since
 # link.exe reads a path starting with / as an option. tests/msvc-known-failures.txt
 # is the expected failure set, which shrinks as the emitted C becomes ISO C17; a
@@ -347,7 +348,7 @@ test-msvc-corpus: bin/zc $(BUILDDIR)/ztestrunner $(BUILDDIR)/wineprefix/.ready
 	  echo "test-msvc-corpus: skipped (Linux only: it runs MSVC under wine)"; exit 0; fi; \
 	if [ -z "$(MSVC_WINE)" ] || [ ! -x "$(MSVC_WINE)/cl" ] || ! command -v wine > /dev/null 2>&1; then \
 	  echo "test-msvc-corpus: skipped (needs wine and MSVC_WINE=<dir>/msvc/bin/x64 from tools/windows/msvc-wine.sh; see tools/windows/README.md)"; exit 0; fi; \
-	$(WINE_ENV) $(BUILDDIR)/ztestrunner --zc bin/zc --cc $(MSVC_WINE)/cl --target x86_64-pc-windows-msvc \
+	$(WINE_ENV) $(BUILDDIR)/ztestrunner --zc bin/zc --cc $(MSVC_WINE)/cl --cc-forward --target x86_64-pc-windows-msvc \
 	   --exec wine --run-only --root . --jobs $(NPROC) > $(BUILDDIR)/msvc-run.log 2>&1; \
 	awk '/^FAIL/ || /^SKIP\(run\) .* \(posix\)$$/ { k = $$1; sub(/^FAIL\(/, "", k); sub(/\)$$/, "", k); \
 	       print $$2, (NF >= 3 ? $$3 : "(" k ")") }' $(BUILDDIR)/msvc-run.log \
@@ -1168,7 +1169,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2287439
+ALLOC_BASELINE := 2287503
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

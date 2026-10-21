@@ -16,7 +16,7 @@ static void z_end_claim(void) {
 #endif
     }
 }
-static _Noreturn void z_panic(const char* msg) {
+static Z_NORETURN void z_panic(const char* msg) {
     z_end_claim();
 #if defined(_WIN32)
     if (!z_win_console_write(2, "zpanic: ", 8, 0) || !z_win_console_write(2, msg, strlen(msg), 1))

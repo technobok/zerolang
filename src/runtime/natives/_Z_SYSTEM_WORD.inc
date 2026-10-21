@@ -1,13 +1,20 @@
 /* The word primitives with no one-expression C form: a carry chain's step, in
    both directions, and the division of a two-word number by a word. Each takes
    the builtin a C compiler offers -- gcc and clang lower these to adc, sbb and
-   div -- and otherwise a portable form, which is what tcc runs. Defining
-   Z_WORD_PORTABLE (-DZ_WORD_PORTABLE) takes the portable forms under any
-   compiler, which is how make bench-math sets the two tiers side by side. */
+   div, and MSVC on x86-64 has intrinsics for all three -- and otherwise a
+   portable form, which is what tcc runs. Defining Z_WORD_PORTABLE
+   (-DZ_WORD_PORTABLE) takes the portable forms under any compiler, which is
+   how make bench-math sets the two tiers side by side. */
 #if defined(__has_builtin) && !defined(Z_WORD_PORTABLE)
 #if __has_builtin(__builtin_addcll) && __has_builtin(__builtin_subcll)
 #define Z_WORD_CARRY_BUILTINS 1
 #endif
+#endif
+#if defined(_MSC_VER) && !defined(__clang__) && defined(_M_X64) && !defined(Z_WORD_PORTABLE)
+#define Z_WORD_MSVC_X64 1
+#endif
+#if defined(__SIZEOF_INT128__) && !defined(Z_WORD_PORTABLE)
+__extension__ typedef unsigned __int128 z_word_u128;
 #endif
 
 /* a + b + cin, and the carry out of it in *cout. cin is 0 or 1. */
@@ -16,6 +23,10 @@ static inline uint64_t z_word_addc(uint64_t a, uint64_t b, uint64_t cin, uint64_
     unsigned long long c;
     uint64_t s = __builtin_addcll(a, b, cin, &c);
     *cout = c;
+    return s;
+#elif defined(Z_WORD_MSVC_X64)
+    unsigned long long s;
+    *cout = _addcarry_u64((unsigned char)cin, a, b, &s);
     return s;
 #else
     uint64_t s = a + b;
@@ -31,6 +42,10 @@ static inline uint64_t z_word_subb(uint64_t a, uint64_t b, uint64_t bin, uint64_
     unsigned long long c;
     uint64_t d = __builtin_subcll(a, b, bin, &c);
     *bout = c;
+    return d;
+#elif defined(Z_WORD_MSVC_X64)
+    unsigned long long d;
+    *bout = _subborrow_u64((unsigned char)bin, a, b, &d);
     return d;
 #else
     uint64_t d = a - b;
@@ -49,12 +64,17 @@ static uint64_t z_word_divwide(uint64_t hi, uint64_t lo, uint64_t d, uint64_t* r
     if (d == 0) z_panic("divWide: division by zero");
     if (hi >= d) z_panic("divWide: the quotient does not fit a word (hi >= by)");
 #if defined(__SIZEOF_INT128__) && !defined(Z_WORD_PORTABLE)
-    unsigned __int128 n = ((unsigned __int128)hi << 64) | lo;
+    z_word_u128 n = ((z_word_u128)hi << 64) | lo;
     *rem = (uint64_t)(n % d);
     return (uint64_t)(n / d);
+#elif defined(Z_WORD_MSVC_X64)
+    unsigned long long r;
+    uint64_t q = _udiv128(hi, lo, d, &r);
+    *rem = r;
+    return q;
 #else
     const uint64_t b = 4294967296u;
-    int s = __builtin_clzll(d);
+    int s = z_clz64(d);
     uint64_t v = d << s;
     uint64_t vn1 = v >> 32;
     uint64_t vn0 = v & 0xFFFFFFFFu;

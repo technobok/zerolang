@@ -77,8 +77,11 @@ static void z_thread_set_name(const char* name) {
     if (name[0] == 0) return;
     HMODULE k = GetModuleHandleW(L"kernel32.dll");
     if (k == NULL) return;
-    z_set_desc_fn f = (z_set_desc_fn)(void*)GetProcAddress(k, "SetThreadDescription");
-    if (f == NULL) return;
+    FARPROC p = GetProcAddress(k, "SetThreadDescription");
+    if (p == NULL) return;
+    /* ISO C converts between function pointer types only through the bytes */
+    z_set_desc_fn f;
+    memcpy(&f, &p, sizeof f);
     wchar_t w[16];
     int i = 0;
     for (; i < 15 && name[i] != 0; i++) w[i] = (wchar_t)(unsigned char)name[i];

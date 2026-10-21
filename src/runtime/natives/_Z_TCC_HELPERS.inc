@@ -57,7 +57,12 @@ static char* z_tcc_lib_path(z_@StringView@_t tccDir) {
 /* the address of `name` in the loaded library, NULL when it has none */
 static void* z_tcc_sym(void* handle, const char* name) {
 #if defined(_WIN32)
-    return (void*)GetProcAddress((HMODULE)handle, name);
+    /* ISO C has no conversion from a function pointer to void*: the bytes are
+       copied, which is what dlsym's own result is on the other systems */
+    FARPROC p = GetProcAddress((HMODULE)handle, name);
+    void* r;
+    memcpy(&r, &p, sizeof r);
+    return r;
 #else
     return dlsym(handle, name);
 #endif

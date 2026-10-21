@@ -882,12 +882,12 @@ convIntToFloat: function {
     }
     magExpr: convMagExpr signed: ssig :wide
     if wide then {
-        w: "z_u128 _mag = \{magExpr}; uint64_t _mh = z_u128_hi(_mag); uint64_t _ml = z_u128_lo(_mag); int _bl = _mh ? (128 - __builtin_clzll(_mh)) : (_ml ? 64 - __builtin_clzll(_ml) : 0); int _tz = _ml ? __builtin_ctzll(_ml) : (_mh ? 64 + __builtin_ctzll(_mh) : 0); if ((_mh == 0 && _ml == 0) || ((_bl - _tz) <= \{p}\{rangeAnd})) { \{okSet} } else { \{(convErr
+        w: "z_u128 _mag = \{magExpr}; uint64_t _mh = z_u128_hi(_mag); uint64_t _ml = z_u128_lo(_mag); int _bl = _mh ? (128 - z_clz64(_mh)) : (_ml ? 64 - z_clz64(_ml) : 0); int _tz = _ml ? z_ctz64(_ml) : (_mh ? 64 + z_ctz64(_mh) : 0); if ((_mh == 0 && _ml == 0) || ((_bl - _tz) <= \{p}\{rangeAnd})) { \{okSet} } else { \{(convErr
             arm: "precisionLoss"
         )} }"
         return w
     }
-    n: "uint64_t _mag = \{magExpr}; if (_v == 0 || ((64 - __builtin_clzll(_mag) - __builtin_ctzll(_mag)) <= \{p}\{rangeAnd})) { \{okSet} } else { \{(convErr
+    n: "uint64_t _mag = \{magExpr}; if (_v == 0 || ((64 - z_clz64(_mag) - z_ctz64(_mag)) <= \{p}\{rangeAnd})) { \{okSet} } else { \{(convErr
         arm: "precisionLoss"
     )} }"
     return n
@@ -1928,7 +1928,7 @@ UnitReq: class {
     path: String
     # `cfeature=`: the C feature its types are built on, for the refusal
     feature: String
-    # `nocc=`: a C compiler family that cannot build it
+    # `nocc=`: the C compiler families that cannot build it, comma-separated
     nocc: String
     # `arch=`: the one target architecture that can
     arch: String
@@ -13223,8 +13223,9 @@ narrowConstToKind: function {v: i64 k: ztypes.numkind} out i64 is {
 # floatValueC -- the C literal for float kind `k`'s value nearest the number
 # constant `v`: its IEEE 754 bits, rounded once by the checker, spelled
 # exactly in hexadecimal at the format's own width -- `f` for an f32, `Q` for
-# an f128, a cast for an f16 (whose every value a double spells), nothing for
-# an f64 -- so every C compiler reads the same value. "" for an infinity,
+# an f128 (inside `__extension__`, as the suffix is not ISO C), a cast for an
+# f16 (whose every value a double spells), nothing for an f64 -- so every C
+# compiler reads the same value. "" for an infinity,
 # which the checker refuses before it gets here.
 floatValueC: function {
     symtab: zenv.ZSymbolTable.view v: ztypes.cval k: ztypes.numkind
@@ -13243,6 +13244,7 @@ floatBitsC: function {bits: math.BigInt.view k: ztypes.numkind} out String is {
     bias: (1 << (eb - 1).i64.orPanic) - 1
     r: String
     if k.f16Type then r.append "Z_F16_C("
+    if k.f128Type then r.append "(__extension__ "
     if (bits.bit i: mb + eb) == 1 then r.append "-"
     # the fraction's bits, padded to whole hex digits
     pad: 4.u64 - (mb % 4) % 4
@@ -13263,7 +13265,7 @@ floatBitsC: function {bits: math.BigInt.view k: ztypes.numkind} out String is {
     r.append digits
     r.append "p\{e}"
     if k.f32Type then r.append "f"
-    if k.f128Type then r.append "Q"
+    if k.f128Type then r.append "Q)"
     if k.f16Type then {
         # and its bits, which is the value where the C compiler has no _Float16
         hb: bits.text base: 16
@@ -34897,9 +34899,11 @@ csrcLineOf: function {r: UnitReq.view} out String is {
 # "" when it can: the compiler family is one its row names, or the target
 # architecture is not the one it names.
 unitReqRefusal: function {r: UnitReq.view fam: StringView arch: StringView} out String is {
-    if r.nocc.length > 0 when r.nocc.stringView == fam then {
-        m1: "'\{r.path}' needs \{r.feature} from the C compiler, and \{r.nocc} has none; build with another compiler"
-        return m1
+    for each ncc: (r.nocc.stringView.split sep: ",") loop {
+        if ncc == fam then {
+            m1: "'\{r.path}' needs \{r.feature} from the C compiler, and \{fam} has none; build with another compiler"
+            return m1
+        }
     }
     if r.arch.length > 0 when r.arch.stringView != arch then {
         m2: "'\{r.path}' needs \{r.feature}, which only \{r.arch} targets have; this build targets \{arch}"

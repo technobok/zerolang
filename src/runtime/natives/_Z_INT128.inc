@@ -138,8 +138,8 @@ static inline z_u128 z_u128_shr(z_u128 a, unsigned n) {
 static inline bool z_u128_eq(z_u128 a, z_u128 b) { return a.lo == b.lo && a.hi == b.hi; }
 static inline bool z_u128_lt(z_u128 a, z_u128 b) { return a.hi < b.hi || (a.hi == b.hi && a.lo < b.lo); }
 static inline int z_u128_clz(z_u128 a) {
-    if (a.hi) return __builtin_clzll(a.hi);
-    if (a.lo) return 64 + __builtin_clzll(a.lo);
+    if (a.hi) return z_clz64(a.hi);
+    if (a.lo) return 64 + z_clz64(a.lo);
     return 128;
 }
 /* a / b and a % b by binary long division: b is aligned under a's top bit
