@@ -586,12 +586,15 @@ test-tcc-heavy: $(TCC_RUN_DEPS)
 
 # readable-check -- --readable-names programs build and behave as the default
 # names do; the cases are the ones about naming (shadowing, case-only arm names,
-# C-keyword members). Last, a readable-named compiler must emit identical C.
+# C-keyword members, locals named as system-header macros). A readable-named
+# compiler must emit identical C, and with mingw-w64 present the readable C of
+# the macro case and of the compiler must compile for Windows, whose headers
+# define macros Linux's do not (`near`, `far`, `FAR`).
 readable-check: bin/zc $(BUILDDIR)/buildstamp.o
 	@mkdir -p $(BUILDDIR)/rn
 	@for c in hello:examples vector:examples records:examples fibonacci:examples \
 	          typedefs:examples shadow_unit_const:tests/fixtures/emitc_corpus \
-	          rn_sibling_shadow:tests/fixtures/emitc_corpus \
+	          rn_sibling_shadow:tests/fixtures/emitc_corpus rn_macro_names:tests/fixtures/emitc_corpus \
           rn_two_companions:tests/fixtures/emitc_corpus \
 	          arm_case_tags:tests/fixtures/emitc_corpus tag_stem_clash:tests/fixtures/emitc_corpus \
 	          member_names_c_words:tests/fixtures/emitc_corpus \
@@ -614,6 +617,15 @@ readable-check: bin/zc $(BUILDDIR)/buildstamp.o
 	@bin/zc hello --src examples --system lib/system --emit-c $(BUILDDIR)/rn/hello-by-id.c
 	@cmp $(BUILDDIR)/rn/hello-by-id.c $(BUILDDIR)/rn/hello-by-rn.c \
 	  || { echo "readable-check FAIL: the readable-named compiler emits different C"; exit 1; }
+	@if command -v $(MINGW_CC) > /dev/null 2>&1; then \
+	  for c in rn_macro_names:tests/fixtures/emitc_corpus zc:src; do \
+	    n=$${c%%:*}; d=$${c#*:}; \
+	    bin/zc $$n --src $$d --system lib/system --readable-names --target x86_64-w64-mingw32 \
+	      --emit-c $(BUILDDIR)/rn/$$n-win.c || exit 1; \
+	    $(MINGW_CC) -std=c17 -fsyntax-only $(BUILDDIR)/rn/$$n-win.c 2> $(BUILDDIR)/rn/$$n-win.log \
+	      || { echo "readable-check FAIL: $$n's readable C does not compile for Windows"; grep -m3 error $(BUILDDIR)/rn/$$n-win.log; exit 1; }; \
+	  done; \
+	fi
 	@echo "readable-check OK: --readable-names builds and runs identically (the compiler included)"
 
 # build -- compile every example, one pattern chain each.
@@ -1036,7 +1048,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2286697
+ALLOC_BASELINE := 2285538
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
