@@ -1070,45 +1070,73 @@ warn-check: bin/zc.c $(BUILDDIR)/zl.c $(BUILDDIR)/zls.c $(BUILDDIR)/tcc
 	@echo "warn-check OK: zero warnings from $(words $(WARN_CCS)) compiler(s) on all four emitted files"
 
 # pedantic-check -- how far the emitted C is from ISO C17, which is all MSVC
-# compiles: gcc -Wpedantic's diagnostics over the three drivers' C and over the C
-# of every RUN case, each total held in tests/pedantic-baseline.txt. A total that
-# moves either way fails: a rise is C that only some compilers take, and a fall
-# is recorded by lowering the baseline in the same commit. -Wpedantic does not
-# see __typeof__, __builtin_* or __attribute__; test-msvc-corpus, cl itself, does.
+# compiles: gcc -Wpedantic's diagnostics over the C of zc, zl and zls and over
+# the C of every RUN case, emitted for Linux and for Windows, each total held in
+# tests/pedantic-baseline.txt. Each target's C is read by a gcc FOR that target,
+# since the runtime chooses its branches by the compiler's own _WIN32: on Linux
+# the host gcc and the mingw-w64 cross gcc, on a Windows host UCRT64 gcc, where
+# no compiler for Linux exists and that half says so and is skipped.
+# A total that moves either way fails: a rise is C that only some compilers
+# take, and a fall is recorded by lowering the baseline in the same commit.
+# -Wpedantic does not see __typeof__, __builtin_* or __attribute__;
+# test-msvc-corpus, cl itself, does.
 PEDANTIC_DIR := $(BUILDDIR)/pedantic
 PEDANTIC_BASELINE := tests/pedantic-baseline.txt
-PEDANTIC_CC := gcc -std=c17 -Wpedantic -fsyntax-only
-pedantic-check: bin/zc bin/zc.c $(BUILDDIR)/zl.c $(BUILDDIR)/zls.c
-	@rm -rf $(PEDANTIC_DIR); mkdir -p $(PEDANTIC_DIR)/drivers $(PEDANTIC_DIR)/run; \
-	for f in bin/zc.c $(BUILDDIR)/zl.c $(BUILDDIR)/zls.c; do \
-	  $(PEDANTIC_CC) $$f > $(PEDANTIC_DIR)/drivers/$$(basename $$f).log 2>&1; \
-	done; \
-	grep -v '^#' tests/fixtures/run_cases.txt | awk 'NF >= 2 && !seen[$$1]++ {print $$1, $$2}' \
-	  | xargs -P $(NPROC) -n 2 sh -c 'n=$$0; dirs=$$1; set --; \
-	      for d in $$(echo "$$dirs" | tr ":" " "); do set -- "$$@" --src "$$d"; done; \
-	      bin/zc "$$n" "$$@" --system lib/system --emit-c $(PEDANTIC_DIR)/run/$$n.c > /dev/null 2>&1 \
-	        || { echo "$$n" >> $(PEDANTIC_DIR)/emitfail.txt; exit 0; }; \
-	      $(PEDANTIC_CC) $(PEDANTIC_DIR)/run/$$n.c > $(PEDANTIC_DIR)/run/$$n.log 2>&1; true'; \
-	if [ -s $(PEDANTIC_DIR)/emitfail.txt ]; then \
-	  echo "pedantic-check FAIL: zc did not emit these RUN cases (make test names the reason):"; \
-	  sed 's/^/  /' $(PEDANTIC_DIR)/emitfail.txt; exit 1; fi; \
+PEDANTIC_FLAGS := -std=c17 -Wpedantic -fsyntax-only
+ifeq ($(WINDOWS_HOST),)
+PEDANTIC_TARGETS := linux:x86_64-linux-gnu windows:x86_64-w64-mingw32
+PEDANTIC_CC_linux := gcc
+PEDANTIC_CC_windows := $(MINGW_CC) $(MINGW_CFLAGS)
+else
+PEDANTIC_TARGETS := windows:x86_64-w64-mingw32
+PEDANTIC_CC_windows := gcc
+endif
+pedantic-check: bin/zc
+	@if [ -z "$(WINDOWS_HOST)" ] && ! $(MINGW_UCRT_CHECK); then \
+	  echo "pedantic-check FAIL: the Windows C is read by $(MINGW_CC), which cannot target the UCRT: $(MINGW_UCRT_FIX); see tools/windows/README.md"; exit 1; fi; \
+	if [ -n "$(WINDOWS_HOST)" ]; then echo "pedantic-check: drivers-linux and corpus-linux skipped (Linux only: no compiler for Linux on Windows)"; fi; \
+	rm -rf $(PEDANTIC_DIR); mkdir -p $(PEDANTIC_DIR); \
+	one() { cc=$$1; o=$$2; n=$$3; t=$$4; dirs=$$5; shift 5; \
+	  for d in $$(echo "$$dirs" | tr ":" " "); do set -- "$$@" --src "$$d"; done; \
+	  if bin/zc "$$n" "$$@" --system lib/system --target "$$t" --emit-c "$$o/$$n.c" > "$$o/$$n.zc" 2>&1; then \
+	    $$cc $(PEDANTIC_FLAGS) "$$o/$$n.c" > "$$o/$$n.log" 2>&1; \
+	  else echo "$$n" >> "$$o/emitfail.txt"; fi; }; \
+	grep -v '^#' tests/fixtures/run_cases.txt | awk 'NF >= 2 && !seen[$$1]++ {print $$1, $$2}' > $(PEDANTIC_DIR)/cases.txt; \
 	fail=0; \
-	for part in drivers run; do \
-	  key=$$part; [ $$part = run ] && key=corpus; \
-	  find $(PEDANTIC_DIR)/$$part -name '*.log' -exec cat {} + > $(PEDANTIC_DIR)/$$key.all; \
-	  if grep -q ' error: ' $(PEDANTIC_DIR)/$$key.all; then \
-	    echo "pedantic-check FAIL: gcc rejects the $$key C:"; grep -m5 ' error: ' $(PEDANTIC_DIR)/$$key.all; fail=1; continue; fi; \
-	  got=$$(grep -c '\[-Wpedantic\]' $(PEDANTIC_DIR)/$$key.all); \
-	  want=$$(awk -v k=$$key '$$1 == k {print $$2}' $(PEDANTIC_BASELINE)); \
-	  if [ "$$got" != "$$want" ]; then \
-	    echo "pedantic-check FAIL: $$key has $$got -Wpedantic diagnostics, $(PEDANTIC_BASELINE) says $$want"; \
-	    echo "  a rise is C outside ISO C17 -- emit the portable form instead; a fall is progress --"; \
-	    echo "  set '$$key $$got' in $(PEDANTIC_BASELINE) in the same commit. By kind:"; \
-	    grep '\[-Wpedantic\]' $(PEDANTIC_DIR)/$$key.all | sed -E 's/^[^:]*:[0-9]+:[0-9]+: warning: //' \
-	      | sort | uniq -c | sort -rn | sed 's/^/  /'; \
-	    fail=1; \
-	  fi; \
-	  printf '%s=%s ' $$key $$got >> $(PEDANTIC_DIR)/summary; \
+	for pair in $(PEDANTIC_TARGETS); do \
+	  os=$${pair%%:*}; t=$${pair#*:}; \
+	  case $$os in linux) cc="$(PEDANTIC_CC_linux)";; *) cc="$(PEDANTIC_CC_windows)";; esac; \
+	  for part in drivers corpus; do mkdir -p $(PEDANTIC_DIR)/$$os/$$part; done; \
+	  for d in zc zl zls; do one "$$cc" $(PEDANTIC_DIR)/$$os/drivers $$d $$t src & done; \
+	  i=0; while read -r n dirs; do \
+	    one "$$cc" $(PEDANTIC_DIR)/$$os/corpus "$$n" $$t "$$dirs" & \
+	    i=$$((i + 1)); [ $$((i % $(NPROC))) -eq 0 ] && wait; \
+	  done < $(PEDANTIC_DIR)/cases.txt; \
+	  wait; \
+	  for part in drivers corpus; do \
+	    key=$$part-$$os; dir=$(PEDANTIC_DIR)/$$os/$$part; \
+	    if [ -s $$dir/emitfail.txt ]; then \
+	      echo "pedantic-check FAIL: zc did not emit these for $$t (the .zc file beside each says why):"; \
+	      sed "s|^|  $$dir/|; s|$$|.zc|" $$dir/emitfail.txt; fail=1; continue; fi; \
+	    want=3; [ $$part = corpus ] && want=$$(grep -c . $(PEDANTIC_DIR)/cases.txt); \
+	    have=$$(ls $$dir | grep -c '\.log$$'); \
+	    if [ "$$have" != "$$want" ]; then \
+	      echo "pedantic-check FAIL: $$key: gcc ran on $$have of $$want files -- the check itself broke here"; fail=1; continue; fi; \
+	    cat $$dir/*.log > $$dir.all; \
+	    if grep -q ' error: ' $$dir.all; then \
+	      echo "pedantic-check FAIL: gcc rejects the $$key C:"; grep -m5 ' error: ' $$dir.all; fail=1; continue; fi; \
+	    got=$$(grep -c '\[-Wpedantic\]' $$dir.all); \
+	    base=$$(awk -v k=$$key '$$1 == k {print $$2}' $(PEDANTIC_BASELINE)); \
+	    if [ "$$got" != "$$base" ]; then \
+	      echo "pedantic-check FAIL: $$key has $$got -Wpedantic diagnostics, $(PEDANTIC_BASELINE) says $$base"; \
+	      echo "  a rise is C outside ISO C17 -- emit the portable form instead; a fall is progress --"; \
+	      echo "  set '$$key $$got' in $(PEDANTIC_BASELINE) in the same commit. By kind:"; \
+	      grep '\[-Wpedantic\]' $$dir.all | sed -E 's/^.*:[0-9]+:[0-9]+: warning: //' \
+	        | sort | uniq -c | sort -rn | sed 's/^/  /'; \
+	      fail=1; \
+	    fi; \
+	    printf '%s=%s ' $$key $$got >> $(PEDANTIC_DIR)/summary; \
+	  done; \
 	done; \
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
 	echo "pedantic-check OK: $$(cat $(PEDANTIC_DIR)/summary)-Wpedantic diagnostics, as the baseline says"
