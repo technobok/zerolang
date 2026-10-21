@@ -1,11 +1,15 @@
 tinycc 0.9.28rc, LGPL-2.1 (see COPYING). Vendored from
 https://repo.or.cz/tinycc.git @ 64552b3faa39ee7948a9ea21bfcc11045b90c70d
 (the last tag, release_0_9_27, is from 2017 and HEAD is ~1400 commits past it,
-so a commit is the only usable pin). `src/` holds the subset an x86_64 host
-build touches -- the nine core .c files, their headers, the x86_64 backend,
-`lib/`, `include/`, `Makefile`, `configure`, `conftest.c` -- with no other
-backend, no `win32/`, no tests and no docs. Built by upstream's own Makefile
-from a staged copy under `out/`; see the Makefile `out/tcc` rule.
+so a commit is the only usable pin). `src/` holds the subset an x86_64 build
+touches, on Linux and on Windows -- the nine core .c files, their headers, the
+x86_64 backend, `lib/`, `include/`, `Makefile`, `configure`, `conftest.c`, and
+for Windows (PE) `tccpe.c`, `win32/include/` (with `winapi/`), the startup and
+helper sources of `win32/lib/` and `win32/tcc-win32.txt` -- with no other
+backend, no tests, no examples and no docs. Upstream's `win32/lib/*.def` import
+lists are not vendored: a Windows build generates its own from the system's
+DLLs with tcc's `-impdef`. Built by upstream's own Makefile from a staged copy
+under `out/`; see the Makefile `out/tcc` rule.
 
 LGPL-2.1 in this dual MIT/Apache tree means **dlopen only, never static-link**:
 static linking is what triggers LGPL section 6's relink obligation. `make
