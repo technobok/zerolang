@@ -8,7 +8,7 @@ cheapest to most real:
 | `make test-mingw` | the whole run corpus, built for Windows by mingw-w64 against the Universal C Runtime (UCRT), run under wine | mingw-w64 + its UCRT files + wine |
 | `make test-tcc-mingw` | the whole run corpus, built for Windows by the vendored tcc (cross-built for Windows, linking the UCRT), run under wine | wine |
 | `make test-msvc-wine` | MSVC itself (`cl.exe` under wine) builds and runs the thread shim's test | wine + msvc-wine (below) |
-| `make ci-windows` | on a real Windows machine: the shim under MSVC and UCRT64 gcc; every corpus binary; non-ASCII text on a console; a file given by its drive path to zc and zl; zc, zl and zls built natively there passing `make test`; the vendored tcc built natively there passing `make test-tcc`, `make mode-parity` (in-process through `libtcc.dll`) and `make cobj-guard` | a Windows host over ssh, e.g. the VM below |
+| `make ci-windows` | on a real Windows machine: the shim under MSVC and UCRT64 gcc; every corpus binary; non-ASCII text on a console; a file given by its drive path to zc and zl; then zc, zl, zls and the vendored tcc built natively there, and `make ci` with them (the Linux-only legs say so and skip) | a Windows host over ssh, e.g. the VM below |
 
 The first three are part of `make ci` and print `skipped (needs ...)` without
 their tools. `make ci-windows` is not, since it needs the machine. Run it at

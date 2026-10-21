@@ -160,9 +160,9 @@ gcc-mingw-w64-x86-64 mingw-w64-ucrt64-dev wine`),
 under wine) and `make test-msvc-wine` (MSVC itself under wine) are part of
 `make ci` and skip without their tools. `make ci-windows` runs the Windows legs
 on a real Windows machine, such as the VM `tools/windows/winvm.sh` builds: every
-corpus binary natively, a console, drive and long paths, then zc, zl and zls
-built there natively (MSYS2 make, UCRT64 gcc) passing `make test`, and the
-vendored tcc built there passing `make test-tcc` in both of its modes. Setting
+corpus binary natively, a console, drive and long paths, then zc, zl, zls and
+the vendored tcc built there natively (MSYS2 make, UCRT64 gcc), and `make ci`
+run with them. Setting
 each one up from scratch, and what to do when one reports something missing, is
 in [tools/windows/README.md](tools/windows/README.md).
 
