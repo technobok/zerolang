@@ -84,26 +84,11 @@ normErr: function {content: StringView} out String is {
     return buf
 }
 
-# ccKind -- the compiler family a resolved path names, by basename. A local
-# twin of zemitterc.ccFamilyOf, deliberately not a call to it: ztestrunner
-# reaches for `os` and `io` and nothing else, and naming the type checker here
-# would drag all of it into out/ztestrunner, which the Makefile builds on its
-# own. Keep the two in agreement -- same order, same spellings, same answers.
-# Used where the family NAME is the datum: the known-leaks key, and messages.
-ccKind: function {ccPath: StringView} out String is {
-    b: path.baseName p: ccPath
-    if (b.contains needle: "tcc") then return "tcc"
-    if (b.contains needle: "clang") then return "clang"
-    if (b.contains needle: "gcc") then return "gcc"
-    return "other"
-}
-
 # usesBoundsChecker -- whether this compiler's sanitizer is tcc's `-b` bounds
 # checker rather than ASan. Everything that has to BRANCH asks this rather than
 # comparing a family name, so the question is asked once and in one spelling.
 usesBoundsChecker: function {ccPath: StringView} out bool is {
-    b: path.baseName p: ccPath
-    return (b.contains needle: "tcc")
+    return (zcc.ccFamilyOf :ccPath).tcc
 }
 
 # sanEnvKey / sanEnvValue -- the environment a sanitized run needs. ASan wants
@@ -227,16 +212,17 @@ dumpArgv: function {
     return a
 }
 
-# zlinkArgs -- the `-l` flags the emitted C declares in its `zlink:` header,
-# `/* zlink: name name */`. The generated file states its own link
+# zlinkArgs -- the libraries the emitted C declares in its `zlink:` header,
+# `/* zlink: name name */`, as the compiler family `fam` names them
+# (zcc.libraryArg). The generated file states its own link
 # requirements, so the harness reads them off the artifact rather than being
 # told separately. Only the header is parsed: these files reach 5.8 MB.
 #
 # The marker is SEARCHED for in that header, not read off a fixed line number.
 # Pinning it to line 2 meant any emitter change that inserted a line above it
-# would drop every -l flag with no error -- and the reader would go on linking,
+# would drop every library with no error -- and the reader would go on linking,
 # because a missing library the libc happens to supply looks like success.
-zlinkArgs: function {csrc: StringView} out List String is {
+zlinkArgs: function {csrc: StringView fam: zcc.ccfamily} out List String is {
     words: zast.Vocab.create block: runnerWord
     flags9k: List String
     txt9k: slurp path: csrc
@@ -250,11 +236,7 @@ zlinkArgs: function {csrc: StringView} out List String is {
             for each tok9k: (line9k.split sep: " ") loop {
                 tw9k: words.slotOf text: tok9k
                 if tw9k == runnerWord.slot.zlinkClose then seen9k = false
-                if seen9k then {
-                    la9k: "-l".string
-                    la9k.append tok9k
-                    flags9k.append from: la9k
-                }
+                if seen9k then flags9k.append from: (zcc.libraryArg f: fam name: tok9k)
                 if tw9k == runnerWord.slot.zlinkOpen then seen9k = true
             }
         }
@@ -264,12 +246,17 @@ zlinkArgs: function {csrc: StringView} out List String is {
 
 # withZlink -- `argv` with the objects of the C sources `csrc` declares
 # (cobjArgs) right after the C file, ahead of every library -- the libraries
-# they need (libm) resolve only for objects named before them -- and the `-l`
-# flags it declares appended. The emitted C must already exist, so a pipeline
+# they need (libm) resolve only for objects named before them -- and the
+# libraries it declares appended, spelled for the compiler argv[0] names. cl
+# takes no objects: `zc cobj` builds them with gcc's command line. The emitted C must already exist, so a pipeline
 # step whose C is written by an earlier step resolves this at spawn time
 # instead (PoolStep.zlinkFrom).
 withZlink: function {argv: (List String).take csrc: StringView zc: StringView} out List String is {
-    ob9m: cobjArgs :argv :csrc :zc
+    fam: zcc.ccfamily.other
+    if argv.length > 0 then fam = zcc.ccFamilyOf ccPath: (argv.get i: 0).stringView
+    # a unit's C sources are built by `zc cobj`, whose command line is gcc's
+    ob9m: List String
+    if fam.msvc.not then ob9m = cobjArgs :argv :csrc :zc
     if ob9m.length > 0 then {
         withObjs: List String
         for each a9m: argv loop {
@@ -280,7 +267,7 @@ withZlink: function {argv: (List String).take csrc: StringView zc: StringView} o
         }
         argv = withObjs.take
     }
-    zl9m: zlinkArgs :csrc
+    zl9m: zlinkArgs :csrc :fam
     for each zf9m: zl9m loop {
         argv.append from: zf9m.copy
     }
@@ -385,7 +372,7 @@ buildTool: function {
         0
     ) then return 1
     ga: (withZlink
-        argv: (gccArgv
+        argv: (ccArgv
             cc: r.cc.stringView
             ccflags: r.ccflags.stringView
             target: r.target.stringView
@@ -409,7 +396,7 @@ buildTool: function {
     return 0
 }
 
-# gccArgv -- the C build command argv; `asan` selects the SANITIZED build over
+# ccArgv -- the C build command argv; `asan` selects the SANITIZED build over
 # the strict CF set. `ccflags` carries what the harness cannot infer about the
 # compiler -- tcc needs `-B <payload>` or it cannot resolve its own stddef.h,
 # since the directory it was configured with is not the one it is running from.
@@ -421,7 +408,11 @@ buildTool: function {
 # on reporting a leak verdict it had not measured. Nothing is appended here
 # whose effect the runner has not established; runLeakCases proves the chosen
 # spelling really reports a leak before it trusts a single verdict.
-gccArgv: function {
+#
+# cl takes its own spellings (zcc.msvcFlags) and builds the unsanitized program
+# only. It reads an argument starting with `/` as an option, so it is handed the
+# file names alone and runs in their directory (ccStepDir).
+ccArgv: function {
     cc: StringView
     ccflags: StringView
     # the --target triple, empty for the host: a build for Windows links the
@@ -432,6 +423,8 @@ gccArgv: function {
     csrc: StringView
     asan: bool
 } out List String is {
+    fam: zcc.ccFamilyOf ccPath: cc
+    if fam.msvc then return (msvcArgv :cc :ccflags :bin :csrc)
     a: List String
     a.append from: cc.string
     for each cf9g: (ccflags.split sep: " ") loop {
@@ -470,12 +463,39 @@ gccArgv: function {
     windows: ztarget.targetIsWindows triple: target
     # not tcc's: its runtime is always linked in, and under -static it would
     # take libraries only as archives, never through its .def import lists
-    if windows when (usesBoundsChecker ccPath: cc).not then a.append from: "-static".string
-    a.append from: "-o".string
-    a.append from: bin.string
+    if windows when fam.tcc.not then a.append from: "-static".string
+    for each of9h: (zcc.outputArgs f: fam exe: bin) loop a.append from: of9h.copy
     a.append from: csrc.string
     if windows.not then a.append from: "-lm".string
     return a
+}
+
+# msvcArgv -- ccArgv for cl: its own spellings, then the C file and the
+# executable by name alone (ccStepDir runs it in their directory).
+msvcArgv: function {
+    cc: StringView
+    ccflags: StringView
+    bin: StringView
+    csrc: StringView
+} out List String is {
+    a: List String
+    a.append from: cc.string
+    for each mf: zcc.msvcFlags loop a.append from: mf.copy
+    for each cf: (ccflags.split sep: " ") loop {
+        if cf.length > 0 then a.append from: cf.string
+    }
+    a.append from: (path.baseName p: csrc)
+    bn: path.baseName p: bin
+    outs: zcc.outputArgs f: zcc.ccfamily.msvc exe: bn.stringView
+    for each of: outs loop a.append from: of.copy
+    return a
+}
+
+# ccStepDir -- where a build step built by ccArgv runs: cl in the directory of
+# the files it is handed by name, every other compiler where the runner runs.
+ccStepDir: function {cc: StringView dir: StringView} out String is {
+    if (zcc.ccFamilyOf ccPath: cc).msvc then return dir.string
+    return String
 }
 
 # binArgv -- the test-binary argv: the binary plus one element per
@@ -1694,7 +1714,7 @@ runRunCases: function {r: Runner} is {
                     allowFail: false
                     zlinkFrom: ""
                 )
-                ga: (gccArgv
+                ga: (ccArgv
                     cc: r.cc.stringView
                     ccflags: r.ccflags.stringView
                     target: r.target.stringView
@@ -1702,9 +1722,10 @@ runRunCases: function {r: Runner} is {
                     csrc: cpath.stringView
                     asan: false
                 )
+                gdir: ccStepDir cc: r.cc.stringView dir: r.tmp.stringView
                 steps.append (mkStep
                     argv: ga
-                    cwd: ""
+                    cwd: gdir.stringView
                     outPath: os.nullDevice.stringView
                     errPath: os.nullDevice.stringView
                     timeoutSecs: 0
@@ -1991,7 +2012,7 @@ buildAndRunProbe: function {
     bin: StringView
     err: StringView
 } out bool is {
-    ga9b: (gccArgv
+    ga9b: (ccArgv
         cc: r.cc.stringView
         ccflags: r.ccflags.stringView
         target: r.target.stringView
@@ -2137,7 +2158,7 @@ runLeakCases: function {r: Runner} is {
         r.skip = r.skip + 1
         return
     }
-    kind: ccKind ccPath: r.cc.stringView
+    kind: (zcc.ccFamilyName f: (zcc.ccFamilyOf ccPath: r.cc.stringView)).string
     bounds: usesBoundsChecker ccPath: r.cc.stringView
     if (proveSanitizer :r :bounds kind: kind.stringView).not then {
         r.fails = r.fails + 1
@@ -2186,7 +2207,7 @@ runLeakCases: function {r: Runner} is {
                 allowFail: false
                 zlinkFrom: ""
             )
-            ga2: (gccArgv
+            ga2: (ccArgv
                 cc: r.cc.stringView
                 ccflags: r.ccflags.stringView
                 target: r.target.stringView
@@ -2855,7 +2876,7 @@ runSmokeCases: function {r: Runner} is {
                     allowFail: false
                     zlinkFrom: ""
                 )
-                ga: (gccArgv
+                ga: (ccArgv
                     cc: r.cc.stringView
                     ccflags: r.ccflags.stringView
                     target: r.target.stringView
@@ -3141,7 +3162,7 @@ runSelfhostAsan: function {r: Runner} is {
         return
     }
     if r.heavy then {
-        # the same per-family sanitizer the leak pool uses: gccArgv picks the
+        # the same per-family sanitizer the leak pool uses: ccArgv picks the
         # spelling, sanEnvKey the environment. Under tcc this is the bounds
         # checker, not ASan, so the kind travels with every verdict below.
         sabounds: usesBoundsChecker ccPath: r.cc.stringView
@@ -3488,6 +3509,10 @@ main: function is {
 
     if (r.target.length > 0) or (r.exec.length > 0) when r.runOnly.not then {
         print "ztestrunner: --target and --exec need --run-only; no other kind runs a foreign binary"
+        os.exit code: 2
+    }
+    if (zcc.ccFamilyOf ccPath: r.cc.stringView).msvc when r.runOnly.not then {
+        print "ztestrunner: --cc cl needs --run-only; the other kinds build with gcc's command line"
         os.exit code: 2
     }
     if r.doccodeOnly then {

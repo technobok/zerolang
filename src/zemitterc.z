@@ -9,9 +9,6 @@
 public: unit {
     :emitC
     :nativeConvRows
-    :ccfamily
-    :ccFamilyOf
-    :ccFamilyName
 }
 
 astnode: zast.astnode
@@ -1900,42 +1897,6 @@ isCReserved: function {cw: zast.Vocab.view name: StringView} out bool is {
 mangleVarName: function {name: StringView cw: zast.Vocab.view} out String is {
     if (isCReserved :cw :name) then return ("v_".concat name)
     return name.string
-}
-
-# ccfamily -- the C compiler zc hands the emitted C to, by family: what the C
-# backend asks when a unit needs something only some compilers have, and what
-# zc asks for warning flags and tcc's runtime directory. A fact about this
-# backend's toolchain, which nothing before emission sees.
-ccfamily: variant {
-    # GCC, reached by spawning it
-    gcc: null
-    # Clang, spawned like GCC
-    clang: null
-    # the vendored tcc, which compiles in-process as well as by spawn
-    tcc: null
-    # a C compiler the build does not name
-    other: null
-}
-
-# ccFamilyOf -- the family a resolved compiler PATH names, by basename. By name
-# alone: probing --version would put a subprocess in every compile, so a --cc
-# pointing at a wrapper script reads as `other`. `tcc` is tested before `cc`
-# and `clang` before `gcc`, since the shorter spelling is a substring of paths
-# naming the longer.
-ccFamilyOf: function {ccPath: StringView} out ccfamily is {
-    b: path.baseName p: ccPath
-    if (b.contains needle: "tcc") then return ccfamily.tcc
-    if (b.contains needle: "clang") then return ccfamily.clang
-    if (b.contains needle: "gcc") then return ccfamily.gcc
-    return ccfamily.other
-}
-
-# ccFamilyName -- a family as the word natives.tbl spells it in `nocc=`.
-ccFamilyName: function {f: ccfamily} out StringView is {
-    if f.tcc then return "tcc"
-    if f.clang then return "clang"
-    if f.gcc then return "gcc"
-    return "other"
 }
 
 # ClassRow -- a `<unit>.<Class>.@class` row: a class whose C the runtime owns.
@@ -34572,7 +34533,7 @@ emitC: function {
     libs: (List String).view
     # the family of the C compiler the output is for: a unit the program
     # reaches may need something only some have
-    ccFamily: ccfamily
+    ccFamily: zcc.ccfamily
     # the architecture the build is for (an archkind arm name), which a unit
     # the program reaches may require
     targetArch: StringView
@@ -34880,7 +34841,7 @@ applyUnitReqs: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    ccFamily: ccfamily
+    ccFamily: zcc.ccfamily
     libs: List String
     # the C sources the reached units need compiled and linked, each one line
     # of the emitted `zcsrc:` header: the source, then its defines
@@ -34891,7 +34852,7 @@ applyUnitReqs: function {
     os: StringView
 } is {
     if ctx.unitReqs.length == 0 then return
-    fam: ccFamilyName f: ccFamily
+    fam: zcc.ccFamilyName f: ccFamily
     # collected, and reported once the walk over the rows is done: a report
     # writes the context the rows live in
     refusals: List String

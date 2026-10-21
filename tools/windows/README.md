@@ -8,9 +8,10 @@ cheapest to most real:
 | `make test-mingw` | the whole run corpus, built for Windows by mingw-w64 against the Universal C Runtime (UCRT), run under wine | mingw-w64 + its UCRT files + wine |
 | `make test-tcc-mingw` | the whole run corpus, built for Windows by the vendored tcc (cross-built for Windows, linking the UCRT), run under wine | wine |
 | `make test-msvc-wine` | MSVC itself (`cl.exe` under wine) builds and runs the thread shim's test | wine + msvc-wine (below) |
+| `make test-msvc-corpus` | the whole run corpus, built for Windows by MSVC (`cl.exe` under wine), run under wine; the cases in `tests/msvc-known-failures.txt` are expected to fail | wine + msvc-wine (below) |
 | `make ci-windows` | on a real Windows machine: the shim under MSVC and UCRT64 gcc; every corpus binary; non-ASCII text on a console; a file given by its drive path to zc and zl; then zc, zl, zls and the vendored tcc built natively there, and `make ci` with them (the Linux-only legs say so and skip) | a Windows host over ssh, e.g. the VM below |
 
-The first three are part of `make ci` and print `skipped (needs ...)` without
+The first four are part of `make ci` and print `skipped (needs ...)` without
 their tools. `make ci-windows` is not, since it needs the machine. Run it at
 stage gates and commit the `tests/windows-verified.txt` a green run writes;
 `make ci` ends with `make windows-due`, which says when a run is due again.
@@ -37,7 +38,7 @@ the UCRT instead. So `make test-mingw` passes the gcc `-mcrtdll=ucrt`
 
 The wine prefix lives in `out/wineprefix` and is created on first use.
 
-## 2. MSVC under wine (`make test-msvc-wine`)
+## 2. MSVC under wine (`make test-msvc-wine`, `make test-msvc-corpus`)
 
 [msvc-wine](https://github.com/mstorsjo/msvc-wine) downloads MSVC and the
 Windows SDK from Microsoft and runs `cl`/`link` under wine. Microsoft's Visual
@@ -48,9 +49,10 @@ needs about 6 GB.
 sudo apt install wine msitools winbind python3 git
 tools/windows/msvc-wine.sh --accept-license ~/msvc-wine
 make test-msvc-wine MSVC_WINE=~/msvc-wine/msvc/bin/x64
+make test-msvc-corpus MSVC_WINE=~/msvc-wine/msvc/bin/x64
 ```
 
-Pass the same `MSVC_WINE=` to `make ci`, or that leg is skipped. Do not put
+Pass the same `MSVC_WINE=` to `make ci`, or those legs are skipped. Do not put
 that `bin/x64` on your `PATH`: its `link`, `lib` and `cmd` would shadow the
 host's own tools.
 

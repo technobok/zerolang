@@ -93,7 +93,7 @@ EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
 .PHONY: all check complexity-report style-lint-fast style-lint test doc-check ci ci-gates ci-corpus \
-	test-math-arm64 test-sqlite-arm64 test-mingw test-tcc-mingw test-msvc-wine ci-windows windows-guest windows-due test-math-noasm test-portable-scalars docs-link-guard math-asm-guard \
+	test-math-arm64 test-sqlite-arm64 test-mingw test-tcc-mingw test-msvc-wine test-msvc-corpus ci-windows windows-guest windows-due test-math-noasm test-portable-scalars docs-link-guard math-asm-guard \
 	bench-math bench-math-kernels test-clang test-tcc test-tcc-heavy readable-check build \
 	tcc zc zl zls regen-goldens regen-fmt-goldens regen-matrix matrix-guard regen-math-asm \
 	fmt-raw-guard regen-lsp-goldens bump-seed test-bootstrap install docs warn-check pedantic-check perf \
@@ -152,7 +152,7 @@ style-lint: bin/zl
 
 # out/ztestrunner -- the corpus runner (src/ztestrunner.z, and src/zdocblocks.z
 # for the doccode kind).
-$(BUILDDIR)/ztestrunner: bin/zc src/ztestrunner.z src/zdocblocks.z $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z)
+$(BUILDDIR)/ztestrunner: bin/zc src/ztestrunner.z src/zdocblocks.z src/zcc.z src/ztarget.z $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z)
 	@mkdir -p $(BUILDDIR)
 	bin/zc ztestrunner --src src --system lib/system --emit-c $(BUILDDIR)/ztestrunner.c
 	$(CC) $(CFLAGS) -o $(BUILDDIR)/ztestrunner $(BUILDDIR)/ztestrunner.c $(call ZLINKOF,$(BUILDDIR)/ztestrunner.c) -lm
@@ -183,7 +183,7 @@ ci:
 	@$(MAKE) --no-print-directory windows-due
 
 # ci-gates -- the gates ci runs in parallel, after perf-strict.
-ci-gates: style-lint zl-full-guard complexity-report warn-check pedantic-check emitter-guard typename-guard frontend-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard highlight-guard any-guard deadcode-guard eager-guard eager-lib-guard case-guard user-native-guard shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard readable-check test-tcc-heavy test-clang test-math-arm64 test-sqlite-arm64 test-math-noasm test-portable-scalars test-mingw test-tcc-mingw test-msvc-wine math-asm-guard matrix-guard docs-link-guard mode-parity ci-corpus
+ci-gates: style-lint zl-full-guard complexity-report warn-check pedantic-check emitter-guard typename-guard frontend-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard highlight-guard any-guard deadcode-guard eager-guard eager-lib-guard case-guard user-native-guard shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard readable-check test-tcc-heavy test-clang test-math-arm64 test-sqlite-arm64 test-math-noasm test-portable-scalars test-mingw test-tcc-mingw test-msvc-wine test-msvc-corpus math-asm-guard matrix-guard docs-link-guard mode-parity ci-corpus
 
 ci-corpus: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --heavy --jobs $(NPROC)
@@ -334,6 +334,33 @@ test-msvc-wine: $(BUILDDIR)/wineprefix/.ready
 	$(WINE_ENV) timeout 300 wine $$d/shim.exe > $$d/run.log 2>&1 && grep -q "zthread shim OK" $$d/run.log \
 	  || { echo "test-msvc-wine FAIL: the MSVC build of the shim test under wine"; tail -20 $$d/run.log; exit 1; }; \
 	echo "test-msvc-wine OK: MSVC $$($(WINE_ENV) $(MSVC_WINE)/cl 2>&1 | grep -m1 -o 'Version [0-9.]*') built the thread shim's test, which passes under wine"
+
+# test-msvc-corpus -- the RUN corpus built for Windows by MSVC itself (cl under
+# wine, MSVC_WINE as test-msvc-wine names it) and run under wine against the same
+# goldens. cl runs in each case's directory and is handed file names alone, since
+# link.exe reads a path starting with / as an option. tests/msvc-known-failures.txt
+# is the expected failure set, which shrinks as the emitted C becomes ISO C17; a
+# move either way fails. Skipped without MSVC_WINE or wine.
+MSVC_KNOWN := tests/msvc-known-failures.txt
+test-msvc-corpus: bin/zc $(BUILDDIR)/ztestrunner $(BUILDDIR)/wineprefix/.ready
+	@if [ -n "$(WINDOWS_HOST)" ]; then \
+	  echo "test-msvc-corpus: skipped (Linux only: it runs MSVC under wine)"; exit 0; fi; \
+	if [ -z "$(MSVC_WINE)" ] || [ ! -x "$(MSVC_WINE)/cl" ] || ! command -v wine > /dev/null 2>&1; then \
+	  echo "test-msvc-corpus: skipped (needs wine and MSVC_WINE=<dir>/msvc/bin/x64 from tools/windows/msvc-wine.sh; see tools/windows/README.md)"; exit 0; fi; \
+	$(WINE_ENV) $(BUILDDIR)/ztestrunner --zc bin/zc --cc $(MSVC_WINE)/cl --target x86_64-pc-windows-msvc \
+	   --exec wine --run-only --root . --jobs $(NPROC) > $(BUILDDIR)/msvc-run.log 2>&1; \
+	awk '/^FAIL/ || /^SKIP\(run\) .* \(posix\)$$/ { k = $$1; sub(/^FAIL\(/, "", k); sub(/\)$$/, "", k); \
+	       print $$2, (NF >= 3 ? $$3 : "(" k ")") }' $(BUILDDIR)/msvc-run.log \
+	  | sort > $(BUILDDIR)/msvc-fails.txt; \
+	grep -v '^#' $(MSVC_KNOWN) | grep -v '^ *$$' | sort > $(BUILDDIR)/msvc-known.txt; \
+	if ! diff -u $(BUILDDIR)/msvc-known.txt $(BUILDDIR)/msvc-fails.txt > $(BUILDDIR)/msvc-diff.txt; then \
+	  head -40 $(BUILDDIR)/msvc-diff.txt; \
+	  echo "test-msvc-corpus FAIL: the MSVC failure set moved (-known +actual above, all of it in $(BUILDDIR)/msvc-diff.txt)"; \
+	  echo "  a gained line is a regression; a lost one passes now -- delete it from"; \
+	  echo "  $(MSVC_KNOWN) in the same commit. Full log: $(BUILDDIR)/msvc-run.log"; \
+	  exit 1; \
+	fi; \
+	echo "test-msvc-corpus OK: $$(sed -n 's/^pass=\([0-9]*\).*/\1/p' $(BUILDDIR)/msvc-run.log) RUN cases pass on Windows (MSVC, wine), $$(grep -c . $(BUILDDIR)/msvc-fails.txt) known failures, none new"
 
 # ci-windows -- the Windows legs on a real Windows machine, reached over ssh as
 # WINDOWS_SSH (the zlwin VM by default; any Windows host whose ssh shell is
@@ -1113,7 +1140,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2287062
+ALLOC_BASELINE := 2287439
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

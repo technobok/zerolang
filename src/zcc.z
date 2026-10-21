@@ -1,0 +1,93 @@
+# zcc -- the C compiler a build hands its C to: which family it is, and how that
+# family spells the parts of a command line that differ between families. A
+# DRIVER's fact, read by zc, the C backend and the test runner alike, so it is
+# a leaf: it opens nothing of the compiler, and the runner builds without the
+# type checker.
+
+# Public interface -- the definitions other units may reference; all other
+# top-level definitions are private to this unit.
+public: unit {
+    :ccfamily
+    :ccFamilyOf
+    :ccFamilyName
+    :msvcFlags
+    :outputArgs
+    :libraryArg
+}
+
+# ccfamily -- the C compiler a build hands its C to, by family: what the C
+# backend asks when a unit needs something only some compilers have, and what
+# a driver asks for the flags it passes.
+ccfamily: variant {
+    # GCC, reached by spawning it
+    gcc: null
+    # Clang, spawned like GCC
+    clang: null
+    # the vendored tcc, which compiles in-process as well as by spawn
+    tcc: null
+    # Microsoft's cl, which spells its options `-name:value` and links
+    # libraries named `<name>.lib`
+    msvc: null
+    # a C compiler the build does not name
+    other: null
+}
+
+# ccFamilyOf -- the family a resolved compiler PATH names, by basename. By name
+# alone: probing --version would put a subprocess in every compile, so a --cc
+# pointing at a wrapper script reads as `other`. `tcc` is tested before `cc`
+# and `clang` before `gcc`, since the shorter spelling is a substring of paths
+# naming the longer; cl is matched whole, since `cl` is part of `clang`.
+ccFamilyOf: function {ccPath: StringView} out ccfamily is {
+    b: path.baseName p: ccPath
+    if (b.contains needle: "tcc") then return ccfamily.tcc
+    if (b.contains needle: "clang") then return ccfamily.clang
+    if (b.contains needle: "gcc") then return ccfamily.gcc
+    for each s9c: msvcNames loop {
+        if s9c == b then return ccfamily.msvc
+    }
+    return ccfamily.other
+}
+
+# msvcNames -- the basenames cl answers to, matched whole
+msvcNames: data { "cl" "cl.exe" } out stringdata
+
+# ccFamilyName -- a family as the word natives.tbl spells it in `nocc=`.
+ccFamilyName: function {f: ccfamily} out StringView is {
+    if f.tcc then return "tcc"
+    if f.clang then return "clang"
+    if f.gcc then return "gcc"
+    if f.msvc then return "msvc"
+    return "other"
+}
+
+# msvcFlags -- what every cl command line carries: no banner, ISO C17, the C11
+# atomics the thread shim uses (an experimental switch in cl 19.51), and source
+# and execution text in UTF-8, as the emitted C is.
+msvcFlags: function {} out List String is {
+    a: List String
+    a.append from: "-nologo".string
+    a.append from: "-std:c17".string
+    a.append from: "-experimental:c11atomics".string
+    a.append from: "-utf-8".string
+    return a
+}
+
+# outputArgs -- the arguments naming the executable a compile writes. cl reads
+# a path starting with `/` as an option, so its caller hands it a relative one.
+outputArgs: function {f: ccfamily exe: StringView} out List String is {
+    a: List String
+    if f.msvc then {
+        a.append from: "-Fe:\{exe}"
+        return a
+    }
+    a.append from: "-o".string
+    a.append from: exe.string
+    return a
+}
+
+# libraryArg -- the argument linking the library `name`: `-l<name>`, or
+# `<name>.lib` for cl.
+libraryArg: function {f: ccfamily name: StringView} out String is {
+    if f.msvc then return "\{name}.lib"
+    return "-l\{name}"
+}
