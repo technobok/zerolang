@@ -235,10 +235,25 @@ cmd_update_golden() {
     define "$IMG/golden.qcow2"
     V start "$DOM" > /dev/null
     wait_ssh 300 || die "no ssh to the golden image"
+    # the image holds the setup files it was built with, read-only from the
+    # setup ISO: replace them with the repository's
+    local f
+    for f in update.ps1 msvcenv.ps1 msys2-packages.txt; do
+        ssh_zl "rm -f /c/zl/setup/$f && cat > /c/zl/setup/$f" < "$HERE/setup/$f" \
+            || die "cannot copy setup/$f to the golden image"
+    done
     local ps='powershell -NoProfile -ExecutionPolicy Bypass -File C:/zl/setup/update.ps1' pass rc
-    for pass in 1 2 3 4; do
+    for pass in 1 2 3 4 5 6; do
         rc=0; ssh_zl "$ps -Phase windows" || rc=$?
         [ $rc -eq 0 ] && break
+        if [ $rc -eq 255 ]; then
+            # the connection went with the machine: Windows restarted on its own
+            # to finish installing the last pass's updates
+            echo "update-golden: the golden restarted during pass $pass"
+            sleep 60
+            wait_ssh 900 || die "no ssh after the golden restarted itself"
+            continue
+        fi
         [ $rc -eq 10 ] || die "update.ps1 -Phase windows failed (exit $rc); golden left running"
         echo "update-golden: reboot after pass $pass"
         ssh_zl 'shutdown -r -t 0' || true

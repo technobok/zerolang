@@ -14,7 +14,9 @@ $vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
 
 function EnvOf([string]$cmd) {
     $h = @{}
-    cmd /c "$cmd >nul 2>&1 && set" | ForEach-Object {
+    # cmd.exe by its path: under ssh MSYS2's /usr/bin, which has a `cmd` script,
+    # comes first on PATH
+    & "$env:SystemRoot\System32\cmd.exe" /c "$cmd >nul 2>&1 && set" | ForEach-Object {
         if ($_ -match '^([^=]+)=(.*)$') { $h[$matches[1]] = $matches[2] }
     }
     return $h

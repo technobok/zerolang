@@ -102,8 +102,11 @@ Step 'msys2' {
     & $bash -lc 'true'
     & $bash -lc 'pacman -Syuu --noconfirm'
     & $bash -lc 'pacman -Syuu --noconfirm'
-    & $bash -lc 'pacman -S --noconfirm --needed make git tar diffutils rsync mingw-w64-ucrt-x86_64-gcc'
-    if (-not (Test-Path C:\msys64\ucrt64\bin\gcc.exe)) { throw 'ucrt64 gcc missing after pacman' }
+    $pkgs = (Get-Content C:\zl\setup\msys2-packages.txt | Where-Object { $_ }) -join ' '
+    & $bash -lc "pacman -S --noconfirm --needed $pkgs"
+    foreach ($t in 'gcc', 'clang', 'python3') {
+        if (-not (Test-Path "C:\msys64\ucrt64\bin\$t.exe")) { throw "ucrt64 $t missing after pacman" }
+    }
 }
 
 Step 'visual studio build tools' {

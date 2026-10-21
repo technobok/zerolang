@@ -51,8 +51,8 @@ host's own tools.
 
 `tools/windows/winvm.sh` builds and drives a Windows 11 Pro VM ("zlwin") under
 KVM/libvirt. The install is unattended from Microsoft's own ISO. It adds
-OpenSSH, MSYS2 (make, git, UCRT64 gcc) and the Visual Studio Build Tools
-(MSVC), keeps the result as a golden image, and starts every run from a fresh
+OpenSSH, MSYS2 (make, git, and UCRT64 gcc, clang and python: the list is
+`setup/msys2-packages.txt`) and the Visual Studio Build Tools (MSVC), keeps the result as a golden image, and starts every run from a fresh
 copy of it.
 
 ### Host requirements
@@ -172,7 +172,9 @@ perf-strict`). Set `ZLWIN_BUSY_FILE` to a lock file your benchmark holds, and
 ### Maintenance
 
 - **Monthly:** `tools/windows/winvm.sh update-golden` applies Windows Update
-  and upgrades the Build Tools and MSYS2 inside the golden image, then powers
+  and upgrades the Build Tools and MSYS2 inside the golden image, installing
+  what `setup/msys2-packages.txt` lists and the image lacks (it first copies
+  the repository's `update.ps1`, `msvcenv.ps1` and package list in), then powers
   off. Confirm with `winvm.sh ci`. Windows Update never runs by itself: it is
   set to notify only, and each run starts from the golden image anyway.
 - **To start over:** `tools/windows/winvm.sh golden --force`. A rebuild
@@ -197,7 +199,8 @@ Windows machine whose ssh login meets these conditions (this is what
 
 - OpenSSH Server, with key login.
 - MSYS2 bash as sshd's shell (`HKLM\SOFTWARE\OpenSSH\DefaultShell`).
-- `make`, `tar`, UCRT64 `gcc` and MSVC's `cl`/`link` on PATH, ahead of
+- `make`, `tar`, UCRT64 `gcc`, `clang` and `python3` (for `make ci` there) and
+  MSVC's `cl`/`link` on PATH, ahead of
   MSYS2's coreutils `link`. A bash that sshd starts reads `~/.bashrc` under
   the Windows profile, not `BASH_ENV`, so source the vcvars environment there.
 

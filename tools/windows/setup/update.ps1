@@ -1,10 +1,33 @@
 # Golden-image maintenance, driven by `winvm.sh update-golden` over ssh.
 #   -Phase windows  install every available Windows update; exit 10 when a
 #                   reboot is needed before the next pass, 0 when none is left
-#   -Phase tools    upgrade the Build Tools and MSYS2, then regenerate zlenv.sh
-param([ValidateSet('windows', 'tools')][string]$Phase = 'windows')
+#   -Phase tools    upgrade the Build Tools and MSYS2, install what
+#                   msys2-packages.txt lists and the image lacks, then
+#                   regenerate zlenv.sh
+param([ValidateSet('windows', 'tools')][string]$Phase = 'windows', [switch]$AsSystem)
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
+
+# The Windows Update API refuses to download for a network logon (ssh:
+# E_ACCESSDENIED), so the windows phase runs itself again as SYSTEM in a
+# scheduled task, waits for it, and passes on its output and exit code.
+if ($Phase -eq 'windows' -and -not $AsSystem) {
+    $log = 'C:\zl\update-windows.log'
+    Remove-Item $log -ErrorAction SilentlyContinue
+    $cmd = "& C:\zl\setup\update.ps1 -Phase windows -AsSystem *> $log; exit `$LASTEXITCODE"
+    $act = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -ExecutionPolicy Bypass -Command `"$cmd`""
+    Register-ScheduledTask -TaskName zlupdate -Action $act -User SYSTEM -RunLevel Highest -Force | Out-Null
+    Start-ScheduledTask -TaskName zlupdate
+    # 267009: running; 267011: not yet run
+    do {
+        Start-Sleep 10
+        $state = (Get-ScheduledTask -TaskName zlupdate).State
+        $rc = (Get-ScheduledTaskInfo -TaskName zlupdate).LastTaskResult
+    } while ($state -eq 'Running' -or $rc -eq 267009 -or $rc -eq 267011)
+    Unregister-ScheduledTask -TaskName zlupdate -Confirm:$false
+    if (Test-Path $log) { Get-Content $log }
+    exit $rc
+}
 
 if ($Phase -eq 'windows') {
     $session = New-Object -ComObject Microsoft.Update.Session
@@ -30,4 +53,6 @@ $installer = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\setup.e
 $p = Start-Process -Wait -PassThru -FilePath $installer -ArgumentList 'update', '--installPath', "`"$vs`"", '--quiet', '--norestart'
 Write-Output "build tools update: exit $($p.ExitCode)"
 & C:\msys64\usr\bin\bash.exe -lc 'pacman -Syuu --noconfirm; pacman -Syuu --noconfirm'
+$pkgs = (Get-Content C:\zl\setup\msys2-packages.txt | Where-Object { $_ }) -join ' '
+& C:\msys64\usr\bin\bash.exe -lc "pacman -S --noconfirm --needed $pkgs"
 & C:\zl\setup\msvcenv.ps1
