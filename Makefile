@@ -250,20 +250,30 @@ $(BUILDDIR)/wineprefix/.ready:
 	  mkdir -p $(WINE_PREFIX) && $(WINE_ENV) timeout 300 wineboot -i > /dev/null 2>&1 && touch $@; \
 	fi
 
-# test-mingw -- the RUN corpus built for Windows by mingw-w64 (zc --target
-# x86_64-w64-mingw32) and run under wine against the same goldens (Windows'
+# test-mingw -- the RUN corpus built for Windows by mingw-w64 against the UCRT
+# (zc --target x86_64-w64-mingw32) and run under wine against the same goldens (Windows'
 # own `<name>.windows.out` where a case has one). A case marked `posix` in
 # run_cases.txt is listed as `(posix)` rather than run.
 # tests/mingw-known-failures.txt is the expected failure set; a move either way
 # fails. Skipped without the cross compiler and wine.
 MINGW_CC := x86_64-w64-mingw32-gcc
+# the UCRT mingw-w64 files (sudo apt install mingw-w64-ucrt64-dev). The
+# packaged x86_64-w64-mingw32-gcc links msvcrt.dll, but every real Windows
+# build -- UCRT64 gcc, MSVC, the vendored tcc -- links the Universal C Runtime.
+# In these files libmsvcrt.a is the UCRT's, so the same gcc given their
+# headers, libraries and start files builds UCRT programs.
+MINGW_UCRT ?= /usr/x86_64-w64-mingw32ucrt
+MINGW_CFLAGS := -isystem $(MINGW_UCRT)/include -B $(MINGW_UCRT)/lib/ -L $(MINGW_UCRT)/lib
+MINGW_UCRT_FIX := sudo apt install mingw-w64-ucrt64-dev
 MINGW_KNOWN := tests/mingw-known-failures.txt
 test-mingw: bin/zc $(BUILDDIR)/ztestrunner $(BUILDDIR)/wineprefix/.ready
 	@if [ -n "$(WINDOWS_HOST)" ]; then \
 	  echo "test-mingw: skipped (Linux only: it runs Windows builds under wine; on Windows make test runs them natively)"; exit 0; fi; \
 	if ! command -v $(MINGW_CC) >/dev/null 2>&1 || ! command -v wine >/dev/null 2>&1; then \
 	  echo "test-mingw: skipped (needs $(MINGW_CC) and wine: sudo apt install gcc-mingw-w64-x86-64 wine; see tools/windows/README.md)"; exit 0; fi; \
-	$(WINE_ENV) $(BUILDDIR)/ztestrunner --zc bin/zc --cc $(MINGW_CC) --target x86_64-w64-mingw32 \
+	if [ ! -f $(MINGW_UCRT)/include/_mingw.h ]; then \
+	  echo "test-mingw: skipped (needs the UCRT mingw-w64 files in $(MINGW_UCRT): $(MINGW_UCRT_FIX); see tools/windows/README.md)"; exit 0; fi; \
+	$(WINE_ENV) $(BUILDDIR)/ztestrunner --zc bin/zc --cc $(MINGW_CC) --ccflags "$(MINGW_CFLAGS)" --target x86_64-w64-mingw32 \
 	   --exec wine --run-only --root . --jobs $(NPROC) > $(BUILDDIR)/mingw-run.log 2>&1; \
 	awk '/^FAIL/ || /^SKIP\(run\) .* \(posix\)$$/ { k = $$1; sub(/^FAIL\(/, "", k); sub(/\)$$/, "", k); \
 	       print $$2, (NF >= 3 ? $$3 : "(" k ")") }' $(BUILDDIR)/mingw-run.log \
@@ -346,8 +356,10 @@ ci-windows: bin/zc $(BUILDDIR)/ztestrunner $(BUILDDIR)/wineprefix/.ready
 	miss=$$($(WINDOWS_SSH_CMD) 'for c in make tar cl gcc; do command -v $$c > /dev/null || printf " %s" $$c; done'); \
 	if [ -n "$$miss" ]; then \
 	  echo "ci-windows FAIL: $(WINDOWS_SSH) has no$$miss on its ssh PATH -- the guest needs MSYS2 bash as sshd's shell with make, tar, UCRT64 gcc and MSVC's cl (vcvars64) on PATH; see tools/windows/README.md"; exit 1; fi; \
+	if [ ! -f $(MINGW_UCRT)/include/_mingw.h ]; then \
+	  echo "ci-windows FAIL: the corpus is built for Windows against the UCRT, whose mingw-w64 files are not in $(MINGW_UCRT): $(MINGW_UCRT_FIX)"; exit 1; fi; \
 	rm -rf $(WINDOWS_DIR); mkdir -p $(WINDOWS_DIR); \
-	$(WINE_ENV) $(BUILDDIR)/ztestrunner --zc bin/zc --cc $(MINGW_CC) --target x86_64-w64-mingw32 \
+	$(WINE_ENV) $(BUILDDIR)/ztestrunner --zc bin/zc --cc $(MINGW_CC) --ccflags "$(MINGW_CFLAGS)" --target x86_64-w64-mingw32 \
 	   --exec wine --run-only --root . --jobs $(NPROC) --save-temps --tmp $(abspath $(WINDOWS_DIR))/build \
 	   > $(WINDOWS_DIR)/build.log 2>&1; \
 	dest=/c/zl/run/$$(date +%Y%m%d-%H%M%S)-$(BUILDID); \
@@ -630,12 +642,12 @@ readable-check: bin/zc $(BUILDDIR)/buildstamp.o
 	@bin/zc hello --src examples --system lib/system --emit-c $(BUILDDIR)/rn/hello-by-id.c
 	@cmp $(BUILDDIR)/rn/hello-by-id.c $(BUILDDIR)/rn/hello-by-rn.c \
 	  || { echo "readable-check FAIL: the readable-named compiler emits different C"; exit 1; }
-	@if command -v $(MINGW_CC) > /dev/null 2>&1; then \
+	@if command -v $(MINGW_CC) > /dev/null 2>&1 && [ -f $(MINGW_UCRT)/include/_mingw.h ]; then \
 	  for c in rn_macro_names:tests/fixtures/emitc_corpus zc:src; do \
 	    n=$${c%%:*}; d=$${c#*:}; \
 	    bin/zc $$n --src $$d --system lib/system --readable-names --target x86_64-w64-mingw32 \
 	      --emit-c $(BUILDDIR)/rn/$$n-win.c || exit 1; \
-	    $(MINGW_CC) -std=c17 -fsyntax-only $(BUILDDIR)/rn/$$n-win.c 2> $(BUILDDIR)/rn/$$n-win.log \
+	    $(MINGW_CC) -std=c17 -fsyntax-only $(MINGW_CFLAGS) $(BUILDDIR)/rn/$$n-win.c 2> $(BUILDDIR)/rn/$$n-win.log \
 	      || { echo "readable-check FAIL: $$n's readable C does not compile for Windows"; grep -m3 error $(BUILDDIR)/rn/$$n-win.log; exit 1; }; \
 	  done; \
 	fi
@@ -1367,10 +1379,10 @@ shim-guard: $(BUILDDIR)/tcc $(BUILDDIR)/wineprefix/.ready
 	    || { echo "shim-guard FAIL: the TSan build"; fail=1; }; \
 	  [ -x $$d/shim-tsan ] && { $$d/shim-tsan > $$d/run.log 2>&1 || { echo "shim-guard FAIL: under ThreadSanitizer"; head -30 $$d/run.log; fail=1; }; }; \
 	fi; \
-	win="; Win32 not run (no x86_64-w64-mingw32-gcc and wine: sudo apt install gcc-mingw-w64-x86-64 wine)"; \
+	win="; Win32 not run (no $(MINGW_CC), UCRT files and wine: sudo apt install gcc-mingw-w64-x86-64 mingw-w64-ucrt64-dev wine)"; \
 	[ -n "$(WINDOWS_HOST)" ] && win=""; \
-	if [ -z "$(WINDOWS_HOST)" ] && command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1 && command -v wine >/dev/null 2>&1; then \
-	  x86_64-w64-mingw32-gcc -std=c17 -Wall -Wextra -Wno-unused-function -O2 -o $$d/shim.exe $$t > $$d/cc.log 2>&1 \
+	if [ -z "$(WINDOWS_HOST)" ] && command -v $(MINGW_CC) >/dev/null 2>&1 && [ -f $(MINGW_UCRT)/include/_mingw.h ] && command -v wine >/dev/null 2>&1; then \
+	  $(MINGW_CC) -std=c17 -Wall -Wextra -Wno-unused-function -O2 $(MINGW_CFLAGS) -o $$d/shim.exe $$t > $$d/cc.log 2>&1 \
 	    || { echo "shim-guard FAIL: mingw-w64 did not build the shim test"; grep -m3 error $$d/cc.log; fail=1; }; \
 	  if [ -f $$d/shim.exe ]; then \
 	    $(WINE_ENV) timeout 300 wine $$d/shim.exe > $$d/run.log 2>&1 \
