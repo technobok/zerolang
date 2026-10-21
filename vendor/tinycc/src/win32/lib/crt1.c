@@ -29,9 +29,19 @@
 #define _runtmain _runmain
 #endif
 
-typedef struct { int newmode; } _startupinfo;
-int __cdecl __tgetmainargs(int *pargc, _TCHAR ***pargv, _TCHAR ***penv, int globb, _startupinfo*);
-void __cdecl __set_app_type(int apptype);
+/* zerolang local patch: the UCRT's startup calls (ucrtbase.dll), in place of
+   msvcrt's __getmainargs, __set_app_type and _XcptFilter */
+#ifdef _UNICODE
+#define _configure_targv _configure_wide_argv
+#define _initialize_tenvironment _initialize_wide_environment
+#else
+#define _configure_targv _configure_narrow_argv
+#define _initialize_tenvironment _initialize_narrow_environment
+#endif
+int __cdecl _configure_targv(int mode); /* 1 as written, 2 wildcards expanded */
+int __cdecl _initialize_tenvironment(void);
+void __cdecl _set_app_type(int apptype);
+int __cdecl _seh_filter_exe(unsigned long code, EXCEPTION_POINTERS *ex);
 unsigned int __cdecl _controlfp(unsigned int new_value, unsigned int mask);
 extern int _tmain(int argc, _TCHAR * argv[], _TCHAR * env[]);
 
@@ -42,17 +52,16 @@ int _dowildcard;
 
 static LONG WINAPI catch_sig(EXCEPTION_POINTERS *ex)
 {
-  return _XcptFilter(ex->ExceptionRecord->ExceptionCode, ex);
+  return _seh_filter_exe(ex->ExceptionRecord->ExceptionCode, ex);
 }
 
 void _tstart(void)
 {
     int ret;
 
-    _startupinfo start_info = {0};
     SetUnhandledExceptionFilter(catch_sig);
     // Sets the current application type
-    __set_app_type(_CONSOLE_APP);
+    _set_app_type(_CONSOLE_APP);
 
     // Set default FP precision to 53 bits (8-byte double)
     // _MCW_PC (Precision control) is not supported on ARM
@@ -60,7 +69,8 @@ void _tstart(void)
     _controlfp(_PC_53, _MCW_PC);
 #endif
 
-    __tgetmainargs( &__argc, &__targv, &_tenviron, _dowildcard, &start_info);
+    _configure_targv(_dowildcard ? 2 : 1);
+    _initialize_tenvironment();
     run_ctors(__argc, __targv, _tenviron);
     ret = _tmain(__argc, __targv, _tenviron);
     run_dtors();
@@ -76,8 +86,8 @@ int _runtmain(int argc, /* as tcc passed in */ char **argv)
 {
     int ret;
 #if defined UNICODE || defined __aarch64__
-    _startupinfo start_info = {0};
-    __tgetmainargs(&__argc, &__targv, &_tenviron, 0, &start_info);
+    _configure_targv(1);
+    _initialize_tenvironment();
 #endif
 #ifdef UNICODE
     /* may be wrong when tcc has received wildcards (*.c) */

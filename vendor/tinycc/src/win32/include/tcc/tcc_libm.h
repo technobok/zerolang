@@ -414,15 +414,21 @@ __CRT_INLINE long double __cdecl nexttowardl(long double x, long double to) {
 }
 
 /* Override msvcrt fabs(): 6.3x speedup! */
+/* zerolang local patch: clear the sign bit, so fabs(-0.0) is +0.0 (the
+   comparison `x < 0 ? -x : x` left -0.0 negative) */
 
 __CRT_INLINE double __cdecl fabs(double x) {
-  return x < 0 ? -x : x;
+  union { double f; unsigned long long i; } u = { x };
+  u.i &= 0x7fffffffffffffffULL;
+  return u.f;
 }
 __CRT_INLINE float __cdecl fabsf(float x) {
-  return x < 0 ? -x : x;
+  union { float f; unsigned int i; } u = { x };
+  u.i &= 0x7fffffffU;
+  return u.f;
 }
 __CRT_INLINE long double __cdecl fabsl(long double x) {
-  return x < 0 ? -x : x;
+  return fabs(x);
 }
 
 

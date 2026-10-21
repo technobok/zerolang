@@ -84,7 +84,7 @@ EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
 .PHONY: all check complexity-report style-lint-fast style-lint test doc-check ci ci-gates ci-corpus \
-	test-math-arm64 test-sqlite-arm64 test-mingw test-msvc-wine ci-windows windows-guest windows-due test-math-noasm test-portable-scalars docs-link-guard math-asm-guard \
+	test-math-arm64 test-sqlite-arm64 test-mingw test-tcc-mingw test-msvc-wine ci-windows windows-guest windows-due test-math-noasm test-portable-scalars docs-link-guard math-asm-guard \
 	bench-math bench-math-kernels test-clang test-tcc test-tcc-heavy readable-check build \
 	tcc zc zl zls regen-goldens regen-fmt-goldens regen-matrix matrix-guard regen-math-asm \
 	fmt-raw-guard regen-lsp-goldens bump-seed test-bootstrap install docs warn-check perf \
@@ -174,7 +174,7 @@ ci:
 	@$(MAKE) --no-print-directory windows-due
 
 # ci-gates -- the gates ci runs in parallel, after perf-strict.
-ci-gates: style-lint zl-full-guard complexity-report warn-check emitter-guard typename-guard frontend-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard highlight-guard any-guard deadcode-guard eager-guard eager-lib-guard case-guard user-native-guard shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard readable-check test-tcc-heavy test-clang test-math-arm64 test-sqlite-arm64 test-math-noasm test-portable-scalars test-mingw test-msvc-wine math-asm-guard matrix-guard docs-link-guard mode-parity ci-corpus
+ci-gates: style-lint zl-full-guard complexity-report warn-check emitter-guard typename-guard frontend-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard highlight-guard any-guard deadcode-guard eager-guard eager-lib-guard case-guard user-native-guard shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard readable-check test-tcc-heavy test-clang test-math-arm64 test-sqlite-arm64 test-math-noasm test-portable-scalars test-mingw test-tcc-mingw test-msvc-wine math-asm-guard matrix-guard docs-link-guard mode-parity ci-corpus
 
 ci-corpus: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --heavy --jobs $(NPROC)
@@ -265,6 +265,33 @@ test-mingw: bin/zc $(BUILDDIR)/ztestrunner $(BUILDDIR)/wineprefix/.ready
 	  exit 1; \
 	fi; \
 	echo "test-mingw OK: $$(sed -n 's/^pass=\([0-9]*\).*/\1/p' $(BUILDDIR)/mingw-run.log) RUN cases pass on Windows (mingw-w64, wine), $$(grep -c . $(BUILDDIR)/mingw-fails.txt) known failures, none new"
+
+# test-tcc-mingw -- the RUN corpus built for Windows by the vendored tcc (the
+# cross compiler above, which links the UCRT, as MSVC and MSYS2 UCRT64 gcc do) as a backend
+# (--cc-forward, so units tcc cannot build are refused by name), run under wine
+# against the same goldens. tests/tcc-mingw-known-failures.txt is the expected
+# failure set: test-tcc's, plus what a Windows build reaches that a Linux one
+# does not, each explained there. Skipped without wine.
+TCC_MINGW_KNOWN := tests/tcc-mingw-known-failures.txt
+test-tcc-mingw: bin/zc $(BUILDDIR)/ztestrunner $(BUILDDIR)/wineprefix/.ready
+	@if ! command -v wine >/dev/null 2>&1; then \
+	  echo "test-tcc-mingw: skipped (needs wine: sudo apt install wine; see tools/windows/README.md)"; exit 0; fi; \
+	$(MAKE) --no-print-directory $(BUILDDIR)/x86_64-win32-tcc > $(BUILDDIR)/tcc-mingw-build.log 2>&1 \
+	  || { tail -20 $(BUILDDIR)/tcc-mingw-build.log; echo "test-tcc-mingw FAIL: the cross tcc did not build"; exit 1; }; \
+	$(WINE_ENV) $(BUILDDIR)/ztestrunner --zc bin/zc --cc $(BUILDDIR)/x86_64-win32-tcc --cc-forward \
+	   --ccflags "-B $(TCCW_LIB)" --target x86_64-w64-mingw32 \
+	   --exec wine --run-only --root . --jobs $(NPROC) > $(BUILDDIR)/tcc-mingw-run.log 2>&1; \
+	awk '/^FAIL/ || /^SKIP\(run\) .* \(posix\)$$/ { k = $$1; sub(/^FAIL\(/, "", k); sub(/\)$$/, "", k); \
+	       print $$2, (NF >= 3 ? $$3 : "(" k ")") }' $(BUILDDIR)/tcc-mingw-run.log \
+	  | sort > $(BUILDDIR)/tcc-mingw-fails.txt; \
+	grep -v '^#' $(TCC_MINGW_KNOWN) | grep -v '^ *$$' | sort > $(BUILDDIR)/tcc-mingw-known.txt; \
+	if ! diff -u $(BUILDDIR)/tcc-mingw-known.txt $(BUILDDIR)/tcc-mingw-fails.txt; then \
+	  echo "test-tcc-mingw FAIL: the Windows tcc failure set moved (-known +actual above)"; \
+	  echo "  a gained line is a regression; a lost one passes now -- delete it from"; \
+	  echo "  $(TCC_MINGW_KNOWN) in the same commit. Full log: $(BUILDDIR)/tcc-mingw-run.log"; \
+	  exit 1; \
+	fi; \
+	echo "test-tcc-mingw OK: $$(sed -n 's/^pass=\([0-9]*\).*/\1/p' $(BUILDDIR)/tcc-mingw-run.log) RUN cases pass on Windows (tcc, wine), $$(grep -c . $(BUILDDIR)/tcc-mingw-fails.txt) known failures, none new"
 
 # test-msvc-wine -- MSVC itself, cl.exe run under wine (msvc-wine; MSVC_WINE
 # names its bin/x64 directory), builds the thread shim's test with the
@@ -629,6 +656,34 @@ $(BUILDDIR)/tcc: $(TCC_SRC) $(TCC_CONFIGDIR)/config.h $(TCC_CONFIGDIR)/config.ma
 
 $(TCCLIB)/libtcc.so: $(BUILDDIR)/tcc ;
 
+# out/x86_64-win32-tcc + out/tcc-win32-lib -- the vendored tinycc as a
+# Linux-hosted cross compiler for Windows (upstream's `make cross-x86_64-win32`
+# from a staged copy, with this host's config), and its payload in the layout a
+# Windows tcc reads: include/ (win32/include, which targets the UCRT -- see
+# vendor/tinycc/VERSION.md -- and tcc's own headers) and lib/ (libtcc1.a and
+# the .def import lists). The import lists are generated by the cross tcc's
+# -impdef from the DLLs of the wine prefix the Windows legs share, as a Windows
+# build generates them from System32; none is vendored.
+TCCW_LIB := $(BUILDDIR)/tcc-win32-lib
+TCCW_DLLS := kernel32 advapi32 shell32 ws2_32 ucrtbase user32 gdi32
+TCC_WIN_SRC := $(wildcard vendor/tinycc/src/win32/lib/* vendor/tinycc/src/win32/include/*.h \
+                          vendor/tinycc/src/win32/include/*/*.h)
+$(BUILDDIR)/x86_64-win32-tcc: $(TCC_SRC) $(TCC_WIN_SRC) $(TCC_CONFIGDIR)/config.h $(TCC_CONFIGDIR)/config.mak
+	@test -f $(WINE_PREFIX)/drive_c/windows/system32/ucrtbase.dll \
+	  || { echo "$@: needs the wine prefix (make $(BUILDDIR)/wineprefix/.ready) for its import lists"; exit 1; }
+	rm -rf $(BUILDDIR)/tinycc-win32 $(TCCW_LIB)
+	mkdir -p $(BUILDDIR)/tinycc-win32 $(TCCW_LIB)/lib
+	cp -r vendor/tinycc/src/. $(BUILDDIR)/tinycc-win32/
+	cp $(TCC_CONFIGDIR)/config.h $(TCC_CONFIGDIR)/config.mak $(BUILDDIR)/tinycc-win32/
+	$(MAKE) -C $(BUILDDIR)/tinycc-win32 -j1 GITHASH=no cross-x86_64-win32
+	cp -r vendor/tinycc/src/win32/include $(TCCW_LIB)/include
+	cp vendor/tinycc/src/include/*.h $(TCCW_LIB)/include/
+	cp $(BUILDDIR)/tinycc-win32/x86_64-win32-libtcc1.a $(TCCW_LIB)/lib/
+	for d in $(TCCW_DLLS); do \
+	  $(BUILDDIR)/tinycc-win32/x86_64-win32-tcc -impdef $(WINE_PREFIX)/drive_c/windows/system32/$$d.dll \
+	    -o $(TCCW_LIB)/lib/$$d.def || exit 1; done
+	cp $(BUILDDIR)/tinycc-win32/x86_64-win32-tcc $@
+
 tcc: $(BUILDDIR)/tcc $(TCCLIB)/libtcc.so
 	@echo "vendored tcc: $(BUILDDIR)/tcc (payload $(TCCLIB))"
 
@@ -931,7 +986,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2286161
+ALLOC_BASELINE := 2286443
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

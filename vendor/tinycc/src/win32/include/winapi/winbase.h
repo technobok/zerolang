@@ -2232,7 +2232,7 @@ extern "C" {
   WINBASEAPI WINBOOL WINAPI CheckNameLegalDOS8Dot3W(LPCWSTR lpName,LPSTR lpOemName,DWORD OemNameSize,PBOOL pbNameContainsSpaces,PBOOL pbNameLegal);
 
   typedef enum _FINDEX_INFO_LEVELS {
-    FindExInfoStandard,FindExInfoMaxInfoLevel
+    FindExInfoStandard,FindExInfoBasic,FindExInfoMaxInfoLevel /* zerolang local patch: FindExInfoBasic */
   } FINDEX_INFO_LEVELS;
 
   typedef enum _FINDEX_SEARCH_OPS {
@@ -2960,6 +2960,63 @@ extern "C" {
   WINBASEAPI WINBOOL WINAPI GetNumaNodeProcessorMask(UCHAR Node,PULONGLONG ProcessorMask);
   WINBASEAPI WINBOOL WINAPI GetNumaAvailableMemoryNode(UCHAR Node,PULONGLONG AvailableBytes);
 
+  /* zerolang local patch: the Vista-and-later declarations zerolang's runtime
+     uses, which this reduced winapi lacks (synchapi.h, processthreadsapi.h,
+     fileapi.h, sysinfoapi.h in the Windows SDK) */
+#define FIND_FIRST_EX_LARGE_FETCH 0x00000002
+  typedef struct _RTL_SRWLOCK { PVOID Ptr; } SRWLOCK,*PSRWLOCK;
+  typedef struct _RTL_CONDITION_VARIABLE { PVOID Ptr; } CONDITION_VARIABLE,*PCONDITION_VARIABLE;
+  typedef union _RTL_RUN_ONCE { PVOID Ptr; } INIT_ONCE,*PINIT_ONCE,*LPINIT_ONCE;
+#define SRWLOCK_INIT {0}
+#define CONDITION_VARIABLE_INIT {0}
+#define INIT_ONCE_STATIC_INIT {0}
+  typedef WINBOOL (WINAPI *PINIT_ONCE_FN)(PINIT_ONCE InitOnce,PVOID Parameter,PVOID *Context);
+  WINBASEAPI VOID WINAPI InitializeSRWLock(PSRWLOCK SRWLock);
+  WINBASEAPI VOID WINAPI AcquireSRWLockExclusive(PSRWLOCK SRWLock);
+  WINBASEAPI VOID WINAPI AcquireSRWLockShared(PSRWLOCK SRWLock);
+  WINBASEAPI VOID WINAPI ReleaseSRWLockExclusive(PSRWLOCK SRWLock);
+  WINBASEAPI VOID WINAPI ReleaseSRWLockShared(PSRWLOCK SRWLock);
+  WINBASEAPI BOOLEAN WINAPI TryAcquireSRWLockExclusive(PSRWLOCK SRWLock);
+  WINBASEAPI BOOLEAN WINAPI TryAcquireSRWLockShared(PSRWLOCK SRWLock);
+  WINBASEAPI VOID WINAPI InitializeConditionVariable(PCONDITION_VARIABLE ConditionVariable);
+  WINBASEAPI WINBOOL WINAPI SleepConditionVariableSRW(PCONDITION_VARIABLE ConditionVariable,PSRWLOCK SRWLock,DWORD dwMilliseconds,ULONG Flags);
+  WINBASEAPI VOID WINAPI WakeConditionVariable(PCONDITION_VARIABLE ConditionVariable);
+  WINBASEAPI VOID WINAPI WakeAllConditionVariable(PCONDITION_VARIABLE ConditionVariable);
+  WINBASEAPI WINBOOL WINAPI InitOnceExecuteOnce(PINIT_ONCE InitOnce,PINIT_ONCE_FN InitFn,PVOID Parameter,LPVOID *Context);
+  WINBASEAPI HRESULT WINAPI SetThreadDescription(HANDLE hThread,PCWSTR lpThreadDescription);
+
+  typedef struct _PROC_THREAD_ATTRIBUTE_LIST *PPROC_THREAD_ATTRIBUTE_LIST,*LPPROC_THREAD_ATTRIBUTE_LIST;
+  typedef struct _STARTUPINFOEXW {
+    STARTUPINFOW StartupInfo;
+    LPPROC_THREAD_ATTRIBUTE_LIST lpAttributeList;
+  } STARTUPINFOEXW,*LPSTARTUPINFOEXW;
+#define EXTENDED_STARTUPINFO_PRESENT 0x00080000
+#define PROC_THREAD_ATTRIBUTE_HANDLE_LIST 0x00020002
+  WINBASEAPI WINBOOL WINAPI InitializeProcThreadAttributeList(LPPROC_THREAD_ATTRIBUTE_LIST lpAttributeList,DWORD dwAttributeCount,DWORD dwFlags,PSIZE_T lpSize);
+  WINBASEAPI WINBOOL WINAPI UpdateProcThreadAttribute(LPPROC_THREAD_ATTRIBUTE_LIST lpAttributeList,DWORD dwFlags,DWORD_PTR Attribute,PVOID lpValue,SIZE_T cbSize,PVOID lpPreviousValue,PSIZE_T lpReturnSize);
+  WINBASEAPI VOID WINAPI DeleteProcThreadAttributeList(LPPROC_THREAD_ATTRIBUTE_LIST lpAttributeList);
+#define ALL_PROCESSOR_GROUPS 0xffff
+  WINBASEAPI DWORD WINAPI GetActiveProcessorCount(WORD GroupNumber);
+  WINBASEAPI ULONGLONG WINAPI GetTickCount64(VOID);
+
+  typedef enum _FILE_INFO_BY_HANDLE_CLASS {
+    FileBasicInfo = 0,FileAttributeTagInfo = 9
+  } FILE_INFO_BY_HANDLE_CLASS;
+  typedef struct _FILE_BASIC_INFO {
+    LARGE_INTEGER CreationTime;
+    LARGE_INTEGER LastAccessTime;
+    LARGE_INTEGER LastWriteTime;
+    LARGE_INTEGER ChangeTime;
+    DWORD FileAttributes;
+  } FILE_BASIC_INFO,*PFILE_BASIC_INFO;
+  typedef struct _FILE_ATTRIBUTE_TAG_INFO {
+    DWORD FileAttributes;
+    DWORD ReparseTag;
+  } FILE_ATTRIBUTE_TAG_INFO,*PFILE_ATTRIBUTE_TAG_INFO;
+  WINBASEAPI WINBOOL WINAPI GetFileInformationByHandleEx(HANDLE hFile,FILE_INFO_BY_HANDLE_CLASS FileInformationClass,LPVOID lpFileInformation,DWORD dwBufferSize);
+#define SYMBOLIC_LINK_FLAG_DIRECTORY 0x1
+#define SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE 0x2
+  WINBASEAPI BOOLEAN WINAPI CreateSymbolicLinkW(LPCWSTR lpSymlinkFileName,LPCWSTR lpTargetFileName,DWORD dwFlags);
 #ifdef __cplusplus
 }
 #endif

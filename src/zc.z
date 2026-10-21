@@ -434,6 +434,22 @@ ccRealPath: function {name: StringView} out String is {
     return cur
 }
 
+# runtimeLinkArgs -- how the C compiler's runtime is linked: off Windows,
+# libm; for Windows, no libm (the C runtime holds the math functions) and, for
+# gcc and clang, -static, so the .exe needs no libgcc or winpthreads DLL
+# beside it. tcc's own runtime (libtcc1.a) is always linked in, and under
+# -static tcc would take libraries only as archives, never through its .def
+# import lists.
+runtimeLinkArgs: function {windowsTarget: bool ccKind: zemitterc.ccfamily} out List String is {
+    a: List String
+    if windowsTarget.not then {
+        a.append from: "-lm".string
+    } else if ccKind.tcc.not then {
+        a.append from: "-static".string
+    }
+    return a
+}
+
 # buildExe -- turn the emitted C into an executable, by running the C
 # compiler as a child process or by loading libtcc into this one. Debug is
 # -O0 -g; --release is -O2. cflags/ldflags split on spaces. Empty out/err
@@ -460,8 +476,9 @@ buildExe: function {
     inproc: bool
     # the build is for Windows, whose executables link the compiler's runtime
     # libraries (libgcc, winpthreads, libquadmath) statically, so an .exe runs
-    # with no DLL beside it
-    staticRuntime: bool
+    # with no DLL beside it, and whose math is the C runtime's -- there is no
+    # libm to name
+    windowsTarget: bool
 } out i32 is {
     if inproc then {
         # There is no ldflags parameter read here: libtcc links through the
@@ -487,7 +504,6 @@ buildExe: function {
         a.append from: "-g".string
     }
     a.append from: "-std=c17".string
-    if staticRuntime then a.append from: "-static".string
     # a `.view` receiver or parameter is `const` in the C, so a write through
     # one is a discarded qualifier: the checker refuses it first, and this
     # makes the C compiler refuse it too, should the checker ever miss one.
@@ -519,7 +535,7 @@ buildExe: function {
         la9c.append lb9c
         a.append from: la9c
     }
-    a.append from: "-lm".string
+    for each rl: (runtimeLinkArgs :windowsTarget :ccKind) loop a.append from: rl.copy
     for each piece2: (ldflags.split sep: " ") loop {
         if piece2.length > 0 then {
             a.append from: piece2.string
@@ -1428,7 +1444,7 @@ buildAndRun: function {
         :objs
         tccDir: ccTcc.stringView
         :inproc
-        staticRuntime: (ztarget.targetIsWindows triple: cf.targetTriple.stringView)
+        windowsTarget: (ztarget.targetIsWindows triple: cf.targetTriple.stringView)
     )
     if cf.saveTemps then {
         kept: "zc: kept generated C at \{tmpc.stringView}"

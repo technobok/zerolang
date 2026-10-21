@@ -256,9 +256,8 @@ extern FILE (*_imp___iob)[];    /* A pointer to an array of FILE */
   int __cdecl vsprintf(char *_Dest,const char *_Format,va_list _Args);
 #ifndef __NO_ISOCEXT  /* externs in libmingwex.a */
   int __cdecl snprintf(char* s, size_t n, const char*  format, ...);
-  __CRT_INLINE int __cdecl vsnprintf (char* s, size_t n, const char* format,va_list arg) {
-    return _vsnprintf ( s, n, format, arg);
-  }
+  /* zerolang local patch: vsnprintf is C99's, in libtcc1.a (win32/lib/ucrt.c),
+     not an inline over msvcrt's _vsnprintf */
   int __cdecl vscanf(const char * Format, va_list argp);
   int __cdecl vfscanf (FILE * fp, const char * Format,va_list argp);
   int __cdecl vsscanf (const char * _Str,const char * Format,va_list argp);
@@ -316,7 +315,7 @@ extern FILE (*_imp___iob)[];    /* A pointer to an array of FILE */
   _CRTIMP int __cdecl _vsnwprintf(wchar_t *_Dest,size_t _Count,const wchar_t *_Format,va_list _Args);
 #ifndef __NO_ISOCEXT  /* externs in libmingwex.a */
   int __cdecl snwprintf (wchar_t* s, size_t n, const wchar_t*  format, ...);
-  __CRT_INLINE int __cdecl vsnwprintf (wchar_t* s, size_t n, const wchar_t* format, va_list arg) { return _vsnwprintf(s,n,format,arg); }
+  int __cdecl vsnwprintf (wchar_t* s, size_t n, const wchar_t* format, va_list arg); /* zerolang local patch: in libtcc1.a */
   int __cdecl vwscanf (const wchar_t *, va_list);
   int __cdecl vfwscanf (FILE *,const wchar_t *,va_list);
   int __cdecl vswscanf (const wchar_t *,const wchar_t *,va_list);

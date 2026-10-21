@@ -168,4 +168,7 @@ typedef struct localeinfo_struct _locale_tstruct,*_locale_t;
 #define MINGW_HAS_SECURE_API
 #define WIN32 1
 
+/* zerolang local patch: the CRT is the UCRT (ucrtbase.dll), not msvcrt.dll */
+#include "_ucrt.h"
+
 #endif /* __MINGW_H */

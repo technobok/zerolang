@@ -2152,7 +2152,9 @@ static void pe_add_runtime(TCCState *s1, struct pe_info *pe)
 
     if (0 == s1->nostdlib) {
         static const char * const libs[] = {
-            "msvcrt", "kernel32", "", "user32", "gdi32", NULL
+            /* zerolang local patch: the UCRT, as every other Windows
+               compiler links, in place of msvcrt.dll */
+            "ucrtbase", "kernel32", "", "user32", "gdi32", NULL
         };
         const char * const *pp, *p;
         if (TCC_LIBTCC1[0])

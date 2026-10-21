@@ -3465,6 +3465,7 @@ typedef DWORD LCID;
 #define IsReparseTagNameSurrogate(_tag) (((_tag) & 0x20000000))
 
 #define IO_REPARSE_TAG_MOUNT_POINT (0xA0000003L)
+#define IO_REPARSE_TAG_SYMLINK (0xA000000CL) /* zerolang local patch */
 #define IO_REPARSE_TAG_HSM (0xC0000004L)
 #define IO_REPARSE_TAG_SIS (0x80000007L)
 #define IO_REPARSE_TAG_DFS (0x8000000AL)

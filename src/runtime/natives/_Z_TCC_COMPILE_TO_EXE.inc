@@ -74,7 +74,10 @@ static int32_t z_tcc_compileToExe(
             }
         }
     }
+#if !defined(_WIN32)
+    /* Windows has no libm: its math is the C runtime's */
     if (rc == 0 && a.add_library(s, "m") == -1) rc = 1;
+#endif
 
     if (rc == 0) {
         char* exe_c = z_sv_to_cstr(exe);

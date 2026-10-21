@@ -803,6 +803,7 @@ extern "C" {
 #define WSA_FLAG_MULTIPOINT_C_LEAF 0x04
 #define WSA_FLAG_MULTIPOINT_D_ROOT 0x08
 #define WSA_FLAG_MULTIPOINT_D_LEAF 0x10
+#define WSA_FLAG_NO_HANDLE_INHERIT 0x80 /* zerolang local patch */
 
 #define IOC_UNIX 0x00000000
 #define IOC_WS2 0x08000000
