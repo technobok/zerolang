@@ -96,7 +96,7 @@ NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 	test-math-arm64 test-sqlite-arm64 test-mingw test-tcc-mingw test-msvc-wine ci-windows windows-guest windows-due test-math-noasm test-portable-scalars docs-link-guard math-asm-guard \
 	bench-math bench-math-kernels test-clang test-tcc test-tcc-heavy readable-check build \
 	tcc zc zl zls regen-goldens regen-fmt-goldens regen-matrix matrix-guard regen-math-asm \
-	fmt-raw-guard regen-lsp-goldens bump-seed test-bootstrap install docs warn-check perf \
+	fmt-raw-guard regen-lsp-goldens bump-seed test-bootstrap install docs warn-check pedantic-check perf \
 	perf-strict pre-push perf-elision any-guard typename-guard emitter-guard frontend-guard \
 	lifetime-guard user-native-guard shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard case-guard require-guard mode-parity zlink-rules-guard \
 	refusal-guard static-tcc-guard zlink-guard emit-set ident-set const-row-guard \
@@ -183,7 +183,7 @@ ci:
 	@$(MAKE) --no-print-directory windows-due
 
 # ci-gates -- the gates ci runs in parallel, after perf-strict.
-ci-gates: style-lint zl-full-guard complexity-report warn-check emitter-guard typename-guard frontend-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard highlight-guard any-guard deadcode-guard eager-guard eager-lib-guard case-guard user-native-guard shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard readable-check test-tcc-heavy test-clang test-math-arm64 test-sqlite-arm64 test-math-noasm test-portable-scalars test-mingw test-tcc-mingw test-msvc-wine math-asm-guard matrix-guard docs-link-guard mode-parity ci-corpus
+ci-gates: style-lint zl-full-guard complexity-report warn-check pedantic-check emitter-guard typename-guard frontend-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard highlight-guard any-guard deadcode-guard eager-guard eager-lib-guard case-guard user-native-guard shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard readable-check test-tcc-heavy test-clang test-math-arm64 test-sqlite-arm64 test-math-noasm test-portable-scalars test-mingw test-tcc-mingw test-msvc-wine math-asm-guard matrix-guard docs-link-guard mode-parity ci-corpus
 
 ci-corpus: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --heavy --jobs $(NPROC)
@@ -1042,6 +1042,50 @@ warn-check: bin/zc.c $(BUILDDIR)/zl.c $(BUILDDIR)/zls.c $(BUILDDIR)/tcc
 	done
 	@echo "warn-check OK: zero warnings from $(words $(WARN_CCS)) compiler(s) on all four emitted files"
 
+# pedantic-check -- how far the emitted C is from ISO C17, which is all MSVC
+# compiles: gcc -Wpedantic's diagnostics over the three drivers' C and over the C
+# of every RUN case, each total held in tests/pedantic-baseline.txt. A total that
+# moves either way fails: a rise is C that only some compilers take, and a fall
+# is recorded by lowering the baseline in the same commit. -Wpedantic does not
+# see __typeof__, __builtin_* or __attribute__; test-msvc-corpus, cl itself, does.
+PEDANTIC_DIR := $(BUILDDIR)/pedantic
+PEDANTIC_BASELINE := tests/pedantic-baseline.txt
+PEDANTIC_CC := gcc -std=c17 -Wpedantic -fsyntax-only
+pedantic-check: bin/zc bin/zc.c $(BUILDDIR)/zl.c $(BUILDDIR)/zls.c
+	@rm -rf $(PEDANTIC_DIR); mkdir -p $(PEDANTIC_DIR)/drivers $(PEDANTIC_DIR)/run; \
+	for f in bin/zc.c $(BUILDDIR)/zl.c $(BUILDDIR)/zls.c; do \
+	  $(PEDANTIC_CC) $$f > $(PEDANTIC_DIR)/drivers/$$(basename $$f).log 2>&1; \
+	done; \
+	grep -v '^#' tests/fixtures/run_cases.txt | awk 'NF >= 2 && !seen[$$1]++ {print $$1, $$2}' \
+	  | xargs -P $(NPROC) -n 2 sh -c 'n=$$0; dirs=$$1; set --; \
+	      for d in $$(echo "$$dirs" | tr ":" " "); do set -- "$$@" --src "$$d"; done; \
+	      bin/zc "$$n" "$$@" --system lib/system --emit-c $(PEDANTIC_DIR)/run/$$n.c > /dev/null 2>&1 \
+	        || { echo "$$n" >> $(PEDANTIC_DIR)/emitfail.txt; exit 0; }; \
+	      $(PEDANTIC_CC) $(PEDANTIC_DIR)/run/$$n.c > $(PEDANTIC_DIR)/run/$$n.log 2>&1; true'; \
+	if [ -s $(PEDANTIC_DIR)/emitfail.txt ]; then \
+	  echo "pedantic-check FAIL: zc did not emit these RUN cases (make test names the reason):"; \
+	  sed 's/^/  /' $(PEDANTIC_DIR)/emitfail.txt; exit 1; fi; \
+	fail=0; \
+	for part in drivers run; do \
+	  key=$$part; [ $$part = run ] && key=corpus; \
+	  find $(PEDANTIC_DIR)/$$part -name '*.log' -exec cat {} + > $(PEDANTIC_DIR)/$$key.all; \
+	  if grep -q ' error: ' $(PEDANTIC_DIR)/$$key.all; then \
+	    echo "pedantic-check FAIL: gcc rejects the $$key C:"; grep -m5 ' error: ' $(PEDANTIC_DIR)/$$key.all; fail=1; continue; fi; \
+	  got=$$(grep -c '\[-Wpedantic\]' $(PEDANTIC_DIR)/$$key.all); \
+	  want=$$(awk -v k=$$key '$$1 == k {print $$2}' $(PEDANTIC_BASELINE)); \
+	  if [ "$$got" != "$$want" ]; then \
+	    echo "pedantic-check FAIL: $$key has $$got -Wpedantic diagnostics, $(PEDANTIC_BASELINE) says $$want"; \
+	    echo "  a rise is C outside ISO C17 -- emit the portable form instead; a fall is progress --"; \
+	    echo "  set '$$key $$got' in $(PEDANTIC_BASELINE) in the same commit. By kind:"; \
+	    grep '\[-Wpedantic\]' $(PEDANTIC_DIR)/$$key.all | sed -E 's/^[^:]*:[0-9]+:[0-9]+: warning: //' \
+	      | sort | uniq -c | sort -rn | sed 's/^/  /'; \
+	    fail=1; \
+	  fi; \
+	  printf '%s=%s ' $$key $$got >> $(PEDANTIC_DIR)/summary; \
+	done; \
+	if [ $$fail -ne 0 ]; then exit 1; fi; \
+	echo "pedantic-check OK: $$(cat $(PEDANTIC_DIR)/summary)-Wpedantic diagnostics, as the baseline says"
+
 # perf -- the self-compile snapshot for docs/perf-baseline.md: line count, wall,
 # peak RSS, phase split and the allocation total.
 PERFARGS := zc --src src --system lib/system --emit-c /dev/null
@@ -1421,9 +1465,10 @@ thread-tsan-guard: bin/zc
 endif
 
 # case-guard -- every program declaring `main` is in a case list (run, smoke or
-# dump), so something compiles it. A unit with no main is reached through others.
+# dump), so something compiles it, and no list names a case twice. A unit with no
+# main is reached through others.
 case-guard:
-	@fail=0; \
+	@fail=0; dup=0; \
 	for f in examples/*.z tests/fixtures/emitc_corpus/*.z; do \
 	  b=$$(basename $$f .z); \
 	  grep -qE '^main: *function' $$f || continue; \
@@ -1431,12 +1476,18 @@ case-guard:
 	    tests/fixtures/run_cases.txt tests/fixtures/smoke_cases.txt tests/fixtures/dump_cases.txt \
 	    || { echo "case-guard: $$b declares main but is in no case list -- nothing compiles it"; fail=1; }; \
 	done; \
+	for l in tests/fixtures/run_cases.txt tests/fixtures/smoke_cases.txt tests/fixtures/dump_cases.txt; do \
+	  for d in $$(grep -v '^#' $$l | awk 'NF {print $$1}' | sort | uniq -d); do \
+	    echo "case-guard: $$d is listed twice in $$l -- the runner would build and run it twice; delete one line"; dup=1; \
+	  done; \
+	done; \
 	if [ $$fail -ne 0 ]; then \
 	  echo "  add it to run_cases.txt with a tests/fixtures/run_golden/<name>.out, or to"; \
 	  echo "  smoke_cases.txt when the output is environment-dependent (build only)"; \
 	  exit 1; \
 	fi; \
-	echo "case-guard OK: every program declaring main is in a case list"
+	if [ $$dup -ne 0 ]; then exit 1; fi; \
+	echo "case-guard OK: every program declaring main is in a case list, and no list names one twice"
 
 # require-guard -- how many programs are refused under --cc tcc, for a Linux and
 # a Windows target whatever the host: a unit's toolchain needs speak only for
