@@ -248,12 +248,6 @@ static z_t64_t z_t64_cat(z_t64_t* a, z_t64_t* b) {
     return z;
 }
 
-static z_t64_t z_t64_from_i64(int64_t n) {
-    char buf[32];
-    snprintf(buf, sizeof(buf), "%ld", (long)n);
-    return z_t64_new(buf);
-}
-
 static z_t64_t z_t64_from_f64(double n) {
     char buf[64];
     snprintf(buf, sizeof(buf), "%g", n);
@@ -2645,8 +2639,8 @@ static const char _zs1406_d[] = "    if (_idx >= _this.length) {\n";
 static const z_t84_t _zs1406 = { .data = _zs1406_d, .size = 32 };
 static const char _zs1407_d[] = "        char _zp_buf[96];\n";
 static const z_t84_t _zs1407 = { .data = _zs1407_d, .size = 26 };
-static const char _zs1408_d[] = "        snprintf(_zp_buf, sizeof(_zp_buf), \"data index: index %lu out of bounds (length %lu)\", (unsigned long)_idx, (unsigned long)_this.length);\n";
-static const z_t84_t _zs1408 = { .data = _zs1408_d, .size = 146 };
+static const char _zs1408_d[] = "        snprintf(_zp_buf, sizeof(_zp_buf), \"data index: index %llu out of bounds (length %llu)\", (unsigned long long)_idx, (unsigned long long)_this.length);\n";
+static const z_t84_t _zs1408 = { .data = _zs1408_d, .size = 158 };
 static const char _zs1409_d[] = "        z_panic(_zp_buf);\n";
 static const z_t84_t _zs1409 = { .data = _zs1409_d, .size = 26 };
 static const char _zs1410_d[] = "    }\n";
@@ -10426,7 +10420,7 @@ static z_t84_t z_t113_index(z_t113_t _this, uint64_t _idx);
 static z_t84_t z_t113_index(z_t113_t _this, uint64_t _idx) {
     if (_idx >= _this.length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this.length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this.length);
         z_panic(_zp_buf);
     }
     return _this.data[_idx];
@@ -10469,7 +10463,7 @@ static int64_t z_t134_index(z_t134_t _this, uint64_t _idx);
 static int64_t z_t134_index(z_t134_t _this, uint64_t _idx) {
     if (_idx >= _this.length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this.length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this.length);
         z_panic(_zp_buf);
     }
     return _this.data[_idx];
@@ -10484,7 +10478,7 @@ static z_t84_t z_t782_index(z_t782_t _this, uint64_t _idx);
 static z_t84_t z_t782_index(z_t782_t _this, uint64_t _idx) {
     if (_idx >= _this.length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this.length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this.length);
         z_panic(_zp_buf);
     }
     return _this.data[_idx];
@@ -10530,7 +10524,7 @@ static uint64_t z_t6015_index(z_t6015_t _this, uint64_t _idx);
 static uint64_t z_t6015_index(z_t6015_t _this, uint64_t _idx) {
     if (_idx >= _this.length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this.length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this.length);
         z_panic(_zp_buf);
     }
     return _this.data[_idx];
@@ -10545,7 +10539,7 @@ static uint8_t z_t8032_index(z_t8032_t _this, uint64_t _idx);
 static uint8_t z_t8032_index(z_t8032_t _this, uint64_t _idx) {
     if (_idx >= _this.length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this.length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this.length);
         z_panic(_zp_buf);
     }
     return _this.data[_idx];
@@ -10609,7 +10603,7 @@ static uint64_t z_t644_get(const z_t644_t* _this, uint64_t _idx);
 static uint64_t z_t644_get(const z_t644_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "ListView get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "ListView get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return _this->data[_idx];
@@ -10619,7 +10613,7 @@ static z_t644_t z_t644_slice(const z_t644_t* _this, uint64_t _from, uint64_t _to
 static z_t644_t z_t644_slice(const z_t644_t* _this, uint64_t _from, uint64_t _to) {
     if (_from > _to || _to > _this->length) {
         char _zp_buf[128];
-        snprintf(_zp_buf, sizeof(_zp_buf), "ListView slice: [%lu, %lu) out of bounds (length %lu)", (unsigned long)_from, (unsigned long)_to, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "ListView slice: [%llu, %llu) out of bounds (length %llu)", (unsigned long long)_from, (unsigned long long)_to, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return (z_t644_t){ .length = _to - _from, .data = _this->data + _from };
@@ -10701,7 +10695,7 @@ static uint64_t z_t3711_get(const z_t3711_t* _this, uint64_t _idx);
 static uint64_t z_t3711_get(const z_t3711_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "SpanVal get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "SpanVal get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return _this->data[_idx];
@@ -10711,7 +10705,7 @@ static uint64_t z_t3711_set(z_t3711_t* _this, uint64_t _idx, uint64_t _val);
 static uint64_t z_t3711_set(z_t3711_t* _this, uint64_t _idx, uint64_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "SpanVal set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "SpanVal set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     uint64_t _old = _this->data[_idx];
@@ -10723,7 +10717,7 @@ static z_t3711_t z_t3711_slice(z_t3711_t* _this, uint64_t _from, uint64_t _to);
 static z_t3711_t z_t3711_slice(z_t3711_t* _this, uint64_t _from, uint64_t _to) {
     if (_from > _to || _to > _this->length) {
         char _zp_buf[128];
-        snprintf(_zp_buf, sizeof(_zp_buf), "SpanVal slice: [%lu, %lu) out of bounds (length %lu)", (unsigned long)_from, (unsigned long)_to, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "SpanVal slice: [%llu, %llu) out of bounds (length %llu)", (unsigned long long)_from, (unsigned long long)_to, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return (z_t3711_t){ .length = _to - _from, .data = _this->data + _from };
@@ -10791,7 +10785,7 @@ static z_t64_t z_t528_set(z_t528_t* _this, uint64_t _idx, z_t64_t _val);
 static z_t64_t z_t528_set(z_t528_t* _this, uint64_t _idx, z_t64_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t64_t _old = _this->data[_idx];
@@ -10813,7 +10807,7 @@ static z_t64_t* z_t528_get(const z_t528_t* _this, uint64_t _idx);
 static z_t64_t* z_t528_get(const z_t528_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return (z_t64_t*)&_this->data[_idx];
@@ -10907,7 +10901,7 @@ static z_t64_t z_t571_set(z_t571_t* _this, uint64_t _idx, z_t64_t _val);
 static z_t64_t z_t571_set(z_t571_t* _this, uint64_t _idx, z_t64_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t64_t _old = _this->data[_idx];
@@ -10929,7 +10923,7 @@ static z_t64_t* z_t571_get(const z_t571_t* _this, uint64_t _idx);
 static z_t64_t* z_t571_get(const z_t571_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return (z_t64_t*)&_this->data[_idx];
@@ -10977,7 +10971,7 @@ static uint64_t z_t595_set(z_t595_t* _this, uint64_t _idx, uint64_t _val);
 static uint64_t z_t595_set(z_t595_t* _this, uint64_t _idx, uint64_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     uint64_t _old = _this->data[_idx];
@@ -10999,7 +10993,7 @@ static uint64_t z_t595_get(const z_t595_t* _this, uint64_t _idx);
 static uint64_t z_t595_get(const z_t595_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return _this->data[_idx];
@@ -11047,7 +11041,7 @@ static uint8_t z_t660_set(z_t660_t* _this, uint64_t _idx, uint8_t _val);
 static uint8_t z_t660_set(z_t660_t* _this, uint64_t _idx, uint8_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     uint8_t _old = _this->data[_idx];
@@ -11069,7 +11063,7 @@ static uint8_t z_t660_get(const z_t660_t* _this, uint64_t _idx);
 static uint8_t z_t660_get(const z_t660_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return _this->data[_idx];
@@ -11120,7 +11114,7 @@ static z_t64_t z_t1002_set(z_t1002_t* _this, uint64_t _idx, z_t64_t _val);
 static z_t64_t z_t1002_set(z_t1002_t* _this, uint64_t _idx, z_t64_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t64_t _old = _this->data[_idx];
@@ -11142,7 +11136,7 @@ static z_t64_t* z_t1002_get(const z_t1002_t* _this, uint64_t _idx);
 static z_t64_t* z_t1002_get(const z_t1002_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return (z_t64_t*)&_this->data[_idx];
@@ -11190,7 +11184,7 @@ static uint64_t z_t3694_set(z_t3694_t* _this, uint64_t _idx, uint64_t _val);
 static uint64_t z_t3694_set(z_t3694_t* _this, uint64_t _idx, uint64_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     uint64_t _old = _this->data[_idx];
@@ -11246,7 +11240,7 @@ static uint64_t z_t3694_get(const z_t3694_t* _this, uint64_t _idx);
 static uint64_t z_t3694_get(const z_t3694_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return _this->data[_idx];
@@ -11256,7 +11250,7 @@ static z_t644_t z_t3694_slice(const z_t3694_t* _this, uint64_t _from, uint64_t _
 static z_t644_t z_t3694_slice(const z_t3694_t* _this, uint64_t _from, uint64_t _to) {
     if (_from > _to || _to > _this->length) {
         char _zp_buf[128];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List slice: [%lu, %lu) out of bounds (length %lu)", (unsigned long)_from, (unsigned long)_to, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List slice: [%llu, %llu) out of bounds (length %llu)", (unsigned long long)_from, (unsigned long long)_to, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return (z_t644_t){ .length = _to - _from, .data = _this->data + _from };
@@ -11314,7 +11308,7 @@ static uint32_t z_t3893_set(z_t3893_t* _this, uint64_t _idx, uint32_t _val);
 static uint32_t z_t3893_set(z_t3893_t* _this, uint64_t _idx, uint32_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     uint32_t _old = _this->data[_idx];
@@ -11336,7 +11330,7 @@ static uint32_t z_t3893_get(const z_t3893_t* _this, uint64_t _idx);
 static uint32_t z_t3893_get(const z_t3893_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return _this->data[_idx];
@@ -11394,7 +11388,7 @@ static uint8_t z_t4534_set(z_t4534_t* _this, uint64_t _idx, uint8_t _val);
 static uint8_t z_t4534_set(z_t4534_t* _this, uint64_t _idx, uint8_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     uint8_t _old = _this->data[_idx];
@@ -11423,7 +11417,7 @@ static uint8_t z_t4534_get(const z_t4534_t* _this, uint64_t _idx);
 static uint8_t z_t4534_get(const z_t4534_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return _this->data[_idx];
@@ -17262,7 +17256,7 @@ static uint32_t z_t740_get(const z_t740_t* _this, uint64_t _idx);
 static uint32_t z_t740_get(const z_t740_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "ListView get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "ListView get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return _this->data[_idx];
@@ -18190,7 +18184,7 @@ static z_t840_t z_t849_set(z_t849_t* _this, uint64_t _idx, z_t840_t _val);
 static z_t840_t z_t849_set(z_t849_t* _this, uint64_t _idx, z_t840_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t840_t _old = _this->data[_idx];
@@ -18212,7 +18206,7 @@ static z_t840_t* z_t849_get(const z_t849_t* _this, uint64_t _idx);
 static z_t840_t* z_t849_get(const z_t849_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return (z_t840_t*)&_this->data[_idx];
@@ -18222,7 +18216,7 @@ static z_t840_t* z_t849_getMut(z_t849_t* _this, uint64_t _idx);
 static z_t840_t* z_t849_getMut(z_t849_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return &_this->data[_idx];
@@ -18273,7 +18267,7 @@ static z_t1641_t z_t1657_set(z_t1657_t* _this, uint64_t _idx, z_t1641_t _val);
 static z_t1641_t z_t1657_set(z_t1657_t* _this, uint64_t _idx, z_t1641_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t1641_t _old = _this->data[_idx];
@@ -18295,7 +18289,7 @@ static z_t1641_t* z_t1657_get(const z_t1657_t* _this, uint64_t _idx);
 static z_t1641_t* z_t1657_get(const z_t1657_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return (z_t1641_t*)&_this->data[_idx];
@@ -18305,7 +18299,7 @@ static z_t1641_t* z_t1657_getMut(z_t1657_t* _this, uint64_t _idx);
 static z_t1641_t* z_t1657_getMut(z_t1657_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return &_this->data[_idx];
@@ -18353,7 +18347,7 @@ static z_t1694_t z_t1716_set(z_t1716_t* _this, uint64_t _idx, z_t1694_t _val);
 static z_t1694_t z_t1716_set(z_t1716_t* _this, uint64_t _idx, z_t1694_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t1694_t _old = _this->data[_idx];
@@ -18375,7 +18369,7 @@ static z_t1694_t* z_t1716_get(const z_t1716_t* _this, uint64_t _idx);
 static z_t1694_t* z_t1716_get(const z_t1716_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return (z_t1694_t*)&_this->data[_idx];
@@ -18385,7 +18379,7 @@ static z_t1694_t* z_t1716_getMut(z_t1716_t* _this, uint64_t _idx);
 static z_t1694_t* z_t1716_getMut(z_t1716_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return &_this->data[_idx];
@@ -18443,7 +18437,7 @@ static z_t2403_t z_t2405_set(z_t2405_t* _this, uint64_t _idx, z_t2403_t _val);
 static z_t2403_t z_t2405_set(z_t2405_t* _this, uint64_t _idx, z_t2403_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t2403_t _old = _this->data[_idx];
@@ -18516,7 +18510,7 @@ static z_t3693_t z_t3730_set(z_t3730_t* _this, uint64_t _idx, z_t3693_t _val);
 static z_t3693_t z_t3730_set(z_t3730_t* _this, uint64_t _idx, z_t3693_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t3693_t _old = _this->data[_idx];
@@ -18538,7 +18532,7 @@ static z_t3693_t* z_t3730_get(const z_t3730_t* _this, uint64_t _idx);
 static z_t3693_t* z_t3730_get(const z_t3730_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return (z_t3693_t*)&_this->data[_idx];
@@ -18589,7 +18583,7 @@ static z_t3767_t z_t3768_set(z_t3768_t* _this, uint64_t _idx, z_t3767_t _val);
 static z_t3767_t z_t3768_set(z_t3768_t* _this, uint64_t _idx, z_t3767_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t3767_t _old = _this->data[_idx];
@@ -18611,7 +18605,7 @@ static z_t3767_t* z_t3768_get(const z_t3768_t* _this, uint64_t _idx);
 static z_t3767_t* z_t3768_get(const z_t3768_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return (z_t3767_t*)&_this->data[_idx];
@@ -18662,7 +18656,7 @@ static z_t3805_t z_t3822_set(z_t3822_t* _this, uint64_t _idx, z_t3805_t _val);
 static z_t3805_t z_t3822_set(z_t3822_t* _this, uint64_t _idx, z_t3805_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t3805_t _old = _this->data[_idx];
@@ -18684,7 +18678,7 @@ static z_t3805_t* z_t3822_get(const z_t3822_t* _this, uint64_t _idx);
 static z_t3805_t* z_t3822_get(const z_t3822_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return (z_t3805_t*)&_this->data[_idx];
@@ -18735,7 +18729,7 @@ static z_t3978_t z_t3982_set(z_t3982_t* _this, uint64_t _idx, z_t3978_t _val);
 static z_t3978_t z_t3982_set(z_t3982_t* _this, uint64_t _idx, z_t3978_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t3978_t _old = _this->data[_idx];
@@ -18757,7 +18751,7 @@ static z_t3978_t* z_t3982_get(const z_t3982_t* _this, uint64_t _idx);
 static z_t3978_t* z_t3982_get(const z_t3982_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return (z_t3978_t*)&_this->data[_idx];
@@ -18818,7 +18812,7 @@ static z_t4475_t z_t4477_set(z_t4477_t* _this, uint64_t _idx, z_t4475_t _val);
 static z_t4475_t z_t4477_set(z_t4477_t* _this, uint64_t _idx, z_t4475_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t4475_t _old = _this->data[_idx];
@@ -18840,7 +18834,7 @@ static z_t4475_t* z_t4477_getMut(z_t4477_t* _this, uint64_t _idx);
 static z_t4475_t* z_t4477_getMut(z_t4477_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return &_this->data[_idx];
@@ -18901,7 +18895,7 @@ static z_t4704_t z_t4706_set(z_t4706_t* _this, uint64_t _idx, z_t4704_t _val);
 static z_t4704_t z_t4706_set(z_t4706_t* _this, uint64_t _idx, z_t4704_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t4704_t _old = _this->data[_idx];
@@ -18923,7 +18917,7 @@ static z_t4704_t* z_t4706_get(const z_t4706_t* _this, uint64_t _idx);
 static z_t4704_t* z_t4706_get(const z_t4706_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return (z_t4704_t*)&_this->data[_idx];
@@ -18933,7 +18927,7 @@ static z_t4704_t* z_t4706_getMut(z_t4706_t* _this, uint64_t _idx);
 static z_t4704_t* z_t4706_getMut(z_t4706_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return &_this->data[_idx];
@@ -18984,7 +18978,7 @@ static z_t4772_t z_t4774_set(z_t4774_t* _this, uint64_t _idx, z_t4772_t _val);
 static z_t4772_t z_t4774_set(z_t4774_t* _this, uint64_t _idx, z_t4772_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t4772_t _old = _this->data[_idx];
@@ -19006,7 +19000,7 @@ static z_t4772_t* z_t4774_get(const z_t4774_t* _this, uint64_t _idx);
 static z_t4772_t* z_t4774_get(const z_t4774_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return (z_t4772_t*)&_this->data[_idx];
@@ -19057,7 +19051,7 @@ static z_t5340_t z_t5347_set(z_t5347_t* _this, uint64_t _idx, z_t5340_t _val);
 static z_t5340_t z_t5347_set(z_t5347_t* _this, uint64_t _idx, z_t5340_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t5340_t _old = _this->data[_idx];
@@ -19079,7 +19073,7 @@ static z_t5340_t* z_t5347_get(const z_t5347_t* _this, uint64_t _idx);
 static z_t5340_t* z_t5347_get(const z_t5347_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return (z_t5340_t*)&_this->data[_idx];
@@ -19127,7 +19121,7 @@ static z_t5383_t z_t5385_set(z_t5385_t* _this, uint64_t _idx, z_t5383_t _val);
 static z_t5383_t z_t5385_set(z_t5385_t* _this, uint64_t _idx, z_t5383_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t5383_t _old = _this->data[_idx];
@@ -19149,7 +19143,7 @@ static z_t5383_t* z_t5385_get(const z_t5385_t* _this, uint64_t _idx);
 static z_t5383_t* z_t5385_get(const z_t5385_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return (z_t5383_t*)&_this->data[_idx];
@@ -19200,7 +19194,7 @@ static z_t5459_t z_t5466_set(z_t5466_t* _this, uint64_t _idx, z_t5459_t _val);
 static z_t5459_t z_t5466_set(z_t5466_t* _this, uint64_t _idx, z_t5459_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t5459_t _old = _this->data[_idx];
@@ -19273,7 +19267,7 @@ static z_t5502_t z_t5504_set(z_t5504_t* _this, uint64_t _idx, z_t5502_t _val);
 static z_t5502_t z_t5504_set(z_t5504_t* _this, uint64_t _idx, z_t5502_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t5502_t _old = _this->data[_idx];
@@ -19295,7 +19289,7 @@ static z_t5502_t* z_t5504_get(const z_t5504_t* _this, uint64_t _idx);
 static z_t5502_t* z_t5504_get(const z_t5504_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return (z_t5502_t*)&_this->data[_idx];
@@ -19346,7 +19340,7 @@ static z_t5540_t z_t5542_set(z_t5542_t* _this, uint64_t _idx, z_t5540_t _val);
 static z_t5540_t z_t5542_set(z_t5542_t* _this, uint64_t _idx, z_t5540_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t5540_t _old = _this->data[_idx];
@@ -19368,7 +19362,7 @@ static z_t5540_t* z_t5542_get(const z_t5542_t* _this, uint64_t _idx);
 static z_t5540_t* z_t5542_get(const z_t5542_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return (z_t5540_t*)&_this->data[_idx];
@@ -19429,7 +19423,7 @@ static z_t5606_t z_t5608_set(z_t5608_t* _this, uint64_t _idx, z_t5606_t _val);
 static z_t5606_t z_t5608_set(z_t5608_t* _this, uint64_t _idx, z_t5606_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t5606_t _old = _this->data[_idx];
@@ -19502,7 +19496,7 @@ static z_t5782_t z_t5784_set(z_t5784_t* _this, uint64_t _idx, z_t5782_t _val);
 static z_t5782_t z_t5784_set(z_t5784_t* _this, uint64_t _idx, z_t5782_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t5782_t _old = _this->data[_idx];
@@ -19524,7 +19518,7 @@ static z_t5782_t* z_t5784_get(const z_t5784_t* _this, uint64_t _idx);
 static z_t5782_t* z_t5784_get(const z_t5784_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return (z_t5782_t*)&_this->data[_idx];
@@ -19534,7 +19528,7 @@ static z_t5782_t* z_t5784_getMut(z_t5784_t* _this, uint64_t _idx);
 static z_t5782_t* z_t5784_getMut(z_t5784_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return &_this->data[_idx];
@@ -19585,7 +19579,7 @@ static z_t5877_t z_t5879_set(z_t5879_t* _this, uint64_t _idx, z_t5877_t _val);
 static z_t5877_t z_t5879_set(z_t5879_t* _this, uint64_t _idx, z_t5877_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t5877_t _old = _this->data[_idx];
@@ -19607,7 +19601,7 @@ static z_t5877_t* z_t5879_get(const z_t5879_t* _this, uint64_t _idx);
 static z_t5877_t* z_t5879_get(const z_t5879_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return (z_t5877_t*)&_this->data[_idx];
@@ -19617,7 +19611,7 @@ static z_t5877_t* z_t5879_getMut(z_t5879_t* _this, uint64_t _idx);
 static z_t5877_t* z_t5879_getMut(z_t5879_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return &_this->data[_idx];
@@ -19668,7 +19662,7 @@ static z_t5915_t z_t5917_set(z_t5917_t* _this, uint64_t _idx, z_t5915_t _val);
 static z_t5915_t z_t5917_set(z_t5917_t* _this, uint64_t _idx, z_t5915_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t5915_t _old = _this->data[_idx];
@@ -19690,7 +19684,7 @@ static z_t5915_t* z_t5917_get(const z_t5917_t* _this, uint64_t _idx);
 static z_t5915_t* z_t5917_get(const z_t5917_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return (z_t5915_t*)&_this->data[_idx];
@@ -19700,7 +19694,7 @@ static z_t5915_t* z_t5917_getMut(z_t5917_t* _this, uint64_t _idx);
 static z_t5915_t* z_t5917_getMut(z_t5917_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return &_this->data[_idx];
@@ -19751,7 +19745,7 @@ static z_t7752_t z_t7754_set(z_t7754_t* _this, uint64_t _idx, z_t7752_t _val);
 static z_t7752_t z_t7754_set(z_t7754_t* _this, uint64_t _idx, z_t7752_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t7752_t _old = _this->data[_idx];
@@ -19773,7 +19767,7 @@ static z_t7752_t* z_t7754_get(const z_t7754_t* _this, uint64_t _idx);
 static z_t7752_t* z_t7754_get(const z_t7754_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return (z_t7752_t*)&_this->data[_idx];
@@ -19783,7 +19777,7 @@ static z_t7752_t* z_t7754_getMut(z_t7754_t* _this, uint64_t _idx);
 static z_t7752_t* z_t7754_getMut(z_t7754_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return &_this->data[_idx];
@@ -19841,7 +19835,7 @@ static z_t8575_t z_t8578_set(z_t8578_t* _this, uint64_t _idx, z_t8575_t _val);
 static z_t8575_t z_t8578_set(z_t8578_t* _this, uint64_t _idx, z_t8575_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t8575_t _old = _this->data[_idx];
@@ -19863,7 +19857,7 @@ static z_t8575_t* z_t8578_get(const z_t8578_t* _this, uint64_t _idx);
 static z_t8575_t* z_t8578_get(const z_t8578_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return (z_t8575_t*)&_this->data[_idx];
@@ -19924,7 +19918,7 @@ static z_t11709_t z_t11712_set(z_t11712_t* _this, uint64_t _idx, z_t11709_t _val
 static z_t11709_t z_t11712_set(z_t11712_t* _this, uint64_t _idx, z_t11709_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t11709_t _old = _this->data[_idx];
@@ -19946,7 +19940,7 @@ static z_t11709_t* z_t11712_get(const z_t11712_t* _this, uint64_t _idx);
 static z_t11709_t* z_t11712_get(const z_t11712_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return (z_t11709_t*)&_this->data[_idx];
@@ -19997,7 +19991,7 @@ static z_t3694_t z_t11778_set(z_t11778_t* _this, uint64_t _idx, z_t3694_t _val);
 static z_t3694_t z_t11778_set(z_t11778_t* _this, uint64_t _idx, z_t3694_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t3694_t _old = _this->data[_idx];
@@ -20019,7 +20013,7 @@ static z_t3694_t z_t11778_get(const z_t11778_t* _this, uint64_t _idx);
 static z_t3694_t z_t11778_get(const z_t11778_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return _this->data[_idx];
@@ -20067,7 +20061,7 @@ static uint32_t z_t724_set(z_t724_t* _this, uint64_t _idx, uint32_t _val);
 static uint32_t z_t724_set(z_t724_t* _this, uint64_t _idx, uint32_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     uint32_t _old = _this->data[_idx];
@@ -20123,7 +20117,7 @@ static uint32_t z_t724_get(const z_t724_t* _this, uint64_t _idx);
 static uint32_t z_t724_get(const z_t724_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return _this->data[_idx];
@@ -20134,7 +20128,7 @@ static z_t740_t z_t724_slice(const z_t724_t* _this, uint64_t _from, uint64_t _to
 static z_t740_t z_t724_slice(const z_t724_t* _this, uint64_t _from, uint64_t _to) {
     if (_from > _to || _to > _this->length) {
         char _zp_buf[128];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List slice: [%lu, %lu) out of bounds (length %lu)", (unsigned long)_from, (unsigned long)_to, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List slice: [%llu, %llu) out of bounds (length %llu)", (unsigned long long)_from, (unsigned long long)_to, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return (z_t740_t){ .length = _to - _from, .data = _this->data + _from };
@@ -20192,7 +20186,7 @@ static z_t910_t z_t937_set(z_t937_t* _this, uint64_t _idx, z_t910_t _val);
 static z_t910_t z_t937_set(z_t937_t* _this, uint64_t _idx, z_t910_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t910_t _old = _this->data[_idx];
@@ -20214,7 +20208,7 @@ static z_t910_t z_t937_get(const z_t937_t* _this, uint64_t _idx);
 static z_t910_t z_t937_get(const z_t937_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return _this->data[_idx];
@@ -20262,7 +20256,7 @@ static z_t1095_t z_t1245_set(z_t1245_t* _this, uint64_t _idx, z_t1095_t _val);
 static z_t1095_t z_t1245_set(z_t1245_t* _this, uint64_t _idx, z_t1095_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t1095_t _old = _this->data[_idx];
@@ -20284,7 +20278,7 @@ static z_t1095_t z_t1245_get(const z_t1245_t* _this, uint64_t _idx);
 static z_t1095_t z_t1245_get(const z_t1245_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return _this->data[_idx];
@@ -20294,7 +20288,7 @@ static z_t1095_t* z_t1245_getMut(z_t1245_t* _this, uint64_t _idx);
 static z_t1095_t* z_t1245_getMut(z_t1245_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return &_this->data[_idx];
@@ -20342,7 +20336,7 @@ static uint32_t z_t1309_set(z_t1309_t* _this, uint64_t _idx, uint32_t _val);
 static uint32_t z_t1309_set(z_t1309_t* _this, uint64_t _idx, uint32_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     uint32_t _old = _this->data[_idx];
@@ -20364,7 +20358,7 @@ static uint32_t z_t1309_get(const z_t1309_t* _this, uint64_t _idx);
 static uint32_t z_t1309_get(const z_t1309_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return _this->data[_idx];
@@ -20375,7 +20369,7 @@ static z_t1325_t z_t1309_slice(const z_t1309_t* _this, uint64_t _from, uint64_t 
 static z_t1325_t z_t1309_slice(const z_t1309_t* _this, uint64_t _from, uint64_t _to) {
     if (_from > _to || _to > _this->length) {
         char _zp_buf[128];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List slice: [%lu, %lu) out of bounds (length %lu)", (unsigned long)_from, (unsigned long)_to, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List slice: [%llu, %llu) out of bounds (length %llu)", (unsigned long long)_from, (unsigned long long)_to, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return (z_t1325_t){ .length = _to - _from, .data = _this->data + _from };
@@ -20433,7 +20427,7 @@ static uint32_t z_t1366_set(z_t1366_t* _this, uint64_t _idx, uint32_t _val);
 static uint32_t z_t1366_set(z_t1366_t* _this, uint64_t _idx, uint32_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     uint32_t _old = _this->data[_idx];
@@ -20455,7 +20449,7 @@ static uint32_t z_t1366_get(const z_t1366_t* _this, uint64_t _idx);
 static uint32_t z_t1366_get(const z_t1366_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return _this->data[_idx];
@@ -20503,7 +20497,7 @@ static uint32_t z_t1428_set(z_t1428_t* _this, uint64_t _idx, uint32_t _val);
 static uint32_t z_t1428_set(z_t1428_t* _this, uint64_t _idx, uint32_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     uint32_t _old = _this->data[_idx];
@@ -20525,7 +20519,7 @@ static uint32_t z_t1428_get(const z_t1428_t* _this, uint64_t _idx);
 static uint32_t z_t1428_get(const z_t1428_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return _this->data[_idx];
@@ -20583,7 +20577,7 @@ static z_t1540_t z_t1545_set(z_t1545_t* _this, uint64_t _idx, z_t1540_t _val);
 static z_t1540_t z_t1545_set(z_t1545_t* _this, uint64_t _idx, z_t1540_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t1540_t _old = _this->data[_idx];
@@ -20605,7 +20599,7 @@ static z_t1540_t z_t1545_get(const z_t1545_t* _this, uint64_t _idx);
 static z_t1540_t z_t1545_get(const z_t1545_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return _this->data[_idx];
@@ -20663,7 +20657,7 @@ static z_t1800_t z_t1805_set(z_t1805_t* _this, uint64_t _idx, z_t1800_t _val);
 static z_t1800_t z_t1805_set(z_t1805_t* _this, uint64_t _idx, z_t1800_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t1800_t _old = _this->data[_idx];
@@ -20685,7 +20679,7 @@ static z_t1800_t z_t1805_get(const z_t1805_t* _this, uint64_t _idx);
 static z_t1800_t z_t1805_get(const z_t1805_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return _this->data[_idx];
@@ -20695,7 +20689,7 @@ static z_t1800_t* z_t1805_getMut(z_t1805_t* _this, uint64_t _idx);
 static z_t1800_t* z_t1805_getMut(z_t1805_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return &_this->data[_idx];
@@ -20743,7 +20737,7 @@ static z_t1862_t z_t1870_set(z_t1870_t* _this, uint64_t _idx, z_t1862_t _val);
 static z_t1862_t z_t1870_set(z_t1870_t* _this, uint64_t _idx, z_t1862_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t1862_t _old = _this->data[_idx];
@@ -20765,7 +20759,7 @@ static z_t1862_t z_t1870_get(const z_t1870_t* _this, uint64_t _idx);
 static z_t1862_t z_t1870_get(const z_t1870_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return _this->data[_idx];
@@ -20813,7 +20807,7 @@ static z_t2043_t z_t2048_set(z_t2048_t* _this, uint64_t _idx, z_t2043_t _val);
 static z_t2043_t z_t2048_set(z_t2048_t* _this, uint64_t _idx, z_t2043_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t2043_t _old = _this->data[_idx];
@@ -20835,7 +20829,7 @@ static z_t2043_t z_t2048_get(const z_t2048_t* _this, uint64_t _idx);
 static z_t2043_t z_t2048_get(const z_t2048_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return _this->data[_idx];
@@ -20883,7 +20877,7 @@ static uint64_t z_t2105_set(z_t2105_t* _this, uint64_t _idx, uint64_t _val);
 static uint64_t z_t2105_set(z_t2105_t* _this, uint64_t _idx, uint64_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     uint64_t _old = _this->data[_idx];
@@ -20905,7 +20899,7 @@ static uint64_t z_t2105_get(const z_t2105_t* _this, uint64_t _idx);
 static uint64_t z_t2105_get(const z_t2105_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return _this->data[_idx];
@@ -20964,7 +20958,7 @@ static uint64_t z_t2160_set(z_t2160_t* _this, uint64_t _idx, uint64_t _val);
 static uint64_t z_t2160_set(z_t2160_t* _this, uint64_t _idx, uint64_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     uint64_t _old = _this->data[_idx];
@@ -20986,7 +20980,7 @@ static uint64_t z_t2160_get(const z_t2160_t* _this, uint64_t _idx);
 static uint64_t z_t2160_get(const z_t2160_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return _this->data[_idx];
@@ -21034,7 +21028,7 @@ static bool z_t2217_set(z_t2217_t* _this, uint64_t _idx, bool _val);
 static bool z_t2217_set(z_t2217_t* _this, uint64_t _idx, bool _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     bool _old = _this->data[_idx];
@@ -21056,7 +21050,7 @@ static bool z_t2217_get(const z_t2217_t* _this, uint64_t _idx);
 static bool z_t2217_get(const z_t2217_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return _this->data[_idx];
@@ -21104,7 +21098,7 @@ static z_t2340_t z_t2345_set(z_t2345_t* _this, uint64_t _idx, z_t2340_t _val);
 static z_t2340_t z_t2345_set(z_t2345_t* _this, uint64_t _idx, z_t2340_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t2340_t _old = _this->data[_idx];
@@ -21133,7 +21127,7 @@ static z_t2340_t z_t2345_get(const z_t2345_t* _this, uint64_t _idx);
 static z_t2340_t z_t2345_get(const z_t2345_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return _this->data[_idx];
@@ -21191,7 +21185,7 @@ static z_t2618_t z_t2623_set(z_t2623_t* _this, uint64_t _idx, z_t2618_t _val);
 static z_t2618_t z_t2623_set(z_t2623_t* _this, uint64_t _idx, z_t2618_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t2618_t _old = _this->data[_idx];
@@ -21261,7 +21255,7 @@ static z_t2699_t z_t2704_set(z_t2704_t* _this, uint64_t _idx, z_t2699_t _val);
 static z_t2699_t z_t2704_set(z_t2704_t* _this, uint64_t _idx, z_t2699_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t2699_t _old = _this->data[_idx];
@@ -21283,7 +21277,7 @@ static z_t2699_t z_t2704_get(const z_t2704_t* _this, uint64_t _idx);
 static z_t2699_t z_t2704_get(const z_t2704_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return _this->data[_idx];
@@ -21331,7 +21325,7 @@ static uint64_t z_t2786_set(z_t2786_t* _this, uint64_t _idx, uint64_t _val);
 static uint64_t z_t2786_set(z_t2786_t* _this, uint64_t _idx, uint64_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     uint64_t _old = _this->data[_idx];
@@ -21353,7 +21347,7 @@ static uint64_t z_t2786_get(const z_t2786_t* _this, uint64_t _idx);
 static uint64_t z_t2786_get(const z_t2786_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return _this->data[_idx];
@@ -21412,7 +21406,7 @@ static uint64_t z_t3178_set(z_t3178_t* _this, uint64_t _idx, uint64_t _val);
 static uint64_t z_t3178_set(z_t3178_t* _this, uint64_t _idx, uint64_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     uint64_t _old = _this->data[_idx];
@@ -21434,7 +21428,7 @@ static uint64_t z_t3178_get(const z_t3178_t* _this, uint64_t _idx);
 static uint64_t z_t3178_get(const z_t3178_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return _this->data[_idx];
@@ -21493,7 +21487,7 @@ static z_t3284_t z_t3289_set(z_t3289_t* _this, uint64_t _idx, z_t3284_t _val);
 static z_t3284_t z_t3289_set(z_t3289_t* _this, uint64_t _idx, z_t3284_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t3284_t _old = _this->data[_idx];
@@ -21515,7 +21509,7 @@ static z_t3284_t z_t3289_get(const z_t3289_t* _this, uint64_t _idx);
 static z_t3284_t z_t3289_get(const z_t3289_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return _this->data[_idx];
@@ -21563,7 +21557,7 @@ static uint64_t z_t3440_set(z_t3440_t* _this, uint64_t _idx, uint64_t _val);
 static uint64_t z_t3440_set(z_t3440_t* _this, uint64_t _idx, uint64_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     uint64_t _old = _this->data[_idx];
@@ -21585,7 +21579,7 @@ static uint64_t z_t3440_get(const z_t3440_t* _this, uint64_t _idx);
 static uint64_t z_t3440_get(const z_t3440_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return _this->data[_idx];
@@ -21633,7 +21627,7 @@ static z_t4018_t z_t4023_set(z_t4023_t* _this, uint64_t _idx, z_t4018_t _val);
 static z_t4018_t z_t4023_set(z_t4023_t* _this, uint64_t _idx, z_t4018_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t4018_t _old = _this->data[_idx];
@@ -21655,7 +21649,7 @@ static z_t4018_t z_t4023_get(const z_t4023_t* _this, uint64_t _idx);
 static z_t4018_t z_t4023_get(const z_t4023_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return _this->data[_idx];
@@ -21703,7 +21697,7 @@ static z_t4194_t z_t4199_set(z_t4199_t* _this, uint64_t _idx, z_t4194_t _val);
 static z_t4194_t z_t4199_set(z_t4199_t* _this, uint64_t _idx, z_t4194_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t4194_t _old = _this->data[_idx];
@@ -21773,7 +21767,7 @@ static z_t4380_t z_t4385_set(z_t4385_t* _this, uint64_t _idx, z_t4380_t _val);
 static z_t4380_t z_t4385_set(z_t4385_t* _this, uint64_t _idx, z_t4380_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t4380_t _old = _this->data[_idx];
@@ -21795,7 +21789,7 @@ static z_t4380_t z_t4385_get(const z_t4385_t* _this, uint64_t _idx);
 static z_t4380_t z_t4385_get(const z_t4385_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return _this->data[_idx];
@@ -21843,7 +21837,7 @@ static z_t4946_t z_t4951_set(z_t4951_t* _this, uint64_t _idx, z_t4946_t _val);
 static z_t4946_t z_t4951_set(z_t4951_t* _this, uint64_t _idx, z_t4946_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t4946_t _old = _this->data[_idx];
@@ -21865,7 +21859,7 @@ static z_t4946_t z_t4951_get(const z_t4951_t* _this, uint64_t _idx);
 static z_t4946_t z_t4951_get(const z_t4951_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return _this->data[_idx];
@@ -21913,7 +21907,7 @@ static z_t2986_t z_t5161_set(z_t5161_t* _this, uint64_t _idx, z_t2986_t _val);
 static z_t2986_t z_t5161_set(z_t5161_t* _this, uint64_t _idx, z_t2986_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t2986_t _old = _this->data[_idx];
@@ -21935,7 +21929,7 @@ static z_t2986_t z_t5161_get(const z_t5161_t* _this, uint64_t _idx);
 static z_t2986_t z_t5161_get(const z_t5161_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return _this->data[_idx];
@@ -21983,7 +21977,7 @@ static z_t5341_t z_t5820_set(z_t5820_t* _this, uint64_t _idx, z_t5341_t _val);
 static z_t5341_t z_t5820_set(z_t5820_t* _this, uint64_t _idx, z_t5341_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t5341_t _old = _this->data[_idx];
@@ -22005,7 +21999,7 @@ static z_t5341_t z_t5820_get(const z_t5820_t* _this, uint64_t _idx);
 static z_t5341_t z_t5820_get(const z_t5820_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return _this->data[_idx];
@@ -22053,7 +22047,7 @@ static z_t6106_t z_t6112_set(z_t6112_t* _this, uint64_t _idx, z_t6106_t _val);
 static z_t6106_t z_t6112_set(z_t6112_t* _this, uint64_t _idx, z_t6106_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t6106_t _old = _this->data[_idx];
@@ -22075,7 +22069,7 @@ static z_t6106_t z_t6112_get(const z_t6112_t* _this, uint64_t _idx);
 static z_t6106_t z_t6112_get(const z_t6112_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return _this->data[_idx];
@@ -22123,7 +22117,7 @@ static z_t2863_t z_t7384_set(z_t7384_t* _this, uint64_t _idx, z_t2863_t _val);
 static z_t2863_t z_t7384_set(z_t7384_t* _this, uint64_t _idx, z_t2863_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t2863_t _old = _this->data[_idx];
@@ -22145,7 +22139,7 @@ static z_t2863_t z_t7384_get(const z_t7384_t* _this, uint64_t _idx);
 static z_t2863_t z_t7384_get(const z_t7384_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return _this->data[_idx];
@@ -22193,7 +22187,7 @@ static z_t7608_t z_t7615_set(z_t7615_t* _this, uint64_t _idx, z_t7608_t _val);
 static z_t7608_t z_t7615_set(z_t7615_t* _this, uint64_t _idx, z_t7608_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t7608_t _old = _this->data[_idx];
@@ -22263,7 +22257,7 @@ static z_t1955_t z_t8862_set(z_t8862_t* _this, uint64_t _idx, z_t1955_t _val);
 static z_t1955_t z_t8862_set(z_t8862_t* _this, uint64_t _idx, z_t1955_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t1955_t _old = _this->data[_idx];
@@ -22285,7 +22279,7 @@ static z_t1955_t z_t8862_get(const z_t8862_t* _this, uint64_t _idx);
 static z_t1955_t z_t8862_get(const z_t8862_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return _this->data[_idx];
@@ -22333,7 +22327,7 @@ static uint8_t z_t8952_set(z_t8952_t* _this, uint64_t _idx, uint8_t _val);
 static uint8_t z_t8952_set(z_t8952_t* _this, uint64_t _idx, uint8_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     uint8_t _old = _this->data[_idx];
@@ -22355,7 +22349,7 @@ static uint8_t z_t8952_get(const z_t8952_t* _this, uint64_t _idx);
 static uint8_t z_t8952_get(const z_t8952_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return _this->data[_idx];
@@ -22403,7 +22397,7 @@ static uint8_t z_t10355_set(z_t10355_t* _this, uint64_t _idx, uint8_t _val);
 static uint8_t z_t10355_set(z_t10355_t* _this, uint64_t _idx, uint8_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     uint8_t _old = _this->data[_idx];
@@ -22425,7 +22419,7 @@ static uint8_t z_t10355_get(const z_t10355_t* _this, uint64_t _idx);
 static uint8_t z_t10355_get(const z_t10355_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return _this->data[_idx];
@@ -22473,7 +22467,7 @@ static z_t1960_t z_t11884_set(z_t11884_t* _this, uint64_t _idx, z_t1960_t _val);
 static z_t1960_t z_t11884_set(z_t11884_t* _this, uint64_t _idx, z_t1960_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t1960_t _old = _this->data[_idx];
@@ -22495,7 +22489,7 @@ static z_t1960_t z_t11884_get(const z_t11884_t* _this, uint64_t _idx);
 static z_t1960_t z_t11884_get(const z_t11884_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return _this->data[_idx];
@@ -41125,7 +41119,7 @@ static z_t1473_t z_t1605_set(z_t1605_t* _this, uint64_t _idx, z_t1473_t _val);
 static z_t1473_t z_t1605_set(z_t1605_t* _this, uint64_t _idx, z_t1473_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t1473_t _old = _this->data[_idx];
@@ -41147,7 +41141,7 @@ static z_t1473_t* z_t1605_get(const z_t1605_t* _this, uint64_t _idx);
 static z_t1473_t* z_t1605_get(const z_t1605_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return (z_t1473_t*)&_this->data[_idx];
@@ -41157,7 +41151,7 @@ static z_t1473_t* z_t1605_getMut(z_t1605_t* _this, uint64_t _idx);
 static z_t1473_t* z_t1605_getMut(z_t1605_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return &_this->data[_idx];
@@ -41208,7 +41202,7 @@ static z_t1927_t z_t1967_set(z_t1967_t* _this, uint64_t _idx, z_t1927_t _val);
 static z_t1927_t z_t1967_set(z_t1967_t* _this, uint64_t _idx, z_t1927_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t1927_t _old = _this->data[_idx];
@@ -41230,7 +41224,7 @@ static z_t1927_t* z_t1967_get(const z_t1967_t* _this, uint64_t _idx);
 static z_t1927_t* z_t1967_get(const z_t1967_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return (z_t1927_t*)&_this->data[_idx];
@@ -41240,7 +41234,7 @@ static z_t1927_t* z_t1967_getMut(z_t1967_t* _this, uint64_t _idx);
 static z_t1927_t* z_t1967_getMut(z_t1967_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return &_this->data[_idx];
@@ -41301,7 +41295,7 @@ static z_t2296_t z_t2304_set(z_t2304_t* _this, uint64_t _idx, z_t2296_t _val);
 static z_t2296_t z_t2304_set(z_t2304_t* _this, uint64_t _idx, z_t2296_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t2296_t _old = _this->data[_idx];
@@ -41374,7 +41368,7 @@ static z_t2516_t z_t2518_set(z_t2518_t* _this, uint64_t _idx, z_t2516_t _val);
 static z_t2516_t z_t2518_set(z_t2518_t* _this, uint64_t _idx, z_t2516_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t2516_t _old = _this->data[_idx];
@@ -41396,7 +41390,7 @@ static z_t2516_t* z_t2518_get(const z_t2518_t* _this, uint64_t _idx);
 static z_t2516_t* z_t2518_get(const z_t2518_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return (z_t2516_t*)&_this->data[_idx];
@@ -41457,7 +41451,7 @@ static z_t3026_t z_t3028_set(z_t3028_t* _this, uint64_t _idx, z_t3026_t _val);
 static z_t3026_t z_t3028_set(z_t3028_t* _this, uint64_t _idx, z_t3026_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t3026_t _old = _this->data[_idx];
@@ -41479,7 +41473,7 @@ static z_t3026_t* z_t3028_get(const z_t3028_t* _this, uint64_t _idx);
 static z_t3026_t* z_t3028_get(const z_t3028_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return (z_t3026_t*)&_this->data[_idx];
@@ -41530,7 +41524,7 @@ static z_t4275_t z_t4306_set(z_t4306_t* _this, uint64_t _idx, z_t4275_t _val);
 static z_t4275_t z_t4306_set(z_t4306_t* _this, uint64_t _idx, z_t4275_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t4275_t _old = _this->data[_idx];
@@ -41552,7 +41546,7 @@ static z_t4275_t* z_t4306_get(const z_t4306_t* _this, uint64_t _idx);
 static z_t4275_t* z_t4306_get(const z_t4306_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return (z_t4275_t*)&_this->data[_idx];
@@ -41562,7 +41556,7 @@ static z_t4275_t* z_t4306_getMut(z_t4306_t* _this, uint64_t _idx);
 static z_t4275_t* z_t4306_getMut(z_t4306_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return &_this->data[_idx];
@@ -41613,7 +41607,7 @@ static z_t5050_t z_t5053_set(z_t5053_t* _this, uint64_t _idx, z_t5050_t _val);
 static z_t5050_t z_t5053_set(z_t5053_t* _this, uint64_t _idx, z_t5050_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t5050_t _old = _this->data[_idx];
@@ -41635,7 +41629,7 @@ static z_t5050_t* z_t5053_get(const z_t5053_t* _this, uint64_t _idx);
 static z_t5050_t* z_t5053_get(const z_t5053_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return (z_t5050_t*)&_this->data[_idx];
@@ -41686,7 +41680,7 @@ static z_t5421_t z_t5423_set(z_t5423_t* _this, uint64_t _idx, z_t5421_t _val);
 static z_t5421_t z_t5423_set(z_t5423_t* _this, uint64_t _idx, z_t5421_t _val) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     z_t5421_t _old = _this->data[_idx];
@@ -41708,7 +41702,7 @@ static z_t5421_t* z_t5423_get(const z_t5423_t* _this, uint64_t _idx);
 static z_t5421_t* z_t5423_get(const z_t5423_t* _this, uint64_t _idx) {
     if (_idx >= _this->length) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %lu out of bounds (length %lu)", (unsigned long)_idx, (unsigned long)_this->length);
+        snprintf(_zp_buf, sizeof(_zp_buf), "List get: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
         z_panic(_zp_buf);
     }
     return (z_t5421_t*)&_this->data[_idx];
@@ -42832,7 +42826,7 @@ static void z_coll_window_check(uint64_t _from, uint64_t _to, uint64_t _len, con
 static void z_coll_window_check(uint64_t _from, uint64_t _to, uint64_t _len, const char* _who) {
     if (_from > _to || _to > _len) {
         char _zp_buf[160];
-        snprintf(_zp_buf, sizeof(_zp_buf), "%s: [%lu, %lu) out of bounds (length %lu)", _who, (unsigned long)_from, (unsigned long)_to, (unsigned long)_len);
+        snprintf(_zp_buf, sizeof(_zp_buf), "%s: [%llu, %llu) out of bounds (length %llu)", _who, (unsigned long long)_from, (unsigned long long)_to, (unsigned long long)_len);
         z_panic(_zp_buf);
     }
 }
@@ -46519,7 +46513,7 @@ static z_t84_t z_t781_at(uint64_t _idx);
 static z_t84_t z_t781_at(uint64_t _idx) {
     if (_idx >= 41) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %lu out of bounds (length 41)", (unsigned long)_idx);
+        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %llu out of bounds (length 41)", (unsigned long long)_idx);
         z_panic(_zp_buf);
     }
     return z_t781[_idx];
@@ -46531,7 +46525,7 @@ static z_t84_t z_t4827_at(uint64_t _idx);
 static z_t84_t z_t4827_at(uint64_t _idx) {
     if (_idx >= 301) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %lu out of bounds (length 301)", (unsigned long)_idx);
+        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %llu out of bounds (length 301)", (unsigned long long)_idx);
         z_panic(_zp_buf);
     }
     return z_t4827[_idx];
@@ -46543,7 +46537,7 @@ static z_t84_t z_t4667_at(uint64_t _idx);
 static z_t84_t z_t4667_at(uint64_t _idx) {
     if (_idx >= 2) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %lu out of bounds (length 2)", (unsigned long)_idx);
+        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %llu out of bounds (length 2)", (unsigned long long)_idx);
         z_panic(_zp_buf);
     }
     return z_t4667[_idx];
@@ -46555,7 +46549,7 @@ static z_t84_t z_t5975_at(uint64_t _idx);
 static z_t84_t z_t5975_at(uint64_t _idx) {
     if (_idx >= 12) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %lu out of bounds (length 12)", (unsigned long)_idx);
+        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %llu out of bounds (length 12)", (unsigned long long)_idx);
         z_panic(_zp_buf);
     }
     return z_t5975[_idx];
@@ -46567,7 +46561,7 @@ static z_t84_t z_t6876_at(uint64_t _idx);
 static z_t84_t z_t6876_at(uint64_t _idx) {
     if (_idx >= 12) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %lu out of bounds (length 12)", (unsigned long)_idx);
+        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %llu out of bounds (length 12)", (unsigned long long)_idx);
         z_panic(_zp_buf);
     }
     return z_t6876[_idx];
@@ -46579,7 +46573,7 @@ static z_t84_t z_t6025_at(uint64_t _idx);
 static z_t84_t z_t6025_at(uint64_t _idx) {
     if (_idx >= 16) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %lu out of bounds (length 16)", (unsigned long)_idx);
+        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %llu out of bounds (length 16)", (unsigned long long)_idx);
         z_panic(_zp_buf);
     }
     return z_t6025[_idx];
@@ -46591,7 +46585,7 @@ static uint64_t z_t6022_at(uint64_t _idx);
 static uint64_t z_t6022_at(uint64_t _idx) {
     if (_idx >= 16) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %lu out of bounds (length 16)", (unsigned long)_idx);
+        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %llu out of bounds (length 16)", (unsigned long long)_idx);
         z_panic(_zp_buf);
     }
     return z_t6022[_idx];
@@ -46603,7 +46597,7 @@ static z_t84_t z_t6629_at(uint64_t _idx);
 static z_t84_t z_t6629_at(uint64_t _idx) {
     if (_idx >= 16) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %lu out of bounds (length 16)", (unsigned long)_idx);
+        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %llu out of bounds (length 16)", (unsigned long long)_idx);
         z_panic(_zp_buf);
     }
     return z_t6629[_idx];
@@ -46615,7 +46609,7 @@ static z_t84_t z_t6627_at(uint64_t _idx);
 static z_t84_t z_t6627_at(uint64_t _idx) {
     if (_idx >= 16) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %lu out of bounds (length 16)", (unsigned long)_idx);
+        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %llu out of bounds (length 16)", (unsigned long long)_idx);
         z_panic(_zp_buf);
     }
     return z_t6627[_idx];
@@ -46627,7 +46621,7 @@ static z_t84_t z_t8670_at(uint64_t _idx);
 static z_t84_t z_t8670_at(uint64_t _idx) {
     if (_idx >= 16) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %lu out of bounds (length 16)", (unsigned long)_idx);
+        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %llu out of bounds (length 16)", (unsigned long long)_idx);
         z_panic(_zp_buf);
     }
     return z_t8670[_idx];
@@ -46639,7 +46633,7 @@ static uint64_t z_t6014_at(uint64_t _idx);
 static uint64_t z_t6014_at(uint64_t _idx) {
     if (_idx >= 16) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %lu out of bounds (length 16)", (unsigned long)_idx);
+        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %llu out of bounds (length 16)", (unsigned long long)_idx);
         z_panic(_zp_buf);
     }
     return z_t6014[_idx];
@@ -46651,7 +46645,7 @@ static z_t84_t z_t5973_at(uint64_t _idx);
 static z_t84_t z_t5973_at(uint64_t _idx) {
     if (_idx >= 38) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %lu out of bounds (length 38)", (unsigned long)_idx);
+        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %llu out of bounds (length 38)", (unsigned long long)_idx);
         z_panic(_zp_buf);
     }
     return z_t5973[_idx];
@@ -46663,7 +46657,7 @@ static z_t84_t z_t5977_at(uint64_t _idx);
 static z_t84_t z_t5977_at(uint64_t _idx) {
     if (_idx >= 11) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %lu out of bounds (length 11)", (unsigned long)_idx);
+        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %llu out of bounds (length 11)", (unsigned long long)_idx);
         z_panic(_zp_buf);
     }
     return z_t5977[_idx];
@@ -46675,7 +46669,7 @@ static z_t84_t z_t6257_at(uint64_t _idx);
 static z_t84_t z_t6257_at(uint64_t _idx) {
     if (_idx >= 50) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %lu out of bounds (length 50)", (unsigned long)_idx);
+        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %llu out of bounds (length 50)", (unsigned long long)_idx);
         z_panic(_zp_buf);
     }
     return z_t6257[_idx];
@@ -46687,7 +46681,7 @@ static z_t84_t z_t6330_at(uint64_t _idx);
 static z_t84_t z_t6330_at(uint64_t _idx) {
     if (_idx >= 9) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %lu out of bounds (length 9)", (unsigned long)_idx);
+        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %llu out of bounds (length 9)", (unsigned long long)_idx);
         z_panic(_zp_buf);
     }
     return z_t6330[_idx];
@@ -46699,7 +46693,7 @@ static z_t84_t z_t6331_at(uint64_t _idx);
 static z_t84_t z_t6331_at(uint64_t _idx) {
     if (_idx >= 4) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %lu out of bounds (length 4)", (unsigned long)_idx);
+        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %llu out of bounds (length 4)", (unsigned long long)_idx);
         z_panic(_zp_buf);
     }
     return z_t6331[_idx];
@@ -46711,7 +46705,7 @@ static z_t84_t z_t6328_at(uint64_t _idx);
 static z_t84_t z_t6328_at(uint64_t _idx) {
     if (_idx >= 2) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %lu out of bounds (length 2)", (unsigned long)_idx);
+        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %llu out of bounds (length 2)", (unsigned long long)_idx);
         z_panic(_zp_buf);
     }
     return z_t6328[_idx];
@@ -46723,7 +46717,7 @@ static uint8_t z_t12050_at(uint64_t _idx);
 static uint8_t z_t12050_at(uint64_t _idx) {
     if (_idx >= 128) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %lu out of bounds (length 128)", (unsigned long)_idx);
+        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %llu out of bounds (length 128)", (unsigned long long)_idx);
         z_panic(_zp_buf);
     }
     return z_t12050[_idx];
@@ -46735,7 +46729,7 @@ static z_t84_t z_t4654_at(uint64_t _idx);
 static z_t84_t z_t4654_at(uint64_t _idx) {
     if (_idx >= 1) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %lu out of bounds (length 1)", (unsigned long)_idx);
+        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %llu out of bounds (length 1)", (unsigned long long)_idx);
         z_panic(_zp_buf);
     }
     return z_t4654[_idx];
@@ -46747,7 +46741,7 @@ static z_t84_t z_t4656_at(uint64_t _idx);
 static z_t84_t z_t4656_at(uint64_t _idx) {
     if (_idx >= 3) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %lu out of bounds (length 3)", (unsigned long)_idx);
+        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %llu out of bounds (length 3)", (unsigned long long)_idx);
         z_panic(_zp_buf);
     }
     return z_t4656[_idx];
@@ -46759,7 +46753,7 @@ static z_t84_t z_t4655_at(uint64_t _idx);
 static z_t84_t z_t4655_at(uint64_t _idx) {
     if (_idx >= 4) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %lu out of bounds (length 4)", (unsigned long)_idx);
+        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %llu out of bounds (length 4)", (unsigned long long)_idx);
         z_panic(_zp_buf);
     }
     return z_t4655[_idx];
@@ -46771,7 +46765,7 @@ static z_t84_t z_t4657_at(uint64_t _idx);
 static z_t84_t z_t4657_at(uint64_t _idx) {
     if (_idx >= 2) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %lu out of bounds (length 2)", (unsigned long)_idx);
+        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %llu out of bounds (length 2)", (unsigned long long)_idx);
         z_panic(_zp_buf);
     }
     return z_t4657[_idx];
@@ -46783,7 +46777,7 @@ static z_t84_t z_t4658_at(uint64_t _idx);
 static z_t84_t z_t4658_at(uint64_t _idx) {
     if (_idx >= 2) {
         char _zp_buf[96];
-        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %lu out of bounds (length 2)", (unsigned long)_idx);
+        snprintf(_zp_buf, sizeof(_zp_buf), "data index: index %llu out of bounds (length 2)", (unsigned long long)_idx);
         z_panic(_zp_buf);
     }
     return z_t4658[_idx];
@@ -109008,13 +109002,13 @@ void z_t7250(z_t84_t z_v46551, z_t84_t z_v46552, z_t84_t z_v46553, bool z_v46554
     z_t64_t z_v46561 = ((z_t64_t){0});
     (void)(z_t64_append(&z_v46561, (_zs1369).data, (_zs1369).size));
     (void)(z_t64_append(&z_v46561, (_zs1370).data, (_zs1370).size));
-    z_t64_t _s964 = z_t64_create((uint64_t)157);
+    z_t64_t _s964 = z_t64_create((uint64_t)169);
     z_t64_append(&_s964, "        snprintf(_zp_buf, sizeof(_zp_buf), ", sizeof("        snprintf(_zp_buf, sizeof(_zp_buf), ")-1);
     z_t64_append(&_s964, "\"", sizeof("\"")-1);
     z_t64_append(&_s964, z_v46553.data, z_v46553.size);
-    z_t64_append(&_s964, " get: index %lu out of bounds (length %lu)", sizeof(" get: index %lu out of bounds (length %lu)")-1);
+    z_t64_append(&_s964, " get: index %llu out of bounds (length %llu)", sizeof(" get: index %llu out of bounds (length %llu)")-1);
     z_t64_append(&_s964, "\"", sizeof("\"")-1);
-    z_t64_append(&_s964, ", (unsigned long)_idx, (unsigned long)_this->length);", sizeof(", (unsigned long)_idx, (unsigned long)_this->length);")-1);
+    z_t64_append(&_s964, ", (unsigned long long)_idx, (unsigned long long)_this->length);", sizeof(", (unsigned long long)_idx, (unsigned long long)_this->length);")-1);
     z_t64_append(&_s964, "\n", sizeof("\n")-1);
     z_t64_t z_v46562 = _s964;
     (void)(z_t64_append(&z_v46561, (z_v46562).data, (z_v46562).size));
@@ -109123,13 +109117,13 @@ void z_t7815(z_t84_t z_v46585, z_t84_t z_v46586, z_t84_t z_v46587, z_t64_t* z_v4
     (void)(z_t64_append(z_v46588, (z_v46590).data, (z_v46590).size));
     (void)(z_t64_append(z_v46588, (_zs1377).data, (_zs1377).size));
     (void)(z_t64_append(z_v46588, (_zs1378).data, (_zs1378).size));
-    z_t64_t _s972 = z_t64_create((uint64_t)181);
+    z_t64_t _s972 = z_t64_create((uint64_t)199);
     z_t64_append(&_s972, "        snprintf(_zp_buf, sizeof(_zp_buf), ", sizeof("        snprintf(_zp_buf, sizeof(_zp_buf), ")-1);
     z_t64_append(&_s972, "\"", sizeof("\"")-1);
     z_t64_append(&_s972, z_v46587.data, z_v46587.size);
-    z_t64_append(&_s972, " slice: [%lu, %lu) out of bounds (length %lu)", sizeof(" slice: [%lu, %lu) out of bounds (length %lu)")-1);
+    z_t64_append(&_s972, " slice: [%llu, %llu) out of bounds (length %llu)", sizeof(" slice: [%llu, %llu) out of bounds (length %llu)")-1);
     z_t64_append(&_s972, "\"", sizeof("\"")-1);
-    z_t64_append(&_s972, ", (unsigned long)_from, (unsigned long)_to, (unsigned long)_this->length);", sizeof(", (unsigned long)_from, (unsigned long)_to, (unsigned long)_this->length);")-1);
+    z_t64_append(&_s972, ", (unsigned long long)_from, (unsigned long long)_to, (unsigned long long)_this->length);", sizeof(", (unsigned long long)_from, (unsigned long long)_to, (unsigned long long)_this->length);")-1);
     z_t64_append(&_s972, "\n", sizeof("\n")-1);
     z_t64_t z_v46591 = _s972;
     (void)(z_t64_append(z_v46588, (z_v46591).data, (z_v46591).size));
@@ -118661,15 +118655,15 @@ _s1243; });
                 (void)(z_t64_append(z_v48368, (z_v48386).data, (z_v48386).size));
     z_t64_free(&z_v48386);
                 (void)(z_t64_append(z_v48368, (_zs1813).data, (_zs1813).size));
-                z_t64_t _s1244 = z_t64_create((uint64_t)130);
+                z_t64_t _s1244 = z_t64_create((uint64_t)136);
                 z_t64_append(&_s1244, "        snprintf(_zp_buf, sizeof(_zp_buf), ", sizeof("        snprintf(_zp_buf, sizeof(_zp_buf), ")-1);
                 z_t64_append(&_s1244, "\"", sizeof("\"")-1);
-                z_t64_append(&_s1244, "data index: index %lu out of bounds (length ", sizeof("data index: index %lu out of bounds (length ")-1);
+                z_t64_append(&_s1244, "data index: index %llu out of bounds (length ", sizeof("data index: index %llu out of bounds (length ")-1);
                 char _b11[32]; int _b11_n = z_fmt_u64(_b11, (uint64_t)z_v48378);
                 z_t64_append(&_s1244, _b11, (uint64_t)_b11_n);
                 z_t64_append(&_s1244, ")", sizeof(")")-1);
                 z_t64_append(&_s1244, "\"", sizeof("\"")-1);
-                z_t64_append(&_s1244, ", (unsigned long)_idx);", sizeof(", (unsigned long)_idx);")-1);
+                z_t64_append(&_s1244, ", (unsigned long long)_idx);", sizeof(", (unsigned long long)_idx);")-1);
                 z_t64_append(&_s1244, "\n", sizeof("\n")-1);
                 z_t64_t z_v48387 = _s1244;
                 (void)(z_t64_append(z_v48368, (z_v48387).data, (z_v48387).size));
