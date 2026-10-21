@@ -244,10 +244,10 @@ extern FILE (*_imp___iob)[];    /* A pointer to an array of FILE */
 # undef vsnprintf
 # undef snprintf
   extern
-  __attribute__((format(gnu_printf, 3, 0))) __attribute__((nonnull (3)))
+  __attribute__((format(gnu_printf, 3, 0)))
   int __mingw_vsnprintf(char *_DstBuf,size_t _MaxCount,const char *_Format,va_list _ArgList);
   extern
-  __attribute__((format(gnu_printf, 3, 4))) __attribute__((nonnull (3)))
+  __attribute__((format(gnu_printf, 3, 4)))
   int __mingw_snprintf(char* s, size_t n, const char*  format, ...);
   int __cdecl vsnprintf(char *_DstBuf,size_t _MaxCount,const char *_Format,va_list _ArgList);
   _CRTIMP int __cdecl _snprintf(char *_Dest,size_t _Count,const char *_Format,...);
