@@ -245,6 +245,14 @@ static inline int32_t z_u128_cmp(z_u128 a, z_u128 b) { return z_u128_lt(b, a) - 
 static inline int32_t z_i128_cmp(z_i128 a, z_i128 b) { return z_i128_lt(b, a) - z_i128_lt(a, b); }
 static inline bool z_i128_is_neg(z_i128 a) { return z_i128_lt(a, z_i128_from_i64(0)); }
 
+/* z_span64 for a 128-bit magnitude: the bits from its highest set bit down to
+   its lowest, both counted; 0 for 0 */
+static inline int z_u128_span(z_u128 m) {
+    uint64_t hi = z_u128_hi(m), lo = z_u128_lo(m);
+    if (hi == 0) return z_span64(lo);
+    return (128 - z_clz64(hi)) - (lo != 0 ? z_ctz64(lo) : 64 + z_ctz64(hi));
+}
+
 /* decimal text, written into out with no terminator; the length is the
    result. 39 digits and a sign is the widest. */
 static int z_fmt_u128(char* out, z_u128 v) {

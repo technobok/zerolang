@@ -409,7 +409,7 @@ kindBitsT: data {
 kindLoT: data {
     i8Type: "-128"
     i16Type: "-32768"
-    i32Type: "-2147483648"
+    i32Type: "(-2147483647 - 1)"
     i64Type: "(-9223372036854775807LL - 1)"
     i128Type: "0"
     u8Type: "0"
@@ -792,25 +792,31 @@ convIsLossy: function {srcK: ztypes.numkind dstK: ztypes.numkind} out bool is {
     return sb >= db
 }
 
-# convErr -- one converror arm of a checked conversion's result, as the C that
-# tags `_r` with it. The two reasons a conversion can fail are the whole
+# convErr -- one converror arm of a checked conversion's result, as the C of
+# the result tagged with it. The two reasons a conversion can fail are the whole
 # vocabulary here: the value did not fit, or it fitted and lost bits doing so.
 convErr: function {
     # the converror arm, as declared
     arm: StringView
 } out String is {
-    e: "_r.tag = @ERRTAG@; _r.data.@ERRMEMBER@@TAG_converror@ = @ARM_converror.\{arm}@;"
+    e: "(z_@RT@_t){ .tag = @ERRTAG@, .data.@ERRMEMBER@@TAG_converror@ = @ARM_converror.\{arm}@ }"
     return e
+}
+
+# convOk -- a checked conversion's result holding `value`, as C.
+convOk: function {value: StringView} out String is {
+    o: "(z_@RT@_t){ .tag = @OKTAG@, .data.@OKMEMBER@ = \{value} }"
+    return o
 }
 
 # convFloatToFloat -- a float -> float conversion. Overflowing to infinity when
 # the source was finite is out of range; anything that does not survive the
 # round trip back to the source type lost precision.
 convFloatToFloat: function {scT: StringView tcT: StringView} out String is {
-    okF: "_r.tag = @OKTAG@; _r.data.@OKMEMBER@ = _f;"
-    b: "\{tcT} _f = (\{tcT})_v; if (isinf(_f) && !isinf(_v)) { \{(convErr
-        arm: "outOfRange"
-    )} } else if ((\{scT})_f != _v) { \{convErr arm: "precisionLoss"} } else { \{okF} }"
+    f: "(\{tcT})(@V@)"
+    b: "((isinf(\{f}) && !isinf(@V@)) ? \{convErr arm: "outOfRange"} : (\{scT}) \{f} != (@V@) ? \{(convErr
+        arm: "precisionLoss"
+    )} : \{convOk value: f.stringView})"
     return b
 }
 
@@ -820,11 +826,11 @@ convFloatToFloat: function {scT: StringView tcT: StringView} out String is {
 convFloatRange: function {dstK: ztypes.numkind} out String is {
     b: kindBits k: dstK
     if (kindSigned k: dstK).not then {
-        u: "(_v >= 0.0 && _v < 0x1p\{b})"
+        u: "((@V@) >= 0.0 && (@V@) < 0x1p\{b})"
         return u
     }
     bm1: b - 1
-    r: "(_v >= -0x1p\{bm1} && _v < 0x1p\{bm1})"
+    r: "((@V@) >= -0x1p\{bm1} && (@V@) < 0x1p\{bm1})"
     return r
 }
 
@@ -839,14 +845,12 @@ convFloatToInt: function {
     scT: StringView
     trunc: StringView
     dstK: ztypes.numkind
-    okSet: StringView
+    okValue: StringView
 } out String is {
     inRange: convFloatRange :dstK
-    b: "if (!\{inRange}) { \{(convErr
-        arm: "outOfRange"
-    )} } else if ((\{scT}) \{trunc} != _v) { \{(convErr
+    b: "(!\{inRange} ? \{convErr arm: "outOfRange"} : (\{scT}) \{trunc} != (@V@) ? \{(convErr
         arm: "precisionLoss"
-    )} } else { \{okSet} }"
+    )} : \{convOk value: okValue})"
     return b
 }
 
@@ -855,41 +859,36 @@ convFloatToInt: function {
 # does not read as magnitude.
 convMagExpr: function {signed: bool wide: bool} out String is {
     if wide.not then {
-        if signed then return "(_v < 0 ? (uint64_t)(0 - (uint64_t)_v) : (uint64_t)_v)"
-        return "(uint64_t)_v"
+        if signed then return "((@V@) < 0 ? (uint64_t)(0 - (uint64_t)(@V@)) : (uint64_t)(@V@))"
+        return "(uint64_t)(@V@)"
     }
-    if signed then return "(z_i128_is_neg(_v) ? z_u128_sub(Z_U128_U64(0), z_i128_bits(_v)) : z_i128_bits(_v))"
-    return "_v"
+    if signed then return "(z_i128_is_neg(@V@) ? z_u128_sub(Z_U128_U64(0), z_i128_bits(@V@)) : z_i128_bits(@V@))"
+    return "(@V@)"
 }
 
 # convIntToFloat -- an integer -> float conversion. It is exact when the
 # magnitude's significant span -- highest set bit down to lowest -- fits the
-# destination's mantissa, so the test counts leading and trailing zeros rather
-# than comparing values. f16 also has a range bound, which no other float here
-# is narrow enough to need.
+# destination's mantissa, so the test counts the span rather than comparing
+# values. f16 also has a range bound, which no other float here is narrow
+# enough to need.
 convIntToFloat: function {
     srcK: ztypes.numkind
     dstK: ztypes.numkind
-    okSet: StringView
+    okValue: StringView
 } out String is {
     p: kindMantissa k: dstK
-    rangeAnd: ""
-    ssig: kindSigned k: srcK
     wide: (srcK == ztypes.numkind.i128Type) or (srcK == ztypes.numkind.u128Type)
+    mag: convMagExpr signed: (kindSigned k: srcK) :wide
+    span: "z_span64(\{mag})"
+    if wide then span = "z_u128_span(\{mag})"
+    rangeAnd: String
     if dstK == ztypes.numkind.f16Type then {
-        rangeAnd = " && _mag <= 65504"
-        if wide then rangeAnd = " && _mh == 0 && _ml <= 65504"
+        rangeAnd = " && \{mag} <= 65504"
+        if wide then rangeAnd = " && !z_u128_lt(Z_U128_U64(65504), \{mag})"
     }
-    magExpr: convMagExpr signed: ssig :wide
-    if wide then {
-        w: "z_u128 _mag = \{magExpr}; uint64_t _mh = z_u128_hi(_mag); uint64_t _ml = z_u128_lo(_mag); int _bl = _mh ? (128 - z_clz64(_mh)) : (_ml ? 64 - z_clz64(_ml) : 0); int _tz = _ml ? z_ctz64(_ml) : (_mh ? 64 + z_ctz64(_mh) : 0); if ((_mh == 0 && _ml == 0) || ((_bl - _tz) <= \{p}\{rangeAnd})) { \{okSet} } else { \{(convErr
-            arm: "precisionLoss"
-        )} }"
-        return w
-    }
-    n: "uint64_t _mag = \{magExpr}; if (_v == 0 || ((64 - z_clz64(_mag) - z_ctz64(_mag)) <= \{p}\{rangeAnd})) { \{okSet} } else { \{(convErr
+    n: "((\{span} <= \{p}\{rangeAnd}) ? \{convOk value: okValue} : \{(convErr
         arm: "precisionLoss"
-    )} }"
+    )})"
     return n
 }
 
@@ -918,16 +917,16 @@ convRangeCond: function {dstK: ztypes.numkind needsLo: bool needsHi: bool} out S
     if needsLo.not then {
         if needsHi.not then return "0"
         hi2: kindHiStr k: dstK
-        h: "_v > \{hi2}"
+        h: "(@V@) > \{hi2}"
         return h
     }
     lo: kindLoStr k: dstK
     if needsHi.not then {
-        l: "_v < \{lo}"
+        l: "(@V@) < \{lo}"
         return l
     }
     hi: kindHiStr k: dstK
-    b: "_v < \{lo} || _v > \{hi}"
+    b: "(@V@) < \{lo} || (@V@) > \{hi}"
     return b
 }
 
@@ -937,24 +936,24 @@ convRangeCond: function {dstK: ztypes.numkind needsLo: bool needsHi: bool} out S
 convRange128: function {srcK: ztypes.numkind dstK: ztypes.numkind} out String is {
     if (kindBits k: dstK) == 128 then {
         # the other 128-bit type: only the sign, or the top bit, is out of range
-        if (kindSigned k: srcK) then return "z_i128_is_neg(_v)"
-        return "(z_u128_hi(_v) >> 63) != 0"
+        if (kindSigned k: srcK) then return "z_i128_is_neg(@V@)"
+        return "(z_u128_hi(@V@) >> 63) != 0"
     }
     hi: kindHiStr k: dstK
     if (kindSigned k: srcK).not then {
-        u: "z_u128_lt(Z_U128_U64(\{hi}), _v)"
+        u: "z_u128_lt(Z_U128_U64(\{hi}), @V@)"
         return u
     }
     if (kindSigned k: dstK).not then {
-        n: "z_i128_is_neg(_v) || z_i128_lt(z_i128_from_u64(\{hi}), _v)"
+        n: "z_i128_is_neg(@V@) || z_i128_lt(z_i128_from_u64(\{hi}), @V@)"
         return n
     }
     lo: kindLoStr k: dstK
-    b: "z_i128_lt(_v, z_i128_from_i64(\{lo})) || z_i128_lt(z_i128_from_i64(\{hi}), _v)"
+    b: "z_i128_lt(@V@, z_i128_from_i64(\{lo})) || z_i128_lt(z_i128_from_i64(\{hi}), @V@)"
     return b
 }
 
-# convOkValue -- the converted value a checked conversion stores once its test
+# convOkValue -- the converted value a checked conversion holds once its test
 # passed, as C: a cast, except where a 128-bit integer is on either side, whose
 # value moves only through the int128 helpers.
 convOkValue: function {srcK: ztypes.numkind dstK: ztypes.numkind tcT: StringView} out String is {
@@ -962,16 +961,16 @@ convOkValue: function {srcK: ztypes.numkind dstK: ztypes.numkind tcT: StringView
     dw: (kindBits k: dstK) == 128
     if dstK == ztypes.numkind.f16Type then {
         # an integer the bounds test has shown is exact in f16
-        src: "(double)_v"
+        src: "(double)(@V@)"
         if sw then {
-            src = "z_u128_to_f64(_v)"
-            if (kindSigned k: srcK) then src = "z_i128_to_f64(_v)"
+            src = "z_u128_to_f64(@V@)"
+            if (kindSigned k: srcK) then src = "z_i128_to_f64(@V@)"
         }
         h: "z_f16_from_f64(\{src})"
         return h
     }
     if sw.not when dw.not then {
-        c: "(\{tcT})_v"
+        c: "(\{tcT})(@V@)"
         return c
     }
     if dw then return (convOkInto128 :srcK :dstK)
@@ -981,12 +980,12 @@ convOkValue: function {srcK: ztypes.numkind dstK: ztypes.numkind tcT: StringView
 # convOkInto128 -- convOkValue for a 128-bit destination.
 convOkInto128: function {srcK: ztypes.numkind dstK: ztypes.numkind} out String is {
     if (kindBits k: srcK) == 128 then {
-        if (kindSigned k: srcK) then return "z_i128_bits(_v)"
-        return "z_u128_signed(_v)"
+        if (kindSigned k: srcK) then return "z_i128_bits(@V@)"
+        return "z_u128_signed(@V@)"
     }
     if (kindIsFloat k: srcK) then return (convFloatTrunc128 :srcK :dstK)
     # a signed source checked non-negative, into u128
-    return "z_u128_from_u64((uint64_t)_v)"
+    return "z_u128_from_u64((uint64_t)(@V@))"
 }
 
 # convOkFrom128 -- convOkValue for a 128-bit source into a narrower type: a
@@ -994,15 +993,15 @@ convOkInto128: function {srcK: ztypes.numkind dstK: ztypes.numkind} out String i
 # already shown holds it.
 convOkFrom128: function {srcK: ztypes.numkind dstK: ztypes.numkind tcT: StringView} out String is {
     if dstK == ztypes.numkind.f128Type then {
-        if (kindSigned k: srcK) then return "z_i128_to_f128(_v)"
-        return "z_u128_to_f128(_v)"
+        if (kindSigned k: srcK) then return "z_i128_to_f128(@V@)"
+        return "z_u128_to_f128(@V@)"
     }
-    val: "z_u128_lo(_v)"
+    val: "z_u128_lo(@V@)"
     if (kindIsFloat k: dstK) then {
-        val = "z_u128_to_f64(_v)"
-        if (kindSigned k: srcK) then val = "z_i128_to_f64(_v)"
+        val = "z_u128_to_f64(@V@)"
+        if (kindSigned k: srcK) then val = "z_i128_to_f64(@V@)"
     } else if (kindSigned k: srcK) then {
-        val = "z_u128_lo(z_i128_bits(_v))"
+        val = "z_u128_lo(z_i128_bits(@V@))"
     }
     c: "(\{tcT})"
     c.append val
@@ -1014,7 +1013,7 @@ convOkFrom128: function {srcK: ztypes.numkind dstK: ztypes.numkind tcT: StringVi
 # 128-bit destination truncates and reads back through the int128 helpers.
 convTruncC: function {srcK: ztypes.numkind dstK: ztypes.numkind tcT: StringView} out String is {
     if (kindBits k: dstK) != 128 then {
-        c: "(\{tcT})_v"
+        c: "(\{tcT})(@V@)"
         return c
     }
     back: "z_i128_to_f64(".string
@@ -1035,10 +1034,10 @@ convFloatTrunc128: function {srcK: ztypes.numkind dstK: ztypes.numkind} out Stri
     pfx: "z_u128"
     if (kindSigned k: dstK) then pfx = "z_i128"
     if srcK == ztypes.numkind.f128Type then {
-        q: "\{pfx}_from_f128(_v)"
+        q: "\{pfx}_from_f128(@V@)"
         return q
     }
-    d: "\{pfx}_from_f64((double)_v)"
+    d: "\{pfx}_from_f64((double)(@V@))"
     return d
 }
 
@@ -1060,11 +1059,12 @@ convFloatToHalf: function {srcK: ztypes.numkind scT: StringView} out String is {
     from: "z_f16_from_f64"
     if (kindMantissa k: srcK) == 24 then from = "z_f16_from_f32"
     if (kindMantissa k: srcK) == 113 then from = "z_f16_from_f128"
-    b: "z_f16 _f = \{from}(_v); if (isinf(z_f16_to_f32(_f)) && !isinf(_v)) { \{(convErr
+    h: "\{from}(@V@)"
+    b: "((isinf(z_f16_to_f32(\{h})) && !isinf(@V@)) ? \{(convErr
         arm: "outOfRange"
-    )} } else if ((\{scT}) z_f16_to_f32(_f) != _v) { \{(convErr
+    )} : (\{scT})z_f16_to_f32(\{h}) != (@V@) ? \{(convErr
         arm: "precisionLoss"
-    )} } else { _r.tag = @OKTAG@; _r.data.@OKMEMBER@ = _f; }"
+    )} : \{convOk value: h.stringView})"
     return b
 }
 
@@ -1079,7 +1079,9 @@ convWideCast: function {srcK: ztypes.numkind dstK: ztypes.numkind} out String is
 
 # convIntToInt -- an integer -> integer conversion. It cannot lose precision,
 # only range, so the whole body is one bounds test.
-convIntToInt: function {srcK: ztypes.numkind dstK: ztypes.numkind okSet: StringView} out String is {
+convIntToInt: function {
+    srcK: ztypes.numkind dstK: ztypes.numkind okValue: StringView
+} out String is {
     sbits: kindBits k: srcK
     dbits: kindBits k: dstK
     ssig: kindSigned k: srcK
@@ -1094,7 +1096,7 @@ convIntToInt: function {srcK: ztypes.numkind dstK: ztypes.numkind okSet: StringV
             needsHi: (convNeedsHi :ssig :dsig :sbits :dbits)
         )
     }
-    b: "if (\{cond}) { \{convErr arm: "outOfRange"} } else { \{okSet} }"
+    b: "((\{cond}) ? \{convErr arm: "outOfRange"} : \{convOk value: okValue})"
     return b
 }
 
@@ -1104,7 +1106,10 @@ convIntToInt: function {srcK: ztypes.numkind dstK: ztypes.numkind okSet: StringV
 # say anything the rule does not; natives-tbl-guard regenerates and diffs to keep
 # it that way. `lossy` follows the DECLARATION: a conversion the units declare as
 # returning `resultval` builds one, and one returning the type directly is a
-# plain cast, so the table and the declaration agree by construction.
+# plain cast, so the table and the declaration agree by construction. A checked
+# conversion is one expression: its tests, in order, each choosing a result.
+# It names @V@ in every test, so the emitter reads a value that is not free to
+# read twice into a temporary first.
 convBodyOf: function {srcK: ztypes.numkind dstK: ztypes.numkind lossy: bool} out String is {
     scT: kindCType k: srcK
     tcT: kindCType k: dstK
@@ -1120,12 +1125,8 @@ convBodyOf: function {srcK: ztypes.numkind dstK: ztypes.numkind lossy: bool} out
     # an f16 source is read as the float it widens to exactly, so every test
     # below compares C arithmetic values
     vT: scT.string
-    vInit: "@V@"
-    if srcK == ztypes.numkind.f16Type then {
-        vT = "float"
-        vInit = "z_f16_to_f32(@V@)"
-    }
-    okSet: "_r.tag = @OKTAG@; _r.data.@OKMEMBER@ = \{convOkValue :srcK :dstK :tcT};"
+    if srcK == ztypes.numkind.f16Type then vT = "float"
+    okValue: convOkValue :srcK :dstK :tcT
     body: String
     # the four corners of float/integer, each with its own way of failing
     if (kindIsFloat k: srcK) then {
@@ -1138,18 +1139,20 @@ convBodyOf: function {srcK: ztypes.numkind dstK: ztypes.numkind lossy: bool} out
                 scT: vT.stringView
                 trunc: (convTruncC :srcK :dstK :tcT).stringView
                 :dstK
-                okSet: okSet.stringView
+                okValue: okValue.stringView
             )
         }
     } else {
         if (kindIsFloat k: dstK) then {
-            body = convIntToFloat :srcK :dstK okSet: okSet.stringView
+            body = convIntToFloat :srcK :dstK okValue: okValue.stringView
         } else {
-            body = convIntToInt :srcK :dstK okSet: okSet.stringView
+            body = convIntToInt :srcK :dstK okValue: okValue.stringView
         }
     }
-    r: "({ \{vT} _v = \{vInit}; z_@RT@_t _r = {0}; \{body} _r; })"
-    return r
+    if srcK == ztypes.numkind.f16Type then {
+        return (substituteAll text: body needle: "@V@" repl: "z_f16_to_f32(@V@)")
+    }
+    return body
 }
 
 # convRowHead -- a conversion row's head, `[system.<src>.<dst> ...]`: the
@@ -1170,7 +1173,7 @@ convRowHead: function {srcK: ztypes.numkind dstK: ztypes.numkind lossy: bool} ou
 
 # convIsValue -- whether the conversion's row is a value (`form=value`): a
 # lossless cast, or the same value handed back. The f16 and 128-bit helpers are
-# calls, and a lossy conversion builds its result in a statement expression.
+# calls, and a lossy conversion builds a result of its own.
 convIsValue: function {srcK: ztypes.numkind dstK: ztypes.numkind lossy: bool} out bool is {
     if lossy then return false
     if srcK == dstK then return true
@@ -1248,6 +1251,58 @@ nativeConvRows: function out String is {
     return buf
 }
 
+# convResultBindings -- the holes a checked conversion's row spells for the
+# `resultval` it answers: its C type, its two tags and its two arms' members,
+# and how the error arm reaches converror's tag.
+convResultBindings: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    retTid: ztypes.tid
+    bn: List String
+    bv: List String
+    rn: List String
+    rv: List String
+} is {
+    bn.append from: "RT".string
+    bv.append from: (ctxCname :ctx tid: retTid)
+    rn.append from: "OKTAG".string
+    rv.append from: (tagConstOf :ast :ctx :symtab tid: retTid armId: zast.wellKnown.slot.wkOk)
+    rn.append from: "ERRTAG".string
+    rv.append from: (tagConstOf :ast :ctx :symtab tid: retTid armId: zast.wellKnown.slot.wkErr)
+    rn.append from: "OKMEMBER".string
+    (rv.append
+        from: (memberC
+            :ast
+            :symtab
+            :ctx
+            owner: retTid
+            kind: memberkind.arm
+            nameId: zast.wellKnown.slot.wkOk
+        )
+    )
+    rn.append from: "ERRMEMBER".string
+    (rv.append
+        from: (memberC
+            :ast
+            :symtab
+            :ctx
+            owner: retTid
+            kind: memberkind.arm
+            nameId: zast.wellKnown.slot.wkErr
+        )
+    )
+    # the error slot's assignment, spelled for whatever `converror` IS
+    if ctx.converrorTid.isZero.not then {
+        rn.append from: "TAG_converror".string
+        if (isOrdinalVariant :symtab tid: ctx.converrorTid) then {
+            rv.append from: "".string
+        } else {
+            rv.append from: ".tag".string
+        }
+    }
+}
+
 # emitNumericCast -- a runtime numeric conversion `<val>.<dstName>`, filled from
 # the natives.tbl row its qualified path names. The row already IS the derivation
 # -- it was generated by it -- so the C is read rather than rebuilt here, and the
@@ -1288,43 +1343,7 @@ emitNumericCast: function {
     rn: List String
     rv: List String
     if isResultval then {
-        bn.append from: "RT".string
-        bv.append from: (ctxCname :ctx tid: retTid)
-        rn.append from: "OKTAG".string
-        rv.append from: (tagConstOf :ast :ctx :symtab tid: retTid armId: zast.wellKnown.slot.wkOk)
-        rn.append from: "ERRTAG".string
-        rv.append from: (tagConstOf :ast :ctx :symtab tid: retTid armId: zast.wellKnown.slot.wkErr)
-        rn.append from: "OKMEMBER".string
-        (rv.append
-            from: (memberC
-                :ast
-                :symtab
-                :ctx
-                owner: retTid
-                kind: memberkind.arm
-                nameId: zast.wellKnown.slot.wkOk
-            )
-        )
-        rn.append from: "ERRMEMBER".string
-        (rv.append
-            from: (memberC
-                :ast
-                :symtab
-                :ctx
-                owner: retTid
-                kind: memberkind.arm
-                nameId: zast.wellKnown.slot.wkErr
-            )
-        )
-        # the error slot's assignment, spelled for whatever `converror` IS
-        if ctx.converrorTid.isZero.not then {
-            rn.append from: "TAG_converror".string
-            if (isOrdinalVariant :symtab tid: ctx.converrorTid) then {
-                rv.append from: "".string
-            } else {
-                rv.append from: ".tag".string
-            }
-        }
+        convResultBindings :ast :symtab :ctx :retTid :bn :bv :rn :rv
     } else {
         # a row that builds a record spells the record's C type as @RT@
         if (body.stringView.contains needle: "@RT@") then {
@@ -1334,6 +1353,22 @@ emitNumericCast: function {
     }
     ord: orderBegin :ctx slots: 1
     if (rowHoleTwice body: body.stringView hole: "@V@") then orderNamesTwice st: ord slot: 0
+    # a checked conversion reads a constant into its temp too: spelled in
+    # place, it would fold the tests, and the C compiler would report the
+    # result they rule out as code never executed
+    partF: valF
+    constant: (orderConstantWith
+        :ast
+        :symtab
+        :ctx
+        n: (ast.nodes.get i: valNid)
+        tf: valF
+        byPtr: false
+    )
+    if isResultval when constant then {
+        constant = false
+        partF.once = true
+    }
     (orderPartWith
         :ast
         :symtab
@@ -1341,15 +1376,8 @@ emitNumericCast: function {
         st: ord
         :mark
         text: val
-        tf: valF
-        constant: (orderConstantWith
-            :ast
-            :symtab
-            :ctx
-            n: (ast.nodes.get i: valNid)
-            tf: valF
-            byPtr: false
-        )
+        tf: partF
+        :constant
         fid: ztypes.tid
         pid: ztypes.tid.zero
         pname: zast.nameid
@@ -10427,7 +10455,12 @@ narrowListIndex: function {
     if dbits == 0 then return pos
     if (convNeedsHi ssig: false :dsig sbits: 64 :dbits).not then return pos
     ct: typeRefC :ast :symtab :ctx tid: idx
-    cond: convRangeCond dstK: nk.kind needsLo: false needsHi: true
+    # the bound test reads the value as @V@; here it is the local `_v`
+    cond: (substituteAll
+        text: (convRangeCond dstK: nk.kind needsLo: false needsHi: true)
+        needle: "@V@"
+        repl: "_v"
+    )
     r: String
     r.append "({ uint64_t _v = "
     r.append pos
@@ -13431,7 +13464,13 @@ intCvalText: function {
     # subtracting from the one below it, and so does this.
     if iv == (0 - 9223372036854775807 - 1) then return "(-9223372036854775807LL - 1)"
     r: "\{iv}"
-    if nk.has then r.append (kindLitSuffix k: nk.kind)
+    sfx: ""
+    if nk.has then sfx = kindLitSuffix k: nk.kind
+    # a signed magnitude past 2^31 - 1 is a long long: said, because a C
+    # compiler with a 32-bit long that reads such a decimal as unsigned long
+    # (MSVC does) would otherwise negate it as unsigned
+    if sfx.length == 0 when (iv > 2147483647) or (iv < (0 - 2147483647)) then sfx = "LL"
+    r.append sfx
     return r
 }
 
@@ -27622,6 +27661,8 @@ emitCountedRangeFor: function {
     fn: "_fn\{mN}"
     rk: ztypecheck.numKindOfTid st: symtab tid: rtR
     cnt: countRangeCountExpr signed: rk.has and (kindSigned k: rk.kind) bound: bound.stringView
+    # the temporaries the count's expression recorded are declared ahead of it
+    flushArgHoists :ctx :ind :tmp :buf
     d0: "\{ind}uint64_t \{fn} = \{cnt};\n"
     buf.append d0
     lidR: pushLoopLabel :ctx :tmp isDo: false
@@ -27760,6 +27801,9 @@ emitClosedRangeFor: function {
         fn: "_fn\{mN}"
         cnt: closedRangeCountExpr from: rs.stringView to: re.stringView :down
         lidR: pushLoopLabel :ctx :tmp isDo: false
+        # the temporaries the two ends' expressions recorded are declared ahead
+        # of them
+        flushArgHoists :ctx :ind :tmp :buf
         d0: "\{ind}\{ctR} \{rs} = \{startx};\n"
         buf.append d0
         d1: "\{ind}\{ctR} \{re} = \{tox};\n"

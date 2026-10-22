@@ -124,6 +124,11 @@ static inline int z_popcount64(uint64_t v) {
 #define z_popcount64(v) __builtin_popcountll(v)
 #endif
 
+/* z_span64 -- how many bits lie from the highest set bit of v down to its
+   lowest, both counted: the significand an integer needs to convert to a
+   float exactly. 0 for 0. */
+static inline int z_span64(uint64_t v) { return v == 0 ? 0 : 64 - z_clz64(v) - z_ctz64(v); }
+
 #if defined(_WIN32)
 /* z_win_console -- a write to a standard stream that is a console goes as
    UTF-16 (WriteConsoleW): the console shows non-ASCII text that way whatever

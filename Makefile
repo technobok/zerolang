@@ -1169,7 +1169,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2282451
+ALLOC_BASELINE := 2283293
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -2861,7 +2861,7 @@ natives-tbl-guard: bin/zc
 	    $$f; \
 	done | LC_ALL=C sort -u > $$d2/declkind; \
 	grep '^\[' $$d2/gen \
-	  | sed -E 's/^\[([^] ]*)[^]]*\] +\(\{.*/\1 lossy/; t; s/^\[([^] ]*)[^]]*\] +.*/\1 safe/' \
+	  | sed -E 's/^\[([^] ]*)[^]]*\] +.*@ERRTAG@.*/\1 lossy/; t; s/^\[([^] ]*)[^]]*\] +.*/\1 safe/' \
 	  | LC_ALL=C sort -u > $$d2/rowkind; \
 	nd=$$(wc -l < $$d2/declkind); nr=$$(wc -l < $$d2/rowkind); \
 	if [ "$$nd" != "$$nr" ]; then \
@@ -2871,7 +2871,7 @@ natives-tbl-guard: bin/zc
 	if [ -n "$$bad" ]; then \
 	  echo "natives-tbl-guard FAIL: a conversion row disagrees with its declared return:"; \
 	  echo "$$bad" | sed 's/^/    /' | head -8; \
-	  echo "  A `resultval` declaration must build one; a direct one must be a plain conversion."; \
+	  echo "  A resultval declaration must build one; a direct one must be a plain conversion."; \
 	  exit 1; \
 	fi; \
 	rm -rf $$d2; \
