@@ -512,7 +512,8 @@ Parser: class {
         )
     }
 
-    # Does an atom start at the current token? (PARENOPEN | REFID | STRBEG)
+    # Does an atom start at the current token? (PARENOPEN | REFID | STRBEG |
+    # LIST)
     atomLookahead: function {this: this.view lex: zlexer.Lexer.view} out bool is {
         tt: lex.peekType
         match (
@@ -523,12 +524,14 @@ Parser: class {
             return true
         } case strBegTok then {
             return true
+        } case listTok then {
+            return true
         } else {
             return false
         }
     }
 
-    # parseAtom -> atomexpr | atomid | atomstring
+    # parseAtom -> atomexpr | atomid | atomstring | atomlist
     #
     # Dispatch on the leading token. Precondition: atomLookahead is true,
     # so the else arm is unreachable (guarded with an error node).
@@ -542,6 +545,8 @@ Parser: class {
             return (this.parseAtomId :lex)
         } case strBegTok then {
             return (this.parseAtomString :lex)
+        } case listTok then {
+            return (this.parseAtomList :lex)
         } else {
             badPos: lex.peekPos
             return (this.mkErrorAt
@@ -574,6 +579,26 @@ Parser: class {
                 msg: "Expected an identifier"
             )
         }
+    }
+
+    # atomlist -> list-definition | "list". The keyword opens a list when `{`
+    # or `is` follows it; anywhere else it names the static list type, as in
+    # `out list u8` or `{d: list u8}`, and the atom carries the keyword's own
+    # name.
+    parseAtomList: function {:this lex: zlexer.Lexer} out astnode is {
+        startPos: lex.peekPos
+        kw: lex.acceptAny pool: this.ast.names
+        tt: lex.peekType
+        if (tt == zlexer.toktype.isTok) or (tt == zlexer.toktype.braceOpenTok) then {
+            return (this.dataBlockBody :lex :startPos isList: true)
+        }
+        return (astnode.atomid (zast.atomidrow
+            nodeid: this.nextId
+            lineno: kw.lineno
+            colno: kw.colno
+            name: kw.text
+        )
+        )
     }
 
     # path -> atom | ( path "." atomid )
@@ -2659,17 +2684,16 @@ Parser: class {
         dCol: u32
         # where the definition starts, for the empty-block report
         startPos: zlexer.tokpos
+        isList: bool
     } out astnode is {
         outOpt: lex.accept tt: zlexer.toktype.outTok pool: this.ast.names
         match (
             outOpt
         ) case none then {
             if elements.length == 0 then {
-                return (this.mkErrorAt
-                    pos: startPos
-                    code: zast.err.badData
-                    msg: "an empty data block must name its value type: `data {} out intdata u8`"
-                )
+                msg: "an empty data block must name its value type: `data {} out intdata u8`".string
+                if isList then msg = "an empty list must name its type: `list {} out list u8`"
+                return (this.mkErrorAt pos: startPos code: zast.err.badData :msg)
             }
             eSpan: zast.kidsAdd kids: this.ast.kids xs: elements
             return (astnode.datablock (zast.datablockrow
@@ -2678,6 +2702,7 @@ Parser: class {
                 colno: dCol
                 elements: eSpan
                 outType: zast.nodeid
+                :isList
             )
             )
         } case some then null
@@ -2703,6 +2728,7 @@ Parser: class {
             colno: dCol
             elements: eSpan
             outType: (this.intern n: typeNode)
+            :isList
         )
         )
     }
@@ -2714,8 +2740,6 @@ Parser: class {
     # re-check). The optional "out" pins the element type.
     acceptDataDefinition: function {:this lex: zlexer.Lexer} out astnode is {
         startPos: lex.peekPos
-        dLine: startPos.lineno
-        dCol: startPos.colno
         dOpt: lex.accept tt: zlexer.toktype.dataTok pool: this.ast.names
         match (
             dOpt
@@ -2726,6 +2750,16 @@ Parser: class {
                 msg: "Expected data"
             )
         } case some then null
+        return (this.dataBlockBody :lex :startPos isList: false)
+    }
+
+    # dataBlockBody -- a data or list definition after its keyword: `["is"] "{"
+    # elements "}" ["out" type]`. `startPos` is the keyword's.
+    dataBlockBody: function {
+        :this lex: zlexer.Lexer startPos: zlexer.tokpos isList: bool
+    } out astnode is {
+        dLine: startPos.lineno
+        dCol: startPos.colno
         lex.accept tt: zlexer.toktype.isTok pool: this.ast.names
         openOpt: lex.accept tt: zlexer.toktype.braceOpenTok pool: this.ast.names
         match (
@@ -2753,7 +2787,7 @@ Parser: class {
                 msg: "Expected closing brace for data body"
             )
         } case some then null
-        return (this.dataBlockWithOut :lex :elements :dLine :dCol :startPos)
+        return (this.dataBlockWithOut :lex :elements :dLine :dCol :startPos :isList)
     }
 
     # Build a reassignment from an already-parsed LHS path list (the `=`

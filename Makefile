@@ -1223,7 +1223,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2306492
+ALLOC_BASELINE := 2309888
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1297,7 +1297,7 @@ TYPENAME_OK := src/ztypecheck.z:resolveClass src/ztypecheck.z:resolveProtocol \
 	src/ztypecheck.z:checkDataBlockMember src/ztypecheck.z:checkMarkerMember \
 	src/zemitterc.z:emitDataMember src/zemitterc.z:emitStrConvCall \
 	src/zsource.z:bareZeroTypeName src/ztypecheck.z:constraintKindForId \
-	src/ztypecheck.z:isConformanceMarker
+	src/ztypecheck.z:isConformanceMarker src/ztypecheck.z:declareCanonicalTypeId
 typename-guard:
 	@fail=0; n=0; \
 	for e in $$(awk '/^[A-Za-z_][A-Za-z0-9_]*: function/ {fn=$$1; sub(":", "", fn)} \
@@ -2185,10 +2185,10 @@ VIEW_GUARD_EMITTED := get:ListRef.get,ListView.get,SpanVal.get getMut:ListRef.ge
   slice:ListRef.slice,ListView.slice \
   contains:ListRef.contains \
   listView:ListRef.listView sort:ListRef.sort \
-  iterate:ListRef.iterate,ListView.iterate,intdata.iterate,floatdata.iterate \
-  index:intdata.get,floatdata.get \
+  iterate:ListRef.iterate,ListView.iterate,intdata.iterate,floatdata.iterate,staticlist.iterate \
+  index:intdata.get,floatdata.get,staticlist.get \
   iterateReverse:ListRef.iterateReverse,ListView.iterateReverse \
-  call:ListIter.call,ListIterVal.call,ListIterMut.call,ListIterMutVal.call \
+  call:ListIter.call,ListIterVal.call,ListIterMut.call,ListIterMutVal.call,StaticIter.call \
   iterateMut:ListRef.iterateMut getv:MapRR.get eq:- \
   extendView:ListVal.extendView destroy:- \
   hasv:MapRR.has,SetRef.has deletev:SetRef.delete
@@ -2290,7 +2290,8 @@ VIEW_GUARD_INLINE := Bytes.byteView:unemitted \
   optionval.or:byvalue resultval.orPanic:byvalue resultval.or:byvalue \
   intliteral.*:byvalue floatliteral.*:byvalue *.iterate:byvalue *.times:byvalue \
   intdata.length:inline intdata.array:inline intdata.tag:inline intdata.slot:inline \
-  floatdata.length:inline floatdata.array:inline floatdata.slot:inline stringdata.*:inline
+  floatdata.length:inline floatdata.array:inline floatdata.slot:inline stringdata.*:inline \
+  staticlist.length:inline staticlist.array:inline staticlist.tag:inline staticlist.slot:inline
 
 define VIEW_GUARD_AWK
 # Reads lib/system/*.z (declarations) and the C backings, then joins them.

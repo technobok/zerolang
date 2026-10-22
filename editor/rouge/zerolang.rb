@@ -26,6 +26,7 @@ module Rouge
           facet
           protocol
           data
+          list
           generator
           typedef
 
@@ -90,7 +91,7 @@ module Rouge
           MapKeyIterRV MapKeyIterVR MapKeyIterVV MapRR MapRV MapVR
           MapVV Option OptionView OptionViewVal OptionMut OptionMutVal Path PathView Reader
           RefHashable Result ResultRV ResultVR Seeker Set SetIter SetIterVal
-          SetRef SetVal SpanPair SpanVal Splitter String StringLike StringView
+          SetRef SetVal SpanPair SpanVal Splitter StaticIter StaticView String StringLike StringView
           Text TextReader Writer _ anyfloat anyint anyval array
           bool break c32 c8 continue
           converror copy dataindex error f128 f16
@@ -98,7 +99,7 @@ module Rouge
           i128 i16 i32 i64 i8
           idkey intdata intliteral intrange iterator meta
           never
-          null openmode optionval panic parseerror print
+          null openmode optionval panic parseerror print staticmember
           public resultval return seekorigin stderr
           stdin stdout str stringJoin stringdata tag
           this true u128 u16

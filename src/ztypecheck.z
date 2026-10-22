@@ -611,6 +611,7 @@ isViewFamilyTid: function {ast: Ast st: zenv.ZSymbolTable tid: ztypes.tid} out b
     if vog.isZero then return false
     if vog == (stdTid :ast :st wk: zast.wellKnown.slot.tyOptionView) then return true
     if vog == (stdTid :ast :st wk: zast.wellKnown.slot.tyOptionViewVal) then return true
+    if vog == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyStaticView) then return true
     if vog == (stdTid :ast :st wk: zast.wellKnown.slot.tyListView) then return true
     if vog == (stdTid :ast :st wk: zast.wellKnown.slot.tyListViewVal) then return true
     if vog == (stdTid :ast :st wk: zast.wellKnown.slot.tyMapEntry) then return true
@@ -818,6 +819,19 @@ suggestSimilar: function {
     return ""
 }
 
+# bindListKeyword -- the keyword `list` names collections.staticlist from every
+# scope. A keyword is never a declared name, so the prelude's binding of it is
+# made here, once both units are indexed: an edge to the template's own
+# declaration.
+bindListKeyword: function {st: zenv.ZSymbolTable} is {
+    core: st.typing.coreUnitRoot
+    coll: st.typing.collectionsUnitRoot
+    if core.isZero or coll.isZero then return
+    sl: st.typing.declFindChild parentDeclId: coll nameId: zast.wellKnown.slot.tyStaticlist
+    if sl.isZero then return
+    st.typing.declAddChildEdge parentDeclId: core nameId: zast.wellKnown.slot.kwList childDeclId: sl
+}
+
 # indexUnitDefs -- pre-scan every unit's top-level definitions into a
 # (unit.name) -> typetype index BEFORE resolution, so a reference can declare the
 # ONE canonical record id (declare-before-bind) instead of an anonymous shell. No
@@ -844,6 +858,7 @@ indexUnitDefs: function {st: zenv.ZSymbolTable scope: ztypes.declid program: Ast
                 nameId: zast.wellKnown.slot.unCollections
             )
             if clo.isZero.not then st.typing.collectionsUnitRoot = clo
+            bindListKeyword :st
             mro: (st.typing.declFindChild
                 parentDeclId: st.typing.programRoot
                 nameId: st.reg.regMainUnitId
@@ -1790,9 +1805,16 @@ declareCanonicalTypeId: function {
             } case none then null
         }
     }
-    # the mint spells the name, read through a borrow
+    # the mint spells the name, read through a borrow. collections.staticlist
+    # is spelled by the keyword that names it, so every message says `list`
+    spell: nameId
+    if nameId == zast.wellKnown.slot.tyStaticlist when (
+        unitDecl == st.typing.collectionsUnitRoot
+    ) then {
+        spell = zast.wellKnown.slot.kwList
+    }
     id: ztypes.tid
-    nT: zast.nameTextAt :ast ref: nameId
+    nT: zast.nameTextAt :ast ref: spell
     id = st.reg.newType name: nT.stringView ownerTid: qowner :typetype
     # valtype-ness is a property of the definition's KIND -- a record or a
     # variant is a valtype, a class or a union is not -- and is known here,
@@ -2047,23 +2069,7 @@ resolveNamedTypeId: function {
     if gp7.isZero.not then return gp7
     site7: definingSiteForId :st :scope :ast :unitDecl :nameId
     duo7: site7.defUnit
-    if duo7.isZero then {
-        # the environment before a shell: a name no unit-name index places
-        # but the scope's chain reaches -- a template's generic
-        # parameter in its own method signature (`v: t`), which is the
-        # canonical GENERIC_PARAM id, not a forward record of that name
-        e7: envTypeIdOf :st :scope :nameId
-        if e7.isZero.not then return e7
-        # an alias the chain reaches before it resolved -- a generic unit's
-        # `elem: t`, read by a sibling's signature -- is followed to its target
-        eh7: envLookup :st :scope :nameId
-        if eh7.declId.isZero.not when (st.typing.decls.get i: eh7.declId).kind.reexportDecl then {
-            ea7: resolveAliasKey :st :ast declId: eh7.declId
-            if ea7.isZero.not then return ea7
-        }
-        nT10: zast.nameTextAt :ast ref: nameId
-        return (st.reg.newType name: nT10.stringView typetype: ztypes.ztypetype.recordType)
-    }
+    if duo7.isZero then return (envNamedTypeId :st :ast :scope :nameId)
     tto7: optionval.none ztypes.ztypetype
     dd7: declOfUnitDef :st :scope unitDecl: duo7 :nameId
     if dd7.isZero.not then tto7 = declDefTypetype :st :ast declId: dd7
@@ -2090,6 +2096,41 @@ resolveNamedTypeId: function {
         aliasDecl: site7.aliasDecl
         :nameId
     )
+}
+
+# envNamedTypeId -- resolveNamedTypeId for a name no unit-name index places: the
+# environment answers before a shell is minted for it.
+envNamedTypeId: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    scope: ztypes.declid
+    nameId: zast.nameid
+} out ztypes.tid is {
+    # a name the scope's chain reaches -- a template's generic parameter in its
+    # own method signature (`v: t`), which is the canonical GENERIC_PARAM id,
+    # not a forward record of that name
+    e7: envTypeIdOf :st :scope :nameId
+    if e7.isZero.not then return e7
+    # an alias the chain reaches before it resolved -- a generic unit's `elem:
+    # t`, read by a sibling's signature -- is followed to its target
+    eh7: envLookup :st :scope :nameId
+    if eh7.declId.isZero.not when (st.typing.decls.get i: eh7.declId).kind.reexportDecl then {
+        ea7: resolveAliasKey :st :ast declId: eh7.declId
+        if ea7.isZero.not then return ea7
+    }
+    # a scope that binds the name to a declaration made under another name --
+    # the prelude's keyword `list`, bound to collections.staticlist -- answers
+    # as the scope walk resolves it
+    if eh7.declId.isZero.not when (st.typing.decls.get i: eh7.declId).name != nameId then {
+        ek7: walkLookupTyperefFrom :ast :st :scope baseId: nameId
+        match (
+            ek7
+        ) case some then {
+            return ek7
+        } case none then null
+    }
+    nT10: zast.nameTextAt :ast ref: nameId
+    return (st.reg.newType name: nT10.stringView typetype: ztypes.ztypetype.recordType)
 }
 
 # resolveAtomType -- resolve a type-atom name in a method/param position. `this`
@@ -7679,6 +7720,7 @@ paramIsBorrowReftype: function {
     if cid == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyOptionViewVal) then return false
     if cid == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyOptionMut) then return false
     if cid == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyOptionMutVal) then return false
+    if cid == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyStaticView) then return false
     if (st.reg.isNativeOf tid: cid) then return false
     tt: st.reg.typetypeOf typeId: cid
     return (tt == ztypes.ztypetype.classType) or (tt == ztypes.ztypetype.unionType)
@@ -10206,15 +10248,36 @@ dataOwnMember: function {
 }
 
 # refuseDataOutType -- a data block's `out` names a type that is no data value
-# type. When it names an element type the value type is the one wrapping it, and
-# the hint writes that out.
+# type of the block's family. When it names an element type the value type is
+# the one wrapping it, and the hint writes that out.
 refuseDataOutType: function {
     ast: Ast
     st: zenv.ZSymbolTable
     outId: zast.nodeid
     ot: ztypes.tid
+    # the block was written `list { }`
+    isList: bool
 } is {
     otn: specWrittenName :st :ast tid: ot
+    oNode: ast.nodes.get i: outId
+    if isList then {
+        lh: "name the list's full type: `out list u8`, `out list StringView`".string
+        if (constraintHolds :ast :st ck: ztypes.constraintkind.staticMember argTid: ot) then {
+            lh = "a list of \{otn} is `out list \{otn}`"
+        }
+        (addErrorH
+            :st
+            nodeid: outId
+            lineno: (nodeLine n: oNode)
+            colno: (nodeCol n: oNode)
+            e: zast.err.typeError
+            msg: "'\{otn}' is no list type: a list's `out` names the list's own type"
+            note: String
+            hint: lh
+            width: otn.length.u32.orPanic
+        )
+        return
+    }
     wrap: String
     if ot == (stdTid :ast :st wk: zast.wellKnown.slot.tyStringView) then {
         wrap = "out stringdata"
@@ -10226,7 +10289,6 @@ refuseDataOutType: function {
     hint: "name the block's value type: `out intdata u8`, `out floatdata f32`, `out stringdata`".string
     if wrap.length > 0 then hint = "a block of \{otn} is `\{wrap}`"
     msg: "'\{otn}' is no data value type: a data block's `out` names the block's value type"
-    oNode: ast.nodes.get i: outId
     (addErrorH
         :st
         nodeid: outId
@@ -10258,8 +10320,9 @@ dataoutparts: record {
     indexLiteral: bool
 }
 
-# dataOutParts -- a block's `out` type, when it is intdata, floatdata or
-# stringdata or an instance of one, taken apart. The parameters are read by
+# dataOutParts -- a block's `out` type, when it is a value type of the block's
+# family, taken apart: `list` for a block written `list { }`, else intdata,
+# floatdata or stringdata, or an instance of one. The parameters are read by
 # position in each template's own declaration: the element first, then the
 # index, and a stringdata has only the index. What the `out` node WROTE decides
 # what is untyped -- the instance itself materialises a literal argument.
@@ -10270,6 +10333,8 @@ dataOutParts: function {
     unitDecl: ztypes.declid
     valueTid: ztypes.tid
     outId: zast.nodeid
+    # the block was written `list { }`
+    isList: bool
 } out dataoutparts is {
     none: (dataoutparts
         isValue: false
@@ -10283,7 +10348,9 @@ dataOutParts: function {
     if tpl.isZero then tpl = valueTid
     sdT: stdTid :ast :st wk: zast.wellKnown.slot.tyStringdata
     isStr: tpl == sdT
-    if isStr.not when tpl != (stdTid :ast :st wk: zast.wellKnown.slot.tyIntdata) when (
+    if isList then {
+        if tpl != (stdTid :ast :st wk: zast.wellKnown.slot.kwList) then return none
+    } else if isStr.not when tpl != (stdTid :ast :st wk: zast.wellKnown.slot.tyIntdata) when (
         tpl != (stdTid :ast :st wk: zast.wellKnown.slot.tyFloatdata)
     ) then return none
     idxAt: 1.u64
@@ -10380,14 +10447,23 @@ dataOutWrote: function {
     return (dataoutwrote elem: elemWrote index: idxWrote)
 }
 
-# dataValueTemplate -- the template a data block of element type `elemTid` is a
-# value of: `stringdata` for StringView, `floatdata` for a float, `intdata` for
-# an integer, 0 for anything else (an element type that did not resolve).
+# dataValueTemplate -- the template data block `dataTid` of element type
+# `elemTid` is a value of: `list` for a block written `list { }` of any element
+# it holds; else `stringdata` for StringView, `floatdata` for a float, `intdata`
+# for an integer. 0 for anything else (an element type that did not resolve).
 dataValueTemplate: function {
     ast: Ast
     st: zenv.ZSymbolTable
+    dataTid: ztypes.tid
     elemTid: ztypes.tid
 } out ztypes.tid is {
+    if (st.typing.listBlocks.has item: dataTid) then {
+        if (constraintHolds :ast :st ck: ztypes.constraintkind.staticMember argTid: elemTid
+        ).not then {
+            return ztypes.tid.zero
+        }
+        return (stdTid :ast :st wk: zast.wellKnown.slot.kwList)
+    }
     if elemTid == (stdTid :ast :st wk: zast.wellKnown.slot.tyStringView) then {
         return (stdTid :ast :st wk: zast.wellKnown.slot.tyStringdata)
     }
@@ -10412,7 +10488,7 @@ dataValueTypeFor: function {
     have: st.reg.dataValueTypeOf tid: dataTid
     if have.isZero.not then return have
     elemTid: st.reg.dataElemTypeOf tid: dataTid
-    tpl: dataValueTemplate :ast :st :elemTid
+    tpl: dataValueTemplate :ast :st :dataTid :elemTid
     if tpl.isZero then return ztypes.tid.zero
     pn: st.reg.genericParamNamesOf tdecl: (declOfTypeId :st tid: tpl)
     # a template with no parameter is its own value type
@@ -10468,7 +10544,7 @@ dataBlockFits: function {
     # a block's `slot` names positions and is no value
     if (st.typing.dataSlotTypes.has item: dataTid) then return false
     elemTid: st.reg.dataElemTypeOf tid: dataTid
-    tpl: dataValueTemplate :ast :st :elemTid
+    tpl: dataValueTemplate :ast :st :dataTid :elemTid
     if tpl.isZero then return false
     if want != tpl when (dataValueArgsMatch :ast :st :dataTid :want :tpl :elemTid
     ).not then return false
@@ -10594,6 +10670,7 @@ resolveDataInto: function {
     subs: (IdMapV zast.nameid v: ztypes.tid).view
 } out ztypes.tid is {
     st.reg.setValtype typeId: did value: false
+    if dnode.isList then st.typing.listBlocks.add item: did
     litId: st.reg.literalIntTid
     # the block's elements are evaluating: a read of the block from one of
     # them is a cycle (constDataMember)
@@ -10631,7 +10708,15 @@ resolveDataInto: function {
         } else {
             ot = unitMonoTypeOf :st :ast rf: scope :tplId :monoId :subs tid: ot
         }
-        vparts = dataOutParts :ast :st :scope :unitDecl valueTid: ot outId: dnode.outType
+        vparts = (dataOutParts
+            :ast
+            :st
+            :scope
+            :unitDecl
+            valueTid: ot
+            outId: dnode.outType
+            isList: dnode.isList
+        )
     }
     # a typed value type names the element type the elements' own tags are
     # weighed against; an untyped one, or an `out` refused below, names none
@@ -10674,12 +10759,12 @@ resolveDataInto: function {
     # constant reads, and only what reaches run time is the i64 / f64 default
     typed: (etn.length > 0) or valueOut or (dataTagWritten :ast :dnode)
     # the template the block's name is a value of: its members are the block's own
-    valTpl: dataValueTemplate :ast :st :elemTid
+    valTpl: dataValueTemplate :ast :st dataTid: did :elemTid
     # an `out` names the block's value type; a declared type that is none is
     # refused here, and a name that resolved to nothing is the unknown type
     # recordTyperef reports
     if vparts.isValue.not when ot.isZero.not when (declOfTypeId :st tid: ot).isZero.not then {
-        refuseDataOutType :ast :st outId: dnode.outType :ot
+        refuseDataOutType :ast :st outId: dnode.outType :ot isList: dnode.isList
     }
     # every name an element takes: its label, else its ordinal
     taken: IdSet zast.nameid
@@ -23541,6 +23626,7 @@ constraintKindForId: function {id: zast.nameid} out ztypes.constraintkind is {
     if id == zast.wellKnown.slot.tyAnyint then return ztypes.constraintkind.anyInt
     if id == zast.wellKnown.slot.tyAnyfloat then return ztypes.constraintkind.anyFloat
     if id == zast.wellKnown.slot.tyDataindex then return ztypes.constraintkind.dataIndex
+    if id == zast.wellKnown.slot.tyStaticmember then return ztypes.constraintkind.staticMember
     if id == zast.wellKnown.slot.tyStringLike then return ztypes.constraintkind.stringLike
     if (constraintIntKindId :id).has then return ztypes.constraintkind.numeric
     return ztypes.constraintkind.other
@@ -23557,6 +23643,7 @@ constraintTextOf: function {desc: ztypes.constraintdesc} out String is {
     if desc.kind == ztypes.constraintkind.anyInt then return "anyint"
     if desc.kind == ztypes.constraintkind.anyFloat then return "anyfloat"
     if desc.kind == ztypes.constraintkind.dataIndex then return "dataindex"
+    if desc.kind == ztypes.constraintkind.staticMember then return "staticmember"
     if desc.kind == ztypes.constraintkind.stringLike then return "StringLike"
     if desc.kind == ztypes.constraintkind.numeric when desc.numKind.has then {
         return (ztypes.numkindName k: desc.numKind.kind)
@@ -23618,15 +23705,24 @@ conformsToText: function {
 }
 
 # literalSatisfies -- an untyped literal type meets the bound that admits one: a
-# data block's element may be left untyped (anyint, anyfloat), and so may its
-# index (dataindex), which leaves its slots untyped.
+# data block's or a list's element may be left untyped (anyint, anyfloat,
+# staticmember), and so may its index (dataindex), which leaves its slots
+# untyped.
 literalSatisfies: function {
     st: zenv.ZSymbolTable.view ck: ztypes.constraintkind argTid: ztypes.tid
 } out bool is {
     if argTid == st.reg.literalIntTid then {
-        return (ck == ztypes.constraintkind.anyInt) or (ck == ztypes.constraintkind.dataIndex)
+        return (
+            (ck == ztypes.constraintkind.anyInt) or
+            (ck == ztypes.constraintkind.dataIndex) or
+            (
+                ck == ztypes.constraintkind.staticMember
+            )
+        )
     }
-    if argTid == st.reg.literalFloatTid then return ck == ztypes.constraintkind.anyFloat
+    if argTid == st.reg.literalFloatTid then {
+        return (ck == ztypes.constraintkind.anyFloat) or (ck == ztypes.constraintkind.staticMember)
+    }
     return false
 }
 
@@ -23671,6 +23767,16 @@ constraintHolds: function {
     } case dataIndex then {
         # a data block's index: an id key, or untyped (literalSatisfies)
         return (typeIsIdKey :st :ast tid: argTid)
+    } case staticMember then {
+        if argTid == (stdTid :ast :st wk: zast.wellKnown.slot.tyStringView) then return true
+        return (
+            (typeIsNumberOf :st tid: argTid float: false) or
+            (typeIsNumberOf
+                :st
+                tid: argTid
+                float: true
+            )
+        )
     } case stringLike then {
         # a union bound, so it admits reference types only: a `str` conforms to
         # Text as a value, and is handed to a StringLike parameter as its
@@ -26579,8 +26685,9 @@ getOrMintSpec: function {
 }
 
 # materialiseDataArgs -- a data value type's arguments at the run-time types its
-# literals become: an untyped element is an i64 (a floatdata's an f64) and an
-# untyped index a u64, as an untyped block's value is `intdata i64 i: u64`. A
+# literals become: an untyped element is an i64 (a floatdata's, or a list's
+# untyped float, an f64) and an untyped index a u64, as an untyped block's value
+# is `intdata i64 i: u64`. A
 # parameter left out takes its default, which is the literal type, so it is
 # bound here too -- the instance is named by what it holds, and a literal type
 # reaches no instance, so the emitter never sees one. The parameters are read by
@@ -26597,7 +26704,8 @@ materialiseDataArgs: function {
     # template no program named cannot be this one
     isStr: templateId == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyStringdata)
     isFloat: templateId == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyFloatdata)
-    if isStr.not when isFloat.not when (
+    isList: templateId == (stdTidRo :ast :st wk: zast.wellKnown.slot.kwList)
+    if isStr.not when isFloat.not when isList.not when (
         templateId != (stdTidRo :ast :st wk: zast.wellKnown.slot.tyIntdata)
     ) then return
     k: u64
@@ -26606,13 +26714,19 @@ materialiseDataArgs: function {
         v: (subs.get key: pn).or d: ztypes.tid.zero
         isElem: isStr.not and (k == 0)
         if v.isZero or (isLiteralTypeId :st tid: v) then {
-            mat: stdTid :ast :st wk: zast.wellKnown.slot.tyU64
-            if isElem then mat = stdTid :ast :st wk: zast.wellKnown.slot.tyI64
-            if isElem when isFloat then mat = stdTid :ast :st wk: zast.wellKnown.slot.tyF64
-            subs.set key: pn value: mat
+            float: isFloat or (v == st.reg.literalFloatTid)
+            subs.set key: pn value: (materialTid :ast :st :isElem :float)
         }
         k = k + 1
     }
+}
+
+# materialTid -- the run-time type an untyped data argument becomes: an element
+# is an i64, or an f64 when it is a float; an index is a u64.
+materialTid: function {ast: Ast st: zenv.ZSymbolTable isElem: bool float: bool} out ztypes.tid is {
+    if isElem.not then return (stdTid :ast :st wk: zast.wellKnown.slot.tyU64)
+    if float then return (stdTid :ast :st wk: zast.wellKnown.slot.tyF64)
+    return (stdTid :ast :st wk: zast.wellKnown.slot.tyI64)
 }
 
 # monoValName -- the value-type name component of a get-wrapper mono name. A type
@@ -26724,6 +26838,7 @@ templateIsCollection: function {
     # read, not resolved: a template no program named cannot be this one
     listIterMutTid: stdTidRo :ast :st wk: zast.wellKnown.slot.tyListIterMut
     listIterMutValTid: stdTidRo :ast :st wk: zast.wellKnown.slot.tyListIterMutVal
+    staticIterTid: stdTidRo :ast :st wk: zast.wellKnown.slot.tyStaticIter
     setIterTid: stdTid :ast :st wk: zast.wellKnown.slot.tySetIter
     setIterValTid: stdTid :ast :st wk: zast.wellKnown.slot.tySetIterVal
     idSetIterTid: stdTid :ast :st wk: zast.wellKnown.slot.tyIdSetIter
@@ -26747,6 +26862,7 @@ templateIsCollection: function {
         (templateId == listIterValTid) or
         (templateId == listIterMutTid) or
         (templateId == listIterMutValTid) or
+        (templateId == staticIterTid) or
         (templateId == setIterTid) or
         (templateId == setIterValTid) or
         (templateId == idSetIterTid) or
@@ -28738,12 +28854,13 @@ isViewUnionMono: function {
     return (isViewUnionOrigin :ast :st :origin)
 }
 
-# isViewUnionOrigin -- `origin` is one of the four view unions: OptionView and
-# OptionMut, each with its valtype twin. Their arm points at a value they do
-# not own; they differ only in what that arm lets the holder do. `origin` is
-# never 0, so a template the program lacks (stdTid 0) matches nothing. The
-# OptionMut pair is READ (stdTidRo), not resolved: a template no program named
-# cannot be `origin`, and resolving it would mint it into every program.
+# isViewUnionOrigin -- `origin` is one of the five view unions: OptionView and
+# OptionMut, each with its valtype twin, and StaticView. Their arm points at a
+# value they do not own; they differ only in what that arm lets the holder do.
+# `origin` is never 0, so a template the program lacks (stdTid 0) matches
+# nothing. The OptionMut pair and StaticView are READ (stdTidRo), not resolved:
+# a template no program named cannot be `origin`, and resolving it would mint it
+# into every program.
 isViewUnionOrigin: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -28752,6 +28869,7 @@ isViewUnionOrigin: function {
     if origin == (stdTid :ast :st wk: zast.wellKnown.slot.tyOptionView) then return true
     if origin == (stdTid :ast :st wk: zast.wellKnown.slot.tyOptionViewVal) then return true
     if origin == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyOptionMut) then return true
+    if origin == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyStaticView) then return true
     return origin == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyOptionMutVal)
 }
 
@@ -31454,6 +31572,23 @@ checkDataBlockMember: function {
             return (callleg handled: true tid: ztypes.tid.zero)
         }
         if isArray then markDataRuntimeIndexed :st tid: bt
+        # only a list of integers owns a `tag`; the template's own member is
+        # no answer for any other
+        if cnId == zast.wellKnown.slot.wkTag when (st.typing.listBlocks.has item: bt
+        ) when (st.typing.declChildOfId parentTypeId: bt nameId: cnId).none then {
+            (addErrorH
+                :st
+                nodeid: dp.nid
+                lineno: dp.lineno
+                colno: dp.colno
+                e: zast.err.typeError
+                msg: "a list's `tag` is the discriminator source of a variant or union, and only a list of integers is one"
+                note: String
+                hint: "write the arms' values as integers: `codes: list { a: 1 b: 2 } out list u8`"
+                width: 3
+            )
+            return (callleg handled: true tid: ztypes.tid.zero)
+        }
         if isArray.not when (st.typing.declChildOfId parentTypeId: bt nameId: cnId).none then {
             dv: dataValueTypeFor :st :ast :unitDecl dataTid: bt
             # a generic unit's block over its parameter is a value of a partial,
@@ -31597,7 +31732,7 @@ refuseDataValueMember: function {
     if og.isZero then og = bt
     if og != (stdTidRo :ast :st wk: zast.wellKnown.slot.tyIntdata) when (
         og != (stdTidRo :ast :st wk: zast.wellKnown.slot.tyFloatdata)
-    ) when (
+    ) when og != (stdTidRo :ast :st wk: zast.wellKnown.slot.kwList) when (
         isSlot.not or (og != (stdTidRo :ast :st wk: zast.wellKnown.slot.tyStringdata))
     ) then return false
     mn: zast.nameTextAt :ast ref: cnId
@@ -53835,6 +53970,8 @@ dataref: record {
     lineno: u32
     # the column to report this data block against
     colno: u32
+    # written `list { ... }` rather than `data { ... }`
+    isList: bool
 }
 
 # dataRefAt -- the data-block row `nid` as plain values (all zero for any
@@ -53848,10 +53985,11 @@ dataRefAt: function {ast: Ast.view nid: zast.nodeid} out dataref is {
             outType: n.outType
             lineno: n.lineno
             colno: n.colno
+            isList: n.isList
         )
     }
     zn: zast.nodeid
-    return (dataref nid: zn nelems: 0 outType: zn lineno: 0 colno: 0)
+    return (dataref nid: zn nelems: 0 outType: zn lineno: 0 colno: 0 isList: false)
 }
 
 # walkTypeOf -- the type the walk in progress stamped on body node `nid`. An

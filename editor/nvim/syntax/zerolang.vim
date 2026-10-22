@@ -43,7 +43,7 @@ syn match zerolangEscapeError /\\$/ contained
 syn region zerolangInterpolation matchgroup=zerolangInterpolationDelim start=/\\{/ end=/}/ contained contains=TOP
 
 " Keywords (use syn match so labels can take priority)
-syn match zerolangKeyword /\<\%(unit\|record\|class\|variant\|union\|facet\|protocol\|data\|generator\|typedef\)\>/
+syn match zerolangKeyword /\<\%(unit\|record\|class\|variant\|union\|facet\|protocol\|data\|list\|generator\|typedef\)\>/
 syn match zerolangKeyword /\<\%(function\|in\|out\|outx\|is\|as\|native\)\>/
 syn match zerolangKeyword /\<\%(if\|when\|then\|else\)\>/
 syn match zerolangKeyword /\<\%(for\|each\|while\|loop\|with\|do\|on\)\>/
@@ -76,11 +76,11 @@ syn match zerolangBuiltinType /\<\%(i8\|i16\|i32\|i64\|i128\)\>/
 syn match zerolangBuiltinType /\<\%(f16\|f32\|f64\|f128\|c8\|c32\|bool\)\>/
 syn match zerolangBuiltinType /\<\%(String\|StringView\|Text\|StringLike\|AnyRef\|anyval\|RefHashable\|valhashable\|Drop\)\>/
 syn match zerolangBuiltinType /\<\%(Option\|optionval\|OptionView\|OptionViewVal\|OptionMut\|OptionMutVal\|Result\|ResultVR\|ResultRV\|resultval\|converror\|Box\|intrange\)\>/
-syn match zerolangBuiltinType /\<\%(array\|str\|List\|ListRef\|ListVal\|ListView\|ListViewVal\|ListIter\|ListIterVal\|ListIterMut\|ListIterMutVal\|SpanVal\|SpanPair\|intdata\|floatdata\|stringdata\|Set\|SetRef\|SetVal\|SetIter\|SetIterVal\|Bytes\|ByteView\)\>/
+syn match zerolangBuiltinType /\<\%(array\|str\|List\|ListRef\|ListVal\|ListView\|ListViewVal\|ListIter\|ListIterVal\|ListIterMut\|ListIterMutVal\|StaticIter\|StaticView\|SpanVal\|SpanPair\|intdata\|floatdata\|stringdata\|Set\|SetRef\|SetVal\|SetIter\|SetIterVal\|Bytes\|ByteView\)\>/
 syn match zerolangBuiltinType /\<\%(Map\|MapRR\|MapRV\|MapVR\|MapVV\|MapKeyIter\|MapItemIter\|MapEntry\|MapKeyIterRV\|MapKeyIterVR\|MapKeyIterVV\|MapItemIterRV\|MapItemIterVR\|MapItemIterVV\|MapEntryRV\|MapEntryVR\|MapEntryVV\)\>/
 syn match zerolangBuiltinType /\<\%(Path\|PathView\|IoError\|Reader\|Writer\|Closer\|Seeker\|seekorigin\|File\|openmode\)\>/
 syn match zerolangBuiltinType /\<\%(IdMapR\|IdMapV\|IdMapEntryR\|IdMapEntryV\|IdMapItemIterR\|IdMapItemIterV\|IdSet\|IdSetIter\)\>/
-syn match zerolangBuiltinType /\<\%(CpIter\|LinesIter\|Splitter\|TextReader\|intliteral\|floatliteral\|idkey\|anyint\|anyfloat\|dataindex\|parseerror\)\>/
+syn match zerolangBuiltinType /\<\%(CpIter\|LinesIter\|Splitter\|TextReader\|intliteral\|floatliteral\|idkey\|anyint\|anyfloat\|dataindex\|staticmember\|parseerror\)\>/
 " Constants / literal values
 syn match zerolangBuiltinConst /\<\%(null\|never\|true\|false\|_\)\>/
 " Predeclared functions, streams, and context words
