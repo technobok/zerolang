@@ -95,6 +95,16 @@ extern int ilogbq(__float128 x);
 #define Z_NORETURN _Noreturn
 #endif
 
+/* Z_TYPEOF -- the type of an expression, which the emitter names only for a
+   temporary whose type it has no C text for. ISO C17 has no spelling for it:
+   gcc, clang, tcc and MSVC take __typeof__ in C17 mode, and C23 standardises
+   it as typeof. */
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L
+#define Z_TYPEOF(x) typeof(x)
+#else
+#define Z_TYPEOF(x) __typeof__(x)
+#endif
+
 /* z_clz64, z_ctz64, z_popcount64 -- the leading zeros, trailing zeros and set
    bits of a 64-bit word. v must not be 0 for the first two, as for the
    builtins they stand for. gcc, clang and tcc take their builtins; MSVC has
