@@ -12037,29 +12037,48 @@ emitArmCtorCall: function {
         }
     }
     inl: armIsInlineC :symtab tid: stid :arm
-    usl: armSlotC :ast :symtab :ctx tid: stid recv: "_u" acc: "." :arm inline: inl
-    # a non-owned arm (`some: T.borrow`) points at its pinned source: the
-    # checker pinned it rather than moving it, and the arm frees nothing
-    if inl.not when (armPayloadNamesStorage :ast :symtab tid: stid :arm :payNid) then {
-        pn: ast.nodes.get i: payNid
-        ptr: "&(\{av})"
-        avq: atomVidIfPlain :ast :symtab :ctx n: pn text: av.stringView
-        if (argAlreadyPointer :ast :symtab :ctx n: pn vid: avq) then ptr = av.copy
-        return (stating
-            :facts
-            from: callFacts
-            text: "({ \{vc}_t _u = {0}; _u.tag = \{tg}; \{usl} = \{ptr}; _u; })"
-        )
+    # the slot's designator: `.data`, or the inline arm's member
+    slot: armSlotC :ast :symtab :ctx tid: stid recv: "" acc: "." :arm inline: inl
+    held: av.copy
+    if inl.not then held = (armHeldC
+        :ast
+        :symtab
+        :ctx
+        :stid
+        :arm
+        :payNid
+        payC: payC.stringView
+        av: av.stringView
+    )
+    return (stating
+        :facts
+        from: callFacts
+        text: "((\{vc}_t){ .tag = \{tg}, \{slot} = \{held} })"
+    )
+}
+
+# armHeldC -- what a union's boxed arm `arm` holds for the payload `av`, the
+# value of node `payNid`, as C: a non-owned arm (`some: T.borrow`) points at
+# its pinned source, which the checker pinned rather than moved, and frees
+# nothing; any other arm points at a new cell holding the payload. An inline
+# arm holds the payload itself.
+armHeldC: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    stid: ztypes.tid
+    arm: zast.nameid
+    payNid: zast.nodeid
+    payC: StringView
+    av: StringView
+} out String is {
+    if (armPayloadNamesStorage :ast :symtab tid: stid :arm :payNid).not then {
+        return (armCellNew pc: payC value: av)
     }
-    st: (armCellStore
-        pc: payC.stringView
-        box: "_b"
-        value: av.stringView
-        slot: usl.stringView
-        inline: inl
-    )
-    return (stating :facts from: callFacts text: "({ \{vc}_t _u = {0}; _u.tag = \{tg}; \{st} _u; })"
-    )
+    pn: ast.nodes.get i: payNid
+    avq: atomVidIfPlain :ast :symtab :ctx n: pn text: av
+    if (argAlreadyPointer :ast :symtab :ctx n: pn vid: avq) then return av.string
+    return "&(\{av})"
 }
 
 # armPayloadNamesStorage -- the arm is non-owned and the call's payload is a
@@ -28331,6 +28350,13 @@ armCellStore: function {
     fl: armCellFill :box :value
     at: armCellAttach :slot :box
     return "\{al} \{fl} \{at}"
+}
+
+# armCellNew -- a new cell holding `value`, as an expression: the value is
+# copied out of a one-element array literal, which is how C takes the
+# address of any value, a call's result included.
+armCellNew: function {pc: StringView value: StringView} out String is {
+    return "z_xmemdup((\{pc}[1]){ \{value} }, sizeof(\{pc}))"
 }
 
 # armCellFree -- free the cell the slot points at, its payload already

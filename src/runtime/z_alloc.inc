@@ -4,6 +4,12 @@ static void* z_xmalloc(size_t n) {
     if (!p) z_panic("out of memory");
     return p;
 }
+/* a new heap cell holding a copy of the n bytes at v */
+static void* z_xmemdup(const void* v, size_t n) {
+    void* p = z_xmalloc(n);
+    memcpy(p, v, n);
+    return p;
+}
 static void* z_xcalloc(size_t count, size_t size) {
     void* p = calloc(count, size);
     if (!p) z_panic("out of memory");
