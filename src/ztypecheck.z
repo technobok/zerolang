@@ -17770,11 +17770,15 @@ registerAndResolveMain: function {
 
 # isConformanceMarker -- true when an as-item operation is a bare type reference
 # (atomid / labelvalue), i.e. a conformance marker like `:Text` or `m: Reader`.
-isConformanceMarker: function {op: astnode.view} out bool is {
+# An opt-out (`==: null`) and a numeric constant (`version: 1`) are atoms that
+# name no type, so they declare nothing.
+isConformanceMarker: function {ast: Ast.view op: astnode.view} out bool is {
     match (
         op
     ) case atomid then {
-        return true
+        if op.name == zast.wellKnown.slot.tyNull then return false
+        nm: zast.nameTextAt :ast ref: op.name
+        return (isNumericLiteralName name: nm.stringView).not
     } case labelvalue then {
         return true
     } else {
@@ -17792,7 +17796,9 @@ declaresConformance: function {ast: Ast.view op: astnode.view} out bool is {
             cmId: zast.kidAt kids: ast.kids span: op.asItems i: asx1629
             asx1629 = asx1629 + 1
             cm: ast.nodes.get i: cmId
-            if cm.namedoperation when (isConformanceMarker op: (ast.nodes.get i: cm.operation)
+            if cm.namedoperation when (isConformanceMarker
+                :ast
+                op: (ast.nodes.get i: cm.operation)
             ) then return true
         }
         return false
@@ -26587,10 +26593,12 @@ materialiseDataArgs: function {
     subs: (IdMapV zast.nameid v: ztypes.tid)
 } is {
     if pnames.length == 0 then return
-    isStr: templateId == (stdTid :ast :st wk: zast.wellKnown.slot.tyStringdata)
-    isFloat: templateId == (stdTid :ast :st wk: zast.wellKnown.slot.tyFloatdata)
+    # READ, not resolved: every instance of every template passes here, and a
+    # template no program named cannot be this one
+    isStr: templateId == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyStringdata)
+    isFloat: templateId == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyFloatdata)
     if isStr.not when isFloat.not when (
-        templateId != (stdTid :ast :st wk: zast.wellKnown.slot.tyIntdata)
+        templateId != (stdTidRo :ast :st wk: zast.wellKnown.slot.tyIntdata)
     ) then return
     k: u64
     for k < pnames.length loop {
@@ -31587,10 +31595,10 @@ refuseDataValueMember: function {
     if isArray.not and (cnId != zast.wellKnown.slot.wkTag) and isSlot.not then return false
     og: st.reg.genericOriginOf tid: bt
     if og.isZero then og = bt
-    if og != (stdTid :ast :st wk: zast.wellKnown.slot.tyIntdata) when (
-        og != (stdTid :ast :st wk: zast.wellKnown.slot.tyFloatdata)
+    if og != (stdTidRo :ast :st wk: zast.wellKnown.slot.tyIntdata) when (
+        og != (stdTidRo :ast :st wk: zast.wellKnown.slot.tyFloatdata)
     ) when (
-        isSlot.not or (og != (stdTid :ast :st wk: zast.wellKnown.slot.tyStringdata))
+        isSlot.not or (og != (stdTidRo :ast :st wk: zast.wellKnown.slot.tyStringdata))
     ) then return false
     mn: zast.nameTextAt :ast ref: cnId
     (addErrorH

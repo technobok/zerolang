@@ -1223,7 +1223,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2306653
+ALLOC_BASELINE := 2306492
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1290,13 +1290,14 @@ any-guard:
 # typename-guard -- a type is identified by its declaration, never by its spelling:
 # a comparison against a zast.wellKnown ty* name is allowed only in TYPENAME_OK,
 # each where the name is not a type identity (system-gated declarations, member and
-# suffix vocabulary, bound families).
+# suffix vocabulary, bound families, the `null` an as-block opt-out is spelled with).
 TYPENAME_OK := src/ztypecheck.z:resolveClass src/ztypecheck.z:resolveProtocol \
 	src/ztypecheck.z:defTypetypeOf src/ztypecheck.z:resolveObjectDef \
 	src/ztypecheck.z:paramIsBorrowReftype src/ztypecheck.z:isBoxTemplate \
 	src/ztypecheck.z:checkDataBlockMember src/ztypecheck.z:checkMarkerMember \
 	src/zemitterc.z:emitDataMember src/zemitterc.z:emitStrConvCall \
-	src/zsource.z:bareZeroTypeName src/ztypecheck.z:constraintKindForId
+	src/zsource.z:bareZeroTypeName src/ztypecheck.z:constraintKindForId \
+	src/ztypecheck.z:isConformanceMarker
 typename-guard:
 	@fail=0; n=0; \
 	for e in $$(awk '/^[A-Za-z_][A-Za-z0-9_]*: function/ {fn=$$1; sub(":", "", fn)} \
