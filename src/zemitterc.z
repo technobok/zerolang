@@ -5070,7 +5070,25 @@ armValueExpr: function {
     if tz.length == 0 then return (stating :facts from: vxF text: vx)
     tc: typeRefC :ast :symtab :ctx tid: tt
     if (isHeapPtrCollection :symtab :ctx tid: tt) then tc = "\{tc}*"
-    return (stating :facts from: callFacts text: "({ \{tc} _mv = \{vx}; \{vx} = \{tz}; _mv; })")
+    # the value is read into its temp, then its source zeroed
+    pre: String
+    partF: vxF
+    partF.once = true
+    t: (orderOnePart
+        :ast
+        :symtab
+        :ctx
+        mark: (pendingHoistMark :ctx)
+        text: vx.copy
+        tf: partF
+        nid: zast.nodeid
+        ctype: tc.stringView
+        constant: false
+        twice: true
+        prefix: pre
+    )
+    mv: "\{vx} = \{tz}, \{t}"
+    return (stating :facts from: callFacts text: (orderWrap prefix: pre call: mv))
 }
 
 # emitArmTakeZero -- after an arm assigned its value `rv` to the target: an arm
@@ -5826,25 +5844,36 @@ dottedBaseNodeId: function {ast: Ast.view n: astnode.view} out zast.nodeid is {
 }
 
 # svNativeCall -- `<svC>_<m>(&recv, args)` for an sv-native method. `&` needs an
-# LVALUE, and a receiver that is itself a CALL is not one: `a.trim.concat other: b`
-# emitted `&z_t_trim(...)` and gcc rejected it. Such a receiver goes inside a
-# statement expression that binds it first -- the same `({ ... })` shape the
-# union and interpolation legs already emit. A StringView owns nothing, so the
-# block only binds and reads the temp; a compound literal is already an lvalue
-# and is spelled directly.
+# LVALUE, and a receiver that is itself a CALL is not one: `a.trim.concat other:
+# b` would spell `&z_t_trim(...)`. Such a receiver is read into its temp first,
+# ahead of the arguments (orderAddressOf). A StringView owns nothing, so the
+# temp frees nothing; a compound literal is already an lvalue and is spelled
+# directly.
 svNativeCall: function {
-    ctx: Ctx.view
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
     m: StringView
     recv: StringView
     recvF: cfacts
     args: StringView
 } out String is {
-    if (canTakeAddress f: recvF) then {
-        direct: "\{ctx.svC}_\{m}(&\{recv}\{args})"
-        return direct
+    pre: String
+    addr: "&\{recv}"
+    if (canTakeAddress f: recvF).not then {
+        svT: "\{ctx.svC}_t"
+        addr = (orderAddressOf
+            :ast
+            :symtab
+            :ctx
+            text: recv.string
+            tf: recvF
+            ctype: svT.stringView
+            prefix: pre
+        )
     }
-    wrapped: "({ \{ctx.svC}_t _svr = \{recv}; \{ctx.svC}_\{m}(&_svr\{args}); })"
-    return wrapped
+    c: "\{ctx.svC}_\{m}(\{addr}\{args})"
+    return (orderWrap prefix: pre call: c)
 }
 
 # svArgAddr -- the &-form of a StringView native argument (pooled
@@ -6062,10 +6091,19 @@ emitSvSubstringCall: function {
         }
         if recvp.length > 0 then {
             needsAddM :ctx uname: "system" memb: "substring"
-            # a receiver that is a call is bound first, as svNativeCall binds it
-            addressable: canTakeAddress f: recvpF
-            lead: "&_svr".string
-            if addressable then lead = "&\{recvp}"
+            # a receiver that is a call is read into its temp first, as
+            # svNativeCall reads it
+            pre: String
+            svT: "\{ctx.svC}_t"
+            lead: (orderAddressOf
+                :ast
+                :symtab
+                :ctx
+                text: recvp
+                tf: recvpF
+                ctype: svT.stringView
+                prefix: pre
+            )
             svc: ctx.svC.copy
             esb: (emitOrderedPair
                 :ast
@@ -6080,12 +6118,7 @@ emitSvSubstringCall: function {
                 b: zast.wellKnown.slot.wkTo
                 bForm: argform.labelled
             )
-            if addressable then return (stating :facts from: callFacts text: esb)
-            return (stating
-                :facts
-                from: callFacts
-                text: "({ \{ctx.svC}_t _svr = \{recvp}; \{esb}; })"
-            )
+            return (stating :facts from: callFacts text: (orderWrap prefix: pre call: esb))
         }
     }
     return ""
@@ -6300,6 +6333,8 @@ emitSvArgNativeCall: function {
             }
             bargs: ", \{barg}"
             eb: (svNativeCall
+                :ast
+                :symtab
                 :ctx
                 m: "byteAt"
                 recv: bnv
@@ -6332,6 +6367,8 @@ emitSvArgNativeCall: function {
         }
         aargs: ", \{argx}"
         ea: (svNativeCall
+            :ast
+            :symtab
             :ctx
             m: mnv
             recv: bnv
@@ -6385,6 +6422,8 @@ emitSvSimpleCall: function {
             }
         }
         e1: (svNativeCall
+            :ast
+            :symtab
             :ctx
             m: mnv
             recv: recvS.stringView
@@ -6496,11 +6535,15 @@ emitSvNativeInfix: function {
     )
     oprefix: orderFinish :ctx st: ord
     aargs: ", \{orderSlotText t: ctx st: ord slot: 1}"
+    recv0: (orderSlotText t: ctx st: ord slot: 0).string
+    recv0F: orderSlotFacts t: ctx st: ord slot: 0
     ecall: (svNativeCall
+        :ast
+        :symtab
         :ctx
         m: op
-        recv: (orderSlotText t: ctx st: ord slot: 0)
-        recvF: (orderSlotFacts t: ctx st: ord slot: 0)
+        recv: recv0.stringView
+        recvF: recv0F
         args: aargs.stringView
     )
     orderEnd :ctx st: ord
@@ -7409,14 +7452,16 @@ orderOnePart: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    mark: hoistmark
     text: String.take
-    tf: cfacts
-    nid: zast.nodeid
     ctype: StringView
-    constant: bool
-    twice: bool
     prefix: String.borrow
+    # where the pending hoists stood before `text` was built
+    mark: hoistmark
+    # unstated facts read the part into its temp
+    tf: cfacts
+    nid: zast.nodeid.zero
+    constant: false
+    twice: true
 } out String is {
     ord: orderBegin :ctx slots: 1
     if twice then orderNamesTwice st: ord slot: 0
@@ -7440,6 +7485,39 @@ orderOnePart: function {
     spelled: (orderSlotText t: ctx st: ord slot: 0).string
     orderEnd :ctx st: ord
     return spelled
+}
+
+# orderAddressOf -- the address of `text`, whose facts are `tf`: `&text` when
+# `&` applies to it as it stands, otherwise the address of the temp, typed
+# `ctype`, it is read into in evaluation order. `prefix` is left holding that
+# read's opening (orderOnePart), "" when there is none.
+orderAddressOf: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    text: String.take
+    tf: cfacts
+    ctype: StringView
+    prefix: String.borrow
+} out String is {
+    if (canTakeAddress f: tf) then return "&\{text}"
+    # a value with no storage is read into its temp however cheap it is
+    partF: tf
+    partF.once = true
+    t: (orderOnePart
+        :ast
+        :symtab
+        :ctx
+        mark: (pendingHoistMark :ctx)
+        :text
+        tf: partF
+        nid: zast.nodeid
+        :ctype
+        constant: false
+        twice: true
+        :prefix
+    )
+    return "&\{t}"
 }
 
 # orderSlotTwice -- whether the row the call `st` opened names the hole of slot
@@ -10467,7 +10545,7 @@ emitListValLendCall: function {
         :call
         recvR: recvR.stringView
         recvT: recvT.stringView
-        len: "_zw->length"
+        len: "@@R@@->length"
         what: "ListVal spanSlice"
         inline: false
     )
@@ -10493,21 +10571,29 @@ narrowListIndex: function {
     if dbits == 0 then return pos
     if (convNeedsHi ssig: false :dsig sbits: 64 :dbits).not then return pos
     ct: typeRefC :ast :symtab :ctx tid: idx
-    # the bound test reads the value as @V@; here it is the local `_v`
+    # the position is read for the bound test and then the conversion
+    pre: String
+    v: (orderOnePart
+        :ast
+        :symtab
+        :ctx
+        mark: (pendingHoistMark :ctx)
+        text: pos
+        tf: cfacts
+        nid: zast.nodeid
+        ctype: "uint64_t"
+        constant: false
+        twice: true
+        prefix: pre
+    )
     cond: (substituteAll
         text: (convRangeCond dstK: nk.kind needsLo: false needsHi: true)
         needle: "@V@"
-        repl: "_v"
+        repl: v.stringView
     )
-    r: String
-    r.append "({ uint64_t _v = "
-    r.append pos
-    r.append "; if ("
-    r.append cond
-    r.append ") z_panic(\"List append: index past the range of the list's index type\"); ("
-    r.append ct
-    r.append ")_v; })"
-    return r
+    pnc: "z_panic(\"List append: index past the range of the list's index type\")"
+    r: "((\{cond}) ? \{pnc} : (void)0, (\{ct})\{v})"
+    return (orderWrap prefix: pre call: r)
 }
 
 # emitListMethodCall -- a method call on a List-mono receiver. Maps the
@@ -10824,54 +10910,156 @@ emitSpanMethodCall: function {
         return (stating :facts from: callFacts text: ef)
     }
     if mnId == zast.wellKnown.slot.wkSplit then {
-        needsAddM :ctx uname: "collections" memb: "window"
-        va: listArg :ast :symtab :ctx :call label: zast.wellKnown.slot.wkAt
-        pairTid: chaseAggregateTypedef :symtab :ctx tid: (stampIdOf :symtab nid: call.nodeid)
-        pc: ctxCname :ctx tid: pairTid
-        loC: (memberC
+        return (emitSpanSplit
             :ast
             :symtab
             :ctx
-            owner: pairTid
-            kind: memberkind.field
-            nameId: zast.wellKnown.slot.wkLo
+            :call
+            cb: cb.stringView
+            recvR: recvR.stringView
+            :facts
         )
-        hiC: (memberC
-            :ast
-            :symtab
-            :ctx
-            owner: pairTid
-            kind: memberkind.field
-            nameId: zast.wellKnown.slot.wkHi
-        )
-        es: String
-        es.append "({ \{cb}_t* _zs = \{recvR}; uint64_t _za = \{va}; "
-        es.append "z_coll_window_check(0, _za, _zs->length, \"SpanVal split\"); "
-        es.append "(\{pc}_t){ .\{loC} = { .length = _za, .data = _zs->data }, "
-        es.append ".\{hiC} = { .length = _zs->length - _za, .data = _zs->data + _za } }; })"
-        return (stating :facts from: callFacts text: es)
     }
     if mnId == zast.wellKnown.slot.wkCopyFrom then {
-        vc: listArg :ast :symtab :ctx :call label: zast.wellKnown.slot.wkFrom
-        vn: labelArgNode :ast :call label: zast.wellKnown.slot.wkFrom form: argform.value
-        lc: (ctxCname
+        return (emitSpanCopyFrom
+            :ast
+            :symtab
             :ctx
-            tid: (chaseAggregateTypedef :symtab :ctx tid: (stampIdOf :symtab nid: vn))
+            :call
+            cb: cb.stringView
+            recvR: recvR.stringView
+            :facts
         )
-        ec: String
-        ec.append "({ \{cb}_t* _zd = \{recvR}; \{lc}_t _zf = \{vc}; "
-        ec.append "z_coll_window_check(0, _zf.length, _zd->length, \"SpanVal copyFrom\"); "
-        ec.append "if (_zf.length > 0) memmove(_zd->data, _zf.data, _zf.length * sizeof(*_zd->data)); })"
-        needsAddM :ctx uname: "collections" memb: "window"
-        return (stating :facts from: callFacts text: ec)
     }
     return ""
 }
 
+# emitSpanSplit -- `w.split at: i` on a window `recvR` of mono `cb`: the pair
+# of windows below and from `i`, each a view of the same storage. The window
+# and then the position are evaluated once each.
+emitSpanSplit: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    call: zast.callrow.view
+    cb: StringView
+    recvR: StringView
+    facts: cfacts.borrow
+} out String is {
+    needsAddM :ctx uname: "collections" memb: "window"
+    va: listArg :ast :symtab :ctx :call label: zast.wellKnown.slot.wkAt
+    pairTid: chaseAggregateTypedef :symtab :ctx tid: (stampIdOf :symtab nid: call.nodeid)
+    pc: ctxCname :ctx tid: pairTid
+    loC: (memberC
+        :ast
+        :symtab
+        :ctx
+        owner: pairTid
+        kind: memberkind.field
+        nameId: zast.wellKnown.slot.wkLo
+    )
+    hiC: (memberC
+        :ast
+        :symtab
+        :ctx
+        owner: pairTid
+        kind: memberkind.field
+        nameId: zast.wellKnown.slot.wkHi
+    )
+    # the window, then the position, each read more than once
+    spT: "\{cb}_t*"
+    rpre: String
+    r: (orderOnePart
+        :ast
+        :symtab
+        :ctx
+        text: recvR.string
+        ctype: spT.stringView
+        prefix: rpre
+        mark: (pendingHoistMark :ctx)
+        tf: cfacts
+    )
+    apre: String
+    at: (orderOnePart
+        :ast
+        :symtab
+        :ctx
+        text: va
+        ctype: "uint64_t"
+        prefix: apre
+        mark: (pendingHoistMark :ctx)
+        tf: cfacts
+    )
+    es: String
+    es.append "(z_coll_window_check(0, \{at}, \{r}->length, \"SpanVal split\"), "
+    es.append "(\{pc}_t){ .\{loC} = { .length = \{at}, .data = \{r}->data }, "
+    es.append ".\{hiC} = { .length = \{r}->length - \{at}, .data = \{r}->data + \{at} } })"
+    return (stating
+        :facts
+        from: callFacts
+        text: (orderWrap prefix: rpre call: (orderWrap prefix: apre call: es))
+    )
+}
+
+# emitSpanCopyFrom -- `w.copyFrom from: src` on a window `recvR` of mono `cb`:
+# the source's elements copied over the window's first ones. The window and then
+# the source are evaluated once each.
+emitSpanCopyFrom: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    call: zast.callrow.view
+    cb: StringView
+    recvR: StringView
+    facts: cfacts.borrow
+} out String is {
+    vc: listArg :ast :symtab :ctx :call label: zast.wellKnown.slot.wkFrom
+    vn: labelArgNode :ast :call label: zast.wellKnown.slot.wkFrom form: argform.value
+    lc: (ctxCname
+        :ctx
+        tid: (chaseAggregateTypedef :symtab :ctx tid: (stampIdOf :symtab nid: vn))
+    )
+    # the window, then the source, each read more than once
+    spT: "\{cb}_t*"
+    rpre: String
+    r: (orderOnePart
+        :ast
+        :symtab
+        :ctx
+        text: recvR.string
+        ctype: spT.stringView
+        prefix: rpre
+        mark: (pendingHoistMark :ctx)
+        tf: cfacts
+    )
+    srcT: "\{lc}_t"
+    fpre: String
+    f: (orderOnePart
+        :ast
+        :symtab
+        :ctx
+        text: vc
+        ctype: srcT.stringView
+        prefix: fpre
+        mark: (pendingHoistMark :ctx)
+        tf: cfacts
+    )
+    ec: String
+    ec.append "(z_coll_window_check(0, \{f}.length, \{r}->length, \"SpanVal copyFrom\"), "
+    ec.append "\{f}.length > 0 ? (void)memmove(\{r}->data, \{f}.data, \{f}.length * sizeof(*\{r}->data)) : (void)0)"
+    needsAddM :ctx uname: "collections" memb: "window"
+    return (stating
+        :facts
+        from: callFacts
+        text: (orderWrap prefix: rpre call: (orderWrap prefix: fpre call: ec))
+    )
+}
+
 # emitWindowSlice -- a window over [from, to) of a list's or an array's storage,
-# written at the call: the receiver's address `recvR` held as `_zw` of C type
-# `recvT`, its length as `len` spells it -- `_zw->length`, or an array's
-# constant -- and the bounds check that names `what` in its panic. An array's
+# written at the call: the receiver's address `recvR` read into a temp of C
+# type `recvT`, its length as `len` spells it -- `@@R@@->length` for that temp,
+# or an array's constant -- and the bounds check that names `what` in its
+# panic. The receiver and then the bounds are evaluated once each, as written. An array's
 # storage is inline, so a receiver read through a view holds it const; `inline`
 # says so, and the window takes the address without the qualifier, its own type
 # deciding whether it writes.
@@ -10891,30 +11079,44 @@ emitWindowSlice: function {
         :ctx
         tid: (chaseAggregateTypedef :symtab :ctx tid: (stampIdOf :symtab nid: call.nodeid))
     )
+    rpre: String
+    r: (orderOnePart
+        :ast
+        :symtab
+        :ctx
+        mark: (pendingHoistMark :ctx)
+        text: recvR.string
+        tf: cfacts
+        nid: zast.nodeid
+        ctype: recvT
+        constant: false
+        twice: true
+        prefix: rpre
+    )
     tmpl: String
-    tmpl.append "({ \{recvT} _zw = @@R@@; uint64_t _zf = @@A@@; uint64_t _zt = @@B@@; "
-    tmpl.append "z_coll_window_check(_zf, _zt, "
+    tmpl.append "(z_coll_window_check(@@A@@, @@B@@, "
     tmpl.append len
     tmpl.append ", \""
     tmpl.append what
-    tmpl.append "\"); "
+    tmpl.append "\"), "
     if inline then {
-        tmpl.append "(\{wc}_t){ .length = _zt - _zf, .data = (void*)(_zw->data + _zf) }; })"
+        tmpl.append "(\{wc}_t){ .length = @@B@@ - @@A@@, .data = (void*)(@@R@@->data + @@A@@) })"
     } else {
-        tmpl.append "(\{wc}_t){ .length = _zt - _zf, .data = _zw->data + _zf }; })"
+        tmpl.append "(\{wc}_t){ .length = @@B@@ - @@A@@, .data = @@R@@->data + @@A@@ })"
     }
-    return (emitOrderedPairInto
+    w: (emitOrderedPairInto
         :ast
         :symtab
         :ctx
         :call
-        lead: recvR
+        lead: r.stringView
         a: zast.wellKnown.slot.wkFrom
         aForm: argform.value
         b: zast.wellKnown.slot.wkTo
         bForm: argform.value
         tmpl: tmpl.stringView
     )
+    return (orderWrap prefix: rpre call: w)
 }
 
 # mapKeyIsString / setElemIsString -- the mono's key/element is a String, i.e.
@@ -11733,7 +11935,7 @@ emitOrderedPair: function {
 
 # emitOrderedPairInto -- emitOrderedPair's evaluation order for a leg whose C is
 # not a call: `tmpl` with @@R@@ the leading receiver text and @@A@@ / @@B@@ the
-# two labelled arguments in their slots.
+# two labelled arguments in their slots, which `tmpl` may name more than once.
 emitOrderedPairInto: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -11746,7 +11948,7 @@ emitOrderedPairInto: function {
     bForm: argform
     tmpl: StringView
 } out String is {
-    ord: orderPairArgs :ast :symtab :ctx :call :a :aForm :b :bForm
+    ord: orderPairArgs :ast :symtab :ctx :call :a :aForm :b :bForm twice: true
     r: orderFinish :ctx st: ord
     opened: r.length > 0
     t1: applyTmpl text: tmpl.string key: "R" val: lead
@@ -11769,11 +11971,17 @@ orderPairArgs: function {
     aForm: argform
     b: zast.nameid
     bForm: argform
+    # the C reading the two names each more than once
+    twice: false
 } out orderstate is {
     na: labelArgNode :ast :call label: a form: aForm
     nb: labelArgNode :ast :call label: b form: bForm
     bFirst: (writtenArgPosition :ast :call nid: nb) < (writtenArgPosition :ast :call nid: na)
     ord: orderBegin :ctx slots: 2
+    if twice then {
+        orderNamesTwice st: ord slot: 0
+        orderNamesTwice st: ord slot: 1
+    }
     if bFirst then orderLabelArg :ast :symtab :ctx :call label: b form: bForm nid: nb slot: 1 :ord
     orderLabelArg :ast :symtab :ctx :call label: a form: aForm nid: na slot: 0 :ord
     if bFirst.not then (orderLabelArg
