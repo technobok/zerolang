@@ -2,8 +2,8 @@
 
 Zerolang is a systems programming language that compiles to C. The compiler is
 self-hosted — written in Zerolang — and bootstraps from a small committed C
-seed, so a C toolchain is all you need to build it. It emits C, which is
-compiled with gcc or clang.
+seed, so a C toolchain is all you need to build it. It emits ISO C17, which
+gcc, clang, the vendored tcc and MSVC's cl all compile.
 
 ## Documentation
 
@@ -113,7 +113,8 @@ and fixed decimals.
 
 ### Prerequisites
 
-- a C compiler — `gcc` or `clang`
+- a C compiler — `gcc` or `clang` (on Windows, MSYS2's UCRT64 gcc; MSVC's
+  `cl` builds the seed and every program too)
 - `make`
 - `git`
 
@@ -137,6 +138,7 @@ seed *is* the compiler:
 
 ```bash
 cc -std=c17 -o zc bootstrap/zc.c
+cl -std:c17 -experimental:c11atomics -utf-8 -O2 bootstrap/zc.c -Fe:zc.exe   # MSVC
 ```
 
 ### Run the tests
@@ -157,14 +159,16 @@ Windows is tested five ways. `make test-mingw` (the run corpus built by
 mingw-w64 against the Universal C Runtime, run under wine; `sudo apt install
 gcc-mingw-w64-x86-64 wine`, gcc 14 or newer),
 `make test-tcc-mingw` (the same corpus built by the vendored tcc for Windows,
-under wine), `make test-msvc-wine` (MSVC itself under wine, on the thread
-shim's test) and `make test-msvc-corpus` (the run corpus built by MSVC under
-wine, against a known-failure list that shrinks as the emitted C becomes ISO
-C17) are part of `make ci` and skip without their tools. `make ci-windows` runs the Windows legs
-on a real Windows machine, such as the VM `tools/windows/winvm.sh` builds: every
+under wine), `make test-msvc-wine` (MSVC itself under wine: the thread shim's
+test, and `zc build --cc cl` with a C library linked) and `make
+test-msvc-corpus` (the run corpus built by MSVC under wine; it fails only the
+`f128` programs zc refuses for cl and the POSIX-only ones) are part of `make
+ci` and skip without their tools. `make ci-windows` runs the Windows legs on a
+real Windows machine, such as the VM `tools/windows/winvm.sh` builds: every
 corpus binary natively, a console, drive and long paths, then zc, zl, zls and
 the vendored tcc built there natively (MSYS2 make, UCRT64 gcc), and `make ci`
-run with them. Setting
+run with them -- the bootstrap proved under cl as well, and the run corpus
+built by the native cl. Setting
 each one up from scratch, and what to do when one reports something missing, is
 in [tools/windows/README.md](tools/windows/README.md).
 

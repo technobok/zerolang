@@ -53,6 +53,11 @@ ZLINKSED = sed -n '1,8s|^/\* zlink: \(.*\) \*/$$|\1|p'
 ZCSRCSED = sed -n '1,8s|^/\* zcsrc: \(.*\) \*/$$|\1|p'
 ZLINKOF = $$($(ZCSRCSED) $(1) | grep -q . && bin/zc cobj $(1) --cc $(or $(2),$(CC)) $(if $(3),--cflags "$(3)")) \
   $$($(ZLINKSED) $(1) | tr ' ' '\n' | sed -e '/^$$/d' -e 's|^|-l|')
+# MSVCLINKOF -- ZLINKOF's libraries as MSVC's cl names them, `<name>.lib` (the
+# C it is used on, zc's own, names no C source)
+MSVCLINKOF = $$($(ZLINKSED) $(1) | tr ' ' '\n' | sed -e '/^$$/d' -e 's|$$|.lib|')
+# what every cl command line here carries, as zcc.msvcFlags gives zc's
+MSVC_CFLAGS := -nologo -std:c17 -experimental:c11atomics -utf-8
 # The drivers link the vendored mimalloc ahead of libc; MIMALLOC=0 builds them on
 # glibc. Nothing else uses it, and it never changes emitted C. Off on Windows:
 # its static override of malloc is not safe with the UCRT.
@@ -345,7 +350,8 @@ test-msvc-wine: bin/zc $(BUILDDIR)/wineprefix/.ready
 	echo "test-msvc-wine OK: MSVC $$($(WINE_ENV) $(MSVC_WINE)/cl 2>&1 | grep -m1 -o 'Version [0-9.]*') built the thread shim's test, which passes under wine; zc build --cc cl builds sqlite_hello (C objects included) to its golden, and refuses a target that is not Windows"
 
 # test-msvc-corpus -- the RUN corpus built for Windows by MSVC itself (cl under
-# wine, MSVC_WINE as test-msvc-wine names it) as a backend (--cc-forward, so units
+# wine, MSVC_WINE as test-msvc-wine names it; on a Windows host the cl on PATH,
+# natively) as a backend (--cc-forward, so units
 # cl cannot build are refused by name) and run under wine against the same
 # goldens. cl's absolute paths are spelled Z:/... (zcc.msvcPath), since link.exe
 # reads a path starting with / as an option. tests/msvc-known-failures.txt is the
@@ -353,13 +359,22 @@ test-msvc-wine: bin/zc $(BUILDDIR)/wineprefix/.ready
 # zc, and the POSIX-only ones -- and a move either way fails. Skipped without
 # MSVC_WINE or wine.
 MSVC_KNOWN := tests/msvc-known-failures.txt
+# On a Windows host it is the same run with the cl on PATH, natively.
+ifneq ($(WINDOWS_HOST),)
+MSVC_CORPUS_RUN = $(BUILDDIR)/ztestrunner --zc bin/zc --cc cl --cc-forward
+MSVC_CORPUS_WHERE := natively
+else
+MSVC_CORPUS_RUN = $(WINE_ENV) $(BUILDDIR)/ztestrunner --zc bin/zc --cc $(MSVC_WINE)/cl --cc-forward \
+  --target x86_64-pc-windows-msvc --exec wine
+MSVC_CORPUS_WHERE := under wine
+endif
 test-msvc-corpus: bin/zc $(BUILDDIR)/ztestrunner $(BUILDDIR)/wineprefix/.ready
 	@if [ -n "$(WINDOWS_HOST)" ]; then \
-	  echo "test-msvc-corpus: skipped (Linux only: it runs MSVC under wine)"; exit 0; fi; \
-	if [ -z "$(MSVC_WINE)" ] || [ ! -x "$(MSVC_WINE)/cl" ] || ! command -v wine > /dev/null 2>&1; then \
+	  if ! command -v cl > /dev/null 2>&1; then \
+	    echo "test-msvc-corpus: skipped (no cl on PATH: run from a shell set up by MSVC's vcvars64.bat; see tools/windows/README.md)"; exit 0; fi; \
+	elif [ -z "$(MSVC_WINE)" ] || [ ! -x "$(MSVC_WINE)/cl" ] || ! command -v wine > /dev/null 2>&1; then \
 	  echo "test-msvc-corpus: skipped (needs wine and MSVC_WINE=<dir>/msvc/bin/x64 from tools/windows/msvc-wine.sh; see tools/windows/README.md)"; exit 0; fi; \
-	$(WINE_ENV) $(BUILDDIR)/ztestrunner --zc bin/zc --cc $(MSVC_WINE)/cl --cc-forward --target x86_64-pc-windows-msvc \
-	   --exec wine --run-only --root . --jobs $(NPROC) > $(BUILDDIR)/msvc-run.log 2>&1; \
+	$(MSVC_CORPUS_RUN) --run-only --root . --jobs $(NPROC) > $(BUILDDIR)/msvc-run.log 2>&1; \
 	awk '/^FAIL/ || /^SKIP\(run\) .* \(posix\)$$/ { k = $$1; sub(/^FAIL\(/, "", k); sub(/\)$$/, "", k); \
 	       print $$2, (NF >= 3 ? $$3 : "(" k ")") }' $(BUILDDIR)/msvc-run.log \
 	  | sort > $(BUILDDIR)/msvc-fails.txt; \
@@ -371,7 +386,7 @@ test-msvc-corpus: bin/zc $(BUILDDIR)/ztestrunner $(BUILDDIR)/wineprefix/.ready
 	  echo "  $(MSVC_KNOWN) in the same commit. Full log: $(BUILDDIR)/msvc-run.log"; \
 	  exit 1; \
 	fi; \
-	echo "test-msvc-corpus OK: $$(sed -n 's/^pass=\([0-9]*\).*/\1/p' $(BUILDDIR)/msvc-run.log) RUN cases pass on Windows (MSVC, wine), $$(grep -c . $(BUILDDIR)/msvc-fails.txt) known failures, none new"
+	echo "test-msvc-corpus OK: $$(sed -n 's/^pass=\([0-9]*\).*/\1/p' $(BUILDDIR)/msvc-run.log) RUN cases pass on Windows (MSVC, $(MSVC_CORPUS_WHERE)), $$(grep -c . $(BUILDDIR)/msvc-fails.txt) known failures, none new"
 
 # ci-windows -- the Windows legs on a real Windows machine, reached over ssh as
 # WINDOWS_SSH (the zlwin VM by default; any Windows host whose ssh shell is
@@ -482,7 +497,7 @@ windows-guest:
 	    || { echo "windows-guest FAIL: zc build --cc cl does not build sqlite_hello to its golden"; tail -10 $$d/zc-cl.log; fail=1; }; \
 	  $(MAKE) --no-print-directory ci > $$d/native-ci.log 2>&1 \
 	    || { echo "windows-guest FAIL: make ci with the native tools"; grep -E 'FAIL|Error [0-9]' $$d/native-ci.log | head -20; fail=1; }; \
-	  ci="$$(grep -c 'skipped (Linux only' $$d/native-ci.log) Linux-only legs skipped"; \
+	  ci="$$(grep -c 'skipped (Linux only' $$d/native-ci.log) Linux-only legs skipped; $$(grep -m1 -o 'agreement OK: [0-9]* toolchain(s)' $$d/native-ci.log) agree in the bootstrap; $$(grep -m1 -o '[0-9]* RUN cases pass on Windows (MSVC, natively)' $$d/native-ci.log)"; \
 	else echo "windows-guest FAIL: zc, zl, zls, the runner and tcc did not build natively"; tail -10 $$d/native-build.log; fail=1; fi; \
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
 	echo "windows-guest OK: the thread shim under MSVC and UCRT64 gcc; $$pass of $$n run-corpus binaries match their goldens on Windows, the rest as under wine; non-ASCII text on a console; drive paths; zc build --cc cl; make ci with the native tools ($$ci)"
@@ -984,24 +999,28 @@ bump-seed: bin/zc
 	@echo "regenerated bootstrap/zc.c -- review the diff and commit"
 
 # The compilers test-bootstrap proves the seed against: $(CC) locally, all three
-# in ci. A named compiler that is missing fails rather than proving less.
+# in ci, and MSVC's cl too on a Windows host. A named compiler that is missing
+# fails rather than proving less.
 BOOTSTRAP_CCS ?= $(CC)
 
-CI_BOOTSTRAP_CCS ?= $(CC) clang $(BUILDDIR)/tcc
+CI_BOOTSTRAP_CCS ?= $(CC) clang $(BUILDDIR)/tcc $(if $(WINDOWS_HOST),cl)
 
 # test-bootstrap -- per compiler: cc the seed, bootstrap twice and require the
 # fixpoint (b2 == b3), and check a seed-built zc compiles the ztypes smoke to its
 # golden. Then across compilers: b1 must be byte-identical whichever compiler
-# built the zc that emitted it. tcc gets -B and none of the -Werror pins. On
-# Windows each build links as the drivers do (DRIVERLINK; tcc cannot link
-# statically), and the seed without its zlink set, which is the one of the
-# system it was emitted on.
+# built the zc that emitted it. tcc gets -B and none of the -Werror pins; cl
+# its own spellings (-Fe: for the executable, its objects into $(BUILDDIR),
+# `<name>.lib`) and its default static C runtime. On Windows each build links
+# as the drivers do (DRIVERLINK; tcc cannot link statically), and the seed
+# without its zlink set, which is the one of the system it was emitted on.
 test-bootstrap:
 	@mkdir -p $(BUILDDIR)
 	@set -e; \
 	for cc in $(BOOTSTRAP_CCS); do \
-	  tag=$$(basename $$cc); \
-	  case "$$cc" in *tcc*) f="-B $(TCCLIB)"; l="";; *) f="$(CFLAGS)"; l="$(DRIVERLINK)";; esac; \
+	  tag=$$(basename $$cc); m=""; o="-o "; \
+	  case "$$cc" in *tcc*) f="-B $(TCCLIB)"; l="";; \
+	    cl|cl.exe|*/cl|*/cl.exe) f="$(MSVC_CFLAGS) -O2 -Fo:$(BUILDDIR)/"; l=""; m=1; o="-Fe:";; \
+	    *) f="$(CFLAGS)"; l="$(DRIVERLINK)";; esac; \
 	  if ! command -v $$cc >/dev/null 2>&1 && [ ! -x $$cc ]; then \
 	    echo "test-bootstrap FAIL: '$$cc' is not available"; \
 	    echo "  BOOTSTRAP_CCS names the toolchains this claim is proved against, so a"; \
@@ -1010,11 +1029,12 @@ test-bootstrap:
 	    exit 1; \
 	  fi; \
 	  echo "== bootstrap chain: $$cc =="; \
-	  $$cc $$f -o $(BUILDDIR)/zc-seed-$$tag bootstrap/zc.c $(if $(WINDOWS_HOST),$$l,$(call ZLINKOF,bootstrap/zc.c)) $(LIBM); \
+	  $$cc $$f $${o}$(BUILDDIR)/zc-seed-$$tag bootstrap/zc.c $(if $(WINDOWS_HOST),$$l,$(call ZLINKOF,bootstrap/zc.c)) $(LIBM); \
 	  $(BUILDDIR)/zc-seed-$$tag zc --src src --system lib/system --emit-c $(BUILDDIR)/b1-$$tag.c; \
-	  $$cc $$f $$l -o $(BUILDDIR)/zc-b1-$$tag $(BUILDDIR)/b1-$$tag.c $(call ZLINKOF,$(BUILDDIR)/b1-$$tag.c) $(LIBM); \
+	  if [ -n "$$m" ]; then k="$(call MSVCLINKOF,$(BUILDDIR)/b1-$$tag.c)"; else k="$(call ZLINKOF,$(BUILDDIR)/b1-$$tag.c) $(LIBM)"; fi; \
+	  $$cc $$f $$l $${o}$(BUILDDIR)/zc-b1-$$tag $(BUILDDIR)/b1-$$tag.c $$k; \
 	  $(BUILDDIR)/zc-b1-$$tag zc --src src --system lib/system --emit-c $(BUILDDIR)/b2-$$tag.c; \
-	  $$cc $$f $$l -o $(BUILDDIR)/zc-b2-$$tag $(BUILDDIR)/b2-$$tag.c $(call ZLINKOF,$(BUILDDIR)/b2-$$tag.c) $(LIBM); \
+	  $$cc $$f $$l $${o}$(BUILDDIR)/zc-b2-$$tag $(BUILDDIR)/b2-$$tag.c $$k; \
 	  $(BUILDDIR)/zc-b2-$$tag zc --src src --system lib/system --emit-c $(BUILDDIR)/b3-$$tag.c; \
 	  if cmp -s $(BUILDDIR)/b2-$$tag.c $(BUILDDIR)/b3-$$tag.c; then \
 	    echo "  fixpoint OK (b2 == b3) under $$tag"; \
@@ -1023,7 +1043,8 @@ test-bootstrap:
 	    diff $(BUILDDIR)/b2-$$tag.c $(BUILDDIR)/b3-$$tag.c | head -6; exit 1; \
 	  fi; \
 	  $(BUILDDIR)/zc-b1-$$tag ztypes_smoke --src tests/unit --src src --system lib/system --emit-c $(BUILDDIR)/zt-$$tag.c; \
-	  $$cc $$f $$l -o $(BUILDDIR)/zt-$$tag $(BUILDDIR)/zt-$$tag.c $(call ZLINKOF,$(BUILDDIR)/zt-$$tag.c) $(LIBM); \
+	  if [ -n "$$m" ]; then k="$(call MSVCLINKOF,$(BUILDDIR)/zt-$$tag.c)"; else k="$(call ZLINKOF,$(BUILDDIR)/zt-$$tag.c) $(LIBM)"; fi; \
+	  $$cc $$f $$l $${o}$(BUILDDIR)/zt-$$tag $(BUILDDIR)/zt-$$tag.c $$k; \
 	  $(BUILDDIR)/zt-$$tag | diff - tests/fixtures/ztypes_smoke_z/smoke.expected; \
 	  echo "  correctness OK (seed-built zc compiles the ztypes smoke to golden) under $$tag"; \
 	done
