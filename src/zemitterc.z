@@ -7946,10 +7946,21 @@ closeInPlace: function {ctx: Ctx mark: hoistmark} is {
 }
 
 # appendInPlaceCond -- end the condition begun at `mark` and append it: its
-# text, or the statement expression that runs its own hoists.
-appendInPlaceCond: function {ctx: Ctx mark: hoistmark text: StringView dst: String.borrow} is {
+# text, or that text running its own hoists (wrapInPlace). `declared` says the
+# caller declares the pending hoists ahead of its construct.
+appendInPlaceCond: function {
+    ctx: Ctx
+    mark: hoistmark
+    text: StringView
+    dst: String.borrow
+    declared: false
+} is {
     if (hoistsGrew :ctx :mark) then {
-        dst.append (wrapInPlace :ctx :mark cond: text)
+        if declared then {
+            dst.append (assignInPlaceTest :ctx :mark cond: text)
+        } else {
+            dst.append (wrapInPlace :ctx :mark cond: text)
+        }
         return
     }
     closeInPlace :ctx :mark
@@ -7985,6 +7996,56 @@ assignInPlace: function {ctx: Ctx mark: hoistmark text: StringView} out String i
     if r.length == 1 then return text.string
     r.append text
     r.append ")"
+    return r
+}
+
+# assignInPlaceTest -- end what openInPlace began, for a condition evaluated at
+# every test whose hoists the caller declares ahead of its construct: each is
+# assigned where the test runs and released once the test has its value --
+# `(_ahN = v, _ccN = (cond), destroy(&_ahN), _ccN)` -- so the statement
+# declaring it owes it nothing. A hoist an inner part assigns only on some paths
+# is zeroed first, so a path that skips it releases nothing. A raw hoist is a
+# statement no expression can hold, and takes wrapInPlace.
+assignInPlaceTest: function {ctx: Ctx mark: hoistmark cond: StringView} out String is {
+    if ctx.argHoistRaw.length > mark.raw then return (wrapInPlace :ctx :mark :cond)
+    r: "(".string
+    rel: String
+    i: mark.names
+    for i < ctx.argHoists.length loop {
+        ph: ctx.argHoists.getMut :i
+        owes: ph.dtor.length > 0
+        if ph.val.length > 0 then {
+            vl: String
+            vl swap ph.val
+            r.append "\{ph.name} = \{vl}, "
+        } else if owes then {
+            r.append "\{ph.name} = (\{ph.ctype}){0}, "
+        }
+        if owes then {
+            # the statement declaring the hoist owes it nothing
+            dl: String
+            dl swap ph.dtor
+            dt: dl.stringView.trim
+            rel.append ", "
+            if dt.endsWith ";" then {
+                rel.append (dt.substring from: 0 to: dt.length - 1)
+            } else {
+                rel.append dt
+            }
+        }
+        i = i + 1
+    }
+    if rel.length == 0 then {
+        closeInPlace :ctx :mark
+        r.append cond
+        r.append ")"
+        return r
+    }
+    ltmp: TmpCtr n: 0 frees: List OwedFree listFrees: List OwedFree
+    cc: "_cc\{tmpNext :ctx tmp: ltmp}"
+    ctx.argHoists.append (ArgHoist name: cc.copy val: String ctype: "bool" dtor: String)
+    closeInPlace :ctx :mark
+    r.append "\{cc} = \{condInParens :cond}\{rel}, \{cc})"
     return r
 }
 
@@ -24247,7 +24308,7 @@ emitForStmt: function {
             :buf
         )
     } else {
-        emitPlainWhileHead :ast :symtab :ctx :n :ind :buf
+        emitPlainWhileHead :ast :symtab :ctx :n :ind :tmp :buf
     }
     fLw: tmp.frees.length
     lLw: tmp.listFrees.length
@@ -24422,6 +24483,8 @@ emitPlainWhileHead: function {
     n: zast.forrow.view
     # the indent the loop is written at
     ind: StringView
+    # the frees of the hoists the header declares
+    tmp: TmpCtr
     # the `while (c) {` line appends here
     buf: String.borrow
 } is {
@@ -24437,6 +24500,8 @@ emitPlainWhileHead: function {
     # `for loop { ... }` -- no conditions, no postconditions: an unconditional
     # loop that exits via break/return.
     if cond.length == 0 then cond.append "1"
+    # the test's hoists are declared ahead of the loop and assigned at each test
+    flushArgHoists :ctx :ind :tmp :buf
     cwW: condInParens cond: cond.stringView
     lw: "\{ind}while \{cwW} {\n"
     buf.append lw
@@ -27689,6 +27754,7 @@ emitOptionLoopTail: function {
     # variable; the iterator has already advanced, which is the order the
     # conditions are written in
     armO: forArmCond :ast :symtab :ctx n: m
+    flushArgHoists :ctx ind: ind2.stringView :tmp :buf
     emitForArmBreak armc: armO.stringView ind: ind2.stringView :buf
     dvG: false
     if m.body.isZero.not then {
@@ -27996,6 +28062,7 @@ emitCountedRangeFor: function {
     buf.append lh
     ind2: "\{ind}    "
     armC: forArmCond :ast :symtab :ctx n: m
+    flushArgHoists :ctx ind: ind2.stringView :tmp :buf
     emitForArmBreak armc: armC.stringView ind: ind2.stringView :buf
     # the body is a BLOCK: whatever it registers -- an argument hoisted to an
     # `_ah` temp, an owned local -- is declared per iteration and has to be
@@ -28140,6 +28207,7 @@ emitClosedRangeFor: function {
         buf.append lh
         ind2: "\{ind}    "
         armX: forArmCond :ast :symtab :ctx n: m
+        flushArgHoists :ctx ind: ind2.stringView :tmp :buf
         emitForArmBreak armc: armX.stringView ind: ind2.stringView :buf
         fLR: tmp.frees.length
         lLR: tmp.listFrees.length
@@ -28414,7 +28482,7 @@ emitForCond: function {
         )
         if tw7.length > 0 then cv = tw7.take
         if cond.length > 0 then cond.append " && "
-        appendInPlaceCond :ctx mark: mk7 text: cv.stringView dst: cond
+        appendInPlaceCond :ctx mark: mk7 text: cv.stringView dst: cond declared: true
     }
 }
 
