@@ -125,7 +125,7 @@ Table of Contents</div>
 </li>
 <li><a href="#item-body-member">item_body_member</a>
 </li>
-<li><a href="#data-definition">data_definition</a>
+<li><a href="#list-definition">list_definition</a>
 </li>
 <li><a href="#primary-expression">primary_expression</a>
 </li>
@@ -214,7 +214,7 @@ be constant.</p>
 itself. The leading colon distinguishes it from a plain reference. Used
 in labelled-list contexts wherever a <a href="#label">label</a> plus value would be accepted:
 item bodies, unit bodies, function parameter lists, blocks, <em><strong>call
-arguments</strong></em> and <em><strong>data elements</strong></em>.</p>
+arguments</strong></em> and <em><strong>list elements</strong></em>.</p>
 <p>No intervening whitespace is allowed after the colon.</p>
 <pre><code>: ":" <a href="#id">id</a></code></pre>
 <h3 id="keywords"><a href="#keywords">2.4. keywords</a></h3>
@@ -290,9 +290,8 @@ within it (ie. it is not a closure).</li>
     the result of this definition will be a <em><strong>constant type</strong></em> reference (exists
     at compile-time only). The definition <em><strong>must</strong></em> only have static references
     within it.</li>
-<li><a href="#data-definition">data_definition</a> (a data value). Returns a read-only block of data.
-Usually done at the unit level. If done within code, the data is uplifted to
-the unit level and a reference to that data is returned.</li>
+<li><a href="#list-definition">list_definition</a> (a static list). A list is declared at unit level
+and read by name; one written inside a function body is refused.</li>
 <li>a <a href="#primary-expression">primary_expression</a> - must be a constant, and <em><strong>not</strong></em> a
     <a href="#block">block</a>: a block cannot be parsed at unit level.</li>
 </ul>
@@ -301,7 +300,7 @@ the unit level and a reference to that data is returned.</li>
 | <a href="#function-definition">function_definition</a>
 | <a href="#unit-definition">unit_definition</a>
 | <a href="#item-definition">item_definition</a>
-| <a href="#data-definition">data_definition</a>
+| <a href="#list-definition">list_definition</a>
 | <a href="#primary-expression">primary_expression</a></code></pre>
 <h3 id="if-expression"><a href="#if-expression">2.13. if_expression</a></h3>
 <p>Conditional.</p>
@@ -530,35 +529,38 @@ read the same way: a branch written without braces ends with its line.</p>
 | <a href="#if-expression">if_expression</a>
 | <a href="#match-expression">match_expression</a>
 | <a href="#operation">operation</a></code></pre>
-<h3 id="data-definition"><a href="#data-definition">2.21. data_definition</a></h3>
-<p>Create a constant block of data: one static array the program holds, read
-through the block's name as a value -- an <code>intdata</code>, <code>floatdata</code> or
-<code>stringdata</code> view of it. Its elements are numbers or strings, one kind per
-block (no records). Value and length are known at compile time.</p>
-<p>A <code>data</code> block with no elements <strong>must</strong> give its value type with
-<code>out</code> (<code>data {} out intdata u8</code>).</p>
-<p>When refering to <code>data</code> the compiler can convert element access, length and
-other calls to a compile time constant operation. When used at runtime, the
-methods are runtime operations similar to an immutable <code>List</code>.</p>
+<h3 id="list-definition"><a href="#list-definition">2.21. list_definition</a></h3>
+<p>Create a static list: one static array the program holds, read through the
+list's name as a value -- a <code>list</code> view of it. Its elements are numbers or
+strings, one kind per list. Value and length are known at compile time.</p>
+<p>A list with no elements <strong>must</strong> give its type with <code>out</code>
+(<code>list {} out list u8</code>).</p>
+<p>Through the list's name, the compiler turns element access, length and other
+calls into compile-time constants. Through a value, the methods are run-time
+operations, as on an immutable <code>List</code>.</p>
 <p>Elements are stored in the order they are written, from index 0. An element
 may have a label, which names it; an integer label is a name like any other. An
-unlabelled element is named by its index. Every name in a block is distinct.</p>
+unlabelled element is named by its index. Every name in a list is distinct.</p>
 <p>Each element is a constant (compile time) value that the typechecker must
-be able to reduce to a number or a string, one kind per block (records and
+be able to reduce to a number or a string, one kind per list (records and
 reference values are rejected by the typechecker, not the parser).</p>
+<p>The word <code>list</code> also names the list's type wherever a type is written:
+<code>out list u8</code>, <code>{d: list StringView}</code>, <code>(list u8 i: byteid)</code>.</p>
+<p><code>data</code> is a reserved word: <code>data { ... }</code> is refused, and the error says to
+write <code>list { ... }</code>.</p>
 <p>Elements are single <a href="#term">term</a>s, not full <a href="#operation">operation</a>s, because greedy
 <a href="#binop">binop</a> parsing would otherwise fuse adjacent values (labelled or not)
 - for example <code>MIDDLE: 20 30</code> could eat the next element as an
 argument. To write a constant operation as an element value, wrap it in
 parentheses so it becomes a term: <code>Bytes: (1024 + 4)</code>. The typechecker
 constant-folds the paren'd expression.</p>
-<p>The optional <code>out</code> argument names the block's VALUE type, a type as a
-function's <code>out</code> writes one: <code>out intdata u8</code>, <code>out stringdata</code>,
-<code>out (intdata u8 i: byteid)</code>. Its element type pins every element's.
+<p>The optional <code>out</code> argument names the list's type, as a function's <code>out</code>
+writes one: <code>out list u8</code>, <code>out list StringView</code>,
+<code>out (list u8 i: byteid)</code>. Its element type pins every element's.
 When absent, the typechecker unifies every per-element type tag
 (<code>name: 0.T</code>), and with none the elements are untyped. See spec for the
 full rule.</p>
-<pre><code>: "data" [ "is" ] "{"
+<pre><code>: "list" [ "is" ] "{"
     ( ( [ <a href="#label">label</a> ] <a href="#term">term</a> ) | <a href="#label-shorthand">label_shorthand</a> )  # first element, required
     { ( [ <a href="#label">label</a> ] <a href="#term">term</a> ) | <a href="#label-shorthand">label_shorthand</a> }
 "}"
@@ -574,7 +576,7 @@ what can consume an <code>else</code>. In a body whose own construct is still
 <em><strong>open</strong></em> a following <code>else</code> would have two candidate owners -- the inner
 form and the enclosing one -- and would bind silently to the inner. Braces
 settle it: <code>then { if a then x else y }</code>. <a href="#for-expression">for_expression</a>,
-<a href="#with-expression">with_expression</a> and <a href="#data-definition">data_definition</a> read no <code>else</code>, so they need no
+<a href="#with-expression">with_expression</a> and <a href="#list-definition">list_definition</a> read no <code>else</code>, so they need no
 braces here.</p>
 <p>An <code>else</code> body carries no such ambiguity and takes a full <a href="#expression">expression</a>. By
 the time one is reached the enclosing <code>if</code> or <code>match</code> has already taken its
@@ -603,7 +605,7 @@ of this expression must be a constant.</p>
 | ( <a href="#term">term</a> "swap" <a href="#term">term</a> )
 | <a href="#for-expression">for_expression</a>
 | <a href="#with-expression">with_expression</a>
-| <a href="#data-definition">data_definition</a></code></pre>
+| <a href="#list-definition">list_definition</a></code></pre>
 <h3 id="block"><a href="#block">2.23. block</a></h3>
 <p>A series of <a href="#blockline">blockline</a>s in braces. Can be used anywhere a
 <a href="#primary-expression">primary_expression</a> is allowed. The value of a block is the value of the
@@ -774,6 +776,8 @@ cannot be line delimitered (ie. all sub-calls must also have parens).</p>
 | <a href="#id">id</a>
 | <a href="#string">string</a>
 | <a href="#stringraw">stringraw</a>
+| <a href="#list-definition">list_definition</a>
+| "list"
 | ( <a href="#term">term</a> { "." <a href="#id">id</a> } [ "." <a href="#type-suffix">type_suffix</a> ] )</code></pre>
 <h3 id="string"><a href="#string">2.32. string</a></h3>
 <p>Interpolated string. Delimitered by double quotes.</p>

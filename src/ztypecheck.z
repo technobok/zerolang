@@ -10019,11 +10019,11 @@ dataElemValue: function {
     ) then {
         return ztypes.noConst
     }
-    msg: "a data element must be a compile-time constant".string
+    msg: "a list element must be a compile-time constant".string
     hint: "an element is a literal, a unit constant, or an expression over them".string
     if cv.kind.none.not then {
-        msg = "a data element must be a number or a string"
-        hint = "a data block holds integers, floats or strings"
+        msg = "a list element must be a number or a string"
+        hint = "a list holds integers, floats or strings"
     }
     (addErrorH
         :st
@@ -10110,10 +10110,10 @@ dataKindsAgree: function {
         svBlock: elemTid == svT
         if kind != first then {
             ft: dataKindText kind: first
-            msg = "data elements are of one kind: this one is \{kt}, the first \{ft}"
+            msg = "list elements are of one kind: this one is \{kt}, the first \{ft}"
         } else if isStr != svBlock then {
             en: st.reg.nameOf tid: elemTid
-            msg = "\{kt} cannot be an element of a block of \{en}"
+            msg = "\{kt} cannot be an element of a list of \{en}"
         }
         if msg.length > 0 then {
             el: ast.nodes.get i: elId
@@ -10125,7 +10125,7 @@ dataKindsAgree: function {
                 e: zast.err.typeError
                 :msg
                 note: String
-                hint: "a block holds all integers, all floats, or all strings (`out stringdata`)"
+                hint: "a list holds all integers, all floats, or all strings (`out list StringView`)"
                 width: 1
             )
             return false
@@ -10203,8 +10203,8 @@ dataElemTypeName: function {
             if (tgId == pick).not then {
                 pn: zast.nameTextAt :ast ref: pick
                 tn: zast.nameTextAt :ast ref: tgId
-                dm: "data element types disagree: '\{pn.stringView}' and '\{tn.stringView}'"
-                dh: "a data block has one element type: write it once, as `out T`".string
+                dm: "list element types disagree: '\{pn.stringView}' and '\{tn.stringView}'"
+                dh: "a list has one element type: write it once, as `out list T`".string
                 en: String
                 (addErrorH
                     :st
@@ -10247,85 +10247,55 @@ dataOwnMember: function {
     return (st.reg.typetypeOf typeId: mt) == ztypes.ztypetype.functionType
 }
 
-# refuseDataOutType -- a data block's `out` names a type that is no data value
-# type of the block's family. When it names an element type the value type is
-# the one wrapping it, and the hint writes that out.
+# refuseDataOutType -- a list's `out` names a type that is no list type. When it
+# names an element type, the hint writes the list type that holds it.
 refuseDataOutType: function {
     ast: Ast
     st: zenv.ZSymbolTable
     outId: zast.nodeid
     ot: ztypes.tid
-    # the block was written `list { }`
-    isList: bool
 } is {
     otn: specWrittenName :st :ast tid: ot
     oNode: ast.nodes.get i: outId
-    if isList then {
-        lh: "name the list's full type: `out list u8`, `out list StringView`".string
-        if (constraintHolds :ast :st ck: ztypes.constraintkind.staticMember argTid: ot) then {
-            lh = "a list of \{otn} is `out list \{otn}`"
-        }
-        (addErrorH
-            :st
-            nodeid: outId
-            lineno: (nodeLine n: oNode)
-            colno: (nodeCol n: oNode)
-            e: zast.err.typeError
-            msg: "'\{otn}' is no list type: a list's `out` names the list's own type"
-            note: String
-            hint: lh
-            width: otn.length.u32.orPanic
-        )
-        return
+    hint: "name the list's full type: `out list u8`, `out list StringView`".string
+    if (constraintHolds :ast :st ck: ztypes.constraintkind.staticMember argTid: ot) then {
+        hint = "a list of \{otn} is `out list \{otn}`"
     }
-    wrap: String
-    if ot == (stdTid :ast :st wk: zast.wellKnown.slot.tyStringView) then {
-        wrap = "out stringdata"
-    } else if (typeIsNumberOf :st tid: ot float: true) then {
-        wrap = "out floatdata \{otn}"
-    } else if (typeIsNumberOf :st tid: ot float: false) then {
-        wrap = "out intdata \{otn}"
-    }
-    hint: "name the block's value type: `out intdata u8`, `out floatdata f32`, `out stringdata`".string
-    if wrap.length > 0 then hint = "a block of \{otn} is `\{wrap}`"
-    msg: "'\{otn}' is no data value type: a data block's `out` names the block's value type"
     (addErrorH
         :st
         nodeid: outId
         lineno: (nodeLine n: oNode)
         colno: (nodeCol n: oNode)
         e: zast.err.typeError
-        :msg
+        msg: "'\{otn}' is no list type: a list's `out` names the list's own type"
         note: String
         :hint
         width: otn.length.u32.orPanic
     )
 }
 
-# dataoutparts -- what a data block's `out` says when it names the block's VALUE
-# type: the element type (StringView for a stringdata) and the index type, as the
-# run-time instance has them, and whether each was left untyped -- written as a
-# literal type or not written at all.
+# dataoutparts -- what a list's `out` says when it names a list type: the element
+# type and the index type, as the run-time instance has them, and whether each
+# was left untyped -- written as a literal type or not written at all.
 dataoutparts: record {
-    # whether the `out` type is a data value type at all; the rest mean
-    # nothing when it is not
+    # whether the `out` type is a list type at all; the rest mean nothing when
+    # it is not
     isValue: bool
     # the element type
     elem: ztypes.tid
-    # the type that indexes the block, 0 for the default
+    # the type that indexes the list, 0 for the default
     index: ztypes.tid
-    # the element was left untyped: the block's elements read as literals
+    # the element was left untyped: the list's elements read as literals
     elemLiteral: bool
-    # the index was left untyped: the block's slots read as literals
+    # the index was left untyped: the list's slots read as literals
     indexLiteral: bool
 }
 
-# dataOutParts -- a block's `out` type, when it is a value type of the block's
-# family, taken apart: `list` for a block written `list { }`, else intdata,
-# floatdata or stringdata, or an instance of one. The parameters are read by
-# position in each template's own declaration: the element first, then the
-# index, and a stringdata has only the index. What the `out` node WROTE decides
-# what is untyped -- the instance itself materialises a literal argument.
+# dataOutParts -- a list's `out` type, when it is `list` or an instance of it,
+# taken apart. The parameters are read by position in the template's own
+# declaration: the element first, then the index. What the `out` node WROTE
+# decides what is untyped -- the instance itself materialises a literal
+# argument.
 dataOutParts: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -10333,8 +10303,6 @@ dataOutParts: function {
     unitDecl: ztypes.declid
     valueTid: ztypes.tid
     outId: zast.nodeid
-    # the block was written `list { }`
-    isList: bool
 } out dataoutparts is {
     none: (dataoutparts
         isValue: false
@@ -10346,30 +10314,21 @@ dataOutParts: function {
     if valueTid.isZero then return none
     tpl: st.reg.genericOriginOf tid: valueTid
     if tpl.isZero then tpl = valueTid
-    sdT: stdTid :ast :st wk: zast.wellKnown.slot.tyStringdata
-    isStr: tpl == sdT
-    if isList then {
-        if tpl != (stdTid :ast :st wk: zast.wellKnown.slot.kwList) then return none
-    } else if isStr.not when tpl != (stdTid :ast :st wk: zast.wellKnown.slot.tyIntdata) when (
-        tpl != (stdTid :ast :st wk: zast.wellKnown.slot.tyFloatdata)
-    ) then return none
-    idxAt: 1.u64
-    elem: ztypes.tid
-    if isStr then {
-        idxAt = 0
-        elem = stdTid :ast :st wk: zast.wellKnown.slot.tyStringView
-    } else {
-        elem = st.reg.genericTypeArgAt specId: valueTid ordinal: 0
-    }
-    idx: st.reg.genericTypeArgAt specId: valueTid ordinal: idxAt
+    if tpl != (stdTid :ast :st wk: zast.wellKnown.slot.kwList) then return none
+    elem: st.reg.genericTypeArgAt specId: valueTid ordinal: 0
+    idx: st.reg.genericTypeArgAt specId: valueTid ordinal: 1
     pn: st.reg.genericParamNamesOf tdecl: (declOfTypeId :st tid: tpl)
-    elemName: zast.nameid
-    idxName: zast.nameid
-    if isStr.not when pn.length > 0 then elemName = pn.get i: 0
-    if idxAt < pn.length then idxName = pn.get i: idxAt
     # what the `out` wrote for each part: nothing, or a literal type, leaves
     # it untyped
-    wrote: dataOutWrote :ast :st :scope :unitDecl :outId :elemName :idxName :isStr
+    wrote: (dataOutWrote
+        :ast
+        :st
+        :scope
+        :unitDecl
+        :outId
+        elemName: (pn.get i: 0)
+        idxName: (pn.get i: 1)
+    )
     elemWrote: wrote.elem
     idxWrote: wrote.index
     eLit: elemWrote.isZero or (isLiteralTypeId :st tid: elemWrote)
@@ -10379,13 +10338,13 @@ dataOutParts: function {
         isValue: true
         :elem
         index: idx
-        elemLiteral: eLit and isStr.not
+        elemLiteral: eLit
         indexLiteral: iLit
     )
 }
 
-# dataoutwrote -- the element and index types a data block's `out` names as its
-# value type's arguments, 0 for a part it leaves to the template's default.
+# dataoutwrote -- the element and index types a list's `out` names as its type's
+# arguments, 0 for a part it leaves to the template's default.
 dataoutwrote: record {
     # the element type written, positionally or by its parameter's name
     elem: ztypes.tid
@@ -10393,8 +10352,8 @@ dataoutwrote: record {
     index: ztypes.tid
 }
 
-# typeAppArgs -- the argument nodes of a type application (`(intdata u8 i:
-# nid)`), in order; none for a bare name.
+# typeAppArgs -- the argument nodes of a type application (`(list u8 i: nid)`),
+# in order; none for a bare name.
 typeAppArgs: function {ast: Ast.view nid: zast.nodeid} out ListVal zast.nodeid is {
     args: ListVal zast.nodeid
     n: ast.nodes.get i: nid
@@ -10408,9 +10367,9 @@ typeAppArgs: function {ast: Ast.view nid: zast.nodeid} out ListVal zast.nodeid i
     return args
 }
 
-# dataOutWrote -- what `(intdata u8 i: nid)` writes for each parameter of its
-# template: an unlabelled argument is the element (a stringdata's index, it
-# having no element), and a labelled one is the parameter it names.
+# dataOutWrote -- what `(list u8 i: nid)` writes for each parameter of its
+# template: an unlabelled argument is the element, and a labelled one is the
+# parameter it names.
 dataOutWrote: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -10419,7 +10378,6 @@ dataOutWrote: function {
     outId: zast.nodeid
     elemName: zast.nameid
     idxName: zast.nameid
-    isStr: bool
 } out dataoutwrote is {
     elemWrote: ztypes.tid
     idxWrote: ztypes.tid
@@ -10441,44 +10399,25 @@ dataOutWrote: function {
         if (isLiteralTypeId :st tid: at) then st.typing.dataLiteralArgs.add item: opId
         first: lbl.isZero and (positional == 0)
         if lbl.isZero then positional = positional + 1
-        if lbl.isZero.not and (lbl == elemName) or (first and isStr.not) then elemWrote = at
-        if lbl.isZero.not and (lbl == idxName) or (first and isStr) then idxWrote = at
+        if lbl.isZero.not and (lbl == elemName) or first then elemWrote = at
+        if lbl.isZero.not and (lbl == idxName) then idxWrote = at
     }
     return (dataoutwrote elem: elemWrote index: idxWrote)
 }
 
-# dataValueTemplate -- the template data block `dataTid` of element type
-# `elemTid` is a value of: `list` for a block written `list { }` of any element
-# it holds; else `stringdata` for StringView, `floatdata` for a float, `intdata`
-# for an integer. 0 for anything else (an element type that did not resolve).
-dataValueTemplate: function {
-    ast: Ast
-    st: zenv.ZSymbolTable
-    dataTid: ztypes.tid
-    elemTid: ztypes.tid
-} out ztypes.tid is {
-    if (st.typing.listBlocks.has item: dataTid) then {
-        if (constraintHolds :ast :st ck: ztypes.constraintkind.staticMember argTid: elemTid
-        ).not then {
-            return ztypes.tid.zero
-        }
-        return (stdTid :ast :st wk: zast.wellKnown.slot.kwList)
+# dataValueTemplate -- the template a list of element type `elemTid` is a value
+# of: `list`, for an element a list may hold; 0 for anything else (an element
+# type that did not resolve).
+dataValueTemplate: function {ast: Ast st: zenv.ZSymbolTable elemTid: ztypes.tid} out ztypes.tid is {
+    if (constraintHolds :ast :st ck: ztypes.constraintkind.staticMember argTid: elemTid).not then {
+        return ztypes.tid.zero
     }
-    if elemTid == (stdTid :ast :st wk: zast.wellKnown.slot.tyStringView) then {
-        return (stdTid :ast :st wk: zast.wellKnown.slot.tyStringdata)
-    }
-    if (typeIsNumberOf :st tid: elemTid float: true) then {
-        return (stdTid :ast :st wk: zast.wellKnown.slot.tyFloatdata)
-    }
-    if (typeIsNumberOf :st tid: elemTid float: false) then {
-        return (stdTid :ast :st wk: zast.wellKnown.slot.tyIntdata)
-    }
-    return ztypes.tid.zero
+    return (stdTid :ast :st wk: zast.wellKnown.slot.kwList)
 }
 
-# dataValueTypeFor -- the type data block `dataTid`'s name has as a value: its
-# template's instance over the block's element type, minted on the first use
-# of the block as a value and kept on the block. 0 when it has none.
+# dataValueTypeFor -- the type list `dataTid`'s name has as a value: the list
+# template's instance over the list's element and index types, minted on the
+# first use of the list as a value and kept on the list. 0 when it has none.
 dataValueTypeFor: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -10488,29 +10427,17 @@ dataValueTypeFor: function {
     have: st.reg.dataValueTypeOf tid: dataTid
     if have.isZero.not then return have
     elemTid: st.reg.dataElemTypeOf tid: dataTid
-    tpl: dataValueTemplate :ast :st :dataTid :elemTid
+    tpl: dataValueTemplate :ast :st :elemTid
     if tpl.isZero then return ztypes.tid.zero
-    pn: st.reg.genericParamNamesOf tdecl: (declOfTypeId :st tid: tpl)
-    # a template with no parameter is its own value type
-    if pn.length == 0 then {
-        st.reg.setDataValueType typeId: dataTid value: tpl
-        return tpl
-    }
     # the parameters by position in the template's own declaration: the
-    # element first, then the index; a stringdata has only the index
-    isStr: tpl == (stdTid :ast :st wk: zast.wellKnown.slot.tyStringdata)
-    idxAt: 1.u64
-    if isStr then idxAt = 0
+    # element first, then the index
+    pn: st.reg.genericParamNamesOf tdecl: (declOfTypeId :st tid: tpl)
     idxTid: (st.typing.dataIndexType.get key: dataTid).or d: ztypes.tid.zero
     subs: IdMapV zast.nameid v: ztypes.tid
-    sfx: String
-    if isStr.not then {
-        subs.set key: (pn.get i: 0) value: elemTid
-        sfx.append "_"
-        sfx.append (st.reg.nameOf tid: elemTid)
-    }
-    if idxTid.isZero.not when idxAt < pn.length then {
-        subs.set key: (pn.get i: idxAt) value: idxTid
+    subs.set key: (pn.get i: 0) value: elemTid
+    sfx: "_\{st.reg.nameOf tid: elemTid}"
+    if idxTid.isZero.not then {
+        subs.set key: (pn.get i: 1) value: idxTid
         sfx.append "_"
         sfx.append (st.reg.nameOf tid: idxTid)
     }
@@ -10530,10 +10457,10 @@ dataValueTypeFor: function {
     return vt
 }
 
-# dataBlockFits -- data block `dataTid`, written where a `want` is taken, is a
-# value of it: `want` is the block's value template over its element type. The
-# block's value type is recorded as `want`, and the block keeps its static array
-# for the view to point at.
+# dataBlockFits -- list `dataTid`, written where a `want` is taken, is a value
+# of it: `want` is the list template over the list's element type. The list's
+# value type is recorded as `want`, and the list keeps its static array for the
+# view to point at.
 dataBlockFits: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -10541,10 +10468,10 @@ dataBlockFits: function {
     want: ztypes.tid
 } out bool is {
     if (st.reg.typetypeOf typeId: dataTid) != ztypes.ztypetype.dataType then return false
-    # a block's `slot` names positions and is no value
+    # a list's `slot` names positions and is no value
     if (st.typing.dataSlotTypes.has item: dataTid) then return false
     elemTid: st.reg.dataElemTypeOf tid: dataTid
-    tpl: dataValueTemplate :ast :st :dataTid :elemTid
+    tpl: dataValueTemplate :ast :st :elemTid
     if tpl.isZero then return false
     if want != tpl when (dataValueArgsMatch :ast :st :dataTid :want :tpl :elemTid
     ).not then return false
@@ -10553,7 +10480,7 @@ dataBlockFits: function {
     return true
 }
 
-# dataValueArgsMatch -- instance `want` of data template `tpl` is what block
+# dataValueArgsMatch -- instance `want` of the list template `tpl` is what list
 # `dataTid` (of element type `elemTid`) is a value of: its element and its index.
 # The parameters are read by position, as dataValueTypeFor binds them.
 dataValueArgsMatch: function {
@@ -10565,12 +10492,9 @@ dataValueArgsMatch: function {
     elemTid: ztypes.tid
 } out bool is {
     if (st.reg.genericOriginOf tid: want) != tpl then return false
-    isStr: tpl == (stdTid :ast :st wk: zast.wellKnown.slot.tyStringdata)
-    idxAt: 1.u64
-    if isStr then idxAt = 0
-    if isStr.not when (st.reg.genericTypeArgAt specId: want ordinal: 0) != elemTid then return false
-    # the index the block declares, else the template's default
-    wantIdx: st.reg.genericTypeArgAt specId: want ordinal: idxAt
+    if (st.reg.genericTypeArgAt specId: want ordinal: 0) != elemTid then return false
+    # the index the list declares, else the template's default
+    wantIdx: st.reg.genericTypeArgAt specId: want ordinal: 1
     haveIdx: (st.typing.dataIndexType.get key: dataTid).or d: ztypes.tid.zero
     if haveIdx.isZero then haveIdx = stdTid :ast :st wk: zast.wellKnown.slot.tyU64
     return wantIdx.isZero or (wantIdx == haveIdx)
@@ -10596,7 +10520,7 @@ dataBlockAsValue: function {
             lineno: (nodeLine n: nn)
             colno: (nodeCol n: nn)
             e: zast.err.typeError
-            msg: "a block's `slot` is no value: it names its labels' positions"
+            msg: "a list's `slot` is no value: it names its labels' positions"
             note: String
             hint: "read one label's position, `blk.slot.label`"
             width: 4
@@ -10670,7 +10594,6 @@ resolveDataInto: function {
     subs: (IdMapV zast.nameid v: ztypes.tid).view
 } out ztypes.tid is {
     st.reg.setValtype typeId: did value: false
-    if dnode.isList then st.typing.listBlocks.add item: did
     litId: st.reg.literalIntTid
     # the block's elements are evaluating: a read of the block from one of
     # them is a cycle (constDataMember)
@@ -10681,7 +10604,7 @@ resolveDataInto: function {
     vals: dataElemValues :ast :st :unitDecl :scope :dnode
     st.typing.constMono = prevMono
     st.typing.constEvalState.set key: lk value: 2.u8
-    # whether `out` names the block's VALUE type (`out intdata u8`) rather than
+    # whether `out` names the list's own type (`out list u8`) rather than
     # its element type (`out u8`, read until every block says its value type)
     valueOut: false
     # whether `slot` reads untyped: the index was left untyped, or no `out` named
@@ -10715,7 +10638,6 @@ resolveDataInto: function {
             :unitDecl
             valueTid: ot
             outId: dnode.outType
-            isList: dnode.isList
         )
     }
     # a typed value type names the element type the elements' own tags are
@@ -10734,7 +10656,7 @@ resolveDataInto: function {
         valueOut = vparts.elemLiteral.not
         elemTid = vparts.elem
         etName = st.reg.nameOf tid: elemTid
-        # a generic unit's block over its parameter (`out intdata t`) is a value
+        # a generic unit's list over its parameter (`out list t`) is a value
         # of the type its `out` names, which no element type selects: each
         # instance's copy is a value of its own
         if (st.reg.typetypeOf typeId: elemTid) == ztypes.ztypetype.genericParam then {
@@ -10759,12 +10681,12 @@ resolveDataInto: function {
     # constant reads, and only what reaches run time is the i64 / f64 default
     typed: (etn.length > 0) or valueOut or (dataTagWritten :ast :dnode)
     # the template the block's name is a value of: its members are the block's own
-    valTpl: dataValueTemplate :ast :st dataTid: did :elemTid
+    valTpl: dataValueTemplate :ast :st :elemTid
     # an `out` names the block's value type; a declared type that is none is
     # refused here, and a name that resolved to nothing is the unknown type
     # recordTyperef reports
     if vparts.isValue.not when ot.isZero.not when (declOfTypeId :st tid: ot).isZero.not then {
-        refuseDataOutType :ast :st outId: dnode.outType :ot isList: dnode.isList
+        refuseDataOutType :ast :st outId: dnode.outType :ot
     }
     # every name an element takes: its label, else its ordinal
     taken: IdSet zast.nameid
@@ -10800,7 +10722,7 @@ resolveDataInto: function {
                     lineno: (nodeLine n: elD)
                     colno: (nodeCol n: elD)
                     e: zast.err.duplicateDef
-                    msg: "data element name '\{dnm}' is used twice"
+                    msg: "list element name '\{dnm}' is used twice"
                     note: String
                     hint: "an unlabelled element is named by its index; give each element its own name"
                     width: dnm.length.u32.orPanic
@@ -10818,7 +10740,7 @@ resolveDataInto: function {
                 elN: ast.nodes.get i: elId
                 emN: zast.nameTextAt :ast ref: memberIdAt
                 tn: st.reg.nameOf tid: valTpl
-                tm: "a data element may not be named '\{emN}'"
+                tm: "a list element may not be named '\{emN}'"
                 th: "`\{emN}` is a member of every \{tn}: rename the element"
                 (addErrorH
                     :st
@@ -13040,7 +12962,7 @@ variantTagIsOrdinalPlain: function {
 # is u8, sequential from 0 -- or declares a numeric tag whose storage is u8.
 #
 # False for a `data`-sourced tag, whose constants are whatever the data block
-# says: `data { LOW: 0  HIGH: 10 }` has two arms and is NOT two ordinals. False
+# says: `list { LOW: 0  HIGH: 10 }` has two arms and is NOT two ordinals. False
 # too for a wider declared numeric, where the author asked for that width. And
 # false when the tag base does not resolve, because an unverified shape is not
 # one to optimise on.
@@ -25174,7 +25096,7 @@ unionBoundMemberRefusal: function {
 boundTypetypeRefusal: function {tt: ztypes.ztypetype bt: StringView} out String is {
     if tt == ztypes.ztypetype.classType then return (boundHasNoGenericText :bt what: "class")
     if tt == ztypes.ztypetype.unitType then return (boundHasNoGenericText :bt what: "unit")
-    if tt == ztypes.ztypetype.dataType then return (boundHasNoGenericText :bt what: "data block")
+    if tt == ztypes.ztypetype.dataType then return (boundHasNoGenericText :bt what: "list")
     if tt == ztypes.ztypetype.recordType then return (boundHasNoGenericText :bt what: "record")
     return ""
 }
@@ -26684,14 +26606,13 @@ getOrMintSpec: function {
     return mid8
 }
 
-# materialiseDataArgs -- a data value type's arguments at the run-time types its
-# literals become: an untyped element is an i64 (a floatdata's, or a list's
-# untyped float, an f64) and an untyped index a u64, as an untyped block's value
-# is `intdata i64 i: u64`. A
-# parameter left out takes its default, which is the literal type, so it is
+# materialiseDataArgs -- a list type's arguments at the run-time types its
+# literals become: an untyped element is an i64, or an f64 for an untyped float,
+# and an untyped index a u64, as an untyped list's value is `(list i64 i: u64)`.
+# A parameter left out takes its default, which is the literal type, so it is
 # bound here too -- the instance is named by what it holds, and a literal type
 # reaches no instance, so the emitter never sees one. The parameters are read by
-# position: the element first, then the index; a stringdata has only the index.
+# position: the element first, then the index.
 materialiseDataArgs: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -26702,20 +26623,14 @@ materialiseDataArgs: function {
     if pnames.length == 0 then return
     # READ, not resolved: every instance of every template passes here, and a
     # template no program named cannot be this one
-    isStr: templateId == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyStringdata)
-    isFloat: templateId == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyFloatdata)
-    isList: templateId == (stdTidRo :ast :st wk: zast.wellKnown.slot.kwList)
-    if isStr.not when isFloat.not when isList.not when (
-        templateId != (stdTidRo :ast :st wk: zast.wellKnown.slot.tyIntdata)
-    ) then return
+    if templateId != (stdTidRo :ast :st wk: zast.wellKnown.slot.kwList) then return
     k: u64
     for k < pnames.length loop {
         pn: pnames.get i: k
         v: (subs.get key: pn).or d: ztypes.tid.zero
-        isElem: isStr.not and (k == 0)
         if v.isZero or (isLiteralTypeId :st tid: v) then {
-            float: isFloat or (v == st.reg.literalFloatTid)
-            subs.set key: pn value: (materialTid :ast :st :isElem :float)
+            float: v == st.reg.literalFloatTid
+            subs.set key: pn value: (materialTid :ast :st isElem: k == 0 :float)
         }
         k = k + 1
     }
@@ -31160,7 +31075,7 @@ checkTagAccessor: function {
                         d: ztypes.tid.zero
                     )
                     dnD: specWrittenName :st :ast tid: dtD
-                    mnx5 = "tag not readable on '\{btn5}' — its values come from data block '\{dnD}'; only a numeric tag source (eg. `tag: u8.tag`) is readable on an instance"
+                    mnx5 = "tag not readable on '\{btn5}' — its values come from list '\{dnD}'; only a numeric tag source (eg. `tag: u8.tag`) is readable on an instance"
                 }
             } case none then null
             en6: String
@@ -31564,7 +31479,7 @@ checkDataBlockMember: function {
                 lineno: dp.lineno
                 colno: dp.colno
                 e: zast.err.typeError
-                msg: "an empty data block has no '.array': an array holds at least one element"
+                msg: "an empty list has no '.array': an array holds at least one element"
                 note: String
                 hint: "read its `length`, or walk it with `iterate`"
                 width: 5
@@ -31574,8 +31489,10 @@ checkDataBlockMember: function {
         if isArray then markDataRuntimeIndexed :st tid: bt
         # only a list of integers owns a `tag`; the template's own member is
         # no answer for any other
-        if cnId == zast.wellKnown.slot.wkTag when (st.typing.listBlocks.has item: bt
-        ) when (st.typing.declChildOfId parentTypeId: bt nameId: cnId).none then {
+        if cnId == zast.wellKnown.slot.wkTag when (st.typing.declChildOfId
+            parentTypeId: bt
+            nameId: cnId
+        ).none then {
             (addErrorH
                 :st
                 nodeid: dp.nid
@@ -31696,7 +31613,7 @@ refuseDataSlotMember: function {
         if (st.typing.declChildOfId parentTypeId: bt nameId: cnId).some then return false
         bn: st.reg.nameOf tid: bt
         msg = "'\{bn}' has no labelled element, so no `slot`"
-        hint = "label the elements whose positions you read: `data { first: 2 second: 3 }`"
+        hint = "label the elements whose positions you read: `list { first: 2 second: 3 }`"
     } else {
         return false
     }
@@ -31730,11 +31647,7 @@ refuseDataValueMember: function {
     if isArray.not and (cnId != zast.wellKnown.slot.wkTag) and isSlot.not then return false
     og: st.reg.genericOriginOf tid: bt
     if og.isZero then og = bt
-    if og != (stdTidRo :ast :st wk: zast.wellKnown.slot.tyIntdata) when (
-        og != (stdTidRo :ast :st wk: zast.wellKnown.slot.tyFloatdata)
-    ) when og != (stdTidRo :ast :st wk: zast.wellKnown.slot.kwList) when (
-        isSlot.not or (og != (stdTidRo :ast :st wk: zast.wellKnown.slot.tyStringdata))
-    ) then return false
+    if og != (stdTidRo :ast :st wk: zast.wellKnown.slot.kwList) then return false
     mn: zast.nameTextAt :ast ref: cnId
     (addErrorH
         :st
@@ -31742,9 +31655,9 @@ refuseDataValueMember: function {
         lineno: dp.lineno
         colno: dp.colno
         e: zast.err.typeError
-        msg: "'\{mn}' is read through a data block's name, not through its value"
-        note: "a data value is the block's elements and length; the count an array type needs is the block's"
-        hint: "use the block's name: `blk.\{mn}`"
+        msg: "'\{mn}' is read through a list's name, not through its value"
+        note: "a list value is the list's elements and length; the count an array type needs is the list's"
+        hint: "use the list's name: `blk.\{mn}`"
         width: mn.length.u32.orPanic
     )
     return true
@@ -32808,7 +32721,7 @@ refuseMarkerWithoutStorage: function {
         pp: zenv.formatPath pool: ast.names path: tp.listView
         what = "'\{pp}'"
         hint = "write the value without a marker: '\{pp}'"
-        if btt == ztypes.ztypetype.dataType then hint = "copy a data block with '\{pp}.array'"
+        if btt == ztypes.ztypetype.dataType then hint = "copy a list with '\{pp}.array'"
         if isFn then hint = "a function's reference is '\{pp}.copy'"
     }
     cn: zast.nameTextAt :ast ref: cnId
@@ -32819,7 +32732,7 @@ refuseMarkerWithoutStorage: function {
         colno: dp.colno
         e: zast.err.typeError
         msg: "\{what} names no storage: '.\{cn}' applies to a variable or a field"
-        note: "a literal, a constant, a data block, a function and a call's result are values, not places"
+        note: "a literal, a constant, a list, a function and a call's result are values, not places"
         :hint
         width: 1
     )
@@ -36449,7 +36362,7 @@ refuseDataBlockStatement: function {
         lineno: ln
         colno: co
         e: zast.err.typeError
-        msg: "'\{pp}' alone does nothing: a data block's value is a view of constants"
+        msg: "'\{pp}' alone does nothing: a list's value is a view of constants"
         note: String
         hint: "bind it, pass it, or read an element"
         width: pp.length.u32.orPanic
@@ -53970,8 +53883,6 @@ dataref: record {
     lineno: u32
     # the column to report this data block against
     colno: u32
-    # written `list { ... }` rather than `data { ... }`
-    isList: bool
 }
 
 # dataRefAt -- the data-block row `nid` as plain values (all zero for any
@@ -53985,11 +53896,10 @@ dataRefAt: function {ast: Ast.view nid: zast.nodeid} out dataref is {
             outType: n.outType
             lineno: n.lineno
             colno: n.colno
-            isList: n.isList
         )
     }
     zn: zast.nodeid
-    return (dataref nid: zn nelems: 0 outType: zn lineno: 0 colno: 0 isList: false)
+    return (dataref nid: zn nelems: 0 outType: zn lineno: 0 colno: 0)
 }
 
 # walkTypeOf -- the type the walk in progress stamped on body node `nid`. An
@@ -54114,17 +54024,17 @@ checkValueArmAt: function {
         lvr: labelRefAt :ast :nid
         return (checkLabelValueAt :st :unitDecl :ast lv: lvr)
     } case datablock then {
-        refuseBodyDataBlock :st :ast :nid
+        refuseBodyList :st :ast :nid
         return ztypes.tid.zero
     } else {
         return ztypes.tid.zero
     }
 }
 
-# refuseBodyDataBlock -- a data block written in a function body. A block is a
-# declaration, built once into static storage, so it is declared at unit level
-# (or in an `as` block) and read by name.
-refuseBodyDataBlock: function {st: zenv.ZSymbolTable ast: Ast.view nid: zast.nodeid} is {
+# refuseBodyList -- a list written in a function body. A list is a declaration,
+# built once into static storage, so it is declared at unit level (or in an
+# `as` block) and read by name.
+refuseBodyList: function {st: zenv.ZSymbolTable ast: Ast.view nid: zast.nodeid} is {
     n: ast.nodes.get i: nid
     (addErrorH
         :st
@@ -54132,9 +54042,9 @@ refuseBodyDataBlock: function {st: zenv.ZSymbolTable ast: Ast.view nid: zast.nod
         lineno: (nodeLine :n)
         colno: (nodeCol :n)
         e: zast.err.typeError
-        msg: "a data block is declared at unit level, not in a function body"
+        msg: "a list is declared at unit level, not in a function body"
         note: String
-        hint: "declare it at unit level, `codes: data { 9 10 }`, and read it by name"
+        hint: "declare it at unit level, `codes: list { 9 10 }`, and read it by name"
         width: 4
     )
 }
@@ -58572,7 +58482,7 @@ renderConstFail: function {st: zenv.ZSymbolTable f: ztypes.constfail} is {
     }
     if f.kind.indexRange then {
         noMethodMsg = constStringAt :st id: f.strId
-        hintText = "a constant index must be below the block's length; the run-time read panics"
+        hintText = "a constant index must be below the list's length; the run-time read panics"
     }
     if noMethodMsg.length == 0 then return
     (reportConstError
@@ -61914,8 +61824,8 @@ constOfDataIndex: function {
     if kv.kind.ivalKind.not then return ztypes.noConst
     count: (st.typing.memberConstOf parentTypeId: dataTid nameId: zast.wellKnown.slot.wkLength).ival
     if (kv.bigId != 0) or (kv.ival < 0) or (kv.ival >= count) then {
-        rm: "constant index \{kv.ival} is outside the data block (length \{count})"
-        if kv.bigId != 0 then rm = "constant index is outside the data block (length \{count})"
+        rm: "constant index \{kv.ival} is outside the list (length \{count})"
+        if kv.bigId != 0 then rm = "constant index is outside the list (length \{count})"
         (constFailRecord
             :st
             kind: ztypes.constfailkind.indexRange
@@ -63336,7 +63246,7 @@ resolveDottedConstantRead: function {
             colno: dr.colno
             width: 4
             msg: "a unit-level constant takes a literal value, not a construction"
-            hint: "read the position inside a function, where it is a value of the block's index type"
+            hint: "read the position inside a function, where it is a value of the list's index type"
         )
         return
     }

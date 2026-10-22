@@ -251,7 +251,7 @@ stored in the resulting format. This table IS the surface: it is what the
 #~"intliteral" type declares (see
 [#> to=./stdlib_system.html: the system unit]), and a suffix naming anything
 else — a scalar typedef included — is refused. A literal takes a typedef only
-where the type is asked for in writing, which is a [#> to=data: data] block's
+where the type is asked for in writing, which is a [#> to=static-list: list]'s
 #~"out T".
 
 #table cols="1 2 >1":
@@ -376,8 +376,8 @@ Coercion sites currently include:
   function implicit return      | #~"f: function out u32 is { 100 }"
   reassignment RHS              | #~"a: 10.u8 ; a = 200 + 100 - 250"
   record/class field initialiser| #~"Foo count: 100"  (field #~"count: u8")
-  data-block element            | #~"bytes: data { 1.u8 2 3 }"  (every element takes the block's type)
-  untyped data-block element    | #~"want b: sizes.small"  (#~"sizes: data { small: 10 }", parameter #~"b: u8")
+  list element                  | #~"bytes: list { 1.u8 2 3 }"  (every element takes the list's type)
+  untyped list element          | #~"want b: sizes.small"  (#~"sizes: list { small: 10 }", parameter #~"b: u8")
 
 Bare-name construction (#~"Foo count: 100") is equivalent to a
 #~".create" call (#~"Foo.create count: 100") — both routes type-check
@@ -774,7 +774,7 @@ Definitions are one of:
     [#> to=variant: variant], [#> to=union: union], [#> to=facet: facet],
     [#> to=protocol: protocol]]
   [#*: constant [#> to=if-definition: if] definition]
-  [#*: [#> to=data: data]]
+  [#*: [#> to=static-list: static list]]
   [#*: typeref (aliases?)]
 
 The descriptions of the syntax for each of these are described in their
@@ -2272,20 +2272,20 @@ sequential from 0, so the arm written first carries 0 -- and writing the
 falsy arm first is therefore the least syntax that says this. It is what
 every stdlib pair does, and what the falsy-first convention is for.
 
-A type whose tag is sourced from a #~"data" block names its own values,
+A type whose tag is sourced from a #~"list" names its own values,
 and there the position says nothing at all. Such a type is a condition
 when its two discriminators #_*"are" 0 and 1 -- in either written order,
 with the arm carrying 0 as the falsy one:
 
 #code language=zerolang: """
-  flag_values: data { ON: 1 OFF: 0 }
+  flag_values: list { ON: 1 OFF: 0 }
   Flag: union { ON: null OFF: null } as { tag: flag_values.tag }
 
   f: Flag.OFF
   if f then print "on" else print "off"   # off: OFF carries 0
   """
 
-Any other set of values -- #~"data { LOW: 0  HIGH: 10 }", or one with no
+Any other set of values -- #~"list { LOW: 0  HIGH: 10 }", or one with no
 zero at all -- describes an enumeration that happens to have two
 elements, not a truth value, and is not a condition. Neither is a sum
 type with three or more arms, a numeric, a string or an aggregate. All
@@ -3143,7 +3143,7 @@ fields and methods of that instance are accessible.
 
 Ownership is determined by how the variable is created/declared or received.
 Each instance has exactly one owner at most. When the owning variable falls out
-of scope, the object is destroyed. Top level objects (ie. #~"data") never fall
+of scope, the object is destroyed. Top level objects (ie. #~"list") never fall
 out of scope.
 
 See [#> to=./ownership.html: ownership] for the full model.
@@ -3168,7 +3168,7 @@ constructor and can only be changed later with #~"swap" -- this ensures that
 both locations always contain a valid instance throughout the lifetime of the
 parent object.
 
-Aliasing is never permitted for reftypes. (A #~"data" block is no reftype: its
+Aliasing is never permitted for reftypes. (A #~"list" is no reftype: its
 name is a readonly view of one static array, which any number of names may
 share.) A reftype can
 only appear once as an argument or as a receiver in any single function call
@@ -3660,7 +3660,7 @@ things, decided by the shape of its value:
     body (#~"record {...}", #~"function ... is {...}", #~"unit as {...}").]
   [#*: a #b:"constant" -- the value is a literal numeric
     (#~"LIMIT: 64", #~"WIDTH: 8.u32"), a string literal, escapes included
-    (#~"NAME: \"zerolang\""), a data element (#~"ONE: primes.1"), or a
+    (#~"NAME: \"zerolang\""), a list element (#~"ONE: primes.1"), or a
     constant expression over them
     (#~"TOTAL: LIMIT + WIDTH", #~"FULL: NAME + \" compiler\"",
     #~"HEAD: (NAME.substring from: 0 to: 4)"). Unit constants inline their literal
@@ -4157,7 +4157,7 @@ swap, as usual.
 A predefined generic type for specifying the discriminator in [#> to=union: unions]
 and [#> to=variant: variants]. #~"tag" is a predefined identifier, not a keyword.
 
-The compiler automatically generates a #~".tag" subtype on all #~"data" types and
+The compiler automatically generates a #~".tag" subtype on every #~"list" of integers and
 all numeric types. This #~".tag" is used to specify the discriminator source in
 a union or variant's #~"as" block.
 
@@ -4165,11 +4165,11 @@ The tag specification must appear in the #~"as" block (not the #~"is" block). At
 most one #~".tag" type is allowed per union/variant. The label name in the
 #~"as" block is convention only (commonly #~"tag", but any name is valid).
 
-When a #~"data" item is used as a tag source:
+When a #~"list" is used as a tag source:
 
-- the data labels must exactly match the union/variant subtype names (one-for-one)
-- all data values must be unique
-- the data values are used as the discriminator constants
+- the list's labels must exactly match the union/variant subtype names (one-for-one)
+- all its values must be unique
+- its values are used as the discriminator constants
 
 When a numeric type's #~".tag" is used (e.g. #~"u16.tag"):
 
@@ -4200,7 +4200,7 @@ itself, #~"MyUnion.tag" returns the data instance (the discriminator's
 constant array).
 
 #code language=zerolang: """
-  priority_values: data { LOW: 0 MEDIUM: 1 HIGH: 2 CRITICAL: 10 }
+  priority_values: list { LOW: 0 MEDIUM: 1 HIGH: 2 CRITICAL: 10 }
 
   Priority: union {
       LOW: null
@@ -4679,130 +4679,136 @@ See also the built-in [#> to=generic: generic type] or a description of
 
 #----: tag (method)
 
-#~".tag" is a synthetic member on every #~"data" type and every numeric type,
+#~".tag" is a synthetic member on every #~"list" of integers and every numeric type,
 naming that type as the discriminator source for a union or variant. It is
 written in the #~"as" block and nowhere else -- see [#> to=tag: tag].
 
-#---: data
+#---: static list
 
-Creates a constant list of embedded data. A block holds one kind of element:
-all integers, all floats, or all strings -- an element of another kind than the
-first, an integer among floats included, is an error where it is written. Each
-element is any compile-time constant of that kind: a literal, a unit constant,
-an expression over them (string #~"+" too), another block's element. The
-block's name is a value: an #~"intdata t" for a block of integers, a
-#~"floatdata t" for one of floats, a #~"stringdata" for one of strings (see
-[#> to="./stdlib_collections.html#data-values": Data values]).
+#~"list { ... }" creates a static list: a constant list of embedded data. A
+list holds one kind of element: all integers, all floats, or all strings -- an
+element of another kind than the first, an integer among floats included, is an
+error where it is written. Each element is any compile-time constant of that
+kind: a literal, a unit constant, an expression over them (string #~"+" too),
+another list's element. The list's name is a value of type #~"list T", where
+#~"T" is the element type (see [#> to="./stdlib_collections.html#lists":
+Lists]). The word #~"list" is also that type wherever a type is written:
+#~"{d: list u8}", #~"out (list StringView i: nameid)".
 
-A block may be empty when its #~"out" names its value type
-(#~"data {} out stringdata"): its length is 0, its walk ends at once, and it
-has no #~".array". With no #~"out" an empty block has nothing to take a type
-from and is an error.
+A list may be empty when its #~"out" names its type (#~"list {} out list
+StringView"): its length is 0, its walk ends at once, and it has no
+#~".array". With no #~"out" an empty list has nothing to take a type from and
+is an error.
 
 Elements are stored in the order they are written: the first is at index 0,
 and each one after it at the next index. An element may carry a label, which
-names it (labels are required for #~"data" that is destined to be used as a
-#~"tag"); an integer label is a name like any other and does not move the
-element. An unlabelled element is named by its index (#~"primes.0"). Every name
-in a block is distinct -- a label that repeats another label, or the index an
-unlabelled element is named by (#~"data { 0 1 1: 3 }"), is an error.
+names it (labels are required for a list that is used as a #~"tag"); an
+integer label is a name like any other and does not move the element. An
+unlabelled element is named by its index (#~"primes.0"). Every name in a list
+is distinct -- a label that repeats another label, or the index an unlabelled
+element is named by (#~"list { 0 1 1: 3 }"), is an error.
 
-Named #~"data" elements can be reference directly elsewhere in the source and
-this is similar to refrencing a constant.
+A labelled element can be referenced directly elsewhere in the source, as a
+constant is.
 
-A block's optional #~"out" names its VALUE type -- #~"out intdata u8",
-#~"out floatdata f32", #~"out stringdata" -- or an instance that also names
-the type its elements are indexed by, #~"out (intdata u8 i: byteid)" or
-#~"out (stringdata i: nameid)". The block's element type is the value
-type's, and any per-element type tag (#~"name: 0.T") must agree with it;
-without an #~"out" the tags alone name it, and must agree with each other.
-A value type that leaves its element out -- #~"out intdata", or one that
-writes the literal type, #~"out (intdata intliteral)" -- names none, and
-neither does a block with no #~"out" and no tag. A number in a
-#~"stringdata" block is an error, as is a string in a block of numbers. An
-interpolated string builds its value at run time, so it is no element.
+A list's optional #~"out" names the list's type -- #~"out list u8",
+#~"out list f32", #~"out list StringView" -- or an instance that also names
+the type its elements are indexed by, #~"out (list u8 i: byteid)" or
+#~"out (list StringView i: nameid)". The list's element type is that type's,
+and any per-element type tag (#~"name: 0.T") must agree with it; without an
+#~"out" the tags alone name it, and must agree with each other. An #~"out"
+that leaves its element out -- #~"out list", or one that writes the literal
+type, #~"out (list intliteral)" -- names none, and neither does a list with no
+#~"out" and no tag. A number in a list of #~"StringView" is an error, as is a
+string in a list of numbers. An interpolated string builds its value at run
+time, so it is no element.
 
-A block whose element type is named -- by its #~"out", or by a tagged element
+A list whose element type is named -- by its #~"out", or by a tagged element
 -- reads every element at that type, whether or not the element wrote a tag
-of its own: #~"mydata.cNul" reads at the block's type at every access, and
-converts as a typed numeric literal does anywhere else. A block that names
+of its own: #~"mydata.cNul" reads at the list's type at every access, and
+converts as a typed numeric literal does anywhere else. A list that names
 no element type reads its elements UNTYPED, as a unit constant reads:
 #~"sizes.small" lands in whatever numeric type takes it, checked by its
-value. Only what reaches run time -- the block's value, a run-time
-#~".get", a walk -- materialises, as a literal does: an untyped block's
-value is an #~"intdata i64" or a #~"floatdata f64", indexed by #~"u64", and
-the emitted program never holds an untyped element. One block is one static
-array, so an untyped block is not an #~"intdata u8": a parameter that asks
+value. Only what reaches run time -- the list's value, a run-time
+#~".get", a walk -- materialises, as a literal does: an untyped list's
+value is a #~"list i64" or a #~"list f64", indexed by #~"u64", and
+the emitted program never holds an untyped element. One list is one static
+array, so an untyped list is not a #~"list u8": a parameter that asks
 for one is refused it.
 
-A value the chosen type cannot hold — #~"data { 300 } out intdata u8", or a
-negative element in an unsigned block — is an error at the #~"data"
+A value the chosen type cannot hold — #~"list { 300 } out list u8", or a
+negative element in an unsigned list — is an error at the list's
 declaration, reported against the element that does not fit. The check
 happens where the value is written rather than where it is read, because
-a data block has no other place that sees every element at once.
+a list has no other place that sees every element at once.
 
-A #~"data" block has the members its value type declares -- #~"length",
-#~"index", #~"iterate" and #~"slot" on every block, #~"array" on a block of
-numbers, and #~"tag", the discriminator for a tagged type (see below), on a
-block of integers:
+A list has the members its type declares -- #~"length", #~"get",
+#~"iterate" and #~"slot" on every list, #~"array" on a list of numbers, and
+#~"tag", the discriminator for a tagged type (see below), on a list of
+integers:
 
 #ul:
-  [#*: #~"tag" -- the block's discriminator, for a tagged type (see below)]
+  [#*: #~"tag" -- the list's discriminator, for a tagged type (see below)]
   [#*: #~"length" -- its element count, a constant]
-  [#*: #~"get" -- #~".get i: k", the element at index #~"k", of the block's
+  [#*: #~"get" -- #~".get i: k", the element at index #~"k", of the list's
     index type (#~"u64" when it names none)]
   [#*: #~"slot" -- #~"blk.slot.label", the POSITION of a labelled element, of
-    the block's index type, or untyped when it names none. A vocabulary held as
-    one block reads each entry's position by its label
-    (#~"names.slot.wkThis"); an unlabelled element has no slot, and a block
+    the list's index type, or untyped when it names none. A vocabulary held as
+    one list reads each entry's position by its label
+    (#~"names.slot.wkThis"); an unlabelled element has no slot, and a list
     with no label has no #~"slot" at all]
   [#*: #~"iterate" -- the walk over the elements, first to last]
-  [#*: #~"array" -- #~".array", a copy of the block into a sized array]
+  [#*: #~"array" -- #~".array", a copy of the list into a sized array]
 
-An element is a member of the block too, so it may not take one of these
-names: a second definition of a name the block already has is refused
+An element is a member of the list too, so it may not take one of these
+names: a second definition of a name the list already has is refused
 where the element is written, naming the member it would collide with.
 
-The block's element type also determines the element width of the runtime array
-a data block is emitted as, when it is indexed by a variable or iterated. An
-untyped block's array holds the #~"i64" or #~"f64" its elements materialise
+The list's element type also determines the element width of the runtime array
+a list is emitted as, when it is indexed by a variable or iterated. An
+untyped list's array holds the #~"i64" or #~"f64" its elements materialise
 to; see
 [#> to=./representation_of_types.html: representation_of_types] for the layout.
 
 String literal fragments are built on top of a u8 data sequence.
 
-Through the block's name, its elements (#~"primes.0", #~"codes.ht"), its
+Through the list's name, its elements (#~"primes.0", #~"codes.ht"), its
 #~".length" and #~".get K" with a constant #~"K" are constants -- in a body
 and in a unit-level definition alike (#~"COUNT: primes.length") -- and a
 program that reads only those carries no array at all. A constant #~"K" out of
 range is a compile error. A run-time #~".get i", #~".array" (a copy into a
-sized array) and the block used as a value put its array into the program.
+sized array) and the list used as a value put its array into the program.
 
 The name is a value: bound (#~"w: primes"), passed, returned, held in a field
 or walked (#~"for each p: primes"), it is a view of the static array --
 its length and a pointer at it -- which binding copies and which takes no lock,
 since static memory can be neither written nor freed. Through a value,
-#~"index" reads at run time and panics out of range, and #~"length" and
-#~"iterate" read the view; #~".array", #~".tag" and #~".slot" are the block's,
-reached through its name only. Written alone as a statement the name does nothing and
-is #~"E0100", and an ownership marker on the block or on an element, which
-names no storage, is #~"E0100" too.
+#~"get" reads at run time and panics out of range, and #~"length" and
+#~"iterate" read the view; #~".array", #~".tag" and #~".slot" are the list's,
+reached through its name only. Written alone as a statement the name does
+nothing and is #~"E0100", and an ownership marker on the list or on an
+element, which names no storage, is #~"E0100" too. A list is declared at unit
+level (or in an #~"as" block); one written inside a function body is
+#~"E0100".
+
+#~"data" is a reserved word: #~"data { ... }" is refused (#~"E0033"), and the
+error says to write #~"list { ... }".
 
 #code language=zerolang: """
-  # untyped elements; as a value, an intdata i64
-  mydata_i64: data { 1 2 0x07 }
+  # untyped elements; as a value, a list i64
+  mydata_i64: list { 1 2 0x07 }
 
-  # array of u8 via `out intdata u8` — every element is u8, no per-element tag
-  mydata_u8: data { 0 64 250 } out intdata u8
+  # array of u8 via `out list u8` — every element is u8, no per-element tag
+  mydata_u8: list { 0 64 250 } out list u8
 
-  # array of u8 via a per-element type tag — same result as `out intdata u8`
-  mydata_u8b: data { 1.u8 2 0x07 }
+  # array of u8 via a per-element type tag — same result as `out list u8`
+  mydata_u8b: list { 1.u8 2 0x07 }
 
   # an integer label names its element: length 3, and `mydata_lbl.4` is 4
-  mydata_lbl: data { 1 2 4: 4 }
+  mydata_lbl: list { 1 2 4: 4 }
 
   # an array with text keys
-  mydata_key: data { FIRST: 1 SECOND: 2 THIRD: 3 }
+  mydata_key: list { FIRST: 1 SECOND: 2 THIRD: 3 }
 
   # which can be used as a tag in a sum-type, using these values for
   #  the descriminator
@@ -4814,9 +4820,9 @@ names no storage, is #~"E0100" too.
       tag: mydata_key.tag
   }
 
-  # elements read at the block's own type, so a block whose values are
+  # elements read at the list's own type, so a list whose values are
   # bytes says so once and reaches a u8 parameter directly
-  mydata_byte: data { FIRST: 1 SECOND: 2 } out intdata u8
+  mydata_byte: list { FIRST: 1 SECOND: 2 } out list u8
   take_u8: function {b: u8} out u8 is { return b }
   result: take_u8 b: mydata_byte.FIRST
 
@@ -4826,7 +4832,7 @@ names no storage, is #~"E0100" too.
   # a vocabulary of strings indexed by its own id type: `words.slot.lf` is
   # the id 1, and `words.get i: words.slot.lf` is "line feed"
   wordid: typedef u64
-  words: data { ht: "tab" lf: "line feed" } out (stringdata i: wordid)
+  words: list { ht: "tab" lf: "line feed" } out (list StringView i: wordid)
   """
 
 #---: array
@@ -4860,8 +4866,8 @@ the number of elements.
   with v: a.listView do print "\{v.length}"    # (ListViewVal t: i64)
   w: a.spanSlice from: 1 to: 3                  # (SpanVal t: i64), [1, 3)
 
-  # copy from data
-  primes: data { 2 3 5 7 11 }
+  # copy from a list
+  primes: list { 2 3 5 7 11 }
   pa: primes.array   # creates array of: i64 to: 5 with data copied in
   """
 
@@ -5859,7 +5865,7 @@ same walk and emit the same code. A #~"create" the type writes -- with a body,
 or native -- is called as the function it is, its parameters' ownership
 included; the synthesised one takes each field as the field declares it.
 
-The implicit construction rule does not apply inside a #~"data" clause
+The implicit construction rule does not apply inside a list's #~"out" clause
 or as a generic parameter (both of which are type references, not
 runtime expressions).
 
@@ -5899,7 +5905,7 @@ same construction.
 Declaration contexts are unchanged. A record or class field
 #~"label: String" and a function parameter #~"{s: String}" remain type
 annotations -- the field or parameter is required and carries no
-default -- and #~"data" clauses and generic type arguments remain type
+default -- and a list's #~"out" clause and generic type arguments remain type
 references. A unit-level binding is also unaffected: unit constants
 take literal values. Only runtime expressions construct. Likewise, an
 atom must #_*"name the type" to construct: a value alias typed as the
@@ -6400,7 +6406,7 @@ type name there is a compile error.)
     (#~"0.u32"). Field / parameter type is the inferred numeric
     type.]
   [#*: #_b:"String" -- a string literal (#~"msg: \"hi\""), a unit string
-    constant (#~"s: GREETING"), or a data block's string element
+    constant (#~"s: GREETING"), or a list's string element
     (#~"verb: verbs.run"): anything that folds to a string. The member is a
     #~"StringView" of the string's static bytes, re-emitted wherever it is left
     out, so it costs what a number does. An interpolated string and an owned
@@ -7123,7 +7129,7 @@ Creating/setting a union value:
   v4: MyUnion2.t5 myclassi.take        # .take transfers ownership
   v5: MyUnion2.t5 (MyClass a: 1 b: 2)  # anonymous instance, no .take needed
 
-  myenum_vals: data { a: 0 b: 1 }
+  myenum_vals: list { a: 0 b: 1 }
 
   myvariant: variant {
       a: u32

@@ -1223,7 +1223,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2310913
+ALLOC_BASELINE := 2307872
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -2185,8 +2185,8 @@ VIEW_GUARD_EMITTED := get:ListRef.get,ListView.get,SpanVal.get getMut:ListRef.ge
   slice:ListRef.slice,ListView.slice \
   contains:ListRef.contains \
   listView:ListRef.listView sort:ListRef.sort \
-  iterate:ListRef.iterate,ListView.iterate,intdata.iterate,floatdata.iterate,staticlist.iterate \
-  index:intdata.get,floatdata.get,staticlist.get \
+  iterate:ListRef.iterate,ListView.iterate,staticlist.iterate \
+  index:staticlist.get \
   iterateReverse:ListRef.iterateReverse,ListView.iterateReverse \
   call:ListIter.call,ListIterVal.call,ListIterMut.call,ListIterMutVal.call,StaticIter.call \
   iterateMut:ListRef.iterateMut getv:MapRR.get eq:- \
@@ -2289,8 +2289,6 @@ VIEW_GUARD_INLINE := Bytes.byteView:unemitted \
   str.stringView:inline str.substring:inline \
   optionval.or:byvalue resultval.orPanic:byvalue resultval.or:byvalue \
   intliteral.*:byvalue floatliteral.*:byvalue *.iterate:byvalue *.times:byvalue \
-  intdata.length:inline intdata.array:inline intdata.tag:inline intdata.slot:inline \
-  floatdata.length:inline floatdata.array:inline floatdata.slot:inline stringdata.*:inline \
   staticlist.length:inline staticlist.array:inline staticlist.tag:inline staticlist.slot:inline
 
 define VIEW_GUARD_AWK

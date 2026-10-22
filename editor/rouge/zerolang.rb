@@ -95,13 +95,13 @@ module Rouge
           Text TextReader Writer _ anyfloat anyint anyval array
           bool break c32 c8 continue
           converror copy dataindex error f128 f16
-          f32 f64 false floatdata floatliteral
+          f32 f64 false floatliteral
           i128 i16 i32 i64 i8
-          idkey intdata intliteral intrange iterator meta
+          idkey intliteral intrange iterator meta
           never
           null openmode optionval panic parseerror print staticmember
           public resultval return seekorigin stderr
-          stdin stdout str stringJoin stringdata tag
+          stdin stdout str stringJoin tag
           this true u128 u16
           u32 u64 u8 valhashable yield
         )

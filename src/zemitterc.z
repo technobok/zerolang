@@ -3860,9 +3860,6 @@ family: list {
     optionMut: "OptionMut"
     optionMutVal: "OptionMutVal"
     staticView: "StaticView"
-    intData: "intdata"
-    floatData: "floatdata"
-    stringData: "stringdata"
     # the static list template, which the keyword names
     staticList: "list"
 } out list StringView
@@ -15669,17 +15666,10 @@ ownerIsCollectionFamily: function {ctx: Ctx.view fam: ztypes.tid} out bool is {
     )
 }
 
-# isDataValueFamily -- is `fam` the template of a data block's value: intdata,
-# floatdata, stringdata (which has no element parameter, so is its own value
-# type) or a list?
+# isDataValueFamily -- is `fam` the template of a static list's value?
 isDataValueFamily: function {ctx: Ctx.view fam: ztypes.tid} out bool is {
     if fam.isZero then return false
-    return (
-        (fam == (ctx.origins.get i: family.slot.intData)) or
-        (fam == (ctx.origins.get i: family.slot.floatData)) or
-        (fam == (ctx.origins.get i: family.slot.stringData)) or
-        (fam == (ctx.origins.get i: family.slot.staticList))
-    )
+    return fam == (ctx.origins.get i: family.slot.staticList)
 }
 
 # dataValueFamilyOf -- the data value family type `tid` belongs to: its origin,
@@ -37148,12 +37138,12 @@ emitListViewMono: function {
     emitListIter :ast :ctx :symtab :monoId nm: nm.stringView ect: ect.stringView :buf
 }
 
-# emitDataMono -- a data value mono (`intdata u8`): z_data.c.tmpl's view struct
-# -- a length and a pointer at the block's static const array -- and each
+# emitDataMono -- a static list's value mono (`list u8`): z_data.c.tmpl's view
+# struct -- a length and a pointer at the list's static const array -- and each
 # member a use site reached: `index`, the bounds-checked read, and `iterate`,
-# which hands the window to the list cursor. The cursor's `data` is a plain
-# pointer shared with walks that write, so the const is dropped there; the
-# typechecker is what keeps a data walk readonly.
+# which hands the window to the cursor. The cursor's `data` is a plain pointer
+# shared with walks that write, so the const is dropped there; the typechecker
+# is what keeps a list walk readonly.
 emitDataMono: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -37163,14 +37153,9 @@ emitDataMono: function {
     buf: String.borrow
 } is {
     nm: cbaseNoPrefix :ctx tid: monoId
-    ect: "\{ctx.svC}_t"
-    if (
-        (dataValueFamilyOf :symtab :ctx tid: monoId) != (ctx.origins.get i: family.slot.stringData)
-    ) then {
-        eid: symtab.reg.genericTypeArgAt specId: monoId ordinal: 0
-        ect0: slotCType :ast :symtab :ctx tid: eid
-        ect = ctypeOrI64 s: ect0.stringView
-    }
+    eid: symtab.reg.genericTypeArgAt specId: monoId ordinal: 0
+    ect0: slotCType :ast :symtab :ctx tid: eid
+    ect: ctypeOrI64 s: ect0.stringView
     p: "\{runtimeDir}/z_data.c.tmpl"
     raw: readTemplateCached :ctx path: p.stringView
     if raw.length > 0 then {
@@ -37184,7 +37169,7 @@ emitDataMono: function {
         buf.append "static \{ect} z_\{nm}_index(z_\{nm}_t _this, uint64_t _idx) {\n"
         buf.append "    if (_idx >= _this.length) {\n"
         buf.append "        char _zp_buf[96];\n"
-        b2: "        snprintf(_zp_buf, sizeof(_zp_buf), \"data index: index %llu out of bounds (length %llu)\", (unsigned long long)_idx, (unsigned long long)_this.length);\n"
+        b2: "        snprintf(_zp_buf, sizeof(_zp_buf), \"list index: index %llu out of bounds (length %llu)\", (unsigned long long)_idx, (unsigned long long)_this.length);\n"
         buf.append b2
         buf.append "        z_panic(_zp_buf);\n"
         buf.append "    }\n"
@@ -45591,7 +45576,7 @@ unitMemberTid: function {
     return ((symtab.typing.declChildOfId parentTypeId: owner :nameId).or d: ztypes.tid.zero)
 }
 
-# emitDataBlock -- `name: data { e0 e1 ... } out intdata T`: a static const
+# emitDataBlock -- `name: list { e0 e1 ... } out list T`: a static const
 # array z_{name}[], with the element C type T (i64 when untyped), and its reader
 # z_{name}_at, which panics on an index past the end (a negative i64 converts
 # to a huge u64). Emitted only when the block is read at runtime (`.get` /
@@ -45655,7 +45640,7 @@ emitDataBlockFor: function {
             buf.append "static \{ect} \{dsym}_at(uint64_t _idx) {\n"
             buf.append "    if (_idx >= \{cnt}) {\n"
             buf.append "        char _zp_buf[96];\n"
-            b2: "        snprintf(_zp_buf, sizeof(_zp_buf), \"data index: index %llu out of bounds (length \{cnt})\", (unsigned long long)_idx);\n"
+            b2: "        snprintf(_zp_buf, sizeof(_zp_buf), \"list index: index %llu out of bounds (length \{cnt})\", (unsigned long long)_idx);\n"
             buf.append b2
             buf.append "        z_panic(_zp_buf);\n"
             buf.append "    }\n"

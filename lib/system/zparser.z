@@ -590,7 +590,7 @@ Parser: class {
         kw: lex.acceptAny pool: this.ast.names
         tt: lex.peekType
         if (tt == zlexer.toktype.isTok) or (tt == zlexer.toktype.braceOpenTok) then {
-            return (this.dataBlockBody :lex :startPos isList: true)
+            return (this.listBody :lex :startPos)
         }
         return (astnode.atomid (zast.atomidrow
             nodeid: this.nextId
@@ -2672,28 +2672,29 @@ Parser: class {
         return (optionval.some (this.reservedLabelError :lex))
     }
 
-    # dataBlockWithOut -- the data block itself, carrying the `out` type when one
-    # follows the body. The elements are spanned here because both answers need
-    # the span and neither needs the list afterwards. An empty block has no
+    # listWithOut -- the list itself, carrying the `out` type when one follows
+    # the body. The elements are spanned here because both answers need the
+    # span and neither needs the element ids afterwards. An empty list has no
     # element to take its type from, so it must write `out`.
-    dataBlockWithOut: function {
+    listWithOut: function {
         :this
         lex: zlexer.Lexer
         elements: ListVal zast.nodeid
         dLine: u32
         dCol: u32
-        # where the definition starts, for the empty-block report
+        # where the definition starts, for the empty-list report
         startPos: zlexer.tokpos
-        isList: bool
     } out astnode is {
         outOpt: lex.accept tt: zlexer.toktype.outTok pool: this.ast.names
         match (
             outOpt
         ) case none then {
             if elements.length == 0 then {
-                msg: "an empty data block must name its value type: `data {} out intdata u8`".string
-                if isList then msg = "an empty list must name its type: `list {} out list u8`"
-                return (this.mkErrorAt pos: startPos code: zast.err.badData :msg)
+                return (this.mkErrorAt
+                    pos: startPos
+                    code: zast.err.badData
+                    msg: "an empty list must name its type: `list {} out list u8`"
+                )
             }
             eSpan: zast.kidsAdd kids: this.ast.kids xs: elements
             return (astnode.datablock (zast.datablockrow
@@ -2702,7 +2703,6 @@ Parser: class {
                 colno: dCol
                 elements: eSpan
                 outType: zast.nodeid
-                :isList
             )
             )
         } case some then null
@@ -2715,9 +2715,9 @@ Parser: class {
                 msg: "Expected type reference after out"
             )
         }
-        # the block's value type, written as a function's `out` type is: a
-        # path (`stringdata`) or an application (`intdata u8`, `(stringdata
-        # i: nameid)`)
+        # the list's type, written as a function's `out` type is: the bare
+        # keyword (`list`) or an application (`list u8`, `(list StringView i:
+        # nameid)`)
         typeNode: this.parseTyperefOperation :lex
         tErr: Parser.isError node: typeNode
         if tErr then return typeNode
@@ -2728,36 +2728,35 @@ Parser: class {
             colno: dCol
             elements: eSpan
             outType: (this.intern n: typeNode)
-            :isList
         )
         )
     }
 
-    # data-definition -> "data" ["is"] "{" { [label] term | label-value } "}"
+    # refuseDataDefinition -- `data` is a reserved declarator, refused where a
+    # definition or an expression starts. A body written after it, `data { 1 2
+    # }`, is read and dropped, so the one mistake is one error.
+    refuseDataDefinition: function {:this lex: zlexer.Lexer} out astnode is {
+        startPos: lex.peekPos
+        lex.accept tt: zlexer.toktype.dataTok pool: this.ast.names
+        tt: lex.peekType
+        if (tt == zlexer.toktype.isTok) or (tt == zlexer.toktype.braceOpenTok) then {
+            body: this.listBody :lex :startPos
+            if (Parser.isError node: body) then return body
+        }
+        return (this.mkErrorAt
+            pos: startPos
+            code: zast.err.reservedName
+            msg: "'data' is a reserved word: a static list is written `list { ... }`"
+        )
+    }
+
+    # list-definition -> "list" ["is"] "{" { [label] term | label-value } "}"
     # ["out" type]. Elements are single terms (paths): a LABEL names the
     # element, a LABELPRE is a label-value, bare terms are positional.
     # Duplicate member names are rejected here (the typechecker does not
-    # re-check). The optional "out" pins the element type.
-    acceptDataDefinition: function {:this lex: zlexer.Lexer} out astnode is {
-        startPos: lex.peekPos
-        dOpt: lex.accept tt: zlexer.toktype.dataTok pool: this.ast.names
-        match (
-            dOpt
-        ) case none then {
-            return (this.mkErrorAt
-                pos: startPos
-                code: zast.err.badExpression
-                msg: "Expected data"
-            )
-        } case some then null
-        return (this.dataBlockBody :lex :startPos isList: false)
-    }
-
-    # dataBlockBody -- a data or list definition after its keyword: `["is"] "{"
-    # elements "}" ["out" type]`. `startPos` is the keyword's.
-    dataBlockBody: function {
-        :this lex: zlexer.Lexer startPos: zlexer.tokpos isList: bool
-    } out astnode is {
+    # re-check). The optional "out" names the list's type. listBody reads it
+    # after its keyword; `startPos` is the keyword's.
+    listBody: function {:this lex: zlexer.Lexer startPos: zlexer.tokpos} out astnode is {
         dLine: startPos.lineno
         dCol: startPos.colno
         lex.accept tt: zlexer.toktype.isTok pool: this.ast.names
@@ -2769,7 +2768,7 @@ Parser: class {
             return (this.mkError
                 tok: bad
                 code: zast.err.badData
-                msg: "Expected opening brace for data body"
+                msg: "Expected opening brace for list body"
             )
         } case some then null
         elements: ListVal zast.nodeid
@@ -2784,10 +2783,10 @@ Parser: class {
             return (this.mkError
                 tok: bad
                 code: zast.err.badData
-                msg: "Expected closing brace for data body"
+                msg: "Expected closing brace for list body"
             )
         } case some then null
-        return (this.dataBlockWithOut :lex :elements :dLine :dCol :startPos :isList)
+        return (this.listWithOut :lex :elements :dLine :dCol :startPos)
     }
 
     # Build a reassignment from an already-parsed LHS path list (the `=`
@@ -3605,7 +3604,7 @@ Parser: class {
         } case matchTok then {
             return (this.acceptMatchExpression :lex)
         } case dataTok then {
-            return (this.acceptDataDefinition :lex)
+            return (this.refuseDataDefinition :lex)
         } else {
             pbase: this.operationPaths :lex
             n: this.pathCount base: pbase
@@ -4056,7 +4055,7 @@ Parser: class {
         } case matchTok then {
             return (this.acceptMatchExpression :lex)
         } case dataTok then {
-            return (this.acceptDataDefinition :lex)
+            return (this.refuseDataDefinition :lex)
         } case withTok then {
             return (this.acceptWithExpression :lex)
         } case braceOpenTok then {

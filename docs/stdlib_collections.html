@@ -89,7 +89,7 @@ Table of Contents</div>
 </li>
 <li><a href="#str">str</a>
 </li>
-<li><a href="#data-values">Data values</a>
+<li><a href="#lists">Lists</a>
 </li>
 <li><a href="#the-list-family">The List family</a>
 </li>
@@ -200,9 +200,7 @@ see <a href="./ownership.html">ownership</a>.</p>
 <ul>
 <li><a href="#array"><strong>array</strong></a> -- <code>record is native as { t: anyval.generic  to: u64.generic }</code></li>
 <li><a href="#str"><strong>str</strong></a> -- <code>record is native as { :Text  to: u64.generic ... }</code></li>
-<li><a href="#data-values"><strong>intdata</strong></a> -- <code>record is native as { t: (anyint.generic default: intliteral) i: (dataindex.generic default: intliteral) }</code>, the value a data block of integers names</li>
-<li><a href="#data-values"><strong>floatdata</strong></a> -- <code>record is native as { t: (anyfloat.generic default: floatliteral) i: (dataindex.generic default: intliteral) }</code>, the value a data block of floats names</li>
-<li><a href="#data-values"><strong>stringdata</strong></a> -- <code>record is native as { i: (dataindex.generic default: intliteral) }</code>, the value a data block of strings names</li>
+<li><a href="#lists"><strong>list</strong></a> -- <code>record is native as { t: staticmember.generic i: (dataindex.generic default: intliteral) }</code>, the value a static list names</li>
 </ul>
 <p><strong>List family</strong></p>
 <ul>
@@ -269,8 +267,8 @@ constant or an expression of constants (<code>to: N * 2</code>,
 <pre><code class="language-zerolang">  # Zero-initialised array of 8 i64s
   a: array t: i64 to: 8
 
-  # Initialise from a data block (one entry per element)
-  block_of_ten: data { 0 1 2 3 4 5 6 7 8 9 }
+  # Initialise from a list (one entry per element)
+  block_of_ten: list { 0 1 2 3 4 5 6 7 8 9 }
   b: block_of_ten.array  # array t: i64 to: 10</code></pre>
 <p><strong>Indexing.</strong></p>
 <ul>
@@ -310,43 +308,45 @@ literal; <code>.string</code> copies out to a heap <code>String</code>;
 <code>to:</code> is a runtime error, not a silent truncation.</p>
 <p>Since <code>str</code> is a valtype it is copied on assignment; the
 copy is a plain byte copy of the inline buffer.</p>
-<h2 id="data-values"><a href="#data-values">5. Data values</a></h2>
-<p>The name of a <code>data</code> block is a value of one of three types, and
-the block's <code>out</code> names which: <code>intdata t</code> for a block of integers,
-<code>floatdata t</code> for one of floats, and <code>stringdata</code> for one of
-strings (<code>verbs: data { "build" "run" } out stringdata</code>). <code>t</code>
-is the block's element type -- any integer type for <code>intdata</code>
-(<code>anyint</code>), any float type for <code>floatdata</code> (<code>anyfloat</code>), or a
-typedef over one. <code>i</code>, the type the block is indexed by, is an id key
--- an unsigned integer type or a typedef over one (<code>dataindex</code>) --
-written <code>(intdata u8 i: byteid)</code>.</p>
+<h2 id="lists"><a href="#lists">5. Lists</a></h2>
+<p>The name of a <code>list</code> is a value of type <code>list t</code>, and the list's <code>out</code>
+names it: <code>(list u8)</code> for a list of bytes, <code>(list StringView)</code> for one of
+strings (<code>verbs: list { "build" "run" } out list StringView</code>).
+<code>t</code> is the list's element type -- any number type, a typedef over one, or
+<code>StringView</code> (the bound <code>staticmember</code>). <code>i</code>, the type the list is
+indexed by, is an id key -- an unsigned integer type or a typedef over one
+(<code>dataindex</code>) -- written <code>(list u8 i: byteid)</code>. The word <code>list</code> is
+the type; the template behind it is <code>collections.staticlist</code>.</p>
 <p>Either may be left out, or written as the literal type: then it is
-UNTYPED. A block with untyped elements reads them as literals through
+UNTYPED. A list with untyped elements reads them as literals through
 its name, and with an untyped index reads its <code>slot</code> positions as
-literals; a block with no <code>out</code> is untyped in both. As a run-time
+literals; a list with no <code>out</code> is untyped in both. As a run-time
 value the literal arguments materialise, as a literal does: an untyped
-element is an <code>i64</code> (a <code>floatdata</code>'s an <code>f64</code>) and an untyped
-index a <code>u64</code>, so the value of <code>data { 2 3 5 }</code> is an
-<code>intdata i64</code>, and the emitted program holds no literal type.</p>
-<p>A data value is a static readonly view: the block's length and a
+element is an <code>i64</code> (an untyped float an <code>f64</code>) and an untyped
+index a <code>u64</code>, so the value of <code>list { 2 3 5 }</code> is a
+<code>list i64</code>, and the emitted program holds no literal type.</p>
+<p>A list value is a static readonly view: the list's length and a
 pointer at its elements, which the program carries as a constant
 array. Nothing is freed and no lock or pin is taken -- static memory
 can be neither written nor freed -- and binding one copies it.</p>
 <ul>
-<li><code>index i: i</code> -- the element at <code>i</code>. Out of bounds
-panics. Through the block's name a constant <code>i</code> folds to the
+<li><code>get i: i</code> -- the element at <code>i</code>. Out of bounds
+panics. Through the list's name a constant <code>i</code> folds to the
 element, and one out of bounds is a compile error</li>
-<li><code>length</code> -- how many elements the block holds</li>
-<li><code>iterate</code> -- the walk over the elements, first to last</li>
-<li><code>array</code> (<code>intdata</code>, <code>floatdata</code>) -- a copy into a sized
-array, through the block's name only: the count is the block's</li>
-<li><code>tag</code> (<code>intdata</code>) -- the block as a tagged type's
+<li><code>length</code> -- how many elements the list holds</li>
+<li><code>iterate</code> -- the walk over the elements, first to last: a
+<code>StaticIter</code>, whose <code>call</code> yields a <code>StaticView</code> of each element.
+One walk serves every element type, numbers and strings alike, and it
+takes no lock</li>
+<li><code>array</code> (a list of numbers) -- a copy into a sized array, through
+the list's name only: the count is the list's</li>
+<li><code>tag</code> (a list of integers) -- the list as a tagged type's
 discriminator source, written in its <code>as</code> block</li>
 <li><code>slot</code> -- <code>blk.slot.label</code>, the position of a labelled
-element, typed <code>i</code>: through the block's name only</li>
+element, typed <code>i</code>: through the list's name only</li>
 </ul>
-<p>There is no projection to a list: build one where it is wanted.</p>
-<pre><code class="language-zerolang">  verbs: data { "build" "run" "emit" } out stringdata
+<p>There is no projection to a <code>List</code>: build one where it is wanted.</p>
+<pre><code class="language-zerolang">  verbs: list { "build" "run" "emit" } out list StringView
 
   names: List String
   for each v: verbs loop names.append v.string</code></pre>

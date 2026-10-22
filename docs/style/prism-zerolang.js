@@ -67,7 +67,7 @@
         'f16', 'f32', 'f64', 'f128', 'c8', 'c32', 'bool',
         'String', 'StringView', 'Text', 'StringLike', 'AnyRef', 'anyval', 'RefHashable', 'valhashable', 'Drop',
         'Option', 'optionval', 'OptionView', 'OptionViewVal', 'OptionMut', 'OptionMutVal', 'Result', 'ResultVR', 'ResultRV', 'resultval', 'converror', 'Box', 'intrange',
-        'array', 'str', 'List', 'ListRef', 'ListVal', 'ListView', 'ListViewVal', 'ListIter', 'ListIterVal', 'ListIterMut', 'ListIterMutVal', 'StaticIter', 'StaticView', 'SpanVal', 'SpanPair', 'intdata', 'floatdata', 'stringdata', 'Set', 'SetRef', 'SetVal', 'SetIter', 'SetIterVal', 'Bytes', 'ByteView',
+        'array', 'str', 'List', 'ListRef', 'ListVal', 'ListView', 'ListViewVal', 'ListIter', 'ListIterVal', 'ListIterMut', 'ListIterMutVal', 'StaticIter', 'StaticView', 'SpanVal', 'SpanPair', 'Set', 'SetRef', 'SetVal', 'SetIter', 'SetIterVal', 'Bytes', 'ByteView',
         'IdMapR', 'IdMapV', 'IdMapEntryR', 'IdMapEntryV', 'IdMapItemIterR', 'IdMapItemIterV', 'IdSet', 'IdSetIter',
         'CpIter', 'LinesIter', 'Splitter', 'TextReader', 'intliteral', 'floatliteral', 'idkey', 'anyint', 'anyfloat', 'dataindex', 'staticmember', 'parseerror',
         'Map', 'MapRR', 'MapRV', 'MapVR', 'MapVV', 'MapKeyIter', 'MapItemIter', 'MapEntry', 'MapKeyIterRV', 'MapKeyIterVR', 'MapKeyIterVV', 'MapItemIterRV', 'MapItemIterVR', 'MapItemIterVV', 'MapEntryRV', 'MapEntryVR', 'MapEntryVV',
