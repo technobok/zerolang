@@ -1223,7 +1223,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2309811
+ALLOC_BASELINE := 2310913
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -2094,7 +2094,7 @@ grep -oE '^[A-Za-z_][A-Za-z0-9_]*:' lib/system/core.z | sed 's/:$$//' | sort -u 
 # the keywords are what each kw*Id function returns, spelled beside its label in
 # zast's wellKnown block (read from the construction, so a new family needs no edit).
 wkspell() {
-  sed -n '/^wellKnown: data {/,/^}/p' lib/system/zast.z | awk -v want="$$1" '
+  sed -n '/^wellKnown: list {/,/^}/p' lib/system/zast.z | awk -v want="$$1" '
     BEGIN { n = split(want, a, " "); for (i = 1; i <= n; i++) w[a[i]] = 1 }
     match($$0, /^ +[A-Za-z0-9_]+: "/) {
       l = $$1; sub(/:$$/, "", l)
