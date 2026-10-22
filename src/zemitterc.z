@@ -7946,21 +7946,17 @@ closeInPlace: function {ctx: Ctx mark: hoistmark} is {
 }
 
 # appendInPlaceCond -- end the condition begun at `mark` and append it: its
-# text, or that text running its own hoists (wrapInPlace). `declared` says the
-# caller declares the pending hoists ahead of its construct.
+# text, or that text assigning and releasing its own hoists (assignInPlaceTest).
+# Every caller declares the pending hoists ahead of its construct: a loop's
+# header or its arm break, a do-while ahead of `do {`, an `if` clause's head.
 appendInPlaceCond: function {
     ctx: Ctx
     mark: hoistmark
     text: StringView
     dst: String.borrow
-    declared: false
 } is {
     if (hoistsGrew :ctx :mark) then {
-        if declared then {
-            dst.append (assignInPlaceTest :ctx :mark cond: text)
-        } else {
-            dst.append (wrapInPlace :ctx :mark cond: text)
-        }
+        dst.append (assignInPlaceTest :ctx :mark cond: text)
         return
     }
     closeInPlace :ctx :mark
@@ -8049,10 +8045,11 @@ assignInPlaceTest: function {ctx: Ctx mark: hoistmark cond: StringView} out Stri
     return r
 }
 
-# wrapInPlace -- end what openInPlace began, for a condition that recorded
-# hoists: they run where the condition is evaluated -- past a short circuit, at
-# every loop test -- as a statement expression that declares them, computes the
-# test, releases what they owed and yields the test.
+# wrapInPlace -- end what openInPlace began, for a condition that recorded a
+# raw hoist (a statement no expression can hold): the hoists run where the
+# condition is evaluated -- past a short circuit, at every loop test -- as a
+# statement expression that declares them, computes the test, releases what
+# they owed and yields the test.
 wrapInPlace: function {ctx: Ctx mark: hoistmark cond: StringView} out String is {
     ltmp: TmpCtr n: 0 frees: List OwedFree listFrees: List OwedFree
     ccN: tmpNext :ctx tmp: ltmp
@@ -24617,19 +24614,22 @@ emitDoWhileFor: function {
     stepped: condMovesLocal :ast :symtab :ctx conds: n.postconditions
     gvD: String
     if stepped then gvD = newCondGuard :ctx :ind :buf
-    ldw: "\{ind}do {\n"
-    buf.append ldw
+    # the body is written into its own buffer: the trailing test is built after
+    # it, and the temporaries the test records are declared ahead of `do {`, as
+    # a while loop's are ahead of `while`
+    body: String
     ind2d: "\{ind}    "
     fLd: tmp.frees.length
     lLd: tmp.listFrees.length
     dvG: false
     if n.body.isZero.not then {
         fbd: ast.nodes.get i: n.body
-        emitBodyNode :ast :symtab :ctx n: fbd ind: ind2d.stringView :tmp :buf
+        emitBodyNode :ast :symtab :ctx n: fbd ind: ind2d.stringView :tmp buf: body
         dvG = blockDiverges :ast :symtab :ctx n: fbd
     }
-    closeScopeBlock :symtab :ctx :tmp fL: fLd lL: lLd diverged: dvG node: n.body :buf
-    emitContLabel :ctx id: lidDW ind: ind2d.stringView :buf
+    closeScopeBlock :symtab :ctx :tmp fL: fLd lL: lLd diverged: dvG node: n.body buf: body
+    emitContLabel :ctx id: lidDW ind: ind2d.stringView buf: body
+    tail: String
     if stepped then {
         (emitSteppedCond
             :ast
@@ -24640,15 +24640,19 @@ emitDoWhileFor: function {
             inLoop: true
             ind: ind2d.stringView
             :tmp
-            :buf
+            buf: body
         )
-        buf.append "\{ind}} while (\{gvD});\n"
+        tail.append "\{ind}} while (\{gvD});\n"
     } else {
         pcond: doWhileCondText :ast :symtab :ctx :n
         cwP: condInParens cond: pcond.stringView
-        lpw: "\{ind}} while \{cwP};\n"
-        buf.append lpw
+        tail.append "\{ind}} while \{cwP};\n"
+        # the test assigns and releases them itself, so the loop owes nothing
+        flushArgHoists :ctx :ind :tmp :buf
     }
+    buf.append "\{ind}do {\n"
+    buf.append body
+    buf.append tail
     popLoopLabel :ctx id: lidDW :ind :buf
 }
 
@@ -28735,7 +28739,7 @@ emitForCond: function {
         )
         if tw7.length > 0 then cv = tw7.take
         if cond.length > 0 then cond.append " && "
-        appendInPlaceCond :ctx mark: mk7 text: cv.stringView dst: cond declared: true
+        appendInPlaceCond :ctx mark: mk7 text: cv.stringView dst: cond
     }
 }
 
