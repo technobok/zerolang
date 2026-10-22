@@ -25,3 +25,11 @@ static Z_NORETURN void z_panic(const char* msg) {
     fflush(NULL);
     _exit(1);
 }
+/* the program's normal end, once main has returned: it ends the process once,
+   as z_panic does, and flushes its output before exit runs. Exit's own flush
+   is not enough here: a C runtime may flush only as it unloads, and a thread
+   still finishing at that moment can cut that short (wine's does). */
+static void z_end(void) {
+    z_end_claim();
+    fflush(NULL);
+}
