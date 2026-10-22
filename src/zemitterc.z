@@ -26,6 +26,18 @@ ArgHoist: class {
     dtor: String
 }
 
+# RawHoist -- statements the statement being built runs ahead of itself, which
+# no declaration can hold (a copy loop, a control value's arms): their text,
+# its lines unindented, and how many argument hoists were recorded before them,
+# which is where they run among those.
+RawHoist: class {
+    text: String
+    at: u64
+    # an assignment the order machinery moved here from a call's comma prefix
+    # (settleAhead): dropping it would lose the part it reads
+    settles: bool
+}
+
 # OrderPend -- one part of a call waiting to learn whether a part evaluated
 # after it needs it read into a temp first: its text, the C type its temp is
 # given (empty to spell it from the parameter or the value), the slot it
@@ -42,6 +54,12 @@ OrderPend: class {
     nid: zast.nodeid
     pure: bool
     facts: cfacts
+    # where its call's slots begin in orderVals
+    valBase: u64
+    # when it was built, on the order counter every part and piece draws from
+    seq: u64
+    # settled ahead of a control value (settleAhead): its slot is filled
+    done: bool
 }
 
 # LoopFrame -- one loop, or do{}while(0) block, open around the code being
@@ -3119,7 +3137,7 @@ ternaryCondPart: function {
     guarded: bool
     facts: cfacts.borrow
 } out String is {
-    mk: openInPlace :ctx
+    mk: openInPlace :ctx :guarded
     cvF: cfacts
     cv: valueExprC :ast :symtab :ctx n: (ast.nodes.get i: op) facts: cvF
     tw: truthyCondText :ast :symtab :ctx n: (ast.nodes.get i: op) raw: cv.stringView
@@ -3148,7 +3166,7 @@ armInPlace: function {
     ref: false
     facts: cfacts.borrow
 } out String is {
-    mk: openInPlace :ctx
+    mk: openInPlace :ctx guarded: true
     vxF: cfacts
     vx: armValueExpr :ast :symtab :ctx :n facts: vxF
     if (hoistsGrew :ctx mark: mk) then {
@@ -3176,6 +3194,9 @@ emitTernaryChain: function {
     txF: constFacts
     depth: u64
     tm: pendingHoistMark :ctx
+    # nothing evaluated before the chain is moved into it: a control value in
+    # it makes the whole if one (below)
+    ctx.guardDepth = ctx.guardDepth + 1
     clx959: u64
     for clx959 < n.clauses.count loop {
         cId: zast.kidAt kids: ast.kids span: n.clauses i: clx959
@@ -3183,6 +3204,7 @@ emitTernaryChain: function {
         cxF: cfacts
         cx: ternaryClause :ast :symtab :ctx c: c9r isFirst: clx959 == 0 :ref facts: cxF
         clx959 = clx959 + 1
+        if cx.length == 0 then ctx.guardDepth = ctx.guardDepth - 1
         if cx.length == 0 then return (ternaryAsStatements
             :ast
             :symtab
@@ -3198,7 +3220,10 @@ emitTernaryChain: function {
     }
     exF: cfacts
     ex: ternaryElse :ast :symtab :ctx oId: n.elseclause :ref facts: exF
-    if ex.length == 0 then return (ternaryAsStatements
+    ctx.guardDepth = ctx.guardDepth - 1
+    # a control value anywhere in the chain runs as statements, which neither
+    # a condition nor an arm of a ternary can hold
+    if (ex.length == 0) or (ctx.argHoistRaw.length > tm.raw) then return (ternaryAsStatements
         :ast
         :symtab
         :ctx
@@ -3234,12 +3259,22 @@ emitTernaryChain: function {
 # have read them is not being emitted.
 dropHoistsTo: function {ctx: Ctx mark: hoistmark} is {
     for ctx.argHoists.length > mark.names loop ctx.argHoists.pop
-    for ctx.argHoistRaw.length > mark.raw loop ctx.argHoistRaw.pop
+    for ctx.argHoistRaw.length > mark.raw loop {
+        # a part settleAhead moved out of its call reads nowhere else
+        if (ctx.argHoistRaw.get i: ctx.argHoistRaw.length - 1).settles then {
+            (emitFail
+                :ctx
+                what: "a speculative build dropped a part settled ahead of a control value"
+                line: 0
+            )
+        }
+        ctx.argHoistRaw.pop
+    }
 }
 
-# ternaryAsStatements -- an if whose arm recorded a hoist no expression can hold:
-# the hoists its ternary text recorded are dropped, and it is built as the
-# statement expression a block-armed if is.
+# ternaryAsStatements -- an if whose ternary text recorded a hoist no
+# expression can hold: the hoists that text recorded are dropped, and it is
+# built as a control value, as a block-armed if is (emitControlExpr).
 ternaryAsStatements: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -4174,8 +4209,9 @@ Ctx: class {
     unitOrder: List String
     # the statement temporaries awaiting declaration
     argHoists: List ArgHoist
-    # raw declarations a fragment asked to be emitted alongside
-    argHoistRaw: List String
+    # statements the statement being built runs ahead of itself, among the
+    # argument hoists in the order they were recorded
+    argHoistRaw: List RawHoist
     # the next `_ah` number
     argHoistCtr: u64
     # the parts of the calls being built, in the order they are evaluated: the
@@ -4186,6 +4222,20 @@ Ctx: class {
     orderPieceVals: List String
     orderPieceNames: List String
     orderPieceTemps: ListVal u64
+    # when each piece's part was built, and whether settleAhead already made it
+    # a statement
+    orderPieceSeq: ListVal u64
+    orderPieceDone: ListVal bool
+    # the counter every part and piece is numbered from, in the order built;
+    # settleAhead touches only those at or above the floor
+    orderSeq: u64
+    orderSeqFloor: u64
+    # how many in-place regions that run only on some paths, or at every loop
+    # test, enclose the text being built (openInPlace with `guarded`)
+    guardDepth: u64
+    # the worklist condHoldsControlValue walks a condition with, kept so that
+    # asking about every condition allocates nothing
+    condScan: ListVal zast.nodeid
     # each open call's argument texts by parameter slot, "" for a slot no
     # argument fills, and a method call's parameter positions: where each
     # argument is written, the positional cursor it is read with, and whether it
@@ -7551,10 +7601,15 @@ orderSlotFacts: function {t: Ctx.view st: orderstate slot: u64} out cfacts is {
 # orderSetSlot -- fill slot `slot` of the call `st` opened with `text`, whose
 # facts are `tf`.
 orderSetSlot: function {ctx: Ctx st: orderstate slot: u64 text: String.take tf: cfacts} is {
-    for ctx.orderVals.length <= (st.valBase + slot) loop ctx.orderVals.append String
-    for ctx.orderValFacts.length <= (st.valBase + slot) loop ctx.orderValFacts.append cfacts
-    ctx.orderVals.set i: st.valBase + slot val: text
-    ctx.orderValFacts.set i: st.valBase + slot val: tf
+    orderSetSlotAt :ctx base: st.valBase :slot :text :tf
+}
+
+# orderSetSlotAt -- orderSetSlot for the call whose slots begin at `base`.
+orderSetSlotAt: function {ctx: Ctx base: u64 slot: u64 text: String.take tf: cfacts} is {
+    for ctx.orderVals.length <= (base + slot) loop ctx.orderVals.append String
+    for ctx.orderValFacts.length <= (base + slot) loop ctx.orderValFacts.append cfacts
+    ctx.orderVals.set i: base + slot val: text
+    ctx.orderValFacts.set i: base + slot val: tf
 }
 
 # orderPartWith -- one part of a call, whose facts are `tf`, just built from `mark`, placed in evaluation
@@ -7603,13 +7658,17 @@ orderPartWith: function {
         }
         i: mark.names
         for i < ctx.argHoists.length loop {
-            ph: ctx.argHoists.getMut :i
-            if ph.val.length > 0 then {
-                ctx.orderPieceNames.append ph.name.copy
-                ctx.orderPieceTemps.append 0
-                pv: String
-                pv swap ph.val
-                ctx.orderPieceVals.append pv
+            pv: String
+            pn: String
+            {
+                ph: ctx.argHoists.getMut :i
+                if ph.val.length > 0 then {
+                    pv swap ph.val
+                    pn.append ph.name
+                }
+            }
+            if pv.length > 0 then {
+                orderAddPiece :ctx name: pn temp: 0 val: pv seq: (orderNextSeq :ctx)
             }
             i = i + 1
         }
@@ -7629,9 +7688,12 @@ orderPartWith: function {
         nid: valueNid
         :pure
         facts: tf
+        valBase: st.valBase
+        seq: (orderNextSeq :ctx)
+        done: false
     )
     if (orderSlotTwice :st :slot) when tf.once or tf.stated.not then {
-        orderSettle :ast :symtab :ctx :st i: ctx.orderPends.length - 1
+        orderSettle :ast :symtab :ctx i: ctx.orderPends.length - 1
         ctx.orderPends.pop
     }
 }
@@ -7649,11 +7711,17 @@ orderSettleWaiting: function {
     all: bool
 } is {
     n: ctx.orderPends.length
-    if n == st.pendMark then return
-    if all.not when (ctx.orderPends.get i: st.pendMark).pure then return
-    i: st.pendMark
+    # a part settleAhead already settled waits for nothing
+    fw: st.pendMark
+    for fw < n loop {
+        if (ctx.orderPends.get i: fw).done.not then break
+        fw = fw + 1
+    }
+    if fw == n then return
+    if all.not when (ctx.orderPends.get i: fw).pure then return
+    i: fw
     for i < n loop {
-        orderSettle :ast :symtab :ctx :st :i
+        if (ctx.orderPends.get :i).done.not then orderSettle :ast :symtab :ctx :i
         i = i + 1
     }
     orderDropWaiting :ctx :st
@@ -7682,7 +7750,6 @@ orderSettle: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    st: orderstate.view
     i: u64
 } is {
     text: String
@@ -7693,6 +7760,8 @@ orderSettle: function {
     pnm: zast.nameid
     vnid: zast.nodeid
     pf: cfacts
+    vb: u64
+    sq: u64
     {
         op: ctx.orderPends.getMut :i
         text swap op.text
@@ -7703,6 +7772,9 @@ orderSettle: function {
         pnm = op.pname
         vnid = op.nid
         pf = op.facts
+        vb = op.valBase
+        sq = op.seq
+        op.done = true
     }
     # a part no declared parameter types is typed as its own expression, read
     # through a comma so a `const` source still gives an assignable temp. A
@@ -7723,7 +7795,7 @@ orderSettle: function {
         if ct.length == 0 then ct = "__typeof__(((void)0, \{text}))"
     }
     if ct.length == 0 then {
-        orderSetSlot :ctx :st :slot :text tf: pf
+        orderSetSlotAt :ctx base: vb :slot :text tf: pf
         return
     }
     tnum: ctx.orderCtr
@@ -7731,12 +7803,118 @@ orderSettle: function {
     tn: "_o\{tnum}"
     # an evaluation-order temp holds the part's value for the call, which owns
     # it: it is no address hoist and owes no destroy
-    ctx.orderPieceNames.append String
-    ctx.orderPieceTemps.append tnum + 1
-    ctx.orderPieceVals.append text
+    orderAddPiece :ctx name: String temp: tnum + 1 val: text seq: sq
     ctx.argHoists.append (ArgHoist name: tn.copy val: String ctype: ct dtor: String)
     # the ordered temp's name
-    orderSetSlot :ctx :st :slot text: tn tf: pathFacts
+    orderSetSlotAt :ctx base: vb :slot text: tn tf: pathFacts
+}
+
+# orderAddPiece -- an assignment that runs ahead of its call: to ordered temp
+# `temp` - 1, or to the hoist `name` when `temp` is 0. `seq` is when its part
+# was built.
+orderAddPiece: function {ctx: Ctx name: String.take temp: u64 val: String.take seq: u64} is {
+    ctx.orderPieceNames.append name
+    ctx.orderPieceTemps.append temp
+    ctx.orderPieceVals.append val
+    ctx.orderPieceSeq.append seq
+    ctx.orderPieceDone.append false
+}
+
+# orderNextSeq -- the next number on the order counter.
+orderNextSeq: function {ctx: Ctx} out u64 is {
+    s: ctx.orderSeq
+    ctx.orderSeq = s + 1
+    return s
+}
+
+# settleAhead -- a control value is about to run as statements ahead of the
+# statement being built (a raw hoist), so whatever that statement evaluates
+# before it has to run before it too: every piece still waiting in an open
+# call's comma prefix, and every part still waiting to learn whether it needs
+# a temp, is made a statement now -- `_oN = text;` -- in the order it was
+# built, which is the order it is written. Only the parts built since the
+# innermost control value began are touched (orderSeqFloor): an arm's
+# statements are its own. Inside a region that runs only on some paths
+# (guardDepth) nothing is: that region is built as statements around it, or
+# keeps its control value in place.
+settleAhead: function {ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx} is {
+    if ctx.guardDepth > 0 then return
+    for true loop {
+        # the earliest part not yet made a statement, then the earliest piece
+        pe: earliestUnsettled :ctx
+        if pe.found.not then return
+        if pe.isPend then {
+            # settled into its temp, the part is a piece at the end of the list
+            # -- or, with no C type for a temp, stays in its call
+            np: ctx.orderPieceVals.length
+            orderSettle :ast :symtab :ctx i: pe.at
+            if ctx.orderPieceVals.length > np then settlePieceAhead :ctx i: np
+        } else {
+            settlePieceAhead :ctx i: pe.at
+        }
+    }
+}
+
+# unsettled -- the earliest part or piece settleAhead has still to make a
+# statement: whether there is one, whether it is a waiting part (else a
+# piece), its index in its list, and when it was built.
+unsettled: record {
+    found: bool
+    isPend: bool
+    at: u64
+    seq: u64
+}
+
+# earliestUnsettled -- the part or piece at or above the order floor, not yet
+# made a statement, that was built first.
+earliestUnsettled: function {ctx: Ctx.view} out unsettled is {
+    r: unsettled found: false isPend: false at: 0 seq: 0
+    fl: ctx.orderSeqFloor
+    pi: u64
+    for pi < ctx.orderPends.length loop {
+        pd: ctx.orderPends.get i: pi
+        if pd.done.not when pd.seq >= fl when (seqBeats :r seq: pd.seq) then {
+            r = unsettled found: true isPend: true at: pi seq: pd.seq
+        }
+        pi = pi + 1
+    }
+    ci: u64
+    for ci < ctx.orderPieceVals.length loop {
+        cs: ctx.orderPieceSeq.get i: ci
+        if (ctx.orderPieceDone.get i: ci).not when cs >= fl when (seqBeats :r seq: cs) then {
+            r = unsettled found: true isPend: false at: ci seq: cs
+        }
+        ci = ci + 1
+    }
+    return r
+}
+
+# seqBeats -- whether something built at `seq` was built before the best so far.
+seqBeats: function {r: unsettled seq: u64} out bool is {
+    if r.found.not then return true
+    return seq < r.seq
+}
+
+# settlePieceAhead -- piece `i`'s assignment as a statement ahead of the one
+# being built, and off its call's comma prefix.
+settlePieceAhead: function {ctx: Ctx i: u64} is {
+    tnum: ctx.orderPieceTemps.get :i
+    lhs: String
+    if tnum > 0 then {
+        lhs.append "_o"
+        appendDecimal buf: lhs n: tnum - 1
+    } else {
+        lhs.append (ctx.orderPieceNames.get :i)
+    }
+    v: String
+    v.append (ctx.orderPieceVals.get :i)
+    ctx.orderPieceVals.set :i val: String
+    ctx.orderPieceDone.set :i val: true
+    ctx.argHoistRaw.append (RawHoist
+        text: "\{lhs} = \{v};\n"
+        at: ctx.argHoists.length
+        settles: true
+    )
 }
 
 # orderFinish -- a call's parts are built: the opening of the comma expression
@@ -7747,40 +7925,47 @@ orderSettle: function {
 orderFinish: function {ctx: Ctx st: orderstate} out String is {
     wi: st.pendMark
     for wi < ctx.orderPends.length loop {
-        wtext: String
-        wslot: u64
-        wf: cfacts
-        {
-            wp: ctx.orderPends.getMut i: wi
-            wtext swap wp.text
-            wslot = wp.slot
-            wf = wp.facts
+        # a part settleAhead settled has its slot filled already
+        if (ctx.orderPends.get i: wi).done.not then {
+            wtext: String
+            wslot: u64
+            wf: cfacts
+            {
+                wp: ctx.orderPends.getMut i: wi
+                wtext swap wp.text
+                wslot = wp.slot
+                wf = wp.facts
+            }
+            orderSetSlot :ctx :st slot: wslot text: wtext tf: wf
         }
-        orderSetSlot :ctx :st slot: wslot text: wtext tf: wf
         wi = wi + 1
     }
     orderDropWaiting :ctx :st
     prefix: String
-    if ctx.orderPieceVals.length == st.pieceMark then return prefix
-    prefix.append "("
     i: st.pieceMark
     for i < ctx.orderPieceVals.length loop {
-        tnum: ctx.orderPieceTemps.get :i
-        if tnum > 0 then {
-            prefix.append "_o"
-            appendDecimal buf: prefix n: tnum - 1
-        } else {
-            prefix.append (ctx.orderPieceNames.get :i)
+        # a piece settleAhead made a statement has run already
+        if (ctx.orderPieceDone.get :i).not then {
+            if prefix.length == 0 then prefix.append "("
+            tnum: ctx.orderPieceTemps.get :i
+            if tnum > 0 then {
+                prefix.append "_o"
+                appendDecimal buf: prefix n: tnum - 1
+            } else {
+                prefix.append (ctx.orderPieceNames.get :i)
+            }
+            prefix.append " = "
+            prefix.append (ctx.orderPieceVals.get :i)
+            prefix.append ", "
         }
-        prefix.append " = "
-        prefix.append (ctx.orderPieceVals.get :i)
-        prefix.append ", "
         i = i + 1
     }
     for ctx.orderPieceVals.length > st.pieceMark loop {
         ctx.orderPieceVals.pop
         ctx.orderPieceNames.pop
         ctx.orderPieceTemps.pop
+        ctx.orderPieceSeq.pop
+        ctx.orderPieceDone.pop
     }
     return prefix
 }
@@ -7864,23 +8049,13 @@ flushArgHoists: function {
     lf0: tmp.listFrees.length
     i: fl
     n: ctx.argHoists.length
+    ri: rfl
+    rn: ctx.argHoistRaw.length
     for i < n loop {
+        # the statements recorded before this hoist run before it
+        ri = appendRawHoistsTo :ctx from: ri to: rn upto: i :ind :buf
         ah: ctx.argHoists.get :i
-        nmo: ah.name.stringView
-        vlo: ah.val.stringView
-        cty: ah.ctype.stringView
-        # a hoist assigned where its part runs has no initialiser: it starts zero
-        buf.append ind
-        buf.append cty
-        buf.append " "
-        buf.append nmo
-        buf.append " = "
-        if vlo.length == 0 then {
-            buf.append "{0}"
-        } else {
-            buf.append vlo
-        }
-        buf.append ";\n"
+        appendArgHoistDecl :ah :ind :buf
         dto: ah.dtor.stringView
         if dto.length > 0 when ctx.hoistsToBlock then {
             tmp.oweList stmt: ah.dtor.copy name: ah.name.copy vid: ztypes.vid.zero
@@ -7890,16 +8065,64 @@ flushArgHoists: function {
         i = i + 1
     }
     tagOwedTemps :ctx :tmp from: lf0
-    ri: rfl
-    rn: ctx.argHoistRaw.length
     for ri < rn loop {
-        rdo: ctx.argHoistRaw.get i: ri
-        buf.append rdo
+        appendRawHoist :ctx i: ri :ind :buf
         ri = ri + 1
     }
     # drop what was just emitted, back to the floor -- not to empty
     for ctx.argHoists.length > fl loop ctx.argHoists.pop
     for ctx.argHoistRaw.length > rfl loop ctx.argHoistRaw.pop
+}
+
+# appendArgHoistDecl -- one argument hoist's declaration. A hoist assigned where
+# its part runs has no initialiser: it starts zero.
+appendArgHoistDecl: function {ah: ArgHoist.view ind: StringView buf: String.borrow} is {
+    buf.append ind
+    buf.append ah.ctype
+    buf.append " "
+    buf.append ah.name
+    buf.append " = "
+    if ah.val.length == 0 then {
+        buf.append "{0}"
+    } else {
+        buf.append ah.val
+    }
+    buf.append ";\n"
+}
+
+# appendRawHoistsTo -- the raw hoists from `from` (below `to`) recorded before
+# argument hoist `upto`, in order; the answer is the first one not written.
+appendRawHoistsTo: function {
+    ctx: Ctx.view
+    from: u64
+    to: u64
+    upto: u64
+    ind: StringView
+    buf: String.borrow
+} out u64 is {
+    ri: from
+    for ri < to loop {
+        if (ctx.argHoistRaw.get i: ri).at > upto then return ri
+        appendRawHoist :ctx i: ri :ind :buf
+        ri = ri + 1
+    }
+    return ri
+}
+
+# appendRawHoist -- raw hoist `i`'s statements, each line at `ind`.
+appendRawHoist: function {ctx: Ctx.view i: u64 ind: StringView buf: String.borrow} is {
+    rh: ctx.argHoistRaw.get :i
+    for each ln: rh.text.stringView.lines loop {
+        buf.append ind
+        buf.append ln
+        buf.append "\n"
+    }
+}
+
+# recordRawHoist -- statements the statement being built runs ahead of itself,
+# after the argument hoists recorded so far.
+recordRawHoist: function {ctx: Ctx text: String.take} is {
+    ctx.argHoistRaw.append (RawHoist :text at: ctx.argHoists.length settles: false)
 }
 
 # hoistmark -- where the pending argument hoists and their floors stood when a
@@ -7909,6 +8132,8 @@ hoistmark: record {
     raw: u64
     floor: u64
     rawFloor: u64
+    # the region runs only on some paths, or at every loop test (guardDepth)
+    guarded: bool
 }
 
 # pendingHoistMark -- where the pending hoists and their floors stand now.
@@ -7918,17 +8143,22 @@ pendingHoistMark: function {ctx: Ctx.view} out hoistmark is {
         raw: ctx.argHoistRaw.length
         floor: ctx.argHoistFloor
         rawFloor: ctx.argHoistRawFloor
+        guarded: false
     )
 }
 
 # openInPlace -- begin a condition evaluated where it is written: a `when`
 # conjunct past the first, a loop's test, a do-while's trailing test. The
 # hoists pending around it stay pending; the ones its text records are its own,
-# and closeInPlace or wrapInPlace ends it.
-openInPlace: function {ctx: Ctx} out hoistmark is {
+# and closeInPlace or wrapInPlace ends it. `guarded` says it runs only on some
+# paths, or at every loop test, so nothing evaluated before it may be moved
+# into it (settleAhead).
+openInPlace: function {ctx: Ctx guarded: bool} out hoistmark is {
     mk: pendingHoistMark :ctx
+    mk.guarded = guarded
     ctx.argHoistFloor = mk.names
     ctx.argHoistRawFloor = mk.raw
+    if guarded then ctx.guardDepth = ctx.guardDepth + 1
     return mk
 }
 
@@ -7943,6 +8173,7 @@ hoistsGrew: function {ctx: Ctx.view mark: hoistmark} out bool is {
 closeInPlace: function {ctx: Ctx mark: hoistmark} is {
     ctx.argHoistFloor = mark.floor
     ctx.argHoistRawFloor = mark.rawFloor
+    if mark.guarded then ctx.guardDepth = ctx.guardDepth - 1
 }
 
 # appendInPlaceCond -- end the condition begun at `mark` and append it: its
@@ -16299,8 +16530,8 @@ emitDataMember: function {
         ctx.argHoistCtr = ctx.argHoistCtr + 1
         daNm: "_da\{daN}"
         daSym: ctxCname :ctx tid: dbt
-        daRaw: "    \{daCt} \{daNm};\n    for (int64_t _i = 0; _i < \{daLen.stringView}; _i++) { \{daNm}.data[_i] = \{daSym}[_i]; }\n"
-        ctx.argHoistRaw.append daRaw
+        daRaw: "\{daCt} \{daNm};\nfor (int64_t _i = 0; _i < \{daLen.stringView}; _i++) { \{daNm}.data[_i] = \{daSym}[_i]; }\n"
+        recordRawHoist :ctx text: daRaw
         return (stating :facts from: pathFacts text: daNm)
     }
     # `primes.first` and `codes.4` reach a LABELLED element by its name, an
@@ -20291,10 +20522,11 @@ appendArmAssign: function {
     buf.append "\{ind}\{target} = \{vx};\n"
 }
 
-# emitControlPtrExpr -- a reference control value built as a statement expression:
-# a pointer local its arms assign with addresses (appendArmAssign), yielded. The
-# temporaries its arms park values in are declared by the statement around the
-# outermost one, which releases them at its end.
+# emitControlPtrExpr -- a reference control value run as statements ahead of the
+# statement it is in (emitControlExpr): a pointer local its arms assign with
+# addresses (appendArmAssign), read where the value is. The temporaries its arms
+# park values in are declared by the statement around the outermost one, ahead
+# of the arms that assign them, and released at its end.
 emitControlPtrExpr: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -20305,16 +20537,14 @@ emitControlPtrExpr: function {
     vt: bindingStampOf :symtab :ctx :nid
     ct: typeRefC :ast :symtab :ctx tid: vt
     if (ct.length == 0) or (ztypecheck.armLeaves :ast :n inLoop: false) then return ""
+    settleAhead :ast :symtab :ctx
     ltmp: TmpCtr n: 0 frees: List OwedFree listFrees: List OwedFree
     cvN: tmpNext :ctx tmp: ltmp
     cv: "_cv\{cvN}"
     pct: "\{ct}*"
     lbuf: String
-    outerFloor: ctx.argHoistFloor
-    outerRawFloor: ctx.argHoistRawFloor
+    outer: openControlArms :ctx
     outerCv: ctx.armRefCv
-    ctx.argHoistFloor = ctx.argHoists.length
-    ctx.argHoistRawFloor = ctx.argHoistRaw.length
     ctx.armRefCv = cvN + 1
     ctx.armRefDepth = ctx.armRefDepth + 1
     (emitControlBindValue
@@ -20325,31 +20555,67 @@ emitControlPtrExpr: function {
         rtid: vt
         nm: cv.stringView
         ct: pct.stringView
-        ind: " "
+        ind: ""
         tmp: ltmp
         buf: lbuf
     )
     flushBlockFrees :ctx tmp: ltmp fL: 0 lL: 0 diverged: false buf: lbuf
     ctx.armRefDepth = ctx.armRefDepth - 1
     ctx.armRefCv = outerCv
-    ctx.argHoistFloor = outerFloor
-    ctx.argHoistRawFloor = outerRawFloor
+    closeControlArms :ctx :outer
     if ctx.armRefDepth == 0 then {
         for ctx.armParks.length > 0 loop ctx.argHoists.append ctx.armParks.pop
     }
-    r: "({\{lbuf} \{cv}; })"
-    return r
+    recordRawHoist :ctx text: lbuf
+    return cv
+}
+
+# armsmark -- what a control value's arms set aside while they are built: the
+# hoist floors, the guard depth and the order floor of the statement around it.
+armsmark: record {
+    floor: u64
+    rawFloor: u64
+    guards: u64
+    seqFloor: u64
+}
+
+# openControlArms -- a control value's arms are about to be built: they are
+# statements of their own, so the hoists they record are theirs, they run on
+# every path through them, and settleAhead inside them reaches only the parts
+# they build.
+openControlArms: function {ctx: Ctx} out armsmark is {
+    m: (armsmark
+        floor: ctx.argHoistFloor
+        rawFloor: ctx.argHoistRawFloor
+        guards: ctx.guardDepth
+        seqFloor: ctx.orderSeqFloor
+    )
+    ctx.argHoistFloor = ctx.argHoists.length
+    ctx.argHoistRawFloor = ctx.argHoistRaw.length
+    ctx.guardDepth = 0
+    ctx.orderSeqFloor = ctx.orderSeq
+    return m
+}
+
+# closeControlArms -- end what openControlArms began.
+closeControlArms: function {ctx: Ctx outer: armsmark} is {
+    ctx.argHoistFloor = outer.floor
+    ctx.argHoistRawFloor = outer.rawFloor
+    ctx.guardDepth = outer.guards
+    ctx.orderSeqFloor = outer.seqFloor
 }
 
 # emitControlExpr -- an `if`, a `match` or a `with` used inside an expression (an
 # argument, an operand, an interpolation part, a condition, a returned value)
-# that no C expression spells: a match, or an if whose arms are blocks. Its arms
-# run where the expression is evaluated -- at every loop test, only past a short
-# circuit, after the operands to its left -- so it is emitted in place as a
-# statement expression that declares the value, runs the if or the match
-# assigning it, releases what that owed, and yields the value. Its temps count
-# on from the function's, and the argument hoists already pending around it stay
-# pending for the statement that declares them.
+# that no C expression spells: a match, or an if whose arms are blocks. ISO C
+# has no statements inside an expression, so it runs as statements AHEAD of the
+# statement it is in -- a raw hoist that declares the value, runs the if or the
+# match assigning it and releases what that owed -- and the expression reads
+# the value. What the statement evaluates before it is made statements first
+# (settleAhead). A condition holding one is stepped (condsNeedSteps), and a
+# ternary holding one becomes one, so it never sits where it would run only on
+# some paths. Its temps count on from the function's, and the argument hoists
+# already pending around it stay pending for the statement that declares them.
 emitControlExpr: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -20365,14 +20631,12 @@ emitControlExpr: function {
     # checker refuses: its cleanup could not reach the values the enclosing
     # statement is building
     if (ct.length == 0) or (ztypecheck.armLeaves :ast :n inLoop: false) then return ""
+    settleAhead :ast :symtab :ctx
     ltmp: TmpCtr n: 0 frees: List OwedFree listFrees: List OwedFree
     cvN: tmpNext :ctx tmp: ltmp
     cv: "_cv\{cvN}"
     lbuf: String
-    outerFloor: ctx.argHoistFloor
-    outerRawFloor: ctx.argHoistRawFloor
-    ctx.argHoistFloor = ctx.argHoists.length
-    ctx.argHoistRawFloor = ctx.argHoistRaw.length
+    outer: openControlArms :ctx
     (emitControlBindValue
         :ast
         :symtab
@@ -20381,15 +20645,14 @@ emitControlExpr: function {
         rtid: vt
         nm: cv.stringView
         ct: ct.stringView
-        ind: " "
+        ind: ""
         tmp: ltmp
         buf: lbuf
     )
     flushBlockFrees :ctx tmp: ltmp fL: 0 lL: 0 diverged: false buf: lbuf
-    ctx.argHoistFloor = outerFloor
-    ctx.argHoistRawFloor = outerRawFloor
-    r: "({\{lbuf} \{cv}; })"
-    return r
+    closeControlArms :ctx :outer
+    recordRawHoist :ctx text: lbuf
+    return cv
 }
 
 # emitOperatorAt -- emit a binary operator by asking what it RESOLVED to,
@@ -24609,9 +24872,9 @@ emitDoWhileFor: function {
     buf: String.borrow
 } is {
     lidDW: pushLoopLabel :ctx :tmp isDo: false
-    # a moving postcondition computes into a guard the trailing test reads,
-    # declared where that test can see it
-    stepped: condMovesLocal :ast :symtab :ctx conds: n.postconditions
+    # a postcondition that moves, or holds a control value, computes into a
+    # guard the trailing test reads, declared where that test can see it
+    stepped: condsNeedSteps :ast :symtab :ctx suspends: false conds: n.postconditions
     gvD: String
     if stepped then gvD = newCondGuard :ctx :ind :buf
     # the body is written into its own buffer: the trailing test is built after
@@ -24673,7 +24936,7 @@ doWhileCondText: function {
         pkop: pk
         if pkn.namedoperation then pkop = pkn.operation
         # the trailing test runs at every iteration, so it is evaluated in place
-        mk8: openInPlace :ctx
+        mk8: openInPlace :ctx guarded: true
         pcvF: cfacts
         pcv: valueExprC :ast :symtab :ctx n: pkn facts: pcvF
         tw8: (truthyCondText
@@ -28727,7 +28990,7 @@ emitForCond: function {
     if n.namedoperation then {
         if (zast.nameTextAt :ast ref: n.name).length > 0 then return
         # a loop's test runs at every iteration, so it is evaluated in place
-        mk7: openInPlace :ctx
+        mk7: openInPlace :ctx guarded: true
         cvF: cfacts
         cv: valueExprC :ast :symtab :ctx n: (ast.nodes.get i: n.operation) facts: cvF
         tw7: (truthyCondText
@@ -29849,7 +30112,7 @@ appendCondText: function {
     if k.namedoperation then opId = k.operation
     # a conjunct past the first runs only when the ones before it held
     guarded: cond.length > 0
-    mk: openInPlace :ctx
+    mk: openInPlace :ctx :guarded
     {
         cvF: cfacts
         cv: valueExprC :ast :symtab :ctx n: (ast.nodes.get i: opId) facts: cvF
@@ -29915,8 +30178,9 @@ condMovesLocal: function {
 }
 
 # condsNeedSteps -- these conditions cannot stay in their header: one
-# suspends, or one moves an owned local. Either way they are written as
-# statements first and the header tests the guard they leave.
+# suspends, one moves an owned local, or one holds a control value that runs
+# as statements. Each of those has to land on a statement, so they are written
+# as statements first and the header tests the guard they leave.
 condsNeedSteps: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -29927,7 +30191,41 @@ condsNeedSteps: function {
     conds: zast.kidspan
 } out bool is {
     if suspends then return true
+    if (condHoldsControlValue :ast :ctx :conds) then return true
     return (condMovesLocal :ast :symtab :ctx :conds)
+}
+
+# condHoldsControlValue -- one of these conditions holds an `if`, a `match` or a
+# `with` used as a value that runs as statements ahead of its statement
+# (emitControlExpr). A ternary-shaped `if` stays an expression and is looked
+# through.
+condHoldsControlValue: function {ast: Ast.view ctx: Ctx conds: zast.kidspan} out bool is {
+    for ctx.condScan.length > 0 loop ctx.condScan.pop
+    ci: u64
+    for ci < conds.count loop {
+        ctx.condScan.append (zast.kidAt kids: ast.kids span: conds i: ci)
+        ci = ci + 1
+    }
+    wi: u64
+    for wi < ctx.condScan.length loop {
+        wid: ctx.condScan.get i: wi
+        wi = wi + 1
+        if wid.isZero.not then {
+            wn: ast.nodes.get i: wid
+            if (isControlValueNode :ast nid: wid) then return true
+            if wn.functiondef.not then zast.childIdsInto :ast n: wn acc: ctx.condScan
+        }
+    }
+    return false
+}
+
+# isControlValueNode -- a `match`, a `with`, or an `if` that is not
+# ternary-shaped: what emitControlExpr builds when it is used as a value.
+isControlValueNode: function {ast: Ast.view nid: zast.nodeid} out bool is {
+    n: ast.nodes.get i: nid
+    if n.caseexpr or n.withexpr then return true
+    if n.ifexpr.not then return false
+    return (ifIsTernary :ast n: (ast.nodes.get i: nid)).not
 }
 
 # emitSteppedConjunct -- one condition of a stepped clause: its text computed
@@ -35484,11 +35782,17 @@ emitC: function {
         emittedListIters: IdSet ztypes.tid
         unitOrder: List String
         argHoists: List ArgHoist
-        argHoistRaw: List String
+        argHoistRaw: List RawHoist
         argHoistCtr: 0
         orderPieceVals: List String
         orderPieceNames: List String
         orderPieceTemps: ListVal u64
+        orderPieceSeq: ListVal u64
+        orderPieceDone: ListVal bool
+        orderSeq: 0
+        orderSeqFloor: 0
+        guardDepth: 0
+        condScan: ListVal zast.nodeid
         orderVals: List String
         orderValFacts: ListVal cfacts
         orderWrit: ListVal u64
