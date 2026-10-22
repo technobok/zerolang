@@ -30158,7 +30158,13 @@ clauseBodyIndent: function {
 
 # emitPlainIfHead -- the `if (c) {` or `} else if (c) {` line of a clause whose
 # conditions stayed in the header. A first clause flushes the argument hoists
-# its condition text recorded; a later clause's header has nowhere to put them.
+# its condition text recorded. A later clause's `} else if` header has nowhere
+# to put them, so a later clause that recorded any opens `} else {` and, one
+# level in, computes its conditions into a guard -- declared, tested, released,
+# as a stepped clause does (openSteppedHead) -- and tests that: they run only on
+# the path where every earlier clause failed, and like any condition past the
+# first they owe nothing to the body. The answer is the blocks the clause
+# opened around itself (0 or 1), which the caller closes after the chain.
 emitPlainIfHead: function {
     ctx: Ctx
     isFirst: bool
@@ -30168,14 +30174,34 @@ emitPlainIfHead: function {
     tmp: TmpCtr
     # the header line appends here
     buf: String.borrow
-} is {
+} out u64 is {
     cw: condInParens :cond
     if isFirst then {
         flushArgHoists :ctx :ind :tmp :buf
         buf.append "\{ind}if \{cw} {\n"
-    } else {
-        buf.append "\{ind}} else if \{cw} {\n"
+        return 0
     }
+    if (hoistsPending :ctx).not then {
+        buf.append "\{ind}} else if \{cw} {\n"
+        return 0
+    }
+    buf.append "\{ind}} else {\n"
+    indN: "\{ind}    "
+    gv: newCondGuard :ctx ind: indN.stringView :buf
+    fL: tmp.frees.length
+    lL: tmp.listFrees.length
+    flushArgHoists :ctx ind: indN.stringView :tmp :buf
+    buf.append "\{indN}\{gv} = \{cw} ? 1 : 0;\n"
+    flushBlockFrees :ctx :tmp :fL :lL diverged: false :buf
+    buf.append "\{indN}if (\{gv}) {\n"
+    return 1
+}
+
+# hoistsPending -- whether argument hoists above the current floors wait to be
+# declared by the statement being built.
+hoistsPending: function {ctx: Ctx.view} out bool is {
+    if ctx.argHoists.length > ctx.argHoistFloor then return true
+    return ctx.argHoistRaw.length > ctx.argHoistRawFloor
 }
 
 # emit one if or else-if clause: its conditions, then the body they guard. The
@@ -30257,7 +30283,9 @@ emitIfClause: function {
                 )
             }
         }
-        if guarded.not then emitPlainIfHead :ctx :isFirst cond: cond.stringView :ind :tmp :buf
+        if guarded.not then {
+            opened = emitPlainIfHead :ctx :isFirst cond: cond.stringView :ind :tmp :buf
+        }
         ind2: clauseBodyIndent :ind nested: opened
         si: u64
         for si < sN.length loop {
