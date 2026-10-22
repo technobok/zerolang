@@ -183,7 +183,7 @@ ci:
 	@$(MAKE) --no-print-directory windows-due
 
 # ci-gates -- the gates ci runs in parallel, after perf-strict.
-ci-gates: style-lint zl-full-guard complexity-report warn-check pedantic-check emitter-guard typename-guard frontend-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard highlight-guard any-guard deadcode-guard eager-guard eager-lib-guard case-guard user-native-guard shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard readable-check test-tcc-heavy test-clang test-math-arm64 test-sqlite-arm64 test-math-noasm test-portable-scalars test-mingw test-tcc-mingw test-msvc-wine test-msvc-corpus math-asm-guard matrix-guard docs-link-guard mode-parity ci-corpus
+ci-gates: style-lint zl-full-guard complexity-report warn-check pedantic-check emitter-guard typename-guard frontend-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard highlight-guard any-guard deadcode-guard eager-guard eager-lib-guard case-guard user-native-guard shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard readable-check test-tcc-heavy test-clang test-signed-ub test-math-arm64 test-sqlite-arm64 test-math-noasm test-portable-scalars test-mingw test-tcc-mingw test-msvc-wine test-msvc-corpus math-asm-guard matrix-guard docs-link-guard mode-parity ci-corpus
 
 ci-corpus: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --heavy --jobs $(NPROC)
@@ -594,6 +594,26 @@ bench-math-kernels: $(if $(BENCH_TCC),$(BUILDDIR)/tcc)
 # prelude forgot to declare (gcc reads quadmath.h).
 test-clang: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc clang --cc-forward --root . --jobs $(NPROC)
+
+# test-signed-ub -- the run corpus with C's undefined signed arithmetic trapping:
+# signed overflow and out-of-range shifts under UBSan, without -fwrapv. The
+# language promises two's-complement wrapping, and MSVC has no -fwrapv, so the
+# emitted C and the runtime must never reach that undefined behaviour; a report
+# aborts its case. Linux only: the Windows toolchains have no UBSan runtime.
+SIGNED_UB_FLAGS := -fsanitize=signed-integer-overflow,shift -fno-sanitize-recover=all -fno-wrapv
+ifneq ($(WINDOWS_HOST),)
+test-signed-ub:
+	@echo "test-signed-ub: skipped (Linux only: UCRT64 gcc has no UBSan runtime; the Linux run covers the same C)"
+else
+test-signed-ub: bin/zc bin/zl $(BUILDDIR)/ztestrunner
+	@$(BUILDDIR)/ztestrunner --zc bin/zc --cc gcc --ccflags "$(SIGNED_UB_FLAGS)" --run-only --root . \
+	   --jobs $(NPROC) > $(BUILDDIR)/signed-ub.log 2>&1 \
+	  || { grep -E '^FAIL|runtime error' $(BUILDDIR)/signed-ub.log | head -20; \
+	       echo "test-signed-ub FAIL: a run case reached C's undefined signed arithmetic (UBSan; full log $(BUILDDIR)/signed-ub.log)"; exit 1; }; \
+	tail -2 $(BUILDDIR)/signed-ub.log | grep -q 'CORPUS GATE GREEN' \
+	  || { tail -5 $(BUILDDIR)/signed-ub.log; echo "test-signed-ub FAIL: the run did not finish green"; exit 1; }; \
+	echo "test-signed-ub OK: $$(grep -o 'pass=[0-9]*' $(BUILDDIR)/signed-ub.log | tail -1) run cases, no signed overflow or out-of-range shift"
+endif
 
 # what a corpus run under the vendored tcc needs built first.
 TCC_RUN_DEPS := bin/zc bin/zl $(BUILDDIR)/tcc $(BUILDDIR)/ztestrunner
@@ -1169,7 +1189,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2302142
+ALLOC_BASELINE := 2303124
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

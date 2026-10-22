@@ -20790,6 +20790,8 @@ emitOperatorAt: function {
     # and those never touch the table at all.
     rhsConst: symtab.typing.nodeConstIn mono: ctx.curThisTid nid: rhsNid
     if rhsConst.kind.none.not then {
+        ieee: zeroDivisionC :symtab :ctx :owner :opId :lhsNid rhs: rhsConst
+        if ieee.length > 0 then return (stating :facts from: constFacts text: ieee)
         cbody: nativeConstImplOf :ctx path: key.stringView
         if cbody.length > 0 then {
             cpos: nativeConstPosOf :ctx path: key.stringView
@@ -20797,6 +20799,62 @@ emitOperatorAt: function {
         }
     }
     return (emitOperatorRow :ast :symtab :ctx :owner :key :body :lhsNid :rhsNid :facts)
+}
+
+# zeroDivisionC -- an f32 or f64 division whose operands are both constants and
+# whose divisor is zero. The checker leaves it unfolded -- neither an infinity
+# nor a NaN has a literal -- and IEEE answers it where it runs. But a C compiler
+# folds a division of two constants itself, and MSVC refuses one by zero
+# (C2124), so the answer is spelled instead: for a zero dividend the NaN an
+# x86-64 division gives (sign set, quiet), by its bits -- math.h's NAN has the
+# sign clear under glibc and set under MSVC -- else math.h's INFINITY, negative
+# when exactly one operand is. "" for any other operation.
+zeroDivisionC: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    # the operator's declaring type
+    owner: ztypes.tid
+    # the operator's name
+    opId: zast.nameid
+    lhsNid: zast.nodeid
+    # the divisor's constant, known to be one
+    rhs: ztypes.cval
+} out String is {
+    if opId != zast.wellKnown.slot.wkOpDiv then return ""
+    nk: ztypecheck.numKindOfTid st: symtab tid: (ztypecheck.typedefChaseTid st: symtab tid: owner)
+    if nk.has.not then return ""
+    ct: ""
+    nan: ""
+    if nk.kind.f64Type then {
+        ct = "double"
+        nan = "(((union { uint64_t u; double f; }){ .u = 0xFFF8000000000000ULL }).f)"
+    } else if nk.kind.f32Type then {
+        ct = "float"
+        nan = "(((union { uint32_t u; float f; }){ .u = 0xFFC00000u }).f)"
+    } else {
+        return ""
+    }
+    if (constIsZero v: rhs).not then return ""
+    lhs: symtab.typing.nodeConstIn mono: ctx.curThisTid nid: lhsNid
+    if lhs.kind.none then return ""
+    if (constIsZero v: lhs) then return nan.string
+    if (constIsNegative v: lhs) != (constIsNegative v: rhs) then return "(-(\{ct})INFINITY)"
+    return "((\{ct})INFINITY)"
+}
+
+# constIsZero -- a numeric constant that is zero, of either sign.
+constIsZero: function {v: ztypes.cval} out bool is {
+    if v.kind.ivalKind then return (v.ival == 0) and (v.bigId == 0)
+    if v.kind.fvalKind then return v.fval == 0.0
+    return false
+}
+
+# constIsNegative -- a numeric constant whose sign bit is set: -0.0 counts, as
+# IEEE's division by zero reads it.
+constIsNegative: function {v: ztypes.cval} out bool is {
+    if v.kind.ivalKind then return v.ival < 0
+    if v.kind.fvalKind then return (v.fval.bits >> 63) == 1
+    return false
 }
 
 # emitOperatorRow -- a native operator's natives.tbl row `body`, keyed `key`:
