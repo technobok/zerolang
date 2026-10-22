@@ -247,31 +247,48 @@ zlinkArgs: function {csrc: StringView fam: zcc.ccfamily} out List String is {
 # withZlink -- `argv` with the objects of the C sources `csrc` declares
 # (cobjArgs) right after the C file, ahead of every library -- the libraries
 # they need (libm) resolve only for objects named before them -- and the
-# libraries it declares appended, spelled for the compiler argv[0] names. cl
-# takes no objects: `zc cobj` builds them with gcc's command line. The emitted C must already exist, so a pipeline
+# libraries it declares appended, spelled for the compiler argv[0] names (cl's
+# paths through zcc.msvcPath). The emitted C must already exist, so a pipeline
 # step whose C is written by an earlier step resolves this at spawn time
 # instead (PoolStep.zlinkFrom).
 withZlink: function {argv: (List String).take csrc: StringView zc: StringView} out List String is {
     fam: zcc.ccfamily.other
     if argv.length > 0 then fam = zcc.ccFamilyOf ccPath: (argv.get i: 0).stringView
-    # a unit's C sources are built by `zc cobj`, whose command line is gcc's
-    ob9m: List String
-    if fam.msvc.not then ob9m = cobjArgs :argv :csrc :zc
-    if ob9m.length > 0 then {
-        withObjs: List String
-        for each a9m: argv loop {
-            withObjs.append from: a9m.copy
-            if a9m.stringView == csrc then {
-                for each o9m: ob9m loop withObjs.append from: o9m.copy
-            }
-        }
-        argv = withObjs.take
-    }
+    ob9m: cobjArgs :argv :csrc :zc
+    if ob9m.length > 0 then argv = withObjects :argv :csrc objs: ob9m :fam
     zl9m: zlinkArgs :csrc :fam
     for each zf9m: zl9m loop {
         argv.append from: zf9m.copy
     }
     return argv
+}
+
+# withObjects -- `argv` with the objects `objs` right after the C file `csrc`,
+# each spelled as compiler family `fam` is handed a path.
+withObjects: function {
+    argv: (List String).view
+    csrc: StringView
+    objs: (List String).view
+    fam: zcc.ccfamily
+} out List String is {
+    # the C file as the compiler was handed it
+    cArg: csrc.string
+    if fam.msvc then cArg = zcc.msvcPath p: csrc
+    r: List String
+    for each a9m: argv loop {
+        r.append from: a9m.copy
+        if a9m == cArg then {
+            for each o9m: objs loop r.append from: (familyPath :fam p: o9m.stringView)
+        }
+    }
+    return r
+}
+
+# familyPath -- a path as compiler family `fam` is handed it: cl's through
+# zcc.msvcPath, any other's as it is.
+familyPath: function {fam: zcc.ccfamily p: StringView} out String is {
+    if fam.msvc then return (zcc.msvcPath :p)
+    return p.string
 }
 
 # cobjArgs -- the objects of the C sources the emitted C's `zcsrc:` header
@@ -410,8 +427,7 @@ buildTool: function {
 # spelling really reports a leak before it trusts a single verdict.
 #
 # cl takes its own spellings (zcc.msvcFlags) and builds the unsanitized program
-# only. It reads an argument starting with `/` as an option, so it is handed the
-# file names alone and runs in their directory (ccStepDir).
+# only, its paths spelled through zcc.msvcPath.
 ccArgv: function {
     cc: StringView
     ccflags: StringView
@@ -470,8 +486,8 @@ ccArgv: function {
     return a
 }
 
-# msvcArgv -- ccArgv for cl: its own spellings, then the C file and the
-# executable by name alone (ccStepDir runs it in their directory).
+# msvcArgv -- ccArgv for cl: its own spellings, then the C file, its object
+# beside it rather than in the directory the runner runs in, and the executable.
 msvcArgv: function {
     cc: StringView
     ccflags: StringView
@@ -484,18 +500,12 @@ msvcArgv: function {
     for each cf: (ccflags.split sep: " ") loop {
         if cf.length > 0 then a.append from: cf.string
     }
-    a.append from: (path.baseName p: csrc)
-    bn: path.baseName p: bin
-    outs: zcc.outputArgs f: zcc.ccfamily.msvc exe: bn.stringView
+    a.append from: (zcc.msvcPath p: csrc)
+    od: path.dirname p: csrc
+    a.append from: "-Fo:\{zcc.msvcPath p: od.stringView}/"
+    outs: zcc.outputArgs f: zcc.ccfamily.msvc exe: bin
     for each of: outs loop a.append from: of.copy
     return a
-}
-
-# ccStepDir -- where a build step built by ccArgv runs: cl in the directory of
-# the files it is handed by name, every other compiler where the runner runs.
-ccStepDir: function {cc: StringView dir: StringView} out String is {
-    if (zcc.ccFamilyOf ccPath: cc).msvc then return dir.string
-    return String
 }
 
 # binArgv -- the test-binary argv: the binary plus one element per
@@ -1722,10 +1732,9 @@ runRunCases: function {r: Runner} is {
                     csrc: cpath.stringView
                     asan: false
                 )
-                gdir: ccStepDir cc: r.cc.stringView dir: r.tmp.stringView
                 steps.append (mkStep
                     argv: ga
-                    cwd: gdir.stringView
+                    cwd: ""
                     outPath: os.nullDevice.stringView
                     errPath: os.nullDevice.stringView
                     timeoutSecs: 0

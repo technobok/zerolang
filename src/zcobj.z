@@ -97,10 +97,9 @@ objectsFor: function {
     # who that compiler is: its real path, or libtcc's (zcheck.libtccFile) under
     # inproc
     ccId: StringView
-    # its family (gcc, clang, tcc, other), a part of the key
-    family: StringView
-    # the compiler is tcc, which takes `-B` for its payload
-    isTcc: bool
+    # its family: a part of the key, and what spells the compile -- tcc takes
+    # `-B` for its payload, cl its own options
+    fam: zcc.ccfamily
     # the target triple, "" for the host
     triple: StringView
     # tcc's runtime payload: `-B` for a spawned tcc, the library under inproc
@@ -116,8 +115,7 @@ objectsFor: function {
             line: line.stringView
             :cc
             :ccId
-            :family
-            :isTcc
+            :fam
             :triple
             :tccDir
             :inproc
@@ -140,8 +138,7 @@ objectFor: function {
     line: StringView
     cc: StringView
     ccId: StringView
-    family: StringView
-    isTcc: bool
+    fam: zcc.ccfamily
     triple: StringView
     tccDir: StringView
     inproc: bool
@@ -174,11 +171,11 @@ objectFor: function {
     key: (objectKey
         srcText: rt.stringView
         :ccId
-        :family
+        family: (zcc.ccFamilyName f: fam)
         :triple
         flags: flags.stringView
     )
-    objName: "\{key}.o"
+    objName: "\{key}\{zcc.objectExt f: fam}"
     obj: path.join a: dir.stringView b: objName.stringView
     lockName: "\{key}.lock"
     lock: path.join a: dir.stringView b: lockName.stringView
@@ -189,7 +186,7 @@ objectFor: function {
         src: src.stringView
         flags: flags.stringView
         :cc
-        :isTcc
+        :fam
         :tccDir
         :inproc
     )
@@ -260,7 +257,7 @@ claimObject: function {
     src: StringView
     flags: StringView
     cc: StringView
-    isTcc: bool
+    fam: zcc.ccfamily
     tccDir: StringView
     inproc: bool
 } out (Result String E: String) is {
@@ -268,7 +265,7 @@ claimObject: function {
         if (io.exists path: obj) then return ((Result String E: String).ok obj.string)
         claim: io.mkdir path: lock
         if claim.ok then {
-            built: buildObject :src :obj :flags :cc :isTcc :tccDir :inproc
+            built: buildObject :src :obj :flags :cc :fam :tccDir :inproc
             rm: io.remove path: lock
             rm.drop
             return built
@@ -290,8 +287,8 @@ buildObject: function {
     obj: StringView
     flags: StringView
     cc: StringView
-    # the compiler is tcc, which takes `-B` for its payload
-    isTcc: bool
+    # the compiler's family: tcc takes `-B` for its payload, cl its own options
+    fam: zcc.ccfamily
     tccDir: StringView
     inproc: bool
 } out (Result String E: String) is {
@@ -300,21 +297,9 @@ buildObject: function {
     if inproc then {
         rc = tcc.compileToObject csrc: src obj: tmp.stringView :tccDir cflags: flags
     } else {
-        a: List String
-        a.append from: cc.string
-        # tcc cannot find its own headers once its tree has moved
-        if isTcc when tccDir.length > 0 then {
-            a.append from: "-B".string
-            a.append from: tccDir.string
-        }
-        for each f: (flags.split sep: " ") loop {
-            if f.length > 0 then a.append from: f.string
-        }
-        a.append from: "-c".string
-        a.append from: src.string
-        a.append from: "-o".string
-        a.append from: tmp.copy
-        rc = os.spawn argv: a cwd: "" outPath: "" errPath: "" timeoutSecs: 0
+        a: objectArgv :cc :fam :tccDir :flags :src obj: tmp.stringView
+        said: "\{tmp}.out"
+        rc = zcc.spawnCompiler argv: a f: fam :src scratch: said.stringView
     }
     if rc != 0 then {
         rt: io.remove path: tmp
@@ -328,6 +313,33 @@ buildObject: function {
         return ((Result String E: String).err m1)
     }
     return ((Result String E: String).ok obj.string)
+}
+
+# objectArgv -- the command line compiling `src` to `obj` with the spawned
+# compiler `cc` of family `fam`: tcc's payload (it cannot find its own headers
+# once its tree has moved), cl's own options, the object's flags.
+objectArgv: function {
+    cc: StringView
+    fam: zcc.ccfamily
+    tccDir: StringView
+    flags: StringView
+    src: StringView
+    obj: StringView
+} out List String is {
+    a: List String
+    a.append from: cc.string
+    if fam.tcc when tccDir.length > 0 then {
+        a.append from: "-B".string
+        a.append from: tccDir.string
+    }
+    if fam.msvc then {
+        for each mf: zcc.msvcFlags loop a.append from: mf.copy
+    }
+    for each f: (flags.split sep: " ") loop {
+        if f.length > 0 then a.append from: f.string
+    }
+    for each oa: (zcc.objectArgs f: fam :src :obj) loop a.append from: oa.copy
+    return a
 }
 
 # lockIsStale -- the lock `lock` was taken longer ago than staleLockSeconds. Its

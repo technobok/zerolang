@@ -495,6 +495,7 @@ buildExe: function {
             :objs
         )
     }
+    if ccKind.msvc then return (buildExeMsvc :cc :tempC :exe :release :cflags :ldflags :libs :objs)
     a: List String
     a.append from: cc.string
     if release then {
@@ -521,11 +522,7 @@ buildExe: function {
         a.append from: "-B".string
         a.append from: tccDir.string
     }
-    for each piece: (cflags.split sep: " ") loop {
-        if piece.length > 0 then {
-            a.append from: piece.string
-        }
-    }
+    appendWords :a text: cflags
     a.append from: "-o".string
     a.append from: exe.string
     a.append from: tempC.string
@@ -536,13 +533,68 @@ buildExe: function {
         a.append from: la9c
     }
     for each rl: (runtimeLinkArgs :windowsTarget :ccKind) loop a.append from: rl.copy
-    for each piece2: (ldflags.split sep: " ") loop {
-        if piece2.length > 0 then {
-            a.append from: piece2.string
-        }
-    }
+    appendWords :a text: ldflags
     rc: os.spawn argv: a cwd: "" outPath: "" errPath: "" timeoutSecs: 0
     return rc
+}
+
+# buildExeMsvc -- buildExe for MSVC's cl, in its own spellings (zcc): -O2 for a
+# release and -Od with debug information (-Z7, a .pdb beside the .exe, no
+# incremental-link file) otherwise; the C file's object written beside it
+# rather than into the directory zc runs in; libraries as `<name>.lib`; the
+# linker's own options after `-link`. cl's default C runtime is the static one,
+# so the .exe needs no DLL beside it, as -static gives gcc's. cl names each C
+# file it compiles on its output, which zc drops: the rest -- warnings and
+# errors -- goes to stderr, where the other compilers write theirs.
+buildExeMsvc: function {
+    cc: StringView
+    tempC: StringView
+    exe: StringView
+    release: bool
+    cflags: StringView
+    ldflags: StringView
+    libs: (List String).view
+    objs: (List String).view
+} out i32 is {
+    a: List String
+    a.append from: cc.string
+    for each mf: zcc.msvcFlags loop a.append from: mf.copy
+    if release then {
+        a.append from: "-O2".string
+    } else {
+        a.append from: "-Od".string
+        a.append from: "-Z7".string
+    }
+    appendWords :a text: cflags
+    a.append from: (zcc.msvcPath p: tempC)
+    od: path.dirname p: tempC
+    a.append from: "-Fo:\{zcc.msvcPath p: od.stringView}/"
+    for each of: (zcc.outputArgs f: zcc.ccfamily.msvc :exe) loop a.append from: of.copy
+    for each ob: objs loop a.append from: (zcc.msvcPath p: ob.stringView)
+    for each lb: libs loop a.append from: (zcc.libraryArg f: zcc.ccfamily.msvc name: lb.stringView)
+    lf: List String
+    if release.not then lf.append from: "-INCREMENTAL:NO".string
+    appendWords a: lf text: ldflags
+    if lf.length > 0 then {
+        a.append from: "-link".string
+        for each l2: lf loop a.append from: l2.copy
+    }
+    outp: "\{tempC}.cl.txt"
+    rc: (zcc.spawnCompiler
+        argv: a
+        f: zcc.ccfamily.msvc
+        src: tempC
+        scratch: outp.stringView
+    )
+    return rc
+}
+
+# appendWords -- the space-separated words of `text` (a --cflags or --ldflags
+# value), each appended to `a` as an argument of its own.
+appendWords: function {a: List String text: StringView} is {
+    for each w: (text.split sep: " ") loop {
+        if w.length > 0 then a.append from: w.string
+    }
 }
 
 # runZlShim -- trigger the standalone zl linter/formatter. `zc lint`/`zc fmt` are
@@ -1296,14 +1348,23 @@ chooseExePath: function {
 # x86_64-windows built a Linux ELF that printed `os=windows`. The
 # evidence accepted is the compiler's own name -- a `<triple>-` prefixed
 # driver, which is exactly what pickCc synthesises when no --cc is given, so
-# the documented cross path passes unchanged.
-refuseCrossTarget: function {targetTriple: StringView cc: StringView isTcc: bool} is {
+# the documented cross path passes unchanged. cl is the other way round: it
+# builds for Windows and nothing else, wherever it runs (under wine on a POSIX
+# host), so it needs a Windows target, the host's or a --target.
+refuseCrossTarget: function {targetTriple: StringView cc: StringView fam: zcc.ccfamily} is {
+    if fam.msvc then {
+        if (ztarget.targetIsWindows triple: targetTriple) then return
+        mc: "zc: '\{cc}' is MSVC's cl, which builds only for Windows"
+        io.eprintln mc
+        io.eprintln "  pass --target x86_64-pc-windows-msvc to build with it on another host (under wine)"
+        os.exit code: 2
+    }
     if (ztarget.targetIsHost triple: targetTriple) then return
     cb: path.baseName p: cc
     tp: targetTriple.string
     tp.append "-"
     if (cb.stringView.startsWith prefix: tp) then return
-    if isTcc then {
+    if fam.tcc then {
         tt: "zc: --cc tcc cannot build for --target '\{targetTriple}'"
         io.eprintln tt
         io.eprintln "  the vendored tinycc is a host-only linux-x86_64 build: one backend, one config triple"
@@ -1413,7 +1474,7 @@ buildAndRun: function {
     cka: zcc.ccFamilyOf ccPath: ccReal.stringView
     isTcc: cka.tcc
     if isTcc when (io.exists path: tccDir) then ccTcc = tccDir.string
-    refuseCrossTarget targetTriple: cf.targetTriple.stringView :cc :isTcc
+    refuseCrossTarget targetTriple: cf.targetTriple.stringView :cc fam: cka
     inproc: (zv.slotOf text: ccMode) == zcWord.slot.mInproc
     if inproc then (refuseInprocMisuse
         :isTcc
@@ -1486,8 +1547,7 @@ objectsForBuild: function {
         :csrc
         :cc
         ccId: ccId.stringView
-        family: (zcc.ccFamilyName f: fam)
-        isTcc: fam.tcc
+        :fam
         triple: targetTriple
         tccDir: payload.stringView
         :inproc

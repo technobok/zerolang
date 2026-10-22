@@ -322,7 +322,7 @@ test-tcc-mingw: bin/zc $(BUILDDIR)/ztestrunner $(BUILDDIR)/wineprefix/.ready
 # relative: link.exe reads an argument starting with / as an option. Skipped
 # without MSVC_WINE or wine.
 MSVC_WINE ?=
-test-msvc-wine: $(BUILDDIR)/wineprefix/.ready
+test-msvc-wine: bin/zc $(BUILDDIR)/wineprefix/.ready
 	@if [ -n "$(WINDOWS_HOST)" ]; then \
 	  echo "test-msvc-wine: skipped (Linux only: it runs MSVC under wine; on Windows windows-guest builds with cl itself)"; exit 0; fi; \
 	if [ -z "$(MSVC_WINE)" ] || [ ! -x "$(MSVC_WINE)/cl" ] || ! command -v wine > /dev/null 2>&1; then \
@@ -333,15 +333,25 @@ test-msvc-wine: $(BUILDDIR)/wineprefix/.ready
 	  || { echo "test-msvc-wine FAIL: cl did not build the shim test"; grep -m5 -E 'error|fatal' $$d/cl.log; exit 1; }; \
 	$(WINE_ENV) timeout 300 wine $$d/shim.exe > $$d/run.log 2>&1 && grep -q "zthread shim OK" $$d/run.log \
 	  || { echo "test-msvc-wine FAIL: the MSVC build of the shim test under wine"; tail -20 $$d/run.log; exit 1; }; \
-	echo "test-msvc-wine OK: MSVC $$($(WINE_ENV) $(MSVC_WINE)/cl 2>&1 | grep -m1 -o 'Version [0-9.]*') built the thread shim's test, which passes under wine"
+	$(WINE_ENV) bin/zc build tests/fixtures/emitc_corpus/sqlite_hello.z --cc $(MSVC_WINE)/cl --target x86_64-pc-windows-msvc \
+	  -o $$d/sqlite_hello.exe > $$d/zcbuild.log 2>&1 \
+	  || { echo "test-msvc-wine FAIL: zc build --cc cl did not build sqlite_hello"; tail -10 $$d/zcbuild.log; exit 1; }; \
+	$(WINE_ENV) timeout 300 wine $$d/sqlite_hello.exe > $$d/sqlite_hello.out 2>&1; \
+	cmp -s $$d/sqlite_hello.out tests/fixtures/run_golden/sqlite_hello.out \
+	  || { echo "test-msvc-wine FAIL: zc build --cc cl's sqlite_hello differs from its golden"; diff $$d/sqlite_hello.out tests/fixtures/run_golden/sqlite_hello.out | head; exit 1; }; \
+	rc=0; bin/zc build examples/hello.z --cc $(MSVC_WINE)/cl -o $$d/hello.exe > $$d/refuse.log 2>&1 || rc=$$?; \
+	{ [ $$rc -eq 2 ] && grep -q 'builds only for Windows' $$d/refuse.log; } \
+	  || { echo "test-msvc-wine FAIL: zc build --cc cl for a Linux target did not refuse (exit $$rc)"; cat $$d/refuse.log; exit 1; }; \
+	echo "test-msvc-wine OK: MSVC $$($(WINE_ENV) $(MSVC_WINE)/cl 2>&1 | grep -m1 -o 'Version [0-9.]*') built the thread shim's test, which passes under wine; zc build --cc cl builds sqlite_hello (C objects included) to its golden, and refuses a target that is not Windows"
 
 # test-msvc-corpus -- the RUN corpus built for Windows by MSVC itself (cl under
 # wine, MSVC_WINE as test-msvc-wine names it) as a backend (--cc-forward, so units
 # cl cannot build are refused by name) and run under wine against the same
-# goldens. cl runs in each case's directory and is handed file names alone, since
-# link.exe reads a path starting with / as an option. tests/msvc-known-failures.txt
-# is the expected failure set, which shrinks as the emitted C becomes ISO C17; a
-# move either way fails. Skipped without MSVC_WINE or wine.
+# goldens. cl's absolute paths are spelled Z:/... (zcc.msvcPath), since link.exe
+# reads a path starting with / as an option. tests/msvc-known-failures.txt is the
+# expected failure set -- only the programs cl cannot build at all, refused by
+# zc, and the POSIX-only ones -- and a move either way fails. Skipped without
+# MSVC_WINE or wine.
 MSVC_KNOWN := tests/msvc-known-failures.txt
 test-msvc-corpus: bin/zc $(BUILDDIR)/ztestrunner $(BUILDDIR)/wineprefix/.ready
 	@if [ -n "$(WINDOWS_HOST)" ]; then \
@@ -467,12 +477,15 @@ windows-guest:
 	  (cd $$d && "$$r/bin/zl" lint --full "$$w\\src\\zsource.z") > $$d/drive-zl.log 2>&1 \
 	    && grep -qF " --> $$w\\src\\zsource.z:" $$d/drive-zl.log \
 	    || { echo "windows-guest FAIL: zl lint given a drive path does not find its project"; grep -m5 -E '^(error|warning)' $$d/drive-zl.log; fail=1; }; \
+	  { "$$r/bin/zc" build tests/fixtures/emitc_corpus/sqlite_hello.z --cc cl -o $$d/sqlite-cl.exe \
+	    && $$d/sqlite-cl.exe > $$d/sqlite-cl.out && cmp -s $$d/sqlite-cl.out tests/fixtures/run_golden/sqlite_hello.out; } > $$d/zc-cl.log 2>&1 \
+	    || { echo "windows-guest FAIL: zc build --cc cl does not build sqlite_hello to its golden"; tail -10 $$d/zc-cl.log; fail=1; }; \
 	  $(MAKE) --no-print-directory ci > $$d/native-ci.log 2>&1 \
 	    || { echo "windows-guest FAIL: make ci with the native tools"; grep -E 'FAIL|Error [0-9]' $$d/native-ci.log | head -20; fail=1; }; \
 	  ci="$$(grep -c 'skipped (Linux only' $$d/native-ci.log) Linux-only legs skipped"; \
 	else echo "windows-guest FAIL: zc, zl, zls, the runner and tcc did not build natively"; tail -10 $$d/native-build.log; fail=1; fi; \
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
-	echo "windows-guest OK: the thread shim under MSVC and UCRT64 gcc; $$pass of $$n run-corpus binaries match their goldens on Windows, the rest as under wine; non-ASCII text on a console; drive paths; make ci with the native tools ($$ci)"
+	echo "windows-guest OK: the thread shim under MSVC and UCRT64 gcc; $$pass of $$n run-corpus binaries match their goldens on Windows, the rest as under wine; non-ASCII text on a console; drive paths; zc build --cc cl; make ci with the native tools ($$ci)"
 
 # windows-due -- one line saying make ci-windows is due, nothing when it is not:
 # it has never passed, or its last green run ($(WINDOWS_VERIFIED)) is
@@ -1189,7 +1202,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2303124
+ALLOC_BASELINE := 2306391
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

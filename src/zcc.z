@@ -11,8 +11,12 @@ public: unit {
     :ccFamilyOf
     :ccFamilyName
     :msvcFlags
+    :msvcPath
     :outputArgs
+    :objectArgs
     :libraryArg
+    :objectExt
+    :spawnCompiler
 }
 
 # ccfamily -- the C compiler a build hands its C to, by family: what the C
@@ -72,16 +76,40 @@ msvcFlags: function {} out List String is {
     return a
 }
 
-# outputArgs -- the arguments naming the executable a compile writes. cl reads
-# a path starting with `/` as an option, so its caller hands it a relative one.
+# msvcPath -- a path as cl is handed it. cl, and the link.exe it runs, read an
+# argument starting with `/` as an option, and a POSIX absolute path starts so;
+# cl runs on a POSIX host only under wine, whose drive Z: is the root, so such a
+# path is spelled `Z:/...`. Any other path is cl's to read as it is.
+msvcPath: function {p: StringView} out String is {
+    if (p.startsWith prefix: "/") then return "Z:\{p}"
+    return p.string
+}
+
+# outputArgs -- the arguments naming the executable a compile writes.
 outputArgs: function {f: ccfamily exe: StringView} out List String is {
     a: List String
     if f.msvc then {
-        a.append from: "-Fe:\{exe}"
+        a.append from: "-Fe:\{msvcPath p: exe}"
         return a
     }
     a.append from: "-o".string
     a.append from: exe.string
+    return a
+}
+
+# objectArgs -- the arguments compiling the C file `src` to the object `obj`
+# without linking: `-c src -o obj`, or cl's `-c src -Fo:obj`.
+objectArgs: function {f: ccfamily src: StringView obj: StringView} out List String is {
+    a: List String
+    a.append from: "-c".string
+    if f.msvc then {
+        a.append from: (msvcPath p: src)
+        a.append from: "-Fo:\{msvcPath p: obj}"
+        return a
+    }
+    a.append from: src.string
+    a.append from: "-o".string
+    a.append from: obj.string
     return a
 }
 
@@ -90,4 +118,34 @@ outputArgs: function {f: ccfamily exe: StringView} out List String is {
 libraryArg: function {f: ccfamily name: StringView} out String is {
     if f.msvc then return "\{name}.lib"
     return "-l\{name}"
+}
+
+# objectExt -- the extension of an object file the family writes: `.obj` for
+# cl, which reads any other as a source it does not know (D9024), `.o` else.
+objectExt: function {f: ccfamily} out StringView is {
+    if f.msvc then return ".obj"
+    return ".o"
+}
+
+# spawnCompiler -- run the compile `argv` of family `f` on the C file `src`,
+# its diagnostics on stderr, and answer its exit status. cl names each C file
+# it compiles on its standard output, and writes its warnings and errors there
+# too: that output is read back from the file `scratch`, the name dropped and
+# the rest written to stderr. Every other family writes to the terminal's own
+# streams.
+spawnCompiler: function {
+    argv: List String f: ccfamily src: StringView scratch: StringView
+} out i32 is {
+    if f.msvc.not then return (os.spawn :argv cwd: "" outPath: "" errPath: "" timeoutSecs: 0)
+    rc: os.spawn :argv cwd: "" outPath: scratch errPath: "" timeoutSecs: 0
+    said: io.readText path: scratch
+    if said.ok then {
+        cn: path.baseName p: src
+        for each ln: said.stringView.lines loop {
+            if ln != cn then io.eprintln ln
+        }
+    }
+    rm: io.remove path: scratch
+    rm.drop
+    return rc
 }
