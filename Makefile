@@ -1169,7 +1169,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2287503
+ALLOC_BASELINE := 2282451
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1827,23 +1827,24 @@ ident-set:
 	fi
 
 # const-row-guard -- a natives.tbl `const=` row is chosen exactly when its operand
-# is a compile-time constant: const_shift_form has three non-constant shifts, each
-# of which must bind an `_r` operand (a variant names its hole more than once).
-CONST_ROW_VARIABLE := 3
+# is a compile-time constant: const_divide_form divides by a variable four times,
+# and each of those must call the helper that checks the divisor; its constant
+# divisors divide inline.
+CONST_ROW_VARIABLE := 4
 
 const-row-guard: bin/zc
 	@d=$$(mktemp -d); em=$$d/emitted.c; \
-	bin/zc emit tests/fixtures/emitc_corpus/const_shift_form.z -o $$em || { \
-	  echo "const-row-guard FAIL: const_shift_form did not emit"; rm -rf $$d; exit 1; }; \
-	n=$$(grep -o '_r = ' $$em | wc -l); rm -rf $$d; \
+	bin/zc emit tests/fixtures/emitc_corpus/const_divide_form.z -o $$em || { \
+	  echo "const-row-guard FAIL: const_divide_form did not emit"; rm -rf $$d; exit 1; }; \
+	n=$$(grep -v '^static' $$em | grep -oE 'z_(div|rem)_[a-z0-9]+\(' | wc -l); rm -rf $$d; \
 	if [ "$$n" -ne $(CONST_ROW_VARIABLE) ]; then \
-	  echo "const-row-guard FAIL: $$n operand bindings, expected $(CONST_ROW_VARIABLE)"; \
-	  echo "  More means a constant count stopped selecting the const= row."; \
-	  echo "  Fewer means a NON-constant one selected it, and the variant names"; \
-	  echo "  its hole more than once -- a call operand would be evaluated twice."; \
+	  echo "const-row-guard FAIL: $$n divisor-checking calls, expected $(CONST_ROW_VARIABLE)"; \
+	  echo "  More means a constant divisor stopped selecting the const= row."; \
+	  echo "  Fewer means a variable divisor selected it, and that division is"; \
+	  echo "  no longer checked for zero."; \
 	  exit 1; \
 	fi; \
-	echo "const-row-guard OK: $$n non-constant shift operands bound, the rest fold"
+	echo "const-row-guard OK: $$n variable divisors checked, the constant ones divide inline"
 
 # deadcode-guard -- no emitted statement is unreachable (clang's
 # -Wunreachable-code; gcc never warns). Skipped without clang.
