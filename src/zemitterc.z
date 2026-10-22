@@ -11546,29 +11546,24 @@ emitInterpArgExpr: function {
         n
     ) case atomstring then {
         if (isInterp :ast parts: n.stringparts) then {
+            # the build runs where the value is read: its locals are declared by
+            # the enclosing statement, and what its parts hoisted is assigned and
+            # released inside it, so the statement owes none of them
             ltmp: TmpCtr n: 0 frees: List OwedFree listFrees: List OwedFree
-            lbuf: String
-            # this interpolation emits into its OWN `({ ... })` scope, so hoists
-            # already pending from the enclosing argument list must stay pending:
-            # they are declared and used at the call, outside this block.
-            hf: ctx.argHoists.length
-            hr: ctx.argHoistRaw.length
+            unused: String
+            ops: String
             sM: (emitInterpBuild
                 :ast
                 :symtab
                 :ctx
                 parts: n.stringparts
-                ind: " "
+                ind: ""
                 tmp: ltmp
-                buf: lbuf
-                hoistFloor: hf
-                hoistRawFloor: hr
+                buf: unused
+                expr: true
+                :ops
             )
-            # the temporaries the parts hoisted (a call's owned result read
-            # through `.stringView`) are owed to this block's own counter, which
-            # no statement end drains: free them here, after the last append
-            flushBlockFrees :ctx tmp: ltmp fL: 0 lL: 0 diverged: false buf: lbuf
-            r: "({ \{lbuf}\{sM}; })"
+            r: "(\{ops}\{sM})"
             return r
         }
         return ""
@@ -11611,6 +11606,7 @@ emitInterpStmtValue: function {
         n
     ) case atomstring then {
         if (isInterp :ast parts: n.stringparts) then {
+            unusedOps: String
             sB: (emitInterpBuild
                 :ast
                 :symtab
@@ -11620,6 +11616,7 @@ emitInterpStmtValue: function {
                 :tmp
                 :buf
                 strNid: n.nodeid
+                ops: unusedOps
             )
             # the built String's temp
             return (stating :facts from: pathFacts text: sB)
@@ -21092,7 +21089,8 @@ emitInterpPrint: function {
     # the interpolated literal's own node, 0 when unknown here
     strNid: zast.nodeid.zero
 } is {
-    sNm: emitInterpBuild :ast :symtab :ctx :parts :ind :tmp :buf :strNid
+    unusedOps: String
+    sNm: emitInterpBuild :ast :symtab :ctx :parts :ind :tmp :buf :strNid ops: unusedOps
     l1: "\{ind}\{ctx.strC}_print(&\{sNm});\n"
     buf.append l1
     if (scopeOwnsTemp :symtab argNid: strNid) then {
@@ -21119,8 +21117,9 @@ emitInterpBuild: function {
     # an inner detail: a statement expression assigns it to a hoist outside the
     # block, and that hoist is what carries the checker's name
     strNid: zast.nodeid.zero
-    hoistFloor: 0.u64
-    hoistRawFloor: 0.u64
+    # the build is used as a value: its steps are operands on `ops`
+    expr: false
+    ops: String.borrow
 } out String is {
     est: u64
     h5x9: u64
@@ -21144,8 +21143,18 @@ emitInterpBuild: function {
         argNid: strNid
         fallback: "_s"
     )
-    l0: "\{ind}\{ctx.strC}_t \{sNm} = \{ctx.strC}_create((uint64_t)\{est});\n"
-    buf.append l0
+    strT: "\{ctx.strC}_t"
+    cr: "\{ctx.strC}_create((uint64_t)\{est})"
+    (interpLocal
+        :ctx
+        :expr
+        ctype: strT.stringView
+        name: sNm.stringView
+        init: cr.stringView
+        :ind
+        :buf
+        :ops
+    )
     h6x9: u64
     for h6x9 < parts.count loop {
         qId: zast.kidAt kids: ast.kids span: parts i: h6x9
@@ -21156,11 +21165,11 @@ emitInterpBuild: function {
             :ctx
             n: (ast.nodes.get i: qId)
             sNm: sNm.stringView
+            :expr
             :ind
             :tmp
             :buf
-            :hoistFloor
-            :hoistRawFloor
+            :ops
         )
     }
     return sNm
@@ -21289,20 +21298,166 @@ interpPartTid: function {
     return (ztypecheck.typedefChaseTid st: symtab tid: t)
 }
 
+# interpStep -- one step of an interpolation build: a statement on `buf` at
+# `ind`, or, for a build used as a value (`expr`), an operand of its comma
+# expression on `ops`.
+interpStep: function {
+    expr: bool
+    text: StringView
+    ind: StringView
+    buf: String.borrow
+    ops: String.borrow
+} is {
+    if expr then {
+        ops.append text
+        ops.append ", "
+        return
+    }
+    buf.append ind
+    buf.append text
+    buf.append ";\n"
+}
+
+# interpLocal -- a local of C type `ctype` an interpolation build sets to
+# `init`: declared on its line in a statement build; in a build used as a
+# value, declared by the enclosing statement and assigned where the build
+# runs. It owns nothing the build does not release.
+interpLocal: function {
+    ctx: Ctx
+    expr: bool
+    ctype: StringView
+    name: StringView
+    init: StringView
+    ind: StringView
+    buf: String.borrow
+    ops: String.borrow
+} is {
+    if expr then {
+        ctx.argHoists.append (ArgHoist
+            name: name.string
+            val: String
+            ctype: ctype.string
+            dtor: String
+        )
+        ops.append name
+        ops.append " = "
+        ops.append init
+        ops.append ", "
+        return
+    }
+    buf.append ind
+    buf.append ctype
+    buf.append " "
+    buf.append name
+    buf.append " = "
+    buf.append init
+    buf.append ";\n"
+}
+
+# interpBuffer -- the `size`-byte char buffer `_b<bN>` a number is formatted
+# into, declared as interpLocal declares a local.
+interpBuffer: function {
+    ctx: Ctx
+    expr: bool
+    bN: u64
+    size: u64
+    ind: StringView
+    buf: String.borrow
+} is {
+    arr: "_b\{bN}"
+    arr.append "["
+    appendDecimal buf: arr n: size
+    arr.append "]"
+    if expr then {
+        ctx.argHoists.append (ArgHoist name: arr val: String ctype: "char" dtor: String)
+        return
+    }
+    buf.append "\{ind}char \{arr};\n"
+}
+
+# interpHoistsInPlace -- the hoists a part of a build used as a value recorded
+# since `mark`: each is assigned where the part runs, ahead of its append, and
+# a value it owns is released after the append (`rel`), so the statement
+# declaring it owes it nothing. A raw hoist copies a constant data block, which
+# no order can change, and stays the statement's.
+interpHoistsInPlace: function {ctx: Ctx mark: hoistmark ops: String.borrow rel: String.borrow} is {
+    i: mark.names
+    for i < ctx.argHoists.length loop {
+        ph: ctx.argHoists.getMut :i
+        if ph.val.length > 0 then {
+            vl: String
+            vl swap ph.val
+            ops.append "\{ph.name} = \{vl}, "
+        }
+        if ph.dtor.length > 0 then {
+            dl: String
+            dl swap ph.dtor
+            appendLinesAsOps ops: rel lines: dl.stringView
+        }
+        i = i + 1
+    }
+}
+
+# appendLinesAsOps -- statement lines, each one call or assignment, as comma
+# operands appended to `ops`, each followed by ", ".
+appendLinesAsOps: function {ops: String.borrow lines: StringView} is {
+    for each ln: (lines.split sep: "\n") loop {
+        t: ln.trim
+        if t.length > 0 then {
+            if t.endsWith ";" then {
+                ops.append (t.substring from: 0 to: t.length - 1)
+            } else {
+                ops.append t
+            }
+            ops.append ", "
+        }
+    }
+}
+
 # appendFormattedNum -- format a number into a stack buffer and append it: the
-# buffer declaration with its formatting statement, then the append.
+# `size`-byte buffer, `_b<bN>_n` set to `call`'s formatted length, then the
+# append.
 appendFormattedNum: function {
     ctx: Ctx
     # the string being built, and the temp counter value for the scalar buffer
     sNm: StringView
     bN: u64
-    # the C declaration of the buffer and of `_b<N>_n`, its formatted length
-    stmt: String
+    size: u64
+    # the formatting call, which answers the length it wrote
+    call: String
+    expr: bool
     ind: StringView
     buf: String.borrow
+    ops: String.borrow
 } is {
-    buf.append "\{ind}\{stmt};\n"
-    buf.append "\{ind}\{ctx.strC}_append(&\{sNm}, _b\{bN}, (uint64_t)_b\{bN}_n);\n"
+    if expr then {
+        interpBuffer :ctx :expr :bN :size :ind :buf
+        nn: "_b\{bN}_n"
+        interpLocal :ctx :expr ctype: "int" name: nn.stringView init: call.stringView :ind :buf :ops
+        st: "\{ctx.strC}_append(&\{sNm}, _b\{bN}, (uint64_t)_b\{bN}_n)"
+        interpStep :expr text: st.stringView :ind :buf :ops
+        return
+    }
+    # the statement form, written in place: the commonest part of all
+    buf.append ind
+    buf.append "char _b"
+    appendDecimal :buf n: bN
+    buf.append "["
+    appendDecimal :buf n: size
+    buf.append "]; int _b"
+    appendDecimal :buf n: bN
+    buf.append "_n = "
+    buf.append call
+    buf.append ";\n"
+    buf.append ind
+    buf.append ctx.strC
+    buf.append "_append(&"
+    buf.append sNm
+    buf.append ", _b"
+    appendDecimal :buf n: bN
+    buf.append ", (uint64_t)_b"
+    appendDecimal :buf n: bN
+    buf.append "_n);\n"
 }
 
 # appendViewPart -- append a StringView-typed part, a by-value operand (a
@@ -21315,17 +21470,20 @@ appendViewPart: function {
     val: StringView
     valF: cfacts
     sNm: StringView
+    expr: bool
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
+    ops: String.borrow
 } is {
+    rd: val.string
     if valF.once then {
-        svh: tmpNext :ctx :tmp
-        buf.append "\{ind}\{ctx.svC}_t _h\{svh} = \{val};\n"
-        buf.append "\{ind}\{ctx.strC}_append(&\{sNm}, _h\{svh}.data, _h\{svh}.size);\n"
-        return
+        rd = "_h\{tmpNext :ctx :tmp}"
+        svT: "\{ctx.svC}_t"
+        interpLocal :ctx :expr ctype: svT.stringView name: rd.stringView init: val :ind :buf :ops
     }
-    buf.append "\{ind}\{ctx.strC}_append(&\{sNm}, \{val}.data, \{val}.size);\n"
+    st: "\{ctx.strC}_append(&\{sNm}, \{rd}.data, \{rd}.size)"
+    interpStep :expr text: st.stringView :ind :buf :ops
 }
 
 # appendStrPart -- append a sized str part, read for its data and its length:
@@ -21338,19 +21496,21 @@ appendStrPart: function {
     val: StringView
     valF: cfacts
     sNm: StringView
+    expr: bool
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
+    ops: String.borrow
 } is {
+    rd: val.string
     if valF.once then {
-        sth: tmpNext :ctx :tmp
+        rd = "_h\{tmpNext :ctx :tmp}"
         stT: chaseAggregateTypedef :symtab :ctx tid: (stampIdOf :symtab nid: (interpPartNodeId :n))
         stC: typeRefC :ast :symtab :ctx tid: stT
-        buf.append "\{ind}\{stC} _h\{sth} = \{val};\n"
-        buf.append "\{ind}\{ctx.strC}_append(&\{sNm}, _h\{sth}.data, _h\{sth}.len);\n"
-        return
+        interpLocal :ctx :expr ctype: stC.stringView name: rd.stringView init: val :ind :buf :ops
     }
-    buf.append "\{ind}\{ctx.strC}_append(&\{sNm}, \{val}.data, \{val}.len);\n"
+    st: "\{ctx.strC}_append(&\{sNm}, \{rd}.data, \{rd}.len)"
+    interpStep :expr text: st.stringView :ind :buf :ops
 }
 
 # appendStringPart -- append a String-typed part. An atom (a borrowed String
@@ -21370,8 +21530,10 @@ appendStringPart: function {
     val: StringView
     valF: cfacts
     sNm: StringView
+    expr: bool
     ind: StringView
     buf: String.borrow
+    ops: String.borrow
 } is {
     an0: atomTextOf :ast :n
     # an atom naming a FUNCTION is a call, whose String is a temporary
@@ -21390,16 +21552,20 @@ appendStringPart: function {
         # a String read through a borrowed field is a pointer with no variable
         # behind it
         if an0.length == 0 when (pathIsPointer :ast :symtab :ctx :n) then sAcc = "->"
-        buf.append "\{ind}\{ctx.strC}_append(&\{sNm}, \{val}\{sAcc}data, \{val}\{sAcc}size);\n"
+        sa: "\{ctx.strC}_append(&\{sNm}, \{val}\{sAcc}data, \{val}\{sAcc}size)"
+        interpStep :expr text: sa.stringView :ind :buf :ops
         return
     }
     # a fallback here may NOT be spelled `_h<n>`: that prefix is the TmpCtr's,
     # and this name comes from `ctx.argHoistCtr`, so two counters would collide
     hNm: argHoistName :symtab :ctx argNid: (interpPartNodeId :n) fallback: "_hp"
-    buf.append "\{ind}\{ctx.strC}_t \{hNm} = \{val};\n"
-    buf.append "\{ind}\{ctx.strC}_append(&\{sNm}, \{hNm}.data, \{hNm}.size);\n"
+    strT: "\{ctx.strC}_t"
+    interpLocal :ctx :expr ctype: strT.stringView name: hNm.stringView init: val :ind :buf :ops
+    sh: "\{ctx.strC}_append(&\{sNm}, \{hNm}.data, \{hNm}.size)"
+    interpStep :expr text: sh.stringView :ind :buf :ops
     if (scopeOwnsTemp :symtab argNid: (interpPartNodeId :n)) then {
-        buf.append "\{ind}\{ctx.strC}_free(&\{hNm});\n"
+        sf: "\{ctx.strC}_free(&\{hNm})"
+        interpStep :expr text: sf.stringView :ind :buf :ops
     }
 }
 
@@ -21431,10 +21597,13 @@ interpBoolPart: function {
     sNm: StringView
     # the temp number for the part's locals
     bN: u64
+    # the build is used as a value: its steps are operands on `ops`
+    expr: bool
     # the statements' indent
     ind: StringView
     # the function body being written
     buf: String.borrow
+    ops: String.borrow
 } is {
     f: zast.nameTextAt :ast ref: (armIdAt :symtab tid: ctx.boolTid armOrd: 0)
     t: zast.nameTextAt :ast ref: (armIdAt :symtab tid: ctx.boolTid armOrd: 1)
@@ -21442,43 +21611,44 @@ interpBoolPart: function {
     tl: t.length
     fq: "\"\{f}\""
     tq: "\"\{t}\""
-    (appendFormattedNum
+    vn: "_v\{bN}"
+    interpLocal :ctx :expr ctype: "bool" name: vn.stringView init: val :ind :buf :ops
+    bn: "_b\{bN}"
+    bi: "\{vn} ? \{tq} : \{fq}"
+    (interpLocal
         :ctx
-        :sNm
-        :bN
-        stmt: "bool _v\{bN} = \{val}; const char* _b\{bN} = _v\{bN} ? \{tq} : \{fq}; int _b\{bN}_n = _v\{bN} ? \{tl} : \{fl}"
+        :expr
+        ctype: "const char*"
+        name: bn.stringView
+        init: bi.stringView
         :ind
         :buf
+        :ops
     )
+    nn: "_b\{bN}_n"
+    ni: "\{vn} ? \{tl} : \{fl}"
+    interpLocal :ctx :expr ctype: "int" name: nn.stringView init: ni.stringView :ind :buf :ops
+    st: "\{ctx.strC}_append(&\{sNm}, \{bn}, (uint64_t)\{nn})"
+    interpStep :expr text: st.stringView :ind :buf :ops
 }
 
-# emit one part of a string interpolation.
-emitInterpPart: function {
-    hoistFloor: 0.u64
-    hoistRawFloor: 0.u64
+# interpScalarPart -- an interpolated number or bool, formatted and appended
+# to `sNm`: false when the part's type `pt` (with its numeric kind `nk`) is
+# neither, and nothing is written.
+interpScalarPart: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: astnode.view
+    pt: ztypes.tid
+    nk: ztypes.suffixinfo
+    val: StringView
     sNm: StringView
+    expr: bool
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
-} is {
-    if n.stringchunk then {
-        tv: (zast.poolTextAt pool: ast.names ref: n.text).stringView
-        esc: cEscape text: tv
-        buf.append "\{ind}\{ctx.strC}_append(&\{sNm}, \"\{esc}\", sizeof(\"\{esc}\")-1);\n"
-        return
-    }
-    pt: interpPartTid :symtab :ctx :n
-    nk: ztypecheck.numKindOfTid st: symtab tid: pt
-    valF: cfacts
-    val: valueExprC :ast :symtab :ctx :n facts: valF
-    # a call fragment may have hoisted non-lvalue args to _ah temps:
-    # declare them before the fragment uses them (mirrors the direct
-    # print path's flush after emitCallValue)
-    flushArgHoists :ctx :ind :tmp :buf floor: hoistFloor rawFloor: hoistRawFloor
+    ops: String.borrow
+} out bool is {
     bN: tmpNext :ctx :tmp
     if nk.has when nk.kind == ztypes.numkind.i128Type then {
         needsAddM :ctx uname: "prelude" memb: "int128"
@@ -21486,9 +21656,12 @@ emitInterpPart: function {
             :ctx
             :sNm
             :bN
-            stmt: "char _b\{bN}[48]; int _b\{bN}_n = z_fmt_i128(_b\{bN}, \{val})"
+            size: 48
+            call: "z_fmt_i128(_b\{bN}, \{val})"
+            :expr
             :ind
             :buf
+            :ops
         )
     } else if nk.has when nk.kind == ztypes.numkind.u128Type then {
         needsAddM :ctx uname: "prelude" memb: "int128"
@@ -21496,9 +21669,12 @@ emitInterpPart: function {
             :ctx
             :sNm
             :bN
-            stmt: "char _b\{bN}[48]; int _b\{bN}_n = z_fmt_u128(_b\{bN}, \{val})"
+            size: 48
+            call: "z_fmt_u128(_b\{bN}, \{val})"
+            :expr
             :ind
             :buf
+            :ops
         )
     } else if pt.isZero.not when ctx.boolTid.isZero.not when (
         (ztypecheck.typedefChaseTid
@@ -21507,7 +21683,7 @@ emitInterpPart: function {
         ) ==
         ctx.boolTid
     ) then {
-        interpBoolPart :ast :symtab :ctx val: val.stringView :sNm :bN :ind :buf
+        interpBoolPart :ast :symtab :ctx :val :sNm :bN :expr :ind :buf :ops
     } else if (interpPartIsInt :symtab tid: pt :nk) then {
         # u64 is the one integer width whose range does not fit in
         # int64_t, so it is formatted unsigned -- signed, u64 max would print
@@ -21526,23 +21702,29 @@ emitInterpPart: function {
             :ctx
             :sNm
             :bN
-            stmt: "char _b\{bN}[32]; int _b\{bN}_n = \{fmtFn}(_b\{bN}, (\{cast})\{val})"
+            size: 32
+            call: "\{fmtFn}(_b\{bN}, (\{cast})\{val})"
+            :expr
             :ind
             :buf
+            :ops
         )
     } else if nk.has when nk.kind == ztypes.numkind.f128Type then {
         (appendFormattedNum
             :ctx
             :sNm
             :bN
-            stmt: "char _b\{bN}[64]; int _b\{bN}_n = quadmath_snprintf(_b\{bN}, 64, \"%Qg\", \{val})"
+            size: 64
+            call: "quadmath_snprintf(_b\{bN}, 64, \"%Qg\", \{val})"
+            :expr
             :ind
             :buf
+            :ops
         )
     } else if nk.has when (kindIsFloat k: nk.kind) then {
         # an f16 is read as the float it widens to: its value need be no C
         # arithmetic type
-        fv: val.copy
+        fv: val.string
         if nk.kind == ztypes.numkind.f16Type then {
             needsAddM :ctx uname: "prelude" memb: "f16"
             fv = "z_f16_to_f32(\{val})"
@@ -21551,30 +21733,97 @@ emitInterpPart: function {
             :ctx
             :sNm
             :bN
-            stmt: "char _b\{bN}[64]; int _b\{bN}_n = snprintf(_b\{bN}, 64, \"%g\", (double)\{fv})"
+            size: 64
+            call: "snprintf(_b\{bN}, 64, \"%g\", (double)\{fv})"
+            :expr
             :ind
             :buf
+            :ops
         )
+    } else {
+        return false
+    }
+    return true
+}
+
+# emitInterpPart -- one part of a string interpolation, appended to the String
+# `sNm` being built: as statements on `buf`, or, for a build used as a value
+# (`expr`), as operands of its comma expression on `ops`.
+emitInterpPart: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: astnode.view
+    sNm: StringView
+    expr: bool
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+    ops: String.borrow
+} is {
+    if n.stringchunk then {
+        tv: (zast.poolTextAt pool: ast.names ref: n.text).stringView
+        esc: cEscape text: tv
+        sc: "\{ctx.strC}_append(&\{sNm}, \"\{esc}\", sizeof(\"\{esc}\")-1)"
+        interpStep :expr text: sc.stringView :ind :buf :ops
+        return
+    }
+    pt: interpPartTid :symtab :ctx :n
+    nk: ztypecheck.numKindOfTid st: symtab tid: pt
+    pmk: pendingHoistMark :ctx
+    valF: cfacts
+    val: valueExprC :ast :symtab :ctx :n facts: valF
+    # a call fragment may have hoisted non-lvalue args to _ah temps: declare
+    # them before the fragment uses them (mirrors the direct print path's flush
+    # after emitCallValue); a build used as a value assigns them where it runs
+    rel: String
+    if expr then {
+        interpHoistsInPlace :ctx mark: pmk :ops :rel
+    } else {
+        flushArgHoists :ctx :ind :tmp :buf
+    }
+    if (interpScalarPart
+        :ast
+        :symtab
+        :ctx
+        :pt
+        :nk
+        val: val.stringView
+        :sNm
+        :expr
+        :ind
+        :tmp
+        :buf
+        :ops
+    ) then {
+        null
     } else if pt.isZero.not when pt == ctx.svTid then {
-        appendViewPart :ctx val: val.stringView :valF :sNm :ind :tmp :buf
+        appendViewPart :ctx val: val.stringView :valF :sNm :expr :ind :tmp :buf :ops
     } else if pt.isZero.not when pt == ctx.strTid then {
-        appendStringPart :ast :symtab :ctx :n val: val.stringView :valF :sNm :ind :buf
+        appendStringPart :ast :symtab :ctx :n val: val.stringView :valF :sNm :expr :ind :buf :ops
     } else if (originIsTid
         :symtab
         tid: (stampIdOf :symtab nid: (interpPartNodeId :n))
         originTid: (ctx.origins.get i: family.slot.str)
     ) then {
-        appendStrPart :ast :symtab :ctx :n val: val.stringView :valF :sNm :ind :tmp :buf
+        appendStrPart :ast :symtab :ctx :n val: val.stringView :valF :sNm :expr :ind :tmp :buf :ops
     } else {
         tn: regNameView :symtab tid: pt
         emitFail :ctx what: "unhandled interp part type \{tn}" line: (ztypecheck.nodeLine :n)
-        buf.append "\{ind}/* zemitterc: unhandled interp part type \{tn} */\n"
+        if expr.not then buf.append "\{ind}/* zemitterc: unhandled interp part type \{tn} */\n"
     }
     # the part's value has been appended, so a `.take` argument inside it
     # has been consumed: zero its source here, as the statement paths do.
     # Without this the callee frees the moved value and the caller frees it
     # again at scope end.
-    emitValueTakeInvalidations :ast :symtab :ctx :n :ind :buf
+    if expr.not then {
+        emitValueTakeInvalidations :ast :symtab :ctx :n :ind :buf
+        return
+    }
+    inv: String
+    emitValueTakeInvalidations :ast :symtab :ctx :n ind: "" buf: inv
+    appendLinesAsOps :ops lines: inv.stringView
+    ops.append rel
 }
 
 # interpPartNodeId -- the nodeid of a value shape, the id its stamp is keyed on:
@@ -22243,6 +22492,7 @@ emitStringBindValue: function {
         n
     ) case atomstring then {
         if (isInterp :ast parts: n.stringparts) then {
+            unusedOps: String
             sB: (emitInterpBuild
                 :ast
                 :symtab
@@ -22252,6 +22502,7 @@ emitStringBindValue: function {
                 :tmp
                 :buf
                 strNid: n.nodeid
+                ops: unusedOps
             )
             lst: "\{ind}\{ctx.strC}_t \{nm} = \{sB};\n"
             buf.append lst
@@ -22391,6 +22642,7 @@ emitStringReturnValue: function {
         n
     ) case atomstring then {
         if (isInterp :ast parts: n.stringparts) then {
+            unusedOps: String
             sB: (emitInterpBuild
                 :ast
                 :symtab
@@ -22400,6 +22652,7 @@ emitStringReturnValue: function {
                 :tmp
                 :buf
                 strNid: n.nodeid
+                ops: unusedOps
             )
             emitReturnCleanup :symtab :ctx :tmp retExpr: sB.stringView keepRefd: true :ind :buf
             lst: "\{ind}return \{sB};\n"
