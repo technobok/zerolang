@@ -1351,8 +1351,6 @@ emitNumericCast: function {
             bv.append from: (ctxCname :ctx tid: retTid)
         }
     }
-    ord: orderBegin :ctx slots: 1
-    if (rowHoleTwice body: body.stringView hole: "@V@") then orderNamesTwice st: ord slot: 0
     # a checked conversion reads a constant into its temp too: spelled in
     # place, it would fold the tests, and the C compiler would report the
     # result they rule out as code never executed
@@ -1369,35 +1367,31 @@ emitNumericCast: function {
         constant = false
         partF.once = true
     }
-    (orderPartWith
+    pre: String
+    spelled: (orderOnePart
         :ast
         :symtab
         :ctx
-        st: ord
         :mark
         text: val
         tf: partF
-        :constant
-        fid: ztypes.tid
-        pid: ztypes.tid.zero
-        pname: zast.nameid
+        nid: valNid
         ctype: ""
-        slot: 0
-        valueNid: valNid
+        :constant
+        twice: (rowHoleTwice body: body.stringView hole: "@V@")
+        prefix: pre
     )
-    oprefix: orderFinish :ctx st: ord
     rn.append from: "V".string
     if isResultval then {
-        rv.append from: (orderSlotText t: ctx st: ord slot: 0).string
+        rv.append from: spelled.copy
     } else {
         (rv.append
             from: (castLitVal
-                val: (orderSlotText t: ctx st: ord slot: 0)
+                val: spelled.stringView
                 dst: (constScalarKindForTid :symtab tid: retTid)
             )
         )
     }
-    orderEnd :ctx st: ord
     filled: (fillHolesForCtx
         :ast
         :symtab
@@ -1409,10 +1403,10 @@ emitNumericCast: function {
         rawNames: rn
         rawVals: rv
     )
-    if oprefix.length == 0 when (nativeValueRowOf :ctx path: key) then {
+    if pre.length == 0 when (nativeValueRowOf :ctx path: key) then {
         return (stating :facts from: (operandFacts e: valF place: false) text: filled)
     }
-    return (stating :facts from: callFacts text: (orderWrap prefix: oprefix call: filled))
+    return (stating :facts from: callFacts text: (orderWrap prefix: pre call: filled))
 }
 
 
@@ -7403,6 +7397,51 @@ orderNamesTwiceArgs: function {st: orderstate.borrow body: StringView count: u64
     }
 }
 
+# orderOnePart -- `text`, whose facts are `tf` and whose value is node `nid`,
+# placed in evaluation order as the one part of C that reads it, more than
+# once when `twice`: it is read into its temp, typed `ctype` (or from `nid`
+# where that is ""), unless it is `constant` or reading it twice costs
+# nothing. `mark` is where the pending hoists stood before `text` was built.
+# The answer is the text the reader spells; `prefix` is left holding the
+# opening of the comma expression that reads it into its temp (orderFinish),
+# "" when it is read in place.
+orderOnePart: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    mark: hoistmark
+    text: String.take
+    tf: cfacts
+    nid: zast.nodeid
+    ctype: StringView
+    constant: bool
+    twice: bool
+    prefix: String.borrow
+} out String is {
+    ord: orderBegin :ctx slots: 1
+    if twice then orderNamesTwice st: ord slot: 0
+    (orderPartWith
+        :ast
+        :symtab
+        :ctx
+        st: ord
+        :mark
+        :text
+        :tf
+        :constant
+        fid: ztypes.tid
+        pid: ztypes.tid.zero
+        pname: zast.nameid
+        :ctype
+        slot: 0
+        valueNid: nid
+    )
+    prefix.append (orderFinish :ctx st: ord)
+    spelled: (orderSlotText t: ctx st: ord slot: 0).string
+    orderEnd :ctx st: ord
+    return spelled
+}
+
 # orderSlotTwice -- whether the row the call `st` opened names the hole of slot
 # `slot` more than once.
 orderSlotTwice: function {st: orderstate.view slot: u64} out bool is {
@@ -7591,21 +7630,20 @@ orderSettle: function {
     # through a comma so a `const` source still gives an assignable temp. A
     # scalar is spelled with its C type: typed as its own expression, the
     # operand of a chain would repeat the whole chain before it
+    # the type the caller gave wins, then the declared parameter's, then the
+    # part's own; each is spelled only when nothing above it answered
     ct: String
-    if vnid.isZero.not then ct = (operandScalarC
-        :symtab
-        n: (ast.nodes.get i: vnid)
-    )
-    if ct.length == 0 then ct = "__typeof__(((void)0, \{text}))"
-    if fid.isZero.not then ct = (paramCType
-        :ast
-        :symtab
-        :ctx
-        :fid
-        pnameId: pnm
-        :pid
-    )
-    if given.length > 0 then ct = given.take
+    if given.length > 0 then {
+        ct = given.take
+    } else if fid.isZero.not then {
+        ct = paramCType :ast :symtab :ctx :fid pnameId: pnm :pid
+    } else {
+        if vnid.isZero.not then ct = (operandScalarC
+            :symtab
+            n: (ast.nodes.get i: vnid)
+        )
+        if ct.length == 0 then ct = "__typeof__(((void)0, \{text}))"
+    }
     if ct.length == 0 then {
         orderSetSlot :ctx :st :slot :text tf: pf
         return
@@ -19317,7 +19355,9 @@ boxMemberElem: function {
 }
 
 # orPanicExprC -- `r.orPanic` on a resultval `tid`: the ok payload, or a panic
-# when `r` holds err. `recv` is r's C expression, evaluated once.
+# when `r` holds err. `recv` is r's C expression, whose facts are `recvF` and
+# whose value is node `recvNid`: it is read for its tag and then its payload,
+# so it is evaluated once, into its temp, unless reading it twice costs nothing.
 orPanicExprC: function {
     # the arm names
     ast: Ast.view
@@ -19326,18 +19366,33 @@ orPanicExprC: function {
     ctx: Ctx
     # the resultval instance
     tid: ztypes.tid
-    recv: StringView
+    recv: String.take
+    recvF: cfacts
+    recvNid: zast.nodeid
     facts: cfacts.borrow
 } out String is {
     rcT: ctxCname :ctx :tid
     okTag: tagConstOf :ast :ctx :symtab :tid armId: zast.wellKnown.slot.wkOk
     okC: memberC :ast :symtab :ctx owner: tid kind: memberkind.arm nameId: zast.wellKnown.slot.wkOk
-    pnc: "z_panic(\"orPanic: result is err\")"
-    return (stating
-        :facts
-        from: callFacts
-        text: "({ \{rcT}_t _rc = (\{recv}); if (_rc.tag != \{okTag}) \{pnc}; _rc.data.\{okC}; })"
+    rcCType: "\{rcT}_t"
+    pre: String
+    spelled: (orderOnePart
+        :ast
+        :symtab
+        :ctx
+        mark: (pendingHoistMark :ctx)
+        text: recv
+        tf: recvF
+        nid: recvNid
+        ctype: rcCType.stringView
+        constant: false
+        twice: true
+        prefix: pre
     )
+    r: spelled.stringView
+    pnc: "z_panic(\"orPanic: result is err\")"
+    body: "((\{r}.tag != \{okTag} ? \{pnc} : (void)0), \{r}.data.\{okC})"
+    return (stating :facts from: callFacts text: (orderWrap prefix: pre call: body))
 }
 
 # emitDottedRead -- the C text of a dotted PATH read (the call form is
@@ -19370,7 +19425,16 @@ emitDottedRead: function {
         if isRcc then {
             rcRecvF: cfacts
             rcRecv: valueExprC :ast :symtab :ctx n: (ast.nodes.get i: n.parent) facts: rcRecvF
-            return (orPanicExprC :ast :symtab :ctx tid: pMono recv: rcRecv.stringView :facts)
+            return (orPanicExprC
+                :ast
+                :symtab
+                :ctx
+                tid: pMono
+                recv: rcRecv
+                recvF: rcRecvF
+                recvNid: n.parent
+                :facts
+            )
         }
     }
     dtg: (emitDottedTagRead
@@ -43657,7 +43721,16 @@ emitResultCombinator: function {
     if recvExpr.length == 0 then return ""
     okTag: tagConstOf :ast :ctx :symtab tid: rtid armId: payArmId
     rcT: ctxCname :ctx tid: rtid
-    if isP then return (orPanicExprC :ast :symtab :ctx tid: rtid recv: recvExpr.stringView :facts)
+    if isP then return (orPanicExprC
+        :ast
+        :symtab
+        :ctx
+        tid: rtid
+        recv: recvExpr
+        recvF: recvExprF
+        recvNid: bnid
+        :facts
+    )
     argN: call.arguments.count.u64
     if argN == 0 then return ""
     firstArgId: zast.kidAt kids: ast.kids span: call.arguments i: 0
@@ -43669,8 +43742,25 @@ emitResultCombinator: function {
     dExpr: valueExprC :ast :symtab :ctx n: (ast.nodes.get i: opId) facts: dExprF
     if dExpr.length == 0 then return ""
     payC: memberC :ast :symtab :ctx owner: rtid kind: memberkind.arm nameId: payArmId
-    ro: "({ \{rcT}_t _rc = (\{recvExpr.stringView}); (_rc.tag == \{okTag.stringView}) ? _rc.data.\{payC} : (\{dExpr.stringView}); })"
-    return (stating :facts from: callFacts text: ro)
+    # the receiver is read for its tag and then its payload
+    rcCType: "\{rcT}_t"
+    pre: String
+    spelled: (orderOnePart
+        :ast
+        :symtab
+        :ctx
+        mark: (pendingHoistMark :ctx)
+        text: recvExpr
+        tf: recvExprF
+        nid: bnid
+        ctype: rcCType.stringView
+        constant: false
+        twice: true
+        prefix: pre
+    )
+    r: spelled.stringView
+    ro: "(\{r}.tag == \{okTag.stringView} ? \{r}.data.\{payC} : (\{dExpr.stringView}))"
+    return (stating :facts from: callFacts text: (orderWrap prefix: pre call: ro))
 }
 
 # emitParsedMethodCall -- a Parsed accessor (hasFlag/option/positional), native,
