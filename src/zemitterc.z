@@ -28699,7 +28699,10 @@ closedRangeStepOp: function {down: bool} out StringView is {
 #
 # Both ends are bound to locals first: each is read twice, once by the guard and
 # once by the count or the init, and re-emitting the expression would evaluate
-# it twice.
+# it twice. Each binding is its own statement, built and written in the order
+# the ends are written -- the start, then the end -- with the temporaries its
+# expression recorded declared just ahead of it: those run when declared, so a
+# temporary of the end declared ahead of the start would run first.
 emitClosedRangeFor: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -28717,31 +28720,27 @@ emitClosedRangeFor: function {
     # arms do
     ctR: rangeCType :ast :symtab :n
     if ctR.length == 0 then return false
-    tox: rangeToExpr :ast :symtab :ctx :n
-    if tox.length == 0 then return false
+    # both ends' shapes are checked before either is built: nothing may be
+    # written once the first is
+    toNid: rangeToNode :ast :n
+    if toNid.isZero then return false
     match (
         n
     ) case call then {
-        facts: cfacts
-        startx: (emitDottedReceiver
-            :ast
-            :symtab
-            :ctx
-            callable: (ast.nodes.get i: n.callable)
-            :facts
-        )
-        if startx.length == 0 then return false
+        startNid: dottedParentNodeId n: (ast.nodes.get i: n.callable)
+        if startNid.isZero then return false
         mN: tmpNext :ctx :tmp
         rs: "_rs\{mN}"
         re: "_re\{mN}"
         fn: "_fn\{mN}"
         cnt: closedRangeCountExpr from: rs.stringView to: re.stringView :down
         lidR: pushLoopLabel :ctx :tmp isDo: false
-        # the temporaries the two ends' expressions recorded are declared ahead
-        # of them
+        startx: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: startNid)
         flushArgHoists :ctx :ind :tmp :buf
         d0: "\{ind}\{ctR} \{rs} = \{startx};\n"
         buf.append d0
+        tox: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: toNid)
+        flushArgHoists :ctx :ind :tmp :buf
         d1: "\{ind}\{ctR} \{re} = \{tox};\n"
         buf.append d1
         d2: "\{ind}uint64_t \{fn} = 0;\n"
@@ -28869,31 +28868,22 @@ closedRangeMemberOf: function {
     }
 }
 
-# rangeToExpr -- the `to:` endpoint of a closed range, or "". The argument is
-# taken by POSITION rather than by its label: `upto` and `downto` declare one
-# parameter each, and the member has already been identified by interned id
-# before this is asked, so the single argument present is that endpoint.
-rangeToExpr: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    n: astnode.view
-} out String is {
+# rangeToNode -- the node of a closed range's `to:` endpoint, 0 when the call
+# has no such argument. The argument is taken by POSITION rather than by its
+# label: `upto` and `downto` declare one parameter each, and the member has
+# already been identified by interned id before this is asked, so the single
+# argument present is that endpoint.
+rangeToNode: function {ast: Ast.view n: astnode.view} out zast.nodeid is {
     match (
         n
     ) case call then {
-        if n.arguments.count.u64 != 1 then return ""
+        if n.arguments.count.u64 != 1 then return zast.nodeid
         aId: zast.kidAt kids: ast.kids span: n.arguments i: 0
         a: ast.nodes.get i: aId
-        if a.namedoperation then return (emitExpr
-            :ast
-            :symtab
-            :ctx
-            n: (ast.nodes.get i: a.operation)
-        )
-        return ""
+        if a.namedoperation then return a.operation
+        return zast.nodeid
     } else {
-        return ""
+        return zast.nodeid
     }
 }
 
@@ -28942,7 +28932,7 @@ closedRangeCountExpr: function {from: StringView to: StringView down: bool} out 
 #
 # There is no other shape to read. Integers are not iterable, so no bare
 # `for each x: N loop` makes an operand its own bound, and `times` takes no arguments,
-# so it is never a call. A CLOSED range is read by closedRangeMemberOf/rangeToExpr
+# so it is never a call. A CLOSED range is read by closedRangeMemberOf/rangeToNode
 # instead -- its receiver is the range's start, not its bound.
 rangeBoundExpr: function {
     ast: Ast.view
