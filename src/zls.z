@@ -2745,12 +2745,12 @@ declTypeIdOf: function {
 }
 
 # the owner type id of the member referenced at node `nid` (the member
-# declaration's parent type or data block, via refDecl), or 0.
+# declaration's parent type or list, via refDecl), or 0.
 memberOwnerOf: function {o: (Option zenv.ZSymbolTable).view nid: zast.nodeid} out ztypes.tid is {
     return (declOwnerOf :o declId: (refDeclOf :o :nid))
 }
 
-# declOwnerOf -- the type or data block declaration `declId` is a member of, or
+# declOwnerOf -- the type or list declaration `declId` is a member of, or
 # 0 when it is no member.
 declOwnerOf: function {o: (Option zenv.ZSymbolTable).view declId: ztypes.declid} out ztypes.tid is {
     if declId.isZero then return ztypes.tid.zero
@@ -2766,7 +2766,7 @@ declOwnerOf: function {o: (Option zenv.ZSymbolTable).view declId: ztypes.declid}
         o
     ) case some then {
         p: o.typing.decls.get i: par
-        # a data block's element is a member of the block
+        # a list's element is a member of the block
         if p.kind.typeDecl or p.kind.staticListDecl then return p.typeId
         return ztypes.tid.zero
     } case none then {
@@ -4431,7 +4431,7 @@ declOfDefOp: function {
 }
 
 # memberNavTarget -- what a member hit names: its owner, or, for a
-# unit-qualified member with no owner stamp, its def tid. A data block's own
+# unit-qualified member with no owner stamp, its def tid. A list's own
 # `length` has no declaration of its own: the block owns it, and is where it is
 # declared. A label's position, `blk.slot.label`, is owned by the block's
 # `slot` and declared by the label: the element's declaration.
@@ -4461,8 +4461,8 @@ declOfTidOpt: function {o: (Option zenv.ZSymbolTable).view tid: ztypes.tid} out 
     }
 }
 
-# dataBaseOfOpt -- the data block the base of dotted path `dpid` names, 0 when
-# the base is no data block.
+# staticListBaseOfOpt -- the list the base of dotted path `dpid` names, 0 when
+# the base is no list.
 staticListBaseOfOpt: function {snap: zcheck.CheckResult dpid: zast.nodeid} out ztypes.tid is {
     baseId: zast.nodeid
     {
@@ -4875,7 +4875,7 @@ genericParamHoverCard: function {
 
 # hitReadsConstOpt -- the hit reads a constant: a bare name (`LIMIT`, `ON:
 # true`, `M: mode.slow`) -- a use with no variable, resolved to a declaration,
-# whose node carries the value the checker folded -- or a data block's element
+# whose node carries the value the checker folded -- or a list's element
 # or length read through the block. A numeric literal folds too and is not
 # asked.
 hitReadsConstOpt: function {
@@ -4884,7 +4884,7 @@ hitReadsConstOpt: function {
     # the hit's written text
     name: StringView
 } out bool is {
-    # a data block's element or length, read through the block
+    # a list's element or length, read through the block
     if hit.kind == 2 when (ownerIsStaticListOpt :o tid: hit.owner) then {
         match (
             o
@@ -4910,7 +4910,7 @@ hitReadsConstOpt: function {
 
 # hitIsConst -- the hit names a constant: one a use read (hitReadsConstOpt), or
 # a declaration that holds a value -- a member read through a unit path
-# (`z.build.os`), a declaration's own name, a data block's element, a
+# (`z.build.os`), a declaration's own name, a list's element, a
 # completion item. A label (`on: true`) carries its VALUE's Decl, under a name
 # that is not the Decl's own.
 hitIsConst: function {snap: zcheck.CheckResult hit: navhit name: StringView} out bool is {
@@ -4957,7 +4957,7 @@ constValueOfHit: function {snap: zcheck.CheckResult hit: navhit} out ztypes.cval
     }
 }
 
-# ownerIsDataOpt -- `tid` is a data block's type, over the LSP's optional
+# ownerIsStaticListOpt -- `tid` is a list's type, over the LSP's optional
 # snapshot.
 ownerIsStaticListOpt: function {o: (Option zenv.ZSymbolTable).view tid: ztypes.tid} out bool is {
     if tid.isZero then return false
@@ -4971,7 +4971,7 @@ ownerIsStaticListOpt: function {o: (Option zenv.ZSymbolTable).view tid: ztypes.t
 }
 
 # untypedConstTypeName -- `intliteral` or `floatliteral` when a constant's value
-# is an untyped number (a unit constant `K: 10`, an element of a data block that
+# is an untyped number (a unit constant `K: 10`, an element of a list that
 # names no type), "" for anything else.
 untypedConstTypeName: function {v: ztypes.cval} out String is {
     if v.numTid.isZero.not then return ""
@@ -5089,8 +5089,8 @@ constCard: function {
     return card
 }
 
-# constPathPrefix -- what a constant's name is spelled through: its owner (a data
-# block, `nav.primes`) when it has one, else the units its declaration sits in
+# constPathPrefix -- what a constant's name is spelled through: its owner (a
+# list, `nav.primes`) when it has one, else the units its declaration sits in
 constPathPrefix: function {
     # the snapshot the hover reads
     snap: zcheck.CheckResult
@@ -5163,7 +5163,7 @@ hoverTypeFence: function {
     fence.append hname
     fence.append ": "
     fence.append tn
-    # a data block's element or length is a constant, which nothing owns
+    # a list's element or length is a constant, which nothing owns
     if (ownerIsStaticListOpt o: snap.st tid: hit.owner) then return fence
     # a native's parameter binds no variable, and the Decl its node resolves
     # to is its type's -- `:i`, of the generic `i`, read as that constant
@@ -5268,7 +5268,7 @@ navHoverAnswer: function {
         docBody = hoverDoc :snap nid: legacyDnd
     }
     hoverCallNotes :snap :sp :hit :body :docBody :site
-    # a data block's ordinal (`primes.0`) is spelled like a literal, and is none
+    # a list's ordinal (`primes.0`) is spelled like a literal, and is none
     if (ownerIsStaticListOpt o: snap.st tid: hit.owner) then return (hoverMarkdown
         code: body.stringView
         doc: docBody.stringView
@@ -5314,8 +5314,8 @@ variableTypeOpt: function {o: (Option zenv.ZSymbolTable).view vid: ztypes.vid} o
     }
 }
 
-# itemValueTid -- the type a completion item's name has as a value: a data
-# block's is its view (`staticlist StringView`), as a use reads it; any other its own.
+# itemValueTid -- the type a completion item's name has as a value: a
+# list's is its view (`staticlist StringView`), as a use reads it; any other its own.
 itemValueTid: function {snap: zcheck.CheckResult tid: ztypes.tid} out ztypes.tid is {
     if (ownerIsStaticListOpt o: snap.st :tid).not then return tid
     o: snap.st
@@ -7997,7 +7997,7 @@ addValueCompletions: function {
     if db.single when site.stmtStart then marks.append zast.markerkind.dropMarker
 }
 
-# tagCarrier -- a type whose `.tag` names a discriminator type: a data block's
+# tagCarrier -- a type whose `.tag` names a discriminator type: a list's
 # element type or a numeric type
 tagCarrier: function {o: (Option zenv.ZSymbolTable).view tid: ztypes.tid} out bool is {
     if tid.isZero then return false

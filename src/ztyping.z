@@ -220,7 +220,7 @@ declkind: variant {
     typeDecl: null
     # a compile-time constant
     constDecl: null
-    # a data block
+    # a list definition, whose elements are its members
     staticListDecl: null
     # a parameter, which is a member of its function's type
     paramDecl: null
@@ -302,7 +302,7 @@ constslot: record {
     name: zast.nameid
 }
 
-# dataslot -- one element of a data block, by position: the block's type and
+# staticlistslot -- one element of a list, by position: the block's type and
 # the element's slot, counted from 0 in the order the elements are written.
 staticlistslot: record {
     owner: ztypes.tid
@@ -1119,16 +1119,16 @@ ZTyping: class {
     # Constants are not written in dependency order, so the evaluator pulls
     # rather than pushes and this is its cycle guard.
     constEvalState: (MapVV constslot v: u8)
-    # each data block's element values by slot, beside memberConst's by name:
+    # each list's element values by slot, beside memberConst's by name:
     # a constant `.get K` reads its element by position
     staticListSlotConst: (MapVV staticlistslot v: ztypes.cval)
     # each list's INDEX type, when its `out` names one (`out (staticlist StringView i:
     # nameid)`): the type of its `slot` reads and of its value's `get`
     staticListIndexType: (IdMapV ztypes.tid v: ztypes.tid)
-    # the `slot` member types of data blocks: each names its block's labels,
+    # the `slot` member types of lists: each names its block's labels,
     # and is read through a label only
     staticListSlotTypes: IdSet ztypes.tid
-    # the type-ref nodes that are a data block's `out` arguments written as a
+    # the type-ref nodes that are a list's `out` arguments written as a
     # literal type (`out (staticlist intliteral)`): an untyped element or index,
     # which a declared type may not name anywhere else
     staticListLiteralArgs: IdSet zast.nodeid
@@ -1393,7 +1393,7 @@ ZTyping: class {
     # of entries.
     pendWrites: ListVal pendwrite
     # each generic unit instance's copies of its template's members -- a type,
-    # an alias, a data block, a nested unit, a function -- recorded where
+    # an alias, a list, a nested unit, a function -- recorded where
     # buildUnitMono mints them, and read by instanceCopyOf
     unitMemberCopies: (MapVV instcopy v: ztypes.tid)
     # the parents pendWrites holds a row for: a member read of any other type,
@@ -2670,15 +2670,15 @@ ZTyping: class {
         return ((t.foldedBranch.get key: nid).or d: (foldedbranch known: false stmt: zast.nodeid))
     }
 
-    # setDataSlotConst -- record the VALUE of element `slot` of data block
-    # `dataTid`.
+    # setStaticListSlotConst -- record the VALUE of element `slot` of list
+    # `staticListTid`.
     setStaticListSlotConst: function {
         :this staticListTid: ztypes.tid slot: u64 value: ztypes.cval
     } is {
         this.staticListSlotConst.set key: (staticlistslot owner: staticListTid :slot) :value
     }
 
-    # dataSlotConstOf -- that value, or `none` when the element has none.
+    # staticListSlotConstOf -- that value, or `none` when the element has none.
     staticListSlotConstOf: function {
         t: this.view staticListTid: ztypes.tid slot: u64
     } out ztypes.cval is {
@@ -2928,7 +2928,7 @@ sumPairArmValueIs: function {
 # the arm written first takes 0 -- which is exactly why writing the falsy arm
 # first is the least syntax that says this, and why every stdlib pair does.
 #
-# A `data`-sourced tag names its own values, and there the position says
+# A list-sourced tag names its own values, and there the position says
 # nothing: the zero-valued arm may be written second, or no arm may carry 0 at
 # all. Such a pair is NOT treated as having a falsy arm -- the same stance
 # variantTagIsOrdinalPlain takes for the C-bool lowering, and for the same
@@ -2949,8 +2949,8 @@ sumPairZeroArm: function {
     f: (ty.sumPairFirstArm.get key: k).or d: none
     s: (ty.sumPairSecondArm.get key: k).or d: none
     if f.isZero or s.isZero then return none
-    # variantTagBase records 0 for a DATA-sourced tag, a numeric base for a
-    # declared one, and nothing when none was declared. Only the data case
+    # variantTagBase records 0 for a list-sourced tag, a numeric base for a
+    # declared one, and nothing when none was declared. Only the list case
     # detaches the value from the position: a declared numeric is still
     # sequential from 0, so the arm written first carries 0.
     listSourced: false
@@ -2961,7 +2961,7 @@ sumPairZeroArm: function {
         if tb.isZero then listSourced = true
     } case none then null
     if listSourced.not then return f
-    # A data block names its own values, so the pair is boolean-like only when
+    # A list names its own values, so the pair is boolean-like only when
     # those values ARE a discriminator pair -- 0 and 1, in either written
     # order. The arm carrying 0 is the falsy one wherever it stands. Any other
     # set (`{ ON: 1  OFF: 2 }`, `{ HI: 5  LO: 0 }`) is an enumeration that

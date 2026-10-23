@@ -586,7 +586,7 @@ ordinalVariantCType: function {
 # enum is `int` and spelling the field with it ignores the declaration -- a
 # `tag: u8.tag` was silently four bytes.
 #
-# "" when the type declares a `data`-sourced tag, whose constants set their own
+# "" when the type declares a list-sourced tag, whose constants set their own
 # width, or when nothing was recorded: the enum remains the storage there.
 tagStorageCType: function {
     symtab: zenv.ZSymbolTable.view
@@ -3501,7 +3501,7 @@ dottedTagReadTid: function {symtab: zenv.ZSymbolTable.view nid: zast.nodeid} out
     return ((symtab.typing.dpTagRead.get key: nid).or d: ztypes.tid.zero)
 }
 
-# dataBlockTid -- the DATA type a data-block reference resolved to: the type
+# staticListTidOf -- the list type a list reference resolved to: the type
 # stamped on the node -- any shape (`inl.primes`, a block another unit or a
 # nested unit declares), and in a generic unit instance's walk the instance's
 # own copy -- else, for a bare name restamped with the block's value type, its
@@ -3782,22 +3782,22 @@ originIsTid: function {
     return ot == originTid
 }
 
-# dataconstkey / dataslotkey -- which element of which data block. A data
+# staticlistconstkey / staticlistslotkey -- which element of which list. A list
 # element is reached two ways -- `primes.first` by LABEL and `primes.0` by
 # ORDINAL -- and a nameid and an ordinal are two id spaces, so they are two
 # TABLES rather than one string that could spell either. Both fields are
 # widened to u64 so the key has no padding for the container's byte hash to
 # read (the callslot / constslot shape).
 staticlistconstkey: record {
-    # the data block's type
+    # the list's type
     owner: ztypes.tid
     # the constant's name. The pair keys the emitted constant
     name: zast.nameid
 }
 
-# which element of which data block, as one key
+# which element of which list, as one key
 staticlistslotkey: record {
-    # the data block's type
+    # the list's type
     owner: ztypes.tid
     # which element. The pair keys the emitted slot
     slot: u64
@@ -3808,7 +3808,7 @@ staticlistslotkey: record {
 # `ctx.origins`, which buildOriginTids fills by walking the names, so
 # `ctx.origins.get i: family.slot.listVal` is the tid `ListVal` was minted from --
 # and an id compare against it is shadow-proof, which comparing the spelling was
-# not. `fixedArray` is the `array` template: a data block's own `.array` member
+# not. `fixedArray` is the `array` template: a list's own `.array` member
 # would shadow a label of that name.
 family: list {
     str: "str"
@@ -3933,7 +3933,7 @@ Ctx: class {
     # each function's "RET cname(PARAMS)", by its type: the forward
     # declaration and the definition write the same text, built once
     fnSigs: (IdMapR ztypes.tid V: String)
-    # the data blocks the program declares, by type
+    # the lists the program declares, by type
     staticListElems: IdSet ztypes.tid
     # a native operator row's hole bindings: `StringView` and `T` its cnames,
     # `L` and `R` its operands. The names never change and the values are
@@ -3943,9 +3943,9 @@ Ctx: class {
     opBindVals: List String
     opRawNames: List String
     opRawVals: List String
-    # each data constant's emitted text, keyed by owner and name
+    # each list constant's emitted text, keyed by owner and name
     staticListConst: (MapVR staticlistconstkey V: String)
-    # each data slot's emitted text, keyed by owner and slot
+    # each list slot's emitted text, keyed by owner and slot
     staticListSlot: (MapVR staticlistslotkey V: String)
     # the current class method body's pointer-receiver params, by variable id
     ptrVids: ListVal ztypes.vid
@@ -4309,7 +4309,7 @@ Ctx: class {
 
 # canonTypeId -- the type a stamped id stands for: itself when it is a generic
 # instance, has a declaration, or is a user family's type; 0 for a shell that is
-# none of these (a generic parameter, a data block). Never looked up by name: a
+# none of these (a generic parameter, a list). Never looked up by name: a
 # name names a different type in another unit.
 canonTypeId: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out ztypes.tid is {
     if (originTidOf :symtab :tid).isZero.not then return tid
@@ -6741,7 +6741,7 @@ emitSvCallLegs: function {
     )
 }
 
-# emitDataIndexCall -- `primes.get i`: a data-block element read,
+# emitStaticListIndexCall -- `primes.get i`: a list element read,
 # emitted as z_{name}_at(arg), which checks the bounds.
 emitStaticListIndexCall: function {
     ast: Ast.view
@@ -8012,7 +8012,7 @@ orderConstantWith: function {
 } out bool is {
     cv: symtab.typing.nodeConstIn mono: ctx.curThisTid nid: (interpPartNodeId :n)
     if cv.kind.none.not then return true
-    # a constant a unit or a data block names reaches the C as its literal
+    # a constant a unit or a list names reaches the C as its literal
     if tf.constant then return true
     if n.atomstring when (litIndexOf :ctx nid: n.nodeid) > 0 then return true
     if n.dottedpath then {
@@ -11119,7 +11119,7 @@ emitArrayMethodCall: function {
     return ""
 }
 
-# emitDataValueMethodCall -- `v.get i: k` on a data value: the mono's own
+# emitStaticListValueMethodCall -- `v.get i: k` on a list value: the mono's own
 # bounds-checked reader, handed the view by value.
 emitStaticListValueMethodCall: function {
     ast: Ast.view
@@ -15668,13 +15668,13 @@ ownerIsCollectionFamily: function {ctx: Ctx.view fam: ztypes.tid} out bool is {
     )
 }
 
-# isDataValueFamily -- is `fam` the template of a static list's value?
+# isStaticListValueFamily -- is `fam` the template of a static list's value?
 isStaticListValueFamily: function {ctx: Ctx.view fam: ztypes.tid} out bool is {
     if fam.isZero then return false
     return fam == (ctx.origins.get i: family.slot.staticList)
 }
 
-# dataValueFamilyOf -- the data value family type `tid` belongs to: its origin,
+# staticListValueFamilyOf -- the list value family type `tid` belongs to: its origin,
 # for an instance of one; 0 for any other type. A family's template is no
 # value -- every one has an element or index parameter -- so it is not one of
 # its own family, and nothing emits it.
@@ -15751,7 +15751,7 @@ tmplInstCreate: function {
 }
 
 # emitNativeMemberCall -- a NATIVE method: it has no body to call, so its
-# owner's family lowers it -- the result and option combinators, a data block's
+# owner's family lowers it -- the result and option combinators, a list's
 # element read, a str's substring, a native collection's empty `create`, a
 # class's fragment call by its unit (cli's Parsed accessors and Spec create,
 # the io and net handles and wrappers), and otherwise its natives.tbl operator
@@ -16501,7 +16501,7 @@ aliasResolvesToSelfAt: function {
     return (ctx.aliases.get i: al - 1).val.stringView == name
 }
 
-# emitDataMember -- a data block's element read through `n`, whose base is the
+# emitStaticListMember -- a list's element read through `n`, whose base is the
 # block `dbt`: a label (`codes.ht`), an ordinal (`primes.0`), `.length`, or
 # `.array` (the whole block copied into an array temp). "" for any other member.
 emitStaticListMember: function {
@@ -16789,7 +16789,7 @@ emitDefRefAtom: function {
     return ""
 }
 
-# dataValueText -- a data block's name, read as a value: the view of its static
+# staticListValueText -- a list's name, read as a value: the view of its static
 # array, `((z_M_t){ .length = N, .data = z_tN })` -- NULL for an empty block,
 # which has none. "" when the atom names no block, or a block the checker never
 # used as a value.
@@ -17086,7 +17086,7 @@ callBaseTemp: function {
     baseNid: zast.nodeid
 } out String is {
     if nstPtr then return ""
-    # a view -- a list's, a data block's -- is a stack struct its walks take by
+    # a view -- a static list's, a List's -- is a stack struct its walks take by
     # address too
     isView: isListViewOriginOf :symtab :ctx tid: nlid
     if (staticListValueFamilyOf :symtab :ctx tid: nlid).isZero.not then isView = true
@@ -18087,7 +18087,7 @@ fnptrSlotCallC: function {
     return "\{base}\{acc}\{fc}(\{recv})"
 }
 
-# dataValueMemberRead -- `length` and `iterate` read off a data value: the view's
+# staticListValueMemberRead -- `length` and `iterate` read off a list value: the view's
 # own length, and the mono's walk over it. A block's name as the base is its
 # value, the view of its array. "" for any other read.
 staticListValueMemberRead: function {
@@ -18345,7 +18345,7 @@ emitUserTypeMemberRead: function {
         )
         if rmr.length > 0 then return rmr
     } case none then null
-    # a unit's member (a data block, a constant) is no field of a struct
+    # a unit's member (a list, a constant) is no field of a struct
     if (memberOrdinal :symtab :ctx owner: bstamp kind: memberkind.field nameId: mnId
     ).none then return ""
     mnUtC: memberC :ast :symtab :ctx owner: bstamp kind: memberkind.field nameId: mnId
@@ -18714,7 +18714,7 @@ dottedTypeConstRead: function {
     bt: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.parent))
     if bt.isZero then return ""
     cid: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
-    # a data block's `slot.label` is the label's position, a constant of the
+    # a list's `slot.label` is the label's position, a constant of the
     # block's index type
     isSlot: symtab.typing.staticListSlotTypes.has item: bt
     if isSlot.not when (symtab.typing.isAsConstDecl
@@ -19107,7 +19107,7 @@ emitDottedUnitRead: function {
     # text, exactly as a bare reference to a constant of this unit does
     ucv: unitConstTextOf :ast :symtab :ctx :n :facts
     if ucv.length > 0 then return ucv
-    # `unit.block` -- another unit's data block reads as its value
+    # `unit.block` -- another unit's list reads as its value
     udv: staticListValueText :symtab :ctx nid: n.nodeid
     if udv.length > 0 then return (stating :facts from: literalFacts text: udv)
     # a stamped implicit zero-create on a unit-qualified type path
@@ -19704,7 +19704,7 @@ convRowKeyOf: function {
     return ncKey
 }
 
-# emitDottedNativeMarker -- a data block's element read, a zero-parameter native
+# emitDottedNativeMarker -- a list's element read, a zero-parameter native
 # that auto-calls (io.stdout, os.pid), the compile-time markers `.private` /
 # `.borrow` / `.take`, and a runtime numeric conversion. The conversion is whichever
 # member resolves to a row on the SOURCE type, so a user field merely NAMED `u32`
@@ -19717,7 +19717,7 @@ emitDottedNativeMarker: function {
     facts: cfacts.borrow
 } out String is {
     mn2Id: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
-    # a data block's element read (`codes.ht`, `consts.codes.ht`, `primes.0`):
+    # a list's element read (`codes.ht`, `consts.codes.ht`, `primes.0`):
     # the block is the base's stamped type, whatever shape the base takes;
     # no base is emitted
     dpbT: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.parent))
@@ -21696,7 +21696,7 @@ interpBuffer: function {
 # interpHoistsInPlace -- the hoists a part of a build used as a value recorded
 # since `mark`: each is assigned where the part runs, ahead of its append, and
 # a value it owns is released after the append (`rel`), so the statement
-# declaring it owes it nothing. A raw hoist copies a constant data block, which
+# declaring it owes it nothing. A raw hoist copies a constant list, which
 # no order can change, and stays the statement's.
 interpHoistsInPlace: function {ctx: Ctx mark: hoistmark ops: String.borrow rel: String.borrow} is {
     i: mark.names
@@ -22166,7 +22166,7 @@ interpPartNodeId: function {n: astnode.view} out zast.nodeid is {
 }
 
 # controlValueNodeId -- the nodeid of a control-flow or block value (if, match,
-# for, with, a bare block, a data block), 0 for any other shape. These are
+# for, with, a bare block, a list), 0 for any other shape. These are
 # values wherever an operand may be parenthesised, and a parenthesis leaves no
 # row of its own to carry the stamp.
 controlValueNodeId: function {n: astnode.view} out zast.nodeid is {
@@ -33488,7 +33488,7 @@ checkNativesResolve: function {
     }
 }
 
-# fill the data-element cache for the whole program, once, before anything
+# fill the list element cache for the whole program, once, before anything
 # reads it
 fillStaticListElems: function {program: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx} is {
     {
@@ -33527,7 +33527,7 @@ fillStaticListElems: function {program: Ast.view symtab: zenv.ZSymbolTable.view 
     }
 }
 
-# populate a data block's element table.
+# populate a list's element table.
 fillStaticListElemsIn: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
@@ -33548,7 +33548,7 @@ fillStaticListElemsIn: function {
                 op: (ast.nodes.get i: bmNode.operation)
             )
             # a unit declared inside this one -- inline, a hidden subunit --
-            # declares data blocks of its own
+            # declares lists of its own
             if (zast.unitOpDeclaresUnit :ast opId: bmNode.operation) then (fillStaticListElemsIn
                 :symtab
                 :ctx
@@ -33568,7 +33568,7 @@ fillStaticListElemsIn: function {
     }
 }
 
-# populate one data-block element.
+# populate one list element.
 fillOneStaticListElem: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -33578,7 +33578,7 @@ fillOneStaticListElem: function {
     fillStaticListElemFor :ast :symtab :ctx :op dtid: (stampIdOf :symtab nid: (zast.nodeIdOf n: op))
 }
 
-# fillDataElemFor -- populate the element table of data block `op` as the data
+# fillStaticListElemFor -- populate the element table of list `op` as the list
 # type `dtid`: the block's own, or a generic unit instance's copy of it.
 fillStaticListElemFor: function {
     ast: Ast.view
@@ -33621,7 +33621,7 @@ fillStaticListElemFor: function {
     } else null
 }
 
-# the label of data-block element `n`, by id: 0 for an unlabelled one.
+# the label of list element `n`, by id: 0 for an unlabelled one.
 staticListElemLabelId: function {n: astnode.view} out zast.nameid is {
     match (
         n
@@ -34325,7 +34325,7 @@ nestedUnitTemplate: function {
     return nt
 }
 
-# fillTemplateDataElems -- the element tables of every instance of the generic
+# fillTemplateStaticListElems -- the element tables of every instance of the generic
 # unit template `tplId`, whose body is `bodyIds`.
 fillTemplateStaticListElems: function {
     symtab: zenv.ZSymbolTable.view
@@ -34339,7 +34339,7 @@ fillTemplateStaticListElems: function {
     }
 }
 
-# fillUnitMonoDataElems -- the element tables of the data blocks a generic unit's
+# fillUnitMonoStaticListElems -- the element tables of the lists a generic unit's
 # instance `monoId` owns: its copies of the blocks in the template's body.
 fillUnitMonoStaticListElems: function {
     symtab: zenv.ZSymbolTable.view
@@ -34370,7 +34370,7 @@ fillUnitMonoStaticListElems: function {
     }
 }
 
-# emitTemplateDataBlocks -- the data blocks of every instance of the generic unit
+# emitTemplateStaticLists -- the lists of every instance of the generic unit
 # template `tplId`, whose body is `bodyIds`: the template's own are never
 # written.
 emitTemplateStaticLists: function {
@@ -34386,8 +34386,8 @@ emitTemplateStaticLists: function {
     }
 }
 
-# emitUnitMonoDataBlocks -- the static arrays of the data blocks a generic unit's
-# instance `monoId` owns, as emitUnitDataBlocks writes a unit's own.
+# emitUnitMonoStaticLists -- the static arrays of the lists a generic unit's
+# instance `monoId` owns, as emitUnitStaticLists writes a unit's own.
 emitUnitMonoStaticLists: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -37147,7 +37147,7 @@ emitListViewMono: function {
     emitListIter :ast :ctx :symtab :monoId nm: nm.stringView ect: ect.stringView :buf
 }
 
-# emitDataMono -- a static list's value mono (`staticlist u8`): z_data.c.tmpl's view
+# emitStaticListMono -- a static list's value mono (`staticlist u8`): z_data.c.tmpl's view
 # struct -- a length and a pointer at the list's static const array -- and each
 # member a use site reached: `index`, the bounds-checked read, and `iterate`,
 # which hands the window to the cursor. The cursor's `data` is a plain pointer
@@ -41635,7 +41635,7 @@ MonoWork: class {
     wListView: ListVal ztypes.tid
     # the windows still owed emission
     wSpan: ListVal ztypes.tid
-    # the data values still owed emission
+    # the list values still owed emission
     wStaticList: ListVal ztypes.tid
     # the lists still owed emission
     wList: ListVal ztypes.tid
@@ -41948,7 +41948,7 @@ emitCollectionMonos: function {
 } is {
     # ListView structs next -- a List's listView companion references
     # the ListView struct by value.
-    # data values first: each is a scalar view, and nothing it names comes later
+    # list values first: each is a scalar view, and nothing it names comes later
     tdat: u64
     for tdat < work.wStaticList.length loop {
         emitStaticListMono :ast :symtab :ctx :runtimeDir monoId: (work.wStaticList.get i: tdat) :buf
@@ -45293,7 +45293,7 @@ isGenericFnTid: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out bo
     return (symtab.reg.typetypeOf typeId: tid) == ztypes.ztypetype.functionType
 }
 
-# emitUnitDataBlocks -- one unit body's data blocks. A block is asked of every
+# emitUnitStaticLists -- one unit body's lists. A block is asked of every
 # named definition and filters itself; a type's `as` constants are not emitted,
 # every read of one is its value.
 emitUnitStaticLists: function {
@@ -45448,7 +45448,7 @@ emitUnitFnFwdDecls: function {
 }
 
 # emitRecordDefsIn -- three passes so cross-class references resolve: the
-# as-block constants and data blocks, then all method forward decls and the
+# as-block constants and lists, then all method forward decls and the
 # unit's own function forward decls, then all method bodies (a method may
 # return/construct a class defined later in the unit). Struct layout is NOT
 # emitted here: emitUserStructsOrdered owns it, and resolves the by-value
@@ -45476,7 +45476,7 @@ emitRecordDefsIn: function {
         :phase
         :buf
     )
-    # its instances' data blocks are written with the other data blocks
+    # its instances' lists are written with the other lists
     if phase == 1 when isTpl then (emitTemplateStaticLists
         :ast
         :symtab
@@ -45543,7 +45543,7 @@ emitNestedRecordDefs: function {
         if nm.namedoperation.not then continue
         nOp: nm.operation
         if (isGenericTemplateUnitOp :ast opId: nOp) then {
-            # its instances' data blocks, with the other data blocks
+            # its instances' lists, with the other lists
             if phase == 1 then (emitTemplateStaticLists
                 :ast
                 :symtab
@@ -45585,7 +45585,7 @@ unitMemberTid: function {
     return ((symtab.typing.declChildOfId parentTypeId: owner :nameId).or d: ztypes.tid.zero)
 }
 
-# emitDataBlock -- `name: list { e0 e1 ... } out staticlist T`: a static const
+# emitStaticList -- `name: list { e0 e1 ... } out staticlist T`: a static const
 # array z_{name}[], with the element C type T (i64 when untyped), and its reader
 # z_{name}_at, which panics on an index past the end (a negative i64 converts
 # to a huge u64). Emitted only when the block is read at runtime (`.get` /
@@ -45599,7 +45599,7 @@ emitStaticList: function {
     emitStaticListFor :symtab :ctx :op ridtid: (stampIdOf :symtab nid: (zast.nodeIdOf n: op)) :buf
 }
 
-# emitDataBlockFor -- emitDataBlock as the data type `ridtid`: the block's own,
+# emitStaticListFor -- emitStaticList as the list type `ridtid`: the block's own,
 # or a generic unit instance's copy of it, whose elements are its own.
 emitStaticListFor: function {
     symtab: zenv.ZSymbolTable.view
@@ -45663,7 +45663,7 @@ emitStaticListFor: function {
     } else null
 }
 
-# dataSlotText -- the C constant for element `slot` of data block `dataTid`,
+# staticListSlotText -- the C constant for element `slot` of list `staticListTid`,
 # rendered from the value the checker recorded, at the block's element type; a
 # string as the StringView initializer its static array holds.
 staticListSlotText: function {
@@ -45701,7 +45701,7 @@ staticListSlotText: function {
 # on the tagged type `tid`, as a C enumerator initialiser (" = 10"), or "" when
 # the type's tag names no value for it.
 #
-# A `data`-sourced tag names its own values and the enum must carry them, or
+# A list-sourced tag names its own values and the enum must carry them, or
 # the declaration means nothing past the front end. The tag the compiler
 # synthesizes when the author declares none names no values, so its enum keeps
 # C's own numbering -- which IS the arm ordinals, the thing every other part of
@@ -46871,7 +46871,7 @@ emitOneRecord: function {
     fids: ListVal ztypes.tid
     fidsNm: ListVal zast.nameid
     recFieldLists :ast :symtab :tid names: fnames ids: fids nameIds: fidsNm
-    # A FIELDLESS record/class is a synthesized carrier -- a data block's
+    # A FIELDLESS record/class is a synthesized carrier -- a list's
     # `tag__{elem}`, a marker type declared `is native` -- and an empty struct
     # is not C. Same rule as the armless variant above, for the same reason:
     # nothing can hold one, so emit nothing rather than invalid C.
