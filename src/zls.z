@@ -2767,7 +2767,7 @@ declOwnerOf: function {o: (Option zenv.ZSymbolTable).view declId: ztypes.declid}
     ) case some then {
         p: o.typing.decls.get i: par
         # a data block's element is a member of the block
-        if p.kind.typeDecl or p.kind.dataDecl then return p.typeId
+        if p.kind.typeDecl or p.kind.staticListDecl then return p.typeId
         return ztypes.tid.zero
     } case none then {
         return ztypes.tid.zero
@@ -2919,7 +2919,7 @@ displayTypeNameSt: function {
     disp: st.reg.nameOf :tid
     if disp.length == 0 then return disp
     # a block's `slot` is named after its block: `main.words.slot`
-    if (st.typing.dataSlotTypes.has item: tid) then {
+    if (st.typing.staticListSlotTypes.has item: tid) then {
         blk: displayTypeNameSt :st tid: (st.reg.ownerTidOf :tid) :site
         if blk.length > 0 then return "\{blk.stringView}.slot"
         return disp
@@ -4440,7 +4440,7 @@ memberNavTarget: function {snap: zcheck.CheckResult hnid: zast.nodeid} out navta
     refDecl: refDeclOf o: snap.st nid: hnid
     refOwner: memberOwnerOf o: snap.st nid: hnid
     if refOwner.isZero then {
-        refOwner = dataBaseOfOpt :snap dpid: hnid
+        refOwner = staticListBaseOfOpt :snap dpid: hnid
         if refOwner.isZero.not then refDecl = declOfTidOpt o: snap.st tid: refOwner
         sl: slotLabelDecl :snap dpid: hnid
         if sl.isZero.not then refDecl = sl
@@ -4463,7 +4463,7 @@ declOfTidOpt: function {o: (Option zenv.ZSymbolTable).view tid: ztypes.tid} out 
 
 # dataBaseOfOpt -- the data block the base of dotted path `dpid` names, 0 when
 # the base is no data block.
-dataBaseOfOpt: function {snap: zcheck.CheckResult dpid: zast.nodeid} out ztypes.tid is {
+staticListBaseOfOpt: function {snap: zcheck.CheckResult dpid: zast.nodeid} out ztypes.tid is {
     baseId: zast.nodeid
     {
         n: snap.prog.nodes.get i: dpid
@@ -4471,7 +4471,7 @@ dataBaseOfOpt: function {snap: zcheck.CheckResult dpid: zast.nodeid} out ztypes.
     }
     if baseId.isZero then return ztypes.tid.zero
     bt: nodeTypeAt o: snap.st nid: baseId
-    if (ownerIsDataOpt o: snap.st tid: bt) then return bt
+    if (ownerIsStaticListOpt o: snap.st tid: bt) then return bt
     return ztypes.tid.zero
 }
 
@@ -4498,7 +4498,7 @@ slotLabelDecl: function {snap: zcheck.CheckResult dpid: zast.nodeid} out ztypes.
     match (
         o
     ) case some then {
-        if (o.typing.dataSlotTypes.has item: bt).not then return ztypes.declid.zero
+        if (o.typing.staticListSlotTypes.has item: bt).not then return ztypes.declid.zero
         bd: o.typing.declIdOfType typeId: (o.reg.ownerTidOf tid: bt)
         if bd.isZero then return bd
         sd: o.typing.declFindChild parentDeclId: bd nameId: zast.wellKnown.slot.wkSlot
@@ -4521,7 +4521,7 @@ slotElementOf: function {
         d: o.typing.decls.get i: declId
         if d.parent.isZero then return ztypes.declid.zero
         sd: o.typing.decls.get i: d.parent
-        if (o.typing.dataSlotTypes.has item: sd.typeId).not then return ztypes.declid.zero
+        if (o.typing.staticListSlotTypes.has item: sd.typeId).not then return ztypes.declid.zero
         if sd.parent.isZero then return ztypes.declid.zero
         return (o.typing.declFindChild parentDeclId: sd.parent nameId: d.name)
     } case none then null
@@ -4885,7 +4885,7 @@ hitReadsConstOpt: function {
     name: StringView
 } out bool is {
     # a data block's element or length, read through the block
-    if hit.kind == 2 when (ownerIsDataOpt :o tid: hit.owner) then {
+    if hit.kind == 2 when (ownerIsStaticListOpt :o tid: hit.owner) then {
         match (
             o
         ) case some then {
@@ -4959,12 +4959,12 @@ constValueOfHit: function {snap: zcheck.CheckResult hit: navhit} out ztypes.cval
 
 # ownerIsDataOpt -- `tid` is a data block's type, over the LSP's optional
 # snapshot.
-ownerIsDataOpt: function {o: (Option zenv.ZSymbolTable).view tid: ztypes.tid} out bool is {
+ownerIsStaticListOpt: function {o: (Option zenv.ZSymbolTable).view tid: ztypes.tid} out bool is {
     if tid.isZero then return false
     match (
         o
     ) case some then {
-        return (o.reg.typetypeOf typeId: tid) == ztypes.ztypetype.dataType
+        return (o.reg.typetypeOf typeId: tid) == ztypes.ztypetype.staticListType
     } case none then {
         return false
     }
@@ -5106,7 +5106,9 @@ constPathPrefix: function {
     ) case some then {
         # an element named where its block declares it
         blk: ztypecheck.declTypeIdOf st: o declId: (o.typing.declParentOf declId: hit.declId)
-        if blk.isZero.not when (o.reg.typetypeOf typeId: blk) == ztypes.ztypetype.dataType then {
+        if blk.isZero.not when (
+            (o.reg.typetypeOf typeId: blk) == ztypes.ztypetype.staticListType
+        ) then {
             return (displayTypeNameSt st: o tid: blk :site)
         }
         return (ztypecheck.unitPathOfDecl st: o declId: hit.declId)
@@ -5162,7 +5164,7 @@ hoverTypeFence: function {
     fence.append ": "
     fence.append tn
     # a data block's element or length is a constant, which nothing owns
-    if (ownerIsDataOpt o: snap.st tid: hit.owner) then return fence
+    if (ownerIsStaticListOpt o: snap.st tid: hit.owner) then return fence
     # a native's parameter binds no variable, and the Decl its node resolves
     # to is its type's -- `:i`, of the generic `i`, read as that constant
     if hit.vid.isZero when (declKindIsParam :snap declId: hit.declId) then return fence
@@ -5267,7 +5269,7 @@ navHoverAnswer: function {
     }
     hoverCallNotes :snap :sp :hit :body :docBody :site
     # a data block's ordinal (`primes.0`) is spelled like a literal, and is none
-    if (ownerIsDataOpt o: snap.st tid: hit.owner) then return (hoverMarkdown
+    if (ownerIsStaticListOpt o: snap.st tid: hit.owner) then return (hoverMarkdown
         code: body.stringView
         doc: docBody.stringView
     )
@@ -5315,12 +5317,12 @@ variableTypeOpt: function {o: (Option zenv.ZSymbolTable).view vid: ztypes.vid} o
 # itemValueTid -- the type a completion item's name has as a value: a data
 # block's is its view (`staticlist StringView`), as a use reads it; any other its own.
 itemValueTid: function {snap: zcheck.CheckResult tid: ztypes.tid} out ztypes.tid is {
-    if (ownerIsDataOpt o: snap.st :tid).not then return tid
+    if (ownerIsStaticListOpt o: snap.st :tid).not then return tid
     o: snap.st
     match (
         o
     ) case some then {
-        vt: ztypecheck.dataValueTypeLate st: o ast: snap.prog dataTid: tid
+        vt: ztypecheck.staticListValueTypeLate st: o ast: snap.prog staticListTid: tid
         if vt.isZero.not then return vt
     } case none then null
     return tid
@@ -8002,7 +8004,7 @@ tagCarrier: function {o: (Option zenv.ZSymbolTable).view tid: ztypes.tid} out bo
     match (
         o
     ) case some then {
-        if (o.reg.typetypeOf typeId: tid) == ztypes.ztypetype.dataType then return true
+        if (o.reg.typetypeOf typeId: tid) == ztypes.ztypetype.staticListType then return true
         return (ztypecheck.numKindOfTid st: o :tid).has
     } case none then null
     return false

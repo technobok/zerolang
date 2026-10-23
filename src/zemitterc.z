@@ -3508,14 +3508,16 @@ dottedTagReadTid: function {symtab: zenv.ZSymbolTable.view nid: zast.nodeid} out
 # refDecl's: the reference's own declaration in whichever unit wrote it, which in
 # an instance's function is the instance's copy of it. 0 when the node names no
 # block.
-dataBlockTid: function {symtab: zenv.ZSymbolTable.view nid: zast.nodeid} out ztypes.tid is {
+staticListTidOf: function {symtab: zenv.ZSymbolTable.view nid: zast.nodeid} out ztypes.tid is {
     if nid.isZero then return ztypes.tid.zero
     t: stampIdOf :symtab :nid
-    if (symtab.reg.typetypeOf typeId: t) == ztypes.ztypetype.dataType then return t
+    if (symtab.reg.typetypeOf typeId: t) == ztypes.ztypetype.staticListType then return t
     rd: (symtab.typing.refDecl.get key: nid).or d: ztypes.declid
     if rd.isZero then return ztypes.tid.zero
     dt: (symtab.typing.decls.get i: rd).typeId
-    if (symtab.reg.typetypeOf typeId: dt) != ztypes.ztypetype.dataType then return ztypes.tid.zero
+    if (
+        (symtab.reg.typetypeOf typeId: dt) != ztypes.ztypetype.staticListType
+    ) then return ztypes.tid.zero
     # read by a generic unit instance's function, the declaration is the
     # template's block and the instance's own copy is the block read
     # (or of an instance enclosing it, for a nested unit's function)
@@ -3786,7 +3788,7 @@ originIsTid: function {
 # TABLES rather than one string that could spell either. Both fields are
 # widened to u64 so the key has no padding for the container's byte hash to
 # read (the callslot / constslot shape).
-dataconstkey: record {
+staticlistconstkey: record {
     # the data block's type
     owner: ztypes.tid
     # the constant's name. The pair keys the emitted constant
@@ -3794,7 +3796,7 @@ dataconstkey: record {
 }
 
 # which element of which data block, as one key
-dataslotkey: record {
+staticlistslotkey: record {
     # the data block's type
     owner: ztypes.tid
     # which element. The pair keys the emitted slot
@@ -3932,7 +3934,7 @@ Ctx: class {
     # declaration and the definition write the same text, built once
     fnSigs: (IdMapR ztypes.tid V: String)
     # the data blocks the program declares, by type
-    dataElems: IdSet ztypes.tid
+    staticListElems: IdSet ztypes.tid
     # a native operator row's hole bindings: `StringView` and `T` its cnames,
     # `L` and `R` its operands. The names never change and the values are
     # replaced per operator, so the four lists live here and an operator
@@ -3942,9 +3944,9 @@ Ctx: class {
     opRawNames: List String
     opRawVals: List String
     # each data constant's emitted text, keyed by owner and name
-    dataConst: (MapVR dataconstkey V: String)
+    staticListConst: (MapVR staticlistconstkey V: String)
     # each data slot's emitted text, keyed by owner and slot
-    dataSlot: (MapVR dataslotkey V: String)
+    staticListSlot: (MapVR staticlistslotkey V: String)
     # the current class method body's pointer-receiver params, by variable id
     ptrVids: ListVal ztypes.vid
     # the enclosing function hands back a REFERENCE to a user reftype, so its
@@ -6741,7 +6743,7 @@ emitSvCallLegs: function {
 
 # emitDataIndexCall -- `primes.get i`: a data-block element read,
 # emitted as z_{name}_at(arg), which checks the bounds.
-emitDataIndexCall: function {
+emitStaticListIndexCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
@@ -6754,11 +6756,11 @@ emitDataIndexCall: function {
     {
         cn: ast.nodes.get i: call.callable
         if cn.dottedpath.not then return ""
-        dtid = dataBlockTid :symtab nid: (interpPartNodeId n: (ast.nodes.get i: cn.parent))
+        dtid = staticListTidOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: cn.parent))
     }
     if dtid.isZero then return ""
-    isData: ctx.dataElems.has item: dtid
-    if isData.not then return ""
+    isStaticList: ctx.staticListElems.has item: dtid
+    if isStaticList.not then return ""
     if mnId == zast.wellKnown.slot.wkGet then {
         ax: "0".string
         arx249: u64
@@ -10759,8 +10761,8 @@ emitFamilyMethodCall: function {
     fam: monoFamilyOf :symtab :ctx tid: bt
     isArr: fam == family.slot.fixedArray
     if isArr then return (emitArrayMethodCall :ast :symtab :ctx :call :mnId :bn :bt :bvid :facts)
-    if (dataValueFamilyOf :symtab :ctx tid: bt).isZero.not then {
-        return (emitDataValueMethodCall :ast :symtab :ctx :call :mnId :bn :bt :facts)
+    if (staticListValueFamilyOf :symtab :ctx tid: bt).isZero.not then {
+        return (emitStaticListValueMethodCall :ast :symtab :ctx :call :mnId :bn :bt :facts)
     }
     isSpan: fam == family.slot.spanVal
     if isSpan then return (emitSpanMethodCall :ast :symtab :ctx :call :mnId :bn :bt :bvid :facts)
@@ -11119,7 +11121,7 @@ emitArrayMethodCall: function {
 
 # emitDataValueMethodCall -- `v.get i: k` on a data value: the mono's own
 # bounds-checked reader, handed the view by value.
-emitDataValueMethodCall: function {
+emitStaticListValueMethodCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
@@ -15662,12 +15664,12 @@ ownerIsCollectionFamily: function {ctx: Ctx.view fam: ztypes.tid} out bool is {
         (fam == (ctx.origins.get i: family.slot.idMapV)) or
         (fam == (ctx.origins.get i: family.slot.idSet)) or
         (fam == (ctx.origins.get i: family.slot.fixedArray)) or
-        (isDataValueFamily :ctx :fam)
+        (isStaticListValueFamily :ctx :fam)
     )
 }
 
 # isDataValueFamily -- is `fam` the template of a static list's value?
-isDataValueFamily: function {ctx: Ctx.view fam: ztypes.tid} out bool is {
+isStaticListValueFamily: function {ctx: Ctx.view fam: ztypes.tid} out bool is {
     if fam.isZero then return false
     return fam == (ctx.origins.get i: family.slot.staticList)
 }
@@ -15676,11 +15678,11 @@ isDataValueFamily: function {ctx: Ctx.view fam: ztypes.tid} out bool is {
 # for an instance of one; 0 for any other type. A family's template is no
 # value -- every one has an element or index parameter -- so it is not one of
 # its own family, and nothing emits it.
-dataValueFamilyOf: function {
+staticListValueFamilyOf: function {
     symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.tid
 } out ztypes.tid is {
     og: originTidOf :symtab :tid
-    if (isDataValueFamily :ctx fam: og) then return og
+    if (isStaticListValueFamily :ctx fam: og) then return og
     return ztypes.tid.zero
 }
 
@@ -15771,7 +15773,7 @@ emitNativeMemberCall: function {
         (ownerFam == (ctx.origins.get i: family.slot.optionval))
     )
     if isComb then return (emitResultCombinator :ast :symtab :ctx :call :facts)
-    if (isDataValueFamily :ctx fam: ownerFam) then return (emitDataIndexCall
+    if (isStaticListValueFamily :ctx fam: ownerFam) then return (emitStaticListIndexCall
         :ast
         :symtab
         :ctx
@@ -16502,7 +16504,7 @@ aliasResolvesToSelfAt: function {
 # emitDataMember -- a data block's element read through `n`, whose base is the
 # block `dbt`: a label (`codes.ht`), an ordinal (`primes.0`), `.length`, or
 # `.array` (the whole block copied into an array temp). "" for any other member.
-emitDataMember: function {
+emitStaticListMember: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
@@ -16532,8 +16534,8 @@ emitDataMember: function {
     }
     # `primes.first` and `codes.4` reach a LABELLED element by its name, an
     # integer label included; `primes.0` an unlabelled one by its ordinal
-    dno: (ctx.dataConst.get
-        key: (dataconstkey
+    dno: (ctx.staticListConst.get
+        key: (staticlistconstkey
             owner: dbt
             name: mnId
         )
@@ -16548,8 +16550,8 @@ emitDataMember: function {
     match (
         dcIdx
     ) case ok then {
-        dso: (ctx.dataSlot.get
-            key: (dataslotkey owner: dbt slot: dcIdx)
+        dso: (ctx.staticListSlot.get
+            key: (staticlistslotkey owner: dbt slot: dcIdx)
         )
         match (
             dso
@@ -16791,15 +16793,15 @@ emitDefRefAtom: function {
 # array, `((z_M_t){ .length = N, .data = z_tN })` -- NULL for an empty block,
 # which has none. "" when the atom names no block, or a block the checker never
 # used as a value.
-dataValueText: function {
+staticListValueText: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     nid: zast.nodeid
 } out String is {
-    dt: dataBlockTid :symtab :nid
+    dt: staticListTidOf :symtab :nid
 
     if dt.isZero then return ""
-    vt: symtab.reg.dataValueTypeOf tid: dt
+    vt: symtab.reg.staticListValueTypeOf tid: dt
     if vt.isZero then return ""
     vc: ctxCname :ctx tid: vt
     ac: ctxCname :ctx tid: dt
@@ -16857,7 +16859,7 @@ emitAtom: function {
 } out String is {
     avC: ast.names.texts.get i: n.name
     av: avC.stringView
-    dv: dataValueText :symtab :ctx nid: n.nodeid
+    dv: staticListValueText :symtab :ctx nid: n.nodeid
     if dv.length > 0 then return (stating :facts from: literalFacts text: dv)
     # a literal landing in an i128, u128 or f16 is that type's value
     if (symtab.typing.helperScalarTarget.has key: n.nodeid) then {
@@ -17038,7 +17040,7 @@ nestedCounterRead: function {
     isCounted: (
         (isListOriginOf :symtab :ctx tid: nlid) or
         (isListViewOriginOf :symtab :ctx tid: nlid) or
-        (dataValueFamilyOf :symtab :ctx tid: nlid).isZero.not or
+        (staticListValueFamilyOf :symtab :ctx tid: nlid).isZero.not or
         (isSetOriginOf :symtab :ctx tid: nlid) or
         (isMapOriginOf :symtab :ctx tid: nlid) or
         (isIdCollectionOriginOf :symtab :ctx tid: nlid)
@@ -17087,7 +17089,7 @@ callBaseTemp: function {
     # a view -- a list's, a data block's -- is a stack struct its walks take by
     # address too
     isView: isListViewOriginOf :symtab :ctx tid: nlid
-    if (dataValueFamilyOf :symtab :ctx tid: nlid).isZero.not then isView = true
+    if (staticListValueFamilyOf :symtab :ctx tid: nlid).isZero.not then isView = true
     if (tmplClassRowOf :symtab :ctx tid: nlid) > 0 then isView = true
     if (stackCollectionTid :symtab :ctx tid: nlid).not when isView.not then return ""
     if (canTakeAddress f: baseF) then return ""
@@ -17229,7 +17231,7 @@ emitNestedCollectionBase: function {
             return (stating :facts from: callFacts text: "\{nlcb}\{w9}\{recvB})")
         }
     }
-    if (dataValueFamilyOf :symtab :ctx tid: nlid).isZero.not when (
+    if (staticListValueFamilyOf :symtab :ctx tid: nlid).isZero.not when (
         mnId == zast.wellKnown.slot.wkIterate
     ) then {
         ndcb: ctxCname :ctx tid: nlid
@@ -18088,7 +18090,7 @@ fnptrSlotCallC: function {
 # dataValueMemberRead -- `length` and `iterate` read off a data value: the view's
 # own length, and the mono's walk over it. A block's name as the base is its
 # value, the view of its array. "" for any other read.
-dataValueMemberRead: function {
+staticListValueMemberRead: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     baseNid: zast.nodeid
@@ -18099,10 +18101,10 @@ dataValueMemberRead: function {
     bstamp: ztypes.tid
     facts: cfacts.borrow
 } out String is {
-    if (dataValueFamilyOf :symtab :ctx tid: bstamp).isZero then return ""
+    if (staticListValueFamilyOf :symtab :ctx tid: bstamp).isZero then return ""
     isLen: mnId == zast.wellKnown.slot.wkLength
     if isLen.not when mnId != zast.wellKnown.slot.wkIterate then return ""
-    base: dataValueText :symtab :ctx nid: baseNid
+    base: staticListValueText :symtab :ctx nid: baseNid
     baseF: literalFacts
     if base.length == 0 then {
         base = bn2.string
@@ -18140,7 +18142,7 @@ emitResolvedMemberRead: function {
     readIsRef: bool
     facts: cfacts.borrow
 } out String is {
-    dvr: dataValueMemberRead :symtab :ctx :baseNid :mnId :bn2 :bn2F :bn2v :bstamp :facts
+    dvr: staticListValueMemberRead :symtab :ctx :baseNid :mnId :bn2 :bn2F :bn2v :bstamp :facts
     if dvr.length > 0 then return dvr
     mtt: symtab.reg.typetypeOf typeId: mco
     if mtt.isInterface then {
@@ -18431,12 +18433,12 @@ emitIdCollectionMemberRead: function {
             return (stating :facts from: (memberFacts b: bn2F) text: "\{bn2}\{entryAcc}value")
         }
     }
-    dbt: (dataBlockTid
+    dbt: (staticListTidOf
         :symtab
         nid: (atomNodeId n: (ast.nodes.get i: n.parent))
     )
     if dbt.isZero.not then {
-        dres: emitDataMember :ast :symtab :ctx :n :dbt mn2: mn2.string :mnId :facts
+        dres: emitStaticListMember :ast :symtab :ctx :n :dbt mn2: mn2.string :mnId :facts
         if dres.length > 0 then return dres
     }
     return ""
@@ -18714,7 +18716,7 @@ dottedTypeConstRead: function {
     cid: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
     # a data block's `slot.label` is the label's position, a constant of the
     # block's index type
-    isSlot: symtab.typing.dataSlotTypes.has item: bt
+    isSlot: symtab.typing.staticListSlotTypes.has item: bt
     if isSlot.not when (symtab.typing.isAsConstDecl
         declId: (symtab.typing.declMemberIdOf parentTypeId: bt nameId: cid)
     ).not then return ""
@@ -19106,7 +19108,7 @@ emitDottedUnitRead: function {
     ucv: unitConstTextOf :ast :symtab :ctx :n :facts
     if ucv.length > 0 then return ucv
     # `unit.block` -- another unit's data block reads as its value
-    udv: dataValueText :symtab :ctx nid: n.nodeid
+    udv: staticListValueText :symtab :ctx nid: n.nodeid
     if udv.length > 0 then return (stating :facts from: literalFacts text: udv)
     # a stamped implicit zero-create on a unit-qualified type path
     # (`unit.Conf`) constructs like the bare-atom legs
@@ -19719,9 +19721,11 @@ emitDottedNativeMarker: function {
     # the block is the base's stamped type, whatever shape the base takes;
     # no base is emitted
     dpbT: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.parent))
-    if dpbT.isZero.not when (symtab.reg.typetypeOf typeId: dpbT) == ztypes.ztypetype.dataType then {
+    if dpbT.isZero.not when (
+        (symtab.reg.typetypeOf typeId: dpbT) == ztypes.ztypetype.staticListType
+    ) then {
         mn2d: zast.nameTextAt :ast ref: mn2Id
-        dres0: emitDataMember :ast :symtab :ctx :n dbt: dpbT mn2: mn2d mnId: mn2Id :facts
+        dres0: emitStaticListMember :ast :symtab :ctx :n dbt: dpbT mn2: mn2d mnId: mn2Id :facts
         if dres0.length > 0 then return dres0
     }
     # a zero-parameter native read without parens auto-calls: the member's
@@ -22178,7 +22182,7 @@ controlValueNodeId: function {n: astnode.view} out zast.nodeid is {
         return n.nodeid
     } case statement then {
         return n.nodeid
-    } case datablock then {
+    } case listblock then {
         return n.nodeid
     } else {
         return zast.nodeid
@@ -33486,7 +33490,7 @@ checkNativesResolve: function {
 
 # fill the data-element cache for the whole program, once, before anything
 # reads it
-fillDataElems: function {program: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx} is {
+fillStaticListElems: function {program: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx} is {
     {
         uCnt9a: program.units.length
         uIdx9a: u64
@@ -33501,14 +33505,14 @@ fillDataElems: function {program: Ast.view symtab: zenv.ZSymbolTable.view ctx: C
                 uNm = u.name
             }
             if opId.isZero.not then {
-                (fillDataElemsIn
+                (fillStaticListElemsIn
                     :symtab
                     :ctx
                     ast: program
                     mainOpId: opId
                 )
                 # a generic file unit's instances own copies of its blocks
-                if (isGenericTemplateUnitOp ast: program :opId) then (fillTemplateDataElems
+                if (isGenericTemplateUnitOp ast: program :opId) then (fillTemplateStaticListElems
                     :symtab
                     :ctx
                     ast: program
@@ -33524,7 +33528,7 @@ fillDataElems: function {program: Ast.view symtab: zenv.ZSymbolTable.view ctx: C
 }
 
 # populate a data block's element table.
-fillDataElemsIn: function {
+fillStaticListElemsIn: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     ast: Ast.view
@@ -33537,7 +33541,7 @@ fillDataElemsIn: function {
         vx249 = vx249 + 1
         bmNode: ast.nodes.get i: bm
         if bmNode.namedoperation then {
-            (fillOneDataElem
+            (fillOneStaticListElem
                 :ast
                 :symtab
                 :ctx
@@ -33545,14 +33549,15 @@ fillDataElemsIn: function {
             )
             # a unit declared inside this one -- inline, a hidden subunit --
             # declares data blocks of its own
-            if (zast.unitOpDeclaresUnit :ast opId: bmNode.operation) then (fillDataElemsIn
+            if (zast.unitOpDeclaresUnit :ast opId: bmNode.operation) then (fillStaticListElemsIn
                 :symtab
                 :ctx
                 :ast
                 mainOpId: bmNode.operation
             )
             # and a generic unit's instances own copies of its blocks
-            if (isGenericTemplateUnitOp :ast opId: bmNode.operation) then (fillTemplateDataElems
+            if (isGenericTemplateUnitOp :ast opId: bmNode.operation
+            ) then (fillTemplateStaticListElems
                 :symtab
                 :ctx
                 :ast
@@ -33564,18 +33569,18 @@ fillDataElemsIn: function {
 }
 
 # populate one data-block element.
-fillOneDataElem: function {
+fillOneStaticListElem: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     op: astnode.view
 } is {
-    fillDataElemFor :ast :symtab :ctx :op dtid: (stampIdOf :symtab nid: (zast.nodeIdOf n: op))
+    fillStaticListElemFor :ast :symtab :ctx :op dtid: (stampIdOf :symtab nid: (zast.nodeIdOf n: op))
 }
 
 # fillDataElemFor -- populate the element table of data block `op` as the data
 # type `dtid`: the block's own, or a generic unit instance's copy of it.
-fillDataElemFor: function {
+fillStaticListElemFor: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
@@ -33584,24 +33589,24 @@ fillDataElemFor: function {
 } is {
     match (
         op
-    ) case datablock then {
-        ctx.dataElems.add item: dtid
+    ) case listblock then {
+        ctx.staticListElems.add item: dtid
         idx: u64
         hasLen: false
         ei9a: u64
         for ei9a < op.elements.count loop {
             e: zast.kidAt kids: ast.kids span: op.elements i: ei9a
             ei9a = ei9a + 1
-            vx: dataSlotText :ast :symtab :ctx dataTid: dtid slot: idx
-            ik: dataslotkey owner: dtid slot: idx
+            vx: staticListSlotText :ast :symtab :ctx staticListTid: dtid slot: idx
+            ik: staticlistslotkey owner: dtid slot: idx
             iv2: vx.copy
-            ctx.dataSlot.set key: ik value: iv2
-            elid: dataElemLabelId n: (ast.nodes.get i: e)
+            ctx.staticListSlot.set key: ik value: iv2
+            elid: staticListElemLabelId n: (ast.nodes.get i: e)
             if elid.isZero.not then {
                 if elid == zast.wellKnown.slot.wkLength then hasLen = true
-                lk: dataconstkey owner: dtid name: elid
+                lk: staticlistconstkey owner: dtid name: elid
                 lv: vx.copy
-                ctx.dataConst.set key: lk value: lv
+                ctx.staticListConst.set key: lk value: lv
             }
             idx = idx + 1
         }
@@ -33609,15 +33614,15 @@ fillDataElemFor: function {
         # never forces the static array out. An element labelled `length` has
         # already claimed the name.
         if hasLen.not then {
-            lnk: dataconstkey owner: dtid name: zast.wellKnown.slot.wkLength
+            lnk: staticlistconstkey owner: dtid name: zast.wellKnown.slot.wkLength
             lnv: "\{idx}"
-            ctx.dataConst.set key: lnk value: lnv
+            ctx.staticListConst.set key: lnk value: lnv
         }
     } else null
 }
 
 # the label of data-block element `n`, by id: 0 for an unlabelled one.
-dataElemLabelId: function {n: astnode.view} out zast.nameid is {
+staticListElemLabelId: function {n: astnode.view} out zast.nameid is {
     match (
         n
     ) case namedoperation then {
@@ -34322,7 +34327,7 @@ nestedUnitTemplate: function {
 
 # fillTemplateDataElems -- the element tables of every instance of the generic
 # unit template `tplId`, whose body is `bodyIds`.
-fillTemplateDataElems: function {
+fillTemplateStaticListElems: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     ast: Ast.view
@@ -34330,13 +34335,13 @@ fillTemplateDataElems: function {
     tplId: ztypes.tid
 } is {
     for each m: (templateMonos :symtab :tplId) loop {
-        fillUnitMonoDataElems :symtab :ctx :ast :bodyIds monoId: m
+        fillUnitMonoStaticListElems :symtab :ctx :ast :bodyIds monoId: m
     }
 }
 
 # fillUnitMonoDataElems -- the element tables of the data blocks a generic unit's
 # instance `monoId` owns: its copies of the blocks in the template's body.
-fillUnitMonoDataElems: function {
+fillUnitMonoStaticListElems: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     ast: Ast.view
@@ -34349,7 +34354,7 @@ fillUnitMonoDataElems: function {
         di = di + 1
         if bm.namedoperation.not then continue
         nui: unitMonoNestedInstance :ast :symtab nameId: bm.name opId: bm.operation mono: monoId
-        if nui.isZero.not then (fillUnitMonoDataElems
+        if nui.isZero.not then (fillUnitMonoStaticListElems
             :symtab
             :ctx
             :ast
@@ -34357,8 +34362,10 @@ fillUnitMonoDataElems: function {
             monoId: nui
         )
         cp: (symtab.typing.declChildOfId parentTypeId: monoId nameId: bm.name).or d: ztypes.tid.zero
-        if cp.isZero.not when (symtab.reg.typetypeOf typeId: cp) == ztypes.ztypetype.dataType then {
-            fillDataElemFor :ast :symtab :ctx op: (ast.nodes.get i: bm.operation) dtid: cp
+        if cp.isZero.not when (
+            (symtab.reg.typetypeOf typeId: cp) == ztypes.ztypetype.staticListType
+        ) then {
+            fillStaticListElemFor :ast :symtab :ctx op: (ast.nodes.get i: bm.operation) dtid: cp
         }
     }
 }
@@ -34366,7 +34373,7 @@ fillUnitMonoDataElems: function {
 # emitTemplateDataBlocks -- the data blocks of every instance of the generic unit
 # template `tplId`, whose body is `bodyIds`: the template's own are never
 # written.
-emitTemplateDataBlocks: function {
+emitTemplateStaticLists: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
@@ -34375,13 +34382,13 @@ emitTemplateDataBlocks: function {
     buf: String.borrow
 } is {
     for each m: (templateMonos :symtab :tplId) loop {
-        emitUnitMonoDataBlocks :ast :symtab :ctx :bodyIds monoId: m :buf
+        emitUnitMonoStaticLists :ast :symtab :ctx :bodyIds monoId: m :buf
     }
 }
 
 # emitUnitMonoDataBlocks -- the static arrays of the data blocks a generic unit's
 # instance `monoId` owns, as emitUnitDataBlocks writes a unit's own.
-emitUnitMonoDataBlocks: function {
+emitUnitMonoStaticLists: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
@@ -34395,7 +34402,7 @@ emitUnitMonoDataBlocks: function {
         di = di + 1
         if bm.namedoperation.not then continue
         nui: unitMonoNestedInstance :ast :symtab nameId: bm.name opId: bm.operation mono: monoId
-        if nui.isZero.not then (emitUnitMonoDataBlocks
+        if nui.isZero.not then (emitUnitMonoStaticLists
             :ast
             :symtab
             :ctx
@@ -34404,8 +34411,10 @@ emitUnitMonoDataBlocks: function {
             :buf
         )
         cp: (symtab.typing.declChildOfId parentTypeId: monoId nameId: bm.name).or d: ztypes.tid.zero
-        if cp.isZero.not when (symtab.reg.typetypeOf typeId: cp) == ztypes.ztypetype.dataType then {
-            emitDataBlockFor :symtab :ctx op: (ast.nodes.get i: bm.operation) ridtid: cp :buf
+        if cp.isZero.not when (
+            (symtab.reg.typetypeOf typeId: cp) == ztypes.ztypetype.staticListType
+        ) then {
+            emitStaticListFor :symtab :ctx op: (ast.nodes.get i: bm.operation) ridtid: cp :buf
         }
     }
 }
@@ -35741,13 +35750,13 @@ emitC: function {
         needUnits: List String
         needMembs: List String
         fnSigs: (IdMapR ztypes.tid V: String)
-        dataElems: IdSet ztypes.tid
+        staticListElems: IdSet ztypes.tid
         opBindNames: List String
         opBindVals: List String
         opRawNames: List String
         opRawVals: List String
-        dataConst: (MapVR dataconstkey V: String)
-        dataSlot: (MapVR dataslotkey V: String)
+        staticListConst: (MapVR staticlistconstkey V: String)
+        staticListSlot: (MapVR staticlistslotkey V: String)
         ptrVids: ListVal ztypes.vid
         refBorrowRet: false
         aliases: List VidVal
@@ -35892,7 +35901,7 @@ emitC: function {
         )
     }
     checkLoadedNatives :program :ctx
-    fillDataElems :program :symtab :ctx
+    fillStaticListElems :program :symtab :ctx
     fillNeeds :program :symtab :ctx
     demandTmplClassNeeds :symtab :ctx
     # A runtime-owned class's methods are demanded by the class being LIVE
@@ -37144,7 +37153,7 @@ emitListViewMono: function {
 # which hands the window to the cursor. The cursor's `data` is a plain pointer
 # shared with walks that write, so the const is dropped there; the typechecker
 # is what keeps a list walk readonly.
-emitDataMono: function {
+emitStaticListMono: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
@@ -41627,7 +41636,7 @@ MonoWork: class {
     # the windows still owed emission
     wSpan: ListVal ztypes.tid
     # the data values still owed emission
-    wData: ListVal ztypes.tid
+    wStaticList: ListVal ztypes.tid
     # the lists still owed emission
     wList: ListVal ztypes.tid
     # the sets still owed emission
@@ -41711,7 +41720,7 @@ classifyCollectionMono: function {
         isColKind = true
         colDst = 8
     }
-    if (dataValueFamilyOf :symtab :ctx tid: tcl).isZero.not then {
+    if (staticListValueFamilyOf :symtab :ctx tid: tcl).isZero.not then {
         isColKind = true
         colDst = 9
     }
@@ -41730,7 +41739,7 @@ classifyCollectionMono: function {
         if colDst == 6 then work.wIdSet.append tv
         if colDst == 7 then work.wIdMap.append tv
         if colDst == 8 then work.wSpan.append tv
-        if colDst == 9 then work.wData.append tv
+        if colDst == 9 then work.wStaticList.append tv
     }
     return isColKind
 }
@@ -41941,8 +41950,8 @@ emitCollectionMonos: function {
     # the ListView struct by value.
     # data values first: each is a scalar view, and nothing it names comes later
     tdat: u64
-    for tdat < work.wData.length loop {
-        emitDataMono :ast :symtab :ctx :runtimeDir monoId: (work.wData.get i: tdat) :buf
+    for tdat < work.wStaticList.length loop {
+        emitStaticListMono :ast :symtab :ctx :runtimeDir monoId: (work.wStaticList.get i: tdat) :buf
         tdat = tdat + 1
     }
     tarr: u64
@@ -42231,7 +42240,7 @@ emitMonos: function {
         wArr: ListVal ztypes.tid
         wListView: ListVal ztypes.tid
         wSpan: ListVal ztypes.tid
-        wData: ListVal ztypes.tid
+        wStaticList: ListVal ztypes.tid
         wList: ListVal ztypes.tid
         wSet: ListVal ztypes.tid
         wMap: ListVal ztypes.tid
@@ -45287,7 +45296,7 @@ isGenericFnTid: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out bo
 # emitUnitDataBlocks -- one unit body's data blocks. A block is asked of every
 # named definition and filters itself; a type's `as` constants are not emitted,
 # every read of one is its value.
-emitUnitDataBlocks: function {
+emitUnitStaticLists: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
@@ -45300,7 +45309,7 @@ emitUnitDataBlocks: function {
         acx = acx + 1
         bm: ast.nodes.get i: bmId
         if bm.namedoperation.not then continue
-        emitDataBlock :symtab :ctx op: (ast.nodes.get i: bm.operation) :buf
+        emitStaticList :symtab :ctx op: (ast.nodes.get i: bm.operation) :buf
     }
 }
 
@@ -45468,7 +45477,7 @@ emitRecordDefsIn: function {
         :buf
     )
     # its instances' data blocks are written with the other data blocks
-    if phase == 1 when isTpl then (emitTemplateDataBlocks
+    if phase == 1 when isTpl then (emitTemplateStaticLists
         :ast
         :symtab
         :ctx
@@ -45504,7 +45513,7 @@ emitRecordDefsInBody: function {
     phase: u64
     buf: String.borrow
 } is {
-    if phase == 1 then emitUnitDataBlocks :ast :symtab :ctx :bodyIds :buf
+    if phase == 1 then emitUnitStaticLists :ast :symtab :ctx :bodyIds :buf
     if phase == 2 then {
         emitUnitDefMethods :ast :symtab :ctx :bodyIds :ownerTid declOnly: true :buf
         emitUnitConformanceImpls :ast :symtab :ctx :bodyIds :ownerTid :buf
@@ -45535,7 +45544,7 @@ emitNestedRecordDefs: function {
         nOp: nm.operation
         if (isGenericTemplateUnitOp :ast opId: nOp) then {
             # its instances' data blocks, with the other data blocks
-            if phase == 1 then (emitTemplateDataBlocks
+            if phase == 1 then (emitTemplateStaticLists
                 :ast
                 :symtab
                 :ctx
@@ -45581,18 +45590,18 @@ unitMemberTid: function {
 # z_{name}_at, which panics on an index past the end (a negative i64 converts
 # to a huge u64). Emitted only when the block is read at runtime (`.get` /
 # `.array`); labels, ordinals and `.length` fold to constants and need no array.
-emitDataBlock: function {
+emitStaticList: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
     op: astnode.view
     buf: String.borrow
 } is {
-    emitDataBlockFor :symtab :ctx :op ridtid: (stampIdOf :symtab nid: (zast.nodeIdOf n: op)) :buf
+    emitStaticListFor :symtab :ctx :op ridtid: (stampIdOf :symtab nid: (zast.nodeIdOf n: op)) :buf
 }
 
 # emitDataBlockFor -- emitDataBlock as the data type `ridtid`: the block's own,
 # or a generic unit instance's copy of it, whose elements are its own.
-emitDataBlockFor: function {
+emitStaticListFor: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
     op: astnode.view
@@ -45601,7 +45610,7 @@ emitDataBlockFor: function {
 } is {
     match (
         op
-    ) case datablock then {
+    ) case listblock then {
         ri: false
         runtimeIndexed9v: symtab.reg.isRuntimeIndexedOf tid: ridtid
         ri = runtimeIndexed9v
@@ -45612,7 +45621,7 @@ emitDataBlockFor: function {
             # materialises to -- not a name read off the `out` clause:
             # a block typed by its tags emits the same array as one typed by
             # the clause. scalarCTypeFor re-checks the tid for a user shadow.
-            etd: symtab.reg.dataElemTypeOf tid: ridtid
+            etd: symtab.reg.staticListElemTypeOf tid: ridtid
             isSv: etd == ctx.svTid
             if isSv then ect = "\{ctx.svC}_t"
             if etd.isZero.not when isSv.not then {
@@ -45626,7 +45635,7 @@ emitDataBlockFor: function {
             cnt: u64
             for cnt < op.elements.count loop {
                 if cnt > 0 then elems.append ", "
-                eso: ctx.dataSlot.get key: (dataslotkey owner: ridtid slot: cnt)
+                eso: ctx.staticListSlot.get key: (staticlistslotkey owner: ridtid slot: cnt)
                 match (
                     eso
                 ) case some then elems.append eso case none then null
@@ -45657,14 +45666,14 @@ emitDataBlockFor: function {
 # dataSlotText -- the C constant for element `slot` of data block `dataTid`,
 # rendered from the value the checker recorded, at the block's element type; a
 # string as the StringView initializer its static array holds.
-dataSlotText: function {
+staticListSlotText: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    dataTid: ztypes.tid
+    staticListTid: ztypes.tid
     slot: u64
 } out String is {
-    v: symtab.typing.dataSlotConstOf :dataTid :slot
+    v: symtab.typing.staticListSlotConstOf :staticListTid :slot
     if v.kind.svalKind then {
         # a static initializer takes the bytes themselves: the pool's `_zcsN`
         # view is no constant expression, and a read of a string element folds
@@ -45678,7 +45687,14 @@ dataSlotText: function {
         return r
     }
     facts: cfacts
-    return (cvalText :ast :symtab :ctx tid: (symtab.reg.dataElemTypeOf tid: dataTid) :v :facts)
+    return (cvalText
+        :ast
+        :symtab
+        :ctx
+        tid: (symtab.reg.staticListElemTypeOf tid: staticListTid)
+        :v
+        :facts
+    )
 }
 
 # armTagValueText -- the declared discriminator of the arm named `armNameId`

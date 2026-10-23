@@ -221,7 +221,7 @@ declkind: variant {
     # a compile-time constant
     constDecl: null
     # a data block
-    dataDecl: null
+    staticListDecl: null
     # a parameter, which is a member of its function's type
     paramDecl: null
     # a record or class field
@@ -260,7 +260,7 @@ declkindName: function {k: declkind} out String is {
         return "type"
     } case constDecl then {
         return "const"
-    } case dataDecl then {
+    } case staticListDecl then {
         return "data"
     } case paramDecl then {
         return "param"
@@ -304,7 +304,7 @@ constslot: record {
 
 # dataslot -- one element of a data block, by position: the block's type and
 # the element's slot, counted from 0 in the order the elements are written.
-dataslot: record {
+staticlistslot: record {
     owner: ztypes.tid
     slot: u64
 }
@@ -1121,17 +1121,17 @@ ZTyping: class {
     constEvalState: (MapVV constslot v: u8)
     # each data block's element values by slot, beside memberConst's by name:
     # a constant `.get K` reads its element by position
-    dataSlotConst: (MapVV dataslot v: ztypes.cval)
+    staticListSlotConst: (MapVV staticlistslot v: ztypes.cval)
     # each list's INDEX type, when its `out` names one (`out (staticlist StringView i:
     # nameid)`): the type of its `slot` reads and of its value's `get`
-    dataIndexType: (IdMapV ztypes.tid v: ztypes.tid)
+    staticListIndexType: (IdMapV ztypes.tid v: ztypes.tid)
     # the `slot` member types of data blocks: each names its block's labels,
     # and is read through a label only
-    dataSlotTypes: IdSet ztypes.tid
+    staticListSlotTypes: IdSet ztypes.tid
     # the type-ref nodes that are a data block's `out` arguments written as a
     # literal type (`out (staticlist intliteral)`): an untyped element or index,
     # which a declared type may not name anywhere else
-    dataLiteralArgs: IdSet zast.nodeid
+    staticListLiteralArgs: IdSet zast.nodeid
     # the svalKind payload pool; cval.strId indexes it 1-based (0 = none)
     constStrings: List String
     # the integers outside i64 a constant holds; cval.bigId indexes it 1-based
@@ -2672,13 +2672,19 @@ ZTyping: class {
 
     # setDataSlotConst -- record the VALUE of element `slot` of data block
     # `dataTid`.
-    setDataSlotConst: function {:this dataTid: ztypes.tid slot: u64 value: ztypes.cval} is {
-        this.dataSlotConst.set key: (dataslot owner: dataTid :slot) :value
+    setStaticListSlotConst: function {
+        :this staticListTid: ztypes.tid slot: u64 value: ztypes.cval
+    } is {
+        this.staticListSlotConst.set key: (staticlistslot owner: staticListTid :slot) :value
     }
 
     # dataSlotConstOf -- that value, or `none` when the element has none.
-    dataSlotConstOf: function {t: this.view dataTid: ztypes.tid slot: u64} out ztypes.cval is {
-        return ((t.dataSlotConst.get key: (dataslot owner: dataTid :slot)).or d: ztypes.noConst)
+    staticListSlotConstOf: function {
+        t: this.view staticListTid: ztypes.tid slot: u64
+    } out ztypes.cval is {
+        return ((t.staticListSlotConst.get key: (staticlistslot owner: staticListTid :slot)).or
+            d: ztypes.noConst
+        )
     }
 
     # memberConstOf -- that value, or `none` when the member has none.
@@ -2904,12 +2910,12 @@ sumPairKeyOf: function {
 # integer: a non-integer tag has no discriminator to compare.
 sumPairArmValueIs: function {
     ty: ZTyping.view
-    dataTid: ztypes.tid
+    staticListTid: ztypes.tid
     armName: zast.nameid
     want: i64
 } out bool is {
     if armName.isZero then return false
-    c: ty.memberConstOf parentTypeId: dataTid nameId: armName
+    c: ty.memberConstOf parentTypeId: staticListTid nameId: armName
     # a value outside i64 is never one an i64 names
     if c.kind.ivalKind then return (c.bigId == 0) and (c.ival == want)
     return false
@@ -2947,14 +2953,14 @@ sumPairZeroArm: function {
     # declared one, and nothing when none was declared. Only the data case
     # detaches the value from the position: a declared numeric is still
     # sequential from 0, so the arm written first carries 0.
-    isData: false
+    listSourced: false
     tb: ty.variantTagBase.get key: k
     match (
         tb
     ) case some then {
-        if tb.isZero then isData = true
+        if tb.isZero then listSourced = true
     } case none then null
-    if isData.not then return f
+    if listSourced.not then return f
     # A data block names its own values, so the pair is boolean-like only when
     # those values ARE a discriminator pair -- 0 and 1, in either written
     # order. The arm carrying 0 is the falsy one wherever it stands. Any other
@@ -2962,13 +2968,13 @@ sumPairZeroArm: function {
     # happens to have two elements, not a truth value.
     dt: (ty.declChildOfId parentTypeId: k nameId: zast.wellKnown.slot.wkTag).or d: ztypes.tid.zero
     if dt.isZero then return none
-    if (sumPairArmValueIs :ty dataTid: dt armName: f want: 0) then {
-        if (sumPairArmValueIs :ty dataTid: dt armName: s want: 1) then return f
+    if (sumPairArmValueIs :ty staticListTid: dt armName: f want: 0) then {
+        if (sumPairArmValueIs :ty staticListTid: dt armName: s want: 1) then return f
         return none
     }
-    if (sumPairArmValueIs :ty dataTid: dt armName: s want: 0) when (sumPairArmValueIs
+    if (sumPairArmValueIs :ty staticListTid: dt armName: s want: 0) when (sumPairArmValueIs
         :ty
-        dataTid: dt
+        staticListTid: dt
         armName: f
         want: 1
     ) then return s
@@ -3272,10 +3278,10 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         nodeConst: (IdMapV zast.nodeid v: ztypes.cval)
         memberConst: (MapVV constslot v: ztypes.cval)
         constEvalState: (MapVV constslot v: u8)
-        dataSlotConst: (MapVV dataslot v: ztypes.cval)
-        dataIndexType: (IdMapV ztypes.tid v: ztypes.tid)
-        dataSlotTypes: IdSet ztypes.tid
-        dataLiteralArgs: IdSet zast.nodeid
+        staticListSlotConst: (MapVV staticlistslot v: ztypes.cval)
+        staticListIndexType: (IdMapV ztypes.tid v: ztypes.tid)
+        staticListSlotTypes: IdSet ztypes.tid
+        staticListLiteralArgs: IdSet zast.nodeid
         constStrings: List String
         constBigInts: List math.BigInt
         constRats: List math.BigRat

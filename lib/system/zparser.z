@@ -2551,15 +2551,15 @@ Parser: class {
 
     # dataMemberElement -- a `name:` element with no term after it, which names a
     # data MEMBER. Some means the duplicate-name error is the whole answer.
-    dataMemberElement: function {
+    listMemberElement: function {
         :this
         lex: zlexer.Lexer
         elements: ListVal zast.nodeid
-        datanames: ListVal zast.nameid
+        listnames: ListVal zast.nameid
     } out optionval astnode is {
         lblTok: lex.acceptAny pool: this.ast.names
         checkName: lblTok.text
-        dup: datanames.contains item: checkName
+        dup: listnames.contains item: checkName
         if dup then {
             bad: lex.acceptAny pool: this.ast.names
             return (optionval.some (this.mkError
@@ -2569,7 +2569,7 @@ Parser: class {
             )
             )
         }
-        datanames.append from: checkName
+        listnames.append from: checkName
         lvName: lblTok.text
         opName: lblTok.text
         lv: this.mkLabelValue line: lblTok.lineno col: lblTok.colno nameId: lvName
@@ -2586,15 +2586,15 @@ Parser: class {
     # dataLabelElement -- a `name: term` element. The label must not repeat one
     # already given, and a label with no term after it is an error rather than the
     # end of the body.
-    dataLabelElement: function {
+    listLabelElement: function {
         :this
         lex: zlexer.Lexer
         elements: ListVal zast.nodeid
-        datanames: ListVal zast.nameid
+        listnames: ListVal zast.nameid
     } out optionval astnode is {
         lblTok: lex.acceptAny pool: this.ast.names
         checkName: lblTok.text
-        dup: datanames.contains item: checkName
+        dup: listnames.contains item: checkName
         if dup then {
             bad: lex.acceptAny pool: this.ast.names
             return (optionval.some (this.mkError
@@ -2604,14 +2604,14 @@ Parser: class {
             )
             )
         }
-        datanames.append from: checkName
+        listnames.append from: checkName
         opName: lblTok.text
         la: this.atomLookahead :lex
         if la.not then {
             badPos: lex.peekPos
             return (optionval.some (this.mkErrorAt
                 pos: badPos
-                code: zast.err.badData
+                code: zast.err.badList
                 msg: "Expected term after data label"
             )
             )
@@ -2632,26 +2632,26 @@ Parser: class {
     # acceptDataElements -- the whole element list, in source order. Some is the
     # error that ends the parse; none means the list is complete, which it is as
     # soon as a bare term does not follow.
-    acceptDataElements: function {
+    acceptListElements: function {
         :this
         lex: zlexer.Lexer
         elements: ListVal zast.nodeid
-        datanames: ListVal zast.nameid
+        listnames: ListVal zast.nameid
     } out optionval astnode is {
         for true loop {
             ett: lex.peekType
             if ett == zlexer.toktype.labelPreTok then {
-                em: this.dataMemberElement :lex :elements :datanames
+                em: this.listMemberElement :lex :elements :listnames
                 if em.some then return (optionval.some em)
                 continue
             }
             if ett == zlexer.toktype.labelTok then {
-                el: this.dataLabelElement :lex :elements :datanames
+                el: this.listLabelElement :lex :elements :listnames
                 if el.some then return (optionval.some el)
                 continue
             }
             la: this.atomLookahead :lex
-            if la.not then return (this.dataElementsEnd :lex)
+            if la.not then return (this.listElementsEnd :lex)
             pathNode: this.parsePath :lex
             pErr: Parser.isError node: pathNode
             if pErr then return (optionval.some pathNode)
@@ -2664,7 +2664,7 @@ Parser: class {
 
     # dataElementsEnd -- no element starts here, so the elements end: none, or
     # the refusal of a keyword written as an element's label
-    dataElementsEnd: function {:this lex: zlexer.Lexer} out optionval astnode is {
+    listElementsEnd: function {:this lex: zlexer.Lexer} out optionval astnode is {
         if (this.reservedLabelLookahead :lex).not then return (optionval.none astnode)
         return (optionval.some (this.reservedLabelError :lex))
     }
@@ -2689,12 +2689,12 @@ Parser: class {
             if elements.length == 0 then {
                 return (this.mkErrorAt
                     pos: startPos
-                    code: zast.err.badData
+                    code: zast.err.badList
                     msg: "an empty list must name its type: `list {} out staticlist u8`"
                 )
             }
             eSpan: zast.kidsAdd kids: this.ast.kids xs: elements
-            return (astnode.datablock (zast.datablockrow
+            return (astnode.listblock (zast.listblockrow
                 nodeid: this.nextId
                 lineno: dLine
                 colno: dCol
@@ -2708,7 +2708,7 @@ Parser: class {
             bad: lex.acceptAny pool: this.ast.names
             return (this.mkError
                 tok: bad
-                code: zast.err.badData
+                code: zast.err.badList
                 msg: "Expected type reference after out"
             )
         }
@@ -2719,7 +2719,7 @@ Parser: class {
         tErr: Parser.isError node: typeNode
         if tErr then return typeNode
         eSpan: zast.kidsAdd kids: this.ast.kids xs: elements
-        return (astnode.datablock (zast.datablockrow
+        return (astnode.listblock (zast.listblockrow
             nodeid: this.nextId
             lineno: dLine
             colno: dCol
@@ -2764,13 +2764,13 @@ Parser: class {
             bad: lex.acceptAny pool: this.ast.names
             return (this.mkError
                 tok: bad
-                code: zast.err.badData
+                code: zast.err.badList
                 msg: "Expected opening brace for list body"
             )
         } case some then null
         elements: ListVal zast.nodeid
-        datanames: ListVal zast.nameid
-        oerr: this.acceptDataElements :lex :elements :datanames
+        listnames: ListVal zast.nameid
+        oerr: this.acceptListElements :lex :elements :listnames
         if oerr.some then return oerr
         closeOpt: lex.accept tt: zlexer.toktype.braceCloseTok pool: this.ast.names
         match (
@@ -2779,7 +2779,7 @@ Parser: class {
             bad: lex.acceptAny pool: this.ast.names
             return (this.mkError
                 tok: bad
-                code: zast.err.badData
+                code: zast.err.badList
                 msg: "Expected closing brace for list body"
             )
         } case some then null

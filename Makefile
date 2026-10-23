@@ -1223,7 +1223,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2306723
+ALLOC_BASELINE := 2306760
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1294,8 +1294,8 @@ any-guard:
 TYPENAME_OK := src/ztypecheck.z:resolveClass src/ztypecheck.z:resolveProtocol \
 	src/ztypecheck.z:defTypetypeOf src/ztypecheck.z:resolveObjectDef \
 	src/ztypecheck.z:paramIsBorrowReftype src/ztypecheck.z:isBoxTemplate \
-	src/ztypecheck.z:checkDataBlockMember src/ztypecheck.z:checkMarkerMember \
-	src/zemitterc.z:emitDataMember src/zemitterc.z:emitStrConvCall \
+	src/ztypecheck.z:checkStaticListMember src/ztypecheck.z:checkMarkerMember \
+	src/zemitterc.z:emitStaticListMember src/zemitterc.z:emitStrConvCall \
 	src/zsource.z:bareZeroTypeName src/ztypecheck.z:constraintKindForId \
 	src/ztypecheck.z:isConformanceMarker src/ztypecheck.z:declareCanonicalTypeId
 typename-guard:

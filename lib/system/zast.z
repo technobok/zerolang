@@ -25,7 +25,7 @@ public: unit {
     :callrow
     :caseclauserow
     :caserow
-    :datablockrow
+    :listblockrow
     :dorow
     :dottedpathrow
     :ErrorData
@@ -91,7 +91,7 @@ public: unit {
     :ifClauseAt
     :forCondAt
     :forPostAt
-    :dataElemAt
+    :listElemAt
     :nameTextAt
     :namedSiteAt
     :namedsite
@@ -185,7 +185,7 @@ err: variant {
     # a for header did not parse
     badFor: null
     # a data block did not parse
-    badData: null
+    badList: null
     # a statement did not parse
     badStatement: null
     # the types do not agree where they must
@@ -341,7 +341,7 @@ astnode: variant {
     # that has one
     namedoperation: namedoperationrow
     # a literal sequence of elements
-    datablock: datablockrow
+    listblock: listblockrow
     # a block of statements
     statement: statementrow
     # one statement: EOL is a statement boundary
@@ -510,7 +510,7 @@ errCode: function {c: err} out u32 is {
         r = 31
     } case badFor then {
         r = 32
-    } case badData then {
+    } case badList then {
         r = 34
     } case badStatement then {
         r = 35
@@ -1543,7 +1543,7 @@ namedoperationrow: record {
 # List-definition payload (`list { ... }`): an ordered list of
 # NamedOperation element nodes and an optional `out <type-ref>` that names
 # the list's type.
-datablockrow: record {
+listblockrow: record {
     # this list's own row in the node table
     nodeid: nodeid
     # the line this list starts on
@@ -1883,7 +1883,7 @@ errname: function {e: err} out String is {
         return "BADCASE"
     } case badFor then {
         return "BADFOR"
-    } case badData then {
+    } case badList then {
         return "BADDATA"
     } case badStatement then {
         return "BADSTATEMENT"
@@ -2067,7 +2067,7 @@ posOf: function {n: astnode.view} out nodepos is {
         return (nodepos line: n.lineno col: n.colno)
     } case namedoperation then {
         return (nodepos line: n.lineno col: n.colno)
-    } case datablock then {
+    } case listblock then {
         return (nodepos line: n.lineno col: n.colno)
     } case stringchunk then {
         return (nodepos line: n.lineno col: n.colno)
@@ -2249,8 +2249,8 @@ printNodeWith: function {ast: Ast.view n: astnode.view withId: bool} is {
         }
         printPoolName :ast ref: n.name
         printNodeWith :ast :withId n: (ast.nodes.get i: n.operation)
-    } case datablock then {
-        print "\{idp}datablock @\{n.lineno}:\{n.colno} elements=\{n.elements.count}"
+    } case listblock then {
+        print "\{idp}listblock @\{n.lineno}:\{n.colno} elements=\{n.elements.count}"
         printKidsWith :ast span: n.elements :withId
         print "  outType:"
         printOptChildWith :ast :withId id: n.outType
@@ -2440,7 +2440,7 @@ childIdsInto: function {ast: Ast.view n: astnode.view acc: ListVal nodeid} is {
         appendSpan kids: ast.kids :acc span: n.arguments
     } case namedoperation then {
         acc.append from: n.operation
-    } case datablock then {
+    } case listblock then {
         appendSpan kids: ast.kids :acc span: n.elements
         appendOptId :acc id: n.outType
     } case statement then {
@@ -2735,11 +2735,11 @@ cloneArm: function {
             hint: n.hint
         )
         )
-    } case datablock then {
+    } case listblock then {
         k: n.elements.count.u64
         ot: nodeid
         if n.outType.isZero.not then ot = cloned.get i: k
-        return (astnode.datablock (datablockrow
+        return (astnode.listblock (listblockrow
             nodeid: myId
             lineno: n.lineno
             colno: n.colno
@@ -2847,9 +2847,9 @@ ifCondAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
 
 # dataElemAt -- the id of element `i` of data block `nid` (0 for any other
 # arm).
-dataElemAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
+listElemAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
     n: ast.nodes.get i: nid
-    if n.datablock then return (kidAt kids: ast.kids span: n.elements :i)
+    if n.listblock then return (kidAt kids: ast.kids span: n.elements :i)
     zn: nodeid
     return zn
 }
@@ -3292,7 +3292,7 @@ nodeIdOf: function {n: astnode.view} out nodeid is {
         return n.nodeid
     } case namedoperation then {
         return n.nodeid
-    } case datablock then {
+    } case listblock then {
         return n.nodeid
     } case statement then {
         return n.nodeid
@@ -3371,8 +3371,8 @@ armName: function {n: astnode.view} out StringView is {
         return "call"
     } case namedoperation then {
         return "namedoperation"
-    } case datablock then {
-        return "datablock"
+    } case listblock then {
+        return "listblock"
     } case statement then {
         return "statement"
     } case statementline then {
