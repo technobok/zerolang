@@ -28710,8 +28710,10 @@ iterWrapperElem: function {
     return (optionval.none ztypes.tid)
 }
 
-# isViewUnionMono -- true when a type is an instance of a view union (its
-# per-iteration values are borrowed references, so the loop var binds BORROWED).
+# isViewUnionMono -- true when a type is an instance of a view union whose
+# per-iteration values are borrowed references, so the loop var binds BORROWED.
+# A StaticView's element is static storage, which nothing frees or writes: the
+# loop var owns it.
 isViewUnionMono: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -28721,6 +28723,7 @@ isViewUnionMono: function {
     goo: st.reg.genericOriginOf tid: wid
     if goo.isZero.not then origin = goo
     if origin.isZero then return false
+    if origin == (stdTidRo :ast :st wk: zast.wellKnown.slot.tyStaticView) then return false
     return (isViewUnionOrigin :ast :st :origin)
 }
 
@@ -30463,7 +30466,7 @@ checkCopyMember: function {
         mCp: "type '\{btnCp}' has no '.copy': a reftype has no default copy -- define a 'copy' method on '\{btnCp}' saying what a duplicate means, or move with '.take'"
 
         if bt == (stdTid :ast :st wk: zast.wellKnown.slot.tyStringView) then {
-            mCp = "type 'StringView' has no '.copy': a view is copied by assignment; '.string' makes an owned String (allocates)"
+            mCp = "type 'StringView' has no '.copy': a view has no owned duplicate; '.string' makes an owned String (allocates)"
         }
         if (refBearingContainer :ast :st tid: bt) then {
             mCp = "type '\{btnCp}' has no '.copy': a container holding REFERENCES has no duplicate to make -- each element would end up owned twice. Build a new one and move the elements with '.take', or '.copy' them one by one"
@@ -31760,6 +31763,7 @@ checkMoveMarkerVar: function {
             tvb: "with '.\{cn}'"
             (readonlyMoveError
                 :st
+                :ast
                 nodeid: dp.nid
                 lineno: dp.lineno
                 colno: dp.colno
@@ -31782,7 +31786,8 @@ checkMoveMarkerVar: function {
         }
         if relBlocked.not when (isBorrowedVar :st vid: mvo) then {
             relBlocked = true
-            mtb: "Cannot move borrowed variable '\{mkRoot}' with '.take' — borrowed names stay bound to their source for the full scope; copy with '.copy' to keep the source"
+            mtbKeep: keepSourceHint :st :ast name: mkRoot
+            mtb: "Cannot move borrowed variable '\{mkRoot}' with '.take' — borrowed names stay bound to their source for the full scope; \{mtbKeep}"
             (addError
                 :st
                 nodeid: dp.nid
@@ -37509,7 +37514,8 @@ refuseBorrowedMove: function {
 borrowedMoveError: function {
     st: zenv.ZSymbolTable ast: Ast.view n: astnode.view text: StringView verb: StringView
 } is {
-    mbv: "Cannot move borrowed variable '\{text}' \{verb} — borrowed names stay bound to their source for the full scope; copy with '.copy' to keep the source"
+    mbvKeep: keepSourceHint :st :ast name: text
+    mbv: "Cannot move borrowed variable '\{text}' \{verb} — borrowed names stay bound to their source for the full scope; \{mbvKeep}"
     if (localFieldPath :st :ast :n) then {
         mbv = "Cannot move field '\{text}' \{verb}: a field stays in its owner for as long as the owner lives; copy it (`.copy`), or exchange it for another value with `swap`"
     } else if (callHandsBackBorrow :st :ast :n) then {
@@ -41085,6 +41091,7 @@ consumeBareArgOwnership: function {
     if (nameIsReadonly :st :ast :name) then {
         (readonlyMoveError
             :st
+            :ast
             :nodeid
             :lineno
             :colno
@@ -41102,7 +41109,8 @@ consumeBareArgOwnership: function {
             verb: "into a `.take` parameter"
         )
         if apin7 then null else if (isBorrowedVar :st :vid) then {
-            mb7: "Cannot move borrowed variable '\{name}' into a `.take` parameter — borrowed names stay bound to their source for the full scope; copy with '.copy' to keep the source"
+            mb7Keep: keepSourceHint :st :ast :name
+            mb7: "Cannot move borrowed variable '\{name}' into a `.take` parameter — borrowed names stay bound to their source for the full scope; \{mb7Keep}"
             (addError
                 :st
                 :nodeid
@@ -42578,19 +42586,37 @@ pinnedMoveError: function {
     return true
 }
 
+# keepSourceHint -- how a refused move keeps the value instead: `.copy`, or for
+# a StringView, which has no owned duplicate, an owned String. The name's type
+# is read as it stands here, so a narrowed payload answers for its arm.
+keepSourceHint: function {st: zenv.ZSymbolTable.view ast: Ast.view name: StringView} out String is {
+    to: st.lookup nameId: (nameIdOf :ast :name)
+    match (
+        to
+    ) case some then {
+        vt: typedefChaseTid :st tid: to
+        if vt == (stdTidPeek :ast :st wk: zast.wellKnown.slot.tyStringView) then {
+            return "a StringView has no owned copy: '.string' makes an owned String (allocates)"
+        }
+    } case none then null
+    return "copy with '.copy' to keep the source"
+}
+
 # readonlyMoveError -- a move whose SOURCE may only be read is refused:
 # capability may only be given up, so `hold`/`view` never become an owned
 # mutable value. `verb` names the move form ("with '.take'", "by
 # reassignment", ...).
 readonlyMoveError: function {
     st: zenv.ZSymbolTable
+    ast: Ast.view
     nodeid: zast.nodeid
     lineno: u32
     colno: u32
     name: StringView
     verb: StringView
 } is {
-    rmm: "Cannot move readonly variable '\{name}' \{verb} — a readonly binding may only be read; copy with '.copy' to keep the source"
+    rmmKeep: keepSourceHint :st :ast :name
+    rmm: "Cannot move readonly variable '\{name}' \{verb} — a readonly binding may only be read; \{rmmKeep}"
     (addError
         :st
         :nodeid
@@ -45961,6 +45987,7 @@ consumeBoxedName: function {
     if (nameIsReadonly :st :ast :name) then {
         (readonlyMoveError
             :st
+            :ast
             :nodeid
             :lineno
             :colno
@@ -45979,7 +46006,8 @@ consumeBoxedName: function {
         verb: "into a box"
     ) then return
     if (isBorrowedVar :st vid: vid8) then {
-        mb8: "Cannot move borrowed variable '\{name}' into a box — borrowed names stay bound to their source for the full scope; copy with '.copy' to keep the source"
+        mb8Keep: keepSourceHint :st :ast :name
+        mb8: "Cannot move borrowed variable '\{name}' into a box — borrowed names stay bound to their source for the full scope; \{mb8Keep}"
         (addError
             :st
             :nodeid

@@ -28067,15 +28067,20 @@ emitObjIterPayload: function {
             tid: payElemTid
         )
         # An OptionMut yield (`iterateMut`) is written through, so even a
-        # valtype payload aliases: a copy would take the writes. Its two rows
-        # close the view-union span.
-        payWrites: (monoFamilyOf :symtab :ctx tid: ovid) >= family.slot.optionMut
+        # valtype payload aliases: a copy would take the writes. A StaticView
+        # element is static storage, owned by the loop var, so it copies
+        # whatever its family.
+        payFam: monoFamilyOf :symtab :ctx tid: ovid
+        payWrites: (payFam == family.slot.optionMut) or (payFam == family.slot.optionMutVal)
         copyOut: payRef.not and payWrites.not
+        if payFam == family.slot.staticView then copyOut = true
         if payScalarC.length > 0 when copyOut then {
             vsl: "_iter\{mN}.data"
             dv: armCellDeref pc: payC slot: vsl.stringView
             l3v: "\{ind}    \{payC} \{lbl} = \{dv};\n"
             buf.append l3v
+            # a static element is the loop var's own value: it is saved as one
+            if payFam == family.slot.staticView then return spillkind.copy
             return spillkind.viewCopy
         } else {
             psl: "_iter\{mN}.data"
