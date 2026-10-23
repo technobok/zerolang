@@ -34429,7 +34429,7 @@ rootNameTextOf: function {ast: Ast.view n: astnode.view} out String is {
 # parameter or the receiver -- a local dies with this call. A construction
 # returned from an `outx` function may fill a non-owned field only from such
 # a root: the result's pins are on the caller's inputs, and only what the
-# caller still owns can be referenced.
+# caller still owns can be referenced. Answers whether it reported.
 checkReturnRooting: function {
     # the symbol table the reports go to
     st: zenv.ZSymbolTable
@@ -34439,8 +34439,8 @@ checkReturnRooting: function {
     arg: argref
     # its type
     argT: ztypes.tid
-} is {
-    if argT.isZero then return
+} out bool is {
+    if argT.isZero then return false
     cid: callNodeIdOf n: (ast.nodes.get i: arg.operation)
     if st.typing.currentReturnsBorrow then {
         okRef: false
@@ -34467,10 +34467,10 @@ checkReturnRooting: function {
         if okRef when st.typing.currentReturnsView.not then {
             checkBorrowResultSource :st :ast :arg :cid
         }
-        return
+        return okRef.not
     }
-    if st.typing.currentFnPins.not then return
-    if cid.isZero then return
+    if st.typing.currentFnPins.not then return false
+    if cid.isZero then return false
     cr: callRefAt :ast nid: cid
     isCtor: false
     cko: st.typing.callKind.get key: cid
@@ -34487,7 +34487,8 @@ checkReturnRooting: function {
     ) case some then {
         isCtor = true
     } case none then null
-    if isCtor.not then return
+    if isCtor.not then return false
+    reported: false
     kA: u64
     for kA < cr.nargs loop {
         aid: zast.callArgAt :ast nid: cr.nid i: kA
@@ -34521,9 +34522,11 @@ checkReturnRooting: function {
                     e: zast.err.ownerError
                     msg: m2
                 )
+                reported = true
             }
         }
     }
+    return reported
 }
 
 # checkBorrowResultSource -- a `.borrow` result lends mutability, so it may
@@ -34596,8 +34599,8 @@ checkBorrowResultSource: function {
 
 # reportReturnKeepsDyingStorage -- a returned value keeps its pending pins
 # locked for the caller, so a pin rooted at a local or a temporary points at a
-# value that dies with this call, `out` or `outx` alike. A construction's
-# fields are judged by the rooting check. Answers whether it reported.
+# value that dies with this call, `out` or `outx` alike, and a construction's
+# fields with them. Answers whether it reported.
 reportReturnKeepsDyingStorage: function {
     # where the refusal is reported
     st: zenv.ZSymbolTable
@@ -34605,10 +34608,7 @@ reportReturnKeepsDyingStorage: function {
     ast: Ast.view
     # the returned argument
     arg: argref
-    # its operation node
-    an: astnode.view
 } out bool is {
-    if (returnedValueIsConstruction :st :ast :an) then return false
     roots: ListVal zast.nameid
     for each p: st.typing.pendingPins loop roots.append (p.path.get i: 0)
     deadNm: zast.nameid
@@ -34627,26 +34627,6 @@ reportReturnKeepsDyingStorage: function {
         msg: m4
     )
     return true
-}
-
-# returnedValueIsConstruction -- the returned value builds an instance: a
-# class, record or union construction, or `meta.create`.
-returnedValueIsConstruction: function {
-    st: zenv.ZSymbolTable.view ast: Ast.view an: astnode.view
-} out bool is {
-    cid: callNodeIdOf n: an
-    if cid.isZero then return false
-    cko: st.typing.callKind.get key: cid
-    match (
-        cko
-    ) case some then {
-        if cko.classCreate then return true
-        if cko.unionCreate then return true
-        if cko.recordCreate then return true
-    } case none then null
-    cr: callRefAt :ast nid: cid
-    mcb: metaCreateBaseId :ast n: (ast.nodes.get i: cr.callable)
-    return mcb.some
 }
 
 # checkReturnCarries -- what a returned value keeps locked. A local that
@@ -34728,7 +34708,7 @@ checkReturnCarries: function {
         }
         return
     }
-    if (reportReturnKeepsDyingStorage :st :ast :arg :an) then return
+    if (reportReturnKeepsDyingStorage :st :ast :arg) then return
     # a returned call: its pending pins are what the result keeps locked
     if (callNodeIdOf n: an).isZero then return
     if st.typing.currentFnPins then return
@@ -47219,8 +47199,7 @@ checkReturnedValue: function {
     }
     reportReturnedBareField :st :ast :arg
     recordReturnedOwnedLocal :st :ast :arg :argT
-    checkReturnRooting :st :ast :arg :argT
-    checkReturnCarries :st :ast :arg :argT
+    if (checkReturnRooting :st :ast :arg :argT).not then checkReturnCarries :st :ast :arg :argT
     checkReturnTypeMatch :st :ast :arg :argT
 }
 
@@ -55502,8 +55481,7 @@ checkImplicitReturn: function {
     )
     reportReturnedBareField :st :ast :arg
     recordReturnedOwnedLocal :st :ast :arg :argT
-    checkReturnRooting :st :ast :arg :argT
-    checkReturnCarries :st :ast :arg :argT
+    if (checkReturnRooting :st :ast :arg :argT).not then checkReturnCarries :st :ast :arg :argT
     checkReturnTypeMatch :st :ast :arg :argT
     if (isLiteralTypeId :st tid: argT) then stampGate :st nid: lsid tid: expR
     recordTailExit :st :ast lineId: lsid :valId
