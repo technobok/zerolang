@@ -54,6 +54,8 @@ constValueText: function {v: ztypes.cval} out String is {
     if v.kind.fvalKind then return "FVAL:\{v.fval}"
     if v.kind.svalKind then return "SVAL:#\{v.strId}"
     if v.kind.armKind then return "ARM:\{v.armTid}#\{v.armName}"
+    # an aggregate by its const_agg row
+    if v.kind.aggKind then return "AGG:#\{v.aggId}"
     return "NONE"
 }
 
@@ -367,6 +369,15 @@ schemaSql: function {} out String is {
     )
     (acc.append
         s: "CREATE TABLE IF NOT EXISTS const_bigfloat (float_id INTEGER PRIMARY KEY, value TEXT NOT NULL);\n"
+    )
+    (acc.append
+        s: "CREATE TABLE IF NOT EXISTS const_agg (agg_id INTEGER PRIMARY KEY, kind TEXT NOT NULL, type_id INTEGER NOT NULL, arm_name_id INTEGER NOT NULL);\n"
+    )
+    (acc.append
+        s: "CREATE TABLE IF NOT EXISTS const_agg_item (agg_id INTEGER NOT NULL, position INTEGER NOT NULL, value TEXT NOT NULL);\n"
+    )
+    (acc.append
+        s: "CREATE TABLE IF NOT EXISTS const_agg_label (agg_id INTEGER NOT NULL, position INTEGER NOT NULL, name_id INTEGER NOT NULL);\n"
     )
     (acc.append
         s: "CREATE TABLE IF NOT EXISTS conformance (conformance_id INTEGER PRIMARY KEY, impl_type_id INTEGER NOT NULL, spec_type_id INTEGER NOT NULL, label TEXT NOT NULL, is_facet INTEGER NOT NULL);\n"
@@ -1020,6 +1031,36 @@ ZDumper: class {
                 v: dc.value
             )}');\n"
             this.acc.append s: row
+        }
+    }
+
+    # appendConstAggs -- one row per aggregate constant (the AGG:#id a
+    # const_value names), with a row per value in it and per label it carries,
+    # by position.
+    appendConstAggs: function {:this typing: ztyping.ZTyping.view} is {
+        i: 1.u64
+        for i < typing.constAggs.length loop {
+            a: typing.constAggs.get :i
+            kn: "list"
+            if a.kind.staticData then kn = "data"
+            if a.kind.staticChoice then kn = "choice"
+            row: "INSERT INTO const_agg VALUES (\{i}, '\{kn}', \{a.tid}, \{a.arm});\n"
+            this.acc.append s: row
+            k: u64
+            for k < a.itemCount loop {
+                v: typing.constAggItems.get i: a.itemStart.u64 + k
+                rowI: "INSERT INTO const_agg_item VALUES (\{i}, \{k}, '\{constValueText :v}');\n"
+                this.acc.append s: rowI
+                k = k + 1
+            }
+            k = 0
+            for k < a.labelCount loop {
+                l: typing.constAggLabels.get i: a.labelStart.u64 + k
+                rowL: "INSERT INTO const_agg_label VALUES (\{i}, \{k}, \{l});\n"
+                this.acc.append s: rowL
+                k = k + 1
+            }
+            i = i + 1
         }
     }
 
@@ -1743,6 +1784,7 @@ dumpSql: function {program: Ast.view vfs: zvfs.ZVfs symtab: zenv.ZSymbolTable} o
     d.appendConstBigInts typing: symtab.typing
     d.appendConstRats typing: symtab.typing
     d.appendConstBigFloats typing: symtab.typing
+    d.appendConstAggs typing: symtab.typing
     d.appendConformance typing: symtab.typing
     d.appendSymbolTable ast: program st: symtab
     return d.acc.copy

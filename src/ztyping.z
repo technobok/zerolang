@@ -309,6 +309,35 @@ staticlistslot: record {
     slot: u64
 }
 
+# constaggkind -- what an aggregate constant is
+constaggkind: variant {
+    # a static list: its elements in written order, each labelled or not
+    staticList: null
+    # a `data` value: its fields in declared order
+    staticData: null
+    # a `choice` value: its arm, and the arm's one value when it carries one
+    staticChoice: null
+} as { tag: u8.tag }
+
+# constagg -- one aggregate constant, a row of ZTyping.constAggs. Its parts are
+# a span of constAggItems (one value per element or field, in order) and, for a
+# labelled list, a span of constAggLabels row for row with them (0 for an
+# element with no label). Row 0 is the sentinel, so aggId 0 is no aggregate.
+constagg: record {
+    kind: constaggkind
+    # the aggregate's type
+    tid: ztypes.tid
+    # a choice value's arm, 0 otherwise
+    arm: zast.nameid
+    # the first of its values in constAggItems
+    itemStart: u32
+    itemCount: u32
+    # the first of its labels in constAggLabels; 0 labels for an aggregate
+    # with none
+    labelStart: u32
+    labelCount: u32
+}
+
 # armkey -- one union arm: the union's type and the arm's name
 armkey: record {
     owner: ztypes.tid
@@ -1143,11 +1172,19 @@ ZTyping: class {
     # the 512-bit values untyped float constants hold once a fraction outgrows
     # 4096-bit parts; cval.floatId indexes it 1-based
     constBigFloats: List math.BigFloat
+    # the aggregate constants -- static lists, `data` and `choice` values --
+    # each content-interned once; cval.aggId indexes it 1-based
+    constAggs: ListVal constagg
+    # the aggregates' values, each aggregate's a span of them
+    constAggItems: ListVal ztypes.cval
+    # the labelled lists' labels, each such list's a span of them
+    constAggLabels: ListVal zast.nameid
     # each pool's hash index, row for row with it
     constStringIndex: ConstIndex
     constBigIntIndex: ConstIndex
     constRatIndex: ConstIndex
     constBigFloatIndex: ConstIndex
+    constAggIndex: ConstIndex
     # ifexpr nodeid -> the clause the fold selected
     foldedBranch: (IdMapV zast.nodeid v: foldedbranch)
     # the pending evaluation failure, recorded by the evaluator and rendered by
@@ -3286,10 +3323,14 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         constBigInts: List math.BigInt
         constRats: List math.BigRat
         constBigFloats: List math.BigFloat
+        constAggs: ListVal constagg
+        constAggItems: ListVal ztypes.cval
+        constAggLabels: ListVal zast.nameid
         constStringIndex: (ConstIndex heads: (MapVV u64 v: u32) next: ListVal u32)
         constBigIntIndex: (ConstIndex heads: (MapVV u64 v: u32) next: ListVal u32)
         constRatIndex: (ConstIndex heads: (MapVV u64 v: u32) next: ListVal u32)
         constBigFloatIndex: (ConstIndex heads: (MapVV u64 v: u32) next: ListVal u32)
+        constAggIndex: (ConstIndex heads: (MapVV u64 v: u32) next: ListVal u32)
         foldedBranch: (IdMapV zast.nodeid v: foldedbranch)
         constFail: ztypes.noConstFail
         conformance: (List ztypes.ZConformance i: ztypes.confid)
@@ -3402,6 +3443,16 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
     childTid.constBigIntIndex.next.append 0
     childTid.constRatIndex.next.append 0
     childTid.constBigFloatIndex.next.append 0
+    childTid.constAggs.append (constagg
+        kind: constaggkind.staticList
+        tid: ztypes.tid.zero
+        arm: zast.nameid.zero
+        itemStart: 0
+        itemCount: 0
+        labelStart: 0
+        labelCount: 0
+    )
+    childTid.constAggIndex.next.append 0
     # the program root, DeclId 1: the file units are parented to it, so every
     # declaration but this one has a parent. Minted with parent 0, so it takes
     # no name edge and lands in no namespace; it carries no unit-scope bit and
