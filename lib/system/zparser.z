@@ -30,7 +30,7 @@ chunkkind: list {
     eol: 5
     strmid: 21
     strchr: 22
-} out list u8
+} out staticlist u8
 
 # the string-chunk kind (literal vs interpolation) for token type `tt`.
 chunkKindOf: function {tt: zlexer.toktype} out u8 is {
@@ -581,23 +581,20 @@ Parser: class {
         }
     }
 
-    # atomlist -> list-definition | "list". The keyword opens a list when `{`
-    # or `is` follows it; anywhere else it names the static list type, as in
-    # `out list u8` or `{d: list u8}`, and the atom carries the keyword's own
-    # name.
+    # atomlist -> list-definition. The keyword opens a list, and only when `{`
+    # or `is` follows it. A keyword names no type, so in a type position --
+    # `out staticlist u8` -- it is refused, with the name the type has.
     parseAtomList: function {:this lex: zlexer.Lexer} out astnode is {
         startPos: lex.peekPos
-        kw: lex.acceptAny pool: this.ast.names
+        lex.accept tt: zlexer.toktype.listTok pool: this.ast.names
         tt: lex.peekType
         if (tt == zlexer.toktype.isTok) or (tt == zlexer.toktype.braceOpenTok) then {
             return (this.listBody :lex :startPos)
         }
-        return (astnode.atomid (zast.atomidrow
-            nodeid: this.nextId
-            lineno: kw.lineno
-            colno: kw.colno
-            name: kw.text
-        )
+        return (this.mkErrorAt
+            pos: startPos
+            code: zast.err.reservedName
+            msg: "'list' opens a static list, `list { ... }`: the type of one is `staticlist`, as in `out staticlist u8`"
         )
     }
 
@@ -2693,7 +2690,7 @@ Parser: class {
                 return (this.mkErrorAt
                     pos: startPos
                     code: zast.err.badData
-                    msg: "an empty list must name its type: `list {} out list u8`"
+                    msg: "an empty list must name its type: `list {} out staticlist u8`"
                 )
             }
             eSpan: zast.kidsAdd kids: this.ast.kids xs: elements
@@ -2715,9 +2712,9 @@ Parser: class {
                 msg: "Expected type reference after out"
             )
         }
-        # the list's type, written as a function's `out` type is: the bare
-        # keyword (`list`) or an application (`list u8`, `(list StringView i:
-        # nameid)`)
+        # the list's type, written as a function's `out` type is: a name
+        # (`staticlist`) or an application (`staticlist u8`, `(staticlist
+        # StringView i: nameid)`)
         typeNode: this.parseTyperefOperation :lex
         tErr: Parser.isError node: typeNode
         if tErr then return typeNode

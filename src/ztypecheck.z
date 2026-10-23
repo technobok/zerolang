@@ -819,19 +819,6 @@ suggestSimilar: function {
     return ""
 }
 
-# bindListKeyword -- the keyword `list` names collections.staticlist from every
-# scope. A keyword is never a declared name, so the prelude's binding of it is
-# made here, once both units are indexed: an edge to the template's own
-# declaration.
-bindListKeyword: function {st: zenv.ZSymbolTable} is {
-    core: st.typing.coreUnitRoot
-    coll: st.typing.collectionsUnitRoot
-    if core.isZero or coll.isZero then return
-    sl: st.typing.declFindChild parentDeclId: coll nameId: zast.wellKnown.slot.tyStaticlist
-    if sl.isZero then return
-    st.typing.declAddChildEdge parentDeclId: core nameId: zast.wellKnown.slot.kwList childDeclId: sl
-}
-
 # indexUnitDefs -- pre-scan every unit's top-level definitions into a
 # (unit.name) -> typetype index BEFORE resolution, so a reference can declare the
 # ONE canonical record id (declare-before-bind) instead of an anonymous shell. No
@@ -858,7 +845,6 @@ indexUnitDefs: function {st: zenv.ZSymbolTable scope: ztypes.declid program: Ast
                 nameId: zast.wellKnown.slot.unCollections
             )
             if clo.isZero.not then st.typing.collectionsUnitRoot = clo
-            bindListKeyword :st
             mro: (st.typing.declFindChild
                 parentDeclId: st.typing.programRoot
                 nameId: st.reg.regMainUnitId
@@ -1805,16 +1791,9 @@ declareCanonicalTypeId: function {
             } case none then null
         }
     }
-    # the mint spells the name, read through a borrow. collections.staticlist
-    # is spelled by the keyword that names it, so every message says `list`
-    spell: nameId
-    if nameId == zast.wellKnown.slot.tyStaticlist when (
-        unitDecl == st.typing.collectionsUnitRoot
-    ) then {
-        spell = zast.wellKnown.slot.kwList
-    }
+    # the mint spells the name, read through a borrow
     id: ztypes.tid
-    nT: zast.nameTextAt :ast ref: spell
+    nT: zast.nameTextAt :ast ref: nameId
     id = st.reg.newType name: nT.stringView ownerTid: qowner :typetype
     # valtype-ness is a property of the definition's KIND -- a record or a
     # variant is a valtype, a class or a union is not -- and is known here,
@@ -2069,7 +2048,23 @@ resolveNamedTypeId: function {
     if gp7.isZero.not then return gp7
     site7: definingSiteForId :st :scope :ast :unitDecl :nameId
     duo7: site7.defUnit
-    if duo7.isZero then return (envNamedTypeId :st :ast :scope :nameId)
+    if duo7.isZero then {
+        # the environment before a shell: a name no unit-name index places
+        # but the scope's chain reaches -- a template's generic
+        # parameter in its own method signature (`v: t`), which is the
+        # canonical GENERIC_PARAM id, not a forward record of that name
+        e7: envTypeIdOf :st :scope :nameId
+        if e7.isZero.not then return e7
+        # an alias the chain reaches before it resolved -- a generic unit's
+        # `elem: t`, read by a sibling's signature -- is followed to its target
+        eh7: envLookup :st :scope :nameId
+        if eh7.declId.isZero.not when (st.typing.decls.get i: eh7.declId).kind.reexportDecl then {
+            ea7: resolveAliasKey :st :ast declId: eh7.declId
+            if ea7.isZero.not then return ea7
+        }
+        nT10: zast.nameTextAt :ast ref: nameId
+        return (st.reg.newType name: nT10.stringView typetype: ztypes.ztypetype.recordType)
+    }
     tto7: optionval.none ztypes.ztypetype
     dd7: declOfUnitDef :st :scope unitDecl: duo7 :nameId
     if dd7.isZero.not then tto7 = declDefTypetype :st :ast declId: dd7
@@ -2096,41 +2091,6 @@ resolveNamedTypeId: function {
         aliasDecl: site7.aliasDecl
         :nameId
     )
-}
-
-# envNamedTypeId -- resolveNamedTypeId for a name no unit-name index places: the
-# environment answers before a shell is minted for it.
-envNamedTypeId: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    scope: ztypes.declid
-    nameId: zast.nameid
-} out ztypes.tid is {
-    # a name the scope's chain reaches -- a template's generic parameter in its
-    # own method signature (`v: t`), which is the canonical GENERIC_PARAM id,
-    # not a forward record of that name
-    e7: envTypeIdOf :st :scope :nameId
-    if e7.isZero.not then return e7
-    # an alias the chain reaches before it resolved -- a generic unit's `elem:
-    # t`, read by a sibling's signature -- is followed to its target
-    eh7: envLookup :st :scope :nameId
-    if eh7.declId.isZero.not when (st.typing.decls.get i: eh7.declId).kind.reexportDecl then {
-        ea7: resolveAliasKey :st :ast declId: eh7.declId
-        if ea7.isZero.not then return ea7
-    }
-    # a scope that binds the name to a declaration made under another name --
-    # the prelude's keyword `list`, bound to collections.staticlist -- answers
-    # as the scope walk resolves it
-    if eh7.declId.isZero.not when (st.typing.decls.get i: eh7.declId).name != nameId then {
-        ek7: walkLookupTyperefFrom :ast :st :scope baseId: nameId
-        match (
-            ek7
-        ) case some then {
-            return ek7
-        } case none then null
-    }
-    nT10: zast.nameTextAt :ast ref: nameId
-    return (st.reg.newType name: nT10.stringView typetype: ztypes.ztypetype.recordType)
 }
 
 # resolveAtomType -- resolve a type-atom name in a method/param position. `this`
@@ -10125,7 +10085,7 @@ dataKindsAgree: function {
                 e: zast.err.typeError
                 :msg
                 note: String
-                hint: "a list holds all integers, all floats, or all strings (`out list StringView`)"
+                hint: "a list holds all integers, all floats, or all strings (`out staticlist StringView`)"
                 width: 1
             )
             return false
@@ -10204,7 +10164,7 @@ dataElemTypeName: function {
                 pn: zast.nameTextAt :ast ref: pick
                 tn: zast.nameTextAt :ast ref: tgId
                 dm: "list element types disagree: '\{pn.stringView}' and '\{tn.stringView}'"
-                dh: "a list has one element type: write it once, as `out list T`".string
+                dh: "a list has one element type: write it once, as `out staticlist T`".string
                 en: String
                 (addErrorH
                     :st
@@ -10257,9 +10217,9 @@ refuseDataOutType: function {
 } is {
     otn: specWrittenName :st :ast tid: ot
     oNode: ast.nodes.get i: outId
-    hint: "name the list's full type: `out list u8`, `out list StringView`".string
+    hint: "name the list's full type: `out staticlist u8`, `out staticlist StringView`".string
     if (constraintHolds :ast :st ck: ztypes.constraintkind.staticMember argTid: ot) then {
-        hint = "a list of \{otn} is `out list \{otn}`"
+        hint = "a list of \{otn} is `out staticlist \{otn}`"
     }
     (addErrorH
         :st
@@ -10314,7 +10274,7 @@ dataOutParts: function {
     if valueTid.isZero then return none
     tpl: st.reg.genericOriginOf tid: valueTid
     if tpl.isZero then tpl = valueTid
-    if tpl != (stdTid :ast :st wk: zast.wellKnown.slot.kwList) then return none
+    if tpl != (stdTid :ast :st wk: zast.wellKnown.slot.tyStaticlist) then return none
     elem: st.reg.genericTypeArgAt specId: valueTid ordinal: 0
     idx: st.reg.genericTypeArgAt specId: valueTid ordinal: 1
     pn: st.reg.genericParamNamesOf tdecl: (declOfTypeId :st tid: tpl)
@@ -10352,7 +10312,7 @@ dataoutwrote: record {
     index: ztypes.tid
 }
 
-# typeAppArgs -- the argument nodes of a type application (`(list u8 i: nid)`),
+# typeAppArgs -- the argument nodes of a type application (`(staticlist u8 i: nid)`),
 # in order; none for a bare name.
 typeAppArgs: function {ast: Ast.view nid: zast.nodeid} out ListVal zast.nodeid is {
     args: ListVal zast.nodeid
@@ -10367,7 +10327,7 @@ typeAppArgs: function {ast: Ast.view nid: zast.nodeid} out ListVal zast.nodeid i
     return args
 }
 
-# dataOutWrote -- what `(list u8 i: nid)` writes for each parameter of its
+# dataOutWrote -- what `(staticlist u8 i: nid)` writes for each parameter of its
 # template: an unlabelled argument is the element, and a labelled one is the
 # parameter it names.
 dataOutWrote: function {
@@ -10412,7 +10372,7 @@ dataValueTemplate: function {ast: Ast st: zenv.ZSymbolTable elemTid: ztypes.tid}
     if (constraintHolds :ast :st ck: ztypes.constraintkind.staticMember argTid: elemTid).not then {
         return ztypes.tid.zero
     }
-    return (stdTid :ast :st wk: zast.wellKnown.slot.kwList)
+    return (stdTid :ast :st wk: zast.wellKnown.slot.tyStaticlist)
 }
 
 # dataValueTypeFor -- the type list `dataTid`'s name has as a value: the list
@@ -10604,7 +10564,7 @@ resolveDataInto: function {
     vals: dataElemValues :ast :st :unitDecl :scope :dnode
     st.typing.constMono = prevMono
     st.typing.constEvalState.set key: lk value: 2.u8
-    # whether `out` names the list's own type (`out list u8`) rather than
+    # whether `out` names the list's own type (`out staticlist u8`) rather than
     # its element type (`out u8`, read until every block says its value type)
     valueOut: false
     # whether `slot` reads untyped: the index was left untyped, or no `out` named
@@ -10656,7 +10616,7 @@ resolveDataInto: function {
         valueOut = vparts.elemLiteral.not
         elemTid = vparts.elem
         etName = st.reg.nameOf tid: elemTid
-        # a generic unit's list over its parameter (`out list t`) is a value
+        # a generic unit's list over its parameter (`out staticlist t`) is a value
         # of the type its `out` names, which no element type selects: each
         # instance's copy is a value of its own
         if (st.reg.typetypeOf typeId: elemTid) == ztypes.ztypetype.genericParam then {
@@ -10739,9 +10699,8 @@ resolveDataInto: function {
             if (dataOwnMember :st :ast tpl: valTpl nameId: memberIdAt) then {
                 elN: ast.nodes.get i: elId
                 emN: zast.nameTextAt :ast ref: memberIdAt
-                tn: st.reg.nameOf tid: valTpl
                 tm: "a list element may not be named '\{emN}'"
-                th: "`\{emN}` is a member of every \{tn}: rename the element"
+                th: "`\{emN}` is a member of every list: rename the element"
                 (addErrorH
                     :st
                     nodeid: (zast.nodeIdOf n: elN)
@@ -26591,7 +26550,7 @@ getOrMintSpec: function {
 
 # materialiseDataArgs -- a list type's arguments at the run-time types its
 # literals become: an untyped element is an i64, or an f64 for an untyped float,
-# and an untyped index a u64, as an untyped list's value is `(list i64 i: u64)`.
+# and an untyped index a u64, as an untyped list's value is `(staticlist i64 i: u64)`.
 # A parameter left out takes its default, which is the literal type, so it is
 # bound here too -- the instance is named by what it holds, and a literal type
 # reaches no instance, so the emitter never sees one. The parameters are read by
@@ -26606,7 +26565,7 @@ materialiseDataArgs: function {
     if pnames.length == 0 then return
     # READ, not resolved: every instance of every template passes here, and a
     # template no program named cannot be this one
-    if templateId != (stdTidRo :ast :st wk: zast.wellKnown.slot.kwList) then return
+    if templateId != (stdTidRo :ast :st wk: zast.wellKnown.slot.tyStaticlist) then return
     k: u64
     for k < pnames.length loop {
         pn: pnames.get i: k
@@ -31484,7 +31443,7 @@ checkDataBlockMember: function {
                 e: zast.err.typeError
                 msg: "a list's `tag` is the discriminator source of a variant or union, and only a list of integers is one"
                 note: String
-                hint: "write the arms' values as integers: `codes: list { a: 1 b: 2 } out list u8`"
+                hint: "write the arms' values as integers: `codes: list { a: 1 b: 2 } out staticlist u8`"
                 width: 3
             )
             return (callleg handled: true tid: ztypes.tid.zero)
@@ -31630,7 +31589,7 @@ refuseDataValueMember: function {
     if isArray.not and (cnId != zast.wellKnown.slot.wkTag) and isSlot.not then return false
     og: st.reg.genericOriginOf tid: bt
     if og.isZero then og = bt
-    if og != (stdTidRo :ast :st wk: zast.wellKnown.slot.kwList) then return false
+    if og != (stdTidRo :ast :st wk: zast.wellKnown.slot.tyStaticlist) then return false
     mn: zast.nameTextAt :ast ref: cnId
     (addErrorH
         :st
@@ -65241,12 +65200,6 @@ bareNameReaches: function {
     if site.isZero then return true
     bd: declOfTypeId :st tid: base
     if bd.isZero then return true
-    # the template the keyword `list` names: a keyword is never shadowed
-    listDecl: (st.typing.declFindChild
-        parentDeclId: st.typing.coreUnitRoot
-        nameId: zast.wellKnown.slot.kwList
-    )
-    if bd == listDecl then return true
     nameId: (st.typing.decls.get i: bd).name
     hit: (envLookup
         :st
