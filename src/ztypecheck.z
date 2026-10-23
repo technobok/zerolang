@@ -23545,8 +23545,6 @@ constraintKindForId: function {id: zast.nameid} out ztypes.constraintkind is {
     if id == zast.wellKnown.slot.tyValhashable then return ztypes.constraintkind.valHashable
     if id == zast.wellKnown.slot.tyRefHashable then return ztypes.constraintkind.refHashable
     if id == zast.wellKnown.slot.tyIdkey then return ztypes.constraintkind.idKey
-    if id == zast.wellKnown.slot.tyAnyint then return ztypes.constraintkind.anyInt
-    if id == zast.wellKnown.slot.tyAnyfloat then return ztypes.constraintkind.anyFloat
     if id == zast.wellKnown.slot.tyDataindex then return ztypes.constraintkind.dataIndex
     if id == zast.wellKnown.slot.tyStaticmember then return ztypes.constraintkind.staticMember
     if id == zast.wellKnown.slot.tyStringLike then return ztypes.constraintkind.stringLike
@@ -23562,8 +23560,6 @@ constraintTextOf: function {desc: ztypes.constraintdesc} out String is {
     if desc.kind == ztypes.constraintkind.valHashable then return "valhashable"
     if desc.kind == ztypes.constraintkind.refHashable then return "RefHashable"
     if desc.kind == ztypes.constraintkind.idKey then return "idkey"
-    if desc.kind == ztypes.constraintkind.anyInt then return "anyint"
-    if desc.kind == ztypes.constraintkind.anyFloat then return "anyfloat"
     if desc.kind == ztypes.constraintkind.dataIndex then return "dataindex"
     if desc.kind == ztypes.constraintkind.staticMember then return "staticmember"
     if desc.kind == ztypes.constraintkind.stringLike then return "StringLike"
@@ -23627,24 +23623,15 @@ conformsToText: function {
 }
 
 # literalSatisfies -- an untyped literal type meets the bound that admits one: a
-# data block's or a list's element may be left untyped (anyint, anyfloat,
-# staticmember), and so may its index (dataindex), which leaves its slots
-# untyped.
+# list's element may be left untyped (staticmember), and so may its index
+# (dataindex), which leaves its slots untyped.
 literalSatisfies: function {
     st: zenv.ZSymbolTable.view ck: ztypes.constraintkind argTid: ztypes.tid
 } out bool is {
     if argTid == st.reg.literalIntTid then {
-        return (
-            (ck == ztypes.constraintkind.anyInt) or
-            (ck == ztypes.constraintkind.dataIndex) or
-            (
-                ck == ztypes.constraintkind.staticMember
-            )
-        )
+        return (ck == ztypes.constraintkind.dataIndex) or (ck == ztypes.constraintkind.staticMember)
     }
-    if argTid == st.reg.literalFloatTid then {
-        return (ck == ztypes.constraintkind.anyFloat) or (ck == ztypes.constraintkind.staticMember)
-    }
+    if argTid == st.reg.literalFloatTid then return ck == ztypes.constraintkind.staticMember
     return false
 }
 
@@ -23682,12 +23669,8 @@ constraintHolds: function {
         # an id key is not merely hashable: the container indexes on its BITS,
         # so the bound admits only the scalars whose bits are an index
         return (typeIsIdKey :st :ast tid: argTid)
-    } case anyInt then {
-        return (typeIsNumberOf :st tid: argTid float: false)
-    } case anyFloat then {
-        return (typeIsNumberOf :st tid: argTid float: true)
     } case dataIndex then {
-        # a data block's index: an id key, or untyped (literalSatisfies)
+        # a list's index: an id key, or untyped (literalSatisfies)
         return (typeIsIdKey :st :ast tid: argTid)
     } case staticMember then {
         if argTid == (stdTid :ast :st wk: zast.wellKnown.slot.tyStringView) then return true
@@ -26015,10 +25998,10 @@ typeIsIdKey: function {
 }
 
 # typeIsNumberOf -- the type's chain-end base is a builtin integer type (`float`
-# false) or float type (`float` true): what `anyint` and `anyfloat` admit. Asked
-# by kind rather than through a variant of the types, which would reach every
-# one of them -- and with i128 and f128 their helpers and libquadmath -- in every
-# program that names the bound.
+# false) or float type (`float` true), which is what `staticmember` admits of
+# numbers. Asked by kind rather than through a variant of the types, which would
+# reach every one of them -- and with i128 and f128 their helpers and
+# libquadmath -- in every program that names the bound.
 typeIsNumberOf: function {
     st: zenv.ZSymbolTable
     tid: ztypes.tid

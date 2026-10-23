@@ -92,7 +92,7 @@ module Rouge
           MapVV Option OptionView OptionViewVal OptionMut OptionMutVal Path PathView Reader
           RefHashable Result ResultRV ResultVR Seeker Set SetIter SetIterVal
           SetRef SetVal SpanPair SpanVal Splitter StaticIter StaticView String StringLike StringView
-          Text TextReader Writer _ anyfloat anyint anyval array
+          Text TextReader Writer _ anyval array
           bool break c32 c8 continue
           converror copy dataindex error f128 f16
           f32 f64 false floatliteral
