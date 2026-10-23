@@ -32206,19 +32206,46 @@ checkMemberNamespace: function {
     isValue: dottedBaseIsValue :st :ast :unitDecl n: (ast.nodes.get i: dp.nid)
     if (st.typing.declIsFnptrFieldId parentTypeId: bt nameId: cnId) then {
         if isValue then return true
-        reportMemberNamespace :st :ast :dp :bt :cnId instanceMember: true functionMember: true
+        (reportMemberNamespace
+            :st
+            :ast
+            :unitDecl
+            :dp
+            :bt
+            :cnId
+            instanceMember: true
+            functionMember: true
+        )
         return false
     }
     if (baseNamesBareGeneric :st :ast :unitDecl :dp :bt :cnId :isValue) then {
         refuseBareGenericMethodBase :st :ast :dp :bt
         return false
     }
-    if isValue.not then return (checkTypeReadSuppliesReceiver :st :ast :dp :bt :cnId :mo :coerce)
+    if isValue.not then return (checkTypeReadSuppliesReceiver
+        :st
+        :ast
+        :unitDecl
+        :dp
+        :bt
+        :cnId
+        :mo
+        :coerce
+    )
     if (memberDeclaresReceiver :st :bt :cnId :mo) then return true
     isCreate: cnId == zast.wellKnown.slot.wkCreate
     if isCreate.not when (st.typing.declMemberIsSynth parentTypeId: bt nameId: cnId
     ) then return true
-    reportMemberNamespace :st :ast :dp :bt :cnId instanceMember: false functionMember: true
+    (reportMemberNamespace
+        :st
+        :ast
+        :unitDecl
+        :dp
+        :bt
+        :cnId
+        instanceMember: false
+        functionMember: true
+    )
     return false
 }
 
@@ -32297,7 +32324,16 @@ checkDataMemberNamespace: function {
     isConst: st.typing.isAsConstDecl declId: md
     isValue: dottedBaseIsValue :st :ast :unitDecl n: (ast.nodes.get i: dp.nid)
     if isConst == isValue.not then return true
-    reportMemberNamespace :st :ast :dp :bt :cnId instanceMember: isConst.not functionMember: false
+    (reportMemberNamespace
+        :st
+        :ast
+        :unitDecl
+        :dp
+        :bt
+        :cnId
+        instanceMember: isConst.not
+        functionMember: false
+    )
     return false
 }
 
@@ -32307,6 +32343,7 @@ checkDataMemberNamespace: function {
 reportMemberNamespace: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
+    unitDecl: ztypes.declid
     dp: dpref
     bt: ztypes.tid
     cnId: zast.nameid
@@ -32327,6 +32364,8 @@ reportMemberNamespace: function {
         if functionMember then what = "function field"
         msg = "'\{cn}' is a \{what} of each '\{tn}' instance, not a member of the type"
         hint = "\{verb} it through an instance: `value.\{cn}`"
+        ah: aliasValueHint :st :ast :unitDecl :dp :bt
+        if ah.length > 0 then hint = ah.take
     }
     (addErrorH
         :st
@@ -32341,6 +32380,31 @@ reportMemberNamespace: function {
     )
 }
 
+# aliasValueHint -- the hint for an instance member read through a unit-level
+# alias of a concrete type, empty for any other base. A unit-level value takes no
+# labelled arguments, so `origin: Pt x: 0` is the alias `origin` and a constant
+# `x`. Only a read through the alias shows a value was meant. The type's own
+# name, a re-export under it (`Spot: geo.Spot`) and a generic instance
+# (`Strs: (ListVal i64)`, a type application rather than an alias) keep their
+# hints.
+aliasValueHint: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    unitDecl: ztypes.declid
+    dp: dpref
+    bt: ztypes.tid
+} out String is {
+    an: atomNameId :ast n: (ast.nodes.get i: dp.parent)
+    if an.isZero then return ""
+    ad: declOfUnitDef :st :unitDecl scope: unitDecl nameId: an
+    if ad.isZero then return ""
+    if (aliasNamesType :st :ast declId: ad).not then return ""
+    tn: specWrittenName :st :ast tid: bt
+    atx: zast.nameTextAt :ast ref: an
+    if atx == tn then return ""
+    return "'\{atx}' names the type '\{tn}', not a value: on a unit-level line, a label after the value begins a definition of its own. Build a '\{tn}' value inside a function"
+}
+
 # checkTypeReadSuppliesReceiver -- a method read through the TYPE in value position
 # auto-calls with nothing to hand it: the type supplies no receiver, and there are
 # no arguments to supply one. `T.first` reached the C as a function pointer bound
@@ -32349,6 +32413,7 @@ reportMemberNamespace: function {
 checkTypeReadSuppliesReceiver: function {
     st: zenv.ZSymbolTable
     ast: Ast
+    unitDecl: ztypes.declid
     dp: dpref
     bt: ztypes.tid
     cnId: zast.nameid
@@ -32363,6 +32428,10 @@ checkTypeReadSuppliesReceiver: function {
     tn: specWrittenName :st :ast tid: bt
     mr: "missing required argument '\{rn}' (type: \{tn})"
     cn: zast.nameTextCopy :ast ref: cnId
+    mh: aliasValueHint :st :ast :unitDecl :dp :bt
+    if mh.length == 0 then {
+        mh = "a method read through its type is handed its receiver as an argument"
+    }
     (addErrorH
         :st
         nodeid: dp.nid
@@ -32371,7 +32440,7 @@ checkTypeReadSuppliesReceiver: function {
         e: zast.err.callError
         msg: mr
         note: ""
-        hint: "a method read through its type is handed its receiver as an argument"
+        hint: mh
         width: cn.length.u32.orPanic
     )
     return false
