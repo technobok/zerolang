@@ -10620,7 +10620,7 @@ staticListFits: function {
     if want != tpl when (staticListValueArgsMatch :ast :st :staticListTid :want :tpl :elemTid
     ).not then return false
     st.reg.setStaticListValueType typeId: staticListTid value: want
-    markStaticListRuntimeIndexed :st tid: staticListTid
+    markStaticListReached :ast :st tid: staticListTid
     return true
 }
 
@@ -10673,7 +10673,7 @@ staticListAsValue: function {
     }
     dv: staticListValueTypeFor :st :ast :unitDecl staticListTid: vt
     if dv.isZero then return vt
-    markStaticListRuntimeIndexed :st tid: vt
+    markStaticListReached :ast :st tid: vt
     stampGate :st :nid tid: dv
     return dv
 }
@@ -30485,16 +30485,25 @@ bareFnRefErrorFor: function {
     )
 }
 
-# markStaticListRuntimeIndexed -- a list accessed via `.get` / `.array` needs
-# its static array emitted; label accesses fold to constants and don't.
-markStaticListRuntimeIndexed: function {st: zenv.ZSymbolTable tid: ztypes.tid} is {
-    if tid >= st.reg.nextTid then return
-    to: st.reg.typeById.getMut i: tid
-    to.runtimeIndexed = true
-    to.drop
-    # read by an instance's walk, the block is the instance's own copy
+# markStaticListReached -- a list read at run time (`.get`, `.array`, or as a
+# value) is reached: its row is emitted as a static array. A label, an ordinal
+# or `length` folds to a constant and reaches nothing. Read by an instance's
+# walk, the list is the instance's own copy; a generic unit's own list is
+# never emitted, since only its instances' copies have elements.
+markStaticListReached: function {ast: Ast.view st: zenv.ZSymbolTable tid: ztypes.tid} is {
     it: monoSubstTid :st :tid
-    if it != tid then markStaticListRuntimeIndexed :st tid: it
+    # an instance's copy has the template's list as its origin
+    if (st.reg.genericOriginOf tid: it).isZero when (declIsUnitTemplate
+        :st
+        :ast
+        declId: (st.typing.declParentOf declId: (declOfTypeId :st tid: it))
+    ) then return
+    (markAggReached
+        :ast
+        :st
+        id: ((st.typing.staticListAggs.get key: it).or d: 0)
+        at: zast.nodeid
+    )
 }
 
 # baseIsPrivateCapable -- may a private member be read through this base? True
@@ -31780,7 +31789,7 @@ checkStaticListMember: function {
             )
             return (callleg handled: true tid: ztypes.tid.zero)
         }
-        if isArray then markStaticListRuntimeIndexed :st tid: bt
+        if isArray then markStaticListReached :ast :st tid: bt
         # only a list of integers owns a `tag`; the template's own member is
         # no answer for any other
         if cnId == zast.wellKnown.slot.wkTag when (st.typing.declChildOfId
@@ -31819,7 +31828,7 @@ checkStaticListMember: function {
                 # `get` reads the block's own array; any other member reads
                 # the block as its value
                 if cnId != zast.wellKnown.slot.wkGet then {
-                    markStaticListRuntimeIndexed :st tid: bt
+                    markStaticListReached :ast :st tid: bt
                     stampGate :st nid: dp.parent tid: dv
                 }
                 return (callleg
@@ -54537,7 +54546,7 @@ markStaticListIndexRead: function {st: zenv.ZSymbolTable ast: Ast.view nid: zast
     staticListTid: staticListIndexedAt :st :ast :nid
     if staticListTid.isZero then return
     if (st.typing.nodeConstIn mono: st.typing.curMonoStamp :nid).kind.none.not then return
-    markStaticListRuntimeIndexed :st tid: staticListTid
+    markStaticListReached :ast :st tid: staticListTid
 }
 
 # staticListIndexedAt -- the list a `blk.get i` call at `nid` reads, as the

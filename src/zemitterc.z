@@ -6859,7 +6859,7 @@ emitStaticListIndexCall: function {
                 ax = emitExpr :ast :symtab :ctx n: aOpNode
             }
         }
-        dsym0: ctxCname :ctx tid: dtid
+        dsym0: staticListArrayName :symtab tid: dtid
         e0: "\{dsym0}_at(\{ax})"
         return (stating :facts from: callFacts text: e0)
     }
@@ -16615,7 +16615,7 @@ emitStaticListMember: function {
         daN: ctx.argHoistCtr
         ctx.argHoistCtr = ctx.argHoistCtr + 1
         daNm: "_da\{daN}"
-        daSym: ctxCname :ctx tid: dbt
+        daSym: staticListArrayName :symtab tid: dbt
         daRaw: "\{daCt} \{daNm};\nfor (int64_t _i = 0; _i < \{daLen.stringView}; _i++) { \{daNm}.data[_i] = \{daSym}[_i]; }\n"
         recordRawHoist :ctx text: daRaw
         return (stating :facts from: pathFacts text: daNm)
@@ -16878,7 +16878,7 @@ emitDefRefAtom: function {
 }
 
 # staticListValueText -- a list's name, read as a value: the view of its static
-# array, `((z_M_t){ .length = N, .data = z_tN })` -- NULL for an empty block,
+# array, `((z_M_t){ .length = N, .data = _zagN })` -- NULL for an empty block,
 # which has none. "" when the atom names no block, or a block the checker never
 # used as a value.
 staticListValueText: function {
@@ -16892,7 +16892,7 @@ staticListValueText: function {
     vt: symtab.reg.staticListValueTypeOf tid: dt
     if vt.isZero then return "".string
     vc: ctxCname :ctx tid: vt
-    ac: ctxCname :ctx tid: dt
+    ac: staticListArrayName :symtab tid: dt
     n: ((symtab.typing.staticListLength staticListTid: dt).or d: 0).i64.orPanic
     if n == 0 then return "((\{vc}_t){ .length = 0, .data = NULL })"
     return "((\{vc}_t){ .length = \{n}, .data = \{ac} })"
@@ -34582,55 +34582,6 @@ fillUnitMonoStaticListElems: function {
     }
 }
 
-# emitTemplateStaticLists -- the lists of every instance of the generic unit
-# template `tplId`, whose body is `bodyIds`: the template's own are never
-# written.
-emitTemplateStaticLists: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    bodyIds: zast.kidspan
-    tplId: ztypes.tid
-    buf: String.borrow
-} is {
-    for each m: (templateMonos :symtab :tplId) loop {
-        emitUnitMonoStaticLists :ast :symtab :ctx :bodyIds monoId: m :buf
-    }
-}
-
-# emitUnitMonoStaticLists -- the static arrays of the lists a generic unit's
-# instance `monoId` owns, as emitUnitStaticLists writes a unit's own.
-emitUnitMonoStaticLists: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    bodyIds: zast.kidspan
-    monoId: ztypes.tid
-    buf: String.borrow
-} is {
-    di: u64
-    for di < bodyIds.count loop {
-        bm: ast.nodes.get i: (zast.kidAt kids: ast.kids span: bodyIds i: di)
-        di = di + 1
-        if bm.namedoperation.not then continue
-        nui: unitMonoNestedInstance :ast :symtab nameId: bm.name opId: bm.operation mono: monoId
-        if nui.isZero.not then (emitUnitMonoStaticLists
-            :ast
-            :symtab
-            :ctx
-            bodyIds: (zast.unitBodyIdsAt :ast unitId: bm.operation)
-            monoId: nui
-            :buf
-        )
-        cp: (symtab.typing.declChildOfId parentTypeId: monoId nameId: bm.name).or d: ztypes.tid.zero
-        if cp.isZero.not when (
-            (symtab.reg.typetypeOf typeId: cp) == ztypes.ztypetype.staticListType
-        ) then {
-            emitStaticListFor :symtab :ctx op: (ast.nodes.get i: bm.operation) ridtid: cp :buf
-        }
-    }
-}
-
 # emitNestedUnitMonoMembers -- the functions of the instance `t` owns of a unit
 # its template's body member `member` declares: emitUnitMonoMembers over the
 # nested unit's body, at any depth. Nothing for a member that declares none.
@@ -42573,14 +42524,14 @@ preEmitProtocolArgs: function {
     }
 }
 
-# emitStaticAggs -- each data value run time reaches (constagg.reached), as the
-# static object its handles point at: `static const <type>_t _zag<row> = {
-# ... };`, fields in declared order. A value it holds is emitted before it, as
-# an aggregate is interned after the ones it holds.
+# emitStaticAggs -- each static value run time reaches (constagg.reached), as
+# the static storage its handles point at: a data value as `static const
+# <type>_t _zag<row> = { ... };`, fields in declared order, and a list as its
+# array (emitStaticListArray). A value it holds is emitted before it, as an
+# aggregate is interned after the ones it holds.
 emitStaticAggs: function {
     ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx buf: String.borrow
 } is {
-    if symtab.typing.staticTypesSeen.not then return
     i: 1.u64
     for i < symtab.typing.constAggs.length loop {
         id: i
@@ -42588,12 +42539,19 @@ emitStaticAggs: function {
         tid: ztypes.tid
         start: u64
         count: u64
+        isList: false
         {
             g: symtab.typing.constAggs.get i: id
-            if g.reached.not or g.kind.staticData.not then continue
+            if g.reached.not then continue
+            isList = g.kind.staticList
+            if isList.not when g.kind.staticData.not then continue
             tid = g.tid
             start = g.itemStart
             count = g.itemCount
+        }
+        if isList then {
+            emitStaticListArray :ast :symtab :ctx :id :tid :count :buf
+            continue
         }
         fnames: List String
         fids: ListVal ztypes.tid
@@ -42615,6 +42573,76 @@ emitStaticAggs: function {
         }
         buf.append " };\n"
     }
+}
+
+# emitStaticListArray -- the reached row `id` of list `tid`: the static const
+# array `_zag<row>[]` of its `count` elements, at the element C type the
+# checker settled (i64 when untyped), and its reader `_zag<row>_at`, which
+# panics on an index past the end (a negative i64 converts to a huge u64). An
+# empty list has no array -- C has no empty initializer -- and every index is
+# past its end.
+emitStaticListArray: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    id: u64
+    tid: ztypes.tid
+    count: u64
+    buf: String.borrow
+} is {
+    ect: staticListElemCType :symtab :ctx :tid
+    elems: String
+    k: u64
+    for k < count loop {
+        if k > 0 then elems.append ", "
+        eso: ctx.staticListSlot.get key: (staticlistslotkey owner: tid slot: k)
+        match (
+            eso
+        ) case some then elems.append eso case none then null
+        k = k + 1
+    }
+    dsym: "_zag\{id}"
+    if count > 0 then buf.append "static const \{ect} \{dsym}[] = {\{elems}};\n\n"
+    buf.append "static \{ect} \{dsym}_at(uint64_t _idx);\n"
+    buf.append "static \{ect} \{dsym}_at(uint64_t _idx) {\n"
+    buf.append "    if (_idx >= \{count}) {\n"
+    buf.append "        char _zp_buf[96];\n"
+    b2: "        snprintf(_zp_buf, sizeof(_zp_buf), \"list index: index %llu out of bounds (length \{count})\", (unsigned long long)_idx);\n"
+    buf.append b2
+    buf.append "        z_panic(_zp_buf);\n"
+    buf.append "    }\n"
+    if count > 0 then {
+        buf.append "    return \{dsym}[_idx];\n"
+    } else {
+        buf.append "    return (\{ect}){0};\n"
+    }
+    buf.append "}\n\n"
+}
+
+# staticListElemCType -- the C type of list `tid`'s elements: the element type
+# the CHECKER settled -- the value type `out` names, the elements' own tags, or
+# the i64 / f64 an untyped list materialises to -- not a name read off the
+# `out` clause, so a list typed by its tags emits the same array as one typed
+# by the clause. scalarCTypeFor re-checks the tid for a user shadow.
+staticListElemCType: function {
+    symtab: zenv.ZSymbolTable.view ctx: Ctx tid: ztypes.tid
+} out String is {
+    etd: symtab.reg.staticListElemTypeOf :tid
+    if (isViewLaid :ctx tid: etd) then return "\{ctx.svC}_t"
+    if etd.isZero.not then {
+        rbn: regNameOf :symtab tid: etd
+        if rbn.length > 0 then {
+            rc: scalarCTypeFor :symtab tid: etd
+            if rc.length > 0 then return rc
+        }
+    }
+    return "int64_t".string
+}
+
+# staticListArrayName -- the C name of list `tid`'s static array: its row's,
+# `_zag<row>`.
+staticListArrayName: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out String is {
+    return "_zag\{(symtab.typing.staticListAggs.get key: tid).or d: 0}"
 }
 
 # staticStringInit -- a folded string as a static initializer of its view: the
@@ -42661,13 +42689,13 @@ emitRecordDefs: function {
 } is {
     emitStaticAggs ast: program :symtab :ctx :buf
     {
-        # 3 phases across ALL file units so cross-unit refs resolve: every unit's
-        # structs, then every unit's fwd-decls, then every unit's method bodies.
+        # 2 phases across ALL file units so cross-unit refs resolve: every
+        # unit's fwd-decls, then every unit's method bodies.
         ph: 1.u64
-        for ph <= 3 loop {
+        for ph <= 2 loop {
             # the generated hashes every method body may call are declared once
             # every struct they take is
-            if ph == 3 then emitHashPrototypes ast: program :symtab :ctx :buf
+            if ph == 2 then emitHashPrototypes ast: program :symtab :ctx :buf
             uCnt9h: program.units.length
             uIdx9h: u64
             for uIdx9h < uCnt9h loop {
@@ -42704,7 +42732,7 @@ emitRecordDefs: function {
                     ctxBindMain :ctx name: sm.stringView unitDecl: smD
                 }
             }
-            if ph == 2 then emitInstanceConformanceImpls ast: program :symtab :ctx :buf
+            if ph == 1 then emitInstanceConformanceImpls ast: program :symtab :ctx :buf
             ph = ph + 1
         }
     }
@@ -45610,26 +45638,6 @@ isGenericFnTid: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out bo
     return (symtab.reg.typetypeOf typeId: tid) == ztypes.ztypetype.functionType
 }
 
-# emitUnitStaticLists -- one unit body's lists. A block is asked of every
-# named definition and filters itself; a type's `as` constants are not emitted,
-# every read of one is its value.
-emitUnitStaticLists: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    bodyIds: zast.kidspan
-    buf: String.borrow
-} is {
-    acx: u64
-    for acx < bodyIds.count loop {
-        bmId: zast.kidAt kids: ast.kids span: bodyIds i: acx
-        acx = acx + 1
-        bm: ast.nodes.get i: bmId
-        if bm.namedoperation.not then continue
-        emitStaticList :symtab :ctx op: (ast.nodes.get i: bm.operation) :buf
-    }
-}
-
 # emitUnitDefMethods -- one unit body's method forward declarations, or its
 # method bodies. The two passes differ in nothing else, which is what
 # `declOnly` carries.
@@ -45764,10 +45772,11 @@ emitUnitFnFwdDecls: function {
     }
 }
 
-# emitRecordDefsIn -- three passes so cross-class references resolve: the
-# as-block constants and lists, then all method forward decls and the
-# unit's own function forward decls, then all method bodies (a method may
-# return/construct a class defined later in the unit). Struct layout is NOT
+# emitRecordDefsIn -- two passes so cross-class references resolve: all method
+# forward decls and the unit's own function forward decls, then all method
+# bodies (a method may return/construct a class defined later in the unit).
+# Static storage -- data values and lists -- is written before either
+# (emitStaticAggs). Struct layout is NOT
 # emitted here: emitUserStructsOrdered owns it, and resolves the by-value
 # ordering between user types and the monos that embed them, which a per-unit
 # walk in declaration order cannot.
@@ -45793,18 +45802,9 @@ emitRecordDefsIn: function {
         :phase
         :buf
     )
-    # its instances' lists are written with the other lists
-    if phase == 1 when isTpl then (emitTemplateStaticLists
-        :ast
-        :symtab
-        :ctx
-        :bodyIds
-        tplId: (ztypecheck.declTypeIdOf st: symtab declId: ctx.mainUnitId)
-        :buf
-    )
     # its instances' functions are declared with the other forward
     # declarations
-    if phase == 2 when isTpl then {
+    if phase == 1 when isTpl then {
         (emitUnitMonoInstances
             :symtab
             :ast
@@ -45830,13 +45830,12 @@ emitRecordDefsInBody: function {
     phase: u64
     buf: String.borrow
 } is {
-    if phase == 1 then emitUnitStaticLists :ast :symtab :ctx :bodyIds :buf
-    if phase == 2 then {
+    if phase == 1 then {
         emitUnitDefMethods :ast :symtab :ctx :bodyIds :ownerTid declOnly: true :buf
         emitUnitConformanceImpls :ast :symtab :ctx :bodyIds :ownerTid :buf
         emitUnitFnFwdDecls :ast :symtab :ctx :bodyIds :ownerTid :buf
     }
-    if phase == 3 then emitUnitDefMethods :ast :symtab :ctx :bodyIds :ownerTid declOnly: false :buf
+    if phase == 2 then emitUnitDefMethods :ast :symtab :ctx :bodyIds :ownerTid declOnly: false :buf
     emitNestedRecordDefs :ast :symtab :ctx :bodyIds :ownerTid :phase :buf
 }
 
@@ -45859,18 +45858,7 @@ emitNestedRecordDefs: function {
         nm: ast.nodes.get i: nmId
         if nm.namedoperation.not then continue
         nOp: nm.operation
-        if (isGenericTemplateUnitOp :ast opId: nOp) then {
-            # its instances' lists, with the other lists
-            if phase == 1 then (emitTemplateStaticLists
-                :ast
-                :symtab
-                :ctx
-                bodyIds: (zast.unitBodyIdsAt :ast unitId: nOp)
-                tplId: (nestedTemplateTid :symtab opId: nOp)
-                :buf
-            )
-            continue
-        }
+        if (isGenericTemplateUnitOp :ast opId: nOp) then continue
         if (zast.unitOpDeclaresUnit :ast opId: nOp).not then continue
         nsTid: unitMemberTid :symtab :ctx :ownerTid nameId: nm.name
         if nsTid.isZero then continue
@@ -45900,84 +45888,6 @@ unitMemberTid: function {
     owner: ownerTid
     if owner.isZero then owner = ztypecheck.declTypeIdOf st: symtab declId: ctx.mainUnitId
     return ((symtab.typing.declChildOfId parentTypeId: owner :nameId).or d: ztypes.tid.zero)
-}
-
-# emitStaticList -- `name: list { e0 e1 ... } out staticlist T`: a static const
-# array z_{name}[], with the element C type T (i64 when untyped), and its reader
-# z_{name}_at, which panics on an index past the end (a negative i64 converts
-# to a huge u64). Emitted only when the block is read at runtime (`.get` /
-# `.array`); labels, ordinals and `.length` fold to constants and need no array.
-emitStaticList: function {
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
-    op: astnode.view
-    buf: String.borrow
-} is {
-    emitStaticListFor :symtab :ctx :op ridtid: (stampIdOf :symtab nid: (zast.nodeIdOf n: op)) :buf
-}
-
-# emitStaticListFor -- emitStaticList as the list type `ridtid`: the block's own,
-# or a generic unit instance's copy of it, whose elements are its own.
-emitStaticListFor: function {
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
-    op: astnode.view
-    ridtid: ztypes.tid
-    buf: String.borrow
-} is {
-    match (
-        op
-    ) case listblock then {
-        ri: false
-        runtimeIndexed9v: symtab.reg.isRuntimeIndexedOf tid: ridtid
-        ri = runtimeIndexed9v
-        if ri then {
-            ect: "int64_t".string
-            # the element type the CHECKER settled -- the value type `out`
-            # names, the elements' own tags, or the i64/f64 an untyped block
-            # materialises to -- not a name read off the `out` clause:
-            # a block typed by its tags emits the same array as one typed by
-            # the clause. scalarCTypeFor re-checks the tid for a user shadow.
-            etd: symtab.reg.staticListElemTypeOf tid: ridtid
-            isSv: isViewLaid :ctx tid: etd
-            if isSv then ect = "\{ctx.svC}_t"
-            if etd.isZero.not when isSv.not then {
-                rbn: regNameOf :symtab tid: etd
-                if rbn.length > 0 then {
-                    rc: scalarCTypeFor :symtab tid: etd
-                    if rc.length > 0 then ect = rc.take
-                }
-            }
-            elems: String
-            cnt: u64
-            for cnt < op.elements.count loop {
-                if cnt > 0 then elems.append ", "
-                eso: ctx.staticListSlot.get key: (staticlistslotkey owner: ridtid slot: cnt)
-                match (
-                    eso
-                ) case some then elems.append eso case none then null
-                cnt = cnt + 1
-            }
-            dsym: ctxCname :ctx tid: ridtid
-            # an empty block has no array -- C has no empty initializer -- and
-            # every index is past its end
-            if cnt > 0 then buf.append "static const \{ect} \{dsym}[] = {\{elems}};\n\n"
-            buf.append "static \{ect} \{dsym}_at(uint64_t _idx);\n"
-            buf.append "static \{ect} \{dsym}_at(uint64_t _idx) {\n"
-            buf.append "    if (_idx >= \{cnt}) {\n"
-            buf.append "        char _zp_buf[96];\n"
-            b2: "        snprintf(_zp_buf, sizeof(_zp_buf), \"list index: index %llu out of bounds (length \{cnt})\", (unsigned long long)_idx);\n"
-            buf.append b2
-            buf.append "        z_panic(_zp_buf);\n"
-            buf.append "    }\n"
-            if cnt > 0 then {
-                buf.append "    return \{dsym}[_idx];\n"
-            } else {
-                buf.append "    return (\{ect}){0};\n"
-            }
-            buf.append "}\n\n"
-        }
-    } else null
 }
 
 # staticListSlotText -- the C constant for element `slot` of list `staticListTid`,
