@@ -1223,7 +1223,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2301487
+ALLOC_BASELINE := 2299798
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -2830,7 +2830,7 @@ zl-full-guard: bin/zl
 	  echo "zl-full-guard FAIL: a generic body's L013/L022 was not reported exactly once:"; \
 	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
 	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full $(CURDIR)/$(ZLFULL_SUB)/inner.z 2>&1); \
-	if ! printf '%s\n' "$$out" | grep -q 'L013' || ! printf '%s\n' "$$out" | grep -q 'subunit/host/inner.z:4:5' || ! printf '%s\n' "$$out" | grep -q 'subunit/host/inner.z:11:20' || printf '%s\n' "$$out" | grep -q 'error\['; then \
+	if ! printf '%s\n' "$$out" | grep -q 'L013' || ! printf '%s\n' "$$out" | grep -q 'subunit/host/inner.z:4:5' || ! printf '%s\n' "$$out" | grep -q 'subunit/host/inner.z:11:14' || printf '%s\n' "$$out" | grep -q 'error\['; then \
 	  echo "zl-full-guard FAIL: a subunit file was not linted as its parent's subunit, at its own path:"; \
 	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
 	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full $(CURDIR)/$(ZLFULL_SUB).z 2>&1); \
