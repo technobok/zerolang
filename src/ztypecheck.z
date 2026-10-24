@@ -34640,7 +34640,7 @@ checkReturnCarries: function {
     # where a refused return is reported
     st: zenv.ZSymbolTable
     # the tree the returned expression is read from
-    ast: Ast.view
+    ast: Ast
     # the returned argument
     arg: argref
     # its type
@@ -34659,6 +34659,26 @@ checkReturnCarries: function {
     }
     if rbn.isZero.not then {
         if rvo.isZero.not then {
+            # a view PARAMETER holds no locks of its own: what it views is the
+            # caller's, which a plain `out` result would leave unlocked
+            if (st.reg.variableOriginOf id: rvo) == ztypes.zvarorigin.param when (isViewFamilyTid
+                :ast
+                :st
+                tid: argT
+            ) when st.typing.currentFnPins.not when st.typing.currentReturnsBorrow.not then {
+                pwn: zast.nameTextAt :ast ref: rbn
+                pfn: specWrittenName :st :ast tid: st.typing.currentFnTid
+                pm: "Cannot return '\{pwn}': it views what the caller passed, which the caller cannot see because '\{pfn}' is `out`, not `outx`"
+                (addError
+                    :st
+                    nodeid: arg.nid
+                    lineno: arg.lineno
+                    colno: arg.colno
+                    e: zast.err.ownerError
+                    msg: pm
+                )
+                return
+            }
             held: List ztyping.PinPath
             (st.heldLockPaths
                 holder: ztypes.zlockholder.var rvo
@@ -41848,6 +41868,83 @@ ownedValueReceiver: function {
     )
 }
 
+# takeValueReceiver -- a method call's receiver, before its arguments are
+# walked: one that is not a variable is evaluated first, so what its value keeps
+# locked is taken now, before the argument walk drains it, and held locked
+# across the arguments. The receiver's type when the result will keep an
+# unnamed local of it (captureValueReceiver); zero otherwise. A concrete and a
+# generic method take their receiver the same way.
+takeValueReceiver: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    call: callref
+    funcId: ztypes.tid
+    # false when the dotted base names a type and hands the receiver to the
+    # arguments
+    recvVal: bool
+    pins: List ztyping.PinPath
+} out ztypes.tid is {
+    if recvVal.not then return ztypes.tid
+    # a receiver that is a `.view` result is read-only: a method that writes its
+    # receiver cannot take one, as no `.borrow` can be lent from it. Read before
+    # the capture, which drains the flag with pins the call does not keep
+    rvRo: st.typing.pendingBorrowReadonly
+    rvT: captureValueReceiver :st :ast :unitDecl :call :funcId :pins
+    if rvRo when (callReadsReceiver :st mid: funcId nid: call.nid).not then {
+        (addError
+            :st
+            nodeid: call.nid
+            lineno: call.lineno
+            colno: call.colno
+            e: zast.err.ownerError
+            msg: "a method that writes its receiver cannot be called on a `.view` result: a view converts to no other ownership"
+        )
+    }
+    # a receiver rooted in a variable is locked through that root after the
+    # arguments; any other holds its pins locked across them
+    if pins.length > 0 when (receiverRootIsVar :st :ast :call).not then {
+        lockReceiverPins :st :ast :call :pins
+    }
+    return rvT
+}
+
+# receiverResultPath -- the receiver path a method call's result pins: the
+# receiver's variable tuple when its root is a variable (a unit-qualified free
+# function reached through this path has none, and pins its arguments alone);
+# otherwise the unnamed local takeValueReceiver's `rvT` asks for, whose pins
+# join the arguments'. Empty when the result keeps nothing.
+receiverResultPath: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    call: callref
+    funcId: ztypes.tid
+    rvT: ztypes.tid
+    rvPins: (List ztyping.PinPath).view
+    pins: List ztyping.PinPath
+    # receives the receiver's path
+    dst: ListVal zast.nameid
+} is {
+    if (resultPins :st :funcId).not then return
+    methodReceiverTuple :ast n: (ast.nodes.get i: call.callable) :dst
+    if dst.length > 0 then {
+        rvb: st.lookupVarId nameId: (dst.get i: 0)
+        if rvb.none then for dst.length > 0 loop dst.pop
+    }
+    # a fresh value at the end of a variable's path is the unnamed local, not
+    # the path
+    if rvT.isZero.not then for dst.length > 0 loop dst.pop
+    if dst.length == 0 then (joinValueReceiver
+        :st
+        :ast
+        :rvT
+        recvNid: (dottedParentNodeId :ast n: (ast.nodes.get i: call.callable))
+        :rvPins
+        path: dst
+        :pins
+    )
+}
+
 # captureValueReceiver -- a call on a receiver that is a value rather than a
 # variable: the receiver is evaluated before the arguments, so the pins its own
 # borrowed result left are taken now, before the argument walk. They are the
@@ -47469,30 +47566,8 @@ checkResolvedMethodCall: function {
     # checkDottedCallableCall answered whether the base names a type, once, for
     # every dotted call (callBaseNamesType); an infix call is never in it
     recvVal: (st.typing.callBaseNamesType.has item: call.nid).not
-    # a receiver that is not a variable is evaluated before the arguments: what
-    # its value keeps locked is taken now, before the argument walk drains it
     rvPins: List ztyping.PinPath
-    rvT: ztypes.tid
-    # a receiver that is a `.view` result is read-only: a method that writes its
-    # receiver cannot take one, as no `.borrow` can be lent from it. Read before
-    # the capture, which drains the flag with pins the call does not keep
-    rvRo: recvVal and st.typing.pendingBorrowReadonly
-    if recvVal then rvT = captureValueReceiver :st :ast :unitDecl :call funcId: dro pins: rvPins
-    if rvRo when (callReadsReceiver :st mid: dro nid: call.nid).not then {
-        (addError
-            :st
-            nodeid: call.nid
-            lineno: call.lineno
-            colno: call.colno
-            e: zast.err.ownerError
-            msg: "a method that writes its receiver cannot be called on a `.view` result: a view converts to no other ownership"
-        )
-    }
-    # a receiver rooted in a variable is locked through that root after the
-    # arguments; any other holds its pins locked across them
-    if rvPins.length > 0 when (receiverRootIsVar :st :ast :call).not then {
-        lockReceiverPins :st :ast :call pins: rvPins
-    }
+    rvT: takeValueReceiver :st :ast :unitDecl :call funcId: dro :recvVal pins: rvPins
     pins: (walkCallArgsHoist
         :st
         :unitDecl
@@ -47589,24 +47664,7 @@ checkResolvedMethodCall: function {
     # unit-qualified free function reached through this path has none,
     # and pins its arguments alone), at the strength the call took
     rtupP: ListVal zast.nameid
-    callableNodeP: ast.nodes.get i: call.callable
-    methodReceiverTuple :ast n: callableNodeP dst: rtupP
-    if rtupP.length > 0 then {
-        rvbP: st.lookupVarId nameId: (rtupP.get i: 0)
-        if rvbP.none then for rtupP.length > 0 loop rtupP.pop
-    }
-    # a fresh value at the end of a variable's path is the unnamed local, not
-    # the path
-    if rvT.isZero.not then for rtupP.length > 0 loop rtupP.pop
-    if rtupP.length == 0 then (joinValueReceiver
-        :st
-        :ast
-        :rvT
-        recvNid: (dottedParentNodeId :ast n: (ast.nodes.get i: call.callable))
-        :rvPins
-        path: rtupP
-        :pins
-    )
+    receiverResultPath :st :ast :call funcId: dro :rvT :rvPins :pins dst: rtupP
     pinCallResult :st funcId: dro :pins recvPath: rtupP recvShared: recvShr
     st.typing.callKind.set key: call.nid value: zast.callkind.regular
     return mres
@@ -48394,6 +48452,8 @@ checkGenericFnCall: function {
     # the locks the call's result may keep: a hoisted argument's temporary
     # joins them AS IT IS MINTED, in argument order, so the walk and the
     # instance's own pass write to one list
+    rvPinsG: List ztyping.PinPath
+    rvTG: takeValueReceiver :st :ast :unitDecl :call funcId: dro :recvVal pins: rvPinsG
     pinsG: List ztyping.PinPath
     gfr: checkGenericCall :st :unitDecl :ast :call funcId: dro pins: pinsG
     if gfr.isZero.not then {
@@ -48405,12 +48465,27 @@ checkGenericFnCall: function {
     midG: genericCallInstance :st :ast :call
     checkGenericCallMissingArgs :ast :st :call mid: midG recvImplicit: recvVal
     rroG: methodReceiverRootId :ast n: callableNode
-    # a generic method's receiver owns what it holds exactly as a concrete
-    # method's does; the concrete leg reaches this through captureValueReceiver
-    if recvVal then ownedValueReceiver :st :ast :unitDecl :call
-    lockMethodReceiver :st :ast :call :dro rroId: rroG
+    recvShrG: lockMethodReceiver :st :ast :call :dro rroId: rroG
     st.popTo marker: mcmG
-    pinGenericCallResult :st mid: midG pins: pinsG
+    # the result pins the receiver as a concrete method's does
+    rtupG: ListVal zast.nameid
+    if recvVal then (receiverResultPath
+        :st
+        :ast
+        :call
+        funcId: midG
+        rvT: rvTG
+        rvPins: rvPinsG
+        pins: pinsG
+        dst: rtupG
+    )
+    if midG.isZero.not then (pinCallResult
+        :st
+        funcId: midG
+        pins: pinsG
+        recvPath: rtupG
+        recvShared: recvShrG
+    )
     return gfr
 }
 
