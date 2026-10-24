@@ -1223,7 +1223,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2301955
+ALLOC_BASELINE := 2302216
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1298,7 +1298,7 @@ TYPENAME_OK := src/ztypecheck.z:resolveClass src/ztypecheck.z:resolveProtocol \
 	src/zemitterc.z:emitStaticListMember src/zemitterc.z:emitStrConvCall \
 	src/zsource.z:bareZeroTypeName src/ztypecheck.z:constraintKindForId \
 	src/ztypecheck.z:isConformanceMarker src/ztypecheck.z:declareCanonicalTypeId \
-	src/ztypecheck.z:checkTextLiteralCast src/zemitterc.z:textLiteralRead
+	src/ztypecheck.z:isTextLiteralCast src/zemitterc.z:textLiteralRead
 typename-guard:
 	@fail=0; n=0; \
 	for e in $$(awk '/^[A-Za-z_][A-Za-z0-9_]*: function/ {fn=$$1; sub(":", "", fn)} \
@@ -1331,7 +1331,7 @@ emitter-guard:
 	chk "'z_t{' literals in src/zemitterc.z" "$$g2" 3; \
 	chk "ztypecheck.walkLookupTyperef" "$$e2" 1; \
 	chk "regNameOf" "$$e6" 5; \
-	chk "mangleVarName (both inside varCName)" "$$e7" 2; \
+	chk "mangleVarName (inside varCName)" "$$e7" 1; \
 	chk "io.readText" "$$e8" 3; \
 	chk "literal arm members (.data.<arm>; memberC spells them)" "$$e10" 0; \
 	chk "poolFind (a re-intern of a name the emitter held as an id, or table text)" "$$e11" 15; \

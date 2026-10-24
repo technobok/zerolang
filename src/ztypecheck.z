@@ -14102,8 +14102,8 @@ armDefaultLeaf: function {
         match n case dottedpath then pathParent = n.parent else null
         if (ast.nodes.get i: pathParent).dottedpath.not then return none
         if (st.reg.typetypeOf typeId: slotTid).isSum.not then return none
-        if (st.typing.declMemberIdOf parentTypeId: slotTid nameId: leaf).isZero then return none
     }
+    if (st.typing.declMemberIdOf parentTypeId: slotTid nameId: leaf).isZero then return none
     return leaf
 }
 
@@ -14207,16 +14207,16 @@ valueDeclares: function {ast: Ast.view node: zast.nodeid} out bool is {
 }
 
 # convertsExpression -- the declaration's value is a conversion written on an
-# OPERATOR EXPRESSION, `(0 - 7).i64`, or on a compile-time `if` or `match`: a
-# value, whose base names no type the way `4.u64`, `zast.nodeid` and a type
-# application's `(List t: u8).view` do.
+# OPERATOR EXPRESSION, `(0 - 7).i64`, on a compile-time `if` or `match`, or on a
+# string literal, `"x".text`: a value, whose base names no type the way `4.u64`,
+# `zast.nodeid` and a type application's `(List t: u8).view` do.
 convertsExpression: function {ast: Ast.view node: zast.nodeid} out bool is {
     n: ast.nodes.get i: node
     match (
         n
     ) case dottedpath then {
         pn: ast.nodes.get i: n.parent
-        if pn.ifexpr or pn.caseexpr then return true
+        if pn.atomstring or pn.ifexpr or pn.caseexpr then return true
         return (zast.infixPartsOf :ast n: pn).found
     } else {
         return false
@@ -33278,17 +33278,23 @@ literalConvTarget: function {
 # `text` (its bytes may be a String's).
 checkTextLiteralCast: function {st: zenv.ZSymbolTable ast: Ast dp: dpref} out callleg is {
     unhandled: callleg handled: false tid: ztypes.tid
-    if (
-        (atomNameId :ast n: (ast.nodes.get i: dp.child)) != zast.wellKnown.slot.tyText
-    ) then return unhandled
-    bn: ast.nodes.get i: dp.parent
-    if bn.atomstring.not then return unhandled
-    if (stringLitIsLiteralText :ast parts: bn.stringparts).not then return unhandled
+    tc: atomNameId :ast n: (ast.nodes.get i: dp.child)
+    if (isTextLiteralCast :ast parentId: dp.parent nameId: tc).not then return unhandled
     txT: stdTid :ast :st wk: zast.wellKnown.slot.tyText
     if txT.isZero then return unhandled
     stampGate :st nid: dp.parent tid: txT
     stampGate :st nid: dp.nid tid: txT
     return (callleg handled: true tid: txT)
+}
+
+# isTextLiteralCast -- the path `"abc".text`: a plain string literal (no
+# interpolation) at `parentId` and the member `text`.
+isTextLiteralCast: function {ast: Ast.view parentId: zast.nodeid nameId: zast.nameid} out bool is {
+    if nameId != zast.wellKnown.slot.tyText then return false
+    if parentId.isZero then return false
+    bn: ast.nodes.get i: parentId
+    if bn.atomstring.not then return false
+    return (stringLitIsLiteralText :ast parts: bn.stringparts)
 }
 
 # checkNumericSuffixCast -- `1.u8` / `(2.5).f32`: when the child names a non-
@@ -61420,16 +61426,24 @@ reportConstantConstraintArg: function {
 # constStringDotted -- a member read on a string constant written as a bare
 # dotted path, which is how `S.length` parses. `length` is the BYTE count,
 # String.length's own answer; `count` is the codepoint one and is not folded.
+# `"abc".text` is the literal made text, as checkTextLiteralCast types it in a
+# body, so a field default or a unit constant has the same type.
 constStringDotted: function {
     ast: Ast
     st: zenv.ZSymbolTable
     scope: ztypes.declid
     v: ztypes.cval
+    # the receiver's own node when it is written in place, else 0
+    recvNid: zast.nodeid
     nameId: zast.nameid
     nodeid: zast.nodeid
     lineno: u32
     colno: u32
 } out ztypes.cval is {
+    if (isTextLiteralCast :ast parentId: recvNid :nameId) then {
+        txT: stdTid :ast :st wk: zast.wellKnown.slot.tyText
+        if txT.isZero.not then return (ztypes.typedConst c: v numTid: txT)
+    }
     if nameId == zast.wellKnown.slot.wkLength then {
         s: constStringAt :st id: v.strId
         return (constStringLength :st :scope :ast s: s.stringView)
@@ -62145,6 +62159,7 @@ constOfNamedBase: function {
                 :scope
                 :ast
                 v: pcv
+                recvNid: zast.nodeid.zero
                 nameId: ncId
                 nodeid: atNid
                 lineno: atLine
@@ -62522,6 +62537,7 @@ evalConstDotted: function {
             :scope
             :ast
             v: pv
+            recvNid: parentId
             nameId: ncId
             nodeid: nid
             lineno: ln
