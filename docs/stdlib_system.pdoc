@@ -89,6 +89,7 @@ operation can fail for reasons the caller needs to handle
 #ul:
   [#*: [#> to=string: #b:"String"] -- #~"String: class is native" (mutable, owned, heap-allocated)]
   [#*: [#> to=stringview: #b:"StringView"] -- #~"StringView: class is native" (readonly view with a #~".borrow" on its source)]
+  [#*: [#> to=text: #b:"text"] -- #~"text: record is native" (static text: part of the program, copied by value)]
   [#*: [#> to=string-iterators: #b:"CpIter"] -- #~"call: function out (optionval t: u32)"]
   [#*: [#> to=string-iterators: #b:"Splitter"] -- #~"call: function out (Option T: StringView)"]
   [#*: [#> to=string-iterators: #b:"LinesIter"] -- #~"call: function out (Option T: StringView)"]
@@ -815,10 +816,54 @@ viewed bytes using a per-process random seed. Same contract as
 #~"String.hash" -- stable within a run, randomised across runs,
 not a content hash.
 
-#b:"#~\":text\" conformance." #~"StringView" is the trivial
+#b:"#~\":StringViewable\" conformance." #~"StringView" is the trivial
 implementor of the #~"StringViewable" protocol -- its #~".stringView"
 method returns itself. This lets any #~"StringViewable"-constrained
 generic accept a plain view.
+
+
+#--: text
+
+#~"text" is static text: a pointer and a length into bytes that are part of
+the program. A #~"text" is never built at run time -- every one comes from the
+program's own string literals -- so it owns nothing, is never freed and never
+locked, and is copied by value like a number. It can be held anywhere a value
+type can: a local, a parameter, a result, a record or class field, a #~"ListVal"
+element, a #~"MapVV" key, a static list (#~"out staticlist text").
+
+#b:"Members." #~"length", #~"isEmpty", the byte orderings (#~"==" #~"!="
+#~"<" #~"<=" #~">" #~">=" and #~"compare"), #~"hash", and #~"string", which
+copies the bytes into an owned #~"String". The slices #~"substring",
+#~"trim", #~"trimStart" and #~"trimEnd" are #~"text" again: a slice of static
+text is static text, over the same bytes. #~"substring" checks its range
+against the text at run time and panics ("substring: bounds error") past its
+end.
+
+#b:"Its view pins nothing." #~"t.stringView" is a #~"StringView" of the same
+bytes. A view of a #~"String" keeps the String locked while it lives; a view of
+a #~"text" keeps nothing locked, because nothing can free or change the
+bytes -- reassigning #~"t" leaves the view valid. The view costs nothing: a
+#~"text" is laid out as a #~"StringView", so the conversion emits no code.
+
+#b:"Read-only string APIs." #~"text" is a value type, and a #~"StringLike"
+parameter admits reference types only (see the family bounds), so a
+#~"text" reaches #~"print", #~"String.append", #~"==" against a String, and
+the other readonly string APIs as its view: #~"print t.stringView". The
+other read queries (#~"startsWith", #~"indexOf", #~"split", ...) are the
+view's too. An interpolation takes a #~"text" as it is, as it takes a view.
+
+#code language=zerolang: """
+  names: list { a: "alpha" b: "beta" } out staticlist text
+
+  main: function is {
+      t: names.a
+      v: t.stringView
+      t = names.b                 # allowed: the view pins nothing
+      print v
+      print (t.substring from: 1 to: 3).stringView
+      print "\{t.length} \{t == names.b}"
+  }
+  """
 
 
 #--: String iterators

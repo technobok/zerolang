@@ -10054,7 +10054,6 @@ staticListKindsAgree: function {
     vals: ListVal ztypes.cval
     elemTid: ztypes.tid
 } out bool is {
-    svT: stdTid :ast :st wk: zast.wellKnown.slot.tyStringView
     first: u8
     k: u64
     for k < dnode.nelems loop {
@@ -10067,7 +10066,7 @@ staticListKindsAgree: function {
         msg: String
         kt: staticListKindText :kind
         isStr: kind == 3
-        svBlock: elemTid == svT
+        svBlock: isStaticStringTid :ast :st tid: elemTid
         if kind != first then {
             ft: staticListKindText kind: first
             msg = "list elements are of one kind: this one is \{kt}, the first \{ft}"
@@ -21896,6 +21895,7 @@ printableInterpTid: function {
     if t == (stdTid :ast :st wk: zast.wellKnown.slot.wkBool) then return true
     if t == (stdTid :ast :st wk: zast.wellKnown.slot.tyString) then return true
     if t == (stdTid :ast :st wk: zast.wellKnown.slot.tyStringView) then return true
+    if t == (stdTid :ast :st wk: zast.wellKnown.slot.tyText) then return true
     tt: st.reg.typetypeOf typeId: t
     if tt == ztypes.ztypetype.genericParam then return true
     if tt == ztypes.ztypetype.tagType then return true
@@ -23668,7 +23668,7 @@ constraintHolds: function {
         # a list's index: an id key, or untyped (literalSatisfies)
         return (typeIsIdKey :st :ast tid: argTid)
     } case staticMember then {
-        if argTid == (stdTid :ast :st wk: zast.wellKnown.slot.tyStringView) then return true
+        if (isStaticStringTid :ast :st tid: argTid) then return true
         return (
             (typeIsNumberOf :st tid: argTid float: false) or
             (typeIsNumberOf
@@ -30622,9 +30622,11 @@ checkMemberAutoCall: function {
             # took. Built locally, then pushed through the full field path (a
             # field list passed as an argument is a non-owning shallow copy).
             tup: ListVal zast.nameid
-            appendValueTuple :ast n: (ast.nodes.get i: dp.parent) dst: tup
+            if (receiverPinsNothing :ast :st recvT: bt).not then {
+                appendValueTuple :ast n: (ast.nodes.get i: dp.parent) dst: tup
+            }
             recvPins: List ztyping.PinPath
-            (valueReceiverPins
+            if (receiverPinsNothing :ast :st recvT: bt).not then (valueReceiverPins
                 :st
                 :ast
                 :unitDecl
@@ -41981,6 +41983,14 @@ takeValueReceiver: function {
     return rvT
 }
 
+# receiverPinsNothing -- a receiver whose storage no result can point into: a
+# text's bytes are the program's, so what a call hands back over them (its
+# view among them) keeps the text's binding unlocked.
+receiverPinsNothing: function {ast: Ast st: zenv.ZSymbolTable recvT: ztypes.tid} out bool is {
+    if recvT.isZero then return false
+    return recvT == (stdTid :ast :st wk: zast.wellKnown.slot.tyText)
+}
+
 # receiverResultPath -- the receiver path a method call's result pins: the
 # receiver's variable tuple when its root is a variable (a unit-qualified free
 # function reached through this path has none, and pins its arguments alone);
@@ -41998,6 +42008,8 @@ receiverResultPath: function {
     dst: ListVal zast.nameid
 } is {
     if (resultPins :st :funcId).not then return
+    rcvT: walkTypeOf :st nid: (dottedParentNodeId :ast n: (ast.nodes.get i: call.callable))
+    if (receiverPinsNothing :ast :st recvT: rcvT) then return
     methodReceiverTuple :ast n: (ast.nodes.get i: call.callable) :dst
     if dst.length > 0 then {
         rvb: st.lookupVarId nameId: (dst.get i: 0)
@@ -60849,7 +60861,15 @@ staticListElemFolds: function {
     elemTid: ztypes.tid
 } out bool is {
     if (isNumericTid :st tid: elemTid) then return true
-    return elemTid == (stdTid :ast :st wk: zast.wellKnown.slot.tyStringView)
+    return (isStaticStringTid :ast :st tid: elemTid)
+}
+
+# isStaticStringTid -- a type a string literal can be held as in a static
+# list: StringView, or `text`.
+isStaticStringTid: function {ast: Ast st: zenv.ZSymbolTable tid: ztypes.tid} out bool is {
+    if tid.isZero then return false
+    if tid == (stdTid :ast :st wk: zast.wellKnown.slot.tyStringView) then return true
+    return tid == (stdTid :ast :st wk: zast.wellKnown.slot.tyText)
 }
 
 # constArmRead -- `<typeName>.<armName>` looked up from `lookupUnit`, as a

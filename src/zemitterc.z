@@ -255,6 +255,13 @@ ctxCnameView: function {ctx: Ctx.view tid: ztypes.tid} outx StringView is {
     return (listCnameView cnames: ctx.cnames :tid)
 }
 
+# isViewLaid -- a type laid out as a StringView: StringView, or text, which is
+# one C type with it.
+isViewLaid: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
+    if tid.isZero then return false
+    return (tid == ctx.svTid) or (tid == ctx.textTid)
+}
+
 # ctxCname -- listCname against the table the emission context carries.
 ctxCname: function {ctx: Ctx.view tid: ztypes.tid} out String is {
     return (listCname cnames: ctx.cnames :tid)
@@ -1369,6 +1376,15 @@ emitNumericCast: function {
             bv.append from: (ctxCname :ctx tid: retTid)
         }
     }
+    # a row over the runtime's string types (text's) spells them as holes
+    if (body.stringView.contains needle: "@StringView@") then {
+        bn.append from: "StringView".string
+        bv.append from: ctx.svC.copy
+    }
+    if (body.stringView.contains needle: "@String@") then {
+        bn.append from: "String".string
+        bv.append from: ctx.strC.copy
+    }
     # a checked conversion reads a constant into its temp too: spelled in
     # place, it would fold the tests, and the C compiler would report the
     # result they rule out as code never executed
@@ -2328,7 +2344,7 @@ recordUnitOrder: function {ctx: Ctx order: StringView} is {
 # answers. Pairing them here instead would be a CROSS PRODUCT -- every conv
 # source crossed with every conv member -- which said yes to `u8.bits` on the
 # strength of `bits` existing on i8.
-recordConvMember: function {ctx: Ctx key: StringView body: StringView} is {
+recordConvMember: function {ctx: Ctx ast: Ast.view key: StringView body: StringView} is {
     firstDot: key.indexOf needle: "."
     match (
         firstDot
@@ -2351,11 +2367,26 @@ recordConvMember: function {ctx: Ctx key: StringView body: StringView} is {
                 if takesArg then {
                     ctx.nativeArgMemb.set key: mk value: true
                 } else {
-                    ctx.nativeConvMemb.set key: mk value: true
+                    (noteConvMember
+                        :ctx
+                        :ast
+                        memb: mk.take
+                        typeName: (afterFirstDot.substring from: 0 to: secondDot)
+                    )
                 }
             }
         } case none then null
     } case none then null
+}
+
+# noteConvMember -- a receiver-only row's member `memb`, on the type named
+# `typeName`, joins the conversion filter: the type's name id while every row
+# of that member is that type's, zero once rows of two types carry it.
+noteConvMember: function {ctx: Ctx ast: Ast.view memb: String.take typeName: StringView} is {
+    tn: zast.poolFind pool: ast.names text: typeName
+    seen: (ctx.nativeConvMemb.get key: memb).or d: tn
+    if seen != tn then tn = zast.nameid.zero
+    ctx.nativeConvMemb.set key: memb.take value: tn
 }
 
 # recordFragmentRow -- a fragment-backed row: its path, then the row's own
@@ -2537,7 +2568,7 @@ recordNativeRow: function {ctx: Ctx ast: Ast.view h: NativeHead.view body: Strin
     ctx.nativeKeys.set key: kk value: true
     if h.call.length > 0 then recordSvCall :ctx :ast key: h.key.stringView call: h.call.stringView
     if body.length > 0 when h.cst.length == 0 then {
-        recordConvMember :ctx key: h.key.stringView :body
+        recordConvMember :ctx :ast key: h.key.stringView :body
     }
     if h.via.length > 0 then ctx.nativeVia.set key: h.key.copy value: h.via.copy
     if h.frag.length > 0 then {
@@ -2690,7 +2721,26 @@ nativeIsArgMembOf: function {ctx: Ctx.view memb: StringView} out bool is {
 # answer: the row named by `<srcPath>.<memb>` is what decides, so a name in
 # this set on a type with no such row is a miss, not a conversion.
 nativeIsConvMembOf: function {ctx: Ctx.view memb: StringView} out bool is {
-    return ((ctx.nativeConvMemb.get key: memb.asString).or d: false)
+    return (ctx.nativeConvMemb.has key: memb.asString)
+}
+
+# nativeConvMembOn -- nativeIsConvMembOf for a receiver of type `srcTid`: the
+# member's receiver-only rows are that type's (by its declaration's name), or
+# they are spread over several types and the path decides.
+nativeConvMembOn: function {
+    symtab: zenv.ZSymbolTable.view ctx: Ctx.view memb: StringView srcTid: ztypes.tid
+} out bool is {
+    seen: ctx.nativeConvMemb.get key: memb.asString
+    match (
+        seen
+    ) case some then {
+        if seen.isZero then return true
+        dId: symtab.typing.declIdOfType typeId: srcTid
+        if dId.isZero then return true
+        return seen == (symtab.typing.decls.get i: dId).name
+    } case none then {
+        return false
+    }
 }
 
 # nativeIsFragBacked -- a fragment implements this path, so its C symbol is the
@@ -4168,8 +4218,11 @@ Ctx: class {
     # native method is called (bindMethodRows)
     methodRowPaths: (IdMapR ztypes.tid V: String)
     methodRowsBound: bool
-    # which natives are conversion members, whose routing differs
-    nativeConvMemb: (MapRV String v: bool)
+    # which natives are conversion members, whose routing differs: each member
+    # name to the name id of the one type whose receiver-only rows carry it, or
+    # zero when rows of several types do, so a read on any other type is told no
+    # before a path is built for it
+    nativeConvMemb: (MapRV String v: zast.nameid)
     # the member NAMES of rows that take ARGUMENTS -- the cheap filter that
     # nativeConvMemb is for the receiver-only rows. A call asks this before it
     # builds a path, because building one per call on a native receiver is an
@@ -4304,6 +4357,8 @@ Ctx: class {
     strTid: ztypes.tid
     # StringView's type id
     svTid: ztypes.tid
+    # text's type id: laid out as a StringView, and spelled with its C name
+    textTid: ztypes.tid
     # converror's canonical id. The numeric-conversion rule is ABOUT converror --
     # natives.tbl's conversion rows name its arms -- so the emitter has to know
     # which type that is to spell the error assignment for its representation.
@@ -19710,7 +19765,9 @@ convRowKeyOf: function {
     )
     mo9: symtab.typing.declChildOfId parentTypeId: ownTid9 nameId: mn2Id
     if mo9.some when (fnIsNativeId :symtab fid: mo9).not then return String
-    ncSrcP: convSrcPathOf :symtab srcTid: (ztypecheck.typedefChaseTid st: symtab tid: ownTid9)
+    srcT9: ztypecheck.typedefChaseTid st: symtab tid: ownTid9
+    if (nativeConvMembOn :symtab :ctx memb: mn2c.stringView srcTid: srcT9).not then return String
+    ncSrcP: convSrcPathOf :symtab srcTid: srcT9
     if ncSrcP.length == 0 then return String
     ncKey: nativeMemberKey srcPath: ncSrcP.stringView memb: mn2c.stringView
     # a conversion is a row with a body: a bodyless row of the same member name
@@ -22130,7 +22187,7 @@ emitInterpPart: function {
         :ops
     ) then {
         null
-    } else if pt.isZero.not when pt == ctx.svTid then {
+    } else if pt.isZero.not when (pt == ctx.svTid) or (pt == ctx.textTid) then {
         appendViewPart :ctx val: val.stringView :valF :sNm :expr :ind :tmp :buf :ops
     } else if pt.isZero.not when pt == ctx.strTid then {
         appendStringPart :ast :symtab :ctx :n val: val.stringView :valF :sNm :expr :ind :buf :ops
@@ -35568,6 +35625,8 @@ runtimetids: record {
     cerr: ztypes.tid
     # bool's type id
     bool: ztypes.tid
+    # text's type id
+    text: ztypes.tid
 }
 
 # resolveRuntimeTids -- resolve those, or leave a tid 0 where the program
@@ -35582,6 +35641,7 @@ resolveRuntimeTids: function {
         sv: (systemTypeTid :program :symtab :sysU nameId: zast.wellKnown.slot.tyStringView)
         cerr: (systemTypeTid :program :symtab :sysU nameId: zast.wellKnown.slot.tyConverror)
         bool: (systemTypeTid :program :symtab :sysU nameId: zast.wellKnown.slot.wkBool)
+        text: (systemTypeTid :program :symtab :sysU nameId: zast.wellKnown.slot.tyText)
     )
 }
 
@@ -35756,6 +35816,9 @@ emitC: function {
     # fragments' own names are unique and already in the text.
     if strId.isZero then strC = "z_String"
     if svId.isZero then svC = "z_StringView"
+    # text is laid out as a StringView and is one C type with it: a text is
+    # passed where a view is, and its `stringView` is the value itself
+    if rtids.text.isZero.not then typeCnames.set i: rtids.text.u64 val: svC.copy
     origins: ListVal ztypes.tid
     buildOriginTids :program :symtab acc: origins
     (emitStringFragments
@@ -35872,7 +35935,7 @@ emitC: function {
         nativeVia: (MapRR String V: String)
         methodRowPaths: (IdMapR ztypes.tid V: String)
         methodRowsBound: false
-        nativeConvMemb: (MapRV String v: bool)
+        nativeConvMemb: (MapRV String v: zast.nameid)
         nativeArgMemb: (MapRV String v: bool)
         fragUnits: List String
         hoistTags: (MapRV String v: zast.nameid)
@@ -35924,6 +35987,7 @@ emitC: function {
         borrowedVars: (IdMapV ztypes.vid v: bool)
         strTid: strId
         svTid: svId
+        textTid: rtids.text
         converrorTid: cerrId
         boolTid: boolId
         :origins
@@ -36539,8 +36603,7 @@ emitListMono: function {
     eid: listElemType :symtab :monoId
     isStrEl: false
     if eid == ctx.strTid then isStrEl = true
-    isSvEl: false
-    if eid == ctx.svTid then isSvEl = true
+    isSvEl: isViewLaid :ctx tid: eid
     ect0: slotCType :ast :symtab :ctx tid: eid
     ect: ctypeOrI64 s: ect0.stringView
     p: "\{runtimeDir}/z_List.c.tmpl"
@@ -37763,7 +37826,7 @@ keyFnProtosC: function {
 keyHashKind: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.tid} out u64 is {
     ktid: ztypecheck.typedefChaseTid st: symtab :tid
     if ktid == ctx.strTid then return 1
-    if ktid == ctx.svTid then return 2
+    if (isViewLaid :ctx tid: ktid) then return 2
     tt: symtab.reg.typetypeOf typeId: ktid
     isRv: tt == ztypes.ztypetype.recordType
     if isRv.not then isRv = tt == ztypes.ztypetype.variantType
@@ -45671,7 +45734,7 @@ emitStaticListFor: function {
             # a block typed by its tags emits the same array as one typed by
             # the clause. scalarCTypeFor re-checks the tid for a user shadow.
             etd: symtab.reg.staticListElemTypeOf tid: ridtid
-            isSv: etd == ctx.svTid
+            isSv: isViewLaid :ctx tid: etd
             if isSv then ect = "\{ctx.svC}_t"
             if etd.isZero.not when isSv.not then {
                 rbn: regNameOf :symtab tid: etd
@@ -46403,6 +46466,14 @@ partHashWords: function {
         words.append ws
         return
     }
+    # a text part hashes its bytes, as a str does
+    if (isViewLaid :ctx tid: base) then {
+        tbf: "z_siphash_bytes".string
+        if ctx.fastHash then tbf = "z_fasthash_bytes"
+        wt: "\{tbf}((const uint8_t*)(\{v}).data, (\{v}).size)"
+        words.append wt
+        return
+    }
     hashFnDemand :ast :symtab :ctx tid: base
     wg: "\{ctxCname :ctx tid: base}_hash(\{v})"
     words.append wg
@@ -46447,6 +46518,8 @@ hashFnDemand: function {
     isAgg: tt.isValueData
     if isAgg.not then return
     if (partIsCScalar :symtab :tid) then return
+    # text hashes as the view it is laid out as: the runtime's, not a generated one
+    if (isViewLaid :ctx :tid) then return
     ctx.hashAsked.add item: tid
     ctx.hashOrder.append tid
     if (ztypecheck.valOpSource :ast st: symtab :tid nameId: zast.wellKnown.slot.wkHash

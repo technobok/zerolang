@@ -101,7 +101,7 @@ module Rouge
           never
           null openmode optionval panic parseerror print staticindex staticlist staticmember
           public resultval return seekorigin stderr
-          stdin stdout str stringJoin tag
+          stdin stdout str stringJoin tag text
           this true u128 u16
           u32 u64 u8 valhashable yield
         )
