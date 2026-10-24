@@ -3913,13 +3913,17 @@ Ctx: class {
     litIds: ListVal zast.nodeid
     # a literal's node id -> its 1-based place in litIds
     litIndex: (IdMapV zast.nodeid v: u64)
+    # each pooled literal's byte count, parallel to litIds: the `.size` its view
+    # is built with where it is used
+    litSizes: ListVal u64
     # which literals were actually referenced, so the unused ones are not
     # emitted
     usedLits: IdSet zast.nodeid
     # the FOLDED-string pool, beside the AST-literal one. A folded value has no
     # literal to point at -- a concatenation and a selected branch were never
-    # written anywhere -- so litIndexOf cannot serve it. Rendered `_zcsN` in the
-    # same static z_StringView_t shape as `_zs`, and MINTING IS THE USE: an
+    # written anywhere -- so litIndexOf cannot serve it. Its bytes are `_zcsN_d`
+    # and its value is built as a source literal's is (constLitView), and
+    # MINTING IS THE USE: an
     # entry exists only because something asked to emit it, so unlike usedLits
     # there is no separate mark.
     constLits: List String
@@ -5943,7 +5947,8 @@ svArgAddr: function {
     ) case atomstring then {
         li: litIndexOf :ctx nid: n.nodeid
         if li > 0 then {
-            a1: "&_zs\{li}"
+            lv: litView :ctx :li
+            a1: "&\{lv}"
             return a1
         } else {
             return ""
@@ -14082,10 +14087,10 @@ cvalStrText: function {
         i = i + 1
     }
     if hit > 0 then {
-        return (stating :facts from: pathFacts text: "_zcs\{hit}")
+        return (stating :facts from: pathFacts text: (constLitView :ctx ci: hit))
     }
     ctx.constLits.append t.copy
-    return (stating :facts from: pathFacts text: "_zcs\{ctx.constLits.length}")
+    return (stating :facts from: pathFacts text: (constLitView :ctx ci: ctx.constLits.length))
 }
 
 # foldedBranchOf -- the clause the typechecker's constant fold selected for an
@@ -19359,7 +19364,10 @@ emitDottedStringConversion: function {
     facts: cfacts.borrow
 } out String is {
     scl: bindLitIndex :ast :ctx n: (ast.nodes.get i: n.parent)
-    if scl > 0 then return (stating :facts from: callFacts text: "\{ctx.strC}_from_view(_zs\{scl})")
+    if scl > 0 then {
+        sclv: litView :ctx li: scl
+        return (stating :facts from: callFacts text: "\{ctx.strC}_from_view(\{sclv})")
+    }
     if (stampIsSv :symtab :ctx nid: n.parent).not then return ""
     sbv0: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent)
     return (stating :facts from: callFacts text: "\{ctx.strC}_from_view(\{sbv0})")
@@ -20205,7 +20213,7 @@ emitExprArms: function {
         )
     } case atomstring then {
         li: litIndexOf :ctx nid: n.nodeid
-        if li > 0 then return (stating :facts from: pathFacts text: "_zs\{li}")
+        if li > 0 then return (stating :facts from: pathFacts text: (litView :ctx :li))
         # an interpolation is an owned String rvalue, built where it is
         # evaluated -- the same shape as a call returning one
         ie: emitInterpArgExpr :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid)
@@ -22426,7 +22434,8 @@ emitPrintStringLiteral: function {
         buf.append "    /* zemitterc: unpooled literal */\n"
         return
     }
-    l: "\{ind}\{ctx.svC}_print(_zs\{li});\n"
+    lv: litView :ctx :li
+    l: "\{ind}\{ctx.svC}_print(\{lv});\n"
     buf.append l
 }
 
@@ -23508,7 +23517,8 @@ emitStringBind: function {
     if btid == ctx.svTid then {
         lvN: bindLitIndex :ast :ctx n: avn
         if lvN > 0 then {
-            lsv2: "\{ind}\{ctx.svC}_t \{nm} = _zs\{lvN};\n"
+            lvv: litView :ctx li: lvN
+            lsv2: "\{ind}\{ctx.svC}_t \{nm} = \{lvv};\n"
             buf.append lsv2
             return true
         }
@@ -23538,7 +23548,8 @@ emitStringBind: function {
     if btid == ctx.strTid then {
         fvN: stringCopyLitIndex :ast :symtab :ctx n: avn
         if fvN > 0 then {
-            lsc: "\{ind}\{ctx.strC}_t \{nm} = \{ctx.strC}_from_view(_zs\{fvN});\n"
+            fvv: litView :ctx li: fvN
+            lsc: "\{ind}\{ctx.strC}_t \{nm} = \{ctx.strC}_from_view(\{fvv});\n"
             buf.append lsc
             tmp.oweFree name: nm.string vid: nameVid
             return true
@@ -35361,6 +35372,21 @@ collectFnLiterals: function {
     } else null
 }
 
+# litView -- pooled source literal `li` (1-based in litIds) as a C value: a
+# view built in place over the pooled bytes, its length a constant, so no
+# descriptor object is emitted beside them
+litView: function {ctx: Ctx.view li: u64} out String is {
+    sz: ctx.litSizes.get i: li - 1
+    return "((\{ctx.svC}_t){ .data = _zs\{li}_d, .size = \{sz} })"
+}
+
+# constLitView -- folded-string pool entry `ci` (1-based) as a C value, built in
+# place as litView builds a source literal
+constLitView: function {ctx: Ctx.view ci: u64} out String is {
+    sz: (ctx.constLits.get i: ci - 1).length
+    return "((\{ctx.svC}_t){ .data = _zcs\{ci}_d, .size = \{sz} })"
+}
+
 # emitLiteralPools -- the two string pools, written ahead of the code they serve:
 # the source literals, filtered to the ones an emission actually referenced, and
 # the folded-constant pool, whose every entry was minted BY an emission and so
@@ -35378,12 +35404,9 @@ emitLiteralPools: function {
             pt: litTexts.get i: pi
             ptv: pt.stringView
             pesc: cEscape text: ptv
-            pblen: ptv.length
             pidx: pi + 1
             poolDataDecl: "static const char _zs\{pidx}_d[] = \"\{pesc}\";\n"
             poolBuf.append poolDataDecl
-            poolViewDecl: "static const \{ctx.svC}_t _zs\{pidx} = { .data = _zs\{pidx}_d, .size = \{pblen} };\n"
-            poolBuf.append poolViewDecl
         }
         pi = pi + 1
     }
@@ -35396,12 +35419,9 @@ emitLiteralPools: function {
         cTypeText: ctx.constLits.get i: ci
         ctv: cTypeText.stringView
         cesc: cEscape text: ctv
-        cblen: ctv.length
         cidx: ci + 1
         constDataDecl: "static const char _zcs\{cidx}_d[] = \"\{cesc}\";\n"
         poolBuf.append constDataDecl
-        constViewDecl: "static const \{ctx.svC}_t _zcs\{cidx} = { .data = _zcs\{cidx}_d, .size = \{cblen} };\n"
-        poolBuf.append constViewDecl
         ci = ci + 1
     }
 }
@@ -35724,6 +35744,8 @@ emitC: function {
     litTexts: List String
     collectUnitLiterals :program :symtab ids: litIds texts: litTexts
     litIndex: literalIndex ids: litIds
+    litSizes: ListVal u64
+    for each lt: litTexts loop litSizes.append lt.length
     rm: mn.copy
     ctx: (Ctx
         mainName: mn
@@ -35736,6 +35758,7 @@ emitC: function {
         cnames: typeCnames
         :litIds
         :litIndex
+        :litSizes
         usedLits: IdSet zast.nodeid
         constLits: List String
         tailRetActive: false
