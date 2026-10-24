@@ -35326,6 +35326,74 @@ checkWideConstants: function {ast: Ast.view st: zenv.ZSymbolTable} is {
     }
 }
 
+# markAggsReached -- each data value the walk folded where no fold consumed
+# it (a field read does) is used at run time: it and every data value it holds
+# are reached, which the emitter writes out. A reached value's untyped numbers
+# land in i64 and f64 there, so one outside them is refused at the value.
+markAggsReached: function {ast: Ast.view st: zenv.ZSymbolTable} is {
+    i: u64
+    for i < st.typing.aggUseNodes.length loop {
+        nid: st.typing.aggUseNodes.get :i
+        mono: st.typing.aggUseMonos.get :i
+        i = i + 1
+        taken: (st.typing.wideConstTaken.get key: (ztyping.monostamp :mono node: nid)).or d: 0
+        if taken == 0 then (markAggReached
+            :ast
+            :st
+            id: (st.typing.nodeConstIn :mono :nid).aggId
+            at: nid
+        )
+    }
+}
+
+# markAggReached -- aggregate row `id` and the aggregates it holds are reached
+# from the run-time use at `at`; each, the first time, has its untyped numbers
+# checked against i64 and f64, reported at that use.
+markAggReached: function {ast: Ast.view st: zenv.ZSymbolTable id: u32 at: zast.nodeid} is {
+    if id == 0 then return
+    start: u64
+    count: u64
+    {
+        g: st.typing.constAggs.getMut i: id.u64
+        if g.reached then return
+        g.reached = true
+        start = g.itemStart
+        count = g.itemCount
+    }
+    k: u64
+    for k < count loop {
+        v: st.typing.constAggItems.get i: start + k
+        k = k + 1
+        if v.kind.aggKind then markAggReached :ast :st id: v.aggId :at
+        refuseWideAggItem :ast :st :v :at
+    }
+}
+
+# refuseWideAggItem -- an untyped number in a data value run time reaches is
+# an i64 or an f64 there: one outside it is refused at the use `at`.
+refuseWideAggItem: function {
+    ast: Ast.view st: zenv.ZSymbolTable v: ztypes.cval at: zast.nodeid
+} is {
+    if v.numTid.isZero.not or at.isZero then return
+    if v.bigId == 0 when (constPastF64 :st :v).not then return
+    tk: ztypes.numkind.i64Type
+    if v.kind.fvalKind then tk = ztypes.numkind.f64Type
+    m: constFitsKindMessage :st :v k: tk spelling: ""
+    if m.length == 0 then return
+    n: ast.nodes.get i: at
+    (addErrorH
+        :st
+        nodeid: at
+        lineno: (nodeLine :n)
+        colno: (nodeCol :n)
+        e: zast.err.typeError
+        msg: m
+        note: String
+        hint: "a data value used at run time holds an untyped number as an i64 or an f64".string
+        width: 1
+    )
+}
+
 # noteClosedRange -- record an `upto` / `downto` call, whose two ends
 # checkClosedRangeSpans asks of once the walk has folded them.
 noteClosedRange: function {st: zenv.ZSymbolTable ast: Ast.view call: callref} is {
@@ -62369,6 +62437,7 @@ constOfStaticFields: function {
         :tid
         arm: zast.nameid.zero
         :items
+        :at
     )
     return (ztypes.makeAggConst :id)
 }
@@ -62617,6 +62686,8 @@ constInternAgg: function {
     # a choice value's arm, 0 otherwise
     arm: zast.nameid
     items: (ListVal ztypes.cval).view
+    # where it is built; an equal value interned earlier keeps its own
+    at: zast.nodeid
 } out u32 is {
     h: kind.tag.u64 + 1 * 1099511628211
     h = (h ^ tid.u64) * 1099511628211
@@ -62639,6 +62710,8 @@ constInternAgg: function {
         itemCount: items.length.u32.orPanic
         labelStart: 0
         labelCount: 0
+        node: at
+        reached: false
     )
     st.typing.constAggIndex.next.append head
     st.typing.constAggIndex.heads.set key: h value: id
@@ -63563,6 +63636,10 @@ stampConstAt: function {
     mono: st.typing.curMonoStamp
     st.typing.setNodeConstIn :mono :nid value: cv
     markOperandsTaken :st :ast :mono :nid
+    if cv.kind.aggKind then {
+        st.typing.aggUseNodes.append from: nid
+        st.typing.aggUseMonos.append from: mono
+    }
     if (cv.bigId != 0) or (constPastF64 :st v: cv) when cv.numTid.isZero then {
         st.typing.wideConstNodes.append from: nid
         st.typing.wideConstMonos.append from: mono
@@ -67546,6 +67623,7 @@ typecheck: function {
         checkBareGenericReturns ast: program :st
         reportTypedefClashes ast: program :st
         checkWideConstants ast: program :st
+        markAggsReached ast: program :st
         checkClosedRangeSpans ast: program :st
         stampAliasValues :st ast: program
         stampGenericBounds :st ast: program

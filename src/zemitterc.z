@@ -4012,6 +4012,11 @@ Ctx: class {
     staticListSlot: (MapVR staticlistslotkey V: String)
     # the current class method body's pointer-receiver params, by variable id
     ptrVids: ListVal ztypes.vid
+    # every variable holding a data value: a handle, read through with `->`
+    # (noteStaticVids, once per program)
+    staticVids: IdSet ztypes.vid
+    # every data type, so a variable narrowed to one reads through its handle
+    staticTids: IdSet ztypes.tid
     # the enclosing function hands back a REFERENCE to a user reftype, so its
     # `return` yields an address. Per-function, set by emitFnBody like ptrVids.
     refBorrowRet: bool
@@ -4405,6 +4410,10 @@ dropPtrVid: function {ctx: Ctx vid: ztypes.vid} is {
 # lasts.
 isPtrVid: function {ctx: Ctx.view vid: ztypes.vid} out bool is {
     if vid.isZero then return false
+    if (ctx.staticVids.has item: vid) then return true
+    # narrowed to a data value: the payload is a handle
+    nt: (vtGet xs: ctx.narrowTid :vid).or d: ztypes.tid.zero
+    if nt.isZero.not when (ctx.staticTids.has item: nt) then return true
     if (ctx.ptrVids.contains item: vid).not then return false
     return (vvHas xs: ctx.narrowBox :vid).not
 }
@@ -4482,6 +4491,8 @@ ptrHeldValtype: function {
     if (isPtrVid :ctx :vid).not then return false
     if (pathIsPointer :ast :symtab :ctx :n).not then return false
     vt: chaseAggregateTypedef :symtab :ctx tid: (symtab.reg.variableTypeOf id: vid)
+    # a data value's pointer is the value itself, never loaded
+    if (isStaticHandle :symtab tid: vt) then return false
     return (passesByValue :symtab :ctx tid: vt)
 }
 
@@ -4537,6 +4548,8 @@ pathIsPointer: function {
     ctx: Ctx
     n: astnode.view
 } out bool is {
+    # a data value is a handle, however it is reached
+    if (isStaticHandle :symtab tid: (stampIdOf :symtab nid: (zast.nodeIdOf :n))) then return true
     match (
         n
     ) case atomid then {
@@ -14061,6 +14074,8 @@ cvalText: function {
         if vc.length == 0 then return "".string
         return (stating :facts from: literalFacts text: "((\{vc}_t){ .tag = \{tg} })")
     }
+    # a data value is the address of its static object (emitStaticAggs)
+    if v.kind.aggKind then return (stating :facts from: constFacts text: "(&_zag\{v.aggId})")
     return "".string
 }
 
@@ -20124,6 +20139,11 @@ emitDottedMemberRead: function {
     # is a local to address, so each takes the legs a call base takes, exactly as
     # the parenthesised `(mkList).length` does
     if (baseAtomReadsAsValue :symtab n: (ast.nodes.get i: n.parent)) then bn2 = "".string
+    # a data value's name is the address of its static object
+    if (symtab.typing.nodeConstIn mono: ctx.curThisTid nid: baseAtomNid).kind.aggKind then {
+        bn2F = cfacts
+        bn2 = nodeConstText :ast :symtab :ctx nid: baseAtomNid facts: bn2F
+    }
     # a base with no atom NAME still has a stamped type. Every native leg
     # below sits behind `bn2.length > 0`, so a projection (`(x.y).stringView`)
     # or a call (s.trim, (mk s: s)) skipped the lot and fell through to the
@@ -27360,6 +27380,7 @@ emitMatchClause: function {
         ind3: "\{ind}    "
         didSeed: false
         unptr: false
+        staticArm: false
         # the narrowing an enclosing scope gave the subject, put back when the
         # arm ends: a match on a name an `if` narrowed must not end that `if`'s
         # narrowing for the statements after the match
@@ -27430,6 +27451,16 @@ emitMatchClause: function {
                     dropPtrVid :ctx vid: snameVid
                     unptr = true
                 }
+                # a data payload is a handle: the shadow reads through it
+                pyo: symtab.typing.declChildOfId parentTypeId: vtid nameId: arm
+                match (
+                    pyo
+                ) case some then {
+                    if (isStaticHandle :symtab tid: pyo) then {
+                        ctx.ptrVids.append from: snameVid
+                        staticArm = true
+                    }
+                } case none then null
             }
         }
         dv: false
@@ -27464,6 +27495,7 @@ emitMatchClause: function {
             )
         }
         if unptr then ctx.ptrVids.append from: snameVid
+        if staticArm then dropPtrVid :ctx vid: snameVid
         if dv.not then {
             l5: "\{ind}    break;\n"
             buf.append l5
@@ -32397,6 +32429,8 @@ paramTypeIsPointer: function {
     pnameId: zast.nameid
     pid: ztypes.tid
 } out bool is {
+    # a data value is a pointer already, and is passed as one
+    if (isStaticHandle :symtab tid: pid) then return false
     owns: paramTakesArg :symtab :fid :pnameId
     # The receiver is a reference in BOTH families -- its default is `borrow`,
     # not `take`, so a record method acts on the caller's instance rather than
@@ -32680,14 +32714,24 @@ destroyOperand: function {
     return "&\{nm}"
 }
 
-# valueIsItsPointer -- a value of tid is held as the pointer its destroy frees:
-# a box, and a Set or Map, which live on the heap.
+# valueIsItsPointer -- a value of tid is held as a pointer: a box, and a Set or
+# Map, which live on the heap and are freed through it, and a data value, a
+# handle to static storage that nothing frees.
 valueIsItsPointer: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
     tid: ztypes.tid
 } out bool is {
+    if (isStaticHandle :symtab :tid) then return true
     return (isBoxTid :symtab :tid) or (isHeapPtrCollection :symtab :ctx :tid)
+}
+
+# isStaticHandle -- a value of tid is a data value: a `const` pointer to the
+# static object the compiler built, copied as the pointer and read through it.
+isStaticHandle: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
+    if tid.isZero then return false
+    if (symtab.reg.isStaticOf :tid) then return true
+    return (symtab.reg.isStaticOf tid: (canonTypeId :symtab :tid))
 }
 
 # isBoxTid -- the type is a builtin Box mono (heap pointer), as flagged by the
@@ -33007,6 +33051,12 @@ typeRefC: function {
         ct: scalarCTypeFor :symtab :tid
         if ct.length > 0 then return ct
     }
+    # an untyped number held at run time -- a data value's field -- is an i64
+    # or an f64 there
+    if (
+        (tid == symtab.reg.literalIntTid) or (tid == symtab.reg.literalBitsTid)
+    ) then return "int64_t".string
+    if tid == symtab.reg.literalFloatTid then return "double".string
     cmid: chaseAggregateTypedef :symtab :ctx tid: cid
     if cmid != cid then {
         cmc: ctxCname :ctx tid: cmid
@@ -33051,6 +33101,8 @@ typeRefC: function {
     isUserStruct: ctt.isUserFamily
     if isUserStruct then {
         rc: ctxCnameView :ctx tid: cid
+        # a data value is a handle to its static object
+        if (isStaticHandle :symtab tid: cid) then return "const \{rc}_t*"
         rt: "\{rc}_t"
         return rt
     }
@@ -33626,6 +33678,25 @@ checkNativesResolve: function {
                 )
             } else null
         }
+    }
+}
+
+# noteStaticVids -- every data type into ctx.staticTids, and every variable
+# whose type is one into ctx.staticVids: such a variable holds a handle, so
+# isPtrVid answers for it in every function, as for a pointer receiver.
+noteStaticVids: function {symtab: zenv.ZSymbolTable.view ctx: Ctx} is {
+    if symtab.typing.staticTypesSeen.not then return
+    t: ztypes.tid 1
+    for t < symtab.reg.nextTid loop {
+        if (symtab.reg.isStaticOf tid: t) then ctx.staticTids.add item: t
+        t = t.next
+    }
+    v: ztypes.vid 1
+    for v < symtab.reg.nextVid loop {
+        if (isStaticHandle :symtab tid: (symtab.reg.variableTypeOf id: v)) then (ctx.staticVids.add
+            item: v
+        )
+        v = v.next
     }
 }
 
@@ -35917,6 +35988,8 @@ emitC: function {
         staticListConst: (MapVR staticlistconstkey V: String)
         staticListSlot: (MapVR staticlistslotkey V: String)
         ptrVids: ListVal ztypes.vid
+        staticVids: IdSet ztypes.vid
+        staticTids: IdSet ztypes.tid
         refBorrowRet: false
         aliases: List VidVal
         narrowBox: List VidVal
@@ -36062,6 +36135,7 @@ emitC: function {
     }
     checkLoadedNatives :program :ctx
     fillStaticListElems :program :symtab :ctx
+    noteStaticVids :symtab :ctx
     fillNeeds :program :symtab :ctx
     demandTmplClassNeeds :symtab :ctx
     # A runtime-owned class's methods are demanded by the class being LIVE
@@ -39987,12 +40061,9 @@ buildUserTypeList: function {
                 ).isZero.not
             )
             if own or (userSpecInstance :symtab tid: t) then {
-                emOk: (
-                    (symtab.reg.isNativeOf
-                        tid: t
-                    ).not and
-                    (symtab.reg.isStaticOf tid: t).not
-                )
+                emOk: (symtab.reg.isNativeOf
+                    tid: t
+                ).not
                 if emOk when (typeDemandMet
                     :ctx
                     tid: t
@@ -42502,6 +42573,84 @@ preEmitProtocolArgs: function {
     }
 }
 
+# emitStaticAggs -- each data value run time reaches (constagg.reached), as the
+# static object its handles point at: `static const <type>_t _zag<row> = {
+# ... };`, fields in declared order. A value it holds is emitted before it, as
+# an aggregate is interned after the ones it holds.
+emitStaticAggs: function {
+    ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx buf: String.borrow
+} is {
+    if symtab.typing.staticTypesSeen.not then return
+    i: 1.u64
+    for i < symtab.typing.constAggs.length loop {
+        id: i
+        i = i + 1
+        tid: ztypes.tid
+        start: u64
+        count: u64
+        {
+            g: symtab.typing.constAggs.get i: id
+            if g.reached.not or g.kind.staticData.not then continue
+            tid = g.tid
+            start = g.itemStart
+            count = g.itemCount
+        }
+        fnames: List String
+        fids: ListVal ztypes.tid
+        fidsNm: ListVal zast.nameid
+        recFieldLists :ast :symtab :tid names: fnames ids: fids nameIds: fidsNm
+        rc: ctxCname :ctx :tid
+        buf.append "static const \{rc}_t _zag\{id} = { "
+        k: u64
+        for k < count loop {
+            if k > 0 then buf.append ", "
+            buf.append (staticAggItemText
+                :ast
+                :symtab
+                :ctx
+                tid: (fids.get i: k)
+                v: (symtab.typing.constAggItems.get i: start + k)
+            )
+            k = k + 1
+        }
+        buf.append " };\n"
+    }
+}
+
+# staticStringInit -- a folded string as a static initializer of its view: the
+# bytes themselves, since the pool's `_zcsN` view is no constant expression.
+staticStringInit: function {symtab: zenv.ZSymbolTable.view v: ztypes.cval} out String is {
+    sv: symtab.typing.constStrings.get i: v.strId
+    r: "{ .data = \"".string
+    r.append (cEscape text: sv.stringView)
+    r.append "\", .size = "
+    r.append "\{sv.length}"
+    r.append " }"
+    return r
+}
+
+# staticAggItemText -- one field of a static object as a constant initializer:
+# a string as the bytes themselves (the pool's `_zcsN` view is no constant
+# expression), a data value as its object's address, an arm as its bool or its
+# tag alone, and a number as cvalText spells it at the field's type.
+staticAggItemText: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    tid: ztypes.tid
+    v: ztypes.cval
+} out String is {
+    if v.kind.svalKind then return (staticStringInit :symtab :v)
+    if v.kind.armKind then {
+        av: armValueC :ast :ctx :symtab tid: v.armTid arm: v.armName
+        if av.length > 0 then return av
+        tg: tagConstOf :ast :ctx :symtab tid: v.armTid armId: v.armName
+        return "{ .tag = \{tg} }"
+    }
+    facts: cfacts
+    return (cvalText :ast :symtab :ctx :tid :v :facts)
+}
+
 # emitRecordDefs -- main-unit record structs + meta_create constructors
 # (scalar/record fields).
 emitRecordDefs: function {
@@ -42510,6 +42659,7 @@ emitRecordDefs: function {
     ctx: Ctx
     buf: String.borrow
 } is {
+    emitStaticAggs ast: program :symtab :ctx :buf
     {
         # 3 phases across ALL file units so cross-unit refs resolve: every unit's
         # structs, then every unit's fwd-decls, then every unit's method bodies.
@@ -45841,18 +45991,8 @@ staticListSlotText: function {
     slot: u64
 } out String is {
     v: symtab.typing.staticListSlotConstOf :staticListTid :slot
-    if v.kind.svalKind then {
-        # a static initializer takes the bytes themselves: the pool's `_zcsN`
-        # view is no constant expression, and a read of a string element folds
-        # to its own
-        sv: symtab.typing.constStrings.get i: v.strId
-        r: "{ .data = \"".string
-        r.append (cEscape text: sv.stringView)
-        r.append "\", .size = "
-        r.append "\{sv.length}"
-        r.append " }"
-        return r
-    }
+    # a read of a string element folds to its own static
+    if v.kind.svalKind then return (staticStringInit :symtab :v)
     facts: cfacts
     return (cvalText
         :ast
@@ -46091,9 +46231,11 @@ isClassDef: function {n: astnode.view} out bool is {
     return (objectDefIsKind :n kind: zast.objectkind.generatorDef)
 }
 
-# true when `n` is a record definition.
+# true when `n` is a record definition. A data type is one: its fields are a
+# record's fields and its methods emit through the same path.
 isRecordDef: function {n: astnode.view} out bool is {
-    return (objectDefIsKind :n kind: zast.objectkind.recordDef)
+    if (objectDefIsKind :n kind: zast.objectkind.recordDef) then return true
+    return (objectDefIsKind :n kind: zast.objectkind.dataDef)
 }
 
 # true when `n` is a variant definition.
@@ -46592,6 +46734,19 @@ hashFnDemand: function {
     }
 }
 
+# appendHashSig -- the signature of `tid`'s generated `_hash`, onto `dest`: it
+# takes the value, or for a data type the handle the value is held as.
+appendHashSig: function {
+    symtab: zenv.ZSymbolTable.view ctx: Ctx tid: ztypes.tid dest: String.borrow
+} is {
+    cn: ctxCname :ctx :tid
+    if (isStaticHandle :symtab :tid) then {
+        dest.append "static uint64_t \{cn}_hash(const \{cn}_t* a)"
+    } else {
+        dest.append "static uint64_t \{cn}_hash(\{cn}_t a)"
+    }
+}
+
 # hashDefC -- the definition of `tid`'s generated `_hash`. A record's and a
 # variant's part words are gathered and hashed together, a variant's led by
 # its tag; a str hashes its bytes up to its length; an array of integers hashes
@@ -46603,10 +46758,10 @@ hashDefC: function {
     tid: ztypes.tid
     dest: String.borrow
 } is {
-    cn: ctxCname :ctx :tid
     bytesFn: "z_siphash_bytes".string
     if ctx.fastHash then bytesFn = "z_fasthash_bytes".string
-    dest.append "static uint64_t \{cn}_hash(\{cn}_t a) {\n"
+    appendHashSig :symtab :ctx :tid :dest
+    dest.append " {\n"
     if (ztypecheck.valIsMonoOf st: symtab :tid wk: zast.wellKnown.slot.tyStr) then {
         dest.append "    return \{bytesFn}(a.data, a.len);\n}\n\n"
         return
@@ -46635,6 +46790,8 @@ hashDefC: function {
             nameId: (nameIds.get i: fk)
         )
         fv: "a.\{fknC}"
+        # a data value is hashed through its handle
+        if (isStaticHandle :symtab :tid) then fv = "a->\{fknC}"
         (partHashWords
             :ast
             :symtab
@@ -46786,8 +46943,8 @@ valKeyHashBody: function {
     }
     base: ztypecheck.typedefChaseTid st: symtab tid: key
     if src.written.not when (partIsCScalar :symtab tid: base).not then {
-        bc: ctxCname :ctx tid: base
-        buf.append "static uint64_t \{bc}_hash(\{bc}_t a);\n"
+        appendHashSig :symtab :ctx tid: base dest: buf
+        buf.append ";\n"
     }
     return (hashExprC :ast :symtab :ctx tid: key v: "_key")
 }
@@ -46858,8 +47015,8 @@ emitHashPrototypes: function {
     }
     oi: u64
     for oi < ctx.hashOrder.length loop {
-        cn: ctxCname :ctx tid: (ctx.hashOrder.get i: oi)
-        buf.append "static uint64_t \{cn}_hash(\{cn}_t a);\n"
+        appendHashSig :symtab :ctx tid: (ctx.hashOrder.get i: oi) dest: buf
+        buf.append ";\n"
         oi = oi + 1
     }
     for each ru: symtab.typing.hashUsed loop {
@@ -46955,8 +47112,14 @@ emitEqLate: function {
     cname: StringView
     body: String.view
     buf: String.borrow
+    # the two sides are data values' handles (writeRecordEq)
+    handles: false
 } is {
-    buf.append "static bool \{cname}_eq(\{cname}_t a, \{cname}_t b);\n"
+    if handles then {
+        buf.append "static bool \{cname}_eq(const \{cname}_t* a, const \{cname}_t* b);\n"
+    } else {
+        buf.append "static bool \{cname}_eq(\{cname}_t a, \{cname}_t b);\n"
+    }
     ctx.lateDefs.append body
 }
 
@@ -46980,7 +47143,7 @@ emitRecordEq: function {
     }
     body: String
     writeRecordEq :ast :symtab :ctx :tid :rc :nameIds :ids dest: body
-    emitEqLate :ctx cname: rc.stringView :body :buf
+    emitEqLate :ctx cname: rc.stringView :body :buf handles: (isStaticHandle :symtab :tid)
 }
 
 # writeRecordEq -- emitRecordEq's definition, written to `dest`.
@@ -46996,7 +47159,10 @@ writeRecordEq: function {
     ids: (ListVal ztypes.tid).view
     dest: String.borrow
 } is {
+    # a data value is compared through the handles it is held as
+    handles: isStaticHandle :symtab :tid
     lq: "static bool \{rc}_eq(\{rc}_t a, \{rc}_t b) {\n"
+    if handles then lq = "static bool \{rc}_eq(const \{rc}_t* a, const \{rc}_t* b) {\n"
     dest.append lq
     if nameIds.length == 0 then {
         dest.append "    (void)a; (void)b;\n"
@@ -47017,6 +47183,7 @@ writeRecordEq: function {
             nameId: (nameIds.get i: fk)
         )
         fsel: ".\{fknC}"
+        if handles then fsel = "->\{fknC}"
         (partEqC
             :ast
             :symtab
@@ -47077,28 +47244,31 @@ emitOneRecord: function {
         l2: "} \{rc}_t;\n"
         buf.append l2
     }
-    params: String
-    inits: String
-    (recordCreateArgs
-        :ast
-        :symtab
-        :ctx
-        :tid
-        names: fnames
-        ids: fids
-        nameIds: fidsNm
-        :params
-        :inits
-    )
-    aliasOk: (definedInNonMain :symtab :ctx :tid).not
-    if aliasOk then aliasOk = (typeHasNativeCreate :symtab :tid).not
-    (emitMetaCreate
-        :buf
-        rc: rc.stringView
-        params: params.stringView
-        inits: inits.stringView
-        alias: aliasOk
-    )
+    # a data value is built only by the compiler: no constructor at run time
+    if (isStaticHandle :symtab :tid).not then {
+        params: String
+        inits: String
+        (recordCreateArgs
+            :ast
+            :symtab
+            :ctx
+            :tid
+            names: fnames
+            ids: fids
+            nameIds: fidsNm
+            :params
+            :inits
+        )
+        aliasOk: (definedInNonMain :symtab :ctx :tid).not
+        if aliasOk then aliasOk = (typeHasNativeCreate :symtab :tid).not
+        (emitMetaCreate
+            :buf
+            rc: rc.stringView
+            params: params.stringView
+            inits: inits.stringView
+            alias: aliasOk
+        )
+    }
     if (eqGenerated :ast :symtab :ctx :tid) then (emitRecordEq
         :ast
         :symtab
