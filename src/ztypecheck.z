@@ -36215,17 +36215,27 @@ reportArmKeepsDyingStorage: function {
 # a `match` whose value is bound, the binding pins what the arm that ran hands
 # back (pinArmValue).
 stashArmValuePins: function {st: zenv.ZSymbolTable ast: Ast.view lineId: zast.nodeid} is {
-    if st.typing.pendingPins.length == 0 then return
-    stashValuePins :st valNid: (implicitReturnValue :st :ast :lineId)
+    stashValuePins :st :ast valNid: (implicitReturnValue :st :ast :lineId)
 }
 
 # stashValuePins -- the pending pins kept under the value node `valNid`, with the
-# variable each pin's root names here (stashArmValuePins).
-stashValuePins: function {st: zenv.ZSymbolTable valNid: zast.nodeid} is {
+# variable each pin's root names here (stashArmValuePins). A value that is a
+# local this scope declared hands over the locks it holds: they end with the
+# scope, and what binds the value keeps them instead.
+stashValuePins: function {st: zenv.ZSymbolTable ast: Ast.view valNid: zast.nodeid} is {
+    if valNid.isZero then return
+    bn: bareAtomNameId n: (ast.nodes.get i: valNid)
+    if bn.isZero.not when (st.scopeBindsHere nameId: bn) then {
+        hv: st.lookupVarId nameId: bn
+        match (
+            hv
+        ) case some then {
+            st.heldLockPaths holder: ztypes.zlockholder.var hv dst: st.typing.pendingPins
+        } case none then null
+    }
     n: st.typing.pendingPins.length
     if n == 0 then return
     vid: valNid
-    if vid.isZero then return
     start: st.typing.armValuePins.length
     for each p: st.typing.pendingPins loop {
         rv: (st.lookupVarId nameId: (p.path.get i: 0)).or d: ztypes.vid
@@ -38144,7 +38154,7 @@ checkWith: function {
     # a body that is one expression is the with's one arm: what its value pins is
     # kept for the destination, as an arm line's is, before the binding dies
     if (ast.nodes.get i: withnode.body).doexpr.not then {
-        stashValuePins :st valNid: withnode.body
+        stashValuePins :st :ast valNid: withnode.body
         drainPendingBorrow :st
     }
     st.popTo marker: withMarker
