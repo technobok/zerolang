@@ -36096,15 +36096,22 @@ pinBoundArms: function {st: zenv.ZSymbolTable ast: Ast vt: ztypes.tid nid: zast.
     if (isControlValue :ast :nid).not then return
     leaves: ListVal zast.nodeid
     armValueLeaves :st :ast :nid into: leaves
+    # the binding owns an `outx` result an arm hands back, as it owns one bound
+    # alone, unless another arm hands back a place it can only borrow
+    owned: false
+    place: false
     for each lf: leaves loop {
         from: armLeafLocal :st :ast nid: lf
         if from.isZero.not then {
             pinArmLocal :st :ast leaf: lf :from
+            place = true
         } else {
             pinFieldRead :st :ast :vt nid: lf
-            pinArmValue :st :ast leaf: lf
+            if (pinArmValue :st :ast leaf: lf) then owned = true
+            if (st.typing.armLeafPlaces.has item: lf) then place = true
         }
     }
+    if owned when place.not then st.typing.pendingBorrowOwned = true
 }
 
 # pinArmLocal -- an arm that yields the bare reftype local `from` of an enclosing
@@ -36120,12 +36127,12 @@ pinArmLocal: function {st: zenv.ZSymbolTable ast: Ast.view leaf: zast.nodeid fro
 
 # pinArmValue -- the pins the arm value `leaf` left where its line was walked
 # (stashArmValuePins), pending again for the binding of the `if` or `match`:
-# an element a call hands back pins its source as it does bound alone. A pin
-# rooted at storage the arm declared is refused: it dies with the arm.
-pinArmValue: function {st: zenv.ZSymbolTable ast: Ast.view leaf: zast.nodeid} is {
-    if (st.typing.armLeafPlaces.has item: leaf).not then return
+# an element a call hands back, and an `outx` result, pin their source as they
+# do bound alone. A pin rooted at storage the arm declared is refused: it dies
+# with the arm. True when the value is an `outx` result's, owned by what binds it.
+pinArmValue: function {st: zenv.ZSymbolTable ast: Ast.view leaf: zast.nodeid} out bool is {
     sp: st.typing.armValuePinSpan.get key: leaf
-    if sp.none then return
+    if sp.none then return false
     k: u64
     for k < sp.len loop {
         i: sp.start.u64 + k
@@ -36140,7 +36147,7 @@ pinArmValue: function {st: zenv.ZSymbolTable ast: Ast.view leaf: zast.nodeid} is
                 :leaf
                 :root
             )
-            return
+            return false
         }
     }
     k = 0
@@ -36154,6 +36161,7 @@ pinArmValue: function {st: zenv.ZSymbolTable ast: Ast.view leaf: zast.nodeid} is
             carried: p.carried
         )
     }
+    return sp.owned
 }
 
 # armValuePinRoot -- the name stashed pin `i` is rooted at.
@@ -36163,12 +36171,12 @@ armValuePinRoot: function {st: zenv.ZSymbolTable.view i: u64} out zast.nameid is
 }
 
 # reportArmKeepsDyingStorage -- the arm value `leaf` keeps `root` locked, and
-# `root` is storage the arm declared, which dies as the arm ends.
+# `root` is storage the arm, block or `with` declared, which dies as it ends.
 reportArmKeepsDyingStorage: function {
     st: zenv.ZSymbolTable ast: Ast.view leaf: zast.nodeid root: zast.nameid
 } is {
     dn: lockRootPhrase :st :ast nameId: root
-    m: "Cannot bind this value: it keeps \{dn} locked, which dies with its arm"
+    m: "Cannot bind this value: it keeps \{dn} locked, which dies with the scope that declares it"
     ln: ast.nodes.get i: leaf
     (addError
         :st
@@ -36186,9 +36194,16 @@ reportArmKeepsDyingStorage: function {
 # a `match` whose value is bound, the binding pins what the arm that ran hands
 # back (pinArmValue).
 stashArmValuePins: function {st: zenv.ZSymbolTable ast: Ast.view lineId: zast.nodeid} is {
+    if st.typing.pendingPins.length == 0 then return
+    stashValuePins :st valNid: (implicitReturnValue :st :ast :lineId)
+}
+
+# stashValuePins -- the pending pins kept under the value node `valNid`, with the
+# variable each pin's root names here (stashArmValuePins).
+stashValuePins: function {st: zenv.ZSymbolTable valNid: zast.nodeid} is {
     n: st.typing.pendingPins.length
     if n == 0 then return
-    vid: implicitReturnValue :st :ast :lineId
+    vid: valNid
     if vid.isZero then return
     start: st.typing.armValuePins.length
     for each p: st.typing.pendingPins loop {
@@ -36203,7 +36218,11 @@ stashArmValuePins: function {st: zenv.ZSymbolTable ast: Ast.view lineId: zast.no
     }
     (st.typing.armValuePinSpan.set
         key: vid
-        value: (ztyping.pinspan start: start.u32.orPanic len: n.u32.orPanic)
+        value: (ztyping.pinspan
+            start: start.u32.orPanic
+            len: n.u32.orPanic
+            owned: st.typing.pendingBorrowOwned
+        )
     )
 }
 
@@ -38101,6 +38120,12 @@ checkWith: function {
     if outerStmt == withnode.nid then st.typing.stmtExprNid = withnode.body
     dt: checkValueAt :st :unitDecl :ast nid: withnode.body
     st.typing.stmtExprNid = outerStmt
+    # a body that is one expression is the with's one arm: what its value pins is
+    # kept for the destination, as an arm line's is, before the binding dies
+    if (ast.nodes.get i: withnode.body).doexpr.not then {
+        stashValuePins :st valNid: withnode.body
+        drainPendingBorrow :st
+    }
     st.popTo marker: withMarker
     return dt
 }
@@ -39992,15 +40017,29 @@ armvalue: record {
     untyped: bool
 }
 
-# isControlValue -- the node is an `if` or a `match`, whose value is its arms'.
+# isControlValue -- the node is an `if` or a `match`, whose value is its arms',
+# or a block or a `with`, whose value is its body's: a body is a one-arm value.
 isControlValue: function {ast: Ast.view nid: zast.nodeid} out bool is {
     n: ast.nodes.get i: nid
-    return n.ifexpr or n.caseexpr
+    return n.ifexpr or n.caseexpr or n.doexpr or n.withexpr
 }
 
 # controlArmBlocks -- the bodies of an `if`'s clauses and else, or a `match`'s
-# arms and else, in order.
+# arms and else, in order; a block's or a `with`'s one body.
 controlArmBlocks: function {ast: Ast.view nid: zast.nodeid into: ListVal zast.nodeid} is {
+    n: ast.nodes.get i: nid
+    body: zast.nodeid
+    if n.doexpr then body = (doRefAt :ast :nid).statement
+    if n.withexpr then body = (withRefAt :ast :nid).body
+    if n.doexpr or n.withexpr then {
+        if body.isZero.not then into.append from: body
+        return
+    }
+    branchArmBlocks :ast :nid :into
+}
+
+# branchArmBlocks -- controlArmBlocks for an `if` or a `match`.
+branchArmBlocks: function {ast: Ast.view nid: zast.nodeid into: ListVal zast.nodeid} is {
     n: ast.nodes.get i: nid
     elseId: zast.nodeid
     if n.ifexpr then {
