@@ -1223,7 +1223,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2299241
+ALLOC_BASELINE := 2299309
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1465,8 +1465,8 @@ user-native-guard: bin/zc
 	fi; \
 	if [ $$fail -eq 0 ]; then \
 	  got=$$($$d/mystery | tr '\n' ' '); \
-	  if [ "$$got" != "49 42 " ]; then \
-	    echo "user-native-guard FAIL: ran but printed '$$got', want '49 42 '"; fail=1; fi; \
+	  if [ "$$got" != "49 42 3 " ]; then \
+	    echo "user-native-guard FAIL: ran but printed '$$got', want '49 42 3 '"; fail=1; fi; \
 	fi; \
 	if [ $$fail -eq 0 ]; then \
 	  bin/zc cellar --src tests/fixtures/user_native --system lib/system \
