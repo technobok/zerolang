@@ -12167,6 +12167,26 @@ recordisdecls: record {
     ne: bool
 }
 
+# refuseGenericFnptrField -- a function written in an `is` section is a field:
+# each instance holds one function, of one type, so it declares no type
+# parameters of its own. A generic function is a method, in the `as` section.
+refuseGenericFnptrField: function {st: zenv.ZSymbolTable ast: Ast.view fm: argref} out bool is {
+    if (fnFieldFlaggableName nameId: fm.name).not then return false
+    op: ast.nodes.get i: fm.operation
+    if op.functiondef.not then return false
+    if (hasGenericParam :ast items: op.asItems).not then return false
+    nm: zast.nameTextAt :ast ref: fm.name
+    (addError
+        :st
+        nodeid: fm.nid
+        lineno: fm.lineno
+        colno: fm.colno
+        e: zast.err.genericError
+        msg: "'\{nm}' is written in the `is` section, so it is a field holding one function, and a field cannot declare type parameters: declare it in the `as` section to make it a method"
+    )
+    return true
+}
+
 # attachRecordIsItems -- each item of a record's `is` block: a method body
 # resolves as a member (a flaggable name also marks an fnptr field); anything
 # else is a field.
@@ -12188,7 +12208,7 @@ attachRecordIsItems: function {
         fmId: zast.objIsItemAt :ast nid: rnode.nid i: kFiter
         kFiter = kFiter + 1
         fm: argRefAt :ast nid: fmId
-        if fm.nid.isZero.not then {
+        if fm.nid.isZero.not when (refuseGenericFnptrField :st :ast :fm).not then {
             fname: zast.nameTextCopy :ast ref: fm.name
             mido: (resolveMethodFnLazy
                 :st
@@ -13581,6 +13601,7 @@ resolveClassMethodDecl: function {
     isgen: bool
     fm: argref
 } is {
+    if (refuseGenericFnptrField :st :ast :fm) then return
     if (isFunctionDefOp op: (ast.nodes.get i: fm.operation)) then {
         fname: zast.nameTextCopy :ast ref: fm.name
         prodM4: false
