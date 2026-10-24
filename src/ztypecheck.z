@@ -10841,10 +10841,14 @@ resolveStaticListInto: function {
     slotLabels: ListVal zast.nameid
     slotOrds: ListVal u64
     ordinal: u64
+    # each element's value and label, in order: the list's aggregate row
+    aggItems: ListVal ztypes.cval
+    aggLabels: ListVal zast.nameid
     kE: u64
     for kE < dnode.nelems loop {
         elId: zast.listElemAt :ast nid: dnode.nid i: kE
         kE = kE + 1
+        itemV: ztypes.noConst
         nmRef: zast.nameid
         isNo: false
         opRef: zast.nodeid
@@ -10925,13 +10929,22 @@ resolveStaticListInto: function {
                 :cv
                 :ek
                 fitTid: elemTid
-            ) then {
-                st.typing.setMemberConst parentTypeId: did nameId: memberIdAt value: cv
-                st.typing.setStaticListSlotConst staticListTid: did slot: ordinal value: cv
-            }
+            ) then itemV = cv
         }
+        aggItems.append itemV
+        aggLabels.append nmRef
         ordinal = ordinal + 1
     }
+    aggId: (constInternAgg
+        :st
+        kind: ztyping.constaggkind.staticList
+        tid: did
+        arm: zast.nameid.zero
+        items: aggItems
+        labels: aggLabels
+        at: dnode.nid
+    )
+    st.typing.staticListAggs.set key: did value: aggId
     if slotLabels.length > 0 then {
         sIdx: (st.typing.staticListIndexType.get key: did).or d: ztypes.tid.zero
         if sIdx.isZero then sIdx = stdTid :ast :st wk: zast.wellKnown.slot.tyU64
@@ -10954,11 +10967,6 @@ resolveStaticListInto: function {
             parentTypeId: did
             nameId: zast.wellKnown.slot.wkLength
             childTypeId: litId
-        )
-        (st.typing.setMemberConst
-            parentTypeId: did
-            nameId: zast.wellKnown.slot.wkLength
-            value: ztypes.makeIntConst ordinal.i64.orPanic
         )
     }
     st.reg.setStaticListElemType typeId: did value: elemTid
@@ -11028,7 +11036,6 @@ resolveStaticListSlots: function {
             childTypeId: idxTid
         )
         st.typing.setMemberConst parentTypeId: slotTid nameId: lab value: cv
-        st.typing.setStaticListSlotConst staticListTid: slotTid slot: k value: cv
         k = k + 1
     }
 }
@@ -16473,7 +16480,6 @@ constValueOfDecl: function {
     # the declaration whose folded value is wanted
     declId: ztypes.declid
 } out ztypes.cval is {
-    ast.drop
     if declId.isZero then return ztypes.noConst
     own: st.typing.declParentOf :declId
     if own.isZero then return ztypes.noConst
@@ -16481,6 +16487,10 @@ constValueOfDecl: function {
     if nm.isZero then return ztypes.noConst
     ot: declTypeIdOf :st declId: own
     if ot.isZero then return ztypes.noConst
+    # a list's element is a row of the list's aggregate
+    if (st.typing.staticListAggs.has key: ot) then {
+        return (staticListMemberValue :st :ast staticListTid: ot nameId: nm)
+    }
     k: st.typing.memberConstKey parentTypeId: ot nameId: nm
     r: st.typing.memberConst.get key: k
     match (
@@ -31936,11 +31946,9 @@ refuseStaticListValueMember: function {
     return true
 }
 
-# staticListElemCount -- how many elements list `staticListTid` holds: its `length`
-# constant, a name no element may take.
+# staticListElemCount -- how many elements list `staticListTid` holds.
 staticListElemCount: function {st: zenv.ZSymbolTable.view staticListTid: ztypes.tid} out u64 is {
-    lc: st.typing.memberConstOf parentTypeId: staticListTid nameId: zast.wellKnown.slot.wkLength
-    return lc.ival.u64.orPanic
+    return ((st.typing.staticListLength :staticListTid).or d: 0)
 }
 
 # checkArrayIndexMember -- a compile-time numeric index on an array instance
@@ -61215,7 +61223,30 @@ constStaticListMember: function {
     ).not then {
         return ztypes.noConst
     }
-    return (st.typing.memberConstOf parentTypeId: staticListTid :nameId)
+    return (staticListMemberValue :st :ast :staticListTid :nameId)
+}
+
+# staticListMemberValue -- the value list `staticListTid` holds under the member
+# name `nameId`: a label first (an element may claim `length`), then the count,
+# then an element named by its position (`blk.3`); `none` for any other name.
+staticListMemberValue: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    staticListTid: ztypes.tid
+    nameId: zast.nameid
+} out ztypes.cval is {
+    lp: st.typing.staticListLabelPos :staticListTid label: nameId
+    match (
+        lp
+    ) case some then return (st.typing.staticListItemAt :staticListTid slot: lp) case none then null
+    if nameId == zast.wellKnown.slot.wkLength then {
+        return (ztypes.makeIntConst (staticListElemCount :st :staticListTid).i64.orPanic)
+    }
+    pos: (zast.nameTextAt :ast ref: nameId).stringView.parseU64
+    match (
+        pos
+    ) case ok then return (st.typing.staticListItemAt :staticListTid slot: pos) case err then null
+    return ztypes.noConst
 }
 
 # staticListElemFolds -- a list element of type `elemTid` reads as a constant: a
@@ -62450,6 +62481,7 @@ constOfStaticFields: function {
         :tid
         arm: zast.nameid.zero
         :items
+        labels: ListVal zast.nameid
         :at
     )
     return (ztypes.makeAggConst :id)
@@ -62699,6 +62731,9 @@ constInternAgg: function {
     # a choice value's arm, 0 otherwise
     arm: zast.nameid
     items: (ListVal ztypes.cval).view
+    # a list's labels, row for row with items (0 for an unlabelled element);
+    # empty for a data or choice value
+    labels: (ListVal zast.nameid).view
     # where it is built; an equal value interned earlier keeps its own
     at: zast.nodeid
 } out u32 is {
@@ -62706,14 +62741,17 @@ constInternAgg: function {
     h = (h ^ tid.u64) * 1099511628211
     h = (h ^ arm.u32) * 1099511628211
     for each it: items loop h = (h ^ (constItemHash v: it)) * 1099511628211
+    for each lb: labels loop h = (h ^ lb.u32) * 1099511628211
     head: (st.typing.constAggIndex.heads.get key: h).or d: 0
     r: head
     for r != 0 loop {
-        if (constAggMatches :st row: r :kind :tid :arm :items) then return r
+        if (constAggMatches :st row: r :kind :tid :arm :items :labels) then return r
         r = st.typing.constAggIndex.next.get i: r.u64
     }
     start: st.typing.constAggItems.length.u32.orPanic
     for each it: items loop st.typing.constAggItems.append it
+    lstart: st.typing.constAggLabels.length.u32.orPanic
+    for each lb: labels loop st.typing.constAggLabels.append lb
     id: st.typing.constAggs.length.u32.orPanic
     st.typing.constAggs.append (ztyping.constagg
         :kind
@@ -62721,8 +62759,8 @@ constInternAgg: function {
         :arm
         itemStart: start
         itemCount: items.length.u32.orPanic
-        labelStart: 0
-        labelCount: 0
+        labelStart: lstart
+        labelCount: labels.length.u32.orPanic
         node: at
         reached: false
     )
@@ -62752,13 +62790,22 @@ constAggMatches: function {
     tid: ztypes.tid
     arm: zast.nameid
     items: (ListVal ztypes.cval).view
+    labels: (ListVal zast.nameid).view
 } out bool is {
     g: st.typing.constAggs.get i: row.u64
     if (g.kind != kind) or (g.tid != tid) or (g.arm != arm) then return false
     if g.itemCount.u64 != items.length then return false
+    if g.labelCount.u64 != labels.length then return false
     i: u64
     for i < items.length loop {
         if (st.typing.constAggItems.get i: g.itemStart.u64 + i) != (items.get :i) then return false
+        i = i + 1
+    }
+    i = 0
+    for i < labels.length loop {
+        if (
+            (st.typing.constAggLabels.get i: g.labelStart.u64 + i) != (labels.get :i)
+        ) then return false
         i = i + 1
     }
     return true
@@ -62871,8 +62918,7 @@ constOfStaticListIndex: function {
     ) then return ztypes.noConst
     kv: evalConstNode :st :scope :ast :unitDecl nid: opId
     if kv.kind.ivalKind.not then return ztypes.noConst
-    count: (st.typing.memberConstOf parentTypeId: staticListTid nameId: zast.wellKnown.slot.wkLength
-    ).ival
+    count: (staticListElemCount :st :staticListTid).i64.orPanic
     if (kv.bigId != 0) or (kv.ival < 0) or (kv.ival >= count) then {
         rm: "constant index \{kv.ival} is outside the list (length \{count})"
         if kv.bigId != 0 then rm = "constant index is outside the list (length \{count})"
@@ -62887,7 +62933,7 @@ constOfStaticListIndex: function {
         )
         return ztypes.noConst
     }
-    ev: st.typing.staticListSlotConstOf :staticListTid slot: kv.ival.u64.orPanic
+    ev: st.typing.staticListItemAt :staticListTid slot: kv.ival.u64.orPanic
     et: st.reg.staticListElemTypeOf tid: staticListTid
     if (staticListElemFolds :ast :st elemTid: et).not then return ztypes.noConst
     return ev

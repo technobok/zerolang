@@ -304,12 +304,6 @@ constslot: record {
     name: zast.nameid
 }
 
-# staticlistslot -- one element of a list, by position: the block's type and
-# the element's slot, counted from 0 in the order the elements are written.
-staticlistslot: record {
-    owner: ztypes.tid
-    slot: u64
-}
 
 # constaggkind -- what an aggregate constant is
 constaggkind: variant {
@@ -1164,9 +1158,9 @@ ZTyping: class {
     # Constants are not written in dependency order, so the evaluator pulls
     # rather than pushes and this is its cycle guard.
     constEvalState: (MapVV constslot v: u8)
-    # each list's element values by slot, beside memberConst's by name:
-    # a constant `.get K` reads its element by position
-    staticListSlotConst: (MapVV staticlistslot v: ztypes.cval)
+    # each list's elements and labels, as one aggregate row (constAggs): an
+    # element by position (`.get K`) or by label, and the count
+    staticListAggs: (IdMapV ztypes.tid v: u32)
     # each list's INDEX type, when its `out` names one (`out (staticlist StringView i:
     # nameid)`): the type of its `slot` reads and of its value's `get`
     staticListIndexType: (IdMapV ztypes.tid v: ztypes.tid)
@@ -2723,21 +2717,51 @@ ZTyping: class {
         return ((t.foldedBranch.get key: nid).or d: (foldedbranch known: false stmt: zast.nodeid))
     }
 
-    # setStaticListSlotConst -- record the VALUE of element `slot` of list
-    # `staticListTid`.
-    setStaticListSlotConst: function {
-        :this staticListTid: ztypes.tid slot: u64 value: ztypes.cval
-    } is {
-        this.staticListSlotConst.set key: (staticlistslot owner: staticListTid :slot) :value
-    }
-
-    # staticListSlotConstOf -- that value, or `none` when the element has none.
-    staticListSlotConstOf: function {
+    # staticListItemAt -- the value of element `slot` of list `staticListTid`, or
+    # `none` when it has none (an element that did not fold, a slot past the end).
+    staticListItemAt: function {
         t: this.view staticListTid: ztypes.tid slot: u64
     } out ztypes.cval is {
-        return ((t.staticListSlotConst.get key: (staticlistslot owner: staticListTid :slot)).or
-            d: ztypes.noConst
-        )
+        id: (t.staticListAggs.get key: staticListTid).or d: 0
+        if id == 0 then return ztypes.noConst
+        g: t.constAggs.get i: id.u64
+        if slot >= g.itemCount then return ztypes.noConst
+        return (t.constAggItems.get i: g.itemStart.u64 + slot)
+    }
+
+    # staticListLabelPos -- the position of the element labelled `label`, none
+    # when no element has that label.
+    staticListLabelPos: function {
+        t: this.view staticListTid: ztypes.tid label: zast.nameid
+    } out optionval u64 is {
+        id: (t.staticListAggs.get key: staticListTid).or d: 0
+        if (id == 0) or label.isZero then return (optionval.none u64)
+        g: t.constAggs.get i: id.u64
+        k: u64
+        for k < g.labelCount loop {
+            if (t.constAggLabels.get i: g.labelStart.u64 + k) == label then return (optionval.some k
+            )
+            k = k + 1
+        }
+        return (optionval.none u64)
+    }
+
+    # staticListLabelItem -- the value of the element labelled `label`, or `none`.
+    staticListLabelItem: function {
+        t: this.view staticListTid: ztypes.tid label: zast.nameid
+    } out ztypes.cval is {
+        po: t.staticListLabelPos :staticListTid :label
+        match (
+            po
+        ) case some then return (t.staticListItemAt :staticListTid slot: po) case none then null
+        return ztypes.noConst
+    }
+
+    # staticListLength -- the list's element count, none before it resolved.
+    staticListLength: function {t: this.view staticListTid: ztypes.tid} out optionval u64 is {
+        id: (t.staticListAggs.get key: staticListTid).or d: 0
+        if id == 0 then return (optionval.none u64)
+        return (optionval.some (t.constAggs.get i: id.u64).itemCount.u64)
     }
 
     # memberConstOf -- that value, or `none` when the member has none.
@@ -2968,7 +2992,7 @@ sumPairArmValueIs: function {
     want: i64
 } out bool is {
     if armName.isZero then return false
-    c: ty.memberConstOf parentTypeId: staticListTid nameId: armName
+    c: ty.staticListLabelItem :staticListTid label: armName
     # a value outside i64 is never one an i64 names
     if c.kind.ivalKind then return (c.bigId == 0) and (c.ival == want)
     return false
@@ -3334,7 +3358,7 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         nodeConst: (IdMapV zast.nodeid v: ztypes.cval)
         memberConst: (MapVV constslot v: ztypes.cval)
         constEvalState: (MapVV constslot v: u8)
-        staticListSlotConst: (MapVV staticlistslot v: ztypes.cval)
+        staticListAggs: (IdMapV ztypes.tid v: u32)
         staticListIndexType: (IdMapV ztypes.tid v: ztypes.tid)
         staticListSlotTypes: IdSet ztypes.tid
         staticLiteralTyperefs: IdSet zast.nodeid
