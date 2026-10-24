@@ -19988,6 +19988,23 @@ orPanicExprC: function {
     return (stating :facts from: callFacts text: (orderWrap prefix: pre call: body))
 }
 
+# textLiteralRead -- `"abc".text`: the literal itself, since text is laid out
+# as its view; "" for any other `.text` read.
+textLiteralRead: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: zast.dottedpathrow.view
+    # the member read
+    mnId: zast.nameid
+    facts: cfacts.borrow
+} out String is {
+    if mnId != zast.wellKnown.slot.tyText then return String
+    if (stampIdOf :symtab nid: n.nodeid) != ctx.textTid then return String
+    tli: litIndexOf :ctx nid: n.parent
+    if tli == 0 then return String
+    return (stating :facts from: pathFacts text: (litView :ctx li: tli))
+}
+
 # emitDottedRead -- the C text of a dotted PATH read (the call form is
 # emitDottedCall). The legs run in the order the checker's stamps settle them:
 # the built-in `.orPanic`, the tagged-type stamps, then -- unless the member is
@@ -20007,6 +20024,8 @@ emitDottedRead: function {
     # is handled by emitResultCombinator in the call dispatch instead.
     # the member is asked by ID: the legs below lend ast, and an id is a scalar
     dcMnId: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
+    tlr: textLiteralRead :symtab :ctx :n mnId: dcMnId :facts
+    if tlr.length > 0 then return tlr
     if dcMnId == zast.wellKnown.slot.wkOrPanic then {
         pStamp: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.parent))
         pMono: chaseAggregateTypedef :symtab :ctx tid: pStamp

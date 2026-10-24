@@ -10730,6 +10730,11 @@ resolveStaticListInto: function {
             if typed when cv.kind.none.not when (isNumericTid :st tid: elemTid) then {
                 cv = ztypes.typedConst c: cv numTid: elemTid
             }
+            # a typed string list's element is a TYPED constant too: it reads
+            # as its element type, and adapts to no other (adaptsToText)
+            if typed when cv.kind.svalKind when (isStaticStringTid :ast :st tid: elemTid) then {
+                cv = ztypes.typedConst c: cv numTid: elemTid
+            }
             if kindsOk when cv.kind.none.not when (staticListElemFits
                 :ast
                 :st
@@ -33268,6 +33273,24 @@ literalConvTarget: function {
     return (optionval.none ztypes.tid)
 }
 
+# checkTextLiteralCast -- `"abc".text`: a plain string literal made text, as
+# `5.u8` makes an integer literal u8. Only a literal: a runtime StringView has no
+# `text` (its bytes may be a String's).
+checkTextLiteralCast: function {st: zenv.ZSymbolTable ast: Ast dp: dpref} out callleg is {
+    unhandled: callleg handled: false tid: ztypes.tid
+    if (
+        (atomNameId :ast n: (ast.nodes.get i: dp.child)) != zast.wellKnown.slot.tyText
+    ) then return unhandled
+    bn: ast.nodes.get i: dp.parent
+    if bn.atomstring.not then return unhandled
+    if (stringLitIsLiteralText :ast parts: bn.stringparts).not then return unhandled
+    txT: stdTid :ast :st wk: zast.wellKnown.slot.tyText
+    if txT.isZero then return unhandled
+    stampGate :st nid: dp.parent tid: txT
+    stampGate :st nid: dp.nid tid: txT
+    return (callleg handled: true tid: txT)
+}
+
 # checkNumericSuffixCast -- `1.u8` / `(2.5).f32`: when the child names a non-
 # function type and the parent is a numeric literal, the path is a typed-literal
 # cast -- the parent atom coerces to the suffix type and the path carries it.
@@ -33521,6 +33544,8 @@ checkDotted: function {
 } out ztypes.tid is {
     nsc: checkNumericSuffixCast :st :ast :dp
     if nsc.handled then return nsc.tid
+    tlc: checkTextLiteralCast :st :ast :dp
+    if tlc.handled then return tlc.tid
     if (refuseMetaMember
         :st
         :ast
@@ -36780,7 +36805,13 @@ checkReassignedType: function {
             )
             return
         }
-        if (typesCompatible :ast :st a: rvt b: chkT).not then {
+        if (typesCompatible :ast :st a: rvt b: chkT).not when (adaptsToText
+            :st
+            :ast
+            dstTid: chkT
+            valueNid: rasgn.value
+            exprNid: rasgn.value
+        ).not then {
             skipR: false
             lttR: st.reg.typetypeOf typeId: chkT
             if lttR == ztypes.ztypetype.protocolType then skipR = true
@@ -45001,6 +45032,65 @@ recordHelperScalarTarget: function {
 }
 
 
+# adaptsToText -- an untyped string constant lands in a `text` destination as
+# text, as an untyped number lands in a u8 one: a plain literal (`"abc"`), an
+# untyped unit constant read by name, a folded read of an untyped list's
+# element. The value is stamped text there. A runtime value -- a local, a
+# parameter, a result, a typed constant -- never converts, and a literal is a
+# StringView wherever nothing asks for text (D1.9).
+adaptsToText: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    dstTid: ztypes.tid
+    # the value as the destination sees it (an argument's own node)
+    valueNid: zast.nodeid
+    # the value expression itself
+    exprNid: zast.nodeid
+} out bool is {
+    if dstTid.isZero then return false
+    if dstTid != (stdTid :ast :st wk: zast.wellKnown.slot.tyText) then return false
+    # an `if` or a `match` lands each arm's value: it adapts when every one does
+    if (isControlValue :ast nid: exprNid) then {
+        leaves: ListVal zast.nodeid
+        armValueLeaves :st :ast nid: exprNid into: leaves
+        if leaves.length == 0 then return false
+        for each lf: leaves loop {
+            if (adaptsToText :st :ast :dstTid valueNid: lf exprNid: lf).not then return false
+        }
+    } else if (isUntypedStringConst :st :ast :valueNid :exprNid).not then {
+        return false
+    }
+    stampGate :st nid: exprNid tid: dstTid
+    return true
+}
+
+# isUntypedStringConst -- the value is an untyped string constant: a plain
+# literal, or a folded constant whose string carries no type (adaptsToText).
+isUntypedStringConst: function {
+    st: zenv.ZSymbolTable ast: Ast valueNid: zast.nodeid exprNid: zast.nodeid
+} out bool is {
+    en: ast.nodes.get i: exprNid
+    if en.atomstring then return (stringLitIsLiteralText :ast parts: en.stringparts)
+    cf: st.typing.nodeConstIn mono: st.typing.curMonoStamp nid: valueNid
+    if cf.kind.svalKind.not then cf = (st.typing.nodeConstIn
+        mono: st.typing.curMonoStamp
+        nid: exprNid
+    )
+    return cf.kind.svalKind and cf.numTid.isZero
+}
+
+# stringLitIsLiteralText -- every part of a string literal is literal text: no
+# interpolation, which builds a String at run time.
+stringLitIsLiteralText: function {ast: Ast.view parts: zast.kidspan} out bool is {
+    k: u64
+    for k < parts.count loop {
+        pn: ast.nodes.get i: (zast.kidAt kids: ast.kids span: parts i: k)
+        k = k + 1
+        if pn.stringchunk.not then return false
+    }
+    return true
+}
+
 # checkUntypedConstFits -- an untyped folded constant at `valueNid` is settled by
 # its value, which must fit the destination; true when the value was one.
 checkUntypedConstFits: function {
@@ -45094,6 +45184,7 @@ checkArgTypeMismatch: function {
         )
     }
     if (typesCompatible :ast :st a: vt b: ptid) then return
+    if (adaptsToText :st :ast dstTid: ptid valueNid: arg.nid exprNid: arg.operation) then return
     (noteSpecStandIn
         :st
         value: vt
@@ -47169,6 +47260,7 @@ checkReturnTypeMatch: function {
         return
     }
     if (typesCompatible :ast :st a: argT b: expR) then return
+    if (adaptsToText :st :ast dstTid: expR valueNid: arg.nid exprNid: arg.operation) then return
     # a value returned as a protocol is judged with every other stand-in, as
     # an owning place: the caller owns what a function returns
     retIsProto: (st.reg.typetypeOf typeId: expR) == ztypes.ztypetype.protocolType
