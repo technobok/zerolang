@@ -444,6 +444,13 @@ checkBareTypeValueAt: function {
     # a collection or iterator instantiation constructs its empty value through
     # the runtime, which declares no fields for the check below to ask about
     if (monoOfNativeTemplate :st :tid) then {
+        if (refuseZerolessArray
+            :st
+            :ast
+            tplId: (st.reg.genericOriginOf :tid)
+            elemTid: (arrayElemTid :st :tid)
+            at: nodeid
+        ) then return
         icn: tid
         st.typing.implicitCreate.set key: nodeid value: icn
         return
@@ -3967,6 +3974,122 @@ refuseTypedefTypePositionFrom: function {
     }
 }
 
+# refuseZerolessArray -- an array is filled with its element's zero value, and
+# a data value has none (lacksZero): `array row to: 4` is refused, with a
+# ListVal or an optionval as the remedy. True when it reported.
+refuseZerolessArray: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    tplId: ztypes.tid
+    elemTid: ztypes.tid
+    at: zast.nodeid
+} out bool is {
+    if st.typing.staticTypesSeen.not then return false
+    if tplId != (stdTidRo :ast :st wk: zast.wellKnown.slot.tyArray) then return false
+    seen: ListVal ztypes.tid
+    if (lacksZero :st tid: elemTid :seen).not then return false
+    tn: specWrittenName :st :ast tid: elemTid
+    n: ast.nodes.get i: at
+    (addErrorH
+        :st
+        nodeid: at
+        lineno: (nodeLine :n)
+        colno: (nodeCol :n)
+        e: zast.err.typeError
+        msg: "an array of '\{tn}' is refused: an array starts as zero values, and a data value has no zero"
+        note: "".string
+        hint: "hold the values in a 'ListVal', or make the element 'optionval \{tn}'"
+        width: 1
+    )
+    return true
+}
+
+# lacksZero -- the type has no zero value: a data type (a handle to a value the
+# compiler built), or a valtype whose zero holds one -- a record with such a
+# field, a variant whose first arm (its zero) carries one, an array of one, a
+# typedef over one.
+lacksZero: function {
+    st: zenv.ZSymbolTable.view tid: ztypes.tid seen: ListVal ztypes.tid
+} out bool is {
+    if tid.isZero or (seen.contains item: tid) then return false
+    seen.append tid
+    if (st.reg.isStaticOf :tid) then return true
+    if (st.reg.typetypeOf typeId: tid) == ztypes.ztypetype.variantType then {
+        od: st.typing.declIdOfType typeId: tid
+        if od.isZero or ((st.typing.declChildSlots declId: od) == 0) then return false
+        a0: st.typing.declChildAt declId: od index: 0
+        if a0.isZero then return false
+        return (lacksZero :st tid: (st.typing.decls.get i: a0).typeId :seen)
+    }
+    parts: ListVal ztypes.tid
+    valPartTids :st :tid :parts
+    for each pt: parts loop {
+        if (lacksZero :st tid: pt :seen) then return true
+    }
+    return false
+}
+
+# refuseStaticMarker -- a data value is copied by binding it and is never
+# moved, borrowed or freed, so no marker applies to it: `.take`, `.borrow`,
+# `.view`, `.hold` and `.copy` are refused. True when it reported.
+refuseStaticMarker: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    dp: dpref
+    bt: ztypes.tid
+    cnId: zast.nameid
+} out bool is {
+    if (st.reg.isStaticOf tid: bt).not then return false
+    mk: zast.markerKindOfName id: cnId
+    isMarker: (
+        mk.takeMarker or
+        mk.borrowMarker or
+        mk.viewMarker or
+        mk.holdMarker or
+        (cnId == zast.wellKnown.slot.wkCopy)
+    )
+    if isMarker.not then return false
+    mn: zast.nameTextCopy :ast ref: cnId
+    (addError
+        :st
+        nodeid: dp.nid
+        lineno: dp.lineno
+        colno: dp.colno
+        e: zast.err.typeError
+        msg: "'.\{mn}' does not apply to a data value: it is copied by binding it, and is never moved, borrowed or freed"
+    )
+    return true
+}
+
+# refuseStaticWrite -- a data value never changes, so a write to a field of
+# one, at any depth of the target's path, is refused. Rebinding a name that
+# holds a data value is no write to it. True when it reported.
+refuseStaticWrite: function {st: zenv.ZSymbolTable ast: Ast target: zast.nodeid} out bool is {
+    cur: target
+    for true loop {
+        parentId: zast.nodeid
+        {
+            n: ast.nodes.get i: cur
+            if n.dottedpath then parentId = n.parent
+        }
+        if parentId.isZero then return false
+        if (st.reg.isStaticOf tid: (walkTypeOf :st nid: parentId)) then {
+            tn: ast.nodes.get i: target
+            (addError
+                :st
+                nodeid: target
+                lineno: (nodeLine n: tn)
+                colno: (nodeCol n: tn)
+                e: zast.err.typeError
+                msg: "a data value cannot change: this writes a field of one".string
+            )
+            return true
+        }
+        cur = parentId
+    }
+    return false
+}
+
 # refuseNonGenericApplication -- a type application whose head is no generic
 # template names nothing: an instance of a type with no parameters is not a
 # type. True, with the error laid at the head, when `tplId` is not generic;
@@ -4311,6 +4434,7 @@ completeApplication: function {
     if (fillApplicationDefaults :st :ast :tplId :typeSubs valSubs: valSubsR :sfx :firstA).not then {
         return false
     }
+    if (refuseZerolessArray :st :ast :tplId elemTid: firstA :at) then return false
     if (anyUnknownParamLabel :st :ast :arguments :tplId) then return true
     return (refuseIncompleteApplication :st :ast :tplId :typeSubs :valSubsR :firstA :at).not
 }
@@ -33748,6 +33872,7 @@ checkDottedOn: function {
         lineno: dp.lineno
         colno: dp.colno
     ) then return ztypes.tid.zero
+    if (refuseStaticMarker :st :ast :dp :bt :cnId) then return ztypes.tid.zero
     noStorage: refuseMarkerWithoutStorage :st :unitDecl :ast :dp :bt :cnId
     if noStorage then return ztypes.tid.zero
     mkm: checkMarkerMember :st :ast :dp :bt :cnId
@@ -37156,6 +37281,10 @@ checkReassignment: function {
     addressable: isAddressableTarget :ast :st nid: rasgn.topath
     if st.typing.errors.length == errL0 when addressable.not then {
         reportNotAddressable :st :ast target: rasgn.topath write: "reassignment"
+        checkMovedValueAt :st :unitDecl :ast nid: rasgn.value owning: false
+        return
+    }
+    if (refuseStaticWrite :st :ast target: rasgn.topath) then {
         checkMovedValueAt :st :unitDecl :ast nid: rasgn.value owning: false
         return
     }
