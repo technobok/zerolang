@@ -1342,6 +1342,7 @@ indexDeclObjInner: function {
     objNodeId: zast.nodeid
 } is {
     ob: objRefAt :ast nid: objNodeId
+    if ob.kind.dataDef then st.typing.staticTypesSeen = true
     if ob.nid.isZero.not then {
         isArm: ob.kind.variantDef or ob.kind.unionDef
         kIit: u64
@@ -8397,6 +8398,14 @@ markerApplicationTarget: function {
     opNid: zast.nodeid
     ownerDecl: ztypes.declid
 } out optionval ztypes.tid is {
+    # only a generic template is applied: a head naming any other type is a
+    # construction (`origin: (Pt x: 0)`), which reportAsConstruction refuses
+    hc: callRefAt :ast nid: opNid
+    if hc.callable.isZero.not then {
+        htpl: typeApplicationTemplate :st :scope :ast :unitDecl callableNid: hc.callable
+        if htpl.isZero.not when (st.reg.isGenericOf tid: htpl
+        ).not then return (optionval.none ztypes.tid)
+    }
     r: (resolveMonoRefInline
         :st
         :ast
@@ -8550,6 +8559,7 @@ attachAsConstant: function {
     if folded.kind.none then {
         reported: reportAsMemberNotConstant :st :ast :parentId :item
         if reported.not then reported = reportUnknownAsCallHead :st :ast :parentId :item
+        if reported.not then reported = reportAsConstruction :st :ast :parentId :item
         # attachMarkers classifies a bare name or a path, which may name a
         # conformance or a type
         if reported.not when (valueMayNameType :st :ast :parentId node: item.operation) then return
@@ -8588,6 +8598,47 @@ reportUnknownAsCallHead: function {
         note: "".string
         hint: "".string
         width: unknown.length.u32.orPanic
+    )
+    return true
+}
+
+# reportAsConstruction -- an `as` item whose value constructs a type that is not
+# generic (`origin: (Pt x: 0)`): no type application, and no constant either,
+# since only a data value is built outside a function. True when it reported.
+reportAsConstruction: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    parentId: ztypes.tid
+    item: argref
+} out bool is {
+    headNid: zast.nodeid
+    {
+        vn: ast.nodes.get i: item.operation
+        if vn.call.not then return false
+        headNid = vn.callable
+    }
+    td: declOfTypeId :st tid: parentId
+    if td.isZero then return false
+    htpl: (typeApplicationTemplate
+        :st
+        scope: td
+        :ast
+        unitDecl: (unitRootOfDecl :st declId: td)
+        callableNid: headNid
+    )
+    if htpl.isZero or (st.reg.isGenericOf tid: htpl) then return false
+    if (st.reg.typetypeOf typeId: htpl).isUserFamily.not then return false
+    nm: zast.nameTextCopy :ast ref: item.name
+    (addErrorH
+        :st
+        nodeid: item.nid
+        lineno: item.lineno
+        colno: item.colno
+        e: zast.err.typeError
+        msg: "a type constant takes a constant value, not a construction".string
+        note: "".string
+        hint: "construct it inside a function, or make '\{nm}' a function that returns the value"
+        width: nm.length.u32.orPanic
     )
     return true
 }
@@ -32529,7 +32580,11 @@ aliasValueHint: function {
     tn: specWrittenName :st :ast tid: bt
     atx: zast.nameTextAt :ast ref: an
     if atx == tn then return "".string
-    return "'\{atx}' names the type '\{tn}', not a value: on a unit-level line, a label after the value begins a definition of its own. Build a '\{tn}' value inside a function"
+    pre: "'\{atx}' names the type '\{tn}', not a value: on a unit-level line, a label after the value begins a definition of its own."
+    # a data value is built where it is declared, in parentheses
+    if (st.reg.isStaticOf tid: bt
+    ) then return "\{pre} Write the value in parentheses: `\{atx}: (\{tn} field: value)`"
+    return "\{pre} Build a '\{tn}' value inside a function"
 }
 
 # checkTypeReadSuppliesReceiver -- a method read through the TYPE in value position
@@ -49868,6 +49923,23 @@ refuseNameConstruction: function {
     tt: st.reg.typetypeOf typeId: tid
     if tt.isUserFamily.not then return false
     bare: spelling.bareName
+    # a data value is built only in a static position (constOfStaticFields)
+    if (st.reg.isStaticOf :tid) then {
+        tn: specWrittenName :st :ast :tid
+        (nameCtorError
+            :ast
+            :st
+            :nodeid
+            :lineno
+            :colno
+            :width
+            :tid
+            :bare
+            reason: "a data value is built only at unit level, as a type constant, or inside another data value"
+            hint: "build it at unit level, `name: (\{tn} field: value)`, and read it here"
+        )
+        return true
+    }
     # no argument: nothing to bind a view to or to project
     zeroArg: bare or spelling.createBare
     if zeroArg when (refuseBorrowedBareType :ast :st :nodeid :lineno :colno :width :tid :bare
@@ -62021,7 +62093,380 @@ constOfCall: function {
     if sm.kind.none.not then return sm
     dx: constOfStaticListIndex :st :scope :ast :unitDecl :nid :callableId args: argIds :ln :co
     if dx.kind.none.not then return dx
+    sct: staticCtorHead :st :scope :ast :unitDecl :callableId
+    if sct.isZero.not then return (constOfStaticFields
+        :st
+        :scope
+        :ast
+        :unitDecl
+        tid: sct
+        args: argIds
+        at: nid
+        :ln
+        :co
+    )
     return (constOfErrorCall :st :scope :ast :unitDecl :nid :callableId args: argIds :ln :co)
+}
+
+# staticCtorHead -- the data type a call's head constructs: `row`,
+# `row.create`, or either through a unit (`tbl.row`); 0 when the head names
+# no data type.
+staticCtorHead: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    callableId: zast.nodeid
+} out ztypes.tid is {
+    if st.typing.staticTypesSeen.not then return ztypes.tid.zero
+    headId: callableId
+    {
+        cn: ast.nodes.get i: callableId
+        if cn.dottedpath when (
+            (atomNameId :ast n: (ast.nodes.get i: cn.child)) == zast.wellKnown.slot.wkCreate
+        ) then headId = cn.parent
+    }
+    t: ztypes.tid
+    hn: atomNameId :ast n: (ast.nodes.get i: headId)
+    if hn.isZero.not then t = typeNamedFrom :st :scope :ast lookupUnit: unitDecl typeNameId: hn
+    # a path is a type only through a unit (`tbl.row`): a member read on a value
+    # (`x.isZero`), which the fold meets far more often, is never resolved here
+    if hn.isZero when (ast.nodes.get i: headId).dottedpath then {
+        rn: atomNameId :ast n: (ast.nodes.get i: (dpRefAt :ast nid: headId).parent)
+        if rn.isZero.not when (nameDenotesUnit :st :scope nameId: rn) then {
+            t = resolveDottedArgTid :st :scope :ast nid: headId
+        }
+    }
+    if (st.reg.isStaticOf tid: t) then return t
+    return ztypes.tid.zero
+}
+
+# constOfStaticFields -- a data value built in a static position, `(row key:
+# "a")` or `row.create`: each field, in declared order, is the argument that
+# names it (by label, or the one unlabelled argument the first field) or else
+# the field's default, fitted to
+# the field's type (constFitToField). An unknown argument and a missing field
+# are reported in a body construction's words. noConst when any field has no
+# value; else the interned aggregate.
+constOfStaticFields: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    tid: ztypes.tid
+    args: (ListVal zast.nodeid).view
+    # where a missing field is reported: the construction
+    at: zast.nodeid
+    ln: u32
+    co: u32
+} out ztypes.cval is {
+    forceAllMembers :st :ast :tid
+    ftids: ListVal ztypes.tid
+    fnames: ListVal zast.nameid
+    dataFieldIds :st :tid ids: ftids nameIds: fnames
+    argOf: ListVal zast.nodeid
+    ok: matchStaticArgs :st :ast :tid :args :fnames :argOf
+    items: ListVal ztypes.cval
+    fi: u64
+    for fi < fnames.length loop {
+        v: (staticFieldValue
+            :st
+            :scope
+            :ast
+            :unitDecl
+            ownerTid: tid
+            ftid: (ftids.get i: fi)
+            name: (fnames.get i: fi)
+            argNid: (argOf.get i: fi)
+            :at
+            :ln
+            :co
+        )
+        if v.kind.none then ok = false
+        items.append v
+        fi = fi + 1
+    }
+    if ok.not then return ztypes.noConst
+    id: (constInternAgg
+        :st
+        kind: ztyping.constaggkind.staticData
+        :tid
+        arm: zast.nameid.zero
+        :items
+    )
+    return (ztypes.makeAggConst :id)
+}
+
+# matchStaticArgs -- the argument each field of a data construction is given,
+# row for row with `fnames` in `argOf` (0 for none): by label, or the one
+# unlabelled argument the first field. False when a label names no field, which
+# is reported.
+matchStaticArgs: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    tid: ztypes.tid
+    args: (ListVal zast.nodeid).view
+    fnames: (ListVal zast.nameid).view
+    argOf: ListVal zast.nodeid
+} out bool is {
+    for argOf.length < fnames.length loop argOf.append zast.nodeid.zero
+    ok: true
+    pos: u64
+    for each aId: args loop {
+        a: argRefAt :ast nid: aId
+        slot: fnames.length
+        if a.name.isZero then {
+            slot = pos
+            pos = pos + 1
+        }
+        fi: u64
+        for fi < fnames.length loop {
+            if a.name.isZero.not when (fnames.get i: fi) == a.name then slot = fi
+            fi = fi + 1
+        }
+        if slot < fnames.length then argOf.set i: slot val: aId
+        if slot == fnames.length then {
+            reportUnknownArgument :st :ast ownerTid: tid label: a.name arg: a
+            ok = false
+        }
+    }
+    return ok
+}
+
+# staticFieldValue -- one field of a data construction: its argument at
+# `argNid` folded, else its default, fitted to the field's type
+# (constFitToField). noConst, reported, when it has neither or does not fit.
+staticFieldValue: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    ownerTid: ztypes.tid
+    ftid: ztypes.tid
+    name: zast.nameid
+    # the argument naming the field, 0 for none
+    argNid: zast.nodeid
+    # where a missing field is reported: the construction
+    at: zast.nodeid
+    ln: u32
+    co: u32
+} out ztypes.cval is {
+    if argNid.isZero.not then {
+        a: argRefAt :ast nid: argNid
+        av: evalConstNode :st :scope :ast :unitDecl nid: a.operation
+        return (constFitToField
+            :st
+            :scope
+            :ast
+            v: av
+            :ftid
+            :name
+            at: a.nid
+            ln: a.lineno
+            co: a.colno
+        )
+    }
+    dv: constOfFieldDefault :st :ast :ownerTid :ftid :name
+    if dv.kind.none.not then return (constFitToField :st :scope :ast v: dv :ftid :name :at :ln :co)
+    fn: zast.nameTextCopy :ast ref: name
+    tnm: specWrittenName :st :ast tid: ftid
+    (addError
+        :st
+        nodeid: at
+        lineno: ln
+        colno: co
+        e: zast.err.callError
+        msg: "missing required argument '\{fn}' (type: \{tnm})"
+    )
+    return ztypes.noConst
+}
+
+# constOfFieldDefault -- the value field `name` of `ownerTid` defaults to, as a
+# constant: a literal folded from its node, a named or computed default from
+# its declaration's fold, an arm as that arm. noConst when it has none.
+constOfFieldDefault: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    ownerTid: ztypes.tid
+    # the field's type: an arm default is an arm of it
+    ftid: ztypes.tid
+    name: zast.nameid
+} out ztypes.cval is {
+    dv: st.typing.declDefaultOfId parentTypeId: ownerTid nameId: name
+    od: declOfTypeId :st tid: ownerTid
+    match (
+        dv
+    ) case literal then {
+        return (evalConstNode :st scope: od :ast unitDecl: od nid: dv)
+    } case constant then {
+        return (constValueOfDecl :st :ast declId: dv)
+    } case arm then {
+        return (ztypes.makeArmConst armTid: ftid armName: (declNameIdOf :st declId: dv))
+    } else {
+        return ztypes.noConst
+    }
+}
+
+# constFitToField -- the constant `v` as the value of a data field of type
+# `ftid`, or noConst with the reason reported at the argument: an untyped
+# number fits the field's number type (constFitsType) or stays untyped in an
+# intliteral or floatliteral field, an untyped string is text, and any other
+# value -- a typed number, an arm, a data value -- must already be of the
+# field's type.
+constFitToField: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    v: ztypes.cval
+    ftid: ztypes.tid
+    name: zast.nameid
+    at: zast.nodeid
+    ln: u32
+    co: u32
+} out ztypes.cval is {
+    fn: zast.nameTextCopy :ast ref: name
+    if v.kind.none then {
+        (addError
+            :st
+            nodeid: at
+            lineno: ln
+            colno: co
+            e: zast.err.callError
+            msg: "argument '\{fn}' is not a constant: a data value is built from constants"
+        )
+        return ztypes.noConst
+    }
+    num: v.kind.ivalKind or v.kind.fvalKind
+    untyped: v.numTid.isZero
+    if num when untyped when (isIntLiteralTid :st tid: ftid) when v.kind.ivalKind then return v
+    if num when untyped when ftid == st.reg.literalFloatTid then return v
+    isNum: (typeIsNumberOf :st tid: ftid float: false) or (typeIsNumberOf :st tid: ftid float: true)
+    if num when untyped when isNum then return (constFitNumber :st :scope :ast :v :ftid :at :ln :co)
+    txT: stdTid :ast :st wk: zast.wellKnown.slot.tyText
+    if v.kind.svalKind when ftid == txT when untyped or (v.numTid == txT) then {
+        return (ztypes.typedConst c: v numTid: txT)
+    }
+    vt: constValueTid :ast :st :scope :v
+    if vt == ftid then return v
+    en: specWrittenName :st :ast tid: ftid
+    gn: specWrittenName :st :ast tid: vt
+    (addError
+        :st
+        nodeid: at
+        lineno: ln
+        colno: co
+        e: zast.err.callError
+        msg: "argument '\{fn}' type mismatch: expected \{en}, got \{gn}"
+    )
+    return ztypes.noConst
+}
+
+# constFitNumber -- the untyped number `v` as a value of the number type `ftid`
+# (a typedef over one included): it must fit the base type (constFitsType,
+# reported at `at`), and it converts as its literal would.
+constFitNumber: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    v: ztypes.cval
+    ftid: ztypes.tid
+    at: zast.nodeid
+    ln: u32
+    co: u32
+} out ztypes.cval is {
+    base: ftid
+    for true loop {
+        bo: st.typing.typedefBaseTid.get key: base
+        match bo case some then base = bo case none then break
+    }
+    fm: constFitsType :st :v target: base
+    if fm.length > 0 then {
+        (addError
+            :st
+            nodeid: at
+            lineno: ln
+            colno: co
+            e: zast.err.typeError
+            msg: fm
+        )
+        return ztypes.noConst
+    }
+    r: v
+    bn: nameIdOf :ast name: (st.reg.nameOf tid: base).stringView
+    cv: constOfConversion :st :scope :ast :v targetId: bn nid: at :ln :co
+    if cv.kind.none.not then r = cv
+    return (ztypes.typedConst c: r numTid: ftid)
+}
+
+# constInternAgg -- the row of an aggregate in ZTyping.constAggs, its items
+# appended to constAggItems: an equal aggregate's row when one is there (same
+# kind, type, arm and items), else a new one.
+constInternAgg: function {
+    st: zenv.ZSymbolTable
+    kind: ztyping.constaggkind
+    tid: ztypes.tid
+    # a choice value's arm, 0 otherwise
+    arm: zast.nameid
+    items: (ListVal ztypes.cval).view
+} out u32 is {
+    h: kind.tag.u64 + 1 * 1099511628211
+    h = (h ^ tid.u64) * 1099511628211
+    h = (h ^ arm.u32) * 1099511628211
+    for each it: items loop h = (h ^ (constItemHash v: it)) * 1099511628211
+    head: (st.typing.constAggIndex.heads.get key: h).or d: 0
+    r: head
+    for r != 0 loop {
+        if (constAggMatches :st row: r :kind :tid :arm :items) then return r
+        r = st.typing.constAggIndex.next.get i: r.u64
+    }
+    start: st.typing.constAggItems.length.u32.orPanic
+    for each it: items loop st.typing.constAggItems.append it
+    id: st.typing.constAggs.length.u32.orPanic
+    st.typing.constAggs.append (ztyping.constagg
+        :kind
+        :tid
+        :arm
+        itemStart: start
+        itemCount: items.length.u32.orPanic
+        labelStart: 0
+        labelCount: 0
+    )
+    st.typing.constAggIndex.next.append head
+    st.typing.constAggIndex.heads.set key: h value: id
+    return id
+}
+
+# constItemHash -- a hash of one aggregate item over the parts that tell
+# values apart; equal values hash alike (a float's bits are left out, so
+# floats share a bucket and are told apart by the compare).
+constItemHash: function {v: ztypes.cval} out u64 is {
+    h: v.kind.tag.u64 + 7 * 1099511628211
+    h = (h ^ (ztypes.i64Bits v: v.ival)) * 1099511628211
+    h = (h ^ v.bigId ^ (v.ratId.u64 << 20) ^ (v.floatId.u64 << 40)) * 1099511628211
+    h = (h ^ v.strId ^ (v.aggId.u64 << 32)) * 1099511628211
+    h = (h ^ v.armTid.u64 ^ (v.armName.u32.u64 << 32)) * 1099511628211
+    return (h ^ v.numTid.u64) * 1099511628211
+}
+
+# constAggMatches -- whether aggregate row `row` holds exactly this kind, type,
+# arm and items.
+constAggMatches: function {
+    st: zenv.ZSymbolTable.view
+    row: u32
+    kind: ztyping.constaggkind
+    tid: ztypes.tid
+    arm: zast.nameid
+    items: (ListVal ztypes.cval).view
+} out bool is {
+    g: st.typing.constAggs.get i: row.u64
+    if (g.kind != kind) or (g.tid != tid) or (g.arm != arm) then return false
+    if g.itemCount.u64 != items.length then return false
+    i: u64
+    for i < items.length loop {
+        if (st.typing.constAggItems.get i: g.itemStart.u64 + i) != (items.get :i) then return false
+        i = i + 1
+    }
+    return true
 }
 
 # reachedErrorData -- E0601, an `error` the compiler proved reachable, in the
@@ -62186,6 +62631,21 @@ constOfNamedBase: function {
                 v: lit
                 targetId: ncId
                 nid: atNid
+                ln: atLine
+                co: atCol
+            )
+        }
+        # `row.create`: a data value of every field's default
+        if ncId == zast.wellKnown.slot.wkCreate then {
+            sct: typeNamedFrom :st :scope :ast lookupUnit: unitDecl typeNameId: ptId
+            if (st.reg.isStaticOf tid: sct) then return (constOfStaticFields
+                :st
+                :scope
+                :ast
+                :unitDecl
+                tid: sct
+                args: ListVal zast.nodeid
+                at: atNid
                 ln: atLine
                 co: atCol
             )
@@ -63256,6 +63716,28 @@ resolveDottedConstantDef: function {
             )
             if pcs.kind.none.not then isCtor = false
         }
+        # a type's `as` constant (`cfg.LIMIT`) is a value, and so is `row.create`,
+        # a data value in a static position: the value channel folds both
+        if isCtor then {
+            cId: atomNameId :ast n: (ast.nodes.get i: defn.child)
+            sct: (typeNamedFrom
+                :st
+                :scope
+                :ast
+                lookupUnit: unitDecl
+                typeNameId: (nameIdOf :ast name: sfLit)
+            )
+            sctD: declOfTypeId :st tid: sct
+            cmD: st.typing.declFindChild parentDeclId: sctD nameId: cId
+            if cmD.isZero.not when (typeMemberHoldsConstant
+                :st
+                :ast
+                typeDecl: sctD
+                defNode: (st.typing.decls.get i: cmD).node
+            ) then isCtor = false
+            if cId == zast.wellKnown.slot.wkCreate when (st.reg.isStaticOf tid: sct
+            ) then isCtor = false
+        }
         if isCtor then {
             dm: "a unit-level constant takes a literal value, not a construction".string
             dh: "construct it inside a function, or make '\{defName}' a function that returns the value"
@@ -63508,6 +63990,15 @@ resolveCalledConstantDef: function {
             :scope
             callableId: defn.callable
         ) then cbu = true
+        # a data value is built here, in a static position: the value channel
+        # folds it (constOfStaticFields)
+        if cbu.not when (staticCtorHead
+            :st
+            :scope
+            :ast
+            :unitDecl
+            callableId: defn.callable
+        ).isZero.not then cbu = true
         if cbu.not then {
             cm: "a unit-level constant takes a literal value, not a construction".string
             ch: "construct it inside a function, or make '\{defName}' a function that returns the value"
@@ -63710,6 +64201,7 @@ constValueTid: function {
     v: ztypes.cval
 } out ztypes.tid is {
     if v.kind.armKind then return v.armTid
+    if v.kind.aggKind then return (st.typing.constAggs.get i: v.aggId.u64).tid
     if v.numTid.isZero.not then return v.numTid
     recvBaseTid: ""
     if v.kind.ivalKind then recvBaseTid = "i64"
@@ -63755,16 +64247,8 @@ instantiatedAliasFold: function {
     if unm.isZero then return false
     dnm: zast.nameTextCopy :ast ref: (declNameIdOf :st :declId)
     if dnm.length == 0 then return false
-    # a numeric typedef applied to one value (`NONE: rid 0`) constructs a
-    # constant and instantiates nothing: the constant channel folds it
     tdc: callRefAt :ast nid: opId
-    if tdc.nargs == 1 when (typedefOverNumericDecl
-        :st
-        :ast
-        unitDecl: unm
-        scope: own
-        callableId: tdc.callable
-    ) then return false
+    if (appliesNoTemplate :st :ast unitDecl: unm scope: own call: tdc) then return false
     # a value that names its own definition, directly or through another
     # (`foo: bar foo`, `Strs: (List Strs)`), re-enters here while its
     # arguments resolve: that is a cycle, reported once, and the re-entry is
@@ -63789,6 +64273,30 @@ instantiatedAliasFold: function {
     )
     st.typing.aliasFoldsOpen.pop
     return folded
+}
+
+# appliesNoTemplate -- a unit-level call that instantiates nothing, so the
+# constant channel folds it: a numeric typedef applied to one value (`NONE: rid
+# 0`), or a head naming a user type that is not generic -- a data type's
+# fields (constOfStaticFields), or a record's, which is no constant at all. A
+# function head is a call, which the alias walk checks for cycles.
+appliesNoTemplate: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    scope: ztypes.declid
+    call: callref
+} out bool is {
+    if call.nargs == 1 when (typedefOverNumericDecl
+        :st
+        :ast
+        :unitDecl
+        :scope
+        callableId: call.callable
+    ) then return true
+    htpl: typeApplicationTemplate :st :scope :ast :unitDecl callableNid: call.callable
+    if htpl.isZero or (st.reg.isGenericOf tid: htpl) then return false
+    return (st.reg.typetypeOf typeId: htpl).isUserFamily
 }
 
 # reportAliasCycle -- a unit-level definition whose value names the definition
