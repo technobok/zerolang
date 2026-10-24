@@ -12762,16 +12762,13 @@ attachVariantTag: function {
     armCountV: u64
     allNullV: bool
 } is {
-    customTagV: unionCustomTagId :st :scope :ast :unitDecl objId: vnode.nid
-    tagId: ztypes.tid
-    match (
-        customTagV
-    ) case some then {
-        tagId = customTagV
-    } case none then {
-        tagName: "\{defName}:tag:data"
-        tagId = st.reg.newType name: tagName.stringView typetype: ztypes.ztypetype.staticListType
-    }
+    tagId: (mintSumTag
+        :st
+        :defName
+        sourceList: ((unionCustomTagId :st :scope :ast :unitDecl objId: vnode.nid).or
+            d: ztypes.tid.zero
+        )
+    )
     # NOT the atomic pair: a tag member is declared by the
     # sweep that discovers it and RE-TYPED here once the
     # tag's own type is known
@@ -12799,6 +12796,25 @@ attachVariantTag: function {
     }
 }
 
+# mintSumTag -- the type of sum `defName`'s `tag` member, a tag type of its
+# own. A tag the `as` block sources from a list (`tag: levels.tag`) takes its
+# arms' values from that list's row.
+mintSumTag: function {
+    st: zenv.ZSymbolTable
+    defName: StringView
+    # the list the values come from; 0 for the default tag
+    sourceList: ztypes.tid
+} out ztypes.tid is {
+    tagName: "\{defName}:tag:data"
+    tagId: st.reg.newType name: tagName.stringView typetype: ztypes.ztypetype.tagType
+    if sourceList.isZero then return tagId
+    (st.typing.tagSourceAggs.set
+        key: tagId
+        value: ((st.typing.staticListAggs.get key: sourceList).or d: 0)
+    )
+    st.typing.tagSourceDecls.set key: tagId value: (declOfTypeId :st tid: sourceList)
+    return tagId
+}
 
 # resolveVariant -- resolve a variant ObjectDef into a VARIANT valtype: a child per
 # arm (arm name -> payload type-ref shell; a `null` arm -> the `null` shell), a
@@ -13800,19 +13816,13 @@ resolveUnion: function {
     # generic template's is its instances'
     recordTagBase :st :scope :ast :unitDecl objId: vnode.nid ownerId: uid
     if isgen.not then {
-        customTag: unionCustomTagId :st :scope :ast :unitDecl objId: vnode.nid
-        tagId: ztypes.tid
-        match (
-            customTag
-        ) case some then {
-            tagId = customTag
-        } case none then {
-            tagName: "\{defName}:tag:data"
-            tagId = (st.reg.newType
-                name: tagName.stringView
-                typetype: ztypes.ztypetype.staticListType
+        tagId: (mintSumTag
+            :st
+            :defName
+            sourceList: ((unionCustomTagId :st :scope :ast :unitDecl objId: vnode.nid).or
+                d: ztypes.tid.zero
             )
-        }
+        )
         # NOT the atomic pair: a tag member is declared by the
         # sweep that discovers it and RE-TYPED here once the
         # tag's own type is known
@@ -16805,7 +16815,8 @@ aliasTargetTid: function {
                     mtt: st.reg.typetypeOf typeId: memberDecl
                     isMem: (
                         (mtt == ztypes.ztypetype.functionType) or
-                        (mtt == ztypes.ztypetype.staticListType)
+                        (mtt == ztypes.ztypetype.staticListType) or
+                        (mtt == ztypes.ztypetype.tagType)
                     ).not
                     if isMem then {
                         atid = rto
@@ -23287,8 +23298,7 @@ mintMonoTagShape: function {
 } is {
     wantTag: tt.isSum
     if wantTag then {
-        tagName: "\{name}:tag:data"
-        tagId: st.reg.newType name: tagName.stringView typetype: ztypes.ztypetype.staticListType
+        tagId: mintSumTag :st defName: name sourceList: ztypes.tid.zero
         (st.typing.declSynthMember
             parentTypeId: mid
             nameId: zast.wellKnown.slot.wkTag
@@ -31229,7 +31239,9 @@ checkTaggedMemberPath: function {
     if isTagged then {
         ctt0: st.reg.typetypeOf typeId: mo
         isMember: (
-            (ctt0 == ztypes.ztypetype.functionType) or (ctt0 == ztypes.ztypetype.staticListType)
+            (ctt0 == ztypes.ztypetype.functionType) or
+            (ctt0 == ztypes.ztypetype.staticListType) or
+            (ctt0 == ztypes.ztypetype.tagType)
         ).not
         if isMember then {
             isVal: dottedBaseIsValue :st :ast :unitDecl n: (ast.nodes.get i: dp.nid)
@@ -31250,8 +31262,6 @@ checkTaggedMemberPath: function {
                 stampGate :st nid: dp.nid tid: stampedTid
                 return (callleg handled: true tid: abt)
             }
-            isArm: true
-            if ctt0 == ztypes.ztypetype.tagType then isArm = false
             gtpl: false
             isgeneric9v: st.reg.isGenericOf tid: bt
             if isgeneric9v then gtpl = true
@@ -31262,7 +31272,7 @@ checkTaggedMemberPath: function {
             # a value of a partial of the template, or of a type its generic
             # unit declares, tests its arm as any value does
             ptSelf: (st.reg.isPartialOf tid: ptb) or ((unitNestedSelf :st :ast tid: ptb) == ptb)
-            if isArm when gtpl when ptSelf then {
+            if gtpl when ptSelf then {
                 pbool: stdTid :ast :st wk: zast.wellKnown.slot.wkBool
                 if pbool.isZero.not then {
                     st.templateArmPreds.set key: dp.nid value: ptb
@@ -31270,7 +31280,7 @@ checkTaggedMemberPath: function {
                     return (callleg handled: true tid: pbool)
                 }
             }
-            if isArm when gtpl.not then {
+            if gtpl.not then {
                 boolId: stdTid :ast :st wk: zast.wellKnown.slot.wkBool
                 if boolId.isZero.not then {
                     st.typing.dpArmPredicate.set key: dp.nid value: bt
@@ -31357,7 +31367,8 @@ checkTagAccessor: function {
                     ).or
                         d: ztypes.tid.zero
                     )
-                    dnD: specWrittenName :st :ast tid: dtD
+                    lsD: (st.typing.tagSourceDecls.get key: dtD).or d: ztypes.declid
+                    dnD: zast.nameTextCopy :ast ref: (declNameIdOf :st declId: lsD)
                     mnx5 = "tag not readable on '\{btn5}' — its values come from list '\{dnD}'; only a numeric tag source (eg. `tag: u8.tag`) is readable on an instance"
                 }
             } case none then null
@@ -34106,7 +34117,9 @@ refuseTypedefArmConstructor: function {
     if mo.none then return false
     ctt: st.reg.typetypeOf typeId: mo
     if (
-        (ctt == ztypes.ztypetype.functionType) or (ctt == ztypes.ztypetype.staticListType)
+        (ctt == ztypes.ztypetype.functionType) or
+        (ctt == ztypes.ztypetype.staticListType) or
+        (ctt == ztypes.ztypetype.tagType)
     ) then return false
     if (dottedBaseIsValue :st :ast :unitDecl n: (ast.nodes.get i: dp.nid)) then return false
     tn: specWrittenName :st :ast tid: tdT
