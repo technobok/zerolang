@@ -15240,10 +15240,13 @@ resolveProtocol: function {
     )
     # A protocol spec receiver is normally dropped (resolves to nothing). The reference
     # resolves Text NESTED inside String's `:Text` marker, so Text's spec `:this` binds
-    # to the enclosing String -- mirror that for the system Text protocol.
+    # to the enclosing String -- mirror that for the system Text protocol, under
+    # either of its names while the rename to StringViewable is staged.
     specThisStr: defName.string
     dropThis: true
-    if unitDecl == st.typing.systemUnitRoot when nameId == zast.wellKnown.slot.tyText then {
+    if unitDecl == st.typing.systemUnitRoot when (
+        (nameId == zast.wellKnown.slot.tyText) or (nameId == zast.wellKnown.slot.tyStringViewable)
+    ) then {
         specThisStr = "String"
         dropThis = false
     }
@@ -23585,18 +23588,20 @@ scalarKindOfNameId: function {id: zast.nameid} out ztypes.suffixinfo is {
     return (ztypes.numkindAt k: id.u64 - zast.wellKnown.slot.tyI8.u64)
 }
 
-# conformsToText -- the generic argument is StringLike: it IS StringView, or a
-# conformance row names it against `Text`. Conformance rows live on the
+# conformsToStringViewable -- the generic argument is StringLike: it IS
+# StringView, or a conformance row names it against `StringViewable`. Conformance rows live on the
 # DECLARING type, so a mono (str_32) conforms through the generic origin it was
 # instantiated from rather than under its own id.
-conformsToText: function {
+conformsToStringViewable: function {
     ast: Ast
     st: zenv.ZSymbolTable
     argTid: ztypes.tid
 } out bool is {
     svT: stdTid :ast :st wk: zast.wellKnown.slot.tyStringView
     if svT.isZero.not when argTid == svT then return true
-    txT: stdTid :ast :st wk: zast.wellKnown.slot.tyText
+    txT: stdTid :ast :st wk: zast.wellKnown.slot.tyStringViewable
+    # a system unit from before the rename names the protocol Text alone
+    if txT.isZero then txT = stdTid :ast :st wk: zast.wellKnown.slot.tyText
     if txT.isZero then return false
     probeT: argTid
     agoo: st.reg.genericOriginOf tid: argTid
@@ -23680,7 +23685,7 @@ constraintHolds: function {
         # Text as a value, and is handed to a StringLike parameter as its
         # `stringView`
         if (st.reg.isReftypeOf tid: argTid).not then return false
-        return (conformsToText :ast :st :argTid)
+        return (conformsToStringViewable :ast :st :argTid)
     } else {
         return true
     }

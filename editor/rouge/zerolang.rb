@@ -91,7 +91,7 @@ module Rouge
           MapKeyIterRV MapKeyIterVR MapKeyIterVV MapRR MapRV MapVR
           MapVV Option OptionView OptionViewVal OptionMut OptionMutVal Path PathView Reader
           RefHashable Result ResultRV ResultVR Seeker Set SetIter SetIterVal
-          SetRef SetVal SpanPair SpanVal Splitter StaticIter StaticView String StringLike StringView
+          SetRef SetVal SpanPair SpanVal Splitter StaticIter StaticView String StringLike StringView StringViewable
           Text TextReader Writer _ anyval array
           bool break c32 c8 continue
           converror copy error f128 f16
