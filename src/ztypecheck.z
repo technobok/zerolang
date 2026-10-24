@@ -1582,6 +1582,9 @@ defTypetypeOf: function {
                 return (optionval.some ztypes.ztypetype.neverType)
             }
             return (optionval.some ztypes.ztypetype.recordType)
+        } case dataDef then {
+            # a data type is a record whose values are static (isStatic)
+            return (optionval.some ztypes.ztypetype.recordType)
         } case variantDef then {
             return (optionval.some ztypes.ztypetype.variantType)
         } case unionDef then {
@@ -5014,6 +5017,9 @@ fieldSlotTid: function {
         prevOn7 = st.typing.declIsOnContainmentPath declId: od7
         st.typing.declSetContaining declId: od7 mark: true
     }
+    # a data field is a static position: its value is folded, never
+    # emitted as written, so it may keep a literal untyped
+    if (st.reg.isStaticOf tid: ownerTid) then st.typing.staticLiteralTyperefs.add item: oId
     r7: resolveFieldTyperef :st :ast :unitDecl :scope nid: oId :thisName
     if od7.isZero.not then st.typing.declSetContaining declId: od7 mark: prevOn7
     return r7
@@ -6205,8 +6211,8 @@ refuseLiteralTyperef: function {
     tid: ztypes.tid
 } is {
     if (isLiteralTypeId :st :tid).not then return
-    # a list's `out` names an untyped element or index this way
-    if (st.typing.staticListLiteralArgs.has item: nid) then return
+    # a list's `out` and a data field name an untyped value this way
+    if (st.typing.staticLiteralTyperefs.has item: nid) then return
     ltn: st.reg.nameOf :tid
     # only where the NAME was written. A literal type's own conversions take an
     # elided `:this`, whose type legitimately IS the literal type -- there is no
@@ -6236,7 +6242,8 @@ refuseLiteralTyperef: function {
 }
 
 # resolveFieldTyperef -- resolveTyperefShell for a member's declared type: an
-# edge of the containment graph, and never a literal's pseudo-type.
+# edge of the containment graph, and never a literal's pseudo-type outside a
+# static position (refuseLiteralTyperef).
 resolveFieldTyperef: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -10354,7 +10361,7 @@ staticListOutWrote: function {
         if opId.isZero then continue
         at: resolveTyperefShell :st :scope :ast :unitDecl nid: opId thisName: ""
         # an untyped element or index is written as its literal type here
-        if (isLiteralTypeId :st tid: at) then st.typing.staticListLiteralArgs.add item: opId
+        if (isLiteralTypeId :st tid: at) then st.typing.staticLiteralTyperefs.add item: opId
         first: lbl.isZero and (positional == 0)
         if lbl.isZero then positional = positional + 1
         if lbl.isZero.not and (lbl == elemName) or first then elemWrote = at
@@ -11845,16 +11852,20 @@ attachDeclaredField: function {
         what: "field"
         name: fname
     )
-    if (refuseReftypeMember
-        :st
-        :ast
-        :fm
-        owner: defName
-        tid: cid
-        what: "record field"
-        remedy: "class"
-        name: fname
-    ) then return
+    if (st.reg.isStaticOf tid: rid) then {
+        if (refuseNonStaticMember :st :ast :fm tid: cid name: fname) then return
+    } else {
+        if (refuseReftypeMember
+            :st
+            :ast
+            :fm
+            owner: defName
+            tid: cid
+            what: "record field"
+            remedy: "class"
+            name: fname
+        ) then return
+    }
     (st.typing.setMemberType
         parentTypeId: rid
         nameId: fm.name
@@ -12287,6 +12298,10 @@ resolveRecord: function {
     asItems: objAsItemsOf :ast nid: rnode.nid
     isgen: hasGenericParam :ast items: asItems
     unitTmpl: nestedTemplateUnit :st :ast :scope :unitDecl nameId: (nameIdOf :ast name: defName)
+    if rnode.kind == zast.objectkind.dataDef then {
+        st.reg.setStatic typeId: rt value: true
+        refuseDataShape :st :defName :rnode ownParams: isgen inGenericUnit: unitTmpl.isZero.not
+    }
     if unitTmpl.isZero.not then isgen = true
     ridDecl: declOfTypeId :st tid: rid
     # BOTH NAMES, INDEPENDENTLY. The old gate asked about `==` alone and then
@@ -13134,6 +13149,81 @@ typeExprText: function {ast: Ast.view nid: zast.nodeid} out String is {
     exprTextOf :ast n: (ast.nodes.get i: nid) dst: r
     if isCall then r.append ")"
     return r
+}
+
+# refuseDataShape -- a data type declares its layout by its fields and is
+# concrete: it cannot be native, take type parameters, or be declared in a
+# generic unit, since each instance of that unit would need its own.
+refuseDataShape: function {
+    st: zenv.ZSymbolTable
+    defName: StringView
+    rnode: objref
+    # whether it declares type parameters of its own
+    ownParams: bool
+    inGenericUnit: bool
+} is {
+    msg: String
+    if rnode.isNative then msg = "'\{defName}' is a data type: its fields declare its layout, so it cannot be native"
+    if ownParams then msg = "'\{defName}' is a data type: a data type cannot take type parameters"
+    if inGenericUnit then msg = "'\{defName}' is a data type: a data type cannot be declared in a generic unit"
+    if msg.length == 0 then return
+    (addError
+        :st
+        nodeid: rnode.nid
+        lineno: rnode.lineno
+        colno: rnode.colno
+        e: zast.err.typeError
+        :msg
+    )
+}
+
+# refuseNonStaticMember -- a data field holds a static value: a number (a
+# literal type included), an enum (bool among them), text, a function
+# reference, a static list or another data type. True when it reported.
+refuseNonStaticMember: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    fm: argref
+    tid: ztypes.tid
+    name: StringView
+} out bool is {
+    if tid.isZero or (isStaticMemberTid :st :ast :tid) then return false
+    # a type parameter: the data type itself is refused (refuseDataShape)
+    if (st.reg.typetypeOf typeId: tid) == ztypes.ztypetype.genericParam then return false
+    tn: specWrittenName :st :ast :tid
+    hint: String
+    if tid == (stdTid :ast :st wk: zast.wellKnown.slot.tyStringView) then {
+        hint = "a string is text here: write it `\"...\".text`".string
+    }
+    (addErrorH
+        :st
+        nodeid: fm.nid
+        lineno: fm.lineno
+        colno: fm.colno
+        e: zast.err.typeError
+        msg: "data field '\{name}' holds a '\{tn}': a data field holds static values -- numbers, bool and other enums, text, function references, static lists and data types"
+        note: String
+        :hint
+        width: name.length.u32.orPanic
+    )
+    return true
+}
+
+# isStaticMemberTid -- a type a data field may hold (refuseNonStaticMember).
+isStaticMemberTid: function {st: zenv.ZSymbolTable ast: Ast tid: ztypes.tid} out bool is {
+    if (
+        (typeIsNumberOf :st :tid float: false) or (typeIsNumberOf :st :tid float: true)
+    ) then return true
+    if (isLiteralTypeId :st :tid) then return true
+    if tid == (stdTid :ast :st wk: zast.wellKnown.slot.tyText) then return true
+    if (st.reg.isStaticOf :tid) then return true
+    if (valIsMonoOf :st :tid wk: zast.wellKnown.slot.tyStaticlist) then return true
+    tt: st.reg.typetypeOf typeId: tid
+    if tt == ztypes.ztypetype.functionType then return true
+    if tt != ztypes.ztypetype.variantType then return false
+    pays: ListVal ztypes.tid
+    variantPayloadTids :st :tid parts: pays
+    return pays.length == 0
 }
 
 # refuseReftypeMember -- A VALTYPE HOLDS VALUE DATA ONLY, the dual of the Box
@@ -17122,14 +17212,20 @@ refuseEmptyObjectDef: function {
     if defn.nis > 0 then return
     if defn.isNative then return
     if defn.kind == zast.objectkind.protocolDef then return
-    holdsData: (defn.kind == zast.objectkind.recordDef) or (defn.kind == zast.objectkind.classDef)
+    holdsData: (
+        (defn.kind == zast.objectkind.recordDef) or
+        (defn.kind == zast.objectkind.classDef) or
+        (defn.kind == zast.objectkind.dataDef)
+    )
     if defn.nas > 0 when holdsData.not then return
     em9o: "'\{defName}' is an empty object definition — it declares no fields and no members"
     eh9o: "give it a field, give it a member, or mark it `is native` when the runtime owns its layout".string
     if defn.nas > 0 then {
-        em9o = "'\{defName}' declares no fields — a record or class holds its data in fields"
+        em9o = "'\{defName}' declares no fields — a record, class or data type holds its data in fields"
         eh9o = "give it a field, or mark it `is native` when the runtime owns its layout".string
     }
+    # a data type cannot be native (refuseDataShape)
+    if defn.kind == zast.objectkind.dataDef then eh9o = "give it a field".string
     en9o: String
     (addErrorH
         :st
@@ -17199,6 +17295,8 @@ resolveObjectDef: function {
                 resolveRecord :st scope: rf :ast :unitDecl :defName rnode: defn
             }
         }
+    } case dataDef then {
+        resolveRecord :st scope: rf :ast :unitDecl :defName rnode: defn
     } case variantDef then {
         resolveVariant :st scope: rf :ast :unitDecl :defName vnode: defn
     } case unionDef then {

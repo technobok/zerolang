@@ -1613,8 +1613,6 @@ Parser: class {
             return true
         } case matchTok then {
             return true
-        } case dataTok then {
-            return true
         } case withTok then {
             return true
         } case braceOpenTok then {
@@ -1851,8 +1849,8 @@ Parser: class {
     # binds silently to the inner one. In an `else` body the enclosing `if` has
     # already taken its `else` and can never take another, so there is exactly
     # one candidate -- which is why `else if` needs no braces and is not an
-    # exception but the general rule holding. `for`, `with` and `data` read no
-    # `else`, so they stay legal here and need no braces.
+    # exception but the general rule holding. `for` and `with` read no `else`,
+    # so they stay legal here and need no braces.
     acceptPrimaryExpression: function {:this lex: zlexer.Lexer} out astnode is {
         tPos: lex.peekPos
         tt: lex.peekType
@@ -2729,24 +2727,6 @@ Parser: class {
         )
     }
 
-    # refuseDataDefinition -- `data` is a reserved declarator, refused where a
-    # definition or an expression starts. A body written after it, `data { 1 2
-    # }`, is read and dropped, so the one mistake is one error.
-    refuseDataDefinition: function {:this lex: zlexer.Lexer} out astnode is {
-        startPos: lex.peekPos
-        lex.accept tt: zlexer.toktype.dataTok pool: this.ast.names
-        tt: lex.peekType
-        if (tt == zlexer.toktype.isTok) or (tt == zlexer.toktype.braceOpenTok) then {
-            body: this.listBody :lex :startPos
-            if (Parser.isError node: body) then return body
-        }
-        return (this.mkErrorAt
-            pos: startPos
-            code: zast.err.reservedName
-            msg: "'data' is a reserved word: a static list is written `list { ... }`".string
-        )
-    }
-
     # list-definition -> "list" ["is"] "{" { [label] term | label-value } "}"
     # ["out" type]. Elements are single terms (paths): a LABEL names the
     # element, a LABELPRE is a label-value, bare terms are positional.
@@ -3564,9 +3544,9 @@ Parser: class {
         return (this.operationFromBase base: pbase :lex)
     }
 
-    # type-definition dispatcher: unit / function / the six item-definition
-    # kinds (record/class/variant/union/protocol/facet) / the if/match/data
-    # expression forms / else a bare operation.
+    # type-definition dispatcher: unit / function / the item-definition kinds
+    # (record/class/variant/union/protocol/facet/generator/typedef/data) / the
+    # if/match expression forms / else a bare operation.
     # Returns a bare astnode; an absent definition becomes an EXPECTEDTYPEDEF
     # error node.
     acceptTypeDefinition: function {
@@ -3601,7 +3581,7 @@ Parser: class {
         } case matchTok then {
             return (this.acceptMatchExpression :lex)
         } case dataTok then {
-            return (this.refuseDataDefinition :lex)
+            return (this.parseItemDefinition :lex :startPos kind: zast.objectkind.dataDef)
         } else {
             pbase: this.operationPaths :lex
             n: this.pathCount base: pbase
@@ -3788,7 +3768,8 @@ Parser: class {
         }
     }
 
-    # item-definition entry (record/class/variant/union/protocol/facet).
+    # item-definition entry (record/class/variant/union/protocol/facet/
+    # generator/data).
     # The caller has peeked the keyword (startPos); this consumes it, seeds
     # empty is/as accumulators, and tail-calls the reorder loop. Stays a
     # thin seed so the tail is re-entrant with the keyword already consumed.
@@ -4051,8 +4032,6 @@ Parser: class {
             return (this.acceptForExpression :lex)
         } case matchTok then {
             return (this.acceptMatchExpression :lex)
-        } case dataTok then {
-            return (this.refuseDataDefinition :lex)
         } case withTok then {
             return (this.acceptWithExpression :lex)
         } case braceOpenTok then {
