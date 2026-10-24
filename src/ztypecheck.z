@@ -60486,10 +60486,24 @@ constOwnerDeclForId: function {
 # resolveDef's business. Only a computed definition can be self-referential in
 # the constant sense: a ring of aliases is an alias cycle, and the resolver
 # already reports that with its own diagnostic and its own wording.
-constDefIsComputed: function {ast: Ast.view n: astnode.view} out bool is {
-    # `X: X + 1` computes, and an infix call is the only shape that does
-    ip: zast.infixPartsOf :ast :n
-    return ip.found
+constDefIsComputed: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    # the definition's value
+    nid: zast.nodeid
+} out bool is {
+    # `X: X + 1` computes, and so does a data value built from others (`a:
+    # (inner v: b.v)`)
+    callableId: zast.nodeid
+    {
+        n: ast.nodes.get i: nid
+        if (zast.infixPartsOf :ast :n).found then return true
+        if n.call then callableId = n.callable
+    }
+    if callableId.isZero then return false
+    return (staticCtorHead :st :scope :ast :unitDecl :callableId).isZero.not
 }
 
 # constValueOfMemberTidId -- the memoised compile-time value of a member of the
@@ -60702,7 +60716,7 @@ constValueOfMemberAt: function {
     }
     if opid.isZero then return ztypes.noConst
     if evalState == 1 then {
-        if (constDefIsComputed :ast n: (ast.nodes.get i: opid)).not then {
+        if (constDefIsComputed :st scope: ownerDecl :ast :unitDecl nid: opid).not then {
             st.typing.constEvalState.set key: k value: 2.u8
             return ztypes.noConst
         }
@@ -62141,6 +62155,39 @@ staticCtorHead: function {
     return ztypes.tid.zero
 }
 
+# constOfStaticCreate -- `row.create` in a static position: the data value of
+# every field's default (constOfStaticFields); noConst for any other path.
+constOfStaticCreate: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    # the base atom's name: the data type
+    ptId: zast.nameid
+    # the member atom's name: `create`
+    ncId: zast.nameid
+    atNid: zast.nodeid
+    atLine: u32
+    atCol: u32
+} out ztypes.cval is {
+    if (
+        (ncId != zast.wellKnown.slot.wkCreate) or st.typing.staticTypesSeen.not
+    ) then return ztypes.noConst
+    sct: typeNamedFrom :st :scope :ast lookupUnit: unitDecl typeNameId: ptId
+    if (st.reg.isStaticOf tid: sct).not then return ztypes.noConst
+    return (constOfStaticFields
+        :st
+        :scope
+        :ast
+        :unitDecl
+        tid: sct
+        args: ListVal zast.nodeid
+        at: atNid
+        ln: atLine
+        co: atCol
+    )
+}
+
 # constOfStaticFields -- a data value built in a static position, `(row key:
 # "a")` or `row.create`: each field, in declared order, is the argument that
 # names it (by label, or the one unlabelled argument the first field) or else
@@ -62253,7 +62300,11 @@ staticFieldValue: function {
 } out ztypes.cval is {
     if argNid.isZero.not then {
         a: argRefAt :ast nid: argNid
+        errA: st.typing.errors.length
         av: evalConstNode :st :scope :ast :unitDecl nid: a.operation
+        # a value whose own fold was reported (a cycle through it) is not
+        # reported again here
+        if av.kind.none when st.typing.errors.length > errA then return ztypes.noConst
         return (constFitToField
             :st
             :scope
@@ -62307,6 +62358,30 @@ constOfFieldDefault: function {
     }
 }
 
+# constAggField -- field `nameId` of the data value `v`, as its value was
+# folded; noConst when the type declares no such field, which the read's own
+# check reports.
+constAggField: function {
+    st: zenv.ZSymbolTable.view v: ztypes.cval nameId: zast.nameid
+} out ztypes.cval is {
+    tid: ztypes.tid
+    start: u64
+    {
+        g: st.typing.constAggs.get i: v.aggId.u64
+        tid = g.tid
+        start = g.itemStart
+    }
+    ftids: ListVal ztypes.tid
+    fnames: ListVal zast.nameid
+    dataFieldIds :st :tid ids: ftids nameIds: fnames
+    fi: u64
+    for fi < fnames.length loop {
+        if (fnames.get i: fi) == nameId then return (st.typing.constAggItems.get i: start + fi)
+        fi = fi + 1
+    }
+    return ztypes.noConst
+}
+
 # constFitToField -- the constant `v` as the value of a data field of type
 # `ftid`, or noConst with the reason reported at the argument: an untyped
 # number fits the field's number type (constFitsType) or stays untyped in an
@@ -62326,6 +62401,11 @@ constFitToField: function {
 } out ztypes.cval is {
     fn: zast.nameTextCopy :ast ref: name
     if v.kind.none then {
+        # the fold's own reason, when it recorded one (a cycle, an overflow)
+        if st.typing.constFail.kind.none.not then {
+            reportPendingConstFail :st
+            return ztypes.noConst
+        }
         (addError
             :st
             nodeid: at
@@ -62636,20 +62716,8 @@ constOfNamedBase: function {
             )
         }
         # `row.create`: a data value of every field's default
-        if ncId == zast.wellKnown.slot.wkCreate then {
-            sct: typeNamedFrom :st :scope :ast lookupUnit: unitDecl typeNameId: ptId
-            if (st.reg.isStaticOf tid: sct) then return (constOfStaticFields
-                :st
-                :scope
-                :ast
-                :unitDecl
-                tid: sct
-                args: ListVal zast.nodeid
-                at: atNid
-                ln: atLine
-                co: atCol
-            )
-        }
+        sc: constOfStaticCreate :st :scope :ast :unitDecl :ptId :ncId :atNid :atLine :atCol
+        if sc.kind.none.not then return sc
         # `unit.CONST` reads a constant out of another unit, found where its
         # type-refs are: the unit's root, or its public block when the block
         # defines it
@@ -62711,6 +62779,10 @@ constOfNamedBase: function {
         # `CC: cckind.tcc` a variant and read a nonexistent arm off it.
         pcv: constValueOfMemberId :st :scope :ast :unitDecl nameId: ptId
         if pcv.kind.armKind then return (constArmChild :st :ast v: pcv :ncId)
+        if pcv.kind.aggKind then return (constAggField :st v: pcv nameId: ncId)
+        # a constant whose fold failed with a reason (a cycle) is no type
+        # either: the type walk below would fold other declarations and lose it
+        if pcv.kind.none when st.typing.constFail.kind.none.not then return ztypes.noConst
         if pcv.kind.svalKind then {
             return (constStringDotted
                 :st
@@ -63086,6 +63158,7 @@ evalConstDotted: function {
     # question was "does it hold this one".
     pv: evalConstNode :st :scope :ast :unitDecl nid: parentId
     if pv.kind.armKind then return (constArmChild :st :ast v: pv :ncId)
+    if pv.kind.aggKind then return (constAggField :st v: pv nameId: ncId)
     # a literal receiver (`"abcd".length`) or a qualified constant
     # (`quadfloat.LIB.length`): the parent is not a bare atom, so its value
     # comes from the recursive walk above rather than from a member read.
@@ -63489,6 +63562,9 @@ useSiteAsks: function {
     if plan.arm != 4 then return true
     if (foldedToString :st nid: plan.parentId) then return true
     if (foldedToNumber :st nid: plan.parentId) then return true
+    # `first.key` reads a field of a folded data value
+    if (st.typing.nodeConstIn mono: st.typing.curMonoStamp nid: plan.parentId
+    ).kind.aggKind then return true
     # `blk.a` reads an element of a list, a constant
     pbt: walkTypeOf :st nid: plan.parentId
     if (st.reg.typetypeOf typeId: pbt) == ztypes.ztypetype.staticListType then return true
