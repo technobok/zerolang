@@ -10389,8 +10389,8 @@ staticListTagWritten: function {ast: Ast dnode: staticlistref} out bool is {
 
 # staticListElemTypeName -- the ONE type name a list's elements carry: the
 # `out T` clause when written, else the type the elements' own tags agree on,
-# else i64 -- StringView when every element is a string, f64 when every one is
-# a float. Tags that disagree are reported here, at the declaration, because a
+# else i64 -- text when every element is a string, f64 when every one is a
+# float. Tags that disagree are reported here, at the declaration, because a
 # block that means two widths at once has no honest emission.
 staticListElemTypeName: function {
     ast: Ast
@@ -10443,7 +10443,7 @@ staticListElemTypeName: function {
         }
     }
     if pick.isZero.not then return pick
-    if allString when dnode.nelems > 0 then return (ast.internString text: "StringView")
+    if allString when dnode.nelems > 0 then return (ast.internString text: "text")
     if allFloat when dnode.nelems > 0 then return (ast.internString text: "f64")
     # every element written in hex, octal or binary: the bits they spell, a u64
     if allBits when dnode.nelems > 0 then return (ast.internString text: "u64")
@@ -13456,7 +13456,7 @@ refuseNonStaticMember: function {
     tn: specWrittenName :st :ast :tid
     hint: String
     if tid == (stdTid :ast :st wk: zast.wellKnown.slot.tyStringView) then {
-        hint = "a string is text here: write it `\"...\".text`".string
+        hint = "a data field's string is text: declare it `text`".string
     }
     (addErrorH
         :st
@@ -31937,20 +31937,50 @@ takeListBase: function {st: zenv.ZSymbolTable dp: dpref} is {
     )
 }
 
+# listElemReadTid -- the type a read of one element of a list has: the list's
+# element type, except that an untyped string reads as the literal it was
+# written as -- a StringView, which a `text` destination adapts -- though the
+# list of untyped strings is a `staticlist text`. A number list's elements
+# read as i64 and adapt the same way, by their untyped value.
+listElemReadTid: function {
+    ast: Ast.view st: zenv.ZSymbolTable.view elem: ztypes.tid item: ztypes.cval
+} out ztypes.tid is {
+    if item.kind.svalKind when item.numTid.isZero then {
+        sv: stdTidPeek :ast :st wk: zast.wellKnown.slot.tyStringView
+        if sv.isZero.not then return sv
+    }
+    return elem
+}
+
 # listMemberType -- the type list row `row` gives member `nameId`: a label,
 # then the count (`length`, untyped), then an ordinal (`blk.3`), an element
-# typed as the list's. An element may claim `length`. 0 for any other name.
+# read as listElemReadTid says. An element may claim `length`. 0 for any other name.
 listMemberType: function {
     st: zenv.ZSymbolTable.view ast: Ast.view row: u32 nameId: zast.nameid
 } out ztypes.tid is {
     g: st.typing.constAggs.get i: row.u64
-    if (st.typing.aggLabelPos id: row label: nameId).some then return g.elem
+    lp: st.typing.aggLabelPos id: row label: nameId
+    match (
+        lp
+    ) case some then {
+        return (listElemReadTid
+            :ast
+            :st
+            elem: g.elem
+            item: (st.typing.constAggItems.get i: g.itemStart.u64 + lp)
+        )
+    } case none then null
     if nameId == zast.wellKnown.slot.wkLength then return st.reg.literalIntTid
     pos: (zast.nameTextAt :ast ref: nameId).stringView.parseU64
     match (
         pos
     ) case ok then {
-        if pos < g.itemCount then return g.elem
+        if pos < g.itemCount then return (listElemReadTid
+            :ast
+            :st
+            elem: g.elem
+            item: (st.typing.constAggItems.get i: g.itemStart.u64 + pos)
+        )
     } case err then null
     return ztypes.tid.zero
 }
@@ -64759,6 +64789,10 @@ constRegisterValueTypeAt: function {
     eo: st.typing.declChildOfId parentTypeId: utid nameId: nid
     if eo.none.not then return
     vt: constValueTid :st :scope :ast :v
+    # a string in a static position is text: a data field's default
+    if v.kind.svalKind when v.numTid.isZero when (st.reg.isStaticOf tid: utid) then {
+        vt = descendNamed :st :scope :ast unitDecl: st.typing.systemUnitRoot name: "text"
+    }
     if vt.isZero.not then (st.typing.setMemberType
         parentTypeId: utid
         nameId: nid
