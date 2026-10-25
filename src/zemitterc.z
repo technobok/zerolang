@@ -42371,6 +42371,7 @@ emitStaticAggs: function {
             start = g.itemStart
             count = g.itemCount
         }
+        emitStaticFnProtos :ast :symtab :ctx row: id :buf
         if isList then {
             emitStaticListArray :ast :symtab :ctx :id :count :buf
             continue
@@ -42399,6 +42400,36 @@ emitStaticAggs: function {
             k = k + 1
         }
         buf.append " };\n"
+    }
+}
+
+# emitStaticFnProtos -- the prototype of each function static row `row` holds
+# a reference to: the static objects are written ahead of the functions, and a
+# function's address is a constant only once it is declared. C takes the same
+# declaration again where the function is written.
+emitStaticFnProtos: function {
+    ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx row: u64 buf: String.borrow
+} is {
+    start: u64
+    count: u64
+    {
+        g: symtab.typing.constAggs.get i: row
+        start = g.itemStart
+        count = g.itemCount
+    }
+    k: u64
+    for k < count loop {
+        v: symtab.typing.constAggItems.get i: start + k
+        k = k + 1
+        if v.kind.fnKind.not then continue
+        fid: (symtab.typing.decls.get i: v.fnDecl).typeId
+        fnode: zast.nodeid
+        {
+            dn: ast.nodes.get i: (symtab.typing.decls.get i: v.fnDecl).node
+            if dn.namedoperation then fnode = dn.operation
+        }
+        if fnode.isZero then continue
+        appendFnSignature :ast :symtab :ctx :fid op: (ast.nodes.get i: fnode) :buf tail: ";\n"
     }
 }
 
@@ -42540,8 +42571,9 @@ staticChoiceInit: function {
 # staticAggItemText -- one field of a static object as a constant initializer:
 # a string as the bytes themselves (the pool's `_zcsN` view is no constant
 # expression), a data value as its object's address, a choice value as its
-# braces (staticChoiceInit), an arm as its bool or its tag alone, and a number
-# as cvalText spells it at the field's type.
+# braces (staticChoiceInit), a function reference as the function, an arm as
+# its bool or its tag alone, and a number as cvalText spells it at the field's
+# type.
 staticAggItemText: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -42556,6 +42588,8 @@ staticAggItemText: function {
     if v.kind.aggKind when (symtab.typing.constAggs.get i: v.aggId.u64).kind.staticChoice then {
         return (staticChoiceInit :ast :symtab :ctx row: v.aggId)
     }
+    # a function reference is the function itself, whose address is a constant
+    if v.kind.fnKind then return (ctxCname :ctx tid: (symtab.typing.decls.get i: v.fnDecl).typeId)
     if v.kind.armKind then {
         av: armValueC :ast :ctx :symtab tid: v.armTid arm: v.armName
         if av.length > 0 then return av

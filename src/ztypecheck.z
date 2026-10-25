@@ -62352,6 +62352,12 @@ constOfBinopFold: function {
         return r
     }
     # a choice arm that carries nothing is never a value that carries one
+    # two function references are equal when they name one function
+    if lv.kind.fnKind when rv.kind.fnKind then {
+        if cop.eq then return (boolConst :st :ast v: lv.fnDecl == rv.fnDecl)
+        if cop.ne then return (boolConst :st :ast v: lv.fnDecl != rv.fnDecl)
+        return ztypes.noConst
+    }
     armAgg: lv.kind.armKind and rv.kind.aggKind
     aggArm: lv.kind.aggKind and rv.kind.armKind
     if armAgg or aggArm then return (constOfArmAggEq :st :ast :lv :rv :opnId)
@@ -62835,7 +62841,7 @@ staticChoiceHead: function {
         hn = atomNameId :ast n: (ast.nodes.get i: (dpRefAt :ast nid: headId).child)
     }
     if (st.typing.choiceNames.has item: hn).not then return ztypes.tid.zero
-    ct: staticTypeAtHead :st :scope :ast :unitDecl :headId
+    ct: namedTypeAtHead :st :scope :ast :unitDecl :headId
     if (st.reg.typetypeOf typeId: ct) != ztypes.ztypetype.variantType then return ztypes.tid.zero
     return ct
 }
@@ -62934,14 +62940,14 @@ staticCtorHead: function {
             (atomNameId :ast n: (ast.nodes.get i: cn.child)) == zast.wellKnown.slot.wkCreate
         ) then headId = cn.parent
     }
-    t: staticTypeAtHead :st :scope :ast :unitDecl :headId
+    t: namedTypeAtHead :st :scope :ast :unitDecl :headId
     if (st.reg.typetypeOf typeId: t) == ztypes.ztypetype.recordType then return t
     return ztypes.tid.zero
 }
 
-# staticTypeAtHead -- the static type a call's head names: `row`, `form`, or
-# either through a unit (`tbl.row`); 0 when the head names none.
-staticTypeAtHead: function {
+# namedTypeAtHead -- the type a head names: `row`, `form`, `add`, or one
+# through a unit (`tbl.row`); 0 when the head names none.
+namedTypeAtHead: function {
     st: zenv.ZSymbolTable
     scope: ztypes.declid
     ast: Ast
@@ -63121,6 +63127,8 @@ staticFieldValue: function {
         # a nested list is of the field's list type
         if (ast.nodes.get i: a.operation).listblock then {
             av = constOfList :st :scope :ast :unitDecl nid: a.operation want: ftid
+        } else if (st.reg.typetypeOf typeId: ftid) == ztypes.ztypetype.functionType then {
+            av = constOfFnRef :st :scope :ast :unitDecl nid: a.operation
         } else {
             av = evalConstNode :st :scope :ast :unitDecl nid: a.operation
         }
@@ -63154,6 +63162,125 @@ staticFieldValue: function {
     return ztypes.noConst
 }
 
+# constOfFnRef -- a function's name, bare or through a unit, where a static
+# value of a function type is taken: the reference to that function. A call is
+# never a static value, so the name is never called here. A spec has no body
+# to refer to; a native function, a generic one and a method are no single
+# function a static value can hold. Each is reported; a name that is no
+# function is noConst, unreported, for the caller's own report.
+constOfFnRef: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    nid: zast.nodeid
+} out ztypes.cval is {
+    if (ast.nodes.get i: nid).call then {
+        cnn: ast.nodes.get i: nid
+        (addError
+            :st
+            nodeid: nid
+            lineno: (nodeLine n: cnn)
+            colno: (nodeCol n: cnn)
+            e: zast.err.typeError
+            msg: "a call is never a static value: a function-typed member takes the function itself, by its name".string
+        )
+        return ztypes.noConst
+    }
+    ft: fnRefTid :st :scope :ast :unitDecl :nid
+    if (st.reg.typetypeOf typeId: ft) != ztypes.ztypetype.functionType then return ztypes.noConst
+    fd: declOfTypeId :st tid: ft
+    if fd.isZero then return ztypes.noConst
+    fname: typeExprText :ast :nid
+    why: String
+    fnode: zast.nodeid
+    {
+        dn: ast.nodes.get i: (st.typing.decls.get i: fd).node
+        if dn.namedoperation then fnode = dn.operation
+    }
+    if fnode.isZero.not when (functiondefIsNative op: (ast.nodes.get i: fnode)) then {
+        why = "'\{fname}' is a native function: it has no body a static value can refer to"
+    } else if (declaresFunctionWithBody :st :ast declId: fd).not then {
+        why = "'\{fname}' is a spec: it has no body a static value can refer to"
+    } else if (st.reg.isGenericOf tid: ft) then {
+        why = "'\{fname}' is generic: a static value refers to one function, and a generic one is many"
+    } else if (fnDeclIsMethod :st declId: fd) then {
+        why = "'\{fname}' is a method: a static value refers to a function, and a method is bound to its receiver"
+    }
+    if why.length > 0 then {
+        n: ast.nodes.get i: nid
+        (addError
+            :st
+            nodeid: nid
+            lineno: (nodeLine :n)
+            colno: (nodeCol :n)
+            e: zast.err.typeError
+            msg: why
+        )
+        return ztypes.noConst
+    }
+    # the function is used: its body is walked, so the emitter writes it
+    (walkDeclaredDef
+        :st
+        :scope
+        :ast
+        unitDecl: (unitRootOfDecl :st declId: fd)
+        nameId: (st.typing.decls.get i: fd).name
+        declId: fd
+    )
+    return (ztypes.makeFnConst decl: fd)
+}
+
+# fnRefTid -- the function type a name in a static position names: a bare
+# name, a unit's function (`util.sub`) or a type's member (`box.twice`), each
+# resolved in the scope that declares it, so its signature is complete. 0 when
+# it names none.
+fnRefTid: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    nid: zast.nodeid
+} out ztypes.tid is {
+    ft: ztypes.tid
+    hn: atomNameId :ast n: (ast.nodes.get i: nid)
+    if hn.isZero.not then {
+        lk: walkLookupTyperefById :st :scope :ast :unitDecl baseId: hn
+        match lk case some then ft = lk case none then null
+        return ft
+    }
+    if (ast.nodes.get i: nid).dottedpath.not then return ft
+    dr: dpRefAt :ast :nid
+    rn: atomNameId :ast n: (ast.nodes.get i: dr.parent)
+    cn: atomNameId :ast n: (ast.nodes.get i: dr.child)
+    if rn.isZero or cn.isZero then return ft
+    # the unit the path names declares the function: its declaration there
+    ud: unitDeclOfPath :st :scope :ast nid: dr.parent
+    if ud.isZero.not then {
+        fd: st.typing.declFindChild parentDeclId: ud nameId: cn
+        if fd.isZero then return ft
+        # resolved now, as a demand would resolve it: the signature is compared
+        resolveDemandedDecl :st :scope :ast declId: fd
+        return (st.typing.decls.get i: fd).typeId
+    }
+    pt: typeNamedFrom :st :scope :ast lookupUnit: unitDecl typeNameId: rn
+    if pt.isZero then return ft
+    forceAllMembers :st :ast tid: pt
+    mt: st.typing.declChildOfId parentTypeId: pt nameId: cn
+    match mt case some then ft = mt case none then null
+    return ft
+}
+
+# fnDeclIsMethod -- function declaration `fd` is a member of a type, a method,
+# rather than of a unit.
+fnDeclIsMethod: function {st: zenv.ZSymbolTable.view declId: ztypes.declid} out bool is {
+    pd: st.typing.declParentOf :declId
+    if pd.isZero then return false
+    pt: (st.typing.decls.get i: pd).typeId
+    if pt.isZero then return false
+    return (st.reg.typetypeOf typeId: pt) != ztypes.ztypetype.unitType
+}
+
 # constOfFieldDefault -- the value field `name` of `ownerTid` defaults to, as a
 # constant: a literal folded from its node, a named or computed default from
 # its declaration's fold, an arm as that arm. noConst when it has none.
@@ -63175,9 +63302,15 @@ constOfFieldDefault: function {
         return (constValueOfDecl :st declId: dv)
     } case arm then {
         return (ztypes.makeArmConst armTid: ftid armName: (declNameIdOf :st declId: dv))
-    } else {
-        return ztypes.noConst
-    }
+    } case func then {
+        return (ztypes.makeFnConst decl: dv)
+    } else null
+    # a field declared by a function's name (`lower: defaultLower`) is of that
+    # function's type, and defaults to it; one declared by a spec has none
+    if (st.reg.typetypeOf typeId: ftid) != ztypes.ztypetype.functionType then return ztypes.noConst
+    fd: declOfTypeId :st tid: ftid
+    if (declaresFunctionWithBody :st :ast declId: fd).not then return ztypes.noConst
+    return (ztypes.makeFnConst decl: fd)
 }
 
 # constAggField -- field `nameId` of the data value `v`, as its value was
@@ -63264,6 +63397,21 @@ constFitToField: function {
     }
     vt: constValueTid :ast :st :scope :v
     if vt == ftid then return v
+    # a function fits a function slot by its signature (functionSignaturesMatch)
+    if v.kind.fnKind then {
+        if (functionSignaturesMatch :ast :st a: vt b: ftid) then return v
+        fen: specWrittenName :st :ast tid: ftid
+        fgn: specWrittenName :st :ast tid: vt
+        (addError
+            :st
+            nodeid: at
+            lineno: ln
+            colno: co
+            e: zast.err.callError
+            msg: "argument '\{fn}' is a function of another signature: '\{fgn}' does not match '\{fen}'"
+        )
+        return ztypes.noConst
+    }
     en: specWrittenName :st :ast tid: ftid
     gn: specWrittenName :st :ast tid: vt
     (addError
@@ -64284,6 +64432,9 @@ stampConstAt: function {
     cv: evalConstNode :st :unitDecl scope: st.curScope :ast :nid
     got: st.typing.constFail
     st.typing.constFail = held
+    # a function a static value holds is called where it is read in a body: the
+    # read is the call, and its value is the call's, at run time
+    if cv.kind.fnKind then return
     if cv.kind.none then {
         hasNone: got.kind.overflow or got.kind.indexRange or got.kind.substringRange
         if got.kind.divZero then hasNone = integerDivision :st :ast f: got
@@ -65177,6 +65328,7 @@ constValueTid: function {
 } out ztypes.tid is {
     if v.kind.armKind then return v.armTid
     if v.kind.aggKind then return (st.typing.constAggs.get i: v.aggId.u64).tid
+    if v.kind.fnKind then return (st.typing.decls.get i: v.fnDecl).typeId
     if v.numTid.isZero.not then return v.numTid
     recvBaseTid: ""
     if v.kind.ivalKind then recvBaseTid = "i64"
