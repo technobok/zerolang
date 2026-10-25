@@ -14830,6 +14830,43 @@ emitCrossUnitTag: function {
     return "".string
 }
 
+# foldedFnRefC -- the C function a data value's function field holds when the
+# value folded: the dotted callable's base is a constant data value, and its
+# field `mnId` a function reference. "" otherwise.
+foldedFnRefC: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    callable: astnode.view
+    mnId: zast.nameid
+} out String is {
+    if callable.dottedpath.not then return "".string
+    bv: symtab.typing.nodeConstIn mono: ctx.curThisTid nid: callable.parent
+    if bv.kind.aggKind.not then return "".string
+    tid: ztypes.tid
+    start: u64
+    {
+        g: symtab.typing.constAggs.get i: bv.aggId.u64
+        if g.kind.staticData.not then return "".string
+        tid = g.tid
+        start = g.itemStart
+    }
+    fnames: List String
+    fids: ListVal ztypes.tid
+    fnIds: ListVal zast.nameid
+    recFieldLists :ast :symtab :tid names: fnames ids: fids nameIds: fnIds
+    k: u64
+    for k < fnIds.length loop {
+        if (fnIds.get i: k) == mnId then {
+            v: symtab.typing.constAggItems.get i: start + k
+            if v.kind.fnKind.not then return "".string
+            return (ctxCname :ctx tid: (symtab.typing.decls.get i: v.fnDecl).typeId)
+        }
+        k = k + 1
+    }
+    return "".string
+}
+
 # emitFnptrFieldCall -- a call through a record/class fnptr field
 # (`c.op a: 100 b: 200` -> `c.op(100, 200)`). "" when the callee member is not
 # a flagged fnptr field. A slot that declares a receiver is handed the instance
@@ -14849,19 +14886,25 @@ emitFnptrFieldCall: function {
     if rtid.isZero then return "".string
     if (symtab.typing.declIsFnptrFieldId parentTypeId: rtid nameId: mnId).not then return "".string
     callableNode: ast.nodes.get i: call.callable
-    recvF: cfacts
-    recvText: emitDottedReceiver :ast :symtab :ctx callable: callableNode facts: recvF
-    if recvText.length == 0 then return "".string
-    # the slot is read through the receiver and the receiver is passed to it
-    recvExpr: (receiverOnce
-        :ast
-        :symtab
-        :ctx
-        callable: callableNode
-        text: recvText.stringView
-        textF: recvF
-        tid: rtid
-    )
+    # a function a folded data value holds is known, and called by its name: the
+    # value itself is never read
+    direct: foldedFnRefC :ast :symtab :ctx callable: callableNode :mnId
+    recvExpr: String
+    if direct.length == 0 then {
+        recvF: cfacts
+        recvText: emitDottedReceiver :ast :symtab :ctx callable: callableNode facts: recvF
+        if recvText.length == 0 then return "".string
+        # the slot is read through the receiver and the receiver is passed to it
+        recvExpr = (receiverOnce
+            :ast
+            :symtab
+            :ctx
+            callable: callableNode
+            text: recvText.stringView
+            textF: recvF
+            tid: rtid
+        )
+    }
     rptr: dottedReceiverIsPtr :ast :symtab :ctx callable: (ast.nodes.get i: call.callable)
     acc: ".".string
     if rptr then acc = "->".string
@@ -14941,6 +14984,13 @@ emitFnptrFieldCall: function {
     }
     orderEnd :ctx st: ord
     callArgs: args.copy
+    if direct.length > 0 then {
+        dcall: direct.take
+        dcall.append "("
+        dcall.append args
+        dcall.append ")"
+        return (stating :facts from: callFacts text: (orderWrap prefix: oprefix call: dcall))
+    }
     if fnTid.isZero.not when (fnTypeTakesThis :symtab tid: fnTid) then {
         callArgs = "&".string
         if rptr then callArgs = "".string
@@ -18124,7 +18174,8 @@ fnptrFieldRead: function {
     if readIsRef when takesThis.not then return String
     accFp: ".".string
     rcvFp: "&\{bn2}"
-    if (isPtrVid :ctx vid: bn2v) then {
+    # a data value is a handle, whether a variable holds it or it folded
+    if (isPtrVid :ctx vid: bn2v) or (isStaticHandle :symtab tid: bstamp) then {
         accFp = "->".string
         rcvFp = "\{bn2}"
     }
