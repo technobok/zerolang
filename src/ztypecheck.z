@@ -10669,6 +10669,8 @@ constOfList: function {
     ast: Ast
     unitDecl: ztypes.declid
     nid: zast.nodeid
+    # the list type the place it lands in takes, 0 for none
+    want: ztypes.tid
 } out ztypes.cval is {
     dnode: staticListRefAt :ast :nid
     if dnode.nid.isZero then return ztypes.noConst
@@ -10682,9 +10684,49 @@ constOfList: function {
         monoId: ztypes.tid
         tplId: ztypes.tid
         subs: noSubs
+        :want
     )
     if row == 0 then return ztypes.noConst
     return (ztypes.makeAggConst id: row)
+}
+
+# staticListWantParts -- the parts of list type `want` a list with no `out`
+# takes from the place it lands in: its element and its index, typed as
+# written there -- an index `want` leaves out reads its slots untyped.
+staticListWantParts: function {st: zenv.ZSymbolTable want: ztypes.tid} out staticlistoutparts is {
+    idx: st.reg.genericTypeArgAt specId: want ordinal: 1
+    return (staticlistoutparts
+        isValue: true
+        elem: (st.reg.genericTypeArgAt specId: want ordinal: 0)
+        index: idx
+        elemLiteral: false
+        indexLiteral: idx.isZero
+    )
+}
+
+# refuseListOutAgainst -- a nested list whose `out` names a list type other
+# than the one the place it lands in takes.
+refuseListOutAgainst: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    outId: zast.nodeid
+    ot: ztypes.tid
+    want: ztypes.tid
+} is {
+    n: ast.nodes.get i: outId
+    gn: specWrittenName :st :ast tid: ot
+    en: specWrittenName :st :ast tid: want
+    (addErrorH
+        :st
+        nodeid: outId
+        lineno: (nodeLine :n)
+        colno: (nodeCol :n)
+        e: zast.err.typeError
+        msg: "the list's `out` is \{gn}, but it is a value of \{en} here"
+        note: String
+        hint: "drop the `out`: a nested list takes its type from where it is written".string
+        width: 1
+    )
 }
 
 # resolveStaticListInto -- a list definition as its row in the aggregate store:
@@ -10708,7 +10750,23 @@ resolveStaticListInto: function {
     tplId: ztypes.tid
     # the instance's substitutions (buildUnitMono's)
     subs: (IdMapV zast.nameid v: ztypes.tid).view
+    # the list type the place it lands in takes (a data field's), 0 for none:
+    # a list with no `out` is of it, and one with an `out` must agree
+    want: ztypes.tid
 } out u32 is {
+    # an empty list has no element to take its type from: one that lands
+    # nowhere typed must write `out`
+    if dnode.nelems == 0 when dnode.outType.isZero when want.isZero then {
+        (addError
+            :st
+            nodeid: dnode.nid
+            lineno: dnode.lineno
+            colno: dnode.colno
+            e: zast.err.badList
+            msg: "an empty list must name its type: `list {} out staticlist u8`".string
+        )
+        return 0
+    }
     litId: st.reg.literalIntTid
     prevMono: st.typing.constMono
     if monoId.isZero.not then st.typing.constMono = monoId
@@ -10749,6 +10807,18 @@ resolveStaticListInto: function {
             valueTid: ot
             outId: dnode.outType
         )
+        if want.isZero.not when ot.isZero.not when ot != want when (staticListFits
+            :ast
+            :st
+            have: ot
+            :want
+        ).not then {
+            refuseListOutAgainst :ast :st outId: dnode.outType :ot :want
+            return 0
+        }
+    } else if want.isZero.not then {
+        vparts = staticListWantParts :st :want
+        untypedSlots = vparts.indexLiteral
     }
     # a typed value type names the element type the elements' own tags are
     # weighed against; an untyped one, or an `out` refused below, names none
@@ -20473,6 +20543,7 @@ mintUnitStaticListInstances: function {
             :monoId
             :tplId
             subs: allSubs
+            want: ztypes.tid
         )
         noteInstanceErrors :st :ast mono: monoId :from
         st.typing.constEvalState.set key: k value: 2.u8
@@ -62488,7 +62559,13 @@ staticFieldValue: function {
     if argNid.isZero.not then {
         a: argRefAt :ast nid: argNid
         errA: st.typing.errors.length
-        av: evalConstNode :st :scope :ast :unitDecl nid: a.operation
+        av: ztypes.noConst
+        # a nested list is of the field's list type
+        if (ast.nodes.get i: a.operation).listblock then {
+            av = constOfList :st :scope :ast :unitDecl nid: a.operation want: ftid
+        } else {
+            av = evalConstNode :st :scope :ast :unitDecl nid: a.operation
+        }
         # a value whose own fold was reported (a cycle through it) is not
         # reported again here
         if av.kind.none when st.typing.errors.length > errA then return ztypes.noConst
@@ -63505,7 +63582,7 @@ evalConstNode: function {
         return (constBlockValue :st :scope :ast :unitDecl nid: fb.stmt)
     }
     if plan.arm == 8 then return (constOfMatch :st :scope :ast :unitDecl :nid)
-    if plan.arm == 9 then return (constOfList :st :scope :ast :unitDecl :nid)
+    if plan.arm == 9 then return (constOfList :st :scope :ast :unitDecl :nid want: ztypes.tid)
     return ztypes.noConst
 }
 

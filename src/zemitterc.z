@@ -42347,8 +42347,8 @@ emitStaticAggs: function {
 }
 
 # emitStaticListArray -- the reached list row `id`: the static const array
-# `_zag<row>[]` of its `count` elements, at the element C type the checker
-# settled (i64 when untyped), and its reader `_zag<row>_at`, which panics on an
+# `_zag<row>[]` of its `count` elements, at the element C type its view reads
+# (staticListElemCType), and its reader `_zag<row>_at`, which panics on an
 # index past the end (a negative i64 converts to a huge u64). An empty list has
 # no array -- C has no empty initializer -- and every index is past its end.
 emitStaticListArray: function {
@@ -42427,6 +42427,14 @@ staticStringInit: function {symtab: zenv.ZSymbolTable.view v: ztypes.cval} out S
     return r
 }
 
+# staticListInit -- list row `row` as a static initializer of its view: the
+# braces alone, since a compound literal is no constant expression.
+staticListInit: function {symtab: zenv.ZSymbolTable.view row: u64} out String is {
+    n: (symtab.typing.constAggs.get i: row).itemCount
+    if n == 0 then return "{ .length = 0, .data = NULL }".string
+    return "{ .length = \{n}, .data = _zag\{row} }"
+}
+
 # staticAggItemText -- one field of a static object as a constant initializer:
 # a string as the bytes themselves (the pool's `_zcsN` view is no constant
 # expression), a data value as its object's address, an arm as its bool or its
@@ -42439,6 +42447,9 @@ staticAggItemText: function {
     v: ztypes.cval
 } out String is {
     if v.kind.svalKind then return (staticStringInit :symtab :v)
+    if v.kind.aggKind when (symtab.typing.constAggs.get i: v.aggId.u64).kind.staticList then {
+        return (staticListInit :symtab row: v.aggId)
+    }
     if v.kind.armKind then {
         av: armValueC :ast :ctx :symtab tid: v.armTid arm: v.armName
         if av.length > 0 then return av
