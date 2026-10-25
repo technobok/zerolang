@@ -101,6 +101,7 @@ public: unit {
     :valPartTids
     :valOpSource
     :isLiteralTypeId
+    :sumArmDeclared
     :valOpOwner
     :valIsMonoOf
     :arrayElemTid
@@ -31334,6 +31335,17 @@ templateArmBase: function {
     )
 }
 
+# sumArmDeclared -- member `nameId` of sum `sumTid` is declared as one of its
+# arms, whatever type the arm carries: a function type among them, which makes
+# it no method.
+sumArmDeclared: function {
+    st: zenv.ZSymbolTable.view sumTid: ztypes.tid nameId: zast.nameid
+} out bool is {
+    md: st.typing.declMemberIdOf parentTypeId: sumTid :nameId
+    if md.isZero then return false
+    return (st.typing.decls.get i: md).kind.armDecl
+}
+
 # checkTaggedMemberPath -- a subtype member named on a tagged TYPE (not a value of
 # it, not the tag, not a method) is a construction reference: the path's value IS
 # the tagged parent. A VALUE base makes the path the arm PREDICATE instead -- it
@@ -31372,8 +31384,12 @@ checkTaggedMemberPath: function {
     }
     if isTagged then {
         ctt0: st.reg.typetypeOf typeId: mo
+        # a method is a function member; an arm that carries a function is an
+        # arm, as its declaration says
+        armDeclared: sumArmDeclared :st sumTid: bt nameId: cnId
+        isMethod: (ctt0 == ztypes.ztypetype.functionType) and armDeclared.not
         isMember: (
-            (ctt0 == ztypes.ztypetype.functionType) or
+            isMethod or
             (memberIsList :st parentTid: bt nameId: cnId) or
             (ctt0 == ztypes.ztypetype.tagType)
         ).not
@@ -32767,6 +32783,9 @@ checkMemberNamespace: function {
     if (st.reg.typetypeOf typeId: mo) != ztypes.ztypetype.functionType then {
         return (checkDataMemberNamespace :st :ast :unitDecl :dp :bt :cnId)
     }
+    # an arm that carries a function is no method: through the type it builds
+    # a value, on a value it is the arm's predicate
+    if (sumArmDeclared :st sumTid: bt nameId: cnId) then return true
     isValue: dottedBaseIsValue :st :ast :unitDecl n: (ast.nodes.get i: dp.nid)
     if (st.typing.declIsFnptrFieldId parentTypeId: bt nameId: cnId) then {
         if isValue then return true
@@ -49027,12 +49046,12 @@ checkTaggedCtorArg: function {
             # than passing a value (optionval.none
             # u64), so it is not a payload at all.
             upNull: isNullTid :st tid: uparmid
-            if uparmid.isZero.not when uvt.isZero.not when upNull.not when (typesCompatible
-                :ast
-                :st
-                a: uvt
-                b: uparmid
-            ).not then {
+            # a function fits an arm that carries one by its signature, as it
+            # fits a function-typed parameter
+            upFits: typesCompatible :ast :st a: uvt b: uparmid
+            upFn: (st.reg.typetypeOf typeId: uparmid) == ztypes.ztypetype.functionType
+            if upFits.not when upFn then upFits = functionSignaturesMatch :ast :st a: uvt b: uparmid
+            if uparmid.isZero.not when uvt.isZero.not when upNull.not when upFits.not then {
                 apn: specWrittenName :st :ast tid: uvt
                 dtn: specWrittenName :st :ast tid: dtp
                 upExp: st.reg.nameOf tid: uparmid
