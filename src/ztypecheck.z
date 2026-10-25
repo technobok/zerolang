@@ -10091,6 +10091,8 @@ staticListElemValues: function {
     unitDecl: ztypes.declid
     scope: ztypes.declid
     dnode: staticlistref
+    # the list type an element that is itself a list takes, 0 for none
+    elemWant: ztypes.tid
 } out ListVal ztypes.cval is {
     vals: ListVal ztypes.cval
     kV: u64
@@ -10102,9 +10104,30 @@ staticListElemValues: function {
             el: ast.nodes.get i: elId
             if el.namedoperation then opRef = el.operation
         }
+        # a nested list is a value of the list's element type
+        if opRef.isZero.not when (ast.nodes.get i: opRef).listblock then {
+            vals.append (staticListNestedValue :ast :st :unitDecl :scope :opRef want: elemWant)
+            continue
+        }
         vals.append (staticListElemValue :ast :st :unitDecl :scope :opRef)
     }
     return vals
+}
+
+# staticListNestedValue -- an element that is itself a list: a value of the
+# list's element type `want`, its row; noConst after the refusal its own
+# resolution made.
+staticListNestedValue: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    scope: ztypes.declid
+    opRef: zast.nodeid
+    want: ztypes.tid
+} out ztypes.cval is {
+    w: want
+    if (valIsMonoOf :st tid: w wk: zast.wellKnown.slot.tyStaticlist).not then w = ztypes.tid.zero
+    return (constOfList :st :scope :ast :unitDecl nid: opRef want: w)
 }
 
 # staticListElemValue -- one element's value (staticListElemValues), or noConst after the
@@ -10128,6 +10151,7 @@ staticListElemValue: function {
     got: st.typing.constFail
     st.typing.constFail = held
     if cv.kind.ivalKind or cv.kind.fvalKind or cv.kind.svalKind then return cv
+    if cv.kind.armKind or cv.kind.aggKind then return cv
     en: ast.nodes.get i: opRef
     if got.kind.none.not when cv.kind.none then {
         # a block read from its own elements fails where nothing is written
@@ -10148,10 +10172,6 @@ staticListElemValue: function {
     }
     msg: "a list element must be a compile-time constant".string
     hint: "an element is a literal, a unit constant, or an expression over them".string
-    if cv.kind.none.not then {
-        msg = "a list element must be a number or a string".string
-        hint = "a list holds integers, floats or strings".string
-    }
     (addErrorH
         :st
         nodeid: opRef
@@ -10209,19 +10229,23 @@ staticListElemFits: function {
     return false
 }
 
-# staticListKindsAgree -- a block holds one kind of element: all integers, all floats
-# or all strings, and a block of strings is a StringView one. An element of
-# another kind than the first, or a kind its `out` cannot be, is refused where
-# it is written. An integer in a float block is refused too: a float block's
-# elements are written as floats. False when one was refused.
+# staticListKindsAgree -- a list holds one kind of element: all integers, all
+# floats, all strings, or all values of one other type -- arms of one enum,
+# data values of one type, lists of one type -- and a list of strings is a
+# StringView one. An element of another kind or type than the first, or one
+# its `out` cannot hold, is refused where it is written. An integer in a float
+# list is refused too: a float list's elements are written as floats. False
+# when one was refused.
 staticListKindsAgree: function {
     ast: Ast
     st: zenv.ZSymbolTable
+    scope: ztypes.declid
     dnode: staticlistref
     vals: ListVal ztypes.cval
     elemTid: ztypes.tid
 } out bool is {
     first: u8
+    firstTid: ztypes.tid
     k: u64
     for k < dnode.nelems loop {
         cv: vals.get i: k
@@ -10229,18 +10253,21 @@ staticListKindsAgree: function {
         k = k + 1
         kind: staticListValueKind :cv
         if kind == 0 then continue
-        if first == 0 then first = kind
-        msg: String
-        kt: staticListKindText :kind
-        isStr: kind == 3
-        svBlock: isStaticStringTid :ast :st tid: elemTid
-        if kind != first then {
-            ft: staticListKindText kind: first
-            msg = "list elements are of one kind: this one is \{kt}, the first \{ft}"
-        } else if isStr != svBlock then {
-            en: st.reg.nameOf tid: elemTid
-            msg = "\{kt} cannot be an element of a list of \{en}"
+        vt: ztypes.tid
+        if kind >= 4 then vt = constValueTid :ast :st :scope v: cv
+        if first == 0 then {
+            first = kind
+            firstTid = vt
         }
+        msg: (staticListElemMismatch
+            :ast
+            :st
+            :kind
+            :vt
+            :first
+            :firstTid
+            :elemTid
+        )
         if msg.length > 0 then {
             el: ast.nodes.get i: elId
             (addErrorH
@@ -10251,7 +10278,7 @@ staticListKindsAgree: function {
                 e: zast.err.typeError
                 :msg
                 note: String
-                hint: "a list holds all integers, all floats, or all strings (`out staticlist StringView`)".string
+                hint: "a list holds elements of one type: name it once, as `out staticlist T`".string
                 width: 1
             )
             return false
@@ -10260,13 +10287,60 @@ staticListKindsAgree: function {
     return true
 }
 
-# staticListValueKind -- a list element's kind: 1 an integer, 2 a float, 3 a string,
-# 0 no value.
+# staticListElemMismatch -- why an element of kind `kind` and type `vt` (for
+# an arm or an aggregate) is no element of a list whose first element is of
+# `first` / `firstTid` and whose element type is `elemTid`; "" when it is one.
+staticListElemMismatch: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    kind: u8
+    vt: ztypes.tid
+    first: u8
+    firstTid: ztypes.tid
+    elemTid: ztypes.tid
+} out String is {
+    kt: staticListKindText :kind
+    if kind >= 4 then kt = specWrittenName :st :ast tid: vt
+    if (kind != first) or (vt != firstTid) then {
+        ft: staticListKindText kind: first
+        if first >= 4 then ft = specWrittenName :st :ast tid: firstTid
+        # numbers and strings differ in kind, anything else in type
+        what: "type"
+        if kind < 4 when first < 4 then what = "kind"
+        return "list elements are of one \{what}: this one is \{kt}, the first \{ft}"
+    }
+    if kind >= 4 then {
+        if (vt == elemTid) or (staticListFits :ast :st have: vt want: elemTid) then return "".string
+        return "\{kt} cannot be an element of a list of \{specWrittenName :st :ast tid: elemTid}"
+    }
+    if kind == 3 == (isStaticStringTid :ast :st tid: elemTid) then return "".string
+    return "\{kt} cannot be an element of a list of \{st.reg.nameOf tid: elemTid}"
+}
+
+# staticListValueKind -- a list element's kind: 1 an integer, 2 a float, 3 a
+# string, 4 an arm, 5 a data value or a list, 0 no value.
 staticListValueKind: function {cv: ztypes.cval} out u8 is {
     if cv.kind.ivalKind then return 1
     if cv.kind.fvalKind then return 2
     if cv.kind.svalKind then return 3
+    if cv.kind.armKind then return 4
+    if cv.kind.aggKind then return 5
     return 0
+}
+
+# staticListFirstValueTid -- the type of a list's first element with a value
+# when that is an arm, a data value or a list: the type a list naming none has
+# as its element type. 0 for a list of numbers or strings, or of no value.
+staticListFirstValueTid: function {
+    ast: Ast st: zenv.ZSymbolTable scope: ztypes.declid vals: (ListVal ztypes.cval).view
+} out ztypes.tid is {
+    for each cv: vals loop {
+        if cv.kind.none.not then {
+            if (staticListValueKind :cv) < 4 then return ztypes.tid.zero
+            return (constValueTid :ast :st :scope v: cv)
+        }
+    }
+    return ztypes.tid.zero
 }
 
 # staticListKindText -- a list element kind as a diagnostic names it.
@@ -10768,10 +10842,6 @@ resolveStaticListInto: function {
         return 0
     }
     litId: st.reg.literalIntTid
-    prevMono: st.typing.constMono
-    if monoId.isZero.not then st.typing.constMono = monoId
-    vals: staticListElemValues :ast :st :unitDecl :scope :dnode
-    st.typing.constMono = prevMono
     # whether `out` names the list's own type (`out staticlist u8`) rather than
     # its element type (`out u8`, read until every list says its value type)
     valueOut: false
@@ -10820,6 +10890,14 @@ resolveStaticListInto: function {
         vparts = staticListWantParts :st :want
         untypedSlots = vparts.indexLiteral
     }
+    # the values, read for the instance a generic unit's copy is for; an
+    # element that is a list takes the element type the `out` names
+    prevMono: st.typing.constMono
+    if monoId.isZero.not then st.typing.constMono = monoId
+    ew: ztypes.tid
+    if vparts.isValue then ew = vparts.elem
+    vals: staticListElemValues :ast :st :unitDecl :scope :dnode elemWant: ew
+    st.typing.constMono = prevMono
     # a typed value type names the element type the elements' own tags are
     # weighed against; an untyped one, or an `out` refused below, names none
     etn: String
@@ -10851,10 +10929,13 @@ resolveStaticListInto: function {
         ) case some then {
             elemTid = lk
         } case none then null
+        # a list of arms, data values or lists is of its first element's type
+        ft: staticListFirstValueTid :ast :st :scope :vals
+        if ft.isZero.not then elemTid = ft
     }
     ek: baseNumKind :st tid: elemTid
     # a list of mixed kinds has no element type to check its elements against
-    kindsOk: staticListKindsAgree :ast :st :dnode :vals :elemTid
+    kindsOk: staticListKindsAgree :ast :st :scope :dnode :vals :elemTid
     # a list that names its type -- `out T`, or a tagged element -- reads each
     # element at that type; one that names none reads them untyped, as a unit
     # constant reads, and only what reaches run time is the i64 / f64 default
@@ -13349,6 +13430,14 @@ refuseNonStaticMember: function {
         width: name.length.u32.orPanic
     )
     return true
+}
+
+# staticMemberHolds -- `tid` satisfies `staticmember`, what a list holds: what
+# a data field holds, a function reference aside, and StringView.
+staticMemberHolds: function {st: zenv.ZSymbolTable ast: Ast tid: ztypes.tid} out bool is {
+    if (st.reg.typetypeOf typeId: tid) == ztypes.ztypetype.functionType then return false
+    if (isStaticStringTid :ast :st :tid) then return true
+    return (isStaticMemberTid :st :ast :tid)
 }
 
 # isStaticMemberTid -- a type a data field may hold (refuseNonStaticMember).
@@ -23922,15 +24011,7 @@ constraintHolds: function {
         # a list's index: an id key, or untyped (literalSatisfies)
         return (typeIsIdKey :st :ast tid: argTid)
     } case staticMember then {
-        if (isStaticStringTid :ast :st tid: argTid) then return true
-        return (
-            (typeIsNumberOf :st tid: argTid float: false) or
-            (typeIsNumberOf
-                :st
-                tid: argTid
-                float: true
-            )
-        )
+        return (staticMemberHolds :st :ast tid: argTid)
     } case stringLike then {
         # a union bound, so it admits reference types only: a `str` conforms to
         # StringViewable as a value, and is handed to a StringLike parameter as its
@@ -61265,15 +61346,18 @@ staticListMemberValue: function {
 }
 
 # staticListElemFolds -- a list element of type `elemTid` reads as a constant: a
-# builtin number, or a string. A typedef element is a value of its own type,
-# whose own members a fold of the bare number would bypass.
+# builtin number, a string, an arm, a data value or a list. A typedef element
+# is a value of its own type, whose own members a fold of the bare number
+# would bypass.
 staticListElemFolds: function {
     ast: Ast
     st: zenv.ZSymbolTable
     elemTid: ztypes.tid
 } out bool is {
     if (isNumericTid :st tid: elemTid) then return true
-    return (isStaticStringTid :ast :st tid: elemTid)
+    if (isStaticStringTid :ast :st tid: elemTid) then return true
+    if (typedefBaseOf :st tid: elemTid).isZero.not then return false
+    return (isStaticMemberTid :st :ast tid: elemTid)
 }
 
 # isStaticStringTid -- a type a string literal can be held as in a static

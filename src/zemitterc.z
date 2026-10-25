@@ -37120,11 +37120,12 @@ emitStaticListMono: function {
     eid: symtab.reg.genericTypeArgAt specId: monoId ordinal: 0
     ect0: slotCType :ast :symtab :ctx tid: eid
     ect: ctypeOrI64 s: ect0.stringView
+    est: staticListStoredC ect: ect.stringView
     p: "\{runtimeDir}/z_data.c.tmpl"
     raw: readTemplateCached :ctx path: p.stringView
     if raw.length > 0 then {
         t1: applyTmpl text: raw key: "NAME" val: nm.stringView
-        t2: applyTmpl text: t1 key: "ELEM_T" val: ect.stringView
+        t2: applyTmpl text: t1 key: "ELEM_T" val: est.stringView
         buf.append t2
         buf.append "\n"
     }
@@ -42360,6 +42361,7 @@ emitStaticListArray: function {
     buf: String.borrow
 } is {
     ect: staticListElemCType :ast :symtab :ctx row: id
+    est: staticListStoredC ect: ect.stringView
     elems: String
     k: u64
     for k < count loop {
@@ -42368,20 +42370,21 @@ emitStaticListArray: function {
         k = k + 1
     }
     dsym: "_zag\{id}"
-    if count > 0 then buf.append "static const \{ect} \{dsym}[] = {\{elems}};\n\n"
+    if count > 0 then buf.append "static const \{est} \{dsym}[] = {\{elems}};\n\n"
     buf.append "static \{ect} \{dsym}_at(uint64_t _idx);\n"
     buf.append "static \{ect} \{dsym}_at(uint64_t _idx) {\n"
+    b2: "snprintf(_zp_buf, sizeof(_zp_buf), \"list index: index %llu out of bounds (length \{count})\", (unsigned long long)_idx);\n"
+    # an empty list's every index is past its end: the reader only panics
+    if count == 0 then {
+        buf.append "    char _zp_buf[96];\n    \{b2}    z_panic(_zp_buf);\n}\n\n"
+        return
+    }
     buf.append "    if (_idx >= \{count}) {\n"
     buf.append "        char _zp_buf[96];\n"
-    b2: "        snprintf(_zp_buf, sizeof(_zp_buf), \"list index: index %llu out of bounds (length \{count})\", (unsigned long long)_idx);\n"
-    buf.append b2
+    buf.append "        \{b2}"
     buf.append "        z_panic(_zp_buf);\n"
     buf.append "    }\n"
-    if count > 0 then {
-        buf.append "    return \{dsym}[_idx];\n"
-    } else {
-        buf.append "    return (\{ect}){0};\n"
-    }
+    buf.append "    return \{dsym}[_idx];\n"
     buf.append "}\n\n"
 }
 
@@ -42397,9 +42400,22 @@ staticListElemCType: function {
     return (ctypeOrI64 s: ect0.stringView)
 }
 
+# staticListStoredC -- element C type `ect` as a list's storage spells it after
+# a `const`: a data value's handle `const z_T_t*` is `z_T_t* const`, so `const`
+# in front of it reads `const z_T_t* const`, never `const const`; any other
+# type is itself.
+staticListStoredC: function {ect: StringView} out String is {
+    if (
+        (ect.startsWith prefix: "const ").not or (ect.endsWith suffix: "*").not
+    ) then return ect.string
+    r: (ect.substring from: 6 to: ect.length).string
+    r.append " const"
+    return r
+}
+
 # listItemText -- the C constant for element `slot` of list row `row`, rendered
-# from the value the checker recorded, at the list's element type; a string as
-# the StringView initializer its static array holds.
+# from the value the checker recorded, at the list's element type, as a static
+# initializer (staticAggItemText).
 listItemText: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -42409,10 +42425,13 @@ listItemText: function {
 } out String is {
     g: symtab.typing.constAggs.get i: row
     if slot >= g.itemCount then return "".string
-    v: symtab.typing.constAggItems.get i: g.itemStart.u64 + slot
-    if v.kind.svalKind then return (staticStringInit :symtab :v)
-    facts: cfacts
-    return (cvalText :ast :symtab :ctx tid: g.elem :v :facts)
+    return (staticAggItemText
+        :ast
+        :symtab
+        :ctx
+        tid: g.elem
+        v: (symtab.typing.constAggItems.get i: g.itemStart.u64 + slot)
+    )
 }
 
 # staticStringInit -- a folded string as a static initializer of its view: the
