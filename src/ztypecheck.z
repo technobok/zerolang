@@ -25017,8 +25017,8 @@ fixedLayout: function {n: u64} out valtypelayout is {
 
 # valtypeLayout -- a value type's size and alignment by the language's layout
 # rules, shape by shape: a typedef its base; an ordinal variant its one-byte
-# discriminator; a record its fields in order with padding, a function
-# reference `refBytes`; any other variant its tag and the union of its
+# discriminator; a data value, a handle, `refBytes`; a record its fields in
+# order with padding, a function reference `refBytes`; any other variant its tag and the union of its
 # payloads; a native as nativeLayout says. A facet (a vtable and a copy) and a
 # native the checker does not model are not measured. A backend lays an inline
 # arm out in the slot however it likes, but must hold every arm these rules
@@ -25040,6 +25040,13 @@ valtypeLayout: function {
     nl: nativeLayout :ast :st :tid :refBytes :depth
     if nl.known or nl.cyclic then return nl
     tt: st.reg.typetypeOf typeId: tid
+    # a data value is held as a handle to its static object
+    if tt == ztypes.ztypetype.recordType when (st.reg.isStaticOf :tid) then return (valtypelayout
+        size: refBytes
+        align: refBytes
+        known: true
+        cyclic: false
+    )
     if tt == ztypes.ztypetype.recordType then return (recordLayout :ast :st :tid :refBytes :depth)
     if tt == ztypes.ztypetype.variantType then return (variantLayout :ast :st :tid :refBytes :depth)
     return unknownLayout
@@ -25201,6 +25208,9 @@ checkUnionSlotArms: function {
 } is {
     names: ListVal zast.nameid
     zenv.sumArmNameIds ty: st.typing reg: st.reg tid: uid ids: names
+    # a static list's element is static storage, never boxed: the view a walk
+    # yields holds it whole, whatever its size
+    staticView: valIsMonoOf :st tid: uid wk: zast.wellKnown.slot.tyStaticView
     for each an: names loop {
         nm: an
         pt: (st.typing.declChildOfId parentTypeId: uid nameId: nm).or d: ztypes.tid.zero
@@ -25210,6 +25220,10 @@ checkUnionSlotArms: function {
         key: st.typing.armKey parentTypeId: uid nameId: nm
         if (st.typing.boxedArms.has item: key) then continue
         if (st.typing.declOwnershipOfId parentTypeId: uid nameId: nm).some then continue
+        if staticView then {
+            st.typing.inlineArms.add item: key
+            continue
+        }
         lay: valtypeLayout :ast :st tid: ptid refBytes: slotB depth: 0
         if lay.known when lay.size <= slotB when lay.align <= slotB then {
             st.typing.inlineArms.add item: key
