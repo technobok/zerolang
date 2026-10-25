@@ -60379,8 +60379,10 @@ literalDefaultTid: function {
 }
 
 # constOfMatch -- a compile-time `match`: the subject folds to an arm constant
-# and the value is the selected arm's, as an `if`'s is its selected branch's,
-# typed by that arm alone. The arms are checked as a body checks them, and only
+# or a choice value, and the value is the selected arm's, as an `if`'s is its
+# selected branch's, typed by that arm alone. Inside the arm a choice value's
+# subject, named bare, reads the value the arm carries, as a body's narrowing
+# does. The arms are checked as a body checks them, and only
 # the selected arm is evaluated, so a dead one may reach an `error` the program
 # never runs. A refusal is RECORDED for the caller that required the value: a
 # use site never asks.
@@ -60395,6 +60397,16 @@ constOfMatch: function {
     if cr.nid.isZero then return ztypes.noConst
     sv: evalConstNode :st :scope :ast :unitDecl nid: cr.subject
     if sv.kind.none then return ztypes.noConst
+    # a choice value selects its arm as an arm constant does; the value it
+    # carries is what the subject's name reads inside that arm
+    payload: ztypes.noConst
+    if sv.kind.aggKind then {
+        g: st.typing.constAggs.get i: sv.aggId.u64
+        if g.kind.staticChoice then {
+            payload = st.typing.constAggItems.get i: g.itemStart.u64
+            sv = ztypes.makeArmConst armTid: g.tid armName: g.arm
+        }
+    }
     if sv.kind.armKind.not then {
         stn: (specWrittenName
             :st
@@ -60414,7 +60426,18 @@ constOfMatch: function {
     }
     stmt: constMatchArm :st :ast :cr subject: sv
     if stmt.isZero then return ztypes.noConst
-    return (constBlockValue :st :scope :ast :unitDecl nid: stmt)
+    sn: atomNameId :ast n: (ast.nodes.get i: cr.subject)
+    narrows: payload.kind.none.not and sn.isZero.not
+    if narrows then {
+        st.typing.constNarrowNames.append sn
+        st.typing.constNarrowVals.append payload
+    }
+    r: constBlockValue :st :scope :ast :unitDecl nid: stmt
+    if narrows then {
+        st.typing.constNarrowNames.pop
+        st.typing.constNarrowVals.pop
+    }
+    return r
 }
 
 # constMatchArm -- the arm a compile-time `match` selects, its arms checked on
@@ -64052,6 +64075,13 @@ evalConstNode: function {
         nv.drop
         if noName then return ztypes.noConst
         if isLit then return litVal
+        nk: st.typing.constNarrowNames.length
+        for nk > 0 loop {
+            nk = nk - 1
+            if (st.typing.constNarrowNames.get i: nk) == plan.nameId then {
+                return (st.typing.constNarrowVals.get i: nk)
+            }
+        }
         if st.typing.constMono.isZero.not or st.typing.curMonoStamp.isZero.not then {
             gv: monoNumericParamValue :st nameId: plan.nameId
             if gv.kind.none.not then return gv
