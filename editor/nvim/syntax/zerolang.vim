@@ -43,7 +43,7 @@ syn match zerolangEscapeError /\\$/ contained
 syn region zerolangInterpolation matchgroup=zerolangInterpolationDelim start=/\\{/ end=/}/ contained contains=TOP
 
 " Keywords (use syn match so labels can take priority)
-syn match zerolangKeyword /\<\%(unit\|record\|class\|variant\|union\|facet\|protocol\|data\|list\|generator\|typedef\)\>/
+syn match zerolangKeyword /\<\%(unit\|record\|class\|variant\|union\|facet\|protocol\|data\|choice\|list\|generator\|typedef\)\>/
 syn match zerolangKeyword /\<\%(function\|in\|out\|outx\|is\|as\|native\)\>/
 syn match zerolangKeyword /\<\%(if\|when\|then\|else\)\>/
 syn match zerolangKeyword /\<\%(for\|each\|while\|loop\|with\|do\|on\)\>/

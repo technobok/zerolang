@@ -1338,9 +1338,9 @@ indexDeclObjInner: function {
     objNodeId: zast.nodeid
 } is {
     ob: objRefAt :ast nid: objNodeId
-    if ob.kind.dataDef then st.typing.staticTypesSeen = true
+    if ob.kind.dataDef or ob.kind.choiceDef then st.typing.staticTypesSeen = true
     if ob.nid.isZero.not then {
-        isArm: ob.kind.variantDef or ob.kind.unionDef
+        isArm: ob.kind.variantDef or ob.kind.unionDef or ob.kind.choiceDef
         kIit: u64
         for kIit < ob.nis loop {
             iId: zast.objIsItemAt :ast nid: ob.nid i: kIit
@@ -1581,6 +1581,9 @@ defTypetypeOf: function {
             # a data type is a record whose values are static (isStatic)
             return (optionval.some ztypes.ztypetype.recordType)
         } case variantDef then {
+            return (optionval.some ztypes.ztypetype.variantType)
+        } case choiceDef then {
+            # a choice is a variant whose values are static (isStatic)
             return (optionval.some ztypes.ztypetype.variantType)
         } case unionDef then {
             return (optionval.some ztypes.ztypetype.unionType)
@@ -3962,7 +3965,7 @@ refuseTypedefTypePositionFrom: function {
 }
 
 # refuseZerolessArray -- an array is filled with its element's zero value, and
-# a data value has none (lacksZero): `array row to: 4` is refused, with a
+# a static value has none (lacksZero): `array row to: 4` is refused, with a
 # ListVal or an optionval as the remedy. True when it reported.
 refuseZerolessArray: function {
     st: zenv.ZSymbolTable
@@ -3983,7 +3986,7 @@ refuseZerolessArray: function {
         lineno: (nodeLine :n)
         colno: (nodeCol :n)
         e: zast.err.typeError
-        msg: "an array of '\{tn}' is refused: an array starts as zero values, and a data value has no zero"
+        msg: "an array of '\{tn}' is refused: an array starts as zero values, and a static value has no zero"
         note: "".string
         hint: "hold the values in a 'ListVal', or make the element 'optionval \{tn}'"
         width: 1
@@ -4016,6 +4019,13 @@ lacksZero: function {
     return false
 }
 
+# staticValueNoun -- a value of static type `tid` as a message names it: "a
+# data value", or "a choice value" for a static sum.
+staticValueNoun: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out StringView is {
+    if (st.reg.typetypeOf typeId: tid) == ztypes.ztypetype.variantType then return "a choice value"
+    return "a data value"
+}
+
 # refuseStaticMarker -- a data value is copied by binding it and is never
 # moved, borrowed or freed, so no marker applies to it: `.take`, `.borrow`,
 # `.view`, `.hold` and `.copy` are refused. True when it reported.
@@ -4037,13 +4047,14 @@ refuseStaticMarker: function {
     )
     if isMarker.not then return false
     mn: zast.nameTextCopy :ast ref: cnId
+    noun: staticValueNoun :st tid: bt
     (addError
         :st
         nodeid: dp.nid
         lineno: dp.lineno
         colno: dp.colno
         e: zast.err.typeError
-        msg: "'.\{mn}' does not apply to a data value: it is copied by binding it, and is never moved, borrowed or freed"
+        msg: "'.\{mn}' does not apply to \{noun}: it is copied by binding it, and is never moved, borrowed or freed"
     )
     return true
 }
@@ -4060,7 +4071,8 @@ refuseStaticWrite: function {st: zenv.ZSymbolTable ast: Ast target: zast.nodeid}
             if n.dottedpath then parentId = n.parent
         }
         if parentId.isZero then return false
-        if (st.reg.isStaticOf tid: (walkTypeOf :st nid: parentId)) then {
+        pt: walkTypeOf :st nid: parentId
+        if (st.reg.isStaticOf tid: pt) then {
             tn: ast.nodes.get i: target
             (addError
                 :st
@@ -4068,7 +4080,7 @@ refuseStaticWrite: function {st: zenv.ZSymbolTable ast: Ast target: zast.nodeid}
                 lineno: (nodeLine n: tn)
                 colno: (nodeCol n: tn)
                 e: zast.err.typeError
-                msg: "a data value cannot change: this writes a field of one".string
+                msg: "\{staticValueNoun :st tid: pt} cannot change: this writes a part of one"
             )
             return true
         }
@@ -12546,7 +12558,13 @@ resolveRecord: function {
     unitTmpl: nestedTemplateUnit :st :ast :scope :unitDecl nameId: (nameIdOf :ast name: defName)
     if rnode.kind == zast.objectkind.dataDef then {
         st.reg.setStatic typeId: rt value: true
-        refuseDataShape :st :defName :rnode ownParams: isgen inGenericUnit: unitTmpl.isZero.not
+        (refuseStaticShape
+            :st
+            :defName
+            :rnode
+            ownParams: isgen
+            inGenericUnit: unitTmpl.isZero.not
+        )
     }
     if unitTmpl.isZero.not then isgen = true
     ridDecl: declOfTypeId :st tid: rid
@@ -12906,6 +12924,10 @@ resolveVariant: function {
     pvGrants_vvid: ListVal zast.nameid
     scanVisibility :st :ast onode: vnode excl: pvExcl_vvid grants: pvGrants_vvid
     st.reg.setValtype typeId: variantTid value: true
+    # a choice's values are static: set before its arms resolve, so an arm may
+    # carry an untyped number (fieldSlotTid)
+    isChoice: vnode.kind == zast.objectkind.choiceDef
+    if isChoice then st.reg.setStatic typeId: variantTid value: true
     vDecl: declOfTypeId :st tid: variantTid
     isgen: false
     onIsgen: ast.nodes.get i: vnode.nid
@@ -12913,6 +12935,13 @@ resolveVariant: function {
         isgen = hasGenericParam :ast items: onIsgen.asItems
     }
     unitTmplV: nestedTemplateUnit :st :ast :scope :unitDecl nameId: (nameIdOf :ast name: defName)
+    if isChoice then (refuseStaticShape
+        :st
+        :defName
+        rnode: vnode
+        ownParams: isgen
+        inGenericUnit: unitTmplV.isZero.not
+    )
     if unitTmplV.isZero.not then isgen = true
     eqAsV: false
     neAsV: false
@@ -12999,10 +13028,13 @@ resolveVariant: function {
             # skip only the offending arm: aborting the whole definition would
             # leave every LATER arm unresolved and report each use of one as a
             # missing member, burying the real mistake under its own fallout
+            armPayloadV: "String"
+            if isChoice then armPayloadV = "text"
             armBadV: (refuseStringArmPayload
                 :st
                 :ast
                 :fm
+                payload: armPayloadV
             )
             if armBadV then continue
             # an arm over the variant's own parameter (`(Cell t: t)`) is a
@@ -13016,17 +13048,7 @@ resolveVariant: function {
                 oId: fm.operation
                 thisName: defName
             )
-            armRefV: (refuseReftypeMember
-                :st
-                :ast
-                :fm
-                owner: defName
-                tid: cid
-                what: "variant arm"
-                remedy: "union"
-                name: (zast.nameTextAt :ast ref: fm.name).stringView
-            )
-            if armRefV then continue
+            if (refuseArmPayload :st :ast :fm :defName :cid :isChoice) then continue
             (st.typing.setMemberType
                 parentTypeId: variantTid
                 nameId: fm.name
@@ -13414,10 +13436,44 @@ typeExprText: function {ast: Ast.view nid: zast.nodeid} out String is {
     return r
 }
 
-# refuseDataShape -- a data type declares its layout by its fields and is
-# concrete: it cannot be native, take type parameters, or be declared in a
-# generic unit, since each instance of that unit would need its own.
-refuseDataShape: function {
+# refuseArmPayload -- what an arm of a sum may not carry: a variant's, a
+# reftype (refuseReftypeMember); a choice's, anything but a static value
+# (refuseNonStaticMember). True when refused, so the arm is skipped.
+refuseArmPayload: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    fm: argref
+    defName: StringView
+    cid: ztypes.tid
+    isChoice: bool
+} out bool is {
+    # an arm that carries nothing carries nothing a choice refuses
+    if isChoice when cid == st.typing.nullTypeId then return false
+    if isChoice then return (refuseNonStaticMember
+        :st
+        :ast
+        :fm
+        tid: cid
+        name: (zast.nameTextAt :ast ref: fm.name).stringView
+        arm: true
+    )
+    return (refuseReftypeMember
+        :st
+        :ast
+        :fm
+        owner: defName
+        tid: cid
+        what: "variant arm"
+        remedy: "union"
+        name: (zast.nameTextAt :ast ref: fm.name).stringView
+    )
+}
+
+# refuseStaticShape -- a data type or a choice declares its layout by its
+# fields or arms and is concrete: it cannot be native, take type parameters,
+# or be declared in a generic unit, since each instance of that unit would
+# need its own.
+refuseStaticShape: function {
     st: zenv.ZSymbolTable
     defName: StringView
     rnode: objref
@@ -13425,10 +13481,16 @@ refuseDataShape: function {
     ownParams: bool
     inGenericUnit: bool
 } is {
+    noun: "data type"
+    parts: "fields"
+    if rnode.kind == zast.objectkind.choiceDef then {
+        noun = "choice"
+        parts = "arms"
+    }
     msg: String
-    if rnode.isNative then msg = "'\{defName}' is a data type: its fields declare its layout, so it cannot be native"
-    if ownParams then msg = "'\{defName}' is a data type: a data type cannot take type parameters"
-    if inGenericUnit then msg = "'\{defName}' is a data type: a data type cannot be declared in a generic unit"
+    if rnode.isNative then msg = "'\{defName}' is a \{noun}: its \{parts} declare its layout, so it cannot be native"
+    if ownParams then msg = "'\{defName}' is a \{noun}: a \{noun} cannot take type parameters"
+    if inGenericUnit then msg = "'\{defName}' is a \{noun}: a \{noun} cannot be declared in a generic unit"
     if msg.length == 0 then return
     (addError
         :st
@@ -13440,15 +13502,18 @@ refuseDataShape: function {
     )
 }
 
-# refuseNonStaticMember -- a data field holds a static value: a number (a
-# literal type included), an enum (bool among them), text, a function
-# reference, a static list or another data type. True when it reported.
+# refuseNonStaticMember -- a data field holds a static value, and a choice's
+# arm carries one: a number (a literal type included), an enum (bool among
+# them), text, a function reference, a static list, a data type or a choice.
+# True when it reported.
 refuseNonStaticMember: function {
     st: zenv.ZSymbolTable
     ast: Ast
     fm: argref
     tid: ztypes.tid
     name: StringView
+    # the member is a choice's arm rather than a data field
+    arm: false
 } out bool is {
     if tid.isZero or (isStaticMemberTid :st :ast :tid) then return false
     # a type parameter: the data type itself is refused (refuseDataShape)
@@ -13457,14 +13522,18 @@ refuseNonStaticMember: function {
     hint: String
     if tid == (stdTid :ast :st wk: zast.wellKnown.slot.tyStringView) then {
         hint = "a data field's string is text: declare it `text`".string
+        if arm then hint = "a choice arm's string is text: declare it `text`".string
     }
+    what: "data field '\{name}' holds a '\{tn}': a data field holds"
+    if arm then what = "choice arm '\{name}' carries a '\{tn}': a choice arm carries"
+
     (addErrorH
         :st
         nodeid: fm.nid
         lineno: fm.lineno
         colno: fm.colno
         e: zast.err.typeError
-        msg: "data field '\{name}' holds a '\{tn}': a data field holds static values -- numbers, bool and other enums, text, function references, static lists and data types"
+        msg: "\{what} static values -- numbers, bool and other enums, text, function references, static lists, data types and choices"
         note: String
         :hint
         width: name.length.u32.orPanic
@@ -14917,13 +14986,15 @@ refuseStringArmPayload: function {
     # the arm's declaration, whose root is tested and whose name the message
     # names
     fm: argref
+    # the payload type the hint offers: a choice carries text
+    payload: "String"
 } out bool is {
     aop: ast.nodes.get i: fm.operation
     if (rootIsStringLiteral :ast n: aop).not then return false
     aname: zast.nameTextAt :ast ref: fm.name
     ap: zast.posOf n: aop
     ma: "arm '\{aname}' is declared by a string literal -- an arm declares the TYPE of its payload"
-    ha: "name the payload's type (`\{aname}: String`), or `null` for an arm that carries nothing"
+    ha: "name the payload's type (`\{aname}: \{payload}`), or `null` for an arm that carries nothing"
     na: String
     (addErrorH
         :st
@@ -17587,6 +17658,8 @@ resolveObjectDef: function {
     } case dataDef then {
         resolveRecord :st scope: rf :ast :unitDecl :defName rnode: defn
     } case variantDef then {
+        resolveVariant :st scope: rf :ast :unitDecl :defName vnode: defn
+    } case choiceDef then {
         resolveVariant :st scope: rf :ast :unitDecl :defName vnode: defn
     } case unionDef then {
         resolveUnion :st scope: rf :ast :unitDecl :defName vnode: defn
@@ -50320,8 +50393,9 @@ refuseNameConstruction: function {
     tt: st.reg.typetypeOf typeId: tid
     if tt.isUserFamily.not then return false
     bare: spelling.bareName
-    # a data value is built only in a static position (constOfStaticFields)
-    if (st.reg.isStaticOf :tid) then {
+    # a data value is built only in a static position (constOfStaticFields); a
+    # choice is a sum, built through an arm, as below
+    if (st.reg.isStaticOf :tid) when tt == ztypes.ztypetype.recordType then {
         tn: specWrittenName :st :ast :tid
         (nameCtorError
             :ast

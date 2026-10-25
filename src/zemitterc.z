@@ -32710,10 +32710,12 @@ valueIsItsPointer: function {
 
 # isStaticHandle -- a value of tid is a data value: a `const` pointer to the
 # static object the compiler built, copied as the pointer and read through it.
+# A choice is static too, but held by value, as a variant is.
 isStaticHandle: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
     if tid.isZero then return false
-    if (symtab.reg.isStaticOf :tid) then return true
-    return (symtab.reg.isStaticOf tid: (canonTypeId :symtab :tid))
+    ct: canonTypeId :symtab :tid
+    if (symtab.reg.isStaticOf :tid).not when (symtab.reg.isStaticOf tid: ct).not then return false
+    return (symtab.reg.typetypeOf typeId: ct) == ztypes.ztypetype.recordType
 }
 
 # isBoxTid -- the type is a builtin Box mono (heap pointer), as flagged by the
@@ -33670,7 +33672,7 @@ noteStaticVids: function {symtab: zenv.ZSymbolTable.view ctx: Ctx} is {
     if symtab.typing.staticTypesSeen.not then return
     t: ztypes.tid 1
     for t < symtab.reg.nextTid loop {
-        if (symtab.reg.isStaticOf tid: t) then ctx.staticTids.add item: t
+        if (isStaticHandle :symtab tid: t) then ctx.staticTids.add item: t
         t = t.next
     }
     v: ztypes.vid 1
@@ -45921,9 +45923,11 @@ isRecordDef: function {n: astnode.view} out bool is {
     return (objectDefIsKind :n kind: zast.objectkind.dataDef)
 }
 
-# true when `n` is a variant definition.
+# true when `n` is a variant definition. A choice is one: its arms are a
+# variant's arms, and its values are laid out as a variant's are.
 isVariantDef: function {n: astnode.view} out bool is {
-    return (objectDefIsKind :n kind: zast.objectkind.variantDef)
+    if (objectDefIsKind :n kind: zast.objectkind.variantDef) then return true
+    return (objectDefIsKind :n kind: zast.objectkind.choiceDef)
 }
 
 # whether a node defines a union, which decides whether its arms may carry

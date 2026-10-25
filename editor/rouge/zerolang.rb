@@ -26,6 +26,7 @@ module Rouge
           facet
           protocol
           data
+          choice
           list
           generator
           typedef

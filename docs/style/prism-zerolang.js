@@ -38,7 +38,7 @@
     // return/break/continue/yield are NOT keywords -- they are predeclared
     // functions (see builtins).
     var keywords = [
-        'unit', 'record', 'class', 'variant', 'union', 'facet', 'protocol', 'data', 'list',
+        'unit', 'record', 'class', 'variant', 'union', 'facet', 'protocol', 'data', 'choice', 'list',
         'generator', 'typedef',
         'function', 'in', 'out', 'outx', 'is', 'as',
         'if', 'when', 'then', 'else',
