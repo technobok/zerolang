@@ -167,10 +167,6 @@ Table of Contents</div>
 </li>
 <li><a href="#record">record</a>
 </li>
-<li><a href="#data">data</a>
-</li>
-<li><a href="#choice">choice</a>
-</li>
 <li><a href="#class">class</a>
 </li>
 <li><a href="#is-and-as-sections">'is' and 'as' Sections</a>
@@ -184,6 +180,8 @@ Table of Contents</div>
 <li><a href="#union">union</a>
 </li>
 <li><a href="#variant">variant</a>
+</li>
+<li><a href="#static-data">Static Data</a>
 </li>
 <li><a href="#operations-2">Operations</a>
 </li>
@@ -393,7 +391,7 @@ stored in the resulting format. This table IS the surface: it is what the
 <code>intliteral</code> type declares (see
 <a href="./stdlib_system.html">the system unit</a>), and a suffix naming anything
 else &#x2014; a scalar typedef included &#x2014; is refused. A literal takes a typedef only
-where the type is asked for in writing, which is a <a href="#static-list">list</a>'s
+where the type is asked for in writing, which is a <a href="#static-lists">list</a>'s
 <code>out T</code>.</p>
 <table>
 <colgroup>
@@ -861,7 +859,7 @@ references used in that initial unit.</p>
     <a href="#variant">variant</a>, <a href="#union">union</a>, <a href="#facet">facet</a>,
     <a href="#protocol">protocol</a></li>
 <li>constant <a href="#if-definition">if</a> definition</li>
-<li><a href="#static-list">static list</a></li>
+<li><a href="#static-lists">static list</a></li>
 <li>typeref (aliases?)</li>
 </ul>
 <p>The descriptions of the syntax for each of these are described in their
@@ -4148,150 +4146,8 @@ arguments.</p>
 naming that type as the discriminator source for a union or variant. It is
 written in the <code>as</code> block and nowhere else -- see <a href="#tag">tag</a>.</p>
 <h3 id="static-list"><a href="#static-list">5.6. static list</a></h3>
-<p><code>list { ... }</code> creates a static list: a constant list of embedded data. A
-list holds elements of one type: all integers, all floats, all strings, or all
-values of one other static type -- <code>bool</code>, the arms of one enum, lists of one
-list type, or values of one <code>data</code> type. An element of another kind or type
-than the first, an integer among floats included, is an error where it is
-written. Each element is any compile-time constant of that type: a literal, a
-unit constant, an expression over them (string <code>+</code> too), another list's
-element, a <code>data</code> construction. With no <code>out</code>, a list of arms, lists or
-<code>data</code> values is of its first element's type, and an element that is itself
-a list takes the element type an <code>out</code> names. The list's name is a value of type <code>staticlist T</code>, where
-<code>T</code> is the element type (see <a href="./stdlib_collections.html#lists">Lists</a>). The keyword <code>list</code> opens a list and names no type: the type is
-<code>staticlist</code> wherever one is written, <code>{d: staticlist u8}</code>,
-<code>out (staticlist StringView i: nameid)</code>.</p>
-<p>A list may be empty when its <code>out</code> names its type (<code>list {} out staticlist
-StringView</code>): its length is 0, its walk ends at once, and it has no
-<code>.array</code>. With no <code>out</code> an empty list has nothing to take a type from and
-is an error, unless it is nested.</p>
-<p>A list written inside a <code>data</code> value is nested: it is a value of the field
-it is written for, so it needs no <code>out</code> -- <code>needs: list { write: "io.write"
-}</code> is a <code>staticlist text</code> when the field is one, and <code>list {}</code> is an empty
-one. An <code>out</code> written on a nested list must name the field's type. Its
-labels, <code>slot</code> and <code>length</code> are read through the path to it, as a named
-list's are through its name: <code>first.needs.write</code>.</p>
-<p>Elements are stored in the order they are written: the first is at index 0,
-and each one after it at the next index. An element may carry a label, which
-names it (labels are required for a list that is used as a <code>tag</code>); an
-integer label is a name like any other and does not move the element. An
-unlabelled element is named by its index (<code>primes.0</code>). Every name in a list
-is distinct -- a label that repeats another label, or the index an unlabelled
-element is named by (<code>list { 0 1 1: 3 }</code>), is an error.</p>
-<p>A labelled element can be referenced directly elsewhere in the source, as a
-constant is.</p>
-<p>A list's optional <code>out</code> names the list's type -- <code>out staticlist u8</code>,
-<code>out staticlist f32</code>, <code>out staticlist StringView</code> -- or an instance that also names
-the type its elements are indexed by, <code>out (staticlist u8 i: byteid)</code> or
-<code>out (staticlist StringView i: nameid)</code>. The list's element type is that type's,
-and any per-element type tag (<code>name: 0.T</code>) must agree with it; without an
-<code>out</code> the tags alone name it, and must agree with each other. An <code>out</code>
-that leaves its element out -- <code>out staticlist</code>, or one that writes the literal
-type, <code>out (staticlist intliteral)</code> -- names none, and neither does a list with no
-<code>out</code> and no tag. A number in a list of <code>StringView</code> is an error, as is a
-string in a list of numbers. An interpolated string builds its value at run
-time, so it is no element.</p>
-<p>A list whose element type is named -- by its <code>out</code>, or by a tagged element
--- reads every element at that type, whether or not the element wrote a tag
-of its own: <code>mydata.cNul</code> reads at the list's type at every access, and
-converts as a typed numeric literal does anywhere else. A list that names
-no element type reads its elements UNTYPED, as a unit constant reads:
-<code>sizes.small</code> lands in whatever numeric type takes it, checked by its
-value, and a string element is a <code>StringView</code> or <code>text</code> as its slot asks,
-as a string literal is. Only what reaches run time -- the list's value, a
-run-time <code>.get</code>, a walk -- materialises: an untyped list's value is a
-<code>staticlist i64</code> or a <code>staticlist f64</code>, and a list of strings is in a static
-position, so its value is a <code>staticlist text</code>; each is indexed by <code>u64</code>,
-and the emitted program never holds an untyped element. A run-time read of a
-text element reaches a <code>StringView</code> through <code>.stringView</code>. One list is one static
-array, so an untyped list is not a <code>staticlist u8</code>: a parameter that asks
-for one is refused it.</p>
-<p>A value the chosen type cannot hold &#x2014; <code>list { 300 } out staticlist u8</code>, or a
-negative element in an unsigned list &#x2014; is an error at the list's
-declaration, reported against the element that does not fit. The check
-happens where the value is written rather than where it is read, because
-a list has no other place that sees every element at once.</p>
-<p>A list has the members its type declares -- <code>length</code>, <code>get</code>,
-<code>iterate</code> and <code>slot</code> on every list, <code>array</code> on a list of numbers, and
-<code>tag</code>, the discriminator for a tagged type (see below), on a list of
-integers:</p>
-<ul>
-<li><code>tag</code> -- the list's discriminator, for a tagged type (see below)</li>
-<li><code>length</code> -- its element count, a constant</li>
-<li><code>get</code> -- <code>.get i: k</code>, the element at index <code>k</code>, of the list's
-index type (<code>u64</code> when it names none)</li>
-<li><code>slot</code> -- <code>blk.slot.label</code>, the POSITION of a labelled element, of
-the list's index type, or untyped when it names none. A vocabulary held as
-one list reads each entry's position by its label
-(<code>names.slot.wkThis</code>); an unlabelled element has no slot, and a list
-with no label has no <code>slot</code> at all</li>
-<li><code>iterate</code> -- the walk over the elements, first to last</li>
-<li><code>array</code> -- <code>.array</code>, a copy of the list into a sized array</li>
-</ul>
-<p>An element is a member of the list too, so it may not take one of these
-names: a second definition of a name the list already has is refused
-where the element is written, naming the member it would collide with.</p>
-<p>The list's element type also determines the element width of the runtime array
-a list is emitted as, when it is indexed by a variable or iterated. An
-untyped list's array holds the <code>i64</code>, <code>f64</code> or <code>text</code> its elements
-materialise to; see
-<a href="./representation_of_types.html">representation_of_types</a> for the layout.</p>
-<p>String literal fragments are built on top of a u8 data sequence.</p>
-<p>Through the list's name, its elements (<code>primes.0</code>, <code>codes.ht</code>), its
-<code>.length</code> and <code>.get K</code> with a constant <code>K</code> are constants -- in a body
-and in a unit-level definition alike (<code>COUNT: primes.length</code>) -- and a
-program that reads only those carries no array at all. A constant <code>K</code> out of
-range is a compile error. A run-time <code>.get i</code>, <code>.array</code> (a copy into a
-sized array) and the list used as a value put its array into the program.</p>
-<p>The name is a value: bound (<code>w: primes</code>), passed, returned, held in a field
-or walked (<code>for each p: primes</code>), it is a view of the static array --
-its length and a pointer at it -- which binding copies and which takes no lock,
-since static memory can be neither written nor freed. Through a value,
-<code>get</code> reads at run time and panics out of range, and <code>length</code> and
-<code>iterate</code> read the view; <code>.array</code>, <code>.tag</code> and <code>.slot</code> are the list's,
-reached through its name only. Written alone as a statement the name does
-nothing and is <code>E0100</code>, and an ownership marker on the list or on an
-element, which names no storage, is <code>E0100</code> too. A list is declared at unit
-level (or in an <code>as</code> block); one written inside a function body is
-<code>E0100</code>.</p>
-<pre><code class="language-zerolang"># untyped elements; as a value, a staticlist i64
-mydata_i64: list { 1 2 0x07 }
-
-# array of u8 via `out staticlist u8` &#x2014; every element is u8, no per-element tag
-mydata_u8: list { 0 64 250 } out staticlist u8
-
-# array of u8 via a per-element type tag &#x2014; same result as `out staticlist u8`
-mydata_u8b: list { 1.u8 2 0x07 }
-
-# an integer label names its element: length 3, and `mydata_lbl.4` is 4
-mydata_lbl: list { 1 2 4: 4 }
-
-# an array with text keys
-mydata_key: list { FIRST: 1 SECOND: 2 THIRD: 3 }
-
-# which can be used as a tag in a sum-type, using these values for
-#  the descriminator
-myvariant: variant {
-    FIRST: null
-    SECOND: null
-    THIRD: null
-} as {
-    tag: mydata_key.tag
-}
-
-# elements read at the list's own type, so a list whose values are
-# bytes says so once and reaches a u8 parameter directly
-mydata_byte: list { FIRST: 1 SECOND: 2 } out staticlist u8
-take_u8: function {b: u8} out u8 is { return b }
-result: take_u8 b: mydata_byte.FIRST
-
-# can also use elements as constants in top level or in code:
-One: mydata_key.FIRST   # same as `One: 1`
-
-# a vocabulary of strings indexed by its own id type: `words.slot.lf` is
-# the id 1, and `words.get i: words.slot.lf` is "line feed"
-wordid: typedef u64
-words: list { ht: "tab" lf: "line feed" } out (staticlist StringView i: wordid)</code></pre>
+<p>A static list, <code>list { ... }</code>, is static data: see
+<a href="#static-lists">Static Data</a>.</p>
 <h3 id="array"><a href="#array">5.7. array</a></h3>
 <p>Arrays are fixed-length, stack-allocated value types that are generic over
 both the element type and length. Arrays of different lengths are different
@@ -5412,7 +5268,8 @@ a local, a function or a constant.</p>
 </ul>
 <h3 id="object-definitions"><a href="#object-definitions">5.14. Object definitions</a></h3>
 <p><code>record</code>, <code>class</code>, <code>union</code>, <code>variant</code>, <code>facet</code> and <code>protocol</code> all
-define an OBJECT. An object definition must declare something: one with neither
+define an OBJECT; so do <code>data</code> and <code>choice</code>, the static record and sum
+types (see <a href="#static-data">Static Data</a>). An object definition must declare something: one with neither
 an <code>is</code> member nor an <code>as</code> member is an error, because there is nothing to
 hold and nothing to call, and no C form exists for it.</p>
 <p>A <code>record</code> or a <code>class</code> must declare a field as well: it holds its data in
@@ -5470,89 +5327,6 @@ valtypes; make 'R' a class to hold 'String'</code>. The remedy is a <code>class<
 <code>union</code> for a sum), or -- for a valtype that must live on the heap -- a
 <code>Box from:</code> local; <code>Box</code> is itself a class, so it too is never a record
 field.</p>
-<h3 id="data"><a href="#data">5.16. data</a></h3>
-<p>Defines a static record type: a record whose values are static. The compiler
-builds a static value, nothing changes it, and nothing frees it. A data type
-is a valtype, so its name is lowercase, as a record's is.</p>
-<pre><code class="language-zerolang"># a row of a table: a key, a text default, and an untyped number
-entry: data {
-    key: text
-    note: "".text
-    size: intliteral
-    live: false
-}</code></pre>
-<p>A data field holds a static value: a number, an untyped <code>intliteral</code> or
-<code>floatliteral</code>, <code>bool</code> or another variant whose arms carry nothing,
-<code>text</code>, a function reference, a <code>staticlist</code>, or another data type. Any
-other field type is error <code>E0100</code>. An untyped string is <code>text</code> here: a
-field written <code>note: ""</code> is a <code>text</code> field, as <code>note: "".text</code> is. A
-default is written by value, as a record's is:
-<code>size: 5</code> is an <code>i64</code> field and <code>size: 5.u8</code> a <code>u8</code> field.</p>
-<p>A function-typed field is declared by a spec, which it must then be given, or
-by a function's name, which is also its default (<code>lower: defaultLower</code>), as a
-class field's is. In a static value the function is written by its bare name,
-or its name through a unit (<code>(op f: add)</code>, <code>(op f: util.sub)</code>): there a
-name is the reference, never a call, and the function must have the field's
-signature. A spec, a native function, a generic function and a method are
-error <code>E0100</code> there, and a call <code>E0100</code> too. A choice arm carries a function
-the same way. Read at run time, such a field is called as any function field
-is (<code>o.f a: 1 b: 2</code>); two references are equal when they name one function.</p>
-<p>A data value is built in a static position: as a unit-level constant, as a
-type's <code>as</code> constant, or inside another data value. With arguments it is
-written in parentheses; with every field at its default it is
-<code>&lt;type&gt;.create</code>. Each argument is checked as a construction's argument is:
-an unknown field and a missing required one are refused, and an argument must
-be a constant of the field's type. An untyped number keeps its full value in
-an <code>intliteral</code> field, and a string is <code>text</code>. Equal values are stored
-once. A construction in a function body is error <code>E0300</code>.</p>
-<p>A field read on a data value, <code>bolt.count</code>, folds to the field's value at
-compile time, at unit level and in a body, through nested values and through a
-type's <code>as</code> constant. Such a read does not emit the data value. An untyped
-number keeps its full value until it is used, where it must fit the type it
-lands in. A data value built from a field of itself, directly or through
-another value, is error <code>E0600</code>.</p>
-<p>A data value never changes. Binding it to a name copies it, and the copy
-refers to the same value. It is never moved, borrowed or freed, so a
-marker on it (<code>.take</code>, <code>.borrow</code>, <code>.view</code>, <code>.hold</code> or <code>.copy</code>) is
-error <code>E0100</code>. A write to one of its fields, at any depth of the path, is
-error <code>E0100</code>. Binding a name that holds a data value to another one is
-no write to either. A data value has no zero value, so an <code>array</code> of a data
-type, or of a record that holds one, is error <code>E0100</code>. Hold such values in
-a <code>ListVal</code>, or make the element <code>optionval</code>.</p>
-<p>At run time a data value is a handle: a pointer to the static object the
-compiler built, which binding, passing and returning copy. Only the values run
-time uses are emitted, with the values they hold. Runtime code may hold a data
-value wherever a valtype goes: a local, a parameter, a return, a record field,
-a <code>ListVal</code>, a map value or key, a <code>SetVal</code> and an <code>optionval</code>. An
-untyped number in a value used at run time is an <code>i64</code> or an <code>f64</code> there,
-and one outside that type is error <code>E0100</code> at the use.</p>
-<p>A data type has the generated <code>==</code>, <code>!=</code> and <code>hash</code> a record has, when
-every field has its own. A field typed <code>intliteral</code> or <code>floatliteral</code>
-compares as the number it holds, as an untyped constant does: exactly, as
-written, where the comparison folds -- two constant data values compare at
-compile time, field by field -- and as the <code>i64</code> or <code>f64</code> it is emitted
-as at run time. So two values whose fields hold <code>0.1</code> and
-<code>0.10000000000000000001</code> differ when compared at compile time and are equal
-at run time, where both are one <code>f64</code>. An <code>intliteral</code> field hashes as its
-<code>i64</code>; a <code>floatliteral</code> field, like an <code>f64</code> one, has no <code>hash</code>, so a
-data type holding one is no map key. A data type's methods take the
-receiver <code>{:this}</code>, the handle; a method that writes a field is refused as
-any write is.</p>
-<pre><code class="language-zerolang">part: data {
-    name: "nut".text
-    count: 1
-}
-
-# a unit-level data value, and one of every default
-bolt: (part name: "bolt" count: 40)
-blank: part.create
-
-main: function is {
-    print "parts"
-}</code></pre>
-<p>A data type declares its layout by its fields, so it cannot be <code>native</code>
-and must declare a field. It cannot take type parameters, nor be declared in
-a generic unit. Each of these is error <code>E0100</code>.</p>
 <p>Generic types can also be used in records:</p>
 <pre><code class="language-zerolang"># k and v can be anything (seperately)
 dictelement: record {
@@ -5588,48 +5362,7 @@ BagIter: class {
         return (meta.create pos: 0 :target)
     }
 }</code></pre>
-<h3 id="choice"><a href="#choice">5.17. choice</a></h3>
-<p>Defines a static sum type: a variant whose values are static, as a data
-type's are. A choice is a valtype, so its name is lowercase, as a variant's
-is. Each arm carries nothing, written <code>null</code>, or one value of the type it
-names, and that type is one a data field may hold: a number (an untyped
-<code>intliteral</code> or <code>floatliteral</code> too), <code>bool</code> or another enum, <code>text</code>, a
-function reference, a <code>staticlist</code>, a data type or another choice. Any other
-payload is error <code>E0100</code>, and so is a choice that is native, takes type
-parameters or is declared in a generic unit.</p>
-<pre><code class="language-zerolang">nativeform: choice {
-    call: null
-    template: text
-    width: u8
-}</code></pre>
-<p>A choice value is used as a variant's is: on a value <code>f</code>, <code>f.call</code> is the arm
-predicate,
-<code>match</code> selects an arm, and <code>==</code> compares arm and value. An arm that
-carries nothing is read by name anywhere, <code>nativeform.call</code>, and has no zero
-otherwise: a bare <code>nativeform</code> builds no value. A choice value is copied by
-binding it, and no marker applies to it.</p>
-<p>A value whose arm carries a value is built in a static position, as a data
-value is: as a unit-level constant, as a type's <code>as</code> constant, or inside
-another data or choice value, in parentheses -- <code>tpl: (nativeform.template
-"io.write")</code>. The one value is checked as a data field's is: an untyped string
-is <code>text</code>, an untyped number keeps its full value in an <code>intliteral</code> arm,
-and a <code>list { }</code> is of the arm's <code>staticlist</code> type. Without the
-parentheses, <code>tpl: nativeform.template "io.write"</code> applies a type, which a
-choice does not take, and is refused, as <code>x: row 5</code> is for a data type. In a
-function body such a value is error <code>E0300</code>: build it at unit level and read
-it there. A read of an arm predicate or <code>==</code> on values built so folds at
-compile time, and so does a unit-level <code>match</code> on one: the value selects
-its arm, and inside that arm the subject's name, written bare, reads the value
-the arm carries -- <code>width: match (tpl) case template then tpl.length else 0</code>.
-A value no run-time code reaches is not emitted.</p>
-<p>At run time a choice value is held by value, as a variant's is: the compiler
-writes the values run time reaches as static objects, and a value inside a
-data value, a list or another choice value in place. Runtime code holds one
-wherever a valtype goes -- a local, a parameter, a return, a data or record or
-class field, a list element, a <code>ListVal</code>, an <code>optionval</code>, a map key or a
-<code>SetVal</code> -- matches it, narrows it and compares it with the generated
-<code>==</code>. Its methods take the receiver <code>{:this}</code> and only read it.</p>
-<h3 id="class"><a href="#class">5.18. class</a></h3>
+<h3 id="class"><a href="#class">5.16. class</a></h3>
 <p>Arguments for <code>class</code>:</p>
 <table>
 <colgroup>
@@ -5655,7 +5388,7 @@ instance of itself in a field:</p>
 } as {
     t: anyval.generic
 }</code></pre>
-<h3 id="is-and-as-sections"><a href="#is-and-as-sections">5.19. 'is' and 'as' Sections</a></h3>
+<h3 id="is-and-as-sections"><a href="#is-and-as-sections">5.17. 'is' and 'as' Sections</a></h3>
 <p>Records, classes, unions and variants have two sections: <code>is</code> (instance
 members) and <code>as</code> (static/shared members). Names in both sections share a
 single namespace -- the same name cannot appear in both sections.</p>
@@ -5736,7 +5469,7 @@ main: function is {
     n: config.greeting.length    # 5
     # config.max_val = 200       # compile error: not an addressable location
 }</code></pre>
-<h3 id="default-values"><a href="#default-values">5.20. Default values</a></h3>
+<h3 id="default-values"><a href="#default-values">5.18. Default values</a></h3>
 <p>Default values may be supplied on function/method parameters and on
 fields of <code>record</code>, <code>class</code>, <code>variant</code>, and <code>union</code> types.
 Field defaults propagate to the auto-generated <code>meta.create</code>
@@ -5867,7 +5600,7 @@ list, map, user class) is not a valid default at this layer; for
 those, supply the value at construction time. Defaulting to an
 arm that carries a non-null payload is rejected for the same
 reason.</p>
-<h3 id="protocol"><a href="#protocol">5.21. protocol</a></h3>
+<h3 id="protocol"><a href="#protocol">5.19. protocol</a></h3>
 <p>A protocol is defined as a list of function specs. Each spec must include a
 <code>this</code> parameter (the receiver). Static methods can also be part of a
 protocol. A protocol cannot include constructors or destructors because they
@@ -6030,7 +5763,7 @@ Writer: protocol {
 #     read: function {:this b: buffer} out boolean
 #     write: function {:this b: buffer} out boolean
 # }</code></pre>
-<h4 id="protocol-instance-creation"><a href="#protocol-instance-creation">5.21.1. Protocol Instance Creation</a></h4>
+<h4 id="protocol-instance-creation"><a href="#protocol-instance-creation">5.19.1. Protocol Instance Creation</a></h4>
 <p>Fields, variables and parameters can be declared to be instances of a named
 protocol. Protocol instances can then be assigned to those fields, variables or
 call arguments.</p>
@@ -6144,7 +5877,7 @@ main: function is {
 
     print "\{use_reader r}"  # prints 15
 }</code></pre>
-<h3 id="facet"><a href="#facet">5.22. facet</a></h3>
+<h3 id="facet"><a href="#facet">5.20. facet</a></h3>
 <p>A facet is the value-type equivalent of a protocol. Where protocol instances
 contain a pointer to the underlying data, facet instances contain a copy of the
 data itself, making them value types.</p>
@@ -6169,7 +5902,7 @@ span: record { lo: u32 hi: u32 } as {
         return s.hi - s.lo
     }
 }</code></pre>
-<h4 id="conformance"><a href="#conformance">5.22.1. Conformance</a></h4>
+<h4 id="conformance"><a href="#conformance">5.20.1. Conformance</a></h4>
 <p>A value type declares conformance to a facet via a labeled entry in its
 <code>as</code> section, the same pattern used for protocols:</p>
 <pre><code class="language-zerolang">point: record { x: i64 } as {
@@ -6183,7 +5916,7 @@ spec's exact signature -- arity, types and ownership markers -- by the rule
 given for protocols.</p>
 <p>Only value types may implement facets. Attempting to implement a facet on
 a class or union produces a compile-time error.</p>
-<h4 id="constructors"><a href="#constructors">5.22.2. Constructors</a></h4>
+<h4 id="constructors"><a href="#constructors">5.20.2. Constructors</a></h4>
 <p>A facet value always holds a <em><strong>copy</strong></em> of its source, so every way of making
 one makes the same thing. With <code>p</code> a <code>point</code> above, they are the forms a
 protocol instance is made with (see <a href="#protocol-instance-creation">Protocol Instance Creation</a>):</p>
@@ -6204,7 +5937,7 @@ d: measurable p.borrow
 #   = hint: drop the marker -- the projection copies either way</code></pre>
 <p>An instance of a generic facet, <code>(sized n: u32)</code>, is made the same ways:
 <code>(sized n: u32) p</code>, <code>(sized n: u32).create from: p</code>, or its label.</p>
-<h4 id="runtime-layout"><a href="#runtime-layout">5.22.3. Runtime layout</a></h4>
+<h4 id="runtime-layout"><a href="#runtime-layout">5.20.3. Runtime layout</a></h4>
 <p>Facet instances are stack-allocated value types. The C representation is:</p>
 <ul>
 <li>A pointer to the vtable (constant offset, first field)</li>
@@ -6216,16 +5949,16 @@ the vtable, the same as protocols.</p>
 <pre><code class="language-zerolang">p: point x: 2
 f: measurable.create from: p
 r: f.measure b: 10    # dispatches through vtable</code></pre>
-<h4 id="facets-as-generic-constraints"><a href="#facets-as-generic-constraints">5.22.4. Facets as generic constraints</a></h4>
+<h4 id="facets-as-generic-constraints"><a href="#facets-as-generic-constraints">5.20.4. Facets as generic constraints</a></h4>
 <p>Facets can be used as generic constraints, the same as protocols. A
 generic parameter constrained by a facet accepts any type that conforms
 to that facet -- value types only, the facet's own family (see
 <a href="#generic-types">generic types</a>).</p>
-<h4 id="facets-as-typedef-base"><a href="#facets-as-typedef-base">5.22.5. Facets as typedef base</a></h4>
+<h4 id="facets-as-typedef-base"><a href="#facets-as-typedef-base">5.20.5. Facets as typedef base</a></h4>
 <p>A record typedef can wrap a facet type, just as a class typedef can wrap
 a protocol type. Both are kind-compatible (record wraps facet because
 both are value types).</p>
-<h3 id="union"><a href="#union">5.23. union</a></h3>
+<h3 id="union"><a href="#union">5.21. union</a></h3>
 <p>For controlling the discriminator, see also the <a href="#tag">tag</a> type.</p>
 <p>Unions are sum-types that can hold exactly one of their child types at any
 given time. A discriminator (tag) is auto-generated for each subtype. A union
@@ -6303,7 +6036,7 @@ MyUnion: union {
     u4: String
     u5: MyClass    # a class defined elsewhere
 }</code></pre>
-<h4 id="constructing-union-instances"><a href="#constructing-union-instances">5.23.1. Constructing union instances</a></h4>
+<h4 id="constructing-union-instances"><a href="#constructing-union-instances">5.21.1. Constructing union instances</a></h4>
 <p>After a union type has been defined, instances are constructed using a
 per-subtype constructor accessed via dot notation: <code>MyUnion.subtype expr</code>.
 Each subtype automatically gets a constructor. Null subtypes take no argument.
@@ -6322,7 +6055,7 @@ c: Outcome.none                      # null subtype: no argument
 # named argument form
 mystr: "failed".string
 d: Outcome.err from: mystr.take      # explicit .take transfers ownership</code></pre>
-<h4 id="ownership-2"><a href="#ownership-2">5.23.2. Ownership</a></h4>
+<h4 id="ownership-2"><a href="#ownership-2">5.21.2. Ownership</a></h4>
 <p>Union instances are owned reference types. The same ownership rules that apply
 to classes also apply to unions:</p>
 <ul>
@@ -6335,7 +6068,7 @@ to classes also apply to unions:</p>
 <p>The compiler generates a per-union destructor that switches on the tag to
 correctly free each subtype's payload: <code>free()</code> for boxed valtypes,
 the appropriate destructor for reftype payloads, and nothing for null subtypes.</p>
-<h4 id="match-on-unions"><a href="#match-on-unions">5.23.3. Match on unions</a></h4>
+<h4 id="match-on-unions"><a href="#match-on-unions">5.21.3. Match on unions</a></h4>
 <p>The <code>match</code> statement dispatches on the union's tag. All subtypes must be
 covered by case clauses, or an <code>else</code> clause must be present. Inside a case
 clause the union variable is narrowed: its name IS the arm's payload.</p>
@@ -6358,7 +6091,7 @@ clause the union variable is narrowed: its name IS the arm's payload.</p>
 <p>Accessing subtype data where the union is not narrowed is a compile error:
 narrow it first, with a <code>match</code> or an arm predicate in an <code>if</code>
 condition.</p>
-<h4 id="creating-sum-type-instances"><a href="#creating-sum-type-instances">5.23.4. Creating sum-type instances</a></h4>
+<h4 id="creating-sum-type-instances"><a href="#creating-sum-type-instances">5.21.4. Creating sum-type instances</a></h4>
 <p>Creating/setting a union value:</p>
 <pre><code class="language-zerolang">MyClass: class { a: u32 b: u32 }
 
@@ -6391,7 +6124,7 @@ types, and does not include <code>null</code>. Generic
 bounds name one of them (or a hashability interface): there is no bound that
 spans both.</p>
 <pre><code class="language-zerolang">smallint: union { i8: null u8: null }</code></pre>
-<h3 id="variant"><a href="#variant">5.24. variant</a></h3>
+<h3 id="variant"><a href="#variant">5.22. variant</a></h3>
 <p>Variants are sum-types that can contain only one of it's child types at any
 given time. A descriminator is usually generated or set for each case. A
 variant is a value type and all child types must be value types. A variant is
@@ -6415,7 +6148,7 @@ always as large as its largest containing type plus the descriminator.</p>
 (tagged storage, no heap cell) and its arms are value types only, where a
 union's arms may hold either family, each in a heap cell; construction,
 matching and tag selection otherwise follow the union rules.</p>
-<h4 id="enumerated-types"><a href="#enumerated-types">5.24.1. Enumerated Types</a></h4>
+<h4 id="enumerated-types"><a href="#enumerated-types">5.22.1. Enumerated Types</a></h4>
 <p>An enumerated type is not a separate kind: it is a variant or union whose arms
 carry no data. Whether zerolang should gain a distinct <code>enum</code> is an open
 question, recorded in <code>Design-OPEN.pdoc</code>.</p>
@@ -6488,7 +6221,7 @@ true: bool.true</code></pre>
 <p>Nothing in the compiler treats <code>bool</code> as a special case of the shape:
 its arms are looked up on the declaration like any other sum type's, and
 a 2-arm variant of the author's own reads the same way.</p>
-<h4 id="using-sum-type-instances"><a href="#using-sum-type-instances">5.24.2. Using sum-type instances</a></h4>
+<h4 id="using-sum-type-instances"><a href="#using-sum-type-instances">5.22.2. Using sum-type instances</a></h4>
 <p>A sum type instance can be tested to see if it is a specific subtype. A
 predicate <code>method</code> is generated for each member named as the member name
 followed by a question mark. The method returns a boolean.</p>
@@ -6519,14 +6252,409 @@ match (
 ) case t2 then {
     print x     # x is the String ("hello") here
 } else null</code></pre>
-<h3 id="operations-2"><a href="#operations-2">5.25. Operations</a></h3>
-<h4 id="constants-and-variables"><a href="#constants-and-variables">5.25.1. Constants and Variables</a></h4>
+<h3 id="static-data"><a href="#static-data">5.23. Static Data</a></h3>
+<p>Static data is data the compiler builds into the program: tables, settings,
+vocabularies -- values the program reads but never builds, changes or frees
+at run time. There are three kinds, each with its keyword:</p>
+<ul>
+<li><code>list { ... }</code> -- a static list: elements of one type, each read by
+its label or its position</li>
+<li><code>data</code> -- a static record type, whose values are built in static
+positions</li>
+<li><code>choice</code> -- a static sum type, whose arms carry nothing or one static
+value</li>
+</ul>
+<pre><code class="language-zerolang"># how a native is written in C
+nativeform: choice {
+    call: null
+    value: null
+    template: text
+}
+
+# one native: its key, its C, how it is written, the units it needs
+nativerow: data {
+    key: text
+    body: ""
+    form: nativeform.call
+    needs: staticlist text
+    live: false
+} as {
+    hasBody: function {:this} out bool is {
+        return this.body.length &gt; 0
+    }
+}
+
+first: (nativerow key: "system.exit" needs: (list {}))
+natives: list {
+    (nativerow
+        key: "system.u8.+"
+        body: "((uint8_t)(@L@ + @R@))"
+        form: nativeform.value
+        needs: (list {})
+    )
+    (nativerow key: "system.print" needs: (list { write: "io.write" }))
+    (nativerow key: "system.fmt" form: nativeform.template "fmt(@0@)" needs: (list {}))
+}
+
+words: list { "a" "b" }
+
+main: function is {
+    print natives.0.key.stringView
+    print natives.1.needs.write.stringView
+    for each n: natives loop {
+        if n.hasBody then print n.key.stringView
+    }
+    byKey: MapVV text v: nativerow
+    for each n: natives loop byKey.set key: n.key value: n
+    if first.form.call then print "call"
+    print "\{byKey.length} \{words.length}"
+}</code></pre>
+<h4 id="static-values"><a href="#static-values">5.23.1. Static values</a></h4>
+<p>A static value is a valtype the compiler builds. It is immutable: no write
+reaches it, at any depth of a path. It is never moved, borrowed or freed:
+binding it, passing it and returning it copy it, and every ownership marker
+(<code>.take</code>, <code>.borrow</code>, <code>.view</code>, <code>.hold</code>, <code>.copy</code>) on one is error
+<code>E0100</code>. It has no zero value, so an <code>array</code> of a static type is error
+<code>E0100</code>: hold such values in a <code>ListVal</code>, or make the element an
+<code>optionval</code>. Its methods take the receiver <code>{:this}</code> and only read it.</p>
+<p>A static value is written in a static position: as a unit-level constant, as
+a type's <code>as</code> constant, or inside another static value. A data or choice
+value with arguments is written in parentheses -- <code>bolt: (part count: 40)</code>,
+<code>tpl: (nativeform.template "io.write")</code> -- since at unit level a bare
+<code>x: Head args</code> applies a type; a data value with every field at its default
+is <code>&lt;type&gt;.create</code>. Building one in a function body is error <code>E0300</code>. Each
+member holds a static value: a number (an untyped <code>intliteral</code> or
+<code>floatliteral</code> too), <code>bool</code> or another enum, <code>text</code>, a function
+reference, a static list, a data value or a choice value. An untyped string
+in a static position is <code>text</code>.</p>
+<p>A read of a static value through a compile-time path -- a field, an element, a
+label, a list's <code>length</code>, an arm predicate, <code>==</code> on two such values, a
+unit-level <code>match</code> -- folds at compile time and is no use of the value. Only
+the values run-time code reaches are emitted, with the values they hold. An
+untyped number keeps its full value until it reaches run time, where it is the
+<code>i64</code> or <code>f64</code> it is emitted as, and one outside that type is error
+<code>E0100</code> at the use.</p>
+<p>A data type and a choice have the generated <code>==</code>, <code>!=</code> and <code>hash</code> a
+record and a variant have, when every part has its own; a list has none. A
+static list is walked by <code>for each</code>, and each element it yields is the
+element itself, whatever its size.</p>
+<h4 id="static-lists"><a href="#static-lists">5.23.2. Static lists</a></h4>
+<p><code>list { ... }</code> creates a static list: a constant list of embedded data. A
+list holds elements of one type: all integers, all floats, all strings, or all
+values of one other static type -- <code>bool</code>, the arms of one enum, lists of one
+list type, or values of one <code>data</code> type. An element of another kind or type
+than the first, an integer among floats included, is an error where it is
+written. Each element is any compile-time constant of that type: a literal, a
+unit constant, an expression over them (string <code>+</code> too), another list's
+element, a <code>data</code> construction. With no <code>out</code>, a list of arms, lists or
+<code>data</code> values is of its first element's type, and an element that is itself
+a list takes the element type an <code>out</code> names. The list's name is a value of type <code>staticlist T</code>, where
+<code>T</code> is the element type (see <a href="./stdlib_collections.html#lists">Lists</a>). The keyword <code>list</code> opens a list and names no type: the type is
+<code>staticlist</code> wherever one is written, <code>{d: staticlist u8}</code>,
+<code>out (staticlist StringView i: nameid)</code>.</p>
+<p>A list may be empty when its <code>out</code> names its type (<code>list {} out staticlist
+StringView</code>): its length is 0, its walk ends at once, and it has no
+<code>.array</code>. With no <code>out</code> an empty list has nothing to take a type from and
+is an error, unless it is nested.</p>
+<p>A list written inside a <code>data</code> value is nested: it is a value of the field
+it is written for, so it needs no <code>out</code> -- <code>needs: list { write: "io.write"
+}</code> is a <code>staticlist text</code> when the field is one, and <code>list {}</code> is an empty
+one. An <code>out</code> written on a nested list must name the field's type. Its
+labels, <code>slot</code> and <code>length</code> are read through the path to it, as a named
+list's are through its name: <code>first.needs.write</code>.</p>
+<p>Elements are stored in the order they are written: the first is at index 0,
+and each one after it at the next index. An element may carry a label, which
+names it (labels are required for a list that is used as a <code>tag</code>); an
+integer label is a name like any other and does not move the element. An
+unlabelled element is named by its index (<code>primes.0</code>). Every name in a list
+is distinct -- a label that repeats another label, or the index an unlabelled
+element is named by (<code>list { 0 1 1: 3 }</code>), is an error.</p>
+<p>A labelled element can be referenced directly elsewhere in the source, as a
+constant is.</p>
+<p>A list's optional <code>out</code> names the list's type -- <code>out staticlist u8</code>,
+<code>out staticlist f32</code>, <code>out staticlist StringView</code> -- or an instance that also names
+the type its elements are indexed by, <code>out (staticlist u8 i: byteid)</code> or
+<code>out (staticlist StringView i: nameid)</code>. The list's element type is that type's,
+and any per-element type tag (<code>name: 0.T</code>) must agree with it; without an
+<code>out</code> the tags alone name it, and must agree with each other. An <code>out</code>
+that leaves its element out -- <code>out staticlist</code>, or one that writes the literal
+type, <code>out (staticlist intliteral)</code> -- names none, and neither does a list with no
+<code>out</code> and no tag. A number in a list of <code>StringView</code> is an error, as is a
+string in a list of numbers. An interpolated string builds its value at run
+time, so it is no element.</p>
+<p>A list whose element type is named -- by its <code>out</code>, or by a tagged element
+-- reads every element at that type, whether or not the element wrote a tag
+of its own: <code>mydata.cNul</code> reads at the list's type at every access, and
+converts as a typed numeric literal does anywhere else. A list that names
+no element type reads its elements UNTYPED, as a unit constant reads:
+<code>sizes.small</code> lands in whatever numeric type takes it, checked by its
+value, and a string element is a <code>StringView</code> or <code>text</code> as its slot asks,
+as a string literal is. Only what reaches run time -- the list's value, a
+run-time <code>.get</code>, a walk -- materialises: an untyped list's value is a
+<code>staticlist i64</code> or a <code>staticlist f64</code>, and a list of strings is in a static
+position, so its value is a <code>staticlist text</code>; each is indexed by <code>u64</code>,
+and the emitted program never holds an untyped element. A run-time read of a
+text element reaches a <code>StringView</code> through <code>.stringView</code>. One list is one static
+array, so an untyped list is not a <code>staticlist u8</code>: a parameter that asks
+for one is refused it.</p>
+<p>A value the chosen type cannot hold &#x2014; <code>list { 300 } out staticlist u8</code>, or a
+negative element in an unsigned list &#x2014; is an error at the list's
+declaration, reported against the element that does not fit. The check
+happens where the value is written rather than where it is read, because
+a list has no other place that sees every element at once.</p>
+<p>A list has the members its type declares -- <code>length</code>, <code>get</code>,
+<code>iterate</code> and <code>slot</code> on every list, <code>array</code> on a list of numbers, and
+<code>tag</code>, the discriminator for a tagged type (see below), on a list of
+integers:</p>
+<ul>
+<li><code>tag</code> -- the list's discriminator, for a tagged type (see below)</li>
+<li><code>length</code> -- its element count, a constant</li>
+<li><code>get</code> -- <code>.get i: k</code>, the element at index <code>k</code>, of the list's
+index type (<code>u64</code> when it names none)</li>
+<li><code>slot</code> -- <code>blk.slot.label</code>, the POSITION of a labelled element, of
+the list's index type, or untyped when it names none. A vocabulary held as
+one list reads each entry's position by its label
+(<code>names.slot.wkThis</code>); an unlabelled element has no slot, and a list
+with no label has no <code>slot</code> at all</li>
+<li><code>iterate</code> -- the walk over the elements, first to last</li>
+<li><code>array</code> -- <code>.array</code>, a copy of the list into a sized array</li>
+</ul>
+<p>An element is a member of the list too, so it may not take one of these
+names: a second definition of a name the list already has is refused
+where the element is written, naming the member it would collide with.</p>
+<p>The list's element type also determines the element width of the runtime array
+a list is emitted as, when it is indexed by a variable or iterated. An
+untyped list's array holds the <code>i64</code>, <code>f64</code> or <code>text</code> its elements
+materialise to; see
+<a href="./representation_of_types.html">representation_of_types</a> for the layout.</p>
+<p>String literal fragments are built on top of a u8 data sequence.</p>
+<p>Through the list's name, its elements (<code>primes.0</code>, <code>codes.ht</code>), its
+<code>.length</code> and <code>.get K</code> with a constant <code>K</code> are constants -- in a body
+and in a unit-level definition alike (<code>COUNT: primes.length</code>) -- and a
+program that reads only those carries no array at all. A constant <code>K</code> out of
+range is a compile error. A run-time <code>.get i</code>, <code>.array</code> (a copy into a
+sized array) and the list used as a value put its array into the program.</p>
+<p>The name is a value: bound (<code>w: primes</code>), passed, returned, held in a field
+or walked (<code>for each p: primes</code>), it is a view of the static array --
+its length and a pointer at it -- which binding copies and which takes no lock,
+since static memory can be neither written nor freed. Through a value,
+<code>get</code> reads at run time and panics out of range, and <code>length</code> and
+<code>iterate</code> read the view; <code>.array</code>, <code>.tag</code> and <code>.slot</code> are the list's,
+reached through its name only. Written alone as a statement the name does
+nothing and is <code>E0100</code>, and an ownership marker on the list or on an
+element, which names no storage, is <code>E0100</code> too. A list is declared at unit
+level (or in an <code>as</code> block); one written inside a function body is
+<code>E0100</code>.</p>
+<pre><code class="language-zerolang"># untyped elements; as a value, a staticlist i64
+mydata_i64: list { 1 2 0x07 }
+
+# array of u8 via `out staticlist u8` &#x2014; every element is u8, no per-element tag
+mydata_u8: list { 0 64 250 } out staticlist u8
+
+# array of u8 via a per-element type tag &#x2014; same result as `out staticlist u8`
+mydata_u8b: list { 1.u8 2 0x07 }
+
+# an integer label names its element: length 3, and `mydata_lbl.4` is 4
+mydata_lbl: list { 1 2 4: 4 }
+
+# an array with text keys
+mydata_key: list { FIRST: 1 SECOND: 2 THIRD: 3 }
+
+# which can be used as a tag in a sum-type, using these values for
+#  the descriminator
+myvariant: variant {
+    FIRST: null
+    SECOND: null
+    THIRD: null
+} as {
+    tag: mydata_key.tag
+}
+
+# elements read at the list's own type, so a list whose values are
+# bytes says so once and reaches a u8 parameter directly
+mydata_byte: list { FIRST: 1 SECOND: 2 } out staticlist u8
+take_u8: function {b: u8} out u8 is { return b }
+result: take_u8 b: mydata_byte.FIRST
+
+# can also use elements as constants in top level or in code:
+One: mydata_key.FIRST   # same as `One: 1`
+
+# a vocabulary of strings indexed by its own id type: `words.slot.lf` is
+# the id 1, and `words.get i: words.slot.lf` is "line feed"
+wordid: typedef u64
+words: list { ht: "tab" lf: "line feed" } out (staticlist StringView i: wordid)</code></pre>
+<h4 id="data"><a href="#data">5.23.3. data</a></h4>
+<p>Defines a static record type: a record whose values are static. The compiler
+builds a static value, nothing changes it, and nothing frees it. A data type
+is a valtype, so its name is lowercase, as a record's is.</p>
+<pre><code class="language-zerolang"># a row of a table: a key, a text default, and an untyped number
+entry: data {
+    key: text
+    note: ""
+    size: intliteral
+    live: false
+}</code></pre>
+<p>A data field holds a static value: a number, an untyped <code>intliteral</code> or
+<code>floatliteral</code>, <code>bool</code> or another variant whose arms carry nothing,
+<code>text</code>, a function reference, a <code>staticlist</code>, or another data type. Any
+other field type is error <code>E0100</code>. An untyped string is <code>text</code> here: a
+field written <code>note: ""</code> is a <code>text</code> field, as <code>note: "".text</code> is. A
+default is written by value, as a record's is:
+<code>size: 5</code> is an <code>i64</code> field and <code>size: 5.u8</code> a <code>u8</code> field.</p>
+<p>A data value is built in a static position: as a unit-level constant, as a
+type's <code>as</code> constant, or inside another data value. With arguments it is
+written in parentheses; with every field at its default it is
+<code>&lt;type&gt;.create</code>. Each argument is checked as a construction's argument is:
+an unknown field and a missing required one are refused, and an argument must
+be a constant of the field's type. An untyped number keeps its full value in
+an <code>intliteral</code> field, and a string is <code>text</code>. Equal values are stored
+once. A construction in a function body is error <code>E0300</code>.</p>
+<p>A field read on a data value, <code>bolt.count</code>, folds to the field's value at
+compile time, at unit level and in a body, through nested values and through a
+type's <code>as</code> constant. Such a read does not emit the data value. An untyped
+number keeps its full value until it is used, where it must fit the type it
+lands in. A data value built from a field of itself, directly or through
+another value, is error <code>E0600</code>.</p>
+<p>A data value never changes. Binding it to a name copies it, and the copy
+refers to the same value. It is never moved, borrowed or freed, so a
+marker on it (<code>.take</code>, <code>.borrow</code>, <code>.view</code>, <code>.hold</code> or <code>.copy</code>) is
+error <code>E0100</code>. A write to one of its fields, at any depth of the path, is
+error <code>E0100</code>. Binding a name that holds a data value to another one is
+no write to either. A data value has no zero value, so an <code>array</code> of a data
+type, or of a record that holds one, is error <code>E0100</code>. Hold such values in
+a <code>ListVal</code>, or make the element <code>optionval</code>.</p>
+<p>At run time a data value is a handle: a pointer to the static object the
+compiler built, which binding, passing and returning copy. Only the values run
+time uses are emitted, with the values they hold. Runtime code may hold a data
+value wherever a valtype goes: a local, a parameter, a return, a record field,
+a <code>ListVal</code>, a map value or key, a <code>SetVal</code> and an <code>optionval</code>. An
+untyped number in a value used at run time is an <code>i64</code> or an <code>f64</code> there,
+and one outside that type is error <code>E0100</code> at the use.</p>
+<p>A data type has the generated <code>==</code>, <code>!=</code> and <code>hash</code> a record has, when
+every field has its own. A field typed <code>intliteral</code> or <code>floatliteral</code>
+compares as the number it holds, as an untyped constant does: exactly, as
+written, where the comparison folds -- two constant data values compare at
+compile time, field by field -- and as the <code>i64</code> or <code>f64</code> it is emitted
+as at run time. So two values whose fields hold <code>0.1</code> and
+<code>0.10000000000000000001</code> differ when compared at compile time and are equal
+at run time, where both are one <code>f64</code>. An <code>intliteral</code> field hashes as its
+<code>i64</code>; a <code>floatliteral</code> field, like an <code>f64</code> one, has no <code>hash</code>, so a
+data type holding one is no map key. A data type's methods take the
+receiver <code>{:this}</code>, the handle; a method that writes a field is refused as
+any write is.</p>
+<pre><code class="language-zerolang">part: data {
+    name: "nut".text
+    count: 1
+}
+
+# a unit-level data value, and one of every default
+bolt: (part name: "bolt" count: 40)
+blank: part.create
+
+main: function is {
+    print "parts"
+}</code></pre>
+<p>A data type declares its layout by its fields, so it cannot be <code>native</code>
+and must declare a field. It cannot take type parameters, nor be declared in
+a generic unit. Each of these is error <code>E0100</code>.</p>
+<h4 id="choice"><a href="#choice">5.23.4. choice</a></h4>
+<p>Defines a static sum type: a variant whose values are static, as a data
+type's are. A choice is a valtype, so its name is lowercase, as a variant's
+is. Each arm carries nothing, written <code>null</code>, or one value of the type it
+names, and that type is one a data field may hold: a number (an untyped
+<code>intliteral</code> or <code>floatliteral</code> too), <code>bool</code> or another enum, <code>text</code>, a
+function reference, a <code>staticlist</code>, a data type or another choice. Any other
+payload is error <code>E0100</code>, and so is a choice that is native, takes type
+parameters or is declared in a generic unit.</p>
+<pre><code class="language-zerolang">nativeform: choice {
+    call: null
+    template: text
+    width: u8
+}</code></pre>
+<p>A choice value is used as a variant's is: on a value <code>f</code>, <code>f.call</code> is the arm
+predicate,
+<code>match</code> selects an arm, and <code>==</code> compares arm and value. An arm that
+carries nothing is read by name anywhere, <code>nativeform.call</code>, and has no zero
+otherwise: a bare <code>nativeform</code> builds no value. A choice value is copied by
+binding it, and no marker applies to it.</p>
+<p>A value whose arm carries a value is built in a static position, as a data
+value is: as a unit-level constant, as a type's <code>as</code> constant, or inside
+another data or choice value, in parentheses -- <code>tpl: (nativeform.template
+"io.write")</code>. The one value is checked as a data field's is: an untyped string
+is <code>text</code>, an untyped number keeps its full value in an <code>intliteral</code> arm,
+and a <code>list { }</code> is of the arm's <code>staticlist</code> type. Without the
+parentheses, <code>tpl: nativeform.template "io.write"</code> applies a type, which a
+choice does not take, and is refused, as <code>x: row 5</code> is for a data type. In a
+function body such a value is error <code>E0300</code>: build it at unit level and read
+it there. A read of an arm predicate or <code>==</code> on values built so folds at
+compile time, and so does a unit-level <code>match</code> on one: the value selects
+its arm, and inside that arm the subject's name, written bare, reads the value
+the arm carries -- <code>width: match (tpl) case template then tpl.length else 0</code>.
+A value no run-time code reaches is not emitted.</p>
+<p>At run time a choice value is held by value, as a variant's is: the compiler
+writes the values run time reaches as static objects, and a value inside a
+data value, a list or another choice value in place. Runtime code holds one
+wherever a valtype goes -- a local, a parameter, a return, a data or record or
+class field, a list element, a <code>ListVal</code>, an <code>optionval</code>, a map key or a
+<code>SetVal</code> -- matches it, narrows it and compares it with the generated
+<code>==</code>. Its methods take the receiver <code>{:this}</code> and only read it.</p>
+<h4 id="function-references-in-static-values"><a href="#function-references-in-static-values">5.23.5. Function references in static values</a></h4>
+<p>A function-typed field is declared by a spec, which it must then be given, or
+by a function's name, which is also its default (<code>lower: defaultLower</code>), as a
+class field's is. In a static value the function is written by its bare name,
+or its name through a unit (<code>(op f: add)</code>, <code>(op f: util.sub)</code>): there a
+name is the reference, never a call, and the function must have the field's
+signature. A spec, a native function, a generic function and a method are
+error <code>E0100</code> there, and a call <code>E0100</code> too. A choice arm carries a function
+the same way. Read at run time, such a field is called as any function field
+is (<code>o.f a: 1 b: 2</code>); two references are equal when they name one function.</p>
+<h4 id="from-static-data-to-run-time-data"><a href="#from-static-data-to-run-time-data">5.23.6. From static data to run-time data</a></h4>
+<p>Static data stays static: a program that wants a value it can change builds
+one, in its own code, from the static value -- usually in a method of the
+static type, which names the run-time type and says how each field converts.
+The compiler derives no run-time twin of a static type.</p>
+<pre><code class="language-zerolang">nativerow: data {
+    key: text
+    live: false
+} as {
+    # a run-time copy the program may change: built by the program's own code
+    editable: function {:this} out Native is {
+        return (Native key: this.key.string live: this.live)
+    }
+}
+
+Native: class {
+    key: String
+    live: bool
+}
+
+natives: list {
+    (nativerow key: "system.exit")
+    (nativerow key: "system.print" live: true)
+}
+
+# every row as a run-time value, in a list the program owns
+editables: function {rows: staticlist nativerow} out List Native is {
+    result: List Native
+    for each r: rows loop result.append r.editable
+    return result
+}
+
+main: function is {
+    xs: editables rows: natives
+    for each n: xs loop print "\{n.key} \{n.live}"
+    name: (xs.get i: 0).key.copy
+    name.append " (edited)"
+    print name
+}</code></pre>
+<h3 id="operations-2"><a href="#operations-2">5.24. Operations</a></h3>
+<h4 id="constants-and-variables"><a href="#constants-and-variables">5.24.1. Constants and Variables</a></h4>
 <p>Literals
 Top level definitions</p>
 <p>Names - identifiers</p>
 <p>Declaration and Initialisation (happen at the same time, must be initialised)
 Includes functions definitions/literals.</p>
-<h4 id="binary-operations"><a href="#binary-operations">5.25.2. Binary operations</a></h4>
+<h4 id="binary-operations"><a href="#binary-operations">5.24.2. Binary operations</a></h4>
 <p>All operations are binary. There are no unary operations. Operation syntax is
 an alternate function call syntax for methods with a receiver and a single
 parameter.</p>
@@ -6544,7 +6672,7 @@ seen as it is once both have been evaluated.</p>
 <p>Operator names are simply method names. Identifiers used for method names can
 include the usual mathematical operator names eg. <code>+ - / *</code>, and a word is an
 operator name too: <code>and</code> and <code>or</code> on <code>bool</code>.</p>
-<h3 id="auto-generated-equality"><a href="#auto-generated-equality">5.26. Auto-Generated Equality</a></h3>
+<h3 id="auto-generated-equality"><a href="#auto-generated-equality">5.25. Auto-Generated Equality</a></h3>
 <p>All value types (records, variants, arrays, str) automatically receive
 <code>==</code> and <code>!=</code> operators, built from their parts: a record compares its
 fields one at a time, a variant compares the discriminator tag and then the
@@ -6630,7 +6758,7 @@ unequal even to itself, and <code>+0.0</code> equals <code>-0.0</code>. This mat
 behaviour of C, Rust, and Go. An array of integers, chars or bools is compared
 as one <code>memcmp</code>, because its bytes give exactly the answer its elements'
 <code>==</code> would; an array of floats is compared element by element.</p>
-<h3 id="reference-type-equality"><a href="#reference-type-equality">5.27. Reference Type Equality</a></h3>
+<h3 id="reference-type-equality"><a href="#reference-type-equality">5.26. Reference Type Equality</a></h3>
 <p>Reference types (classes, unions) do not have a default <code>==</code> operator.
 Using <code>==</code> on a reference type without explicitly defining it is a compile
 error.</p>

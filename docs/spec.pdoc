@@ -251,7 +251,7 @@ stored in the resulting format. This table IS the surface: it is what the
 #~"intliteral" type declares (see
 [#> to=./stdlib_system.html: the system unit]), and a suffix naming anything
 else — a scalar typedef included — is refused. A literal takes a typedef only
-where the type is asked for in writing, which is a [#> to=static-list: list]'s
+where the type is asked for in writing, which is a [#> to=static-lists: list]'s
 #~"out T".
 
 #table cols="1 2 >1":
@@ -779,7 +779,7 @@ Definitions are one of:
     [#> to=variant: variant], [#> to=union: union], [#> to=facet: facet],
     [#> to=protocol: protocol]]
   [#*: constant [#> to=if-definition: if] definition]
-  [#*: [#> to=static-list: static list]]
+  [#*: [#> to=static-lists: static list]]
   [#*: typeref (aliases?)]
 
 The descriptions of the syntax for each of these are described in their
@@ -4690,167 +4690,8 @@ written in the #~"as" block and nowhere else -- see [#> to=tag: tag].
 
 #---: static list
 
-#~"list { ... }" creates a static list: a constant list of embedded data. A
-list holds elements of one type: all integers, all floats, all strings, or all
-values of one other static type -- #~"bool", the arms of one enum, lists of one
-list type, or values of one #~"data" type. An element of another kind or type
-than the first, an integer among floats included, is an error where it is
-written. Each element is any compile-time constant of that type: a literal, a
-unit constant, an expression over them (string #~"+" too), another list's
-element, a #~"data" construction. With no #~"out", a list of arms, lists or
-#~"data" values is of its first element's type, and an element that is itself
-a list takes the element type an #~"out" names. The list's name is a value of type #~"staticlist T", where
-#~"T" is the element type (see [#> to="./stdlib_collections.html#lists":
-Lists]). The keyword #~"list" opens a list and names no type: the type is
-#~"staticlist" wherever one is written, #~"{d: staticlist u8}",
-#~"out (staticlist StringView i: nameid)".
-
-A list may be empty when its #~"out" names its type (#~"list {} out staticlist
-StringView"): its length is 0, its walk ends at once, and it has no
-#~".array". With no #~"out" an empty list has nothing to take a type from and
-is an error, unless it is nested.
-
-A list written inside a #~"data" value is nested: it is a value of the field
-it is written for, so it needs no #~"out" -- #~"needs: list { write: \"io.write\"
-}" is a #~"staticlist text" when the field is one, and #~"list {}" is an empty
-one. An #~"out" written on a nested list must name the field's type. Its
-labels, #~"slot" and #~"length" are read through the path to it, as a named
-list's are through its name: #~"first.needs.write".
-
-Elements are stored in the order they are written: the first is at index 0,
-and each one after it at the next index. An element may carry a label, which
-names it (labels are required for a list that is used as a #~"tag"); an
-integer label is a name like any other and does not move the element. An
-unlabelled element is named by its index (#~"primes.0"). Every name in a list
-is distinct -- a label that repeats another label, or the index an unlabelled
-element is named by (#~"list { 0 1 1: 3 }"), is an error.
-
-A labelled element can be referenced directly elsewhere in the source, as a
-constant is.
-
-A list's optional #~"out" names the list's type -- #~"out staticlist u8",
-#~"out staticlist f32", #~"out staticlist StringView" -- or an instance that also names
-the type its elements are indexed by, #~"out (staticlist u8 i: byteid)" or
-#~"out (staticlist StringView i: nameid)". The list's element type is that type's,
-and any per-element type tag (#~"name: 0.T") must agree with it; without an
-#~"out" the tags alone name it, and must agree with each other. An #~"out"
-that leaves its element out -- #~"out staticlist", or one that writes the literal
-type, #~"out (staticlist intliteral)" -- names none, and neither does a list with no
-#~"out" and no tag. A number in a list of #~"StringView" is an error, as is a
-string in a list of numbers. An interpolated string builds its value at run
-time, so it is no element.
-
-A list whose element type is named -- by its #~"out", or by a tagged element
--- reads every element at that type, whether or not the element wrote a tag
-of its own: #~"mydata.cNul" reads at the list's type at every access, and
-converts as a typed numeric literal does anywhere else. A list that names
-no element type reads its elements UNTYPED, as a unit constant reads:
-#~"sizes.small" lands in whatever numeric type takes it, checked by its
-value, and a string element is a #~"StringView" or #~"text" as its slot asks,
-as a string literal is. Only what reaches run time -- the list's value, a
-run-time #~".get", a walk -- materialises: an untyped list's value is a
-#~"staticlist i64" or a #~"staticlist f64", and a list of strings is in a static
-position, so its value is a #~"staticlist text"; each is indexed by #~"u64",
-and the emitted program never holds an untyped element. A run-time read of a
-text element reaches a #~"StringView" through #~".stringView". One list is one static
-array, so an untyped list is not a #~"staticlist u8": a parameter that asks
-for one is refused it.
-
-A value the chosen type cannot hold — #~"list { 300 } out staticlist u8", or a
-negative element in an unsigned list — is an error at the list's
-declaration, reported against the element that does not fit. The check
-happens where the value is written rather than where it is read, because
-a list has no other place that sees every element at once.
-
-A list has the members its type declares -- #~"length", #~"get",
-#~"iterate" and #~"slot" on every list, #~"array" on a list of numbers, and
-#~"tag", the discriminator for a tagged type (see below), on a list of
-integers:
-
-#ul:
-  [#*: #~"tag" -- the list's discriminator, for a tagged type (see below)]
-  [#*: #~"length" -- its element count, a constant]
-  [#*: #~"get" -- #~".get i: k", the element at index #~"k", of the list's
-    index type (#~"u64" when it names none)]
-  [#*: #~"slot" -- #~"blk.slot.label", the POSITION of a labelled element, of
-    the list's index type, or untyped when it names none. A vocabulary held as
-    one list reads each entry's position by its label
-    (#~"names.slot.wkThis"); an unlabelled element has no slot, and a list
-    with no label has no #~"slot" at all]
-  [#*: #~"iterate" -- the walk over the elements, first to last]
-  [#*: #~"array" -- #~".array", a copy of the list into a sized array]
-
-An element is a member of the list too, so it may not take one of these
-names: a second definition of a name the list already has is refused
-where the element is written, naming the member it would collide with.
-
-The list's element type also determines the element width of the runtime array
-a list is emitted as, when it is indexed by a variable or iterated. An
-untyped list's array holds the #~"i64", #~"f64" or #~"text" its elements
-materialise to; see
-[#> to=./representation_of_types.html: representation_of_types] for the layout.
-
-String literal fragments are built on top of a u8 data sequence.
-
-Through the list's name, its elements (#~"primes.0", #~"codes.ht"), its
-#~".length" and #~".get K" with a constant #~"K" are constants -- in a body
-and in a unit-level definition alike (#~"COUNT: primes.length") -- and a
-program that reads only those carries no array at all. A constant #~"K" out of
-range is a compile error. A run-time #~".get i", #~".array" (a copy into a
-sized array) and the list used as a value put its array into the program.
-
-The name is a value: bound (#~"w: primes"), passed, returned, held in a field
-or walked (#~"for each p: primes"), it is a view of the static array --
-its length and a pointer at it -- which binding copies and which takes no lock,
-since static memory can be neither written nor freed. Through a value,
-#~"get" reads at run time and panics out of range, and #~"length" and
-#~"iterate" read the view; #~".array", #~".tag" and #~".slot" are the list's,
-reached through its name only. Written alone as a statement the name does
-nothing and is #~"E0100", and an ownership marker on the list or on an
-element, which names no storage, is #~"E0100" too. A list is declared at unit
-level (or in an #~"as" block); one written inside a function body is
-#~"E0100".
-
-#code language=zerolang: """
-  # untyped elements; as a value, a staticlist i64
-  mydata_i64: list { 1 2 0x07 }
-
-  # array of u8 via `out staticlist u8` — every element is u8, no per-element tag
-  mydata_u8: list { 0 64 250 } out staticlist u8
-
-  # array of u8 via a per-element type tag — same result as `out staticlist u8`
-  mydata_u8b: list { 1.u8 2 0x07 }
-
-  # an integer label names its element: length 3, and `mydata_lbl.4` is 4
-  mydata_lbl: list { 1 2 4: 4 }
-
-  # an array with text keys
-  mydata_key: list { FIRST: 1 SECOND: 2 THIRD: 3 }
-
-  # which can be used as a tag in a sum-type, using these values for
-  #  the descriminator
-  myvariant: variant {
-      FIRST: null
-      SECOND: null
-      THIRD: null
-  } as {
-      tag: mydata_key.tag
-  }
-
-  # elements read at the list's own type, so a list whose values are
-  # bytes says so once and reaches a u8 parameter directly
-  mydata_byte: list { FIRST: 1 SECOND: 2 } out staticlist u8
-  take_u8: function {b: u8} out u8 is { return b }
-  result: take_u8 b: mydata_byte.FIRST
-
-  # can also use elements as constants in top level or in code:
-  One: mydata_key.FIRST   # same as `One: 1`
-
-  # a vocabulary of strings indexed by its own id type: `words.slot.lf` is
-  # the id 1, and `words.get i: words.slot.lf` is "line feed"
-  wordid: typedef u64
-  words: list { ht: "tab" lf: "line feed" } out (staticlist StringView i: wordid)
-  """
+A static list, #~"list { ... }", is static data: see
+[#> to=static-lists: Static Data].
 
 #---: array
 
@@ -6162,7 +6003,8 @@ The above applies to standard function references (non-method pointers; no
 #---: Object definitions
 
 #~"record", #~"class", #~"union", #~"variant", #~"facet" and #~"protocol" all
-define an OBJECT. An object definition must declare something: one with neither
+define an OBJECT; so do #~"data" and #~"choice", the static record and sum
+types (see [#> to=static-data: Static Data]). An object definition must declare something: one with neither
 an #~"is" member nor an #~"as" member is an error, because there is nothing to
 hold and nothing to call, and no C form exists for it.
 
@@ -6226,105 +6068,6 @@ valtypes; make 'R' a class to hold 'String'". The remedy is a #~"class" (a
 #~"Box from:" local; #~"Box" is itself a class, so it too is never a record
 field.
 
-#---: data
-
-Defines a static record type: a record whose values are static. The compiler
-builds a static value, nothing changes it, and nothing frees it. A data type
-is a valtype, so its name is lowercase, as a record's is.
-
-#code language=zerolang: """
-  # a row of a table: a key, a text default, and an untyped number
-  entry: data {
-      key: text
-      note: "".text
-      size: intliteral
-      live: false
-  }
-  """
-
-A data field holds a static value: a number, an untyped #~"intliteral" or
-#~"floatliteral", #~"bool" or another variant whose arms carry nothing,
-#~"text", a function reference, a #~"staticlist", or another data type. Any
-other field type is error #~"E0100". An untyped string is #~"text" here: a
-field written #~"note: \"\"" is a #~"text" field, as #~"note: \"\".text" is. A
-default is written by value, as a record's is:
-#~"size: 5" is an #~"i64" field and #~"size: 5.u8" a #~"u8" field.
-
-A function-typed field is declared by a spec, which it must then be given, or
-by a function's name, which is also its default (#~"lower: defaultLower"), as a
-class field's is. In a static value the function is written by its bare name,
-or its name through a unit (#~"(op f: add)", #~"(op f: util.sub)"): there a
-name is the reference, never a call, and the function must have the field's
-signature. A spec, a native function, a generic function and a method are
-error #~"E0100" there, and a call #~"E0100" too. A choice arm carries a function
-the same way. Read at run time, such a field is called as any function field
-is (#~"o.f a: 1 b: 2"); two references are equal when they name one function.
-
-A data value is built in a static position: as a unit-level constant, as a
-type's #~"as" constant, or inside another data value. With arguments it is
-written in parentheses; with every field at its default it is
-#~"<type>.create". Each argument is checked as a construction's argument is:
-an unknown field and a missing required one are refused, and an argument must
-be a constant of the field's type. An untyped number keeps its full value in
-an #~"intliteral" field, and a string is #~"text". Equal values are stored
-once. A construction in a function body is error #~"E0300".
-
-A field read on a data value, #~"bolt.count", folds to the field's value at
-compile time, at unit level and in a body, through nested values and through a
-type's #~"as" constant. Such a read does not emit the data value. An untyped
-number keeps its full value until it is used, where it must fit the type it
-lands in. A data value built from a field of itself, directly or through
-another value, is error #~"E0600".
-
-A data value never changes. Binding it to a name copies it, and the copy
-refers to the same value. It is never moved, borrowed or freed, so a
-marker on it (#~".take", #~".borrow", #~".view", #~".hold" or #~".copy") is
-error #~"E0100". A write to one of its fields, at any depth of the path, is
-error #~"E0100". Binding a name that holds a data value to another one is
-no write to either. A data value has no zero value, so an #~"array" of a data
-type, or of a record that holds one, is error #~"E0100". Hold such values in
-a #~"ListVal", or make the element #~"optionval".
-
-At run time a data value is a handle: a pointer to the static object the
-compiler built, which binding, passing and returning copy. Only the values run
-time uses are emitted, with the values they hold. Runtime code may hold a data
-value wherever a valtype goes: a local, a parameter, a return, a record field,
-a #~"ListVal", a map value or key, a #~"SetVal" and an #~"optionval". An
-untyped number in a value used at run time is an #~"i64" or an #~"f64" there,
-and one outside that type is error #~"E0100" at the use.
-
-A data type has the generated #~"==", #~"!=" and #~"hash" a record has, when
-every field has its own. A field typed #~"intliteral" or #~"floatliteral"
-compares as the number it holds, as an untyped constant does: exactly, as
-written, where the comparison folds -- two constant data values compare at
-compile time, field by field -- and as the #~"i64" or #~"f64" it is emitted
-as at run time. So two values whose fields hold #~"0.1" and
-#~"0.10000000000000000001" differ when compared at compile time and are equal
-at run time, where both are one #~"f64". An #~"intliteral" field hashes as its
-#~"i64"; a #~"floatliteral" field, like an #~"f64" one, has no #~"hash", so a
-data type holding one is no map key. A data type's methods take the
-receiver #~"{:this}", the handle; a method that writes a field is refused as
-any write is.
-
-#code language=zerolang: """
-  part: data {
-      name: "nut".text
-      count: 1
-  }
-
-  # a unit-level data value, and one of every default
-  bolt: (part name: "bolt" count: 40)
-  blank: part.create
-
-  main: function is {
-      print "parts"
-  }
-  """
-
-A data type declares its layout by its fields, so it cannot be #~"native"
-and must declare a field. It cannot take type parameters, nor be declared in
-a generic unit. Each of these is error #~"E0100".
-
 Generic types can also be used in records:
 
 #code language=zerolang: """
@@ -6367,55 +6110,6 @@ and [#> to=./ownership.html: ownership].
       }
   }
   """
-
-#---: choice
-
-Defines a static sum type: a variant whose values are static, as a data
-type's are. A choice is a valtype, so its name is lowercase, as a variant's
-is. Each arm carries nothing, written #~"null", or one value of the type it
-names, and that type is one a data field may hold: a number (an untyped
-#~"intliteral" or #~"floatliteral" too), #~"bool" or another enum, #~"text", a
-function reference, a #~"staticlist", a data type or another choice. Any other
-payload is error #~"E0100", and so is a choice that is native, takes type
-parameters or is declared in a generic unit.
-
-#code language=zerolang: """
-  nativeform: choice {
-      call: null
-      template: text
-      width: u8
-  }
-  """
-
-A choice value is used as a variant's is: on a value #~"f", #~"f.call" is the arm
-predicate,
-#~"match" selects an arm, and #~"==" compares arm and value. An arm that
-carries nothing is read by name anywhere, #~"nativeform.call", and has no zero
-otherwise: a bare #~"nativeform" builds no value. A choice value is copied by
-binding it, and no marker applies to it.
-
-A value whose arm carries a value is built in a static position, as a data
-value is: as a unit-level constant, as a type's #~"as" constant, or inside
-another data or choice value, in parentheses -- #~"tpl: (nativeform.template
-\"io.write\")". The one value is checked as a data field's is: an untyped string
-is #~"text", an untyped number keeps its full value in an #~"intliteral" arm,
-and a #~"list { }" is of the arm's #~"staticlist" type. Without the
-parentheses, #~"tpl: nativeform.template \"io.write\"" applies a type, which a
-choice does not take, and is refused, as #~"x: row 5" is for a data type. In a
-function body such a value is error #~"E0300": build it at unit level and read
-it there. A read of an arm predicate or #~"==" on values built so folds at
-compile time, and so does a unit-level #~"match" on one: the value selects
-its arm, and inside that arm the subject's name, written bare, reads the value
-the arm carries -- #~"width: match (tpl) case template then tpl.length else 0".
-A value no run-time code reaches is not emitted.
-
-At run time a choice value is held by value, as a variant's is: the compiler
-writes the values run time reaches as static objects, and a value inside a
-data value, a list or another choice value in place. Runtime code holds one
-wherever a valtype goes -- a local, a parameter, a return, a data or record or
-class field, a list element, a #~"ListVal", an #~"optionval", a map key or a
-#~"SetVal" -- matches it, narrows it and compares it with the generated
-#~"==". Its methods take the receiver #~"{:this}" and only read it.
 
 #---: class
 
@@ -7462,6 +7156,462 @@ read; its test is the predicate form above.
   ) case t2 then {
       print x     # x is the String ("hello") here
   } else null
+  """
+
+#---: Static Data
+
+Static data is data the compiler builds into the program: tables, settings,
+vocabularies -- values the program reads but never builds, changes or frees
+at run time. There are three kinds, each with its keyword:
+
+#ul:
+  [#*: #~"list { ... }" -- a static list: elements of one type, each read by
+    its label or its position]
+  [#*: #~"data" -- a static record type, whose values are built in static
+    positions]
+  [#*: #~"choice" -- a static sum type, whose arms carry nothing or one static
+    value]
+
+#code language=zerolang: """
+  # how a native is written in C
+  nativeform: choice {
+      call: null
+      value: null
+      template: text
+  }
+
+  # one native: its key, its C, how it is written, the units it needs
+  nativerow: data {
+      key: text
+      body: ""
+      form: nativeform.call
+      needs: staticlist text
+      live: false
+  } as {
+      hasBody: function {:this} out bool is {
+          return this.body.length > 0
+      }
+  }
+
+  first: (nativerow key: "system.exit" needs: (list {}))
+  natives: list {
+      (nativerow
+          key: "system.u8.+"
+          body: "((uint8_t)(@L@ + @R@))"
+          form: nativeform.value
+          needs: (list {})
+      )
+      (nativerow key: "system.print" needs: (list { write: "io.write" }))
+      (nativerow key: "system.fmt" form: nativeform.template "fmt(@0@)" needs: (list {}))
+  }
+
+  words: list { "a" "b" }
+
+  main: function is {
+      print natives.0.key.stringView
+      print natives.1.needs.write.stringView
+      for each n: natives loop {
+          if n.hasBody then print n.key.stringView
+      }
+      byKey: MapVV text v: nativerow
+      for each n: natives loop byKey.set key: n.key value: n
+      if first.form.call then print "call"
+      print "\{byKey.length} \{words.length}"
+  }
+  """
+
+#----: Static values
+
+A static value is a valtype the compiler builds. It is immutable: no write
+reaches it, at any depth of a path. It is never moved, borrowed or freed:
+binding it, passing it and returning it copy it, and every ownership marker
+(#~".take", #~".borrow", #~".view", #~".hold", #~".copy") on one is error
+#~"E0100". It has no zero value, so an #~"array" of a static type is error
+#~"E0100": hold such values in a #~"ListVal", or make the element an
+#~"optionval". Its methods take the receiver #~"{:this}" and only read it.
+
+A static value is written in a static position: as a unit-level constant, as
+a type's #~"as" constant, or inside another static value. A data or choice
+value with arguments is written in parentheses -- #~"bolt: (part count: 40)",
+#~"tpl: (nativeform.template \"io.write\")" -- since at unit level a bare
+#~"x: Head args" applies a type; a data value with every field at its default
+is #~"<type>.create". Building one in a function body is error #~"E0300". Each
+member holds a static value: a number (an untyped #~"intliteral" or
+#~"floatliteral" too), #~"bool" or another enum, #~"text", a function
+reference, a static list, a data value or a choice value. An untyped string
+in a static position is #~"text".
+
+A read of a static value through a compile-time path -- a field, an element, a
+label, a list's #~"length", an arm predicate, #~"==" on two such values, a
+unit-level #~"match" -- folds at compile time and is no use of the value. Only
+the values run-time code reaches are emitted, with the values they hold. An
+untyped number keeps its full value until it reaches run time, where it is the
+#~"i64" or #~"f64" it is emitted as, and one outside that type is error
+#~"E0100" at the use.
+
+A data type and a choice have the generated #~"==", #~"!=" and #~"hash" a
+record and a variant have, when every part has its own; a list has none. A
+static list is walked by #~"for each", and each element it yields is the
+element itself, whatever its size.
+
+#----: Static lists
+
+#~"list { ... }" creates a static list: a constant list of embedded data. A
+list holds elements of one type: all integers, all floats, all strings, or all
+values of one other static type -- #~"bool", the arms of one enum, lists of one
+list type, or values of one #~"data" type. An element of another kind or type
+than the first, an integer among floats included, is an error where it is
+written. Each element is any compile-time constant of that type: a literal, a
+unit constant, an expression over them (string #~"+" too), another list's
+element, a #~"data" construction. With no #~"out", a list of arms, lists or
+#~"data" values is of its first element's type, and an element that is itself
+a list takes the element type an #~"out" names. The list's name is a value of type #~"staticlist T", where
+#~"T" is the element type (see [#> to="./stdlib_collections.html#lists":
+Lists]). The keyword #~"list" opens a list and names no type: the type is
+#~"staticlist" wherever one is written, #~"{d: staticlist u8}",
+#~"out (staticlist StringView i: nameid)".
+
+A list may be empty when its #~"out" names its type (#~"list {} out staticlist
+StringView"): its length is 0, its walk ends at once, and it has no
+#~".array". With no #~"out" an empty list has nothing to take a type from and
+is an error, unless it is nested.
+
+A list written inside a #~"data" value is nested: it is a value of the field
+it is written for, so it needs no #~"out" -- #~"needs: list { write: \"io.write\"
+}" is a #~"staticlist text" when the field is one, and #~"list {}" is an empty
+one. An #~"out" written on a nested list must name the field's type. Its
+labels, #~"slot" and #~"length" are read through the path to it, as a named
+list's are through its name: #~"first.needs.write".
+
+Elements are stored in the order they are written: the first is at index 0,
+and each one after it at the next index. An element may carry a label, which
+names it (labels are required for a list that is used as a #~"tag"); an
+integer label is a name like any other and does not move the element. An
+unlabelled element is named by its index (#~"primes.0"). Every name in a list
+is distinct -- a label that repeats another label, or the index an unlabelled
+element is named by (#~"list { 0 1 1: 3 }"), is an error.
+
+A labelled element can be referenced directly elsewhere in the source, as a
+constant is.
+
+A list's optional #~"out" names the list's type -- #~"out staticlist u8",
+#~"out staticlist f32", #~"out staticlist StringView" -- or an instance that also names
+the type its elements are indexed by, #~"out (staticlist u8 i: byteid)" or
+#~"out (staticlist StringView i: nameid)". The list's element type is that type's,
+and any per-element type tag (#~"name: 0.T") must agree with it; without an
+#~"out" the tags alone name it, and must agree with each other. An #~"out"
+that leaves its element out -- #~"out staticlist", or one that writes the literal
+type, #~"out (staticlist intliteral)" -- names none, and neither does a list with no
+#~"out" and no tag. A number in a list of #~"StringView" is an error, as is a
+string in a list of numbers. An interpolated string builds its value at run
+time, so it is no element.
+
+A list whose element type is named -- by its #~"out", or by a tagged element
+-- reads every element at that type, whether or not the element wrote a tag
+of its own: #~"mydata.cNul" reads at the list's type at every access, and
+converts as a typed numeric literal does anywhere else. A list that names
+no element type reads its elements UNTYPED, as a unit constant reads:
+#~"sizes.small" lands in whatever numeric type takes it, checked by its
+value, and a string element is a #~"StringView" or #~"text" as its slot asks,
+as a string literal is. Only what reaches run time -- the list's value, a
+run-time #~".get", a walk -- materialises: an untyped list's value is a
+#~"staticlist i64" or a #~"staticlist f64", and a list of strings is in a static
+position, so its value is a #~"staticlist text"; each is indexed by #~"u64",
+and the emitted program never holds an untyped element. A run-time read of a
+text element reaches a #~"StringView" through #~".stringView". One list is one static
+array, so an untyped list is not a #~"staticlist u8": a parameter that asks
+for one is refused it.
+
+A value the chosen type cannot hold — #~"list { 300 } out staticlist u8", or a
+negative element in an unsigned list — is an error at the list's
+declaration, reported against the element that does not fit. The check
+happens where the value is written rather than where it is read, because
+a list has no other place that sees every element at once.
+
+A list has the members its type declares -- #~"length", #~"get",
+#~"iterate" and #~"slot" on every list, #~"array" on a list of numbers, and
+#~"tag", the discriminator for a tagged type (see below), on a list of
+integers:
+
+#ul:
+  [#*: #~"tag" -- the list's discriminator, for a tagged type (see below)]
+  [#*: #~"length" -- its element count, a constant]
+  [#*: #~"get" -- #~".get i: k", the element at index #~"k", of the list's
+    index type (#~"u64" when it names none)]
+  [#*: #~"slot" -- #~"blk.slot.label", the POSITION of a labelled element, of
+    the list's index type, or untyped when it names none. A vocabulary held as
+    one list reads each entry's position by its label
+    (#~"names.slot.wkThis"); an unlabelled element has no slot, and a list
+    with no label has no #~"slot" at all]
+  [#*: #~"iterate" -- the walk over the elements, first to last]
+  [#*: #~"array" -- #~".array", a copy of the list into a sized array]
+
+An element is a member of the list too, so it may not take one of these
+names: a second definition of a name the list already has is refused
+where the element is written, naming the member it would collide with.
+
+The list's element type also determines the element width of the runtime array
+a list is emitted as, when it is indexed by a variable or iterated. An
+untyped list's array holds the #~"i64", #~"f64" or #~"text" its elements
+materialise to; see
+[#> to=./representation_of_types.html: representation_of_types] for the layout.
+
+String literal fragments are built on top of a u8 data sequence.
+
+Through the list's name, its elements (#~"primes.0", #~"codes.ht"), its
+#~".length" and #~".get K" with a constant #~"K" are constants -- in a body
+and in a unit-level definition alike (#~"COUNT: primes.length") -- and a
+program that reads only those carries no array at all. A constant #~"K" out of
+range is a compile error. A run-time #~".get i", #~".array" (a copy into a
+sized array) and the list used as a value put its array into the program.
+
+The name is a value: bound (#~"w: primes"), passed, returned, held in a field
+or walked (#~"for each p: primes"), it is a view of the static array --
+its length and a pointer at it -- which binding copies and which takes no lock,
+since static memory can be neither written nor freed. Through a value,
+#~"get" reads at run time and panics out of range, and #~"length" and
+#~"iterate" read the view; #~".array", #~".tag" and #~".slot" are the list's,
+reached through its name only. Written alone as a statement the name does
+nothing and is #~"E0100", and an ownership marker on the list or on an
+element, which names no storage, is #~"E0100" too. A list is declared at unit
+level (or in an #~"as" block); one written inside a function body is
+#~"E0100".
+
+#code language=zerolang: """
+  # untyped elements; as a value, a staticlist i64
+  mydata_i64: list { 1 2 0x07 }
+
+  # array of u8 via `out staticlist u8` — every element is u8, no per-element tag
+  mydata_u8: list { 0 64 250 } out staticlist u8
+
+  # array of u8 via a per-element type tag — same result as `out staticlist u8`
+  mydata_u8b: list { 1.u8 2 0x07 }
+
+  # an integer label names its element: length 3, and `mydata_lbl.4` is 4
+  mydata_lbl: list { 1 2 4: 4 }
+
+  # an array with text keys
+  mydata_key: list { FIRST: 1 SECOND: 2 THIRD: 3 }
+
+  # which can be used as a tag in a sum-type, using these values for
+  #  the descriminator
+  myvariant: variant {
+      FIRST: null
+      SECOND: null
+      THIRD: null
+  } as {
+      tag: mydata_key.tag
+  }
+
+  # elements read at the list's own type, so a list whose values are
+  # bytes says so once and reaches a u8 parameter directly
+  mydata_byte: list { FIRST: 1 SECOND: 2 } out staticlist u8
+  take_u8: function {b: u8} out u8 is { return b }
+  result: take_u8 b: mydata_byte.FIRST
+
+  # can also use elements as constants in top level or in code:
+  One: mydata_key.FIRST   # same as `One: 1`
+
+  # a vocabulary of strings indexed by its own id type: `words.slot.lf` is
+  # the id 1, and `words.get i: words.slot.lf` is "line feed"
+  wordid: typedef u64
+  words: list { ht: "tab" lf: "line feed" } out (staticlist StringView i: wordid)
+  """
+
+#----: data
+
+
+Defines a static record type: a record whose values are static. The compiler
+builds a static value, nothing changes it, and nothing frees it. A data type
+is a valtype, so its name is lowercase, as a record's is.
+
+#code language=zerolang: """
+  # a row of a table: a key, a text default, and an untyped number
+  entry: data {
+      key: text
+      note: ""
+      size: intliteral
+      live: false
+  }
+  """
+
+A data field holds a static value: a number, an untyped #~"intliteral" or
+#~"floatliteral", #~"bool" or another variant whose arms carry nothing,
+#~"text", a function reference, a #~"staticlist", or another data type. Any
+other field type is error #~"E0100". An untyped string is #~"text" here: a
+field written #~"note: \"\"" is a #~"text" field, as #~"note: \"\".text" is. A
+default is written by value, as a record's is:
+#~"size: 5" is an #~"i64" field and #~"size: 5.u8" a #~"u8" field.
+
+A data value is built in a static position: as a unit-level constant, as a
+type's #~"as" constant, or inside another data value. With arguments it is
+written in parentheses; with every field at its default it is
+#~"<type>.create". Each argument is checked as a construction's argument is:
+an unknown field and a missing required one are refused, and an argument must
+be a constant of the field's type. An untyped number keeps its full value in
+an #~"intliteral" field, and a string is #~"text". Equal values are stored
+once. A construction in a function body is error #~"E0300".
+
+A field read on a data value, #~"bolt.count", folds to the field's value at
+compile time, at unit level and in a body, through nested values and through a
+type's #~"as" constant. Such a read does not emit the data value. An untyped
+number keeps its full value until it is used, where it must fit the type it
+lands in. A data value built from a field of itself, directly or through
+another value, is error #~"E0600".
+
+A data value never changes. Binding it to a name copies it, and the copy
+refers to the same value. It is never moved, borrowed or freed, so a
+marker on it (#~".take", #~".borrow", #~".view", #~".hold" or #~".copy") is
+error #~"E0100". A write to one of its fields, at any depth of the path, is
+error #~"E0100". Binding a name that holds a data value to another one is
+no write to either. A data value has no zero value, so an #~"array" of a data
+type, or of a record that holds one, is error #~"E0100". Hold such values in
+a #~"ListVal", or make the element #~"optionval".
+
+At run time a data value is a handle: a pointer to the static object the
+compiler built, which binding, passing and returning copy. Only the values run
+time uses are emitted, with the values they hold. Runtime code may hold a data
+value wherever a valtype goes: a local, a parameter, a return, a record field,
+a #~"ListVal", a map value or key, a #~"SetVal" and an #~"optionval". An
+untyped number in a value used at run time is an #~"i64" or an #~"f64" there,
+and one outside that type is error #~"E0100" at the use.
+
+A data type has the generated #~"==", #~"!=" and #~"hash" a record has, when
+every field has its own. A field typed #~"intliteral" or #~"floatliteral"
+compares as the number it holds, as an untyped constant does: exactly, as
+written, where the comparison folds -- two constant data values compare at
+compile time, field by field -- and as the #~"i64" or #~"f64" it is emitted
+as at run time. So two values whose fields hold #~"0.1" and
+#~"0.10000000000000000001" differ when compared at compile time and are equal
+at run time, where both are one #~"f64". An #~"intliteral" field hashes as its
+#~"i64"; a #~"floatliteral" field, like an #~"f64" one, has no #~"hash", so a
+data type holding one is no map key. A data type's methods take the
+receiver #~"{:this}", the handle; a method that writes a field is refused as
+any write is.
+
+#code language=zerolang: """
+  part: data {
+      name: "nut".text
+      count: 1
+  }
+
+  # a unit-level data value, and one of every default
+  bolt: (part name: "bolt" count: 40)
+  blank: part.create
+
+  main: function is {
+      print "parts"
+  }
+  """
+
+A data type declares its layout by its fields, so it cannot be #~"native"
+and must declare a field. It cannot take type parameters, nor be declared in
+a generic unit. Each of these is error #~"E0100".
+
+#----: choice
+
+
+Defines a static sum type: a variant whose values are static, as a data
+type's are. A choice is a valtype, so its name is lowercase, as a variant's
+is. Each arm carries nothing, written #~"null", or one value of the type it
+names, and that type is one a data field may hold: a number (an untyped
+#~"intliteral" or #~"floatliteral" too), #~"bool" or another enum, #~"text", a
+function reference, a #~"staticlist", a data type or another choice. Any other
+payload is error #~"E0100", and so is a choice that is native, takes type
+parameters or is declared in a generic unit.
+
+#code language=zerolang: """
+  nativeform: choice {
+      call: null
+      template: text
+      width: u8
+  }
+  """
+
+A choice value is used as a variant's is: on a value #~"f", #~"f.call" is the arm
+predicate,
+#~"match" selects an arm, and #~"==" compares arm and value. An arm that
+carries nothing is read by name anywhere, #~"nativeform.call", and has no zero
+otherwise: a bare #~"nativeform" builds no value. A choice value is copied by
+binding it, and no marker applies to it.
+
+A value whose arm carries a value is built in a static position, as a data
+value is: as a unit-level constant, as a type's #~"as" constant, or inside
+another data or choice value, in parentheses -- #~"tpl: (nativeform.template
+\"io.write\")". The one value is checked as a data field's is: an untyped string
+is #~"text", an untyped number keeps its full value in an #~"intliteral" arm,
+and a #~"list { }" is of the arm's #~"staticlist" type. Without the
+parentheses, #~"tpl: nativeform.template \"io.write\"" applies a type, which a
+choice does not take, and is refused, as #~"x: row 5" is for a data type. In a
+function body such a value is error #~"E0300": build it at unit level and read
+it there. A read of an arm predicate or #~"==" on values built so folds at
+compile time, and so does a unit-level #~"match" on one: the value selects
+its arm, and inside that arm the subject's name, written bare, reads the value
+the arm carries -- #~"width: match (tpl) case template then tpl.length else 0".
+A value no run-time code reaches is not emitted.
+
+At run time a choice value is held by value, as a variant's is: the compiler
+writes the values run time reaches as static objects, and a value inside a
+data value, a list or another choice value in place. Runtime code holds one
+wherever a valtype goes -- a local, a parameter, a return, a data or record or
+class field, a list element, a #~"ListVal", an #~"optionval", a map key or a
+#~"SetVal" -- matches it, narrows it and compares it with the generated
+#~"==". Its methods take the receiver #~"{:this}" and only read it.
+
+#----: Function references in static values
+
+A function-typed field is declared by a spec, which it must then be given, or
+by a function's name, which is also its default (#~"lower: defaultLower"), as a
+class field's is. In a static value the function is written by its bare name,
+or its name through a unit (#~"(op f: add)", #~"(op f: util.sub)"): there a
+name is the reference, never a call, and the function must have the field's
+signature. A spec, a native function, a generic function and a method are
+error #~"E0100" there, and a call #~"E0100" too. A choice arm carries a function
+the same way. Read at run time, such a field is called as any function field
+is (#~"o.f a: 1 b: 2"); two references are equal when they name one function.
+
+#----: From static data to run-time data
+
+Static data stays static: a program that wants a value it can change builds
+one, in its own code, from the static value -- usually in a method of the
+static type, which names the run-time type and says how each field converts.
+The compiler derives no run-time twin of a static type.
+
+#code language=zerolang: """
+  nativerow: data {
+      key: text
+      live: false
+  } as {
+      # a run-time copy the program may change: built by the program's own code
+      editable: function {:this} out Native is {
+          return (Native key: this.key.string live: this.live)
+      }
+  }
+
+  Native: class {
+      key: String
+      live: bool
+  }
+
+  natives: list {
+      (nativerow key: "system.exit")
+      (nativerow key: "system.print" live: true)
+  }
+
+  # every row as a run-time value, in a list the program owns
+  editables: function {rows: staticlist nativerow} out List Native is {
+      result: List Native
+      for each r: rows loop result.append r.editable
+      return result
+  }
+
+  main: function is {
+      xs: editables rows: natives
+      for each n: xs loop print "\{n.key} \{n.live}"
+      name: (xs.get i: 0).key.copy
+      name.append " (edited)"
+      print name
+  }
   """
 
 #---: Operations
