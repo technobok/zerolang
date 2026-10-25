@@ -100,8 +100,6 @@ ztypetype: variant {
     protocolType: null
     # a facet: a valtype interface carrying its vtable beside the value
     facetType: null
-    # a list's element type
-    staticListType: null
     # a tag: the discriminator type a sum is `as`-declared over
     tagType: null
     # the type of an expression that does not return, so nothing downstream of
@@ -391,8 +389,6 @@ ztypetypeName: function {t: ztypetype} out String is {
         return "PROTOCOL".string
     } case facetType then {
         return "FACET".string
-    } case staticListType then {
-        return "DATA".string
     } case tagType then {
         return "TAG".string
     } case neverType then {
@@ -1118,14 +1114,6 @@ ZType: class {
     # list and its template. GENERIC_PARAM cannot say this either, so the node
     # reading gets its own bit as the partial reading did.
     isTrieNode: bool
-    # a list's single element type. The checker settles it from `out T`
-    # or the elements' own tags; the emitter reads it for the static array's C
-    # element type rather than re-deriving one from a name. 0 for every other
-    # kind of type.
-    staticListElemTypeId: optionval tid
-    # the type a list's NAME has as a value: the `staticlist t` instance minted
-    # for it. 0 for every other kind of type.
-    staticListValueTypeId: optionval tid
     # the declaration (ztyping DeclId) that minted this type; 0 until the
     # declaration layer links it
     def: declid
@@ -1319,8 +1307,6 @@ holeType: function {} out ZType is {
         isStatic: false
         isPartial: false
         isTrieNode: false
-        staticListElemTypeId: optionval.none tid
-        staticListValueTypeId: optionval.none tid
         def: declid
         ownerTid: tid
     )
@@ -1407,8 +1393,6 @@ ZTypeRegistry: class {
             isStatic: false
             isPartial: false
             isTrieNode: false
-            staticListElemTypeId: optionval.none tid
-            staticListValueTypeId: optionval.none tid
             def: declid
             :ownerTid
         )
@@ -1899,36 +1883,6 @@ ZTypeRegistry: class {
         if tid >= this.nextTid then return name.length == 0
         got: this.typeById.get i: tid
         return got.name.stringView == name
-    }
-
-    # staticListElemTypeOf -- the element type the checker settled on for a
-    # list, or 0 when the type is not a list. The emitter asks this
-    # rather than reading the `out T` name, so a block typed by its elements'
-    # own tags emits the same C array as one typed by the clause.
-    staticListElemTypeOf: function {t: this.view tid: tid} out tid is {
-        if tid >= t.nextTid then return ztypes.tid.zero
-        return ((t.typeById.get i: tid).staticListElemTypeId.or d: ztypes.tid.zero)
-    }
-
-    # record a list's element type
-    setStaticListElemType: function {:this typeId: tid value: tid} is {
-        if typeId >= this.nextTid then return
-        got: this.typeById.getMut i: typeId
-        got.staticListElemTypeId = optionval.some value
-    }
-
-    # staticListValueTypeOf -- the type a list's name has as a value, or 0 when
-    # the type is not a list.
-    staticListValueTypeOf: function {t: this.view tid: tid} out tid is {
-        if tid >= t.nextTid then return ztypes.tid.zero
-        return ((t.typeById.get i: tid).staticListValueTypeId.or d: ztypes.tid.zero)
-    }
-
-    # record the type a list's name has as a value
-    setStaticListValueType: function {:this typeId: tid value: tid} is {
-        if typeId >= this.nextTid then return
-        got: this.typeById.getMut i: typeId
-        got.staticListValueTypeId = optionval.some value
     }
 
     # genericOriginOf -- the template a mono was instantiated from, or 0 when

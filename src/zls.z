@@ -2742,13 +2742,13 @@ declTypeIdOf: function {
 }
 
 # the owner type id of the member referenced at node `nid` (the member
-# declaration's parent type or list, via refDecl), or 0.
+# declaration's parent type, via refDecl), or 0.
 memberOwnerOf: function {o: (Option zenv.ZSymbolTable).view nid: zast.nodeid} out ztypes.tid is {
     return (declOwnerOf :o declId: (refDeclOf :o :nid))
 }
 
-# declOwnerOf -- the type or list declaration `declId` is a member of, or
-# 0 when it is no member.
+# declOwnerOf -- the type declaration `declId` is a member of, or 0 when it is
+# no member (a list's element is the list's, which is no type: listMemberDecl).
 declOwnerOf: function {o: (Option zenv.ZSymbolTable).view declId: ztypes.declid} out ztypes.tid is {
     if declId.isZero then return ztypes.tid.zero
     par: ztypes.declid
@@ -2763,8 +2763,7 @@ declOwnerOf: function {o: (Option zenv.ZSymbolTable).view declId: ztypes.declid}
         o
     ) case some then {
         p: o.typing.decls.get i: par
-        # a list's element is a member of the block
-        if p.kind.typeDecl or p.kind.staticListDecl then return p.typeId
+        if p.kind.typeDecl then return p.typeId
         return ztypes.tid.zero
     } case none then {
         return ztypes.tid.zero
@@ -2915,12 +2914,6 @@ displayTypeNameSt: function {
 } out String is {
     disp: st.reg.nameOf :tid
     if disp.length == 0 then return disp
-    # a block's `slot` is named after its block: `main.words.slot`
-    if (st.typing.staticListSlotTypes.has item: tid) then {
-        blk: displayTypeNameSt :st tid: (st.reg.ownerTidOf :tid) :site
-        if blk.length > 0 then return "\{blk.stringView}.slot"
-        return disp
-    }
     inst: instanceSpelling :st :tid :site
     if inst.length > 0 then return inst
     base: tid
@@ -4427,56 +4420,41 @@ declOfDefOp: function {
     return ztypes.declid.zero
 }
 
-# memberNavTarget -- what a member hit names: its owner, or, for a
-# unit-qualified member with no owner stamp, its def tid. A list's own
-# `length` has no declaration of its own: the block owns it, and is where it is
-# declared. A label's position, `blk.slot.label`, is owned by the block's
-# `slot` and declared by the label: the element's declaration.
+# memberNavTarget -- what a member hit names: its owner, a list's member
+# (listMemberDecl), or, for a unit-qualified member with no owner stamp, its
+# def tid.
 memberNavTarget: function {snap: zcheck.CheckResult hnid: zast.nodeid} out navtarget is {
     refTid: ztypes.tid
     refDecl: refDeclOf o: snap.st nid: hnid
     refOwner: memberOwnerOf o: snap.st nid: hnid
-    if refOwner.isZero then {
-        refOwner = staticListBaseOfOpt :snap dpid: hnid
-        if refOwner.isZero.not then refDecl = declOfTidOpt o: snap.st tid: refOwner
-        sl: slotLabelDecl :snap dpid: hnid
-        if sl.isZero.not then refDecl = sl
-    }
-    if refOwner.isZero then refTid = useUnitDef o: snap.st nid: hnid
+    lm: ztypes.declid
+    if refOwner.isZero then lm = listMemberDecl :snap dpid: hnid
+    if lm.isZero.not then refDecl = lm
+    if refOwner.isZero when lm.isZero then refTid = useUnitDef o: snap.st nid: hnid
     return (navtarget vid: ztypes.vid tid: refTid owner: refOwner declId: refDecl)
 }
 
-# declOfTidOpt -- the declaration that declares type `tid`, over the LSP's
-# optional snapshot; 0 when there is none.
-declOfTidOpt: function {o: (Option zenv.ZSymbolTable).view tid: ztypes.tid} out ztypes.declid is {
+# listDeclOfNodeOpt -- the list declaration node `nid` names (`codes`,
+# `zast.wellKnown`), the declaration the checker resolved it to; 0 for any
+# other node.
+listDeclOfNodeOpt: function {
+    o: (Option zenv.ZSymbolTable).view nid: zast.nodeid
+} out ztypes.declid is {
+    d: refDeclOf :o :nid
+    if d.isZero then return d
     match (
         o
     ) case some then {
-        return (o.typing.declIdOfType typeId: tid)
-    } case none then {
-        return ztypes.declid
-    }
+        if (o.typing.decls.get i: d).kind.staticListDecl then return d
+    } case none then null
+    return ztypes.declid.zero
 }
 
-# staticListBaseOfOpt -- the list the base of dotted path `dpid` names, 0 when
-# the base is no list.
-staticListBaseOfOpt: function {snap: zcheck.CheckResult dpid: zast.nodeid} out ztypes.tid is {
-    baseId: zast.nodeid
-    {
-        n: snap.prog.nodes.get i: dpid
-        if n.dottedpath then baseId = n.parent
-    }
-    if baseId.isZero then return ztypes.tid.zero
-    bt: nodeTypeAt o: snap.st nid: baseId
-    if (ownerIsStaticListOpt o: snap.st tid: bt) then return bt
-    return ztypes.tid.zero
-}
-
-# slotLabelDecl -- the declaration dotted path `dpid` reads when it reads a
-# label's position, `blk.slot.label`: the label's member of the block's `slot`,
-# which holds the position. The checker records no declaration on such a path;
-# 0 for any other.
-slotLabelDecl: function {snap: zcheck.CheckResult dpid: zast.nodeid} out ztypes.declid is {
+# listMemberDecl -- the declaration a member read `dpid` of a list names: its
+# element, by label or ordinal -- a label's position, `blk.slot.label`, is its
+# element's too -- and the list itself for its count, which has no
+# declaration of its own. 0 when the path reads no list.
+listMemberDecl: function {snap: zcheck.CheckResult dpid: zast.nodeid} out ztypes.declid is {
     baseId: zast.nodeid
     nm: zast.nameid
     {
@@ -4490,25 +4468,36 @@ slotLabelDecl: function {snap: zcheck.CheckResult dpid: zast.nodeid} out ztypes.
         }
     }
     if baseId.isZero then return ztypes.declid.zero
-    bt: nodeTypeAt o: snap.st nid: baseId
+    ld: listDeclOfNodeOpt o: snap.st nid: baseId
+    if ld.isZero then {
+        b: snap.prog.nodes.get i: baseId
+        if b.dottedpath when (
+            (atomNameOfNode prog: snap.prog nid: b.child) == zast.wellKnown.slot.wkSlot
+        ) then {
+            ld = listDeclOfNodeOpt o: snap.st nid: b.parent
+        }
+    }
+    if ld.isZero then return ld
     o: snap.st
     match (
         o
     ) case some then {
-        if (o.typing.staticListSlotTypes.has item: bt).not then return ztypes.declid.zero
-        bd: o.typing.declIdOfType typeId: (o.reg.ownerTidOf tid: bt)
-        if bd.isZero then return bd
-        sd: o.typing.declFindChild parentDeclId: bd nameId: zast.wellKnown.slot.wkSlot
-        if sd.isZero then return sd
-        return (o.typing.declFindChild parentDeclId: sd nameId: nm)
+        e: o.typing.declFindChild parentDeclId: ld nameId: nm
+        if e.isZero.not then return e
     } case none then null
-    return ztypes.declid.zero
+    return ld
 }
 
-# slotElementOf -- the element a label's member of a block's `slot` is the
-# position of: the block's declaration of the same label, which is where the
-# label is written. 0 for a declaration that is no slot's label.
-slotElementOf: function {
+# atomNameOfNode -- the name an atom node spells, 0 for any other node
+atomNameOfNode: function {prog: Ast.view nid: zast.nodeid} out zast.nameid is {
+    n: prog.nodes.get i: nid
+    if n.atomid then return n.name
+    return zast.nameid.zero
+}
+
+# listOfDeclOpt -- the list declaration `declId` is or belongs to: a list's own,
+# or its element's list. 0 for any other declaration.
+listOfDeclOpt: function {
     o: (Option zenv.ZSymbolTable).view declId: ztypes.declid
 } out ztypes.declid is {
     if declId.isZero then return declId
@@ -4516,24 +4505,120 @@ slotElementOf: function {
         o
     ) case some then {
         d: o.typing.decls.get i: declId
-        if d.parent.isZero then return ztypes.declid.zero
-        sd: o.typing.decls.get i: d.parent
-        if (o.typing.staticListSlotTypes.has item: sd.typeId).not then return ztypes.declid.zero
-        if sd.parent.isZero then return ztypes.declid.zero
-        return (o.typing.declFindChild parentDeclId: sd.parent nameId: d.name)
+        if d.kind.staticListDecl then return declId
+        if d.parent.isZero.not when (o.typing.decls.get i: d.parent).kind.staticListDecl then {
+            return d.parent
+        }
     } case none then null
     return ztypes.declid.zero
 }
 
-# writtenDeclOf -- the declaration `declId` is written as: a label's member of
-# a block's `slot` is written at its element, which documents it; any other is
-# its own.
-writtenDeclOf: function {
-    o: (Option zenv.ZSymbolTable).view declId: ztypes.declid
-} out ztypes.declid is {
-    se: slotElementOf :o :declId
-    if se.isZero.not then return se
-    return declId
+# listMemberHit -- the hit is a list's member: an element, named where the list
+# declares it or read through it, or the list's count read through it.
+listMemberHit: function {snap: zcheck.CheckResult hit: navhit} out bool is {
+    ld: listOfDeclOpt o: snap.st declId: hit.declId
+    if ld.isZero then return false
+    return (ld != hit.declId) or (hit.kind == 2)
+}
+
+# listMemberPrefix -- the path a list member's hit is spelled through: its
+# list's, `nav.primes`; "" when the hit is no list's member.
+listMemberPrefix: function {snap: zcheck.CheckResult hit: navhit} out String is {
+    if (listMemberHit :snap :hit).not then return "".string
+    lp: listPathOpt :snap declId: (listOfDeclOpt o: snap.st declId: hit.declId)
+    # a label's position is read through the list's `slot`
+    if (readsListSlotOpt :snap nid: hit.nodeid) then lp.append ".slot"
+    return lp
+}
+
+# nodeConstOpt -- the value the check folded node `nid` to, over the LSP's
+# optional snapshot; none when it folded to none.
+nodeConstOpt: function {o: (Option zenv.ZSymbolTable).view nid: zast.nodeid} out ztypes.cval is {
+    match (
+        o
+    ) case some then {
+        return ((o.typing.nodeConst.get key: nid).or d: ztypes.noConst)
+    } case none then null
+    return ztypes.noConst
+}
+
+# listPathOpt -- the path a list is spelled through, `nav.primes`.
+listPathOpt: function {snap: zcheck.CheckResult declId: ztypes.declid} out String is {
+    ld: declId
+    o: snap.st
+    match (
+        o
+    ) case some then {
+        up: ztypecheck.unitPathOfDecl st: o declId: ld
+        nm: zast.nameTextAt ast: snap.prog ref: (o.typing.decls.get i: ld).name
+        if up.length > 0 then up.appendByte b: 46
+        up.append nm
+        return up
+    } case none then null
+    return "".string
+}
+
+# listRowTidOpt -- when `declId` is a list's element, the type its list row
+# gives a read of it (`elem`) or of its label's position (`slot`). 0 otherwise.
+listRowTidOpt: function {
+    snap: zcheck.CheckResult declId: ztypes.declid slot: bool
+} out ztypes.tid is {
+    ld: listOfDeclOpt o: snap.st :declId
+    if ld.isZero or (ld == declId) then return ztypes.tid.zero
+    o: snap.st
+    match (
+        o
+    ) case some then {
+        lv: ztypecheck.constValueOfDeclLate st: o ast: snap.prog declId: ld
+        if lv.kind.aggKind.not then return ztypes.tid.zero
+        g: o.typing.constAggs.get i: lv.aggId.u64
+        if slot then return g.slot
+        return g.elem
+    } case none then null
+    return ztypes.tid.zero
+}
+
+# listSlotValueOpt -- the position a label's position read `hit` names: its
+# element's place in its list, typed as the list's `slot`.
+listSlotValueOpt: function {snap: zcheck.CheckResult hit: navhit} out ztypes.cval is {
+    ld: listOfDeclOpt o: snap.st declId: hit.declId
+    if ld.isZero or (ld == hit.declId) then return ztypes.noConst
+    o: snap.st
+    match (
+        o
+    ) case some then {
+        lv: ztypecheck.constValueOfDeclLate st: o ast: snap.prog declId: ld
+        if lv.kind.aggKind.not then return ztypes.noConst
+        g: o.typing.constAggs.get i: lv.aggId.u64
+        po: o.typing.aggLabelPos id: lv.aggId label: (o.typing.decls.get i: hit.declId).name
+        match (
+            po
+        ) case some then {
+            cv: ztypes.makeIntConst po.i64.orPanic
+            if g.slot != o.reg.literalIntTid when (ztypecheck.numKindOfTid
+                st: o
+                tid: g.slot
+            ).has then cv = ztypes.typedConst c: cv numTid: g.slot
+            return cv
+        } case none then null
+    } case none then null
+    return ztypes.noConst
+}
+
+# readsListSlotOpt -- node `nid` reads a label's position, `blk.slot.label`.
+readsListSlotOpt: function {snap: zcheck.CheckResult nid: zast.nodeid} out bool is {
+    n: snap.prog.nodes.get i: nid
+    if n.dottedpath.not then return false
+    st0: ztypes.tid
+    {
+        o: snap.st
+        match (
+            o
+        ) case some then {
+            st0 = o.typing.listSlotTid
+        } case none then null
+    }
+    return st0.isZero.not and ((nodeTypeAt o: snap.st nid: n.parent) == st0)
 }
 
 # isUnitTidOpt -- `tid` is a unit's type, over the LSP's optional snapshot.
@@ -4881,8 +4966,8 @@ hitReadsConstOpt: function {
     # the hit's written text
     name: StringView
 } out bool is {
-    # a list's element or length, read through the block
-    if hit.kind == 2 when (ownerIsStaticListOpt :o tid: hit.owner) then {
+    # a list's element or length, read through the list
+    if hit.kind == 2 when (listOfDeclOpt :o declId: hit.declId).isZero.not then {
         match (
             o
         ) case some then {
@@ -4940,6 +5025,11 @@ declNamed: function {
 # constValueOfHit -- the value a constant's card shows: what the use site read,
 # when the check folded it there, else what its declaration folds to.
 constValueOfHit: function {snap: zcheck.CheckResult hit: navhit} out ztypes.cval is {
+    # a label's position the check did not fold (an id-typed index)
+    if hit.nodeid.isZero.not when (readsListSlotOpt :snap nid: hit.nodeid) when (nodeConstOpt
+        o: snap.st
+        nid: hit.nodeid
+    ).kind.none then return (listSlotValueOpt :snap :hit)
     o: snap.st
     match (
         o
@@ -4951,19 +5041,6 @@ constValueOfHit: function {snap: zcheck.CheckResult hit: navhit} out ztypes.cval
         return (ztypecheck.constValueOfDeclLate st: o ast: snap.prog declId: hit.declId)
     } case none then {
         return ztypes.noConst
-    }
-}
-
-# ownerIsStaticListOpt -- `tid` is a list's type, over the LSP's optional
-# snapshot.
-ownerIsStaticListOpt: function {o: (Option zenv.ZSymbolTable).view tid: ztypes.tid} out bool is {
-    if tid.isZero then return false
-    match (
-        o
-    ) case some then {
-        return (o.reg.typetypeOf typeId: tid) == ztypes.ztypetype.staticListType
-    } case none then {
-        return false
     }
 }
 
@@ -5069,12 +5146,13 @@ constCard: function {
     if v.kind.svalKind then {
         st9: hit.tid
         if st9.isZero then st9 = declTypeIdOf o: snap.st declId: hit.declId
+        if st9.isZero then st9 = listRowTidOpt :snap declId: hit.declId slot: false
         if st9.isZero.not then ut = displayTypeNameOfOpt o: snap.st tid: st9 :site
     }
-    # a label's position in a block indexed by an id type is a value of that
+    # a label's position in a list indexed by an id type is a value of that
     # type, which the number the checker folded does not carry
-    if ut.length > 0 when (slotElementOf o: snap.st declId: hit.declId).isZero.not then {
-        dt: declTypeIdOf o: snap.st declId: hit.declId
+    if ut.length > 0 when (readsListSlotOpt :snap nid: hit.nodeid) then {
+        dt: listRowTidOpt :snap declId: hit.declId slot: true
         if dt.isZero.not when (isLiteralTid o: snap.st tid: dt).not then {
             ut = displayTypeNameOfOpt o: snap.st tid: dt :site
         }
@@ -5097,17 +5175,14 @@ constPathPrefix: function {
     site: ztypes.declid
 } out String is {
     if hit.owner.isZero.not then return (displayTypeNameOfOpt o: snap.st tid: hit.owner :site)
+    # an element, named where its list declares it or read through it, or a
+    # list's count
+    lp: listMemberPrefix :snap :hit
+    if lp.length > 0 then return lp
     o: snap.st
     match (
         o
     ) case some then {
-        # an element named where its block declares it
-        blk: ztypecheck.declTypeIdOf st: o declId: (o.typing.declParentOf declId: hit.declId)
-        if blk.isZero.not when (
-            (o.reg.typetypeOf typeId: blk) == ztypes.ztypetype.staticListType
-        ) then {
-            return (displayTypeNameSt st: o tid: blk :site)
-        }
         return (ztypecheck.unitPathOfDecl st: o declId: hit.declId)
     } case none then {
         return "".string
@@ -5131,7 +5206,11 @@ hoverTypeFence: function {
     # its type and its value, not the type
     isConst: hitIsConst :snap :hit name: hname.stringView
     tk: String
-    if isConst.not then tk = typeKindTextOpt o: snap.st tid: hit.tid :site
+    if isConst.not when (listMemberHit :snap :hit).not then tk = (typeKindTextOpt
+        o: snap.st
+        tid: hit.tid
+        :site
+    )
     if tk.length > 0 then {
         kindFence: displayTypeNameOfOpt o: snap.st tid: hit.tid :site
         kindFence.append ": "
@@ -5146,22 +5225,19 @@ hoverTypeFence: function {
     tn: displayTypeNameOfOpt o: snap.st tid: t :site
     if tn.length == 0 then return "".string
     fence: String
-    if hit.owner.isZero.not then {
-        own: (displayTypeNameOfOpt
-            o: snap.st
-            tid: hit.owner
-            :site
-        )
-        if own.length > 0 then {
-            fence.append own
-            fence.appendByte b: 46
-        }
+    own: String
+    if hit.owner.isZero.not then own = displayTypeNameOfOpt o: snap.st tid: hit.owner :site
+    lp: listMemberPrefix :snap :hit
+    if lp.length > 0 then own = lp.take
+    if own.length > 0 then {
+        fence.append own
+        fence.appendByte b: 46
     }
     fence.append hname
     fence.append ": "
     fence.append tn
     # a list's element or length is a constant, which nothing owns
-    if (ownerIsStaticListOpt o: snap.st tid: hit.owner) then return fence
+    if (listMemberHit :snap :hit) then return fence
     # a native's parameter binds no variable, and the Decl its node resolves
     # to is its type's -- `:i`, of the generic `i`, read as that constant
     if hit.vid.isZero when (declKindIsParam :snap declId: hit.declId) then return fence
@@ -5249,7 +5325,7 @@ navHoverAnswer: function {
         refOwner: hit.owner
         member: hname.stringView
     )
-    dnd: declNodeOf o: snap.st declId: (writtenDeclOf o: snap.st declId: hit.declId)
+    dnd: declNodeOf o: snap.st declId: hit.declId
     if dnd.isZero then dnd = legacyDnd
     if dnd.isZero.not then {
         docBody = hoverDoc :snap nid: dnd
@@ -5266,7 +5342,7 @@ navHoverAnswer: function {
     }
     hoverCallNotes :snap :sp :hit :body :docBody :site
     # a list's ordinal (`primes.0`) is spelled like a literal, and is none
-    if (ownerIsStaticListOpt o: snap.st tid: hit.owner) then return (hoverMarkdown
+    if (listMemberHit :snap :hit) then return (hoverMarkdown
         code: body.stringView
         doc: docBody.stringView
     )
@@ -5288,7 +5364,7 @@ navHoverAnswer: function {
 # or a member is of its declared type where its node has no stamp, and where it
 # is declared with a literal type, which the fold rewrote the stamp from.
 hoverValueTid: function {snap: zcheck.CheckResult hit: navhit} out ztypes.tid is {
-    if hit.nodeid.isZero then return (itemValueTid :snap tid: hit.tid)
+    if hit.nodeid.isZero then return hit.tid
     if hit.kind == 6 when hit.vid.isZero.not then return (variableTypeOpt o: snap.st vid: hit.vid)
     nt: nodeTypeAt o: snap.st nid: hit.nodeid
     # a declaration, and a name with no stamp of its own -- a `case`'s arm --
@@ -5309,20 +5385,6 @@ variableTypeOpt: function {o: (Option zenv.ZSymbolTable).view vid: ztypes.vid} o
     } case none then {
         return ztypes.tid.zero
     }
-}
-
-# itemValueTid -- the type a completion item's name has as a value: a
-# list's is its view (`staticlist StringView`), as a use reads it; any other its own.
-itemValueTid: function {snap: zcheck.CheckResult tid: ztypes.tid} out ztypes.tid is {
-    if (ownerIsStaticListOpt o: snap.st :tid).not then return tid
-    o: snap.st
-    match (
-        o
-    ) case some then {
-        vt: ztypecheck.staticListValueTypeLate st: o ast: snap.prog staticListTid: tid
-        if vt.isZero.not then return vt
-    } case none then null
-    return tid
 }
 
 # appendNote -- add a paragraph to a hover's doc text: a blank line between
@@ -5411,7 +5473,7 @@ navDefinitionAnswer: function {
     }
     dd: hit.declId
     if dd.isZero when hit.vid.isZero.not then dd = paramDeclOfVar :snap vid: hit.vid :name
-    dn: declNodeOf o: snap.st declId: (writtenDeclOf o: snap.st declId: dd)
+    dn: declNodeOf o: snap.st declId: dd
     if dn.isZero then {
         dn = (defNodeOf
             o: snap.st
@@ -5466,12 +5528,6 @@ referencesTargetOf: function {
     if hit.kind == 1 when vid.isZero when (snap.prog.nodes.get i: hit.nodeid).labelvalue then {
         vid = defVarIdOf o: snap.st nid: hit.nodeid
     }
-    # a label's position is its element's, which the block owns
-    se: slotElementOf o: snap.st declId: dd
-    if se.isZero.not then {
-        dd = se
-        owner = ztypes.tid.zero
-    }
     if hit.kind == 6 then {
         dr: declRowTarget :snap :sp :hit :name
         vid = dr.vid
@@ -5493,6 +5549,8 @@ referencesTargetOf: function {
         return (reftarget :vid declId: dd owner: ztypes.tid :name)
     }
     od: spelledOrigin :snap declId: dd :name
+    # a list's count or `slot`, spelled by its own name, is the list's
+    if od.isZero when dd.isZero.not when (listOfDeclOpt o: snap.st declId: dd) == dd then od = dd
     if owner.isZero then owner = declOwnerOf o: snap.st declId: od
     return (reftarget :vid declId: od :owner :name)
 }
@@ -5802,16 +5860,15 @@ rowUsesDecl: function {
     snap: zcheck.CheckResult sp: Spans.view tg: reftarget row: spanrow
 } out bool is {
     if row.kind == 2 when tg.owner.isZero.not then {
-        ow: memberOwnerOf o: snap.st nid: row.nodeid
-        # `blk.slot.label` is owned as its element is, by the block
-        if ow.isZero then ow = (declOwnerOf
-            o: snap.st
-            declId: (slotElementOf o: snap.st declId: (slotLabelDecl :snap dpid: row.nodeid))
-        )
-        return ow == tg.owner
+        return (memberOwnerOf o: snap.st nid: row.nodeid) == tg.owner
     }
     use: (row.kind == 1) or (row.kind == 2)
     if use.not or tg.declId.isZero then return false
+    # a list's element is named as its list declares it
+    if row.kind == 2 when (memberOwnerOf o: snap.st nid: row.nodeid).isZero then {
+        lm: listMemberDecl :snap dpid: row.nodeid
+        if lm.isZero.not then return lm == tg.declId
+    }
     ca: caseArmDecl :snap :sp nid: row.nodeid
     if ca.isZero when row.kind == 1 then ca = (genericUseDecl
         :snap
@@ -7942,7 +7999,7 @@ addMemberCompletions: function {
         return
     }
     addTypeMarkers place: site.place :marks
-    if site.place.asItems when (tagCarrier o: snap.st tid: db.tid) then (addCand
+    if site.place.asItems when (tagCarrier :snap tid: db.tid) then (addCand
         :sink
         name: "tag"
         kind: 7
@@ -7995,13 +8052,15 @@ addValueCompletions: function {
 }
 
 # tagCarrier -- a type whose `.tag` names a discriminator type: a list's
-# element type or a numeric type
-tagCarrier: function {o: (Option zenv.ZSymbolTable).view tid: ztypes.tid} out bool is {
+# value (`staticlist u8`) or a numeric type
+tagCarrier: function {snap: zcheck.CheckResult tid: ztypes.tid} out bool is {
     if tid.isZero then return false
+    o: snap.st
     match (
         o
     ) case some then {
-        if (o.reg.typetypeOf typeId: tid) == ztypes.ztypetype.staticListType then return true
+        sl: ztypecheck.stdTidRo ast: snap.prog st: o wk: zast.wellKnown.slot.tyStaticlist
+        if sl.isZero.not when (o.reg.genericOriginOf :tid) == sl then return true
         return (ztypecheck.numKindOfTid st: o :tid).has
     } case none then null
     return false

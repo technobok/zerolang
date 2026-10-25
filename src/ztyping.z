@@ -19,6 +19,7 @@ public: unit {
     :SynthNode
     :GenFields
     :ConstIndex
+    :aggshape
     :constagg
     :constaggkind
     :defaultval
@@ -332,10 +333,26 @@ constagg: record {
     # with none
     labelStart: u32
     labelCount: u32
+    # a list's element type as a read sees it: intliteral or floatliteral for
+    # an untyped list, whose array holds i64 or f64. 0 otherwise
+    elem: ztypes.tid
+    # the type of a list's `slot.label` read: its declared index, else
+    # intliteral. 0 otherwise
+    slot: ztypes.tid
     # where it was first built, for a report about it
     node: zast.nodeid
     # run time reaches it, so it is emitted (markAggsReached)
     reached: bool
+}
+
+# aggshape -- what makes an aggregate this one, apart from its items and
+# labels: the constagg fields of the same names.
+aggshape: record {
+    kind: constaggkind
+    tid: ztypes.tid
+    arm: zast.nameid
+    elem: ztypes.tid
+    slot: ztypes.tid
 }
 
 # armkey -- one union arm: the union's type and the arm's name
@@ -1158,20 +1175,13 @@ ZTyping: class {
     # Constants are not written in dependency order, so the evaluator pulls
     # rather than pushes and this is its cycle guard.
     constEvalState: (MapVV constslot v: u8)
-    # each list's elements and labels, as one aggregate row (constAggs): an
-    # element by position (`.get K`) or by label, and the count
-    staticListAggs: (IdMapV ztypes.tid v: u32)
+    # the one type every list's `slot` has (listSlotTid), 0 until minted
+    listSlotTid: ztypes.tid
     # each list-sourced tag's values: the row of the list its sum's `as` block
     # names (`tag: levels.tag`), whose labels name the arms
     tagSourceAggs: (IdMapV ztypes.tid v: u32)
     # each list-sourced tag's list, by its declaration, which a report names
     tagSourceDecls: (IdMapV ztypes.tid v: ztypes.declid)
-    # each list's INDEX type, when its `out` names one (`out (staticlist StringView i:
-    # nameid)`): the type of its `slot` reads and of its value's `get`
-    staticListIndexType: (IdMapV ztypes.tid v: ztypes.tid)
-    # the `slot` member types of lists: each names its block's labels,
-    # and is read through a label only
-    staticListSlotTypes: IdSet ztypes.tid
     # the type-ref nodes in a static position, where a literal type may be
     # written: a list's `out` arguments (`out (staticlist intliteral)`) and a
     # data type's field types. A declared type may not name one anywhere else
@@ -1979,7 +1989,10 @@ ZTyping: class {
         # member's kind: a method's type IS the function it declares (its
         # parameters attach to that namespace), and a synthesized field's type
         # still has exactly one declaration behind it.
-        if typeId.isZero.not then {
+        # A LIST is the exception: its type is its value's, the list template's
+        # instance, which the list declares no more than a constant declares
+        # i64.
+        if typeId.isZero.not when (this.decls.get i: md8).kind.staticListDecl.not then {
             exd8: this.declIdOfType :typeId
             if exd8.isZero then this.declByTypeId.set key: typeId value: md8
         }
@@ -2722,33 +2735,6 @@ ZTyping: class {
         return ((t.foldedBranch.get key: nid).or d: (foldedbranch known: false stmt: zast.nodeid))
     }
 
-    # staticListItemAt -- the value of element `slot` of list `staticListTid`, or
-    # `none` when it has none (an element that did not fold, a slot past the end).
-    staticListItemAt: function {
-        t: this.view staticListTid: ztypes.tid slot: u64
-    } out ztypes.cval is {
-        id: (t.staticListAggs.get key: staticListTid).or d: 0
-        if id == 0 then return ztypes.noConst
-        g: t.constAggs.get i: id.u64
-        if slot >= g.itemCount then return ztypes.noConst
-        return (t.constAggItems.get i: g.itemStart.u64 + slot)
-    }
-
-    # staticListLabelPos -- the position of the element labelled `label`, none
-    # when no element has that label.
-    staticListLabelPos: function {
-        t: this.view staticListTid: ztypes.tid label: zast.nameid
-    } out optionval u64 is {
-        return (t.aggLabelPos id: ((t.staticListAggs.get key: staticListTid).or d: 0) :label)
-    }
-
-    # staticListLabelItem -- the value of the element labelled `label`, or `none`.
-    staticListLabelItem: function {
-        t: this.view staticListTid: ztypes.tid label: zast.nameid
-    } out ztypes.cval is {
-        return (t.aggLabelItem id: ((t.staticListAggs.get key: staticListTid).or d: 0) :label)
-    }
-
     # aggLabelPos -- the position of row `id`'s item labelled `label`, none when
     # no item has that label (or there is no row).
     aggLabelPos: function {t: this.view id: u32 label: zast.nameid} out optionval u64 is {
@@ -2781,13 +2767,6 @@ ZTyping: class {
         t: this.view tagTid: ztypes.tid armName: zast.nameid
     } out ztypes.cval is {
         return (t.aggLabelItem id: ((t.tagSourceAggs.get key: tagTid).or d: 0) label: armName)
-    }
-
-    # staticListLength -- the list's element count, none before it resolved.
-    staticListLength: function {t: this.view staticListTid: ztypes.tid} out optionval u64 is {
-        id: (t.staticListAggs.get key: staticListTid).or d: 0
-        if id == 0 then return (optionval.none u64)
-        return (optionval.some (t.constAggs.get i: id.u64).itemCount.u64)
     }
 
     # memberConstOf -- that value, or `none` when the member has none.
@@ -3384,11 +3363,9 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         nodeConst: (IdMapV zast.nodeid v: ztypes.cval)
         memberConst: (MapVV constslot v: ztypes.cval)
         constEvalState: (MapVV constslot v: u8)
-        staticListAggs: (IdMapV ztypes.tid v: u32)
+        listSlotTid: ztypes.tid
         tagSourceAggs: (IdMapV ztypes.tid v: u32)
         tagSourceDecls: (IdMapV ztypes.tid v: ztypes.declid)
-        staticListIndexType: (IdMapV ztypes.tid v: ztypes.tid)
-        staticListSlotTypes: IdSet ztypes.tid
         staticLiteralTyperefs: IdSet zast.nodeid
         constStrings: List String
         constBigInts: List math.BigInt
@@ -3522,6 +3499,8 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         itemCount: 0
         labelStart: 0
         labelCount: 0
+        elem: ztypes.tid.zero
+        slot: ztypes.tid.zero
         node: zast.nodeid.zero
         reached: false
     )

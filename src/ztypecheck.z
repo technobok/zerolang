@@ -25,7 +25,6 @@ public: unit {
     :indexAddedUnits
     :resolveUnitMemberLate
     :constValueOfDeclLate
-    :staticListValueTypeLate
     :constBigOf
     :constIntText
     :constFloatBits
@@ -49,7 +48,6 @@ public: unit {
     :unitdefNodeId
     :stdTidPeek
     :isOperatorName
-    :instanceCopyOf
     :instancesWithin
     :dataFieldIds
     :isNullTid
@@ -711,7 +709,7 @@ typesCompatible: function {
 } out bool is {
     if a == b then return true
     if (st.reg.typetypeOf typeId: a) == ztypes.ztypetype.neverType then return true
-    if (staticListFits :ast :st staticListTid: a want: b) then return true
+    if (staticListFits :ast :st have: a want: b) then return true
     if (st.reg.typetypeOf typeId: a) == ztypes.ztypetype.genericParam when (
         (st.reg.typetypeOf typeId: b) == ztypes.ztypetype.genericParam
     ) then {
@@ -1018,42 +1016,32 @@ resolveUnitMemberLate: function {
 # after the check (zls's card for a constant): the memo when a read already
 # folded it, else, for a constant, folded now, as a lookup folds one it meets
 # unfolded. A re-export is asked as resolveAliasKey asks one: `os: oskind.linux`
-# folds to its arm. A list's element was recorded when its block
-# resolved. noConst when the declaration holds no value.
+# folds to its arm. A list's element is its list row's item. noConst when the
+# declaration holds no value.
 constValueOfDeclLate: function {
     st: zenv.ZSymbolTable
     ast: Ast
     declId: ztypes.declid
 } out ztypes.cval is {
     if declId.isZero then return ztypes.noConst
+    lr: listDeclRow :ast :st declId: (st.typing.declParentOf :declId)
+    if lr != 0 then return (staticListMemberValue
+        :st
+        :ast
+        row: lr
+        nameId: (declNameIdOf :st :declId)
+    )
     otid: declTypeIdOf :st declId: (st.typing.declParentOf :declId)
     if otid.isZero then return ztypes.noConst
     dk: (st.typing.decls.get i: declId).kind
     k: st.typing.memberConstKey parentTypeId: otid nameId: (declNameIdOf :st :declId)
-    if dk.constDecl or dk.reexportDecl when (
+    if dk.constDecl or dk.reexportDecl or dk.staticListDecl when (
         ((st.typing.constEvalState.get key: k).or d: 0) != 2
     ) then {
         constFoldDecl :ast :st :declId
         stampResolvedOnDemand :st :ast
     }
-    return (constValueOfDecl :st :ast :declId)
-}
-
-# staticListValueTypeLate -- the type list `staticListTid`'s name has as a value, for
-# a reader after the check (zls's card for a block no use read as one): minted
-# now when no use did, as staticListAsValue mints it. 0 when it has none.
-staticListValueTypeLate: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    staticListTid: ztypes.tid
-} out ztypes.tid is {
-    have: st.reg.staticListValueTypeOf tid: staticListTid
-    if have.isZero.not then return have
-    unm: unitRootOfDecl :st declId: (declOfTypeId :st tid: staticListTid)
-    if unm.isZero then return ztypes.tid.zero
-    vt: staticListValueTypeFor :st :ast unitDecl: unm :staticListTid
-    stampResolvedOnDemand :st :ast
-    return vt
+    return (constValueOfDecl :st :declId)
 }
 
 # indexUnitBody -- index one unit's top-level defs, in body order.
@@ -1571,8 +1559,6 @@ defTypetypeOf: function {
         defn
     ) case functiondef then {
         return (optionval.some ztypes.ztypetype.functionType)
-    } case listblock then {
-        return (optionval.some ztypes.ztypetype.staticListType)
     } case objectdef then {
         match (
             defn.kind
@@ -8679,7 +8665,7 @@ attachAsConstant: function {
     md: st.typing.declMemberIdOf parentTypeId: parentId nameId: item.name
     if md.isZero then return
     constFoldDecl :ast :st declId: md
-    folded: constValueOfDecl :st :ast declId: md
+    folded: constValueOfDecl :st declId: md
     if folded.kind.none then {
         reported: reportAsMemberNotConstant :st :ast :parentId :item
         if reported.not then reported = reportUnknownAsCallHead :st :ast :parentId :item
@@ -10557,34 +10543,47 @@ staticListValueTemplate: function {
     return (stdTid :ast :st wk: zast.wellKnown.slot.tyStaticlist)
 }
 
-# staticListValueTypeFor -- the type list `staticListTid`'s name has as a value: the list
-# template's instance over the list's element and index types, minted on the
-# first use of the list as a value and kept on the list. 0 when it has none.
-staticListValueTypeFor: function {
+# staticListValueTypeOver -- the type a list of element type `elemTid` has as a
+# value: the list template's instance over the element, and over the index
+# when the list names one (`idxTid`, else 0). An untyped element or index is
+# bound at the run-time type it becomes (materialiseStaticListArgs). 0 when the
+# element is none a list may hold.
+staticListValueTypeOver: function {
     st: zenv.ZSymbolTable
     ast: Ast
     unitDecl: ztypes.declid
-    staticListTid: ztypes.tid
+    elemTid: ztypes.tid
+    idxTid: ztypes.tid
 } out ztypes.tid is {
-    have: st.reg.staticListValueTypeOf tid: staticListTid
-    if have.isZero.not then return have
-    elemTid: st.reg.staticListElemTypeOf tid: staticListTid
     tpl: staticListValueTemplate :ast :st :elemTid
     if tpl.isZero then return ztypes.tid.zero
     # the parameters by position in the template's own declaration: the
-    # element first, then the index
+    # element first, then the index, each at the run-time type it holds
+    et: elemTid
+    if (isLiteralTypeId :st tid: et) then et = (materialTid
+        :ast
+        :st
+        isElem: true
+        float: et == st.reg.literalFloatTid
+    )
+    it: idxTid
+    if it.isZero.not when (isLiteralTypeId :st tid: it) then it = (materialTid
+        :ast
+        :st
+        isElem: false
+        float: false
+    )
     pn: st.reg.genericParamNamesOf tdecl: (declOfTypeId :st tid: tpl)
-    idxTid: (st.typing.staticListIndexType.get key: staticListTid).or d: ztypes.tid.zero
     subs: IdMapV zast.nameid v: ztypes.tid
-    subs.set key: (pn.get i: 0) value: elemTid
-    sfx: "_\{st.reg.nameOf tid: elemTid}"
-    if idxTid.isZero.not then {
-        subs.set key: (pn.get i: 1) value: idxTid
+    subs.set key: (pn.get i: 0) value: et
+    sfx: "_\{st.reg.nameOf tid: et}"
+    if it.isZero.not then {
+        subs.set key: (pn.get i: 1) value: it
         sfx.append "_"
-        sfx.append (st.reg.nameOf tid: idxTid)
+        sfx.append (st.reg.nameOf tid: it)
     }
     noVals: IdMapV zast.nameid v: u64
-    vt: (getOrMintSpec
+    return (getOrMintSpec
         :st
         scope: st.curScope
         :ast
@@ -10595,161 +10594,128 @@ staticListValueTypeFor: function {
         valSubs: noVals
         fallbackArg: ztypes.tid.zero
     )
-    st.reg.setStaticListValueType typeId: staticListTid value: vt
-    return vt
 }
 
-# staticListFits -- list `staticListTid`, written where a `want` is taken, is a value
-# of it: `want` is the list template over the list's element type. The list's
-# value type is recorded as `want`, and the list keeps its static array for the
-# view to point at.
+# staticListFits -- a list value of type `have` is one of type `want`: both
+# are the list template's instances over one element type, and their indexes
+# agree, an index left out being the template's default.
 staticListFits: function {
     ast: Ast
     st: zenv.ZSymbolTable
-    staticListTid: ztypes.tid
+    have: ztypes.tid
     want: ztypes.tid
 } out bool is {
-    if (
-        (st.reg.typetypeOf typeId: staticListTid) != ztypes.ztypetype.staticListType
-    ) then return false
-    # a list's `slot` names positions and is no value
-    if (st.typing.staticListSlotTypes.has item: staticListTid) then return false
-    elemTid: st.reg.staticListElemTypeOf tid: staticListTid
-    tpl: staticListValueTemplate :ast :st :elemTid
+    tpl: stdTidRo :ast :st wk: zast.wellKnown.slot.tyStaticlist
     if tpl.isZero then return false
-    if want != tpl when (staticListValueArgsMatch :ast :st :staticListTid :want :tpl :elemTid
-    ).not then return false
-    st.reg.setStaticListValueType typeId: staticListTid value: want
-    markStaticListReached :ast :st tid: staticListTid
-    return true
-}
-
-# staticListValueArgsMatch -- instance `want` of the list template `tpl` is what list
-# `staticListTid` (of element type `elemTid`) is a value of: its element and its index.
-# The parameters are read by position, as staticListValueTypeFor binds them.
-staticListValueArgsMatch: function {
-    ast: Ast
-    st: zenv.ZSymbolTable
-    staticListTid: ztypes.tid
-    want: ztypes.tid
-    tpl: ztypes.tid
-    elemTid: ztypes.tid
-} out bool is {
+    if (st.reg.genericOriginOf tid: have) != tpl then return false
     if (st.reg.genericOriginOf tid: want) != tpl then return false
-    if (st.reg.genericTypeArgAt specId: want ordinal: 0) != elemTid then return false
-    # the index the list declares, else the template's default
-    wantIdx: st.reg.genericTypeArgAt specId: want ordinal: 1
-    haveIdx: (st.typing.staticListIndexType.get key: staticListTid).or d: ztypes.tid.zero
-    if haveIdx.isZero then haveIdx = stdTid :ast :st wk: zast.wellKnown.slot.tyU64
-    return wantIdx.isZero or (wantIdx == haveIdx)
+    if (
+        (st.reg.genericTypeArgAt specId: have ordinal: 0) !=
+        (st.reg.genericTypeArgAt
+            specId: want
+            ordinal: 0
+        )
+    ) then return false
+    u64t: stdTid :ast :st wk: zast.wellKnown.slot.tyU64
+    hi: st.reg.genericTypeArgAt specId: have ordinal: 1
+    if hi.isZero then hi = u64t
+    wi: st.reg.genericTypeArgAt specId: want ordinal: 1
+    if wi.isZero then wi = u64t
+    return hi == wi
 }
 
-# staticListAsValue -- a list written where a value is wanted: its name's
-# value, the static view of its elements. The node is restamped with the value
-# type, and the block keeps its static array for the view to point at. `vt`
-# itself for anything that is not a list.
+# listSlotTid -- the one type every list's `slot` has: it names its list's
+# labels' positions and is read through a label, never as a value. Minted on
+# first use.
+listSlotTid: function {st: zenv.ZSymbolTable} out ztypes.tid is {
+    if st.typing.listSlotTid.isZero.not then return st.typing.listSlotTid
+    t: st.reg.newType name: "slot" typetype: ztypes.ztypetype.recordType
+    st.reg.setValtype typeId: t value: true
+    st.typing.listSlotTid = t
+    return t
+}
+
+# staticListAsValue -- a value of type `vt` written where a value is wanted:
+# a list's `slot` is none, and is refused. `vt` itself otherwise, 0 when
+# refused.
 staticListAsValue: function {
     st: zenv.ZSymbolTable
     ast: Ast
-    unitDecl: ztypes.declid
     vt: ztypes.tid
     nid: zast.nodeid
 } out ztypes.tid is {
-    if (st.reg.typetypeOf typeId: vt) != ztypes.ztypetype.staticListType then return vt
-    if (st.typing.staticListSlotTypes.has item: vt) then {
-        nn: ast.nodes.get i: nid
-        (addErrorH
-            :st
-            nodeid: nid
-            lineno: (nodeLine n: nn)
-            colno: (nodeCol n: nn)
-            e: zast.err.typeError
-            msg: "a list's `slot` is no value: it names its labels' positions".string
-            note: String
-            hint: "read one label's position, `blk.slot.label`".string
-            width: 4
-        )
-        return ztypes.tid.zero
-    }
-    dv: staticListValueTypeFor :st :ast :unitDecl staticListTid: vt
-    if dv.isZero then return vt
-    markStaticListReached :ast :st tid: vt
-    stampGate :st :nid tid: dv
-    return dv
+    if vt.isZero or (vt != st.typing.listSlotTid) then return vt
+    nn: ast.nodes.get i: nid
+    (addErrorH
+        :st
+        nodeid: nid
+        lineno: (nodeLine n: nn)
+        colno: (nodeCol n: nn)
+        e: zast.err.typeError
+        msg: "a list's `slot` is no value: it names its labels' positions".string
+        note: String
+        hint: "read one label's position, `blk.slot.label`".string
+        width: 4
+    )
+    return ztypes.tid.zero
 }
 
-# resolveStaticList -- resolve a list definition into a list type: one child per
-# element (the element's own label when present, else its ordinal), all of the
-# block's single element type, plus a `tag` child typed `tag__{element-type}`.
-# Mark it a non-valtype, then record its defining unit + `{unit}.{name}` view.
-# The element type is settled and RANGE-CHECKED here, at the declaration: a
-# value the declared width cannot hold is an error where it is written, not a
-# silent truncation at every read.
-resolveStaticList: function {
-    ast: Ast
+# constOfList -- a list definition's value: its row in the aggregate store
+# (resolveStaticListInto). A list is a constant: a unit (or a type's `as`
+# block) declares it, and its name reads it.
+constOfList: function {
     st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
     scope: ztypes.declid
-    defName: StringView
-    dnode: staticlistref
-} out ztypes.tid is {
-    did: (declareCanonicalType
-        :st
-        :scope
-        :ast
-        :unitDecl
-        ownerNameId: zast.nameid
-        name: defName
-        typetype: ztypes.ztypetype.staticListType
-    )
+    ast: Ast
+    unitDecl: ztypes.declid
+    nid: zast.nodeid
+} out ztypes.cval is {
+    dnode: staticListRefAt :ast :nid
+    if dnode.nid.isZero then return ztypes.noConst
     noSubs: IdMapV zast.nameid v: ztypes.tid
-    return (resolveStaticListInto
+    row: (resolveStaticListInto
         :ast
         :st
         :unitDecl
         :scope
-        :defName
         :dnode
-        :did
         monoId: ztypes.tid
         tplId: ztypes.tid
         subs: noSubs
     )
+    if row == 0 then return ztypes.noConst
+    return (ztypes.makeAggConst id: row)
 }
 
-# resolveStaticListInto -- resolveStaticList's work over the list type `did`: the block's
-# own type, or a generic unit instance's copy of it (mintUnitStaticListInstances). A
-# copy evaluates the template's elements for the instance `monoId` -- a numeric
-# parameter reads its value -- and reads the `out` type as the instance sees it
-# (unitMonoTypeOf), so each element is checked against the instance's own
-# element type.
+# resolveStaticListInto -- a list definition as its row in the aggregate store:
+# one item per element, labelled by the element's own label when it has one,
+# all of the list's single element type. The row's type is the list's value
+# type, its `elem` the type an element read has, its `slot` the type of a
+# label's position. The element type is settled and RANGE-CHECKED here, at the
+# declaration: a value the declared width cannot hold is an error where it is
+# written, not a silent truncation at every read. For a generic unit's
+# instance (`monoId`), the template's elements are evaluated for the instance
+# -- a numeric parameter reads its value -- and the `out` type is read as the
+# instance sees it (unitMonoTypeOf). 0 when the list has no row.
 resolveStaticListInto: function {
     ast: Ast
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     scope: ztypes.declid
-    defName: StringView
     dnode: staticlistref
-    did: ztypes.tid
-    # the instance whose copy `did` is, and its template; 0 for the block itself
+    # the instance the row is for, and its template; 0 for the list itself
     monoId: ztypes.tid
     tplId: ztypes.tid
     # the instance's substitutions (buildUnitMono's)
     subs: (IdMapV zast.nameid v: ztypes.tid).view
-} out ztypes.tid is {
-    st.reg.setValtype typeId: did value: false
+} out u32 is {
     litId: st.reg.literalIntTid
-    # the block's elements are evaluating: a read of the block from one of
-    # them is a cycle (constStaticListMember)
-    lk: st.typing.memberConstKey parentTypeId: did nameId: zast.wellKnown.slot.wkLength
-    st.typing.constEvalState.set key: lk value: 1.u8
     prevMono: st.typing.constMono
     if monoId.isZero.not then st.typing.constMono = monoId
     vals: staticListElemValues :ast :st :unitDecl :scope :dnode
     st.typing.constMono = prevMono
-    st.typing.constEvalState.set key: lk value: 2.u8
     # whether `out` names the list's own type (`out staticlist u8`) rather than
-    # its element type (`out u8`, read until every block says its value type)
+    # its element type (`out u8`, read until every list says its value type)
     valueOut: false
     # whether `slot` reads untyped: the index was left untyped, or no `out` named
     # one. An old-form `out T` keeps its typed (u64) slots.
@@ -10765,13 +10731,13 @@ resolveStaticListInto: function {
         indexLiteral: false
     )
     if dnode.outType.isZero.not then {
-        # `out T` is a type written in the block's scope and resolved as any
+        # `out T` is a type written in the list's scope and resolved as any
         # written type is: a user type spelled like a builtin is the user's
-        ot = resolveTyperefShell :st :scope :ast :unitDecl nid: dnode.outType thisName: defName
+        ot = resolveTyperefShell :st :scope :ast :unitDecl nid: dnode.outType thisName: ""
         if monoId.isZero then {
             # recorded as any signature's type is, so a name that resolves to
             # nothing is reported as an unknown type where it is written
-            recordTyperef :st :scope :ast :unitDecl thisName: defName nid: dnode.outType
+            recordTyperef :st :scope :ast :unitDecl thisName: "" nid: dnode.outType
         } else {
             ot = unitMonoTypeOf :st :ast rf: scope :tplId :monoId :subs tid: ot
         }
@@ -10789,26 +10755,22 @@ resolveStaticListInto: function {
     etn: String
     if vparts.isValue when vparts.elemLiteral.not then etn = st.reg.nameOf tid: vparts.elem
     etId: staticListElemTypeName :ast :st :dnode outName: etn.stringView :vals
-    etName: zast.nameTextCopy :ast ref: etId
     elemTid: litId
+    idxTid: ztypes.tid
+    # the list's value type, when its `out` names one over a type parameter
+    vt: ztypes.tid
     if vparts.isValue then {
-        if vparts.index.isZero.not then (st.typing.staticListIndexType.set
-            key: did
-            value: vparts.index
-        )
+        idxTid = vparts.index
         untypedSlots = vparts.indexLiteral
-        # an untyped element reads as a literal, as in a block with no `out`,
-        # and the block's value is the template's over the run-time type the
+        # an untyped element reads as a literal, as in a list with no `out`,
+        # and the list's value is the template's over the run-time type the
         # literal materialises to
         valueOut = vparts.elemLiteral.not
         elemTid = vparts.elem
-        etName = st.reg.nameOf tid: elemTid
         # a generic unit's list over its parameter (`out staticlist t`) is a value
         # of the type its `out` names, which no element type selects: each
-        # instance's copy is a value of its own
-        if (st.reg.typetypeOf typeId: elemTid) == ztypes.ztypetype.genericParam then {
-            st.reg.setStaticListValueType typeId: did value: ot
-        }
+        # instance's row is a value of its own
+        if (st.reg.typetypeOf typeId: elemTid) == ztypes.ztypetype.genericParam then vt = ot
     } else {
         # an element's suffix (`0.u8`) or the untyped default names the
         # prelude's type whatever the unit declares, as a literal's suffix
@@ -10821,15 +10783,16 @@ resolveStaticListInto: function {
         } case none then null
     }
     ek: baseNumKind :st tid: elemTid
-    # a block of mixed kinds has no element type to check its elements against
+    # a list of mixed kinds has no element type to check its elements against
     kindsOk: staticListKindsAgree :ast :st :dnode :vals :elemTid
-    # a block that names its type -- `out T`, or a tagged element -- reads each
+    # a list that names its type -- `out T`, or a tagged element -- reads each
     # element at that type; one that names none reads them untyped, as a unit
     # constant reads, and only what reaches run time is the i64 / f64 default
     typed: (etn.length > 0) or valueOut or (staticListTagWritten :ast :dnode)
-    # the template the block's name is a value of: its members are the block's own
+    # the template the list's value is an instance of: its members are every
+    # list's own
     valTpl: staticListValueTemplate :ast :st :elemTid
-    # an `out` names the block's value type; a declared type that is none is
+    # an `out` names the list's value type; a declared type that is none is
     # refused here, and a name that resolved to nothing is the unknown type
     # recordTyperef reports
     if vparts.isValue.not when ot.isZero.not when (declOfTypeId :st tid: ot).isZero.not then {
@@ -10837,9 +10800,7 @@ resolveStaticListInto: function {
     }
     # every name an element takes: its label, else its ordinal
     taken: IdSet zast.nameid
-    # the labelled elements' labels and positions, which `slot` reads
-    slotLabels: ListVal zast.nameid
-    slotOrds: ListVal u64
+    labelled: false
     ordinal: u64
     # each element's value and label, in order: the list's aggregate row
     aggItems: ListVal ztypes.cval
@@ -10880,11 +10841,8 @@ resolveStaticListInto: function {
                 )
             }
             taken.add item: memberIdAt
-            if nmRef.isZero.not then {
-                slotLabels.append nmRef
-                slotOrds.append ordinal
-            }
-            # an element named for one of the block's own members would shadow
+            if nmRef.isZero.not then labelled = true
+            # an element named for one of the list's own members would shadow
             # it, or be shadowed by it -- either way a read of the name would
             # not mean what it says
             if (staticListOwnMember :st :ast tpl: valTpl nameId: memberIdAt) then {
@@ -10904,13 +10862,8 @@ resolveStaticListInto: function {
                     width: emN.length.u32.orPanic
                 )
             }
-            (st.typing.setMemberType
-                parentTypeId: did
-                nameId: memberIdAt
-                childTypeId: elemTid
-            )
             # The element's VALUE, recorded here rather than folded on demand:
-            # it is the discriminator a tagged type using this block will be
+            # it is the discriminator a tagged type using this list will be
             # emitted with, and a backend reading it has no unit to fold under.
             cv: vals.get i: ordinal
             if typed when cv.kind.none.not when (isNumericTid :st tid: elemTid) then {
@@ -10935,109 +10888,29 @@ resolveStaticListInto: function {
         aggLabels.append nmRef
         ordinal = ordinal + 1
     }
-    aggId: (constInternAgg
+    if vt.isZero then vt = staticListValueTypeOver :st :ast :unitDecl :elemTid :idxTid
+    # a label's position is typed as the list's index, else as the template's
+    # default u64 -- or untyped when the index was left so. A list with no
+    # labelled element has no `slot`.
+    slotTid: ztypes.tid
+    if labelled then {
+        slotTid = idxTid
+        if slotTid.isZero then slotTid = stdTid :ast :st wk: zast.wellKnown.slot.tyU64
+        if untypedSlots then slotTid = litId
+    }
+    return (constInternAgg
         :st
-        kind: ztyping.constaggkind.staticList
-        tid: did
-        arm: zast.nameid.zero
+        shape: (ztyping.aggshape
+            kind: ztyping.constaggkind.staticList
+            tid: vt
+            arm: zast.nameid.zero
+            elem: elemTid
+            slot: slotTid
+        )
         items: aggItems
         labels: aggLabels
         at: dnode.nid
     )
-    st.typing.staticListAggs.set key: did value: aggId
-    if slotLabels.length > 0 then {
-        sIdx: (st.typing.staticListIndexType.get key: did).or d: ztypes.tid.zero
-        if sIdx.isZero then sIdx = stdTid :ast :st wk: zast.wellKnown.slot.tyU64
-        if untypedSlots then sIdx = st.reg.literalIntTid
-        resolveStaticListSlots :st staticListTid: did idxTid: sIdx labels: slotLabels ords: slotOrds
-    }
-    # `length` is a constant of the block: every element is known here, so the
-    # read folds like a labelled element rather than reaching a runtime array.
-    # An element labelled `length` has already claimed the name and keeps it.
-    # It stays a literal: a COUNT is not an element, and pinning it to a narrow
-    # element type would make `for i < xs.length` compare across widths.
-    lgot: (st.typing.declChildOfId
-        parentTypeId: did
-        nameId: zast.wellKnown.slot.wkLength
-    )
-    match (
-        lgot
-    ) case some then null case none then {
-        (st.typing.setMemberType
-            parentTypeId: did
-            nameId: zast.wellKnown.slot.wkLength
-            childTypeId: litId
-        )
-    }
-    st.reg.setStaticListElemType typeId: did value: elemTid
-    # only a block of integers is a discriminator source
-    if (typeIsNumberOf :st tid: elemTid float: false).not then return did
-    # the block's own discriminator carrier, owned by the block as its `slot`
-    # is: two blocks over one element type are two carriers, never one type
-    # found by a shared NAME in the system unit
-    tagName: "tag__\{etName.stringView}"
-    tagId: (st.reg.newType
-        name: tagName.stringView
-        typetype: ztypes.ztypetype.recordType
-        ownerTid: did
-    )
-    st.reg.setValtype typeId: tagId value: true
-    # NOT the atomic pair: a data unit's tag member is declared
-    # by the sweep above and RE-TYPED here once the tag's own
-    # type is known
-    (st.typing.declSynthMember
-        parentTypeId: did
-        nameId: zast.wellKnown.slot.wkTag
-        kind: ztyping.declkind.fieldDecl
-    )
-    (st.typing.setMemberType
-        parentTypeId: did
-        nameId: zast.wellKnown.slot.wkTag
-        childTypeId: tagId
-    )
-    return did
-}
-
-# resolveStaticListSlots -- list `staticListTid`'s `slot`: a member whose own members
-# are the block's labels, each the POSITION of its element, typed as the block's
-# index (`wk.slot.wkLen`). It is a list type of its own, so a label reads as an
-# element of a block reads; it is read through a label and nothing else.
-resolveStaticListSlots: function {
-    st: zenv.ZSymbolTable
-    staticListTid: ztypes.tid
-    idxTid: ztypes.tid
-    labels: (ListVal zast.nameid).view
-    ords: (ListVal u64).view
-} is {
-    slotTid: (st.reg.newType
-        name: "slot"
-        typetype: ztypes.ztypetype.staticListType
-        ownerTid: staticListTid
-    )
-    st.reg.setValtype typeId: slotTid value: false
-    st.typing.staticListSlotTypes.add item: slotTid
-    (st.typing.declSynthMemberTyped
-        parentTypeId: staticListTid
-        nameId: zast.wellKnown.slot.wkSlot
-        kind: ztyping.declkind.fieldDecl
-        childTypeId: slotTid
-    )
-    st.reg.setStaticListElemType typeId: slotTid value: idxTid
-    num: isNumericTid :st tid: idxTid
-    k: u64
-    for k < labels.length loop {
-        lab: labels.get i: k
-        cv: ztypes.makeIntConst (ords.get i: k).i64.orPanic
-        if num then cv = ztypes.typedConst c: cv numTid: idxTid
-        (st.typing.declSynthMemberTyped
-            parentTypeId: slotTid
-            nameId: lab
-            kind: ztyping.declkind.fieldDecl
-            childTypeId: idxTid
-        )
-        st.typing.setMemberConst parentTypeId: slotTid nameId: lab value: cv
-        k = k + 1
-    }
 }
 
 # recordIsTypedef -- true when a definition is a `typedef`. Such a type gets no
@@ -12765,9 +12638,7 @@ attachVariantTag: function {
     tagId: (mintSumTag
         :st
         :defName
-        sourceList: ((unionCustomTagId :st :scope :ast :unitDecl objId: vnode.nid).or
-            d: ztypes.tid.zero
-        )
+        source: (unionCustomTagId :st :scope :ast :unitDecl objId: vnode.nid)
     )
     # NOT the atomic pair: a tag member is declared by the
     # sweep that discovers it and RE-TYPED here once the
@@ -12802,17 +12673,14 @@ attachVariantTag: function {
 mintSumTag: function {
     st: zenv.ZSymbolTable
     defName: StringView
-    # the list the values come from; 0 for the default tag
-    sourceList: ztypes.tid
+    # the list the values come from; a zero row for the default tag
+    source: tagsource
 } out ztypes.tid is {
     tagName: "\{defName}:tag:data"
     tagId: st.reg.newType name: tagName.stringView typetype: ztypes.ztypetype.tagType
-    if sourceList.isZero then return tagId
-    (st.typing.tagSourceAggs.set
-        key: tagId
-        value: ((st.typing.staticListAggs.get key: sourceList).or d: 0)
-    )
-    st.typing.tagSourceDecls.set key: tagId value: (declOfTypeId :st tid: sourceList)
+    if source.row == 0 then return tagId
+    st.typing.tagSourceAggs.set key: tagId value: source.row
+    st.typing.tagSourceDecls.set key: tagId value: source.decl
     return tagId
 }
 
@@ -13123,9 +12991,6 @@ tagBaseIsU8: function {
 } out bool is {
     rr: walkLookupTyperef :st :scope :ast :unitDecl base: bn
     if rr.none then return false
-    if (st.reg.typetypeOf typeId: rr) == ztypes.ztypetype.staticListType then {
-        return false
-    }
     u8t: stdTid :ast :st wk: zast.wellKnown.slot.tyU8
     if u8t.isZero then return false
     return rr == u8t
@@ -13270,28 +13135,41 @@ qualifierUnitDecl: function {
     }
 }
 
-# unionCustomTagOfArm -- one as-item of a union: a `tag` member naming a
-# list answers that list's type. A tag on any other base (`u8.tag`) stamps the
-# item with the system's `tag` and answers none, as does every other item.
+# tagsource -- the list a sum's `as` block sources its tag from (`tag:
+# levels.tag`): its row and its declaration. A zero row is none.
+tagsource: record {
+    row: u32
+    decl: ztypes.declid
+}
+
+# unionCustomTagOfArm -- one as-item of a union: a `tag` member whose base is a
+# list answers that list. A tag on any other base (`u8.tag`) stamps the item
+# with the system's `tag` and answers none, as does every other item.
 unionCustomTagOfArm: function {
     ast: Ast
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     scope: ztypes.declid
     am: argref
-} out optionval ztypes.tid is {
-    if am.name != zast.wellKnown.slot.wkTag then return (optionval.none ztypes.tid)
+} out tagsource is {
+    none: tagsource row: 0 decl: ztypes.declid
+    if am.name != zast.wellKnown.slot.wkTag then return none
     pnId: zast.nameid
+    baseId: zast.nodeid
     {
         op: ast.nodes.get i: am.operation
-        if op.dottedpath then pnId = atomNameId :ast n: (ast.nodes.get i: op.parent)
+        if op.dottedpath then {
+            baseId = op.parent
+            pnId = atomNameId :ast n: (ast.nodes.get i: op.parent)
+        }
     }
-    if pnId.isZero then return (optionval.none ztypes.tid)
-    rr: ((walkLookupTyperefById :st :scope :ast :unitDecl baseId: pnId).or
-        d: ztypes.tid.zero
-    )
-    if rr.isZero then return (optionval.none ztypes.tid)
-    if (st.reg.typetypeOf typeId: rr).staticListType then return (optionval.some rr)
+    if pnId.isZero then return none
+    ld: declInScope :st scopeDeclId: scope nameId: pnId
+    if ld.isZero.not when (st.typing.decls.get i: ld).kind.staticListDecl then {
+        lv: evalConstNode :st :scope :ast :unitDecl nid: baseId
+        if lv.kind.aggKind then return (tagsource row: lv.aggId decl: ld)
+        return none
+    }
     hUnitDecl: unitDeclOfName :st nameId: zast.wellKnown.slot.unSystem
     tgo: resolvedByIds :st :ast unitDecl: hUnitDecl name: zast.wellKnown.slot.wkTag
     match (
@@ -13300,19 +13178,19 @@ unionCustomTagOfArm: function {
         tnid0: nodeId n: (ast.nodes.get i: am.operation)
         ztyping.nodeTypeSet tbl: st.typing.nodeType nid: tnid0 tid: tgo
     } case none then null
-    return (optionval.none ztypes.tid)
+    return none
 }
 
-# unionCustomTagId -- a union's list-sourced tag, if any: an `as { tag: <list>.tag }`
-# item whose `<list>` resolves to an in-unit list type. Returns that list's type id;
-# none when absent or not a list (the union then synthesizes its own tag wrapper).
+# unionCustomTagId -- a sum's list-sourced tag, if any: an `as { tag:
+# <list>.tag }` item whose `<list>` is a list. A zero row when there is none
+# (the sum then synthesizes its own tag).
 unionCustomTagId: function {
     ast: Ast
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     scope: ztypes.declid
     objId: zast.nodeid
-} out optionval ztypes.tid is {
+} out tagsource is {
     orf: objRefAt :ast nid: objId
     kIter: u64
     for kIter < orf.nas loop {
@@ -13321,14 +13199,10 @@ unionCustomTagId: function {
         am: argRefAt :ast nid: amId
         if am.nid.isZero.not then {
             r: unionCustomTagOfArm :st :scope :ast :unitDecl :am
-            match (
-                r
-            ) case some then {
-                return (optionval.some r)
-            } case none then null
+            if r.row != 0 then return r
         }
     }
-    return (optionval.none ztypes.tid)
+    return (tagsource row: 0 decl: ztypes.declid)
 }
 
 # typeExprText -- a type expression as it is WRITTEN (exprTextOf),
@@ -13819,9 +13693,7 @@ resolveUnion: function {
         tagId: (mintSumTag
             :st
             :defName
-            sourceList: ((unionCustomTagId :st :scope :ast :unitDecl objId: vnode.nid).or
-                d: ztypes.tid.zero
-            )
+            source: (unionCustomTagId :st :scope :ast :unitDecl objId: vnode.nid)
         )
         # NOT the atomic pair: a tag member is declared by the
         # sweep that discovers it and RE-TYPED here once the
@@ -14122,7 +13994,7 @@ foldedDeclType: function {
     # template stops agreeing with itself. The arm's own declaration tells the
     # two apart, and a name the fold cannot place belongs to the type-ref path,
     # which knows how to resolve one.
-    cvD: constValueOfDecl :st :ast declId: fd
+    cvD: constValueOfDecl :st declId: fd
     if cvD.kind.armKind then {
         avD: (st.typing.declMemberIdOf
             parentTypeId: cvD.armTid
@@ -14552,7 +14424,7 @@ recordFoldedScalarDefault: function {
         parentTypeId: ownerTid
         nameId: dm.name
     )
-    cv: constValueOfDecl :st :ast declId: fdc
+    cv: constValueOfDecl :st declId: fdc
     if cv.kind.ivalKind or cv.kind.fvalKind or cv.kind.svalKind then {
         (st.typing.declSetDefaultId
             parentTypeId: ownerTid
@@ -14596,7 +14468,7 @@ recordFoldedArmDefault: function {
         parentTypeId: ownerTid
         nameId: dm.name
     )
-    cvF: constValueOfDecl :st :ast declId: fdc
+    cvF: constValueOfDecl :st declId: fdc
     if cvF.kind.armKind.not then return
     (recordArmDefault
         :st
@@ -16264,7 +16136,7 @@ resolveAliasKey: function {
     # Folded first for that reason. A genuine type alias folds to nothing and
     # falls through to the chase below, unchanged.
     constFoldDecl :st :ast :declId
-    cvA: constValueOfDecl :st :ast :declId
+    cvA: constValueOfDecl :st :declId
     if cvA.kind.none.not then return (declTypeIdOf :st :declId)
     r: resolveAliasKeyIn :st scope: ascope :ast :declId
     if r.isZero then r = resolveAppliedMemberAlias :st :ast scope: ascope :declId
@@ -16338,6 +16210,21 @@ reportDeepTypeMember: function {
 } is {
     tu: unitDeclOfPath :st :scope :ast nid: unitPath
     if tu.isZero then return
+    # a list's element or count
+    lr: listDeclRow :ast :st declId: (st.typing.declFindChild parentDeclId: tu nameId: typeId)
+    if lr != 0 then {
+        if (listMemberType :st :ast row: lr nameId: memberId).isZero.not then return
+        (reportDeepAliasMissing
+            :st
+            :ast
+            :declId
+            what: "list"
+            ownerId: typeId
+            :memberId
+            ownerUnit: ztypes.declid
+        )
+        return
+    }
     ptid: descendNamedId :st :scope :ast unitDecl: tu nameId: typeId
     if ptid.isZero then return
     if (st.typing.declChildOfId parentTypeId: ptid nameId: memberId).none.not then return
@@ -16485,8 +16372,6 @@ refuseArmAliasPayload: function {
 constValueOfDecl: function {
     # where the memo lives
     st: zenv.ZSymbolTable.view
-    # the tree the declaration's name is read from
-    ast: Ast.view
     # the declaration whose folded value is wanted
     declId: ztypes.declid
 } out ztypes.cval is {
@@ -16497,10 +16382,6 @@ constValueOfDecl: function {
     if nm.isZero then return ztypes.noConst
     ot: declTypeIdOf :st declId: own
     if ot.isZero then return ztypes.noConst
-    # a list's element is a row of the list's aggregate
-    if (st.typing.staticListAggs.has key: ot) then {
-        return (staticListMemberValue :st :ast staticListTid: ot nameId: nm)
-    }
     k: st.typing.memberConstKey parentTypeId: ot nameId: nm
     r: st.typing.memberConst.get key: k
     match (
@@ -16815,7 +16696,7 @@ aliasTargetTid: function {
                     mtt: st.reg.typetypeOf typeId: memberDecl
                     isMem: (
                         (mtt == ztypes.ztypetype.functionType) or
-                        (mtt == ztypes.ztypetype.staticListType) or
+                        (memberIsList :st parentTid: rto nameId: tnId) or
                         (mtt == ztypes.ztypetype.tagType)
                     ).not
                     if isMem then {
@@ -17188,7 +17069,7 @@ descendNamedId: function {
     if ddec.isZero.not then {
         dcC: false
         ddo: st.typing.decls.get i: ddec
-        if ddo.kind.constDecl when ddo.typeId.isZero then dcC = true
+        if ddo.kind.constDecl or ddo.kind.staticListDecl when ddo.typeId.isZero then dcC = true
         isConst: ddo.kind.constDecl
         ddo.drop
         if dcC then constFoldDecl :st :ast declId: ddec
@@ -17612,11 +17493,10 @@ resolveDef: function {
             tid: fid
         )
     } case listblock then {
-        # the block's type is the one it was just declared as, wherever it is
-        # written: a nested unit's block has no name in the file unit, or
-        # another block's
-        dr: staticListRefAt :ast nid: defnId
-        dbt: resolveStaticList :st scope: rf :ast :unitDecl :defName dnode: dr
+        # a list is a constant: folding it registers its type, its value's
+        ld: st.typing.declFindChild parentDeclId: rf nameId: defNameId
+        constFoldDecl :ast :st declId: ld
+        dbt: declTypeIdOf :st declId: ld
         if dbt.isZero.not then ztyping.nodeTypeSet tbl: st.typing.nodeType nid: defnId tid: dbt
     } case objectdef then {
         orf: objRefAt :ast nid: defnId
@@ -20546,7 +20426,7 @@ mintUnitAliasInstances: function {
             :ast
             declId: ad
         )
-        if at.isZero or (constValueOfDecl :st :ast declId: ad).kind.none.not then continue
+        if at.isZero or (constValueOfDecl :st declId: ad).kind.none.not then continue
         inst: unitMonoTypeOf :st :ast :rf :tplId :monoId subs: allSubs tid: at
         (st.typing.declSynthMember
             parentTypeId: monoId
@@ -20560,12 +20440,11 @@ mintUnitAliasInstances: function {
 }
 
 # mintUnitStaticListInstances -- each list a generic unit declares, as the
-# instance's own: a list type of the instance's whose generic origin is the
-# template's block, so the instance's walk reads it in the block's place
-# (bindUnitNestedTypes) and a read through the instance finds it as a member.
-# Its elements are the template's, evaluated and range-checked for the instance
-# (resolveStaticListInto): an element the instance cannot hold is an error that names
-# the instance.
+# instance's own: its row, the template's elements evaluated and range-checked
+# for the instance (resolveStaticListInto), recorded as the instance's
+# constant -- which a read through the instance, or the instance's walk of the
+# template, finds (constValueOfMemberAt). An element the instance cannot hold
+# is an error that names the instance.
 mintUnitStaticListInstances: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -20581,44 +20460,38 @@ mintUnitStaticListInstances: function {
         nm: argRefAt :ast nid: (zast.kidAt kids: ast.kids span: bodyIds i: vi)
         vi = vi + 1
         if nm.nid.isZero or (ast.nodes.get i: nm.operation).listblock.not then continue
-        td: st.typing.declFindChild parentDeclId: rf nameId: nm.name
-        if td.isZero then continue
-        if (declTypeIdOf :st declId: td).isZero then (resolveDemandedDecl
-            :st
-            scope: rf
-            :ast
-            declId: td
-        )
-        blk: declTypeIdOf :st declId: td
-        if blk.isZero then continue
-        dn: zast.nameTextCopy :ast ref: nm.name
-        did: (st.reg.newType
-            name: dn.stringView
-            typetype: ztypes.ztypetype.staticListType
-            ownerTid: monoId
-        )
-        st.reg.setGenericOrigin typeId: did value: blk
+        k: st.typing.memberConstKey parentTypeId: monoId nameId: nm.name
+        if (st.typing.constEvalState.has key: k) then continue
+        st.typing.constEvalState.set key: k value: 1.u8
         from: st.typing.errors.length
-        (resolveStaticListInto
+        row: (resolveStaticListInto
             :ast
             :st
             unitDecl: tmplUnitName
             scope: rf
-            defName: dn.stringView
             dnode: (staticListRefAt :ast nid: nm.operation)
-            :did
             :monoId
             :tplId
             subs: allSubs
         )
         noteInstanceErrors :st :ast mono: monoId :from
+        st.typing.constEvalState.set key: k value: 2.u8
+        if row == 0 then continue
+        (st.typing.setMemberConst
+            parentTypeId: monoId
+            nameId: nm.name
+            value: (ztypes.makeAggConst id: row)
+        )
         (st.typing.declSynthMember
             parentTypeId: monoId
             nameId: nm.name
             kind: ztyping.declkind.staticListDecl
         )
-        st.typing.setMemberType parentTypeId: monoId nameId: nm.name childTypeId: did
-        recordUnitMemberCopy :st :monoId :tplId nameId: nm.name copy: did
+        (st.typing.setMemberType
+            parentTypeId: monoId
+            nameId: nm.name
+            childTypeId: (st.typing.constAggs.get i: row.u64).tid
+        )
     }
 }
 
@@ -23298,7 +23171,7 @@ mintMonoTagShape: function {
 } is {
     wantTag: tt.isSum
     if wantTag then {
-        tagId: mintSumTag :st defName: name sourceList: ztypes.tid.zero
+        tagId: mintSumTag :st defName: name source: (tagsource row: 0 decl: ztypes.declid)
         (st.typing.declSynthMember
             parentTypeId: mid
             nameId: zast.wellKnown.slot.wkTag
@@ -25384,7 +25257,6 @@ unionBoundMemberRefusal: function {
 boundTypetypeRefusal: function {tt: ztypes.ztypetype bt: StringView} out String is {
     if tt == ztypes.ztypetype.classType then return (boundHasNoGenericText :bt what: "class")
     if tt == ztypes.ztypetype.unitType then return (boundHasNoGenericText :bt what: "unit")
-    if tt == ztypes.ztypetype.staticListType then return (boundHasNoGenericText :bt what: "list")
     if tt == ztypes.ztypetype.recordType then return (boundHasNoGenericText :bt what: "record")
     return "".string
 }
@@ -30485,27 +30357,6 @@ bareFnRefErrorFor: function {
     )
 }
 
-# markStaticListReached -- a list read at run time (`.get`, `.array`, or as a
-# value) is reached: its row is emitted as a static array. A label, an ordinal
-# or `length` folds to a constant and reaches nothing. Read by an instance's
-# walk, the list is the instance's own copy; a generic unit's own list is
-# never emitted, since only its instances' copies have elements.
-markStaticListReached: function {ast: Ast.view st: zenv.ZSymbolTable tid: ztypes.tid} is {
-    it: monoSubstTid :st :tid
-    # an instance's copy has the template's list as its origin
-    if (st.reg.genericOriginOf tid: it).isZero when (declIsUnitTemplate
-        :st
-        :ast
-        declId: (st.typing.declParentOf declId: (declOfTypeId :st tid: it))
-    ) then return
-    (markAggReached
-        :ast
-        :st
-        id: ((st.typing.staticListAggs.get key: it).or d: 0)
-        at: zast.nodeid
-    )
-}
-
 # baseIsPrivateCapable -- may a private member be read through this base? True
 # when the base is the type's own `this`/same-type receiver (self, inside its
 # methods), a `.private` projection, or a read of a `.private`-typed friend
@@ -30561,11 +30412,7 @@ memberStrictType: function {st: zenv.ZSymbolTable.view bt: ztypes.tid} out bool 
     # its member set is complete and empty
     if bt.isZero.not when bt == st.typing.nullTypeId then return true
     tt: st.reg.typetypeOf typeId: bt
-    isConc: (
-        tt.isUserFamily or
-        (tt == ztypes.ztypetype.staticListType) or
-        (tt == ztypes.ztypetype.functionType)
-    )
+    isConc: tt.isUserFamily or (tt == ztypes.ztypetype.functionType)
     if isConc.not then return false
     if (st.reg.hasType typeId: bt).not then return false
     declTid: bt
@@ -31249,7 +31096,7 @@ checkTaggedMemberPath: function {
         ctt0: st.reg.typetypeOf typeId: mo
         isMember: (
             (ctt0 == ztypes.ztypetype.functionType) or
-            (ctt0 == ztypes.ztypetype.staticListType) or
+            (memberIsList :st parentTid: bt nameId: cnId) or
             (ctt0 == ztypes.ztypetype.tagType)
         ).not
         if isMember then {
@@ -31749,13 +31596,14 @@ checkUnitQualifiedMember: function {
     return (callleg handled: false tid: ztypes.tid.zero)
 }
 
-# checkStaticListMember -- a member of a list that no element names, read
-# through the block's name: a member of its value type (`index`, `iterate`),
-# and `.array`. `.get` reads the block's own array, which markStaticListIndexRead
-# keeps when the read does not fold; every other value member reads the value,
-# which keeps the array always. `.array` copies the elements into the sized
-# array instance (array_{elem}_{count}), minting it on first access. Through a
-# VALUE, `.array` and `.tag` are refused: both are the block's.
+# checkStaticListMember -- a member read off a list reached by a compile-time
+# path (`codes`, `zast.wellKnown`): an element by its label or ordinal, typed as
+# the list's element; the count, `length`, untyped; `slot`, whose labels read
+# positions (checkListSlotRead); `.array`, the elements copied into the sized
+# array instance (array_{elem}_{count}), minted on first access; and `tag`,
+# which only a sum's `as` block reads. Any other member is the list value's
+# (`get`, `iterate`). Through a run-time VALUE, `.array`, `.tag` and `.slot`
+# are refused: the path carries what they need.
 checkStaticListMember: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
@@ -31763,175 +31611,245 @@ checkStaticListMember: function {
     dp: dpref
     bt: ztypes.tid
     cnId: zast.nameid
-    coerce: bool
 } out callleg is {
+    if bt.isZero.not when bt == st.typing.listSlotTid then return (checkListSlotRead
+        :st
+        :ast
+        :dp
+        :cnId
+    )
     isArray: cnId == zast.wellKnown.slot.tyArray
-    if (refuseStaticListValueMember :st :ast :dp :bt :cnId :isArray) then return (callleg
-        handled: true
-        tid: ztypes.tid.zero
-    )
-    if (refuseStaticListSlotMember :st :ast :dp :bt :cnId) then return (callleg
-        handled: true
-        tid: ztypes.tid.zero
-    )
-    if (st.reg.typetypeOf typeId: bt) == ztypes.ztypetype.staticListType then {
-        if isArray when (staticListElemCount :st staticListTid: bt) == 0 then {
+    row: listRowOfNode :st nid: dp.parent
+    if row == 0 then {
+        if (refuseStaticListValueMember :st :ast :dp :bt :cnId :isArray) then return (callleg
+            handled: true
+            tid: ztypes.tid.zero
+        )
+        return (callleg handled: false tid: ztypes.tid.zero)
+    }
+    g: st.typing.constAggs.get i: row.u64
+    if isArray then return (checkListArray :st :ast :unitDecl :dp :row)
+    if cnId == zast.wellKnown.slot.wkSlot then {
+        if g.slot.isZero then {
+            pp: ListVal zast.nameid
+            appendValueTuple :ast n: (ast.nodes.get i: dp.parent) dst: pp
+            bn: zenv.formatPath pool: ast.names path: pp.listView
             (addErrorH
                 :st
                 nodeid: dp.nid
                 lineno: dp.lineno
                 colno: dp.colno
                 e: zast.err.typeError
-                msg: "an empty list has no '.array': an array holds at least one element".string
+                msg: "'\{bn}' has no labelled element, so no `slot`"
                 note: String
-                hint: "read its `length`, or walk it with `iterate`".string
-                width: 5
+                hint: "label the elements whose positions you read: `list { first: 2 second: 3 }`".string
+                width: 4
             )
             return (callleg handled: true tid: ztypes.tid.zero)
         }
-        if isArray then markStaticListReached :ast :st tid: bt
-        # only a list of integers owns a `tag`; the template's own member is
-        # no answer for any other
-        if cnId == zast.wellKnown.slot.wkTag when (st.typing.declChildOfId
-            parentTypeId: bt
-            nameId: cnId
-        ).none then {
-            (addErrorH
-                :st
-                nodeid: dp.nid
-                lineno: dp.lineno
-                colno: dp.colno
-                e: zast.err.typeError
-                msg: "a list's `tag` is the discriminator source of a variant or union, and only a list of integers is one".string
-                note: String
-                hint: "write the arms' values as integers: `codes: list { a: 1 b: 2 } out staticlist u8`".string
-                width: 3
-            )
-            return (callleg handled: true tid: ztypes.tid.zero)
-        }
-        if isArray.not when (st.typing.declChildOfId parentTypeId: bt nameId: cnId).none then {
-            dv: staticListValueTypeFor :st :ast :unitDecl staticListTid: bt
-            # a generic unit's block over its parameter is a value of a partial,
-            # whose members its template answers while the template's body is
-            # checked; each instance reads its own copy's
-            if (st.reg.isPartialOf tid: dv) then {
-                return (callleg
-                    handled: true
-                    tid: (checkDottedOn :st :unitDecl :ast :dp bt: dv :coerce)
-                )
-            }
-            forceMemberOf :st :ast parentTypeId: dv nameId: cnId
-            vmo: st.typing.declChildOfId parentTypeId: dv nameId: cnId
-            match (
-                vmo
-            ) case some then {
-                # `get` reads the block's own array; any other member reads
-                # the block as its value
-                if cnId != zast.wellKnown.slot.wkGet then {
-                    markStaticListReached :ast :st tid: bt
-                    stampGate :st nid: dp.parent tid: dv
-                }
-                return (callleg
-                    handled: true
-                    tid: (checkResolvedMember
-                        :st
-                        :unitDecl
-                        :ast
-                        :dp
-                        bt: dv
-                        :cnId
-                        mo: vmo
-                        :coerce
-                        aliasViaX: false
-                    )
-                )
-            } case none then null
-        }
+        # a position needs no array
+        takeListBase :st :dp
+        sl: listSlotTid :st
+        stampGate :st nid: dp.nid tid: sl
+        return (callleg handled: true tid: sl)
     }
-    # `.array` on a list copies the elements into the sized array
-    # instance (array_{elem}_{count}), minting it on first access.
-    if cnId == zast.wellKnown.slot.tyArray when (
-        (st.reg.typetypeOf typeId: bt) == ztypes.ztypetype.staticListType
-    ) then {
-        elo: st.reg.staticListElemTypeOf tid: bt
-        if elo.isZero then return (callleg handled: false tid: ztypes.tid.zero)
-        ecnt: staticListElemCount :st staticListTid: bt
-        ato: stdTidOpt :ast :st wk: zast.wellKnown.slot.tyArray
-        match (
-            ato
-        ) case some then {
-            eno: st.reg.nameOf tid: elo
-            amn: "_\{eno}_\{ecnt}"
-            # `array` declares its element parameter then its count; asking
-            # the template for both names keeps this site correct across a
-            # rename. Two names or the leg declines: a zero key is the ELIDED
-            # key, and getOrMintSpec rebinds that to the FIRST parameter --
-            # which would bind the count to the element slot.
-            aNames: st.reg.genericParamNamesOf tdecl: (declOfTypeId :st tid: ato)
-            if aNames.length < 2 then return (callleg handled: false tid: ztypes.tid.zero)
-            asubs: IdMapV zast.nameid v: ztypes.tid
-            asubs.set key: (aNames.get i: 0) value: elo
-            vsE: IdMapV zast.nameid v: u64
-            vsE.set key: (aNames.get i: 1) value: ecnt
-            amid: (getOrMintSpec
-                :st
-                scope: st.curScope
-                :ast
-                :unitDecl
-                sfx: amn.stringView
-                templateId: ato
-                subs: asubs
-                valSubs: vsE
-                fallbackArg: ztypes.tid.zero
-            )
-            mintCollectionChildren :st :ast monoId: amid templateId: ato
-            setar: amid
-            stampGate :st nid: dp.nid tid: setar
-            return (callleg handled: true tid: amid)
-        } case none then null
+    if cnId == zast.wellKnown.slot.wkTag then {
+        msg: "a list's `tag` is the discriminator source of a variant or union, and only a list of integers is one".string
+        hint: "write the arms' values as integers: `codes: list { a: 1 b: 2 } out staticlist u8`".string
+        if (typeIsNumberOf :st tid: g.elem float: false) then {
+            msg = "a list's `tag` is read in a variant's or union's `as` block: `tag: codes.tag`".string
+            hint = String
+        }
+        (addErrorH
+            :st
+            nodeid: dp.nid
+            lineno: dp.lineno
+            colno: dp.colno
+            e: zast.err.typeError
+            :msg
+            note: String
+            :hint
+            width: 3
+        )
+        return (callleg handled: true tid: ztypes.tid.zero)
     }
+    et: listMemberType :st :ast :row nameId: cnId
+    if et.isZero then {
+        # a member of the list's value (`get`, `iterate`), else nothing; a
+        # generic unit's list over its parameter is a value of a partial,
+        # whose members its template answers
+        if (st.reg.isPartialOf tid: g.tid) then return (callleg handled: false tid: ztypes.tid.zero)
+        forceMemberOf :st :ast parentTypeId: g.tid nameId: cnId
+        if (st.typing.declChildOfId parentTypeId: g.tid nameId: cnId).some then return (callleg
+            handled: false
+            tid: ztypes.tid.zero
+        )
+        pp: ListVal zast.nameid
+        appendValueTuple :ast n: (ast.nodes.get i: dp.parent) dst: pp
+        bn: zenv.formatPath pool: ast.names path: pp.listView
+        mn: zast.nameTextAt :ast ref: cnId
+        (addErrorH
+            :st
+            nodeid: dp.nid
+            lineno: dp.lineno
+            colno: dp.colno
+            e: zast.err.typeError
+            msg: "list '\{bn}' has no element or member '\{mn}'"
+            note: String
+            hint: String
+            width: mn.length.u32.orPanic
+        )
+        return (callleg handled: true tid: ztypes.tid.zero)
+    }
+    # an element or the count is a constant: the list's array is not read
+    takeListBase :st :dp
+    stampGate :st nid: dp.nid tid: et
+    return (callleg handled: true tid: et)
+}
+
+# memberIsList -- member `nameId` of `parentTid` is a list its `as` block
+# declares, a value and no arm.
+memberIsList: function {
+    st: zenv.ZSymbolTable.view parentTid: ztypes.tid nameId: zast.nameid
+} out bool is {
+    d: st.typing.declMemberIdOf parentTypeId: parentTid :nameId
+    if d.isZero then return false
+    return (st.typing.decls.get i: d).kind.staticListDecl
+}
+
+# listRowOfNode -- the list row the node at `nid` folded to in the walk in
+# progress: a list reached by a compile-time path. 0 for any other node.
+listRowOfNode: function {st: zenv.ZSymbolTable.view nid: zast.nodeid} out u32 is {
+    v: st.typing.nodeConstIn mono: st.typing.curMonoStamp :nid
+    if v.kind.aggKind.not then return 0
+    if (st.typing.constAggs.get i: v.aggId.u64).kind.staticList.not then return 0
+    return v.aggId
+}
+
+# takeListBase -- the list at the base of dotted path `dp` is read for a
+# constant the path names, not for its array: the base reaches nothing.
+takeListBase: function {st: zenv.ZSymbolTable dp: dpref} is {
+    (st.typing.wideConstTaken.set
+        key: (ztyping.monostamp mono: st.typing.curMonoStamp node: dp.parent)
+        value: 1
+    )
+}
+
+# listMemberType -- the type list row `row` gives member `nameId`: a label,
+# then the count (`length`, untyped), then an ordinal (`blk.3`), an element
+# typed as the list's. An element may claim `length`. 0 for any other name.
+listMemberType: function {
+    st: zenv.ZSymbolTable.view ast: Ast.view row: u32 nameId: zast.nameid
+} out ztypes.tid is {
+    g: st.typing.constAggs.get i: row.u64
+    if (st.typing.aggLabelPos id: row label: nameId).some then return g.elem
+    if nameId == zast.wellKnown.slot.wkLength then return st.reg.literalIntTid
+    pos: (zast.nameTextAt :ast ref: nameId).stringView.parseU64
+    match (
+        pos
+    ) case ok then {
+        if pos < g.itemCount then return g.elem
+    } case err then null
+    return ztypes.tid.zero
+}
+
+# checkListArray -- `.array` on a list reached by a compile-time path: its
+# elements copied into the sized array instance (array_{elem}_{count}), minted
+# on first access. An empty list has none.
+checkListArray: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    dp: dpref
+    row: u32
+} out callleg is {
+    g: st.typing.constAggs.get i: row.u64
+    if g.itemCount == 0 then {
+        (addErrorH
+            :st
+            nodeid: dp.nid
+            lineno: dp.lineno
+            colno: dp.colno
+            e: zast.err.typeError
+            msg: "an empty list has no '.array': an array holds at least one element".string
+            note: String
+            hint: "read its `length`, or walk it with `iterate`".string
+            width: 5
+        )
+        return (callleg handled: true tid: ztypes.tid.zero)
+    }
+    # the array holds the run-time element: an untyped one is its i64 / f64
+    elo: st.reg.genericTypeArgAt specId: g.tid ordinal: 0
+    if elo.isZero then return (callleg handled: false tid: ztypes.tid.zero)
+    ecnt: g.itemCount.u64
+    ato: stdTidOpt :ast :st wk: zast.wellKnown.slot.tyArray
+    match (
+        ato
+    ) case some then {
+        eno: st.reg.nameOf tid: elo
+        amn: "_\{eno}_\{ecnt}"
+        # `array` declares its element parameter then its count; asking
+        # the template for both names keeps this site correct across a
+        # rename. Two names or the leg declines: a zero key is the ELIDED
+        # key, and getOrMintSpec rebinds that to the FIRST parameter --
+        # which would bind the count to the element slot.
+        aNames: st.reg.genericParamNamesOf tdecl: (declOfTypeId :st tid: ato)
+        if aNames.length < 2 then return (callleg handled: false tid: ztypes.tid.zero)
+        asubs: IdMapV zast.nameid v: ztypes.tid
+        asubs.set key: (aNames.get i: 0) value: elo
+        vsE: IdMapV zast.nameid v: u64
+        vsE.set key: (aNames.get i: 1) value: ecnt
+        amid: (getOrMintSpec
+            :st
+            scope: st.curScope
+            :ast
+            :unitDecl
+            sfx: amn.stringView
+            templateId: ato
+            subs: asubs
+            valSubs: vsE
+            fallbackArg: ztypes.tid.zero
+        )
+        mintCollectionChildren :st :ast monoId: amid templateId: ato
+        stampGate :st nid: dp.nid tid: amid
+        return (callleg handled: true tid: amid)
+    } case none then null
     return (callleg handled: false tid: ztypes.tid.zero)
 }
 
-# refuseStaticListSlotMember -- a `slot` read that names no label: a member of a block's
-# `slot` other than one of its labels (`codes.slot.length`, a misspelt label),
-# or `slot` on a block with no labelled element. True when refused.
-refuseStaticListSlotMember: function {
+# checkListSlotRead -- `P.slot.label`: the position of the list's element so
+# labelled, typed as its `slot` (the list's index, or untyped). A name that is
+# no label of the list is refused: `slot` holds the labels' positions and
+# nothing else.
+checkListSlotRead: function {
     st: zenv.ZSymbolTable
     ast: Ast
     dp: dpref
-    bt: ztypes.tid
     cnId: zast.nameid
-} out bool is {
-    mn: zast.nameTextAt :ast ref: cnId
-    msg: String
-    hint: String
-    if (st.typing.staticListSlotTypes.has item: bt) then {
-        if (st.typing.declChildOfId parentTypeId: bt nameId: cnId).some then return false
-        msg = "'\{mn}' is no label of this block: its `slot` holds its labels' positions and nothing else"
-        hint = "read a label's position, `blk.slot.label`".string
-    } else if cnId == zast.wellKnown.slot.wkSlot when (
-        (st.reg.typetypeOf typeId: bt) == ztypes.ztypetype.staticListType
-    ) then {
-        if (st.typing.declChildOfId parentTypeId: bt nameId: cnId).some then return false
-        bn: st.reg.nameOf tid: bt
-        msg = "'\{bn}' has no labelled element, so no `slot`"
-        hint = "label the elements whose positions you read: `list { first: 2 second: 3 }`".string
-    } else {
-        return false
+} out callleg is {
+    pn: ast.nodes.get i: dp.parent
+    row: zast.nodeid
+    if pn.dottedpath then row = pn.parent
+    lr: listRowOfNode :st nid: row
+    if lr == 0 then return (callleg handled: true tid: ztypes.tid.zero)
+    if (st.typing.aggLabelPos id: lr label: cnId).some then {
+        sl: (st.typing.constAggs.get i: lr.u64).slot
+        stampGate :st nid: dp.nid tid: sl
+        return (callleg handled: true tid: sl)
     }
+    mn: zast.nameTextAt :ast ref: cnId
     (addErrorH
         :st
         nodeid: dp.nid
         lineno: dp.lineno
         colno: dp.colno
         e: zast.err.typeError
-        :msg
+        msg: "'\{mn}' is no label of this block: its `slot` holds its labels' positions and nothing else"
         note: String
-        :hint
+        hint: "read a label's position, `blk.slot.label`".string
         width: mn.length.u32.orPanic
     )
-    return true
+    return (callleg handled: true tid: ztypes.tid.zero)
 }
 
 # refuseStaticListValueMember -- `.array` or `.tag` read through a list VALUE: both are
@@ -31964,11 +31882,6 @@ refuseStaticListValueMember: function {
         width: mn.length.u32.orPanic
     )
     return true
-}
-
-# staticListElemCount -- how many elements list `staticListTid` holds.
-staticListElemCount: function {st: zenv.ZSymbolTable.view staticListTid: ztypes.tid} out u64 is {
-    return ((st.typing.staticListLength :staticListTid).or d: 0)
 }
 
 # checkArrayIndexMember -- a compile-time numeric index on an array instance
@@ -33097,7 +33010,7 @@ refuseMarkerWithoutStorage: function {
         pp: zenv.formatPath pool: ast.names path: tp.listView
         what = "'\{pp}'"
         hint = "write the value without a marker: '\{pp}'"
-        if btt == ztypes.ztypetype.staticListType then hint = "copy a list with '\{pp}.array'"
+        if (listRowOfNode :st nid: dp.parent) != 0 then hint = "copy a list with '\{pp}.array'"
         if isFn then hint = "a function's reference is '\{pp}.copy'"
     }
     cn: zast.nameTextAt :ast ref: cnId
@@ -33924,7 +33837,7 @@ checkDottedOn: function {
     if fcp.handled then return fcp.tid
     aix: checkArrayIndexMember :st :ast :dp :bt :cnId
     if aix.handled then return aix.tid
-    dbm: checkStaticListMember :st :unitDecl :ast :dp :bt :cnId :coerce
+    dbm: checkStaticListMember :st :unitDecl :ast :dp :bt :cnId
     if dbm.handled then return dbm.tid
     if (refuseGenericUnitMemberRead :st :ast :dp :bt) then return ztypes.tid.zero
     uqm: checkUnitQualifiedMember :st :unitDecl :ast :dp :bt :cnId :coerce
@@ -34127,7 +34040,7 @@ refuseTypedefArmConstructor: function {
     ctt: st.reg.typetypeOf typeId: mo
     if (
         (ctt == ztypes.ztypetype.functionType) or
-        (ctt == ztypes.ztypetype.staticListType) or
+        (memberIsList :st parentTid: bt nameId: cnId) or
         (ctt == ztypes.ztypetype.tagType)
     ) then return false
     if (dottedBaseIsValue :st :ast :unitDecl n: (ast.nodes.get i: dp.nid)) then return false
@@ -34654,16 +34567,6 @@ typeOfBareName: function {
         # parameter, or an alias of it, is the instance's argument, and the
         # construction is checked as that argument's
         if isAutoFn.not when isGenFn.not then result = instanceTypeOf :st :ast :unitDecl tid: result
-        if st.typing.suppressBareCtor.not then (checkBareNameValue
-            :st
-            :unitDecl
-            :ast
-            :node
-            :fo
-            instTid: result
-        )
-        setu: result
-        stampGate :st nid: node.nid tid: setu
         # atom-use def reference: the DEF's declaration (nodeType
         # carries the auto-call RETURN type above, not the referent)
         sfF: (declSurfaceOfName
@@ -34673,6 +34576,18 @@ typeOfBareName: function {
             nameId: node.name
             tid: fo
         )
+        # a list's name reads its value, never a construction of its type
+        isList: sfF.isZero.not and (st.typing.decls.get i: sfF).kind.staticListDecl
+        if st.typing.suppressBareCtor.not when isList.not then (checkBareNameValue
+            :st
+            :unitDecl
+            :ast
+            :node
+            :fo
+            instTid: result
+        )
+        setu: result
+        stampGate :st nid: node.nid tid: setu
         stampRefDecl :st nid: node.nid declId: sfF
         # the definition the name resolved to, wherever it lives: a namespace
         # member is no definition of the unit the read is written in
@@ -35393,7 +35308,7 @@ markAggsReached: function {ast: Ast.view st: zenv.ZSymbolTable} is {
 # from the run-time use at `at`; each, the first time, has its untyped numbers
 # checked against i64 and f64, reported at that use.
 markAggReached: function {ast: Ast.view st: zenv.ZSymbolTable id: u32 at: zast.nodeid} is {
-    if id == 0 then return
+    if (id == 0) or (aggHasNoValue :st :id) then return
     start: u64
     count: u64
     {
@@ -35410,6 +35325,19 @@ markAggReached: function {ast: Ast.view st: zenv.ZSymbolTable id: u32 at: zast.n
         if v.kind.aggKind then markAggReached :ast :st id: v.aggId :at
         refuseWideAggItem :ast :st :v :at
     }
+}
+
+# aggHasNoValue -- row `id` holds an element with no value: a generic unit's
+# own list over its parameters, whose instances' rows are the ones run time
+# reaches. A data value with a part of no value has no row at all.
+aggHasNoValue: function {st: zenv.ZSymbolTable.view id: u32} out bool is {
+    g: st.typing.constAggs.get i: id.u64
+    k: u64
+    for k < g.itemCount loop {
+        if (st.typing.constAggItems.get i: g.itemStart.u64 + k).kind.none then return true
+        k = k + 1
+    }
+    return false
 }
 
 # refuseWideAggItem -- an untyped number in a data value run time reaches is
@@ -36848,8 +36776,7 @@ refuseStaticListStatement: function {
     vt: ztypes.tid
     nid: zast.nodeid
 } out bool is {
-    if vt.isZero then return false
-    if (st.reg.typetypeOf typeId: vt) != ztypes.ztypetype.staticListType then return false
+    if vt.isZero or ((listRowOfNode :st :nid) == 0) then return false
     tp: ListVal zast.nameid
     appendValueTuple :ast n: (ast.nodes.get i: nid) dst: tp
     pp: zenv.formatPath pool: ast.names path: tp.listView
@@ -36896,7 +36823,7 @@ checkAssignment: function {
         reportUnresolvedValue :st :unitDecl :ast nid: asgn.value
     }
     if (refuseNullValue :st :ast :vt nid: asgn.value) then return
-    vt = staticListAsValue :st :ast :unitDecl :vt nid: asgn.value
+    vt = staticListAsValue :st :ast :vt nid: asgn.value
     if (refuseNonValue :st :ast :vt nid: asgn.value) then return
     refuseValueBorrow :st :ast :vt value: asgn.value
     if vt.isZero.not then {
@@ -38480,7 +38407,7 @@ checkWith: function {
     withMarker: st.pushBlock node: withnode.nid
     errW: st.typing.errors.length
     vt: checkValueAt :st :unitDecl :ast nid: withnode.value
-    vt = staticListAsValue :st :ast :unitDecl :vt nid: withnode.value
+    vt = staticListAsValue :st :ast :vt nid: withnode.value
     if (refuseNonValue :st :ast :vt nid: withnode.value) then vt = ztypes.tid
     refuseValueBorrow :st :ast :vt value: withnode.value
     if vt.u64 == 0 when st.typing.errors.length == errW then {
@@ -39517,7 +39444,7 @@ checkForCondition: function {
     }
     st.typing.allowBareFnRef = bfrFor
     st.typing.eachSubjectNid = esPrev
-    vt = staticListAsValue :st :ast :unitDecl :vt nid: cond.operation
+    vt = staticListAsValue :st :ast :vt nid: cond.operation
     if (refuseNonValue :st :ast :vt nid: cond.operation) then vt = ztypes.tid
     # a condition that typed to nothing and raised nothing is an
     # unresolvable name -- the same rule the binding and operand sites
@@ -49550,9 +49477,7 @@ callableReadsStaticList: function {
 } out bool is {
     dr: dpRefAt :ast nid: call.callable
     if dr.nid.isZero then return false
-    rt: walkTypeOf :st nid: dr.parent
-    if rt.isZero then return false
-    return (st.reg.typetypeOf typeId: rt) == ztypes.ztypetype.staticListType
+    return (listRowOfNode :st nid: dr.parent) != 0
 }
 
 # checkTypeApplicationValue -- a type application written with its type
@@ -54539,35 +54464,34 @@ checkValueAt: function {
     return t
 }
 
-# markStaticListIndexRead -- a `blk.get i` the fold did not answer reads the block's
-# static array at run time, so the emitter must keep it. A constant index folds
-# to its element and needs no array.
+# markStaticListIndexRead -- a `blk.get K` the fold answered reads an element,
+# a constant, and not the list's array: the list at its base reaches nothing.
+# One the fold did not answer reads the array at run time, and the base's own
+# use reaches it.
 markStaticListIndexRead: function {st: zenv.ZSymbolTable ast: Ast.view nid: zast.nodeid} is {
-    staticListTid: staticListIndexedAt :st :ast :nid
-    if staticListTid.isZero then return
-    if (st.typing.nodeConstIn mono: st.typing.curMonoStamp :nid).kind.none.not then return
-    markStaticListReached :ast :st tid: staticListTid
+    baseId: staticListIndexedAt :st :ast :nid
+    if baseId.isZero then return
+    mono: st.typing.curMonoStamp
+    if (st.typing.nodeConstIn :mono :nid).kind.none then return
+    st.typing.wideConstTaken.set key: (ztyping.monostamp :mono node: baseId) value: 1
 }
 
-# staticListIndexedAt -- the list a `blk.get i` call at `nid` reads, as the
-# walk typed its base; 0 for any other node.
+# staticListIndexedAt -- the base of a `blk.get i` call at `nid` whose base is
+# a list reached by a compile-time path; 0 for any other node.
 staticListIndexedAt: function {
     st: zenv.ZSymbolTable.view ast: Ast.view nid: zast.nodeid
-} out ztypes.tid is {
+} out zast.nodeid is {
     baseId: zast.nodeid
     {
         n: ast.nodes.get i: nid
-        if n.call.not then return ztypes.tid.zero
+        if n.call.not then return zast.nodeid
         cn: ast.nodes.get i: n.callable
-        if cn.dottedpath.not then return ztypes.tid.zero
-        if (atomIsIndex :ast nid: cn.child).not then return ztypes.tid.zero
+        if cn.dottedpath.not then return zast.nodeid
+        if (atomIsIndex :ast nid: cn.child).not then return zast.nodeid
         baseId = cn.parent
     }
-    staticListTid: walkTypeOf :st nid: baseId
-    if (
-        (st.reg.typetypeOf typeId: staticListTid) != ztypes.ztypetype.staticListType
-    ) then return ztypes.tid.zero
-    return staticListTid
+    if (listRowOfNode :st nid: baseId) == 0 then return zast.nodeid
+    return baseId
 }
 
 # atomIsIndex -- node `nid` is the atom naming the member a list reads an
@@ -55873,7 +55797,7 @@ foldedParamTid: function {
     if fnTid.isZero then return ztypes.tid.zero
     if (declaredByValue :st :ast ownerTid: fnTid node: pm.operation).not then return ztypes.tid.zero
     pmd: st.typing.declMemberIdOf parentTypeId: fnTid nameId: pm.name
-    pvd: constValueOfDecl :st :ast declId: pmd
+    pvd: constValueOfDecl :st declId: pmd
     if pvd.kind.none then return ztypes.tid.zero
     fvo: (st.typing.declChildOfId parentTypeId: fnTid nameId: pm.name).or d: ztypes.tid.zero
     return fvo
@@ -60735,15 +60659,37 @@ constDefIsComputed: function {
     nid: zast.nodeid
 } out bool is {
     # `X: X + 1` computes, and so does a data value built from others (`a:
-    # (inner v: b.v)`)
+    # (inner v: b.v)`) and a list (`a: list { 1 a.0 }`)
     callableId: zast.nodeid
     {
         n: ast.nodes.get i: nid
-        if (zast.infixPartsOf :ast :n).found then return true
+        if (zast.infixPartsOf :ast :n).found or n.listblock then return true
         if n.call then callableId = n.callable
     }
     if callableId.isZero then return false
     return (staticCtorHead :st :scope :ast :unitDecl :callableId).isZero.not
+}
+
+# constOfUnitMember -- `unit.CONST`: a constant read out of the unit `ptId`
+# names, found where its type-refs are: the unit's root, or its public block
+# when the block defines it.
+constOfUnitMember: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    ptId: zast.nameid
+    ncId: zast.nameid
+} out ztypes.cval is {
+    ud: unitDeclOfNameOrOwn :st :scope nameId: ptId
+    owner: qualifiedMemberScope :st unitRoot: ud memberId: ncId
+    return (constValueOfMemberId :st scope: owner :ast unitDecl: ud nameId: ncId)
+}
+
+# resolvedTidOr -- the type `name` resolves to from `unitDecl`, 0 for none.
+resolvedTidOr: function {
+    st: zenv.ZSymbolTable ast: Ast unitDecl: ztypes.declid name: zast.nameid
+} out ztypes.tid is {
+    return ((resolvedByIds :st :ast :unitDecl :name).or d: ztypes.tid.zero)
 }
 
 # constValueOfMemberTidId -- the memoised compile-time value of a member of the
@@ -61213,61 +61159,37 @@ foldIfBranch: function {
     return fb
 }
 
-# constStaticListMember -- a list's element or length as a value, from the
-# constants the block recorded as it resolved -- typed when the block names its
-# type, untyped when it names none; a cycle when the block is still evaluating
-# its elements, one of which reads it. An element is a value only when
-# the block's elements are a builtin number: `out byteid` makes each element a
-# byteid, whose own `==` a fold of the bare integer would bypass. The length is
-# a count, never an element, and is always one.
-constStaticListMember: function {
+# staticListMemberValue -- the value list row `row` holds under the member name
+# `nameId`: a label first (an element may claim `length`), then the count,
+# then an element named by its position (`blk.3`); `none` for any other name.
+# An element is a value only when the list's elements are a builtin number or
+# a string: `out byteid` makes each element a byteid, whose own `==` a fold of
+# the bare integer would bypass. The count is never an element, and is always
+# one.
+staticListMemberValue: function {
     st: zenv.ZSymbolTable
     ast: Ast
-    staticListTid: ztypes.tid
+    row: u32
     nameId: zast.nameid
 } out ztypes.cval is {
-    lk: st.typing.memberConstKey parentTypeId: staticListTid nameId: zast.wellKnown.slot.wkLength
-    if ((st.typing.constEvalState.get key: lk).or d: 0) == 1 then {
-        bn: st.reg.nameOf tid: staticListTid
-        (constFailRecord
-            :st
-            kind: ztypes.constfailkind.cycle
-            nodeid: zast.nodeid
-            lineno: 0
-            colno: 0
-            width: 1
-            strId: (constInternString :st text: bn.stringView)
-        )
-        return ztypes.noConst
-    }
-    eo: (st.typing.declChildOfId parentTypeId: staticListTid :nameId).or d: ztypes.tid.zero
-    if nameId != zast.wellKnown.slot.wkLength when (staticListElemFolds :ast :st elemTid: eo
-    ).not then {
-        return ztypes.noConst
-    }
-    return (staticListMemberValue :st :ast :staticListTid :nameId)
-}
-
-# staticListMemberValue -- the value list `staticListTid` holds under the member
-# name `nameId`: a label first (an element may claim `length`), then the count,
-# then an element named by its position (`blk.3`); `none` for any other name.
-staticListMemberValue: function {
-    st: zenv.ZSymbolTable.view
-    ast: Ast.view
-    staticListTid: ztypes.tid
-    nameId: zast.nameid
-} out ztypes.cval is {
-    lp: st.typing.staticListLabelPos :staticListTid label: nameId
+    g: st.typing.constAggs.get i: row.u64
+    folds: staticListElemFolds :ast :st elemTid: g.elem
+    lp: st.typing.aggLabelPos id: row label: nameId
     match (
         lp
-    ) case some then return (st.typing.staticListItemAt :staticListTid slot: lp) case none then null
-    if nameId == zast.wellKnown.slot.wkLength then {
-        return (ztypes.makeIntConst (staticListElemCount :st :staticListTid).i64.orPanic)
-    }
+    ) case some then {
+        if folds.not then return ztypes.noConst
+        return (st.typing.constAggItems.get i: g.itemStart.u64 + lp)
+    } case none then null
+    if nameId == zast.wellKnown.slot.wkLength then return (ztypes.makeIntConst g.itemCount)
     pos: (zast.nameTextAt :ast ref: nameId).stringView.parseU64
     match (
         pos
-    ) case ok then return (st.typing.staticListItemAt :staticListTid slot: pos) case err then null
+    ) case ok then {
+        if folds when pos < g.itemCount then return (st.typing.constAggItems.get
+            i: g.itemStart.u64 + pos
+        )
+    } case err then null
     return ztypes.noConst
 }
 
@@ -61294,8 +61216,7 @@ isStaticStringTid: function {ast: Ast st: zenv.ZSymbolTable tid: ztypes.tid} out
 # constArmRead -- `<typeName>.<armName>` looked up from `lookupUnit`, as a
 # value. The parent's FAMILY decides, the same test resolveConstantDef uses to
 # tell an arm read from a construction: variant or union means the child is an
-# arm, a list means an element or the block's length (constStaticListMember),
-# and anything else is a member read a constant cannot hold.
+# arm, and anything else is a member read a constant cannot hold.
 constArmRead: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -61309,9 +61230,6 @@ constArmRead: function {
     ptid: typeNamedFrom :st :scope :ast :lookupUnit :typeNameId
     if ptid.isZero then return ztypes.noConst
     ptt: st.reg.typetypeOf typeId: ptid
-    if ptt == ztypes.ztypetype.staticListType then {
-        return (constStaticListMember :st :ast staticListTid: ptid nameId: armNameId)
-    }
     # another type's `as` constant (`cfg.LIMIT`), folded where it is declared
     ptd: declOfTypeId :st tid: ptid
     pmd: st.typing.declFindChild parentDeclId: ptd nameId: armNameId
@@ -62499,9 +62417,13 @@ constOfStaticFields: function {
     if ok.not then return ztypes.noConst
     id: (constInternAgg
         :st
-        kind: ztyping.constaggkind.staticData
-        :tid
-        arm: zast.nameid.zero
+        shape: (ztyping.aggshape
+            kind: ztyping.constaggkind.staticData
+            :tid
+            arm: zast.nameid.zero
+            elem: ztypes.tid.zero
+            slot: ztypes.tid.zero
+        )
         :items
         labels: ListVal zast.nameid
         :at
@@ -62615,7 +62537,7 @@ constOfFieldDefault: function {
     ) case literal then {
         return (evalConstNode :st scope: od :ast unitDecl: od nid: dv)
     } case constant then {
-        return (constValueOfDecl :st :ast declId: dv)
+        return (constValueOfDecl :st declId: dv)
     } case arm then {
         return (ztypes.makeArmConst armTid: ftid armName: (declNameIdOf :st declId: dv))
     } else {
@@ -62624,18 +62546,21 @@ constOfFieldDefault: function {
 }
 
 # constAggField -- field `nameId` of the data value `v`, as its value was
-# folded; noConst when the type declares no such field, which the read's own
-# check reports.
+# folded, or a list's member (staticListMemberValue); noConst when the type
+# declares no such field, which the read's own check reports.
 constAggField: function {
-    st: zenv.ZSymbolTable.view v: ztypes.cval nameId: zast.nameid
+    st: zenv.ZSymbolTable ast: Ast v: ztypes.cval nameId: zast.nameid
 } out ztypes.cval is {
     tid: ztypes.tid
     start: u64
+    isList: false
     {
         g: st.typing.constAggs.get i: v.aggId.u64
         tid = g.tid
         start = g.itemStart
+        isList = g.kind.staticList
     }
+    if isList then return (staticListMemberValue :st :ast row: v.aggId :nameId)
     ftids: ListVal ztypes.tid
     fnames: ListVal zast.nameid
     dataFieldIds :st :tid ids: ftids nameIds: fnames
@@ -62745,13 +62670,10 @@ constFitNumber: function {
 
 # constInternAgg -- the row of an aggregate in ZTyping.constAggs, its items
 # appended to constAggItems: an equal aggregate's row when one is there (same
-# kind, type, arm and items), else a new one.
+# shape, items and labels), else a new one.
 constInternAgg: function {
     st: zenv.ZSymbolTable
-    kind: ztyping.constaggkind
-    tid: ztypes.tid
-    # a choice value's arm, 0 otherwise
-    arm: zast.nameid
+    shape: ztyping.aggshape
     items: (ListVal ztypes.cval).view
     # a list's labels, row for row with items (0 for an unlabelled element);
     # empty for a data or choice value
@@ -62759,15 +62681,16 @@ constInternAgg: function {
     # where it is built; an equal value interned earlier keeps its own
     at: zast.nodeid
 } out u32 is {
-    h: kind.tag.u64 + 1 * 1099511628211
-    h = (h ^ tid.u64) * 1099511628211
-    h = (h ^ arm.u32) * 1099511628211
+    h: shape.kind.tag.u64 + 1 * 1099511628211
+    h = (h ^ shape.tid.u64) * 1099511628211
+    h = (h ^ shape.arm.u32) * 1099511628211
+    h = (h ^ shape.elem.u64 ^ (shape.slot.u64 << 32)) * 1099511628211
     for each it: items loop h = (h ^ (constItemHash v: it)) * 1099511628211
     for each lb: labels loop h = (h ^ lb.u32) * 1099511628211
     head: (st.typing.constAggIndex.heads.get key: h).or d: 0
     r: head
     for r != 0 loop {
-        if (constAggMatches :st row: r :kind :tid :arm :items :labels) then return r
+        if (constAggMatches :st row: r :shape :items :labels) then return r
         r = st.typing.constAggIndex.next.get i: r.u64
     }
     start: st.typing.constAggItems.length.u32.orPanic
@@ -62776,13 +62699,15 @@ constInternAgg: function {
     for each lb: labels loop st.typing.constAggLabels.append lb
     id: st.typing.constAggs.length.u32.orPanic
     st.typing.constAggs.append (ztyping.constagg
-        :kind
-        :tid
-        :arm
+        kind: shape.kind
+        tid: shape.tid
+        arm: shape.arm
         itemStart: start
         itemCount: items.length.u32.orPanic
         labelStart: lstart
         labelCount: labels.length.u32.orPanic
+        elem: shape.elem
+        slot: shape.slot
         node: at
         reached: false
     )
@@ -62803,19 +62728,18 @@ constItemHash: function {v: ztypes.cval} out u64 is {
     return (h ^ v.numTid.u64) * 1099511628211
 }
 
-# constAggMatches -- whether aggregate row `row` holds exactly this kind, type,
-# arm and items.
+# constAggMatches -- whether aggregate row `row` holds exactly this shape,
+# items and labels.
 constAggMatches: function {
     st: zenv.ZSymbolTable.view
     row: u32
-    kind: ztyping.constaggkind
-    tid: ztypes.tid
-    arm: zast.nameid
+    shape: ztyping.aggshape
     items: (ListVal ztypes.cval).view
     labels: (ListVal zast.nameid).view
 } out bool is {
     g: st.typing.constAggs.get i: row.u64
-    if (g.kind != kind) or (g.tid != tid) or (g.arm != arm) then return false
+    if (g.kind != shape.kind) or (g.tid != shape.tid) or (g.arm != shape.arm) then return false
+    if (g.elem != shape.elem) or (g.slot != shape.slot) then return false
     if g.itemCount.u64 != items.length then return false
     if g.labelCount.u64 != labels.length then return false
     i: u64
@@ -62917,30 +62841,22 @@ constOfStaticListIndex: function {
 } out ztypes.cval is {
     if args.length != 1 then return ztypes.noConst
     baseId: zast.nodeid
-    baseName: zast.nameid
     opId: zast.nodeid
     {
         cn: ast.nodes.get i: callableId
-        if cn.dottedpath when (atomIsIndex :ast nid: cn.child) then {
-            baseId = cn.parent
-            baseName = atomNameId :ast n: (ast.nodes.get i: cn.parent)
-        }
+        if cn.dottedpath when (atomIsIndex :ast nid: cn.child) then baseId = cn.parent
         an: ast.nodes.get i: (args.get i: 0)
         if an.namedoperation then opId = an.operation
     }
-    if baseName.isZero or opId.isZero then return ztypes.noConst
+    if baseId.isZero or opId.isZero then return ztypes.noConst
     if (st.typing.atomVariableId.get key: baseId).none.not then return ztypes.noConst
-    staticListTid: walkTypeOf :st nid: baseId
-    if (st.reg.typetypeOf typeId: staticListTid) != ztypes.ztypetype.staticListType then {
-        staticListTid = typeNamedFrom :st :scope :ast lookupUnit: unitDecl typeNameId: baseName
-    }
-    if staticListTid.isZero then return ztypes.noConst
-    if (
-        (st.reg.typetypeOf typeId: staticListTid) != ztypes.ztypetype.staticListType
-    ) then return ztypes.noConst
+    lv: evalConstNode :st :scope :ast :unitDecl nid: baseId
+    if lv.kind.aggKind.not then return ztypes.noConst
+    row: lv.aggId
+    if (st.typing.constAggs.get i: row.u64).kind.staticList.not then return ztypes.noConst
     kv: evalConstNode :st :scope :ast :unitDecl nid: opId
     if kv.kind.ivalKind.not then return ztypes.noConst
-    count: (staticListElemCount :st :staticListTid).i64.orPanic
+    count: (st.typing.constAggs.get i: row.u64).itemCount.i64
     if (kv.bigId != 0) or (kv.ival < 0) or (kv.ival >= count) then {
         rm: "constant index \{kv.ival} is outside the list (length \{count})"
         if kv.bigId != 0 then rm = "constant index is outside the list (length \{count})"
@@ -62955,10 +62871,9 @@ constOfStaticListIndex: function {
         )
         return ztypes.noConst
     }
-    ev: st.typing.staticListItemAt :staticListTid slot: kv.ival.u64.orPanic
-    et: st.reg.staticListElemTypeOf tid: staticListTid
-    if (staticListElemFolds :ast :st elemTid: et).not then return ztypes.noConst
-    return ev
+    g: st.typing.constAggs.get i: row.u64
+    if (staticListElemFolds :ast :st elemTid: g.elem).not then return ztypes.noConst
+    return (st.typing.constAggItems.get i: g.itemStart.u64 + kv.ival.u64.orPanic)
 }
 
 # constOfNamedBase -- a dotted path whose base is a bare atom. The base can name a
@@ -63001,14 +62916,21 @@ constOfNamedBase: function {
         # `row.create`: a data value of every field's default
         sc: constOfStaticCreate :st :scope :ast :unitDecl :ptId :ncId :atNid :atLine :atCol
         if sc.kind.none.not then return sc
-        # `unit.CONST` reads a constant out of another unit, found where its
-        # type-refs are: the unit's root, or its public block when the block
-        # defines it
+        # `unit.CONST` reads a constant out of another unit
         if (nameDenotesUnit :st :scope nameId: ptId) then {
-            nameId98: ptId
-            unitDecl98: unitDeclOfNameOrOwn :st :scope nameId: nameId98
-            owner98: qualifiedMemberScope :st unitRoot: unitDecl98 memberId: ncId
-            return (constValueOfMemberId :st scope: owner98 :ast unitDecl: unitDecl98 nameId: ncId)
+            uv: constOfUnitMember :st :scope :ast :ptId :ncId
+            # a unit instance's own constant (`wi.primes`, `wi: (wrap t: i64)`)
+            # is read off the instance, below
+            if (
+                uv.kind.none.not or
+                (st.reg.genericOriginOf tid: (resolvedTidOr
+                    :st
+                    :ast
+                    :unitDecl
+                    name: ptId
+                )
+                ).isZero
+            ) then return uv
         }
         # A nested namespace (`m: unit { NUM: 7 }`) is a definition of THIS
         # unit whose type is a unit; it is deliberately absent from the
@@ -63062,7 +62984,7 @@ constOfNamedBase: function {
         # `CC: cckind.tcc` a variant and read a nonexistent arm off it.
         pcv: constValueOfMemberId :st :scope :ast :unitDecl nameId: ptId
         if pcv.kind.armKind then return (constArmChild :st :ast v: pcv :ncId)
-        if pcv.kind.aggKind then return (constAggField :st v: pcv nameId: ncId)
+        if pcv.kind.aggKind then return (constAggField :st :ast v: pcv nameId: ncId)
         # a constant whose fold failed with a reason (a cycle) is no type
         # either: the type walk below would fold other declarations and lose it
         if pcv.kind.none when st.typing.constFail.kind.none.not then return ztypes.noConst
@@ -63110,7 +63032,7 @@ constOfNamedBase: function {
 
 # constplan -- what evaluating one row needs once its view is gone: the arm
 # (2 atomid, 3 atomstring, 4 dottedpath, 5 infix, 6 call, 7 ifexpr, 8 caseexpr,
-# 0 anything else) and the ids and scalars that arm reads.
+# 9 listblock, 0 anything else) and the ids and scalars that arm reads.
 constplan: record {
     # the arm the constant names, when it names one
     arm: u32
@@ -63177,6 +63099,8 @@ evalConstPlan: function {ast: Ast.view nid: zast.nodeid} out constplan is {
             arm = 7
         } case caseexpr then {
             arm = 8
+        } case listblock then {
+            arm = 9
         } else null
     }
     return (constplan :arm :innerId :nameId :parts :parentId :childId :ln :co)
@@ -63240,59 +63164,44 @@ evalConstString: function {
 }
 
 # constStaticListSlotRead -- `blk.slot.label`: the position of a list's labelled
-# element, as the block's `slot` member records it. The block is named bare or
-# through its unit (`zast.wellKnown`). noConst when the path is not that shape.
+# element, typed as the list's `slot`. The list is any compile-time path to it
+# (`codes`, `zast.wellKnown`). noConst when the path is not that shape.
 constStaticListSlotRead: function {
     st: zenv.ZSymbolTable
     scope: ztypes.declid
     ast: Ast
     unitDecl: ztypes.declid
-    # the block's path and the `slot` segment
+    # the list's path and the `slot` segment
     gpId: zast.nodeid
     gcId: zast.nodeid
     labelId: zast.nameid
 } out ztypes.cval is {
-    lookupUnit: unitDecl
-    blkId: zast.nameid
     {
         gc: ast.nodes.get i: gcId
         if gc.atomid.not then return ztypes.noConst
         if gc.name != zast.wellKnown.slot.wkSlot then return ztypes.noConst
     }
-    unitPath: zast.nodeid
-    {
-        gp: ast.nodes.get i: gpId
-        if gp.atomid then blkId = gp.name
-        if gp.dottedpath then {
-            unitPath = gp.parent
-            gpc: ast.nodes.get i: gp.child
-            if gpc.atomid then blkId = gpc.name
-        }
-    }
-    if blkId.isZero then return ztypes.noConst
-    if unitPath.isZero.not then {
-        lookupUnit = unitDeclOfPath :st :scope :ast nid: unitPath
-        if lookupUnit.isZero then return ztypes.noConst
-    }
-    staticListTid: typeNamedFrom :st :scope :ast :lookupUnit typeNameId: blkId
-    if (
-        (st.reg.typetypeOf typeId: staticListTid) != ztypes.ztypetype.staticListType
-    ) then return ztypes.noConst
-    slotTid: ((st.typing.declChildOfId
-        parentTypeId: staticListTid
-        nameId: zast.wellKnown.slot.wkSlot
-    ).or
-        d: ztypes.tid.zero
-    )
-    if (st.typing.staticListSlotTypes.has item: slotTid).not then return ztypes.noConst
+    lv: evalConstNode :st :scope :ast :unitDecl nid: gpId
+    if lv.kind.aggKind.not then return ztypes.noConst
+    g: st.typing.constAggs.get i: lv.aggId.u64
+    if g.kind.staticList.not or g.slot.isZero then return ztypes.noConst
     # a position folds as an element of its type would: a typedef index is a
     # value of its own type, read where it is written and not folded
-    sEl: st.reg.staticListElemTypeOf tid: slotTid
-    if (isLiteralTypeId :st tid: sEl).not when (staticListElemFolds :ast :st elemTid: sEl
+    if (isLiteralTypeId :st tid: g.slot).not when (staticListElemFolds :ast :st elemTid: g.slot
     ).not then {
         return ztypes.noConst
     }
-    return (st.typing.memberConstOf parentTypeId: slotTid nameId: labelId)
+    po: st.typing.aggLabelPos id: lv.aggId label: labelId
+    match (
+        po
+    ) case some then {
+        cv: ztypes.makeIntConst po.i64.orPanic
+        if (isLiteralTypeId :st tid: g.slot).not when (isNumericTid :st tid: g.slot) then {
+            cv = ztypes.typedConst c: cv numTid: g.slot
+        }
+        return cv
+    } case none then null
+    return ztypes.noConst
 }
 
 # evalConstArmViaUnit -- `unit.kind.arm`: an arm of a type reached THROUGH its
@@ -63441,7 +63350,7 @@ evalConstDotted: function {
     # question was "does it hold this one".
     pv: evalConstNode :st :scope :ast :unitDecl nid: parentId
     if pv.kind.armKind then return (constArmChild :st :ast v: pv :ncId)
-    if pv.kind.aggKind then return (constAggField :st v: pv nameId: ncId)
+    if pv.kind.aggKind then return (constAggField :st :ast v: pv nameId: ncId)
     # a literal receiver (`"abcd".length`) or a qualified constant
     # (`quadfloat.LIB.length`): the parent is not a bare atom, so its value
     # comes from the recursive walk above rather than from a member read.
@@ -63476,10 +63385,23 @@ evalConstDotted: function {
     # from that unit rather than from the one being evaluated.
     # `z.build.os` -- a constant of a unit reached through a path of units: a
     # subunit is no file unit, so no bare base names it
+    iv: constOfInstanceMember :st :ast :parentId :ncId
+    if iv.kind.none.not then return iv
     if parentIsDotted then {
         return (evalConstViaDottedParent :st :scope :ast :unitDecl :parentId :gpId :gcId :ncId)
     }
     return ztypes.noConst
+}
+
+# constOfInstanceMember -- `wi.inner.sq`: a constant of the unit instance the
+# walk typed the parent as; noConst for any other parent.
+constOfInstanceMember: function {
+    st: zenv.ZSymbolTable ast: Ast parentId: zast.nodeid ncId: zast.nameid
+} out ztypes.cval is {
+    put: walkTypeOf :st nid: parentId
+    if (st.reg.typetypeOf typeId: put) != ztypes.ztypetype.unitType then return ztypes.noConst
+    if (st.reg.genericOriginOf tid: put).isZero then return ztypes.noConst
+    return (constValueOfMemberTidId :st :ast unitTid: put nameId: ncId)
 }
 
 # evalConstViaDottedParent -- `a.b.c` whose parent `a.b` is itself a path: a
@@ -63583,6 +63505,7 @@ evalConstNode: function {
         return (constBlockValue :st :scope :ast :unitDecl nid: fb.stmt)
     }
     if plan.arm == 8 then return (constOfMatch :st :scope :ast :unitDecl :nid)
+    if plan.arm == 9 then return (constOfList :st :scope :ast :unitDecl :nid)
     return ztypes.noConst
 }
 
@@ -63844,7 +63767,7 @@ useSiteAsks: function {
     if plan.arm == 6 then {
         return (callOnFoldedString :st :ast :nid) or (staticListIndexedAt :st :ast :nid).isZero.not
     }
-    if (plan.arm == 7) or (plan.arm == 8) then return false
+    if (plan.arm == 7) or (plan.arm == 8) or (plan.arm == 9) then return false
     if plan.arm == 3 then return plan.parts < 2
     if plan.arm != 4 then return true
     if (foldedToString :st nid: plan.parentId) then return true
@@ -63852,9 +63775,11 @@ useSiteAsks: function {
     # `first.key` reads a field of a folded data value
     if (st.typing.nodeConstIn mono: st.typing.curMonoStamp nid: plan.parentId
     ).kind.aggKind then return true
-    # `blk.a` reads an element of a list, a constant
     pbt: walkTypeOf :st nid: plan.parentId
-    if (st.reg.typetypeOf typeId: pbt) == ztypes.ztypetype.staticListType then return true
+    # `blk.slot.a` reads a label's position, a constant
+    if pbt == st.typing.listSlotTid when pbt.isZero.not then return true
+    # `inst.blk` reads a member of a unit or a unit instance (`wi: (wrap t: i64)`)
+    if (st.reg.typetypeOf typeId: pbt) == ztypes.ztypetype.unitType then return true
     pn: atomNameId :ast n: (ast.nodes.get i: plan.parentId)
     # `unit.CONST` reads another unit's constant, which a conversion after it
     # (`unit.CONST.u8`) folds
@@ -63922,35 +63847,30 @@ reportUnitConstantRef: function {
 }
 
 # staticListConstantIsConstruction -- a unit-level constant reading a list's
-# element or length (`ONE: primes.1`). A member the block does not have is the
-# body's report for the same read. True when the element is not a builtin
-# number -- `out byteid` makes each one a byteid -- so the read builds a value
-# rather than naming a constant, and is refused as a construction is.
+# element or count (`ONE: primes.1`), the list being row `row`. A member the
+# list does not have is the body's report for the same read. True when the
+# element is not a builtin number or a string -- `out byteid` makes each one a
+# byteid -- so the read builds a value rather than naming a constant, and is
+# refused as a construction is.
 staticListConstantIsConstruction: function {
     st: zenv.ZSymbolTable
-    scope: ztypes.declid
     ast: Ast
-    unitDecl: ztypes.declid
     defn: dpref
-    # the block's name
+    # the list's name
     sfLit: StringView
     # the member read off it
     sfTy: StringView
+    row: u32
 } out bool is {
-    dto: walkLookupTyperef :st :scope :ast :unitDecl base: sfLit
-    if dto.none then return false
-    dtid: dto
     mid: nameIdOf :ast name: sfTy
-    member: st.typing.declChildOfId parentTypeId: dtid nameId: mid
-    if member.none then {
-        m: "type '\{sfLit}' has no member '\{sfTy}'"
+    if (listMemberType :st :ast :row nameId: mid).isZero then {
         (addErrorH
             :st
             nodeid: defn.nid
             lineno: defn.lineno
             colno: defn.colno
             e: zast.err.typeError
-            msg: m
+            msg: "list '\{sfLit}' has no element or member '\{sfTy}'"
             note: "".string
             hint: "".string
             width: sfLit.length.u32.orPanic
@@ -63958,7 +63878,18 @@ staticListConstantIsConstruction: function {
         return false
     }
     if mid == zast.wellKnown.slot.wkLength then return false
-    return (isNumericTid :st tid: member).not
+    return (staticListElemFolds :ast :st elemTid: (st.typing.constAggs.get i: row.u64).elem).not
+}
+
+# listDeclRow -- the row of list declaration `declId`, folded on first ask; 0
+# when the declaration is no list, or the list has no row.
+listDeclRow: function {ast: Ast st: zenv.ZSymbolTable declId: ztypes.declid} out u32 is {
+    if declId.isZero then return 0
+    if (st.typing.decls.get i: declId).kind.staticListDecl.not then return 0
+    constFoldDecl :ast :st :declId
+    v: constValueOfDecl :st :declId
+    if v.kind.aggKind.not then return 0
+    return v.aggId
 }
 
 # resolveDottedConstantDef -- a unit-level constant whose value is a dotted path.
@@ -63993,7 +63924,21 @@ resolveDottedConstantDef: function {
         # reaches a SAME-UNIT type at this stage; the typeref walk
         # answers for the resolvable ones.
         isCtor: false
-        if (nameDenotesUnit
+        # a list's element or count (`ONE: primes.1`)
+        ldr: (listDeclRow
+            :ast
+            :st
+            declId: (declOfUnitDef :st :scope :unitDecl nameId: (nameIdOf :ast name: sfLit))
+        )
+        if ldr != 0 then isCtor = (staticListConstantIsConstruction
+            :st
+            :ast
+            :defn
+            :sfLit
+            :sfTy
+            row: ldr
+        )
+        if ldr == 0 when (nameDenotesUnit
             :st
             :scope
             nameId: (nameIdOf :ast name: sfLit)
@@ -64042,34 +63987,23 @@ resolveDottedConstantDef: function {
                 op: defn.nid
             ) then known = false
             if known then {
-                # a variant or union parent names an ARM, a list parent
-                # an element or its length, and a UNIT parent reads a member of
-                # it -- which is what every cross-unit re-export is. Only a
-                # plain TYPE parent makes the read a construction.
+                # a variant or union parent names an ARM, and a UNIT parent
+                # reads a member of it -- which is what every cross-unit
+                # re-export is. Only a plain TYPE parent makes the read a
+                # construction.
                 isCtor = (
                     (ptt != ztypes.ztypetype.variantType) and
                     (ptt != ztypes.ztypetype.unionType) and
-                    (ptt != ztypes.ztypetype.unitType) and
-                    (ptt != ztypes.ztypetype.staticListType)
-                )
-            }
-            if known when ptt == ztypes.ztypetype.staticListType then {
-                isCtor = (staticListConstantIsConstruction
-                    :st
-                    :scope
-                    :ast
-                    :unitDecl
-                    :defn
-                    :sfLit
-                    :sfTy
+                    (ptt != ztypes.ztypetype.unitType)
                 )
             }
         }
         # ASK THE CONSTANT FIRST. `LEN: LIB.length` reads a member of
         # a string CONSTANT, and LIB's own type is StringView -- a
         # class -- so the typeref walk above finds a non-variant parent
-        # and calls the read a construction. The value settles it.
-        if isCtor then {
+        # and calls the read a construction. The value settles it. A list's
+        # value is no answer: its typedef element builds a value.
+        if isCtor when ldr == 0 then {
             pcs: (constValueOfMember
                 :st
                 :scope
@@ -64081,7 +64015,7 @@ resolveDottedConstantDef: function {
         }
         # a type's `as` constant (`cfg.LIMIT`) is a value, and so is `row.create`,
         # a data value in a static position: the value channel folds both
-        if isCtor then {
+        if isCtor when ldr == 0 then {
             cId: atomNameId :ast n: (ast.nodes.get i: defn.child)
             sct: (typeNamedFrom
                 :st
@@ -64280,18 +64214,10 @@ resolveCalledConstantDef: function {
                 defName: cbn.stringView
             )
             if crv.kind.svalKind then cbu = true
-        }
-        # `blk.get K` reads an element by position, a value the value
-        # channel folds and range-checks
-        if cbu.not when ccn.dottedpath when (atomIsIndex :ast nid: ccn.child) then {
-            dbt: (typeNamedFrom
-                :st
-                :scope
-                :ast
-                lookupUnit: unitDecl
-                typeNameId: (nameIdOf :ast name: cbn.stringView)
-            )
-            if (st.reg.typetypeOf typeId: dbt) == ztypes.ztypetype.staticListType then cbu = true
+            # `blk.get K` reads an element by position, a value the value
+            # channel folds and range-checks
+            if crv.kind.aggKind when ccn.dottedpath when (atomIsIndex :ast nid: ccn.child
+            ) when (st.typing.constAggs.get i: crv.aggId.u64).kind.staticList then cbu = true
         }
         if cbu.not then {
             # found the way a type reference finds its template: a name the
@@ -64798,8 +64724,7 @@ reportMissingQualifiedMember: function {
         if tt.isZero then return
         typeTid: tt
         ttt: st.reg.typetypeOf typeId: typeTid
-        valued: ttt.isSum
-        if valued.not when ttt != ztypes.ztypetype.staticListType then return
+        if ttt.isSum.not then return
         declared: st.typing.declChildOfId parentTypeId: typeTid nameId: memberId
         if declared.none.not then return
         missing = memberId
