@@ -100,6 +100,7 @@ public: unit {
     :walkLookupTyperefRo
     :valPartTids
     :valOpSource
+    :isLiteralTypeId
     :valOpOwner
     :valIsMonoOf
     :arrayElemTid
@@ -25853,6 +25854,9 @@ markValOpUsed: function {
     depth: u64
 } is {
     if tid.isZero or (depth > 64) then return
+    # an untyped number compares and hashes as the number it is emitted as,
+    # with no member of its own
+    if (isLiteralTypeId :st :tid) then return
     owner: valOpOwner :st :tid :nameId
     if owner.isZero then return
     md: st.typing.declMemberIdOf parentTypeId: owner :nameId
@@ -26083,6 +26087,9 @@ valEqMissingPart: function {
     for i < parts.length loop {
         p: parts.get :i
         i = i + 1
+        # an untyped number holds the i64 or f64 it is emitted as, and compares
+        # as that number does
+        if (isLiteralTypeId :st tid: p) then continue
         if (valEqMissingPart :ast :st tid: p depth: depth + 1).isZero.not then return p
     }
     return ztypes.tid
@@ -26113,6 +26120,10 @@ valHashMissingPart: function {
     for i < parts.length loop {
         p: parts.get :i
         i = i + 1
+        # an untyped number hashes as the i64 it is emitted as; a float has no
+        # hash, so neither has a floatliteral
+        if p == st.reg.literalFloatTid then return p
+        if (isIntLiteralTid :st tid: p) then continue
         if (valHashMissingPart :ast :st tid: p depth: depth + 1).isZero.not then return p
     }
     return ztypes.tid
@@ -62088,7 +62099,7 @@ constStringMethod: function {
 
 # constOfBinopFold -- the folded value of `lv <op> rv`: two tags compare by
 # ARM IDENTITY, two strings by interned text (and `+` joins), integers and
-# floats by value. noConst for anything else.
+# floats by value, two data values field by field. noConst for anything else.
 constOfBinopFold: function {
     st: zenv.ZSymbolTable
     scope: ztypes.declid
@@ -62149,10 +62160,84 @@ constOfBinopFold: function {
         if r.kind.ivalKind then r.bits = lv.bits
         return r
     }
+    if lv.kind.aggKind when rv.kind.aggKind then return (constOfAggEq
+        :st
+        :scope
+        :ast
+        :lv
+        :rv
+        :opnId
+        :nid
+        :ln
+        :co
+    )
     lNum: lv.kind.ivalKind or lv.kind.fvalKind
     rNum: rv.kind.ivalKind or rv.kind.fvalKind
     if lNum and rNum then return (constOfExactBinop :st :ast :lv :rv :opnId :nid :ln :co)
     return ztypes.noConst
+}
+
+# constOfAggEq -- `lv == rv` or `lv != rv` over two data values, folded. The
+# generated `==` compares the fields in order, each with its own `==`, so each
+# pair folds as that comparison: an untyped number exactly, as written, where
+# run time compares the i64 or f64 it is emitted as. noConst for another
+# operator, two lists, and a type whose `==` is written: that one is a method,
+# and calling it is run-time code.
+constOfAggEq: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    lv: ztypes.cval
+    rv: ztypes.cval
+    opnId: zast.nameid
+    nid: zast.nodeid
+    ln: u32
+    co: u32
+} out ztypes.cval is {
+    cop: cmpOpOf :opnId
+    if (cop.eq or cop.ne).not then return ztypes.noConst
+    isData: false
+    lt: ztypes.tid
+    rt: ztypes.tid
+    ls: u64
+    rs: u64
+    n: u64
+    {
+        la: st.typing.constAggs.get i: lv.aggId.u64
+        ra: st.typing.constAggs.get i: rv.aggId.u64
+        isData = la.kind.staticData and ra.kind.staticData
+        lt = la.tid
+        rt = ra.tid
+        ls = la.itemStart
+        rs = ra.itemStart
+        n = la.itemCount
+    }
+    if isData.not or (lt != rt) then return ztypes.noConst
+    eqSrc: valOpSource :ast :st tid: lt nameId: zast.wellKnown.slot.wkOpEq
+    if eqSrc.generated.not then return ztypes.noConst
+    same: true
+    i: u64
+    for i < n while same loop {
+        li: st.typing.constAggItems.get i: ls + i
+        ri: st.typing.constAggItems.get i: rs + i
+        i = i + 1
+        pair: (constOfBinopFold
+            :st
+            :scope
+            :ast
+            lv: li
+            rv: ri
+            opnId: zast.wellKnown.slot.wkOpEq
+            :nid
+            :ln
+            :co
+        )
+        truth: boolArmTruth :ast :st v: pair
+        if truth == 2 then return ztypes.noConst
+        same = truth == 1
+    }
+    if cop.ne then same = same.not
+    return (boolConst :ast :st v: same)
 }
 
 # constOfExactBinop -- an operator over two untyped numbers, a float among
@@ -65377,7 +65462,7 @@ unfoldedBinopWhy: function {
         nid: br.operator
         width: opn.length.u32.orPanic
         msg: "'\{opn}' has no compile-time value for \{lk} and \{rk}"
-        hint: "constants fold + - * / and comparisons on numbers, % & | ^ << >> on integers, + == != on strings, and == != and or on arms".string
+        hint: "constants fold + - * / and comparisons on numbers, % & | ^ << >> on integers, + == != on strings, and == != and or on arms, == != on data values".string
     )
     return true
 }
