@@ -1339,6 +1339,7 @@ indexDeclObjInner: function {
 } is {
     ob: objRefAt :ast nid: objNodeId
     if ob.kind.dataDef or ob.kind.choiceDef then st.typing.staticTypesSeen = true
+    if ob.kind.choiceDef then st.typing.choiceNames.add item: (declNameIdOf :st :declId)
     if ob.nid.isZero.not then {
         isArm: ob.kind.variantDef or ob.kind.unionDef or ob.kind.choiceDef
         kIit: u64
@@ -10335,7 +10336,9 @@ staticListElemMismatch: function {
 } out String is {
     kt: staticListKindText :kind
     if kind >= 4 then kt = specWrittenName :st :ast tid: vt
-    if (kind != first) or (vt != firstTid) then {
+    # an arm and a value of one choice are elements of one type
+    sameKind: (kind == first) or ((kind >= 4) and (first >= 4))
+    if sameKind.not or (vt != firstTid) then {
         ft: staticListKindText kind: first
         if first >= 4 then ft = specWrittenName :st :ast tid: firstTid
         # numbers and strings differ in kind, anything else in type
@@ -10352,7 +10355,7 @@ staticListElemMismatch: function {
 }
 
 # staticListValueKind -- a list element's kind: 1 an integer, 2 a float, 3 a
-# string, 4 an arm, 5 a data value or a list, 0 no value.
+# string, 4 an arm, 5 a data value, a choice value or a list, 0 no value.
 staticListValueKind: function {cv: ztypes.cval} out u8 is {
     if cv.kind.ivalKind then return 1
     if cv.kind.fvalKind then return 2
@@ -49067,6 +49070,30 @@ checkTaggedCtorArg: function {
     }
 }
 
+# refuseBodyChoice -- a choice value that carries a value, built in a function
+# body. Like a data value it is built only in a static position, and read
+# where it is needed; an arm that carries nothing is no construction.
+refuseBodyChoice: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    call: callref
+    dtp: ztypes.tid
+} is {
+    path: typeExprText :ast nid: call.callable
+    (nameCtorError
+        :ast
+        :st
+        nodeid: call.nid
+        lineno: call.lineno
+        colno: call.colno
+        width: 1
+        tid: dtp
+        bare: false
+        reason: "a choice value is built only at unit level, as a type constant, or inside another static value"
+        hint: "build it at unit level, `name: (\{path} value)`, and read it here"
+    )
+}
+
 # checkTaggedTypeCall -- the callable named a non-generic TYPE reached through a
 # tagged parent: a constructor for it, checked against the type's own fields.
 checkTaggedTypeCall: function {
@@ -49080,6 +49107,10 @@ checkTaggedTypeCall: function {
         :ast
         n: (ast.nodes.get i: call.callable)
     )
+    if (st.reg.isStaticOf tid: dtp) then {
+        refuseBodyChoice :st :ast :call :dtp
+        return dtp
+    }
     kAiter2: u64
     for kAiter2 < call.nargs loop {
         arg2Id: zast.callArgAt :ast nid: call.nid i: kAiter2
@@ -62264,6 +62295,10 @@ constOfBinopFold: function {
         if r.kind.ivalKind then r.bits = lv.bits
         return r
     }
+    # a choice arm that carries nothing is never a value that carries one
+    armAgg: lv.kind.armKind and rv.kind.aggKind
+    aggArm: lv.kind.aggKind and rv.kind.armKind
+    if armAgg or aggArm then return (constOfArmAggEq :st :ast :lv :rv :opnId)
     if lv.kind.aggKind when rv.kind.aggKind then return (constOfAggEq
         :st
         :scope
@@ -62281,8 +62316,27 @@ constOfBinopFold: function {
     return ztypes.noConst
 }
 
-# constOfAggEq -- `lv == rv` or `lv != rv` over two data values, folded. The
-# generated `==` compares the fields in order, each with its own `==`, so each
+# constOfArmAggEq -- `==` or `!=` between a choice arm that carries nothing
+# and a choice value that carries one: never equal. noConst for another
+# operator or another pair.
+constOfArmAggEq: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    lv: ztypes.cval
+    rv: ztypes.cval
+    opnId: zast.nameid
+} out ztypes.cval is {
+    cop: cmpOpOf :opnId
+    if (cop.eq or cop.ne).not then return ztypes.noConst
+    ag: lv
+    if rv.kind.aggKind then ag = rv
+    if (st.typing.constAggs.get i: ag.aggId.u64).kind.staticChoice.not then return ztypes.noConst
+    return (boolConst :ast :st v: cop.ne)
+}
+
+# constOfAggEq -- `lv == rv` or `lv != rv` over two data or choice values,
+# folded. The generated `==` compares the fields in order (a choice value's
+# arm, then its one value), each with its own `==`, so each
 # pair folds as that comparison: an untyped number exactly, as written, where
 # run time compares the i64 or f64 it is emitted as. noConst for another
 # operator, two lists, and a type whose `==` is written: that one is a method,
@@ -62301,6 +62355,7 @@ constOfAggEq: function {
     cop: cmpOpOf :opnId
     if (cop.eq or cop.ne).not then return ztypes.noConst
     isData: false
+    sameArm: false
     lt: ztypes.tid
     rt: ztypes.tid
     ls: u64
@@ -62310,6 +62365,9 @@ constOfAggEq: function {
         la: st.typing.constAggs.get i: lv.aggId.u64
         ra: st.typing.constAggs.get i: rv.aggId.u64
         isData = la.kind.staticData and ra.kind.staticData
+        # a choice value: its arm, then the value it carries
+        if la.kind.staticChoice when ra.kind.staticChoice then isData = true
+        sameArm = la.arm == ra.arm
         lt = la.tid
         rt = ra.tid
         ls = la.itemStart
@@ -62319,7 +62377,7 @@ constOfAggEq: function {
     if isData.not or (lt != rt) then return ztypes.noConst
     eqSrc: valOpSource :ast :st tid: lt nameId: zast.wellKnown.slot.wkOpEq
     if eqSrc.generated.not then return ztypes.noConst
-    same: true
+    same: sameArm
     i: u64
     for i < n while same loop {
         li: st.typing.constAggItems.get i: ls + i
@@ -62683,7 +62741,123 @@ constOfCall: function {
         :ln
         :co
     )
+    ch: (constOfStaticChoice
+        :st
+        :scope
+        :ast
+        :unitDecl
+        :callableId
+        args: argIds
+        at: nid
+        :ln
+        :co
+    )
+    if ch.kind.none.not then return ch
     return (constOfErrorCall :st :scope :ast :unitDecl :nid :callableId args: argIds :ln :co)
+}
+
+# staticChoiceHead -- the choice a call's head builds a value of: `form.arm`,
+# or through a unit (`tbl.form.arm`); 0 when the head names no arm of a
+# choice's type.
+staticChoiceHead: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    callableId: zast.nodeid
+} out ztypes.tid is {
+    if st.typing.staticTypesSeen.not then return ztypes.tid.zero
+    headId: zast.nodeid
+    {
+        cn: ast.nodes.get i: callableId
+        if cn.dottedpath when (ast.nodes.get i: cn.child).atomid then headId = cn.parent
+    }
+    if headId.isZero then return ztypes.tid.zero
+    # the head's own name, the last of a unit path's
+    hn: atomNameId :ast n: (ast.nodes.get i: headId)
+    if hn.isZero when (ast.nodes.get i: headId).dottedpath then {
+        hn = atomNameId :ast n: (ast.nodes.get i: (dpRefAt :ast nid: headId).child)
+    }
+    if (st.typing.choiceNames.has item: hn).not then return ztypes.tid.zero
+    ct: staticTypeAtHead :st :scope :ast :unitDecl :headId
+    if (st.reg.typetypeOf typeId: ct) != ztypes.ztypetype.variantType then return ztypes.tid.zero
+    return ct
+}
+
+# constOfStaticChoice -- `(form.template "x")` in a static position: the choice
+# value of the arm the path names, carrying its one argument folded and fitted
+# to the arm's type as a data field's value is (staticFieldValue). noConst
+# when the path names no arm of a choice; an arm that carries nothing, or an
+# argument count other than one, is reported.
+constOfStaticChoice: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    callableId: zast.nodeid
+    args: (ListVal zast.nodeid).view
+    at: zast.nodeid
+    ln: u32
+    co: u32
+} out ztypes.cval is {
+    ct: staticChoiceHead :st :scope :ast :unitDecl :callableId
+    if ct.isZero then return ztypes.noConst
+    armId: atomNameId :ast n: (ast.nodes.get i: (dpRefAt :ast nid: callableId).child)
+    forceAllMembers :st :ast tid: ct
+    ad: st.typing.declMemberIdOf parentTypeId: ct nameId: armId
+    an: zast.nameTextCopy :ast ref: armId
+    cnm: specWrittenName :st :ast tid: ct
+    path: typeExprText :ast nid: callableId
+    msg: String
+    ptid: ztypes.tid
+    if ad.isZero.not then ptid = (st.typing.decls.get i: ad).typeId
+    if ad.isZero then {
+        msg = "choice '\{cnm}' has no arm '\{an}'"
+    } else if ptid == st.typing.nullTypeId then {
+        msg = "arm '\{an}' of '\{cnm}' carries nothing: write it `\{path}`, without a value"
+    } else if args.length != 1 then {
+        msg = "arm '\{an}' of '\{cnm}' carries one value: `(\{path} value)`"
+    }
+    if msg.length > 0 then {
+        addError :st nodeid: at lineno: ln colno: co e: zast.err.callError :msg
+        return ztypes.noConst
+    }
+    argNid: args.get i: 0
+    av: argRefAt :ast nid: argNid
+    if av.name.isZero.not then {
+        reportUnknownArgument :st :ast ownerTid: ct label: av.name arg: av
+        return ztypes.noConst
+    }
+    v: (staticFieldValue
+        :st
+        :scope
+        :ast
+        :unitDecl
+        ownerTid: ct
+        ftid: ptid
+        name: armId
+        :argNid
+        :at
+        :ln
+        :co
+    )
+    if v.kind.none then return ztypes.noConst
+    items: ListVal ztypes.cval
+    items.append v
+    id: (constInternAgg
+        :st
+        shape: (ztyping.aggshape
+            kind: ztyping.constaggkind.staticChoice
+            tid: ct
+            arm: armId
+            elem: ztypes.tid.zero
+            slot: ztypes.tid.zero
+        )
+        :items
+        labels: ListVal zast.nameid
+        :at
+    )
+    return (ztypes.makeAggConst :id)
 }
 
 # staticCtorHead -- the data type a call's head constructs: `row`,
@@ -62704,6 +62878,20 @@ staticCtorHead: function {
             (atomNameId :ast n: (ast.nodes.get i: cn.child)) == zast.wellKnown.slot.wkCreate
         ) then headId = cn.parent
     }
+    t: staticTypeAtHead :st :scope :ast :unitDecl :headId
+    if (st.reg.typetypeOf typeId: t) == ztypes.ztypetype.recordType then return t
+    return ztypes.tid.zero
+}
+
+# staticTypeAtHead -- the static type a call's head names: `row`, `form`, or
+# either through a unit (`tbl.row`); 0 when the head names none.
+staticTypeAtHead: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    headId: zast.nodeid
+} out ztypes.tid is {
     t: ztypes.tid
     hn: atomNameId :ast n: (ast.nodes.get i: headId)
     if hn.isZero.not then t = typeNamedFrom :st :scope :ast lookupUnit: unitDecl typeNameId: hn
@@ -62739,6 +62927,8 @@ constOfStaticCreate: function {
     ) then return ztypes.noConst
     sct: typeNamedFrom :st :scope :ast lookupUnit: unitDecl typeNameId: ptId
     if (st.reg.isStaticOf tid: sct).not then return ztypes.noConst
+    # a choice has no value of its own: it is built through an arm
+    if (st.reg.typetypeOf typeId: sct) != ztypes.ztypetype.recordType then return ztypes.noConst
     return (constOfStaticFields
         :st
         :scope
@@ -62935,21 +63125,31 @@ constOfFieldDefault: function {
 }
 
 # constAggField -- field `nameId` of the data value `v`, as its value was
-# folded, or a list's member (staticListMemberValue); noConst when the type
-# declares no such field, which the read's own check reports.
+# folded, a list's member (staticListMemberValue), or a choice value's arm
+# predicate; noConst when the type declares no such member, which the read's
+# own check reports.
 constAggField: function {
     st: zenv.ZSymbolTable ast: Ast v: ztypes.cval nameId: zast.nameid
 } out ztypes.cval is {
     tid: ztypes.tid
     start: u64
     isList: false
+    isChoice: false
+    arm: zast.nameid
     {
         g: st.typing.constAggs.get i: v.aggId.u64
         tid = g.tid
         start = g.itemStart
         isList = g.kind.staticList
+        isChoice = g.kind.staticChoice
+        arm = g.arm
     }
     if isList then return (staticListMemberValue :st :ast row: v.aggId :nameId)
+    # a choice value's arm name is its arm predicate, as on any variant value
+    if isChoice then {
+        if (st.typing.declMemberIdOf parentTypeId: tid :nameId).isZero then return ztypes.noConst
+        return (boolConst :ast :st v: arm == nameId)
+    }
     ftids: ListVal ztypes.tid
     fnames: ListVal zast.nameid
     dataFieldIds :st :tid ids: ftids nameIds: fnames
@@ -64542,6 +64742,41 @@ resolveInstantiatedAlias: function {
     return true
 }
 
+# staticValueCall -- the unit-level definition `defName: defn` builds a data
+# value (`(row 5)`) or a choice value (`(form.count 3)`). Such a value is
+# written in parentheses: without them the call applies a type, which a data
+# type or a choice does not take, and that is reported here.
+staticValueCall: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    defName: StringView
+    defn: callref
+} out bool is {
+    ct: staticCtorHead :st :scope :ast :unitDecl callableId: defn.callable
+    if ct.isZero then ct = staticChoiceHead :st :scope :ast :unitDecl callableId: defn.callable
+    if ct.isZero then return false
+    grouped: false
+    {
+        dn: ast.nodes.get i: defn.nid
+        if dn.call then grouped = dn.grouped
+    }
+    if grouped then return true
+    tn: specWrittenName :st :ast tid: ct
+    head: typeExprText :ast nid: defn.callable
+    (reportUnitConstantShape
+        :st
+        nodeid: defn.nid
+        lineno: defn.lineno
+        colno: defn.colno
+        width: head.length.u32.orPanic
+        msg: "'\{tn}' takes no type arguments: at unit level a value of it is written in parentheses"
+        hint: "`\{defName}: (\{head} ...)`"
+    )
+    return true
+}
+
 # resolveCalledConstantDef -- a unit-level constant whose value is a CALL. A
 # construction is not a literal, but the parenthesised form is the generic-unit
 # instantiation (`intmath: (genmath t: i64)`) and stays legal -- its callee names
@@ -64668,15 +64903,9 @@ resolveCalledConstantDef: function {
             :scope
             callableId: defn.callable
         ) then cbu = true
-        # a data value is built here, in a static position: the value channel
-        # folds it (constOfStaticFields)
-        if cbu.not when (staticCtorHead
-            :st
-            :scope
-            :ast
-            :unitDecl
-            callableId: defn.callable
-        ).isZero.not then cbu = true
+        # a data or choice value is built here, in a static position: the value
+        # channel folds it (constOfStaticFields, constOfStaticChoice)
+        if cbu.not when (staticValueCall :st :scope :ast :unitDecl :defName :defn) then cbu = true
         if cbu.not then {
             cm: "a unit-level constant takes a literal value, not a construction".string
             ch: "construct it inside a function, or make '\{defName}' a function that returns the value"
@@ -64959,8 +65188,9 @@ instantiatedAliasFold: function {
 
 # appliesNoTemplate -- a unit-level call that instantiates nothing, so the
 # constant channel folds it: a numeric typedef applied to one value (`NONE: rid
-# 0`), or a head naming a user type that is not generic -- a data type's
-# fields (constOfStaticFields), or a record's, which is no constant at all. A
+# 0`), a head naming a user type that is not generic -- a data type's fields
+# (constOfStaticFields), or a record's, which is no constant at all -- or a
+# choice's arm (constOfStaticChoice). A
 # function head is a call, which the alias walk checks for cycles.
 appliesNoTemplate: function {
     st: zenv.ZSymbolTable
@@ -64976,6 +65206,9 @@ appliesNoTemplate: function {
         :scope
         callableId: call.callable
     ) then return true
+    # a choice value (constOfStaticChoice) names an arm, not a template
+    chHead: staticChoiceHead :st :scope :ast :unitDecl callableId: call.callable
+    if chHead.isZero.not then return true
     htpl: typeApplicationTemplate :st :scope :ast :unitDecl callableNid: call.callable
     if htpl.isZero or (st.reg.isGenericOf tid: htpl) then return false
     return (st.reg.typetypeOf typeId: htpl).isUserFamily
