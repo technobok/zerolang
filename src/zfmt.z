@@ -1394,7 +1394,12 @@ Builder: class {
     # whether `null` would mean the same depends on what `null` names where it is
     # written, which a layout cannot know), or a bare statement -- `null` among
     # them, an ordinary name
-    visitBody: function {:this id: zast.nodeid} out u32 is {
+    visitBody: function {
+        :this
+        id: zast.nodeid
+        # a `then` or `case` body, which a following `else` could continue
+        arm: false
+    } out u32 is {
         n: this.node :id
         count: u64
         match (
@@ -1403,14 +1408,47 @@ Builder: class {
             count = n.statements.count
         } else null
         if (this.peekIs tt: zlexer.toktype.braceOpenTok) then return (this.visitBlock :id)
-        # a bare body: the one statement
+        # a bare body: the one statement. An `if` or a `match` as an arm's body
+        # is in parentheses: written bare, a following `else` would bind to it
         match (
             n
         ) case statement then {
-            if count == 1 then return (this.visitStatement id: (this.kid span: n.statements i: 0))
+            if count == 1 then {
+                sid: this.kid span: n.statements i: 0
+                vid: zast.nodeid
+                if arm then vid = this.bareControlValue id: sid
+                if vid.isZero.not then return (this.visitValue
+                    id: vid
+                    slot: slotkind.clause
+                    wrapped: false
+                )
+                return (this.visitStatement id: sid)
+            }
         } else null
         this.c.note msg: "a clause body the formatter does not print".string
         return 0
+    }
+
+    # bareControlValue -- the `if` or `match` statement `id` is, as a value; 0
+    # for any other statement
+    bareControlValue: function {this: this.view id: zast.nodeid} out zast.nodeid is {
+        vid: id
+        n: this.node :id
+        match (
+            n
+        ) case statementline then {
+            vid = n.statementline
+        } else null
+        v: this.node id: vid
+        match (
+            v
+        ) case ifexpr then {
+            return vid
+        } case caseexpr then {
+            return vid
+        } else {
+            return zast.nodeid
+        }
     }
 
     # ---- control flow ----
@@ -1448,7 +1486,7 @@ Builder: class {
                     xs.append this.idSpace
                     xs.append (this.tok tt: zlexer.toktype.thenTok)
                     xs.append this.idSpace
-                    xs.append (this.visitBody id: cl.statement)
+                    xs.append (this.visitBody id: cl.statement arm: true)
                 } else null
             }
             if n.elseclause.isZero.not then {
@@ -1591,7 +1629,7 @@ Builder: class {
                     xs.append this.idSpace
                     xs.append (this.tok tt: zlexer.toktype.thenTok)
                     xs.append this.idSpace
-                    xs.append (this.visitBody id: cl.statement)
+                    xs.append (this.visitBody id: cl.statement arm: true)
                 } else null
             }
             if n.elseclause.isZero.not then {
