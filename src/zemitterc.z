@@ -14013,7 +14013,8 @@ cvalText: function {
 }
 
 # aggCvalText -- cvalText for an aggregate: a data value is the address of its
-# static object (emitStaticAggs), a list the view of its array.
+# static object (emitStaticAggs), a choice value that object itself, a list
+# the view of its array.
 aggCvalText: function {
     symtab: zenv.ZSymbolTable.view ctx: Ctx.view v: ztypes.cval facts: cfacts.borrow
 } out String is {
@@ -14021,6 +14022,12 @@ aggCvalText: function {
         :facts
         from: literalFacts
         text: (listValueC :symtab :ctx row: v.aggId)
+    )
+    # a choice value is held by value: its static object, read whole
+    if (symtab.typing.constAggs.get i: v.aggId.u64).kind.staticChoice then return (stating
+        :facts
+        from: constFacts
+        text: "_zag\{v.aggId}"
     )
     return (stating :facts from: constFacts text: "(&_zag\{v.aggId})")
 }
@@ -32496,6 +32503,22 @@ fnReturnC: function {
     return (fnReturnPointerC :ast :symtab :ctx :fid :op ret: ret.stringView)
 }
 
+# paramReadsOnly -- a parameter passed by reference that the function only
+# reads: a view, or a choice value, which nothing changes.
+paramReadsOnly: function {
+    symtab: zenv.ZSymbolTable.view
+    fid: ztypes.tid
+    pnameId: zast.nameid
+    pid: ztypes.tid
+} out bool is {
+    if (symtab.reg.isStaticOf tid: (canonTypeId :symtab tid: pid)) then return true
+    return (symtab.typing.declOwnershipIs
+        parentTypeId: fid
+        nameId: pnameId
+        own: ztypes.zparamownership.viewMode
+    )
+}
+
 # paramCType -- one parameter's C type: the pointer form where the parameter is
 # passed by reference, const-qualified when it is a view, because a view is read
 # through and never written through and the C has to say so -- the runtime
@@ -32512,11 +32535,7 @@ paramCType: function {
     ct: typeRefC :ast :symtab :ctx tid: pid
     if (paramTypeIsPointer :ast :symtab :ctx :fid :pnameId :pid).not then return ct
     if ct.length == 0 then return ct
-    if (symtab.typing.declOwnershipIs
-        parentTypeId: fid
-        nameId: pnameId
-        own: ztypes.zparamownership.viewMode
-    ) then return "const \{ct}*"
+    if (paramReadsOnly :symtab :fid :pnameId :pid) then return "const \{ct}*"
     return "\{ct}*"
 }
 
@@ -39700,6 +39719,20 @@ isArmWrapMono: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztype
     )
 }
 
+# staticListElemOf -- the element type a static list or its iterator mono holds
+# a pointer to, which a variant -- written whole, with no forward declaration
+# -- must precede; 0 for any other mono.
+staticListElemOf: function {
+    symtab: zenv.ZSymbolTable.view ctx: Ctx.view monoId: ztypes.tid
+} out ztypes.tid is {
+    stl: (
+        (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: family.slot.staticList)) or
+        (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: family.slot.staticIter))
+    )
+    if stl.not then return ztypes.tid.zero
+    return (symtab.reg.genericTypeArgAt specId: monoId ordinal: 0)
+}
+
 # monoElemIdsOf -- the type ids a collection/wrapper mono references by its
 # element/key/value (array/List/ListView/Set/Map) or arm payloads (optionval/
 # resultval/Option/Result/OptionView), or its fields for a user-generic
@@ -39721,6 +39754,11 @@ monoElemIdsOf: function {
     if byGet then {
         e: listElemType :symtab :monoId
         if e.isZero.not then acc.append e
+        return
+    }
+    ste: staticListElemOf :symtab :ctx :monoId
+    if ste.isZero.not then {
+        acc.append ste
         return
     }
     if (isSetOriginOf :symtab :ctx tid: monoId) then {
@@ -40102,6 +40140,10 @@ emitMonoById: function {
     }
     if (isListOriginOf :symtab :ctx tid: monoId) then {
         emitListMono :ast :symtab :ctx :runtimeDir :monoId :buf
+        return
+    }
+    if (staticListValueFamilyOf :symtab :ctx tid: monoId).isZero.not then {
+        emitStaticListMono :ast :symtab :ctx :runtimeDir :monoId :buf
         return
     }
     if (isSetOriginOf :symtab :ctx tid: monoId) then {
@@ -40798,11 +40840,7 @@ fnptrParamTypeC: function {
         ctp: "\{ct}*"
         # the same rule as fnSignature: a view is read through, and a
         # function value must match the signatures it is assigned
-        if (symtab.typing.declOwnershipIs
-            parentTypeId: fid
-            nameId: pnameId
-            own: ztypes.zparamownership.viewMode
-        ) then ctp = "const \{ct}*"
+        if (paramReadsOnly :symtab :fid :pnameId :pid) then ctp = "const \{ct}*"
         ct = ctp.take
     }
     if ct.length == 0 then return "int64_t".string
@@ -41192,8 +41230,7 @@ emitUserProtocols: function {
 
 # collectLateGroup -- the late collection/variant monos: the by-value kinds that
 # embed a user type, and so must follow the user structs. One pass per family.
-# The LIST ORDER is the emission order of the group, so it is the order the
-# fifteen open-coded calls stood in.
+# The LIST ORDER is the emission order of the group.
 collectLateGroup: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -41209,6 +41246,7 @@ collectLateGroup: function {
     fams.append (ctx.origins.get i: family.slot.listView)
     fams.append (ctx.origins.get i: family.slot.listViewVal)
     fams.append (ctx.origins.get i: family.slot.spanVal)
+    fams.append (ctx.origins.get i: family.slot.staticList)
     fams.append (ctx.origins.get i: family.slot.listRef)
     fams.append (ctx.origins.get i: family.slot.listVal)
     fams.append (ctx.origins.get i: family.slot.set)
@@ -41349,6 +41387,8 @@ lateMemberIsMono: function {
     # -- is written from its template as the runtime's monos are
     if (tmplClassRowOf :symtab :ctx :tid) > 0 then return true
     if (originTidOf :symtab :tid).isZero then return false
+    # a static list is the runtime's mono, whatever its element
+    if (staticListValueFamilyOf :symtab :ctx :tid).isZero.not then return true
     return (isUserInstance :symtab :ctx tcl: tid).not
 }
 
@@ -42300,8 +42340,9 @@ preEmitProtocolArgs: function {
 
 # emitStaticAggs -- each static value run time reaches (constagg.reached), as
 # the static storage its handles point at: a data value as `static const
-# <type>_t _zag<row> = { ... };`, fields in declared order, and a list as its
-# array (emitStaticListArray). A value it holds is emitted before it, as an
+# <type>_t _zag<row> = { ... };`, fields in declared order, a choice value the
+# same way (staticChoiceInit), read whole, and a list as its array
+# (emitStaticListArray). A value it holds is emitted before it, as an
 # aggregate is interned after the ones it holds.
 emitStaticAggs: function {
     ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx buf: String.borrow
@@ -42314,17 +42355,23 @@ emitStaticAggs: function {
         start: u64
         count: u64
         isList: false
+        isChoice: false
         {
             g: symtab.typing.constAggs.get i: id
             if g.reached.not then continue
             isList = g.kind.staticList
-            if isList.not when g.kind.staticData.not then continue
+            isChoice = g.kind.staticChoice
             tid = g.tid
             start = g.itemStart
             count = g.itemCount
         }
         if isList then {
             emitStaticListArray :ast :symtab :ctx :id :count :buf
+            continue
+        }
+        if isChoice then {
+            ci: staticChoiceInit :ast :symtab :ctx row: id
+            buf.append "static const \{ctxCname :ctx :tid}_t _zag\{id} = \{ci};\n"
             continue
         }
         fnames: List String
@@ -42456,10 +42503,39 @@ staticListInit: function {symtab: zenv.ZSymbolTable.view row: u64} out String is
     return "{ .length = \{n}, .data = _zag\{row} }"
 }
 
+# staticChoiceInit -- choice row `row` as a constant initializer: its tag and
+# the value its arm carries, in the arm's member of the payload union, spelled
+# as a field of a static object is (staticAggItemText). A choice is held by
+# value, so this is the value itself wherever it lands.
+staticChoiceInit: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    row: u64
+} out String is {
+    tid: ztypes.tid
+    arm: zast.nameid
+    item: ztypes.noConst
+    {
+        g: symtab.typing.constAggs.get i: row
+        tid = g.tid
+        arm = g.arm
+        item = symtab.typing.constAggItems.get i: g.itemStart.u64
+    }
+    tg: tagConstOf :ast :ctx :symtab :tid armId: arm
+    mc: memberC :ast :symtab :ctx owner: tid kind: memberkind.arm nameId: arm
+    pt: ztypes.tid
+    ad: symtab.typing.declMemberIdOf parentTypeId: tid nameId: arm
+    if ad.isZero.not then pt = (symtab.typing.decls.get i: ad).typeId
+    it: staticAggItemText :ast :symtab :ctx tid: pt v: item
+    return "{ .tag = \{tg}, .data = { .\{mc} = \{it} } }"
+}
+
 # staticAggItemText -- one field of a static object as a constant initializer:
 # a string as the bytes themselves (the pool's `_zcsN` view is no constant
-# expression), a data value as its object's address, an arm as its bool or its
-# tag alone, and a number as cvalText spells it at the field's type.
+# expression), a data value as its object's address, a choice value as its
+# braces (staticChoiceInit), an arm as its bool or its tag alone, and a number
+# as cvalText spells it at the field's type.
 staticAggItemText: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -42470,6 +42546,9 @@ staticAggItemText: function {
     if v.kind.svalKind then return (staticStringInit :symtab :v)
     if v.kind.aggKind when (symtab.typing.constAggs.get i: v.aggId.u64).kind.staticList then {
         return (staticListInit :symtab row: v.aggId)
+    }
+    if v.kind.aggKind when (symtab.typing.constAggs.get i: v.aggId.u64).kind.staticChoice then {
+        return (staticChoiceInit :ast :symtab :ctx row: v.aggId)
     }
     if v.kind.armKind then {
         av: armValueC :ast :ctx :symtab tid: v.armTid arm: v.armName

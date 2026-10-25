@@ -1,0 +1,78 @@
+# choice_runtime.z -- a choice value run time reaches is emitted as the value
+# itself, as a variant's is: a reached constant is a static object read whole,
+# and one inside a data value, a list or another choice value is its braces.
+# Run time holds it anywhere a valtype goes -- a local, a parameter, a return,
+# a data field, a list element walked by `for each`, a ListVal, a record and a
+# class field, an optionval, a map key and a set -- matches it, narrows it,
+# compares it with the generated `==` and hashes it, and calls its methods.
+inner: data { v: u8 name: text }
+
+form: choice {
+    call: null
+    template: text
+    count: intliteral
+    sub: inner
+} as {
+    describe: function {:this} out String is {
+        match (this) case call then return "call".string case template then return "tpl \{this.stringView}" case count then return "count \{this}" case sub then return "sub \{this.v} \{this.name.stringView}"
+    }
+}
+
+bag: choice {
+    empty: null
+    nums: staticlist u8
+}
+
+row: data {
+    key: text
+    kind: form
+}
+
+a: (form.template "tpl")
+b: (form.template "tpl")
+c: (form.count 41)
+s: (form.sub (inner v: 7 name: "seven"))
+n: (bag.nums list { 1 2 3 })
+rows: list {
+    (row key: "x" kind: a)
+    (row key: "y" kind: form.call)
+    (row key: "z" kind: (form.count 5))
+}
+forms: list { a form.call c s }
+
+holder: record { f: form n: u8 }
+Box: class { f: form }
+
+pick: function {b: bool} out form is {
+    if b then return a
+    return form.call
+}
+
+main: function is {
+    print a.describe
+    print "\{c.describe} \{s.describe} \{(pick b: false).describe}"
+    nn: n
+    match (nn) case nums then print "nums \{nn.length}" case empty then print "empty"
+    for each r: rows loop print "\{r.key.stringView} \{r.kind.describe}"
+    for each f: forms loop print f.describe
+    x: a
+    print "\{x == b} \{x == c} \{x == form.call} \{(pick b: true) == a}"
+    held: ListVal form
+    held.append a
+    held.append form.call
+    print "\{held.length} \{(held.get i: 0).describe}"
+    h: holder f: c n: 1
+    bx: Box f: a
+    o: optionval.some s
+    match o case some then print "\{h.f.describe} \{bx.f.describe} \{o.describe}" case none then print "none"
+    m: MapVV form v: u8
+    m.set key: a value: 1
+    m.set key: b value: 2
+    m.set key: c value: 3
+    m.set key: form.call value: 4
+    print "\{m.length} \{(m.get key: a).or d: 0} \{(m.get key: form.call).or d: 0}"
+    st: SetVal form
+    st.add a
+    st.add b
+    print "\{st.length}"
+}
