@@ -6173,7 +6173,28 @@ resolveTyperefShell: function {
             :thisName
         )
     }
+    # a list where a member's type goes is the member's default
+    if (ast.nodes.get i: nid).listblock then refuseListDefault :st :ast :nid
     return (st.reg.newType name: "?" typetype: ztypes.ztypetype.recordType)
+}
+
+# refuseListDefault -- a list written where a field's or a parameter's type
+# goes. That makes it the member's default, and a default is a number, a
+# string, an arm or a function: a list would be dropped and the member typed
+# by nothing, so the declaration is refused.
+refuseListDefault: function {st: zenv.ZSymbolTable ast: Ast.view nid: zast.nodeid} is {
+    n: ast.nodes.get i: nid
+    (addErrorH
+        :st
+        nodeid: nid
+        lineno: (nodeLine :n)
+        colno: (nodeCol :n)
+        e: zast.err.typeError
+        msg: "a list cannot be a default: a default is a number, a string, an arm or a function".string
+        note: String
+        hint: "declare the member's type, `staticlist i64`, and give the list where the value is built".string
+        width: 4
+    )
 }
 
 # shellHeadIsGeneric -- whether a type-reference shell's head names a generic
@@ -12024,6 +12045,32 @@ attachRecordField: function {
     if handledR.not then attachDeclaredField :st :scope :ast :unitDecl :defName :rid :fm :fname
 }
 
+# declaredFieldTid -- the slot type of a field declared by a type-ref: the type
+# its folded value gives it, or else the type-ref resolved.
+declaredFieldTid: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    defName: StringView
+    rid: ztypes.tid
+    fm: argref
+    # the type the declaration's folded value gives it, zero for none
+    folded: ztypes.tid
+} out ztypes.tid is {
+    if folded.isZero.not then return folded
+    refuseUnfoldedConversion :st :ast what: "field" dm: fm
+    return (fieldSlotTid
+        :st
+        :ast
+        :unitDecl
+        :scope
+        ownerTid: rid
+        oId: fm.operation
+        thisName: defName
+    )
+}
+
 # attachDeclaredField -- a field declared by a type-ref rather than by a
 # sibling method: resolve its slot type, refuse what a record may not hold,
 # attach it, and record the marker and default the declaration carries.
@@ -12038,17 +12085,9 @@ attachDeclaredField: function {
     fname: StringView
 } is {
     folded: foldedDeclType :st :ast ownerTid: rid dm: fm
-    cid: folded
-    if cid.isZero then refuseUnfoldedConversion :st :ast what: "field" dm: fm
-    if cid.isZero then cid = (fieldSlotTid
-        :st
-        :ast
-        :unitDecl
-        :scope
-        ownerTid: rid
-        oId: fm.operation
-        thisName: defName
-    )
+    cid: declaredFieldTid :st :scope :ast :unitDecl :defName :rid :fm :folded
+    # refused where its type was resolved (refuseListDefault)
+    if (ast.nodes.get i: fm.operation).listblock then return
     (refuseNullTyped
         :st
         tid: cid
