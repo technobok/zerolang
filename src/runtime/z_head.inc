@@ -105,6 +105,19 @@ extern int ilogbq(__float128 x);
 #define Z_TYPEOF(x) __typeof__(x)
 #endif
 
+/* Z_VALUE_TYPEOF -- the unqualified type of an expression's value, for a
+   temporary the emitter declares first and assigns after: a `const` source
+   must still give an assignable temp. gcc, clang and tcc drop an rvalue's
+   qualifiers, which a comma makes of any operand; MSVC keeps them, and takes
+   __typeof_unqual__ instead. C23 names it typeof_unqual. */
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L
+#define Z_VALUE_TYPEOF(x) typeof_unqual(x)
+#elif defined(_MSC_VER) && !defined(__clang__)
+#define Z_VALUE_TYPEOF(x) __typeof_unqual__(x)
+#else
+#define Z_VALUE_TYPEOF(x) __typeof__(((void)0, x))
+#endif
+
 /* z_clz64, z_ctz64, z_popcount64 -- the leading zeros, trailing zeros and set
    bits of a 64-bit word. v must not be 0 for the first two, as for the
    builtins they stand for. gcc, clang and tcc take their builtins; MSVC has
