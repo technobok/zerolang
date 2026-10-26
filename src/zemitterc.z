@@ -5570,6 +5570,12 @@ isStringyTid: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
     return tid == ctx.svTid
 }
 
+# isStringOrViewLaid -- tid is String, or laid out as a StringView (isViewLaid):
+# a receiver the view natives take.
+isStringOrViewLaid: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
+    return (isStringyTid :ctx :tid) or (isViewLaid :ctx :tid)
+}
+
 # readOnce -- `text`, which its caller spells more than once, as it may be
 # spelled: bound to a temp first when reading it twice would repeat work (its
 # facts say `once`). A place -- a load of a call's result, `(*get(..))`, or a
@@ -6499,7 +6505,7 @@ emitSvNativeInfix: function {
     opId: zast.nameid
     facts: cfacts.borrow
 } out String is {
-    if (isStringyTid :ctx tid: owner).not then return "".string
+    if (isStringOrViewLaid :ctx tid: owner).not then return "".string
     if (svCallOf :ctx nameId: opId).simple.not then return "".string
     needsAddM :ctx uname: "system" memb: op
     ord: orderBegin :ctx slots: 2
@@ -6629,7 +6635,7 @@ emitDottedCall: function {
                 callable: (ast.nodes.get i: call.callable)
             )
         )
-        if (isStringyTid :ctx tid: rsid) then {
+        if (isStringOrViewLaid :ctx tid: rsid) then {
             callableNode: ast.nodes.get i: call.callable
             bn = emitDottedReceiver :ast :symtab :ctx callable: callableNode facts: bnF
             btid = rsid
@@ -6682,8 +6688,8 @@ emitDottedCall: function {
     return sv
 }
 
-# emitSvCallLegs -- the view-native legs of a method call on a String or
-# StringView receiver, tried in turn; "" when none takes it.
+# emitSvCallLegs -- the view-native legs of a method call on a String,
+# StringView or text receiver, tried in turn; "" when none takes it.
 emitSvCallLegs: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -6699,6 +6705,8 @@ emitSvCallLegs: function {
     dcbV: ztypes.vid
     facts: cfacts.borrow
 } out String is {
+    # text is laid out as a StringView, and its view members are StringView's
+    if btid == ctx.textTid then btid = ctx.svTid
     eCmp: emitSvCompareCall :ast :symtab :ctx :call :bnv :bnvF :mnId :btid :btIsStr :dcbV :facts
     if eCmp.length > 0 then return eCmp
     eSub: emitSvSubstringCall :ast :symtab :ctx :call :bnv :bnvF :mnId :btid :btIsStr :dcbV :facts
@@ -15719,7 +15727,7 @@ staticListValueFamilyOf: function {
     return ztypes.tid.zero
 }
 
-# emitStringFamilyCall -- a method whose owner is String or StringView: the
+# emitStringFamilyCall -- a method whose owner is String, StringView or text: the
 # String-argument form first, then the dotted form both share. "" declines, as
 # every leg here does.
 emitStringFamilyCall: function {
@@ -15735,7 +15743,8 @@ emitStringFamilyCall: function {
         if rsa.length > 0 then return rsa
         return (emitDottedCall :ast :symtab :ctx :call :facts)
     }
-    if ownerTid != ctx.svTid then return "".string
+    # text is laid out as a StringView, and its view members are StringView's
+    if (isViewLaid :ctx tid: ownerTid).not then return "".string
     return (emitDottedCall :ast :symtab :ctx :call :facts)
 }
 
@@ -18024,7 +18033,7 @@ methodAutoCallRead: function {
     readIsRef: bool
     facts: cfacts.borrow
 } out String is {
-    if (svCallOf :ctx nameId: mnId).noarg when (isStringyTid :ctx tid: bstamp) then {
+    if (svCallOf :ctx nameId: mnId).noarg when (isStringOrViewLaid :ctx tid: bstamp) then {
         needsAddM :ctx uname: "system" memb: mn2
         svfaF: bn2F
         svfa: (svValueForm
@@ -18951,7 +18960,7 @@ emitDottedAtomBase: function {
     if eNum.length > 0 then return eNum
     bnid2: interpPartNodeId n: (ast.nodes.get i: n.parent)
     bareTid: chaseStrTypedef :symtab :ctx tid: (stampIdOf :symtab nid: bnid2)
-    bareSv: bareTid == ctx.svTid
+    bareSv: isViewLaid :ctx tid: bareTid
     bareStr: bareTid == ctx.strTid
     if bareStr when (svCallOf :ctx nameId: mnId).noarg then {
         # String receivers project to a view for the no-arg SV
@@ -21121,7 +21130,7 @@ orderRowOperand: function {
     vF: cfacts
     v: operandValueC :ast :symtab :ctx :nid facts: vF
     n: ast.nodes.get i: nid
-    if (isStringyTid :ctx tid: owner).not then {
+    if (isStringOrViewLaid :ctx tid: owner).not then {
         stateFacts facts: opF from: vF
         constant: orderConstantWith :ast :symtab :ctx :n tf: vF byPtr: false
         (orderPartWith

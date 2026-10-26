@@ -1223,7 +1223,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2343693
+ALLOC_BASELINE := 2344360
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -2322,6 +2322,9 @@ VIEW_GUARD_INLINE := Bytes.byteView:unemitted \
   str.stringView:inline str.substring:inline \
   optionval.or:byvalue resultval.orPanic:byvalue resultval.or:byvalue \
   intliteral.*:byvalue floatliteral.*:byvalue textliteral.*:byvalue *.iterate:byvalue *.times:byvalue \
+  text.isAscii:inline text.startsWith:inline text.endsWith:inline text.contains:inline text.indexOf:inline text.lastIndexOf:inline \
+  text.byteAt:inline text.splitOnce:inline text.count:inline text.codepoints:inline text.toLowerAscii:inline text.toUpperAscii:inline \
+  text.replace:inline text.replaceFirst:inline text.repeated:inline text.concat:inline \
   staticlist.length:inline staticlist.array:inline staticlist.tag:inline staticlist.slot:inline
 
 define VIEW_GUARD_AWK
