@@ -2830,7 +2830,8 @@ generic-param-guard: bin/zl
 # zl-full-guard -- `zl lint --full` never passes a file it did not check: it runs
 # with no flags from a foreign cwd and with no runtime dir, says why when it
 # cannot, reports a dependency's error at that file, reports a generic body once,
-# lints a subunit as itself, and places L003/L011 only in the --full tier.
+# lints a subunit as itself, places L003/L011 only in the --full tier, and
+# reports A012 for a file unit with no public block, never for a subunit.
 ZLFULL_FIX := tests/fixtures/zl_full/tiered.z
 ZLFULL_DEP := tests/fixtures/zl_full/depunit/depmain.z
 ZLFULL_ONCE := tests/fixtures/zl_full/generic_once.z
@@ -2897,6 +2898,14 @@ zl-full-guard: bin/zl
 	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
 	if $(CURDIR)/bin/zl lint $(CURDIR)/$(ZLFULL_BZ) 2>&1 | grep -q 'L011'; then \
 	  echo "zl-full-guard FAIL: the parse tier reported L011, which needs the checker"; fail=1; fi; \
+	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full --arch $(CURDIR)/$(ZLFULL_SUB).z 2>&1); \
+	if [ "$$(printf '%s\n' "$$out" | grep -c 'A012')" != 1 ]; then \
+	  echo "zl-full-guard FAIL: A012 did not report the unit with no public block once:"; \
+	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
+	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full --arch $(CURDIR)/$(ZLFULL_SUB)/inner.z $(CURDIR)/$(ZLFULL_PUB) 2>&1); \
+	if printf '%s\n' "$$out" | grep -q 'A012'; then \
+	  echo "zl-full-guard FAIL: A012 reported a subunit, or a unit that has a public block:"; \
+	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
 	rm -rf $$d; \
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
 	echo "zl-full-guard OK: --full runs without flags from a foreign cwd and without a runtime, says why when it cannot, places a dependency's error in its own file, and lints a subunit as itself"

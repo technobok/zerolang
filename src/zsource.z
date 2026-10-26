@@ -4002,6 +4002,7 @@ Analysis: class {
         srcdirs: (List String).view
         systemdir: StringView
     } is {
+        this.reportMissingPublic ast: prog :lu
         {
             mainOp: lu.op
             uname: lu.name.stringView
@@ -4045,6 +4046,28 @@ Analysis: class {
                 }
             }
         }
+    }
+
+    # reportMissingPublic -- A012: a file unit with no `public:` block. Its
+    # surface is then every top-level definition, so L012 can judge none of
+    # them unused. A subunit, hidden or inline, exports nothing past its
+    # parent and is not asked.
+    reportMissingPublic: function {:this ast: Ast.view lu: LintedUnit.view} is {
+        if lu.names.length != 1 then return
+        bodyIds: zast.unitBodyIdsAt :ast unitId: lu.op
+        i: u64
+        for i < bodyIds.count loop {
+            m: ast.nodes.get i: (zast.kidAt kids: ast.kids span: bodyIds :i)
+            i = i + 1
+            if m.namedoperation when m.name == zast.wellKnown.slot.wkPublic then return
+        }
+        (this.info
+            code: "A012"
+            msg: "unit `\{lu.name}` has no `public:` block, so every definition is public; list what other units read, and L012 judges the rest"
+            line: 1
+            col: 1
+            width: 1
+        )
     }
 
     # reportUnusedExports -- A007: a name this unit's `public:` block exports
