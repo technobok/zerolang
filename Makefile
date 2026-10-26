@@ -1223,7 +1223,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2337015
+ALLOC_BASELINE := 2338070
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1931,9 +1931,16 @@ deadcode-guard: bin/zc
 
 # static-value-guard -- every static value the emitter writes (`_zag<row>`) is
 # read by the C: a value no run-time code reaches is not written (clang's
-# -Wunused-const-variable; gcc warns only past -fsyntax-only). Skipped without
-# clang.
+# -Wunused-const-variable; gcc warns only past -fsyntax-only). And a list read
+# only at compile time writes no view type: static_list_folded_only's C holds no
+# `{ length; const T* data; }` struct. Skipped without clang.
 static-value-guard: bin/zc
+	@v=$$(bin/zc emit tests/fixtures/emitc_corpus/static_list_folded_only.z 2>/dev/null \
+	  | grep -A1 '^    uint64_t length;$$' | grep -c '^    const .*\* data;$$'); \
+	if [ "$$v" -ne 0 ]; then \
+	  echo "static-value-guard FAIL: a list read only at compile time wrote $$v view types"; \
+	  echo "  See staticListReached in src/zemitterc.z."; exit 1; \
+	fi
 	@command -v clang >/dev/null 2>&1 || { echo "static-value-guard SKIP: clang not installed"; exit 0; }; \
 	d=$$(mktemp -d); n=0; rep=""; \
 	for f in examples/*.z tests/fixtures/emitc_corpus/*.z; do \

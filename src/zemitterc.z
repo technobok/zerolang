@@ -41686,7 +41686,10 @@ classifyCollectionMono: function {
         ) then ugu = false
         if ugu then work.wUgUnion.append tv
     }
-    if (isViewUnionOriginOf :symtab :ctx tid: tcl) then work.wOptView.append tv
+    if (isViewUnionOriginOf :symtab :ctx tid: tcl) then {
+        isSv: originIsTid :symtab tid: tcl originTid: (ctx.origins.get i: family.slot.staticView)
+        if isSv.not or (staticViewReached :symtab tid: tv) then work.wOptView.append tv
+    }
     colDst: u64
     if (originIsTid :symtab tid: tcl originTid: (ctx.origins.get i: family.slot.fixedArray)) then {
         isColKind = true
@@ -41723,6 +41726,9 @@ classifyCollectionMono: function {
     if (staticListValueFamilyOf :symtab :ctx tid: tcl).isZero.not then {
         isColKind = true
         colDst = 9
+        # a list read only at compile time has its value type minted all the
+        # same: its view struct is written only for a list run time reads
+        if (staticListReached :symtab tid: tv).not then colDst = 0
     }
     if isColKind when (monoIsLate
         :ast
@@ -41742,6 +41748,60 @@ classifyCollectionMono: function {
         if colDst == 9 then work.wStaticList.append tv
     }
     return isColKind
+}
+
+# staticListReached -- the C names the list type `tid`: run time reads a list
+# value of it (a reached list row, constagg.reached), or a parameter, a field
+# or an arm is declared with it. The type a list constant is declared with is
+# minted for the constant alone, and a list read only at compile time names it
+# nowhere else.
+staticListReached: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
+    i: u64
+    for i < symtab.typing.constAggs.length loop {
+        g: symtab.typing.constAggs.get :i
+        i = i + 1
+        if g.reached when g.kind.staticList when g.tid == tid then return true
+    }
+    d: u64
+    for d < symtab.typing.decls.length loop {
+        dd: symtab.typing.decls.get i: (ztypes.declid.create from: d)
+        d = d + 1
+        if dd.typeId == tid then {
+            k: dd.kind
+            if k.fieldDecl or k.armDecl then return true
+            # the instance's own methods take it as `this`: no other use
+            if k.paramDecl when (declOwnerTid :symtab declId: dd.parent) != tid then return true
+        }
+    }
+    return false
+}
+
+# declOwnerTid -- the type the declaration `declId` is a member of: its
+# parent's type, 0 for a top-level one.
+declOwnerTid: function {symtab: zenv.ZSymbolTable.view declId: ztypes.declid} out ztypes.tid is {
+    if declId.isZero then return ztypes.tid.zero
+    par: (symtab.typing.decls.get i: declId).parent
+    if par.isZero then return ztypes.tid.zero
+    return (symtab.typing.decls.get i: par).typeId
+}
+
+# staticViewReached -- the StaticView instance `tid` answers a walk run time
+# makes: a reached list of its element type has its `iterate` used.
+staticViewReached: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
+    elem: symtab.reg.genericTypeArgAt specId: tid ordinal: 0
+    i: u64
+    for i < symtab.typing.constAggs.length loop {
+        g: symtab.typing.constAggs.get :i
+        i = i + 1
+        if g.reached when g.kind.staticList when (
+            (symtab.reg.genericTypeArgAt specId: g.tid ordinal: 0) == elem
+        ) when (monoMemberUsed
+            :symtab
+            monoId: g.tid
+            nameId: zast.wellKnown.slot.wkIterate
+        ) then return true
+    }
+    return false
 }
 
 # isSystemVariantTid -- a variant a system unit DECLARED: not an instantiation
