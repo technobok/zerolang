@@ -64210,6 +64210,21 @@ evalConstPlan: function {ast: Ast.view nid: zast.nodeid} out constplan is {
     return (constplan :arm :innerId :nameId :parts :parentId :childId :ln :co)
 }
 
+# plainStringLiteral -- string literal `nid` is text chunks only, with no
+# interpolation: a constant wherever it is written
+plainStringLiteral: function {ast: Ast.view nid: zast.nodeid} out bool is {
+    sn: ast.nodes.get i: nid
+    if sn.atomstring then {
+        i: u64
+        for i < sn.stringparts.count loop {
+            part: ast.nodes.get i: (zast.kidAt kids: ast.kids span: sn.stringparts :i)
+            if part.stringchunk.not then return false
+            i = i + 1
+        }
+    }
+    return true
+}
+
 # evalConstString -- a string literal's value: text chunks and nothing else are
 # a plain literal. An escape is a chunk of its own, already decoded, so
 # `"a\nb"` is three chunks and one value. An INTERPOLATION has a value only at
@@ -64886,7 +64901,8 @@ useSiteAsks: function {
         return (callOnFoldedString :st :ast :nid) or (staticListIndexedAt :st :ast :nid).isZero.not
     }
     if (plan.arm == 7) or (plan.arm == 8) or (plan.arm == 9) then return false
-    if plan.arm == 3 then return plan.parts < 2
+    # a literal with no interpolation, its escapes chunks of their own
+    if plan.arm == 3 then return (plainStringLiteral :ast :nid)
     if plan.arm != 4 then return true
     if (foldedToString :st nid: plan.parentId) then return true
     if (foldedToNumber :st nid: plan.parentId) then return true
