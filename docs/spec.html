@@ -6901,23 +6901,36 @@ is no subject, as it is not in a body.</p>
 
 M: mode.slow
 SIZE: match M case fast then { 64 } else { 32 }   # folded to 32</code></pre>
-<p>A string constant is a <code>StringView</code> receiver like any other. Five of its
-methods fold: <code>length</code>, <code>startsWith</code>, <code>endsWith</code>, <code>contains</code> and
-<code>substring</code>. Each answer is computed by calling the same method the program
-would call at run time, so the two cannot disagree. In a body, any other
-method (<code>count</code>, <code>split</code>, <code>toUpperAscii</code>) runs at run time on the
-constant's static view. In a unit-level definition the call is checked
-against the method's declaration exactly as a body checks it, so a missing,
-unknown or surplus argument, or an argument of the wrong type, is the error
-the body reports (<code>E0300</code>, or <code>E0100</code> for a method <code>StringView</code> does not
-declare). A complete call to a method that does not fold is <code>E0600</code>.</p>
+<p>A string constant is a <code>textliteral</code>, and a text method called on one
+with constant arguments folds to a constant: <code>length</code> and <code>count</code> to an
+untyped number; <code>isEmpty</code>, <code>isAscii</code>, <code>startsWith</code>, <code>endsWith</code> and
+<code>contains</code> to a <code>bool</code>; <code>substring</code>, <code>trim</code>, <code>trimStart</code>,
+<code>trimEnd</code>, <code>replace</code>, <code>replaceFirst</code>, <code>toUpperAscii</code>,
+<code>toLowerAscii</code>, <code>repeated</code>, <code>concat</code> and <code>+</code> to a new
+<code>textliteral</code>. Each answer is computed by calling the same method the
+program would call at run time, so the two cannot disagree. A folded number
+lands as an untyped one does (<code>n: "ab".length</code> is an <code>i64</code>), and a
+folded string is a literal, so <code>x: "abc".toUpperAscii</code> is a
+<code>StringView</code> -- a <code>String</code> needs <code>.string</code>. A new string reaches the
+program only where run time reads it, as one static array.</p>
+<p>A method that answers an option (<code>indexOf</code>, <code>stripPrefix</code>,
+<code>splitOnce</code>) or walks (<code>split</code>, <code>lines</code>, <code>codepoints</code>) does not
+fold, nor does a call with an argument known only at run time: it runs on the
+<code>StringView</code> the literal becomes. In a unit-level definition the call is
+checked against the method's declaration exactly as a body checks it, so a
+missing, unknown or surplus argument, or an argument of the wrong type, is
+the error the body reports (<code>E0300</code>, or <code>E0100</code> for a method
+<code>StringView</code> does not declare). A complete call to a method that does not
+fold is <code>E0600</code>.</p>
 <pre><code class="language-zerolang">NAME: "zerolang"
 N: NAME.length                         # folded to 8
 HEAD: (NAME.substring from: 0 to: 4)   # folded to "zero"
+LOUD: NAME.toUpperAscii                # folded to "ZEROLANG"
+AT: (NAME.indexOf needle: "o")         # E0600: 'indexOf' has no compile-time value
 TAIL: (NAME.substring from: 4)         # E0300: missing required argument 'to' (type: u64)
-WIDE: NAME.count                       # E0600: 'count' has no compile-time value
 main: function is {
-    c: NAME.count                      # run time, on the constant's static view
+    w: "lang"
+    at: NAME.indexOf needle: w         # run time, on the constant's static view
 }</code></pre>
 <p>Named constants propagate: if <code>a: 1</code> and <code>b: a + 2</code> are defined at
 unit level, then <code>b</code> has a compile time constant value of <code>3</code>. Chains

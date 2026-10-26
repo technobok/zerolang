@@ -54908,7 +54908,45 @@ checkValueAt: function {
     stampConstAt :st :unitDecl :ast :nid
     markStaticListIndexRead :st :ast :nid
     markFoldedFnFieldCall :st :ast :nid
+    ft: textFoldType :st :ast :nid
+    if ft.isZero.not then {
+        stampGate :st :nid tid: ft
+        return ft
+    }
     return t
+}
+
+# textFoldType -- the type of a text method's folded call at `nid` on an
+# untyped string: a literal's, as the value it folded to (an untyped number an
+# intliteral, a string of the receiver's type), so `"abc".toUpperAscii` is a
+# textliteral and no String. 0 when the node is no such fold.
+textFoldType: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid} out ztypes.tid is {
+    mono: st.typing.curMonoStamp
+    cv: st.typing.nodeConstIn :mono :nid
+    if cv.kind.none then return ztypes.tid.zero
+    path: nid
+    {
+        n: ast.nodes.get i: nid
+        match n case call then path = n.callable else null
+    }
+    recvId: zast.nodeid
+    nameId: zast.nameid
+    {
+        pn: ast.nodes.get i: path
+        match (
+            pn
+        ) case dottedpath then {
+            recvId = pn.parent
+            nameId = bareAtomNameId n: (ast.nodes.get i: pn.child)
+        } else return ztypes.tid.zero
+    }
+    if (textFoldOp :nameId) == textfold.none then return ztypes.tid.zero
+    rv: st.typing.nodeConstIn :mono nid: recvId
+    if rv.kind.svalKind.not or rv.numTid.isZero.not then return ztypes.tid.zero
+    if cv.kind.ivalKind when cv.numTid.isZero then return st.reg.literalIntTid
+    if cv.kind.svalKind when cv.numTid.isZero then return st.reg.literalTextTid
+    if cv.kind.armKind then return cv.armTid
+    return ztypes.tid.zero
 }
 
 # markFoldedFnFieldCall -- a call through a function field of a folded data
@@ -60666,19 +60704,6 @@ constMissingArms: function {
     return missing
 }
 
-# constStringLength -- a string constant's `length`: its byte count, typed u64
-# as String.length declares it.
-constStringLength: function {
-    ast: Ast
-    st: zenv.ZSymbolTable
-    scope: ztypes.declid
-    s: StringView
-} out ztypes.cval is {
-    n: ztypes.makeIntConst s.length.i64.orPanic
-    u64Id: zast.wellKnown.slot.tyU64
-    return (ztypes.typedConst c: n numTid: (scalarTidOf :st :scope :ast nameId: u64Id))
-}
-
 # arithop -- the arithmetic operator a constant fold computes, read off its
 # spelling once so each width's arithmetic switches on the kind.
 arithop: variant {
@@ -62321,21 +62346,83 @@ constStringDotted: function {
         ct: textLiteralCastTarget :ast :st :nameId
         if ct.isZero.not then return (ztypes.typedConst c: v numTid: ct)
     }
-    if nameId == zast.wellKnown.slot.wkLength then {
-        s: constStringAt :st id: v.strId
-        return (constStringLength :st :scope :ast s: s.stringView)
-    }
-    name: zast.nameTextAt :ast ref: nameId
-    return (constUnsupportedMethod :st name: name.stringView :nodeid :lineno :colno)
+    noArgs: ListVal zast.nodeid
+    return (constTextFold
+        :st
+        :scope
+        :ast
+        unitDecl: ztypes.declid
+        args: noArgs
+        recv: v
+        :nameId
+        :nodeid
+        :lineno
+        :colno
+    )
 }
 
-# constStringMethod -- fold a static method call on a string constant. Every
-# answer is computed by CALLING the same method the run time would, so a folded
-# result and a run-time one cannot disagree about an empty prefix, an empty
-# needle, or a boundary index. `substring` PANICS out of range rather than
-# clamping, so out of range at compile time means there is no value -- not a
-# clamped one, and not a silent `none` that would let the definition through.
-constStringMethod: function {
+# textfold -- the text methods a constant folds through (constTextFold), each
+# read off its name once (textFoldOp): first those that take no argument, then
+# one string, then two, then numbers. Every one answers a plain value: a method
+# answering an option, or one that walks (`split`, `lines`, `codepoints`), does
+# not fold, and runs on the StringView the literal becomes.
+textfold: list {
+    byteLength: 0
+    count: 1
+    isEmpty: 2
+    isAscii: 3
+    trim: 4
+    trimStart: 5
+    trimEnd: 6
+    toUpperAscii: 7
+    toLowerAscii: 8
+    startsWith: 9
+    endsWith: 10
+    contains: 11
+    concat: 12
+    replace: 13
+    replaceFirst: 14
+    substring: 15
+    repeated: 16
+    # no fold
+    none: 17
+} out staticlist u8
+
+# textFoldOp -- the fold the text method `nameId` has, textfold.none for a
+# name that does not fold.
+textFoldOp: function {nameId: zast.nameid} out u8 is {
+    if nameId == zast.wellKnown.slot.wkLength then return textfold.byteLength
+    if nameId == zast.wellKnown.slot.wkCount then return textfold.count
+    if nameId == zast.wellKnown.slot.wkIsEmpty then return textfold.isEmpty
+    if nameId == zast.wellKnown.slot.wkIsAscii then return textfold.isAscii
+    if nameId == zast.wellKnown.slot.wkTrim then return textfold.trim
+    if nameId == zast.wellKnown.slot.wkTrimStart then return textfold.trimStart
+    if nameId == zast.wellKnown.slot.wkTrimEnd then return textfold.trimEnd
+    if nameId == zast.wellKnown.slot.wkToUpperAscii then return textfold.toUpperAscii
+    if nameId == zast.wellKnown.slot.wkToLowerAscii then return textfold.toLowerAscii
+    return (textFoldArgOp :nameId)
+}
+
+# textFoldArgOp -- textFoldOp for the methods that take arguments.
+textFoldArgOp: function {nameId: zast.nameid} out u8 is {
+    if nameId == zast.wellKnown.slot.wkStartsWith then return textfold.startsWith
+    if nameId == zast.wellKnown.slot.wkEndsWith then return textfold.endsWith
+    if nameId == zast.wellKnown.slot.wkContains then return textfold.contains
+    if nameId == zast.wellKnown.slot.wkConcat then return textfold.concat
+    if nameId == zast.wellKnown.slot.wkReplace then return textfold.replace
+    if nameId == zast.wellKnown.slot.wkReplaceFirst then return textfold.replaceFirst
+    if nameId == zast.wellKnown.slot.wkSubstring then return textfold.substring
+    if nameId == zast.wellKnown.slot.wkRepeated then return textfold.repeated
+    return textfold.none
+}
+
+# constTextFold -- fold a method call on a string constant, `args` its
+# arguments (none for a bare `S.trim`). Every answer is computed by CALLING the
+# same method the run time would, so a folded result and a run-time one cannot
+# disagree about an empty prefix, an empty needle, or a boundary index. A
+# number answer is untyped and a string answer keeps the receiver's type: an
+# untyped one is a textliteral.
+constTextFold: function {
     ast: Ast
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
@@ -62348,60 +62435,129 @@ constStringMethod: function {
     lineno: u32
     colno: u32
 } out ztypes.cval is {
-    s: constStringAt :st id: recv.strId
-    if nameId == zast.wellKnown.slot.wkLength then {
-        return (constStringLength :st :scope :ast s: s.stringView)
-    }
-    lbl: zast.nameid
-    if nameId == zast.wellKnown.slot.wkStartsWith then lbl = zast.wellKnown.slot.wkPrefix
-    if nameId == zast.wellKnown.slot.wkEndsWith then lbl = zast.wellKnown.slot.wkSuffix
-    if nameId == zast.wellKnown.slot.wkContains then lbl = zast.wellKnown.slot.wkNeedle
-    if lbl.isZero.not then {
-        a: constStrArgAt :st :scope :ast :unitDecl :args label: lbl idx: 0
-        if a.kind.svalKind.not then return ztypes.noConst
-        constStr: constStringAt :st id: a.strId
-        if nameId == zast.wellKnown.slot.wkStartsWith then return (boolConst
-            :st
-            :ast
-            v: (s.startsWith prefix: constStr)
-        )
-        if nameId == zast.wellKnown.slot.wkEndsWith then return (boolConst
-            :st
-            :ast
-            v: (s.endsWith suffix: constStr)
-        )
-        return (boolConst :st :ast v: (s.contains needle: constStr))
-    }
-    if nameId == zast.wellKnown.slot.wkSubstring then {
-        f: constStrArgAt :st :scope :ast :unitDecl :args label: zast.wellKnown.slot.wkFrom idx: 0
-        t: constStrArgAt :st :scope :ast :unitDecl :args label: zast.wellKnown.slot.wkTo idx: 1
-        if f.kind.ivalKind.not then return ztypes.noConst
-        if t.kind.ivalKind.not then return ztypes.noConst
-        sz: s.length.i64.orPanic
-        bad: (f.ival < 0) or (t.ival < 0) or (f.ival > sz) or (t.ival > sz) or (f.ival > t.ival)
-        # an index outside i64 is past any string's end
-        if (f.bigId != 0) or (t.bigId != 0) then bad = true
-        if bad then {
-            (constFailRecord
-                :st
-                kind: ztypes.constfailkind.substringRange
-                :nodeid
-                :lineno
-                :colno
-                width: 1
-            )
-            return ztypes.noConst
-        }
-        sub: s.substring from: f.ival.u64.orPanic to: t.ival.u64.orPanic
-        return (ztypes.makeStrConst (constInternString :st text: sub))
-    }
-    return (constUnsupportedMethod
+    op: textFoldOp :nameId
+    if op == textfold.none then return (constUnsupportedMethod
         :st
         name: (zast.nameTextAt :ast ref: nameId).stringView
         :nodeid
         :lineno
         :colno
     )
+    s: constStringAt :st id: recv.strId
+    if op < textfold.startsWith then return (constTextFoldBare :st :ast :recv sv: s.stringView :op)
+    if op < textfold.replace then {
+        a: constStrArgAt :st :scope :ast :unitDecl :args label: (textFoldArgLabel :op) idx: 0
+        if a.kind.svalKind.not then return ztypes.noConst
+        av: constStringAt :st id: a.strId
+        return (constTextFoldWith :st :ast :recv sv: s.stringView :op arg: av.stringView)
+    }
+    if op < textfold.substring then {
+        nd: constStrArgAt :st :scope :ast :unitDecl :args label: zast.wellKnown.slot.wkNeedle idx: 0
+        rl: zast.wellKnown.slot.wkReplacement
+        rp: constStrArgAt :st :scope :ast :unitDecl :args label: rl idx: 1
+        if nd.kind.svalKind.not or rp.kind.svalKind.not then return ztypes.noConst
+        nv: constStringAt :st id: nd.strId
+        rv: constStringAt :st id: rp.strId
+        if op == textfold.replaceFirst then {
+            f: s.stringView.replaceFirst needle: nv replacement: rv
+            return (constTextResult :st :recv text: f.stringView)
+        }
+        g: s.stringView.replace needle: nv replacement: rv
+        return (constTextResult :st :recv text: g.stringView)
+    }
+    if op == textfold.repeated then {
+        n: constStrArgAt :st :scope :ast :unitDecl :args label: zast.wellKnown.slot.wkN idx: 0
+        if n.kind.ivalKind.not or (n.ival < 0) or (n.bigId != 0) then return ztypes.noConst
+        r: s.stringView.repeated n: n.ival.u64.orPanic
+        return (constTextResult :st :recv text: r.stringView)
+    }
+    return (constTextSubstring :ast :st :unitDecl :scope :args :recv :nodeid :lineno :colno)
+}
+
+# constTextFoldBare -- a text fold that takes no argument, on the string `sv`.
+constTextFoldBare: function {
+    st: zenv.ZSymbolTable ast: Ast recv: ztypes.cval sv: StringView op: u8
+} out ztypes.cval is {
+    if op == textfold.byteLength then return (ztypes.makeIntConst sv.length.i64.orPanic)
+    if op == textfold.count then return (ztypes.makeIntConst sv.count.i64.orPanic)
+    if op == textfold.isEmpty then return (boolConst :st :ast v: sv.isEmpty)
+    if op == textfold.isAscii then return (boolConst :st :ast v: sv.isAscii)
+    if op == textfold.trim then return (constTextResult :st :recv text: sv.trim)
+    if op == textfold.trimStart then return (constTextResult :st :recv text: sv.trimStart)
+    if op == textfold.trimEnd then return (constTextResult :st :recv text: sv.trimEnd)
+    if op == textfold.toUpperAscii then {
+        u: sv.toUpperAscii
+        return (constTextResult :st :recv text: u.stringView)
+    }
+    l: sv.toLowerAscii
+    return (constTextResult :st :recv text: l.stringView)
+}
+
+# textFoldArgLabel -- the label a one-string text fold's argument is written
+# with, as the method declares it.
+textFoldArgLabel: function {op: u8} out zast.nameid is {
+    if op == textfold.startsWith then return zast.wellKnown.slot.wkPrefix
+    if op == textfold.endsWith then return zast.wellKnown.slot.wkSuffix
+    if op == textfold.concat then return zast.wellKnown.slot.wkOther
+    return zast.wellKnown.slot.wkNeedle
+}
+
+# constTextFoldWith -- a text fold that takes one string, `arg`, on `sv`.
+constTextFoldWith: function {
+    st: zenv.ZSymbolTable ast: Ast recv: ztypes.cval sv: StringView op: u8 arg: StringView
+} out ztypes.cval is {
+    if op == textfold.startsWith then return (boolConst :st :ast v: (sv.startsWith prefix: arg))
+    if op == textfold.endsWith then return (boolConst :st :ast v: (sv.endsWith suffix: arg))
+    if op == textfold.contains then return (boolConst :st :ast v: (sv.contains needle: arg))
+    c: sv.concat other: arg
+    return (constTextResult :st :recv text: c.stringView)
+}
+
+# constTextSubstring -- `S.substring from: f to: t` folded: the bytes between
+# the two constant indexes, or no value with the range failure recorded.
+constTextSubstring: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    scope: ztypes.declid
+    args: (ListVal zast.nodeid).view
+    recv: ztypes.cval
+    nodeid: zast.nodeid
+    lineno: u32
+    colno: u32
+} out ztypes.cval is {
+    s: constStringAt :st id: recv.strId
+    f: constStrArgAt :st :scope :ast :unitDecl :args label: zast.wellKnown.slot.wkFrom idx: 0
+    t: constStrArgAt :st :scope :ast :unitDecl :args label: zast.wellKnown.slot.wkTo idx: 1
+    if f.kind.ivalKind.not then return ztypes.noConst
+    if t.kind.ivalKind.not then return ztypes.noConst
+    sz: s.length.i64.orPanic
+    bad: (f.ival < 0) or (t.ival < 0) or (f.ival > sz) or (t.ival > sz) or (f.ival > t.ival)
+    # an index outside i64 is past any string's end
+    if (f.bigId != 0) or (t.bigId != 0) then bad = true
+    if bad then {
+        (constFailRecord
+            :st
+            kind: ztypes.constfailkind.substringRange
+            :nodeid
+            :lineno
+            :colno
+            width: 1
+        )
+        return ztypes.noConst
+    }
+    sub: s.substring from: f.ival.u64.orPanic to: t.ival.u64.orPanic
+    return (constTextResult :st :recv text: sub)
+}
+
+# constTextResult -- a string a text fold made from `recv`: interned, and of
+# the receiver's type, so an untyped receiver's is a textliteral.
+constTextResult: function {
+    st: zenv.ZSymbolTable recv: ztypes.cval text: StringView
+} out ztypes.cval is {
+    c: ztypes.makeStrConst (constInternString :st :text)
+    if recv.numTid.isZero then return c
+    return (ztypes.typedConst :c numTid: recv.numTid)
 }
 
 # constOfBinopFold -- the folded value of `lv <op> rv`: two tags compare by
@@ -62713,7 +62869,7 @@ constOfStringMethodCall: function {
     if rcv.kind.svalKind.not then return ztypes.noConst
     mnc: atomNameId :ast n: (ast.nodes.get i: methodId)
     if mnc.isZero then return ztypes.noConst
-    return (constStringMethod
+    return (constTextFold
         :st
         :scope
         :ast
@@ -66199,6 +66355,8 @@ unfoldedMemberWhy: function {
     if pn.isZero or cn.isZero then return false
     hit: envLookup :st :scope nameId: pn
     if hit.declId.isZero then return false
+    # a constant's declaration carries its value's type: only a type is asked
+    if (st.typing.decls.get i: hit.declId).kind.typeDecl.not then return false
     tid: declTypeIdOf :st declId: hit.declId
     if tid.isZero then return false
     if (st.reg.typetypeOf typeId: tid) == ztypes.ztypetype.unitType then return false

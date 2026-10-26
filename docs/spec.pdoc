@@ -7936,25 +7936,39 @@ is no subject, as it is not in a body.
   SIZE: match M case fast then { 64 } else { 32 }   # folded to 32
   """
 
-A string constant is a #~"StringView" receiver like any other. Five of its
-methods fold: #~"length", #~"startsWith", #~"endsWith", #~"contains" and
-#~"substring". Each answer is computed by calling the same method the program
-would call at run time, so the two cannot disagree. In a body, any other
-method (#~"count", #~"split", #~"toUpperAscii") runs at run time on the
-constant's static view. In a unit-level definition the call is checked
-against the method's declaration exactly as a body checks it, so a missing,
-unknown or surplus argument, or an argument of the wrong type, is the error
-the body reports (#~"E0300", or #~"E0100" for a method #~"StringView" does not
-declare). A complete call to a method that does not fold is #~"E0600".
+A string constant is a #~"textliteral", and a text method called on one
+with constant arguments folds to a constant: #~"length" and #~"count" to an
+untyped number; #~"isEmpty", #~"isAscii", #~"startsWith", #~"endsWith" and
+#~"contains" to a #~"bool"; #~"substring", #~"trim", #~"trimStart",
+#~"trimEnd", #~"replace", #~"replaceFirst", #~"toUpperAscii",
+#~"toLowerAscii", #~"repeated", #~"concat" and #~"+" to a new
+#~"textliteral". Each answer is computed by calling the same method the
+program would call at run time, so the two cannot disagree. A folded number
+lands as an untyped one does (#~"n: \"ab\".length" is an #~"i64"), and a
+folded string is a literal, so #~"x: \"abc\".toUpperAscii" is a
+#~"StringView" -- a #~"String" needs #~".string". A new string reaches the
+program only where run time reads it, as one static array.
+
+A method that answers an option (#~"indexOf", #~"stripPrefix",
+#~"splitOnce") or walks (#~"split", #~"lines", #~"codepoints") does not
+fold, nor does a call with an argument known only at run time: it runs on the
+#~"StringView" the literal becomes. In a unit-level definition the call is
+checked against the method's declaration exactly as a body checks it, so a
+missing, unknown or surplus argument, or an argument of the wrong type, is
+the error the body reports (#~"E0300", or #~"E0100" for a method
+#~"StringView" does not declare). A complete call to a method that does not
+fold is #~"E0600".
 
 #code language=zerolang expect=E0600: """
   NAME: "zerolang"
   N: NAME.length                         # folded to 8
   HEAD: (NAME.substring from: 0 to: 4)   # folded to "zero"
+  LOUD: NAME.toUpperAscii                # folded to "ZEROLANG"
+  AT: (NAME.indexOf needle: "o")         # E0600: 'indexOf' has no compile-time value
   TAIL: (NAME.substring from: 4)         # E0300: missing required argument 'to' (type: u64)
-  WIDE: NAME.count                       # E0600: 'count' has no compile-time value
   main: function is {
-      c: NAME.count                      # run time, on the constant's static view
+      w: "lang"
+      at: NAME.indexOf needle: w         # run time, on the constant's static view
   }
   """
 

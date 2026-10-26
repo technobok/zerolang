@@ -1223,7 +1223,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2339740
+ALLOC_BASELINE := 2343693
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1931,7 +1931,9 @@ deadcode-guard: bin/zc
 
 # static-value-guard -- every static value the emitter writes (`_zag<row>`) is
 # read by the C: a value no run-time code reaches is not written (clang's
-# -Wunused-const-variable; gcc warns only past -fsyntax-only). And a list read
+# -Wunused-const-variable; gcc warns only past -fsyntax-only), and so is every
+# string array (`_zs<n>`, `_zcs<n>`): a string folded and read only at compile
+# time writes none (text_fold_run). And a list read
 # only at compile time writes no view type: static_list_folded_only's C holds no
 # `{ length; const T* data; }` struct. Skipped without clang.
 static-value-guard: bin/zc
@@ -1946,13 +1948,13 @@ static-value-guard: bin/zc
 	for f in examples/*.z tests/fixtures/emitc_corpus/*.z; do \
 	  b=$$(basename $$f .z); \
 	  bin/zc emit $$f -o $$d/$$b.c 2>/dev/null || continue; \
-	  c=$$(clang -fsyntax-only -std=c17 -Wunused-const-variable $$d/$$b.c 2>&1 | grep -c "unused variable '_zag"); \
+	  c=$$(clang -fsyntax-only -std=c17 -Wunused-const-variable $$d/$$b.c 2>&1 | grep -cE "unused variable '_z(ag|c?s)[0-9]"); \
 	  n=$$(($$n + $$c)); \
 	  if [ "$$c" -gt 0 ]; then rep="$$rep  $$b: $$c\n"; fi; \
 	done; \
 	rm -rf $$d; \
 	if [ "$$n" -gt 0 ]; then \
-	  echo "static-value-guard FAIL: $$n static values written that nothing reads"; \
+	  echo "static-value-guard FAIL: $$n static values or strings written that nothing reads"; \
 	  printf "$$rep"; \
 	  echo "  A value marked reached where no run-time read remains. See markAggReached in src/ztypecheck.z."; \
 	  exit 1; \
