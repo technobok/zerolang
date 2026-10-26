@@ -1413,28 +1413,34 @@ cUpperOf: function {text: StringView} out String is {
     return buf
 }
 
-# cEscape -- escape literal text for a C string body.
+# cEscape -- escape literal text for a C string body. A control byte other
+# than \n and \t is written in octal, which takes at most three digits, so a
+# digit after it stays a digit (a hex escape would swallow it). A `?` after a
+# `?` is escaped: C17 reads `??=` and its kin as trigraphs.
 cEscape: function {text: StringView} out String is {
     buf: String
     i: u64
     n: text.length
     for i < n loop {
-        bo: text.byteAt :i
-        match (
-            bo
-        ) case some then {
-            if bo == 92 then {
-                buf.append "\\\\"
-            } else if bo == 34 then {
-                buf.append "\\\""
-            } else if bo == 10 then {
-                buf.append "\\n"
-            } else if bo == 9 then {
-                buf.append "\\t"
-            } else {
-                buf.appendByte b: bo
-            }
-        } case none then null
+        bo: (text.byteAt :i).or d: 0
+        if bo == 92 then {
+            buf.append "\\\\"
+        } else if bo == 34 then {
+            buf.append "\\\""
+        } else if bo == 10 then {
+            buf.append "\\n"
+        } else if bo == 9 then {
+            buf.append "\\t"
+        } else if (bo < 32) or (bo == 127) then {
+            buf.appendByte b: 92
+            buf.appendByte b: 48 + (bo >> 6)
+            buf.appendByte b: 48 + ((bo >> 3) & 7)
+            buf.appendByte b: 48 + (bo & 7)
+        } else if bo == 63 when i > 0 when ((text.byteAt i: i - 1).or d: 0) == 63 then {
+            buf.append "\\?"
+        } else {
+            buf.appendByte b: bo
+        }
         i = i + 1
     }
     return buf
