@@ -6987,12 +6987,14 @@ addTypeMembers: function {
     # drop members named for a numeric type: after a literal, the ones its
     # literal type does not declare are compile errors, not completions
     skipNumeric: bool
+    # offer the members the type's `public:` block leaves out
+    privateOk: bool
 } is {
     match (
         o
     ) case some then {
         {
-            addTypeMembersIn :prog :o :tid :sink :skipNumeric
+            addTypeMembersIn :prog :o :tid :sink :skipNumeric :privateOk
         }
     } case none then null
 }
@@ -7045,6 +7047,7 @@ addTypeMembersIn: function {
     tid: ztypes.tid
     sink: (MapRV String v: u8)
     skipNumeric: bool
+    privateOk: bool
 } is {
     # a unit's children are its definitions, not members: addUnitMembers
     # handles those, and declMemberList excludes them by design
@@ -7057,9 +7060,14 @@ addTypeMembersIn: function {
     mn8: pn8.length
     for mk8 < mn8 loop {
         cn: pn8.get i: mk8
-        skip8: false
-        if skipNumeric when (ztypecheck.isNumericTypeName name: cn.stringView) then skip8 = true
-        if skip8.not then {
+        if (memberHidden
+            :o
+            :tid
+            name: cn.stringView
+            nameId: (pi8.get i: mk8)
+            :skipNumeric
+            :privateOk
+        ).not then {
             k: 5.u8
             if (
                 (o.reg.typetypeOf typeId: (pt8.get i: mk8)) == ztypes.ztypetype.functionType
@@ -7070,6 +7078,22 @@ addTypeMembersIn: function {
         }
         mk8 = mk8 + 1
     }
+}
+
+# memberHidden -- member `name` of `tid` is left out of a completion: a numeric
+# type's name under skipNumeric, or one the type's `public:` block leaves out
+# where it may not be read
+memberHidden: function {
+    o: zenv.ZSymbolTable.view
+    tid: ztypes.tid
+    name: StringView
+    nameId: zast.nameid
+    skipNumeric: bool
+    privateOk: bool
+} out bool is {
+    if skipNumeric when (ztypecheck.isNumericTypeName :name) then return true
+    if privateOk then return false
+    return (ztypecheck.declMemberIsPrivate st: o :tid :nameId)
 }
 
 # addHeadUnitMembers -- the definitions of the unit a single head names: the
@@ -7123,6 +7147,84 @@ addUnitMembers: function {
             }
         }
     }
+}
+
+# privateMembersReachable -- whether the cursor may read the members that the
+# `public:` block of type `tid` leaves out, as the checker allows: inside the
+# type's own definition (its methods), or through a `base` binding that holds
+# the type's `.private` handle. A type with no block has none to hide.
+privateMembersReachable: function {
+    snap: zcheck.CheckResult
+    docRel: StringView
+    l1u: u32
+    base: StringView
+    tid: ztypes.tid
+} out bool is {
+    throwaway: MapRV String v: u8
+    ds: (enclosingDefStart
+        prog: snap.prog
+        unitOp: (docUnitOp r: snap rel: docRel)
+        :l1u
+        sink: throwaway
+    )
+    docFs: docFsnoOf r: snap rel: docRel
+    vid: baseVarInScope :snap :docRel defStart: ds :l1u :base
+    tn: typeDefNode o: snap.st :tid
+    if tn.isZero.not then {
+        # the enclosing definition is the type's own, in this document
+        inOwn: (memberStartLine m: (snap.prog.nodes.get i: tn)) == ds
+        if inOwn when (zcheck.fsnoFor r: snap nodeid: tn) == docFs then return true
+    }
+    o: snap.st
+    match (
+        o
+    ) case some then {
+        if (ztypecheck.publicNsOf st: o :tid).isZero then return true
+        if vid.isZero then return false
+        return (o.reg.variableIsPrivate id: vid)
+    } case none then null
+    return false
+}
+
+# typeDefNode -- the definition node of type `tid`, a generic instance's being
+# its template's; 0 when the snapshot knows none
+typeDefNode: function {o: (Option zenv.ZSymbolTable).view tid: ztypes.tid} out zast.nodeid is {
+    match (
+        o
+    ) case some then {
+        owner: tid
+        og: o.reg.genericOriginOf :tid
+        if og.isZero.not then owner = og
+        d: o.reg.defOf tid: owner
+        if d.isZero.not then return (o.typing.decls.get i: d).node
+    } case none then null
+    return zast.nodeid
+}
+
+# baseVarInScope -- the variable the local `base` names in the enclosing def,
+# as baseTypeInScope finds its rows; 0 when none is found
+baseVarInScope: function {
+    snap: zcheck.CheckResult
+    docRel: StringView
+    defStart: u32
+    l1u: u32
+    base: StringView
+} out ztypes.vid is {
+    result: ztypes.vid
+    sp: fileSpans prog: snap.prog fsno: (docFsnoOf r: snap rel: docRel)
+    ri: u64
+    for ri < sp.rows.length loop {
+        row: sp.rows.get i: ri
+        if row.line >= defStart when row.line <= l1u when (
+            (sp.names.get i: ri).stringView == base
+        ) then {
+            v: useVarId o: snap.st nid: row.nodeid
+            if row.kind == 3 then v = defVarIdOf o: snap.st nid: row.nodeid
+            if v.isZero.not then result = v
+        }
+        ri = ri + 1
+    }
+    return result
 }
 
 # baseTypeInScope -- the type id of the local `base` visible in the enclosing
@@ -7338,10 +7440,10 @@ addLiteralMembers: function {
     bits: bool
     sink: (MapRV String v: u8)
 } is {
-    addTypeMembers :prog :o tid: litTid :sink skipNumeric: false
+    addTypeMembers :prog :o tid: litTid :sink skipNumeric: false privateOk: false
     dflt: literalDefaultTid :prog :o :litTid :bits
     if dflt.isZero then return
-    addTypeMembers :prog :o tid: dflt :sink skipNumeric: true
+    addTypeMembers :prog :o tid: dflt :sink skipNumeric: true privateOk: false
 }
 
 # dotFrom -- index of the first `.` at or after `start` in base, or
@@ -7493,6 +7595,7 @@ addLiteralHead: function {
         tid: cur
         :sink
         skipNumeric: false
+        privateOk: false
     )
 }
 
@@ -8198,7 +8301,14 @@ addMemberCompletions: function {
         return
     }
     if site.place.body then {
-        addValueCompletions :snap :db :site :sink :marks
+        (addValueCompletions
+            :snap
+            :db
+            :site
+            privateOk: (privateMembersReachable :snap :docRel :l1u :base tid: db.tid)
+            :sink
+            :marks
+        )
         return
     }
     addTypeMarkers place: site.place :marks
@@ -8228,6 +8338,8 @@ addValueCompletions: function {
     snap: zcheck.CheckResult
     db: dotbase
     site: dotsite
+    # the members the type's `public:` block leaves out may be read here
+    privateOk: bool
     sink: (MapRV String v: u8)
     marks: ListVal zast.markerkind
 } is {
@@ -8242,6 +8354,7 @@ addValueCompletions: function {
         tid: db.tid
         :sink
         skipNumeric: false
+        :privateOk
     )
     if db.kind.typeBase then return
     valtype: isValtypeOpt o: snap.st tid: db.tid
