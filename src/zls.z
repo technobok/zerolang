@@ -6663,7 +6663,7 @@ addUnitChainDefs: function {
         cur: site
         for cur.isZero.not loop {
             if (o.typing.declIsUnitScope declId: cur) then {
-                addDeclUnitDefs prog: snap.prog st: o declId: cur :sink
+                addDeclUnitDefs prog: snap.prog st: o declId: cur outside: false :sink
             }
             cur = o.typing.declParentOf declId: cur
         }
@@ -6678,21 +6678,28 @@ addCoreDefs: function {snap: zcheck.CheckResult.view sink: (MapRV String v: u8)}
         o
     ) case some then {
         cr: o.typing.coreUnitRoot
-        if cr.isZero.not then addDeclUnitDefs prog: snap.prog st: o declId: cr :sink
+        if cr.isZero.not then addDeclUnitDefs prog: snap.prog st: o declId: cr outside: true :sink
     } case none then null
 }
 
-# addDeclUnitDefs -- the definitions of the unit declaration `declId`.
+# addDeclUnitDefs -- the definitions of the unit declaration `declId` that a
+# name written `outside` it, or inside, may read (collectUnitDefsIn).
 addDeclUnitDefs: function {
     prog: Ast.view
     st: zenv.ZSymbolTable.view
     declId: ztypes.declid
+    outside: bool
     sink: (MapRV String v: u8)
 } is {
     dn: (st.typing.decls.get i: declId).node
     if dn.isZero then return
     np: prog.nodes.get i: dn
-    if np.namedoperation then collectUnitDefsIn ast: prog ud: (prog.nodes.get i: np.operation) :sink
+    if np.namedoperation then (collectUnitDefsIn
+        ast: prog
+        ud: (prog.nodes.get i: np.operation)
+        :outside
+        :sink
+    )
 }
 
 # addUnitFiles -- the units the folder `dirid` holds, as Module candidates:
@@ -6714,16 +6721,104 @@ addUnitFiles: function {vfs: zvfs.ZVfs.view dirid: zvfs.fsno sink: (MapRV String
     } case file then null case err then null
 }
 
-# add a unit node's definition names to a completion sink.
-collectUnitDefsIn: function {ast: Ast.view ud: zast.astnode.view sink: (MapRV String v: u8)} is {
+# collectUnitDefsIn -- unit node `ud`'s definition names, as a completion
+# sink reads them: from inside the unit every definition, and from `outside`
+# what its `public:` block lists, every definition when it has none.
+collectUnitDefsIn: function {
+    ast: Ast.view
+    ud: zast.astnode.view
+    outside: bool
+    sink: (MapRV String v: u8)
+} is {
     if ud.unitdef then {
+        pb: publicBlockOp :ast body: ud.body
+        # from another unit only what the block lists is reachable
+        if outside when pb.isZero.not then {
+            collectPublicEntries :ast body: ud.body pb: (ast.nodes.get i: pb) :sink
+            return
+        }
         box2059: u64
         for box2059 < ud.body.count loop {
             b9Id: zast.kidAt kids: ast.kids span: ud.body i: box2059
             box2059 = box2059 + 1
-            collectMemberDef :ast m: (ast.nodes.get i: b9Id) :sink
+            ofPb: false
+            {
+                m: ast.nodes.get i: b9Id
+                if m.namedoperation then ofPb = m.operation == pb
+            }
+            # the block itself is no definition to offer
+            if ofPb.not then collectMemberDef :ast m: (ast.nodes.get i: b9Id) :sink
         }
     }
+}
+
+# publicBlockOp -- the `public:` block among a unit's definitions `body`, or
+# zero when it has none
+publicBlockOp: function {ast: Ast.view body: zast.kidspan} out zast.nodeid is {
+    i: u64
+    for i < body.count loop {
+        m: ast.nodes.get i: (zast.kidAt kids: ast.kids span: body :i)
+        i = i + 1
+        if m.namedoperation when (zast.unitOpKindIs
+            :ast
+            opId: m.operation
+            k: zast.unitkind.publicNs
+        ) then return m.operation
+    }
+    return zast.nodeid
+}
+
+# collectPublicEntries -- the names the `public:` block `pb` of the unit whose
+# definitions are `body` puts on its surface (addPublicEntry).
+collectPublicEntries: function {
+    ast: Ast.view
+    body: zast.kidspan
+    pb: zast.astnode.view
+    sink: (MapRV String v: u8)
+} is {
+    if pb.unitdef then {
+        i: u64
+        for i < pb.body.count loop {
+            eId: zast.kidAt kids: ast.kids span: pb.body :i
+            i = i + 1
+            addPublicEntry :ast :body e: (ast.nodes.get i: eId) :sink
+        }
+    }
+}
+
+# addPublicEntry -- one `public:` block entry `e` as a completion: an entry
+# naming a definition (`:shown`, `twice: double`) has that definition's kind,
+# and any other entry is a definition of the block.
+addPublicEntry: function {
+    ast: Ast.view
+    body: zast.kidspan
+    e: zast.astnode.view
+    sink: (MapRV String v: u8)
+} is {
+    if e.namedoperation then {
+        op: ast.nodes.get i: e.operation
+        named: zast.nameid
+        if op.labelvalue then named = e.name
+        if op.atomid then named = op.name
+        k: defKindOf :op
+        if named.isZero.not then k = unitDefKindNamed :ast :body nameId: named
+        lb: zast.nameTextAt :ast ref: e.name
+        addCand :sink name: lb.stringView kind: k
+    }
+}
+
+# unitDefKindNamed -- the completion kind of the definition `nameId` among a
+# unit's definitions `body`
+unitDefKindNamed: function {ast: Ast.view body: zast.kidspan nameId: zast.nameid} out u8 is {
+    i: u64
+    for i < body.count loop {
+        m: ast.nodes.get i: (zast.kidAt kids: ast.kids span: body :i)
+        i = i + 1
+        if m.namedoperation when m.name == nameId then return (defKindOf
+            op: (ast.nodes.get i: m.operation)
+        )
+    }
+    return 21
 }
 
 # add member `m`'s name to a completion sink.
@@ -6980,6 +7075,7 @@ addTypeMembersIn: function {
 # addHeadUnitMembers -- the definitions of the unit a single head names: the
 # top-level unit by its file, else the unit a bare name reaches from the
 # document's unit -- its own subunit, which no top-level file of the name holds.
+# Read from the document's unit, which sees another unit's public names only.
 addHeadUnitMembers: function {
     snap: zcheck.CheckResult.view
     docRel: StringView
@@ -6987,25 +7083,28 @@ addHeadUnitMembers: function {
     sink: (MapRV String v: u8)
 } is {
     if (unitFsnoByName :snap :name).isZero.not then {
-        addUnitMembers prog: snap.prog :name :sink
+        addUnitMembers prog: snap.prog :name selfOp: (docUnitOp r: snap rel: docRel) :sink
         return
     }
-    d: (bareDeclOf
-        o: snap.st
-        site: (docUnitDecl r: snap rel: docRel)
-        nameId: (zast.poolFind pool: snap.prog.names text: name)
-    )
+    site: docUnitDecl r: snap rel: docRel
+    d: bareDeclOf o: snap.st :site nameId: (zast.poolFind pool: snap.prog.names text: name)
     if d.isZero then return
     o: snap.st
     match (
         o
     ) case some then {
-        addDeclUnitDefs prog: snap.prog st: o declId: d :sink
+        addDeclUnitDefs prog: snap.prog st: o declId: d outside: d != site :sink
     } case none then null
 }
 
-# addUnitMembers -- the top-level symbols of the file-unit named `name`.
-addUnitMembers: function {prog: Ast.view name: StringView sink: (MapRV String v: u8)} is {
+# addUnitMembers -- the top-level symbols of the file-unit named `name`, read
+# from the unit whose definition node is `selfOp`.
+addUnitMembers: function {
+    prog: Ast.view
+    name: StringView
+    selfOp: zast.nodeid
+    sink: (MapRV String v: u8)
+} is {
     {
         uCnt9d: prog.units.length
         uIdx9d: u64
@@ -7018,6 +7117,7 @@ addUnitMembers: function {prog: Ast.view name: StringView sink: (MapRV String v:
                 if lb.stringView == name then (collectUnitDefsIn
                     ast: prog
                     ud: (prog.nodes.get i: u.operation)
+                    outside: u.operation != selfOp
                     :sink
                 )
             }
@@ -7926,11 +8026,14 @@ bareHeadOf: function {
 
 # addUnitDeclMembers -- the definitions of the unit whose type is `unitTid`,
 # and of its `public:` block: a subunit reached through a path, which has no
-# file of the name to list.
+# file of the name to list. Read from another unit, only what the block lists.
 addUnitDeclMembers: function {
     prog: Ast.view
     o: (Option zenv.ZSymbolTable).view
     unitTid: ztypes.tid
+    # the unit the completion is written in, which reads another unit's
+    # public names only
+    site: ztypes.declid
     sink: (MapRV String v: u8)
 } is {
     match (
@@ -7938,8 +8041,8 @@ addUnitDeclMembers: function {
     ) case some then {
         ud: o.reg.defOf tid: unitTid
         if ud.isZero then return
-        addDeclChildren :prog :o declId: ud :sink
         pb: ztypecheck.publicNsOf st: o tid: unitTid
+        if pb.isZero or (ud == site) then addDeclChildren :prog :o declId: ud :sink
         if pb.isZero.not then addDeclChildren :prog :o declId: pb :sink
     } case none then null
 }
@@ -8085,7 +8188,13 @@ addMemberCompletions: function {
     if db.kind.unitBase then {
         if db.single then {
             addHeadUnitMembers :snap :docRel name: base :sink
-        } else addUnitDeclMembers prog: snap.prog o: snap.st unitTid: db.tid :sink
+        } else (addUnitDeclMembers
+            prog: snap.prog
+            o: snap.st
+            unitTid: db.tid
+            site: (docUnitDecl r: snap rel: docRel)
+            :sink
+        )
         return
     }
     if site.place.body then {
