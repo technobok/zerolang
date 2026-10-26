@@ -6188,9 +6188,12 @@ resolveTyperefShell: function {
             :thisName
         )
     }
-    # a list where a member's type goes is the member's default
+    # anything else is a value, not a type: its fold has said why it is
+    # refused, and the member is declared with no type (memberDeclRefused). A
+    # list where a member's type goes is the member's default
     if (ast.nodes.get i: nid).listblock then refuseListDefault :st :ast :nid
-    return (st.reg.newType name: "?" typetype: ztypes.ztypetype.recordType)
+    st.typing.refusedDefaults.add item: nid
+    return ztypes.tid.zero
 }
 
 # refuseListDefault -- a list written where a field's or a parameter's type
@@ -14258,6 +14261,7 @@ foldedDeclType: function {
         nameId: dm.name
     )
     if fd.isZero then return ztypes.tid
+    errsBefore: st.typing.errors.length
     constFoldDecl :ast :st declId: fd
     # AN ARM CONSTANT MUST NAME AN ARM SOMETHING DECLARES. A GENERIC
     # PARAMETER'S declaration wears the same shape -- `t: anyval.generic` reads
@@ -14267,6 +14271,8 @@ foldedDeclType: function {
     # two apart, and a name the fold cannot place belongs to the type-ref path,
     # which knows how to resolve one.
     cvD: constValueOfDecl :st declId: fd
+    # a value the fold refused declares nothing: its report is the member's
+    if cvD.kind.none when st.typing.errors.length > errsBefore then return ztypes.tid
     if cvD.kind.armKind then {
         avD: (st.typing.declMemberIdOf
             parentTypeId: cvD.armTid
@@ -30814,6 +30820,23 @@ scopeMemberTid: function {
     return (probeScopeTyperef :st :ast :root :nameId)
 }
 
+# memberDeclRefused -- `tid` declares a member `nameId` by a default that was
+# refused (ZTyping.refusedDefaults). The refusal is reported where the default
+# is written, and that report stands for every read of the member.
+memberDeclRefused: function {
+    st: zenv.ZSymbolTable.view ast: Ast.view tid: ztypes.tid nameId: zast.nameid
+} out bool is {
+    td: declOfTypeId :st :tid
+    if td.isZero then return false
+    md: st.typing.declFindChild parentDeclId: td :nameId
+    if md.isZero then return false
+    dn: (st.typing.decls.get i: md).node
+    if dn.isZero then return false
+    n: ast.nodes.get i: dn
+    if n.namedoperation.not then return false
+    return (st.typing.refusedDefaults.has item: n.operation)
+}
+
 # reportUnknownMember -- an unknown member on a type whose member set is
 # complete is a hard error; memberStrictType says which types those are. The
 # param-stamp suppression a template body is walked under does not gate this: a
@@ -30863,6 +30886,7 @@ reportUnknownMember: function {
             baseNum: (isNumericTid :st tid: bt) or (isLiteralTypeId :st tid: bt)
             if (isScalarNameId id: cnId) when baseNum then stillMiss = false
         }
+        if stillMiss when (memberDeclRefused :st :ast tid: bt nameId: cnId) then stillMiss = false
         if stillMiss then {
             cn: zast.nameTextAt :ast ref: cnId
             # named as the value's own type: a typedef forwards its members to
@@ -65860,6 +65884,13 @@ unfoldedWhy: function {
     if plan.arm == 2 then {
         return (unfoldedNameWhy :st :scope :ast :unitDecl :nid nameId: plan.nameId :visiting)
     }
+    if plan.arm == 4 when (unfoldedMemberWhy
+        :st
+        :scope
+        :ast
+        parentId: plan.parentId
+        childId: plan.childId
+    ) then return true
     if (plan.arm == 4) or (plan.arm == 6) when (checkConstantMethodShape
         :st
         :scope
@@ -66103,6 +66134,33 @@ unfoldedBinopWhy: function {
         msg: "'\{opn}' has no compile-time value for \{lk} and \{rk}"
         hint: "constants fold + - * / and comparisons on numbers, % & | ^ << >> on integers, + == != on strings, and == != and or on arms, == != on data values".string
     )
+    return true
+}
+
+# unfoldedMemberWhy -- a path `T.m` with no value, where `T` names a type that
+# declares no member `m`: the body's unknown-member error, at the member. True
+# when it reported.
+unfoldedMemberWhy: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    parentId: zast.nodeid
+    childId: zast.nodeid
+} out bool is {
+    pn: bareAtomNameId n: (ast.nodes.get i: parentId)
+    cn: bareAtomNameId n: (ast.nodes.get i: childId)
+    if pn.isZero or cn.isZero then return false
+    hit: envLookup :st :scope nameId: pn
+    if hit.declId.isZero then return false
+    tid: declTypeIdOf :st declId: hit.declId
+    if tid.isZero then return false
+    if (st.reg.typetypeOf typeId: tid) == ztypes.ztypetype.unitType then return false
+    if (st.typing.declFindChild parentDeclId: hit.declId nameId: cn).isZero.not then return false
+    tn: specWrittenName :st :ast :tid
+    mn: zast.nameTextAt :ast ref: cn
+    msg: "type '\{tn}' has no member '\{mn}'"
+    w: mn.length.u32.orPanic
+    reportUnfoldedAs :st :ast nid: childId width: w e: zast.err.typeError :msg hint: String
     return true
 }
 
