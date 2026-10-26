@@ -812,27 +812,37 @@ add an extra blank line if a trailing newline is required
       in this case (closing delimiter is hard left)
 "</code></pre>
 <h4 id="string-literal-types"><a href="#string-literal-types">2.11.4. String Literal Types</a></h4>
-<p>A string literal types as <code>StringView</code> -- a view over the static
-program-memory bytes that hold the literal. This is true for both
-interpreted and raw forms; the runtime stores the literal once in the
-program image, and bindings, arguments, and returns referencing the
-literal share that storage with no allocation.</p>
+<p>A string literal types as <code>textliteral</code>, a compile-time type, as an
+integer literal types as <code>intliteral</code>. The literal's bytes are stored
+once in the program image, and whatever reads them shares that storage
+with no allocation. This is true for both interpreted and raw forms.</p>
 <p>An <em><strong>interpolated</strong></em> interpreted string is the one exception: because
 the runtime must allocate to splice the interpolated values into the
 surrounding text, the resulting literal types as <code>String</code>.</p>
-<p>A literal coerces to its destination where one is known, as a number
-literal does: at a <code>text</code> destination -- a parameter, a record, class,
-<code>data</code> or <code>choice</code> field, an <code>out text</code> return, a <code>ListVal text</code>
-element, a typed static list -- it is <code>text</code>, static text (see the
-stdlib's <code>text</code>), and <code>"abc".text</code> makes it one outright, as
-<code>5.u8</code> makes a <code>u8</code>. So does an untyped string constant read by name,
-and a folded read of an untyped list's element. A runtime value never
-converts: a local bound to a literal is the <code>StringView</code> it was bound as.</p>
+<p>A literal takes the type of its destination, as a number literal does:
+at a <code>text</code> destination -- a parameter, a record, class, <code>data</code> or
+<code>choice</code> field, an <code>out text</code> return, a <code>ListVal text</code> element, a
+typed static list -- it is <code>text</code>, static text (see the stdlib's
+<code>text</code>), and at a <code>StringView</code> or <code>StringLike</code> one it is a
+<code>StringView</code>. With no destination it is <code>text</code> in a static position
+(a data field's default, an untyped list's element) and a <code>StringView</code>
+elsewhere: a local bound to a literal is the <code>StringView</code> it was bound
+as, and a field or parameter declared by a string default
+(<code>name: ""</code>) is a <code>StringView</code>. An untyped string constant
+(<code>NAME: "zero"</code>) is a <code>textliteral</code> too, and so is a folded read of
+an untyped list's element. <code>.text</code> and <code>.stringView</code> convert one
+outright -- <code>"abc".text</code>, <code>NAME.text</code> -- as <code>5.u8</code> makes a
+<code>u8</code>. A run-time value never converts: a <code>StringView</code> is no
+<code>text</code>.</p>
+<p><code>textliteral</code> is refused as the declared type of a parameter, a local
+or a run-time field. A <code>data</code> or <code>choice</code> field and a list's
+<code>out</code> may name it, as they may <code>intliteral</code>: the value stays
+untyped, and is <code>text</code> where run time reads it.</p>
 <p>A literal never becomes an owned <code>String</code> by itself: a <code>String</code>
 allocates, and the allocation is written where it happens. A
 <code>String</code> parameter, field, <code>out String</code> return or reassignment
 takes <code>"bob".string</code>, and a bare literal there is the ordinary
-type mismatch (a <code>StringView</code> where a <code>String</code> is wanted). A
+type mismatch (a <code>textliteral</code> where a <code>String</code> is wanted). A
 plain binding (<code>x: "x"</code>) is a view, and a <code>StringLike</code> generic
 parameter takes the view as written. For the <em><strong>empty</strong></em> owned string,
 no literal is needed at all: the bare type name constructs it
@@ -6391,9 +6401,10 @@ of its own: <code>mydata.cNul</code> reads at the list's type at every access, a
 converts as a typed numeric literal does anywhere else. A list that names
 no element type reads its elements UNTYPED, as a unit constant reads:
 <code>sizes.small</code> lands in whatever numeric type takes it, checked by its
-value, and a string element is a <code>StringView</code> or <code>text</code> as its slot asks,
-as a string literal is. Only what reaches run time -- the list's value, a
-run-time <code>.get</code>, a walk -- materialises: an untyped list's value is a
+value, and a string element is a <code>textliteral</code>, which its slot makes a
+<code>StringView</code> or <code>text</code>, as a string literal is. Only what reaches run
+time -- the list's value, a run-time <code>.get</code>, a walk -- materialises: an
+untyped list's value is a
 <code>staticlist i64</code> or a <code>staticlist f64</code>, and a list of strings is in a static
 position, so its value is a <code>staticlist text</code>; each is indexed by <code>u64</code>,
 and the emitted program never holds an untyped element. A run-time read of a

@@ -94,7 +94,7 @@ point: record {
 
 ### Strings
 
-A string literal is a `StringView`; a `String` is the owned kind, which
+A string literal is read as a `StringView`; a `String` is the owned kind, which
 `append` grows. Interpolation uses `\{expr}`:
 
 ```zerolang

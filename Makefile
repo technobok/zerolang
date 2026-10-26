@@ -1223,7 +1223,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2338070
+ALLOC_BASELINE := 2339740
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1298,7 +1298,7 @@ TYPENAME_OK := src/ztypecheck.z:resolveClass src/ztypecheck.z:resolveProtocol \
 	src/zemitterc.z:emitStaticListMember src/zemitterc.z:emitStrConvCall \
 	src/zsource.z:bareZeroTypeName src/ztypecheck.z:constraintKindForId \
 	src/ztypecheck.z:isConformanceMarker src/ztypecheck.z:declareCanonicalTypeId \
-	src/ztypecheck.z:isTextLiteralCast src/zemitterc.z:textLiteralRead
+	src/ztypecheck.z:textLiteralCastTarget
 typename-guard:
 	@fail=0; n=0; \
 	for e in $$(awk '/^[A-Za-z_][A-Za-z0-9_]*: function/ {fn=$$1; sub(":", "", fn)} \
@@ -2319,7 +2319,7 @@ VIEW_GUARD_INLINE := Bytes.byteView:unemitted \
   str.length:inline str.size:inline str.string:byvalue \
   str.stringView:inline str.substring:inline \
   optionval.or:byvalue resultval.orPanic:byvalue resultval.or:byvalue \
-  intliteral.*:byvalue floatliteral.*:byvalue *.iterate:byvalue *.times:byvalue \
+  intliteral.*:byvalue floatliteral.*:byvalue textliteral.*:byvalue *.iterate:byvalue *.times:byvalue \
   staticlist.length:inline staticlist.array:inline staticlist.tag:inline staticlist.slot:inline
 
 define VIEW_GUARD_AWK

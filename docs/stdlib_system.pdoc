@@ -80,7 +80,7 @@ operation can fail for reasons the caller needs to handle
   [#*: [#> to=bool: #b:"bool"] -- #~"variant { false: null  true: null }"; comparisons, #~"and" / #~"or" / #~"not"]
   [#*: [#> to=null: #b:"null"] -- #~"null: record is native"]
   [#*: [#> to=never: #b:"never"] -- #~"never: record is native"]
-  [#*: [#> to=literal-types: #b:"intliteral" / #b:"floatliteral"] -- the compile-time types of a numeric literal]
+  [#*: [#> to=literal-types: #b:"intliteral" / #b:"floatliteral" / #b:"textliteral"] -- the compile-time types of a literal]
   [#*: [#> to=intrange: #b:"intrange"] -- the walk #~"times" / #~"upto" / #~"downto" hand back]
   [#*: [#> to=family-bounds: #b:"AnyRef" / #b:"anyval"] -- the family bounds; there is no top type]
 
@@ -484,10 +484,13 @@ when the range is held as a value:
 #--: literal types
 
 
-The type a numeric literal wears before context pins it. #~"intliteral"
+The type a literal wears before context pins it. #~"intliteral"
 declares a conversion to each of the sixteen scalars; #~"floatliteral"
 declares only the four float ones, which is what makes #~"3.5.u8" a
-missing member rather than a rule written by hand.
+missing member rather than a rule written by hand. #~"textliteral" is
+the type of a string literal and of an untyped string constant: it
+declares #~"text", #~"stringView" and #~"string", and any other member is
+read on the #~"StringView" it becomes (#~"\"abc\".length").
 
 Their conversions return the #b:"bare" target type, never a
 #~"resultval". On a scalar a lossy conversion can fail at run time and
@@ -495,10 +498,11 @@ so must be checked; on a literal the value is known at compile time, so
 it either fits -- and #~"65.u8" is simply a #~"u8" -- or it does not and
 the program is rejected where the literal is written.
 
-Neither type reaches emission: the programmer converts explicitly, or
-context coerces, or the literal falls to #~"i64" / #~"f64".
+None of the three reaches emission: the programmer converts explicitly,
+or context coerces, or the literal falls to #~"i64" / #~"f64", and a
+string to #~"StringView" -- #~"text" in a static position.
 
-#~"core" re-exports both names, so a unit-level alias may refer to one
+#~"core" re-exports the three names, so a unit-level alias may refer to one
 (#~"lit: intliteral"), but #~"create: null" means nothing constructs
 one: a binding that names it bare is refused by the general
 non-constructible rule, the same one a user record with
@@ -652,8 +656,8 @@ for building and modifying text. A two-word struct: size (current
 byte count) plus capacity (allocated buffer size). No separate
 string-builder type -- #~"String" is the builder.
 
-#b:"Construction." The most common form is projecting a
-stringView-typed literal:
+#b:"Construction." The most common form is a string literal, which a
+binding takes as a StringView:
 
 #code language=zerolang: """
   s: "hello".string
@@ -737,7 +741,7 @@ non-owned parameter -- see [#> to=./ownership.html: ownership].
 #b:"Construction."
 
 #code language=zerolang: """
-  # A literal IS a stringView -- zero-copy into .rodata
+  # a literal bound by itself is a StringView -- zero-copy into .rodata
   v: "hello"
 
   # From a mutable string -- installs a lock on s
@@ -831,11 +835,12 @@ locked, and is copied by value like a number. It can be held anywhere a value
 type can: a local, a parameter, a result, a record or class field, a #~"ListVal"
 element, a #~"MapVV" key, a static list (#~"out staticlist text").
 
-#b:"From literals." A string literal is a #~"StringView" unless its
-destination asks for #~"text", and then it is #~"text": a #~"text"
-parameter, field, #~"out text" return, #~"ListVal text" element or a typed
-static list. #~"\"abc\".text" makes one outright. A runtime value -- a local
-bound to a literal, a parameter, a typed constant -- keeps its type.
+#b:"From literals." A string literal is a #~"textliteral", which its
+destination makes #~"text" -- a #~"text" parameter, field, #~"out text"
+return, #~"ListVal text" element or a typed static list -- or a
+#~"StringView" elsewhere. #~"\"abc\".text" and #~"NAME.text", for an untyped
+string constant, make one outright. A runtime value -- a local bound to a
+literal, a parameter, a typed constant -- keeps its type.
 
 #b:"Members." #~"length", #~"isEmpty", the byte orderings (#~"==" #~"!="
 #~"<" #~"<=" #~">" #~">=" and #~"compare"), #~"hash", and #~"string", which

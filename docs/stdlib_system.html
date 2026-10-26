@@ -183,7 +183,7 @@ operation can fail for reasons the caller needs to handle
 <li><a href="#bool"><strong>bool</strong></a> -- <code>variant { false: null  true: null }</code>; comparisons, <code>and</code> / <code>or</code> / <code>not</code></li>
 <li><a href="#null"><strong>null</strong></a> -- <code>null: record is native</code></li>
 <li><a href="#never"><strong>never</strong></a> -- <code>never: record is native</code></li>
-<li><a href="#literal-types"><strong>intliteral</strong> / <strong>floatliteral</strong></a> -- the compile-time types of a numeric literal</li>
+<li><a href="#literal-types"><strong>intliteral</strong> / <strong>floatliteral</strong> / <strong>textliteral</strong></a> -- the compile-time types of a literal</li>
 <li><a href="#intrange"><strong>intrange</strong></a> -- the walk <code>times</code> / <code>upto</code> / <code>downto</code> hand back</li>
 <li><a href="#family-bounds"><strong>AnyRef</strong> / <strong>anyval</strong></a> -- the family bounds; there is no top type</li>
 </ul>
@@ -518,18 +518,22 @@ when the range is held as a value:</p>
 <pre><code class="language-zerolang">  r: 1.upto to: 3
   for h: r loop print "\{h}"           # 1 2 3 -- read bare, r is its call</code></pre>
 <h2 id="literal-types"><a href="#literal-types">5. literal types</a></h2>
-<p>The type a numeric literal wears before context pins it. <code>intliteral</code>
+<p>The type a literal wears before context pins it. <code>intliteral</code>
 declares a conversion to each of the sixteen scalars; <code>floatliteral</code>
 declares only the four float ones, which is what makes <code>3.5.u8</code> a
-missing member rather than a rule written by hand.</p>
+missing member rather than a rule written by hand. <code>textliteral</code> is
+the type of a string literal and of an untyped string constant: it
+declares <code>text</code>, <code>stringView</code> and <code>string</code>, and any other member is
+read on the <code>StringView</code> it becomes (<code>"abc".length</code>).</p>
 <p>Their conversions return the <strong>bare</strong> target type, never a
 <code>resultval</code>. On a scalar a lossy conversion can fail at run time and
 so must be checked; on a literal the value is known at compile time, so
 it either fits -- and <code>65.u8</code> is simply a <code>u8</code> -- or it does not and
 the program is rejected where the literal is written.</p>
-<p>Neither type reaches emission: the programmer converts explicitly, or
-context coerces, or the literal falls to <code>i64</code> / <code>f64</code>.</p>
-<p><code>core</code> re-exports both names, so a unit-level alias may refer to one
+<p>None of the three reaches emission: the programmer converts explicitly,
+or context coerces, or the literal falls to <code>i64</code> / <code>f64</code>, and a
+string to <code>StringView</code> -- <code>text</code> in a static position.</p>
+<p><code>core</code> re-exports the three names, so a unit-level alias may refer to one
 (<code>lit: intliteral</code>), but <code>create: null</code> means nothing constructs
 one: a binding that names it bare is refused by the general
 non-constructible rule, the same one a user record with
@@ -648,8 +652,8 @@ section.</p>
 for building and modifying text. A two-word struct: size (current
 byte count) plus capacity (allocated buffer size). No separate
 string-builder type -- <code>String</code> is the builder.</p>
-<p><strong>Construction.</strong> The most common form is projecting a
-stringView-typed literal:</p>
+<p><strong>Construction.</strong> The most common form is a string literal, which a
+binding takes as a StringView:</p>
 <pre><code class="language-zerolang">  s: "hello".string</code></pre>
 <p>This copies the rodata literal into a fresh heap buffer. To
 accumulate programmatically, start empty and <code>.append</code>:</p>
@@ -714,7 +718,7 @@ cannot escape into a
 class field or be returned from a function unless the source is a
 non-owned parameter -- see <a href="./ownership.html">ownership</a>.</p>
 <p><strong>Construction.</strong></p>
-<pre><code class="language-zerolang">  # A literal IS a stringView -- zero-copy into .rodata
+<pre><code class="language-zerolang">  # a literal bound by itself is a StringView -- zero-copy into .rodata
   v: "hello"
 
   # From a mutable string -- installs a lock on s
@@ -789,11 +793,12 @@ program's own string literals -- so it owns nothing, is never freed and never
 locked, and is copied by value like a number. It can be held anywhere a value
 type can: a local, a parameter, a result, a record or class field, a <code>ListVal</code>
 element, a <code>MapVV</code> key, a static list (<code>out staticlist text</code>).</p>
-<p><strong>From literals.</strong> A string literal is a <code>StringView</code> unless its
-destination asks for <code>text</code>, and then it is <code>text</code>: a <code>text</code>
-parameter, field, <code>out text</code> return, <code>ListVal text</code> element or a typed
-static list. <code>"abc".text</code> makes one outright. A runtime value -- a local
-bound to a literal, a parameter, a typed constant -- keeps its type.</p>
+<p><strong>From literals.</strong> A string literal is a <code>textliteral</code>, which its
+destination makes <code>text</code> -- a <code>text</code> parameter, field, <code>out text</code>
+return, <code>ListVal text</code> element or a typed static list -- or a
+<code>StringView</code> elsewhere. <code>"abc".text</code> and <code>NAME.text</code>, for an untyped
+string constant, make one outright. A runtime value -- a local bound to a
+literal, a parameter, a typed constant -- keeps its type.</p>
 <p><strong>Members.</strong> <code>length</code>, <code>isEmpty</code>, the byte orderings (<code>==</code> <code>!=</code>
 <code>&lt;</code> <code>&lt;=</code> <code>&gt;</code> <code>&gt;=</code> and <code>compare</code>), <code>hash</code>, and <code>string</code>, which
 copies the bytes into an owned <code>String</code>. The slices <code>substring</code>,

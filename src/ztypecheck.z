@@ -725,6 +725,8 @@ typesCompatible: function {
     if aLit when bLit then return true
     if aLit when (isNumericTid :st tid: b) then return true
     if bLit when (isNumericTid :st tid: a) then return true
+    if (isTextLiteralTid :st tid: a) when (textLiteralLands :ast :st dst: b) then return true
+    if (isTextLiteralTid :st tid: b) when (textLiteralLands :ast :st dst: a) then return true
     cur: a
     for cur.isZero.not loop {
         nb: typedefBaseTidOf :st tid: cur
@@ -6360,7 +6362,7 @@ refuseLiteralTyperef: function {
     nid: zast.nodeid
     tid: ztypes.tid
 } is {
-    if (isLiteralTypeId :st :tid).not then return
+    if (isAnyLiteralTid :st :tid).not then return
     # a list's `out` and a data field name an untyped value this way
     if (st.typing.staticLiteralTyperefs.has item: nid) then return
     ltn: st.reg.nameOf :tid
@@ -6375,7 +6377,7 @@ refuseLiteralTyperef: function {
     if written9.not then return
     dflt: literalDefaultName :st :tid
     lm9: "'\{ltn}' is a compile-time type and cannot be written as a declared type"
-    ln9: "a numeric literal wears it until context pins one; it never reaches emission".string
+    ln9: "a literal wears it until context pins one; it never reaches emission".string
     lh9: "name the type the value should have, such as `\{dflt}`"
     pos: zast.posOf n: (ast.nodes.get i: nid)
     (addErrorH
@@ -10572,7 +10574,7 @@ staticListOutParts: function {
     )
     elemWrote: wrote.elem
     idxWrote: wrote.index
-    eLit: elemWrote.isZero or (isLiteralTypeId :st tid: elemWrote)
+    eLit: elemWrote.isZero or (isAnyLiteralTid :st tid: elemWrote)
     iLit: idxWrote.isZero or (isLiteralTypeId :st tid: idxWrote)
     if iLit then idx = ztypes.tid.zero
     return (staticlistoutparts
@@ -10637,7 +10639,7 @@ staticListOutWrote: function {
         if opId.isZero then continue
         at: resolveTyperefShell :st :scope :ast :unitDecl nid: opId thisName: ""
         # an untyped element or index is written as its literal type here
-        if (isLiteralTypeId :st tid: at) then st.typing.staticLiteralTyperefs.add item: opId
+        if (isAnyLiteralTid :st tid: at) then st.typing.staticLiteralTyperefs.add item: opId
         first: lbl.isZero and (positional == 0)
         if lbl.isZero then positional = positional + 1
         if lbl.isZero.not and (lbl == elemName) or first then elemWrote = at
@@ -10681,6 +10683,8 @@ staticListValueTypeOver: function {
         isElem: true
         float: et == st.reg.literalFloatTid
     )
+    # an untyped string is text in a static position
+    if et == st.reg.literalTextTid then et = stdTid :ast :st wk: zast.wellKnown.slot.tyText
     it: idxTid
     if it.isZero.not when (isLiteralTypeId :st tid: it) then it = (materialTid
         :ast
@@ -11062,7 +11066,7 @@ resolveStaticListInto: function {
                 cv = ztypes.typedConst c: cv numTid: elemTid
             }
             # a typed string list's element is a TYPED constant too: it reads
-            # as its element type, and adapts to no other (adaptsToText)
+            # as its element type, not as a textliteral
             if typed when cv.kind.svalKind when (isStaticStringTid :ast :st tid: elemTid) then {
                 cv = ztypes.typedConst c: cv numTid: elemTid
             }
@@ -13561,7 +13565,7 @@ isStaticMemberTid: function {st: zenv.ZSymbolTable ast: Ast tid: ztypes.tid} out
     if (
         (typeIsNumberOf :st :tid float: false) or (typeIsNumberOf :st :tid float: true)
     ) then return true
-    if (isLiteralTypeId :st :tid) then return true
+    if (isAnyLiteralTid :st :tid) then return true
     if tid == (stdTid :ast :st wk: zast.wellKnown.slot.tyText) then return true
     if (st.reg.isStaticOf :tid) then return true
     if (valIsMonoOf :st :tid wk: zast.wellKnown.slot.tyStaticlist) then return true
@@ -22351,7 +22355,7 @@ printableInterpTid: function {
     tid: ztypes.tid
 } out bool is {
     if tid.isZero then return true
-    if (isLiteralTypeId :st :tid) then return true
+    if (isAnyLiteralTid :st :tid) then return true
     t: tid
     for true loop {
         b: typedefBaseTidOf :st tid: t
@@ -22439,9 +22443,10 @@ checkInterpPart: function {
     )
 }
 
-# checkString -- a non-interpolated string literal types as StringView; an
-# interpolated one (any non-chunk part) types as String, since it must allocate
-# to splice the values, and each interpolated sub-expression is walked + stamped.
+# checkString -- a non-interpolated string literal types as textliteral, which
+# its destination converts; an interpolated one (any non-chunk part) types as
+# String, since it must allocate to splice the values, and each interpolated
+# sub-expression is walked + stamped.
 checkString: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
@@ -22472,7 +22477,7 @@ checkString: function {
     if hasInterp then {
         tyOpt = stdTidOpt :ast :st wk: zast.wellKnown.slot.tyString
     } else {
-        tyOpt = stdTidOpt :ast :st wk: zast.wellKnown.slot.tyStringView
+        tyOpt = optionval.some st.reg.literalTextTid
     }
     match (
         tyOpt
@@ -24093,6 +24098,7 @@ literalSatisfies: function {
         )
     }
     if argTid == st.reg.literalFloatTid then return ck == ztypes.constraintkind.staticMember
+    if argTid == st.reg.literalTextTid then return ck == ztypes.constraintkind.staticMember
     return false
 }
 
@@ -27087,7 +27093,9 @@ materialiseStaticListArgs: function {
     for k < pnames.length loop {
         pn: pnames.get i: k
         v: (subs.get key: pn).or d: ztypes.tid.zero
-        if v.isZero or (isLiteralTypeId :st tid: v) then {
+        if v == st.reg.literalTextTid then {
+            subs.set key: pn value: (stdTid :ast :st wk: zast.wellKnown.slot.tyText)
+        } else if v.isZero or (isLiteralTypeId :st tid: v) then {
             float: v == st.reg.literalFloatTid
             subs.set key: pn value: (materialTid :ast :st isElem: k == 0 :float)
         }
@@ -32069,16 +32077,13 @@ takeListBase: function {st: zenv.ZSymbolTable dp: dpref} is {
 
 # listElemReadTid -- the type a read of one element of a list has: the list's
 # element type, except that an untyped string reads as the literal it was
-# written as -- a StringView, which a `text` destination adapts -- though the
-# list of untyped strings is a `staticlist text`. A number list's elements
-# read as i64 and adapt the same way, by their untyped value.
+# written as, a textliteral, though the list of untyped strings is a
+# `staticlist text`. A number list's elements read as i64 and land by their
+# untyped value.
 listElemReadTid: function {
-    ast: Ast.view st: zenv.ZSymbolTable.view elem: ztypes.tid item: ztypes.cval
+    st: zenv.ZSymbolTable.view elem: ztypes.tid item: ztypes.cval
 } out ztypes.tid is {
-    if item.kind.svalKind when item.numTid.isZero then {
-        sv: stdTidPeek :ast :st wk: zast.wellKnown.slot.tyStringView
-        if sv.isZero.not then return sv
-    }
+    if item.kind.svalKind when item.numTid.isZero then return st.reg.literalTextTid
     return elem
 }
 
@@ -32094,7 +32099,6 @@ listMemberType: function {
         lp
     ) case some then {
         return (listElemReadTid
-            :ast
             :st
             elem: g.elem
             item: (st.typing.constAggItems.get i: g.itemStart.u64 + lp)
@@ -32106,7 +32110,6 @@ listMemberType: function {
         pos
     ) case ok then {
         if pos < g.itemCount then return (listElemReadTid
-            :ast
             :st
             elem: g.elem
             item: (st.typing.constAggItems.get i: g.itemStart.u64 + pos)
@@ -33870,30 +33873,6 @@ literalConvTarget: function {
     return (optionval.none ztypes.tid)
 }
 
-# checkTextLiteralCast -- `"abc".text`: a plain string literal made text, as
-# `5.u8` makes an integer literal u8. Only a literal: a runtime StringView has no
-# `text` (its bytes may be a String's).
-checkTextLiteralCast: function {st: zenv.ZSymbolTable ast: Ast dp: dpref} out callleg is {
-    unhandled: callleg handled: false tid: ztypes.tid
-    tc: atomNameId :ast n: (ast.nodes.get i: dp.child)
-    if (isTextLiteralCast :ast parentId: dp.parent nameId: tc).not then return unhandled
-    txT: stdTid :ast :st wk: zast.wellKnown.slot.tyText
-    if txT.isZero then return unhandled
-    stampGate :st nid: dp.parent tid: txT
-    stampGate :st nid: dp.nid tid: txT
-    return (callleg handled: true tid: txT)
-}
-
-# isTextLiteralCast -- the path `"abc".text`: a plain string literal (no
-# interpolation) at `parentId` and the member `text`.
-isTextLiteralCast: function {ast: Ast.view parentId: zast.nodeid nameId: zast.nameid} out bool is {
-    if nameId != zast.wellKnown.slot.tyText then return false
-    if parentId.isZero then return false
-    bn: ast.nodes.get i: parentId
-    if bn.atomstring.not then return false
-    return (stringLitIsLiteralText :ast parts: bn.stringparts)
-}
-
 # checkNumericSuffixCast -- `1.u8` / `(2.5).f32`: when the child names a non-
 # function type and the parent is a numeric literal, the path is a typed-literal
 # cast -- the parent atom coerces to the suffix type and the path carries it.
@@ -34021,6 +34000,35 @@ checkUntypedConstantCast: function {
     return (callleg handled: true tid: target)
 }
 
+# checkUntypedTextCast -- `NAME.text` or `NAME.stringView` where NAME is an
+# untyped string constant, or a folded read of an untyped list's element: the
+# conversion is the literal's own, as `"abc".text` is, so the base and the path
+# carry the target type.
+checkUntypedTextCast: function {st: zenv.ZSymbolTable ast: Ast dp: dpref} out callleg is {
+    notCast: callleg handled: false tid: ztypes.tid.zero
+    v: st.typing.nodeConstIn mono: st.typing.curMonoStamp nid: dp.parent
+    if v.kind.svalKind.not or v.numTid.isZero.not then return notCast
+    target: textLiteralCastTarget :ast :st nameId: (atomNameId :ast n: (ast.nodes.get i: dp.child))
+    if target.isZero then return notCast
+    stampGate :st nid: dp.parent tid: target
+    stampGate :st nid: dp.nid tid: target
+    return (callleg handled: true tid: target)
+}
+
+# textLiteralCastTarget -- the type a textliteral's conversion member `nameId`
+# makes it: text for `text`, StringView for `stringView`; 0 for any other name.
+textLiteralCastTarget: function {
+    ast: Ast st: zenv.ZSymbolTable nameId: zast.nameid
+} out ztypes.tid is {
+    if nameId == zast.wellKnown.slot.tyText then {
+        return (stdTid :ast :st wk: zast.wellKnown.slot.tyText)
+    }
+    if nameId == zast.wellKnown.slot.wkStringView then {
+        return (stdTid :ast :st wk: zast.wellKnown.slot.tyStringView)
+    }
+    return ztypes.tid.zero
+}
+
 # boxMemberDelegates -- a member read off a Box that is its element's: anything
 # but the ownership and access markers and `.copy`, which act on the box.
 boxMemberDelegates: function {nameId: zast.nameid} out bool is {
@@ -34091,9 +34099,10 @@ dottedBaseTid: function {
         }
         if bt.isZero then return ztypes.tid.zero
     }
-    # A literal base materialises before member lookup (`5.times` is i64's);
-    # the parent node restamps at the concrete default.
-    if (isLiteralTypeId :st tid: bt) then {
+    # A literal base materialises before member lookup (`5.times` is i64's,
+    # `"ab".length` StringView's); the parent node restamps at the concrete
+    # default.
+    if (isAnyLiteralTid :st tid: bt) then {
         mbt: materialiseLiteral :ast :st t: bt
         if mbt != bt then {
             bt = mbt
@@ -34147,8 +34156,6 @@ checkDotted: function {
 } out ztypes.tid is {
     nsc: checkNumericSuffixCast :st :ast :dp
     if nsc.handled then return nsc.tid
-    tlc: checkTextLiteralCast :st :ast :dp
-    if tlc.handled then return tlc.tid
     if (refuseMetaMember
         :st
         :ast
@@ -34176,6 +34183,8 @@ checkDottedOn: function {
 } out ztypes.tid is {
     ucc: checkUntypedConstantCast :st :ast :dp
     if ucc.handled then return ucc.tid
+    utc: checkUntypedTextCast :st :ast :dp
+    if utc.handled then return utc.tid
     cnId: atomNameId :ast n: (ast.nodes.get i: dp.child)
     if cnId.isZero then return ztypes.tid.zero
     # an instance's walk reads a partial base as the spec its arguments complete
@@ -36539,7 +36548,7 @@ lastStmtType: function {
 }
 
 # materialiseLiteral -- fold a literal pseudo-type id to its concrete default
-# (i64 / f64); concrete ids pass through.
+# (i64 / u64 / f64, StringView for a string); concrete ids pass through.
 materialiseLiteral: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -36573,6 +36582,7 @@ literalTypeDefaultTid: function {
     if t == st.reg.literalIntTid then nm = zast.wellKnown.slot.tyI64
     if t == st.reg.literalBitsTid then nm = zast.wellKnown.slot.tyU64
     if t == st.reg.literalFloatTid then nm = zast.wellKnown.slot.tyF64
+    if t == st.reg.literalTextTid then return (stdTid :ast :st wk: zast.wellKnown.slot.tyStringView)
     if nm.isZero then return t
     return (scalarTidOf :st :scope :ast nameId: nm)
 }
@@ -37511,13 +37521,7 @@ checkReassignedType: function {
             )
             return
         }
-        if (typesCompatible :ast :st a: rvt b: chkT).not when (adaptsToText
-            :st
-            :ast
-            dstTid: chkT
-            valueNid: rasgn.value
-            exprNid: rasgn.value
-        ).not then {
+        if (typesCompatible :ast :st a: rvt b: chkT).not then {
             skipR: false
             lttR: st.reg.typetypeOf typeId: chkT
             if lttR == ztypes.ztypetype.protocolType then skipR = true
@@ -37795,7 +37799,7 @@ checkReassignment: function {
     if (refuseNullValue :st :ast vt: mrv0 nid: rasgn.value) then return
     # A literal RHS at a concretely-typed target coerces: restamp the RHS. A
     # literal-typed target (a literal-init loop binding) keeps the pseudo.
-    if lvt.isZero.not when rvt.isZero.not when (isLiteralTypeId :st tid: rvt) when (isLiteralTypeId
+    if lvt.isZero.not when rvt.isZero.not when (isAnyLiteralTid :st tid: rvt) when (isAnyLiteralTid
         :st
         tid: lvt
     ).not then {
@@ -43939,6 +43943,27 @@ isLiteralTypeId: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool 
     return tid == st.reg.literalFloatTid
 }
 
+# isTextLiteralTid -- a string literal's pseudo-type, textliteral. Not one of
+# isLiteralTypeId's, which are the NUMERIC literals: a number converts to any
+# number, and a textliteral only to text or a StringView.
+isTextLiteralTid: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
+    return tid == st.reg.literalTextTid
+}
+
+# isAnyLiteralTid -- a literal's pseudo-type, numeric or textliteral: a value
+# that takes the type of the place it lands in.
+isAnyLiteralTid: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
+    return (isLiteralTypeId :st :tid) or (isTextLiteralTid :st :tid)
+}
+
+# textLiteralLands -- a textliteral fits the place typed `dst`: text,
+# StringView, or textliteral itself.
+textLiteralLands: function {ast: Ast st: zenv.ZSymbolTable dst: ztypes.tid} out bool is {
+    if dst == st.reg.literalTextTid then return true
+    if dst == (stdTid :ast :st wk: zast.wellKnown.slot.tyText) then return true
+    return dst == (stdTid :ast :st wk: zast.wellKnown.slot.tyStringView)
+}
+
 # isIntLiteralTid -- an integer literal's pseudo-type: a decimal one's, or a
 # hex, octal or binary one's.
 isIntLiteralTid: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
@@ -43946,12 +43971,13 @@ isIntLiteralTid: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool 
 }
 
 # literalDefaultName -- the type a literal pseudo-type takes where nothing gives
-# it one: i64, u64 for a hex, octal or binary integer, which spells bits, and
-# f64. "" for any other type.
+# it one: i64, u64 for a hex, octal or binary integer, which spells bits, f64,
+# and StringView for a string outside a static position. "" for any other type.
 literalDefaultName: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out StringView is {
     if tid == st.reg.literalIntTid then return "i64"
     if tid == st.reg.literalBitsTid then return "u64"
     if tid == st.reg.literalFloatTid then return "f64"
+    if tid == st.reg.literalTextTid then return "StringView"
     return ""
 }
 
@@ -45804,65 +45830,6 @@ recordHelperScalarTarget: function {
 }
 
 
-# adaptsToText -- an untyped string constant lands in a `text` destination as
-# text, as an untyped number lands in a u8 one: a plain literal (`"abc"`), an
-# untyped unit constant read by name, a folded read of an untyped list's
-# element. The value is stamped text there. A runtime value -- a local, a
-# parameter, a result, a typed constant -- never converts, and a literal is a
-# StringView wherever nothing asks for text (D1.9).
-adaptsToText: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    dstTid: ztypes.tid
-    # the value as the destination sees it (an argument's own node)
-    valueNid: zast.nodeid
-    # the value expression itself
-    exprNid: zast.nodeid
-} out bool is {
-    if dstTid.isZero then return false
-    if dstTid != (stdTid :ast :st wk: zast.wellKnown.slot.tyText) then return false
-    # an `if` or a `match` lands each arm's value: it adapts when every one does
-    if (isControlValue :ast nid: exprNid) then {
-        leaves: ListVal zast.nodeid
-        armValueLeaves :st :ast nid: exprNid into: leaves
-        if leaves.length == 0 then return false
-        for each lf: leaves loop {
-            if (adaptsToText :st :ast :dstTid valueNid: lf exprNid: lf).not then return false
-        }
-    } else if (isUntypedStringConst :st :ast :valueNid :exprNid).not then {
-        return false
-    }
-    stampGate :st nid: exprNid tid: dstTid
-    return true
-}
-
-# isUntypedStringConst -- the value is an untyped string constant: a plain
-# literal, or a folded constant whose string carries no type (adaptsToText).
-isUntypedStringConst: function {
-    st: zenv.ZSymbolTable ast: Ast valueNid: zast.nodeid exprNid: zast.nodeid
-} out bool is {
-    en: ast.nodes.get i: exprNid
-    if en.atomstring then return (stringLitIsLiteralText :ast parts: en.stringparts)
-    cf: st.typing.nodeConstIn mono: st.typing.curMonoStamp nid: valueNid
-    if cf.kind.svalKind.not then cf = (st.typing.nodeConstIn
-        mono: st.typing.curMonoStamp
-        nid: exprNid
-    )
-    return cf.kind.svalKind and cf.numTid.isZero
-}
-
-# stringLitIsLiteralText -- every part of a string literal is literal text: no
-# interpolation, which builds a String at run time.
-stringLitIsLiteralText: function {ast: Ast.view parts: zast.kidspan} out bool is {
-    k: u64
-    for k < parts.count loop {
-        pn: ast.nodes.get i: (zast.kidAt kids: ast.kids span: parts i: k)
-        k = k + 1
-        if pn.stringchunk.not then return false
-    }
-    return true
-}
-
 # checkUntypedConstFits -- an untyped folded constant at `valueNid` is settled by
 # its value, which must fit the destination; true when the value was one.
 checkUntypedConstFits: function {
@@ -45956,7 +45923,6 @@ checkArgTypeMismatch: function {
         )
     }
     if (typesCompatible :ast :st a: vt b: ptid) then return
-    if (adaptsToText :st :ast dstTid: ptid valueNid: arg.nid exprNid: arg.operation) then return
     (noteSpecStandIn
         :st
         value: vt
@@ -46196,12 +46162,14 @@ argOwnershipOf: function {
     isHold: false
     pt: ztypes.tid
     if funcId.isZero.not when pnId.isZero.not then {
-        if (isLiteralTypeId :st tid: vt) then {
+        if (isAnyLiteralTid :st tid: vt) then {
             po: st.typing.declChildOfId parentTypeId: funcId nameId: pnId
             match (
                 po
             ) case some then {
-                pt = po
+                # a generic parameter's type is the argument's own: inference
+                # already gave the literal its default
+                if (st.reg.typetypeOf typeId: po) != ztypes.ztypetype.genericParam then pt = po
             } case none then null
         }
         oo: (st.typing.declOwnershipOfId
@@ -48028,11 +47996,14 @@ checkReturnTypeMatch: function {
         )
         # a returned literal is the declared type, as an argument is its
         # parameter's
-        if (isLiteralTypeId :st tid: argT) then stampGate :st nid: arg.operation tid: expR
+        if (isAnyLiteralTid :st tid: argT) then stampGate :st nid: arg.operation tid: expR
         return
     }
-    if (typesCompatible :ast :st a: argT b: expR) then return
-    if (adaptsToText :st :ast dstTid: expR valueNid: arg.nid exprNid: arg.operation) then return
+    if (typesCompatible :ast :st a: argT b: expR) then {
+        # a returned string literal is the declared type, as a number is
+        if (isTextLiteralTid :st tid: argT) then stampGate :st nid: arg.operation tid: expR
+        return
+    }
     # a value returned as a protocol is judged with every other stand-in, as
     # an owning place: the caller owns what a function returns
     retIsProto: (st.reg.typetypeOf typeId: expR) == ztypes.ztypetype.protocolType
@@ -56483,7 +56454,7 @@ checkImplicitReturn: function {
     recordReturnedOwnedLocal :st :ast :arg :argT
     if (checkReturnRooting :st :ast :arg :argT).not then checkReturnCarries :st :ast :arg :argT
     checkReturnTypeMatch :st :ast :arg :argT
-    if (isLiteralTypeId :st tid: argT) then stampGate :st nid: lsid tid: expR
+    if (isAnyLiteralTid :st tid: argT) then stampGate :st nid: lsid tid: expR
     recordTailExit :st :ast lineId: lsid :valId
 }
 
@@ -58877,11 +58848,12 @@ foldLiteralStamps: function {st: zenv.ZSymbolTable program: Ast} is {
     intId: stdTid ast: program :st wk: zast.wellKnown.slot.tyI64
     floatId: stdTid ast: program :st wk: zast.wellKnown.slot.tyF64
     bitsId: stdTid ast: program :st wk: zast.wellKnown.slot.tyU64
+    textId: stdTid ast: program :st wk: zast.wellKnown.slot.tyStringView
     nn: st.typing.nodeType.length
     ni: zast.nodeid
     for ni.u64 < nn loop {
         fv: st.typing.nodeType.get i: ni
-        to: literalStampFold :st :fv :intId :floatId :bitsId
+        to: literalStampFold :st :fv :intId :floatId :bitsId :textId
         if to.isZero.not then {
             # the declaration a tool reads is the literal type's own; a hex,
             # octal or binary literal's conversions are the integer literal's
@@ -58895,18 +58867,21 @@ foldLiteralStamps: function {st: zenv.ZSymbolTable program: Ast} is {
 }
 
 # literalStampFold -- the concrete type a literal stamp folds to: i64 for an
-# integer literal, f64 for a float one, u64 for a hex, octal or binary one;
-# the zero tid for any other stamp, or a default the program does not reach.
+# integer literal, f64 for a float one, u64 for a hex, octal or binary one,
+# StringView for a string literal no destination pinned; the zero tid for any
+# other stamp, or a default the program does not reach.
 literalStampFold: function {
     st: zenv.ZSymbolTable.view
     fv: ztypes.tid
     intId: ztypes.tid
     floatId: ztypes.tid
     bitsId: ztypes.tid
+    textId: ztypes.tid
 } out ztypes.tid is {
     if fv == st.reg.literalIntTid then return intId
     if fv == st.reg.literalFloatTid then return floatId
     if fv == st.reg.literalBitsTid then return bitsId
+    if fv == st.reg.literalTextTid then return textId
     return ztypes.tid.zero
 }
 
@@ -61742,9 +61717,10 @@ staticListElemFolds: function {
 }
 
 # isStaticStringTid -- a type a string literal can be held as in a static
-# list: StringView, or `text`.
+# list: StringView, `text`, or the untyped textliteral.
 isStaticStringTid: function {ast: Ast st: zenv.ZSymbolTable tid: ztypes.tid} out bool is {
     if tid.isZero then return false
+    if tid == st.reg.literalTextTid then return true
     if tid == (stdTid :ast :st wk: zast.wellKnown.slot.tyStringView) then return true
     return tid == (stdTid :ast :st wk: zast.wellKnown.slot.tyText)
 }
@@ -62327,23 +62303,23 @@ reportConstantConstraintArg: function {
 # constStringDotted -- a member read on a string constant written as a bare
 # dotted path, which is how `S.length` parses. `length` is the BYTE count,
 # String.length's own answer; `count` is the codepoint one and is not folded.
-# `"abc".text` is the literal made text, as checkTextLiteralCast types it in a
-# body, so a field default or a unit constant has the same type.
+# `"abc".text` and `NAME.text` are the literal made text, as the checker types
+# them in a body, so a field default or a unit constant has the same type.
 constStringDotted: function {
     ast: Ast
     st: zenv.ZSymbolTable
     scope: ztypes.declid
     v: ztypes.cval
-    # the receiver's own node when it is written in place, else 0
-    recvNid: zast.nodeid
     nameId: zast.nameid
     nodeid: zast.nodeid
     lineno: u32
     colno: u32
 } out ztypes.cval is {
-    if (isTextLiteralCast :ast parentId: recvNid :nameId) then {
-        txT: stdTid :ast :st wk: zast.wellKnown.slot.tyText
-        if txT.isZero.not then return (ztypes.typedConst c: v numTid: txT)
+    # the literal's conversions (checkUntypedTextCast): an untyped string made
+    # text or a StringView
+    if v.numTid.isZero then {
+        ct: textLiteralCastTarget :ast :st :nameId
+        if ct.isZero.not then return (ztypes.typedConst c: v numTid: ct)
     }
     if nameId == zast.wellKnown.slot.wkLength then {
         s: constStringAt :st id: v.strId
@@ -63967,7 +63943,6 @@ constOfNamedBase: function {
                 :scope
                 :ast
                 v: pcv
-                recvNid: zast.nodeid.zero
                 nameId: ncId
                 nodeid: atNid
                 lineno: atLine
@@ -64333,7 +64308,6 @@ evalConstDotted: function {
             :scope
             :ast
             v: pv
-            recvNid: parentId
             nameId: ncId
             nodeid: nid
             lineno: ln
@@ -65470,9 +65444,12 @@ constRegisterValueTypeAt: function {
     eo: st.typing.declChildOfId parentTypeId: utid nameId: nid
     if eo.none.not then return
     vt: constValueTid :st :scope :ast :v
-    # a string in a static position is text: a data field's default
-    if v.kind.svalKind when v.numTid.isZero when (st.reg.isStaticOf tid: utid) then {
-        vt = descendNamed :st :scope :ast unitDecl: st.typing.systemUnitRoot name: "text"
+    # an untyped string a field or a parameter is declared by is that member's
+    # type, so it takes a default as a number does: text in a static position
+    # (a data field), a StringView elsewhere. A constant keeps the textliteral
+    if vt == st.reg.literalTextTid when (memberDeclaredByDefault :st :ownerDecl :nameId) then {
+        vt = stdTid :ast :st wk: zast.wellKnown.slot.tyStringView
+        if (st.reg.isStaticOf tid: utid) then vt = stdTid :ast :st wk: zast.wellKnown.slot.tyText
     }
     if vt.isZero.not then (st.typing.setMemberType
         parentTypeId: utid
@@ -65481,8 +65458,20 @@ constRegisterValueTypeAt: function {
     )
 }
 
+# memberDeclaredByDefault -- the member `nameId` of the declaration `ownerDecl`
+# is a field or a parameter, declared by its default value; false for a
+# constant.
+memberDeclaredByDefault: function {
+    st: zenv.ZSymbolTable.view ownerDecl: ztypes.declid nameId: zast.nameid
+} out bool is {
+    md: st.typing.declFindChild parentDeclId: ownerDecl :nameId
+    if md.isZero then return false
+    k: (st.typing.decls.get i: md).kind
+    return k.fieldDecl or k.paramDecl
+}
+
 # constValueTid -- the type a compile-time value carries: an arm its owning
-# type, a number i64 or f64, a string StringView. 0 for no value.
+# type, a number i64 or f64, an untyped string textliteral. 0 for no value.
 constValueTid: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -65497,7 +65486,8 @@ constValueTid: function {
     if v.kind.ivalKind then recvBaseTid = "i64"
     if v.bits then recvBaseTid = "u64"
     if v.kind.fvalKind then recvBaseTid = "f64"
-    if v.kind.svalKind then recvBaseTid = "StringView"
+    # an untyped string is a literal: its destination converts it
+    if v.kind.svalKind then return st.reg.literalTextTid
     if recvBaseTid.length == 0 then return ztypes.tid.zero
     # the constant's type is a reference to a system type: it resolves on
     # discovery, like every other reference, so the registration never depends

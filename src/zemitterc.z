@@ -19996,23 +19996,6 @@ orPanicExprC: function {
     return (stating :facts from: callFacts text: (orderWrap prefix: pre call: body))
 }
 
-# textLiteralRead -- `"abc".text`: the literal itself, since text is laid out
-# as its view; "" for any other `.text` read.
-textLiteralRead: function {
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    n: zast.dottedpathrow.view
-    # the member read
-    mnId: zast.nameid
-    facts: cfacts.borrow
-} out String is {
-    if mnId != zast.wellKnown.slot.tyText then return String
-    if (stampIdOf :symtab nid: n.nodeid) != ctx.textTid then return String
-    tli: litIndexOf :ctx nid: n.parent
-    if tli == 0 then return String
-    return (stating :facts from: pathFacts text: (litView :ctx li: tli))
-}
-
 # emitDottedRead -- the C text of a dotted PATH read (the call form is
 # emitDottedCall). The legs run in the order the checker's stamps settle them:
 # the built-in `.orPanic`, the tagged-type stamps, then -- unless the member is
@@ -20032,8 +20015,6 @@ emitDottedRead: function {
     # is handled by emitResultCombinator in the call dispatch instead.
     # the member is asked by ID: the legs below lend ast, and an id is a scalar
     dcMnId: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
-    tlr: textLiteralRead :symtab :ctx :n mnId: dcMnId :facts
-    if tlr.length > 0 then return tlr
     if dcMnId == zast.wellKnown.slot.wkOrPanic then {
         pStamp: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.parent))
         pMono: chaseAggregateTypedef :symtab :ctx tid: pStamp
@@ -33037,6 +33018,20 @@ chaseStrTypedef: function {
     return tid
 }
 
+# literalTypeC -- the C type a literal's pseudo-type is held as at run time,
+# in a data value's field: an untyped number is an i64 or an f64, and a string
+# the view it reads as. "" for any other type.
+literalTypeC: function {
+    symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.tid
+} out String is {
+    if (
+        (tid == symtab.reg.literalIntTid) or (tid == symtab.reg.literalBitsTid)
+    ) then return "int64_t".string
+    if tid == symtab.reg.literalFloatTid then return "double".string
+    if tid == symtab.reg.literalTextTid then return "\{ctx.svC}_t"
+    return "".string
+}
+
 # typeRefC -- the C spelling for a type id: scalars by name, records by
 # their id-based cname ("" when unsupported).
 typeRefC: function {
@@ -33058,12 +33053,8 @@ typeRefC: function {
         ct: scalarCTypeFor :symtab :tid
         if ct.length > 0 then return ct
     }
-    # an untyped number held at run time -- a data value's field -- is an i64
-    # or an f64 there
-    if (
-        (tid == symtab.reg.literalIntTid) or (tid == symtab.reg.literalBitsTid)
-    ) then return "int64_t".string
-    if tid == symtab.reg.literalFloatTid then return "double".string
+    lc: literalTypeC :symtab :ctx :tid
+    if lc.length > 0 then return lc
     cmid: chaseAggregateTypedef :symtab :ctx tid: cid
     if cmid != cid then {
         cmc: ctxCname :ctx tid: cmid
