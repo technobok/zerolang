@@ -1,0 +1,59 @@
+# textiter -- the iterators over a text, an implementation subunit of system:
+# they have bodies, and system.z is declarations. A text is the program's own
+# bytes, so each piece is a text too, and the walk holds no lock.
+
+# the pieces of a text between its separators. A walk yields every piece, the
+# empty ones at either end among them; one with an empty separator yields none.
+textsplitter: record {
+    # what is left to cut
+    rest: text
+    # what the pieces are cut at
+    sep: text
+    # true once the last piece has been yielded
+    done: bool
+} as {
+    # the next piece, or none once the last has been yielded. A `for` header
+    # drives it
+    call: function {s: this} out optionval text is {
+        if s.done then return (optionval.none text)
+        cut: s.rest.indexOf needle: s.sep.stringView
+        match (
+            cut
+        ) case some then {
+            piece: s.rest.substring from: 0 to: cut
+            s.rest = s.rest.substring from: cut + s.sep.length to: s.rest.length
+            return (optionval.some piece)
+        } case none then null
+        s.done = true
+        return (optionval.some s.rest)
+    }
+}
+
+# the lines of a text: each without its `\n`, and without a `\r` before it. A
+# last empty line is dropped, so an empty text has none.
+textlinesiter: record {
+    # what is left to walk
+    rest: text
+    # true once the last line has been yielded
+    done: bool
+} as {
+    # the next line, or none once the last has been yielded. A `for` header
+    # drives it
+    call: function {s: this} out optionval text is {
+        if s.done then return (optionval.none text)
+        line: s.rest
+        nl: s.rest.indexOf needle: "\n"
+        match (
+            nl
+        ) case some then {
+            line = s.rest.substring from: 0 to: nl
+            s.rest = s.rest.substring from: nl + 1 to: s.rest.length
+            s.done = s.rest.isEmpty
+        } case none then {
+            s.done = true
+        }
+        # a carriage return before the line feed belongs to the terminator
+        if (line.endsWith suffix: "\x0d") then line = line.substring from: 0 to: line.length - 1
+        return (optionval.some line)
+    }
+}

@@ -22104,6 +22104,8 @@ unknownTypeArgAtom: function {
             arg: ast.nodes.get i: argId
             if arg.namedoperation then opId = arg.operation
         }
+        # a pun (`:t`) is answered with the `name: name` hint instead
+        if opId.isZero.not when (ast.nodes.get i: opId).labelvalue then continue
         atomNid: markedBareAtom :ast nid: opId
         if atomNid.isZero.not then {
             nameId: atomNameId :ast n: (ast.nodes.get i: atomNid)
@@ -22113,9 +22115,11 @@ unknownTypeArgAtom: function {
     return zast.nodeid.zero
 }
 
-# typeNameResolvesNowhere -- a bare type name no lookup answers: not a type in
-# scope, not a generic parameter, not a declaration in scope, and not a member
-# of any loaded unit (the closure-wide search typerefExcused makes too).
+# typeNameResolvesNowhere -- a bare type name no lookup answers: not a type or
+# a generic parameter in scope, not a declaration in scope, and not a member of
+# any loaded unit (the closure-wide search typerefExcused makes too). A generic
+# parameter some other template owns is no answer: which templates have been
+# minted by now is an order, and the wording of an error must not follow it.
 typeNameResolvesNowhere: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -22124,7 +22128,6 @@ typeNameResolvesNowhere: function {
     nameId: zast.nameid
 } out bool is {
     if nameId.isZero then return false
-    if (st.typing.gpNames.has item: nameId) then return false
     if (walkLookupTyperefById :ast :st :unitDecl :scope baseId: nameId).some then return false
     if (envLookup :st :scope :nameId).declId.isZero.not then return false
     for each ud: (programUnitDecls :st) loop {

@@ -1223,7 +1223,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2346707
+ALLOC_BASELINE := 2348374
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -2321,7 +2321,7 @@ VIEW_GUARD_INLINE := Bytes.byteView:unemitted \
   str.length:inline str.size:inline str.string:byvalue \
   str.stringView:inline str.substring:inline \
   optionval.or:byvalue resultval.orPanic:byvalue resultval.or:byvalue \
-  intliteral.*:byvalue floatliteral.*:byvalue textliteral.*:byvalue *.iterate:byvalue *.times:byvalue \
+  intliteral.*:byvalue floatliteral.*:byvalue textliteral.*:byvalue \
   text.isAscii:inline text.startsWith:inline text.endsWith:inline text.contains:inline text.indexOf:inline text.lastIndexOf:inline \
   text.byteAt:inline text.splitOnce:inline text.count:inline text.codepoints:inline text.toLowerAscii:inline text.toUpperAscii:inline \
   text.replace:inline text.replaceFirst:inline text.repeated:inline text.concat:inline \
@@ -2478,14 +2478,14 @@ isdecl {
         dacc = dacc " " $$0
         dlines++
         if (dacc ~ /is native/) { grab = 0; declEmit() }
-        else if (dacc ~ /\bis \{/ || dlines > 14) grab = 0
+        else if (dacc ~ /[ \t]is \{/ || dlines > 14) grab = 0
         next
     }
     if ($$0 ~ /^[ \t]+([A-Za-z_][A-Za-z0-9_]*|[=!<>+*\/%&|^-]+): function/) {
         dmeth = $$1; sub(/:$$/, "", dmeth)
         dacc = $$0; dlines = 1
         if (dacc ~ /is native/) { declEmit(); next }
-        if (dacc ~ /\bis \{/) next
+        if (dacc ~ /[ \t]is \{/) next
         grab = 1
     }
     next

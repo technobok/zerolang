@@ -195,6 +195,8 @@ operation can fail for reasons the caller needs to handle
 <li><a href="#string-iterators"><strong>CpIter</strong></a> -- <code>call: function out (optionval t: u32)</code></li>
 <li><a href="#string-iterators"><strong>Splitter</strong></a> -- <code>call: function out (Option T: StringView)</code></li>
 <li><a href="#string-iterators"><strong>LinesIter</strong></a> -- <code>call: function out (Option T: StringView)</code></li>
+<li><a href="#string-iterators"><strong>textsplitter</strong></a> -- <code>call: function out (optionval t: text)</code></li>
+<li><a href="#string-iterators"><strong>textlinesiter</strong></a> -- <code>call: function out (optionval t: text)</code></li>
 <li><a href="#text-and-stringlike"><strong>StringViewable</strong></a> -- <code>protocol { stringView: function {:this} out StringView }</code></li>
 <li><a href="#text-and-stringlike"><strong>StringLike</strong></a> -- <code>union { :StringView :StringViewable }</code></li>
 </ul>
@@ -812,6 +814,15 @@ build a new owned <code>String</code>: <code>toLowerAscii</code>, <code>toUpperA
 <code>replace</code>, <code>replaceFirst</code>, <code>repeated</code>, <code>concat</code> and <code>+</code>. Each runs
 the <code>StringView</code> member of the same name, since a <code>text</code> is laid out as
 one.</p>
+<p><strong>Its own pieces.</strong> Where a <code>StringView</code> member answers views, a <code>text</code>
+has its own, which answer <code>text</code>: <code>stripPrefix p:</code> and <code>stripSuffix s:</code>
+give <code>optionval text</code> (the rest, or <code>none</code> when the text does not open or
+close with it), and <code>split sep:</code> and <code>lines</code> give a <code>textsplitter</code> and a
+<code>textlinesiter</code>, which <code>for each</code> walks. Their pieces are the
+<code>StringView</code> walks' pieces: empty ones at either end are kept, an empty
+separator yields none, and a line loses its <code>\n</code> or <code>\r\n</code>. A piece is
+a value of its own, so a walk locks nothing. <code>split</code> takes its separator as
+<code>text</code>: the walk keeps it, and a value type can keep only static text.</p>
 <p><strong>Its view pins nothing.</strong> <code>t.stringView</code> is a <code>StringView</code> of the same
 bytes. A view of a <code>String</code> keeps the String locked while it lives; a view of
 a <code>text</code> keeps nothing locked, because nothing can free or change the
@@ -820,9 +831,8 @@ bytes -- reassigning <code>t</code> leaves the view valid. The view costs nothin
 <p><strong>Read-only string APIs.</strong> <code>text</code> is a value type, and a <code>StringLike</code>
 parameter admits reference types only (see the family bounds), so a
 <code>text</code> reaches <code>print</code>, <code>String.append</code>, <code>==</code> against a String, and
-the other readonly string APIs as its view: <code>print t.stringView</code>. The
-other read queries (<code>startsWith</code>, <code>indexOf</code>, <code>split</code>, ...) are the
-view's too. An interpolation takes a <code>text</code> as it is, as it takes a view.</p>
+the other readonly string APIs as its view: <code>print t.stringView</code>. An
+interpolation takes a <code>text</code> as it is, as it takes a view.</p>
 <pre><code class="language-zerolang">names: list { a: "alpha" b: "beta" } out staticlist text
 
 main: function is {
@@ -835,8 +845,9 @@ main: function is {
 }</code></pre>
 <h2 id="string-iterators"><a href="#string-iterators">13. String iterators</a></h2>
 <p>Iterator classes built by <code>StringView.codepoints</code>, <code>.split</code>,
-and <code>.lines</code>. Opaque to user code -- only the <code>.call</code> method
-is public. Each <code>.call</code> yields the next item:</p>
+and <code>.lines</code>, and the records <code>text.split</code> and <code>text.lines</code> build.
+Opaque to user code -- only the <code>.call</code> method is public. Each <code>.call</code>
+yields the next item:</p>
 <ul>
 <li><code>CpIter.call</code> yields <code>optionval(u32)</code> -- the next
 decoded codepoint, or <code>optionval.none</code> at end. Ill-formed
@@ -848,6 +859,9 @@ separators yield zero iterations</li>
 <li><code>LinesIter.call</code> yields <code>Option(StringView)</code> -- the
 next line (without trailing <code>\n</code> or <code>\r\n</code>), or
 <code>Option.none</code> at end. An empty trailing line is dropped</li>
+<li><code>textsplitter.call</code> and <code>textlinesiter.call</code> yield
+<code>optionval(text)</code> -- the same pieces as a <code>text</code>, which hold
+nothing locked</li>
 </ul>
 <p>Rarely constructed directly: <code>for</code> over the source is the
 usual form.</p>

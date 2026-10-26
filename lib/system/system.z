@@ -32,6 +32,8 @@ public: unit {
     :CpIter
     :Splitter
     :LinesIter
+    :textsplitter
+    :textlinesiter
     :StringViewable
     :StringLike
     :valhashable
@@ -2024,6 +2026,30 @@ text: record is native as {
     splitOnce: function as { T: StringLike.generic } in {
         t: this.view sep: T.view
     } out optionval u64 is native
+    # the text after `p`, or none when it does not open with `p`
+    stripPrefix: function as { T: StringLike.generic } in {
+        t: this.view p: T.view
+    } out optionval text is {
+        if (t.startsWith prefix: p).not then return (optionval.none text)
+        return (optionval.some (t.substring from: p.length to: t.length))
+    }
+    # the text before `s`, or none when it does not close with `s`
+    stripSuffix: function as { T: StringLike.generic } in {
+        t: this.view s: T.view
+    } out optionval text is {
+        if (t.endsWith suffix: s).not then return (optionval.none text)
+        return (optionval.some (t.substring from: 0 to: t.length - s.length))
+    }
+    # the pieces between each `sep`, walked by `for each`; an empty `sep`
+    # yields none, and an empty text one empty piece
+    split: function {t: this.view sep: text} out textsplitter is {
+        return (textsplitter rest: t :sep done: sep.isEmpty)
+    }
+    # the lines, each without its `\n` or `\r\n`; a last empty line is
+    # dropped
+    lines: function {t: this.view} out textlinesiter is {
+        return (textlinesiter rest: t done: t.isEmpty)
+    }
     # the codepoint count, read as UTF-8; `length` counts bytes
     count: function {t: this.view} out u64 is native
     # the text's codepoints, decoded from UTF-8 one `call` at a time
@@ -2072,6 +2098,12 @@ LinesIter: class is native as {
     # end
     call: function {:this} outx Option StringView is native
 }
+
+# the pieces of a text between its separators, built by `text.split`
+textsplitter: textiter.textsplitter
+
+# the lines of a text, built by `text.lines`
+textlinesiter: textiter.textlinesiter
 
 # Protocol: any type that can be viewed as a StringView. The returned
 # view references the parent's storage, so the spec is `outx`: the

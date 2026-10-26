@@ -5590,6 +5590,45 @@ unaliasedVid: function {
     return vid
 }
 
+# viewLaidNative -- member `mnId` read off a `tid` laid out as a StringView is
+# the view native of the name: text's own members are methods instead
+viewLaidNative: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    tid: ztypes.tid
+    mnId: zast.nameid
+} out bool is {
+    if (isViewLaid :ctx :tid).not then return false
+    return (textOwnMember :symtab :ctx owner: tid nameId: mnId).not
+}
+
+# textOwnMember -- member `nameId` of `owner` is one of text's own: written in
+# zerolang (stripPrefix, split, lines, ...) rather than a native, which text
+# reads as StringView's of the name
+textOwnMember: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    owner: ztypes.tid
+    nameId: zast.nameid
+} out bool is {
+    if owner != ctx.textTid then return false
+    md: symtab.typing.declMemberIdOf parentTypeId: owner :nameId
+    if md.isZero then return false
+    return (symtab.reg.isNativeOf tid: (symtab.typing.decls.get i: md).typeId).not
+}
+
+# textViewNativeByPtr -- member `mnId` read off variable `vid` is a view native
+# on a text the C holds through a pointer (textHeldByPtr)
+textViewNativeByPtr: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    vid: ztypes.vid
+    mnId: zast.nameid
+} out bool is {
+    if (textHeldByPtr :symtab :ctx :vid).not then return false
+    return (viewLaidNative :symtab :ctx tid: ctx.textTid :mnId)
+}
+
 # textHeldByPtr -- variable `vid` is a text the C holds through a pointer: a
 # `.view` parameter or a receiver, since text is a record. The view legs read a
 # receiver as a StringView value and take its address themselves, so they are
@@ -15776,8 +15815,15 @@ emitStringFamilyCall: function {
         if rsa.length > 0 then return rsa
         return (emitDottedCall :ast :symtab :ctx :call :facts)
     }
-    # text is laid out as a StringView, and its view members are StringView's
+    # text is laid out as a StringView, and its view members are StringView's;
+    # its own, written in zerolang, are called as any method is
     if (isViewLaid :ctx tid: ownerTid).not then return "".string
+    if (textOwnMember
+        :symtab
+        :ctx
+        owner: ownerTid
+        nameId: (aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable))
+    ) then return "".string
     return (emitDottedCall :ast :symtab :ctx :call :facts)
 }
 
@@ -18066,7 +18112,8 @@ methodAutoCallRead: function {
     readIsRef: bool
     facts: cfacts.borrow
 } out String is {
-    if (svCallOf :ctx nameId: mnId).noarg when (isStringOrViewLaid :ctx tid: bstamp) then {
+    viewNative: (isStringyTid :ctx tid: bstamp) or (viewLaidNative :symtab :ctx tid: bstamp :mnId)
+    if (svCallOf :ctx nameId: mnId).noarg when viewNative then {
         needsAddM :ctx uname: "system" memb: mn2
         svfaF: bn2F
         svfa: (svValueForm
@@ -18993,7 +19040,7 @@ emitDottedAtomBase: function {
     if eNum.length > 0 then return eNum
     bnid2: interpPartNodeId n: (ast.nodes.get i: n.parent)
     bareTid: chaseStrTypedef :symtab :ctx tid: (stampIdOf :symtab nid: bnid2)
-    bareSv: isViewLaid :ctx tid: bareTid
+    bareSv: viewLaidNative :symtab :ctx tid: bareTid :mnId
     bareStr: bareTid == ctx.strTid
     if bareStr when (svCallOf :ctx nameId: mnId).noarg then {
         # String receivers project to a view for the no-arg SV
@@ -20149,11 +20196,6 @@ emitDottedMemberRead: function {
     # is a local to address, so each takes the legs a call base takes, exactly as
     # the parenthesised `(mkList).length` does
     if (baseAtomReadsAsValue :symtab n: (ast.nodes.get i: n.parent)) then bn2 = "".string
-    if (textHeldByPtr :symtab :ctx vid: bn2v) then {
-        bn2 = "(*\{bn2})"
-        bn2F = derefFacts
-        bn2v = ztypes.vid
-    }
     # a data value's name is the address of its static object
     if (symtab.typing.nodeConstIn mono: ctx.curThisTid nid: baseAtomNid).kind.aggKind then {
         bn2F = cfacts
@@ -20198,9 +20240,10 @@ emitDottedMemberRead: function {
     mn2: aliasOrChild :ast :symtab aliasId: n.nodeid childId: n.child
     mnId: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
     if bn2.length > 0 then {
-        # a Box's fields and methods are its element's, read through the cell
+        # a Box's fields and methods are its element's, read through the cell;
+        # a text held by pointer is read through its pointee by the view natives
         bxE: boxMemberElem :ast :symtab :ctx :n
-        if bxE.isZero.not then {
+        if bxE.isZero.not or (textViewNativeByPtr :symtab :ctx vid: bn2v :mnId) then {
             bn2 = "(*\{bn2})"
             bn2F = derefFacts
             bn2v = ztypes.vid

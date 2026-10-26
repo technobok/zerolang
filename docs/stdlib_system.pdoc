@@ -93,6 +93,8 @@ operation can fail for reasons the caller needs to handle
   [#*: [#> to=string-iterators: #b:"CpIter"] -- #~"call: function out (optionval t: u32)"]
   [#*: [#> to=string-iterators: #b:"Splitter"] -- #~"call: function out (Option T: StringView)"]
   [#*: [#> to=string-iterators: #b:"LinesIter"] -- #~"call: function out (Option T: StringView)"]
+  [#*: [#> to=string-iterators: #b:"textsplitter"] -- #~"call: function out (optionval t: text)"]
+  [#*: [#> to=string-iterators: #b:"textlinesiter"] -- #~"call: function out (optionval t: text)"]
   [#*: [#> to=text-and-stringlike: #b:"StringViewable"] -- #~"protocol { stringView: function {:this} out StringView }"]
   [#*: [#> to=text-and-stringlike: #b:"StringLike"] -- #~"union { :StringView :StringViewable }"]
 
@@ -856,6 +858,16 @@ build a new owned #~"String": #~"toLowerAscii", #~"toUpperAscii",
 the #~"StringView" member of the same name, since a #~"text" is laid out as
 one.
 
+#b:"Its own pieces." Where a #~"StringView" member answers views, a #~"text"
+has its own, which answer #~"text": #~"stripPrefix p:" and #~"stripSuffix s:"
+give #~"optionval text" (the rest, or #~"none" when the text does not open or
+close with it), and #~"split sep:" and #~"lines" give a #~"textsplitter" and a
+#~"textlinesiter", which #~"for each" walks. Their pieces are the
+#~"StringView" walks' pieces: empty ones at either end are kept, an empty
+separator yields none, and a line loses its #~"\\n" or #~"\\r\\n". A piece is
+a value of its own, so a walk locks nothing. #~"split" takes its separator as
+#~"text": the walk keeps it, and a value type can keep only static text.
+
 #b:"Its view pins nothing." #~"t.stringView" is a #~"StringView" of the same
 bytes. A view of a #~"String" keeps the String locked while it lives; a view of
 a #~"text" keeps nothing locked, because nothing can free or change the
@@ -865,9 +877,8 @@ bytes -- reassigning #~"t" leaves the view valid. The view costs nothing: a
 #b:"Read-only string APIs." #~"text" is a value type, and a #~"StringLike"
 parameter admits reference types only (see the family bounds), so a
 #~"text" reaches #~"print", #~"String.append", #~"==" against a String, and
-the other readonly string APIs as its view: #~"print t.stringView". The
-other read queries (#~"startsWith", #~"indexOf", #~"split", ...) are the
-view's too. An interpolation takes a #~"text" as it is, as it takes a view.
+the other readonly string APIs as its view: #~"print t.stringView". An
+interpolation takes a #~"text" as it is, as it takes a view.
 
 #code language=zerolang: """
   names: list { a: "alpha" b: "beta" } out staticlist text
@@ -887,8 +898,9 @@ view's too. An interpolation takes a #~"text" as it is, as it takes a view.
 
 
 Iterator classes built by #~"StringView.codepoints", #~".split",
-and #~".lines". Opaque to user code -- only the #~".call" method
-is public. Each #~".call" yields the next item:
+and #~".lines", and the records #~"text.split" and #~"text.lines" build.
+Opaque to user code -- only the #~".call" method is public. Each #~".call"
+yields the next item:
 
 #ul:
   [#*: #~"CpIter.call" yields #~"optionval(u32)" -- the next
@@ -901,6 +913,9 @@ is public. Each #~".call" yields the next item:
   [#*: #~"LinesIter.call" yields #~"Option(StringView)" -- the
     next line (without trailing #~"\\n" or #~"\\r\\n"), or
     #~"Option.none" at end. An empty trailing line is dropped]
+  [#*: #~"textsplitter.call" and #~"textlinesiter.call" yield
+    #~"optionval(text)" -- the same pieces as a #~"text", which hold
+    nothing locked]
 
 Rarely constructed directly: #~"for" over the source is the
 usual form.

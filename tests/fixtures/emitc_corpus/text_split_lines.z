@@ -1,0 +1,76 @@
+# text's own split, lines, stripPrefix and stripSuffix, beside StringView's on
+# the same bytes: each piece of a text is a text, and the edge cases agree --
+# empty pieces at either end, an empty text, an empty separator, `\r\n` line
+# ends and a last line with no terminator. A `text.view` parameter, which the
+# C holds by pointer, walks them too.
+CSV: ",a,,b,"
+EMPTY: ""
+CRLF: "one\x0d\ntwo\n\nthree"
+
+pieces: function {t: text sep: text} out String is {
+    acc: String
+    for each p: (t.split :sep) loop {
+        acc.append "[\{p}]"
+    }
+    return acc
+}
+
+viewPieces: function {t: StringView sep: StringView} out String is {
+    acc: String
+    for each p: (t.split :sep) loop {
+        acc.append "[\{p}]"
+    }
+    return acc
+}
+
+lineList: function {t: text} out String is {
+    acc: String
+    for each l: t.lines loop {
+        acc.append "(\{l.length})"
+    }
+    return acc
+}
+
+viewLineList: function {t: StringView} out String is {
+    acc: String
+    for each l: t.lines loop {
+        acc.append "(\{l.length})"
+    }
+    return acc
+}
+
+stripped: function {o: optionval text} out String is {
+    match (
+        o
+    ) case some then {
+        return "some \{o}"
+    } case none then {
+        return "none".string
+    }
+}
+
+# walk -- each line of `t`, stripped, and its pieces
+walk: function {t: text.view} is {
+    for each l: t.lines loop {
+        print "\{(l.stripPrefix p: "k=").or d: l} \{(l.stripSuffix s: "=y").or d: l}"
+        for each p: (l.split sep: "=") loop {
+            print "  \{p}"
+        }
+    }
+}
+
+main: function is {
+    print "\{pieces t: CSV.text sep: ","} \{viewPieces t: CSV sep: ","}"
+    print "\{pieces t: EMPTY.text sep: ","} \{viewPieces t: EMPTY sep: ","}"
+    print "\{pieces t: CSV.text sep: ""}|\{viewPieces t: CSV sep: ""}|"
+    print "\{pieces t: CSV.text sep: ",,"} \{viewPieces t: CSV sep: ",,"}"
+    print "\{lineList t: CRLF.text} \{viewLineList t: CRLF}"
+    print "\{lineList t: "a\n".text} \{viewLineList t: "a\n"}"
+    print "\{lineList t: EMPTY.text}|\{viewLineList t: EMPTY}|"
+    prefix: ",a".string
+    print (stripped o: (CSV.text.stripPrefix p: prefix))
+    print (stripped o: (CSV.text.stripPrefix p: "a"))
+    print (stripped o: (CSV.text.stripSuffix s: "b,"))
+    print (stripped o: (CSV.text.stripSuffix s: CSV))
+    walk t: "k=v\nx=y".text
+}
