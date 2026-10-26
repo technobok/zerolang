@@ -45361,13 +45361,52 @@ standInNeedsBox: function {
     return (st.reg.typetypeOf typeId: value).isReferenceData
 }
 
-# specWrittenName -- a spec as a program writes it: its name, or for an
-# instance of a generic spec the application that names it, `(Getter v: i64)`.
+# isFieldSignature -- `tid` is the signature a function field declares
+# written out, a type named after its field.
+isFieldSignature: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
+    fd: declOfTypeId :st :tid
+    if fd.isZero then return false
+    return (st.typing.decls.get i: fd).fnptrField
+}
+
+# signatureText -- a function type spelled as its signature is written,
+# `function {x: i64} out i64`. A function field's signature is a type of its
+# own named after the field, and that name says nothing about what it takes.
+signatureText: function {st: zenv.ZSymbolTable.view ast: Ast.view tid: ztypes.tid} out String is {
+    r: "function".string
+    ns: st.typing.declRowSlots ownerTid: tid
+    ps: String
+    k: u64
+    for k < ns loop {
+        row: st.typing.declRowAt ownerTid: tid membersOnly: true slot: k
+        k = k + 1
+        if row.keep then {
+            if ps.length > 0 then ps.append " "
+            if row.name == zast.wellKnown.slot.wkThis then {
+                ps.append ":this"
+            } else {
+                ptn: specWrittenName :st :ast tid: row.tid
+                ps.append "\{zast.nameTextAt :ast ref: row.name}: \{ptn}"
+            }
+        }
+    }
+    if ps.length > 0 then r.append " {\{ps}}"
+    ro: methodReturnOf :st mid: tid
+    match ro case some then r.append " out \{specWrittenName :st :ast tid: ro}" case none then null
+    return r
+}
+
+# specWrittenName -- a spec as a program writes it: its name, a function
+# field's own signature written out (signatureText), or for an instance of a
+# generic spec the application that names it, `(Getter v: i64)`.
 # Trailing arguments that are their parameter's default are left out, as the
 # instance's label leaves them (defaultsTailLength): `(ListVal t: u8)`.
 specWrittenName: function {st: zenv.ZSymbolTable.view ast: Ast.view tid: ztypes.tid} out String is {
     org: st.reg.genericOriginOf :tid
-    if org.isZero then return (st.reg.nameOf :tid)
+    if org.isZero then {
+        if (isFieldSignature :st :tid) then return (signatureText :st :ast :tid)
+        return (st.reg.nameOf :tid)
+    }
     otid: org
     r: "(\{specWrittenName :st :ast tid: otid}"
     tdecl: declOfTypeId :st tid: otid
@@ -63403,6 +63442,8 @@ constFitToField: function {
     if vt == ftid then return v
     # a function fits a function slot by its signature (functionSignaturesMatch)
     if v.kind.fnKind then {
+        stampDeclaredSignature :st :ast fid: vt
+        stampDeclaredSignature :st :ast fid: ftid
         if (functionSignaturesMatch :ast :st a: vt b: ftid) then return v
         fen: specWrittenName :st :ast tid: ftid
         fgn: specWrittenName :st :ast tid: vt
@@ -63427,6 +63468,43 @@ constFitToField: function {
         msg: "argument '\{fn}' type mismatch: expected \{en}, got \{gn}"
     )
     return ztypes.noConst
+}
+
+# stampDeclaredSignature -- stamp the type-refs of the function type `fid`'s
+# signature, when a definition declares it. A data value is folded before
+# stampTyperefs runs, and functionSignaturesMatch reads a return type off its
+# node stamp: unstamped, a declared function had no return, so two functions
+# with returns of different types matched and a correct one was refused.
+stampDeclaredSignature: function {st: zenv.ZSymbolTable ast: Ast fid: ztypes.tid} is {
+    d: declOfTypeId :st tid: fid
+    if d.isZero then return
+    if (st.reg.typetypeOf typeId: fid) != ztypes.ztypetype.functionType then return
+    dn: zast.nodeid
+    dp: ztypes.declid
+    {
+        decl: st.typing.decls.get i: d
+        dn = decl.node
+        dp = decl.parent
+    }
+    if dn.isZero or dp.isZero then return
+    opId: zast.nodeid
+    {
+        nn: ast.nodes.get i: dn
+        if nn.namedoperation then opId = nn.operation
+    }
+    if opId.isZero then return
+    ud: unitDeclOfTid :st tid: fid
+    if ud.isZero then return
+    (stampMemberSignature
+        :st
+        scope: dp
+        :ast
+        unitDecl: ud
+        thisName: ""
+        ownerTid: ztypes.tid.zero
+        fnNodeId: opId
+        mid: fid
+    )
 }
 
 # constFitNumber -- the untyped number `v` as a value of the number type `ftid`
