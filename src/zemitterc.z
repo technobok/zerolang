@@ -5570,6 +5570,29 @@ isStringyTid: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
     return tid == ctx.svTid
 }
 
+# unaliasedVid -- `vid`, the variable atom `nid` (spelled `name`) reads, when
+# no alias stands in for it here; 0 when one does, since the base binding is
+# then not what is being read and the substituted text is.
+unaliasedVid: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    nid: zast.nodeid
+    name: StringView
+    vid: ztypes.vid
+} out ztypes.vid is {
+    if (aliasResolveAt :symtab :ctx :nid :name :vid).stringView != name then return ztypes.vid
+    return vid
+}
+
+# textHeldByPtr -- variable `vid` is a text the C holds through a pointer: a
+# `.view` parameter or a receiver, since text is a record. The view legs read a
+# receiver as a StringView value and take its address themselves, so they are
+# handed the pointee (a StringView is a class, passed as itself).
+textHeldByPtr: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view vid: ztypes.vid} out bool is {
+    if (isPtrVid :ctx :vid).not then return false
+    return (symtab.reg.variableTypeOf id: vid) == ctx.textTid
+}
+
 # isStringOrViewLaid -- tid is String, or laid out as a StringView (isViewLaid):
 # a receiver the view natives take.
 isStringOrViewLaid: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
@@ -6653,6 +6676,10 @@ emitDottedCall: function {
         bnA: aliasResolveAt :symtab :ctx nid: bnid name: bn0 vid: baseVid
         if bnA.stringView == bn0 then dcbV = atomVid :symtab nid: bnid
         bn = emitLocalAtomNameAtWith :symtab :ctx nid: bnid name: bn0 vid: baseVid facts: bnF
+        if bnA.stringView == bn0 when (textHeldByPtr :symtab :ctx vid: baseVid) then {
+            bn = "(*\{bn})"
+            bnF = derefFacts
+        }
     }
     btIsStr: btid == ctx.strTid
     # the view legs read a String receiver more than once, for its data and its
@@ -20100,14 +20127,8 @@ emitDottedMemberRead: function {
     bn2r: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.parent))
     baseAtomNid: atomNodeId n: (ast.nodes.get i: n.parent)
     baseAtomVid: atomVid :symtab nid: baseAtomNid
-    bn2a: aliasResolveAt :symtab :ctx nid: baseAtomNid name: bn2r.stringView vid: baseAtomVid
-    # the receiver's variable, for the pointer-access checks below. An alias
-    # substitution means the base binding is not what is being read, so the
-    # vid stays 0 and bn2 becomes the substituted text.
-    bn2v: ztypes.vid
-    if bn2a.stringView == bn2r then {
-        bn2v = atomVid :symtab nid: (atomNodeId n: (ast.nodes.get i: n.parent))
-    }
+    # the receiver's variable, for the pointer-access checks below
+    bn2v: unaliasedVid :symtab :ctx nid: baseAtomNid name: bn2r.stringView vid: baseAtomVid
     bn2F: cfacts
     bn2: (emitLocalAtomNameAtWith
         :symtab
@@ -20122,6 +20143,11 @@ emitDottedMemberRead: function {
     # is a local to address, so each takes the legs a call base takes, exactly as
     # the parenthesised `(mkList).length` does
     if (baseAtomReadsAsValue :symtab n: (ast.nodes.get i: n.parent)) then bn2 = "".string
+    if (textHeldByPtr :symtab :ctx vid: bn2v) then {
+        bn2 = "(*\{bn2})"
+        bn2F = derefFacts
+        bn2v = ztypes.vid
+    }
     # a data value's name is the address of its static object
     if (symtab.typing.nodeConstIn mono: ctx.curThisTid nid: baseAtomNid).kind.aggKind then {
         bn2F = cfacts
