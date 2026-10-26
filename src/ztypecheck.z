@@ -39581,14 +39581,37 @@ bindForOwnedElement: function {st: zenv.ZSymbolTable cond: argref elem: ztypes.t
 # reference on top of the one error.
 refuseUnwalkableBinding: function {
     st: zenv.ZSymbolTable
-    ast: Ast.view
+    ast: Ast
     cond: argref
     vt: ztypes.tid
     isEach: bool
 } is {
     itn: specWrittenName :st :ast tid: vt
     im: "a 'for' binding must answer an option, got '\{itn}'"
-    if isEach then im = "'for each' needs a type with 'iterate' or an iterator 'call', got '\{itn}'"
+    h: String
+    if isEach then {
+        im = "'for each' needs a type with 'iterate' or an iterator 'call', got '\{itn}'"
+        # an option answers once; a plain `for` reads it again at every
+        # iteration, which is how a bound iterator or a method answering an
+        # option is walked
+        if (forOptionElementOf :st :ast :vt).elem.isZero.not then {
+            vn: zast.nameTextAt :ast ref: cond.name
+            # the read as written, before its implied `.call`
+            srcNid: cond.operation
+            {
+                rn: ast.nodes.get i: srcNid
+                match (
+                    rn
+                ) case dottedpath then {
+                    cid: bareAtomNameId n: (ast.nodes.get i: rn.child)
+                    if cid == zast.wellKnown.slot.wkCall then srcNid = rn.parent
+                } else null
+            }
+            src: typeExprText :ast nid: srcNid
+            im = "'for each' evaluates '\{src}' once, and it answers an option, which has no walk"
+            h = "a plain `for` reads it again at every iteration: `for \{vn}: \{src}`"
+        }
+    }
     (addErrorH
         :st
         nodeid: cond.nid
@@ -39597,7 +39620,7 @@ refuseUnwalkableBinding: function {
         e: zast.err.typeError
         msg: im
         note: String
-        hint: String
+        hint: h
         width: 0
     )
     (st.define
