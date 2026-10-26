@@ -33024,7 +33024,8 @@ aliasValueHint: function {
     atx: zast.nameTextAt :ast ref: an
     if atx == tn then return "".string
     pre: "'\{atx}' names the type '\{tn}', not a value: on a unit-level line, a label after the value begins a definition of its own."
-    # a data value is built where it is declared, in parentheses
+    # a data value is built where it is declared, its labelled arguments in
+    # parentheses
     if (st.reg.isStaticOf tid: bt
     ) then return "\{pre} Write the value in parentheses: `\{atx}: (\{tn} field: value)`"
     return "\{pre} Build a '\{tn}' value inside a function"
@@ -65087,38 +65088,18 @@ resolveInstantiatedAlias: function {
 }
 
 # staticValueCall -- the unit-level definition `defName: defn` builds a data
-# value (`(row 5)`) or a choice value (`(form.count 3)`). Such a value is
-# written in parentheses: without them the call applies a type, which a data
-# type or a choice does not take, and that is reported here.
+# value (`row 5`) or a choice value (`form.count 3`): the head's kind decides,
+# and the value channel folds it (constOfStaticFields, constOfStaticChoice).
 staticValueCall: function {
     st: zenv.ZSymbolTable
     scope: ztypes.declid
     ast: Ast
     unitDecl: ztypes.declid
-    defName: StringView
     defn: callref
 } out bool is {
     ct: staticCtorHead :st :scope :ast :unitDecl callableId: defn.callable
     if ct.isZero then ct = staticChoiceHead :st :scope :ast :unitDecl callableId: defn.callable
-    if ct.isZero then return false
-    grouped: false
-    {
-        dn: ast.nodes.get i: defn.nid
-        if dn.call then grouped = dn.grouped
-    }
-    if grouped then return true
-    tn: specWrittenName :st :ast tid: ct
-    head: typeExprText :ast nid: defn.callable
-    (reportUnitConstantShape
-        :st
-        nodeid: defn.nid
-        lineno: defn.lineno
-        colno: defn.colno
-        width: head.length.u32.orPanic
-        msg: "'\{tn}' takes no type arguments: at unit level a value of it is written in parentheses"
-        hint: "`\{defName}: (\{head} ...)`"
-    )
-    return true
+    return ct.isZero.not
 }
 
 # resolveCalledConstantDef -- a unit-level constant whose value is a CALL. A
@@ -65247,9 +65228,8 @@ resolveCalledConstantDef: function {
             :scope
             callableId: defn.callable
         ) then cbu = true
-        # a data or choice value is built here, in a static position: the value
-        # channel folds it (constOfStaticFields, constOfStaticChoice)
-        if cbu.not when (staticValueCall :st :scope :ast :unitDecl :defName :defn) then cbu = true
+        # a data or choice value is built here, in a static position
+        if cbu.not when (staticValueCall :st :scope :ast :unitDecl :defn) then cbu = true
         if cbu.not then {
             cm: "a unit-level constant takes a literal value, not a construction".string
             ch: "construct it inside a function, or make '\{defName}' a function that returns the value"
