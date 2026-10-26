@@ -54949,6 +54949,7 @@ textFoldType: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid} out zty
     if cv.kind.ivalKind when cv.numTid.isZero then return st.reg.literalIntTid
     if cv.kind.svalKind when cv.numTid.isZero then return st.reg.literalTextTid
     if cv.kind.armKind then return cv.armTid
+    if cv.kind.aggKind then return (st.typing.constAggs.get i: cv.aggId.u64).tid
     return ztypes.tid.zero
 }
 
@@ -61986,8 +61987,8 @@ constUnsupportedMethod: function {
     return ztypes.noConst
 }
 
-# checkConstantMethodShape -- a string constant's method called in a unit-level
-# definition, checked against the method's declaration the way a body checks
+# checkConstantMethodShape -- a string or option constant's method called in a
+# unit-level definition, checked against the method's declaration the way a body checks
 # the same call. The evaluator answers only "a value or none": a surplus
 # argument or an unknown label folded anyway, and a missing argument or one of
 # the wrong kind left no value and no reason, which the emitter then met. The
@@ -62117,8 +62118,9 @@ checkConstantIfBranchShape: function {
 }
 
 # checkConstantMethodCall -- the method at `site`, when its receiver folds to a
-# string: a member StringView declares, then either the arguments written or,
-# for a bare read, none of the required ones left out.
+# string or an option: a member StringView or the option's type declares, then
+# either the arguments written or, for a bare read, none of the required ones
+# left out.
 checkConstantMethodCall: function {
     st: zenv.ZSymbolTable
     scope: ztypes.declid
@@ -62140,8 +62142,9 @@ checkConstantMethodCall: function {
     constFailClear :st
     rv: evalConstNode :st :scope :ast :unitDecl nid: site.recvId
     st.typing.constFail = held
-    if rv.kind.svalKind.not then return
+    if rv.kind.svalKind.not and (optionPayloadTid :st :ast v: rv).isZero then return
     svT: stdTid :ast :st wk: zast.wellKnown.slot.tyStringView
+    if rv.kind.svalKind.not then svT = constValueTid :ast :st :scope v: rv
     forceMemberOf :st :ast parentTypeId: svT nameId: methodId
     if (st.typing.declMemberIdOf parentTypeId: svT nameId: methodId).isZero then {
         reportConstantNoMember :st :ast :svT :methodId nodeid: site.childId :ln :co
@@ -62180,8 +62183,8 @@ checkConstantMethodCall: function {
     )
 }
 
-# reportConstantNoMember -- the body's report for a member StringView does not
-# declare, with the closest name it does as the hint.
+# reportConstantNoMember -- the body's report for a member the receiver's type
+# `svT` does not declare, with the closest name it does as the hint.
 reportConstantNoMember: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
@@ -62192,7 +62195,7 @@ reportConstantNoMember: function {
     co: u32
 } is {
     cn: zast.nameTextAt :ast ref: methodId
-    m: "type 'StringView' has no member '\{cn}'"
+    m: "type '\{specWrittenName :st :ast tid: svT}' has no member '\{cn}'"
     sug: suggestSimilar :ast :st parentTypeId: svT name: cn.stringView
     h: String
     if sug.length > 0 then {
@@ -62251,9 +62254,10 @@ checkConstantCallArgs: function {
 }
 
 # checkConstantArgKind -- one argument's VALUE against its parameter: a string
-# for a StringLike parameter, an integer for a numeric one. An argument with no
-# value is the evaluator's to explain, and a parameter of any other type is not
-# one a folded method declares.
+# for a StringLike or text parameter, an integer for a numeric one, and an
+# untyped one that fits it, as a body checks it. An argument with no value is
+# the evaluator's to explain, and a parameter of any other type is not one a
+# folded method declares.
 checkConstantArgKind: function {
     st: zenv.ZSymbolTable
     scope: ztypes.declid
@@ -62277,7 +62281,11 @@ checkConstantArgKind: function {
     }
     wantsInt: isNumericTid :st tid: pt
     wantsText: pt == (stdTid :ast :st wk: zast.wellKnown.slot.tyStringView)
-    if wantsInt when av.kind.ivalKind then return
+    if pt == (stdTid :ast :st wk: zast.wellKnown.slot.tyText) then wantsText = true
+    if wantsInt when av.kind.ivalKind then {
+        checkConstantArgFits :st :av :pt :arg
+        return
+    }
     if wantsText when av.kind.svalKind then return
     if wantsInt.not when wantsText.not then return
     pnm: zast.nameTextAt :ast ref: paramName
@@ -62291,6 +62299,18 @@ checkConstantArgKind: function {
         e: zast.err.callError
         msg: "argument '\{pnm}' type mismatch: expected \{en}, got \{gn}"
     )
+}
+
+# checkConstantArgFits -- an untyped integer argument `av` fits its numeric
+# parameter's type `pt`, as a literal written there must; a typed one is the
+# parameter's kind already.
+checkConstantArgFits: function {
+    st: zenv.ZSymbolTable av: ztypes.cval pt: ztypes.tid arg: argref
+} is {
+    if av.numTid.isZero.not then return
+    fm: constFitsType :st v: av target: pt
+    if fm.length == 0 then return
+    addError :st nodeid: arg.nid lineno: arg.lineno colno: arg.colno e: zast.err.typeError msg: fm
 }
 
 # reportConstantConstraintArg -- a value that is not a string, given for a
@@ -62366,9 +62386,9 @@ constStringDotted: function {
 
 # textfold -- the text methods a constant folds through (constTextFold), each
 # read off its name once (textFoldOp): first those that take no argument, then
-# one string, then two, then numbers. Every one answers a plain value: a method
-# answering an option, or one that walks (`split`, `lines`, `codepoints`), does
-# not fold, and runs on the StringView the literal becomes.
+# one string, then two, then numbers, then those answering an option
+# (constTextFoldOption). A method that walks (`split`, `lines`, `codepoints`)
+# does not fold, and runs on the StringView the literal becomes.
 textfold: list {
     byteLength: 0
     count: 1
@@ -62387,8 +62407,14 @@ textfold: list {
     replaceFirst: 14
     substring: 15
     repeated: 16
+    indexOf: 17
+    lastIndexOf: 18
+    splitOnce: 19
+    stripPrefix: 20
+    stripSuffix: 21
+    byteAt: 22
     # no fold
-    none: 17
+    none: 23
 } out staticlist u8
 
 # textFoldOp -- the fold the text method `nameId` has, textfold.none for a
@@ -62406,7 +62432,8 @@ textFoldOp: function {nameId: zast.nameid} out u8 is {
     return (textFoldArgOp :nameId)
 }
 
-# textFoldArgOp -- textFoldOp for the methods that take arguments.
+# textFoldArgOp -- textFoldOp for the methods that take arguments, those
+# answering an option last.
 textFoldArgOp: function {nameId: zast.nameid} out u8 is {
     if nameId == zast.wellKnown.slot.wkStartsWith then return textfold.startsWith
     if nameId == zast.wellKnown.slot.wkEndsWith then return textfold.endsWith
@@ -62416,6 +62443,12 @@ textFoldArgOp: function {nameId: zast.nameid} out u8 is {
     if nameId == zast.wellKnown.slot.wkReplaceFirst then return textfold.replaceFirst
     if nameId == zast.wellKnown.slot.wkSubstring then return textfold.substring
     if nameId == zast.wellKnown.slot.wkRepeated then return textfold.repeated
+    if nameId == zast.wellKnown.slot.wkIndexOf then return textfold.indexOf
+    if nameId == zast.wellKnown.slot.wkLastIndexOf then return textfold.lastIndexOf
+    if nameId == zast.wellKnown.slot.wkSplitOnce then return textfold.splitOnce
+    if nameId == zast.wellKnown.slot.wkStripPrefix then return textfold.stripPrefix
+    if nameId == zast.wellKnown.slot.wkStripSuffix then return textfold.stripSuffix
+    if nameId == zast.wellKnown.slot.wkByteAt then return textfold.byteAt
     return textfold.none
 }
 
@@ -62468,6 +62501,19 @@ constTextFold: function {
         g: s.stringView.replace needle: nv replacement: rv
         return (constTextResult :st :recv text: g.stringView)
     }
+    if op >= textfold.indexOf then return (constTextFoldOption
+        :st
+        :ast
+        :unitDecl
+        :scope
+        :args
+        :recv
+        :op
+        :nameId
+        :nodeid
+        :lineno
+        :colno
+    )
     if op == textfold.repeated then {
         n: constStrArgAt :st :scope :ast :unitDecl :args label: zast.wellKnown.slot.wkN idx: 0
         if n.kind.ivalKind.not or (n.ival < 0) or (n.bigId != 0) then return ztypes.noConst
@@ -62551,6 +62597,224 @@ constTextSubstring: function {
     }
     sub: s.substring from: f.ival.u64.orPanic to: t.ival.u64.orPanic
     return (constTextResult :st :recv text: sub)
+}
+
+# constTextFoldOption -- a text fold answering an option, on the string
+# constant `recv`: a known `some` or `none`, of the type the method declares --
+# optionval u64 for an index, optionval u8 for a byte, optionval text for a
+# piece. noConst when the argument does not fold. A StringView constant's
+# piece is an `Option StringView`, a reftype, which has no compile-time value:
+# the call does not fold, and runs.
+constTextFoldOption: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    scope: ztypes.declid
+    args: (ListVal zast.nodeid).view
+    recv: ztypes.cval
+    op: u8
+    # the method's name id
+    nameId: zast.nameid
+    nodeid: zast.nodeid
+    lineno: u32
+    colno: u32
+} out ztypes.cval is {
+    txT: stdTid :ast :st wk: zast.wellKnown.slot.tyText
+    if op >= textfold.stripPrefix when recv.numTid.isZero.not when recv.numTid != txT then {
+        return (constUnsupportedMethod
+            :st
+            name: (zast.nameTextAt :ast ref: nameId).stringView
+            :nodeid
+            :lineno
+            :colno
+        )
+    }
+    s: constStringAt :st id: recv.strId
+    if op == textfold.byteAt then {
+        i: constStrArgAt :st :scope :ast :unitDecl :args label: zast.wellKnown.slot.wkI idx: 0
+        if i.kind.ivalKind.not or (i.ival < 0) or (i.bigId != 0) then return ztypes.noConst
+        return (constByteAt :st :ast sv: s.stringView i: i.ival.u64.orPanic)
+    }
+    a: constStrArgAt :st :scope :ast :unitDecl :args label: (textFoldOptionLabel :op) idx: 0
+    if a.kind.svalKind.not then return ztypes.noConst
+    av: constStringAt :st id: a.strId
+    if op >= textfold.stripPrefix then return (constTextPiece
+        :st
+        :ast
+        sv: s.stringView
+        :op
+        arg: av.stringView
+    )
+    return (constTextIndex :st :ast sv: s.stringView :op arg: av.stringView)
+}
+
+# textFoldOptionLabel -- the label an option-answering text fold's string
+# argument is written with, as the method declares it.
+textFoldOptionLabel: function {op: u8} out zast.nameid is {
+    if op == textfold.splitOnce then return zast.wellKnown.slot.wkSep
+    if op == textfold.stripPrefix then return zast.wellKnown.slot.wkP
+    if op == textfold.stripSuffix then return zast.wellKnown.slot.wkS
+    return zast.wellKnown.slot.wkNeedle
+}
+
+# constTextIndex -- `indexOf`, `lastIndexOf` or `splitOnce` of `arg` in `sv`,
+# folded: the byte index as a u64, or none.
+constTextIndex: function {
+    st: zenv.ZSymbolTable ast: Ast sv: StringView op: u8 arg: StringView
+} out ztypes.cval is {
+    at: sv.indexOf needle: arg
+    if op == textfold.lastIndexOf then at = sv.lastIndexOf needle: arg
+    if op == textfold.splitOnce then at = sv.splitOnce sep: arg
+    u64t: stdTid :ast :st wk: zast.wellKnown.slot.tyU64
+    match (
+        at
+    ) case some then {
+        n: ztypes.typedConst c: ztypes.makeIntConst at.i64.orPanic numTid: u64t
+        return (constOptionSome :st :ast item: n)
+    } case none then null
+    return (constOptionNone :st :ast elem: u64t)
+}
+
+# constByteAt -- `byteAt i` of `sv`, folded: the byte as a u8, or none past the
+# end.
+constByteAt: function {st: zenv.ZSymbolTable ast: Ast sv: StringView i: u64} out ztypes.cval is {
+    u8t: stdTid :ast :st wk: zast.wellKnown.slot.tyU8
+    b: sv.byteAt :i
+    match (
+        b
+    ) case some then {
+        n: ztypes.typedConst c: ztypes.makeIntConst b numTid: u8t
+        return (constOptionSome :st :ast item: n)
+    } case none then null
+    return (constOptionNone :st :ast elem: u8t)
+}
+
+# constTextPiece -- `stripPrefix` or `stripSuffix` of `arg` on the static
+# string `sv`, folded: the rest as text, a piece of static text being static,
+# or none.
+constTextPiece: function {
+    st: zenv.ZSymbolTable ast: Ast sv: StringView op: u8 arg: StringView
+} out ztypes.cval is {
+    txT: stdTid :ast :st wk: zast.wellKnown.slot.tyText
+    rest: sv.stripPrefix p: arg
+    if op == textfold.stripSuffix then rest = sv.stripSuffix s: arg
+    match (
+        rest
+    ) case some then {
+        c: ztypes.makeStrConst (constInternString :st text: rest)
+        return (constOptionSome :st :ast item: (ztypes.typedConst :c numTid: txT))
+    } case none then null
+    return (constOptionNone :st :ast elem: txT)
+}
+
+# constOptionSome -- the option constant `some item`: a choice-shaped value of
+# the optionval over the item's own type, its arm `some`.
+constOptionSome: function {st: zenv.ZSymbolTable ast: Ast item: ztypes.cval} out ztypes.cval is {
+    ot: optionvalOver :st :ast elem: (constValueTid :ast :st scope: ztypes.declid v: item)
+    items: ListVal ztypes.cval
+    items.append item
+    id: (constInternAgg
+        :st
+        shape: (ztyping.aggshape
+            kind: ztyping.constaggkind.staticChoice
+            tid: ot
+            arm: zast.wellKnown.slot.wkSome
+            elem: ztypes.tid.zero
+            slot: ztypes.tid.zero
+        )
+        :items
+        labels: ListVal zast.nameid
+        at: zast.nodeid
+    )
+    return (ztypes.makeAggConst :id)
+}
+
+# constOptionNone -- the option constant `none` of the optionval over `elem`:
+# an arm that carries nothing.
+constOptionNone: function {st: zenv.ZSymbolTable ast: Ast elem: ztypes.tid} out ztypes.cval is {
+    return (ztypes.makeArmConst
+        armTid: (optionvalOver :st :ast :elem)
+        armName: zast.wellKnown.slot.wkNone
+    )
+}
+
+# optionvalOver -- the instance `optionval elem`, minted on first ask.
+optionvalOver: function {st: zenv.ZSymbolTable ast: Ast elem: ztypes.tid} out ztypes.tid is {
+    tpl: stdTid :ast :st wk: zast.wellKnown.slot.tyOptionval
+    subs: IdMapV zast.nameid v: ztypes.tid
+    subs.set key: (firstGenericParamId :st templateId: tpl) value: elem
+    sfx: "_\{st.reg.nameOf tid: elem}"
+    noVals: IdMapV zast.nameid v: u64
+    return (getOrMintSpec
+        :st
+        scope: st.curScope
+        :ast
+        unitDecl: st.typing.systemUnitRoot
+        sfx: sfx.stringView
+        templateId: tpl
+        :subs
+        valSubs: noVals
+        fallbackArg: ztypes.tid.zero
+    )
+}
+
+# optionPayloadTid -- the payload type of the option constant `v`: an optionval
+# instance's `some` or `none`; 0 when `v` is no option.
+optionPayloadTid: function {
+    st: zenv.ZSymbolTable.view ast: Ast.view v: ztypes.cval
+} out ztypes.tid is {
+    t: ztypes.tid
+    if v.kind.armKind then t = v.armTid
+    if v.kind.aggKind when (st.typing.constAggs.get i: v.aggId.u64).kind.staticChoice then {
+        t = (st.typing.constAggs.get i: v.aggId.u64).tid
+    }
+    if t.isZero then return t
+    ov: stdTidPeek :ast :st wk: zast.wellKnown.slot.tyOptionval
+    if ov.isZero or ((st.reg.genericOriginOf tid: t) != ov) then return ztypes.tid.zero
+    return (st.reg.genericTypeArgAt specId: t ordinal: 0)
+}
+
+# constOptionOr -- `o.or d: v` on the option constant `o`: what it holds, or
+# `d` as the payload's type when it holds nothing. noConst for another method,
+# and where `d` does not fold or fit: the call's own check reports that.
+constOptionOr: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    args: (ListVal zast.nodeid).view
+    recv: ztypes.cval
+    nameId: zast.nameid
+} out ztypes.cval is {
+    if nameId != zast.wellKnown.slot.wkOr then return ztypes.noConst
+    pt: optionPayloadTid :st :ast v: recv
+    if recv.kind.aggKind then {
+        return (st.typing.constAggItems.get
+            i: (st.typing.constAggs.get i: recv.aggId.u64).itemStart.u64
+        )
+    }
+    d: constStrArgAt :st :scope :ast :unitDecl :args label: zast.wellKnown.slot.wkD idx: 0
+    return (constAsPayload :st :scope :ast v: d tid: pt)
+}
+
+# constAsPayload -- the constant `v` as a value of type `tid`, as an argument
+# lands there: an untyped integer that fits takes the type, an untyped string is
+# text, and a value of the type is itself. noConst for anything else.
+constAsPayload: function {
+    st: zenv.ZSymbolTable scope: ztypes.declid ast: Ast v: ztypes.cval tid: ztypes.tid
+} out ztypes.cval is {
+    if v.kind.none then return v
+    if v.kind.ivalKind when v.numTid.isZero then {
+        if (numKindOfTid :st :tid).has.not then return ztypes.noConst
+        if (constFitsType :st :v target: tid).length > 0 then return ztypes.noConst
+        return (ztypes.typedConst c: v numTid: tid)
+    }
+    txT: stdTid :ast :st wk: zast.wellKnown.slot.tyText
+    if v.kind.svalKind when v.numTid.isZero when tid == txT then {
+        return (ztypes.typedConst c: v numTid: txT)
+    }
+    if (constValueTid :ast :st :scope :v) == tid then return v
+    return ztypes.noConst
 }
 
 # constTextResult -- a string a text fold made from `recv`: interned, and of
@@ -62845,11 +63109,11 @@ constOfBinop: function {
     return (constOfBinopFold :st :scope :ast :lv :rv :opnId :nid :ln :co)
 }
 
-# constOfStringMethodCall -- a static method on a string constant
-# (`"abcd".length`) is a CALL whose callable is a dotted path: the receiver
-# folds to a string and the child names the method. noConst when the call
-# is not that shape or its receiver does not fold.
-constOfStringMethodCall: function {
+# constOfMethodCall -- a method on a string constant (`"abcd".length`) or an
+# option constant (`(S.indexOf "#").or d: 0`) is a CALL whose callable is a
+# dotted path: the receiver folds and the child names the method. noConst
+# when the call is not that shape or its receiver does not fold.
+constOfMethodCall: function {
     st: zenv.ZSymbolTable
     scope: ztypes.declid
     ast: Ast
@@ -62869,9 +63133,20 @@ constOfStringMethodCall: function {
     }
     if recvId.isZero then return ztypes.noConst
     rcv: evalConstNode :st :scope :ast :unitDecl nid: recvId
-    if rcv.kind.svalKind.not then return ztypes.noConst
+    if (
+        rcv.kind.svalKind.not and (optionPayloadTid :st :ast v: rcv).isZero
+    ) then return ztypes.noConst
     mnc: atomNameId :ast n: (ast.nodes.get i: methodId)
     if mnc.isZero then return ztypes.noConst
+    if rcv.kind.svalKind.not then return (constOptionOr
+        :st
+        :scope
+        :ast
+        :unitDecl
+        :args
+        recv: rcv
+        nameId: mnc
+    )
     return (constTextFold
         :st
         :scope
@@ -63015,7 +63290,7 @@ constOfValueCall: function {
     ln: u32
     co: u32
 } out ztypes.cval is {
-    sm: constOfStringMethodCall :st :scope :ast :unitDecl :nid :callableId :args :ln :co
+    sm: constOfMethodCall :st :scope :ast :unitDecl :nid :callableId :args :ln :co
     if sm.kind.none.not then return sm
     return (constOfNumericTypedef :st :scope :ast :unitDecl :callableId :args)
 }
@@ -64711,8 +64986,9 @@ foldedToNumber: function {st: zenv.ZSymbolTable.view nid: zast.nodeid} out bool 
     return v.kind.ivalKind or v.kind.fvalKind
 }
 
-# callOnFoldedString -- the call at `nid` is a method called on a folded string.
-callOnFoldedString: function {
+# callOnFoldedValue -- the call at `nid` is a method called on a folded string
+# or a folded option.
+callOnFoldedValue: function {
     st: zenv.ZSymbolTable.view
     ast: Ast.view
     nid: zast.nodeid
@@ -64724,7 +65000,9 @@ callOnFoldedString: function {
         if cn.dottedpath then recvId = cn.parent
     }
     if recvId.isZero then return false
-    return (foldedToString :st nid: recvId)
+    if (foldedToString :st nid: recvId) then return true
+    rv: st.typing.nodeConstIn mono: st.typing.curMonoStamp nid: recvId
+    return (optionPayloadTid :st :ast v: rv).isZero.not
 }
 
 # stampConstAt -- record what a USE SITE evaluates to, when it evaluates to
@@ -64797,8 +65075,9 @@ constPastF64: function {st: zenv.ZSymbolTable.view v: ztypes.cval} out bool is {
 
 # markOperandsTaken -- the operands of the fold at `nid` are taken: its value
 # is computed from theirs, so an untyped one outside i64 lands nowhere itself.
-# The operands of an infix operator, or the base of a member read (`.not`, a
-# conversion, which checked the value against its target).
+# The operands of an infix operator, the base of a member read (`.not`, a
+# conversion, which checked the value against its target), or the receiver of
+# a method call (`(S.indexOf "#").or d: 0`), which run time then never reads.
 markOperandsTaken: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
@@ -64811,12 +65090,23 @@ markOperandsTaken: function {
         st.typing.wideConstTaken.set key: (ztyping.monostamp :mono node: br.rhs) value: 1
         return
     }
-    n: ast.nodes.get i: nid
-    match (
-        n
-    ) case dottedpath then {
-        st.typing.wideConstTaken.set key: (ztyping.monostamp :mono node: n.parent) value: 1
-    } else null
+    callable: zast.nodeid
+    {
+        n: ast.nodes.get i: nid
+        match (
+            n
+        ) case dottedpath then {
+            st.typing.wideConstTaken.set key: (ztyping.monostamp :mono node: n.parent) value: 1
+        } case call then {
+            callable = n.callable
+        } else null
+    }
+    if callable.isZero then return
+    cn: ast.nodes.get i: callable
+    if cn.dottedpath then (st.typing.wideConstTaken.set
+        key: (ztyping.monostamp :mono node: cn.parent)
+        value: 1
+    )
 }
 
 # refuseZeroDivisor -- an integer `/` or `%` at `nid` whose divisor is a
@@ -64901,7 +65191,7 @@ useSiteAsks: function {
         return rv.kind.none.not
     }
     if plan.arm == 6 then {
-        return (callOnFoldedString :st :ast :nid) or (staticListIndexedAt :st :ast :nid).isZero.not
+        return (callOnFoldedValue :st :ast :nid) or (staticListIndexedAt :st :ast :nid).isZero.not
     }
     if (plan.arm == 7) or (plan.arm == 8) or (plan.arm == 9) then return false
     # a literal with no interpolation, its escapes chunks of their own
@@ -64909,9 +65199,13 @@ useSiteAsks: function {
     if plan.arm != 4 then return true
     if (foldedToString :st nid: plan.parentId) then return true
     if (foldedToNumber :st nid: plan.parentId) then return true
-    # `first.key` reads a field of a folded data value
-    if (st.typing.nodeConstIn mono: st.typing.curMonoStamp nid: plan.parentId
-    ).kind.aggKind then return true
+    # `first.key` reads a field of a folded data value, `o.none` an arm
+    # predicate of a folded option
+    {
+        pv: st.typing.nodeConstIn mono: st.typing.curMonoStamp nid: plan.parentId
+        if pv.kind.aggKind then return true
+        if (optionPayloadTid :st :ast v: pv).isZero.not then return true
+    }
     pbt: walkTypeOf :st nid: plan.parentId
     # `blk.slot.a` reads a label's position, a constant
     if pbt == st.typing.listSlotTid when pbt.isZero.not then return true
@@ -65355,8 +65649,9 @@ resolveCalledConstantDef: function {
         # ASK THE CONSTANT FIRST, the same ordering the dotted-path
         # value read uses: `CT: (LIB.contains needle: "x")` is a call
         # whose receiver is a string CONSTANT, so it is a value and not
-        # a construction. Classifying by the callee's shape alone calls
-        # every static string method a construction.
+        # a construction, and so is `(AT.or d: 0)` on an option constant.
+        # Classifying by the callee's shape alone calls every static string
+        # method a construction.
         if cbu.not then {
             crv: (constValueOfMember
                 :st
@@ -65366,6 +65661,7 @@ resolveCalledConstantDef: function {
                 defName: cbn.stringView
             )
             if crv.kind.svalKind then cbu = true
+            if (optionPayloadTid :st :ast v: crv).isZero.not then cbu = true
             # `blk.get K` reads an element by position, a value the value
             # channel folds and range-checks
             if crv.kind.aggKind when ccn.dottedpath when (atomIsIndex :ast nid: ccn.child

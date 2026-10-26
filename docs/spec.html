@@ -6913,20 +6913,31 @@ lands as an untyped one does (<code>n: "ab".length</code> is an <code>i64</code>
 folded string is a literal, so <code>x: "abc".toUpperAscii</code> is a
 <code>StringView</code> -- a <code>String</code> needs <code>.string</code>. A new string reaches the
 program only where run time reads it, as one static array.</p>
-<p>A method that answers an option (<code>indexOf</code>, <code>stripPrefix</code>,
-<code>splitOnce</code>) or walks (<code>split</code>, <code>lines</code>, <code>codepoints</code>) does not
-fold, nor does a call with an argument known only at run time: it runs on the
+<p>A method that answers an option folds too, and the value keeps the option
+type the method declares: a known <code>some</code> or a known <code>none</code>.
+<code>indexOf</code>, <code>lastIndexOf</code> and <code>splitOnce</code> answer an
+<code>optionval u64</code>, <code>byteAt</code> an <code>optionval u8</code>, and <code>stripPrefix</code> and
+<code>stripSuffix</code> an <code>optionval text</code>, since a piece of static text is
+static. The option's own readers fold on it: <code>.or d:</code>, the predicates
+<code>.some</code> and <code>.none</code>, <code>match</code> and <code>==</code>. Read at run time, it is the
+value itself. A <code>StringView</code> constant's piece is an <code>Option StringView</code>, a
+reference type, which has no compile-time value: that call does not fold.</p>
+<p>A method that walks (<code>split</code>, <code>lines</code>, <code>codepoints</code>) does not fold, nor
+does a call with an argument known only at run time: it runs on the
 <code>StringView</code> the literal becomes. In a unit-level definition the call is
 checked against the method's declaration exactly as a body checks it, so a
-missing, unknown or surplus argument, or an argument of the wrong type, is
-the error the body reports (<code>E0300</code>, or <code>E0100</code> for a method
-<code>StringView</code> does not declare). A complete call to a method that does not
-fold is <code>E0600</code>.</p>
+missing, unknown or surplus argument, an argument of the wrong type or one
+that does not fit its parameter, is the error the body reports (<code>E0300</code>,
+or <code>E0100</code> for a member the receiver does not declare). A complete call to
+a method that does not fold is <code>E0600</code>.</p>
 <pre><code class="language-zerolang">NAME: "zerolang"
 N: NAME.length                         # folded to 8
 HEAD: (NAME.substring from: 0 to: 4)   # folded to "zero"
 LOUD: NAME.toUpperAscii                # folded to "ZEROLANG"
-AT: (NAME.indexOf needle: "o")         # E0600: 'indexOf' has no compile-time value
+AT: (NAME.indexOf needle: "o")         # folded to some 3, an optionval u64
+POS: (AT.or d: 0)                      # folded to 3
+GAP: NAME.indexOf " "                  # folded to none
+WORDS: NAME.split " "                  # E0600: 'split' has no compile-time value
 TAIL: (NAME.substring from: 4)         # E0300: missing required argument 'to' (type: u64)
 main: function is {
     w: "lang"
