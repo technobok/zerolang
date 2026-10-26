@@ -35675,12 +35675,24 @@ markAggsReached: function {ast: Ast.view st: zenv.ZSymbolTable} is {
 # checked against i64 and f64, reported at that use.
 markAggReached: function {ast: Ast.view st: zenv.ZSymbolTable id: u32 at: zast.nodeid} is {
     if (id == 0) or (aggHasNoValue :st :id) then return
-    start: u64
-    count: u64
     {
         g: st.typing.constAggs.getMut i: id.u64
         if g.reached then return
         g.reached = true
+    }
+    markAggItemsReached :ast :st :id :at
+}
+
+# markAggItemsReached -- the aggregates row `id` holds are reached with it. A
+# data value or a list is held by its object's address, so its object is
+# reached. A choice value is written inside its holder, in braces
+# (staticChoiceInit), so it has no object of its own there: only what it holds
+# is reached.
+markAggItemsReached: function {ast: Ast.view st: zenv.ZSymbolTable id: u32 at: zast.nodeid} is {
+    start: u64
+    count: u64
+    {
+        g: st.typing.constAggs.get i: id.u64
         start = g.itemStart
         count = g.itemCount
     }
@@ -35688,7 +35700,13 @@ markAggReached: function {ast: Ast.view st: zenv.ZSymbolTable id: u32 at: zast.n
     for k < count loop {
         v: st.typing.constAggItems.get i: start + k
         k = k + 1
-        if v.kind.aggKind then markAggReached :ast :st id: v.aggId :at
+        if v.kind.aggKind then {
+            if (st.typing.constAggs.get i: v.aggId.u64).kind.staticChoice then {
+                markAggItemsReached :ast :st id: v.aggId :at
+            } else {
+                markAggReached :ast :st id: v.aggId :at
+            }
+        }
         refuseWideAggItem :ast :st :v :at
     }
 }
@@ -54918,7 +54936,38 @@ checkValueAt: function {
     t: checkValueArmAt :st :unitDecl :ast :nid
     stampConstAt :st :unitDecl :ast :nid
     markStaticListIndexRead :st :ast :nid
+    markFoldedFnFieldCall :st :ast :nid
     return t
+}
+
+# markFoldedFnFieldCall -- a call through a function field of a folded data
+# value names the function the field holds (the emitter's foldedFnRefC): the
+# value at the callable's base is read for that field alone and reaches
+# nothing.
+markFoldedFnFieldCall: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid} is {
+    callable: zast.nodeid
+    {
+        n: ast.nodes.get i: nid
+        match n case call then callable = n.callable else return
+    }
+    baseId: zast.nodeid
+    field: zast.nameid
+    {
+        cn: ast.nodes.get i: callable
+        match (
+            cn
+        ) case dottedpath then {
+            baseId = cn.parent
+            field = bareAtomNameId n: (ast.nodes.get i: cn.child)
+        } else return
+    }
+    if field.isZero then return
+    mono: st.typing.curMonoStamp
+    bv: st.typing.nodeConstIn :mono nid: baseId
+    if bv.kind.aggKind.not then return
+    if (st.typing.constAggs.get i: bv.aggId.u64).kind.staticData.not then return
+    if (constAggField :st :ast v: bv nameId: field).kind.fnKind.not then return
+    st.typing.wideConstTaken.set key: (ztyping.monostamp :mono node: baseId) value: 1
 }
 
 # markStaticListIndexRead -- a `blk.get K` the fold answered reads an element,
@@ -64563,8 +64612,13 @@ stampConstAt: function {
     got: st.typing.constFail
     st.typing.constFail = held
     # a function a static value holds is called where it is read in a body: the
-    # read is the call, and its value is the call's, at run time
-    if cv.kind.fnKind then return
+    # read is the call, and its value is the call's, at run time. The call
+    # names the function (the emitter's foldedFnRefC), so a data value at the
+    # path's base is read for that field alone and reaches nothing
+    if cv.kind.fnKind then {
+        markOperandsTaken :st :ast mono: st.typing.curMonoStamp :nid
+        return
+    }
     if cv.kind.none then {
         hasNone: got.kind.overflow or got.kind.indexRange or got.kind.substringRange
         if got.kind.divZero then hasNone = integerDivision :st :ast f: got

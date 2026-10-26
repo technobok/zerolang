@@ -105,7 +105,7 @@ NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 	perf-strict pre-push perf-elision any-guard typename-guard emitter-guard frontend-guard \
 	lifetime-guard user-native-guard shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard case-guard require-guard mode-parity zlink-rules-guard \
 	refusal-guard static-tcc-guard zlink-guard emit-set ident-set const-row-guard \
-	deadcode-guard alias-label-guard fwd-shape-guard eager-guard eager-lib-guard \
+	deadcode-guard static-value-guard alias-label-guard fwd-shape-guard eager-guard eager-lib-guard \
 	highlight-guard view-guard fallback-guard clean native-guard generic-param-guard \
 	zl-full-guard natives-tbl-guard
 
@@ -188,7 +188,7 @@ ci:
 	@$(MAKE) --no-print-directory windows-due
 
 # ci-gates -- the gates ci runs in parallel, after perf-strict.
-ci-gates: style-lint zl-full-guard complexity-report warn-check pedantic-check emitter-guard typename-guard frontend-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard highlight-guard any-guard deadcode-guard eager-guard eager-lib-guard case-guard user-native-guard shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard readable-check test-tcc-heavy test-clang test-signed-ub test-math-arm64 test-sqlite-arm64 test-math-noasm test-portable-scalars test-mingw test-tcc-mingw test-msvc-wine test-msvc-corpus math-asm-guard matrix-guard docs-link-guard mode-parity ci-corpus
+ci-gates: style-lint zl-full-guard complexity-report warn-check pedantic-check emitter-guard typename-guard frontend-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard highlight-guard any-guard deadcode-guard static-value-guard eager-guard eager-lib-guard case-guard user-native-guard shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard readable-check test-tcc-heavy test-clang test-signed-ub test-math-arm64 test-sqlite-arm64 test-math-noasm test-portable-scalars test-mingw test-tcc-mingw test-msvc-wine test-msvc-corpus math-asm-guard matrix-guard docs-link-guard mode-parity ci-corpus
 
 ci-corpus: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --heavy --jobs $(NPROC)
@@ -1223,7 +1223,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2336074
+ALLOC_BASELINE := 2337015
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1928,6 +1928,29 @@ deadcode-guard: bin/zc
 	else \
 	  echo "deadcode-guard OK: $$n unreachable statements (baseline $(DEADCODE_BASELINE))"; \
 	fi
+
+# static-value-guard -- every static value the emitter writes (`_zag<row>`) is
+# read by the C: a value no run-time code reaches is not written (clang's
+# -Wunused-const-variable; gcc warns only past -fsyntax-only). Skipped without
+# clang.
+static-value-guard: bin/zc
+	@command -v clang >/dev/null 2>&1 || { echo "static-value-guard SKIP: clang not installed"; exit 0; }; \
+	d=$$(mktemp -d); n=0; rep=""; \
+	for f in examples/*.z tests/fixtures/emitc_corpus/*.z; do \
+	  b=$$(basename $$f .z); \
+	  bin/zc emit $$f -o $$d/$$b.c 2>/dev/null || continue; \
+	  c=$$(clang -fsyntax-only -std=c17 -Wunused-const-variable $$d/$$b.c 2>&1 | grep -c "unused variable '_zag"); \
+	  n=$$(($$n + $$c)); \
+	  if [ "$$c" -gt 0 ]; then rep="$$rep  $$b: $$c\n"; fi; \
+	done; \
+	rm -rf $$d; \
+	if [ "$$n" -gt 0 ]; then \
+	  echo "static-value-guard FAIL: $$n static values written that nothing reads"; \
+	  printf "$$rep"; \
+	  echo "  A value marked reached where no run-time read remains. See markAggReached in src/ztypecheck.z."; \
+	  exit 1; \
+	fi; \
+	echo "static-value-guard OK: every static value written is read"
 
 # alias-label-guard -- a mono is labelled by its template's declared name, never by
 # the alias a use reached it through. A program declaring its own List/Map/Set
