@@ -4768,6 +4768,16 @@ navResolve: function {
         owner: (declOwnerOf o: snap.st declId: ca)
         declId: ca
     )
+    # a unit-level static value is folded with no stamps on its nodes
+    if base.vid.isZero when base.tid.isZero when base.declId.isZero then {
+        sd: staticValuePartDecl :snap :sp :docRel row: hit
+        if sd.isZero.not then base = (navtarget
+            vid: ztypes.vid
+            tid: ztypes.tid
+            owner: (declOwnerOf o: snap.st declId: sd)
+            declId: sd
+        )
+    }
     t: navTargetRefine :snap :hnid hnm: hnm.stringView kind: hit.kind :base
     # a unit's name answers with its FILE: a top-level unit's by name, a
     # subunit's through the declaration the checker resolved it to
@@ -4790,6 +4800,81 @@ navResolve: function {
         :unitFsno
     )
     return (optionval.some found)
+}
+
+# staticValuePartDecl -- the declaration a part of a unit-level static value
+# names, `form.template "x"` or `(row key: "k")`: the head a data type or a
+# choice, the member after a choice its arm, a label the data type's field.
+# The checker folds such a value without stamping its nodes
+# (constOfStaticFields), so each is resolved by name in the document's unit,
+# as caseArmDecl resolves an arm. 0 for any other row.
+staticValuePartDecl: function {
+    snap: zcheck.CheckResult sp: Spans.view docRel: StringView row: spanrow
+} out ztypes.declid is {
+    ud: docUnitDecl r: snap rel: docRel
+    if ud.isZero then return ud
+    if row.kind == 1 then return (staticTypeDeclNamed :snap unitDecl: ud nameId: row.name)
+    if row.kind == 2 then {
+        pid: zast.nodeid
+        {
+            dp: snap.prog.nodes.get i: row.nodeid
+            match dp case dottedpath then pid = dp.parent else null
+        }
+        td: staticTypeDeclNamed :snap unitDecl: ud nameId: (atomNameIdOf :snap nid: pid)
+        if td.isZero then return td
+        return (declChildOf :snap declId: td nameId: row.name)
+    }
+    if row.kind != 6 then return ztypes.declid.zero
+    cg: sp.argCall.get key: row.nodeid
+    callId: zast.nodeid
+    match cg case some then callId = cg case none then return ztypes.declid.zero
+    head: zast.nodeid
+    {
+        cn: snap.prog.nodes.get i: callId
+        match cn case call then head = cn.callable else null
+    }
+    td: staticTypeDeclNamed :snap unitDecl: ud nameId: (atomNameIdOf :snap nid: head)
+    if td.isZero then return td
+    return (declChildOf :snap declId: td nameId: row.name)
+}
+
+# staticTypeDeclNamed -- the data type or choice `unitDecl` declares as
+# `nameId`; 0 for a name that is none.
+staticTypeDeclNamed: function {
+    snap: zcheck.CheckResult unitDecl: ztypes.declid nameId: zast.nameid
+} out ztypes.declid is {
+    if nameId.isZero then return ztypes.declid.zero
+    o: snap.st
+    match (
+        o
+    ) case some then {
+        d: o.typing.declFindChild parentDeclId: unitDecl :nameId
+        if d.isZero then return d
+        dt: (o.typing.decls.get i: d).typeId
+        if (o.reg.isStaticOf tid: dt) then return d
+    } case none then null
+    return ztypes.declid.zero
+}
+
+# declChildOf -- the member `nameId` the declaration `declId` declares, 0 when
+# it declares none.
+declChildOf: function {
+    snap: zcheck.CheckResult declId: ztypes.declid nameId: zast.nameid
+} out ztypes.declid is {
+    o: snap.st
+    match (
+        o
+    ) case some then {
+        return (o.typing.declFindChild parentDeclId: declId :nameId)
+    } case none then null
+    return ztypes.declid.zero
+}
+
+# atomNameIdOf -- the name a bare atom node spells, 0 for any other node.
+atomNameIdOf: function {snap: zcheck.CheckResult nid: zast.nodeid} out zast.nameid is {
+    if nid.isZero then return zast.nameid.zero
+    n: snap.prog.nodes.get i: nid
+    match n case atomid then return n.name else return zast.nameid.zero
 }
 
 # caseArmDecl -- the declaration the arm a `case` clause writes (`nid`) names:
