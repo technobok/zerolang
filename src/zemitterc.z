@@ -267,6 +267,13 @@ ctxCname: function {ctx: Ctx.view tid: ztypes.tid} out String is {
     return (listCname cnames: ctx.cnames :tid)
 }
 
+# spelledCname -- ctxCname for C being written: until the reached types are
+# fixed, the type it names is a use they are closed from (closeReachedTypes).
+spelledCname: function {ctx: Ctx tid: ztypes.tid} out String is {
+    if ctx.reachFixed.not then ctx.typeUses.add item: tid
+    return (listCname cnames: ctx.cnames :tid)
+}
+
 # atomVid -- the variable a reference node resolves to, or 0.
 atomVid: function {symtab: zenv.ZSymbolTable.view nid: zast.nodeid} out ztypes.vid is {
     return ((symtab.typing.atomVariableId.get key: nid).or
@@ -1229,11 +1236,11 @@ convResultBindings: function {
     rv: List String
 } is {
     bn.append from: "RT".string
-    bv.append from: (ctxCname :ctx tid: retTid)
+    bv.append from: (spelledCname :ctx tid: retTid)
     rn.append from: "OKTAG".string
-    rv.append from: (tagConstOf :ast :ctx :symtab tid: retTid armId: zast.wellKnown.slot.wkOk)
+    rv.append from: (spelledTagConst :ast :ctx :symtab tid: retTid armId: zast.wellKnown.slot.wkOk)
     rn.append from: "ERRTAG".string
-    rv.append from: (tagConstOf :ast :ctx :symtab tid: retTid armId: zast.wellKnown.slot.wkErr)
+    rv.append from: (spelledTagConst :ast :ctx :symtab tid: retTid armId: zast.wellKnown.slot.wkErr)
     rn.append from: "OKMEMBER".string
     (rv.append
         from: (memberC
@@ -1316,7 +1323,7 @@ emitNumericCast: function {
         # a row that builds a record spells the record's C type as @RT@
         if (body.stringView.contains needle: "@RT@") then {
             bn.append from: "RT".string
-            bv.append from: (ctxCname :ctx tid: retTid)
+            bv.append from: (spelledCname :ctx tid: retTid)
         }
     }
     # a row over the runtime's string types (text's) spells them as holes
@@ -4066,6 +4073,15 @@ Ctx: class {
     fnptrWritten: IdSet ztypes.tid
     # the typedef pass has run: a function type met after it must be one it wrote
     fnptrPassDone: bool
+    # the struct types the generated code spells (typeRefC, a fragment's
+    # holes) while it is generated, which is before any type is written
+    typeUses: IdSet ztypes.tid
+    # those closed over what each one's C spells in turn: its fields, arm
+    # payloads, elements and the signatures of its used members. Only these
+    # types are written
+    reachedTypes: IdSet ztypes.tid
+    # the reached set is closed: a struct type spelled after it must be in it
+    reachFixed: bool
     # the (impl, protocol) pairs a NATIVE conformer is boxed as -- a String or a
     # str mono handed to a StringViewable. The runtime supplies such an impl's struct, so
     # no unit pass writes its helpers: every box site asks for them here, and
@@ -7041,7 +7057,7 @@ emitNativeArgMethod: function {
     bv: List String
     if (body.stringView.contains needle: "@RT@") then {
         bn.append from: "RT".string
-        bv.append from: (ctxCname
+        bv.append from: (spelledCname
             :ctx
             tid: (chaseAggregateTypedef :symtab :ctx tid: (stampIdOf :symtab nid: call.nodeid))
         )
@@ -10641,7 +10657,7 @@ emitEmptyColCreate: function {
             (zo == (ctx.origins.get i: family.slot.str))
         )
         if isSized when zo.isZero.not then {
-            zcb: ctxCname :ctx tid: zmid
+            zcb: spelledCname :ctx tid: zmid
             return (stating :facts from: callFacts text: "\{zcb}_create()")
         }
     }
@@ -10667,7 +10683,7 @@ emitEmptyColCreate: function {
         (isIdCollectionOriginOf :symtab :ctx tid: mid)
     )
     if isCol.not then return "".string
-    cb: ctxCname :ctx tid: mid
+    cb: spelledCname :ctx tid: mid
     ccap: listCapArg :ast :symtab :ctx n: (ast.nodes.get i: call.nodeid)
     return (stating :facts from: callFacts text: "\{cb}_create((uint64_t)\{ccap})")
 }
@@ -10849,7 +10865,7 @@ emitListValLendCall: function {
     isResize: mnId == zast.wellKnown.slot.wkResize
     isSpanSlice: mnId == zast.wellKnown.slot.wkSpanSlice
     if isResize.not when isSpanSlice.not then return "".string
-    cb: ctxCname :ctx tid: bt
+    cb: spelledCname :ctx tid: bt
     recvR: colRecvRef :ctx bn: bn.stringView vid: bvid
     if isResize then {
         vr: listArg :ast :symtab :ctx :call label: zast.wellKnown.slot.wkTo
@@ -10928,7 +10944,7 @@ emitListMethodCall: function {
     bvid: ztypes.vid
     facts: cfacts.borrow
 } out String is {
-    cb: ctxCname :ctx tid: bt
+    cb: spelledCname :ctx tid: bt
     recvR: colRecvRef :ctx bn: bn.stringView vid: bvid
     if mnId == zast.wellKnown.slot.wkAppend then {
         v: colArg :ast :symtab :ctx :call label: zast.wellKnown.slot.wkFrom consumes: true
@@ -11099,7 +11115,7 @@ emitArrayMethodCall: function {
     bvid: ztypes.vid
     facts: cfacts.borrow
 } out String is {
-    cb: ctxCname :ctx tid: bt
+    cb: spelledCname :ctx tid: bt
     if mnId == zast.wellKnown.slot.wkGet then {
         vi: listArg :ast :symtab :ctx :call label: zast.wellKnown.slot.wkI
         return (stating :facts from: callFacts text: "\{cb}_get(\{bn}, \{vi})")
@@ -11172,7 +11188,7 @@ emitStaticListValueMethodCall: function {
         )
     }
     if row != 0 then return (stating :facts from: callFacts text: "_zag\{row}_at(\{vi})")
-    cb: ctxCname :ctx tid: bt
+    cb: spelledCname :ctx tid: bt
     return (stating :facts from: callFacts text: "\{cb}_index(\{bn}, \{vi})")
 }
 
@@ -11190,7 +11206,7 @@ emitSpanMethodCall: function {
     bvid: ztypes.vid
     facts: cfacts.borrow
 } out String is {
-    cb: ctxCname :ctx tid: bt
+    cb: spelledCname :ctx tid: bt
     recvR: colRecvRef :ctx bn: bn.stringView vid: bvid
     if mnId == zast.wellKnown.slot.wkGet then {
         v: listArg :ast :symtab :ctx :call label: zast.wellKnown.slot.wkI
@@ -11280,7 +11296,7 @@ emitSpanSplit: function {
     needsAddM :ctx uname: "collections" memb: "window"
     va: listArg :ast :symtab :ctx :call label: zast.wellKnown.slot.wkAt
     pairTid: chaseAggregateTypedef :symtab :ctx tid: (stampIdOf :symtab nid: call.nodeid)
-    pc: ctxCname :ctx tid: pairTid
+    pc: spelledCname :ctx tid: pairTid
     loC: (memberC
         :ast
         :symtab
@@ -11346,7 +11362,7 @@ emitSpanCopyFrom: function {
 } out String is {
     vc: listArg :ast :symtab :ctx :call label: zast.wellKnown.slot.wkFrom
     vn: labelArgNode :ast :call label: zast.wellKnown.slot.wkFrom form: argform.value
-    lc: (ctxCname
+    lc: (spelledCname
         :ctx
         tid: (chaseAggregateTypedef :symtab :ctx tid: (stampIdOf :symtab nid: vn))
     )
@@ -11406,7 +11422,7 @@ emitWindowSlice: function {
     inline: bool
 } out String is {
     needsAddM :ctx uname: "collections" memb: "window"
-    wc: (ctxCname
+    wc: (spelledCname
         :ctx
         tid: (chaseAggregateTypedef :symtab :ctx tid: (stampIdOf :symtab nid: call.nodeid))
     )
@@ -11590,7 +11606,7 @@ emitSetMethodCall: function {
     bt: ztypes.tid
     facts: cfacts.borrow
 } out String is {
-    cb: ctxCname :ctx tid: bt
+    cb: spelledCname :ctx tid: bt
     if mnId == zast.wellKnown.slot.wkAdd then {
         vF: cfacts
         v: (colArgWith
@@ -11645,7 +11661,7 @@ emitMapMethodCall: function {
     bt: ztypes.tid
     facts: cfacts.borrow
 } out String is {
-    cb: ctxCname :ctx tid: bt
+    cb: spelledCname :ctx tid: bt
     if mnId == zast.wellKnown.slot.wkSet then {
         return (stating :facts from: callFacts text: (emitOrderedPair
             :ast
@@ -11729,7 +11745,7 @@ emitIdMapMethodCall: function {
     bvid: ztypes.vid
     facts: cfacts.borrow
 } out String is {
-    cb: ctxCname :ctx tid: bt
+    cb: spelledCname :ctx tid: bt
     recvR: colRecvRef :ctx bn: bn.stringView vid: bvid
     if mnId == zast.wellKnown.slot.wkSet then {
         return (stating :facts from: callFacts text: (emitOrderedPair
@@ -11787,7 +11803,7 @@ emitIdSetMethodCall: function {
     bvid: ztypes.vid
     facts: cfacts.borrow
 } out String is {
-    cb: ctxCname :ctx tid: bt
+    cb: spelledCname :ctx tid: bt
     recvR: colRecvRef :ctx bn: bn.stringView vid: bvid
     if mnId == zast.wellKnown.slot.wkAdd then {
         v: colArg :ast :symtab :ctx :call label: zast.wellKnown.slot.wkItem consumes: false
@@ -12500,8 +12516,8 @@ emitInlineVariantCtor: function {
     facts: cfacts.borrow
 } out String is {
     pc: armPayloadC :ast :symtab :ctx :tid :arm
-    tg: tagConstOf :ast :ctx :symtab :tid armId: arm
-    vc: ctxCname :ctx :tid
+    tg: spelledTagConst :ast :ctx :symtab :tid armId: arm
+    vc: spelledCname :ctx :tid
     if pc.length > 0 then {
         av: "0".string
         got: false
@@ -12552,8 +12568,8 @@ emitArmCtorCall: function {
         return (emitInlineVariantCtor :ast :symtab :ctx :call tid: stid :arm :facts)
     }
     if tt != ztypes.ztypetype.unionType then return "".string
-    vc: ctxCname :ctx tid: stid
-    tg: tagConstOf :ast :ctx :symtab tid: stid armId: arm
+    vc: spelledCname :ctx tid: stid
+    tg: spelledTagConst :ast :ctx :symtab tid: stid armId: arm
     payC: armPayloadC :ast :symtab :ctx tid: stid :arm
     if payC.length == 0 then {
         return (stating :facts from: literalFacts text: "((\{vc}_t){ .tag = \{tg}, .data = NULL })")
@@ -12696,7 +12712,7 @@ userCreateCallC: function {
     oprefix: orderFinish :ctx st: ord
     args: orderJoinSlots :ctx st: ord count: pn
     orderEnd :ctx st: ord
-    mc3: ctxCname :ctx tid: fid
+    mc3: spelledCname :ctx tid: fid
     return (stating
         :facts
         from: callFacts
@@ -12920,9 +12936,9 @@ renderDefault: function {
             if cf.isZero.not then return (stating
                 :facts
                 from: pathFacts
-                text: (ctxCname :ctx tid: cf)
+                text: (spelledCname :ctx tid: cf)
             )
-            return (stating :facts from: pathFacts text: (ctxCname :ctx tid: targetTid))
+            return (stating :facts from: pathFacts text: (spelledCname :ctx tid: targetTid))
         }
     }
     {
@@ -12934,7 +12950,7 @@ renderDefault: function {
             cv: targetTid
             vtarget: targetTid
             if cv.isZero.not then vtarget = cv
-            tg: tagConstOf :ast :ctx :symtab tid: vtarget :armId
+            tg: spelledTagConst :ast :ctx :symtab tid: vtarget :armId
             tc: (typeRefC
                 :ast
                 :symtab
@@ -13142,7 +13158,7 @@ fieldDefaultText: function {
     }
     if (symtab.typing.declIsFnptrFieldId parentTypeId: tid nameId: nm) then {
         # the method's name, a designator
-        return (stating :facts from: pathFacts text: (ctxCname :ctx tid: fid))
+        return (stating :facts from: pathFacts text: (spelledCname :ctx tid: fid))
     }
     return (stating :facts from: constFacts text: "0".string)
 }
@@ -13182,9 +13198,9 @@ emitCtorDefaultsFill: function {
             if cargs.length > 0 then cargs.append ", "
             cargs.append cav
         }
-        ccb: ctxCname :ctx tid: cco
+        ccb: spelledCname :ctx tid: cco
         # a templated class creates through its template's function
-        if (tmplClassRowOf :symtab :ctx :tid) > 0 then ccb = "\{ctxCname :ctx :tid}_create"
+        if (tmplClassRowOf :symtab :ctx :tid) > 0 then ccb = "\{spelledCname :ctx :tid}_create"
         return (stating :facts from: callFacts text: "\{ccb}(\{cargs})")
     }
     fids: ListVal ztypes.tid
@@ -13208,7 +13224,7 @@ emitCtorDefaultsFill: function {
         if args.length > 0 then args.append ", "
         args.append av
     }
-    rcb: ctxCname :ctx :tid
+    rcb: spelledCname :ctx :tid
     return (stating :facts from: callFacts text: "\{rcb}_create(\{args})")
 }
 
@@ -13361,7 +13377,7 @@ userCreateCtor: function {
     cargs: orderJoinSlots :ctx st: ord count: ccn
     orderEnd :ctx st: ord
     ccb: named.string
-    if ccb.length == 0 then ccb = ctxCname :ctx tid: cco
+    if ccb.length == 0 then ccb = spelledCname :ctx tid: cco
     return (stating
         :facts
         from: callFacts
@@ -13384,7 +13400,7 @@ emitRecordCtor: function {
     cco: userCreateFn :symtab :tid
     if cco.isZero.not then {
         named: String
-        if (tmplClassRowOf :symtab :ctx :tid) > 0 then named = "\{ctxCname :ctx :tid}_create"
+        if (tmplClassRowOf :symtab :ctx :tid) > 0 then named = "\{spelledCname :ctx :tid}_create"
         return (userCreateCtor :ast :symtab :ctx :call :cco :facts named: named.stringView)
     }
     fnames: List String
@@ -13417,7 +13433,7 @@ emitRecordCtor: function {
     oprefix: orderFinish :ctx st: ord
     args: orderJoinSlots :ctx st: ord count: fn0
     orderEnd :ctx st: ord
-    rc: ctxCname :ctx :tid
+    rc: spelledCname :ctx :tid
     rc.append "_create"
     return (stating
         :facts
@@ -14000,7 +14016,7 @@ floatBitsC: function {bits: math.BigInt.view k: ztypes.numkind} out String is {
 cvalText: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
+    ctx: Ctx
     tid: ztypes.tid
     v: ztypes.cval
     facts: cfacts.borrow
@@ -14013,22 +14029,32 @@ cvalText: function {
     if v.kind.fvalKind then {
         return (stating :facts from: constFacts text: (floatCvalText :symtab :tid :v))
     }
-    if v.kind.armKind then {
-        if v.armTid.isZero then return "".string
-        if v.armName.isZero then return "".string
-        # a variant that maps onto a scalar C type (bool) renders as that
-        # scalar; anything else is the payload-less compound literal
-        # emitInlineVariantCtor builds for the same arm written as a call
-        atomVarId: armValueC :ast :ctx :symtab tid: v.armTid arm: v.armName
-        if atomVarId.length > 0 then return (stating :facts from: constFacts text: atomVarId)
-        tg: tagConstOf :ast :ctx :symtab tid: v.armTid armId: v.armName
-        if tg.length == 0 then return "".string
-        vc: ctxCname :ctx tid: v.armTid
-        if vc.length == 0 then return "".string
-        return (stating :facts from: literalFacts text: "((\{vc}_t){ .tag = \{tg} })")
-    }
+    if v.kind.armKind then return (armCvalText :ast :symtab :ctx :v :facts)
     if v.kind.aggKind then return (aggCvalText :symtab :ctx :v :facts)
     return "".string
+}
+
+# armCvalText -- cvalText for an arm with no payload. A variant that maps onto a
+# scalar C type (bool) renders as that scalar; anything else is the
+# payload-less compound literal emitInlineVariantCtor builds for the same arm
+# written as a call. Either spells a tag constant its enum declares.
+armCvalText: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    v: ztypes.cval
+    facts: cfacts.borrow
+} out String is {
+    if v.armTid.isZero then return "".string
+    if v.armName.isZero then return "".string
+    if ctx.reachFixed.not then ctx.typeUses.add item: v.armTid
+    atomVarId: armValueC :ast :ctx :symtab tid: v.armTid arm: v.armName
+    if atomVarId.length > 0 then return (stating :facts from: constFacts text: atomVarId)
+    tg: tagConstOf :ast :ctx :symtab tid: v.armTid armId: v.armName
+    if tg.length == 0 then return "".string
+    vc: ctxCname :ctx tid: v.armTid
+    if vc.length == 0 then return "".string
+    return (stating :facts from: literalFacts text: "((\{vc}_t){ .tag = \{tg} })")
 }
 
 # aggCvalText -- cvalText for an aggregate: a data value is the address of its
@@ -14218,12 +14244,11 @@ memberConstTid: function {
 # memberConstText -- the C text for a unit constant, rendered from its VALUE
 # and carrying the literal suffix its declared type asks for. "" when the
 # member has no compile-time value, which is what leaves the caller on its
-# ordinary path. SCALARS ONLY: it answers on a Ctx.view, and a folded string
-# needs the mutable Ctx that memberConstStringText takes.
+# ordinary path. SCALARS ONLY: a folded string is memberConstStringText's.
 memberConstText: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
+    ctx: Ctx
     unitTid: ztypes.tid
     nameId: zast.nameid
     facts: cfacts.borrow
@@ -14367,7 +14392,7 @@ emitMetaCreateCall: function {
         oprefix: orderFinish :ctx st: ord
         args: orderJoinSlots :ctx st: ord count: fn0
         orderEnd :ctx st: ord
-        ecb: ctxCname :ctx tid: et
+        ecb: spelledCname :ctx tid: et
         ecb.append "_meta_create"
         return (stating
             :facts
@@ -14557,7 +14582,7 @@ emitFnCallWithFid: function {
     fid: ztypes.tid
     facts: cfacts.borrow
 } out String is {
-    fc: ctxCname :ctx tid: fid
+    fc: spelledCname :ctx tid: fid
     fpNames: List String
     fpIds: ListVal ztypes.tid
     fpIds9Nm: ListVal zast.nameid
@@ -14834,7 +14859,7 @@ emitCrossUnitTag: function {
     if isTagged.not then return "".string
     pc: armPayloadC :ast :symtab :ctx tid: vtid :arm
     if pc.length == 0 then {
-        tg: tagConstOf :ast :ctx :symtab tid: vtid armId: arm
+        tg: spelledTagConst :ast :ctx :symtab tid: vtid armId: arm
         vc: ctxCnameView :ctx tid: vtid
         avx: (armValueC
             :ast
@@ -14879,7 +14904,7 @@ foldedFnRefC: function {
         if (fnIds.get i: k) == mnId then {
             v: symtab.typing.constAggItems.get i: start + k
             if v.kind.fnKind.not then return "".string
-            return (ctxCname :ctx tid: (symtab.typing.decls.get i: v.fnDecl).typeId)
+            return (spelledCname :ctx tid: (symtab.typing.decls.get i: v.fnDecl).typeId)
         }
         k = k + 1
     }
@@ -15213,7 +15238,7 @@ conformanceArgText: function {
     ) then {
         suffix = "create_owned".string
     }
-    aIb: ctxCname :ctx tid: su.value
+    aIb: spelledCname :ctx tid: su.value
     aRcv: "&\{av}"
     if (isPtrVid :ctx vid: avVid) then {
         aRcv = "\{av}"
@@ -15867,7 +15892,7 @@ tmplInstCreate: function {
     if (tmplClassRowOf :symtab :ctx tid: ct) == 0 then return "".string
     cco: userCreateFn :symtab tid: ct
     if cco.isZero then return "".string
-    named: "\{ctxCname :ctx tid: ct}_create"
+    named: "\{spelledCname :ctx tid: ct}_create"
     return (userCreateCtor :ast :symtab :ctx :call :cco :facts named: named.stringView)
 }
 
@@ -16776,9 +16801,9 @@ tagAliasArmC: function {
     if ctorArmName.isZero then return "".string
     ava: armValueC :ast :ctx :symtab tid: brid arm: ctorArmName
     if ava.length > 0 then return (stating :facts from: constFacts text: ava)
-    atg: tagConstOf :ast :ctx :symtab tid: brid armId: ctorArmName
+    atg: spelledTagConst :ast :ctx :symtab tid: brid armId: ctorArmName
     if atg.length == 0 then return "".string
-    avc: ctxCname :ctx tid: brid
+    avc: spelledCname :ctx tid: brid
     return (stating :facts from: literalFacts text: "((\{avc}_t){ .tag = \{atg} })")
 }
 
@@ -16818,7 +16843,7 @@ implicitZeroValue: function {
         arrO: ctx.origins.get i: family.slot.fixedArray
         isSized: (zso == strO) or (zso == arrO)
         if isSized when zso.isZero.not then {
-            zsc: ctxCname :ctx tid: zm
+            zsc: spelledCname :ctx tid: zm
             return (stating :facts from: callFacts text: "\{zsc}_create()")
         }
     }
@@ -16826,7 +16851,7 @@ implicitZeroValue: function {
         :ctx
         originTid: (originTidOf :symtab tid: zm)
     ) then {
-        zmc: ctxCname :ctx tid: zm
+        zmc: spelledCname :ctx tid: zm
         zmt: zm
         # every family whose `create` takes a capacity is built with none
         takesCap: (
@@ -16904,7 +16929,7 @@ emitDefRefAtom: function {
             tid: brid
             :facts
         )
-        brc: ctxCname :ctx tid: brid
+        brc: spelledCname :ctx tid: brid
         return (stating :facts from: literalFacts text: "((\{brc}_t){0})")
     }
     if brid.isZero.not when (
@@ -16928,7 +16953,7 @@ emitDefRefAtom: function {
     if brid.isZero.not when (
         (symtab.reg.typetypeOf typeId: brid) == ztypes.ztypetype.functionType
     ) then {
-        fbcn: ctxCname :ctx tid: brid
+        fbcn: spelledCname :ctx tid: brid
         return (fnRefOrCallC
             :ast
             :symtab
@@ -17279,7 +17304,7 @@ nestedStrMember: function {
     baseNid: zast.nodeid
     facts: cfacts.borrow
 } out String is {
-    nstrcb: ctxCname :ctx tid: nlid
+    nstrcb: spelledCname :ctx tid: nlid
     if mnId == zast.wellKnown.slot.wkLength then return (stating
         :facts
         from: (memberFacts b: baseAtomF)
@@ -17370,7 +17395,7 @@ emitNestedCollectionBase: function {
         if nsm.length > 0 then return nsm
     }
     if (isListOriginOf :symtab :ctx tid: nlid) then {
-        nlcb: ctxCname :ctx tid: nlid
+        nlcb: spelledCname :ctx tid: nlid
         recvB: colRecvRef :ctx bn: baseAtom vid: bs9vid
         if mnId == zast.wellKnown.slot.wkPop then return (stating
             :facts
@@ -17395,14 +17420,14 @@ emitNestedCollectionBase: function {
     if (staticListValueFamilyOf :symtab :ctx tid: nlid).isZero.not when (
         mnId == zast.wellKnown.slot.wkIterate
     ) then {
-        ndcb: ctxCname :ctx tid: nlid
+        ndcb: spelledCname :ctx tid: nlid
         recvD: colRecvRef :ctx bn: baseAtom vid: bs9vid
         return (stating :facts from: callFacts text: "\{ndcb}_iterate(\{recvD})")
     }
     # a view walks too: its read walks reached through a field or off a call's
     # result (`l.listView.iterate`, the iterable of `for each w: l.listView`)
     if (isListViewOriginOf :symtab :ctx tid: nlid) when (isListReadWalkMember name: mn2) then {
-        nvcb: ctxCname :ctx tid: nlid
+        nvcb: spelledCname :ctx tid: nlid
         recvV: colRecvRef :ctx bn: baseAtom vid: bs9vid
         wv9: "_\{mn2}("
         return (stating :facts from: callFacts text: "\{nvcb}\{wv9}\{recvV})")
@@ -17412,7 +17437,7 @@ emitNestedCollectionBase: function {
     # find. The receiver field is already a pointer, so it is passed directly
     # (no `&`).
     if (isSetOriginOf :symtab :ctx tid: nlid) then {
-        nscb: ctxCname :ctx tid: nlid
+        nscb: spelledCname :ctx tid: nlid
         if mnId == zast.wellKnown.slot.wkIterate then return (stating
             :facts
             from: callFacts
@@ -17420,7 +17445,7 @@ emitNestedCollectionBase: function {
         )
     }
     if (isMapOriginOf :symtab :ctx tid: nlid) then {
-        nmpcb: ctxCname :ctx tid: nlid
+        nmpcb: spelledCname :ctx tid: nlid
         if mnId == zast.wellKnown.slot.wkIterate then return (stating
             :facts
             from: callFacts
@@ -17433,7 +17458,7 @@ emitNestedCollectionBase: function {
     # the id-keyed pair reached through a FIELD. They are stack structs, so
     # the receiver goes by address where a Map's field is already a pointer.
     if (isIdCollectionOriginOf :symtab :ctx tid: nlid) then {
-        nidcb: ctxCname :ctx tid: nlid
+        nidcb: spelledCname :ctx tid: nlid
         nidrv: colRecvRef :ctx bn: baseAtom vid: bs9vid
         if mnId == zast.wellKnown.slot.wkIterate then return (stating
             :facts
@@ -17676,7 +17701,7 @@ unitInstanceMemberRead: function {
         from: ((symtab.typing.declChildOfId parentTypeId: bst nameId: cid).or d: ztypes.tid.zero)
     )
     if (symtab.reg.typetypeOf typeId: fid) != ztypes.ztypetype.functionType then return "".string
-    cn: ctxCname :ctx tid: fid
+    cn: spelledCname :ctx tid: fid
     if (
         (symtab.reg.typetypeOf typeId: (stampIdOf :symtab nid: n.nodeid)) ==
         ztypes.ztypetype.functionType
@@ -18201,7 +18226,7 @@ fnptrFieldRead: function {
     readIsRef: bool
     facts: cfacts.borrow
 } out String is {
-    mcFp: ctxCname :ctx tid: mco
+    mcFp: spelledCname :ctx tid: mco
     if baseIsType then return (stating :facts from: pathFacts text: mcFp)
     takesThis: fnTypeTakesThis :symtab tid: mco
     if readIsRef when takesThis.not then return String
@@ -18276,7 +18301,7 @@ staticListValueMemberRead: function {
     acc: "."
     if (isPtrVid :ctx vid: bn2v) then acc = "->"
     if isLen then return (stating :facts from: (memberFacts b: baseF) text: "\{base}\{acc}length")
-    dvc: ctxCname :ctx tid: bstamp
+    dvc: spelledCname :ctx tid: bstamp
     if (isPtrVid :ctx vid: bn2v) then return (stating
         :facts
         from: callFacts
@@ -18543,11 +18568,11 @@ emitIdCollectionMemberRead: function {
             return (stating :facts from: (memberFacts b: bn2F) text: "\{bn2}\{accB2}capacity")
         }
         if mnId == zast.wellKnown.slot.wkIterate then {
-            idcb: ctxCname :ctx tid: bstamp
+            idcb: spelledCname :ctx tid: bstamp
             return (stating :facts from: callFacts text: "\{idcb}_iterate(\{recvB2})")
         }
         if mnId == zast.wellKnown.slot.wkIterateItems then {
-            idcb8: ctxCname :ctx tid: bstamp
+            idcb8: spelledCname :ctx tid: bstamp
             return (stating :facts from: callFacts text: "\{idcb8}_iterateItems(\{recvB2})")
         }
     }
@@ -18558,7 +18583,7 @@ emitIdCollectionMemberRead: function {
         if mnId == zast.wellKnown.slot.wkCapacity then {
             return (stating :facts from: (memberFacts b: bn2F) text: "\{bn2}->capacity")
         }
-        scb2: ctxCname :ctx tid: bstamp
+        scb2: spelledCname :ctx tid: bstamp
         if mnId == zast.wellKnown.slot.wkIterate then {
             return (stating :facts from: callFacts text: "\{scb2}_iterate(\{bn2})")
         }
@@ -18570,7 +18595,7 @@ emitIdCollectionMemberRead: function {
         if mnId == zast.wellKnown.slot.wkCapacity then {
             return (stating :facts from: (memberFacts b: bn2F) text: "\{bn2}->capacity")
         }
-        mcb2: ctxCname :ctx tid: bstamp
+        mcb2: spelledCname :ctx tid: bstamp
         if mnId == zast.wellKnown.slot.wkIterate then {
             return (stating :facts from: callFacts text: "\{mcb2}_iterate(\{bn2})")
         }
@@ -18633,7 +18658,7 @@ windowMemberRead: function {
         text: "\{base}\{acc}length"
     )
     if isSpan when mnId == zast.wellKnown.slot.wkClear then {
-        sc: ctxCname :ctx :tid
+        sc: spelledCname :ctx :tid
         rr: colRecvRef :ctx bn: base :vid
         return (stating :facts from: callFacts text: "\{sc}_clear(\{rr})")
     }
@@ -18650,8 +18675,8 @@ windowMemberRead: function {
         rt = fnReturnTidOf :symtab tid: co
     } case none then null
     if rt.isZero then return "".string
-    wc: ctxCname :ctx tid: rt
-    rc: ctxCname :ctx :tid
+    wc: spelledCname :ctx tid: rt
+    rc: spelledCname :ctx :tid
     # the length and the data both read the base: bound first when that repeats
     # work
     bound: String
@@ -18738,7 +18763,7 @@ emitCollectionMemberRead: function {
     }
     if (originIsTid :symtab tid: bstamp originTid: (ctx.origins.get i: family.slot.fixedArray)
     ) then {
-        acba: ctxCname :ctx tid: bstamp
+        acba: spelledCname :ctx tid: bstamp
         if mnId == zast.wellKnown.slot.wkLength then {
             return (stating :facts from: constFacts text: "\{acba}_length")
         }
@@ -18751,7 +18776,7 @@ emitCollectionMemberRead: function {
         }
     }
     if (originIsTid :symtab tid: bstamp originTid: (ctx.origins.get i: family.slot.str)) then {
-        scba: ctxCname :ctx tid: bstamp
+        scba: spelledCname :ctx tid: bstamp
         if mnId == zast.wellKnown.slot.wkLength then {
             return (stating :facts from: (memberFacts b: bn2F) text: "\{bn2}\{accB2}len")
         }
@@ -18780,7 +18805,7 @@ emitCollectionMemberRead: function {
             return (stating :facts from: (memberFacts b: bn2F) text: "\{bn2}\{accB2}length")
         }
         if (isListReadWalkMember name: mn2) then {
-            lcb9: ctxCname :ctx tid: bstamp
+            lcb9: spelledCname :ctx tid: bstamp
             w8: "_\{mn2}("
             return (stating :facts from: callFacts text: "\{lcb9}\{w8}\{recvB2})")
         }
@@ -18789,7 +18814,7 @@ emitCollectionMemberRead: function {
         if mnId == zast.wellKnown.slot.wkCapacity then {
             return (stating :facts from: (memberFacts b: bn2F) text: "\{bn2}\{accB2}capacity")
         }
-        lcb2: ctxCname :ctx tid: bstamp
+        lcb2: spelledCname :ctx tid: bstamp
         if mnId == zast.wellKnown.slot.wkPop then {
             return (stating :facts from: callFacts text: "\{lcb2}_pop(\{recvB2})")
         }
@@ -19206,7 +19231,7 @@ unitFnMemberC: function {
     if ((symtab.reg.typetypeOf typeId: fid) == ztypes.ztypetype.functionType).not then {
         return "".string
     }
-    dpUfc: ctxCname :ctx tid: fid
+    dpUfc: spelledCname :ctx tid: fid
     return (fnRefOrCallC
         :ast
         :symtab
@@ -19244,7 +19269,7 @@ nsFnMemberC: function {
     if ((symtab.reg.typetypeOf typeId: nftid) == ztypes.ztypetype.functionType).not then {
         return "".string
     }
-    nfcn: ctxCname :ctx tid: nftid
+    nfcn: spelledCname :ctx tid: nftid
     return (fnRefOrCallC
         :ast
         :symtab
@@ -19393,7 +19418,7 @@ emitResolvedCopy: function {
     cvcp: colCopyCall :ast :symtab :ctx :n :tid :facts
     if cvcp.length > 0 then return cvcp
     if inGeneric then {
-        cvtn: ctxCname :ctx :tid
+        cvtn: spelledCname :ctx :tid
         (emitFail
             :ctx
             what: "unsupported .copy of type \{cvtn} in a generic body"
@@ -19605,12 +19630,12 @@ taggedArmValueC: function {
     dtg: tt.isSum
     if dtg.not then return String
     if (isGenericType :symtab tid: dtp) then return String
-    vcH: ctxCname :ctx tid: dtp
+    vcH: spelledCname :ctx tid: dtp
     if vcH.length == 0 then return String
     if (armPayloadC :ast :symtab :ctx tid: dtp arm: mnc0Id).length > 0 then return String
     avh: armValueC :ast :ctx :symtab tid: dtp arm: mnc0Id
     if avh.length > 0 then return (stating :facts from: constFacts text: avh)
-    tgH: tagConstOf :ast :ctx :symtab tid: dtp armId: mnc0Id
+    tgH: spelledTagConst :ast :ctx :symtab tid: dtp armId: mnc0Id
     return (stating :facts from: literalFacts text: "((\{vcH}_t){ .tag = \{tgH} })")
 }
 
@@ -19659,7 +19684,7 @@ armPredicateC: function {
         )
         return (stating :facts from: (operandFacts e: recvPF place: false) text: "(\{valP})")
     }
-    tgP: tagConstOf :ast :ctx :symtab tid: dap armId: mnc0Id
+    tgP: spelledTagConst :ast :ctx :symtab tid: dap armId: mnc0Id
     # an ordinal IS its discriminator: compare the value, not a field
     if (isOrdinalVariant :symtab tid: dap) then return (stating
         :facts
@@ -20066,8 +20091,8 @@ orPanicExprC: function {
     recvNid: zast.nodeid
     facts: cfacts.borrow
 } out String is {
-    rcT: ctxCname :ctx :tid
-    okTag: tagConstOf :ast :ctx :symtab :tid armId: zast.wellKnown.slot.wkOk
+    rcT: spelledCname :ctx :tid
+    okTag: spelledTagConst :ast :ctx :symtab :tid armId: zast.wellKnown.slot.wkOk
     okC: memberC :ast :symtab :ctx owner: tid kind: memberkind.arm nameId: zast.wellKnown.slot.wkOk
     rcCType: "\{rcT}_t"
     pre: String
@@ -21140,7 +21165,7 @@ fillOperatorRow: function {
         rv.append from: String
         rv.append from: String
     }
-    bv.set i: 1 val: (ctxCname :ctx tid: tcnTid)
+    bv.set i: 1 val: (spelledCname :ctx tid: tcnTid)
     rv.set i: 0 val: (ctx.orderVals.set i: ord.valBase val: String)
     rv.set i: 1 val: (ctx.orderVals.set i: ord.valBase + 1 val: String)
     orderEnd :ctx st: ord
@@ -21375,7 +21400,7 @@ emitDeclaredOperator: function {
             :isFacet
         )
     } else {
-        cn: ctxCname :ctx tid: call
+        cn: spelledCname :ctx tid: call
         r.append cn
         r.append "("
         r.append (orderSlotText t: ctx st: ord slot: 0)
@@ -21516,7 +21541,7 @@ emitListEqOperator: function {
     r: orderFinish :ctx st: ord
     opened: r.length > 0
     if neg then r.append "!"
-    r.append (ctxCname :ctx tid: owner)
+    r.append (spelledCname :ctx tid: owner)
     r.append "_eq("
     r.append (orderSlotText t: ctx st: ord slot: 0)
     r.append ", "
@@ -22643,7 +22668,7 @@ emitPrintViaStringView: function {
     match (
         svco
     ) case some then {
-        mcb: ctxCname :ctx tid: svco
+        mcb: spelledCname :ctx tid: svco
         argOrig: originTidOf :symtab tid: argTid
         usesAmp: false
         if (
@@ -23101,9 +23126,9 @@ emitOptionBoxHoist: function {
                 av = emitExpr :ast :symtab :ctx n: aOpNode
             }
         }
-        vc: ctxCname :ctx tid: mid
+        vc: spelledCname :ctx tid: mid
         payC: armPayloadC :ast :symtab :ctx tid: mid arm: zast.wellKnown.slot.wkSome
-        tg: tagConstOf :ast :ctx :symtab tid: mid armId: zast.wellKnown.slot.wkSome
+        tg: spelledTagConst :ast :ctx :symtab tid: mid armId: zast.wellKnown.slot.wkSome
         # what the payload hoisted is declared ahead of the box
         flushArgHoists :ctx :ind :tmp :buf
         bN: tmpNext :ctx :tmp
@@ -23344,7 +23369,7 @@ emitCollectionBind: function {
         return true
     }
     if isHeap then {
-        hcb: ctxCname :ctx tid: ltid
+        hcb: spelledCname :ctx tid: ltid
         (emitHeapColBind
             :ast
             :symtab
@@ -23382,7 +23407,7 @@ emitControlCollectionBind: function {
     # a Set or Map, held and destroyed through its pointer
     isHeap: bool
 } is {
-    cb: ctxCname :ctx tid: ltid
+    cb: spelledCname :ctx tid: ltid
     ct: "\{cb}_t"
     free: "    \{cb}_destroy(&\{nm});\n"
     if isHeap then {
@@ -23496,7 +23521,7 @@ emitListBind: function {
     ltid: ztypes.tid
     nbrw: bool
 } is {
-    lcb: ctxCname :ctx tid: ltid
+    lcb: spelledCname :ctx tid: ltid
     if (noArgNativeRhs :ast :symtab unitName: ctx.mainName.stringView n: avn) then {
         # owned List returned by os.args / os.envNames: emit the call.
         losr: emitExpr :ast :symtab :ctx n: avn
@@ -23989,7 +24014,7 @@ emitNarrowedTakeBind: function {
             # a String payload is freed by the string runtime, which
             # has no `_destroy`: it rides the scope's String free list
             # like any other owned String local.
-            ldcbC: ctxCname :ctx tid: ntO
+            ldcbC: spelledCname :ctx tid: ntO
             if ldcbC.stringView == ctx.strC then {
                 tmp.oweFree name: nm.string vid: nameVid
             } else {
@@ -25724,7 +25749,7 @@ emitGenLocalBind: function {
     vn: ast.nodes.get i: n.value
     if (forexprValue n: vn) then {
         buf.append (destroyLineC :symtab :ctx tid: rtsid nm: fld.stringView :ind)
-        lcb: ctxCname :ctx tid: rtsid
+        lcb: spelledCname :ctx tid: rtsid
         buf.append "\{ind}\{fld} = \{lcb}_create((uint64_t)0);\n"
         (emitListComprehension
             :ast
@@ -26529,7 +26554,7 @@ pairSubjectCType: function {
 } out String is {
     sct: scalarCTypeFor :symtab :tid
     if sct.length > 0 then return sct
-    return "\{ctxCname :ctx :tid}_t"
+    return "\{spelledCname :ctx :tid}_t"
 }
 
 # matchOrdinalPairRoute -- an ordinal-pair subject (two ordinal variants matched
@@ -26870,7 +26895,7 @@ emitMatchStmt: function {
         buf.append lu0
         return
     }
-    vc: ctxCname :ctx tid: vtid
+    vc: spelledCname :ctx tid: vtid
     mN: tmpNext :ctx :tmp
     sname: atomTextOf :ast n: (ast.nodes.get i: m.subject)
     # the subject's variable: inside an arm the bound name IS the subject,
@@ -27474,7 +27499,7 @@ emitMatchClause: function {
 } is {
     if c.caseclause then {
         arm: clauseArmId :symtab nid: c.nodeid written: c.name
-        tg: tagConstOf :ast :ctx :symtab tid: vtid armId: arm
+        tg: spelledTagConst :ast :ctx :symtab tid: vtid armId: arm
         l2: "\{ind}case \{tg}: {\n"
         buf.append l2
         pc: armPayloadC :ast :symtab :ctx tid: vtid :arm
@@ -27761,8 +27786,8 @@ emitDoBindValue: function {
         ld: "\{ind}\{ct} \{nm};\n"
         buf.append ld
         if (ztypecheck.blockHasBreak :ast n: (ast.nodes.get i: n.statement)) then {
-            noneTag: tagConstOf :ast :ctx :symtab :tid armId: zast.wellKnown.slot.wkNone
-            someTag: tagConstOf :ast :ctx :symtab :tid armId: zast.wellKnown.slot.wkSome
+            noneTag: spelledTagConst :ast :ctx :symtab :tid armId: zast.wellKnown.slot.wkNone
+            someTag: spelledTagConst :ast :ctx :symtab :tid armId: zast.wellKnown.slot.wkSome
             someC: (memberC
                 :ast
                 :symtab
@@ -28213,7 +28238,7 @@ emitObjIterRecv: function {
     iterRecv: String
     ownGit: false
     if bareFnId.isZero.not then {
-        bcn: ctxCname :ctx tid: bareFnId
+        bcn: spelledCname :ctx tid: bareFnId
         lgh: "\{ind}\{itCb}_t _git\{mN} = \{bcn}();\n"
         buf.append lgh
         iterRecv = "_git\{mN}"
@@ -28283,7 +28308,7 @@ emitObjIterField: function {
     }
     ivex: String
     if bareFnId.isZero.not then {
-        bcn: ctxCname :ctx tid: bareFnId
+        bcn: spelledCname :ctx tid: bareFnId
         ivex = "\{bcn}()"
     } else {
         ivex = emitExpr :ast :symtab :ctx n: (ast.nodes.get i: cOp)
@@ -28493,9 +28518,9 @@ emitObjIterLoop: function {
     # type: there is no iterator to emit against.
     if ovid.isZero then return false
     callC: objIterCallC :symtab :ctx :cco :itid
-    ovc: ctxCname :ctx tid: ovid
+    ovc: spelledCname :ctx tid: ovid
     mN: tmpNext :ctx :tmp
-    itCb: ctxCname :ctx tid: itid
+    itCb: spelledCname :ctx tid: itid
     iterRecv: (emitObjIterRecv
         :ast
         :symtab
@@ -28559,7 +28584,7 @@ emitOptionLoopTail: function {
     tmp: TmpCtr
     buf: String.borrow
 } is {
-    ovNone: tagConstOf :ast :ctx :symtab tid: ovid armId: zast.wellKnown.slot.wkNone
+    ovNone: spelledTagConst :ast :ctx :symtab tid: ovid armId: zast.wellKnown.slot.wkNone
     payC: armPayloadC :ast :symtab :ctx tid: ovid arm: zast.wellKnown.slot.wkSome
     if (originIsTid
         :symtab
@@ -28710,7 +28735,7 @@ emitPlainBindingFor: function {
     lbl: varCName :ctx vid: lblV name: lblR.stringView
     ovid: stampTidDeep :symtab n: opN
     if ovid.isZero then return false
-    ovc: ctxCname :ctx tid: ovid
+    ovc: spelledCname :ctx tid: ovid
     mN: tmpNext :ctx :tmp
     lidO: pushLoopLabel :ctx :tmp isDo: false
     payCleanup: objIterPayCleanup :symtab :ctx :ovid lbl: lbl.stringView :lblV
@@ -31482,7 +31507,7 @@ emitControlBindValue: function {
     if (emitMatchBindValue :ast :symtab :ctx n: vn :nm :ct :ind :tmp :buf) then return true
     if (emitWithBindValue :ast :symtab :ctx n: vn :rtid :nm :ct :ind :tmp :buf) then return true
     if (forexprValue n: vn).not then return false
-    lcb: ctxCname :ctx tid: rtid
+    lcb: spelledCname :ctx tid: rtid
     lc0: "\{ind}\{lcb}_t \{nm} = \{lcb}_create((uint64_t)0);\n"
     buf.append lc0
     (emitListComprehension
@@ -33177,14 +33202,15 @@ typeRefC: function {
         # the `is native` declaration -- emit its struct, not the C scalar.
         # scalarCTypeFor is that gate, and the sixteen scalars, `bool` and the
         # shells all come back through it with their C type intact.
-        ct: scalarCTypeFor :symtab :tid
+        ct: scalarTypeRefC :symtab :ctx :tid
         if ct.length > 0 then return ct
     }
     lc: literalTypeC :symtab :ctx :tid
     if lc.length > 0 then return lc
     cmid: chaseAggregateTypedef :symtab :ctx tid: cid
     if cmid != cid then {
-        cmc: ctxCname :ctx tid: cmid
+        noteTypeUse :ctx tid: cmid
+        cmc: spelledCname :ctx tid: cmid
         return "\{cmc}_t"
     }
     cid = chaseStrTypedef :symtab :ctx tid: cid
@@ -33199,6 +33225,8 @@ typeRefC: function {
         return ts1
     }
     if (isBoxTid :symtab tid: cid) then {
+        # spelled as its element's pointer, and destroyed through its own
+        noteTypeUse :ctx tid: cid
         bxeid: symtab.reg.genericTypeArgAt specId: cid ordinal: 0
         bxinner: (typeRefC
             :ast
@@ -33209,11 +33237,13 @@ typeRefC: function {
         return "\{bxinner}*"
     }
     if (isCollectionOriginTid :ctx originTid: (originTidOf :symtab tid: cid)) then {
+        noteTypeUse :ctx tid: cid
         cc: ctxCnameView :ctx tid: cid
         cTypeText: "\{cc}_t"
         return cTypeText
     }
     if (originIsTid :symtab tid: cid originTid: (ctx.origins.get i: family.slot.fixedArray)) then {
+        noteTypeUse :ctx tid: cid
         aca: ctxCnameView :ctx tid: cid
         act: "\{aca}_t"
         return act
@@ -33225,6 +33255,7 @@ typeRefC: function {
     # because what it names is a function-pointer typedef and not a struct.
     isUserStruct: ctt.isUserFamily
     if isUserStruct then {
+        noteTypeUse :ctx tid: cid
         rc: ctxCnameView :ctx tid: cid
         # a data value is a handle to its static object
         if (isStaticHandle :symtab tid: cid) then return "const \{rc}_t*"
@@ -33254,6 +33285,164 @@ noteFnptrUse: function {ctx: Ctx tid: ztypes.tid} is {
         what: "a function type spelled after its typedefs were written, and not among them".string
         line: 0
     )
+}
+
+# scalarTypeRefC -- the C scalar a type is held as, "" for one held otherwise.
+# An ordinal variant is held as a scalar, and its values are the tag constants
+# its enum declares: spelling it is a use of the enum.
+scalarTypeRefC: function {symtab: zenv.ZSymbolTable.view ctx: Ctx tid: ztypes.tid} out String is {
+    ct: scalarCTypeFor :symtab :tid
+    if ct.length > 0 when (symtab.reg.typetypeOf typeId: tid) == ztypes.ztypetype.variantType then {
+        noteTypeUse :ctx :tid
+    }
+    return ct
+}
+
+# noteTypeUse -- a C spelling of the struct type `tid`: before the reached set is
+# closed it is a use the set starts from; after, the type must be one the set
+# holds, or the C names a struct that is never written.
+noteTypeUse: function {ctx: Ctx tid: ztypes.tid} is {
+    if ctx.reachFixed.not then {
+        ctx.typeUses.add item: tid
+        return
+    }
+    if (ctx.reachedTypes.has item: tid) then return
+    cn: ctxCname :ctx :tid
+    (emitFail
+        :ctx
+        what: "type \{cn} spelled after the reached types were fixed, and not among them"
+        line: 0
+    )
+}
+
+# closeReachedTypes -- fix the struct types the program's C needs: each one
+# the generated code spelled, and what each of those spells in turn. It runs
+# once, after every function, method body and runtime fragment is generated and
+# before the first type is written; a type outside the set is not written.
+closeReachedTypes: function {ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx} is {
+    todo: ListVal ztypes.tid
+    for each u: ctx.typeUses loop todo.append u
+    for todo.length > 0 loop {
+        drainReach :symtab :ctx :todo
+        # a written impl's conformance helpers spell the protocol they make a
+        # value of; a marker's only when the program makes one
+        ri: ztypes.confid
+        for ri.next < symtab.typing.nextConf loop {
+            ri = ri.next
+            spec: ztypes.tid
+            {
+                row: symtab.typing.conformance.get i: ri
+                if (ctx.reachedTypes.has item: row.implTypeId) then spec = row.specTypeId
+            }
+            if spec.isZero.not when (ctx.reachedTypes.has item: spec).not when (markerValueMade
+                :ast
+                :symtab
+                :ctx
+                :spec
+            ) then todo.append spec
+        }
+    }
+    ctx.reachFixed = true
+}
+
+# drainReach -- add each type on `todo` to the reached set, and what it spells.
+drainReach: function {symtab: zenv.ZSymbolTable.view ctx: Ctx todo: ListVal ztypes.tid} is {
+    for todo.length > 0 loop {
+        t: todo.pop
+        if (ctx.reachedTypes.has item: t) then continue
+        ctx.reachedTypes.add item: t
+        next: ListVal ztypes.tid
+        typeReachEdges :symtab :ctx tid: t acc: next
+        for each n: next loop {
+            if n.isZero.not when (ctx.reachedTypes.has item: n).not then todo.append n
+        }
+    }
+}
+
+# typeReached -- the type is one the program's C spells, so it is written.
+typeReached: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
+    return (ctx.reachedTypes.has item: tid)
+}
+
+# typeReachEdges -- the types one written type's C spells: a mono's elements,
+# keys, values and arm payloads, a declared type's fields or arm payloads, the
+# signatures of the members written beside it, and what a container's
+# templates spell.
+typeReachEdges: function {
+    symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.tid acc: ListVal ztypes.tid
+} is {
+    names: ListVal zast.nameid
+    tt: symtab.reg.typetypeOf typeId: tid
+    if (originTidOf :symtab :tid).isZero.not then {
+        monoElemIdsOf :symtab :ctx monoId: tid :acc
+    } else if tt == ztypes.ztypetype.variantType then {
+        variantArmIds :symtab :tid ids: acc nameIds: names
+    } else {
+        recFieldIds :symtab :tid ids: acc nameIds: names
+    }
+    memberSigReachEdges :symtab :tid :acc
+    containerReachEdges :symtab :ctx :tid :acc
+}
+
+# memberSigReachEdges -- the signature of each member written beside a type:
+# one a use site resolved, and an iterator's `call`, which its cursor is
+# written with.
+memberSigReachEdges: function {
+    symtab: zenv.ZSymbolTable.view tid: ztypes.tid acc: ListVal ztypes.tid
+} is {
+    names: ListVal zast.nameid
+    slot: u64
+    for slot < (symtab.typing.declRowSlots ownerTid: tid) loop {
+        rw: symtab.typing.declRowAt ownerTid: tid membersOnly: true :slot
+        slot = slot + 1
+        if rw.keep.not then continue
+        if (symtab.reg.typetypeOf typeId: rw.tid) != ztypes.ztypetype.functionType then continue
+        if rw.name != zast.wellKnown.slot.wkCall when (monoMemberUsed
+            :symtab
+            monoId: tid
+            nameId: rw.name
+        ).not then {
+            continue
+        }
+        sig: ListVal ztypes.tid
+        sig.append (symtab.reg.returnTypeOf tid: rw.tid)
+        recFieldIds :symtab tid: rw.tid ids: sig nameIds: names
+        for each st: sig loop acc.append (instTypeOf :symtab inst: tid tid: st)
+    }
+}
+
+# containerReachEdges -- what a container's templates spell beyond its used
+# members.
+containerReachEdges: function {
+    symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.tid acc: ListVal ztypes.tid
+} is {
+    # what a container's base template spells whether or not anything calls
+    # it: a set's iterator, a map's `get` answer and a hashed map's `remove`
+    if (isSetOriginOf :symtab :ctx :tid) or (isIdSetOriginOf :symtab :ctx :tid) then {
+        acc.append (monoMethodReturn :symtab monoId: tid nameId: zast.wellKnown.slot.wkIterate)
+    }
+    if (isMapOriginOf :symtab :ctx :tid) or (isIdMapOriginOf :symtab :ctx :tid) then {
+        acc.append (monoMethodReturn :symtab monoId: tid nameId: zast.wellKnown.slot.wkGet)
+    }
+    if (isMapOriginOf :symtab :ctx :tid) then {
+        acc.append (monoMethodReturn :symtab monoId: tid nameId: zast.wellKnown.slot.wkRemove)
+    }
+    # a map's two walks are written from one template, so either one used
+    # writes both cursors
+    if (isMapOriginOf :symtab :ctx :tid) or (isIdMapOriginOf :symtab :ctx :tid) then {
+        walks: (
+            (monoMemberUsed :symtab monoId: tid nameId: zast.wellKnown.slot.wkIterate) or
+            (monoMemberUsed :symtab monoId: tid nameId: zast.wellKnown.slot.wkIterateItems)
+        )
+        if walks then {
+            acc.append (monoMethodReturn :symtab monoId: tid nameId: zast.wellKnown.slot.wkIterate)
+            acc.append (monoMethodReturn
+                :symtab
+                monoId: tid
+                nameId: zast.wellKnown.slot.wkIterateItems
+            )
+        }
+    }
 }
 
 # variantArmIds -- a variant's arm payload ids and arm name ids, for the callers
@@ -33352,6 +33541,20 @@ tagConstOf: function {
         tn: regNameView :symtab :tid
         panic msg: "zemitterc: a tag constant for '\{an}', which '\{tn}' does not declare as an arm"
     }
+}
+
+# spelledTagConst -- tagConstOf for C being written: a tag constant is
+# declared by its type's enum, so until the reached types are fixed it is a
+# use of that type (closeReachedTypes).
+spelledTagConst: function {
+    ast: Ast.view
+    ctx: Ctx
+    symtab: zenv.ZSymbolTable.view
+    tid: ztypes.tid
+    armId: zast.nameid
+} out String is {
+    if ctx.reachFixed.not then ctx.typeUses.add item: tid
+    return (tagConstOf :ast :ctx :symtab :tid :armId)
 }
 
 # armOrdinalOf -- the position of the arm named `armId` among sum `tid`'s arms
@@ -35712,28 +35915,37 @@ emitCodeBody: function {
     runtimeDir: StringView
     nodeEstE: u64
     codeBuf: String.borrow
-} is {
+} out u64 is {
     codeBuf.reserve n: nodeEstE * 8
-    {
-        emitMonos ast: program :symtab :ctx :runtimeDir buf: codeBuf
-        # the split / lines iterator types, ahead of the typedefs of the function
-        # types that spell them; they reach nothing the passes below write
-        (emitRuntimeUnit
-            ast: program
-            :symtab
-            :ctx
-            :runtimeDir
-            uname: "sviter"
-            buf: codeBuf
-        )
-        # ahead of the runtime fragments: those dereference the layouts of the
-        # types they serve, so anything a fragment touches must already be
-        # complete, and this is the pass that orders by-value embedding in both
-        # directions (a user struct inside a mono, a mono inside a user struct)
-        emitFnptrTypedefs ast: program :symtab :ctx buf: codeBuf
-        emitUserStructsOrdered ast: program :symtab :ctx :runtimeDir buf: codeBuf
-        emitRuntimeUnits ast: program :symtab :ctx :runtimeDir buf: codeBuf late: false
-    }
+    # the runtime units are generated before the types, which they follow in
+    # the output: their holes name types, and a type is written only once
+    # something has spelled it. The split / lines iterator types go ahead of
+    # the typedefs of the function types that spell them; they reach nothing
+    # the passes below write
+    svBuf: String
+    (emitRuntimeUnit
+        ast: program
+        :symtab
+        :ctx
+        :runtimeDir
+        uname: "sviter"
+        buf: svBuf
+    )
+    rtBuf: String
+    emitRuntimeUnits ast: program :symtab :ctx :runtimeDir buf: rtBuf late: false
+    needsAt: ctx.needUnits.length
+    closeReachedTypes ast: program :symtab :ctx
+    emitMonos ast: program :symtab :ctx :runtimeDir buf: codeBuf
+    codeBuf.append svBuf
+    # ahead of the runtime fragments: those dereference the layouts of the
+    # types they serve, so anything a fragment touches must already be
+    # complete, and this is the pass that orders by-value embedding in both
+    # directions (a user struct inside a mono, a mono inside a user struct)
+    emitFnptrTypedefs ast: program :symtab :ctx buf: codeBuf
+    emitUserStructsOrdered ast: program :symtab :ctx :runtimeDir buf: codeBuf
+    codeBuf.append rtBuf
+    # the count of needs the runtime pass answered: one asked after it is late
+    return needsAt
 }
 
 # emitRuntimeUnits -- every unit's runtime, in the order the table gives, then
@@ -35897,6 +36109,9 @@ emitC: function {
         fnptrDemand: IdSet ztypes.tid
         fnptrWritten: IdSet ztypes.tid
         fnptrPassDone: false
+        typeUses: IdSet ztypes.tid
+        reachedTypes: IdSet ztypes.tid
+        reachFixed: false
         nativeBoxImpls: ListVal ztypes.tid
         nativeBoxProtos: ListVal ztypes.tid
         tmplCache: (Map String V: String)
@@ -36025,16 +36240,23 @@ emitC: function {
         fnsBuf.append "void z_main(void) {\n"
         fnsBuf.append "}\n\n"
     }
+    # the methods are generated ahead of the types, which they follow in the
+    # output: a type is written only once something has spelled it
+    protosBuf: String
+    emitRecordDefs :program :symtab :ctx phase: 1 buf: protosBuf
+    bodiesBuf: String
+    emitRecordDefs :program :symtab :ctx phase: 2 buf: bodiesBuf
     codeBuf: String
-    emitCodeBody :program :symtab :ctx :runtimeDir :nodeEstE :codeBuf
-    # what a type method's body asks for while it is written comes after the
-    # runtime pass has run, and goes in where that pass ended: ahead of every
-    # method body, behind every struct and runtime unit it reads. That is a
-    # native conformer's helpers, and the fragment rows whose demand fired
-    # only inside a method -- an operator or a native method's `needs=`
+    needsAt: emitCodeBody :program :symtab :ctx :runtimeDir :nodeEstE :codeBuf
+    # what is asked for after the runtime pass has run -- while a type or a
+    # conformance helper is written -- goes in where that pass ended: ahead of
+    # every method body, behind every struct and runtime unit it reads. That is
+    # a native conformer's helpers, and the fragment rows whose demand fired
+    # only there -- an operator or a native method's `needs=`
     natAt: codeBuf.length
-    needsAt: ctx.needUnits.length
-    emitRecordDefs :program :symtab :ctx buf: codeBuf
+    codeBuf.append protosBuf
+    emitRecordDefs :program :symtab :ctx phase: 3 buf: codeBuf
+    codeBuf.append bodiesBuf
     lateBuf: String
     if ctx.needUnits.length > needsAt then {
         emitRuntimeUnits ast: program :symtab :ctx :runtimeDir buf: lateBuf late: true
@@ -36751,7 +36973,7 @@ emitListContains: function {
             nameId: zast.wellKnown.slot.wkOpEq
         )
         body.append "        { \{ect} _e = _this->data[i]; if ("
-        body.append (ctxCname :ctx tid: (fo.or d: ztypes.tid.zero))
+        body.append (spelledCname :ctx tid: (fo.or d: ztypes.tid.zero))
         body.append "(&_e, "
         if (elemBorrowsByPtr :symtab :ctx tid: elem) then body.append "&"
         body.append "_needle)) return true; }\n"
@@ -36841,7 +37063,7 @@ sortLessC: function {
         rhs = "&_b"
     }
     fo: symtab.typing.declChildOfId parentTypeId: owner nameId: zast.wellKnown.slot.wkCompare
-    fc: ctxCname :ctx tid: (fo.or d: ztypes.tid.zero)
+    fc: spelledCname :ctx tid: (fo.or d: ztypes.tid.zero)
     return "\{fc}(&_a, \{rhs}) < 0"
 }
 
@@ -37028,8 +37250,9 @@ emitListIterCursor: function {
 }
 
 # emitIterCursorOf -- the list cursor `liId` and the view union its `call`
-# yields, emitted once. False when either was never minted, which leaves the walk with
-# nothing to emit.
+# yields, emitted once. False when either was never minted, or the cursor is
+# spelled by nothing the program writes, which leaves the walk with nothing to
+# emit.
 emitIterCursorOf: function {
     # the arm names
     ast: Ast.view
@@ -37040,6 +37263,7 @@ emitIterCursorOf: function {
     buf: String.borrow
 } out bool is {
     if liId.isZero then return false
+    if (typeReached :ctx tid: liId).not then return false
     ovId: (monoMethodReturn
         :symtab
         monoId: liId
@@ -37047,8 +37271,8 @@ emitIterCursorOf: function {
     )
     if ovId.isZero then return false
     if (listIterEmitted :ctx tid: liId) then return true
-    ovNone: tagConstOf :ast :ctx :symtab tid: ovId armId: zast.wellKnown.slot.wkNone
-    ovSome: tagConstOf :ast :ctx :symtab tid: ovId armId: zast.wellKnown.slot.wkSome
+    ovNone: spelledTagConst :ast :ctx :symtab tid: ovId armId: zast.wellKnown.slot.wkNone
+    ovSome: spelledTagConst :ast :ctx :symtab tid: ovId armId: zast.wellKnown.slot.wkSome
     (emitListIterCursor
         :ctx
         :liId
@@ -37552,13 +37776,13 @@ emitUnionMono: function {
     inlTids: ListVal ztypes.tid
     unionInlineArmTids :symtab :tid acc: inlTids
     preEmitEmbeddedTypes :ast :symtab :ctx ids: inlTids :buf
-    vc: ctxCname :ctx :tid
+    vc: spelledCname :ctx :tid
     buf.append "typedef enum {\n"
     ai: u64
     an: aidsNm.length
     for ai < an loop {
         aname: aidsNm.get i: ai
-        tg: tagConstOf :ast :ctx :symtab :tid armId: aname
+        tg: spelledTagConst :ast :ctx :symtab :tid armId: aname
         tv: armTagValueText :symtab :tid armNameId: aname
         lt: "    \{tg}\{tv},\n"
         buf.append lt
@@ -37602,7 +37826,7 @@ emitUnionMono: function {
         # points at its pinned source: nothing to destroy or free in either
         owned: (symtab.typing.declIsBorrowedFieldId parentTypeId: tid nameId: pname).not
         if pc.length > 0 when owned when (armIsInlineC :symtab :tid arm: pname).not then {
-            ptg: tagConstOf :ast :ctx :symtab :tid armId: pname
+            ptg: spelledTagConst :ast :ctx :symtab :tid armId: pname
             lcase: "        case \{ptg}:\n"
             buf.append lcase
             (emitArmPayloadDestroy
@@ -38121,6 +38345,9 @@ emitMapIters: function {
     if miiId.isZero then return
     mkiId: monoMethodReturn :symtab :monoId nameId: zast.wellKnown.slot.wkIterate
     if mkiId.isZero then return
+    # the two walks are one template: written when either is reached, and the
+    # reached set holds both (typeReachEdges)
+    if (typeReached :ctx tid: miiId).not when (typeReached :ctx tid: mkiId).not then return
     ovkId: (monoMethodReturn
         :symtab
         monoId: mkiId
@@ -38244,7 +38471,7 @@ optionNoneC: function {
     opt: ztypes.tid
     ind: StringView
 } out String is {
-    nt: tagConstOf :ast :ctx :symtab tid: opt armId: zast.wellKnown.slot.wkNone
+    nt: spelledTagConst :ast :ctx :symtab tid: opt armId: zast.wellKnown.slot.wkNone
     if (optionIsValFamily :symtab :ctx :opt) then return "\{ind}_r.tag = \{nt};\n"
     return "\{ind}_r.tag = \{nt};\n\{ind}_r.data = NULL;\n"
 }
@@ -38260,7 +38487,7 @@ optionSomeC: function {
     value: StringView
     ind: StringView
 } out String is {
-    st: tagConstOf :ast :ctx :symtab tid: opt armId: zast.wellKnown.slot.wkSome
+    st: spelledTagConst :ast :ctx :symtab tid: opt armId: zast.wellKnown.slot.wkSome
     if (optionIsValFamily :symtab :ctx :opt) then {
         rsC: (memberC
             :ast
@@ -38311,8 +38538,8 @@ emitMapMono: function {
     valTid: mapValType :symtab :monoId
     valT: cTypeForNameTid :ast :symtab :ctx tid: valTid
     ov: cbaseNoPrefix :ctx tid: ovId
-    ovSome: tagConstOf :ast :ctx :symtab tid: ovId armId: zast.wellKnown.slot.wkSome
-    ovNone: tagConstOf :ast :ctx :symtab tid: ovId armId: zast.wellKnown.slot.wkNone
+    ovSome: spelledTagConst :ast :ctx :symtab tid: ovId armId: zast.wellKnown.slot.wkSome
+    ovNone: spelledTagConst :ast :ctx :symtab tid: ovId armId: zast.wellKnown.slot.wkNone
     keyTid: mapKeyType :symtab :monoId
     keyT: (cTypeForNameTid
         :ast
@@ -38560,8 +38787,8 @@ emitIdMapMono: function {
     } case none then null
     if ovId.isZero then return
     ov: cbaseNoPrefix :ctx tid: ovId
-    ovSome: tagConstOf :ast :ctx :symtab tid: ovId armId: zast.wellKnown.slot.wkSome
-    ovNone: tagConstOf :ast :ctx :symtab tid: ovId armId: zast.wellKnown.slot.wkNone
+    ovSome: spelledTagConst :ast :ctx :symtab tid: ovId armId: zast.wellKnown.slot.wkSome
+    ovNone: spelledTagConst :ast :ctx :symtab tid: ovId armId: zast.wellKnown.slot.wkNone
     valTid: mapValType :symtab :monoId
     valT: cTypeForNameTid :ast :symtab :ctx tid: valTid
     keyTid: mapKeyType :symtab :monoId
@@ -38654,7 +38881,8 @@ emitIdMapMono: function {
 }
 
 # emitMapGetMut -- a map's in-place value reference, from its own template
-# (`file`, z_MapMut or z_IdMapMut): emitted only when `getMut` resolved. Its
+# (`file`, z_MapMut or z_IdMapMut): emitted only when `getMut` resolved and
+# what it returns is reached. Its
 # declared return -- an OptionMut over the VALUE in both value families, where
 # `get`'s differs between them -- names the C type; `keyHole` is the template's
 # key placeholder, filled with `keyT`.
@@ -38676,7 +38904,7 @@ emitMapGetMut: function {
         :monoId
         nameId: zast.wellKnown.slot.wkGetMut
     )
-    if gmId.isZero then return
+    if (typeReached :ctx tid: gmId).not then return
     gmv: cbaseNoPrefix :ctx tid: gmId
     pm: "\{runtimeDir}/\{file}"
     rawm: readTemplateCached :ctx path: pm.stringView
@@ -38707,7 +38935,7 @@ emitIdMapIters: function {
     buf: String.borrow
 } is {
     miiId: monoMethodReturn :symtab :monoId nameId: zast.wellKnown.slot.wkIterateItems
-    if miiId.isZero then return
+    if (typeReached :ctx tid: miiId).not then return
     oveId: (monoMethodReturn
         :symtab
         monoId: miiId
@@ -38863,10 +39091,13 @@ canonPartTid: function {
     return (builtinTid :ast :symtab nameId: (zast.poolFind pool: ast.names text: part))
 }
 
-# ioCanonCname -- memoized wrapper: the canon->cname map is emit-stable and io
-# fragments reload the same canons once per unit, so cache each result (incl.
-# the "" miss) per program. Avoids re-running the O(type count) registry scan in
-# ioCanonCnameUncached ~30x per canon.
+# ioCanonCname -- the id-based cname for an io canonical stem (the part after
+# `z_` in a runtime fragment): a mono (Result_*/List_u8/...) via its spec trie,
+# else a named system type (IoError/File/filestat/Reader/...) by registry name,
+# and "" when the type is not in the (demand-driven) registry for this program.
+# The canon->cname map is emit-stable and io fragments reload the same canons
+# once per unit, so each result (the "" miss included) is cached per program:
+# the O(type count) registry scan runs once per canon, not ~30 times.
 ioCanonCname: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -38885,7 +39116,11 @@ ioCanonCname: function {
         } case none then null
     }
     if found then return cached
-    r: ioCanonCnameUncached :ast :symtab :ctx :canon
+    # a hole names the type it is filled with, as a spelling does
+    t: ioCanonTidAny :ast :symtab :ctx :canon
+    if t.isZero.not when ctx.reachFixed.not then ctx.typeUses.add item: t
+    r: String
+    if t.isZero.not then r = ctxCname :ctx tid: t
     ctx.ioCanonC.set key: canon.string value: r.copy
     return r
 }
@@ -38934,21 +39169,6 @@ fragUnitChild: function {
     if unitDecl.isZero then return ztypes.tid.zero
     uo: ztypecheck.resolveUnitChildRo :ast st: symtab :unitDecl :nameId
     return (uo.or d: ztypes.tid.zero)
-}
-
-# ioCanonCnameUncached -- the id-based cname for an io canonical stem (the part
-# after `z_` in a runtime fragment): a mono (Result_*/List_u8/...) via its spec
-# trie, else a named system type (IoError/File/filestat/Reader/...) by registry
-# name. "" when the type is not in the (demand-driven) registry for this program.
-ioCanonCnameUncached: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
-    canon: StringView
-} out String is {
-    t: ioCanonTidAny :ast :symtab :ctx :canon
-    if t.isZero then return "".string
-    return (ctxCname :ctx tid: t)
 }
 
 # loadIoFragment -- read an io/cli runtime `.inc` and fill its holes
@@ -39346,7 +39566,7 @@ emitIoStdStreams: function {
     if needAny.not then return
     fid: ioFileId :symtab :ctx
     if fid.isZero then return
-    fbase: ctxCname :ctx tid: fid
+    fbase: spelledCname :ctx tid: fid
     wcn: ioCanonCname :ast :symtab :ctx canon: "Writer"
     rcn: ioCanonCname :ast :symtab :ctx canon: "Reader"
     if (needsHasM :ctx uname: "io" memb: "stdout") then {
@@ -39506,7 +39726,7 @@ emitClassRowStruct: function {
     cid: ztypes.tid
     buf: String.borrow
 } is {
-    fc: ctxCname :ctx tid: cid
+    fc: spelledCname :ctx tid: cid
     fnames: List String
     fids: ListVal ztypes.tid
     fidsNm: ListVal zast.nameid
@@ -39670,7 +39890,7 @@ emitDeclaredFwdDecl: function {
     if (symtab.reg.isNativeOf :tid) then return
     if (isTypedefType :symtab :tid) then return
     if (isBoxTid :symtab :tid) then return
-    cn: ctxCname :ctx :tid
+    cn: spelledCname :ctx :tid
     ctx.fwdDeclaredTypes.add item: tid
     l0: "typedef struct \{cn}_t \{cn}_t;\n"
     buf.append l0
@@ -39712,7 +39932,7 @@ emitMonoFwdDecl: function {
     if origin.isZero then return
     if (isBoxTid :symtab :tid) then return
     if (monoNeedsFwdDecl :symtab :ctx :tid).not then return
-    cnX: ctxCname :ctx :tid
+    cnX: spelledCname :ctx :tid
     ctx.fwdDeclaredTypes.add item: tid
     lx0: "typedef struct \{cnX}_t \{cnX}_t;\n"
     buf.append lx0
@@ -39765,7 +39985,8 @@ emitMainFwdDecls: function {symtab: zenv.ZSymbolTable.view ctx: Ctx buf: String.
     last: symtab.reg.nextTid
     t: ztypes.tid
     for t < last loop {
-        if (isStructTypetype tt: (symtab.reg.typetypeOf typeId: t)) then {
+        if (isStructTypetype tt: (symtab.reg.typetypeOf typeId: t)) when (typeReached :ctx tid: t
+        ) then {
             emitTypeFwdDecl :symtab :ctx tid: t :buf
         }
         t = t.next
@@ -39955,7 +40176,7 @@ buildUserTypeList: function {
                 if emOk when (typeDemandMet
                     :ctx
                     tid: t
-                ) then acc.append t
+                ) when (typeReached :ctx tid: t) then acc.append t
             }
         }
         t = t.next
@@ -40654,7 +40875,7 @@ applyMemberHoles: function {
         if mid.isZero.not then fid = ((symtab.typing.declChildOfId parentTypeId: arg nameId: mid).or
             d: ztypes.tid.zero
         )
-        fc: ctxCname :ctx tid: fid
+        fc: spelledCname :ctx tid: fid
         if fid.isZero or (fc.length == 0) then {
             m: "a class template calls the member '\{mname}' of its parameter, which the argument does not declare"
             emitFail :ctx what: m line: 0
@@ -40799,7 +41020,7 @@ collectLateMonosKind: function {
 } is {
     tm: ztypes.tid
     for tm < last loop {
-        if (originIsTid :symtab tid: tm :originTid) when (monoIsLate
+        if (originIsTid :symtab tid: tm :originTid) when (typeReached :ctx tid: tm) when (monoIsLate
             :ast
             :symtab
             :ctx
@@ -41012,7 +41233,7 @@ ensureFwdStruct: function {
             emitMonoFwdDecl :symtab :ctx :tid origin: mo :buf
             return
         }
-        cn: ctxCname :ctx :tid
+        cn: spelledCname :ctx :tid
         ctx.fwdDeclaredTypes.add item: tid
         l0: "typedef struct \{cn}_t \{cn}_t;\n"
         buf.append l0
@@ -41044,7 +41265,7 @@ fwdDeclareSpec: function {
     if (typeStructEmitted :ctx :tid) then return
     if (ctx.fwdDeclaredTypes.has item: tid) then return
     if (symtab.reg.isNativeOf :tid) then return
-    cn: ctxCname :ctx :tid
+    cn: spelledCname :ctx :tid
     ctx.fwdDeclaredTypes.add item: tid
     l0: "typedef struct \{cn}_t \{cn}_t;\n"
     buf.append l0
@@ -41339,7 +41560,7 @@ emitUserProtocols: function {
                 (definedInUnitTid :symtab tid: tp).isZero.not and
                 (symtab.reg.isNativeOf tid: tp).not
             )
-            if pown or (userSpecInstance :symtab tid: tp) then {
+            if pown or (userSpecInstance :symtab tid: tp) when (typeReached :ctx tid: tp) then {
                 (emitUserTypeById
                     :ast
                     :symtab
@@ -41413,7 +41634,10 @@ collectTmplClassInstances: function {
     for tm < last loop {
         if (tmplClassRowOf :symtab :ctx tid: tm) > 0 then {
             own: (originTidOf :symtab tid: tm).isZero
-            if own.not or (tmplClassInProgram :symtab tpl: tm) then acc.append tm
+            if own.not or (tmplClassInProgram :symtab tpl: tm) when (typeReached :ctx tid: tm
+            ) then {
+                acc.append tm
+            }
         }
         tm = tm.next
     }
@@ -42015,6 +42239,7 @@ classifyMonoAt: function {
     tcl: ztypes.tid
     work: MonoWork
 } is {
+    if (typeReached :ctx tid: tcl).not then return
     tv: tcl
     tt: symtab.reg.typetypeOf typeId: tcl
     gen: isGenericType :symtab tid: tcl
@@ -42089,6 +42314,7 @@ isLateUserInstance: function {
     userList: (ListVal ztypes.tid).view
 } out bool is {
     if (isUserInstance :symtab :ctx :tcl).not then return false
+    if (typeReached :ctx tid: tcl).not then return false
     return (monoIsLate :ast :symtab :ctx monoId: tcl :userList)
 }
 
@@ -42557,14 +42783,14 @@ emitStaticAggs: function {
         }
         if isChoice then {
             ci: staticChoiceInit :ast :symtab :ctx row: id
-            buf.append "static const \{ctxCname :ctx :tid}_t _zag\{id} = \{ci};\n"
+            buf.append "static const \{spelledCname :ctx :tid}_t _zag\{id} = \{ci};\n"
             continue
         }
         fnames: List String
         fids: ListVal ztypes.tid
         fidsNm: ListVal zast.nameid
         recFieldLists :ast :symtab :tid names: fnames ids: fids nameIds: fidsNm
-        rc: ctxCname :ctx :tid
+        rc: spelledCname :ctx :tid
         buf.append "static const \{rc}_t _zag\{id} = { "
         k: u64
         for k < count loop {
@@ -42738,7 +42964,7 @@ staticChoiceInit: function {
         arm = g.arm
         item = symtab.typing.constAggItems.get i: g.itemStart.u64
     }
-    tg: tagConstOf :ast :ctx :symtab :tid armId: arm
+    tg: spelledTagConst :ast :ctx :symtab :tid armId: arm
     mc: memberC :ast :symtab :ctx owner: tid kind: memberkind.arm nameId: arm
     pt: ztypes.tid
     ad: symtab.typing.declMemberIdOf parentTypeId: tid nameId: arm
@@ -42768,11 +42994,14 @@ staticAggItemText: function {
         return (staticChoiceInit :ast :symtab :ctx row: v.aggId)
     }
     # a function reference is the function itself, whose address is a constant
-    if v.kind.fnKind then return (ctxCname :ctx tid: (symtab.typing.decls.get i: v.fnDecl).typeId)
+    if v.kind.fnKind then return (spelledCname
+        :ctx
+        tid: (symtab.typing.decls.get i: v.fnDecl).typeId
+    )
     if v.kind.armKind then {
         av: armValueC :ast :ctx :symtab tid: v.armTid arm: v.armName
         if av.length > 0 then return av
-        tg: tagConstOf :ast :ctx :symtab tid: v.armTid armId: v.armName
+        tg: spelledTagConst :ast :ctx :symtab tid: v.armTid armId: v.armName
         return "{ .tag = \{tg} }"
     }
     facts: cfacts
@@ -42785,56 +43014,56 @@ emitRecordDefs: function {
     program: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
+    # 1: the static aggregates and every unit's forward declarations; 2: every
+    # unit's method bodies; 3: the conformance helpers and the hash
+    # prototypes, which are written after the types they serve and so are
+    # generated after them. In the output 3 goes between 1 and 2, so the
+    # passes across ALL file units let cross-unit references resolve
+    phase: u64
     buf: String.borrow
 } is {
-    emitStaticAggs ast: program :symtab :ctx :buf
-    {
-        # 2 phases across ALL file units so cross-unit refs resolve: every
-        # unit's fwd-decls, then every unit's method bodies.
-        ph: 1.u64
-        for ph <= 2 loop {
-            # the generated hashes every method body may call are declared once
-            # every struct they take is
-            if ph == 2 then emitHashPrototypes ast: program :symtab :ctx :buf
-            uCnt9h: program.units.length
-            uIdx9h: u64
-            for uIdx9h < uCnt9h loop {
-                uId: program.units.get i: uIdx9h
-                uIdx9h = uIdx9h + 1
-                opId: zast.nodeid
-                unitNameText: String
-                un9Id: zast.nameid
-                {
-                    u: program.nodes.get i: uId
-                    if u.namedoperation then {
-                        un: zast.poolTextAt pool: program.names ref: u.name
-                        opId = u.operation
-                        unitNameText = un.copy
-                        un9Id = u.name
-                    }
-                }
-                if opId.isZero.not then {
-                    sm: ctx.mainName.copy
-                    smD: ctx.mainUnitId
-                    (ctxBindMain
-                        :ctx
-                        name: unitNameText.stringView
-                        unitDecl: (ztypecheck.unitDeclOfName st: symtab nameId: un9Id)
-                    )
-                    (emitRecordDefsIn
-                        :symtab
-                        :ctx
-                        ast: program
-                        mainOpId: opId
-                        phase: ph
-                        :buf
-                    )
-                    ctxBindMain :ctx name: sm.stringView unitDecl: smD
-                }
+    if phase == 1 then emitStaticAggs ast: program :symtab :ctx :buf
+    uCnt9h: program.units.length
+    uIdx9h: u64
+    for uIdx9h < uCnt9h loop {
+        uId: program.units.get i: uIdx9h
+        uIdx9h = uIdx9h + 1
+        opId: zast.nodeid
+        unitNameText: String
+        un9Id: zast.nameid
+        {
+            u: program.nodes.get i: uId
+            if u.namedoperation then {
+                un: zast.poolTextAt pool: program.names ref: u.name
+                opId = u.operation
+                unitNameText = un.copy
+                un9Id = u.name
             }
-            if ph == 1 then emitInstanceConformanceImpls ast: program :symtab :ctx :buf
-            ph = ph + 1
         }
+        if opId.isZero.not then {
+            sm: ctx.mainName.copy
+            smD: ctx.mainUnitId
+            (ctxBindMain
+                :ctx
+                name: unitNameText.stringView
+                unitDecl: (ztypecheck.unitDeclOfName st: symtab nameId: un9Id)
+            )
+            (emitRecordDefsIn
+                :symtab
+                :ctx
+                ast: program
+                mainOpId: opId
+                :phase
+                :buf
+            )
+            ctxBindMain :ctx name: sm.stringView unitDecl: smD
+        }
+    }
+    if phase == 3 then {
+        emitInstanceConformanceImpls ast: program :symtab :ctx :buf
+        # the generated hashes every method body may call are declared once
+        # every struct they take is
+        emitHashPrototypes ast: program :symtab :ctx :buf
     }
 }
 
@@ -43079,7 +43308,7 @@ emitOneFacet: function {
 } is {
     if (ctx.emittedUserTypes.has item: tid) then return
     ctx.emittedUserTypes.add item: tid
-    pbase: ctxCname :ctx :tid
+    pbase: spelledCname :ctx :tid
     impls: ListVal ztypes.tid
     facetImplTids :symtab :tid acc: impls
     preEmitEmbeddedTypes :ast :symtab :ctx ids: impls :buf
@@ -43204,7 +43433,7 @@ emitOneProtocol: function {
     # a marker no value is made of has nothing in the program's C to name it
     if (protocolEmitted :ast :symtab :ctx :tid) then return
     ctx.emittedUserTypes.add item: tid
-    pbase: ctxCname :ctx :tid
+    pbase: spelledCname :ctx :tid
     mnames: List String
     mids: ListVal ztypes.tid
     midsNm: ListVal zast.nameid
@@ -43316,6 +43545,14 @@ implMethodCname: function {
     return (ctxCname :ctx tid: implMid)
 }
 
+# implHelpersDue -- an impl's conformance helpers are written: its struct is
+# out, or, for a runtime unit's, which are generated before any struct is
+# written, something has spelled it by then and so the reached types hold it.
+implHelpersDue: function {ctx: Ctx.view implTid: ztypes.tid} out bool is {
+    if ctx.reachFixed.not then return (ctx.typeUses.has item: implTid)
+    return (typeStructEmitted :ctx tid: implTid)
+}
+
 # emitConformanceImplsForType -- the conformance helpers one impl type owes a
 # family: every row of the conformance table naming it, each emitted once.
 # The families differ in which impls they accept and which helper they emit,
@@ -43336,7 +43573,7 @@ emitConformanceImplsForType: function {
     # a protocol conforms only to markers, and its value stands in for its own
     # protocol only, so its rows need no helpers
     if implTT == ztypes.ztypetype.protocolType then return
-    if (typeStructEmitted :ctx tid: implTid).not then return
+    if (implHelpersDue :ctx :implTid).not then return
     want: ztypes.ztypetype.protocolType
     if isFacet then want = ztypes.ztypetype.facetType
     ri: ztypes.confid
@@ -43454,9 +43691,9 @@ emitConformanceImpl: function {
         ownLbl: conformanceLabelFor :symtab :implTid protoTid: specTid
         if ownLbl.length == 0 then return
     }
-    implBase: ctxCname :ctx tid: implTid
+    implBase: spelledCname :ctx tid: implTid
     implCtype: implStructC :symtab :ctx tid: implTid
-    specBase: ctxCname :ctx tid: specTid
+    specBase: spelledCname :ctx tid: specTid
     specCtype: "\{specBase}_t"
     vtableCtype: "\{specBase}_vtable_t"
     wbase: "\{implBase}_\{label}"
@@ -44047,7 +44284,7 @@ emitClassNativeCall: function {
         if row == 0 then return "".string
         demandNativeRow :ctx :row key: key.stringView
     }
-    fc: ctxCname :ctx tid: cid
+    fc: spelledCname :ctx tid: cid
     recvExpr: nativeValueRecvExpr :ast :symtab :ctx :cid recvNid: valRecv
     if valRecv.isZero then recvExpr = nativeCallRecvExpr :ast :symtab :ctx :calr :bn :bnid
     pNames: List String
@@ -44261,7 +44498,7 @@ emitClassNativeRead: function {
         k = k + 1
     }
     if tmplInst.not then demandNativeRow :ctx :row key: key.stringView
-    fc: ctxCname :ctx tid: cid
+    fc: spelledCname :ctx tid: cid
     rexp: "&\{recv}"
     if (isPtrVid :ctx vid: recvVid) then rexp = recv.string
     c1: (nativeMethodCallOpen
@@ -44550,7 +44787,7 @@ emitIoWrapperCreate: function {
     oprefix: orderFinish :ctx st: ord
     args: orderJoinSlots :ctx st: ord count: pn
     orderEnd :ctx st: ord
-    wcn: ctxCname :ctx tid: wid
+    wcn: spelledCname :ctx tid: wid
     typeUseAdd :ctx tid: wid
     wcn.append "_create"
     return (stating
@@ -44840,7 +45077,7 @@ emitNativeFreeFnCall: function {
     callee: "z_\{un}_\{mn}"
     viaMember: nativeViaMember :ctx key: key.stringView
     if viaMember.length > 0 then {
-        callee = "\{ctxCname :ctx tid: (stampIdOf :symtab nid: call.nodeid)}_\{viaMember}"
+        callee = "\{spelledCname :ctx tid: (stampIdOf :symtab nid: call.nodeid)}_\{viaMember}"
     } else if (nativeIsFragBacked :ctx path: key.stringView).not then return "".string
     needsAddM :ctx uname: un.stringView memb: "@unit"
     needsAddM :ctx uname: un.stringView memb: mn
@@ -44992,7 +45229,7 @@ viaBoxArg: function {
         tmpNm: hoistForAddress :ast :symtab :ctx :av tid: paramTid :argNid
         addr = "&\{tmpNm}"
     }
-    return "\{ctxCname :ctx tid: paramTid}_\{lbl}_create_owned(\{addr})"
+    return "\{spelledCname :ctx tid: paramTid}_\{lbl}_create_owned(\{addr})"
 }
 
 # emitCliSpecCreate -- `cli.Spec.create programName: ... summary: ...` ->
@@ -45070,7 +45307,7 @@ emitCliSpecCreate: function {
     orderEnd :ctx st: ord
     needsAddM :ctx uname: "cli" memb: "@unit"
     needsAddM :ctx uname: "cli" memb: "spec_create"
-    ccb: ctxCname :ctx tid: cid
+    ccb: spelledCname :ctx tid: cid
     ccb.append "_create"
     return (stating
         :facts
@@ -45116,8 +45353,8 @@ emitResultCombinator: function {
     recvExprF: cfacts
     recvExpr: valueExprC :ast :symtab :ctx n: (ast.nodes.get i: bnid) facts: recvExprF
     if recvExpr.length == 0 then return "".string
-    okTag: tagConstOf :ast :ctx :symtab tid: rtid armId: payArmId
-    rcT: ctxCname :ctx tid: rtid
+    okTag: spelledTagConst :ast :ctx :symtab tid: rtid armId: payArmId
+    rcT: spelledCname :ctx tid: rtid
     if isP then return (orPanicExprC
         :ast
         :symtab
@@ -45188,7 +45425,7 @@ emitParsedMethodCall: function {
     ) then {
         return "".string
     }
-    pc: ctxCname :ctx tid: pid
+    pc: spelledCname :ctx tid: pid
     recvV0: atomVid :symtab nid: bnid
     recv: aliasResolveAt :symtab :ctx nid: bnid name: bn vid: recvV0
     recvV: ztypes.vid
@@ -45257,7 +45494,7 @@ emitUserIterCall: function {
     ) then {
         return "".string
     }
-    callC: ctxCname :ctx tid: cco
+    callC: spelledCname :ctx tid: cco
     recvVid: atomVid :symtab nid: bnid
     recvText: aliasResolveAt :symtab :ctx nid: bnid name: bn vid: recvVid
     recvV: ztypes.vid
@@ -45702,7 +45939,7 @@ emitProtocolCreateCall: function {
                 )
             }
             if fromTid.isZero then return "".string
-            implBase: ctxCname :ctx tid: fromTid
+            implBase: spelledCname :ctx tid: fromTid
             label: boxLabelFor :symtab :ctx implTid: fromTid :protoTid
             if label.length == 0 then return "".string
             valueVid: atomVid :symtab nid: (dottedBaseNodeId :ast n: fop)
@@ -45944,9 +46181,9 @@ emitRecordDefsInBody: function {
 } is {
     if phase == 1 then {
         emitUnitDefMethods :ast :symtab :ctx :bodyIds :ownerTid declOnly: true :buf
-        emitUnitConformanceImpls :ast :symtab :ctx :bodyIds :ownerTid :buf
         emitUnitFnFwdDecls :ast :symtab :ctx :bodyIds :ownerTid :buf
     }
+    if phase == 3 then emitUnitConformanceImpls :ast :symtab :ctx :bodyIds :ownerTid :buf
     if phase == 2 then emitUnitDefMethods :ast :symtab :ctx :bodyIds :ownerTid declOnly: false :buf
     emitNestedRecordDefs :ast :symtab :ctx :bodyIds :ownerTid :phase :buf
 }
@@ -46083,7 +46320,7 @@ writeVariantEq: function {
         qco: symtab.typing.declChildOfId parentTypeId: tid nameId: qname
         qc: armPayloadC :ast :symtab :ctx :tid arm: qname
         if qc.length > 0 when qco.some then {
-            qtg: tagConstOf :ast :ctx :symtab :tid armId: qname
+            qtg: spelledTagConst :ast :ctx :symtab :tid armId: qname
             qnameC: memberC :ast :symtab :ctx owner: tid kind: memberkind.arm nameId: qname
             qsel: ".data.\{qnameC}"
             dest.append "        case \{qtg}: return "
@@ -46149,13 +46386,13 @@ emitOneVariant: function {
     # program in the corpus its C.
     if aidsNm.length == 0 then return
     preEmitEmbeddedTypes :ast :symtab :ctx ids: aids :buf
-    vc: ctxCname :ctx :tid
+    vc: spelledCname :ctx :tid
     buf.append "typedef enum {\n"
     ai: u64
     an: aidsNm.length
     for ai < an loop {
         aname: aidsNm.get i: ai
-        tg: tagConstOf :ast :ctx :symtab :tid armId: aname
+        tg: spelledTagConst :ast :ctx :symtab :tid armId: aname
         tv: armTagValueText :symtab :tid armNameId: aname
         lt: "    \{tg}\{tv},\n"
         buf.append lt
@@ -46311,7 +46548,7 @@ emitStructDestructor: function {
     fnameIds: (ListVal zast.nameid).view
     buf: String.borrow
 } is {
-    rc: ctxCname :ctx :tid
+    rc: spelledCname :ctx :tid
     d0: "static void \{rc}_destroy(\{rc}_t* p);\n"
     buf.append d0
     d1: "static void \{rc}_destroy(\{rc}_t* p) {\n"
@@ -46340,7 +46577,7 @@ emitStructDestructor: function {
                 buf.append ds
             } else if bxF.isZero.not then {
                 # a Box field IS the cell's pointer: its destroy takes the value
-                bxC: ctxCname :ctx tid: bxF
+                bxC: spelledCname :ctx tid: bxF
                 dbx: "    \{bxC}_destroy(p->\{fC});\n"
                 buf.append dbx
             } else {
@@ -46564,7 +46801,7 @@ partEqC: function {
         }
         owner: ztypecheck.valOpOwner st: symtab :tid nameId: zast.wellKnown.slot.wkOpEq
         fo: symtab.typing.declChildOfId parentTypeId: owner nameId: opId
-        dest.append (ctxCname :ctx tid: (fo.or d: ztypes.tid.zero))
+        dest.append (spelledCname :ctx tid: (fo.or d: ztypes.tid.zero))
         dest.append "(&"
         dest.append lhs
         dest.append sel
@@ -46602,7 +46839,7 @@ partEqC: function {
         dest.append sel
         return
     }
-    dest.append (ctxCname :ctx tid: (ztypecheck.typedefChaseTid st: symtab :tid))
+    dest.append (spelledCname :ctx tid: (ztypecheck.typedefChaseTid st: symtab :tid))
     dest.append "_eq("
     dest.append lhs
     dest.append sel
@@ -46629,7 +46866,7 @@ partHashWords: function {
     if src.written then {
         owner: ztypecheck.valOpOwner st: symtab :tid nameId: zast.wellKnown.slot.wkHash
         fo: symtab.typing.declChildOfId parentTypeId: owner nameId: zast.wellKnown.slot.wkHash
-        fc: ctxCname :ctx tid: (fo.or d: ztypes.tid.zero)
+        fc: spelledCname :ctx tid: (fo.or d: ztypes.tid.zero)
         wr: String
         wr.append fc
         wr.append "(&"
@@ -46671,7 +46908,7 @@ partHashWords: function {
         return
     }
     hashFnDemand :ast :symtab :ctx tid: base
-    wg: "\{ctxCname :ctx tid: base}_hash(\{v})"
+    wg: "\{spelledCname :ctx tid: base}_hash(\{v})"
     words.append wg
 }
 
@@ -46738,7 +46975,7 @@ hashFnDemand: function {
 appendHashSig: function {
     symtab: zenv.ZSymbolTable.view ctx: Ctx tid: ztypes.tid dest: String.borrow
 } is {
-    cn: ctxCname :ctx :tid
+    cn: spelledCname :ctx :tid
     if (isStaticHandle :symtab :tid) then {
         dest.append "static uint64_t \{cn}_hash(const \{cn}_t* a)"
     } else {
@@ -46847,7 +47084,7 @@ variantHashBody: function {
                 :words
             )
             if words.length > width then width = words.length
-            cases.append "        case \{tagConstOf :ast :ctx :symtab :tid armId: qname}:"
+            cases.append "        case \{spelledTagConst :ast :ctx :symtab :tid armId: qname}:"
             wi: u64
             for wi < words.length loop {
                 cases.append " _h[\{wi + 1}] = \{words.get i: wi};"
@@ -46934,7 +47171,7 @@ valKeyHashBody: function {
         fo: symtab.typing.declChildOfId parentTypeId: owner nameId: zast.wellKnown.slot.wkHash
         fid: fo.or d: ztypes.tid.zero
         buf.append "static uint64_t "
-        buf.append (ctxCname :ctx tid: fid)
+        buf.append (spelledCname :ctx tid: fid)
         buf.append "("
         buf.append (keyFnParamConstC :symtab :fid index: 0)
         buf.append keyT
@@ -46966,7 +47203,7 @@ valKeyEqBody: function {
         fo: symtab.typing.declChildOfId parentTypeId: owner nameId: opId
         fid: fo.or d: ztypes.tid.zero
         buf.append "static bool "
-        buf.append (ctxCname :ctx tid: fid)
+        buf.append (spelledCname :ctx tid: fid)
         buf.append "("
         buf.append (keyFnParamConstC :symtab :fid index: 0)
         buf.append keyT
@@ -47028,7 +47265,7 @@ emitHashPrototypes: function {
                 :ctx
                 tid: r
             )
-            buf.append "static uint64_t \{ctxCname :ctx tid: fid}(const \{rt}* _t);\n"
+            buf.append "static uint64_t \{spelledCname :ctx tid: fid}(const \{rt}* _t);\n"
         }
     }
 }
@@ -47052,7 +47289,7 @@ emitHashDefs: function {
                 tid: r
             )
             he: hashExprC :ast :symtab :ctx tid: r v: "(*_t)"
-            buf.append "static uint64_t \{ctxCname :ctx tid: fid}(const \{rt}* _t) {\n"
+            buf.append "static uint64_t \{spelledCname :ctx tid: fid}(const \{rt}* _t) {\n"
             buf.append "    return \{he};\n}\n\n"
         }
     }
@@ -47222,7 +47459,7 @@ emitOneRecord: function {
     # nothing can hold one, so emit nothing rather than invalid C.
     if fnames.length == 0 then return
     preEmitEmbeddedTypes :ast :symtab :ctx ids: fids :buf
-    rc: ctxCname :ctx :tid
+    rc: spelledCname :ctx :tid
     if (isFwdDeclared :ctx :tid) then {
         lopenR: "struct \{rc}_t {\n"
         buf.append lopenR
@@ -47616,7 +47853,7 @@ setupGenCtx: function {
         ctx.genActive = false
         return false
     }
-    rc: ctxCname :ctx tid: rid
+    rc: spelledCname :ctx tid: rid
     ctx.genFieldsRow = genFieldsRowOf :symtab :op
     ctx.genActive = true
     ctx.genTid = owner
@@ -47625,7 +47862,7 @@ setupGenCtx: function {
     ctx.genForNext = 0
     for ctx.genForSpills.length > 0 loop ctx.genForSpills.pop
     ctx.genWrap = "\{rc}_t"
-    ctx.genSomeTag = tagConstOf :ast :ctx :symtab tid: rid armId: zast.wellKnown.slot.wkSome
+    ctx.genSomeTag = spelledTagConst :ast :ctx :symtab tid: rid armId: zast.wellKnown.slot.wkSome
     ctx.genSomeC = (memberC
         :ast
         :symtab
@@ -47634,7 +47871,7 @@ setupGenCtx: function {
         kind: memberkind.arm
         nameId: zast.wellKnown.slot.wkSome
     )
-    ctx.genNoneTag = tagConstOf :ast :ctx :symtab tid: rid armId: zast.wellKnown.slot.wkNone
+    ctx.genNoneTag = spelledTagConst :ast :ctx :symtab tid: rid armId: zast.wellKnown.slot.wkNone
     # a reftype element wraps in Option: the yield leg boxes the payload
     # (emitOptionalAssign's malloc'd-box shape); valtype wrappers stay inline.
     gp: String

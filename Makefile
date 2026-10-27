@@ -105,7 +105,7 @@ NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 	perf-strict pre-push perf-elision any-guard typename-guard emitter-guard frontend-guard \
 	lifetime-guard user-native-guard shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard case-guard require-guard mode-parity zlink-rules-guard \
 	refusal-guard static-tcc-guard zlink-guard emit-set ident-set const-row-guard \
-	deadcode-guard static-value-guard alias-label-guard fwd-shape-guard eager-guard eager-lib-guard \
+	deadcode-guard typeuse-guard static-value-guard alias-label-guard fwd-shape-guard eager-guard eager-lib-guard \
 	highlight-guard view-guard fallback-guard clean native-guard generic-param-guard \
 	zl-full-guard natives-tbl-guard
 
@@ -188,7 +188,7 @@ ci:
 	@$(MAKE) --no-print-directory windows-due
 
 # ci-gates -- the gates ci runs in parallel, after perf-strict.
-ci-gates: style-lint zl-full-guard complexity-report warn-check pedantic-check emitter-guard typename-guard frontend-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard highlight-guard any-guard deadcode-guard static-value-guard eager-guard eager-lib-guard case-guard user-native-guard shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard readable-check test-tcc-heavy test-clang test-signed-ub test-math-arm64 test-sqlite-arm64 test-math-noasm test-portable-scalars test-mingw test-tcc-mingw test-msvc-wine test-msvc-corpus math-asm-guard matrix-guard constparity-guard docs-link-guard mode-parity ci-corpus
+ci-gates: style-lint zl-full-guard complexity-report warn-check pedantic-check emitter-guard typename-guard frontend-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard highlight-guard any-guard deadcode-guard typeuse-guard static-value-guard eager-guard eager-lib-guard case-guard user-native-guard shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard readable-check test-tcc-heavy test-clang test-signed-ub test-math-arm64 test-sqlite-arm64 test-math-noasm test-portable-scalars test-mingw test-tcc-mingw test-msvc-wine test-msvc-corpus math-asm-guard matrix-guard constparity-guard docs-link-guard mode-parity ci-corpus
 
 ci-corpus: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --heavy --jobs $(NPROC)
@@ -1252,7 +1252,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2367361
+ALLOC_BASELINE := 2367462
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1957,6 +1957,78 @@ deadcode-guard: bin/zc
 	else \
 	  echo "deadcode-guard OK: $$n unreachable statements (baseline $(DEADCODE_BASELINE))"; \
 	fi
+
+# typeuse-guard -- every C type the emitter writes is spelled by the code it
+# writes: a struct, enum or forward declaration nothing reachable from main
+# names is not written. No C compiler warns about an unused file-scope type,
+# so the C is read here: each top-level chunk is owned by the z_tN name it
+# defines, and reaches every z_tN name it mentions. The baseline is the types
+# that only functions spell which the checker demanded and the emitter's own
+# loop lowering never calls (a range's `times`, `upto`, `downto`, `call`).
+TYPEUSE_BASELINE := 75
+
+define TYPEUSE_GUARD_PY
+import re, sys
+from collections import defaultdict
+NAME = re.compile(r'\b(z_t\d+|Z_T\d+|_zag\d+|_zc?s\d+)')
+DEF = [re.compile(r'^\s*typedef\s+struct\s+(z_t\d+)_t\b'), re.compile(r'^\s*struct\s+(z_t\d+)_t\b'),
+       re.compile(r'\}\s*(z_t\d+)(?:_tag)?_t\s*;\s*$$', re.M), re.compile(r'^\s*static\s+const\s+[\w ]+\s+(_zag\d+)\b'),
+       re.compile(r'^\s*static\s+const\s+char\s+(_zc?s\d+)_d\b'),
+       re.compile(r'^\s*(?:static\s+)?(?:const\s+)?[\w\*\s]+?\b(z_t\d+)(?:_[a-z_]+)?\s*\(', re.M),
+       re.compile(r'^\s*#define\s+(z_t\d+)')]
+def canon(n): return 'z_t' + n[3:] if n.startswith('Z_T') else n
+def chunks(text):
+    out, cur, depth = [], [], 0
+    for line in text.splitlines():
+        cur.append(line); depth += line.count('{') - line.count('}')
+        if depth == 0 and line.rstrip().endswith((';', '}')): out.append('\n'.join(cur)); cur = []
+    if cur: out.append('\n'.join(cur))
+    return out
+def owner(ch):
+    first = ch.lstrip().split('\n', 1)[0]
+    for p in DEF:
+        m = p.search(first) if p.pattern.startswith('^') else p.search(ch)
+        if m: return m.group(1)
+    return None
+total = 0
+for path in sys.argv[1:]:
+    own, todo, seen = defaultdict(list), set(), set()
+    for ch in chunks(open(path, errors='replace').read()):
+        o, refs = owner(ch), {canon(n) for n in NAME.findall(ch)}
+        if o is None: todo |= refs
+        else: own[canon(o)].append((ch, refs))
+    while todo:
+        n = todo.pop()
+        if n in seen: continue
+        seen.add(n)
+        for ch, refs in own.get(n, []): todo |= refs - seen
+    for n, cs in own.items():
+        if n in seen: continue
+        ty = [ch for ch, _ in cs if re.match(r'\s*(typedef|struct|\})', ch)]
+        if ty:
+            total += 1; print('  %s: %s %s' % (path.rsplit('/', 1)[-1], n, ty[0].strip().split('\n')[0][:60]))
+print('TOTAL', total)
+endef
+export TYPEUSE_GUARD_PY
+
+typeuse-guard: bin/zc
+	@d=$$(mktemp -d); \
+	for f in examples/*.z tests/fixtures/emitc_corpus/*.z; do \
+	  b=$$(basename $$f .z); bin/zc emit $$f -o $$d/$$b.c 2>/dev/null || rm -f $$d/$$b.c; \
+	done; \
+	python3 -c "$$TYPEUSE_GUARD_PY" $$d/*.c > $$d/report; \
+	n=$$(sed -n 's/^TOTAL //p' $$d/report); \
+	if [ "$$n" -gt "$(TYPEUSE_BASELINE)" ]; then \
+	  echo "typeuse-guard FAIL: $$n unused C types (baseline $(TYPEUSE_BASELINE))"; \
+	  grep -v '^TOTAL' $$d/report | head -40; \
+	  echo "  A type written that nothing spells: see closeReachedTypes in src/zemitterc.z."; \
+	  rm -rf $$d; exit 1; \
+	elif [ "$$n" -lt "$(TYPEUSE_BASELINE)" ]; then \
+	  echo "typeuse-guard: $$n < baseline $(TYPEUSE_BASELINE) -- lower TYPEUSE_BASELINE here"; \
+	else \
+	  echo "typeuse-guard OK: $$n unused C types (baseline $(TYPEUSE_BASELINE))"; \
+	fi; \
+	rm -rf $$d
 
 # static-value-guard -- every static value the emitter writes (`_zag<row>`) is
 # read by the C: a value no run-time code reaches is not written (clang's
@@ -2680,7 +2752,7 @@ view-guard:
 # is not live), and the emitFail and marker-site counts in src/zemitterc.z are
 # ratchets. A new refusal leg may raise EMITFAIL_BASELINE (say so in the commit);
 # a new fallback leg may not.
-EMITFAIL_BASELINE := 45
+EMITFAIL_BASELINE := 46
 MARKER_BASELINE := 24
 EXCS := $(NAMES:%=$(EXDIR)/%.c)
 fallback-guard: $(EXCS) bin/zc bin/zl bin/zls
