@@ -1,0 +1,51 @@
+# zproject_smoke -- the generated `z` unit holds each value of a build as
+# written, whatever bytes it carries. A path or a flag may hold a line break,
+# a tab or another control byte; written raw, one ends the comment line or the
+# string literal it sits in, and the unit no longer parses. Each generated
+# unit is printed where it carries a value and then parsed to its end.
+# Compared against tests/fixtures/zproject_smoke_z/smoke.expected.
+
+public: unit {
+    :main
+}
+
+# unitParses -- the unit text `text` parses to its end: its definitions and
+# then end of file, as the parser reads a unit file
+unitParses: function {text: StringView} out bool is {
+    p: zparser.Parser.create
+    tk: zlexer.Tokenizer.create source: text.string fsno: zvfs.fsno
+    lx: zlexer.Lexer.create lexer: tk
+    lx.advance pool: p.ast.names
+    body: p.acceptUnitBody lex: lx
+    for each d: body loop {
+        if (zast.isErrorAt ast: p.ast id: d) then return false
+    }
+    return (lx.accept tt: zlexer.toktype.eofTok pool: p.ast.names).some
+}
+
+# carries -- the line names a value the facts below set
+carries: function {line: StringView} out bool is {
+    if (line.contains "Flags") or (line.contains "outputDir") then return true
+    return (line.startsWith prefix: "main:") or (line.contains "a source root")
+}
+
+main: function is {
+    dirs: List String
+    dirs.append "sub\nx".string
+    facts: zproject.BuildFacts.create srcdirs: dirs systemdir: "lib/system" main: "m\"q"
+    facts.cFlags = "-O2\n-g".string
+    facts.linkFlags = "a\tb\x0dc\x01d".string
+    facts.outputDir = "out\nx".string
+    pf: zproject.ProjectFile.create
+    layer: zproject.zLayer :pf :facts
+    i: u64
+    for i < layer.texts.length loop {
+        text: layer.texts.get :i
+        print "=== \{layer.paths.get :i} ==="
+        for each ln: text.stringView.lines loop {
+            if (carries line: ln) then print ln
+        }
+        print "parses: \{unitParses text: text.stringView}"
+        i = i + 1
+    }
+}

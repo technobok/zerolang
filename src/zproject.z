@@ -928,34 +928,49 @@ kindsText: function out String is {
 layoutLine: function {root: StringView base: StringView what: StringView} out String is {
     rel: relativeTo :base p: root
     if rel.length == 0 then return "#   (\{what}, outside this directory)\n"
-    return "#   \{rel}  -- \{what}\n"
+    return "#   \{escapedText s: rel.stringView}  -- \{what}\n"
 }
 
 # commentPair -- `name: value` as a comment line
 commentPair: function {name: StringView value: StringView} out String is {
-    return "#   \{name}: \{value}\n"
+    return "#   \{name}: \{escapedText s: value}\n"
 }
 
-# quoted -- `s` as a string literal
+# quoted -- `s` as a string literal (escapedText inside quotes)
 quoted: function {s: StringView} out String is {
     r: "\"".string
+    r.append (escapedText :s)
+    r.append "\""
+    return r
+}
+
+# escapedText -- `s` with every byte a literal or a comment line cannot hold as
+# written escaped as the lexer reads it back: `"` and `\`, the line break and
+# tab by name, and any other control byte (below 0x20, and 0x7F) as `\xHH`. A value of the build -- a path, a flag -- may hold any of
+# them, and one written raw ends the comment line or the literal it sits in.
+escapedText: function {s: StringView} out String is {
+    r: String
+    hex: "0123456789abcdef"
     i: u64
     for i < s.length loop {
-        b: s.byteAt :i
-        match (
-            b
-        ) case some then {
-            if b == 34 then {
-                r.append "\\\""
-            } else if b == 92 then {
-                r.append "\\\\"
-            } else {
-                r.appendByte :b
-            }
-        } case none then null
+        b: (s.byteAt :i).or d: 0
         i = i + 1
+        if b == 34 then {
+            r.append "\\\""
+        } else if b == 92 then {
+            r.append "\\\\"
+        } else if b == 10 then {
+            r.append "\\n"
+        } else if b == 9 then {
+            r.append "\\t"
+        } else if (b < 32) or (b == 127) then {
+            r.append "\\x"
+            r.appendByte b: ((hex.byteAt i: b / 16).or d: 48)
+            r.appendByte b: ((hex.byteAt i: b % 16).or d: 48)
+        } else {
+            r.appendByte :b
+        }
     }
-    r.append "\""
     return r
 }
 
