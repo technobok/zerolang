@@ -30626,6 +30626,8 @@ bareFnRefErrorFor: function {
     fid: ztypes.tid
     written: StringView
     refHint: bool
+    # the hint to give instead of the one the read's form takes; "" for that one
+    hint: ""
 } is {
     prov: ListVal zast.nameid
     misN: List String
@@ -30659,6 +30661,7 @@ bareFnRefErrorFor: function {
     # a native has no reference form to copy (refuseNativeReference)
     noRef: refHint.not or (isNativeFnTid :st tid: fid)
     if noRef then eh = "call it with its required arguments".string
+    if hint.length > 0 then eh = hint.string
     (addErrorH
         :st
         :nodeid
@@ -33164,6 +33167,8 @@ reportBareMemberRef: function {
     mo: ztypes.tid
     # the member read's type: still the FUNCTION when it was not called
     result: ztypes.tid
+    # the hint to give instead of bareFnRefErrorFor's own; "" for that one
+    hint: ""
 } is {
     if st.typing.suppressFnAutoCall or st.typing.allowBareFnRef then return
     if (st.reg.typetypeOf typeId: result) != ztypes.ztypetype.functionType then return
@@ -33186,6 +33191,7 @@ reportBareMemberRef: function {
         fid: result
         written: wpath.stringView
         refHint: (readsMethodThroughInstance :st :ast :unitDecl :dp :bt :mo).not
+        :hint
     )
 }
 
@@ -62558,6 +62564,7 @@ checkConstantMethodCall: function {
     }
     # a read with no arguments is a call, which a method needing them is not
     if (fnAutoCallable :st mid: fid) then return
+    sh: unitSplitCallHint :st :scope :ast :fid pathId: site.pathId
     (reportBareMemberRef
         :st
         :ast
@@ -62567,7 +62574,65 @@ checkConstantMethodCall: function {
         cnId: (atomNameId :ast n: (ast.nodes.get i: site.childId))
         mo: fid
         result: fid
+        hint: sh.stringView
     )
+}
+
+# unitSplitCallHint -- a unit-level method read at `pathId` whose missing
+# arguments are each a definition written after it on its line: at unit level
+# every `name:` begins a definition, so `T: S.substring from: 2 to: 3` is
+# three of them. The hint says so and shows the call in parentheses; "" when
+# the line holds no such definitions.
+unitSplitCallHint: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    fid: ztypes.tid
+    pathId: zast.nodeid
+} out String is {
+    prov: ListVal zast.nameid
+    misN: List String
+    misI: ListVal ztypes.tid
+    (missingCtorFields
+        :ast
+        :st
+        funcId: fid
+        isCtor: false
+        provided: prov
+        posCount: 0
+        recvImplicit: true
+        missingNames: misN
+        missingIds: misI
+    )
+    if misN.length == 0 then return "".string
+    line: nodeLine n: (ast.nodes.get i: pathId)
+    names: String
+    args: String
+    k: u64
+    for each mn: misN loop {
+        k = k + 1
+        d: st.typing.declFindChild parentDeclId: scope nameId: (nameIdOf :ast name: mn.stringView)
+        if d.isZero then return "".string
+        opId: zast.nodeid
+        dLine: u32
+        {
+            dn: ast.nodes.get i: (st.typing.decls.get i: d).node
+            if dn.namedoperation then opId = dn.operation
+            dLine = nodeLine n: dn
+        }
+        if opId.isZero or (dLine != line) then return "".string
+        if k == misN.length when k > 1 then {
+            names.append " and "
+        } else if names.length > 0 then names.append ", "
+        names.append "`\{mn}`"
+        args.append " \{mn}: \{typeExprText :ast nid: opId}"
+    }
+    what: "are definitions of their own"
+    if misN.length == 1 then what = "is a definition of its own"
+    return "at unit level each `name:` begins a definition, so \{names} here \{what}: write the call in parentheses, `(\{(typeExprText
+        :ast
+        nid: pathId
+    )}\{args})`"
 }
 
 # checkConstantCallArgs -- the arguments of a unit-level call against the
