@@ -1,0 +1,1122 @@
+# constparitygen -- the constant-parity matrix's generator: every kind of
+# unit-level constant crossed with every way a program reads one, each read
+# written in three POSITIONS -- U, a unit-level constant computed from it; D,
+# the same expression in a body; L, the same expression on a body local
+# initialised from it. A constant is read by the checker the body uses, so the
+# three must agree: the same printed value, or the same error code. The one
+# difference a position may make is U's E0600 "no compile-time value" where
+# the body runs the read.
+#
+# The expectations table tests/fixtures/constparity_expect.txt states each
+# cell's verdict: RUN with the value printed, REFUSED with the error line, NA
+# with the reason the cell cannot be written, KNOWN with the defect that keeps
+# it from agreeing -- emitted nowhere in the fixtures, so they stay green, and
+# written with --cells so the defect's fix can be measured. A table whose
+# positions disagree, other than through KNOWN, is refused: the table cannot
+# record a disagreement as expected.
+#
+# Usage: constparitygen [--root DIR] [--cells DIR]
+#   --root   the repository the fixtures are written under (default `.`):
+#            per kind emitc_corpus/cpar_<k>.z, run_golden/cpar_<k>.out, the
+#            cpar_ rows of run_cases.txt, and per refused reader
+#            errors/cpar_<k>_<reader>.z + .err + .zcargs.
+#   --cells  one program per cell into DIR plus DIR/manifest.txt (name kind
+#            reader position verdict detail) instead, to look at a cell alone.
+#
+# A kind is text: its declarations, its value, and templates for the members a
+# reader names. A reader is a template over `@C`, the subject (the constant,
+# or the local copying it): `@MEM` `@MTH` `@MBAD` `@MMISS` (a member, a method
+# call, the call with a wrong argument, the method without its arguments),
+# `@ARM` `@OTH` (the arm the value holds, another arm), `@RDC` `@RDF` (a
+# printable read of the subject, of its field `f`) and `@B` (the subject as a
+# value is passed). A reader with no expression is a statement the kind writes
+# (`match`, `if`), printing through `@P`; it has no U position.
+
+public: unit {
+    :main
+}
+
+# Kind -- one kind of constant: what declares it and the templates its readers use
+Kind: class {
+    name: String
+    # every declaration the constant needs, before `C`
+    decls: String
+    # the constant's value, as `C: <value>` writes it
+    value: String
+    # the type a parameter or data field holding it is written as; empty --
+    # neither can be written
+    ty: String
+    # a printable read of `@X`
+    read: String
+    # `@X` written where a value is passed or bound
+    bind: String
+    mem: String
+    meth: String
+    methBad: String
+    methMiss: String
+    arm: String
+    other: String
+    # the statements of the `match` and `if` readers; empty -- the kind has none
+    matchStmt: String
+    ifStmt: String
+    # the type as the compiler's messages name it
+    shown: String
+    # the groups a table selector names it by, space-delimited
+    tags: String
+}
+
+# need -- the kind template a reader cannot be written without
+need: variant {
+    nothing: null
+    mem: null
+    meth: null
+    methBad: null
+    methMiss: null
+    arm: null
+    other: null
+    ty: null
+    matchStmt: null
+    ifStmt: null
+}
+
+# Reader -- one way a program reads a constant
+Reader: class {
+    name: String
+    # the read as an expression over `@C`; empty -- a statement the kind writes
+    expr: String
+    needs: need
+    # the read is of the data constant `H` holding the value, not of `C`
+    boxed: bool
+}
+
+# Row -- one line of the expectations table
+Row: class {
+    lineno: u64
+    selector: String
+    reader: u64
+    # the position the row selects as a paritySlot slot; paritySlot.length --
+    # all three
+    pos: u64
+    expected: outcome
+    detail: String
+}
+
+# Slot -- a cell: kind, reader and position by index, the outcome and the row
+# that set it
+Slot: class {
+    kind: u64
+    reader: u64
+    pos: u64
+    expected: outcome
+    row: u64
+}
+
+# outcome -- what a cell is expected to do: print its value, be refused, be
+# unwritable, or agree once its known defect is fixed
+outcome: variant { run: null refused: null na: null known: null }
+
+# fail -- report a generator error and stop
+fail: function as { T: StringLike.generic } in {msg: T.view} is {
+    io.eprintln "constparitygen: \{msg}"
+    os.exit code: 1
+}
+
+# writeFile -- write a generated file, stopping on failure
+writeFile: function as { T: StringLike.generic } in {path: T.view content: StringView} is {
+    w: io.writeText :path :content
+    if w.err then fail msg: "cannot write \{path}"
+}
+
+# ensureDir -- make a directory and its parents, stopping on failure
+ensureDir: function as { T: StringLike.generic } in {path: T.view} is {
+    mk: io.mkdirp :path
+    if mk.err then fail msg: "cannot create \{path}"
+}
+
+# paritySlot -- the three positions, in the order every cell is written
+paritySlot: list {
+    atUnit: "U"
+    inBody: "D"
+    onLocal: "L"
+} out staticlist StringView
+
+# parityWord -- the words this program reads off its input, classified by slot
+parityWord: list {
+    run: "RUN"
+    refused: "REFUSED"
+    na: "NA"
+    known: "KNOWN"
+    anyKind: "*"
+    noValue: "E0600"
+    fRoot: "--root"
+    fCells: "--cells"
+} out staticlist StringView
+
+# addKind -- one kind into ks
+addKind: function {
+    ks: List Kind
+    name: StringView
+    value: StringView
+    shown: StringView
+    tags: StringView
+    decls: ""
+    ty: ""
+    read: "@X"
+    bind: "@X"
+    mem: ""
+    meth: ""
+    methBad: ""
+    methMiss: ""
+    arm: ""
+    other: ""
+    matchStmt: ""
+    ifStmt: ""
+} is {
+    ks.append (Kind
+        name: name.string
+        decls: decls.string
+        value: value.string
+        ty: ty.string
+        read: read.string
+        bind: bind.string
+        mem: mem.string
+        meth: meth.string
+        methBad: methBad.string
+        methMiss: methMiss.string
+        arm: arm.string
+        other: other.string
+        matchStmt: matchStmt.string
+        ifStmt: ifStmt.string
+        shown: shown.string
+        tags: " \{tags} "
+    )
+}
+
+# kinds -- every kind of constant, in grid order
+kinds: function out List Kind is {
+    ks: List Kind
+    scalarKinds :ks
+    textKinds :ks
+    staticKinds :ks
+    optionKinds :ks
+    fnKinds :ks
+    return ks
+}
+
+# scalarKinds -- the number and bool kinds, into ks
+scalarKinds: function {ks: List Kind} is {
+    addKind :ks name: "intlit" value: "7" shown: "intliteral" tags: "num lit" mem: "i64"
+    (addKind
+        :ks
+        name: "int"
+        value: "7.i64"
+        shown: "i64"
+        tags: "num"
+        ty: "i64"
+        mem: "not"
+        meth: "compare rhs: 3"
+        methBad: "compare rhs: \"x\""
+        methMiss: "compare"
+    )
+    (addKind
+        :ks
+        name: "u8"
+        value: "7.u8"
+        shown: "u8"
+        tags: "num"
+        ty: "u8"
+        mem: "not"
+        meth: "compare rhs: 3"
+        methBad: "compare rhs: \"x\""
+        methMiss: "compare"
+    )
+    addKind :ks name: "floatlit" value: "2.5" shown: "floatliteral" tags: "num lit" mem: "f64"
+    addKind :ks name: "f64" value: "2.5.f64" shown: "f64" tags: "num" ty: "f64"
+    (addKind
+        :ks
+        name: "bool"
+        value: "true"
+        shown: "bool"
+        tags: "sum"
+        ty: "bool"
+        mem: "not"
+        meth: "and rhs: false"
+        methBad: "and rhs: 3"
+        methMiss: "and"
+        arm: "true"
+        other: "false"
+        matchStmt: "match @C case true then print \"@P t\" case false then print \"@P f\""
+        ifStmt: "if @C.true then print \"@P yes\" else print \"@P no\""
+    )
+}
+
+# textKinds -- the string kinds: an untyped literal and text, into ks
+textKinds: function {ks: List Kind} is {
+    addKind :ks name: "strlit" value: "\"abc\"" shown: "textliteral" tags: "str lit" mem: "text"
+    (addKind
+        :ks
+        name: "text"
+        value: "\"abc\".text"
+        shown: "text"
+        tags: "str"
+        ty: "text"
+        mem: "length"
+        meth: "substring from: 0 to: 1"
+        methBad: "substring from: \"x\" to: 1"
+        methMiss: "substring"
+    )
+}
+
+# staticKinds -- the static list, data and choice kinds, and a plain enum, into ks
+staticKinds: function {ks: List Kind} is {
+    (addKind
+        :ks
+        name: "list"
+        value: "list {1 2 3}"
+        shown: "(staticlist t: i64 i: u64)"
+        tags: "static"
+        ty: "staticlist i64"
+        read: "@X.length"
+        mem: "length"
+        meth: "get i: 1"
+        methBad: "get i: \"x\""
+        methMiss: "get"
+    )
+    (addKind
+        :ks
+        name: "data"
+        decls: "pt: data {\n    x: i64\n    y: i64\n}\n"
+        value: "(pt x: 1 y: 2)"
+        shown: "pt"
+        tags: "static"
+        ty: "pt"
+        read: "@X.x"
+        mem: "x"
+    )
+    (addKind
+        :ks
+        name: "enum"
+        decls: "en: variant { a: null b: null }\n"
+        value: "en.a"
+        shown: "en"
+        tags: "sum"
+        ty: "en"
+        read: "@X.a"
+        arm: "a"
+        other: "b"
+        matchStmt: "match @C case a then print \"@P a\" case b then print \"@P b\""
+        ifStmt: "if @C.a then print \"@P yes\" else print \"@P no\""
+    )
+    (addKind
+        :ks
+        name: "choice0"
+        decls: "color: choice {\n    red: null\n    green: null\n}\n"
+        value: "color.red"
+        shown: "color"
+        tags: "sum static"
+        ty: "color"
+        read: "@X.red"
+        arm: "red"
+        other: "green"
+        matchStmt: "match @C case red then print \"@P red\" case green then print \"@P green\""
+        ifStmt: "if @C.red then print \"@P yes\" else print \"@P no\""
+    )
+    (addKind
+        :ks
+        name: "choice1"
+        decls: "shape: choice {\n    circle: i64\n    dot: null\n}\n"
+        value: "(shape.circle 5)"
+        shown: "shape"
+        tags: "sum static"
+        ty: "shape"
+        read: "@X.circle"
+        arm: "circle"
+        other: "dot"
+        matchStmt: "match @C case circle then print \"@P r \\{@C}\" case dot then print \"@P dot\""
+        ifStmt: "if @C.circle then print \"@P r \\{@C}\" else print \"@P no\""
+    )
+}
+
+# optionKinds -- an option a folded method answers, holding a value and holding none, into ks
+optionKinds: function {ks: List Kind} is {
+    (addKind
+        :ks
+        name: "optsome"
+        decls: "G: \"a#b\"\n"
+        value: "G.indexOf \"#\""
+        shown: "(optionval t: u64)"
+        tags: "sum opt"
+        ty: "(optionval t: u64)"
+        read: "@X.some"
+        meth: "or d: 9"
+        methBad: "or d: \"x\""
+        methMiss: "or"
+        arm: "some"
+        other: "none"
+        matchStmt: "match @C case some then print \"@P at \\{@C}\" case none then print \"@P none\""
+        ifStmt: "if @C.some then print \"@P at \\{@C}\" else print \"@P no\""
+    )
+    (addKind
+        :ks
+        name: "optnone"
+        decls: "G: \"ab\"\n"
+        value: "G.indexOf \"#\""
+        shown: "(optionval t: u64)"
+        tags: "sum opt"
+        ty: "(optionval t: u64)"
+        read: "@X.some"
+        meth: "or d: 9"
+        methBad: "or d: \"x\""
+        methMiss: "or"
+        arm: "none"
+        other: "some"
+        matchStmt: "match @C case some then print \"@P at \\{@C}\" case none then print \"@P none\""
+        ifStmt: "if @C.none then print \"@P none\" else print \"@P \\{@C}\""
+    )
+}
+
+# fnKinds -- a function reference, into ks
+fnKinds: function {ks: List Kind} is {
+    (addKind
+        :ks
+        name: "fnref"
+        decls: "twice: function {n: i64} out i64 is { return n * 2 }\nfnT: function {n: i64} out i64\n"
+        value: "twice"
+        shown: "twice"
+        tags: "fn"
+        ty: "fnT"
+        read: "(@X n: 2)"
+        bind: "@X.copy"
+    )
+}
+
+# addReader -- one reader into rs
+addReader: function {
+    rs: List Reader
+    name: StringView
+    expr: ""
+    needs: need
+    boxed: false
+} is {
+    rs.append (Reader name: name.string expr: expr.string :needs :boxed)
+}
+
+# readers -- every way a constant is read, in grid order
+readers: function out List Reader is {
+    rs: List Reader
+    addReader :rs name: "mem" expr: "@C.@MEM" needs: need.mem
+    addReader :rs name: "unknown" expr: "@C.zork" needs: need.nothing
+    addReader :rs name: "meth" expr: "(@C.@MTH)" needs: need.meth
+    addReader :rs name: "methBad" expr: "(@C.@MBAD)" needs: need.methBad
+    addReader :rs name: "methMiss" expr: "@C.@MMISS" needs: need.methMiss
+    addReader :rs name: "armHeld" expr: "@C.@ARM" needs: need.arm
+    addReader :rs name: "armOther" expr: "@C.@OTH" needs: need.other
+    addReader :rs name: "interp" expr: "\"\\{@C}\"" needs: need.nothing
+    addReader :rs name: "eq" expr: "(@C == C)" needs: need.nothing
+    addReader :rs name: "arg" expr: "(pass v: @B)" needs: need.ty
+    addReader :rs name: "field" expr: "@RDF" needs: need.ty boxed: true
+    addReader :rs name: "read" expr: "@RDC" needs: need.nothing
+    addReader :rs name: "match" needs: need.matchStmt
+    addReader :rs name: "ifArm" needs: need.ifStmt
+    return rs
+}
+
+# has -- whether the kind has the template a reader needs
+has: function {k: Kind.view n: need} out bool is {
+    match (
+        n
+    ) case nothing then {
+        return true
+    } case mem then {
+        return k.mem.length > 0
+    } case meth then {
+        return k.meth.length > 0
+    } case methBad then {
+        return k.methBad.length > 0
+    } case methMiss then {
+        return k.methMiss.length > 0
+    } case arm then {
+        return k.arm.length > 0
+    } case other then {
+        return k.other.length > 0
+    } case ty then {
+        return k.ty.length > 0
+    } case matchStmt then {
+        return k.matchStmt.length > 0
+    } case ifStmt then return k.ifStmt.length > 0
+}
+
+# hasPos -- whether the reader has the position: a statement has no U
+hasPos: function {r: Reader.view pos: u64} out bool is {
+    if pos == paritySlot.slot.atUnit then return r.expr.length > 0
+    return true
+}
+
+# subst -- every template name in text written out for kind k, the subject subj
+subst: function {k: Kind.view text: StringView subj: StringView} out String is {
+    field: "\{subj}.f"
+    a: text.replace needle: "@RDF" replacement: (k.read.stringView.replace
+        needle: "@X"
+        replacement: field
+    )
+    b: a.stringView.replace needle: "@RDC" replacement: (k.read.stringView.replace
+        needle: "@X"
+        replacement: subj
+    )
+    c: b.stringView.replace needle: "@MBAD" replacement: k.methBad
+    d: c.stringView.replace needle: "@MMISS" replacement: k.methMiss
+    e: d.stringView.replace needle: "@MTH" replacement: k.meth
+    f: e.stringView.replace needle: "@MEM" replacement: k.mem
+    g: f.stringView.replace needle: "@ARM" replacement: k.arm
+    h: g.stringView.replace needle: "@OTH" replacement: k.other
+    i: h.stringView.replace needle: "@B" replacement: (k.bind.stringView.replace
+        needle: "@X"
+        replacement: subj
+    )
+    return (i.stringView.replace needle: "@C" replacement: subj)
+}
+
+# base -- the constant a reader reads: `H` for a boxed one, else `C`
+base: function {r: Reader.view} out StringView is {
+    if r.boxed then return "H"
+    return "C"
+}
+
+# cellName -- the name a cell's constant or function is written as
+cellName: function {r: Reader.view pos: u64} out String is {
+    return "\{r.name}\{paritySlot.get i: pos}"
+}
+
+# statement -- a statement reader's text for kind k, printing `prefix`
+statement: function {
+    k: Kind.view r: Reader.view subj: StringView prefix: StringView
+} out String is {
+    tpl: if r.needs == need.matchStmt then k.matchStmt.copy else k.ifStmt.copy
+    s: subst :k text: tpl.stringView :subj
+    return (s.stringView.replace needle: "@P" replacement: prefix)
+}
+
+# cellDecl -- what a cell adds at unit level: U's constant
+cellDecl: function {k: Kind.view r: Reader.view pos: u64} out String is {
+    if pos != paritySlot.slot.atUnit then return "".string
+    e: subst :k text: r.expr.stringView subj: (base :r)
+    return "\{cellName :r :pos}: \{e}\n"
+}
+
+# cellFn -- what a cell adds as a function: D's and L's read, printed
+cellFn: function {k: Kind.view r: Reader.view pos: u64} out String is {
+    if pos == paritySlot.slot.atUnit then return "".string
+    buf: "\{cellName :r :pos}: function is {\n"
+    subj: base :r
+    if pos == paritySlot.slot.onLocal then {
+        b: if r.boxed then "H".string else k.bind.stringView.replace needle: "@X" replacement: "C"
+        buf.append "    l: \{b}\n"
+        subj = "l"
+    }
+    prefix: "\{r.name} \{paritySlot.get i: pos}"
+    if r.expr.length == 0 then {
+        buf.append "    \{statement :k :r :subj prefix: prefix.stringView}\n"
+    } else {
+        buf.append "    v: \{subst :k text: r.expr.stringView :subj}\n"
+        buf.append "    print \"\{prefix} \\{v}\"\n"
+    }
+    buf.append "}\n"
+    return buf
+}
+
+# cellCall -- what a cell adds to main: U's print, D's and L's call
+cellCall: function {r: Reader.view pos: u64} out String is {
+    name: cellName :r :pos
+    if pos == paritySlot.slot.atUnit then return "    print \"\{r.name} U \\{\{name}}\"\n"
+    return "    \{name}\n"
+}
+
+# kindDecls -- the declarations every program of kind k starts with: the
+# constant, `pass` when a cell passes it, and `H` when a cell reads it boxed
+kindDecls: function {k: Kind.view rs: (List Reader).view slots: (List Slot).view} out String is {
+    buf: k.decls.copy
+    buf.append "C: \{k.value}\n"
+    passes: false
+    boxes: false
+    for each s: slots loop {
+        r: rs.get i: s.reader
+        if r.needs == need.ty when r.boxed.not then passes = true
+        if r.boxed then boxes = true
+    }
+    if passes then {
+        rd: k.read.stringView.replace needle: "@X" replacement: "v"
+        buf.append "pass: function {v: \{k.ty}} out String is {\n    r: \"\\{\{rd}}\"\n    return r\n}\n"
+    }
+    if boxes then buf.append "box: data {\n    f: \{k.ty}\n}\nH: (box f: C)\n"
+    return buf
+}
+
+# program -- a program of the given cells of one kind
+program: function {
+    k: Kind.view
+    rs: (List Reader).view
+    slots: (List Slot).view
+    what: StringView
+    calls: bool
+} out String is {
+    buf: "# GENERATED by tests/unit/constparitygen.z from tests/fixtures/constparity_expect.txt\n".string
+    buf.append "# -- `make regen-constparity`; do not edit. The `\{k.name}` constant (\{k.shown}) read\n"
+    buf.append "# in every cell whose verdict is \{what}: U a unit constant, D a body, L a local.\n"
+    buf.append (kindDecls :k :rs :slots)
+    fns: String
+    main: "main: function is {\n".string
+    for each s: slots loop {
+        r: rs.get i: s.reader
+        buf.append (cellDecl :k :r pos: s.pos)
+        fns.append (cellFn :k :r pos: s.pos)
+        if calls then main.append (cellCall :r pos: s.pos)
+    }
+    if calls.not then main.append "    print \"refused\"\n"
+    main.append "}\n"
+    buf.append fns
+    buf.append main
+    return buf
+}
+
+# words -- the first three space-separated words of a table line, then the rest
+# of the line trimmed; fewer pieces when the line has fewer words
+words: function {line: StringView} out List String is {
+    buf: List String
+    t: line.trim
+    from: u64
+    for buf.length < 3 loop {
+        rest: (t.substring :from to: t.length).trimStart
+        if rest.length == 0 then return buf
+        from = t.length - rest.length
+        sp: rest.indexOf needle: " "
+        if sp.none then {
+            buf.append rest.string
+            return buf
+        }
+        buf.append (rest.substring from: 0 to: sp).string
+        from = from + sp
+    }
+    last: (t.substring :from to: t.length).trim
+    if last.length > 0 then buf.append last.string
+    return buf
+}
+
+# slurp -- a file's text, stopping when it cannot be read
+slurp: function {path: StringView} out String is {
+    r: io.readText :path
+    match (
+        r
+    ) case ok then {
+        return r.copy
+    } case err then {
+        fail msg: "cannot read \{path}"
+        return "".string
+    }
+}
+
+# outcomeOf -- the outcome a verdict word names, stopping on any other word
+outcomeOf: function {w: StringView where: String.view} out outcome is {
+    words: zast.Vocab.create block: parityWord
+    wW: words.slotOf text: w
+    if wW == parityWord.slot.run then return outcome.run
+    if wW == parityWord.slot.refused then return outcome.refused
+    if wW == parityWord.slot.na then return outcome.na
+    if wW == parityWord.slot.known then return outcome.known
+    fail msg: "\{where}: unknown verdict '\{w}'"
+    return outcome.run
+}
+
+# outcomeWord -- the verdict word an outcome is written as
+outcomeWord: function {o: outcome} out StringView is {
+    match (
+        o
+    ) case run then return "RUN" case refused then return "REFUSED" case na then return "NA" case known then return "KNOWN"
+}
+
+# isCode -- an error code as a REFUSED row starts its detail: `E` and 4 digits
+isCode: function {w: StringView} out bool is {
+    if w.length != 5 then return false
+    if (w.startsWith prefix: "E").not then return false
+    tail: w.substring from: 1 to: 5
+    n: tail.parseU64
+    return n.ok
+}
+
+# codeOf -- the error code a REFUSED detail starts with
+codeOf: function {detail: StringView} outx StringView is {
+    sp: detail.indexOf needle: " "
+    return (detail.substring from: 0 to: (sp.or d: detail.length))
+}
+
+# selects -- whether a row's selector names the kind: `*`, `@<tag>`, or its name
+selects: function {sel: StringView k: Kind.view} out bool is {
+    words: zast.Vocab.create block: parityWord
+    if (words.slotOf text: sel) == parityWord.slot.anyKind then return true
+    if (sel.startsWith prefix: "@") then {
+        tag: " \{sel.substring from: 1 to: sel.length} "
+        return (k.tags.contains tag)
+    }
+    return sel == k.name
+}
+
+# readerIndex -- where the named reader sits in rs, stopping when it is none
+readerIndex: function {name: StringView rs: (List Reader).view where: String.view} out u64 is {
+    ri: u64
+    for ri < rs.length loop {
+        r: rs.get i: ri
+        if r.name == name then return ri
+        ri = ri + 1
+    }
+    fail msg: "\{where}: unknown reader '\{name}'"
+    return 0
+}
+
+# parseRow -- one table line as a row, each part checked: the reader may name
+# one position as `reader/U`, `/D` or `/L`
+parseRow: function {
+    line: StringView
+    where: String.view
+    lineno: u64
+    rs: (List Reader).view
+} out Row is {
+    ws: words :line
+    if ws.length < 3 then fail msg: "\{where}: want `selector reader[/pos] verdict [detail]`"
+    sel: ws.get i: 0
+    rd: ws.get i: 1
+    slash: rd.stringView.indexOf needle: "/"
+    rname: rd.stringView.substring from: 0 to: (slash.or d: rd.length)
+    pos: u64
+    pos = paritySlot.length
+    if slash.some then {
+        poss: zast.Vocab.create block: paritySlot
+        pos = poss.slotOf text: (rd.stringView.substring from: slash + 1 to: rd.length)
+        if pos == poss.none then fail msg: "\{where}: a position is U, D or L"
+    }
+    ri: readerIndex name: rname :rs :where
+    expected: outcomeOf w: (ws.get i: 2).stringView :where
+    detail: if ws.length > 3 then (ws.get i: 3).copy else "".string
+    if expected.refused when (isCode w: (codeOf detail: detail.stringView)).not then (fail
+        msg: "\{where}: REFUSED wants `Ennnn message`"
+    )
+    if detail.length == 0 then (fail
+        msg: "\{where}: \{outcomeWord o: expected} needs a value or a reason"
+    )
+    return (Row :lineno selector: sel.copy reader: ri :pos :expected :detail)
+}
+
+# readTable -- the expectations table's rows
+readTable: function {path: StringView rs: (List Reader).view} out List Row is {
+    rows: List Row
+    content: slurp :path
+    lineno: u64
+    for each ln: content.stringView.lines loop {
+        lineno = lineno + 1
+        t: ln.trim
+        if t.length > 0 when (t.startsWith prefix: "#").not then {
+            where: "\{path}:\{lineno}"
+            rows.append (parseRow line: t :where :lineno :rs)
+        }
+    }
+    return rows
+}
+
+# rowSelects -- whether a row selects the cell
+rowSelects: function {row: Row.view k: Kind.view ri: u64 pos: u64} out bool is {
+    if row.reader != ri then return false
+    if row.pos != paritySlot.length when row.pos != pos then return false
+    return (selects sel: row.selector.stringView :k)
+}
+
+# cellSlot -- the cell of kind ki, reader ri at pos: the LAST row selecting it
+# decides it, and a cell no row selects is an error
+cellSlot: function {
+    ks: (List Kind).view
+    rs: (List Reader).view
+    rows: (List Row).view
+    used: ListVal bool
+    ki: u64
+    ri: u64
+    pos: u64
+    tablePath: StringView
+} out Slot is {
+    k: ks.get i: ki
+    s: Slot kind: ki reader: ri :pos expected: outcome.na row: rows.length
+    rw: u64
+    for rw < rows.length loop {
+        if (rowSelects row: (rows.get i: rw) :k :ri :pos) then {
+            s.expected = (rows.get i: rw).expected
+            s.row = rw
+            used.set i: rw val: true
+        }
+        rw = rw + 1
+    }
+    if s.row == rows.length then {
+        r: rs.get i: ri
+        fail msg: "\{tablePath}: no row for \{k.name} \{r.name}/\{paritySlot.get i: pos}"
+    }
+    return s
+}
+
+# allSlots -- every cell a kind can have, kinds outer, readers then positions
+# inner (cellSlot); a row that selects no cell is an error
+allSlots: function {
+    ks: (List Kind).view
+    rs: (List Reader).view
+    rows: (List Row).view
+    tablePath: StringView
+} out List Slot is {
+    used: ListVal bool
+    for used.length < rows.length loop used.append false
+    buf: List Slot
+    ki: u64
+    for ki < ks.length loop {
+        ri: u64
+        for ri < rs.length loop {
+            pos: u64
+            for pos < paritySlot.length loop {
+                k: ks.get i: ki
+                r: rs.get i: ri
+                if (has :k n: r.needs) when (hasPos :r :pos) then {
+                    buf.append (cellSlot :ks :rs :rows :used :ki :ri :pos :tablePath)
+                }
+                pos = pos + 1
+            }
+            ri = ri + 1
+        }
+        ki = ki + 1
+    }
+    rw: u64
+    for rw < rows.length loop {
+        if (used.get i: rw).not then (fail
+            msg: "\{tablePath}:\{(rows.get i: rw).lineno}: the row selects no cell"
+        )
+        rw = rw + 1
+    }
+    return buf
+}
+
+# rowDetail -- the detail of the row that set a slot, `@N` the type as the
+# compiler names it
+rowDetail: function {s: Slot.view rows: (List Row).view k: Kind.view} out String is {
+    r: rows.get i: s.row
+    return (r.detail.stringView.replace needle: "@N" replacement: k.shown)
+}
+
+# pairAgrees -- two positions of one reader agree: both RUN print the same
+# value, both REFUSED give the same code, and a REFUSED beside a RUN only as
+# U's E0600, the read a unit constant cannot compute. s comes first in grid
+# order, so only s can be U.
+pairAgrees: function {s: Slot.view t: Slot.view a: StringView b: StringView} out bool is {
+    if s.expected.run when t.expected.run then return a == b
+    if s.expected.refused when t.expected.refused then return (
+        (codeOf detail: a) == (codeOf detail: b)
+    )
+    if s.expected.refused when t.expected.run then {
+        words: zast.Vocab.create block: parityWord
+        noValue: (words.slotOf text: (codeOf detail: a)) == parityWord.slot.noValue
+        return (s.pos == paritySlot.slot.atUnit) and noValue
+    }
+    return (s.expected.run and t.expected.refused).not
+}
+
+# checkParity -- the positions of each kind's reader agree (pairAgrees); NA and
+# KNOWN cells take no part.
+checkParity: function {
+    ks: (List Kind).view
+    rs: (List Reader).view
+    rows: (List Row).view
+    slots: (List Slot).view
+} is {
+    for each s: slots loop {
+        for each t: slots loop {
+            if s.kind == t.kind when s.reader == t.reader when s.pos < t.pos then {
+                k: ks.get i: s.kind
+                a: rowDetail :s :rows :k
+                b: rowDetail s: t :rows :k
+                if (pairAgrees :s :t a: a.stringView b: b.stringView).not then {
+                    r: rs.get i: s.reader
+                    ps: paritySlot.get i: s.pos
+                    pt: paritySlot.get i: t.pos
+                    (fail
+                        msg: "\{k.name} \{r.name}: \{ps} and \{pt} disagree; mark the wrong one KNOWN with its defect"
+                    )
+                }
+            }
+        }
+    }
+}
+
+# errLine -- a REFUSED detail `Ennnn message` as the compiler prints it
+errLine: function {detail: StringView} out String is {
+    sp: (detail.indexOf needle: " ").or d: 0
+    code: detail.substring from: 0 to: sp
+    msg: detail.substring from: sp + 1 to: detail.length
+    return "error[\{code}]: \{msg}\n"
+}
+
+# pick -- kind ki's slots with the given outcome
+pick: function {slots: (List Slot).view ki: u64 expected: outcome} out List Slot is {
+    buf: List Slot
+    for each s: slots loop {
+        if s.kind == ki when s.expected == expected then buf.append (Slot
+            kind: s.kind
+            reader: s.reader
+            pos: s.pos
+            expected: s.expected
+            row: s.row
+        )
+    }
+    return buf
+}
+
+# golden -- what a RUN program prints: U's lines first, as main prints them,
+# then D's and L's in cell order
+golden: function {
+    k: Kind.view
+    rs: (List Reader).view
+    rows: (List Row).view
+    slots: (List Slot).view
+} out String is {
+    buf: String
+    for each s: slots loop {
+        r: rs.get i: s.reader
+        buf.append "\{r.name} \{paritySlot.get i: s.pos} \{rowDetail :s :rows :k}\n"
+    }
+    return buf
+}
+
+# errGolden -- the error lines a REFUSED program reports: the unit-level
+# constants' first, then the bodies', each in cell order
+errGolden: function {
+    k: Kind.view
+    rows: (List Row).view
+    slots: (List Slot).view
+} out String is {
+    buf: String
+    for each s: slots loop {
+        if s.pos == paritySlot.slot.atUnit then buf.append (errLine
+            detail: (rowDetail :s :rows :k).stringView
+        )
+    }
+    for each s: slots loop {
+        if s.pos != paritySlot.slot.atUnit then buf.append (errLine
+            detail: (rowDetail :s :rows :k).stringView
+        )
+    }
+    if slots.length == 1 then {
+        buf.append "1 error found\n"
+    } else buf.append "\{slots.length} errors found\n"
+    return buf
+}
+
+# writeKind -- one kind's RUN program and golden, and a REFUSED program per
+# reader: a unit's errors are reported pass by pass, not in source order, so
+# one reader's cells -- one error per position -- keep the order fixed
+writeKind: function {
+    root: StringView
+    ks: (List Kind).view
+    rs: (List Reader).view
+    rows: (List Row).view
+    slots: (List Slot).view
+    ki: u64
+    cases: String
+} is {
+    k: ks.get i: ki
+    run: pick :slots :ki expected: outcome.run
+    if run.length > 0 then {
+        stem: "cpar_\{k.name}"
+        prog: program :k :rs slots: run what: "RUN" calls: true
+        writeFile path: "\{root}/tests/fixtures/emitc_corpus/\{stem}.z" content: prog.stringView
+        gold: golden :k :rs :rows slots: run
+        writeFile path: "\{root}/tests/fixtures/run_golden/\{stem}.out" content: gold.stringView
+        cases.append "\{stem} tests/fixtures/emitc_corpus\n"
+    }
+    refused: pick :slots :ki expected: outcome.refused
+    ri: u64
+    for ri < rs.length loop {
+        one: List Slot
+        for each s: refused loop {
+            if s.reader == ri then one.append (Slot
+                kind: s.kind
+                reader: s.reader
+                pos: s.pos
+                expected: s.expected
+                row: s.row
+            )
+        }
+        if one.length > 0 then {
+            r: rs.get i: ri
+            stem: "cpar_\{k.name}_\{r.name.stringView.toLowerAscii}"
+            prog: program :k :rs slots: one what: "REFUSED" calls: false
+            dir: "\{root}/tests/fixtures/errors"
+            writeFile path: "\{dir}/\{stem}.z" content: prog.stringView
+            err: errGolden :k :rows slots: one
+            writeFile path: "\{dir}/\{stem}.err" content: err.stringView
+            writeFile path: "\{dir}/\{stem}.zcargs" content: "--eager\n"
+        }
+        ri = ri + 1
+    }
+}
+
+# writeFixtures -- every kind's programs and goldens under root, and the cpar_
+# rows of run_cases.txt replaced by this run's
+writeFixtures: function {
+    root: StringView
+    ks: (List Kind).view
+    rs: (List Reader).view
+    rows: (List Row).view
+    slots: (List Slot).view
+} is {
+    ensureDir path: "\{root}/tests/fixtures/emitc_corpus"
+    ensureDir path: "\{root}/tests/fixtures/run_golden"
+    ensureDir path: "\{root}/tests/fixtures/errors"
+    cases: String
+    ki: u64
+    for ki < ks.length loop {
+        writeKind :root :ks :rs :rows :slots :ki :cases
+        ki = ki + 1
+    }
+    path: "\{root}/tests/fixtures/run_cases.txt"
+    content: String
+    if (io.exists :path) then content = slurp path: path.stringView
+    buf: spliceCases content: content.stringView cases: cases.stringView
+    writeFile :path content: buf.stringView
+}
+
+# spliceCases -- the run_cases.txt text `content` with its cpar_ rows replaced
+# by `cases`, at the first of them, or appended when there is none
+spliceCases: function {content: StringView cases: StringView} out String is {
+    buf: String
+    placed: false
+    for each ln: content.lines loop {
+        isOurs: ln.startsWith prefix: "cpar_"
+        if isOurs when placed.not then buf.append cases
+        if isOurs then placed = true
+        if ln.length > 0 when isOurs.not then {
+            buf.append ln
+            buf.append "\n"
+        }
+    }
+    if placed.not then buf.append cases
+    return buf
+}
+
+# writeCells -- one program per writable cell, KNOWN ones included, and the
+# manifest
+writeCells: function {
+    dir: StringView
+    ks: (List Kind).view
+    rs: (List Reader).view
+    rows: (List Row).view
+    slots: (List Slot).view
+} is {
+    ensureDir path: dir
+    manifest: String
+    for each s: slots loop {
+        if s.expected.na.not then {
+            k: ks.get i: s.kind
+            r: rs.get i: s.reader
+            one: List Slot
+            one.append (Slot
+                kind: s.kind
+                reader: s.reader
+                pos: s.pos
+                expected: s.expected
+                row: s.row
+            )
+            prog: program :k :rs slots: one what: "a cell" calls: true
+            name: "\{k.name}_\{cellName :r pos: s.pos}"
+            writeFile path: "\{dir}/\{name}.z" content: prog.stringView
+            manifest.append "\{name} \{k.name} \{r.name} \{paritySlot.get i: s.pos} \{(outcomeWord
+                o: s.expected
+            )} \{rowDetail :s :rows :k}\n"
+        }
+    }
+    writeFile path: "\{dir}/manifest.txt" content: manifest.stringView
+}
+
+# tally -- how many slots carry the outcome
+tally: function {slots: (List Slot).view expected: outcome} out u64 is {
+    n: u64
+    for each s: slots loop {
+        if s.expected == expected then n = n + 1
+    }
+    return n
+}
+
+# report -- the counts, and each known defect with how many cells wait on it
+report: function {
+    ks: (List Kind).view
+    rs: (List Reader).view
+    rows: (List Row).view
+    slots: (List Slot).view
+} is {
+    run: tally :slots expected: outcome.run
+    refused: tally :slots expected: outcome.refused
+    na: tally :slots expected: outcome.na
+    known: tally :slots expected: outcome.known
+    print "constparitygen: \{ks.length} kinds x \{rs.length} readers: \{run} RUN, \{refused} REFUSED, \{na} NA, \{known} KNOWN"
+    defects: List String
+    counts: ListVal u64
+    for each s: slots loop {
+        if s.expected.known then {
+            k: ks.get i: s.kind
+            d: rowDetail :s :rows :k
+            qi: u64
+            for qi < defects.length while (defects.get i: qi) != d loop qi = qi + 1
+            if qi == defects.length then {
+                defects.append d.copy
+                counts.append 0
+            }
+            counts.set i: qi val: (counts.get i: qi) + 1
+        }
+    }
+    qi: u64
+    for qi < defects.length loop {
+        print "  x\{counts.get i: qi}: \{defects.get i: qi}"
+        qi = qi + 1
+    }
+}
+
+# Options -- the command line: where the fixtures go, or the cells instead
+Options: class {
+    root: String
+    cellsDir: String
+}
+
+# parseArgs -- the command line as Options, stopping on anything else
+parseArgs: function out Options is {
+    words: zast.Vocab.create block: parityWord
+    argv: os.args
+    opts: Options root: ".".string cellsDir: "".string
+    i: 1.u64
+    for i < argv.length loop {
+        a: argv.get :i
+        aW: words.slotOf text: a.stringView
+        if (i + 1) >= argv.length then fail msg: "usage: constparitygen [--root DIR] [--cells DIR]"
+        v: argv.get i: i + 1
+        if aW == parityWord.slot.fRoot then {
+            opts.root = v.copy
+        } else if aW == parityWord.slot.fCells then {
+            opts.cellsDir = v.copy
+        } else fail msg: "usage: constparitygen [--root DIR] [--cells DIR]"
+        i = i + 2
+    }
+    return opts
+}
+
+main: function is {
+    opts: parseArgs
+    ks: kinds
+    rs: readers
+    tablePath: "\{opts.root}/tests/fixtures/constparity_expect.txt"
+    rows: readTable path: tablePath.stringView :rs
+    slots: allSlots :ks :rs :rows tablePath: tablePath.stringView
+    if opts.cellsDir.length > 0 then {
+        writeCells dir: opts.cellsDir.stringView :ks :rs :rows :slots
+    } else {
+        checkParity :ks :rs :rows :slots
+        writeFixtures root: opts.root.stringView :ks :rs :rows :slots
+    }
+    report :ks :rs :rows :slots
+}

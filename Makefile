@@ -100,7 +100,7 @@ NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 .PHONY: all check complexity-report style-lint-fast style-lint test doc-check ci ci-gates ci-corpus \
 	test-math-arm64 test-sqlite-arm64 test-mingw test-tcc-mingw test-msvc-wine test-msvc-corpus ci-windows windows-guest windows-due test-math-noasm test-portable-scalars docs-link-guard math-asm-guard \
 	bench-math bench-math-kernels test-clang test-tcc test-tcc-heavy readable-check build \
-	tcc zc zl zls regen-goldens regen-fmt-goldens regen-matrix matrix-guard regen-math-asm \
+	tcc zc zl zls regen-goldens regen-fmt-goldens regen-matrix matrix-guard regen-constparity constparity-guard regen-math-asm \
 	fmt-raw-guard regen-lsp-goldens bump-seed test-bootstrap install docs warn-check pedantic-check perf \
 	perf-strict pre-push perf-elision any-guard typename-guard emitter-guard frontend-guard \
 	lifetime-guard user-native-guard shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard case-guard require-guard mode-parity zlink-rules-guard \
@@ -188,7 +188,7 @@ ci:
 	@$(MAKE) --no-print-directory windows-due
 
 # ci-gates -- the gates ci runs in parallel, after perf-strict.
-ci-gates: style-lint zl-full-guard complexity-report warn-check pedantic-check emitter-guard typename-guard frontend-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard highlight-guard any-guard deadcode-guard static-value-guard eager-guard eager-lib-guard case-guard user-native-guard shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard readable-check test-tcc-heavy test-clang test-signed-ub test-math-arm64 test-sqlite-arm64 test-math-noasm test-portable-scalars test-mingw test-tcc-mingw test-msvc-wine test-msvc-corpus math-asm-guard matrix-guard docs-link-guard mode-parity ci-corpus
+ci-gates: style-lint zl-full-guard complexity-report warn-check pedantic-check emitter-guard typename-guard frontend-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard highlight-guard any-guard deadcode-guard static-value-guard eager-guard eager-lib-guard case-guard user-native-guard shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard readable-check test-tcc-heavy test-clang test-signed-ub test-math-arm64 test-sqlite-arm64 test-math-noasm test-portable-scalars test-mingw test-tcc-mingw test-msvc-wine test-msvc-corpus math-asm-guard matrix-guard constparity-guard docs-link-guard mode-parity ci-corpus
 
 ci-corpus: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --heavy --jobs $(NPROC)
@@ -963,6 +963,35 @@ matrix-guard: out/matrixgen
 	rm -rf $$d; \
 	if [ $$bad -ne 0 ]; then echo "  run 'make regen-matrix' and review the diff"; exit 1; fi; \
 	echo "matrix-guard OK: $$n files equal matrixgen's output"
+
+# The constant-parity matrix generator: every kind of unit-level constant by
+# every reader, each read as a unit constant, in a body and on a local.
+out/constparitygen: bin/zc tests/unit/constparitygen.z $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z)
+	@mkdir -p $(BUILDDIR)
+	bin/zc constparitygen --src tests/unit --system lib/system --emit-c $(BUILDDIR)/constparitygen.c
+	$(CC) $(CFLAGS) -o $(BUILDDIR)/constparitygen $(BUILDDIR)/constparitygen.c $(call ZLINKOF,$(BUILDDIR)/constparitygen.c) -lm
+
+# regen-constparity -- rewrite the cpar_ fixtures from tests/fixtures/constparity_expect.txt.
+regen-constparity: out/constparitygen
+	$(BUILDDIR)/constparitygen --root .
+
+# constparity-guard -- the committed cpar_ fixtures are constparitygen's output,
+# regenerated under a scratch root, with none left over that it no longer writes.
+constparity-guard: out/constparitygen
+	@d=$$(mktemp -d); mkdir -p $$d/tests/fixtures; \
+	cp tests/fixtures/constparity_expect.txt tests/fixtures/run_cases.txt $$d/tests/fixtures/; \
+	$(BUILDDIR)/constparitygen --root $$d > $$d/gen.log 2>&1 || { cat $$d/gen.log; rm -rf $$d; exit 1; }; \
+	bad=0; n=0; \
+	for f in $$(cd $$d && find tests/fixtures -type f ! -name constparity_expect.txt); do \
+	  n=$$((n+1)); \
+	  if ! cmp -s $$d/$$f $$f; then echo "constparity-guard FAIL: $$f differs from constparitygen's output"; bad=1; fi; \
+	done; \
+	for f in $$(find tests/fixtures/emitc_corpus tests/fixtures/run_golden tests/fixtures/errors -name 'cpar_*' -type f); do \
+	  if [ ! -f $$d/$$f ]; then echo "constparity-guard FAIL: $$f is no longer generated"; bad=1; fi; \
+	done; \
+	rm -rf $$d; \
+	if [ $$bad -ne 0 ]; then echo "  run 'make regen-constparity' and review the diff"; exit 1; fi; \
+	echo "constparity-guard OK: $$n files equal constparitygen's output"
 
 # tools/asmgen -- writes math's word-vector kernels as inline asm, per architecture.
 out/asmgen: bin/zc $(wildcard tools/asmgen/*.z) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z)
