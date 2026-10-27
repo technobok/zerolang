@@ -17015,6 +17015,11 @@ emitAtom: function {
 } out String is {
     avC: ast.names.texts.get i: n.name
     av: avC.stringView
+    # a unit constant a match arm narrowed reads the payload it holds there
+    if (symtab.typing.narrowedConstReads.has key: n.nodeid) then {
+        nw: nodeConstText :ast :symtab :ctx nid: n.nodeid :facts
+        if nw.length > 0 then return nw
+    }
     dv: staticListValueText :symtab :ctx nid: n.nodeid
     if dv.length > 0 then return (stating :facts from: literalFacts text: dv)
     # a literal landing in an i128, u128 or f16 is that type's value
@@ -26791,6 +26796,44 @@ emitMatchStmt: function {
     tmp: TmpCtr
     buf: String.borrow
 } is {
+    # a match on a unit constant runs the one arm the constant holds
+    mfb: foldedBranchOf :symtab :ctx nid: m.nodeid
+    if mfb.known then {
+        mwn: ast.nodes.get i: mfb.stmt
+        mscope: branchScopeOf :ast clauses: m.clauses elseclause: m.elseclause stmt: mfb.stmt
+        buf.append "\{ind}{\n"
+        indM: "\{ind}    "
+        fLM: tmp.frees.length
+        lLM: tmp.listFrees.length
+        if assignTo.length > 0 then {
+            (emitBranchAssign
+                :ast
+                :symtab
+                :ctx
+                n: mwn
+                target: assignTo
+                scope: mscope
+                ind: indM.stringView
+                :tmp
+                :buf
+            )
+            flushBlockFrees :ctx :tmp fL: fLM lL: lLM diverged: false :buf
+        } else {
+            emitBodyNode :ast :symtab :ctx n: mwn ind: indM.stringView :tmp :buf
+            (closeScopeBlock
+                :symtab
+                :ctx
+                :tmp
+                fL: fLM
+                lL: lLM
+                diverged: (blockDiverges :ast :symtab :ctx n: mwn)
+                node: mscope
+                :buf
+            )
+        }
+        buf.append "\{ind}}\n"
+        return
+    }
     sxF: cfacts
     sx: emitExprWith :ast :symtab :ctx n: (ast.nodes.get i: m.subject) facts: sxF
     if (matchOrdinalPairRoute

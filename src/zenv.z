@@ -858,19 +858,40 @@ ZSymbolTable: class {
         return (this.typing.declFindLocal scope: this.curScope :nameId)
     }
 
+    # bodyStart -- where the rows of the body being walked begin: the start of
+    # the innermost open scope a body opened (push), whose parent is the
+    # declaration the body belongs to rather than an enclosing scope
+    bodyStart: function {this: this.view} out u64 is {
+        n: this.open.length
+        for n > 0 loop {
+            n = n - 1
+            sc: this.open.get i: n
+            if sc.parent.isZero.not when (this.typing.decls.get i: sc.parent
+            ).kind.scopeDecl.not then {
+                return sc.start
+            }
+        }
+        return 0
+    }
+
     # isLocalName -- does an open scope define `nameId`, taken or not?
     isLocalName: function {this: this.view nameId: zast.nameid} out bool is {
         d: this.findLocal :nameId
         return d.isZero.not
     }
 
-    # rowOf -- the newest overlay row laid over `declId`, or none.
+    # rowOf -- the newest overlay row laid over `declId`, or none. A unit
+    # constant is every body's to narrow, and a body another one demands is
+    # walked while that one's rows are still open: a constant's rows count
+    # only from the body being walked (bodyStart).
     rowOf: function {this: this.view declId: ztypes.declid} out optionval u64 is {
         if declId.isZero then return (optionval.none u64)
         if (this.typing.declRowsOf :declId) == 0 then return (optionval.none u64)
+        lowest: u64
+        if (this.typing.decls.get i: declId).kind.constDecl then lowest = this.bodyStart
         ne: this.entries.length
         j: ne
-        for j > 0 loop {
+        for j > lowest loop {
             j2: j - 1
             e: this.entries.get i: j2
             if e.declId == declId then return (optionval.some j2)
@@ -2095,6 +2116,25 @@ ZSymbolTable: class {
 
     # --- narrowing ---
 
+    # subjectDecl -- the declaration a narrowing of `nameId` is laid over: the
+    # local an open scope defines, else the unit-level constant the name reads.
+    # A constant never changes, so it narrows as a local does; a nearer
+    # definition of another kind shadows it, and narrows nothing.
+    subjectDecl: function {this: this.view nameId: zast.nameid} out ztypes.declid is {
+        d: this.findLocal :nameId
+        if d.isZero.not then return d
+        cur: this.curScope
+        for cur.isZero.not loop {
+            c: this.typing.declFindChild parentDeclId: cur :nameId
+            if c.isZero.not then {
+                if (this.typing.decls.get i: c).kind.constDecl then return c
+                return ztypes.declid.zero
+            }
+            cur = this.typing.declParentOf declId: cur
+        }
+        return ztypes.declid.zero
+    }
+
     # Narrow `name` to a subtype. shadow=true (match-arm): the row's type
     # id becomes the narrowed PAYLOAD type (null/missing payload keeps the
     # outer), and the outer is stashed in originalZtypeId for the emitter's
@@ -2103,7 +2143,7 @@ ZSymbolTable: class {
     narrow: function {
         :this nameId: zast.nameid toTypeId: ztypes.tid subtypeName: zast.nameid shadow: bool
     } is {
-        d: this.findLocal :nameId
+        d: this.subjectDecl :nameId
         if d.isZero then return
         curT: this.currentTypeOf declId: d
         originalTypeId: curT
@@ -2150,7 +2190,7 @@ ZSymbolTable: class {
     exclude: function {
         :this nameId: zast.nameid subtypeName: zast.nameid fullTypeId: ztypes.tid
     } is {
-        d: this.findLocal :nameId
+        d: this.subjectDecl :nameId
         if d.isZero then return
         allSubs: ListVal zast.nameid
         (sumArmNameIds
@@ -2196,7 +2236,7 @@ ZSymbolTable: class {
 
     # Copy the current exclusion set for `name` into `into`.
     collectExcluded: function {this: this.view nameId: zast.nameid into: IdSet zast.nameid} is {
-        ro: this.rowOf declId: (this.findLocal :nameId)
+        ro: this.rowOf declId: (this.subjectDecl :nameId)
         match (
             ro
         ) case some then {
@@ -2373,7 +2413,7 @@ ZSymbolTable: class {
         nameId: zast.nameid
         fullTypeId: ztypes.tid
     } out zast.nameid is {
-        ro: this.rowOf declId: (this.findLocal :nameId)
+        ro: this.rowOf declId: (this.subjectDecl :nameId)
         match (
             ro
         ) case some then {
@@ -2397,7 +2437,7 @@ ZSymbolTable: class {
     # (the bare name IS a payload; originalZtypeId records the outer sum
     # type).
     isShadowNarrowed: function {this: this.view nameId: zast.nameid} out bool is {
-        ro: this.rowOf declId: (this.findLocal :nameId)
+        ro: this.rowOf declId: (this.subjectDecl :nameId)
         match (
             ro
         ) case some then {
@@ -2417,7 +2457,7 @@ ZSymbolTable: class {
 
     # the arm a name is currently narrowed to
     getSubtypeName: function {this: this.view nameId: zast.nameid} out zast.nameid is {
-        ro: this.rowOf declId: (this.findLocal :nameId)
+        ro: this.rowOf declId: (this.subjectDecl :nameId)
         match (
             ro
         ) case some then {

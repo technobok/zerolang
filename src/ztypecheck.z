@@ -35994,11 +35994,116 @@ checkUnboundAtom: function {
     isLit = isNumericLiteralName name: ndNm.stringView
     ndNm.drop
     if isLit then return (checkLiteralAtom :st :ast :node)
+    ncr: checkNarrowedConstRead :st :unitDecl :ast :node
+    if ncr.isZero.not then return ncr
     # the parameter is the innermost scope's: a unit template declares it as a
     # member, where a type lookup would find it as a name
     result: checkNumericParamAtom :st :ast :node
     if result.isZero then result = typeOfBareName :st :unitDecl :ast :node
     return result
+}
+
+# checkNarrowedConstRead -- a bare name reading a unit constant that a match arm
+# or an arm predicate narrowed to an arm carrying a payload: the name IS the
+# payload, as a narrowed local's is. Its value is the payload the constant
+# holds; an arm the constant does not hold is never run (its match or `if`
+# folds), so a read there has a type and no value. 0 when the name is no
+# constant narrowed so.
+checkNarrowedConstRead: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    node: atomref
+} out ztypes.tid is {
+    d: st.subjectDecl nameId: node.name
+    if d.isZero or (st.typing.decls.get i: d).kind.constDecl.not then return ztypes.tid.zero
+    if (st.isShadowNarrowed nameId: node.name).not then return ztypes.tid.zero
+    arm: st.getSubtypeName nameId: node.name
+    v: constSumValueOf :st :ast :unitDecl nameId: node.name
+    if v.kind.none or arm.isZero then return ztypes.tid.zero
+    if (armCarriesPayload :st armTid: (constValueTid :st scope: st.curScope :ast :v) armName: arm
+    ).not then return ztypes.tid.zero
+    tid: st.currentTypeOf declId: d
+    pv: constArmPayload :st :v :arm
+    st.typing.narrowedConstReads.set key: node.nid value: pv
+    if pv.kind.none.not then (st.typing.setNodeConstIn
+        mono: st.typing.curMonoStamp
+        nid: node.nid
+        value: pv
+    )
+    stampGate :st nid: node.nid :tid
+    return tid
+}
+
+# constSumValueOf -- the value of the unit constant a body's bare name reads,
+# when it is a sum's (an arm, a choice value or an option); noConst otherwise.
+constSumValueOf: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    nameId: zast.nameid
+} out ztypes.cval is {
+    if (st.isLocalName :nameId) then return ztypes.noConst
+    held: st.typing.constFail
+    v: constValueOfMemberId :st scope: st.curScope :ast :unitDecl :nameId
+    st.typing.constFail = held
+    if v.kind.armKind then return v
+    if v.kind.aggKind when (st.typing.constAggs.get i: v.aggId.u64).kind.staticChoice then return v
+    return ztypes.noConst
+}
+
+# constHeldArm -- the arm a sum constant `v` holds
+constHeldArm: function {st: zenv.ZSymbolTable.view v: ztypes.cval} out zast.nameid is {
+    if v.kind.aggKind then return (st.typing.constAggs.get i: v.aggId.u64).arm
+    return v.armName
+}
+
+# constArmPayload -- the payload sum constant `v` holds in arm `arm`: its value
+# when it holds that arm and the arm carries one, noConst otherwise
+constArmPayload: function {
+    st: zenv.ZSymbolTable.view v: ztypes.cval arm: zast.nameid
+} out ztypes.cval is {
+    if v.kind.aggKind.not then return ztypes.noConst
+    g: st.typing.constAggs.get i: v.aggId.u64
+    if (g.arm != arm) or (g.itemCount == 0) then return ztypes.noConst
+    return (st.typing.constAggItems.get i: g.itemStart.u64)
+}
+
+# recordConstMatchFold -- a match whose subject is a unit constant's name selects
+# the arm the constant holds, as an `if` on a constant condition selects its
+# branch (foldIfBranch): only that arm's body is emitted.
+recordConstMatchFold: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    casenode: caseref
+} is {
+    sn: atomNameId :ast n: (ast.nodes.get i: casenode.subject)
+    if sn.isZero then return
+    v: constSumValueOf :st :ast :unitDecl nameId: sn
+    if v.kind.none then return
+    held: constHeldArm :st :v
+    stmt: casenode.elseclause
+    k: u64
+    for k < casenode.nclauses loop {
+        cl: caseClauseRefAt :ast nid: (zast.caseClauseAt :ast nid: casenode.nid i: k)
+        k = k + 1
+        if cl.name == held then stmt = cl.statement
+    }
+    if stmt.isZero then return
+    (ztyping.setFirstOrPerMono
+        perMono: st.typing.monoFoldedBranch
+        shared: st.typing.foldedBranch
+        copies: st.typing.instanceCopies
+        mono: st.typing.curMonoStamp
+        nid: casenode.nid
+        value: (ztyping.foldedbranch known: true :stmt)
+    )
+    # the subject decided the fold, and run time never reads it
+    (st.typing.wideConstTaken.set
+        key: (ztyping.monostamp mono: st.typing.curMonoStamp node: casenode.subject)
+        value: 1
+    )
 }
 
 # checkNumericParamAtom -- a bare name that names a numeric generic parameter of
@@ -40744,6 +40849,8 @@ checkIfClauses: function {
     # the loop's next iteration is enough for the whole statement to
     kindAcc: zenv.divkind.none
     anyEmpty: false
+    # before the selected clause, every condition folded false
+    beforeSelected: true
     kC: u64
     for kC < ifnode.nclauses loop {
         clauseId: zast.ifClauseAt :ast nid: ifnode.nid i: kC
@@ -40754,8 +40861,20 @@ checkIfClauses: function {
             if (isEmptyBody :st :ast :unitDecl n: (ast.nodes.get i: clause.statement)
             ) then anyEmpty = true
             if skipDead when clause.statement != fbr.stmt then dead = true
+            if clause.statement == fbr.stmt then beforeSelected = false
         }
-        if dead then continue
+        if dead then {
+            if beforeSelected then (foldedFalseFacts
+                :st
+                :unitDecl
+                :ast
+                :clause
+                :accFacts
+                :guardFacts
+                :pBool
+            )
+            continue
+        }
         bm: st.pushBlock node: clause.nid
         for each pf: accFacts loop (applyPredFact
             :ast
@@ -40809,6 +40928,69 @@ checkIfClauses: function {
     return kindAcc
 }
 
+
+# foldedFalseFacts -- a dead clause before the selected one: its one condition
+# folded false, so it is checked as the fold read it, and the arm it rules out
+# is ruled out for the clauses after it and the else, as a failed condition's
+# is. Its body is not walked, so the code after the `if` learns the arm is ruled
+# out only where the body is seen to diverge without walking it (deadBody-
+# Diverges), as a diverging clause's condition is ruled out there.
+foldedFalseFacts: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    clause: ifclauseref
+    accFacts: List ArmPredFact
+    guardFacts: List ArmPredFact
+    pBool: ztypes.tid
+} is {
+    if clause.nconds != 1 then return
+    bm: st.pushBlock node: clause.nid
+    cfacts: List ArmPredFact
+    checkClauseConditions :st :unitDecl :ast :clause factsOut: cfacts boolId: pBool
+    st.popTo marker: bm
+    if cfacts.length != 1 then return
+    f: cfacts.pop
+    if (deadBodyDiverges :st :unitDecl :ast body: clause.statement
+    ) then guardFacts.append (ArmPredFact
+        subject: f.subject
+        armName: f.armName
+        fullTid: f.fullTid
+        negated: f.negated
+    )
+    accFacts.append f
+}
+
+# deadBodyDiverges -- a body that is not walked ends in `return`, `break`,
+# `continue` or `panic`, the builtin and not a name the program binds: read
+# off the tree, as nothing in a dead body is resolved. false for any other
+# ending, which may still diverge -- an answer only where it is sure.
+deadBodyDiverges: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    body: zast.nodeid
+} out bool is {
+    lastId: body
+    bn: ast.nodes.get i: body
+    if bn.statement then {
+        if bn.statements.count.u64 == 0 then return false
+        sId: zast.kidAt kids: ast.kids span: bn.statements i: bn.statements.count.u64 - 1
+        sl: ast.nodes.get i: sId
+        lastId = sId
+        if sl.statementline then lastId = sl.statementline
+    }
+    head: lastId
+    ln: ast.nodes.get i: lastId
+    if ln.call then head = ln.callable
+    hn: atomNameId :ast n: (ast.nodes.get i: head)
+    builtin: (hn == zast.wellKnown.slot.wkReturn) or (hn == zast.wellKnown.slot.wkBreak)
+    builtin = (
+        builtin or (hn == zast.wellKnown.slot.wkContinue) or (hn == zast.wellKnown.slot.wkPanic)
+    )
+    if builtin.not or (st.isLocalName nameId: hn) then return false
+    return (declOfUnitDef :st :unitDecl scope: st.curScope nameId: hn).isZero
+}
 
 # layConditionTakes -- the takes an `if` clause's conditions made, laid again
 # where the `if` stands once the clause is walked: the clauses after it and
@@ -53082,6 +53264,8 @@ checkCaseClause: function {
     # the owned locals live before the match, and those an arm took
     liveBefore: (IdSet ztypes.declid).view
     takenAcross: ArmTakes
+    # the match folds to another arm: this one's body is not walked
+    dead: bool
 } out casearmfacts is {
     anyEmpty: false
     allDiverge: true
@@ -53131,15 +53315,20 @@ checkCaseClause: function {
             :subjT
         )
     }
-    checkStatement :st :unitDecl :ast blockId: clause.statement
-    at: lastStmtType :st :ast block: (ast.nodes.get i: clause.statement)
-    atc: at
-    armTypes.append atc
-    if at.isZero.not when at == neverId then {
-        dn: armName.copy
-        diverging.append dn
-    } else {
-        allDiverge = false
+    # an arm the fold rules out is not walked: it neither completes nor is
+    # seen to diverge, so it gives the match no type and the code after it no
+    # narrowing
+    if dead.not then {
+        allDiverge = (walkCaseArmBody
+            :st
+            :unitDecl
+            :ast
+            :clause
+            armName: armName.stringView
+            :neverId
+            :diverging
+            :armTypes
+        )
     }
     if (textListHas names: covered text: armName.stringView) then {
         (addError
@@ -53157,6 +53346,26 @@ checkCaseClause: function {
     if ak == zenv.divkind.none then st.collectArmNarrowingEnds
     st.popTo marker: armMarker
     return (casearmfacts empty: anyEmpty diverges: allDiverge)
+}
+
+# walkCaseArmBody -- walk a `case` arm's body: its value type joins the
+# match's, and an arm that diverges is recorded by name. True when it diverges.
+walkCaseArmBody: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    clause: caseclauseref
+    armName: StringView
+    neverId: ztypes.tid
+    diverging: List String
+    armTypes: ListVal ztypes.tid
+} out bool is {
+    checkStatement :st :unitDecl :ast blockId: clause.statement
+    at: lastStmtType :st :ast block: (ast.nodes.get i: clause.statement)
+    armTypes.append at
+    if at.isZero or (at != neverId) then return false
+    diverging.append armName.string
+    return true
 }
 
 # requiredArms -- the arms a match over a sum subject must cover. Ambient
@@ -53379,10 +53588,14 @@ checkCaseElse: function {
             fullTid: subjT
         )
     }
-    walkBodyAt :st :unitDecl :ast bodyId: casenode.elseclause
-    ecr: ast.nodes.get i: casenode.elseclause
-    et: lastStmtType :st :ast block: ecr
-    armTypes.append et
+    # a match folded to one of its arms never runs its else (walkCaseClauses)
+    fb: st.typing.foldedBranchIn mono: st.typing.curMonoStamp nid: casenode.nid
+    et: neverId
+    if fb.known.not or st.typing.eagerAll or (fb.stmt == casenode.elseclause) then {
+        walkBodyAt :st :unitDecl :ast bodyId: casenode.elseclause
+        et = lastStmtType :st :ast block: (ast.nodes.get i: casenode.elseclause)
+        armTypes.append et
+    }
     # the else is an arm: it decides `allDiverge` like any other. Leaving it
     # out stamped `never` on a match whose else completes -- and `never` is
     # read downstream as "control does not continue", so the emitter dropped
@@ -53415,6 +53628,10 @@ walkCaseClauses: function {
     anyEmpty: false
     allDiverge: true
     armsPublic: caseArmsArePublic :st :ast subject: casenode.subject :subjT
+    # a match folded to one arm walks that arm alone, as a folded `if` does
+    # (checkIfClauses); `--eager` walks every arm
+    fb: st.typing.foldedBranchIn mono: st.typing.curMonoStamp nid: casenode.nid
+    skipDead: fb.known and st.typing.eagerAll.not
     kC: u64
     for kC < casenode.nclauses loop {
         clauseId: zast.caseClauseAt :ast nid: casenode.nid i: kC
@@ -53436,6 +53653,7 @@ walkCaseClauses: function {
                 :armTypes
                 :liveBefore
                 :takenAcross
+                dead: skipDead and (clause.statement != fb.stmt)
             )
             if cf.empty then anyEmpty = true
             if cf.diverges.not then allDiverge = false
@@ -53546,6 +53764,7 @@ checkCaseArms: function {
     diverging: List String
     armTypes: ListVal ztypes.tid
     allDiverge: true
+    recordConstMatchFold :st :ast :unitDecl :casenode
     cf0: (walkCaseClauses
         :st
         :unitDecl
@@ -64898,6 +65117,10 @@ evalConstNode: function {
         nv.drop
         if noName then return ztypes.noConst
         if isLit then return litVal
+        ncv: st.typing.narrowedConstReads.get key: nid
+        match (
+            ncv
+        ) case some then return ncv case none then null
         nk: st.typing.constNarrowNames.length
         for nk > 0 loop {
             nk = nk - 1
