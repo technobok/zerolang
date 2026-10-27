@@ -30859,6 +30859,23 @@ reportUnknownMember: function {
     bt: ztypes.tid
     cnId: zast.nameid
 } is {
+    shown: walkTypeOf :st nid: dp.parent
+    if shown.isZero then shown = bt
+    reportUnknownMemberAs :st :ast :dp :bt :cnId :shown
+}
+
+# reportUnknownMemberAs -- reportUnknownMember with the receiver named as
+# `shown`: the value's own type, which a typedef's is (`rid`) where `bt` is the
+# base it forwards its members to. A unit-level constant's nodes are not walked,
+# so its reader names the constant's type itself.
+reportUnknownMemberAs: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    dp: dpref
+    bt: ztypes.tid
+    cnId: zast.nameid
+    shown: ztypes.tid
+} is {
     if (memberStrictType :st :bt) then {
         # demand-order safety: walk the type's methods once and
         # re-probe before declaring the member unknown
@@ -30900,11 +30917,7 @@ reportUnknownMember: function {
         if stillMiss when (memberDeclRefused :st :ast tid: bt nameId: cnId) then stillMiss = false
         if stillMiss then {
             cn: zast.nameTextAt :ast ref: cnId
-            # named as the value's own type: a typedef forwards its members to
-            # its base, which `bt` is by now
-            shownMm: walkTypeOf :st nid: dp.parent
-            if shownMm.isZero then shownMm = bt
-            btnMm: specWrittenName :st :ast tid: shownMm
+            btnMm: specWrittenName :st :ast tid: shown
             mMm: "type '\{btnMm}' has no member '\{cn}'"
             sugMm: suggestSimilar :ast :st parentTypeId: bt name: cn.stringView
             hMm: String
@@ -31939,6 +31952,37 @@ checkUnitQualifiedMember: function {
     return (callleg handled: false tid: ztypes.tid.zero)
 }
 
+# listValueMember -- a member of the list `row` that is no element, label or
+# count: one its value's type declares (`get`, `iterate`). A name it does not
+# declare is reported, in the words every position uses, and answers false.
+listValueMember: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    dp: dpref
+    row: u32
+    cnId: zast.nameid
+} out bool is {
+    gt: (st.typing.constAggs.get i: row.u64).tid
+    forceMemberOf :st :ast parentTypeId: gt nameId: cnId
+    if (st.typing.declChildOfId parentTypeId: gt nameId: cnId).some then return true
+    pp: ListVal zast.nameid
+    appendValueTuple :ast n: (ast.nodes.get i: dp.parent) dst: pp
+    bn: zenv.formatPath pool: ast.names path: pp.listView
+    mn: zast.nameTextAt :ast ref: cnId
+    (addErrorH
+        :st
+        nodeid: dp.nid
+        lineno: dp.lineno
+        colno: dp.colno
+        e: zast.err.typeError
+        msg: "list '\{bn}' has no element or member '\{mn}'"
+        note: String
+        hint: String
+        width: mn.length.u32.orPanic
+    )
+    return false
+}
+
 # checkStaticListMember -- a member read off a list reached by a compile-time
 # path (`codes`, `zast.wellKnown`): an element by its label or ordinal, typed as
 # the list's element; the count, `length`, untyped; `slot`, whose labels read
@@ -32018,31 +32062,10 @@ checkStaticListMember: function {
     }
     et: listMemberType :st :ast :row nameId: cnId
     if et.isZero then {
-        # a member of the list's value (`get`, `iterate`), else nothing; a
-        # generic unit's list over its parameter is a value of a partial,
+        # a generic unit's list over its parameter is a value of a partial,
         # whose members its template answers
         if (st.reg.isPartialOf tid: g.tid) then return (callleg handled: false tid: ztypes.tid.zero)
-        forceMemberOf :st :ast parentTypeId: g.tid nameId: cnId
-        if (st.typing.declChildOfId parentTypeId: g.tid nameId: cnId).some then return (callleg
-            handled: false
-            tid: ztypes.tid.zero
-        )
-        pp: ListVal zast.nameid
-        appendValueTuple :ast n: (ast.nodes.get i: dp.parent) dst: pp
-        bn: zenv.formatPath pool: ast.names path: pp.listView
-        mn: zast.nameTextAt :ast ref: cnId
-        (addErrorH
-            :st
-            nodeid: dp.nid
-            lineno: dp.lineno
-            colno: dp.colno
-            e: zast.err.typeError
-            msg: "list '\{bn}' has no element or member '\{mn}'"
-            note: String
-            hint: String
-            width: mn.length.u32.orPanic
-        )
-        return (callleg handled: true tid: ztypes.tid.zero)
+        return (callleg handled: (listValueMember :st :ast :dp :row :cnId).not tid: ztypes.tid.zero)
     }
     # an element or the count is a constant: the list's array is not read
     takeListBase :st :dp
@@ -61987,13 +62010,15 @@ constUnsupportedMethod: function {
     return ztypes.noConst
 }
 
-# checkConstantMethodShape -- a string or option constant's method called in a
-# unit-level definition, checked against the method's declaration the way a body checks
-# the same call. The evaluator answers only "a value or none": a surplus
-# argument or an unknown label folded anyway, and a missing argument or one of
-# the wrong kind left no value and no reason, which the emitter then met. The
-# reports are the body's own, so each shape reads as it does in a body; a
-# receiver that is itself such a call is checked first. True when a report was
+# checkConstantMethodShape -- each member read, method call and operator on a
+# constant in a unit-level definition, checked the way a body checks it: the
+# member on the value's type (constantMemberTid), and a string or option
+# method's arguments against its declaration. The evaluator answers only "a
+# value or none": an unknown member folded to `false`, a surplus argument or an
+# unknown label folded anyway, and a missing argument or one of the wrong kind
+# left no value and no reason, which the emitter then met. The reports are the
+# body's own, so each shape reads as it does in a body; a receiver that is
+# itself such a call is checked first. True when a report was
 # made -- now or on an earlier ask of the same node -- which tells the caller
 # the evaluator's own reason is not the one to show. Otherwise that reason is
 # kept: the lookups below demand declarations, and a demanded constant clears
@@ -62004,21 +62029,20 @@ checkConstantMethodShape: function {
     ast: Ast
     unitDecl: ztypes.declid
     nid: zast.nodeid
-    # whether the definition has no value. One that folded can still carry a
-    # surplus argument or an unknown label, but only in a CALL, so a folded
-    # dotted read is not asked about at all
-    unfolded: bool
 } out bool is {
     held: st.typing.constFail
-    reported: checkConstantMethodShapeAt :st :scope :ast :unitDecl :nid :unfolded
+    reported: checkConstantMethodShapeAt :st :scope :ast :unitDecl :nid
     if reported.not then st.typing.constFail = held
     return reported
 }
 
-# constmethodsite -- where a method call on a constant sits in the tree: its
-# receiver, the member node naming the method, and the call when there is one
-# (a bare `P.substring` is a dotted path and has none).
+# constmethodsite -- where a member read or method call on a constant sits in
+# the tree: the dotted path, its receiver, the member node naming the method,
+# and the call when there is one (a bare `P.substring` is a dotted path and has
+# none).
 constmethodsite: record {
+    # the dotted path naming the member
+    pathId: zast.nodeid
     # the receiver node, 0 when the node is not a method call or read
     recvId: zast.nodeid
     # the member node naming the method
@@ -62033,23 +62057,26 @@ constmethodsite: record {
 # non-infix call whose callable is one.
 constMethodSiteAt: function {ast: Ast.view nid: zast.nodeid} out constmethodsite is {
     call: callRefAt :ast :nid
+    pathId: zast.nodeid
     recvId: zast.nodeid
     childId: zast.nodeid
     isCall: false
     n: ast.nodes.get i: nid
     if n.dottedpath then {
+        pathId = nid
         recvId = n.parent
         childId = n.child
     }
     if recvId.isZero when call.nid.isZero.not when call.infix.not then {
         cn: ast.nodes.get i: call.callable
         if cn.dottedpath then {
+            pathId = call.callable
             recvId = cn.parent
             childId = cn.child
             isCall = true
         }
     }
-    return (constmethodsite :recvId :childId :isCall :call)
+    return (constmethodsite :pathId :recvId :childId :isCall :call)
 }
 
 # checkConstantMethodShapeAt -- checkConstantMethodShape's walk, which may
@@ -62061,7 +62088,6 @@ checkConstantMethodShapeAt: function {
     ast: Ast
     unitDecl: ztypes.declid
     nid: zast.nodeid
-    unfolded: bool
 } out bool is {
     if (st.typing.constsDiagnosed.has item: nid) then return true
     lhsId: zast.nodeid
@@ -62077,17 +62103,40 @@ checkConstantMethodShapeAt: function {
         isIf = ipn.ifexpr
     }
     if lhsId.isZero.not then {
-        lr: checkConstantMethodShapeAt :st :scope :ast :unitDecl nid: lhsId :unfolded
-        rr: checkConstantMethodShapeAt :st :scope :ast :unitDecl nid: rhsId :unfolded
-        return lr or rr
+        lr: checkConstantMethodShapeAt :st :scope :ast :unitDecl nid: lhsId
+        rr: checkConstantMethodShapeAt :st :scope :ast :unitDecl nid: rhsId
+        if lr or rr then return true
+        # `a op b` is `a.op b`: the operator is a member of the left operand
+        opIdN: zast.nodeid
+        {
+            ipn2: ast.nodes.get i: nid
+            opIdN = (zast.infixPartsOf :ast n: ipn2).operator
+        }
+        call: callRefAt :ast :nid
+        opSite: (constmethodsite
+            pathId: call.callable
+            recvId: lhsId
+            childId: opIdN
+            isCall: true
+            :call
+        )
+        errsOp: st.typing.errors.length
+        held: st.typing.constFail
+        constFailClear :st
+        lv: evalConstNode :st :scope :ast :unitDecl nid: lhsId
+        st.typing.constFail = held
+        constantMemberTid :st :scope :ast site: opSite rv: lv
+        if st.typing.errors.length == errsOp then return false
+        st.typing.constsDiagnosed.add item: nid
+        return true
     }
-    if isIf then return (checkConstantIfBranchShape :st :scope :ast :unitDecl :nid :unfolded)
+    if isIf then return (checkConstantIfBranchShape :st :scope :ast :unitDecl :nid)
     site: constMethodSiteAt :ast :nid
     if site.recvId.isZero then return false
-    inner: checkConstantMethodShapeAt :st :scope :ast :unitDecl nid: site.recvId :unfolded
+    inner: checkConstantMethodShapeAt :st :scope :ast :unitDecl nid: site.recvId
     if inner then return true
     errs0: st.typing.errors.length
-    checkConstantMethodCall :st :scope :ast :unitDecl :site :unfolded
+    checkConstantMethodCall :st :scope :ast :unitDecl :site
     if st.typing.errors.length == errs0 then return false
     st.typing.constsDiagnosed.add item: nid
     return true
@@ -62102,7 +62151,6 @@ checkConstantIfBranchShape: function {
     ast: Ast
     unitDecl: ztypes.declid
     nid: zast.nodeid
-    unfolded: bool
 } out bool is {
     fb: foldIfBranch :st :scope :ast :unitDecl :nid
     if fb.known.not or fb.stmt.isZero then return false
@@ -62114,104 +62162,92 @@ checkConstantIfBranchShape: function {
         if sl.statementline then lastId = sl.statementline
     }
     if lastId.isZero then return false
-    return (checkConstantMethodShapeAt :st :scope :ast :unitDecl nid: lastId :unfolded)
+    return (checkConstantMethodShapeAt :st :scope :ast :unitDecl nid: lastId)
 }
 
-# checkConstantMethodCall -- the method at `site`, when its receiver folds to a
-# string or an option: a member StringView or the option's type declares, then
-# either the arguments written or, for a bare read, none of the required ones
-# left out.
+# constantMemberTid -- the member at `site`, when its receiver has a
+# compile-time value: the member a body finds on the value's type, an unknown
+# one reported in the body's words. Asked whether the definition folded or not:
+# the evaluator computes a value, and a value never decides what a name means
+# -- an arm predicate on a name the type does not declare is no `false`. A
+# static list's elements and labels are its own (listMemberType, which every
+# position asks). The member's type is 0 when the receiver has no value, the
+# member was reported, or it is a cast or an element, which take no arguments.
+constantMemberTid: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    site: constmethodsite
+    rv: ztypes.cval
+} out constmember is {
+    none: constmember recvTid: ztypes.tid.zero memberTid: ztypes.tid.zero
+    methodId: atomNameId :ast n: (ast.nodes.get i: site.childId)
+    if methodId.isZero or rv.kind.none then return none
+    dp: dpRefAt :ast nid: site.pathId
+    svT: constValueTid :ast :st :scope v: rv
+    if svT.isZero then return none
+    if rv.kind.aggKind when (st.typing.constAggs.get i: rv.aggId.u64).kind.staticList then {
+        row: rv.aggId
+        if (listMemberType :st :ast :row nameId: methodId).isZero.not then return none
+        if (listValueMember :st :ast :dp :row cnId: methodId).not then return none
+    }
+    # an untyped string's conversion (`"x".text`) is a cast, as in a body
+    # (checkUntypedTextCast); any other literal reads as the type it
+    # materialises to, as a body's base does
+    if rv.kind.svalKind when rv.numTid.isZero when (textLiteralCastTarget :ast :st nameId: methodId
+    ).isZero.not then return none
+    if (isAnyLiteralTid :st tid: svT) then svT = materialiseLiteral :ast :st t: svT
+    shown: svT
+    svT = typedefMemberOwner :st :ast bt: svT cnId: methodId
+    forceMemberOf :st :ast parentTypeId: svT nameId: methodId
+    mo: st.typing.declChildOfId parentTypeId: svT nameId: methodId
+    if mo.none then {
+        reportUnknownMemberAs :st :ast :dp bt: svT cnId: methodId :shown
+        return none
+    }
+    return (constmember recvTid: svT memberTid: mo)
+}
+
+# constmember -- a constant's member as constantMemberTid finds it: the type
+# it is read on and the member's own type, both 0 when there is none to check
+constmember: record {
+    recvTid: ztypes.tid
+    memberTid: ztypes.tid
+}
+
+# checkConstantMethodCall -- the member at `site` (constantMemberTid), then, for
+# a method of a string or an option, either the arguments written or, for a
+# bare read, none of the required ones left out.
 checkConstantMethodCall: function {
     st: zenv.ZSymbolTable
     scope: ztypes.declid
     ast: Ast
     unitDecl: ztypes.declid
     site: constmethodsite
-    unfolded: bool
 } is {
-    methodId: zast.nameid
-    ln: u32
-    co: u32
-    mn: ast.nodes.get i: site.childId
-    if mn.atomid then methodId = mn.name
-    ln = nodeLine n: mn
-    co = nodeCol n: mn
-    if methodId.isZero then return
-    if unfolded.not when site.isCall.not then return
     held: st.typing.constFail
     constFailClear :st
     rv: evalConstNode :st :scope :ast :unitDecl nid: site.recvId
     st.typing.constFail = held
-    if rv.kind.svalKind.not and (optionPayloadTid :st :ast v: rv).isZero then return
-    svT: stdTid :ast :st wk: zast.wellKnown.slot.tyStringView
-    if rv.kind.svalKind.not then svT = constValueTid :ast :st :scope v: rv
-    forceMemberOf :st :ast parentTypeId: svT nameId: methodId
-    if (st.typing.declMemberIdOf parentTypeId: svT nameId: methodId).isZero then {
-        reportConstantNoMember :st :ast :svT :methodId nodeid: site.childId :ln :co
-        return
-    }
-    fo: (st.typing.declChildOfId parentTypeId: svT nameId: methodId).or d: ztypes.tid.zero
-    fid: fo
+    cm: constantMemberTid :st :scope :ast :site :rv
+    fid: cm.memberTid
     if (st.reg.typetypeOf typeId: fid) != ztypes.ztypetype.functionType then return
     if site.isCall then {
+        if rv.kind.svalKind.not and (optionPayloadTid :st :ast v: rv).isZero then return
         checkConstantCallArgs :st :scope :ast :unitDecl call: site.call :fid
         return
     }
-    prov: ListVal zast.nameid
-    misN: List String
-    misI: ListVal ztypes.tid
-    (missingCtorFields
+    # a read with no arguments is a call, which a method needing them is not
+    if (fnAutoCallable :st mid: fid) then return
+    (reportBareMemberRef
+        :st
         :ast
-        :st
-        funcId: fid
-        isCtor: false
-        provided: prov
-        posCount: 0
-        recvImplicit: true
-        missingNames: misN
-        missingIds: misI
-    )
-    if misN.length == 0 then return
-    (bareFnRefError
-        :ast
-        :st
-        nodeid: site.childId
-        lineno: ln
-        colno: co
-        width: (zast.nameTextAt :ast ref: methodId).length.u32.orPanic
-        :fid
-    )
-}
-
-# reportConstantNoMember -- the body's report for a member the receiver's type
-# `svT` does not declare, with the closest name it does as the hint.
-reportConstantNoMember: function {
-    st: zenv.ZSymbolTable
-    ast: Ast.view
-    svT: ztypes.tid
-    methodId: zast.nameid
-    nodeid: zast.nodeid
-    ln: u32
-    co: u32
-} is {
-    cn: zast.nameTextAt :ast ref: methodId
-    m: "type '\{specWrittenName :st :ast tid: svT}' has no member '\{cn}'"
-    sug: suggestSimilar :ast :st parentTypeId: svT name: cn.stringView
-    h: String
-    if sug.length > 0 then {
-        hh: "did you mean '\{sug}'?"
-        h = hh.take
-    }
-    (addErrorH
-        :st
-        :nodeid
-        lineno: ln
-        colno: co
-        e: zast.err.typeError
-        msg: m
-        note: "".string
-        hint: h
-        width: cn.length.u32.orPanic
+        :unitDecl
+        dp: (dpRefAt :ast nid: site.pathId)
+        bt: cm.recvTid
+        cnId: (atomNameId :ast n: (ast.nodes.get i: site.childId))
+        mo: fid
+        result: fid
     )
 }
 
@@ -65278,36 +65314,21 @@ reportUnitConstantRef: function {
 }
 
 # staticListConstantIsConstruction -- a unit-level constant reading a list's
-# element or count (`ONE: primes.1`), the list being row `row`. A member the
-# list does not have is the body's report for the same read. True when the
+# element or count (`ONE: primes.1`), the list being row `row`. Any other
+# member is no element, and the shape check asks the list about it as a body
+# does (checkConstantMethodCall). True when the
 # element is not a builtin number or a string -- `out byteid` makes each one a
 # byteid -- so the read builds a value rather than naming a constant, and is
 # refused as a construction is.
 staticListConstantIsConstruction: function {
     st: zenv.ZSymbolTable
     ast: Ast
-    defn: dpref
-    # the list's name
-    sfLit: StringView
     # the member read off it
     sfTy: StringView
     row: u32
 } out bool is {
     mid: nameIdOf :ast name: sfTy
-    if (listMemberType :st :ast :row nameId: mid).isZero then {
-        (addErrorH
-            :st
-            nodeid: defn.nid
-            lineno: defn.lineno
-            colno: defn.colno
-            e: zast.err.typeError
-            msg: "list '\{sfLit}' has no element or member '\{sfTy}'"
-            note: "".string
-            hint: "".string
-            width: sfLit.length.u32.orPanic
-        )
-        return false
-    }
+    if (listMemberType :st :ast :row nameId: mid).isZero then return false
     if mid == zast.wellKnown.slot.wkLength then return false
     return (staticListElemFolds :ast :st elemTid: (st.typing.constAggs.get i: row.u64).elem).not
 }
@@ -65364,8 +65385,6 @@ resolveDottedConstantDef: function {
         if ldr != 0 then isCtor = (staticListConstantIsConstruction
             :st
             :ast
-            :defn
-            :sfLit
             :sfTy
             row: ldr
         )
@@ -65493,36 +65512,9 @@ resolveDottedConstantDef: function {
             lit: sfLit
             target: sfTy
         )
-        # The suffix must name a conversion the literal type declares, and
-        # those are exactly the sixteen scalars. Tested by SPELLING rather than
-        # by asking the declaration: a unit constant resolves after the demand
-        # walk, so the literal type's members are not necessarily materialised
-        # yet -- `--eager` reaches this before they are -- and an unsatisfiable
-        # demand is not the same answer as "no such conversion".
-        #
-        # Accepting any type name that happens to resolve, with a
-        # `descendNamed` fallback to reach a typedef nothing else references, is
-        # what makes a typedef a literal suffix at all.
-        if (isNumericTypeName name: sfTy).not then {
-            sfLitTid: st.reg.literalIntTid
-            if (isFloatLiteralName name: sfLit) then sfLitTid = st.reg.literalFloatTid
-            sfn: specWrittenName :st :ast tid: sfLitTid
-            sm9: "'\{sfn}' has no conversion to '\{sfTy}'"
-            sh9: "a literal's suffix names one of the numeric types it converts to".string
-            sn9: String
-            (addErrorH
-                :st
-                nodeid: defn.nid
-                lineno: defn.lineno
-                colno: defn.colno
-                e: zast.err.typeError
-                msg: sm9
-                note: sn9
-                hint: sh9
-                width: sfTy.length.u32.orPanic
-            )
-            return
-        }
+        # A suffix that names no numeric type is no conversion: it is a member
+        # read on the literal's materialised type, which the shape check asks
+        # about as a body does (constantMemberTid)
     }
 }
 
@@ -66131,7 +66123,6 @@ constFoldDecl: function {
         :ast
         unitDecl: unm
         nid: opId
-        unfolded: valFound.kind.none
     ) then constFailClear :st
     reportPendingConstFail :st
     # a nested unit's constant is reached through this door alone, so a
@@ -66243,7 +66234,6 @@ resolveConstantMember: function {
         :ast
         :unitDecl
         nid: defnId
-        unfolded: cvv.kind.none
     ) then constFailClear :st
     reportPendingConstFail :st
     if cvv.kind.none then reportMissingQualifiedMember :st :scope :ast :defnId
@@ -66415,7 +66405,6 @@ unfoldedWhy: function {
         :ast
         :unitDecl
         :nid
-        unfolded: true
     ) then return true
     msg: "not a compile-time constant".string
     hint: "a unit constant is built from literals, other constants, operators, `if` and `match`".string
