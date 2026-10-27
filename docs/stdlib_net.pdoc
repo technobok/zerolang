@@ -84,7 +84,7 @@ the #~"u64":
 
 #ul:
   [#*: #b:"socket" -- #~"typedef i64", the system's socket: a descriptor on POSIX, a 64-bit SOCKET on Windows]
-  [#*: [#> to=listener: #b:"Listener"] -- #~"class { sock: socket  open: bool } as { accept  close  pollReadable }"]
+  [#*: [#> to=listener: #b:"Listener"] -- #~"class { sock: socket  port: u16  open: bool } as { accept  close  pollReadable }"]
   [#*: [#> to=conn: #b:"Conn"] -- #~"class { sock: socket  open: bool } as { :Reader  :Writer  read  write  flush  close  pollReadable }"]
 
 #p: #b:"Functions"
@@ -99,7 +99,8 @@ the #~"u64":
 
 
 A bound, listening TCP socket on 127.0.0.1, produced by
-[#> to=listen: #~"net.listen"]. #~"accept" blocks until a client
+[#> to=listen: #~"net.listen"]. Its #~"port" field is the port it
+listens on. #~"accept" blocks until a client
 connects and returns the #~"Conn" for that client. #~"close"
 releases the socket; closing an already-closed listener is a
 safe no-op.
@@ -152,8 +153,12 @@ plugs into any API written against the #~"io" stream protocols.
 #--: listen
 
 
-Bind + listen on #~"127.0.0.1:<port>", backlog 16. A port another
-socket holds is refused: Windows is told so with
+Bind + listen on #~"127.0.0.1:<port>", backlog 16. Port #~"0" asks
+the system for a free port, and the listener's #~"port" says which one
+it chose -- as #~":0" does in Go's #~"net.Listen" and Rust's
+#~"TcpListener::bind", whose port is read back from the local address.
+Tests that run side by side take a port this way, so they never
+collide. A port another socket holds is refused: Windows is told so with
 #~"SO_EXCLUSIVEADDRUSE", and POSIX's #~"SO_REUSEADDR" only lets a
 port still in TIME_WAIT be taken again. The returned #~"Listener"
 accepts client connections; errors (port in use, permission denied)
@@ -161,10 +166,11 @@ surface as #~"IoError". On Windows the sockets are Winsock's, started
 on first use and never inherited by a child.
 
 #code language=zerolang: """
-  lr: net.listen port: 8437
+  lr: net.listen port: 0
   match (
       lr
   ) case ok then {
+      print "listening on \{lr.port}"
       ar: lr.accept
       match (
           ar

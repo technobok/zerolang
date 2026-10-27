@@ -72,6 +72,14 @@ static int z_net_poll(int64_t s, int ms) {
     return (r > 0 && (p.revents & (POLLRDNORM | POLLHUP | POLLERR))) ? 1 : 0;
 }
 
+/* the port a bound socket holds, or -1 */
+static int32_t z_net_port(int64_t s) {
+    struct sockaddr_in a;
+    int n = sizeof a;
+    if (getsockname((SOCKET)s, (struct sockaddr*)&a, &n) != 0) return -1;
+    return ntohs(a.sin_port);
+}
+
 static int z_net_interrupted(int e) {
     return e == WSAEINTR;
 }
@@ -122,6 +130,13 @@ static int z_net_poll(int64_t s, int ms) {
     int r = poll(&p, 1, ms);
     if (r < 0) return errno == EINTR ? 0 : -1;
     return (r > 0 && (p.revents & (POLLIN | POLLHUP))) ? 1 : 0;
+}
+
+static int32_t z_net_port(int64_t s) {
+    struct sockaddr_in a;
+    socklen_t n = sizeof a;
+    if (getsockname((int)s, (struct sockaddr*)&a, &n) != 0) return -1;
+    return ntohs(a.sin_port);
 }
 
 static int z_net_interrupted(int e) {
