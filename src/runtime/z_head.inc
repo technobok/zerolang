@@ -80,6 +80,7 @@ extern int ilogbq(__float128 x);
 #include <poll.h>
 #include <sys/random.h>
 #include <sys/syscall.h>
+#include <sys/uio.h>
 #else
 #include <io.h>
 #include <windows.h>
@@ -190,7 +191,6 @@ static size_t z_win_utf8_tail(const char* buf, size_t n) {
    fd is not a console, so the caller writes the bytes itself */
 static int z_win_console_write(int fd, const char* s, size_t n, int nl) {
     if (!z_win_is_console(fd)) return 0;
-    fflush(fd == 1 ? stdout : stderr);
     HANDLE h = GetStdHandle(fd == 1 ? STD_OUTPUT_HANDLE : STD_ERROR_HANDLE);
     char buf[4096 + 8];
     wchar_t wbuf[4096 + 8];
@@ -220,4 +220,50 @@ static int z_win_console_write(int fd, const char* s, size_t n, int nl) {
     return 1;
 }
 #endif
+
+/* z_write_line -- n bytes of s, and a line break when nl, written to fd in
+   one call to the OS: no C stdio buffer holds them, so what print, a stream's
+   write and a spawned child put out reaches the OS in the order the program
+   ran it. A Windows console takes the bytes as UTF-16 (z_win_console_write). */
+static void z_write_line(int fd, const char* s, size_t n, int nl) {
+#if defined(_WIN32)
+    if (z_win_console_write(fd, s, n, nl)) return;
+    HANDLE h = GetStdHandle(fd == 1 ? STD_OUTPUT_HANDLE : STD_ERROR_HANDLE);
+    char small[512];
+    size_t total = n + (nl ? 1 : 0);
+    char* buf = total <= sizeof(small) ? small : (char*)malloc(total);
+    if (buf == NULL) return;
+    memcpy(buf, s, n);
+    if (nl) buf[n] = '\n';
+    size_t at = 0;
+    while (at < total) {
+        DWORD put = 0;
+        DWORD ask = total - at > 0x40000000u ? 0x40000000u : (DWORD)(total - at);
+        if (!WriteFile(h, buf + at, ask, &put, NULL) || put == 0) break;
+        at += put;
+    }
+    if (buf != small) free(buf);
+#else
+    struct iovec v[2];
+    v[0].iov_base = (void*)s;
+    v[0].iov_len = n;
+    v[1].iov_base = (void*)"\n";
+    v[1].iov_len = nl ? 1 : 0;
+    int k = 0;
+    while (k < 2) {
+        ssize_t w = writev(fd, v + k, 2 - k);
+        if (w < 0 && errno == EINTR) continue;
+        if (w <= 0) return;
+        size_t left = (size_t)w;
+        while (k < 2 && left >= v[k].iov_len) {
+            left -= v[k].iov_len;
+            k++;
+        }
+        if (k < 2) {
+            v[k].iov_base = (char*)v[k].iov_base + left;
+            v[k].iov_len -= left;
+        }
+    }
+#endif
+}
 

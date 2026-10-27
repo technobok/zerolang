@@ -4,10 +4,7 @@ typedef struct {
 } z_@StringView@_t;
 
 static void z_@StringView@_print(z_@StringView@_t sv) {
-#if defined(_WIN32)
-    if (z_win_console_write(1, sv.data, sv.size, 1)) return;
-#endif
-    printf("%.*s\n", (int)sv.size, sv.data);
+    z_write_line(1, sv.data, sv.size, 1);
 }
 
 static bool z_@StringView@_eq(z_@StringView@_t a, z_@StringView@_t b) {

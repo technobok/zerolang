@@ -18,10 +18,8 @@ static void z_end_claim(void) {
 }
 static Z_NORETURN void z_panic(const char* msg) {
     z_end_claim();
-#if defined(_WIN32)
-    if (!z_win_console_write(2, "zpanic: ", 8, 0) || !z_win_console_write(2, msg, strlen(msg), 1))
-#endif
-    fprintf(stderr, "zpanic: %s\n", msg);
+    z_write_line(2, "zpanic: ", 8, 0);
+    z_write_line(2, msg, strlen(msg), 1);
     fflush(NULL);
     _exit(1);
 }
