@@ -12121,10 +12121,12 @@ attachDeclaredField: function {
         what: "field"
         name: fname
     )
+    # a refused field is still the type's field, as written: a construction
+    # naming it is not refused again for an unknown argument
     if (st.reg.isStaticOf tid: rid) then {
-        if (refuseNonStaticMember :st :ast :fm tid: cid name: fname) then return
+        refuseNonStaticMember :st :ast :fm tid: cid name: fname
     } else {
-        if (refuseReftypeMember
+        (refuseReftypeMember
             :st
             :ast
             :fm
@@ -12133,7 +12135,7 @@ attachDeclaredField: function {
             what: "record field"
             remedy: "class"
             name: fname
-        ) then return
+        )
     }
     (st.typing.setMemberType
         parentTypeId: rid
@@ -33169,10 +33171,10 @@ reportBareMemberRef: function {
     result: ztypes.tid
     # the hint to give instead of bareFnRefErrorFor's own; "" for that one
     hint: ""
-} is {
-    if st.typing.suppressFnAutoCall or st.typing.allowBareFnRef then return
-    if (st.reg.typetypeOf typeId: result) != ztypes.ztypetype.functionType then return
-    if (st.typing.declIsFnptrFieldId parentTypeId: bt nameId: cnId) then return
+} out bool is {
+    if st.typing.suppressFnAutoCall or st.typing.allowBareFnRef then return false
+    if (st.reg.typetypeOf typeId: result) != ztypes.ztypetype.functionType then return false
+    if (st.typing.declIsFnptrFieldId parentTypeId: bt nameId: cnId) then return false
     cn: zast.nameTextCopy :ast ref: cnId
     bfl: nodeLine n: (ast.nodes.get i: dp.child)
     bfc: nodeCol n: (ast.nodes.get i: dp.child)
@@ -33193,6 +33195,7 @@ reportBareMemberRef: function {
         refHint: (readsMethodThroughInstance :st :ast :unitDecl :dp :bt :mo).not
         :hint
     )
+    return true
 }
 
 # checkResolvedMember -- the member resolved on the base type. Stamps the owner for
@@ -33318,7 +33321,11 @@ checkResolvedMember: function {
         coerce: callIt
         result0: result
     )
-    if coerce then reportBareMemberRef :st :ast :unitDecl :dp :bt :cnId :mo :result
+    # a refused read has no type, so what binds it is not refused again at
+    # each use (`v: c.compare` then `"\{v}"`)
+    if coerce when (reportBareMemberRef :st :ast :unitDecl :dp :bt :cnId :mo :result) then {
+        result = ztypes.tid.zero
+    }
     reportPrivateMember :st :ast :dp :bt :cnId :aliasViaX
     stampGate :st nid: dp.nid tid: result
     return (callFieldObject :st :unitDecl :ast :dp :mo :coerce :result)
@@ -34110,9 +34117,17 @@ dottedBaseTid: function {
     if baseIsName then st.typing.suppressBareCtor = true
     supFnPrev: st.typing.suppressFnAutoCall
     if childIsRef then st.typing.suppressFnAutoCall = true
+    errsBase: st.typing.errors.length
     bt: checkValueAt :st :unitDecl :ast nid: dp.parent
     st.typing.suppressFnAutoCall = supFnPrev
     st.typing.suppressBareCtor = supPrev
+    # a base refused as a call missing its arguments has no value to read a
+    # member of: that refusal is the one error
+    if st.typing.errors.length > errsBase when (
+        (st.reg.typetypeOf typeId: bt) == ztypes.ztypetype.functionType
+    ) then {
+        return ztypes.tid.zero
+    }
     if bt.isZero then {
         # an unresolved bare-name base may be a unit-qualified member
         # path (io.stdout): the side map types the base as the UNIT type.
@@ -64152,6 +64167,9 @@ staticFieldValue: function {
     ln: u32
     co: u32
 } out ztypes.cval is {
+    # a field of a type no data field may hold was refused where it is
+    # declared (refuseNonStaticMember): that is the one error, not each value
+    if (isStaticMemberTid :st :ast tid: ftid).not then return ztypes.noConst
     if argNid.isZero.not then {
         a: argRefAt :ast nid: argNid
         errA: st.typing.errors.length
