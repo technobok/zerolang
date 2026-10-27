@@ -22424,20 +22424,22 @@ checkInterpPart: function {
         )
         return
     }
-    pLn: u32
-    pCo: u32
-    {
-        part: ast.nodes.get i: partId
-        pLn = nodeLine n: part
-        pCo = nodeCol n: part
-    }
+    reportNotPrintable :st :ast :partId :ptid
+}
+
+# reportNotPrintable -- an interpolation part of type `ptid`, which has no
+# printed form
+reportNotPrintable: function {
+    st: zenv.ZSymbolTable ast: Ast partId: zast.nodeid ptid: ztypes.tid
+} is {
+    part: ast.nodes.get i: partId
     ptn: specWrittenName :st :ast tid: ptid
     pm: "type '\{ptn}' is not printable in an interpolation"
     (addErrorH
         :st
         nodeid: partId
-        lineno: pLn
-        colno: pCo
+        lineno: (nodeLine n: part)
+        colno: (nodeCol n: part)
         e: zast.err.typeError
         msg: pm
         note: "an interpolated value must be numeric, bool, String or StringView".string
@@ -51526,6 +51528,39 @@ checkRegularCall: function {
     return nleg.tid
 }
 
+# refuseNumericOperator -- AN OPERATOR IS AN IDENTIFIER, and a numeric literal
+# names no method and never can. This reaches the infix form from the shape a
+# call takes when a second argument is written without its name: `f 10 3` is
+# three paths, and three paths are the operator form -- receiver `f`, operator
+# `10`, argument `3` -- not two arguments. Reported, true; a body and a
+# unit-level definition ask the same.
+refuseNumericOperator: function {st: zenv.ZSymbolTable ast: Ast call: callref} out bool is {
+    if call.infix.not then return false
+    opLit: (zast.nameTextAt
+        :ast
+        ref: (dottedChildNameId :ast n: (ast.nodes.get i: call.callable))
+    )
+    if (opLit.length == 0) or (isNumericLiteralName name: opLit.stringView).not then return false
+    opN9: ast.nodes.get i: call.callable
+    oCh9: zast.nodeid
+    if opN9.dottedpath then oCh9 = opN9.child
+    mLit: "'\{opLit}' is not an operator: an operator is an identifier"
+    hLit: "a call takes at most one unlabelled argument -- give every later argument its parameter name".string
+    nLit: String
+    (addErrorH
+        :st
+        nodeid: oCh9
+        lineno: (nodeLine n: (ast.nodes.get i: oCh9))
+        colno: (nodeCol n: (ast.nodes.get i: oCh9))
+        e: zast.err.callError
+        msg: mLit
+        note: nLit
+        hint: hLit
+        width: opLit.length.u32.orPanic
+    )
+    return true
+}
+
 # checkCall -- type a call. C1 handles the `return <value>` control-flow form:
 # stamp the callable atom with return's type, mark the call RETURN, walk the
 # return value, and resolve the call to `never`. Other call kinds land later.
@@ -51537,39 +51572,10 @@ checkCall: function {
 } out ztypes.tid is {
     st.typing.callKind.set key: call.nid value: zast.callkind.unknown
     if call.infix.not then noteClosedRange :st :ast :call
-    # AN OPERATOR IS AN IDENTIFIER, and a numeric literal names no method and
-    # never can. This reaches the infix form from the shape a call takes when a
-    # second argument is written without its name: `f 10 3` is three paths, and
-    # three paths are the operator form -- receiver `f`, operator `10`,
-    # argument `3` -- not two arguments. Asked BEFORE the callable or the
-    # operands are walked, because walking the receiver reports `f` as a bare
-    # function reference first and buries the mistake that produced it.
-    if call.infix then {
-        opLit: (zast.nameTextAt
-            :ast
-            ref: (dottedChildNameId :ast n: (ast.nodes.get i: call.callable))
-        )
-        if opLit.length > 0 when (isNumericLiteralName name: opLit.stringView) then {
-            opN9: ast.nodes.get i: call.callable
-            oCh9: zast.nodeid
-            if opN9.dottedpath then oCh9 = opN9.child
-            mLit: "'\{opLit}' is not an operator: an operator is an identifier"
-            hLit: "a call takes at most one unlabelled argument -- give every later argument its parameter name".string
-            nLit: String
-            (addErrorH
-                :st
-                nodeid: oCh9
-                lineno: (nodeLine n: (ast.nodes.get i: oCh9))
-                colno: (nodeCol n: (ast.nodes.get i: oCh9))
-                e: zast.err.callError
-                msg: mLit
-                note: nLit
-                hint: hLit
-                width: opLit.length.u32.orPanic
-            )
-            return ztypes.tid.zero
-        }
-    }
+    # asked BEFORE the callable or the operands are walked, because walking the
+    # receiver reports `f` as a bare function reference first and buries the
+    # mistake that produced it
+    if (refuseNumericOperator :st :ast :call) then return ztypes.tid.zero
     cnId: (bodySelfTypeNameId
         :st
         nameId: (atomNameId :ast n: (ast.nodes.get i: call.callable))
@@ -59768,7 +59774,7 @@ renderConstFail: function {st: zenv.ZSymbolTable f: ztypes.constfail} is {
     if f.kind.unsupportedMethod then {
         mn: constStringAt :st id: f.strId
         noMethodMsg = "'\{mn}' has no compile-time value"
-        hintText = "only a function body can call it: it runs there, on the string's run-time view".string
+        hintText = "only a function body can call it: it runs there, at run time".string
     }
     if f.kind.substringRange then {
         noMethodMsg = "constant 'substring' range is out of bounds".string
@@ -61437,7 +61443,7 @@ constDefIsComputed: function {
     nid: zast.nodeid
 } out bool is {
     # `X: X + 1` computes, and so does a data value built from others (`a:
-    # (inner v: b.v)`) and a list (`a: list { 1 a.0 }`)
+    # (inner v: b.v)`), a list (`a: list { 1 a.0 }`) and a function's call
     callableId: zast.nodeid
     {
         n: ast.nodes.get i: nid
@@ -61445,7 +61451,9 @@ constDefIsComputed: function {
         if n.call then callableId = n.callable
     }
     if callableId.isZero then return false
-    return (staticCtorHead :st :scope :ast :unitDecl :callableId).isZero.not
+    if (staticCtorHead :st :scope :ast :unitDecl :callableId).isZero.not then return true
+    # a function's call computes from its arguments too (`foo: bar foo`)
+    return (calleeFnTid :st :scope :ast :unitDecl :callableId).isZero.not
 }
 
 # constOfUnitMember -- `unit.CONST`: a constant read out of the unit `ptId`
@@ -62311,7 +62319,7 @@ checkConstantMethodShapeAt: function {
     unitDecl: ztypes.declid
     nid: zast.nodeid
 } out bool is {
-    if (st.typing.constsDiagnosed.has item: nid) then return true
+    if (st.typing.constShapesReported.has item: nid) then return true
     lhsId: zast.nodeid
     rhsId: zast.nodeid
     isIf: false
@@ -62328,40 +62336,102 @@ checkConstantMethodShapeAt: function {
         lr: checkConstantMethodShapeAt :st :scope :ast :unitDecl nid: lhsId
         rr: checkConstantMethodShapeAt :st :scope :ast :unitDecl nid: rhsId
         if lr or rr then return true
-        # `a op b` is `a.op b`: the operator is a member of the left operand
-        opIdN: zast.nodeid
-        {
-            ipn2: ast.nodes.get i: nid
-            opIdN = (zast.infixPartsOf :ast n: ipn2).operator
-        }
-        call: callRefAt :ast :nid
-        opSite: (constmethodsite
-            pathId: call.callable
-            recvId: lhsId
-            childId: opIdN
-            isCall: true
-            :call
-        )
-        errsOp: st.typing.errors.length
-        held: st.typing.constFail
-        constFailClear :st
-        lv: evalConstNode :st :scope :ast :unitDecl nid: lhsId
-        st.typing.constFail = held
-        constantMemberTid :st :scope :ast site: opSite rv: lv
-        if st.typing.errors.length == errsOp then return false
-        st.typing.constsDiagnosed.add item: nid
-        return true
+        return (checkConstantOperator :st :scope :ast :unitDecl :nid :lhsId)
     }
     if isIf then return (checkConstantIfBranchShape :st :scope :ast :unitDecl :nid)
     site: constMethodSiteAt :ast :nid
-    if site.recvId.isZero then return false
+    if site.recvId.isZero then return (checkConstantFnCall :st :scope :ast :unitDecl :nid)
     inner: checkConstantMethodShapeAt :st :scope :ast :unitDecl nid: site.recvId
     if inner then return true
     errs0: st.typing.errors.length
     checkConstantMethodCall :st :scope :ast :unitDecl :site
     if st.typing.errors.length == errs0 then return false
-    st.typing.constsDiagnosed.add item: nid
+    st.typing.constShapesReported.add item: nid
     return true
+}
+
+# checkConstantOperator -- `a op b` is `a.op b`: the operator at `nid` is a
+# member of the left operand `lhsId`, asked as a body asks it
+# (constantMemberTid). True when a report was made.
+checkConstantOperator: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    nid: zast.nodeid
+    lhsId: zast.nodeid
+} out bool is {
+    opIdN: zast.nodeid
+    {
+        ipn2: ast.nodes.get i: nid
+        opIdN = (zast.infixPartsOf :ast n: ipn2).operator
+    }
+    call: callRefAt :ast :nid
+    opSite: constmethodsite pathId: call.callable recvId: lhsId childId: opIdN isCall: true :call
+    errsOp: st.typing.errors.length
+    held: st.typing.constFail
+    constFailClear :st
+    lv: evalConstNode :st :scope :ast :unitDecl nid: lhsId
+    st.typing.constFail = held
+    # an operand with no value is the evaluator's to explain
+    if lv.kind.none.not then constantMemberTid :st :scope :ast :unitDecl site: opSite rv: lv
+    if st.typing.errors.length == errsOp then return false
+    st.typing.constShapesReported.add item: nid
+    return true
+}
+
+# checkConstantFnCall -- a unit-level call of a function, its arguments checked
+# as a body checks them (checkConstantCallArgs); an interpolated string, each
+# part printable as a body's must be. True when a report was made.
+checkConstantFnCall: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    nid: zast.nodeid
+} out bool is {
+    errs0: st.typing.errors.length
+    sr: strRefAt :ast :nid
+    if sr.nid.isZero.not then {
+        checkConstantInterpParts :st :scope :ast :unitDecl node: sr
+    } else {
+        call: callRefAt :ast :nid
+        if call.nid.isZero or call.infix then return false
+        fid: calleeFieldFnTid :st :scope :ast :unitDecl callableId: call.callable
+        if fid.isZero then return false
+        checkConstantCallArgs :st :scope :ast :unitDecl :call :fid recvImplicit: false
+    }
+    if st.typing.errors.length == errs0 then return false
+    st.typing.constShapesReported.add item: nid
+    return true
+}
+
+# checkConstantInterpParts -- each part of a unit-level interpolated string is
+# printable, as a body's must be (reportNotPrintable): an interpolation has no
+# compile-time value, and a part that could not print is the mistake to report.
+checkConstantInterpParts: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    node: strref
+} is {
+    k: u64
+    for k < node.nparts loop {
+        partId: zast.stringPartAt :ast nid: node.nid i: k
+        k = k + 1
+        if (rowArmAt :ast nid: partId).stringchunk.not then {
+            held: st.typing.constFail
+            constFailClear :st
+            pv: evalConstNode :st :scope :ast :unitDecl nid: partId
+            st.typing.constFail = held
+            pt: constArgTid :st :scope :ast v: pv
+            if pv.kind.none.not when pt.isZero.not when (printableInterpTid :ast :st tid: pt
+            ).not then {
+                reportNotPrintable :st :ast :partId ptid: pt
+            }
+        }
+    }
 }
 
 # checkConstantIfBranchShape -- a unit-level `if` is asked about the branch it
@@ -62399,13 +62469,16 @@ constantMemberTid: function {
     st: zenv.ZSymbolTable
     scope: ztypes.declid
     ast: Ast
+    unitDecl: ztypes.declid
     site: constmethodsite
     rv: ztypes.cval
 } out constmember is {
     none: constmember recvTid: ztypes.tid.zero memberTid: ztypes.tid.zero
     methodId: atomNameId :ast n: (ast.nodes.get i: site.childId)
-    if methodId.isZero or rv.kind.none then return none
+    if methodId.isZero then return none
     dp: dpRefAt :ast nid: site.pathId
+    # a function's name has no value here, and its members are its type's
+    if rv.kind.none then return (constantFnMember :st :scope :ast :unitDecl :site :dp :methodId)
     svT: constValueTid :ast :st :scope v: rv
     if svT.isZero then return none
     if rv.kind.aggKind when (st.typing.constAggs.get i: rv.aggId.u64).kind.staticList then {
@@ -62430,6 +62503,31 @@ constantMemberTid: function {
     return (constmember recvTid: svT memberTid: mo)
 }
 
+# constantFnMember -- constantMemberTid for a receiver that names a function,
+# which has no value at unit level: the member on the function's type
+constantFnMember: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    site: constmethodsite
+    dp: dpref
+    methodId: zast.nameid
+} out constmember is {
+    none: constmember recvTid: ztypes.tid.zero memberTid: ztypes.tid.zero
+    fnT: calleeFnTid :st :scope :ast :unitDecl callableId: site.recvId
+    if fnT.isZero then return none
+    # `.copy` on a function's name is its reference (checkFunctionCopy)
+    if methodId == zast.wellKnown.slot.wkCopy then return none
+    forceMemberOf :st :ast parentTypeId: fnT nameId: methodId
+    fm: st.typing.declChildOfId parentTypeId: fnT nameId: methodId
+    if fm.none then {
+        reportUnknownMemberAs :st :ast :dp bt: fnT cnId: methodId shown: fnT
+        return none
+    }
+    return (constmember recvTid: fnT memberTid: fm)
+}
+
 # constmember -- a constant's member as constantMemberTid finds it: the type
 # it is read on and the member's own type, both 0 when there is none to check
 constmember: record {
@@ -62451,12 +62549,11 @@ checkConstantMethodCall: function {
     constFailClear :st
     rv: evalConstNode :st :scope :ast :unitDecl nid: site.recvId
     st.typing.constFail = held
-    cm: constantMemberTid :st :scope :ast :site :rv
+    cm: constantMemberTid :st :scope :ast :unitDecl :site :rv
     fid: cm.memberTid
     if (st.reg.typetypeOf typeId: fid) != ztypes.ztypetype.functionType then return
     if site.isCall then {
-        if rv.kind.svalKind.not and (optionPayloadTid :st :ast v: rv).isZero then return
-        checkConstantCallArgs :st :scope :ast :unitDecl call: site.call :fid
+        checkConstantCallArgs :st :scope :ast :unitDecl call: site.call :fid recvImplicit: true
         return
     }
     # a read with no arguments is a call, which a method needing them is not
@@ -62473,10 +62570,10 @@ checkConstantMethodCall: function {
     )
 }
 
-# checkConstantCallArgs -- the arguments of a unit-level string-method call
-# against the method's parameters: each label names one, an unlabelled argument
-# takes the first slot after the receiver, every required one is given, and
-# each value is of its parameter's kind.
+# checkConstantCallArgs -- the arguments of a unit-level call against the
+# callee's parameters, as a body checks them: each label names one, an
+# unlabelled argument takes the first slot after the receiver (`recvImplicit`)
+# or the first, every required one is given, and each value fits its parameter.
 checkConstantCallArgs: function {
     st: zenv.ZSymbolTable
     scope: ztypes.declid
@@ -62484,6 +62581,7 @@ checkConstantCallArgs: function {
     unitDecl: ztypes.declid
     call: callref
     fid: ztypes.tid
+    recvImplicit: bool
 } is {
     idx: u64
     ai: u64
@@ -62499,7 +62597,7 @@ checkConstantCallArgs: function {
                 continue
             }
         } else {
-            pn = positionalParamNameId :st funcId: fid :idx skipRecv: true
+            pn = positionalParamNameId :st funcId: fid :idx skipRecv: recvImplicit
             idx = idx + 1
             if pn.isZero then {
                 reportSurplusPositional :st :ast :call effId: fid :arg
@@ -62508,14 +62606,28 @@ checkConstantCallArgs: function {
         }
         checkConstantArgKind :st :scope :ast :unitDecl :fid paramName: pn :arg
     }
-    checkMissingCallArgs :ast :st :call funcId: fid isCtor: false recvImplicit: true
+    checkMissingCallArgs :ast :st :call funcId: fid isCtor: false :recvImplicit
 }
 
-# checkConstantArgKind -- one argument's VALUE against its parameter: a string
-# for a StringLike or text parameter, an integer for a numeric one, and an
-# untyped one that fits it, as a body checks it. An argument with no value is
-# the evaluator's to explain, and a parameter of any other type is not one a
-# folded method declares.
+# constArgTid -- the type a body sees for an argument whose value is `v`: an
+# untyped number or string is its literal type, which its parameter converts,
+# and a typed value is its own type
+constArgTid: function {
+    st: zenv.ZSymbolTable scope: ztypes.declid ast: Ast v: ztypes.cval
+} out ztypes.tid is {
+    if v.numTid.isZero then {
+        if v.kind.ivalKind then return st.reg.literalIntTid
+        if v.kind.fvalKind then return st.reg.literalFloatTid
+        if v.kind.svalKind then return st.reg.literalTextTid
+    }
+    return (constValueTid :st :scope :ast :v)
+}
+
+# checkConstantArgKind -- one argument's VALUE against its parameter, as a body
+# checks it (checkArgTypeMismatch, with the type the body sees: constArgTid).
+# An untyped constant read by name (`N`) fits by its value, as a written
+# literal does by its lexeme. An argument with no value is the evaluator's to
+# explain.
 checkConstantArgKind: function {
     st: zenv.ZSymbolTable
     scope: ztypes.declid
@@ -62537,25 +62649,15 @@ checkConstantArgKind: function {
         if av.kind.svalKind.not then reportConstantConstraintArg :st :ast :fid :pt :av :arg
         return
     }
-    wantsInt: isNumericTid :st tid: pt
-    wantsText: pt == (stdTid :ast :st wk: zast.wellKnown.slot.tyStringView)
-    if pt == (stdTid :ast :st wk: zast.wellKnown.slot.tyText) then wantsText = true
-    if wantsInt when av.kind.ivalKind then {
-        checkConstantArgFits :st :av :pt :arg
-        return
-    }
-    if wantsText when av.kind.svalKind then return
-    if wantsInt.not when wantsText.not then return
-    pnm: zast.nameTextAt :ast ref: paramName
-    en: specWrittenName :st :ast tid: pt
-    gn: constKindName :st v: av
-    (addError
+    if (argLiteralLexeme :ast nid: arg.operation).length == 0 when (isNumericTid :st tid: pt
+    ) when av.kind.ivalKind then checkConstantArgFits :st :av :pt :arg
+    (checkArgTypeMismatch
         :st
-        nodeid: arg.nid
-        lineno: arg.lineno
-        colno: arg.colno
-        e: zast.err.callError
-        msg: "argument '\{pnm}' type mismatch: expected \{en}, got \{gn}"
+        :ast
+        ptid: pt
+        vt: (constArgTid :st :scope :ast v: av)
+        pnId: paramName
+        :arg
     )
 }
 
@@ -63624,6 +63726,61 @@ constOfCall: function {
     )
     if ch.kind.none.not then return ch
     return (constOfErrorCall :st :scope :ast :unitDecl :nid :callableId args: argIds :ln :co)
+}
+
+# calleeFieldFnTid -- calleeFnTid, or the function a static data value holds
+# in the field the callee reads (`H.f`), which only its value says
+calleeFieldFnTid: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    callableId: zast.nodeid
+} out ztypes.tid is {
+    ft: calleeFnTid :st :scope :ast :unitDecl :callableId
+    if ft.isZero.not then return ft
+    cn: ast.nodes.get i: callableId
+    if cn.dottedpath.not then return ztypes.tid.zero
+    pv: evalConstNode :st :scope :ast :unitDecl nid: cn.parent
+    if pv.kind.aggKind.not then return ztypes.tid.zero
+    if (st.typing.constAggs.get i: pv.aggId.u64).kind.staticData.not then return ztypes.tid.zero
+    fv: constAggField :st :ast v: pv nameId: (atomNameId :ast n: (ast.nodes.get i: cn.child))
+    if fv.kind.fnKind then return (constValueTid :st :scope :ast v: fv)
+    return ztypes.tid.zero
+}
+
+# calleeFnTid -- the function type a call's callee names, by its name
+# (`twice`) or through a unit; resolved, never evaluated. A path through a
+# value is a member of that value (`K.u8`), no function. 0 for any other
+# callee.
+calleeFnTid: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    callableId: zast.nodeid
+} out ztypes.tid is {
+    cn: ast.nodes.get i: callableId
+    if cn.call then return ztypes.tid.zero
+    if cn.dottedpath when (unitDeclOfPath :st :scope :ast nid: cn.parent
+    ).isZero then return ztypes.tid.zero
+    # a constant is never resolved here: resolving folds it, and a constant
+    # read while its own fold is open is a cycle the fold reports. One that
+    # holds a function (`C: twice`) has that type once it is declared.
+    an: atomNameId :ast n: cn
+    if an.isZero.not then {
+        ad: declOfUnitDef :st :unitDecl :scope nameId: an
+        if ad.isZero.not when (st.typing.decls.get i: ad).kind.constDecl then {
+            at: (st.typing.decls.get i: ad).typeId
+            if (
+                (st.reg.typetypeOf typeId: at) != ztypes.ztypetype.functionType
+            ) then return ztypes.tid.zero
+            return at
+        }
+    }
+    ft: fnRefTid :st :scope :ast :unitDecl nid: callableId
+    if (st.reg.typetypeOf typeId: ft) != ztypes.ztypetype.functionType then return ztypes.tid.zero
+    return ft
 }
 
 # staticChoiceHead -- the choice a call's head builds a value of: `form.arm`,
@@ -65689,6 +65846,10 @@ resolveDottedConstantDef: function {
             )
             if pcs.kind.none.not then isCtor = false
         }
+        # a member read through a function's name is the function's, and the
+        # shape check asks it as a body does
+        if isCtor when (calleeFnTid :st :scope :ast :unitDecl callableId: defn.parent
+        ).isZero.not then isCtor = false
         # a type's `as` constant (`cfg.LIMIT`) is a value, and so is `row.create`,
         # a data value in a static position: the value channel folds both
         if isCtor when ldr == 0 then {
@@ -65870,9 +66031,9 @@ resolveCalledConstantDef: function {
         # ASK THE CONSTANT FIRST, the same ordering the dotted-path
         # value read uses: `CT: (LIB.contains needle: "x")` is a call
         # whose receiver is a string CONSTANT, so it is a value and not
-        # a construction, and so is `(AT.or d: 0)` on an option constant.
-        # Classifying by the callee's shape alone calls every static string
-        # method a construction.
+        # a construction, and so is `(N.compare rhs: 3)` on a number and
+        # `(twice n: 2)` on a function. Classifying by the callee's shape
+        # alone calls every one of them a construction.
         if cbu.not then {
             crv: (constValueOfMember
                 :st
@@ -65881,12 +66042,12 @@ resolveCalledConstantDef: function {
                 :unitDecl
                 defName: cbn.stringView
             )
-            if crv.kind.svalKind then cbu = true
-            if (optionPayloadTid :st :ast v: crv).isZero.not then cbu = true
-            # `blk.get K` reads an element by position, a value the value
-            # channel folds and range-checks
-            if crv.kind.aggKind when ccn.dottedpath when (atomIsIndex :ast nid: ccn.child
-            ) when (st.typing.constAggs.get i: crv.aggId.u64).kind.staticList then cbu = true
+            # any constant's method, and a call of a function, is a call: the
+            # shape check asks it as a body does, and a value or "no
+            # compile-time value" is the evaluator's answer
+            if crv.kind.none.not then cbu = true
+            if (calleeFnTid :st :scope :ast :unitDecl callableId: defn.callable
+            ).isZero.not then cbu = true
         }
         if cbu.not then {
             # found the way a type reference finds its template: a name the
@@ -66049,6 +66210,11 @@ resolveConstantDef: function {
     dnI: ast.nodes.get i: defnId
     ipI: zast.infixPartsOf :ast n: dnI
     if ipI.found then {
+        if (refuseNumericOperator :st :ast call: (callRefAt :ast nid: defnId)) then {
+            # the one mistake: the evaluator's own answer for the shape is not asked
+            st.typing.constShapesReported.add item: defnId
+            return
+        }
         resolveBinopConstantDef :ast :st :unitDecl :scope :defnId
         return
     }
@@ -66221,6 +66387,9 @@ instantiatedAliasFold: function {
     if dnm.length == 0 then return false
     tdc: callRefAt :ast nid: opId
     if (appliesNoTemplate :st :ast unitDecl: unm scope: own call: tdc) then return false
+    # a function's call is a call, never an instance
+    if tdc.infix.not when (calleeFnTid :st scope: own :ast unitDecl: unm callableId: tdc.callable
+    ).isZero.not then return false
     # a value that names its own definition, directly or through another
     # (`foo: bar foo`, `Strs: (List Strs)`), re-enters here while its
     # arguments resolve: that is a cycle, reported once, and the re-entry is
@@ -66466,7 +66635,7 @@ resolveConstantMember: function {
     ) then constFailClear :st
     reportPendingConstFail :st
     if cvv.kind.none then reportMissingQualifiedMember :st :scope :ast :defnId
-    if cvv.kind.none when (isComputedConstantDef :ast nid: defnId) then {
+    if cvv.kind.none when (constDefNeedsValue :st :scope :ast :unitDecl nid: defnId) then {
         (diagnoseUnfoldedConstant
             :st
             :ast
@@ -66500,7 +66669,9 @@ diagnoseUnfoldedConstant: function {
     defnId: zast.nodeid
 } is {
     if ownerDecl.isZero then return
-    if (isComputedConstantDef :ast nid: defnId).not then return
+    if (constDefNeedsValue :st scope: ownerDecl :ast :unitDecl nid: defnId).not then return
+    # a definition whose shape was reported has its one error already
+    if (st.typing.constShapesReported.has item: defnId) then return
     if (st.typing.constsDiagnosed.has item: defnId) then return
     st.typing.constsDiagnosed.add item: defnId
     visiting: ListVal zast.nodeid
@@ -66583,6 +66754,30 @@ operandConstantType: function {
     )
 }
 
+# constDefNeedsValue -- a unit-level definition REQUIRED to fold: a computed one
+# (isComputedConstantDef), or a call of a function or of a method of a
+# constant, which the classifier takes as a call rather than a construction or
+# a type's instance
+constDefNeedsValue: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    nid: zast.nodeid
+} out bool is {
+    if (isComputedConstantDef :ast :nid) then return true
+    call: callRefAt :ast :nid
+    if call.nid.isZero or call.infix then return false
+    if (calleeFieldFnTid :st :scope :ast :unitDecl callableId: call.callable
+    ).isZero.not then return true
+    cn: ast.nodes.get i: call.callable
+    if cn.dottedpath.not then return false
+    held: st.typing.constFail
+    rv: evalConstNode :st :scope :ast :unitDecl nid: cn.parent
+    st.typing.constFail = held
+    return rv.kind.none.not
+}
+
 # isComputedConstantDef -- the definition COMPUTES its value: an operator or a
 # compile-time `if` or `match`. These are the shapes whose missing value is a
 # refusal.
@@ -66621,6 +66816,11 @@ unfoldedWhy: function {
     if plan.arm == 2 then {
         return (unfoldedNameWhy :st :scope :ast :unitDecl :nid nameId: plan.nameId :visiting)
     }
+    if plan.arm == 6 then {
+        # a call whose shape was reported needs no second reason
+        if (checkConstantMethodShape :st :scope :ast :unitDecl :nid) then return true
+        return (unfoldedCallWhy :st :scope :ast :unitDecl :nid :visiting)
+    }
     if plan.arm == 4 when (unfoldedMemberWhy
         :st
         :scope
@@ -66628,7 +66828,7 @@ unfoldedWhy: function {
         parentId: plan.parentId
         childId: plan.childId
     ) then return true
-    if (plan.arm == 4) or (plan.arm == 6) when (checkConstantMethodShape
+    if plan.arm == 4 when (checkConstantMethodShape
         :st
         :scope
         :ast
@@ -66637,11 +66837,107 @@ unfoldedWhy: function {
     ) then return true
     msg: "not a compile-time constant".string
     hint: "a unit constant is built from literals, other constants, operators, `if` and `match`".string
-    if plan.arm == 6 then {
-        msg = "a call has no compile-time value".string
-        hint = "only `error` and the string constant methods are evaluated at compile time".string
-    }
     reportUnfolded :st :ast :nid width: 1 :msg :hint
+    return true
+}
+
+# constNameClosesRing -- the constant `nameId` read at `nid` is defined by a
+# definition the walk is already in: a cycle, reported in the evaluator's words.
+constNameClosesRing: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    nid: zast.nodeid
+    nameId: zast.nameid
+    visiting: (ListVal zast.nodeid).view
+} out bool is {
+    cd: (st.typing.declFindChild
+        parentDeclId: (constOwnerDeclForId :st :scope :unitDecl :nameId)
+        :nameId
+    )
+    if cd.isZero then return false
+    defOp: zast.nodeid
+    {
+        dn: ast.nodes.get i: (st.typing.decls.get i: cd).node
+        if dn.namedoperation then defOp = dn.operation
+    }
+    if defOp.isZero or (visiting.contains item: defOp).not then return false
+    nameText: zast.nameTextCopy :ast ref: nameId
+    (reportConstError
+        :st
+        nodeid: nid
+        lineno: (nodeLine n: (ast.nodes.get i: nid))
+        colno: (nodeCol n: (ast.nodes.get i: nid))
+        width: nameText.length.u32.orPanic
+        msg: "constant '\{nameText}' is defined in terms of itself"
+        hint: "a unit constant may only read constants that do not read it back".string
+    )
+    return true
+}
+
+# unfoldedCallWhy -- a unit-level call with no value. Its arguments run first,
+# so a constant one names with no value is the reason -- a definition naming
+# itself through it among them, a ring the evaluator does not walk, as it runs
+# no call; then a call of a function, or of a method of a constant, runs only
+# at run time and is named as written: "'twice' has no compile-time value".
+unfoldedCallWhy: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    scope: ztypes.declid
+    nid: zast.nodeid
+    visiting: ListVal zast.nodeid
+} out bool is {
+    call: callRefAt :ast :nid
+    ai: u64
+    for ai < call.nargs loop {
+        arg: argRefAt :ast nid: (zast.callArgAt :ast nid: call.nid i: ai)
+        ai = ai + 1
+        an: atomNameId :ast n: (ast.nodes.get i: arg.operation)
+        if an.isZero.not then {
+            if (constNameClosesRing
+                :st
+                :scope
+                :ast
+                :unitDecl
+                nid: arg.operation
+                nameId: an
+                :visiting
+            ) then {
+                return true
+            }
+            if (unfoldedWhy :ast :st :unitDecl :scope nid: arg.operation :visiting) then return true
+        }
+    }
+    named: calleeFieldFnTid :st :scope :ast :unitDecl callableId: call.callable
+    cn: ast.nodes.get i: call.callable
+    if named.isZero when cn.dottedpath then {
+        held: st.typing.constFail
+        rv: evalConstNode :st :scope :ast :unitDecl nid: cn.parent
+        st.typing.constFail = held
+        if rv.kind.none.not then named = constValueTid :st :scope :ast v: rv
+    }
+    if named.isZero then {
+        (reportUnfolded
+            :st
+            :ast
+            :nid
+            width: 1
+            msg: "a call has no compile-time value".string
+            hint: "only `error` and the string constant methods are evaluated at compile time".string
+        )
+        return true
+    }
+    ctx: typeExprText :ast nid: call.callable
+    (reportUnfolded
+        :st
+        :ast
+        :nid
+        width: 1
+        msg: "'\{ctx}' has no compile-time value"
+        hint: "only a function body can call it: it runs there, at run time".string
+    )
     return true
 }
 
@@ -66933,7 +67229,7 @@ unfoldedNameWhy: function {
         dn: ast.nodes.get i: cdo.node
         if dn.namedoperation then defOp = dn.operation
         cdo.drop
-        if defOp.isZero.not when (isComputedConstantDef :ast nid: defOp) then {
+        if defOp.isZero.not when (constDefNeedsValue :st scope: od :ast :unitDecl nid: defOp) then {
             # a ring of constants is a cycle, which the evaluator reports
             if (visiting.contains item: defOp) then return true
             visiting.append from: defOp
