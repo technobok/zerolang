@@ -117,6 +117,8 @@ Table of Contents</div>
 </li>
 <li><a href="#parseerror">parseerror</a>
 </li>
+<li><a href="#utf8error">utf8error</a>
+</li>
 <li><a href="#bytes-and-byteview">bytes and byteView</a>
 </li>
 <li><a href="#path-and-pathview">path and pathview</a>
@@ -213,6 +215,7 @@ operation can fail for reasons the caller needs to handle
 <li><a href="#result"><strong>ResultRV</strong></a> -- <code>union { err: e  ok: T } as { T: AnyRef.generic  e: anyval.generic }</code></li>
 <li><a href="#result"><strong>resultval</strong></a> -- <code>variant { err: e  ok: t } as { t: anyval.generic  e: anyval.generic }</code></li>
 <li><a href="#parseerror"><strong>parseerror</strong></a> -- <code>variant { empty: null  invalidDigit: null  overflow: null }</code></li>
+<li><a href="#utf8error"><strong>utf8error</strong></a> -- <code>record { validUpTo: u64 }</code></li>
 </ul>
 <p><strong>Byte and Path typedefs</strong></p>
 <ul>
@@ -992,7 +995,11 @@ the leading sign on signed parses, or the decimal point on
 <code>parseF64</code>)</li>
 <li><code>overflow</code> -- magnitude exceeds the target type's range</li>
 </ul>
-<h2 id="bytes-and-byteview"><a href="#bytes-and-byteview">19. bytes and byteView</a></h2>
+<h2 id="utf8error"><a href="#utf8error">19. utf8error</a></h2>
+<p>The error <code>ByteView.stringView</code> gives for bytes that are not UTF-8:
+<code>utf8error { validUpTo: u64 }</code>. The first <code>validUpTo</code> bytes are
+valid UTF-8, and the first invalid sequence starts there.</p>
+<h2 id="bytes-and-byteview"><a href="#bytes-and-byteview">20. bytes and byteView</a></h2>
 <p>Two typedef classes for binary data: <code>Bytes</code> is an owned,
 growable buffer; <code>ByteView</code> is a readonly borrowed view into
 one. The underlying storage is <code>(ListVal u8)</code> / <code>(ListViewVal
@@ -1013,7 +1020,18 @@ as a non-owned parameter.</p>
   b.append from: 72.u8
   b.append from: 105.u8
   v: b.byteView</code></pre>
-<h2 id="path-and-pathview"><a href="#path-and-pathview">20. path and pathview</a></h2>
+<p><strong>Strings as bytes, and back.</strong> <code>byteView</code> on a <code>String</code>, a
+<code>StringView</code> or a <code>text</code> reads its bytes in place as a
+<code>ByteView</code>: nothing is copied, and the source is pinned as its
+<code>stringView</code> pins it (a <code>text</code> pins nothing). <code>ByteView.stringView</code>
+reads bytes back as text: it checks that they are UTF-8 and answers a
+<code>StringView</code> over the same bytes, or a <code>utf8error</code> saying where the
+first invalid sequence starts.</p>
+<pre><code class="language-zerolang">  s: "hi".string
+  for each b: s.byteView loop print "\{b}"
+  r: s.byteView.stringView
+  match r case ok then print "text \{r}" case err then print "not UTF-8 from byte \{r.validUpTo}"</code></pre>
+<h2 id="path-and-pathview"><a href="#path-and-pathview">21. path and pathview</a></h2>
 <p>Typedef classes over <code>String</code> / <code>StringView</code> for filesystem
 paths. The wrapping gives I/O signatures a distinct path name and
 a place for path-specific methods (join / parent / basename /
@@ -1021,7 +1039,7 @@ extension / normalize) as they land. Until then, string
 operations flow through via the typedef rule.</p>
 <p><strong>View lifetime.</strong> Same as <code>StringView</code> / <code>ByteView</code> -- a
 <code>PathView</code> locks its source <code>Path</code>.</p>
-<h2 id="box"><a href="#box">21. box</a></h2>
+<h2 id="box"><a href="#box">22. box</a></h2>
 <p>Generic reftype wrapper over a <strong>valtype</strong> (the bound rejects
 reftypes -- they are already references). Converts a valtype
 into a heap-allocated reftype; its C representation is a bare
@@ -1039,7 +1057,7 @@ argument (<code>(Result (Box filestat) E: IoError)</code>).</p>
 <p>Construction is routed through the unified call dispatch; see
 <a href="./compiler.html">compiler</a>. Destruction frees the heap copy
 on scope exit.</p>
-<h2 id="typedef"><a href="#typedef">22. typedef</a></h2>
+<h2 id="typedef"><a href="#typedef">23. typedef</a></h2>
 <p>Zero-overhead wrapper type. <code>typedef</code> is a declarator, not a type
 of the system unit: a definition names its one base type, and the
 wrapper takes the base's family:</p>
@@ -1047,14 +1065,14 @@ wrapper takes the base's family:</p>
 <p>This declares <code>Path</code> as a typedef over <code>String</code>: a distinct
 type in signatures but with full backward compatibility to
 <code>String</code>'s operations. See <a href="./spec.html#typedef">spec</a>.</p>
-<h2 id="tag"><a href="#tag">23. tag</a></h2>
+<h2 id="tag"><a href="#tag">24. tag</a></h2>
 <p>Generic record that carries a variant / union discriminator's
 storage type. The <code>tag: tag</code> field in numeric records and user
 variants tells the compiler how wide the discriminator is.
 Parameterised by <code>t</code>: <code>tag of: u8</code> / <code>tag of: u16</code> / etc.
 Rarely referenced by user code directly -- the compiler emits
 the tag field and accesses it internally.</p>
-<h2 id="error"><a href="#error">24. error</a></h2>
+<h2 id="error"><a href="#error">25. error</a></h2>
 <p>Compile-time error. Invoking <code>error msg: ...</code> at type-check
 time emits the message as a compile error and aborts
 compilation. Used in generic bodies and conditional code paths
@@ -1068,7 +1086,7 @@ that must be statically dead; the <code>never</code> return type lets
       if LIMIT &gt; 8 then error msg: "LIMIT must be at most 8"
       print "LIMIT is \{LIMIT}"
   }</code></pre>
-<h2 id="panic"><a href="#panic">25. panic</a></h2>
+<h2 id="panic"><a href="#panic">26. panic</a></h2>
 <p>Runtime terminal error. <code>panic msg: ...</code> prints
 <code>zpanic: &lt;msg&gt;</code> to stderr and exits the process with status
 <code>1</code>. Use <code>panic</code> for programmer errors that should never occur
@@ -1092,7 +1110,7 @@ numeric cast overflow, stringView bounds) also funnel through
 <p>Panics are terminal: there is no <code>recover</code> mechanism. The
 <code>never</code> return type ensures any code after a <code>panic</code> is
 statically unreachable.</p>
-<h2 id="return"><a href="#return">26. return</a></h2>
+<h2 id="return"><a href="#return">27. return</a></h2>
 <p>Return from the enclosing function. Spelled as a function for
 uniformity with the control-flow dispatch model -- <code>return x</code>
 is a call with a single positional argument.</p>
@@ -1106,7 +1124,7 @@ applies.</p>
 return-ownership annotation; see <a href="./ownership.html">ownership</a>
 for <code>.borrow</code> / <code>.view</code> interactions and the
 lock-escape rules for view returns.</p>
-<h2 id="break"><a href="#break">27. break</a></h2>
+<h2 id="break"><a href="#break">28. break</a></h2>
 <p>Leaves the enclosing loop. Takes no argument. The <code>never</code> return
 type propagates through the enclosing block. Declared in
 <code>system.z</code> as a native statement and re-exported by <code>core</code>, like
@@ -1116,7 +1134,7 @@ type propagates through the enclosing block. Declared in
       if i == 50 then break
       i = i + 1
   }</code></pre>
-<h2 id="continue"><a href="#continue">28. continue</a></h2>
+<h2 id="continue"><a href="#continue">29. continue</a></h2>
 <p>Goes on to the enclosing loop's next iteration. Takes no argument.
 Declared and re-exported as <code>break</code> is.</p>
 <pre><code class="language-zerolang">  i: 0

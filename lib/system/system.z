@@ -57,6 +57,7 @@ public: unit {
     :ResultRV
     :resultval
     :parseerror
+    :utf8error
     :wide
     :carried
     :divmod
@@ -1693,6 +1694,11 @@ String: class is native as {
     # a borrowed view over these bytes. It copies nothing, so it must not
     # outlive the String it came from
     stringView: function {t: this.view} outx StringView is native
+    # the bytes, read in place as a ByteView: it copies nothing and pins the
+    # String as stringView does
+    byteView: function {t: this.view} outx collections.ByteView is {
+        return (viewBytes s: t.stringView)
+    }
     # a borrowed view over the bytes in [from, to), counted in BYTES. It does
     # not check that the ends fall on codepoint boundaries
     substring: function {t: this.view from: u64 to: u64} outx StringView is native
@@ -1742,6 +1748,10 @@ String: class is native as {
 StringView: class is native as {
     # the byte count of the viewed range
     length: function {t: this.view} out u64 is native
+    # the viewed bytes, read in place as a ByteView over the same memory
+    byteView: function {t: this.view} outx collections.ByteView is {
+        return (viewBytes s: t)
+    }
     # an OWNED copy of the viewed bytes. The view borrows, so this is what
     # outlives the source
     string: function {t: this.view} out String is native
@@ -1973,6 +1983,11 @@ text: record is native as {
     # the text as a StringView: the bytes are the program's, so the view keeps
     # nothing locked
     stringView: function {t: this.view} outx StringView is native
+    # the text's bytes, read in place: the bytes are the program's, so the view
+    # keeps nothing locked
+    byteView: function {t: this.view} outx collections.ByteView is {
+        return (viewBytes s: t.stringView)
+    }
     # byte equality
     ==: function {t: this.view rhs: type} out bool is native
     # true when the two differ in length or in any byte
@@ -2384,6 +2399,15 @@ resultval: variant {
     # only ever wanted the value
     or: function {t: this.view d: t} out t is native
 }
+
+# utf8error -- bytes that are not UTF-8 (ByteView.stringView): the first
+# `validUpTo` of them are, and the first invalid sequence starts there
+utf8error: record {
+    validUpTo: u64
+}
+
+# viewBytes -- the bytes `s` views, as a ByteView over the same memory
+viewBytes: function {s: StringView.view} outx collections.ByteView is native
 
 # parseerror -- error variants for stringView numeric-parse methods
 # (parseI64 / parseU64 / parseF64). Valtype variant: all arms are

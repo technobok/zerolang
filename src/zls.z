@@ -384,29 +384,11 @@ transportReadable: function {tp: Transport.view millis: i32} out (ResultVR bool 
 # `this.snapshots`, so sending stays legal while those fields are locked
 # (e.g. publishAll sends inside a docs iteration).
 
-# the bytes of `s`, for a Writer
-bytesOf: function {s: StringView} out Bytes is {
-    b: Bytes
-    i: u64
-    n: s.length
-    for i < n loop {
-        bo: s.byteAt :i
-        match (
-            bo
-        ) case some then {
-            b.append from: bo
-        } case none then null
-        i = i + 1
-    }
-    return b
-}
-
 # write every byte of `s`, looping until the transport has taken them all: a
 # single write may take fewer than it was offered, and a partial LSP frame is
 # a protocol error rather than a short message.
 writeAll: function {s: StringView tp: Transport} is {
-    b: bytesOf :s
-    bv: b.byteView
+    bv: s.byteView
     wr: transportWrite :tp :bv
     match (
         wr
@@ -9688,20 +9670,10 @@ printUsage: function is {
 
 # announcePort -- tell whoever started `zls --listen` which port it listens
 # on: the one asked for, or the free one the system chose for port 0, which a
-# launcher can only learn this way. One line on stdout, written straight to
-# fd 1 -- print would hold it in a buffer while stdout is a pipe.
+# launcher can only learn this way. One line on stdout, which print hands to
+# the operating system at once, a pipe on the other end or not.
 announcePort: function {port: u16} is {
-    line: "zls: listening on 127.0.0.1:\{port}"
-    line.appendByte b: 10
-    b: bytesOf s: line.stringView
-    bv: b.byteView
-    w: io.stdout
-    wr: w.write from: bv
-    match (
-        wr
-    ) case ok then null case err then {
-        io.eprintln "zls: could not write the listening port"
-    }
+    print "zls: listening on 127.0.0.1:\{port}"
 }
 
 # language-server entry point: dispatch on the transport flag

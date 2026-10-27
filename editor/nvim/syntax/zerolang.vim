@@ -80,7 +80,7 @@ syn match zerolangBuiltinType /\<\%(array\|str\|text\|List\|ListRef\|ListVal\|Li
 syn match zerolangBuiltinType /\<\%(Map\|MapRR\|MapRV\|MapVR\|MapVV\|MapKeyIter\|MapItemIter\|MapEntry\|MapKeyIterRV\|MapKeyIterVR\|MapKeyIterVV\|MapItemIterRV\|MapItemIterVR\|MapItemIterVV\|MapEntryRV\|MapEntryVR\|MapEntryVV\)\>/
 syn match zerolangBuiltinType /\<\%(Path\|PathView\|IoError\|Reader\|Writer\|Closer\|Seeker\|seekorigin\|File\|openmode\)\>/
 syn match zerolangBuiltinType /\<\%(IdMapR\|IdMapV\|IdMapEntryR\|IdMapEntryV\|IdMapItemIterR\|IdMapItemIterV\|IdSet\|IdSetIter\)\>/
-syn match zerolangBuiltinType /\<\%(CpIter\|LinesIter\|Splitter\|TextReader\|intliteral\|floatliteral\|textliteral\|idkey\|staticindex\|staticmember\|staticlist\|parseerror\)\>/
+syn match zerolangBuiltinType /\<\%(CpIter\|LinesIter\|Splitter\|TextReader\|intliteral\|floatliteral\|textliteral\|idkey\|staticindex\|staticmember\|staticlist\|parseerror\|utf8error\)\>/
 " Constants / literal values
 syn match zerolangBuiltinConst /\<\%(null\|never\|true\|false\|_\)\>/
 " Predeclared functions, streams, and context words

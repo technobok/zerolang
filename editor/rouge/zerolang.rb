@@ -100,7 +100,7 @@ module Rouge
           i128 i16 i32 i64 i8
           idkey intliteral intrange iterator meta
           never
-          null openmode optionval panic parseerror print staticindex staticlist staticmember
+          null openmode optionval panic parseerror print staticindex staticlist staticmember utf8error
           public resultval return seekorigin stderr
           stdin stdout str stringJoin tag text textliteral
           this true u128 u16
