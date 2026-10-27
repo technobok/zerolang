@@ -1858,6 +1858,7 @@ runLspCases: function {r: Runner} is {
         if fn.endsWith ".raw" then keep = true
         if keep then names.append fn.copy
     }
+    lspListenCase :r zlsB: zlsB.stringView
     names.sort
     for each cf: names loop {
         (lspCase
@@ -1868,6 +1869,123 @@ runLspCases: function {r: Runner} is {
             cv: cf.stringView
         )
     }
+}
+
+# lspListenCase -- `zls --listen 0` end to end over a socket: the server
+# takes a free port and says which on its stdout, a client connects to that
+# port, `shutdown` is answered, and `exit` ends the server with status 0. A
+# server that kept the port to itself could never be reached, and the
+# transcript cases all go through --replay.
+lspListenCase: function {r: Runner zlsB: StringView} is {
+    outP: "\{r.tmp.stringView}/lsp_listen.out"
+    argv: List String
+    argv.append zlsB.string
+    argv.append "--listen".string
+    argv.append "0".string
+    s: (os.spawnAsync
+        :argv
+        cwd: ""
+        outPath: outP.stringView
+        errPath: os.nullDevice.stringView
+    )
+    children: List os.Child
+    match (
+        s
+    ) case ok then children.append from: s.take case err then {
+        print "FAIL(lsp) listen (spawn)"
+        r.fails = r.fails + 1
+        return
+    }
+    deadline: os.monotonicMillis + (r.timeoutSecs.i64 * 1000)
+    port: awaitListenPort path: outP.stringView :deadline
+    want: frameLsp src: "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":null}"
+    got: String
+    if port != 0 then got = listenExchange :port :deadline n: want.length
+    st: reapWithin :children :deadline
+    if got.stringView == want when st == 0 then {
+        r.passN = r.passN + 1
+    } else {
+        print "FAIL(lsp) listen (port \{port}: answered \{got.length} of \{want.length} bytes, exit \{st})"
+        r.fails = r.fails + 1
+    }
+}
+
+# awaitListenPort -- the port `zls --listen` announces in its stdout file at
+# `path`, read again every 10 ms until `deadline`: 0 if it never comes
+awaitListenPort: function {path: StringView deadline: i64} out u16 is {
+    port: listenPort :path
+    for port == 0 loop {
+        if os.monotonicMillis > deadline then return 0
+        os.sleepMillis ms: 10
+        port = listenPort :path
+    }
+    return port
+}
+
+# listenPort -- the port in the "zls: listening on 127.0.0.1:<port>" line of
+# the file at `path`, or 0 while it has not been written yet
+listenPort: function {path: StringView} out u16 is {
+    c: slurp :path
+    pre: "zls: listening on 127.0.0.1:"
+    for each ln: c.stringView.lines loop {
+        if (ln.startsWith prefix: pre) then {
+            digits: ln.substring from: pre.length to: ln.length
+            pr: digits.parseU64
+            if pr.ok when pr <= 65535 then return pr.u16.orPanic
+        }
+    }
+    return 0
+}
+
+# listenExchange -- connect to `port`, send `shutdown` then `exit`, and read
+# until `n` bytes of answer have come, the server closes, or `deadline`
+listenExchange: function {port: u16 deadline: i64 n: u64} out String is {
+    got: String
+    cr: net.connect :port
+    match cr case ok then null case err then return got
+    req: (frameLsp
+        src: "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"shutdown\"}\n{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}"
+    )
+    b: bytesOf s: req.stringView
+    bv: b.byteView
+    wr: cr.write from: bv
+    if wr.err then return got
+    buf: Bytes
+    for (buf.length < n) and (os.monotonicMillis <= deadline) loop {
+        pr: cr.pollReadable timeoutMillis: 100
+        if pr.err then break
+        if pr then {
+            rr: cr.read into: buf max: 4096
+            if rr.err then break
+            if rr == 0 then break
+        }
+    }
+    for each c: buf loop got.appendByte b: c
+    return got
+}
+
+# bytesOf -- the bytes of `s`, for a Writer
+bytesOf: function {s: StringView} out Bytes is {
+    b: Bytes
+    i: u64
+    for i < s.length loop {
+        c: s.byteAt :i
+        match c case some then b.append from: c case none then null
+        i = i + 1
+    }
+    return b
+}
+
+# reapWithin -- the exit status of the one child in `children`, killing it
+# once `deadline` has passed (a killed child's status is 137)
+reapWithin: function {children: List os.Child deadline: i64} out i32 is {
+    for true loop {
+        w: os.waitAny :children
+        if w.pid != 0 then return w.status
+        if os.monotonicMillis > deadline then (children.getMut i: 0).kill
+        os.sleepMillis ms: 10
+    }
+    return -1
 }
 
 # lspCase -- one transcript, framed (`.msgs`) or raw (`.raw`), replayed
