@@ -29450,14 +29450,16 @@ nameNamesType: function {
 }
 
 # declNamesInstantiation -- a unit-level definition whose value instantiates a
-# generic template (`B8: (Buffer cap: 8)`): it names the instance, a type. Read
-# off what resolution already recorded -- the definition's type is the instance
-# -- so nothing is resolved to answer.
+# generic template (`B8: (Buffer cap: 8)`) or a generic unit (`wi: (wrap t:
+# i64)`): it names the instance, a type. Read off what resolution already
+# recorded, so nothing is resolved to answer. A call-shaped CONSTANT is a value
+# even when its type is an instance: `AT: G.indexOf "#"` is an option.
 declNamesInstantiation: function {
     st: zenv.ZSymbolTable.view
     ast: Ast.view
     declId: ztypes.declid
 } out bool is {
+    if (st.typing.instantiatedAliases.has item: declId) then return true
     dt: ztypes.tid
     isCall: false
     ddo: st.typing.decls.get i: declId
@@ -29465,6 +29467,7 @@ declNamesInstantiation: function {
     dn: ast.nodes.get i: ddo.node
     if dn.namedoperation then isCall = (ast.nodes.get i: dn.operation).call
     if isCall.not or dt.isZero then return false
+    if (st.reg.typetypeOf typeId: dt) != ztypes.ztypetype.unitType then return false
     return (st.reg.genericOriginOf tid: dt).isZero.not
 }
 
@@ -65561,7 +65564,10 @@ resolveInstantiatedAlias: function {
     if mt.isZero then return false
     mtid: mt
     adecl: declOfUnitDef :st :scope :unitDecl nameId: (nameIdOf :ast name: defName)
-    if adecl.isZero.not then st.typing.declSetType declId: adecl typeId: mtid
+    if adecl.isZero.not then {
+        st.typing.declSetType declId: adecl typeId: mtid
+        st.typing.instantiatedAliases.add item: adecl
+    }
     cu: (declTypeIdOf
         :st
         declId: (constOwnerDeclFor :st :scope :ast :unitDecl :defName)
