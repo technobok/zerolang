@@ -6995,12 +6995,14 @@ addTypeMembers: function {
     skipNumeric: bool
     # offer the members the type's `public:` block leaves out
     privateOk: bool
+    # the `.` follows a value, where a member of the type is not offered
+    onValue: bool
 } is {
     match (
         o
     ) case some then {
         {
-            addTypeMembersIn :prog :o :tid :sink :skipNumeric :privateOk
+            addTypeMembersIn :prog :o :tid :sink :skipNumeric :privateOk :onValue
         }
     } case none then null
 }
@@ -7054,6 +7056,7 @@ addTypeMembersIn: function {
     sink: (MapRV String v: u8)
     skipNumeric: bool
     privateOk: bool
+    onValue: bool
 } is {
     # a unit's children are its definitions, not members: addUnitMembers
     # handles those, and declMemberList excludes them by design
@@ -7075,12 +7078,23 @@ addTypeMembersIn: function {
             :privateOk
         ).not then {
             k: 5.u8
-            if (
-                (o.reg.typetypeOf typeId: (pt8.get i: mk8)) == ztypes.ztypetype.functionType
-            ) then k = 2
+            isFn: (o.reg.typetypeOf typeId: (pt8.get i: mk8)) == ztypes.ztypetype.functionType
+            if isFn then k = 2
             md: o.typing.declMemberIdOf parentTypeId: tid nameId: (pi8.get i: mk8)
             if md.isZero.not when (o.typing.decls.get i: md).kind.armDecl then k = 20
-            addCand :sink name: cn.stringView kind: k
+            # a member of the TYPE (`create`) is not reached through a value,
+            # by the checker's own rule
+            typeOnly: (
+                isFn and
+                onValue and
+                (ztypecheck.memberIsTypeOnly
+                    st: o
+                    bt: tid
+                    cnId: (pi8.get i: mk8)
+                    mo: (pt8.get i: mk8)
+                )
+            )
+            if typeOnly.not then addCand :sink name: cn.stringView kind: k
         }
         mk8 = mk8 + 1
     }
@@ -7446,10 +7460,10 @@ addLiteralMembers: function {
     bits: bool
     sink: (MapRV String v: u8)
 } is {
-    addTypeMembers :prog :o tid: litTid :sink skipNumeric: false privateOk: false
+    addTypeMembers :prog :o tid: litTid :sink skipNumeric: false privateOk: false onValue: true
     dflt: literalDefaultTid :prog :o :litTid :bits
     if dflt.isZero then return
-    addTypeMembers :prog :o tid: dflt :sink skipNumeric: true privateOk: false
+    addTypeMembers :prog :o tid: dflt :sink skipNumeric: true privateOk: false onValue: true
 }
 
 # dotFrom -- index of the first `.` at or after `start` in base, or
@@ -7602,6 +7616,7 @@ addLiteralHead: function {
         :sink
         skipNumeric: false
         privateOk: false
+        onValue: true
     )
 }
 
@@ -8361,6 +8376,7 @@ addValueCompletions: function {
         :sink
         skipNumeric: false
         :privateOk
+        onValue: db.kind.typeBase.not
     )
     if db.kind.typeBase then return
     valtype: isValtypeOpt o: snap.st tid: db.tid

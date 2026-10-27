@@ -84,6 +84,7 @@ public: unit {
     :unitDeclOfName
     :filePathsOf
     :declMemberIsPrivate
+    :memberIsTypeOnly
     :publicAliasInternalNames
     :unitDeclOfTid
     :numKindOfTid
@@ -32892,10 +32893,7 @@ checkMemberNamespace: function {
         :mo
         :coerce
     )
-    if (memberDeclaresReceiver :st :bt :cnId :mo) then return true
-    isCreate: cnId == zast.wellKnown.slot.wkCreate
-    if isCreate.not when (st.typing.declMemberIsSynth parentTypeId: bt nameId: cnId
-    ) then return true
+    if (memberIsTypeOnly :st :bt :cnId :mo).not then return true
     (reportMemberNamespace
         :st
         :ast
@@ -33126,11 +33124,27 @@ markTypedefListViewUse: function {
     if lvD.isZero.not then st.typing.usedMemberDecl.add item: lvD
 }
 
+# memberIsTypeOnly -- the function member `cnId` of `bt` (of type `mo`) belongs
+# to the TYPE, so no instance reaches it: it declares no receiver -- `create`, a
+# shared function of the `as` section. A member the compiler synthesises other
+# than `create` takes its receiver implicitly. The checker refuses `t.create`
+# by it, and an editor offers on a value only what it does not mark.
+memberIsTypeOnly: function {
+    st: zenv.ZSymbolTable.view
+    bt: ztypes.tid
+    cnId: zast.nameid
+    mo: ztypes.tid
+} out bool is {
+    if (memberDeclaresReceiver :st :bt :cnId :mo) then return false
+    if cnId == zast.wellKnown.slot.wkCreate then return true
+    return (st.typing.declMemberIsSynth parentTypeId: bt nameId: cnId).not
+}
+
 # memberDeclaresReceiver -- the function member `cnId` of `bt` takes a receiver. A
 # member a mono MINTS for itself carries no parameter rows, so the question goes
 # to the template's declaration of it.
 memberDeclaresReceiver: function {
-    st: zenv.ZSymbolTable
+    st: zenv.ZSymbolTable.view
     bt: ztypes.tid
     cnId: zast.nameid
     mo: ztypes.tid
