@@ -37,6 +37,13 @@ typedef enum {
     CDEAD_LIVE_ARM_1
 } cdead_live_tag_t;
 
+/* an anonymous enum, live through its first enumerator alone: the enum is
+   one item, whichever of its constants C spells */
+enum {
+    CDEAD_LIVE_ANON_0,
+    CDEAD_LIVE_ANON_1
+};
+
 typedef void (*cdead_dead_fn_ft)(int);
 
 static const char cdead_dead_str[] = "unused";
@@ -78,6 +85,6 @@ int main(void) {
     cdead_live_t v = {1};
     cdead_live_count = cdead_live_add(v);
 #endif
-    printf("%d\n", cdead_live_count);
+    printf("%d\n", cdead_live_count + CDEAD_LIVE_ANON_0);
     return 0;
 }

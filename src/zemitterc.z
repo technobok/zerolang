@@ -4170,6 +4170,12 @@ Ctx: class {
     # the struct types the generated code spells (typeRefC, a fragment's
     # holes) while it is generated, which is before any type is written
     typeUses: IdSet ztypes.tid
+    # the ordinal variants written C spells a tag constant of (spelledTagConst):
+    # their enum is written, but their type name only where it is spelled
+    ordinalTagUses: IdSet ztypes.tid
+    # the ordinal variants reached only through their tag constants: written
+    # as their enum alone, with no type name (closeReachedTypes)
+    tagOnlyTypes: IdSet ztypes.tid
     # those closed over what each one's C spells in turn: its fields, arm
     # payloads, elements and the signatures of its used members. Only these
     # types are written
@@ -33681,13 +33687,10 @@ noteFnptrUse: function {ctx: Ctx tid: ztypes.tid} is {
 }
 
 # scalarTypeRefC -- the C scalar a type is held as, "" for one held otherwise.
-# An ordinal variant is held as a scalar, and its values are the tag constants
-# its enum declares: spelling it is a use of the enum.
+# An ordinal variant is held as a scalar: spelling it names neither its enum
+# nor its type (a value of it spells a tag constant, spelledTagConst).
 scalarTypeRefC: function {symtab: zenv.ZSymbolTable.view ctx: Ctx tid: ztypes.tid} out String is {
     ct: scalarCTypeFor :symtab :tid
-    if ct.length > 0 when (symtab.reg.typetypeOf typeId: tid) == ztypes.ztypetype.variantType then {
-        noteTypeUse :ctx :tid
-    }
     if ct.length > 0 then noteScalarTypeUse :symtab :ctx :tid
     return ct
 }
@@ -33726,6 +33729,14 @@ closeReachedTypes: function {ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: C
     todo: ListVal ztypes.tid
     for each u: ctx.typeUses loop todo.append u
     drainReach :symtab :ctx :todo
+    # an ordinal variant reached only through its tag constants is written as
+    # its enum alone
+    for each o: ctx.ordinalTagUses loop {
+        if (ctx.reachedTypes.has item: o).not then {
+            ctx.reachedTypes.add item: o
+            ctx.tagOnlyTypes.add item: o
+        }
+    }
     ctx.reachFixed = true
     demandTemplateEqs :ast :symtab :ctx
     demandWrittenDestroys :symtab :ctx
@@ -33815,7 +33826,13 @@ drainReach: function {symtab: zenv.ZSymbolTable.view ctx: Ctx todo: ListVal ztyp
         next: ListVal ztypes.tid
         typeReachEdges :symtab :ctx tid: t acc: next
         for each n: next loop {
-            if n.isZero.not when (ctx.reachedTypes.has item: n).not then todo.append n
+            # an ordinal variant is spelled as its C scalar wherever another
+            # type holds one: it is reached only by its own name or its tag
+            # constants
+            if n.isZero.not when (ctx.reachedTypes.has item: n).not when (isOrdinalVariant
+                :symtab
+                tid: n
+            ).not then todo.append n
         }
     }
 }
@@ -34009,7 +34026,8 @@ tagConstOf: function {
 
 # spelledTagConst -- tagConstOf for C being written: a tag constant is
 # declared by its type's enum, so until the reached types are fixed it is a
-# use of that type (closeReachedTypes).
+# use of that type (closeReachedTypes) -- of an ordinal variant's enum alone,
+# whose type name is a use of its own.
 spelledTagConst: function {
     ast: Ast.view
     ctx: Ctx
@@ -34017,7 +34035,13 @@ spelledTagConst: function {
     tid: ztypes.tid
     armId: zast.nameid
 } out String is {
-    if ctx.reachFixed.not then ctx.typeUses.add item: tid
+    if ctx.reachFixed.not then {
+        if (isOrdinalVariant :symtab :tid) then (ctx.ordinalTagUses.add
+            item: tid
+        ) else (ctx.typeUses.add
+            item: tid
+        )
+    }
     return (tagConstOf :ast :ctx :symtab :tid :armId)
 }
 
@@ -36548,6 +36572,8 @@ emitC: function {
         fnptrWritten: IdSet ztypes.tid
         fnptrPassDone: false
         typeUses: IdSet ztypes.tid
+        ordinalTagUses: IdSet ztypes.tid
+        tagOnlyTypes: IdSet ztypes.tid
         reachedTypes: IdSet ztypes.tid
         reachFixed: false
         fnJobs: ListVal fnjob
@@ -46973,6 +46999,38 @@ closeStructBody: function {ctx: Ctx.view tid: ztypes.tid cn: StringView buf: Str
     }
 }
 
+# emitVariantEnum -- a variant's enum of arm tag constants: its tag type, or for
+# an ordinal (`ctype` its C scalar) an enum that names no type -- its tag type is
+# never spelled -- and the ordinal's own type where written C spells it
+emitVariantEnum: function {
+    ast: Ast.view
+    ctx: Ctx
+    symtab: zenv.ZSymbolTable.view
+    tid: ztypes.tid
+    aidsNm: (ListVal zast.nameid).view
+    ctype: StringView
+    cn: StringView
+    buf: String.borrow
+} is {
+    if ctype.length > 0 then buf.append "enum {\n" else buf.append "typedef enum {\n"
+    for each aname: aidsNm loop {
+        tg: spelledTagConst :ast :ctx :symtab :tid armId: aname
+        tv: armTagValueText :symtab :tid armNameId: aname
+        lt: "    \{tg}\{tv},\n"
+        buf.append lt
+    }
+    if ctype.length == 0 then {
+        le: "} \{cn}_tag_t;\n"
+        buf.append le
+        return
+    }
+    buf.append "};\n"
+    if (ctx.tagOnlyTypes.has item: tid).not then {
+        lo: "typedef \{ctype} \{cn}_t;\n"
+        buf.append lo
+    }
+}
+
 # emitOneVariant -- tag enum + tagged struct (+ payload union when any
 # arm carries one) + the by-tag/value eq helper.
 emitOneVariant: function {
@@ -46996,29 +47054,16 @@ emitOneVariant: function {
     if aidsNm.length == 0 then return
     preEmitEmbeddedTypes :ast :symtab :ctx ids: aids :buf
     vc: spelledCname :ctx :tid
-    buf.append "typedef enum {\n"
-    ai: u64
-    an: aidsNm.length
-    for ai < an loop {
-        aname: aidsNm.get i: ai
-        tg: spelledTagConst :ast :ctx :symtab :tid armId: aname
-        tv: armTagValueText :symtab :tid armNameId: aname
-        lt: "    \{tg}\{tv},\n"
-        buf.append lt
-        ai = ai + 1
-    }
-    le: "} \{vc}_tag_t;\n"
-    buf.append le
     # An ORDINAL is its own discriminator. The struct would hold the tag and
     # nothing else, so the type IS the tag's storage -- the enum stays for the
-    # constants, which are the arm ordinals. Comparison is `==` (binopKeyOf
-    # routes it to @scalar), so there is no comparator to emit either.
+    # constants, which are the arm ordinals, and names no type: its tag type is
+    # never spelled. The type is named only where written C spells it.
+    # Comparison is `==` (binopKeyOf routes it to @scalar), so there is no
+    # comparator to emit either.
     ovc: ordinalVariantCType :symtab :tid
-    if ovc.length > 0 then {
-        lo: "typedef \{ovc} \{vc}_t;\n"
-        buf.append lo
-        return
-    }
+    emitVariantEnum :ast :ctx :symtab :tid :aidsNm ctype: ovc.stringView cn: vc.stringView :buf
+    if ovc.length > 0 then return
+    an: aidsNm.length
     openStructBody :ctx :tid cn: vc.stringView :buf
     tsc: tagStorageCType :symtab :tid
     if tsc.length == 0 then {

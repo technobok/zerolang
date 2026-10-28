@@ -1252,7 +1252,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2387037
+ALLOC_BASELINE := 2387616
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1971,7 +1971,7 @@ deadcode-guard: bin/zc
 # of every kind, and live ones only a careless reader misses: the reader must
 # report exactly CDEAD_PROBE there before its count is trusted. The baseline is
 # the dead items the emitter writes today (corpus, then zc); lower it as it falls.
-CDEAD_BASELINE := 6954 195
+CDEAD_BASELINE := 6236 195
 CDEAD_PROBE := cdead_dead_fn cdead_dead_fn_ft cdead_dead_inline cdead_dead_leaf \
 	cdead_dead_macro cdead_dead_proto_t cdead_dead_str cdead_dead_t cdead_dead_vtable_t
 
@@ -2065,6 +2065,9 @@ def classify(ch):
         if tm and b >= 0 and tm.group(1) not in names: names.append(tm.group(1))
         if re.match(r'typedef\s+enum\b', t) and b >= 0: names += enumerators(t[b:])
         return ('type', names)
+    # an anonymous enum is one item, owned by every constant it declares
+    if re.match(r'enum\s*\{', t) and b >= 0:
+        return ('type', enumerators(t[b:]))
     m = re.match(r'(?:(?:static|const|volatile|extern|inline)\s+)*(struct|union|enum)\s+(\w+)\s*([{;])', t)
     if m and (m.group(3) == ';' or t.endswith('};') and not re.search(r'\}\s*\w+\s*(\[[^\]]*\])?\s*(=|;)', t)):
         names = [m.group(2)]
