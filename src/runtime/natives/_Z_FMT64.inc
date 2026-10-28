@@ -4,6 +4,7 @@
    or interpolates goes through here. Returns the length; writes no NUL, as
    z_fmt_i128 does not -- the caller appends exactly that many bytes. Loaded
    only for a program that interpolates an integer. */
+/*@@row @prelude.fmt_u64 demand=@fmt_u64@@*/
 static int z_fmt_u64(char* out, uint64_t v) {
     char tmp[20];
     int n = 0;
@@ -14,7 +15,8 @@ static int z_fmt_u64(char* out, uint64_t v) {
     for (int i = 0; i < n; i++) out[i] = tmp[n - 1 - i];
     return n;
 }
-
+/*@@end@@*/
+/*@@row @prelude.fmt_i64 demand=@fmt_i64 needs=@fmt_u64@@*/
 static int z_fmt_i64(char* out, int64_t v) {
     if (v < 0) {
         out[0] = '-';
@@ -22,3 +24,4 @@ static int z_fmt_i64(char* out, int64_t v) {
     }
     return z_fmt_u64(out, (uint64_t)v);
 }
+/*@@end@@*/

@@ -8,46 +8,55 @@
    instead: zc refuses a constant zero, and no other constant can trap there.
    i32 and i64 always come here, where a constant -1 still needs its wrap; at
    -O2 the C compiler folds the tests away for a constant. */
+/*@@row @prelude.div_i32 demand=@div_i32 needs=@panic@@*/
 static inline int32_t z_div_i32(int32_t a, int32_t b) {
     if (b == 0) z_panic("division by zero");
     if (b == -1) return (int32_t)(0u - (uint32_t)a);
     return a / b;
 }
-
+/*@@end@@*/
+/*@@row @prelude.rem_i32 demand=@rem_i32 needs=@panic@@*/
 static inline int32_t z_rem_i32(int32_t a, int32_t b) {
     if (b == 0) z_panic("division by zero");
     if (b == -1) return 0;
     return a % b;
 }
-
+/*@@end@@*/
+/*@@row @prelude.div_i64 demand=@div_i64 needs=@panic@@*/
 static inline int64_t z_div_i64(int64_t a, int64_t b) {
     if (b == 0) z_panic("division by zero");
     if (b == -1) return (int64_t)(0u - (uint64_t)a);
     return a / b;
 }
-
+/*@@end@@*/
+/*@@row @prelude.rem_i64 demand=@rem_i64 needs=@panic@@*/
 static inline int64_t z_rem_i64(int64_t a, int64_t b) {
     if (b == 0) z_panic("division by zero");
     if (b == -1) return 0;
     return a % b;
 }
-
+/*@@end@@*/
+/*@@row @prelude.div_u32 demand=@div_u32 needs=@panic@@*/
 static inline uint32_t z_div_u32(uint32_t a, uint32_t b) {
     if (b == 0) z_panic("division by zero");
     return a / b;
 }
-
+/*@@end@@*/
+/*@@row @prelude.rem_u32 demand=@rem_u32 needs=@panic@@*/
 static inline uint32_t z_rem_u32(uint32_t a, uint32_t b) {
     if (b == 0) z_panic("division by zero");
     return a % b;
 }
-
+/*@@end@@*/
+/*@@row @prelude.div_u64 demand=@div_u64 needs=@panic@@*/
 static inline uint64_t z_div_u64(uint64_t a, uint64_t b) {
     if (b == 0) z_panic("division by zero");
     return a / b;
 }
-
+/*@@end@@*/
+/*@@row @prelude.rem_u64 demand=@rem_u64 needs=@panic@@*/
 static inline uint64_t z_rem_u64(uint64_t a, uint64_t b) {
     if (b == 0) z_panic("division by zero");
     return a % b;
 }
+/*@@end@@*/

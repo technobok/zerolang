@@ -4250,6 +4250,8 @@ Ctx: class {
     # the rows a file writes in place, which no unit walk writes: every piece,
     # and the row whose fragment the header writes (z_panic's)
     rowsInPlace: IdSet u64
+    # the prelude fragments holding pieces, by name: written a piece at a time
+    piecedFrags: Set String
     # the units the rows belong to, each once, in the order the table first
     # names them: where a fragment's plain type-name hole is looked up after
     # the system unit (ioCanonTidAny). The system unit itself is not listed
@@ -22450,6 +22452,9 @@ interpScalarPart: function {
         if nk.has when (kindSigned k: nk.kind).not when (kindBits k: nk.kind) == 64 then {
             fmtFn = "z_fmt_u64"
             cast = "uint64_t"
+            preludeNeed :ctx memb: "@fmt_u64"
+        } else {
+            preludeNeed :ctx memb: "@fmt_i64"
         }
         (appendFormattedNum
             :ctx
@@ -35773,6 +35778,39 @@ loadPieces: function {ctx: Ctx runtimeDir: StringView} is {
         pp: nativePath :runtimeDir frag: pf.stringView
         loadPiecesOf :ctx path: pp.stringView
     }
+    # the prelude rows' fragments: one holding pieces is written by its row, a
+    # piece at a time (ioFrag)
+    n: ctx.fragUnits.length
+    i: u64
+    for i < n loop {
+        isP: false
+        {
+            u: ctx.fragUnits.get :i
+            isP = (ctx.nativeWords.slotOf text: u.stringView) == nativeWord.slot.unitPrelude
+        }
+        if isP when (ctx.rowsInPlace.has item: i).not then {
+            fl: (ctx.fragNames.get :i).copy
+            for each fr: (fl.stringView.split sep: ",") loop {
+                if fr.length > 0 then loadFragPieces :ctx :runtimeDir frag: fr
+            }
+        }
+        i = i + 1
+    }
+}
+
+# loadFragPieces -- loadPiecesOf for the prelude fragment `frag`, when it holds
+# pieces: it is marked to be written a piece at a time
+loadFragPieces: function {ctx: Ctx runtimeDir: StringView frag: StringView} is {
+    p: nativePath :runtimeDir :frag
+    has: false
+    {
+        txt: readTemplateCached :ctx path: p.stringView
+        has = txt.stringView.contains needle: "/*@@row "
+    }
+    if has.not then return
+    if (ctx.piecedFrags.has item: frag.string) then return
+    ctx.piecedFrags.add item: frag.string
+    loadPiecesOf :ctx path: p.stringView
 }
 
 # loadFixedPieces -- loadPiecesOf for the fixed file `name`
@@ -36260,6 +36298,7 @@ emitC: function {
         fragTypeTids: ListVal ztypes.tid
         fragNeeds: (IdMapR u64 V: String)
         rowsInPlace: IdSet u64
+        piecedFrags: Set String
         fragUnitDecls: ListVal ztypes.declid
         demandGatedTids: IdSet ztypes.tid
         usedTypeIds: IdSet ztypes.tid
@@ -39727,6 +39766,12 @@ ioFrag: function {
     buf: String.borrow
 } is {
     p: nativePath :runtimeDir :frag
+    if (ctx.piecedFrags.has item: frag.string) then {
+        raw: readTemplateCached :ctx path: p.stringView
+        pc: piecedText :ctx text: raw.stringView
+        buf.append (fillFragmentHoles :ast :symtab :ctx text: pc.take path: p.stringView)
+        return
+    }
     f: loadIoFragment :ast :symtab :ctx path: p.stringView
     buf.append f
 }
