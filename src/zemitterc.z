@@ -2025,6 +2025,18 @@ UnitReq: class {
     cdefs: String
 }
 
+# memberWord -- the template members an instance's text is cut into
+# (`/*@@member NAME@@*/`): a member written C calls is recorded by its instance
+# and its slot here (noteMemberUse), never by its spelling.
+memberWord: list {
+    destroy: "destroy"
+    create: "create"
+    grow: "grow"
+    append: "append"
+    set: "set"
+    pop: "pop"
+} out staticlist StringView
+
 # nativeWord -- the words natives.tbl and the runtime fragments spell that the
 # loader acts on: the pointer-arguments and value-form flags, the unit-order
 # row, the two runtime units it orders specially, the two type holes the
@@ -2075,6 +2087,9 @@ NativeHead: class {
     call: String
     # `pulls=`: the other units' members demanding this one demands
     pulls: String
+    # `members=`: the template members of other instances the row's fragments
+    # call, each `<canon>.<member>` (List_String.append)
+    members: String
     # `link=`, `cfeature=`, `nocc=`, `arch=`, `os=`, `csrc=`, `cdefs=`: on an
     # `@unit.` row, the unit's requirements of the C toolchain (UnitReq)
     link: String
@@ -2114,6 +2129,7 @@ NativeHead: class {
             eq: false
             call: String
             pulls: String
+            members: String
             link: String
             cfeature: String
             nocc: String
@@ -2199,6 +2215,12 @@ NativeHead: class {
             plo
         ) case some then {
             this.pulls = plo.string
+        } case none then null
+        mlo: f.stripPrefix p: "members="
+        match (
+            mlo
+        ) case some then {
+            this.members = mlo.string
         } case none then null
     }
 
@@ -2378,6 +2400,19 @@ noteConvMember: function {ctx: Ctx ast: Ast.view memb: String.take typeName: Str
     seen: (ctx.nativeConvMemb.get key: memb).or d: tn
     if seen != tn then tn = zast.nameid.zero
     ctx.nativeConvMemb.set key: memb.take value: tn
+}
+
+# recordHeadFragment -- a table row's fragment: its `members=`, by the row it
+# becomes, then the row itself (recordFragmentRow)
+recordHeadFragment: function {ctx: Ctx h: NativeHead.view} is {
+    if h.members.length > 0 then ctx.fragMembers.set key: ctx.fragUnits.length value: h.members.copy
+    (recordFragmentRow
+        :ctx
+        key: h.key.stringView
+        frag: h.frag.stringView
+        dem: h.dem.stringView
+        need: h.need.stringView
+    )
 }
 
 # recordFragmentRow -- a fragment-backed row: its path, then the row's own
@@ -2568,15 +2603,7 @@ recordNativeRow: function {ctx: Ctx ast: Ast.view h: NativeHead.view body: Strin
         recordConvMember :ctx :ast key: h.key.stringView :body
     }
     if h.via.length > 0 then ctx.nativeVia.set key: h.key.copy value: h.via.copy
-    if h.frag.length > 0 then {
-        (recordFragmentRow
-            :ctx
-            key: h.key.stringView
-            frag: h.frag.stringView
-            dem: h.dem.stringView
-            need: h.need.stringView
-        )
-    }
+    if h.frag.length > 0 then recordHeadFragment :ctx :h
     recordRowBodies :ctx :h :body
 }
 
@@ -4252,6 +4279,16 @@ Ctx: class {
     rowsInPlace: IdSet u64
     # the prelude fragments holding pieces, by name: written a piece at a time
     piecedFrags: Set String
+    # the template members written C calls, each keyed by its instance and its
+    # memberWord slot (memberKey): a template's member section is written for an
+    # instance only where its member is here (sectionedText)
+    memberUses: IdSet u64
+    # the template members' vocabulary
+    memberWords: zast.Vocab
+    # the `members=` of the fragment rows that have one, by row
+    fragMembers: (IdMapR u64 V: String)
+    # the members an instance was written without: spelling one after is late
+    membersLeftOut: IdSet u64
     # the units the rows belong to, each once, in the order the table first
     # names them: where a fragment's plain type-name hole is looked up after
     # the system unit (ioCanonTidAny). The system unit itself is not listed
@@ -6325,6 +6362,7 @@ emitSvSubstringCall: function {
                 :symtab
                 :ctx
                 :call
+                mono: ztypes.tid.zero
                 cb: svc.stringView
                 m: "substring"
                 lead: lead.stringView
@@ -8517,6 +8555,8 @@ noteDestroyUse: function {symtab: zenv.ZSymbolTable.view ctx: Ctx tid: ztypes.ti
         return
     }
     ctx.destroyUsed.add item: tid
+    # an instance's destructor is a member of its template
+    noteMemberUse :ctx mono: tid member: memberWord.slot.destroy
     parts: ListVal ztypes.tid
     destroyParts :symtab :ctx :tid acc: parts
     for each p: parts loop {
@@ -10850,6 +10890,7 @@ emitEmptyColCreate: function {
         )
         if isSized when zo.isZero.not then {
             zcb: spelledCname :ctx tid: zmid
+            noteMemberUse :ctx mono: zmid member: memberWord.slot.create
             return (stating :facts from: callFacts text: "\{zcb}_create()")
         }
     }
@@ -10877,6 +10918,7 @@ emitEmptyColCreate: function {
     if isCol.not then return "".string
     cb: spelledCname :ctx tid: mid
     ccap: listCapArg :ast :symtab :ctx n: (ast.nodes.get i: call.nodeid)
+    noteMemberUse :ctx mono: mid member: memberWord.slot.create
     return (stating :facts from: callFacts text: "\{cb}_create((uint64_t)\{ccap})")
 }
 
@@ -11141,6 +11183,7 @@ emitListMethodCall: function {
     recvR: colRecvRef :ctx bn: bn.stringView vid: bvid
     if mnId == zast.wellKnown.slot.wkAppend then {
         v: colArg :ast :symtab :ctx :call label: zast.wellKnown.slot.wkFrom consumes: true
+        noteMemberUse :ctx mono: bt member: memberWord.slot.append
         e0: "\{cb}_append(\{recvR}, \{v})"
         return (stating
             :facts
@@ -11179,6 +11222,7 @@ emitListMethodCall: function {
             :symtab
             :ctx
             :call
+            mono: bt
             cb: cb.stringView
             m: "slice"
             lead: recvR.stringView
@@ -11200,6 +11244,7 @@ emitListMethodCall: function {
             :symtab
             :ctx
             :call
+            mono: bt
             cb: cb.stringView
             m: "set"
             lead: recvR.stringView
@@ -11211,6 +11256,7 @@ emitListMethodCall: function {
         )
     }
     if mnId == zast.wellKnown.slot.wkPop then {
+        noteMemberUse :ctx mono: bt member: memberWord.slot.pop
         e3: "\{cb}_pop(\{recvR})"
         return (stating :facts from: callFacts text: e3)
     }
@@ -11220,6 +11266,7 @@ emitListMethodCall: function {
             :symtab
             :ctx
             :call
+            mono: bt
             cb: cb.stringView
             m: "insert"
             lead: recvR.stringView
@@ -11320,6 +11367,7 @@ emitArrayMethodCall: function {
             :symtab
             :ctx
             :call
+            mono: bt
             cb: cb.stringView
             m: "set"
             lead: recvR.stringView
@@ -11418,6 +11466,7 @@ emitSpanMethodCall: function {
             :symtab
             :ctx
             :call
+            mono: bt
             cb: cb.stringView
             m: "set"
             lead: recvR.stringView
@@ -11434,6 +11483,7 @@ emitSpanMethodCall: function {
             :symtab
             :ctx
             :call
+            mono: bt
             cb: cb.stringView
             m: "slice"
             lead: recvR.stringView
@@ -11861,6 +11911,7 @@ emitMapMethodCall: function {
             :symtab
             :ctx
             :call
+            mono: bt
             cb: cb.stringView
             m: "set"
             lead: bn.stringView
@@ -11946,6 +11997,7 @@ emitIdMapMethodCall: function {
             :symtab
             :ctx
             :call
+            mono: bt
             cb: cb.stringView
             m: "set"
             lead: recvR.stringView
@@ -12444,6 +12496,8 @@ emitOrderedPair: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
+    # the instance whose member `m` is called (0 for a runtime one)
+    mono: ztypes.tid
     cb: StringView
     m: StringView
     lead: StringView
@@ -12453,6 +12507,7 @@ emitOrderedPair: function {
     bForm: argform
 } out String is {
     ord: orderPairArgs :ast :symtab :ctx :call :a :aForm :b :bForm
+    if mono.isZero.not then noteMemberUse :ctx :mono member: (ctx.memberWords.slotOf text: m)
     r: orderFinish :ctx st: ord
     opened: r.length > 0
     r.append cb
@@ -13419,6 +13474,7 @@ emitCtorDefaultsFill: function {
     }
     noteCreateUse :ctx :tid
     rcb: spelledCname :ctx :tid
+    noteMemberUse :ctx mono: tid member: memberWord.slot.create
     return (stating :facts from: callFacts text: "\{rcb}_create(\{args})")
 }
 
@@ -17046,6 +17102,7 @@ implicitZeroValue: function {
         isSized: (zso == strO) or (zso == arrO)
         if isSized when zso.isZero.not then {
             zsc: spelledCname :ctx tid: zm
+            noteMemberUse :ctx mono: zm member: memberWord.slot.create
             return (stating :facts from: callFacts text: "\{zsc}_create()")
         }
     }
@@ -17062,7 +17119,11 @@ implicitZeroValue: function {
             (isMapOriginOf :symtab :ctx tid: zmt) or
             (isIdCollectionOriginOf :symtab :ctx tid: zmt)
         )
-        if takesCap then return (stating :facts from: callFacts text: "\{zmc}_create((uint64_t)0)")
+        if takesCap then {
+            noteMemberUse :ctx mono: zm member: memberWord.slot.create
+            return (stating :facts from: callFacts text: "\{zmc}_create((uint64_t)0)")
+        }
+        noteMemberUse :ctx mono: zm member: memberWord.slot.create
         return (stating :facts from: callFacts text: "\{zmc}_create()")
     }
     return (emitCtorDefaultsFill :ast :symtab :ctx :tid :facts)
@@ -17599,11 +17660,10 @@ emitNestedCollectionBase: function {
     if (isListOriginOf :symtab :ctx tid: nlid) then {
         nlcb: spelledCname :ctx tid: nlid
         recvB: colRecvRef :ctx bn: baseAtom vid: bs9vid
-        if mnId == zast.wellKnown.slot.wkPop then return (stating
-            :facts
-            from: callFacts
-            text: "\{nlcb}_pop(\{recvB})"
-        )
+        if mnId == zast.wellKnown.slot.wkPop then {
+            noteMemberUse :ctx mono: nlid member: memberWord.slot.pop
+            return (stating :facts from: callFacts text: "\{nlcb}_pop(\{recvB})")
+        }
         if mnId == zast.wellKnown.slot.wkSort then return (stating
             :facts
             from: callFacts
@@ -19018,6 +19078,7 @@ emitCollectionMemberRead: function {
         }
         lcb2: spelledCname :ctx tid: bstamp
         if mnId == zast.wellKnown.slot.wkPop then {
+            noteMemberUse :ctx mono: bstamp member: memberWord.slot.pop
             return (stating :facts from: callFacts text: "\{lcb2}_pop(\{recvB2})")
         }
         if mnId == zast.wellKnown.slot.wkSort then {
@@ -23776,12 +23837,14 @@ emitListBind: function {
     } else {
         if (forexprValue n: avn) then {
             # list comprehension: `xs: for ... loop { expr }` create + populate
+            noteMemberUse :ctx mono: ltid member: memberWord.slot.create
             lc0: "\{ind}\{lcb}_t \{nm} = \{lcb}_create((uint64_t)0);\n"
             buf.append lc0
             (emitListComprehension
                 :ast
                 :symtab
                 :ctx
+                listTid: ltid
                 forNode: avn
                 listCb: lcb.stringView
                 listVar: nm
@@ -23826,6 +23889,7 @@ emitListBind: function {
                 # fallback leg is what fallback-guard exists to keep shrinking.
                 lcap: listCapArg :ast :symtab :ctx n: avn
                 flushArgHoists :ctx :ind :tmp :buf
+                noteMemberUse :ctx mono: ltid member: memberWord.slot.create
                 lb1: "\{ind}\{lcb}_t \{nm} = \{lcb}_create((uint64_t)\{lcap});\n"
                 buf.append lb1
             }
@@ -23885,6 +23949,7 @@ emitHeapColBind: function {
     } else {
         hcap: listCapArg :ast :symtab :ctx n: avn
         flushArgHoists :ctx :ind :tmp :buf
+        noteMemberUse :ctx mono: ltid member: memberWord.slot.create
         hb0: "\{ind}\{cb}_t* \{nm} = \{cb}_create((uint64_t)\{hcap});\n"
         buf.append hb0
     }
@@ -25998,11 +26063,13 @@ emitGenLocalBind: function {
     if (forexprValue n: vn) then {
         buf.append (destroyLineC :symtab :ctx tid: rtsid nm: fld.stringView :ind)
         lcb: spelledCname :ctx tid: rtsid
+        noteMemberUse :ctx mono: rtsid member: memberWord.slot.create
         buf.append "\{ind}\{fld} = \{lcb}_create((uint64_t)0);\n"
         (emitListComprehension
             :ast
             :symtab
             :ctx
+            listTid: rtsid
             forNode: vn
             listCb: lcb.stringView
             listVar: fld.stringView
@@ -31771,12 +31838,14 @@ emitControlBindValue: function {
     if (emitWithBindValue :ast :symtab :ctx n: vn :rtid :nm :ct :ind :tmp :buf) then return true
     if (forexprValue n: vn).not then return false
     lcb: spelledCname :ctx tid: rtid
+    noteMemberUse :ctx mono: rtid member: memberWord.slot.create
     lc0: "\{ind}\{lcb}_t \{nm} = \{lcb}_create((uint64_t)0);\n"
     buf.append lc0
     (emitListComprehension
         :ast
         :symtab
         :ctx
+        listTid: rtid
         forNode: vn
         listCb: lcb.stringView
         listVar: nm
@@ -32400,12 +32469,15 @@ emitListComprehension: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     forNode: astnode.view
+    # the list instance the comprehension appends to
+    listTid: ztypes.tid
     listCb: StringView
     listVar: StringView
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
 } is {
+    noteMemberUse :ctx mono: listTid member: memberWord.slot.append
     match (
         forNode
     ) case forexpr then {
@@ -35825,7 +35897,7 @@ loadPiecesOf: function {ctx: Ctx path: StringView} is {
     txt: readTemplateCached :ctx path: p.stringView
     pos: u64
     for pos < txt.length loop {
-        sp: nextPiece text: txt.stringView from: pos
+        sp: nextPiece text: txt.stringView from: pos openM: "/*@@row "
         if sp.found.not then return
         if sp.whole.not then {
             (emitFail
@@ -35869,9 +35941,11 @@ piecespan: record {
     next: u64
 }
 
-# nextPiece -- the first piece of `text` at or after `from`. Each marker owns
-# the line break that follows it, so a piece left out leaves no blank line.
-nextPiece: function {text: StringView from: u64} out piecespan is {
+# nextPiece -- the first piece of `text` at or after `from` that opens with
+# `openM` (`/*@@row ` for a runtime file's piece, `/*@@member ` for a template's
+# member). Each marker owns the line break that follows it, so a piece left out
+# leaves no blank line.
+nextPiece: function {text: StringView from: u64 openM: StringView} out piecespan is {
     sp: (piecespan
         found: false
         whole: false
@@ -35882,7 +35956,6 @@ nextPiece: function {text: StringView from: u64} out piecespan is {
         bodyTo: 0
         next: text.length
     )
-    openM: "/*@@row "
     endM: "/*@@end@@*/"
     oo: (text.substring :from to: text.length).indexOf needle: openM
     if oo.none then return sp
@@ -35915,7 +35988,7 @@ piecedText: function {ctx: Ctx.view text: StringView} out String is {
     res: String
     pos: u64
     for pos < text.length loop {
-        sp: nextPiece :text from: pos
+        sp: nextPiece :text from: pos openM: "/*@@row "
         res.append (text.substring from: pos to: sp.at)
         if sp.whole.not then {
             res.append (text.substring from: sp.at to: text.length)
@@ -35929,6 +36002,162 @@ piecedText: function {ctx: Ctx.view text: StringView} out String is {
         if row > 0 when (rowDemandFired :ctx i: row - 1) then (res.append
             (text.substring from: sp.bodyFrom to: sp.bodyTo)
         )
+        pos = sp.next
+    }
+    return res
+}
+
+# memberKey -- the key a template member is recorded by: its instance, and its
+# slot in memberWord
+memberKey: function {mono: ztypes.tid member: u64} out u64 is {
+    return mono.u64 * 64 + member
+}
+
+# noteMemberUse -- written C calls template member `member` (a memberWord
+# slot) of instance `mono`: the instance writes its section. A member its
+# instance was already written without names a function the C never defines.
+noteMemberUse: function {ctx: Ctx mono: ztypes.tid member: u64} is {
+    k: memberKey :mono :member
+    if (ctx.memberUses.has item: k) then return
+    if (ctx.membersLeftOut.has item: k) then {
+        cn: ctxCname :ctx tid: mono
+        (emitFail
+            :ctx
+            what: "a template member of \{cn} called after its instance was written"
+            line: 0
+        )
+        return
+    }
+    ctx.memberUses.add item: k
+}
+
+# sectionedText -- an instance's template text as this program writes it: the
+# text outside its member sections whole (the instance's types), and a section
+# `/*@@member NAME needs=a,b@@*/ ... /*@@end@@*/` where written C calls
+# member NAME of instance `mono` (noteMemberUse; a destructor through
+# noteDestroyUse), or a kept
+# section of it needs NAME. A section left out is remembered (membersLeftOut).
+# Each section's name and needs are held as offsets into the text: an instance
+# is written for every container a program names, so its sections cost no copy.
+sectionedText: function {ctx: Ctx mono: ztypes.tid text: StringView} out String is {
+    # per section: name from, name to, needs from, needs to
+    marks: ListVal u64
+    kept: ListVal bool
+    sectionHeads :ctx :mono :text :marks :kept
+    closeSectionNeeds :text :marks :kept
+    return (writeSections :ctx :mono :text :marks :kept)
+}
+
+# sectionHeads -- each member section's name and needs, in order, and whether
+# written C calls it
+sectionHeads: function {
+    ctx: Ctx.view
+    mono: ztypes.tid
+    text: StringView
+    marks: ListVal u64
+    kept: ListVal bool
+} is {
+    pos: u64
+    for pos < text.length loop {
+        sp: nextPiece :text from: pos openM: "/*@@member "
+        if sp.whole.not then return
+        hd: text.substring from: sp.headFrom to: sp.headTo
+        nameTo: sp.headFrom + ((hd.indexOf needle: " ").or d: hd.length)
+        needFrom: sp.headTo
+        needTo: sp.headTo
+        with no: (hd.indexOf needle: "needs=") do match (
+            no
+        ) case some then {
+            needFrom = sp.headFrom + no + 6
+            rest: text.substring from: needFrom to: sp.headTo
+            needTo = needFrom + ((rest.indexOf needle: " ").or d: rest.length)
+        } case none then null
+        marks.append sp.headFrom
+        marks.append nameTo
+        marks.append needFrom
+        marks.append needTo
+        slot: ctx.memberWords.slotOf text: (text.substring from: sp.headFrom to: nameTo)
+        kept.append (ctx.memberUses.has item: (memberKey :mono member: slot))
+        pos = sp.next
+    }
+}
+
+# closeSectionNeeds -- keep every section a kept one needs, until none is added
+closeSectionNeeds: function {text: StringView marks: (ListVal u64).view kept: ListVal bool} is {
+    grew: true
+    for grew loop {
+        grew = false
+        k: u64
+        for k < kept.length loop {
+            if (kept.get i: k) when (keepNeedsOf :text :marks :kept :k) then grew = true
+            k = k + 1
+        }
+    }
+}
+
+# keepNeedsOf -- keep each section kept section `k` needs: true when one was
+# not kept already. The needs are walked by offset: a view of the text held
+# across keepSection would lock it.
+keepNeedsOf: function {
+    text: StringView marks: (ListVal u64).view kept: ListVal bool k: u64
+} out bool is {
+    grew: false
+    at: marks.get i: k * 4 + 2
+    to: marks.get i: k * 4 + 3
+    for at < to loop {
+        cm: ((text.substring from: at :to).indexOf needle: ",").or d: to - at
+        if cm > 0 when (keepSection :text :marks :kept from: at to: at + cm) then grew = true
+        at = at + cm + 1
+    }
+    return grew
+}
+
+# keepSection -- keep the section named by the text from `from` to `to`: true
+# when it was not kept already
+keepSection: function {
+    text: StringView marks: (ListVal u64).view kept: ListVal bool from: u64 to: u64
+} out bool is {
+    name: text.substring :from :to
+    j: u64
+    for j < kept.length loop {
+        if (text.substring from: (marks.get i: j * 4) to: (marks.get i: j * 4 + 1)) == name then {
+            if (kept.get i: j) then return false
+            kept.set i: j val: true
+            return true
+        }
+        j = j + 1
+    }
+    return false
+}
+
+# writeSections -- the text with the kept sections and without the others,
+# each left out recorded by its C name
+writeSections: function {
+    ctx: Ctx
+    mono: ztypes.tid
+    text: StringView
+    marks: (ListVal u64).view
+    kept: (ListVal bool).view
+} out String is {
+    res: String
+    i: u64
+    pos: u64
+    for pos < text.length loop {
+        sp: nextPiece :text from: pos openM: "/*@@member "
+        res.append (text.substring from: pos to: sp.at)
+        if sp.whole.not then {
+            res.append (text.substring from: sp.at to: text.length)
+            return res
+        }
+        if (kept.get :i) then {
+            res.append (text.substring from: sp.bodyFrom to: sp.bodyTo)
+        } else {
+            slot: (ctx.memberWords.slotOf
+                text: (text.substring from: (marks.get i: i * 4) to: (marks.get i: i * 4 + 1))
+            )
+            ctx.membersLeftOut.add item: (memberKey :mono member: slot)
+        }
+        i = i + 1
         pos = sp.next
     }
     return res
@@ -36299,6 +36528,10 @@ emitC: function {
         fragNeeds: (IdMapR u64 V: String)
         rowsInPlace: IdSet u64
         piecedFrags: Set String
+        memberUses: IdSet u64
+        memberWords: (zast.Vocab.create block: memberWord)
+        fragMembers: (IdMapR u64 V: String)
+        membersLeftOut: IdSet u64
         fragUnitDecls: ListVal ztypes.declid
         demandGatedTids: IdSet ztypes.tid
         usedTypeIds: IdSet ztypes.tid
@@ -36976,6 +37209,17 @@ listElemsDestroyC: function {
     return "    for (uint64_t _di = 0; _di < p->length; _di++) {\n\{edc}    }\n"
 }
 
+# listAddOnsGrow -- the List members written after the instance's own text
+# (insert, extend, resize: their own fragments) call its grow
+listAddOnsGrow: function {symtab: zenv.ZSymbolTable.view ctx: Ctx monoId: ztypes.tid} is {
+    callsGrow: (
+        (monoMemberUsed :symtab :monoId nameId: zast.wellKnown.slot.wkInsert) or
+        (monoMemberUsed :symtab :monoId nameId: zast.wellKnown.slot.wkExtend) or
+        (monoMemberUsed :symtab :monoId nameId: zast.wellKnown.slot.wkResize)
+    )
+    if callsGrow then noteMemberUse :ctx mono: monoId member: memberWord.slot.grow
+}
+
 # emitListMono -- substitute z_List.c.tmpl for a List instance + the
 # linear-scan contains companion (scalar element equality).
 emitListMono: function {
@@ -37003,7 +37247,9 @@ emitListMono: function {
         t3: applyTmpl text: t2 key: "DESTROY_ELEMS" val: delems.stringView
         lvm: listviewMethods :ctx :symtab :monoId nm: nm.stringView ect: ect.stringView
         t4: applyTmpl text: t3 key: "LISTVIEW_METHODS" val: lvm.stringView
-        buf.append t4
+        # insert, extend and resize, written after the instance, call its grow
+        listAddOnsGrow :symtab :ctx :monoId
+        buf.append (sectionedText :ctx mono: monoId text: t4.stringView)
         buf.append "\n"
     }
     # insert and extend are their own fragments, written only for an instance
@@ -37831,7 +38077,7 @@ emitSpanMemberOnDemand: function {
 # so gating on that emits it into every program -- which is what it did before
 # it had a declaration at all.
 listviewMethods: function {
-    ctx: Ctx.view
+    ctx: Ctx
     symtab: zenv.ZSymbolTable.view
     monoId: ztypes.tid
     nm: StringView
@@ -37857,6 +38103,7 @@ listviewMethods: function {
                     # undefined on one even for zero bytes -- as is indexing
                     # _this->data before grow has allocated anything
                     buf.append "    if (_from.length == 0) { return; }\n"
+                    noteMemberUse :ctx mono: monoId member: memberWord.slot.grow
                     m2: "    z_\{nm}_grow(_this, _this->length + _from.length);\n"
                     buf.append m2
                     m3: "    memcpy(&_this->data[_this->length], _from.data, _from.length * sizeof(\{ect}));\n"
@@ -39658,6 +39905,7 @@ emitRuntimeUnit: function {
         if isU when (ctx.rowsWritten.has item: i).not when (rowDemandFired :ctx :i) then {
             ctx.rowsWritten.add item: i
             closeRowNeeds :ctx
+            rowMemberUses :ast :symtab :ctx row: i
             fl: (ctx.fragNames.get :i).copy
             for each fr: (fl.stringView.split sep: ",") loop {
                 if fr.length > 0 then {
@@ -39682,6 +39930,31 @@ needsOutsidePrelude: function {ctx: Ctx.view from: u64} out bool is {
         i = i + 1
     }
     return false
+}
+
+# rowMemberUses -- the template members row `row`'s fragments call (its
+# `members=`): each `<canon>.<member>` is recorded by the C name the canon's
+# instance has
+rowMemberUses: function {ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx row: u64} is {
+    ml: String
+    {
+        mo: ctx.fragMembers.get key: row
+        match (
+            mo
+        ) case some then {
+            ml = mo.copy
+        } case none then null
+    }
+    for each one: (ml.stringView.split sep: ",") loop {
+        dot: one.lastIndexOf needle: "."
+        match (
+            dot
+        ) case some then {
+            mt: ioCanonTidAny :ast :symtab :ctx canon: (one.substring from: 0 to: dot)
+            sl: ctx.memberWords.slotOf text: (one.substring from: dot + 1 to: one.length)
+            if mt.isZero.not then noteMemberUse :ctx mono: mt member: sl
+        } case none then null
+    }
 }
 
 # closeRowNeeds -- register the `needs=` of every fired row, until a round
