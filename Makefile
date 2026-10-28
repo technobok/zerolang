@@ -105,7 +105,7 @@ NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 	perf-strict pre-push perf-elision any-guard typename-guard emitter-guard frontend-guard \
 	lifetime-guard user-native-guard shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard case-guard require-guard mode-parity zlink-rules-guard \
 	refusal-guard static-tcc-guard zlink-guard emit-set ident-set const-row-guard \
-	deadcode-guard cdead-guard cc-unused-guard static-value-guard alias-label-guard fwd-shape-guard eager-guard eager-lib-guard \
+	deadcode-guard cdead-guard cc-unused-guard piece-guard static-value-guard alias-label-guard fwd-shape-guard eager-guard eager-lib-guard \
 	highlight-guard view-guard fallback-guard clean native-guard generic-param-guard \
 	zl-full-guard natives-tbl-guard
 
@@ -188,7 +188,7 @@ ci:
 	@$(MAKE) --no-print-directory windows-due
 
 # ci-gates -- the gates ci runs in parallel, after perf-strict.
-ci-gates: style-lint zl-full-guard complexity-report warn-check pedantic-check emitter-guard typename-guard frontend-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard highlight-guard any-guard deadcode-guard cdead-guard cc-unused-guard static-value-guard eager-guard eager-lib-guard case-guard user-native-guard shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard readable-check test-tcc-heavy test-clang test-signed-ub test-math-arm64 test-sqlite-arm64 test-math-noasm test-portable-scalars test-mingw test-tcc-mingw test-msvc-wine test-msvc-corpus math-asm-guard matrix-guard constparity-guard docs-link-guard mode-parity ci-corpus
+ci-gates: style-lint zl-full-guard complexity-report warn-check pedantic-check emitter-guard typename-guard frontend-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard highlight-guard any-guard deadcode-guard cdead-guard cc-unused-guard piece-guard static-value-guard eager-guard eager-lib-guard case-guard user-native-guard shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard readable-check test-tcc-heavy test-clang test-signed-ub test-math-arm64 test-sqlite-arm64 test-math-noasm test-portable-scalars test-mingw test-tcc-mingw test-msvc-wine test-msvc-corpus math-asm-guard matrix-guard constparity-guard docs-link-guard mode-parity ci-corpus
 
 ci-corpus: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --heavy --jobs $(NPROC)
@@ -1252,7 +1252,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2367159
+ALLOC_BASELINE := 2370352
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1971,7 +1971,7 @@ deadcode-guard: bin/zc
 # of every kind, and live ones only a careless reader misses: the reader must
 # report exactly CDEAD_PROBE there before its count is trusted. The baseline is
 # the dead items the emitter writes today (corpus, then zc); lower it as it falls.
-CDEAD_BASELINE := 114814 530
+CDEAD_BASELINE := 60120 483
 CDEAD_PROBE := cdead_dead_fn cdead_dead_fn_ft cdead_dead_inline cdead_dead_leaf \
 	cdead_dead_macro cdead_dead_proto_t cdead_dead_str cdead_dead_t cdead_dead_vtable_t
 
@@ -2184,7 +2184,7 @@ cdead-guard: bin/zc
 # cdead_dead_fn and cdead_dead_str, so a compiler that stops warning cannot
 # pass. The baseline is today's warnings (gcc corpus, gcc zc, clang corpus,
 # clang zc); lower it as it falls. Skipped without clang.
-CC_UNUSED_BASELINE := 25199 401 26916 405
+CC_UNUSED_BASELINE := 25199 400 26916 404
 CC_UNUSED_FLAGS := -std=c17 -c -o /dev/null -Wunused-function -Wunused-variable -Wunused-const-variable
 CC_UNUSED_RE := warning: .*\[-Wunused-(function|variable|const-variable)
 
@@ -2215,6 +2215,225 @@ cc-unused-guard: bin/zc
 	else \
 	  echo "cc-unused-guard OK: unused static functions/variables:$$got (baseline $(CC_UNUSED_BASELINE))"; \
 	fi
+
+# piece-guard -- a piece of a runtime file is written only where written C
+# needs it (loadPieces in src/zemitterc.z), so every text that calls a piece
+# must say so: a natives.tbl row (its body, its fragments, its template) and
+# another piece by `needs=`, a builtin template by its `/*@@needs ...@@*/`
+# marker, and the emitter by `preludeNeed :ctx memb: "@<piece>"` in the same
+# definition that spells the name. Text outside every piece may call none. A
+# missing need is caught here whether or not a corpus program writes the call.
+# The markers must be whole, each key defined once, each piece closing the
+# #if it opens. The guard first runs on a copy with one table need and one
+# emitter record removed, and must report both.
+define PIECE_GUARD_PY
+import os, re, sys
+rt, emitter = sys.argv[1], sys.argv[2]
+OPEN, CLOSE, END = '/*@@row ', '@@*/', '/*@@end@@*/'
+IDENT = re.compile(r'[A-Za-z_@][\w@]*')
+errs = []
+
+def strip_c(t):
+    # comments and string/char literals out, line breaks kept
+    t = re.sub(r'/\*.*?\*/', lambda m: '\n' * m.group(0).count('\n'), t, flags=re.S)
+    t = re.sub(r'//[^\n]*', '', t)
+    return re.sub(r'"(?:\\.|[^"\\\n])*"|\'(?:\\.|[^\'\\\n])*\'', '""', t)
+
+def attrs(head):
+    w = head.split()
+    a = {}
+    for x in w[1:]:
+        k, _, v = x.partition('=')
+        a[k] = v
+    return w[0] if w else '', a
+
+def unit_of(key):
+    return key.split('.')[0].lstrip('@')
+
+def demands(key, a):
+    d = a.get('demand') or key.rsplit('.', 1)[-1]
+    return [x for x in d.split(',') if x]
+
+def needs_of(key, a):
+    u = unit_of(key)
+    out = []
+    for n in (a.get('needs', '') + ',' + a.get('pulls', '')).split(','):
+        if n:
+            out.append(tuple(n.split('.', 1)) if '.' in n else (u, n))
+    return out
+
+def defined(body):
+    # the names a piece defines: functions and prototypes, statics, typedefs,
+    # macros
+    names = set()
+    for ln in strip_c(body).split('\n'):
+        s = ln.strip()
+        m = re.match(r'#\s*define\s+([\w@]+)', s)
+        if m:
+            names.add(m.group(1)); continue
+        if s.startswith('#'):
+            continue
+        m = re.match(r'\}\s*([\w@]+)\s*;', s)
+        if m:
+            names.add(m.group(1)); continue
+        if re.match(r'(__extension__\s+)?typedef\b', s) and s.endswith(';') and '{' not in s:
+            names.add(IDENT.findall(s[:-1])[-1]); continue
+        if re.match(r'(static|extern)\b', s):
+            pre = s.split('=')[0].split(';')[0]
+            m = re.search(r'([\w@]+)\s*\(', pre)
+            if m and not re.match(r'(static|extern)\b[^(]*\(\s*\*', pre):
+                names.add(m.group(1))
+            else:
+                ids = IDENT.findall(re.sub(r'\[.*', '', pre))
+                if ids:
+                    names.add(ids[-1])
+    names.discard('if'); names.discard('for'); names.discard('while')
+    return names
+
+def ifdepth_ok(body):
+    d = 0
+    for ln in strip_c(body).split('\n'):
+        s = ln.strip()
+        if re.match(r'#\s*if', s): d += 1
+        elif re.match(r'#\s*endif', s):
+            d -= 1
+            if d < 0: return False
+    return d == 0
+
+# --- the pieces, in every runtime text file -----------------------------------
+pieces = []          # (key, attrs, body, file)
+outside = {}         # file -> its text outside pieces
+files = sorted([os.path.join(rt, f) for f in os.listdir(rt) if f.endswith('.inc') or f.endswith('.c.tmpl')] +
+               [os.path.join(rt, 'natives', f) for f in os.listdir(os.path.join(rt, 'natives')) if f.endswith('.inc')])
+for f in files:
+    t = open(f).read()
+    if '/*@@' not in t:
+        continue
+    pos, rest = 0, []
+    while True:
+        i = t.find(OPEN, pos)
+        if i < 0:
+            rest.append(t[pos:]); break
+        rest.append(t[pos:i])
+        h = t.find(CLOSE, i + len(OPEN))
+        e = t.find(END, i)
+        if h < 0 or e < 0 or h > e or t.find(OPEN, i + 1, e) >= 0:
+            errs.append(f'{f}: the piece marker at byte {i} is not closed by {END}')
+            break
+        key, a = attrs(t[i + len(OPEN):h])
+        body = t[h + len(CLOSE):e]
+        if not key.startswith('@prelude.'):
+            errs.append(f'{f}: piece {key} is not a prelude piece (@prelude.<name>)')
+        if not ifdepth_ok(body):
+            errs.append(f'{f}: piece {key} opens or closes an #if it does not close or open')
+        if re.search(r'(?<!@)@(?!@)', re.sub(r'@@.*?@@', '', body).replace('@String@', '').replace('@StringView@', '')):
+            errs.append(f'{f}: piece {key} spells an `@` that is not a String/StringView hole')
+        pieces.append((key, a, body, f))
+        pos = e + len(END)
+    outside[f] = ''.join(rest)
+keys = [p[0] for p in pieces]
+for k in set(keys):
+    if keys.count(k) > 1:
+        errs.append(f'piece {k} is defined {keys.count(k)} times')
+
+# --- every row that can fire: natives.tbl rows and the pieces ----------------
+rows = []            # (key, attrs, text it writes, where)
+for ln in open(os.path.join(rt, 'natives.tbl')):
+    s = ln.strip()
+    if not s.startswith('[') or ']' not in s:
+        continue
+    head, body = s[1:s.index(']')], s[s.index(']') + 1:].strip()
+    key, a = attrs(head)
+    text = body
+    for fr in [x for x in (a.get('frag', '') + ',' + a.get('destroy', '')).split(',') if x]:
+        p = os.path.join(rt, 'natives', fr + '.inc')
+        if os.path.exists(p):
+            text += '\n' + open(p).read()
+    if a.get('tmpl'):
+        p = os.path.join(rt, a['tmpl'])
+        if os.path.exists(p):
+            text += '\n' + open(p).read()
+    rows.append((key, a, text, 'natives.tbl [' + key + ']'))
+for key, a, body, f in pieces:
+    rows.append((key, a, body, f'{f} piece {key}'))
+by_demand = {}
+for key, a, _, _ in rows:
+    for d in demands(key, a):
+        by_demand.setdefault((unit_of(key), d), []).append((key, a))
+
+def closure(start):
+    seen, todo = set(), list(start)
+    while todo:
+        n = todo.pop()
+        if n in seen: continue
+        seen.add(n)
+        for key, a in by_demand.get(n, []):
+            todo.extend(needs_of(key, a))
+    return seen
+
+owner = {}           # defined name -> piece key, demand
+for key, a, body, f in pieces:
+    for n in defined(body):
+        owner[n] = (key, ('prelude', demands(key, a)[0]))
+
+def spelled(text):
+    return set(IDENT.findall(strip_c(text))) & set(owner)
+
+for key, a, text, where in rows:
+    names = spelled(text)
+    if not names: continue
+    cov = closure(needs_of(key, a) + [(unit_of(key), d) for d in demands(key, a)])
+    for n in sorted(names):
+        pk, dem = owner[n]
+        if pk != key and dem not in cov:
+            errs.append(f'{where} spells {n} (piece {pk}) and does not need it: add needs={dem[0]}.{dem[1]}')
+for f, t in outside.items():
+    for n in sorted(spelled(t)):
+        errs.append(f'{f} spells {n} (piece {owner[n][0]}) outside any piece, where nothing declares the need')
+# templates written from no row (the builtin collections): their own needs marker
+for f in files:
+    if not f.endswith('.c.tmpl'): continue
+    t = open(f).read()
+    m = re.search(r'/\*@@needs ([^@]*)@@\*/', t)
+    decl = [tuple(x.split('.', 1)) for x in (m.group(1).split(',') if m else []) if '.' in x]
+    cov = closure(decl)
+    for n in sorted(spelled(t)):
+        pk, dem = owner[n]
+        if dem not in cov:
+            errs.append(f'{f} spells {n} (piece {pk}) and its /*@@needs ...@@*/ marker does not name {dem[0]}.{dem[1]}')
+
+# --- the emitter: each top-level item that spells a piece's name records it --
+src = open(emitter).read().split('\n')
+items, cur = [], None
+for i, ln in enumerate(src):
+    if re.match(r'[A-Za-z]\w*:', ln):
+        cur = [i + 1, ln.split(':')[0], []]
+        items.append(cur)
+    if cur is not None and not ln.lstrip().startswith('#'):
+        cur[2].append(ln)
+for line, name, body in items:
+    code = '\n'.join(body)
+    got = set(re.findall(r'preludeNeed :ctx memb: "(@[\w@]+)"', code))
+    for n in sorted(set(re.findall(r'(?<![\w@\\])[A-Za-z_][\w]*', code)) & set(owner)):
+        pk, dem = owner[n]
+        if dem[1] not in got:
+            errs.append(f'{emitter}:{line} {name} spells {n} (piece {pk}) without preludeNeed :ctx memb: "{dem[1]}"')
+
+for e in errs:
+    print('piece-guard FAIL: ' + e)
+print(f'PIECES {len(pieces)} NAMES {len(owner)} FAILS {len(errs)}')
+sys.exit(1 if errs else 0)
+endef
+export PIECE_GUARD_PY
+
+piece-guard:
+	@d=$$(mktemp -d); cp -r src/runtime $$d/rt; \
+	python3 -c "import sys; p, z = sys.argv[1], sys.argv[2]; t = open(p + '/natives.tbl').read(); open(p + '/natives.tbl', 'w').write(t.replace('[system.f128.% needs=prelude.@quadmath]', '[system.f128.%]', 1)); s = open('src/zemitterc.z').read(); open(z, 'w').write(s.replace('        preludeNeed :ctx memb: \"@quadmath\"\n', '', 1))" $$d/rt $$d/z.z; \
+	got=$$(python3 -c "$$PIECE_GUARD_PY" $$d/rt $$d/z.z | grep -c 'FAIL.*quadmath'); \
+	if [ "$$got" != 2 ]; then \
+	  echo "piece-guard FAIL: a removed table need and emitter record give $$got reports, not 2"; rm -rf $$d; exit 1; \
+	fi; \
+	rm -rf $$d; python3 -c "$$PIECE_GUARD_PY" src/runtime src/zemitterc.z
 
 # static-value-guard -- every static value the emitter writes (`_zag<row>`) is
 # read by the C: a value no run-time code reaches is not written (clang's
@@ -2938,7 +3157,7 @@ view-guard:
 # is not live), and the emitFail and marker-site counts in src/zemitterc.z are
 # ratchets. A new refusal leg may raise EMITFAIL_BASELINE (say so in the commit);
 # a new fallback leg may not.
-EMITFAIL_BASELINE := 50
+EMITFAIL_BASELINE := 51
 MARKER_BASELINE := 24
 EXCS := $(NAMES:%=$(EXDIR)/%.c)
 fallback-guard: $(EXCS) bin/zc bin/zl bin/zls

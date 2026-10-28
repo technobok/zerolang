@@ -13,6 +13,8 @@
 #include <stdbool.h>
 #include <string.h>
 #include <math.h>
+/*@@row @prelude.quadmath demand=@quadmath@@*/
+/* libquadmath, which f128 calls: written only where written C calls it */
 #if defined(__SIZEOF_FLOAT128__) && !defined(__clang__)
 #include <quadmath.h>
 #elif defined(__SIZEOF_FLOAT128__)
@@ -65,6 +67,7 @@ extern int signbitq(__float128 x);
 extern __float128 scalbnq(__float128 x, int n);
 extern int ilogbq(__float128 x);
 #endif
+/*@@end@@*/
 #include <errno.h>
 #include <fcntl.h>
 #include <sys/stat.h>

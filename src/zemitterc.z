@@ -2891,10 +2891,7 @@ emitterFailure: function {what: String line: u32} out zast.ErrorData is {
     )
 }
 
-# loadFragment -- read a runtime fragment and fill its holes. Every fragment
-# on this path spells only `z_@String@` / `z_@StringView@`, so the two
-# bindings are the whole vocabulary and no registry lookup is needed -- which
-# is what lets the three unconditional loads run before Ctx exists.
+# loadFragment -- read a runtime fragment and fill its holes (fillStringHoles).
 loadFragment: function {
     path: StringView
     svC: StringView
@@ -2905,37 +2902,50 @@ loadFragment: function {
     match (
         rd
     ) case ok then {
-        bn: List String
-        bv: List String
-        bn.append from: "StringView".string
-        bv.append from: svC.string
-        bn.append from: "String".string
-        bv.append from: strC.string
-        ferr: List String
-        rwn: List String
-        rwv: List String
-        cur: (fillHoles
-            text: rd
-            :path
-            bindNames: bn
-            bindVals: bv
-            rawNames: rwn
-            rawVals: rwv
-            fails: ferr
-        )
-        fi: u64
-        fn: ferr.length
-        for fi < fn loop {
-            m: ferr.get i: fi
-            fails.append (emitterFailure what: m.copy line: 0)
-            fi = fi + 1
-        }
-        return cur
+        return (fillStringHoles text: rd :path :svC :strC :fails)
     } case err then {
         fails.append (emitterFailure what: "missing runtime fragment \{path}" line: 0)
         m: "/* zemitterc: missing runtime fragment \{path} */\n"
         return m
     }
+}
+
+# fillStringHoles -- fill a runtime text's holes. Every text on this path spells
+# only `z_@String@` / `z_@StringView@`, so the two bindings are the whole
+# vocabulary and no registry lookup is needed.
+fillStringHoles: function {
+    text: String
+    path: StringView
+    svC: StringView
+    strC: StringView
+    fails: List zast.ErrorData
+} out String is {
+    bn: List String
+    bv: List String
+    bn.append from: "StringView".string
+    bv.append from: svC.string
+    bn.append from: "String".string
+    bv.append from: strC.string
+    ferr: List String
+    rwn: List String
+    rwv: List String
+    cur: (fillHoles
+        :text
+        :path
+        bindNames: bn
+        bindVals: bv
+        rawNames: rwn
+        rawVals: rwv
+        fails: ferr
+    )
+    fi: u64
+    fn: ferr.length
+    for fi < fn loop {
+        m: ferr.get i: fi
+        fails.append (emitterFailure what: m.copy line: 0)
+        fi = fi + 1
+    }
+    return cur
 }
 
 # stringChunkText -- a stringchunk's text ("" for any other shape).
@@ -4228,6 +4238,9 @@ Ctx: class {
     # the row is written, so a helper row loaded by its demand gets what its
     # body calls as a called row does (the prelude is written after them all)
     fragNeeds: (IdMapR u64 V: String)
+    # the text of each piece of a fixed runtime file, by its row (loadPieces):
+    # a piece is written in place by its file, never by a unit walk
+    pieceText: (IdMapR u64 V: String)
     # the units the rows belong to, each once, in the order the table first
     # names them: where a fragment's plain type-name hole is looked up after
     # the system unit (ioCanonTidAny). The system unit itself is not listed
@@ -5561,6 +5574,12 @@ needsAddPulls: function {ctx: Ctx uname: StringView memb: StringView} is {
             } case none then null
         }
     }
+}
+
+# preludeNeed -- record that written C calls the prelude piece `memb`
+# (loadPieces): the piece is written only where something did.
+preludeNeed: function {ctx: Ctx memb: StringView} is {
+    needsAddM :ctx uname: "prelude" :memb
 }
 
 # needsHasM -- true when the (unit, member) pair was demanded.
@@ -22395,6 +22414,7 @@ interpScalarPart: function {
             :ops
         )
     } else if nk.has when nk.kind == ztypes.numkind.f128Type then {
+        preludeNeed :ctx memb: "@quadmath"
         (appendFormattedNum
             :ctx
             :sNm
@@ -35539,6 +35559,10 @@ assembleEmitOutput: function {
     codeBuf: StringView
     fnsBuf: StringView
 } is {
+    # the hash functions are the last C generated, so the runtime they call is
+    # demanded ahead of the prelude below
+    hashDefs: String
+    emitHashDefs ast: program :symtab :ctx buf: hashDefs
     # every body has emitted by now, so a need registered inside a type
     # method -- which emits after the runtime pass -- is still in time. This is
     # why `prelude` is a unit of its own: it goes into the header, ahead of the
@@ -35553,8 +35577,6 @@ assembleEmitOutput: function {
             :buf
         )
     }
-    hashDefs: String
-    emitHashDefs ast: program :symtab :ctx buf: hashDefs
     (buf.reserve
         n: (
             poolBuf.length +
@@ -35572,7 +35594,7 @@ assembleEmitOutput: function {
     buf.append ctx.lateDefs
     buf.append hashDefs
     ps: "\{runtimeDir}/z_start.inc"
-    buf.append (loadFragment path: ps.stringView svC: "" strC: "" fails: ctx.emitErrors)
+    buf.append (loadFixedFile :ctx path: ps.stringView)
     buf.append "int main(int argc, char* argv[]) {\n"
     if (needsHasM :ctx uname: "os" memb: "args") then {
         buf.append "    z_os_args_init(argc, argv);\n"
@@ -35590,7 +35612,7 @@ assembleEmitOutput: function {
 # includes (z_head.inc), z_panic, and the allocator wrappers everything else is
 # built on (z_alloc.inc). The prelude is the same bytes in every program but
 # for z_panic, which is the `@prelude.panic` row's fragment: a threaded
-# program's differs.
+# program's differs, and for the pieces each program's C calls (loadPieces).
 emitCHeader: function {
     libs: (List String).view
     # the C sources to build and link, one `zcsrc:` line each (applyUnitReqs)
@@ -35598,7 +35620,7 @@ emitCHeader: function {
     runtimeDir: StringView
     # the fragment z_panic is written from
     panicFrag: StringView
-    errs: List zast.ErrorData
+    ctx: Ctx
     buf: String.borrow
 } is {
     # the link libraries the reached units declared, so whatever drives the C
@@ -35621,11 +35643,159 @@ emitCHeader: function {
     }
     buf.append "\n"
     p0: "\{runtimeDir}/z_head.inc"
-    buf.append (loadFragment path: p0.stringView svC: "" strC: "" fails: errs)
+    buf.append (loadFixedFile :ctx path: p0.stringView)
     p1: nativePath :runtimeDir frag: panicFrag
-    buf.append (loadFragment path: p1.stringView svC: "" strC: "" fails: errs)
+    buf.append (loadFixedFile :ctx path: p1.stringView)
     p2: "\{runtimeDir}/z_alloc.inc"
-    buf.append (loadFragment path: p2.stringView svC: "" strC: "" fails: errs)
+    buf.append (loadFixedFile :ctx path: p2.stringView)
+}
+
+# loadPieces -- the pieces of the runtime's fixed files, registered as rows of
+# the prelude unit. A piece is the text between `/*@@row KEY attr=...@@*/` and
+# `/*@@end@@*/`; its head is read as a natives.tbl row's head is, so its
+# `demand=` and `needs=` decide it as they decide any row (rowDemandFired,
+# closeRowNeeds). It is written in place, by the file that holds it
+# (loadFixedFile), never by a unit walk. Both markers are C comments: a
+# compiler that knows no pieces writes the file whole, and the C compiles.
+loadPieces: function {ctx: Ctx runtimeDir: StringView} is {
+    loadPiecesOf :ctx :runtimeDir name: "z_head.inc"
+    loadPiecesOf :ctx :runtimeDir name: "z_alloc.inc"
+    loadPiecesOf :ctx :runtimeDir name: "z_String.inc"
+    loadPiecesOf :ctx :runtimeDir name: "z_StringView.inc"
+    loadPiecesOf :ctx :runtimeDir name: "z_hash.inc"
+    loadPiecesOf :ctx :runtimeDir name: "z_start.inc"
+}
+
+# loadPiecesOf -- loadPieces for the fixed file `name`
+loadPiecesOf: function {ctx: Ctx runtimeDir: StringView name: StringView} is {
+    p: "\{runtimeDir}/\{name}"
+    txt: readTemplateCached :ctx path: p.stringView
+    pos: u64
+    for pos < txt.length loop {
+        sp: nextPiece text: txt.stringView from: pos
+        if sp.found.not then return
+        if sp.whole.not then {
+            (emitFail
+                :ctx
+                what: "runtime file \{p}: the piece marker at byte \{sp.at} is not closed"
+                line: 0
+            )
+            return
+        }
+        h: (NativeHead.create
+            head: (txt.stringView.substring from: sp.headFrom to: sp.headTo)
+            words: ctx.nativeWords
+        )
+        bt: (txt.stringView.substring from: sp.bodyFrom to: sp.bodyTo).string
+        ctx.pieceText.set key: ctx.fragUnits.length value: bt.take
+        (recordFragmentRow
+            :ctx
+            key: h.key.stringView
+            frag: ""
+            dem: h.dem.stringView
+            need: h.need.stringView
+        )
+        pos = sp.next
+    }
+}
+
+# piecespan -- where the next piece of a fixed file lies (nextPiece)
+piecespan: record {
+    # a piece opens at or after the point searched from
+    found: bool
+    # its markers are whole: a head closed by `@@*/`, an end marker after it
+    whole: bool
+    # where its open marker starts
+    at: u64
+    # its head, between `/*@@row ` and `@@*/`
+    headFrom: u64
+    headTo: u64
+    # its text: from the line after the open marker up to the end marker
+    bodyFrom: u64
+    bodyTo: u64
+    # where the file's own text resumes, after the end marker's line
+    next: u64
+}
+
+# nextPiece -- the first piece of `text` at or after `from`. Each marker owns
+# the line break that follows it, so a piece left out leaves no blank line.
+nextPiece: function {text: StringView from: u64} out piecespan is {
+    sp: (piecespan
+        found: false
+        whole: false
+        at: text.length
+        headFrom: 0
+        headTo: 0
+        bodyFrom: 0
+        bodyTo: 0
+        next: text.length
+    )
+    openM: "/*@@row "
+    endM: "/*@@end@@*/"
+    oo: (text.substring :from to: text.length).indexOf needle: openM
+    if oo.none then return sp
+    sp.found = true
+    sp.at = from + oo
+    sp.headFrom = sp.at + openM.length
+    hc: (text.substring from: sp.headFrom to: text.length).indexOf needle: "@@*/"
+    if hc.none then return sp
+    sp.headTo = sp.headFrom + hc
+    sp.bodyFrom = lineAfter :text at: sp.headTo + 4
+    ec: (text.substring from: sp.bodyFrom to: text.length).indexOf needle: endM
+    if ec.none then return sp
+    sp.bodyTo = sp.bodyFrom + ec
+    sp.next = lineAfter :text at: sp.bodyTo + endM.length
+    sp.whole = true
+    return sp
+}
+
+# lineAfter -- `at`, moved past the line break there when there is one
+lineAfter: function {text: StringView at: u64} out u64 is {
+    b: text.byteAt i: at
+    if b.none then return at
+    if b == 10 then return at + 1
+    return at
+}
+
+# piecedText -- a fixed file's text as this program writes it: the text outside
+# its pieces whole, and a piece only where its row fired (loadPieces)
+piecedText: function {ctx: Ctx.view text: StringView} out String is {
+    res: String
+    pos: u64
+    for pos < text.length loop {
+        sp: nextPiece :text from: pos
+        res.append (text.substring from: pos to: sp.at)
+        if sp.whole.not then {
+            res.append (text.substring from: sp.at to: text.length)
+            return res
+        }
+        hd: text.substring from: sp.headFrom to: sp.headTo
+        row: (nativeFragRow
+            :ctx
+            path: (hd.substring from: 0 to: ((hd.indexOf needle: " ").or d: hd.length))
+        )
+        if row > 0 when (rowDemandFired :ctx i: row - 1) then (res.append
+            (text.substring from: sp.bodyFrom to: sp.bodyTo)
+        )
+        pos = sp.next
+    }
+    return res
+}
+
+# loadFixedFile -- one of the runtime's fixed files as this program writes it:
+# its pieces decided (piecedText), its holes filled (fillStringHoles)
+loadFixedFile: function {ctx: Ctx path: StringView} out String is {
+    raw: readTemplateCached :ctx :path
+    pc: piecedText :ctx text: raw.stringView
+    svL: ctx.svC
+    strL: ctx.strC
+    return (fillStringHoles
+        text: pc
+        :path
+        svC: svL.stringView
+        strC: strL.stringView
+        fails: ctx.emitErrors
+    )
 }
 
 # the runtime types the emitter must name before anything else: String,
@@ -35713,22 +35883,13 @@ buildTypeCnames: function {
 
 # emitStringFragments -- the String, StringView and hash runtime fragments. A
 # String typedef (Path) shares the String struct and its free (destroyFnC).
-emitStringFragments: function {
-    runtimeDir: StringView
-    errs: List zast.ErrorData
-    buf: String.borrow
-    strC: StringView
-    svC: StringView
-} is {
+emitStringFragments: function {ctx: Ctx runtimeDir: StringView buf: String.borrow} is {
     p1: "\{runtimeDir}/z_String.inc"
-    f1: loadFragment path: p1.stringView :svC :strC fails: errs
-    buf.append f1
+    buf.append (loadFixedFile :ctx path: p1.stringView)
     p2: "\{runtimeDir}/z_StringView.inc"
-    f2: loadFragment path: p2.stringView :svC :strC fails: errs
-    buf.append f2
+    buf.append (loadFixedFile :ctx path: p2.stringView)
     ph: "\{runtimeDir}/z_hash.inc"
-    fh: loadFragment path: ph.stringView :svC :strC fails: errs
-    buf.append fh
+    buf.append (loadFixedFile :ctx path: ph.stringView)
 }
 
 # emitCodeBody -- everything that references a `_zsN` literal goes into codeBuf
@@ -35854,13 +36015,6 @@ emitC: function {
     if rtids.text.isZero.not then typeCnames.set i: rtids.text.u64 val: svC.copy
     origins: ListVal ztypes.tid
     buildOriginTids :program :symtab acc: origins
-    (emitStringFragments
-        :runtimeDir
-        :errs
-        :buf
-        strC: strC.stringView
-        svC: svC.stringView
-    )
     mn: mainCName :program
     litIds: ListVal zast.nodeid
     litTexts: List String
@@ -35991,6 +36145,7 @@ emitC: function {
         fragTypeNames: List String
         fragTypeTids: ListVal ztypes.tid
         fragNeeds: (IdMapR u64 V: String)
+        pieceText: (IdMapR u64 V: String)
         fragUnitDecls: ListVal ztypes.declid
         demandGatedTids: IdSet ztypes.tid
         usedTypeIds: IdSet ztypes.tid
@@ -36040,6 +36195,7 @@ emitC: function {
         :origins
     )
     loadNativeTbl :ctx ast: program :symtab :runtimeDir
+    loadPieces :ctx :runtimeDir
     linkLibs: List String
     for each lb: libs loop linkLibs.append from: lb.copy
     csrcs: List String
@@ -36158,6 +36314,12 @@ emitC: function {
         )
         pf = "_Z_PANIC".string
     }
+    # the fixed files are decided last, when every demand is in: the header,
+    # then the String, StringView and hash fragments the code follows
+    closeRowNeeds :ctx
+    head: String
+    emitCHeader libs: linkLibs :csrcs :runtimeDir panicFrag: pf.stringView :ctx buf: head
+    emitStringFragments :ctx :runtimeDir buf: head
     # the Ctx's failures follow assembly's own, in the order recorded: popped
     # twice, so each is moved rather than copied
     rev: List zast.ErrorData
@@ -36167,7 +36329,7 @@ emitC: function {
     # units need, which the table had to be read to know
     whole: String
     whole.append "/* Generated by zerolang compiler */\n"
-    emitCHeader libs: linkLibs :csrcs :runtimeDir panicFrag: pf.stringView :errs buf: whole
+    whole.append head
     whole.append buf
     return whole
 }
@@ -39297,6 +39459,8 @@ emitRuntimeUnit: function {
         u: ctx.fragUnits.get :i
         isU = u.stringView == uname
         u.drop
+        # a piece is written in place by its file (loadPieces)
+        if isU when (ctx.pieceText.has key: i) then isU = false
         if isU when (ctx.rowsWritten.has item: i).not when (rowDemandFired :ctx :i) then {
             ctx.rowsWritten.add item: i
             closeRowNeeds :ctx
