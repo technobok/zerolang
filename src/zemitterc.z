@@ -2005,6 +2005,7 @@ UnitReq: class {
 nativeWord: list {
     argsPtr: "args=ptr"
     formValue: "form=value"
+    callsEq: "calls=eq"
     unitsRow: "@units"
     unitIo: "io"
     unitPrelude: "prelude"
@@ -2040,6 +2041,8 @@ NativeHead: class {
     ptr: bool
     # `form=value`: the body is a value computed from its holes
     value: bool
+    # `calls=eq`: the body calls the generated `==` of its `@T@` (noteEqUse)
+    eq: bool
     # `call=`: on a StringView row, how a call of the member is emitted (svcall)
     call: String
     # `pulls=`: the other units' members demanding this one demands
@@ -2080,6 +2083,7 @@ NativeHead: class {
             spec: String
             ptr: false
             value: false
+            eq: false
             call: String
             pulls: String
             link: String
@@ -2119,6 +2123,7 @@ NativeHead: class {
         this.setFactAttr :f
         if w == nativeWord.slot.argsPtr then this.ptr = true
         if w == nativeWord.slot.formValue then this.value = true
+        if w == nativeWord.slot.callsEq then this.eq = true
         fo: f.stripPrefix p: "frag="
         match (
             fo
@@ -2436,6 +2441,10 @@ recordRowBodies: function {ctx: Ctx h: NativeHead.view body: StringView} is {
     if h.value then {
         kv: h.key.copy
         ctx.nativeValueRows.set key: kv value: true
+    }
+    if h.eq then {
+        ke: h.key.copy
+        ctx.nativeEqRows.set key: ke value: true
     }
 }
 
@@ -2842,6 +2851,12 @@ nativePtrArgsOf: function {ctx: Ctx.view path: StringView} out bool is {
 # call's.
 nativeValueRowOf: function {ctx: Ctx.view path: StringView} out bool is {
     return ((ctx.nativeValueRows.get key: path.asString).or d: false)
+}
+
+# nativeCallsEqOf -- true when a row's body calls the generated `==` of the type
+# it is filled for (`calls=eq`).
+nativeCallsEqOf: function {ctx: Ctx.view path: StringView} out bool is {
+    return ((ctx.nativeEqRows.get key: path.asString).or d: false)
 }
 
 # emitFail -- record an emission failure for an unhandled construct. The
@@ -4056,6 +4071,9 @@ Ctx: class {
     # one, so a C `_eq`
     eqAsked: IdSet ztypes.tid
     eqHasBody: IdSet ztypes.tid
+    # the types whose generated `_eq` written C calls: only these are written
+    # (noteEqUse)
+    eqUsed: IdSet ztypes.tid
     # the types whose generated `_hash` is written, in the order they were
     # demanded
     hashAsked: IdSet ztypes.tid
@@ -4122,6 +4140,9 @@ Ctx: class {
     # which rows are values computed from their holes (`form=value`); a
     # `const=` variant is marked as its plain row is
     nativeValueRows: (MapRV String v: bool)
+    # the rows whose body calls the generated `==` of the type they are filled
+    # for (`calls=eq`)
+    nativeEqRows: (MapRV String v: bool)
     # a row that answers only when named ARGUMENTS are compile-time constants,
     # kept beside the ordinary body rather than in it: `nativeTbl` is keyed by
     # path alone, so a second row of the same path would overwrite the first
@@ -21137,6 +21158,7 @@ emitOperatorRow: function {
     if (typedefChaseHasBaseName :symtab tid: owner) then {
         tcnTid = ztypecheck.typedefChaseTid st: symtab tid: owner
     }
+    if (nativeCallsEqOf :ctx path: key.stringView) then noteEqUse :ast :symtab :ctx tid: tcnTid
     filled: fillOperatorRow :ast :symtab :ctx :ord :body :key :tcnTid
     # a value row with no temps ahead of it reads as its operands do
     if oprefix.length == 0 when (nativeValueRowOf :ctx path: key.stringView) then {
@@ -33355,6 +33377,47 @@ closeReachedTypes: function {ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: C
         }
     }
     ctx.reachFixed = true
+    demandTemplateEqs :ast :symtab :ctx
+}
+
+# demandTemplateEqs -- the generated `==` each reached container's template
+# calls on its elements (templateEqElem), written into the container after
+# the element's own struct.
+demandTemplateEqs: function {ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx} is {
+    rs: ListVal ztypes.tid
+    for each r: ctx.reachedTypes loop rs.append r
+    for each m: rs loop {
+        el: templateEqElem :symtab :ctx tid: m
+        if el.isZero.not when (symtab.reg.isValtypeOf tid: el) when (partEqCallsGenerated
+            :ast
+            :symtab
+            tid: el
+        ) then noteEqUse :ast :symtab :ctx tid: el
+    }
+}
+
+# templateEqElem -- the element a container's template compares with the
+# element's own `==`: a Set's or Map's value-type key (valKeyEqBody), and a
+# list's element when its `contains`, `==` or `!=` is used; 0 for any other
+# type.
+templateEqElem: function {
+    symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.tid
+} out ztypes.tid is {
+    if (isListOriginOf :symtab :ctx :tid) then {
+        compares: (
+            (monoMemberUsed :symtab monoId: tid nameId: zast.wellKnown.slot.wkContains) or
+            (monoMemberUsed :symtab monoId: tid nameId: zast.wellKnown.slot.wkOpEq) or
+            (monoMemberUsed :symtab monoId: tid nameId: zast.wellKnown.slot.wkOpNe)
+        )
+        if compares then return (listElemType :symtab monoId: tid)
+        return ztypes.tid.zero
+    }
+    el: ztypes.tid
+    if (isSetOriginOf :symtab :ctx :tid) then el = setElemType :symtab monoId: tid
+    if (isMapOriginOf :symtab :ctx :tid) then el = mapKeyType :symtab monoId: tid
+    if el.isZero then return el
+    if (isValKey :symtab key: el kind: (keyHashKind :symtab :ctx tid: el)) then return el
+    return ztypes.tid.zero
 }
 
 # drainReach -- add each type on `todo` to the reached set, and what it spells.
@@ -35731,6 +35794,7 @@ emitC: function {
         emittedUserTypes: IdSet ztypes.tid
         eqAsked: IdSet ztypes.tid
         eqHasBody: IdSet ztypes.tid
+        eqUsed: IdSet ztypes.tid
         hashAsked: IdSet ztypes.tid
         hashOrder: ListVal ztypes.tid
         lateDefs: String
@@ -35759,6 +35823,7 @@ emitC: function {
         nativePulls: (Map String V: String)
         nativePtrArgs: (MapRV String v: bool)
         nativeValueRows: (MapRV String v: bool)
+        nativeEqRows: (MapRV String v: bool)
         nativeKeys: (MapRV String v: bool)
         cWords: (zast.Vocab.create block: cReserved)
         opWords: (zast.Vocab.create block: opSpelling)
@@ -36218,7 +36283,8 @@ emitArrayMono: function {
     lenStr: monoLengthText :symtab :monoId
     createBody: "    z_\{nm}_t _this = {0};"
     eqBody: String
-    if (eqGenerated :ast :symtab :ctx tid: monoId) then (arrayEqBody
+    if (ctx.eqUsed.has item: monoId) when (eqGenerated :ast :symtab :ctx tid: monoId
+    ) then (arrayEqBody
         :ast
         :symtab
         :ctx
@@ -46012,7 +46078,7 @@ emitOneVariant: function {
     }
     if haveP then buf.append "    } data;\n"
     closeStructBody :ctx :tid cn: vc.stringView :buf
-    if (eqGenerated :ast :symtab :ctx :tid) then {
+    if (ctx.eqUsed.has item: tid) when (eqGenerated :ast :symtab :ctx :tid) then {
         emitVariantEq :ast :symtab :ctx :tid vc: vc.stringView arms: aidsNm :aids :haveP :buf
     }
 }
@@ -46328,6 +46394,45 @@ eqGenerated: function {
     return ok
 }
 
+# noteEqUse -- written C calls the generated `==` of `tid` (its `_eq`), so it
+# is written, and so is each part's its body calls (partEqC): demanded now, so
+# the set is whole before the first type is written. A call that arrives after
+# its type was written names a function that is never written.
+noteEqUse: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    tid: ztypes.tid
+} is {
+    t: ztypecheck.typedefChaseTid st: symtab :tid
+    if (ctx.eqUsed.has item: t) then return
+    if (ctx.emittedUserTypes.has item: t) then {
+        cn: ctxCname :ctx tid: t
+        emitFail :ctx what: "the `==` of \{cn} called after its type was written" line: 0
+        return
+    }
+    ctx.eqUsed.add item: t
+    parts: ListVal ztypes.tid
+    ztypecheck.valPartTids st: symtab tid: t :parts
+    for each p: parts loop {
+        if (partEqCallsGenerated :ast :symtab tid: p) then noteEqUse :ast :symtab :ctx tid: p
+    }
+}
+
+# partEqCallsGenerated -- comparing a `tid` part calls its generated `_eq`
+# (partEqC's last leg): neither the author's `==` nor a scalar's.
+partEqCallsGenerated: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    tid: ztypes.tid
+} out bool is {
+    if (ztypecheck.isLiteralTypeId st: symtab :tid) then return false
+    src: ztypecheck.valOpSource :ast st: symtab :tid nameId: zast.wellKnown.slot.wkOpEq
+    if src.written or src.negated then return false
+    if (partIsHelperScalar :symtab :tid) then return false
+    return (partIsCScalar :symtab :tid).not
+}
+
 # partHasEq -- a part a generated `==` can compare: its own `==` is the
 # runtime's or the author's, or generated with a body of its own.
 partHasEq: function {
@@ -46407,6 +46512,7 @@ partEqC: function {
         dest.append sel
         return
     }
+    noteEqUse :ast :symtab :ctx :tid
     dest.append (spelledCname :ctx tid: (ztypecheck.typedefChaseTid st: symtab :tid))
     dest.append "_eq("
     dest.append lhs
@@ -47075,7 +47181,7 @@ emitOneRecord: function {
             alias: aliasOk
         )
     }
-    if (eqGenerated :ast :symtab :ctx :tid) then (emitRecordEq
+    if (ctx.eqUsed.has item: tid) when (eqGenerated :ast :symtab :ctx :tid) then (emitRecordEq
         :ast
         :symtab
         :ctx
