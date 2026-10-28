@@ -4077,6 +4077,9 @@ Ctx: class {
     # the types whose destructor written C calls: a record's or a class's is
     # written only then (noteDestroyUse)
     destroyUsed: IdSet ztypes.tid
+    # the types written C builds field by field: a record's or a class's
+    # `_meta_create` is written only then (noteCreateUse)
+    createUsed: IdSet ztypes.tid
     # the types whose generated `_hash` is written, in the order they were
     # demanded
     hashAsked: IdSet ztypes.tid
@@ -8428,6 +8431,21 @@ popLoopLabel: function {ctx: Ctx id: u64 ind: StringView buf: String.borrow} is 
     } case none then null
 }
 
+
+# noteCreateUse -- written C builds a `tid` field by field (`_create`, or
+# `_meta_create` from its own `create`), so the constructor emitOneRecord
+# writes beside the type is written. One built after its type was written
+# names a function that is never written; a runtime-owned class's is written
+# with its struct.
+noteCreateUse: function {ctx: Ctx tid: ztypes.tid} is {
+    if (ctx.createUsed.has item: tid) then return
+    if (ctx.emittedUserTypes.has item: tid) when (ctx.classRowTids.contains item: tid).not then {
+        cn: ctxCname :ctx :tid
+        emitFail :ctx what: "\{cn} built after its type was written" line: 0
+        return
+    }
+    ctx.createUsed.add item: tid
+}
 
 # noteDestroyUse -- written C calls the destructor of `tid`, a destroy target
 # (destroyTargetTid), so a record's or a class's is written; and so is each
@@ -13333,6 +13351,7 @@ emitCtorDefaultsFill: function {
         if args.length > 0 then args.append ", "
         args.append av
     }
+    noteCreateUse :ctx :tid
     rcb: spelledCname :ctx :tid
     return (stating :facts from: callFacts text: "\{rcb}_create(\{args})")
 }
@@ -13542,6 +13561,7 @@ emitRecordCtor: function {
     oprefix: orderFinish :ctx st: ord
     args: orderJoinSlots :ctx st: ord count: fn0
     orderEnd :ctx st: ord
+    noteCreateUse :ctx :tid
     rc: spelledCname :ctx :tid
     rc.append "_create"
     return (stating
@@ -14501,6 +14521,7 @@ emitMetaCreateCall: function {
         oprefix: orderFinish :ctx st: ord
         args: orderJoinSlots :ctx st: ord count: fn0
         orderEnd :ctx st: ord
+        noteCreateUse :ctx tid: et
         ecb: spelledCname :ctx tid: et
         ecb.append "_meta_create"
         return (stating
@@ -35902,6 +35923,7 @@ emitC: function {
         eqHasBody: IdSet ztypes.tid
         eqUsed: IdSet ztypes.tid
         destroyUsed: IdSet ztypes.tid
+        createUsed: IdSet ztypes.tid
         hashAsked: IdSet ztypes.tid
         hashOrder: ListVal ztypes.tid
         lateDefs: String
@@ -47265,8 +47287,9 @@ emitOneRecord: function {
         l2: "} \{rc}_t;\n"
         buf.append l2
     }
-    # a data value is built only by the compiler: no constructor at run time
-    if (isStaticHandle :symtab :tid).not then {
+    # a data value is built only by the compiler: no constructor at run time;
+    # any other is written only when written C builds one
+    if (isStaticHandle :symtab :tid).not when (ctx.createUsed.has item: tid) then {
         params: String
         inits: String
         (recordCreateArgs
