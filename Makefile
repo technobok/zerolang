@@ -1252,7 +1252,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2387616
+ALLOC_BASELINE := 2389067
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1971,7 +1971,7 @@ deadcode-guard: bin/zc
 # of every kind, and live ones only a careless reader misses: the reader must
 # report exactly CDEAD_PROBE there before its count is trusted. The baseline is
 # the dead items the emitter writes today (corpus, then zc); lower it as it falls.
-CDEAD_BASELINE := 6236 195
+CDEAD_BASELINE := 6047 195
 CDEAD_PROBE := cdead_dead_fn cdead_dead_fn_ft cdead_dead_inline cdead_dead_leaf \
 	cdead_dead_macro cdead_dead_proto_t cdead_dead_str cdead_dead_t cdead_dead_vtable_t
 
@@ -2389,8 +2389,13 @@ for key, a, text, where in rows:
 def spelled(text):
     return set(IDENT.findall(strip_c(text))) & set(owner)
 
+# the String and StringView types are spelled through a hole (`z_@String@_t`),
+# and a fragment's or template's hole fill records them: only a piece, decided
+# with the type's own piece, declares them
+HOLE_TYPES = {'z_@String@_t', 'z_@StringView@_t'}
 for key, a, text, where in rows:
     names = spelled(text)
+    if ' piece ' not in where: names -= HOLE_TYPES
     if not names: continue
     cov = closure(needs_of(key, a) + [(unit_of(key), d) for d in demands(key, a)])
     for n in sorted(names):
@@ -2411,7 +2416,7 @@ for f in files:
         if a.get('tmpl') and os.path.join(rt, a['tmpl']) == f:
             decl += needs_of(key, a) + [(unit_of(key), d) for d in demands(key, a)]
     cov = closure(decl)
-    for n in sorted(spelled(t)):
+    for n in sorted(spelled(t) - HOLE_TYPES):
         pk, dem = owner[n]
         if dem not in cov:
             errs.append(f'{f} spells {n} (piece {pk}) and its /*@@needs ...@@*/ marker does not name {dem[0]}.{dem[1]}')

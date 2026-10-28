@@ -98,7 +98,7 @@ static uint64_t z_siphash_bytes(const void* in, uint64_t inlen) {
 }
 
 /*@@end@@*/
-/*@@row @prelude.siphash_stringview demand=@siphash_stringview needs=@siphash_bytes@@*/
+/*@@row @prelude.siphash_stringview demand=@siphash_stringview needs=@siphash_bytes,@StringView_t@@*/
 static uint64_t z_siphash_stringview(z_@StringView@_t v) {
     return z_siphash_bytes(v.data, v.size);
 }
@@ -204,7 +204,7 @@ static uint64_t z_fasthash_bytes(const void* in, uint64_t inlen) {
 }
 
 /*@@end@@*/
-/*@@row @prelude.fasthash_stringview demand=@fasthash_stringview needs=@fasthash_bytes@@*/
+/*@@row @prelude.fasthash_stringview demand=@fasthash_stringview needs=@fasthash_bytes,@StringView_t@@*/
 static uint64_t z_fasthash_stringview(z_@StringView@_t v) {
     return z_fasthash_bytes(v.data, v.size);
 }

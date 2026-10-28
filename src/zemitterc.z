@@ -1339,10 +1339,12 @@ emitNumericCast: function {
     # a row over the runtime's string types (text's) spells them as holes
     if (body.stringView.contains needle: "@StringView@") then {
         bn.append from: "StringView".string
+        preludeNeed :ctx memb: "@StringView_t"
         bv.append from: ctx.svC.copy
     }
     if (body.stringView.contains needle: "@String@") then {
         bn.append from: "String".string
+        preludeNeed :ctx memb: "@String_t"
         bv.append from: ctx.strC.copy
     }
     # a checked conversion reads a constant into its temp too: spelled in
@@ -5875,6 +5877,7 @@ svValueForm: function {
         }
         acc: ".".string
         if (isPtrVid :ctx vid: valueVid) then acc = "->".string
+        preludeNeed :ctx memb: "@StringView_t"
         v1: "((\{ctx.svC}_t){ .data = \{rex}\{acc}data, .size = \{rex}\{acc}size })"
         return (stating :facts from: literalFacts text: v1)
     } else {
@@ -5885,7 +5888,8 @@ svValueForm: function {
 # svValueFormPtr -- svValueForm for a String operand the C holds through a
 # POINTER: a borrowed String parameter, or a String read through a borrowed
 # field.
-svValueFormPtr: function {ctx: Ctx.view expr: StringView} out String is {
+svValueFormPtr: function {ctx: Ctx expr: StringView} out String is {
+    preludeNeed :ctx memb: "@StringView_t"
     v: "((\{ctx.svC}_t){ .data = \{expr}->data, .size = \{expr}->size })"
     return v
 }
@@ -6137,6 +6141,7 @@ svNativeCall: function {
     pre: String
     addr: "&\{recv}"
     if (canTakeAddress f: recvF).not then {
+        preludeNeed :ctx memb: "@StringView_t"
         svT: "\{ctx.svC}_t"
         addr = (orderAddressOf
             :ast
@@ -6364,6 +6369,7 @@ emitSvSubstringCall: function {
                 recvpF = literalFacts
                 sacc: ".".string
                 if (isPtrVid :ctx vid: dcbV) then sacc = "->".string
+                preludeNeed :ctx memb: "@StringView_t"
                 recvp = "((\{ctx.svC}_t){ .data = \{bnv}\{sacc}data, .size = \{bnv}\{sacc}len })"
             }
         }
@@ -6372,6 +6378,7 @@ emitSvSubstringCall: function {
             # a receiver that is a call is read into its temp first, as
             # svNativeCall reads it
             pre: String
+            preludeNeed :ctx memb: "@StringView_t"
             svT: "\{ctx.svC}_t"
             lead: (orderAddressOf
                 :ast
@@ -7214,6 +7221,7 @@ emitNativeArgMethod: function {
     }
     if (body.stringView.contains needle: "@StringView@") then {
         bn.append from: "StringView".string
+        preludeNeed :ctx memb: "@StringView_t"
         bv.append from: ctx.svC.copy
     }
     filled: (fillHolesForCtx
@@ -13407,7 +13415,8 @@ renderedMethodDefaultArgs: function {
 
 # emitExprStrZero -- the empty owned String value: the zero struct needs
 # no allocation and no free.
-emitExprStrZero: function {ctx: Ctx.view facts: cfacts.borrow} out String is {
+emitExprStrZero: function {ctx: Ctx facts: cfacts.borrow} out String is {
+    preludeNeed :ctx memb: "@String_t"
     return (stating :facts from: literalFacts text: "((\{ctx.strC}_t){0})")
 }
 
@@ -17659,6 +17668,7 @@ nestedStrMember: function {
         )
         sb: baseAtom
         if bound.length > 0 then sb = bound.stringView
+        preludeNeed :ctx memb: "@StringView_t"
         return (stating
             :facts
             from: literalFacts
@@ -18408,11 +18418,10 @@ typeNameCreateZero: function {
 } out String is {
     zsc: scalarCTypeFor :symtab tid: bstamp
     if zsc.length > 0 then return (scalarZeroC :symtab cType: zsc.stringView tid: bstamp :facts)
-    if bstamp == ctx.strTid then return (stating
-        :facts
-        from: literalFacts
-        text: "((\{ctx.strC}_t){0})"
-    )
+    if bstamp == ctx.strTid then {
+        preludeNeed :ctx memb: "@String_t"
+        return (stating :facts from: literalFacts text: "((\{ctx.strC}_t){0})")
+    }
     return String
 }
 
@@ -19114,6 +19123,7 @@ emitCollectionMemberRead: function {
             return (stating :facts from: callFacts text: "\{scba}_string(\{bn2})")
         }
         if (ztypecheck.isStringViewMember nameId: mnId) then {
+            preludeNeed :ctx memb: "@StringView_t"
             return (stating
                 :facts
                 from: literalFacts
@@ -19267,6 +19277,7 @@ emitSvAtomBase: function {
             if (isPtrVid :ctx vid: bn2v) then accA = "".string
             avsF: operandFacts e: bn2F place: false
             if accA.length > 0 then avsF = addrFacts e: bn2F
+            preludeNeed :ctx memb: "@String_t"
             return (stating :facts from: avsF text: "((const \{ctx.strC}_t*)\{accA}\{bn2})")
         }
         if mnId == zast.wellKnown.slot.wkCount then {
@@ -21491,6 +21502,7 @@ fillOperatorRow: function {
     rv swap ctx.opRawVals
     if bn.length == 0 then {
         bn.append from: "StringView".string
+        preludeNeed :ctx memb: "@StringView_t"
         bn.append from: "T".string
         bv.append from: ctx.svC.copy
         bv.append from: String
@@ -22015,6 +22027,7 @@ emitInterpBuild: function {
         argNid: strNid
         fallback: "_s"
     )
+    preludeNeed :ctx memb: "@String_t"
     strT: "\{ctx.strC}_t"
     preludeNeed :ctx memb: "@String_create"
     cr: "\{ctx.strC}_create((uint64_t)\{est})"
@@ -22354,6 +22367,7 @@ appendViewPart: function {
     rd: val.string
     if valF.once then {
         rd = "_h\{tmpNext :ctx :tmp}"
+        preludeNeed :ctx memb: "@StringView_t"
         svT: "\{ctx.svC}_t"
         interpLocal :ctx :expr ctype: svT.stringView name: rd.stringView init: val :ind :buf :ops
     }
@@ -22437,6 +22451,7 @@ appendStringPart: function {
     # a fallback here may NOT be spelled `_h<n>`: that prefix is the TmpCtr's,
     # and this name comes from `ctx.argHoistCtr`, so two counters would collide
     hNm: argHoistName :symtab :ctx argNid: (interpPartNodeId :n) fallback: "_hp"
+    preludeNeed :ctx memb: "@String_t"
     strT: "\{ctx.strC}_t"
     interpLocal :ctx :expr ctype: strT.stringView name: hNm.stringView init: val :ind :buf :ops
     preludeNeed :ctx memb: "@String_append"
@@ -23107,6 +23122,7 @@ emitPrintAtom: function {
     }
     if (originIsTid :symtab tid: argTid originTid: (ctx.origins.get i: family.slot.str)) then {
         preludeNeed :ctx memb: "@StringView_print"
+        preludeNeed :ctx memb: "@StringView_t"
         lpstr: "\{ind}\{ctx.svC}_print((\{ctx.svC}_t){ .data = \{anmE}.data, .size = \{anmE}.len });\n"
         buf.append lpstr
         return
@@ -23154,6 +23170,7 @@ emitPrintValueExpr: function {
     flushArgHoists :ctx :ind :tmp :buf
     if esF.place.not then {
         hps: tmpNext :ctx :tmp
+        preludeNeed :ctx memb: "@String_t"
         lsa: "\{ind}\{ctx.strC}_t _h\{hps} = \{es};\n"
         buf.append lsa
         preludeNeed :ctx memb: "@String_print"
@@ -23205,6 +23222,7 @@ emitPrintCallValue: function {
         return
     }
     hpc: tmpNext :ctx :tmp
+    preludeNeed :ctx memb: "@String_t"
     lpa: "\{ind}\{ctx.strC}_t _h\{hpc} = \{ce};\n"
     buf.append lpa
     preludeNeed :ctx memb: "@String_print"
@@ -23411,6 +23429,7 @@ emitStringBindValue: function {
                 strNid: n.nodeid
                 ops: unusedOps
             )
+            preludeNeed :ctx memb: "@String_t"
             lst: "\{ind}\{ctx.strC}_t \{nm} = \{sB};\n"
             buf.append lst
             tmp.oweFree name: nm.string vid: nmVid
@@ -23445,6 +23464,7 @@ emitStringBindValue: function {
                     )
                     flushArgHoists :ctx :ind :tmp :buf
                     preludeNeed :ctx memb: "@String_copy"
+                    preludeNeed :ctx memb: "@String_t"
                     lc: "\{ind}\{ctx.strC}_t \{nm} = \{ctx.strC}_copy(&\{tnm});\n"
                     buf.append lc
                     tmp.oweFree name: nm.string vid: nmVid
@@ -23603,6 +23623,7 @@ emitDiscardedResult: function {
         return
     }
     dnm: varCName :ctx vid: dv name: ""
+    preludeNeed :ctx memb: "@String_t"
     dct: if rtid == ctx.strTid then "\{ctx.strC}_t" else (typeRefC
         :ast
         :symtab
@@ -24069,8 +24090,12 @@ emitStringMatchBind: function {
     if isIf then isIf = (ifIsTernary :ast n: (ast.nodes.get i: n.value)).not
     if isMatch.not when isIf.not then return false
     avn: ast.nodes.get i: n.value
+    preludeNeed :ctx memb: "@StringView_t"
     smT: "\{ctx.svC}_t"
-    if isStr then smT = "\{ctx.strC}_t"
+    if isStr then {
+        preludeNeed :ctx memb: "@String_t"
+        smT = "\{ctx.strC}_t"
+    }
     bound: false
     if isIf then {
         bound = emitIfBindValue :ast :symtab :ctx n: avn :nm ct: smT.stringView :ind :tmp :buf
@@ -24102,8 +24127,12 @@ emitStringBind: function {
     # a block value is bound as a collection's is: the local declared, the block
     # assigning its last value
     if avn.doexpr when (btid == ctx.svTid) or (btid == ctx.strTid) then {
+        preludeNeed :ctx memb: "@StringView_t"
         dct: "\{ctx.svC}_t"
-        if btid == ctx.strTid then dct = "\{ctx.strC}_t"
+        if btid == ctx.strTid then {
+            preludeNeed :ctx memb: "@String_t"
+            dct = "\{ctx.strC}_t"
+        }
         return (emitDoBindValue
             :ast
             :symtab
@@ -24122,6 +24151,7 @@ emitStringBind: function {
         lvN: bindLitIndex :ast :ctx n: avn
         if lvN > 0 then {
             lvv: litView :ctx li: lvN
+            preludeNeed :ctx memb: "@StringView_t"
             lsv2: "\{ind}\{ctx.svC}_t \{nm} = \{lvv};\n"
             buf.append lsv2
             return true
@@ -24132,6 +24162,7 @@ emitStringBind: function {
             svbV: atomVid :symtab nid: (stringviewOfBaseNid :ast :symtab n: avn)
             if (isPtrVid :ctx vid: svbV) then svacc4 = "->".string
             svbR4: emitLocalAtomName :ctx name: svb vid: svbV
+            preludeNeed :ctx memb: "@StringView_t"
             lsv4: "\{ind}\{ctx.svC}_t \{nm} = (\{ctx.svC}_t){ .data = \{svbR4}\{svacc4}data, .size = \{svbR4}\{svacc4}size };\n"
             buf.append lsv4
             return true
@@ -24144,6 +24175,7 @@ emitStringBind: function {
             lsv3: "\{ind}/* zemitterc: unhandled StringView binding \{nm} */\n"
             buf.append lsv3
         } else {
+            preludeNeed :ctx memb: "@StringView_t"
             lsv5: "\{ind}\{ctx.svC}_t \{nm} = \{vx};\n"
             buf.append lsv5
         }
@@ -24154,6 +24186,7 @@ emitStringBind: function {
         if fvN > 0 then {
             fvv: litView :ctx li: fvN
             preludeNeed :ctx memb: "@String_from_view"
+            preludeNeed :ctx memb: "@String_t"
             lsc: "\{ind}\{ctx.strC}_t \{nm} = \{ctx.strC}_from_view(\{fvv});\n"
             buf.append lsc
             tmp.oweFree name: nm.string vid: nameVid
@@ -24179,6 +24212,7 @@ emitStringBind: function {
             lst2: "\{ind}/* zemitterc: unhandled String binding \{nm} */\n"
             buf.append lst2
         } else {
+            preludeNeed :ctx memb: "@String_t"
             lst3: "\{ind}\{ctx.strC}_t \{nm} = \{sx};\n"
             buf.append lst3
             # the value may be a call that took ownership of an argument;
@@ -25041,7 +25075,10 @@ reassignTargetC: function {
     rtnid: zast.nodeid
     rtsid: ztypes.tid
 } out String is {
-    if (stampIsStr :symtab :ctx nid: rtnid) then return "\{ctx.strC}_t"
+    if (stampIsStr :symtab :ctx nid: rtnid) then {
+        preludeNeed :ctx memb: "@String_t"
+        return "\{ctx.strC}_t"
+    }
     rrt: typeRefC :ast :symtab :ctx tid: rtsid
     if (isHeapPtrCollection :symtab :ctx tid: rtsid) then return "\{rrt}*"
     return rrt
@@ -25074,13 +25111,16 @@ emitReassignDestroy: function {
 # of its destroy target, which a typedef shares; empty when it owns nothing.
 movedZeroC: function {
     symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
+    ctx: Ctx
     tid: ztypes.tid
 } out String is {
     dt: destroyTargetTid :symtab :ctx :tid
     if dt.isZero then return String
     if (valueIsItsPointer :symtab :ctx tid: dt) then return "NULL".string
-    if dt == ctx.strTid then return "(\{ctx.strC}_t){0}"
+    if dt == ctx.strTid then {
+        preludeNeed :ctx memb: "@String_t"
+        return "(\{ctx.strC}_t){0}"
+    }
     return "(\{ctxCnameView :ctx tid: dt}_t){0}"
 }
 
@@ -25230,7 +25270,10 @@ companionCType: function {
     ctx: Ctx
     tid: ztypes.tid
 } out String is {
-    if tid == ctx.strTid then return "\{ctx.strC}_t"
+    if tid == ctx.strTid then {
+        preludeNeed :ctx memb: "@String_t"
+        return "\{ctx.strC}_t"
+    }
     ct: typeRefC :ast :symtab :ctx :tid
     if (isHeapPtrCollection :symtab :ctx :tid) then ct.append "*"
     return ct
@@ -33572,14 +33615,15 @@ chaseStrTypedef: function {
 # literalTypeC -- the C type a literal's pseudo-type is held as at run time,
 # in a data value's field: an untyped number is an i64 or an f64, and a string
 # the view it reads as. "" for any other type.
-literalTypeC: function {
-    symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.tid
-} out String is {
+literalTypeC: function {symtab: zenv.ZSymbolTable.view ctx: Ctx tid: ztypes.tid} out String is {
     if (
         (tid == symtab.reg.literalIntTid) or (tid == symtab.reg.literalBitsTid)
     ) then return "int64_t".string
     if tid == symtab.reg.literalFloatTid then return "double".string
-    if tid == symtab.reg.literalTextTid then return "\{ctx.svC}_t"
+    if tid == symtab.reg.literalTextTid then {
+        preludeNeed :ctx memb: "@StringView_t"
+        return "\{ctx.svC}_t"
+    }
     return "".string
 }
 
@@ -33616,10 +33660,12 @@ typeRefC: function {
     tdc: typedefChaseC :ast :symtab :ctx tid: cid
     if tdc.length > 0 then return tdc
     if cid == ctx.strTid then {
+        preludeNeed :ctx memb: "@String_t"
         ts0: "\{ctx.strC}_t"
         return ts0
     }
     if cid == ctx.svTid then {
+        preludeNeed :ctx memb: "@StringView_t"
         ts1: "\{ctx.svC}_t"
         return ts1
     }
@@ -35753,15 +35799,17 @@ collectFnLiterals: function {
 # litView -- pooled source literal `li` (1-based in litIds) as a C value: a
 # view built in place over the pooled bytes, its length a constant, so no
 # descriptor object is emitted beside them
-litView: function {ctx: Ctx.view li: u64} out String is {
+litView: function {ctx: Ctx li: u64} out String is {
     sz: ctx.litSizes.get i: li - 1
+    preludeNeed :ctx memb: "@StringView_t"
     return "((\{ctx.svC}_t){ .data = _zs\{li}_d, .size = \{sz} })"
 }
 
 # constLitView -- folded-string pool entry `ci` (1-based) as a C value, built in
 # place as litView builds a source literal
-constLitView: function {ctx: Ctx.view ci: u64} out String is {
+constLitView: function {ctx: Ctx ci: u64} out String is {
     sz: (ctx.constLits.get i: ci - 1).length
+    preludeNeed :ctx memb: "@StringView_t"
     return "((\{ctx.svC}_t){ .data = _zcs\{ci}_d, .size = \{sz} })"
 }
 
@@ -37180,6 +37228,9 @@ emitStrMono: function {
     } case none then null
     p: "\{runtimeDir}/z_str.c.tmpl"
     tx: readTemplate :ctx path: p.stringView
+    # the template's String and StringView holes spell those types
+    preludeNeed :ctx memb: "@String_t"
+    preludeNeed :ctx memb: "@StringView_t"
     svL: ctx.svC
     strL: ctx.strC
     raw: (fillStringHoles
@@ -38685,8 +38736,10 @@ emitOptionViewMono: function {
 setViewProbes: function {ctx: Ctx monoId: ztypes.tid nm: StringView buf: String.borrow} is {
     if (memberUsed :ctx mono: monoId member: memberWord.slot.hasv) then {
         noteMemberUse :ctx mono: monoId member: memberWord.slot.has
+        preludeNeed :ctx memb: "@StringView_t"
         sv0: "static int z_\{nm}_hasv(const z_\{nm}_t* _this, \{ctx.svC}_t _item) {\n"
         buf.append sv0
+        preludeNeed :ctx memb: "@String_t"
         sv1: "    \{ctx.strC}_t _k = { _item.size, (char*)_item.data, _item.size };\n"
         buf.append sv1
         sv2: "    return z_\{nm}_has(_this, &_k);\n}\n\n"
@@ -38694,8 +38747,10 @@ setViewProbes: function {ctx: Ctx monoId: ztypes.tid nm: StringView buf: String.
     }
     if (memberUsed :ctx mono: monoId member: memberWord.slot.deletev) then {
         noteMemberUse :ctx mono: monoId member: memberWord.slot.delete
+        preludeNeed :ctx memb: "@StringView_t"
         sd0: "static int z_\{nm}_deletev(z_\{nm}_t* _this, \{ctx.svC}_t _item) {\n"
         buf.append sd0
+        preludeNeed :ctx memb: "@String_t"
         sd1: "    \{ctx.strC}_t _k = { _item.size, (char*)_item.data, _item.size };\n"
         buf.append sd1
         sd2: "    return z_\{nm}_delete(_this, &_k);\n}\n\n"
@@ -38710,8 +38765,10 @@ mapViewProbes: function {
 } is {
     if (memberUsed :ctx mono: monoId member: memberWord.slot.getv) then {
         noteMemberUse :ctx mono: monoId member: memberWord.slot.getOne
+        preludeNeed :ctx memb: "@StringView_t"
         gv0: "static z_\{ov}_t z_\{nm}_getv(const z_\{nm}_t* _this, \{ctx.svC}_t _key) {\n"
         buf.append gv0
+        preludeNeed :ctx memb: "@String_t"
         gv1: "    \{ctx.strC}_t _k = { _key.size, (char*)_key.data, _key.size };\n"
         buf.append gv1
         gv2: "    return z_\{nm}_get(_this, &_k);\n}\n\n"
@@ -38719,8 +38776,10 @@ mapViewProbes: function {
     }
     if (memberUsed :ctx mono: monoId member: memberWord.slot.hasv) then {
         noteMemberUse :ctx mono: monoId member: memberWord.slot.has
+        preludeNeed :ctx memb: "@StringView_t"
         hv0: "static int z_\{nm}_hasv(const z_\{nm}_t* _this, \{ctx.svC}_t _key) {\n"
         buf.append hv0
+        preludeNeed :ctx memb: "@String_t"
         hv1: "    \{ctx.strC}_t _k = { _key.size, (char*)_key.data, _key.size };\n"
         buf.append hv1
         hv2: "    return z_\{nm}_has(_this, &_k);\n}\n\n"
@@ -39833,9 +39892,11 @@ fillFragmentHoles: function {
             bn.append from: nv.string
             hw: ctx.nativeWords.slotOf text: nv
             if hw == nativeWord.slot.holeStringView then {
+                preludeNeed :ctx memb: "@StringView_t"
                 sv: ctx.svC
                 bv.append from: sv.copy
             } else if hw == nativeWord.slot.holeString then {
+                preludeNeed :ctx memb: "@String_t"
                 st: ctx.strC
                 bv.append from: st.copy
             } else {
@@ -41622,6 +41683,8 @@ emitTmplClassMono: function {
     if raw.length == 0 then return
     nm: cbaseNoPrefix :ctx tid: monoId
     t: applyTmpl text: raw key: "NAME" val: nm.stringView
+    if (t.stringView.contains needle: "@@String@@") then preludeNeed :ctx memb: "@String_t"
+    if (t.stringView.contains needle: "@@StringView@@") then preludeNeed :ctx memb: "@StringView_t"
     t = applyTmpl text: t key: "String" val: ctx.strC.stringView
     t = applyTmpl text: t key: "StringView" val: ctx.svC.stringView
     tpl: originTidOf :symtab tid: monoId
@@ -41827,8 +41890,14 @@ fnptrRetTypeC: function {
     if rtid.isZero then rtid = fnRegReturnId :symtab :tid
     if rtid.isZero then return "void".string
     base9: String
-    if rtid == ctx.strTid then base9 = "\{ctx.strC}_t"
-    if base9.length == 0 when rtid == ctx.svTid then base9 = "\{ctx.svC}_t"
+    if rtid == ctx.strTid then {
+        preludeNeed :ctx memb: "@String_t"
+        base9 = "\{ctx.strC}_t"
+    }
+    if base9.length == 0 when rtid == ctx.svTid then {
+        preludeNeed :ctx memb: "@StringView_t"
+        base9 = "\{ctx.svC}_t"
+    }
     if base9.length == 0 then {
         rc: scalarCTypeFor :symtab tid: rtid
         if rc.length > 0 then base9 = rc.take
@@ -44630,6 +44699,7 @@ nativeBoxCall: function {
     if mnameId == zast.wellKnown.slot.wkStringView then {
         if implTid == ctx.strTid then return (svValueFormPtr :ctx expr: "_self")
         if (originIsTid :symtab tid: implTid originTid: (ctx.origins.get i: family.slot.str)) then {
+            preludeNeed :ctx memb: "@StringView_t"
             return "((\{ctx.svC}_t){ .data = _self->data, .size = _self->len })"
         }
     }
