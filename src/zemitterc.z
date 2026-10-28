@@ -2035,6 +2035,26 @@ memberWord: list {
     append: "append"
     set: "set"
     pop: "pop"
+    find: "find"
+    add: "add"
+    has: "has"
+    delete: "delete"
+    getOne: "get"
+    remove: "remove"
+    getMut: "getMut"
+    getv: "getv"
+    hasv: "hasv"
+    deletev: "deletev"
+    iterateAll: "iterate"
+    hashItem: "hash_item"
+    itemsEqual: "items_equal"
+    hashKey: "hash_key"
+    keysEqual: "keys_equal"
+    hashSlot: "slot"
+    entriesCap: "entries_cap"
+    itemsCap: "items_cap"
+    keyAt: "keyAt"
+    valueAt: "valueAt"
 } out staticlist StringView
 
 # nativeWord -- the words natives.tbl and the runtime fragments spell that the
@@ -11193,6 +11213,7 @@ emitListMethodCall: function {
     }
     if mnId == zast.wellKnown.slot.wkGet then {
         v: listArg :ast :symtab :ctx :call label: zast.wellKnown.slot.wkI
+        noteMemberUse :ctx mono: bt member: memberWord.slot.getOne
         e1: "\{cb}_get(\{recvR}, \{v})"
         if (listGetIsPtr
             :symtab
@@ -11204,6 +11225,7 @@ emitListMethodCall: function {
     }
     if mnId == zast.wellKnown.slot.wkGetMut then {
         vm: listArg :ast :symtab :ctx :call label: zast.wellKnown.slot.wkI
+        noteMemberUse :ctx mono: bt member: memberWord.slot.getMut
         e1m: "\{cb}_getMut(\{recvR}, \{vm})"
         if (listGetIsPtr
             :symtab
@@ -11358,6 +11380,7 @@ emitArrayMethodCall: function {
     cb: spelledCname :ctx tid: bt
     if mnId == zast.wellKnown.slot.wkGet then {
         vi: listArg :ast :symtab :ctx :call label: zast.wellKnown.slot.wkI
+        noteMemberUse :ctx mono: bt member: memberWord.slot.getOne
         return (stating :facts from: callFacts text: "\{cb}_get(\{bn}, \{vi})")
     }
     if mnId == zast.wellKnown.slot.wkSet then {
@@ -11451,6 +11474,7 @@ emitSpanMethodCall: function {
     recvR: colRecvRef :ctx bn: bn.stringView vid: bvid
     if mnId == zast.wellKnown.slot.wkGet then {
         v: listArg :ast :symtab :ctx :call label: zast.wellKnown.slot.wkI
+        noteMemberUse :ctx mono: bt member: memberWord.slot.getOne
         e1: "\{cb}_get(\{recvR}, \{v})"
         if (listGetIsPtr
             :symtab
@@ -11797,6 +11821,11 @@ emitKeyedProbe: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
+    # the instance probed, and the probe's member and view-keyed member
+    # (memberWord slots)
+    mono: ztypes.tid
+    member: u64
+    memberV: u64
     # the probe's C function: the collection's C name and the member
     fnC: String.view
     bn: StringView
@@ -11808,6 +11837,7 @@ emitKeyedProbe: function {
     if viewForm then {
         kv: colArgAsStringViewExpr :ast :symtab :ctx :call :label
         if kv.length > 0 then {
+            noteMemberUse :ctx :mono member: memberV
             fnV: "\{fnC}v"
             vargs: "\{bn}, \{kv}"
             return (stating
@@ -11817,6 +11847,7 @@ emitKeyedProbe: function {
             )
         }
     }
+    noteMemberUse :ctx :mono :member
     kF: cfacts
     k: colArgWith :ast :symtab :ctx :call facts: kF :label consumes: false
     if stringKey then k = (stringKeyArgPointer
@@ -11861,6 +11892,7 @@ emitSetMethodCall: function {
             label: zast.wellKnown.slot.wkItem
             consumes: true
         )
+        noteMemberUse :ctx mono: bt member: memberWord.slot.add
         e0: "\{cb}_add(\{bn}, \{v})"
         return (stating :facts from: callFacts text: e0)
     }
@@ -11869,6 +11901,9 @@ emitSetMethodCall: function {
         :symtab
         :ctx
         :call
+        mono: bt
+        member: memberWord.slot.has
+        memberV: memberWord.slot.hasv
         fnC: "\{cb}_has"
         bn: bn.stringView
         label: zast.wellKnown.slot.wkItem
@@ -11881,6 +11916,9 @@ emitSetMethodCall: function {
         :symtab
         :ctx
         :call
+        mono: bt
+        member: memberWord.slot.delete
+        memberV: memberWord.slot.deletev
         fnC: "\{cb}_delete"
         bn: bn.stringView
         label: zast.wellKnown.slot.wkItem
@@ -11927,6 +11965,9 @@ emitMapMethodCall: function {
         :symtab
         :ctx
         :call
+        mono: bt
+        member: memberWord.slot.getOne
+        memberV: memberWord.slot.getv
         fnC: "\{cb}_get"
         bn: bn.stringView
         label: zast.wellKnown.slot.wkKey
@@ -11939,6 +11980,9 @@ emitMapMethodCall: function {
         :symtab
         :ctx
         :call
+        mono: bt
+        member: memberWord.slot.getMut
+        memberV: memberWord.slot.getMut
         fnC: "\{cb}_getMut"
         bn: bn.stringView
         label: zast.wellKnown.slot.wkKey
@@ -11951,6 +11995,9 @@ emitMapMethodCall: function {
         :symtab
         :ctx
         :call
+        mono: bt
+        member: memberWord.slot.has
+        memberV: memberWord.slot.hasv
         fnC: "\{cb}_has"
         bn: bn.stringView
         label: zast.wellKnown.slot.wkKey
@@ -11963,6 +12010,9 @@ emitMapMethodCall: function {
         :symtab
         :ctx
         :call
+        mono: bt
+        member: memberWord.slot.remove
+        memberV: memberWord.slot.remove
         fnC: "\{cb}_remove"
         bn: bn.stringView
         label: zast.wellKnown.slot.wkKey
@@ -12010,26 +12060,31 @@ emitIdMapMethodCall: function {
     }
     if mnId == zast.wellKnown.slot.wkGet then {
         vk: colArg :ast :symtab :ctx :call label: zast.wellKnown.slot.wkKey consumes: false
+        noteMemberUse :ctx mono: bt member: memberWord.slot.getOne
         e1: "\{cb}_get(\{recvR}, \{vk})"
         return (stating :facts from: callFacts text: e1)
     }
     if mnId == zast.wellKnown.slot.wkGetMut then {
         vkm: colArg :ast :symtab :ctx :call label: zast.wellKnown.slot.wkKey consumes: false
+        noteMemberUse :ctx mono: bt member: memberWord.slot.getMut
         e1m: "\{cb}_getMut(\{recvR}, \{vkm})"
         return (stating :facts from: callFacts text: e1m)
     }
     if mnId == zast.wellKnown.slot.wkHas then {
         vk: colArg :ast :symtab :ctx :call label: zast.wellKnown.slot.wkKey consumes: false
+        noteMemberUse :ctx mono: bt member: memberWord.slot.has
         e2: "\{cb}_has(\{recvR}, \{vk})"
         return (stating :facts from: callFacts text: e2)
     }
     if mnId == zast.wellKnown.slot.wkKeyAt then {
         vi: colArg :ast :symtab :ctx :call label: zast.wellKnown.slot.wkI consumes: false
+        noteMemberUse :ctx mono: bt member: memberWord.slot.keyAt
         e3: "\{cb}_keyAt(\{recvR}, \{vi})"
         return (stating :facts from: callFacts text: e3)
     }
     if mnId == zast.wellKnown.slot.wkValueAt then {
         vi2: colArg :ast :symtab :ctx :call label: zast.wellKnown.slot.wkI consumes: false
+        noteMemberUse :ctx mono: bt member: memberWord.slot.valueAt
         e4: "\{cb}_valueAt(\{recvR}, \{vi2})"
         return (stating :facts from: callFacts text: e4)
     }
@@ -12052,11 +12107,13 @@ emitIdSetMethodCall: function {
     recvR: colRecvRef :ctx bn: bn.stringView vid: bvid
     if mnId == zast.wellKnown.slot.wkAdd then {
         v: colArg :ast :symtab :ctx :call label: zast.wellKnown.slot.wkItem consumes: false
+        noteMemberUse :ctx mono: bt member: memberWord.slot.add
         e0: "\{cb}_add(\{recvR}, \{v})"
         return (stating :facts from: callFacts text: e0)
     }
     if mnId == zast.wellKnown.slot.wkHas then {
         v: colArg :ast :symtab :ctx :call label: zast.wellKnown.slot.wkItem consumes: false
+        noteMemberUse :ctx mono: bt member: memberWord.slot.has
         e1: "\{cb}_has(\{recvR}, \{v})"
         return (stating :facts from: callFacts text: e1)
     }
@@ -17684,6 +17741,7 @@ emitNestedCollectionBase: function {
     ) then {
         ndcb: spelledCname :ctx tid: nlid
         recvD: colRecvRef :ctx bn: baseAtom vid: bs9vid
+        noteMemberUse :ctx mono: nlid member: memberWord.slot.iterateAll
         return (stating :facts from: callFacts text: "\{ndcb}_iterate(\{recvD})")
     }
     # a view walks too: its read walks reached through a field or off a call's
@@ -17700,19 +17758,17 @@ emitNestedCollectionBase: function {
     # (no `&`).
     if (isSetOriginOf :symtab :ctx tid: nlid) then {
         nscb: spelledCname :ctx tid: nlid
-        if mnId == zast.wellKnown.slot.wkIterate then return (stating
-            :facts
-            from: callFacts
-            text: "\{nscb}_iterate(\{baseAtom})"
-        )
+        if mnId == zast.wellKnown.slot.wkIterate then {
+            noteMemberUse :ctx mono: nlid member: memberWord.slot.iterateAll
+            return (stating :facts from: callFacts text: "\{nscb}_iterate(\{baseAtom})")
+        }
     }
     if (isMapOriginOf :symtab :ctx tid: nlid) then {
         nmpcb: spelledCname :ctx tid: nlid
-        if mnId == zast.wellKnown.slot.wkIterate then return (stating
-            :facts
-            from: callFacts
-            text: "\{nmpcb}_iterate(\{baseAtom})"
-        )
+        if mnId == zast.wellKnown.slot.wkIterate then {
+            noteMemberUse :ctx mono: nlid member: memberWord.slot.iterateAll
+            return (stating :facts from: callFacts text: "\{nmpcb}_iterate(\{baseAtom})")
+        }
         if (
             mnId == zast.wellKnown.slot.wkIterateItems
         ) then return (stating :facts from: callFacts text: "\{nmpcb}_iterateItems(\{baseAtom})")
@@ -17722,11 +17778,10 @@ emitNestedCollectionBase: function {
     if (isIdCollectionOriginOf :symtab :ctx tid: nlid) then {
         nidcb: spelledCname :ctx tid: nlid
         nidrv: colRecvRef :ctx bn: baseAtom vid: bs9vid
-        if mnId == zast.wellKnown.slot.wkIterate then return (stating
-            :facts
-            from: callFacts
-            text: "\{nidcb}_iterate(\{nidrv})"
-        )
+        if mnId == zast.wellKnown.slot.wkIterate then {
+            noteMemberUse :ctx mono: nlid member: memberWord.slot.iterateAll
+            return (stating :facts from: callFacts text: "\{nidcb}_iterate(\{nidrv})")
+        }
         if mnId == zast.wellKnown.slot.wkIterateItems then return (stating
             :facts
             from: callFacts
@@ -18569,6 +18624,7 @@ staticListValueMemberRead: function {
         from: callFacts
         text: "\{dvc}_iterate(\{base})"
     )
+    noteMemberUse :ctx mono: bstamp member: memberWord.slot.iterateAll
     return (stating :facts from: callFacts text: "\{dvc}_iterate(&\{base})")
 }
 
@@ -18831,6 +18887,7 @@ emitIdCollectionMemberRead: function {
         }
         if mnId == zast.wellKnown.slot.wkIterate then {
             idcb: spelledCname :ctx tid: bstamp
+            noteMemberUse :ctx mono: bstamp member: memberWord.slot.iterateAll
             return (stating :facts from: callFacts text: "\{idcb}_iterate(\{recvB2})")
         }
         if mnId == zast.wellKnown.slot.wkIterateItems then {
@@ -18847,6 +18904,7 @@ emitIdCollectionMemberRead: function {
         }
         scb2: spelledCname :ctx tid: bstamp
         if mnId == zast.wellKnown.slot.wkIterate then {
+            noteMemberUse :ctx mono: bstamp member: memberWord.slot.iterateAll
             return (stating :facts from: callFacts text: "\{scb2}_iterate(\{bn2})")
         }
     }
@@ -18859,6 +18917,7 @@ emitIdCollectionMemberRead: function {
         }
         mcb2: spelledCname :ctx tid: bstamp
         if mnId == zast.wellKnown.slot.wkIterate then {
+            noteMemberUse :ctx mono: bstamp member: memberWord.slot.iterateAll
             return (stating :facts from: callFacts text: "\{mcb2}_iterate(\{bn2})")
         }
         if mnId == zast.wellKnown.slot.wkIterateItems then {
@@ -36013,6 +36072,11 @@ memberKey: function {mono: ztypes.tid member: u64} out u64 is {
     return mono.u64 * 64 + member
 }
 
+# memberUsed -- written C calls template member `member` of instance `mono`
+memberUsed: function {ctx: Ctx.view mono: ztypes.tid member: u64} out bool is {
+    return (ctx.memberUses.has item: (memberKey :mono :member))
+}
+
 # noteMemberUse -- written C calls template member `member` (a memberWord
 # slot) of instance `mono`: the instance writes its section. A member its
 # instance was already written without names a function the C never defines.
@@ -38587,6 +38651,57 @@ emitOptionViewMono: function {
     buf.append l6
 }
 
+# setViewProbes -- a String-keyed Set's view-keyed probes, each written where
+# written C calls it (hasv, deletev). The view's bytes are wrapped in a String
+# header that aliases them: has and delete only hash and compare the probe,
+# never store or free it (delete frees the STORED item only). Each records the
+# member it forwards to, so the instance written after keeps it.
+setViewProbes: function {ctx: Ctx monoId: ztypes.tid nm: StringView buf: String.borrow} is {
+    if (memberUsed :ctx mono: monoId member: memberWord.slot.hasv) then {
+        noteMemberUse :ctx mono: monoId member: memberWord.slot.has
+        sv0: "static int z_\{nm}_hasv(const z_\{nm}_t* _this, \{ctx.svC}_t _item) {\n"
+        buf.append sv0
+        sv1: "    \{ctx.strC}_t _k = { _item.size, (char*)_item.data, _item.size };\n"
+        buf.append sv1
+        sv2: "    return z_\{nm}_has(_this, &_k);\n}\n\n"
+        buf.append sv2
+    }
+    if (memberUsed :ctx mono: monoId member: memberWord.slot.deletev) then {
+        noteMemberUse :ctx mono: monoId member: memberWord.slot.delete
+        sd0: "static int z_\{nm}_deletev(z_\{nm}_t* _this, \{ctx.svC}_t _item) {\n"
+        buf.append sd0
+        sd1: "    \{ctx.strC}_t _k = { _item.size, (char*)_item.data, _item.size };\n"
+        buf.append sd1
+        sd2: "    return z_\{nm}_delete(_this, &_k);\n}\n\n"
+        buf.append sd2
+    }
+}
+
+# mapViewProbes -- a String-keyed Map's view-keyed probes, each written where
+# written C calls it (getv, hasv), as a Set's are (setViewProbes)
+mapViewProbes: function {
+    ctx: Ctx monoId: ztypes.tid nm: StringView ov: StringView buf: String.borrow
+} is {
+    if (memberUsed :ctx mono: monoId member: memberWord.slot.getv) then {
+        noteMemberUse :ctx mono: monoId member: memberWord.slot.getOne
+        gv0: "static z_\{ov}_t z_\{nm}_getv(const z_\{nm}_t* _this, \{ctx.svC}_t _key) {\n"
+        buf.append gv0
+        gv1: "    \{ctx.strC}_t _k = { _key.size, (char*)_key.data, _key.size };\n"
+        buf.append gv1
+        gv2: "    return z_\{nm}_get(_this, &_k);\n}\n\n"
+        buf.append gv2
+    }
+    if (memberUsed :ctx mono: monoId member: memberWord.slot.hasv) then {
+        noteMemberUse :ctx mono: monoId member: memberWord.slot.has
+        hv0: "static int z_\{nm}_hasv(const z_\{nm}_t* _this, \{ctx.svC}_t _key) {\n"
+        buf.append hv0
+        hv1: "    \{ctx.strC}_t _k = { _key.size, (char*)_key.data, _key.size };\n"
+        buf.append hv1
+        hv2: "    return z_\{nm}_has(_this, &_k);\n}\n\n"
+        buf.append hv2
+    }
+}
+
 # emitSetMono -- substitute z_Set.c.tmpl for a Set instance (compact-dict
 # struct + add/has/delete/iterate + the SetIter companion). Depends on the
 # element's OptionView mono being emitted first (the iterator yields it).
@@ -38699,25 +38814,12 @@ emitSetMono: function {
         t7: applyTmpl text: t6c key: "OPTIONVIEW" val: ov.stringView
         t8: applyOptionTags :ast :ctx :symtab text: t7 key: "OPTIONVIEW" tid: ovId
         t: applyTmpl text: t8 key: "SETITER" val: si.stringView
-        buf.append t
+        # the view-keyed probes, written after the instance, call its members
+        vp: String
+        if isStr then setViewProbes :ctx :monoId nm: nm.stringView buf: vp
+        buf.append (sectionedText :ctx mono: monoId text: t.stringView)
         buf.append "\n"
-    }
-    if isStr then {
-        # String sets: view-keyed probes. The temporary String header aliases
-        # the view bytes; has/delete only hash and compare, never store or
-        # free the probe (delete frees the STORED item only).
-        sv0: "static int z_\{nm}_hasv(const z_\{nm}_t* _this, \{ctx.svC}_t _item) {\n"
-        buf.append sv0
-        sv1: "    \{ctx.strC}_t _k = { _item.size, (char*)_item.data, _item.size };\n"
-        buf.append sv1
-        sv2: "    return z_\{nm}_has(_this, &_k);\n}\n\n"
-        buf.append sv2
-        sd0: "static int z_\{nm}_deletev(z_\{nm}_t* _this, \{ctx.svC}_t _item) {\n"
-        buf.append sd0
-        sd1: "    \{ctx.strC}_t _k = { _item.size, (char*)_item.data, _item.size };\n"
-        buf.append sd1
-        sd2: "    return z_\{nm}_delete(_this, &_k);\n}\n\n"
-        buf.append sd2
+        buf.append vp
     }
     # `.copy` is declared on SetVal and not on SetRef, so a SetRef mono has no
     # member here to find and nothing is written
@@ -39158,8 +39260,9 @@ emitMapMono: function {
         t13: applyTmpl text: t12 key: "FREE_VAL_DUP" val: freeValDup.stringView
         t14: applyTmpl text: t13 key: "REMOVE_WRAP" val: rmWrap.stringView
         t15: applyTmpl text: t14 key: "REMOVE_BODY" val: removeBody.stringView
-        buf.append t15
-        buf.append "\n"
+        # getMut and the view-keyed probes, written after the instance, call
+        # its members: they are decided first
+        gm: String
         (emitMapGetMut
             :ast
             :symtab
@@ -39170,25 +39273,14 @@ emitMapMono: function {
             nm: nm.stringView
             keyHole: "KEY_ARG_T"
             keyT: keyArgT.stringView
-            :buf
+            buf: gm
         )
-    }
-    if kkind == 1 then {
-        # String-keyed maps: a view-keyed get. The temporary String header
-        # aliases the view bytes; get/find only hash and compare the key,
-        # never store or free it.
-        gv0: "static z_\{ov}_t z_\{nm}_getv(const z_\{nm}_t* _this, \{ctx.svC}_t _key) {\n"
-        buf.append gv0
-        gv1: "    \{ctx.strC}_t _k = { _key.size, (char*)_key.data, _key.size };\n"
-        buf.append gv1
-        gv2: "    return z_\{nm}_get(_this, &_k);\n}\n\n"
-        buf.append gv2
-        hv0: "static int z_\{nm}_hasv(const z_\{nm}_t* _this, \{ctx.svC}_t _key) {\n"
-        buf.append hv0
-        hv1: "    \{ctx.strC}_t _k = { _key.size, (char*)_key.data, _key.size };\n"
-        buf.append hv1
-        hv2: "    return z_\{nm}_has(_this, &_k);\n}\n\n"
-        buf.append hv2
+        vp: String
+        if kkind == 1 then mapViewProbes :ctx :monoId nm: nm.stringView ov: ov.stringView buf: vp
+        buf.append (sectionedText :ctx mono: monoId text: t15.stringView)
+        buf.append "\n"
+        buf.append vp
+        buf.append gm
     }
     (emitMapIters
         :ast
@@ -39300,8 +39392,9 @@ emitIdMapMono: function {
     t6: applyTmpl text: t5 key: "FREE_VAL_DUP" val: freeValDup.stringView
     t7: applyTmpl text: t6 key: "OPTIONVAL" val: ov.stringView
     t: applyTmpl text: t7 key: "GET_BODY" val: getBody.stringView
-    buf.append t
-    buf.append "\n"
+    # getMut and copy, written after the instance, call its members: they are
+    # decided first
+    gm: String
     (emitMapGetMut
         :ast
         :symtab
@@ -39312,8 +39405,16 @@ emitIdMapMono: function {
         nm: nm.stringView
         keyHole: "KEY_T"
         keyT: keyT.stringView
-        :buf
+        buf: gm
     )
+    if (monoMemberUsed :symtab :monoId nameId: zast.wellKnown.slot.wkCopy) then (noteMemberUse
+        :ctx
+        mono: monoId
+        member: memberWord.slot.entriesCap
+    )
+    buf.append (sectionedText :ctx mono: monoId text: t.stringView)
+    buf.append "\n"
+    buf.append gm
     (emitIdMapIters
         :ast
         :symtab
@@ -39367,6 +39468,9 @@ emitMapGetMut: function {
     if (typeReached :ctx tid: gmId).not then return
     gmv: cbaseNoPrefix :ctx tid: gmId
     pm: "\{runtimeDir}/\{file}"
+    # getMut probes through the instance's find (and a Map's hash_key)
+    noteMemberUse :ctx mono: monoId member: memberWord.slot.find
+    noteMemberUse :ctx mono: monoId member: memberWord.slot.hashKey
     rawm: readTemplate :ctx path: pm.stringView
     if rawm.length == 0 then return
     m1: applyTmpl text: rawm key: "NAME" val: nm
@@ -39471,7 +39575,13 @@ emitIdSetMono: function {
     t4: applyTmpl text: t3 key: "IDSETITER" val: si.stringView
     t5: applyTmpl text: t4 key: "OPTIONVIEW" val: ov.stringView
     t6: applyOptionTags :ast :ctx :symtab text: t5 key: "OPTIONVIEW" tid: ovId
-    buf.append t6
+    # copy, written after the instance, calls its items_cap
+    if (monoMemberUsed :symtab :monoId nameId: zast.wellKnown.slot.wkCopy) then (noteMemberUse
+        :ctx
+        mono: monoId
+        member: memberWord.slot.itemsCap
+    )
+    buf.append (sectionedText :ctx mono: monoId text: t6.stringView)
     buf.append "\n"
     # IdSet is one form only, so this writes for every instance that calls it
     (emitColMethodOnDemand
