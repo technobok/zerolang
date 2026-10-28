@@ -3,14 +3,19 @@ typedef struct {
     const char* data;    /* pointer into string buffer or .rodata */
 } z_@StringView@_t;
 
+/*@@row @prelude.StringView_print demand=@StringView_print@@*/
 static void z_@StringView@_print(z_@StringView@_t sv) {
     z_write_line(1, sv.data, sv.size, 1);
 }
 
+/*@@end@@*/
+/*@@row @prelude.StringView_eq demand=@StringView_eq@@*/
 static bool z_@StringView@_eq(z_@StringView@_t a, z_@StringView@_t b) {
     return a.size == b.size && memcmp(a.data, b.data, a.size) == 0;
 }
 
+/*@@end@@*/
+/*@@row @prelude.StringView_cmp demand=@StringView_cmp@@*/
 /* byte-wise lexicographic compare: returns -1 / 0 / 1. Shorter
    view is less than longer when they share a prefix. */
 static int32_t z_@StringView@_cmp(z_@StringView@_t a, z_@StringView@_t b) {
@@ -22,6 +27,8 @@ static int32_t z_@StringView@_cmp(z_@StringView@_t a, z_@StringView@_t b) {
     return 0;
 }
 
+/*@@end@@*/
+/*@@row @prelude.String_from_view demand=@String_from_view@@*/
 static z_@String@_t z_@String@_from_view(z_@StringView@_t sv) {
     z_@String@_t z = {0};
     z.size = sv.size;
@@ -37,4 +44,4 @@ static z_@String@_t z_@String@_from_view(z_@StringView@_t sv) {
     return z;
 }
 
-
+/*@@end@@*/

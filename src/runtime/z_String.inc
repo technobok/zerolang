@@ -4,6 +4,7 @@ typedef struct {
     uint64_t capacity;   /* allocated buffer size */
 } z_@String@_t;
 
+/*@@row @prelude.String_new demand=@String_new@@*/
 static z_@String@_t z_@String@_new(const char* s) {
     z_@String@_t z = {0};
     z.size = (uint64_t)strlen(s);
@@ -14,6 +15,8 @@ static z_@String@_t z_@String@_new(const char* s) {
     return z;
 }
 
+/*@@end@@*/
+/*@@row @prelude.String_cat demand=@String_cat@@*/
 static z_@String@_t z_@String@_cat(z_@String@_t* a, z_@String@_t* b) {
     z_@String@_t z = {0};
     z.size = a->size + b->size;
@@ -25,26 +28,36 @@ static z_@String@_t z_@String@_cat(z_@String@_t* a, z_@String@_t* b) {
     return z;
 }
 
+/*@@end@@*/
+/*@@row @prelude.String_from_f64 demand=@String_from_f64 needs=@String_new@@*/
 static z_@String@_t z_@String@_from_f64(double n) {
     char buf[64];
     snprintf(buf, sizeof(buf), "%g", n);
     return z_@String@_new(buf);
 }
 
+/*@@end@@*/
+/*@@row @prelude.String_print demand=@String_print@@*/
 static void z_@String@_print(const z_@String@_t* s) {
     z_write_line(1, s->data, s->size, 1);
 }
 
+/*@@end@@*/
+/*@@row @prelude.String_free demand=@String_free@@*/
 static void z_@String@_free(z_@String@_t* s) {
     if (s && s->data) free(s->data);
 }
 
+/*@@end@@*/
+/*@@row @prelude.String_eq demand=@String_eq@@*/
 static bool z_@String@_eq(z_@String@_t* a, z_@String@_t* b) {
     if (a == b) return true;
     if (a->size != b->size) return false;
     return a->size == 0 || memcmp(a->data, b->data, a->size) == 0;
 }
 
+/*@@end@@*/
+/*@@row @prelude.String_cmp demand=@String_cmp@@*/
 /* byte-wise lexicographic compare: returns -1 / 0 / 1. Shorter
    string is less than longer when they share a prefix. */
 static int32_t z_@String@_cmp(z_@String@_t* a, z_@String@_t* b) {
@@ -57,6 +70,8 @@ static int32_t z_@String@_cmp(z_@String@_t* a, z_@String@_t* b) {
     return 0;
 }
 
+/*@@end@@*/
+/*@@row @prelude.String_reserve demand=@String_reserve@@*/
 static void z_@String@_reserve(z_@String@_t* s, uint64_t additional) {
     uint64_t needed = s->size + additional;
     if (needed <= s->capacity) return;
@@ -66,6 +81,8 @@ static void z_@String@_reserve(z_@String@_t* s, uint64_t additional) {
     s->capacity = new_cap;
 }
 
+/*@@end@@*/
+/*@@row @prelude.String_append demand=@String_append needs=@String_reserve@@*/
 static void z_@String@_append(z_@String@_t* s, const char* data, uint64_t len) {
     if (len == 0) return;
     z_@String@_reserve(s, len);
@@ -74,6 +91,8 @@ static void z_@String@_append(z_@String@_t* s, const char* data, uint64_t len) {
     s->data[s->size] = '\0';
 }
 
+/*@@end@@*/
+/*@@row @prelude.String_append_byte demand=@String_append_byte needs=@String_reserve@@*/
 static void z_@String@_append_byte(z_@String@_t* s, uint8_t b) {
     z_@String@_reserve(s, 1);
     s->data[s->size] = (char)b;
@@ -81,12 +100,16 @@ static void z_@String@_append_byte(z_@String@_t* s, uint8_t b) {
     s->data[s->size] = '\0';
 }
 
+/*@@end@@*/
+/*@@row @prelude.String_shrink demand=@String_shrink@@*/
 static void z_@String@_shrink(z_@String@_t* s) {
     if (s->size == s->capacity) return;
     s->data = (char*)z_xrealloc(s->data, s->size + 1);
     s->capacity = s->size;
 }
 
+/*@@end@@*/
+/*@@row @prelude.String_create demand=@String_create@@*/
 static z_@String@_t z_@String@_create(uint64_t cap) {
     z_@String@_t z = {0};
     z.capacity = cap;
@@ -97,6 +120,8 @@ static z_@String@_t z_@String@_create(uint64_t cap) {
     return z;
 }
 
+/*@@end@@*/
+/*@@row @prelude.String_copy demand=@String_copy@@*/
 static z_@String@_t z_@String@_copy(const z_@String@_t* s) {
     z_@String@_t z = {0};
     z.size = s->size;
@@ -112,4 +137,4 @@ static z_@String@_t z_@String@_copy(const z_@String@_t* s) {
     return z;
 }
 
-
+/*@@end@@*/

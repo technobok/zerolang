@@ -6255,6 +6255,7 @@ emitSvCompareCall: function {
                 if cargs.length == 0 then cargs.append caf
             }
         }
+        preludeNeed :ctx memb: "@StringView_cmp"
         ce: "\{ctx.svC}_cmp(\{bf}, \{cargs})"
         return (stating :facts from: callFacts text: ce)
     }
@@ -7316,6 +7317,7 @@ emitStringArgMethod: function {
             }
             aacc: "."
             if argPtr then aacc = "->"
+            preludeNeed :ctx memb: "@String_append"
             rapps: "\{ctx.strC}_append(\{recvAddr}, (\{argval})\{aacc}data, (\{argval})\{aacc}size)"
             return (stating :facts from: callFacts text: rapps)
         }
@@ -7330,6 +7332,9 @@ emitStringArgMethod: function {
             :facts
         )
     }
+    # append_byte and reserve are pieces of the String fragment
+    pm: "@String_\{nativeM}"
+    preludeNeed :ctx memb: pm.stringView
     r: "\{ctx.strC}_\{nativeM}(\{recvAddr}, \{argval})"
     return (stating :facts from: callFacts text: r)
 }
@@ -7545,9 +7550,11 @@ stringAppendViewText: function {
     if argTid == ctx.svTid when argvalF.once then {
         # a view read twice is bound once, and frees nothing
         ah: hoistForAddress :ast :symtab :ctx av: argval tid: argTid argNid: zast.nodeid
+        preludeNeed :ctx memb: "@String_append"
         rh: "\{ctx.strC}_append(\{recvAddr}, (\{ah}).data, (\{ah}).size)"
         return (stating :facts from: callFacts text: rh)
     }
+    preludeNeed :ctx memb: "@String_append"
     r: "\{ctx.strC}_append(\{recvAddr}, (\{argval}).data, (\{argval}).size)"
     return (stating :facts from: callFacts text: r)
 }
@@ -8595,7 +8602,10 @@ destroyFnC: function {
     dt: destroyTargetTid :symtab :ctx :tid
     if dt.isZero then return String
     noteDestroyUse :symtab :ctx tid: dt
-    if dt == ctx.strTid then return "\{ctx.strC}_free"
+    if dt == ctx.strTid then {
+        preludeNeed :ctx memb: "@String_free"
+        return "\{ctx.strC}_free"
+    }
     return "\{ctxCnameView :ctx tid: dt}_destroy"
 }
 
@@ -8612,7 +8622,10 @@ destroyLineC: function {
     dt: destroyTargetTid :symtab :ctx :tid
     if dt.isZero then return String
     noteDestroyUse :symtab :ctx tid: dt
-    if dt == ctx.strTid then return "\{ind}\{ctx.strC}_free(&\{nm});\n"
+    if dt == ctx.strTid then {
+        preludeNeed :ctx memb: "@String_free"
+        return "\{ind}\{ctx.strC}_free(&\{nm});\n"
+    }
     addr: "&"
     if (valueIsItsPointer :symtab :ctx tid: dt) then addr = ""
     return "\{ind}\{ctxCnameView :ctx tid: dt}_destroy(\{addr}\{nm});\n"
@@ -16379,9 +16392,13 @@ emitStringMethod: function {
     facts: cfacts.borrow
 } out String is {
     if mnId == zast.wellKnown.slot.wkCopy then {
-        if recvIsPtr then return (stating :facts from: callFacts text: "\{ctx.strC}_copy(\{recv})")
+        if recvIsPtr then {
+            preludeNeed :ctx memb: "@String_copy"
+            return (stating :facts from: callFacts text: "\{ctx.strC}_copy(\{recv})")
+        }
         rhF: cfacts
         rh: addressableText :ast :symtab :ctx e: recv eF: recvF tid: ctx.strTid facts: rhF
+        preludeNeed :ctx memb: "@String_copy"
         return (stating :facts from: callFacts text: "\{ctx.strC}_copy(&\{rh})")
     }
     if mnId == zast.wellKnown.slot.wkLength then {
@@ -16406,6 +16423,7 @@ emitStringMethod: function {
         return (svValueForm :ast :symtab :ctx expr: recv isStr: true vid: recvVid :facts)
     }
     if mnId == zast.wellKnown.slot.wkShrink then {
+        preludeNeed :ctx memb: "@String_shrink"
         if recvIsPtr then return (stating :facts from: callFacts text: "\{ctx.strC}_shrink(\{recv})"
         )
         return (stating :facts from: callFacts text: "\{ctx.strC}_shrink(&\{recv})")
@@ -19571,8 +19589,10 @@ emitResolvedCopy: function {
             cvan2: atomTextOf :ast n: cvpn
             cvav: atomVid :symtab nid: (atomNodeId n: cvpn)
             if cvan2.length > 0 when (isPtrVid :ctx vid: cvav) then {
+                preludeNeed :ctx memb: "@String_copy"
                 return (stating :facts from: callFacts text: "\{ctx.strC}_copy(\{cvpv})")
             }
+            preludeNeed :ctx memb: "@String_copy"
             return (stating :facts from: callFacts text: "\{ctx.strC}_copy(&\{cvpv})")
         }
     }
@@ -19729,10 +19749,12 @@ emitDottedStringConversion: function {
     scl: bindLitIndex :ast :ctx n: (ast.nodes.get i: n.parent)
     if scl > 0 then {
         sclv: litView :ctx li: scl
+        preludeNeed :ctx memb: "@String_from_view"
         return (stating :facts from: callFacts text: "\{ctx.strC}_from_view(\{sclv})")
     }
     if (stampIsSv :symtab :ctx nid: n.parent).not then return "".string
     sbv0: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent)
+    preludeNeed :ctx memb: "@String_from_view"
     return (stating :facts from: callFacts text: "\{ctx.strC}_from_view(\{sbv0})")
 }
 
@@ -21795,9 +21817,11 @@ emitInterpPrint: function {
 } is {
     unusedOps: String
     sNm: emitInterpBuild :ast :symtab :ctx :parts :ind :tmp :buf :strNid ops: unusedOps
+    preludeNeed :ctx memb: "@String_print"
     l1: "\{ind}\{ctx.strC}_print(&\{sNm});\n"
     buf.append l1
     if (scopeOwnsTemp :symtab argNid: strNid) then {
+        preludeNeed :ctx memb: "@String_free"
         l2: "\{ind}\{ctx.strC}_free(&\{sNm});\n"
         buf.append l2
     }
@@ -21848,6 +21872,7 @@ emitInterpBuild: function {
         fallback: "_s"
     )
     strT: "\{ctx.strC}_t"
+    preludeNeed :ctx memb: "@String_create"
     cr: "\{ctx.strC}_create((uint64_t)\{est})"
     (interpLocal
         :ctx
@@ -22138,11 +22163,13 @@ appendFormattedNum: function {
         interpBuffer :ctx :expr :bN :size :ind :buf
         nn: "_b\{bN}_n"
         interpLocal :ctx :expr ctype: "int" name: nn.stringView init: call.stringView :ind :buf :ops
+        preludeNeed :ctx memb: "@String_append"
         st: "\{ctx.strC}_append(&\{sNm}, _b\{bN}, (uint64_t)_b\{bN}_n)"
         interpStep :expr text: st.stringView :ind :buf :ops
         return
     }
     # the statement form, written in place: the commonest part of all
+    preludeNeed :ctx memb: "@String_append"
     buf.append ind
     buf.append "char _b"
     appendDecimal :buf n: bN
@@ -22186,6 +22213,7 @@ appendViewPart: function {
         svT: "\{ctx.svC}_t"
         interpLocal :ctx :expr ctype: svT.stringView name: rd.stringView init: val :ind :buf :ops
     }
+    preludeNeed :ctx memb: "@String_append"
     st: "\{ctx.strC}_append(&\{sNm}, \{rd}.data, \{rd}.size)"
     interpStep :expr text: st.stringView :ind :buf :ops
 }
@@ -22213,6 +22241,7 @@ appendStrPart: function {
         stC: typeRefC :ast :symtab :ctx tid: stT
         interpLocal :ctx :expr ctype: stC.stringView name: rd.stringView init: val :ind :buf :ops
     }
+    preludeNeed :ctx memb: "@String_append"
     st: "\{ctx.strC}_append(&\{sNm}, \{rd}.data, \{rd}.len)"
     interpStep :expr text: st.stringView :ind :buf :ops
 }
@@ -22256,6 +22285,7 @@ appendStringPart: function {
         # a String read through a borrowed field is a pointer with no variable
         # behind it
         if an0.length == 0 when (pathIsPointer :ast :symtab :ctx :n) then sAcc = "->".string
+        preludeNeed :ctx memb: "@String_append"
         sa: "\{ctx.strC}_append(&\{sNm}, \{val}\{sAcc}data, \{val}\{sAcc}size)"
         interpStep :expr text: sa.stringView :ind :buf :ops
         return
@@ -22265,9 +22295,11 @@ appendStringPart: function {
     hNm: argHoistName :symtab :ctx argNid: (interpPartNodeId :n) fallback: "_hp"
     strT: "\{ctx.strC}_t"
     interpLocal :ctx :expr ctype: strT.stringView name: hNm.stringView init: val :ind :buf :ops
+    preludeNeed :ctx memb: "@String_append"
     sh: "\{ctx.strC}_append(&\{sNm}, \{hNm}.data, \{hNm}.size)"
     interpStep :expr text: sh.stringView :ind :buf :ops
     if (scopeOwnsTemp :symtab argNid: (interpPartNodeId :n)) then {
+        preludeNeed :ctx memb: "@String_free"
         sf: "\{ctx.strC}_free(&\{hNm})"
         interpStep :expr text: sf.stringView :ind :buf :ops
     }
@@ -22332,6 +22364,7 @@ interpBoolPart: function {
     nn: "_b\{bN}_n"
     ni: "\{vn} ? \{tl} : \{fl}"
     interpLocal :ctx :expr ctype: "int" name: nn.stringView init: ni.stringView :ind :buf :ops
+    preludeNeed :ctx memb: "@String_append"
     st: "\{ctx.strC}_append(&\{sNm}, \{bn}, (uint64_t)\{nn})"
     interpStep :expr text: st.stringView :ind :buf :ops
 }
@@ -22469,6 +22502,7 @@ emitInterpPart: function {
     if n.stringchunk then {
         tv: (zast.poolTextAt pool: ast.names ref: n.text).stringView
         esc: cEscape text: tv
+        preludeNeed :ctx memb: "@String_append"
         sc: "\{ctx.strC}_append(&\{sNm}, \"\{esc}\", sizeof(\"\{esc}\")-1)"
         interpStep :expr text: sc.stringView :ind :buf :ops
         return
@@ -22814,6 +22848,7 @@ emitPrintStringLiteral: function {
         return
     }
     lv: litView :ctx :li
+    preludeNeed :ctx memb: "@StringView_print"
     l: "\{ind}\{ctx.svC}_print(\{lv});\n"
     buf.append l
 }
@@ -22844,9 +22879,11 @@ emitPrintViaStringView: function {
             (symtab.reg.typetypeOf typeId: argTid) == ztypes.ztypetype.classType
         ) when argOrig.isZero when (isPtrVid :ctx :vid).not then usesAmp = true
         if usesAmp then {
+            preludeNeed :ctx memb: "@StringView_print"
             lpt: "\{ind}\{ctx.svC}_print(\{mcb}(&\{name}));\n"
             buf.append lpt
         } else {
+            preludeNeed :ctx memb: "@StringView_print"
             lpt2: "\{ind}\{ctx.svC}_print(\{mcb}(\{name}));\n"
             buf.append lpt2
         }
@@ -22900,9 +22937,11 @@ emitPrintAtom: function {
     }
     if (stampIsStr :symtab :ctx nid: n.nodeid) then {
         if (isPtrVid :ctx vid: anv) then {
+            preludeNeed :ctx memb: "@String_print"
             lps: "\{ind}\{ctx.strC}_print(\{anmE});\n"
             buf.append lps
         } else {
+            preludeNeed :ctx memb: "@String_print"
             lps2: "\{ind}\{ctx.strC}_print(&\{anmE});\n"
             buf.append lps2
         }
@@ -22910,11 +22949,13 @@ emitPrintAtom: function {
     }
     argTid: stampIdOf :symtab nid: n.nodeid
     if ctx.svTid == argTid then {
+        preludeNeed :ctx memb: "@StringView_print"
         lpv: "\{ind}\{ctx.svC}_print(\{anmE});\n"
         buf.append lpv
         return
     }
     if (originIsTid :symtab tid: argTid originTid: (ctx.origins.get i: family.slot.str)) then {
+        preludeNeed :ctx memb: "@StringView_print"
         lpstr: "\{ind}\{ctx.svC}_print((\{ctx.svC}_t){ .data = \{anmE}.data, .size = \{anmE}.len });\n"
         buf.append lpstr
         return
@@ -22947,6 +22988,7 @@ emitPrintValueExpr: function {
     if (stampIsSv :symtab :ctx nid: eid) then {
         ev: emitExpr :ast :symtab :ctx :n
         flushArgHoists :ctx :ind :tmp :buf
+        preludeNeed :ctx memb: "@StringView_print"
         lpe: "\{ind}\{ctx.svC}_print(\{ev});\n"
         buf.append lpe
         return
@@ -22963,18 +23005,22 @@ emitPrintValueExpr: function {
         hps: tmpNext :ctx :tmp
         lsa: "\{ind}\{ctx.strC}_t _h\{hps} = \{es};\n"
         buf.append lsa
+        preludeNeed :ctx memb: "@String_print"
         lsb: "\{ind}\{ctx.strC}_print(&_h\{hps});\n"
         buf.append lsb
+        preludeNeed :ctx memb: "@String_free"
         lsf: "\{ind}\{ctx.strC}_free(&_h\{hps});\n"
         buf.append lsf
         return
     }
     # a String read through a borrowed field is already a pointer
     if (pathIsPointer :ast :symtab :ctx :n) then {
+        preludeNeed :ctx memb: "@String_print"
         lsp: "\{ind}\{ctx.strC}_print(\{es});\n"
         buf.append lsp
         return
     }
+    preludeNeed :ctx memb: "@String_print"
     lsl: "\{ind}\{ctx.strC}_print(&\{es});\n"
     buf.append lsl
 }
@@ -23002,6 +23048,7 @@ emitPrintCallValue: function {
     )
     flushArgHoists :ctx :ind :tmp :buf
     if (stampIsSv :symtab :ctx nid: call.nodeid) then {
+        preludeNeed :ctx memb: "@StringView_print"
         lpcv: "\{ind}\{ctx.svC}_print(\{ce});\n"
         buf.append lpcv
         return
@@ -23009,11 +23056,13 @@ emitPrintCallValue: function {
     hpc: tmpNext :ctx :tmp
     lpa: "\{ind}\{ctx.strC}_t _h\{hpc} = \{ce};\n"
     buf.append lpa
+    preludeNeed :ctx memb: "@String_print"
     lpb: "\{ind}\{ctx.strC}_print(&_h\{hpc});\n"
     buf.append lpb
     # a borrow-returning call (an element view) hands back storage its container
     # still owns
     if (callRhsIsBorrow :ast :symtab :ctx :call) then return
+    preludeNeed :ctx memb: "@String_free"
     lpf: "\{ind}\{ctx.strC}_free(&_h\{hpc});\n"
     buf.append lpf
 }
@@ -23174,6 +23223,7 @@ copyRvalueHoist: function {
             argNid: (zast.nodeIdOf n: (ast.nodes.get i: n.parent))
             pv: pv.stringView
         )
+        preludeNeed :ctx memb: "@String_copy"
         return (stating :facts from: callFacts text: "\{ctx.strC}_copy(&\{tnm})")
     } else {
         return "".string
@@ -23243,6 +23293,7 @@ emitStringBindValue: function {
                         pv: pv.stringView
                     )
                     flushArgHoists :ctx :ind :tmp :buf
+                    preludeNeed :ctx memb: "@String_copy"
                     lc: "\{ind}\{ctx.strC}_t \{nm} = \{ctx.strC}_copy(&\{tnm});\n"
                     buf.append lc
                     tmp.oweFree name: nm.string vid: nmVid
@@ -23947,6 +23998,7 @@ emitStringBind: function {
         fvN: stringCopyLitIndex :ast :symtab :ctx n: avn
         if fvN > 0 then {
             fvv: litView :ctx li: fvN
+            preludeNeed :ctx memb: "@String_from_view"
             lsc: "\{ind}\{ctx.strC}_t \{nm} = \{ctx.strC}_from_view(\{fvv});\n"
             buf.append lsc
             tmp.oweFree name: nm.string vid: nameVid
@@ -24854,6 +24906,7 @@ emitReassignDestroy: function {
     buf: String.borrow
 } is {
     if (stampIsStr :symtab :ctx nid: rtnid) then {
+        preludeNeed :ctx memb: "@String_free"
         buf.append "\{ind}\{ctx.strC}_free(&\{nm2});\n"
         return
     }
@@ -27337,7 +27390,7 @@ emitBoolElse: function {
 # since (fL, lL) so a local declared inside a block (a match arm) is freed at
 # block end, not function end (where it is out of C scope). LIFO order.
 flushBlockFrees: function {
-    ctx: Ctx.view
+    ctx: Ctx
     tmp: TmpCtr
     fL: u64
     lL: u64
@@ -27356,6 +27409,7 @@ flushBlockFrees: function {
     for tmp.frees.length > fL loop {
         fvo: tmp.frees.pop
         if live when fvo.spent.not then {
+            preludeNeed :ctx memb: "@String_free"
             ff: "    \{ctx.strC}_free(&\{fvo.name});\n"
             buf.append ff
         }
@@ -27392,7 +27446,7 @@ closeScopeBlock: function {
 # collection destroys before String frees: the emitter's own temporaries
 # (`temps`) or the locals.
 emitRowsSince: function {
-    ctx: Ctx.view tmp: TmpCtr.view fL: u64 lL: u64 temps: bool buf: String.borrow
+    ctx: Ctx tmp: TmpCtr.view fL: u64 lL: u64 temps: bool buf: String.borrow
 } is {
     i: tmp.listFrees.length
     for i > lL loop {
@@ -27404,6 +27458,7 @@ emitRowsSince: function {
     for j > fL loop {
         j = j - 1
         fr: tmp.frees.get i: j
+        preludeNeed :ctx memb: "@String_free"
         if (
             fr.vid.isZero == temps
         ) when fr.spent.not then buf.append "    \{ctx.strC}_free(&\{fr.name});\n"
@@ -27469,7 +27524,7 @@ emitScopeDestroy: function {
 # spendOwedFree -- emit the destroy the binding of `vid` registered, newest
 # registration first, and mark it spent; false when it registered none.
 spendOwedFree: function {
-    ctx: Ctx.view tmp: TmpCtr vid: ztypes.vid ind: StringView buf: String.borrow
+    ctx: Ctx tmp: TmpCtr vid: ztypes.vid ind: StringView buf: String.borrow
 } out bool is {
     i: tmp.listFrees.length
     for i > 0 loop {
@@ -27487,6 +27542,7 @@ spendOwedFree: function {
         ff: tmp.frees.getMut i: j
         if ff.vid == vid when ff.spent.not then {
             ff.spent = true
+            preludeNeed :ctx memb: "@String_free"
             buf.append "\{ind}\{ctx.strC}_free(&\{ff.name});\n"
             return true
         }
@@ -27564,6 +27620,7 @@ emitContinueFrees: function {
     for j > fMark loop {
         j = j - 1
         nm: tmp.frees.get i: j
+        preludeNeed :ctx memb: "@String_free"
         if nm.spent.not when (
             allRows or nm.vid.isZero
         ) then buf.append "\{ind}\{ctx.strC}_free(&\{nm.name});\n"
@@ -27628,6 +27685,7 @@ emitExitItem: function {
         ff: tmp.frees.get i: j
         if ff.vid == vid when ff.spent.not then {
             if (exitKeeps :ctx :vid name: ff.name.stringView :retExpr :keepRefd).not then {
+                preludeNeed :ctx memb: "@String_free"
                 buf.append "\{ind}\{ctx.strC}_free(&\{ff.name});\n"
             }
             return
@@ -35180,6 +35238,7 @@ emitReturnCleanup: function {
             fvR.spent or (exitKeeps :ctx vid: fvR.vid name: fvR.name.stringView :retExpr :keepRefd)
         ).not
         if keepF when allRows or fvR.vid.isZero then {
+            preludeNeed :ctx memb: "@String_free"
             lfR: "\{ind}\{ctx.strC}_free(&\{fvR.name});\n"
             buf.append lfR
         }
@@ -35357,8 +35416,9 @@ emitBodyEndFrees: function {
 
 # emitOwedRows -- the rows still owed, in registration order: the emitter's own
 # temporaries (`temps`) or the locals, and never one already spent.
-emitOwedRows: function {ctx: Ctx.view tmp: TmpCtr.view temps: bool buf: String.borrow} is {
+emitOwedRows: function {ctx: Ctx tmp: TmpCtr.view temps: bool buf: String.borrow} is {
     for each fv: tmp.frees loop {
+        preludeNeed :ctx memb: "@String_free"
         if (
             fv.vid.isZero == temps
         ) when fv.spent.not then buf.append "    \{ctx.strC}_free(&\{fv.name});\n"
@@ -37411,8 +37471,10 @@ emitListSort: function {
     lt: String
     if isStr.not when isSv.not then lt = sortLessC :ast :symtab :ctx :elem
     if isStr then {
+        preludeNeed :ctx memb: "@String_cmp"
         buf.append "\{s0} { return \{ctx.strC}_cmp(&_a, &_b) < 0; }\n"
     } else if isSv then {
+        preludeNeed :ctx memb: "@StringView_cmp"
         buf.append "\{s0} { return \{ctx.svC}_cmp(_a, _b) < 0; }\n"
     } else if (sortCallsWritten :ast :symtab :elem) then {
         buf.append "\{s0};\n"
@@ -46624,6 +46686,7 @@ emitStructDestructor: function {
                 nameId: (fnameIds.get i: fi)
             )
             if fid == ctx.strTid then {
+                preludeNeed :ctx memb: "@String_free"
                 ds: "    \{ctx.strC}_free(&p->\{fC});\n"
                 buf.append ds
             } else if bxF.isZero.not then {
@@ -46822,6 +46885,9 @@ noteEqUse: function {
     tid: ztypes.tid
 } is {
     t: ztypecheck.typedefChaseTid st: symtab :tid
+    # String's and StringView's `==` are pieces of their runtime fragments
+    if t == ctx.strTid then preludeNeed :ctx memb: "@String_eq"
+    if (isViewLaid :ctx tid: t) then preludeNeed :ctx memb: "@StringView_eq"
     if (ctx.eqUsed.has item: t) then return
     if (ctx.emittedUserTypes.has item: t) then {
         cn: ctxCname :ctx tid: t
