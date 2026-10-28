@@ -105,7 +105,7 @@ NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 	perf-strict pre-push perf-elision any-guard typename-guard emitter-guard frontend-guard \
 	lifetime-guard user-native-guard shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard case-guard require-guard mode-parity zlink-rules-guard \
 	refusal-guard static-tcc-guard zlink-guard emit-set ident-set const-row-guard \
-	deadcode-guard typeuse-guard static-value-guard alias-label-guard fwd-shape-guard eager-guard eager-lib-guard \
+	deadcode-guard cdead-guard cc-unused-guard static-value-guard alias-label-guard fwd-shape-guard eager-guard eager-lib-guard \
 	highlight-guard view-guard fallback-guard clean native-guard generic-param-guard \
 	zl-full-guard natives-tbl-guard
 
@@ -188,7 +188,7 @@ ci:
 	@$(MAKE) --no-print-directory windows-due
 
 # ci-gates -- the gates ci runs in parallel, after perf-strict.
-ci-gates: style-lint zl-full-guard complexity-report warn-check pedantic-check emitter-guard typename-guard frontend-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard highlight-guard any-guard deadcode-guard typeuse-guard static-value-guard eager-guard eager-lib-guard case-guard user-native-guard shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard readable-check test-tcc-heavy test-clang test-signed-ub test-math-arm64 test-sqlite-arm64 test-math-noasm test-portable-scalars test-mingw test-tcc-mingw test-msvc-wine test-msvc-corpus math-asm-guard matrix-guard constparity-guard docs-link-guard mode-parity ci-corpus
+ci-gates: style-lint zl-full-guard complexity-report warn-check pedantic-check emitter-guard typename-guard frontend-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard highlight-guard any-guard deadcode-guard cdead-guard cc-unused-guard static-value-guard eager-guard eager-lib-guard case-guard user-native-guard shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard readable-check test-tcc-heavy test-clang test-signed-ub test-math-arm64 test-sqlite-arm64 test-math-noasm test-portable-scalars test-mingw test-tcc-mingw test-msvc-wine test-msvc-corpus math-asm-guard matrix-guard constparity-guard docs-link-guard mode-parity ci-corpus
 
 ci-corpus: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --heavy --jobs $(NPROC)
@@ -1958,77 +1958,263 @@ deadcode-guard: bin/zc
 	  echo "deadcode-guard OK: $$n unreachable statements (baseline $(DEADCODE_BASELINE))"; \
 	fi
 
-# typeuse-guard -- every C type the emitter writes is spelled by the code it
-# writes: a struct, enum or forward declaration nothing reachable from main
-# names is not written. No C compiler warns about an unused file-scope type,
-# so the C is read here: each top-level chunk is owned by the z_tN name it
-# defines, and reaches every z_tN name it mentions. The baseline is the types
-# that only functions spell which the checker demanded and the emitter's own
-# loop lowering never calls (a range's `times`, `upto`, `downto`, `call`).
-TYPEUSE_BASELINE := 75
+# cdead-guard -- every top-level C item the emitter writes is reached from
+# `main`. No C compiler reports an unused type, macro or static inline function,
+# or a function only an unused one calls, so the C is read here: the C of each
+# corpus program and of zc itself, once for each preprocessor configuration the
+# C branches on (C17 and C23, the portable integer and float code, clang, tcc,
+# MSVC, MinGW). Each top-level item -- function, prototype, type, enumerator,
+# static, macro -- is owned by the names it defines and reaches every name it
+# mentions. `main`, a name an #if tests and a #define that configures a system
+# header are the roots. An item no configuration reaches is dead, and an item
+# the reader cannot name fails the guard. tests/c/cdead_probe.c holds dead items
+# of every kind, and live ones only a careless reader misses: the reader must
+# report exactly CDEAD_PROBE there before its count is trusted. The baseline is
+# the dead items the emitter writes today (corpus, then zc); lower it as it falls.
+CDEAD_BASELINE := 217731 772
+CDEAD_PROBE := cdead_dead_fn cdead_dead_fn_ft cdead_dead_inline cdead_dead_leaf \
+	cdead_dead_macro cdead_dead_proto_t cdead_dead_str cdead_dead_t cdead_dead_vtable_t
 
-define TYPEUSE_GUARD_PY
-import re, sys
+define CDEAD_GUARD_PY
+import re, subprocess, sys
 from collections import defaultdict
-NAME = re.compile(r'\b(z_t\d+|Z_T\d+|_zag\d+|_zc?s\d+)')
-DEF = [re.compile(r'^\s*typedef\s+struct\s+(z_t\d+)_t\b'), re.compile(r'^\s*struct\s+(z_t\d+)_t\b'),
-       re.compile(r'\}\s*(z_t\d+)(?:_tag)?_t\s*;\s*$$', re.M), re.compile(r'^\s*static\s+const\s+[\w ]+\s+(_zag\d+)\b'),
-       re.compile(r'^\s*static\s+const\s+char\s+(_zc?s\d+)_d\b'),
-       re.compile(r'^\s*(?:static\s+)?(?:const\s+)?[\w\*\s]+?\b(z_t\d+)(?:_[a-z_]+)?\s*\(', re.M),
-       re.compile(r'^\s*#define\s+(z_t\d+)')]
-def canon(n): return 'z_t' + n[3:] if n.startswith('Z_T') else n
-def chunks(text):
-    out, cur, depth = [], [], 0
-    for line in text.splitlines():
-        cur.append(line); depth += line.count('{') - line.count('}')
-        if depth == 0 and line.rstrip().endswith((';', '}')): out.append('\n'.join(cur)); cur = []
-    if cur: out.append('\n'.join(cur))
-    return out
-def owner(ch):
-    first = ch.lstrip().split('\n', 1)[0]
-    for p in DEF:
-        m = p.search(first) if p.pattern.startswith('^') else p.search(ch)
-        if m: return m.group(1)
-    return None
-total = 0
-for path in sys.argv[1:]:
-    own, todo, seen = defaultdict(list), set(), set()
-    for ch in chunks(open(path, errors='replace').read()):
-        o, refs = owner(ch), {canon(n) for n in NAME.findall(ch)}
-        if o is None: todo |= refs
-        else: own[canon(o)].append((ch, refs))
-    while todo:
-        n = todo.pop()
-        if n in seen: continue
-        seen.add(n)
-        for ch, refs in own.get(n, []): todo |= refs - seen
-    for n, cs in own.items():
-        if n in seen: continue
-        ty = [ch for ch, _ in cs if re.match(r'\s*(typedef|struct|\})', ch)]
-        if ty:
-            total += 1; print('  %s: %s %s' % (path.rsplit('/', 1)[-1], n, ty[0].strip().split('\n')[0][:60]))
-print('TOTAL', total)
-endef
-export TYPEUSE_GUARD_PY
+# the preprocessor configurations the emitted C branches on; reach is their union
+CONFIGS = [
+    ['-std=c17'],
+    ['-std=c23'],
+    ['-std=c17', '-DZ_WORD_PORTABLE', '-DZ_INT128_PORTABLE', '-DZ_F16_PORTABLE',
+     '-U__SIZEOF_FLOAT128__', '-U__SIZEOF_INT128__', '-U__FLT16_MANT_DIG__'],
+    ['-std=c17', '-D__clang__'],
+    ['-undef', '-D__TINYC__', '-D__linux__', '-D__x86_64__', '-D__STDC_VERSION__=201112L'],
+    ['-undef', '-D_WIN32', '-D_WIN64', '-D_MSC_VER=1940', '-D_M_X64', '-D__STDC_VERSION__=201710L'],
+    ['-std=c17', '-U__linux__', '-U__linux', '-Ulinux', '-U__unix__', '-U__unix', '-Uunix',
+     '-D_WIN32', '-D_WIN64'],
+]
+SENT = 'int cdead_sentinel_;'
+# a name, but not a member after `.` or `->`
+ID = re.compile(r'(?<![.\w>])(?<!->)[A-Za-z_]\w*')
+ATTR = re.compile(r'\b(__attribute__|__declspec)\s*\(')
 
-typeuse-guard: bin/zc
-	@d=$$(mktemp -d); \
+def pre(text, flags):
+    """the file's own text for one configuration: conditionals resolved, macros
+    kept, system headers not read"""
+    src = SENT + '\n' + re.sub(r'(?m)^\s*#\s*include\b.*$$', '', text)
+    out = subprocess.run(['gcc', '-E', '-P', '-fdirectives-only', '-nostdinc', *flags, '-x', 'c', '-'],
+                         input=src, capture_output=True, text=True).stdout
+    return out.split(SENT, 1)[1]
+
+def strip(t):
+    t = re.sub(r'\\\n', ' ', t)
+    t = re.sub(r'/\*.*?\*/', ' ', t, flags=re.S)
+    t = re.sub(r'//[^\n]*', '', t)
+    t = re.sub(r'"(\\.|[^"\\\n])*"', '""', t)
+    return re.sub(r"'(\\.|[^'\\\n])*'", "0", t)
+
+def unattr(t):
+    while True:
+        m = ATTR.search(t)
+        if not m: return t
+        i, d = m.end(), 1
+        while d and i < len(t):
+            d += {'(': 1, ')': -1}.get(t[i], 0); i += 1
+        t = t[:m.start()] + ' ' + t[i:]
+
+def chunks(text):
+    """the top-level items, one string each: a directive, or the lines up to a
+    `;` or `}` at brace depth 0"""
+    out, cur, depth = [], [], 0
+    for line in text.split('\n'):
+        s = line.strip()
+        if not s: continue
+        if depth == 0 and not cur and s.startswith('#'):
+            out.append(s); continue
+        cur.append(s); depth += s.count('{') - s.count('}')
+        if depth == 0 and s.endswith((';', '}')):
+            out.append(' '.join(cur)); cur = []
+    if cur: out.append(' '.join(cur))
+    return out
+
+def top_paren(head):
+    d = 0
+    for i, c in enumerate(head):
+        if c == '(' and d == 0: return i
+        d += {'(': 1, ')': -1, '[': 1, ']': -1}.get(c, 0)
+    return -1
+
+def enumerators(body):
+    inner = body[1:body.find('}')]
+    return [m.group(1) for m in re.finditer(r'(?:^|,)\s*(\w+)\s*(?:=[^,]*)?(?=,|$$)', inner)]
+
+def classify(ch):
+    """(kind, names) for one top-level item; no names when it defines none"""
+    if ch.startswith('#'):
+        m = re.match(r'#\s*define\s+(\w+)', ch)
+        return ('macro', [m.group(1)]) if m else (None, [])
+    t = unattr(ch)
+    if re.match(r'(_Static_assert|static_assert)\b', t): return (None, [])
+    b = t.find('{')
+    head = t if b < 0 else t[:b]
+    if re.match(r'typedef\b', t):
+        m = re.search(r'\(\s*\*\s*(\w+)\s*\)\s*\(', t) if b < 0 else None
+        names = [m.group(1)] if m else []
+        if not m:
+            tail = re.sub(r'\[[^\]]*\]', '', t[t.rfind('}') + 1:] if b >= 0 else t)
+            ids = ID.findall(tail.rstrip(' ;'))
+            if ids: names.append(ids[-1])
+        tm = re.match(r'typedef\s+(?:const\s+)?(?:struct|union|enum)\s+(\w+)', t)
+        if tm and b >= 0 and tm.group(1) not in names: names.append(tm.group(1))
+        if re.match(r'typedef\s+enum\b', t) and b >= 0: names += enumerators(t[b:])
+        return ('type', names)
+    m = re.match(r'(?:(?:static|const|volatile|extern|inline)\s+)*(struct|union|enum)\s+(\w+)\s*([{;])', t)
+    if m and (m.group(3) == ';' or t.endswith('};') and not re.search(r'\}\s*\w+\s*(\[[^\]]*\])?\s*(=|;)', t)):
+        names = [m.group(2)]
+        if m.group(1) == 'enum' and b >= 0: names += enumerators(t[b:])
+        return ('type', names)
+    p = top_paren(head)
+    eq = head.find('=')
+    if p > 0 and (eq < 0 or eq > p):
+        ids = ID.findall(head[:p])
+        if ids and not re.match(r'(if|while|for|switch|return|sizeof)$$', ids[-1]):
+            return ('fn', [ids[-1]])
+    cut = len(t)
+    for c in ('=', ';'):
+        i = t.find(c)
+        if 0 <= i < cut: cut = i
+    ids = ID.findall(re.sub(r'\[[^\]]*\]', '', t[:cut]))
+    return ('var', [ids[-1]]) if ids else (None, [])
+
+def raw_roots(raw):
+    """the names the preprocessor itself consumes: those an #if tests, and each
+    #define directly ahead of an #include (it configures a system header)"""
+    roots, pending = set(), set()
+    for line in strip(raw).split('\n'):
+        s = line.strip()
+        if not s: continue
+        m = re.match(r'#\s*(if|ifdef|ifndef|elif)\b(.*)', s)
+        if m: roots |= set(ID.findall(m.group(2))); continue
+        m = re.match(r'#\s*define\s+(\w+)', s)
+        if m: pending.add(m.group(1)); continue
+        if re.match(r'#\s*include\b', s): roots |= pending
+        if not re.match(r'#\s*(else|endif)\b', s): pending = set()
+    return roots
+
+def analyse(path):
+    """the dead items of one file, {first name: kind}, and the items it could
+    not name"""
+    raw = open(path, errors='replace').read()
+    reached, groups, unowned = set(), {}, []
+    roots = raw_roots(raw) | {'main'}
+    for flags in CONFIGS:
+        own = defaultdict(set)
+        for ch in chunks(strip(pre(raw, flags))):
+            kind, names = classify(ch)
+            if not names:
+                if not re.match(r'#\s*(undef|pragma)|(_Static_assert|static_assert)\b', ch):
+                    unowned.append(ch[:80])
+                continue
+            refs = set(ID.findall(ch if ch.startswith('#') else unattr(ch))) - set(names)
+            for n in names: own[n] |= refs
+            groups.setdefault(names[0], [kind, set()])[1].update(names)
+        seen, todo = set(), set(roots)
+        while todo:
+            n = todo.pop()
+            if n in seen: continue
+            seen.add(n)
+            todo |= own.get(n, set()) - seen
+        reached |= seen
+    # an item (a prototype and its definition are one) is dead when no
+    # configuration reaches any name it defines
+    return {p: k for p, (k, ns) in groups.items() if not (ns & reached)}, sorted(set(unowned))
+
+listing = sys.argv[1] == '--list'
+tot = defaultdict(int); uo = 0
+for p in sys.argv[2 if listing else 1:]:
+    items, unowned = analyse(p)
+    uo += len(unowned)
+    for n, k in sorted(items.items()):
+        tot[k] += 1
+        if listing: print('DEAD %s %s' % (k, n))
+    for u in unowned: print('UNOWNED %s: %s' % (p.rsplit('/', 1)[-1], u))
+print('KINDS', ' '.join('%s=%d' % kv for kv in sorted(tot.items())))
+print('TOTAL', sum(tot.values()), uo)
+endef
+export CDEAD_GUARD_PY
+
+# GUARD_EMIT_C -- write the C of every corpus program into $$d, and zc's own C
+# into $$d/zc/zc.c, for the guards that read emitted C. A program that does not
+# emit is left out: the corpus runner reports it.
+GUARD_EMIT_C = mkdir -p $$d/zc; \
 	for f in examples/*.z tests/fixtures/emitc_corpus/*.z; do \
 	  b=$$(basename $$f .z); bin/zc emit $$f -o $$d/$$b.c 2>/dev/null || rm -f $$d/$$b.c; \
 	done; \
-	python3 -c "$$TYPEUSE_GUARD_PY" $$d/*.c > $$d/report; \
-	n=$$(sed -n 's/^TOTAL //p' $$d/report); \
-	if [ "$$n" -gt "$(TYPEUSE_BASELINE)" ]; then \
-	  echo "typeuse-guard FAIL: $$n unused C types (baseline $(TYPEUSE_BASELINE))"; \
-	  grep -v '^TOTAL' $$d/report | head -40; \
-	  echo "  A type written that nothing spells: see closeReachedTypes in src/zemitterc.z."; \
+	bin/zc zc --src src --system lib/system $(ZCHASH) --emit-c $$d/zc/zc.c >/dev/null
+
+cdead-guard: bin/zc
+	@d=$$(mktemp -d); \
+	got=$$(python3 -c "$$CDEAD_GUARD_PY" --list tests/c/cdead_probe.c | sed -n 's/^DEAD [a-z]* //p' | tr '\n' ' '); \
+	if [ "$$got" != "$$(echo $(CDEAD_PROBE)) " ]; then \
+	  echo "cdead-guard FAIL: the reader does not see tests/c/cdead_probe.c's dead items"; \
+	  echo "  want: $(CDEAD_PROBE)"; echo "  got:  $$got"; rm -rf $$d; exit 1; \
+	fi; \
+	$(GUARD_EMIT_C); \
+	ls $$d/*.c | xargs -P $(NPROC) -n 40 python3 -c "$$CDEAD_GUARD_PY" > $$d/report; \
+	python3 -c "$$CDEAD_GUARD_PY" $$d/zc/zc.c > $$d/zcreport; \
+	n=$$(awk '/^TOTAL/ {s += $$2} END {print s}' $$d/report); z=$$(awk '/^TOTAL/ {print $$2}' $$d/zcreport); \
+	u=$$(cat $$d/report $$d/zcreport | awk '/^TOTAL/ {s += $$3} END {print s}'); \
+	kinds=$$(cat $$d/report $$d/zcreport | tr ' ' '\n' | grep = | awk -F= '{a[$$1] += $$2} END {for (k in a) printf " %s=%d", k, a[k]}'); \
+	set -- $(CDEAD_BASELINE); \
+	if [ "$$u" -gt 0 ]; then \
+	  echo "cdead-guard FAIL: $$u top-level C items the reader cannot name"; grep '^UNOWNED' $$d/report $$d/zcreport | head -20; \
 	  rm -rf $$d; exit 1; \
-	elif [ "$$n" -lt "$(TYPEUSE_BASELINE)" ]; then \
-	  echo "typeuse-guard: $$n < baseline $(TYPEUSE_BASELINE) -- lower TYPEUSE_BASELINE here"; \
+	elif [ "$$n" -gt "$$1" ] || [ "$$z" -gt "$$2" ]; then \
+	  echo "cdead-guard FAIL: $$n dead C items in the corpus, $$z in zc (baseline $(CDEAD_BASELINE));$$kinds"; \
+	  echo "  A C item written that main does not reach: see emitC in src/zemitterc.z."; \
+	  rm -rf $$d; exit 1; \
+	elif [ "$$n" -lt "$$1" ] || [ "$$z" -lt "$$2" ]; then \
+	  echo "cdead-guard: $$n $$z < baseline $(CDEAD_BASELINE) -- lower CDEAD_BASELINE here"; \
 	else \
-	  echo "typeuse-guard OK: $$n unused C types (baseline $(TYPEUSE_BASELINE))"; \
+	  echo "cdead-guard OK: $$n dead C items in the corpus, $$z in zc (baseline $(CDEAD_BASELINE));$$kinds"; \
 	fi; \
 	rm -rf $$d
+
+# cc-unused-guard -- gcc and clang find no unused static function or variable
+# in the emitted C: the C of each corpus program and of zc itself is compiled
+# with -Wunused-function -Wunused-variable -Wunused-const-variable and the
+# warnings counted. Both compilers must first report tests/c/cdead_probe.c's
+# cdead_dead_fn and cdead_dead_str, so a compiler that stops warning cannot
+# pass. The baseline is today's warnings (gcc corpus, gcc zc, clang corpus,
+# clang zc); lower it as it falls. Skipped without clang.
+CC_UNUSED_BASELINE := 51170 555 52882 559
+CC_UNUSED_FLAGS := -std=c17 -c -o /dev/null -Wunused-function -Wunused-variable -Wunused-const-variable
+CC_UNUSED_RE := warning: .*\[-Wunused-(function|variable|const-variable)
+
+cc-unused-guard: bin/zc
+	@command -v clang >/dev/null 2>&1 || { echo "cc-unused-guard SKIP: clang not installed"; exit 0; }; \
+	for cc in gcc clang; do \
+	  w=$$($$cc $(CC_UNUSED_FLAGS) tests/c/cdead_probe.c 2>&1); \
+	  for want in cdead_dead_fn cdead_dead_str; do \
+	    echo "$$w" | grep -E "$(CC_UNUSED_RE)" | grep -q "$$want" || { \
+	      echo "cc-unused-guard FAIL: $$cc does not report tests/c/cdead_probe.c's $$want"; exit 1; }; \
+	  done; \
+	done; \
+	d=$$(mktemp -d); \
+	$(GUARD_EMIT_C); \
+	got=""; \
+	for cc in gcc clang; do \
+	  c=$$(ls $$d/*.c | xargs -P $(NPROC) -I{} sh -c "$$cc $(CC_UNUSED_FLAGS) {} 2>&1 | grep -cE '$(CC_UNUSED_RE)'" | awk '{s += $$1} END {print s}'); \
+	  z=$$($$cc $(CC_UNUSED_FLAGS) $$d/zc/zc.c 2>&1 | grep -cE '$(CC_UNUSED_RE)'); \
+	  got="$$got $$c $$z"; \
+	done; \
+	rm -rf $$d; \
+	set -- $$got; g1=$$1; g2=$$2; c1=$$3; c2=$$4; set -- $(CC_UNUSED_BASELINE); \
+	if [ "$$g1" -gt "$$1" ] || [ "$$g2" -gt "$$2" ] || [ "$$c1" -gt "$$3" ] || [ "$$c2" -gt "$$4" ]; then \
+	  echo "cc-unused-guard FAIL: unused static functions/variables:$$got (baseline $(CC_UNUSED_BASELINE))"; \
+	  echo "  A C item written that nothing calls: see emitC in src/zemitterc.z."; exit 1; \
+	elif [ "$$g1 $$g2 $$c1 $$c2" != "$(CC_UNUSED_BASELINE)" ]; then \
+	  echo "cc-unused-guard:$$got < baseline $(CC_UNUSED_BASELINE) -- lower CC_UNUSED_BASELINE here"; \
+	else \
+	  echo "cc-unused-guard OK: unused static functions/variables:$$got (baseline $(CC_UNUSED_BASELINE))"; \
+	fi
 
 # static-value-guard -- every static value the emitter writes (`_zag<row>`) is
 # read by the C: a value no run-time code reaches is not written (clang's
