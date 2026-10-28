@@ -268,9 +268,11 @@ ctxCname: function {ctx: Ctx.view tid: ztypes.tid} out String is {
 }
 
 # spelledCname -- ctxCname for C being written: until the reached types are
-# fixed, the type it names is a use they are closed from (closeReachedTypes).
+# fixed, the type it names is a use they are closed from (closeReachedTypes),
+# and a function it names is written (noteFnUse).
 spelledCname: function {ctx: Ctx tid: ztypes.tid} out String is {
     if ctx.reachFixed.not then ctx.typeUses.add item: tid
+    noteFnUse :ctx :tid
     return (listCname cnames: ctx.cnames :tid)
 }
 
@@ -4082,6 +4084,15 @@ Ctx: class {
     reachedTypes: IdSet ztypes.tid
     # the reached set is closed: a struct type spelled after it must be in it
     reachFixed: bool
+    # every function the units could write, in the order the C writes them
+    # (planFns), and each one's job by its type id
+    fnJobs: ListVal fnjob
+    fnJobAt: (IdMapV ztypes.tid v: u64)
+    # parallel to fnJobs: spelled by written C, and written
+    fnQueued: ListVal bool
+    fnWritten: ListVal bool
+    # the written functions are fixed: a function spelled after must be one
+    fnClosed: bool
     # the (impl, protocol) pairs a NATIVE conformer is boxed as -- a String or a
     # str mono handed to a StringViewable. The runtime supplies such an impl's struct, so
     # no unit pass writes its helpers: every box site asks for them here, and
@@ -9074,6 +9085,7 @@ emitInstanceMethodBody: function {
     oprefix: orderFinish :ctx st: ord
     args: orderJoinSlots :ctx st: ord count: pn
     orderEnd :ctx st: ord
+    noteFnUse :ctx tid: mco
     return (stating :facts from: callFacts text: (orderClose
         prefix: oprefix
         callee: (ctxCnameView :ctx tid: mco)
@@ -15538,6 +15550,7 @@ emitUserFnCall: function {
         pp = pp + 1
     }
     orderEnd :ctx st: ord
+    noteFnUse :ctx tid: fid
     return (stating
         :facts
         from: callFacts
@@ -32739,10 +32752,9 @@ fnSignature: function {
 # itself declares. A function of that name anywhere else -- a namespace's, a
 # type's -- is an ordinary function and keeps its own signature.
 isEntryMain: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view fid: ztypes.tid} out bool is {
-    if ctx.mainUnitId.isZero then return false
-    md: symtab.typing.declFindChild parentDeclId: ctx.mainUnitId nameId: zast.wellKnown.slot.wkMain
-    if md.isZero then return false
-    return (ztypecheck.declTypeIdOf st: symtab declId: md) == fid
+    em: entryMainTid :symtab :ctx
+    if em.isZero then return false
+    return em == fid
 }
 
 # appendFnSignature -- fnSignature's text appended to `buf`, then `tail` (";\n"
@@ -34323,7 +34335,7 @@ scanSvMemberNeed: function {ctx: Ctx m: StringView mId: zast.nameid} is {
 }
 
 # scanNeeds -- recursively register io/os native needs for every call in a
-# def/body. Structurally mirrors collectLiterals; emitFns registers free-fn
+# def/body. Structurally mirrors collectLiterals; fillNeeds registers free-fn
 # needs ahead of the runtime pass, but type-method bodies emit afterwards (via
 # emitRecordDefs), so a native used only inside a method (e.g. io.stat in
 # zvfs's providers) would never have its runtime body emitted. A callee that
@@ -34521,7 +34533,7 @@ fnUndemanded: function {
 
 # isGenericTemplateUnitOp -- a file unit that is a generic template (declares a
 # bare `t: anyval.generic` member). Its raw functions reference the unbound type
-# param, so they are not emitted directly; emitUnitMonoInstances emits one
+# param, so they are not emitted directly; planUnitMonoInstances plans one
 # concrete C function per (instantiation, method) instead.
 isGenericTemplateUnitOp: function {ast: Ast.view opId: zast.nodeid} out bool is {
     bodyIds: zast.unitBodyIdsAt :ast unitId: opId
@@ -34544,53 +34556,16 @@ nestedTemplateTid: function {symtab: zenv.ZSymbolTable.view opId: zast.nodeid} o
     return (stampIdOf :symtab nid: opId)
 }
 
-# emitUnitMonoFn -- one function of a unit mono: its signature as a
-# declaration, or its body with the mono as the enclosing type.
-emitUnitMonoFn: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable
-    ctx: Ctx
-    # the mono and the function
-    t: ztypes.tid
-    cfid: ztypes.tid
-    # the function's definition node
-    op: astnode.view
-    declOnly: bool
-    buf: String.borrow
-} is {
-    # the whole function is the instance's: its parameters are the variables
-    # the instance walk bound, in the signature as in the body, and the body is
-    # its own copy
-    symtab.typing.emitMono = t
-    iop: (ast.nodes.get
-        i: (instanceOpAt :symtab mono: t op: (zast.nodeIdOf n: op))
-    )
-    if declOnly then {
-        appendFnSignature :ast :symtab :ctx fid: cfid op: iop :buf tail: ";\n"
-        symtab.typing.emitMono = ztypes.tid.zero
-        return
-    }
-    appendFnSignature :ast :symtab :ctx fid: cfid op: iop :buf tail: " {\n"
-    resetFnEmitState :ctx
-    registerReftypeParams :ast :symtab :ctx fid: cfid op: iop
-    ctx.curThisTid = t
-    emitFnBody :ast :symtab :ctx op: iop fid: cfid :buf
-    symtab.typing.emitMono = ztypes.tid.zero
-    ctx.curThisTid = ztypes.tid.zero
-    buf.append "}\n\n"
-}
 
-# emitUnitNestedMethods -- the methods of the unit mono `t`'s own copy of a type
+# planUnitNestedMethods -- the methods of the unit mono `t`'s own copy of a type
 # its template declares, or of each of its instances of one with parameters of
 # its own.
-emitUnitNestedMethods: function {
+planUnitNestedMethods: function {
     ast: Ast.view
-    symtab: zenv.ZSymbolTable
+    symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     member: astnode.view
     t: ztypes.tid
-    declOnly: bool
-    buf: String.borrow
 } is {
     if member.namedoperation.not then return
     op: ast.nodes.get i: member.operation
@@ -34599,37 +34574,46 @@ emitUnitNestedMethods: function {
     inst: io.or d: ztypes.tid.zero
     if inst.isZero then return
     if (symtab.reg.genericOriginOf tid: inst).isZero.not then {
-        emitMonoMethodsIn :ast :symtab :ctx span: op.isItems monoId: inst :declOnly :buf
-        emitMonoMethodsIn :ast :symtab :ctx span: op.asItems monoId: inst :declOnly :buf
+        planMonoMethods :ast :ctx span: op.isItems monoId: inst
+        planMonoMethods :ast :ctx span: op.asItems monoId: inst
         return
     }
     if (symtab.reg.isGenericOf tid: inst).not then return
     # a type with parameters of its own: each instance of it `t` has
     for each ci: (ztypecheck.instancesWithin st: symtab owner: t tplId: inst) loop {
-        emitMonoMethodsIn :ast :symtab :ctx span: op.isItems monoId: ci :declOnly :buf
-        emitMonoMethodsIn :ast :symtab :ctx span: op.asItems monoId: ci :declOnly :buf
+        planMonoMethods :ast :ctx span: op.isItems monoId: ci
+        planMonoMethods :ast :ctx span: op.asItems monoId: ci
     }
 }
 
-# emitUnitMonoMembers -- every body-carrying function the template declares,
+# planMonoMethods -- a method job for every member of `span`, written as the
+# mono `monoId`'s (emitMonoMethodAt).
+planMonoMethods: function {ast: Ast.view ctx: Ctx span: zast.kidspan monoId: ztypes.tid} is {
+    i: u64
+    for i < span.count loop {
+        amId: zast.kidAt kids: ast.kids :span :i
+        i = i + 1
+        planFnJob :ctx fid: ztypes.tid.zero nid: amId mono: monoId method: true
+    }
+}
+
+# planUnitMonoMembers -- every body-carrying function the template declares,
 # as the mono `t` substituted it.
-emitUnitMonoMembers: function {
+planUnitMonoMembers: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     # the template's body items
     bodyIds: zast.kidspan
     t: ztypes.tid
-    declOnly: bool
-    buf: String.borrow
 } is {
     vx: u64
     for vx < bodyIds.count loop {
         fm: zast.kidAt kids: ast.kids span: bodyIds i: vx
         vx = vx + 1
         fm9Node: ast.nodes.get i: fm
-        emitUnitNestedMethods :ast :symtab :ctx member: fm9Node :t :declOnly :buf
-        emitNestedUnitMonoMembers :ast :symtab :ctx member: fm9Node :t :declOnly :buf
+        planUnitNestedMethods :ast :symtab :ctx member: fm9Node :t
+        planNestedUnitMonoMembers :ast :symtab :ctx member: fm9Node :t
         if fm9Node.namedoperation when (ztypecheck.isFunctionDefWithBody
             o: (ast.nodes.get i: fm9Node.operation)
         ) then {
@@ -34640,33 +34624,27 @@ emitUnitMonoMembers: function {
             # a function with type parameters of its own is each instance of it
             cgo: cfo.or d: ztypes.tid.zero
             if cgo.isZero.not when (symtab.reg.isGenericOf tid: cgo) then {
-                (emitFnMonoInstances
-                    :ast
+                (planFnMonoInstances
                     :symtab
                     :ctx
                     templateFnId: cgo
-                    templateFnOp: (ast.nodes.get i: fm9Node.operation)
-                    :declOnly
-                    :buf
+                    templateFnOpId: fm9Node.operation
                 )
                 continue
             }
-            # written when the instance walk took it, which is where the
+            # planned when the instance walk took it, which is where the
             # program uses it
             cmd: symtab.typing.declMemberIdOf parentTypeId: t nameId: fm9Node.name
             took: cmd.isZero or (symtab.typing.declIsWalked declId: cmd)
             if took when cfo.some when (
                 (symtab.reg.typetypeOf typeId: cfo) == ztypes.ztypetype.functionType
             ) then {
-                (emitUnitMonoFn
-                    :ast
-                    :symtab
+                (planFnJob
                     :ctx
-                    :t
-                    cfid: cfo
-                    op: (ast.nodes.get i: fm9Node.operation)
-                    :declOnly
-                    :buf
+                    fid: cfo
+                    nid: (instanceOpAt :symtab mono: t op: fm9Node.operation)
+                    mono: t
+                    method: false
                 )
             }
         }
@@ -34706,17 +34684,15 @@ nestedUnitTemplate: function {
     return nt
 }
 
-# emitNestedUnitMonoMembers -- the functions of the instance `t` owns of a unit
-# its template's body member `member` declares: emitUnitMonoMembers over the
+# planNestedUnitMonoMembers -- the functions of the instance `t` owns of a unit
+# its template's body member `member` declares: planUnitMonoMembers over the
 # nested unit's body, at any depth. Nothing for a member that declares none.
-emitNestedUnitMonoMembers: function {
+planNestedUnitMonoMembers: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     member: astnode.view
     t: ztypes.tid
-    declOnly: bool
-    buf: String.borrow
 } is {
     match (
         member
@@ -34724,33 +34700,30 @@ emitNestedUnitMonoMembers: function {
         nbody: zast.unitBodyIdsAt :ast unitId: member.operation
         nui: unitMonoNestedInstance :ast :symtab nameId: member.name opId: member.operation mono: t
         if nui.isZero.not then {
-            emitUnitMonoMembers :ast :symtab :ctx bodyIds: nbody t: nui :declOnly :buf
+            planUnitMonoMembers :ast :symtab :ctx bodyIds: nbody t: nui
             return
         }
         # a template with parameters of its own: each instance of it `t` owns
         ntpl: nestedUnitTemplate :ast :symtab nameId: member.name opId: member.operation mono: t
         if ntpl.isZero then return
         for each oi: (ztypecheck.instancesWithin st: symtab owner: t tplId: ntpl) loop {
-            emitUnitMonoMembers :ast :symtab :ctx bodyIds: nbody t: oi :declOnly :buf
+            planUnitMonoMembers :ast :symtab :ctx bodyIds: nbody t: oi
         }
     } else null
 }
 
-# emitUnitMonoInstances -- emit the monomorphized methods of a generic file unit
+# planUnitMonoInstances -- the monomorphized functions of a generic file unit
 # (genmath instantiated as intmath: i64, i32math: i32). For each registry UNIT
-# type whose generic origin is this template, emit one C function per template
-# method keyed by the mono's concrete FUNCTION child id (so the signature carries
-# the substituted types); the body AST is the template method itself (lock-safe:
-# its root is the program AST, not symtab, so emitFnBody can borrow symtab).
-emitUnitMonoInstances: function {
+# type whose generic origin is this template, one C function per template
+# function, keyed by the mono's concrete FUNCTION child id (so the signature
+# carries the substituted types).
+planUnitMonoInstances: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     # the template, and its definition node
     tplId: ztypes.tid
     templateUnitOpId: zast.nodeid
-    declOnly: bool
-    buf: String.borrow
 } is {
     bodyIds: zast.unitBodyIdsAt :ast unitId: templateUnitOpId
     if tplId.isZero then return
@@ -34761,93 +34734,261 @@ emitUnitMonoInstances: function {
         if (symtab.reg.typetypeOf typeId: tt) == ztypes.ztypetype.unitType then {
             go9opt: originTidOf :symtab tid: tt
             if go9opt.isZero.not when go9opt == tplId then {
-                emitUnitMonoMembers :ast :symtab :ctx :bodyIds :t :declOnly :buf
+                planUnitMonoMembers :ast :symtab :ctx :bodyIds :t
             }
         }
         t = t.next
     }
 }
 
-# emitFnsPass -- one declOnly-parameterized sweep over EVERY unit, routing
-# generic template units to their mono instances and plain units to emitFnsIn.
-# It asks no unit-level question: what a runtime-backed unit supplies is dropped
-# per DEFINITION, by fnUndemanded and the native filters collectFnDecls
-# applies. ctx.mainName is rebound to each unit for the duration.
-emitFnsPass: function {
+# planFnsPass -- one sweep over EVERY unit, routing generic template units to
+# their mono instances and plain units to planFnsIn. It asks no unit-level
+# question: what a runtime-backed unit supplies is dropped per DEFINITION, by
+# fnUndemanded and the native filters collectFnDecls applies. ctx.mainName is
+# rebound to each unit for the duration.
+planFnsPass: function {
     program: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    declOnly: bool
-    buf: String.borrow
 } is {
-    {
-        uCnt9e: program.units.length
-        uIdx9e: u64
-        for uIdx9e < uCnt9e loop {
-            uId: program.units.get i: uIdx9e
-            uIdx9e = uIdx9e + 1
-            opId: zast.nodeid
-            unitNameText: String
-            un9Id: zast.nameid
-            {
-                u: program.nodes.get i: uId
-                if u.namedoperation then {
-                    un: zast.poolTextAt pool: program.names ref: u.name
-                    opId = u.operation
-                    unitNameText = un.copy
-                    un9Id = u.name
-                }
+    uCnt9e: program.units.length
+    uIdx9e: u64
+    for uIdx9e < uCnt9e loop {
+        uId: program.units.get i: uIdx9e
+        uIdx9e = uIdx9e + 1
+        opId: zast.nodeid
+        unitNameText: String
+        un9Id: zast.nameid
+        {
+            u: program.nodes.get i: uId
+            if u.namedoperation then {
+                un: zast.poolTextAt pool: program.names ref: u.name
+                opId = u.operation
+                unitNameText = un.copy
+                un9Id = u.name
             }
-            if opId.isZero.not then {
-                sm: ctx.mainName.copy
-                smD: ctx.mainUnitId
-                (ctxBindMain
+        }
+        if opId.isZero.not then {
+            sm: ctx.mainName.copy
+            smD: ctx.mainUnitId
+            (ctxBindMain
+                :ctx
+                name: unitNameText.stringView
+                unitDecl: (ztypecheck.unitDeclOfName st: symtab nameId: un9Id)
+            )
+            if (isGenericTemplateUnitOp ast: program :opId) then {
+                (planUnitMonoInstances
+                    :symtab
+                    ast: program
                     :ctx
-                    name: unitNameText.stringView
-                    unitDecl: (ztypecheck.unitDeclOfName st: symtab nameId: un9Id)
+                    tplId: (ztypecheck.declTypeIdOf st: symtab declId: ctx.mainUnitId)
+                    templateUnitOpId: opId
                 )
-                isTpl: isGenericTemplateUnitOp ast: program :opId
-                if isTpl then {
-                    (emitUnitMonoInstances
-                        :symtab
-                        ast: program
-                        :ctx
-                        tplId: (ztypecheck.declTypeIdOf st: symtab declId: ctx.mainUnitId)
-                        templateUnitOpId: opId
-                        :declOnly
-                        :buf
-                    )
-                } else {
-                    (emitFnsIn
-                        :symtab
-                        :ctx
-                        ast: program
-                        mainOpId: opId
-                        ownerTid: ztypes.tid
-                        :declOnly
-                        :buf
-                    )
-                }
-                ctxBindMain :ctx name: sm.stringView unitDecl: smD
+            } else {
+                planFnsIn :symtab :ctx ast: program mainOpId: opId ownerTid: ztypes.tid
             }
+            ctxBindMain :ctx name: sm.stringView unitDecl: smD
         }
     }
 }
 
-# emitFns -- the main unit's function declarations then definitions
-# (two-phase index walk so the body list is free during emission).
-emitFns: function {
+# planFns -- every function the program's units could write, as jobs in the
+# order the C writes them (planFnJob); then the job of the main unit's `main`
+# is queued, the root every written function is reached from. A function is
+# written only once written C spells it (noteFnUse, drainFnJobs): the checker
+# demands what the source names, and the emitter's lowering may call none of
+# it -- a counted loop over `0.upto to: 12` calls neither `upto` nor the
+# range's `call`.
+planFns: function {
     program: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    buf: String.borrow
 } is {
-    # every file unit's fn DECLARATIONS first, then every file unit's
-    # DEFINITIONS -- a main-unit body may call a dep-unit fn declared
-    # earlier (and vice versa).
-    emitFnsPass :program :symtab :ctx declOnly: true :buf
-    emitFnsPass :program :symtab :ctx declOnly: false :buf
+    planFnsPass :program :symtab :ctx
+    em: entryMainTid :symtab :ctx
+    if em.isZero.not then noteFnUse :ctx tid: em
 }
+
+# fnjob -- one C function the program's units could write, as planFns met it:
+# what writing it needs, captured where the walk met it, so the worklist can
+# write it whenever written C first spells it (noteFnUse).
+fnjob: record {
+    # the function's type id; 0 for a method job, which nothing looks up
+    fid: ztypes.tid
+    # the node it is written from: an instance's own copy of a template
+    # function, or a method's member
+    nid: zast.nodeid
+    # the file unit it belongs to, bound while it is written (ctxBindMain)
+    unitDecl: ztypes.declid
+    # ctx.nsTid while it is written: the namespace unit it belongs to, 0 for the
+    # file unit's own
+    nsTid: ztypes.tid
+    # the mono it is an instance of (symtab.typing.emitMono, ctx.curThisTid), or
+    # a method job's type; 0 for a plain function
+    mono: ztypes.tid
+    # a method of a unit mono's own type: written whether or not anything
+    # spells it, like every method emitRecordDefs writes
+    method: bool
+    # once written, where its forward declaration and its definition lie in the
+    # text the jobs are written into (drainFnJobs)
+    protoAt: u64
+    protoEnd: u64
+    bodyAt: u64
+    bodyEnd: u64
+}
+
+# planFnJob -- record one function the walk met, under the unit binding and
+# namespace ctx holds now. A method job is queued at once.
+planFnJob: function {
+    ctx: Ctx
+    fid: ztypes.tid
+    nid: zast.nodeid
+    mono: ztypes.tid
+    method: bool
+} is {
+    k: ctx.fnJobs.length
+    ctx.fnJobs.append (fnjob
+        :fid
+        :nid
+        unitDecl: ctx.mainUnitId
+        nsTid: ctx.nsTid
+        :mono
+        :method
+        protoAt: 0
+        protoEnd: 0
+        bodyAt: 0
+        bodyEnd: 0
+    )
+    if fid.isZero.not then ctx.fnJobAt.set key: fid value: k
+    ctx.fnQueued.append method
+    ctx.fnWritten.append false
+}
+
+# noteFnUse -- written C spells the function `tid`: queue its job, if it has
+# one. Once the written functions are fixed it must be one of them, or the C
+# names a function that is never written.
+noteFnUse: function {ctx: Ctx tid: ztypes.tid} is {
+    at: ctx.fnJobAt.get key: tid
+    if at.none then return
+    if (ctx.fnQueued.get i: at) then return
+    if ctx.fnClosed then {
+        cn: ctxCname :ctx :tid
+        (emitFail
+            :ctx
+            what: "function \{cn} spelled after the written functions were fixed, and not among them"
+            line: 0
+        )
+        return
+    }
+    ctx.fnQueued.set i: at val: true
+}
+
+# drainFnJobs -- write every queued job not yet written, lowest first, until a
+# round queues nothing new: what one job's C spells is queued as it is written.
+# The forward declarations go into `protos` and the definitions into `bodies`,
+# which keep every job's text, in the order written.
+drainFnJobs: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    protos: String.borrow
+    bodies: String.borrow
+} is {
+    sm: ctx.mainName.copy
+    smD: ctx.mainUnitId
+    sns: ctx.nsTid
+    more: true
+    for more loop {
+        more = false
+        k: u64
+        for k < ctx.fnJobs.length loop {
+            if (ctx.fnQueued.get i: k) when (ctx.fnWritten.get i: k).not then {
+                writeFnJob :ast :symtab :ctx :k :protos :bodies
+                more = true
+            }
+            k = k + 1
+        }
+    }
+    ctxBindMain :ctx name: sm.stringView unitDecl: smD
+    ctx.nsTid = sns
+}
+
+# writeFnJob -- write job `k`, its forward declaration onto `protos` and its
+# definition onto `bodies`, with ctx bound as the walk had it. An instance --
+# of a generic function or of a unit template -- is written whole from its own
+# copy of the template function, which its instance walk checked.
+writeFnJob: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    k: u64
+    protos: String.borrow
+    bodies: String.borrow
+} is {
+    ctx.fnWritten.set i: k val: true
+    j: ctx.fnJobs.get i: k
+    if j.unitDecl != ctx.mainUnitId then {
+        un: zast.poolTextAt pool: ast.names ref: (symtab.typing.declNameOf declId: j.unitDecl)
+        ctxBindMain :ctx name: un.stringView unitDecl: j.unitDecl
+    }
+    ctx.nsTid = j.nsTid
+    pa: protos.length
+    ba: bodies.length
+    if j.method then {
+        emitMonoMethodAt :ast :symtab :ctx nid: j.nid monoId: j.mono declOnly: true buf: protos
+        emitMonoMethodAt :ast :symtab :ctx nid: j.nid monoId: j.mono declOnly: false buf: bodies
+    } else {
+        symtab.typing.emitMono = j.mono
+        op: ast.nodes.get i: j.nid
+        appendFnSignature :ast :symtab :ctx fid: j.fid :op buf: protos tail: ";\n"
+        appendFnSignature :ast :symtab :ctx fid: j.fid :op buf: bodies tail: " {\n"
+        resetFnEmitState :ctx
+        registerReftypeParams :ast :symtab :ctx fid: j.fid :op
+        ctx.curThisTid = j.mono
+        emitFnBody :ast :symtab :ctx :op fid: j.fid buf: bodies
+        ctx.curThisTid = ztypes.tid.zero
+        symtab.typing.emitMono = ztypes.tid.zero
+        bodies.append "}\n\n"
+    }
+    (ctx.fnJobs.set
+        i: k
+        val: (fnjob
+            fid: j.fid
+            nid: j.nid
+            unitDecl: j.unitDecl
+            nsTid: j.nsTid
+            mono: j.mono
+            method: j.method
+            protoAt: pa
+            protoEnd: protos.length
+            bodyAt: ba
+            bodyEnd: bodies.length
+        )
+    )
+}
+
+# appendWrittenFns -- the forward declarations, or the definitions, of the
+# written jobs from `text` (drainFnJobs' `protos` or `bodies`), in the order
+# planFns met them.
+appendWrittenFns: function {ctx: Ctx.view protos: bool text: StringView buf: String.borrow} is {
+    for each j: ctx.fnJobs loop {
+        if protos then {
+            buf.append (text.substring from: j.protoAt to: j.protoEnd)
+        } else {
+            buf.append (text.substring from: j.bodyAt to: j.bodyEnd)
+        }
+    }
+}
+
+# entryMainTid -- the function the unit ctx is bound to declares as `main`; 0
+# when it declares none.
+entryMainTid: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view} out ztypes.tid is {
+    if ctx.mainUnitId.isZero then return ztypes.tid.zero
+    md: symtab.typing.declFindChild parentDeclId: ctx.mainUnitId nameId: zast.wellKnown.slot.wkMain
+    if md.isZero then return ztypes.tid.zero
+    return (ztypecheck.declTypeIdOf st: symtab declId: md)
+}
+
 
 # instanceOpAt -- the function node instance `mono` is emitted from: its own
 # copy of the template function `op`, which its instance walk checked
@@ -34858,20 +34999,17 @@ instanceOpAt: function {
     return ((symtab.typing.instanceBody.get key: (ztyping.monostamp :mono node: op)).or d: op)
 }
 
-# emitFnMonoInstances -- emit the monomorphized instances of a generic free
-# function (identity_i64, identity_f64, first_i64_f64, ...). Each instance was
-# minted by the typechecker (mintMono, params already substituted); emit one C
-# function per registry FUNCTION whose generic origin is this template, keyed by
-# the mono FUNCTION id (concrete signature) with the template body AST (lock-safe:
-# the body AST root is the program, not symtab).
-emitFnMonoInstances: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable
+# planFnMonoInstances -- the monomorphized instances of a generic free function
+# (identity_i64, identity_f64, first_i64_f64, ...). Each instance was minted by
+# the typechecker (mintMono, params already substituted): one job per registry
+# FUNCTION whose generic origin is this template, keyed by the mono FUNCTION id
+# (concrete signature), written from the instance's own copy of the template
+# body (instanceOpAt).
+planFnMonoInstances: function {
+    symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     templateFnId: ztypes.tid
-    templateFnOp: astnode.view
-    declOnly: bool
-    buf: String.borrow
+    templateFnOpId: zast.nodeid
 } is {
     last: symtab.reg.nextTid
     t: ztypes.tid
@@ -34882,69 +35020,27 @@ emitFnMonoInstances: function {
             if go9opt == templateFnId when go9opt.isZero.not then isMono = true
         }
         if isMono then {
-            # the whole function is the instance's (emitUnitMonoFn), and so is
-            # the body it is emitted from
-            symtab.typing.emitMono = t
-            iop: (ast.nodes.get
-                i: (instanceOpAt :symtab mono: t op: (zast.nodeIdOf n: templateFnOp))
+            (planFnJob
+                :ctx
+                fid: t
+                nid: (instanceOpAt :symtab mono: t op: templateFnOpId)
+                mono: t
+                method: false
             )
-            if declOnly then {
-                (appendFnSignature
-                    :ast
-                    :symtab
-                    :ctx
-                    fid: t
-                    op: iop
-                    :buf
-                    tail: ";\n"
-                )
-            } else {
-                (appendFnSignature
-                    :ast
-                    :symtab
-                    :ctx
-                    fid: t
-                    op: iop
-                    :buf
-                    tail: " {\n"
-                )
-                resetFnEmitState :ctx
-                (registerReftypeParams
-                    :ast
-                    :symtab
-                    :ctx
-                    fid: t
-                    op: iop
-                )
-                ctx.curThisTid = t
-                (emitFnBody
-                    :ast
-                    :symtab
-                    :ctx
-                    op: iop
-                    fid: t
-                    :buf
-                )
-                ctx.curThisTid = ztypes.tid.zero
-                buf.append "}\n\n"
-            }
-            symtab.typing.emitMono = ztypes.tid.zero
         }
         t = t.next
     }
 }
 
-# emitNestedUnitFns -- a nested unit's own functions and mono instances, which
-# are children of IT rather than of the file unit, so they are emitted by
+# planNestedUnitFns -- a nested unit's own functions and mono instances, which
+# are children of IT rather than of the file unit, so they are planned by
 # recursing with the nested namespace as the owner.
-emitNestedUnitFns: function {
+planNestedUnitFns: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     bodyIds: zast.kidspan
     ownerTid: ztypes.tid
-    declOnly: bool
-    buf: String.borrow
 } is {
     vx289: u64
     for vx289 < bodyIds.count loop {
@@ -34954,20 +35050,18 @@ emitNestedUnitFns: function {
         if ium.namedoperation then {
             iuOpId: ium.operation
             if (isGenericTemplateUnitOp :ast opId: iuOpId) then {
-                (emitUnitMonoInstances
+                (planUnitMonoInstances
                     :symtab
                     :ast
                     :ctx
                     tplId: (nestedTemplateTid :symtab opId: iuOpId)
                     templateUnitOpId: iuOpId
-                    :declOnly
-                    :buf
                 )
             }
             isNs: false
             if (zast.unitOpDeclaresUnit :ast opId: iuOpId) then isNs = true
             # a `public:` block that DEFINES no function of its own has
-            # nothing to emit here (its entries name the unit's siblings)
+            # nothing to plan here (its entries name the unit's siblings)
             if isNs when (zast.unitOpKindIs :ast opId: iuOpId k: zast.unitkind.publicNs
             ) when (unitOpHasBodiedFn :ast opId: iuOpId).not then isNs = false
             if isNs then {
@@ -34987,15 +35081,7 @@ emitNestedUnitFns: function {
                 if nsTid.isZero.not then {
                     sns: ctx.nsTid
                     ctx.nsTid = nsTid
-                    (emitFnsIn
-                        :ast
-                        :symtab
-                        :ctx
-                        mainOpId: iuOpId
-                        ownerTid: nsTid
-                        :declOnly
-                        :buf
-                    )
+                    planFnsIn :ast :symtab :ctx mainOpId: iuOpId ownerTid: nsTid
                     ctx.nsTid = sns
                 }
             }
@@ -35047,85 +35133,37 @@ collectFnDecls: function {
     }
 }
 
-# emitFnDeclsInOrder -- one C function per collected declaration: its mono
-# instances first, then the signature, then the body unless this is the
-# declaration-only pass.
-emitFnDeclsInOrder: function {
+# planFnDecls -- one job per collected declaration, or one per instance of a
+# generic one.
+planFnDecls: function {
     ast: Ast.view
-    symtab: zenv.ZSymbolTable
+    symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     bodyIds: zast.kidspan
     ownerTid: ztypes.tid
     idxs: (ListVal u64).view
-    declOnly: bool
-    buf: String.borrow
 } is {
     wn: idxs.length
     wi: u64
     for wi < wn loop {
         didx: idxs.get i: wi
+        wi = wi + 1
         dm2Id: zast.kidAt kids: ast.kids span: bodyIds i: didx
         dm2: ast.nodes.get i: dm2Id
-        if dm2.namedoperation then {
-            fid: unitMemberTid :symtab :ctx :ownerTid nameId: dm2.name
-            if (isGenericFnTid :symtab tid: fid) then {
-                (emitFnMonoInstances
-                    :ast
-                    :symtab
-                    :ctx
-                    templateFnId: fid
-                    templateFnOp: (ast.nodes.get i: dm2.operation)
-                    :declOnly
-                    :buf
-                )
-            } else {
-                if declOnly then {
-                    (appendFnSignature
-                        :ast
-                        :symtab
-                        :ctx
-                        :fid
-                        op: (ast.nodes.get i: dm2.operation)
-                        :buf
-                        tail: ";\n"
-                    )
-                } else {
-                    (appendFnSignature
-                        :ast
-                        :symtab
-                        :ctx
-                        :fid
-                        op: (ast.nodes.get i: dm2.operation)
-                        :buf
-                        tail: " {\n"
-                    )
-                    resetFnEmitState :ctx
-                    (registerReftypeParams
-                        :ast
-                        :symtab
-                        :ctx
-                        :fid
-                        op: (ast.nodes.get i: dm2.operation)
-                    )
-                    (emitFnBody
-                        :ast
-                        :symtab
-                        :ctx
-                        op: (ast.nodes.get i: dm2.operation)
-                        :fid
-                        :buf
-                    )
-                    buf.append "}\n\n"
-                }
-            }
+        if dm2.namedoperation.not then continue
+        fid: unitMemberTid :symtab :ctx :ownerTid nameId: dm2.name
+        if (isGenericFnTid :symtab tid: fid) then {
+            planFnMonoInstances :symtab :ctx templateFnId: fid templateFnOpId: dm2.operation
+        } else {
+            planFnJob :ctx :fid nid: dm2.operation mono: ztypes.tid.zero method: false
         }
-        wi = wi + 1
     }
 }
 
 
-# emit a unit's function definitions.
-emitFnsIn: function {
+# planFnsIn -- a unit's functions: those of the units nested in it first, then
+# its own.
+planFnsIn: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
@@ -35136,26 +35174,12 @@ emitFnsIn: function {
     # of IT, so resolving them against the file unit misses and hands the
     # signature a tid of 0, which renders as `z_t0(void)`.
     ownerTid: ztypes.tid
-    declOnly: bool
-    buf: String.borrow
 } is {
     bodyIds: zast.unitBodyIdsAt :ast unitId: mainOpId
-    {
-        emitNestedUnitFns :ast :symtab :ctx :bodyIds :ownerTid :declOnly :buf
-        idxs: ListVal u64
-        collectFnDecls :ast :symtab :ctx :bodyIds :ownerTid :idxs
-        (emitFnDeclsInOrder
-            :ast
-            :symtab
-            :ctx
-            :bodyIds
-            :ownerTid
-            :idxs
-            :declOnly
-            :buf
-        )
-        if declOnly then buf.append "\n"
-    }
+    planNestedUnitFns :ast :symtab :ctx :bodyIds :ownerTid
+    idxs: ListVal u64
+    collectFnDecls :ast :symtab :ctx :bodyIds :ownerTid :idxs
+    planFnDecls :ast :symtab :ctx :bodyIds :ownerTid :idxs
 }
 
 # unitOpHasBodiedFn -- does the unit body at `opId` define a function with a
@@ -36112,6 +36136,11 @@ emitC: function {
         typeUses: IdSet ztypes.tid
         reachedTypes: IdSet ztypes.tid
         reachFixed: false
+        fnJobs: ListVal fnjob
+        fnJobAt: (IdMapV ztypes.tid v: u64)
+        fnQueued: ListVal bool
+        fnWritten: ListVal bool
+        fnClosed: false
         nativeBoxImpls: ListVal ztypes.tid
         nativeBoxProtos: ListVal ztypes.tid
         tmplCache: (Map String V: String)
@@ -36225,27 +36254,42 @@ emitC: function {
     # rather than by a call: a DECLARED Reader/Writer conformance needs the
     # native's address whether or not anything calls it, and net's `Conn`
     # declares one that nothing in the tree constructs. This runs ahead of
-    # every consultation: emitFns asks it (ownsResources) of each value it
+    # every consultation: a function body asks it (ownsResources) of each value it
     # destroys or moves out -- a Listener a function returns by `r.take` must
     # leave its Result releasing nothing -- and emitMonos asks it for the
     # structs the fragments dereference.
     markLiveClasses ast: program :symtab :ctx
     nodeEstE: u64
     nodeEstE = program.nodes.length
-    fnsBuf: String
-    fnsBuf.reserve n: nodeEstE * 24
-    emitFns :program :symtab :ctx buf: fnsBuf
-    hasMain: programHasMain :program
-    if hasMain.not then {
-        fnsBuf.append "void z_main(void) {\n"
-        fnsBuf.append "}\n\n"
-    }
+    planFns :program :symtab :ctx
+    fnProtoText: String
+    fnBodyText: String
+    fnBodyText.reserve n: nodeEstE * 24
+    drainFnJobs ast: program :symtab :ctx protos: fnProtoText bodies: fnBodyText
     # the methods are generated ahead of the types, which they follow in the
     # output: a type is written only once something has spelled it
     protosBuf: String
     emitRecordDefs :program :symtab :ctx phase: 1 buf: protosBuf
     bodiesBuf: String
     emitRecordDefs :program :symtab :ctx phase: 2 buf: bodiesBuf
+    # every method is written, so what a method calls is reached too; after
+    # this the written functions are fixed
+    drainFnJobs ast: program :symtab :ctx protos: fnProtoText bodies: fnBodyText
+    ctx.fnClosed = true
+    fnsBuf: String
+    fnsBuf.reserve n: fnBodyText.length + 64
+    appendWrittenFns :ctx protos: false text: fnBodyText.stringView buf: fnsBuf
+    if (programHasMain :program).not then {
+        fnsBuf.append "void z_main(void) {\n"
+        fnsBuf.append "}\n\n"
+    }
+    # the functions' forward declarations go after the types, with the
+    # methods': a method body may call a function, and a generator function
+    # returns its iterator class
+    fnProtosBuf: String
+    fnProtosBuf.reserve n: fnProtoText.length + 1
+    appendWrittenFns :ctx protos: true text: fnProtoText.stringView buf: fnProtosBuf
+    fnProtosBuf.append "\n"
     codeBuf: String
     needsAt: emitCodeBody :program :symtab :ctx :runtimeDir :nodeEstE :codeBuf
     # what is asked for after the runtime pass has run -- while a type or a
@@ -36255,6 +36299,7 @@ emitC: function {
     # only there -- an operator or a native method's `needs=`
     natAt: codeBuf.length
     codeBuf.append protosBuf
+    codeBuf.append fnProtosBuf
     emitRecordDefs :program :symtab :ctx phase: 3 buf: codeBuf
     codeBuf.append bodiesBuf
     lateBuf: String
@@ -46055,71 +46100,6 @@ emitUnitConformanceImpls: function {
     }
 }
 
-# emitUnitFnFwdDecls -- forward declarations for one unit's own bodied
-# functions, after the struct defs (so a generator function returning its synth
-# iter class resolves) and before the method bodies (a synth iterator's call
-# body may call another generator's fn). A generic function template declares
-# its instances instead, since a method body may call one; their definitions
-# come later, with the functions. A definition that never
-# resolved has no id, and its forward declaration renders as `z_t0(void)` over
-# unbound parameter names -- two of them in one unit collide on return type,
-# which is broken C rather than a diagnostic. Nothing can call what did not
-# resolve, so there is nothing to declare.
-emitUnitFnFwdDecls: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable
-    ctx: Ctx
-    bodyIds: zast.kidspan
-    ownerTid: ztypes.tid
-    buf: String.borrow
-} is {
-    fdx: u64
-    for fdx < bodyIds.count loop {
-        bfdId: zast.kidAt kids: ast.kids span: bodyIds i: fdx
-        fdx = fdx + 1
-        bfd: ast.nodes.get i: bfdId
-        if bfd.namedoperation.not then continue
-        # a template's instances are functions of this unit too, and a method
-        # emitted ahead of them may call one
-        if (isGenericTemplateUnitOp :ast opId: bfd.operation) then {
-            (emitUnitMonoInstances
-                :symtab
-                :ast
-                :ctx
-                tplId: (nestedTemplateTid :symtab opId: bfd.operation)
-                templateUnitOpId: bfd.operation
-                declOnly: true
-                :buf
-            )
-            continue
-        }
-        bfdOp: ast.nodes.get i: bfd.operation
-        if (ztypecheck.isFunctionDefWithBody o: bfdOp).not then continue
-        fdid: unitMemberTid :symtab :ctx :ownerTid nameId: bfd.name
-        if fdid.isZero then continue
-        if (isGenericFnTid :symtab tid: fdid) then {
-            (emitFnMonoInstances
-                :ast
-                :symtab
-                :ctx
-                templateFnId: fdid
-                templateFnOp: bfdOp
-                declOnly: true
-                :buf
-            )
-            continue
-        }
-        (appendFnSignature
-            :ast
-            :symtab
-            :ctx
-            fid: fdid
-            op: bfdOp
-            :buf
-            tail: ";\n"
-        )
-    }
-}
 
 # emitRecordDefsIn -- two passes so cross-class references resolve: all method
 # forward decls and the unit's own function forward decls, then all method
@@ -46151,19 +46131,6 @@ emitRecordDefsIn: function {
         :phase
         :buf
     )
-    # its instances' functions are declared with the other forward
-    # declarations
-    if phase == 1 when isTpl then {
-        (emitUnitMonoInstances
-            :symtab
-            :ast
-            :ctx
-            tplId: (ztypecheck.declTypeIdOf st: symtab declId: ctx.mainUnitId)
-            templateUnitOpId: mainOpId
-            declOnly: true
-            :buf
-        )
-    }
 }
 
 # emitRecordDefsInBody -- one unit body's share of a phase, then the share of
@@ -46179,10 +46146,7 @@ emitRecordDefsInBody: function {
     phase: u64
     buf: String.borrow
 } is {
-    if phase == 1 then {
-        emitUnitDefMethods :ast :symtab :ctx :bodyIds :ownerTid declOnly: true :buf
-        emitUnitFnFwdDecls :ast :symtab :ctx :bodyIds :ownerTid :buf
-    }
+    if phase == 1 then emitUnitDefMethods :ast :symtab :ctx :bodyIds :ownerTid declOnly: true :buf
     if phase == 3 then emitUnitConformanceImpls :ast :symtab :ctx :bodyIds :ownerTid :buf
     if phase == 2 then emitUnitDefMethods :ast :symtab :ctx :bodyIds :ownerTid declOnly: false :buf
     emitNestedRecordDefs :ast :symtab :ctx :bodyIds :ownerTid :phase :buf
@@ -48403,7 +48367,7 @@ emitOneMethod: function {
     if mono.isZero.not then {
         symtab.typing.emitMono = mono
     } else if (symtab.reg.genericOriginOf tid: thisTid).isZero.not then {
-        # a method of an instance is the instance's whole (emitUnitMonoFn), and
+        # a method of an instance is the instance's whole (writeFnJob), and
         # it is emitted from the instance's own copy
         symtab.typing.emitMono = thisTid
         iopId: instanceOpAt :symtab mono: thisTid op: (zast.nodeIdOf n: op)
