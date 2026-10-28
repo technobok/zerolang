@@ -1802,6 +1802,7 @@ bindArmHoles: function {
                 ord
             ) case some then {
                 rawNames.append from: hv.string
+                noteTagConstUse :ctx :symtab tid: tt
                 rawVals.append from: (tagConstC :ast :ctx :symtab tid: tt armOrd: ord)
             } case none then null
         }
@@ -12835,9 +12836,9 @@ emitInlineVariantCtor: function {
     facts: cfacts.borrow
 } out String is {
     pc: armPayloadC :ast :symtab :ctx :tid :arm
-    tg: spelledTagConst :ast :ctx :symtab :tid armId: arm
-    vc: spelledCname :ctx :tid
     if pc.length > 0 then {
+        tg: spelledTagConst :ast :ctx :symtab :tid armId: arm
+        vc: spelledCname :ctx :tid
         av: "0".string
         got: false
         axi99: u64
@@ -12859,8 +12860,11 @@ emitInlineVariantCtor: function {
             text: "((\{vc}_t){ .tag = \{tg}, .data.\{armCiC} = (\{av}) })"
         )
     } else {
+        # a scalar arm (`true`) spells only its tag constant, never the type
         armValue: armValueC :ast :ctx :symtab :tid :arm
         if armValue.length > 0 then return (stating :facts from: constFacts text: armValue)
+        tg: spelledTagConst :ast :ctx :symtab :tid armId: arm
+        vc: spelledCname :ctx :tid
         return (stating :facts from: literalFacts text: "((\{vc}_t){ .tag = \{tg} })")
     }
 }
@@ -13269,13 +13273,6 @@ renderDefault: function {
             cv: targetTid
             vtarget: targetTid
             if cv.isZero.not then vtarget = cv
-            tg: spelledTagConst :ast :ctx :symtab tid: vtarget :armId
-            tc: (typeRefC
-                :ast
-                :symtab
-                :ctx
-                tid: vtarget
-            )
             avd: (armValueC
                 :ast
                 :ctx
@@ -13284,6 +13281,13 @@ renderDefault: function {
                 arm: armId
             )
             if avd.length > 0 then return (stating :facts from: constFacts text: avd)
+            tg: spelledTagConst :ast :ctx :symtab tid: vtarget :armId
+            tc: (typeRefC
+                :ast
+                :symtab
+                :ctx
+                tid: vtarget
+            )
             return (stating :facts from: literalFacts text: "(\{tc}){ .tag = \{tg} }")
         }
     }
@@ -14370,12 +14374,12 @@ armCvalText: function {
 } out String is {
     if v.armTid.isZero then return "".string
     if v.armName.isZero then return "".string
-    if ctx.reachFixed.not then ctx.typeUses.add item: v.armTid
+    # a scalar arm (`true`) spells only its tag constant, never the type
     atomVarId: armValueC :ast :ctx :symtab tid: v.armTid arm: v.armName
     if atomVarId.length > 0 then return (stating :facts from: constFacts text: atomVarId)
-    tg: tagConstOf :ast :ctx :symtab tid: v.armTid armId: v.armName
+    tg: spelledTagConst :ast :ctx :symtab tid: v.armTid armId: v.armName
     if tg.length == 0 then return "".string
-    vc: ctxCname :ctx tid: v.armTid
+    vc: spelledCname :ctx tid: v.armTid
     if vc.length == 0 then return "".string
     return (stating :facts from: literalFacts text: "((\{vc}_t){ .tag = \{tg} })")
 }
@@ -15183,8 +15187,6 @@ emitCrossUnitTag: function {
     if isTagged.not then return "".string
     pc: armPayloadC :ast :symtab :ctx tid: vtid :arm
     if pc.length == 0 then {
-        tg: spelledTagConst :ast :ctx :symtab tid: vtid armId: arm
-        vc: ctxCnameView :ctx tid: vtid
         avx: (armValueC
             :ast
             :ctx
@@ -15193,6 +15195,8 @@ emitCrossUnitTag: function {
             :arm
         )
         if avx.length > 0 then return (stating :facts from: constFacts text: avx)
+        tg: spelledTagConst :ast :ctx :symtab tid: vtid armId: arm
+        vc: spelledCname :ctx tid: vtid
         return (stating :facts from: literalFacts text: "((\{vc}_t){ .tag = \{tg} })")
     }
     return "".string
@@ -19973,11 +19977,11 @@ taggedArmValueC: function {
     dtg: tt.isSum
     if dtg.not then return String
     if (isGenericType :symtab tid: dtp) then return String
-    vcH: spelledCname :ctx tid: dtp
-    if vcH.length == 0 then return String
+    if (ctxCnameView :ctx tid: dtp).length == 0 then return String
     if (armPayloadC :ast :symtab :ctx tid: dtp arm: mnc0Id).length > 0 then return String
     avh: armValueC :ast :ctx :symtab tid: dtp arm: mnc0Id
     if avh.length > 0 then return (stating :facts from: constFacts text: avh)
+    vcH: spelledCname :ctx tid: dtp
     tgH: spelledTagConst :ast :ctx :symtab tid: dtp armId: mnc0Id
     return (stating :facts from: literalFacts text: "((\{vcH}_t){ .tag = \{tgH} })")
 }
@@ -21502,7 +21506,6 @@ fillOperatorRow: function {
     rv swap ctx.opRawVals
     if bn.length == 0 then {
         bn.append from: "StringView".string
-        preludeNeed :ctx memb: "@StringView_t"
         bn.append from: "T".string
         bv.append from: ctx.svC.copy
         bv.append from: String
@@ -21511,7 +21514,16 @@ fillOperatorRow: function {
         rv.append from: String
         rv.append from: String
     }
-    bv.set i: 1 val: (spelledCname :ctx tid: tcnTid)
+    # every row is offered both bindings; only a hole its body holds spells the
+    # type, so only that records it (a `bool ==` row spells neither)
+    if (body.stringView.contains needle: "@StringView@") then {
+        preludeNeed :ctx memb: "@StringView_t"
+    }
+    tcnC: String
+    if (body.stringView.contains needle: "@T@") then {
+        tcnC = spelledCname :ctx tid: tcnTid
+    }
+    bv.set i: 1 val: tcnC
     rv.set i: 0 val: (ctx.orderVals.set i: ord.valBase val: String)
     rv.set i: 1 val: (ctx.orderVals.set i: ord.valBase + 1 val: String)
     orderEnd :ctx st: ord
@@ -34070,10 +34082,20 @@ tagConstOf: function {
     }
 }
 
-# spelledTagConst -- tagConstOf for C being written: a tag constant is
-# declared by its type's enum, so until the reached types are fixed it is a
-# use of that type (closeReachedTypes) -- of an ordinal variant's enum alone,
-# whose type name is a use of its own.
+# noteTagConstUse -- a tag constant of `tid` spelled in C being written: it is
+# declared by its type's enum, so until the reached types are fixed it is a use
+# of that type (closeReachedTypes) -- of an ordinal variant's enum alone, whose
+# type name is a use of its own.
+noteTagConstUse: function {ctx: Ctx symtab: zenv.ZSymbolTable.view tid: ztypes.tid} is {
+    if ctx.reachFixed then return
+    if (isOrdinalVariant :symtab :tid) then (ctx.ordinalTagUses.add
+        item: tid
+    ) else (ctx.typeUses.add
+        item: tid
+    )
+}
+
+# spelledTagConst -- tagConstOf for C being written (noteTagConstUse).
 spelledTagConst: function {
     ast: Ast.view
     ctx: Ctx
@@ -34081,13 +34103,7 @@ spelledTagConst: function {
     tid: ztypes.tid
     armId: zast.nameid
 } out String is {
-    if ctx.reachFixed.not then {
-        if (isOrdinalVariant :symtab :tid) then (ctx.ordinalTagUses.add
-            item: tid
-        ) else (ctx.typeUses.add
-            item: tid
-        )
-    }
+    noteTagConstUse :ctx :symtab :tid
     return (tagConstOf :ast :ctx :symtab :tid :armId)
 }
 
@@ -34148,7 +34164,7 @@ armValueC: function {
     # the arm names
     ast: Ast.view
     # the C names
-    ctx: Ctx.view
+    ctx: Ctx
     symtab: zenv.ZSymbolTable.view
     tid: ztypes.tid
     # the arm's name
@@ -34156,7 +34172,7 @@ armValueC: function {
 } out String is {
     avs: ordinalVariantCType :symtab :tid
     if avs.length == 0 then return "".string
-    avt: tagConstOf :ast :ctx :symtab :tid armId: arm
+    avt: spelledTagConst :ast :ctx :symtab :tid armId: arm
     avr: "((\{avs})\{avt})"
     return avr
 }
@@ -40541,6 +40557,9 @@ maybePreEmitElem: function {
         if srid.isZero.not then rid0 = srid
     }
     cid: chaseAggregateTypedef :symtab :ctx tid: rid0
+    # a type written C never reaches is not written: an ordinal field is its
+    # scalar, so its enum is reached only where a tag constant is spelled
+    if (typeReached :ctx tid: cid).not then return
     # an instance is emitted by its own sweep, but a user's spec instance is
     # emitted as a user spec is
     monoLk4: originTidOf :symtab tid: cid
