@@ -18,7 +18,7 @@ static void z_end_claim(void) {
     }
 }
 /*@@end@@*/
-/*@@row @prelude.panic_fn_threaded demand=@panic needs=@end_claim,@write_line@@*/
+/*@@row @prelude.panic_fn_threaded demand=@panic needs=@end_claim,@write_line,@noreturn@@*/
 static Z_NORETURN void z_panic(const char* msg) {
     z_end_claim();
     z_write_line(2, "zpanic: ", 8, 0);

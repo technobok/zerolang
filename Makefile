@@ -1252,7 +1252,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2375749
+ALLOC_BASELINE := 2376196
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1971,7 +1971,7 @@ deadcode-guard: bin/zc
 # of every kind, and live ones only a careless reader misses: the reader must
 # report exactly CDEAD_PROBE there before its count is trusted. The baseline is
 # the dead items the emitter writes today (corpus, then zc); lower it as it falls.
-CDEAD_BASELINE := 24779 476
+CDEAD_BASELINE := 9477 465
 CDEAD_PROBE := cdead_dead_fn cdead_dead_fn_ft cdead_dead_inline cdead_dead_leaf \
 	cdead_dead_macro cdead_dead_proto_t cdead_dead_str cdead_dead_t cdead_dead_vtable_t
 
@@ -2434,8 +2434,13 @@ while todo:
     if n in CONV_ROWS or n not in calls: continue
     CONV_ROWS.add(n)
     todo.extend(c for c in calls[n] if c.startswith('conv'))
+# the scalar type facts and the literal renderers spell the 128-bit and f16
+# types and literal macros as data: the type is recorded where it is spelled
+# (scalarTypeRefC), and a literal is always written beside a spelling of its
+# type -- a declared variable, a prototype, or a row that needs it
+TYPE_DATA = {'kindFacts', 'int128WordsC', 'floatBitsC'}
 for line, name, body in items:
-    if name in CONV_ROWS: continue
+    if name in CONV_ROWS or name in TYPE_DATA: continue
     # the String and StringView C names are spelled through the emission
     # context's bindings
     code = '\n'.join(body).replace('\\{ctx.strC}_', 'z_@String@_').replace('\\{ctx.svC}_', 'z_@StringView@_')

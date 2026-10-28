@@ -1,4 +1,4 @@
-/*@@row @prelude.unreachable demand=@unreachable needs=@panic@@*/
+/*@@row @prelude.unreachable demand=@unreachable needs=@panic,@noreturn@@*/
 static Z_NORETURN void z_unreachable(void) { z_panic("unreachable"); }
 /*@@end@@*/
 /*@@row @prelude.xmalloc demand=@xmalloc needs=@panic@@*/
@@ -32,6 +32,7 @@ static void* z_xrealloc(void* p, size_t n) {
 /*@@end@@*/
 
 
+/*@@row @prelude.int128_t demand=@int128_t@@*/
 /* i128 / u128: the C compiler's 128-bit integer where it has one, two 64-bit
    words where it has none (tcc) or under -DZ_INT128_PORTABLE. No emitted
    expression applies a C operator to either: every operation is a function in
@@ -56,7 +57,9 @@ typedef struct { uint64_t lo; uint64_t hi; } z_i128;
 #define Z_I128_U64(v) ((z_i128){ (uint64_t)(v), 0 })
 #define Z_U128_U64(v) ((z_u128){ (uint64_t)(v), 0 })
 #endif
+/*@@end@@*/
 
+/*@@row @prelude.f16_t demand=@f16_t@@*/
 /* f16: the C compiler's _Float16 where it has one, its 16 bits where it has
    none (tcc) or under -DZ_F16_PORTABLE. As with i128, every operation is a
    function -- in natives/_Z_F16.inc, computing in float and rounding once --
@@ -70,3 +73,4 @@ __extension__ typedef _Float16 z_f16;
 typedef struct { uint16_t bits; } z_f16;
 #define Z_F16_C(lit, bits) ((z_f16){ (uint16_t)(bits) })
 #endif
+/*@@end@@*/

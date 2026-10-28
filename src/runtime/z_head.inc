@@ -90,6 +90,7 @@ extern int ilogbq(__float128 x);
 #endif
 #include <signal.h>
 
+/*@@row @prelude.noreturn demand=@noreturn@@*/
 /* Z_NORETURN -- a function that never returns. ISO C spells it _Noreturn,
    which gcc, clang and MSVC act on; tcc acts only on its attribute form, and
    without it reports a value-returning function that ends in a call of one. */
@@ -98,7 +99,9 @@ extern int ilogbq(__float128 x);
 #else
 #define Z_NORETURN _Noreturn
 #endif
+/*@@end@@*/
 
+/*@@row @prelude.typeof demand=@typeof@@*/
 /* Z_TYPEOF -- the type of an expression, which the emitter names only for a
    temporary whose type it has no C text for. ISO C17 has no spelling for it:
    gcc, clang, tcc and MSVC take __typeof__ in C17 mode, and C23 standardises
@@ -108,7 +111,9 @@ extern int ilogbq(__float128 x);
 #else
 #define Z_TYPEOF(x) __typeof__(x)
 #endif
+/*@@end@@*/
 
+/*@@row @prelude.value_typeof demand=@value_typeof@@*/
 /* Z_VALUE_TYPEOF -- the unqualified type of an expression's value, for a
    temporary the emitter declares first and assigns after: a `const` source
    must still give an assignable temp. gcc, clang and tcc drop an rvalue's
@@ -121,6 +126,7 @@ extern int ilogbq(__float128 x);
 #else
 #define Z_VALUE_TYPEOF(x) __typeof__(((void)0, x))
 #endif
+/*@@end@@*/
 
 /*@@row @prelude.bits demand=@bits@@*/
 /* z_clz64, z_ctz64, z_popcount64 -- the leading zeros, trailing zeros and set

@@ -7928,7 +7928,10 @@ orderSettle: function {
             :symtab
             n: (ast.nodes.get i: vnid)
         )
-        if ct.length == 0 then ct = "Z_VALUE_TYPEOF(\{text})"
+        if ct.length == 0 then {
+            preludeNeed :ctx memb: "@value_typeof"
+            ct = "Z_VALUE_TYPEOF(\{text})"
+        }
     }
     if ct.length == 0 then {
         orderSetSlotAt :ctx base: vb :slot :text tf: pf
@@ -10538,6 +10541,7 @@ emitBorrowAliasBind: function {
     # marker on a value and an element the container hands back, neither of
     # which a view qualifies.
     if placeLeg then {
+        preludeNeed :ctx memb: "@typeof"
         lbF: "\{ind}Z_TYPEOF(\{addr}\{rvm}) __borrow_\{nm} = \{addr}\{rvm};\n"
         buf.append lbF
     } else {
@@ -25871,6 +25875,7 @@ emitWithLocal: function {
     if (withBorrowsPlace :ast :symtab :ctx :n vid: wvid) then {
         addrP: "&"
         if (pathIsPointer :ast :symtab :ctx n: (ast.nodes.get i: n.value)) then addrP = ""
+        preludeNeed :ctx memb: "@typeof"
         lp0: "\{ind}Z_TYPEOF(\{addrP}\{wv}) __borrow_\{wnm} = \{addrP}\{wv};\n"
         buf.append lp0
         lp1: "\{ind}/* alias: \{wnm} => (*__borrow_\{wnm}) */\n"
@@ -31597,6 +31602,7 @@ emitPlainReturn: function {
     if hoist when ctx.refBorrowRet then {
         # a reference return holds the ADDRESS across the frees, not a copy
         rr: refReturnText :ast :symtab :ctx :vid rv: rv.stringView
+        preludeNeed :ctx memb: "@typeof"
         rrCt: "Z_TYPEOF(\{rr})"
         (emitHoistedReturn
             :ctx
@@ -33546,7 +33552,17 @@ scalarTypeRefC: function {symtab: zenv.ZSymbolTable.view ctx: Ctx tid: ztypes.ti
     if ct.length > 0 when (symtab.reg.typetypeOf typeId: tid) == ztypes.ztypetype.variantType then {
         noteTypeUse :ctx :tid
     }
+    if ct.length > 0 then noteScalarTypeUse :symtab :ctx :tid
     return ct
+}
+
+# noteScalarTypeUse -- a C spelling of the scalar `tid`: the 128-bit integers'
+# and f16's C types are prelude pieces, written where something spells them
+noteScalarTypeUse: function {symtab: zenv.ZSymbolTable.view ctx: Ctx tid: ztypes.tid} is {
+    nk: ztypecheck.numKindOfTid st: symtab :tid
+    if nk.has.not then return
+    if (kindBits k: nk.kind) == 128 then preludeNeed :ctx memb: "@int128_t"
+    if nk.kind == ztypes.numkind.f16Type then preludeNeed :ctx memb: "@f16_t"
 }
 
 # noteTypeUse -- a C spelling of the struct type `tid`: before the reached set is
