@@ -4074,6 +4074,9 @@ Ctx: class {
     # the types whose generated `_eq` written C calls: only these are written
     # (noteEqUse)
     eqUsed: IdSet ztypes.tid
+    # the types whose destructor written C calls: a record's or a class's is
+    # written only then (noteDestroyUse)
+    destroyUsed: IdSet ztypes.tid
     # the types whose generated `_hash` is written, in the order they were
     # demanded
     hashAsked: IdSet ztypes.tid
@@ -8426,6 +8429,77 @@ popLoopLabel: function {ctx: Ctx id: u64 ind: StringView buf: String.borrow} is 
 }
 
 
+# noteDestroyUse -- written C calls the destructor of `tid`, a destroy target
+# (destroyTargetTid), so a record's or a class's is written; and so is each
+# part's its body frees (destroyParts), demanded now so the set is whole
+# before the first type is written. A record's destructor called after its
+# type was written names a function that is never written.
+noteDestroyUse: function {symtab: zenv.ZSymbolTable.view ctx: Ctx tid: ztypes.tid} is {
+    if (ctx.destroyUsed.has item: tid) then return
+    if (destroyGated :symtab :ctx :tid) when (ctx.emittedUserTypes.has item: tid) then {
+        cn: ctxCname :ctx :tid
+        emitFail :ctx what: "the destructor of \{cn} called after its type was written" line: 0
+        return
+    }
+    ctx.destroyUsed.add item: tid
+    parts: ListVal ztypes.tid
+    destroyParts :symtab :ctx :tid acc: parts
+    for each p: parts loop {
+        dt: destroyTargetTid :symtab :ctx tid: p
+        if dt.isZero.not when dt != ctx.strTid then noteDestroyUse :symtab :ctx tid: dt
+    }
+}
+
+# destroyParts -- the types whose values a destructor of `tid` frees: an
+# instance's elements, keys, values, payloads or fields (monoElemIdsOf), a
+# record's or a class's fields but the borrowed ones (a Box field is the Box),
+# a variant's or a union's arm payloads.
+destroyParts: function {
+    symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.tid acc: ListVal ztypes.tid
+} is {
+    names: ListVal zast.nameid
+    tt: symtab.reg.typetypeOf typeId: tid
+    if (originTidOf :symtab :tid).isZero.not then {
+        monoElemIdsOf :symtab :ctx monoId: tid :acc
+    } else if tt.isFieldwise then {
+        fids: ListVal ztypes.tid
+        recFieldIds :symtab :tid ids: fids nameIds: names
+        i: u64
+        for i < fids.length loop {
+            f: fids.get :i
+            fn: names.get :i
+            i = i + 1
+            if (symtab.typing.declIsBorrowedFieldId parentTypeId: tid nameId: fn) then continue
+            bx: fieldIsBox :symtab fid: f
+            if bx.isZero.not then f = bx
+            acc.append f
+        }
+    } else if (tt == ztypes.ztypetype.variantType) or (tt == ztypes.ztypetype.unionType) then {
+        variantArmIds :symtab :tid ids: acc nameIds: names
+    }
+}
+
+# destroyGated -- `tid`'s destructor is the one emitOneRecord writes, and only
+# when written C calls it: a record's or a class's, but not an instance of a
+# runtime template (List, Box, ...) nor a class whose C the runtime owns, whose
+# destructors are written with them.
+destroyGated: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.tid} out bool is {
+    if (symtab.reg.typetypeOf typeId: tid).isFieldwise.not then return false
+    o: originTidOf :symtab :tid
+    if o.isZero.not when (ctx.origins.contains item: o) then return false
+    if (tmplClassRowOf :symtab :ctx :tid) > 0 then return false
+    return (ctx.classRowTids.contains item: tid).not
+}
+
+# destroyWritten -- a gated destructor (destroyGated) is written only when
+# written C calls it (noteDestroyUse); any other is written with its type.
+destroyWritten: function {
+    symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.tid
+} out bool is {
+    if (destroyGated :symtab :ctx :tid).not then return true
+    return (ctx.destroyUsed.has item: tid)
+}
+
 # destroyTargetTid -- the type whose cleanup frees a value of tid, zero when the
 # value owns nothing. A typedef emits no cleanup of its own: it shares its end's
 # struct and cleanup, an aggregate's (chaseAggregateTypedef) or a String's
@@ -8461,11 +8535,12 @@ ownsResources: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztype
 # value owns nothing.
 destroyFnC: function {
     symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
+    ctx: Ctx
     tid: ztypes.tid
 } out String is {
     dt: destroyTargetTid :symtab :ctx :tid
     if dt.isZero then return String
+    noteDestroyUse :symtab :ctx tid: dt
     if dt == ctx.strTid then return "\{ctx.strC}_free"
     return "\{ctxCnameView :ctx tid: dt}_destroy"
 }
@@ -8475,13 +8550,14 @@ destroyFnC: function {
 # nothing.
 destroyLineC: function {
     symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
+    ctx: Ctx
     tid: ztypes.tid
     nm: StringView
     ind: StringView
 } out String is {
     dt: destroyTargetTid :symtab :ctx :tid
     if dt.isZero then return String
+    noteDestroyUse :symtab :ctx tid: dt
     if dt == ctx.strTid then return "\{ind}\{ctx.strC}_free(&\{nm});\n"
     addr: "&"
     if (valueIsItsPointer :symtab :ctx tid: dt) then addr = ""
@@ -8492,7 +8568,7 @@ destroyLineC: function {
 # of type `tid`, "" when the type owns nothing.
 hoistDestroyLine: function {
     symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
+    ctx: Ctx
     tid: ztypes.tid
     nm: StringView
 } out String is {
@@ -28312,6 +28388,7 @@ emitObjIterRecv: function {
     # continue inside the loop never free the live instance.
     # gated on structDestroyNontrivial: whether the destructor frees anything
     if ownGit when (structDestroyNontrivial :symtab :ctx tid: itid) then {
+        noteDestroyUse :symtab :ctx tid: itid
         gdt: "    \{itCb}_destroy(&_git\{mN});\n"
         gdn: "_git\{mN}"
         tmp.oweList stmt: gdt name: gdn vid: ztypes.vid.zero
@@ -28338,6 +28415,7 @@ emitObjIterField: function {
 } out String is {
     recv: genFieldC :ast :symtab :ctx nameId: gi
     if (structDestroyNontrivial :symtab :ctx tid: itid) then {
+        noteDestroyUse :symtab :ctx tid: itid
         ld: "\{ind}\{itCb}_destroy(&\{recv});\n"
         buf.append ld
     }
@@ -33378,6 +33456,34 @@ closeReachedTypes: function {ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: C
     }
     ctx.reachFixed = true
     demandTemplateEqs :ast :symtab :ctx
+    demandWrittenDestroys :symtab :ctx
+}
+
+# demandWrittenDestroys -- the destructors written whatever calls them call
+# their parts': every reached type's that is not gated (destroyGated: a union,
+# an instance of List, Box or Option, a runtime-owned class), and each reached
+# impl's owned protocol box (emitConformanceImpl's `_owned_destroy`).
+demandWrittenDestroys: function {symtab: zenv.ZSymbolTable.view ctx: Ctx} is {
+    rs: ListVal ztypes.tid
+    for each r: ctx.reachedTypes loop rs.append r
+    for each m: rs loop {
+        if (destroyGated :symtab :ctx tid: m).not when (destroyTargetTid :symtab :ctx tid: m
+        ).isZero.not then {
+            noteDestroyUse :symtab :ctx tid: m
+        }
+    }
+    ri: ztypes.confid
+    for ri.next < symtab.typing.nextConf loop {
+        ri = ri.next
+        impl: ztypes.tid
+        {
+            row: symtab.typing.conformance.get i: ri
+            if (ctx.reachedTypes.has item: row.implTypeId) then impl = row.implTypeId
+        }
+        if impl.isZero then continue
+        dt: destroyTargetTid :symtab :ctx tid: impl
+        if dt.isZero.not when dt != ctx.strTid then noteDestroyUse :symtab :ctx tid: dt
+    }
 }
 
 # demandTemplateEqs -- the generated `==` each reached container's template
@@ -35795,6 +35901,7 @@ emitC: function {
         eqAsked: IdSet ztypes.tid
         eqHasBody: IdSet ztypes.tid
         eqUsed: IdSet ztypes.tid
+        destroyUsed: IdSet ztypes.tid
         hashAsked: IdSet ztypes.tid
         hashOrder: ListVal ztypes.tid
         lateDefs: String
@@ -38022,7 +38129,7 @@ mapFreeKeyDel: function {keyFree: StringView valFree: StringView} out String is 
 # for scalars. Mirrors emitStructDestructor's per-field cleanup.
 mapValFreeStmt: function {
     symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
+    ctx: Ctx
     valTid: ztypes.tid
     slot: StringView
 } out String is {
@@ -39610,7 +39717,8 @@ emitDeclaredFwdDecl: function {
     l0: "typedef struct \{cn}_t \{cn}_t;\n"
     buf.append l0
     needDtor: (symtab.reg.typetypeOf typeId: tid) == ztypes.ztypetype.unionType
-    if (ownsResources :symtab :ctx :tid) then needDtor = true
+    if (ownsResources :symtab :ctx :tid) when (destroyWritten :symtab :ctx :tid
+    ) then needDtor = true
     if needDtor then {
         l1: "static void \{cn}_destroy(\{cn}_t* p);\n"
         buf.append l1
@@ -39652,7 +39760,8 @@ emitMonoFwdDecl: function {
     lx0: "typedef struct \{cnX}_t \{cnX}_t;\n"
     buf.append lx0
     fwdDtor: (
-        (ownsResources :symtab :ctx :tid) or
+        (ownsResources :symtab :ctx :tid) and
+        (destroyWritten :symtab :ctx :tid) or
         (isMapOriginOf :symtab :ctx :tid) or
         (isSetOriginOf :symtab :ctx :tid)
     )
@@ -47191,7 +47300,7 @@ emitOneRecord: function {
         ids: fids
         :buf
     )
-    if (ownsResources :symtab :ctx :tid) then {
+    if (destroyWritten :symtab :ctx :tid) when (ownsResources :symtab :ctx :tid) then {
         emitStructDestructor :ast :symtab :ctx :tid :fnames :fids fnameIds: fidsNm :buf
     }
 }
