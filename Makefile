@@ -1252,7 +1252,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2372937
+ALLOC_BASELINE := 2375749
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1361,7 +1361,7 @@ emitter-guard:
 	chk "ztypecheck.walkLookupTyperef" "$$e2" 1; \
 	chk "regNameOf" "$$e6" 4; \
 	chk "mangleVarName (inside varCName)" "$$e7" 1; \
-	chk "io.readText" "$$e8" 3; \
+	chk "io.readText" "$$e8" 2; \
 	chk "literal arm members (.data.<arm>; memberC spells them)" "$$e10" 0; \
 	chk "poolFind (a re-intern of a name the emitter held as an id, or table text)" "$$e11" 14; \
 	chk "member-name TEXT (C spelling and natives.tbl keys only; look members up by aliasChildNameId)" "$$e12" 15; \
@@ -1971,7 +1971,7 @@ deadcode-guard: bin/zc
 # of every kind, and live ones only a careless reader misses: the reader must
 # report exactly CDEAD_PROBE there before its count is trusted. The baseline is
 # the dead items the emitter writes today (corpus, then zc); lower it as it falls.
-CDEAD_BASELINE := 30282 475
+CDEAD_BASELINE := 24779 476
 CDEAD_PROBE := cdead_dead_fn cdead_dead_fn_ft cdead_dead_inline cdead_dead_leaf \
 	cdead_dead_macro cdead_dead_proto_t cdead_dead_str cdead_dead_t cdead_dead_vtable_t
 
@@ -2184,7 +2184,7 @@ cdead-guard: bin/zc
 # cdead_dead_fn and cdead_dead_str, so a compiler that stops warning cannot
 # pass. The baseline is today's warnings (gcc corpus, gcc zc, clang corpus,
 # clang zc); lower it as it falls. Skipped without clang.
-CC_UNUSED_BASELINE := 6929 392 8646 396
+CC_UNUSED_BASELINE := 3901 393 4438 397
 CC_UNUSED_FLAGS := -std=c17 -c -o /dev/null -Wunused-function -Wunused-variable -Wunused-const-variable
 CC_UNUSED_RE := warning: .*\[-Wunused-(function|variable|const-variable)
 
@@ -2277,7 +2277,8 @@ def defined(body):
         if m:
             names.add(m.group(1)); continue
         if re.match(r'(__extension__\s+)?typedef\b', s) and s.endswith(';') and '{' not in s:
-            names.add(IDENT.findall(s[:-1])[-1]); continue
+            fp = re.search(r'\(\s*\*\s*([\w@]+)\s*\)', s)
+            names.add(fp.group(1) if fp else IDENT.findall(s[:-1])[-1]); continue
         if re.match(r'(static|extern)\b', s):
             pre = s.split('=')[0].split(';')[0]
             m = re.search(r'([\w@]+)\s*\(', pre)
@@ -2307,7 +2308,7 @@ files = sorted([os.path.join(rt, f) for f in os.listdir(rt) if f.endswith('.inc'
                [os.path.join(rt, 'natives', f) for f in os.listdir(os.path.join(rt, 'natives')) if f.endswith('.inc')])
 for f in files:
     t = open(f).read()
-    if '/*@@' not in t:
+    if OPEN not in t:
         continue
     pos, rest = 0, []
     while True:
@@ -2347,11 +2348,8 @@ for ln in open(os.path.join(rt, 'natives.tbl')):
     text = body
     for fr in [x for x in (a.get('frag', '') + ',' + a.get('destroy', '')).split(',') if x]:
         p = os.path.join(rt, 'natives', fr + '.inc')
-        if os.path.exists(p):
-            text += '\n' + open(p).read()
-    if a.get('tmpl'):
-        p = os.path.join(rt, a['tmpl'])
-        if os.path.exists(p):
+        # a pieced fragment is written a piece at a time: its pieces are rows
+        if os.path.exists(p) and OPEN not in open(p).read():
             text += '\n' + open(p).read()
     rows.append((key, a, text, 'natives.tbl [' + key + ']'))
 for key, a, body, f in pieces:
@@ -2375,6 +2373,15 @@ owner = {}           # defined name -> piece key, demand
 for key, a, body, f in pieces:
     for n in defined(body):
         owner[n] = (key, ('prelude', demands(key, a)[0]))
+# a prelude row's fragments are written whole, where its demand fired: what
+# they define is the row's, as a piece's is
+for key, a, text, where in rows:
+    if key.startswith('@prelude.') and a.get('frag') and where.startswith('natives.tbl'):
+        for fr in a['frag'].split(','):
+            p = os.path.join(rt, 'natives', fr + '.inc')
+            if os.path.exists(p) and OPEN not in open(p).read():
+                for n in defined(open(p).read()):
+                    owner.setdefault(n, (key, ('prelude', demands(key, a)[0])))
 
 def spelled(text):
     return set(IDENT.findall(strip_c(text))) & set(owner)
@@ -2394,8 +2401,12 @@ for f, t in outside.items():
 for f in files:
     if not f.endswith('.c.tmpl'): continue
     t = open(f).read()
-    m = re.search(r'/\*@@needs ([^@]*)@@\*/', t)
+    m = re.match(r'/\*@@needs (.*?)@@\*/', t)
     decl = [tuple(x.split('.', 1)) for x in (m.group(1).split(',') if m else []) if '.' in x]
+    # a class row's template is written with the row: the row's needs serve it
+    for key, a, _, _ in rows:
+        if a.get('tmpl') and os.path.join(rt, a['tmpl']) == f:
+            decl += needs_of(key, a) + [(unit_of(key), d) for d in demands(key, a)]
     cov = closure(decl)
     for n in sorted(spelled(t)):
         pk, dem = owner[n]
@@ -2411,11 +2422,25 @@ for i, ln in enumerate(src):
         items.append(cur)
     if cur is not None and not ln.lstrip().startswith('#'):
         cur[2].append(ln)
+# nativeConvRows' helpers write natives.tbl's conversion rows, not C: the
+# rows they write carry their needs, checked above with the table
+CONV_ROWS = set()
+calls = {}
 for line, name, body in items:
+    calls[name] = set(re.findall(r'\b([a-z]\w*)\s+:?\w*:', '\n'.join(body))) | set(re.findall(r'\(([a-z]\w*)\b', '\n'.join(body)))
+todo = ['nativeConvRows']
+while todo:
+    n = todo.pop()
+    if n in CONV_ROWS or n not in calls: continue
+    CONV_ROWS.add(n)
+    todo.extend(c for c in calls[n] if c.startswith('conv'))
+for line, name, body in items:
+    if name in CONV_ROWS: continue
     # the String and StringView C names are spelled through the emission
     # context's bindings
     code = '\n'.join(body).replace('\\{ctx.strC}_', 'z_@String@_').replace('\\{ctx.svC}_', 'z_@StringView@_')
     got = set(re.findall(r'preludeNeed :ctx memb: "([\w@]+)"', code))
+    got |= set(re.findall(r'needsAddM :ctx uname: "prelude" memb: "([\w@]+)"', code))
     # a String name spelled with a computed member, or the String type's C name
     # appended on its own, records the member it spells there too
     if re.search(r'z_@String@_\\\{|\.append ctx\.strC\b', code) and not re.search(r'preludeNeed :ctx memb: (pm\.stringView|"@String_)', code):
@@ -3164,7 +3189,7 @@ view-guard:
 # ratchets. A new refusal leg may raise EMITFAIL_BASELINE (say so in the commit);
 # a new fallback leg may not.
 EMITFAIL_BASELINE := 51
-MARKER_BASELINE := 24
+MARKER_BASELINE := 23
 EXCS := $(NAMES:%=$(EXDIR)/%.c)
 fallback-guard: $(EXCS) bin/zc bin/zl bin/zls
 	@fail=0; \

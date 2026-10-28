@@ -1,25 +1,35 @@
+/*@@row @prelude.unreachable demand=@unreachable needs=@panic@@*/
 static Z_NORETURN void z_unreachable(void) { z_panic("unreachable"); }
+/*@@end@@*/
+/*@@row @prelude.xmalloc demand=@xmalloc needs=@panic@@*/
 static void* z_xmalloc(size_t n) {
     void* p = malloc(n);
     if (!p) z_panic("out of memory");
     return p;
 }
+/*@@end@@*/
+/*@@row @prelude.xmemdup demand=@xmemdup needs=@xmalloc@@*/
 /* a new heap cell holding a copy of the n bytes at v */
 static void* z_xmemdup(const void* v, size_t n) {
     void* p = z_xmalloc(n);
     memcpy(p, v, n);
     return p;
 }
+/*@@end@@*/
+/*@@row @prelude.xcalloc demand=@xcalloc needs=@panic@@*/
 static void* z_xcalloc(size_t count, size_t size) {
     void* p = calloc(count, size);
     if (!p) z_panic("out of memory");
     return p;
 }
+/*@@end@@*/
+/*@@row @prelude.xrealloc demand=@xrealloc needs=@panic@@*/
 static void* z_xrealloc(void* p, size_t n) {
     void* q = realloc(p, n);
     if (!q) z_panic("out of memory");
     return q;
 }
+/*@@end@@*/
 
 
 /* i128 / u128: the C compiler's 128-bit integer where it has one, two 64-bit

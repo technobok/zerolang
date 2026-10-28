@@ -4,7 +4,7 @@ typedef struct {
     uint64_t capacity;   /* allocated buffer size */
 } z_@String@_t;
 
-/*@@row @prelude.String_new demand=@String_new@@*/
+/*@@row @prelude.String_new demand=@String_new needs=@xmalloc@@*/
 static z_@String@_t z_@String@_new(const char* s) {
     z_@String@_t z = {0};
     z.size = (uint64_t)strlen(s);
@@ -16,7 +16,7 @@ static z_@String@_t z_@String@_new(const char* s) {
 }
 
 /*@@end@@*/
-/*@@row @prelude.String_cat demand=@String_cat@@*/
+/*@@row @prelude.String_cat demand=@String_cat needs=@xmalloc@@*/
 static z_@String@_t z_@String@_cat(z_@String@_t* a, z_@String@_t* b) {
     z_@String@_t z = {0};
     z.size = a->size + b->size;
@@ -37,7 +37,7 @@ static z_@String@_t z_@String@_from_f64(double n) {
 }
 
 /*@@end@@*/
-/*@@row @prelude.String_print demand=@String_print@@*/
+/*@@row @prelude.String_print demand=@String_print needs=@write_line@@*/
 static void z_@String@_print(const z_@String@_t* s) {
     z_write_line(1, s->data, s->size, 1);
 }
@@ -71,7 +71,7 @@ static int32_t z_@String@_cmp(z_@String@_t* a, z_@String@_t* b) {
 }
 
 /*@@end@@*/
-/*@@row @prelude.String_reserve demand=@String_reserve@@*/
+/*@@row @prelude.String_reserve demand=@String_reserve needs=@xrealloc@@*/
 static void z_@String@_reserve(z_@String@_t* s, uint64_t additional) {
     uint64_t needed = s->size + additional;
     if (needed <= s->capacity) return;
@@ -101,7 +101,7 @@ static void z_@String@_append_byte(z_@String@_t* s, uint8_t b) {
 }
 
 /*@@end@@*/
-/*@@row @prelude.String_shrink demand=@String_shrink@@*/
+/*@@row @prelude.String_shrink demand=@String_shrink needs=@xrealloc@@*/
 static void z_@String@_shrink(z_@String@_t* s) {
     if (s->size == s->capacity) return;
     s->data = (char*)z_xrealloc(s->data, s->size + 1);
@@ -109,7 +109,7 @@ static void z_@String@_shrink(z_@String@_t* s) {
 }
 
 /*@@end@@*/
-/*@@row @prelude.String_create demand=@String_create@@*/
+/*@@row @prelude.String_create demand=@String_create needs=@xmalloc@@*/
 static z_@String@_t z_@String@_create(uint64_t cap) {
     z_@String@_t z = {0};
     z.capacity = cap;
@@ -121,7 +121,7 @@ static z_@String@_t z_@String@_create(uint64_t cap) {
 }
 
 /*@@end@@*/
-/*@@row @prelude.String_copy demand=@String_copy@@*/
+/*@@row @prelude.String_copy demand=@String_copy needs=@xmalloc@@*/
 static z_@String@_t z_@String@_copy(const z_@String@_t* s) {
     z_@String@_t z = {0};
     z.size = s->size;

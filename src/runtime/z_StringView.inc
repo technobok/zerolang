@@ -3,7 +3,7 @@ typedef struct {
     const char* data;    /* pointer into string buffer or .rodata */
 } z_@StringView@_t;
 
-/*@@row @prelude.StringView_print demand=@StringView_print@@*/
+/*@@row @prelude.StringView_print demand=@StringView_print needs=@write_line@@*/
 static void z_@StringView@_print(z_@StringView@_t sv) {
     z_write_line(1, sv.data, sv.size, 1);
 }
@@ -28,7 +28,7 @@ static int32_t z_@StringView@_cmp(z_@StringView@_t a, z_@StringView@_t b) {
 }
 
 /*@@end@@*/
-/*@@row @prelude.String_from_view demand=@String_from_view@@*/
+/*@@row @prelude.String_from_view demand=@String_from_view needs=@xmalloc@@*/
 static z_@String@_t z_@String@_from_view(z_@StringView@_t sv) {
     z_@String@_t z = {0};
     z.size = sv.size;

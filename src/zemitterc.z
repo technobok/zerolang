@@ -1134,7 +1134,7 @@ convRowHead: function {srcK: ztypes.numkind dstK: ztypes.numkind lossy: bool} ou
     sn: ztypes.numkindName k: srcK
     dn: ztypes.numkindName k: dstK
     head: "[system.\{sn}.\{dn}"
-    nds: convNeeds :srcK :dstK
+    nds: convNeeds :srcK :dstK :lossy
     if nds.length > 0 then {
         head.append " needs="
         head.append nds
@@ -1157,13 +1157,21 @@ convIsValue: function {srcK: ztypes.numkind dstK: ztypes.numkind lossy: bool} ou
 
 # convNeeds -- the helper fragments a conversion row calls, as its `needs=`
 # list: the int128 helpers for a 128-bit integer on either side, the f16 ones
-# for an f16. "" for a row that needs neither.
-convNeeds: function {srcK: ztypes.numkind dstK: ztypes.numkind} out String is {
+# for an f16, and the span count a checked integer -> float conversion of a
+# 64-bit-or-narrower integer tests (convIntToFloat). "" for a row that needs
+# none.
+convNeeds: function {srcK: ztypes.numkind dstK: ztypes.numkind lossy: bool} out String is {
     r: String
     if ((kindBits k: srcK) == 128) or ((kindBits k: dstK) == 128) then r.append "prelude.int128"
     if (srcK == ztypes.numkind.f16Type) or (dstK == ztypes.numkind.f16Type) then {
         if r.length > 0 then r.append ","
         r.append "prelude.f16"
+    }
+    if lossy when (kindIsFloat k: srcK).not when (kindIsFloat k: dstK) when (
+        (kindBits k: srcK) != 128
+    ) then {
+        if r.length > 0 then r.append ","
+        r.append "prelude.@span64"
     }
     return r
 }
@@ -1891,6 +1899,26 @@ readTemplateCached: function {ctx: Ctx path: StringView} out String is {
     }
     ctx.tmplCache.set key: path.string value: txt.copy
     return txt
+}
+
+# readTemplate -- a runtime template's text, for writing an instance of it. Its
+# first line may be `/*@@needs <unit>.<member>,...@@*/`: the runtime the
+# template calls, registered here as a row's `needs=` is, and left out of the
+# text (a compiler that knows no marker writes it as a comment).
+readTemplate: function {ctx: Ctx path: StringView} out String is {
+    raw: readTemplateCached :ctx :path
+    marked: raw.stringView.startsWith prefix: "/*@@needs "
+    if marked.not then return raw
+    body: String
+    {
+        rv: raw.stringView
+        cl: (rv.indexOf needle: "@@*/").or d: 0
+        for each nd: ((rv.substring from: 10 to: cl).split sep: ",") loop {
+            if nd.length > 0 then rowNeedAddOne :ctx uname: "" need: nd
+        }
+        body = (rv.substring from: (lineAfter text: rv at: cl + 4) to: rv.length).string
+    }
+    return body
 }
 
 # cReserved -- the words an emitted identifier must not collide with, so a local
@@ -2889,25 +2917,6 @@ emitterFailure: function {what: String line: u32} out zast.ErrorData is {
         note: "".string
         hint: "".string
     )
-}
-
-# loadFragment -- read a runtime fragment and fill its holes (fillStringHoles).
-loadFragment: function {
-    path: StringView
-    svC: StringView
-    strC: StringView
-    fails: List zast.ErrorData
-} out String is {
-    rd: io.readText :path
-    match (
-        rd
-    ) case ok then {
-        return (fillStringHoles text: rd :path :svC :strC :fails)
-    } case err then {
-        fails.append (emitterFailure what: "missing runtime fragment \{path}" line: 0)
-        m: "/* zemitterc: missing runtime fragment \{path} */\n"
-        return m
-    }
 }
 
 # fillStringHoles -- fill a runtime text's holes. Every text on this path spells
@@ -4238,9 +4247,9 @@ Ctx: class {
     # the row is written, so a helper row loaded by its demand gets what its
     # body calls as a called row does (the prelude is written after them all)
     fragNeeds: (IdMapR u64 V: String)
-    # the text of each piece of a fixed runtime file, by its row (loadPieces):
-    # a piece is written in place by its file, never by a unit walk
-    pieceText: (IdMapR u64 V: String)
+    # the rows a file writes in place, which no unit walk writes: every piece,
+    # and the row whose fragment the header writes (z_panic's)
+    rowsInPlace: IdSet u64
     # the units the rows belong to, each once, in the order the table first
     # names them: where a fragment's plain type-name hole is looked up after
     # the system unit (ioCanonTidAny). The system unit itself is not listed
@@ -10801,6 +10810,7 @@ emitBoxCreate: function {
     # declared zero by the enclosing statement, assigned here; the box moves
     # into the value it builds, so it is no address hoist and owes no destroy
     ctx.argHoists.append (ArgHoist name: bnm.copy val: String ctype: "\{binner}*" dtor: String)
+    preludeNeed :ctx memb: "@xmalloc"
     return (stating
         :facts
         from: callFacts
@@ -11102,6 +11112,7 @@ narrowListIndex: function {
         needle: "@V@"
         repl: v.stringView
     )
+    preludeNeed :ctx memb: "@panic"
     pnc: "z_panic(\"List append: index past the range of the list's index type\")"
     r: "((\{cond}) ? \{pnc} : (void)0, (\{ct})\{v})"
     return (orderWrap prefix: pre call: r)
@@ -12801,7 +12812,7 @@ armHeldC: function {
     av: StringView
 } out String is {
     if (armPayloadNamesStorage :ast :symtab tid: stid :arm :payNid).not then {
-        return (armCellNew pc: payC value: av)
+        return (armCellNew :ctx pc: payC value: av)
     }
     pn: ast.nodes.get i: payNid
     avq: atomVidIfPlain :ast :symtab :ctx n: pn text: av
@@ -20299,6 +20310,7 @@ orPanicExprC: function {
         prefix: pre
     )
     r: spelled.stringView
+    preludeNeed :ctx memb: "@panic"
     pnc: "z_panic(\"orPanic: result is err\")"
     body: "((\{r}.tag != \{okTag} ? \{pnc} : (void)0), \{r}.data.\{okC})"
     return (stating :facts from: callFacts text: (orderWrap prefix: pre call: body))
@@ -22758,9 +22770,11 @@ emitErrorStmt: function {
     if got when avF.failed.not then okArg = true
     if okArg then {
         flushArgHoists :ctx :ind :tmp :buf
+        preludeNeed :ctx memb: "@panic"
         el: "\{ind}z_panic((const char*)\{av}.data);\n"
         buf.append el
     } else {
+        preludeNeed :ctx memb: "@panic"
         ef: "\{ind}z_panic(\"(compile-time error)\");\n"
         buf.append ef
     }
@@ -22808,9 +22822,11 @@ emitPanicStmt: function {
     if got when avF.failed.not then okArg = true
     if okArg then {
         flushArgHoists :ctx :ind :tmp :buf
+        preludeNeed :ctx memb: "@panic"
         pl: "\{ind}z_panic((const char*)\{av}.data);\n"
         buf.append pl
     } else {
+        preludeNeed :ctx memb: "@panic"
         pf: "\{ind}z_panic(\"(panic)\");\n"
         buf.append pf
     }
@@ -23360,7 +23376,7 @@ emitOptionBoxHoist: function {
         buf.append b2
         bx: "_Box\{bN}"
         tv: "_t\{bN}"
-        b3: armCellAlloc pc: payC.stringView box: bx.stringView
+        b3: armCellAlloc :ctx pc: payC.stringView box: bx.stringView
         buf.append "\{ind}\{b3}\n"
         b4: armCellFill box: bx.stringView value: tv.stringView
         buf.append "\{ind}\{b4}\n"
@@ -26760,6 +26776,7 @@ emitGenericDissect: function {
         pnmT: zast.poolTextAt pool: ast.names ref: paramName
         cnm: "generic match on '\{pnmT}' has no case for '\{subjDesc}' and no else"
         ctx.emitErrors.append (emitterFailure what: cnm.copy line: 0)
+        preludeNeed :ctx memb: "@panic"
         ef: "\{ind}z_panic(\"(compile-time error)\");\n"
         buf.append ef
     }
@@ -27378,6 +27395,7 @@ emitBoolElse: function {
         if diverges then {
             leD: "\{ind}else {\n"
             buf.append leD
+            preludeNeed :ctx memb: "@unreachable"
             lzD: "\{ind}    z_unreachable();\n"
             buf.append lzD
             lcD: "\{ind}}\n"
@@ -27904,6 +27922,7 @@ emitMatchElse: function {
         buf.append l
     } else {
         if diverges then {
+            preludeNeed :ctx memb: "@unreachable"
             ld0: "\{ind}default: z_unreachable();\n"
             buf.append ld0
         } else {
@@ -27917,6 +27936,7 @@ emitMatchElse: function {
 # inline for a valtype optionval (payC ""), a malloc'd box for a reftype
 # Option payload.
 emitOptionalAssign: function {
+    ctx: Ctx
     target: StringView
     someTag: StringView
     # the some arm's C member name (memberC)
@@ -27928,7 +27948,7 @@ emitOptionalAssign: function {
 } is {
     if payC.length > 0 then {
         tsl: "\{target}.data"
-        st: armCellStore pc: payC box: "_zb" value: vx slot: tsl.stringView
+        st: armCellStore :ctx pc: payC box: "_zb" value: vx slot: tsl.stringView
         lb: "\{ind}\{target}.tag = \{someTag};\n\{ind}{ \{st} }\n"
         buf.append lb
     } else {
@@ -27965,7 +27985,7 @@ emitBranchAssignOptional: function {
             if (si + 1) == cnt then {
                 vx: emitExpr :ast :symtab :ctx n: sx
                 flushArgHoists :ctx :ind :tmp :buf
-                emitOptionalAssign :target :someTag :someC :payC vx: vx.stringView :ind :buf
+                emitOptionalAssign :ctx :target :someTag :someC :payC vx: vx.stringView :ind :buf
                 emitValueTakeInvalidations :ast :symtab :ctx n: sx :ind :buf
             } else {
                 emitStmt :ast :symtab :ctx n: sx :ind :tmp :buf
@@ -27985,7 +28005,7 @@ emitBranchAssignOptional: function {
     } else {
         vx2: emitExpr :ast :symtab :ctx :n
         flushArgHoists :ctx :ind :tmp :buf
-        emitOptionalAssign :target :someTag :someC :payC vx: vx2.stringView :ind :buf
+        emitOptionalAssign :ctx :target :someTag :someC :payC vx: vx2.stringView :ind :buf
         emitValueTakeInvalidations :ast :symtab :ctx :n :ind :buf
     }
 }
@@ -29693,7 +29713,8 @@ armCellPtr: function {pc: StringView slot: StringView inline: false} out String 
 }
 
 # armCellAlloc -- declare `box`, a fresh cell for a payload.
-armCellAlloc: function {pc: StringView box: StringView} out String is {
+armCellAlloc: function {ctx: Ctx pc: StringView box: StringView} out String is {
+    preludeNeed :ctx memb: "@xmalloc"
     return "\{pc}* \{box} = (\{pc}*)z_xmalloc(sizeof(\{pc}));"
 }
 
@@ -29711,6 +29732,7 @@ armCellAttach: function {slot: StringView box: StringView} out String is {
 # the cell `box` allocated, filled with `value`, and attached; an inline arm's
 # payload is the slot's own store.
 armCellStore: function {
+    ctx: Ctx
     pc: StringView
     box: StringView
     value: StringView
@@ -29718,7 +29740,7 @@ armCellStore: function {
     inline: false
 } out String is {
     if inline then return "\{slot} = \{value};"
-    al: armCellAlloc :pc :box
+    al: armCellAlloc :ctx :pc :box
     fl: armCellFill :box :value
     at: armCellAttach :slot :box
     return "\{al} \{fl} \{at}"
@@ -29727,7 +29749,8 @@ armCellStore: function {
 # armCellNew -- a new cell holding `value`, as an expression: the value is
 # copied out of a one-element array literal, which is how C takes the
 # address of any value, a call's result included.
-armCellNew: function {pc: StringView value: StringView} out String is {
+armCellNew: function {ctx: Ctx pc: StringView value: StringView} out String is {
+    preludeNeed :ctx memb: "@xmemdup"
     return "z_xmemdup((\{pc}[1]){ \{value} }, sizeof(\{pc}))"
 }
 
@@ -35661,6 +35684,7 @@ assembleEmitOutput: function {
     }
     buf.append "    z_start();\n"
     buf.append "    z_main();\n"
+    preludeNeed :ctx memb: "@end"
     buf.append "    z_end();\n"
     buf.append "    return 0;\n"
     buf.append "}\n"
@@ -35718,17 +35742,32 @@ emitCHeader: function {
 # (loadFixedFile), never by a unit walk. Both markers are C comments: a
 # compiler that knows no pieces writes the file whole, and the C compiles.
 loadPieces: function {ctx: Ctx runtimeDir: StringView} is {
-    loadPiecesOf :ctx :runtimeDir name: "z_head.inc"
-    loadPiecesOf :ctx :runtimeDir name: "z_alloc.inc"
-    loadPiecesOf :ctx :runtimeDir name: "z_String.inc"
-    loadPiecesOf :ctx :runtimeDir name: "z_StringView.inc"
-    loadPiecesOf :ctx :runtimeDir name: "z_hash.inc"
-    loadPiecesOf :ctx :runtimeDir name: "z_start.inc"
+    loadFixedPieces :ctx :runtimeDir name: "z_head.inc"
+    loadFixedPieces :ctx :runtimeDir name: "z_alloc.inc"
+    loadFixedPieces :ctx :runtimeDir name: "z_String.inc"
+    loadFixedPieces :ctx :runtimeDir name: "z_StringView.inc"
+    loadFixedPieces :ctx :runtimeDir name: "z_hash.inc"
+    loadFixedPieces :ctx :runtimeDir name: "z_start.inc"
+    # z_panic's fragment, the one the table chose (a threaded program's
+    # differs): written in the header's slot, a piece at a time
+    pr: nativeFragRow :ctx path: "@prelude.panic"
+    if pr > 0 then {
+        ctx.rowsInPlace.add item: pr - 1
+        pf: (ctx.fragNames.get i: pr - 1).copy
+        pp: nativePath :runtimeDir frag: pf.stringView
+        loadPiecesOf :ctx path: pp.stringView
+    }
 }
 
-# loadPiecesOf -- loadPieces for the fixed file `name`
-loadPiecesOf: function {ctx: Ctx runtimeDir: StringView name: StringView} is {
+# loadFixedPieces -- loadPiecesOf for the fixed file `name`
+loadFixedPieces: function {ctx: Ctx runtimeDir: StringView name: StringView} is {
     p: "\{runtimeDir}/\{name}"
+    loadPiecesOf :ctx path: p.stringView
+}
+
+# loadPiecesOf -- loadPieces for the runtime file at `path`
+loadPiecesOf: function {ctx: Ctx path: StringView} is {
+    p: path.string
     txt: readTemplateCached :ctx path: p.stringView
     pos: u64
     for pos < txt.length loop {
@@ -35746,8 +35785,7 @@ loadPiecesOf: function {ctx: Ctx runtimeDir: StringView name: StringView} is {
             head: (txt.stringView.substring from: sp.headFrom to: sp.headTo)
             words: ctx.nativeWords
         )
-        bt: (txt.stringView.substring from: sp.bodyFrom to: sp.bodyTo).string
-        ctx.pieceText.set key: ctx.fragUnits.length value: bt.take
+        ctx.rowsInPlace.add item: ctx.fragUnits.length
         (recordFragmentRow
             :ctx
             key: h.key.stringView
@@ -36205,7 +36243,7 @@ emitC: function {
         fragTypeNames: List String
         fragTypeTids: ListVal ztypes.tid
         fragNeeds: (IdMapR u64 V: String)
-        pieceText: (IdMapR u64 V: String)
+        rowsInPlace: IdSet u64
         fragUnitDecls: ListVal ztypes.declid
         demandGatedTids: IdSet ztypes.tid
         usedTypeIds: IdSet ztypes.tid
@@ -36369,7 +36407,7 @@ emitC: function {
     if pf.length == 0 then {
         (emitFail
             :ctx
-            what: "natives.tbl has no @prelude.panic row: z_panic has nothing to be written from".string
+            what: "natives.tbl has no @prelude.panic row: the panic function has nothing to be written from".string
             line: 0
         )
         pf = "_Z_PANIC".string
@@ -36665,7 +36703,7 @@ emitArrayMono: function {
         dest: eqBody
     )
     p: "\{runtimeDir}/z_array.c.tmpl"
-    raw: readTemplateCached :ctx path: p.stringView
+    raw: readTemplate :ctx path: p.stringView
     if raw.length > 0 then {
         t1: applyTmpl text: raw key: "NAME" val: nm.stringView
         t2: applyTmpl text: t1 key: "ELEM_T" val: ect.stringView
@@ -36741,8 +36779,8 @@ monoLengthText: function {symtab: zenv.ZSymbolTable.view monoId: ztypes.tid} out
 }
 
 # emitStrMono -- a str valtype mono (fixed-capacity inline string). Substitutes
-# z_str.c.tmpl (struct + create + .string + String_to_<name>). Read via
-# loadFragment so the template's canonical z_String becomes ctx.strC.
+# z_str.c.tmpl (struct + create + .string + String_to_<name>). Its String and
+# StringView holes are filled (fillStringHoles) with ctx.strC / ctx.svC.
 # Capacity is the mono's recorded `to` argument.
 emitStrMono: function {
     symtab: zenv.ZSymbolTable.view
@@ -36763,9 +36801,11 @@ emitStrMono: function {
         eqBody = "static bool z_\{nm}_eq(z_\{nm}_t a, z_\{nm}_t b) {\n    return a.len == b.len && memcmp(a.data, b.data, a.len) == 0;\n}\n"
     } case none then null
     p: "\{runtimeDir}/z_str.c.tmpl"
+    tx: readTemplate :ctx path: p.stringView
     svL: ctx.svC
     strL: ctx.strC
-    raw: (loadFragment
+    raw: (fillStringHoles
+        text: tx
         path: p.stringView
         svC: svL.stringView
         strC: strL.stringView
@@ -36848,7 +36888,7 @@ emitColMethodOnDemand: function {
     if md.isZero then return
     if (symtab.typing.usedMemberDecl.has item: md).not then return
     fp: "\{runtimeDir}/\{file}"
-    raw: readTemplateCached :ctx path: fp.stringView
+    raw: readTemplate :ctx path: fp.stringView
     if raw.length == 0 then return
     f1: applyTmpl text: raw key: "NAME" val: nm
     if hole.length == 0 then {
@@ -36899,7 +36939,7 @@ emitListMono: function {
     ect0: slotCType :ast :symtab :ctx tid: eid
     ect: ctypeOrI64 s: ect0.stringView
     p: "\{runtimeDir}/z_List.c.tmpl"
-    raw: readTemplateCached :ctx path: p.stringView
+    raw: readTemplate :ctx path: p.stringView
     if raw.length == 0 then return
     {
         t1: applyTmpl text: raw key: "NAME" val: nm.stringView
@@ -36970,6 +37010,7 @@ emitListMono: function {
     useMut: monoMemberUsed :symtab :monoId nameId: zast.wellKnown.slot.wkGetMut
     if useGet or useMut then {
         (emitColGet
+            :ctx
             nm: nm.stringView
             ect: ect.stringView
             kind: "List"
@@ -37164,6 +37205,7 @@ sortLessC: function {
 # written on its own demand, and the readonly view templates never ask for
 # `getMut`.
 emitColGet: function {
+    ctx: Ctx
     nm: StringView
     ect: StringView
     kind: StringView
@@ -37187,6 +37229,7 @@ emitColGet: function {
     guard.append "        char _zp_buf[96];\n"
     b2: "        snprintf(_zp_buf, sizeof(_zp_buf), \"\{kind} get: index %llu out of bounds (length %llu)\", (unsigned long long)_idx, (unsigned long long)_this->length);\n"
     guard.append b2
+    preludeNeed :ctx memb: "@panic"
     guard.append "        z_panic(_zp_buf);\n"
     guard.append "    }\n"
     if hasGet then {
@@ -37229,6 +37272,7 @@ emitColGet: function {
 # once: view-guard reads these string literals to learn which declaration the
 # emitted function backs, and a name behind a local is a name it cannot see.
 emitColSlice: function {
+    ctx: Ctx
     nm: StringView
     lvc: StringView
     kind: StringView
@@ -37242,6 +37286,7 @@ emitColSlice: function {
     buf.append "        char _zp_buf[128];\n"
     b2: "        snprintf(_zp_buf, sizeof(_zp_buf), \"\{kind} slice: [%llu, %llu) out of bounds (length %llu)\", (unsigned long long)_from, (unsigned long long)_to, (unsigned long long)_this->length);\n"
     buf.append b2
+    preludeNeed :ctx memb: "@panic"
     buf.append "        z_panic(_zp_buf);\n"
     buf.append "    }\n"
     s3: "    return (\{lvc}_t){ .length = _to - _from, .data = _this->data + _from };\n"
@@ -37259,7 +37304,7 @@ emitColSlice: function {
 # serves both templates.
 emitListSliceOnDemand: function {
     symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
+    ctx: Ctx
     monoId: ztypes.tid
     nm: StringView
     kind: StringView
@@ -37279,7 +37324,7 @@ emitListSliceOnDemand: function {
         if rt.isZero when (isListViewOriginOf :symtab :ctx tid: monoId) then rt = monoId
         if rt.isZero.not then {
             lvc: ctxCname :ctx tid: rt
-            emitColSlice :nm lvc: lvc.stringView :kind :buf
+            emitColSlice :ctx :nm lvc: lvc.stringView :kind :buf
         }
     } case none then null
 }
@@ -37508,6 +37553,7 @@ emitListSort: function {
     s3: "static void z_\{nm}_sort(z_\{nm}_t* _this) {\n"
     buf.append s3
     buf.append "    if (_this->length < 2) return;\n"
+    preludeNeed :ctx memb: "@xmalloc"
     sa: "    \{ect}* scratch = (\{ect}*)z_xmalloc(_this->length * sizeof(\{ect}));\n"
     buf.append sa
     sd: "    z_\{nm}_sort_rec(_this->data, scratch, 0, _this->length);\n"
@@ -37530,7 +37576,7 @@ emitListViewMono: function {
     ect0: slotCType :ast :symtab :ctx tid: eid
     ect: ctypeOrI64 s: ect0.stringView
     p: "\{runtimeDir}/z_ListView.c.tmpl"
-    raw: readTemplateCached :ctx path: p.stringView
+    raw: readTemplate :ctx path: p.stringView
     if raw.length > 0 then {
         t1: applyTmpl text: raw key: "NAME" val: nm.stringView
         t2: applyTmpl text: t1 key: "ELEM_T" val: ect.stringView
@@ -37539,6 +37585,7 @@ emitListViewMono: function {
     }
     if (monoMemberUsed :symtab :monoId nameId: zast.wellKnown.slot.wkGet) then {
         (emitColGet
+            :ctx
             nm: nm.stringView
             ect: ect.stringView
             kind: "ListView"
@@ -37580,7 +37627,7 @@ emitStaticListMono: function {
     ect: ctypeOrI64 s: ect0.stringView
     est: staticListStoredC ect: ect.stringView
     p: "\{runtimeDir}/z_data.c.tmpl"
-    raw: readTemplateCached :ctx path: p.stringView
+    raw: readTemplate :ctx path: p.stringView
     if raw.length > 0 then {
         t1: applyTmpl text: raw key: "NAME" val: nm.stringView
         t2: applyTmpl text: t1 key: "ELEM_T" val: est.stringView
@@ -37594,6 +37641,7 @@ emitStaticListMono: function {
         buf.append "        char _zp_buf[96];\n"
         b2: "        snprintf(_zp_buf, sizeof(_zp_buf), \"list index: index %llu out of bounds (length %llu)\", (unsigned long long)_idx, (unsigned long long)_this.length);\n"
         buf.append b2
+        preludeNeed :ctx memb: "@panic"
         buf.append "        z_panic(_zp_buf);\n"
         buf.append "    }\n"
         buf.append "    return _this.data[_idx];\n"
@@ -37630,7 +37678,7 @@ emitSpanMono: function {
     ect0: slotCType :ast :symtab :ctx tid: eid
     ect: ctypeOrI64 s: ect0.stringView
     p: "\{runtimeDir}/z_ListView.c.tmpl"
-    raw: readTemplateCached :ctx path: p.stringView
+    raw: readTemplate :ctx path: p.stringView
     if raw.length > 0 then {
         t1: applyTmpl text: raw key: "NAME" val: nm.stringView
         t2: applyTmpl text: t1 key: "ELEM_T" val: ect.stringView
@@ -37638,6 +37686,7 @@ emitSpanMono: function {
         buf.append "\n"
     }
     if (monoMemberUsed :symtab :monoId nameId: zast.wellKnown.slot.wkGet) then (emitColGet
+        :ctx
         nm: nm.stringView
         ect: ect.stringView
         kind: "SpanVal"
@@ -38327,7 +38376,7 @@ emitSetMono: function {
     ifDel: mapValFreeStmt :symtab :ctx valTid: et slot: "_this->entries[idx].item"
     freeItemDel: setFreeItemDel itemFree: ifDel.stringView
     p: "\{runtimeDir}/z_Set.c.tmpl"
-    raw: readTemplateCached :ctx path: p.stringView
+    raw: readTemplate :ctx path: p.stringView
     if raw.length > 0 then {
         t1: applyTmpl text: raw key: "NAME" val: nm.stringView
         t2: applyTmpl text: t1 key: "MACRO" val: mcr.stringView
@@ -38486,7 +38535,7 @@ emitMapIters: function {
     ovk: cbaseNoPrefix :ctx tid: ovkId
     ove: cbaseNoPrefix :ctx tid: oveId
     pi: "\{runtimeDir}/z_MapIter.c.tmpl"
-    rawi: readTemplateCached :ctx path: pi.stringView
+    rawi: readTemplate :ctx path: pi.stringView
     if rawi.length > 0 then {
         i1: applyTmpl text: rawi key: "NAME" val: nm
         i2: applyTmpl text: i1 key: "KEY_T" val: keyT
@@ -38608,7 +38657,7 @@ optionSomeC: function {
         )
         return "\{ind}_r.tag = \{st};\n\{ind}_r.data.\{rsC} = \{value};\n"
     }
-    ral: armCellAlloc pc: valT box: "_box"
+    ral: armCellAlloc :ctx pc: valT box: "_box"
     rfl: armCellFill box: "_box" :value
     rat: armCellAttach slot: "_r.data" box: "_box"
     return "\{ind}_r.tag = \{st};\n\{ind}\{ral}\n\{ind}\{rfl}\n\{ind}\{rat}\n"
@@ -38783,7 +38832,7 @@ emitMapMono: function {
     )
     removeBody: "    \{rmDecl}\n    if (idx < 0) {\n\{rmNoneC}        return _r;\n    }\n\{rmSomeC}\{delTail}    return _r;"
     p: "\{runtimeDir}/z_Map.c.tmpl"
-    raw: readTemplateCached :ctx path: p.stringView
+    raw: readTemplate :ctx path: p.stringView
     if raw.length == 0 then return
     {
         t1: applyTmpl text: raw key: "NAME" val: nm.stringView
@@ -38939,7 +38988,7 @@ emitIdMapMono: function {
         getBody = "    z_\{ov}_t _r = {0};\n    if (idx >= 0) {\n        _r.tag = \{ovSome};\n        _r.data = (void*)&_this->entries[idx].value;\n    } else {\n        _r.tag = \{ovNone};\n        _r.data = NULL;\n    }\n    return _r;"
     }
     p: "\{runtimeDir}/z_IdMap.c.tmpl"
-    raw: readTemplateCached :ctx path: p.stringView
+    raw: readTemplate :ctx path: p.stringView
     if raw.length == 0 then return
     t1: applyTmpl text: raw key: "NAME" val: nm.stringView
     t2: applyTmpl text: t1 key: "MACRO" val: mcr.stringView
@@ -39016,7 +39065,7 @@ emitMapGetMut: function {
     if (typeReached :ctx tid: gmId).not then return
     gmv: cbaseNoPrefix :ctx tid: gmId
     pm: "\{runtimeDir}/\{file}"
-    rawm: readTemplateCached :ctx path: pm.stringView
+    rawm: readTemplate :ctx path: pm.stringView
     if rawm.length == 0 then return
     m1: applyTmpl text: rawm key: "NAME" val: nm
     m2: applyTmpl text: m1 key: keyHole val: keyT
@@ -39068,7 +39117,7 @@ emitIdMapIters: function {
     me: cbaseNoPrefix :ctx tid: meId
     ove: cbaseNoPrefix :ctx tid: oveId
     pi: "\{runtimeDir}/z_IdMapIter.c.tmpl"
-    rawi: readTemplateCached :ctx path: pi.stringView
+    rawi: readTemplate :ctx path: pi.stringView
     if rawi.length == 0 then return
     j1: applyTmpl text: rawi key: "NAME" val: nm
     j2: applyTmpl text: j1 key: "KEY_T" val: keyT
@@ -39112,7 +39161,7 @@ emitIdSetMono: function {
     ov: cbaseNoPrefix :ctx tid: ovId
     si: cbaseNoPrefix :ctx tid: siId
     p: "\{runtimeDir}/z_IdSet.c.tmpl"
-    raw: readTemplateCached :ctx path: p.stringView
+    raw: readTemplate :ctx path: p.stringView
     if raw.length == 0 then return
     t1: applyTmpl text: raw key: "NAME" val: nm.stringView
     t2: applyTmpl text: t1 key: "MACRO" val: mcr.stringView
@@ -39550,7 +39599,7 @@ emitRuntimeUnit: function {
         isU = u.stringView == uname
         u.drop
         # a piece is written in place by its file (loadPieces)
-        if isU when (ctx.pieceText.has key: i) then isU = false
+        if isU when (ctx.rowsInPlace.has item: i) then isU = false
         if isU when (ctx.rowsWritten.has item: i).not when (rowDemandFired :ctx :i) then {
             ctx.rowsWritten.add item: i
             closeRowNeeds :ctx
@@ -41099,7 +41148,7 @@ emitTmplClassMono: function {
 } is {
     tf: (ctx.classRows.get i: row).tmpl.copy
     p: "\{runtimeDir}/\{tf}"
-    raw: readTemplateCached :ctx path: p.stringView
+    raw: readTemplate :ctx path: p.stringView
     if raw.length == 0 then return
     nm: cbaseNoPrefix :ctx tid: monoId
     t: applyTmpl text: raw key: "NAME" val: nm.stringView
@@ -43037,12 +43086,14 @@ emitStaticListArray: function {
     b2: "snprintf(_zp_buf, sizeof(_zp_buf), \"list index: index %llu out of bounds (length \{count})\", (unsigned long long)_idx);\n"
     # an empty list's every index is past its end: the reader only panics
     if count == 0 then {
+        preludeNeed :ctx memb: "@panic"
         buf.append "    char _zp_buf[96];\n    \{b2}    z_panic(_zp_buf);\n}\n\n"
         return
     }
     buf.append "    if (_idx >= \{count}) {\n"
     buf.append "        char _zp_buf[96];\n"
     buf.append "        \{b2}"
+    preludeNeed :ctx memb: "@panic"
     buf.append "        z_panic(_zp_buf);\n"
     buf.append "    }\n"
     buf.append "    return \{dsym}[_idx];\n"
@@ -44016,6 +44067,7 @@ emitConformanceImpl: function {
         buf.append "((\{implCtype}*)p);\n"
     }
     buf.append "    free(p);\n}\n\n"
+    preludeNeed :ctx memb: "@xmalloc"
     oc0: "static \{specCtype} \{wbase}_create_owned(\{implCtype}* val) {\n    \{specCtype} proto = {0};\n    \{implCtype}* boxed = (\{implCtype}*)z_xmalloc(sizeof(\{implCtype}));\n    *boxed = *val;\n    proto.data = boxed;\n    proto.vtable = &\{wbase}_vtable;\n    proto.destroy = \{wbase}_owned_destroy;\n    return proto;\n}\n\n"
     buf.append oc0
 }
@@ -48390,11 +48442,16 @@ emitYieldStmt: function {
     lw: "\{ind}\{ctx.genWrap} _ry_\{k} = {0};\n"
     buf.append lw
     tgt: "_ry_\{k}"
+    # copied out: the assignment records what it calls in the Ctx
+    gst: ctx.genSomeTag.copy
+    gsc: ctx.genSomeC.copy
+    gpc: ctx.genPayC.copy
     (emitOptionalAssign
+        :ctx
         target: tgt.stringView
-        someTag: ctx.genSomeTag.stringView
-        someC: ctx.genSomeC.stringView
-        payC: ctx.genPayC.stringView
+        someTag: gst.stringView
+        someC: gsc.stringView
+        payC: gpc.stringView
         vx: ve.stringView
         :ind
         :buf

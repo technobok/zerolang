@@ -122,6 +122,7 @@ extern int ilogbq(__float128 x);
 #define Z_VALUE_TYPEOF(x) __typeof__(((void)0, x))
 #endif
 
+/*@@row @prelude.bits demand=@bits@@*/
 /* z_clz64, z_ctz64, z_popcount64 -- the leading zeros, trailing zeros and set
    bits of a 64-bit word. v must not be 0 for the first two, as for the
    builtins they stand for. gcc, clang and tcc take their builtins; MSVC has
@@ -150,12 +151,16 @@ static inline int z_popcount64(uint64_t v) {
 #define z_ctz64(v) __builtin_ctzll(v)
 #define z_popcount64(v) __builtin_popcountll(v)
 #endif
+/*@@end@@*/
 
+/*@@row @prelude.span64 demand=@span64 needs=@bits@@*/
 /* z_span64 -- how many bits lie from the highest set bit of v down to its
    lowest, both counted: the significand an integer needs to convert to a
    float exactly. 0 for 0. */
 static inline int z_span64(uint64_t v) { return v == 0 ? 0 : 64 - z_clz64(v) - z_ctz64(v); }
+/*@@end@@*/
 
+/*@@row @prelude.write_line demand=@write_line@@*/
 #if defined(_WIN32)
 /* z_win_console -- a write to a standard stream that is a console goes as
    UTF-16 (WriteConsoleW): the console shows non-ASCII text that way whatever
@@ -269,4 +274,5 @@ static void z_write_line(int fd, const char* s, size_t n, int nl) {
     }
 #endif
 }
+/*@@end@@*/
 

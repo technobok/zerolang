@@ -2,6 +2,7 @@
 #if defined(_WIN32)
 #include <windows.h>
 #endif
+/*@@row @prelude.end_claim demand=@end_claim@@*/
 /* a program that runs threads ends once: the first thread to end it -- a
    panic, or os.exit -- flushes and leaves with _exit, so exit's handlers never
    run under the other threads' feet, and any thread ending it meanwhile waits
@@ -16,6 +17,8 @@ static void z_end_claim(void) {
 #endif
     }
 }
+/*@@end@@*/
+/*@@row @prelude.panic_fn_threaded demand=@panic needs=@end_claim,@write_line@@*/
 static Z_NORETURN void z_panic(const char* msg) {
     z_end_claim();
     z_write_line(2, "zpanic: ", 8, 0);
@@ -23,6 +26,8 @@ static Z_NORETURN void z_panic(const char* msg) {
     fflush(NULL);
     _exit(1);
 }
+/*@@end@@*/
+/*@@row @prelude.end_threaded demand=@end needs=@end_claim@@*/
 /* the program's normal end, once main has returned: it ends the process once,
    as z_panic does, and flushes its output before exit runs. Exit's own flush
    is not enough here: a C runtime may flush only as it unloads, and a thread
@@ -31,3 +36,4 @@ static void z_end(void) {
     z_end_claim();
     fflush(NULL);
 }
+/*@@end@@*/
