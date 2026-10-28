@@ -36277,7 +36277,7 @@ emitC: function {
     emitRecordDefs :program :symtab :ctx phase: 3 buf: codeBuf
     codeBuf.append bodiesBuf
     lateBuf: String
-    if ctx.needUnits.length > needsAt then {
+    if (needsOutsidePrelude :ctx from: needsAt) then {
         emitRuntimeUnits ast: program :symtab :ctx :runtimeDir buf: lateBuf late: true
     }
     if ctx.nativeBoxImpls.length > 0 then {
@@ -38074,18 +38074,39 @@ keyHashKind: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.
 }
 
 # the C body of a Set's hash function.
-setHashBody: function {kind: u64 fast: bool} out String is {
+setHashBody: function {ctx: Ctx kind: u64} out String is {
     # a String key arrives BY POINTER (the probe never copies the header)
-    if fast then {
-        if kind == 1 then return "z_fasthash_bytes(_key->data, _key->size)".string
-        if kind == 2 then return "z_fasthash_stringview(_key)".string
-        if kind == 3 then return "z_fasthash_bytes(&_key, sizeof(_key))".string
-    } else {
-        if kind == 1 then return "z_siphash_bytes(_key->data, _key->size)".string
-        if kind == 2 then return "z_siphash_stringview(_key)".string
-        if kind == 3 then return "z_siphash_bytes(&_key, sizeof(_key))".string
+    if kind == 1 then return "\{hashBytesFn :ctx}(_key->data, _key->size)"
+    if kind == 2 then return "\{hashViewFn :ctx}(_key)"
+    if kind == 3 then return "\{hashBytesFn :ctx}(&_key, sizeof(_key))"
+    return (hashU64C :ctx v: "(uint64_t)_key")
+}
+
+# hashBytesFn -- the C function hashing a run of bytes: SipHash, or the fast
+# hash under --fast-hash. Written C calls it through here, so it is written.
+hashBytesFn: function {ctx: Ctx} out String is {
+    if ctx.fastHash then {
+        preludeNeed :ctx memb: "@fasthash_bytes"
+        return "z_fasthash_bytes".string
     }
-    return "z_hash_u64((uint64_t)_key)".string
+    preludeNeed :ctx memb: "@siphash_bytes"
+    return "z_siphash_bytes".string
+}
+
+# hashViewFn -- hashBytesFn for the bytes a StringView views
+hashViewFn: function {ctx: Ctx} out String is {
+    if ctx.fastHash then {
+        preludeNeed :ctx memb: "@fasthash_stringview"
+        return "z_fasthash_stringview".string
+    }
+    preludeNeed :ctx memb: "@siphash_stringview"
+    return "z_siphash_stringview".string
+}
+
+# hashU64C -- the C mixing the 64-bit word `v` into a hash
+hashU64C: function {ctx: Ctx v: StringView} out String is {
+    preludeNeed :ctx memb: "@hash_u64"
+    return "z_hash_u64(\{v})"
 }
 
 # the C body of a Set's element-equality function.
@@ -38185,7 +38206,7 @@ emitSetMono: function {
     if ovId.isZero then return
     ov: cbaseNoPrefix :ctx tid: ovId
     si: cbaseNoPrefix :ctx tid: siId
-    hashBody: setHashBody kind: ekind fast: ctx.fastHash
+    hashBody: setHashBody :ctx kind: ekind
     eqBody: setEqBody kind: ekind
     ek: elemTid
     valElem: isValKey :symtab key: ek kind: ekind
@@ -38575,7 +38596,7 @@ emitMapMono: function {
     )
     kkind: keyHashKind :symtab :ctx tid: keyTid
     keyIsStr: kkind == 1
-    hashKeyBody: setHashBody kind: kkind fast: ctx.fastHash
+    hashKeyBody: setHashBody :ctx kind: kkind
     keysEqBody: setEqBody kind: kkind
     kk: keyTid
     valKey: isValKey :symtab key: kk kind: kkind
@@ -39426,11 +39447,18 @@ rowDemandFired: function {ctx: Ctx.view i: u64} out bool is {
     if tt.isZero.not when (typeRowDemanded :ctx tid: tt) then return true
     u: ctx.fragUnits.get :i
     d: ctx.fragMembs.get :i
-    fired: false
-    for each dm: (d.stringView.split sep: ",") loop {
-        if dm.length > 0 when (needsHasM :ctx uname: u.stringView memb: dm) then fired = true
+    # the list is walked by position: every round of closeRowNeeds asks this of
+    # every row, and a split allocates for each member it hands out
+    dv: d.stringView
+    at: u64
+    for at < dv.length loop {
+        rem: dv.substring from: at to: dv.length
+        cm: (rem.indexOf needle: ",").or d: rem.length
+        if cm > 0 when (needsHasM :ctx uname: u.stringView memb: (rem.substring from: 0 to: cm)
+        ) then return true
+        at = at + cm + 1
     }
-    return fired
+    return false
 }
 
 # emitRuntimeUnit -- one unit's runtime: every row it owns, in TABLE ORDER,
@@ -39473,6 +39501,21 @@ emitRuntimeUnit: function {
         }
         i = i + 1
     }
+}
+
+# needsOutsidePrelude -- whether a need registered from position `from` on is
+# another unit's than the prelude's: the prelude is decided at assembly, so a
+# need of its own asks no late runtime walk
+needsOutsidePrelude: function {ctx: Ctx.view from: u64} out bool is {
+    i: from
+    for i < ctx.needUnits.length loop {
+        u: ctx.needUnits.get :i
+        if (
+            (ctx.nativeWords.slotOf text: u.stringView) != nativeWord.slot.unitPrelude
+        ) then return true
+        i = i + 1
+    }
+    return false
 }
 
 # closeRowNeeds -- register the `needs=` of every fired row, until a round
@@ -46949,9 +46992,7 @@ partHashWords: function {
     }
     # a text part hashes its bytes, as a str does
     if (isViewLaid :ctx tid: base) then {
-        tbf: "z_siphash_bytes".string
-        if ctx.fastHash then tbf = "z_fasthash_bytes".string
-        wt: "\{tbf}((const uint8_t*)(\{v}).data, (\{v}).size)"
+        wt: "\{hashBytesFn :ctx}((const uint8_t*)(\{v}).data, (\{v}).size)"
         words.append wt
         return
     }
@@ -46975,13 +47016,18 @@ hashExprC: function {
     w0: words.get i: 0
     if words.length == 2 then {
         w1: words.get i: 1
-        return "z_hash_u64(\{w0} ^ z_hash_u64(\{w1}))"
+        inner: hashU64C :ctx v: w1.stringView
+        both: "\{w0} ^ \{inner}"
+        return (hashU64C :ctx v: both.stringView)
     }
     src: ztypecheck.valOpSource :ast st: symtab :tid nameId: zast.wellKnown.slot.wkHash
     base: ztypecheck.typedefChaseTid st: symtab :tid
-    if src.written.not when (partIsCScalar :symtab tid: base) then return "z_hash_u64(\{w0})"
+    if src.written.not when (partIsCScalar :symtab tid: base) then return (hashU64C
+        :ctx
+        v: w0.stringView
+    )
     if (symtab.reg.typetypeOf typeId: base) == ztypes.ztypetype.functionType then {
-        return "z_hash_u64(\{w0})"
+        return (hashU64C :ctx v: w0.stringView)
     }
     return w0.copy
 }
@@ -47042,20 +47088,18 @@ hashDefC: function {
     tid: ztypes.tid
     dest: String.borrow
 } is {
-    bytesFn: "z_siphash_bytes".string
-    if ctx.fastHash then bytesFn = "z_fasthash_bytes".string
     appendHashSig :symtab :ctx :tid :dest
     dest.append " {\n"
     if (ztypecheck.valIsMonoOf st: symtab :tid wk: zast.wellKnown.slot.tyStr) then {
-        dest.append "    return \{bytesFn}(a.data, a.len);\n}\n\n"
+        dest.append "    return \{hashBytesFn :ctx}(a.data, a.len);\n}\n\n"
         return
     }
     if (ztypecheck.valIsMonoOf st: symtab :tid wk: zast.wellKnown.slot.tyArray) then {
-        arrayHashBody :ast :symtab :ctx :tid bytesFn: bytesFn.stringView :dest
+        arrayHashBody :ast :symtab :ctx :tid :dest
         return
     }
     if (symtab.reg.typetypeOf typeId: tid) == ztypes.ztypetype.variantType then {
-        variantHashBody :ast :symtab :ctx :tid bytesFn: bytesFn.stringView :dest
+        variantHashBody :ast :symtab :ctx :tid :dest
         return
     }
     words: List String
@@ -47095,7 +47139,7 @@ hashDefC: function {
         wi = wi + 1
     }
     dest.append " };\n"
-    dest.append "    return \{bytesFn}(_h, sizeof(_h));\n}\n\n"
+    dest.append "    return \{hashBytesFn :ctx}(_h, sizeof(_h));\n}\n\n"
 }
 
 # variantHashBody -- a variant's generated `_hash`: its tag, then the words of
@@ -47105,7 +47149,6 @@ variantHashBody: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     tid: ztypes.tid
-    bytesFn: StringView
     dest: String.borrow
 } is {
     aids: ListVal ztypes.tid
@@ -47148,7 +47191,7 @@ variantHashBody: function {
         dest.append cases
         dest.append "        default: break;\n    }\n"
     }
-    dest.append "    return \{bytesFn}(_h, sizeof(_h));\n}\n\n"
+    dest.append "    return \{hashBytesFn :ctx}(_h, sizeof(_h));\n}\n\n"
 }
 
 # arrayHashBody -- an array's generated `_hash`: its bytes when the element's
@@ -47158,17 +47201,17 @@ arrayHashBody: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     tid: ztypes.tid
-    bytesFn: StringView
     dest: String.borrow
 } is {
     elem: ztypecheck.arrayElemTid st: symtab :tid
     if (elemEqIsBytes :ast :symtab tid: elem) then {
-        dest.append "    return \{bytesFn}(a.data, sizeof(a.data));\n}\n\n"
+        dest.append "    return \{hashBytesFn :ctx}(a.data, sizeof(a.data));\n}\n\n"
         return
     }
     len: monoLengthText :symtab monoId: tid
     eh: hashExprC :ast :symtab :ctx tid: elem v: "a.data[_i]"
     dest.append "    uint64_t _h = \{len};\n"
+    preludeNeed :ctx memb: "@hash_combine"
     dest.append "    for (int _i = 0; _i < \{len}; _i++) _h = z_hash_combine(_h, \{eh});\n"
     dest.append "    return _h;\n}\n\n"
 }

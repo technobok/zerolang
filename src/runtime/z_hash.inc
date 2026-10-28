@@ -1,3 +1,4 @@
+/*@@row @prelude.seed demand=@seed@@*/
 /* SipHash-1-3 with a per-process random seed.
 
    Used by Map / Set bucket dispatch (variable-length keys) and the
@@ -7,11 +8,11 @@
    axis, and splitmix64 is materially faster on 8 bytes than SipHash.
 
    Seed bytes are read once at program startup via `z_siphash_init`
-   (called from `z_start`, z_start.inc): from `rand_s` on Windows,
-   else `getrandom`, else `/dev/urandom`. With no entropy source the
-   seed is a fixed pattern -- hashes are deterministic in that
-   degenerate environment but the program runs and Map / Set
-   behaviour is unaffected. */
+   (called from `z_start`, z_start.inc, in a program that hashes): from
+   `rand_s` on Windows, else `getrandom`, else `/dev/urandom`. With no
+   entropy source the seed is a fixed pattern -- hashes are
+   deterministic in that degenerate environment but the program runs
+   and Map / Set behaviour is unaffected. */
 
 static uint64_t z_sip_k0 = 0;
 static uint64_t z_sip_k1 = 0;
@@ -49,6 +50,8 @@ static void z_siphash_init(void) {
     memcpy(&z_sip_k1, &key[8], 8);
 }
 
+/*@@end@@*/
+/*@@row @prelude.siphash_bytes demand=@siphash_bytes needs=@seed@@*/
 #define Z_SIP_ROTL(x, b) (((x) << (b)) | ((x) >> (64 - (b))))
 #define Z_SIP_ROUND(v0, v1, v2, v3) do {                       \
     v0 += v1; v1 = Z_SIP_ROTL(v1, 13); v1 ^= v0;               \
@@ -94,19 +97,14 @@ static uint64_t z_siphash_bytes(const void* in, uint64_t inlen) {
     return v0 ^ v1 ^ v2 ^ v3;
 }
 
-static uint64_t z_siphash_string(z_@String@_t s) {
-    return z_siphash_bytes(s.data, s.size);
-}
-
+/*@@end@@*/
+/*@@row @prelude.siphash_stringview demand=@siphash_stringview needs=@siphash_bytes@@*/
 static uint64_t z_siphash_stringview(z_@StringView@_t v) {
     return z_siphash_bytes(v.data, v.size);
 }
 
-/* wyhash-style fast path, selected by `zc --fast-hash` for Map / Set
-   bucket dispatch. Seeded from the same per-process entropy as
-   SipHash but NOT hash-flood resistant: use only when map keys are
-   trusted input. SipHash stays the default. */
-
+/*@@end@@*/
+/*@@row @prelude.mul128 demand=@mul128@@*/
 /* 64x64 -> 128 multiply, both halves. The __uint128_t form is one mulq on
    gcc/clang; the fallback is the same product in four 32-bit partial
    products, for a C compiler with no 128-bit integer type or a build that
@@ -127,6 +125,13 @@ static inline void z_fh_mul128(uint64_t a, uint64_t b, uint64_t* lo, uint64_t* h
     *hi = hh + (lh >> 32) + (hl >> 32) + (mid >> 32);
 }
 #endif
+
+/*@@end@@*/
+/*@@row @prelude.fasthash_bytes demand=@fasthash_bytes needs=@seed,@mul128@@*/
+/* wyhash-style fast path, selected by `zc --fast-hash` for Map / Set
+   bucket dispatch. Seeded from the same per-process entropy as
+   SipHash but NOT hash-flood resistant: use only when map keys are
+   trusted input. SipHash stays the default. */
 
 static inline uint64_t z_fh_mix(uint64_t a, uint64_t b) {
     uint64_t lo;
@@ -198,14 +203,14 @@ static uint64_t z_fasthash_bytes(const void* in, uint64_t inlen) {
     return z_fh_mix(a ^ c0 ^ inlen, b ^ c1);
 }
 
-static uint64_t z_fasthash_string(z_@String@_t s) {
-    return z_fasthash_bytes(s.data, s.size);
-}
-
+/*@@end@@*/
+/*@@row @prelude.fasthash_stringview demand=@fasthash_stringview needs=@fasthash_bytes@@*/
 static uint64_t z_fasthash_stringview(z_@StringView@_t v) {
     return z_fasthash_bytes(v.data, v.size);
 }
 
+/*@@end@@*/
+/*@@row @prelude.hash_u64 demand=@hash_u64@@*/
 /* splitmix64 finalizer -- single-block mixer for 64-bit integer
    keys. Not SipHash: bare integers have no length axis to exploit
    so the security premium isn't worth ~5x the cost. Matches Rust's
@@ -219,6 +224,8 @@ static uint64_t z_hash_u64(uint64_t x) {
     return x;
 }
 
+/*@@end@@*/
+/*@@row @prelude.hash_combine demand=@hash_combine needs=@hash_u64@@*/
 /* z_hash_combine -- fold one more 64-bit hash into a running one, in order:
    an array whose elements are not compared by their bytes hashes each and
    folds the results, so equal arrays fold equal hashes in the same order. */
@@ -226,3 +233,4 @@ static uint64_t z_hash_combine(uint64_t h, uint64_t v) {
     return z_hash_u64(h ^ (v + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2)));
 }
 
+/*@@end@@*/
