@@ -2399,11 +2399,13 @@ recordFragmentRow: function {
     } else {
         dm = dem.string
     }
+    # `uses_<Type>` first: the row fires when written C spells the type, and on
+    # any member the rest of the list names
     tn: String
     with uo: (dm.stringView.stripPrefix p: "uses_") do match (
         uo
     ) case some then {
-        tn = uo.string
+        tn = (uo.substring from: 0 to: ((uo.indexOf needle: ",").or d: uo.length)).string
     } case none then null
     ctx.fragUnits.append from: du
     ctx.fragMembs.append from: dm
@@ -4207,6 +4209,10 @@ Ctx: class {
     # the table rows already written: a unit whose types a function type's
     # typedef spells is written ahead of the typedefs, and not again after
     rowsWritten: IdSet u64
+    # the fired rows whose `needs=` are registered (closeRowNeeds), and the
+    # count of demands when that was last made whole
+    rowsClosed: IdSet u64
+    rowNeedsAt: u64
     # the members fragments were emitted for
     fragMembs: List String
     # their names, parallel to fragMembs
@@ -4232,6 +4238,9 @@ Ctx: class {
     usedTypeIds: IdSet ztypes.tid
     # conformance rows whose helper set is already in the buffer, by row id
     emittedConformance: IdSet ztypes.confid
+    # conformance rows written C makes a value of -- an impl boxed as its
+    # protocol or facet (noteBoxUse): only these rows' helpers are written
+    boxedConformance: IdSet ztypes.confid
     # each marker protocol (one with no members) asked about, to whether the
     # program makes a value of it (markerValueMade)
     markerValues: (IdMapV ztypes.tid v: bool)
@@ -5616,11 +5625,19 @@ typeIsUsed: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
 }
 
 # typeDemandMet -- may this type's body be emitted? A type no fragment row
-# gates is unconditional; one that IS gated waits until it is constructed,
-# because its struct exists to be dereferenced by a fragment that is itself
-# demand-loaded. The gating set comes from natives.tbl, not from a list here.
+# gates is unconditional; one that IS gated waits until written C spells it or
+# constructs it, because its struct exists to be dereferenced by a fragment
+# that is itself demand-loaded (typeRowDemanded). The gating set comes from
+# natives.tbl, not from a list here.
 typeDemandMet: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
     if (ctx.demandGatedTids.has item: tid).not then return true
+    return (typeRowDemanded :ctx :tid)
+}
+
+# typeRowDemanded -- a `uses_<Type>` row's demand: written C spells or reaches
+# the type (ctx.typeUses, ctx.reachedTypes), or constructs it.
+typeRowDemanded: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
+    if (ctx.typeUses.has item: tid) or (ctx.reachedTypes.has item: tid) then return true
     return (typeIsUsed :ctx :tid)
 }
 
@@ -33455,26 +33472,7 @@ noteTypeUse: function {ctx: Ctx tid: ztypes.tid} is {
 closeReachedTypes: function {ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx} is {
     todo: ListVal ztypes.tid
     for each u: ctx.typeUses loop todo.append u
-    for todo.length > 0 loop {
-        drainReach :symtab :ctx :todo
-        # a written impl's conformance helpers spell the protocol they make a
-        # value of; a marker's only when the program makes one
-        ri: ztypes.confid
-        for ri.next < symtab.typing.nextConf loop {
-            ri = ri.next
-            spec: ztypes.tid
-            {
-                row: symtab.typing.conformance.get i: ri
-                if (ctx.reachedTypes.has item: row.implTypeId) then spec = row.specTypeId
-            }
-            if spec.isZero.not when (ctx.reachedTypes.has item: spec).not when (markerValueMade
-                :ast
-                :symtab
-                :ctx
-                :spec
-            ) then todo.append spec
-        }
-    }
+    drainReach :symtab :ctx :todo
     ctx.reachFixed = true
     demandTemplateEqs :ast :symtab :ctx
     demandWrittenDestroys :symtab :ctx
@@ -33547,6 +33545,14 @@ templateEqElem: function {
     return ztypes.tid.zero
 }
 
+# reachSoFar -- the reached set closed over what has been spelled so far,
+# without fixing it.
+reachSoFar: function {symtab: zenv.ZSymbolTable.view ctx: Ctx} is {
+    todo: ListVal ztypes.tid
+    for each u: ctx.typeUses loop todo.append u
+    drainReach :symtab :ctx :todo
+}
+
 # drainReach -- add each type on `todo` to the reached set, and what it spells.
 drainReach: function {symtab: zenv.ZSymbolTable.view ctx: Ctx todo: ListVal ztypes.tid} is {
     for todo.length > 0 loop {
@@ -33587,19 +33593,20 @@ typeReachEdges: function {
 }
 
 # memberSigReachEdges -- the signature of each member written beside a type:
-# one a use site resolved, and an iterator's `call`, which its cursor is
-# written with.
+# one a use site resolved, an iterator's `call`, which its cursor is written
+# with, and every member of a protocol or facet, whose vtable lists them all.
 memberSigReachEdges: function {
     symtab: zenv.ZSymbolTable.view tid: ztypes.tid acc: ListVal ztypes.tid
 } is {
     names: ListVal zast.nameid
+    allMembers: (symtab.reg.typetypeOf typeId: tid).isInterface
     slot: u64
     for slot < (symtab.typing.declRowSlots ownerTid: tid) loop {
         rw: symtab.typing.declRowAt ownerTid: tid membersOnly: true :slot
         slot = slot + 1
         if rw.keep.not then continue
         if (symtab.reg.typetypeOf typeId: rw.tid) != ztypes.ztypetype.functionType then continue
-        if rw.name != zast.wellKnown.slot.wkCall when (monoMemberUsed
+        if allMembers.not when rw.name != zast.wellKnown.slot.wkCall when (monoMemberUsed
             :symtab
             monoId: tid
             nameId: rw.name
@@ -33608,6 +33615,8 @@ memberSigReachEdges: function {
         }
         sig: ListVal ztypes.tid
         sig.append (symtab.reg.returnTypeOf tid: rw.tid)
+        # the return a vtable slot or a wrapper is written with (methodRetCtype)
+        sig.append ((ztypecheck.methodReturnOf st: symtab mid: rw.tid).or d: ztypes.tid.zero)
         recFieldIds :symtab tid: rw.tid ids: sig nameIds: names
         for each st: sig loop acc.append (instTypeOf :symtab inst: tid tid: st)
     }
@@ -35736,6 +35745,14 @@ emitCodeBody: function {
     codeBuf: String.borrow
 } out u64 is {
     codeBuf.reserve n: nodeEstE * 8
+    # every body is written: the boxes the std streams make, and the natives
+    # each boxed runtime class's vtable takes, are known before the rows are
+    demandStdStreamBoxes ast: program :symtab :ctx
+    demandBoxedNatives ast: program :symtab :ctx
+    # what the written code reaches so far, so a `uses_<Type>` row fires for a
+    # type reached only through another's field or arm (a Result's payload);
+    # closeReachedTypes goes on from here once the runtime has spelled its own
+    reachSoFar :symtab :ctx
     # the runtime units are generated before the types, which they follow in
     # the output: their holes name types, and a type is written only once
     # something has spelled it. The split / lines iterator types go ahead of
@@ -35967,6 +35984,8 @@ emitC: function {
         fragUnits: List String
         hoistTags: (MapRV String v: zast.nameid)
         rowsWritten: IdSet u64
+        rowsClosed: IdSet u64
+        rowNeedsAt: 0
         fragMembs: List String
         fragNames: List String
         fragTypeNames: List String
@@ -35976,6 +35995,7 @@ emitC: function {
         demandGatedTids: IdSet ztypes.tid
         usedTypeIds: IdSet ztypes.tid
         emittedConformance: IdSet ztypes.confid
+        boxedConformance: IdSet ztypes.confid
         markerValues: (IdMapV ztypes.tid v: bool)
         emittedListIters: IdSet ztypes.tid
         unitOrder: List String
@@ -39237,10 +39257,11 @@ bindFragUnitDecls: function {symtab: zenv.ZSymbolTable.view ctx: Ctx ast: Ast.vi
 
 # rowDemandFired -- true when ANY demand the row at `i` names was demanded for that
 # row's unit. `demand=a,b,c` means ANY OF: a helper several members share is one
-# row naming the members that reach it, so it loads once however many fired.
+# row naming the members that reach it, so it loads once however many fired. A
+# `uses_<Type>` row fires too when written C spells the type (typeRowDemanded).
 rowDemandFired: function {ctx: Ctx.view i: u64} out bool is {
     tt: ctx.fragTypeTids.get :i
-    if tt.isZero.not then return (typeIsUsed :ctx tid: tt)
+    if tt.isZero.not when (typeRowDemanded :ctx tid: tt) then return true
     u: ctx.fragUnits.get :i
     d: ctx.fragMembs.get :i
     fired: false
@@ -39266,6 +39287,7 @@ emitRuntimeUnit: function {
     uname: StringView
     buf: String.borrow
 } is {
+    closeRowNeeds :ctx
     i: u64
     n: ctx.fragUnits.length
     for i < n loop {
@@ -39277,7 +39299,7 @@ emitRuntimeUnit: function {
         u.drop
         if isU when (ctx.rowsWritten.has item: i).not when (rowDemandFired :ctx :i) then {
             ctx.rowsWritten.add item: i
-            rowNeedsOnWrite :ctx row: i :uname
+            closeRowNeeds :ctx
             fl: (ctx.fragNames.get :i).copy
             for each fr: (fl.stringView.split sep: ",") loop {
                 if fr.length > 0 then {
@@ -39289,9 +39311,29 @@ emitRuntimeUnit: function {
     }
 }
 
-# rowNeedsOnWrite -- register what fragment row `row` of unit `uname` needs
-# (its `needs=`, ctx.fragNeeds) as it is written
-rowNeedsOnWrite: function {ctx: Ctx row: u64 uname: StringView} is {
+# closeRowNeeds -- register the `needs=` of every fired row, until a round
+# fires no row it has not seen: made whole before a row is written, so a row a
+# later one needs -- in a unit the walk has already passed -- is written in the
+# same walk, ahead of the C that calls it. Nothing to do while no demand has
+# been added since the last time.
+closeRowNeeds: function {ctx: Ctx} is {
+    for ctx.needUnits.length != ctx.rowNeedsAt loop {
+        ctx.rowNeedsAt = ctx.needUnits.length
+        i: u64
+        for i < ctx.fragUnits.length loop {
+            if (ctx.rowsClosed.has item: i).not when (rowDemandFired :ctx :i) then {
+                ctx.rowsClosed.add item: i
+                un: (ctx.fragUnits.get :i).copy
+                rowNeeds :ctx row: i uname: un.stringView
+            }
+            i = i + 1
+        }
+    }
+}
+
+# rowNeeds -- register what fragment row `row` of unit `uname` needs (its
+# `needs=`, ctx.fragNeeds)
+rowNeeds: function {ctx: Ctx row: u64 uname: StringView} is {
     nd: String
     {
         ndo: ctx.fragNeeds.get key: row
@@ -39365,13 +39407,6 @@ isIoUnitClass: function {symtab: zenv.ZSymbolTable.view ctx: Ctx tid: ztypes.tid
     return (duId == ctx.ioUnitDecl) or (duId == ctx.osUnitDecl) or (duId == ctx.cliUnitDecl)
 }
 
-# ioClassIsLive -- whether an io-unit class needs its conformance impls: a
-# class with a `.@class` row when its row made it live (File), any other when
-# its type is used.
-ioClassIsLive: function {ctx: Ctx tid: ztypes.tid} out bool is {
-    if (ctx.classRowTids.contains item: tid) then return (ctx.liveClasses.has item: tid)
-    return (typeIsUsed :ctx :tid)
-}
 
 # emitIoFileConformance -- protocol conformance helpers for every reachable io
 # class (File -> Reader/Writer/Closer/Seeker; BufWriter -> Writer; BufReader ->
@@ -39387,9 +39422,52 @@ emitIoFileConformance: function {
     for ti < last loop {
         tid: ti
         ti = ti.next
-        if (isIoUnitClass :symtab :ctx :tid) when (ioClassIsLive :ctx :tid) then {
+        if (isIoUnitClass :symtab :ctx :tid) then {
             emitConformanceImplsForType :ast :symtab :ctx implTid: tid isFacet: false :buf
         }
+    }
+}
+
+# demandStdStreamBoxes -- the std streams emitIoStdStreams writes box their
+# backing File as a Writer (stdout, stderr) or a Reader (stdin).
+demandStdStreamBoxes: function {ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx} is {
+    fid: ioFileId :symtab :ctx
+    if fid.isZero then return
+    if (
+        (needsHasM :ctx uname: "io" memb: "stdout") or (needsHasM :ctx uname: "io" memb: "stderr")
+    ) then {
+        (noteBoxUse
+            :symtab
+            :ctx
+            implTid: fid
+            protoTid: (ioCanonTidAny :ast :symtab :ctx canon: "Writer")
+        )
+    }
+    if (needsHasM :ctx uname: "io" memb: "stdin") then {
+        (noteBoxUse
+            :symtab
+            :ctx
+            implTid: fid
+            protoTid: (ioCanonTidAny :ast :symtab :ctx canon: "Reader")
+        )
+    }
+}
+
+# demandBoxedNatives -- for each boxed row of a runtime-owned class, the
+# natives its protocol names, which the row's vtable takes the addresses of
+# (demandSpecNatives): demanded before the runtime pass writes the rows.
+demandBoxedNatives: function {ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx} is {
+    rows: ListVal ztypes.confid
+    for each b: ctx.boxedConformance loop rows.append b
+    for each ri: rows loop {
+        cid: ztypes.tid
+        spec: ztypes.tid
+        {
+            row: symtab.typing.conformance.get i: ri
+            cid = row.implTypeId
+            spec = row.specTypeId
+        }
+        if (ctx.classRowTids.contains item: cid) then demandSpecNatives :ast :symtab :ctx :cid :spec
     }
 }
 
@@ -39455,33 +39533,12 @@ markLiveClasses: function {ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx
                 if c.length > 0 when (ioCanonTidAny :ast :symtab :ctx canon: c
                 ).isZero then live = false
             }
-            if live then {
-                ctx.liveClasses.add item: cid
-                typeUseAdd :ctx tid: cid
-                demandConformedNatives :ast :symtab :ctx :cid
-            }
+            if live then ctx.liveClasses.add item: cid
         }
         i = i + 1
     }
 }
 
-# demandConformedNatives -- the native methods a fragment row implements that
-# the protocols class `cid` declares name: each one's row is demanded, as a call
-# of it would (demandSpecNatives)
-demandConformedNatives: function {
-    ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx cid: ztypes.tid
-} is {
-    ri: ztypes.confid
-    for ri.next < symtab.typing.nextConf loop {
-        ri = ri.next
-        spec: ztypes.tid
-        {
-            row: symtab.typing.conformance.get i: ri
-            if row.implTypeId == cid then spec = row.specTypeId
-        }
-        if spec.isZero.not then demandSpecNatives :ast :symtab :ctx :cid :spec
-    }
-}
 
 # demandSpecNatives -- each method protocol `spec` names, as class `cid`
 # implements it, demanded through its fragment row when one implements it
@@ -39505,7 +39562,7 @@ demandSpecNatives: function {
 }
 
 # emitClassRowStructs -- each `.@class` row's struct and destructor, in table
-# order, when the program has the class live or uses it. The struct is laid
+# order, when the C written spells the class (typeReached). The struct is laid
 # out from the declaration as a record's is (emitRecordStructBody); the
 # destructor is the row's `destroy=` fragment. The type is marked in
 # ctx.emittedUserTypes so every other path skips it -- a by-value use would
@@ -39525,9 +39582,7 @@ emitClassRowStructs: function {
         # a class with a template is written from it (emitTmplClassMono)
         emit: cid.isZero.not and ((ctx.classRows.get :i).tmpl.length == 0)
         if emit when (ctx.emittedUserTypes.has item: cid) then emit = false
-        if emit when (ctx.liveClasses.has item: cid).not when (typeIsUsed :ctx tid: cid).not then {
-            emit = false
-        }
+        if emit when (typeReached :ctx tid: cid).not then emit = false
         if emit then {
             ctx.emittedUserTypes.add item: cid
             emitClassRowStruct :ast :symtab :ctx :cid :buf
@@ -43391,13 +43446,6 @@ implMethodCname: function {
     return (ctxCname :ctx tid: implMid)
 }
 
-# implHelpersDue -- an impl's conformance helpers are written: its struct is
-# out, or, for a runtime unit's, which are generated before any struct is
-# written, something has spelled it by then and so the reached types hold it.
-implHelpersDue: function {ctx: Ctx.view implTid: ztypes.tid} out bool is {
-    if ctx.reachFixed.not then return (ctx.typeUses.has item: implTid)
-    return (typeStructEmitted :ctx tid: implTid)
-}
 
 # emitConformanceImplsForType -- the conformance helpers one impl type owes a
 # family: every row of the conformance table naming it, each emitted once.
@@ -43419,7 +43467,6 @@ emitConformanceImplsForType: function {
     # a protocol conforms only to markers, and its value stands in for its own
     # protocol only, so its rows need no helpers
     if implTT == ztypes.ztypetype.protocolType then return
-    if (implHelpersDue :ctx :implTid).not then return
     want: ztypes.ztypetype.protocolType
     if isFacet then want = ztypes.ztypetype.facetType
     ri: ztypes.confid
@@ -43437,8 +43484,8 @@ emitConformanceImplsForType: function {
             }
         }
         if hit.not then continue
-        # a marker conformance needs helpers only to make a value of the marker
-        if (markerValueMade :ast :symtab :ctx spec: tid).not then continue
+        # a row's helpers are written once written C makes a value of it
+        if (ctx.boxedConformance.has item: ri).not then continue
         if (symtab.reg.typetypeOf typeId: tid) == want when (conformanceRowEmitted
             :ctx
             row: ri
@@ -43716,6 +43763,31 @@ nativeConformerRow: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} ou
     return ztypes.tid.zero
 }
 
+# noteBoxUse -- written C makes a `protoTid` value of an `implTid`: its
+# conformance row's helpers are written (emitConformanceImplsForType), and both
+# types are spelled.
+noteBoxUse: function {
+    symtab: zenv.ZSymbolTable.view ctx: Ctx implTid: ztypes.tid protoTid: ztypes.tid
+} is {
+    ri: ztypes.confid
+    for ri.next < symtab.typing.nextConf loop {
+        ri = ri.next
+        hit: false
+        {
+            row: symtab.typing.conformance.get i: ri
+            hit = (row.implTypeId == implTid) and (row.specTypeId == protoTid)
+        }
+        if hit.not then continue
+        if (ctx.boxedConformance.has item: ri) then return
+        ctx.boxedConformance.add item: ri
+        if ctx.reachFixed.not then {
+            ctx.typeUses.add item: implTid
+            ctx.typeUses.add item: protoTid
+        }
+        return
+    }
+}
+
 # boxLabelFor -- conformanceLabelFor at a site that boxes `implTid` as
 # `protoTid`. A native conformer is looked up through the row its origin
 # carries, and the pair is recorded: nothing else would ever write its helpers.
@@ -43726,9 +43798,16 @@ boxLabelFor: function {
     protoTid: ztypes.tid
 } out String is {
     nrow: nativeConformerRow :symtab tid: implTid
-    if nrow.isZero then return (conformanceLabelFor :symtab :implTid :protoTid)
+    if nrow.isZero then {
+        noteBoxUse :symtab :ctx :implTid :protoTid
+        return (conformanceLabelFor :symtab :implTid :protoTid)
+    }
     lbl: conformanceLabelFor :symtab implTid: nrow :protoTid
     if lbl.length == 0 then return lbl
+    if ctx.reachFixed.not then {
+        ctx.typeUses.add item: implTid
+        ctx.typeUses.add item: protoTid
+    }
     seen: false
     bi: u64
     for bi < ctx.nativeBoxImpls.length loop {
