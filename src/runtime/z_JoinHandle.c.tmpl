@@ -10,8 +10,6 @@
    joined, then destroys a result nobody took. `detach` hands the block to the
    thread: of the thread finishing and the handle letting go, whichever comes
    second (one atomic `done` decides) destroys the result and frees the block. */
-#define Z_JH_STORE_0(dst, e) ((dst) = (e))
-#define Z_JH_STORE_1(dst, e) ((void)(e))
 
 typedef struct z_@@NAME@@_blk {
     z_@@ARG.create.task@@_t task;
@@ -32,7 +30,12 @@ typedef struct z_@@NAME@@_t {
 static void z_@@NAME@@_run(void* p) {
     z_@@NAME@@_blk* b = (z_@@NAME@@_blk*)p;
     Z_ATOMIC_STORE(&b->tid, z_thread_self_id(), Z_RELEASE);
-    Z_JH_STORE_@@P0_NULL@@(b->result, b->task.vtable->@@SLOT.create.task.call@@(b->task.data));
+    /* a task answering nothing stores nothing */
+#if @@P0_NULL@@
+    (void)b->task.vtable->@@SLOT.create.task.call@@(b->task.data);
+#else
+    b->result = b->task.vtable->@@SLOT.create.task.call@@(b->task.data);
+#endif
     z_@@ARG.create.task@@_destroy(&b->task);
     Z_ATOMIC_STORE(&b->finished, 1, Z_RELEASE);
     /* detached first: the handle let go, so the thread cleans up */
