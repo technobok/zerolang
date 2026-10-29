@@ -2112,6 +2112,8 @@ memberWord: list {
     slice: "slice"
     fill: "fill"
     clear: "clear"
+    indexEmpty: "index_empty"
+    indexDeleted: "index_deleted"
 } out staticlist StringView
 
 # nativeWord -- the words natives.tbl and the runtime fragments spell that the
@@ -39534,57 +39536,34 @@ emitSetMono: function {
     if ovId.isZero then return
     ov: cbaseNoPrefix :ctx tid: ovId
     si: cbaseNoPrefix :ctx tid: siId
-    hashBody: setHashBody :ctx kind: ekind
-    eqBody: setEqBody kind: ekind
-    ek: elemTid
-    valElem: isValKey :symtab key: ek kind: ekind
-    if valElem then {
-        hashBody = valKeyHashBody :ast :symtab :ctx key: ek keyT: itemT.stringView :buf
-        eqBody = valKeyEqBody :ast :symtab :ctx key: ek keyT: itemT.stringView :buf
-    }
-    {
-        dh: String
-        de: String
-        if ekind == 0 when valElem.not then {
-            dh = (declaredKeyFnC
-                :symtab
-                :ctx
-                tid: elemTid
-                memberId: zast.wellKnown.slot.wkHash
-            )
-            de = (declaredKeyFnC
-                :symtab
-                :ctx
-                tid: elemTid
-                memberId: zast.wellKnown.slot.wkOpEq
-            )
-        }
-        if dh.length > 0 when de.length > 0 then {
-            hb: "\{dh}(&_key)"
-            hashBody = hb.take
-            rhsPs: elemBorrowsByPtr :symtab :ctx tid: elemTid
-            rhsAs: "_b".string
-            rhsTs: itemT.copy
-            if rhsPs then {
-                rhsAs = "&_b".string
-                rhsTsp: "\{itemT}*"
-                rhsTs = rhsTsp.take
-            }
-            eb: "\{de}(&_a, \{rhsAs})"
-            eqBody = eb.take
-            fd: (keyFnProtosC
-                :symtab
-                :ctx
-                tid: elemTid
-                dh: dh.stringView
-                de: de.stringView
-                keyT: itemT.stringView
-                rhsT: rhsTs.stringView
-                rhsByPtr: rhsPs
-            )
-            buf.append fd
-        }
-    }
+    # the view-keyed probes, written after the instance, call its members:
+    # they are decided before the instance's text is
+    vp: String
+    if isStr then setViewProbes :ctx :monoId nm: nm.stringView buf: vp
+    # the instance's text as this program writes it (sectionedText), so the
+    # item hash and `==` are spelled only where a written section holds them
+    p: "\{runtimeDir}/z_Set.c.tmpl"
+    raw: readTemplate :ctx path: p.stringView
+    if raw.length == 0 then return
+    rs: sectionedText :ctx mono: monoId text: raw.stringView
+    needHash: rs.stringView.contains needle: "@@HASH_BODY@@"
+    needEq: rs.stringView.contains needle: "@@EQ_BODY@@"
+    # the key's own `hash` and `==` where it has them, the kind's otherwise
+    hashBody: String
+    eqBody: String
+    (setKeyBodies
+        :ast
+        :symtab
+        :ctx
+        :elemTid
+        :ekind
+        itemT: itemT.stringView
+        :needHash
+        :needEq
+        :hashBody
+        :eqBody
+        :buf
+    )
     et: elemTid
     ifDestroy: mapValFreeStmt :symtab :ctx valTid: et slot: "p->entries[i].item"
     destroyItems: setDestroyItems itemFree: ifDestroy.stringView
@@ -39592,20 +39571,11 @@ emitSetMono: function {
     freeItemDup: setFreeItemDup itemFree: ifDup.stringView
     ifDel: mapValFreeStmt :symtab :ctx valTid: et slot: "_this->entries[idx].item"
     freeItemDel: setFreeItemDel itemFree: ifDel.stringView
-    p: "\{runtimeDir}/z_Set.c.tmpl"
-    raw: readTemplate :ctx path: p.stringView
-    if raw.length > 0 then {
-        t1: applyTmpl text: raw key: "NAME" val: nm.stringView
+    {
+        t1: applyTmpl text: rs key: "NAME" val: nm.stringView
         t2: applyTmpl text: t1 key: "MACRO" val: mcr.stringView
         t3: applyTmpl text: t2 key: "ITEM_T" val: itemT.stringView
-        itemArgT: itemT.copy
-        itemRef: String
-        if isStr then {
-            itemArgT = "const \{itemT}*"
-            itemRef = "&".string
-        }
-        t3 = applyTmpl text: t3 key: "ITEM_ARG_T" val: itemArgT.stringView
-        t3 = applyTmpl text: t3 key: "ITEM_REF" val: itemRef.stringView
+        t3 = setItemArgHoles text: t3 itemT: itemT.stringView :isStr
         t4: applyTmpl text: t3 key: "HASH_BODY" val: hashBody.stringView
         t5: applyTmpl text: t4 key: "EQ_BODY" val: eqBody.stringView
         t6: applyTmpl text: t5 key: "DESTROY_ITEMS" val: destroyItems.stringView
@@ -39614,10 +39584,7 @@ emitSetMono: function {
         t7: applyTmpl text: t6c key: "OPTIONVIEW" val: ov.stringView
         t8: applyOptionTags :ast :ctx :symtab text: t7 key: "OPTIONVIEW" tid: ovId
         t: applyTmpl text: t8 key: "SETITER" val: si.stringView
-        # the view-keyed probes, written after the instance, call its members
-        vp: String
-        if isStr then setViewProbes :ctx :monoId nm: nm.stringView buf: vp
-        buf.append (sectionedText :ctx mono: monoId text: t.stringView)
+        buf.append t
         buf.append "\n"
         buf.append vp
     }
@@ -39634,6 +39601,94 @@ emitSetMono: function {
         holeVal: ""
         :buf
     )
+}
+
+# setKeyBodies -- a Set item's hash and `==` bodies, each only when its
+# section is written (`needHash`, `needEq`): a value type's own (valKeyHashBody,
+# valKeyEqBody), a reference's declared pair (declaring both ahead of the mono),
+# or the kind's.
+setKeyBodies: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    elemTid: ztypes.tid
+    ekind: u64
+    itemT: StringView
+    needHash: bool
+    needEq: bool
+    hashBody: String.borrow
+    eqBody: String.borrow
+    buf: String.borrow
+} is {
+    valElem: isValKey :symtab key: elemTid kind: ekind
+    if valElem then {
+        if needHash then hashBody.append (valKeyHashBody
+            :ast
+            :symtab
+            :ctx
+            key: elemTid
+            keyT: itemT
+            :buf
+        )
+        if needEq then eqBody.append (valKeyEqBody :ast :symtab :ctx key: elemTid keyT: itemT :buf)
+    }
+    {
+        dh: String
+        de: String
+        if ekind == 0 when valElem.not when needHash or needEq then {
+            dh = (declaredKeyFnC
+                :symtab
+                :ctx
+                tid: elemTid
+                memberId: zast.wellKnown.slot.wkHash
+            )
+            de = (declaredKeyFnC
+                :symtab
+                :ctx
+                tid: elemTid
+                memberId: zast.wellKnown.slot.wkOpEq
+            )
+        }
+        if dh.length > 0 when de.length > 0 then {
+            hb: "\{dh}(&_key)"
+            hashBody.append hb
+            rhsPs: elemBorrowsByPtr :symtab :ctx tid: elemTid
+            rhsAs: "_b".string
+            rhsTs: itemT.string
+            if rhsPs then {
+                rhsAs = "&_b".string
+                rhsTsp: "\{itemT}*"
+                rhsTs = rhsTsp.take
+            }
+            eb: "\{de}(&_a, \{rhsAs})"
+            eqBody.append eb
+            fd: (keyFnProtosC
+                :symtab
+                :ctx
+                tid: elemTid
+                dh: dh.stringView
+                de: de.stringView
+                keyT: itemT
+                rhsT: rhsTs.stringView
+                rhsByPtr: rhsPs
+            )
+            buf.append fd
+        }
+    }
+    if needHash when hashBody.length == 0 then hashBody.append (setHashBody :ctx kind: ekind)
+    if needEq when eqBody.length == 0 then eqBody.append (setEqBody kind: ekind)
+}
+
+# setItemArgHoles -- a Set template's ITEM_ARG_T and ITEM_REF: a String item
+# is passed by pointer (the probe never copies the header), any other by value.
+setItemArgHoles: function {text: String itemT: StringView isStr: bool} out String is {
+    if isStr.not then {
+        t1: applyTmpl :text key: "ITEM_ARG_T" val: itemT
+        return (applyTmpl text: t1 key: "ITEM_REF" val: "")
+    }
+    argT: "const \{itemT}*"
+    t2: applyTmpl :text key: "ITEM_ARG_T" val: argT.stringView
+    return (applyTmpl text: t2 key: "ITEM_REF" val: "&")
 }
 
 # mapDestroyEntries / mapFreeKeyDup / mapFreeKeyDel -- the key cleanup
@@ -39913,13 +39968,59 @@ emitMapMono: function {
     )
     kkind: keyHashKind :symtab :ctx tid: keyTid
     keyIsStr: kkind == 1
-    hashKeyBody: setHashBody :ctx kind: kkind
-    keysEqBody: setEqBody kind: kkind
+    keyArgT: keyT.copy
+    keyRef: String
+    if keyIsStr then {
+        keyArgT = "const \{keyT}*"
+        keyRef = "&".string
+    }
+    # getMut and the view-keyed probes, written after the instance, call its
+    # members: they are decided before the instance's text is
+    gm: String
+    (emitMapGetMut
+        :ast
+        :symtab
+        :ctx
+        :monoId
+        :runtimeDir
+        file: "z_MapMut.c.tmpl"
+        nm: nm.stringView
+        keyHole: "KEY_ARG_T"
+        keyT: keyArgT.stringView
+        buf: gm
+    )
+    vp: String
+    if kkind == 1 then mapViewProbes :ctx :monoId nm: nm.stringView ov: ov.stringView buf: vp
+    # the instance's text as this program writes it (sectionedText), so the
+    # key hash and `==` are spelled only where a written section holds them
+    p: "\{runtimeDir}/z_Map.c.tmpl"
+    raw: readTemplate :ctx path: p.stringView
+    if raw.length == 0 then return
+    rs: sectionedText :ctx mono: monoId text: raw.stringView
+    needHash: rs.stringView.contains needle: "@@HASH_KEY_BODY@@"
+    needEq: rs.stringView.contains needle: "@@KEYS_EQUAL_BODY@@"
+    # the key's own `hash` and `==` where it has them, the kind's otherwise
+    hashKeyBody: String
+    keysEqBody: String
     kk: keyTid
     valKey: isValKey :symtab key: kk kind: kkind
     if valKey then {
-        hashKeyBody = valKeyHashBody :ast :symtab :ctx key: kk keyT: keyT.stringView :buf
-        keysEqBody = valKeyEqBody :ast :symtab :ctx key: kk keyT: keyT.stringView :buf
+        if needHash then hashKeyBody = (valKeyHashBody
+            :ast
+            :symtab
+            :ctx
+            key: kk
+            keyT: keyT.stringView
+            :buf
+        )
+        if needEq then keysEqBody = (valKeyEqBody
+            :ast
+            :symtab
+            :ctx
+            key: kk
+            keyT: keyT.stringView
+            :buf
+        )
     }
     {
         # Only the FALLTHROUGH kind. String (1), StringView (2) and the
@@ -39928,7 +40029,7 @@ emitMapMono: function {
         # them by emitted name links to nothing.
         dhm: String
         dem: String
-        if kkind == 0 when valKey.not then {
+        if kkind == 0 when valKey.not when needHash or needEq then {
             dhm = (declaredKeyFnC
                 :symtab
                 :ctx
@@ -39971,6 +40072,8 @@ emitMapMono: function {
             buf.append fdm
         }
     }
+    if needHash when hashKeyBody.length == 0 then hashKeyBody = setHashBody :ctx kind: kkind
+    if needEq when keysEqBody.length == 0 then keysEqBody = setEqBody kind: kkind
     vfDestroy: (mapValFreeStmt
         :symtab
         :ctx
@@ -40037,19 +40140,10 @@ emitMapMono: function {
         ind: "    "
     )
     removeBody: "    \{rmDecl}\n    if (idx < 0) {\n\{rmNoneC}        return _r;\n    }\n\{rmSomeC}\{delTail}    return _r;"
-    p: "\{runtimeDir}/z_Map.c.tmpl"
-    raw: readTemplate :ctx path: p.stringView
-    if raw.length == 0 then return
     {
-        t1: applyTmpl text: raw key: "NAME" val: nm.stringView
+        t1: applyTmpl text: rs key: "NAME" val: nm.stringView
         t2: applyTmpl text: t1 key: "MACRO" val: mcr.stringView
         t3: applyTmpl text: t2 key: "KEY_T" val: keyT.stringView
-        keyArgT: keyT.copy
-        keyRef: String
-        if keyIsStr then {
-            keyArgT = "const \{keyT}*"
-            keyRef = "&".string
-        }
         t3 = applyTmpl text: t3 key: "KEY_ARG_T" val: keyArgT.stringView
         t3 = applyTmpl text: t3 key: "KEY_REF" val: keyRef.stringView
         t4: applyTmpl text: t3 key: "VAL_T" val: valT.stringView
@@ -40062,24 +40156,7 @@ emitMapMono: function {
         t13: applyTmpl text: t12 key: "FREE_VAL_DUP" val: freeValDup.stringView
         t14: applyTmpl text: t13 key: "REMOVE_WRAP" val: rmWrap.stringView
         t15: applyTmpl text: t14 key: "REMOVE_BODY" val: removeBody.stringView
-        # getMut and the view-keyed probes, written after the instance, call
-        # its members: they are decided first
-        gm: String
-        (emitMapGetMut
-            :ast
-            :symtab
-            :ctx
-            :monoId
-            :runtimeDir
-            file: "z_MapMut.c.tmpl"
-            nm: nm.stringView
-            keyHole: "KEY_ARG_T"
-            keyT: keyArgT.stringView
-            buf: gm
-        )
-        vp: String
-        if kkind == 1 then mapViewProbes :ctx :monoId nm: nm.stringView ov: ov.stringView buf: vp
-        buf.append (sectionedText :ctx mono: monoId text: t15.stringView)
+        buf.append t15
         buf.append "\n"
         buf.append vp
         buf.append gm
