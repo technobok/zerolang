@@ -4335,6 +4335,9 @@ Ctx: class {
     # conformance rows written C makes a value of -- an impl boxed as its
     # protocol or facet (noteBoxUse): only these rows' helpers are written
     boxedConformance: IdSet ztypes.confid
+    # each (impl, protocol) pair written C boxes as an OWNED protocol value
+    # (noteOwnedBoxUse): only these get `_create_owned` and `_owned_destroy`
+    ownedBoxUses: IdSet u64
     # each marker protocol (one with no members) asked about, to whether the
     # program makes a value of it (markerValueMade)
     markerValues: (IdMapV ztypes.tid v: bool)
@@ -8634,10 +8637,11 @@ destroyParts: function {
 }
 
 # destroyGated -- `tid`'s destructor is one zc writes only when written C calls
-# it: a record's or a class's (emitOneRecord), a union's -- Option, Result, a
+# it: a record's or a class's (emitOneRecord), a runtime-owned class's
+# `destroy=` fragment (emitClassRowStructs), a union's -- Option, Result, a
 # user's (emitUnionMono) -- or a view option's (emitOptionViewMono); but not an
-# instance of a runtime template (List, Box, ...) nor a class whose C the
-# runtime owns, whose destructors are written with them.
+# instance of a runtime template (List, Box, a templated class), whose
+# destructor is written with it.
 destroyGated: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.tid} out bool is {
     tt: symtab.reg.typetypeOf typeId: tid
     if tt == ztypes.ztypetype.unionType then return true
@@ -8645,8 +8649,7 @@ destroyGated: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes
     if tt.isFieldwise.not then return false
     o: originTidOf :symtab :tid
     if o.isZero.not when (ctx.origins.contains item: o) then return false
-    if (tmplClassRowOf :symtab :ctx :tid) > 0 then return false
-    return (ctx.classRowTids.contains item: tid).not
+    return (tmplClassRowOf :symtab :ctx :tid) == 0
 }
 
 # destroyWritten -- a gated destructor (destroyGated) is written only when
@@ -15576,6 +15579,7 @@ conformanceArgText: function {
         (symtab.reg.typetypeOf typeId: su.spec) == ztypes.ztypetype.protocolType
     ) then {
         suffix = "create_owned".string
+        noteOwnedBoxUse :ctx implTid: su.value protoTid: su.spec
     }
     aIb: spelledCname :ctx tid: su.value
     aRcv: "&\{av}"
@@ -33818,9 +33822,9 @@ closeReachedTypes: function {ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: C
 }
 
 # demandWrittenDestroys -- the destructors written whatever calls them call
-# their parts': every reached type's that is not gated (destroyGated: a union,
-# an instance of List, Box or Option, a runtime-owned class), and each reached
-# impl's owned protocol box (emitConformanceImpl's `_owned_destroy`).
+# their parts': every reached type's that is not gated (destroyGated: an
+# instance of List, Box or a templated class), and the impl of each owned
+# protocol box written C makes (emitConformanceImpl's `_owned_destroy`).
 demandWrittenDestroys: function {symtab: zenv.ZSymbolTable.view ctx: Ctx} is {
     rs: ListVal ztypes.tid
     for each r: ctx.reachedTypes loop rs.append r
@@ -33830,15 +33834,24 @@ demandWrittenDestroys: function {symtab: zenv.ZSymbolTable.view ctx: Ctx} is {
             noteDestroyUse :symtab :ctx tid: m
         }
     }
+    impls: ListVal ztypes.tid
     ri: ztypes.confid
     for ri.next < symtab.typing.nextConf loop {
         ri = ri.next
-        impl: ztypes.tid
-        {
-            row: symtab.typing.conformance.get i: ri
-            if (ctx.reachedTypes.has item: row.implTypeId) then impl = row.implTypeId
-        }
-        if impl.isZero then continue
+        row: symtab.typing.conformance.get i: ri
+        k: ownedBoxKey implTid: row.implTypeId protoTid: row.specTypeId
+        if (ctx.ownedBoxUses.has item: k) then impls.append row.implTypeId
+    }
+    ni: u64
+    for ni < ctx.nativeBoxImpls.length loop {
+        k: (ownedBoxKey
+            implTid: (ctx.nativeBoxImpls.get i: ni)
+            protoTid: (ctx.nativeBoxProtos.get i: ni)
+        )
+        if (ctx.ownedBoxUses.has item: k) then impls.append (ctx.nativeBoxImpls.get i: ni)
+        ni = ni + 1
+    }
+    for each impl: impls loop {
         dt: destroyTargetTid :symtab :ctx tid: impl
         if dt.isZero.not when dt != ctx.strTid then noteDestroyUse :symtab :ctx tid: dt
     }
@@ -36724,6 +36737,7 @@ emitC: function {
         usedTypeIds: IdSet ztypes.tid
         emittedConformance: IdSet ztypes.confid
         boxedConformance: IdSet ztypes.confid
+        ownedBoxUses: IdSet u64
         markerValues: (IdMapV ztypes.tid v: bool)
         emittedListIters: IdSet ztypes.tid
         unitOrder: List String
@@ -40208,7 +40222,10 @@ rowMemberUses: function {ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx r
         ) case some then {
             mt: ioCanonTidAny :ast :symtab :ctx canon: (one.substring from: 0 to: dot)
             sl: ctx.memberWords.slotOf text: (one.substring from: dot + 1 to: one.length)
-            if mt.isZero.not then noteMemberUse :ctx mono: mt member: sl
+            # a destructor called is a destroy use, whatever the type (noteDestroyUse)
+            if mt.isZero.not when sl == memberWord.slot.destroy then {
+                noteDestroyUse :symtab :ctx tid: mt
+            } else if mt.isZero.not then noteMemberUse :ctx mono: mt member: sl
         } case none then null
     }
 }
@@ -40495,7 +40512,9 @@ emitClassRowStructs: function {
             ctx.emittedUserTypes.add item: cid
             emitClassRowStruct :ast :symtab :ctx :cid :buf
             dfr: (ctx.classRows.get :i).destroy.copy
-            if dfr.length > 0 then ioFrag :ast :symtab :ctx :runtimeDir frag: dfr.stringView :buf
+            if dfr.length > 0 when (destroyWritten :symtab :ctx tid: cid) then {
+                ioFrag :ast :symtab :ctx :runtimeDir frag: dfr.stringView :buf
+            }
         }
         i = i + 1
     }
@@ -44661,6 +44680,7 @@ emitConformanceImpl: function {
     }
     bc0: "static \{specCtype} \{wbase}_create(const \{implCtype}* val) {\n    \{specCtype} proto = {0};\n    proto.data = (void*)val;\n    proto.vtable = &\{wbase}_vtable;\n    proto.destroy = NULL;\n    return proto;\n}\n\n"
     buf.append bc0
+    if (ctx.ownedBoxUses.has item: (ownedBoxKey :implTid protoTid: specTid)).not then return
     od0: "static void \{wbase}_owned_destroy(void* p) {\n"
     buf.append od0
     ofn: destroyFnC :symtab :ctx tid: implTid
@@ -44710,6 +44730,18 @@ noteBoxUse: function {
         }
         return
     }
+}
+
+# noteOwnedBoxUse -- written C boxes an `implTid` as an OWNED `protoTid` value
+# (`_create_owned`): the pair's owned create and destroy are written, and the
+# impl's destructor with them (demandWrittenDestroys)
+noteOwnedBoxUse: function {ctx: Ctx implTid: ztypes.tid protoTid: ztypes.tid} is {
+    ctx.ownedBoxUses.add item: (ownedBoxKey :implTid :protoTid)
+}
+
+# ownedBoxKey -- the (impl, protocol) pair as one ownedBoxUses key
+ownedBoxKey: function {implTid: ztypes.tid protoTid: ztypes.tid} out u64 is {
+    return implTid.u64 * 4294967296 + protoTid.u64
 }
 
 # boxLabelFor -- conformanceLabelFor at a site that boxes `implTid` as
@@ -46079,6 +46111,7 @@ viaBoxArg: function {
         tmpNm: hoistForAddress :ast :symtab :ctx :av tid: paramTid :argNid
         addr = "&\{tmpNm}"
     }
+    noteOwnedBoxUse :ctx implTid: paramTid protoTid: targetTid
     return "\{spelledCname :ctx tid: paramTid}_\{lbl}_create_owned(\{addr})"
 }
 
@@ -46792,6 +46825,7 @@ emitProtocolCreateCall: function {
             implBase: spelledCname :ctx tid: fromTid
             label: boxLabelFor :symtab :ctx implTid: fromTid :protoTid
             if label.length == 0 then return "".string
+            if borrowsP.not when isFct.not then noteOwnedBoxUse :ctx implTid: fromTid :protoTid
             valueVid: atomVid :symtab nid: (dottedBaseNodeId :ast n: fop)
             if valueVid.isZero then valueVid = atomVid :symtab nid: (atomNodeId n: fop)
             valVar: aliasResolve :ctx name: fromBase vid: valueVid
