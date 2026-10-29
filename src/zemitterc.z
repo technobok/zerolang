@@ -834,12 +834,18 @@ convFloatToInt: function {
 # convMagExpr -- the C for an integer's MAGNITUDE, which is what the exactness
 # test measures. A signed source negates rather than casting, so the sign bit
 # does not read as magnitude.
-convMagExpr: function {signed: bool wide: bool} out String is {
+convMagExpr: function {signed: bool wide: bool needs: List String} out String is {
     if wide.not then {
         if signed then return "((@V@) < 0 ? (uint64_t)(0 - (uint64_t)(@V@)) : (uint64_t)(@V@))".string
         return "(uint64_t)(@V@)".string
     }
-    if signed then return "(z_i128_is_neg(@V@) ? z_u128_sub(Z_U128_U64(0), z_i128_bits(@V@)) : z_i128_bits(@V@))".string
+    if signed then {
+        convNeed :needs piece: "@i128_is_neg"
+        convNeed :needs piece: "@u128_sub"
+        convNeed :needs piece: "@u128_u64"
+        convNeed :needs piece: "@i128_bits"
+        return "(z_i128_is_neg(@V@) ? z_u128_sub(Z_U128_U64(0), z_i128_bits(@V@)) : z_i128_bits(@V@))".string
+    }
     return "(@V@)".string
 }
 
@@ -852,16 +858,26 @@ convIntToFloat: function {
     srcK: ztypes.numkind
     dstK: ztypes.numkind
     okValue: StringView
+    needs: List String
 } out String is {
     p: kindMantissa k: dstK
     wide: (srcK == ztypes.numkind.i128Type) or (srcK == ztypes.numkind.u128Type)
-    mag: convMagExpr signed: (kindSigned k: srcK) :wide
+    mag: convMagExpr signed: (kindSigned k: srcK) :wide :needs
     span: "z_span64(\{mag})"
-    if wide then span = "z_u128_span(\{mag})"
+    if wide then {
+        span = "z_u128_span(\{mag})"
+        convNeed :needs piece: "@u128_span"
+    } else {
+        convNeed :needs piece: "@span64"
+    }
     rangeAnd: String
     if dstK == ztypes.numkind.f16Type then {
         rangeAnd = " && \{mag} <= 65504"
-        if wide then rangeAnd = " && !z_u128_lt(Z_U128_U64(65504), \{mag})"
+        if wide then {
+            rangeAnd = " && !z_u128_lt(Z_U128_U64(65504), \{mag})"
+            convNeed :needs piece: "@u128_lt"
+            convNeed :needs piece: "@u128_u64"
+        }
     }
     n: "((\{span} <= \{p}\{rangeAnd}) ? \{convOk value: okValue} : \{(convErr
         arm: "precisionLoss"
@@ -910,21 +926,33 @@ convRangeCond: function {dstK: ztypes.numkind needsLo: bool needsHi: bool} out S
 # convRange128 -- convRangeCond for a 128-bit SOURCE, whose value is no C
 # arithmetic type where the C compiler has no 128-bit integer: each bound is
 # asked of the int128 helpers. Every such conversion has a bound to breach.
-convRange128: function {srcK: ztypes.numkind dstK: ztypes.numkind} out String is {
+convRange128: function {
+    srcK: ztypes.numkind dstK: ztypes.numkind needs: List String
+} out String is {
     if (kindBits k: dstK) == 128 then {
         # the other 128-bit type: only the sign, or the top bit, is out of range
-        if (kindSigned k: srcK) then return "z_i128_is_neg(@V@)".string
+        if (kindSigned k: srcK) then {
+            convNeed :needs piece: "@i128_is_neg"
+            return "z_i128_is_neg(@V@)".string
+        }
+        convNeed :needs piece: "@u128_hi"
         return "(z_u128_hi(@V@) >> 63) != 0".string
     }
     hi: kindHiStr k: dstK
     if (kindSigned k: srcK).not then {
+        convNeed :needs piece: "@u128_lt"
+        convNeed :needs piece: "@u128_u64"
         u: "z_u128_lt(Z_U128_U64(\{hi}), @V@)"
         return u
     }
+    convNeed :needs piece: "@i128_lt"
     if (kindSigned k: dstK).not then {
+        convNeed :needs piece: "@i128_is_neg"
+        convNeed :needs piece: "@i128_from_u64"
         n: "z_i128_is_neg(@V@) || z_i128_lt(z_i128_from_u64(\{hi}), @V@)"
         return n
     }
+    convNeed :needs piece: "@i128_from_i64"
     lo: kindLoStr k: dstK
     b: "z_i128_lt(@V@, z_i128_from_i64(\{lo})) || z_i128_lt(z_i128_from_i64(\{hi}), @V@)"
     return b
@@ -933,7 +961,9 @@ convRange128: function {srcK: ztypes.numkind dstK: ztypes.numkind} out String is
 # convOkValue -- the converted value a checked conversion holds once its test
 # passed, as C: a cast, except where a 128-bit integer is on either side, whose
 # value moves only through the int128 helpers.
-convOkValue: function {srcK: ztypes.numkind dstK: ztypes.numkind tcT: StringView} out String is {
+convOkValue: function {
+    srcK: ztypes.numkind dstK: ztypes.numkind tcT: StringView needs: List String
+} out String is {
     sw: (kindBits k: srcK) == 128
     dw: (kindBits k: dstK) == 128
     if dstK == ztypes.numkind.f16Type then {
@@ -942,7 +972,9 @@ convOkValue: function {srcK: ztypes.numkind dstK: ztypes.numkind tcT: StringView
         if sw then {
             src = "z_u128_to_f64(@V@)"
             if (kindSigned k: srcK) then src = "z_i128_to_f64(@V@)"
+            convNeedCall :needs call: src
         }
+        convNeed :needs piece: "@f16_from_f64"
         h: "z_f16_from_f64(\{src})"
         return h
     }
@@ -950,35 +982,53 @@ convOkValue: function {srcK: ztypes.numkind dstK: ztypes.numkind tcT: StringView
         c: "(\{tcT})(@V@)"
         return c
     }
-    if dw then return (convOkInto128 :srcK :dstK)
-    return (convOkFrom128 :srcK :dstK :tcT)
+    if dw then return (convOkInto128 :srcK :dstK :needs)
+    return (convOkFrom128 :srcK :dstK :tcT :needs)
 }
 
 # convOkInto128 -- convOkValue for a 128-bit destination.
-convOkInto128: function {srcK: ztypes.numkind dstK: ztypes.numkind} out String is {
+convOkInto128: function {
+    srcK: ztypes.numkind dstK: ztypes.numkind needs: List String
+} out String is {
     if (kindBits k: srcK) == 128 then {
-        if (kindSigned k: srcK) then return "z_i128_bits(@V@)".string
+        if (kindSigned k: srcK) then {
+            convNeed :needs piece: "@i128_bits"
+            return "z_i128_bits(@V@)".string
+        }
+        convNeed :needs piece: "@u128_signed"
         return "z_u128_signed(@V@)".string
     }
-    if (kindIsFloat k: srcK) then return (convFloatTrunc128 :srcK :dstK)
+    if (kindIsFloat k: srcK) then return (convFloatTrunc128 :srcK :dstK :needs)
     # a signed source checked non-negative, into u128
+    convNeed :needs piece: "@u128_from_u64"
     return "z_u128_from_u64((uint64_t)(@V@))".string
 }
 
 # convOkFrom128 -- convOkValue for a 128-bit source into a narrower type: a
 # float reads its value, an integer its low word, which the bounds test has
 # already shown holds it.
-convOkFrom128: function {srcK: ztypes.numkind dstK: ztypes.numkind tcT: StringView} out String is {
+convOkFrom128: function {
+    srcK: ztypes.numkind dstK: ztypes.numkind tcT: StringView needs: List String
+} out String is {
     if dstK == ztypes.numkind.f128Type then {
-        if (kindSigned k: srcK) then return "z_i128_to_f128(@V@)".string
+        if (kindSigned k: srcK) then {
+            convNeed :needs piece: "@i128_to_f128"
+            return "z_i128_to_f128(@V@)".string
+        }
+        convNeed :needs piece: "@u128_to_f128"
         return "z_u128_to_f128(@V@)".string
     }
     val: "z_u128_lo(@V@)"
     if (kindIsFloat k: dstK) then {
         val = "z_u128_to_f64(@V@)"
         if (kindSigned k: srcK) then val = "z_i128_to_f64(@V@)"
-    } else if (kindSigned k: srcK) then {
-        val = "z_u128_lo(z_i128_bits(@V@))"
+        convNeedCall :needs call: val
+    } else {
+        convNeed :needs piece: "@u128_lo"
+        if (kindSigned k: srcK) then {
+            val = "z_u128_lo(z_i128_bits(@V@))"
+            convNeed :needs piece: "@i128_bits"
+        }
     }
     c: "(\{tcT})"
     c.append val
@@ -988,7 +1038,9 @@ convOkFrom128: function {srcK: ztypes.numkind dstK: ztypes.numkind tcT: StringVi
 # convTruncC -- a float source truncated to the destination integer and read
 # back as a float, as C: what convFloatToInt compares the value against. A
 # 128-bit destination truncates and reads back through the int128 helpers.
-convTruncC: function {srcK: ztypes.numkind dstK: ztypes.numkind tcT: StringView} out String is {
+convTruncC: function {
+    srcK: ztypes.numkind dstK: ztypes.numkind tcT: StringView needs: List String
+} out String is {
     if (kindBits k: dstK) != 128 then {
         c: "(\{tcT})(@V@)"
         return c
@@ -999,7 +1051,8 @@ convTruncC: function {srcK: ztypes.numkind dstK: ztypes.numkind tcT: StringView}
         back = "z_i128_to_f128(".string
         if (kindSigned k: dstK).not then back = "z_u128_to_f128(".string
     }
-    back.append (convFloatTrunc128 :srcK :dstK)
+    convNeedCall :needs call: back.stringView
+    back.append (convFloatTrunc128 :srcK :dstK :needs)
     back.append ")"
     return back
 }
@@ -1007,23 +1060,33 @@ convTruncC: function {srcK: ztypes.numkind dstK: ztypes.numkind tcT: StringView}
 # convFloatTrunc128 -- a float source truncated to a 128-bit integer, as C: from
 # f128 directly, from any narrower float through double, which holds each of
 # them exactly.
-convFloatTrunc128: function {srcK: ztypes.numkind dstK: ztypes.numkind} out String is {
+convFloatTrunc128: function {
+    srcK: ztypes.numkind dstK: ztypes.numkind needs: List String
+} out String is {
     pfx: "z_u128"
     if (kindSigned k: dstK) then pfx = "z_i128"
     if srcK == ztypes.numkind.f128Type then {
         q: "\{pfx}_from_f128(@V@)"
+        convNeedCall :needs call: q.stringView
         return q
     }
     d: "\{pfx}_from_f64((double)(@V@))"
+    convNeedCall :needs call: d.stringView
     return d
 }
 
 # convHalfCast -- a lossless conversion with an f16 on either side: the same
 # value handed back, a narrow integer widened into one, or an f16 widened to a
 # wider float, each through the f16 helpers.
-convHalfCast: function {srcK: ztypes.numkind dstK: ztypes.numkind tcT: StringView} out String is {
+convHalfCast: function {
+    srcK: ztypes.numkind dstK: ztypes.numkind tcT: StringView needs: List String
+} out String is {
     if srcK == dstK then return "(@V@)".string
-    if dstK == ztypes.numkind.f16Type then return "z_f16_from_f32((float)@V@)".string
+    if dstK == ztypes.numkind.f16Type then {
+        convNeed :needs piece: "@f16_from_f32"
+        return "z_f16_from_f32((float)@V@)".string
+    }
+    convNeed :needs piece: "@f16_to_f32"
     w: "((\{tcT})z_f16_to_f32(@V@))"
     return w
 }
@@ -1032,11 +1095,13 @@ convHalfCast: function {srcK: ztypes.numkind dstK: ztypes.numkind tcT: StringVie
 # the f16 helpers: rounded once from the source, out of range when that made an
 # infinity of a finite value, precision lost when it does not read back. `scT`
 # is the type the source is read as.
-convFloatToHalf: function {srcK: ztypes.numkind scT: StringView} out String is {
+convFloatToHalf: function {srcK: ztypes.numkind scT: StringView needs: List String} out String is {
     from: "z_f16_from_f64"
     if (kindMantissa k: srcK) == 24 then from = "z_f16_from_f32"
     if (kindMantissa k: srcK) == 113 then from = "z_f16_from_f128"
     h: "\{from}(@V@)"
+    convNeedCall :needs call: h.stringView
+    convNeed :needs piece: "@f16_to_f32"
     b: "((isinf(z_f16_to_f32(\{h})) && !isinf(@V@)) ? \{(convErr
         arm: "outOfRange"
     )} : (\{scT})z_f16_to_f32(\{h}) != (@V@) ? \{(convErr
@@ -1047,17 +1112,24 @@ convFloatToHalf: function {srcK: ztypes.numkind scT: StringView} out String is {
 
 # convWideCast -- a lossless conversion with a 128-bit integer on either side:
 # the same type handed back, or a narrower integer widened by the helpers.
-convWideCast: function {srcK: ztypes.numkind dstK: ztypes.numkind} out String is {
+convWideCast: function {
+    srcK: ztypes.numkind dstK: ztypes.numkind needs: List String
+} out String is {
     if srcK == dstK then return "(@V@)".string
-    if (kindSigned k: dstK).not then return "z_u128_from_u64(@V@)".string
-    if (kindSigned k: srcK) then return "z_i128_from_i64(@V@)".string
-    return "z_i128_from_u64(@V@)".string
+    w: "z_i128_from_u64(@V@)"
+    if (kindSigned k: dstK).not then {
+        w = "z_u128_from_u64(@V@)"
+    } else if (kindSigned k: srcK) then {
+        w = "z_i128_from_i64(@V@)"
+    }
+    convNeedCall :needs call: w
+    return w.string
 }
 
 # convIntToInt -- an integer -> integer conversion. It cannot lose precision,
 # only range, so the whole body is one bounds test.
 convIntToInt: function {
-    srcK: ztypes.numkind dstK: ztypes.numkind okValue: StringView
+    srcK: ztypes.numkind dstK: ztypes.numkind okValue: StringView needs: List String
 } out String is {
     sbits: kindBits k: srcK
     dbits: kindBits k: dstK
@@ -1065,7 +1137,7 @@ convIntToInt: function {
     dsig: kindSigned k: dstK
     cond: String
     if sbits == 128 then {
-        cond = convRange128 :srcK :dstK
+        cond = convRange128 :srcK :dstK :needs
     } else {
         cond = (convRangeCond
             :dstK
@@ -1087,15 +1159,17 @@ convIntToInt: function {
 # conversion is one expression: its tests, in order, each choosing a result.
 # It names @V@ in every test, so the emitter reads a value that is not free to
 # read twice into a temporary first.
-convBodyOf: function {srcK: ztypes.numkind dstK: ztypes.numkind lossy: bool} out String is {
+convBodyOf: function {
+    srcK: ztypes.numkind dstK: ztypes.numkind lossy: bool needs: List String
+} out String is {
     scT: kindCType k: srcK
     tcT: kindCType k: dstK
     wide: ((kindBits k: srcK) == 128) or ((kindBits k: dstK) == 128)
     if lossy.not then {
         if (srcK == ztypes.numkind.f16Type) or (dstK == ztypes.numkind.f16Type) then {
-            return (convHalfCast :srcK :dstK :tcT)
+            return (convHalfCast :srcK :dstK :tcT :needs)
         }
-        if wide then return (convWideCast :srcK :dstK)
+        if wide then return (convWideCast :srcK :dstK :needs)
         d: "((\{tcT})@V@)"
         return d
     }
@@ -1103,30 +1177,31 @@ convBodyOf: function {srcK: ztypes.numkind dstK: ztypes.numkind lossy: bool} out
     # below compares C arithmetic values
     vT: scT.string
     if srcK == ztypes.numkind.f16Type then vT = "float".string
-    okValue: convOkValue :srcK :dstK :tcT
+    okValue: convOkValue :srcK :dstK :tcT :needs
     body: String
     # the four corners of float/integer, each with its own way of failing
     if (kindIsFloat k: srcK) then {
         if dstK == ztypes.numkind.f16Type then {
-            body = convFloatToHalf :srcK scT: vT.stringView
+            body = convFloatToHalf :srcK scT: vT.stringView :needs
         } else if (kindIsFloat k: dstK) then {
             body = convFloatToFloat :scT :tcT
         } else {
             body = (convFloatToInt
                 scT: vT.stringView
-                trunc: (convTruncC :srcK :dstK :tcT).stringView
+                trunc: (convTruncC :srcK :dstK :tcT :needs).stringView
                 :dstK
                 okValue: okValue.stringView
             )
         }
     } else {
         if (kindIsFloat k: dstK) then {
-            body = convIntToFloat :srcK :dstK okValue: okValue.stringView
+            body = convIntToFloat :srcK :dstK okValue: okValue.stringView :needs
         } else {
-            body = convIntToInt :srcK :dstK okValue: okValue.stringView
+            body = convIntToInt :srcK :dstK okValue: okValue.stringView :needs
         }
     }
     if srcK == ztypes.numkind.f16Type then {
+        convNeed :needs piece: "@f16_to_f32"
         return (substituteAll text: body needle: "@V@" repl: "z_f16_to_f32(@V@)")
     }
     return body
@@ -1134,11 +1209,13 @@ convBodyOf: function {srcK: ztypes.numkind dstK: ztypes.numkind lossy: bool} out
 
 # convRowHead -- a conversion row's head, `[system.<src>.<dst> ...]`: the
 # helpers the row calls, and whether it is a value, go inside the bracket.
-convRowHead: function {srcK: ztypes.numkind dstK: ztypes.numkind lossy: bool} out String is {
+convRowHead: function {
+    srcK: ztypes.numkind dstK: ztypes.numkind lossy: bool needs: (List String).view
+} out String is {
     sn: ztypes.numkindName k: srcK
     dn: ztypes.numkindName k: dstK
     head: "[system.\{sn}.\{dn}"
-    nds: convNeeds :srcK :dstK :lossy
+    nds: convNeeds :srcK :dstK :needs
     if nds.length > 0 then {
         head.append " needs="
         head.append nds
@@ -1160,28 +1237,47 @@ convIsValue: function {srcK: ztypes.numkind dstK: ztypes.numkind lossy: bool} ou
 }
 
 # convNeeds -- the helper fragments a conversion row calls, as its `needs=`
-# list: the int128 helpers for a 128-bit integer on either side (the pieces of
-# _Z_INT128 that answer @int128_conv, every one a conversion row spells), the f16 ones
-# (_Z_F16's that answer @f16_conv)
-# for an f16, and the span count a checked integer -> float conversion of a
-# 64-bit-or-narrower integer tests (convIntToFloat). "" for a row that needs
-# none.
-convNeeds: function {srcK: ztypes.numkind dstK: ztypes.numkind lossy: bool} out String is {
+# list: the int128 or f16 fragment's row for a 128-bit integer or an f16 on
+# either side, then each prelude piece its body calls, as the body's builders
+# recorded them (convNeed), once each in the order first called. "" for a row
+# that needs none.
+convNeeds: function {
+    srcK: ztypes.numkind dstK: ztypes.numkind needs: (List String).view
+} out String is {
     r: String
-    if (
-        ((kindBits k: srcK) == 128) or ((kindBits k: dstK) == 128)
-    ) then r.append "prelude.int128,prelude.@int128_conv"
+    if ((kindBits k: srcK) == 128) or ((kindBits k: dstK) == 128) then r.append "prelude.int128"
     if (srcK == ztypes.numkind.f16Type) or (dstK == ztypes.numkind.f16Type) then {
         if r.length > 0 then r.append ","
-        r.append "prelude.f16,prelude.@f16_conv"
+        r.append "prelude.f16"
     }
-    if lossy when (kindIsFloat k: srcK).not when (kindIsFloat k: dstK) when (
-        (kindBits k: srcK) != 128
-    ) then {
+    seen: Set String
+    for each p: needs loop {
+        if (seen.has item: p) then continue
+        seen.add item: p.copy
         if r.length > 0 then r.append ","
-        r.append "prelude.@span64"
+        r.append "prelude."
+        r.append p
     }
     return r
+}
+
+# convNeed -- a conversion body's builder calls the prelude piece `piece`
+# (its demand word, `@i128_bits`): the row needs it (convNeeds).
+convNeed: function {needs: List String piece: StringView} is {
+    needs.append piece.string
+}
+
+# convNeedCall -- convNeed for the helper a builder's call text `z_<name>(...)`
+# names: the piece `@<name>`. For the builders that compose the helper's name.
+convNeedCall: function {needs: List String call: StringView} is {
+    open: (call.indexOf needle: "(").or d: call.length
+    name: (call.substring from: 0 to: open).stripPrefix p: "z_"
+    match (
+        name
+    ) case some then {
+        p: "@\{name}"
+        needs.append p
+    } case none then null
 }
 
 # nativeConvRows -- the conversions section of natives.tbl, generated from the
@@ -1223,8 +1319,9 @@ nativeConvRows: function out String is {
             d: order.get i: di
             di = di + 1
             lo: convIsLossy srcK: s dstK: d
-            bd: convBodyOf srcK: s dstK: d lossy: lo
-            key: convRowHead srcK: s dstK: d lossy: lo
+            nds: List String
+            bd: convBodyOf srcK: s dstK: d lossy: lo needs: nds
+            key: convRowHead srcK: s dstK: d lossy: lo needs: nds
             pad: key.copy
             for pad.length < 30 loop pad.append " "
             row: "\{pad} \{bd}\n"

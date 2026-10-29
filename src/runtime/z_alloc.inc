@@ -81,7 +81,7 @@ typedef struct { uint64_t lo; uint64_t hi; } z_i128;
 #endif
 /*@@end@@*/
 
-/*@@row @prelude.u128_u64 demand=@u128_u64,@int128_conv needs=@int128_t@@*/
+/*@@row @prelude.u128_u64 demand=@u128_u64 needs=@int128_t@@*/
 #ifdef Z_INT128_NATIVE
 #define Z_U128_U64(v) ((z_u128)(uint64_t)(v))
 #else

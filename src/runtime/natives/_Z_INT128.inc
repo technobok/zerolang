@@ -5,35 +5,35 @@
    function computes on them. The emitted C is the same for every compiler: it
    is z_head.inc's preprocessor test that decides, not zc. Loaded only for
    a program that operates on either type. */
-/*@@row @prelude.u128_lo demand=@u128_lo,@int128_conv needs=@int128_t@@*/
+/*@@row @prelude.u128_lo demand=@u128_lo needs=@int128_t@@*/
 #if defined(Z_INT128_NATIVE)
 static inline uint64_t z_u128_lo(z_u128 x) { return (uint64_t)x; }
 #else
 static inline uint64_t z_u128_lo(z_u128 x) { return x.lo; }
 #endif
 /*@@end@@*/
-/*@@row @prelude.u128_hi demand=@u128_hi,@int128_conv needs=@int128_t@@*/
+/*@@row @prelude.u128_hi demand=@u128_hi needs=@int128_t@@*/
 #if defined(Z_INT128_NATIVE)
 static inline uint64_t z_u128_hi(z_u128 x) { return (uint64_t)(x >> 64); }
 #else
 static inline uint64_t z_u128_hi(z_u128 x) { return x.hi; }
 #endif
 /*@@end@@*/
-/*@@row @prelude.i128_bits demand=@i128_bits,@int128_conv needs=@int128_t@@*/
+/*@@row @prelude.i128_bits demand=@i128_bits needs=@int128_t@@*/
 #if defined(Z_INT128_NATIVE)
 static inline z_u128 z_i128_bits(z_i128 x) { return (z_u128)x; }
 #else
 static inline z_u128 z_i128_bits(z_i128 x) { z_u128 r = { x.lo, x.hi }; return r; }
 #endif
 /*@@end@@*/
-/*@@row @prelude.u128_signed demand=@u128_signed,@int128_conv needs=@int128_t@@*/
+/*@@row @prelude.u128_signed demand=@u128_signed needs=@int128_t@@*/
 #if defined(Z_INT128_NATIVE)
 static inline z_i128 z_u128_signed(z_u128 x) { return (z_i128)x; }
 #else
 static inline z_i128 z_u128_signed(z_u128 x) { z_i128 r = { x.lo, x.hi }; return r; }
 #endif
 /*@@end@@*/
-/*@@row @prelude.i128_from_i64 demand=@i128_from_i64,@int128_conv needs=@int128_t@@*/
+/*@@row @prelude.i128_from_i64 demand=@i128_from_i64 needs=@int128_t@@*/
 #if defined(Z_INT128_NATIVE)
 static inline z_i128 z_i128_from_i64(int64_t v) { return (z_i128)v; }
 #else
@@ -43,14 +43,14 @@ static inline z_i128 z_i128_from_i64(int64_t v) {
 }
 #endif
 /*@@end@@*/
-/*@@row @prelude.i128_from_u64 demand=@i128_from_u64,@int128_conv needs=@int128_t@@*/
+/*@@row @prelude.i128_from_u64 demand=@i128_from_u64 needs=@int128_t@@*/
 #if defined(Z_INT128_NATIVE)
 static inline z_i128 z_i128_from_u64(uint64_t v) { return (z_i128)v; }
 #else
 static inline z_i128 z_i128_from_u64(uint64_t v) { z_i128 r = { v, 0 }; return r; }
 #endif
 /*@@end@@*/
-/*@@row @prelude.u128_from_u64 demand=@u128_from_u64,@int128_conv needs=@int128_t@@*/
+/*@@row @prelude.u128_from_u64 demand=@u128_from_u64 needs=@int128_t@@*/
 #if defined(Z_INT128_NATIVE)
 static inline z_u128 z_u128_from_u64(uint64_t v) { return (z_u128)v; }
 #else
@@ -83,7 +83,7 @@ static inline z_u128 z_u128_add(z_u128 a, z_u128 b) {
 }
 #endif
 /*@@end@@*/
-/*@@row @prelude.u128_sub demand=@u128_sub,@int128_conv needs=@int128_t@@*/
+/*@@row @prelude.u128_sub demand=@u128_sub needs=@int128_t@@*/
 #if defined(Z_INT128_NATIVE)
 static inline z_u128 z_u128_sub(z_u128 a, z_u128 b) { return a - b; }
 #else
@@ -185,7 +185,7 @@ static inline bool z_u128_eq(z_u128 a, z_u128 b) { return a == b; }
 static inline bool z_u128_eq(z_u128 a, z_u128 b) { return a.lo == b.lo && a.hi == b.hi; }
 #endif
 /*@@end@@*/
-/*@@row @prelude.u128_lt demand=@u128_lt,@int128_conv needs=@int128_t@@*/
+/*@@row @prelude.u128_lt demand=@u128_lt needs=@int128_t@@*/
 #if defined(Z_INT128_NATIVE)
 static inline bool z_u128_lt(z_u128 a, z_u128 b) { return a < b; }
 #else
@@ -362,7 +362,7 @@ static inline bool z_i128_eq(z_i128 a, z_i128 b) { return a == b; }
 static inline bool z_i128_eq(z_i128 a, z_i128 b) { return a.lo == b.lo && a.hi == b.hi; }
 #endif
 /*@@end@@*/
-/*@@row @prelude.i128_lt demand=@i128_lt,@int128_conv needs=@int128_t@@*/
+/*@@row @prelude.i128_lt demand=@i128_lt needs=@int128_t@@*/
 #if defined(Z_INT128_NATIVE)
 static inline bool z_i128_lt(z_i128 a, z_i128 b) { return a < b; }
 #else
@@ -372,7 +372,7 @@ static inline bool z_i128_lt(z_i128 a, z_i128 b) {
 }
 #endif
 /*@@end@@*/
-/*@@row @prelude.u128_to_f64 demand=@u128_to_f64,@int128_conv needs=@int128_t@@*/
+/*@@row @prelude.u128_to_f64 demand=@u128_to_f64 needs=@int128_t@@*/
 #if defined(Z_INT128_NATIVE)
 static inline double z_u128_to_f64(z_u128 x) { return (double)x; }
 #else
@@ -381,7 +381,7 @@ static inline double z_u128_to_f64(z_u128 x) { return (double)x; }
 static inline double z_u128_to_f64(z_u128 x) { return (double)x.hi * 0x1p64 + (double)x.lo; }
 #endif
 /*@@end@@*/
-/*@@row @prelude.i128_to_f64 demand=@i128_to_f64,@int128_conv needs=@i128_bits,@i128_neg,@u128_negate,@u128_to_f64,@int128_t@@*/
+/*@@row @prelude.i128_to_f64 demand=@i128_to_f64 needs=@i128_bits,@i128_neg,@u128_negate,@u128_to_f64,@int128_t@@*/
 #if defined(Z_INT128_NATIVE)
 static inline double z_i128_to_f64(z_i128 x) { return (double)x; }
 #else
@@ -391,7 +391,7 @@ static inline double z_i128_to_f64(z_i128 x) {
 }
 #endif
 /*@@end@@*/
-/*@@row @prelude.u128_from_f64 demand=@u128_from_f64,@int128_conv needs=@int128_t@@*/
+/*@@row @prelude.u128_from_f64 demand=@u128_from_f64 needs=@int128_t@@*/
 #if defined(Z_INT128_NATIVE)
 static inline z_u128 z_u128_from_f64(double v) { return (z_u128)v; }
 #else
@@ -405,7 +405,7 @@ static inline z_u128 z_u128_from_f64(double v) {
 }
 #endif
 /*@@end@@*/
-/*@@row @prelude.i128_from_f64 demand=@i128_from_f64,@int128_conv needs=@u128_from_f64,@u128_negate,@u128_signed,@int128_t@@*/
+/*@@row @prelude.i128_from_f64 demand=@i128_from_f64 needs=@u128_from_f64,@u128_negate,@u128_signed,@int128_t@@*/
 #if defined(Z_INT128_NATIVE)
 static inline z_i128 z_i128_from_f64(double v) { return (z_i128)v; }
 #else
@@ -415,7 +415,7 @@ static inline z_i128 z_i128_from_f64(double v) {
 }
 #endif
 /*@@end@@*/
-/*@@row @prelude.u128_to_f128 demand=@u128_to_f128,@int128_conv needs=@int128_t@@*/
+/*@@row @prelude.u128_to_f128 demand=@u128_to_f128 needs=@int128_t@@*/
 #if defined(Z_INT128_NATIVE)
 #if defined(__SIZEOF_FLOAT128__)
 static inline __float128 z_u128_to_f128(z_u128 x) { return (__float128)x; }
@@ -428,7 +428,7 @@ static inline __float128 z_u128_to_f128(z_u128 x) {
 #endif
 #endif
 /*@@end@@*/
-/*@@row @prelude.i128_to_f128 demand=@i128_to_f128,@int128_conv needs=@i128_bits,@i128_neg,@u128_negate,@u128_to_f128,@int128_t@@*/
+/*@@row @prelude.i128_to_f128 demand=@i128_to_f128 needs=@i128_bits,@i128_neg,@u128_negate,@u128_to_f128,@int128_t@@*/
 #if defined(Z_INT128_NATIVE)
 #if defined(__SIZEOF_FLOAT128__)
 static inline __float128 z_i128_to_f128(z_i128 x) { return (__float128)x; }
@@ -442,7 +442,7 @@ static inline __float128 z_i128_to_f128(z_i128 x) {
 #endif
 #endif
 /*@@end@@*/
-/*@@row @prelude.u128_from_f128 demand=@u128_from_f128,@int128_conv needs=@int128_t@@*/
+/*@@row @prelude.u128_from_f128 demand=@u128_from_f128 needs=@int128_t@@*/
 #if defined(Z_INT128_NATIVE)
 #if defined(__SIZEOF_FLOAT128__)
 static inline z_u128 z_u128_from_f128(__float128 v) { return (z_u128)v; }
@@ -459,7 +459,7 @@ static inline z_u128 z_u128_from_f128(__float128 v) {
 #endif
 #endif
 /*@@end@@*/
-/*@@row @prelude.i128_from_f128 demand=@i128_from_f128,@int128_conv needs=@u128_from_f128,@u128_negate,@u128_signed,@int128_t@@*/
+/*@@row @prelude.i128_from_f128 demand=@i128_from_f128 needs=@u128_from_f128,@u128_negate,@u128_signed,@int128_t@@*/
 #if defined(Z_INT128_NATIVE)
 #if defined(__SIZEOF_FLOAT128__)
 static inline z_i128 z_i128_from_f128(__float128 v) { return (z_i128)v; }
@@ -481,11 +481,11 @@ static inline int32_t z_u128_cmp(z_u128 a, z_u128 b) { return z_u128_lt(b, a) - 
 /*@@row @prelude.i128_cmp demand=@i128_cmp needs=@i128_lt,@int128_t@@*/
 static inline int32_t z_i128_cmp(z_i128 a, z_i128 b) { return z_i128_lt(b, a) - z_i128_lt(a, b); }
 /*@@end@@*/
-/*@@row @prelude.i128_is_neg demand=@i128_is_neg,@int128_conv needs=@i128_from_i64,@i128_lt,@int128_t@@*/
+/*@@row @prelude.i128_is_neg demand=@i128_is_neg needs=@i128_from_i64,@i128_lt,@int128_t@@*/
 static inline bool z_i128_is_neg(z_i128 a) { return z_i128_lt(a, z_i128_from_i64(0)); }
 /*@@end@@*/
 
-/*@@row @prelude.u128_span demand=@u128_span,@int128_conv needs=@u128_hi,@u128_lo,@span64,@int128_t@@*/
+/*@@row @prelude.u128_span demand=@u128_span needs=@u128_hi,@u128_lo,@span64,@int128_t@@*/
 /* z_span64 for a 128-bit magnitude: the bits from its highest set bit down to
    its lowest, both counted; 0 for 0 */
 static inline int z_u128_span(z_u128 m) {
