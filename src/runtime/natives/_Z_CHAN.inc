@@ -1,3 +1,4 @@
+/*@@row @prelude.chan demand=@chan needs=@cond_t,@mutex_t@@*/
 /* the block a channel's two ends share (sync.z Receiver / Sender): its values,
    each `elemSize` bytes, in a ring under one lock, with how many Senders live
    and whether the Receiver does. The typed ends are thin wrappers that pass
@@ -17,7 +18,9 @@ typedef struct z_chan {
     uint64_t senders;
     bool receiverAlive;
 } z_chan;
+/*@@end@@*/
 
+/*@@row @prelude.chan_new demand=@chan_new needs=@chan,@cond_init,@mutex_init,@panic,@xmalloc@@*/
 static z_chan* z_chan_new(size_t elemSize, void (*destroyElem)(void*), uint64_t capacity) {
     z_chan* b = (z_chan*)z_xmalloc(sizeof(z_chan));
     if (z_mutex_init(&b->m) != 0 || z_cond_init(&b->notEmpty) != 0 || z_cond_init(&b->notFull) != 0) {
@@ -34,7 +37,9 @@ static z_chan* z_chan_new(size_t elemSize, void (*destroyElem)(void*), uint64_t 
     b->receiverAlive = true;
     return b;
 }
+/*@@end@@*/
 
+/*@@row @prelude.chan_free demand=@chan_free needs=@chan,@cond_destroy,@mutex_destroy@@*/
 /* the block, once neither end holds it; the lock is not held */
 static void z_chan_free(z_chan* b) {
     free(b->ring);
@@ -43,7 +48,9 @@ static void z_chan_free(z_chan* b) {
     z_mutex_destroy(&b->m);
     free(b);
 }
+/*@@end@@*/
 
+/*@@row @prelude.chan_grow demand=@chan_grow needs=@chan,@xmalloc@@*/
 /* the ring, twice as large, its values in order from the start; the lock is
    held */
 static void z_chan_grow(z_chan* b) {
@@ -57,13 +64,17 @@ static void z_chan_grow(z_chan* b) {
     b->size = n;
     b->head = 0;
 }
+/*@@end@@*/
 
+/*@@row @prelude.chan_add_sender demand=@chan_add_sender needs=@chan,@mutex_lock,@mutex_unlock@@*/
 static void z_chan_add_sender(z_chan* b) {
     z_mutex_lock(&b->m);
     b->senders++;
     z_mutex_unlock(&b->m);
 }
+/*@@end@@*/
 
+/*@@row @prelude.chan_drop_sender demand=@chan_drop_sender needs=@chan,@chan_free,@cond_broadcast,@mutex_lock,@mutex_unlock@@*/
 /* a Sender ends: the last one wakes a receiver waiting for a value that can
    no longer come */
 static void z_chan_drop_sender(z_chan* b) {
@@ -75,7 +86,9 @@ static void z_chan_drop_sender(z_chan* b) {
     z_mutex_unlock(&b->m);
     if (gone) z_chan_free(b);
 }
+/*@@end@@*/
 
+/*@@row @prelude.chan_drop_receiver demand=@chan_drop_receiver needs=@chan,@chan_free,@cond_broadcast,@mutex_lock,@mutex_unlock@@*/
 /* the Receiver ends: what it never took is destroyed, and a sender waiting for
    room is woken to learn nothing will read it */
 static void z_chan_drop_receiver(z_chan* b) {
@@ -88,7 +101,9 @@ static void z_chan_drop_receiver(z_chan* b) {
     z_mutex_unlock(&b->m);
     if (gone) z_chan_free(b);
 }
+/*@@end@@*/
 
+/*@@row @prelude.chan_send demand=@chan_send needs=@chan,@chan_grow,@cond_signal,@cond_wait,@mutex_lock,@mutex_unlock@@*/
 /* move the value at `value` in, waiting while the ring is full; false, the
    value destroyed here, once the Receiver is gone */
 static bool z_chan_send(z_chan* b, void* value) {
@@ -106,7 +121,9 @@ static bool z_chan_send(z_chan* b, void* value) {
     z_mutex_unlock(&b->m);
     return true;
 }
+/*@@end@@*/
 
+/*@@row @prelude.chan_receive demand=@chan_receive needs=@chan,@cond_signal,@cond_wait,@mutex_lock,@mutex_unlock@@*/
 /* the oldest value, moved to `out`: true when there was one. `wait` waits for
    one while a Sender lives; without it an empty ring answers false at once */
 static bool z_chan_receive(z_chan* b, void* out, bool wait) {
@@ -123,3 +140,4 @@ static bool z_chan_receive(z_chan* b, void* out, bool wait) {
     z_mutex_unlock(&b->m);
     return true;
 }
+/*@@end@@*/
