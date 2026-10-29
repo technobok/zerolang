@@ -42483,7 +42483,7 @@ templateParamArgs: function {
 # native class, from the C template its row names: @@NAME@@ is the C name, and
 # for each type parameter P, @@P@@ is the C type of the argument as a slot holds
 # it and @@P_DESTROY@@ the name of a function `void (P* x)` destroying one in
-# place, written ahead of the template; @@P0@@ / @@P0_DESTROY@@ name the same
+# place, written ahead of the template where a kept section names it; @@P0@@ / @@P0_DESTROY@@ name the same
 # by position. A runtime fragment's own `@Name@` holes
 # fill as a fragment's do.
 emitTmplClassMono: function {
@@ -42510,6 +42510,10 @@ emitTmplClassMono: function {
     pNames: List String
     pTids: ListVal ztypes.tid
     templateParamArgs :ast :symtab template: tpl mono: monoId names: pNames tids: pTids
+    # each parameter's in-place destructor, written only where a kept section
+    # names it (below)
+    dfns: List String
+    dts: ListVal ztypes.tid
     k: u64
     for k < pNames.length loop {
         pn: (pNames.get i: k).copy
@@ -42518,11 +42522,8 @@ emitTmplClassMono: function {
         sc: ctypeOrI64 s: sc0.stringView
         t = applyTmpl text: t key: pn.stringView val: sc.stringView
         dfn: "z_\{nm}_destroy_\{pn}"
-        dl: destroyLineC :symtab :ctx tid: at nm: "(*x)" ind: "    "
-        buf.append "static void \{dfn}("
-        buf.append "\{sc}* x) {\n"
-        buf.append dl
-        buf.append "    (void)x;\n}\n"
+        dfns.append dfn.copy
+        dts.append at
         dk: "\{pn}_DESTROY"
         t = applyTmpl text: t key: dk.stringView val: dfn.stringView
         # by position too, so one template serves classes that name their
@@ -42549,6 +42550,20 @@ emitTmplClassMono: function {
     filled: fillFragmentHoles :ast :symtab :ctx text: made.take path: p.stringView
     # the members written C calls, and those they need (sectionedText)
     kept: sectionedText :ctx mono: monoId text: filled.stringView
+    di: u64
+    for di < dfns.length loop {
+        dn: (dfns.get i: di).copy
+        dat: dts.get i: di
+        di = di + 1
+        if (kept.stringView.contains needle: dn).not then continue
+        dsc0: slotCType :ast :symtab :ctx tid: dat
+        dsc: ctypeOrI64 s: dsc0.stringView
+        dl: destroyLineC :symtab :ctx tid: dat nm: "(*x)" ind: "    "
+        buf.append "static void \{dn}("
+        buf.append "\{dsc}* x) {\n"
+        buf.append dl
+        buf.append "    (void)x;\n}\n"
+    }
     splitTmplText :ctx text: kept.stringView :buf
 }
 
