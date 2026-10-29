@@ -14,57 +14,240 @@
 #include <string.h>
 #include <math.h>
 /*@@row @prelude.quadmath demand=@quadmath@@*/
-/* libquadmath, which f128 calls: written only where written C calls it */
+/* libquadmath, which f128 calls: written only where written C calls it.
+   GCC has its header; clang has __float128 without it, so each symbol the
+   runtime and the f128 rows call is declared on its own, below. */
 #if defined(__SIZEOF_FLOAT128__) && !defined(__clang__)
 #include <quadmath.h>
-#elif defined(__SIZEOF_FLOAT128__)
-/* clang: __float128 without GCC's quadmath.h; declare each libquadmath
-   symbol the runtime and the f128 rows call. */
+#endif
+/*@@end@@*/
+/*@@row @prelude.fmodq demand=@fmodq needs=@quadmath@@*/
+#if defined(__SIZEOF_FLOAT128__) && defined(__clang__)
 extern __float128 fmodq(__float128 x, __float128 y);
+#endif
+/*@@end@@*/
+/*@@row @prelude.strtoflt128 demand=@strtoflt128 needs=@quadmath@@*/
+#if defined(__SIZEOF_FLOAT128__) && defined(__clang__)
 extern __float128 strtoflt128(const char *s, char **sp);
+#endif
+/*@@end@@*/
+/*@@row @prelude.quadmath_snprintf demand=@quadmath_snprintf needs=@quadmath@@*/
+#if defined(__SIZEOF_FLOAT128__) && defined(__clang__)
 extern int quadmath_snprintf(char *s, size_t size, const char *format, ...);
+#endif
+/*@@end@@*/
+/*@@row @prelude.cbrtq demand=@cbrtq needs=@quadmath@@*/
+#if defined(__SIZEOF_FLOAT128__) && defined(__clang__)
 extern __float128 cbrtq(__float128 x);
+#endif
+/*@@end@@*/
+/*@@row @prelude.hypotq demand=@hypotq needs=@quadmath@@*/
+#if defined(__SIZEOF_FLOAT128__) && defined(__clang__)
 extern __float128 hypotq(__float128 x, __float128 y);
+#endif
+/*@@end@@*/
+/*@@row @prelude.powq demand=@powq needs=@quadmath@@*/
+#if defined(__SIZEOF_FLOAT128__) && defined(__clang__)
 extern __float128 powq(__float128 x, __float128 y);
+#endif
+/*@@end@@*/
+/*@@row @prelude.expq demand=@expq needs=@quadmath@@*/
+#if defined(__SIZEOF_FLOAT128__) && defined(__clang__)
 extern __float128 expq(__float128 x);
+#endif
+/*@@end@@*/
+/*@@row @prelude.exp2q demand=@exp2q needs=@quadmath@@*/
+#if defined(__SIZEOF_FLOAT128__) && defined(__clang__)
 extern __float128 exp2q(__float128 x);
+#endif
+/*@@end@@*/
+/*@@row @prelude.expm1q demand=@expm1q needs=@quadmath@@*/
+#if defined(__SIZEOF_FLOAT128__) && defined(__clang__)
 extern __float128 expm1q(__float128 x);
+#endif
+/*@@end@@*/
+/*@@row @prelude.logq demand=@logq needs=@quadmath@@*/
+#if defined(__SIZEOF_FLOAT128__) && defined(__clang__)
 extern __float128 logq(__float128 x);
+#endif
+/*@@end@@*/
+/*@@row @prelude.log2q demand=@log2q needs=@quadmath@@*/
+#if defined(__SIZEOF_FLOAT128__) && defined(__clang__)
 extern __float128 log2q(__float128 x);
+#endif
+/*@@end@@*/
+/*@@row @prelude.log10q demand=@log10q needs=@quadmath@@*/
+#if defined(__SIZEOF_FLOAT128__) && defined(__clang__)
 extern __float128 log10q(__float128 x);
+#endif
+/*@@end@@*/
+/*@@row @prelude.log1pq demand=@log1pq needs=@quadmath@@*/
+#if defined(__SIZEOF_FLOAT128__) && defined(__clang__)
 extern __float128 log1pq(__float128 x);
+#endif
+/*@@end@@*/
+/*@@row @prelude.sinq demand=@sinq needs=@quadmath@@*/
+#if defined(__SIZEOF_FLOAT128__) && defined(__clang__)
 extern __float128 sinq(__float128 x);
+#endif
+/*@@end@@*/
+/*@@row @prelude.cosq demand=@cosq needs=@quadmath@@*/
+#if defined(__SIZEOF_FLOAT128__) && defined(__clang__)
 extern __float128 cosq(__float128 x);
+#endif
+/*@@end@@*/
+/*@@row @prelude.tanq demand=@tanq needs=@quadmath@@*/
+#if defined(__SIZEOF_FLOAT128__) && defined(__clang__)
 extern __float128 tanq(__float128 x);
+#endif
+/*@@end@@*/
+/*@@row @prelude.asinq demand=@asinq needs=@quadmath@@*/
+#if defined(__SIZEOF_FLOAT128__) && defined(__clang__)
 extern __float128 asinq(__float128 x);
+#endif
+/*@@end@@*/
+/*@@row @prelude.acosq demand=@acosq needs=@quadmath@@*/
+#if defined(__SIZEOF_FLOAT128__) && defined(__clang__)
 extern __float128 acosq(__float128 x);
+#endif
+/*@@end@@*/
+/*@@row @prelude.atanq demand=@atanq needs=@quadmath@@*/
+#if defined(__SIZEOF_FLOAT128__) && defined(__clang__)
 extern __float128 atanq(__float128 x);
+#endif
+/*@@end@@*/
+/*@@row @prelude.atan2q demand=@atan2q needs=@quadmath@@*/
+#if defined(__SIZEOF_FLOAT128__) && defined(__clang__)
 extern __float128 atan2q(__float128 x, __float128 y);
+#endif
+/*@@end@@*/
+/*@@row @prelude.sinhq demand=@sinhq needs=@quadmath@@*/
+#if defined(__SIZEOF_FLOAT128__) && defined(__clang__)
 extern __float128 sinhq(__float128 x);
+#endif
+/*@@end@@*/
+/*@@row @prelude.coshq demand=@coshq needs=@quadmath@@*/
+#if defined(__SIZEOF_FLOAT128__) && defined(__clang__)
 extern __float128 coshq(__float128 x);
+#endif
+/*@@end@@*/
+/*@@row @prelude.tanhq demand=@tanhq needs=@quadmath@@*/
+#if defined(__SIZEOF_FLOAT128__) && defined(__clang__)
 extern __float128 tanhq(__float128 x);
+#endif
+/*@@end@@*/
+/*@@row @prelude.asinhq demand=@asinhq needs=@quadmath@@*/
+#if defined(__SIZEOF_FLOAT128__) && defined(__clang__)
 extern __float128 asinhq(__float128 x);
+#endif
+/*@@end@@*/
+/*@@row @prelude.acoshq demand=@acoshq needs=@quadmath@@*/
+#if defined(__SIZEOF_FLOAT128__) && defined(__clang__)
 extern __float128 acoshq(__float128 x);
+#endif
+/*@@end@@*/
+/*@@row @prelude.atanhq demand=@atanhq needs=@quadmath@@*/
+#if defined(__SIZEOF_FLOAT128__) && defined(__clang__)
 extern __float128 atanhq(__float128 x);
+#endif
+/*@@end@@*/
+/*@@row @prelude.erfq demand=@erfq needs=@quadmath@@*/
+#if defined(__SIZEOF_FLOAT128__) && defined(__clang__)
 extern __float128 erfq(__float128 x);
+#endif
+/*@@end@@*/
+/*@@row @prelude.erfcq demand=@erfcq needs=@quadmath@@*/
+#if defined(__SIZEOF_FLOAT128__) && defined(__clang__)
 extern __float128 erfcq(__float128 x);
+#endif
+/*@@end@@*/
+/*@@row @prelude.tgammaq demand=@tgammaq needs=@quadmath@@*/
+#if defined(__SIZEOF_FLOAT128__) && defined(__clang__)
 extern __float128 tgammaq(__float128 x);
+#endif
+/*@@end@@*/
+/*@@row @prelude.lgammaq demand=@lgammaq needs=@quadmath@@*/
+#if defined(__SIZEOF_FLOAT128__) && defined(__clang__)
 extern __float128 lgammaq(__float128 x);
+#endif
+/*@@end@@*/
+/*@@row @prelude.floorq demand=@floorq needs=@quadmath@@*/
+#if defined(__SIZEOF_FLOAT128__) && defined(__clang__)
 extern __float128 floorq(__float128 x);
+#endif
+/*@@end@@*/
+/*@@row @prelude.ceilq demand=@ceilq needs=@quadmath@@*/
+#if defined(__SIZEOF_FLOAT128__) && defined(__clang__)
 extern __float128 ceilq(__float128 x);
+#endif
+/*@@end@@*/
+/*@@row @prelude.truncq demand=@truncq needs=@quadmath@@*/
+#if defined(__SIZEOF_FLOAT128__) && defined(__clang__)
 extern __float128 truncq(__float128 x);
+#endif
+/*@@end@@*/
+/*@@row @prelude.roundq demand=@roundq needs=@quadmath@@*/
+#if defined(__SIZEOF_FLOAT128__) && defined(__clang__)
 extern __float128 roundq(__float128 x);
+#endif
+/*@@end@@*/
+/*@@row @prelude.nearbyintq demand=@nearbyintq needs=@quadmath@@*/
+#if defined(__SIZEOF_FLOAT128__) && defined(__clang__)
 extern __float128 nearbyintq(__float128 x);
+#endif
+/*@@end@@*/
+/*@@row @prelude.fabsq demand=@fabsq needs=@quadmath@@*/
+#if defined(__SIZEOF_FLOAT128__) && defined(__clang__)
 extern __float128 fabsq(__float128 x);
+#endif
+/*@@end@@*/
+/*@@row @prelude.copysignq demand=@copysignq needs=@quadmath@@*/
+#if defined(__SIZEOF_FLOAT128__) && defined(__clang__)
 extern __float128 copysignq(__float128 x, __float128 y);
+#endif
+/*@@end@@*/
+/*@@row @prelude.fmaq demand=@fmaq needs=@quadmath@@*/
+#if defined(__SIZEOF_FLOAT128__) && defined(__clang__)
 extern __float128 fmaq(__float128 x, __float128 y, __float128 z);
+#endif
+/*@@end@@*/
+/*@@row @prelude.fminq demand=@fminq needs=@quadmath@@*/
+#if defined(__SIZEOF_FLOAT128__) && defined(__clang__)
 extern __float128 fminq(__float128 x, __float128 y);
+#endif
+/*@@end@@*/
+/*@@row @prelude.fmaxq demand=@fmaxq needs=@quadmath@@*/
+#if defined(__SIZEOF_FLOAT128__) && defined(__clang__)
 extern __float128 fmaxq(__float128 x, __float128 y);
+#endif
+/*@@end@@*/
+/*@@row @prelude.isnanq demand=@isnanq needs=@quadmath@@*/
+#if defined(__SIZEOF_FLOAT128__) && defined(__clang__)
 extern int isnanq(__float128 x);
+#endif
+/*@@end@@*/
+/*@@row @prelude.isinfq demand=@isinfq needs=@quadmath@@*/
+#if defined(__SIZEOF_FLOAT128__) && defined(__clang__)
 extern int isinfq(__float128 x);
+#endif
+/*@@end@@*/
+/*@@row @prelude.finiteq demand=@finiteq needs=@quadmath@@*/
+#if defined(__SIZEOF_FLOAT128__) && defined(__clang__)
 extern int finiteq(__float128 x);
+#endif
+/*@@end@@*/
+/*@@row @prelude.signbitq demand=@signbitq needs=@quadmath@@*/
+#if defined(__SIZEOF_FLOAT128__) && defined(__clang__)
 extern int signbitq(__float128 x);
+#endif
+/*@@end@@*/
+/*@@row @prelude.scalbnq demand=@scalbnq needs=@quadmath@@*/
+#if defined(__SIZEOF_FLOAT128__) && defined(__clang__)
 extern __float128 scalbnq(__float128 x, int n);
+#endif
+/*@@end@@*/
+/*@@row @prelude.ilogbq demand=@ilogbq needs=@quadmath@@*/
+#if defined(__SIZEOF_FLOAT128__) && defined(__clang__)
 extern int ilogbq(__float128 x);
 #endif
 /*@@end@@*/

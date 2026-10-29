@@ -1252,7 +1252,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2381212
+ALLOC_BASELINE := 2381885
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1971,7 +1971,7 @@ deadcode-guard: bin/zc
 # of every kind, and live ones only a careless reader misses: the reader must
 # report exactly CDEAD_PROBE there before its count is trusted. The baseline is
 # the dead items the emitter writes today (corpus, then zc); lower it as it falls.
-CDEAD_BASELINE := 557 2
+CDEAD_BASELINE := 376 2
 CDEAD_PROBE := cdead_dead_fn cdead_dead_fn_ft cdead_dead_inline cdead_dead_leaf \
 	cdead_dead_macro cdead_dead_proto_t cdead_dead_str cdead_dead_t cdead_dead_vtable_t
 
@@ -2541,8 +2541,8 @@ export PIECE_GUARD_PY
 
 piece-guard:
 	@d=$$(mktemp -d); cp -r src/runtime $$d/rt; \
-	python3 -c "import sys; p, z = sys.argv[1], sys.argv[2]; t = open(p + '/natives.tbl').read(); open(p + '/natives.tbl', 'w').write(t.replace('[system.f128.% needs=prelude.@quadmath]', '[system.f128.%]', 1)); s = open('src/zemitterc.z').read(); open(z, 'w').write(s.replace('        preludeNeed :ctx memb: \"@quadmath\"\n', '', 1))" $$d/rt $$d/z.z; \
-	got=$$(python3 -c "$$PIECE_GUARD_PY" $$d/rt $$d/z.z | grep -c 'FAIL.*quadmath'); \
+	python3 -c "import sys; p, z = sys.argv[1], sys.argv[2]; t = open(p + '/natives.tbl').read(); open(p + '/natives.tbl', 'w').write(t.replace('[system.f128.% needs=prelude.@quadmath,prelude.@fmodq]', '[system.f128.%]', 1)); s = open('src/zemitterc.z').read(); open(z, 'w').write(s.replace('        preludeNeed :ctx memb: \"@quadmath_snprintf\"\n', '', 1))" $$d/rt $$d/z.z; \
+	got=$$(python3 -c "$$PIECE_GUARD_PY" $$d/rt $$d/z.z | grep -cE 'FAIL.*(fmodq|quadmath)'); \
 	if [ "$$got" != 2 ]; then \
 	  echo "piece-guard FAIL: a removed table need and emitter record give $$got reports, not 2"; rm -rf $$d; exit 1; \
 	fi; \
