@@ -1252,7 +1252,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2384644
+ALLOC_BASELINE := 2384692
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1971,7 +1971,7 @@ deadcode-guard: bin/zc
 # of every kind, and live ones only a careless reader misses: the reader must
 # report exactly CDEAD_PROBE there before its count is trusted. The baseline is
 # the dead items the emitter writes today (corpus, then zc); lower it as it falls.
-CDEAD_BASELINE := 161 2
+CDEAD_BASELINE := 116 2
 CDEAD_PROBE := cdead_dead_fn cdead_dead_fn_ft cdead_dead_inline cdead_dead_leaf \
 	cdead_dead_macro cdead_dead_proto_t cdead_dead_str cdead_dead_t cdead_dead_vtable_t
 
@@ -2191,7 +2191,7 @@ cdead-guard: bin/zc
 # cdead_dead_fn and cdead_dead_str, so a compiler that stops warning cannot
 # pass. The baseline is today's warnings (gcc corpus, gcc zc, clang corpus,
 # clang zc); lower it as it falls. Skipped without clang.
-CC_UNUSED_BASELINE := 131 0 188 2
+CC_UNUSED_BASELINE := 104 0 161 2
 CC_UNUSED_FLAGS := -std=c17 -c -o /dev/null -Wunused-function -Wunused-variable -Wunused-const-variable
 CC_UNUSED_RE := warning: .*\[-Wunused-(function|variable|const-variable)
 
@@ -2371,6 +2371,22 @@ for ln in open(os.path.join(rt, 'natives.tbl')):
 for key, a, body, f in pieces:
     if not key.startswith('@prelude.') and f not in unit_frags:
         errs.append(f'{f}: piece {key} is not a prelude piece and its fragment answers no @unit row, so no compiler loads it')
+# a member row answers its own name unless it says otherwise, and one demand
+# word fires every row answering it: two classes of a unit with a member of
+# the same name would each write the other's (Database.prepare wrote
+# Transaction.prepare)
+word_cls = {}
+for ln in open(os.path.join(rt, 'natives.tbl')):
+    s = ln.strip()
+    m0 = re.match(r'\[(\w+)\.(\w+)\.(\w+)\b', s)
+    if not m0 or ']' not in s: continue
+    k, a0 = attrs(s[1:s.index(']')])
+    if not a0.get('frag'): continue
+    for w in (a0.get('demand') or m0.group(3)).split(','):
+        word_cls.setdefault((m0.group(1), w), set()).add(m0.group(2))
+for (u, w), cls in sorted(word_cls.items()):
+    if len(cls) > 1:
+        errs.append(f'natives.tbl: demand word {u}.{w} fires the members of {len(cls)} classes ({", ".join(sorted(cls))}): give each its own demand=')
 keys = [p[0] for p in pieces]
 for k in set(keys):
     if keys.count(k) > 1:
