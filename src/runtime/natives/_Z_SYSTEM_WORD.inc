@@ -5,18 +5,25 @@
    portable form, which is what tcc runs. Defining Z_WORD_PORTABLE
    (-DZ_WORD_PORTABLE) takes the portable forms under any compiler, which is
    how make bench-math sets the two tiers side by side. */
+/*@@row @system.word_carry_builtins demand=@word_carry_builtins@@*/
 #if defined(__has_builtin) && !defined(Z_WORD_PORTABLE)
 #if __has_builtin(__builtin_addcll) && __has_builtin(__builtin_subcll)
 #define Z_WORD_CARRY_BUILTINS 1
 #endif
 #endif
+/*@@end@@*/
+/*@@row @system.word_msvc_x64 demand=@word_msvc_x64@@*/
 #if defined(_MSC_VER) && !defined(__clang__) && defined(_M_X64) && !defined(Z_WORD_PORTABLE)
 #define Z_WORD_MSVC_X64 1
 #endif
+/*@@end@@*/
+/*@@row @system.word_u128 demand=@word_u128@@*/
 #if defined(__SIZEOF_INT128__) && !defined(Z_WORD_PORTABLE)
 __extension__ typedef unsigned __int128 z_word_u128;
 #endif
+/*@@end@@*/
 
+/*@@row @system.word_addc demand=@word_addc needs=@word_carry_builtins,@word_msvc_x64@@*/
 /* a + b + cin, and the carry out of it in *cout. cin is 0 or 1. */
 static inline uint64_t z_word_addc(uint64_t a, uint64_t b, uint64_t cin, uint64_t* cout) {
 #if defined(Z_WORD_CARRY_BUILTINS)
@@ -35,7 +42,9 @@ static inline uint64_t z_word_addc(uint64_t a, uint64_t b, uint64_t cin, uint64_
     return r;
 #endif
 }
+/*@@end@@*/
 
+/*@@row @system.word_subb demand=@word_subb needs=@word_carry_builtins,@word_msvc_x64@@*/
 /* a - b - bin, and the borrow out of it in *bout. bin is 0 or 1. */
 static inline uint64_t z_word_subb(uint64_t a, uint64_t b, uint64_t bin, uint64_t* bout) {
 #if defined(Z_WORD_CARRY_BUILTINS)
@@ -54,7 +63,9 @@ static inline uint64_t z_word_subb(uint64_t a, uint64_t b, uint64_t bin, uint64_
     return r;
 #endif
 }
+/*@@end@@*/
 
+/*@@row @system.word_divwide demand=@word_divwide needs=prelude.@clz64,prelude.@panic,@word_u128,@word_msvc_x64@@*/
 /* (hi, lo) / d, the remainder in *rem. The quotient fits a word only when
    hi < d, and a zero d has none: both panic. The portable form is long
    division in 32-bit digits: d is shifted until its top bit is set, so each
@@ -101,3 +112,4 @@ static uint64_t z_word_divwide(uint64_t hi, uint64_t lo, uint64_t d, uint64_t* r
     return q1 * b + q0;
 #endif
 }
+/*@@end@@*/
