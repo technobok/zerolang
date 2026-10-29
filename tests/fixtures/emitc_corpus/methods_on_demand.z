@@ -1,0 +1,87 @@
+# A method is written only where written C calls it, as a function is. A range
+# loop is lowered to a counted C `for`, so `upto`, `downto`, `times` and the
+# range's `call` are written for none of these loops, though the checker checks
+# them. The methods only generated C calls are written where it calls them:
+# the `==` of a part a generated `_eq` compares, a Set key's `hash` and `==`,
+# the method a protocol box's vtable calls, a generator's `call`, an operator
+# and a variant's method.
+Inner: record {
+    k: i64
+} as {
+    ==: function {:this rhs: Inner} out bool is {
+        return this.k == rhs.k
+    }
+}
+
+Outer: record {
+    a: Inner
+    b: i64
+}
+
+Key: record {
+    n: u64
+} as {
+    hash: function {t: this.view} out u64 is {
+        return t.n * 31
+    }
+    ==: function {t: this.view rhs: Key} out bool is {
+        return t.n == rhs.n
+    }
+}
+
+Sized: protocol {
+    size: function {t: this.view} out i64
+}
+
+Box2: record {
+    w: i64
+    h: i64
+} as {
+    :Sized
+    size: function {t: this.view} out i64 is {
+        return t.w * t.h
+    }
+    +: function {t: this.view rhs: Box2} out Box2 is {
+        return (Box2 w: t.w + rhs.w h: t.h + rhs.h)
+    }
+}
+
+Pair: generator { a: i64 b: i64 } as {
+    call: function out i64 is {
+        yield this.a
+        yield this.b
+    }
+}
+
+shape: variant {
+    dot: null
+    line: i64
+} as {
+    len: function {:this} out i64 is {
+        if this.dot then return 0
+        return 4
+    }
+}
+
+area: function {s: Sized} out i64 is {
+    return s.size
+}
+
+main: function is {
+    total: i64
+    for each i: (0.upto to: 3) loop total = total + i
+    for each i: (3.downto to: 0) loop total = total + i
+    for each i: 4.times loop total = total + 1
+    x: Outer a: (Inner k: 1) b: 2
+    y: Outer a: (Inner k: 1) b: 2
+    if x == y then print "outer equal"
+    ks: SetVal Key
+    ks.add item: (Key n: 5)
+    if (ks.has item: (Key n: 5)) then print "has key"
+    b: Box2 w: 2 h: 3
+    c: b + b
+    print "\{area s: c} \{total}"
+    for each v: (Pair a: 7 b: 8) loop print "\{v}"
+    l: shape.line 4
+    print "\{l.len}"
+}

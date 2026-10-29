@@ -15127,7 +15127,7 @@ emitCrossUnitFnCall: function {
 # `unit.Type.create` written as a dotted path (not a call): emit `<Type>_create()`
 # (the user create, no receiver). "" when not such a 3-segment bare create.
 emitCrossUnitBareCreate: function {
-    ctx: Ctx.view
+    ctx: Ctx
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     parent: astnode.view
@@ -15160,6 +15160,7 @@ emitCrossUnitBareCreate: function {
         cco
     ) case some then {
         if (symtab.reg.typetypeOf typeId: cco) == ztypes.ztypetype.functionType then {
+            noteFnUse :ctx tid: cco
             ccb: ctxCname :ctx tid: cco
             return (stating :facts from: callFacts text: "\{ccb}()")
         }
@@ -18497,6 +18498,7 @@ autoCallCname: function {
         d: ztypes.tid.zero
     )
     if oc == method then return (objIterCallC :symtab :ctx cco: method itid: owner)
+    noteFnUse :ctx tid: method
     return (ctxCname :ctx tid: method)
 }
 
@@ -28697,6 +28699,7 @@ objIterCallC: function {
     callC: String
     isUserWritten: (fnIsNativeId :symtab fid: cco).not
     if isUserWritten then {
+        noteFnUse :ctx tid: cco
         callC = ctxCname :ctx tid: cco
     } else {
         itc: ctxCname :ctx tid: itid
@@ -33959,18 +33962,32 @@ drainReach: function {symtab: zenv.ZSymbolTable.view ctx: Ctx todo: ListVal ztyp
         t: todo.pop
         if (ctx.reachedTypes.has item: t) then continue
         ctx.reachedTypes.add item: t
-        next: ListVal ztypes.tid
-        typeReachEdges :symtab :ctx tid: t acc: next
-        for each n: next loop {
-            # an ordinal variant is spelled as its C scalar wherever another
-            # type holds one: it is reached only by its own name or its tag
-            # constants
-            if n.isZero.not when (ctx.reachedTypes.has item: n).not when (isOrdinalVariant
-                :symtab
-                tid: n
-            ).not then todo.append n
-        }
+        at: todo.length
+        typeReachEdges :symtab :ctx tid: t acc: todo
+        keepReachEdges :symtab reached: ctx.reachedTypes :todo from: at
     }
+}
+
+# keepReachEdges -- drop from `todo`, past `from`, the edges a closure does not
+# follow: none, one already reached, and an ordinal variant, which is spelled as
+# its C scalar wherever another type holds one: it is reached only by its own
+# name or its tag constants.
+keepReachEdges: function {
+    symtab: zenv.ZSymbolTable.view
+    reached: (IdSet ztypes.tid).view
+    todo: ListVal ztypes.tid
+    from: u64
+} is {
+    w: from
+    k: from
+    for k < todo.length loop {
+        n: todo.get i: k
+        k = k + 1
+        if n.isZero or (reached.has item: n) or (isOrdinalVariant :symtab tid: n) then continue
+        todo.set i: w val: n
+        w = w + 1
+    }
+    for todo.length > w loop todo.pop
 }
 
 # typeReached -- the type is one the program's C spells, so it is written.
@@ -33997,15 +34014,17 @@ typeReachEdges: function {
     # a typedef of an aggregate is spelled as the aggregate (typeRefC)
     ch: chaseAggregateTypedef :symtab :ctx :tid
     if ch != tid then acc.append ch
-    memberSigReachEdges :symtab :tid :acc
+    memberSigReachEdges :symtab :ctx :tid :acc
     containerReachEdges :symtab :ctx :tid :acc
 }
 
 # memberSigReachEdges -- the signature of each member written beside a type:
 # one a use site resolved, an iterator's `call`, which its cursor is written
 # with, and every member of a protocol or facet, whose vtable lists them all.
+# A method with a body is a function job: written only where C calls it, and
+# then its own C spells its signature.
 memberSigReachEdges: function {
-    symtab: zenv.ZSymbolTable.view tid: ztypes.tid acc: ListVal ztypes.tid
+    symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.tid acc: ListVal ztypes.tid
 } is {
     names: ListVal zast.nameid
     allMembers: (symtab.reg.typetypeOf typeId: tid).isInterface
@@ -34015,6 +34034,7 @@ memberSigReachEdges: function {
         slot = slot + 1
         if rw.keep.not then continue
         if (symtab.reg.typetypeOf typeId: rw.tid) != ztypes.ztypetype.functionType then continue
+        if (ctx.fnJobAt.get key: rw.tid).some then continue
         if allMembers.not when rw.name != zast.wellKnown.slot.wkCall when (monoMemberUsed
             :symtab
             monoId: tid
@@ -34022,12 +34042,15 @@ memberSigReachEdges: function {
         ).not then {
             continue
         }
-        sig: ListVal ztypes.tid
-        sig.append (symtab.reg.returnTypeOf tid: rw.tid)
+        at: acc.length
+        acc.append (symtab.reg.returnTypeOf tid: rw.tid)
         # the return a vtable slot or a wrapper is written with (methodRetCtype)
-        sig.append ((ztypecheck.methodReturnOf st: symtab mid: rw.tid).or d: ztypes.tid.zero)
-        recFieldIds :symtab tid: rw.tid ids: sig nameIds: names
-        for each st: sig loop acc.append (instTypeOf :symtab inst: tid tid: st)
+        acc.append ((ztypecheck.methodReturnOf st: symtab mid: rw.tid).or d: ztypes.tid.zero)
+        recFieldIds :symtab tid: rw.tid ids: acc nameIds: names
+        for at < acc.length loop {
+            acc.set i: at val: (instTypeOf :symtab inst: tid tid: (acc.get i: at))
+            at = at + 1
+        }
     }
 }
 
@@ -34807,26 +34830,250 @@ planUnitNestedMethods: function {
     inst: io.or d: ztypes.tid.zero
     if inst.isZero then return
     if (symtab.reg.genericOriginOf tid: inst).isZero.not then {
-        planMonoMethods :ast :ctx span: op.isItems monoId: inst
-        planMonoMethods :ast :ctx span: op.asItems monoId: inst
+        planMonoMethods :ast :symtab :ctx span: op.isItems monoId: inst withMethods: false
+        planMonoMethods :ast :symtab :ctx span: op.asItems monoId: inst withMethods: false
         return
     }
     if (symtab.reg.isGenericOf tid: inst).not then return
     # a type with parameters of its own: each instance of it `t` has
     for each ci: (ztypecheck.instancesWithin st: symtab owner: t tplId: inst) loop {
-        planMonoMethods :ast :ctx span: op.isItems monoId: ci
-        planMonoMethods :ast :ctx span: op.asItems monoId: ci
+        planMonoMethods :ast :symtab :ctx span: op.isItems monoId: ci withMethods: false
+        planMonoMethods :ast :symtab :ctx span: op.asItems monoId: ci withMethods: false
     }
 }
 
-# planMonoMethods -- a method job for every member of `span`, written as the
-# mono `monoId`'s (emitMonoMethodAt).
-planMonoMethods: function {ast: Ast.view ctx: Ctx span: zast.kidspan monoId: ztypes.tid} is {
+# planMonoMethods -- planMethodAt over every member of `span`. The is block
+# and the as block of a template are asked the same question: a generator keeps
+# its methods in the one a class keeps its fields in, and that difference
+# reaches no emitted byte.
+planMonoMethods: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    span: zast.kidspan
+    monoId: ztypes.tid
+    withMethods: bool
+} is {
     i: u64
     for i < span.count loop {
         amId: zast.kidAt kids: ast.kids :span :i
         i = i + 1
-        planFnJob :ctx fid: ztypes.tid.zero nid: amId mono: monoId method: true
+        planMethodAt :ast :symtab :ctx nid: amId :monoId :withMethods
+    }
+}
+
+# planMethodAt -- the job of the member `nid` of a template, as the mono
+# `monoId`'s method, when it is a method with a body. An instance's method is
+# written when its instance walk took it, which is where the program uses it; a
+# method with type parameters of its own is written per instance of it.
+planMethodAt: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    nid: zast.nodeid
+    monoId: ztypes.tid
+    withMethods: bool
+} is {
+    site: zast.namedSiteAt :ast :nid
+    if site.operation.isZero then return
+    if (ztypecheck.isFunctionDefWithBody o: (ast.nodes.get i: site.operation)).not then return
+    co: symtab.typing.declChildOfId parentTypeId: monoId nameId: site.name
+    fid: co.or d: ztypes.tid.zero
+    if fid.isZero then return
+    if (symtab.reg.typetypeOf typeId: fid) != ztypes.ztypetype.functionType then return
+    imd: symtab.typing.declMemberIdOf parentTypeId: monoId nameId: site.name
+    took: imd.isZero or (symtab.typing.declIsWalked declId: imd)
+    if took.not when (isGenericFnTid :symtab tid: fid).not then return
+    (planMethodOrInstances
+        :symtab
+        :ctx
+        mid: fid
+        owner: monoId
+        opId: site.operation
+        :withMethods
+    )
+}
+
+# planMethodOrInstances -- the job of a method, or, for a method with type
+# parameters of its own, of each of its instances: the template itself is never
+# written, an instance is, from its own copy of the body.
+planMethodOrInstances: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    mid: ztypes.tid
+    owner: ztypes.tid
+    opId: zast.nodeid
+    withMethods: bool
+} is {
+    if (isGenericFnTid :symtab tid: mid).not then {
+        planMethodJob :ctx fid: mid nid: opId :owner mono: ztypes.tid.zero :withMethods
+        return
+    }
+    for each t: (symtab.reg.instancesOf origin: mid) loop {
+        (planMethodJob
+            :ctx
+            fid: t
+            nid: (instanceOpAt :symtab mono: t op: opId)
+            :owner
+            mono: t
+            :withMethods
+        )
+    }
+}
+
+# planRecordMethods -- the job of every method a unit body declares on a type
+# of its own, in the order the C writes them: per file unit, its body's types,
+# then each unit nested in it. A file unit that is itself a template has none
+# of its own: its instances carry their copies of its types.
+planRecordMethods: function {program: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx} is {
+    uIdx: u64
+    for uIdx < program.units.length loop {
+        uId: program.units.get i: uIdx
+        uIdx = uIdx + 1
+        u: program.nodes.get i: uId
+        if u.namedoperation.not then continue
+        opId: u.operation
+        if opId.isZero or (isGenericTemplateUnitOp ast: program :opId) then continue
+        un: zast.nameTextCopy ast: program ref: u.name
+        sm: ctx.mainName.copy
+        smD: ctx.mainUnitId
+        (ctxBindMain
+            :ctx
+            name: un.stringView
+            unitDecl: (ztypecheck.unitDeclOfName st: symtab nameId: u.name)
+        )
+        (planBodyMethods
+            ast: program
+            :symtab
+            :ctx
+            bodyIds: (zast.unitBodyIdsAt ast: program unitId: opId)
+            ownerTid: ztypes.tid
+        )
+        ctxBindMain :ctx name: sm.stringView unitDecl: smD
+    }
+}
+
+# planBodyMethods -- the methods of each type one unit body declares, then of
+# each unit nested in it. `ownerTid` is the nested unit whose body this is, 0
+# for a file unit.
+planBodyMethods: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    bodyIds: zast.kidspan
+    ownerTid: ztypes.tid
+} is {
+    i: u64
+    for i < bodyIds.count loop {
+        bmId: zast.kidAt kids: ast.kids span: bodyIds :i
+        i = i + 1
+        bm: ast.nodes.get i: bmId
+        if bm.namedoperation.not then continue
+        opn: ast.nodes.get i: bm.operation
+        # every family declaring methods takes its receiver and is written alike
+        hasMethods: (
+            (isRecordDef n: opn) or
+            (isClassDef n: opn) or
+            (isVariantDef n: opn) or
+            (isUnionDef n: opn) or
+            (isTypedefDef n: opn)
+        )
+        if hasMethods.not then continue
+        rid: unitMemberTid :symtab :ctx :ownerTid nameId: bm.name
+        if rid.isZero.not then planTypeMethods :ast :symtab :ctx tid: rid op: opn
+    }
+    planNestedUnitMethods :ast :symtab :ctx :bodyIds :ownerTid
+}
+
+# planNestedUnitMethods -- planBodyMethods over each non-generic unit nested in
+# one unit body, with ctx.nsTid set to it while its body is planned (a generic
+# unit's instances are planned per mono).
+planNestedUnitMethods: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    bodyIds: zast.kidspan
+    ownerTid: ztypes.tid
+} is {
+    ni: u64
+    for ni < bodyIds.count loop {
+        nmId: zast.kidAt kids: ast.kids span: bodyIds i: ni
+        ni = ni + 1
+        nm: ast.nodes.get i: nmId
+        if nm.namedoperation.not then continue
+        nOp: nm.operation
+        if (isGenericTemplateUnitOp :ast opId: nOp) then continue
+        if (zast.unitOpDeclaresUnit :ast opId: nOp).not then continue
+        nsTid: unitMemberTid :symtab :ctx :ownerTid nameId: nm.name
+        if nsTid.isZero then continue
+        sns: ctx.nsTid
+        ctx.nsTid = nsTid
+        (planBodyMethods
+            :ast
+            :symtab
+            :ctx
+            bodyIds: (zast.unitBodyIdsAt :ast unitId: nOp)
+            ownerTid: nsTid
+        )
+        ctx.nsTid = sns
+    }
+}
+
+# planTypeMethods -- the jobs of the type `tid`'s as-block and is-block methods
+# with bodies. A generic type's are its monos': each mono carries its own
+# declaration of each of the template's methods.
+planTypeMethods: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    tid: ztypes.tid
+    op: astnode.view
+} is {
+    if op.objectdef.not then return
+    if (isGenericType :symtab :tid) then {
+        last: symtab.reg.nextTid
+        t: ztypes.tid
+        for t < last loop {
+            go: originTidOf :symtab tid: t
+            if go.isZero.not when go == tid then {
+                planMonoMethods :ast :symtab :ctx span: op.isItems monoId: t withMethods: true
+                planMonoMethods :ast :symtab :ctx span: op.asItems monoId: t withMethods: true
+            }
+            t = t.next
+        }
+        return
+    }
+    planOwnMethods :ast :symtab :ctx :tid span: op.asItems
+    planOwnMethods :ast :symtab :ctx :tid span: op.isItems
+}
+
+# planOwnMethods -- the job of each member of `span` that is a method of the
+# non-generic type `tid` with a body the checker walked (methodBodyWalked).
+planOwnMethods: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    tid: ztypes.tid
+    span: zast.kidspan
+} is {
+    i: u64
+    for i < span.count loop {
+        amId: zast.kidAt kids: ast.kids :span :i
+        i = i + 1
+        am: ast.nodes.get i: amId
+        if am.namedoperation.not then continue
+        if (ztypecheck.isFunctionDefWithBody o: (ast.nodes.get i: am.operation)).not then continue
+        mo: (symtab.typing.declChildOfId parentTypeId: tid nameId: am.name).or d: ztypes.tid.zero
+        if mo.isZero then continue
+        if (methodBodyWalked :symtab ownerTid: tid mid: mo nameId: am.name).not then continue
+        (planMethodOrInstances
+            :symtab
+            :ctx
+            mid: mo
+            owner: tid
+            opId: am.operation
+            withMethods: true
+        )
     }
 }
 
@@ -34877,7 +35124,6 @@ planUnitMonoMembers: function {
                     fid: cfo
                     nid: (instanceOpAt :symtab mono: t op: fm9Node.operation)
                     mono: t
-                    method: false
                 )
             }
         }
@@ -35046,7 +35292,7 @@ planFns: function {
 # what writing it needs, captured where the walk met it, so the worklist can
 # write it whenever written C first spells it (noteFnUse).
 fnjob: record {
-    # the function's type id; 0 for a method job, which nothing looks up
+    # the function's type id: an instance's own for an instance
     fid: ztypes.tid
     # the node it is written from: an instance's own copy of a template
     # function, or a method's member
@@ -35056,12 +35302,17 @@ fnjob: record {
     # ctx.nsTid while it is written: the namespace unit it belongs to, 0 for the
     # file unit's own
     nsTid: ztypes.tid
-    # the mono it is an instance of (symtab.typing.emitMono, ctx.curThisTid), or
-    # a method job's type; 0 for a plain function
+    # the mono it is an instance of (symtab.typing.emitMono, ctx.curThisTid);
+    # for a method, the instance of a method with type parameters of its own it
+    # is; 0 for a plain function or method
     mono: ztypes.tid
-    # a method of a unit mono's own type: written whether or not anything
-    # spells it, like every method emitRecordDefs writes
+    # a method, written as its owner's (emitOneMethod)
     method: bool
+    # the type a method belongs to; 0 for a function
+    owner: ztypes.tid
+    # a method a unit body declares on a type of its own: its text goes with
+    # the types' methods, ahead of the functions' (emitC)
+    withMethods: bool
     # once written, where its forward declaration and its definition lie in the
     # text the jobs are written into (drainFnJobs)
     protoAt: u64
@@ -35071,13 +35322,42 @@ fnjob: record {
 }
 
 # planFnJob -- record one function the walk met, under the unit binding and
-# namespace ctx holds now. A method job is queued at once.
-planFnJob: function {
+# namespace ctx holds now.
+planFnJob: function {ctx: Ctx fid: ztypes.tid nid: zast.nodeid mono: ztypes.tid} is {
+    (addFnJob
+        :ctx
+        :fid
+        :nid
+        :mono
+        method: false
+        owner: ztypes.tid.zero
+        withMethods: false
+    )
+}
+
+# planMethodJob -- record one method of `owner` the walk met, as planFnJob
+# does a function.
+planMethodJob: function {
+    ctx: Ctx
+    fid: ztypes.tid
+    nid: zast.nodeid
+    owner: ztypes.tid
+    mono: ztypes.tid
+    withMethods: bool
+} is {
+    addFnJob :ctx :fid :nid :mono method: true :owner :withMethods
+}
+
+# addFnJob -- one job, under the unit binding and namespace ctx holds now,
+# found by its type id; queued only when written C spells it (noteFnUse).
+addFnJob: function {
     ctx: Ctx
     fid: ztypes.tid
     nid: zast.nodeid
     mono: ztypes.tid
     method: bool
+    owner: ztypes.tid
+    withMethods: bool
 } is {
     k: ctx.fnJobs.length
     ctx.fnJobs.append (fnjob
@@ -35087,13 +35367,15 @@ planFnJob: function {
         nsTid: ctx.nsTid
         :mono
         :method
+        :owner
+        :withMethods
         protoAt: 0
         protoEnd: 0
         bodyAt: 0
         bodyEnd: 0
     )
     if fid.isZero.not then ctx.fnJobAt.set key: fid value: k
-    ctx.fnQueued.append method
+    ctx.fnQueued.append false
     ctx.fnWritten.append false
 }
 
@@ -35168,8 +35450,29 @@ writeFnJob: function {
     pa: protos.length
     ba: bodies.length
     if j.method then {
-        emitMonoMethodAt :ast :symtab :ctx nid: j.nid monoId: j.mono declOnly: true buf: protos
-        emitMonoMethodAt :ast :symtab :ctx nid: j.nid monoId: j.mono declOnly: false buf: bodies
+        mop: ast.nodes.get i: j.nid
+        (emitOneMethod
+            :ast
+            :symtab
+            :ctx
+            mid: j.fid
+            thisTid: j.owner
+            op: mop
+            declOnly: true
+            buf: protos
+            mono: j.mono
+        )
+        (emitOneMethod
+            :ast
+            :symtab
+            :ctx
+            mid: j.fid
+            thisTid: j.owner
+            op: mop
+            declOnly: false
+            buf: bodies
+            mono: j.mono
+        )
     } else {
         symtab.typing.emitMono = j.mono
         op: ast.nodes.get i: j.nid
@@ -35192,6 +35495,8 @@ writeFnJob: function {
             nsTid: j.nsTid
             mono: j.mono
             method: j.method
+            owner: j.owner
+            withMethods: j.withMethods
             protoAt: pa
             protoEnd: protos.length
             bodyAt: ba
@@ -35202,14 +35507,225 @@ writeFnJob: function {
 
 # appendWrittenFns -- the forward declarations, or the definitions, of the
 # written jobs from `text` (drainFnJobs' `protos` or `bodies`), in the order
-# planFns met them.
-appendWrittenFns: function {ctx: Ctx.view protos: bool text: StringView buf: String.borrow} is {
+# planFns met them: the units' type methods, or the rest.
+appendWrittenFns: function {
+    ctx: Ctx.view
+    protos: bool
+    withMethods: bool
+    text: StringView
+    buf: String.borrow
+} is {
     for each j: ctx.fnJobs loop {
+        if j.withMethods != withMethods then continue
         if protos then {
             buf.append (text.substring from: j.protoAt to: j.protoEnd)
         } else {
             buf.append (text.substring from: j.bodyAt to: j.bodyEnd)
         }
+    }
+}
+
+# demandHelperCalls -- queue the methods the author wrote that only generated
+# C written after the functions are fixed calls: a container's element and key
+# methods (demandContainerCalls), the `==` and `hash` of a part a generated
+# `_eq` or `_hash` compares, and the impl methods a boxed conformance's
+# wrappers call (emitConformanceImpl). Asked of the types reached so far, which
+# `preview` keeps from one call to the next (reachPreview); true when it queued
+# a job, whose C may reach more.
+demandHelperCalls: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    preview: IdSet ztypes.tid
+} out bool is {
+    before: queuedFnCount :ctx
+    seen: IdSet ztypes.tid
+    seenHash: IdSet ztypes.tid
+    for each r: (reachPreview :symtab :ctx seen: preview) loop {
+        demandContainerCalls :ast :symtab :ctx tid: r :seen :seenHash
+    }
+    es: ListVal ztypes.tid
+    for each e: ctx.eqUsed loop es.append e
+    for each e: es loop demandEqCalls :ast :symtab :ctx tid: e :seen
+    hs: ListVal ztypes.tid
+    for each h: ctx.hashAsked loop hs.append h
+    for each h: hs loop demandHashCalls :ast :symtab :ctx tid: h seen: seenHash
+    ri: ztypes.confid
+    for ri.next < symtab.typing.nextConf loop {
+        ri = ri.next
+        if (ctx.boxedConformance.has item: ri).not then continue
+        row: symtab.typing.conformance.get i: ri
+        demandImplCalls :ast :symtab :ctx implTid: row.implTypeId specTid: row.specTypeId
+    }
+    return (queuedFnCount :ctx) != before
+}
+
+# demandContainerCalls -- the element and key methods the author wrote that a
+# container mono `tid` calls: the element `==` its template compares with
+# (templateEqElem), a List's (demandListElemCalls), and a Set's or Map's key
+# `hash` and `==` (emitSetMono, emitMapMono).
+demandContainerCalls: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    tid: ztypes.tid
+    seen: IdSet ztypes.tid
+    seenHash: IdSet ztypes.tid
+} is {
+    el: templateEqElem :symtab :ctx :tid
+    if el.isZero.not then demandEqCalls :ast :symtab :ctx tid: el :seen
+    if (isListOriginOf :symtab :ctx :tid) then demandListElemCalls :ast :symtab :ctx monoId: tid
+    k: ztypes.tid
+    if (isSetOriginOf :symtab :ctx :tid) then k = setElemType :symtab monoId: tid
+    if (isMapOriginOf :symtab :ctx :tid) then k = mapKeyType :symtab monoId: tid
+    if k.isZero then return
+    kind: keyHashKind :symtab :ctx tid: k
+    if (isValKey :symtab key: k :kind) then {
+        demandEqCalls :ast :symtab :ctx tid: k :seen
+        demandHashCalls :ast :symtab :ctx tid: k seen: seenHash
+        return
+    }
+    if kind != 0 then return
+    dh: declaredKeyFnId :symtab :ctx tid0: k nid: zast.wellKnown.slot.wkHash
+    de: declaredKeyFnId :symtab :ctx tid0: k nid: zast.wellKnown.slot.wkOpEq
+    if dh.isZero.not when de.isZero.not then {
+        noteFnUse :ctx tid: dh
+        noteFnUse :ctx tid: de
+    }
+}
+
+# demandListElemCalls -- the element methods the author wrote that a List
+# mono's written members call: a reference element's `==` in `contains`
+# (emitListContains), and the `compare` its `sort` orders by (sortLessC).
+demandListElemCalls: function {
+    ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx monoId: ztypes.tid
+} is {
+    elem: listElemType :symtab :monoId
+    if elem.isZero then return
+    if (symtab.reg.isValtypeOf tid: elem).not when (monoMemberUsed
+        :symtab
+        :monoId
+        nameId: zast.wellKnown.slot.wkContains
+    ) then noteFnUse :ctx tid: (refElemEqFid :symtab :elem)
+    if (monoMemberUsed :symtab :monoId nameId: zast.wellKnown.slot.wkSort) when (sortCallsWritten
+        :ast
+        :symtab
+        :elem
+    ) then noteFnUse :ctx tid: (sortCompareFid :symtab :elem)
+}
+
+# fnJobUnwritten -- `tid` is a function the program's units could write and
+# written C never called, so none of it is in the C.
+fnJobUnwritten: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
+    at: ctx.fnJobAt.get key: tid
+    if at.none then return false
+    return (ctx.fnWritten.get i: at).not
+}
+
+# queuedFnCount -- the function jobs written C has spelled so far.
+queuedFnCount: function {ctx: Ctx.view} out u64 is {
+    n: u64
+    for each q: ctx.fnQueued loop {
+        if q then n = n + 1
+    }
+    return n
+}
+
+# reachPreview -- the types written C reaches so far that `seen` lacks, added to
+# it: what it spelled, closed over what each one's C spells (drainReach),
+# without touching the reached set.
+reachPreview: function {
+    symtab: zenv.ZSymbolTable.view ctx: Ctx.view seen: IdSet ztypes.tid
+} out ListVal ztypes.tid is {
+    added: ListVal ztypes.tid
+    todo: ListVal ztypes.tid
+    for each u: ctx.typeUses loop {
+        if (seen.has item: u).not then todo.append u
+    }
+    for todo.length > 0 loop {
+        t: todo.pop
+        if (seen.has item: t) then continue
+        seen.add item: t
+        added.append t
+        at: todo.length
+        typeReachEdges :symtab :ctx tid: t acc: todo
+        keepReachEdges :symtab reached: seen :todo from: at
+    }
+    return added
+}
+
+# demandEqCalls -- comparing a `tid` with its own `==` calls the author's
+# method when the author wrote one (partEqC), and each part's otherwise.
+demandEqCalls: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    tid: ztypes.tid
+    seen: IdSet ztypes.tid
+} is {
+    if (seen.has item: tid) then return
+    seen.add item: tid
+    src: ztypecheck.valOpSource :ast st: symtab :tid nameId: zast.wellKnown.slot.wkOpEq
+    if src.written or src.negated then {
+        opId: zast.wellKnown.slot.wkOpEq
+        if src.negated then opId = zast.wellKnown.slot.wkOpNe
+        owner: ztypecheck.valOpOwner st: symtab :tid nameId: zast.wellKnown.slot.wkOpEq
+        fo: symtab.typing.declChildOfId parentTypeId: owner nameId: opId
+        noteFnUse :ctx tid: (fo.or d: ztypes.tid.zero)
+        return
+    }
+    if src.generated.not then return
+    parts: ListVal ztypes.tid
+    ztypecheck.valPartTids st: symtab :tid :parts
+    for each p: parts loop demandEqCalls :ast :symtab :ctx tid: p :seen
+}
+
+# demandHashCalls -- hashing a `tid` calls the author's `hash` when the author
+# wrote one (partHashWords), and each part's otherwise.
+demandHashCalls: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    tid: ztypes.tid
+    seen: IdSet ztypes.tid
+} is {
+    if (seen.has item: tid) then return
+    seen.add item: tid
+    src: ztypecheck.valOpSource :ast st: symtab :tid nameId: zast.wellKnown.slot.wkHash
+    if src.written then {
+        owner: ztypecheck.valOpOwner st: symtab :tid nameId: zast.wellKnown.slot.wkHash
+        fo: symtab.typing.declChildOfId parentTypeId: owner nameId: zast.wellKnown.slot.wkHash
+        noteFnUse :ctx tid: (fo.or d: ztypes.tid.zero)
+        return
+    }
+    if src.generated.not then return
+    parts: ListVal ztypes.tid
+    ztypecheck.valPartTids st: symtab :tid :parts
+    for each p: parts loop demandHashCalls :ast :symtab :ctx tid: p :seen
+}
+
+# demandImplCalls -- the impl methods a conformance row's wrappers call: one
+# per spec method the vtable has a slot for (emitConformanceImpl).
+demandImplCalls: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    implTid: ztypes.tid
+    specTid: ztypes.tid
+} is {
+    mnames: List String
+    mids: ListVal ztypes.tid
+    midsNm: ListVal zast.nameid
+    protoChildMethods :ast :symtab tid: specTid names: mnames ids: mids nameIds: midsNm
+    i: u64
+    for i < mids.length loop {
+        smid: mids.get :i
+        mnameId: midsNm.get :i
+        i = i + 1
+        if (specMemberIsSelfTyped :ast :symtab ifaceTid: specTid :smid) then continue
+        owner: ztypecheck.valOpOwner st: symtab tid: implTid nameId: mnameId
+        imo: symtab.typing.declChildOfId parentTypeId: owner nameId: mnameId
+        noteFnUse :ctx tid: (imo.or d: ztypes.tid.zero)
     }
 }
 
@@ -35258,7 +35774,6 @@ planFnMonoInstances: function {
                 fid: t
                 nid: (instanceOpAt :symtab mono: t op: templateFnOpId)
                 mono: t
-                method: false
             )
         }
         t = t.next
@@ -35388,7 +35903,7 @@ planFnDecls: function {
         if (isGenericFnTid :symtab tid: fid) then {
             planFnMonoInstances :symtab :ctx templateFnId: fid templateFnOpId: dm2.operation
         } else {
-            planFnJob :ctx :fid nid: dm2.operation mono: ztypes.tid.zero method: false
+            planFnJob :ctx :fid nid: dm2.operation mono: ztypes.tid.zero
         }
     }
 }
@@ -36880,23 +37395,29 @@ emitC: function {
     nodeEstE: u64
     nodeEstE = program.nodes.length
     planFns :program :symtab :ctx
+    planRecordMethods :program :symtab :ctx
+    # the static aggregates, the functions and the methods are generated ahead
+    # of the types, which they follow in the output: a type is written only
+    # once something has spelled it
+    protosBuf: String
+    emitStaticAggs ast: program :symtab :ctx buf: protosBuf
     fnProtoText: String
     fnBodyText: String
     fnBodyText.reserve n: nodeEstE * 24
     drainFnJobs ast: program :symtab :ctx protos: fnProtoText bodies: fnBodyText
-    # the methods are generated ahead of the types, which they follow in the
-    # output: a type is written only once something has spelled it
-    protosBuf: String
-    emitRecordDefs :program :symtab :ctx phase: 1 buf: protosBuf
-    bodiesBuf: String
-    emitRecordDefs :program :symtab :ctx phase: 2 buf: bodiesBuf
-    # every method is written, so what a method calls is reached too; after
-    # this the written functions are fixed
-    drainFnJobs ast: program :symtab :ctx protos: fnProtoText bodies: fnBodyText
+    # the methods only the types' helpers call, written after this
+    preview: IdSet ztypes.tid
+    for (demandHelperCalls ast: program :symtab :ctx :preview) loop {
+        drainFnJobs ast: program :symtab :ctx protos: fnProtoText bodies: fnBodyText
+    }
+    # after this the written functions are fixed
     ctx.fnClosed = true
+    appendWrittenFns :ctx protos: true withMethods: true text: fnProtoText.stringView buf: protosBuf
+    bodiesBuf: String
+    appendWrittenFns :ctx protos: false withMethods: true text: fnBodyText.stringView buf: bodiesBuf
     fnsBuf: String
     fnsBuf.reserve n: fnBodyText.length + 64
-    appendWrittenFns :ctx protos: false text: fnBodyText.stringView buf: fnsBuf
+    appendWrittenFns :ctx protos: false withMethods: false text: fnBodyText.stringView buf: fnsBuf
     if (programHasMain :program).not then {
         fnsBuf.append "void z_main(void) {\n"
         fnsBuf.append "}\n\n"
@@ -36906,7 +37427,13 @@ emitC: function {
     # returns its iterator class
     fnProtosBuf: String
     fnProtosBuf.reserve n: fnProtoText.length + 1
-    appendWrittenFns :ctx protos: true text: fnProtoText.stringView buf: fnProtosBuf
+    (appendWrittenFns
+        :ctx
+        protos: true
+        withMethods: false
+        text: fnProtoText.stringView
+        buf: fnProtosBuf
+    )
     fnProtosBuf.append "\n"
     codeBuf: String
     needsAt: emitCodeBody :program :symtab :ctx :runtimeDir :nodeEstE :codeBuf
@@ -36918,7 +37445,7 @@ emitC: function {
     natAt: codeBuf.length
     codeBuf.append protosBuf
     codeBuf.append fnProtosBuf
-    emitRecordDefs :program :symtab :ctx phase: 3 buf: codeBuf
+    emitRecordDefs :program :symtab :ctx buf: codeBuf
     codeBuf.append bodiesBuf
     lateBuf: String
     if (needsOutsidePrelude :ctx from: needsAt) then {
@@ -37662,12 +38189,8 @@ emitListContains: function {
         # a reference element compares with the `==` its type declares, by
         # address, as a Set's element does
         late = true
-        fo: (symtab.typing.declChildOfId
-            parentTypeId: (ztypecheck.typedefChaseTid st: symtab tid: elem)
-            nameId: zast.wellKnown.slot.wkOpEq
-        )
         body.append "        { \{ect} _e = _this->data[i]; if ("
-        body.append (spelledCname :ctx tid: (fo.or d: ztypes.tid.zero))
+        body.append (spelledCname :ctx tid: (refElemEqFid :symtab :elem))
         body.append "(&_e, "
         if (elemBorrowsByPtr :symtab :ctx tid: elem) then body.append "&"
         body.append "_needle)) return true; }\n"
@@ -37689,6 +38212,16 @@ emitListContains: function {
     } else {
         buf.append body
     }
+}
+
+# refElemEqFid -- the `==` a reference element's type declares, which a list's
+# `contains` compares it with.
+refElemEqFid: function {symtab: zenv.ZSymbolTable.view elem: ztypes.tid} out ztypes.tid is {
+    fo: (symtab.typing.declChildOfId
+        parentTypeId: (ztypecheck.typedefChaseTid st: symtab tid: elem)
+        nameId: zast.wellKnown.slot.wkOpEq
+    )
+    return (fo.or d: ztypes.tid.zero)
 }
 
 # emitListEq -- a ListVal's `==`: the same length, and each element equal to
@@ -37749,16 +38282,24 @@ sortLessC: function {
         }
         return "_a < _b".string
     }
-    owner: ztypecheck.typedefChaseTid st: symtab tid: elem
     rhs: "_b"
-    if (symtab.reg.isValtypeOf tid: elem) then {
-        owner = ztypecheck.valOpOwner st: symtab tid: elem nameId: zast.wellKnown.slot.wkCompare
-    } else if (elemBorrowsByPtr :symtab :ctx tid: elem) then {
+    if (symtab.reg.isValtypeOf tid: elem).not when (elemBorrowsByPtr :symtab :ctx tid: elem) then {
         rhs = "&_b"
     }
-    fo: symtab.typing.declChildOfId parentTypeId: owner nameId: zast.wellKnown.slot.wkCompare
-    fc: spelledCname :ctx tid: (fo.or d: ztypes.tid.zero)
+    fc: spelledCname :ctx tid: (sortCompareFid :symtab :elem)
     return "\{fc}(&_a, \{rhs}) < 0"
+}
+
+# sortCompareFid -- the `compare` the author wrote that orders `elem`
+# (sortCallsWritten): a value type's own or its typedef chain's, a reference's
+# declared one.
+sortCompareFid: function {symtab: zenv.ZSymbolTable.view elem: ztypes.tid} out ztypes.tid is {
+    owner: ztypecheck.typedefChaseTid st: symtab tid: elem
+    if (symtab.reg.isValtypeOf tid: elem) then {
+        owner = ztypecheck.valOpOwner st: symtab tid: elem nameId: zast.wellKnown.slot.wkCompare
+    }
+    fo: symtab.typing.declChildOfId parentTypeId: owner nameId: zast.wellKnown.slot.wkCompare
+    return (fo.or d: ztypes.tid.zero)
 }
 
 # emitColGet -- the element `get` for a List / ListView mono. The declared
@@ -38676,12 +39217,13 @@ declaredKeyFnId: function {
 # holds the key BY VALUE, so the caller addresses it.
 declaredKeyFnC: function {
     symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
+    ctx: Ctx
     tid: ztypes.tid
     memberId: zast.nameid
 } out String is {
     fid: declaredKeyFnId :symtab :ctx tid0: tid nid: memberId
     if fid.isZero then return "".string
+    noteFnUse :ctx tid: fid
     return (ctxCname :ctx tid: fid)
 }
 
@@ -42380,8 +42922,10 @@ emitFnptrTypedefs: function {
 
 # seedDeclaredFnptr -- a member row that holds a function value demands its type's
 # typedef: a function's parameter of a function type, or a type's fn-pointer
-# field. A method row is the type's own function, not a value it holds. The type
-# is spelled through typeRefC, which records the demand under the id it names.
+# field. A method row is the type's own function, not a value it holds, and a
+# method the program never writes is in no C at all (fnJobUnwritten), whichever
+# block declares it. The type is spelled through typeRefC, which records the
+# demand under the id it names.
 seedDeclaredFnptr: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -42390,6 +42934,7 @@ seedDeclaredFnptr: function {
     name: zast.nameid
     tid: ztypes.tid
 } is {
+    if (fnJobUnwritten :ctx :tid) then return
     ot: symtab.reg.typetypeOf typeId: owner
     isParam: ot == ztypes.ztypetype.functionType
     if isParam.not when (symtab.typing.declIsFnptrFieldId
@@ -43910,21 +44455,16 @@ staticAggItemText: function {
     return (cvalText :ast :symtab :ctx :tid :v :facts)
 }
 
-# emitRecordDefs -- main-unit record structs + meta_create constructors
-# (scalar/record fields).
+# emitRecordDefs -- the conformance helpers and the hash prototypes, which are
+# written after the types they serve and so are generated after them: every
+# file unit's, then each generic instance's. The units' methods are function
+# jobs (planRecordMethods).
 emitRecordDefs: function {
     program: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    # 1: the static aggregates and every unit's forward declarations; 2: every
-    # unit's method bodies; 3: the conformance helpers and the hash
-    # prototypes, which are written after the types they serve and so are
-    # generated after them. In the output 3 goes between 1 and 2, so the
-    # passes across ALL file units let cross-unit references resolve
-    phase: u64
     buf: String.borrow
 } is {
-    if phase == 1 then emitStaticAggs ast: program :symtab :ctx :buf
     uCnt9h: program.units.length
     uIdx9h: u64
     for uIdx9h < uCnt9h loop {
@@ -43955,18 +44495,15 @@ emitRecordDefs: function {
                 :ctx
                 ast: program
                 mainOpId: opId
-                :phase
                 :buf
             )
             ctxBindMain :ctx name: sm.stringView unitDecl: smD
         }
     }
-    if phase == 3 then {
-        emitInstanceConformanceImpls ast: program :symtab :ctx :buf
-        # the generated hashes every method body may call are declared once
-        # every struct they take is
-        emitHashPrototypes ast: program :symtab :ctx :buf
-    }
+    emitInstanceConformanceImpls ast: program :symtab :ctx :buf
+    # the generated hashes every method body may call are declared once
+    # every struct they take is
+    emitHashPrototypes ast: program :symtab :ctx :buf
 }
 
 # emitInstanceConformanceImpls -- the conformance helpers of each generic
@@ -43995,50 +44532,6 @@ emitInstanceConformanceImpls: function {
         implT: it
         emitConformanceImplsForType :ast :symtab :ctx implTid: implT isFacet: false :buf
         emitConformanceImplsForType :ast :symtab :ctx implTid: implT isFacet: true :buf
-    }
-}
-
-# emitDefMethods -- emit a record/class def's as-block methods (forward decls
-# when declOnly, bodies otherwise). Used by the method passes of emitRecordDefsIn.
-emitDefMethods: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable
-    ctx: Ctx
-    bm: astnode.view
-    ownerTid: ztypes.tid
-    declOnly: bool
-    buf: String.borrow
-} is {
-    if bm.namedoperation then {
-        # A VARIANT'S as-block METHODS ARE METHODS. Only a record leg and a
-        # class leg existed, so NO user method on a variant was ever emitted --
-        # named or operator -- while the call site emitted a call to it. Every
-        # such program was accepted at exit 0 and rejected by the C compiler
-        # for an implicit declaration.
-        #
-        # All three families take their receiver and emit alike, which is why
-        # they share emitRecordMethods -- and why the name resolves ONCE here
-        # rather than once per family.
-        opn9: ast.nodes.get i: bm.operation
-        hasMethods: (
-            (isRecordDef n: opn9) or
-            (isClassDef n: opn9) or
-            (isVariantDef n: opn9) or
-            (isUnionDef n: opn9) or
-            (isTypedefDef n: opn9)
-        )
-        if hasMethods then {
-            rid: unitMemberTid :symtab :ctx :ownerTid nameId: bm.name
-            if rid.isZero.not then (emitRecordMethods
-                :ast
-                :symtab
-                :ctx
-                tid: rid
-                op: opn9
-                :declOnly
-                :buf
-            )
-        }
     }
 }
 
@@ -44428,13 +44921,12 @@ implStructC: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.
 # method is its chain's first declarer: its own, or its base's.
 implMethodCname: function {
     symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
+    ctx: Ctx
     implTid: ztypes.tid
     mnameId: zast.nameid
     mname: StringView
 } out String is {
     owner: ztypecheck.valOpOwner st: symtab tid: implTid nameId: mnameId
-    implBase: ctxCnameView :ctx tid: owner
     implMid: ztypes.tid
     imo: symtab.typing.declChildOfId parentTypeId: owner nameId: mnameId
     match (
@@ -44442,6 +44934,8 @@ implMethodCname: function {
     ) case some then {
         implMid = imo
     } case none then null
+    noteFnUse :ctx tid: implMid
+    implBase: ctxCnameView :ctx tid: owner
     if (fnIsNativeId :symtab fid: implMid) then return "\{implBase}_\{mname}"
     if (definedInNonMain :symtab :ctx tid: owner) then return "\{implBase}_\{mname}"
     return (ctxCname :ctx tid: implMid)
@@ -46942,26 +47436,6 @@ isGenericFnTid: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out bo
     return (symtab.reg.typetypeOf typeId: tid) == ztypes.ztypetype.functionType
 }
 
-# emitUnitDefMethods -- one unit body's method forward declarations, or its
-# method bodies. The two passes differ in nothing else, which is what
-# `declOnly` carries.
-emitUnitDefMethods: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable
-    ctx: Ctx
-    bodyIds: zast.kidspan
-    ownerTid: ztypes.tid
-    declOnly: bool
-    buf: String.borrow
-} is {
-    dmx: u64
-    for dmx < bodyIds.count loop {
-        bmdId: zast.kidAt kids: ast.kids span: bodyIds i: dmx
-        dmx = dmx + 1
-        bmd: ast.nodes.get i: bmdId
-        emitDefMethods :ast :symtab :ctx bm: bmd :ownerTid :declOnly :buf
-    }
-}
 
 # emitUnitConformanceImpls -- one unit body's conformance implementations, the
 # protocol family then the facet one, for every type it declares that may
@@ -47011,11 +47485,7 @@ emitUnitConformanceImpls: function {
 }
 
 
-# emitRecordDefsIn -- two passes so cross-class references resolve: all method
-# forward decls and the unit's own function forward decls, then all method
-# bodies (a method may return/construct a class defined later in the unit).
-# Static storage -- data values and lists -- is written before either
-# (emitStaticAggs). Struct layout is NOT
+# emitRecordDefsIn -- one file unit's conformance helpers. Struct layout is NOT
 # emitted here: emitUserStructsOrdered owns it, and resolves the by-value
 # ordering between user types and the monos that embed them, which a per-unit
 # walk in declaration order cannot.
@@ -47024,7 +47494,6 @@ emitRecordDefsIn: function {
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     mainOpId: zast.nodeid
-    phase: u64
     buf: String.borrow
 } is {
     bodyIds: zast.unitBodyIdsAt :ast unitId: mainOpId
@@ -47032,35 +47501,12 @@ emitRecordDefsIn: function {
     # as a nested template has not (emitNestedRecordDefs): its instances carry
     # their functions and their copies of its types
     isTpl: isGenericTemplateUnitOp :ast opId: mainOpId
-    if isTpl.not then (emitRecordDefsInBody
-        :ast
-        :symtab
-        :ctx
-        :bodyIds
-        ownerTid: ztypes.tid
-        :phase
-        :buf
-    )
+    if isTpl.not then {
+        emitUnitConformanceImpls :ast :symtab :ctx :bodyIds ownerTid: ztypes.tid :buf
+        emitNestedRecordDefs :ast :symtab :ctx :bodyIds ownerTid: ztypes.tid :buf
+    }
 }
 
-# emitRecordDefsInBody -- one unit body's share of a phase, then the share of
-# each unit nested in it. `ownerTid` is the nested unit whose body this is, 0
-# for a file unit: a nested unit's definitions are its children, not the file
-# unit's, and a method emitted from one is at any depth, called from anywhere.
-emitRecordDefsInBody: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable
-    ctx: Ctx
-    bodyIds: zast.kidspan
-    ownerTid: ztypes.tid
-    phase: u64
-    buf: String.borrow
-} is {
-    if phase == 1 then emitUnitDefMethods :ast :symtab :ctx :bodyIds :ownerTid declOnly: true :buf
-    if phase == 3 then emitUnitConformanceImpls :ast :symtab :ctx :bodyIds :ownerTid :buf
-    if phase == 2 then emitUnitDefMethods :ast :symtab :ctx :bodyIds :ownerTid declOnly: false :buf
-    emitNestedRecordDefs :ast :symtab :ctx :bodyIds :ownerTid :phase :buf
-}
 
 # emitNestedRecordDefs -- each non-generic unit nested in one unit body, with
 # ctx.nsTid set to it while its body is emitted (a generic unit's instances are
@@ -47071,7 +47517,6 @@ emitNestedRecordDefs: function {
     ctx: Ctx
     bodyIds: zast.kidspan
     ownerTid: ztypes.tid
-    phase: u64
     buf: String.borrow
 } is {
     ni: u64
@@ -47085,17 +47530,11 @@ emitNestedRecordDefs: function {
         if (zast.unitOpDeclaresUnit :ast opId: nOp).not then continue
         nsTid: unitMemberTid :symtab :ctx :ownerTid nameId: nm.name
         if nsTid.isZero then continue
+        nb: zast.unitBodyIdsAt :ast unitId: nOp
         sns: ctx.nsTid
         ctx.nsTid = nsTid
-        (emitRecordDefsInBody
-            :ast
-            :symtab
-            :ctx
-            bodyIds: (zast.unitBodyIdsAt :ast unitId: nOp)
-            ownerTid: nsTid
-            :phase
-            :buf
-        )
+        emitUnitConformanceImpls :ast :symtab :ctx bodyIds: nb ownerTid: nsTid :buf
+        emitNestedRecordDefs :ast :symtab :ctx bodyIds: nb ownerTid: nsTid :buf
         ctx.nsTid = sns
     }
 }
@@ -48452,226 +48891,6 @@ emitOneRecord: function {
     }
 }
 
-# emitMonoMethodAt -- one member of a template's body, emitted for the mono
-# `monoId` from the mono's own copy of it (emitOneMethod): a declaration under
-# `declOnly` and a definition otherwise. Anything that is not a method with a
-# body, or whose declaration the mono does not carry, is skipped.
-emitMonoMethodAt: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable
-    ctx: Ctx
-    nid: zast.nodeid
-    monoId: ztypes.tid
-    declOnly: bool
-    buf: String.borrow
-} is {
-    site: zast.namedSiteAt :ast :nid
-    if site.operation.isZero then return
-    if (ztypecheck.isFunctionDefWithBody o: (ast.nodes.get i: site.operation)).not then return
-    co: symtab.typing.declChildOfId parentTypeId: monoId nameId: site.name
-    fid: co.or d: ztypes.tid.zero
-    if fid.isZero then return
-    if (symtab.reg.typetypeOf typeId: fid) != ztypes.ztypetype.functionType then return
-    # an instance's method is written when its instance walk took it, which is
-    # where the program uses it; a method with type parameters of its own is
-    # written per instance of it
-    imd: symtab.typing.declMemberIdOf parentTypeId: monoId nameId: site.name
-    took: imd.isZero or (symtab.typing.declIsWalked declId: imd)
-    if took.not when (isGenericFnTid :symtab tid: fid).not then return
-    (emitMethodOrInstances
-        :ast
-        :symtab
-        :ctx
-        mid: fid
-        thisTid: monoId
-        op: (ast.nodes.get i: site.operation)
-        :declOnly
-        :buf
-    )
-}
-
-# emitMonoMethodsIn -- emitMonoMethodAt over every member of `span`. The is
-# block and the as block of a template are asked the same question: a generator
-# keeps its methods in the one a class keeps its fields in, and that difference
-# reaches no emitted byte.
-emitMonoMethodsIn: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable
-    ctx: Ctx
-    span: zast.kidspan
-    monoId: ztypes.tid
-    declOnly: bool
-    buf: String.borrow
-} is {
-    i: u64
-    for i < span.count loop {
-        amId: zast.kidAt kids: ast.kids :span :i
-        i = i + 1
-        emitMonoMethodAt :ast :symtab :ctx nid: amId :monoId :declOnly :buf
-    }
-}
-
-# emitClassMonoMethods -- every method body a template's monos need, one mono at
-# a time. A mono carries its own declaration for each of the template's methods,
-# so the C is written per mono and not per template.
-emitClassMonoMethods: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable
-    ctx: Ctx
-    tplId: ztypes.tid
-    op: astnode.view
-    declOnly: bool
-    buf: String.borrow
-} is {
-    if op.objectdef.not then return
-    isItems: op.isItems
-    asItems: op.asItems
-    last8: symtab.reg.nextTid
-    t8: ztypes.tid
-    for t8 < last8 loop {
-        go8: originTidOf :symtab tid: t8
-        if go8.isZero.not when go8 == tplId then {
-            emitMonoMethodsIn :ast :symtab :ctx span: isItems monoId: t8 :declOnly :buf
-            emitMonoMethodsIn :ast :symtab :ctx span: asItems monoId: t8 :declOnly :buf
-        }
-        t8 = t8.next
-    }
-}
-
-
-# emitRecordMethods -- the record's as-block functions as free C
-# functions taking the record by value (params from the method type's
-# children; the AST return fallback covers unstamped returns).
-emitRecordMethods: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable
-    ctx: Ctx
-    tid: ztypes.tid
-    op: astnode.view
-    declOnly: bool
-    buf: String.borrow
-} is {
-    if (isGenericType :symtab :tid) then {
-        (emitClassMonoMethods
-            :ast
-            :symtab
-            :ctx
-            tplId: tid
-            :op
-            :declOnly
-            :buf
-        )
-        return
-    }
-    if op.objectdef then {
-        idxs: ListVal u64
-        names: List String
-        ai: u64
-        asx1729: u64
-        for asx1729 < op.asItems.count loop {
-            amId: zast.kidAt kids: ast.kids span: op.asItems i: asx1729
-            asx1729 = asx1729 + 1
-            am: ast.nodes.get i: amId
-            if am.namedoperation when (ztypecheck.isFunctionDefWithBody
-                o: (ast.nodes.get i: am.operation)
-            ) then {
-                av: ai
-                idxs.append av
-                an: zast.nameTextCopy :ast ref: am.name
-                names.append an
-            }
-            ai = ai + 1
-        }
-        wi: u64
-        wn: idxs.length
-        for wi < wn loop {
-            midx: idxs.get i: wi
-            am2Id: zast.kidAt kids: ast.kids span: op.asItems i: midx
-            am2: ast.nodes.get i: am2Id
-            if am2.namedoperation then {
-                mo: (symtab.typing.declChildOfId
-                    parentTypeId: tid
-                    nameId: am2.name
-                )
-                match (
-                    mo
-                ) case some then {
-                    if (methodBodyWalked
-                        :symtab
-                        ownerTid: tid
-                        mid: mo
-                        nameId: am2.name
-                    ) then {
-                        (emitMethodOrInstances
-                            :ast
-                            :symtab
-                            :ctx
-                            mid: mo
-                            thisTid: tid
-                            op: (ast.nodes.get i: am2.operation)
-                            :declOnly
-                            :buf
-                        )
-                    }
-                } case none then null
-            }
-            wi = wi + 1
-        }
-        iidxs: ListVal u64
-        inames: List String
-        iai: u64
-        isx1899: u64
-        for isx1899 < op.isItems.count loop {
-            im9Id: zast.kidAt kids: ast.kids span: op.isItems i: isx1899
-            isx1899 = isx1899 + 1
-            im: ast.nodes.get i: im9Id
-            if im.namedoperation when (ztypecheck.isFunctionDefWithBody
-                o: (ast.nodes.get i: im.operation)
-            ) then {
-                iav: iai
-                iidxs.append iav
-                ian: zast.nameTextCopy :ast ref: im.name
-                inames.append ian
-            }
-            iai = iai + 1
-        }
-        iwi: u64
-        iwn: iidxs.length
-        for iwi < iwn loop {
-            imidx: iidxs.get i: iwi
-            im2Id: zast.kidAt kids: ast.kids span: op.isItems i: imidx
-            im2: ast.nodes.get i: im2Id
-            if im2.namedoperation then {
-                imo: (symtab.typing.declChildOfId
-                    parentTypeId: tid
-                    nameId: im2.name
-                )
-                match (
-                    imo
-                ) case some then {
-                    if (methodBodyWalked
-                        :symtab
-                        ownerTid: tid
-                        mid: imo
-                        nameId: im2.name
-                    ) then {
-                        (emitMethodOrInstances
-                            :ast
-                            :symtab
-                            :ctx
-                            mid: imo
-                            thisTid: tid
-                            op: (ast.nodes.get i: im2.operation)
-                            :declOnly
-                            :buf
-                        )
-                    }
-                } case none then null
-            }
-            iwi = iwi + 1
-        }
-    }
-}
 
 # methodBodyWalked -- is this method's body emitted? A body is emitted when the
 # checker walked it: the walk is what stamps a body, and the checker walks a
@@ -48690,38 +48909,6 @@ methodBodyWalked: function {
     return (symtab.typing.declIsWalked declId: md)
 }
 
-# emitMethodOrInstances -- a method, or, for a method with type parameters of
-# its own, each of its instances: the template itself is never emitted, an
-# instance is, from its own copy of the body
-emitMethodOrInstances: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable
-    ctx: Ctx
-    mid: ztypes.tid
-    thisTid: ztypes.tid
-    op: astnode.view
-    declOnly: bool
-    buf: String.borrow
-} is {
-    if (isGenericFnTid :symtab tid: mid).not then {
-        emitOneMethod :ast :symtab :ctx :mid :thisTid :op :declOnly :buf mono: ztypes.tid.zero
-        return
-    }
-    for each t: (symtab.reg.instancesOf origin: mid) loop {
-        iop: instanceOpAt :symtab mono: t op: (zast.nodeIdOf n: op)
-        (emitOneMethod
-            :ast
-            :symtab
-            :ctx
-            mid: t
-            :thisTid
-            op: (ast.nodes.get i: iop)
-            :declOnly
-            :buf
-            mono: t
-        )
-    }
-}
 
 # nodeYieldCount -- the number of `yield` expressions in a subtree (yields do
 # not nest). Used to detect a generator `call` body and size its resume-state
