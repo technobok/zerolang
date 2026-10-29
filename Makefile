@@ -1252,7 +1252,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2380199
+ALLOC_BASELINE := 2381212
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1971,7 +1971,7 @@ deadcode-guard: bin/zc
 # of every kind, and live ones only a careless reader misses: the reader must
 # report exactly CDEAD_PROBE there before its count is trusted. The baseline is
 # the dead items the emitter writes today (corpus, then zc); lower it as it falls.
-CDEAD_BASELINE := 723 2
+CDEAD_BASELINE := 557 2
 CDEAD_PROBE := cdead_dead_fn cdead_dead_fn_ft cdead_dead_inline cdead_dead_leaf \
 	cdead_dead_macro cdead_dead_proto_t cdead_dead_str cdead_dead_t cdead_dead_vtable_t
 
@@ -2269,8 +2269,15 @@ def defined(body):
     # the names a piece defines: functions and prototypes, statics, typedefs,
     # macros
     names = set()
+    depth = 0
     for ln in strip_c(body).split('\n'):
         s = ln.strip()
+        top = depth == 0
+        depth += s.count('{') - s.count('}')
+        # a library's prototype at file level: `int sqlite3_step(sqlite3_stmt*);`
+        m = re.match(r'(?:const\s+)?(?:unsigned\s+)?([A-Za-z_]\w*)[\s*]+([A-Za-z_]\w*)\s*\((.*)\)\s*;\Z', s)
+        if top and m and m.group(1) not in ('return', 'else', 'static', 'extern', 'typedef') and '=' not in s:
+            names.add(m.group(2)); continue
         m = re.match(r'#\s*define\s+([\w@]+)', s)
         if m:
             names.add(m.group(1)); continue
@@ -2334,8 +2341,8 @@ for f in files:
             break
         key, a = attrs(t[i + len(OPEN):h])
         body = t[h + len(CLOSE):e]
-        if not key.startswith('@prelude.'):
-            errs.append(f'{f}: piece {key} is not a prelude piece (@prelude.<name>)')
+        if not re.match(r'@\w+\.\w+\Z', key):
+            errs.append(f'{f}: piece {key} is not a unit piece (@<unit>.<name>)')
         if not ifdepth_ok(body):
             errs.append(f'{f}: piece {key} opens or closes an #if it does not close or open')
         if re.search(r'(?<!@)@(?!@)', re.sub(r'@@.*?@@', '', body).replace('@String@', '').replace('@StringView@', '')):
@@ -2343,6 +2350,18 @@ for f in files:
         pieces.append((key, a, body, f))
         pos = e + len(END)
     outside[f] = ''.join(rest)
+# a unit's pieces are loaded only from the fragments of the rows answering
+# its `@unit` (loadPieces): a piece elsewhere is never a row
+unit_frags = set()
+for ln in open(os.path.join(rt, 'natives.tbl')):
+    s = ln.strip()
+    if s.startswith('[') and ']' in s:
+        k, a0 = attrs(s[1:s.index(']')])
+        if a0.get('demand') == '@unit':
+            unit_frags |= {os.path.join(rt, 'natives', x + '.inc') for x in a0.get('frag', '').split(',') if x}
+for key, a, body, f in pieces:
+    if not key.startswith('@prelude.') and f not in unit_frags:
+        errs.append(f'{f}: piece {key} is not a prelude piece and its fragment answers no @unit row, so no compiler loads it')
 keys = [p[0] for p in pieces]
 for k in set(keys):
     if keys.count(k) > 1:
@@ -2386,7 +2405,7 @@ def closure(start):
 owner = {}           # defined name -> piece key, demand
 for key, a, body, f in pieces:
     for n in defined(body):
-        owner[n] = (key, ('prelude', demands(key, a)[0]))
+        owner[n] = (key, (unit_of(key), demands(key, a)[0]))
 # a prelude row's fragments are written whole, where its demand fired: what
 # they define is the row's, as a piece's is
 for key, a, text, where in rows:

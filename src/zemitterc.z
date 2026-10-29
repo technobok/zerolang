@@ -2118,7 +2118,8 @@ memberWord: list {
 
 # nativeWord -- the words natives.tbl and the runtime fragments spell that the
 # loader acts on: the pointer-arguments and value-form flags, the unit-order
-# row, the two runtime units it orders specially, the two type holes the
+# row, the demand a unit-wide row answers, the two runtime units it orders
+# specially, the two type holes the
 # emitter fills itself, and the operating systems an `os=` may name. Read through a zast.Vocab (ctx.nativeWords), never
 # compared as text.
 nativeWord: list {
@@ -2126,6 +2127,7 @@ nativeWord: list {
     formValue: "form=value"
     callsEq: "calls=eq"
     unitsRow: "@units"
+    unitDemand: "@unit"
     unitIo: "io"
     unitPrelude: "prelude"
     holeString: "String"
@@ -36663,7 +36665,8 @@ emitCHeader: function {
 }
 
 # loadPieces -- the pieces of the runtime's fixed files, registered as rows of
-# the prelude unit. A piece is the text between `/*@@row KEY attr=...@@*/` and
+# the prelude unit, and those of a unit's shared fragments, as rows of their
+# unit. A piece is the text between `/*@@row KEY attr=...@@*/` and
 # `/*@@end@@*/`; its head is read as a natives.tbl row's head is, so its
 # `demand=` and `needs=` decide it as they decide any row (rowDemandFired,
 # closeRowNeeds). It is written in place, by the file that holds it
@@ -36685,17 +36688,24 @@ loadPieces: function {ctx: Ctx runtimeDir: StringView} is {
         pp: nativePath :runtimeDir frag: pf.stringView
         loadPiecesOf :ctx path: pp.stringView
     }
-    # the prelude rows' fragments: one holding pieces is written by its row, a
-    # piece at a time (ioFrag)
+    # the prelude rows' fragments, and a unit's own (the rows answering its
+    # `@unit`, which hold what every member of it shares): one holding pieces
+    # is written by its row, a piece at a time (ioFrag)
     n: ctx.fragUnits.length
     i: u64
     for i < n loop {
-        isP: false
+        hosts: false
         {
             u: ctx.fragUnits.get :i
-            isP = (ctx.nativeWords.slotOf text: u.stringView) == nativeWord.slot.unitPrelude
+            hosts = (ctx.nativeWords.slotOf text: u.stringView) == nativeWord.slot.unitPrelude
+            if hosts.not then hosts = (
+                (ctx.nativeWords.slotOf
+                    text: (ctx.fragMembs.get :i).stringView
+                ) ==
+                nativeWord.slot.unitDemand
+            )
         }
-        if isP when (ctx.rowsInPlace.has item: i).not then {
+        if hosts when (ctx.rowsInPlace.has item: i).not then {
             fl: (ctx.fragNames.get :i).copy
             for each fr: (fl.stringView.split sep: ",") loop {
                 if fr.length > 0 then loadFragPieces :ctx :runtimeDir frag: fr
@@ -36705,7 +36715,7 @@ loadPieces: function {ctx: Ctx runtimeDir: StringView} is {
     }
 }
 
-# loadFragPieces -- loadPiecesOf for the prelude fragment `frag`, when it holds
+# loadFragPieces -- loadPiecesOf for the fragment `frag`, when it holds
 # pieces: it is marked to be written a piece at a time
 loadFragPieces: function {ctx: Ctx runtimeDir: StringView frag: StringView} is {
     p: nativePath :runtimeDir :frag
