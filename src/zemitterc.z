@@ -13934,6 +13934,7 @@ emitRecordCtor: function {
         named: String
         if (fnIsNativeId :symtab fid: cco) then {
             noteMemberUse :ctx mono: tid member: memberWord.slot.create
+            demandMethodRow :ast :symtab :ctx mfid: cco
             named = "\{spelledCname :ctx :tid}_create"
         }
         return (userCreateCtor :ast :symtab :ctx :call :cco :facts named: named.stringView)
@@ -41323,9 +41324,7 @@ demandSpecNatives: function {
         match (
             mo
         ) case some then {
-            key: methodRowPath :ast :symtab :ctx mfid: mo
-            row: nativeFragRow :ctx path: key.stringView
-            if row > 0 then demandNativeRow :ctx :row key: key.stringView
+            demandMethodRow :ast :symtab :ctx mfid: mo
         } case none then null
     }
 }
@@ -45961,6 +45960,16 @@ demandNativeRow: function {ctx: Ctx row: u64 key: StringView} is {
     rowNeedAdd :ctx :key
 }
 
+# demandMethodRow -- what calling native method `mfid` demands, through the
+# fragment row that implements it (demandNativeRow); nothing when none does
+demandMethodRow: function {
+    ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx mfid: ztypes.tid
+} is {
+    key: methodRowPath :ast :symtab :ctx :mfid
+    row: nativeFragRow :ctx path: key.stringView
+    if row > 0 then demandNativeRow :ctx :row key: key.stringView
+}
+
 # nativeMethodArgForm -- how a native method's fragment takes a parameter of type
 # `pid`. ONE C RULE, decided by the type: a value view (a StringView, a
 # StringLike generic's view, a ByteView or ListView) BY VALUE, as a free
@@ -46588,6 +46597,7 @@ emitIoWrapperCreate: function {
         cid = cco
     } case none then null
     if cid.isZero then return "".string
+    demandMethodRow :ast :symtab :ctx mfid: cid
     pnames: List String
     pids: ListVal ztypes.tid
     pidsNm: ListVal zast.nameid
