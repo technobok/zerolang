@@ -1971,7 +1971,7 @@ deadcode-guard: bin/zc
 # of every kind, and live ones only a careless reader misses: the reader must
 # report exactly CDEAD_PROBE there before its count is trusted. The baseline is
 # the dead items the emitter writes today (corpus, then zc); lower it as it falls.
-CDEAD_BASELINE := 237 2
+CDEAD_BASELINE := 201 2
 CDEAD_PROBE := cdead_dead_fn cdead_dead_fn_ft cdead_dead_inline cdead_dead_leaf \
 	cdead_dead_macro cdead_dead_proto_t cdead_dead_str cdead_dead_t cdead_dead_vtable_t
 
@@ -2004,11 +2004,15 @@ def pre(text, flags):
     return out.split(SENT, 1)[1]
 
 def strip(t):
+    # one pass, left to right: a `//` or `/*` inside a literal is the
+    # literal's, and a quote inside a comment is the comment's
     t = re.sub(r'\\\n', ' ', t)
-    t = re.sub(r'/\*.*?\*/', ' ', t, flags=re.S)
-    t = re.sub(r'//[^\n]*', '', t)
-    t = re.sub(r'"(\\.|[^"\\\n])*"', '""', t)
-    return re.sub(r"'(\\.|[^'\\\n])*'", "0", t)
+    def one(m):
+        s = m.group(0)
+        if s.startswith('"'): return '""'
+        if s.startswith("'"): return '0'
+        return ' '
+    return re.sub(r'"(?:\\.|[^"\\\n])*"|\'(?:\\.|[^\'\\\n])*\'|/\*.*?\*/|//[^\n]*', one, t, flags=re.S)
 
 def unattr(t):
     while True:
@@ -2238,9 +2242,13 @@ errs = []
 
 def strip_c(t):
     # comments and string/char literals out, line breaks kept
-    t = re.sub(r'/\*.*?\*/', lambda m: '\n' * m.group(0).count('\n'), t, flags=re.S)
-    t = re.sub(r'//[^\n]*', '', t)
-    return re.sub(r'"(?:\\.|[^"\\\n])*"|\'(?:\\.|[^\'\\\n])*\'', '""', t)
+    # one pass, left to right: a `//` inside a literal is the literal's
+    def one(m):
+        s = m.group(0)
+        if s.startswith('/*'): return '\n' * s.count('\n')
+        if s.startswith('//'): return ''
+        return '""'
+    return re.sub(r'"(?:\\.|[^"\\\n])*"|\'(?:\\.|[^\'\\\n])*\'|/\*.*?\*/|//[^\n]*', one, t, flags=re.S)
 
 def attrs(head):
     w = head.split()
