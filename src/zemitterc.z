@@ -34143,21 +34143,12 @@ containerReachEdges: function {
     if (isMapOriginOf :symtab :ctx :tid) when usesRemove then {
         acc.append (monoMethodReturn :symtab monoId: tid nameId: zast.wellKnown.slot.wkRemove)
     }
-    # a map's two walks are written from one template, so either one used
-    # writes both cursors
-    if (isMapOriginOf :symtab :ctx :tid) or (isIdMapOriginOf :symtab :ctx :tid) then {
-        walks: (
-            (memberUsed :ctx mono: tid member: memberWord.slot.iterateAll) or
-            (memberUsed :ctx mono: tid member: memberWord.slot.iterateItems)
-        )
-        if walks then {
-            acc.append (monoMethodReturn :symtab monoId: tid nameId: zast.wellKnown.slot.wkIterate)
-            acc.append (monoMethodReturn
-                :symtab
-                monoId: tid
-                nameId: zast.wellKnown.slot.wkIterateItems
-            )
-        }
+    # a map's walks: each one's cursor, where written C calls it
+    if isMap when (memberUsed :ctx mono: tid member: memberWord.slot.iterateAll) then {
+        acc.append (monoMethodReturn :symtab monoId: tid nameId: zast.wellKnown.slot.wkIterate)
+    }
+    if isMap when (memberUsed :ctx mono: tid member: memberWord.slot.iterateItems) then {
+        acc.append (monoMethodReturn :symtab monoId: tid nameId: zast.wellKnown.slot.wkIterateItems)
     }
 }
 
@@ -39711,13 +39702,15 @@ emitMapIters: function {
     valT: StringView
     buf: String.borrow
 } is {
+    # each walk is a section, written where written C calls it (memberUsed);
+    # the reached set holds the cursors of the walks called (typeReachEdges)
+    walksKeys: memberUsed :ctx mono: monoId member: memberWord.slot.iterateAll
+    walksItems: memberUsed :ctx mono: monoId member: memberWord.slot.iterateItems
+    if walksKeys.not when walksItems.not then return
     miiId: monoMethodReturn :symtab :monoId nameId: zast.wellKnown.slot.wkIterateItems
     if miiId.isZero then return
     mkiId: monoMethodReturn :symtab :monoId nameId: zast.wellKnown.slot.wkIterate
     if mkiId.isZero then return
-    # the two walks are one template: written when either is reached, and the
-    # reached set holds both (typeReachEdges)
-    if (typeReached :ctx tid: miiId).not when (typeReached :ctx tid: mkiId).not then return
     ovkId: (monoMethodReturn
         :symtab
         monoId: mkiId
@@ -39749,7 +39742,8 @@ emitMapIters: function {
     pi: "\{runtimeDir}/z_MapIter.c.tmpl"
     rawi: readTemplate :ctx path: pi.stringView
     if rawi.length > 0 then {
-        i1: applyTmpl text: rawi key: "NAME" val: nm
+        rs: sectionedText :ctx mono: monoId text: rawi.stringView
+        i1: applyTmpl text: rs key: "NAME" val: nm
         i2: applyTmpl text: i1 key: "KEY_T" val: keyT
         i3: applyTmpl text: i2 key: "VAL_T" val: valT
         i4: applyTmpl text: i3 key: "MAPKEYITER" val: mki.stringView
