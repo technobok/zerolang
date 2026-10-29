@@ -2094,6 +2094,20 @@ memberWord: list {
     wait: "wait"
     waitTimeout: "waitTimeout"
     write: "write"
+    insert: "insert"
+    extend: "extend"
+    resize: "resize"
+    contains: "contains"
+    eq: "eq"
+    sort: "sort"
+    iterateReverse: "iterateReverse"
+    iterateMut: "iterateMut"
+    iterateItems: "iterateItems"
+    listView: "listView"
+    extendView: "extendView"
+    slice: "slice"
+    fill: "fill"
+    clear: "clear"
 } out staticlist StringView
 
 # nativeWord -- the words natives.tbl and the runtime fragments spell that the
@@ -11193,6 +11207,7 @@ emitListValLendCall: function {
     recvR: colRecvRef :ctx bn: bn.stringView vid: bvid
     if isResize then {
         vr: listArg :ast :symtab :ctx :call label: zast.wellKnown.slot.wkTo
+        noteMemberUse :ctx mono: bt member: memberWord.slot.resize
         er: "\{cb}_resize(\{recvR}, \{vr})"
         return (stating :facts from: callFacts text: er)
     }
@@ -11327,6 +11342,7 @@ emitListMethodCall: function {
     }
     if mnId == zast.wellKnown.slot.wkExtendView then {
         vw9: listArg :ast :symtab :ctx :call label: zast.wellKnown.slot.wkFrom
+        noteMemberUse :ctx mono: bt member: memberWord.slot.extendView
         e1e: "\{cb}_extendView(\{recvR}, \{vw9})"
         return (stating :facts from: callFacts text: e1e)
     }
@@ -11373,15 +11389,18 @@ emitListMethodCall: function {
         eaa: listTakeArgBase :ast :call label: zast.wellKnown.slot.wkFrom
         eaV: atomVid :symtab nid: (listTakeArgBaseNid :ast :call label: zast.wellKnown.slot.wkFrom)
         ea: emitLocalAtomName :ctx name: eaa vid: eaV
+        noteMemberUse :ctx mono: bt member: memberWord.slot.extend
         e5: "\{cb}_extend(\{recvR}, &\{ea})"
         return (stating :facts from: callFacts text: e5)
     }
     if mnId == zast.wellKnown.slot.wkContains then {
         vc: containsNeedleC :ast :symtab :ctx :call
+        noteMemberUse :ctx mono: bt member: memberWord.slot.contains
         e6: "\{cb}_contains(\{recvR}, \{vc})"
         return (stating :facts from: callFacts text: e6)
     }
     if mnId == zast.wellKnown.slot.wkSort then {
+        noteMemberUse :ctx mono: bt member: memberWord.slot.sort
         e7: "\{cb}_sort(\{recvR})"
         return (stating :facts from: callFacts text: e7)
     }
@@ -11595,6 +11614,7 @@ emitSpanMethodCall: function {
     }
     if mnId == zast.wellKnown.slot.wkFill then {
         vf: listArg :ast :symtab :ctx :call label: zast.wellKnown.slot.wkItem
+        noteMemberUse :ctx mono: bt member: memberWord.slot.fill
         ef: "\{cb}_fill(\{recvR}, \{vf})"
         return (stating :facts from: callFacts text: ef)
     }
@@ -17813,17 +17833,16 @@ emitNestedCollectionBase: function {
             noteMemberUse :ctx mono: nlid member: memberWord.slot.pop
             return (stating :facts from: callFacts text: "\{nlcb}_pop(\{recvB})")
         }
-        if mnId == zast.wellKnown.slot.wkSort then return (stating
-            :facts
-            from: callFacts
-            text: "\{nlcb}_sort(\{recvB})"
-        )
-        if (ztypecheck.isListViewMember nameId: mnId) then return (stating
-            :facts
-            from: callFacts
-            text: "\{nlcb}_listView(\{recvB})"
-        )
+        if mnId == zast.wellKnown.slot.wkSort then {
+            noteMemberUse :ctx mono: nlid member: memberWord.slot.sort
+            return (stating :facts from: callFacts text: "\{nlcb}_sort(\{recvB})")
+        }
+        if (ztypecheck.isListViewMember nameId: mnId) then {
+            noteMemberUse :ctx mono: nlid member: memberWord.slot.listView
+            return (stating :facts from: callFacts text: "\{nlcb}_listView(\{recvB})")
+        }
         if (isListWalkMember name: mn2) then {
+            noteMemberUse :ctx mono: nlid member: (ctx.memberWords.slotOf text: mn2)
             w9: "_\{mn2}("
             return (stating :facts from: callFacts text: "\{nlcb}\{w9}\{recvB})")
         }
@@ -17841,6 +17860,7 @@ emitNestedCollectionBase: function {
     if (isListViewOriginOf :symtab :ctx tid: nlid) when (isListReadWalkMember name: mn2) then {
         nvcb: spelledCname :ctx tid: nlid
         recvV: colRecvRef :ctx bn: baseAtom vid: bs9vid
+        noteMemberUse :ctx mono: nlid member: (ctx.memberWords.slotOf text: mn2)
         wv9: "_\{mn2}("
         return (stating :facts from: callFacts text: "\{nvcb}\{wv9}\{recvV})")
     }
@@ -17861,9 +17881,10 @@ emitNestedCollectionBase: function {
             noteMemberUse :ctx mono: nlid member: memberWord.slot.iterateAll
             return (stating :facts from: callFacts text: "\{nmpcb}_iterate(\{baseAtom})")
         }
-        if (
-            mnId == zast.wellKnown.slot.wkIterateItems
-        ) then return (stating :facts from: callFacts text: "\{nmpcb}_iterateItems(\{baseAtom})")
+        if mnId == zast.wellKnown.slot.wkIterateItems then {
+            noteMemberUse :ctx mono: nlid member: memberWord.slot.iterateItems
+            return (stating :facts from: callFacts text: "\{nmpcb}_iterateItems(\{baseAtom})")
+        }
     }
     # the id-keyed pair reached through a FIELD. They are stack structs, so
     # the receiver goes by address where a Map's field is already a pointer.
@@ -17874,11 +17895,10 @@ emitNestedCollectionBase: function {
             noteMemberUse :ctx mono: nlid member: memberWord.slot.iterateAll
             return (stating :facts from: callFacts text: "\{nidcb}_iterate(\{nidrv})")
         }
-        if mnId == zast.wellKnown.slot.wkIterateItems then return (stating
-            :facts
-            from: callFacts
-            text: "\{nidcb}_iterateItems(\{nidrv})"
-        )
+        if mnId == zast.wellKnown.slot.wkIterateItems then {
+            noteMemberUse :ctx mono: nlid member: memberWord.slot.iterateItems
+            return (stating :facts from: callFacts text: "\{nidcb}_iterateItems(\{nidrv})")
+        }
     }
     return "".string
 }
@@ -18984,6 +19004,7 @@ emitIdCollectionMemberRead: function {
         }
         if mnId == zast.wellKnown.slot.wkIterateItems then {
             idcb8: spelledCname :ctx tid: bstamp
+            noteMemberUse :ctx mono: bstamp member: memberWord.slot.iterateItems
             return (stating :facts from: callFacts text: "\{idcb8}_iterateItems(\{recvB2})")
         }
     }
@@ -19013,6 +19034,7 @@ emitIdCollectionMemberRead: function {
             return (stating :facts from: callFacts text: "\{mcb2}_iterate(\{bn2})")
         }
         if mnId == zast.wellKnown.slot.wkIterateItems then {
+            noteMemberUse :ctx mono: bstamp member: memberWord.slot.iterateItems
             return (stating :facts from: callFacts text: "\{mcb2}_iterateItems(\{bn2})")
         }
     }
@@ -19073,6 +19095,7 @@ windowMemberRead: function {
     if isSpan when mnId == zast.wellKnown.slot.wkClear then {
         sc: spelledCname :ctx :tid
         rr: colRecvRef :ctx bn: base :vid
+        noteMemberUse :ctx mono: tid member: memberWord.slot.clear
         return (stating :facts from: callFacts text: "\{sc}_clear(\{rr})")
     }
     lendsView: isArr or isSpan and (mnId == zast.wellKnown.slot.wkListView)
@@ -19226,6 +19249,7 @@ emitCollectionMemberRead: function {
         }
         if (isListReadWalkMember name: mn2) then {
             lcb9: spelledCname :ctx tid: bstamp
+            noteMemberUse :ctx mono: bstamp member: (ctx.memberWords.slotOf text: mn2)
             w8: "_\{mn2}("
             return (stating :facts from: callFacts text: "\{lcb9}\{w8}\{recvB2})")
         }
@@ -19240,12 +19264,15 @@ emitCollectionMemberRead: function {
             return (stating :facts from: callFacts text: "\{lcb2}_pop(\{recvB2})")
         }
         if mnId == zast.wellKnown.slot.wkSort then {
+            noteMemberUse :ctx mono: bstamp member: memberWord.slot.sort
             return (stating :facts from: callFacts text: "\{lcb2}_sort(\{recvB2})")
         }
         if (ztypecheck.isListViewMember nameId: mnId) then {
+            noteMemberUse :ctx mono: bstamp member: memberWord.slot.listView
             return (stating :facts from: callFacts text: "\{lcb2}_listView(\{recvB2})")
         }
         if mnId == zast.wellKnown.slot.wkIterateMut then {
+            noteMemberUse :ctx mono: bstamp member: memberWord.slot.iterateMut
             return (stating :facts from: callFacts text: "\{lcb2}_iterateMut(\{recvB2})")
         }
     }
@@ -19903,7 +19930,7 @@ copyFamilyOf: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes
 # stack struct is copied from its ADDRESS, `stackRecv`; a dict is heap-held,
 # and its local already IS the pointer, `heapRecv`.
 containerCopyText: function {
-    ctx: Ctx.view
+    ctx: Ctx
     tid: ztypes.tid
     fam: u64
     stackRecv: StringView
@@ -19911,6 +19938,7 @@ containerCopyText: function {
     facts: cfacts.borrow
 } out String is {
     cb: ctxCname :ctx :tid
+    noteMemberUse :ctx mono: tid member: memberWord.slot.copy
     if fam == 2 then return (stating :facts from: callFacts text: "\{cb}_copy(\{heapRecv})")
     return (stating :facts from: callFacts text: "\{cb}_copy(\{stackRecv})")
 }
@@ -21978,6 +22006,7 @@ emitListEqOperator: function {
     r: orderFinish :ctx st: ord
     opened: r.length > 0
     if neg then r.append "!"
+    noteMemberUse :ctx mono: owner member: memberWord.slot.eq
     r.append (spelledCname :ctx tid: owner)
     r.append "_eq("
     r.append (orderSlotText t: ctx st: ord slot: 0)
@@ -33951,9 +33980,8 @@ templateEqElem: function {
 } out ztypes.tid is {
     if (isListOriginOf :symtab :ctx :tid) then {
         compares: (
-            (monoMemberUsed :symtab monoId: tid nameId: zast.wellKnown.slot.wkContains) or
-            (monoMemberUsed :symtab monoId: tid nameId: zast.wellKnown.slot.wkOpEq) or
-            (monoMemberUsed :symtab monoId: tid nameId: zast.wellKnown.slot.wkOpNe)
+            (memberUsed :ctx mono: tid member: memberWord.slot.contains) or
+            (memberUsed :ctx mono: tid member: memberWord.slot.eq)
         )
         if compares then return (listElemType :symtab monoId: tid)
         return ztypes.tid.zero
@@ -34036,11 +34064,11 @@ typeReachEdges: function {
     containerReachEdges :symtab :ctx :tid :acc
 }
 
-# memberSigReachEdges -- the signature of each member written beside a type:
-# one a use site resolved, an iterator's `call`, which its cursor is written
-# with, and every member of a protocol or facet, whose vtable lists them all.
-# A method with a body is a function job: written only where C calls it, and
-# then its own C spells its signature.
+# memberSigReachEdges -- the signature of each member written beside a type
+# that no call spells: an iterator's `call`, which its cursor is written with,
+# and every member of a protocol or facet, whose vtable lists them all. Any
+# other member's signature is spelled where written C calls it -- a method with
+# a body by its own job, a native by its call.
 memberSigReachEdges: function {
     symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.tid acc: ListVal ztypes.tid
 } is {
@@ -34053,13 +34081,7 @@ memberSigReachEdges: function {
         if rw.keep.not then continue
         if (symtab.reg.typetypeOf typeId: rw.tid) != ztypes.ztypetype.functionType then continue
         if (ctx.fnJobAt.get key: rw.tid).some then continue
-        if allMembers.not when rw.name != zast.wellKnown.slot.wkCall when (monoMemberUsed
-            :symtab
-            monoId: tid
-            nameId: rw.name
-        ).not then {
-            continue
-        }
+        if allMembers.not when rw.name != zast.wellKnown.slot.wkCall then continue
         at: acc.length
         acc.append (symtab.reg.returnTypeOf tid: rw.tid)
         # the return a vtable slot or a wrapper is written with (methodRetCtype)
@@ -34101,8 +34123,8 @@ containerReachEdges: function {
     # writes both cursors
     if (isMapOriginOf :symtab :ctx :tid) or (isIdMapOriginOf :symtab :ctx :tid) then {
         walks: (
-            (monoMemberUsed :symtab monoId: tid nameId: zast.wellKnown.slot.wkIterate) or
-            (monoMemberUsed :symtab monoId: tid nameId: zast.wellKnown.slot.wkIterateItems)
+            (memberUsed :ctx mono: tid member: memberWord.slot.iterateAll) or
+            (memberUsed :ctx mono: tid member: memberWord.slot.iterateItems)
         )
         if walks then {
             acc.append (monoMethodReturn :symtab monoId: tid nameId: zast.wellKnown.slot.wkIterate)
@@ -35646,12 +35668,12 @@ demandListElemCalls: function {
 } is {
     elem: listElemType :symtab :monoId
     if elem.isZero then return
-    if (symtab.reg.isValtypeOf tid: elem).not when (monoMemberUsed
-        :symtab
-        :monoId
-        nameId: zast.wellKnown.slot.wkContains
+    if (symtab.reg.isValtypeOf tid: elem).not when (memberUsed
+        :ctx
+        mono: monoId
+        member: memberWord.slot.contains
     ) then noteFnUse :ctx tid: (refElemEqFid :symtab :elem)
-    if (monoMemberUsed :symtab :monoId nameId: zast.wellKnown.slot.wkSort) when (sortCallsWritten
+    if (memberUsed :ctx mono: monoId member: memberWord.slot.sort) when (sortCallsWritten
         :ast
         :symtab
         :elem
@@ -36804,9 +36826,9 @@ piecedText: function {ctx: Ctx.view text: StringView} out String is {
 }
 
 # memberKey -- the key a template member is recorded by: its instance, and its
-# slot in memberWord
+# slot in memberWord (fewer than 128 words)
 memberKey: function {mono: ztypes.tid member: u64} out u64 is {
-    return mono.u64 * 64 + member
+    return mono.u64 * 128 + member
 }
 
 # memberUsed -- written C calls template member `member` of instance `mono`
@@ -37971,34 +37993,16 @@ emitBoxMono: function {
     buf.append "}\n\n"
 }
 
-# monoMemberUsed -- whether a USE SITE resolved this member on this mono. The
-# question a per-mono emission must ask, and not the same as declChildOfId:
-# every instance carries every template member, so that one answers yes
-# everywhere and gates nothing. emitColMethodOnDemand has always asked this;
-# the members written inline beside it asked the other, and so were emitted into
-# every program that instantiated the container at all.
-monoMemberUsed: function {
-    symtab: zenv.ZSymbolTable.view
-    monoId: ztypes.tid
-    nameId: zast.nameid
-} out bool is {
-    md9: symtab.typing.declMemberIdOf parentTypeId: monoId :nameId
-    if md9.isZero then return false
-    return (symtab.typing.usedMemberDecl.has item: md9)
-}
 
-# emitColMethodOnDemand -- write one container template method, but only when the
-# program actually calls it on THIS instance. `usedMemberDecl` holds the member
-# declarations a use site resolved; the INSTANCE's own member is the question,
-# because refDecl records the template's and so answers for every instance at
-# once. A method nothing calls is a dead C function in every program that names
-# the collection at all.
+# emitColMethodOnDemand -- write one container template method, but only where
+# written C calls it on THIS instance (memberUsed). A method nothing calls is a
+# dead C function in every program that names the collection at all.
 emitColMethodOnDemand: function {
-    symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     runtimeDir: StringView
     monoId: ztypes.tid
-    nameId: zast.nameid
+    # the member, a memberWord slot
+    member: u64
     file: StringView
     nm: StringView
     # the ONE hole a template needs beyond NAME, and what fills it: `ELEM_T`
@@ -38009,9 +38013,7 @@ emitColMethodOnDemand: function {
     holeVal: StringView
     buf: String.borrow
 } is {
-    md: symtab.typing.declMemberIdOf parentTypeId: monoId :nameId
-    if md.isZero then return
-    if (symtab.typing.usedMemberDecl.has item: md).not then return
+    if (memberUsed :ctx mono: monoId :member).not then return
     fp: "\{runtimeDir}/\{file}"
     raw: readTemplate :ctx path: fp.stringView
     if raw.length == 0 then return
@@ -38048,11 +38050,11 @@ listElemsDestroyC: function {
 
 # listAddOnsGrow -- the List members written after the instance's own text
 # (insert, extend, resize: their own fragments) call its grow
-listAddOnsGrow: function {symtab: zenv.ZSymbolTable.view ctx: Ctx monoId: ztypes.tid} is {
+listAddOnsGrow: function {ctx: Ctx monoId: ztypes.tid} is {
     callsGrow: (
-        (monoMemberUsed :symtab :monoId nameId: zast.wellKnown.slot.wkInsert) or
-        (monoMemberUsed :symtab :monoId nameId: zast.wellKnown.slot.wkExtend) or
-        (monoMemberUsed :symtab :monoId nameId: zast.wellKnown.slot.wkResize)
+        (memberUsed :ctx mono: monoId member: memberWord.slot.insert) or
+        (memberUsed :ctx mono: monoId member: memberWord.slot.extend) or
+        (memberUsed :ctx mono: monoId member: memberWord.slot.resize)
     )
     if callsGrow then noteMemberUse :ctx mono: monoId member: memberWord.slot.grow
 }
@@ -38085,7 +38087,7 @@ emitListMono: function {
         lvm: listviewMethods :ctx :symtab :monoId nm: nm.stringView ect: ect.stringView
         t4: applyTmpl text: t3 key: "LISTVIEW_METHODS" val: lvm.stringView
         # insert, extend and resize, written after the instance, call its grow
-        listAddOnsGrow :symtab :ctx :monoId
+        listAddOnsGrow :ctx :monoId
         buf.append (sectionedText :ctx mono: monoId text: t4.stringView)
         buf.append "\n"
     }
@@ -38093,11 +38095,10 @@ emitListMono: function {
     # that calls them. Every List instance used to carry both, and in the
     # compiler's own C half of them were never called
     (emitColMethodOnDemand
-        :symtab
         :ctx
         :runtimeDir
         :monoId
-        nameId: zast.wellKnown.slot.wkInsert
+        member: memberWord.slot.insert
         file: "z_List_insert.c.tmpl"
         nm: nm.stringView
         hole: "ELEM_T"
@@ -38105,11 +38106,10 @@ emitListMono: function {
         :buf
     )
     (emitColMethodOnDemand
-        :symtab
         :ctx
         :runtimeDir
         :monoId
-        nameId: zast.wellKnown.slot.wkExtend
+        member: memberWord.slot.extend
         file: "z_List_extend.c.tmpl"
         nm: nm.stringView
         hole: "ELEM_T"
@@ -38118,11 +38118,10 @@ emitListMono: function {
     )
     # `resize` is declared on ListVal alone, as `.copy` is below
     (emitColMethodOnDemand
-        :symtab
         :ctx
         :runtimeDir
         :monoId
-        nameId: zast.wellKnown.slot.wkResize
+        member: memberWord.slot.resize
         file: "z_List_resize.c.tmpl"
         nm: nm.stringView
         hole: "ELEM_T"
@@ -38133,19 +38132,18 @@ emitListMono: function {
     # no member here for declMemberIdOf to find and nothing is written. The
     # family needs no test of its own
     (emitColMethodOnDemand
-        :symtab
         :ctx
         :runtimeDir
         :monoId
-        nameId: zast.wellKnown.slot.wkCopy
+        member: memberWord.slot.copy
         file: "z_List_copy.c.tmpl"
         nm: nm.stringView
         hole: "ELEM_T"
         holeVal: ect.stringView
         :buf
     )
-    useGet: monoMemberUsed :symtab :monoId nameId: zast.wellKnown.slot.wkGet
-    useMut: monoMemberUsed :symtab :monoId nameId: zast.wellKnown.slot.wkGetMut
+    useGet: memberUsed :ctx mono: monoId member: memberWord.slot.getOne
+    useMut: memberUsed :ctx mono: monoId member: memberWord.slot.getMut
     if useGet or useMut then {
         (emitColGet
             :ctx
@@ -38160,7 +38158,7 @@ emitListMono: function {
         )
     }
     elemT: eid
-    if (monoMemberUsed :symtab :monoId nameId: zast.wellKnown.slot.wkContains) then {
+    if (memberUsed :ctx mono: monoId member: memberWord.slot.contains) then {
         (emitListContains
             :ast
             :symtab
@@ -38172,9 +38170,9 @@ emitListMono: function {
             :buf
         )
     }
+    # called by written C, or a part of a generated `==` written C calls
     eqUsed: (
-        (monoMemberUsed :symtab :monoId nameId: zast.wellKnown.slot.wkOpEq) or
-        (monoMemberUsed :symtab :monoId nameId: zast.wellKnown.slot.wkOpNe)
+        (memberUsed :ctx mono: monoId member: memberWord.slot.eq) or (ctx.eqUsed.has item: monoId)
     )
     if eqUsed then (emitListEq
         :ast
@@ -38185,7 +38183,7 @@ emitListMono: function {
         elem: elemT
         :buf
     )
-    if (monoMemberUsed :symtab :monoId nameId: zast.wellKnown.slot.wkSort) then {
+    if (memberUsed :ctx mono: monoId member: memberWord.slot.sort) then {
         (emitListSort
             :ast
             :symtab
@@ -38446,14 +38444,10 @@ emitColSlice: function {
     buf.append "}\n\n"
 }
 
-# emitListSliceOnDemand -- emitColSlice for one mono, written only when a use
-# site resolved THIS instance's `slice`. `declChildOfId` is the wrong question:
-# every instance carries every template member, so it answers yes everywhere and
-# the window becomes dead C in each program that merely NAMES a list --
-# `usedMemberDecl` is what `insert` and `extend` are gated on and is the demand
-# itself. The view it slices to comes from the member's declared return, which
-# is another mono for a List and the mono itself for a ListView, so one path
-# serves both templates.
+# emitListSliceOnDemand -- emitColSlice for one mono, written only where written
+# C calls THIS instance's `slice` (memberUsed). The view it slices to comes from
+# the member's declared return, which is another mono for a List and the mono
+# itself for a ListView, so one path serves both templates.
 emitListSliceOnDemand: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
@@ -38462,9 +38456,7 @@ emitListSliceOnDemand: function {
     kind: StringView
     buf: String.borrow
 } is {
-    md: symtab.typing.declMemberIdOf parentTypeId: monoId nameId: zast.wellKnown.slot.wkSlice
-    if md.isZero then return
-    if (symtab.typing.usedMemberDecl.has item: md).not then return
+    if (memberUsed :ctx mono: monoId member: memberWord.slot.slice).not then return
     co: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.wellKnown.slot.wkSlice
     match (
         co
@@ -38596,7 +38588,7 @@ emitListIter: function {
         )
     }
     if (emitIterCursorOf :ast :ctx :symtab :liId :ect :buf) then {
-        emitListIterReadonly :ctx :symtab :monoId :liId :nm :buf
+        emitListIterReadonly :ctx :monoId :liId :nm :buf
     }
     # iterateMut -- the mutable walk, for a mono that declares one: its own
     # cursor type, since what it yields may be written. The C bodies are the
@@ -38604,7 +38596,7 @@ emitListIter: function {
     # lets the caller do with the elements. A view declares none: it is
     # readonly, and an ungated one would be a writable walk over storage the
     # view may not write.
-    if (monoMemberUsed :symtab :monoId nameId: zast.wellKnown.slot.wkIterateMut).not then return
+    if (memberUsed :ctx mono: monoId member: memberWord.slot.iterateMut).not then return
     lmId: monoMethodReturn :symtab :monoId nameId: zast.wellKnown.slot.wkIterateMut
     if (emitIterCursorOf :ast :ctx :symtab liId: lmId :ect :buf).not then return
     lm: cbaseNoPrefix :ctx tid: lmId
@@ -38618,7 +38610,6 @@ emitListIter: function {
 # cursor `liId`, each when used.
 emitListIterReadonly: function {
     ctx: Ctx
-    symtab: zenv.ZSymbolTable.view
     monoId: ztypes.tid
     liId: ztypes.tid
     nm: StringView
@@ -38635,7 +38626,7 @@ emitListIterReadonly: function {
     # the element inherits the strength of the lock its holder has on the
     # container.
     s8: "static z_\{li}_t z_\{nm}_iterate(const z_\{nm}_t* _this);\n"
-    if (monoMemberUsed :symtab :monoId nameId: zast.wellKnown.slot.wkIterate) then {
+    if (memberUsed :ctx mono: monoId member: memberWord.slot.iterateAll) then {
         buf.append s8
         s: "static z_\{li}_t z_\{nm}_iterate(const z_\{nm}_t* _this) {\n    z_\{li}_t _it = {0};\n    _it.data = _this->data;\n    _it.length = _this->length;\n    _it.idx = 0;\n    _it.down = false;\n    return _it;\n}\n\n"
         buf.append s
@@ -38643,7 +38634,7 @@ emitListIterReadonly: function {
     # iterateReverse -- the same cursor over the same window, walked from the
     # far end. Readonly like `iterate`, and there is no mutable twin: writing
     # through a walk is `iterateMut`, in either direction it is the same lock.
-    if (monoMemberUsed :symtab :monoId nameId: zast.wellKnown.slot.wkIterateReverse) then {
+    if (memberUsed :ctx mono: monoId member: memberWord.slot.iterateReverse) then {
         s12: "static z_\{li}_t z_\{nm}_iterateReverse(const z_\{nm}_t* _this);\n"
         buf.append s12
         s13: "static z_\{li}_t z_\{nm}_iterateReverse(const z_\{nm}_t* _this) {\n    z_\{li}_t _it = {0};\n    _it.data = _this->data;\n    _it.length = _this->length;\n    _it.idx = 0;\n    _it.down = true;\n    return _it;\n}\n\n"
@@ -38735,7 +38726,7 @@ emitListViewMono: function {
         buf.append t2
         buf.append "\n"
     }
-    if (monoMemberUsed :symtab :monoId nameId: zast.wellKnown.slot.wkGet) then {
+    if (memberUsed :ctx mono: monoId member: memberWord.slot.getOne) then {
         (emitColGet
             :ctx
             nm: nm.stringView
@@ -38799,7 +38790,7 @@ emitStaticListMono: function {
         buf.append "    return _this.data[_idx];\n"
         buf.append "}\n\n"
     }
-    if (monoMemberUsed :symtab :monoId nameId: zast.wellKnown.slot.wkIterate).not then return
+    if (memberUsed :ctx mono: monoId member: memberWord.slot.iterateAll).not then return
     liId: monoMethodReturn :symtab :monoId nameId: zast.wellKnown.slot.wkIterate
     if (emitIterCursorOf :ast :ctx :symtab :liId ect: ect.stringView :buf).not then return
     li: cbaseNoPrefix :ctx tid: liId
@@ -38837,7 +38828,7 @@ emitSpanMono: function {
         buf.append t2
         buf.append "\n"
     }
-    if (monoMemberUsed :symtab :monoId nameId: zast.wellKnown.slot.wkGet) then (emitColGet
+    if (memberUsed :ctx mono: monoId member: memberWord.slot.getOne) then (emitColGet
         :ctx
         nm: nm.stringView
         ect: ect.stringView
@@ -38849,44 +38840,40 @@ emitSpanMono: function {
         :buf
     )
     (emitSpanMemberOnDemand
-        :symtab
         :ctx
         :runtimeDir
         :monoId
-        nameId: zast.wellKnown.slot.wkSet
+        member: memberWord.slot.set
         file: "z_SpanVal_set.c.tmpl"
         nm: nm.stringView
         ect: ect.stringView
         :buf
     )
     (emitSpanMemberOnDemand
-        :symtab
         :ctx
         :runtimeDir
         :monoId
-        nameId: zast.wellKnown.slot.wkSlice
+        member: memberWord.slot.slice
         file: "z_SpanVal_slice.c.tmpl"
         nm: nm.stringView
         ect: ect.stringView
         :buf
     )
     (emitSpanMemberOnDemand
-        :symtab
         :ctx
         :runtimeDir
         :monoId
-        nameId: zast.wellKnown.slot.wkFill
+        member: memberWord.slot.fill
         file: "z_SpanVal_fill.c.tmpl"
         nm: nm.stringView
         ect: ect.stringView
         :buf
     )
     (emitSpanMemberOnDemand
-        :symtab
         :ctx
         :runtimeDir
         :monoId
-        nameId: zast.wellKnown.slot.wkClear
+        member: memberWord.slot.clear
         file: "z_SpanVal_clear.c.tmpl"
         nm: nm.stringView
         ect: ect.stringView
@@ -38897,22 +38884,21 @@ emitSpanMono: function {
 # emitSpanMemberOnDemand -- emitColMethodOnDemand for a window, whose one hole
 # beyond NAME is the element type.
 emitSpanMemberOnDemand: function {
-    symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     runtimeDir: StringView
     monoId: ztypes.tid
-    nameId: zast.nameid
+    # the member, a memberWord slot
+    member: u64
     file: StringView
     nm: StringView
     ect: StringView
     buf: String.borrow
 } is {
     (emitColMethodOnDemand
-        :symtab
         :ctx
         :runtimeDir
         :monoId
-        :nameId
+        :member
         :file
         :nm
         hole: "ELEM_T"
@@ -38921,12 +38907,8 @@ emitSpanMemberOnDemand: function {
     )
 }
 
-# listviewMethods -- the _listView cast when a List mono carries a listView
-# child, plus the _extendView companion when something actually calls it; ""
-# otherwise. extendView is gated on the USE SITE (usedMemberDecl), not on the
-# instance declaring the member: every instance carries every template member,
-# so gating on that emits it into every program -- which is what it did before
-# it had a declaration at all.
+# listviewMethods -- the _listView cast and the _extendView companion of a List
+# mono, each where written C calls it (memberUsed); "" otherwise.
 listviewMethods: function {
     ctx: Ctx
     symtab: zenv.ZSymbolTable.view
@@ -38943,11 +38925,11 @@ listviewMethods: function {
             {
                 lvc: ctxCname :ctx tid: rt
                 buf: String
-                if (monoMemberUsed :symtab :monoId nameId: zast.wellKnown.slot.wkListView) then {
+                if (memberUsed :ctx mono: monoId member: memberWord.slot.listView) then {
                     m0: "static \{lvc}_t z_\{nm}_listView(const z_\{nm}_t* _this) { return *(\{lvc}_t*)_this; }\n"
                     buf.append m0
                 }
-                if (monoMemberUsed :symtab :monoId nameId: zast.wellKnown.slot.wkExtendView) then {
+                if (memberUsed :ctx mono: monoId member: memberWord.slot.extendView) then {
                     m1: "static void z_\{nm}_extendView(z_\{nm}_t* _this, \{lvc}_t _from) {\n"
                     buf.append m1
                     # an empty window carries a null data pointer, and memcpy is
@@ -39625,11 +39607,10 @@ emitSetMono: function {
     # `.copy` is declared on SetVal and not on SetRef, so a SetRef mono has no
     # member here to find and nothing is written
     (emitColMethodOnDemand
-        :symtab
         :ctx
         :runtimeDir
         :monoId
-        nameId: zast.wellKnown.slot.wkCopy
+        member: memberWord.slot.copy
         file: "z_dict_copy.c.tmpl"
         nm: nm.stringView
         hole: ""
@@ -40097,11 +40078,10 @@ emitMapMono: function {
     # `.copy` is declared on MapVV alone, so the other three Map families have
     # no member here to find and nothing is written
     (emitColMethodOnDemand
-        :symtab
         :ctx
         :runtimeDir
         :monoId
-        nameId: zast.wellKnown.slot.wkCopy
+        member: memberWord.slot.copy
         file: "z_dict_copy.c.tmpl"
         nm: nm.stringView
         hole: ""
@@ -40208,7 +40188,7 @@ emitIdMapMono: function {
         keyT: keyT.stringView
         buf: gm
     )
-    if (monoMemberUsed :symtab :monoId nameId: zast.wellKnown.slot.wkCopy) then (noteMemberUse
+    if (memberUsed :ctx mono: monoId member: memberWord.slot.copy) then (noteMemberUse
         :ctx
         mono: monoId
         member: memberWord.slot.entriesCap
@@ -40229,11 +40209,10 @@ emitIdMapMono: function {
     )
     # `.copy` is declared on IdMapV and not on IdMapR
     (emitColMethodOnDemand
-        :symtab
         :ctx
         :runtimeDir
         :monoId
-        nameId: zast.wellKnown.slot.wkCopy
+        member: memberWord.slot.copy
         file: "z_IdMap_copy.c.tmpl"
         nm: nm.stringView
         hole: ""
@@ -40377,7 +40356,7 @@ emitIdSetMono: function {
     t5: applyTmpl text: t4 key: "OPTIONVIEW" val: ov.stringView
     t6: applyOptionTags :ast :ctx :symtab text: t5 key: "OPTIONVIEW" tid: ovId
     # copy, written after the instance, calls its items_cap
-    if (monoMemberUsed :symtab :monoId nameId: zast.wellKnown.slot.wkCopy) then (noteMemberUse
+    if (memberUsed :ctx mono: monoId member: memberWord.slot.copy) then (noteMemberUse
         :ctx
         mono: monoId
         member: memberWord.slot.itemsCap
@@ -40386,11 +40365,10 @@ emitIdSetMono: function {
     buf.append "\n"
     # IdSet is one form only, so this writes for every instance that calls it
     (emitColMethodOnDemand
-        :symtab
         :ctx
         :runtimeDir
         :monoId
-        nameId: zast.wellKnown.slot.wkCopy
+        member: memberWord.slot.copy
         file: "z_IdSet_copy.c.tmpl"
         nm: nm.stringView
         hole: "ITEM_T"
@@ -43519,7 +43497,7 @@ classifyCollectionMono: function {
     }
     if (isViewUnionOriginOf :symtab :ctx tid: tcl) then {
         isSv: originIsTid :symtab tid: tcl originTid: (ctx.origins.get i: family.slot.staticView)
-        if isSv.not or (staticViewReached :symtab tid: tv) then work.wOptView.append tv
+        if isSv.not or (staticViewReached :symtab :ctx tid: tv) then work.wOptView.append tv
     }
     colDst: u64
     if (originIsTid :symtab tid: tcl originTid: (ctx.origins.get i: family.slot.fixedArray)) then {
@@ -43618,7 +43596,9 @@ declOwnerTid: function {symtab: zenv.ZSymbolTable.view declId: ztypes.declid} ou
 
 # staticViewReached -- the StaticView instance `tid` answers a walk run time
 # makes: a reached list of its element type has its `iterate` used.
-staticViewReached: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
+staticViewReached: function {
+    symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.tid
+} out bool is {
     elem: symtab.reg.genericTypeArgAt specId: tid ordinal: 0
     i: u64
     for i < symtab.typing.constAggs.length loop {
@@ -43626,11 +43606,7 @@ staticViewReached: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out
         i = i + 1
         if g.reached when g.kind.staticList when (
             (symtab.reg.genericTypeArgAt specId: g.tid ordinal: 0) == elem
-        ) when (monoMemberUsed
-            :symtab
-            monoId: g.tid
-            nameId: zast.wellKnown.slot.wkIterate
-        ) then return true
+        ) when (memberUsed :ctx mono: g.tid member: memberWord.slot.iterateAll) then return true
     }
     return false
 }
