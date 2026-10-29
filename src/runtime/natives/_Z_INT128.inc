@@ -192,7 +192,7 @@ static inline bool z_u128_lt(z_u128 a, z_u128 b) { return a < b; }
 static inline bool z_u128_lt(z_u128 a, z_u128 b) { return a.hi < b.hi || (a.hi == b.hi && a.lo < b.lo); }
 #endif
 /*@@end@@*/
-/*@@row @prelude.u128_clz demand=@u128_clz needs=@int128_t,@bits@@*/
+/*@@row @prelude.u128_clz demand=@u128_clz needs=@int128_t,@clz64@@*/
 #if !defined(Z_INT128_NATIVE)
 static inline int z_u128_clz(z_u128 a) {
     if (a.hi) return z_clz64(a.hi);
@@ -485,7 +485,7 @@ static inline int32_t z_i128_cmp(z_i128 a, z_i128 b) { return z_i128_lt(b, a) - 
 static inline bool z_i128_is_neg(z_i128 a) { return z_i128_lt(a, z_i128_from_i64(0)); }
 /*@@end@@*/
 
-/*@@row @prelude.u128_span demand=@u128_span,@int128_conv needs=@u128_hi,@u128_lo,@bits,@span64,@int128_t@@*/
+/*@@row @prelude.u128_span demand=@u128_span,@int128_conv needs=@u128_hi,@u128_lo,@span64,@int128_t@@*/
 /* z_span64 for a 128-bit magnitude: the bits from its highest set bit down to
    its lowest, both counted; 0 for 0 */
 static inline int z_u128_span(z_u128 m) {

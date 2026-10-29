@@ -43,18 +43,48 @@ static void* z_xrealloc(void* p, size_t n) {
 #define Z_INT128_NATIVE 1
 __extension__ typedef __int128 z_i128;
 __extension__ typedef unsigned __int128 z_u128;
-#define Z_U128_C(hi, lo) ((z_u128)(((z_u128)(uint64_t)(hi) << 64) | (z_u128)(uint64_t)(lo)))
-#define Z_I128_C(hi, lo) ((z_i128)Z_U128_C(hi, lo))
-#define Z_I128_I64(v) ((z_i128)(int64_t)(v))
-#define Z_I128_U64(v) ((z_i128)(uint64_t)(v))
-#define Z_U128_U64(v) ((z_u128)(uint64_t)(v))
 #else
 typedef struct { uint64_t lo; uint64_t hi; } z_u128;
 typedef struct { uint64_t lo; uint64_t hi; } z_i128;
+#endif
+/*@@end@@*/
+
+/*@@row @prelude.u128_c demand=@u128_c needs=@int128_t@@*/
+#ifdef Z_INT128_NATIVE
+#define Z_U128_C(hi, lo) ((z_u128)(((z_u128)(uint64_t)(hi) << 64) | (z_u128)(uint64_t)(lo)))
+#else
 #define Z_U128_C(hi, lo) ((z_u128){ (uint64_t)(lo), (uint64_t)(hi) })
+#endif
+/*@@end@@*/
+
+/*@@row @prelude.i128_c demand=@i128_c needs=@int128_t,@u128_c@@*/
+#ifdef Z_INT128_NATIVE
+#define Z_I128_C(hi, lo) ((z_i128)Z_U128_C(hi, lo))
+#else
 #define Z_I128_C(hi, lo) ((z_i128){ (uint64_t)(lo), (uint64_t)(hi) })
+#endif
+/*@@end@@*/
+
+/*@@row @prelude.i128_i64 demand=@i128_i64 needs=@int128_t@@*/
+#ifdef Z_INT128_NATIVE
+#define Z_I128_I64(v) ((z_i128)(int64_t)(v))
+#else
 #define Z_I128_I64(v) ((z_i128){ (uint64_t)(int64_t)(v), (int64_t)(v) < 0 ? ~(uint64_t)0 : 0 })
+#endif
+/*@@end@@*/
+
+/*@@row @prelude.i128_u64 demand=@i128_u64 needs=@int128_t@@*/
+#ifdef Z_INT128_NATIVE
+#define Z_I128_U64(v) ((z_i128)(uint64_t)(v))
+#else
 #define Z_I128_U64(v) ((z_i128){ (uint64_t)(v), 0 })
+#endif
+/*@@end@@*/
+
+/*@@row @prelude.u128_u64 demand=@u128_u64,@int128_conv needs=@int128_t@@*/
+#ifdef Z_INT128_NATIVE
+#define Z_U128_U64(v) ((z_u128)(uint64_t)(v))
+#else
 #define Z_U128_U64(v) ((z_u128){ (uint64_t)(v), 0 })
 #endif
 /*@@end@@*/

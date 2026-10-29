@@ -128,12 +128,12 @@ extern int ilogbq(__float128 x);
 #endif
 /*@@end@@*/
 
-/*@@row @prelude.bits demand=@bits@@*/
 /* z_clz64, z_ctz64, z_popcount64 -- the leading zeros, trailing zeros and set
    bits of a 64-bit word. v must not be 0 for the first two, as for the
    builtins they stand for. gcc, clang and tcc take their builtins; MSVC has
    none, and takes the bit-scan intrinsics and a portable count of set bits
    (__popcnt64 needs a processor with POPCNT, which MSVC does not test for). */
+/*@@row @prelude.clz64 demand=@clz64@@*/
 #if defined(_MSC_VER) && !defined(__clang__)
 #include <intrin.h>
 static inline int z_clz64(uint64_t v) {
@@ -141,11 +141,26 @@ static inline int z_clz64(uint64_t v) {
     _BitScanReverse64(&i, v);
     return 63 - (int)i;
 }
+#else
+#define z_clz64(v) __builtin_clzll(v)
+#endif
+/*@@end@@*/
+
+/*@@row @prelude.ctz64 demand=@ctz64@@*/
+#if defined(_MSC_VER) && !defined(__clang__)
+#include <intrin.h>
 static inline int z_ctz64(uint64_t v) {
     unsigned long i;
     _BitScanForward64(&i, v);
     return (int)i;
 }
+#else
+#define z_ctz64(v) __builtin_ctzll(v)
+#endif
+/*@@end@@*/
+
+/*@@row @prelude.popcount64 demand=@popcount64@@*/
+#if defined(_MSC_VER) && !defined(__clang__)
 static inline int z_popcount64(uint64_t v) {
     v = v - ((v >> 1) & 0x5555555555555555u);
     v = (v & 0x3333333333333333u) + ((v >> 2) & 0x3333333333333333u);
@@ -153,13 +168,11 @@ static inline int z_popcount64(uint64_t v) {
     return (int)((v * 0x0101010101010101u) >> 56);
 }
 #else
-#define z_clz64(v) __builtin_clzll(v)
-#define z_ctz64(v) __builtin_ctzll(v)
 #define z_popcount64(v) __builtin_popcountll(v)
 #endif
 /*@@end@@*/
 
-/*@@row @prelude.span64 demand=@span64 needs=@bits@@*/
+/*@@row @prelude.span64 demand=@span64 needs=@clz64,@ctz64@@*/
 /* z_span64 -- how many bits lie from the highest set bit of v down to its
    lowest, both counted: the significand an integer needs to convert to a
    float exactly. 0 for 0. */

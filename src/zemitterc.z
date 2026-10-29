@@ -658,14 +658,14 @@ isUserStructType: function {tt: ztypes.ztypetype} out bool is {
 
 # wideLiteralOf -- an integer lexeme as a value of 128-bit integer kind `k`
 # (int128WordsC); "" when `k` is no 128-bit kind or the lexeme is no integer.
-wideLiteralOf: function {lex: StringView k: ztypes.suffixinfo} out String is {
+wideLiteralOf: function {ctx: Ctx lex: StringView k: ztypes.suffixinfo} out String is {
     if k.has.not then return "".string
     if (kindBits k: k.kind) != 128 then return "".string
     wb: ztypecheck.constLiteralBig :lex
     match (
         wb
     ) case some then {
-        return (int128WordsC b: wb signed: (kindSigned k: k.kind))
+        return (int128WordsC :ctx b: wb signed: (kindSigned k: k.kind))
     } case none then null
     return "".string
 }
@@ -675,21 +675,25 @@ wideLiteralOf: function {lex: StringView k: ztypes.suffixinfo} out String is {
 # complement. C has no 128-bit literal, and a 64-bit one would overflow in 64
 # bits before reaching the destination; the macro is the type's own value
 # where the C compiler has the type and its two words where it has none.
-int128WordsC: function {b: math.BigInt.view signed: bool} out String is {
+int128WordsC: function {ctx: Ctx b: math.BigInt.view signed: bool} out String is {
     one: math.BigInt from: 1
     bits: b.copy
     if b.sign < 0 then bits = b + (one << 128)
     mask: (one << 64) - one
     hi: (bits >> 64).text base: 16
     lo: (bits & mask).text base: 16
-    if signed then return "Z_I128_C(0x\{hi}ULL, 0x\{lo}ULL)"
+    if signed then {
+        preludeNeed :ctx memb: "@i128_c"
+        return "Z_I128_C(0x\{hi}ULL, 0x\{lo}ULL)"
+    }
+    preludeNeed :ctx memb: "@u128_c"
     return "Z_U128_C(0x\{hi}ULL, 0x\{lo}ULL)"
 }
 
 # literalDefaultC -- a literal default's C text: a decimal past i64 with its
 # unsigned suffix, a prefixed literal decoded, anything else as written.
-literalDefaultC: function {lex: StringView} out String is {
-    wl: wideLiteralC :lex
+literalDefaultC: function {lex: StringView ctx: Ctx} out String is {
+    wl: wideLiteralC :ctx :lex
     if wl.length > 0 then return wl
     lc: literalC :lex
     if lc.length > 0 then return lc
@@ -700,7 +704,7 @@ literalDefaultC: function {lex: StringView} out String is {
 # checker admits one only where a type takes it, and C reads an unsuffixed
 # decimal as a signed type it does not fit, and has no token at all past u64
 # or in binary. "" for any other text; a name is told apart by its first byte.
-wideLiteralC: function {lex: StringView} out String is {
+wideLiteralC: function {ctx: Ctx lex: StringView} out String is {
     if lex.length < 19 then return "".string
     b0: (lex.byteAt i: 0).or d: 0
     if b0 != 45 when (b0 < 48) or (b0 > 57) then return "".string
@@ -709,7 +713,7 @@ wideLiteralC: function {lex: StringView} out String is {
         bo
     ) case some then {
         if bo.i64.ok then return "".string
-        return (bigValueC b: bo)
+        return (bigValueC :ctx b: bo)
     } case none then null
     return "".string
 }
@@ -13323,9 +13327,9 @@ renderDefault: function {
                 text: (floatBitsC bits: (ztypecheck.floatLexemeBits lex: lt.stringView :k) :k)
             )
         }
-        wlD: wideLiteralOf lex: lt.stringView k: (constScalarKindForTid :symtab tid: targetTid)
+        wlD: wideLiteralOf :ctx lex: lt.stringView k: (constScalarKindForTid :symtab tid: targetTid)
         if wlD.length > 0 then return (stating :facts from: constFacts text: wlD)
-        return (stating :facts from: constFacts text: (literalDefaultC lex: lt.stringView))
+        return (stating :facts from: constFacts text: (literalDefaultC lex: lt.stringView :ctx))
     }
     {
         dk: dv
@@ -14449,7 +14453,7 @@ cvalText: function {
     if v.kind.ivalKind then return (stating
         :facts
         from: constFacts
-        text: (intCvalText :symtab :tid :v)
+        text: (intCvalText :symtab :ctx :tid :v)
     )
     if v.kind.fvalKind then {
         return (stating :facts from: constFacts text: (floatCvalText :symtab :tid :v))
@@ -14507,6 +14511,7 @@ aggCvalText: function {
 # narrowed to, or a value outside i64 spelled whole.
 intCvalText: function {
     symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
     tid: ztypes.tid
     v: ztypes.cval
 } out String is {
@@ -14514,12 +14519,13 @@ intCvalText: function {
     if nk.has when (kindBits k: nk.kind) == 128 then {
         sg: kindSigned k: nk.kind
         if v.bigId != 0 then return (int128WordsC
+            :ctx
             b: (ztypecheck.constBigOf st: symtab :v)
             signed: sg
         )
-        return (int128WordsC b: (math.BigInt from: v.ival) signed: sg)
+        return (int128WordsC :ctx b: (math.BigInt from: v.ival) signed: sg)
     }
-    if v.bigId != 0 then return (bigConstC :symtab :v)
+    if v.bigId != 0 then return (bigConstC :symtab :ctx :v)
     iv: v.ival
     if nk.has then iv = narrowConstToKind v: v.ival k: nk.kind
     # C HAS NO NEGATIVE LITERALS. A leading `-` is an operator applied to a
@@ -14542,20 +14548,20 @@ intCvalText: function {
 
 # bigConstC -- an integer constant outside i64 as C, spelled by its value: the
 # checker settled it in a type that holds it, and C converts it there.
-bigConstC: function {symtab: zenv.ZSymbolTable.view v: ztypes.cval} out String is {
+bigConstC: function {symtab: zenv.ZSymbolTable.view ctx: Ctx v: ztypes.cval} out String is {
     b: ztypecheck.constBigOf st: symtab :v
-    return (bigValueC :b)
+    return (bigValueC :ctx :b)
 }
 
 # bigValueC -- an integer outside i64 as C. A u64 is its digits, unsigned;
 # anything wider is built from two 64-bit halves of its 128-bit two's
 # complement form, since C has no 128-bit literal -- signed when the value is
 # negative. "" past 128 bits, which no type holds.
-bigValueC: function {b: math.BigInt.view} out String is {
+bigValueC: function {ctx: Ctx b: math.BigInt.view} out String is {
     if b.sign > 0 when b.bitLength <= 64 then return "\{b.string}ULL"
     if b.bitLength > 128 then return "".string
-    if b.sign < 0 then return (int128WordsC :b signed: true)
-    return (int128WordsC :b signed: false)
+    if b.sign < 0 then return (int128WordsC :ctx :b signed: true)
+    return (int128WordsC :ctx :b signed: false)
 }
 
 # floatCvalText -- cvalText for a folded float: the value the float type it is
@@ -17521,7 +17527,7 @@ emitAtom: function {
             )
         }
     }
-    wl: wideLiteralC lex: av
+    wl: wideLiteralC :ctx lex: av
     if wl.length > 0 then return wl
     # stamped variable use first: the local, alias-resolved and C-mangled
     # -- a stamped atom is a LOCAL, so the module-constant probe (an owned
@@ -19313,6 +19319,7 @@ emitCollectionMemberRead: function {
 dottedAtomNumericBase: function {
     bn2: StringView
     mn2: StringView
+    ctx: Ctx
 } out String is {
     b1: bn2.byteAt i: 0
     match (
@@ -19325,7 +19332,7 @@ dottedAtomNumericBase: function {
             # as well would make `1.nameid` mean "u32". The suffix is the
             # literal's own text, read as the lexer reads one (numkindByName).
             nk3: ztypes.numkindByName name: mn2
-            wl3: wideLiteralOf lex: bn2 k: nk3
+            wl3: wideLiteralOf :ctx lex: bn2 k: nk3
             if wl3.length > 0 then return wl3
             if nk3.has then {
                 bc1: bn2.string
@@ -19526,7 +19533,7 @@ emitDottedAtomBase: function {
     # its facts, where a leg knows them
     facts: cfacts.borrow
 } out String is {
-    eNum: dottedAtomNumericBase :bn2 :mn2
+    eNum: dottedAtomNumericBase :bn2 :mn2 :ctx
     if eNum.length > 0 then return eNum
     bnid2: interpPartNodeId n: (ast.nodes.get i: n.parent)
     bareTid: chaseStrTypedef :symtab :ctx tid: (stampIdOf :symtab nid: bnid2)
