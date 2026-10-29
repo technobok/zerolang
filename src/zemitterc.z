@@ -4391,6 +4391,9 @@ Ctx: class {
     # each (impl, protocol) pair written C boxes as an OWNED protocol value
     # (noteOwnedBoxUse): only these get `_create_owned` and `_owned_destroy`
     ownedBoxUses: IdSet u64
+    # each (impl, protocol or facet) pair written C boxes as a BORROWED value,
+    # or copies into a facet (noteBorrowBoxUse): only these get `_create`
+    borrowBoxUses: IdSet u64
     # the static aggregate rows written C spells `_zag<row>` of (noteAggUse),
     # those written, each one's text and its row in the order written
     # (writeDemandedAggs), and whether the written set is fixed
@@ -15672,6 +15675,8 @@ conformanceArgText: function {
     ) then {
         suffix = "create_owned".string
         noteOwnedBoxUse :ctx implTid: su.value protoTid: su.spec
+    } else {
+        noteBorrowBoxUse :ctx implTid: su.value protoTid: su.spec
     }
     aIb: spelledCname :ctx tid: su.value
     aRcv: "&\{av}"
@@ -18515,6 +18520,7 @@ protocolProjectionRead: function {
 } out String is {
     clab: boxLabelFor :symtab :ctx implTid: bstamp protoTid: mco
     if (clab.stringView == mn2).not then return String
+    noteBorrowBoxUse :ctx implTid: bstamp protoTid: mco
     ib: ctxCnameView :ctx tid: bstamp
     if (isPtrVid :ctx vid: bn2v) then return "\{ib}_\{mn2}_create(\{bn2})"
     return "\{ib}_\{mn2}_create(&\{bn2})"
@@ -37395,6 +37401,7 @@ emitC: function {
         emittedConformance: IdSet ztypes.confid
         boxedConformance: IdSet ztypes.confid
         ownedBoxUses: IdSet u64
+        borrowBoxUses: IdSet u64
         aggUses: IdSet u64
         aggWritten: IdSet u64
         aggTexts: List String
@@ -41001,20 +41008,14 @@ demandStdStreamBoxes: function {ast: Ast.view symtab: zenv.ZSymbolTable.view ctx
     if (
         (needsHasM :ctx uname: "io" memb: "stdout") or (needsHasM :ctx uname: "io" memb: "stderr")
     ) then {
-        (noteBoxUse
-            :symtab
-            :ctx
-            implTid: fid
-            protoTid: (ioCanonTidAny :ast :symtab :ctx canon: "Writer")
-        )
+        spW: ioCanonTidAny :ast :symtab :ctx canon: "Writer"
+        noteBoxUse :symtab :ctx implTid: fid protoTid: spW
+        noteBorrowBoxUse :ctx implTid: fid protoTid: spW
     }
     if (needsHasM :ctx uname: "io" memb: "stdin") then {
-        (noteBoxUse
-            :symtab
-            :ctx
-            implTid: fid
-            protoTid: (ioCanonTidAny :ast :symtab :ctx canon: "Reader")
-        )
+        spR: ioCanonTidAny :ast :symtab :ctx canon: "Reader"
+        noteBoxUse :symtab :ctx implTid: fid protoTid: spR
+        noteBorrowBoxUse :ctx implTid: fid protoTid: spR
     }
 }
 
@@ -45380,13 +45381,15 @@ emitConformanceImpl: function {
         mj = mj + 1
     }
     buf.append "};\n\n"
+    borrows: ctx.borrowBoxUses.has item: (ownedBoxKey :implTid protoTid: specTid)
     if isFacet then {
+        if borrows.not then return
         fc0: "static \{specCtype} \{wbase}_create(const \{implCtype}* val) {\n    \{specCtype} facet = {0};\n    facet.vtable = &\{wbase}_vtable;\n    facet.data._i\{implTid} = *val;\n    return facet;\n}\n\n"
         buf.append fc0
         return
     }
     bc0: "static \{specCtype} \{wbase}_create(const \{implCtype}* val) {\n    \{specCtype} proto = {0};\n    proto.data = (void*)val;\n    proto.vtable = &\{wbase}_vtable;\n    proto.destroy = NULL;\n    return proto;\n}\n\n"
-    buf.append bc0
+    if borrows then buf.append bc0
     if (ctx.ownedBoxUses.has item: (ownedBoxKey :implTid protoTid: specTid)).not then return
     od0: "static void \{wbase}_owned_destroy(void* p) {\n"
     buf.append od0
@@ -45444,6 +45447,13 @@ noteBoxUse: function {
 # impl's destructor with them (demandWrittenDestroys)
 noteOwnedBoxUse: function {ctx: Ctx implTid: ztypes.tid protoTid: ztypes.tid} is {
     ctx.ownedBoxUses.add item: (ownedBoxKey :implTid :protoTid)
+}
+
+# noteBorrowBoxUse -- written C boxes an `implTid` as a borrowed `protoTid`
+# value, or copies it into a `protoTid` facet (`_create`): the pair's create is
+# written (emitConformanceImpl)
+noteBorrowBoxUse: function {ctx: Ctx implTid: ztypes.tid protoTid: ztypes.tid} is {
+    ctx.borrowBoxUses.add item: (ownedBoxKey :implTid :protoTid)
 }
 
 # ownedBoxKey -- the (impl, protocol) pair as one ownedBoxUses key
@@ -47544,7 +47554,11 @@ emitProtocolCreateCall: function {
             implBase: spelledCname :ctx tid: fromTid
             label: boxLabelFor :symtab :ctx implTid: fromTid :protoTid
             if label.length == 0 then return "".string
-            if borrowsP.not when isFct.not then noteOwnedBoxUse :ctx implTid: fromTid :protoTid
+            if borrowsP or isFct then {
+                noteBorrowBoxUse :ctx implTid: fromTid :protoTid
+            } else {
+                noteOwnedBoxUse :ctx implTid: fromTid :protoTid
+            }
             valueVid: atomVid :symtab nid: (dottedBaseNodeId :ast n: fop)
             if valueVid.isZero then valueVid = atomVid :symtab nid: (atomNodeId n: fop)
             valVar: aliasResolve :ctx name: fromBase vid: valueVid
