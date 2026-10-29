@@ -21586,6 +21586,7 @@ emitOperatorAt: function {
     # the stamp is asked FIRST: it is a plain id lookup, where reaching the
     # table means building a key from a view. Most operands are not constants,
     # and those never touch the table at all.
+    constRow: false
     rhsConst: symtab.typing.nodeConstIn mono: ctx.curThisTid nid: rhsNid
     if rhsConst.kind.none.not then {
         ieee: zeroDivisionC :symtab :ctx :owner :opId :lhsNid rhs: rhsConst
@@ -21593,10 +21594,13 @@ emitOperatorAt: function {
         cbody: nativeConstImplOf :ctx path: key.stringView
         if cbody.length > 0 then {
             cpos: nativeConstPosOf :ctx path: key.stringView
-            if (constPosIsFirstOnly pos: cpos.stringView) then body = cbody.copy
+            if (constPosIsFirstOnly pos: cpos.stringView) then {
+                body = cbody.copy
+                constRow = true
+            }
         }
     }
-    return (emitOperatorRow :ast :symtab :ctx :owner :key :body :lhsNid :rhsNid :facts)
+    return (emitOperatorRow :ast :symtab :ctx :owner :key :body :constRow :lhsNid :rhsNid :facts)
 }
 
 # zeroDivisionC -- an f32 or f64 division whose operands are both constants and
@@ -21658,7 +21662,8 @@ constIsNegative: function {v: ztypes.cval} out bool is {
 # emitOperatorRow -- a native operator's natives.tbl row `body`, keyed `key`:
 # its two operands built in written order, in the form the row takes them, its
 # holes filled, and its facts stated -- a value row's from its operands, any
-# other row's a call's.
+# other row's a call's. The plain row's needs are fired unless `body` is its
+# constant-operand variant's, which calls nothing they supply.
 emitOperatorRow: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -21666,11 +21671,12 @@ emitOperatorRow: function {
     owner: ztypes.tid
     key: String
     body: String
+    constRow: bool
     lhsNid: zast.nodeid
     rhsNid: zast.nodeid
     facts: cfacts.borrow
 } out String is {
-    rowNeedAdd :ctx key: key.stringView
+    if constRow.not then rowNeedAdd :ctx key: key.stringView
     ord: orderBegin :ctx slots: 2
     if (rowHoleTwice body: body.stringView hole: "@L@") then orderNamesTwice st: ord slot: 0
     if (rowHoleTwice body: body.stringView hole: "@R@") then orderNamesTwice st: ord slot: 1
