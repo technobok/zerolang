@@ -1,4 +1,4 @@
-/*@@needs prelude.@xmalloc,prelude.@atomic,prelude.@atomic_add,prelude.@atomic_cas,prelude.@atomic_load,prelude.@atomic_store,prelude.@atomic_sub,prelude.@atomic_xchg@@*/
+/*@@needs prelude.@atomic@@*/
 /* Atomic -- one integer every thread reads and changes whole (sync.z), one
    copy per integer type. The value lives in a heap block every handle
    shares (`share` makes another), so its address holds while any thread can
@@ -12,6 +12,7 @@ typedef struct z_@@NAME@@_t {
     z_@@NAME@@_blk* b;
 } z_@@NAME@@_t;
 
+/*@@member create@@*/
 static z_@@NAME@@_t z_@@NAME@@_create(@@t@@ value) {
     z_@@NAME@@_t a;
     a.b = (z_@@NAME@@_blk*)z_xmalloc(sizeof(z_@@NAME@@_blk));
@@ -19,42 +20,59 @@ static z_@@NAME@@_t z_@@NAME@@_create(@@t@@ value) {
     atomic_init(&a.b->refs, 1);
     return a;
 }
+/*@@end@@*/
 
+/*@@member share needs=prelude.@atomic_add@@*/
 static z_@@NAME@@_t z_@@NAME@@_share(z_@@NAME@@_t* a) {
     Z_ATOMIC_ADD(&a->b->refs, 1, Z_RELAXED);
     z_@@NAME@@_t s;
     s.b = a->b;
     return s;
 }
+/*@@end@@*/
 
+/*@@member destroy needs=prelude.@atomic_sub@@*/
 static void z_@@NAME@@_destroy(z_@@NAME@@_t* a) {
     if (a->b == NULL) return;
     if (Z_ATOMIC_SUB(&a->b->refs, 1, Z_ACQREL) == 1) free(a->b);
     a->b = NULL;
 }
+/*@@end@@*/
 
+/*@@member load needs=prelude.@atomic_load@@*/
 static @@t@@ z_@@NAME@@_load(const z_@@NAME@@_t* a, z_@memoryorder@_t order) {
     return Z_ATOMIC_LOAD(&a->b->v, z_sync_load_order(order));
 }
+/*@@end@@*/
 
+/*@@member store needs=prelude.@atomic_store@@*/
 static void z_@@NAME@@_store(z_@@NAME@@_t* a, @@t@@ value, z_@memoryorder@_t order) {
     Z_ATOMIC_STORE(&a->b->v, value, z_sync_store_order(order));
 }
+/*@@end@@*/
 
+/*@@member exchange needs=prelude.@atomic_xchg@@*/
 static @@t@@ z_@@NAME@@_exchange(z_@@NAME@@_t* a, @@t@@ value, z_@memoryorder@_t order) {
     return Z_ATOMIC_XCHG(&a->b->v, value, z_sync_order(order));
 }
+/*@@end@@*/
 
+/*@@member compareExchange needs=prelude.@atomic_cas@@*/
 static @@t@@ z_@@NAME@@_compareExchange(z_@@NAME@@_t* a, @@t@@ current, @@t@@ next, z_@memoryorder@_t order) {
     @@t@@ seen = current;
     Z_ATOMIC_CAS(&a->b->v, &seen, next, z_sync_order(order), z_sync_fail_order(order));
     return seen;
 }
+/*@@end@@*/
 
+/*@@member fetchAdd needs=prelude.@atomic_add@@*/
 static @@t@@ z_@@NAME@@_fetchAdd(z_@@NAME@@_t* a, @@t@@ value, z_@memoryorder@_t order) {
     return Z_ATOMIC_ADD(&a->b->v, value, z_sync_order(order));
 }
+/*@@end@@*/
 
+/*@@member fetchSub needs=prelude.@atomic_sub@@*/
 static @@t@@ z_@@NAME@@_fetchSub(z_@@NAME@@_t* a, @@t@@ value, z_@memoryorder@_t order) {
     return Z_ATOMIC_SUB(&a->b->v, value, z_sync_order(order));
 }
+/*@@end@@*/

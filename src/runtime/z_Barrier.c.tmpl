@@ -1,4 +1,4 @@
-/*@@needs prelude.@panic,prelude.@xmalloc,prelude.@atomic,prelude.@atomic_add,prelude.@atomic_sub,prelude.@acqrel,prelude.@relaxed,prelude.@cond_broadcast,prelude.@cond_destroy,prelude.@cond_init,prelude.@cond_t,prelude.@cond_wait,prelude.@mutex_destroy,prelude.@mutex_init,prelude.@mutex_lock,prelude.@mutex_t,prelude.@mutex_unlock@@*/
+/*@@needs prelude.@atomic,prelude.@cond_t,prelude.@mutex_t@@*/
 /* Barrier -- where a fixed number of threads wait for each other (sync.z).
    One lock and one condition variable in a heap block every handle shares:
    each round counts its arrivals, the last one starts the next round and
@@ -16,6 +16,7 @@ typedef struct z_@@NAME@@_t {
     z_@@NAME@@_blk* b;
 } z_@@NAME@@_t;
 
+/*@@member create needs=prelude.@cond_init,prelude.@mutex_init@@*/
 static z_@@NAME@@_t z_@@NAME@@_create(uint64_t count) {
     z_@@NAME@@_t br;
     br.b = (z_@@NAME@@_blk*)z_xmalloc(sizeof(z_@@NAME@@_blk));
@@ -28,14 +29,18 @@ static z_@@NAME@@_t z_@@NAME@@_create(uint64_t count) {
     atomic_init(&br.b->refs, 1);
     return br;
 }
+/*@@end@@*/
 
+/*@@member share needs=prelude.@atomic_add,prelude.@relaxed@@*/
 static z_@@NAME@@_t z_@@NAME@@_share(z_@@NAME@@_t* h) {
     Z_ATOMIC_ADD(&h->b->refs, 1, Z_RELAXED);
     z_@@NAME@@_t s;
     s.b = h->b;
     return s;
 }
+/*@@end@@*/
 
+/*@@member destroy needs=prelude.@acqrel,prelude.@atomic_sub,prelude.@cond_destroy,prelude.@mutex_destroy@@*/
 /* the last handle to end destroys what the block holds and frees it */
 static void z_@@NAME@@_destroy(z_@@NAME@@_t* h) {
     if (h->b == NULL) return;
@@ -46,7 +51,9 @@ static void z_@@NAME@@_destroy(z_@@NAME@@_t* h) {
     }
     h->b = NULL;
 }
+/*@@end@@*/
 
+/*@@member wait needs=prelude.@cond_broadcast,prelude.@cond_wait,prelude.@mutex_lock,prelude.@mutex_unlock@@*/
 static bool z_@@NAME@@_wait(z_@@NAME@@_t* br) {
     z_@@NAME@@_blk* b = br->b;
     z_mutex_lock(&b->m);
@@ -63,3 +70,4 @@ static bool z_@@NAME@@_wait(z_@@NAME@@_t* br) {
     z_mutex_unlock(&b->m);
     return false;
 }
+/*@@end@@*/

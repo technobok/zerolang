@@ -2066,6 +2066,34 @@ memberWord: list {
     size: "size"
     string: "string"
     toStr: "to"
+    call: "call"
+    capacity: "capacity"
+    compareExchange: "compareExchange"
+    copy: "copy"
+    destroyElem: "destroyElem"
+    detach: "detach"
+    exchange: "exchange"
+    fetchAdd: "fetchAdd"
+    fetchSub: "fetchSub"
+    id: "id"
+    isFinished: "isFinished"
+    join: "join"
+    load: "load"
+    lock: "lock"
+    notifyAll: "notifyAll"
+    notifyOne: "notifyOne"
+    read: "read"
+    receive: "receive"
+    run: "run"
+    send: "send"
+    sender: "sender"
+    share: "share"
+    store: "store"
+    tryReceive: "tryReceive"
+    value: "value"
+    wait: "wait"
+    waitTimeout: "waitTimeout"
+    write: "write"
 } out staticlist StringView
 
 # nativeWord -- the words natives.tbl and the runtime fragments spell that the
@@ -13541,7 +13569,10 @@ emitCtorDefaultsFill: function {
         }
         ccb: spelledCname :ctx tid: cco
         # a templated class creates through its template's function
-        if (tmplClassRowOf :symtab :ctx :tid) > 0 then ccb = "\{spelledCname :ctx :tid}_create"
+        if (tmplClassRowOf :symtab :ctx :tid) > 0 then {
+            noteMemberUse :ctx mono: tid member: memberWord.slot.create
+            ccb = "\{spelledCname :ctx :tid}_create"
+        }
         return (stating :facts from: callFacts text: "\{ccb}(\{cargs})")
     }
     fids: ListVal ztypes.tid
@@ -13744,7 +13775,10 @@ emitRecordCtor: function {
     if cco.isZero.not then {
         # a native create is its row's fragment, written under the class's name
         named: String
-        if (fnIsNativeId :symtab fid: cco) then named = "\{spelledCname :ctx :tid}_create"
+        if (fnIsNativeId :symtab fid: cco) then {
+            noteMemberUse :ctx mono: tid member: memberWord.slot.create
+            named = "\{spelledCname :ctx :tid}_create"
+        }
         return (userCreateCtor :ast :symtab :ctx :call :cco :facts named: named.stringView)
     }
     fnames: List String
@@ -16240,6 +16274,7 @@ tmplInstCreate: function {
     if (tmplClassRowOf :symtab :ctx tid: ct) == 0 then return "".string
     cco: userCreateFn :symtab tid: ct
     if cco.isZero then return "".string
+    noteMemberUse :ctx mono: ct member: memberWord.slot.create
     named: "\{spelledCname :ctx tid: ct}_create"
     return (userCreateCtor :ast :symtab :ctx :call :cco :facts named: named.stringView)
 }
@@ -18453,7 +18488,7 @@ typeNameCreateZero: function {
 # Every other method is its own cname.
 autoCallCname: function {
     symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
+    ctx: Ctx
     # the type the method was found on
     owner: ztypes.tid
     method: ztypes.tid
@@ -28642,7 +28677,7 @@ objIterYieldTid: function {
 # template's `{type}_call`.
 objIterCallC: function {
     symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
+    ctx: Ctx
     cco: ztypes.tid
     itid: ztypes.tid
 } out String is {
@@ -28665,6 +28700,12 @@ objIterCallC: function {
         callC = ctxCname :ctx tid: cco
     } else {
         itc: ctxCname :ctx tid: itid
+        # a templated class's `call` is a section of its template
+        if (tmplClassRowOf :symtab :ctx tid: itid) > 0 then (noteMemberUse
+            :ctx
+            mono: itid
+            member: memberWord.slot.call
+        )
         callC = "\{itc}_call"
     }
     return callC
@@ -41818,7 +41859,9 @@ emitTmplClassMono: function {
     # what is left is a runtime fragment's own holes: a type by canon, a tag
     # constant, a member
     filled: fillFragmentHoles :ast :symtab :ctx text: made.take path: p.stringView
-    splitTmplText :ctx text: filled.stringView :buf
+    # the members written C calls, and those they need (sectionedText)
+    kept: sectionedText :ctx mono: monoId text: filled.stringView
+    splitTmplText :ctx text: kept.stringView :buf
 }
 
 # splitTmplText -- an instantiated class template, placed so its functions may
@@ -44981,6 +45024,13 @@ methodRowPath: function {
     return "".string
 }
 
+# noteTmplMemberUse -- written C calls member `mnId` of templated class instance
+# `cid`: that section of its template is written (sectionedText)
+noteTmplMemberUse: function {ast: Ast.view ctx: Ctx cid: ztypes.tid mnId: zast.nameid} is {
+    mn: zast.nameTextAt :ast ref: mnId
+    noteMemberUse :ctx mono: cid member: (ctx.memberWords.slotOf text: mn.stringView)
+}
+
 # nativeMethodCallOpen -- `<class>_<method>(<receiver>`, the open call of a
 # native method's fragment function, which the caller closes after its
 # arguments
@@ -45173,6 +45223,7 @@ emitClassNativeCall: function {
         if row == 0 then return "".string
         demandNativeRow :ctx :row key: key.stringView
     }
+    if tmplInst then noteTmplMemberUse :ast :ctx :cid :mnId
     fc: spelledCname :ctx tid: cid
     recvExpr: nativeValueRecvExpr :ast :symtab :ctx :cid recvNid: valRecv
     if valRecv.isZero then recvExpr = nativeCallRecvExpr :ast :symtab :ctx :calr :bn :bnid
@@ -45387,6 +45438,8 @@ emitClassNativeRead: function {
         k = k + 1
     }
     if tmplInst.not then demandNativeRow :ctx :row key: key.stringView
+    # a templated class's member is a section of its template (noteMemberUse)
+    if tmplInst then noteTmplMemberUse :ast :ctx :cid :mnId
     fc: spelledCname :ctx tid: cid
     rexp: "&\{recv}"
     if (isPtrVid :ctx vid: recvVid) then rexp = recv.string
@@ -45966,7 +46019,9 @@ emitNativeFreeFnCall: function {
     callee: "z_\{un}_\{mn}"
     viaMember: nativeViaMember :ctx key: key.stringView
     if viaMember.length > 0 then {
-        callee = "\{spelledCname :ctx tid: (stampIdOf :symtab nid: call.nodeid)}_\{viaMember}"
+        viaInst: stampIdOf :symtab nid: call.nodeid
+        noteMemberUse :ctx mono: viaInst member: (ctx.memberWords.slotOf text: viaMember.stringView)
+        callee = "\{spelledCname :ctx tid: viaInst}_\{viaMember}"
     } else if (nativeIsFragBacked :ctx path: key.stringView).not then return "".string
     needsAddM :ctx uname: un.stringView memb: "@unit"
     needsAddM :ctx uname: un.stringView memb: mn

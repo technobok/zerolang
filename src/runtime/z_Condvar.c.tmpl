@@ -1,4 +1,4 @@
-/*@@needs prelude.@panic,prelude.@xmalloc,prelude.@atomic,prelude.@atomic_add,prelude.@atomic_sub,prelude.@acqrel,prelude.@relaxed,prelude.@cond_broadcast,prelude.@cond_destroy,prelude.@cond_init,prelude.@cond_signal,prelude.@cond_t@@*/
+/*@@needs prelude.@atomic,prelude.@cond_t@@*/
 /* Condvar -- where threads wait for a condition (sync.z). The condition
    variable lives in a heap block every handle shares, so it holds still while
    threads wait on it; a MutexGuard's `wait` waits on it with the guard's
@@ -12,6 +12,7 @@ typedef struct z_@@NAME@@_t {
     z_@@NAME@@_blk* b;
 } z_@@NAME@@_t;
 
+/*@@member create needs=prelude.@cond_init@@*/
 static z_@@NAME@@_t z_@@NAME@@_create(void) {
     z_@@NAME@@_t cv;
     cv.b = (z_@@NAME@@_blk*)z_xmalloc(sizeof(z_@@NAME@@_blk));
@@ -19,14 +20,18 @@ static z_@@NAME@@_t z_@@NAME@@_create(void) {
     atomic_init(&cv.b->refs, 1);
     return cv;
 }
+/*@@end@@*/
 
+/*@@member share needs=prelude.@atomic_add,prelude.@relaxed@@*/
 static z_@@NAME@@_t z_@@NAME@@_share(z_@@NAME@@_t* h) {
     Z_ATOMIC_ADD(&h->b->refs, 1, Z_RELAXED);
     z_@@NAME@@_t s;
     s.b = h->b;
     return s;
 }
+/*@@end@@*/
 
+/*@@member destroy needs=prelude.@acqrel,prelude.@atomic_sub,prelude.@cond_destroy@@*/
 /* the last handle to end destroys what the block holds and frees it */
 static void z_@@NAME@@_destroy(z_@@NAME@@_t* h) {
     if (h->b == NULL) return;
@@ -36,11 +41,16 @@ static void z_@@NAME@@_destroy(z_@@NAME@@_t* h) {
     }
     h->b = NULL;
 }
+/*@@end@@*/
 
+/*@@member notifyOne needs=prelude.@cond_signal@@*/
 static void z_@@NAME@@_notifyOne(z_@@NAME@@_t* cv) {
     z_cond_signal(&cv->b->c);
 }
+/*@@end@@*/
 
+/*@@member notifyAll needs=prelude.@cond_broadcast@@*/
 static void z_@@NAME@@_notifyAll(z_@@NAME@@_t* cv) {
     z_cond_broadcast(&cv->b->c);
 }
+/*@@end@@*/

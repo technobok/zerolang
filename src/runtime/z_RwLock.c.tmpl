@@ -1,4 +1,4 @@
-/*@@needs prelude.@panic,prelude.@xmalloc,prelude.@atomic,prelude.@atomic_add,prelude.@atomic_sub,prelude.@rwlock_destroy,prelude.@rwlock_init,prelude.@rwlock_rdlock,prelude.@rwlock_t,prelude.@rwlock_wrlock,prelude.@acqrel,prelude.@relaxed@@*/
+/*@@needs prelude.@atomic,prelude.@rwlock_t@@*/
 /* RwLock and RwLockVal -- a value of @@P0@@ that many threads read at once or
    one writes, through the guards `read` and `write` answer (sync.z), one copy
    per value type; both classes are this template, @@P0@@ their one type. The lock and the value live in a heap block every handle shares, as a
@@ -14,6 +14,7 @@ typedef struct z_@@NAME@@_t {
     z_@@NAME@@_blk* b;
 } z_@@NAME@@_t;
 
+/*@@member create needs=prelude.@rwlock_init@@*/
 static z_@@NAME@@_t z_@@NAME@@_create(@@P0@@ value) {
     z_@@NAME@@_t rw;
     rw.b = (z_@@NAME@@_blk*)z_xmalloc(sizeof(z_@@NAME@@_blk));
@@ -22,14 +23,18 @@ static z_@@NAME@@_t z_@@NAME@@_create(@@P0@@ value) {
     rw.b->value = value;
     return rw;
 }
+/*@@end@@*/
 
+/*@@member share needs=prelude.@atomic_add,prelude.@relaxed@@*/
 static z_@@NAME@@_t z_@@NAME@@_share(z_@@NAME@@_t* h) {
     Z_ATOMIC_ADD(&h->b->refs, 1, Z_RELAXED);
     z_@@NAME@@_t s;
     s.b = h->b;
     return s;
 }
+/*@@end@@*/
 
+/*@@member destroy needs=prelude.@acqrel,prelude.@atomic_sub,prelude.@rwlock_destroy@@*/
 /* the last handle to end destroys what the block holds and frees it */
 static void z_@@NAME@@_destroy(z_@@NAME@@_t* h) {
     if (h->b == NULL) return;
@@ -40,7 +45,9 @@ static void z_@@NAME@@_destroy(z_@@NAME@@_t* h) {
     }
     h->b = NULL;
 }
+/*@@end@@*/
 
+/*@@member read needs=prelude.@rwlock_rdlock@@*/
 static z_@@OUT.read@@_t z_@@NAME@@_read(z_@@NAME@@_t* rw) {
     z_@@OUT.read@@_t g;
     if (z_rwlock_rdlock(&rw->b->l) != 0) z_panic("sync.RwLock: read lock failed");
@@ -48,7 +55,9 @@ static z_@@OUT.read@@_t z_@@NAME@@_read(z_@@NAME@@_t* rw) {
     g.value = &rw->b->value;
     return g;
 }
+/*@@end@@*/
 
+/*@@member write needs=prelude.@rwlock_wrlock@@*/
 static z_@@OUT.write@@_t z_@@NAME@@_write(z_@@NAME@@_t* rw) {
     z_@@OUT.write@@_t g;
     if (z_rwlock_wrlock(&rw->b->l) != 0) z_panic("sync.RwLock: write lock failed");
@@ -56,3 +65,4 @@ static z_@@OUT.write@@_t z_@@NAME@@_write(z_@@NAME@@_t* rw) {
     g.value = &rw->b->value;
     return g;
 }
+/*@@end@@*/

@@ -1,4 +1,4 @@
-/*@@needs prelude.@panic,prelude.@xmalloc,prelude.@acqrel,prelude.@acquire,prelude.@atomic,prelude.@atomic_add,prelude.@atomic_load,prelude.@atomic_store,prelude.@release,prelude.@thread_detach,prelude.@thread_join,prelude.@thread_self_id,prelude.@thread_start,prelude.@thread_t@@*/
+/*@@needs prelude.@atomic,prelude.@thread_t@@*/
 /* JoinHandle / JoinHandleVal -- one started thread and the result its task
    answers (thread.z), one copy per result type; one template serves both
    classes through positional holes. The task arrives boxed as a Task value: its
@@ -28,6 +28,7 @@ typedef struct z_@@NAME@@_t {
     z_@@NAME@@_blk* b;
 } z_@@NAME@@_t;
 
+/*@@member run needs=prelude.@acqrel,prelude.@atomic_add,prelude.@atomic_store,prelude.@release,prelude.@thread_self_id@@*/
 static void z_@@NAME@@_run(void* p) {
     z_@@NAME@@_blk* b = (z_@@NAME@@_blk*)p;
     Z_ATOMIC_STORE(&b->tid, z_thread_self_id(), Z_RELEASE);
@@ -40,7 +41,9 @@ static void z_@@NAME@@_run(void* p) {
         free(b);
     }
 }
+/*@@end@@*/
 
+/*@@member create needs=run,prelude.@thread_start@@*/
 static z_@@NAME@@_t z_@@NAME@@_create(z_@@ARG.create.task@@_t task, @@StringView@@_t name, uint64_t stackSize) {
     z_@@NAME@@_t h;
     h.b = (z_@@NAME@@_blk*)z_xmalloc(sizeof(z_@@NAME@@_blk));
@@ -55,14 +58,18 @@ static z_@@NAME@@_t z_@@NAME@@_create(z_@@ARG.create.task@@_t task, @@StringView
     }
     return h;
 }
+/*@@end@@*/
 
+/*@@member wait needs=prelude.@atomic_store,prelude.@release,prelude.@thread_join@@*/
 static void z_@@NAME@@_wait(z_@@NAME@@_blk* b) {
     if (b->joined) return;
     if (z_thread_join(&b->th) != 0) z_panic("thread: join failed");
     b->joined = true;
     Z_ATOMIC_STORE(&b->tid, 0, Z_RELEASE);
 }
+/*@@end@@*/
 
+/*@@member join needs=wait@@*/
 /* the result, moved out: destroy then leaves it to its new owner */
 static @@P0@@ z_@@NAME@@_join(z_@@NAME@@_t* h) {
     z_@@NAME@@_wait(h->b);
@@ -70,15 +77,21 @@ static @@P0@@ z_@@NAME@@_join(z_@@NAME@@_t* h) {
     h->b->taken = true;
     return h->b->result;
 }
+/*@@end@@*/
 
+/*@@member isFinished needs=prelude.@acquire,prelude.@atomic_load@@*/
 static bool z_@@NAME@@_isFinished(const z_@@NAME@@_t* h) {
     return Z_ATOMIC_LOAD(&h->b->finished, Z_ACQUIRE) != 0;
 }
+/*@@end@@*/
 
+/*@@member id needs=prelude.@acquire,prelude.@atomic_load@@*/
 static uint64_t z_@@NAME@@_id(const z_@@NAME@@_t* h) {
     return Z_ATOMIC_LOAD(&h->b->tid, Z_ACQUIRE);
 }
+/*@@end@@*/
 
+/*@@member detach needs=prelude.@acqrel,prelude.@atomic_add,prelude.@thread_detach@@*/
 /* let the thread run on its own: it destroys the result and frees the block
    when it finishes, or this does now if it already has */
 static void z_@@NAME@@_detach(z_@@NAME@@_t* h) {
@@ -90,7 +103,9 @@ static void z_@@NAME@@_detach(z_@@NAME@@_t* h) {
         free(b);
     }
 }
+/*@@end@@*/
 
+/*@@member destroy needs=wait@@*/
 static void z_@@NAME@@_destroy(z_@@NAME@@_t* h) {
     if (h->b == NULL) return;
     z_@@NAME@@_wait(h->b);
@@ -98,3 +113,4 @@ static void z_@@NAME@@_destroy(z_@@NAME@@_t* h) {
     free(h->b);
     h->b = NULL;
 }
+/*@@end@@*/
