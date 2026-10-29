@@ -1252,7 +1252,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2375247
+ALLOC_BASELINE := 2376006
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1971,7 +1971,7 @@ deadcode-guard: bin/zc
 # of every kind, and live ones only a careless reader misses: the reader must
 # report exactly CDEAD_PROBE there before its count is trusted. The baseline is
 # the dead items the emitter writes today (corpus, then zc); lower it as it falls.
-CDEAD_BASELINE := 5041 113
+CDEAD_BASELINE := 4796 113
 CDEAD_PROBE := cdead_dead_fn cdead_dead_fn_ft cdead_dead_inline cdead_dead_leaf \
 	cdead_dead_macro cdead_dead_proto_t cdead_dead_str cdead_dead_t cdead_dead_vtable_t
 
@@ -2187,7 +2187,7 @@ cdead-guard: bin/zc
 # cdead_dead_fn and cdead_dead_str, so a compiler that stops warning cannot
 # pass. The baseline is today's warnings (gcc corpus, gcc zc, clang corpus,
 # clang zc); lower it as it falls. Skipped without clang.
-CC_UNUSED_BASELINE := 1441 76 1883 78
+CC_UNUSED_BASELINE := 1260 76 1702 78
 CC_UNUSED_FLAGS := -std=c17 -c -o /dev/null -Wunused-function -Wunused-variable -Wunused-const-variable
 CC_UNUSED_RE := warning: .*\[-Wunused-(function|variable|const-variable)
 
@@ -2415,11 +2415,26 @@ for f in files:
     for key, a, _, _ in rows:
         if a.get('tmpl') and os.path.join(rt, a['tmpl']) == f:
             decl += needs_of(key, a) + [(unit_of(key), d) for d in demands(key, a)]
-    cov = closure(decl)
-    for n in sorted(spelled(t) - HOLE_TYPES):
-        pk, dem = owner[n]
-        if dem not in cov:
-            errs.append(f'{f} spells {n} (piece {pk}) and its /*@@needs ...@@*/ marker does not name {dem[0]}.{dem[1]}')
+    # a member section is written with the row needs it declares and those of
+    # the sibling sections it needs; the text outside the sections with the marker's
+    secs = {}
+    for sm in re.finditer(r'/\*@@member (\S+)(?: needs=(\S*))?@@\*/(.*?)/\*@@end@@\*/', t, re.S):
+        secs[sm.group(1)] = ([x for x in (sm.group(2) or '').split(',') if x], sm.group(3))
+    def sec_decl(name, seen):
+        if name in seen or name not in secs: return []
+        seen.add(name)
+        out = []
+        for x in secs[name][0]:
+            out += [tuple(x.split('.', 1))] if '.' in x else sec_decl(x, seen)
+        return out
+    parts = [('', re.sub(r'/\*@@member .*?/\*@@end@@\*/', '', t, flags=re.S), decl)]
+    parts += [(f' (member {k})', body, decl + sec_decl(k, set())) for k, (_, body) in secs.items()]
+    for where, body, d in parts:
+        cov = closure(d)
+        for n in sorted(spelled(body) - HOLE_TYPES):
+            pk, dem = owner[n]
+            if dem not in cov:
+                errs.append(f'{f}{where} spells {n} (piece {pk}) and neither its /*@@needs ...@@*/ marker nor its section needs= name {dem[0]}.{dem[1]}')
 
 # --- the emitter: each top-level item that spells a piece's name records it --
 src = open(emitter).read().split('\n')

@@ -2058,6 +2058,10 @@ memberWord: list {
     itemsCap: "items_cap"
     keyAt: "keyAt"
     valueAt: "valueAt"
+    lengthOf: "length"
+    size: "size"
+    string: "string"
+    toStr: "to"
 } out staticlist StringView
 
 # nativeWord -- the words natives.tbl and the runtime fragments spell that the
@@ -10836,6 +10840,7 @@ emitStrConvCall: function {
     lenAcc: "len".string
     if ptid == ctx.strTid then lenAcc = "size".string
     if ptid == ctx.svTid then lenAcc = "size".string
+    noteMemberUse :ctx mono: rid member: memberWord.slot.toStr
     return (stating
         :facts
         from: callFacts
@@ -11424,6 +11429,7 @@ emitArrayMethodCall: function {
     if isSlice then {
         recvA: colRecvRef :ctx bn: bn.stringView vid: bvid
         recvTa: "const \{cb}_t*"
+        noteMemberUse :ctx mono: bt member: memberWord.slot.lengthOf
         lenA: "\{cb}_length"
         whatA: "array slice"
         if (
@@ -17552,7 +17558,7 @@ emitNestedStringViewBase: function {
 # mono's `_length` constant spells it. "" for any other member.
 nestedCounterRead: function {
     symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
+    ctx: Ctx
     mnId: zast.nameid
     nlid: ztypes.tid
     baseAtom: StringView
@@ -17564,6 +17570,7 @@ nestedCounterRead: function {
     arrO: ctx.origins.get i: family.slot.fixedArray
     if isLength when (originIsTid :symtab tid: nlid originTid: arrO) then {
         acnb: ctxCname :ctx tid: nlid
+        noteMemberUse :ctx mono: nlid member: memberWord.slot.lengthOf
         return (stating :facts from: constFacts text: "\{acnb}_length")
     }
     isCounted: (
@@ -17653,16 +17660,14 @@ nestedStrMember: function {
         from: (memberFacts b: baseAtomF)
         text: "\{baseAtom}.len"
     )
-    if mnId == zast.wellKnown.slot.wkSize then return (stating
-        :facts
-        from: constFacts
-        text: "\{nstrcb}_size"
-    )
-    if mnId == zast.wellKnown.slot.wkString then return (stating
-        :facts
-        from: callFacts
-        text: "\{nstrcb}_string(\{baseAtom})"
-    )
+    if mnId == zast.wellKnown.slot.wkSize then {
+        noteMemberUse :ctx mono: nlid member: memberWord.slot.size
+        return (stating :facts from: constFacts text: "\{nstrcb}_size")
+    }
+    if mnId == zast.wellKnown.slot.wkString then {
+        noteMemberUse :ctx mono: nlid member: memberWord.slot.string
+        return (stating :facts from: callFacts text: "\{nstrcb}_string(\{baseAtom})")
+    }
     if (ztypecheck.isStringViewMember nameId: mnId) then {
         bound: String
         if baseAtomF.once then bound = (readOnce
@@ -19036,7 +19041,10 @@ windowMemberRead: function {
     wb: base
     if bound.length > 0 then wb = bound.stringView
     len: "\{wb}\{acc}length"
-    if isArr then len = "\{rc}_length"
+    if isArr then {
+        noteMemberUse :ctx mono: tid member: memberWord.slot.lengthOf
+        len = "\{rc}_length"
+    }
     # an array's storage is inline, const through a view receiver: the window
     # takes it without the qualifier, as emitWindowSlice says
     if isArr then return (stating
@@ -19109,6 +19117,7 @@ emitCollectionMemberRead: function {
     ) then {
         acba: spelledCname :ctx tid: bstamp
         if mnId == zast.wellKnown.slot.wkLength then {
+            noteMemberUse :ctx mono: bstamp member: memberWord.slot.lengthOf
             return (stating :facts from: constFacts text: "\{acba}_length")
         }
         if (allDigits s: mn2) then {
@@ -19125,9 +19134,11 @@ emitCollectionMemberRead: function {
             return (stating :facts from: (memberFacts b: bn2F) text: "\{bn2}\{accB2}len")
         }
         if mnId == zast.wellKnown.slot.wkSize then {
+            noteMemberUse :ctx mono: bstamp member: memberWord.slot.size
             return (stating :facts from: constFacts text: "\{scba}_size")
         }
         if mnId == zast.wellKnown.slot.wkString then {
+            noteMemberUse :ctx mono: bstamp member: memberWord.slot.string
             return (stating :facts from: callFacts text: "\{scba}_string(\{bn2})")
         }
         if (ztypecheck.isStringViewMember nameId: mnId) then {
@@ -36307,6 +36318,7 @@ writeSections: function {
             return res
         }
         if (kept.get :i) then {
+            sectionRowNeeds :ctx :text from: (marks.get i: i * 4 + 2) to: (marks.get i: i * 4 + 3)
             res.append (text.substring from: sp.bodyFrom to: sp.bodyTo)
         } else {
             slot: (ctx.memberWords.slotOf
@@ -36318,6 +36330,18 @@ writeSections: function {
         pos = sp.next
     }
     return res
+}
+
+# sectionRowNeeds -- the runtime rows a kept section needs: each need that names
+# a row (`prelude.@panic`, never a sibling section, whose name has no dot)
+sectionRowNeeds: function {ctx: Ctx text: StringView from: u64 to: u64} is {
+    at: from
+    for at < to loop {
+        cm: ((text.substring from: at :to).indexOf needle: ",").or d: to - at
+        nd: text.substring from: at to: at + cm
+        if (nd.contains needle: ".") then rowNeedAddOne :ctx uname: "" need: nd
+        at = at + cm + 1
+    }
 }
 
 # loadFixedFile -- one of the runtime's fixed files as this program writes it:
@@ -37157,7 +37181,7 @@ emitArrayMono: function {
         t3: applyTmpl text: t2 key: "LEN" val: lenStr.stringView
         t4: applyTmpl text: t3 key: "CREATE_BODY" val: createBody.stringView
         t5: applyTmpl text: t4 key: "EQ_BODY" val: eqBody.stringView
-        buf.append t5
+        buf.append (sectionedText :ctx mono: monoId text: t5.stringView)
         buf.append "\n"
     }
 }
@@ -37245,27 +37269,32 @@ emitStrMono: function {
     match (
         eqo
     ) case some then {
-        eqBody = "static bool z_\{nm}_eq(z_\{nm}_t a, z_\{nm}_t b) {\n    return a.len == b.len && memcmp(a.data, b.data, a.len) == 0;\n}\n"
+        # written where written C compares two of them (noteEqUse)
+        if (ctx.eqUsed.has item: monoId) then {
+            eqBody = "static bool z_\{nm}_eq(z_\{nm}_t a, z_\{nm}_t b) {\n    return a.len == b.len && memcmp(a.data, b.data, a.len) == 0;\n}\n"
+        }
     } case none then null
     p: "\{runtimeDir}/z_str.c.tmpl"
     tx: readTemplate :ctx path: p.stringView
-    # the template's String and StringView holes spell those types
+    # the template's String holes spell that type
     preludeNeed :ctx memb: "@String_t"
-    preludeNeed :ctx memb: "@StringView_t"
-    svL: ctx.svC
-    strL: ctx.strC
-    raw: (fillStringHoles
-        text: tx
-        path: p.stringView
-        svC: svL.stringView
-        strC: strL.stringView
-        fails: ctx.emitErrors
-    )
+    raw: String
+    {
+        svL: ctx.svC
+        strL: ctx.strC
+        raw = (fillStringHoles
+            text: tx
+            path: p.stringView
+            svC: svL.stringView
+            strC: strL.stringView
+            fails: ctx.emitErrors
+        )
+    }
     t1: applyTmpl text: raw key: "NAME" val: nm.stringView
     t2: applyTmpl text: t1 key: "CAP" val: capStr.stringView
     t3: applyTmpl text: t2 key: "LEN_T" val: lenT.stringView
     t4: applyTmpl text: t3 key: "EQ_BODY" val: eqBody.stringView
-    buf.append t4
+    buf.append (sectionedText :ctx mono: monoId text: t4.stringView)
     buf.append "\n"
 }
 
