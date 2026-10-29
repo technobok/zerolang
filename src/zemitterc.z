@@ -2641,12 +2641,19 @@ recordFragmentRow: function {
         dm = dem.string
     }
     # `uses_<Type>` first: the row fires when written C spells the type, and on
-    # any member the rest of the list names
+    # any member the rest of the list names. `destroys_<Type>` fires when
+    # written C calls the type's destructor.
     tn: String
     with uo: (dm.stringView.stripPrefix p: "uses_") do match (
         uo
     ) case some then {
         tn = (uo.substring from: 0 to: ((uo.indexOf needle: ",").or d: uo.length)).string
+    } case none then null
+    with dso: (dm.stringView.stripPrefix p: "destroys_") do match (
+        dso
+    ) case some then {
+        tn = (dso.substring from: 0 to: ((dso.indexOf needle: ",").or d: dso.length)).string
+        ctx.fragDestroyRows.add item: ctx.fragUnits.length
     } case none then null
     ctx.fragUnits.append from: du
     ctx.fragMembs.append from: dm
@@ -4460,6 +4467,9 @@ Ctx: class {
     fragTypeNames: List String
     # their owning types, parallel again
     fragTypeTids: ListVal ztypes.tid
+    # the rows whose type demand is `destroys_<Type>` instead: reached by
+    # written C calling the type's destructor (destroyUsed), not by the type
+    fragDestroyRows: IdSet u64
     # the `needs=` of the fragment rows that have one, by row: registered when
     # the row is written, so a helper row loaded by its demand gets what its
     # body calls as a called row does (the prelude is written after them all)
@@ -37509,6 +37519,7 @@ emitC: function {
         fragNames: List String
         fragTypeNames: List String
         fragTypeTids: ListVal ztypes.tid
+        fragDestroyRows: IdSet u64
         fragNeeds: (IdMapR u64 V: String)
         rowsInPlace: IdSet u64
         piecedFrags: Set String
@@ -40949,7 +40960,10 @@ bindFragTypeTids: function {symtab: zenv.ZSymbolTable.view ctx: Ctx ast: Ast.vie
             found = rowTypeTid :ast :symtab uname: unitNameText.stringView tname: tn.stringView
         }
         ctx.fragTypeTids.append found
-        if found.isZero.not then ctx.demandGatedTids.add item: found
+        # a destructor's row gates no type: the type is written when reached
+        if found.isZero.not when (ctx.fragDestroyRows.has item: i).not then {
+            ctx.demandGatedTids.add item: found
+        }
         i = i + 1
     }
 }
@@ -40973,10 +40987,15 @@ bindFragUnitDecls: function {symtab: zenv.ZSymbolTable.view ctx: Ctx ast: Ast.vi
 # rowDemandFired -- true when ANY demand the row at `i` names was demanded for that
 # row's unit. `demand=a,b,c` means ANY OF: a helper several members share is one
 # row naming the members that reach it, so it loads once however many fired. A
-# `uses_<Type>` row fires too when written C spells the type (typeRowDemanded).
+# `uses_<Type>` row fires too when written C spells the type (typeRowDemanded),
+# and a `destroys_<Type>` row when written C calls the type's destructor.
 rowDemandFired: function {ctx: Ctx.view i: u64} out bool is {
     tt: ctx.fragTypeTids.get :i
-    if tt.isZero.not when (typeRowDemanded :ctx tid: tt) then return true
+    if tt.isZero.not then {
+        if (ctx.fragDestroyRows.has item: i) then {
+            if (ctx.destroyUsed.has item: tt) then return true
+        } else if (typeRowDemanded :ctx tid: tt) then return true
+    }
     u: ctx.fragUnits.get :i
     d: ctx.fragMembs.get :i
     # the list is walked by position: every round of closeRowNeeds asks this of
@@ -45945,7 +45964,8 @@ nativeMethodCallOpen: function {fc: StringView mn: StringView recv: StringView} 
 
 # demandNativeRow -- what calling the method the fragment row `row` (keyed
 # `key`) implements demands: its unit's runtime, and the row's own demands --
-# none for a `uses_<Type>` row, which loads with its type -- plus the runtime
+# none for a `uses_<Type>` or `destroys_<Type>` row, which loads with its type's
+# use or destructor -- plus the runtime
 # its body `needs=`
 demandNativeRow: function {ctx: Ctx row: u64 key: StringView} is {
     i: row - 1
