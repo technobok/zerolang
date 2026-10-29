@@ -8629,12 +8629,16 @@ destroyParts: function {
     }
 }
 
-# destroyGated -- `tid`'s destructor is the one emitOneRecord writes, and only
-# when written C calls it: a record's or a class's, but not an instance of a
-# runtime template (List, Box, ...) nor a class whose C the runtime owns, whose
-# destructors are written with them.
+# destroyGated -- `tid`'s destructor is one zc writes only when written C calls
+# it: a record's or a class's (emitOneRecord), a union's -- Option, Result, a
+# user's (emitUnionMono) -- or a view option's (emitOptionViewMono); but not an
+# instance of a runtime template (List, Box, ...) nor a class whose C the
+# runtime owns, whose destructors are written with them.
 destroyGated: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.tid} out bool is {
-    if (symtab.reg.typetypeOf typeId: tid).isFieldwise.not then return false
+    tt: symtab.reg.typetypeOf typeId: tid
+    if tt == ztypes.ztypetype.unionType then return true
+    if (isViewUnionOriginOf :symtab :ctx :tid) then return true
+    if tt.isFieldwise.not then return false
     o: originTidOf :symtab :tid
     if o.isZero.not when (ctx.origins.contains item: o) then return false
     if (tmplClassRowOf :symtab :ctx :tid) > 0 then return false
@@ -29038,6 +29042,7 @@ emitOptionLoopTail: function {
         originTid: (ctx.origins.get i: family.slot.option)
     ) then {
         # owned heap-payload union: destroy the box on the NONE arm too.
+        noteDestroyUse :symtab :ctx tid: ovid
         l2o: "\{ind}    if (_iter\{mN}.tag == \{ovNone}) { \{ovc}_destroy(&_iter\{mN}); break; }\n"
         buf.append l2o
     } else {
@@ -38408,6 +38413,7 @@ emitUnionMono: function {
         buf.append lg
     }
     buf.append inlineAsserts
+    if (destroyWritten :symtab :ctx :tid).not then return
     ld: "static void \{vc}_destroy(\{vc}_t* u) {\n"
     buf.append ld
     buf.append "    if (!u) return;\n"
@@ -38740,6 +38746,10 @@ emitOptionViewMono: function {
     buf.append "    void* data;\n"
     l5: "} z_\{nm}_t;\n"
     buf.append l5
+    if (destroyWritten :symtab :ctx tid: monoId).not then {
+        buf.append "\n"
+        return
+    }
     l6: "static void z_\{nm}_destroy(z_\{nm}_t* u) { (void)u; }\n\n"
     buf.append l6
 }
