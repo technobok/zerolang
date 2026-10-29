@@ -4370,6 +4370,17 @@ Ctx: class {
     # each (impl, protocol) pair written C boxes as an OWNED protocol value
     # (noteOwnedBoxUse): only these get `_create_owned` and `_owned_destroy`
     ownedBoxUses: IdSet u64
+    # the static aggregate rows written C spells `_zag<row>` of (noteAggUse),
+    # those written, each one's text and its row in the order written
+    # (writeDemandedAggs), and whether the written set is fixed
+    aggUses: IdSet u64
+    aggWritten: IdSet u64
+    aggTexts: List String
+    aggRows: ListVal u64
+    aggsFixed: bool
+    # the static list rows whose reader `_zag<row>_at` written C calls
+    # (noteAggReaderUse)
+    aggReaderUses: IdSet u64
     # each marker protocol (one with no members) asked about, to whether the
     # program makes a value of it (markerValueMade)
     markerValues: (IdMapV ztypes.tid v: bool)
@@ -11511,8 +11522,12 @@ emitStaticListValueMethodCall: function {
             nid: (interpPartNodeId n: (ast.nodes.get i: cn.parent))
         )
     }
-    if row != 0 then return (stating :facts from: callFacts text: "_zag\{row}_at(\{vi})")
+    if row != 0 then {
+        noteAggReaderUse :ctx :row
+        return (stating :facts from: callFacts text: "_zag\{row}_at(\{vi})")
+    }
     cb: spelledCname :ctx tid: bt
+    noteMemberUse :ctx mono: bt member: memberWord.slot.getOne
     return (stating :facts from: callFacts text: "\{cb}_index(\{bn}, \{vi})")
 }
 
@@ -14437,16 +14452,17 @@ armCvalText: function {
 }
 
 # aggCvalText -- cvalText for an aggregate: a data value is the address of its
-# static object (emitStaticAggs), a choice value that object itself, a list
+# static object (writeDemandedAggs), a choice value that object itself, a list
 # the view of its array.
 aggCvalText: function {
-    symtab: zenv.ZSymbolTable.view ctx: Ctx.view v: ztypes.cval facts: cfacts.borrow
+    symtab: zenv.ZSymbolTable.view ctx: Ctx v: ztypes.cval facts: cfacts.borrow
 } out String is {
     if (symtab.typing.constAggs.get i: v.aggId.u64).kind.staticList then return (stating
         :facts
         from: literalFacts
         text: (listValueC :symtab :ctx row: v.aggId)
     )
+    noteAggUse :ctx row: v.aggId
     # a choice value is held by value: its static object, read whole
     if (symtab.typing.constAggs.get i: v.aggId.u64).kind.staticChoice then return (stating
         :facts
@@ -17058,6 +17074,7 @@ emitStaticListMember: function {
         daN: ctx.argHoistCtr
         ctx.argHoistCtr = ctx.argHoistCtr + 1
         daNm: "_da\{daN}"
+        noteAggUse :ctx :row
         daRaw: "\{daCt} \{daNm};\nfor (int64_t _i = 0; _i < \{daLen.stringView}; _i++) { \{daNm}.data[_i] = _zag\{row}[_i]; }\n"
         recordRawHoist :ctx text: daRaw
         return (stating :facts from: pathFacts text: daNm)
@@ -17378,10 +17395,11 @@ staticListValueText: function {
 # listValueC -- list row `row` as a value: the view of its static array,
 # `((z_M_t){ .length = N, .data = _zagN })` -- NULL for an empty list, which
 # has none.
-listValueC: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view row: u64} out String is {
+listValueC: function {symtab: zenv.ZSymbolTable.view ctx: Ctx row: u64} out String is {
     g: symtab.typing.constAggs.get i: row
     vc: ctxCname :ctx tid: g.tid
     if g.itemCount == 0 then return "((\{vc}_t){ .length = 0, .data = NULL })"
+    noteAggUse :ctx :row
     return "((\{vc}_t){ .length = \{g.itemCount}, .data = _zag\{row} })"
 }
 
@@ -35505,6 +35523,32 @@ writeFnJob: function {
     )
 }
 
+# writeDemanded -- write every function, method and static value written C
+# spells, starting from `main`'s job (planFns), until a round spells nothing
+# new: the jobs (drainFnJobs), the static values, whose items may spell
+# functions (writeDemandedAggs), and the methods only the types' helpers call
+# (demandHelperCalls). After it the written functions and static values are
+# fixed.
+writeDemanded: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    protos: String.borrow
+    bodies: String.borrow
+} is {
+    drainFnJobs :ast :symtab :ctx :protos :bodies
+    preview: IdSet ztypes.tid
+    more: true
+    for more loop {
+        aggs: writeDemandedAggs :ast :symtab :ctx
+        helpers: demandHelperCalls :ast :symtab :ctx :preview
+        more = aggs or helpers
+        if more then drainFnJobs :ast :symtab :ctx :protos :bodies
+    }
+    ctx.fnClosed = true
+    ctx.aggsFixed = true
+}
+
 # appendWrittenFns -- the forward declarations, or the definitions, of the
 # written jobs from `text` (drainFnJobs' `protos` or `bodies`), in the order
 # planFns met them: the units' type methods, or the rest.
@@ -37310,6 +37354,12 @@ emitC: function {
         emittedConformance: IdSet ztypes.confid
         boxedConformance: IdSet ztypes.confid
         ownedBoxUses: IdSet u64
+        aggUses: IdSet u64
+        aggWritten: IdSet u64
+        aggTexts: List String
+        aggRows: ListVal u64
+        aggsFixed: false
+        aggReaderUses: IdSet u64
         markerValues: (IdMapV ztypes.tid v: bool)
         emittedListIters: IdSet ztypes.tid
         unitOrder: List String
@@ -37400,18 +37450,12 @@ emitC: function {
     # of the types, which they follow in the output: a type is written only
     # once something has spelled it
     protosBuf: String
-    emitStaticAggs ast: program :symtab :ctx buf: protosBuf
     fnProtoText: String
     fnBodyText: String
     fnBodyText.reserve n: nodeEstE * 24
-    drainFnJobs ast: program :symtab :ctx protos: fnProtoText bodies: fnBodyText
-    # the methods only the types' helpers call, written after this
-    preview: IdSet ztypes.tid
-    for (demandHelperCalls ast: program :symtab :ctx :preview) loop {
-        drainFnJobs ast: program :symtab :ctx protos: fnProtoText bodies: fnBodyText
-    }
-    # after this the written functions are fixed
-    ctx.fnClosed = true
+    writeDemanded ast: program :symtab :ctx protos: fnProtoText bodies: fnBodyText
+    appendWrittenAggs :symtab :ctx buf: protosBuf
+    emitStaticListReaders ast: program :symtab :ctx buf: protosBuf
     appendWrittenFns :ctx protos: true withMethods: true text: fnProtoText.stringView buf: protosBuf
     bodiesBuf: String
     appendWrittenFns :ctx protos: false withMethods: true text: fnBodyText.stringView buf: bodiesBuf
@@ -38742,7 +38786,7 @@ emitStaticListMono: function {
         buf.append t2
         buf.append "\n"
     }
-    if (monoMemberUsed :symtab :monoId nameId: zast.wellKnown.slot.wkGet) then {
+    if (memberUsed :ctx mono: monoId member: memberWord.slot.getOne) then {
         buf.append "static \{ect} z_\{nm}_index(z_\{nm}_t _this, uint64_t _idx);\n"
         buf.append "static \{ect} z_\{nm}_index(z_\{nm}_t _this, uint64_t _idx) {\n"
         buf.append "    if (_idx >= _this.length) {\n"
@@ -44194,19 +44238,21 @@ preEmitProtocolArgs: function {
     }
 }
 
-# emitStaticAggs -- each static value run time reaches (constagg.reached), as
-# the static storage its handles point at: a data value as `static const
-# <type>_t _zag<row> = { ... };`, fields in declared order, a choice value the
-# same way (staticChoiceInit), read whole, and a list as its array
-# (emitStaticListArray). A value it holds is emitted before it, as an
-# aggregate is interned after the ones it holds.
-emitStaticAggs: function {
-    ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx buf: String.borrow
-} is {
+# writeDemandedAggs -- each static value run time reaches (constagg.reached)
+# that written C spells (noteAggUse) and is not yet written, as the static
+# storage its handles point at: a data value as `static const <type>_t
+# _zag<row> = { ... };`, fields in declared order, a choice value the same way
+# (staticChoiceInit), read whole, and a list as its array (emitStaticListArray).
+# Each row's text is kept apart (appendWrittenAggs writes them in row order: a
+# value it holds is emitted before it, as an aggregate is interned after the
+# ones it holds). True when it wrote one, whose items may spell more.
+writeDemandedAggs: function {ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx} out bool is {
+    wrote: false
     i: 1.u64
     for i < symtab.typing.constAggs.length loop {
         id: i
         i = i + 1
+        if (ctx.aggUses.has item: id).not or (ctx.aggWritten.has item: id) then continue
         tid: ztypes.tid
         start: u64
         count: u64
@@ -44221,35 +44267,69 @@ emitStaticAggs: function {
             start = g.itemStart
             count = g.itemCount
         }
+        ctx.aggWritten.add item: id
+        wrote = true
+        buf: String
         emitStaticFnProtos :ast :symtab :ctx row: id :buf
         if isList then {
             emitStaticListArray :ast :symtab :ctx :id :count :buf
-            continue
-        }
-        if isChoice then {
+        } else if isChoice then {
             ci: staticChoiceInit :ast :symtab :ctx row: id
             buf.append "static const \{spelledCname :ctx :tid}_t _zag\{id} = \{ci};\n"
-            continue
+        } else {
+            emitStaticRecord :ast :symtab :ctx :id :tid :start :count :buf
         }
-        fnames: List String
-        fids: ListVal ztypes.tid
-        fidsNm: ListVal zast.nameid
-        recFieldLists :ast :symtab :tid names: fnames ids: fids nameIds: fidsNm
-        rc: spelledCname :ctx :tid
-        buf.append "static const \{rc}_t _zag\{id} = { "
-        k: u64
-        for k < count loop {
-            if k > 0 then buf.append ", "
-            buf.append (staticAggItemText
-                :ast
-                :symtab
-                :ctx
-                tid: (fids.get i: k)
-                v: (symtab.typing.constAggItems.get i: start + k)
-            )
-            k = k + 1
+        ctx.aggTexts.append buf.take
+        ctx.aggRows.append id
+    }
+    return wrote
+}
+
+# emitStaticRecord -- data row `id`, a `tid` record of the `count` folded
+# values from `start`: its static const object.
+emitStaticRecord: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    id: u64
+    tid: ztypes.tid
+    start: u64
+    count: u64
+    buf: String.borrow
+} is {
+    fnames: List String
+    fids: ListVal ztypes.tid
+    fidsNm: ListVal zast.nameid
+    recFieldLists :ast :symtab :tid names: fnames ids: fids nameIds: fidsNm
+    rc: spelledCname :ctx :tid
+    buf.append "static const \{rc}_t _zag\{id} = { "
+    k: u64
+    for k < count loop {
+        if k > 0 then buf.append ", "
+        buf.append (staticAggItemText
+            :ast
+            :symtab
+            :ctx
+            tid: (fids.get i: k)
+            v: (symtab.typing.constAggItems.get i: start + k)
+        )
+        k = k + 1
+    }
+    buf.append " };\n"
+}
+
+# appendWrittenAggs -- the written static aggregates' text, in row order.
+appendWrittenAggs: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view buf: String.borrow} is {
+    i: 1.u64
+    for i < symtab.typing.constAggs.length loop {
+        if (ctx.aggWritten.has item: i) then {
+            k: u64
+            for k < ctx.aggRows.length loop {
+                if (ctx.aggRows.get i: k) == i then buf.append (ctx.aggTexts.get i: k)
+                k = k + 1
+            }
         }
-        buf.append " };\n"
+        i = i + 1
     }
 }
 
@@ -44285,9 +44365,8 @@ emitStaticFnProtos: function {
 
 # emitStaticListArray -- the reached list row `id`: the static const array
 # `_zag<row>[]` of its `count` elements, at the element C type its view reads
-# (staticListElemCType), and its reader `_zag<row>_at`, which panics on an
-# index past the end (a negative i64 converts to a huge u64). An empty list has
-# no array -- C has no empty initializer -- and every index is past its end.
+# (staticListElemCType). An empty list has no array -- C has no empty
+# initializer. Its reader is written apart, where called (emitStaticListReaders).
 emitStaticListArray: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -44305,8 +44384,60 @@ emitStaticListArray: function {
         elems.append (listItemText :ast :symtab :ctx row: id slot: k)
         k = k + 1
     }
+    if count > 0 then buf.append "static const \{est} _zag\{id}[] = {\{elems}};\n\n"
+}
+
+# noteAggUse -- written C spells static aggregate row `row` (`_zag<row>`): it
+# is written (writeDemandedAggs). One spelled after the written rows are fixed
+# is never written.
+noteAggUse: function {ctx: Ctx row: u64} is {
+    if (ctx.aggUses.has item: row) then return
+    if ctx.aggsFixed then {
+        (emitFail
+            :ctx
+            what: "a static aggregate spelled after the aggregates were written".string
+            line: 0
+        )
+        return
+    }
+    ctx.aggUses.add item: row
+}
+
+# noteAggReaderUse -- written C calls static list row `row`'s reader
+# `_zag<row>_at`: it is written with the row it reads, which are fixed together.
+noteAggReaderUse: function {ctx: Ctx row: u64} is {
+    noteAggUse :ctx :row
+    if ctx.aggsFixed.not then ctx.aggReaderUses.add item: row
+}
+
+# emitStaticListReaders -- the reader `_zag<row>_at` of each reached list row
+# written C calls (noteAggReaderUse), in row order, after every function body.
+emitStaticListReaders: function {
+    ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx buf: String.borrow
+} is {
+    i: 1.u64
+    for i < symtab.typing.constAggs.length loop {
+        id: i
+        i = i + 1
+        if (ctx.aggReaderUses.has item: id).not then continue
+        count: (symtab.typing.constAggs.get i: id).itemCount
+        emitStaticListReader :ast :symtab :ctx :id :count :buf
+    }
+}
+
+# emitStaticListReader -- list row `id`'s reader `_zag<row>_at`, which panics
+# on an index past the end of its `count` elements (a negative i64 converts to
+# a huge u64): for an empty list, on every index.
+emitStaticListReader: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    id: u64
+    count: u64
+    buf: String.borrow
+} is {
+    ect: staticListElemCType :ast :symtab :ctx row: id
     dsym: "_zag\{id}"
-    if count > 0 then buf.append "static const \{est} \{dsym}[] = {\{elems}};\n\n"
     buf.append "static \{ect} \{dsym}_at(uint64_t _idx);\n"
     buf.append "static \{ect} \{dsym}_at(uint64_t _idx) {\n"
     b2: "snprintf(_zp_buf, sizeof(_zp_buf), \"list index: index %llu out of bounds (length \{count})\", (unsigned long long)_idx);\n"
@@ -44386,9 +44517,10 @@ staticStringInit: function {symtab: zenv.ZSymbolTable.view v: ztypes.cval} out S
 
 # staticListInit -- list row `row` as a static initializer of its view: the
 # braces alone, since a compound literal is no constant expression.
-staticListInit: function {symtab: zenv.ZSymbolTable.view row: u64} out String is {
+staticListInit: function {symtab: zenv.ZSymbolTable.view ctx: Ctx row: u64} out String is {
     n: (symtab.typing.constAggs.get i: row).itemCount
     if n == 0 then return "{ .length = 0, .data = NULL }".string
+    noteAggUse :ctx :row
     return "{ .length = \{n}, .data = _zag\{row} }"
 }
 
@@ -44435,7 +44567,7 @@ staticAggItemText: function {
 } out String is {
     if v.kind.svalKind then return (staticStringInit :symtab :v)
     if v.kind.aggKind when (symtab.typing.constAggs.get i: v.aggId.u64).kind.staticList then {
-        return (staticListInit :symtab row: v.aggId)
+        return (staticListInit :symtab :ctx row: v.aggId)
     }
     if v.kind.aggKind when (symtab.typing.constAggs.get i: v.aggId.u64).kind.staticChoice then {
         return (staticChoiceInit :ast :symtab :ctx row: v.aggId)
