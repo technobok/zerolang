@@ -6,18 +6,10 @@
    under -DZ_F16_PORTABLE, a value is its 16 bits and the conversions are done
    here, rounding to nearest, ties to even. Loaded only for a program that
    operates on f16. */
+/*@@row @prelude.f16_to_f32 demand=@f16_to_f32,@f16_conv needs=@f16_t@@*/
 #if defined(Z_F16_NATIVE)
-
 static inline float z_f16_to_f32(z_f16 x) { return (float)x; }
-static inline z_f16 z_f16_from_f32(float v) { return (z_f16)v; }
-static inline z_f16 z_f16_from_f64(double v) { return (z_f16)v; }
-#if defined(__SIZEOF_FLOAT128__)
-static inline z_f16 z_f16_from_f128(__float128 v) { return (z_f16)v; }
-#endif
-static inline uint16_t z_f16_bits(z_f16 x) { uint16_t b; memcpy(&b, &x, sizeof(b)); return b; }
-
 #else
-
 static inline float z_f16_to_f32(z_f16 x) {
     uint32_t s = (uint32_t)(x.bits >> 15) << 31;
     uint32_t e = (x.bits >> 10) & 0x1Fu;
@@ -39,6 +31,12 @@ static inline float z_f16_to_f32(z_f16 x) {
     memcpy(&r, &f, sizeof(r));
     return r;
 }
+#endif
+/*@@end@@*/
+/*@@row @prelude.f16_from_f64 demand=@f16_from_f64,@f16_conv needs=@f16_t@@*/
+#if defined(Z_F16_NATIVE)
+static inline z_f16 z_f16_from_f64(double v) { return (z_f16)v; }
+#else
 /* a double rounded to the nearest f16, ties to even: its 52-bit fraction
    shifted down to 10 bits (more for a subnormal), the shifted-out part
    deciding the rounding. A carry out of the fraction raises the exponent,
@@ -79,7 +77,21 @@ static inline z_f16 z_f16_from_f64(double v) {
     r.bits = (uint16_t)(s | out);
     return r;
 }
+#endif
+/*@@end@@*/
+/*@@row @prelude.f16_from_f32 demand=@f16_from_f32,@f16_conv needs=@f16_from_f64,@f16_t@@*/
+#if defined(Z_F16_NATIVE)
+static inline z_f16 z_f16_from_f32(float v) { return (z_f16)v; }
+#else
 static inline z_f16 z_f16_from_f32(float v) { return z_f16_from_f64((double)v); }
+#endif
+/*@@end@@*/
+/*@@row @prelude.f16_from_f128 demand=@f16_from_f128,@f16_conv needs=@f16_from_f64,@f16_t@@*/
+#if defined(Z_F16_NATIVE)
+#if defined(__SIZEOF_FLOAT128__)
+static inline z_f16 z_f16_from_f128(__float128 v) { return (z_f16)v; }
+#endif
+#else
 #if defined(__SIZEOF_FLOAT128__)
 /* an f128 rounded to a double with round-to-odd, then to f16: a double keeps
    more than twice f16's precision plus two bits, so the second rounding is
@@ -96,14 +108,34 @@ static inline z_f16 z_f16_from_f128(__float128 v) {
     return z_f16_from_f64(d);
 }
 #endif
-static inline uint16_t z_f16_bits(z_f16 x) { return x.bits; }
-
 #endif
+/*@@end@@*/
+/*@@row @prelude.f16_bits demand=@f16_bits needs=@f16_t@@*/
+#if defined(Z_F16_NATIVE)
+static inline uint16_t z_f16_bits(z_f16 x) { uint16_t b; memcpy(&b, &x, sizeof(b)); return b; }
+#else
+static inline uint16_t z_f16_bits(z_f16 x) { return x.bits; }
+#endif
+/*@@end@@*/
 
+/*@@row @prelude.f16_add demand=@f16_add needs=@f16_from_f32,@f16_to_f32,@f16_t@@*/
 static inline z_f16 z_f16_add(z_f16 a, z_f16 b) { return z_f16_from_f32(z_f16_to_f32(a) + z_f16_to_f32(b)); }
+/*@@end@@*/
+/*@@row @prelude.f16_sub demand=@f16_sub needs=@f16_from_f32,@f16_to_f32,@f16_t@@*/
 static inline z_f16 z_f16_sub(z_f16 a, z_f16 b) { return z_f16_from_f32(z_f16_to_f32(a) - z_f16_to_f32(b)); }
+/*@@end@@*/
+/*@@row @prelude.f16_mul demand=@f16_mul needs=@f16_from_f32,@f16_to_f32,@f16_t@@*/
 static inline z_f16 z_f16_mul(z_f16 a, z_f16 b) { return z_f16_from_f32(z_f16_to_f32(a) * z_f16_to_f32(b)); }
+/*@@end@@*/
+/*@@row @prelude.f16_div demand=@f16_div needs=@f16_from_f32,@f16_to_f32,@f16_t@@*/
 static inline z_f16 z_f16_div(z_f16 a, z_f16 b) { return z_f16_from_f32(z_f16_to_f32(a) / z_f16_to_f32(b)); }
+/*@@end@@*/
+/*@@row @prelude.f16_eq demand=@f16_eq needs=@f16_to_f32,@f16_t@@*/
 static inline bool z_f16_eq(z_f16 a, z_f16 b) { return z_f16_to_f32(a) == z_f16_to_f32(b); }
+/*@@end@@*/
+/*@@row @prelude.f16_lt demand=@f16_lt needs=@f16_to_f32,@f16_t@@*/
 static inline bool z_f16_lt(z_f16 a, z_f16 b) { return z_f16_to_f32(a) < z_f16_to_f32(b); }
+/*@@end@@*/
+/*@@row @prelude.f16_le demand=@f16_le needs=@f16_to_f32,@f16_t@@*/
 static inline bool z_f16_le(z_f16 a, z_f16 b) { return z_f16_to_f32(a) <= z_f16_to_f32(b); }
+/*@@end@@*/

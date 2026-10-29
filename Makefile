@@ -1252,7 +1252,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2378724
+ALLOC_BASELINE := 2378953
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1971,7 +1971,7 @@ deadcode-guard: bin/zc
 # of every kind, and live ones only a careless reader misses: the reader must
 # report exactly CDEAD_PROBE there before its count is trusted. The baseline is
 # the dead items the emitter writes today (corpus, then zc); lower it as it falls.
-CDEAD_BASELINE := 2924 108
+CDEAD_BASELINE := 2892 108
 CDEAD_PROBE := cdead_dead_fn cdead_dead_fn_ft cdead_dead_inline cdead_dead_leaf \
 	cdead_dead_macro cdead_dead_proto_t cdead_dead_str cdead_dead_t cdead_dead_vtable_t
 
@@ -2187,7 +2187,7 @@ cdead-guard: bin/zc
 # cdead_dead_fn and cdead_dead_str, so a compiler that stops warning cannot
 # pass. The baseline is today's warnings (gcc corpus, gcc zc, clang corpus,
 # clang zc); lower it as it falls. Skipped without clang.
-CC_UNUSED_BASELINE := 820 76 960 78
+CC_UNUSED_BASELINE := 820 76 930 78
 CC_UNUSED_FLAGS := -std=c17 -c -o /dev/null -Wunused-function -Wunused-variable -Wunused-const-variable
 CC_UNUSED_RE := warning: .*\[-Wunused-(function|variable|const-variable)
 
