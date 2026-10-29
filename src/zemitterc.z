@@ -42640,7 +42640,10 @@ emitTmplClassMono: function {
         t = applyMemberHoles :ast :symtab :ctx text: t param: pn.stringView arg: at
         k = k + 1
     }
-    t = applyAnswerHoles :ast :symtab :ctx text: t inst: monoId nm: nm.stringView :buf
+    # the option builders its answer holes name, kept apart until the sections
+    # the program writes are known
+    ab: String
+    t = applyAnswerHoles :ast :symtab :ctx text: t inst: monoId nm: nm.stringView buf: ab
     made: dropUnmadeFns text: t.stringView
     # what is left is a runtime fragment's own holes: a type by canon, a tag
     # constant, a member
@@ -42661,7 +42664,25 @@ emitTmplClassMono: function {
         buf.append dl
         buf.append "    (void)x;\n}\n"
     }
+    keepNamedHelpers helpers: ab.stringView kept: kept.stringView :buf
     splitTmplText :ctx text: kept.stringView :buf
+}
+
+# keepNamedHelpers -- of `helpers`, functions an instance's holes made (each
+# `static <type> <name>(...) {` up to its closing `}` line), those `kept` --
+# the instance's text as written -- names.
+keepNamedHelpers: function {helpers: StringView kept: StringView buf: String.borrow} is {
+    pos: u64
+    for pos < helpers.length loop {
+        rest: helpers.substring from: pos to: helpers.length
+        e: pos + ((rest.indexOf needle: "\n}\n").or d: rest.length - 3) + 3
+        fn: helpers.substring from: pos to: e
+        pos = e
+        op: (fn.indexOf needle: "(").or d: 0
+        sp: (fn.substring from: 0 to: op).lastIndexOf needle: " "
+        nm: fn.substring from: (sp.or d: 0) + 1 to: op
+        if nm.length > 0 when (kept.contains needle: nm) then buf.append fn
+    }
 }
 
 # splitTmplText -- an instantiated class template, placed so its functions may
