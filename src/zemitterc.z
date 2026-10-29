@@ -4201,6 +4201,9 @@ Ctx: class {
     # the types written C builds field by field: a record's or a class's
     # `_meta_create` is written only then (noteCreateUse)
     createUsed: IdSet ztypes.tid
+    # those whose `<rc>_create` name written C calls: only these get the
+    # `#define` that names `_meta_create` so (noteCreateAliasUse)
+    createAliasUsed: IdSet ztypes.tid
     # the types whose generated `_hash` is written, in the order they were
     # demanded
     hashAsked: IdSet ztypes.tid
@@ -8639,6 +8642,13 @@ noteCreateUse: function {ctx: Ctx tid: ztypes.tid} is {
         return
     }
     ctx.createUsed.add item: tid
+}
+
+# noteCreateAliasUse -- written C builds a `tid` through its `<rc>_create`
+# name, the `#define` written with its `_meta_create` (emitMetaCreate)
+noteCreateAliasUse: function {ctx: Ctx tid: ztypes.tid} is {
+    noteCreateUse :ctx :tid
+    ctx.createAliasUsed.add item: tid
 }
 
 # noteDestroyUse -- written C calls the destructor of `tid`, a destroy target
@@ -13631,7 +13641,7 @@ emitCtorDefaultsFill: function {
         if args.length > 0 then args.append ", "
         args.append av
     }
-    noteCreateUse :ctx :tid
+    noteCreateAliasUse :ctx :tid
     rcb: spelledCname :ctx :tid
     noteMemberUse :ctx mono: tid member: memberWord.slot.create
     return (stating :facts from: callFacts text: "\{rcb}_create(\{args})")
@@ -13846,7 +13856,7 @@ emitRecordCtor: function {
     oprefix: orderFinish :ctx st: ord
     args: orderJoinSlots :ctx st: ord count: fn0
     orderEnd :ctx st: ord
-    noteCreateUse :ctx :tid
+    noteCreateAliasUse :ctx :tid
     rc: spelledCname :ctx :tid
     rc.append "_create"
     return (stating
@@ -37312,6 +37322,7 @@ emitC: function {
         eqUsed: IdSet ztypes.tid
         destroyUsed: IdSet ztypes.tid
         createUsed: IdSet ztypes.tid
+        createAliasUsed: IdSet ztypes.tid
         hashAsked: IdSet ztypes.tid
         hashOrder: ListVal ztypes.tid
         lateDefs: String
@@ -41141,6 +41152,17 @@ emitClassRowStructs: function {
     }
 }
 
+# recordCreateAlias -- a record's `<rc>_create` is written beside its
+# `_meta_create`: written C calls it (noteCreateAliasUse), and the record is
+# the main unit's and constructed by its fields, not by a native create.
+recordCreateAlias: function {
+    symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.tid
+} out bool is {
+    if (ctx.createAliasUsed.has item: tid).not then return false
+    if (definedInNonMain :symtab :ctx :tid) then return false
+    return (typeHasNativeCreate :symtab :tid).not
+}
+
 # emitMetaCreate -- a struct's field-wise constructor, `<rc>_meta_create`, and
 # when `alias` the `<rc>_create` name a construction calls
 emitMetaCreate: function {
@@ -41213,7 +41235,7 @@ emitClassRowStruct: function {
         rc: fc.stringView
         params: params.stringView
         inits: inits.stringView
-        alias: true
+        alias: (ctx.createAliasUsed.has item: cid)
     )
 }
 
@@ -48974,14 +48996,12 @@ emitOneRecord: function {
             :params
             :inits
         )
-        aliasOk: (definedInNonMain :symtab :ctx :tid).not
-        if aliasOk then aliasOk = (typeHasNativeCreate :symtab :tid).not
         (emitMetaCreate
             :buf
             rc: rc.stringView
             params: params.stringView
             inits: inits.stringView
-            alias: aliasOk
+            alias: (recordCreateAlias :symtab :ctx :tid)
         )
     }
     if (ctx.eqUsed.has item: tid) when (eqGenerated :ast :symtab :ctx :tid) then (emitRecordEq
