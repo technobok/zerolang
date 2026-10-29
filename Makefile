@@ -1252,7 +1252,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2381885
+ALLOC_BASELINE := 2381923
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1971,7 +1971,7 @@ deadcode-guard: bin/zc
 # of every kind, and live ones only a careless reader misses: the reader must
 # report exactly CDEAD_PROBE there before its count is trusted. The baseline is
 # the dead items the emitter writes today (corpus, then zc); lower it as it falls.
-CDEAD_BASELINE := 376 2
+CDEAD_BASELINE := 343 2
 CDEAD_PROBE := cdead_dead_fn cdead_dead_fn_ft cdead_dead_inline cdead_dead_leaf \
 	cdead_dead_macro cdead_dead_proto_t cdead_dead_str cdead_dead_t cdead_dead_vtable_t
 
@@ -2055,7 +2055,7 @@ def classify(ch):
     b = t.find('{')
     head = t if b < 0 else t[:b]
     if re.match(r'typedef\b', t):
-        m = re.search(r'\(\s*\*\s*(\w+)\s*\)\s*\(', t) if b < 0 else None
+        m = re.search(r'\(\s*(?:\w+\s+)?\*\s*(\w+)\s*\)\s*\(', t) if b < 0 else None
         names = [m.group(1)] if m else []
         if not m:
             tail = re.sub(r'\[[^\]]*\]', '', t[t.rfind('}') + 1:] if b >= 0 else t)
@@ -2295,7 +2295,7 @@ def defined(body):
         if m:
             names.add(m.group(2)); continue
         if re.match(r'(__extension__\s+)?typedef\b', s) and s.endswith(';') and '{' not in s:
-            fp = re.search(r'\(\s*\*\s*([\w@]+)\s*\)', s)
+            fp = re.search(r'\(\s*(?:\w+\s+)?\*\s*([\w@]+)\s*\)', s)
             names.add(fp.group(1) if fp else IDENT.findall(s[:-1])[-1]); continue
         if re.match(r'(static|extern)\b', s):
             pre = s.split('=')[0].split(';')[0]

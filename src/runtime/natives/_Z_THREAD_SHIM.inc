@@ -81,21 +81,23 @@ static int64_t z_thread_live(void) {
 }
 /*@@end@@*/
 
-/* what a new thread runs first: its name, then the body, then the count */
+/*@@row @prelude.thread_fn demand=@thread_fn@@*/
 typedef void (*z_thread_fn)(void* arg);
+/*@@end@@*/
+
+/*@@row @prelude.thread_start_block demand=@thread_start_block needs=@thread_fn@@*/
+/* what a new thread runs first: its name, then the body, then the count */
 typedef struct z_thread_start_block {
     z_thread_fn fn;
     void* arg;
     char name[16];
 } z_thread_start_block;
+/*@@end@@*/
 
 #if defined(_WIN32)
 /* ---------------------------------------------------------------- Win32 -- */
 #include <windows.h>
 #include <process.h>
-
-typedef HRESULT (WINAPI *z_set_desc_fn)(HANDLE, PCWSTR);
-
 #else
 /* ------------------------------------------------------------- pthreads -- */
 #include <pthread.h>
@@ -106,6 +108,11 @@ typedef HRESULT (WINAPI *z_set_desc_fn)(HANDLE, PCWSTR);
 #endif
 
 #endif
+/*@@row @prelude.set_desc_fn demand=@set_desc_fn@@*/
+#if defined(_WIN32)
+typedef HRESULT (WINAPI *z_set_desc_fn)(HANDLE, PCWSTR);
+#endif
+/*@@end@@*/
 /*@@row @prelude.thread_t demand=@thread_t@@*/
 #if defined(_WIN32)
 typedef struct { HANDLE h; } z_thread_t;
@@ -148,7 +155,7 @@ typedef struct { pthread_once_t o; } z_once_t;
 #define Z_ONCE_INIT { PTHREAD_ONCE_INIT }
 #endif
 /*@@end@@*/
-/*@@row @prelude.thread_set_name demand=@thread_set_name@@*/
+/*@@row @prelude.thread_set_name demand=@thread_set_name needs=@set_desc_fn@@*/
 #if defined(_WIN32)
 /* SetThreadDescription exists from Windows 10 1607; asked for by name so an
    older system runs the thread unnamed rather than failing to load */
@@ -176,7 +183,7 @@ static void z_thread_set_name(const char* name) {
 }
 #endif
 /*@@end@@*/
-/*@@row @prelude.thread_trampoline demand=@thread_trampoline needs=@thread_live_count,@atomic_sub,@release,@thread_set_name@@*/
+/*@@row @prelude.thread_trampoline demand=@thread_trampoline needs=@thread_live_count,@atomic_sub,@release,@thread_set_name,@thread_start_block@@*/
 #if defined(_WIN32)
 static unsigned __stdcall z_thread_trampoline(void* p) {
     z_thread_start_block b = *(z_thread_start_block*)p;
@@ -197,7 +204,7 @@ static void* z_thread_trampoline(void* p) {
 }
 #endif
 /*@@end@@*/
-/*@@row @prelude.thread_start demand=@thread_start needs=@thread_live_count,@acqrel,@atomic_add,@atomic_sub,@release,@thread_stack_default,@thread_t,@thread_trampoline,@xmalloc@@*/
+/*@@row @prelude.thread_start demand=@thread_start needs=@thread_live_count,@acqrel,@atomic_add,@atomic_sub,@release,@thread_stack_default,@thread_t,@thread_trampoline,@xmalloc,@thread_fn,@thread_start_block@@*/
 #if defined(_WIN32)
 static int z_thread_start(z_thread_t* t, z_thread_fn fn, void* arg, uint64_t stack, const char* name) {
     z_thread_start_block* b = (z_thread_start_block*)z_xmalloc(sizeof(z_thread_start_block));
