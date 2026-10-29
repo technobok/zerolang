@@ -4352,6 +4352,9 @@ Ctx: class {
     fnWritten: ListVal bool
     # the written functions are fixed: a function spelled after must be one
     fnClosed: bool
+    # every function written C spells, whether or not it is a job: a generated
+    # member written only where named (hashMemberRead) asks it
+    fnSpelled: IdSet ztypes.tid
     # the (impl, protocol) pairs a NATIVE conformer is boxed as -- a String or a
     # str mono handed to a StringViewable. The runtime supplies such an impl's struct, so
     # no unit pass writes its helpers: every box site asks for them here, and
@@ -35546,6 +35549,7 @@ addFnJob: function {
 # one. Once the written functions are fixed it must be one of them, or the C
 # names a function that is never written.
 noteFnUse: function {ctx: Ctx tid: ztypes.tid} is {
+    ctx.fnSpelled.add item: tid
     at: ctx.fnJobAt.get key: tid
     if at.none then return
     if (ctx.fnQueued.get i: at) then return
@@ -37461,6 +37465,7 @@ emitC: function {
         fnQueued: ListVal bool
         fnWritten: ListVal bool
         fnClosed: false
+        fnSpelled: IdSet ztypes.tid
         nativeBoxImpls: ListVal ztypes.tid
         nativeBoxProtos: ListVal ztypes.tid
         tmplCache: (Map String V: String)
@@ -43198,7 +43203,26 @@ emitFnptrTypedefs: function {
         }
         t0 = t0.next
     }
+    emitHashMemberFnptrs :ast :symtab :ctx :buf
     ctx.fnptrPassDone = true
+}
+
+# emitHashMemberFnptrs -- the `_ft` typedef of each generated `hash` member
+# written C names as a value (hashMemberRead): it has no declaration for the
+# pass above to read, and emitHashDefs writes it taking its type by pointer.
+emitHashMemberFnptrs: function {
+    ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx buf: String.borrow
+} is {
+    for each ru: symtab.typing.hashUsed loop {
+        r: ru
+        fid: hashMemberRead :ast :symtab :ctx tid: r
+        if fid.isZero or (ctx.fnptrDemand.has item: fid).not then continue
+        if (ctx.fnptrWritten.has item: fid) then continue
+        ctx.fnptrWritten.add item: fid
+        rt: cTypeForNameTid :ast :symtab :ctx tid: r
+        cb: ctxCnameView :ctx tid: fid
+        buf.append "typedef uint64_t (*\{cb}_ft)(const \{rt}*);\n"
+    }
 }
 
 # seedDeclaredFnptr -- a member row that holds a function value demands its type's
@@ -48896,6 +48920,7 @@ synthHashOf: function {
 hashMemberRead: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
     tid: ztypes.tid
 } out ztypes.tid is {
     if (ztypecheck.valOpSource :ast st: symtab :tid nameId: zast.wellKnown.slot.wkHash
@@ -48905,8 +48930,9 @@ hashMemberRead: function {
     fo: symtab.typing.declChildOfId parentTypeId: tid nameId: zast.wellKnown.slot.wkHash
     fid: fo.or d: ztypes.tid.zero
     if fid.isZero then return fid
-    md: symtab.typing.declMemberIdOf parentTypeId: tid nameId: zast.wellKnown.slot.wkHash
-    if (symtab.typing.usedMemberDecl.has item: md).not then return ztypes.tid
+    # a read of it is its type's hash of the value (synthHashRead); only C
+    # naming the member itself, a reference to it, calls this function
+    if (ctx.fnSpelled.has item: fid).not then return ztypes.tid
     return fid
 }
 
@@ -48997,7 +49023,7 @@ emitHashPrototypes: function {
     }
     for each ru: symtab.typing.hashUsed loop {
         r: ru
-        fid: hashMemberRead :ast :symtab tid: r
+        fid: hashMemberRead :ast :symtab :ctx tid: r
         if fid.isZero.not then {
             rt: (cTypeForNameTid
                 :ast
@@ -49020,7 +49046,7 @@ emitHashDefs: function {
 } is {
     for each ru: symtab.typing.hashUsed loop {
         r: ru
-        fid: hashMemberRead :ast :symtab tid: r
+        fid: hashMemberRead :ast :symtab :ctx tid: r
         if fid.isZero.not then {
             rt: (cTypeForNameTid
                 :ast
