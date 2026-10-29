@@ -1,9 +1,11 @@
 /* sqlite's Transaction helpers: its connection, and the COMMIT or ROLLBACK
    that finishes it -- once; after that every call answers misuse */
+/*@@row @sqlite.sqlite_tx_db demand=@sqlite_tx_db needs=@sqlite3@@*/
 static sqlite3* z_sqlite_tx_db(const z_@Transaction@_t* x) {
     return (sqlite3*)(uintptr_t)x->@MEMBER_Transaction.db@;
 }
-
+/*@@end@@*/
+/*@@row @sqlite.sqlite_tx_finish demand=@sqlite_tx_finish needs=@SQLITE_OK,@sqlite3,@sqlite3_exec,@sqlite3_get_autocommit,@sqlite_tx_db@@*/
 static z_@Result_null_SqliteError@_t z_sqlite_tx_finish(z_@Transaction@_t* x, const char* sql) {
     if (x->@MEMBER_Transaction.finished@) return z_sqlite_null_misuse("the transaction is already finished");
     sqlite3* db = z_sqlite_tx_db(x);
@@ -22,4 +24,4 @@ static z_@Result_null_SqliteError@_t z_sqlite_tx_finish(z_@Transaction@_t* x, co
     result.data = NULL;
     return result;
 }
-
+/*@@end@@*/
