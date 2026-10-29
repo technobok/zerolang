@@ -8706,12 +8706,13 @@ destroyParts: function {
 # destroyGated -- `tid`'s destructor is one zc writes only when written C calls
 # it: a record's or a class's (emitOneRecord), a runtime-owned class's
 # `destroy=` fragment (emitClassRowStructs), a union's -- Option, Result, a
-# user's (emitUnionMono) -- or a view option's (emitOptionViewMono); but not an
-# instance of a runtime template (List, Box, a templated class), whose
-# destructor is written with it.
+# user's (emitUnionMono) --, a view option's (emitOptionViewMono) or a
+# protocol's (emitOneProtocol); but not an instance of a runtime template
+# (List, Box, a templated class), whose destructor is written with it.
 destroyGated: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.tid} out bool is {
     tt: symtab.reg.typetypeOf typeId: tid
     if tt == ztypes.ztypetype.unionType then return true
+    if tt == ztypes.ztypetype.protocolType then return true
     if (isViewUnionOriginOf :symtab :ctx :tid) then return true
     if tt.isFieldwise.not then return false
     o: originTidOf :symtab :tid
@@ -45032,6 +45033,20 @@ emitOneProtocol: function {
     buf.append "_vtable_t* vtable;\n    void (*destroy)(void*);\n"
     closeStructBody :ctx :tid cn: pbase.stringView :buf
     buf.append "\n"
+    emitProtocolDestroy :symtab :ctx :tid pbase: pbase.stringView :buf
+}
+
+# emitProtocolDestroy -- a protocol value's destructor, where written C calls
+# it (destroyWritten): it runs the destroy an owned value carries (a borrowed
+# one carries none) and clears it.
+emitProtocolDestroy: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    tid: ztypes.tid
+    pbase: StringView
+    buf: String.borrow
+} is {
+    if (destroyWritten :symtab :ctx :tid).not then return
     l2: "static void \{pbase}_destroy(\{pbase}_t* proto) {\n    if (!proto) return;\n    if (proto->destroy) proto->destroy(proto->data);\n    proto->destroy = NULL;\n}\n\n"
     buf.append l2
 }
