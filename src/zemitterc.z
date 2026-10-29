@@ -42877,6 +42877,11 @@ emitOneFnptrTypedef: function {
         di = di + 1
     }
     rtid: fnRegReturnId :symtab :tid
+    if rtid.isZero.not when (
+        (symtab.reg.typetypeOf typeId: rtid) == ztypes.ztypetype.functionType
+    ) then {
+        emitOneFnptrTypedef :ast :symtab :ctx tid: rtid :seen :fnOwner :buf
+    }
     if rtid.isZero.not then ensureFwdStruct :symtab :ctx tid: rtid :buf
     params: String
     pi: u64
@@ -42947,7 +42952,6 @@ emitFnptrTypedefs: function {
             }
         }
     }
-    seedFnptrValues :ast :symtab :ctx
     t0: ztypes.tid
     for t0 < last loop {
         if (
@@ -42986,6 +42990,10 @@ seedDeclaredFnptr: function {
     if (fnJobUnwritten :ctx :tid) then return
     ot: symtab.reg.typetypeOf typeId: owner
     isParam: ot == ztypes.ztypetype.functionType
+    # a function job's signature is written before the pass, spelling its
+    # parameters; a field is spelled only where its type is written
+    if isParam when (ctx.fnJobAt.get key: owner).some then return
+    if isParam.not when (typeReached :ctx tid: owner).not then return
     if isParam.not when (symtab.typing.declIsFnptrFieldId
         parentTypeId: owner
         nameId: name
@@ -42993,32 +43001,6 @@ seedDeclaredFnptr: function {
     typeRefC :ast :symtab :ctx :tid
 }
 
-# seedFnptrValues -- a variable of a function type, and a function returning one,
-# demand its typedef: their C spelling may be written after the pass (a method
-# body, a struct field).
-seedFnptrValues: function {ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx} is {
-    vi: ztypes.vid
-    vn: symtab.reg.nextVid
-    for vi < vn loop {
-        vt: symtab.reg.variableTypeOf id: vi
-        vi = vi.next
-        if (symtab.reg.typetypeOf typeId: vt) == ztypes.ztypetype.functionType then {
-            typeRefC :ast :symtab :ctx tid: vt
-        }
-    }
-    ft: ztypes.tid
-    for ft < symtab.reg.nextTid loop {
-        if (symtab.reg.typetypeOf typeId: ft) == ztypes.ztypetype.functionType then {
-            rt: symtab.reg.returnTypeOf tid: ft
-            if rt.isZero.not when (
-                (symtab.reg.typetypeOf typeId: rt) == ztypes.ztypetype.functionType
-            ) then {
-                typeRefC :ast :symtab :ctx tid: rt
-            }
-        }
-        ft = ft.next
-    }
-}
 
 # userSpecInstance -- an instance of a user's generic protocol or facet: its
 # struct and vtable are the program's to write, where the template's
