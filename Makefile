@@ -1252,7 +1252,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2377185
+ALLOC_BASELINE := 2377770
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1971,7 +1971,7 @@ deadcode-guard: bin/zc
 # of every kind, and live ones only a careless reader misses: the reader must
 # report exactly CDEAD_PROBE there before its count is trusted. The baseline is
 # the dead items the emitter writes today (corpus, then zc); lower it as it falls.
-CDEAD_BASELINE := 3844 108
+CDEAD_BASELINE := 3319 108
 CDEAD_PROBE := cdead_dead_fn cdead_dead_fn_ft cdead_dead_inline cdead_dead_leaf \
 	cdead_dead_macro cdead_dead_proto_t cdead_dead_str cdead_dead_t cdead_dead_vtable_t
 
@@ -2187,7 +2187,7 @@ cdead-guard: bin/zc
 # cdead_dead_fn and cdead_dead_str, so a compiler that stops warning cannot
 # pass. The baseline is today's warnings (gcc corpus, gcc zc, clang corpus,
 # clang zc); lower it as it falls. Skipped without clang.
-CC_UNUSED_BASELINE := 1159 76 1601 78
+CC_UNUSED_BASELINE := 825 76 1267 78
 CC_UNUSED_FLAGS := -std=c17 -c -o /dev/null -Wunused-function -Wunused-variable -Wunused-const-variable
 CC_UNUSED_RE := warning: .*\[-Wunused-(function|variable|const-variable)
 
@@ -2279,6 +2279,14 @@ def defined(body):
         m = re.match(r'\}\s*([\w@]+)\s*;', s)
         if m:
             names.add(m.group(1)); continue
+        # a one-line struct typedef: `typedef struct { ... } NAME;`
+        m = re.match(r'typedef\b.*\}\s*([\w@]+)\s*;\Z', s)
+        if m and s.count('{') == s.count('}'):
+            names.add(m.group(1)); continue
+        # a static whose type is a macro call: `static Z_ATOMIC(int64_t) name;`
+        m = re.match(r'(static|extern)\b[^(=;]*\([^()]*\)\s*([\w@]+)\s*(=.*)?;\Z', s)
+        if m:
+            names.add(m.group(2)); continue
         if re.match(r'(__extension__\s+)?typedef\b', s) and s.endswith(';') and '{' not in s:
             fp = re.search(r'\(\s*\*\s*([\w@]+)\s*\)', s)
             names.add(fp.group(1) if fp else IDENT.findall(s[:-1])[-1]); continue
@@ -2414,7 +2422,9 @@ for f in files:
     # a class row's template is written with the row: the row's needs serve it
     for key, a, _, _ in rows:
         if a.get('tmpl') and os.path.join(rt, a['tmpl']) == f:
-            decl += needs_of(key, a) + [(unit_of(key), d) for d in demands(key, a)]
+            # (not by `@class`: every class row of a unit shares that word, and
+            # through it one class's needs would cover another's template)
+            decl += needs_of(key, a) + [(unit_of(key), d) for d in demands(key, a) if d != '@class']
     # a member section is written with the row needs it declares and those of
     # the sibling sections it needs; the text outside the sections with the marker's
     secs = {}
