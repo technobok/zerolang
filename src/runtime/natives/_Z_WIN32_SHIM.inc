@@ -26,8 +26,24 @@
 #include <winioctl.h>
 #include <stddef.h>
 
-static DWORD z_win_from_errno(int e);
+/*@@row @prelude.win_from_errno demand=@win_from_errno@@*/
+/* the Win32 code for an errno the C runtime set, for the few calls that go
+   through it (_close, the environment) */
+static DWORD z_win_from_errno(int e) {
+    switch (e) {
+        case ENOENT: return ERROR_FILE_NOT_FOUND;
+        case EACCES: return ERROR_ACCESS_DENIED;
+        case EEXIST: return ERROR_FILE_EXISTS;
+        case EBADF:  return ERROR_INVALID_HANDLE;
+        case EMFILE: return ERROR_TOO_MANY_OPEN_FILES;
+        case ENOMEM: return ERROR_NOT_ENOUGH_MEMORY;
+        case ENOSPC: return ERROR_DISK_FULL;
+        default:     return ERROR_INVALID_PARAMETER;
+    }
+}
+/*@@end@@*/
 
+/*@@row @prelude.win_wide demand=@win_wide needs=@xmalloc@@*/
 static wchar_t* z_win_wide(const char* s, size_t n) {
     if (n > (size_t)INT_MAX) {
         SetLastError(ERROR_FILENAME_EXCED_RANGE);
@@ -43,7 +59,9 @@ static wchar_t* z_win_wide(const char* s, size_t n) {
     w[wn] = 0;
     return w;
 }
+/*@@end@@*/
 
+/*@@row @prelude.win_utf8 demand=@win_utf8 needs=@xmalloc@@*/
 static char* z_win_utf8(const wchar_t* w, int wn, size_t* len) {
     int n = WideCharToMultiByte(CP_UTF8, 0, w, wn, NULL, 0, NULL, NULL);
     if (n == 0 && wn != 0) return NULL;
@@ -55,11 +73,15 @@ static char* z_win_utf8(const wchar_t* w, int wn, size_t* len) {
     if (len) *len = (size_t)n;
     return s;
 }
+/*@@end@@*/
 
+/*@@row @prelude.win_sep demand=@win_sep@@*/
 static int z_win_sep(char c) {
     return c == '\\' || c == '/';
 }
+/*@@end@@*/
 
+/*@@row @prelude.win_root_len demand=@win_root_len needs=@win_sep@@*/
 /* the root of a path, in bytes: "\\?\C:\" and "\\?\UNC\srv\share\" (verbatim),
    "\\srv\share\" (UNC), "C:\", "C:" (drive-relative), "\" (current drive);
    0 for a relative path */
@@ -92,7 +114,9 @@ static size_t z_win_root_len(const char* s, size_t n) {
     if (n >= 1 && z_win_sep(s[0])) return 1;
     return 0;
 }
+/*@@end@@*/
 
+/*@@row @prelude.win_path demand=@win_path needs=@win_wide,@xmalloc@@*/
 /* the path as UTF-16. A path the plain Win32 API cannot take whole -- one
    reaching MAX_PATH less the 12 a directory needs for its 8.3 entry -- is made
    absolute and given the \\?\ prefix (\\?\UNC\ for a share), which lifts the
@@ -131,7 +155,9 @@ static wchar_t* z_win_path(const char* s, size_t n) {
     if (out != full) memmove(full, out, (wcslen(out) + 1) * sizeof(wchar_t));
     return full;
 }
+/*@@end@@*/
 
+/*@@row @prelude.win_open demand=@win_open needs=@win_path@@*/
 /* CreateFileW on a UTF-8 path: shared for reading, writing and deletion, as
    POSIX files are, and never inherited by a child. A directory opened for
    access a directory cannot give answers ERROR_DIRECTORY_NOT_SUPPORTED
@@ -156,7 +182,9 @@ static HANDLE z_win_open(const char* s, size_t n, DWORD access, DWORD dispositio
     free(w);
     return h;
 }
+/*@@end@@*/
 
+/*@@row @prelude.win_open_fd demand=@win_open_fd needs=@win_open@@*/
 /* a C runtime fd over a file z_win_open opens: `how` 0 reads an existing file,
    1 writes one created or truncated, 2 appends to one created if missing --
    through FILE_APPEND_DATA, so every write lands at the end whoever else
@@ -183,7 +211,9 @@ static int z_win_open_fd(const char* s, size_t n, int how) {
     }
     return fd;
 }
+/*@@end@@*/
 
+/*@@row @prelude.win_read demand=@win_read@@*/
 /* read / write / seek on an fd's handle, one call each: the byte count or the
    new position, -1 on failure. A pipe whose writer has gone reads as the end
    of the stream, as on POSIX. */
@@ -197,14 +227,18 @@ static int64_t z_win_read(int fd, void* buf, uint64_t n) {
     }
     return (int64_t)got;
 }
+/*@@end@@*/
 
+/*@@row @prelude.win_write demand=@win_write@@*/
 static int64_t z_win_write(int fd, const void* buf, uint64_t n) {
     DWORD put = 0;
     DWORD ask = n > 0x40000000u ? 0x40000000u : (DWORD)n;
     if (!WriteFile((HANDLE)_get_osfhandle(fd), buf, ask, &put, NULL)) return -1;
     return (int64_t)put;
 }
+/*@@end@@*/
 
+/*@@row @prelude.win_seek demand=@win_seek@@*/
 /* `whence` is SEEK_SET, SEEK_CUR or SEEK_END, which are FILE_BEGIN,
    FILE_CURRENT and FILE_END's values */
 static int64_t z_win_seek(int fd, int64_t off, int whence) {
@@ -214,7 +248,9 @@ static int64_t z_win_seek(int fd, int64_t off, int whence) {
     if (!SetFilePointerEx((HANDLE)_get_osfhandle(fd), d, &at, (DWORD)whence)) return -1;
     return (int64_t)at.QuadPart;
 }
+/*@@end@@*/
 
+/*@@row @prelude.win_close demand=@win_close needs=@win_from_errno@@*/
 /* _close, its failure as a Win32 code: the C runtime keeps the OS's in
    _doserrno when the OS refused, and only an errno when it refused itself */
 static int z_win_close(int fd) {
@@ -223,7 +259,9 @@ static int z_win_close(int fd) {
     SetLastError(e != 0 ? e : z_win_from_errno(errno));
     return -1;
 }
+/*@@end@@*/
 
+/*@@row @prelude.win_getenv demand=@win_getenv needs=@win_utf8,@win_wide,@xmalloc@@*/
 /* the environment: Win32's, which a spawned child receives and whose names
    match regardless of case, kept in step with the C runtime's copy (_wgetenv's)
    for C code that reads that one. z_win_getenv answers a UTF-8 copy or NULL;
@@ -246,7 +284,9 @@ static char* z_win_getenv(const char* k, size_t kn) {
     free(wk);
     return out;
 }
+/*@@end@@*/
 
+/*@@row @prelude.win_setenv demand=@win_setenv needs=@win_wide@@*/
 static int z_win_setenv(const char* k, size_t kn, const char* v, size_t vn) {
     wchar_t* wk = z_win_wide(k, kn);
     wchar_t* wv = wk != NULL ? z_win_wide(v, vn) : NULL;
@@ -263,7 +303,9 @@ static int z_win_setenv(const char* k, size_t kn, const char* v, size_t vn) {
     SetLastError(e);
     return ok ? 0 : -1;
 }
+/*@@end@@*/
 
+/*@@row @prelude.win_unsetenv demand=@win_unsetenv needs=@win_wide@@*/
 static int z_win_unsetenv(const char* k, size_t kn) {
     wchar_t* wk = z_win_wide(k, kn);
     if (wk == NULL) return -1;
@@ -276,7 +318,9 @@ static int z_win_unsetenv(const char* k, size_t kn) {
     SetLastError(e);
     return ok ? 0 : -1;
 }
+/*@@end@@*/
 
+/*@@row @prelude.win_error_text demand=@win_error_text needs=@win_utf8@@*/
 /* FormatMessageW's text for a Win32 error, as UTF-8 without the trailing line
    break; NULL when the system has none */
 static char* z_win_error_text(DWORD code) {
@@ -291,21 +335,8 @@ static char* z_win_error_text(DWORD code) {
     LocalFree(w);
     return s;
 }
+/*@@end@@*/
 
-/* the Win32 code for an errno the C runtime set, for the few calls that go
-   through it (_close, the environment) */
-static DWORD z_win_from_errno(int e) {
-    switch (e) {
-        case ENOENT: return ERROR_FILE_NOT_FOUND;
-        case EACCES: return ERROR_ACCESS_DENIED;
-        case EEXIST: return ERROR_FILE_EXISTS;
-        case EBADF:  return ERROR_INVALID_HANDLE;
-        case EMFILE: return ERROR_TOO_MANY_OPEN_FILES;
-        case ENOMEM: return ERROR_NOT_ENOUGH_MEMORY;
-        case ENOSPC: return ERROR_DISK_FULL;
-        default:     return ERROR_INVALID_PARAMETER;
-    }
-}
 
 #endif
 #endif
