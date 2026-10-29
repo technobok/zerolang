@@ -34036,15 +34036,24 @@ memberSigReachEdges: function {
 containerReachEdges: function {
     symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.tid acc: ListVal ztypes.tid
 } is {
-    # what a container's base template spells whether or not anything calls
-    # it: a set's iterator, a map's `get` answer and a hashed map's `remove`
-    if (isSetOriginOf :symtab :ctx :tid) or (isIdSetOriginOf :symtab :ctx :tid) then {
+    # what a container's member sections spell, for the members written C
+    # calls (memberUses): a set's iterator, a map's `get` answer (`getv`
+    # forwards to `get`) and a hashed map's `remove`
+    isSet: (isSetOriginOf :symtab :ctx :tid) or (isIdSetOriginOf :symtab :ctx :tid)
+    isMap: (isMapOriginOf :symtab :ctx :tid) or (isIdMapOriginOf :symtab :ctx :tid)
+    walksSet: memberUsed :ctx mono: tid member: memberWord.slot.iterateAll
+    usesGet: (
+        (memberUsed :ctx mono: tid member: memberWord.slot.getOne) or
+        (memberUsed :ctx mono: tid member: memberWord.slot.getv)
+    )
+    usesRemove: memberUsed :ctx mono: tid member: memberWord.slot.remove
+    if isSet when walksSet then {
         acc.append (monoMethodReturn :symtab monoId: tid nameId: zast.wellKnown.slot.wkIterate)
     }
-    if (isMapOriginOf :symtab :ctx :tid) or (isIdMapOriginOf :symtab :ctx :tid) then {
+    if isMap when usesGet then {
         acc.append (monoMethodReturn :symtab monoId: tid nameId: zast.wellKnown.slot.wkGet)
     }
-    if (isMapOriginOf :symtab :ctx :tid) then {
+    if (isMapOriginOf :symtab :ctx :tid) when usesRemove then {
         acc.append (monoMethodReturn :symtab monoId: tid nameId: zast.wellKnown.slot.wkRemove)
     }
     # a map's two walks are written from one template, so either one used
