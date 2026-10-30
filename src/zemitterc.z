@@ -8830,6 +8830,9 @@ destroyParts: function {
 } is {
     names: ListVal zast.nameid
     tt: symtab.reg.typetypeOf typeId: tid
+    # a templated class's destructor frees what its destroy section's holes
+    # spell, recorded with the sections the instance keeps (closeTmplDestroys)
+    if (tmplClassRowOf :symtab :ctx :tid) != 0 then return
     if (originTidOf :symtab :tid).isZero.not then {
         monoElemIdsOf :symtab :ctx monoId: tid :acc
     } else if tt.isFieldwise then {
@@ -8852,10 +8855,11 @@ destroyParts: function {
 
 # destroyGated -- `tid`'s destructor is one zc writes only when written C calls
 # it: a record's or a class's (emitOneRecord), a runtime-owned class's
-# `destroy=` fragment (emitClassRowStructs), a union's -- Option, Result, a
-# user's (emitUnionMono) --, a view option's (emitOptionViewMono) or a
-# protocol's (emitOneProtocol); but not an instance of a runtime template
-# (List, Box, a templated class), whose destructor is written with it.
+# `destroy=` fragment (emitClassRowStructs), a templated class's `destroy`
+# section (sectionedText), a union's -- Option, Result, a user's
+# (emitUnionMono) --, a view option's (emitOptionViewMono) or a protocol's
+# (emitOneProtocol); but not an instance of a runtime container template
+# (List, Box), whose destructor is written with it.
 destroyGated: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.tid} out bool is {
     tt: symtab.reg.typetypeOf typeId: tid
     if tt == ztypes.ztypetype.unionType then return true
@@ -8863,8 +8867,7 @@ destroyGated: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes
     if (isViewUnionOriginOf :symtab :ctx :tid) then return true
     if tt.isFieldwise.not then return false
     o: originTidOf :symtab :tid
-    if o.isZero.not when (ctx.origins.contains item: o) then return false
-    return (tmplClassRowOf :symtab :ctx :tid) == 0
+    return o.isZero or (ctx.origins.contains item: o).not
 }
 
 # destroyWritten -- a gated destructor (destroyGated) is written only when
@@ -34196,6 +34199,155 @@ closeReachedTypes: function {ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: C
     demandWrittenDestroys :symtab :ctx
 }
 
+# closeTmplDestroys -- what each templated class instance's kept sections free:
+# a destroy hole a section spells is a destroy use -- `@@P<k>_DESTROY@@` or
+# `@@<P>_DESTROY@@` of the k-th type argument, `z_@@ARG.<m>.<p>@@_destroy` or
+# `z_@@OUT.<m>@@_destroy` of the type the hole names (tmplHoleType). A use may
+# keep another instance's destroy section, so the walk repeats until no member
+# use is added. It runs before any type is written: the instances' text is
+# written later, when a destructor first called there names one never written.
+closeTmplDestroys: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    runtimeDir: StringView
+} is {
+    seen: ctx.memberUses.length + 1
+    for seen != ctx.memberUses.length loop {
+        seen = ctx.memberUses.length
+        monos: ListVal ztypes.tid
+        for each r: ctx.reachedTypes loop {
+            if (tmplClassRowOf :symtab :ctx tid: r) != 0 then monos.append r
+        }
+        for each m: monos loop tmplSectionDestroys :ast :symtab :ctx :runtimeDir mono: m
+    }
+}
+
+# tmplSectionDestroys -- closeTmplDestroys for one instance `mono`: its
+# template's text as sectionedText keeps it -- what is outside every section,
+# and each kept section -- its destroy holes noted.
+tmplSectionDestroys: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    runtimeDir: StringView
+    mono: ztypes.tid
+} is {
+    row: tmplClassRowOf :symtab :ctx tid: mono
+    tf: (ctx.classRows.get i: row - 1).tmpl.copy
+    p: "\{runtimeDir}/\{tf}"
+    raw: readTemplate :ctx path: p.stringView
+    if raw.length == 0 then return
+    pNames: List String
+    pTids: ListVal ztypes.tid
+    (templateParamArgs
+        :ast
+        :symtab
+        template: (originTidOf :symtab tid: mono)
+        :mono
+        names: pNames
+        tids: pTids
+    )
+    marks: ListVal u64
+    kept: ListVal bool
+    sectionHeads :ctx :mono text: raw.stringView :marks :kept
+    closeSectionNeeds text: raw.stringView :marks :kept
+    hits: ListVal ztypes.tid
+    {
+        text: raw.stringView
+        i: u64
+        pos: u64
+        for pos < text.length loop {
+            sp: nextPiece :text from: pos openM: "/*@@member "
+            # the text outside every section is written with each instance
+            outTo: sp.at
+            if sp.whole.not then outTo = text.length
+            (destroyHoleTypes
+                :ast
+                :symtab
+                :ctx
+                inst: mono
+                body: (text.substring from: pos to: outTo)
+                :pNames
+                :pTids
+                acc: hits
+            )
+            if sp.whole.not then break
+            if (kept.get :i) then {
+                (destroyHoleTypes
+                    :ast
+                    :symtab
+                    :ctx
+                    inst: mono
+                    body: (text.substring from: sp.bodyFrom to: sp.bodyTo)
+                    :pNames
+                    :pTids
+                    acc: hits
+                )
+            }
+            i = i + 1
+            pos = sp.next
+        }
+    }
+    for each t: hits loop {
+        dt: destroyTargetTid :symtab :ctx tid: t
+        if dt.isZero.not when dt != ctx.strTid then noteDestroyUse :symtab :ctx tid: dt
+    }
+}
+
+# destroyHoleTypes -- the types the destroy holes in a section `body` of
+# instance `inst` free, into `acc`: a parameter's `_DESTROY` hole, by name or by
+# position, its argument; an `ARG.`/`OUT.` hole followed by `_destroy` the type
+# it names.
+destroyHoleTypes: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    inst: ztypes.tid
+    body: StringView
+    pNames: (List String).view
+    pTids: (ListVal ztypes.tid).view
+    acc: ListVal ztypes.tid
+} is {
+    pos: u64
+    for pos < body.length loop {
+        rest: body.substring from: pos to: body.length
+        o: (rest.indexOf needle: "@@").or d: rest.length
+        if o == rest.length then return
+        after: rest.substring from: o + 2 to: rest.length
+        c: (after.indexOf needle: "@@").or d: after.length
+        if c == after.length then return
+        hole: after.substring from: 0 to: c
+        tail: after.substring from: c + 2 to: after.length
+        pos = pos + o + 4 + c
+        if (hole.endsWith suffix: "_DESTROY") then {
+            pa: holeParamArg :pNames :pTids name: (hole.substring from: 0 to: hole.length - 8)
+            if pa.isZero.not then acc.append pa
+        } else if (tail.startsWith prefix: "_destroy") then {
+            t: tmplHoleType :ast :symtab :ctx :inst :hole
+            if t.isZero.not then acc.append t
+        }
+    }
+}
+
+# holeParamArg -- the argument bound to the type parameter a hole names, by its
+# name or by position (`P<k>`); 0 for a name no parameter has
+holeParamArg: function {
+    pNames: (List String).view
+    pTids: (ListVal ztypes.tid).view
+    name: StringView
+} out ztypes.tid is {
+    k: u64
+    for k < pNames.length loop {
+        byPos: "P\{k}"
+        if (
+            ((pNames.get i: k).stringView == name) or (byPos.stringView == name)
+        ) then return (pTids.get i: k)
+        k = k + 1
+    }
+    return ztypes.tid.zero
+}
+
 # demandWrittenDestroys -- the destructors written whatever calls them call
 # their parts': every reached type's that is not gated (destroyGated: an
 # instance of List, Box or a templated class), and the impl of each owned
@@ -37572,6 +37724,7 @@ emitCodeBody: function {
     emitRuntimeUnits ast: program :symtab :ctx :runtimeDir buf: rtBuf late: false
     needsAt: ctx.needUnits.length
     closeReachedTypes ast: program :symtab :ctx
+    closeTmplDestroys ast: program :symtab :ctx :runtimeDir
     emitMonos ast: program :symtab :ctx :runtimeDir buf: codeBuf
     codeBuf.append svBuf
     # ahead of the runtime fragments: those dereference the layouts of the
