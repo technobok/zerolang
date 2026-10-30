@@ -4344,6 +4344,10 @@ Ctx: class {
     # the ordinal variants reached only through their tag constants: written
     # as their enum alone, with no type name (closeReachedTypes)
     tagOnlyTypes: IdSet ztypes.tid
+    # the other variants whose tag enum written C spells -- a tag constant, or
+    # the `_tag_t` type a fragment names: only these, and a variant whose struct
+    # stores its tag as the enum, write it (tagEnumWritten)
+    tagEnumUses: IdSet ztypes.tid
     # those closed over what each one's C spells in turn: its fields, arm
     # payloads, elements and the signatures of its used members. Only these
     # types are written
@@ -30519,7 +30523,7 @@ boolArmSideOf: function {
 truthyCondText: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
+    ctx: Ctx
     n: astnode.view
     raw: StringView
 } out String is {
@@ -30528,7 +30532,7 @@ truthyCondText: function {
     tid: symtab.typing.nodeTypeFor nid: (interpPartNodeId :n)
     if tid.isZero then return "".string
     if (isOrdinalPair :symtab :tid) then return "".string
-    tg: tagConstOf :ast :ctx :symtab :tid armId: fa
+    tg: spelledTagConst :ast :ctx :symtab :tid armId: fa
     if tg.length == 0 then return "".string
     accessOp: ".".string
     rn: atomNodeId :n
@@ -34376,14 +34380,55 @@ tagConstOf: function {
 # noteTagConstUse -- a tag constant of `tid` spelled in C being written: it is
 # declared by its type's enum, so until the reached types are fixed it is a use
 # of that type (closeReachedTypes) -- of an ordinal variant's enum alone, whose
-# type name is a use of its own.
+# type name is a use of its own -- and of the enum (noteTagEnumUse).
 noteTagConstUse: function {ctx: Ctx symtab: zenv.ZSymbolTable.view tid: ztypes.tid} is {
-    if ctx.reachFixed then return
-    if (isOrdinalVariant :symtab :tid) then (ctx.ordinalTagUses.add
-        item: tid
-    ) else (ctx.typeUses.add
-        item: tid
+    if (isOrdinalVariant :symtab :tid) then {
+        if ctx.reachFixed.not then ctx.ordinalTagUses.add item: tid
+        return
+    }
+    if ctx.reachFixed.not then ctx.typeUses.add item: tid
+    noteTagEnumUse :ctx :symtab :tid
+}
+
+# noteTagEnumUse -- C being written spells the tag enum of the non-ordinal sum
+# `tid`, a constant of it or its `_tag_t`: before the reached types are fixed
+# the enum is a use; after, it must be one already used, or the C names an enum
+# that is never written. A union's enum is written with its struct: the
+# collection templates spell their options' tags after the types are fixed.
+noteTagEnumUse: function {ctx: Ctx symtab: zenv.ZSymbolTable.view tid: ztypes.tid} is {
+    if (symtab.reg.typetypeOf typeId: tid) != ztypes.ztypetype.variantType then return
+    if ctx.reachFixed.not then {
+        ctx.tagEnumUses.add item: tid
+        return
+    }
+    if (ctx.tagEnumUses.has item: tid) then return
+    # a type that is not written is spelled only by template text its writer
+    # drops (a stand-in's options)
+    if (ctx.reachedTypes.has item: tid).not then return
+    cn: ctxCname :ctx :tid
+    (emitFail
+        :ctx
+        what: "the tag enum of \{cn} spelled after the reached types were fixed, and not among them"
+        line: 0
     )
+}
+
+# tagEnumWritten -- whether the non-ordinal variant `tid`'s tag enum is written:
+# where C spells it, where its struct stores the tag as the enum (`tsc`, its
+# tagStorageCType, empty), or where its generated `==` is written beside it and
+# switches on the constants. Those two are the type's own uses of it.
+tagEnumWritten: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    tid: ztypes.tid
+    tsc: StringView
+} out bool is {
+    if tsc.length == 0 then ctx.tagEnumUses.add item: tid
+    if (ctx.eqUsed.has item: tid) when (eqGenerated :ast :symtab :ctx :tid) then {
+        ctx.tagEnumUses.add item: tid
+    }
+    return (ctx.tagEnumUses.has item: tid)
 }
 
 # spelledTagConst -- tagConstOf for C being written (noteTagConstUse).
@@ -37478,6 +37523,7 @@ emitC: function {
         typeUses: IdSet ztypes.tid
         ordinalTagUses: IdSet ztypes.tid
         tagOnlyTypes: IdSet ztypes.tid
+        tagEnumUses: IdSet ztypes.tid
         reachedTypes: IdSet ztypes.tid
         reachFixed: false
         fnJobs: ListVal fnjob
@@ -37938,6 +37984,8 @@ applyOptionTags: function {
     if (text.stringView.contains needle: probe).not then return text
     sk: "\{key}_SOME"
     nk: "\{key}_NONE"
+    # an option view's enum is written with its struct (emitOptionViewMono), so
+    # spelling its constants is no use of it to record
     sv: tagConstOf :ast :ctx :symtab :tid armId: zast.wellKnown.slot.wkSome
     nv: tagConstOf :ast :ctx :symtab :tid armId: zast.wellKnown.slot.wkNone
     a: applyTmpl :text key: sk.stringView val: sv.stringView
@@ -40835,6 +40883,15 @@ fillFragmentHoles: function {
                 bv.append from: st.copy
             } else {
                 cc: ioCanonCname :ast :symtab :ctx canon: nv
+                # `z_@X@_tag_t` spells X's tag enum
+                if (rd.stringView.contains needle: "@_tag_t") then {
+                    tagHole: "@\{nv}@_tag_t"
+                    if (rd.stringView.contains needle: tagHole) then (noteTagEnumUse
+                        :ctx
+                        :symtab
+                        tid: (ioCanonTidAny :ast :symtab :ctx canon: nv)
+                    )
+                }
                 # a type-name hole that resolves to nothing used to fill
                 # with nothing, so `z_@IoError@_t` became `z__t` and the
                 # C compiler reported it instead of zc. The TAG channel
@@ -48117,9 +48174,10 @@ closeStructBody: function {ctx: Ctx.view tid: ztypes.tid cn: StringView buf: Str
     }
 }
 
-# emitVariantEnum -- a variant's enum of arm tag constants: its tag type, or for
-# an ordinal (`ctype` its C scalar) an enum that names no type -- its tag type is
-# never spelled -- and the ordinal's own type where written C spells it
+# emitVariantEnum -- a variant's enum of arm tag constants: its tag type, written
+# where C spells it (tagEnumWritten), or for an ordinal (`ctype` its C scalar)
+# an enum that names no type -- its tag type is never spelled -- and the
+# ordinal's own type where written C spells it
 emitVariantEnum: function {
     ast: Ast.view
     ctx: Ctx
@@ -48130,6 +48188,10 @@ emitVariantEnum: function {
     cn: StringView
     buf: String.borrow
 } is {
+    if ctype.length == 0 then {
+        tsc: tagStorageCType :symtab :tid
+        if (tagEnumWritten :ast :symtab :ctx :tid tsc: tsc.stringView).not then return
+    }
     if ctype.length > 0 then buf.append "enum {\n" else buf.append "typedef enum {\n"
     for each aname: aidsNm loop {
         tg: spelledTagConst :ast :ctx :symtab :tid armId: aname
