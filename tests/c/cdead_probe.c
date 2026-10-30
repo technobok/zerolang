@@ -1,8 +1,9 @@
 /* cdead_probe.c -- C with dead items of every kind, on purpose. `make
    cdead-guard` requires its reader to report exactly the items named
    cdead_dead_*, and `make cc-unused-guard` requires gcc and clang to report
-   cdead_dead_fn and cdead_dead_str, before either trusts a count over the
-   emitted C: a reader or a compiler that stops seeing dead C cannot pass.
+   cdead_dead_fn, cdead_dead_str and cdead_dead_word_fn (and not the unused
+   local), before either trusts a count over the emitted C: a reader or a
+   compiler that stops seeing dead C cannot pass.
    Everything named cdead_live_* is reached from main, some of it only through
    a path a rough reader misses. */
 /* configures a system header: live although the C never names it */
@@ -58,7 +59,13 @@ static void cdead_dead_fn(void) {
     cdead_dead_leaf();
 }
 
-/* static inline: gcc and clang report neither */
+#if defined(Z_WORD_PORTABLE)
+/* defined in one configuration only, and called in none */
+static void cdead_dead_word_fn(void) {
+}
+#endif
+
+/* static inline: gcc never reports it, clang does */
 static inline int cdead_dead_inline(int x) {
     return x;
 }
@@ -96,6 +103,8 @@ static int cdead_live_add(cdead_live_t v) {
 }
 
 int main(void) {
+    /* a local nothing reads: no file-scope item, so not counted */
+    int cdead_unused_local = 0;
 #if CDEAD_LIVE_SWITCH
     cdead_live_t v = {1};
     cdead_live_count = cdead_live_add(v);

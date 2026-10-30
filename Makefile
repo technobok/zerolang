@@ -1973,7 +1973,8 @@ deadcode-guard: bin/zc
 # the dead items the emitter writes today (corpus, then zc); lower it as it falls.
 CDEAD_BASELINE := 0 0
 CDEAD_PROBE := cdead_dead_ext_t cdead_dead_fn cdead_dead_fn_ft cdead_dead_inline cdead_dead_leaf \
-	cdead_dead_macro cdead_dead_proto_t cdead_dead_str cdead_dead_t cdead_dead_vtable_t
+	cdead_dead_macro cdead_dead_proto_t cdead_dead_str cdead_dead_t cdead_dead_vtable_t \
+	cdead_dead_word_fn
 
 define CDEAD_GUARD_PY
 import re, subprocess, sys
@@ -2187,43 +2188,99 @@ cdead-guard: bin/zc
 	fi; \
 	rm -rf $$d
 
-# cc-unused-guard -- gcc and clang find no unused static function or variable
-# in the emitted C: the C of each corpus program and of zc itself is compiled
-# with -Wunused-function -Wunused-variable -Wunused-const-variable and the
-# warnings counted. Both compilers must first report tests/c/cdead_probe.c's
-# cdead_dead_fn and cdead_dead_str, so a compiler that stops warning cannot
-# pass. The baseline is today's warnings (gcc corpus, gcc zc, clang corpus,
-# clang zc); lower it as it falls. Skipped without clang.
-CC_UNUSED_BASELINE := 50 0 93 0
-CC_UNUSED_FLAGS := -std=c17 -c -o /dev/null -Wunused-function -Wunused-variable -Wunused-const-variable
-CC_UNUSED_RE := warning: .*\[-Wunused-(function|variable|const-variable)
+# cc-unused-guard -- gcc and clang find no unused file-scope item in the
+# emitted C: the C of each corpus program and of zc itself is compiled in each
+# configuration the C branches on that this host can run (default, the portable
+# integers and float, the portable word) with -Wunused-function
+# -Wunused-variable -Wunused-const-variable, and the warnings on FILE-SCOPE
+# items counted -- static functions and variables; a local, an indented line,
+# is not (CC_UNUSED_PY). An undeclared function is an error
+# (-Werror=implicit-function-declaration), so C conditioned on a narrower test
+# than its callers fails as surely as C conditioned on a wider one stays
+# unused. Both compilers must first report exactly CC_UNUSED_PROBE_<cc> in
+# tests/c/cdead_probe.c across the configurations (its unused local not among
+# them) and an error for a call to an undeclared function, so a compiler, a
+# configuration or a filter that stops seeing them cannot pass. The baseline is
+# today's count summed over the configurations (gcc corpus, gcc zc, clang
+# corpus, clang zc); lower it as it falls. Skipped without clang.
+CC_UNUSED_BASELINE := 6 0 92 0
+CC_UNUSED_FLAGS := -std=c17 -c -o /dev/null -Wunused-function -Wunused-variable -Wunused-const-variable \
+	-Werror=implicit-function-declaration
+CC_UNUSED_PROBE_gcc := cdead_dead_fn cdead_dead_str cdead_dead_word_fn
+# clang also reports an unused static inline function (gcc never does)
+CC_UNUSED_PROBE_clang := cdead_dead_fn cdead_dead_inline cdead_dead_str cdead_dead_word_fn
+
+define CC_UNUSED_PY
+import re, sys
+# the file-scope unused warnings, and the errors, a compiler wrote on stdin for
+# the file argv[1]; --list names each
+path = sys.argv[1]; listing = '--list' in sys.argv
+src = open(path, errors='replace').read().split('\n')
+n = 0; errs = 0
+for ln in sys.stdin:
+    if ': error:' in ln:
+        errs += 1
+        if listing: print('ERROR ' + ln.strip())
+        continue
+    m = re.match(r'(.*?):(\d+):\d+: warning: (.*)\[-Wunused-(function|variable|const-variable)=?\]', ln)
+    if not m or m.group(1) != path: continue
+    no = int(m.group(2))
+    text = src[no - 1] if no <= len(src) else ''
+    if m.group(4) == 'variable' and text[:1] in (' ', '\t'): continue
+    n += 1
+    if listing:
+        nm = re.search(r"['‘]([A-Za-z_]\w*)['’]", m.group(3))
+        print('UNUSED ' + (nm.group(1) if nm else '?'))
+print('COUNT %d %d' % (n, errs))
+endef
+export CC_UNUSED_PY
+
+# CC_UNUSED_CFGS -- the configurations, one per line of flags (the first empty)
+CC_UNUSED_CFGS = "" "-DZ_INT128_PORTABLE -DZ_F16_PORTABLE" "-DZ_WORD_PORTABLE"
 
 cc-unused-guard: bin/zc
 	@command -v clang >/dev/null 2>&1 || { echo "cc-unused-guard SKIP: clang not installed"; exit 0; }; \
-	for cc in gcc clang; do \
-	  w=$$($$cc $(CC_UNUSED_FLAGS) tests/c/cdead_probe.c 2>&1); \
-	  for want in cdead_dead_fn cdead_dead_str; do \
-	    echo "$$w" | grep -E "$(CC_UNUSED_RE)" | grep -q "$$want" || { \
-	      echo "cc-unused-guard FAIL: $$cc does not report tests/c/cdead_probe.c's $$want"; exit 1; }; \
-	  done; \
-	done; \
 	d=$$(mktemp -d); \
-	$(GUARD_EMIT_C); \
-	got=""; \
+	printf 'int main(void) { return cdead_undeclared_fn(); }\n' > $$d/undeclared.c; \
 	for cc in gcc clang; do \
-	  c=$$(ls $$d/*.c | xargs -P $(NPROC) -I{} sh -c "$$cc $(CC_UNUSED_FLAGS) {} 2>&1 | grep -cE '$(CC_UNUSED_RE)'" | awk '{s += $$1} END {print s}'); \
-	  z=$$($$cc $(CC_UNUSED_FLAGS) $$d/zc/zc.c 2>&1 | grep -cE '$(CC_UNUSED_RE)'); \
+	  got=$$(for cfg in $(CC_UNUSED_CFGS); do \
+	    $$cc $(CC_UNUSED_FLAGS) $$cfg tests/c/cdead_probe.c 2>&1 \
+	      | python3 -c "$$CC_UNUSED_PY" tests/c/cdead_probe.c --list; done \
+	    | sed -n 's/^UNUSED //p' | sort -u | tr '\n' ' '); \
+	  want="$(CC_UNUSED_PROBE_gcc) "; [ $$cc = clang ] && want="$(CC_UNUSED_PROBE_clang) "; \
+	  if [ "$$got" != "$$want" ]; then \
+	    echo "cc-unused-guard FAIL: $$cc does not report exactly tests/c/cdead_probe.c's file-scope dead items"; \
+	    echo "  want: $$want"; echo "  got:  $$got"; rm -rf $$d; exit 1; \
+	  fi; \
+	  e=$$($$cc $(CC_UNUSED_FLAGS) $$d/undeclared.c 2>&1 | python3 -c "$$CC_UNUSED_PY" $$d/undeclared.c | awk '{print $$3}'); \
+	  if [ "$$e" = "0" ]; then \
+	    echo "cc-unused-guard FAIL: $$cc does not reject a call to an undeclared function"; rm -rf $$d; exit 1; \
+	  fi; \
+	done; \
+	$(GUARD_EMIT_C); \
+	got=""; errs=0; \
+	for cc in gcc clang; do \
+	  c=0; z=0; \
+	  for cfg in $(CC_UNUSED_CFGS); do \
+	    ls $$d/*.c | grep -v '/undeclared.c$$' | xargs -P $(NPROC) -I{} sh -c "$$cc $(CC_UNUSED_FLAGS) $$cfg {} 2>&1 | python3 -c \"\$$CC_UNUSED_PY\" {}" > $$d/count; \
+	    c=$$((c + $$(awk '{s += $$2} END {print s + 0}' $$d/count))); errs=$$((errs + $$(awk '{s += $$3} END {print s + 0}' $$d/count))); \
+	    $$cc $(CC_UNUSED_FLAGS) $$cfg $$d/zc/zc.c 2>&1 | python3 -c "$$CC_UNUSED_PY" $$d/zc/zc.c > $$d/count; \
+	    z=$$((z + $$(awk '{print $$2}' $$d/count))); errs=$$((errs + $$(awk '{print $$3}' $$d/count))); \
+	  done; \
 	  got="$$got $$c $$z"; \
 	done; \
 	rm -rf $$d; \
+	if [ $$errs -ne 0 ]; then \
+	  echo "cc-unused-guard FAIL: $$errs compile error(s) in a configuration: C calls a function its test leaves out"; exit 1; \
+	fi; \
 	set -- $$got; g1=$$1; g2=$$2; c1=$$3; c2=$$4; set -- $(CC_UNUSED_BASELINE); \
 	if [ "$$g1" -gt "$$1" ] || [ "$$g2" -gt "$$2" ] || [ "$$c1" -gt "$$3" ] || [ "$$c2" -gt "$$4" ]; then \
-	  echo "cc-unused-guard FAIL: unused static functions/variables:$$got (baseline $(CC_UNUSED_BASELINE))"; \
-	  echo "  A C item written that nothing calls: see emitC in src/zemitterc.z."; exit 1; \
+	  echo "cc-unused-guard FAIL: unused file-scope functions/variables:$$got (baseline $(CC_UNUSED_BASELINE))"; \
+	  echo "  A C item written that nothing calls in some configuration: see emitC in src/zemitterc.z."; exit 1; \
 	elif [ "$$g1 $$g2 $$c1 $$c2" != "$(CC_UNUSED_BASELINE)" ]; then \
 	  echo "cc-unused-guard:$$got < baseline $(CC_UNUSED_BASELINE) -- lower CC_UNUSED_BASELINE here"; \
 	else \
-	  echo "cc-unused-guard OK: unused static functions/variables:$$got (baseline $(CC_UNUSED_BASELINE))"; \
+	  echo "cc-unused-guard OK: unused file-scope functions/variables:$$got (baseline $(CC_UNUSED_BASELINE))"; \
 	fi
 
 # piece-guard -- a piece of a runtime file is written only where written C
