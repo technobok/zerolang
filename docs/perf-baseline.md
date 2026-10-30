@@ -276,9 +276,29 @@ corpus, emitted by each compiler (gcc timed over a fixed 50-program sample):
 -72% C, -49% gcc -O0 time, -6% at -O2, -6.5% object size; every unused
 static function in emitted C is now a compile error.
 
-Open: the fixed input rose 12.3% (1,995M -> 2,241M) between `17175e8d` and
-`ec0c50a9`, on the same input, so the compiler itself got slower there; the
-arcs between (threads, static text, static data) are not yet bisected.
+The fixed input rose 12.3% (1,995M -> 2,241M) between `17175e8d` and
+`ec0c50a9`, on the same input, so the compiler itself got slower there.
+Bisected over the 359 commits between, each compiler on the fixed input:
+
+| commit | change | fixed input |
+|---|---|---|
+| `98c9c0f4` | signed arithmetic wraps; integer division checks its divisor | +57M |
+| `bb808e48` | a row body is a C expression, and names a hole as often as it needs | +30M |
+| `b94df3e9` | getMut over a value type: read as a value | +18M |
+| `28eed221` | the emitter names an expression's type through Z_TYPEOF | +13M |
+| `64b1fff9` | a text method on a string constant folds through one table | +12M |
+| 40 others | under 10M each | +115M |
+
+The two largest are one cost. Since `98c9c0f4` every integer operator fills a
+natives.tbl row, and filling a row searches its body text: for `@ARM_` and
+`@MEMBER_` holes on every use, and since `bb808e48` for a hole named twice
+(rowHoleTwice). StringView_indexOf_raw calls memcmp at each byte position, so
+the two commits add 46M of memcmp and 20M of indexOf_raw (callgrind, each
+commit against its parent). What a row's body holds does not change between
+uses: a row's hole facts, found once when the table is read, and a search
+that skips to the needle's first byte would recover most of it. The other
+steps are the checker and emitter work the features ask for, with no single
+hot spot.
 Each compiler in these tables is its commit's seed compiling its own source,
 built at gcc -O1 with mimalloc as `out/zc-perf` is, and timed on core 0.
 
