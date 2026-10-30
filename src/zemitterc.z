@@ -18377,6 +18377,48 @@ nestedBaseText: function {
     return b
 }
 
+# typePathMemberCall -- a member without a receiver read off a nested base
+# (`(vec n: 3).ones`): the base is the type's path, which is no argument, so it
+# is never built -- building it would write, and record, C nothing spells. ""
+# for a member that takes one, or that another leg serves (a collection's, a
+# protocol's, a native, a function field).
+typePathMemberCall: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: zast.dottedpathrow.view
+    mnId: zast.nameid
+    facts: cfacts.borrow
+} out String is {
+    pnid: interpPartNodeId n: (ast.nodes.get i: n.parent)
+    nlid: monoStampIdOf :symtab :ctx nid: pnid
+    if nlid.isZero then nlid = stampIdOf :symtab nid: pnid
+    nlid = typedefMethodOwner :symtab :ctx tid: nlid :mnId
+    if nlid.isZero then return "".string
+    if (symtab.reg.typetypeOf typeId: nlid).isFieldwise.not then return "".string
+    if (isCollectionOriginTid :ctx originTid: (originTidOf :symtab tid: nlid)) then return "".string
+    if (isDispatchableTid :symtab tid: nlid) then return "".string
+    if (isStringyTid :ctx tid: nlid) then return "".string
+    if (symtab.typing.declIsFnptrFieldId parentTypeId: nlid nameId: mnId) then return "".string
+    mo: symtab.typing.declChildOfId parentTypeId: nlid nameId: mnId
+    match (
+        mo
+    ) case some then {
+        if (symtab.reg.typetypeOf typeId: mo) != ztypes.ztypetype.functionType then return "".string
+        if (fnIsNativeId :symtab fid: mo) or (fnTypeTakesThis :symtab tid: mo) then return "".string
+        nmc: autoCallCname :symtab :ctx owner: nlid method: mo
+        return (stating :facts from: callFacts text: (receiverCallText
+            :ast
+            :symtab
+            :ctx
+            callee: nmc.stringView
+            recv: ""
+            fnTid: mo
+        )
+        )
+    } case none then return "".string
+}
+
 # emitDottedNestedBase -- a read whose base is itself a path (`it.target.a`,
 # `this.field.pop`): emit the base expression, then chain `.` or `->` by whether
 # the base resolves to a pointer. The collection legs repeat here because the
@@ -18396,6 +18438,8 @@ emitDottedNestedBase: function {
     if eSv.length > 0 then return eSv
     eUi: unitInstanceMemberRead :ast :symtab :ctx :n :facts
     if eUi.length > 0 then return eUi
+    eTl: typePathMemberCall :ast :symtab :ctx :n :mnId :facts
+    if eTl.length > 0 then return eTl
     # a nested base (e.g. it.target.a): emit the base expression, then chain
     # `.`/`->` by whether the base resolves to a pointer (a pointer variable or a lock field).
     baseAtomF: cfacts
