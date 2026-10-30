@@ -245,7 +245,42 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-10-11 | 7936e2a7 | [a unit's row records whether it is generic](#r-7936e2a7) | 0.75s | 0.80s | 152MB / 119MB | 114 / 388 / 274 (total 776) | 2,154,121 | 447MB | 39.3s | 170,194 |
 | 2026-10-11 | c8473d57 | [review P2-P3: four defects, three scans, itoa](#r-c8473d57) | 0.72s | 0.75s | 154MB / 118MB | 100 / 363 / 255 (total 718) | 2,152,945 | 447MB | 36.6s | 170,272 |
 | 2026-10-12 | 17175e8d | [review P4-P5: facts slot, one call router, row records, three spellings](#r-17175e8d) | 0.72s | 0.76s | 153MB / 120MB | 107 / 364 / 257 (total 728) | 2,172,858 | 453MB | 36.6s | 171,555 |
+| 2026-10-30 | 59f8083e | [the emitter writes only what `main` reaches](#r-59f8083e) | 0.88s | 0.92s | 169MB / 141MB | 121 / 459 / 326 (total 906) | 2,386,430 | 498MB | 37.9s | 192,267 |
 
+
+<a id="r-59f8083e"></a>
+**The emitter writes only what `main` reaches** (`17175e8d` -> `59f8083e`; the
+function-reach arc is `ec0c50a9` -> `59f8083e`; `make ci` and `make ci-windows`
+green at `f645677b`). Machine: gcc 15.3.0, glibc 2.44. `17175e8d`, rebuilt on
+it, measures 7,826M instructions and 1,995M on the fixed input, as its row did,
+so the columns below compare across the toolchain change.
+
+| commit | instructions (own source) | fixed input | allocs | LOC |
+|---|---|---|---|---|
+| `17175e8d` | 7,826M | 1,995M | 2,172,963 | 171,555 |
+| `ec0c50a9` | 9,435M | 2,241M | 2,367,528 | 189,544 |
+| `59f8083e` | 9,424M | 2,230M | 2,386,496 | 192,267 |
+
+The function-reach arc (`ec0c50a9` -> `59f8083e`) costs the compiler nothing:
+-0.1% instructions on 2,723 more lines, -0.5% on the fixed input. Its own last
+session (`e336dfd4` -> `59f8083e`) splits as each compiler on each tree does:
++20M from how it compiles, +84M from the 1,154 lines it added. What the arc
+buys is in the C it writes. The 1,192 programs of `ec0c50a9`'s examples and
+corpus, emitted by each compiler (gcc timed over a fixed 50-program sample):
+
+| commit | emitted C lines | hello lines | gcc -O0 | gcc -O2 | -O2 object bytes |
+|---|---|---|---|---|---|
+| `ec0c50a9` | 2,413,498 | 1,699 | 2,850ms | 3,203ms | 394,232 |
+| `59f8083e` | 686,705 | 212 | 1,446ms | 3,001ms | 368,512 |
+
+-72% C, -49% gcc -O0 time, -6% at -O2, -6.5% object size; every unused
+static function in emitted C is now a compile error.
+
+Open: the fixed input rose 12.3% (1,995M -> 2,241M) between `17175e8d` and
+`ec0c50a9`, on the same input, so the compiler itself got slower there; the
+arcs between (threads, static text, static data) are not yet bisected.
+Each compiler in these tables is its commit's seed compiling its own source,
+built at gcc -O1 with mimalloc as `out/zc-perf` is, and timed on core 0.
 
 <a id="r-17175e8d"></a>
 **Review P4-P5: facts slot, one call router, row records, three spellings**
