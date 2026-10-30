@@ -88,10 +88,6 @@ BUILDDATE := $(if $(BUILDID),$(shell git show -s --format=%cs HEAD 2>/dev/null))
 
 # The bootstrap compiler, built from the committed seed (bootstrap/README.md).
 ZC      := $(BUILDDIR)/zc-seed
-# The C the seed emitted (bootstrap/zc.c, and bin/zc.c, which the seed writes)
-# predates writing only what `main` reaches: it is compiled without
-# -Werror=unused-function until the seed is bumped past function reach.
-SEEDCFLAGS := -Wno-unused-function
 # The runtime the emitter inlines: an edit here changes emitted C as a source edit does.
 RT_DEP  := $(wildcard src/runtime/*.inc) $(wildcard src/runtime/*.c.tmpl) $(wildcard src/runtime/natives/*.inc) src/runtime/natives.tbl
 
@@ -855,7 +851,7 @@ tcc: $(BUILDDIR)/tcc $(TCCLIB)/$(LIBTCC)
 # on Windows it links no library -- there is no in-process tcc there.
 $(BUILDDIR)/zc-seed: bootstrap/zc.c
 	@mkdir -p $(BUILDDIR)
-	$(CC) $(CFLAGS) $(SEEDCFLAGS) -o $@ bootstrap/zc.c $(if $(WINDOWS_HOST),$(DRIVERLINK),$(call ZLINKOF,bootstrap/zc.c)) -lm
+	$(CC) $(CFLAGS) -o $@ bootstrap/zc.c $(if $(WINDOWS_HOST),$(DRIVERLINK),$(call ZLINKOF,bootstrap/zc.c)) -lm
 
 # bin/zc -- the self-hosted compiler, built by the seed.
 bin/zc.c: $(wildcard src/*.z) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z) $(ZC) $(RT_DEP)
@@ -864,7 +860,7 @@ bin/zc.c: $(wildcard src/*.z) $(wildcard lib/system/*.z) $(wildcard lib/system/s
 
 $(BUILDDIR)/zc.o: bin/zc.c
 	@mkdir -p $(BUILDDIR)
-	$(CC) $(CFLAGS) $(SEEDCFLAGS) $(OPTFLAGS) $(STAMPDEF) -c bin/zc.c -o $@
+	$(CC) $(CFLAGS) $(OPTFLAGS) $(STAMPDEF) -c bin/zc.c -o $@
 
 bin/zc: $(BUILDDIR)/zc.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ)
 	@mkdir -p bin
@@ -1154,8 +1150,7 @@ warn-check: bin/zc.c $(BUILDDIR)/zl.c $(BUILDDIR)/zls.c $(BUILDDIR)/tcc
 	    exit 1; \
 	  fi; \
 	  for f in bootstrap/zc.c bin/zc.c $(BUILDDIR)/zl.c $(BUILDDIR)/zls.c; do \
-	    s=''; case "$$tag:$$f" in *tcc*:*) ;; *:bootstrap/zc.c|*:bin/zc.c) s='$(SEEDCFLAGS)';; esac; \
-	    $$cc $$w $$s -Werror -c $$f -o /dev/null; \
+	    $$cc $$w -Werror -c $$f -o /dev/null; \
 	  done; \
 	  echo "  $$tag: clean on seed + zc + zl + zls"; \
 	done
