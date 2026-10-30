@@ -63,7 +63,20 @@ static inline int cdead_dead_inline(int x) {
     return x;
 }
 
+/* `__extension__` ahead of a typedef: still a type, named by its last word */
+__extension__ typedef struct {
+    int n;
+} cdead_dead_ext_t;
+
 static int cdead_live_add(cdead_live_t v);
+
+#if defined(Z_INT128_PORTABLE)
+/* reached only where the portable integers meet a compiler with __float128,
+   a configuration of its own */
+static int cdead_live_portable(void) {
+    return 3;
+}
+#endif
 
 #if defined(_WIN32)
 /* reached from the Windows branch only */
@@ -75,6 +88,8 @@ static int cdead_live_win(void) {
 static int cdead_live_add(cdead_live_t v) {
 #if defined(_WIN32)
     return v.n + cdead_live_win();
+#elif defined(Z_INT128_PORTABLE) && defined(__SIZEOF_FLOAT128__)
+    return v.n + cdead_live_portable();
 #else
     return v.n + CDEAD_LIVE_ARM_1;
 #endif

@@ -1962,17 +1962,17 @@ deadcode-guard: bin/zc
 # `main`. No C compiler reports an unused type, macro or static inline function,
 # or a function only an unused one calls, so the C is read here: the C of each
 # corpus program and of zc itself, once for each preprocessor configuration the
-# C branches on (C17 and C23, the portable integer and float code, clang, tcc,
-# MSVC, MinGW). Each top-level item -- function, prototype, type, enumerator,
-# static, macro -- is owned by the names it defines and reaches every name it
-# mentions. `main`, a name an #if tests and a #define that configures a system
-# header are the roots. An item no configuration reaches is dead, and an item
+# C branches on (C17 and C23, the portable integer and float code with and
+# without __float128, clang, tcc, MSVC, MinGW). Each top-level item -- function,
+# prototype, type, enumerator, static, macro -- is owned by the names it defines
+# and reaches every name it mentions. `main`, a name an #if tests and a #define
+# that configures a system header are the roots. An item no configuration reaches is dead, and an item
 # the reader cannot name fails the guard. tests/c/cdead_probe.c holds dead items
 # of every kind, and live ones only a careless reader misses: the reader must
 # report exactly CDEAD_PROBE there before its count is trusted. The baseline is
 # the dead items the emitter writes today (corpus, then zc); lower it as it falls.
-CDEAD_BASELINE := 21 0
-CDEAD_PROBE := cdead_dead_fn cdead_dead_fn_ft cdead_dead_inline cdead_dead_leaf \
+CDEAD_BASELINE := 15 0
+CDEAD_PROBE := cdead_dead_ext_t cdead_dead_fn cdead_dead_fn_ft cdead_dead_inline cdead_dead_leaf \
 	cdead_dead_macro cdead_dead_proto_t cdead_dead_str cdead_dead_t cdead_dead_vtable_t
 
 define CDEAD_GUARD_PY
@@ -1984,6 +1984,8 @@ CONFIGS = [
     ['-std=c23'],
     ['-std=c17', '-DZ_WORD_PORTABLE', '-DZ_INT128_PORTABLE', '-DZ_F16_PORTABLE',
      '-U__SIZEOF_FLOAT128__', '-U__SIZEOF_INT128__', '-U__FLT16_MANT_DIG__'],
+    # make test-portable-scalars: the struct forms beside the compiler's __float128
+    ['-std=c17', '-DZ_INT128_PORTABLE', '-DZ_F16_PORTABLE'],
     ['-std=c17', '-D__clang__'],
     ['-undef', '-D__TINYC__', '-D__linux__', '-D__x86_64__', '-D__STDC_VERSION__=201112L'],
     ['-undef', '-D_WIN32', '-D_WIN64', '-D_MSC_VER=1940', '-D_M_X64', '-D__STDC_VERSION__=201710L'],
@@ -2054,7 +2056,8 @@ def classify(ch):
     if ch.startswith('#'):
         m = re.match(r'#\s*define\s+(\w+)', ch)
         return ('macro', [m.group(1)]) if m else (None, [])
-    t = unattr(ch)
+    # `__extension__` only quiets -pedantic: the item is what follows it
+    t = re.sub(r'^(__extension__\s+)+', '', unattr(ch))
     if re.match(r'(_Static_assert|static_assert)\b', t): return (None, [])
     b = t.find('{')
     head = t if b < 0 else t[:b]
