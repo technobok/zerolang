@@ -4240,6 +4240,16 @@ Ctx: class {
     rowCondKey: (IdMapR u64 V: String)
     # natives.tbl's `[@cond NAME = expr]` rows, by bit (Cond)
     condNames: List String
+    # the runtime directory, for a template a decision reads before it is written
+    runtimeDir: String
+    # the Set and Map instances whose kept text spells their key's `==` /
+    # `hash` (tmplKeptSpells): member uses only grow, so a yes is final
+    keyEqKept: IdSet ztypes.tid
+    keyHashKept: IdSet ztypes.tid
+    # a no, with the member use count it was given at: still no while no
+    # member use was added
+    keyEqNoAt: (IdMapV ztypes.tid v: u64)
+    keyHashNoAt: (IdMapV ztypes.tid v: u64)
     condExprs: List String
     # members some fragment needs declared before it can be emitted
     needMembs: List String
@@ -34541,7 +34551,7 @@ demandTemplateEqs: function {ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: C
 # list's element when its `contains`, `==` or `!=` is used; 0 for any other
 # type.
 templateEqElem: function {
-    symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.tid
+    symtab: zenv.ZSymbolTable.view ctx: Ctx tid: ztypes.tid
 } out ztypes.tid is {
     if (isListOriginOf :symtab :ctx :tid) then {
         compares: (
@@ -34555,8 +34565,96 @@ templateEqElem: function {
     if (isSetOriginOf :symtab :ctx :tid) then el = setElemType :symtab monoId: tid
     if (isMapOriginOf :symtab :ctx :tid) then el = mapKeyType :symtab monoId: tid
     if el.isZero then return el
-    if (isValKey :symtab key: el kind: (keyHashKind :symtab :ctx tid: el)) then return el
-    return ztypes.tid.zero
+    if (isValKey :symtab key: el kind: (keyHashKind :symtab :ctx tid: el)
+    ).not then return ztypes.tid.zero
+    if (keyEqSpelled :symtab :ctx :tid).not then return ztypes.tid.zero
+    return el
+}
+
+# keyEqSpelled -- the Set or Map instance `tid` compares its keys in the text
+# it is written with: a member whose section does (a lookup) is used, so the
+# key's `==` is called
+keyEqSpelled: function {symtab: zenv.ZSymbolTable.view ctx: Ctx tid: ztypes.tid} out bool is {
+    if (ctx.keyEqKept.has item: tid) then return true
+    if ((ctx.keyEqNoAt.get key: tid).or d: 0) == (ctx.memberUses.length + 1) then return false
+    sp: false
+    if (isSetOriginOf :symtab :ctx :tid) then sp = (tmplKeptSpells
+        :ctx
+        mono: tid
+        file: "z_Set.c.tmpl"
+        needle: "@@EQ_BODY@@"
+    )
+    if (isMapOriginOf :symtab :ctx :tid) then {
+        sp = tmplKeptSpells :ctx mono: tid file: "z_Map.c.tmpl" needle: "@@KEYS_EQUAL_BODY@@"
+    }
+    if sp then {
+        ctx.keyEqKept.add item: tid
+    } else {
+        ctx.keyEqNoAt.set key: tid value: ctx.memberUses.length + 1
+    }
+    return sp
+}
+
+# keyHashSpelled -- keyEqSpelled for the key's `hash`
+keyHashSpelled: function {symtab: zenv.ZSymbolTable.view ctx: Ctx tid: ztypes.tid} out bool is {
+    if (ctx.keyHashKept.has item: tid) then return true
+    if ((ctx.keyHashNoAt.get key: tid).or d: 0) == (ctx.memberUses.length + 1) then return false
+    sp: false
+    if (isSetOriginOf :symtab :ctx :tid) then sp = (tmplKeptSpells
+        :ctx
+        mono: tid
+        file: "z_Set.c.tmpl"
+        needle: "@@HASH_BODY@@"
+    )
+    if (isMapOriginOf :symtab :ctx :tid) then {
+        sp = tmplKeptSpells :ctx mono: tid file: "z_Map.c.tmpl" needle: "@@HASH_KEY_BODY@@"
+    }
+    if sp then {
+        ctx.keyHashKept.add item: tid
+    } else {
+        ctx.keyHashNoAt.set key: tid value: ctx.memberUses.length + 1
+    }
+    return sp
+}
+
+# tmplKeptSpells -- instance `mono`'s template `file`, as sectionedText keeps it
+# for the member uses so far, spells `needle`: in the text outside every
+# section, or in a kept one
+tmplKeptSpells: function {
+    ctx: Ctx mono: ztypes.tid file: StringView needle: StringView
+} out bool is {
+    p: "\{ctx.runtimeDir}/\{file}"
+    if (ctx.tmplCache.get key: p.stringView.asString).none then (readTemplateCached
+        :ctx
+        path: p.stringView
+    )
+    got: ctx.tmplCache.get key: p.stringView.asString
+    if got.none then return true
+    return (keptTextSpells :ctx :mono text: got.stringView :needle)
+}
+
+# keptTextSpells -- tmplKeptSpells over the template's text, read in place
+keptTextSpells: function {
+    ctx: Ctx.view mono: ztypes.tid text: StringView needle: StringView
+} out bool is {
+    marks: ListVal u64
+    kept: ListVal bool
+    sectionHeads :ctx :mono :text :marks :kept
+    closeSectionNeeds :text :marks :kept
+    i: u64
+    pos: u64
+    for pos < text.length loop {
+        sp: nextPiece :text from: pos openM: "/*@@member "
+        outTo: sp.at
+        if sp.whole.not then outTo = text.length
+        if ((text.substring from: pos to: outTo).contains :needle) then return true
+        if sp.whole.not then return false
+        if (kept.get :i) when ((text.substring from: sp.bodyFrom to: sp.bodyTo).contains :needle
+        ) then return true
+        i = i + 1
+        pos = sp.next
+    }
+    return false
 }
 
 # reachSoFar -- the reached set closed over what has been spelled so far,
@@ -36339,19 +36437,35 @@ demandContainerCalls: function {
     k: ztypes.tid
     if (isSetOriginOf :symtab :ctx :tid) then k = setElemType :symtab monoId: tid
     if (isMapOriginOf :symtab :ctx :tid) then k = mapKeyType :symtab monoId: tid
-    if k.isZero then return
+    if k.isZero.not then demandKeyCalls :ast :symtab :ctx :tid key: k :seen :seenHash
+}
+
+# demandKeyCalls -- the `==` and `hash` of the key `key` a Set or Map instance
+# `tid` calls: only a member that looks a key up spells them
+demandKeyCalls: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    tid: ztypes.tid
+    key: ztypes.tid
+    seen: IdSet ztypes.tid
+    seenHash: IdSet ztypes.tid
+} is {
+    k: key
     kind: keyHashKind :symtab :ctx tid: k
+    eqK: keyEqSpelled :symtab :ctx :tid
+    hashK: keyHashSpelled :symtab :ctx :tid
     if (isValKey :symtab key: k :kind) then {
-        demandEqCalls :ast :symtab :ctx tid: k :seen
-        demandHashCalls :ast :symtab :ctx tid: k seen: seenHash
+        if eqK then demandEqCalls :ast :symtab :ctx tid: k :seen
+        if hashK then demandHashCalls :ast :symtab :ctx tid: k seen: seenHash
         return
     }
     if kind != 0 then return
     dh: declaredKeyFnId :symtab :ctx tid0: k nid: zast.wellKnown.slot.wkHash
     de: declaredKeyFnId :symtab :ctx tid0: k nid: zast.wellKnown.slot.wkOpEq
     if dh.isZero.not when de.isZero.not then {
-        noteFnUse :ctx tid: dh
-        noteFnUse :ctx tid: de
+        if hashK then noteFnUse :ctx tid: dh
+        if eqK then noteFnUse :ctx tid: de
     }
 }
 
@@ -38150,6 +38264,11 @@ emitC: function {
         rowCondEpochAt: 0
         rowCondKey: (IdMapR u64 V: String)
         condNames: List String
+        runtimeDir: String
+        keyEqKept: IdSet ztypes.tid
+        keyHashKept: IdSet ztypes.tid
+        keyEqNoAt: (IdMapV ztypes.tid v: u64)
+        keyHashNoAt: (IdMapV ztypes.tid v: u64)
         condExprs: List String
         needMembs: List String
         fnSigs: (IdMapR ztypes.tid V: String)
@@ -38319,6 +38438,7 @@ emitC: function {
         boolTid: boolId
         :origins
     )
+    ctx.runtimeDir = runtimeDir.string
     loadNativeTbl :ctx ast: program :symtab :runtimeDir
     loadPieces :ctx :runtimeDir
     linkLibs: List String
