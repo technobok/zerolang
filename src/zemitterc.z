@@ -1593,271 +1593,6 @@ substituteAll: function {text: String needle: StringView repl: StringView} out S
     return buf
 }
 
-# holeNames -- every distinct `@Name@` hole in a fragment, in first-seen
-# order: the holes a fragment spells ARE its demand. `@@KEY@@` template keys
-# are opaque, so the mixed z_str.c.tmpl (which spells both) never reads the
-# `@NAME@` inside a `@@NAME@@` as a hole.
-holeNames: function {text: StringView} out List String is {
-    names: List String
-    pos: u64
-    total: text.length
-    for pos < total loop {
-        rem: text.substring from: pos to: total
-        ao: rem.indexOf needle: "@"
-        match (
-            ao
-        ) case some then {
-            at: pos + ao
-            dbl: false
-            nx: text.byteAt i: at + 1
-            match (
-                nx
-            ) case some then {
-                if nx == 64 then dbl = true
-            } case none then null
-            if dbl then {
-                aft: text.substring from: at + 2 to: total
-                cl: aft.indexOf needle: "@@"
-                match (
-                    cl
-                ) case some then {
-                    pos = at + 2 + cl + 2
-                } case none then {
-                    pos = at + 2
-                }
-            } else {
-                sub: text.substring from: at + 1 to: total
-                ho: sub.indexOf needle: "@"
-                match (
-                    ho
-                ) case some then {
-                    endn: at + 1 + ho
-                    nm: text.substring from: at + 1 to: endn
-                    seen: false
-                    si: u64
-                    sn: names.length
-                    for si < sn loop {
-                        e: names.get i: si
-                        if e.stringView == nm then seen = true
-                        si = si + 1
-                    }
-                    if seen.not then names.append from: nm.string
-                    pos = endn + 1
-                } case none then {
-                    pos = at + 1
-                }
-            }
-        } case none then {
-            pos = total
-        }
-    }
-    return names
-}
-
-# hasUnfilledHole -- true when an unfilled single-`@` hole survives. `@@KEY@@` keys
-# are opaque here too, so a template key still awaiting applyTmpl does not
-# read as a hole.
-hasUnfilledHole: function {text: StringView} out bool is {
-    pos: u64
-    total: text.length
-    for pos < total loop {
-        rem: text.substring from: pos to: total
-        ao: rem.indexOf needle: "@"
-        match (
-            ao
-        ) case some then {
-            at: pos + ao
-            dbl: false
-            nx: text.byteAt i: at + 1
-            match (
-                nx
-            ) case some then {
-                if nx == 64 then dbl = true
-            } case none then null
-            if dbl then {
-                aft: text.substring from: at + 2 to: total
-                cl: aft.indexOf needle: "@@"
-                match (
-                    cl
-                ) case some then {
-                    pos = at + 2 + cl + 2
-                } case none then {
-                    pos = at + 2
-                }
-            } else {
-                return true
-            }
-        } case none then {
-            pos = total
-        }
-    }
-    return false
-}
-
-# appendHoleBinding -- append the text hole `name` fills with to `buf`, and
-# answer whether anything binds it. Whether it is bound is a separate answer
-# from what it appends, because a hole may legitimately fill with NOTHING:
-# `@TAG_X@` is `.tag` while X is a tagged struct and empty once X is
-# unwrapped. A CNAME binding fills with the bound name minus its `z_` prefix,
-# because the body spells that prefix itself (`z_@File@_t`), and a value
-# carrying no `z_` is a canon that resolved to nothing, which appends nothing
-# and is reported as fatal at the fill site. A RAW binding fills verbatim: an
-# emitted operand is an arbitrary C expression, not a type's name, so the
-# prefix rule would be a lie about it. Cnames are consulted first.
-appendHoleBinding: function {
-    buf: String.borrow
-    name: StringView
-    bindNames: (List String).view
-    bindVals: (List String).view
-    rawNames: (List String).view
-    rawVals: (List String).view
-} out bool is {
-    bi: u64
-    bn: bindNames.length
-    for bi < bn loop {
-        k: bindNames.get i: bi
-        if k.stringView == name then {
-            v: bindVals.get i: bi
-            vv: v.stringView
-            if (vv.startsWith prefix: "z_") then buf.append (vv.substring from: 2 to: vv.length)
-            return true
-        }
-        bi = bi + 1
-    }
-    ri: u64
-    rn: rawNames.length
-    for ri < rn loop {
-        rk: rawNames.get i: ri
-        if rk.stringView == name then {
-            buf.append (rawVals.get i: ri)
-            return true
-        }
-        ri = ri + 1
-    }
-    return false
-}
-
-# fillHoles -- fill every `z_@Name@` hole in a runtime fragment from the
-# caller's bindings. The single substitution pass for every fragment loader:
-# it scans once, so no needle order can matter, and `@@KEY@@` template keys
-# pass through untouched for applyTmpl. Every failure is fatal and names the
-# fragment and the hole.
-fillHoles: function {
-    text: String
-    path: StringView
-    bindNames: List String
-    bindVals: List String
-    rawNames: List String
-    rawVals: List String
-    fails: List String
-} out String is {
-    buf: String
-    tv: text.stringView
-    total: tv.length
-    pos: u64
-    bad: false
-    for pos < total loop {
-        rem: tv.substring from: pos to: total
-        ao: rem.indexOf needle: "@"
-        match (
-            ao
-        ) case some then {
-            pre: rem.substring from: 0 to: ao
-            buf.append pre
-            at: pos + ao
-            dbl: false
-            nx: tv.byteAt i: at + 1
-            match (
-                nx
-            ) case some then {
-                if nx == 64 then dbl = true
-            } case none then null
-            if dbl then {
-                aft: tv.substring from: at + 2 to: total
-                cl: aft.indexOf needle: "@@"
-                match (
-                    cl
-                ) case some then {
-                    ex: at + 2 + cl + 2
-                    run: tv.substring from: at to: ex
-                    buf.append run
-                    pos = ex
-                } case none then {
-                    buf.append "@@"
-                    pos = at + 2
-                }
-            } else {
-                sub: tv.substring from: at + 1 to: total
-                ho: sub.indexOf needle: "@"
-                match (
-                    ho
-                ) case some then {
-                    endn: at + 1 + ho
-                    nm: tv.substring from: at + 1 to: endn
-                    if (appendHoleBinding :buf name: nm :bindNames :bindVals :rawNames :rawVals
-                    ).not then {
-                        fh: "fragment \{path}: hole @\{nm}@ is bound to nothing"
-                        fails.append from: fh
-                        bad = true
-                        buf.append "@"
-                        buf.append nm
-                        buf.append "@"
-                    }
-                    pos = endn + 1
-                } case none then {
-                    fu: "fragment \{path}: unterminated hole"
-                    fails.append from: fu
-                    bad = true
-                    buf.append "@"
-                    pos = at + 1
-                }
-            }
-        } case none then {
-            buf.append rem
-            pos = total
-        }
-    }
-    if bad.not when (hasUnfilledHole text: buf.stringView) then {
-        fr: "fragment \{path}: a hole survived the fill"
-        fails.append from: fr
-    }
-    return buf
-}
-
-# fillHolesForCtx -- fillHoles for every loader that holds a Ctx: the fill's
-# failures are reported through the emit-failure channel, so a bad fragment
-# fails the run. The three unconditional loads in emitC run before Ctx exists
-# and drain fillHoles' sink into their own fails list instead. The tag-constant
-# holes are bound here, for every loader alike (bindArmHoles).
-fillHolesForCtx: function {
-    # the arm names
-    ast: Ast.view
-    # the checked program the canons resolve in
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    text: String
-    path: StringView
-    bindNames: List String
-    bindVals: List String
-    rawNames: List String
-    rawVals: List String
-} out String is {
-    bindArmHoles :ast :symtab :ctx text: text.stringView :rawNames :rawVals
-    bindMemberHoles :ast :symtab :ctx text: text.stringView :rawNames :rawVals
-    ferr: List String
-    cur: (fillHoles
-        :text
-        :path
-        :bindNames
-        :bindVals
-        :rawNames
-        :rawVals
-        fails: ferr
-    )
-    emitFillFails :ctx fails: ferr
-    return cur
-}
-
 # emitFillFails -- report each failure a fill gathered through the emit-failure
 # channel, so a bad fragment or row fails the run
 emitFillFails: function {ctx: Ctx fails: (List String).view} is {
@@ -1906,7 +1641,7 @@ rtseg: record {
 rtinfo: record {
     segFrom: u64
     segTo: u64
-    # its member sections in RtTexts.pieces, in text order (rtpiece)
+    # its member sections or row pieces in RtTexts.pieces, in text order (rtpiece)
     pieceFrom: u64
     pieceTo: u64
     # a `@` opens a hole that no `@` closes, which every fill reports
@@ -1918,15 +1653,18 @@ rtinfo: record {
 }
 
 # rtpiece -- one `/*@@member NAME needs=a,b@@*/ ... /*@@end@@*/` section of a
-# template, found once (nextPiece): its head's name and needs, and its body
+# template, or one `/*@@row PATH ...@@*/ ... /*@@end@@*/` piece of a runtime
+# file, found once (nextPiece): its head's name and needs, and its body
 rtpiece: record {
     # its markers are whole; a section that is not is the text's last, and the
     # text from its open marker on is written as it stands
     whole: bool
     # where its open marker starts
     at: u64
-    # its name, from the head's start to `nameTo`
+    # its head, between its open marker and `@@*/`, and its name: the head up to
+    # `nameTo`
     headFrom: u64
+    headTo: u64
     nameTo: u64
     # its `needs=` list, empty when the head has none
     needsFrom: u64
@@ -2023,7 +1761,7 @@ RtTexts: class {
     infos: (ListVal rtinfo i: rtid)
     # every text's stretches, each text's in one run (rtinfo)
     segs: ListVal rtseg
-    # every template's member sections, each text's in one run (rtinfo)
+    # every text's member sections or row pieces, each text's in one run (rtinfo)
     pieces: ListVal rtpiece
     # the hole names, rtHole's first
     holes: zast.Vocab
@@ -2076,7 +1814,8 @@ RtTexts: class {
             lit = m.to
         }
         this.addLiteral from: lit to: text.length
-        if (spells & 4) != 0 then this.addPieces :text
+        if (spells & 4) != 0 then this.addPieces :text openM: "/*@@member "
+        if (spells & 8) != 0 then this.addPieces :text openM: "/*@@row "
         this.infos.append (rtinfo
             :segFrom
             segTo: this.segs.length
@@ -2090,7 +1829,8 @@ RtTexts: class {
     }
 
     # addMark -- the hole or key `m` of `text` as a stretch, its name interned:
-    # 1 when it is an ARM hole, 2 a MEMBER hole, 4 a member section's head
+    # 1 when it is an ARM hole, 2 a MEMBER hole, 4 a member section's head, 8 a
+    # row piece's head
     addMark: function {:this text: StringView m: rtmark} out u64 is {
         spells: u64
         hid: zast.nameid.zero
@@ -2099,6 +1839,7 @@ RtTexts: class {
             k = rtsegkind.key
             kn: text.substring from: m.at + 2 to: m.to - 2
             if (kn.startsWith prefix: "member ") then spells = 4
+            if (kn.startsWith prefix: "row ") then spells = 8
             hid = this.keys.set s: kn
         } else {
             nm: text.substring from: m.at + 1 to: m.to - 1
@@ -2110,12 +1851,13 @@ RtTexts: class {
         return spells
     }
 
-    # addPieces -- each member section of `text`, in order, up to and including
-    # the first whose markers are not whole
-    addPieces: function {:this text: StringView} is {
+    # addPieces -- each piece of `text` opening with `openM` (a template's
+    # member sections, a runtime file's row pieces), in order, up to and
+    # including the first whose markers are not whole
+    addPieces: function {:this text: StringView openM: StringView} is {
         pos: u64
         for pos < text.length loop {
-            sp: nextPiece :text from: pos openM: "/*@@member "
+            sp: nextPiece :text from: pos :openM
             if sp.found.not then return
             hd: text.substring from: sp.headFrom to: sp.headTo
             nameTo: sp.headFrom + ((hd.indexOf needle: " ").or d: hd.length)
@@ -2131,6 +1873,7 @@ RtTexts: class {
                 whole: sp.whole
                 at: sp.at
                 headFrom: sp.headFrom
+                headTo: sp.headTo
                 :nameTo
                 needsFrom: needFrom
                 needsTo: needTo
@@ -2173,7 +1916,7 @@ RtTexts: class {
     }
 
     # holesNamed -- each distinct hole of text `id` whose name starts with
-    # `prefix`, in the order first spelled: its id, and its name past the prefix
+    # `prefix`, in the order first spelled: its id, and its name
     holesNamed: function {
         this: this.view
         id: rtid
@@ -2196,7 +1939,7 @@ RtTexts: class {
             nv: nm.stringView
             if (nv.startsWith :prefix) then {
                 ids.append sg.name
-                names.append from: (nv.substring from: prefix.length to: nv.length).string
+                names.append from: nv.string
             }
         }
     }
@@ -2474,10 +2217,9 @@ rtAppendHole: function {
     return false
 }
 
-# rtFillForCtx -- text `id` filled for a loader that holds a Ctx, as
-# fillHolesForCtx fills a fragment: its tag-constant and member holes bound
-# first (rtBindArms, rtBindMembers), and each failure reported through the
-# emit-failure channel
+# rtFillForCtx -- a natives.tbl row's body `id` filled: its tag-constant and
+# member holes bound first (rtBindPrefixed), and each failure reported through
+# the emit-failure channel
 rtFillForCtx: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -2490,59 +2232,225 @@ rtFillForCtx: function {
     rawVals: List String
 } out String is {
     inf: ctx.rt.infos.get i: id
-    if inf.arms then rtBindArms :ast :symtab :ctx :id :rawIds :rawVals
-    if inf.members then rtBindMembers :ast :symtab :ctx :id :rawIds :rawVals
+    if inf.arms then rtBindHoles :ast :symtab :ctx :id arms: true :rawIds :rawVals
+    if inf.members then rtBindHoles :ast :symtab :ctx :id arms: false :rawIds :rawVals
     ferr: List String
     cur: ctx.rt.fill :id :path :bindIds :bindVals :rawIds :rawVals fails: ferr
     emitFillFails :ctx fails: ferr
     return cur
 }
 
-# rtBindArms -- bind each `@ARM_<canon>.<arm>@` hole text `id` spells to its tag
-# constant (armHoleC), as bindArmHoles binds a fragment's
-rtBindArms: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    id: rtid
-    rawIds: ListVal zast.nameid
-    rawVals: List String
-} is {
+# rtFragHoles -- each distinct hole of text `id` that plan `plan` writes (every
+# one when `all`), in the order first spelled
+rtFragHoles: function {
+    ctx: Ctx.view
+    plan: RtPlan.view
+    all: bool
     ids: ListVal zast.nameid
     names: List String
-    ctx.rt.holesNamed :id prefix: "ARM_" :ids :names
-    k: u64
-    for k < ids.length loop {
-        ac: armHoleC :ast :symtab :ctx body: (names.get i: k).stringView
-        if ac.length > 0 then {
-            rawIds.append (ids.get i: k)
-            rawVals.append from: ac
-        }
+} is {
+    inf: ctx.rt.infos.get i: plan.id
+    k: inf.segFrom
+    for k < inf.segTo loop {
+        sg: ctx.rt.segs.get i: k
         k = k + 1
+        if sg.kind.hole.not then continue
+        if all.not when (rtPlanWrites :ctx :plan at: sg.from).not then continue
+        seen: false
+        for each d: ids loop {
+            if d == sg.name then seen = true
+        }
+        if seen then continue
+        ids.append sg.name
+        names.append from: (ctx.rt.holes.pool.texts.get i: sg.name).copy
     }
 }
 
-# rtBindMembers -- bind each `@MEMBER_<canon>.<name>@` hole text `id` spells to
-# the member's C name (memberHoleC), as bindMemberHoles binds a fragment's
-rtBindMembers: function {
+# rtTagTypeHole -- text `id` spells `z_@<hole>@_tag_t`, the tag enum of the type
+# the hole names: the hole, then a literal starting `_tag_t`
+rtTagTypeHole: function {ctx: Ctx.view id: rtid hole: zast.nameid} out bool is {
+    inf: ctx.rt.infos.get i: id
+    t: ctx.rt.texts.get i: id
+    tv: t.stringView
+    k: inf.segFrom
+    for (k + 1) < inf.segTo loop {
+        sg: ctx.rt.segs.get i: k
+        k = k + 1
+        if sg.kind.hole.not or (sg.name != hole) then continue
+        nx: ctx.rt.segs.get i: k
+        if nx.kind.literal.not then continue
+        if ((tv.substring from: nx.from to: nx.to).startsWith prefix: "_tag_t") then return true
+    }
+    return false
+}
+
+# rtFragmentText -- a runtime fragment or an instantiated class template, parsed
+# (`id`), as plan `plan` writes it with its `z_@Name@` holes filled. The holes it
+# writes (every one when `all`) ARE the demand: each name resolves through
+# StringView/String or the canon path, and a name that resolves to nothing is
+# fatal. A `@TAG_<canon>@` hole is how to reach that type's discriminator, an
+# `@ARM_<canon>.<arm>@` hole a tag constant (armHoleC), an
+# `@MEMBER_<canon>.<name>@` hole a member (memberHoleC).
+rtFragmentText: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    plan: RtPlan.view
+    all: bool
+    # where the text came from, for the messages
+    path: StringView
+} out String is {
+    bn: ListVal zast.nameid
+    bv: List String
+    rn: ListVal zast.nameid
+    rv: List String
+    hids: ListVal zast.nameid
+    hnames: List String
+    rtFragHoles :ctx :plan :all ids: hids names: hnames
+    k: u64
+    for k < hids.length loop {
+        (rtFragHole
+            :ast
+            :symtab
+            :ctx
+            id: plan.id
+            hole: (hids.get i: k)
+            name: (hnames.get i: k).stringView
+            :path
+            :bn
+            :bv
+            :rn
+            :rv
+        )
+        k = k + 1
+    }
+    rtBindPrefixed :ast :symtab :ctx ids: hids names: hnames arms: true rawIds: rn rawVals: rv
+    rtBindPrefixed :ast :symtab :ctx ids: hids names: hnames arms: false rawIds: rn rawVals: rv
+    ferr: List String
+    res: (rtRenderWith
+        :ctx
+        :plan
+        keys: ctx.rt.noKeys
+        bindIds: bn
+        bindVals: bv
+        rawIds: rn
+        rawVals: rv
+        holes: true
+        :path
+        fails: ferr
+    )
+    if (ctx.rt.infos.get i: plan.id).open then {
+        ferr.append from: "fragment \{path}: unterminated hole"
+    }
+    emitFillFails :ctx fails: ferr
+    return res
+}
+
+# rtFragHole -- bind the fragment hole `name` (`hole`): a `@TAG_<canon>@` to
+# `.tag`, or to nothing for a type the backend has unwrapped, which IS its
+# discriminator; StringView and String to their C names; any other name to the
+# C name of the type its canon names. An ARM or MEMBER hole is bound apart
+# (rtBindPrefixed).
+rtFragHole: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     id: rtid
+    hole: zast.nameid
+    name: StringView
+    path: StringView
+    bn: ListVal zast.nameid
+    bv: List String
+    rn: ListVal zast.nameid
+    rv: List String
+} is {
+    if (name.startsWith prefix: "ARM_") or (name.startsWith prefix: "MEMBER_") then return
+    if (name.startsWith prefix: "TAG_") then {
+        tt: ioCanonTidAny :ast :symtab :ctx canon: (name.substring from: 4 to: name.length)
+        rn.append hole
+        tagv: ".tag"
+        if (isOrdinalVariant :symtab tid: tt) then tagv = ""
+        rv.append from: tagv.string
+        return
+    }
+    bn.append hole
+    hw: ctx.nativeWords.slotOf text: name
+    if hw == nativeWord.slot.holeStringView then {
+        preludeNeed :ctx memb: "@StringView_t"
+        bv.append from: ctx.svC.copy
+        return
+    }
+    if hw == nativeWord.slot.holeString then {
+        preludeNeed :ctx memb: "@String_t"
+        bv.append from: ctx.strC.copy
+        return
+    }
+    cc: ioCanonCname :ast :symtab :ctx canon: name
+    # `z_@X@_tag_t` spells X's tag enum
+    if (rtTagTypeHole :ctx :id :hole) then (noteTagEnumUse
+        :ctx
+        :symtab
+        tid: (ioCanonTidAny :ast :symtab :ctx canon: name)
+    )
+    # a type-name hole that resolves to nothing is reported here, not left
+    # for the C compiler to find as `z__t`; the TAG channel above is where an
+    # empty fill is legitimate
+    if cc.length == 0 then {
+        emitFail :ctx what: "fragment \{path}: hole @\{name}@ names no type in this program" line: 0
+    }
+    bv.append from: cc
+}
+
+# rtBindHoles -- bind each ARM hole (when `arms`) or MEMBER hole of the row body
+# `id` (rtBindPrefixed)
+rtBindHoles: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    id: rtid
+    arms: bool
     rawIds: ListVal zast.nameid
     rawVals: List String
 } is {
-    ids: ListVal zast.nameid
-    names: List String
-    ctx.rt.holesNamed :id prefix: "MEMBER_" :ids :names
+    hids: ListVal zast.nameid
+    hnames: List String
+    prefix: "MEMBER_"
+    if arms then prefix = "ARM_"
+    ctx.rt.holesNamed :id :prefix ids: hids names: hnames
+    rtBindPrefixed :ast :symtab :ctx ids: hids names: hnames :arms :rawIds :rawVals
+}
+
+# rtBindPrefixed -- bind each hole of `ids` / `names` that is an `ARM_` hole
+# (armHoleC) when `arms`, a `MEMBER_` hole (memberHoleC) otherwise, to the C it
+# names; one that names nothing is left unbound, which the fill reports
+rtBindPrefixed: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    ids: (ListVal zast.nameid).view
+    names: (List String).view
+    arms: bool
+    rawIds: ListVal zast.nameid
+    rawVals: List String
+} is {
+    prefix: "MEMBER_"
+    if arms then prefix = "ARM_"
     k: u64
     for k < ids.length loop {
-        mc: memberHoleC :ast :symtab :ctx body: (names.get i: k).stringView
-        if mc.length > 0 then {
-            rawIds.append (ids.get i: k)
-            rawVals.append from: mc
-        }
+        nv: names.get i: k
         k = k + 1
+        if (nv.stringView.startsWith :prefix).not then continue
+        body: nv.stringView.substring from: prefix.length to: nv.length
+        c: String
+        if arms then {
+            c = armHoleC :ast :symtab :ctx :body
+        } else {
+            c = memberHoleC :ast :symtab :ctx :body
+        }
+        if c.length > 0 then {
+            rawIds.append (ids.get i: k - 1)
+            rawVals.append from: c
+        }
     }
 }
 
@@ -2564,76 +2472,6 @@ armHoleC: function {
     if ord.none then return "".string
     noteTagConstUse :ctx :symtab tid: tt
     return (tagConstC :ast :ctx :symtab tid: tt armOrd: ord)
-}
-
-# bindArmHoles -- bind every `@ARM_<canon>.<arm>@` hole a fragment spells to the
-# tag constant of that arm of the type the canon names (ioCanonTidAny, as the
-# `@TAG_<canon>@` holes resolve): a fragment names a tag constant by its type
-# and its arm, never by the constant's own spelling. A canon naming no type in
-# this program, or an arm that type does not declare, leaves the hole unbound,
-# which fillHoles reports as fatal.
-bindArmHoles: function {
-    # the arm names
-    ast: Ast.view
-    # the checked program the canons resolve in
-    symtab: zenv.ZSymbolTable.view
-    # the emission context the canons resolve through
-    ctx: Ctx
-    # the fragment's text
-    text: StringView
-    # the raw bindings the fill reads, appended to
-    rawNames: List String
-    # and their values
-    rawVals: List String
-} is {
-    if (text.contains needle: "@ARM_").not then return
-    for each hn: (holeNames :text) loop {
-        hv: hn.stringView
-        if (hv.startsWith prefix: "ARM_") then {
-            ac: armHoleC :ast :symtab :ctx body: (hv.substring from: 4 to: hv.length)
-            if ac.length > 0 then {
-                rawNames.append from: hv.string
-                rawVals.append from: ac
-            }
-        }
-    }
-}
-
-# bindMemberHoles -- bind every `@MEMBER_<canon>.<name>@` hole a fragment spells
-# to the C name of that member of the type the canon names (ioCanonTidAny, as
-# the `@ARM_` holes resolve): a fragment reaches a field of a struct the
-# compiler generates, or an arm in a sum's `data`, by its type and its name,
-# never by the member's C spelling, which is the emitter's to choose
-# (memberC). A record's or class's member is a field, a variant's an arm, a
-# union's an inline arm slot -- its other arms live behind `data` -- and a
-# protocol's or facet's a vtable slot. A canon
-# naming no type, or a member the type does not declare, leaves the hole
-# unbound, which fillHoles reports as fatal.
-bindMemberHoles: function {
-    # the names the holes spell
-    ast: Ast.view
-    # the program whose types the canons name
-    symtab: zenv.ZSymbolTable.view
-    # the emission context memberC spells through
-    ctx: Ctx
-    # the fragment, unfilled
-    text: StringView
-    # the verbatim bindings, appended to
-    rawNames: List String
-    # the C names bound to them
-    rawVals: List String
-} is {
-    if (text.contains needle: "@MEMBER_").not then return
-    for each hn: (holeNames :text) loop {
-        hv: hn.stringView
-        if (hv.startsWith prefix: "MEMBER_") then {
-            mc: memberHoleC :ast :symtab :ctx body: (hv.substring from: 7 to: hv.length)
-            if mc.length > 0 then {
-                rawNames.append from: hv.string
-                rawVals.append from: mc
-            }
-        }
-    }
 }
 
 # memberHoleC -- the C name of the member a MEMBER hole's `<canon>.<name>`
@@ -2700,20 +2538,7 @@ readTemplateCached: function {ctx: Ctx path: StringView} out String is {
 # `needs=` is, and left out of the text (a compiler that knows no marker writes
 # it as a comment).
 tmplTextOf: function {ctx: Ctx path: StringView} out rtid is {
-    id: (ctx.tmplTexts.get key: path.asString).or d: rtid.zero
-    if id.isZero then {
-        raw: readTemplateCached :ctx :path
-        needs: String
-        from: u64
-        if (raw.stringView.startsWith prefix: "/*@@needs ") then {
-            cl: (raw.stringView.indexOf needle: "@@*/").or d: 0
-            needs = (raw.stringView.substring from: 10 to: cl).string
-            from = lineAfter text: raw.stringView at: cl + 4
-        }
-        id = ctx.rt.parse text: (raw.stringView.substring :from to: raw.length)
-        ctx.tmplTexts.set key: path.string value: id
-        ctx.tmplNeeds.set key: path.string value: needs
-    }
+    id: tmplParsed :ctx :path
     nds: String
     {
         got: ctx.tmplNeeds.get key: path.asString
@@ -2729,24 +2554,24 @@ tmplTextOf: function {ctx: Ctx path: StringView} out rtid is {
     return id
 }
 
-# readTemplate -- a runtime template's text, for writing an instance of it. Its
-# first line may be `/*@@needs <unit>.<member>,...@@*/`: the runtime the
-# template calls, registered here as a row's `needs=` is, and left out of the
-# text (a compiler that knows no marker writes it as a comment).
-readTemplate: function {ctx: Ctx path: StringView} out String is {
-    raw: readTemplateCached :ctx :path
-    marked: raw.stringView.startsWith prefix: "/*@@needs "
-    if marked.not then return raw
-    body: String
-    {
-        rv: raw.stringView
-        cl: (rv.indexOf needle: "@@*/").or d: 0
-        for each nd: ((rv.substring from: 10 to: cl).split sep: ",") loop {
-            if nd.length > 0 then rowNeedAddOne :ctx uname: "" need: nd
+# tmplParsed -- the runtime file at `path` parsed (RtTexts) on its first read and
+# kept by path, its `/*@@needs` line left out and kept apart (tmplTextOf)
+tmplParsed: function {ctx: Ctx path: StringView} out rtid is {
+    id: (ctx.tmplTexts.get key: path.asString).or d: rtid.zero
+    if id.isZero then {
+        raw: readTemplateCached :ctx :path
+        needs: String
+        from: u64
+        if (raw.stringView.startsWith prefix: "/*@@needs ") then {
+            cl: (raw.stringView.indexOf needle: "@@*/").or d: 0
+            needs = (raw.stringView.substring from: 10 to: cl).string
+            from = lineAfter text: raw.stringView at: cl + 4
         }
-        body = (rv.substring from: (lineAfter text: rv at: cl + 4) to: rv.length).string
+        id = ctx.rt.parse text: (raw.stringView.substring :from to: raw.length)
+        ctx.tmplTexts.set key: path.string value: id
+        ctx.tmplNeeds.set key: path.string value: needs
     }
-    return body
+    return id
 }
 
 # cReserved -- the words an emitted identifier must not collide with, so a local
@@ -3904,44 +3729,6 @@ emitterFailure: function {what: String line: u32} out zast.ErrorData is {
         note: "".string
         hint: "".string
     )
-}
-
-# fillStringHoles -- fill a runtime text's holes. Every text on this path spells
-# only `z_@String@` / `z_@StringView@`, so the two bindings are the whole
-# vocabulary and no registry lookup is needed.
-fillStringHoles: function {
-    text: String
-    path: StringView
-    svC: StringView
-    strC: StringView
-    fails: List zast.ErrorData
-} out String is {
-    bn: List String
-    bv: List String
-    bn.append from: "StringView".string
-    bv.append from: svC.string
-    bn.append from: "String".string
-    bv.append from: strC.string
-    ferr: List String
-    rwn: List String
-    rwv: List String
-    cur: (fillHoles
-        :text
-        :path
-        bindNames: bn
-        bindVals: bv
-        rawNames: rwn
-        rawVals: rwv
-        fails: ferr
-    )
-    fi: u64
-    fn: ferr.length
-    for fi < fn loop {
-        m: ferr.get i: fi
-        fails.append (emitterFailure what: m.copy line: 0)
-        fi = fi + 1
-    }
-    return cur
 }
 
 # stringChunkText -- a stringchunk's text ("" for any other shape).
@@ -35094,8 +34881,8 @@ tmplSectionDestroys: function {
     row: tmplClassRowOf :symtab :ctx tid: mono
     tf: (ctx.classRows.get i: row - 1).tmpl.copy
     p: "\{runtimeDir}/\{tf}"
-    raw: readTemplate :ctx path: p.stringView
-    if raw.length == 0 then return
+    ti: tmplTextOf :ctx path: p.stringView
+    if (rtEmpty :ctx id: ti) then return
     pNames: List String
     pTids: ListVal ztypes.tid
     (templateParamArgs
@@ -35106,86 +34893,55 @@ tmplSectionDestroys: function {
         names: pNames
         tids: pTids
     )
-    marks: ListVal u64
-    kept: ListVal bool
-    sectionHeads :ctx :mono text: raw.stringView :marks :kept
-    closeSectionNeeds text: raw.stringView :marks :kept
+    plan: rtKeptPlan :ctx :mono id: ti
     hits: ListVal ztypes.tid
-    {
-        text: raw.stringView
-        i: u64
-        pos: u64
-        for pos < text.length loop {
-            sp: nextPiece :text from: pos openM: "/*@@member "
-            # the text outside every section is written with each instance
-            outTo: sp.at
-            if sp.whole.not then outTo = text.length
-            (destroyHoleTypes
-                :ast
-                :symtab
-                :ctx
-                inst: mono
-                body: (text.substring from: pos to: outTo)
-                :pNames
-                :pTids
-                acc: hits
-            )
-            if sp.whole.not then break
-            if (kept.get :i) then {
-                (destroyHoleTypes
-                    :ast
-                    :symtab
-                    :ctx
-                    inst: mono
-                    body: (text.substring from: sp.bodyFrom to: sp.bodyTo)
-                    :pNames
-                    :pTids
-                    acc: hits
-                )
-            }
-            i = i + 1
-            pos = sp.next
-        }
-    }
+    destroyKeyTypes :ast :symtab :ctx inst: mono :plan :pNames :pTids acc: hits
     for each t: hits loop {
         dt: destroyTargetTid :symtab :ctx tid: t
         if dt.isZero.not when dt != ctx.strTid then noteDestroyUse :symtab :ctx tid: dt
     }
 }
 
-# destroyHoleTypes -- the types the destroy holes in a section `body` of
-# instance `inst` free, into `acc`: a parameter's `_DESTROY` hole, by name or by
-# position, its argument; an `ARG.`/`OUT.` hole followed by `_destroy` the type
-# it names.
-destroyHoleTypes: function {
+# destroyKeyTypes -- the types whose destructor the text plan `plan` writes
+# names through a key: `@@P_DESTROY@@` a parameter's, `@@X@@_destroy` the type
+# the key X names (tmplHoleType)
+destroyKeyTypes: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
     inst: ztypes.tid
-    body: StringView
+    plan: RtPlan.view
     pNames: (List String).view
     pTids: (ListVal ztypes.tid).view
     acc: ListVal ztypes.tid
 } is {
-    pos: u64
-    for pos < body.length loop {
-        rest: body.substring from: pos to: body.length
-        o: (rest.indexOf needle: "@@").or d: rest.length
-        if o == rest.length then return
-        after: rest.substring from: o + 2 to: rest.length
-        c: (after.indexOf needle: "@@").or d: after.length
-        if c == after.length then return
-        hole: after.substring from: 0 to: c
-        tail: after.substring from: c + 2 to: after.length
-        pos = pos + o + 4 + c
+    rt: ctx.rt
+    t: rt.texts.get i: plan.id
+    tv: t.stringView
+    inf: rt.infos.get i: plan.id
+    k: inf.segFrom
+    for k < inf.segTo loop {
+        sg: rt.segs.get i: k
+        k = k + 1
+        if sg.kind.key.not or (rtPlanWrites :ctx :plan at: sg.from).not then continue
+        hole: tv.substring from: sg.from + 2 to: sg.to - 2
         if (hole.endsWith suffix: "_DESTROY") then {
             pa: holeParamArg :pNames :pTids name: (hole.substring from: 0 to: hole.length - 8)
             if pa.isZero.not then acc.append pa
-        } else if (tail.startsWith prefix: "_destroy") then {
-            t: tmplHoleType :ast :symtab :ctx :inst :hole
-            if t.isZero.not then acc.append t
+        } else if k < inf.segTo when (rtStartsLiteral :ctx :plan at: k prefix: "_destroy") then {
+            ht: tmplHoleType :ast :symtab :ctx :inst :hole
+            if ht.isZero.not then acc.append ht
         }
     }
+}
+
+# rtStartsLiteral -- stretch `at` of plan `plan`'s text is a written literal
+# starting with `prefix`
+rtStartsLiteral: function {ctx: Ctx.view plan: RtPlan.view at: u64 prefix: StringView} out bool is {
+    sg: ctx.rt.segs.get i: at
+    if sg.kind.literal.not or (rtPlanWrites :ctx :plan at: sg.from).not then return false
+    t: ctx.rt.texts.get i: plan.id
+    return ((t.stringView.substring from: sg.from to: sg.to).startsWith :prefix)
 }
 
 # holeParamArg -- the argument bound to the type parameter a hole names, by its
@@ -35294,10 +35050,10 @@ keyEqSpelled: function {symtab: zenv.ZSymbolTable.view ctx: Ctx tid: ztypes.tid}
         :ctx
         mono: tid
         file: "z_Set.c.tmpl"
-        needle: "@@EQ_BODY@@"
+        key: "EQ_BODY"
     )
     if (isMapOriginOf :symtab :ctx :tid) then {
-        sp = tmplKeptSpells :ctx mono: tid file: "z_Map.c.tmpl" needle: "@@KEYS_EQUAL_BODY@@"
+        sp = tmplKeptSpells :ctx mono: tid file: "z_Map.c.tmpl" key: "KEYS_EQUAL_BODY"
     }
     if sp then {
         ctx.keyEqKept.add item: tid
@@ -35316,10 +35072,10 @@ keyHashSpelled: function {symtab: zenv.ZSymbolTable.view ctx: Ctx tid: ztypes.ti
         :ctx
         mono: tid
         file: "z_Set.c.tmpl"
-        needle: "@@HASH_BODY@@"
+        key: "HASH_BODY"
     )
     if (isMapOriginOf :symtab :ctx :tid) then {
-        sp = tmplKeptSpells :ctx mono: tid file: "z_Map.c.tmpl" needle: "@@HASH_KEY_BODY@@"
+        sp = tmplKeptSpells :ctx mono: tid file: "z_Map.c.tmpl" key: "HASH_KEY_BODY"
     }
     if sp then {
         ctx.keyHashKept.add item: tid
@@ -35330,43 +35086,12 @@ keyHashSpelled: function {symtab: zenv.ZSymbolTable.view ctx: Ctx tid: ztypes.ti
 }
 
 # tmplKeptSpells -- instance `mono`'s template `file`, as rtSectionPlan keeps it
-# for the member uses so far, spells `needle`: in the text outside every
+# for the member uses so far, spells the key `key`: in the text outside every
 # section, or in a kept one
-tmplKeptSpells: function {
-    ctx: Ctx mono: ztypes.tid file: StringView needle: StringView
-} out bool is {
+tmplKeptSpells: function {ctx: Ctx mono: ztypes.tid file: StringView key: StringView} out bool is {
     p: "\{ctx.runtimeDir}/\{file}"
-    if (ctx.tmplCache.get key: p.stringView.asString).none then (readTemplateCached
-        :ctx
-        path: p.stringView
-    )
-    got: ctx.tmplCache.get key: p.stringView.asString
-    if got.none then return true
-    return (keptTextSpells :ctx :mono text: got.stringView :needle)
-}
-
-# keptTextSpells -- tmplKeptSpells over the template's text, read in place
-keptTextSpells: function {
-    ctx: Ctx.view mono: ztypes.tid text: StringView needle: StringView
-} out bool is {
-    marks: ListVal u64
-    kept: ListVal bool
-    sectionHeads :ctx :mono :text :marks :kept
-    closeSectionNeeds :text :marks :kept
-    i: u64
-    pos: u64
-    for pos < text.length loop {
-        sp: nextPiece :text from: pos openM: "/*@@member "
-        outTo: sp.at
-        if sp.whole.not then outTo = text.length
-        if ((text.substring from: pos to: outTo).contains :needle) then return true
-        if sp.whole.not then return false
-        if (kept.get :i) when ((text.substring from: sp.bodyFrom to: sp.bodyTo).contains :needle
-        ) then return true
-        i = i + 1
-        pos = sp.next
-    }
-    return false
+    plan: rtKeptPlan :ctx :mono id: (tmplParsed :ctx path: p.stringView)
+    return (rtPlanSpells :ctx :plan name: key)
 }
 
 # reachSoFar -- the reached set closed over what has been spelled so far,
@@ -38229,12 +37954,8 @@ answersUnit: function {ctx: Ctx.view dem: StringView} out bool is {
 # pieces: it is marked to be written a piece at a time
 loadFragPieces: function {ctx: Ctx runtimeDir: StringView frag: StringView} is {
     p: nativePath :runtimeDir :frag
-    has: false
-    {
-        txt: readTemplateCached :ctx path: p.stringView
-        has = txt.stringView.contains needle: "/*@@row "
-    }
-    if has.not then return
+    inf: ctx.rt.infos.get i: (tmplParsed :ctx path: p.stringView)
+    if inf.pieceFrom == inf.pieceTo then return
     if (ctx.piecedFrags.has item: frag.string) then return
     ctx.piecedFrags.add item: frag.string
     loadPiecesOf :ctx path: p.stringView
@@ -38246,24 +37967,27 @@ loadFixedPieces: function {ctx: Ctx runtimeDir: StringView name: StringView} is 
     loadPiecesOf :ctx path: p.stringView
 }
 
-# loadPiecesOf -- loadPieces for the runtime file at `path`
+# loadPiecesOf -- loadPieces for the runtime file at `path`: each of its pieces
+# (rtpiece) recorded as a row, in place in the file
 loadPiecesOf: function {ctx: Ctx path: StringView} is {
     p: path.string
-    txt: readTemplateCached :ctx path: p.stringView
-    pos: u64
-    for pos < txt.length loop {
-        sp: nextPiece text: txt.stringView from: pos openM: "/*@@row "
-        if sp.found.not then return
-        if sp.whole.not then {
+    id: tmplParsed :ctx path: p.stringView
+    tt: (ctx.rt.texts.get i: id).copy
+    inf: ctx.rt.infos.get i: id
+    j: inf.pieceFrom
+    for j < inf.pieceTo loop {
+        pc: ctx.rt.pieces.get i: j
+        j = j + 1
+        if pc.whole.not then {
             (emitFail
                 :ctx
-                what: "runtime file \{p}: the piece marker at byte \{sp.at} is not closed"
+                what: "runtime file \{p}: the piece marker at byte \{pc.at} is not closed"
                 line: 0
             )
             return
         }
         h: (NativeHead.create
-            head: (txt.stringView.substring from: sp.headFrom to: sp.headTo)
+            head: (tt.stringView.substring from: pc.headFrom to: pc.headTo)
             words: ctx.nativeWords
         )
         ctx.rowsInPlace.add item: ctx.fragUnits.length
@@ -38274,7 +37998,6 @@ loadPiecesOf: function {ctx: Ctx path: StringView} is {
             dem: h.dem.stringView
             need: h.need.stringView
         )
-        pos = sp.next
     }
 }
 
@@ -38335,36 +38058,6 @@ lineAfter: function {text: StringView at: u64} out u64 is {
     if b.none then return at
     if b == 10 then return at + 1
     return at
-}
-
-# piecedText -- a fixed file's text as this program writes it: the text outside
-# its pieces whole, and a piece only where its row fired (loadPieces)
-piecedText: function {ctx: Ctx.view text: StringView} out String is {
-    res: String
-    pos: u64
-    for pos < text.length loop {
-        sp: nextPiece :text from: pos openM: "/*@@row "
-        res.append (text.substring from: pos to: sp.at)
-        if sp.whole.not then {
-            res.append (text.substring from: sp.at to: text.length)
-            return res
-        }
-        hd: text.substring from: sp.headFrom to: sp.headTo
-        row: (nativeFragRow
-            :ctx
-            path: (hd.substring from: 0 to: ((hd.indexOf needle: " ").or d: hd.length))
-        )
-        if row > 0 when (rowDemandFired :ctx i: row - 1) then {
-            body: text.substring from: sp.bodyFrom to: sp.bodyTo
-            if (rowAlways :ctx i: row - 1) then {
-                res.append body
-            } else {
-                wrapCond :ctx c: (rowCond :ctx i: row - 1) :body buf: res
-            }
-        }
-        pos = sp.next
-    }
-    return res
 }
 
 # memberKey -- the key a template member is recorded by: its instance, and its
@@ -38472,23 +38165,10 @@ rtSectionPlan: function {ctx: Ctx mono: ztypes.tid id: rtid} out RtPlan is {
     plan: RtPlan :id kept: ListVal bool conds: List Cond
     inf: ctx.rt.infos.get i: id
     if inf.pieceFrom == inf.pieceTo then return plan
+    marks: ListVal u64
+    rtKept :ctx :mono :id :marks kept: plan.kept
     tt: (ctx.rt.texts.get i: id).copy
     text: tt.stringView
-    # per section: name from, name to, needs from, needs to
-    marks: ListVal u64
-    j: inf.pieceFrom
-    for j < inf.pieceTo loop {
-        pc: ctx.rt.pieces.get i: j
-        j = j + 1
-        if pc.whole.not then break
-        marks.append pc.headFrom
-        marks.append pc.nameTo
-        marks.append pc.needsFrom
-        marks.append pc.needsTo
-        slot: ctx.memberWords.slotOf text: (text.substring from: pc.headFrom to: pc.nameTo)
-        plan.kept.append (ctx.memberUses.has item: (memberKey :mono member: slot))
-    }
-    closeSectionNeeds :text :marks kept: plan.kept
     # a section kept only for a call some configurations make is written
     # inside `#if`, and so is each section only it needs
     if (monoCondMembers :ctx :mono) then (sectionConds
@@ -38503,6 +38183,69 @@ rtSectionPlan: function {ctx: Ctx mono: ztypes.tid id: rtid} out RtPlan is {
     return plan
 }
 
+# rtKept -- per member section of template `id`, in text order, whether instance
+# `mono` writes it: written C calls its member, or a written section needs it
+# (closeSectionNeeds); each section's name and needs as offsets in `marks`
+rtKept: function {
+    ctx: Ctx.view
+    mono: ztypes.tid
+    id: rtid
+    # per section: name from, name to, needs from, needs to
+    marks: ListVal u64
+    kept: ListVal bool
+} is {
+    t: ctx.rt.texts.get i: id
+    text: t.stringView
+    inf: ctx.rt.infos.get i: id
+    j: inf.pieceFrom
+    for j < inf.pieceTo loop {
+        pc: ctx.rt.pieces.get i: j
+        j = j + 1
+        if pc.whole.not then break
+        marks.append pc.headFrom
+        marks.append pc.nameTo
+        marks.append pc.needsFrom
+        marks.append pc.needsTo
+        slot: ctx.memberWords.slotOf text: (text.substring from: pc.headFrom to: pc.nameTo)
+        kept.append (ctx.memberUses.has item: (memberKey :mono member: slot))
+    }
+    closeSectionNeeds :text :marks :kept
+}
+
+# rtKeptPlan -- rtKept as a plan, for a question about the text instance `mono`
+# writes (rtPlanSpells) that decides nothing
+rtKeptPlan: function {ctx: Ctx.view mono: ztypes.tid id: rtid} out RtPlan is {
+    plan: RtPlan :id kept: ListVal bool conds: List Cond
+    marks: ListVal u64
+    rtKept :ctx :mono :id :marks kept: plan.kept
+    return plan
+}
+
+# rtRowPlan -- the pieces of runtime file `id` this program writes: a piece where
+# its row fired, inside `#if` where the row holds under a condition
+rtRowPlan: function {ctx: Ctx.view id: rtid} out RtPlan is {
+    plan: RtPlan :id kept: ListVal bool conds: List Cond
+    t: ctx.rt.texts.get i: id
+    text: t.stringView
+    inf: ctx.rt.infos.get i: id
+    j: inf.pieceFrom
+    for j < inf.pieceTo loop {
+        pc: ctx.rt.pieces.get i: j
+        j = j + 1
+        if pc.whole.not then break
+        row: nativeFragRow :ctx path: (text.substring from: pc.headFrom to: pc.nameTo)
+        fired: false
+        if row > 0 when (rowDemandFired :ctx i: row - 1) then fired = true
+        plan.kept.append fired
+        if fired when (rowAlways :ctx i: row - 1).not then {
+            plan.conds.append (rowCond :ctx i: row - 1)
+        } else {
+            plan.conds.append condAlways
+        }
+    }
+    return plan
+}
+
 # planNeeds -- for each section of `plan`, in text order, the runtime a written
 # one needs (sectionRowNeeds), under its condition, or the member a section left
 # out names (membersLeftOut)
@@ -38511,7 +38254,7 @@ planNeeds: function {
     mono: ztypes.tid
     # the template
     text: StringView
-    # per section: name from, name to, needs from, needs to
+    # each section's offsets (rtKept)
     marks: (ListVal u64).view
     plan: RtPlan.view
 } is {
@@ -38789,40 +38532,6 @@ sectionNeedsUnder: function {
     return grew
 }
 
-# sectionHeads -- each member section's name and needs, in order, and whether
-# written C calls it
-sectionHeads: function {
-    ctx: Ctx.view
-    mono: ztypes.tid
-    text: StringView
-    marks: ListVal u64
-    kept: ListVal bool
-} is {
-    pos: u64
-    for pos < text.length loop {
-        sp: nextPiece :text from: pos openM: "/*@@member "
-        if sp.whole.not then return
-        hd: text.substring from: sp.headFrom to: sp.headTo
-        nameTo: sp.headFrom + ((hd.indexOf needle: " ").or d: hd.length)
-        needFrom: sp.headTo
-        needTo: sp.headTo
-        with no: (hd.indexOf needle: "needs=") do match (
-            no
-        ) case some then {
-            needFrom = sp.headFrom + no + 6
-            rest: text.substring from: needFrom to: sp.headTo
-            needTo = needFrom + ((rest.indexOf needle: " ").or d: rest.length)
-        } case none then null
-        marks.append sp.headFrom
-        marks.append nameTo
-        marks.append needFrom
-        marks.append needTo
-        slot: ctx.memberWords.slotOf text: (text.substring from: sp.headFrom to: nameTo)
-        kept.append (ctx.memberUses.has item: (memberKey :mono member: slot))
-        pos = sp.next
-    }
-}
-
 # closeSectionNeeds -- keep every section a kept one needs, until none is added
 closeSectionNeeds: function {text: StringView marks: (ListVal u64).view kept: ListVal bool} is {
     grew: true
@@ -38884,19 +38593,33 @@ sectionRowNeeds: function {ctx: Ctx text: StringView from: u64 to: u64 cond: Con
 }
 
 # loadFixedFile -- one of the runtime's fixed files as this program writes it:
-# its pieces decided (piecedText), its holes filled (fillStringHoles)
+# its pieces decided (rtRowPlan), its String and StringView holes filled
 loadFixedFile: function {ctx: Ctx path: StringView} out String is {
-    raw: readTemplateCached :ctx :path
-    pc: piecedText :ctx text: raw.stringView
-    svL: ctx.svC
-    strL: ctx.strC
-    return (fillStringHoles
-        text: pc
+    plan: rtRowPlan :ctx id: (tmplParsed :ctx :path)
+    bn: ListVal zast.nameid
+    bv: List String
+    bn.append (rtHoleId slot: rtHole.slot.holeStringView)
+    bv.append from: ctx.svC.copy
+    bn.append (rtHoleId slot: rtHole.slot.holeString)
+    bv.append from: ctx.strC.copy
+    ferr: List String
+    res: (rtRenderWith
+        :ctx
+        :plan
+        keys: ctx.rt.noKeys
+        bindIds: bn
+        bindVals: bv
+        rawIds: ListVal zast.nameid
+        rawVals: List String
+        holes: true
         :path
-        svC: svL.stringView
-        strC: strL.stringView
-        fails: ctx.emitErrors
+        fails: ferr
     )
+    if (ctx.rt.infos.get i: plan.id).open then {
+        ferr.append from: "fragment \{path}: unterminated hole"
+    }
+    for each m: ferr loop ctx.emitErrors.append (emitterFailure what: m.copy line: 0)
+    return res
 }
 
 # the runtime types the emitter must name before anything else: String,
@@ -42538,7 +42261,7 @@ fragUnitChild: function {
 }
 
 # loadIoFragment -- read an io/cli runtime `.inc` and fill its holes
-# (fillFragmentHoles).
+# (rtFragmentText).
 loadIoFragment: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -42549,105 +42272,14 @@ loadIoFragment: function {
     match (
         rd
     ) case ok then {
-        return (fillFragmentHoles :ast :symtab :ctx text: rd.take :path)
+        txt: rd.take
+        id: ctx.rt.parse text: txt.stringView
+        plan: RtPlan :id kept: ListVal bool conds: List Cond
+        return (rtFragmentText :ast :symtab :ctx :plan all: true :path)
     } case err then {
         emitFail :ctx what: "missing io fragment \{path}" line: 0
         return "/* zemitterc: missing io fragment \{path} */\n"
     }
-}
-
-# fillFragmentHoles -- fill the `z_@Name@` holes a runtime fragment or an
-# instantiated class template spells. The holes found in the text ARE the
-# demand: each name resolves through StringView/String or the canon path, and a
-# name that resolves to nothing is fatal. A tag constant is an
-# `@ARM_<canon>.<arm>@` hole, which fillHolesForCtx binds.
-fillFragmentHoles: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    text: String.take
-    # where the text came from, for the messages
-    path: StringView
-} out String is {
-    rd: text.take
-    bn: List String
-    bv: List String
-    rwn: List String
-    rwv: List String
-    names: holeNames text: rd.stringView
-    ni: u64
-    nn: names.length
-    for ni < nn loop {
-        nm: names.get i: ni
-        nv: nm.stringView
-        # `@TAG_<type>@` -- how to reach that type's discriminator. A tagged
-        # struct is reached through `.tag`; a type the backend has unwrapped
-        # IS its discriminator, and the hole fills with nothing. A fragment
-        # spelling this stays correct across a change to the representation,
-        # which matters because this file is read by the running compiler
-        # AND by the committed seed, and they need not agree. An
-        # `@ARM_<canon>.<arm>@` tag constant and an `@MEMBER_<canon>.<name>@`
-        # member are fillHolesForCtx's to bind.
-        if (
-            (nv.startsWith prefix: "ARM_") or (nv.startsWith prefix: "MEMBER_")
-        ) then null else if (nv.startsWith prefix: "TAG_") then {
-            tn: nv.substring from: 4 to: nv.length
-            tt: ioCanonTidAny :ast :symtab :ctx canon: tn
-            rwn.append from: nv.string
-            if (isOrdinalVariant :symtab tid: tt) then {
-                rwv.append from: "".string
-            } else {
-                rwv.append from: ".tag".string
-            }
-        } else {
-            bn.append from: nv.string
-            hw: ctx.nativeWords.slotOf text: nv
-            if hw == nativeWord.slot.holeStringView then {
-                preludeNeed :ctx memb: "@StringView_t"
-                sv: ctx.svC
-                bv.append from: sv.copy
-            } else if hw == nativeWord.slot.holeString then {
-                preludeNeed :ctx memb: "@String_t"
-                st: ctx.strC
-                bv.append from: st.copy
-            } else {
-                cc: ioCanonCname :ast :symtab :ctx canon: nv
-                # `z_@X@_tag_t` spells X's tag enum
-                if (rd.stringView.contains needle: "@_tag_t") then {
-                    tagHole: "@\{nv}@_tag_t"
-                    if (rd.stringView.contains needle: tagHole) then (noteTagEnumUse
-                        :ctx
-                        :symtab
-                        tid: (ioCanonTidAny :ast :symtab :ctx canon: nv)
-                    )
-                }
-                # a type-name hole that resolves to nothing used to fill
-                # with nothing, so `z_@IoError@_t` became `z__t` and the
-                # C compiler reported it instead of zc. The TAG channel
-                # above is where an empty fill is legitimate.
-                if cc.length == 0 then {
-                    (emitFail
-                        :ctx
-                        what: "fragment \{path}: hole @\{nv}@ names no type in this program"
-                        line: 0
-                    )
-                }
-                bv.append from: cc
-            }
-        }
-        ni = ni + 1
-    }
-    return (fillHolesForCtx
-        :ast
-        :symtab
-        :ctx
-        text: rd
-        :path
-        bindNames: bn
-        bindVals: bv
-        rawNames: rwn
-        rawVals: rwv
-    )
 }
 
 # ioFileId -- the io File class type id: the File io's own unit declares, by id
@@ -43233,9 +42865,8 @@ ioFrag: function {
 } is {
     p: nativePath :runtimeDir :frag
     if (ctx.piecedFrags.has item: frag.string) then {
-        raw: readTemplateCached :ctx path: p.stringView
-        pc: piecedText :ctx text: raw.stringView
-        buf.append (fillFragmentHoles :ast :symtab :ctx text: pc.take path: p.stringView)
+        plan: rtRowPlan :ctx id: (tmplParsed :ctx path: p.stringView)
+        buf.append (rtFragmentText :ast :symtab :ctx :plan all: false path: p.stringView)
         return
     }
     f: loadIoFragment :ast :symtab :ctx path: p.stringView
@@ -44720,14 +44351,12 @@ emitTmplClassMono: function {
     answerKeys :ast :symtab :ctx id: ti keys: kt inst: monoId nm: nm.stringView buf: ab
     t: rtFillKeys :ctx id: ti keys: kt
     made: dropUnmadeFns text: t.stringView
-    # what is left is a runtime fragment's own holes: a type by canon, a tag
-    # constant, a member
-    filled: fillFragmentHoles :ast :symtab :ctx text: made.take path: p.stringView
-    # the members written C calls, and those they need (rtSectionPlan): this
-    # instance's own text, parsed once
-    fid: ctx.rt.parse text: filled.stringView
-    plan: rtSectionPlan :ctx mono: monoId id: fid
-    kept: rtRender :ctx :plan keys: RtKeys.create
+    # the members written C calls, and those they need (rtSectionPlan), in this
+    # instance's own text, parsed once; what is left in it is a runtime
+    # fragment's own holes, every one bound: a type by canon, a tag constant, a
+    # member
+    plan: rtSectionPlan :ctx mono: monoId id: (ctx.rt.parse text: made.stringView)
+    kept: rtFragmentText :ast :symtab :ctx :plan all: true path: p.stringView
     di: u64
     for di < dfns.length loop {
         dn: (dfns.get i: di).copy
