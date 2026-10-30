@@ -23,7 +23,10 @@ HOST_OSNAME  := linux
 endif
 # the gcc spelling of the discarded-qualifiers error; clang names it differently.
 QUALWERR := $(if $(findstring clang,$(shell $(CC) --version 2>/dev/null | head -1)),-Werror=incompatible-pointer-types-discards-qualifiers,-Werror=discarded-qualifiers)
-CFLAGS_BASE := -std=c17 -Wall -Wextra -Wno-unused-function -Wno-unused-parameter \
+# The emitted C writes only what `main` reaches (make cdead-guard, cc-unused-guard):
+# an unused static function is an error. An unused local stays a warning: a
+# binding whose reads all fold is the source's matter (-Wall).
+CFLAGS_BASE := -std=c17 -Wall -Wextra -Werror=unused-function -Wno-unused-parameter \
             -Werror=implicit-function-declaration -Werror=implicit-int \
             -Werror=int-conversion -Werror=incompatible-pointer-types \
             -Werror=unused-but-set-variable
@@ -85,6 +88,10 @@ BUILDDATE := $(if $(BUILDID),$(shell git show -s --format=%cs HEAD 2>/dev/null))
 
 # The bootstrap compiler, built from the committed seed (bootstrap/README.md).
 ZC      := $(BUILDDIR)/zc-seed
+# The C the seed emitted (bootstrap/zc.c, and bin/zc.c, which the seed writes)
+# predates writing only what `main` reaches: it is compiled without
+# -Werror=unused-function until the seed is bumped past function reach.
+SEEDCFLAGS := -Wno-unused-function
 # The runtime the emitter inlines: an edit here changes emitted C as a source edit does.
 RT_DEP  := $(wildcard src/runtime/*.inc) $(wildcard src/runtime/*.c.tmpl) $(wildcard src/runtime/natives/*.inc) src/runtime/natives.tbl
 
@@ -848,7 +855,7 @@ tcc: $(BUILDDIR)/tcc $(TCCLIB)/$(LIBTCC)
 # on Windows it links no library -- there is no in-process tcc there.
 $(BUILDDIR)/zc-seed: bootstrap/zc.c
 	@mkdir -p $(BUILDDIR)
-	$(CC) $(CFLAGS) -o $@ bootstrap/zc.c $(if $(WINDOWS_HOST),$(DRIVERLINK),$(call ZLINKOF,bootstrap/zc.c)) -lm
+	$(CC) $(CFLAGS) $(SEEDCFLAGS) -o $@ bootstrap/zc.c $(if $(WINDOWS_HOST),$(DRIVERLINK),$(call ZLINKOF,bootstrap/zc.c)) -lm
 
 # bin/zc -- the self-hosted compiler, built by the seed.
 bin/zc.c: $(wildcard src/*.z) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z) $(ZC) $(RT_DEP)
@@ -857,7 +864,7 @@ bin/zc.c: $(wildcard src/*.z) $(wildcard lib/system/*.z) $(wildcard lib/system/s
 
 $(BUILDDIR)/zc.o: bin/zc.c
 	@mkdir -p $(BUILDDIR)
-	$(CC) $(CFLAGS) $(OPTFLAGS) $(STAMPDEF) -c bin/zc.c -o $@
+	$(CC) $(CFLAGS) $(SEEDCFLAGS) $(OPTFLAGS) $(STAMPDEF) -c bin/zc.c -o $@
 
 bin/zc: $(BUILDDIR)/zc.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ)
 	@mkdir -p bin
@@ -1147,7 +1154,8 @@ warn-check: bin/zc.c $(BUILDDIR)/zl.c $(BUILDDIR)/zls.c $(BUILDDIR)/tcc
 	    exit 1; \
 	  fi; \
 	  for f in bootstrap/zc.c bin/zc.c $(BUILDDIR)/zl.c $(BUILDDIR)/zls.c; do \
-	    $$cc $$w -Werror -c $$f -o /dev/null; \
+	    s=''; case "$$tag:$$f" in *tcc*:*) ;; *:bootstrap/zc.c|*:bin/zc.c) s='$(SEEDCFLAGS)';; esac; \
+	    $$cc $$w $$s -Werror -c $$f -o /dev/null; \
 	  done; \
 	  echo "  $$tag: clean on seed + zc + zl + zls"; \
 	done
@@ -1475,6 +1483,12 @@ cobj-guard: bin/zc $(BUILDDIR)/tcc
 # is the template function of the instance it answers; and an `os=windows` @unit row links
 # for a windows target and nowhere else. The runtime dir is built from src/runtime
 # plus the fixture's rows, fragments and template.
+# A user unit's class template is written whole where it has no member
+# sections, and the member words a section may name are the runtime's own
+# (memberWord): Cell's `puts` and `holding`, which one instance calls and
+# another does not, are the user's C, as a hand-written shim's functions are.
+USERTMPLCFLAGS := -Wno-unused-function
+
 user-native-guard: bin/zc
 	@d=$$(mktemp -d); fail=0; \
 	mkdir -p $$d/rt; cp -r src/runtime/. $$d/rt/; \
@@ -1504,7 +1518,7 @@ user-native-guard: bin/zc
 	    || { echo "user-native-guard FAIL: emit cellar"; sed -n 1,5p $$d/cemit.log; fail=1; }; \
 	fi; \
 	if [ $$fail -eq 0 ]; then \
-	  $(CC) $(CFLAGS) -o $$d/cellar $$d/cellar.c $(call ZLINKOF,$$d/cellar.c) -lm > $$d/ccc.log 2>&1 \
+	  $(CC) $(CFLAGS) $(USERTMPLCFLAGS) -o $$d/cellar $$d/cellar.c $(call ZLINKOF,$$d/cellar.c) -lm > $$d/ccc.log 2>&1 \
 	    || { echo "user-native-guard FAIL: the templated class did not compile"; grep -m3 error $$d/ccc.log; fail=1; }; \
 	fi; \
 	if [ $$fail -eq 0 ]; then \
