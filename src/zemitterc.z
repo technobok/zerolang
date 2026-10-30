@@ -1944,39 +1944,6 @@ RtTexts: class {
         }
     }
 
-    # fill -- text `id` with each hole filled from the bindings and each key
-    # written as it stands (fillSpan); a hole never closed is a failure too
-    fill: function {
-        this: this.view
-        id: rtid
-        # where the text came from, for the messages
-        path: StringView
-        bindIds: (ListVal zast.nameid).view
-        bindVals: (List String).view
-        rawIds: (ListVal zast.nameid).view
-        rawVals: (List String).view
-        fails: List String
-    } out String is {
-        buf: String
-        t: this.texts.get i: id
-        (this.fillSpan
-            :id
-            from: 0
-            to: t.length
-            keys: this.noKeys
-            :bindIds
-            :bindVals
-            :rawIds
-            :rawVals
-            holes: true
-            :path
-            :fails
-            :buf
-        )
-        if (this.infos.get i: id).open then fails.append from: "fragment \{path}: unterminated hole"
-        return buf
-    }
-
     # fillSpan -- append bytes `from` to `to` of text `id` to `buf`: each key the
     # table `keys` binds filled from it (rtAppendKey); when `holes`, each hole from
     # the bindings, a cname binding (`bindIds`) without its `z_` prefix, which
@@ -2017,9 +1984,11 @@ RtTexts: class {
                 buf.append run
             } else if sg.kind.key then {
                 if (rtAppendKey :buf name: sg.name :keys).not then buf.append run
-            } else if holes then {
-                rtWriteHole :buf :run name: sg.name :bindIds :bindVals :rawIds :rawVals :path :fails
-            } else {
+            } else if holes.not then {
+                buf.append run
+            } else if (rtAppendHole :buf name: sg.name :bindIds :bindVals :rawIds :rawVals
+            ).not then {
+                fails.append from: "fragment \{path}: hole \{run} is bound to nothing"
                 buf.append run
             }
         }
@@ -2167,25 +2136,6 @@ rtClipTo: function {sg: rtseg to: u64} out u64 is {
     return sg.to
 }
 
-# rtWriteHole -- append the text hole `name` (spelled `run`) fills with to `buf`
-# (rtAppendHole); a hole bound to nothing is written as it stands and is a
-# failure added to `fails` naming `path`
-rtWriteHole: function {
-    buf: String.borrow
-    run: StringView
-    name: zast.nameid
-    bindIds: (ListVal zast.nameid).view
-    bindVals: (List String).view
-    rawIds: (ListVal zast.nameid).view
-    rawVals: (List String).view
-    path: StringView
-    fails: List String
-} is {
-    if (rtAppendHole :buf :name :bindIds :bindVals :rawIds :rawVals) then return
-    fails.append from: "fragment \{path}: hole \{run} is bound to nothing"
-    buf.append run
-}
-
 # rtAppendHole -- append the text hole `name` fills with to `buf`, and answer
 # whether anything binds it: appendHoleBinding, by hole id
 rtAppendHole: function {
@@ -2235,7 +2185,22 @@ rtFillForCtx: function {
     if inf.arms then rtBindHoles :ast :symtab :ctx :id arms: true :rawIds :rawVals
     if inf.members then rtBindHoles :ast :symtab :ctx :id arms: false :rawIds :rawVals
     ferr: List String
-    cur: ctx.rt.fill :id :path :bindIds :bindVals :rawIds :rawVals fails: ferr
+    cur: String
+    (ctx.rt.fillSpan
+        :id
+        from: 0
+        to: (ctx.rt.texts.get i: id).length
+        keys: ctx.rt.noKeys
+        :bindIds
+        :bindVals
+        :rawIds
+        :rawVals
+        holes: true
+        :path
+        fails: ferr
+        buf: cur
+    )
+    if inf.open then ferr.append from: "fragment \{path}: unterminated hole"
     emitFillFails :ctx fails: ferr
     return cur
 }
