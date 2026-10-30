@@ -4188,6 +4188,12 @@ Ctx: class {
     aliases: List VidVal
     # the box a narrowed variable projects out of
     narrowBox: List VidVal
+    # the types each narrowBox text spells, recorded when the text is read
+    aliasHeld: List AliasHeld
+    # while an arm alias is built: noteTypeUse holds its types in heldTypeUses
+    # instead of recording them
+    typeUseHold: bool
+    heldTypeUses: ListVal ztypes.tid
     # the type a variable is currently narrowed to
     narrowTid: List VidTid
     # the arms ruled out for a variable, which lets a switch omit them
@@ -5009,6 +5015,16 @@ VidVal: class {
     ptr: String
 }
 
+# AliasHeld -- a type an arm alias spells, recorded only when the alias is read:
+# the narrowing an arm opens is built whether or not the arm reads it
+# (heldArmPayloadC, holdForAlias, noteAliasRead).
+AliasHeld: class {
+    # the alias text, as narrowBox holds it
+    val: String
+    # a type the text spells
+    tid: ztypes.tid
+}
+
 # a variable paired with a type, for the side lists that record what a
 # variable was narrowed or excluded to. A pair rather than a map: the lists
 # are short and scanned, never indexed
@@ -5247,23 +5263,29 @@ aliasResolvesToSelf: function {ctx: Ctx.view name: StringView vid: ztypes.vid} o
 # aliasResolveWith -- aliasResolve, the entry's facts stated into `facts`; none
 # stated when no table has an entry for the variable.
 aliasResolveWith: function {
-    ctx: Ctx.view name: StringView vid: ztypes.vid facts: cfacts.borrow
+    ctx: Ctx name: StringView vid: ztypes.vid facts: cfacts.borrow
 } out String is {
     nb: vidFind xs: ctx.narrowBox :vid
-    if nb > 0 then return (entryText xs: ctx.narrowBox at: nb - 1 :facts)
+    if nb > 0 then {
+        noteAliasRead :ctx :vid
+        return (entryText xs: ctx.narrowBox at: nb - 1 :facts)
+    }
     al: vidFind xs: ctx.aliases :vid
     if al > 0 then return (entryText xs: ctx.aliases at: al - 1 :facts)
     return name.string
 }
 
 # aliasResolve -- a `.take` alias's base C name, or the name itself if none.
-aliasResolve: function {ctx: Ctx.view name: StringView vid: ztypes.vid} out String is {
+aliasResolve: function {ctx: Ctx name: StringView vid: ztypes.vid} out String is {
     # A match-arm narrowing (narrowBox) takes priority: inside the arm the
     # variable resolves to the narrowed union payload cast, not the un-narrowed
     # binding or a stale for-loop/borrow/take alias -- mirrors takeSourceResolve.
     # `name` is only what comes back when neither table has an entry.
     nb: vidFind xs: ctx.narrowBox :vid
-    if nb > 0 then return (ctx.narrowBox.get i: nb - 1).val.copy
+    if nb > 0 then {
+        noteAliasRead :ctx :vid
+        return (ctx.narrowBox.get i: nb - 1).val.copy
+    }
     al: vidFind xs: ctx.aliases :vid
     if al > 0 then return (ctx.aliases.get i: al - 1).val.copy
     return name.string
@@ -5272,7 +5294,7 @@ aliasResolve: function {ctx: Ctx.view name: StringView vid: ztypes.vid} out Stri
 # takeSourceResolve -- the C lvalue to zero after a take of `name`: a match-arm
 # narrowing's union box payload (narrowBox) takes priority over a plain `.take`
 # alias, so the source zeroing invalidates the box, not just the narrowed copy.
-takeSourceResolve: function {ctx: Ctx.view name: StringView vid: ztypes.vid} out String is {
+takeSourceResolve: function {ctx: Ctx name: StringView vid: ztypes.vid} out String is {
     return (emitLocalAtomName :ctx :name :vid)
 }
 
@@ -5335,7 +5357,7 @@ takeAliasBase: function {
 takeStringSource: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
+    ctx: Ctx
     n: astnode.view
 } out String is {
     match (
@@ -5563,7 +5585,7 @@ emitNarrowedTakeZero: function {
 # plain value and IS a move source.
 implicitTakeSourceAtom: function {
     symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
+    ctx: Ctx
     nid: zast.nodeid
     nm: StringView
 } out String is {
@@ -5614,7 +5636,7 @@ isBareNameValue: function {n: astnode.view} out bool is {
 implicitTakeSource: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
+    ctx: Ctx
     n: astnode.view
 } out String is {
     match (
@@ -5945,7 +5967,7 @@ unaliasedVid: function {
     name: StringView
     vid: ztypes.vid
 } out ztypes.vid is {
-    if (aliasResolveAt :symtab :ctx :nid :name :vid).stringView != name then return ztypes.vid
+    if (aliasResolvesToSelfAt :symtab :ctx :nid :name :vid).not then return ztypes.vid
     return vid
 }
 
@@ -15707,7 +15729,10 @@ emitFnptrLocalCall: function {
     fcm: wholeLocalName :ctx vid: cnVid name: cn0
     # a name narrowed to an arm that carries a function calls that function
     nbx: vvGet xs: ctx.narrowBox vid: cnVid
-    if nbx.length > 0 then fcm = nbx.take
+    if nbx.length > 0 then {
+        noteAliasRead :ctx vid: cnVid
+        fcm = nbx.take
+    }
     # THE SLOT'S OWN PARAMETER LIST DECIDES HOW EACH ARGUMENT IS PASSED, the
     # same question emitFnptrFieldCall asks of a fn-pointer FIELD. It matters
     # here as soon as an unbound METHOD reference can reach a local: a receiver
@@ -17038,14 +17063,14 @@ slotOrdinalOf: function {
 # emitLocalAtomName -- a local variable's C spelling: the alias or narrowing
 # cast in scope for it, else its own identifier. Shared by the atomid and
 # labelvalue (:name shorthand) value legs.
-emitLocalAtomName: function {ctx: Ctx.view name: StringView vid: ztypes.vid} out String is {
+emitLocalAtomName: function {ctx: Ctx name: StringView vid: ztypes.vid} out String is {
     facts: cfacts
     return (emitLocalAtomNameWith :ctx :name :vid :facts)
 }
 
 # emitLocalAtomNameWith -- emitLocalAtomName, its facts stated into `facts`.
 emitLocalAtomNameWith: function {
-    ctx: Ctx.view
+    ctx: Ctx
     name: StringView
     vid: ztypes.vid
     facts: cfacts.borrow
@@ -17054,7 +17079,10 @@ emitLocalAtomNameWith: function {
     # copy of `name` for the no-alias case, which is the common one, only for the
     # comparison below to discard it.
     nb: vidFind xs: ctx.narrowBox :vid
-    if nb > 0 then return (entryText xs: ctx.narrowBox at: nb - 1 :facts)
+    if nb > 0 then {
+        noteAliasRead :ctx :vid
+        return (entryText xs: ctx.narrowBox at: nb - 1 :facts)
+    }
     al: vidFind xs: ctx.aliases :vid
     if al > 0 then return (entryText xs: ctx.aliases at: al - 1 :facts)
     return (localNameText :ctx :vid :name :facts)
@@ -17132,7 +17160,7 @@ wholeLocalNameWith: function {
 # whole local once a write ended its narrowing.
 emitLocalAtomNameAt: function {
     symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
+    ctx: Ctx
     nid: zast.nodeid
     name: StringView
     vid: ztypes.vid
@@ -17144,7 +17172,7 @@ emitLocalAtomNameAt: function {
 # emitLocalAtomNameAtWith -- emitLocalAtomNameAt, its facts stated into `facts`.
 emitLocalAtomNameAtWith: function {
     symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
+    ctx: Ctx
     nid: zast.nodeid
     name: StringView
     vid: ztypes.vid
@@ -17181,7 +17209,7 @@ localAtomNameIsAt: function {
 # write ended, only a take alias substitutes for the name.
 aliasResolveAt: function {
     symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
+    ctx: Ctx
     nid: zast.nodeid
     name: StringView
     vid: ztypes.vid
@@ -28180,6 +28208,54 @@ exitKeeps: function {
     return (vvHas xs: ctx.aliases :vid)
 }
 
+# seedUnionArmAlias -- narrow match subject `sname` to union `vtid`'s arm `arm`:
+# reads of it inside the arm read the payload's cell, cast to `pc`, whose types
+# (`pcHeld`) are recorded where that alias is read.
+seedUnionArmAlias: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    vtid: ztypes.tid
+    arm: zast.nameid
+    pc: StringView
+    pcHeld: ListVal ztypes.tid
+    slotRecv: StringView
+    slotRecvF: cfacts
+    slotAcc: StringView
+    sname: StringView
+    snameVid: ztypes.vid
+    ind: StringView
+    buf: String.borrow
+} is {
+    inl: armIsInlineC :symtab tid: vtid :arm
+    msl: (armSlotC
+        :ast
+        :symtab
+        :ctx
+        tid: vtid
+        recv: slotRecv
+        acc: slotAcc
+        :arm
+        inline: inl
+    )
+    nbv: armCellRef :pc slot: msl.stringView inline: inl
+    holdForAlias :ctx val: nbv.stringView held: pcHeld
+    cmt: "\{ind}    /* alias: \{sname} => \{nbv} */\n"
+    buf.append cmt
+    (vvSet
+        xs: ctx.narrowBox
+        vid: snameVid
+        val: nbv.stringView
+        facts: (armCellFacts recvF: slotRecvF inline: inl)
+    )
+    co: symtab.typing.declChildOfId parentTypeId: vtid nameId: arm
+    match (
+        co
+    ) case some then {
+        vtSet xs: ctx.narrowTid vid: snameVid tid: co
+    } case none then null
+}
+
 # emit one arm of a match over a tagged sum.
 emitMatchClause: function {
     ast: Ast.view
@@ -28205,7 +28281,9 @@ emitMatchClause: function {
         tg: spelledTagConst :ast :ctx :symtab tid: vtid armId: arm
         l2: "\{ind}case \{tg}: {\n"
         buf.append l2
-        pc: armPayloadC :ast :symtab :ctx tid: vtid :arm
+        # held: a union arm's cast is recorded where its alias is read
+        pcHeld: ListVal ztypes.tid
+        pc: heldArmPayloadC :ast :symtab :ctx tid: vtid :arm held: pcHeld
         ind3: "\{ind}    "
         didSeed: false
         unptr: false
@@ -28218,32 +28296,22 @@ emitMatchClause: function {
         prevT: (vtGet xs: ctx.narrowTid vid: snameVid).or d: ztypes.tid.zero
         if pc.length > 0 when sname.length > 0 then {
             if isUni then {
-                inl: armIsInlineC :symtab tid: vtid :arm
-                msl: (armSlotC
+                (seedUnionArmAlias
                     :ast
                     :symtab
                     :ctx
-                    tid: vtid
-                    recv: slotRecv
-                    acc: slotAcc
+                    :vtid
                     :arm
-                    inline: inl
+                    pc: pc.stringView
+                    :pcHeld
+                    :slotRecv
+                    :slotRecvF
+                    :slotAcc
+                    :sname
+                    :snameVid
+                    :ind
+                    :buf
                 )
-                nbv: armCellRef pc: pc.stringView slot: msl.stringView inline: inl
-                cmt: "\{ind}    /* alias: \{sname} => \{nbv} */\n"
-                buf.append cmt
-                (vvSet
-                    xs: ctx.narrowBox
-                    vid: snameVid
-                    val: nbv.stringView
-                    facts: (armCellFacts recvF: slotRecvF inline: inl)
-                )
-                co: symtab.typing.declChildOfId parentTypeId: vtid nameId: arm
-                match (
-                    co
-                ) case some then {
-                    vtSet xs: ctx.narrowTid vid: snameVid tid: co
-                } case none then null
                 didSeed = true
             } else if (bodyReassigns :ast n: (ast.nodes.get i: c.statement) name: sname) then {
                 # a body that WRITES the subject must reach the variable, which a
@@ -28292,6 +28360,8 @@ emitMatchClause: function {
                 } case none then null
             }
         }
+        # what no alias took is spelled by the clause's own text (the shadow)
+        releaseHeld :ctx held: pcHeld
         dv: false
         if assignTo.length > 0 then {
             aInd2: "\{ind}    "
@@ -30096,19 +30166,26 @@ armAliasText: function {
     acc: StringView
     facts: cfacts.borrow
 } out String is {
-    pc: armPayloadC :ast :symtab :ctx :tid :arm
+    # the payload type is recorded where the alias is read: an arm that never
+    # reads it spells no cast
+    held: ListVal ztypes.tid
+    pc: heldArmPayloadC :ast :symtab :ctx :tid :arm :held
     if pc.length == 0 then return "".string
     if (symtab.reg.typetypeOf typeId: tid) == ztypes.ztypetype.unionType then {
         inl: armIsInlineC :symtab :tid :arm
         rsl: armSlotC :ast :symtab :ctx :tid :recv :acc :arm inline: inl
-        return (stating
+        ut: (stating
             :facts
             from: (armCellFacts :recvF inline: inl)
             text: (armCellRef pc: pc.stringView slot: rsl.stringView inline: inl)
         )
+        holdForAlias :ctx val: ut.stringView :held
+        return ut
     }
     armC: memberC :ast :symtab :ctx owner: tid kind: memberkind.arm nameId: arm
-    return (stating :facts from: (memberFacts b: recvF) text: "\{recv}\{acc}data.\{armC}")
+    vt: stating :facts from: (memberFacts b: recvF) text: "\{recv}\{acc}data.\{armC}"
+    holdForAlias :ctx val: vt.stringView :held
+    return vt
 }
 
 # A union arm's payload lives in a heap cell that the union's `data` slot
@@ -33133,6 +33210,7 @@ resetFnEmitState: function {ctx: Ctx} is {
     ctx.ptrVids = ListVal ztypes.vid
     ctx.aliases = List VidVal
     ctx.narrowBox = List VidVal
+    ctx.aliasHeld = List AliasHeld
     ctx.narrowTid = List VidTid
     ctx.exclArms = List VidArms
     ctx.exclTids = List VidTid
@@ -34037,6 +34115,10 @@ noteScalarTypeUse: function {symtab: zenv.ZSymbolTable.view ctx: Ctx tid: ztypes
 # holds, or the C names a struct that is never written.
 noteTypeUse: function {ctx: Ctx tid: ztypes.tid} is {
     if ctx.reachFixed.not then {
+        if ctx.typeUseHold then {
+            ctx.heldTypeUses.append tid
+            return
+        }
         ctx.typeUses.add item: tid
         return
     }
@@ -34201,7 +34283,9 @@ typeReachEdges: function {
 } is {
     names: ListVal zast.nameid
     tt: symtab.reg.typetypeOf typeId: tid
-    if (originTidOf :symtab :tid).isZero.not then {
+    if tt == ztypes.ztypetype.unionType then {
+        unionReachEdges :symtab :ctx :tid :acc
+    } else if (originTidOf :symtab :tid).isZero.not then {
         monoElemIdsOf :symtab :ctx monoId: tid :acc
     } else if tt == ztypes.ztypetype.variantType then {
         variantArmIds :symtab :tid ids: acc nameIds: names
@@ -34213,6 +34297,30 @@ typeReachEdges: function {
     if ch != tid then acc.append ch
     memberSigReachEdges :symtab :ctx :tid :acc
     containerReachEdges :symtab :ctx :tid :acc
+}
+
+# unionReachEdges -- the arm payloads a union's own C spells (emitUnionMono): an
+# inline arm's, a member of its slot, and a heap arm's whose destructor the
+# union's destructor calls through a cast. A heap arm's payload is otherwise
+# spelled where written C builds the arm or reads it (noteAliasRead).
+unionReachEdges: function {
+    symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.tid acc: ListVal ztypes.tid
+} is {
+    ids: ListVal ztypes.tid
+    names: ListVal zast.nameid
+    recFieldIds :symtab :tid :ids nameIds: names
+    dw: destroyWritten :symtab :ctx :tid
+    i: u64
+    for i < ids.length loop {
+        p: ids.get :i
+        nm: names.get :i
+        i = i + 1
+        if (armIsInlineC :symtab :tid arm: nm) then {
+            acc.append p
+        } else if dw when (destroyTargetTid :symtab :ctx tid: p).isZero.not then {
+            acc.append p
+        }
+    }
 }
 
 # memberSigReachEdges -- the signature of each member written beside a type
@@ -34515,25 +34623,43 @@ armValueC: function {
 
 # emitArmPayloadDestroy -- the destructor call for a union arm's boxed payload,
 # nothing when the payload owns nothing. The box holds the payload as it is
-# stored (`pc`), and a Set or a Map payload is stored as its pointer, so that
-# one is destroyed through what the box holds.
+# stored (armPayloadC), and a Set or a Map payload is stored as its pointer, so
+# that one is destroyed through what the box holds.
 emitArmPayloadDestroy: function {
+    ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     tid: ztypes.tid
     arm: zast.nameid
-    pc: StringView
     buf: String.borrow
 } is {
     pdtr: payloadDestructor :symtab :ctx :tid :arm
     if pdtr.length == 0 then return
+    # the cast is spelled only here, the payload a reach edge of the union
+    # (unionReachEdges)
+    pc: armPayloadC :ast :symtab :ctx :tid :arm
     co: symtab.typing.declChildOfId parentTypeId: tid nameId: arm
     if (isHeapPtrCollection :symtab :ctx tid: (co.or d: ztypes.tid.zero)) then {
-        dh: armCellDeref :pc slot: "u->data"
+        dh: armCellDeref pc: pc.stringView slot: "u->data"
         buf.append "            \{pdtr}(\{dh});\n"
     } else {
-        dd: armCellPtr :pc slot: "u->data"
+        dd: armCellPtr pc: pc.stringView slot: "u->data"
         buf.append "            \{pdtr}(\{dd});\n"
+    }
+}
+
+# armHasPayload -- arm `arm` of sum `tid` carries a payload: armPayloadC is
+# not "", asked without spelling the payload's type.
+armHasPayload: function {
+    symtab: zenv.ZSymbolTable.view tid: ztypes.tid arm: zast.nameid
+} out bool is {
+    co: symtab.typing.declChildOfId parentTypeId: tid nameId: arm
+    match (
+        co
+    ) case some then {
+        return (symtab.reg.typetypeOf typeId: co) != ztypes.ztypetype.nullType
+    } case none then {
+        return false
     }
 }
 
@@ -34554,6 +34680,59 @@ armPayloadC: function {
         return (slotCType :ast :symtab :ctx tid: co)
     } case none then {
         return "".string
+    }
+}
+
+# heldArmPayloadC -- armPayloadC with the types it spells held in `held`, not
+# recorded: the caller records them where the text is written (releaseHeld), or
+# where an alias spelling it is read (holdForAlias).
+heldArmPayloadC: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    tid: ztypes.tid
+    arm: zast.nameid
+    held: ListVal ztypes.tid
+} out String is {
+    ctx.typeUseHold = true
+    pc: armPayloadC :ast :symtab :ctx :tid :arm
+    ctx.typeUseHold = false
+    for each t: ctx.heldTypeUses loop held.append t
+    ctx.heldTypeUses = ListVal ztypes.tid
+    return pc
+}
+
+# releaseHeld -- record the types `held` still holds: their text is written.
+releaseHeld: function {ctx: Ctx held: ListVal ztypes.tid} is {
+    for held.length > 0 loop noteTypeUse :ctx tid: held.pop
+}
+
+# holdForAlias -- the types `held` holds are spelled by alias `val`: recorded
+# when narrowBox's text is read (noteAliasRead), not before.
+holdForAlias: function {ctx: Ctx val: StringView held: ListVal ztypes.tid} is {
+    for held.length > 0 loop ctx.aliasHeld.append (AliasHeld val: val.string tid: held.pop)
+}
+
+# noteAliasRead -- C being written reads `vid`'s narrowBox text: the types the
+# text spells are recorded, once.
+noteAliasRead: function {ctx: Ctx vid: ztypes.vid} is {
+    if ctx.aliasHeld.length == 0 then return
+    nb: vidFind xs: ctx.narrowBox :vid
+    if nb == 0 then return
+    hits: ListVal u64
+    {
+        v: (ctx.narrowBox.get i: nb - 1).val.stringView
+        i: u64
+        for i < ctx.aliasHeld.length loop {
+            e: ctx.aliasHeld.get :i
+            if e.tid.isZero.not when e.val.stringView == v then hits.append i
+            i = i + 1
+        }
+    }
+    for each h: hits loop {
+        t: (ctx.aliasHeld.get i: h).tid
+        noteTypeUse :ctx tid: t
+        ctx.aliasHeld.set i: h val: (AliasHeld val: "".string tid: ztypes.tid.zero)
     }
 }
 
@@ -37481,6 +37660,7 @@ emitC: function {
         refBorrowRet: false
         aliases: List VidVal
         narrowBox: List VidVal
+        aliasHeld: List AliasHeld
         narrowTid: List VidTid
         exclArms: List VidArms
         exclTids: List VidTid
@@ -37521,6 +37701,8 @@ emitC: function {
         fnptrWritten: IdSet ztypes.tid
         fnptrPassDone: false
         typeUses: IdSet ztypes.tid
+        typeUseHold: false
+        heldTypeUses: ListVal ztypes.tid
         ordinalTagUses: IdSet ztypes.tid
         tagOnlyTypes: IdSet ztypes.tid
         tagEnumUses: IdSet ztypes.tid
@@ -39301,20 +39483,20 @@ emitUnionMono: function {
     pj: u64
     for pj < an loop {
         pname: aidsNm.get i: pj
-        pc: armPayloadC :ast :symtab :ctx :tid arm: pname
         # an inline payload is a value in the slot, and a non-owned arm's
         # points at its pinned source: nothing to destroy or free in either
         owned: (symtab.typing.declIsBorrowedFieldId parentTypeId: tid nameId: pname).not
-        if pc.length > 0 when owned when (armIsInlineC :symtab :tid arm: pname).not then {
+        hasP: armHasPayload :symtab :tid arm: pname
+        if hasP when owned when (armIsInlineC :symtab :tid arm: pname).not then {
             ptg: spelledTagConst :ast :ctx :symtab :tid armId: pname
             lcase: "        case \{ptg}:\n"
             buf.append lcase
             (emitArmPayloadDestroy
+                :ast
                 :symtab
                 :ctx
                 :tid
                 arm: pname
-                pc: pc.stringView
                 :buf
             )
             uf: armCellFree slot: "u->data"
