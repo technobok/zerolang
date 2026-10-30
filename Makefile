@@ -1255,7 +1255,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2386430
+ALLOC_BASELINE := 2371750
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -3484,6 +3484,8 @@ native-guard:
 	bound=$$({ sed -nE 's/^\[@canon\.([A-Za-z_][A-Za-z0-9_]*) .*/"\1"/p' src/runtime/natives.tbl; \
 	    grep -oE 'mono: "[A-Za-z_][A-Za-z0-9_]*"' src/zemitterc.z; \
 	    grep -ohE 'bn\.append from: "[A-Za-z_][A-Za-z0-9_]*"' src/zemitterc.z; \
+	    for sl in $$(grep -ohE 'bn\.append \(rtHoleId slot: rtHole\.slot\.[A-Za-z0-9_]+\)' src/zemitterc.z | sed -E 's/.*slot\.([A-Za-z0-9_]+)\)/\1/' | sort -u); do \
+	      sed -nE "/^rtHole: list \{/,/^\}/ s/^    $$sl: (\"[^\"]*\")/\1/p" src/zemitterc.z; done; \
 	  } | sed 's/.*"\(.*\)"/\1/'; printf 'String\nStringView\n'); \
 	bound=" $$(echo "$$bound" | sort -u | tr '\n' ' ') "; \
 	known=$$(echo "$$bound" | tr ' ' '\n'; \

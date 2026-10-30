@@ -1345,18 +1345,18 @@ convResultBindings: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     retTid: ztypes.tid
-    bn: List String
+    bn: ListVal zast.nameid
     bv: List String
-    rn: List String
+    rn: ListVal zast.nameid
     rv: List String
 } is {
-    bn.append from: "RT".string
+    bn.append (rtHoleId slot: rtHole.slot.holeRT)
     bv.append from: (spelledCname :ctx tid: retTid)
-    rn.append from: "OKTAG".string
+    rn.append (rtHoleId slot: rtHole.slot.holeOkTag)
     rv.append from: (spelledTagConst :ast :ctx :symtab tid: retTid armId: zast.wellKnown.slot.wkOk)
-    rn.append from: "ERRTAG".string
+    rn.append (rtHoleId slot: rtHole.slot.holeErrTag)
     rv.append from: (spelledTagConst :ast :ctx :symtab tid: retTid armId: zast.wellKnown.slot.wkErr)
-    rn.append from: "OKMEMBER".string
+    rn.append (rtHoleId slot: rtHole.slot.holeOkMember)
     (rv.append
         from: (memberC
             :ast
@@ -1367,7 +1367,7 @@ convResultBindings: function {
             nameId: zast.wellKnown.slot.wkOk
         )
     )
-    rn.append from: "ERRMEMBER".string
+    rn.append (rtHoleId slot: rtHole.slot.holeErrMember)
     (rv.append
         from: (memberC
             :ast
@@ -1380,7 +1380,7 @@ convResultBindings: function {
     )
     # the error slot's assignment, spelled for whatever `converror` IS
     if ctx.converrorTid.isZero.not then {
-        rn.append from: "TAG_converror".string
+        rn.append (rtHoleId slot: rtHole.slot.holeTagConverror)
         if (isOrdinalVariant :symtab tid: ctx.converrorTid) then {
             rv.append from: "".string
         } else {
@@ -1412,7 +1412,7 @@ emitNumericCast: function {
     facts: cfacts.borrow
 } out String is {
     body: nativeImplOf :ctx path: key
-    if body.length == 0 then {
+    if body.isZero then {
         emitFail :ctx what: "no native implementation for '\{key}'" line: 0
         return (stating
             :facts
@@ -1428,27 +1428,27 @@ emitNumericCast: function {
         tid: retTid
         originTid: (ctx.origins.get i: family.slot.resultval)
     )
-    bn: List String
+    bn: ListVal zast.nameid
     bv: List String
-    rn: List String
+    rn: ListVal zast.nameid
     rv: List String
     if isResultval then {
         convResultBindings :ast :symtab :ctx :retTid :bn :bv :rn :rv
     } else {
         # a row that builds a record spells the record's C type as @RT@
-        if (body.stringView.contains needle: "@RT@") then {
-            bn.append from: "RT".string
+        if (rtHas :ctx id: body slot: rtHole.slot.holeRT) then {
+            bn.append (rtHoleId slot: rtHole.slot.holeRT)
             bv.append from: (spelledCname :ctx tid: retTid)
         }
     }
     # a row over the runtime's string types (text's) spells them as holes
-    if (body.stringView.contains needle: "@StringView@") then {
-        bn.append from: "StringView".string
+    if (rtHas :ctx id: body slot: rtHole.slot.holeStringView) then {
+        bn.append (rtHoleId slot: rtHole.slot.holeStringView)
         preludeNeed :ctx memb: "@StringView_t"
         bv.append from: ctx.svC.copy
     }
-    if (body.stringView.contains needle: "@String@") then {
-        bn.append from: "String".string
+    if (rtHas :ctx id: body slot: rtHole.slot.holeString) then {
+        bn.append (rtHoleId slot: rtHole.slot.holeString)
         preludeNeed :ctx memb: "@String_t"
         bv.append from: ctx.strC.copy
     }
@@ -1479,10 +1479,10 @@ emitNumericCast: function {
         nid: valNid
         ctype: ""
         :constant
-        twice: (rowHoleTwice body: body.stringView hole: "@V@")
+        twice: (rtTwice :ctx id: body hole: (rtHoleId slot: rtHole.slot.holeV))
         prefix: pre
     )
-    rn.append from: "V".string
+    rn.append (rtHoleId slot: rtHole.slot.holeV)
     if isResultval then {
         rv.append from: spelled.copy
     } else {
@@ -1493,15 +1493,15 @@ emitNumericCast: function {
             )
         )
     }
-    filled: (fillHolesForCtx
+    filled: (rtFillForCtx
         :ast
         :symtab
         :ctx
-        text: body
+        id: body
         path: key
-        bindNames: bn
+        bindIds: bn
         bindVals: bv
-        rawNames: rn
+        rawIds: rn
         rawVals: rv
     )
     if pre.length == 0 when (nativeValueRowOf :ctx path: key) then {
@@ -1854,16 +1854,428 @@ fillHolesForCtx: function {
         :rawVals
         fails: ferr
     )
-    fi: u64
-    fn: ferr.length
-    for fi < fn loop {
-        m: ferr.get i: fi
-        emitFail :ctx what: m.copy line: 0
-        fi = fi + 1
-    }
+    emitFillFails :ctx fails: ferr
     return cur
 }
 
+# emitFillFails -- report each failure a fill gathered through the emit-failure
+# channel, so a bad fragment or row fails the run
+emitFillFails: function {ctx: Ctx fails: (List String).view} is {
+    for each m: fails loop emitFail :ctx what: m.copy line: 0
+}
+
+
+# rtid -- a parsed runtime text's id in RtTexts: ids rise as texts are parsed,
+# and 0 is no text
+rtid: typedef u64 as {
+    # identity by id
+    ==: function {this: this.view rhs: rtid} out bool is {
+        return this.u64 == rhs.u64
+    }
+    # the sentinel: 0 is no text, never the first one
+    isZero: function {this: this.view} out bool is {
+        return this.u64 == 0
+    }
+    # the zero rtid: no text. A path natives.tbl gives no body answers it
+    zero: rtid 0
+}
+
+# rtsegkind -- what one stretch of a parsed runtime text is (rtseg)
+rtsegkind: variant {
+    # text written as it stands
+    literal: null
+    # a `@Name@` hole, which a fill takes from its bindings
+    hole: null
+    # a `@@KEY@@` template key, or a piece marker's `@@...@@` run, which a fill
+    # writes as it stands
+    key: null
+} as { tag: u8.tag }
+
+# rtseg -- one stretch of a parsed runtime text, in text order: its bytes, and
+# a hole's name between its `@`s, interned in RtTexts.holes
+rtseg: record {
+    kind: rtsegkind
+    from: u64
+    to: u64
+    name: zast.nameid
+}
+
+# rtinfo -- where a parsed text's stretches lie in RtTexts.segs, and what a fill
+# would otherwise search its bytes for
+rtinfo: record {
+    segFrom: u64
+    segTo: u64
+    # a `@` opens a hole that no `@` closes, which every fill reports
+    open: bool
+    # a hole is an `@ARM_<canon>.<arm>@` tag constant (rtBindArms)
+    arms: bool
+    # a hole is an `@MEMBER_<canon>.<name>@` member (rtBindMembers)
+    members: bool
+}
+
+# rtmark -- the next hole or key of a runtime text (rtNextMark)
+rtmark: record {
+    # a hole or a key opens at or after the point searched from
+    found: bool
+    # it is a lone `@` that no `@` closes: the rest of the text is text
+    open: bool
+    # it is a `@@KEY@@` key rather than a `@Name@` hole
+    key: bool
+    # its bytes, its `@`s included
+    at: u64
+    to: u64
+}
+
+# rtNextMark -- the first hole or key of `text` at or after `from`. A `@@` opens a
+# key that runs to the next `@@` and a lone `@` a hole that runs to the next `@`,
+# as fillHoles reads them; a `@@` nothing closes is text.
+rtNextMark: function {text: StringView from: u64} out rtmark is {
+    m: rtmark found: false open: false key: false at: text.length to: text.length
+    pos: from
+    total: text.length
+    for pos < total loop {
+        ao: (text.substring from: pos to: total).indexOf needle: "@"
+        if ao.none then return m
+        at: pos + ao
+        if ((text.byteAt i: at + 1).or d: 0) != 64 then {
+            ho: (text.substring from: at + 1 to: total).indexOf needle: "@"
+            m.found = true
+            m.at = at
+            if ho.none then {
+                m.open = true
+            } else {
+                m.to = at + 1 + ho + 1
+            }
+            return m
+        }
+        cl: (text.substring from: at + 2 to: total).indexOf needle: "@@"
+        if cl.some then {
+            m.found = true
+            m.key = true
+            m.at = at
+            m.to = at + 2 + cl + 2
+            return m
+        }
+        pos = at + 2
+    }
+    return m
+}
+
+# rtHole -- the holes the emitter binds by name, interned first in RtTexts.holes
+# so each is known by its slot (rtHoleId)
+rtHole: list {
+    holeL: "L"
+    holeR: "R"
+    holeV: "V"
+    holeA1: "A1"
+    holeT: "T"
+    holeRT: "RT"
+    holeStringView: "StringView"
+    holeString: "String"
+    holeOkTag: "OKTAG"
+    holeErrTag: "ERRTAG"
+    holeOkMember: "OKMEMBER"
+    holeErrMember: "ERRMEMBER"
+    holeTagConverror: "TAG_converror"
+} out staticlist StringView
+
+# rtHoleId -- the id of rtHole's hole `slot`: the vocabulary interns its block
+# in order after the sentinel
+rtHoleId: function {slot: u64} out zast.nameid is {
+    return (zast.nameid from: (slot + 1).u32.orPanic)
+}
+
+# RtTexts -- the runtime text the emitter fills, each text parsed once: a
+# natives.tbl row's body when the row is recorded. A text is cut into literal
+# stretches, holes and keys, so a fill walks the stretches once, appending, and
+# a question about the holes a text spells (does it spell @T@, does it name @L@
+# twice) reads its holes instead of searching its bytes on every use. A value a
+# fill puts in a hole is never searched for holes again.
+RtTexts: class {
+    # the texts, by id; id 0 is the sentinel empty text
+    texts: (List String i: rtid)
+    # each text's stretches and facts, by id as `texts` is
+    infos: (ListVal rtinfo i: rtid)
+    # every text's stretches, each text's in one run (rtinfo)
+    segs: ListVal rtseg
+    # the hole names, rtHole's first
+    holes: zast.Vocab
+} as {
+    # create -- the pool holding only the sentinel
+    create: function {} out this is {
+        r: (meta.create
+            texts: (List String i: rtid)
+            infos: (ListVal rtinfo i: rtid)
+            segs: ListVal rtseg
+            holes: (zast.Vocab.create block: rtHole)
+        )
+        r.texts.append "".string
+        r.infos.append (rtinfo segFrom: 0 segTo: 0 open: false arms: false members: false)
+        return r
+    }
+
+    # parse -- cut `text` into its stretches and keep it: its id (rtNextMark
+    # finds each hole and key)
+    parse: function {:this text: StringView} out rtid is {
+        segFrom: this.segs.length
+        open: false
+        arms: false
+        members: false
+        lit: u64
+        for lit < text.length loop {
+            m: rtNextMark :text from: lit
+            if m.found.not or m.open then {
+                open = m.open
+                break
+            }
+            this.addLiteral from: lit to: m.at
+            hid: zast.nameid.zero
+            if m.key.not then {
+                nm: text.substring from: m.at + 1 to: m.to - 1
+                if (nm.startsWith prefix: "ARM_") then arms = true
+                if (nm.startsWith prefix: "MEMBER_") then members = true
+                hid = this.holes.pool.set s: nm
+            }
+            k: rtsegkind.hole
+            if m.key then k = rtsegkind.key
+            this.segs.append (rtseg kind: k from: m.at to: m.to name: hid)
+            lit = m.to
+        }
+        this.addLiteral from: lit to: text.length
+        this.infos.append (rtinfo :segFrom segTo: this.segs.length :open :arms :members)
+        return (this.texts.append text.string)
+    }
+
+    # addLiteral -- the text from `from` to `to` as a literal stretch, when there
+    # is any
+    addLiteral: function {:this from: u64 to: u64} is {
+        if to > from then this.segs.append (rtseg
+            kind: rtsegkind.literal
+            :from
+            :to
+            name: zast.nameid.zero
+        )
+    }
+
+    # holeCount -- how many times text `id` spells the hole `hole`
+    holeCount: function {this: this.view id: rtid hole: zast.nameid} out u64 is {
+        n: u64
+        inf: this.infos.get i: id
+        k: inf.segFrom
+        for k < inf.segTo loop {
+            sg: this.segs.get i: k
+            if sg.kind.hole when sg.name == hole then n = n + 1
+            k = k + 1
+        }
+        return n
+    }
+
+    # holeNamed -- the id of the hole spelled `name`, zero when no text spells it
+    holeNamed: function {this: this.view name: StringView} out zast.nameid is {
+        return (this.holes.pool.find s: name)
+    }
+
+    # holesNamed -- each distinct hole of text `id` whose name starts with
+    # `prefix`, in the order first spelled: its id, and its name past the prefix
+    holesNamed: function {
+        this: this.view
+        id: rtid
+        prefix: StringView
+        ids: ListVal zast.nameid
+        names: List String
+    } is {
+        inf: this.infos.get i: id
+        k: inf.segFrom
+        for k < inf.segTo loop {
+            sg: this.segs.get i: k
+            k = k + 1
+            if sg.kind.hole.not then continue
+            seen: false
+            for each d: ids loop {
+                if d == sg.name then seen = true
+            }
+            if seen then continue
+            nm: this.holes.pool.texts.get i: sg.name
+            nv: nm.stringView
+            if (nv.startsWith :prefix) then {
+                ids.append sg.name
+                names.append from: (nv.substring from: prefix.length to: nv.length).string
+            }
+        }
+    }
+
+    # fill -- text `id` with each hole filled from the bindings and each key
+    # written as it stands: a cname binding (`bindIds`) without its `z_` prefix,
+    # which the text spells itself (`z_@File@_t`), a raw one (`rawIds`) as it
+    # stands (rtAppendHole). A hole bound to nothing, and a hole never closed,
+    # are failures, added to `fails` naming `path`.
+    fill: function {
+        this: this.view
+        id: rtid
+        # where the text came from, for the messages
+        path: StringView
+        bindIds: (ListVal zast.nameid).view
+        bindVals: (List String).view
+        rawIds: (ListVal zast.nameid).view
+        rawVals: (List String).view
+        fails: List String
+    } out String is {
+        buf: String
+        t: this.texts.get i: id
+        tv: t.stringView
+        inf: this.infos.get i: id
+        k: inf.segFrom
+        for k < inf.segTo loop {
+            sg: this.segs.get i: k
+            k = k + 1
+            run: tv.substring from: sg.from to: sg.to
+            if sg.kind.hole then {
+                if (rtAppendHole :buf name: sg.name :bindIds :bindVals :rawIds :rawVals).not then {
+                    fails.append from: "fragment \{path}: hole \{run} is bound to nothing"
+                    buf.append run
+                }
+            } else {
+                buf.append run
+            }
+        }
+        if inf.open then fails.append from: "fragment \{path}: unterminated hole"
+        return buf
+    }
+}
+
+# rtHas -- text `id` spells the hole rtHole `slot`
+rtHas: function {ctx: Ctx.view id: rtid slot: u64} out bool is {
+    return (ctx.rt.holeCount :id hole: (rtHoleId :slot)) > 0
+}
+
+# rtTwice -- text `id` spells the hole `hole` more than once: the part filling it
+# is read into a temp (orderNamesTwice)
+rtTwice: function {ctx: Ctx.view id: rtid hole: zast.nameid} out bool is {
+    return (ctx.rt.holeCount :id :hole) > 1
+}
+
+# rtAppendHole -- append the text hole `name` fills with to `buf`, and answer
+# whether anything binds it: appendHoleBinding, by hole id
+rtAppendHole: function {
+    buf: String.borrow
+    name: zast.nameid
+    bindIds: (ListVal zast.nameid).view
+    bindVals: (List String).view
+    rawIds: (ListVal zast.nameid).view
+    rawVals: (List String).view
+} out bool is {
+    bi: u64
+    for bi < bindIds.length loop {
+        if (bindIds.get i: bi) == name then {
+            v: bindVals.get i: bi
+            vv: v.stringView
+            if (vv.startsWith prefix: "z_") then buf.append (vv.substring from: 2 to: vv.length)
+            return true
+        }
+        bi = bi + 1
+    }
+    ri: u64
+    for ri < rawIds.length loop {
+        if (rawIds.get i: ri) == name then {
+            buf.append (rawVals.get i: ri)
+            return true
+        }
+        ri = ri + 1
+    }
+    return false
+}
+
+# rtFillForCtx -- text `id` filled for a loader that holds a Ctx, as
+# fillHolesForCtx fills a fragment: its tag-constant and member holes bound
+# first (rtBindArms, rtBindMembers), and each failure reported through the
+# emit-failure channel
+rtFillForCtx: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    id: rtid
+    path: StringView
+    bindIds: ListVal zast.nameid
+    bindVals: List String
+    rawIds: ListVal zast.nameid
+    rawVals: List String
+} out String is {
+    inf: ctx.rt.infos.get i: id
+    if inf.arms then rtBindArms :ast :symtab :ctx :id :rawIds :rawVals
+    if inf.members then rtBindMembers :ast :symtab :ctx :id :rawIds :rawVals
+    ferr: List String
+    cur: ctx.rt.fill :id :path :bindIds :bindVals :rawIds :rawVals fails: ferr
+    emitFillFails :ctx fails: ferr
+    return cur
+}
+
+# rtBindArms -- bind each `@ARM_<canon>.<arm>@` hole text `id` spells to its tag
+# constant (armHoleC), as bindArmHoles binds a fragment's
+rtBindArms: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    id: rtid
+    rawIds: ListVal zast.nameid
+    rawVals: List String
+} is {
+    ids: ListVal zast.nameid
+    names: List String
+    ctx.rt.holesNamed :id prefix: "ARM_" :ids :names
+    k: u64
+    for k < ids.length loop {
+        ac: armHoleC :ast :symtab :ctx body: (names.get i: k).stringView
+        if ac.length > 0 then {
+            rawIds.append (ids.get i: k)
+            rawVals.append from: ac
+        }
+        k = k + 1
+    }
+}
+
+# rtBindMembers -- bind each `@MEMBER_<canon>.<name>@` hole text `id` spells to
+# the member's C name (memberHoleC), as bindMemberHoles binds a fragment's
+rtBindMembers: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    id: rtid
+    rawIds: ListVal zast.nameid
+    rawVals: List String
+} is {
+    ids: ListVal zast.nameid
+    names: List String
+    ctx.rt.holesNamed :id prefix: "MEMBER_" :ids :names
+    k: u64
+    for k < ids.length loop {
+        mc: memberHoleC :ast :symtab :ctx body: (names.get i: k).stringView
+        if mc.length > 0 then {
+            rawIds.append (ids.get i: k)
+            rawVals.append from: mc
+        }
+        k = k + 1
+    }
+}
+
+# armHoleC -- the tag constant an ARM hole's `<canon>.<arm>` names, its use
+# noted; "" when the canon names no type in this program or the type declares no
+# such arm
+armHoleC: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    # the hole past its `ARM_`
+    body: StringView
+} out String is {
+    dot: body.indexOf needle: "."
+    if dot.none then return "".string
+    tt: ioCanonTidAny :ast :symtab :ctx canon: (body.substring from: 0 to: dot)
+    aid: zast.poolFind pool: ast.names text: (body.substring from: dot + 1 to: body.length)
+    ord: armOrdinalOf :symtab tid: tt armId: aid
+    if ord.none then return "".string
+    noteTagConstUse :ctx :symtab tid: tt
+    return (tagConstC :ast :ctx :symtab tid: tt armOrd: ord)
+}
 
 # bindArmHoles -- bind every `@ARM_<canon>.<arm>@` hole a fragment spells to the
 # tag constant of that arm of the type the canon names (ioCanonTidAny, as the
@@ -1889,27 +2301,11 @@ bindArmHoles: function {
     for each hn: (holeNames :text) loop {
         hv: hn.stringView
         if (hv.startsWith prefix: "ARM_") then {
-            body: hv.substring from: 4 to: hv.length
-            ord: optionval.none u64
-            tt: ztypes.tid
-            dot: body.indexOf needle: "."
-            match (
-                dot
-            ) case some then {
-                tt = ioCanonTidAny :ast :symtab :ctx canon: (body.substring from: 0 to: dot)
-                aid: (zast.poolFind
-                    pool: ast.names
-                    text: (body.substring from: dot + 1 to: body.length)
-                )
-                ord = armOrdinalOf :symtab tid: tt armId: aid
-            } case none then null
-            match (
-                ord
-            ) case some then {
+            ac: armHoleC :ast :symtab :ctx body: (hv.substring from: 4 to: hv.length)
+            if ac.length > 0 then {
                 rawNames.append from: hv.string
-                noteTagConstUse :ctx :symtab tid: tt
-                rawVals.append from: (tagConstC :ast :ctx :symtab tid: tt armOrd: ord)
-            } case none then null
+                rawVals.append from: ac
+            }
         }
     }
 }
@@ -2668,12 +3064,13 @@ recordFragmentRow: function {
 recordRowBodies: function {ctx: Ctx h: NativeHead.view body: StringView} is {
     if body.length > 0 then {
         kb: h.key.copy
+        bid: ctx.rt.parse text: body
         if h.cst.length > 0 then {
-            ctx.nativeConstBody.set key: kb value: body.string
+            ctx.nativeConstBody.set key: kb value: bid
             kc: h.key.copy
             ctx.nativeConstPos.set key: kc value: h.cst.copy
         } else {
-            ctx.nativeTbl.set key: kb value: body.string
+            ctx.nativeTbl.set key: kb value: bid
         }
     }
     if h.need.length > 0 then {
@@ -2983,18 +3380,11 @@ nativeHasBody: function {ctx: Ctx.view path: StringView} out bool is {
     return (ctx.nativeTbl.has key: path.asString)
 }
 
-# nativeImplOf -- the C body natives.tbl gives for a qualified path, "" when
-# the table has no row for it. "" is the error case at every call site: the
-# compiler supplies no implementation for that declaration.
-nativeImplOf: function {ctx: Ctx.view path: StringView} out String is {
-    result: String
-    g: ctx.nativeTbl.get key: path.asString
-    match (
-        g
-    ) case some then {
-        result = g.copy
-    } case none then null
-    return result
+# nativeImplOf -- the C body natives.tbl gives for a qualified path, parsed
+# (RtTexts), zero when the table has no row for it. Zero is the error case at
+# every call site: the compiler supplies no implementation for that declaration.
+nativeImplOf: function {ctx: Ctx.view path: StringView} out rtid is {
+    return ((ctx.nativeTbl.get key: path.asString).or d: rtid.zero)
 }
 
 # nativeConstImplOf -- the body of the row that answers only when the argument
@@ -3002,15 +3392,8 @@ nativeImplOf: function {ctx: Ctx.view path: StringView} out String is {
 # row. A constant position fills with a LITERAL, so the row may spell what only
 # a known value allows: `[system.u64./ const=1]` divides inline, where the plain
 # row calls the helper that checks the divisor.
-nativeConstImplOf: function {ctx: Ctx.view path: StringView} out String is {
-    result: String
-    g: ctx.nativeConstBody.get key: path.asString
-    match (
-        g
-    ) case some then {
-        result = g.copy
-    } case none then null
-    return result
+nativeConstImplOf: function {ctx: Ctx.view path: StringView} out rtid is {
+    return ((ctx.nativeConstBody.get key: path.asString).or d: rtid.zero)
 }
 
 # nativeConstPosOf -- the argument positions that row requires to be constant,
@@ -4257,12 +4640,12 @@ Ctx: class {
     # declaration and the definition write the same text, built once
     fnSigs: (IdMapR ztypes.tid V: String)
     # a native operator row's hole bindings: `StringView` and `T` its cnames,
-    # `L` and `R` its operands. The names never change and the values are
+    # `L` and `R` its operands. The holes never change and the values are
     # replaced per operator, so the four lists live here and an operator
     # borrows them (emitOperatorAt) rather than building four of its own
-    opBindNames: List String
+    opBindIds: ListVal zast.nameid
     opBindVals: List String
-    opRawNames: List String
+    opRawIds: ListVal zast.nameid
     opRawVals: List String
     # the current class method body's pointer-receiver params, by variable id
     ptrVids: ListVal ztypes.vid
@@ -4478,11 +4861,13 @@ Ctx: class {
     canonSpecs: (Map String V: String)
     # the `@unit.` rows: what a reached unit needs from the C toolchain
     unitReqs: List UnitReq
-    # natives.tbl, read once at emit start: qualified path -> the C body, plus
-    # the two row attributes. Parsed eagerly rather than on first lookup
-    # because the lookup site is inside emitExpr, which holds a Ctx but not the
-    # runtime dir; emitC has both.
-    nativeTbl: (Map String V: String)
+    # the runtime text the emitter fills, each parsed once (RtTexts)
+    rt: RtTexts
+    # natives.tbl, read once at emit start: qualified path -> the C body, parsed
+    # (rt), plus the two row attributes. Read eagerly rather than on first
+    # lookup because the lookup site is inside emitExpr, which holds a Ctx but
+    # not the runtime dir; emitC has both.
+    nativeTbl: (MapRV String v: rtid)
     # what each native fragment needs declared before it
     nativeNeed: (Map String V: String)
     # the `pulls=` of each row, keyed by the path
@@ -4501,7 +4886,7 @@ Ctx: class {
     # and the guarded form would simply vanish. The body and the positions it
     # requires are two maps rather than one composed key for the same reason
     # the rest of this table is: the path IS the key.
-    nativeConstBody: (Map String V: String)
+    nativeConstBody: (MapRV String v: rtid)
     # which argument position of a native must be a constant
     nativeConstPos: (Map String V: String)
     # the conversion rows, split so the two questions stay separate: is this
@@ -7508,8 +7893,8 @@ emitNativeArgMethod: function {
     key: nativeMemberKey srcPath: srcP.stringView memb: mn
     if key.length == 0 then return "".string
     body: nativeImplOf :ctx path: key.stringView
-    if body.length == 0 then return "".string
-    if (body.stringView.contains needle: "@A1@").not then return "".string
+    if body.isZero then return "".string
+    if (rtHas :ctx id: body slot: rtHole.slot.holeA1).not then return "".string
     rowNeedAdd :ctx key: key.stringView
     mk: pendingHoistMark :ctx
     recvF: cfacts
@@ -7545,7 +7930,7 @@ emitNativeArgMethod: function {
     if pNames.length < 2 then return "".string
     # the receiver is evaluated first, then the arguments as written
     ord: orderBegin :ctx slots: pNames.length
-    orderNamesTwiceArgs st: ord body: body.stringView count: pNames.length
+    orderNamesTwiceArgs :ctx st: ord :body count: pNames.length
     recvNid: dottedParentNodeId n: (ast.nodes.get i: call.callable)
     (orderArgAtWith
         :ast
@@ -7562,7 +7947,7 @@ emitNativeArgMethod: function {
     )
     orderNativeArgs :ast :symtab :ctx :call fpNameIds: pNameIds :ord
     oprefix: orderFinish :ctx st: ord
-    rn: List String
+    rn: ListVal zast.nameid
     rv: List String
     filledAll: nativeHoleValues t: ctx st: ord count: pNames.length names: rn vals: rv
     orderEnd :ctx st: ord
@@ -7571,29 +7956,29 @@ emitNativeArgMethod: function {
     if filledAll.not then return "".string
     # a row that builds a record spells the record's C type as @RT@, and a row
     # over text the view's as @StringView@
-    bn: List String
+    bn: ListVal zast.nameid
     bv: List String
-    if (body.stringView.contains needle: "@RT@") then {
-        bn.append from: "RT".string
+    if (rtHas :ctx id: body slot: rtHole.slot.holeRT) then {
+        bn.append (rtHoleId slot: rtHole.slot.holeRT)
         bv.append from: (spelledCname
             :ctx
             tid: (chaseAggregateTypedef :symtab :ctx tid: (stampIdOf :symtab nid: call.nodeid))
         )
     }
-    if (body.stringView.contains needle: "@StringView@") then {
-        bn.append from: "StringView".string
+    if (rtHas :ctx id: body slot: rtHole.slot.holeStringView) then {
+        bn.append (rtHoleId slot: rtHole.slot.holeStringView)
         preludeNeed :ctx memb: "@StringView_t"
         bv.append from: ctx.svC.copy
     }
-    filled: (fillHolesForCtx
+    filled: (rtFillForCtx
         :ast
         :symtab
         :ctx
-        text: body
+        id: body
         path: key.stringView
-        bindNames: bn
+        bindIds: bn
         bindVals: bv
-        rawNames: rn
+        rawIds: rn
         rawVals: rv
     )
     # a call's facts even for a value row: the arguments' own are not kept
@@ -7607,7 +7992,7 @@ nativeHoleValues: function {
     t: Ctx.view
     st: orderstate
     count: u64
-    names: List String
+    names: ListVal zast.nameid
     vals: List String
 } out bool is {
     filledAll: true
@@ -7615,7 +8000,7 @@ nativeHoleValues: function {
     for hi < count loop {
         hv: orderSlotText :t :st slot: hi
         if hv.length == 0 then filledAll = false
-        if hi == 0 then names.append "V".string else names.append "A\{hi}"
+        names.append (rtArgHole ctx: t :hi)
         vals.append hv.string
         hi = hi + 1
     }
@@ -8033,14 +8418,6 @@ orderBegin: function {ctx: Ctx slots: u64} out orderstate is {
     )
 }
 
-# rowHoleTwice -- whether a natives.tbl body names the hole `hole` more than
-# once.
-rowHoleTwice: function {body: StringView hole: StringView} out bool is {
-    first: (body.indexOf needle: hole).or d: 0
-    last: (body.lastIndexOf needle: hole).or d: 0
-    return first != last
-}
-
 # orderNamesTwice -- the row the call `st` opened names the hole of slot `slot`
 # more than once: the part that fills it is read once, into its temp, unless
 # reading it twice costs nothing (orderPartWith).
@@ -8048,15 +8425,21 @@ orderNamesTwice: function {st: orderstate.borrow slot: u64} is {
     if slot < 64 then st.twice = st.twice | (1.u64 << slot)
 }
 
+# rtArgHole -- the hole an argument row's slot `hi` fills: @V@ for slot 0, @A1@
+# for slot 1, and so on; zero when no row spells it
+rtArgHole: function {ctx: Ctx.view hi: u64} out zast.nameid is {
+    if hi == 0 then return (rtHoleId slot: rtHole.slot.holeV)
+    an: "A\{hi}"
+    return (ctx.rt.holeNamed name: an.stringView)
+}
+
 # orderNamesTwiceArgs -- orderNamesTwice for each of an argument row's `count`
 # slots that `body` names more than once: @V@ fills slot 0, @A1@ slot 1, and
 # so on.
-orderNamesTwiceArgs: function {st: orderstate.borrow body: StringView count: u64} is {
+orderNamesTwiceArgs: function {ctx: Ctx.view st: orderstate.borrow body: rtid count: u64} is {
     i: u64
     for i < count loop {
-        hole: "@V@".string
-        if i > 0 then hole = "@A\{i}@"
-        if (rowHoleTwice :body hole: hole.stringView) then orderNamesTwice :st slot: i
+        if (rtTwice :ctx id: body hole: (rtArgHole :ctx hi: i)) then orderNamesTwice :st slot: i
         i = i + 1
     }
 }
@@ -9918,8 +10301,7 @@ wordOperatorRowBinds: function {
     if (nativeIsArgMembOf :ctx memb: mn).not then return false
     if (fnIsNativeId :symtab fid: method).not then return false
     key: binopKeyOf :ast :symtab :owner isNative: true op: mn
-    body: nativeImplOf :ctx path: key.stringView
-    return (body.stringView.contains needle: "@L@")
+    return (rtHas :ctx id: (nativeImplOf :ctx path: key.stringView) slot: rtHole.slot.holeL)
 }
 
 # opPairPartnerId -- the OTHER half of the comparison pair, 0 for any other
@@ -21810,7 +22192,7 @@ emitOperatorAt: function {
     }
     key: binopKeyOf :ast :symtab :owner isNative: isNat :op
     body: nativeImplOf :ctx path: key.stringView
-    if body.length == 0 then {
+    if body.isZero then {
         emitFail :ctx what: "no native implementation for '\{key}'" line: lineno
         return (stating
             :facts
@@ -21831,10 +22213,10 @@ emitOperatorAt: function {
         ieee: zeroDivisionC :symtab :ctx :owner :opId :lhsNid rhs: rhsConst
         if ieee.length > 0 then return (stating :facts from: constFacts text: ieee)
         cbody: nativeConstImplOf :ctx path: key.stringView
-        if cbody.length > 0 then {
+        if cbody.isZero.not then {
             cpos: nativeConstPosOf :ctx path: key.stringView
             if (constPosIsFirstOnly pos: cpos.stringView) then {
-                body = cbody.copy
+                body = cbody
                 constRow = true
             }
         }
@@ -21909,7 +22291,7 @@ emitOperatorRow: function {
     ctx: Ctx
     owner: ztypes.tid
     key: String
-    body: String
+    body: rtid
     constRow: bool
     lhsNid: zast.nodeid
     rhsNid: zast.nodeid
@@ -21917,8 +22299,10 @@ emitOperatorRow: function {
 } out String is {
     if constRow.not then rowNeedAdd :ctx key: key.stringView
     ord: orderBegin :ctx slots: 2
-    if (rowHoleTwice body: body.stringView hole: "@L@") then orderNamesTwice st: ord slot: 0
-    if (rowHoleTwice body: body.stringView hole: "@R@") then orderNamesTwice st: ord slot: 1
+    lh: rtHoleId slot: rtHole.slot.holeL
+    rh: rtHoleId slot: rtHole.slot.holeR
+    if (rtTwice :ctx id: body hole: lh) then orderNamesTwice st: ord slot: 0
+    if (rtTwice :ctx id: body hole: rh) then orderNamesTwice st: ord slot: 1
     lhsF: cfacts
     (orderRowOperand
         :ast
@@ -21969,55 +22353,55 @@ fillOperatorRow: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     ord: orderstate
-    body: String
+    body: rtid
     key: String
     tcnTid: ztypes.tid
 } out String is {
-    bn: List String
+    bn: ListVal zast.nameid
     bv: List String
-    rn: List String
+    rn: ListVal zast.nameid
     rv: List String
-    bn swap ctx.opBindNames
+    bn swap ctx.opBindIds
     bv swap ctx.opBindVals
-    rn swap ctx.opRawNames
+    rn swap ctx.opRawIds
     rv swap ctx.opRawVals
     if bn.length == 0 then {
-        bn.append from: "StringView".string
-        bn.append from: "T".string
+        bn.append (rtHoleId slot: rtHole.slot.holeStringView)
+        bn.append (rtHoleId slot: rtHole.slot.holeT)
         bv.append from: ctx.svC.copy
         bv.append from: String
-        rn.append from: "L".string
-        rn.append from: "R".string
+        rn.append (rtHoleId slot: rtHole.slot.holeL)
+        rn.append (rtHoleId slot: rtHole.slot.holeR)
         rv.append from: String
         rv.append from: String
     }
     # every row is offered both bindings; only a hole its body holds spells the
     # type, so only that records it (a `bool ==` row spells neither)
-    if (body.stringView.contains needle: "@StringView@") then {
+    if (rtHas :ctx id: body slot: rtHole.slot.holeStringView) then {
         preludeNeed :ctx memb: "@StringView_t"
     }
     tcnC: String
-    if (body.stringView.contains needle: "@T@") then {
+    if (rtHas :ctx id: body slot: rtHole.slot.holeT) then {
         tcnC = spelledCname :ctx tid: tcnTid
     }
     bv.set i: 1 val: tcnC
     rv.set i: 0 val: (ctx.orderVals.set i: ord.valBase val: String)
     rv.set i: 1 val: (ctx.orderVals.set i: ord.valBase + 1 val: String)
     orderEnd :ctx st: ord
-    filled: (fillHolesForCtx
+    filled: (rtFillForCtx
         :ast
         :symtab
         :ctx
-        text: body
+        id: body
         path: key.stringView
-        bindNames: bn
+        bindIds: bn
         bindVals: bv
-        rawNames: rn
+        rawIds: rn
         rawVals: rv
     )
-    bn swap ctx.opBindNames
+    bn swap ctx.opBindIds
     bv swap ctx.opBindVals
-    rn swap ctx.opRawNames
+    rn swap ctx.opRawIds
     rv swap ctx.opRawVals
     return filled
 }
@@ -38272,9 +38656,9 @@ emitC: function {
         condExprs: List String
         needMembs: List String
         fnSigs: (IdMapR ztypes.tid V: String)
-        opBindNames: List String
+        opBindIds: ListVal zast.nameid
         opBindVals: List String
-        opRawNames: List String
+        opRawIds: ListVal zast.nameid
         opRawVals: List String
         ptrVids: ListVal ztypes.vid
         staticVids: IdSet ztypes.vid
@@ -38342,8 +38726,9 @@ emitC: function {
         ioCanonC: (Map String V: String)
         canonSpecs: (Map String V: String)
         unitReqs: List UnitReq
-        nativeTbl: (Map String V: String)
-        nativeConstBody: (Map String V: String)
+        rt: RtTexts.create
+        nativeTbl: (MapRV String v: rtid)
+        nativeConstBody: (MapRV String v: rtid)
         nativeConstPos: (Map String V: String)
         nativeNeed: (Map String V: String)
         nativePulls: (Map String V: String)
