@@ -1668,7 +1668,9 @@ require-guard: bin/zc
 
 # mode-parity -- --cc-mode inproc builds the same PROGRAM as spawn: every run case
 # is built both ways and its output and exit code compared (never the bytes).
-# Refusals must match too. Only zc's temp-path pid is normalised.
+# Refusals must match too. Only zc's temp-path pid is normalised. Each program
+# reads an empty stdin, as the test runner gives it: the list of cases is this
+# loop's stdin, and a program reading its own would eat the cases after it.
 mode-parity: bin/zc $(BUILDDIR)/tcc
 	@mkdir -p $(BUILDDIR)/parity; n=0; bad=0; \
 	while read -r name dir rest; do \
@@ -1682,7 +1684,7 @@ mode-parity: bin/zc $(BUILDDIR)/tcc
 	      > $(BUILDDIR)/parity/$$name.$$mode.build 2>&1 || true; \
 	    if [ -x $(BUILDDIR)/parity/$$name.$$mode ]; then \
 	      ( cd $(BUILDDIR)/parity && xargs -a $$name.args ./$$name.$$mode ) \
-	        > $(BUILDDIR)/parity/$$name.$$mode.out 2>&1; \
+	        < /dev/null > $(BUILDDIR)/parity/$$name.$$mode.out 2>&1; \
 	      echo "exit=$$?" >> $(BUILDDIR)/parity/$$name.$$mode.out; \
 	    else \
 	      cp $(BUILDDIR)/parity/$$name.$$mode.build $(BUILDDIR)/parity/$$name.$$mode.out; \
