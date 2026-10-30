@@ -2832,6 +2832,10 @@ loadNativeTbl: function {
     rf: RowFacts declared: Set String held: Set String replaced: Set String
     for each ln: txt.stringView.lines loop {
         t: ln.trim
+        if (t.startsWith prefix: "[@cond ") then {
+            recordCond :ctx head: (t.substring from: 1 to: ((t.indexOf needle: "]").or d: t.length))
+            continue
+        }
         if (t.startsWith prefix: "[") then {
             co: t.indexOf needle: "]"
             match (
@@ -3068,18 +3072,82 @@ rowNeedAdd: function {ctx: Ctx key: StringView} is {
 # rowNeedAddOne -- one need of a row's `needs=` list (rowNeedAdd): a member of
 # the row's own unit `uname`, or `<unit>.<member>`.
 rowNeedAddOne: function {ctx: Ctx uname: StringView need: StringView} is {
+    rowNeedAddCond :ctx :uname :need cond: condAlways
+}
+
+# rowNeedAddCond -- rowNeedAddOne for a row holding under `cond`: a need
+# `X?NAME` holds where the row does AND natives.tbl's condition NAME does
+rowNeedAddCond: function {ctx: Ctx uname: StringView need: StringView cond: Cond.view} is {
+    q: need.indexOf needle: "?"
+    match (
+        q
+    ) case some then {
+        cb: condBitOf :ctx name: (need.substring from: q + 1 to: need.length)
+        if cb == 0 then return
+        (rowNeedAddBare
+            :ctx
+            :uname
+            need: (need.substring from: 0 to: q)
+            cond: (condWith c: cond bit: cb)
+        )
+    } case none then rowNeedAddBare :ctx :uname :need :cond
+}
+
+# rowNeedAddBare -- one need with no condition of its own, under `cond`
+rowNeedAddBare: function {ctx: Ctx uname: StringView need: StringView cond: Cond.view} is {
     qd: need.indexOf needle: "."
     match (
         qd
     ) case some then {
-        (needsAddM
+        (needsAddMCond
             :ctx
             uname: (need.substring from: 0 to: qd)
             memb: (need.substring from: qd + 1 to: need.length)
+            :cond
         )
     } case none then {
-        if uname.length > 0 then needsAddM :ctx :uname memb: need
+        if uname.length > 0 then needsAddMCond :ctx :uname memb: need :cond
     }
+}
+
+# condBitOf -- the bit of natives.tbl's condition `name`; 0, and a failure,
+# for a name no `[@cond]` row declares
+condBitOf: function {ctx: Ctx name: StringView} out u64 is {
+    k: u64
+    for k < ctx.condNames.length loop {
+        if (ctx.condNames.get i: k).stringView == name then return 1.u64 << k
+        k = k + 1
+    }
+    (emitFail
+        :ctx
+        what: "natives.tbl: a need names the condition '\{name}', which no [@cond] row declares"
+        line: 0
+    )
+    return 0
+}
+
+# recordCond -- a `[@cond NAME = <C expression>]` row: the condition a need
+# `X?NAME` holds under, tested in the written C by the expression
+recordCond: function {ctx: Ctx head: StringView} is {
+    rest: head.substring from: 6 to: head.length
+    eq: (rest.indexOf needle: "=").or d: rest.length
+    nm: (rest.substring from: 0 to: eq).trim
+    ex: ""
+    if eq < rest.length then ex = (rest.substring from: eq + 1 to: rest.length).trim
+    bad: String
+    if (
+        (nm.length == 0) or (ex.length == 0)
+    ) then bad = "'[\{head}]' is not `@cond NAME = <C expression>`"
+    for each c: ctx.condNames loop {
+        if c.stringView == nm then bad = "the condition '\{nm}' is declared twice"
+    }
+    if ctx.condNames.length == 64 then bad = "more than 64 conditions".string
+    if bad.length > 0 then {
+        emitFail :ctx what: "natives.tbl: \{bad}" line: 0
+        return
+    }
+    ctx.condNames.append from: nm.string
+    ctx.condExprs.append from: ex.string
 }
 
 # nativePtrArgsOf -- true when a row's body takes its operands by pointer, so
@@ -4160,6 +4228,19 @@ Ctx: class {
     # to name the fragment. A member of `@unit` is the unit ITSELF being
     # demanded.
     needUnits: List String
+    # per demand: it holds in every configuration; the others' conditions are
+    # terms in condTermDemand/condTermMask (Cond)
+    needAlways: ListVal bool
+    condTermDemand: ListVal u64
+    condTermMask: ListVal u64
+    # bumped whenever a demand's condition grows: closeRowNeeds re-runs a fired
+    # row's needs when its condition changed
+    condEpoch: u64
+    rowCondEpochAt: u64
+    rowCondKey: (IdMapR u64 V: String)
+    # natives.tbl's `[@cond NAME = expr]` rows, by bit (Cond)
+    condNames: List String
+    condExprs: List String
     # members some fragment needs declared before it can be emitted
     needMembs: List String
     # each function's "RET cname(PARAMS)", by its type: the forward
@@ -4465,6 +4546,8 @@ Ctx: class {
     # the fired rows whose `needs=` are registered (closeRowNeeds), and the
     # count of demands when that was last made whole
     rowsClosed: IdSet u64
+    # the closed rows that hold in every configuration: their needs are final
+    rowsAlwaysClosed: IdSet u64
     rowNeedsAt: u64
     # the members fragments were emitted for
     fragMembs: List String
@@ -4493,6 +4576,11 @@ Ctx: class {
     # memberWord slot (memberKey): a template's member section is written for an
     # instance only where its member is here (sectionedText)
     memberUses: IdSet u64
+    # a member used only under conditions has terms here (memberCond); one
+    # used in every configuration after that is in memberAlways
+    memberCondKey: ListVal u64
+    memberCondMask: ListVal u64
+    memberAlways: IdSet u64
     # the template members' vocabulary
     memberWords: zast.Vocab
     # the `members=` of the fragment rows that have one, by row
@@ -5827,10 +5915,44 @@ emitValueTakeInvalidations: function {
 # name is composed from the pair once, where the fragment is loaded; nothing
 # else ever needs the two halves stuck together.
 needsAddM: function {ctx: Ctx uname: StringView memb: StringView} is {
-    if (needsHasM :ctx :uname :memb) then return
+    i: needsIndex :ctx :uname :memb
+    if i > 0 when (ctx.needAlways.get i: i - 1) then return
+    if i > 0 then {
+        needsAddMCond :ctx :uname :memb cond: condAlways
+        return
+    }
     ctx.needUnits.append from: uname.string
     ctx.needMembs.append from: memb.string
-    needsAddPulls :ctx :uname :memb
+    ctx.needAlways.append true
+    pl: pullsOf :ctx :uname :memb
+    if pl.length > 0 then needsAddPullsIn :ctx pulls: pl.stringView cond: condAlways
+}
+
+# needsAddMCond -- needsAddM in the configurations `cond` holds in: a demand
+# met in fewer than every one is written inside `#if` (Cond), and one met again
+# under another condition holds under either
+needsAddMCond: function {ctx: Ctx uname: StringView memb: StringView cond: Cond.view} is {
+    i: needsIndex :ctx :uname :memb
+    if i == 0 then {
+        ctx.needUnits.append from: uname.string
+        ctx.needMembs.append from: memb.string
+        ctx.needAlways.append cond.always
+        if cond.always.not then {
+            for each t: cond.terms loop {
+                ctx.condTermDemand.append ctx.needUnits.length - 1
+                ctx.condTermMask.append t
+            }
+            ctx.condEpoch = ctx.condEpoch + 1
+        }
+    } else {
+        if (ctx.needAlways.get i: i - 1) then return
+        cur: demandCond :ctx at: i - 1
+        if (condMerge dst: cur src: cond).not then return
+        setDemandCond :ctx at: i - 1 c: cur
+        ctx.condEpoch = ctx.condEpoch + 1
+    }
+    pl: pullsOf :ctx :uname :memb
+    if pl.length > 0 then needsAddPullsIn :ctx pulls: pl.stringView :cond
 }
 
 # needsAddPulls -- the demands a member's row `pulls=` along with it (natives.tbl):
@@ -5840,30 +5962,33 @@ needsAddM: function {ctx: Ctx uname: StringView memb: StringView} is {
 # emission by reading its unit's demands back -- which is what let io's runtime
 # gate on a predicate no row could state. The pulled names wear the `@` that
 # marks a demand outside the member space: no declaration is called sv_cstr.
-needsAddPulls: function {ctx: Ctx uname: StringView memb: StringView} is {
-    # copied out: each pulled demand below writes the tables the row is read from
+pullsOf: function {ctx: Ctx.view uname: StringView memb: StringView} out String is {
+    # copied out: each pulled demand writes the tables the row is read from
     pl: String
-    {
-        pg: ctx.nativePulls.get key: "\{uname}.\{memb}"
+    pg: ctx.nativePulls.get key: "\{uname}.\{memb}"
+    match (
+        pg
+    ) case some then {
+        pl = pg.copy
+    } case none then null
+    return pl
+}
+
+# needsAddPullsIn -- each `<unit>.<member>` of a row's `pulls=` list, demanded
+# under the condition of the member that pulls it
+needsAddPullsIn: function {ctx: Ctx pulls: StringView cond: Cond.view} is {
+    for each one: (pulls.split sep: ",") loop {
+        qd: one.indexOf needle: "."
         match (
-            pg
+            qd
         ) case some then {
-            pl = pg.copy
+            (needsAddMCond
+                :ctx
+                uname: (one.substring from: 0 to: qd)
+                memb: (one.substring from: qd + 1 to: one.length)
+                :cond
+            )
         } case none then null
-    }
-    if pl.length > 0 then {
-        for each one: (pl.stringView.split sep: ",") loop {
-            qd: one.indexOf needle: "."
-            match (
-                qd
-            ) case some then {
-                (needsAddM
-                    :ctx
-                    uname: (one.substring from: 0 to: qd)
-                    memb: (one.substring from: qd + 1 to: one.length)
-                )
-            } case none then null
-        }
     }
 }
 
@@ -5875,17 +6000,23 @@ preludeNeed: function {ctx: Ctx memb: StringView} is {
 
 # needsHasM -- true when the (unit, member) pair was demanded.
 needsHasM: function {ctx: Ctx.view uname: StringView memb: StringView} out bool is {
+    return (needsIndex :ctx :uname :memb) > 0
+}
+
+# needsIndex -- the (unit, member) pair's position among the demands, plus
+# one; 0 when it was not demanded
+needsIndex: function {ctx: Ctx.view uname: StringView memb: StringView} out u64 is {
     i: u64
     n: ctx.needUnits.length
     for i < n loop {
         u: ctx.needUnits.get :i
         if u.stringView == uname then {
             m: ctx.needMembs.get :i
-            if m.stringView == memb then return true
+            if m.stringView == memb then return i + 1
         }
         i = i + 1
     }
-    return false
+    return 0
 }
 
 # typeUseAdd -- record that the program constructed this type.
@@ -37392,9 +37523,14 @@ piecedText: function {ctx: Ctx.view text: StringView} out String is {
             :ctx
             path: (hd.substring from: 0 to: ((hd.indexOf needle: " ").or d: hd.length))
         )
-        if row > 0 when (rowDemandFired :ctx i: row - 1) then (res.append
-            (text.substring from: sp.bodyFrom to: sp.bodyTo)
-        )
+        if row > 0 when (rowDemandFired :ctx i: row - 1) then {
+            body: text.substring from: sp.bodyFrom to: sp.bodyTo
+            if (rowAlways :ctx i: row - 1) then {
+                res.append body
+            } else {
+                wrapCond :ctx c: (rowCond :ctx i: row - 1) :body buf: res
+            }
+        }
         pos = sp.next
     }
     return res
@@ -37416,7 +37552,16 @@ memberUsed: function {ctx: Ctx.view mono: ztypes.tid member: u64} out bool is {
 # instance was already written without names a function the C never defines.
 noteMemberUse: function {ctx: Ctx mono: ztypes.tid member: u64} is {
     k: memberKey :mono :member
-    if (ctx.memberUses.has item: k) then return
+    if (ctx.memberUses.has item: k) then {
+        if (ctx.memberCondKey.contains item: k) then ctx.memberAlways.add item: k
+        return
+    }
+    addMemberUse :ctx :mono :k
+}
+
+# addMemberUse -- record member key `k` of instance `mono` as used. A member its
+# instance was already written without names a function the C never defines.
+addMemberUse: function {ctx: Ctx mono: ztypes.tid k: u64} is {
     if (ctx.membersLeftOut.has item: k) then {
         cn: ctxCname :ctx tid: mono
         (emitFail
@@ -37427,6 +37572,53 @@ noteMemberUse: function {ctx: Ctx mono: ztypes.tid member: u64} is {
         return
     }
     ctx.memberUses.add item: k
+}
+
+# noteMemberUseCond -- noteMemberUse under `cond`: the section is written inside
+# `#if` while every use of the member holds in fewer than every configuration
+noteMemberUseCond: function {ctx: Ctx mono: ztypes.tid member: u64 cond: Cond.view} is {
+    if cond.always then {
+        noteMemberUse :ctx :mono :member
+        return
+    }
+    k: memberKey :mono :member
+    if (ctx.memberUses.has item: k) when (memberCondOf :ctx key: k).always then return
+    cur: memberCondOf :ctx key: k
+    if (ctx.memberUses.has item: k).not then cur = Cond always: false terms: ListVal u64
+    if (condMerge dst: cur src: cond).not when (ctx.memberUses.has item: k) then return
+    w: u64
+    j: u64
+    for j < ctx.memberCondKey.length loop {
+        kk: ctx.memberCondKey.get i: j
+        mm: ctx.memberCondMask.get i: j
+        j = j + 1
+        if kk == k then continue
+        ctx.memberCondKey.set i: w val: kk
+        ctx.memberCondMask.set i: w val: mm
+        w = w + 1
+    }
+    for ctx.memberCondKey.length > w loop {
+        ctx.memberCondKey.pop
+        ctx.memberCondMask.pop
+    }
+    for each t: cur.terms loop {
+        ctx.memberCondKey.append k
+        ctx.memberCondMask.append t
+    }
+    if (ctx.memberUses.has item: k).not then addMemberUse :ctx :mono :k
+}
+
+# memberCondOf -- the condition member key `key` is used under
+memberCondOf: function {ctx: Ctx.view key: u64} out Cond is {
+    if (ctx.memberAlways.has item: key) then return condAlways
+    c: Cond always: false terms: ListVal u64
+    j: u64
+    for j < ctx.memberCondKey.length loop {
+        if (ctx.memberCondKey.get i: j) == key then c.terms.append (ctx.memberCondMask.get i: j)
+        j = j + 1
+    }
+    if c.terms.length == 0 then return condAlways
+    return c
 }
 
 # sectionedText -- an instance's template text as this program writes it: the
@@ -37443,7 +37635,83 @@ sectionedText: function {ctx: Ctx mono: ztypes.tid text: StringView} out String 
     kept: ListVal bool
     sectionHeads :ctx :mono :text :marks :kept
     closeSectionNeeds :text :marks :kept
-    return (writeSections :ctx :mono :text :marks :kept)
+    # a section kept only for a call some configurations make is written
+    # inside `#if`, and so is each section only it needs
+    sconds: List Cond
+    if (monoCondMembers :ctx :mono) then sectionConds :ctx :mono :text :marks :kept conds: sconds
+    return (writeSections :ctx :mono :text :marks :kept :sconds)
+}
+
+# monoCondMembers -- some member of instance `mono` is used only under a
+# condition
+monoCondMembers: function {ctx: Ctx.view mono: ztypes.tid} out bool is {
+    for each k: ctx.memberCondKey loop {
+        if (k / 128) == mono.u64 when (ctx.memberAlways.has item: k).not then return true
+    }
+    return false
+}
+
+# sectionConds -- the condition each section of `mono`'s text is written under:
+# a kept one's member's, ORed into each section it needs, until none grows; a
+# section kept for no member of its own holds only where those that need it do
+sectionConds: function {
+    ctx: Ctx.view
+    mono: ztypes.tid
+    text: StringView
+    marks: (ListVal u64).view
+    kept: (ListVal bool).view
+    conds: List Cond
+} is {
+    k: u64
+    for k < kept.length loop {
+        c: Cond always: false terms: ListVal u64
+        slot: (ctx.memberWords.slotOf
+            text: (text.substring from: (marks.get i: k * 4) to: (marks.get i: k * 4 + 1))
+        )
+        mk: memberKey :mono member: slot
+        if (kept.get i: k) when (ctx.memberUses.has item: mk) then c = memberCondOf :ctx key: mk
+        conds.append c
+        k = k + 1
+    }
+    grew: true
+    for grew loop {
+        grew = false
+        j: u64
+        for j < kept.length loop {
+            if (kept.get i: j) when (sectionNeedsUnder :text :marks :conds from: j) then grew = true
+            j = j + 1
+        }
+    }
+}
+
+# sectionNeedsUnder -- OR section `from`'s condition into each section it needs:
+# true when one grew
+sectionNeedsUnder: function {
+    text: StringView marks: (ListVal u64).view conds: List Cond from: u64
+} out bool is {
+    grew: false
+    src: Cond always: false terms: ListVal u64
+    {
+        sc: conds.get i: from
+        src.always = sc.always
+        for each t: sc.terms loop src.terms.append t
+    }
+    at: marks.get i: from * 4 + 2
+    to: marks.get i: from * 4 + 3
+    for at < to loop {
+        cm: ((text.substring from: at :to).indexOf needle: ",").or d: to - at
+        nm: text.substring from: at to: at + cm
+        j: u64
+        for j < conds.length loop {
+            if (text.substring from: (marks.get i: j * 4) to: (marks.get i: j * 4 + 1)) == nm then {
+                dst: conds.getMut i: j
+                if (condMerge :dst :src) then grew = true
+            }
+            j = j + 1
+        }
+        at = at + cm + 1
+    }
+    return grew
 }
 
 # sectionHeads -- each member section's name and needs, in order, and whether
@@ -37536,6 +37804,8 @@ writeSections: function {
     text: StringView
     marks: (ListVal u64).view
     kept: (ListVal bool).view
+    # each section's condition, where some member is used under one
+    sconds: (List Cond).view
 } out String is {
     res: String
     i: u64
@@ -37548,8 +37818,31 @@ writeSections: function {
             return res
         }
         if (kept.get :i) then {
-            sectionRowNeeds :ctx :text from: (marks.get i: i * 4 + 2) to: (marks.get i: i * 4 + 3)
-            res.append (text.substring from: sp.bodyFrom to: sp.bodyTo)
+            if i < sconds.length then {
+                sc: Cond always: false terms: ListVal u64
+                {
+                    so: sconds.get :i
+                    sc.always = so.always
+                    for each t: so.terms loop sc.terms.append t
+                }
+                (sectionRowNeeds
+                    :ctx
+                    :text
+                    from: (marks.get i: i * 4 + 2)
+                    to: (marks.get i: i * 4 + 3)
+                    cond: sc
+                )
+                wrapCond :ctx c: sc body: (text.substring from: sp.bodyFrom to: sp.bodyTo) buf: res
+            } else {
+                (sectionRowNeeds
+                    :ctx
+                    :text
+                    from: (marks.get i: i * 4 + 2)
+                    to: (marks.get i: i * 4 + 3)
+                    cond: condAlways
+                )
+                res.append (text.substring from: sp.bodyFrom to: sp.bodyTo)
+            }
         } else {
             slot: (ctx.memberWords.slotOf
                 text: (text.substring from: (marks.get i: i * 4) to: (marks.get i: i * 4 + 1))
@@ -37564,12 +37857,12 @@ writeSections: function {
 
 # sectionRowNeeds -- the runtime rows a kept section needs: each need that names
 # a row (`prelude.@panic`, never a sibling section, whose name has no dot)
-sectionRowNeeds: function {ctx: Ctx text: StringView from: u64 to: u64} is {
+sectionRowNeeds: function {ctx: Ctx text: StringView from: u64 to: u64 cond: Cond.view} is {
     at: from
     for at < to loop {
         cm: ((text.substring from: at :to).indexOf needle: ",").or d: to - at
         nd: text.substring from: at to: at + cm
-        if (nd.contains needle: ".") then rowNeedAddOne :ctx uname: "" need: nd
+        if (nd.contains needle: ".") then rowNeedAddCond :ctx uname: "" need: nd :cond
         at = at + cm + 1
     }
 }
@@ -37845,6 +38138,14 @@ emitC: function {
         condDepth: 0
         emitErrors: List zast.ErrorData
         needUnits: List String
+        needAlways: ListVal bool
+        condTermDemand: ListVal u64
+        condTermMask: ListVal u64
+        condEpoch: 0
+        rowCondEpochAt: 0
+        rowCondKey: (IdMapR u64 V: String)
+        condNames: List String
+        condExprs: List String
         needMembs: List String
         fnSigs: (IdMapR ztypes.tid V: String)
         opBindNames: List String
@@ -37940,6 +38241,7 @@ emitC: function {
         hoistTags: (MapRV String v: zast.nameid)
         rowsWritten: IdSet u64
         rowsClosed: IdSet u64
+        rowsAlwaysClosed: IdSet u64
         rowNeedsAt: 0
         fragMembs: List String
         fragNames: List String
@@ -37950,6 +38252,9 @@ emitC: function {
         rowsInPlace: IdSet u64
         piecedFrags: Set String
         memberUses: IdSet u64
+        memberCondKey: ListVal u64
+        memberCondMask: ListVal u64
+        memberAlways: IdSet u64
         memberWords: (zast.Vocab.create block: memberWord)
         fragMembers: (IdMapR u64 V: String)
         membersLeftOut: IdSet u64
@@ -41443,6 +41748,194 @@ bindFragUnitDecls: function {symtab: zenv.ZSymbolTable.view ctx: Ctx ast: Ast.vi
     }
 }
 
+# Cond -- the configurations C holds in: every one (`always`), or the OR of
+# `terms`, each the AND of the natives.tbl conditions (`[@cond NAME = expr]`)
+# whose bits it sets. A demand, a fired row and a template member each hold
+# one: a need `X?NAME` holds where its row does AND NAME does, and C reached
+# in fewer than every configuration is written inside `#if` (wrapCond), so no
+# configuration compiles C it never calls.
+Cond: class {
+    always: bool
+    terms: ListVal u64
+}
+
+# condAlways -- the condition that holds in every configuration
+condAlways: function out Cond is {
+    return (Cond always: true terms: ListVal u64)
+}
+
+# condWith -- `c` AND the condition whose bit is `bit`
+condWith: function {c: Cond.view bit: u64} out Cond is {
+    r: Cond always: false terms: ListVal u64
+    if c.always then {
+        r.terms.append bit
+        return r
+    }
+    for each t: c.terms loop condAddTerm terms: r.terms term: t | bit
+    return r
+}
+
+# condAddTerm -- OR the term `term` into `terms`: nothing when a term there
+# already holds wherever it does, and the terms it holds wherever they do
+# dropped. True when `terms` changed.
+condAddTerm: function {terms: ListVal u64 term: u64} out bool is {
+    for each t: terms loop {
+        if (t & term) == t then return false
+    }
+    w: u64
+    k: u64
+    for k < terms.length loop {
+        t: terms.get i: k
+        k = k + 1
+        if (t & term) == term then continue
+        terms.set i: w val: t
+        w = w + 1
+    }
+    for terms.length > w loop terms.pop
+    terms.append term
+    return true
+}
+
+# condMerge -- OR `src` into `dst`: true when `dst` changed
+condMerge: function {dst: Cond src: Cond.view} out bool is {
+    if dst.always then return false
+    if src.always then {
+        dst.always = true
+        for dst.terms.length > 0 loop dst.terms.pop
+        return true
+    }
+    grew: false
+    for each t: src.terms loop {
+        if (condAddTerm terms: dst.terms term: t) then grew = true
+    }
+    return grew
+}
+
+# condKey -- a condition as text, equal for equal conditions
+condKey: function {c: Cond.view} out String is {
+    if c.always then return "*".string
+    k: String
+    for each t: c.terms loop k.append "\{t},"
+    return k
+}
+
+# condExprC -- the C preprocessor test a condition is: its terms ORed, each the
+# AND of its conditions' expressions
+condExprC: function {ctx: Ctx.view c: Cond.view} out String is {
+    e: String
+    for each t: c.terms loop {
+        if e.length > 0 then e.append " || "
+        e.append "("
+        first: true
+        k: u64
+        for k < ctx.condNames.length loop {
+            if (t & (1.u64 << k)) != 0 then {
+                if first.not then e.append " && "
+                first = false
+                e.append "("
+                e.append (ctx.condExprs.get i: k)
+                e.append ")"
+            }
+            k = k + 1
+        }
+        e.append ")"
+    }
+    return e
+}
+
+# wrapCond -- `body` into `buf`, inside `#if` where `c` holds in fewer than
+# every configuration
+wrapCond: function {ctx: Ctx.view c: Cond.view body: StringView buf: String.borrow} is {
+    if c.always or (c.terms.length == 0) then {
+        buf.append body
+        return
+    }
+    buf.append "#if "
+    buf.append (condExprC :ctx :c)
+    buf.append "\n"
+    buf.append body
+    if (body.endsWith suffix: "\n").not then buf.append "\n"
+    buf.append "#endif\n"
+}
+
+# demandCond -- the condition demand `at` holds under
+demandCond: function {ctx: Ctx.view at: u64} out Cond is {
+    if (ctx.needAlways.get i: at) then return condAlways
+    c: Cond always: false terms: ListVal u64
+    k: u64
+    for k < ctx.condTermDemand.length loop {
+        if (ctx.condTermDemand.get i: k) == at then c.terms.append (ctx.condTermMask.get i: k)
+        k = k + 1
+    }
+    return c
+}
+
+# setDemandCond -- demand `at` holds under `c` now
+setDemandCond: function {ctx: Ctx at: u64 c: Cond.view} is {
+    w: u64
+    k: u64
+    for k < ctx.condTermDemand.length loop {
+        d: ctx.condTermDemand.get i: k
+        m: ctx.condTermMask.get i: k
+        k = k + 1
+        if d == at then continue
+        ctx.condTermDemand.set i: w val: d
+        ctx.condTermMask.set i: w val: m
+        w = w + 1
+    }
+    for ctx.condTermDemand.length > w loop {
+        ctx.condTermDemand.pop
+        ctx.condTermMask.pop
+    }
+    ctx.needAlways.set i: at val: c.always
+    if c.always then return
+    for each t: c.terms loop {
+        ctx.condTermDemand.append at
+        ctx.condTermMask.append t
+    }
+}
+
+# rowAlways -- the fired row `i` holds in every configuration: a demand it
+# answers does, or written C spelled its type
+rowAlways: function {ctx: Ctx.view i: u64} out bool is {
+    if (ctx.fragTypeTids.get :i).isZero.not then return true
+    d: ctx.fragMembs.get :i
+    u: ctx.fragUnits.get :i
+    dv: d.stringView
+    at: u64
+    for at < dv.length loop {
+        rem: dv.substring from: at to: dv.length
+        cm: (rem.indexOf needle: ",").or d: rem.length
+        if cm > 0 then {
+            x: needsIndex :ctx uname: u.stringView memb: (rem.substring from: 0 to: cm)
+            if x > 0 when (ctx.needAlways.get i: x - 1) then return true
+        }
+        at = at + cm + 1
+    }
+    return false
+}
+
+# rowCond -- the condition the fired row `i` holds under: the OR of the
+# demands it answers
+rowCond: function {ctx: Ctx.view i: u64} out Cond is {
+    if (rowAlways :ctx :i) then return condAlways
+    c: Cond always: false terms: ListVal u64
+    d: ctx.fragMembs.get :i
+    u: ctx.fragUnits.get :i
+    dv: d.stringView
+    at: u64
+    for at < dv.length loop {
+        rem: dv.substring from: at to: dv.length
+        cm: (rem.indexOf needle: ",").or d: rem.length
+        if cm > 0 then {
+            x: needsIndex :ctx uname: u.stringView memb: (rem.substring from: 0 to: cm)
+            if x > 0 then condMerge dst: c src: (demandCond :ctx at: x - 1)
+        }
+        at = at + cm + 1
+    }
+    return c
+}
+
 # rowDemandFired -- true when ANY demand the row at `i` names was demanded for that
 # row's unit. `demand=a,b,c` means ANY OF: a helper several members share is one
 # row naming the members that reach it, so it loads once however many fired. A
@@ -41500,18 +41993,37 @@ emitRuntimeUnit: function {
         # a piece is written in place by its file (loadPieces)
         if isU when (ctx.rowsInPlace.has item: i) then isU = false
         if isU when (ctx.rowsWritten.has item: i).not when (rowDemandFired :ctx :i) then {
-            ctx.rowsWritten.add item: i
-            closeRowNeeds :ctx
-            rowMemberUses :ast :symtab :ctx row: i
-            fl: (ctx.fragNames.get :i).copy
-            for each fr: (fl.stringView.split sep: ",") loop {
-                if fr.length > 0 then {
-                    ioFrag :ast :symtab :ctx :runtimeDir frag: fr :buf
-                }
-            }
+            writeRuntimeRow :ast :symtab :ctx :runtimeDir row: i :buf
         }
         i = i + 1
     }
+}
+
+# writeRuntimeRow -- a fired row's fragments, inside `#if` where the row holds
+# in fewer than every configuration (rowCond)
+writeRuntimeRow: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    runtimeDir: StringView
+    row: u64
+    buf: String.borrow
+} is {
+    ctx.rowsWritten.add item: row
+    closeRowNeeds :ctx
+    rowMemberUses :ast :symtab :ctx :row
+    fl: (ctx.fragNames.get i: row).copy
+    if (rowAlways :ctx i: row) then {
+        for each fr: (fl.stringView.split sep: ",") loop {
+            if fr.length > 0 then ioFrag :ast :symtab :ctx :runtimeDir frag: fr :buf
+        }
+        return
+    }
+    rb: String
+    for each fr: (fl.stringView.split sep: ",") loop {
+        if fr.length > 0 then ioFrag :ast :symtab :ctx :runtimeDir frag: fr buf: rb
+    }
+    wrapCond :ctx c: (rowCond :ctx i: row) body: rb.stringView :buf
 }
 
 # needsOutsidePrelude -- whether a need registered from position `from` on is
@@ -41542,19 +42054,39 @@ rowMemberUses: function {ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx r
             ml = mo.copy
         } case none then null
     }
-    for each one: (ml.stringView.split sep: ",") loop {
-        dot: one.lastIndexOf needle: "."
-        match (
-            dot
-        ) case some then {
-            mt: ioCanonTidAny :ast :symtab :ctx canon: (one.substring from: 0 to: dot)
-            sl: ctx.memberWords.slotOf text: (one.substring from: dot + 1 to: one.length)
-            # a destructor called is a destroy use, whatever the type (noteDestroyUse)
-            if mt.isZero.not when sl == memberWord.slot.destroy then {
-                noteDestroyUse :symtab :ctx tid: mt
-            } else if mt.isZero.not then noteMemberUse :ctx mono: mt member: sl
-        } case none then null
+    for each one: (ml.stringView.split sep: ",") loop rowMemberUse :ast :symtab :ctx :row :one
+}
+
+# rowMemberUse -- one `<canon>.<member>` entry of row `row`'s `members=`, its
+# `?NAME` the condition the fragment calls it under
+rowMemberUse: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    row: u64
+    one: StringView
+} is {
+    qm: (one.indexOf needle: "?").or d: one.length
+    ent: one.substring from: 0 to: qm
+    dot: (ent.lastIndexOf needle: ".").or d: ent.length
+    if dot == ent.length then return
+    mt: ioCanonTidAny :ast :symtab :ctx canon: (ent.substring from: 0 to: dot)
+    if mt.isZero then return
+    sl: ctx.memberWords.slotOf text: (ent.substring from: dot + 1 to: ent.length)
+    # a destructor called is a destroy use, whatever the type (noteDestroyUse)
+    if sl == memberWord.slot.destroy then {
+        noteDestroyUse :symtab :ctx tid: mt
+        return
     }
+    cb: u64
+    if qm < one.length then cb = condBitOf :ctx name: (one.substring from: qm + 1 to: one.length)
+    if cb == 0 when (rowAlways :ctx i: row) then {
+        noteMemberUse :ctx mono: mt member: sl
+        return
+    }
+    rc: rowCond :ctx i: row
+    if cb != 0 then rc = condWith c: rc bit: cb
+    noteMemberUseCond :ctx mono: mt member: sl cond: rc
 }
 
 # closeRowNeeds -- register the `needs=` of every fired row, until a round
@@ -41563,23 +42095,61 @@ rowMemberUses: function {ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx r
 # same walk, ahead of the C that calls it. Nothing to do while no demand has
 # been added since the last time.
 closeRowNeeds: function {ctx: Ctx} is {
-    for ctx.needUnits.length != ctx.rowNeedsAt loop {
+    for (ctx.needUnits.length != ctx.rowNeedsAt) or (ctx.condEpoch != ctx.rowCondEpochAt) loop {
         ctx.rowNeedsAt = ctx.needUnits.length
+        # a demand's condition grew: a fired row it fires holds in more
+        # configurations, and so do its needs
+        recond: ctx.condEpoch != ctx.rowCondEpochAt
+        ctx.rowCondEpochAt = ctx.condEpoch
         i: u64
         for i < ctx.fragUnits.length loop {
-            if (ctx.rowsClosed.has item: i).not when (rowDemandFired :ctx :i) then {
-                ctx.rowsClosed.add item: i
-                un: (ctx.fragUnits.get :i).copy
-                rowNeeds :ctx row: i uname: un.stringView
-            }
+            if (rowDemandFired :ctx :i) then closeRow :ctx row: i :recond
             i = i + 1
         }
     }
 }
 
+# closeRow -- register fired row `row`'s needs the first time the walk meets it,
+# and again when a demand's condition grew (`recond`) and the row's may have
+# with it; a row holding everywhere can hold in no more places
+closeRow: function {ctx: Ctx row: u64 recond: bool} is {
+    if (ctx.rowsClosed.has item: row) then {
+        if recond when (ctx.rowsAlwaysClosed.has item: row).not then rowNeedsUnder :ctx :row
+        return
+    }
+    ctx.rowsClosed.add item: row
+    if (rowAlways :ctx i: row).not then {
+        rowNeedsUnder :ctx :row
+        return
+    }
+    ctx.rowsAlwaysClosed.add item: row
+    un: (ctx.fragUnits.get i: row).copy
+    rowNeeds :ctx :row uname: un.stringView cond: condAlways
+}
+
+# rowNeedsUnder -- rowNeeds for fired row `row` under the condition it holds in,
+# once per condition: a row the walk revisits under the same one adds nothing
+rowNeedsUnder: function {ctx: Ctx row: u64} is {
+    c: rowCond :ctx i: row
+    k: condKey :c
+    seen: false
+    {
+        ko: ctx.rowCondKey.get key: row
+        match (
+            ko
+        ) case some then {
+            seen = ko.stringView == k
+        } case none then null
+    }
+    if seen then return
+    ctx.rowCondKey.set key: row value: k.copy
+    un: (ctx.fragUnits.get i: row).copy
+    rowNeeds :ctx :row uname: un.stringView cond: c
+}
+
 # rowNeeds -- register what fragment row `row` of unit `uname` needs (its
 # `needs=`, ctx.fragNeeds)
-rowNeeds: function {ctx: Ctx row: u64 uname: StringView} is {
+rowNeeds: function {ctx: Ctx row: u64 uname: StringView cond: Cond.view} is {
     nd: String
     {
         ndo: ctx.fragNeeds.get key: row
@@ -41590,7 +42160,7 @@ rowNeeds: function {ctx: Ctx row: u64 uname: StringView} is {
         } case none then null
     }
     for each n1: (nd.stringView.split sep: ",") loop {
-        if n1.length > 0 then rowNeedAddOne :ctx :uname need: n1
+        if n1.length > 0 then rowNeedAddCond :ctx :uname need: n1 :cond
     }
 }
 

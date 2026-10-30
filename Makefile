@@ -1252,7 +1252,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2370860
+ALLOC_BASELINE := 2383511
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -2203,7 +2203,7 @@ cdead-guard: bin/zc
 # configuration or a filter that stops seeing them cannot pass. The baseline is
 # today's count summed over the configurations (gcc corpus, gcc zc, clang
 # corpus, clang zc); lower it as it falls. Skipped without clang.
-CC_UNUSED_BASELINE := 6 0 92 0
+CC_UNUSED_BASELINE := 0 0 0 0
 CC_UNUSED_FLAGS := -std=c17 -c -o /dev/null -Wunused-function -Wunused-variable -Wunused-const-variable \
 	-Werror=implicit-function-declaration
 CC_UNUSED_PROBE_gcc := cdead_dead_fn cdead_dead_str cdead_dead_word_fn
@@ -2325,11 +2325,31 @@ def demands(key, a):
     d = a.get('demand') or key.rsplit('.', 1)[-1]
     return [x for x in d.split(',') if x]
 
+# the conditions `[@cond NAME = expr]` declares; a need or a members= entry
+# `X?NAME` is the need X, under a condition the table must declare
+conds = set()
+for ln in open(os.path.join(rt, 'natives.tbl')):
+    cm = re.match(r'\[@cond (\w+) =', ln.strip())
+    if cm: conds.add(cm.group(1))
+
+def uncond(x, where):
+    x, q, c = x.partition('?')
+    if q and c not in conds:
+        errs.append(f'{where}: the condition {c} of {x} is declared by no [@cond] row')
+    return x
+
+def tbl_rows():
+    # natives.tbl's lines, the [@cond] rows left out: they are no row
+    for ln in open(os.path.join(rt, 'natives.tbl')):
+        if not ln.strip().startswith('[@cond '):
+            yield ln
+
 def needs_of(key, a):
     u = unit_of(key)
     out = []
     for n in (a.get('needs', '') + ',' + a.get('pulls', '')).split(','):
         if n:
+            n = uncond(n, key)
             out.append(tuple(n.split('.', 1)) if '.' in n else (u, n))
     return out
 
@@ -2422,7 +2442,7 @@ for f in files:
 # a unit's pieces are loaded only from the fragments of the rows answering
 # its `@unit` (loadPieces): a piece elsewhere is never a row
 unit_frags = set()
-for ln in open(os.path.join(rt, 'natives.tbl')):
+for ln in tbl_rows():
     s = ln.strip()
     if s.startswith('[') and ']' in s:
         k, a0 = attrs(s[1:s.index(']')])
@@ -2436,7 +2456,7 @@ for key, a, body, f in pieces:
 # the same name would each write the other's (Database.prepare wrote
 # Transaction.prepare)
 word_cls = {}
-for ln in open(os.path.join(rt, 'natives.tbl')):
+for ln in tbl_rows():
     s = ln.strip()
     m0 = re.match(r'\[(\w+)\.(\w+)\.(\w+)\b', s)
     if not m0 or ']' not in s: continue
@@ -2454,7 +2474,7 @@ for k in set(keys):
 
 # --- every row that can fire: natives.tbl rows and the pieces ----------------
 rows = []            # (key, attrs, text it writes, where)
-for ln in open(os.path.join(rt, 'natives.tbl')):
+for ln in tbl_rows():
     s = ln.strip()
     if not s.startswith('[') or ']' not in s:
         continue
@@ -2536,7 +2556,7 @@ for f in files:
     # the sibling sections it needs; the text outside the sections with the marker's
     secs = {}
     for sm in re.finditer(r'/\*@@member (\S+)(?: needs=(\S*))?@@\*/(.*?)/\*@@end@@\*/', t, re.S):
-        secs[sm.group(1)] = ([x for x in (sm.group(2) or '').split(',') if x], sm.group(3))
+        secs[sm.group(1)] = ([uncond(x, f) for x in (sm.group(2) or '').split(',') if x], sm.group(3))
     def sec_decl(name, seen):
         if name in seen or name not in secs: return []
         seen.add(name)
@@ -2597,14 +2617,14 @@ for line, name, body in items:
 
 # a fragment calling a member of a container instance by its canon
 # (`z_@List_String@_append`) declares it on its row: `members=List_String.append`
-for ln in open(os.path.join(rt, 'natives.tbl')):
+for ln in tbl_rows():
     s = ln.strip()
     if not s.startswith('[') or ']' not in s:
         continue
     key, a = attrs(s[1:s.index(']')])
     if not a.get('frag') or 'const' in a:
         continue
-    have = set(x for x in a.get('members', '').split(',') if x)
+    have = set(uncond(x, key) for x in a.get('members', '').split(',') if x)
     for fr in a['frag'].split(','):
         p = os.path.join(rt, 'natives', fr + '.inc')
         if not os.path.exists(p):
@@ -2617,6 +2637,7 @@ for ln in open(os.path.join(rt, 'natives.tbl')):
             if c + '.' + m not in have:
                 errs.append(f'natives.tbl [{key}] fragment {fr} calls {c}.{m} and does not declare it: add members={c}.{m}')
 
+errs = list(dict.fromkeys(errs))
 for e in errs:
     print('piece-guard FAIL: ' + e)
 print(f'PIECES {len(pieces)} NAMES {len(owner)} FAILS {len(errs)}')
@@ -3356,7 +3377,7 @@ view-guard:
 # is not live), and the emitFail and marker-site counts in src/zemitterc.z are
 # ratchets. A new refusal leg may raise EMITFAIL_BASELINE (say so in the commit);
 # a new fallback leg may not.
-EMITFAIL_BASELINE := 54
+EMITFAIL_BASELINE := 56
 MARKER_BASELINE := 23
 EXCS := $(NAMES:%=$(EXDIR)/%.c)
 fallback-guard: $(EXCS) bin/zc bin/zl bin/zls

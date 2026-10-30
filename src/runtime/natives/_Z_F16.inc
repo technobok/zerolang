@@ -79,14 +79,14 @@ static inline z_f16 z_f16_from_f64(double v) {
 }
 #endif
 /*@@end@@*/
-/*@@row @prelude.f16_from_f32 demand=@f16_from_f32 needs=@f16_from_f64,@f16_t@@*/
+/*@@row @prelude.f16_from_f32 demand=@f16_from_f32 needs=@f16_from_f64?portable16,@f16_t@@*/
 #if defined(Z_F16_NATIVE)
 static inline z_f16 z_f16_from_f32(float v) { return (z_f16)v; }
 #else
 static inline z_f16 z_f16_from_f32(float v) { return z_f16_from_f64((double)v); }
 #endif
 /*@@end@@*/
-/*@@row @prelude.f16_from_f128 demand=@f16_from_f128 needs=@f16_from_f64,@f16_t@@*/
+/*@@row @prelude.f16_from_f128 demand=@f16_from_f128 needs=@f16_from_f64?portable16q,@f16_t@@*/
 #if defined(Z_F16_NATIVE)
 #if defined(__SIZEOF_FLOAT128__)
 static inline z_f16 z_f16_from_f128(__float128 v) { return (z_f16)v; }

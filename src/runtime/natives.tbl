@@ -48,7 +48,15 @@
 #              fixed runtime file (z_head.inc, z_hash.inc, ...) is the text
 #              between `/*@@row @prelude.<name> demand=... needs=...@@*/` and
 #              `/*@@end@@*/`, written in place only where a need names it:
-#              `prelude.@<name>` here (make piece-guard)
+#              `prelude.@<name>` here (make piece-guard). A need `<n>?<c>`
+#              holds only under the condition <c>: the body calls <n> in one
+#              preprocessor branch alone (u128 division's portable form calls the
+#              long division; the native one does not), so <n> is written where
+#              the row is AND <c> is, inside `#if`, and no configuration
+#              compiles a function it never calls (make cc-unused-guard). <c> is
+#              declared once by a `[@cond <c> = <C expression>]` row; a row
+#              written under no condition holds everywhere. `members=` entries
+#              take `?<c>` too.
 #   args=ptr   the body takes its operands by pointer, so they must be lvalues
 #   pulls=<l>  demanding the member demands each `<unit>.<member>` of <l>
 #              (comma-separated) at once, where the demand is recorded: the
@@ -154,6 +162,14 @@
 #     threads (sqlite's THREADSAFE=2), by its `@unit.` row's `when=threaded`
 #     variant.
 
+
+# the conditions a need `<n>?<c>` holds under: C preprocessor expressions
+[@cond portable128 = !defined(Z_INT128_NATIVE)]
+[@cond native128 = defined(Z_INT128_NATIVE)]
+[@cond portable128q = !defined(Z_INT128_NATIVE) && defined(__SIZEOF_FLOAT128__)]
+[@cond portable16 = !defined(Z_F16_NATIVE)]
+[@cond portable16q = !defined(Z_F16_NATIVE) && defined(__SIZEOF_FLOAT128__)]
+[@cond win32 = defined(_WIN32)]
 
 # system.u8
 [system.u8.+ form=value]       ((uint8_t)(@L@ + @R@))
@@ -889,7 +905,7 @@
 
 # os -- args (a hand-ordered pair: the argv globals main() fills, then the copy)
 # and env come first, then the convention loads
-[os.args demand=args needs=prelude.zwin32,prelude.@String_append,prelude.@String_create,prelude.@String_new,prelude.@xmalloc,prelude.@win_utf8 frag=_Z_OS_ARGV_GLOBALS,_Z_OS_ARGS members=List_String.append,List_String.create]
+[os.args demand=args needs=prelude.zwin32,prelude.@String_append,prelude.@String_create,prelude.@String_new,prelude.@xmalloc,prelude.@win_utf8 frag=_Z_OS_ARGV_GLOBALS,_Z_OS_ARGS members=List_String.append?win32,List_String.create?win32]
 [os.env pulls=io.@sv_cstr needs=prelude.zwin32,prelude.@String_new,prelude.@xmalloc,prelude.@win_getenv frag=_Z_OS_GET_ENV]
 [os.buildCommit needs=prelude.@String_new frag=_Z_OS_BUILD_COMMIT]
 [os.buildCompiler needs=prelude.@String_new frag=_Z_OS_BUILD_COMPILER]

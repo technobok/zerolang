@@ -110,7 +110,7 @@ static inline z_u128 z_u128_mul64(uint64_t a, uint64_t b) {
 }
 #endif
 /*@@end@@*/
-/*@@row @prelude.u128_mul demand=@u128_mul needs=@u128_mul64,@int128_native,@u128_t@@*/
+/*@@row @prelude.u128_mul demand=@u128_mul needs=@u128_mul64?portable128,@int128_native,@u128_t@@*/
 #if defined(Z_INT128_NATIVE)
 static inline z_u128 z_u128_mul(z_u128 a, z_u128 b) { return a * b; }
 #else
@@ -192,7 +192,7 @@ static inline bool z_u128_lt(z_u128 a, z_u128 b) { return a < b; }
 static inline bool z_u128_lt(z_u128 a, z_u128 b) { return a.hi < b.hi || (a.hi == b.hi && a.lo < b.lo); }
 #endif
 /*@@end@@*/
-/*@@row @prelude.u128_clz demand=@u128_clz needs=@int128_native,@u128_t,@clz64@@*/
+/*@@row @prelude.u128_clz demand=@u128_clz needs=@int128_native,@u128_t,@clz64?portable128@@*/
 #if !defined(Z_INT128_NATIVE)
 static inline int z_u128_clz(z_u128 a) {
     if (a.hi) return z_clz64(a.hi);
@@ -201,7 +201,7 @@ static inline int z_u128_clz(z_u128 a) {
 }
 #endif
 /*@@end@@*/
-/*@@row @prelude.u128_divmod demand=@u128_divmod needs=@u128_clz,@u128_lt,@u128_shl,@u128_shr,@u128_sub,@int128_native,@u128_t,@panic@@*/
+/*@@row @prelude.u128_divmod demand=@u128_divmod needs=@u128_clz?portable128,@u128_lt?portable128,@u128_shl?portable128,@u128_shr?portable128,@u128_sub?portable128,@int128_native,@u128_t,@panic?portable128@@*/
 #if !defined(Z_INT128_NATIVE)
 /* a / b and a % b by binary long division: b is aligned under a's top bit
    and subtracted back down, one quotient bit per step. A zero divisor
@@ -222,7 +222,7 @@ static z_u128 z_u128_divmod(z_u128 a, z_u128 b, z_u128* rem) {
 }
 #endif
 /*@@end@@*/
-/*@@row @prelude.u128_div demand=@u128_div needs=@u128_divmod,@int128_native,@u128_t,@panic@@*/
+/*@@row @prelude.u128_div demand=@u128_div needs=@u128_divmod?portable128,@int128_native,@u128_t,@panic?native128@@*/
 #if defined(Z_INT128_NATIVE)
 static inline z_u128 z_u128_div(z_u128 a, z_u128 b) {
     if (b == 0) z_panic("division by zero");
@@ -232,7 +232,7 @@ static inline z_u128 z_u128_div(z_u128 a, z_u128 b) {
 static inline z_u128 z_u128_div(z_u128 a, z_u128 b) { z_u128 r; return z_u128_divmod(a, b, &r); }
 #endif
 /*@@end@@*/
-/*@@row @prelude.u128_rem demand=@u128_rem needs=@u128_divmod,@int128_native,@u128_t,@panic@@*/
+/*@@row @prelude.u128_rem demand=@u128_rem needs=@u128_divmod?portable128,@int128_native,@u128_t,@panic?native128@@*/
 #if defined(Z_INT128_NATIVE)
 static inline z_u128 z_u128_rem(z_u128 a, z_u128 b) {
     if (b == 0) z_panic("division by zero");
@@ -247,33 +247,33 @@ static inline z_u128 z_u128_rem(z_u128 a, z_u128 b) { z_u128 r; z_u128_divmod(a,
 static inline bool z_i128_neg(z_i128 a) { return (a.hi >> 63) != 0; }
 #endif
 /*@@end@@*/
-/*@@row @prelude.u128_negate demand=@u128_negate needs=@u128_add,@u128_from_u64,@u128_not,@int128_native,@u128_t@@*/
+/*@@row @prelude.u128_negate demand=@u128_negate needs=@u128_add?portable128,@u128_from_u64?portable128,@u128_not?portable128,@int128_native,@u128_t@@*/
 #if !defined(Z_INT128_NATIVE)
 static inline z_u128 z_u128_negate(z_u128 a) { return z_u128_add(z_u128_not(a), z_u128_from_u64(1)); }
 #endif
 /*@@end@@*/
-/*@@row @prelude.i128_add demand=@i128_add needs=@i128_bits,@u128_add,@u128_signed,@int128_native,@i128_t,@u128_t@@*/
+/*@@row @prelude.i128_add demand=@i128_add needs=@i128_bits?portable128,@u128_add?portable128,@u128_signed?portable128,@int128_native,@i128_t,@u128_t@@*/
 #if defined(Z_INT128_NATIVE)
 static inline z_i128 z_i128_add(z_i128 a, z_i128 b) { return (z_i128)((z_u128)a + (z_u128)b); }
 #else
 static inline z_i128 z_i128_add(z_i128 a, z_i128 b) { return z_u128_signed(z_u128_add(z_i128_bits(a), z_i128_bits(b))); }
 #endif
 /*@@end@@*/
-/*@@row @prelude.i128_sub demand=@i128_sub needs=@i128_bits,@u128_signed,@u128_sub,@int128_native,@i128_t,@u128_t@@*/
+/*@@row @prelude.i128_sub demand=@i128_sub needs=@i128_bits?portable128,@u128_signed?portable128,@u128_sub?portable128,@int128_native,@i128_t,@u128_t@@*/
 #if defined(Z_INT128_NATIVE)
 static inline z_i128 z_i128_sub(z_i128 a, z_i128 b) { return (z_i128)((z_u128)a - (z_u128)b); }
 #else
 static inline z_i128 z_i128_sub(z_i128 a, z_i128 b) { return z_u128_signed(z_u128_sub(z_i128_bits(a), z_i128_bits(b))); }
 #endif
 /*@@end@@*/
-/*@@row @prelude.i128_mul demand=@i128_mul needs=@i128_bits,@u128_mul,@u128_signed,@int128_native,@i128_t,@u128_t@@*/
+/*@@row @prelude.i128_mul demand=@i128_mul needs=@i128_bits?portable128,@u128_mul?portable128,@u128_signed?portable128,@int128_native,@i128_t,@u128_t@@*/
 #if defined(Z_INT128_NATIVE)
 static inline z_i128 z_i128_mul(z_i128 a, z_i128 b) { return (z_i128)((z_u128)a * (z_u128)b); }
 #else
 static inline z_i128 z_i128_mul(z_i128 a, z_i128 b) { return z_u128_signed(z_u128_mul(z_i128_bits(a), z_i128_bits(b))); }
 #endif
 /*@@end@@*/
-/*@@row @prelude.i128_div demand=@i128_div needs=@i128_bits,@i128_neg,@u128_div,@u128_negate,@u128_signed,@int128_native,@i128_t,@u128_t,@panic@@*/
+/*@@row @prelude.i128_div demand=@i128_div needs=@i128_bits?portable128,@i128_neg?portable128,@u128_div?portable128,@u128_negate?portable128,@u128_signed?portable128,@int128_native,@i128_t,@u128_t,@panic?native128@@*/
 #if defined(Z_INT128_NATIVE)
 /* a zero divisor panics; the minimum divided by -1 wraps back to itself */
 static inline z_i128 z_i128_div(z_i128 a, z_i128 b) {
@@ -292,7 +292,7 @@ static inline z_i128 z_i128_div(z_i128 a, z_i128 b) {
 }
 #endif
 /*@@end@@*/
-/*@@row @prelude.i128_rem demand=@i128_rem needs=@i128_bits,@i128_neg,@u128_negate,@u128_rem,@u128_signed,@int128_native,@i128_t,@u128_t,@panic@@*/
+/*@@row @prelude.i128_rem demand=@i128_rem needs=@i128_bits?portable128,@i128_neg?portable128,@u128_negate?portable128,@u128_rem?portable128,@u128_signed?portable128,@int128_native,@i128_t,@u128_t,@panic?native128@@*/
 #if defined(Z_INT128_NATIVE)
 static inline z_i128 z_i128_rem(z_i128 a, z_i128 b) {
     if (b == 0) z_panic("division by zero");
@@ -308,42 +308,42 @@ static inline z_i128 z_i128_rem(z_i128 a, z_i128 b) {
 }
 #endif
 /*@@end@@*/
-/*@@row @prelude.i128_and demand=@i128_and needs=@i128_bits,@u128_and,@u128_signed,@int128_native,@i128_t@@*/
+/*@@row @prelude.i128_and demand=@i128_and needs=@i128_bits?portable128,@u128_and?portable128,@u128_signed?portable128,@int128_native,@i128_t@@*/
 #if defined(Z_INT128_NATIVE)
 static inline z_i128 z_i128_and(z_i128 a, z_i128 b) { return a & b; }
 #else
 static inline z_i128 z_i128_and(z_i128 a, z_i128 b) { return z_u128_signed(z_u128_and(z_i128_bits(a), z_i128_bits(b))); }
 #endif
 /*@@end@@*/
-/*@@row @prelude.i128_or demand=@i128_or needs=@i128_bits,@u128_or,@u128_signed,@int128_native,@i128_t@@*/
+/*@@row @prelude.i128_or demand=@i128_or needs=@i128_bits?portable128,@u128_or?portable128,@u128_signed?portable128,@int128_native,@i128_t@@*/
 #if defined(Z_INT128_NATIVE)
 static inline z_i128 z_i128_or(z_i128 a, z_i128 b) { return a | b; }
 #else
 static inline z_i128 z_i128_or(z_i128 a, z_i128 b) { return z_u128_signed(z_u128_or(z_i128_bits(a), z_i128_bits(b))); }
 #endif
 /*@@end@@*/
-/*@@row @prelude.i128_xor demand=@i128_xor needs=@i128_bits,@u128_signed,@u128_xor,@int128_native,@i128_t@@*/
+/*@@row @prelude.i128_xor demand=@i128_xor needs=@i128_bits?portable128,@u128_signed?portable128,@u128_xor?portable128,@int128_native,@i128_t@@*/
 #if defined(Z_INT128_NATIVE)
 static inline z_i128 z_i128_xor(z_i128 a, z_i128 b) { return a ^ b; }
 #else
 static inline z_i128 z_i128_xor(z_i128 a, z_i128 b) { return z_u128_signed(z_u128_xor(z_i128_bits(a), z_i128_bits(b))); }
 #endif
 /*@@end@@*/
-/*@@row @prelude.i128_not demand=@i128_not needs=@i128_bits,@u128_not,@u128_signed,@int128_native,@i128_t@@*/
+/*@@row @prelude.i128_not demand=@i128_not needs=@i128_bits?portable128,@u128_not?portable128,@u128_signed?portable128,@int128_native,@i128_t@@*/
 #if defined(Z_INT128_NATIVE)
 static inline z_i128 z_i128_not(z_i128 a) { return ~a; }
 #else
 static inline z_i128 z_i128_not(z_i128 a) { return z_u128_signed(z_u128_not(z_i128_bits(a))); }
 #endif
 /*@@end@@*/
-/*@@row @prelude.i128_shl demand=@i128_shl needs=@i128_bits,@u128_shl,@u128_signed,@int128_native,@i128_t,@u128_t@@*/
+/*@@row @prelude.i128_shl demand=@i128_shl needs=@i128_bits?portable128,@u128_shl?portable128,@u128_signed?portable128,@int128_native,@i128_t,@u128_t@@*/
 #if defined(Z_INT128_NATIVE)
 static inline z_i128 z_i128_shl(z_i128 a, unsigned n) { return (z_i128)((z_u128)a << n); }
 #else
 static inline z_i128 z_i128_shl(z_i128 a, unsigned n) { return z_u128_signed(z_u128_shl(z_i128_bits(a), n)); }
 #endif
 /*@@end@@*/
-/*@@row @prelude.i128_shr demand=@i128_shr needs=@i128_bits,@i128_neg,@u128_from_u64,@u128_not,@u128_or,@u128_shr,@u128_signed,@int128_native,@i128_t,@u128_t@@*/
+/*@@row @prelude.i128_shr demand=@i128_shr needs=@i128_bits?portable128,@i128_neg?portable128,@u128_from_u64?portable128,@u128_not?portable128,@u128_or?portable128,@u128_shr?portable128,@u128_signed?portable128,@int128_native,@i128_t,@u128_t@@*/
 #if defined(Z_INT128_NATIVE)
 static inline z_i128 z_i128_shr(z_i128 a, unsigned n) { return a >> n; }
 #else
@@ -381,7 +381,7 @@ static inline double z_u128_to_f64(z_u128 x) { return (double)x; }
 static inline double z_u128_to_f64(z_u128 x) { return (double)x.hi * 0x1p64 + (double)x.lo; }
 #endif
 /*@@end@@*/
-/*@@row @prelude.i128_to_f64 demand=@i128_to_f64 needs=@i128_bits,@i128_neg,@u128_negate,@u128_to_f64,@int128_native,@i128_t@@*/
+/*@@row @prelude.i128_to_f64 demand=@i128_to_f64 needs=@i128_bits?portable128,@i128_neg?portable128,@u128_negate?portable128,@u128_to_f64?portable128,@int128_native,@i128_t@@*/
 #if defined(Z_INT128_NATIVE)
 static inline double z_i128_to_f64(z_i128 x) { return (double)x; }
 #else
@@ -405,7 +405,7 @@ static inline z_u128 z_u128_from_f64(double v) {
 }
 #endif
 /*@@end@@*/
-/*@@row @prelude.i128_from_f64 demand=@i128_from_f64 needs=@u128_from_f64,@u128_negate,@u128_signed,@int128_native,@i128_t@@*/
+/*@@row @prelude.i128_from_f64 demand=@i128_from_f64 needs=@u128_from_f64?portable128,@u128_negate?portable128,@u128_signed?portable128,@int128_native,@i128_t@@*/
 #if defined(Z_INT128_NATIVE)
 static inline z_i128 z_i128_from_f64(double v) { return (z_i128)v; }
 #else
@@ -428,7 +428,7 @@ static inline __float128 z_u128_to_f128(z_u128 x) {
 #endif
 #endif
 /*@@end@@*/
-/*@@row @prelude.i128_to_f128 demand=@i128_to_f128 needs=@i128_bits,@i128_neg,@u128_negate,@u128_to_f128,@int128_native,@i128_t@@*/
+/*@@row @prelude.i128_to_f128 demand=@i128_to_f128 needs=@i128_bits?portable128q,@i128_neg?portable128q,@u128_negate?portable128q,@u128_to_f128?portable128q,@int128_native,@i128_t@@*/
 #if defined(Z_INT128_NATIVE)
 #if defined(__SIZEOF_FLOAT128__)
 static inline __float128 z_i128_to_f128(z_i128 x) { return (__float128)x; }
@@ -459,7 +459,7 @@ static inline z_u128 z_u128_from_f128(__float128 v) {
 #endif
 #endif
 /*@@end@@*/
-/*@@row @prelude.i128_from_f128 demand=@i128_from_f128 needs=@u128_from_f128,@u128_negate,@u128_signed,@int128_native,@i128_t@@*/
+/*@@row @prelude.i128_from_f128 demand=@i128_from_f128 needs=@u128_from_f128?portable128q,@u128_negate?portable128q,@u128_signed?portable128q,@int128_native,@i128_t@@*/
 #if defined(Z_INT128_NATIVE)
 #if defined(__SIZEOF_FLOAT128__)
 static inline z_i128 z_i128_from_f128(__float128 v) { return (z_i128)v; }
