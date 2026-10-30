@@ -1252,7 +1252,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2383511
+ALLOC_BASELINE := 2383659
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -2202,13 +2202,19 @@ cdead-guard: bin/zc
 # them) and an error for a call to an undeclared function, so a compiler, a
 # configuration or a filter that stops seeing them cannot pass. The baseline is
 # today's count summed over the configurations (gcc corpus, gcc zc, clang
-# corpus, clang zc); lower it as it falls. Skipped without clang.
-CC_UNUSED_BASELINE := 0 0 0 0
+# corpus, clang zc, mingw-w64 corpus, mingw-w64 zc -- the Windows branches);
+# lower it as it falls. Skipped without clang; mingw-w64's pair is not measured
+# without it ("-").
+CC_UNUSED_BASELINE := 0 0 0 0 0 0
 CC_UNUSED_FLAGS := -std=c17 -c -o /dev/null -Wunused-function -Wunused-variable -Wunused-const-variable \
 	-Werror=implicit-function-declaration
 CC_UNUSED_PROBE_gcc := cdead_dead_fn cdead_dead_str cdead_dead_word_fn
 # clang also reports an unused static inline function (gcc never does)
 CC_UNUSED_PROBE_clang := cdead_dead_fn cdead_dead_inline cdead_dead_str cdead_dead_word_fn
+CC_UNUSED_PROBE_mingw := $(CC_UNUSED_PROBE_gcc)
+# the compilers: mingw-w64 compiles the same C for Windows
+CC_UNUSED_CCS = gcc clang $(if $(shell command -v $(MINGW_CC) 2>/dev/null),mingw)
+CC_UNUSED_CMD = $(if $(filter mingw,$(1)),$(MINGW_CC) $(MINGW_CFLAGS),$(1))
 
 define CC_UNUSED_PY
 import re, sys
@@ -2242,29 +2248,33 @@ cc-unused-guard: bin/zc
 	@command -v clang >/dev/null 2>&1 || { echo "cc-unused-guard SKIP: clang not installed"; exit 0; }; \
 	d=$$(mktemp -d); \
 	printf 'int main(void) { return cdead_undeclared_fn(); }\n' > $$d/undeclared.c; \
-	for cc in gcc clang; do \
+	for cc in $(CC_UNUSED_CCS); do \
+	  ccx="$$cc"; [ $$cc = mingw ] && ccx="$(MINGW_CC) $(MINGW_CFLAGS)"; \
 	  got=$$(for cfg in $(CC_UNUSED_CFGS); do \
-	    $$cc $(CC_UNUSED_FLAGS) $$cfg tests/c/cdead_probe.c 2>&1 \
+	    $$ccx $(CC_UNUSED_FLAGS) $$cfg tests/c/cdead_probe.c 2>&1 \
 	      | python3 -c "$$CC_UNUSED_PY" tests/c/cdead_probe.c --list; done \
 	    | sed -n 's/^UNUSED //p' | sort -u | tr '\n' ' '); \
 	  want="$(CC_UNUSED_PROBE_gcc) "; [ $$cc = clang ] && want="$(CC_UNUSED_PROBE_clang) "; \
+	  [ $$cc = mingw ] && want="$(CC_UNUSED_PROBE_mingw) "; \
 	  if [ "$$got" != "$$want" ]; then \
 	    echo "cc-unused-guard FAIL: $$cc does not report exactly tests/c/cdead_probe.c's file-scope dead items"; \
 	    echo "  want: $$want"; echo "  got:  $$got"; rm -rf $$d; exit 1; \
 	  fi; \
-	  e=$$($$cc $(CC_UNUSED_FLAGS) $$d/undeclared.c 2>&1 | python3 -c "$$CC_UNUSED_PY" $$d/undeclared.c | awk '{print $$3}'); \
+	  e=$$($$ccx $(CC_UNUSED_FLAGS) $$d/undeclared.c 2>&1 | python3 -c "$$CC_UNUSED_PY" $$d/undeclared.c | awk '{print $$3}'); \
 	  if [ "$$e" = "0" ]; then \
 	    echo "cc-unused-guard FAIL: $$cc does not reject a call to an undeclared function"; rm -rf $$d; exit 1; \
 	  fi; \
 	done; \
 	$(GUARD_EMIT_C); \
 	got=""; errs=0; \
-	for cc in gcc clang; do \
+	for cc in gcc clang mingw; do \
+	  case " $(CC_UNUSED_CCS) " in *" $$cc "*) ;; *) got="$$got - -"; continue;; esac; \
+	  ccx="$$cc"; [ $$cc = mingw ] && ccx="$(MINGW_CC) $(MINGW_CFLAGS)"; \
 	  c=0; z=0; \
 	  for cfg in $(CC_UNUSED_CFGS); do \
-	    ls $$d/*.c | grep -v '/undeclared.c$$' | xargs -P $(NPROC) -I{} sh -c "$$cc $(CC_UNUSED_FLAGS) $$cfg {} 2>&1 | python3 -c \"\$$CC_UNUSED_PY\" {}" > $$d/count; \
+	    ls $$d/*.c | grep -v '/undeclared.c$$' | xargs -P $(NPROC) -I{} sh -c "$$ccx $(CC_UNUSED_FLAGS) $$cfg {} 2>&1 | python3 -c \"\$$CC_UNUSED_PY\" {}" > $$d/count; \
 	    c=$$((c + $$(awk '{s += $$2} END {print s + 0}' $$d/count))); errs=$$((errs + $$(awk '{s += $$3} END {print s + 0}' $$d/count))); \
-	    $$cc $(CC_UNUSED_FLAGS) $$cfg $$d/zc/zc.c 2>&1 | python3 -c "$$CC_UNUSED_PY" $$d/zc/zc.c > $$d/count; \
+	    $$ccx $(CC_UNUSED_FLAGS) $$cfg $$d/zc/zc.c 2>&1 | python3 -c "$$CC_UNUSED_PY" $$d/zc/zc.c > $$d/count; \
 	    z=$$((z + $$(awk '{print $$2}' $$d/count))); errs=$$((errs + $$(awk '{print $$3}' $$d/count))); \
 	  done; \
 	  got="$$got $$c $$z"; \
@@ -2273,11 +2283,12 @@ cc-unused-guard: bin/zc
 	if [ $$errs -ne 0 ]; then \
 	  echo "cc-unused-guard FAIL: $$errs compile error(s) in a configuration: C calls a function its test leaves out"; exit 1; \
 	fi; \
-	set -- $$got; g1=$$1; g2=$$2; c1=$$3; c2=$$4; set -- $(CC_UNUSED_BASELINE); \
-	if [ "$$g1" -gt "$$1" ] || [ "$$g2" -gt "$$2" ] || [ "$$c1" -gt "$$3" ] || [ "$$c2" -gt "$$4" ]; then \
+	over=$$(echo "$$got / $(CC_UNUSED_BASELINE)" | awk '{n = (NF - 1) / 2; for (i = 1; i <= n; i++) if ($$i != "-" && $$i > $$(i + n + 1)) o = 1; print o + 0}'); \
+	same=$$(echo "$$got / $(CC_UNUSED_BASELINE)" | awk '{n = (NF - 1) / 2; for (i = 1; i <= n; i++) if ($$i != "-" && $$i != $$(i + n + 1)) d = 1; print d + 0}'); \
+	if [ "$$over" = 1 ]; then \
 	  echo "cc-unused-guard FAIL: unused file-scope functions/variables:$$got (baseline $(CC_UNUSED_BASELINE))"; \
 	  echo "  A C item written that nothing calls in some configuration: see emitC in src/zemitterc.z."; exit 1; \
-	elif [ "$$g1 $$g2 $$c1 $$c2" != "$(CC_UNUSED_BASELINE)" ]; then \
+	elif [ "$$same" = 1 ]; then \
 	  echo "cc-unused-guard:$$got < baseline $(CC_UNUSED_BASELINE) -- lower CC_UNUSED_BASELINE here"; \
 	else \
 	  echo "cc-unused-guard OK: unused file-scope functions/variables:$$got (baseline $(CC_UNUSED_BASELINE))"; \

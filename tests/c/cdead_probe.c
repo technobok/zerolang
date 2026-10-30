@@ -77,7 +77,7 @@ __extension__ typedef struct {
 
 static int cdead_live_add(cdead_live_t v);
 
-#if defined(Z_INT128_PORTABLE)
+#if defined(Z_INT128_PORTABLE) && !defined(_WIN32)
 /* reached only where the portable integers meet a compiler with __float128,
    a configuration of its own */
 static int cdead_live_portable(void) {
