@@ -246,7 +246,44 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-10-11 | c8473d57 | [review P2-P3: four defects, three scans, itoa](#r-c8473d57) | 0.72s | 0.75s | 154MB / 118MB | 100 / 363 / 255 (total 718) | 2,152,945 | 447MB | 36.6s | 170,272 |
 | 2026-10-12 | 17175e8d | [review P4-P5: facts slot, one call router, row records, three spellings](#r-17175e8d) | 0.72s | 0.76s | 153MB / 120MB | 107 / 364 / 257 (total 728) | 2,172,858 | 453MB | 36.6s | 171,555 |
 | 2026-10-30 | 59f8083e | [the emitter writes only what `main` reaches](#r-59f8083e) | 0.88s | 0.92s | 169MB / 141MB | 121 / 459 / 326 (total 906) | 2,386,430 | 498MB | 37.9s | 192,267 |
+| 2026-10-30 | 255de41e | [runtime text is parsed once](#r-255de41e) | 0.87s | 0.93s | 168MB / 142MB | 103 / 463 / 316 (total 882) | 2,370,692 | 485MB | 39.3s | 192,742 |
 
+
+<a id="r-255de41e"></a>
+**Runtime text is parsed once** (`82a76ad2` -> `255de41e`, five commits: rows
+`af51ebdf`, templates `71f2e4ba`, fragments and fixed files `2ae80dca`, the
+row fill and docs `255de41e`). Every runtime text -- a natives.tbl row's body,
+a template, a fragment, a fixed file -- is cut into literal stretches, holes
+and keys, with its member sections or row pieces, when it is first read
+(`RtTexts`); a fill walks the stretches once and never searches a value it
+put in a hole. Emitted C is byte-identical at every commit: 2,723 files (every
+program with `main` for the host and for x86_64-w64-mingw32, zc/zl/zls, zc for
+windows, tests/unit, the user-native runtime). Measured as the row above, each
+commit's seed compiling its own source, gcc -O1 with mimalloc, core 0:
+
+| commit | instructions (own source) | fixed input | allocs | fixed-input allocs | LOC |
+|---|---|---|---|---|---|
+| `59f8083e` | 9,425M | 2,231M | 2,386,496 | 523,701 | 192,267 |
+| `255de41e` | 9,206M | 2,133M | 2,370,758 | 508,113 | 192,742 |
+
+-2.3% on the self-compile (on 475 more lines), -4.4% on the fixed input,
+-15.7K allocations on each. The text search the 2026-10-30 bisection found,
+inclusive callgrind cost of `StringView.contains`, `indexOf` and
+`lastIndexOf` on a readable -O1 build:
+
+| input | `59f8083e` | `255de41e` | parse (once) | fill walks |
+|---|---|---|---|---|
+| fixed input | 149.0M | 30.2M | 14.3M | 19.5M |
+| self-compile | 375.0M | 45.8M | 20.0M | 19.8M |
+
+What is left of the search is not runtime text: `hasDecimalExponent` and
+`isFloatLexeme` classify numeric lexemes (~7M), `condInParens` inspects
+generated C (~11M on the self-compile), and the parse finds its own marks.
+The parse costs what one read of every row and runtime file costs, once per
+compile, so it is a larger share of a small program: on the fixed input most
+of the gain is the integer-operator rows (`98c9c0f4`, `bb808e48`), whose
+per-use searches were 122M; on the self-compile it is the templates, whose
+`applyTmpl` chain copied and rescanned each one once per key (205M).
 
 <a id="r-59f8083e"></a>
 **The emitter writes only what `main` reaches** (`17175e8d` -> `59f8083e`; the
