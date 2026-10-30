@@ -40168,7 +40168,8 @@ emitMapIters: function {
     rawi: readTemplate :ctx path: pi.stringView
     if rawi.length > 0 then {
         rs: sectionedText :ctx mono: monoId text: rawi.stringView
-        i1: applyTmpl text: rs key: "NAME" val: nm
+        rse: entryTypedefKept :ctx text: rs.stringView entryId: meId
+        i1: applyTmpl text: rse key: "NAME" val: nm
         i2: applyTmpl text: i1 key: "KEY_T" val: keyT
         i3: applyTmpl text: i2 key: "VAL_T" val: valT
         i4: applyTmpl text: i3 key: "MAPKEYITER" val: mki.stringView
@@ -40181,6 +40182,26 @@ emitMapIters: function {
         buf.append i10
         buf.append "\n"
     }
+}
+
+# entryTypedefKept -- a map iterator template's text with its
+# `/*@@entrytype@@*/` line -- the typedef naming the map's entry as its MapEntry
+# type `entryId` -- kept where that type is reached and dropped elsewhere: the
+# item walk hands entries out through an option view, which spells no entry
+# type, so only C that reads one names it.
+entryTypedefKept: function {ctx: Ctx.view text: StringView entryId: ztypes.tid} out String is {
+    mk: "/*@@entrytype@@*/"
+    at: (text.indexOf needle: mk).or d: text.length
+    if at == text.length then return text.string
+    rest: text.substring from: at + mk.length to: text.length
+    kept: (text.substring from: 0 to: at).string
+    if (typeReached :ctx tid: entryId) then {
+        kept.append rest
+    } else {
+        nl: (rest.indexOf needle: "\n").or d: rest.length
+        if nl < rest.length then kept.append (rest.substring from: nl + 1 to: rest.length)
+    }
+    return kept
 }
 
 # mapKeyType -- a Map mono's KEY type, read off its `set` member's `key`
@@ -40775,7 +40796,8 @@ emitIdMapIters: function {
     pi: "\{runtimeDir}/z_IdMapIter.c.tmpl"
     rawi: readTemplate :ctx path: pi.stringView
     if rawi.length == 0 then return
-    j1: applyTmpl text: rawi key: "NAME" val: nm
+    rie: entryTypedefKept :ctx text: rawi.stringView entryId: meId
+    j1: applyTmpl text: rie key: "NAME" val: nm
     j2: applyTmpl text: j1 key: "KEY_T" val: keyT
     j3: applyTmpl text: j2 key: "VAL_T" val: valT
     j4: applyTmpl text: j3 key: "IDMAPITEMITER" val: mii.stringView
