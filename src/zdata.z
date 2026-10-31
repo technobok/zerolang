@@ -7,8 +7,17 @@
 # definition is reached.
 
 public: unit {
+    :DataFile
     :open
     :dumpText
+    :errorsText
+    :errorCount
+    :definition
+    :fieldOf
+    :textOf
+    :boolOf
+    :textsOf
+    :isOfType
 }
 
 Ast: zast.Ast
@@ -60,6 +69,152 @@ open: function {
         } case none then null
     }
     return (DataFile check: r unitDecl: ud)
+}
+
+# errorCount -- how many errors the check found: its parse error, or every
+# error of the checked file
+errorCount: function {f: DataFile.view} out u64 is {
+    if f.check.parseOk.not then return 1
+    return f.check.errorCount
+}
+
+# errorsText -- every error, each its code and message, then where it is:
+# `error[E0300]: ...` over ` --> settings.zd:2:5`
+errorsText: function {f: DataFile.view} out String is {
+    buf: String
+    if f.check.parseOk.not then {
+        root: f.check.prog.nodes.get i: f.check.prog.root
+        match (
+            root
+        ) case error then {
+            errorText e: (zast.errorDataOf ast: f.check.prog row: root) :f :buf
+        } else null
+        return buf
+    }
+    o: f.check.st
+    match (
+        o
+    ) case some then {
+        for each e: o.typing.errors loop errorText :e :f :buf
+    } case none then null
+    return buf
+}
+
+# errorText -- one error onto `buf`, as errorsText writes it
+errorText: function {e: zast.ErrorData.view f: DataFile.view buf: String.borrow} is {
+    if buf.length > 0 then buf.append "\n"
+    buf.append (zast.errorLine :e)
+    fno: e.fsno
+    if fno.isZero when e.nodeid.isZero.not then fno = f.check.prog.fsnoForNode nodeid: e.nodeid
+    if fno.isZero or (e.lineno == 0) then return
+    buf.append "\n --> "
+    buf.append (f.check.vfs.displayPath dentryid: fno)
+    buf.append ":"
+    buf.append "\{e.lineno}"
+    buf.append ":"
+    buf.append "\{e.colno}"
+}
+
+# definition -- the value the file's own unit defines as `name`; none when
+# it defines no such value
+definition: function {f: DataFile.view name: StringView} out ztypes.cval is {
+    o: f.check.st
+    match (
+        o
+    ) case some then {
+        nid: zast.poolFind pool: f.check.prog.names text: name
+        if nid.isZero then return ztypes.noConst
+        ut: ztypecheck.declTypeIdOf st: o declId: f.unitDecl
+        return (o.typing.memberConstOf parentTypeId: ut nameId: nid)
+    } case none then null
+    return ztypes.noConst
+}
+
+# fieldOf -- field `name` of data value `v`, its default where the
+# construction left it out; none when `v` is no data value with that field
+fieldOf: function {f: DataFile.view v: ztypes.cval name: StringView} out ztypes.cval is {
+    if v.kind.aggKind.not then return ztypes.noConst
+    o: f.check.st
+    match (
+        o
+    ) case some then {
+        nid: zast.poolFind pool: f.check.prog.names text: name
+        g: o.typing.constAggs.get i: v.aggId.u64
+        if g.kind.staticData.not then return ztypes.noConst
+        ids: ListVal ztypes.tid
+        nameIds: ListVal zast.nameid
+        ztypecheck.dataFieldIds st: o tid: g.tid :ids :nameIds
+        k: u32
+        for k < g.itemCount while k.u64 < nameIds.length loop {
+            if (nameIds.get i: k.u64) == nid then return (
+                o.typing.constAggItems.get
+                i: g.itemStart + k
+            )
+            k = k + 1
+        }
+    } case none then null
+    return ztypes.noConst
+}
+
+# textOf -- a string value's text, "" for any other value
+textOf: function {f: DataFile.view v: ztypes.cval} out String is {
+    if v.kind.svalKind.not then return "".string
+    o: f.check.st
+    match (
+        o
+    ) case some then {
+        return (o.typing.constStrings.get i: v.strId.u64).copy
+    } case none then null
+    return "".string
+}
+
+# boolOf -- whether `v` is `true`
+boolOf: function {v: ztypes.cval} out bool is {
+    return v.kind.armKind and (v.armName == zast.wellKnown.slot.wkTrue)
+}
+
+# textsOf -- a list's elements as text, each as textOf reads it; none for a
+# value that is no list
+textsOf: function {f: DataFile.view v: ztypes.cval} out List String is {
+    r: List String
+    if v.kind.aggKind.not then return r
+    o: f.check.st
+    match (
+        o
+    ) case some then {
+        g: o.typing.constAggs.get i: v.aggId.u64
+        if g.kind.staticList.not then return r
+        k: u32
+        for k < g.itemCount loop {
+            r.append (textOf :f v: (o.typing.constAggItems.get i: g.itemStart + k))
+            k = k + 1
+        }
+    } case none then null
+    return r
+}
+
+# isOfType -- whether `v` is a data value of type `typeName` that unit
+# `unitName` declares (a schema's type, `toolchain.project`)
+isOfType: function {
+    f: DataFile.view v: ztypes.cval unitName: StringView typeName: StringView
+} out bool is {
+    if v.kind.aggKind.not then return false
+    o: f.check.st
+    match (
+        o
+    ) case some then {
+        un: zast.poolFind pool: f.check.prog.names text: unitName
+        tn: zast.poolFind pool: f.check.prog.names text: typeName
+        if un.isZero or tn.isZero then return false
+        ud: o.typing.declFindChild parentDeclId: o.typing.programRoot nameId: un
+        td: o.typing.declFindChild parentDeclId: ud nameId: tn
+        if td.isZero then return false
+        return (
+            (o.typing.constAggs.get i: v.aggId.u64).tid ==
+            (ztypecheck.declTypeIdOf st: o declId: td)
+        )
+    } case none then null
+    return false
 }
 
 # dumpText -- every value the file defines, written back as zdata: one line per

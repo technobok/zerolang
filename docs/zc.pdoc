@@ -73,7 +73,7 @@ an error — use #~"zc build <src>".
   [#*: #b:"build" #~"<src>" — compile to a native executable; output is
     #~"-o OUT", else #~"<unit>" in the project's directory (or its
     #~"outputDir"), or outside a project in #~"./". In a project whose
-    #~"project.z" lists #~"programs", #~"<src>" may be left out: every
+    #~"project.zd" lists #~"programs", #~"<src>" may be left out: every
     program is built, in the order listed, stopping at the first that
     fails.]
   [#*: #b:"run" #~"<src> [args...]" — build to a temporary file, then run it
@@ -109,7 +109,7 @@ an error — use #~"zc build <src>".
     cached object's path, one a line, to link after the #~".c" (see
     [#> to=c-sources-a-unit-builds: C sources a unit builds]).]
   [#*: #b:"init" #~"[dir]" — make #~"dir" (default #~".") a project: write its
-    #~"project.z" and #~".zerolang/", and a #~"main.z" when it holds no unit
+    #~"project.zd" and #~".zerolang/", and a #~"main.z" when it holds no unit
     (see [#> to=projects: Projects]).]
   [#*: #b:"lint" #~"[args...]" and #b:"fmt" #~"[args...]" — thin shims that
     locate the sibling #~"zl" binary (the standalone linter/formatter), forward
@@ -137,33 +137,39 @@ position, so #~"zc build --help" prints the help for #~"build".
 
 #--: Projects
 
-A #b:"project" is a directory holding a #~"project.z": the user's file of
+A #b:"project" is a directory holding a #~"project.zd": the user's file of
 settings, and the marker of the project's root. #~"zc", #~"zl" and #~"zls"
 find it by walking up from where they start -- #~"zc" from the directory of a
 unit named by its file, else the working directory -- and stop at the first,
 nearest one. With none anywhere above, each behaves exactly as without
 projects.
 
-#code language=zerolang: """
-  # project.z
-  sourceDirs: list { "src" }
-  programs: list { "app" "tool" }
-  release: true
+#code language=zdata: """
+  # project.zd
+  project: (
+      toolchain.project
+      sourceDirs: list { "src" }
+      programs: list { "app" "tool" }
+      release: true
+  )
 """
 
-The settings are read #b:"before" anything is built, since they say where the
-source and the stdlib are, so each one is a literal: a string, #~"true" /
-#~"false", or -- for #~"sourceDirs" and #~"programs" -- a list of string
-literals. A setting the file does not know, a value that is not a literal and
-a literal of the wrong kind are each an error at the line, and stop the
-driver. A path is relative to the project directory. A #b:"flag fully
-overrides" the file's value; a unit named by its file is its own source root.
+#~"project.zd" is a data file (see [#> to=./zdata.html: zdata]). Its
+#~"project" is a #~"toolchain.project" value: the type is a schema in the
+stdlib, #~"lib/system/toolchain.zd", and lists every setting below with its
+default. The file is checked against the schema of the driver's own stdlib (its
+#~"--system", or the one installed with it), not the stdlib the project names,
+so a setting the type does not have and a value of the wrong type are each an
+error at its line, and stop the driver. A setting the file leaves out takes its
+default: an empty string or #~"false", which mean the driver's own default. A
+path is relative to the project directory. A #b:"flag fully overrides" the
+file's value; a unit named by its file is its own source root.
 
 #ul:
   [#*: #~"sourceDirs" -- the source roots, the first searched first (each a
     #~"--src"): always a list, #~"list { \"src\" \"lib\" }", even with
-    one root. Unset is the project directory itself; an empty list
-    (#~"list {} out staticlist StringView") is no source root at all]
+    one root. Unset is the project directory itself (#~"\"\"" names it);
+    an empty list (#~"list {} out staticlist text") is no source root at all]
   [#*: #~"systemDir" -- the stdlib (#~"--system")]
   [#*: #~"runtimeDir" -- the C runtime (#~"--runtime")]
   [#*: #~"programs" -- the project's programs, each a unit declaring
@@ -185,20 +191,20 @@ overrides" the file's value; a unit named by its file is its own source root.
     #~"tccLibDir" -- the C toolchain (#~"--cc", #~"--cc-mode", #~"--cflags",
     #~"--ldflags", #~"--tcc-lib")]
 
-The compiler's own folder, #~".zerolang/", sits beside #~"project.z" and is
+The compiler's own folder, #~".zerolang/", sits beside #~"project.zd" and is
 disposable: it holds a #~".gitignore" of #~"*" and the #b:"generated" unit
 #~"z" each build writes -- #~"z.build" says what the build is
-(#~"z.build.os", #~"z.build.main", ...) and #~"z.project" is the project's
-own #~"project.z" (see #~"z_unit.pdoc"). Outside a project that unit lives in
-the user's cache directory instead.
+(#~"z.build.os", #~"z.build.main", ...) and #~"z.project" holds the project's
+settings (see #~"z_unit.pdoc"). Outside a project that unit lives in the user's
+cache directory instead. #~"project.zd" itself is no unit of the program.
 
-#~"zc init [dir]" makes a directory a project: it writes #~"project.z" with
-every setting commented out at its default, and #~".zerolang/". In a directory
-with no #~".z" file it also writes #~"main.z", printing a greeting, and lists
-it in #~"programs", so #~"zc build && ./main" works at once. It refuses a directory
-that already holds a #~"project.z".
+#~"zc init [dir]" makes a directory a project: it writes #~"project.zd" with
+its source roots set and every other setting commented out at its default, and
+#~".zerolang/". In a directory with no #~".z" file it also writes #~"main.z",
+printing a greeting, and lists it in #~"programs", so #~"zc build && ./main"
+works at once. It refuses a directory that already holds a #~"project.zd".
 
-The zerolang repository is itself a project: its #~"project.z" names
+The zerolang repository is itself a project: its #~"project.zd" names
 #~"src", #~"lib/system" and its four programs (#~"zc", #~"zl", #~"zls",
 #~"ztestrunner"), so a plain #~"zc build" anywhere in the tree builds them
 all, and #~"zls" searches each of them for references.
@@ -535,7 +541,7 @@ lines — #~"ZEROLANG_ROOT", #~"ZEROLANG_SYSTEM", #~"ZEROLANG_RUNTIME",
 #~"ZEROLANG_VENDOR" and #~"ZC_OBJ_CACHE" (where a unit's C sources are
 found and their objects kept, see
 [#> to=c-sources-a-unit-builds: C sources a unit builds]),
-#~"ZC_PROJECT" (the #~"project.z" in effect, empty outside a project),
+#~"ZC_PROJECT" (the #~"project.zd" in effect, empty outside a project),
 #~"ZC_VERSION",
 #~"ZC_COMMIT", #~"ZC_BUILD_DATE", #~"ZC_BUILD_CC", and #~"ZC_EXE". It
 honours the same flags and project as a build, so

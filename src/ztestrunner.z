@@ -2134,9 +2134,16 @@ lspAbsolute: function {text: StringView uris: LspUris.view} out String is {
 }
 
 # lspRelative -- the server's output with the run's root dropped from its
-# URIs again, so a golden reads the same from any root on any system
+# URIs again, and the generated unit's directory for the host
+# (`.zerolang/targets/<arch>-<os>/`) spelled `targets/HOST`, so a golden reads
+# the same from any root on any system
 lspRelative: function {text: StringView uris: LspUris.view} out String is {
-    return (text.replace needle: "\"\{uris.prefix}/" replacement: "\"file://")
+    t: text.replace needle: "\"\{uris.prefix}/" replacement: "\"file://"
+    key: ztarget.targetOrHostArch triple: ""
+    key.append "-"
+    key.append (ztarget.targetOrHostOs triple: "")
+    hostDir: "/.zerolang/targets/\{key}/"
+    return (t.stringView.replace needle: hostDir replacement: "/.zerolang/targets/HOST/")
 }
 
 # knownLeakers -- the programs recorded in tests/known-leaks.txt as expected to
@@ -3067,9 +3074,9 @@ projectFileThere: function {work: StringView p: StringView} out bool is {
     return (io.exists path: "\{work}/\{p}.exe")
 }
 
-# copyUnits -- every `.z` file of directory `from`, and of each directory under
-# it, into a new directory `to` laid out the same way: a project may keep its
-# units in several source roots
+# copyUnits -- every `.z` and `.zd` file of directory `from`, and of each
+# directory under it, into a new directory `to` laid out the same way: a project
+# may keep its units in several source roots, and its settings in project.zd
 copyUnits: function {from: StringView to: StringView} is {
     io.mkdirp path: to
     files: io.listDir path: from
@@ -3077,7 +3084,7 @@ copyUnits: function {from: StringView to: StringView} is {
     for each fe: files loop {
         fv: fe.stringView
         fsrc: "\{from}/\{fv}"
-        if fv.endsWith ".z" then {
+        if (fv.endsWith ".z") or (fv.endsWith ".zd") then {
             fc: slurp path: fsrc.stringView
             io.writeText path: "\{to}/\{fv}" content: fc
         } else if (zcheck.pathKindIs path: fsrc.stringView want: io.filekind.dir) then {

@@ -125,7 +125,7 @@ ZLSCOPE := src/*.z lib/system/*.z lib/system/system/*.z lib/system/math/*.z test
 # gives each tree its own roots.
 ZLFULLSCOPE := src/*.z lib/system/*.z lib/system/system/*.z lib/system/math/*.z
 # What the formatter checks; tests/fixtures/ is input and stays as written.
-FMTSCOPE := src/*.z lib/system/*.z lib/system/system/*.z lib/system/math/*.z examples/*.z tests/unit/*.z $(TOOLSRC)
+FMTSCOPE := src/*.z lib/system/*.z lib/system/system/*.z lib/system/math/*.z examples/*.z tests/unit/*.z $(TOOLSRC) lib/system/*.zd project.zd
 
 all: bin/zc bin/zl bin/zls
 
@@ -1255,7 +1255,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2389455
+ALLOC_BASELINE := 2425762
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

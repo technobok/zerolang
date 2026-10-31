@@ -187,7 +187,7 @@ printUsage: function is {
     io.eprintln "  emit  <src>          emit standalone C (-o FILE, else stdout)"
     io.eprintln ""
     io.eprintln "project:"
-    io.eprintln "  init [dir]           make dir (default .) a project: project.z, and main.z when"
+    io.eprintln "  init [dir]           make dir (default .) a project: project.zd, and main.z when"
     io.eprintln "                       it holds no unit"
     io.eprintln ""
     io.eprintln "diagnostics:"
@@ -220,7 +220,7 @@ printCommandHelp: function {zv: zast.Vocab.view cmd: StringView} is {
         io.eprintln "usage: zc build <src> [flags]"
         io.eprintln "Compile <src> to a native executable."
         io.eprintln "Output goes to -o OUT, else <unit> (<unit>.exe for windows targets) in the"
-        io.eprintln "project's directory (project.z's outputDir moves it), or outside a project in ."
+        io.eprintln "project's directory (project.zd's outputDir moves it), or outside a project in ."
         io.eprintln "Flags: --release --cc CC --cc-mode spawn|inproc --target TRIPLE"
         io.eprintln "       --save-temps"
         io.eprintln "       --cflags STR --ldflags STR --src DIR --tcc-lib DIR"
@@ -360,7 +360,7 @@ printEnv: function {
     buf.append "\nZC_OBJ_CACHE="
     buf.append zcobj.objectCacheDir
     buf.append "\nZC_PROJECT="
-    if project.length > 0 then buf.append (path.join a: project b: "project.z")
+    if project.length > 0 then buf.append (path.join a: project b: "project.zd")
     buf.append "\nZC_VERSION="
     buf.append ver
     buf.append "\nZC_COMMIT="
@@ -985,7 +985,7 @@ ZcFlags: class {
     # -o: where any output goes when its own flag named none
     outPath: String
     # where a build writes its executable when -o names none: the project
-    # directory, or project.z's outputDir under it; "" (the working directory)
+    # directory, or project.zd's outputDir under it; "" (the working directory)
     # outside a project
     outputDir: String
     # --cc: the C compiler to drive, "" to resolve one from the target
@@ -1171,14 +1171,14 @@ ZcFlags: class {
         )
     }
 
-    # projectStart -- where the search for project.z begins: the directory of
+    # projectStart -- where the search for project.zd begins: the directory of
     # a unit named by its file, else the working directory
     projectStart: function {this: this.view} out String is {
         if this.unitIsPath.not then return ".".string
         return (path.dirname p: this.unitname.stringView)
     }
 
-    # applyProject -- each setting no flag gave, from project.z (its programs
+    # applyProject -- each setting no flag gave, from project.zd (its programs
     # are unitsToCompile's). A flag
     # replaces the file's value outright, and a unit named by its file is its
     # own source root; a switch the file turns on stays on. Paths the file gives
@@ -1196,7 +1196,7 @@ ZcFlags: class {
         if pf.eager then this.eagerCheck = true
     }
 
-    # applyProjectPaths -- the directories project.z gives, under the project
+    # applyProjectPaths -- the directories project.zd gives, under the project
     # directory, where no flag gave one
     applyProjectPaths: function {:this pf: zproject.ProjectFile.view} is {
         d: pf.dir.stringView
@@ -1216,7 +1216,7 @@ ZcFlags: class {
         )
     }
 
-    # applyProjectTools -- the target and the C toolchain project.z names, where
+    # applyProjectTools -- the target and the C toolchain project.zd names, where
     # no flag named them
     applyProjectTools: function {:this zv: zast.Vocab.view pf: zproject.ProjectFile.view} is {
         if this.targetTriple.length == 0 then this.targetTriple = pf.target.copy
@@ -1227,7 +1227,7 @@ ZcFlags: class {
                 refuseUnknownCcMode
                 :zv
                 mode: this.ccModeFlag.stringView
-                named: "project.z's cCompilerMode"
+                named: "project.zd's cCompilerMode"
             )
         }
         if this.cflags.length == 0 then this.cflags = pf.cFlags.copy
@@ -1762,11 +1762,13 @@ emitCSource: function {
 }
 
 # applyProjectOrExit -- the project's settings under the flags, or, when its
-# project.z cannot be read, the error and stop.
+# project.zd cannot be read, the error and stop.
 applyProjectOrExit: function {cf: ZcFlags zv: zast.Vocab.view pf: zproject.ProjectFile.view} is {
     if pf.error.length > 0 then {
         io.eprintln pf.error
-        io.eprintln "1 error found"
+        if (
+            pf.errorCount == 1
+        ) then io.eprintln "1 error found" else io.eprintln "\{pf.errorCount} errors found"
         os.exit code: 2
     }
     cf.applyProject :zv :pf
@@ -1832,7 +1834,13 @@ main: function is {
     }
     isRun: subW == zcWord.slot.vRun
     cf: parseZcArgs :argv :n :zv sub: sub.stringView :unitname :isRun
-    pf: zproject.discoverProject start: cf.projectStart.stringView
+    # project.zd is checked against this zc's own stdlib, the --system the
+    # command names or the one installed with it
+    pf: (
+        zproject.discoverProject
+        start: cf.projectStart.stringView
+        systemdir: (zcheck.resolveSystemDir flagVal: cf.systemFlag.stringView).stringView
+    )
     applyProjectOrExit :cf :zv :pf
     refuseBadTarget targetTriple: cf.targetTriple.stringView
     if subW == zcWord.slot.vEnv then printEnvAndExit :cf :pf
@@ -1879,11 +1887,11 @@ unitsToCompile: function {
             names.append pg
         }
         if subW != zcWord.slot.vBuild then {
-            io.eprintln "zc: project.z lists several programs (\{names}); name the one to use"
+            io.eprintln "zc: project.zd lists several programs (\{names}); name the one to use"
             os.exit code: 2
         }
         if cf.outPath.length > 0 then {
-            io.eprintln "zc: -o names one file, and project.z lists several programs (\{names}); name the one to build"
+            io.eprintln "zc: -o names one file, and project.zd lists several programs (\{names}); name the one to build"
             os.exit code: 2
         }
     }

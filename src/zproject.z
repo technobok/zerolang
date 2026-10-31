@@ -1,13 +1,16 @@
-# zproject -- the project a driver runs in: the nearest project.z at or above
+# zproject -- the project a driver runs in: the nearest project.zd at or above
 # where it started, and the settings that file gives.
 #
 # A driver reads the settings before it builds anything, since they say where
-# the source and the stdlib are. So each setting is a LITERAL -- a string, or
-# true or false -- read from the parsed file without loading any unit, and a
-# flag the driver was given replaces the file's value outright. The compile
-# then loads the same file again, as the ordinary unit it also is.
+# the source and the stdlib are. project.zd is a data file (docs/zdata.pdoc)
+# whose `project` is a `toolchain.project` value: zdata checks it against that
+# schema, found in the driver's own stdlib, and the settings are read off the
+# value, every one its default where the file leaves it out. A flag the driver
+# was given replaces the file's value outright. The build reads the settings
+# through the generated unit `z.project` (projectText); project.zd itself is
+# no unit of the program.
 #
-# No project.z anywhere above is single-file mode: every setting is unset and
+# No project.zd anywhere above is single-file mode: every setting is unset and
 # each driver behaves as it does without one.
 
 # Public interface -- the definitions other units may reference; all other
@@ -27,34 +30,20 @@ Ast: zast.Ast
 
 # projectFileName -- the file that marks a project's root and holds its
 # settings
-projectFileName: "project.z"
+projectFileName: "project.zd"
 
-# The settings project.z may give, one block per kind of value. The vocabulary
-# is DATA: a setting's name is the text a file spells, with no id to compare it
-# against, so the reader gets by on the one compare settingIn makes.
-
-# stringSettings -- the settings that take a string
-stringSettings: list {
-    "systemDir" "runtimeDir" "target" "outputDir" "cCompiler" "cCompilerMode" "cFlags" "linkFlags"
-    "tccLibDir"
-} out staticlist StringView
-
-# switchSettings -- the settings that take true or false
-switchSettings: list { "release" "fastHash" "readableNames" "eager" } out staticlist StringView
-
-# listSettings -- the settings that take a list of string literals
-listSettings: list { "sourceDirs" "programs" } out staticlist StringView
-
-# ProjectFile -- what a project.z says, as read before the build. A string
+# ProjectFile -- what a project.zd says, as read before the build. A string
 # setting the file leaves out is "", a switch it leaves out is false: both mean
 # "the driver's own default".
 ProjectFile: class {
-    # the directory holding project.z, spelled from where the search began, so
-    # relative when that was; "" when no project.z was found
+    # the directory holding project.zd, spelled from where the search began, so
+    # relative when that was; "" when no project.zd was found
     dir: String
-    # the first thing wrong with the file, rendered as a diagnostic; "" when it
-    # read cleanly
+    # what is wrong with the file, each error rendered as a diagnostic; "" when
+    # it read cleanly
     error: String
+    # how many errors `error` holds
+    errorCount: u64
     # the source roots, each relative to `dir` ("" for `dir` itself), the first
     # searched first
     sourceDirs: List String
@@ -97,6 +86,7 @@ ProjectFile: class {
             meta.create
             dir: String
             error: String
+            errorCount: 0
             sourceDirs: List String
             sourceDirsGiven: false
             systemDir: String
@@ -164,73 +154,10 @@ ProjectFile: class {
         return (this.rootHolding :path).length > 0
     }
 
-    # found -- whether a project.z was found at all
+    # found -- whether a project.zd was found at all
     found: function {this: this.view} out bool is {
         return this.dir.length > 0
     }
-
-    # setString -- record string setting `k`, its place in stringSettings from 1
-    setString: function {:this k: u64 value: String.take} is {
-        if k == 1 then {
-            this.systemDir = value.take
-        } else if k == 2 then {
-            this.runtimeDir = value.take
-        } else if k == 3 then {
-            this.target = value.take
-        } else if k == 4 then {
-            this.outputDir = value.take
-        } else if k == 5 then {
-            this.cCompiler = value.take
-        } else if k == 6 then {
-            this.cCompilerMode = value.take
-        } else if k == 7 then {
-            this.cFlags = value.take
-        } else if k == 8 then {
-            this.linkFlags = value.take
-        } else {
-            this.tccLibDir = value.take
-        }
-    }
-
-    # setSwitch -- record switch setting `k`, its place in switchSettings from 1
-    setSwitch: function {:this k: u64 value: bool} is {
-        if k == 1 then {
-            this.release = value
-        } else if k == 2 then {
-            this.fastHash = value
-        } else if k == 3 then {
-            this.readableNames = value
-        } else {
-            this.eager = value
-        }
-    }
-}
-
-# settingIn -- where `name` is in the settings `names`, from 1; 0 when it is
-# not one of them
-settingIn: function {names: staticlist StringView name: StringView} out u64 is {
-    i: u64
-    for each s: names loop {
-        i = i + 1
-        if s == name then return i
-    }
-    return 0
-}
-
-# settingList -- every setting project.z may give, as the unknown-setting
-# report lists them
-settingList: function out String is {
-    r: String
-    for each s: stringSettings loop settingListAppend :r :s
-    for each s: switchSettings loop settingListAppend :r :s
-    for each s: listSettings loop settingListAppend :r :s
-    return r
-}
-
-# settingListAppend -- one name onto a comma-separated list
-settingListAppend: function {r: String.borrow s: StringView} is {
-    if r.length > 0 then r.append ", "
-    r.append s
 }
 
 # dotsOnly -- whether path component `p` is exactly `n` dots: `.` or `..`
@@ -256,7 +183,7 @@ isRootPath: function {p: StringView} out bool is {
     return (path.rootLength :p) == p.length
 }
 
-# inProject -- a path project.z gives, as the driver opens it: joined to the
+# inProject -- a path project.zd gives, as the driver opens it: joined to the
 # project directory unless it is absolute. "" stays "" (unset).
 inProject: function {dir: StringView rel: StringView} out String is {
     if rel.length == 0 then return "".string
@@ -266,16 +193,18 @@ inProject: function {dir: StringView rel: StringView} out String is {
 }
 
 # discoverProject -- the project `start` (a directory) belongs to: the nearest
-# project.z at or above it, read. No project.z anywhere above is an empty
-# ProjectFile, which is single-file mode.
-discoverProject: function {start: StringView} out ProjectFile is {
+# project.zd at or above it, read against the schema in `systemdir`, the
+# driver's own stdlib (the schema is the driver's: a project's own systemDir
+# setting cannot name where the file that gives it is checked). No project.zd
+# anywhere above is an empty ProjectFile, which is single-file mode.
+discoverProject: function {start: StringView systemdir: StringView} out ProjectFile is {
     dir: findProjectDir :start
     if dir.length == 0 then return ProjectFile.create
-    return (readProject dir: dir.stringView)
+    return (readProject dir: dir.stringView :systemdir)
 }
 
 # findProjectDir -- the nearest directory at or above `start` holding a
-# project.z, spelled by climbing from `start` (`src` climbs to `.`, then `..`),
+# project.zd, spelled by climbing from `start` (`src` climbs to `.`, then `..`),
 # so a relative start answers a relative directory. "" when there is none up to
 # the filesystem root.
 findProjectDir: function {start: StringView} out String is {
@@ -343,25 +272,60 @@ upOne: function {p: StringView} out String is {
     return (path.dirname :p)
 }
 
-# readProject -- the settings of `dir`/project.z. Every top-level definition
-# must name a setting and give it a literal of the setting's kind; the first
-# that does not is the result's `error`, and the settings read before it are
-# kept.
-readProject: function {dir: StringView} out ProjectFile is {
+# readProject -- the settings of `dir`/project.zd: its `project`, a
+# `toolchain.project` value, checked by zdata against the schema in
+# `systemdir`. What is wrong with the file is the result's `error`, every
+# error rendered.
+readProject: function {dir: StringView systemdir: StringView} out ProjectFile is {
     pf: ProjectFile.create
     pf.dir = dir.string
     file: path.join a: dir b: projectFileName
     shown: displayOf path: file.stringView
-    rd: io.readText path: file
-    match (
-        rd
-    ) case ok then {
-        root: ast.parseSource source: rd.copy
-        pf.error = readSettings ast: root shown: shown.stringView into: pf
-    } case err then {
-        pf.error = "error: cannot read \{shown}"
+    # with no stdlib there is no schema to read the file against, and nothing
+    # the driver could build: its own report of the missing root is the one
+    # that stops it
+    if (zcheck.pathKindIs path: systemdir want: io.filekind.dir).not then return pf
+    df: zdata.open file: file.stringView srcdirs: List String :systemdir
+    if df.ok.not then {
+        pf.error = zdata.errorsText f: df
+        pf.errorCount = zdata.errorCount f: df
+        return pf
+    }
+    v: zdata.definition f: df name: "project"
+    if (zdata.isOfType f: df :v unitName: "toolchain" typeName: "project").not then {
+        head: "error: \{shown} gives its settings as `project: (toolchain.project ...)`, and defines no such value"
+        pf.error = diagnostic head: head.stringView shown: shown.stringView
+        pf.errorCount = 1
+        return pf
+    }
+    readFields :df :v into: pf
+    twice: namedTwice items: pf.programs
+    if twice.length > 0 then {
+        head2: "error: 'programs' names '\{twice}' twice"
+        pf.error = diagnostic head: head2.stringView shown: shown.stringView
+        pf.errorCount = 1
     }
     return pf
+}
+
+# readFields -- each setting of `project` value `v` into `into`
+readFields: function {df: zdata.DataFile.view v: ztypes.cval into: ProjectFile} is {
+    into.sourceDirs = zdata.textsOf f: df v: (zdata.fieldOf f: df :v name: "sourceDirs")
+    into.sourceDirsGiven = true
+    into.programs = zdata.textsOf f: df v: (zdata.fieldOf f: df :v name: "programs")
+    into.systemDir = zdata.textOf f: df v: (zdata.fieldOf f: df :v name: "systemDir")
+    into.runtimeDir = zdata.textOf f: df v: (zdata.fieldOf f: df :v name: "runtimeDir")
+    into.target = zdata.textOf f: df v: (zdata.fieldOf f: df :v name: "target")
+    into.outputDir = zdata.textOf f: df v: (zdata.fieldOf f: df :v name: "outputDir")
+    into.cCompiler = zdata.textOf f: df v: (zdata.fieldOf f: df :v name: "cCompiler")
+    into.cCompilerMode = zdata.textOf f: df v: (zdata.fieldOf f: df :v name: "cCompilerMode")
+    into.cFlags = zdata.textOf f: df v: (zdata.fieldOf f: df :v name: "cFlags")
+    into.linkFlags = zdata.textOf f: df v: (zdata.fieldOf f: df :v name: "linkFlags")
+    into.tccLibDir = zdata.textOf f: df v: (zdata.fieldOf f: df :v name: "tccLibDir")
+    into.release = zdata.boolOf v: (zdata.fieldOf f: df :v name: "release")
+    into.fastHash = zdata.boolOf v: (zdata.fieldOf f: df :v name: "fastHash")
+    into.readableNames = zdata.boolOf v: (zdata.fieldOf f: df :v name: "readableNames")
+    into.eager = zdata.boolOf v: (zdata.fieldOf f: df :v name: "eager")
 }
 
 # displayOf -- a path as a diagnostic names it: without a leading `./`
@@ -380,147 +344,6 @@ displayOf: function {path: StringView} out String is {
     return path.string
 }
 
-# readSettings -- each top-level definition of the parsed project.z into
-# `into`; the first problem rendered as a diagnostic, "" when there is none
-readSettings: function {ast: Ast.view shown: StringView into: ProjectFile} out String is {
-    if ast.units.length == 0 then return "".string
-    un: ast.nodes.get i: (ast.units.get i: 0)
-    if un.namedoperation.not then return "".string
-    body: zast.unitBodyIdsAt :ast unitId: un.operation
-    i: u64
-    for i < body.count loop {
-        id: zast.kidAt kids: ast.kids span: body :i
-        i = i + 1
-        problem: readOne :ast :id :shown :into
-        if problem.length > 0 then return problem.take
-    }
-    return "".string
-}
-
-# readOne -- one top-level definition of project.z into `into`; what is wrong
-# with it as a diagnostic, "" when nothing is
-readOne: function {
-    ast: Ast.view
-    id: zast.nodeid
-    shown: StringView
-    into: ProjectFile
-} out String is {
-    n: ast.nodes.get i: id
-    match (
-        n
-    ) case error then {
-        return (parseProblem :ast row: n :shown)
-    } case namedoperation then {
-        return (readSetting :ast :id nameRef: n.name valueId: n.operation :shown :into)
-    } else {
-        return (
-            located
-            :ast
-            at: id
-            :shown
-            msg: "project.z holds settings only, each written `name: value`".string
-        )
-    }
-}
-
-# readSetting -- the setting `nameRef: <valueId>` into `into`; the problem with
-# it as a diagnostic, "" when there is none
-readSetting: function {
-    ast: Ast.view
-    id: zast.nodeid
-    nameRef: zast.nameid
-    valueId: zast.nodeid
-    shown: StringView
-    into: ProjectFile
-} out String is {
-    nm: zast.poolTextAt pool: ast.names ref: nameRef
-    v: ast.nodes.get i: valueId
-    match (
-        v
-    ) case error then {
-        return (parseProblem :ast row: v :shown)
-    } else null
-    kl: settingIn names: listSettings name: nm.stringView
-    if kl > 0 then return (readListSetting :ast :id :v :shown name: nm.stringView which: kl :into)
-    ks: settingIn names: stringSettings name: nm.stringView
-    kb: settingIn names: switchSettings name: nm.stringView
-    if ks == 0 when kb == 0 then {
-        names: settingList
-        return (
-            located
-            :ast
-            at: id
-            :shown
-            msg: "'\{nm}' is not a project setting; the settings are \{names}"
-        )
-    }
-    if ks > 0 then {
-        sv: literalString :ast :v
-        match (
-            sv
-        ) case some then {
-            into.setString k: ks value: sv.take
-            return "".string
-        } case none then null
-        why: "'\{nm}' must be a string literal: project.z is read before any unit loads"
-        if (literalSwitch :v).some then why = "'\{nm}' takes a string, not true or false"
-        return (located :ast at: id :shown msg: why.take)
-    }
-    bv: literalSwitch :v
-    match (
-        bv
-    ) case some then {
-        into.setSwitch k: kb value: bv
-        return "".string
-    } case none then null
-    why2: "'\{nm}' must be true or false: project.z is read before any unit loads"
-    if (literalString :ast :v).some then why2 = "'\{nm}' takes true or false, not a string"
-    return (located :ast at: id :shown msg: why2.take)
-}
-
-# readListSetting -- list setting `name`, its place in listSettings from 1
-# (`sourceDirs: list { "src" "lib" }`), into `into`: a list, possibly
-# empty, of string literals, read before any unit loads; the problem with it as
-# a diagnostic, "" when there is none
-readListSetting: function {
-    ast: Ast.view
-    id: zast.nodeid
-    v: astnode.view
-    shown: StringView
-    name: StringView
-    which: u64
-    into: ProjectFile
-} out String is {
-    why: "'\{name}' must be a list of string literals -- `list { \"a\" \"b\" }` -- since project.z is read before any unit loads"
-    if v.listblock.not then return (located :ast at: id :shown msg: why.take)
-    items: List String
-    k: u64
-    for k < v.elements.count loop {
-        en: ast.nodes.get i: (zast.kidAt kids: ast.kids span: v.elements i: k)
-        k = k + 1
-        ev: Option.none String
-        if en.namedoperation then ev = literalString :ast v: (ast.nodes.get i: en.operation)
-        match (
-            ev
-        ) case some then {
-            items.append from: ev.take
-        } case none then {
-            return (located :ast at: id :shown msg: why.take)
-        }
-    }
-    if which == 1 then {
-        into.sourceDirs = items.take
-        into.sourceDirsGiven = true
-        return "".string
-    }
-    twice: namedTwice :items
-    if twice.length > 0 then {
-        return (located :ast at: id :shown msg: "'programs' names '\{twice}' twice")
-    }
-    into.programs = items.take
-    return "".string
-}
-
 # namedTwice -- the first entry of `items` an earlier one repeats, "" when each
 # is named once
 namedTwice: function {items: (List String).view} out String is {
@@ -537,67 +360,12 @@ namedTwice: function {items: (List String).view} out String is {
     return "".string
 }
 
-# literalString -- the text of a string literal with no interpolation, none for
-# any other node
-literalString: function {ast: Ast.view v: astnode.view} out Option String is {
-    match (
-        v
-    ) case atomstring then {
-        r: String
-        k: u64
-        for k < v.stringparts.count loop {
-            c: ast.nodes.get i: (zast.kidAt kids: ast.kids span: v.stringparts i: k)
-            k = k + 1
-            match (
-                c
-            ) case stringchunk then {
-                r.append (zast.poolTextAt pool: ast.names ref: c.text)
-            } else {
-                return (Option.none String)
-            }
-        }
-        return (Option.some r.take)
-    } else {
-        return (Option.none String)
-    }
-}
-
-# literalSwitch -- the value of a bare `true` or `false`, none for any other
-# node
-literalSwitch: function {v: astnode.view} out optionval bool is {
-    match (
-        v
-    ) case atomid then {
-        if v.name == zast.wellKnown.slot.wkTrue then return (optionval.some true)
-        if v.name == zast.wellKnown.slot.wkFalse then return (optionval.some false)
-    } else null
-    return (optionval.none bool)
-}
-
-# located -- `msg` as a diagnostic at node `at`
-located: function {ast: Ast.view at: zast.nodeid msg: String shown: StringView} out String is {
-    pos: zast.posOf n: (ast.nodes.get i: at)
-    head: "error: \{msg}"
-    return (diagnostic head: head.stringView :shown line: pos.line col: pos.col)
-}
-
-# parseProblem -- a parse error in project.z as a diagnostic
-parseProblem: function {ast: Ast.view row: zast.errorrow shown: StringView} out String is {
-    e: zast.errorDataOf :ast :row
-    head: zast.errorLine :e
-    return (diagnostic head: head.stringView :shown line: e.lineno col: e.colno)
-}
-
-# diagnostic -- `head` and the place it is about, as zc renders an error:
-# the second line `--> path:line:col`
-diagnostic: function {head: StringView shown: StringView line: u32 col: u32} out String is {
+# diagnostic -- `head` and the file it is about, as zc renders an error: the
+# second line `--> path`
+diagnostic: function {head: StringView shown: StringView} out String is {
     r: head.string
     r.append "\n --> "
     r.append shown
-    r.append ":"
-    r.append "\{line}"
-    r.append ":"
-    r.append "\{col}"
     return r
 }
 
@@ -665,8 +433,9 @@ BuildFacts: class {
 }
 
 # zLayer -- the generated `z` unit for one build: z.z, which publishes
-# `build` and (in a project) `project`, and z/build.z, the build's values. It
-# lives in .zerolang/targets/<arch>-<os>/ beside the project's project.z, or,
+# `build` and (in a project) `project`, z/build.z, the build's values, and in a
+# project z/project.z, its settings (projectText). It lives in
+# .zerolang/targets/<arch>-<os>/ beside the project's project.zd, or,
 # with no project, in the user's cache directory, so nothing is written beside
 # a lone source file. The build reads the text from memory and the copy on disk
 # is for people and editors, so two builds running at once cannot read each
@@ -682,14 +451,11 @@ zLayer: function {pf: ProjectFile.view facts: BuildFacts.view} out zcheck.GenLay
     dir: String
     tsub: "targets/\{key}"
     if home.length > 0 then dir = path.join a: home.stringView b: tsub.stringView
-    projectFile: String
-    if pf.found then projectFile = path.join a: pf.dir.stringView b: projectFileName
     layer: (
         zcheck.GenLayer
         :dir
         paths: List String
         texts: List String
-        :projectFile
     )
     layer.paths.append from: "z.z".string
     layer.texts.append from: (zText hasProject: pf.found)
@@ -703,6 +469,10 @@ zLayer: function {pf: ProjectFile.view facts: BuildFacts.view} out zcheck.GenLay
         archName: arn.stringView
         key: key.stringView
     )
+    if pf.found then {
+        layer.paths.append from: "z/project.z".string
+        layer.texts.append from: (projectText :pf :facts)
+    }
     return layer
 }
 
@@ -715,7 +485,7 @@ layerBaseOf: function {pf: ProjectFile.view facts: BuildFacts.view} out String i
 }
 
 # zerolangDirOf -- the compiler's own directory for this build: `.zerolang`
-# beside project.z, or with no project one under the user's cache directory
+# beside project.zd, or with no project one under the user's cache directory
 # keyed by the main file's directory -- the same key on every run, so each
 # directory keeps one folder; "" when there is no cache directory
 zerolangDirOf: function {pf: ProjectFile.view facts: BuildFacts.view} out String is {
@@ -770,6 +540,57 @@ writeIfChanged: function {path: StringView text: StringView} is {
     if mv.err then io.remove path: tmp
 }
 
+# projectText -- z/project.z: every setting of the project as a constant,
+# each at its default where project.zd leaves it out, the switches as this
+# build's flags left them
+projectText: function {pf: ProjectFile.view facts: BuildFacts.view} out String is {
+    t: String
+    t.append "# project.z -- GENERATED by zc from project.zd for the build that wrote\n"
+    t.append "# it; do not edit. Every setting of the project, at its default where\n"
+    t.append "# project.zd leaves it out, and each switch as this build's flags left it.\n"
+    t.append "# Read each as `z.project.<name>`.\n"
+    t.append (textsLine name: "sourceDirs" items: pf.sourceDirs)
+    t.append (textLine name: "systemDir" value: pf.systemDir.stringView)
+    t.append (textLine name: "runtimeDir" value: pf.runtimeDir.stringView)
+    t.append (textsLine name: "programs" items: pf.programs)
+    t.append (textLine name: "target" value: pf.target.stringView)
+    t.append (textLine name: "outputDir" value: pf.outputDir.stringView)
+    t.append (textLine name: "cCompiler" value: pf.cCompiler.stringView)
+    t.append (textLine name: "cCompilerMode" value: pf.cCompilerMode.stringView)
+    t.append (textLine name: "cFlags" value: pf.cFlags.stringView)
+    t.append (textLine name: "linkFlags" value: pf.linkFlags.stringView)
+    t.append (textLine name: "tccLibDir" value: pf.tccLibDir.stringView)
+    t.append "release: \{facts.release}\n"
+    t.append "fastHash: \{facts.fastHash}\n"
+    t.append "readableNames: \{facts.readableNames}\n"
+    t.append "eager: \{facts.eager}\n"
+    return t
+}
+
+# textLine -- `name: "value"`, a string setting as z/project.z writes it
+textLine: function {name: StringView value: StringView} out String is {
+    t: name.string
+    t.append ": "
+    t.append (quoted s: value)
+    t.append "\n"
+    return t
+}
+
+# textsLine -- `name: list { "a" "b" } out staticlist StringView`, a list
+# setting: its elements views of the program's static strings, as a string
+# literal is
+textsLine: function {name: StringView items: (List String).view} out String is {
+    t: name.string
+    t.append ": list {"
+    for each it: items loop {
+        t.append " "
+        t.append (quoted s: it.stringView)
+    }
+    if items.length > 0 then t.append " "
+    t.append "} out staticlist StringView\n"
+    return t
+}
+
 # zText -- z.z: the unit a program names as `z`
 zText: function {hasProject: bool} out String is {
     t: String
@@ -778,7 +599,7 @@ zText: function {hasProject: bool} out String is {
     t.append "# holding it is safe to delete.\n"
     t.append "#\n"
     t.append "# `z.build` is what the build is: its target, its unit, its switches.\n"
-    if hasProject then t.append "# `z.project` is the project's own project.z.\n"
+    if hasProject then t.append "# `z.project` is the project's settings, as project.zd gives them.\n"
     t.append "public: unit {\n"
     t.append "    :build\n"
     if hasProject then t.append "    :project\n"
@@ -866,7 +687,7 @@ buildHeader: function {
     t.append "# Do not edit; zc rewrites it whenever a value changes. Read each as\n"
     t.append "# `z.build.<name>`. A path below is relative to "
     if pf.found then {
-        t.append "the project directory, the\n# one holding project.z.\n"
+        t.append "the project directory, the\n# one holding project.zd.\n"
     } else {
         t.append "the main file's directory.\n"
     }
@@ -880,7 +701,6 @@ buildHeader: function {
         t.append "#   (the user's cache directory)  -- this unit and z.z (generated)\n"
     }
     t.append (layoutLine root: facts.systemdir.stringView :base what: "the stdlib")
-    if pf.found then t.append "#   project.z  -- mounted alone as z/project.z\n"
     t.append "#\n# The C toolchain: the backend's business, so no constant below names it.\n"
     t.append (commentPair name: "cCompiler" value: facts.cCompiler.stringView)
     t.append (commentPair name: "cCompilerMode" value: facts.cCompilerMode.stringView)
@@ -1009,12 +829,12 @@ cleanAbsolute: function {p: StringView} out String is {
     return (path.clean p: abs.stringView)
 }
 
-# initProject -- `zc init`: make `dir` a project. Writes project.z with every
+# initProject -- `zc init`: make `dir` a project. Writes project.zd with every
 # setting present and commented out at its default, each under a line saying
 # what it is, and the compiler's .zerolang directory. When `dir` holds no `.z`
 # file it also writes main.z, a unit printing a greeting, and sets `main` to
 # it, so `zc build` works at once. Refuses a directory that already holds a
-# project.z. Answers each path written, one per line, or the refusal.
+# project.zd. Answers each path written, one per line, or the refusal.
 initProject: function {dir: StringView} out InitResult is {
     pz: path.join a: dir b: projectFileName
     pzs: displayOf path: pz.stringView
@@ -1059,50 +879,55 @@ dirHoldsUnits: function {dir: StringView} out bool is {
     return false
 }
 
-# projectTemplate -- the project.z `zc init` writes: every setting, commented
-# out at its default; `programs` set to main.z's unit when init wrote that too
+# projectTemplate -- the project.zd `zc init` writes: every setting, commented
+# out at its default but the source roots, which make it a construction;
+# `programs` set to main.z's unit when init wrote that too
 projectTemplate: function {withMain: bool} out String is {
     t: String
-    t.append "# project.z -- this directory is a zerolang project. zc, zl and zls\n"
-    t.append "# started anywhere below it read their settings here. Every setting is\n"
-    t.append "# optional and shown at its default; a flag given to zc replaces it\n"
-    t.append "# outright. A path is relative to this directory.\n"
-    t.append "\n# the directories holding the project's units, the first searched first\n"
-    t.append "# (--src)\n"
-    t.append "# sourceDirs: list { \".\" }\n"
-    t.append "\n# the project's programs, each a unit declaring `main`: `zc build` builds\n"
-    t.append "# them all when it names no unit, and `zc run` runs the one listed\n"
+    t.append "# project.zd -- this directory is a zerolang project. zc, zl and zls\n"
+    t.append "# started anywhere below it read their settings here: `project`, a\n"
+    t.append "# toolchain.project value (docs/zdata.pdoc). Every setting is optional and\n"
+    t.append "# shown at its default; a flag given to zc replaces it outright. A path is\n"
+    t.append "# relative to this directory.\n"
+    t.append "project: (\n"
+    t.append "    toolchain.project\n"
+    t.append "    # the directories holding the project's units, the first searched first\n"
+    t.append "    # (--src)\n"
+    t.append "    sourceDirs: list { \".\" }\n"
+    t.append "    # the project's programs, each a unit declaring `main`: `zc build` builds\n"
+    t.append "    # them all when it names no unit, and `zc run` runs the one listed\n"
     if withMain then {
-        t.append "programs: list { \"main\" }\n"
+        t.append "    programs: list { \"main\" }\n"
     } else {
-        t.append "# programs: list { \"main\" }\n"
+        t.append "    # programs: list { \"main\" }\n"
     }
-    t.append "\n# where `zc build` writes the executable (-o names a file instead)\n"
-    t.append "# outputDir: \".\"\n"
-    t.append "\n# the target triple to build for (--target); unset builds for the host\n"
-    t.append "# target: \"x86_64-linux\"\n"
-    t.append "\n# build with optimisation (--release)\n"
-    t.append "# release: false\n"
-    t.append "\n# the emitter's cheaper name hash (--fast-hash)\n"
-    t.append "# fastHash: false\n"
-    t.append "\n# source names in the C rather than numbered ones (--readable-names)\n"
-    t.append "# readableNames: false\n"
-    t.append "\n# typecheck every definition, not only what main reaches (--eager)\n"
-    t.append "# eager: false\n"
-    t.append "\n# the stdlib directory (--system); unset uses the one installed with zc\n"
-    t.append "# systemDir: \"lib/system\"\n"
-    t.append "\n# the C runtime directory (--runtime); unset uses the one installed with zc\n"
-    t.append "# runtimeDir: \"runtime\"\n"
-    t.append "\n# the C compiler (--cc); unset picks one for the target\n"
-    t.append "# cCompiler: \"cc\"\n"
-    t.append "\n# how the C compiler runs, spawn or inproc (--cc-mode)\n"
-    t.append "# cCompilerMode: \"spawn\"\n"
-    t.append "\n# passed through to the C compile step (--cflags)\n"
-    t.append "# cFlags: \"\"\n"
-    t.append "\n# passed through to the link step (--ldflags)\n"
-    t.append "# linkFlags: \"\"\n"
-    t.append "\n# the tcc runtime payload directory (--tcc-lib); unset uses the vendored one\n"
-    t.append "# tccLibDir: \"\"\n"
+    t.append "    # where `zc build` writes the executable (-o names a file instead)\n"
+    t.append "    # outputDir: \".\"\n"
+    t.append "    # the target triple to build for (--target); unset builds for the host\n"
+    t.append "    # target: \"x86_64-linux\"\n"
+    t.append "    # build with optimisation (--release)\n"
+    t.append "    # release: false\n"
+    t.append "    # the emitter's cheaper name hash (--fast-hash)\n"
+    t.append "    # fastHash: false\n"
+    t.append "    # source names in the C rather than numbered ones (--readable-names)\n"
+    t.append "    # readableNames: false\n"
+    t.append "    # typecheck every definition, not only what main reaches (--eager)\n"
+    t.append "    # eager: false\n"
+    t.append "    # the stdlib directory (--system); unset uses the one installed with zc\n"
+    t.append "    # systemDir: \"lib/system\"\n"
+    t.append "    # the C runtime directory (--runtime); unset uses the one installed with zc\n"
+    t.append "    # runtimeDir: \"runtime\"\n"
+    t.append "    # the C compiler (--cc); unset picks one for the target\n"
+    t.append "    # cCompiler: \"cc\"\n"
+    t.append "    # how the C compiler runs, spawn or inproc (--cc-mode)\n"
+    t.append "    # cCompilerMode: \"spawn\"\n"
+    t.append "    # passed through to the C compile step (--cflags)\n"
+    t.append "    # cFlags: \"\"\n"
+    t.append "    # passed through to the link step (--ldflags)\n"
+    t.append "    # linkFlags: \"\"\n"
+    t.append "    # the tcc runtime payload directory (--tcc-lib); unset uses the vendored one\n"
+    t.append "    # tccLibDir: \"\"\n"
+    t.append ")\n"
     return t
 }
 

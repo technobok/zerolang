@@ -168,7 +168,7 @@ an error &#x2014; use <code>zc build &lt;src&gt;</code>.</p>
 <li><strong>build</strong> <code>&lt;src&gt;</code> &#x2014; compile to a native executable; output is
 <code>-o OUT</code>, else <code>&lt;unit&gt;</code> in the project's directory (or its
 <code>outputDir</code>), or outside a project in <code>./</code>. In a project whose
-<code>project.z</code> lists <code>programs</code>, <code>&lt;src&gt;</code> may be left out: every
+<code>project.zd</code> lists <code>programs</code>, <code>&lt;src&gt;</code> may be left out: every
 program is built, in the order listed, stopping at the first that
 fails.</li>
 <li><strong>run</strong> <code>&lt;src&gt; [args...]</code> &#x2014; build to a temporary file, then run it
@@ -204,7 +204,7 @@ need (its <code>zcsrc:</code> header lines) with the compiler that will link it
 cached object's path, one a line, to link after the <code>.c</code> (see
 <a href="#c-sources-a-unit-builds">C sources a unit builds</a>).</li>
 <li><strong>init</strong> <code>[dir]</code> &#x2014; make <code>dir</code> (default <code>.</code>) a project: write its
-<code>project.z</code> and <code>.zerolang/</code>, and a <code>main.z</code> when it holds no unit
+<code>project.zd</code> and <code>.zerolang/</code>, and a <code>main.z</code> when it holds no unit
 (see <a href="#projects">Projects</a>).</li>
 <li><strong>lint</strong> <code>[args...]</code> and <strong>fmt</strong> <code>[args...]</code> &#x2014; thin shims that
 locate the sibling <code>zl</code> binary (the standalone linter/formatter), forward
@@ -225,28 +225,34 @@ zc explain E0200</code></pre>
 <p><code>-h</code> / <code>--help</code> and <code>-V</code> / <code>--version</code> are also accepted in any
 position, so <code>zc build --help</code> prints the help for <code>build</code>.</p>
 <h2 id="projects"><a href="#projects">4. Projects</a></h2>
-<p>A <strong>project</strong> is a directory holding a <code>project.z</code>: the user's file of
+<p>A <strong>project</strong> is a directory holding a <code>project.zd</code>: the user's file of
 settings, and the marker of the project's root. <code>zc</code>, <code>zl</code> and <code>zls</code>
 find it by walking up from where they start -- <code>zc</code> from the directory of a
 unit named by its file, else the working directory -- and stop at the first,
 nearest one. With none anywhere above, each behaves exactly as without
 projects.</p>
-<pre><code class="language-zerolang">  # project.z
-  sourceDirs: list { "src" }
-  programs: list { "app" "tool" }
-  release: true</code></pre>
-<p>The settings are read <strong>before</strong> anything is built, since they say where the
-source and the stdlib are, so each one is a literal: a string, <code>true</code> /
-<code>false</code>, or -- for <code>sourceDirs</code> and <code>programs</code> -- a list of string
-literals. A setting the file does not know, a value that is not a literal and
-a literal of the wrong kind are each an error at the line, and stop the
-driver. A path is relative to the project directory. A <strong>flag fully
-overrides</strong> the file's value; a unit named by its file is its own source root.</p>
+<pre><code class="language-zdata">  # project.zd
+  project: (
+      toolchain.project
+      sourceDirs: list { "src" }
+      programs: list { "app" "tool" }
+      release: true
+  )</code></pre>
+<p><code>project.zd</code> is a data file (see <a href="./zdata.html">zdata</a>). Its
+<code>project</code> is a <code>toolchain.project</code> value: the type is a schema in the
+stdlib, <code>lib/system/toolchain.zd</code>, and lists every setting below with its
+default. The file is checked against the schema of the driver's own stdlib (its
+<code>--system</code>, or the one installed with it), not the stdlib the project names,
+so a setting the type does not have and a value of the wrong type are each an
+error at its line, and stop the driver. A setting the file leaves out takes its
+default: an empty string or <code>false</code>, which mean the driver's own default. A
+path is relative to the project directory. A <strong>flag fully overrides</strong> the
+file's value; a unit named by its file is its own source root.</p>
 <ul>
 <li><code>sourceDirs</code> -- the source roots, the first searched first (each a
 <code>--src</code>): always a list, <code>list { "src" "lib" }</code>, even with
-one root. Unset is the project directory itself; an empty list
-(<code>list {} out staticlist StringView</code>) is no source root at all</li>
+one root. Unset is the project directory itself (<code>""</code> names it);
+an empty list (<code>list {} out staticlist text</code>) is no source root at all</li>
 <li><code>systemDir</code> -- the stdlib (<code>--system</code>)</li>
 <li><code>runtimeDir</code> -- the C runtime (<code>--runtime</code>)</li>
 <li><code>programs</code> -- the project's programs, each a unit declaring
@@ -268,18 +274,18 @@ switches (<code>--release</code>, <code>--fast-hash</code>, <code>--readable-nam
 <code>tccLibDir</code> -- the C toolchain (<code>--cc</code>, <code>--cc-mode</code>, <code>--cflags</code>,
 <code>--ldflags</code>, <code>--tcc-lib</code>)</li>
 </ul>
-<p>The compiler's own folder, <code>.zerolang/</code>, sits beside <code>project.z</code> and is
+<p>The compiler's own folder, <code>.zerolang/</code>, sits beside <code>project.zd</code> and is
 disposable: it holds a <code>.gitignore</code> of <code>*</code> and the <strong>generated</strong> unit
 <code>z</code> each build writes -- <code>z.build</code> says what the build is
-(<code>z.build.os</code>, <code>z.build.main</code>, ...) and <code>z.project</code> is the project's
-own <code>project.z</code> (see <code>z_unit.pdoc</code>). Outside a project that unit lives in
-the user's cache directory instead.</p>
-<p><code>zc init [dir]</code> makes a directory a project: it writes <code>project.z</code> with
-every setting commented out at its default, and <code>.zerolang/</code>. In a directory
-with no <code>.z</code> file it also writes <code>main.z</code>, printing a greeting, and lists
-it in <code>programs</code>, so <code>zc build &amp;&amp; ./main</code> works at once. It refuses a directory
-that already holds a <code>project.z</code>.</p>
-<p>The zerolang repository is itself a project: its <code>project.z</code> names
+(<code>z.build.os</code>, <code>z.build.main</code>, ...) and <code>z.project</code> holds the project's
+settings (see <code>z_unit.pdoc</code>). Outside a project that unit lives in the user's
+cache directory instead. <code>project.zd</code> itself is no unit of the program.</p>
+<p><code>zc init [dir]</code> makes a directory a project: it writes <code>project.zd</code> with
+its source roots set and every other setting commented out at its default, and
+<code>.zerolang/</code>. In a directory with no <code>.z</code> file it also writes <code>main.z</code>,
+printing a greeting, and lists it in <code>programs</code>, so <code>zc build &amp;&amp; ./main</code>
+works at once. It refuses a directory that already holds a <code>project.zd</code>.</p>
+<p>The zerolang repository is itself a project: its <code>project.zd</code> names
 <code>src</code>, <code>lib/system</code> and its four programs (<code>zc</code>, <code>zl</code>, <code>zls</code>,
 <code>ztestrunner</code>), so a plain <code>zc build</code> anywhere in the tree builds them
 all, and <code>zls</code> searches each of them for references.</p>
@@ -555,7 +561,7 @@ lines &#x2014; <code>ZEROLANG_ROOT</code>, <code>ZEROLANG_SYSTEM</code>, <code>Z
 <code>ZEROLANG_VENDOR</code> and <code>ZC_OBJ_CACHE</code> (where a unit's C sources are
 found and their objects kept, see
 <a href="#c-sources-a-unit-builds">C sources a unit builds</a>),
-<code>ZC_PROJECT</code> (the <code>project.z</code> in effect, empty outside a project),
+<code>ZC_PROJECT</code> (the <code>project.zd</code> in effect, empty outside a project),
 <code>ZC_VERSION</code>,
 <code>ZC_COMMIT</code>, <code>ZC_BUILD_DATE</code>, <code>ZC_BUILD_CC</code>, and <code>ZC_EXE</code>. It
 honours the same flags and project as a build, so
