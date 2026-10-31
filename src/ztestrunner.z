@@ -2524,6 +2524,9 @@ runErrorCases: function {r: Runner} is {
 # with `zc data` (its own directory first, then what <case>.zcargs adds). A case
 # with a <case>.err golden must fail with those errors (normErr); any other
 # must succeed and print exactly its <case>.out, the file's values written back.
+# `zl lint --full` checks each file the same way: it must report the golden's
+# errors, or pass a case that has none -- a data file's definitions are read
+# by the program that opens it, so none is reported unused.
 runZdataCases: function {r: Runner} is {
     dir: "\{r.root.stringView}/tests/fixtures/zdata"
     pool: List PoolJob
@@ -2551,6 +2554,29 @@ runZdataCases: function {r: Runner} is {
             zlinkFrom: ""
         )
         pool.append (mkJob name: nm :steps)
+        largv: List String
+        largv.append from: "\{r.root.stringView}/bin/zl"
+        largv.append from: "lint".string
+        largv.append from: "--full".string
+        largv.append from: "--system".string
+        largv.append from: r.sys.copy
+        largv.append from: "--src".string
+        largv.append from: dir.copy
+        largv.append from: "\{dir}/\{nm}.zd"
+        lerrP: "\{r.tmp.stringView}/\{nm}.zlerr"
+        lsteps: List PoolStep
+        lsteps.append (
+            mkStep
+            argv: (withExtraArgs argv: largv file: xf.stringView)
+            cwd: ""
+            outPath: os.nullDevice.stringView
+            errPath: lerrP.stringView
+            timeoutSecs: 0
+            allowFail: true
+            zlinkFrom: ""
+        )
+        ljn: "\{nm}#zl"
+        pool.append (mkJob name: ljn.stringView steps: lsteps)
     }
     statuses: ListVal i32
     failSteps: ListVal i64
@@ -2561,7 +2587,15 @@ runZdataCases: function {r: Runner} is {
         nm: job.name.stringView
         st: statuses.get i: ji
         ji = ji + 1
-        if (zdataCaseOk :r dir: dir.stringView :nm status: st) then {
+        lst: statuses.get i: ji
+        ji = ji + 1
+        if (zdataCaseOk :r dir: dir.stringView :nm status: st) when (
+            zdataLintOk
+            :r
+            dir: dir.stringView
+            :nm
+            status: lst
+        ) then {
             r.passN = r.passN + 1
         } else {
             print "FAIL(zdata) \{nm}"
@@ -2585,6 +2619,31 @@ zdataCaseOk: function {r: Runner.view dir: StringView nm: StringView status: i32
     outP: "\{r.tmp.stringView}/\{nm}.zdout"
     outGold: "\{dir}/\{nm}.out"
     return (status == 0) and ((slurp path: outP.stringView) == (slurp path: outGold.stringView))
+}
+
+# zdataLintOk -- `zl lint --full` on one zdata case: the golden's error lines
+# when it has a .err, a clean pass when it has none
+zdataLintOk: function {r: Runner.view dir: StringView nm: StringView status: i32} out bool is {
+    errGold: "\{dir}/\{nm}.err"
+    lerrP: "\{r.tmp.stringView}/\{nm}.zlerr"
+    if (io.exists path: errGold).not then return status == 0
+    got: slurp path: lerrP.stringView
+    want: slurp path: errGold.stringView
+    return (
+        (status != 0) and ((errorLines text: got.stringView) == (errorLines text: want.stringView))
+    )
+}
+
+# errorLines -- the `error[E...]` header lines of a diagnostic report
+errorLines: function {text: StringView} out String is {
+    buf: String
+    for each ln: text.lines loop {
+        if (ln.startsWith prefix: "error[E") then {
+            buf.append ln
+            buf.append "\n"
+        }
+    }
+    return buf
 }
 
 # rootFree -- zc's stderr with the runner's own root dropped from the paths it

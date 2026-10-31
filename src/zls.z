@@ -962,6 +962,13 @@ Server: class {
                     srcDir: this.srcDir.stringView
                     systemDir: this.systemDir.stringView
                 )
+                docSrc: this.srcDir.copy
+                # a data file is a unit of its own directory first (zdata.open),
+                # so that is the root its relpath is relative to
+                if (zsource.isDataFile file: pth.stringView) then {
+                    docSrc = path.dirname p: pth.stringView
+                    rel = path.baseName p: pth.stringView
+                }
                 if rel.length == 0 then {
                     # Outside both roots -- every .z file in examples/ or a
                     # scratch directory, whenever srcDir is a project's src/.
@@ -981,7 +988,7 @@ Server: class {
                     uri: uo.copy
                     path: pth
                     relpath: rel
-                    srcDir: this.srcDir.copy
+                    srcDir: docSrc
                     systemDir: this.systemDir.copy
                     text: to.copy
                     version: ver
@@ -1157,6 +1164,10 @@ Server: class {
         }
         if found.not then return
         this.enterProjectOf file: mp.stringView
+        if (zsource.isDataFile file: mp.stringView) then {
+            this.recomputeData :uri mp: mp.stringView
+            return
+        }
         this.entrySnap = Map String V: zcheck.CheckResult
         pgs: List String
         for each pg: this.projPrograms loop pgs.append from: pg.copy
@@ -1190,6 +1201,48 @@ Server: class {
             this.bindGroup :uri topRel: topRel.stringView key: gk.stringView
             this.snapshots.set key: gk.copy value: r
             this.snapMain.set key: gk.copy value: mu.copy
+        }
+    }
+
+    # recomputeData -- check open data file `uri` (at `mp`) as zdata.open
+    # does: its own directory the first root, served from its buffer there,
+    # then the project's roots, the unit files `.zd`. Its check is a group of
+    # its own, keyed by the file.
+    recomputeData: function {:this uri: StringView mp: StringView} is {
+        dd: path.dirname p: mp
+        base: path.baseName p: mp
+        roots: List String
+        roots.append from: dd.copy
+        for each sd: this.srcDirs loop roots.append from: sd.copy
+        own: Map String V: String
+        {
+            dgo: this.docs.get key: uri.asString
+            match (
+                dgo
+            ) case some then {
+                own.set key: base.copy value: dgo.text.copy
+            } case none then null
+        }
+        ovs: this.overlaysOf
+        ovs.insert from: own.take at: 0
+        mu: zsource.unitNameOf file: mp
+        r: (
+            zcheck.check
+            srcdirs: roots
+            systemdir: this.systemDir.stringView
+            mainUnit: mu.stringView
+            overlays: ovs
+            layer: zcheck.noLayer
+            dataFile: true
+        )
+        rows: ListVal zcheck.diagrow
+        msgs: List String
+        zcheck.diagsOf :r :rows :msgs
+        this.publishAll :r :rows :msgs mainUnit: mu.stringView mainPath: mp
+        if r.parseOk then {
+            this.bindGroup :uri topRel: base.stringView key: mp
+            this.snapshots.set key: mp.string value: r
+            this.snapMain.set key: mp.string value: mu.copy
         }
     }
 

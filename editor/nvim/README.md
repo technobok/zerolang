@@ -1,6 +1,7 @@
 # Zerolang syntax highlighting for Neovim
 
-Provides syntax highlighting for `.z` files.
+Provides syntax highlighting for `.z` files, and for zdata (`.zd`) files,
+which are written in the same grammar (filetype `zdata`).
 
 ## Installation
 

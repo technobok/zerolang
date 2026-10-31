@@ -21,6 +21,7 @@ public: unit {
     :topUnitPathOf
     :unitAnchorFsno
     :unitNameOf
+    :isDataFile
 }
 
 astnode: zast.astnode
@@ -3875,13 +3876,17 @@ Analysis: class {
         systemdir: StringView
         layer: zcheck.GenLayer.view
         uname: StringView
+        # the file is a data file: its own directory is its first root, and
+        # it is asked what a data file may not hold
+        dataFile: bool
     } is {
         if (this.rootsReady :srcdirs :systemdir).not then return
         vfs: zcheck.newVfs
         # the roots as zc binds them, the first --src searched first
-        roots: zcheck.buildRoots :vfs :systemdir :srcdirs :layer
+        own: suffixRoots :srcdirs file: this.path.stringView :dataFile
+        roots: zcheck.buildRoots :vfs :systemdir srcdirs: own :layer
         rootid: roots.root
-        p: zparser.Parser.create
+        p: zparser.Parser.create ext: (unitFileExt file: this.path.stringView)
         prog: p.parse :vfs :rootid mainUnitName: uname.string
         # a failed parse names its error as the tree's root row. The test is a
         # call so no lock outlives it: typecheck below takes the tree.
@@ -3914,14 +3919,16 @@ Analysis: class {
                 dumpRows: false
                 filePaths: (ztypecheck.filePathsOf :vfs ast: prog)
             )
+            if dataFile then zcheck.dataRefusals :prog :vfs :st
             this.reportTypeErrors :st :prog
             this.placeForeignDiags :vfs :self
             # the rules below read what the typecheck STAMPED. On a failed
             # typecheck that evidence is partial, so they would report from it
-            # rather than about it
+            # rather than about it. A data file's definitions are read by the
+            # program that opens it, which no check here sees: none is unused
             if st.typing.errors.length == 0 then {
                 this.lintSuffixUnit :prog :lu :st
-                this.reportUnusedDefs :prog :lu :st
+                if dataFile.not then this.reportUnusedDefs :prog :lu :st
                 this.reportUnusedVars :prog :lu :st
                 this.reportViewableLocals :prog :lu :st
                 if this.opts.arch then this.reportArch :prog :lu :st :srcdirs :systemdir
@@ -5862,7 +5869,8 @@ topUnitPathOf: function {file: StringView} out String is {
         dir: path.dirname p: cur.stringView
         # a root names no unit folder
         if (path.baseName p: dir.stringView).length > 0 then {
-            parentFile: "\{dir}.z"
+            parentFile: dir.copy
+            parentFile.append (unitFileExt :file)
             if (zcheck.pathKindIs path: parentFile.stringView want: io.filekind.file) then {
                 cur = parentFile.take
                 stepping = true
@@ -5875,10 +5883,36 @@ topUnitPathOf: function {file: StringView} out String is {
     return cur
 }
 
-# unitNameOf -- a file path's unit name: the final path segment without the ".z" suffix.
+# suffixRoots -- the src roots the typecheck tier parses `file` against: the
+# project's, after the file's own directory for a data file, whose units its
+# siblings and its hidden folder are first (zdata.open)
+suffixRoots: function {
+    srcdirs: (List String).view file: StringView dataFile: bool
+} out List String is {
+    own: List String
+    if dataFile then own.append (path.dirname p: (topUnitPathOf :file).stringView)
+    for each sd: srcdirs loop own.append from: sd.copy
+    return own
+}
+
+# isDataFile -- the file is a data file (`.zd`, docs/zdata.pdoc) rather than
+# a source file
+isDataFile: function {file: StringView} out bool is {
+    return (file.endsWith ".zd")
+}
+
+# unitFileExt -- the extension the units of `file`'s kind carry: `.zd` beside
+# a data file, `.z` beside any other
+unitFileExt: function {file: StringView} out StringView is {
+    if (isDataFile :file) then return ".zd"
+    return ".z"
+}
+
+# unitNameOf -- a file path's unit name: the final path segment without its
+# unit extension (`.z`, or `.zd` for a data file).
 unitNameOf: function {file: StringView} out String is {
     base: path.baseName p: file
-    sfx: base.stringView.stripSuffix s: ".z"
+    sfx: base.stringView.stripSuffix s: (unitFileExt :file)
     match (
         sfx
     ) case some then {
@@ -6424,7 +6458,14 @@ analyzeFileFull: function {
         # a subunit file is parsed from its topmost unit, which names the parse
         top: topUnitPathOf file: a.path.stringView
         un: unitNameOf file: top.stringView
-        a.checkSuffix :srcdirs :systemdir :layer uname: un.stringView
+        (
+            a.checkSuffix
+            :srcdirs
+            :systemdir
+            :layer
+            uname: un.stringView
+            dataFile: (isDataFile file: a.path.stringView)
+        )
         a.checkLineLength width: opts.lineLength
         a.sortEditsInPlace
         return a

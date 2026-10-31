@@ -75,7 +75,7 @@ function M.setup(opts)
   local system_dir = opts.systemDir or vim.env.ZEROLANG_SYSTEM or (checkout .. "/lib/system")
 
   vim.api.nvim_create_autocmd("FileType", {
-    pattern = "zerolang",
+    pattern = { "zerolang", "zdata" },
     callback = function(args)
       local fname = vim.api.nvim_buf_get_name(args.buf)
       if fname == "" then

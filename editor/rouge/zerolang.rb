@@ -413,5 +413,15 @@ module Rouge
       #  rule %r/-?(?:0|[1-9]\d*)(?:e[+-]?\d+)?/i, Num::Integer
       #end
     end
+
+    # zdata (`.zd`, docs/zdata.pdoc) is written in zerolang's own grammar, so
+    # its lexer is zerolang's under its own tag and type
+    class Zdata < ZeroLang
+      title 'zdata'
+      desc "zdata, zerolang's data file format"
+      tag 'zdata'
+      filenames '*.zd'
+      mimetypes 'application/vnd.zerolang.zdata'
+    end
   end
 end
