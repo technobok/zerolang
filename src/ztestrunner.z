@@ -1190,21 +1190,35 @@ doccodeJobs: function {
         fmtAt.append from: -1
         if b.problem.length == 0 when (naming.get i: bi).length == 0 when b.check.length == 0 then {
             stem: doccodeStem :dir page: b.page.stringView :bi
-            prog: zdocblocks.wrapProgram code: (zdocblocks.programOf :blocks at: bi)
+            # a data block is the whole file it shows, read with `zc data`
+            ext: ".z"
+            tool: "emit"
+            prog: String
+            own: String
+            if b.dataFile then {
+                ext = ".zd"
+                tool = "data"
+                prog = zdocblocks.fileText code: b.code
+                own = prog.copy
+            } else {
+                prog = zdocblocks.wrapProgram code: (zdocblocks.programOf :blocks at: bi)
+                own = zdocblocks.wrapProgram code: b.code
+            }
             emitAt.set i: bi val: pool.length.i64.orPanic
-            progPath: stem.stringView.concat ".z"
+            progPath: stem.stringView.concat ext
             pool.append (
                 doccodeJob
                 :r
                 path: progPath.stringView
                 content: prog.stringView
-                tool: "emit"
+                :tool
             )
             # a syntax error lays nothing out
             if (b.expect.stringView.startsWith "E00").not then {
-                own: zdocblocks.wrapProgram code: b.code
                 fmtAt.set i: bi val: pool.length.i64.orPanic
-                ownPath: stem.stringView.concat "_fmt.z"
+                fmtName: "_fmt".string
+                fmtName.append ext
+                ownPath: stem.stringView.concat fmtName
                 pool.append (
                     doccodeJob
                     :r
@@ -1247,7 +1261,13 @@ doccodeJob: function {
     if wr.err then print "FAIL(doccode) could not write \{path}"
     argv: List String
     errPath: "\{path}.err"
-    if tool.endsWith "emit" then {
+    if tool.endsWith "data" then {
+        argv.append from: r.zc.copy
+        argv.append from: "data".string
+        argv.append from: path.string
+        argv.append from: "--system".string
+        argv.append from: r.sys.copy
+    } else if tool.endsWith "emit" then {
         argv.append from: r.zc.copy
         argv.append from: "emit".string
         argv.append from: path.string
@@ -1294,7 +1314,9 @@ doccodeVerdict: function {
     if problem.length == 0 then problem = naming.string
     if problem.length == 0 then {
         stem: doccodeStem :dir page: b.page.stringView :bi
-        errPath: stem.stringView.concat ".z.err"
+        errExt: ".z.err"
+        if b.dataFile then errExt = ".zd.err"
+        errPath: stem.stringView.concat errExt
         errText: slurp path: errPath.stringView
         problem = (
             emitVerdict

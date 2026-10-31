@@ -19,6 +19,7 @@ public: unit {
     :checkNames
     :programOf
     :wrapProgram
+    :fileText
 }
 
 # DocBlock -- one example: where it is, its arguments, and its code as the
@@ -41,6 +42,9 @@ DocBlock: class {
     code: List String
     # what is wrong with the block itself, "" when nothing is
     problem: String
+    # the block is a whole data file (`language=zdata`, docs/zdata.pdoc), read
+    # with `zc data` rather than wrapped into a program
+    dataFile: bool
 }
 
 # scanPage -- every zerolang block of one page, in reading order. A page whose
@@ -110,9 +114,11 @@ scanCode: function {
     colon: hv.indexOf ":"
     match colon case some then null case none then return at + 1
     args: hv.substring from: 5 to: colon
-    if (hasWord text: args word: "language=zerolang").not then return at + 1
+    isData: hasWord text: args word: "language=zdata"
+    if (hasWord text: args word: "language=zerolang").not when isData.not then return at + 1
     tail: (hv.substring from: colon + 1 to: hv.length).trim
     b: newBlock :page line: at + 1
+    b.dataFile = isData
     readArgs :b :args
     next: at + 1
     if tail.startsWith "\"\"\"" then {
@@ -202,6 +208,7 @@ newBlock: function {page: StringView line: u64} out DocBlock is {
         after: "".string
         code: List String
         problem: "".string
+        dataFile: false
     )
 }
 
@@ -354,6 +361,11 @@ programOf: function {blocks: (List DocBlock).view at: u64} out List String is {
     }
     for each l: b.code loop prog.append from: l.copy
     return prog
+}
+
+# fileText -- a data block's code as the file it is
+fileText: function {code: (List String).view} out String is {
+    return (joinLines lines: code)
 }
 
 # wrapProgram -- the program a block's lines compile as. A block that declares

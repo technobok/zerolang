@@ -1,0 +1,248 @@
+#doc.lang: en
+
+#//: zdata -- zerolang's data file format
+
+#doc.title: zdata -- Zerolang Data Files
+#doc.content type=main id=content
+#doc.heading.number level=4
+#doc.heading.anchor level=4
+#doc.link rel=stylesheet href=style/zerolang.css
+#doc.link rel=icon type=image/png sizes=192x192 href=style/favicon-192x192.png
+#doc.link rel=icon type=image/x-icon href=style/favicon-48x48.ico
+#doc.link rel=icon type=image/png sizes=32x32 href=style/favicon-32x32.png
+#doc.link rel=icon type=image/png sizes=16x16 href=style/favicon-16x16.png
+
+#doc.script src=style/tocbot.min.js
+#doc.script src=style/init.js
+#doc.script src=style/prism.min.js
+#doc.script src=style/prism-zerolang.js
+#doc.author: pw <p@zerolang.org>
+#doc.datecreated: 2026-10-31
+#doc.version: v0.1
+
+#doc.body class=toc-sidebar
+#nav id=nav: [#include literal=true: style/nav.html]
+
+#header:
+  #-: zdata -- Zerolang Data Files
+
+#nav id=toc class=toc-sidebar:
+  #div id=tocfile: Table of Contents
+  #doc.toc
+
+
+#--: What zdata is
+
+#_*"zdata" is the format of a zerolang #_*"data file": a file of values that a
+program reads, such as its settings. A data file has the extension #~".zd". It
+is written in zerolang's own grammar, and holds only the part of the language
+that describes values: numbers, strings, truth values, lists, #~"data" and
+#~"choice" values, and names of other values -- with the #~"data" and #~"choice"
+types they are built from.
+
+#code language=zdata: """
+  # service -- the settings of a network service
+  name: "relay"
+  port: 8080.u16
+  debug: false
+  allowed: list { "10.0.0.0/8" "192.168.0.0/16" }
+  timeoutSeconds: 2.5
+  """
+
+A data file is not compiled into a program. The static data a program carries
+(see [#> to="./spec.html#static-data": Static Data]) is written in a source file
+(#~".z"); a data file is #_*"read" by a program, while it runs. Today the reader
+is the compiler, #~"zc": it reads the project's settings from #~"project.zd" (see
+[#> to=./zc.html: zc]). The same file can be checked and printed with
+#~"zc data":
+
+#code: """
+  $ zc data service.zd
+  name: "relay"
+  port: 8080.u16
+  debug: false
+  allowed: list { "10.0.0.0/8" "192.168.0.0/16" }
+  timeoutSeconds: 2.5
+  """
+
+#--: A data file is a unit
+
+A data file is a #_*"unit", as a source file is (see
+[#> to=./units.html: Units]): #~"service.zd" is the unit #~"service", and each
+definition in it is a member of that unit. A name in a data file is resolved
+as a name in a source file is: the file's own definitions, each enclosing unit,
+then the other units. A unit written inside the file (#~"site: unit { ... }")
+groups definitions without a type of their own, and a file may keep hidden
+subunits in a directory of its own name (#~"service/" beside #~"service.zd").
+
+The units a data file names are found in the file's own directory first, then
+in the project's source roots, then in the standard library. They are data files
+too: a data file never sees a source file, and a source file never sees a data
+file. #~"net.z" and #~"net.zd" may sit side by side; each is its own unit, of its
+own kind. The units of the language's prelude (#~"core" and the units it names)
+are the one exception: their types, such as #~"text" and #~"u16", are the types
+every data file's values have, so a data file cannot be named like one of them.
+
+#--: What a data file holds
+
+Every definition of a data file binds a name to one of these:
+
+#ul:
+  [#*: a #b:"literal": a number, untyped (#~"5", #~"2.5") or with its type
+    (#~"8080.u16"), a string, or #~"true" or #~"false". A string is a
+    #~"text".]
+  [#*: a #b:"list", #~"list { ... }", of literals or of other values, with
+    labels if it wants them (#~"list { small: 1 large: 9 }"). An empty list
+    names its type: #~"list {} out staticlist text".]
+  [#*: a #b:"data value", #~"(listener port: 8080)", or a #b:"choice value",
+    #~"level.normal" or #~"(tier.paid (seats count: 12))".]
+  [#*: a #b:"reference" to another definition, here or in another unit
+    (#~"home: site.title").]
+  [#*: a #b:"data" or #b:"choice" type, the shape of the values built from
+    it: each field with its type, or with a default whose value gives its type.
+    A list default is a list (#~"names: list {} out staticlist text").]
+  [#*: a #b:"type alias" (#~"texts: staticlist text") or a #b:"unit alias"
+    (#~"s: schema"), a second name for a type or a unit.]
+  [#*: a #b:"unit", #~"name: unit { ... }", holding more definitions.]
+
+Everything in a data file is public: a program that reads the file reads any of
+its definitions.
+
+#code language=zdata: """
+  # the shape of one listener, and the two the service opens
+  listener: data {
+      host: "0.0.0.0"
+      port: 80.u16
+      tls: false
+      names: list {} out staticlist text
+  }
+
+  level: choice {
+      quiet: null
+      normal: null
+      verbose: null
+  }
+
+  web: (listener port: 8080 names: list { "www" "api" })
+  admin: (listener host: "127.0.0.1" port: 9000 tls: true)
+  logging: level.normal
+  """
+
+A data value has every field of its type: the fields a construction leaves out
+take their defaults. #~"zc data" prints each value whole:
+
+#code: """
+  $ zc data listeners.zd
+  web: (listener host: "0.0.0.0" port: 8080.u16 tls: false names: list { "www" "api" })
+  admin: (listener host: "127.0.0.1" port: 9000.u16 tls: true names: list {})
+  logging: level.normal
+  """
+
+A unit inside the file groups definitions, and a definition may name any
+other:
+
+#code language=zdata: """
+  site: unit {
+      title: "Docs"
+      pages: list { "index" "guide" }
+  }
+
+  mirrors: unit {
+      eu: "https://eu.example.org"
+      us: "https://us.example.org"
+  }
+
+  home: site.title
+  """
+
+A choice arm may carry a value, as a variant's arm does:
+
+#code language=zdata: """
+  tier: choice {
+      free: null
+      paid: seats
+  }
+
+  seats: data {
+      count: 1
+      monthly: true
+  }
+
+  team: tier.paid (seats count: 12)
+  solo: tier.free
+  """
+
+#--: What a data file cannot hold
+
+A data file describes values; it does not compute them or declare behaviour. It
+cannot hold a function, any type but #~"data" and #~"choice" (a record, a class,
+a variant, a union, a protocol, a facet, a generator, a typedef), an #~"as"
+block, a generic unit, a #~"public:" block, a #~"require:" block, an operator
+(#~"1 + 2"), an interpolated string, or an #~"if" or #~"match". Each is error
+#~"E0041" at its own line, and the file reports nothing else while it holds
+one:
+
+#code language=zdata expect=E0041: """
+  sum: 1 + 2
+  """
+
+#--: Schemas
+
+A file that holds only types is a #_*"schema": the shapes other files build their
+values from. A file reaches a schema as it reaches any unit, by its name; the
+types are named through it.
+
+#code language=zdata: """
+  # schema.zd -- the shapes of a service's settings
+  listener: data {
+      host: "0.0.0.0"
+      port: 80.u16
+  }
+  """
+
+#code language=zdata check=none: """
+  # service.zd -- built from schema.zd's types
+  web: (schema.listener port: 8080)
+  """
+
+Reach a schema's types with one dot. When a schema sits deeper, in a unit
+another unit declares, name it once at the top of the file and read through the
+name (see [#> to=./styleguide.html: the style guide], References Through Units):
+
+#code language=zdata check=none: """
+  c: toolchain.runtime
+  web: (c.listener port: 8080)
+  """
+
+#--: Typed files
+
+A file whose whole content is one value of a known type wraps that value in a
+construction that names the type. The program that reads the file asks for the
+definition by its name and expects that type; the checker has already proved
+that the value fits it, every field included.
+
+#code language=zdata check=none: """
+  # project.zd -- the settings a program reads as one `settings` value
+  s: schema
+  settings: (
+      s.service
+      name: "relay"
+      web: (s.listener port: 8080)
+  )
+  """
+
+#--: Checking
+
+A data file is checked by zerolang's own checker, and every definition is
+checked, whether or not anything reads it: a name that names nothing, a value
+that does not fit its field, a field a type does not have, is an error where it
+is written, with the code and the words the same mistake has in a source file.
+#~"zc data" reports the errors as #~"zc build" does and exits with status 1.
+
+The tools read data files as they read source files. #~"zl fmt" lays a data file
+out as it lays out a source file, and #~"zl lint --full" checks it as #~"zc data"
+does (see [#> to=./zl.html: zl]); a definition nothing reads is not reported
+unused, since the program that opens the file reads it. #~"zls" checks an open
+data file and answers hover and go-to-definition in it. An editor knows the
+format by the language id #~"zdata"; the file's media type is
+#~"application/vnd.zerolang.zdata".
