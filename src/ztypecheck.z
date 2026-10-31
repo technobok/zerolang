@@ -3230,6 +3230,10 @@ resolveDottedArgTid: function {
 } out ztypes.tid is {
     dr: dpRefAt :ast :nid
     if dr.nid.isZero then return ztypes.tid.zero
+    # a unit the declarations name, however deep and through any alias
+    cqId: atomNameId :ast n: (ast.nodes.get i: dr.child)
+    qm: qualifiedMemberTid :st :scope :ast qualNid: dr.parent memberId: cqId
+    if qm.isZero.not then return qm
     # owned copies: the walks below lend ast
     pq: zast.nameTextCopy :ast ref: (atomNameId :ast n: (ast.nodes.get i: dr.parent))
     cq: zast.nameTextCopy :ast ref: (atomNameId :ast n: (ast.nodes.get i: dr.child))
@@ -3241,9 +3245,7 @@ resolveDottedArgTid: function {
             return (descendNamed :st :scope :ast unitDecl: ud name: cq.stringView)
         }
     }
-    # `rem.point`, `rem.deeper.tag`: a unit a unit declares, however deep
-    cqId: atomNameId :ast n: (ast.nodes.get i: dr.child)
-    return (nestedQualifiedTid :st :scope :ast qualNid: dr.parent memberId: cqId)
+    return ztypes.tid.zero
 }
 
 
@@ -5509,6 +5511,12 @@ dottedTyperefShell: function {
     # that instance's own copy
     uim: instanceTyperefMember :st :scope :ast :unitDecl :nid :pId :cId
     if uim.isZero.not then return uim
+    # a member of a unit the declarations name (a file unit, a nested unit, a
+    # path of them, an alias of any): the member, the way a cross-unit ref is
+    if (isStripMarkerId nameId: cId).not then {
+        qm: qualifiedMemberTid :st :scope :ast qualNid: parentId memberId: cId
+        if qm.isZero.not then return qm
+    }
     if (qualifierNamesUnit :st :scope qualId: pId memberId: cId) then {
         demandUnitMember :st unitNameId: pId nameId: cId
         ud8: unitDeclOfNameOrOwn :st :scope nameId: pId
@@ -5531,24 +5539,6 @@ dottedTyperefShell: function {
         if (isNumericLiteralNameAt :ast ref: pId) when isSfx then {
             return (scalarTidOf :st :scope :ast nameId: cId)
         }
-        # A qualified ref into a NESTED unit names a MEMBER, the way a
-        # cross-unit ref does -- the leg above cannot see it because a
-        # nested unit is absent from the unit-name index. Peeling to the
-        # parent instead handed the slot the UNIT's own type.
-        nsRoot: ztypes.declid
-        nsro: unitDecl
-        if nsro.isZero.not then nsRoot = nsro
-        nsParentNm: atomNameId :ast n: (ast.nodes.get i: parentId)
-        nsChildNm: atomNameId :ast n: (ast.nodes.get i: childId)
-        nsTid: (nestedUnitMemberTid
-            :st
-            :scope
-            :ast
-            ownerDeclId: nsRoot
-            nestedNameId: nsParentNm
-            defName: nsChildNm
-        )
-        if nsTid.isZero.not then return nsTid
         return (peeledTyperef :st :scope :ast :unitDecl :nid :parentId leafId: cId :thisName)
     }
 }
@@ -13294,17 +13284,17 @@ dottedTyperefId: function {ast: Ast st: zenv.ZSymbolTable op: astnode.view} out 
             )
             return (ro.or d: ztypes.tid.zero)
         }
-        return (nestedQualifiedTid :st scope: st.curScope :ast qualNid: op.parent memberId: cnId)
+        return (qualifiedMemberTid :st scope: st.curScope :ast qualNid: op.parent memberId: cnId)
     } else {
         return ztypes.tid.zero
     }
 }
 
-# nestedQualifiedTid -- `sub.Member` where the qualifier `qualNid` names a unit
-# declared inside another (inline, a hidden subunit, `rem.deeper`) rather than
-# a file unit: the member of that unit's own declaration, 0 when the qualifier
-# names no such unit.
-nestedQualifiedTid: function {
+# qualifiedMemberTid -- `q.Member` where the qualifier path `qualNid` names a
+# unit (qualifierUnitDecl): a file unit, a unit declared inside another
+# (inline, a hidden subunit, `rem.deeper`), or an alias of one (`c: rem`). The
+# member of that unit's own declaration; 0 when the qualifier names no unit.
+qualifiedMemberTid: function {
     st: zenv.ZSymbolTable
     scope: ztypes.declid
     ast: Ast
@@ -13315,7 +13305,10 @@ nestedQualifiedTid: function {
     ud: qualifierUnitDecl :st :scope :ast nid: qualNid
     if ud.isZero then return ztypes.tid.zero
     owner: st.typing.declParentOf declId: ud
-    if owner == st.typing.programRoot then return ztypes.tid.zero
+    if owner == st.typing.programRoot then {
+        demandUnitMember :st unitNameId: (st.typing.declNameOf declId: ud) nameId: memberId
+        return (descendNamedId :st :scope :ast unitDecl: ud nameId: memberId)
+    }
     return (nestedUnitMemberTid
         :st
         :scope
@@ -13328,38 +13321,75 @@ nestedQualifiedTid: function {
 
 # qualifierUnitDecl -- the unit declaration a qualifier path names: a bare name
 # through the environment (a file unit, or a unit a unit declares), each further
-# segment a unit its predecessor declares. 0 when a segment names no unit.
+# segment a unit its predecessor declares, and at any segment an alias of a unit
+# (`c: runtime.nativec`). 0 when a segment names no unit.
 qualifierUnitDecl: function {
     st: zenv.ZSymbolTable.view
     scope: ztypes.declid
     ast: Ast.view
     nid: zast.nodeid
 } out ztypes.declid is {
+    return (qualifierUnitDeclAt :st :scope :ast :nid hops: 0)
+}
+
+# qualifierUnitDeclAt -- qualifierUnitDecl, `hops` unit aliases into a chain.
+# A chain longer than unitAliasHops is a cycle and names no unit.
+qualifierUnitDeclAt: function {
+    st: zenv.ZSymbolTable.view
+    scope: ztypes.declid
+    ast: Ast.view
+    nid: zast.nodeid
+    hops: u64
+} out ztypes.declid is {
     none: ztypes.declid.zero
-    if nid.isZero then return none
+    if nid.isZero or (hops > unitAliasHops) then return none
     n: ast.nodes.get i: nid
     match (
         n
     ) case atomid then {
         fu: unitDeclOfName :st nameId: n.name
         if fu.isZero.not then return fu
-        return (nestedUnitDeclNamed :st :scope nameId: n.name)
+        h: envLookup :st :scope nameId: n.name
+        return (unitOfBinding :st :ast declId: h.declId :hops)
     } case dottedpath then {
-        pd: qualifierUnitDecl :st :scope :ast nid: n.parent
+        pd: qualifierUnitDeclAt :st :scope :ast nid: n.parent :hops
         if pd.isZero then return none
         cd: (st.typing.declFindChild
             parentDeclId: pd
             nameId: (atomNameId :ast n: (ast.nodes.get i: n.child))
         )
-        if cd.isZero then return none
-        isUd: false
-        cdo: st.typing.decls.get i: cd
-        if cdo.kind.unitDecl then isUd = true
-        if isUd then return cd
-        return none
+        return (unitOfBinding :st :ast declId: cd :hops)
     } else {
         return none
     }
+}
+
+# unitAliasHops -- how many unit aliases a qualifier is followed through
+unitAliasHops: 8
+
+# unitOfBinding -- the unit declaration `declId` names: itself when it declares
+# a unit, the unit its value names when it is an alias of one (read off the
+# value as written, so it holds before the alias resolves), else 0.
+unitOfBinding: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    declId: ztypes.declid
+    hops: u64
+} out ztypes.declid is {
+    if declId.isZero then return ztypes.declid.zero
+    isUd: false
+    dO: st.typing.decls.get i: declId
+    if dO.kind.unitDecl then isUd = true
+    if isUd then return declId
+    ar: argRefAt :ast nid: (st.typing.decls.get i: declId).node
+    if ar.operation.isZero then return ztypes.declid.zero
+    return (qualifierUnitDeclAt
+        :st
+        scope: (st.typing.declParentOf :declId)
+        :ast
+        nid: ar.operation
+        hops: hops + 1
+    )
 }
 
 # tagsource -- the list a sum's `as` block sources its tag from (`tag:
@@ -17242,6 +17272,17 @@ resolveAliasKeyIn: function {
         qualId: altK.unitName
         memberId: altK.defName
     )
+    # a member of a unit an alias names (`lk: c.link` with `c: inner`)
+    if atid.isZero then {
+        avn: (argRefAt :ast nid: (st.typing.decls.get i: adecl).node).operation
+        if avn.isZero.not then atid = (qualifiedMemberTid
+            :st
+            scope: aParent
+            :ast
+            qualNid: (dpRefAt :ast nid: avn).parent
+            memberId: altK.defName
+        )
+    }
     st.typing.declSetResolving declId: adecl mark: false
     rootedOut: ListVal bool
     atid = (aliasTargetTid
@@ -64018,13 +64059,17 @@ namedTypeAtHead: function {
     t: ztypes.tid
     hn: atomNameId :ast n: (ast.nodes.get i: headId)
     if hn.isZero.not then t = typeNamedFrom :st :scope :ast lookupUnit: unitDecl typeNameId: hn
-    # a path is a type only through a unit (`tbl.row`): a member read on a value
-    # (`x.isZero`), which the fold meets far more often, is never resolved here
+    # a path is a type only through a unit (`tbl.row`, `inner.row`, `c.row`
+    # with `c: inner`): a member read on a value (`x.isZero`), which the fold
+    # meets far more often, is never resolved here
     if hn.isZero when (ast.nodes.get i: headId).dottedpath then {
-        rn: atomNameId :ast n: (ast.nodes.get i: (dpRefAt :ast nid: headId).parent)
-        if rn.isZero.not when (nameDenotesUnit :st :scope nameId: rn) then {
-            t = resolveDottedArgTid :st :scope :ast nid: headId
-        }
+        qn: (dpRefAt :ast nid: headId).parent
+        rn: atomNameId :ast n: (ast.nodes.get i: qn)
+        viaUnit: (
+            (nameDenotesUnit :st :scope nameId: rn) or
+            (qualifierUnitDecl :st :scope :ast nid: qn).isZero.not
+        )
+        if viaUnit then t = resolveDottedArgTid :st :scope :ast nid: headId
     }
     if (st.reg.isStaticOf tid: t) then return t
     return ztypes.tid.zero
@@ -65161,16 +65206,18 @@ constOfUnitPathMember: function {
     return (constValueOfMemberId :st scope: pown :ast unitDecl: pud nameId: ncId)
 }
 
-# unitDeclOfPath -- the unit declaration a name or dotted path names: a unit
-# at its root (a file unit, or one this scope declares, `inl.codes.lf`), then
-# each segment a unit the one before declares (`z.build`). 0 when any step names
-# no unit.
+# unitDeclOfPath -- the unit declaration a name or dotted path names
+# (qualifierUnitDecl: a file unit, a unit a scope declares, `inl.codes.lf`,
+# `z.build`, an alias of one), else for a bare name binding a generic unit's
+# instance the unit the walk is in. 0 when the path names no unit.
 unitDeclOfPath: function {
     st: zenv.ZSymbolTable.view
     scope: ztypes.declid
     ast: Ast.view
     nid: zast.nodeid
 } out ztypes.declid is {
+    ud: qualifierUnitDecl :st :scope :ast :nid
+    if ud.isZero.not then return ud
     n: ast.nodes.get i: nid
     match (
         n
@@ -65178,34 +65225,8 @@ unitDeclOfPath: function {
         if (nameDenotesUnit :st :scope nameId: n.name) then {
             return (unitDeclOfNameOrOwn :st :scope nameId: n.name)
         }
-        return (nestedUnitDeclNamed :st :scope nameId: n.name)
-    } case dottedpath then {
-        pu: unitDeclOfPath :st :scope :ast nid: n.parent
-        if pu.isZero then return ztypes.declid.zero
-        cn: atomNameId :ast n: (ast.nodes.get i: n.child)
-        if cn.isZero then return ztypes.declid.zero
-        cd: st.typing.declFindChild parentDeclId: pu nameId: cn
-        if (declDeclaresUnit :st :ast declId: cd) then return cd
-        return ztypes.declid.zero
-    } else {
-        return ztypes.declid.zero
-    }
-}
-
-# nestedUnitDeclNamed -- the declaration of the nested unit or subunit `nameId`
-# names from `scope`, or 0 when it names no unit declaration.
-nestedUnitDeclNamed: function {
-    st: zenv.ZSymbolTable.view
-    scope: ztypes.declid
-    nameId: zast.nameid
-} out ztypes.declid is {
-    h: envLookup :st :scope :nameId
-    if h.declId.isZero then return ztypes.declid.zero
-    isUd: false
-    hdo: st.typing.decls.get i: h.declId
-    if hdo.kind.unitDecl then isUd = true
-    if isUd.not then return ztypes.declid.zero
-    return h.declId
+    } else null
+    return ztypes.declid.zero
 }
 
 # evalConstDotted -- a dotted path's value: a member read off a named base
@@ -65870,11 +65891,13 @@ resolveDottedConstantDef: function {
             :sfTy
             row: ldr
         )
-        if ldr == 0 when (nameDenotesUnit
-            :st
-            :scope
-            nameId: (nameIdOf :ast name: sfLit)
-        ).not then {
+        # a unit's member, the unit named or aliased (`c: inner`), is no
+        # construction
+        namesUnit: (
+            (nameDenotesUnit :st :scope nameId: (nameIdOf :ast name: sfLit)) or
+            (qualifierUnitDecl :st :scope :ast nid: defn.parent).isZero.not
+        )
+        if ldr == 0 when namesUnit.not then {
             ptt: ztypes.ztypetype.nullType
             known: false
             {
@@ -68260,10 +68283,11 @@ declSurfaceEnsure: function {
 # --- the environment ---
 
 
-# unitDeclOfNameOrOwn -- the Decl of the FILE unit a name denotes, or, for a
-# name that is no file unit (a nested unit's or a template's own name, spelled
-# as the walk's unit), the unit `scope` lies in. unitDeclOfName is the door
-# whose miss is 0; the two are not interchangeable.
+# unitDeclOfNameOrOwn -- the Decl of the FILE unit a name denotes, or of the
+# unit an alias in scope names (`c: inner`, unitOfBinding), or, for a name that
+# is neither (a nested unit's or a template's own name, spelled as the walk's
+# unit), the unit `scope` lies in. unitDeclOfName is the door whose miss is 0;
+# the two are not interchangeable.
 unitDeclOfNameOrOwn: function {
     st: zenv.ZSymbolTable.view
     scope: ztypes.declid
@@ -68271,8 +68295,28 @@ unitDeclOfNameOrOwn: function {
 } out ztypes.declid is {
     if nameId.isZero then return ztypes.declid.zero
     r: unitDeclOfName :st :nameId
-    if r.isZero then return (unitRootOfDecl :st declId: scope)
-    return r
+    if r.isZero.not then return r
+    ua: unitOfAliasType :st :scope :nameId
+    if ua.isZero.not then return ua
+    return (unitRootOfDecl :st declId: scope)
+}
+
+# unitOfAliasType -- the unit an alias in scope names (`c: inner`), read off the
+# type the alias resolved to: a unit's own type, never an instance of a generic
+# unit (`intmath: (mathops t: i64)`), whose members are the instance's. 0 for any
+# other name, and for an alias not resolved yet.
+unitOfAliasType: function {
+    st: zenv.ZSymbolTable.view
+    scope: ztypes.declid
+    nameId: zast.nameid
+} out ztypes.declid is {
+    h: envLookup :st :scope :nameId
+    if h.declId.isZero then return ztypes.declid.zero
+    bt: declTypeIdOf :st declId: h.declId
+    if bt.isZero then return ztypes.declid.zero
+    if (st.reg.typetypeOf typeId: bt) != ztypes.ztypetype.unitType then return ztypes.declid.zero
+    if (st.reg.typeById.get i: bt).genericOriginId.none.not then return ztypes.declid.zero
+    return (declOfTypeId :st tid: bt)
 }
 
 # unitNameIdOf / unitNameTextOf -- the spelling a unit's DECLARATION carries.
