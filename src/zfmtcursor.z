@@ -185,24 +185,6 @@ kindName: function {tt: zlexer.toktype} out String is {
     }
 }
 
-# lineStartsOf -- the byte offset every line begins at, line 1 first
-lineStartsOf: function {source: StringView} out ListVal u64 is {
-    starts: ListVal u64
-    starts.append 0
-    i: u64
-    n: source.length
-    for i < n loop {
-        b: (source.byteAt :i).or d: 0
-        i = i + 1
-        if b == 10 then starts.append i
-        if b == 13 then {
-            nb: (source.byteAt :i).or d: 0
-            if nb != 10 then starts.append i
-        }
-    }
-    return starts
-}
-
 # the raw token stream of one source and the tree walk's position in it
 Cursor: class {
     # every token of the source, trivia included, ending with the EOF token
@@ -495,46 +477,20 @@ Cursor: class {
     }
 }
 
-# byteOffsetsOf -- each token's first byte from its line and codepoint column,
-# with one extra entry holding the source length. Widths are never summed: an
-# escape token's width is its decoded size, not its source span
+# byteOffsetsOf -- each token's first byte, with one extra entry holding the
+# source length (EOF stands at it)
 byteOffsetsOf: function {
     toks: (ListVal tokenize.token).view
     source: StringView
 } out ListVal u64 is {
-    starts: lineStartsOf :source
     offs: ListVal u64
-    curLine: 1.u32
-    curCol: 1.u32
-    curByte: u64
     n: source.length
-    k: u64
-    for k < toks.length loop {
-        t: toks.get i: k
-        k = k + 1
+    for each t: toks loop {
         if t.toktype == zlexer.toktype.eofTok then {
             offs.append n
-            continue
+        } else {
+            offs.append t.offset
         }
-        if t.lineno != curLine then {
-            curLine = t.lineno
-            curCol = 1
-            curByte = n
-            if curLine.u64 <= starts.length then curByte = starts.get i: curLine.u64 - 1
-        }
-        for curCol < t.colno loop {
-            b: (source.byteAt i: curByte).or d: 0
-            curByte = curByte + 1
-            # a continuation byte is not a codepoint of its own
-            for curByte < n loop {
-                nb: (source.byteAt i: curByte).or d: 0
-                if (nb & 192) != 128 then break
-                curByte = curByte + 1
-            }
-            b.drop
-            curCol = curCol + 1
-        }
-        offs.append curByte
     }
     offs.append n
     return offs

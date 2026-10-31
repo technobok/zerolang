@@ -1122,9 +1122,11 @@ Ast: class {
     # the unit a demand-driven walk starts from. It names the tree, not one row
     # in it, which is why it sits here rather than on the program row
     mainUnitName: String
-    # the text of every string literal's runs, stored once and never interned:
-    # string content is not a name. Row 0 is the empty sentinel
-    literals: (List String i: litid)
+    # the text of every string literal's runs, end to end, stored once and
+    # never interned: string content is not a name
+    literalBytes: String
+    # each run's span of literalBytes, by litid; row 0 is the empty sentinel
+    literals: (ListVal litspan i: litid)
 } as {
     # an empty tree: no nodes, no units, and a name pool holding only its
     # sentinel row
@@ -1139,9 +1141,10 @@ Ast: class {
             files: ListVal zvfs.fsno
             root: nodeid
             mainUnitName: String
-            literals: (List String i: litid)
+            literalBytes: String
+            literals: (ListVal litspan i: litid)
         )
-        a.literals.append from: String
+        a.literals.append from: (litspan from: 0 size: 0)
         # row 0 is the sentinel a node id of 0 addresses: the placeholder arm,
         # which every reader already treats as "nothing here"
         a.nodes.append from: astnode.placeholder
@@ -1162,9 +1165,19 @@ Ast: class {
     }
 
     # literalAdd -- a string literal's run of text, stored as a new row
-    literalAdd: function {:this text: String.take} out litid is {
+    literalAdd: function {:this text: StringView} out litid is {
+        from: this.literalBytes.length
+        this.literalBytes.append text
+        return (this.literalClose :from)
+    }
+
+    # literalClose -- the bytes appended to literalBytes since `from` as a new
+    # row; 0 when there are none
+    literalClose: function {:this from: u64} out litid is {
+        size: this.literalBytes.length - from
+        if size == 0 then return (litid 0)
         id: litid this.literals.length.u32.orPanic
-        this.literals.append from: text.take
+        this.literals.append from: (litspan :from :size)
         return id
     }
 
@@ -1184,9 +1197,16 @@ litid: typedef u32 as {
     }
 }
 
+# litspan -- a literal run's bytes in Ast.literalBytes
+litspan: record {
+    from: u64
+    size: u64
+}
+
 # literalTextAt -- the text of literal row `ref`
-literalTextAt: function {ast: Ast.view ref: litid} outx String.view is {
-    return (ast.literals.get i: ref)
+literalTextAt: function {ast: Ast.view ref: litid} outx StringView is {
+    sp: ast.literals.get i: ref
+    return (ast.literalBytes.substring from: sp.from to: sp.from + sp.size)
 }
 
 # nameid -- a StringPool id: the interned identity of one identifier's text.

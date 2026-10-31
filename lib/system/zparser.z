@@ -35,13 +35,37 @@ chunkkind: list {
 } out staticlist u8
 
 # strseg -- one token of a string literal as stringParts reads it: its kind
-# (chunkkind), its text for a text token, its expression for a hole
+# (chunkkind); a content run's source span (`from`, `size`), an escape's or a
+# line end's pooled text, a hole's expression
 strseg: record {
     kind: u8
     text: zast.nameid
+    from: u64
+    size: u64
     expr: zast.nodeid
     lineno: u32
     colno: u32
+}
+
+# segTextOf -- a literal token's text: a content run's span of `src`, an
+# escape's or a line end's text in `pool`
+segTextOf: function {pool: zast.StringPool.view seg: strseg src: StringView} outx StringView is {
+    if seg.kind == chunkkind.strmid then return (
+        src.substring
+        from: seg.from
+        to: seg.from + seg.size
+    )
+    return (zast.poolTextAt :pool ref: seg.text).stringView
+}
+
+# runPieceOf -- a literal token's text as its run keeps it: with the first
+# `p9.length` bytes cut off when it opens a line that carries the prefix
+runPieceOf: function {
+    pool: zast.StringPool.view seg: strseg src: StringView cut: bool p9: StringView
+} outx StringView is {
+    t: segTextOf :pool :seg :src
+    if cut then return (t.substring from: p9.length to: t.length)
+    return t
 }
 
 # the string-chunk kind (literal vs interpolation) for token type `tt`.
@@ -817,9 +841,9 @@ Parser: class {
     # with text -- only when every such line carries it. A line beginning with
     # an escape, an interpolation or only whitespace is neither checked nor
     # stripped.
-    stringParts: function {:this base: u64} out ListVal zast.nodeid is {
+    stringParts: function {:this base: u64 src: StringView} out ListVal zast.nodeid is {
         n: this.segStack.length
-        from: this.keptFrom :base
+        from: this.keptFrom :base :src
         to: n
         prefix: String
         j: n
@@ -829,23 +853,28 @@ Parser: class {
                 to = j - 1
                 k: j
                 for k < n loop {
-                    prefix.append (
-                        zast.poolTextAt
-                        pool: this.ast.names
-                        ref: (this.segStack.get i: k).text
+                    prefix.append (segTextOf pool: this.ast.names seg: (this.segStack.get i: k) :src
                     )
                     k = k + 1
                 }
                 break
             }
-            if (this.blankSeg seg: s).not then break
+            if (this.blankSeg seg: s :src).not then break
             j = j - 1
         }
         parts: ListVal zast.nodeid
         if from >= to then return parts
         carries: ListVal bool
         strip: prefix.length > 0
-        if strip then strip = this.lineStartsCarry :base :from :to p9: prefix.stringView :carries
+        if strip then strip = (
+            this.lineStartsCarry
+            :base
+            :from
+            :to
+            p9: prefix.stringView
+            :carries
+            :src
+        )
         a: from
         i: from
         for i < to loop {
@@ -861,6 +890,7 @@ Parser: class {
                     :carries
                     p9: prefix.stringView
                     lineStart: a == from
+                    :src
                 )
                 parts.append s.expr
                 a = i + 1
@@ -877,27 +907,28 @@ Parser: class {
             :carries
             p9: prefix.stringView
             lineStart: a == from
+            :src
         )
         return parts
     }
 
     # keptFrom -- where the literal at `base` starts its text: past a blank
     # first line, else at its first token
-    keptFrom: function {this: this.view base: u64} out u64 is {
+    keptFrom: function {this: this.view base: u64 src: StringView} out u64 is {
         i: base
         for i < this.segStack.length loop {
             s: this.segStack.get :i
             if s.kind == chunkkind.eol then return i + 1
-            if (this.blankSeg seg: s).not then return base
+            if (this.blankSeg seg: s :src).not then return base
             i = i + 1
         }
         return base
     }
 
     # blankSeg -- a text token holding only spaces and tabs
-    blankSeg: function {this: this.view seg: strseg} out bool is {
+    blankSeg: function {this: this.view seg: strseg src: StringView} out bool is {
         if seg.kind != chunkkind.strmid then return false
-        return (isWsOnlyView sv: (zast.poolTextAt pool: this.ast.names ref: seg.text).stringView)
+        return (isWsOnlyView sv: (segTextOf pool: this.ast.names :seg :src))
     }
 
     # lineStartsCarry -- whether every line of `from`..`to` that begins with text
@@ -910,6 +941,7 @@ Parser: class {
         to: u64
         p9: StringView
         carries: (ListVal bool).borrow
+        src: StringView
     } out bool is {
         all: true
         lineStart: true
@@ -922,7 +954,7 @@ Parser: class {
         for i < to loop {
             s: this.segStack.get :i
             if lineStart when s.kind == chunkkind.strmid then {
-                t: (zast.poolTextAt pool: this.ast.names ref: s.text).stringView
+                t: segTextOf pool: this.ast.names seg: s :src
                 if (isWsOnlyView sv: t).not then {
                     if t.startsWith p9 then {
                         carries.set i: i - base val: true
@@ -937,29 +969,9 @@ Parser: class {
         return all
     }
 
-    # runPiece -- token `i`'s text as its run keeps it: the prefix taken off
-    # when it opens a line that carries it
-    runPiece: function {
-        this: this.view
-        i: u64
-        base: u64
-        atStart: bool
-        strip: bool
-        carries: (ListVal bool).view
-        p9: StringView
-    } outx StringView is {
-        t: (zast.poolTextAt pool: this.ast.names ref: (this.segStack.get :i).text).stringView
-        if atStart when strip when (carries.get i: i - base) then return (
-            t.substring
-            from: p9.length
-            to: t.length
-        )
-        return t
-    }
-
     # addRun -- tokens `from`..`to` (no hole among them) as one chunk of
-    # `parts`, stored once in the tree's literals at its exact size; a run with
-    # no text adds nothing
+    # `parts`, its text appended once to the tree's literals; a run with no text
+    # adds nothing
     addRun: function {
         :this
         base: u64
@@ -970,37 +982,29 @@ Parser: class {
         carries: (ListVal bool).view
         p9: StringView
         lineStart: bool
+        src: StringView
     } is {
-        size: u64
+        start: this.ast.literalBytes.length
         runLine: u32
         runCol: u32
         atStart: lineStart
         i: from
         for i < to loop {
             s: this.segStack.get :i
-            pl: (this.runPiece :i :base :atStart :strip :carries :p9).length
-            if pl > 0 when size == 0 then {
+            cut: false
+            if atStart when strip when (carries.get i: i - base) then cut = true
+            had: this.ast.literalBytes.length
+            this.ast.literalBytes.append (runPieceOf pool: this.ast.names seg: s :src :cut :p9)
+            if had == start when this.ast.literalBytes.length > had then {
                 runLine = s.lineno
                 runCol = s.colno
-                if atStart when strip when (carries.get i: i - base) then runCol = (
-                    runCol + p9.length.u32.orPanic
-                )
+                if cut then runCol = runCol + p9.length.u32.orPanic
             }
-            size = size + pl
             atStart = s.kind == chunkkind.eol
             i = i + 1
         }
-        if size == 0 then return
-        run: String
-        run.reserve n: size
-        atStart = lineStart
-        i = from
-        for i < to loop {
-            run.append (this.runPiece :i :base :atStart :strip :carries :p9)
-            atStart = (this.segStack.get :i).kind == chunkkind.eol
-            i = i + 1
-        }
-        id: this.ast.literalAdd text: run.take
+        id: this.ast.literalClose from: start
+        if id.u32 == 0 then return
         chunk: astnode.stringchunk (
             zast.stringchunkrow
             nodeid: this.nextId
@@ -1064,6 +1068,8 @@ Parser: class {
                         strseg
                         kind: chunkkind.hole
                         text: zast.nameid.zero
+                        from: 0
+                        size: 0
                         expr: (this.intern n: expr)
                         lineno: 0
                         colno: 0
@@ -1097,6 +1103,8 @@ Parser: class {
                     strseg
                     kind: ck
                     text: chunkTok.text
+                    from: chunkTok.offset
+                    size: chunkTok.width
                     expr: zast.nodeid
                     lineno: chunkTok.lineno
                     colno: chunkTok.colno
@@ -1112,7 +1120,7 @@ Parser: class {
                 )
             }
         }
-        stripped: this.stringParts :base
+        stripped: this.stringParts :base src: lex.lexer.source.stringView
         this.segStack.resize to: base
         return (astnode.atomstring (
             zast.atomstringrow

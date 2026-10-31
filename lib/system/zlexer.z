@@ -256,7 +256,8 @@ textWidth: function {s: String} out u32 is {
     return s.length.u32.orPanic
 }
 
-# one lexer token: its kind, interned text, and file/line/column position. A
+# one lexer token: its kind, interned text, and file/line/column position and
+# source span. A
 # RECORD: every field is a value now that the text is a pool id, so a token
 # travels by copy and an optional one needs no box.
 token: record {
@@ -278,6 +279,10 @@ token: record {
     # text is a constant of its type, or an id into the name pool, still owes
     # its callers a width
     width: u32
+    # the byte its span starts at in the source. A strMidTok's text IS that
+    # span -- string content is not a name, so it is never pooled and its
+    # `text` is 0
+    offset: u64
 }
 
 # Where a token is and how wide it is, without its text. A valtype, so a
@@ -375,25 +380,6 @@ israwc: function {b: u8} out bool is {
     if b > 127 then return true
     idx: b.u64
     return ((charflags.get idx) & charflag.rawStringBody) != 0
-}
-
-# Append every byte of `delim_view` to `stringparts`. Used by the
-# raw-string scanner when a short `"` run was consumed into the
-# delim accumulator and must be treated as literal content.
-extendraw: function {stringparts: String delim_view: StringView} is {
-    j: u64
-    dlen: delim_view.length
-    for j < dlen loop {
-        b: delim_view.byteAt j
-        match (
-            b
-        ) case some then {
-            stringparts.appendByte b
-        } case none then {
-            j = dlen
-        }
-        j = j + 1
-    }
 }
 
 # true when byte `b` is a hex digit (0-9, a-f, A-F).
@@ -504,6 +490,7 @@ Tokenizer: class {
                 :fsno
                 lineno: 0
                 colno: 0
+                offset: 0
             )
             statestack: ListVal tokstatetype
             keepTrivia: true
@@ -584,7 +571,7 @@ Tokenizer: class {
         s0: this.tokpos
         for isstrc this.atchar loop this.accept
         if this.tokpos > s0 then {
-            return (this.spanTok :pool tt: toktype.strMidTok s: s0 e: this.tokpos :line :col)
+            return (this.contentTok s: s0 e: this.tokpos :line :col)
         }
         this.accept
         return (this.byteTok :pool tt: toktype.errTok s: s0 :line :col)
@@ -592,98 +579,82 @@ Tokenizer: class {
 
     # Inside a STRINGRAW state.
     # rawRunStop -- the raw string's content run ended at a byte that cannot
-    # continue it. Whatever was accumulated becomes a STRMID; with nothing
-    # accumulated the offending byte itself is the ERR token.
-    rawRunStop: function {
-        :this
-        pool: zast.StringPool
-        stringparts: String
-        line: u32
-        col: u32
-    } out token is {
-        if stringparts.length > 0 then {
-            return (this.textTok :pool tt: toktype.strMidTok s: stringparts :line :col)
-        }
+    # continue it. The run from `s0` becomes a STRMID; with nothing in it the
+    # offending byte itself is the ERR token.
+    rawRunStop: function {:this pool: zast.StringPool s0: u64 line: u32 col: u32} out token is {
+        if this.tokpos > s0 then return (this.contentTok s: s0 e: this.tokpos :line :col)
         err: String
         err.appendByte this.atchar
+        at: this.tokpos
         this.accept
-        return (this.textTok :pool tt: toktype.errTok s: err :line :col)
+        return (this.textTok :pool tt: toktype.errTok s: err :at :line :col)
     }
 
-    # rawRunClose -- the closing delimiter matched. The state pops here, and any
-    # preceding content is emitted first with the STREND stashed behind it: one
-    # call returns one token, so the close waits its turn.
+    # rawRunClose -- the closing delimiter, from `dpos`, matched. The state pops
+    # here, and any content before it is emitted first with the STREND stashed
+    # behind it: one call returns one token, so the close waits its turn.
     rawRunClose: function {
         :this
         pool: zast.StringPool
-        stringparts: String
-        delimparts: String
+        s0: u64
+        dpos: u64
         line: u32
         col: u32
         dline: u32
         dcol: u32
     } out token is {
         this.statepop
-        if stringparts.length > 0 then {
-            this.nexttok = (
-                this.textTok
-                :pool
-                tt: toktype.strEndTok
-                s: delimparts
-                line: dline
-                col: dcol
-            )
-            this.hasnext = true
-            return (this.textTok :pool tt: toktype.strMidTok s: stringparts :line :col)
-        }
-        return (this.textTok :pool tt: toktype.strEndTok s: delimparts line: dline col: dcol)
+        close: this.spanTok :pool tt: toktype.strEndTok s: dpos e: this.tokpos line: dline col: dcol
+        if dpos == s0 then return close
+        this.nexttok = close
+        this.hasnext = true
+        return (this.contentTok s: s0 e: dpos :line :col)
     }
 
-    # acceptstringrawtoken. RAWC bytes accumulate into the content
-    # buffer; a `"` run is matched against `delim_len` -- equal-length
-    # run closes the string, shorter run is literal content. On close,
-    # the STREND is stashed in `this.nexttok` (or returned directly if
-    # there is no preceding content) and the STRINGRAW state is
-    # popped. EOL/EOF are NOT consumed here; the outer dispatcher
-    # routes them to the EOF / EOL branches in `token` on the next
-    # call, which re-enters this method afterwards.
+    # acceptstringrawtoken -- one run of a raw string's content: RAWC bytes and
+    # `"` runs shorter than the delimiter, which are content too, so the run is
+    # one span of the source. A run as long as `delim_len` closes the string. EOL
+    # and EOF are NOT consumed here; the outer dispatcher routes them to the EOF
+    # / EOL branches in `token` on the next call, which re-enters this method
+    # afterwards.
     acceptstringrawtoken: function {:this pool: zast.StringPool delim_len: u8} out token is {
         line: this.lineno
         col: this.colno
-        stringparts: String
+        s0: this.tokpos
         for true loop {
-            for israwc this.atchar loop {
-                stringparts.appendByte this.atchar
-                this.accept
-            }
-            # EOL / EOF / other non-RAWC byte: stop here and let the outer
-            # dispatcher resume in the same STRINGRAW state on the next call.
-            if this.atchar != ascii.doubleQuote then {
-                return (this.rawRunStop :pool :stringparts :line :col)
-            }
+            for israwc this.atchar loop this.accept
+            if this.atchar != ascii.doubleQuote then return (this.rawRunStop :pool :s0 :line :col)
             dline: this.lineno
             dcol: this.colno
-            # Fresh delimparts per outer iteration: an un-reset
-            # accumulator would let a short `"` run inside the body
-            # under-consume the eventual close by the leftover count.
-            delimparts: String
-            for this.atchar == ascii.doubleQuote while delimparts.length < delim_len loop {
-                delimparts.appendByte this.atchar
+            dpos: this.tokpos
+            run: u8
+            for this.atchar == ascii.doubleQuote while run < delim_len loop {
                 this.accept
+                run = run + 1
             }
-            if delimparts.length.u8.orPanic < delim_len then {
-                # short run -- literal content
-                extendraw :stringparts delim_view: delimparts.stringView
-            } else {
-                return (this.rawRunClose :pool :stringparts :delimparts :line :col :dline :dcol)
-            }
+            if run == delim_len then return (
+                this.rawRunClose
+                :pool
+                :s0
+                :dpos
+                :line
+                :col
+                :dline
+                :dcol
+            )
         }
-        # unreachable -- the for-while-true loop only exits via return
+        return (this.contentTok s: s0 e: this.tokpos :line :col)
+    }
+
+    # contentTok -- a run of string content over the source span `s`..`e`. Its
+    # text is the span, read from the source by whoever needs it, never pooled
+    contentTok: function {this: this.view s: u64 e: u64 line: u32 col: u32} out token is {
         return (
             token
-            toktype: toktype.errTok
-            width: 0
+            toktype: toktype.strMidTok
+            width: (spanWidth :s :e)
             text: zast.nameid.zero
+            offset: s
             fsno: this.fsno
             lineno: line
             colno: col
@@ -702,11 +673,12 @@ Tokenizer: class {
     acceptcharescape: function {:this pool: zast.StringPool} out token is {
         line: this.lineno
         col: this.colno
+        at: this.tokpos
         c: this.atchar
         if c != ascii.backslash then {
             err: String
             err.appendByte c
-            return (this.textTok :pool tt: toktype.errTok s: err :line :col)
+            return (this.textTok :pool tt: toktype.errTok s: err :at :line :col)
         }
         this.accept
         c = this.atchar
@@ -737,27 +709,27 @@ Tokenizer: class {
             this.accept
             sc: String
             sc.appendByte named_byte
-            return (this.textTok :pool tt: toktype.strChrTok s: sc :line :col)
+            return (this.textTok :pool tt: toktype.strChrTok s: sc :at :line :col)
         }
 
         if c == ascii.lowerX then {
-            return (this.accepthexescape :pool n: 2 specifier: ascii.lowerX :line :col)
+            return (this.accepthexescape :pool n: 2 specifier: ascii.lowerX :at :line :col)
         }
         if c == ascii.lowerU then {
-            return (this.accepthexescape :pool n: 6 specifier: ascii.lowerU :line :col)
+            return (this.accepthexescape :pool n: 6 specifier: ascii.lowerU :at :line :col)
         }
 
         if c == ascii.braceOpen then {
             bs: String
             bs.appendByte ascii.backslash
             this.statepush s: tokstatetype.stringexpr
-            return (this.textTok :pool tt: toktype.strExprBegTok s: bs :line :col)
+            return (this.textTok :pool tt: toktype.strExprBegTok s: bs :at :line :col)
         }
 
         err: String
         err.appendByte ascii.backslash
         err.appendByte c
-        return (this.textTok :pool tt: toktype.errTok s: err :line :col)
+        return (this.textTok :pool tt: toktype.errTok s: err :at :line :col)
     }
 
     # Consume `n` hex digits and produce a STRCHR with the decoded
@@ -771,7 +743,7 @@ Tokenizer: class {
     # the codepoint (1-4 bytes). Codepoints above U+10FFFF cannot be
     # represented in 1-4 byte UTF-8 and are rejected as ERR.
     accepthexescape: function {
-        :this pool: zast.StringPool n: u32 specifier: u8 line: u32 col: u32
+        :this pool: zast.StringPool n: u32 specifier: u8 at: u64 line: u32 col: u32
     } out token is {
         this.accept
         digits: String
@@ -784,7 +756,7 @@ Tokenizer: class {
                 consumed = consumed + 1
             } else {
                 et: escapeErrText :specifier :digits
-                return (this.textTok :pool tt: toktype.errTok s: et :line :col)
+                return (this.textTok :pool tt: toktype.errTok s: et :at :line :col)
             }
         }
 
@@ -811,17 +783,17 @@ Tokenizer: class {
         if specifier == ascii.lowerU then {
             if val > 1114111 then {
                 et: escapeErrText :specifier :digits
-                return (this.textTok :pool tt: toktype.errTok s: et :line :col)
+                return (this.textTok :pool tt: toktype.errTok s: et :at :line :col)
             }
             sc: String
             utf8_encode_append cp: val dst: sc
-            return (this.textTok :pool tt: toktype.strChrTok s: sc :line :col)
+            return (this.textTok :pool tt: toktype.strChrTok s: sc :at :line :col)
         }
 
         b: val.u8.orPanic
         sc: String
         sc.appendByte b
-        return (this.textTok :pool tt: toktype.strChrTok s: sc :line :col)
+        return (this.textTok :pool tt: toktype.strChrTok s: sc :at :line :col)
     }
 
     # idTok -- a token over the source span `s`..`e` whose text is already
@@ -843,6 +815,7 @@ Tokenizer: class {
             fsno: this.fsno
             lineno: line
             colno: col
+            offset: s
         )
     }
 
@@ -871,6 +844,7 @@ Tokenizer: class {
             toktype: tt
             width: (spanWidth :s :e)
             text: (this.tokSpanId :pool :s :e)
+            offset: s
             fsno: this.fsno
             lineno: line
             colno: col
@@ -891,6 +865,7 @@ Tokenizer: class {
             toktype: tt
             width: 1
             text: (this.tokSpanId :pool :s e: s + 1)
+            offset: s
             fsno: this.fsno
             lineno: line
             colno: col
@@ -905,6 +880,7 @@ Tokenizer: class {
         pool: zast.StringPool
         tt: toktype
         s: String
+        at: u64
         line: u32
         col: u32
     } out token is {
@@ -913,6 +889,7 @@ Tokenizer: class {
             toktype: tt
             width: (textWidth :s)
             text: (pool.set s: s.stringView)
+            offset: at
             fsno: this.fsno
             lineno: line
             colno: col
@@ -952,6 +929,7 @@ Tokenizer: class {
                 fsno: this.fsno
                 lineno: this.nexttok.lineno
                 colno: this.nexttok.colno
+                offset: this.nexttok.offset
             )
         }
         this.hasnext = false
@@ -963,6 +941,7 @@ Tokenizer: class {
             fsno: this.fsno
             lineno: this.nexttok.lineno
             colno: this.nexttok.colno
+            offset: this.nexttok.offset
         )
     }
 
@@ -986,6 +965,7 @@ Tokenizer: class {
                 toktype: toktype.strEndTok
                 width: 1
                 text: (this.tokSpanId :pool s: s0 + 1 e: s0 + 2)
+                offset: s0 + 1
                 fsno: this.fsno
                 lineno: line
                 colno: col + 1
@@ -1095,6 +1075,7 @@ Tokenizer: class {
             toktype: tt
             width: (spanWidth :s e: this.tokpos)
             text: txt
+            offset: s
             fsno: this.fsno
             lineno: line
             colno: col
@@ -1252,6 +1233,7 @@ Tokenizer: class {
         if numbershaped when this.atchar == ascii.dot then {
             dot_line: this.lineno
             dot_col: this.colno
+            dot_at: this.tokpos
             this.accept
             if isdigit this.atchar then {
                 for isidchar this.atchar loop this.accept
@@ -1262,6 +1244,7 @@ Tokenizer: class {
                     toktype: toktype.dotTok
                     width: 1
                     text: (pool.set s: ".")
+                    offset: dot_at
                     fsno: this.fsno
                     lineno: dot_line
                     colno: dot_col
@@ -1333,6 +1316,7 @@ Tokenizer: class {
             toktype: toktype.colonTok
             width: 1
             text: (this.colonText :pool)
+            offset: s_word - 1
             fsno: this.fsno
             lineno: colonpre_line
             colno: colonpre_col
@@ -1420,6 +1404,7 @@ Tokenizer: class {
                 toktype: toktype.colonTok
                 width: 1
                 text: (this.colonText :pool)
+                offset: this.tokpos
                 fsno: this.fsno
                 lineno: this.lineno
                 colno: this.colno
@@ -1468,6 +1453,7 @@ Tokenizer: class {
                 toktype: toktype.eofTok
                 width: 0
                 text: zast.nameid.zero
+                offset: this.tokpos
                 fsno: this.fsno
                 lineno: line
                 colno: col
@@ -1538,6 +1524,7 @@ Lexer: class {
             fsno: zvfs.fsno
             lineno: 0
             colno: 0
+            offset: 0
         )
         return (meta.create :lexer thistoken: placeholder filterEol: true)
     }
@@ -1639,6 +1626,7 @@ Lexer: class {
             lineno: this.thistoken.lineno
             colno: this.thistoken.colno
             width: this.thistoken.width
+            offset: this.thistoken.offset
         )
     }
 }
