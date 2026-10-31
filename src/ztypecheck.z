@@ -6393,31 +6393,9 @@ resolveTyperefShell: function {
         )
     }
     # anything else is a value, not a type: its fold has said why it is
-    # refused, and the member is declared with no type (memberDeclRefused). A
-    # list where a member's type goes is the member's default
-    if (ast.nodes.get i: nid).listblock then refuseListDefault :st :ast :nid
+    # refused, and the member is declared with no type (memberDeclRefused)
     st.typing.refusedDefaults.add item: nid
     return ztypes.tid.zero
-}
-
-# refuseListDefault -- a list written where a field's or a parameter's type
-# goes. That makes it the member's default, and a default is a number, a
-# string, an arm or a function: a list would be dropped and the member typed
-# by nothing, so the declaration is refused.
-refuseListDefault: function {st: zenv.ZSymbolTable ast: Ast.view nid: zast.nodeid} is {
-    n: ast.nodes.get i: nid
-    (
-        addErrorH
-        :st
-        nodeid: nid
-        lineno: (nodeLine :n)
-        colno: (nodeCol :n)
-        e: zast.err.typeError
-        msg: "a list cannot be a default: a default is a number, a string, an arm or a function".string
-        note: String
-        hint: "declare the member's type, `staticlist i64`, and give the list where the value is built".string
-        width: 4
-    )
 }
 
 # shellHeadIsGeneric -- whether a type-reference shell's head names a generic
@@ -7356,7 +7334,7 @@ registerValueParam: function {
             fname: pnmA.stringView
             dm: pm
         )
-        recordFoldedScalarDefault :st :ast ownerTid: fid dm: pm
+        recordFoldedDefault :st :ast ownerTid: fid dm: pm
     }
     if (isNumericLiteralNameAt :ast ref: ptn) then {
         refuseWideDefault :st :ast nid: pm.operation
@@ -12496,8 +12474,8 @@ attachDeclaredField: function {
 } is {
     folded: foldedDeclType :st :ast ownerTid: rid dm: fm
     cid: declaredFieldTid :st :scope :ast :unitDecl :defName :rid :fm :folded
-    # refused where its type was resolved (refuseListDefault)
-    if (ast.nodes.get i: fm.operation).listblock then return
+    # a list that did not fold declares nothing; its fold said why
+    if (ast.nodes.get i: fm.operation).listblock when folded.isZero then return
     (
         refuseNullTyped
         :st
@@ -12581,7 +12559,7 @@ attachDeclaredField: function {
         }
     }
     recordFoldedArmDefault :st :ast what: "field" ownerTid: rid :fname dm: fm
-    recordFoldedScalarDefault :st :ast ownerTid: rid dm: fm
+    recordFoldedDefault :st :ast ownerTid: rid dm: fm
     if dcn1Id.isZero.not when (isStripMarkerId nameId: dcn1Id) then null else {
         if dcn1Id.isZero.not then {
             rdk3: nodeId n: (ast.nodes.get i: fm.operation)
@@ -15187,7 +15165,7 @@ valueStampsTyperef: function {
 valueDeclares: function {ast: Ast.view node: zast.nodeid} out bool is {
     n: ast.nodes.get i: node
     if (bareAtomNameId :n).isZero.not then return true
-    if n.atomstring or n.ifexpr or n.caseexpr then return true
+    if n.atomstring or n.ifexpr or n.caseexpr or n.listblock then return true
     if (convertsExpression :ast :node) then return true
     return (zast.infixPartsOf :ast :n).found
 }
@@ -15237,13 +15215,14 @@ refuseUnfoldedConversion: function {
     return true
 }
 
-# recordFoldedScalarDefault -- record the default a declaration's folded value
+# recordFoldedDefault -- record the default a declaration's folded value
 # is, when that value is a compile-time SCALAR written as a name or an
-# expression (`n: LIMIT`, `n: 2 * 3`, `n: CAP + 1`) or a string that folds (a
+# expression (`n: LIMIT`, `n: 2 * 3`, `n: CAP + 1`), a string that folds (a
 # literal, a unit string constant, a list element): a StringView of static
-# memory, re-emitted at every call and construction as its `_zcsN`. A literal
+# memory, re-emitted at every call and construction as its `_zcsN`, or a static
+# list (`tags: list { "core" }`), passed as the view of its array. A literal
 # number and an arm keep their own kinds of default.
-recordFoldedScalarDefault: function {
+recordFoldedDefault: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
     # the owner the member hangs off
@@ -15259,7 +15238,9 @@ recordFoldedScalarDefault: function {
         nameId: dm.name
     )
     cv: constValueOfDecl :st declId: fdc
-    if cv.kind.ivalKind or cv.kind.fvalKind or cv.kind.svalKind then {
+    isList: false
+    if cv.kind.aggKind then isList = (st.typing.constAggs.get i: cv.aggId.u64).kind.staticList
+    if cv.kind.ivalKind or cv.kind.fvalKind or cv.kind.svalKind or isList then {
         (
             st.typing.declSetDefaultId
             parentTypeId: ownerTid
@@ -15267,9 +15248,12 @@ recordFoldedScalarDefault: function {
             value: ztyping.defaultval.constant fdc
         )
     }
+    # a call that leaves the member out reads the list at run time; the
+    # emitter writes it only where C spells it
+    if isList then markAggReached :ast :st id: cv.aggId at: dm.nid
     # a data value types the member but is no default: it would be dropped, and
     # each use would then be told the member is required
-    if cv.kind.aggKind then {
+    if cv.kind.aggKind when isList.not then {
         nm: zast.nameTextCopy :ast ref: dm.name
         (
             addError
@@ -15278,7 +15262,7 @@ recordFoldedScalarDefault: function {
             lineno: dm.lineno
             colno: dm.colno
             e: zast.err.typeError
-            msg: "'\{nm}' defaults to a data value: a default is a number, a string, an arm or a function"
+            msg: "'\{nm}' defaults to a data value: a default is a number, a string, a static list, an arm or a function"
         )
     }
 }
@@ -15380,7 +15364,7 @@ resolveNamedFieldSlot: function {
         childTypeId: cidf
     )
     recordFoldedArmDefault :st :ast what: "field" ownerTid: cid :fname dm: fm
-    recordFoldedScalarDefault :st :ast ownerTid: cid dm: fm
+    recordFoldedDefault :st :ast ownerTid: cid dm: fm
     if (st.reg.typetypeOf typeId: cidf) == ztypes.ztypetype.functionType then {
         (
             st.typing.setChildFnptrField
@@ -47624,6 +47608,13 @@ checkArgTypeMismatch: function {
     mm7: "argument '\{pn}' type mismatch: expected \{en7}, got \{an7}"
     en7b: String
     eh7: String
+    # a static list is no collection built at run time: it is written once
+    if (valIsMonoOf :st tid: ptid wk: zast.wellKnown.slot.tyStaticlist) when (
+        valIsMonoOf
+        :st
+        tid: vt
+        wk: zast.wellKnown.slot.tyStaticlist
+    ).not then eh7 = "a static list is written `list { ... }` at unit level, and passed by its name".string
     (
         addErrorH
         :st
