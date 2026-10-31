@@ -455,12 +455,11 @@ Tokenizer: class {
     # Mode stack for string + interpolation contexts. Empty means the
     # implicit FILE state (see `statecurrent`).
     statestack: ListVal tokstatetype
-    # Whether whitespace and comment tokens carry their source text.
-    # They are the only tokens whose text no reader of THIS tokenizer
-    # needs -- `scan` hands the full stream to a caller that may want it,
-    # so the public default is true, and Lexer clears it because its own
-    # advance drops both kinds before the parser ever sees them. An empty
-    # String owns no buffer, so a token that skips its text costs nothing.
+    # Whether whitespace and comment tokens are made at all. `scan` hands the
+    # full stream to a caller that may want them, so the public default is
+    # true; the Lexer clears it because its own advance would drop both kinds
+    # before the parser ever saw them, and so the tokenizer steps over them
+    # without building a token.
     keepTrivia: bool
 } as {
     # a tokenizer over `source`, positioned before the first byte
@@ -1081,9 +1080,7 @@ Tokenizer: class {
         return (this.byteTok :pool tt: toktype.braceCloseTok s: s0 :line :col)
     }
 
-    # triviaTok -- whitespace or a comment run. The span is always the width, but
-    # the TEXT is interned only when trivia is being kept: a run the parser will
-    # discard should not put its spelling in the pool.
+    # triviaTok -- whitespace or a comment run, made only when trivia is kept.
     triviaTok: function {
         this: this.view
         pool: zast.StringPool
@@ -1092,13 +1089,11 @@ Tokenizer: class {
         line: u32
         col: u32
     } out token is {
-        txt: zast.nameid
-        if this.keepTrivia then txt = this.tokSpanId :pool :s e: this.tokpos
         return (
             token
             toktype: tt
             width: (spanWidth :s e: this.tokpos)
-            text: txt
+            text: (this.tokSpanId :pool :s e: this.tokpos)
             offset: s
             fsno: this.fsno
             lineno: line
@@ -1139,6 +1134,8 @@ Tokenizer: class {
         line: u32
         col: u32
     } out optionval token is {
+        # under no pushed state the bytes are code
+        if this.statestack.length == 0 then return (optionval.none token)
         kind: this.statecurrent
         in_string: false
         raw_delim: u8
@@ -1164,6 +1161,17 @@ Tokenizer: class {
             return (optionval.some (this.acceptstringrawtoken :pool delim_len: raw_delim))
         }
         return (optionval.none token)
+    }
+
+    # skipTrivia -- when trivia is not kept, step over the whitespace and the
+    # comment at the cursor without making tokens of them: a comment runs to the
+    # line end, so whitespace before one is all a line can hold besides. Inside
+    # a string those bytes are content, and stay.
+    skipTrivia: function {:this} is {
+        if this.keepTrivia then return
+        if this.statestack.length > 0 when this.inString then return
+        this.acceptRun cls: charflag.whitespace
+        if this.atchar == ascii.hash then this.acceptRun cls: charflag.commentBody
     }
 
     # triviaToken -- a run of whitespace or a comment, whichever `c` starts.
@@ -1461,6 +1469,7 @@ Tokenizer: class {
         # `accept` has never run). After this, .atchar holds the next
         # byte to dispatch on (or ascii.nul if the source is empty).
         if this.pos == 0 then this.accept
+        this.skipTrivia
         line: this.lineno
         col: this.colno
         c: this.atchar
