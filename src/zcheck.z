@@ -306,7 +306,10 @@ indexAdded: function {
 # check -- parse + typecheck(full) `mainUnit` against `srcdirs` layered
 # over `systemdir`. `overlays` holds, per src root, live buffer text by the
 # name relative to that root (e.g. "zparser.z"); each root's buffers are served
-# by a StringProvider bound in front of everything, shadowing disk.
+# by a StringProvider bound in front of everything, shadowing disk. With
+# `dataFile` the units are data files (`.zd`): each is also asked what it may not hold
+# (zdatafile), and when one holds anything of that kind those refusals are the
+# check's errors.
 check: function {
     # the src roots, the first searched first
     srcdirs: (List String).view
@@ -316,6 +319,8 @@ check: function {
     # path relative to that root
     overlays: List (Map String V: String)
     layer: GenLayer.view
+    # the units are data files, `<unit>.zd`, rather than source files
+    dataFile: false
 } out CheckResult is {
     vfs: newVfs
     roots: buildRoots :vfs :systemdir :srcdirs :layer
@@ -337,7 +342,9 @@ check: function {
             }
         }
     }
-    p: zparser.Parser.create
+    ext: ".z"
+    if dataFile then ext = ".zd"
+    p: zparser.Parser.create :ext
     prog: p.parse :vfs :rootid mainUnitName: mainUnit.string
     # a failed parse names its error as the tree's root row
     isErr: zast.isErrorAt ast: prog id: prog.root
@@ -362,6 +369,13 @@ check: function {
         dumpRows: false
         filePaths: (ztypecheck.filePathsOf :vfs ast: prog)
     )
+    # what a data file may not hold is its one report: the checker's words about
+    # a function or an operator in it would only repeat the refusal
+    if dataFile then {
+        refusedErrs: List zast.ErrorData
+        zdatafile.refused ast: prog :vfs errs: refusedErrs
+        if refusedErrs.length > 0 then refusedErrs swap st.typing.errors
+    }
     nerr: st.typing.errors.length
     return (
         CheckResult

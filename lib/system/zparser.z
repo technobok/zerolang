@@ -256,10 +256,14 @@ Parser: class {
     # and the finished window is claimed into the kid table directly
     argStack: ListVal zast.nodeid
     argNameStack: ListVal zast.nameid
+    # the extension a unit's file carries: `.z` for source, `.zd` for a data
+    # file (docs/zdata.pdoc). One parse reads one kind
+    ext: String
 } as {
     # a parser with an empty tree: the node table holds only its sentinel row,
-    # and the name pool only the empty text
-    create: function {} out this is {
+    # and the name pool only the empty text. It reads unit files named
+    # `<unit><ext>`
+    create: function {ext: ".z"} out this is {
         return (
             meta.create
             curFile: zvfs.fsno
@@ -267,6 +271,7 @@ Parser: class {
             opStack: ListVal zast.nodeid
             argStack: ListVal zast.nodeid
             argNameStack: ListVal zast.nameid
+            ext: ext.string
         )
     }
 
@@ -4302,7 +4307,7 @@ Parser: class {
         }
     }
 
-    # Load and parse the unit file `<unitname>.z` under `parentid`. On
+    # Load and parse the unit file `<unitname><ext>` under `parentid`. On
     # success appends namedoperation(name,
     # unitdef) into `outBody`, this unit's top-level def names into `outNames`,
     # and its unresolved externs into `outExterns`; recursively loads any
@@ -4338,7 +4343,7 @@ Parser: class {
             )
             )
         }
-        fn: "\{unitname.stringView}.z"
+        fn: "\{unitname.stringView}\{this.ext}"
         fsid: vfs.walk parent: parentid name: fn.stringView
         fkind: vfs.arm dentryid: fsid
         isNF: false
@@ -4874,6 +4879,11 @@ Parser: class {
         coreNames: List String
         coreNamesOut: ListVal zast.nameid
         coreExterns: List String
+        # THE PRELUDE IS ZEROLANG whatever kind of file this parse reads: core
+        # and the units it names load as `.z` first, and only then the main
+        # unit and what it names, as `ext`
+        ownExt: ".z".string
+        ownExt swap this.ext
         coreRes: (
             this.loadUnit
             :vfs
@@ -4885,6 +4895,7 @@ Parser: class {
             outExterns: coreExterns
             outNames: coreNamesOut
         )
+        ownExt swap this.ext
         coreErr: Parser.isError node: coreRes
         coreOk: false
         if coreErr then {
@@ -4903,10 +4914,24 @@ Parser: class {
                 ref: cn
             )
         }
+        preludeQueue: List String
+        ceIt: coreExterns.iterate
+        for ce: ceIt loop enqueueUnit queue: preludeQueue :defNames name: ce.copy
+        ownExt swap this.ext
+        pres: (
+            this.loadQueued
+            :vfs
+            :rootid
+            :coreNames
+            :defNames
+            queue: preludeQueue
+            :units
+            required: ""
+        )
+        ownExt swap this.ext
+        if (Parser.isError node: pres) then return (this.errorTree e: pres)
         loadQueue: List String
         loadQueue.append mainUnitName.copy
-        ceIt: coreExterns.iterate
-        for ce: ceIt loop enqueueUnit queue: loadQueue :defNames name: ce.copy
         res: (
             this.loadQueued
             :vfs

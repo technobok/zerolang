@@ -1,0 +1,261 @@
+# zdata -- a data file (`.zd`, docs/zdata.pdoc) as zc reads one. The file is a
+# unit, checked as zerolang checks any unit (zcheck.check with the `.zd`
+# extension, which also refuses what a data file may not hold); its values are
+# read off the checked symbol table: the folded constants, a data value's
+# fields with their defaults applied, a list's elements, a choice value's arm.
+# The reader hands out the file's top-level unit, through which every
+# definition is reached.
+
+public: unit {
+    :open
+    :dumpText
+}
+
+Ast: zast.Ast
+
+# DataFile -- a checked data file: the check, and the file's own unit
+DataFile: class {
+    check: zcheck.CheckResult
+    # the file's unit declaration, 0 when the check failed before it had one
+    unitDecl: ztypes.declid
+} as {
+    # ok -- the file parsed and checked with no error
+    ok: function {t: this.view} out bool is {
+        return t.check.parseOk and (t.check.errorCount == 0)
+    }
+}
+
+# open -- check the data file at `file` as a unit named by its stem. Its own
+# directory is the first root, so the file's siblings and its hidden folder
+# (`x/` beside `x.zd`) are reached first; then `srcdirs`, then `systemdir`,
+# the roots zerolang's own units are found in.
+open: function {
+    file: StringView srcdirs: (List String).view systemdir: StringView
+} out DataFile is {
+    roots: List String
+    roots.append (path.dirname p: file)
+    for each sd: srcdirs loop roots.append from: sd.copy
+    unitName: unitNameOf :file
+    r: (
+        zcheck.check
+        srcdirs: roots
+        :systemdir
+        mainUnit: unitName.stringView
+        overlays: List (Map String V: String)
+        layer: zcheck.noLayer
+        dataFile: true
+    )
+    ud: ztypes.declid
+    {
+        o: r.st
+        match (
+            o
+        ) case some then {
+            nid: zast.poolFind pool: r.prog.names text: unitName.stringView
+            if nid.isZero.not then ud = (
+                o.typing.declFindChild
+                parentDeclId: o.typing.programRoot
+                nameId: nid
+            )
+        } case none then null
+    }
+    return (DataFile check: r unitDecl: ud)
+}
+
+# dumpText -- every value the file defines, written back as zdata: one line per
+# definition, a nested unit as a `unit { }` block, each data value with all its
+# fields (defaults included). Types are the file's schema, not its values, and
+# are left out.
+dumpText: function {f: DataFile.view} out String is {
+    buf: String
+    o: f.check.st
+    match (
+        o
+    ) case some then {
+        dumpUnit st: o ast: f.check.prog unitDecl: f.unitDecl indent: 0 :buf
+    } case none then null
+    return buf
+}
+
+# dumpUnit -- the values unit `unitDecl` defines, in declaration order
+dumpUnit: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    unitDecl: ztypes.declid
+    indent: u64
+    buf: String.borrow
+} is {
+    ut: ztypecheck.declTypeIdOf :st declId: unitDecl
+    pad: " ".repeated n: indent
+    n: st.typing.declChildSlots declId: unitDecl
+    i: u64
+    for i < n loop {
+        cd: st.typing.declChildAt declId: unitDecl index: i
+        i = i + 1
+        isUnit: false
+        cname: zast.nameid
+        {
+            co: st.typing.decls.get i: cd
+            isUnit = co.kind.unitDecl
+            cname = co.name
+        }
+        nm: zast.nameTextAt :ast ref: cname
+        if isUnit then {
+            buf.append "\{pad}\{nm}: unit {\n"
+            dumpUnit :st :ast unitDecl: cd indent: indent + 4 :buf
+            buf.append "\{pad}}\n"
+        } else {
+            v: st.typing.memberConstOf parentTypeId: ut nameId: cname
+            if v.kind.none.not then {
+                buf.append "\{pad}\{nm}: "
+                buf.append (valueText :st :ast :v)
+                buf.append "\n"
+            }
+        }
+    }
+}
+
+# valueText -- one folded value written as zdata
+valueText: function {st: zenv.ZSymbolTable.view ast: Ast.view v: ztypes.cval} out String is {
+    if v.kind.ivalKind then return (numberText :st :v text: (ztypecheck.constIntText :st :v))
+    if v.kind.fvalKind then return (numberText :st :v text: (ztypecheck.constFloatText :st :v))
+    if v.kind.svalKind then return (quoted s: (st.typing.constStrings.get i: v.strId.u64).stringView
+    )
+    if v.kind.armKind then return (armText :st :ast tid: v.armTid arm: v.armName)
+    if v.kind.aggKind then return (aggText :st :ast row: v.aggId)
+    return "?".string
+}
+
+# numberText -- a number, suffixed with its type when it has one (`5.u8`)
+numberText: function {st: zenv.ZSymbolTable.view v: ztypes.cval text: String} out String is {
+    t: text.copy
+    if v.numTid.isZero then return t
+    t.append "."
+    t.append (st.reg.nameOf tid: v.numTid)
+    return t
+}
+
+# armText -- an arm: `true` and `false` bare, any other through its type
+armText: function {
+    st: zenv.ZSymbolTable.view ast: Ast.view tid: ztypes.tid arm: zast.nameid
+} out String is {
+    an: zast.nameTextAt :ast ref: arm
+    if tid == st.typing.boolTid then return an.copy
+    return (pathText type: (st.reg.nameOf :tid) leaf: an.stringView)
+}
+
+# pathText -- `type.leaf`, a type's member as zdata writes it
+pathText: function {type: String leaf: StringView} out String is {
+    t: type.copy
+    t.append "."
+    t.append leaf
+    return t
+}
+
+# aggText -- a list, a data value or a choice value, whole
+aggText: function {st: zenv.ZSymbolTable.view ast: Ast.view row: u64} out String is {
+    g: st.typing.constAggs.get i: row
+    if g.kind.staticList then return (listText :st :ast :row)
+    if g.kind.staticChoice then return (choiceText :st :ast :row)
+    return (dataText :st :ast :row)
+}
+
+# listText -- a static list: `list { a b }`, each label written before its
+# element
+listText: function {st: zenv.ZSymbolTable.view ast: Ast.view row: u64} out String is {
+    g: st.typing.constAggs.get i: row
+    if g.itemCount == 0 then return "list {}".string
+    t: "list {".string
+    k: u64
+    for k < g.itemCount loop {
+        t.append " "
+        if k < g.labelCount then {
+            lb: st.typing.constAggLabels.get i: g.labelStart.u64 + k
+            if lb.isZero.not then {
+                t.append (zast.nameTextAt :ast ref: lb)
+                t.append ": "
+            }
+        }
+        t.append (valueText :st :ast v: (st.typing.constAggItems.get i: g.itemStart.u64 + k))
+        k = k + 1
+    }
+    t.append " }"
+    return t
+}
+
+# choiceText -- a choice value: its arm, and in parentheses with its value
+# when the arm carries one
+choiceText: function {st: zenv.ZSymbolTable.view ast: Ast.view row: u64} out String is {
+    g: st.typing.constAggs.get i: row
+    arm: (
+        pathText
+        type: (st.reg.nameOf tid: g.tid)
+        leaf: (zast.nameTextAt :ast ref: g.arm).stringView
+    )
+    if g.itemCount == 0 then return arm
+    t: "(".string
+    t.append arm
+    t.append " "
+    t.append (valueText :st :ast v: (st.typing.constAggItems.get i: g.itemStart.u64))
+    t.append ")"
+    return t
+}
+
+# dataText -- a data value: `(type field: value ...)`, every field in declared
+# order, its default where the construction left it out
+dataText: function {st: zenv.ZSymbolTable.view ast: Ast.view row: u64} out String is {
+    g: st.typing.constAggs.get i: row
+    ids: ListVal ztypes.tid
+    nameIds: ListVal zast.nameid
+    ztypecheck.dataFieldIds :st tid: g.tid :ids :nameIds
+    t: "(".string
+    t.append (st.reg.nameOf tid: g.tid)
+    k: u64
+    for k < g.itemCount while k < nameIds.length loop {
+        t.append " "
+        t.append (zast.nameTextAt :ast ref: (nameIds.get i: k))
+        t.append ": "
+        t.append (valueText :st :ast v: (st.typing.constAggItems.get i: g.itemStart.u64 + k))
+        k = k + 1
+    }
+    t.append ")"
+    return t
+}
+
+# unitNameOf -- a data file's unit name: its file name without `.zd`
+unitNameOf: function {file: StringView} out String is {
+    base: path.baseName p: file
+    sfx: base.stringView.stripSuffix s: ".zd"
+    match (
+        sfx
+    ) case some then {
+        return sfx.string
+    } case none then {
+        return base.copy
+    }
+}
+
+# quoted -- a string as a zdata literal: in double quotes, with `\` and `"`
+# and the control characters escaped
+quoted: function {s: StringView} out String is {
+    t: "\"".string
+    bv: s.byteView
+    i: u64
+    for i < bv.length loop {
+        b: bv.get :i
+        i = i + 1
+        if b == 34 then {
+            t.append "\\\""
+        } else if b == 92 then {
+            t.append "\\\\"
+        } else if b == 10 then {
+            t.append "\\n"
+        } else if b == 9 then {
+            t.append "\\t"
+        } else {
+            t.appendByte b
+        }
+    }
+    t.append "\""
+    return t
+}

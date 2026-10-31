@@ -2520,6 +2520,73 @@ runErrorCases: function {r: Runner} is {
     }
 }
 
+# runZdataCases -- the ZDATA kind: each tests/fixtures/zdata/<case>.zd is read
+# with `zc data` (its own directory first, then what <case>.zcargs adds). A case
+# with a <case>.err golden must fail with those errors (normErr); any other
+# must succeed and print exactly its <case>.out, the file's values written back.
+runZdataCases: function {r: Runner} is {
+    dir: "\{r.root.stringView}/tests/fixtures/zdata"
+    pool: List PoolJob
+    names: fixtureNames dir: dir.stringView suffix: ".zd"
+    for each nmS: names loop {
+        nm: nmS.stringView
+        argv: List String
+        argv.append from: r.zc.copy
+        argv.append from: "data".string
+        argv.append from: "\{dir}/\{nm}.zd"
+        argv.append from: "--system".string
+        argv.append from: r.sys.copy
+        xf: "\{dir}/\{nm}.zcargs"
+        outP: "\{r.tmp.stringView}/\{nm}.zdout"
+        errP: "\{r.tmp.stringView}/\{nm}.zderr"
+        steps: List PoolStep
+        steps.append (
+            mkStep
+            argv: (withExtraArgs :argv file: xf.stringView)
+            cwd: ""
+            outPath: outP.stringView
+            errPath: errP.stringView
+            timeoutSecs: 0
+            allowFail: true
+            zlinkFrom: ""
+        )
+        pool.append (mkJob name: nm :steps)
+    }
+    statuses: ListVal i32
+    failSteps: ListVal i64
+    runJobs jobs: pool maxJobs: r.jobsMax :statuses :failSteps
+    ji: u64
+    for ji < pool.length loop {
+        job: pool.get i: ji
+        nm: job.name.stringView
+        st: statuses.get i: ji
+        ji = ji + 1
+        if (zdataCaseOk :r dir: dir.stringView :nm status: st) then {
+            r.passN = r.passN + 1
+        } else {
+            print "FAIL(zdata) \{nm}"
+            r.fails = r.fails + 1
+        }
+    }
+}
+
+# zdataCaseOk -- one zdata case's verdict: with a .err golden, a failure with
+# those errors; without one, a success that printed exactly the .out golden
+zdataCaseOk: function {r: Runner.view dir: StringView nm: StringView status: i32} out bool is {
+    errGold: "\{dir}/\{nm}.err"
+    if (io.exists path: errGold) then {
+        errP: "\{r.tmp.stringView}/\{nm}.zderr"
+        got: slurp path: errP.stringView
+        return (
+            (status != 0) and
+            ((normErr content: got.stringView) == (slurp path: errGold.stringView))
+        )
+    }
+    outP: "\{r.tmp.stringView}/\{nm}.zdout"
+    outGold: "\{dir}/\{nm}.out"
+    return (status == 0) and ((slurp path: outP.stringView) == (slurp path: outGold.stringView))
+}
+
 # rootFree -- zc's stderr with the runner's own root dropped from the paths it
 # names, read through path.toSlash: zc prints a file by its root joined with
 # its path, cleaned and in native separators, and a golden spells it from the
@@ -3710,6 +3777,7 @@ main: function is {
         runLspCases :r
         runLeakCases :r
         runErrorCases :r
+        runZdataCases :r
         runDumpCases :r
         runDifferentialCases :r
         runVfsCases :r

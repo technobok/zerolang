@@ -1,0 +1,201 @@
+# zdatafile -- what a data file (`.zd`, docs/zdata.pdoc) may hold. The parser
+# reads a data file as it reads any unit, its unit extension set to `.zd`; this
+# pass then walks every unit a data file holds and refuses, at its own line,
+# each construct a data file cannot hold. What it leaves -- values, and the
+# `data` and `choice` types they are built from -- zerolang's checker checks as
+# it checks any unit. Nothing is added to the parse of a source file.
+
+public: unit {
+    :refused
+}
+
+astnode: zast.astnode
+Ast: zast.Ast
+
+# dataFileHint -- what every refusal adds: what a data file holds
+dataFileHint: "a data file holds values, and the data and choice types they are built from"
+
+# refused -- an error into `errs` for each construct a data file cannot hold,
+# in every unit whose file is a data file. Units read from source files (the
+# prelude) are not asked.
+refused: function {ast: Ast.view vfs: zvfs.ZVfs.view errs: List zast.ErrorData} is {
+    for each u: ast.units loop {
+        f: ast.rowFile.get i: u
+        if (vfs.path dentryid: f).stringView.endsWith ".zd" then unitItem :ast :errs nid: u
+    }
+}
+
+# unitItem -- one member of a data file's unit, `name: value`
+unitItem: function {ast: Ast.view errs: List zast.ErrorData nid: zast.nodeid} is {
+    n: ast.nodes.get i: nid
+    match (
+        n
+    ) case namedoperation then {
+        member :ast :errs nid: n.operation
+    } else null
+}
+
+# member -- what a unit member's name is bound to: a function, a type, a unit,
+# or a value
+member: function {ast: Ast.view errs: List zast.ErrorData nid: zast.nodeid} is {
+    n: ast.nodes.get i: nid
+    match (
+        n
+    ) case functiondef then {
+        refuse :ast :errs :nid what: "a function"
+    } case objectdef then {
+        objectMember :ast :errs :nid
+    } case unitdef then {
+        unitMember :ast :errs :nid
+    } else {
+        value :ast :errs :nid
+    }
+}
+
+# objectMember -- a type declared in a data file: a `data` or a `choice`, with
+# no `as` block and no native layout, each of its members a value or a type
+objectMember: function {ast: Ast.view errs: List zast.ErrorData nid: zast.nodeid} is {
+    n: ast.nodes.get i: nid
+    match (
+        n
+    ) case objectdef then {
+        allowed: n.kind.dataDef or n.kind.choiceDef
+        if allowed.not then {
+            refuse :ast :errs :nid what: (objectKindText k: n.kind)
+            return
+        }
+        if n.isNative then {
+            refuse :ast :errs :nid what: "a native type"
+            return
+        }
+        if n.asItems.count > 0 then {
+            (
+                refuse
+                :ast
+                :errs
+                nid: (zast.kidAt kids: ast.kids span: n.asItems i: 0)
+                what: "an `as` block"
+            )
+        }
+        i: u64
+        for i < n.isItems.count loop {
+            unitItem :ast :errs nid: (zast.kidAt kids: ast.kids span: n.isItems :i)
+            i = i + 1
+        }
+    } else null
+}
+
+# objectKindText -- an object kind a data file cannot hold, as a refusal names it
+objectKindText: function {k: zast.objectkind} out StringView is {
+    match (
+        k
+    ) case recordDef then {
+        return "a record type"
+    } case classDef then {
+        return "a class"
+    } case variantDef then {
+        return "a variant type"
+    } case unionDef then {
+        return "a union type"
+    } case protocolDef then {
+        return "a protocol"
+    } case facetDef then {
+        return "a facet"
+    } case generatorDef then {
+        return "a generator"
+    } case typedefDef then {
+        return "a typedef"
+    } else {
+        return "a type of that kind"
+    }
+}
+
+# unitMember -- a unit in a data file: an inline `unit {}` or a hidden subunit,
+# whose members are checked as the file's are. A generic unit, a `public:`
+# block (everything in a data file is public) and a `require:` block are not
+# data.
+unitMember: function {ast: Ast.view errs: List zast.ErrorData nid: zast.nodeid} is {
+    n: ast.nodes.get i: nid
+    match (
+        n
+    ) case unitdef then {
+        if n.kind.template then {
+            refuse :ast :errs :nid what: "a generic unit"
+            return
+        }
+        if n.kind.publicNs then {
+            refuse :ast :errs :nid what: "a `public:` block: every member of a data file is public"
+            return
+        }
+        if n.kind.requirement then {
+            refuse :ast :errs :nid what: "a `require:` block"
+            return
+        }
+        i: u64
+        for i < n.body.count loop {
+            unitItem :ast :errs nid: (zast.kidAt kids: ast.kids span: n.body :i)
+            i = i + 1
+        }
+    } else null
+}
+
+# value -- a value, or a type where one goes: a literal, a name or a path, a
+# string with no interpolation, a list of values, a construction or a type
+# application whose arguments are values. An operator, an interpolation and a
+# control-flow expression compute at run time and are not data.
+value: function {ast: Ast.view errs: List zast.ErrorData nid: zast.nodeid} is {
+    if nid.isZero then return
+    n: ast.nodes.get i: nid
+    match (
+        n
+    ) case atomid then null case dottedpath then null case labelvalue then null case stringchunk then null case atomstring then {
+        i: u64
+        for i < n.stringparts.count loop {
+            p: ast.nodes.get i: (zast.kidAt kids: ast.kids span: n.stringparts :i)
+            if p.stringchunk.not then {
+                refuse :ast :errs :nid what: "an interpolated string"
+                return
+            }
+            i = i + 1
+        }
+    } case listblock then {
+        i: u64
+        for i < n.elements.count loop {
+            unitItem :ast :errs nid: (zast.listElemAt :ast :nid :i)
+            i = i + 1
+        }
+    } case call then {
+        if n.infix then {
+            refuse :ast :errs :nid what: "an operator expression"
+            return
+        }
+        i: u64
+        for i < n.arguments.count loop {
+            unitItem :ast :errs nid: (zast.kidAt kids: ast.kids span: n.arguments :i)
+            i = i + 1
+        }
+    } case ifexpr then {
+        refuse :ast :errs :nid what: "an `if` expression"
+    } case caseexpr then {
+        refuse :ast :errs :nid what: "a `match` expression"
+    } else {
+        refuse :ast :errs :nid what: "an expression"
+    }
+}
+
+# refuse -- record that the construct at `nid` is not data
+refuse: function {ast: Ast.view errs: List zast.ErrorData nid: zast.nodeid what: StringView} is {
+    n: ast.nodes.get i: nid
+    errs.append (
+        zast.ErrorData
+        nodeid: nid
+        lineno: (zast.posOf :n).line
+        colno: (zast.posOf :n).col
+        width: 1
+        err: zast.err.dataFile
+        msg: "a data file cannot hold \{what}"
+        fsno: (ast.rowFile.get i: nid)
+        note: String
+        hint: dataFileHint.string
+    )
+}
