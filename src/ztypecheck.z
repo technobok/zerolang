@@ -4741,6 +4741,7 @@ recordDottedTyperef: function {
     cnId = atomNameId :ast n: cNode
     pNode: ast.nodes.get i: parentId
     pnId = atomNameId :ast n: pNode
+    if (recordUnitPathTyperef :st :ast :scope :thisName :nid :parentId :pnId :cnId) then return
     if (qualifierNamesUnit :st :scope qualId: pnId memberId: cnId) then {
         # a unit INSTANCE's member type names the instance's own copy, which
         # the instance's scope does not hold by name: stamped here
@@ -4814,6 +4815,44 @@ recordDottedTyperef: function {
     }
 }
 
+
+# recordUnitPathTyperef -- a dotted type-ref naming a member of a unit through an
+# alias or a path (`c.os` with `c: inner`, `rt.inner.T`): a file unit's member is
+# recorded under that unit, as recordDottedTyperef records a cross-unit ref; a
+# nested unit's is stamped here, as stampNestedTyperef stamps one. False when
+# the parent names no unit, or names a file unit by its own name.
+recordUnitPathTyperef: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    scope: ztypes.declid
+    thisName: StringView
+    nid: zast.nodeid
+    parentId: zast.nodeid
+    # the parent's name, zero for a path
+    pnId: zast.nameid
+    cnId: zast.nameid
+} out bool is {
+    if (isStripMarkerId nameId: cnId) then return false
+    qud: qualifierUnitDecl :st :scope :ast nid: parentId
+    if qud.isZero or ((unitDeclOfName :st nameId: pnId) == qud) then return false
+    if (st.typing.declParentOf declId: qud) == st.typing.programRoot then {
+        (recordResolvedName
+            :st
+            :scope
+            :ast
+            unitDecl: qud
+            :thisName
+            nameId: cnId
+            :nid
+            recScope: (qualifiedMemberScope :st unitRoot: qud memberId: cnId)
+        )
+        return true
+    }
+    qmt: qualifiedMemberTid :st :scope :ast qualNid: parentId memberId: cnId
+    if qmt.isZero then return false
+    ztyping.nodeTypeSet tbl: st.typing.nodeType :nid tid: qmt
+    return true
+}
 
 # qualifiedMemberScope -- the scope a qualified type-ref's member `unit.member`
 # is looked up from: the unit's root, or its `public:` block when the block
@@ -5352,6 +5391,7 @@ checkReturnNamesType: function {
     if pnId.isZero then return
     if (isNumericLiteralNameAt :ast ref: pnId) then return
     if (nameDenotesUnit :st :scope nameId: pnId) then return
+    if (qualifierUnitDecl :st :scope :ast nid: parentId).isZero.not then return
     reportReturnNamesNoType :st :scope :ast :unitDecl nid: oId unitId: pnId memberId: leafId
     recordResolvedName :st :scope :ast :unitDecl :thisName nameId: pnId nid: oId recScope: scope
     recordTyperef :st :scope :ast :unitDecl :thisName nid: parentId
