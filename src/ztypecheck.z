@@ -64115,15 +64115,16 @@ namedTypeAtHead: function {
     return ztypes.tid.zero
 }
 
-# constOfStaticCreate -- `row.create` in a static position: the data value of
+# constOfStaticCreate -- `row.create` in a static position, the type named
+# bare or through a unit (`tbl.row.create`, namedTypeAtHead): the data value of
 # every field's default (constOfStaticFields); noConst for any other path.
 constOfStaticCreate: function {
     st: zenv.ZSymbolTable
     scope: ztypes.declid
     ast: Ast
     unitDecl: ztypes.declid
-    # the base atom's name: the data type
-    ptId: zast.nameid
+    # the path's parent: the data type
+    headId: zast.nodeid
     # the member atom's name: `create`
     ncId: zast.nameid
     atNid: zast.nodeid
@@ -64133,8 +64134,8 @@ constOfStaticCreate: function {
     if (
         (ncId != zast.wellKnown.slot.wkCreate) or st.typing.staticTypesSeen.not
     ) then return ztypes.noConst
-    sct: typeNamedFrom :st :scope :ast lookupUnit: unitDecl typeNameId: ptId
-    if (st.reg.isStaticOf tid: sct).not then return ztypes.noConst
+    sct: namedTypeAtHead :st :scope :ast :unitDecl :headId
+    if sct.isZero then return ztypes.noConst
     # a choice has no value of its own: it is built through an arm
     if (st.reg.typetypeOf typeId: sct) != ztypes.ztypetype.recordType then return ztypes.noConst
     return (constOfStaticFields
@@ -64858,6 +64859,48 @@ constOfStaticListIndex: function {
     return (st.typing.constAggItems.get i: g.itemStart.u64 + kv.ival.u64.orPanic)
 }
 
+# constOfDottedHead -- what a dotted path's head settles before the parent's own
+# value is asked: `row.create`, the type named bare or through a unit
+# (`tbl.row.create`), a data value of every field's default; then a member read
+# off a bare-atom base (constOfNamedBase). noConst when neither answers.
+constOfDottedHead: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    nid: zast.nodeid
+    parentId: zast.nodeid
+    # the parent's name when it is a bare atom, else zero
+    ptId: zast.nameid
+    ncId: zast.nameid
+    ln: u32
+    co: u32
+} out ztypes.cval is {
+    sc: (constOfStaticCreate
+        :st
+        :scope
+        :ast
+        :unitDecl
+        headId: parentId
+        :ncId
+        atNid: nid
+        atLine: ln
+        atCol: co
+    )
+    if sc.kind.none.not or ptId.isZero then return sc
+    return (constOfNamedBase
+        :st
+        :scope
+        :unitDecl
+        :ast
+        atNid: nid
+        atLine: ln
+        atCol: co
+        :ptId
+        :ncId
+    )
+}
+
 # constOfNamedBase -- a dotted path whose base is a bare atom. The base can name a
 # numeric literal (`1.u32` is a width suffix, not a member read), another unit, a
 # nested namespace, a nested unit of the scope being evaluated, or a same-unit
@@ -64895,9 +64938,6 @@ constOfNamedBase: function {
                 co: atCol
             )
         }
-        # `row.create`: a data value of every field's default
-        sc: constOfStaticCreate :st :scope :ast :unitDecl :ptId :ncId :atNid :atLine :atCol
-        if sc.kind.none.not then return sc
         # `unit.CONST` reads a constant out of another unit
         if (nameDenotesUnit :st :scope nameId: ptId) then {
             uv: constOfUnitMember :st :scope :ast :ptId :ncId
@@ -65301,20 +65341,8 @@ evalConstDotted: function {
             gcId = pn.child
         }
     }
-    if ptId.isZero.not then {
-        pbv: (constOfNamedBase
-            :st
-            :scope
-            :unitDecl
-            :ast
-            atNid: nid
-            atLine: ln
-            atCol: co
-            :ptId
-            :ncId
-        )
-        if pbv.kind.none.not then return pbv
-    }
+    hv: constOfDottedHead :st :scope :ast :unitDecl :nid :parentId :ptId :ncId :ln :co
+    if hv.kind.none.not then return hv
     # `z.build.os.linux` -- the ARM-PREDICATE form, asked FIRST for the
     # same reason the atomid case asks the constant first: `tsrc.os` is a
     # constant whose TYPE is a variant, so reading it as a qualified type
