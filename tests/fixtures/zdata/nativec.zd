@@ -1,0 +1,73 @@
+# nativec -- a unit's C implementation file built from runtime.nativec: a
+# member row and its constant variant, a helper with a fragment, a pieced
+# helper, a class row on a template, and every requirement kind
+c: runtime.nativec
+implementation: (
+    c.implementation
+    rows: list {
+        (
+            c.row
+            key: "gauge.+"
+            body: "((uint8_t)(@L@ + @R@))"
+            form: c.form.value
+        )
+        (c.row key: "gauge./" needs: list { "prelude.@div_u32" } body: "z_div_u32(@L@, @R@)")
+        (c.row key: "gauge./" constant: list { 1 } body: "(@L@ / @R@)")
+        (
+            c.row
+            key: "@twice"
+            demand: list { "twice" "@twice" }
+            fragments: list {
+                """
+                static int64_t z_twice(int64_t n) {
+                    return n + n;
+                }
+                """
+            }
+        )
+        (
+            c.row
+            key: "@decls"
+            demand: list { "@unit" }
+            pieces: list {
+                (c.piece text: "/* the library's declarations */")
+                (
+                    c.piece
+                    name: "handle"
+                    demand: list { "@handle" }
+                    text: "typedef struct handle handle;"
+                )
+            }
+        )
+        (c.row key: "Cell.@class" template: "Cell" fact: "threaded")
+        (c.row key: "Cell.put")
+    }
+    facts: list { (c.fact name: "threaded" reach: list { "demo.spawn" }) }
+    canons: list { (c.canon stem: "Option_Cell" spec: list { "Option" "demo.Cell" }) }
+    links: list { (c.link library: "winmm" os: list { c.os.windows }) }
+    sources: list { (c.source path: "demo/demo.c" defines: list { "DEMO=1" }) }
+    refusals: list {
+        (
+            c.refusal
+            subunit: "wide"
+            feature: "__float128"
+            compilers: list { c.compiler.tcc c.compiler.msvc }
+            onlyArchitectures: list { c.architecture.x86_64 }
+        )
+    }
+    templates: list {
+        (
+            c.template
+            name: "Cell"
+            sections: list {
+                (c.section text: "typedef struct z_@@NAME@@_t { @@T@@ v; } z_@@NAME@@_t;")
+                (
+                    c.section
+                    member: "put"
+                    needs: list { "prelude.@panic" }
+                    text: "static void z_@@NAME@@_put(void) {}"
+                )
+            }
+        )
+    }
+)

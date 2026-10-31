@@ -1,0 +1,411 @@
+# runtime -- the shapes of a backend's implementation files: the C (or other
+# target) text behind every `is native` declaration of a unit. A unit `u` that
+# declares something native carries `u/nativec.zd` beside `u.z`, its C
+# backend's file, whose `implementation` is a `nativec.implementation`; the
+# compiler answers "which implementation" by looking the declaration's path up in
+# the files of the units a program reaches. An absent row is an error, not a
+# fallthrough.
+#
+# THREADS. The checker moves values between threads and lets several threads
+# read one, so every native's C holds with other threads running:
+#   - a native method's `.view` receiver is a const pointer (view-guard), and the
+#     method writes nothing its object reaches -- no cache, count or cursor kept
+#     in the object (an iterator's cursor is the iterator's own) -- so any number
+#     of threads may read one object at once. A class whose reads drive C state
+#     declares `thread.Unshareable` (sqlite's: a read prepares on the
+#     connection); one whose value must stay on the thread that made it declares
+#     `thread.ThreadBound` (the lock guards).
+#   - what two values share (a sync handle's block) changes only atomically or
+#     under the block's own lock; everything else a value reaches is its own, and
+#     moves with it.
+#   - process-wide state is written before the program's main runs, or by a row
+#     that holds under the `threaded` fact, with threads running: the argv
+#     globals and the hash seed are set in C's main ahead of z_main;
+#     setEnv/unsetEnv refuse while threads run; a panic or os.exit ends the
+#     process once.
+#   - libc calls are the reentrant ones (getpwuid_r; no strerror, strtok or
+#     localtime). The lgamma family writes libc's `signgam`, which nothing reads;
+#     the result is the call's own.
+#   - a C source a unit builds is built thread-safe in a program that starts
+#     threads (sqlite's THREADSAFE=2), by a source that holds under `threaded`.
+
+# nativec -- the C backend's implementation file
+nativec: unit {
+    # implementation -- one unit's natives in C
+    implementation: data {
+        # the unit's rows, in LOAD ORDER: a class's struct, a helper and a
+        # fragment are written in the order their rows stand, so a row stands
+        # below every row whose C it uses. The units load in the order the
+        # foundation gives; a unit it does not name loads after those it does
+        rows: list {} out staticlist row
+        # the generic instances this unit's C names by a canonical stem
+        canons: list {} out staticlist canon
+        # the facts this unit's rows may vary by
+        facts: list {} out staticlist fact
+        # the libraries a program reaching the unit links
+        links: list {} out staticlist link
+        # the C sources a program reaching the unit compiles and links
+        sources: list {} out staticlist source
+        # the toolchains that cannot build the unit, refused before any C is
+        # compiled
+        refusals: list {} out staticlist refusal
+        # the C templates a class or a container is written from
+        templates: list {} out staticlist template
+    }
+
+    # row -- the implementation of one declaration, or a helper several share.
+    # The key says which: `<type>.<member>` or `<function>` for a declaration of
+    # the unit (`u8.+`, `File.close`, `readText`); `<type>.@class` for a
+    # runtime-owned class; `@<name>` for a helper, outside the declaration space,
+    # as `@` marks every name the unit's declarations cannot spell.
+    #
+    # A class's NATIVE METHOD row's fragment defines the `<Class>_<method>`
+    # function, called `(&receiver, args...)` -- the METHOD ABI, one rule decided
+    # by each parameter's type: the receiver by pointer; a value view
+    # (StringView, a StringLike's `.view`, ByteView, ListView) BY VALUE; an owned
+    # collection (List, Map, Bytes) by pointer; anything else by value. A
+    # protocol slot takes the same, so a native method fills a vtable as it is.
+    # The row is demanded wherever the method is called or read (`f.close`), and
+    # when its class is live for each method its declared conformances name.
+    #
+    # A row that names a TYPE -- a method row, a class row, a `uses_<Type>`
+    # demand -- applies only to a type that declares something native, and a
+    # method row only to a native method: a user unit or type that shares the
+    # stdlib's name is not the one the row implements, and gets none of it.
+    row: data {
+        # the declaration's path within the unit, `<type>.@class`, or `@<name>`
+        key: text
+        # a C expression with holes, when the native is one:
+        #   @T@        the receiver type's C name, minus the leading z_ that a
+        #              body spells for itself -- so a body writes z_ then the hole
+        #   @L@ @R@    the emitted operands
+        #   @V@        the receiver of a receiver-only row -- a conversion,
+        #              `bits`, `not`
+        #   @A1@ @A2@  the arguments of an argument-taking row, 1-based with the
+        #              receiver excluded (the numbering `constant` uses), named by
+        #              DECLARED position and evaluated in written order
+        # The operands are evaluated once each, in written order, ahead of the
+        # body. A hole fills with the operand's C as it stands when reading it
+        # twice costs nothing (a name, a field, a constant); a body that names a
+        # hole more than once gets the operand read into a temporary first
+        # otherwise. So a body may name any hole as often as it needs, and is an
+        # expression: C17 has no statement inside an expression, and a body that
+        # needs storage of its own calls a fragment's function instead. A body
+        # and a fragment also fill:
+        #   @TAG_<type>@
+        #              how to reach that type's discriminator: `.tag` while it is
+        #              a tagged struct, NOTHING once the backend has unwrapped it
+        #   @ARM_<type>.<arm>@
+        #              the tag constant of that arm of that type
+        #   @MEMBER_<type>.<name>@
+        #              that member of a struct the compiler generates for a
+        #              zerolang declaration: a record's or class's field, a
+        #              variant's arm in its `data`, a union's inline arm slot, a
+        #              protocol's vtable slot. A runtime-owned layout (`is
+        #              native`: String, the collections, ...) keeps its own
+        #   @OKTAG@ @ERRTAG@ @OKMEMBER@ @ERRMEMBER@
+        #              a conversion row's result: the ok and err tags, and the ok
+        #              and err arms' members, of the resultval instance it returns
+        #   @<Type>@   a type's C name minus z_, by its source name or its canon
+        # A hole naming a type must name one the compiler can resolve.
+        body: ""
+        # the C functions the native needs, in the order they are written: each
+        # a fragment, text with the holes a body has, written once when the row
+        # is demanded
+        fragments: list {} out staticlist text
+        # the row's fragment as PIECES, in place of `fragments`: each written
+        # where it stands only when a need names its demand, a piece with no
+        # demand always
+        pieces: list {} out staticlist piece
+        # the demand-gated runtime the C calls; without it the callee never
+        # reaches the output and the C does not compile. A need is a demand of
+        # the row's own unit (`grow`, `@errno`) or `<unit>.<demand>` of another's
+        # (`prelude.@xmalloc`, `system.word`). A need `<n>?<c>` holds only under
+        # the condition <c>: the C calls <n> in one preprocessor branch alone, so
+        # <n> is written where the row is AND <c> is, inside `#if`, and no
+        # configuration compiles a function it never calls (cc-unused-guard)
+        needs: list {} out staticlist text
+        # the demands that reach the row, ANY OF, when it is not the key's last
+        # segment: a member's name (`file_close`, `spec_create`); `@unit`, the
+        # unit itself was demanded; `@<name>`, a demand outside the member space;
+        # `uses_<T>`, written C spells or constructs the unit's type T;
+        # `destroys_<T>`, written C calls T's destructor. A helper several
+        # members share is ONE row naming the members that reach it
+        demand: list {} out staticlist text
+        # what the body is: a call's result (bound to a temp before a reader
+        # spells it twice -- a missing mark costs a temp, never wrong C), or a
+        # VALUE computed from its holes, operators and casts over them, no call
+        # and no statement expression (native-guard refuses one that calls)
+        form: form.call
+        # the body takes its operands by pointer, so they must be lvalues
+        byPointer: false
+        # on a `StringView` member row: how a call of the member on a String or
+        # StringView is emitted. The compiler keys these by the member's name; a
+        # member with none takes the general paths
+        call: call.general
+        # a VARIANT row, chosen over the plain row of the same key only when the
+        # argument positions given -- 1-based, RECEIVER EXCLUDED, so a binop's one
+        # argument is 1 -- are all compile-time constants. Such a position fills
+        # with a LITERAL, so the variant can spell what only a known value allows:
+        # a division by a literal that is neither 0 nor -1 needs no check
+        # (const-row-guard pins both directions)
+        constant: list {} out staticlist u64
+        # a VARIANT row, chosen over the plain row of the same key when the fact
+        # holds and dropped when it does not; it stands ABOVE that plain row, and
+        # a key may have a variant and no plain row
+        fact: ""
+        # demanding the row demands each `<unit>.<demand>` here at once, where the
+        # demand is recorded: the helpers another unit's C supplies to this one
+        # (os.env needs io's StringView-to-C-string), registered before that
+        # unit's runtime is written
+        pulls: list {} out staticlist text
+        # the template members of other instances the fragments call, each
+        # `<canon>.<member>` (`List_String.append`), `?<c>` as a need takes
+        members: list {} out staticlist text
+        # on a native FREE function answering an instance of a templated class:
+        # the function is that instance's template function `z_<instance>_<m>`,
+        # called with the function's arguments in declared order (a left-out one
+        # is its default). A generic function needs C per instance, and the
+        # instance it answers is the one place that C is written (`thread.spawn`
+        # is JoinHandle's create)
+        via: ""
+        # on a structural `==`/`!=` row: the body calls the generated `==` of its
+        # @T@
+        callsEquals: false
+        # on a class row: the class is written from this template -- once per
+        # instance when it is GENERIC, once when it is not (a class holding OS
+        # state, whose layout no declaration can say)
+        template: ""
+        # on a class row whose struct is laid out from its declaration: the canons
+        # whose instances must ALL exist for the class to be LIVE. A live class is
+        # used, and the native methods its declared conformances name are
+        # demanded: their vtables take those addresses whether or not anything
+        # calls them. The gate is order-independent -- true exactly when what the
+        # fragments reference exists -- so the C always compiles
+        live: list {} out staticlist text
+        # on a class row: the C defining the class's `_destroy(<Class>_t* p)`,
+        # what a declaration cannot say (an fd closed once, a handle released),
+        # written with the struct. A destructor that calls what the unit's own
+        # fragments declare is instead a row of the unit's after them (sqlite's
+        # Database): the struct's destructor is declared ahead of it either way
+        destroy: ""
+    }
+
+    # piece -- a part of a fixed file or a fragment, written in place only where
+    # a need names its demand; a piece with no demand is written always
+    piece: data {
+        # the piece's name within its unit, for the reader
+        name: ""
+        # the demands that reach the piece, as a row's
+        demand: list {} out staticlist text
+        # what the piece's own C calls, as a row's
+        needs: list {} out staticlist text
+        # the C
+        text: text
+    }
+
+    # template -- a C template a class or a container is instantiated from:
+    # @@NAME@@ the instance's C name, and per type parameter P, @@P@@ the C type of
+    # its argument as a slot holds it and @@P_DESTROY@@ a function `void (P* x)`
+    # destroying one in place. A class's template defines the struct,
+    # `z_@@NAME@@_create`, `z_@@NAME@@_destroy` and `z_@@NAME@@_<method>` for each
+    # native method, taking the receiver by pointer; each method still has its
+    # (bodiless) row. @@P.<m>@@ names the function the argument declares as its
+    # member <m> (a bound's method, called with the receiver by pointer);
+    # @@OUT.<m>@@ is the C name of the type the instance's method <m> answers
+    # (`lock` -> its MutexGuard), @@ARG.<m>.<p>@@ of the type its parameter <p>
+    # takes (`wait cond:` -> Condvar), and @@SOME.<m>@@ / @@NONE.<m>@@ name
+    # functions building the option <m> answers, some over one argument or none:
+    # a function spelling one the program does not have is left out, since
+    # nothing calls it. @@P0@@ / @@P0_DESTROY@@ name the first parameter by
+    # position, so one template serves two classes. A method answering
+    # `.borrow`/`.view` returns a pointer to it; @@String@@ / @@StringView@@ are
+    # those types' C names, and the holes a fragment spells fill as in a
+    # fragment, so a lone at-sign opens a hole there too. The template's types
+    # come before its first function, and each function's signature is one
+    # `static ...) {` line: the types are written with the instance, the functions
+    # after the program's prototypes, so a body may call any of them.
+    template: data {
+        # the template's name, as a class row's `template` or the compiler names
+        # it (`List`)
+        name: text
+        # the runtime every instance calls, registered at each instance as a
+        # row's needs are
+        needs: list {} out staticlist text
+        # the template's text: a section for a member is written only when the
+        # instance's member is demanded, one with no member always
+        sections: list {} out staticlist section
+    }
+
+    # section -- a part of a template
+    section: data {
+        # the member whose demand writes the section; none, written always
+        member: ""
+        # what the section's C calls, as a row's needs
+        needs: list {} out staticlist text
+        # the C
+        text: text
+    }
+
+    # canon -- a generic instance a fragment spells as a hole by a canonical
+    # stem (z_@Result_String_IoError@_t), named by its template and type
+    # arguments, which the compiler resolves through the instance it builds, never
+    # from the mangled spelling. A hole no canon names is a plain source name
+    # (File, IoError, Reader) and resolves by that name.
+    canon: data {
+        # the stem a hole spells
+        stem: text
+        # the template, then each type argument: a type name, `<unit>.<name>`
+        # for a type a unit outside system declares, or `@<stem>` for another
+        # canon's instance
+        spec: list {} out staticlist text
+    }
+
+    # fact -- a property of the whole program that rows vary by: it holds when
+    # the program reaches any of its paths. A fact needs no #define: what it
+    # changes is which rows the program is built from.
+    fact: data {
+        # the name a row's `fact` gives
+        name: text
+        # each a free function or a type, `<unit>.<name>`, demanded by the
+        # program (a generic one when any instance of it is), in a unit that
+        # declares something native
+        reach: list {} out staticlist text
+    }
+
+    # link -- a library added to the link line of a program that reaches the
+    # unit (some declaration in it is demanded)
+    link: data {
+        # the library, as the linker names it (`m`, `pthread`, `ws2_32`)
+        library: text
+        # a hidden subunit whose reaching asks for the library, rather than the
+        # unit's
+        subunit: ""
+        # a fact the link holds under, as a variant row's
+        fact: ""
+        # the operating systems the link is for; none, every one
+        os: list {} out staticlist os
+    }
+
+    # source -- a C source under the vendor directory that the unit's runtime
+    # needs compiled and linked: the emitted C records it and its defines on a
+    # `zcsrc:` header line, and the driver builds the object into its cache with
+    # the compiler that links (zc cobj)
+    source: data {
+        # the path under the vendor directory
+        path: text
+        # the defines it is compiled with
+        defines: list {} out staticlist text
+        # a hidden subunit whose reaching asks for the source
+        subunit: ""
+        # a fact the source holds under, as a variant row's
+        fact: ""
+        # the operating systems the source is for; none, every one
+        os: list {} out staticlist os
+    }
+
+    # refusal -- what cannot build the unit, refused by name before any C is
+    # compiled
+    refusal: data {
+        # a hidden subunit whose reaching is refused, rather than the unit's
+        subunit: ""
+        # the C feature the refusal names (`__float128`)
+        feature: ""
+        # the C compiler families that cannot build it
+        compilers: list {} out staticlist compiler
+        # the only target architectures that can; none, every one
+        onlyArchitectures: list {} out staticlist architecture
+    }
+
+    # form -- what a row's body is
+    form: choice {
+        # a call's result
+        call: null
+        # a value computed from its holes
+        value: null
+    }
+
+    # call -- how a call of a StringView member is emitted
+    call: choice {
+        # the general paths
+        general: null
+        # the receiver and arguments by pointer
+        simple: null
+        # an argument, an optionval/Option result
+        argument: null
+        # a resultval result
+        parse: null
+        # no arguments, its fragment registered ahead of the type-method bodies
+        noArguments: null
+    }
+
+    # os -- an operating-system family, as z.build.oskind names it
+    os: choice {
+        linux: null
+        darwin: null
+        windows: null
+        other: null
+    }
+
+    # architecture -- a CPU architecture family, as z.build.archkind names it
+    architecture: choice {
+        x86_64: null
+        aarch64: null
+        other: null
+    }
+
+    # compiler -- a C compiler family
+    compiler: choice {
+        gcc: null
+        clang: null
+        tcc: null
+        msvc: null
+    }
+
+    # foundation -- what every program's C is built on: system's file holds it,
+    # beside system's own implementation
+    foundation: data {
+        # the units' load order. `prelude` is not among them: it is written into
+        # the header, ahead of the literal pool, because a need registered inside
+        # a type method arrives after the units have run
+        order: list {} out staticlist text
+        # rows that belong to no declared unit, each group loaded as a unit of its
+        # own name: `prelude` (the header's helpers, needs `prelude.<demand>`) and
+        # `sviter` (the split / lines iterator types, which declare types the
+        # collections join and the rest of system go on to spell)
+        groups: list {} out staticlist group
+        # the conditions a need `<n>?<c>` holds under
+        conditions: list {} out staticlist condition
+        # the synthesised structural cases -- a record's or a variant's `==`/`!=`,
+        # which no unit declares, keyed `record.==`; a record whose typedef chain
+        # bottoms out at a scalar compares inline, `scalar.==`
+        structural: list {} out staticlist row
+        # the files every program's C opens with, written whole but for their
+        # pieces: `head`, `alloc`, `String`, `StringView`, `hash`, `start`
+        files: list {} out staticlist file
+    }
+
+    # group -- the rows of a load group that is not a declared unit
+    group: data {
+        # the group's name, as a need's unit spells it
+        name: text
+        # its rows, in load order
+        rows: list {} out staticlist row
+    }
+
+    # condition -- a name for a C preprocessor condition
+    condition: data {
+        # the name a need's `?<c>` gives
+        name: text
+        # the C preprocessor expression
+        expression: text
+    }
+
+    # file -- a fixed file of the runtime
+    file: data {
+        # the file's name (`head`)
+        name: text
+        # its text, in order
+        pieces: list {} out staticlist piece
+    }
+}
