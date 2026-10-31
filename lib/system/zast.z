@@ -1383,6 +1383,10 @@ StringPool: class {
     slots: ListVal nameid
     # how many slots are occupied, so the index can be grown before it degrades
     used: u64
+    # the id of each one-byte text, by its byte, once it is interned: the
+    # lexer's punctuation, line ends and one-letter names are found without a
+    # hash or a probe. Empty until the first one is set; 0 means not yet seen
+    byteIds: ListVal nameid
 } as {
     # createEmpty -- a pool holding only the sentinel, so id 0 is the empty text
     # before anything has been interned: a Vocab's, which interns its own block
@@ -1395,6 +1399,7 @@ StringPool: class {
             wordClass: (ListVal u8 i: nameid)
             slots: ListVal nameid
             used: 0
+            byteIds: ListVal nameid
         )
         # the sentinel row an absent ref reads. It is deliberately given no
         # slot, so interning "" still mints an id of its own.
@@ -1475,8 +1480,24 @@ StringPool: class {
         return 0
     }
 
-    # set -- intern s, copying the bytes only on first sight.
+    # set -- intern s, copying the bytes only on first sight. A one-byte text is
+    # answered from `byteIds` once it has been seen, so the ids are the ones the
+    # probe would have given, in the same order.
     set: function {:this s: StringView} out nameid is {
+        if s.length == 1 then {
+            if this.byteIds.length == 0 then this.byteIds.resize to: 256
+            b: ((s.byteAt 0).or d: 0).u64
+            known: this.byteIds.get i: b
+            if known.isZero.not then return known
+            nid: this.intern :s
+            this.byteIds.set i: b val: nid
+            return nid
+        }
+        return (this.intern :s)
+    }
+
+    # intern -- set's probe and insert, for any text.
+    intern: function {:this s: StringView} out nameid is {
         this.reserve
         h: s.fastHash
         si: this.probeSlot :s :h

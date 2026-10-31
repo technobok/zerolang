@@ -311,75 +311,68 @@ wordclass: list {
 # `kwlookup` instead of routing through a `toktype` sentinel arm.
 kwresult: record { found: bool tt: toktype }
 
-# Byte-class predicates used by the scanner dispatch. A carriage return is
-# whitespace: only a linefeed ends a line, and a CR before one is the CRLF
-# spelling of that line end.
-isws: function {b: u8} out bool is {
-    return (b == ascii.space) or (b == ascii.ht) or (b == ascii.cr)
-}
-
-# true when byte `b` may appear in a comment body: anything but LF and NUL --
-# a comment runs to the linefeed.
-iscommentbody: function {b: u8} out bool is {
-    return (b != ascii.nul) and (b != ascii.lf)
-}
-
-# Bitmask flags for the 128-element charflags table below. Each
-# byte 0..127 maps to a u8 mask whose bits identify the character
-# classes the byte belongs to. The scanner predicates lower to a
-# single table lookup + mask test.
+# Bitmask flags for the 256-element charflags table below. Each byte maps to a
+# u8 mask whose bits identify the character classes the byte belongs to, so a
+# scanner predicate -- and a whole run, `Tokenizer.acceptRun` -- is a table
+# lookup and a mask test per byte.
 charflag: list {
-    identifier: 0b0001       # identifier char (letters, digits, operators, excludes delimiters)
-    digit: 0b0010            # ASCII digit 0-9
-    stringBody: 0b0100       # legal in an interpreted-string body (not NUL, ", LF, CR, \\)
-    rawStringBody: 0b1000    # legal in a raw-string body (not NUL, ", LF, CR)
+    identifier: 0b0000001       # identifier char (letters, digits, operators, excludes delimiters)
+    digit: 0b0000010            # ASCII digit 0-9
+    stringBody: 0b0000100       # legal in an interpreted-string body (not NUL, ", LF, CR, \\)
+    rawStringBody: 0b0001000    # legal in a raw-string body (not NUL, ", LF, CR)
+    # whitespace: space, tab and CR. A carriage return is whitespace: only a
+    # linefeed ends a line, and a CR before one is the CRLF spelling of that
+    # line end
+    whitespace: 0b0010000
+    commentBody: 0b0100000      # legal in a comment body: anything but LF and NUL
+    # a byte that starts a codepoint (not a UTF-8 continuation byte): the
+    # column advances once per codepoint, not once per byte
+    codepointStart: 0b1000000
 } out staticlist u8
 
 charflags: list {
-    0b0000 0b1100 0b1100 0b1100 0b1100 0b1100 0b1100 0b1100   #   0..  7
-    0b1100 0b1100 0b0000 0b1100 0b1100 0b0000 0b1100 0b1100   #   8.. 15  (lf / cr drop stringBody and rawStringBody)
-    0b1100 0b1100 0b1100 0b1100 0b1100 0b1100 0b1100 0b1100   #  16.. 23
-    0b1100 0b1100 0b1100 0b1100 0b1100 0b1100 0b1100 0b1100   #  24.. 31
-    0b1100 0b1101 0b0000 0b1100 0b1101 0b1101 0b1101 0b1101   #  32.. 39  (space=stringBody|rawStringBody, ! identifier, " all-off, # not identifier)
-    0b1100 0b1100 0b1101 0b1101 0b1100 0b1101 0b1100 0b1101   #  40.. 47  (parens/comma/dot drop identifier; * + - / keep it)
-    0b1111 0b1111 0b1111 0b1111 0b1111 0b1111 0b1111 0b1111   #  48.. 55  digits: identifier | digit | stringBody | rawStringBody
-    0b1111 0b1111 0b1100 0b1100 0b1101 0b1101 0b1101 0b1101   #  56.. 63  digits + ; : (drop identifier), < = > ?
-    0b1101 0b1101 0b1101 0b1101 0b1101 0b1101 0b1101 0b1101   #  64.. 71  @ A..G
-    0b1101 0b1101 0b1101 0b1101 0b1101 0b1101 0b1101 0b1101   #  72.. 79  H..O
-    0b1101 0b1101 0b1101 0b1101 0b1101 0b1101 0b1101 0b1101   #  80.. 87  P..W
-    0b1101 0b1101 0b1101 0b1100 0b1001 0b1100 0b1101 0b1101   #  88.. 95  X Y Z [ \\ ] ^ _   (\\ drops stringBody)
-    0b1100 0b1101 0b1101 0b1101 0b1101 0b1101 0b1101 0b1101   #  96..103  ` a..g  (` drops identifier)
-    0b1101 0b1101 0b1101 0b1101 0b1101 0b1101 0b1101 0b1101   # 104..111
-    0b1101 0b1101 0b1101 0b1101 0b1101 0b1101 0b1101 0b1101   # 112..119
-    0b1101 0b1101 0b1101 0b1100 0b1101 0b1100 0b1101 0b1100   # 120..127  x y z { | } ~ del
+    0b1000000 0b1101100 0b1101100 0b1101100 0b1101100 0b1101100 0b1101100 0b1101100   #   0..  7
+    0b1101100 0b1111100 0b1000000 0b1101100 0b1101100 0b1110000 0b1101100 0b1101100   #   8.. 15  (lf / cr drop stringBody and rawStringBody)
+    0b1101100 0b1101100 0b1101100 0b1101100 0b1101100 0b1101100 0b1101100 0b1101100   #  16.. 23
+    0b1101100 0b1101100 0b1101100 0b1101100 0b1101100 0b1101100 0b1101100 0b1101100   #  24.. 31
+    0b1111100 0b1101101 0b1100000 0b1101100 0b1101101 0b1101101 0b1101101 0b1101101   #  32.. 39  (space=stringBody|rawStringBody, ! identifier, " all-off, # not identifier)
+    0b1101100 0b1101100 0b1101101 0b1101101 0b1101100 0b1101101 0b1101100 0b1101101   #  40.. 47  (parens/comma/dot drop identifier; * + - / keep it)
+    0b1101111 0b1101111 0b1101111 0b1101111 0b1101111 0b1101111 0b1101111 0b1101111   #  48.. 55  digits: identifier | digit | stringBody | rawStringBody
+    0b1101111 0b1101111 0b1101100 0b1101100 0b1101101 0b1101101 0b1101101 0b1101101   #  56.. 63  digits + ; : (drop identifier), < = > ?
+    0b1101101 0b1101101 0b1101101 0b1101101 0b1101101 0b1101101 0b1101101 0b1101101   #  64.. 71  @ A..G
+    0b1101101 0b1101101 0b1101101 0b1101101 0b1101101 0b1101101 0b1101101 0b1101101   #  72.. 79  H..O
+    0b1101101 0b1101101 0b1101101 0b1101101 0b1101101 0b1101101 0b1101101 0b1101101   #  80.. 87  P..W
+    0b1101101 0b1101101 0b1101101 0b1101100 0b1101001 0b1101100 0b1101101 0b1101101   #  88.. 95  X Y Z [ \\ ] ^ _   (\\ drops stringBody)
+    0b1101100 0b1101101 0b1101101 0b1101101 0b1101101 0b1101101 0b1101101 0b1101101   #  96..103  ` a..g  (` drops identifier)
+    0b1101101 0b1101101 0b1101101 0b1101101 0b1101101 0b1101101 0b1101101 0b1101101   # 104..111
+    0b1101101 0b1101101 0b1101101 0b1101101 0b1101101 0b1101101 0b1101101 0b1101101   # 112..119
+    0b1101101 0b1101101 0b1101101 0b1101100 0b1101101 0b1101100 0b1101101 0b1101100   # 120..127  x y z { | } ~ del
+    0b0101100 0b0101100 0b0101100 0b0101100 0b0101100 0b0101100 0b0101100 0b0101100   # 128..135  UTF-8 continuation bytes
+    0b0101100 0b0101100 0b0101100 0b0101100 0b0101100 0b0101100 0b0101100 0b0101100   # 136..143  UTF-8 continuation bytes
+    0b0101100 0b0101100 0b0101100 0b0101100 0b0101100 0b0101100 0b0101100 0b0101100   # 144..151  UTF-8 continuation bytes
+    0b0101100 0b0101100 0b0101100 0b0101100 0b0101100 0b0101100 0b0101100 0b0101100   # 152..159  UTF-8 continuation bytes
+    0b0101100 0b0101100 0b0101100 0b0101100 0b0101100 0b0101100 0b0101100 0b0101100   # 160..167  UTF-8 continuation bytes
+    0b0101100 0b0101100 0b0101100 0b0101100 0b0101100 0b0101100 0b0101100 0b0101100   # 168..175  UTF-8 continuation bytes
+    0b0101100 0b0101100 0b0101100 0b0101100 0b0101100 0b0101100 0b0101100 0b0101100   # 176..183  UTF-8 continuation bytes
+    0b0101100 0b0101100 0b0101100 0b0101100 0b0101100 0b0101100 0b0101100 0b0101100   # 184..191  UTF-8 continuation bytes
+    0b1101100 0b1101100 0b1101100 0b1101100 0b1101100 0b1101100 0b1101100 0b1101100   # 192..199  UTF-8 lead bytes
+    0b1101100 0b1101100 0b1101100 0b1101100 0b1101100 0b1101100 0b1101100 0b1101100   # 200..207  UTF-8 lead bytes
+    0b1101100 0b1101100 0b1101100 0b1101100 0b1101100 0b1101100 0b1101100 0b1101100   # 208..215  UTF-8 lead bytes
+    0b1101100 0b1101100 0b1101100 0b1101100 0b1101100 0b1101100 0b1101100 0b1101100   # 216..223  UTF-8 lead bytes
+    0b1101100 0b1101100 0b1101100 0b1101100 0b1101100 0b1101100 0b1101100 0b1101100   # 224..231  UTF-8 lead bytes
+    0b1101100 0b1101100 0b1101100 0b1101100 0b1101100 0b1101100 0b1101100 0b1101100   # 232..239  UTF-8 lead bytes
+    0b1101100 0b1101100 0b1101100 0b1101100 0b1101100 0b1101100 0b1101100 0b1101100   # 240..247  UTF-8 lead bytes
+    0b1101100 0b1101100 0b1101100 0b1101100 0b1101100 0b1101100 0b1101100 0b1101100   # 248..255  UTF-8 lead bytes (f8..ff never valid)
 } out staticlist u8
 
-# true when byte `b` is legal inside an identifier.
-isidchar: function {b: u8} out bool is {
-    if b > 127 then return false
-    idx: b.u64
-    return ((charflags.get idx) & charflag.identifier) != 0
+# true when byte `b` is whitespace (space, tab, CR).
+isws: function {b: u8} out bool is {
+    return ((charflags.get b.u64) & charflag.whitespace) != 0
 }
 
 # true when byte `b` is an ASCII digit 0-9.
 isdigit: function {b: u8} out bool is {
-    if b > 127 then return false
-    idx: b.u64
-    return ((charflags.get idx) & charflag.digit) != 0
-}
-
-# true when byte `b` is legal in an interpreted-string body.
-isstrc: function {b: u8} out bool is {
-    if b > 127 then return true
-    idx: b.u64
-    return ((charflags.get idx) & charflag.stringBody) != 0
-}
-
-# true when byte `b` is legal in a raw-string body.
-israwc: function {b: u8} out bool is {
-    if b > 127 then return true
-    idx: b.u64
-    return ((charflags.get idx) & charflag.rawStringBody) != 0
+    return ((charflags.get b.u64) & charflag.digit) != 0
 }
 
 # true when byte `b` is a hex digit (0-9, a-f, A-F).
@@ -558,6 +551,37 @@ Tokenizer: class {
         }
     }
 
+    # acceptRun -- accept every byte from the cursor on that the class `cls`
+    # (a charflag) admits, in one pass over the source: the state is what
+    # repeated `accept`s would leave -- the cursor on the first byte outside the
+    # class (NUL at the end), and the column advanced once per codepoint landed
+    # on, the one under the stopping cursor included.
+    acceptRun: function {:this cls: u8} is {
+        sv: this.source.stringView
+        n: sv.length
+        k: this.tokpos
+        if k >= n then return
+        if ((charflags.get this.atchar.u64) & cls) == 0 then return
+        cols: this.colno
+        stop: ascii.nul
+        k = k + 1
+        for k < n loop {
+            b: (sv.byteAt k).or d: 0
+            f: charflags.get b.u64
+            if (f & charflag.codepointStart) != 0 then cols = cols + 1
+            if (f & cls) == 0 then {
+                stop = b
+                break
+            }
+            k = k + 1
+        }
+        this.colno = cols
+        this.tokpos = k
+        this.atchar = stop
+        this.pos = k
+        if k < n then this.pos = k + 1
+    }
+
     # Inside a STRING state at a non-doublequote, non-EOL byte.
     #
     # acceptcharescape; otherwise gather STRC bytes into a STRMID. If
@@ -569,7 +593,7 @@ Tokenizer: class {
         c: this.atchar
         if c == ascii.backslash then return (this.acceptcharescape :pool)
         s0: this.tokpos
-        for isstrc this.atchar loop this.accept
+        this.acceptRun cls: charflag.stringBody
         if this.tokpos > s0 then {
             return (this.contentTok s: s0 e: this.tokpos :line :col)
         }
@@ -622,7 +646,7 @@ Tokenizer: class {
         col: this.colno
         s0: this.tokpos
         for true loop {
-            for israwc this.atchar loop this.accept
+            this.acceptRun cls: charflag.rawStringBody
             if this.atchar != ascii.doubleQuote then return (this.rawRunStop :pool :s0 :line :col)
             dline: this.lineno
             dcol: this.colno
@@ -1153,11 +1177,11 @@ Tokenizer: class {
         col: u32
     } out optionval token is {
         if (isws b: c) then {
-            for (isws b: this.atchar) loop this.accept
+            this.acceptRun cls: charflag.whitespace
             return (optionval.some (this.triviaTok :pool tt: toktype.wsTok s: s0 :line :col))
         }
         if c == ascii.hash then {
-            for (iscommentbody b: this.atchar) loop this.accept
+            this.acceptRun cls: charflag.commentBody
             return (optionval.some (this.triviaTok :pool tt: toktype.commentTok s: s0 :line :col))
         }
         return (optionval.none token)
@@ -1228,7 +1252,7 @@ Tokenizer: class {
         # dot-continuation rule turns on
         numbershaped: false
         if isdigit cw then numbershaped = true
-        for isidchar this.atchar loop this.accept
+        this.acceptRun cls: charflag.identifier
         e_word: this.tokpos
         if numbershaped when this.atchar == ascii.dot then {
             dot_line: this.lineno
@@ -1236,7 +1260,7 @@ Tokenizer: class {
             dot_at: this.tokpos
             this.accept
             if isdigit this.atchar then {
-                for isidchar this.atchar loop this.accept
+                this.acceptRun cls: charflag.identifier
                 e_word = this.tokpos
             } else {
                 this.nexttok = (
