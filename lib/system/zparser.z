@@ -30,7 +30,19 @@ chunkkind: list {
     eol: 5
     strmid: 21
     strchr: 22
+    # an interpolation
+    hole: 1
 } out staticlist u8
+
+# strseg -- one token of a string literal as stringParts reads it: its kind
+# (chunkkind), its text for a text token, its expression for a hole
+strseg: record {
+    kind: u8
+    text: zast.nameid
+    expr: zast.nodeid
+    lineno: u32
+    colno: u32
+}
 
 # the string-chunk kind (literal vs interpolation) for token type `tt`.
 chunkKindOf: function {tt: zlexer.toktype} out u8 is {
@@ -81,40 +93,6 @@ isWsOnlyView: function {sv: StringView} out bool is {
         i = i + 1
     }
     return allWs
-}
-
-# Classify a string part for the whitespace scans:
-# 0 = not a stringchunk (interpolation) ; 1 = EOL ; 2 = STRMID ws-only ;
-# 3 = STRMID has non-ws ; 4 = STRCHR ; 5 = other stringchunk kind.
-partClass: function {n: astnode.view pool: zast.StringPool.view} out i64 is {
-    code: 0
-    if n.stringchunk then {
-        k: n.chunkKind
-        if k == chunkkind.eol then {
-            code = 1
-        } else if k == chunkkind.strmid then {
-            ws: isWsOnlyView sv: (zast.poolTextAt :pool ref: n.text).stringView
-            if ws then {
-                code = 2
-            } else {
-                code = 3
-            }
-        } else if k == chunkkind.strchr then {
-            code = 4
-        } else {
-            code = 5
-        }
-    }
-    return code
-}
-
-# True if astnode `n` is a stringchunk whose text starts with `p`.
-chunkStartsWith: function {n: astnode.view p: StringView pool: zast.StringPool.view} out bool is {
-    res: false
-    if n.stringchunk then {
-        res = (zast.poolTextAt :pool ref: n.text).stringView.startsWith prefix: p
-    }
-    return res
 }
 
 # True for `public`, the one member name a type body may not declare: it names
@@ -256,6 +234,11 @@ Parser: class {
     # and the finished window is claimed into the kid table directly
     argStack: ListVal zast.nodeid
     argNameStack: ListVal zast.nameid
+    # a string literal's tokens while parseAtomString reads them, on the same
+    # discipline: a literal keeps its window from where it started, a string
+    # inside one of its interpolations pushes above it and is gone before the
+    # literal reads on
+    segStack: ListVal strseg
     # the extension a unit's file carries: `.z` for source, `.zd` for a data
     # file (docs/zdata.pdoc). One parse reads one kind
     ext: String
@@ -271,6 +254,7 @@ Parser: class {
             opStack: ListVal zast.nodeid
             argStack: ListVal zast.nodeid
             argNameStack: ListVal zast.nameid
+            segStack: ListVal strseg
             ext: ext.string
         )
     }
@@ -826,6 +810,207 @@ Parser: class {
         }
     }
 
+    # stringParts -- a literal's tokens, segStack from `base` on, as its parts:
+    # each run of text between interpolations one chunk, under the spec's
+    # newline and indentation rules: a blank first line goes; a blank last line
+    # goes, and its indentation is the prefix taken off every line that begins
+    # with text -- only when every such line carries it. A line beginning with
+    # an escape, an interpolation or only whitespace is neither checked nor
+    # stripped.
+    stringParts: function {:this base: u64} out ListVal zast.nodeid is {
+        n: this.segStack.length
+        from: this.keptFrom :base
+        to: n
+        prefix: String
+        j: n
+        for j > from loop {
+            s: this.segStack.get i: j - 1
+            if s.kind == chunkkind.eol then {
+                to = j - 1
+                k: j
+                for k < n loop {
+                    prefix.append (
+                        zast.poolTextAt
+                        pool: this.ast.names
+                        ref: (this.segStack.get i: k).text
+                    )
+                    k = k + 1
+                }
+                break
+            }
+            if (this.blankSeg seg: s).not then break
+            j = j - 1
+        }
+        parts: ListVal zast.nodeid
+        if from >= to then return parts
+        carries: ListVal bool
+        strip: prefix.length > 0
+        if strip then strip = this.lineStartsCarry :base :from :to p9: prefix.stringView :carries
+        a: from
+        i: from
+        for i < to loop {
+            s: this.segStack.get :i
+            if s.kind == chunkkind.hole then {
+                (
+                    this.addRun
+                    :base
+                    from: a
+                    to: i
+                    :parts
+                    :strip
+                    :carries
+                    p9: prefix.stringView
+                    lineStart: a == from
+                )
+                parts.append s.expr
+                a = i + 1
+            }
+            i = i + 1
+        }
+        (
+            this.addRun
+            :base
+            from: a
+            :to
+            :parts
+            :strip
+            :carries
+            p9: prefix.stringView
+            lineStart: a == from
+        )
+        return parts
+    }
+
+    # keptFrom -- where the literal at `base` starts its text: past a blank
+    # first line, else at its first token
+    keptFrom: function {this: this.view base: u64} out u64 is {
+        i: base
+        for i < this.segStack.length loop {
+            s: this.segStack.get :i
+            if s.kind == chunkkind.eol then return i + 1
+            if (this.blankSeg seg: s).not then return base
+            i = i + 1
+        }
+        return base
+    }
+
+    # blankSeg -- a text token holding only spaces and tabs
+    blankSeg: function {this: this.view seg: strseg} out bool is {
+        if seg.kind != chunkkind.strmid then return false
+        return (isWsOnlyView sv: (zast.poolTextAt pool: this.ast.names ref: seg.text).stringView)
+    }
+
+    # lineStartsCarry -- whether every line of `from`..`to` that begins with text
+    # begins with `p9`; `carries` records, token by token from `base`, the line
+    # starts that do. Each line start is read once.
+    lineStartsCarry: function {
+        this: this.view
+        base: u64
+        from: u64
+        to: u64
+        p9: StringView
+        carries: (ListVal bool).borrow
+    } out bool is {
+        all: true
+        lineStart: true
+        i: base
+        for i < to loop {
+            carries.append false
+            i = i + 1
+        }
+        i = from
+        for i < to loop {
+            s: this.segStack.get :i
+            if lineStart when s.kind == chunkkind.strmid then {
+                t: (zast.poolTextAt pool: this.ast.names ref: s.text).stringView
+                if (isWsOnlyView sv: t).not then {
+                    if t.startsWith p9 then {
+                        carries.set i: i - base val: true
+                    } else {
+                        all = false
+                    }
+                }
+            }
+            lineStart = s.kind == chunkkind.eol
+            i = i + 1
+        }
+        return all
+    }
+
+    # runPiece -- token `i`'s text as its run keeps it: the prefix taken off
+    # when it opens a line that carries it
+    runPiece: function {
+        this: this.view
+        i: u64
+        base: u64
+        atStart: bool
+        strip: bool
+        carries: (ListVal bool).view
+        p9: StringView
+    } outx StringView is {
+        t: (zast.poolTextAt pool: this.ast.names ref: (this.segStack.get :i).text).stringView
+        if atStart when strip when (carries.get i: i - base) then return (
+            t.substring
+            from: p9.length
+            to: t.length
+        )
+        return t
+    }
+
+    # addRun -- tokens `from`..`to` (no hole among them) as one chunk of
+    # `parts`, stored once in the tree's literals at its exact size; a run with
+    # no text adds nothing
+    addRun: function {
+        :this
+        base: u64
+        from: u64
+        to: u64
+        parts: (ListVal zast.nodeid).borrow
+        strip: bool
+        carries: (ListVal bool).view
+        p9: StringView
+        lineStart: bool
+    } is {
+        size: u64
+        runLine: u32
+        runCol: u32
+        atStart: lineStart
+        i: from
+        for i < to loop {
+            s: this.segStack.get :i
+            pl: (this.runPiece :i :base :atStart :strip :carries :p9).length
+            if pl > 0 when size == 0 then {
+                runLine = s.lineno
+                runCol = s.colno
+                if atStart when strip when (carries.get i: i - base) then runCol = (
+                    runCol + p9.length.u32.orPanic
+                )
+            }
+            size = size + pl
+            atStart = s.kind == chunkkind.eol
+            i = i + 1
+        }
+        if size == 0 then return
+        run: String
+        run.reserve n: size
+        atStart = lineStart
+        i = from
+        for i < to loop {
+            run.append (this.runPiece :i :base :atStart :strip :carries :p9)
+            atStart = (this.segStack.get :i).kind == chunkkind.eol
+            i = i + 1
+        }
+        id: this.ast.literalAdd text: run.take
+        chunk: astnode.stringchunk (
+            zast.stringchunkrow
+            nodeid: this.nextId
+            lineno: runLine
+            colno: runCol
+            text: id
+        )
+        parts.append (this.intern n: chunk)
+    }
+
     # atomstring -> "\"" { strmid | newline | strchr | strexpr } "\""
     #
     # Collect literal-text chunks; an embedded interpolation (STREXPRBEG)
@@ -836,7 +1021,7 @@ Parser: class {
         fLine: firstTok.lineno
         fCol: firstTok.colno
         fDelim: firstTok.text
-        parts: ListVal zast.nodeid
+        base: this.segStack.length
         for true loop {
             tPos: lex.peekPos
             tt: lex.peekType
@@ -846,6 +1031,7 @@ Parser: class {
                     lex.advance pool: this.ast.names
                     break
                 } else {
+                    this.segStack.resize to: base
                     return (
                         this.mkErrorAt
                         pos: tPos
@@ -857,6 +1043,7 @@ Parser: class {
                 lex.advance pool: this.ast.names
                 btPos: lex.peekPos
                 if lex.peekType != zlexer.toktype.braceOpenTok then {
+                    this.segStack.resize to: base
                     return (
                         this.mkErrorAt
                         pos: btPos
@@ -873,10 +1060,18 @@ Parser: class {
                     expr: this.parseExpression :lex
                     eErr: Parser.isError node: expr
                     if eErr then return expr
-                    parts.append (this.intern n: expr)
+                    this.segStack.append (
+                        strseg
+                        kind: chunkkind.hole
+                        text: zast.nameid.zero
+                        expr: (this.intern n: expr)
+                        lineno: 0
+                        colno: 0
+                    )
                     this.skipEols :lex
                     ctPos: lex.peekPos
                     if lex.peekType != zlexer.toktype.braceCloseTok then {
+                        this.segStack.resize to: base
                         return (
                             this.mkErrorAt
                             pos: ctPos
@@ -887,6 +1082,7 @@ Parser: class {
                     lex.advance pool: this.ast.names
                 } else {
                     badPos: lex.peekPos
+                    this.segStack.resize to: base
                     return (
                         this.mkErrorAt
                         pos: badPos
@@ -897,17 +1093,17 @@ Parser: class {
             } else if (isStrChunkTok :tt) then {
                 ck: chunkKindOf :tt
                 chunkTok: lex.acceptAny pool: this.ast.names
-                chunk: astnode.stringchunk (
-                    zast.stringchunkrow
-                    nodeid: this.nextId
+                this.segStack.append (
+                    strseg
+                    kind: ck
+                    text: chunkTok.text
+                    expr: zast.nodeid
                     lineno: chunkTok.lineno
                     colno: chunkTok.colno
-                    text: chunkTok.text
-                    chunkKind: ck
                 )
-                parts.append (this.intern n: chunk)
             } else {
                 bad: lex.acceptAny pool: this.ast.names
+                this.segStack.resize to: base
                 return (
                     this.mkError
                     tok: bad
@@ -916,7 +1112,8 @@ Parser: class {
                 )
             }
         }
-        stripped: this.stripStringWhitespace :parts
+        stripped: this.stringParts :base
+        this.segStack.resize to: base
         return (astnode.atomstring (
             zast.atomstringrow
             nodeid: this.nextId
@@ -925,217 +1122,6 @@ Parser: class {
             stringparts: (zast.kidsAdd kids: this.ast.kids xs: stripped)
         )
         )
-    }
-
-    # firstKeptPart -- the index the string's content starts at. A leading blank
-    # line is dropped, so an EOL reached over nothing but whitespace moves the
-    # start past it; anything else means there is no leading blank line at all.
-    firstKeptPart: function {this: this.view parts: (ListVal zast.nodeid).view} out u64 is {
-        n: parts.length
-        i: u64
-        for i < n loop {
-            elId: parts.get :i
-            c: (
-                partClass
-                n: (this.ast.nodes.get i: elId)
-                pool: this.ast.names
-            )
-            if c == 1 then return i + 1
-            if c != 2 then return 0
-            i = i + 1
-        }
-        return 0
-    }
-
-    # lastBlankLine -- the index of the EOL that opens a trailing blank line, if
-    # the string has one. What follows that EOL is the closing indentation, which
-    # is the common prefix every other line is measured against.
-    lastBlankLine: function {
-        this: this.view
-        parts: (ListVal zast.nodeid).view
-        startIdx: u64
-    } out optionval u64 is {
-        j: parts.length
-        for j > startIdx loop {
-            j2: j - 1
-            elId: parts.get i: j2
-            c: (
-                partClass
-                n: (this.ast.nodes.get i: elId)
-                pool: this.ast.names
-            )
-            if c == 1 then return (optionval.some j2)
-            if c != 2 then return (optionval.none u64)
-            j = j - 1
-        }
-        return (optionval.none u64)
-    }
-
-    # trailingPrefix -- the text of every chunk from `from` to the end, which is
-    # the closing line's indentation.
-    trailingPrefix: function {
-        this: this.view parts: (ListVal zast.nodeid).view from: u64
-    } out String is {
-        prefix: String
-        n: parts.length
-        m: from
-        for m < n loop {
-            el: this.ast.nodes.get i: (parts.get i: m)
-            if el.stringchunk then prefix.append (
-                zast.poolTextAt
-                pool: this.ast.names
-                ref: el.text
-            )
-            m = m + 1
-        }
-        return prefix
-    }
-
-    # prefixAtEveryLineStart -- whether every non-blank line in the range opens
-    # with `p9`. Stripping is all or nothing: one line that does not carry the
-    # prefix means the string was not indented uniformly, and none of it is
-    # stripped.
-    prefixAtEveryLineStart: function {
-        this: this.view
-        parts: (ListVal zast.nodeid).view
-        startIdx: u64
-        endIdx: u64
-        p9: StringView
-    } out bool is {
-        atLineStart: true
-        p: startIdx
-        for p < endIdx loop {
-            elId: parts.get i: p
-            p = p + 1
-            el: this.ast.nodes.get i: elId
-            c: partClass n: el pool: this.ast.names
-            if c == 1 then {
-                atLineStart = true
-                continue
-            }
-            wasLineStart: atLineStart
-            atLineStart = false
-            if c == 0 then continue
-            if wasLineStart when c == 3 then {
-                sw: chunkStartsWith n: el p: p9 pool: this.ast.names
-                if sw.not then return false
-            }
-        }
-        return true
-    }
-
-    # strippedChunkText -- the text this chunk keeps once the common prefix is
-    # taken off its front, or none when nothing should be taken off: stripping is
-    # off, the part is not a mid-string chunk, it is whitespace only, or it does
-    # not carry the prefix. An answer of length zero means the chunk goes.
-    strippedChunkText: function {
-        this: this.view
-        el: zast.stringchunkrow.view
-        doStrip: bool
-        p9: StringView
-    } out Option String is {
-        if doStrip.not then return (Option.none String)
-        if el.chunkKind != chunkkind.strmid then return (Option.none String)
-        tv: (zast.poolTextAt pool: this.ast.names ref: el.text).stringView
-        if (isWsOnlyView sv: tv) then return (Option.none String)
-        sp: tv.stripPrefix p: p9
-        if sp.none then return (Option.none String)
-        return (Option.some sp.string)
-    }
-
-    # rebuildStripped -- the kept range, with each line-start chunk's common
-    # prefix removed. The parts are reverse-drained and popped back so the index
-    # tracks the ORIGINAL position, which is what the kept range is stated in.
-    rebuildStripped: function {
-        :this
-        parts: (ListVal zast.nodeid).take
-        startIdx: u64
-        endIdx: u64
-        doStrip: bool
-        p9: StringView
-    } out ListVal zast.nodeid is {
-        pfxLen32: p9.length.u32.orPanic
-        rev: ListVal zast.nodeid
-        for parts.length > 0 loop rev.append parts.pop
-        result: ListVal zast.nodeid
-        atLineStart: true
-        idx: u64
-        for rev.length > 0 loop {
-            elId: rev.pop
-            at9: idx
-            idx = idx + 1
-            if (at9 < startIdx) or (at9 >= endIdx) then continue
-            el: this.ast.nodes.get i: elId
-            lineStart: atLineStart
-            atLineStart = false
-            if el.stringchunk.not then {
-                result.append elId
-                continue
-            }
-            if el.chunkKind == chunkkind.eol then {
-                atLineStart = true
-                result.append elId
-                continue
-            }
-            if lineStart.not then {
-                result.append elId
-                continue
-            }
-            sopt: this.strippedChunkText :el :doStrip :p9
-            if sopt.none then {
-                result.append elId
-                continue
-            }
-            if sopt.length == 0 then continue
-            nc: astnode.stringchunk (
-                zast.stringchunkrow
-                nodeid: el.nodeid
-                lineno: el.lineno
-                colno: el.colno + pfxLen32
-                text: (zast.poolSet pool: this.ast.names text: sopt.stringView)
-                chunkKind: chunkkind.strmid
-            )
-            result.append (this.intern n: nc)
-        }
-        return result
-    }
-
-    # Apply the spec's string newline/whitespace handling: a leading blank line
-    # goes, a trailing blank line goes and its indentation becomes the common
-    # prefix, and that prefix comes off the front of every other line -- but only
-    # if every other line carries it.
-    stripStringWhitespace: function {
-        :this parts: (ListVal zast.nodeid).take
-    } out ListVal zast.nodeid is {
-        origLen: parts.length
-        if origLen == 0 then return parts
-        startIdx: this.firstKeptPart :parts
-        endIdx: origLen
-        prefix: String
-        lastOpt: this.lastBlankLine :parts :startIdx
-        if lastOpt.some then {
-            prefix = this.trailingPrefix :parts from: lastOpt + 1
-            endIdx = lastOpt
-        }
-        if startIdx >= endIdx then {
-            emptyParts: ListVal zast.nodeid
-            return emptyParts
-        }
-        prefixView: prefix.stringView
-        needStrip: prefixView.length > 0
-        doStrip: needStrip
-        if needStrip then doStrip = (
-            this.prefixAtEveryLineStart
-            :parts
-            :startIdx
-            :endIdx
-            p9: prefixView
-        )
-        # nothing trimmed and nothing to strip -- the parts stand as they are
-        noTrim: startIdx == 0
-        if endIdx != origLen then noTrim = false
-        if noTrim when doStrip.not then return parts
-        return (this.rebuildStripped :parts :startIdx :endIdx :doStrip p9: prefixView)
     }
 
     # a call node over an already-built callable and argument list. The list

@@ -103,6 +103,8 @@ public: unit {
     :poolFind
     :poolSet
     :poolTextAt
+    :literalTextAt
+    :litid
     :poolTextCopy
     :poolTextEq
     :posOf
@@ -1120,6 +1122,9 @@ Ast: class {
     # the unit a demand-driven walk starts from. It names the tree, not one row
     # in it, which is why it sits here rather than on the program row
     mainUnitName: String
+    # the text of every string literal's runs, stored once and never interned:
+    # string content is not a name. Row 0 is the empty sentinel
+    literals: (List String i: litid)
 } as {
     # an empty tree: no nodes, no units, and a name pool holding only its
     # sentinel row
@@ -1134,7 +1139,9 @@ Ast: class {
             files: ListVal zvfs.fsno
             root: nodeid
             mainUnitName: String
+            literals: (List String i: litid)
         )
+        a.literals.append from: String
         # row 0 is the sentinel a node id of 0 addresses: the placeholder arm,
         # which every reader already treats as "nothing here"
         a.nodes.append from: astnode.placeholder
@@ -1154,10 +1161,32 @@ Ast: class {
         return (poolSet pool: this.names :text)
     }
 
+    # literalAdd -- a string literal's run of text, stored as a new row
+    literalAdd: function {:this text: String.take} out litid is {
+        id: litid this.literals.length.u32.orPanic
+        this.literals.append from: text.take
+        return id
+    }
+
     # fsnoForNode -- the file the row `nodeid` reports from (rowFile).
     fsnoForNode: function {this: this.view nodeid: nodeid} out zvfs.fsno is {
         return (this.rowFile.get i: nodeid)
     }
+}
+
+# litid -- a row of Ast.literals: one string literal run's text. 0 is the
+# empty sentinel. A typedef so a literal row cannot cross with the name or node
+# id spaces
+litid: typedef u32 as {
+    # identity by row
+    ==: function {this: this.view rhs: litid} out bool is {
+        return this.u32 == rhs.u32
+    }
+}
+
+# literalTextAt -- the text of literal row `ref`
+literalTextAt: function {ast: Ast.view ref: litid} outx String.view is {
+    return (ast.literals.get i: ref)
 }
 
 # nameid -- a StringPool id: the interned identity of one identifier's text.
@@ -1494,7 +1523,9 @@ StringPool: class {
     }
 }
 
-# one chunk of an interpolated string -- literal text or an embedded expression, tagged by `chunkKind`.
+# one run of a string literal's text: the bytes between the literal's
+# delimiters, or between its interpolations, with escapes resolved and the
+# literal's indentation already taken off
 stringchunkrow: record {
     # this string chunk's own row in the node table
     nodeid: nodeid
@@ -1502,12 +1533,8 @@ stringchunkrow: record {
     lineno: u32
     # the column this string chunk starts at
     colno: u32
-    # the literal bytes of this chunk, escapes already resolved, interned. The
-    # lexer already put them in the pool; the row names them rather than owning
-    # a second copy
-    text: nameid
-    # whether the chunk is literal text or an interpolation hole
-    chunkKind: u8
+    # the run's text, a row of the tree's literals
+    text: litid
 }
 
 # Interpolated-string-literal payload: an ordered list of astnode
@@ -2277,8 +2304,8 @@ printNodeWith: function {ast: Ast.view n: astnode.view withId: bool} is {
         lnm: nameTextCopy :ast ref: n.name
         print "\{idp}labelvalue @\{n.lineno}:\{n.colno} name=\{lnm}"
     } case stringchunk then {
-        ctx9: poolTextAt pool: ast.names ref: n.text
-        print "\{idp}stringchunk @\{n.lineno}:\{n.colno} text=\{ctx9} chunkKind=\{n.chunkKind}"
+        ctx9: literalTextAt :ast ref: n.text
+        print "\{idp}stringchunk @\{n.lineno}:\{n.colno} text=\{ctx9}"
     } case atomstring then {
         print "\{idp}atomstring @\{n.lineno}:\{n.colno} parts=\{n.stringparts.count.u64}"
         printKidsWith :ast span: n.stringparts :withId
@@ -2781,14 +2808,12 @@ cloneArm: function {
         )
         )
     } case stringchunk then {
-        ckL: n.chunkKind
         return (astnode.stringchunk (
             stringchunkrow
             nodeid: myId
             lineno: n.lineno
             colno: n.colno
             text: n.text
-            chunkKind: ckL
         )
         )
     } case error then {
