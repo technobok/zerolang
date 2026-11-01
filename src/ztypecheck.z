@@ -63498,6 +63498,29 @@ constValueOfMember: function {
     return (constValueOfMemberId :st :scope :ast :unitDecl nameId: dn9)
 }
 
+# constFoldOpen -- whether the constant `nameId`, as `scope` in `unitDecl` names
+# it, is being evaluated now, further up the stack
+constFoldOpen: function {
+    st: zenv.ZSymbolTable.view
+    scope: ztypes.declid
+    unitDecl: ztypes.declid
+    nameId: zast.nameid
+} out bool is {
+    if nameId.isZero then return false
+    od: constOwnerDeclForId :st :scope :unitDecl :nameId
+    if od.isZero then return false
+    utid: declTypeIdOf :st declId: od
+    if utid.isZero then return false
+    em: activeConstMono :st ownerDecl: od
+    if em.isZero.not then utid = em
+    sg: st.typing.constEvalState.get key: (st.typing.memberConstKey parentTypeId: utid :nameId)
+    match (
+        sg
+    ) case some then {
+        return sg == 1
+    } case none then return false
+}
+
 # constValueOfMemberId -- the same pull, asked BY ID. The name is a pool id
 # everywhere it matters: the owner walk compares ids, the child lookup compares
 # ids, and the memo is keyed on one. Only a cycle diagnostic ever wants the
@@ -69706,6 +69729,11 @@ resolveConstantDefsIn: function {
                         isApplicationShaped
                         :ast
                         opId: bmNode.operation
+                    ) then isEdge = true
+                    # a constant whose fold is under way further up the stack
+                    # is left to that fold: the walk only makes sure each
+                    # member folds, and is no read that could close a cycle
+                    if isEdge.not when (constFoldOpen :st scope: rf :unitDecl nameId: bmNode.name
                     ) then isEdge = true
                     if isEdge.not when (
                         isGenericParam
