@@ -10492,6 +10492,7 @@ staticListElemValue: function {
     }
     held: st.typing.constFail
     constFailClear :st
+    errA: st.typing.errors.length
     cv: evalConstNode :st :scope :ast :unitDecl nid: opRef
     got: st.typing.constFail
     st.typing.constFail = held
@@ -10515,6 +10516,9 @@ staticListElemValue: function {
     ) then {
         return ztypes.noConst
     }
+    # an element whose evaluation reported why it has no value -- the
+    # definition it names failed -- has its one error already
+    if st.typing.errors.length > errA then return ztypes.noConst
     msg: "a list element must be a compile-time constant".string
     hint: "an element is a literal, a unit constant, or an expression over them".string
     (
@@ -67932,19 +67936,7 @@ reportUnitConstantShape: function {
     hint: String
 } is {
     un: "unit constants inline literal numeric values".string
-    st.typing.errors.append (
-        zast.ErrorData
-        :nodeid
-        :lineno
-        :colno
-        :width
-        err: zast.err.typeError
-        msg: msg.copy
-        fsno: zvfs.fsno
-        note: un
-        hint: hint.copy
-    )
-    st.typing.isError = true
+    addErrorH :st :nodeid :lineno :colno e: zast.err.typeError :msg note: un :hint :width
 }
 
 # reportUnitConstantRef -- the callee of a unit-level construction names
@@ -67960,21 +67952,18 @@ reportUnitConstantRef: function {
     width: u32
     msg: String
 } is {
-    en: String
-    eh: String
-    st.typing.errors.append (
-        zast.ErrorData
+    (
+        addErrorH
+        :st
         :nodeid
         :lineno
         :colno
+        e: zast.err.badReference
+        :msg
+        note: String
+        hint: String
         :width
-        err: zast.err.badReference
-        msg: msg.copy
-        fsno: zvfs.fsno
-        note: en
-        hint: eh
     )
-    st.typing.isError = true
 }
 
 # staticListConstantIsConstruction -- a unit-level constant reading a list's
@@ -68277,6 +68266,53 @@ staticValueCall: function {
     return ct.isZero.not
 }
 
+# reportMissingHeadMember -- the head of a unit-level call is `unit.member`
+# and the unit declares no such member: reported at the member, as a body
+# reports the same read. False when the head is another shape or the member
+# exists.
+reportMissingHeadMember: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    defn: callref
+} out bool is {
+    qualId: zast.nodeid
+    memberNid: zast.nodeid
+    {
+        hn: ast.nodes.get i: defn.callable
+        match (
+            hn
+        ) case dottedpath then {
+            if (ast.nodes.get i: hn.parent).atomid then {
+                qualId = hn.parent
+                memberNid = hn.child
+            }
+        } else null
+    }
+    memberId: atomNameId :ast n: (ast.nodes.get i: memberNid)
+    if qualId.isZero or memberId.isZero then return false
+    ud: qualifierUnitDecl :st :scope :ast nid: qualId
+    if ud.isZero then return false
+    if (st.typing.declFindChild parentDeclId: ud nameId: memberId).isZero.not then return false
+    if (declOfUnitDefIds :st unitDecl: ud nameId: memberId).isZero.not then return false
+    cn: ast.nodes.get i: memberNid
+    un: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: qualId))
+    mn: zast.nameTextAt :ast ref: memberId
+    (
+        addErrorH
+        :st
+        nodeid: (nodeId n: cn)
+        lineno: (nodeLine n: cn)
+        colno: (nodeCol n: cn)
+        e: zast.err.typeError
+        msg: "unit '\{un}' has no member '\{mn}'"
+        note: (unitFileNote :st :ast unitDecl: ud)
+        hint: String
+        width: mn.length.u32.orPanic
+    )
+    return true
+}
+
 # resolveCalledConstantDef -- a unit-level constant whose value is a CALL. A
 # construction is not a literal, but the parenthesised form is the generic-unit
 # instantiation (`intmath: (genmath t: i64)`) and stays legal -- its callee names
@@ -68301,6 +68337,9 @@ resolveCalledConstantDef: function {
         # a generic-unit binding is no file unit at all: the Decl tree
         # answers both -- without it every `intmath: (mathops t: i64)`
         # reads as a construction.
+        # a head reached through a unit (`c.impl`) names a member that unit
+        # declares, or the construction has nothing to build
+        if (reportMissingHeadMember :st :scope :ast :defn) then return
         cbu: nameDenotesUnit :st :scope nameId: (nameIdOf :ast name: cbn.stringView)
         if cbu.not then {
             # the same scope walk the instantiation collector uses --
