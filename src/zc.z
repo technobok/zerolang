@@ -151,6 +151,7 @@ zcWord: list {
     fEager: "--eager"
     fSrc: "--src"
     fSystem: "--system"
+    fWriteRuntime: "--write-runtime"
     fRuntime: "--runtime"
     fEmitC: "--emit-c"
     fDumpSql: "--dump-sql"
@@ -192,7 +193,8 @@ printUsage: function is {
     io.eprintln ""
     io.eprintln "diagnostics:"
     io.eprintln "  dump  <src>          dump the typecheck model as SQL (--canon: id-normalized)"
-    io.eprintln "  natives              print the generated conversion rows of natives.tbl"
+    io.eprintln "  natives              print the generated conversion rows of natives.tbl;"
+    io.eprintln "                       --write-runtime DIR writes the runtime the nativec files make"
     io.eprintln "  data <file.zd>       check a data file and print its values, defaults applied"
     io.eprintln "  explain <code>       explain an error code, e.g. zc explain E0200"
     io.eprintln ""
@@ -238,10 +240,13 @@ printCommandHelp: function {zv: zast.Vocab.view cmd: StringView} is {
         io.eprintln "Dump the typecheck model as SQL to -o FILE (or stdout)."
         io.eprintln "--canon emits the id-normalized model instead."
     } else if w == zcWord.slot.vNatives then {
-        io.eprintln "usage: zc natives"
+        io.eprintln "usage: zc natives [--write-runtime DIR [--system DIR]]"
         io.eprintln "Print the conversions section of src/runtime/natives.tbl, derived from"
         io.eprintln "the numeric rule. natives-tbl-guard diffs this against the checked-in"
         io.eprintln "file, so the table cannot drift from the rule it caches."
+        io.eprintln "--write-runtime DIR writes into DIR the runtime directory the units'"
+        io.eprintln "nativec.zd files under the system directory make: natives.tbl, natives/,"
+        io.eprintln "the templates and the fixed files."
     } else if w == zcWord.slot.vData then {
         io.eprintln "usage: zc data <file.zd> [--src DIR]... [--system DIR]"
         io.eprintln "Check a data file (docs/zdata.pdoc) and print every value it defines, one"
@@ -803,11 +808,7 @@ dispatchToolVerb: function {argv: (List String).borrow n: u64 w: u64 zv: zast.Vo
         print ir.text.stringView.trim
         os.exit code: 0
     }
-    if w == zcWord.slot.vNatives then {
-        nrows: zemitterc.nativeConvRows
-        print nrows
-        os.exit code: 0
-    }
+    if w == zcWord.slot.vNatives then os.exit code: (runNatives :argv :n :zv)
     if w == zcWord.slot.vData then {
         rcd: runData :argv :n :zv
         os.exit code: rcd
@@ -824,6 +825,61 @@ dispatchToolVerb: function {argv: (List String).borrow n: u64 w: u64 zv: zast.Vo
         rcm: runZlShim verb: "format" :argv
         os.exit code: rcm
     }
+}
+
+# runNatives -- `zc natives`: the conversions section of natives.tbl, or with
+# `--write-runtime DIR [--system DIR]` the runtime directory the nativec files
+# under the system directory make (znativec.generate). Answers the exit code.
+runNatives: function {argv: (List String).view n: u64 zv: zast.Vocab.view} out i32 is {
+    if n <= 2 then {
+        print zemitterc.nativeConvRows
+        return 0
+    }
+    dir: String
+    sysFlag: String
+    i: 2.u64
+    for i < n loop {
+        a: (argv.get :i).copy
+        i = i + 1
+        fw: zv.slotOf text: a.stringView
+        if fw == zcWord.slot.fWriteRuntime when i < n then {
+            dir = (argv.get :i).copy
+            i = i + 1
+        } else if fw == zcWord.slot.fSystem when i < n then {
+            sysFlag = (argv.get :i).copy
+            i = i + 1
+        } else {
+            io.eprintln "zc natives: unexpected argument '\{a}'"
+            return 2
+        }
+    }
+    if dir.length == 0 then {
+        io.eprintln "zc natives: missing --write-runtime DIR"
+        return 2
+    }
+    rf: (
+        znativec.generate
+        systemdir: (zcheck.resolveSystemDir flagVal: sysFlag.stringView).stringView
+    )
+    if rf.error.length > 0 then {
+        io.eprintln rf.error.stringView.trimEnd
+        return 1
+    }
+    nd: "\{dir}/natives"
+    io.mkdirp path: nd
+    k: u64
+    for k < rf.paths.length loop {
+        p: "\{dir}/\{rf.paths.get i: k}"
+        wr: io.writeText path: p content: (rf.texts.get i: k)
+        k = k + 1
+        match (
+            wr
+        ) case err then {
+            io.eprintln "zc natives: cannot write \{p}"
+            return 1
+        } case ok then null
+    }
+    return 0
 }
 
 # runData -- `zc data <file.zd> [--src DIR]... [--system DIR]`: check the data

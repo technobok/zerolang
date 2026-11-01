@@ -1,0 +1,2117 @@
+# nativec -- collections's C implementation, a runtime.nativec file
+c: runtime.nativec
+
+# implementation -- the C behind collections's native declarations
+implementation: (
+    c.implementation
+    rows: list {
+        # the collections string join
+        (
+            c.row
+            key: "stringJoin"
+            needs: list { "prelude.@xmalloc" }
+            fragments: list {
+                """
+                /* collections.stringJoin -- borrow `parts` (read-only) and return a new
+                   owned string. `parts` arrives by pointer, as a stack reftype parameter
+                   does; the caller keeps it. */
+                static z_@String@_t z_collections_stringJoin(
+                    z_@List_String@_t* parts, z_@StringView@_t sep);
+                static z_@String@_t z_collections_stringJoin(
+                    z_@List_String@_t* parts, z_@StringView@_t sep) {
+                    z_@String@_t out = {0};
+                    uint64_t n = parts->length;
+                    if (n == 0) {
+                        out.capacity = 1;
+                        out.data = (char*)z_xmalloc(1);
+                        out.data[0] = '\0';
+                        return out;
+                    }
+                    uint64_t total = sep.size * (n - 1);
+                    for (uint64_t i = 0; i < n; i++) {
+                        total += parts->data[i].size;
+                    }
+                    out.size = total;
+                    out.capacity = total + 1;
+                    out.data = (char*)z_xmalloc(out.capacity + 1);
+                    uint64_t pos = 0;
+                    for (uint64_t i = 0; i < n; i++) {
+                        if (i > 0 && sep.size > 0) {
+                            memcpy(out.data + pos, sep.data, sep.size);
+                            pos += sep.size;
+                        }
+                        memcpy(out.data + pos, parts->data[i].data, parts->data[i].size);
+                        pos += parts->data[i].size;
+                    }
+                    out.data[total] = '\0';
+                    return out;
+                }
+
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "@window"
+            needs: list { "prelude.@panic" }
+            fragments: list {
+                """
+                /* the bounds of a window over [from, to) of `len` elements: a list's or an
+                   array's storage lent as a SpanVal or a view, or a window split in two. */
+                static void z_coll_window_check(uint64_t _from, uint64_t _to, uint64_t _len, const char* _who);
+                static void z_coll_window_check(uint64_t _from, uint64_t _to, uint64_t _len, const char* _who) {
+                    if (_from > _to || _to > _len) {
+                        char _zp_buf[160];
+                        snprintf(_zp_buf, sizeof(_zp_buf), "%s: [%llu, %llu) out of bounds (length %llu)", _who, (unsigned long long)_from, (unsigned long long)_to, (unsigned long long)_len);
+                        z_panic(_zp_buf);
+                    }
+                }
+                """
+            }
+        )
+        (
+            c.row
+            key: "bytesText"
+            fragments: list {
+                """
+                /* `bytes` as a StringView over the same memory */
+                static z_@StringView@_t z_collections_bytesText(z_@ListViewVal_u8@_t bytes);
+                static z_@StringView@_t z_collections_bytesText(z_@ListViewVal_u8@_t bytes) {
+                    z_@StringView@_t sv = { bytes.length, (const char*)bytes.data };
+                    return sv;
+                }
+                """
+            }
+        )
+        (
+            c.row
+            key: "utf8ValidUpTo"
+            needs: list { "system.utf8" }
+            fragments: list {
+                """
+                /* how many of `bytes` are valid UTF-8 before the first invalid sequence; the
+                   count itself is the shared validator's (_Z_UTF8_VALID_UPTO) */
+                static uint64_t z_utf8_valid_upto(const uint8_t* data, uint64_t len);
+                static uint64_t z_collections_utf8ValidUpTo(z_@ListViewVal_u8@_t bytes);
+                static uint64_t z_collections_utf8ValidUpTo(z_@ListViewVal_u8@_t bytes) {
+                    return z_utf8_valid_upto(bytes.data, bytes.length);
+                }
+                """
+            }
+        )
+        # -- collections -------------------------------------------------------
+        # A container's natives are GENERATED: the emitter instantiates one of the
+        # shared .c.tmpl files per monomorphised container, so every method below comes
+        # out of one substitution and none has C of its own to name here. The rows say
+        # that the compiler supplies them -- which is what an absent row has to be able
+        # to deny.
+
+        # collections.array
+        (c.row key: "array.get")
+        (c.row key: "array.set")
+        (c.row key: "array.length")
+        (c.row key: "array.listView")
+        (c.row key: "array.slice")
+        (c.row key: "array.span")
+        (c.row key: "array.spanSlice")
+        (c.row key: "array.create")
+        # collections.str
+        (c.row key: "str.length")
+        (c.row key: "str.size")
+        (c.row key: "str.string")
+        (c.row key: "str.stringView")
+        (c.row key: "str.substring")
+        (
+            c.row
+            key: "str.compare"
+            needs: list { "prelude.@StringView_cmp" }
+            body: "z_@StringView@_cmp((z_@StringView@_t){ .size = (@V@).len, .data = (const char*)(@V@).data }, (z_@StringView@_t){ .size = (@A1@).len, .data = (const char*)(@A1@).data })"
+        )
+        (c.row key: "str.create")
+        # collections.ListRef
+        (c.row key: "ListRef.append")
+        (c.row key: "ListRef.insert")
+        (c.row key: "ListRef.extend")
+        (c.row key: "ListRef.get")
+        (c.row key: "ListRef.getMut")
+        (c.row key: "ListRef.set")
+        (c.row key: "ListRef.pop")
+        (c.row key: "ListRef.contains")
+        (c.row key: "ListRef.sort")
+        (c.row key: "ListRef.length")
+        (c.row key: "ListRef.capacity")
+        (c.row key: "ListRef.listView")
+        (c.row key: "ListRef.slice")
+        (c.row key: "ListRef.iterate")
+        (c.row key: "ListRef.iterateReverse")
+        (c.row key: "ListRef.iterateMut")
+        (c.row key: "ListRef.create")
+        # collections.ListVal
+        (c.row key: "ListVal.append")
+        (c.row key: "ListVal.insert")
+        (c.row key: "ListVal.extend")
+        (c.row key: "ListVal.get")
+        (c.row key: "ListVal.getMut")
+        (c.row key: "ListVal.set")
+        (c.row key: "ListVal.pop")
+        (c.row key: "ListVal.contains")
+        (c.row key: "ListVal.==")
+        (c.row key: "ListVal.!=")
+        (c.row key: "ListVal.sort")
+        (c.row key: "ListVal.length")
+        (c.row key: "ListVal.capacity")
+        (c.row key: "ListVal.listView")
+        (c.row key: "ListVal.slice")
+        (c.row key: "ListVal.span")
+        (c.row key: "ListVal.spanSlice")
+        (c.row key: "ListVal.resize")
+        (c.row key: "ListVal.extendView")
+        (c.row key: "ListVal.iterate")
+        (c.row key: "ListVal.iterateReverse")
+        (c.row key: "ListVal.iterateMut")
+        (c.row key: "ListVal.copy")
+        (c.row key: "ListVal.create")
+        # collections.ListIter
+        (c.row key: "ListIter.call")
+        # collections.ListIterVal
+        (c.row key: "ListIterVal.call")
+        # collections.StaticIter
+        (c.row key: "StaticIter.call")
+        # collections.ListIterMut
+        (c.row key: "ListIterMut.call")
+        # collections.ListIterMutVal
+        (c.row key: "ListIterMutVal.call")
+        # collections.ListView
+        (c.row key: "ListView.get")
+        (c.row key: "ListView.slice")
+        (c.row key: "ListView.iterate")
+        (c.row key: "ListView.iterateReverse")
+        (c.row key: "ListView.length")
+        # collections.ListViewVal
+        (c.row key: "ListViewVal.get")
+        (c.row key: "ListViewVal.slice")
+        (c.row key: "ListViewVal.iterate")
+        (c.row key: "ListViewVal.iterateReverse")
+        (c.row key: "ListViewVal.length")
+        # collections.staticlist -- a `list`'s value; the emitter builds each from the
+        # list's static array
+        (c.row key: "staticlist.get")
+        (c.row key: "staticlist.length")
+        (c.row key: "staticlist.iterate")
+        (c.row key: "staticlist.array")
+        (c.row key: "staticlist.tag")
+        (c.row key: "staticlist.slot")
+        # collections.SpanVal
+        (c.row key: "SpanVal.get")
+        (c.row key: "SpanVal.set")
+        (c.row key: "SpanVal.length")
+        (c.row key: "SpanVal.slice")
+        (c.row key: "SpanVal.split")
+        (c.row key: "SpanVal.listView")
+        (c.row key: "SpanVal.copyFrom")
+        (c.row key: "SpanVal.fill")
+        (c.row key: "SpanVal.clear")
+        # collections.Bytes
+        (c.row key: "Bytes.byteView")
+        # collections.MapRR
+        (c.row key: "MapRR.get")
+        (c.row key: "MapRR.getMut")
+        (c.row key: "MapRR.set")
+        (c.row key: "MapRR.has")
+        (c.row key: "MapRR.remove")
+        (c.row key: "MapRR.length")
+        (c.row key: "MapRR.capacity")
+        (c.row key: "MapRR.iterate")
+        (c.row key: "MapRR.iterateItems")
+        (c.row key: "MapRR.create")
+        # collections.MapRV
+        (c.row key: "MapRV.get")
+        (c.row key: "MapRV.getMut")
+        (c.row key: "MapRV.set")
+        (c.row key: "MapRV.has")
+        (c.row key: "MapRV.remove")
+        (c.row key: "MapRV.length")
+        (c.row key: "MapRV.capacity")
+        (c.row key: "MapRV.iterate")
+        (c.row key: "MapRV.iterateItems")
+        (c.row key: "MapRV.create")
+        # collections.MapVR
+        (c.row key: "MapVR.get")
+        (c.row key: "MapVR.getMut")
+        (c.row key: "MapVR.set")
+        (c.row key: "MapVR.has")
+        (c.row key: "MapVR.remove")
+        (c.row key: "MapVR.length")
+        (c.row key: "MapVR.capacity")
+        (c.row key: "MapVR.iterate")
+        (c.row key: "MapVR.iterateItems")
+        (c.row key: "MapVR.create")
+        # collections.MapVV
+        (c.row key: "MapVV.get")
+        (c.row key: "MapVV.getMut")
+        (c.row key: "MapVV.set")
+        (c.row key: "MapVV.has")
+        (c.row key: "MapVV.remove")
+        (c.row key: "MapVV.length")
+        (c.row key: "MapVV.capacity")
+        (c.row key: "MapVV.iterate")
+        (c.row key: "MapVV.iterateItems")
+        (c.row key: "MapVV.copy")
+        (c.row key: "MapVV.create")
+        # collections.MapKeyIter
+        (c.row key: "MapKeyIter.call")
+        # collections.MapKeyIterRV
+        (c.row key: "MapKeyIterRV.call")
+        # collections.MapKeyIterVR
+        (c.row key: "MapKeyIterVR.call")
+        # collections.MapKeyIterVV
+        (c.row key: "MapKeyIterVV.call")
+        # collections.SetRef
+        (c.row key: "SetRef.add")
+        (c.row key: "SetRef.has")
+        (c.row key: "SetRef.delete")
+        (c.row key: "SetRef.length")
+        (c.row key: "SetRef.capacity")
+        (c.row key: "SetRef.iterate")
+        (c.row key: "SetRef.create")
+        # collections.SetVal
+        (c.row key: "SetVal.add")
+        (c.row key: "SetVal.has")
+        (c.row key: "SetVal.delete")
+        (c.row key: "SetVal.length")
+        (c.row key: "SetVal.capacity")
+        (c.row key: "SetVal.iterate")
+        (c.row key: "SetVal.copy")
+        (c.row key: "SetVal.create")
+        # collections.IdMapR
+        (c.row key: "IdMapR.get")
+        (c.row key: "IdMapR.set")
+        (c.row key: "IdMapR.getMut")
+        (c.row key: "IdMapR.has")
+        (c.row key: "IdMapR.keyAt")
+        (c.row key: "IdMapR.valueAt")
+        (c.row key: "IdMapR.length")
+        (c.row key: "IdMapR.capacity")
+        (c.row key: "IdMapR.iterateItems")
+        (c.row key: "IdMapR.create")
+        # collections.IdMapV
+        (c.row key: "IdMapV.get")
+        (c.row key: "IdMapV.set")
+        (c.row key: "IdMapV.getMut")
+        (c.row key: "IdMapV.has")
+        (c.row key: "IdMapV.keyAt")
+        (c.row key: "IdMapV.valueAt")
+        (c.row key: "IdMapV.length")
+        (c.row key: "IdMapV.capacity")
+        (c.row key: "IdMapV.iterateItems")
+        (c.row key: "IdMapV.copy")
+        (c.row key: "IdMapV.create")
+        # collections.IdMapItemIterR
+        (c.row key: "IdMapItemIterR.call")
+        # collections.IdMapItemIterV
+        (c.row key: "IdMapItemIterV.call")
+        # collections.IdSet
+        (c.row key: "IdSet.add")
+        (c.row key: "IdSet.has")
+        (c.row key: "IdSet.length")
+        (c.row key: "IdSet.capacity")
+        (c.row key: "IdSet.iterate")
+        (c.row key: "IdSet.copy")
+        (c.row key: "IdSet.create")
+        # collections.IdSetIter
+        (c.row key: "IdSetIter.call")
+        # collections.SetIter
+        (c.row key: "SetIter.call")
+        # collections.SetIterVal
+        (c.row key: "SetIterVal.call")
+        # collections.MapItemIter
+        (c.row key: "MapItemIter.call")
+        # collections.MapItemIterRV
+        (c.row key: "MapItemIterRV.call")
+        # collections.MapItemIterVR
+        (c.row key: "MapItemIterVR.call")
+        # collections.MapItemIterVV
+        (c.row key: "MapItemIterVV.call")
+        # collections.MapEntry -- key/value project the entry struct's fields at known
+        # offsets; the emitter open-codes them, so the rows assert existence only.
+        (c.row key: "MapEntry.key")
+        (c.row key: "MapEntry.value")
+        # collections.MapEntryRV
+        (c.row key: "MapEntryRV.key")
+        (c.row key: "MapEntryRV.value")
+        # collections.MapEntryVR
+        (c.row key: "MapEntryVR.key")
+        (c.row key: "MapEntryVR.value")
+        # collections.MapEntryVV
+        (c.row key: "MapEntryVV.key")
+        (c.row key: "MapEntryVV.value")
+        # collections.IdMapEntryR
+        (c.row key: "IdMapEntryR.key")
+        (c.row key: "IdMapEntryR.value")
+        # collections.IdMapEntryV
+        (c.row key: "IdMapEntryV.key")
+        (c.row key: "IdMapEntryV.value")
+    }
+    templates: list {
+        (
+            c.template
+            name: "IdMap"
+            sections: list {
+                (
+                    c.section
+                    text: """
+                        /* IdMap -- an append-only, id-keyed map.
+
+                           Three differences from z_Map.c.tmpl, all of them consequences of "no
+                           removal" and "the key is an unsigned scalar":
+
+                             * No `alive` byte and no stored `hash`. Nothing is ever removed, so
+                               `entries[0 .. length-1]` are ALL live -- the array is dense with no
+                               holes. That collapses Map's `length` / `entries_len` pair into one
+                               counter, which is simultaneously the live count, the used-slot count
+                               and the next insertion index.
+                             * `indices` is uint32_t holding `pos + 1`, with 0 for empty. There is no
+                               DELETED sentinel, so `find` has no tombstone branch, `set` has no
+                               first-deleted scan and `grow` has no compaction pass.
+                             * The struct is returned BY VALUE and `destroy` does not free it: this is
+                               a stack struct like z_List, not a heap object like z_Map. An empty one
+                               costs no allocation at all.
+
+                           `entries` is sized at capacity*2/3 -- the same 2/3 load factor the index
+                           grows at -- so "entries is full" and "the index must grow" are one event,
+                           and no separate entries_cap field is needed. The growth test itself carries
+                           no division: cross-multiplied it is (length+1)*3 >= capacity*2. */
+
+                        /* Below this index size no `indices` array is allocated and `find` scans the
+                           dense entries instead; `indices == NULL` is the discriminator, so the large
+                           path pays no extra branch. Capacity 16 admits 10 entries, which covers ~90%
+                           of the containers a self-compile creates. This file is read from disk at
+                           emit time, so changing the constant needs no compiler rebuild. */
+                        #define Z_@@MACRO@@_SMALL_MAX 16
+
+                        typedef struct {
+                            @@KEY_T@@ key;
+                            @@VAL_T@@ value;
+                        } z_@@NAME@@_entry_t;
+
+                        typedef struct z_@@NAME@@_t {
+                            uint32_t length;
+                            uint32_t capacity;
+                            uint32_t* indices;
+                            z_@@NAME@@_entry_t* entries;
+                        } z_@@NAME@@_t;
+
+                        """
+                )
+                (
+                    c.section
+                    member: "slot"
+                    text: """
+                        /* THE INDEX FUNCTION -- the one knob. Identity (`(uint64_t)_key`) is optimal
+                           for a dense run of ids and pathological for a sparse subset of a wide id
+                           space, where `& mask` folds unrelated groups onto each other: measured over
+                           a self-compile it cost +77% probe steps and took the worst run from 74 to
+                           749. The golden-ratio multiply costs one imul plus one shift and beat the
+                           splitmix64 finalizer it replaces on both total steps and tail. The shift is
+                           not optional: bit i of a product depends only on bits 0..i of the operands,
+                           so a multiply's low bits -- exactly the ones `& (capacity-1)` reads -- are
+                           barely mixed, while the high half carries every input bit. */
+                        static uint64_t z_@@NAME@@_slot(@@KEY_T@@ _key);
+                        static uint64_t z_@@NAME@@_slot(@@KEY_T@@ _key) {
+                            return (((uint64_t)_key) * 0x9E3779B97F4A7C15ULL) >> 32;
+                        }
+                        """
+                )
+                (
+                    c.section
+                    member: "entries_cap"
+                    text: """
+                        /* how many entries an index of this size admits, at the 2/3 load factor */
+                        static uint32_t z_@@NAME@@_entries_cap(uint32_t _capacity);
+                        static uint32_t z_@@NAME@@_entries_cap(uint32_t _capacity) {
+                            return (uint32_t)((((uint64_t)_capacity) * 2u) / 3u);
+                        }
+                        """
+                )
+                (
+                    c.section
+                    member: "destroy"
+                    text: """
+                        static void z_@@NAME@@_destroy(z_@@NAME@@_t* p);
+                        static void z_@@NAME@@_destroy(z_@@NAME@@_t* p) {
+                            if (!p) return;
+                        @@DESTROY_ENTRIES@@    free(p->indices);
+                            free(p->entries);
+                            /* NO free(p) -- the struct is on the stack */
+                        }
+                        """
+                )
+                (
+                    c.section
+                    member: "create"
+                    needs: list { "entries_cap" "prelude.@xcalloc" }
+                    text: """
+                        static z_@@NAME@@_t z_@@NAME@@_create(uint64_t _capacity);
+                        static z_@@NAME@@_t z_@@NAME@@_create(uint64_t _capacity) {
+                            z_@@NAME@@_t _this = {0};
+                            if (_capacity > 0) {
+                                uint32_t _p2 = 8;
+                                while ((uint64_t)z_@@NAME@@_entries_cap(_p2) < _capacity && _p2 < 0x40000000u) {
+                                    _p2 <<= 1;
+                                }
+                                _this.capacity = _p2;
+                                _this.entries = (z_@@NAME@@_entry_t*)z_xcalloc(
+                                    z_@@NAME@@_entries_cap(_p2), sizeof(z_@@NAME@@_entry_t));
+                                if (_p2 > Z_@@MACRO@@_SMALL_MAX) {
+                                    _this.indices = (uint32_t*)z_xcalloc(_p2, sizeof(uint32_t));
+                                }
+                            }
+                            return _this;
+                        }
+                        """
+                )
+                (
+                    c.section
+                    member: "grow"
+                    needs: list { "entries_cap" "slot" "prelude.@xcalloc" "prelude.@xrealloc" }
+                    text: """
+                        /* Double the index and re-slot. `entries` is dense and stays in insertion
+                           order, so there is nothing to compact -- only the sparse index is rebuilt,
+                           and only once it is worth having. */
+                        static void z_@@NAME@@_grow(z_@@NAME@@_t* _this);
+                        static void z_@@NAME@@_grow(z_@@NAME@@_t* _this) {
+                            uint32_t _new_cap = _this->capacity == 0 ? 8 : _this->capacity * 2;
+                            _this->entries = (z_@@NAME@@_entry_t*)z_xrealloc(_this->entries,
+                                (size_t)z_@@NAME@@_entries_cap(_new_cap) * sizeof(z_@@NAME@@_entry_t));
+                            _this->capacity = _new_cap;
+                            free(_this->indices);
+                            _this->indices = NULL;
+                            if (_new_cap > Z_@@MACRO@@_SMALL_MAX) {
+                                _this->indices = (uint32_t*)z_xcalloc(_new_cap, sizeof(uint32_t));
+                                for (uint32_t i = 0; i < _this->length; i++) {
+                                    uint64_t probe = z_@@NAME@@_slot(_this->entries[i].key) & (_new_cap - 1);
+                                    while (_this->indices[probe]) probe = (probe + 1) & (_new_cap - 1);
+                                    _this->indices[probe] = i + 1;
+                                }
+                            }
+                        }
+                        """
+                )
+                (
+                    c.section
+                    member: "find"
+                    needs: list { "slot" }
+                    text: """
+                        /* the entry index for `_key`, or -1. On a miss `_slot_out` (when given, and
+                           when an index exists) receives the index slot the key belongs in. */
+                        static int64_t z_@@NAME@@_find(const z_@@NAME@@_t* _this, @@KEY_T@@ _key, uint64_t* _slot_out);
+                        static int64_t z_@@NAME@@_find(const z_@@NAME@@_t* _this, @@KEY_T@@ _key, uint64_t* _slot_out) {
+                            if (!_this->indices) {
+                                for (uint32_t i = 0; i < _this->length; i++) {
+                                    if (_this->entries[i].key == _key) return (int64_t)i;
+                                }
+                                return -1;
+                            }
+                            uint64_t _mask = _this->capacity - 1;
+                            uint64_t probe = z_@@NAME@@_slot(_key) & _mask;
+                            for (uint32_t i = 0; i < _this->capacity; i++) {
+                                uint32_t slot = _this->indices[probe];
+                                if (slot == 0) {
+                                    if (_slot_out) *_slot_out = probe;
+                                    return -1;
+                                }
+                                if (_this->entries[slot - 1].key == _key) {
+                                    if (_slot_out) *_slot_out = probe;
+                                    return (int64_t)(slot - 1);
+                                }
+                                probe = (probe + 1) & _mask;
+                            }
+                            return -1;
+                        }
+                        """
+                )
+                (
+                    c.section
+                    member: "set"
+                    needs: list { "find" "grow" }
+                    text: """
+                        static void z_@@NAME@@_set(z_@@NAME@@_t* _this, @@KEY_T@@ _key, @@VAL_T@@ _val);
+                        static void z_@@NAME@@_set(z_@@NAME@@_t* _this, @@KEY_T@@ _key, @@VAL_T@@ _val) {
+                            uint64_t _slot = 0;
+                            int64_t existing = z_@@NAME@@_find(_this, _key, &_slot);
+                            if (existing >= 0) {
+                        @@FREE_VAL_DUP@@        _this->entries[existing].value = _val;
+                                return;
+                            }
+                            if ((uint64_t)(_this->length + 1) * 3 >= (uint64_t)_this->capacity * 2) {
+                                z_@@NAME@@_grow(_this);
+                                /* the index was rebuilt (or has just appeared): re-probe for the slot */
+                                z_@@NAME@@_find(_this, _key, &_slot);
+                            }
+                            uint32_t pos = _this->length;
+                            _this->entries[pos].key = _key;
+                            _this->entries[pos].value = _val;
+                            _this->length++;
+                            if (_this->indices) _this->indices[_slot] = pos + 1;
+                        }
+                        """
+                )
+                (
+                    c.section
+                    member: "get"
+                    needs: list { "find" }
+                    text: """
+                        /* A CONST receiver, as `find` already takes and as z_Set's `iterate` does:
+                           `get` reads, and declaring it `.view` in zerolang is what lets an IdMap be
+                           read through a readonly holder at all -- a heap Map escapes that question
+                           because its field read yields a pointer, a stack struct does not. The
+                           reference form casts the const away on the payload for the same reason
+                           iterate does: OptionView's data is a bare void* shared with the readers that
+                           hand out a mutable interior pointer, so const stops here. */
+                        static z_@@OPTIONVAL@@_t z_@@NAME@@_get(const z_@@NAME@@_t* _this, @@KEY_T@@ _key);
+                        static z_@@OPTIONVAL@@_t z_@@NAME@@_get(const z_@@NAME@@_t* _this, @@KEY_T@@ _key) {
+                            int64_t idx = z_@@NAME@@_find(_this, _key, NULL);
+                        @@GET_BODY@@
+                        }
+                        """
+                )
+                (
+                    c.section
+                    member: "has"
+                    needs: list { "find" }
+                    text: """
+                        static int z_@@NAME@@_has(const z_@@NAME@@_t* _this, @@KEY_T@@ _key);
+                        static int z_@@NAME@@_has(const z_@@NAME@@_t* _this, @@KEY_T@@ _key) {
+                            return z_@@NAME@@_find(_this, _key, NULL) >= 0;
+                        }
+                        """
+                )
+                (
+                    c.section
+                    member: "keyAt"
+                    text: """
+                        /* POSITIONAL reads. `entries` is dense and insertion-ordered, so position is a
+                           meaningful coordinate here in a way it is not in a Map, and reaching one
+                           costs an array index rather than a probe. They exist because an ordered walk
+                           whose body needs the container's owner cannot hold an iterator across it.
+                           `keyAt` answers a bare key -- the `idkey` bound makes it a scalar, and 0
+                           past the end is the same "no id" every id space already spells -- while
+                           `valueAt` answers `get`'s own return, since a value is not always a scalar
+                           and not always a copy. */
+                        static @@KEY_T@@ z_@@NAME@@_keyAt(const z_@@NAME@@_t* _this, uint64_t _i);
+                        static @@KEY_T@@ z_@@NAME@@_keyAt(const z_@@NAME@@_t* _this, uint64_t _i) {
+                            if (_i >= (uint64_t)_this->length) return (@@KEY_T@@)0;
+                            return _this->entries[_i].key;
+                        }
+                        """
+                )
+                (
+                    c.section
+                    member: "valueAt"
+                    text: """
+                        static z_@@OPTIONVAL@@_t z_@@NAME@@_valueAt(const z_@@NAME@@_t* _this, uint64_t _i);
+                        static z_@@OPTIONVAL@@_t z_@@NAME@@_valueAt(const z_@@NAME@@_t* _this, uint64_t _i) {
+                            int64_t idx = _i < (uint64_t)_this->length ? (int64_t)_i : -1;
+                        @@GET_BODY@@
+                        }
+                        """
+                )
+            }
+        )
+        (
+            c.template
+            name: "IdMapIter"
+            sections: list {
+                (
+                    c.section
+                    text: """
+                        /* The entry IS the projection: `entries` is dense, so a borrowed entry is a
+                           plain `&entries[idx]` and the cursor is an index test rather than a scan for
+                           the next live one. Insertion order, and nothing can perforate it. */
+                        /*@@entrytype@@*/typedef z_@@NAME@@_entry_t z_@@IDMAPENTRY@@_t;
+
+                        typedef struct {
+                            z_@@NAME@@_t* m;
+                            uint32_t idx;
+                        } z_@@IDMAPITEMITER@@_t;
+
+                        static z_@@OPTIONVIEW_ENTRY@@_t z_@@IDMAPITEMITER@@_call(z_@@IDMAPITEMITER@@_t* _it);
+                        static z_@@OPTIONVIEW_ENTRY@@_t z_@@IDMAPITEMITER@@_call(z_@@IDMAPITEMITER@@_t* _it) {
+                            z_@@OPTIONVIEW_ENTRY@@_t _out = {0};
+                            if (_it->idx < _it->m->length) {
+                                _out.tag = @@OPTIONVIEW_ENTRY_SOME@@;
+                                _out.data = &_it->m->entries[_it->idx];
+                                _it->idx++;
+                                return _out;
+                            }
+                            _out.tag = @@OPTIONVIEW_ENTRY_NONE@@;
+                            return _out;
+                        }
+
+                        static z_@@IDMAPITEMITER@@_t z_@@NAME@@_iterateItems(const z_@@NAME@@_t* _this);
+                        static z_@@IDMAPITEMITER@@_t z_@@NAME@@_iterateItems(const z_@@NAME@@_t* _this) {
+                            z_@@IDMAPITEMITER@@_t _it = {0};
+                            /* the same const stop as `get` and z_Set's `iterate`: OptionView's payload
+                               is a bare void*, so const cannot propagate into it */
+                            _it.m = (z_@@NAME@@_t*)_this;
+                            _it.idx = 0;
+                            return _it;
+                        }
+                        """
+                )
+            }
+        )
+        (
+            c.template
+            name: "IdMapMut"
+            sections: list {
+                (
+                    c.section
+                    text: """
+                        /* getMut hands back a pointer INTO the entry where the value family's `get`
+                           copies out, so an update writes the entry in place instead of going through
+                           `set`. One emitted function for both families: what differs is the declared
+                           return, exactly as ListRef.get (a view) and ListVal.get (a copy) already
+                           differ while sharing one getMut.
+
+                           Its own file, for the reason z_IdMapIter.c.tmpl is separate: a mono whose
+                           `getMut` never resolved must still emit its container, and a template read
+                           by a seed that cannot fill its holes writes them into the C verbatim. */
+
+                        static z_@@OPTIONMUT_V@@_t z_@@NAME@@_getMut(z_@@NAME@@_t* _this, @@KEY_T@@ _key);
+                        static z_@@OPTIONMUT_V@@_t z_@@NAME@@_getMut(z_@@NAME@@_t* _this, @@KEY_T@@ _key) {
+                            z_@@OPTIONMUT_V@@_t _r = {0};
+                            int64_t idx = z_@@NAME@@_find(_this, _key, NULL);
+                            if (idx >= 0) {
+                                _r.tag = @@OPTIONMUT_V_SOME@@;
+                                _r.data = &_this->entries[idx].value;
+                            } else {
+                                _r.tag = @@OPTIONMUT_V_NONE@@;
+                                _r.data = NULL;
+                            }
+                            return _r;
+                        }
+                        """
+                )
+            }
+        )
+        (
+            c.template
+            name: "IdMap_copy"
+            needs: list { "prelude.@xcalloc" }
+            sections: list {
+                (
+                    c.section
+                    text: """
+                        /* IdMapV.copy -- an owned duplicate that shares no storage with the source.
+                           The key is a scalar and the value a valtype, so the dense entry array copies
+                           as bytes and the index copies verbatim.
+
+                           TWO THINGS THE SIZE MUST COME FROM THE SOURCE, not from `length`. The entry
+                           array is allocated at entries_cap(capacity) -- the 2/3 load factor the index
+                           grows at -- so a copy sized by length would be reallocated out from under
+                           the next `set`. And below SMALL_MAX there is no index at all: `indices ==
+                           NULL` is the discriminator every lookup reads, so a copy that allocated one
+                           would put the source and the duplicate on different code paths. */
+                        static z_@@NAME@@_t z_@@NAME@@_copy(const z_@@NAME@@_t* _this);
+                        static z_@@NAME@@_t z_@@NAME@@_copy(const z_@@NAME@@_t* _this) {
+                            z_@@NAME@@_t _out = {0};
+                            if (!_this || _this->capacity == 0) return _out;
+                            _out.length = _this->length;
+                            _out.capacity = _this->capacity;
+                            uint32_t _ecap = z_@@NAME@@_entries_cap(_this->capacity);
+                            if (_ecap > 0 && _this->entries) {
+                                _out.entries = (z_@@NAME@@_entry_t*)z_xcalloc(_ecap, sizeof(z_@@NAME@@_entry_t));
+                                memcpy(_out.entries, _this->entries, (size_t)_ecap * sizeof(z_@@NAME@@_entry_t));
+                            }
+                            if (_this->indices) {
+                                _out.indices = (uint32_t*)z_xcalloc(_this->capacity, sizeof(uint32_t));
+                                memcpy(_out.indices, _this->indices, (size_t)_this->capacity * sizeof(uint32_t));
+                            }
+                            return _out;
+                        }
+                        """
+                )
+            }
+        )
+        (
+            c.template
+            name: "IdSet"
+            sections: list {
+                (
+                    c.section
+                    text: """
+                        /* IdSet -- an append-only set of unsigned scalar ids.
+
+                           z_IdMap.c.tmpl without the value column; see that file for why there is no
+                           `alive` byte, no stored hash, no DELETED sentinel and no free(p), and for
+                           the reasoning behind the index function and the small mode. */
+
+                        #define Z_@@MACRO@@_SMALL_MAX 16
+
+                        typedef struct z_@@NAME@@_t {
+                            uint32_t length;
+                            uint32_t capacity;
+                            uint32_t* indices;
+                            @@ITEM_T@@* items;
+                        } z_@@NAME@@_t;
+
+                        """
+                )
+                (
+                    c.section
+                    member: "slot"
+                    text: """
+                        static uint64_t z_@@NAME@@_slot(@@ITEM_T@@ _item);
+                        static uint64_t z_@@NAME@@_slot(@@ITEM_T@@ _item) {
+                            return (((uint64_t)_item) * 0x9E3779B97F4A7C15ULL) >> 32;
+                        }
+                        """
+                )
+                (
+                    c.section
+                    member: "items_cap"
+                    text: """
+                        static uint32_t z_@@NAME@@_items_cap(uint32_t _capacity);
+                        static uint32_t z_@@NAME@@_items_cap(uint32_t _capacity) {
+                            return (uint32_t)((((uint64_t)_capacity) * 2u) / 3u);
+                        }
+                        """
+                )
+                (
+                    c.section
+                    member: "destroy"
+                    text: """
+                        static void z_@@NAME@@_destroy(z_@@NAME@@_t* p);
+                        static void z_@@NAME@@_destroy(z_@@NAME@@_t* p) {
+                            if (!p) return;
+                            free(p->indices);
+                            free(p->items);
+                            /* NO free(p) -- the struct is on the stack */
+                        }
+                        """
+                )
+                (
+                    c.section
+                    member: "create"
+                    needs: list { "items_cap" "prelude.@xcalloc" }
+                    text: """
+                        static z_@@NAME@@_t z_@@NAME@@_create(uint64_t _capacity);
+                        static z_@@NAME@@_t z_@@NAME@@_create(uint64_t _capacity) {
+                            z_@@NAME@@_t _this = {0};
+                            if (_capacity > 0) {
+                                uint32_t _p2 = 8;
+                                while ((uint64_t)z_@@NAME@@_items_cap(_p2) < _capacity && _p2 < 0x40000000u) {
+                                    _p2 <<= 1;
+                                }
+                                _this.capacity = _p2;
+                                _this.items = (@@ITEM_T@@*)z_xcalloc(z_@@NAME@@_items_cap(_p2), sizeof(@@ITEM_T@@));
+                                if (_p2 > Z_@@MACRO@@_SMALL_MAX) {
+                                    _this.indices = (uint32_t*)z_xcalloc(_p2, sizeof(uint32_t));
+                                }
+                            }
+                            return _this;
+                        }
+                        """
+                )
+                (
+                    c.section
+                    member: "grow"
+                    needs: list { "items_cap" "slot" "prelude.@xcalloc" "prelude.@xrealloc" }
+                    text: """
+                        static void z_@@NAME@@_grow(z_@@NAME@@_t* _this);
+                        static void z_@@NAME@@_grow(z_@@NAME@@_t* _this) {
+                            uint32_t _new_cap = _this->capacity == 0 ? 8 : _this->capacity * 2;
+                            _this->items = (@@ITEM_T@@*)z_xrealloc(_this->items,
+                                (size_t)z_@@NAME@@_items_cap(_new_cap) * sizeof(@@ITEM_T@@));
+                            _this->capacity = _new_cap;
+                            free(_this->indices);
+                            _this->indices = NULL;
+                            if (_new_cap > Z_@@MACRO@@_SMALL_MAX) {
+                                _this->indices = (uint32_t*)z_xcalloc(_new_cap, sizeof(uint32_t));
+                                for (uint32_t i = 0; i < _this->length; i++) {
+                                    uint64_t probe = z_@@NAME@@_slot(_this->items[i]) & (_new_cap - 1);
+                                    while (_this->indices[probe]) probe = (probe + 1) & (_new_cap - 1);
+                                    _this->indices[probe] = i + 1;
+                                }
+                            }
+                        }
+                        """
+                )
+                (
+                    c.section
+                    member: "find"
+                    needs: list { "slot" }
+                    text: """
+                        static int64_t z_@@NAME@@_find(const z_@@NAME@@_t* _this, @@ITEM_T@@ _item, uint64_t* _slot_out);
+                        static int64_t z_@@NAME@@_find(const z_@@NAME@@_t* _this, @@ITEM_T@@ _item, uint64_t* _slot_out) {
+                            if (!_this->indices) {
+                                for (uint32_t i = 0; i < _this->length; i++) {
+                                    if (_this->items[i] == _item) return (int64_t)i;
+                                }
+                                return -1;
+                            }
+                            uint64_t _mask = _this->capacity - 1;
+                            uint64_t probe = z_@@NAME@@_slot(_item) & _mask;
+                            for (uint32_t i = 0; i < _this->capacity; i++) {
+                                uint32_t slot = _this->indices[probe];
+                                if (slot == 0) {
+                                    if (_slot_out) *_slot_out = probe;
+                                    return -1;
+                                }
+                                if (_this->items[slot - 1] == _item) {
+                                    if (_slot_out) *_slot_out = probe;
+                                    return (int64_t)(slot - 1);
+                                }
+                                probe = (probe + 1) & _mask;
+                            }
+                            return -1;
+                        }
+                        """
+                )
+                (
+                    c.section
+                    member: "add"
+                    needs: list { "find" "grow" }
+                    text: """
+                        /* 1 when the item was newly added, 0 when it was already present */
+                        static int z_@@NAME@@_add(z_@@NAME@@_t* _this, @@ITEM_T@@ _item);
+                        static int z_@@NAME@@_add(z_@@NAME@@_t* _this, @@ITEM_T@@ _item) {
+                            uint64_t _slot = 0;
+                            if (z_@@NAME@@_find(_this, _item, &_slot) >= 0) return 0;
+                            if ((uint64_t)(_this->length + 1) * 3 >= (uint64_t)_this->capacity * 2) {
+                                z_@@NAME@@_grow(_this);
+                                z_@@NAME@@_find(_this, _item, &_slot);
+                            }
+                            uint32_t pos = _this->length;
+                            _this->items[pos] = _item;
+                            _this->length++;
+                            if (_this->indices) _this->indices[_slot] = pos + 1;
+                            return 1;
+                        }
+                        """
+                )
+                (
+                    c.section
+                    member: "has"
+                    needs: list { "find" }
+                    text: """
+                        static int z_@@NAME@@_has(const z_@@NAME@@_t* _this, @@ITEM_T@@ _item);
+                        static int z_@@NAME@@_has(const z_@@NAME@@_t* _this, @@ITEM_T@@ _item) {
+                            return z_@@NAME@@_find(_this, _item, NULL) >= 0;
+                        }
+                        """
+                )
+                (
+                    c.section
+                    text: """
+                        /* The cursor is a plain index test, not a scan: `items` is dense, so there is
+                           no hole to skip and no `alive` byte to read. Iteration is in INSERTION order
+                           for the same reason a Map's is -- the array IS the insertion order -- and
+                           here nothing can ever perforate it. */
+                        """
+                )
+                (
+                    c.section
+                    member: "iterate"
+                    text: """
+                        typedef struct {
+                            z_@@NAME@@_t* s;
+                            uint32_t idx;
+                        } z_@@IDSETITER@@_t;
+
+                        static z_@@OPTIONVIEW@@_t z_@@IDSETITER@@_call(z_@@IDSETITER@@_t* _it);
+                        static z_@@OPTIONVIEW@@_t z_@@IDSETITER@@_call(z_@@IDSETITER@@_t* _it) {
+                            z_@@OPTIONVIEW@@_t _out = {0};
+                            if (_it->idx < _it->s->length) {
+                                _out.tag = @@OPTIONVIEW_SOME@@;
+                                _out.data = &_it->s->items[_it->idx];
+                                _it->idx++;
+                                return _out;
+                            }
+                            _out.tag = @@OPTIONVIEW_NONE@@;
+                            return _out;
+                        }
+
+                        static z_@@IDSETITER@@_t z_@@NAME@@_iterate(const z_@@NAME@@_t* _this);
+                        static z_@@IDSETITER@@_t z_@@NAME@@_iterate(const z_@@NAME@@_t* _this) {
+                            z_@@IDSETITER@@_t _it = {0};
+                            /* the one const cast, for the reason z_Set.c.tmpl's iterate spells out:
+                               OptionView's payload is a bare void* shared with the readers that hand
+                               out a mutable interior pointer, so const stops here. What the const
+                               receiver buys -- that `iterate` provably does not write through the
+                               container -- is what view-guard checks and is unaffected. */
+                            _it.s = (z_@@NAME@@_t*)_this;
+                            _it.idx = 0;
+                            return _it;
+                        }
+                        """
+                )
+            }
+        )
+        (
+            c.template
+            name: "IdSet_copy"
+            needs: list { "prelude.@xcalloc" }
+            sections: list {
+                (
+                    c.section
+                    text: """
+                        /* IdSet.copy -- an owned duplicate that shares no storage with the source. An
+                           id is a scalar, so the dense item array copies as bytes and the index copies
+                           verbatim. z_IdMap_copy.c.tmpl without the value column: the same two size
+                           rules apply, items_cap(capacity) rather than length, and a NULL index stays
+                           NULL so the copy takes the same small-mode path the source does. */
+                        static z_@@NAME@@_t z_@@NAME@@_copy(const z_@@NAME@@_t* _this);
+                        static z_@@NAME@@_t z_@@NAME@@_copy(const z_@@NAME@@_t* _this) {
+                            z_@@NAME@@_t _out = {0};
+                            if (!_this || _this->capacity == 0) return _out;
+                            _out.length = _this->length;
+                            _out.capacity = _this->capacity;
+                            uint32_t _icap = z_@@NAME@@_items_cap(_this->capacity);
+                            if (_icap > 0 && _this->items) {
+                                _out.items = (@@ITEM_T@@*)z_xcalloc(_icap, sizeof(@@ITEM_T@@));
+                                memcpy(_out.items, _this->items, (size_t)_icap * sizeof(@@ITEM_T@@));
+                            }
+                            if (_this->indices) {
+                                _out.indices = (uint32_t*)z_xcalloc(_this->capacity, sizeof(uint32_t));
+                                memcpy(_out.indices, _this->indices, (size_t)_this->capacity * sizeof(uint32_t));
+                            }
+                            return _out;
+                        }
+                        """
+                )
+            }
+        )
+        (
+            c.template
+            name: "List"
+            sections: list {
+                (
+                    c.section
+                    text: """
+                        typedef struct z_@@NAME@@_t {
+                            uint64_t length;
+                            @@ELEM_T@@* data;
+                            uint64_t capacity;
+                        } z_@@NAME@@_t;
+
+                        """
+                )
+                (
+                    c.section
+                    member: "destroy"
+                    text: """
+                        static void z_@@NAME@@_destroy(z_@@NAME@@_t* p);
+                        static void z_@@NAME@@_destroy(z_@@NAME@@_t* p) {
+                            if (!p) return;
+                        @@DESTROY_ELEMS@@    free(p->data);
+                        }
+                        """
+                )
+                (
+                    c.section
+                    member: "create"
+                    needs: list { "prelude.@xcalloc" }
+                    text: """
+                        static z_@@NAME@@_t z_@@NAME@@_create(uint64_t _capacity);
+                        static z_@@NAME@@_t z_@@NAME@@_create(uint64_t _capacity) {
+                            z_@@NAME@@_t _this = {0};
+                            _this.capacity = _capacity;
+                            if (_capacity > 0) {
+                                _this.data = (@@ELEM_T@@*)z_xcalloc(_capacity, sizeof(@@ELEM_T@@));
+                            }
+                            return _this;
+                        }
+                        """
+                )
+                (
+                    c.section
+                    member: "grow"
+                    needs: list { "prelude.@xrealloc" }
+                    text: """
+                        static void z_@@NAME@@_grow(z_@@NAME@@_t* _this, uint64_t _needed);
+                        static void z_@@NAME@@_grow(z_@@NAME@@_t* _this, uint64_t _needed) {
+                            if (_needed <= _this->capacity) return;
+                            uint64_t newcap = _this->capacity + (_this->capacity >> 1) + 4;
+                            if (newcap < _needed) newcap = _needed;
+                            _this->capacity = newcap;
+                            _this->data = (@@ELEM_T@@*)z_xrealloc(_this->data, newcap * sizeof(@@ELEM_T@@));
+                        }
+                        """
+                )
+                (
+                    c.section
+                    member: "append"
+                    needs: list { "grow" }
+                    text: """
+                        static uint64_t z_@@NAME@@_append(z_@@NAME@@_t* _this, @@ELEM_T@@ _val);
+                        static uint64_t z_@@NAME@@_append(z_@@NAME@@_t* _this, @@ELEM_T@@ _val) {
+                            z_@@NAME@@_grow(_this, _this->length + 1);
+                            _this->data[_this->length] = _val;
+                            return _this->length++;
+                        }
+                        """
+                )
+                (
+                    c.section
+                    member: "set"
+                    needs: list { "prelude.@panic" }
+                    text: """
+                        static @@ELEM_T@@ z_@@NAME@@_set(z_@@NAME@@_t* _this, uint64_t _idx, @@ELEM_T@@ _val);
+                        static @@ELEM_T@@ z_@@NAME@@_set(z_@@NAME@@_t* _this, uint64_t _idx, @@ELEM_T@@ _val) {
+                            if (_idx >= _this->length) {
+                                char _zp_buf[96];
+                                snprintf(_zp_buf, sizeof(_zp_buf), "List set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
+                                z_panic(_zp_buf);
+                            }
+                            @@ELEM_T@@ _old = _this->data[_idx];
+                            _this->data[_idx] = _val;
+                            return _old;
+                        }
+                        """
+                )
+                (
+                    c.section
+                    member: "pop"
+                    needs: list { "prelude.@panic" }
+                    text: """
+                        static @@ELEM_T@@ z_@@NAME@@_pop(z_@@NAME@@_t* _this);
+                        static @@ELEM_T@@ z_@@NAME@@_pop(z_@@NAME@@_t* _this) {
+                            if (_this->length == 0) {
+                                z_panic("List pop: empty list");
+                            }
+                            _this->length--;
+                            return _this->data[_this->length];
+                        }
+                        """
+                )
+                (c.section text: "@@LISTVIEW_METHODS@@")
+            }
+        )
+        (
+            c.template
+            name: "ListView"
+            sections: list {
+                (
+                    c.section
+                    text: """
+                        typedef struct z_@@NAME@@_t {
+                            uint64_t length;
+                            @@ELEM_T@@* data;
+                        } z_@@NAME@@_t;
+
+                        """
+                )
+            }
+        )
+        (
+            c.template
+            name: "List_copy"
+            needs: list { "prelude.@xcalloc" }
+            sections: list {
+                (
+                    c.section
+                    text: """
+                        /* ListVal.copy -- an owned duplicate that shares no storage with the source.
+                           Emitted only for a mono whose program calls it, which is why it is its own
+                           file rather than a block in z_List.c.tmpl: that file is shared with ListRef,
+                           which declares no copy and must never be given one.
+
+                           The elements are valtypes, so their BYTES are the elements and one memcpy
+                           duplicates them all. An empty source needs no buffer -- the zero struct IS
+                           an empty list, exactly as it is for an empty String. */
+                        static z_@@NAME@@_t z_@@NAME@@_copy(const z_@@NAME@@_t* _this);
+                        static z_@@NAME@@_t z_@@NAME@@_copy(const z_@@NAME@@_t* _this) {
+                            z_@@NAME@@_t _out = {0};
+                            if (!_this || _this->length == 0) return _out;
+                            _out.length = _this->length;
+                            _out.capacity = _this->length;
+                            _out.data = (@@ELEM_T@@*)z_xcalloc(_this->length, sizeof(@@ELEM_T@@));
+                            memcpy(_out.data, _this->data, (size_t)_this->length * sizeof(@@ELEM_T@@));
+                            return _out;
+                        }
+                        """
+                )
+            }
+        )
+        (
+            c.template
+            name: "List_extend"
+            sections: list {
+                (
+                    c.section
+                    text: """
+                        static void z_@@NAME@@_extend(z_@@NAME@@_t* _this, z_@@NAME@@_t* _from);
+                        static void z_@@NAME@@_extend(z_@@NAME@@_t* _this, z_@@NAME@@_t* _from) {
+                            if (!_from) return;
+                            z_@@NAME@@_grow(_this, _this->length + _from->length);
+                            memcpy(&_this->data[_this->length], _from->data, _from->length * sizeof(@@ELEM_T@@));
+                            _this->length += _from->length;
+                            free(_from->data);
+                            _from->data = NULL;
+                            _from->length = 0;
+                            _from->capacity = 0;
+                        }
+                        """
+                )
+            }
+        )
+        (
+            c.template
+            name: "List_insert"
+            needs: list { "prelude.@panic" }
+            sections: list {
+                (
+                    c.section
+                    text: """
+                        static void z_@@NAME@@_insert(z_@@NAME@@_t* _this, @@ELEM_T@@ _val, uint64_t _at);
+                        static void z_@@NAME@@_insert(z_@@NAME@@_t* _this, @@ELEM_T@@ _val, uint64_t _at) {
+                            if (_at > _this->length) {
+                                char _zp_buf[96];
+                                snprintf(_zp_buf, sizeof(_zp_buf), "List insert: index %llu out of bounds (length %llu)", (unsigned long long)_at, (unsigned long long)_this->length);
+                                z_panic(_zp_buf);
+                            }
+                            z_@@NAME@@_grow(_this, _this->length + 1);
+                            memmove(&_this->data[_at + 1], &_this->data[_at], (_this->length - _at) * sizeof(@@ELEM_T@@));
+                            _this->data[_at] = _val;
+                            _this->length++;
+                        }
+                        """
+                )
+            }
+        )
+        (
+            c.template
+            name: "List_resize"
+            sections: list {
+                (
+                    c.section
+                    text: """
+                        static void z_@@NAME@@_resize(z_@@NAME@@_t* _this, uint64_t _to);
+                        static void z_@@NAME@@_resize(z_@@NAME@@_t* _this, uint64_t _to) {
+                            z_@@NAME@@_grow(_this, _to);
+                            if (_to > _this->length) memset(_this->data + _this->length, 0, (_to - _this->length) * sizeof(@@ELEM_T@@));
+                            _this->length = _to;
+                        }
+                        """
+                )
+            }
+        )
+        (
+            c.template
+            name: "Map"
+            sections: list {
+                (c.section member: "index_empty" text: "#define Z_@@MACRO@@_INDEX_EMPTY (-1)")
+                (c.section member: "index_deleted" text: "#define Z_@@MACRO@@_INDEX_DELETED (-2)")
+                (
+                    c.section
+                    text: """
+
+                        typedef struct {
+                            uint8_t alive;
+                            uint64_t hash;
+                            @@KEY_T@@ key;
+                            @@VAL_T@@ value;
+                        } z_@@NAME@@_entry_t;
+
+                        typedef struct z_@@NAME@@_t {
+                            uint64_t capacity;
+                            uint64_t length;
+                            uint64_t entries_len;
+                            uint64_t entries_cap;
+                            int64_t* indices;
+                            z_@@NAME@@_entry_t* entries;
+                        } z_@@NAME@@_t;
+
+                        """
+                )
+                (
+                    c.section
+                    member: "hash_key"
+                    text: """
+                        static uint64_t z_@@NAME@@_hash_key(@@KEY_ARG_T@@ _key);
+                        static uint64_t z_@@NAME@@_hash_key(@@KEY_ARG_T@@ _key) {
+                            return @@HASH_KEY_BODY@@;
+                        }
+                        """
+                )
+                (
+                    c.section
+                    member: "keys_equal"
+                    text: """
+                        static int z_@@NAME@@_keys_equal(@@KEY_ARG_T@@ _a, @@KEY_ARG_T@@ _b);
+                        static int z_@@NAME@@_keys_equal(@@KEY_ARG_T@@ _a, @@KEY_ARG_T@@ _b) {
+                            return @@KEYS_EQUAL_BODY@@;
+                        }
+                        """
+                )
+                (
+                    c.section
+                    member: "destroy"
+                    text: """
+                        static void z_@@NAME@@_destroy(z_@@NAME@@_t* p);
+                        static void z_@@NAME@@_destroy(z_@@NAME@@_t* p) {
+                            if (!p) return;
+                        @@DESTROY_ENTRIES@@    free(p->indices);
+                            free(p->entries);
+                            free(p);
+                        }
+                        """
+                )
+                (
+                    c.section
+                    member: "create"
+                    needs: list { "index_empty" "prelude.@xcalloc" "prelude.@xmalloc" }
+                    text: """
+                        static z_@@NAME@@_t* z_@@NAME@@_create(uint64_t _capacity);
+                        static z_@@NAME@@_t* z_@@NAME@@_create(uint64_t _capacity) {
+                            z_@@NAME@@_t* _this = (z_@@NAME@@_t*)z_xmalloc(sizeof(z_@@NAME@@_t));
+                            *_this = (z_@@NAME@@_t){0};
+                            if (_capacity < 8) _capacity = 0;
+                            /* probing masks with (capacity - 1): round any caller capacity up to
+                               a power of two */
+                            if (_capacity & (_capacity - 1)) {
+                                uint64_t _p2 = 8;
+                                while (_p2 < _capacity) _p2 <<= 1;
+                                _capacity = _p2;
+                            }
+                            _this->capacity = _capacity;
+                            _this->entries_cap = _capacity;
+                            if (_capacity > 0) {
+                                _this->indices = (int64_t*)z_xmalloc(_capacity * sizeof(int64_t));
+                                for (uint64_t i = 0; i < _capacity; i++) {
+                                    _this->indices[i] = Z_@@MACRO@@_INDEX_EMPTY;
+                                }
+                                _this->entries = (z_@@NAME@@_entry_t*)z_xcalloc(_capacity, sizeof(z_@@NAME@@_entry_t));
+                            }
+                            return _this;
+                        }
+                        """
+                )
+                (
+                    c.section
+                    member: "grow"
+                    needs: list { "index_empty" "prelude.@xcalloc" "prelude.@xmalloc" }
+                    text: """
+                        static void z_@@NAME@@_grow(z_@@NAME@@_t* _this);
+                        static void z_@@NAME@@_grow(z_@@NAME@@_t* _this) {
+                            uint64_t old_cap = _this->capacity;
+                            uint64_t new_cap = old_cap == 0 ? 8 : old_cap * 2;
+                            z_@@NAME@@_entry_t* old_entries = _this->entries;
+                            uint64_t old_entries_len = _this->entries_len;
+                            int64_t* new_indices = (int64_t*)z_xmalloc(new_cap * sizeof(int64_t));
+                            for (uint64_t i = 0; i < new_cap; i++) {
+                                new_indices[i] = Z_@@MACRO@@_INDEX_EMPTY;
+                            }
+                            z_@@NAME@@_entry_t* new_entries = (z_@@NAME@@_entry_t*)z_xcalloc(new_cap, sizeof(z_@@NAME@@_entry_t));
+                            uint64_t new_entries_len = 0;
+                            for (uint64_t i = 0; i < old_entries_len; i++) {
+                                if (!old_entries[i].alive) continue;
+                                new_entries[new_entries_len] = old_entries[i];
+                                uint64_t probe = old_entries[i].hash & (new_cap - 1);
+                                while (new_indices[probe] != Z_@@MACRO@@_INDEX_EMPTY) {
+                                    probe = (probe + 1) & (new_cap - 1);
+                                }
+                                new_indices[probe] = (int64_t)new_entries_len;
+                                new_entries_len++;
+                            }
+                            free(_this->indices);
+                            free(old_entries);
+                            _this->indices = new_indices;
+                            _this->entries = new_entries;
+                            _this->capacity = new_cap;
+                            _this->entries_cap = new_cap;
+                            _this->entries_len = new_entries_len;
+                        }
+                        """
+                )
+                (
+                    c.section
+                    member: "find"
+                    needs: list { "keys_equal" "index_empty" "index_deleted" }
+                    text: """
+                        static int64_t z_@@NAME@@_find(const z_@@NAME@@_t* _this, @@KEY_ARG_T@@ _key, uint64_t _hash, int64_t* _slot_out);
+                        static int64_t z_@@NAME@@_find(const z_@@NAME@@_t* _this, @@KEY_ARG_T@@ _key, uint64_t _hash, int64_t* _slot_out) {
+                            if (_this->capacity == 0) return -1;
+                            uint64_t probe = _hash & (_this->capacity - 1);
+                            for (uint64_t i = 0; i < _this->capacity; i++) {
+                                int64_t slot = _this->indices[probe];
+                                if (slot == Z_@@MACRO@@_INDEX_EMPTY) {
+                                    if (_slot_out) *_slot_out = (int64_t)probe;
+                                    return -1;
+                                }
+                                if (slot != Z_@@MACRO@@_INDEX_DELETED) {
+                                    if (_this->entries[slot].hash == _hash && z_@@NAME@@_keys_equal(@@KEY_REF@@_this->entries[slot].key, _key)) {
+                                        if (_slot_out) *_slot_out = (int64_t)probe;
+                                        return slot;
+                                    }
+                                }
+                                probe = (probe + 1) & (_this->capacity - 1);
+                            }
+                            return -1;
+                        }
+                        """
+                )
+                (
+                    c.section
+                    member: "set"
+                    needs: list {
+                        "hash_key" "find" "grow" "index_empty" "index_deleted" "prelude.@xrealloc"
+                    }
+                    text: """
+                        static void z_@@NAME@@_set(z_@@NAME@@_t* _this, @@KEY_T@@ _key, @@VAL_T@@ _val);
+                        static void z_@@NAME@@_set(z_@@NAME@@_t* _this, @@KEY_T@@ _key, @@VAL_T@@ _val) {
+                            uint64_t h = z_@@NAME@@_hash_key(@@KEY_REF@@_key);
+                            int64_t existing = z_@@NAME@@_find(_this, @@KEY_REF@@_key, h, NULL);
+                            if (existing >= 0) {
+                        @@FREE_VAL_DUP@@        _this->entries[existing].value = _val;
+                        @@FREE_KEY_DUP@@        return;
+                            }
+                            if (_this->capacity == 0 || (_this->entries_len + 1) * 3 >= _this->capacity * 2) {
+                                z_@@NAME@@_grow(_this);
+                            }
+                            uint64_t probe = h & (_this->capacity - 1);
+                            int64_t first_deleted = -1;
+                            for (uint64_t i = 0; i < _this->capacity; i++) {
+                                int64_t slot = _this->indices[probe];
+                                if (slot == Z_@@MACRO@@_INDEX_EMPTY) {
+                                    if (first_deleted >= 0) probe = (uint64_t)first_deleted;
+                                    break;
+                                }
+                                if (slot == Z_@@MACRO@@_INDEX_DELETED && first_deleted < 0) {
+                                    first_deleted = (int64_t)probe;
+                                }
+                                probe = (probe + 1) & (_this->capacity - 1);
+                            }
+                            if (_this->entries_len >= _this->entries_cap) {
+                                uint64_t new_ec = _this->entries_cap == 0 ? 8 : _this->entries_cap * 2;
+                                _this->entries = (z_@@NAME@@_entry_t*)z_xrealloc(_this->entries, new_ec * sizeof(z_@@NAME@@_entry_t));
+                                for (uint64_t i = _this->entries_cap; i < new_ec; i++) {
+                                    _this->entries[i] = (z_@@NAME@@_entry_t){0};
+                                }
+                                _this->entries_cap = new_ec;
+                            }
+                            int64_t new_idx = (int64_t)_this->entries_len;
+                            _this->entries[new_idx].alive = 1;
+                            _this->entries[new_idx].hash = h;
+                            _this->entries[new_idx].key = _key;
+                            _this->entries[new_idx].value = _val;
+                            _this->entries_len++;
+                            _this->indices[probe] = new_idx;
+                            _this->length++;
+                        }
+                        """
+                )
+                (
+                    c.section
+                    member: "get"
+                    needs: list { "hash_key" "find" }
+                    text: """
+                        static z_@@OPTIONVAL@@_t z_@@NAME@@_get(const z_@@NAME@@_t* _this, @@KEY_ARG_T@@ _key);
+                        static z_@@OPTIONVAL@@_t z_@@NAME@@_get(const z_@@NAME@@_t* _this, @@KEY_ARG_T@@ _key) {
+                            uint64_t h = z_@@NAME@@_hash_key(_key);
+                            int64_t idx = z_@@NAME@@_find(_this, _key, h, NULL);
+                        @@GET_BODY@@
+                        }
+                        """
+                )
+                (
+                    c.section
+                    member: "remove"
+                    needs: list { "hash_key" "find" }
+                    text: """
+                        static z_@@REMOVE_WRAP@@_t z_@@NAME@@_remove(z_@@NAME@@_t* _this, @@KEY_ARG_T@@ _key);
+                        static z_@@REMOVE_WRAP@@_t z_@@NAME@@_remove(z_@@NAME@@_t* _this, @@KEY_ARG_T@@ _key) {
+                            uint64_t h = z_@@NAME@@_hash_key(_key);
+                            int64_t slot = -1;
+                            int64_t idx = z_@@NAME@@_find(_this, _key, h, &slot);
+                        @@REMOVE_BODY@@
+                        }
+                        """
+                )
+                (
+                    c.section
+                    member: "has"
+                    needs: list { "hash_key" "find" }
+                    text: """
+                        static int z_@@NAME@@_has(const z_@@NAME@@_t* _this, @@KEY_ARG_T@@ _key);
+                        static int z_@@NAME@@_has(const z_@@NAME@@_t* _this, @@KEY_ARG_T@@ _key) {
+                            uint64_t h = z_@@NAME@@_hash_key(_key);
+                            return z_@@NAME@@_find(_this, _key, h, NULL) >= 0;
+                        }
+                        """
+                )
+            }
+        )
+        (
+            c.template
+            name: "MapIter"
+            sections: list {
+                (
+                    c.section
+                    member: "iterate"
+                    text: """
+                        typedef struct {
+                            z_@@NAME@@_t* m;
+                            uint64_t idx;
+                        } z_@@MAPKEYITER@@_t;
+
+                        static z_@@OPTIONVIEW_K@@_t z_@@MAPKEYITER@@_call(z_@@MAPKEYITER@@_t* _it);
+                        static z_@@OPTIONVIEW_K@@_t z_@@MAPKEYITER@@_call(z_@@MAPKEYITER@@_t* _it) {
+                            z_@@OPTIONVIEW_K@@_t _out = {0};
+                            while (_it->idx < _it->m->entries_len) {
+                                if (_it->m->entries[_it->idx].alive) {
+                                    _out.tag = @@OPTIONVIEW_K_SOME@@;
+                                    _out.data = &_it->m->entries[_it->idx].key;
+                                    _it->idx++;
+                                    return _out;
+                                }
+                                _it->idx++;
+                            }
+                            _out.tag = @@OPTIONVIEW_K_NONE@@;
+                            return _out;
+                        }
+
+                        static z_@@MAPKEYITER@@_t z_@@NAME@@_iterate(const z_@@NAME@@_t* _this);
+                        static z_@@MAPKEYITER@@_t z_@@NAME@@_iterate(const z_@@NAME@@_t* _this) {
+                            z_@@MAPKEYITER@@_t _it = {0};
+                            /* The cursor keeps a plain T* and OptionView's payload is a single void*, shared
+                           with the readers that hand out a mutable interior pointer on purpose
+                           (List.get's write-back), so const cannot propagate that far without breaking
+                           them. This ONE cast is where it stops. What the const receiver buys is still
+                           real and is what view-guard checks: `iterate` itself provably does not write
+                           through the container. That the ELEMENTS are readonly is a typecheck-level
+                           guarantee -- the loop element inherits the strength of the lock its holder
+                           has on the container -- not a C one. */
+                            _it.m = (z_@@NAME@@_t*)_this;
+                            _it.idx = 0;
+                            return _it;
+                        }
+
+                        """
+                )
+                (c.section text: "")
+                (
+                    c.section
+                    member: "iterateItems"
+                    text: """
+                        /*@@entrytype@@*/typedef z_@@NAME@@_entry_t z_@@MAPENTRY@@_t;
+
+                        typedef struct {
+                            z_@@NAME@@_t* m;
+                            uint64_t idx;
+                        } z_@@MAPITEMITER@@_t;
+
+                        static z_@@OPTIONVIEW_ENTRY@@_t z_@@MAPITEMITER@@_call(z_@@MAPITEMITER@@_t* _it);
+                        static z_@@OPTIONVIEW_ENTRY@@_t z_@@MAPITEMITER@@_call(z_@@MAPITEMITER@@_t* _it) {
+                            z_@@OPTIONVIEW_ENTRY@@_t _out = {0};
+                            while (_it->idx < _it->m->entries_len) {
+                                if (_it->m->entries[_it->idx].alive) {
+                                    _out.tag = @@OPTIONVIEW_ENTRY_SOME@@;
+                                    _out.data = &_it->m->entries[_it->idx];
+                                    _it->idx++;
+                                    return _out;
+                                }
+                                _it->idx++;
+                            }
+                            _out.tag = @@OPTIONVIEW_ENTRY_NONE@@;
+                            return _out;
+                        }
+
+                        static z_@@MAPITEMITER@@_t z_@@NAME@@_iterateItems(z_@@NAME@@_t* _this);
+                        static z_@@MAPITEMITER@@_t z_@@NAME@@_iterateItems(z_@@NAME@@_t* _this) {
+                            z_@@MAPITEMITER@@_t _it = {0};
+                            _it.m = _this;
+                            _it.idx = 0;
+                            return _it;
+                        }
+                        """
+                )
+            }
+        )
+        (
+            c.template
+            name: "MapMut"
+            sections: list {
+                (
+                    c.section
+                    text: """
+                        /* getMut hands back a pointer INTO the entry's value, so an update writes the
+                           entry in place instead of going through `set`. Only the value is reached:
+                           the key, whose hash places the entry, stays behind the map. One emitted
+                           function for both value families: what differs is the declared return
+                           (OptionMut over a reference, OptionMutVal over a value), as IdMap's
+                           getMut is shared between IdMapR and IdMapV.
+
+                           Its own file, for the reason z_IdMapMut.c.tmpl is separate: a mono whose
+                           `getMut` never resolved must still emit its container, and a template read
+                           by a seed that cannot fill its holes writes them into the C verbatim. */
+
+                        static z_@@OPTIONMUT_V@@_t z_@@NAME@@_getMut(z_@@NAME@@_t* _this, @@KEY_ARG_T@@ _key);
+                        static z_@@OPTIONMUT_V@@_t z_@@NAME@@_getMut(z_@@NAME@@_t* _this, @@KEY_ARG_T@@ _key) {
+                            z_@@OPTIONMUT_V@@_t _r = {0};
+                            uint64_t h = z_@@NAME@@_hash_key(_key);
+                            int64_t idx = z_@@NAME@@_find(_this, _key, h, NULL);
+                            if (idx >= 0) {
+                                _r.tag = @@OPTIONMUT_V_SOME@@;
+                                _r.data = &_this->entries[idx].value;
+                            } else {
+                                _r.tag = @@OPTIONMUT_V_NONE@@;
+                                _r.data = NULL;
+                            }
+                            return _r;
+                        }
+                        """
+                )
+            }
+        )
+        (
+            c.template
+            name: "Set"
+            sections: list {
+                (c.section member: "index_empty" text: "#define Z_@@MACRO@@_INDEX_EMPTY (-1)")
+                (c.section member: "index_deleted" text: "#define Z_@@MACRO@@_INDEX_DELETED (-2)")
+                (
+                    c.section
+                    text: """
+
+                        typedef struct {
+                            uint8_t alive;
+                            uint64_t hash;
+                            @@ITEM_T@@ item;
+                        } z_@@NAME@@_entry_t;
+
+                        typedef struct z_@@NAME@@_t {
+                            uint64_t capacity;
+                            uint64_t length;
+                            uint64_t entries_len;
+                            uint64_t entries_cap;
+                            int64_t* indices;
+                            z_@@NAME@@_entry_t* entries;
+                        } z_@@NAME@@_t;
+
+                        """
+                )
+                (
+                    c.section
+                    member: "hash_item"
+                    text: """
+                        static uint64_t z_@@NAME@@_hash_item(@@ITEM_ARG_T@@ _key);
+                        static uint64_t z_@@NAME@@_hash_item(@@ITEM_ARG_T@@ _key) {
+                            return @@HASH_BODY@@;
+                        }
+                        """
+                )
+                (
+                    c.section
+                    member: "items_equal"
+                    text: """
+                        static int z_@@NAME@@_items_equal(@@ITEM_ARG_T@@ _a, @@ITEM_ARG_T@@ _b);
+                        static int z_@@NAME@@_items_equal(@@ITEM_ARG_T@@ _a, @@ITEM_ARG_T@@ _b) {
+                            return @@EQ_BODY@@;
+                        }
+                        """
+                )
+                (
+                    c.section
+                    member: "destroy"
+                    text: """
+                        static void z_@@NAME@@_destroy(z_@@NAME@@_t* p);
+                        static void z_@@NAME@@_destroy(z_@@NAME@@_t* p) {
+                            if (!p) return;
+                        @@DESTROY_ITEMS@@    free(p->indices);
+                            free(p->entries);
+                            free(p);
+                        }
+                        """
+                )
+                (
+                    c.section
+                    member: "create"
+                    needs: list { "index_empty" "prelude.@xcalloc" "prelude.@xmalloc" }
+                    text: """
+                        static z_@@NAME@@_t* z_@@NAME@@_create(uint64_t _capacity);
+                        static z_@@NAME@@_t* z_@@NAME@@_create(uint64_t _capacity) {
+                            z_@@NAME@@_t* _this = (z_@@NAME@@_t*)z_xmalloc(sizeof(z_@@NAME@@_t));
+                            *_this = (z_@@NAME@@_t){0};
+                            if (_capacity < 8) _capacity = 0;
+                            /* probing masks with (capacity - 1): round any caller capacity up to
+                               a power of two */
+                            if (_capacity & (_capacity - 1)) {
+                                uint64_t _p2 = 8;
+                                while (_p2 < _capacity) _p2 <<= 1;
+                                _capacity = _p2;
+                            }
+                            _this->capacity = _capacity;
+                            _this->entries_cap = _capacity;
+                            if (_capacity > 0) {
+                                _this->indices = (int64_t*)z_xmalloc(_capacity * sizeof(int64_t));
+                                for (uint64_t i = 0; i < _capacity; i++) {
+                                    _this->indices[i] = Z_@@MACRO@@_INDEX_EMPTY;
+                                }
+                                _this->entries = (z_@@NAME@@_entry_t*)z_xcalloc(_capacity, sizeof(z_@@NAME@@_entry_t));
+                            }
+                            return _this;
+                        }
+                        """
+                )
+                (
+                    c.section
+                    member: "grow"
+                    needs: list { "index_empty" "prelude.@xcalloc" "prelude.@xmalloc" }
+                    text: """
+                        static void z_@@NAME@@_grow(z_@@NAME@@_t* _this);
+                        static void z_@@NAME@@_grow(z_@@NAME@@_t* _this) {
+                            uint64_t old_cap = _this->capacity;
+                            uint64_t new_cap = old_cap == 0 ? 8 : old_cap * 2;
+                            z_@@NAME@@_entry_t* old_entries = _this->entries;
+                            uint64_t old_entries_len = _this->entries_len;
+                            int64_t* new_indices = (int64_t*)z_xmalloc(new_cap * sizeof(int64_t));
+                            for (uint64_t i = 0; i < new_cap; i++) {
+                                new_indices[i] = Z_@@MACRO@@_INDEX_EMPTY;
+                            }
+                            z_@@NAME@@_entry_t* new_entries = (z_@@NAME@@_entry_t*)z_xcalloc(new_cap, sizeof(z_@@NAME@@_entry_t));
+                            uint64_t new_entries_len = 0;
+                            for (uint64_t i = 0; i < old_entries_len; i++) {
+                                if (!old_entries[i].alive) continue;
+                                new_entries[new_entries_len] = old_entries[i];
+                                uint64_t probe = old_entries[i].hash & (new_cap - 1);
+                                while (new_indices[probe] != Z_@@MACRO@@_INDEX_EMPTY) {
+                                    probe = (probe + 1) & (new_cap - 1);
+                                }
+                                new_indices[probe] = (int64_t)new_entries_len;
+                                new_entries_len++;
+                            }
+                            free(_this->indices);
+                            free(old_entries);
+                            _this->indices = new_indices;
+                            _this->entries = new_entries;
+                            _this->capacity = new_cap;
+                            _this->entries_cap = new_cap;
+                            _this->entries_len = new_entries_len;
+                        }
+                        """
+                )
+                (
+                    c.section
+                    member: "find"
+                    needs: list { "items_equal" "index_empty" "index_deleted" }
+                    text: """
+                        static int64_t z_@@NAME@@_find(const z_@@NAME@@_t* _this, @@ITEM_ARG_T@@ _item, uint64_t _hash, int64_t* _slot_out);
+                        static int64_t z_@@NAME@@_find(const z_@@NAME@@_t* _this, @@ITEM_ARG_T@@ _item, uint64_t _hash, int64_t* _slot_out) {
+                            if (_this->capacity == 0) return -1;
+                            uint64_t probe = _hash & (_this->capacity - 1);
+                            for (uint64_t i = 0; i < _this->capacity; i++) {
+                                int64_t slot = _this->indices[probe];
+                                if (slot == Z_@@MACRO@@_INDEX_EMPTY) {
+                                    if (_slot_out) *_slot_out = (int64_t)probe;
+                                    return -1;
+                                }
+                                if (slot != Z_@@MACRO@@_INDEX_DELETED) {
+                                    if (_this->entries[slot].hash == _hash && z_@@NAME@@_items_equal(@@ITEM_REF@@_this->entries[slot].item, _item)) {
+                                        if (_slot_out) *_slot_out = (int64_t)probe;
+                                        return slot;
+                                    }
+                                }
+                                probe = (probe + 1) & (_this->capacity - 1);
+                            }
+                            return -1;
+                        }
+                        """
+                )
+                (
+                    c.section
+                    member: "add"
+                    needs: list {
+                        "hash_item" "find" "grow" "index_empty" "index_deleted" "prelude.@xrealloc"
+                    }
+                    text: """
+                        static int z_@@NAME@@_add(z_@@NAME@@_t* _this, @@ITEM_T@@ _item);
+                        static int z_@@NAME@@_add(z_@@NAME@@_t* _this, @@ITEM_T@@ _item) {
+                            uint64_t h = z_@@NAME@@_hash_item(@@ITEM_REF@@_item);
+                            int64_t existing = z_@@NAME@@_find(_this, @@ITEM_REF@@_item, h, NULL);
+                            if (existing >= 0) {
+                        @@FREE_ITEM_DUP@@        return 0;
+                            }
+                            if (_this->capacity == 0 || (_this->entries_len + 1) * 3 >= _this->capacity * 2) {
+                                z_@@NAME@@_grow(_this);
+                            }
+                            uint64_t probe = h & (_this->capacity - 1);
+                            int64_t first_deleted = -1;
+                            for (uint64_t i = 0; i < _this->capacity; i++) {
+                                int64_t slot = _this->indices[probe];
+                                if (slot == Z_@@MACRO@@_INDEX_EMPTY) {
+                                    if (first_deleted >= 0) probe = (uint64_t)first_deleted;
+                                    break;
+                                }
+                                if (slot == Z_@@MACRO@@_INDEX_DELETED && first_deleted < 0) {
+                                    first_deleted = (int64_t)probe;
+                                }
+                                probe = (probe + 1) & (_this->capacity - 1);
+                            }
+                            if (_this->entries_len >= _this->entries_cap) {
+                                uint64_t new_ec = _this->entries_cap == 0 ? 8 : _this->entries_cap * 2;
+                                _this->entries = (z_@@NAME@@_entry_t*)z_xrealloc(_this->entries, new_ec * sizeof(z_@@NAME@@_entry_t));
+                                for (uint64_t i = _this->entries_cap; i < new_ec; i++) {
+                                    _this->entries[i] = (z_@@NAME@@_entry_t){0};
+                                }
+                                _this->entries_cap = new_ec;
+                            }
+                            int64_t new_idx = (int64_t)_this->entries_len;
+                            _this->entries[new_idx].alive = 1;
+                            _this->entries[new_idx].hash = h;
+                            _this->entries[new_idx].item = _item;
+                            _this->entries_len++;
+                            _this->indices[probe] = new_idx;
+                            _this->length++;
+                            return 1;
+                        }
+                        """
+                )
+                (
+                    c.section
+                    member: "has"
+                    needs: list { "hash_item" "find" }
+                    text: """
+                        static int z_@@NAME@@_has(const z_@@NAME@@_t* _this, @@ITEM_ARG_T@@ _item);
+                        static int z_@@NAME@@_has(const z_@@NAME@@_t* _this, @@ITEM_ARG_T@@ _item) {
+                            uint64_t h = z_@@NAME@@_hash_item(_item);
+                            return z_@@NAME@@_find(_this, _item, h, NULL) >= 0;
+                        }
+                        """
+                )
+                (
+                    c.section
+                    member: "delete"
+                    needs: list { "hash_item" "find" "index_deleted" }
+                    text: """
+                        static int z_@@NAME@@_delete(z_@@NAME@@_t* _this, @@ITEM_ARG_T@@ _item);
+                        static int z_@@NAME@@_delete(z_@@NAME@@_t* _this, @@ITEM_ARG_T@@ _item) {
+                            uint64_t h = z_@@NAME@@_hash_item(_item);
+                            int64_t slot = -1;
+                            int64_t idx = z_@@NAME@@_find(_this, _item, h, &slot);
+                            if (idx < 0) return 0;
+                        @@FREE_ITEM_DEL@@    _this->entries[idx].alive = 0;
+                            _this->indices[slot] = Z_@@MACRO@@_INDEX_DELETED;
+                            _this->length--;
+                            return 1;
+                        }
+                        """
+                )
+                (
+                    c.section
+                    member: "iterate"
+                    text: """
+                        typedef struct {
+                            z_@@NAME@@_t* s;
+                            uint64_t idx;
+                        } z_@@SETITER@@_t;
+
+                        static z_@@OPTIONVIEW@@_t z_@@SETITER@@_call(z_@@SETITER@@_t* _it);
+                        static z_@@OPTIONVIEW@@_t z_@@SETITER@@_call(z_@@SETITER@@_t* _it) {
+                            z_@@OPTIONVIEW@@_t _out = {0};
+                            while (_it->idx < _it->s->entries_len) {
+                                if (_it->s->entries[_it->idx].alive) {
+                                    _out.tag = @@OPTIONVIEW_SOME@@;
+                                    _out.data = &_it->s->entries[_it->idx].item;
+                                    _it->idx++;
+                                    return _out;
+                                }
+                                _it->idx++;
+                            }
+                            _out.tag = @@OPTIONVIEW_NONE@@;
+                            return _out;
+                        }
+
+                        static z_@@SETITER@@_t z_@@NAME@@_iterate(const z_@@NAME@@_t* _this);
+                        static z_@@SETITER@@_t z_@@NAME@@_iterate(const z_@@NAME@@_t* _this) {
+                            z_@@SETITER@@_t _it = {0};
+                            /* The cursor keeps a plain T* and OptionView's payload is a single void*, shared
+                           with the readers that hand out a mutable interior pointer on purpose
+                           (List.get's write-back), so const cannot propagate that far without breaking
+                           them. This ONE cast is where it stops. What the const receiver buys is still
+                           real and is what view-guard checks: `iterate` itself provably does not write
+                           through the container. That the ELEMENTS are readonly is a typecheck-level
+                           guarantee -- the loop element inherits the strength of the lock its holder
+                           has on the container -- not a C one. */
+                            _it.s = (z_@@NAME@@_t*)_this;
+                            _it.idx = 0;
+                            return _it;
+                        }
+                        """
+                )
+            }
+        )
+        (
+            c.template
+            name: "SpanVal_clear"
+            sections: list {
+                (
+                    c.section
+                    text: """
+                        static void z_@@NAME@@_clear(z_@@NAME@@_t* _this);
+                        static void z_@@NAME@@_clear(z_@@NAME@@_t* _this) {
+                            if (_this->length > 0) memset(_this->data, 0, _this->length * sizeof(@@ELEM_T@@));
+                        }
+                        """
+                )
+            }
+        )
+        (
+            c.template
+            name: "SpanVal_fill"
+            sections: list {
+                (
+                    c.section
+                    text: """
+                        static void z_@@NAME@@_fill(z_@@NAME@@_t* _this, @@ELEM_T@@ _val);
+                        static void z_@@NAME@@_fill(z_@@NAME@@_t* _this, @@ELEM_T@@ _val) {
+                            for (uint64_t _i = 0; _i < _this->length; _i++) _this->data[_i] = _val;
+                        }
+                        """
+                )
+            }
+        )
+        (
+            c.template
+            name: "SpanVal_set"
+            needs: list { "prelude.@panic" }
+            sections: list {
+                (
+                    c.section
+                    text: """
+                        static @@ELEM_T@@ z_@@NAME@@_set(z_@@NAME@@_t* _this, uint64_t _idx, @@ELEM_T@@ _val);
+                        static @@ELEM_T@@ z_@@NAME@@_set(z_@@NAME@@_t* _this, uint64_t _idx, @@ELEM_T@@ _val) {
+                            if (_idx >= _this->length) {
+                                char _zp_buf[96];
+                                snprintf(_zp_buf, sizeof(_zp_buf), "SpanVal set: index %llu out of bounds (length %llu)", (unsigned long long)_idx, (unsigned long long)_this->length);
+                                z_panic(_zp_buf);
+                            }
+                            @@ELEM_T@@ _old = _this->data[_idx];
+                            _this->data[_idx] = _val;
+                            return _old;
+                        }
+                        """
+                )
+            }
+        )
+        (
+            c.template
+            name: "SpanVal_slice"
+            needs: list { "prelude.@panic" }
+            sections: list {
+                (
+                    c.section
+                    text: """
+                        static z_@@NAME@@_t z_@@NAME@@_slice(z_@@NAME@@_t* _this, uint64_t _from, uint64_t _to);
+                        static z_@@NAME@@_t z_@@NAME@@_slice(z_@@NAME@@_t* _this, uint64_t _from, uint64_t _to) {
+                            if (_from > _to || _to > _this->length) {
+                                char _zp_buf[128];
+                                snprintf(_zp_buf, sizeof(_zp_buf), "SpanVal slice: [%llu, %llu) out of bounds (length %llu)", (unsigned long long)_from, (unsigned long long)_to, (unsigned long long)_this->length);
+                                z_panic(_zp_buf);
+                            }
+                            return (z_@@NAME@@_t){ .length = _to - _from, .data = _this->data + _from };
+                        }
+                        """
+                )
+            }
+        )
+        (
+            c.template
+            name: "array"
+            sections: list {
+                (
+                    c.section
+                    text: """
+                        typedef struct z_@@NAME@@_t {
+                            @@ELEM_T@@ data[@@LEN@@];
+                        } z_@@NAME@@_t;
+
+                        """
+                )
+                (c.section member: "length" text: "#define z_@@NAME@@_length @@LEN@@")
+                (
+                    c.section
+                    member: "create"
+                    text: """
+                        static z_@@NAME@@_t z_@@NAME@@_create(void);
+                        static z_@@NAME@@_t z_@@NAME@@_create(void) {
+                        @@CREATE_BODY@@
+                            return _this;
+                        }
+                        """
+                )
+                (
+                    c.section
+                    member: "get"
+                    needs: list { "prelude.@panic" }
+                    text: """
+                        static @@ELEM_T@@ z_@@NAME@@_get(z_@@NAME@@_t _this, uint64_t _idx);
+                        static @@ELEM_T@@ z_@@NAME@@_get(z_@@NAME@@_t _this, uint64_t _idx) {
+                            if (_idx >= @@LEN@@) {
+                                char _zp_buf[96];
+                                snprintf(_zp_buf, sizeof(_zp_buf), "array get: index %llu out of bounds (length @@LEN@@)", (unsigned long long)_idx);
+                                z_panic(_zp_buf);
+                            }
+                            return _this.data[_idx];
+                        }
+                        """
+                )
+                (
+                    c.section
+                    member: "set"
+                    needs: list { "prelude.@panic" }
+                    text: """
+                        static @@ELEM_T@@ z_@@NAME@@_set(z_@@NAME@@_t* _this, uint64_t _idx, @@ELEM_T@@ _val);
+                        static @@ELEM_T@@ z_@@NAME@@_set(z_@@NAME@@_t* _this, uint64_t _idx, @@ELEM_T@@ _val) {
+                            if (_idx >= @@LEN@@) {
+                                char _zp_buf[96];
+                                snprintf(_zp_buf, sizeof(_zp_buf), "array set: index %llu out of bounds (length @@LEN@@)", (unsigned long long)_idx);
+                                z_panic(_zp_buf);
+                            }
+                            @@ELEM_T@@ _old = _this->data[_idx];
+                            _this->data[_idx] = _val;
+                            return _old;
+                        }
+                        """
+                )
+                (
+                    c.section
+                    text: """
+
+                        @@EQ_BODY@@
+                        """
+                )
+            }
+        )
+        (
+            c.template
+            name: "data"
+            sections: list {
+                (
+                    c.section
+                    text: """
+                        typedef struct z_@@NAME@@_t {
+                            uint64_t length;
+                            const @@ELEM_T@@* data;
+                        } z_@@NAME@@_t;
+                        """
+                )
+            }
+        )
+        (
+            c.template
+            name: "dict_copy"
+            needs: list { "prelude.@xcalloc" "prelude.@xmalloc" }
+            sections: list {
+                (
+                    c.section
+                    text: """
+                        /* SetVal.copy / MapVV.copy -- an owned duplicate that shares no storage with
+                           the source. ONE template serves both: z_Set.c.tmpl and z_Map.c.tmpl declare
+                           the identical struct -- capacity, length, entries_len, entries_cap, indices,
+                           entries -- and both name their entry type z_@@NAME@@_entry_t, so nothing
+                           here has to know which family it is emitting for.
+
+                           THE TABLE IS COPIED POSITION FOR POSITION, not rebuilt. Every key and value
+                           is a valtype, so an entry's bytes are the entry; carrying the index across
+                           verbatim preserves the EMPTY and DELETED sentinels, the tombstones
+                           (`alive == 0`) and each entry's stored hash, which is what lets the copy
+                           answer a probe without re-hashing anything. Rebuilding would also lose
+                           insertion order, which the entry array defines.
+
+                           The struct itself is heap-allocated and `destroy` frees it, so the copy
+                           allocates its own -- returning the source's pointer would free it twice. */
+                        static z_@@NAME@@_t* z_@@NAME@@_copy(const z_@@NAME@@_t* _this);
+                        static z_@@NAME@@_t* z_@@NAME@@_copy(const z_@@NAME@@_t* _this) {
+                            z_@@NAME@@_t* _out = (z_@@NAME@@_t*)z_xmalloc(sizeof(z_@@NAME@@_t));
+                            *_out = (z_@@NAME@@_t){0};
+                            if (!_this) return _out;
+                            _out->capacity = _this->capacity;
+                            _out->length = _this->length;
+                            _out->entries_len = _this->entries_len;
+                            _out->entries_cap = _this->entries_cap;
+                            if (_this->capacity > 0 && _this->indices) {
+                                _out->indices = (int64_t*)z_xmalloc((size_t)_this->capacity * sizeof(int64_t));
+                                memcpy(_out->indices, _this->indices, (size_t)_this->capacity * sizeof(int64_t));
+                            }
+                            if (_this->entries_cap > 0 && _this->entries) {
+                                _out->entries = (z_@@NAME@@_entry_t*)z_xcalloc(_this->entries_cap, sizeof(z_@@NAME@@_entry_t));
+                                memcpy(_out->entries, _this->entries, (size_t)_this->entries_cap * sizeof(z_@@NAME@@_entry_t));
+                            }
+                            return _out;
+                        }
+                        """
+                )
+            }
+        )
+        (
+            c.template
+            name: "str"
+            sections: list {
+                (
+                    c.section
+                    text: """
+                        typedef struct {
+                            @@LEN_T@@ len;
+                            char data[@@CAP@@];
+                        } z_@@NAME@@_t;
+
+                        """
+                )
+                (c.section member: "size" text: "#define z_@@NAME@@_size @@CAP@@")
+                (
+                    c.section
+                    member: "create"
+                    text: """
+                        static z_@@NAME@@_t z_@@NAME@@_create(void);
+                        static z_@@NAME@@_t z_@@NAME@@_create(void) {
+                            z_@@NAME@@_t _this = {0};
+                            return _this;
+                        }
+                        """
+                )
+                (
+                    c.section
+                    member: "string"
+                    needs: list { "prelude.@xmalloc" }
+                    text: """
+                        static z_@String@_t z_@@NAME@@_string(z_@@NAME@@_t _this);
+                        static z_@String@_t z_@@NAME@@_string(z_@@NAME@@_t _this) {
+                            z_@String@_t z = {0};
+                            z.size = _this.len;
+                            z.capacity = _this.len + 1;
+                            z.data = (char*)z_xmalloc(z.capacity + 1);
+                            memcpy(z.data, _this.data, _this.len);
+                            z.data[_this.len] = '\0';
+                            return z;
+                        }
+                        """
+                )
+                (
+                    c.section
+                    member: "to"
+                    text: """
+                        static z_@@NAME@@_t z_@String@_to_@@NAME@@(const char* data, uint64_t len);
+                        static z_@@NAME@@_t z_@String@_to_@@NAME@@(const char* data, uint64_t len) {
+                            z_@@NAME@@_t r = {0};
+                            uint64_t n = len < @@CAP@@ ? len : @@CAP@@;
+                            r.len = (@@LEN_T@@)n;
+                            memcpy(r.data, data, n);
+                            return r;
+                        }
+                        """
+                )
+                (
+                    c.section
+                    text: """
+
+                        @@EQ_BODY@@
+                        """
+                )
+            }
+        )
+    }
+)

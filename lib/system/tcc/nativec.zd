@@ -1,0 +1,317 @@
+# nativec -- tcc's C implementation, a runtime.nativec file
+c: runtime.nativec
+
+# implementation -- the C behind tcc's native declarations
+implementation: (
+    c.implementation
+    rows: list {
+        (
+            c.row
+            key: "@helpers"
+            demand: list { "@unit" }
+            needs: list { "prelude.zwin32" "io.@sv_cstr" "prelude.@xmalloc" "prelude.@win_path" }
+            fragments: list {
+                """
+                /* Shared by tcc.available and tcc.compileToExe: the libtcc entry points and
+                   the dlopen (LoadLibraryW on Windows) that finds them.
+
+                   libtcc is LOADED, never linked. That is a licence requirement, not a
+                   preference -- tinycc is LGPL-2.1 inside a permissive tree -- and
+                   `make static-tcc-guard` fails the build if any tcc symbol reaches a
+                   binary. So the names below are strings, resolved at the point of use;
+                   nothing here creates a link-time dependency, and a zc built without a
+                   tcc beside it is a zc that reports 127 rather than one that fails to
+                   start.
+
+                   The library lives in <tccDir> -- libtcc.so, or libtcc.dll on Windows --
+                   the same directory that holds the runtime payload tcc_set_lib_path needs.
+                   One directory, one answer. */
+                #if defined(_WIN32)
+                #define Z_TCC_LIB_FILE "\\libtcc.dll"
+                #else
+                #include <dlfcn.h>
+                #define Z_TCC_LIB_FILE "/libtcc.so"
+                #endif
+                typedef struct TCCState z_tcc_State;
+                typedef void z_tcc_ErrorFunc(void* opaque, const char* msg);
+
+                typedef struct {
+                    void* handle;
+                    z_tcc_State* (*nw)(void);
+                    void (*del)(z_tcc_State*);
+                    void (*set_lib_path)(z_tcc_State*, const char*);
+                    void (*set_error_func)(z_tcc_State*, void*, z_tcc_ErrorFunc*);
+                    int (*set_options)(z_tcc_State*, const char*);
+                    int (*set_output_type)(z_tcc_State*, int);
+                    int (*add_file)(z_tcc_State*, const char*);
+                    int (*add_library)(z_tcc_State*, const char*);
+                    int (*output_file)(z_tcc_State*, const char*);
+                } z_tcc_api_t;
+
+                #define Z_TCC_OUTPUT_EXE 2
+                #define Z_TCC_OUTPUT_OBJ 3
+
+                /* diagnostics go to stderr verbatim, so a program reports the same text
+                   whichever mode built it. */
+                static void z_tcc_on_error(void* opaque, const char* msg) {
+                    (void)opaque;
+                    fprintf(stderr, "%s\n", msg);
+                }
+
+                static char* z_tcc_lib_path(z_@StringView@_t tccDir) {
+                    char* dir = z_sv_to_cstr(tccDir);
+                    size_t n = strlen(dir);
+                    char* p = (char*)z_xmalloc(n + sizeof(Z_TCC_LIB_FILE));
+                    memcpy(p, dir, n);
+                    memcpy(p + n, Z_TCC_LIB_FILE, sizeof(Z_TCC_LIB_FILE));
+                    free(dir);
+                    return p;
+                }
+
+                /* the address of `name` in the loaded library, NULL when it has none */
+                static void* z_tcc_sym(void* handle, const char* name) {
+                #if defined(_WIN32)
+                    /* ISO C has no conversion from a function pointer to void*: the bytes are
+                       copied, which is what dlsym's own result is on the other systems */
+                    FARPROC p = GetProcAddress((HMODULE)handle, name);
+                    void* r;
+                    memcpy(&r, &p, sizeof r);
+                    return r;
+                #else
+                    return dlsym(handle, name);
+                #endif
+                }
+
+                /* 1 when every entry point resolved. A partial load is a failed load: a
+                   libtcc missing one of these is not one this code can drive. */
+                static void z_tcc_close(z_tcc_api_t* a);
+
+                static int z_tcc_open(z_tcc_api_t* a, z_@StringView@_t tccDir) {
+                    memset(a, 0, sizeof(*a));
+                    char* path = z_tcc_lib_path(tccDir);
+                #if defined(_WIN32)
+                    wchar_t* wpath = z_win_path(path, strlen(path));
+                    a->handle = wpath ? (void*)LoadLibraryW(wpath) : NULL;
+                    free(wpath);
+                #else
+                    a->handle = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+                #endif
+                    free(path);
+                    if (!a->handle) return 0;
+                    *(void**)&a->nw = z_tcc_sym(a->handle, "tcc_new");
+                    *(void**)&a->del = z_tcc_sym(a->handle, "tcc_delete");
+                    *(void**)&a->set_lib_path = z_tcc_sym(a->handle, "tcc_set_lib_path");
+                    *(void**)&a->set_error_func = z_tcc_sym(a->handle, "tcc_set_error_func");
+                    *(void**)&a->set_options = z_tcc_sym(a->handle, "tcc_set_options");
+                    *(void**)&a->set_output_type = z_tcc_sym(a->handle, "tcc_set_output_type");
+                    *(void**)&a->add_file = z_tcc_sym(a->handle, "tcc_add_file");
+                    *(void**)&a->add_library = z_tcc_sym(a->handle, "tcc_add_library");
+                    *(void**)&a->output_file = z_tcc_sym(a->handle, "tcc_output_file");
+                    if (a->nw && a->del && a->set_lib_path && a->set_error_func
+                        && a->set_options && a->set_output_type && a->add_file
+                        && a->add_library && a->output_file) {
+                        return 1;
+                    }
+                    z_tcc_close(a);
+                    return 0;
+                }
+
+                static void z_tcc_close(z_tcc_api_t* a) {
+                #if defined(_WIN32)
+                    if (a->handle) FreeLibrary((HMODULE)a->handle);
+                #else
+                    if (a->handle) dlclose(a->handle);
+                #endif
+                    a->handle = NULL;
+                }
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "available"
+            fragments: list {
+                """
+                /* tcc.available -- can libtcc be loaded from `tccDir` and driven from here?
+                   A probe for diagnostics and for a program deciding what to offer; the
+                   build path does NOT consult it, because `--cc-mode inproc` never falls
+                   back and so has nothing to decide. Loads and immediately unloads. */
+                static bool z_tcc_available(z_@StringView@_t tccDir);
+                static bool z_tcc_available(z_@StringView@_t tccDir) {
+                    z_tcc_api_t a;
+                    if (!z_tcc_open(&a, tccDir)) return false;
+                    z_tcc_close(&a);
+                    return true;
+                }
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "compileToExe"
+            needs: list { "io.@sv_cstr" }
+            fragments: list {
+                """
+                /* tcc.compileToExe -- compile `csrc` and link it to the executable `exe`,
+                   in this process, through libtcc loaded from `tccDir`.
+
+                   The result is a file on disk (TCC_OUTPUT_EXE), never a run in memory:
+                   in-process buys the fast COMPILE, and the program still executes as its
+                   own child, so exit codes, signals and the leak corpus are unaffected and
+                   a crashing program cannot take zc down with it.
+
+                   `tccDir` is also handed to tcc_set_lib_path -- tcc's runtime payload is
+                   fixed when tcc is configured, so a relocated one cannot resolve even
+                   stddef.h until it is told. `cflags` is parsed by tcc itself (the same
+                   spelling as the command line); `libs` are the `-l` names the emitted C
+                   declared, with -lm appended the way the spawned path appends it; `objs`
+                   are object files linked in after the source.
+
+                   Returns 0 on success, 1 when tcc rejected the program or the link
+                   failed, and 127 when libtcc could not be loaded -- the code os.spawn
+                   already uses for "could not run the compiler", so the driver reports
+                   both through one path rather than growing a second. */
+                static int32_t z_tcc_compileToExe(
+                    z_@StringView@_t csrc, z_@StringView@_t exe, z_@StringView@_t tccDir,
+                    bool release, z_@StringView@_t cflags, const z_@List_String@_t* libs,
+                    const z_@List_String@_t* objs
+                );
+                static int32_t z_tcc_compileToExe(
+                    z_@StringView@_t csrc, z_@StringView@_t exe, z_@StringView@_t tccDir,
+                    bool release, z_@StringView@_t cflags, const z_@List_String@_t* libs,
+                    const z_@List_String@_t* objs
+                ) {
+                    z_tcc_api_t a;
+                    if (!z_tcc_open(&a, tccDir)) return 127;
+
+                    z_tcc_State* s = a.nw();
+                    if (!s) {
+                        z_tcc_close(&a);
+                        return 127;
+                    }
+                    a.set_error_func(s, NULL, z_tcc_on_error);
+
+                    char* dir_c = z_sv_to_cstr(tccDir);
+                    a.set_lib_path(s, dir_c);
+                    free(dir_c);
+
+                    int32_t rc = 0;
+                    /* -g matches the spawned path's debug default; tcc has one optimisation
+                       level, so --release changes nothing here beyond dropping -g. */
+                    if (!release && a.set_options(s, "-g") == -1) rc = 1;
+
+                    if (rc == 0 && cflags.size > 0) {
+                        char* cf = z_sv_to_cstr(cflags);
+                        if (a.set_options(s, cf) == -1) rc = 1;
+                        free(cf);
+                    }
+                    if (rc == 0 && a.set_output_type(s, Z_TCC_OUTPUT_EXE) == -1) rc = 1;
+
+                    if (rc == 0) {
+                        char* src_c = z_sv_to_cstr(csrc);
+                        if (a.add_file(s, src_c) == -1) rc = 1;
+                        free(src_c);
+                    }
+                    if (rc == 0) {
+                        for (uint64_t i = 0; i < objs->length; i++) {
+                            if (a.add_file(s, objs->data[i].data) == -1) {
+                                rc = 1;
+                                break;
+                            }
+                        }
+                    }
+                    if (rc == 0) {
+                        for (uint64_t i = 0; i < libs->length; i++) {
+                            if (a.add_library(s, libs->data[i].data) == -1) {
+                                rc = 1;
+                                break;
+                            }
+                        }
+                    }
+                #if !defined(_WIN32)
+                    /* Windows has no libm: its math is the C runtime's */
+                    if (rc == 0 && a.add_library(s, "m") == -1) rc = 1;
+                #endif
+
+                    if (rc == 0) {
+                        char* exe_c = z_sv_to_cstr(exe);
+                        if (a.output_file(s, exe_c) == -1) rc = 1;
+                        free(exe_c);
+                    }
+
+                    a.del(s);
+                    z_tcc_close(&a);
+                    return rc;
+                }
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "compileToObject"
+            needs: list { "io.@sv_cstr" }
+            fragments: list {
+                """
+                /* tcc.compileToObject -- compile `csrc` to the object file `obj`, in this
+                   process, through libtcc loaded from `tccDir` (TCC_OUTPUT_OBJ). `cflags` is
+                   parsed by tcc itself, the -D defines among them. Codes as compileToExe's:
+                   0 on success, 1 when tcc rejected the source, 127 when libtcc could not be
+                   loaded. */
+                static int32_t z_tcc_compileToObject(
+                    z_@StringView@_t csrc, z_@StringView@_t obj, z_@StringView@_t tccDir,
+                    z_@StringView@_t cflags
+                );
+                static int32_t z_tcc_compileToObject(
+                    z_@StringView@_t csrc, z_@StringView@_t obj, z_@StringView@_t tccDir,
+                    z_@StringView@_t cflags
+                ) {
+                    z_tcc_api_t a;
+                    if (!z_tcc_open(&a, tccDir)) return 127;
+
+                    z_tcc_State* s = a.nw();
+                    if (!s) {
+                        z_tcc_close(&a);
+                        return 127;
+                    }
+                    a.set_error_func(s, NULL, z_tcc_on_error);
+
+                    char* dir_c = z_sv_to_cstr(tccDir);
+                    a.set_lib_path(s, dir_c);
+                    free(dir_c);
+
+                    int32_t rc = 0;
+                    if (cflags.size > 0) {
+                        char* cf = z_sv_to_cstr(cflags);
+                        if (a.set_options(s, cf) == -1) rc = 1;
+                        free(cf);
+                    }
+                    if (rc == 0 && a.set_output_type(s, Z_TCC_OUTPUT_OBJ) == -1) rc = 1;
+                    if (rc == 0) {
+                        char* src_c = z_sv_to_cstr(csrc);
+                        if (a.add_file(s, src_c) == -1) rc = 1;
+                        free(src_c);
+                    }
+                    if (rc == 0) {
+                        char* obj_c = z_sv_to_cstr(obj);
+                        if (a.output_file(s, obj_c) == -1) rc = 1;
+                        free(obj_c);
+                    }
+
+                    a.del(s);
+                    z_tcc_close(&a);
+                    return rc;
+                }
+
+                """
+            }
+        )
+    }
+    links: list {
+        # tcc -- the shared helpers, then the convention loads. The loader's dlopen
+        # needs libdl on POSIX; on Windows it is LoadLibraryW, through the Win32 layer.
+        (c.link library: "dl" os: list { c.os.linux c.os.darwin c.os.other })
+    }
+)

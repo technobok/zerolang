@@ -1,0 +1,240 @@
+# nativec -- thread's C implementation, a runtime.nativec file
+c: runtime.nativec
+
+# implementation -- the C behind thread's native declarations
+implementation: (
+    c.implementation
+    rows: list {
+        (c.row key: "JoinHandle.@class" template: "JoinHandle" needs: list { "prelude.zthread" })
+        (c.row key: "JoinHandle.join")
+        (c.row key: "JoinHandle.isFinished")
+        (c.row key: "JoinHandle.id")
+        (c.row key: "JoinHandle.detach")
+        (c.row key: "JoinHandle.create")
+        (c.row key: "JoinHandleVal.@class" template: "JoinHandle" needs: list { "prelude.zthread" })
+        (c.row key: "JoinHandleVal.join")
+        (c.row key: "JoinHandleVal.isFinished")
+        (c.row key: "JoinHandleVal.id")
+        (c.row key: "JoinHandleVal.detach")
+        (c.row key: "JoinHandleVal.create")
+        (c.row key: "spawn" via: "create")
+        (c.row key: "spawnVal" via: "create")
+        (
+            c.row
+            key: "yieldNow"
+            needs: list { "prelude.zthread" "prelude.@thread_yield" }
+            fragments: list {
+                """
+                /* thread.yieldNow -- give the CPU to another runnable thread */
+                static void z_thread_yieldNow(void);
+                static void z_thread_yieldNow(void) {
+                    z_thread_yield();
+                }
+                """
+            }
+        )
+        (
+            c.row
+            key: "running"
+            needs: list { "prelude.zthread" "prelude.@thread_live" }
+            fragments: list {
+                """
+                /* thread.running -- threads the program started that have not finished. A
+                   thread leaves the count after its task is destroyed and its block freed */
+                static int64_t z_thread_running(void);
+                static int64_t z_thread_running(void) {
+                    return z_thread_live();
+                }
+                """
+            }
+        )
+    }
+    links: list {
+        # thread -- a JoinHandle per result type, and its value twin, from one
+        # template; the shim's threads need pthread at the link. A program that only
+        # names the unit's markers (a sqlite type is `thread.Unshareable`) starts no
+        # thread and links nothing for it.
+        (c.link library: "pthread" fact: "threaded" os: list { c.os.linux c.os.darwin c.os.other })
+    }
+    templates: list {
+        (
+            c.template
+            name: "JoinHandle"
+            needs: list { "prelude.@atomic" "prelude.@thread_t" }
+            sections: list {
+                (
+                    c.section
+                    text: """
+                        /* JoinHandle / JoinHandleVal -- one started thread and the result its task
+                           answers (thread.z), one copy per result type; one template serves both
+                           classes through positional holes. The task arrives boxed as a Task value: its
+                           vtable calls it, and destroying the box destroys it -- on the thread, as soon
+                           as `call` returns -- so the handle's type names the result alone. The result
+                           lives in a heap block whose address does not move while the thread runs; the
+                           handle is a pointer to it. A task answering nothing (R is null) stores
+                           nothing. `join` waits and moves the result out; destroy joins a thread nobody
+                           joined, then destroys a result nobody took. `detach` hands the block to the
+                           thread: of the thread finishing and the handle letting go, whichever comes
+                           second (one atomic `done` decides) destroys the result and frees the block. */
+
+                        typedef struct z_@@NAME@@_blk {
+                            z_@@ARG.create.task@@_t task;
+                            @@P0@@ result;
+                            z_thread_t th;
+                            Z_ATOMIC(int) finished;
+                            Z_ATOMIC(int) done;
+                            Z_ATOMIC(uint64_t) tid;
+                            bool joined;
+                            bool taken;
+                        } z_@@NAME@@_blk;
+
+                        typedef struct z_@@NAME@@_t {
+                            z_@@NAME@@_blk* b;
+                        } z_@@NAME@@_t;
+
+                        """
+                )
+                (
+                    c.section
+                    member: "run"
+                    needs: list {
+                        "prelude.@acqrel" "prelude.@atomic_add" "prelude.@atomic_store"
+                        "prelude.@release" "prelude.@thread_self_id"
+                    }
+                    text: """
+                        static void z_@@NAME@@_run(void* p) {
+                            z_@@NAME@@_blk* b = (z_@@NAME@@_blk*)p;
+                            Z_ATOMIC_STORE(&b->tid, z_thread_self_id(), Z_RELEASE);
+                            /* a task answering nothing stores nothing */
+                        #if @@P0_NULL@@
+                            (void)b->task.vtable->@@SLOT.create.task.call@@(b->task.data);
+                        #else
+                            b->result = b->task.vtable->@@SLOT.create.task.call@@(b->task.data);
+                        #endif
+                            z_@@ARG.create.task@@_destroy(&b->task);
+                            Z_ATOMIC_STORE(&b->finished, 1, Z_RELEASE);
+                            /* detached first: the handle let go, so the thread cleans up */
+                            if (Z_ATOMIC_ADD(&b->done, 1, Z_ACQREL) == 1) {
+                                @@P0_DESTROY@@(&b->result);
+                                free(b);
+                            }
+                        }
+                        """
+                )
+                (c.section text: "")
+                (
+                    c.section
+                    member: "create"
+                    needs: list { "run" "prelude.@thread_start" }
+                    text: """
+                        static z_@@NAME@@_t z_@@NAME@@_create(z_@@ARG.create.task@@_t task, @@StringView@@_t name, uint64_t stackSize) {
+                            z_@@NAME@@_t h;
+                            h.b = (z_@@NAME@@_blk*)z_xmalloc(sizeof(z_@@NAME@@_blk));
+                            memset(h.b, 0, sizeof(z_@@NAME@@_blk));
+                            h.b->task = task;
+                            char nm[16];
+                            size_t n = name.size < 15 ? (size_t)name.size : 15;
+                            memcpy(nm, name.data, n);
+                            nm[n] = 0;
+                            if (z_thread_start(&h.b->th, z_@@NAME@@_run, h.b, stackSize, nm) != 0) {
+                                z_panic("thread.spawn: the operating system could not start a thread");
+                            }
+                            return h;
+                        }
+                        """
+                )
+                (c.section text: "")
+                (
+                    c.section
+                    member: "wait"
+                    needs: list {
+                        "prelude.@atomic_store" "prelude.@release" "prelude.@thread_join"
+                        "prelude.@panic"
+                    }
+                    text: """
+                        static void z_@@NAME@@_wait(z_@@NAME@@_blk* b) {
+                            if (b->joined) return;
+                            if (z_thread_join(&b->th) != 0) z_panic("thread: join failed");
+                            b->joined = true;
+                            Z_ATOMIC_STORE(&b->tid, 0, Z_RELEASE);
+                        }
+                        """
+                )
+                (c.section text: "")
+                (
+                    c.section
+                    member: "join"
+                    needs: list { "wait" "prelude.@panic" }
+                    text: """
+                        /* the result, moved out: destroy then leaves it to its new owner */
+                        static @@P0@@ z_@@NAME@@_join(z_@@NAME@@_t* h) {
+                            z_@@NAME@@_wait(h->b);
+                            if (h->b->taken) z_panic("thread: join called twice on one handle");
+                            h->b->taken = true;
+                            return h->b->result;
+                        }
+                        """
+                )
+                (c.section text: "")
+                (
+                    c.section
+                    member: "isFinished"
+                    needs: list { "prelude.@acquire" "prelude.@atomic_load" }
+                    text: """
+                        static bool z_@@NAME@@_isFinished(const z_@@NAME@@_t* h) {
+                            return Z_ATOMIC_LOAD(&h->b->finished, Z_ACQUIRE) != 0;
+                        }
+                        """
+                )
+                (c.section text: "")
+                (
+                    c.section
+                    member: "id"
+                    needs: list { "prelude.@acquire" "prelude.@atomic_load" }
+                    text: """
+                        static uint64_t z_@@NAME@@_id(const z_@@NAME@@_t* h) {
+                            return Z_ATOMIC_LOAD(&h->b->tid, Z_ACQUIRE);
+                        }
+                        """
+                )
+                (c.section text: "")
+                (
+                    c.section
+                    member: "detach"
+                    needs: list {
+                        "prelude.@acqrel" "prelude.@atomic_add" "prelude.@thread_detach"
+                        "prelude.@panic"
+                    }
+                    text: """
+                        /* let the thread run on its own: it destroys the result and frees the block
+                           when it finishes, or this does now if it already has */
+                        static void z_@@NAME@@_detach(z_@@NAME@@_t* h) {
+                            z_@@NAME@@_blk* b = h->b;
+                            h->b = NULL;
+                            if (z_thread_detach(&b->th) != 0) z_panic("thread: detach failed");
+                            if (Z_ATOMIC_ADD(&b->done, 1, Z_ACQREL) == 1) {
+                                @@P0_DESTROY@@(&b->result);
+                                free(b);
+                            }
+                        }
+                        """
+                )
+                (c.section text: "")
+                (
+                    c.section
+                    member: "destroy"
+                    needs: list { "wait" }
+                    text: """
+                        static void z_@@NAME@@_destroy(z_@@NAME@@_t* h) {
+                            if (h->b == NULL) return;
+                            z_@@NAME@@_wait(h->b);
+                            if (!h->b->taken) @@P0_DESTROY@@(&h->b->result);
+                            free(h->b);
+                            h->b = NULL;
+                        }
+                        """
+                )
+            }
+        )
+    }
+)

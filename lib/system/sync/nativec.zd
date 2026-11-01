@@ -1,0 +1,1263 @@
+# nativec -- sync's C implementation, a runtime.nativec file
+c: runtime.nativec
+
+# implementation -- the C behind sync's native declarations
+implementation: (
+    c.implementation
+    rows: list {
+        # memoryorder to the C11 order, for every atomic's template
+        (
+            c.row
+            key: "@memory_order"
+            needs: list {
+                "prelude.zthread" "prelude.@acqrel" "prelude.@acquire" "prelude.@relaxed"
+                "prelude.@release" "prelude.@seqcst" "prelude.@order_t"
+            }
+            fragments: list {
+                """
+                /* sync.memoryorder -- the C11 order an atomic operation takes. */
+                static z_order_t z_sync_order(z_@memoryorder@_t o);
+                static z_order_t z_sync_order(z_@memoryorder@_t o) {
+                    switch (o@TAG_memoryorder@) {
+                        case @ARM_memoryorder.relaxed@: return Z_RELAXED;
+                        case @ARM_memoryorder.acquire@: return Z_ACQUIRE;
+                        case @ARM_memoryorder.release@: return Z_RELEASE;
+                        case @ARM_memoryorder.acqRel@: return Z_ACQREL;
+                        default: return Z_SEQCST;
+                    }
+                }
+                """
+            }
+        )
+        # the checks a load, a store and a failed compare-exchange add, each named by
+        # the atomic section that calls it
+        (
+            c.row
+            key: "@load_order"
+            demand: list { "@load_order" }
+            needs: list { "memory_order" "prelude.@panic" }
+            fragments: list {
+                """
+                /* a load's order. A load cannot release: that order is a broken program, so
+                   it panics rather than reach C as undefined behaviour. */
+                static z_order_t z_sync_load_order(z_@memoryorder@_t o);
+                static z_order_t z_sync_load_order(z_@memoryorder@_t o) {
+                    z_order_t c = z_sync_order(o);
+                    if (c == Z_RELEASE || c == Z_ACQREL) z_panic("atomic load: a load cannot take release ordering");
+                    return c;
+                }
+                """
+            }
+        )
+        (
+            c.row
+            key: "@store_order"
+            demand: list { "@store_order" }
+            needs: list { "memory_order" "prelude.@panic" }
+            fragments: list {
+                """
+                /* a store's order. A store cannot acquire: that order is a broken program,
+                   so it panics rather than reach C as undefined behaviour. */
+                static z_order_t z_sync_store_order(z_@memoryorder@_t o);
+                static z_order_t z_sync_store_order(z_@memoryorder@_t o) {
+                    z_order_t c = z_sync_order(o);
+                    if (c == Z_ACQUIRE || c == Z_ACQREL) z_panic("atomic store: a store cannot take acquire ordering");
+                    return c;
+                }
+                """
+            }
+        )
+        (
+            c.row
+            key: "@fail_order"
+            demand: list { "@fail_order" }
+            needs: list { "memory_order" }
+            fragments: list {
+                """
+                /* the order a failed compare-exchange takes. It only loads, so it orders as
+                   its order's load half. */
+                static z_order_t z_sync_fail_order(z_@memoryorder@_t o);
+                static z_order_t z_sync_fail_order(z_@memoryorder@_t o) {
+                    z_order_t c = z_sync_order(o);
+                    if (c == Z_RELEASE) return Z_RELAXED;
+                    if (c == Z_ACQREL) return Z_ACQUIRE;
+                    return c;
+                }
+                """
+            }
+        )
+        (
+            c.row
+            key: "Atomic.@class"
+            template: "Atomic"
+            needs: list { "prelude.zthread" "memory_order" }
+        )
+        (c.row key: "Atomic.create")
+        (c.row key: "Atomic.share")
+        (c.row key: "Atomic.load")
+        (c.row key: "Atomic.store")
+        (c.row key: "Atomic.exchange")
+        (c.row key: "Atomic.compareExchange")
+        (c.row key: "Atomic.fetchAdd")
+        (c.row key: "Atomic.fetchSub")
+        (
+            c.row
+            key: "AtomicBool.@class"
+            template: "AtomicBool"
+            needs: list { "prelude.zthread" "memory_order" }
+        )
+        (c.row key: "AtomicBool.create")
+        (c.row key: "AtomicBool.share")
+        (c.row key: "AtomicBool.load")
+        (c.row key: "AtomicBool.store")
+        (c.row key: "AtomicBool.exchange")
+        (c.row key: "AtomicBool.compareExchange")
+        (c.row key: "Mutex.@class" template: "Mutex" needs: list { "prelude.zthread" })
+        (c.row key: "Mutex.create")
+        (c.row key: "Mutex.share")
+        (c.row key: "Mutex.lock")
+        (c.row key: "MutexGuard.@class" template: "MutexGuard" needs: list { "prelude.zthread" })
+        (c.row key: "MutexGuard.value")
+        (c.row key: "MutexGuard.set")
+        (c.row key: "MutexGuard.wait")
+        (c.row key: "MutexGuard.waitTimeout")
+        (c.row key: "RwLock.@class" template: "RwLock" needs: list { "prelude.zthread" })
+        (c.row key: "RwLock.create")
+        (c.row key: "RwLock.share")
+        (c.row key: "RwLock.read")
+        (c.row key: "RwLock.write")
+        (c.row key: "ReadGuard.@class" template: "ReadGuard" needs: list { "prelude.zthread" })
+        (c.row key: "ReadGuard.value")
+        (c.row key: "WriteGuard.@class" template: "WriteGuard" needs: list { "prelude.zthread" })
+        (c.row key: "WriteGuard.value")
+        (c.row key: "WriteGuard.set")
+        (c.row key: "MutexVal.@class" template: "Mutex" needs: list { "prelude.zthread" })
+        (c.row key: "MutexVal.create")
+        (c.row key: "MutexVal.share")
+        (c.row key: "MutexVal.lock")
+        (c.row key: "MutexGuardVal.@class" template: "MutexGuard" needs: list { "prelude.zthread" })
+        (c.row key: "MutexGuardVal.value")
+        (c.row key: "MutexGuardVal.set")
+        (c.row key: "MutexGuardVal.wait")
+        (c.row key: "MutexGuardVal.waitTimeout")
+        (c.row key: "RwLockVal.@class" template: "RwLock" needs: list { "prelude.zthread" })
+        (c.row key: "RwLockVal.create")
+        (c.row key: "RwLockVal.share")
+        (c.row key: "RwLockVal.read")
+        (c.row key: "RwLockVal.write")
+        (c.row key: "ReadGuardVal.@class" template: "ReadGuard" needs: list { "prelude.zthread" })
+        (c.row key: "ReadGuardVal.value")
+        (c.row key: "WriteGuardVal.@class" template: "WriteGuard" needs: list { "prelude.zthread" })
+        (c.row key: "WriteGuardVal.value")
+        (c.row key: "WriteGuardVal.set")
+        (c.row key: "Condvar.@class" template: "Condvar" needs: list { "prelude.zthread" })
+        (c.row key: "Condvar.create")
+        (c.row key: "Condvar.share")
+        (c.row key: "Condvar.notifyOne")
+        (c.row key: "Condvar.notifyAll")
+        (c.row key: "Barrier.@class" template: "Barrier" needs: list { "prelude.zthread" })
+        (c.row key: "Barrier.create")
+        (c.row key: "Barrier.share")
+        (c.row key: "Barrier.wait")
+        (
+            c.row
+            key: "Receiver.@class"
+            template: "Receiver"
+            needs: list { "prelude.zthread" "prelude.zchan" "prelude.@chan" }
+        )
+        (c.row key: "Receiver.create")
+        (c.row key: "Receiver.sender")
+        (c.row key: "Receiver.receive")
+        (c.row key: "Receiver.tryReceive")
+        (c.row key: "Receiver.iterate")
+        (c.row key: "Receiver.capacity")
+        (
+            c.row
+            key: "ReceiverVal.@class"
+            template: "Receiver"
+            needs: list { "prelude.zthread" "prelude.zchan" "prelude.@chan" }
+        )
+        (c.row key: "ReceiverVal.create")
+        (c.row key: "ReceiverVal.sender")
+        (c.row key: "ReceiverVal.receive")
+        (c.row key: "ReceiverVal.tryReceive")
+        (c.row key: "ReceiverVal.iterate")
+        (c.row key: "ReceiverVal.capacity")
+        (
+            c.row
+            key: "Sender.@class"
+            template: "Sender"
+            needs: list { "prelude.zthread" "prelude.zchan" "prelude.@chan" }
+        )
+        (c.row key: "Sender.send")
+        (c.row key: "Sender.copy")
+        (
+            c.row
+            key: "SenderVal.@class"
+            template: "Sender"
+            needs: list { "prelude.zthread" "prelude.zchan" "prelude.@chan" }
+        )
+        (c.row key: "SenderVal.send")
+        (c.row key: "SenderVal.copy")
+        (
+            c.row
+            key: "ReceiverIter.@class"
+            template: "ReceiverIter"
+            needs: list { "prelude.zthread" "prelude.zchan" "prelude.@chan" }
+        )
+        (c.row key: "ReceiverIter.call")
+        (
+            c.row
+            key: "ReceiverIterVal.@class"
+            template: "ReceiverIter"
+            needs: list { "prelude.zthread" "prelude.zchan" "prelude.@chan" }
+        )
+        (c.row key: "ReceiverIterVal.call")
+    }
+    links: list {
+        # sync -- what threads share: each class is written from its template, over the
+        # shim's atomics and locks, which need pthread at the link
+        (c.link library: "pthread" os: list { c.os.linux c.os.darwin c.os.other })
+    }
+    templates: list {
+        (
+            c.template
+            name: "Atomic"
+            needs: list { "prelude.@atomic" }
+            sections: list {
+                (
+                    c.section
+                    text: """
+                        /* Atomic -- one integer every thread reads and changes whole (sync.z), one
+                           copy per integer type. The value lives in a heap block every handle
+                           shares (`share` makes another), so its address holds while any thread can
+                           reach it; the last handle to end frees it. */
+                        typedef struct z_@@NAME@@_blk {
+                            Z_ATOMIC(@@t@@) v;
+                            Z_ATOMIC(uint64_t) refs;
+                        } z_@@NAME@@_blk;
+
+                        typedef struct z_@@NAME@@_t {
+                            z_@@NAME@@_blk* b;
+                        } z_@@NAME@@_t;
+
+                        """
+                )
+                (
+                    c.section
+                    member: "create"
+                    needs: list { "prelude.@xmalloc" }
+                    text: """
+                        static z_@@NAME@@_t z_@@NAME@@_create(@@t@@ value) {
+                            z_@@NAME@@_t a;
+                            a.b = (z_@@NAME@@_blk*)z_xmalloc(sizeof(z_@@NAME@@_blk));
+                            atomic_init(&a.b->v, value);
+                            atomic_init(&a.b->refs, 1);
+                            return a;
+                        }
+                        """
+                )
+                (c.section text: "")
+                (
+                    c.section
+                    member: "share"
+                    needs: list { "prelude.@atomic_add" }
+                    text: """
+                        static z_@@NAME@@_t z_@@NAME@@_share(z_@@NAME@@_t* a) {
+                            Z_ATOMIC_ADD(&a->b->refs, 1, Z_RELAXED);
+                            z_@@NAME@@_t s;
+                            s.b = a->b;
+                            return s;
+                        }
+                        """
+                )
+                (c.section text: "")
+                (
+                    c.section
+                    member: "destroy"
+                    needs: list { "prelude.@atomic_sub" }
+                    text: """
+                        static void z_@@NAME@@_destroy(z_@@NAME@@_t* a) {
+                            if (a->b == NULL) return;
+                            if (Z_ATOMIC_SUB(&a->b->refs, 1, Z_ACQREL) == 1) free(a->b);
+                            a->b = NULL;
+                        }
+                        """
+                )
+                (c.section text: "")
+                (
+                    c.section
+                    member: "load"
+                    needs: list { "prelude.@atomic_load" "sync.@load_order" }
+                    text: """
+                        static @@t@@ z_@@NAME@@_load(const z_@@NAME@@_t* a, z_@memoryorder@_t order) {
+                            return Z_ATOMIC_LOAD(&a->b->v, z_sync_load_order(order));
+                        }
+                        """
+                )
+                (c.section text: "")
+                (
+                    c.section
+                    member: "store"
+                    needs: list { "prelude.@atomic_store" "sync.@store_order" }
+                    text: """
+                        static void z_@@NAME@@_store(z_@@NAME@@_t* a, @@t@@ value, z_@memoryorder@_t order) {
+                            Z_ATOMIC_STORE(&a->b->v, value, z_sync_store_order(order));
+                        }
+                        """
+                )
+                (c.section text: "")
+                (
+                    c.section
+                    member: "exchange"
+                    needs: list { "prelude.@atomic_xchg" }
+                    text: """
+                        static @@t@@ z_@@NAME@@_exchange(z_@@NAME@@_t* a, @@t@@ value, z_@memoryorder@_t order) {
+                            return Z_ATOMIC_XCHG(&a->b->v, value, z_sync_order(order));
+                        }
+                        """
+                )
+                (c.section text: "")
+                (
+                    c.section
+                    member: "compareExchange"
+                    needs: list { "prelude.@atomic_cas" "sync.@fail_order" }
+                    text: """
+                        static @@t@@ z_@@NAME@@_compareExchange(z_@@NAME@@_t* a, @@t@@ current, @@t@@ next, z_@memoryorder@_t order) {
+                            @@t@@ seen = current;
+                            Z_ATOMIC_CAS(&a->b->v, &seen, next, z_sync_order(order), z_sync_fail_order(order));
+                            return seen;
+                        }
+                        """
+                )
+                (c.section text: "")
+                (
+                    c.section
+                    member: "fetchAdd"
+                    needs: list { "prelude.@atomic_add" }
+                    text: """
+                        static @@t@@ z_@@NAME@@_fetchAdd(z_@@NAME@@_t* a, @@t@@ value, z_@memoryorder@_t order) {
+                            return Z_ATOMIC_ADD(&a->b->v, value, z_sync_order(order));
+                        }
+                        """
+                )
+                (c.section text: "")
+                (
+                    c.section
+                    member: "fetchSub"
+                    needs: list { "prelude.@atomic_sub" }
+                    text: """
+                        static @@t@@ z_@@NAME@@_fetchSub(z_@@NAME@@_t* a, @@t@@ value, z_@memoryorder@_t order) {
+                            return Z_ATOMIC_SUB(&a->b->v, value, z_sync_order(order));
+                        }
+                        """
+                )
+            }
+        )
+        (
+            c.template
+            name: "AtomicBool"
+            needs: list { "prelude.@atomic" }
+            sections: list {
+                (
+                    c.section
+                    text: """
+                        /* AtomicBool -- one flag every thread reads and changes whole (sync.z). The value lives in a heap block every handle
+                           shares (`share` makes another), so its address holds while any thread can
+                           reach it; the last handle to end frees it. */
+                        typedef struct z_@@NAME@@_blk {
+                            Z_ATOMIC(bool) v;
+                            Z_ATOMIC(uint64_t) refs;
+                        } z_@@NAME@@_blk;
+
+                        typedef struct z_@@NAME@@_t {
+                            z_@@NAME@@_blk* b;
+                        } z_@@NAME@@_t;
+
+                        """
+                )
+                (
+                    c.section
+                    member: "create"
+                    needs: list { "prelude.@xmalloc" }
+                    text: """
+                        static z_@@NAME@@_t z_@@NAME@@_create(bool value) {
+                            z_@@NAME@@_t a;
+                            a.b = (z_@@NAME@@_blk*)z_xmalloc(sizeof(z_@@NAME@@_blk));
+                            atomic_init(&a.b->v, value);
+                            atomic_init(&a.b->refs, 1);
+                            return a;
+                        }
+                        """
+                )
+                (c.section text: "")
+                (
+                    c.section
+                    member: "share"
+                    needs: list { "prelude.@atomic_add" }
+                    text: """
+                        static z_@@NAME@@_t z_@@NAME@@_share(z_@@NAME@@_t* a) {
+                            Z_ATOMIC_ADD(&a->b->refs, 1, Z_RELAXED);
+                            z_@@NAME@@_t s;
+                            s.b = a->b;
+                            return s;
+                        }
+                        """
+                )
+                (c.section text: "")
+                (
+                    c.section
+                    member: "destroy"
+                    needs: list { "prelude.@atomic_sub" }
+                    text: """
+                        static void z_@@NAME@@_destroy(z_@@NAME@@_t* a) {
+                            if (a->b == NULL) return;
+                            if (Z_ATOMIC_SUB(&a->b->refs, 1, Z_ACQREL) == 1) free(a->b);
+                            a->b = NULL;
+                        }
+                        """
+                )
+                (c.section text: "")
+                (
+                    c.section
+                    member: "load"
+                    needs: list { "prelude.@atomic_load" "sync.@load_order" }
+                    text: """
+                        static bool z_@@NAME@@_load(const z_@@NAME@@_t* a, z_@memoryorder@_t order) {
+                            return Z_ATOMIC_LOAD(&a->b->v, z_sync_load_order(order));
+                        }
+                        """
+                )
+                (c.section text: "")
+                (
+                    c.section
+                    member: "store"
+                    needs: list { "prelude.@atomic_store" "sync.@store_order" }
+                    text: """
+                        static void z_@@NAME@@_store(z_@@NAME@@_t* a, bool value, z_@memoryorder@_t order) {
+                            Z_ATOMIC_STORE(&a->b->v, value, z_sync_store_order(order));
+                        }
+                        """
+                )
+                (c.section text: "")
+                (
+                    c.section
+                    member: "exchange"
+                    needs: list { "prelude.@atomic_xchg" }
+                    text: """
+                        static bool z_@@NAME@@_exchange(z_@@NAME@@_t* a, bool value, z_@memoryorder@_t order) {
+                            return Z_ATOMIC_XCHG(&a->b->v, value, z_sync_order(order));
+                        }
+                        """
+                )
+                (c.section text: "")
+                (
+                    c.section
+                    member: "compareExchange"
+                    needs: list { "prelude.@atomic_cas" "sync.@fail_order" }
+                    text: """
+                        static bool z_@@NAME@@_compareExchange(z_@@NAME@@_t* a, bool current, bool next, z_@memoryorder@_t order) {
+                            bool seen = current;
+                            Z_ATOMIC_CAS(&a->b->v, &seen, next, z_sync_order(order), z_sync_fail_order(order));
+                            return seen;
+                        }
+                        """
+                )
+            }
+        )
+        (
+            c.template
+            name: "Barrier"
+            needs: list { "prelude.@atomic" "prelude.@cond_t" "prelude.@mutex_t" }
+            sections: list {
+                (
+                    c.section
+                    text: """
+                        /* Barrier -- where a fixed number of threads wait for each other (sync.z).
+                           One lock and one condition variable in a heap block every handle shares:
+                           each round counts its arrivals, the last one starts the next round and
+                           wakes the rest, and a waiter waits until the round it arrived in has ended. */
+                        typedef struct z_@@NAME@@_blk {
+                            z_mutex_t m;
+                            z_cond_t c;
+                            uint64_t count;
+                            uint64_t waiting;
+                            uint64_t round;
+                            Z_ATOMIC(uint64_t) refs;
+                        } z_@@NAME@@_blk;
+
+                        typedef struct z_@@NAME@@_t {
+                            z_@@NAME@@_blk* b;
+                        } z_@@NAME@@_t;
+
+                        """
+                )
+                (
+                    c.section
+                    member: "create"
+                    needs: list {
+                        "prelude.@cond_init" "prelude.@mutex_init" "prelude.@panic"
+                        "prelude.@xmalloc"
+                    }
+                    text: """
+                        static z_@@NAME@@_t z_@@NAME@@_create(uint64_t count) {
+                            z_@@NAME@@_t br;
+                            br.b = (z_@@NAME@@_blk*)z_xmalloc(sizeof(z_@@NAME@@_blk));
+                            if (z_mutex_init(&br.b->m) != 0 || z_cond_init(&br.b->c) != 0) {
+                                z_panic("sync.Barrier: the operating system could not make a lock");
+                            }
+                            br.b->count = count == 0 ? 1 : count;
+                            br.b->waiting = 0;
+                            br.b->round = 0;
+                            atomic_init(&br.b->refs, 1);
+                            return br;
+                        }
+                        """
+                )
+                (c.section text: "")
+                (
+                    c.section
+                    member: "share"
+                    needs: list { "prelude.@atomic_add" "prelude.@relaxed" }
+                    text: """
+                        static z_@@NAME@@_t z_@@NAME@@_share(z_@@NAME@@_t* h) {
+                            Z_ATOMIC_ADD(&h->b->refs, 1, Z_RELAXED);
+                            z_@@NAME@@_t s;
+                            s.b = h->b;
+                            return s;
+                        }
+                        """
+                )
+                (c.section text: "")
+                (
+                    c.section
+                    member: "destroy"
+                    needs: list {
+                        "prelude.@acqrel" "prelude.@atomic_sub" "prelude.@cond_destroy"
+                        "prelude.@mutex_destroy"
+                    }
+                    text: """
+                        /* the last handle to end destroys what the block holds and frees it */
+                        static void z_@@NAME@@_destroy(z_@@NAME@@_t* h) {
+                            if (h->b == NULL) return;
+                            if (Z_ATOMIC_SUB(&h->b->refs, 1, Z_ACQREL) == 1) {
+                                z_cond_destroy(&h->b->c);
+                                z_mutex_destroy(&h->b->m);
+                                free(h->b);
+                            }
+                            h->b = NULL;
+                        }
+                        """
+                )
+                (c.section text: "")
+                (
+                    c.section
+                    member: "wait"
+                    needs: list {
+                        "prelude.@cond_broadcast" "prelude.@cond_wait" "prelude.@mutex_lock"
+                        "prelude.@mutex_unlock"
+                    }
+                    text: """
+                        static bool z_@@NAME@@_wait(z_@@NAME@@_t* br) {
+                            z_@@NAME@@_blk* b = br->b;
+                            z_mutex_lock(&b->m);
+                            uint64_t round = b->round;
+                            b->waiting++;
+                            if (b->waiting == b->count) {
+                                b->waiting = 0;
+                                b->round++;
+                                z_cond_broadcast(&b->c);
+                                z_mutex_unlock(&b->m);
+                                return true;
+                            }
+                            while (b->round == round) z_cond_wait(&b->c, &b->m);
+                            z_mutex_unlock(&b->m);
+                            return false;
+                        }
+                        """
+                )
+            }
+        )
+        (
+            c.template
+            name: "Condvar"
+            needs: list { "prelude.@atomic" "prelude.@cond_t" }
+            sections: list {
+                (
+                    c.section
+                    text: """
+                        /* Condvar -- where threads wait for a condition (sync.z). The condition
+                           variable lives in a heap block every handle shares, so it holds still while
+                           threads wait on it; a MutexGuard's `wait` waits on it with the guard's
+                           lock. */
+                        typedef struct z_@@NAME@@_blk {
+                            z_cond_t c;
+                            Z_ATOMIC(uint64_t) refs;
+                        } z_@@NAME@@_blk;
+
+                        typedef struct z_@@NAME@@_t {
+                            z_@@NAME@@_blk* b;
+                        } z_@@NAME@@_t;
+
+                        """
+                )
+                (
+                    c.section
+                    member: "create"
+                    needs: list { "prelude.@cond_init" "prelude.@panic" "prelude.@xmalloc" }
+                    text: """
+                        static z_@@NAME@@_t z_@@NAME@@_create(void) {
+                            z_@@NAME@@_t cv;
+                            cv.b = (z_@@NAME@@_blk*)z_xmalloc(sizeof(z_@@NAME@@_blk));
+                            if (z_cond_init(&cv.b->c) != 0) z_panic("sync.Condvar: the operating system could not make a condition variable");
+                            atomic_init(&cv.b->refs, 1);
+                            return cv;
+                        }
+                        """
+                )
+                (c.section text: "")
+                (
+                    c.section
+                    member: "share"
+                    needs: list { "prelude.@atomic_add" "prelude.@relaxed" }
+                    text: """
+                        static z_@@NAME@@_t z_@@NAME@@_share(z_@@NAME@@_t* h) {
+                            Z_ATOMIC_ADD(&h->b->refs, 1, Z_RELAXED);
+                            z_@@NAME@@_t s;
+                            s.b = h->b;
+                            return s;
+                        }
+                        """
+                )
+                (c.section text: "")
+                (
+                    c.section
+                    member: "destroy"
+                    needs: list { "prelude.@acqrel" "prelude.@atomic_sub" "prelude.@cond_destroy" }
+                    text: """
+                        /* the last handle to end destroys what the block holds and frees it */
+                        static void z_@@NAME@@_destroy(z_@@NAME@@_t* h) {
+                            if (h->b == NULL) return;
+                            if (Z_ATOMIC_SUB(&h->b->refs, 1, Z_ACQREL) == 1) {
+                                z_cond_destroy(&h->b->c);
+                                free(h->b);
+                            }
+                            h->b = NULL;
+                        }
+                        """
+                )
+                (c.section text: "")
+                (
+                    c.section
+                    member: "notifyOne"
+                    needs: list { "prelude.@cond_signal" }
+                    text: """
+                        static void z_@@NAME@@_notifyOne(z_@@NAME@@_t* cv) {
+                            z_cond_signal(&cv->b->c);
+                        }
+                        """
+                )
+                (c.section text: "")
+                (
+                    c.section
+                    member: "notifyAll"
+                    needs: list { "prelude.@cond_broadcast" }
+                    text: """
+                        static void z_@@NAME@@_notifyAll(z_@@NAME@@_t* cv) {
+                            z_cond_broadcast(&cv->b->c);
+                        }
+                        """
+                )
+            }
+        )
+        (
+            c.template
+            name: "Mutex"
+            needs: list { "prelude.@atomic" "prelude.@mutex_t" }
+            sections: list {
+                (
+                    c.section
+                    text: """
+                        /* Mutex and MutexVal -- a value of @@P0@@ that one thread at a time reaches,
+                           through the guard `lock` answers (sync.z), one copy per value type; both
+                           classes are this template, @@P0@@ their one type. The lock and the
+                           value live in a heap block every handle shares (`share` makes another), so
+                           neither moves while a thread waits on it or holds it; the last handle to
+                           end frees it. A MutexGuard is `{z_mutex_t* m; T* value}`
+                           (z_MutexGuard.c.tmpl): `lock` fills one. */
+                        typedef struct z_@@NAME@@_blk {
+                            z_mutex_t m;
+                            Z_ATOMIC(uint64_t) refs;
+                            @@P0@@ value;
+                        } z_@@NAME@@_blk;
+
+                        typedef struct z_@@NAME@@_t {
+                            z_@@NAME@@_blk* b;
+                        } z_@@NAME@@_t;
+
+                        """
+                )
+                (
+                    c.section
+                    member: "create"
+                    needs: list { "prelude.@mutex_init" "prelude.@panic" "prelude.@xmalloc" }
+                    text: """
+                        static z_@@NAME@@_t z_@@NAME@@_create(@@P0@@ value) {
+                            z_@@NAME@@_t mx;
+                            mx.b = (z_@@NAME@@_blk*)z_xmalloc(sizeof(z_@@NAME@@_blk));
+                            if (z_mutex_init(&mx.b->m) != 0) z_panic("sync.Mutex: the operating system could not make a lock");
+                            atomic_init(&mx.b->refs, 1);
+                            mx.b->value = value;
+                            return mx;
+                        }
+                        """
+                )
+                (c.section text: "")
+                (
+                    c.section
+                    member: "share"
+                    needs: list { "prelude.@atomic_add" "prelude.@relaxed" }
+                    text: """
+                        static z_@@NAME@@_t z_@@NAME@@_share(z_@@NAME@@_t* h) {
+                            Z_ATOMIC_ADD(&h->b->refs, 1, Z_RELAXED);
+                            z_@@NAME@@_t s;
+                            s.b = h->b;
+                            return s;
+                        }
+                        """
+                )
+                (c.section text: "")
+                (
+                    c.section
+                    member: "destroy"
+                    needs: list { "prelude.@acqrel" "prelude.@atomic_sub" "prelude.@mutex_destroy" }
+                    text: """
+                        /* the last handle to end destroys what the block holds and frees it */
+                        static void z_@@NAME@@_destroy(z_@@NAME@@_t* h) {
+                            if (h->b == NULL) return;
+                            if (Z_ATOMIC_SUB(&h->b->refs, 1, Z_ACQREL) == 1) {
+                                @@P0_DESTROY@@(&h->b->value);
+                                z_mutex_destroy(&h->b->m);
+                                free(h->b);
+                            }
+                            h->b = NULL;
+                        }
+                        """
+                )
+                (c.section text: "")
+                (
+                    c.section
+                    member: "lock"
+                    needs: list { "prelude.@mutex_lock" "prelude.@panic" }
+                    text: """
+                        static z_@@OUT.lock@@_t z_@@NAME@@_lock(z_@@NAME@@_t* mx) {
+                            z_@@OUT.lock@@_t g;
+                            if (z_mutex_lock(&mx->b->m) != 0) z_panic("sync.Mutex: lock failed");
+                            g.m = &mx->b->m;
+                            g.value = &mx->b->value;
+                            return g;
+                        }
+                        """
+                )
+            }
+        )
+        (
+            c.template
+            name: "MutexGuard"
+            needs: list { "prelude.@mutex_t" }
+            sections: list {
+                (
+                    c.section
+                    text: """
+                        /* MutexGuard and MutexGuardVal -- a Mutex's lock, held (sync.z), one copy per
+                           value type; both classes are this template, @@P0@@ their one type: the
+                           lock and the value it guards, both in the Mutex's block, which the guard's
+                           pins keep alive. Destroying the guard unlocks; `wait` unlocks while it
+                           waits on a Condvar and locks again before it returns. */
+                        typedef struct z_@@NAME@@_t {
+                            z_mutex_t* m;
+                            @@P0@@* value;
+                        } z_@@NAME@@_t;
+
+                        """
+                )
+                (
+                    c.section
+                    member: "destroy"
+                    needs: list { "prelude.@mutex_unlock" }
+                    text: """
+                        static void z_@@NAME@@_destroy(z_@@NAME@@_t* g) {
+                            if (g->m == NULL) return;
+                            z_mutex_unlock(g->m);
+                            g->m = NULL;
+                        }
+                        """
+                )
+                (c.section text: "")
+                (
+                    c.section
+                    member: "value"
+                    text: """
+                        static @@P0@@* z_@@NAME@@_value(z_@@NAME@@_t* g) {
+                            return g->value;
+                        }
+                        """
+                )
+                (c.section text: "")
+                (
+                    c.section
+                    member: "set"
+                    text: """
+                        /* the old value moves out to the caller, which owns it from here */
+                        static @@P0@@ z_@@NAME@@_set(z_@@NAME@@_t* g, @@P0@@ value) {
+                            @@P0@@ old = *g->value;
+                            *g->value = value;
+                            return old;
+                        }
+                        """
+                )
+                (c.section text: "")
+                (
+                    c.section
+                    member: "wait"
+                    needs: list { "prelude.@cond_wait" "prelude.@panic" }
+                    text: """
+                        static void z_@@NAME@@_wait(z_@@NAME@@_t* g, z_@@ARG.wait.cond@@_t cond) {
+                            if (z_cond_wait(&cond.b->c, g->m) != 0) z_panic("sync.Condvar: wait failed");
+                        }
+                        """
+                )
+                (c.section text: "")
+                (
+                    c.section
+                    member: "waitTimeout"
+                    needs: list { "prelude.@cond_timedwait" "prelude.@panic" }
+                    text: """
+                        static bool z_@@NAME@@_waitTimeout(z_@@NAME@@_t* g, z_@@ARG.waitTimeout.cond@@_t cond, uint64_t ms) {
+                            int e = z_cond_timedwait(&cond.b->c, g->m, ms);
+                            if (e != 0 && e != ETIMEDOUT) z_panic("sync.Condvar: wait failed");
+                            return e == ETIMEDOUT;
+                        }
+                        """
+                )
+            }
+        )
+        (
+            c.template
+            name: "ReadGuard"
+            needs: list { "prelude.@rwlock_t" }
+            sections: list {
+                (
+                    c.section
+                    text: """
+                        /* ReadGuard and ReadGuardVal -- a read lock on an RwLock, held (sync.z), one
+                           copy per value type; both classes are this template, @@P0@@ their one type: the lock and the value, both in the RwLock's block, which the guard's
+                           pins keep alive. Destroying the guard unlocks. */
+                        typedef struct z_@@NAME@@_t {
+                            z_rwlock_t* l;
+                            @@P0@@* value;
+                        } z_@@NAME@@_t;
+
+                        """
+                )
+                (
+                    c.section
+                    member: "destroy"
+                    needs: list { "prelude.@rwlock_rdunlock" }
+                    text: """
+                        static void z_@@NAME@@_destroy(z_@@NAME@@_t* g) {
+                            if (g->l == NULL) return;
+                            z_rwlock_rdunlock(g->l);
+                            g->l = NULL;
+                        }
+                        """
+                )
+                (c.section text: "")
+                (
+                    c.section
+                    member: "value"
+                    text: """
+                        static @@P0@@* z_@@NAME@@_value(const z_@@NAME@@_t* g) {
+                            return g->value;
+                        }
+                        """
+                )
+            }
+        )
+        (
+            c.template
+            name: "Receiver"
+            sections: list {
+                (
+                    c.section
+                    text: """
+                        /* Receiver / ReceiverVal -- the one reading end of a channel (sync.z), one
+                           copy per value type; both classes are this template, @@P0@@ their one type
+                           parameter. It owns the channel's block (_Z_CHAN.inc) with whatever Senders
+                           it made. `receive` and `tryReceive` answer an option built by the
+                           instance's own @@SOME.<m>@@ / @@NONE.<m>@@ helpers. */
+                        typedef struct z_@@NAME@@_t {
+                            z_chan* b;
+                        } z_@@NAME@@_t;
+
+                        """
+                )
+                (
+                    c.section
+                    member: "destroyElem"
+                    text: """
+                        static void z_@@NAME@@_destroyElem(void* p) {
+                            @@P0_DESTROY@@((@@P0@@*)p);
+                        }
+                        """
+                )
+                (c.section text: "")
+                (
+                    c.section
+                    member: "create"
+                    needs: list { "destroyElem" "prelude.@chan_new" }
+                    text: """
+                        static z_@@NAME@@_t z_@@NAME@@_create(uint64_t capacity) {
+                            z_@@NAME@@_t r;
+                            r.b = z_chan_new(sizeof(@@P0@@), z_@@NAME@@_destroyElem, capacity);
+                            return r;
+                        }
+                        """
+                )
+                (c.section text: "")
+                (
+                    c.section
+                    member: "destroy"
+                    needs: list { "prelude.@chan_drop_receiver" }
+                    text: """
+                        static void z_@@NAME@@_destroy(z_@@NAME@@_t* r) {
+                            if (r->b == NULL) return;
+                            z_chan_drop_receiver(r->b);
+                            r->b = NULL;
+                        }
+                        """
+                )
+                (c.section text: "")
+                (
+                    c.section
+                    member: "sender"
+                    needs: list { "prelude.@chan_add_sender" }
+                    text: """
+                        static z_@@OUT.sender@@_t z_@@NAME@@_sender(z_@@NAME@@_t* r) {
+                            z_chan_add_sender(r->b);
+                            z_@@OUT.sender@@_t s;
+                            s.b = r->b;
+                            return s;
+                        }
+                        """
+                )
+                (c.section text: "")
+                (
+                    c.section
+                    member: "receive"
+                    needs: list { "prelude.@chan_receive" }
+                    text: """
+                        static z_@@OUT.receive@@_t z_@@NAME@@_receive(z_@@NAME@@_t* r) {
+                            @@P0@@ v;
+                            if (z_chan_receive(r->b, &v, true)) return @@SOME.receive@@(v);
+                            return @@NONE.receive@@();
+                        }
+                        """
+                )
+                (c.section text: "")
+                (
+                    c.section
+                    member: "tryReceive"
+                    needs: list { "prelude.@chan_receive" }
+                    text: """
+                        static z_@@OUT.tryReceive@@_t z_@@NAME@@_tryReceive(z_@@NAME@@_t* r) {
+                            @@P0@@ v;
+                            if (z_chan_receive(r->b, &v, false)) return @@SOME.tryReceive@@(v);
+                            return @@NONE.tryReceive@@();
+                        }
+                        """
+                )
+                (c.section text: "")
+                (
+                    c.section
+                    member: "iterate"
+                    text: """
+                        static z_@@OUT.iterate@@_t z_@@NAME@@_iterate(z_@@NAME@@_t* r) {
+                            z_@@OUT.iterate@@_t it;
+                            it.b = r->b;
+                            return it;
+                        }
+                        """
+                )
+                (c.section text: "")
+                (
+                    c.section
+                    member: "capacity"
+                    text: """
+                        static uint64_t z_@@NAME@@_capacity(const z_@@NAME@@_t* r) {
+                            return r->b->cap;
+                        }
+                        """
+                )
+            }
+        )
+        (
+            c.template
+            name: "ReceiverIter"
+            sections: list {
+                (
+                    c.section
+                    text: """
+                        /* ReceiverIter / ReceiverIterVal -- a Receiver walked by `for each`: each
+                           call waits for the next value, and answers none once every Sender is gone
+                           and nothing is left (sync.z). It reaches the channel's block through the
+                           Receiver it was made from, which it keeps locked. */
+                        typedef struct z_@@NAME@@_t {
+                            z_chan* b;
+                        } z_@@NAME@@_t;
+
+                        """
+                )
+                (
+                    c.section
+                    member: "call"
+                    needs: list { "prelude.@chan_receive" }
+                    text: """
+                        static z_@@OUT.call@@_t z_@@NAME@@_call(z_@@NAME@@_t* it) {
+                            @@P0@@ v;
+                            if (z_chan_receive(it->b, &v, true)) return @@SOME.call@@(v);
+                            return @@NONE.call@@();
+                        }
+                        """
+                )
+                (c.section text: "")
+                (
+                    c.section
+                    member: "destroy"
+                    text: """
+                        static void z_@@NAME@@_destroy(z_@@NAME@@_t* it) {
+                            (void)it;
+                        }
+                        """
+                )
+            }
+        )
+        (
+            c.template
+            name: "RwLock"
+            needs: list { "prelude.@atomic" "prelude.@rwlock_t" }
+            sections: list {
+                (
+                    c.section
+                    text: """
+                        /* RwLock and RwLockVal -- a value of @@P0@@ that many threads read at once or
+                           one writes, through the guards `read` and `write` answer (sync.z), one copy
+                           per value type; both classes are this template, @@P0@@ their one type. The lock and the value live in a heap block every handle shares, as a
+                           Mutex's do. A ReadGuard and a WriteGuard are `{z_rwlock_t* l; T* value}`
+                           (z_ReadGuard.c.tmpl, z_WriteGuard.c.tmpl): `read` and `write` fill one. */
+                        typedef struct z_@@NAME@@_blk {
+                            z_rwlock_t l;
+                            Z_ATOMIC(uint64_t) refs;
+                            @@P0@@ value;
+                        } z_@@NAME@@_blk;
+
+                        typedef struct z_@@NAME@@_t {
+                            z_@@NAME@@_blk* b;
+                        } z_@@NAME@@_t;
+
+                        """
+                )
+                (
+                    c.section
+                    member: "create"
+                    needs: list { "prelude.@rwlock_init" "prelude.@panic" "prelude.@xmalloc" }
+                    text: """
+                        static z_@@NAME@@_t z_@@NAME@@_create(@@P0@@ value) {
+                            z_@@NAME@@_t rw;
+                            rw.b = (z_@@NAME@@_blk*)z_xmalloc(sizeof(z_@@NAME@@_blk));
+                            if (z_rwlock_init(&rw.b->l) != 0) z_panic("sync.RwLock: the operating system could not make a lock");
+                            atomic_init(&rw.b->refs, 1);
+                            rw.b->value = value;
+                            return rw;
+                        }
+                        """
+                )
+                (c.section text: "")
+                (
+                    c.section
+                    member: "share"
+                    needs: list { "prelude.@atomic_add" "prelude.@relaxed" }
+                    text: """
+                        static z_@@NAME@@_t z_@@NAME@@_share(z_@@NAME@@_t* h) {
+                            Z_ATOMIC_ADD(&h->b->refs, 1, Z_RELAXED);
+                            z_@@NAME@@_t s;
+                            s.b = h->b;
+                            return s;
+                        }
+                        """
+                )
+                (c.section text: "")
+                (
+                    c.section
+                    member: "destroy"
+                    needs: list {
+                        "prelude.@acqrel" "prelude.@atomic_sub" "prelude.@rwlock_destroy"
+                    }
+                    text: """
+                        /* the last handle to end destroys what the block holds and frees it */
+                        static void z_@@NAME@@_destroy(z_@@NAME@@_t* h) {
+                            if (h->b == NULL) return;
+                            if (Z_ATOMIC_SUB(&h->b->refs, 1, Z_ACQREL) == 1) {
+                                @@P0_DESTROY@@(&h->b->value);
+                                z_rwlock_destroy(&h->b->l);
+                                free(h->b);
+                            }
+                            h->b = NULL;
+                        }
+                        """
+                )
+                (c.section text: "")
+                (
+                    c.section
+                    member: "read"
+                    needs: list { "prelude.@rwlock_rdlock" "prelude.@panic" }
+                    text: """
+                        static z_@@OUT.read@@_t z_@@NAME@@_read(z_@@NAME@@_t* rw) {
+                            z_@@OUT.read@@_t g;
+                            if (z_rwlock_rdlock(&rw->b->l) != 0) z_panic("sync.RwLock: read lock failed");
+                            g.l = &rw->b->l;
+                            g.value = &rw->b->value;
+                            return g;
+                        }
+                        """
+                )
+                (c.section text: "")
+                (
+                    c.section
+                    member: "write"
+                    needs: list { "prelude.@rwlock_wrlock" "prelude.@panic" }
+                    text: """
+                        static z_@@OUT.write@@_t z_@@NAME@@_write(z_@@NAME@@_t* rw) {
+                            z_@@OUT.write@@_t g;
+                            if (z_rwlock_wrlock(&rw->b->l) != 0) z_panic("sync.RwLock: write lock failed");
+                            g.l = &rw->b->l;
+                            g.value = &rw->b->value;
+                            return g;
+                        }
+                        """
+                )
+            }
+        )
+        (
+            c.template
+            name: "Sender"
+            sections: list {
+                (
+                    c.section
+                    text: """
+                        /* Sender / SenderVal -- a sending end of a channel (sync.z), one copy per
+                           value type; both classes are this template. Each Sender counts in the
+                           channel's block (_Z_CHAN.inc): the last to end wakes a waiting receiver. */
+                        typedef struct z_@@NAME@@_t {
+                            z_chan* b;
+                        } z_@@NAME@@_t;
+
+                        """
+                )
+                (
+                    c.section
+                    member: "send"
+                    needs: list { "prelude.@chan_send" }
+                    text: """
+                        static bool z_@@NAME@@_send(z_@@NAME@@_t* s, @@P0@@ value) {
+                            return z_chan_send(s->b, &value);
+                        }
+                        """
+                )
+                (c.section text: "")
+                (
+                    c.section
+                    member: "copy"
+                    needs: list { "prelude.@chan_add_sender" }
+                    text: """
+                        static z_@@NAME@@_t z_@@NAME@@_copy(z_@@NAME@@_t* s) {
+                            z_chan_add_sender(s->b);
+                            z_@@NAME@@_t c;
+                            c.b = s->b;
+                            return c;
+                        }
+                        """
+                )
+                (c.section text: "")
+                (
+                    c.section
+                    member: "destroy"
+                    needs: list { "prelude.@chan_drop_sender" }
+                    text: """
+                        static void z_@@NAME@@_destroy(z_@@NAME@@_t* s) {
+                            if (s->b == NULL) return;
+                            z_chan_drop_sender(s->b);
+                            s->b = NULL;
+                        }
+                        """
+                )
+            }
+        )
+        (
+            c.template
+            name: "WriteGuard"
+            needs: list { "prelude.@rwlock_t" }
+            sections: list {
+                (
+                    c.section
+                    text: """
+                        /* WriteGuard and WriteGuardVal -- the write lock on an RwLock, held (sync.z),
+                           one copy per value type; both classes are this template, @@P0@@ their one
+                           type: the lock and the value, both in the RwLock's block, which the guard's
+                           pins keep alive. Destroying the guard unlocks. */
+                        typedef struct z_@@NAME@@_t {
+                            z_rwlock_t* l;
+                            @@P0@@* value;
+                        } z_@@NAME@@_t;
+
+                        """
+                )
+                (
+                    c.section
+                    member: "destroy"
+                    needs: list { "prelude.@rwlock_wrunlock" }
+                    text: """
+                        static void z_@@NAME@@_destroy(z_@@NAME@@_t* g) {
+                            if (g->l == NULL) return;
+                            z_rwlock_wrunlock(g->l);
+                            g->l = NULL;
+                        }
+                        """
+                )
+                (c.section text: "")
+                (
+                    c.section
+                    member: "value"
+                    text: """
+                        static @@P0@@* z_@@NAME@@_value(z_@@NAME@@_t* g) {
+                            return g->value;
+                        }
+                        """
+                )
+                (c.section text: "")
+                (
+                    c.section
+                    member: "set"
+                    text: """
+                        /* the old value moves out to the caller, which owns it from here */
+                        static @@P0@@ z_@@NAME@@_set(z_@@NAME@@_t* g, @@P0@@ value) {
+                            @@P0@@ old = *g->value;
+                            *g->value = value;
+                            return old;
+                        }
+                        """
+                )
+            }
+        )
+    }
+)

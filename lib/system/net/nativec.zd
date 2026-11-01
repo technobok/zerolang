@@ -1,0 +1,642 @@
+# nativec -- net's C implementation, a runtime.nativec file
+c: runtime.nativec
+
+# implementation -- the C behind net's native declarations
+implementation: (
+    c.implementation
+    rows: list {
+        # the socket layer under every native here (POSIX or Winsock)
+        (
+            c.row
+            key: "@sys"
+            demand: list { "@unit" }
+            needs: list { "prelude.zwin32" }
+            pieces: list {
+                (
+                    c.piece
+                    text: """
+                        /* z_net -- the socket layer under net's natives: POSIX sockets, or Winsock,
+                           started once on first use (net's natives.tbl unit row links ws2_32). A socket is
+                           net's `socket`, an int64. Every call answers -1 on failure, the reason
+                           left for z_net_error -- errno, or WSAGetLastError. A socket is never
+                           inherited by a child, and a write to a peer that has gone fails with EPIPE
+                           rather than raising SIGPIPE. */
+                        #if defined(_WIN32)
+                        #include <winsock2.h>
+                        #endif
+                        """
+                )
+                (
+                    c.piece
+                    name: "wsa_flag_no_handle_inherit"
+                    demand: list { "@wsa_flag_no_handle_inherit" }
+                    text: """
+                        #if defined(_WIN32)
+                        #ifndef WSA_FLAG_NO_HANDLE_INHERIT
+                        #define WSA_FLAG_NO_HANDLE_INHERIT 0x80
+                        #endif
+                        #endif
+                        """
+                )
+                (
+                    c.piece
+                    name: "net_once"
+                    demand: list { "@net_once" }
+                    text: """
+                        #if defined(_WIN32)
+                        static INIT_ONCE z_net_once = INIT_ONCE_STATIC_INIT;
+                        #endif
+                        """
+                )
+                (
+                    c.piece
+                    name: "net_start"
+                    demand: list { "@net_start" }
+                    text: """
+                        #if defined(_WIN32)
+                        static BOOL CALLBACK z_net_start(PINIT_ONCE once, PVOID arg, PVOID* ctx) {
+                            (void)once;
+                            (void)arg;
+                            (void)ctx;
+                            WSADATA d;
+                            return WSAStartup(MAKEWORD(2, 2), &d) == 0;
+                        }
+                        #endif
+                        """
+                )
+                (
+                    c.piece
+                    name: "net_raw"
+                    demand: list { "@net_raw" }
+                    text: """
+                        #if defined(_WIN32)
+                        /* the socket as the Winsock calls take it */
+                        #define Z_NET_RAW(s) ((SOCKET)(s))
+                        #else
+                        /* the socket as the POSIX calls take it */
+                        #define Z_NET_RAW(s) ((int)(s))
+                        #endif
+                        """
+                )
+                (
+                    c.piece
+                    name: "net_error"
+                    demand: list { "@net_error" }
+                    text: """
+                        #if defined(_WIN32)
+                        static int z_net_error(void) {
+                            return WSAGetLastError();
+                        }
+                        #else
+                        static int z_net_error(void) {
+                            return errno;
+                        }
+                        #endif
+                        """
+                )
+                (
+                    c.piece
+                    name: "net_socket"
+                    demand: list { "@net_socket" }
+                    needs: list { "@net_once" "@net_start" "net.@wsa_flag_no_handle_inherit" }
+                    text: """
+                        #if defined(_WIN32)
+                        static int64_t z_net_socket(void) {
+                            if (!InitOnceExecuteOnce(&z_net_once, z_net_start, NULL, NULL)) {
+                                WSASetLastError(WSANOTINITIALISED);
+                                return -1;
+                            }
+                            SOCKET s = WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0, WSA_FLAG_NO_HANDLE_INHERIT);
+                            return s == INVALID_SOCKET ? -1 : (int64_t)s;
+                        }
+                        #else
+                        static int64_t z_net_socket(void) {
+                            return socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+                        }
+                        #endif
+                        """
+                )
+                (
+                    c.piece
+                    name: "net_accept"
+                    demand: list { "@net_accept" }
+                    text: """
+                        #if defined(_WIN32)
+                        static int64_t z_net_accept(int64_t l) {
+                            SOCKET s = accept((SOCKET)l, NULL, NULL);
+                            if (s == INVALID_SOCKET) return -1;
+                            SetHandleInformation((HANDLE)s, HANDLE_FLAG_INHERIT, 0);
+                            return (int64_t)s;
+                        }
+                        #else
+                        /* accept4 sets close-on-exec atomically; it is reached through syscall()
+                           because its libc declaration needs _GNU_SOURCE, which the prelude does not
+                           define */
+                        static int64_t z_net_accept(int64_t l) {
+                            return (int64_t)syscall(SYS_accept4, (int)l, NULL, NULL, SOCK_CLOEXEC);
+                        }
+                        #endif
+                        """
+                )
+                (
+                    c.piece
+                    name: "net_close"
+                    demand: list { "@net_close" }
+                    text: """
+                        #if defined(_WIN32)
+                        static int z_net_close(int64_t s) {
+                            return closesocket((SOCKET)s) == 0 ? 0 : -1;
+                        }
+                        #else
+                        static int z_net_close(int64_t s) {
+                            return close((int)s);
+                        }
+                        #endif
+                        """
+                )
+                (
+                    c.piece
+                    name: "net_recv"
+                    demand: list { "@net_recv" }
+                    text: """
+                        #if defined(_WIN32)
+                        static int64_t z_net_recv(int64_t s, void* b, uint64_t n) {
+                            return recv((SOCKET)s, (char*)b, n > INT_MAX ? INT_MAX : (int)n, 0);
+                        }
+                        #else
+                        static int64_t z_net_recv(int64_t s, void* b, uint64_t n) {
+                            return recv((int)s, b, n, 0);
+                        }
+                        #endif
+                        """
+                )
+                (
+                    c.piece
+                    name: "net_send"
+                    demand: list { "@net_send" }
+                    text: """
+                        #if defined(_WIN32)
+                        static int64_t z_net_send(int64_t s, const void* b, uint64_t n) {
+                            return send((SOCKET)s, (const char*)b, n > INT_MAX ? INT_MAX : (int)n, 0);
+                        }
+                        #else
+                        static int64_t z_net_send(int64_t s, const void* b, uint64_t n) {
+                        #ifdef MSG_NOSIGNAL
+                            return send((int)s, b, n, MSG_NOSIGNAL);
+                        #else
+                            return send((int)s, b, n, 0);
+                        #endif
+                        }
+                        #endif
+                        """
+                )
+                (
+                    c.piece
+                    name: "net_exclusive"
+                    demand: list { "@net_exclusive" }
+                    text: """
+                        #if defined(_WIN32)
+                        /* a port another socket holds is refused rather than shared */
+                        static int z_net_exclusive(int64_t s) {
+                            BOOL one = TRUE;
+                            return setsockopt((SOCKET)s, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, (const char*)&one, sizeof one) == 0 ? 0 : -1;
+                        }
+                        #else
+                        /* SO_REUSEADDR only lets a port in TIME_WAIT be bound again: one a socket
+                           holds is still refused */
+                        static int z_net_exclusive(int64_t s) {
+                            int one = 1;
+                            return setsockopt((int)s, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+                        }
+                        #endif
+                        """
+                )
+                (
+                    c.piece
+                    name: "net_poll"
+                    demand: list { "@net_poll" }
+                    text: """
+                        #if defined(_WIN32)
+                        /* 1 when the socket is readable (or the peer closed) within ms, 0 when not,
+                           -1 on failure */
+                        static int z_net_poll(int64_t s, int ms) {
+                            WSAPOLLFD p;
+                            p.fd = (SOCKET)s;
+                            p.events = POLLRDNORM;
+                            p.revents = 0;
+                            int r = WSAPoll(&p, 1, ms);
+                            if (r < 0) return WSAGetLastError() == WSAEINTR ? 0 : -1;
+                            return (r > 0 && (p.revents & (POLLRDNORM | POLLHUP | POLLERR))) ? 1 : 0;
+                        }
+                        #else
+                        static int z_net_poll(int64_t s, int ms) {
+                            struct pollfd p = { (int)s, POLLIN, 0 };
+                            int r = poll(&p, 1, ms);
+                            if (r < 0) return errno == EINTR ? 0 : -1;
+                            return (r > 0 && (p.revents & (POLLIN | POLLHUP))) ? 1 : 0;
+                        }
+                        #endif
+                        """
+                )
+                (
+                    c.piece
+                    name: "net_port"
+                    demand: list { "@net_port" }
+                    text: """
+                        #if defined(_WIN32)
+                        /* the port a bound socket holds, or -1 */
+                        static int32_t z_net_port(int64_t s) {
+                            struct sockaddr_in a;
+                            int n = sizeof a;
+                            if (getsockname((SOCKET)s, (struct sockaddr*)&a, &n) != 0) return -1;
+                            return ntohs(a.sin_port);
+                        }
+                        #else
+                        static int32_t z_net_port(int64_t s) {
+                            struct sockaddr_in a;
+                            socklen_t n = sizeof a;
+                            if (getsockname((int)s, (struct sockaddr*)&a, &n) != 0) return -1;
+                            return ntohs(a.sin_port);
+                        }
+                        #endif
+                        """
+                )
+                (
+                    c.piece
+                    name: "net_interrupted"
+                    demand: list { "@net_interrupted" }
+                    text: """
+                        #if defined(_WIN32)
+                        static int z_net_interrupted(int e) {
+                            return e == WSAEINTR;
+                        }
+                        #else
+                        static int z_net_interrupted(int e) {
+                            return e == EINTR;
+                        }
+                        #endif
+                        """
+                )
+                (c.piece text: "")
+                (
+                    c.piece
+                    name: "net_boxed_error"
+                    demand: list { "@net_boxed_error" }
+                    needs: list { "prelude.@xmalloc" "io.@errno" }
+                    text: """
+                        /* the IoError an OS error code makes, boxed for a Result's err arm */
+                        static z_@IoError@_t* z_net_boxed_error(int e) {
+                            z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
+                            *boxed = z_io_os_error(e);
+                            return boxed;
+                        }
+                        """
+                )
+            }
+        )
+        # the socket holders: live once listen, accept or connect minted their Result; a
+        # Conn's read and write also dereference the byte-buffer monos
+        (
+            c.row
+            key: "Listener.@class"
+            live: list { "Result_Listener_IoError" }
+            needs: list { "net.@net_close" }
+            destroy: """
+                /* written with the struct, ahead of net's socket layer (_Z_NET_SYS) */
+                static int z_net_close(int64_t s);
+                static void z_@Listener@_destroy(z_@Listener@_t* p) {
+                    if (!p) return;
+                    if (!p->@MEMBER_Listener.open@) return;
+                    z_net_close(p->@MEMBER_Listener.sock@);
+                    p->@MEMBER_Listener.open@ = false;
+                }
+                """
+        )
+        (
+            c.row
+            key: "Conn.@class"
+            live: list { "Result_Conn_IoError" "ListVal_u8" "ListViewVal_u8" }
+            needs: list { "net.@net_close" }
+            destroy: """
+                /* written with the struct, ahead of net's socket layer (_Z_NET_SYS) */
+                static int z_net_close(int64_t s);
+                static void z_@Conn@_destroy(z_@Conn@_t* p) {
+                    if (!p) return;
+                    if (!p->@MEMBER_Conn.open@) return;
+                    z_net_close(p->@MEMBER_Conn.sock@);
+                    p->@MEMBER_Conn.open@ = false;
+                }
+                """
+        )
+        (
+            c.row
+            key: "listen"
+            needs: list {
+                "prelude.@xmalloc" "net.@net_raw" "net.@net_boxed_error" "net.@net_close"
+                "net.@net_error" "net.@net_exclusive" "net.@net_port" "net.@net_socket"
+            }
+            fragments: list {
+                """
+                /* net.listen — bind + listen a TCP socket on 127.0.0.1:port; backlog 16. Port
+                   0 takes a free port, read back with getsockname. A port another socket holds
+                   is refused (z_net_exclusive). */
+                static z_@Result_Listener_IoError@_t z_net_listen(uint16_t port) {
+                    z_@Result_Listener_IoError@_t result = {0};
+                    int64_t s = z_net_socket();
+                    if (s < 0) {
+                        result.tag = @ARM_Result_Listener_IoError.err@;
+                        result.data = z_net_boxed_error(z_net_error());
+                        return result;
+                    }
+                    z_net_exclusive(s);
+                    struct sockaddr_in addr;
+                    memset(&addr, 0, sizeof addr);
+                    addr.sin_family = AF_INET;
+                    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+                    addr.sin_port = htons(port);
+                    int32_t bound = -1;
+                    if (bind(Z_NET_RAW(s), (struct sockaddr*)&addr, sizeof(addr)) != 0 || listen(Z_NET_RAW(s), 16) != 0
+                        || (bound = z_net_port(s)) < 0) {
+                        int e = z_net_error();
+                        z_net_close(s);
+                        result.tag = @ARM_Result_Listener_IoError.err@;
+                        result.data = z_net_boxed_error(e);
+                        return result;
+                    }
+                    z_@Listener@_t* boxed = (z_@Listener@_t*)z_xmalloc(sizeof(z_@Listener@_t));
+                    boxed->@MEMBER_Listener.sock@ = s;
+                    boxed->@MEMBER_Listener.port@ = (uint16_t)bound;
+                    boxed->@MEMBER_Listener.open@ = true;
+                    result.tag = @ARM_Result_Listener_IoError.ok@;
+                    result.data = boxed;
+                    return result;
+                }
+                """
+            }
+        )
+        (
+            c.row
+            key: "Listener.accept"
+            demand: list { "listener_accept" }
+            needs: list {
+                "prelude.@xmalloc" "net.@net_accept" "net.@net_boxed_error" "net.@net_error"
+                "net.@net_interrupted"
+            }
+            fragments: list {
+                """
+                /* listener.accept — block for one connection; an interrupted wait retries.
+                   The connection is never inherited by a child (z_net_accept). */
+                static z_@Result_Conn_IoError@_t z_@Listener@_accept(z_@Listener@_t* l) {
+                    z_@Result_Conn_IoError@_t result = {0};
+                    int64_t s;
+                    for (;;) {
+                        s = z_net_accept(l->@MEMBER_Listener.sock@);
+                        if (s >= 0) break;
+                        int e = z_net_error();
+                        if (z_net_interrupted(e)) continue;
+                        result.tag = @ARM_Result_Conn_IoError.err@;
+                        result.data = z_net_boxed_error(e);
+                        return result;
+                    }
+                    z_@Conn@_t* boxed = (z_@Conn@_t*)z_xmalloc(sizeof(z_@Conn@_t));
+                    boxed->@MEMBER_Conn.sock@ = s;
+                    boxed->@MEMBER_Conn.open@ = true;
+                    result.tag = @ARM_Result_Conn_IoError.ok@;
+                    result.data = boxed;
+                    return result;
+                }
+                """
+            }
+        )
+        (
+            c.row
+            key: "Listener.close"
+            demand: list { "listener_close" }
+            needs: list { "net.@net_boxed_error" "net.@net_close" "net.@net_error" }
+            fragments: list {
+                """
+                /* listener.close — close once; double closes no-op. */
+                static z_@Result_null_IoError@_t z_@Listener@_close(z_@Listener@_t* l) {
+                    z_@Result_null_IoError@_t result = {0};
+                    if (l->@MEMBER_Listener.open@) {
+                        l->@MEMBER_Listener.open@ = false;
+                        if (z_net_close(l->@MEMBER_Listener.sock@) != 0) {
+                            result.tag = @ARM_Result_null_IoError.err@;
+                            result.data = z_net_boxed_error(z_net_error());
+                            return result;
+                        }
+                    }
+                    result.tag = @ARM_Result_null_IoError.ok@;
+                    result.data = NULL;
+                    return result;
+                }
+                """
+            }
+        )
+        (
+            c.row
+            key: "Listener.pollReadable"
+            demand: list { "listener_pollReadable" }
+            needs: list { "net.@net_boxed_error" "net.@net_error" "net.@net_poll" }
+            fragments: list {
+                """
+                /* listener.pollReadable — readable within timeoutMillis (z_net_poll); an
+                   interrupted wait reports not-readable. */
+                static z_@ResultVR_bool_IoError@_t z_@Listener@_pollReadable(const z_@Listener@_t* l, int32_t timeoutMillis) {
+                    z_@ResultVR_bool_IoError@_t result = {0};
+                    int r = z_net_poll(l->@MEMBER_Listener.sock@, timeoutMillis);
+                    if (r < 0) {
+                        result.tag = @ARM_ResultVR_bool_IoError.err@;
+                        result.data = z_net_boxed_error(z_net_error());
+                        return result;
+                    }
+                    result.tag = @ARM_ResultVR_bool_IoError.ok@;
+                    result.@MEMBER_ResultVR_bool_IoError.ok@ = r > 0;
+                    return result;
+                }
+                """
+            }
+        )
+        (
+            c.row
+            key: "connect"
+            needs: list {
+                "prelude.@xmalloc" "net.@net_raw" "net.@net_boxed_error" "net.@net_close"
+                "net.@net_error" "net.@net_interrupted" "net.@net_socket"
+            }
+            fragments: list {
+                """
+                /* net.connect — open a client connection to 127.0.0.1:port. */
+                static z_@Result_Conn_IoError@_t z_net_connect(uint16_t port) {
+                    z_@Result_Conn_IoError@_t result = {0};
+                    int64_t s = z_net_socket();
+                    if (s >= 0) {
+                        struct sockaddr_in addr;
+                        memset(&addr, 0, sizeof addr);
+                        addr.sin_family = AF_INET;
+                        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+                        addr.sin_port = htons(port);
+                        int rc;
+                        for (;;) {
+                            rc = connect(Z_NET_RAW(s), (struct sockaddr*)&addr, sizeof(addr));
+                            if (rc == 0 || !z_net_interrupted(z_net_error())) break;
+                        }
+                        if (rc == 0) {
+                            z_@Conn@_t* boxed = (z_@Conn@_t*)z_xmalloc(sizeof(z_@Conn@_t));
+                            boxed->@MEMBER_Conn.sock@ = s;
+                            boxed->@MEMBER_Conn.open@ = true;
+                            result.tag = @ARM_Result_Conn_IoError.ok@;
+                            result.data = boxed;
+                            return result;
+                        }
+                    }
+                    int e = z_net_error();
+                    if (s >= 0) z_net_close(s);
+                    result.tag = @ARM_Result_Conn_IoError.err@;
+                    result.data = z_net_boxed_error(e);
+                    return result;
+                }
+                """
+            }
+        )
+        (
+            c.row
+            key: "Conn.read"
+            needs: list {
+                "@unit" "io.@wrap_u64" "prelude.@xrealloc" "net.@net_error" "net.@net_interrupted"
+                "net.@net_recv"
+            }
+            fragments: list {
+                """
+                /* conn.read — read up to `max` bytes, appending to `buf`; 0 = peer
+                   closed. An interrupted read retries. Mirrors file.read. */
+                static z_@ResultVR_u64_IoError@_t z_@Conn@_read(
+                    z_@Conn@_t* c, z_@ListVal_u8@_t* buf, uint64_t max
+                ) {
+                    if (buf->capacity < buf->length + max) {
+                        uint64_t newcap = buf->length + max;
+                        buf->data = (uint8_t*)z_xrealloc(buf->data, newcap);
+                        buf->capacity = newcap;
+                    }
+                    int64_t n;
+                    for (;;) {
+                        n = z_net_recv(c->@MEMBER_Conn.sock@, buf->data + buf->length, max);
+                        if (n >= 0) break;
+                        int e = z_net_error();
+                        if (!z_net_interrupted(e)) return z_io_u64_err(e);
+                    }
+                    buf->length += (uint64_t)n;
+                    return z_io_u64_ok((uint64_t)n);
+                }
+                """
+            }
+        )
+        (
+            c.row
+            key: "Conn.write"
+            needs: list {
+                "@unit" "io.@wrap_u64" "net.@net_error" "net.@net_interrupted" "net.@net_send"
+            }
+            fragments: list {
+                """
+                /* conn.write — write all bytes from `src`; loops on short writes,
+                   retries an interrupted one. Mirrors file.write. */
+                static z_@ResultVR_u64_IoError@_t z_@Conn@_write(
+                    z_@Conn@_t* c, z_@ListViewVal_u8@_t src
+                ) {
+                    uint64_t total = 0;
+                    while (total < src.length) {
+                        int64_t n = z_net_send(c->@MEMBER_Conn.sock@, src.data + total, src.length - total);
+                        if (n < 0) {
+                            int e = z_net_error();
+                            if (z_net_interrupted(e)) continue;
+                            return z_io_u64_err(e);
+                        }
+                        total += (uint64_t)n;
+                    }
+                    return z_io_u64_ok(total);
+                }
+                """
+            }
+        )
+        (
+            c.row
+            key: "Conn.close"
+            needs: list { "@unit" "net.@net_boxed_error" "net.@net_close" "net.@net_error" }
+            fragments: list {
+                """
+                /* conn.close — close once; double closes no-op. */
+                static z_@Result_null_IoError@_t z_@Conn@_close(z_@Conn@_t* c) {
+                    z_@Result_null_IoError@_t result = {0};
+                    if (c->@MEMBER_Conn.open@) {
+                        c->@MEMBER_Conn.open@ = false;
+                        if (z_net_close(c->@MEMBER_Conn.sock@) != 0) {
+                            result.tag = @ARM_Result_null_IoError.err@;
+                            result.data = z_net_boxed_error(z_net_error());
+                            return result;
+                        }
+                    }
+                    result.tag = @ARM_Result_null_IoError.ok@;
+                    result.data = NULL;
+                    return result;
+                }
+                """
+            }
+        )
+        (
+            c.row
+            key: "Conn.flush"
+            needs: list { "@unit" }
+            fragments: list {
+                """
+                /* conn.flush — sockets write through; nothing buffered here. */
+                static z_@Result_null_IoError@_t z_@Conn@_flush(z_@Conn@_t* c) {
+                    (void)c;
+                    z_@Result_null_IoError@_t result = {0};
+                    result.tag = @ARM_Result_null_IoError.ok@;
+                    result.data = NULL;
+                    return result;
+                }
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "Conn.pollReadable"
+            needs: list { "@unit" "net.@net_boxed_error" "net.@net_error" "net.@net_poll" }
+            fragments: list {
+                """
+                /* conn.pollReadable — readable within timeoutMillis (z_net_poll); an
+                   interrupted wait reports not-readable. */
+                static z_@ResultVR_bool_IoError@_t z_@Conn@_pollReadable(const z_@Conn@_t* c, int32_t timeoutMillis) {
+                    z_@ResultVR_bool_IoError@_t result = {0};
+                    int r = z_net_poll(c->@MEMBER_Conn.sock@, timeoutMillis);
+                    if (r < 0) {
+                        result.tag = @ARM_ResultVR_bool_IoError.err@;
+                        result.data = z_net_boxed_error(z_net_error());
+                        return result;
+                    }
+                    result.tag = @ARM_ResultVR_bool_IoError.ok@;
+                    result.@MEMBER_ResultVR_bool_IoError.ok@ = r > 0;
+                    return result;
+                }
+                """
+            }
+        )
+    }
+    canons: list {
+        (c.canon stem: "Result_Listener_IoError" spec: list { "Result" "net.Listener" "IoError" })
+        (c.canon stem: "Result_Conn_IoError" spec: list { "Result" "net.Conn" "IoError" })
+    }
+    links: list {
+        # net -- each fragment on its own demand, as io's are: a fragment names the
+        # types its member returns, which exist only when that member is used. A
+        # Listener's methods are demanded as `listener_<name>`. A Conn's load on the
+        # Conn itself (`uses_Conn`): its declared Reader/Writer conformance takes the
+        # addresses of read, write, flush and close whether or not anything calls them,
+        # and a Conn the program never makes is not emitted at all.
+        # Winsock is a library of its own on Windows.
+        (c.link library: "ws2_32" os: list { c.os.windows })
+    }
+)

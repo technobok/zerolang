@@ -1,0 +1,1870 @@
+# nativec -- io's C implementation, a runtime.nativec file
+c: runtime.nativec
+
+# implementation -- the C behind io's native declarations
+implementation: (
+    c.implementation
+    rows: list {
+        # io -- the shared helpers first, each naming the members that pull it, then the
+        # convention loads alphabetically, then File's methods in their own order and
+        # the stream bundles.
+        (
+            c.row
+            key: "@sv_to_cstr"
+            demand: list { "@sv_cstr" }
+            needs: list { "prelude.@xmalloc" }
+            fragments: list {
+                """
+                static char* z_sv_to_cstr(z_@StringView@_t v) {
+                    char* buf = (char*)z_xmalloc(v.size + 1);
+                    if (v.size > 0) memcpy(buf, v.data, v.size);
+                    buf[v.size] = '\0';
+                    return buf;
+                }
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "@errno_map"
+            demand: list { "@errno" }
+            needs: list {
+                "prelude.zwin32" "prelude.@String_new" "prelude.@xmalloc" "prelude.@win_error_text"
+            }
+            fragments: list {
+                """
+                /* an OS error code -> IoError: errno on POSIX, a Win32 error code (GetLastError,
+                   WSAGetLastError) on Windows. A code no arm names becomes `other`, carrying
+                   "<the OS's message> (os error N)" so nothing is lost in translation; so does
+                   a malformed path, under `invalidpath`. POSIX's message comes from the
+                   reentrant strerror_r -- the XSI form, as the prelude asks for POSIX without
+                   _GNU_SOURCE -- and Windows' from FormatMessageW. */
+                static z_@String@_t* z_io_os_error_text(int code) {
+                    char text[640];
+                #if defined(_WIN32)
+                    char* msg = z_win_error_text((DWORD)code);
+                    snprintf(text, sizeof text, "%s (os error %d)", msg ? msg : "unknown error", code);
+                    free(msg);
+                #else
+                    char msg[256];
+                    int failed = strerror_r(code, msg, sizeof msg);
+                    snprintf(text, sizeof text, "%s (os error %d)", failed ? "unknown error" : msg, code);
+                #endif
+                    z_@String@_t* sp = (z_@String@_t*)z_xmalloc(sizeof(z_@String@_t));
+                    *sp = z_@String@_new(text);
+                    return sp;
+                }
+
+                static z_@IoError@_t z_io_os_error(int code) {
+                    z_@IoError@_t r = {0};
+                    r.data = NULL;
+                    switch (code) {
+                #if defined(_WIN32)
+                        case ERROR_FILE_NOT_FOUND:
+                        case ERROR_PATH_NOT_FOUND:
+                        case ERROR_INVALID_DRIVE:
+                        case ERROR_BAD_NETPATH:
+                        case ERROR_BAD_NET_NAME:          r.tag = @ARM_IoError.notfound@; break;
+                        case ERROR_ACCESS_DENIED:
+                        case ERROR_SHARING_VIOLATION:
+                        case ERROR_LOCK_VIOLATION:
+                        case ERROR_PRIVILEGE_NOT_HELD:    r.tag = @ARM_IoError.permissiondenied@; break;
+                        case WSAEINTR:                    r.tag = @ARM_IoError.interrupted@; break;
+                        case ERROR_ALREADY_EXISTS:
+                        case ERROR_FILE_EXISTS:           r.tag = @ARM_IoError.exists@; break;
+                        case ERROR_DIRECTORY_NOT_SUPPORTED: r.tag = @ARM_IoError.isdir@; break;
+                        case ERROR_DIRECTORY:             r.tag = @ARM_IoError.notdir@; break;
+                        case ERROR_DISK_FULL:
+                        case ERROR_HANDLE_DISK_FULL:      r.tag = @ARM_IoError.nospace@; break;
+                        case ERROR_INVALID_NAME:
+                        case ERROR_BAD_PATHNAME:
+                        case ERROR_FILENAME_EXCED_RANGE:
+                        case ERROR_NO_UNICODE_TRANSLATION:
+                            r.tag = @ARM_IoError.invalidpath@;
+                            r.data = z_io_os_error_text(code);
+                            break;
+                #else
+                        case ENOENT:  r.tag = @ARM_IoError.notfound@; break;
+                        case EACCES:
+                        case EPERM:   r.tag = @ARM_IoError.permissiondenied@; break;
+                        case EINTR:   r.tag = @ARM_IoError.interrupted@; break;
+                        case EEXIST:  r.tag = @ARM_IoError.exists@; break;
+                        case EISDIR:  r.tag = @ARM_IoError.isdir@; break;
+                        case ENOTDIR: r.tag = @ARM_IoError.notdir@; break;
+                        case ENOSPC:  r.tag = @ARM_IoError.nospace@; break;
+                #endif
+                        default:
+                            r.tag = @ARM_IoError.other@;
+                            r.data = z_io_os_error_text(code);
+                            break;
+                    }
+                    return r;
+                }
+                """
+            }
+        )
+        (
+            c.row
+            key: "@write_common"
+            demand: list { "writeText" "appendText" }
+            needs: list {
+                "prelude.zwin32" "prelude.@xmalloc" "prelude.@win_open_fd" "prelude.@win_write"
+                "@errno" "@sv_cstr?posix"
+            }
+            fragments: list {
+                """
+                /* shared helper: write all bytes; returns 0 ok, the OS error code on
+                   failure. */
+                static int z_io_write_all(int fd, const char* data, uint64_t size) {
+                    uint64_t off = 0;
+                    while (off < size) {
+                #if defined(_WIN32)
+                        int64_t n = z_win_write(fd, data + off, size - off);
+                        if (n < 0) return (int)GetLastError();
+                #else
+                        int64_t n = write(fd, data + off, size - off);
+                        if (n < 0) {
+                            if (errno == EINTR) continue;
+                            return errno;
+                        }
+                #endif
+                        off += (uint64_t)n;
+                    }
+                    return 0;
+                }
+
+                /* shared helper: path + how it opens (1 truncates, 2 appends; the file is
+                   created either way) -> write content -> close. path and content are
+                   borrowed views; caller retains. */
+                static z_@Result_null_IoError@_t z_io_write_common(
+                    z_@StringView@_t path, z_@StringView@_t content, int how
+                ) {
+                    z_@Result_null_IoError@_t result = {0};
+                #if defined(_WIN32)
+                    int fd = z_win_open_fd(path.data, path.size, how);
+                    int e = (int)GetLastError();
+                #else
+                    int flags = O_WRONLY | O_CREAT | (how == 2 ? O_APPEND : O_TRUNC);
+                    char* path_cstr = z_sv_to_cstr(path);
+                    int fd = open(path_cstr, flags | O_CLOEXEC, 0644);
+                    int e = errno;
+                    free(path_cstr);
+                #endif
+                    if (fd < 0) {
+                        z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
+                        *boxed = z_io_os_error(e);
+                        result.tag = @ARM_Result_null_IoError.err@;
+                        result.data = boxed;
+                        return result;
+                    }
+                    int werr = z_io_write_all(fd, content.data, content.size);
+                #if defined(_WIN32)
+                    _close(fd);
+                #else
+                    close(fd);
+                #endif
+                    if (werr != 0) {
+                        z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
+                        *boxed = z_io_os_error(werr);
+                        result.tag = @ARM_Result_null_IoError.err@;
+                        result.data = boxed;
+                        return result;
+                    }
+                    result.tag = @ARM_Result_null_IoError.ok@;
+                    result.data = NULL;
+                    return result;
+                }
+                """
+            }
+        )
+        (
+            c.row
+            key: "@wrap_u64_result"
+            demand: list { "file_read" "file_write" "file_seek" "@wrap_u64" }
+            needs: list { "@errno" "prelude.@xmalloc" }
+            fragments: list {
+                """
+                static z_@ResultVR_u64_IoError@_t z_io_u64_ok(uint64_t v);
+                static z_@ResultVR_u64_IoError@_t z_io_u64_ok(uint64_t v) {
+                    z_@ResultVR_u64_IoError@_t result = {0};
+                    result.tag = @ARM_ResultVR_u64_IoError.ok@;
+                    result.@MEMBER_ResultVR_u64_IoError.ok@ = v;
+                    return result;
+                }
+
+                static z_@ResultVR_u64_IoError@_t z_io_u64_err(int saved_errno);
+                static z_@ResultVR_u64_IoError@_t z_io_u64_err(int saved_errno) {
+                    z_@ResultVR_u64_IoError@_t result = {0};
+                    z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
+                    *boxed = z_io_os_error(saved_errno);
+                    result.tag = @ARM_ResultVR_u64_IoError.err@;
+                    result.data = boxed;
+                    return result;
+                }
+
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "@wrap_null_result"
+            demand: list { "@wrap_null" }
+            needs: list { "prelude.@xmalloc" "@errno" }
+            fragments: list {
+                """
+                static z_@Result_null_IoError@_t z_io_wrap_null_Result(int rc, int saved_errno) {
+                    z_@Result_null_IoError@_t result = {0};
+                    if (rc == 0) {
+                        result.tag = @ARM_Result_null_IoError.ok@;
+                        result.data = NULL;
+                        return result;
+                    }
+                    z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
+                    *boxed = z_io_os_error(saved_errno);
+                    result.tag = @ARM_Result_null_IoError.err@;
+                    result.data = boxed;
+                    return result;
+                }
+
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "@stat_fill"
+            demand: list { "stat" "lstat" }
+            needs: list { "prelude.zwin32" "prelude.@win_open" }
+            fragments: list {
+                """
+                /* Populate fs for z_io_stat / z_io_lstat: on POSIX from a struct stat -- the
+                   only behavioral split between them lives in the syscall call site (stat(2)
+                   follows symlinks, lstat(2) does not) -- and on Windows from the file's handle
+                   (z_io_win_stat). */
+                #if defined(_WIN32)
+                /* seconds since 1970 from a FILETIME's 100ns ticks since 1601 */
+                static uint64_t z_io_win_unix_seconds(uint64_t ticks) {
+                    const uint64_t epoch = 116444736000000000ULL;
+                    return ticks > epoch ? (ticks - epoch) / 10000000ULL : 0;
+                }
+
+                static uint64_t z_io_win_ft(FILETIME ft) {
+                    return ((uint64_t)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
+                }
+
+                /* whether the path's last component ends in an extension Windows runs */
+                static int z_io_win_runnable(const char* s, size_t n) {
+                    size_t i = n;
+                    while (i > 0 && s[i - 1] != '/' && s[i - 1] != '\\') i--;
+                    const char* dot = NULL;
+                    for (size_t j = i; j < n; j++) if (s[j] == '.') dot = s + j;
+                    if (dot == NULL || (size_t)(s + n - dot) != 4) return 0;
+                    const char* exts[] = { ".exe", ".com", ".bat", ".cmd" };
+                    for (int k = 0; k < 4; k++) {
+                        int same = 1;
+                        for (int c = 0; c < 4; c++) {
+                            char ch = dot[c];
+                            if (ch >= 'A' && ch <= 'Z') ch = (char)(ch - 'A' + 'a');
+                            if (ch != exts[k][c]) same = 0;
+                        }
+                        if (same) return 1;
+                    }
+                    return 0;
+                }
+
+                /* stat (follow) or lstat (not) a path through its handle; 0, or the Win32
+                   error. kind: a symbolic link or junction is `symlink` under lstat. mode is
+                   synthesised as POSIX spells it: the type bits; 0444 for a read-only file,
+                   else 0666; plus 0111 for a directory and for .exe, .com, .bat and .cmd.
+                   device is the volume serial number, inode the file index, ctime the change
+                   time. */
+                static int z_io_win_stat(z_@StringView@_t path, int follow, z_@filestat@_t* fs) {
+                    DWORD flags = FILE_FLAG_BACKUP_SEMANTICS | (follow ? 0 : FILE_FLAG_OPEN_REPARSE_POINT);
+                    HANDLE h = z_win_open(path.data, path.size, FILE_READ_ATTRIBUTES, OPEN_EXISTING, flags);
+                    if (h == INVALID_HANDLE_VALUE) return (int)GetLastError();
+                    BY_HANDLE_FILE_INFORMATION bi;
+                    if (!GetFileInformationByHandle(h, &bi)) {
+                        int e = (int)GetLastError();
+                        CloseHandle(h);
+                        return e;
+                    }
+                    FILE_ATTRIBUTE_TAG_INFO ti;
+                    memset(&ti, 0, sizeof ti);
+                    if (bi.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) {
+                        GetFileInformationByHandleEx(h, FileAttributeTagInfo, &ti, sizeof ti);
+                    }
+                    FILE_BASIC_INFO basic;
+                    BOOL has_basic = GetFileInformationByHandleEx(h, FileBasicInfo, &basic, sizeof basic);
+                    CloseHandle(h);
+                    int is_dir = (bi.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+                    int is_link = !follow && (bi.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)
+                        && (ti.ReparseTag == IO_REPARSE_TAG_SYMLINK || ti.ReparseTag == IO_REPARSE_TAG_MOUNT_POINT);
+                    uint32_t mode;
+                    if (is_link) {
+                        fs->@MEMBER_filestat.kind@@TAG_filekind@ = @ARM_filekind.symlink@;
+                        mode = 0120000;
+                    } else if (is_dir) {
+                        fs->@MEMBER_filestat.kind@@TAG_filekind@ = @ARM_filekind.dir@;
+                        mode = 0040000;
+                    } else {
+                        fs->@MEMBER_filestat.kind@@TAG_filekind@ = @ARM_filekind.file@;
+                        mode = 0100000;
+                    }
+                    mode |= (bi.dwFileAttributes & FILE_ATTRIBUTE_READONLY) ? 0444 : 0666;
+                    if (is_dir || z_io_win_runnable(path.data, path.size)) mode |= 0111;
+                    fs->@MEMBER_filestat.size@ = is_dir ? 0 : (((uint64_t)bi.nFileSizeHigh << 32) | bi.nFileSizeLow);
+                    fs->@MEMBER_filestat.mtimeSeconds@ = z_io_win_unix_seconds(z_io_win_ft(bi.ftLastWriteTime));
+                    fs->@MEMBER_filestat.atimeSeconds@ = z_io_win_unix_seconds(z_io_win_ft(bi.ftLastAccessTime));
+                    fs->@MEMBER_filestat.ctimeSeconds@ = has_basic
+                        ? z_io_win_unix_seconds((uint64_t)basic.ChangeTime.QuadPart)
+                        : z_io_win_unix_seconds(z_io_win_ft(bi.ftLastWriteTime));
+                    fs->@MEMBER_filestat.mode@ = mode;
+                    fs->@MEMBER_filestat.device@ = (uint64_t)bi.dwVolumeSerialNumber;
+                    fs->@MEMBER_filestat.inode@ = ((uint64_t)bi.nFileIndexHigh << 32) | bi.nFileIndexLow;
+                    fs->@MEMBER_filestat.nlink@ = (uint64_t)bi.nNumberOfLinks;
+                    return 0;
+                }
+                #else
+                static void z_io_fill_filestat(z_@filestat@_t* fs, const struct stat* sb);
+                static void z_io_fill_filestat(z_@filestat@_t* fs, const struct stat* sb) {
+                    if (S_ISREG(sb->st_mode))       fs->@MEMBER_filestat.kind@@TAG_filekind@ = @ARM_filekind.file@;
+                    else if (S_ISDIR(sb->st_mode))  fs->@MEMBER_filestat.kind@@TAG_filekind@ = @ARM_filekind.dir@;
+                    else if (S_ISLNK(sb->st_mode))  fs->@MEMBER_filestat.kind@@TAG_filekind@ = @ARM_filekind.symlink@;
+                    else                            fs->@MEMBER_filestat.kind@@TAG_filekind@ = @ARM_filekind.other@;
+                    fs->@MEMBER_filestat.size@ = (uint64_t)sb->st_size;
+                    fs->@MEMBER_filestat.mtimeSeconds@ = (uint64_t)sb->st_mtime;
+                    fs->@MEMBER_filestat.atimeSeconds@ = (uint64_t)sb->st_atime;
+                    fs->@MEMBER_filestat.ctimeSeconds@ = (uint64_t)sb->st_ctime;
+                    fs->@MEMBER_filestat.mode@ = (uint32_t)sb->st_mode;
+                    fs->@MEMBER_filestat.device@ = (uint64_t)sb->st_dev;
+                    fs->@MEMBER_filestat.inode@ = (uint64_t)sb->st_ino;
+                    fs->@MEMBER_filestat.nlink@ = (uint64_t)sb->st_nlink;
+                }
+                #endif
+                """
+            }
+        )
+        (
+            c.row
+            key: "appendText"
+            fragments: list {
+                """
+                static z_@Result_null_IoError@_t z_io_appendText(
+                    z_@StringView@_t path, z_@StringView@_t content
+                ) {
+                    return z_io_write_common(path, content, 2);
+                }
+
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "eprintln"
+            needs: list { "prelude.@write_line" }
+            fragments: list {
+                """
+                static void z_io_eprintln(z_@StringView@_t sv) {
+                    z_write_line(2, sv.data, sv.size, 1);
+                }
+
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "exists"
+            needs: list { "prelude.zwin32" "prelude.@win_path" "@sv_cstr?posix" }
+            fragments: list {
+                """
+                static bool z_io_exists(z_@StringView@_t path) {
+                #if defined(_WIN32)
+                    wchar_t* w = z_win_path(path.data, path.size);
+                    if (w == NULL) return false;
+                    DWORD a = GetFileAttributesW(w);
+                    free(w);
+                    return a != INVALID_FILE_ATTRIBUTES;
+                #else
+                    char* path_cstr = z_sv_to_cstr(path);
+                    int r = access(path_cstr, F_OK);
+                    free(path_cstr);
+                    return r == 0;
+                #endif
+                }
+                """
+            }
+        )
+        (
+            c.row
+            key: "listDir"
+            needs: list {
+                "prelude.@String_new" "prelude.zwin32" "prelude.@xmalloc" "prelude.@win_path"
+                "prelude.@win_utf8" "@errno" "@sv_cstr?posix"
+            }
+            members: list { "List_String.create" "List_String.append" }
+            fragments: list {
+                """
+                /* Enumerate directory entries via opendir/readdir/closedir, or on
+                   Windows FindFirstFileExW/FindNextFileW over `path\*`.
+                   Returns bare entry names (not full paths), skipping `.` and
+                   `..`, in filesystem order. The list is constructed on stack and
+                   then boxed heap-side so the result union's void* data can
+                   carry it; the compiler-generated result destructor calls
+                   z_@List_String@_destroy on the ok payload, which in turn frees
+                   each entry's z_@String@_t. */
+                static z_@Result_List_String_IoError@_t z_io_listDir(z_@StringView@_t path);
+                static z_@Result_List_String_IoError@_t z_io_listDir(z_@StringView@_t path) {
+                    z_@Result_List_String_IoError@_t result = {0};
+                #if defined(_WIN32)
+                    /* path\* -- a root or a path ending in a separator takes just the * */
+                    char* pat = (char*)z_xmalloc(path.size + 3);
+                    if (path.size > 0) memcpy(pat, path.data, path.size);
+                    size_t pn = path.size;
+                    if (pn > 0 && pat[pn - 1] != '/' && pat[pn - 1] != '\\' && pat[pn - 1] != ':') pat[pn++] = '\\';
+                    pat[pn++] = '*';
+                    wchar_t* w = path.size > 0 ? z_win_path(pat, pn) : NULL;
+                    free(pat);
+                    WIN32_FIND_DATAW fd;
+                    HANDLE d = INVALID_HANDLE_VALUE;
+                    if (w != NULL) {
+                        d = FindFirstFileExW(w, FindExInfoBasic, &fd, FindExSearchNameMatch, NULL, FIND_FIRST_EX_LARGE_FETCH);
+                    } else if (path.size == 0) {
+                        SetLastError(ERROR_PATH_NOT_FOUND);
+                    }
+                    int e = (int)GetLastError();
+                    free(w);
+                    int empty = 0;
+                    if (d == INVALID_HANDLE_VALUE && path.size > 0) {
+                        /* what the path itself is decides: a directory with nothing in it (a
+                           volume's root holds no `.`), or a file, which is notdir as on POSIX */
+                        wchar_t* wp = z_win_path(path.data, path.size);
+                        DWORD a = wp != NULL ? GetFileAttributesW(wp) : INVALID_FILE_ATTRIBUTES;
+                        free(wp);
+                        if (a != INVALID_FILE_ATTRIBUTES) {
+                            if (a & FILE_ATTRIBUTE_DIRECTORY) {
+                                if (e == ERROR_FILE_NOT_FOUND) empty = 1;
+                            } else {
+                                e = ERROR_DIRECTORY;
+                            }
+                        }
+                    }
+                    if (d == INVALID_HANDLE_VALUE && !empty) {
+                #else
+                    char* path_cstr = z_sv_to_cstr(path);
+                    DIR* d = opendir(path_cstr);
+                    int e = errno;
+                    free(path_cstr);
+                    if (!d) {
+                #endif
+                        z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
+                        *boxed = z_io_os_error(e);
+                        result.tag = @ARM_Result_List_String_IoError.err@;
+                        result.data = boxed;
+                        return result;
+                    }
+                    z_@List_String@_t list = z_@List_String@_create((uint64_t)0);
+                #if defined(_WIN32)
+                    if (!empty) {
+                        do {
+                            const wchar_t* nm = fd.cFileName;
+                            if (nm[0] == L'.' && (nm[1] == 0 || (nm[1] == L'.' && nm[2] == 0))) continue;
+                            char* u = z_win_utf8(nm, -1, NULL);
+                            if (u == NULL) continue;
+                            z_@List_String@_append(&list, z_@String@_new(u));
+                            free(u);
+                        } while (FindNextFileW(d, &fd));
+                        FindClose(d);
+                    }
+                #else
+                    struct dirent* entry;
+                    errno = 0;
+                    while ((entry = readdir(d)) != NULL) {
+                        const char* name = entry->d_name;
+                        if (name[0] == '.' && (name[1] == '\0' ||
+                            (name[1] == '.' && name[2] == '\0'))) continue;
+                        z_@List_String@_append(&list, z_@String@_new(name));
+                    }
+                    closedir(d);
+                #endif
+                    z_@List_String@_t* boxed = (z_@List_String@_t*)z_xmalloc(sizeof(z_@List_String@_t));
+                    *boxed = list;
+                    result.tag = @ARM_Result_List_String_IoError.ok@;
+                    result.data = boxed;
+                    return result;
+                }
+
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "lstat"
+            needs: list { "prelude.@xmalloc" "@errno" "@sv_cstr?posix" }
+            fragments: list {
+                """
+                /* lstat(2) — like stat but does not follow symlinks. The SYMLINK
+                   arm of filekind fires here when the target path is a symlink. */
+                static z_@Result_filestat_IoError@_t z_io_lstat(z_@StringView@_t path);
+                static z_@Result_filestat_IoError@_t z_io_lstat(z_@StringView@_t path) {
+                    z_@Result_filestat_IoError@_t result = {0};
+                    z_@filestat@_t fs = {0};
+                #if defined(_WIN32)
+                    int e = z_io_win_stat(path, 0, &fs);
+                    int rc = e == 0 ? 0 : -1;
+                #else
+                    char* path_cstr = z_sv_to_cstr(path);
+                    struct stat sb;
+                    int rc = lstat(path_cstr, &sb);
+                    int e = errno;
+                    free(path_cstr);
+                    if (rc == 0) z_io_fill_filestat(&fs, &sb);
+                #endif
+                    if (rc != 0) {
+                        z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
+                        *boxed = z_io_os_error(e);
+                        result.tag = @ARM_Result_filestat_IoError.err@;
+                        result.data = boxed;
+                        return result;
+                    }
+                    z_@filestat@_t* boxed = (z_@filestat@_t*)z_xmalloc(sizeof(z_@filestat@_t));
+                    *boxed = fs;
+                    result.tag = @ARM_Result_filestat_IoError.ok@;
+                    result.data = boxed;
+                    return result;
+                }
+
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "mkdir"
+            needs: list { "prelude.zwin32" "prelude.@win_path" "@sv_cstr?posix" "@wrap_null" }
+            fragments: list {
+                """
+                /* mkdir -- one directory, mode 0755 on POSIX; Windows has no mode bits, and the
+                   directory inherits its parent's access control. */
+                static z_@Result_null_IoError@_t z_io_mkdir(z_@StringView@_t path) {
+                #if defined(_WIN32)
+                    wchar_t* w = z_win_path(path.data, path.size);
+                    int rc = (w != NULL && CreateDirectoryW(w, NULL)) ? 0 : -1;
+                    int e = (int)GetLastError();
+                    free(w);
+                #else
+                    char* path_cstr = z_sv_to_cstr(path);
+                    int rc = mkdir(path_cstr, 0755);
+                    int e = errno;
+                    free(path_cstr);
+                #endif
+                    return z_io_wrap_null_Result(rc, e);
+                }
+                """
+            }
+        )
+        (
+            c.row
+            key: "mkdirp"
+            needs: list {
+                "prelude.zwin32" "prelude.@xmalloc" "prelude.@win_path" "prelude.@win_root_len"
+                "@wrap_null"
+            }
+            fragments: list {
+                """
+                /* mkdir -p path. Walks components, creating each missing directory (mode 0755
+                   on POSIX). Succeeds if the final path already exists as a directory; fails
+                   with notdir if a parent exists as a non-directory, and with exists if the
+                   path itself does. Components split at '/', and on Windows at '\' too; a
+                   Windows path's root (C:\, \\srv\share\, \\?\C:\) is never created.
+                   Allocates a mutable copy of path so it can null-terminate prefixes in
+                   place. */
+                static z_@Result_null_IoError@_t z_io_mkdirp(z_@StringView@_t path);
+                static z_@Result_null_IoError@_t z_io_mkdirp(z_@StringView@_t path) {
+                    uint64_t n = path.size;
+                    char* buf = (char*)z_xmalloc(n + 1);
+                    if (n > 0) memcpy(buf, path.data, n);
+                    buf[n] = '\0';
+                #if defined(_WIN32)
+                    uint64_t first = (uint64_t)z_win_root_len(buf, (size_t)n);
+                    if (first == 0) first = 1;
+                #else
+                    uint64_t first = 1;
+                #endif
+                    for (uint64_t i = first; i <= n; i++) {
+                #if defined(_WIN32)
+                        int at_sep = i < n && (buf[i] == '/' || buf[i] == '\\');
+                #else
+                        int at_sep = i < n && buf[i] == '/';
+                #endif
+                        if (i == n || at_sep) {
+                            char saved = buf[i];
+                            buf[i] = '\0';
+                            if (buf[0] != '\0') {
+                #if defined(_WIN32)
+                                wchar_t* w = z_win_path(buf, (size_t)i);
+                                int made = w != NULL && CreateDirectoryW(w, NULL);
+                                DWORD e = made ? 0 : GetLastError();
+                                /* a parent that is a file is notdir, as POSIX's mkdir says;
+                                   Windows would answer "path not found" for the next one */
+                                if (e == ERROR_ALREADY_EXISTS && i < n && !(GetFileAttributesW(w) & FILE_ATTRIBUTE_DIRECTORY)) {
+                                    e = ERROR_DIRECTORY;
+                                }
+                                free(w);
+                                if (!made && e != ERROR_ALREADY_EXISTS) {
+                                    free(buf);
+                                    return z_io_wrap_null_Result(-1, (int)e);
+                                }
+                #else
+                                int rc = mkdir(buf, 0755);
+                                if (rc != 0 && errno != EEXIST) {
+                                    int e = errno;
+                                    free(buf);
+                                    return z_io_wrap_null_Result(-1, e);
+                                }
+                #endif
+                            }
+                            buf[i] = saved;
+                        }
+                    }
+                    /* the walk took "already there" as done; the path itself must be a directory */
+                #if defined(_WIN32)
+                    wchar_t* w = z_win_path(buf, (size_t)n);
+                    DWORD a = w != NULL ? GetFileAttributesW(w) : INVALID_FILE_ATTRIBUTES;
+                    free(w);
+                    free(buf);
+                    if (a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY)) return z_io_wrap_null_Result(-1, ERROR_ALREADY_EXISTS);
+                #else
+                    struct stat sb;
+                    int there = n > 0 && stat(buf, &sb) == 0;
+                    free(buf);
+                    if (there && !S_ISDIR(sb.st_mode)) return z_io_wrap_null_Result(-1, EEXIST);
+                #endif
+                    return z_io_wrap_null_Result(0, 0);
+                }
+                """
+            }
+        )
+        (
+            c.row
+            key: "open"
+            needs: list {
+                "prelude.zwin32" "prelude.@xmalloc" "prelude.@win_open_fd" "@errno" "@sv_cstr?posix"
+            }
+            fragments: list {
+                """
+                /* translate the openmode variant tag to open(2) flags and a default mode, or
+                   on Windows to z_win_open_fd's three ways */
+                static z_@Result_File_IoError@_t z_io_open(
+                    z_@StringView@_t path, z_@openmode@_t mode
+                ) {
+                    z_@Result_File_IoError@_t result = {0};
+                #if defined(_WIN32)
+                    int how = 0;
+                    switch (mode@TAG_openmode@) {
+                        case @ARM_openmode.write@:  how = 1; break;
+                        case @ARM_openmode.append@: how = 2; break;
+                        default:                    how = 0; break;
+                    }
+                    int fd = z_win_open_fd(path.data, path.size, how);
+                    int e = (int)GetLastError();
+                #else
+                    int flags;
+                    mode_t perm = 0644;
+                    switch (mode@TAG_openmode@) {
+                        case @ARM_openmode.read@:   flags = O_RDONLY; break;
+                        case @ARM_openmode.write@:  flags = O_WRONLY | O_CREAT | O_TRUNC; break;
+                        case @ARM_openmode.append@: flags = O_WRONLY | O_CREAT | O_APPEND; break;
+                        default:                    flags = O_RDONLY; break;
+                    }
+                    char* path_cstr = z_sv_to_cstr(path);
+                    int fd = open(path_cstr, flags | O_CLOEXEC, perm);
+                    int e = errno;
+                    free(path_cstr);
+                #endif
+                    if (fd < 0) {
+                        z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
+                        *boxed = z_io_os_error(e);
+                        result.tag = @ARM_Result_File_IoError.err@;
+                        result.data = boxed;
+                        return result;
+                    }
+                    z_@File@_t* boxed = (z_@File@_t*)z_xmalloc(sizeof(z_@File@_t));
+                    boxed->@MEMBER_File.fd@ = (int32_t)fd;
+                    boxed->@MEMBER_File.open@ = true;
+                    result.tag = @ARM_Result_File_IoError.ok@;
+                    result.data = boxed;
+                    return result;
+                }
+
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "readText"
+            needs: list {
+                "prelude.@String_append" "prelude.@String_create" "prelude.@String_free"
+                "prelude.zwin32" "prelude.@xmalloc" "prelude.@win_open_fd" "prelude.@win_read"
+                "@errno" "@sv_cstr?posix"
+            }
+            fragments: list {
+                """
+                static z_@Result_String_IoError@_t z_io_readText(z_@StringView@_t path) {
+                    /* path is a borrowed view; caller retains ownership */
+                    z_@Result_String_IoError@_t result = {0};
+                #if defined(_WIN32)
+                    int fd = z_win_open_fd(path.data, path.size, 0);
+                    int e = (int)GetLastError();
+                #else
+                    char* path_cstr = z_sv_to_cstr(path);
+                    int fd = open(path_cstr, O_RDONLY | O_CLOEXEC);
+                    int e = errno;
+                    free(path_cstr);
+                #endif
+                    if (fd < 0) {
+                        z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
+                        *boxed = z_io_os_error(e);
+                        result.tag = @ARM_Result_String_IoError.err@;
+                        result.data = boxed;
+                        return result;
+                    }
+                    z_@String@_t content = z_@String@_create((uint64_t)4096);
+                    char buf[4096];
+                    for (;;) {
+                #if defined(_WIN32)
+                        int64_t n = z_win_read(fd, buf, sizeof(buf));
+                        if (n < 0) e = (int)GetLastError();
+                #else
+                        int64_t n = read(fd, buf, sizeof(buf));
+                        if (n < 0) {
+                            if (errno == EINTR) continue;
+                            e = errno;
+                        }
+                #endif
+                        if (n == 0) break;
+                        if (n < 0) {
+                #if defined(_WIN32)
+                            _close(fd);
+                #else
+                            close(fd);
+                #endif
+                            z_@String@_free(&content);
+                            z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
+                            *boxed = z_io_os_error(e);
+                            result.tag = @ARM_Result_String_IoError.err@;
+                            result.data = boxed;
+                            return result;
+                        }
+                        z_@String@_append(&content, buf, (uint64_t)n);
+                    }
+                #if defined(_WIN32)
+                    _close(fd);
+                #else
+                    close(fd);
+                #endif
+                    z_@String@_t* boxed = (z_@String@_t*)z_xmalloc(sizeof(z_@String@_t));
+                    *boxed = content;
+                    result.tag = @ARM_Result_String_IoError.ok@;
+                    result.data = boxed;
+                    return result;
+                }
+
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "readlink"
+            needs: list {
+                "prelude.@String_new" "prelude.zwin32" "prelude.@xmalloc" "prelude.@xrealloc"
+                "prelude.@win_open" "prelude.@win_utf8" "@errno" "@sv_cstr?posix"
+            }
+            fragments: list {
+                """
+                /* readlink — follow-free read of a symlink's target. readlink(2)
+                   does not NUL-terminate, and we don't know the exact target size
+                   up front; loop with a growing buffer until the kernel says the
+                   full target fit. EINVAL from readlink means the path exists but
+                   isn't a symbolic link -- surfaced as invalidpath with a
+                   caller-readable message. On Windows the target is the reparse
+                   point's substitute name as stored (z_io_win_readlink), a junction's
+                   included. The success path breaks out so the body ends
+                   in its return -- c2mir miscompiles a struct return otherwise. */
+                #if defined(_WIN32)
+                /* a symbolic link's or junction's reparse data, as FSCTL_GET_REPARSE_POINT
+                   returns it (the SDK keeps the type in the driver kit) */
+                typedef struct {
+                    ULONG tag;
+                    USHORT data_length;
+                    USHORT reserved;
+                    USHORT sub_offset;
+                    USHORT sub_length;
+                    USHORT print_offset;
+                    USHORT print_length;
+                    /* a symbolic link has a Flags word here; a junction's path follows */
+                    ULONG flags;
+                } z_io_win_reparse;
+
+                /* the stored target of the link at `path`, as UTF-8 (`\??\` stripped, a
+                   share's `UNC\` given back its `\\`); NULL with *err the Win32 code,
+                   ERROR_NOT_A_REPARSE_POINT for anything but a symbolic link or junction */
+                static char* z_io_win_readlink(z_@StringView@_t path, size_t* len, int* err) {
+                    HANDLE h = z_win_open(
+                        path.data, path.size, 0, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS
+                    );
+                    if (h == INVALID_HANDLE_VALUE) {
+                        *err = (int)GetLastError();
+                        return NULL;
+                    }
+                    union {
+                        z_io_win_reparse r;
+                        unsigned char raw[MAXIMUM_REPARSE_DATA_BUFFER_SIZE];
+                    } buf;
+                    DWORD got = 0;
+                    BOOL ok = DeviceIoControl(h, FSCTL_GET_REPARSE_POINT, NULL, 0, &buf, sizeof buf, &got, NULL);
+                    DWORD e = GetLastError();
+                    CloseHandle(h);
+                    if (!ok) {
+                        *err = (int)e;
+                        return NULL;
+                    }
+                    const unsigned char* names;
+                    if (buf.r.tag == IO_REPARSE_TAG_SYMLINK) {
+                        names = buf.raw + sizeof(z_io_win_reparse);
+                    } else if (buf.r.tag == IO_REPARSE_TAG_MOUNT_POINT) {
+                        names = buf.raw + offsetof(z_io_win_reparse, flags);
+                    } else {
+                        *err = ERROR_NOT_A_REPARSE_POINT;
+                        return NULL;
+                    }
+                    const wchar_t* sub = (const wchar_t*)(names + buf.r.sub_offset);
+                    int n = (int)(buf.r.sub_length / sizeof(wchar_t));
+                    if (n >= 4 && sub[0] == L'\\' && sub[1] == L'?' && sub[2] == L'?' && sub[3] == L'\\') {
+                        sub += 4;
+                        n -= 4;
+                    }
+                    int unc = n >= 4 && sub[0] == L'U' && sub[1] == L'N' && sub[2] == L'C' && sub[3] == L'\\';
+                    if (unc) {
+                        sub += 3;
+                        n -= 3;
+                    }
+                    size_t un = 0;
+                    char* u = z_win_utf8(sub, n, &un);
+                    if (u == NULL) {
+                        *err = (int)GetLastError();
+                        return NULL;
+                    }
+                    if (unc) {
+                        char* v = (char*)z_xmalloc(un + 2);
+                        v[0] = '\\';
+                        memcpy(v + 1, u, un + 1);
+                        free(u);
+                        u = v;
+                        un++;
+                    }
+                    *len = un;
+                    return u;
+                }
+                #endif
+
+                static z_@Result_String_IoError@_t z_io_readlink(z_@StringView@_t path);
+                static z_@Result_String_IoError@_t z_io_readlink(z_@StringView@_t path) {
+                    z_@Result_String_IoError@_t result = {0};
+                #if defined(_WIN32)
+                    size_t tn = 0;
+                    int e = 0;
+                    char* t = z_io_win_readlink(path, &tn, &e);
+                    if (t == NULL) {
+                        z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
+                        if (e == ERROR_NOT_A_REPARSE_POINT) {
+                            z_@IoError@_t v = {0};
+                            v.tag = @ARM_IoError.invalidpath@;
+                            z_@String@_t* sp = (z_@String@_t*)z_xmalloc(sizeof(z_@String@_t));
+                            *sp = z_@String@_new("not a symbolic link");
+                            v.data = sp;
+                            *boxed = v;
+                        } else {
+                            *boxed = z_io_os_error(e);
+                        }
+                        result.tag = @ARM_Result_String_IoError.err@;
+                        result.data = boxed;
+                        return result;
+                    }
+                    z_@String@_t* tb = (z_@String@_t*)z_xmalloc(sizeof(z_@String@_t));
+                    *tb = z_@String@_new(t);
+                    free(t);
+                    result.tag = @ARM_Result_String_IoError.ok@;
+                    result.data = tb;
+                    return result;
+                #else
+                    char* path_cstr = z_sv_to_cstr(path);
+                    uint64_t cap = (uint64_t)256;
+                    char* buf = (char*)z_xmalloc(cap);
+                    ssize_t n;
+                    for (;;) {
+                        n = readlink(path_cstr, buf, cap);
+                        if (n < 0) {
+                            int e = errno;
+                            free(buf);
+                            free(path_cstr);
+                            z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
+                            if (e == EINVAL) {
+                                z_@IoError@_t v = {0};
+                                v.tag = @ARM_IoError.invalidpath@;
+                                z_@String@_t* sp = (z_@String@_t*)z_xmalloc(sizeof(z_@String@_t));
+                                *sp = z_@String@_new("not a symbolic link");
+                                v.data = sp;
+                                *boxed = v;
+                            } else {
+                                *boxed = z_io_os_error(e);
+                            }
+                            result.tag = @ARM_Result_String_IoError.err@;
+                            result.data = boxed;
+                            return result;
+                        }
+                        if ((uint64_t)n < cap) break;
+                        cap *= 2;
+                        buf = (char*)z_xrealloc(buf, cap);
+                    }
+                    z_@String@_t target = {0};
+                    target.size = (uint64_t)n;
+                    target.capacity = target.size + 1;
+                    target.data = (char*)z_xmalloc(target.capacity + 1);
+                    memcpy(target.data, buf, target.size);
+                    target.data[target.size] = '\0';
+                    free(buf);
+                    free(path_cstr);
+                    z_@String@_t* boxed = (z_@String@_t*)z_xmalloc(sizeof(z_@String@_t));
+                    *boxed = target;
+                    result.tag = @ARM_Result_String_IoError.ok@;
+                    result.data = boxed;
+                    return result;
+                #endif
+                }
+
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "remove"
+            needs: list { "prelude.zwin32" "prelude.@win_path" "@sv_cstr?posix" "@wrap_null" }
+            fragments: list {
+                """
+                /* remove -- a file or an empty directory. POSIX tries unlink and falls back to
+                   rmdir on EISDIR; Windows asks the kind first, a directory symlink or junction
+                   being removed as the directory entry it is. */
+                static z_@Result_null_IoError@_t z_io_remove(z_@StringView@_t path) {
+                #if defined(_WIN32)
+                    wchar_t* w = z_win_path(path.data, path.size);
+                    int rc = -1;
+                    if (w != NULL) {
+                        DWORD a = GetFileAttributesW(w);
+                        if (a != INVALID_FILE_ATTRIBUTES) {
+                            BOOL ok = (a & FILE_ATTRIBUTE_DIRECTORY) ? RemoveDirectoryW(w) : DeleteFileW(w);
+                            rc = ok ? 0 : -1;
+                        }
+                    }
+                    int e = (int)GetLastError();
+                    free(w);
+                #else
+                    char* path_cstr = z_sv_to_cstr(path);
+                    int rc = unlink(path_cstr);
+                    int e = errno;
+                    if (rc != 0 && e == EISDIR) {
+                        rc = rmdir(path_cstr);
+                        e = errno;
+                    }
+                    free(path_cstr);
+                #endif
+                    return z_io_wrap_null_Result(rc, e);
+                }
+                """
+            }
+        )
+        (
+            c.row
+            key: "rename"
+            needs: list { "prelude.zwin32" "prelude.@win_path" "@sv_cstr?posix" "@wrap_null" }
+            fragments: list {
+                """
+                /* rename -- atomically replaces an existing `to` (MoveFileExW's
+                   REPLACE_EXISTING on Windows) */
+                static z_@Result_null_IoError@_t z_io_rename(
+                    z_@StringView@_t from, z_@StringView@_t to
+                ) {
+                #if defined(_WIN32)
+                    wchar_t* wf = z_win_path(from.data, from.size);
+                    wchar_t* wt = wf != NULL ? z_win_path(to.data, to.size) : NULL;
+                    int rc = (wt != NULL && MoveFileExW(wf, wt, MOVEFILE_REPLACE_EXISTING)) ? 0 : -1;
+                    int e = (int)GetLastError();
+                    free(wf);
+                    free(wt);
+                #else
+                    char* from_cstr = z_sv_to_cstr(from);
+                    char* to_cstr = z_sv_to_cstr(to);
+                    int rc = rename(from_cstr, to_cstr);
+                    int e = errno;
+                    free(from_cstr);
+                    free(to_cstr);
+                #endif
+                    return z_io_wrap_null_Result(rc, e);
+                }
+                """
+            }
+        )
+        (
+            c.row
+            key: "stat"
+            needs: list { "prelude.@xmalloc" "@errno" "@sv_cstr?posix" }
+            fragments: list {
+                """
+                /* stat(2) follows symlinks; the SYMLINK arm never fires here —
+                   that arm is reached through z_io_lstat. Returns the filestat
+                   value by value (not boxed); the compiler-generated result
+                   destructor frees the ok payload's heap copy. */
+                static z_@Result_filestat_IoError@_t z_io_stat(z_@StringView@_t path);
+                static z_@Result_filestat_IoError@_t z_io_stat(z_@StringView@_t path) {
+                    z_@Result_filestat_IoError@_t result = {0};
+                    z_@filestat@_t fs = {0};
+                #if defined(_WIN32)
+                    int e = z_io_win_stat(path, 1, &fs);
+                    int rc = e == 0 ? 0 : -1;
+                #else
+                    char* path_cstr = z_sv_to_cstr(path);
+                    struct stat sb;
+                    int rc = stat(path_cstr, &sb);
+                    int e = errno;
+                    free(path_cstr);
+                    if (rc == 0) z_io_fill_filestat(&fs, &sb);
+                #endif
+                    if (rc != 0) {
+                        z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
+                        *boxed = z_io_os_error(e);
+                        result.tag = @ARM_Result_filestat_IoError.err@;
+                        result.data = boxed;
+                        return result;
+                    }
+                    z_@filestat@_t* boxed = (z_@filestat@_t*)z_xmalloc(sizeof(z_@filestat@_t));
+                    *boxed = fs;
+                    result.tag = @ARM_Result_filestat_IoError.ok@;
+                    result.data = boxed;
+                    return result;
+                }
+
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "symlink"
+            needs: list {
+                "prelude.zwin32" "prelude.@xmalloc" "io.@wrap_null" "prelude.@win_path"
+                "prelude.@win_root_len" "prelude.@win_wide" "@sv_cstr?posix"
+            }
+            fragments: list {
+                """
+                /* symlink — create a symbolic link at `link` with `target` as the
+                   link content. Both args are borrowed views; caller retains.
+                   EEXIST maps to ioerror.exists so callers can distinguish
+                   'already there' from other failures.
+
+                   On Windows a link is a file link or a directory link, so it is a
+                   directory link when the target -- relative to the link's own folder
+                   when relative -- is a directory now. The target is stored with
+                   native separators. Creating one needs Developer Mode or the
+                   privilege to (permissiondenied without): it is asked for
+                   unprivileged first, and plainly on a Windows too old to know the
+                   flag. */
+                #if defined(_WIN32)
+                static int z_io_win_symlink(z_@StringView@_t target, z_@StringView@_t link) {
+                    char* t = (char*)z_xmalloc(target.size + 1);
+                    for (uint64_t i = 0; i < target.size; i++) t[i] = target.data[i] == '/' ? '\\' : target.data[i];
+                    t[target.size] = '\0';
+                    /* where the target resolves from: itself when absolute, else the link's folder */
+                    char* at = t;
+                    if (z_win_root_len(t, target.size) == 0) {
+                        size_t d = link.size;
+                        while (d > 0 && link.data[d - 1] != '/' && link.data[d - 1] != '\\') d--;
+                        at = (char*)z_xmalloc(d + target.size + 1);
+                        if (d > 0) memcpy(at, link.data, d);
+                        memcpy(at + d, t, target.size + 1);
+                    }
+                    wchar_t* wa = z_win_path(at, strlen(at));
+                    DWORD a = wa != NULL ? GetFileAttributesW(wa) : INVALID_FILE_ATTRIBUTES;
+                    free(wa);
+                    if (at != t) free(at);
+                    DWORD flags = (a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY)) ? SYMBOLIC_LINK_FLAG_DIRECTORY : 0;
+                    wchar_t* wt = z_win_wide(t, target.size);
+                    free(t);
+                    wchar_t* wl = wt != NULL ? z_win_path(link.data, link.size) : NULL;
+                    int rc = -1;
+                    if (wl != NULL) {
+                        BOOLEAN ok = CreateSymbolicLinkW(wl, wt, flags | SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE);
+                        if (!ok && GetLastError() == ERROR_INVALID_PARAMETER) ok = CreateSymbolicLinkW(wl, wt, flags);
+                        rc = ok ? 0 : -1;
+                    }
+                    DWORD e = GetLastError();
+                    free(wt);
+                    free(wl);
+                    SetLastError(e);
+                    return rc;
+                }
+                #endif
+
+                static z_@Result_null_IoError@_t z_io_symlink(
+                    z_@StringView@_t target, z_@StringView@_t link
+                );
+                static z_@Result_null_IoError@_t z_io_symlink(
+                    z_@StringView@_t target, z_@StringView@_t link
+                ) {
+                #if defined(_WIN32)
+                    int rc = z_io_win_symlink(target, link);
+                    int e = (int)GetLastError();
+                #else
+                    char* target_cstr = z_sv_to_cstr(target);
+                    char* link_cstr = z_sv_to_cstr(link);
+                    int rc = symlink(target_cstr, link_cstr);
+                    int e = errno;
+                    free(target_cstr);
+                    free(link_cstr);
+                #endif
+                    return z_io_wrap_null_Result(rc, e);
+                }
+                """
+            }
+        )
+        (
+            c.row
+            key: "writeText"
+            fragments: list {
+                """
+                static z_@Result_null_IoError@_t z_io_writeText(
+                    z_@StringView@_t path, z_@StringView@_t content
+                ) {
+                    return z_io_write_common(path, content, 1);
+                }
+
+
+                """
+            }
+        )
+        # a File is runtime-owned: its struct is its declaration's, its destructor closes
+        # the fd once, and it is live -- its Reader/Writer/Closer/Seeker natives demanded
+        # -- once the byte-buffer monos its read and write take exist
+        (
+            c.row
+            key: "File.@class"
+            live: list { "ListVal_u8" "ListViewVal_u8" }
+            destroy: """
+                static void z_@File@_destroy(z_@File@_t* p) {
+                    if (!p) return;
+                    if (!p->@MEMBER_File.open@) return;
+                #if defined(_WIN32)
+                    _close(p->@MEMBER_File.fd@);
+                #else
+                    close(p->@MEMBER_File.fd@);
+                #endif
+                    p->@MEMBER_File.open@ = false;
+                }
+                """
+        )
+        (
+            c.row
+            key: "File.close"
+            demand: list { "file_close" }
+            needs: list { "prelude.zwin32" "prelude.@win_close" "@wrap_null" }
+            fragments: list {
+                """
+                /* file.close — explicit close that surfaces delayed write errors.
+                   Marks the file as closed so z_@File@_destroy skips a second close. */
+                static z_@Result_null_IoError@_t z_@File@_close(z_@File@_t* p);
+                static z_@Result_null_IoError@_t z_@File@_close(z_@File@_t* p) {
+                    z_@Result_null_IoError@_t result = {0};
+                    if (!p || !p->@MEMBER_File.open@) {
+                        result.tag = @ARM_Result_null_IoError.ok@;
+                        result.data = NULL;
+                        return result;
+                    }
+                #if defined(_WIN32)
+                    int rc = z_win_close(p->@MEMBER_File.fd@);
+                    int e = (int)GetLastError();
+                #else
+                    int rc = close(p->@MEMBER_File.fd@);
+                    int e = errno;
+                #endif
+                    p->@MEMBER_File.open@ = false;
+                    return z_io_wrap_null_Result(rc, e);
+                }
+
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "File.write"
+            demand: list { "file_write" }
+            needs: list { "prelude.@write_line" "prelude.@win_write" }
+            fragments: list {
+                """
+                /* file.write — write all bytes from `src`. Loops on short writes;
+                   retries on EINTR. Returns total bytes written on success.
+                   `src` is a listview (layout: length, data*), matching byteview. */
+                static z_@ResultVR_u64_IoError@_t z_@File@_write(
+                    z_@File@_t* f, z_@ListViewVal_u8@_t src
+                );
+                static z_@ResultVR_u64_IoError@_t z_@File@_write(
+                    z_@File@_t* f, z_@ListViewVal_u8@_t src
+                ) {
+                    uint64_t total = 0;
+                    while (total < src.length) {
+                #if defined(_WIN32)
+                        if (z_win_console_write(f->@MEMBER_File.fd@, (const char*)src.data + total, src.length - total, 0)) {
+                            total = src.length;
+                            break;
+                        }
+                        int64_t n = z_win_write(f->@MEMBER_File.fd@, src.data + total, src.length - total);
+                        if (n < 0) return z_io_u64_err((int)GetLastError());
+                #else
+                        int64_t n = write(f->@MEMBER_File.fd@, src.data + total, src.length - total);
+                        if (n < 0) {
+                            if (errno == EINTR) continue;
+                            return z_io_u64_err(errno);
+                        }
+                #endif
+                        total += (uint64_t)n;
+                    }
+                    return z_io_u64_ok(total);
+                }
+
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "File.read"
+            demand: list { "file_read" }
+            needs: list { "prelude.@xrealloc" "prelude.@win_read" }
+            fragments: list {
+                """
+                /* file.read — read up to `max` bytes, appending to `buf`.
+                   Grows the list capacity as needed. Returns actual bytes read
+                   (0 indicates EOF); retries on EINTR. The loop breaks out so the body
+                   ends in its return -- c2mir miscompiles a struct return otherwise. */
+                static z_@ResultVR_u64_IoError@_t z_@File@_read(
+                    z_@File@_t* f, z_@ListVal_u8@_t* buf, uint64_t max
+                );
+                static z_@ResultVR_u64_IoError@_t z_@File@_read(
+                    z_@File@_t* f, z_@ListVal_u8@_t* buf, uint64_t max
+                ) {
+                    if (buf->capacity < buf->length + max) {
+                        uint64_t newcap = buf->length + max;
+                        buf->data = (uint8_t*)z_xrealloc(buf->data, newcap);
+                        buf->capacity = newcap;
+                    }
+                    int64_t n;
+                #if defined(_WIN32)
+                    n = z_win_read(f->@MEMBER_File.fd@, buf->data + buf->length, max);
+                    if (n < 0) return z_io_u64_err((int)GetLastError());
+                #else
+                    for (;;) {
+                        n = read(f->@MEMBER_File.fd@, buf->data + buf->length, max);
+                        if (n >= 0) break;
+                        if (errno != EINTR) return z_io_u64_err(errno);
+                    }
+                #endif
+                    buf->length += (uint64_t)n;
+                    return z_io_u64_ok((uint64_t)n);
+                }
+
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "File.seek"
+            demand: list { "file_seek" }
+            needs: list { "prelude.@win_seek" }
+            fragments: list {
+                """
+                /* file.seek — reposition the fd head, 64-bit on every system. Maps
+                   seekorigin to the matching whence constant. Returns the new absolute
+                   position measured from the start of the file. */
+                static z_@ResultVR_u64_IoError@_t z_@File@_seek(
+                    z_@File@_t* f, int64_t off, z_@seekorigin@_t origin
+                );
+                static z_@ResultVR_u64_IoError@_t z_@File@_seek(
+                    z_@File@_t* f, int64_t off, z_@seekorigin@_t origin
+                ) {
+                    int whence;
+                    switch (origin@TAG_seekorigin@) {
+                        case @ARM_seekorigin.start@:   whence = SEEK_SET; break;
+                        case @ARM_seekorigin.current@: whence = SEEK_CUR; break;
+                        case @ARM_seekorigin.end@:     whence = SEEK_END; break;
+                        default:                       whence = SEEK_SET; break;
+                    }
+                #if defined(_WIN32)
+                    int64_t pos = z_win_seek(f->@MEMBER_File.fd@, off, whence);
+                    if (pos < 0) return z_io_u64_err((int)GetLastError());
+                #else
+                    off_t pos = lseek(f->@MEMBER_File.fd@, (off_t)off, whence);
+                    if (pos < 0) return z_io_u64_err(errno);
+                #endif
+                    return z_io_u64_ok((uint64_t)pos);
+                }
+
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "File.flush"
+            demand: list { "file_flush" }
+            fragments: list {
+                """
+                /* file.flush — no-op for raw file descriptors (POSIX write goes
+                   directly to the kernel, no userspace buffer to drain). Exists
+                   so file satisfies the `writer` protocol signature. */
+                static z_@Result_null_IoError@_t z_@File@_flush(z_@File@_t* f);
+                static z_@Result_null_IoError@_t z_@File@_flush(z_@File@_t* f) {
+                    (void)f;
+                    z_@Result_null_IoError@_t result = {0};
+                    result.tag = @ARM_Result_null_IoError.ok@;
+                    result.data = NULL;
+                    return result;
+                }
+
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "File.pollReadable"
+            demand: list { "file_pollReadable" }
+            needs: list { "prelude.zwin32" "prelude.@xmalloc" }
+            pulls: list { "io.@errno" }
+            fragments: list {
+                """
+                /* file.pollReadable — whether a read would find data, or the end to drain,
+                   within timeoutMillis. POSIX polls the fd (POLLIN|POLLHUP); an interrupted
+                   wait reports not-readable. Windows asks the handle by its kind: a disk
+                   file is always ready; a pipe answers PeekNamedPipe (bytes waiting, or its
+                   writer gone), asked every millisecond or so until the time is up; a
+                   console is waited on (WaitForSingleObject). */
+                static z_@ResultVR_bool_IoError@_t z_@File@_pollReadable(const z_@File@_t* f, int32_t timeoutMillis);
+                static z_@ResultVR_bool_IoError@_t z_@File@_pollReadable(const z_@File@_t* f, int32_t timeoutMillis) {
+                    z_@ResultVR_bool_IoError@_t result = {0};
+                    int ready = 0;
+                    int e = 0;
+                #if defined(_WIN32)
+                    HANDLE h = (HANDLE)_get_osfhandle(f->@MEMBER_File.fd@);
+                    DWORD kind = GetFileType(h);
+                    if (kind == FILE_TYPE_PIPE) {
+                        ULONGLONG start = GetTickCount64();
+                        for (;;) {
+                            DWORD avail = 0;
+                            if (!PeekNamedPipe(h, NULL, 0, NULL, &avail, NULL)) {
+                                DWORD pe = GetLastError();
+                                if (pe == ERROR_BROKEN_PIPE) ready = 1; else e = (int)pe;
+                                break;
+                            }
+                            if (avail > 0) {
+                                ready = 1;
+                                break;
+                            }
+                            if (timeoutMillis >= 0 && GetTickCount64() - start >= (ULONGLONG)timeoutMillis) break;
+                            Sleep(1);
+                        }
+                    } else if (kind == FILE_TYPE_CHAR) {
+                        DWORD w = WaitForSingleObject(h, timeoutMillis < 0 ? INFINITE : (DWORD)timeoutMillis);
+                        if (w == WAIT_OBJECT_0) ready = 1;
+                        else if (w == WAIT_FAILED) e = (int)GetLastError();
+                    } else {
+                        ready = 1;
+                    }
+                #else
+                    struct pollfd p = { f->@MEMBER_File.fd@, POLLIN, 0 };
+                    int rc = poll(&p, 1, timeoutMillis);
+                    if (rc < 0 && errno != EINTR) e = errno;
+                    ready = rc > 0 && (p.revents & (POLLIN | POLLHUP));
+                #endif
+                    if (e != 0) {
+                        z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
+                        *boxed = z_io_os_error(e);
+                        result.tag = @ARM_ResultVR_bool_IoError.err@;
+                        result.data = boxed;
+                        return result;
+                    }
+                    result.tag = @ARM_ResultVR_bool_IoError.ok@;
+                    result.@MEMBER_ResultVR_bool_IoError.ok@ = ready != 0;
+                    return result;
+                }
+                """
+            }
+        )
+        (
+            c.row
+            key: "BufWriter.create"
+            demand: list { "uses_BufWriter" }
+            members: list { "ListVal_u8.create" }
+            fragments: list {
+                """
+                /* bufwriter.create — allocate a buffered writer with an empty
+                   backing buffer of the requested capacity. The sink is held by
+                   borrow (the source writer is locked by the typechecker's
+                   path-scoped lock for the wrapper's lifetime). */
+                static z_@BufWriter@_t z_@BufWriter@_create(z_@Writer@_t sink, uint64_t cap);
+                static z_@BufWriter@_t z_@BufWriter@_create(z_@Writer@_t sink, uint64_t cap) {
+                    z_@BufWriter@_t self = {0};
+                    self.@MEMBER_BufWriter.sink@ = sink;
+                    self.@MEMBER_BufWriter.buf@ = z_@ListVal_u8@_create(cap);
+                    self.@MEMBER_BufWriter.cap@ = cap;
+                    return self;
+                }
+
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "BufWriter.flush"
+            demand: list { "uses_BufWriter" }
+            fragments: list {
+                """
+                /* bufwriter.flush — drain the backing buffer to the sink via its
+                   writer vtable. On ok, the buffer length is reset to 0. On err,
+                   the underlying ioerror is transferred into the returned
+                   result(null, ioerror) so callers see exactly one error. */
+                static z_@Result_null_IoError@_t z_@BufWriter@_flush(z_@BufWriter@_t* self);
+                static z_@Result_null_IoError@_t z_@BufWriter@_flush(z_@BufWriter@_t* self) {
+                    z_@Result_null_IoError@_t result = {0};
+                    if (self->@MEMBER_BufWriter.buf@.length == 0) {
+                        result.tag = @ARM_Result_null_IoError.ok@;
+                        result.data = NULL;
+                        return result;
+                    }
+                    z_@ListViewVal_u8@_t view = { self->@MEMBER_BufWriter.buf@.length, self->@MEMBER_BufWriter.buf@.data };
+                    z_@ResultVR_u64_IoError@_t wr =
+                        self->@MEMBER_BufWriter.sink@.vtable->@MEMBER_Writer.write@(self->@MEMBER_BufWriter.sink@.data, view);
+                    if (wr.tag == @ARM_ResultVR_u64_IoError.ok@) {
+                        self->@MEMBER_BufWriter.buf@.length = 0;
+                        result.tag = @ARM_Result_null_IoError.ok@;
+                        result.data = NULL;
+                        return result;
+                    }
+                    /* err: transfer ioerror box into result(null, ioerror) */
+                    result.tag = @ARM_Result_null_IoError.err@;
+                    result.data = wr.data;
+                    return result;
+                }
+
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "BufWriter.write"
+            demand: list { "uses_BufWriter" }
+            needs: list { "io.@wrap_u64" }
+            members: list { "ListVal_u8.grow" }
+            fragments: list {
+                """
+                /* bufwriter.write — append `from` to the backing buffer. If the
+                   combined length would exceed `cap`, flush first (propagating
+                   any write error). Chunks larger than `cap` bypass the buffer
+                   and go straight to the sink. */
+                static z_@ResultVR_u64_IoError@_t z_@BufWriter@_write(
+                    z_@BufWriter@_t* self, z_@ListViewVal_u8@_t from
+                );
+                static z_@ResultVR_u64_IoError@_t z_@BufWriter@_write(
+                    z_@BufWriter@_t* self, z_@ListViewVal_u8@_t from
+                ) {
+                    if (self->@MEMBER_BufWriter.buf@.length + from.length > self->@MEMBER_BufWriter.cap@) {
+                        z_@Result_null_IoError@_t fr = z_@BufWriter@_flush(self);
+                        if (fr.tag != @ARM_Result_null_IoError.ok@) {
+                            z_@ResultVR_u64_IoError@_t result = {0};
+                            result.tag = @ARM_ResultVR_u64_IoError.err@;
+                            result.data = fr.data;
+                            return result;
+                        }
+                    }
+                    if (from.length > self->@MEMBER_BufWriter.cap@) {
+                        /* oversize write: bypass the buffer */
+                        return self->@MEMBER_BufWriter.sink@.vtable->@MEMBER_Writer.write@(self->@MEMBER_BufWriter.sink@.data, from);
+                    }
+                    z_@ListVal_u8@_grow(&self->@MEMBER_BufWriter.buf@, self->@MEMBER_BufWriter.buf@.length + from.length);
+                    memcpy(self->@MEMBER_BufWriter.buf@.data + self->@MEMBER_BufWriter.buf@.length, from.data, from.length);
+                    self->@MEMBER_BufWriter.buf@.length += from.length;
+                    return z_io_u64_ok(from.length);
+                }
+
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "BufReader.create"
+            demand: list { "uses_BufReader" }
+            members: list { "ListVal_u8.create" }
+            fragments: list {
+                """
+                /* bufreader.create — wrap a reader. Pre-allocates the internal
+                   `buf` to `cap` so the first refill never has to grow it. `head`
+                   starts at 0; the buffer is empty (buf.length == 0) so the first
+                   read triggers a refill. Source is held by borrow via the
+                   typechecker's path-scoped lock. */
+                static z_@BufReader@_t z_@BufReader@_create(z_@Reader@_t source, uint64_t cap);
+                static z_@BufReader@_t z_@BufReader@_create(z_@Reader@_t source, uint64_t cap) {
+                    z_@BufReader@_t self = {0};
+                    self.@MEMBER_BufReader.source@ = source;
+                    self.@MEMBER_BufReader.buf@ = z_@ListVal_u8@_create(cap);
+                    self.@MEMBER_BufReader.head@ = 0;
+                    self.@MEMBER_BufReader.cap@ = cap;
+                    return self;
+                }
+
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "BufReader.read"
+            demand: list { "uses_BufReader" }
+            needs: list { "prelude.@xrealloc" "io.@wrap_u64" }
+            fragments: list {
+                """
+                /* bufreader.read — drain the internal buffer into `into`; when
+                   empty, refill from the source with a single `cap`-sized read
+                   (or forward straight to the source when the caller wants more
+                   than `cap` bytes). Returns what it has in one call; callers
+                   that need exactly N bytes loop externally, matching the
+                   reader-protocol contract ('short reads are fine'). */
+                static z_@ResultVR_u64_IoError@_t z_@BufReader@_read(
+                    z_@BufReader@_t* self, z_@ListVal_u8@_t* into, uint64_t max
+                );
+                static z_@ResultVR_u64_IoError@_t z_@BufReader@_read(
+                    z_@BufReader@_t* self, z_@ListVal_u8@_t* into, uint64_t max
+                ) {
+                    uint64_t available = self->@MEMBER_BufReader.buf@.length - self->@MEMBER_BufReader.head@;
+                    if (available == 0) {
+                        if (max >= self->@MEMBER_BufReader.cap@) {
+                            /* bypass: caller wants more than our buffer holds --
+                               forward directly and skip the intermediate copy. */
+                            return self->@MEMBER_BufReader.source@.vtable->@MEMBER_Reader.read@(
+                                self->@MEMBER_BufReader.source@.data, into, max
+                            );
+                        }
+                        /* refill: pull up to cap bytes into our buffer in one
+                           source read, then fall through to the drain path. */
+                        self->@MEMBER_BufReader.buf@.length = 0;
+                        self->@MEMBER_BufReader.head@ = 0;
+                        z_@ResultVR_u64_IoError@_t rr = self->@MEMBER_BufReader.source@.vtable->@MEMBER_Reader.read@(
+                            self->@MEMBER_BufReader.source@.data, &self->@MEMBER_BufReader.buf@, self->@MEMBER_BufReader.cap@
+                        );
+                        if (rr.tag != @ARM_ResultVR_u64_IoError.ok@) return rr;
+                        available = self->@MEMBER_BufReader.buf@.length;
+                        if (available == 0) return z_io_u64_ok(0);
+                    }
+                    uint64_t take = max < available ? max : available;
+                    if (into->capacity < into->length + take) {
+                        uint64_t newcap = into->length + take;
+                        into->data = (uint8_t*)z_xrealloc(into->data, newcap);
+                        into->capacity = newcap;
+                    }
+                    memcpy(
+                        into->data + into->length,
+                        self->@MEMBER_BufReader.buf@.data + self->@MEMBER_BufReader.head@,
+                        take
+                    );
+                    into->length += take;
+                    self->@MEMBER_BufReader.head@ += take;
+                    return z_io_u64_ok(take);
+                }
+
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "TextWriter.create"
+            demand: list { "@tw_create" }
+            fragments: list {
+                """
+                /* textwriter.create -- wrap a bufwriter. The sink is held by
+                   borrow (path-scoped lock on the bufwriter keeps it stable
+                   for the wrapper's lifetime). No backing buffer of our own --
+                   we delegate to the bufwriter's buffer. */
+                static z_@TextWriter@_t z_@TextWriter@_create(z_@BufWriter@_t* sink);
+                static z_@TextWriter@_t z_@TextWriter@_create(z_@BufWriter@_t* sink) {
+                    z_@TextWriter@_t self = {0};
+                    self.@MEMBER_TextWriter.sink@ = sink;
+                    return self;
+                }
+
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "TextWriter.write"
+            demand: list { "@tw_write" }
+            fragments: list {
+                """
+                /* textwriter.write -- forward the stringview's bytes to the
+                   underlying bufwriter. Stringviews are UTF-8 by construction
+                   (the compiler's string/stringview types enforce it at their
+                   ingress points), so no validation is performed here. */
+                static z_@ResultVR_u64_IoError@_t z_@TextWriter@_write(
+                    z_@TextWriter@_t* self, z_@StringView@_t from
+                );
+                static z_@ResultVR_u64_IoError@_t z_@TextWriter@_write(
+                    z_@TextWriter@_t* self, z_@StringView@_t from
+                ) {
+                    z_@ListViewVal_u8@_t view = { from.size, (uint8_t*)from.data };
+                    return z_@BufWriter@_write(self->@MEMBER_TextWriter.sink@, view);
+                }
+
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "TextWriter.writeLine"
+            demand: list { "@tw_writeLine" }
+            needs: list { "io.@wrap_u64" }
+            fragments: list {
+                """
+                /* textwriter.write_line -- emit the stringview followed by an
+                   LF ('\n'). Two sink writes: content then newline. Returns the
+                   total byte count on ok; on a partial-write err from the
+                   newline, the content is still considered written (its count
+                   would have been reported by a plain `write` call) so the
+                   caller can distinguish 'nothing landed' from 'content landed,
+                   newline did not' by inspecting the ok count. Errors from the
+                   content write short-circuit. */
+                static z_@ResultVR_u64_IoError@_t z_@TextWriter@_writeLine(
+                    z_@TextWriter@_t* self, z_@StringView@_t from
+                );
+                static z_@ResultVR_u64_IoError@_t z_@TextWriter@_writeLine(
+                    z_@TextWriter@_t* self, z_@StringView@_t from
+                ) {
+                    z_@ListViewVal_u8@_t body = { from.size, (uint8_t*)from.data };
+                    z_@ResultVR_u64_IoError@_t br = z_@BufWriter@_write(self->@MEMBER_TextWriter.sink@, body);
+                    if (br.tag != @ARM_ResultVR_u64_IoError.ok@) return br;
+                    uint8_t nl = (uint8_t)'\n';
+                    z_@ListViewVal_u8@_t tail = { (uint64_t)1, &nl };
+                    z_@ResultVR_u64_IoError@_t tr = z_@BufWriter@_write(self->@MEMBER_TextWriter.sink@, tail);
+                    if (tr.tag != @ARM_ResultVR_u64_IoError.ok@) return tr;
+                    return z_io_u64_ok(br.@MEMBER_ResultVR_u64_IoError.ok@ + tr.@MEMBER_ResultVR_u64_IoError.ok@);
+                }
+
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "TextWriter.flush"
+            demand: list { "@tw_flush" }
+            fragments: list {
+                """
+                /* textwriter.flush -- delegate to the bufwriter's flush. The
+                   textwriter has no buffer of its own to drain. */
+                static z_@Result_null_IoError@_t z_@TextWriter@_flush(z_@TextWriter@_t* self);
+                static z_@Result_null_IoError@_t z_@TextWriter@_flush(z_@TextWriter@_t* self) {
+                    return z_@BufWriter@_flush(self->@MEMBER_TextWriter.sink@);
+                }
+
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "@utf8_validate"
+            demand: list { "@utf8_validate" }
+            needs: list { "prelude.@xmalloc" }
+            fragments: list {
+                """
+                /* 1 when [data, data+len) is valid UTF-8, else 0: the count itself is the
+                   shared validator's (_Z_UTF8_VALID_UPTO, which readLine needs) */
+                static uint64_t z_utf8_valid_upto(const uint8_t* data, uint64_t len);
+                static int z_io_utf8_is_valid(const uint8_t* data, uint64_t len);
+                static int z_io_utf8_is_valid(const uint8_t* data, uint64_t len) {
+                    return z_utf8_valid_upto(data, len) == len;
+                }
+
+                /* Box a null-payload ioerror arm into result(string, ioerror). */
+                static z_@Result_String_IoError@_t z_io_String_err_arm(z_@IoError@_tag_t tag);
+                static z_@Result_String_IoError@_t z_io_String_err_arm(z_@IoError@_tag_t tag) {
+                    z_@Result_String_IoError@_t result = {0};
+                    z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
+                    z_@IoError@_t e = {0};
+                    e.tag = tag;
+                    *boxed = e;
+                    result.tag = @ARM_Result_String_IoError.err@;
+                    result.data = boxed;
+                    return result;
+                }
+
+                /* Box a string value into result(string, ioerror) ok arm. Takes
+                   ownership of `s` (its heap buffer moves into the boxed copy). */
+                static z_@Result_String_IoError@_t z_io_String_ok(z_@String@_t s);
+                static z_@Result_String_IoError@_t z_io_String_ok(z_@String@_t s) {
+                    z_@Result_String_IoError@_t result = {0};
+                    z_@String@_t* boxed = (z_@String@_t*)z_xmalloc(sizeof(z_@String@_t));
+                    *boxed = s;
+                    result.tag = @ARM_Result_String_IoError.ok@;
+                    result.data = boxed;
+                    return result;
+                }
+
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "TextReader.create"
+            demand: list { "@tr_create" }
+            needs: list { "system.utf8" }
+            members: list { "ListVal_u8.create" }
+            fragments: list {
+                """
+                /* textreader.create -- wrap a bufreader. Owns a small line-accum
+                   buffer (`buf`) used across read_line calls to carry bytes that
+                   didn't yet form a complete LF-terminated line. */
+                static z_@TextReader@_t z_@TextReader@_create(z_@BufReader@_t* source);
+                static z_@TextReader@_t z_@TextReader@_create(z_@BufReader@_t* source) {
+                    z_@TextReader@_t self = {0};
+                    self.@MEMBER_TextReader.source@ = source;
+                    self.@MEMBER_TextReader.buf@ = z_@ListVal_u8@_create(0);
+                    return self;
+                }
+
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "TextReader.readLine"
+            demand: list { "@tr_readLine" }
+            needs: list { "system.utf8" "prelude.@xmalloc" "@utf8_validate" }
+            fragments: list {
+                """
+                /* textreader.read_line -- scan `buf` for LF; if none present pull
+                   another chunk from the underlying bufreader. On finding LF split
+                   at that offset, validate the line (without its LF) as UTF-8,
+                   emit `ioerror.badencoding` on failure or `result.ok(line)` on
+                   success. On a zero-byte read with buf non-empty, surface the
+                   unterminated tail once; with buf empty, surface `ioerror.eof`. Both
+                   success paths break out with `line` set so the body ends in its
+                   return -- c2mir miscompiles a struct return otherwise. */
+                static z_@Result_String_IoError@_t z_@TextReader@_readLine(
+                    z_@TextReader@_t* self
+                );
+                static z_@Result_String_IoError@_t z_@TextReader@_readLine(
+                    z_@TextReader@_t* self
+                ) {
+                    uint64_t scan_start = 0;
+                    z_@String@_t line = {0};
+                    bool found = false;
+                    for (;;) {
+                        for (uint64_t i = scan_start; i < self->@MEMBER_TextReader.buf@.length; i++) {
+                            if (self->@MEMBER_TextReader.buf@.data[i] == (uint8_t)'\n') {
+                                if (!z_io_utf8_is_valid(self->@MEMBER_TextReader.buf@.data, i)) {
+                                    return z_io_String_err_arm(@ARM_IoError.badencoding@);
+                                }
+                                line.size = i;
+                                line.capacity = i + 1;
+                                line.data = (char*)z_xmalloc(line.capacity + 1);
+                                if (i > 0) memcpy(line.data, self->@MEMBER_TextReader.buf@.data, i);
+                                line.data[i] = '\0';
+                                uint64_t tail = self->@MEMBER_TextReader.buf@.length - (i + 1);
+                                if (tail > 0) {
+                                    memmove(self->@MEMBER_TextReader.buf@.data, self->@MEMBER_TextReader.buf@.data + i + 1, tail);
+                                }
+                                self->@MEMBER_TextReader.buf@.length = tail;
+                                found = true;
+                                break;
+                            }
+                        }
+                        if (found) break;
+                        scan_start = self->@MEMBER_TextReader.buf@.length;
+                        uint64_t cap = self->@MEMBER_TextReader.source@->@MEMBER_BufReader.cap@;
+                        if (cap == 0) cap = 4096;
+                        z_@ResultVR_u64_IoError@_t rr = z_@BufReader@_read(
+                            self->@MEMBER_TextReader.source@, &self->@MEMBER_TextReader.buf@, cap
+                        );
+                        if (rr.tag != @ARM_ResultVR_u64_IoError.ok@) {
+                            z_@Result_String_IoError@_t result = {0};
+                            result.tag = @ARM_Result_String_IoError.err@;
+                            result.data = rr.data;
+                            return result;
+                        }
+                        uint64_t n = rr.@MEMBER_ResultVR_u64_IoError.ok@;
+                        if (n == 0) {
+                            if (self->@MEMBER_TextReader.buf@.length == 0) {
+                                return z_io_String_err_arm(@ARM_IoError.eof@);
+                            }
+                            uint64_t size = self->@MEMBER_TextReader.buf@.length;
+                            if (!z_io_utf8_is_valid(self->@MEMBER_TextReader.buf@.data, size)) {
+                                return z_io_String_err_arm(@ARM_IoError.badencoding@);
+                            }
+                            line.size = size;
+                            line.capacity = size + 1;
+                            line.data = (char*)z_xmalloc(line.capacity + 1);
+                            if (size > 0) memcpy(line.data, self->@MEMBER_TextReader.buf@.data, size);
+                            line.data[size] = '\0';
+                            self->@MEMBER_TextReader.buf@.length = 0;
+                            break;
+                        }
+                    }
+                    return z_io_String_ok(line);
+                }
+
+
+                """
+            }
+        )
+        # the statement-special and the three streams: no fragment of their own, so the
+        # row states only that the compiler supplies them
+        (c.row key: "print")
+        (c.row key: "stdin")
+        (c.row key: "stdout")
+        (c.row key: "stderr")
+    }
+    canons: list {
+        (c.canon stem: "Box_filestat" spec: list { "Box" "io.filestat" })
+        (c.canon stem: "Result_filestat_IoError" spec: list { "Result" "@Box_filestat" "IoError" })
+        (c.canon stem: "Result_String_IoError" spec: list { "Result" "String" "IoError" })
+        (c.canon stem: "Result_File_IoError" spec: list { "Result" "File" "IoError" })
+        (c.canon stem: "Result_null_IoError" spec: list { "Result" "null" "IoError" })
+        (c.canon stem: "ResultVR_u64_IoError" spec: list { "ResultVR" "u64" "IoError" })
+        (c.canon stem: "ResultVR_bool_IoError" spec: list { "ResultVR" "bool" "IoError" })
+        (c.canon stem: "Result_List_String_IoError" spec: list { "Result" "@List_String" "IoError" }
+        )
+    }
+)

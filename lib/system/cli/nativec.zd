@@ -1,0 +1,558 @@
+# nativec -- cli's C implementation, a runtime.nativec file
+c: runtime.nativec
+
+# implementation -- the C behind cli's native declarations
+implementation: (
+    c.implementation
+    rows: list {
+        # cli -- the convention loads, then parse's ordered pair and Parsed's methods
+        (
+            c.row
+            key: "addFlag"
+            members: list { "List_FlagDef.append" }
+            fragments: list {
+                """
+                /* name/shortName/help are .take: stored directly in the flagdef. */
+                static void z_cli_addFlag(z_@Spec@_t* spec,
+                    z_@String@_t name, z_@String@_t shortName, z_@String@_t help);
+                static void z_cli_addFlag(z_@Spec@_t* spec,
+                    z_@String@_t name, z_@String@_t shortName, z_@String@_t help) {
+                    z_@FlagDef@_t f = {0};
+                    f.@MEMBER_FlagDef.name@ = name;
+                    f.@MEMBER_FlagDef.shortName@ = shortName;
+                    f.@MEMBER_FlagDef.help@ = help;
+                    z_@List_FlagDef@_append(&spec->@MEMBER_Spec.flags@, f);
+                }
+
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "addOption"
+            members: list { "List_OptionDef.append" }
+            fragments: list {
+                """
+                /* name/shortName/help are .take: stored directly in the optiondef. */
+                static void z_cli_addOption(z_@Spec@_t* spec,
+                    z_@String@_t name, z_@String@_t shortName, z_@String@_t help, bool required);
+                static void z_cli_addOption(z_@Spec@_t* spec,
+                    z_@String@_t name, z_@String@_t shortName, z_@String@_t help, bool required) {
+                    z_@OptionDef@_t o = {0};
+                    o.@MEMBER_OptionDef.name@ = name;
+                    o.@MEMBER_OptionDef.shortName@ = shortName;
+                    o.@MEMBER_OptionDef.help@ = help;
+                    o.@MEMBER_OptionDef.required@ = required;
+                    z_@List_OptionDef@_append(&spec->@MEMBER_Spec.options@, o);
+                }
+
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "addPositional"
+            members: list { "List_PositionalDef.append" }
+            fragments: list {
+                """
+                /* name/help are .take: stored directly in the positionaldef. */
+                static void z_cli_addPositional(z_@Spec@_t* spec,
+                    z_@String@_t name, z_@String@_t help, bool required);
+                static void z_cli_addPositional(z_@Spec@_t* spec,
+                    z_@String@_t name, z_@String@_t help, bool required) {
+                    z_@PositionalDef@_t p = {0};
+                    p.@MEMBER_PositionalDef.name@ = name;
+                    p.@MEMBER_PositionalDef.help@ = help;
+                    p.@MEMBER_PositionalDef.required@ = required;
+                    z_@List_PositionalDef@_append(&spec->@MEMBER_Spec.positionals@, p);
+                }
+
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "helpText"
+            needs: list { "prelude.@String_append" "prelude.@String_create" }
+            fragments: list {
+                """
+                static z_@String@_t z_cli_helpText(z_@Spec@_t* spec);
+                static z_@String@_t z_cli_helpText(z_@Spec@_t* spec) {
+                    z_@String@_t out = z_@String@_create(128);
+                    z_@String@_append(&out, "usage: ", 7);
+                    z_@String@_append(&out, spec->@MEMBER_Spec.programName@.data, spec->@MEMBER_Spec.programName@.size);
+                    z_@String@_append(&out, " [options]", 10);
+                    for (uint64_t i = 0; i < spec->@MEMBER_Spec.positionals@.length; i++) {
+                        z_@String@_append(&out, " <", 2);
+                        z_@String@_append(&out, spec->@MEMBER_Spec.positionals@.data[i].@MEMBER_PositionalDef.name@.data,
+                                        spec->@MEMBER_Spec.positionals@.data[i].@MEMBER_PositionalDef.name@.size);
+                        z_@String@_append(&out, ">", 1);
+                    }
+                    if (spec->@MEMBER_Spec.summary@.size > 0) {
+                        z_@String@_append(&out, "\n\n", 2);
+                        z_@String@_append(&out, spec->@MEMBER_Spec.summary@.data, spec->@MEMBER_Spec.summary@.size);
+                    }
+                    if (spec->@MEMBER_Spec.flags@.length > 0) {
+                        z_@String@_append(&out, "\n\nFlags:", 8);
+                        for (uint64_t i = 0; i < spec->@MEMBER_Spec.flags@.length; i++) {
+                            z_@FlagDef@_t* f = &spec->@MEMBER_Spec.flags@.data[i];
+                            z_@String@_append(&out, "\n  ", 3);
+                            if (f->@MEMBER_FlagDef.shortName@.size > 0) {
+                                z_@String@_append(&out, f->@MEMBER_FlagDef.shortName@.data, f->@MEMBER_FlagDef.shortName@.size);
+                                z_@String@_append(&out, ", ", 2);
+                            }
+                            z_@String@_append(&out, f->@MEMBER_FlagDef.name@.data, f->@MEMBER_FlagDef.name@.size);
+                            if (f->@MEMBER_FlagDef.help@.size > 0) {
+                                z_@String@_append(&out, "    ", 4);
+                                z_@String@_append(&out, f->@MEMBER_FlagDef.help@.data, f->@MEMBER_FlagDef.help@.size);
+                            }
+                        }
+                    }
+                    if (spec->@MEMBER_Spec.options@.length > 0) {
+                        z_@String@_append(&out, "\n\nOptions:", 10);
+                        for (uint64_t i = 0; i < spec->@MEMBER_Spec.options@.length; i++) {
+                            z_@OptionDef@_t* o = &spec->@MEMBER_Spec.options@.data[i];
+                            z_@String@_append(&out, "\n  ", 3);
+                            if (o->@MEMBER_OptionDef.shortName@.size > 0) {
+                                z_@String@_append(&out, o->@MEMBER_OptionDef.shortName@.data, o->@MEMBER_OptionDef.shortName@.size);
+                                z_@String@_append(&out, ", ", 2);
+                            }
+                            z_@String@_append(&out, o->@MEMBER_OptionDef.name@.data, o->@MEMBER_OptionDef.name@.size);
+                            if (o->@MEMBER_OptionDef.help@.size > 0) {
+                                z_@String@_append(&out, "    ", 4);
+                                z_@String@_append(&out, o->@MEMBER_OptionDef.help@.data, o->@MEMBER_OptionDef.help@.size);
+                            }
+                        }
+                    }
+                    if (spec->@MEMBER_Spec.positionals@.length > 0) {
+                        z_@String@_append(&out, "\n\nPositionals:", 14);
+                        for (uint64_t i = 0; i < spec->@MEMBER_Spec.positionals@.length; i++) {
+                            z_@PositionalDef@_t* p = &spec->@MEMBER_Spec.positionals@.data[i];
+                            z_@String@_append(&out, "\n  ", 3);
+                            z_@String@_append(&out, p->@MEMBER_PositionalDef.name@.data, p->@MEMBER_PositionalDef.name@.size);
+                            if (p->@MEMBER_PositionalDef.help@.size > 0) {
+                                z_@String@_append(&out, "    ", 4);
+                                z_@String@_append(&out, p->@MEMBER_PositionalDef.help@.data, p->@MEMBER_PositionalDef.help@.size);
+                            }
+                        }
+                    }
+                    return out;
+                }
+
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "Spec.create"
+            demand: list { "spec_create" }
+            members: list {
+                "List_FlagDef.create" "List_OptionDef.create" "List_PositionalDef.create"
+            }
+            fragments: list {
+                """
+                /* `programName` and `summary` are .take params: caller transfers
+                   ownership of the string buffers; the spec stores them directly
+                   (no copy). Caller-side implicit-take zeros the source vars. */
+                static z_@Spec@_t z_@Spec@_create(z_@String@_t programName, z_@String@_t summary);
+                static z_@Spec@_t z_@Spec@_create(z_@String@_t programName, z_@String@_t summary) {
+                    z_@Spec@_t s = {0};
+                    s.@MEMBER_Spec.programName@ = programName;
+                    s.@MEMBER_Spec.summary@ = summary;
+                    s.@MEMBER_Spec.flags@ = z_@List_FlagDef@_create(0);
+                    s.@MEMBER_Spec.options@ = z_@List_OptionDef@_create(0);
+                    s.@MEMBER_Spec.positionals@ = z_@List_PositionalDef@_create(0);
+                    return s;
+                }
+
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "parse"
+            needs: list {
+                "prelude.@String_append" "prelude.@String_create" "prelude.@String_free"
+                "prelude.@String_new" "prelude.@xmalloc"
+            }
+            members: list {
+                "List_String.destroy" "List_String.create" "Map_String_String.create"
+                "List_String.append" "Map_String_String.set" "Map_String_String.get"
+                "Parsed.destroy"
+            }
+            fragments: list {
+                """
+                /* byte-compare z_@String@_t vs C string + length */
+                static bool z_cli_str_eq(const z_@String@_t* a, const char* b, uint64_t blen);
+                static bool z_cli_str_eq(const z_@String@_t* a, const char* b, uint64_t blen) {
+                    if (a->size != blen) return false;
+                    return memcmp(a->data, b, blen) == 0;
+                }
+
+                /* find flag index by long name */
+                static int64_t z_cli_find_flag_long(const z_@List_FlagDef@_t* flags, const char* name, uint64_t nlen);
+                static int64_t z_cli_find_flag_long(const z_@List_FlagDef@_t* flags, const char* name, uint64_t nlen) {
+                    for (uint64_t i = 0; i < flags->length; i++) {
+                        if (z_cli_str_eq(&flags->data[i].@MEMBER_FlagDef.name@, name, nlen)) return (int64_t)i;
+                    }
+                    return -1;
+                }
+
+                /* find flag index by short name (full short incl. `-`) */
+                static int64_t z_cli_find_flag_short(const z_@List_FlagDef@_t* flags, const char* name, uint64_t nlen);
+                static int64_t z_cli_find_flag_short(const z_@List_FlagDef@_t* flags, const char* name, uint64_t nlen) {
+                    for (uint64_t i = 0; i < flags->length; i++) {
+                        if (z_cli_str_eq(&flags->data[i].@MEMBER_FlagDef.shortName@, name, nlen)) return (int64_t)i;
+                    }
+                    return -1;
+                }
+
+                static int64_t z_cli_findOption_long(const z_@List_OptionDef@_t* options, const char* name, uint64_t nlen);
+                static int64_t z_cli_findOption_long(const z_@List_OptionDef@_t* options, const char* name, uint64_t nlen) {
+                    for (uint64_t i = 0; i < options->length; i++) {
+                        if (z_cli_str_eq(&options->data[i].@MEMBER_OptionDef.name@, name, nlen)) return (int64_t)i;
+                    }
+                    return -1;
+                }
+
+                static int64_t z_cli_findOption_short(const z_@List_OptionDef@_t* options, const char* name, uint64_t nlen);
+                static int64_t z_cli_findOption_short(const z_@List_OptionDef@_t* options, const char* name, uint64_t nlen) {
+                    for (uint64_t i = 0; i < options->length; i++) {
+                        if (z_cli_str_eq(&options->data[i].@MEMBER_OptionDef.shortName@, name, nlen)) return (int64_t)i;
+                    }
+                    return -1;
+                }
+
+                /* build a clierror union with a string payload */
+                static z_@CliError@_t z_cli_err(z_@CliError@_tag_t tag, const char* msg, uint64_t mlen);
+                static z_@CliError@_t z_cli_err(z_@CliError@_tag_t tag, const char* msg, uint64_t mlen) {
+                    z_@CliError@_t e = {0};
+                    e.tag = tag;
+                    z_@String@_t* s = (z_@String@_t*)z_xmalloc(sizeof(z_@String@_t));
+                    *s = z_@String@_create(mlen);
+                    z_@String@_append(s, msg, mlen);
+                    e.data = s;
+                    return e;
+                }
+
+                /* wrap clierror in result.err */
+                static z_@Result_Parsed_CliError@_t z_cli_wrap_err(z_@CliError@_t e);
+                static z_@Result_Parsed_CliError@_t z_cli_wrap_err(z_@CliError@_t e) {
+                    z_@Result_Parsed_CliError@_t r = {0};
+                    z_@CliError@_t* boxed = (z_@CliError@_t*)z_xmalloc(sizeof(z_@CliError@_t));
+                    *boxed = e;
+                    r.tag = @ARM_Result_Parsed_CliError.err@;
+                    r.data = boxed;
+                    return r;
+                }
+
+                /* fail the parse on token tok: the error copies tok before the partial
+                   result and the consumed args (which tok may point into) are freed */
+                static z_@Result_Parsed_CliError@_t z_cli_fail(z_@Parsed@_t* parsed, z_@List_String@_t* args, z_@CliError@_tag_t tag, const char* tok, uint64_t tlen);
+                static z_@Result_Parsed_CliError@_t z_cli_fail(z_@Parsed@_t* parsed, z_@List_String@_t* args, z_@CliError@_tag_t tag, const char* tok, uint64_t tlen) {
+                    z_@CliError@_t e = z_cli_err(tag, tok, tlen);
+                    z_@Parsed@_destroy(parsed); free(parsed);
+                    z_@List_String@_destroy(args);
+                    return z_cli_wrap_err(e);
+                }
+
+
+                """
+                """
+                static z_@Result_Parsed_CliError@_t z_cli_parse(z_@Spec@_t* spec, z_@List_String@_t args);
+                static z_@Result_Parsed_CliError@_t z_cli_parse(z_@Spec@_t* spec, z_@List_String@_t args) {
+                    z_@Parsed@_t* parsed = (z_@Parsed@_t*)z_xmalloc(sizeof(z_@Parsed@_t));
+                    parsed->@MEMBER_Parsed.flagSet@ = z_@List_String@_create(0);
+                    parsed->@MEMBER_Parsed.optionValues@ = z_@Map_String_String@_create(0);
+                    parsed->@MEMBER_Parsed.positionalValues@ = z_@Map_String_String@_create(0);
+                    parsed->@MEMBER_Parsed.extraArgs@ = z_@List_String@_create(0);
+                    uint64_t next_pos = 0;
+                    uint64_t i = 1;  /* skip argv[0] */
+                    while (i < args.length) {
+                        z_@String@_t* a = &args.data[i];
+                        /* `--` alone terminates option parsing */
+                        if (a->size == 2 && a->data[0] == '-' && a->data[1] == '-') {
+                            for (uint64_t j = i + 1; j < args.length; j++) {
+                                z_@List_String@_append(
+                                    &parsed->@MEMBER_Parsed.extraArgs@,
+                                    z_@String@_new(args.data[j].data)
+                                );
+                            }
+                            break;
+                        }
+                        /* long form `--name[=value]` */
+                        if (a->size >= 3 && a->data[0] == '-' && a->data[1] == '-') {
+                            /* find `=` within the arg */
+                            const char* eq = (const char*)memchr(a->data, '=', a->size);
+                            uint64_t name_len = eq ? (uint64_t)(eq - a->data) : a->size;
+                            int64_t fi = z_cli_find_flag_long(&spec->@MEMBER_Spec.flags@, a->data, name_len);
+                            if (fi >= 0) {
+                                if (eq) {
+                                    return z_cli_fail(parsed, &args, @ARM_CliError.unexpectedArg@, a->data, a->size);
+                                }
+                                z_@List_String@_append(
+                                    &parsed->@MEMBER_Parsed.flagSet@,
+                                    z_@String@_new(spec->@MEMBER_Spec.flags@.data[fi].@MEMBER_FlagDef.name@.data)
+                                );
+                                i++;
+                                continue;
+                            }
+                            int64_t oi = z_cli_findOption_long(
+                                &spec->@MEMBER_Spec.options@, a->data, name_len);
+                            if (oi >= 0) {
+                                z_@String@_t key = z_@String@_new(spec->@MEMBER_Spec.options@.data[oi].@MEMBER_OptionDef.name@.data);
+                                z_@String@_t val = {0};
+                                if (eq) {
+                                    uint64_t vlen = a->size - (name_len + 1);
+                                    val = z_@String@_create(vlen);
+                                    z_@String@_append(&val, eq + 1, vlen);
+                                } else {
+                                    if (i + 1 >= args.length) {
+                                        z_@String@_free(&key);
+                                        return z_cli_fail(parsed, &args, @ARM_CliError.missingValue@, a->data, a->size);
+                                    }
+                                    val = z_@String@_new(args.data[i + 1].data);
+                                    i++;
+                                }
+                                z_@Map_String_String@_set(
+                                    parsed->@MEMBER_Parsed.optionValues@, key, val);
+                                i++;
+                                continue;
+                            }
+                            return z_cli_fail(parsed, &args, @ARM_CliError.unknownFlag@, a->data, a->size);
+                        }
+                        /* short form `-x[yz...]` */
+                        if (a->size >= 2 && a->data[0] == '-') {
+                            /* full-token match first (e.g. -v, -o with separate value) */
+                            int64_t fi = z_cli_find_flag_short(&spec->@MEMBER_Spec.flags@, a->data, a->size);
+                            if (fi >= 0) {
+                                z_@List_String@_append(
+                                    &parsed->@MEMBER_Parsed.flagSet@,
+                                    z_@String@_new(spec->@MEMBER_Spec.flags@.data[fi].@MEMBER_FlagDef.name@.data)
+                                );
+                                i++;
+                                continue;
+                            }
+                            int64_t oi = z_cli_findOption_short(
+                                &spec->@MEMBER_Spec.options@, a->data, a->size);
+                            if (oi >= 0) {
+                                if (i + 1 >= args.length) {
+                                    return z_cli_fail(parsed, &args, @ARM_CliError.missingValue@, a->data, a->size);
+                                }
+                                z_@String@_t key = z_@String@_new(spec->@MEMBER_Spec.options@.data[oi].@MEMBER_OptionDef.name@.data);
+                                z_@String@_t val = z_@String@_new(args.data[i + 1].data);
+                                z_@Map_String_String@_set(
+                                    parsed->@MEMBER_Parsed.optionValues@, key, val);
+                                i += 2;
+                                continue;
+                            }
+                            /* bundled short flags: every char after `-` must be
+                               a short flag, until a short option ends the bundle and
+                               takes the rest of the token, or the next token, as its value. */
+                            if (a->size > 2) {
+                                bool ok = true;
+                                for (uint64_t k = 1; k < a->size && ok; k++) {
+                                    char buf[2] = { '-', a->data[k] };
+                                    int64_t bfi = z_cli_find_flag_short(&spec->@MEMBER_Spec.flags@, buf, 2);
+                                    if (bfi >= 0) {
+                                        z_@List_String@_append(
+                                            &parsed->@MEMBER_Parsed.flagSet@,
+                                            z_@String@_new(spec->@MEMBER_Spec.flags@.data[bfi].@MEMBER_FlagDef.name@.data)
+                                        );
+                                        continue;
+                                    }
+                                    int64_t boi = z_cli_findOption_short(
+                                        &spec->@MEMBER_Spec.options@, buf, 2);
+                                    if (boi >= 0) {
+                                        uint64_t vlen = a->size - (k + 1);
+                                        z_@String@_t val = {0};
+                                        if (vlen > 0) {
+                                            val = z_@String@_create(vlen);
+                                            z_@String@_append(&val, a->data + k + 1, vlen);
+                                        } else {
+                                            /* the option ends the bundle (`-vo`): its value is the next token */
+                                            if (i + 1 >= args.length) {
+                                                return z_cli_fail(parsed, &args, @ARM_CliError.missingValue@, a->data, a->size);
+                                            }
+                                            val = z_@String@_new(args.data[i + 1].data);
+                                            i++;
+                                        }
+                                        z_@String@_t key = z_@String@_new(
+                                            spec->@MEMBER_Spec.options@.data[boi].@MEMBER_OptionDef.name@.data);
+                                        z_@Map_String_String@_set(
+                                            parsed->@MEMBER_Parsed.optionValues@, key, val);
+                                        break;
+                                    }
+                                    ok = false;
+                                }
+                                if (!ok) {
+                                    return z_cli_fail(parsed, &args, @ARM_CliError.unknownFlag@, a->data, a->size);
+                                }
+                                i++;
+                                continue;
+                            }
+                            return z_cli_fail(parsed, &args, @ARM_CliError.unknownFlag@, a->data, a->size);
+                        }
+                        /* positional; `-` alone lands here (the stdin convention) */
+                        if (next_pos < spec->@MEMBER_Spec.positionals@.length) {
+                            z_@String@_t key = z_@String@_new(
+                                spec->@MEMBER_Spec.positionals@.data[next_pos].@MEMBER_PositionalDef.name@.data);
+                            z_@String@_t val = z_@String@_new(a->data);
+                            z_@Map_String_String@_set(
+                                parsed->@MEMBER_Parsed.positionalValues@, key, val);
+                            next_pos++;
+                        } else {
+                            z_@List_String@_append(
+                                &parsed->@MEMBER_Parsed.extraArgs@, z_@String@_new(a->data));
+                        }
+                        i++;
+                    }
+                    /* parse loop finished reading — args copies have been
+                       materialised via z_@String@_new wherever needed. Free the
+                       incoming list now so every exit path (ok or err) is
+                       leak-free. */
+                    z_@List_String@_destroy(&args);
+                    /* required checks: map.get returns a borrowed OptionView into the map's
+                       storage; read the tag only -- the map owns the value, so no free. */
+                    for (uint64_t k = 0; k < spec->@MEMBER_Spec.options@.length; k++) {
+                        if (!spec->@MEMBER_Spec.options@.data[k].@MEMBER_OptionDef.required@) continue;
+                        z_@OptionView_String@_t v = z_@Map_String_String@_get(
+                            parsed->@MEMBER_Parsed.optionValues@, &spec->@MEMBER_Spec.options@.data[k].@MEMBER_OptionDef.name@);
+                        bool missing = (v.tag == @ARM_OptionView_String.none@);
+                        if (missing) {
+                            z_@Parsed@_destroy(parsed); free(parsed);
+                            return z_cli_wrap_err(
+                                z_cli_err(@ARM_CliError.missingRequired@,
+                                          spec->@MEMBER_Spec.options@.data[k].@MEMBER_OptionDef.name@.data,
+                                          spec->@MEMBER_Spec.options@.data[k].@MEMBER_OptionDef.name@.size));
+                        }
+                    }
+                    for (uint64_t k = 0; k < spec->@MEMBER_Spec.positionals@.length; k++) {
+                        if (!spec->@MEMBER_Spec.positionals@.data[k].@MEMBER_PositionalDef.required@) continue;
+                        z_@OptionView_String@_t v = z_@Map_String_String@_get(
+                            parsed->@MEMBER_Parsed.positionalValues@, &spec->@MEMBER_Spec.positionals@.data[k].@MEMBER_PositionalDef.name@);
+                        bool missing = (v.tag == @ARM_OptionView_String.none@);
+                        if (missing) {
+                            z_@Parsed@_destroy(parsed); free(parsed);
+                            return z_cli_wrap_err(
+                                z_cli_err(@ARM_CliError.missingRequired@,
+                                          spec->@MEMBER_Spec.positionals@.data[k].@MEMBER_PositionalDef.name@.data,
+                                          spec->@MEMBER_Spec.positionals@.data[k].@MEMBER_PositionalDef.name@.size));
+                        }
+                    }
+                    z_@Result_Parsed_CliError@_t r = {0};
+                    r.tag = @ARM_Result_Parsed_CliError.ok@;
+                    r.data = parsed;
+                    return r;
+                }
+
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "Parsed.hasFlag"
+            fragments: list {
+                """
+                static bool z_@Parsed@_hasFlag(const z_@Parsed@_t* self, const z_@StringView@_t* name);
+                static bool z_@Parsed@_hasFlag(const z_@Parsed@_t* self, const z_@StringView@_t* name) {
+                    for (uint64_t i = 0; i < self->@MEMBER_Parsed.flagSet@.length; i++) {
+                        z_@String@_t* s = &self->@MEMBER_Parsed.flagSet@.data[i];
+                        if (s->size == name->size
+                            && memcmp(s->data, name->data, name->size) == 0) {
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "Parsed.option"
+            needs: list {
+                "prelude.@String_append" "prelude.@String_create" "prelude.@String_free"
+                "prelude.@xmalloc"
+            }
+            members: list { "Map_String_String.get" }
+            fragments: list {
+                """
+                static z_@Option_String@_t z_@Parsed@_option(const z_@Parsed@_t* self, const z_@StringView@_t* name);
+                static z_@Option_String@_t z_@Parsed@_option(const z_@Parsed@_t* self, const z_@StringView@_t* name) {
+                    z_@Option_String@_t out = {0};
+                    z_@String@_t key = z_@String@_create(name->size);
+                    z_@String@_append(&key, name->data, name->size);
+                    /* map.get returns a borrowed OptionView into the map's storage; deep-copy
+                       the borrowed String into an owned box so the caller owns the result. */
+                    z_@OptionView_String@_t v = z_@Map_String_String@_get(
+                        self->@MEMBER_Parsed.optionValues@, &key);
+                    z_@String@_free(&key);
+                    if (v.tag == @ARM_OptionView_String.none@) {
+                        out.tag = @ARM_Option_String.none@;
+                        return out;
+                    }
+                    z_@String@_t* src = (z_@String@_t*)v.data;
+                    z_@String@_t* box = (z_@String@_t*)z_xmalloc(sizeof(z_@String@_t));
+                    *box = z_@String@_create(src->size);
+                    z_@String@_append(box, src->data, src->size);
+                    out.tag = @ARM_Option_String.some@;
+                    out.data = box;
+                    return out;
+                }
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "Parsed.positional"
+            needs: list {
+                "prelude.@String_append" "prelude.@String_create" "prelude.@String_free"
+                "prelude.@xmalloc"
+            }
+            members: list { "Map_String_String.get" }
+            fragments: list {
+                """
+                static z_@Option_String@_t z_@Parsed@_positional(const z_@Parsed@_t* self, const z_@StringView@_t* name);
+                static z_@Option_String@_t z_@Parsed@_positional(const z_@Parsed@_t* self, const z_@StringView@_t* name) {
+                    z_@Option_String@_t out = {0};
+                    z_@String@_t key = z_@String@_create(name->size);
+                    z_@String@_append(&key, name->data, name->size);
+                    /* map.get returns a borrowed OptionView into the map's storage; deep-copy
+                       the borrowed String into an owned box so the caller owns the result. */
+                    z_@OptionView_String@_t v = z_@Map_String_String@_get(
+                        self->@MEMBER_Parsed.positionalValues@, &key);
+                    z_@String@_free(&key);
+                    if (v.tag == @ARM_OptionView_String.none@) {
+                        out.tag = @ARM_Option_String.none@;
+                        return out;
+                    }
+                    z_@String@_t* src = (z_@String@_t*)v.data;
+                    z_@String@_t* box = (z_@String@_t*)z_xmalloc(sizeof(z_@String@_t));
+                    *box = z_@String@_create(src->size);
+                    z_@String@_append(box, src->data, src->size);
+                    out.tag = @ARM_Option_String.some@;
+                    out.data = box;
+                    return out;
+                }
+
+                """
+            }
+        )
+    }
+    canons: list {
+        (c.canon stem: "List_PositionalDef" spec: list { "ListRef" "cli.PositionalDef" })
+        (c.canon stem: "List_OptionDef" spec: list { "ListRef" "cli.OptionDef" })
+        (c.canon stem: "List_FlagDef" spec: list { "ListRef" "cli.FlagDef" })
+        (c.canon stem: "Result_Parsed_CliError" spec: list { "Result" "cli.Parsed" "cli.CliError" })
+    }
+)

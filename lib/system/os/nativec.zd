@@ -1,0 +1,1728 @@
+# nativec -- os's C implementation, a runtime.nativec file
+c: runtime.nativec
+
+# implementation -- the C behind os's native declarations
+implementation: (
+    c.implementation
+    rows: list {
+        # os -- args (a hand-ordered pair: the argv globals main() fills, then the copy)
+        # and env come first, then the convention loads
+        (
+            c.row
+            key: "args"
+            demand: list { "args" }
+            needs: list {
+                "prelude.zwin32" "prelude.@String_append" "prelude.@String_create"
+                "prelude.@String_new" "prelude.@xmalloc" "prelude.@win_utf8"
+            }
+            members: list { "List_String.append?win32" "List_String.create?win32" }
+            fragments: list {
+                """
+                /* z_os_args_init -- what main() hands os.args before z_main runs, so os.args
+                   needs no argument threaded through every call. On POSIX it keeps argc and
+                   argv. On Windows os.args reads the command line itself (GetCommandLineW),
+                   so nothing is kept. Only emitted when the program references os.args. */
+                #if defined(_WIN32)
+                static void z_os_args_init(int argc, char** argv) {
+                    (void)argc;
+                    (void)argv;
+                }
+                #else
+                static int z_os_argc_g;
+                static char** z_os_argv_g;
+                static void z_os_args_init(int argc, char** argv) {
+                    z_os_argc_g = argc;
+                    z_os_argv_g = argv;
+                }
+                #endif
+                """
+                """
+                /* os.args -- copy argv into a freshly-allocated list of strings.
+                   The caller owns the outer list and every string inside; scope
+                   exit runs the list destructor which frees each element.
+
+                   On Windows the arguments come from the command line itself
+                   (GetCommandLineW), as UTF-16, split by the rules CommandLineToArgvW
+                   and the C runtime use: the program name ends at the first space
+                   outside quotes and takes no escapes; after it, 2n backslashes and a
+                   quote are n backslashes and a quote that opens or closes quoting,
+                   2n+1 backslashes and a quote are n backslashes and a literal quote,
+                   "" inside quotes is a literal quote, and other backslashes are
+                   literal. */
+                #if defined(_WIN32)
+                static void z_os_win_arg(z_@List_String@_t* out, const wchar_t* w, size_t n) {
+                    size_t un = 0;
+                    char* u = z_win_utf8(w, (int)n, &un);
+                    z_@String@_t s = z_@String@_create((uint64_t)un);
+                    if (u != NULL) z_@String@_append(&s, u, (uint64_t)un);
+                    free(u);
+                    z_@List_String@_append(out, s);
+                }
+                #endif
+                static z_@List_String@_t z_os_args(void);
+                static z_@List_String@_t z_os_args(void) {
+                #if defined(_WIN32)
+                    z_@List_String@_t out = z_@List_String@_create((uint64_t)0);
+                    const wchar_t* c = GetCommandLineW();
+                    size_t total = wcslen(c);
+                    wchar_t* cur = (wchar_t*)z_xmalloc((total + 1) * sizeof(wchar_t));
+                    size_t cn = 0;
+                    if (*c == 0) {
+                        wchar_t me[MAX_PATH];
+                        DWORD got = GetModuleFileNameW(NULL, me, MAX_PATH);
+                        z_os_win_arg(&out, me, got < MAX_PATH ? got : 0);
+                    } else {
+                        int inq = 0;
+                        for (; *c != 0; c++) {
+                            if (*c == L'"') {
+                                inq = !inq;
+                                continue;
+                            }
+                            if (!inq && (*c == L' ' || *c == L'\t')) break;
+                            cur[cn++] = *c;
+                        }
+                        z_os_win_arg(&out, cur, cn);
+                    }
+                    while (*c == L' ' || *c == L'\t') c++;
+                    while (*c != 0) {
+                        int inq = 0;
+                        size_t bs = 0;
+                        cn = 0;
+                        for (; *c != 0; c++) {
+                            if (*c == L'\\') {
+                                bs++;
+                                continue;
+                            }
+                            if (*c == L'"') {
+                                for (size_t k = 0; k < bs / 2; k++) cur[cn++] = L'\\';
+                                int literal = (bs % 2) != 0;
+                                bs = 0;
+                                if (literal) {
+                                    cur[cn++] = L'"';
+                                } else if (inq && c[1] == L'"') {
+                                    cur[cn++] = L'"';
+                                    c++;
+                                } else {
+                                    inq = !inq;
+                                }
+                                continue;
+                            }
+                            for (; bs > 0; bs--) cur[cn++] = L'\\';
+                            if (!inq && (*c == L' ' || *c == L'\t')) break;
+                            cur[cn++] = *c;
+                        }
+                        for (; bs > 0; bs--) cur[cn++] = L'\\';
+                        z_os_win_arg(&out, cur, cn);
+                        while (*c == L' ' || *c == L'\t') c++;
+                    }
+                    free(cur);
+                    return out;
+                #else
+                    uint64_t n = (uint64_t)(z_os_argc_g > 0 ? z_os_argc_g : 0);
+                    z_@List_String@_t out = {0};
+                    out.length = n;
+                    out.capacity = n;
+                    if (n > 0) {
+                        out.data = (z_@String@_t*)z_xmalloc(n * sizeof(z_@String@_t));
+                        for (uint64_t i = 0; i < n; i++) {
+                            out.data[i] = z_@String@_new(z_os_argv_g[i]);
+                        }
+                    }
+                    return out;
+                #endif
+                }
+                """
+            }
+        )
+        (
+            c.row
+            key: "env"
+            needs: list {
+                "prelude.zwin32" "prelude.@String_new" "prelude.@xmalloc" "prelude.@win_getenv"
+            }
+            pulls: list { "io.@sv_cstr?posix" }
+            fragments: list {
+                """
+                /* os.get_env -- look up the environment by name (Win32's on Windows,
+                   where names match regardless of case). Returns
+                   option.some(string) on hit (copying the value so the caller
+                   owns the heap buffer and libc's environ isn't aliased); returns
+                   option.none on miss. `key` is a borrowed view; caller retains. */
+                static z_@Option_String@_t z_os_env(z_@StringView@_t key);
+                static z_@Option_String@_t z_os_env(z_@StringView@_t key) {
+                    z_@Option_String@_t out = {0};
+                #if defined(_WIN32)
+                    char* v = z_win_getenv(key.data, key.size);
+                #else
+                    char* key_cstr = z_sv_to_cstr(key);
+                    const char* v = getenv(key_cstr);
+                    free(key_cstr);
+                #endif
+                    if (v == NULL) {
+                        out.tag = @ARM_Option_String.none@;
+                        return out;
+                    }
+                    z_@String@_t* boxed = (z_@String@_t*)z_xmalloc(sizeof(z_@String@_t));
+                    *boxed = z_@String@_new(v);
+                #if defined(_WIN32)
+                    free(v);
+                #endif
+                    out.tag = @ARM_Option_String.some@;
+                    out.data = boxed;
+                    return out;
+                }
+
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "buildCommit"
+            needs: list { "prelude.@String_new" }
+            fragments: list {
+                """
+                /* os.buildCommit -- the build stamp this binary carries, empty when the
+                   build supplied none. Two routes set it: define ZC_BUILD_COMMIT for the C
+                   compiler, or define ZC_BUILD_STAMP_LINKED and link an object that defines
+                   z_build_commit and z_build_date. The link route costs a relink rather than
+                   a recompile of this translation unit when the stamp changes, which is why
+                   the Makefile uses it. There is no weak default to override: on PE/COFF
+                   (mingw) a strong definition does not reliably replace a weak one, and
+                   MSVC has no weak symbols at all. */
+                #if defined(ZC_BUILD_STAMP_LINKED)
+                extern const char z_build_commit[];
+                #else
+                #ifndef ZC_BUILD_COMMIT
+                #define ZC_BUILD_COMMIT ""
+                #endif
+                const char z_build_commit[] = ZC_BUILD_COMMIT;
+                #endif
+
+                static z_@String@_t z_os_buildCommit(void);
+                static z_@String@_t z_os_buildCommit(void) {
+                    return z_@String@_new(z_build_commit);
+                }
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "buildCompiler"
+            needs: list { "prelude.@String_new" }
+            fragments: list {
+                """
+                /* os.buildCompiler -- name and version of the C compiler that compiled this
+                   translation unit, read from its own predefined macros, so it needs nothing
+                   from the build. clang defines __GNUC__ as well, so it is tested first. The
+                   numeric macros are used rather than __VERSION__, which gcc and clang spell
+                   differently ("15.2.0" vs "Ubuntu Clang 21.1.8 (6ubuntu1)"). */
+                #define Z_BUILDCC_STR_(x) #x
+                #define Z_BUILDCC_STR(x) Z_BUILDCC_STR_(x)
+
+                static z_@String@_t z_os_buildCompiler(void);
+                static z_@String@_t z_os_buildCompiler(void) {
+                #if defined(__clang__)
+                    return z_@String@_new("clang " Z_BUILDCC_STR(__clang_major__) "."
+                                        Z_BUILDCC_STR(__clang_minor__) "."
+                                        Z_BUILDCC_STR(__clang_patchlevel__));
+                #elif defined(__GNUC__)
+                    return z_@String@_new("gcc " Z_BUILDCC_STR(__GNUC__) "."
+                                        Z_BUILDCC_STR(__GNUC_MINOR__) "."
+                                        Z_BUILDCC_STR(__GNUC_PATCHLEVEL__));
+                #elif defined(_MSC_VER)
+                    /* _MSC_VER is 1951 for MSVC 19.51, and _MSC_FULL_VER adds the build */
+                    char v[48];
+                    snprintf(v, sizeof v, "msvc %d.%d.%d", _MSC_VER / 100, _MSC_VER % 100, _MSC_FULL_VER % 100000);
+                    return z_@String@_new(v);
+                #else
+                    return z_@String@_new("cc");
+                #endif
+                }
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "buildDate"
+            needs: list { "prelude.@String_new" }
+            fragments: list {
+                """
+                /* os.buildDate -- companion to os.buildCommit: the date the build stamped
+                   in, empty when it stamped none. Set by defining ZC_BUILD_DATE for the C
+                   compiler, or under ZC_BUILD_STAMP_LINKED by the linked object, as
+                   os.buildCommit is. */
+                #if defined(ZC_BUILD_STAMP_LINKED)
+                extern const char z_build_date[];
+                #else
+                #ifndef ZC_BUILD_DATE
+                #define ZC_BUILD_DATE ""
+                #endif
+                const char z_build_date[] = ZC_BUILD_DATE;
+                #endif
+
+                static z_@String@_t z_os_buildDate(void);
+                static z_@String@_t z_os_buildDate(void) {
+                    return z_@String@_new(z_build_date);
+                }
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "cwd"
+            needs: list { "prelude.@String_new" "prelude.@xmalloc" "prelude.@win_utf8" }
+            pulls: list { "io.@errno" }
+            fragments: list {
+                """
+                /* os.cwd -- getcwd(NULL, 0) allocates a buffer sized to the
+                   current path. We copy into a z_@String@_t and free the libc
+                   buffer so ownership stays uniform. On Windows it is
+                   GetCurrentDirectoryW's native path, as UTF-8. */
+                static z_@Result_String_IoError@_t z_os_cwd(void);
+                static z_@Result_String_IoError@_t z_os_cwd(void) {
+                    z_@Result_String_IoError@_t out = {0};
+                #if defined(_WIN32)
+                    char* buf = NULL;
+                    DWORD need = GetCurrentDirectoryW(0, NULL);
+                    int e = (int)GetLastError();
+                    if (need > 0) {
+                        wchar_t* w = (wchar_t*)z_xmalloc((size_t)need * sizeof(wchar_t));
+                        DWORD got = GetCurrentDirectoryW(need, w);
+                        e = (int)GetLastError();
+                        if (got > 0 && got < need) buf = z_win_utf8(w, (int)got, NULL);
+                        free(w);
+                    }
+                #else
+                    char* buf = getcwd(NULL, 0);
+                    int e = errno;
+                #endif
+                    if (buf == NULL) {
+                        z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
+                        *boxed = z_io_os_error(e);
+                        out.tag = @ARM_Result_String_IoError.err@;
+                        out.data = boxed;
+                        return out;
+                    }
+                    z_@String@_t* boxed = (z_@String@_t*)z_xmalloc(sizeof(z_@String@_t));
+                    *boxed = z_@String@_new(buf);
+                    free(buf);
+                    out.tag = @ARM_Result_String_IoError.ok@;
+                    out.data = boxed;
+                    return out;
+                }
+
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "envNames"
+            needs: list {
+                "prelude.zwin32" "prelude.@String_append" "prelude.@String_create"
+                "prelude.@win_utf8"
+            }
+            members: list { "List_String.create" "List_String.append" }
+            fragments: list {
+                """
+                /* os.env_names -- snapshot of the environment's names. Each entry is
+                   `key=value`; we copy the portion before the first `=` into a
+                   freshly-allocated z_@String@_t and push onto an owned list. The list's
+                   destructor frees each string. Windows' block (GetEnvironmentStringsW)
+                   also holds a hidden `=C:=C:\dir` entry per drive -- the shell's current
+                   directories -- which names nothing a program set and is left out. */
+                #if !defined(_WIN32)
+                extern char** environ;
+                #endif
+                static z_@List_String@_t z_os_envNames(void);
+                static z_@List_String@_t z_os_envNames(void) {
+                    z_@List_String@_t out = z_@List_String@_create((uint64_t)0);
+                #if defined(_WIN32)
+                    wchar_t* block = GetEnvironmentStringsW();
+                    if (block == NULL) return out;
+                    for (const wchar_t* ep = block; *ep != 0; ep += wcslen(ep) + 1) {
+                        if (ep[0] == L'=') continue;
+                        const wchar_t* eq = wcschr(ep, L'=');
+                        int n = eq != NULL ? (int)(eq - ep) : (int)wcslen(ep);
+                        size_t un = 0;
+                        char* u = z_win_utf8(ep, n, &un);
+                        if (u == NULL) continue;
+                        z_@String@_t s = z_@String@_create((uint64_t)un);
+                        z_@String@_append(&s, u, (uint64_t)un);
+                        free(u);
+                        z_@List_String@_append(&out, s);
+                    }
+                    FreeEnvironmentStringsW(block);
+                #else
+                    if (environ == NULL) return out;
+                    for (char** ep = environ; *ep != NULL; ep++) {
+                        const char* entry = *ep;
+                        const char* eq = strchr(entry, '=');
+                        size_t n = (eq != NULL) ? (size_t)(eq - entry) : strlen(entry);
+                        z_@String@_t s = z_@String@_create((uint64_t)n);
+                        z_@String@_append(&s, entry, (uint64_t)n);
+                        z_@List_String@_append(&out, s);
+                    }
+                #endif
+                    return out;
+                }
+                """
+            }
+        )
+        (
+            c.row
+            key: "exePath"
+            needs: list { "prelude.@String_new" "prelude.@xmalloc" "prelude.@win_utf8" }
+            pulls: list { "io.@errno" }
+            fragments: list {
+                """
+                /* os.exePath -- absolute path of the running executable. Linux
+                   reads /proc/self/exe; macOS uses _NSGetExecutablePath; Windows
+                   GetModuleFileNameW, a native path. Copied
+                   into a z_@String@_t so ownership stays uniform with the other os
+                   string natives. */
+                #if defined(__APPLE__)
+                #include <mach-o/dyld.h>
+                #endif
+                static z_@Result_String_IoError@_t z_os_exePath(void);
+                static z_@Result_String_IoError@_t z_os_exePath(void) {
+                    z_@Result_String_IoError@_t out = {0};
+                #if defined(_WIN32)
+                    /* the buffer doubles until the name fits: a long path is not cut short */
+                    DWORD cap = 512;
+                    char* path = NULL;
+                    for (;;) {
+                        wchar_t* w = (wchar_t*)z_xmalloc((size_t)cap * sizeof(wchar_t));
+                        DWORD got = GetModuleFileNameW(NULL, w, cap);
+                        if (got == 0) {
+                            free(w);
+                            break;
+                        }
+                        if (got < cap) {
+                            path = z_win_utf8(w, (int)got, NULL);
+                            free(w);
+                            break;
+                        }
+                        free(w);
+                        cap *= 2;
+                    }
+                    if (path == NULL) {
+                        z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
+                        *boxed = z_io_os_error((int)GetLastError());
+                        out.tag = @ARM_Result_String_IoError.err@;
+                        out.data = boxed;
+                        return out;
+                    }
+                    z_@String@_t* sb = (z_@String@_t*)z_xmalloc(sizeof(z_@String@_t));
+                    *sb = z_@String@_new(path);
+                    free(path);
+                    out.tag = @ARM_Result_String_IoError.ok@;
+                    out.data = sb;
+                    return out;
+                #else
+                    char buf[4096];
+                #if defined(__APPLE__)
+                    uint32_t bufsize = (uint32_t)sizeof(buf);
+                    if (_NSGetExecutablePath(buf, &bufsize) != 0) {
+                        z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
+                        z_@IoError@_t e = {0};
+                        e.tag = @ARM_IoError.other@;
+                        z_@String@_t* sp = (z_@String@_t*)z_xmalloc(sizeof(z_@String@_t));
+                        *sp = z_@String@_new("the executable's path is longer than 4095 bytes");
+                        e.data = sp;
+                        *boxed = e;
+                        out.tag = @ARM_Result_String_IoError.err@;
+                        out.data = boxed;
+                        return out;
+                    }
+                #else
+                    ssize_t len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+                    if (len < 0) {
+                        int e = errno;
+                        z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
+                        *boxed = z_io_os_error(e);
+                        out.tag = @ARM_Result_String_IoError.err@;
+                        out.data = boxed;
+                        return out;
+                    }
+                    buf[len] = '\0';
+                #endif
+                    z_@String@_t* boxed = (z_@String@_t*)z_xmalloc(sizeof(z_@String@_t));
+                    *boxed = z_@String@_new(buf);
+                    out.tag = @ARM_Result_String_IoError.ok@;
+                    out.data = boxed;
+                    return out;
+                #endif
+                }
+
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "exit"
+            fact: "threaded"
+            needs: list { "prelude.@end_claim" }
+            fragments: list {
+                """
+                /* os.exit in a program that runs threads -- it ends the process once, as
+                   z_panic does (z_end_claim): output is flushed and the process leaves with
+                   _exit. In-scope zerolang destructors are skipped. */
+                static void z_os_exit(int32_t code);
+                static void z_os_exit(int32_t code) {
+                    z_end_claim();
+                    fflush(NULL);
+                    _exit((int)code);
+                }
+                """
+            }
+        )
+        (
+            c.row
+            key: "exit"
+            needs: list { "prelude.@end_claim" }
+            fragments: list {
+                """
+                /* os.exit -- libc exit with the given status. Does not return;
+                   in-scope zerolang destructors are skipped. */
+                static void z_os_exit(int32_t code);
+                static void z_os_exit(int32_t code) {
+                    exit((int)code);
+                }
+
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "homeDir"
+            needs: list { "prelude.@String_new" "prelude.@xmalloc" "prelude.@win_getenv" }
+            pulls: list { "io.@errno" }
+            fragments: list {
+                """
+                /* os.home_dir -- read $HOME from the environment, or on Windows
+                   %USERPROFILE% ($HOME is a POSIX notion there, as Rust holds). No
+                   passwd fallback: callers who care about stripped environments must
+                   set the variable explicitly. */
+                static z_@Result_String_IoError@_t z_os_homeDir(void);
+                static z_@Result_String_IoError@_t z_os_homeDir(void) {
+                    z_@Result_String_IoError@_t out = {0};
+                #if defined(_WIN32)
+                    char* h = z_win_getenv("USERPROFILE", 11);
+                    const char* why = "%USERPROFILE% is not set";
+                #else
+                    const char* h = getenv("HOME");
+                    const char* why = "$HOME is not set";
+                #endif
+                    if (h == NULL) {
+                        z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
+                        z_@IoError@_t v = {0};
+                        v.tag = @ARM_IoError.other@;
+                        z_@String@_t* sp = (z_@String@_t*)z_xmalloc(sizeof(z_@String@_t));
+                        *sp = z_@String@_new(why);
+                        v.data = sp;
+                        *boxed = v;
+                        out.tag = @ARM_Result_String_IoError.err@;
+                        out.data = boxed;
+                        return out;
+                    }
+                    z_@String@_t* boxed = (z_@String@_t*)z_xmalloc(sizeof(z_@String@_t));
+                    *boxed = z_@String@_new(h);
+                #if defined(_WIN32)
+                    free(h);
+                #endif
+                    out.tag = @ARM_Result_String_IoError.ok@;
+                    out.data = boxed;
+                    return out;
+                }
+                """
+            }
+        )
+        (
+            c.row
+            key: "hostArchName"
+            needs: list { "prelude.@String_new" }
+            fragments: list {
+                """
+                /* os.hostArchName -- the CPU family this translation unit was compiled for.
+                   Companion to _Z_OS_HOST_OS_NAME; same reasoning for returning a name. */
+                static z_@String@_t z_os_hostArchName(void);
+                static z_@String@_t z_os_hostArchName(void) {
+                #if defined(__x86_64__) || defined(_M_X64)
+                    return z_@String@_new("x86_64");
+                #elif defined(__aarch64__) || defined(_M_ARM64)
+                    return z_@String@_new("aarch64");
+                #else
+                    return z_@String@_new("other");
+                #endif
+                }
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "hostOsName"
+            needs: list { "prelude.@String_new" }
+            fragments: list {
+                """
+                /* os.hostOsName -- the OS family this translation unit was compiled for,
+                   resolved by the C preprocessor. A NAME rather than a variant so the runtime
+                   needs to know nothing about `platform`'s kinds: `zc` maps it to a
+                   `platform.oskind` arm when it fills that unit in for the build it is
+                   performing. Falls through to `other` on an unrecognised host. */
+                static z_@String@_t z_os_hostOsName(void);
+                static z_@String@_t z_os_hostOsName(void) {
+                #if defined(__linux__)
+                    return z_@String@_new("linux");
+                #elif defined(__APPLE__)
+                    return z_@String@_new("darwin");
+                #elif defined(_WIN32)
+                    return z_@String@_new("windows");
+                #else
+                    return z_@String@_new("other");
+                #endif
+                }
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "hostname"
+            needs: list { "prelude.@String_new" "prelude.@xmalloc" "prelude.@win_utf8" }
+            pulls: list { "io.@errno" }
+            fragments: list {
+                """
+                /* os.hostname -- gethostname(3). HOST_NAME_MAX is typically 64
+                   on Linux; we use 256 to be defensive on unusual POSIX hosts
+                   and truncate on overflow. On Windows, the DNS host name
+                   (GetComputerNameExW). */
+                static z_@Result_String_IoError@_t z_os_hostname(void);
+                static z_@Result_String_IoError@_t z_os_hostname(void) {
+                    z_@Result_String_IoError@_t out = {0};
+                #if defined(_WIN32)
+                    wchar_t w[256];
+                    DWORD wn = 256;
+                    char* name = NULL;
+                    int e = 0;
+                    if (GetComputerNameExW(ComputerNameDnsHostname, w, &wn)) {
+                        name = z_win_utf8(w, (int)wn, NULL);
+                    }
+                    if (name == NULL) {
+                        e = (int)GetLastError();
+                #else
+                    char buf[256];
+                    if (gethostname(buf, sizeof(buf)) != 0) {
+                        int e = errno;
+                #endif
+                        z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
+                        *boxed = z_io_os_error(e);
+                        out.tag = @ARM_Result_String_IoError.err@;
+                        out.data = boxed;
+                        return out;
+                    }
+                    z_@String@_t* boxed = (z_@String@_t*)z_xmalloc(sizeof(z_@String@_t));
+                #if defined(_WIN32)
+                    *boxed = z_@String@_new(name);
+                    free(name);
+                #else
+                    buf[sizeof(buf) - 1] = '\0';
+                    *boxed = z_@String@_new(buf);
+                #endif
+                    out.tag = @ARM_Result_String_IoError.ok@;
+                    out.data = boxed;
+                    return out;
+                }
+
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "monotonicMillis"
+            needs: list { "prelude.zwin32" }
+            fragments: list {
+                """
+                /* os.monotonicMillis -- milliseconds on the monotonic clock. Only
+                   differences are meaningful (the epoch is arbitrary, typically boot).
+                   Infallible: CLOCK_MONOTONIC cannot fail on a supported platform, nor
+                   QueryPerformanceCounter on Windows. */
+                #include <time.h>
+                static int64_t z_os_monotonicMillis(void);
+                static int64_t z_os_monotonicMillis(void) {
+                #if defined(_WIN32)
+                    LARGE_INTEGER f;
+                    LARGE_INTEGER c;
+                    QueryPerformanceFrequency(&f);
+                    QueryPerformanceCounter(&c);
+                    return (int64_t)(c.QuadPart / f.QuadPart) * 1000 + (int64_t)((c.QuadPart % f.QuadPart) * 1000 / f.QuadPart);
+                #else
+                    struct timespec ts;
+                    clock_gettime(CLOCK_MONOTONIC, &ts);
+                    return (int64_t)ts.tv_sec * 1000 + (int64_t)(ts.tv_nsec / 1000000);
+                #endif
+                }
+                """
+            }
+        )
+        (
+            c.row
+            key: "cpuCount"
+            needs: list { "prelude.zwin32" }
+            fragments: list {
+                """
+                /* os.cpu_count -- online processors, for sizing a worker pool. sysconf is
+                   POSIX and returns -1 with errno set when the name is unsupported, so the
+                   result is clamped to at least 1: a caller dividing work by this must never
+                   be handed 0, and "I could not tell" is answerable with "assume serial".
+                   Windows counts the active processors of every processor group. */
+                static int32_t z_os_cpuCount(void);
+                static int32_t z_os_cpuCount(void) {
+                #if defined(_WIN32)
+                    long n = (long)GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
+                #else
+                    long n = sysconf(_SC_NPROCESSORS_ONLN);
+                #endif
+                    if (n < 1) return 1;
+                    if (n > 1024) return 1024;
+                    return (int32_t)n;
+                }
+                """
+            }
+        )
+        (
+            c.row
+            key: "pid"
+            needs: list { "prelude.zwin32" }
+            fragments: list {
+                """
+                /* os.pid -- getpid (GetCurrentProcessId on Windows). A pid fits in
+                   int32_t on every supported platform (Linux caps at 4_194_304 by
+                   default; Windows' are multiples of 4 below 2^26 in practice). */
+                static int32_t z_os_pid(void);
+                static int32_t z_os_pid(void) {
+                #if defined(_WIN32)
+                    return (int32_t)GetCurrentProcessId();
+                #else
+                    return (int32_t)getpid();
+                #endif
+                }
+                """
+            }
+        )
+        (
+            c.row
+            key: "ppid"
+            needs: list { "prelude.zwin32" }
+            fragments: list {
+                """
+                /* os.ppid -- getppid. Windows keeps no parent link a process can ask
+                   for directly, so it is this process's entry in a Toolhelp snapshot;
+                   0 when the snapshot cannot be taken. */
+                #if defined(_WIN32)
+                #include <tlhelp32.h>
+                #endif
+                static int32_t z_os_ppid(void);
+                static int32_t z_os_ppid(void) {
+                #if defined(_WIN32)
+                    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+                    if (snap == INVALID_HANDLE_VALUE) return 0;
+                    DWORD me = GetCurrentProcessId();
+                    DWORD parent = 0;
+                    PROCESSENTRY32W pe;
+                    pe.dwSize = sizeof pe;
+                    for (BOOL more = Process32FirstW(snap, &pe); more; more = Process32NextW(snap, &pe)) {
+                        if (pe.th32ProcessID == me) {
+                            parent = pe.th32ParentProcessID;
+                            break;
+                        }
+                    }
+                    CloseHandle(snap);
+                    return (int32_t)parent;
+                #else
+                    return (int32_t)getppid();
+                #endif
+                }
+                """
+            }
+        )
+        (
+            c.row
+            key: "setCwd"
+            needs: list { "prelude.@xmalloc" "prelude.@win_path" }
+            pulls: list { "io.@sv_cstr?posix" "io.@errno" }
+            fragments: list {
+                """
+                /* os.set_cwd -- chdir(path). `path` is a borrowed view; caller
+                   retains. */
+                static z_@Result_null_IoError@_t z_os_setCwd(z_@StringView@_t path);
+                static z_@Result_null_IoError@_t z_os_setCwd(z_@StringView@_t path) {
+                    z_@Result_null_IoError@_t out = {0};
+                #if defined(_WIN32)
+                    wchar_t* w = z_win_path(path.data, path.size);
+                    int rc = (w != NULL && SetCurrentDirectoryW(w)) ? 0 : -1;
+                    int e = (int)GetLastError();
+                    free(w);
+                #else
+                    char* path_cstr = z_sv_to_cstr(path);
+                    int rc = chdir(path_cstr);
+                    int e = errno;
+                    free(path_cstr);
+                #endif
+                    if (rc != 0) {
+                        z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
+                        *boxed = z_io_os_error(e);
+                        out.tag = @ARM_Result_null_IoError.err@;
+                        out.data = boxed;
+                        return out;
+                    }
+                    out.tag = @ARM_Result_null_IoError.ok@;
+                    out.data = NULL;
+                    return out;
+                }
+
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "setEnv"
+            fact: "threaded"
+            needs: list {
+                "prelude.zthread" "prelude.@String_new" "prelude.@xmalloc" "prelude.@win_setenv"
+                "prelude.@thread_live"
+            }
+            pulls: list { "io.@sv_cstr?posix" "io.@errno" }
+            fragments: list {
+                """
+                /* os.set_env in a program that starts threads -- as _Z_OS_SET_ENV.inc, but
+                   refused while another thread runs: setenv may move the environment under a
+                   getenv on that thread (POSIX makes no promise for either). */
+                static z_@Result_null_IoError@_t z_os_setEnv(
+                    z_@StringView@_t key, z_@StringView@_t value
+                );
+                static z_@Result_null_IoError@_t z_os_setEnv(
+                    z_@StringView@_t key, z_@StringView@_t value
+                ) {
+                    z_@Result_null_IoError@_t out = {0};
+                    if (z_thread_live() > 0) {
+                        z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
+                        z_@IoError@_t v = {0};
+                        v.tag = @ARM_IoError.other@;
+                        z_@String@_t* sp = (z_@String@_t*)z_xmalloc(sizeof(z_@String@_t));
+                        *sp = z_@String@_new("os.setEnv: another thread is running, and it may be reading the environment");
+                        v.data = sp;
+                        *boxed = v;
+                        out.tag = @ARM_Result_null_IoError.err@;
+                        out.data = boxed;
+                        return out;
+                    }
+                #if defined(_WIN32)
+                    int rc = z_win_setenv(key.data, key.size, value.data, value.size);
+                    int e = (int)GetLastError();
+                #else
+                    char* key_cstr = z_sv_to_cstr(key);
+                    char* value_cstr = z_sv_to_cstr(value);
+                    int rc = setenv(key_cstr, value_cstr, 1);
+                    int e = errno;
+                    free(key_cstr);
+                    free(value_cstr);
+                #endif
+                    if (rc != 0) {
+                        z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
+                        *boxed = z_io_os_error(e);
+                        out.tag = @ARM_Result_null_IoError.err@;
+                        out.data = boxed;
+                        return out;
+                    }
+                    out.tag = @ARM_Result_null_IoError.ok@;
+                    out.data = NULL;
+                    return out;
+                }
+
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "setEnv"
+            needs: list {
+                "prelude.@String_new" "prelude.@xmalloc" "prelude.@win_setenv"
+                "prelude.@thread_live"
+            }
+            pulls: list { "io.@sv_cstr?posix" "io.@errno" }
+            fragments: list {
+                """
+                /* os.set_env -- setenv(key, value, 1): always overwrites. libc
+                   copies key/value into its own storage. Both args are borrowed
+                   views; caller retains. */
+                static z_@Result_null_IoError@_t z_os_setEnv(
+                    z_@StringView@_t key, z_@StringView@_t value
+                );
+                static z_@Result_null_IoError@_t z_os_setEnv(
+                    z_@StringView@_t key, z_@StringView@_t value
+                ) {
+                    z_@Result_null_IoError@_t out = {0};
+                #if defined(_WIN32)
+                    int rc = z_win_setenv(key.data, key.size, value.data, value.size);
+                    int e = (int)GetLastError();
+                #else
+                    char* key_cstr = z_sv_to_cstr(key);
+                    char* value_cstr = z_sv_to_cstr(value);
+                    int rc = setenv(key_cstr, value_cstr, 1);
+                    int e = errno;
+                    free(key_cstr);
+                    free(value_cstr);
+                #endif
+                    if (rc != 0) {
+                        z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
+                        *boxed = z_io_os_error(e);
+                        out.tag = @ARM_Result_null_IoError.err@;
+                        out.data = boxed;
+                        return out;
+                    }
+                    out.tag = @ARM_Result_null_IoError.ok@;
+                    out.data = NULL;
+                    return out;
+                }
+
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "sleepMillis"
+            needs: list { "prelude.zwin32" }
+            fragments: list {
+                """
+                /* os.sleepMillis -- suspend the calling thread for ms milliseconds.
+                   Restarts after EINTR so the full duration always elapses; Windows'
+                   Sleep is not interrupted. */
+                #include <time.h>
+                static void z_os_sleepMillis(int64_t ms);
+                static void z_os_sleepMillis(int64_t ms) {
+                    if (ms <= 0) return;
+                #if defined(_WIN32)
+                    while (ms > 0) {
+                        DWORD part = ms > 0x7fffffff ? 0x7fffffff : (DWORD)ms;
+                        Sleep(part);
+                        ms -= (int64_t)part;
+                    }
+                #else
+                    struct timespec req;
+                    req.tv_sec = (time_t)(ms / 1000);
+                    req.tv_nsec = (long)(ms % 1000) * 1000000L;
+                    while (nanosleep(&req, &req) != 0 && errno == EINTR) {
+                    }
+                #endif
+                }
+                """
+            }
+        )
+        (
+            c.row
+            key: "tempDir"
+            needs: list {
+                "prelude.zwin32" "prelude.@String_append" "prelude.@String_create"
+                "prelude.@String_new" "prelude.@win_utf8"
+            }
+            fragments: list {
+                """
+                /* os.tempDir -- $TMPDIR, else /tmp; on Windows GetTempPathW (which reads
+                   %TMP%, %TEMP%, %USERPROFILE%, then the Windows directory), a native path.
+                   A trailing separator is dropped unless the path is a root. */
+                static z_@String@_t z_os_tempDir(void);
+                static z_@String@_t z_os_tempDir(void) {
+                #if defined(_WIN32)
+                    wchar_t w[MAX_PATH + 2];
+                    DWORD n = GetTempPathW(MAX_PATH + 1, w);
+                    char* u = NULL;
+                    size_t un = 0;
+                    if (n > 0 && n <= MAX_PATH + 1) u = z_win_utf8(w, (int)n, &un);
+                    if (u == NULL) return z_@String@_new("C:\\Windows\\Temp");
+                    while (un > 1 && (u[un - 1] == '\\' || u[un - 1] == '/') && !(un == 3 && u[1] == ':')) u[--un] = '\0';
+                    z_@String@_t out = z_@String@_new(u);
+                    free(u);
+                    return out;
+                #else
+                    const char* t = getenv("TMPDIR");
+                    if (t == NULL || t[0] == '\0') t = "/tmp";
+                    size_t n = strlen(t);
+                    while (n > 1 && t[n - 1] == '/') n--;
+                    z_@String@_t out = z_@String@_create((uint64_t)n);
+                    z_@String@_append(&out, t, (uint64_t)n);
+                    return out;
+                #endif
+                }
+                """
+            }
+        )
+        # a Child holds the OS's handle on its process: live once spawnAsync minted its
+        # Result; the destructor closes the handle
+        (
+            c.row
+            key: "Child.@class"
+            live: list { "Result_Child_IoError" }
+            destroy: """
+                /* a Child's destructor: its handle is closed -- the pidfd, or on Windows the
+                   process handle -- and the process itself is left running */
+                static void z_@Child@_destroy(z_@Child@_t* p) {
+                    if (!p || !p->@MEMBER_Child.open@) return;
+                    p->@MEMBER_Child.open@ = false;
+                    if (p->@MEMBER_Child.handle@ < 0) return;
+                #if defined(_WIN32)
+                    CloseHandle((HANDLE)(intptr_t)p->@MEMBER_Child.handle@);
+                #else
+                    close((int)p->@MEMBER_Child.handle@);
+                #endif
+                    p->@MEMBER_Child.handle@ = -1;
+                }
+                """
+        )
+        (
+            c.row
+            key: "Child.kill"
+            demand: list { "child_kill" }
+            needs: list { "prelude.zwin32" }
+            fragments: list {
+                """
+                /* child.kill -- end the child now, through its handle where there is one so
+                   no process that reused its pid is touched: SIGKILL (pidfd_send_signal, else
+                   kill), or TerminateProcess with 137, the status a SIGKILLed child reports.
+                   Nothing once the child is reaped. */
+                static void z_@Child@_kill(z_@Child@_t* c);
+                static void z_@Child@_kill(z_@Child@_t* c) {
+                    if (c->@MEMBER_Child.reaped@ || c->@MEMBER_Child.pid@ <= 0) return;
+                #if defined(_WIN32)
+                    TerminateProcess((HANDLE)(intptr_t)c->@MEMBER_Child.handle@, 137);
+                #else
+                #ifdef SYS_pidfd_send_signal
+                    if (c->@MEMBER_Child.handle@ >= 0
+                        && syscall(SYS_pidfd_send_signal, (int)c->@MEMBER_Child.handle@, SIGKILL, NULL, 0) == 0) return;
+                #endif
+                    kill((pid_t)c->@MEMBER_Child.pid@, SIGKILL);
+                #endif
+                }
+                """
+            }
+        )
+        # the start both spawns share, ahead of them
+        (
+            c.row
+            key: "@spawn_start"
+            demand: list { "@spawn_start" }
+            needs: list {
+                "prelude.zwin32" "prelude.@xmalloc" "prelude.@win_path" "prelude.@win_wide"
+            }
+            pulls: list { "io.@sv_cstr?posix" }
+            fragments: list {
+                """
+                /* z_os_spawn_start -- start argv as a child, the start os.spawn and
+                   os.spawnAsync share. stdout->outPath, stderr->errPath (each created or
+                   truncated); an empty out/err path inherits the parent's stream, and empty
+                   out+err inherits stdin too (else stdin is the null device). A non-empty cwd
+                   is the child's working directory. Answers 0 with the child's pid and the
+                   OS's handle on it, or the OS error code: the redirections could not be
+                   opened, the directory could not be entered, or the program could not be
+                   started.
+
+                   The redirection files are opened in the parent before the child starts, so
+                   the child's cwd cannot change their resolution, and no other child started
+                   meanwhile inherits them: a child sees only its three standard streams.
+
+                   POSIX: posix_spawnp (argv[0] resolved via PATH), which unlike fork is safe in
+                   a program that runs threads -- the child runs no code of ours between its
+                   start and the exec; the redirections are opened close-on-exec and handed
+                   over as 0/1/2 by file actions (dup2 clears close-on-exec on the copy). The
+                   handle is a pidfd, -1 on a kernel without them.
+
+                   Windows: CreateProcessW with a command line quoted so CommandLineToArgvW
+                   (and the C runtime) split it back into argv exactly; argv[0] is resolved
+                   through PATH, a name without an extension tried with .exe and .com; a .bat
+                   or .cmd is refused (ERROR_BAD_EXE_FORMAT) -- cmd.exe runs those, by its own
+                   quoting rules. The three standard handles are duplicated inheritable and
+                   are the only handles the child inherits (PROC_THREAD_ATTRIBUTE_HANDLE_LIST).
+                   The handle is the process handle. argv element buffers are NUL-terminated
+                   and borrowed. */
+                #if defined(_WIN32)
+                /* append `s` to the command line `w`, quoted when it must be */
+                static size_t z_os_win_quote(wchar_t* w, size_t at, const wchar_t* s, int force) {
+                    int plain = !force && s[0] != 0;
+                    for (const wchar_t* c = s; *c != 0 && plain; c++) {
+                        if (*c == L' ' || *c == L'\t' || *c == L'\n' || *c == L'\v' || *c == L'"') plain = 0;
+                    }
+                    if (plain) {
+                        for (const wchar_t* c = s; *c != 0; c++) w[at++] = *c;
+                        return at;
+                    }
+                    w[at++] = L'"';
+                    size_t bs = 0;
+                    for (const wchar_t* c = s;; c++) {
+                        if (*c == L'\\') {
+                            bs++;
+                            continue;
+                        }
+                        if (*c == 0) {
+                            /* backslashes before the closing quote are doubled */
+                            for (size_t k = 0; k < bs * 2; k++) w[at++] = L'\\';
+                            break;
+                        }
+                        if (*c == L'"') {
+                            for (size_t k = 0; k < bs * 2 + 1; k++) w[at++] = L'\\';
+                        } else {
+                            for (size_t k = 0; k < bs; k++) w[at++] = L'\\';
+                        }
+                        bs = 0;
+                        w[at++] = *c;
+                    }
+                    w[at++] = L'"';
+                    return at;
+                }
+
+                static int z_os_win_is_file(const wchar_t* p) {
+                    DWORD a = GetFileAttributesW(p);
+                    return a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY);
+                }
+
+                /* the program argv[0] names: as written when it holds a separator, else the
+                   first PATH directory that has it; either way tried as written when it has
+                   an extension, else with .exe, then .com. NULL with the last error set when
+                   there is none. */
+                static wchar_t* z_os_win_find_program(const wchar_t* name) {
+                    size_t n = wcslen(name);
+                    int has_sep = wcschr(name, L'\\') != NULL || wcschr(name, L'/') != NULL || (n >= 2 && name[1] == L':');
+                    const wchar_t* base = name;
+                    for (const wchar_t* c = name; *c != 0; c++) if (*c == L'\\' || *c == L'/' || *c == L':') base = c + 1;
+                    int has_ext = wcschr(base, L'.') != NULL;
+                    const wchar_t* exts[] = { L"", L".exe", L".com" };
+                    int first = has_ext ? 0 : 1;
+                    int last = has_ext ? 0 : 2;
+                    wchar_t* path = NULL;
+                    DWORD pn = 0;
+                    if (!has_sep) {
+                        pn = GetEnvironmentVariableW(L"PATH", NULL, 0);
+                        if (pn > 0) {
+                            path = (wchar_t*)z_xmalloc((size_t)pn * sizeof(wchar_t));
+                            if (GetEnvironmentVariableW(L"PATH", path, pn) == 0) path[0] = 0;
+                        }
+                    }
+                    const wchar_t* dir = has_sep ? L"" : (path != NULL ? path : L"");
+                    wchar_t* found = NULL;
+                    for (;;) {
+                        const wchar_t* end = has_sep ? dir : wcschr(dir, L';');
+                        size_t dn = has_sep ? 0 : (end != NULL ? (size_t)(end - dir) : wcslen(dir));
+                        if (has_sep || dn > 0) {
+                            for (int k = first; k <= last && found == NULL; k++) {
+                                size_t cap = dn + 1 + n + 5;
+                                wchar_t* cand = (wchar_t*)z_xmalloc(cap * sizeof(wchar_t));
+                                size_t at = 0;
+                                for (size_t i = 0; i < dn; i++) cand[at++] = dir[i];
+                                if (dn > 0 && cand[at - 1] != L'\\' && cand[at - 1] != L'/') cand[at++] = L'\\';
+                                for (size_t i = 0; i < n; i++) cand[at++] = name[i];
+                                for (const wchar_t* e = exts[k]; *e != 0; e++) cand[at++] = *e;
+                                cand[at] = 0;
+                                if (z_os_win_is_file(cand)) found = cand; else free(cand);
+                            }
+                        }
+                        if (found != NULL || has_sep || end == NULL) break;
+                        dir = end + 1;
+                    }
+                    free(path);
+                    if (found == NULL) SetLastError(ERROR_FILE_NOT_FOUND);
+                    return found;
+                }
+
+                /* an inheritable copy of a standard handle, or of the null device when this
+                   process has none; NULL on failure */
+                static HANDLE z_os_win_inheritable(HANDLE h) {
+                    HANDLE dup = NULL;
+                    if (h == NULL || h == INVALID_HANDLE_VALUE) {
+                        SECURITY_ATTRIBUTES sa = { sizeof(SECURITY_ATTRIBUTES), NULL, TRUE };
+                        dup = CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING, 0, NULL);
+                        return dup == INVALID_HANDLE_VALUE ? NULL : dup;
+                    }
+                    if (!DuplicateHandle(GetCurrentProcess(), h, GetCurrentProcess(), &dup, 0, TRUE, DUPLICATE_SAME_ACCESS)) return NULL;
+                    return dup;
+                }
+
+                /* a redirection file, opened for writing and inheritable */
+                static HANDLE z_os_win_redirect(z_@StringView@_t path) {
+                    wchar_t* w = z_win_path(path.data, path.size);
+                    if (w == NULL) return NULL;
+                    SECURITY_ATTRIBUTES sa = { sizeof(SECURITY_ATTRIBUTES), NULL, TRUE };
+                    HANDLE h = CreateFileW(w, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, &sa, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+                    DWORD e = GetLastError();
+                    free(w);
+                    SetLastError(e);
+                    return h == INVALID_HANDLE_VALUE ? NULL : h;
+                }
+                #else
+                #include <spawn.h>
+                extern char** environ;
+                #endif
+
+                static int z_os_spawn_start(
+                    const z_@List_String@_t* argv, z_@StringView@_t cwd, z_@StringView@_t outPath,
+                    z_@StringView@_t errPath, int32_t* pid_out, int64_t* handle_out
+                );
+                static int z_os_spawn_start(
+                    const z_@List_String@_t* argv, z_@StringView@_t cwd, z_@StringView@_t outPath,
+                    z_@StringView@_t errPath, int32_t* pid_out, int64_t* handle_out
+                ) {
+                    *pid_out = 0;
+                    *handle_out = -1;
+                    int inherit_out = (outPath.size == 0);
+                    int inherit_err = (errPath.size == 0);
+                    int inherit_in = (inherit_out && inherit_err);
+                #if defined(_WIN32)
+                    if (argv->length == 0) return ERROR_INVALID_PARAMETER;
+                    /* the arguments as UTF-16, and the program they name */
+                    wchar_t** wargs = (wchar_t**)z_xmalloc(argv->length * sizeof(wchar_t*));
+                    size_t line_cap = 1;
+                    int bad = 0;
+                    for (uint64_t i = 0; i < argv->length; i++) {
+                        wargs[i] = z_win_wide(argv->data[i].data, argv->data[i].size);
+                        if (wargs[i] == NULL) {
+                            bad = 1;
+                            wargs[i] = z_win_wide("", 0);
+                        }
+                        line_cap += wcslen(wargs[i]) * 2 + 3;
+                    }
+                    int rc = 0;
+                    wchar_t* program = NULL;
+                    if (bad) {
+                        rc = ERROR_NO_UNICODE_TRANSLATION;
+                    } else if (wcschr(wargs[0], L'"') != NULL) {
+                        rc = ERROR_INVALID_NAME;
+                    } else {
+                        program = z_os_win_find_program(wargs[0]);
+                        if (program == NULL) {
+                            rc = (int)GetLastError();
+                        } else {
+                            size_t pl = wcslen(program);
+                            const wchar_t* ext = pl >= 4 ? program + pl - 4 : L"";
+                            if (_wcsicmp(ext, L".bat") == 0 || _wcsicmp(ext, L".cmd") == 0) rc = ERROR_BAD_EXE_FORMAT;
+                        }
+                    }
+                    wchar_t* line = NULL;
+                    if (rc == 0) {
+                        line = (wchar_t*)z_xmalloc(line_cap * sizeof(wchar_t));
+                        size_t at = z_os_win_quote(line, 0, wargs[0], 1);
+                        for (uint64_t i = 1; i < argv->length; i++) {
+                            line[at++] = L' ';
+                            at = z_os_win_quote(line, at, wargs[i], 0);
+                        }
+                        line[at] = 0;
+                    }
+                    for (uint64_t i = 0; i < argv->length; i++) free(wargs[i]);
+                    free(wargs);
+                    HANDLE hin = NULL;
+                    HANDLE hout = NULL;
+                    HANDLE herr = NULL;
+                    wchar_t* wcwd = NULL;
+                    if (rc == 0) {
+                        hout = inherit_out ? z_os_win_inheritable(GetStdHandle(STD_OUTPUT_HANDLE)) : z_os_win_redirect(outPath);
+                        if (hout == NULL) rc = (int)GetLastError();
+                    }
+                    if (rc == 0) {
+                        herr = inherit_err ? z_os_win_inheritable(GetStdHandle(STD_ERROR_HANDLE)) : z_os_win_redirect(errPath);
+                        if (herr == NULL) rc = (int)GetLastError();
+                    }
+                    if (rc == 0) {
+                        hin = z_os_win_inheritable(inherit_in ? GetStdHandle(STD_INPUT_HANDLE) : NULL);
+                        if (hin == NULL) rc = (int)GetLastError();
+                    }
+                    if (rc == 0 && cwd.size > 0) {
+                        wcwd = z_win_path(cwd.data, cwd.size);
+                        if (wcwd == NULL) {
+                            rc = (int)GetLastError();
+                        } else {
+                            DWORD a = GetFileAttributesW(wcwd);
+                            if (a == INVALID_FILE_ATTRIBUTES) rc = (int)GetLastError();
+                            else if (!(a & FILE_ATTRIBUTE_DIRECTORY)) rc = ERROR_DIRECTORY;
+                        }
+                    }
+                    LPPROC_THREAD_ATTRIBUTE_LIST attrs = NULL;
+                    HANDLE inherit[3] = { hin, hout, herr };
+                    if (rc == 0) {
+                        SIZE_T asize = 0;
+                        InitializeProcThreadAttributeList(NULL, 1, 0, &asize);
+                        attrs = (LPPROC_THREAD_ATTRIBUTE_LIST)z_xmalloc(asize);
+                        if (!InitializeProcThreadAttributeList(attrs, 1, 0, &asize)
+                            || !UpdateProcThreadAttribute(attrs, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherit, sizeof inherit, NULL, NULL)) {
+                            rc = (int)GetLastError();
+                        }
+                    }
+                    if (rc == 0) {
+                        STARTUPINFOEXW si;
+                        memset(&si, 0, sizeof si);
+                        si.StartupInfo.cb = sizeof si;
+                        si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+                        si.StartupInfo.hStdInput = hin;
+                        si.StartupInfo.hStdOutput = hout;
+                        si.StartupInfo.hStdError = herr;
+                        si.lpAttributeList = attrs;
+                        PROCESS_INFORMATION pi;
+                        if (CreateProcessW(program, line, NULL, NULL, TRUE, CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT,
+                                           NULL, wcwd, &si.StartupInfo, &pi)) {
+                            CloseHandle(pi.hThread);
+                            *pid_out = (int32_t)pi.dwProcessId;
+                            *handle_out = (int64_t)(intptr_t)pi.hProcess;
+                        } else {
+                            rc = (int)GetLastError();
+                        }
+                    }
+                    if (attrs != NULL) {
+                        DeleteProcThreadAttributeList(attrs);
+                        free(attrs);
+                    }
+                    if (hin != NULL) CloseHandle(hin);
+                    if (hout != NULL) CloseHandle(hout);
+                    if (herr != NULL) CloseHandle(herr);
+                    free(wcwd);
+                    free(line);
+                    free(program);
+                    return rc;
+                #else
+                    if (argv->length == 0) return EINVAL;
+                    char** c_argv = (char**)z_xmalloc((argv->length + 1) * sizeof(char*));
+                    for (uint64_t i = 0; i < argv->length; i++) {
+                        c_argv[i] = argv->data[i].data;
+                    }
+                    c_argv[argv->length] = NULL;
+                    char* cwd_c = z_sv_to_cstr(cwd);
+                    int rc = 0;
+                    int out_fd = -1;
+                    int err_fd = -1;
+                    int null_fd = -1;
+                    if (!inherit_out) {
+                        char* out_c = z_sv_to_cstr(outPath);
+                        out_fd = open(out_c, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+                        if (out_fd < 0) rc = errno;
+                        free(out_c);
+                    }
+                    if (rc == 0 && !inherit_err) {
+                        char* err_c = z_sv_to_cstr(errPath);
+                        err_fd = open(err_c, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+                        if (err_fd < 0) rc = errno;
+                        free(err_c);
+                    }
+                    if (rc == 0 && !inherit_in) {
+                        null_fd = open("/dev/null", O_RDONLY | O_CLOEXEC);
+                        if (null_fd < 0) rc = errno;
+                    }
+                    if (rc == 0) {
+                        posix_spawn_file_actions_t fa;
+                        posix_spawn_file_actions_init(&fa);
+                        if (cwd.size > 0) rc = posix_spawn_file_actions_addchdir_np(&fa, cwd_c);
+                        if (rc == 0 && !inherit_in) rc = posix_spawn_file_actions_adddup2(&fa, null_fd, 0);
+                        if (rc == 0 && !inherit_out) rc = posix_spawn_file_actions_adddup2(&fa, out_fd, 1);
+                        if (rc == 0 && !inherit_err) rc = posix_spawn_file_actions_adddup2(&fa, err_fd, 2);
+                        pid_t child = -1;
+                        if (rc == 0) rc = posix_spawnp(&child, c_argv[0], &fa, NULL, c_argv, environ);
+                        posix_spawn_file_actions_destroy(&fa);
+                        if (rc == 0) {
+                            *pid_out = (int32_t)child;
+                #ifdef SYS_pidfd_open
+                            int pfd = (int)syscall(SYS_pidfd_open, child, 0);
+                            if (pfd >= 0) *handle_out = (int64_t)pfd;
+                #endif
+                        }
+                    }
+                    if (out_fd >= 0) close(out_fd);
+                    if (err_fd >= 0) close(err_fd);
+                    if (null_fd >= 0) close(null_fd);
+                    free(cwd_c);
+                    free(c_argv);
+                    return rc;
+                #endif
+                }
+                """
+            }
+        )
+        (
+            c.row
+            key: "spawn"
+            pulls: list { "io.@sv_cstr?posix" "os.@spawn_start" }
+            fragments: list {
+                """
+                /* os.spawn -- start argv as a child (z_os_spawn_start: PATH resolution,
+                   redirections, cwd) and wait for it. Returns the child's exit status; 128 +
+                   signo for a child a signal ended; 127 on exec/setup failure; 124 if
+                   timeoutSecs > 0 and the child outlived it (killed). timeoutSecs <= 0 waits
+                   forever.
+
+                   The timeout waits on the child's own handle -- its pidfd, polled; on
+                   Windows its process handle -- so it touches no process-wide state (no
+                   signal handler, no alarm) and another thread's spawn is not disturbed. A
+                   kernel without pidfd_open (ENOSYS) is polled with WNOHANG every 10ms
+                   instead. */
+                #include <time.h>
+                #if !defined(_WIN32)
+                static int32_t z_os_spawn_status(int wst) {
+                    if (WIFEXITED(wst)) return (int32_t)WEXITSTATUS(wst);
+                    if (WIFSIGNALED(wst)) return 128 + (int32_t)WTERMSIG(wst);
+                    return 127;
+                }
+                #endif
+                static int32_t z_os_spawn(
+                    z_@List_String@_t* argv, z_@StringView@_t cwd, z_@StringView@_t outPath,
+                    z_@StringView@_t errPath, int32_t timeoutSecs
+                );
+                static int32_t z_os_spawn(
+                    z_@List_String@_t* argv, z_@StringView@_t cwd, z_@StringView@_t outPath,
+                    z_@StringView@_t errPath, int32_t timeoutSecs
+                ) {
+                    int32_t pid = 0;
+                    int64_t handle = -1;
+                    if (z_os_spawn_start(argv, cwd, outPath, errPath, &pid, &handle) != 0) return 127;
+                #if defined(_WIN32)
+                    HANDLE h = (HANDLE)(intptr_t)handle;
+                    DWORD budget = INFINITE;
+                    if (timeoutSecs > 0) budget = timeoutSecs < 4000000 ? (DWORD)timeoutSecs * 1000 : 4000000000u;
+                    DWORD w = WaitForSingleObject(h, budget);
+                    int32_t status = 127;
+                    if (w == WAIT_TIMEOUT) {
+                        TerminateProcess(h, 137);
+                        WaitForSingleObject(h, INFINITE);
+                        status = 124;
+                    } else {
+                        DWORD code = 0;
+                        if (w == WAIT_OBJECT_0 && GetExitCodeProcess(h, &code)) status = (int32_t)code;
+                    }
+                    CloseHandle(h);
+                    return status;
+                #else
+                    int pfd = (int)handle;
+                    int wst = 0;
+                    int32_t status = 127;
+                    if (timeoutSecs <= 0) {
+                        for (;;) {
+                            if (waitpid(pid, &wst, 0) >= 0) {
+                                status = z_os_spawn_status(wst);
+                                break;
+                            }
+                            if (errno != EINTR) break;
+                        }
+                        if (pfd >= 0) close(pfd);
+                        return status;
+                    }
+                    int64_t budget = (int64_t)timeoutSecs * 1000;
+                    if (pfd >= 0) {
+                        struct pollfd p = { pfd, POLLIN, 0 };
+                        struct timespec t0;
+                        clock_gettime(CLOCK_MONOTONIC, &t0);
+                        int ready = 0;
+                        for (;;) {
+                            struct timespec t1;
+                            clock_gettime(CLOCK_MONOTONIC, &t1);
+                            int64_t spent = (int64_t)(t1.tv_sec - t0.tv_sec) * 1000
+                                          + (int64_t)(t1.tv_nsec - t0.tv_nsec) / 1000000;
+                            if (spent >= budget) break;
+                            int r = poll(&p, 1, (int)(budget - spent));
+                            if (r > 0) { ready = 1; break; }
+                            if (r < 0 && errno != EINTR) break;
+                        }
+                        close(pfd);
+                        if (!ready) {
+                            kill(pid, SIGKILL);
+                            while (waitpid(pid, &wst, 0) < 0 && errno == EINTR) {}
+                            return 124;
+                        }
+                        while (waitpid(pid, &wst, 0) < 0) {
+                            if (errno != EINTR) return 127;
+                        }
+                        return z_os_spawn_status(wst);
+                    }
+                    for (int64_t waited = 0; ; waited += 10) {
+                        pid_t r = waitpid(pid, &wst, WNOHANG);
+                        if (r == pid) return z_os_spawn_status(wst);
+                        if (r < 0 && errno != EINTR) return 127;
+                        if (waited >= budget) break;
+                        struct timespec ts = { 0, 10 * 1000000L };
+                        nanosleep(&ts, NULL);
+                    }
+                    kill(pid, SIGKILL);
+                    while (waitpid(pid, &wst, 0) < 0 && errno == EINTR) {}
+                    return 124;
+                #endif
+                }
+                """
+            }
+        )
+        (
+            c.row
+            key: "spawnAsync"
+            needs: list { "prelude.@xmalloc" }
+            pulls: list { "io.@sv_cstr?posix" "io.@errno" "os.@spawn_start" }
+            fragments: list {
+                """
+                /* os.spawnAsync -- start argv like os.spawn (z_os_spawn_start: same PATH
+                   resolution, redirection and cwd rules) but return immediately with the
+                   Child: its pid and the OS's handle on it. The error says why the start
+                   failed. No timeout: the caller reaps with waitAny and enforces deadlines
+                   with monotonicMillis and Child.kill. */
+                static z_@Result_Child_IoError@_t z_os_spawnAsync(
+                    const z_@List_String@_t* argv, z_@StringView@_t cwd, z_@StringView@_t outPath,
+                    z_@StringView@_t errPath
+                );
+                static z_@Result_Child_IoError@_t z_os_spawnAsync(
+                    const z_@List_String@_t* argv, z_@StringView@_t cwd, z_@StringView@_t outPath,
+                    z_@StringView@_t errPath
+                ) {
+                    z_@Result_Child_IoError@_t result = {0};
+                    int32_t pid = 0;
+                    int64_t handle = -1;
+                    int e = z_os_spawn_start(argv, cwd, outPath, errPath, &pid, &handle);
+                    if (e != 0) {
+                        z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
+                        *boxed = z_io_os_error(e);
+                        result.tag = @ARM_Result_Child_IoError.err@;
+                        result.data = boxed;
+                        return result;
+                    }
+                    z_@Child@_t* boxed = (z_@Child@_t*)z_xmalloc(sizeof(z_@Child@_t));
+                    boxed->@MEMBER_Child.pid@ = pid;
+                    boxed->@MEMBER_Child.handle@ = handle;
+                    boxed->@MEMBER_Child.open@ = true;
+                    boxed->@MEMBER_Child.reaped@ = false;
+                    result.tag = @ARM_Result_Child_IoError.ok@;
+                    result.data = boxed;
+                    return result;
+                }
+                """
+            }
+        )
+        (
+            c.row
+            key: "unsetEnv"
+            fact: "threaded"
+            needs: list {
+                "prelude.zthread" "prelude.@String_new" "prelude.@xmalloc" "prelude.@win_unsetenv"
+                "prelude.@thread_live"
+            }
+            pulls: list { "io.@sv_cstr?posix" "io.@errno" }
+            fragments: list {
+                """
+                /* os.unset_env in a program that starts threads -- as
+                   _Z_OS_UNSET_ENV.inc, but refused while another thread runs, as
+                   os.setEnv is. */
+                static z_@Result_null_IoError@_t z_os_unsetEnv(z_@StringView@_t key);
+                static z_@Result_null_IoError@_t z_os_unsetEnv(z_@StringView@_t key) {
+                    z_@Result_null_IoError@_t out = {0};
+                    if (z_thread_live() > 0) {
+                        z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
+                        z_@IoError@_t v = {0};
+                        v.tag = @ARM_IoError.other@;
+                        z_@String@_t* sp = (z_@String@_t*)z_xmalloc(sizeof(z_@String@_t));
+                        *sp = z_@String@_new("os.unsetEnv: another thread is running, and it may be reading the environment");
+                        v.data = sp;
+                        *boxed = v;
+                        out.tag = @ARM_Result_null_IoError.err@;
+                        out.data = boxed;
+                        return out;
+                    }
+                #if defined(_WIN32)
+                    int rc = z_win_unsetenv(key.data, key.size);
+                    int e = (int)GetLastError();
+                #else
+                    char* key_cstr = z_sv_to_cstr(key);
+                    int rc = unsetenv(key_cstr);
+                    int e = errno;
+                    free(key_cstr);
+                #endif
+                    if (rc != 0) {
+                        z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
+                        *boxed = z_io_os_error(e);
+                        out.tag = @ARM_Result_null_IoError.err@;
+                        out.data = boxed;
+                        return out;
+                    }
+                    out.tag = @ARM_Result_null_IoError.ok@;
+                    out.data = NULL;
+                    return out;
+                }
+
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "unsetEnv"
+            needs: list {
+                "prelude.@String_new" "prelude.@xmalloc" "prelude.@win_unsetenv"
+                "prelude.@thread_live"
+            }
+            pulls: list { "io.@sv_cstr?posix" "io.@errno" }
+            fragments: list {
+                """
+                /* os.unset_env -- unsetenv(key). Idempotent: removing a variable
+                   that was never set returns ok null. */
+                static z_@Result_null_IoError@_t z_os_unsetEnv(z_@StringView@_t key);
+                static z_@Result_null_IoError@_t z_os_unsetEnv(z_@StringView@_t key) {
+                    z_@Result_null_IoError@_t out = {0};
+                #if defined(_WIN32)
+                    int rc = z_win_unsetenv(key.data, key.size);
+                    int e = (int)GetLastError();
+                #else
+                    char* key_cstr = z_sv_to_cstr(key);
+                    int rc = unsetenv(key_cstr);
+                    int e = errno;
+                    free(key_cstr);
+                #endif
+                    if (rc != 0) {
+                        z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
+                        *boxed = z_io_os_error(e);
+                        out.tag = @ARM_Result_null_IoError.err@;
+                        out.data = boxed;
+                        return out;
+                    }
+                    out.tag = @ARM_Result_null_IoError.ok@;
+                    out.data = NULL;
+                    return out;
+                }
+
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "userName"
+            needs: list { "prelude.@String_new" "prelude.@xmalloc" "prelude.@win_utf8" }
+            pulls: list { "io.@errno" }
+            fragments: list {
+                """
+                /* os.user_name -- resolve the effective uid via getpwuid_r.
+                   Starts with a 1 KiB buffer and retries once with 16 KiB if
+                   ERANGE; beyond that, surface as ioerror.other. */
+                static z_@Result_String_IoError@_t z_os_userName(void);
+                static z_@Result_String_IoError@_t z_os_userName(void) {
+                    z_@Result_String_IoError@_t out = {0};
+                #if defined(_WIN32)
+                    /* the account the process runs as (GetUserNameW) */
+                    wchar_t w[257];
+                    DWORD wn = 257;
+                    char* name = GetUserNameW(w, &wn) ? z_win_utf8(w, -1, NULL) : NULL;
+                    if (name == NULL) {
+                        z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
+                        *boxed = z_io_os_error((int)GetLastError());
+                        out.tag = @ARM_Result_String_IoError.err@;
+                        out.data = boxed;
+                        return out;
+                    }
+                    z_@String@_t* sb = (z_@String@_t*)z_xmalloc(sizeof(z_@String@_t));
+                    *sb = z_@String@_new(name);
+                    free(name);
+                    out.tag = @ARM_Result_String_IoError.ok@;
+                    out.data = sb;
+                    return out;
+                #else
+                    uid_t uid = geteuid();
+                    size_t bufsize = 1024;
+                    for (int attempt = 0; attempt < 2; attempt++) {
+                        char* buf = (char*)z_xmalloc(bufsize);
+                        struct passwd pwd;
+                        struct passwd* result = NULL;
+                        int rc = getpwuid_r(uid, &pwd, buf, bufsize, &result);
+                        if (rc == 0 && result != NULL) {
+                            z_@String@_t* boxed = (z_@String@_t*)z_xmalloc(sizeof(z_@String@_t));
+                            *boxed = z_@String@_new(pwd.pw_name);
+                            free(buf);
+                            out.tag = @ARM_Result_String_IoError.ok@;
+                            out.data = boxed;
+                            return out;
+                        }
+                        free(buf);
+                        if (rc == ERANGE && attempt == 0) {
+                            bufsize = 16 * 1024;
+                            continue;
+                        }
+                        int e = (rc == 0) ? ENOENT : rc;
+                        z_@IoError@_t* boxed = (z_@IoError@_t*)z_xmalloc(sizeof(z_@IoError@_t));
+                        *boxed = z_io_os_error(e);
+                        out.tag = @ARM_Result_String_IoError.err@;
+                        out.data = boxed;
+                        return out;
+                    }
+                    /* unreachable */
+                    out.tag = @ARM_Result_String_IoError.err@;
+                    out.data = NULL;
+                    return out;
+                #endif
+                }
+
+
+                """
+            }
+        )
+        (
+            c.row
+            key: "waitAny"
+            needs: list { "prelude.zwin32" }
+            fragments: list {
+                """
+                /* os.waitAny -- reap one exited child among `children` without blocking,
+                   marking it reaped; pid 0 = none of them has exited. Each child is asked
+                   about by its own pid (POSIX) or handle (Windows), so a child another part
+                   of the program started is never reaped here, and one already reaped is
+                   skipped. status decodes like os.spawn: the exit code; a signalled child
+                   reports 128 + signo; one Child.kill ended reports 137 everywhere. */
+                static z_@procexit@_t z_os_waitAny(z_@List_Child@_t* children);
+                static z_@procexit@_t z_os_waitAny(z_@List_Child@_t* children) {
+                    z_@procexit@_t r = {0};
+                    for (uint64_t i = 0; i < children->length; i++) {
+                        z_@Child@_t* c = &children->data[i];
+                        if (c->@MEMBER_Child.reaped@ || c->@MEMBER_Child.pid@ <= 0) continue;
+                #if defined(_WIN32)
+                        HANDLE h = (HANDLE)(intptr_t)c->@MEMBER_Child.handle@;
+                        if (WaitForSingleObject(h, 0) != WAIT_OBJECT_0) continue;
+                        DWORD code = 127;
+                        if (!GetExitCodeProcess(h, &code)) code = 127;
+                        r.@MEMBER_procexit.status@ = (int32_t)code;
+                #else
+                        int wst = 0;
+                        pid_t p = waitpid((pid_t)c->@MEMBER_Child.pid@, &wst, WNOHANG);
+                        if (p <= 0) continue;
+                        if (WIFEXITED(wst)) {
+                            r.@MEMBER_procexit.status@ = (int32_t)WEXITSTATUS(wst);
+                        } else if (WIFSIGNALED(wst)) {
+                            r.@MEMBER_procexit.status@ = 128 + (int32_t)WTERMSIG(wst);
+                        } else {
+                            r.@MEMBER_procexit.status@ = 127;
+                        }
+                #endif
+                        c->@MEMBER_Child.reaped@ = true;
+                        r.@MEMBER_procexit.pid@ = c->@MEMBER_Child.pid@;
+                        return r;
+                    }
+                    return r;
+                }
+                """
+            }
+        )
+    }
+    canons: list {
+        (c.canon stem: "List_Child" spec: list { "ListRef" "os.Child" })
+        (c.canon stem: "Result_Child_IoError" spec: list { "Result" "os.Child" "IoError" })
+    }
+    links: list {
+        # On Windows os.userName is advapi32's (GetUserNameW) and the command line is
+        # split by shell32's CommandLineToArgvW: mingw-w64 gcc links both by default,
+        # tcc and cl do not
+        (c.link library: "advapi32" os: list { c.os.windows })
+        (c.link library: "shell32" os: list { c.os.windows })
+    }
+)
