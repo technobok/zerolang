@@ -98,6 +98,7 @@ public: unit {
     :specLookup
     :sumSubtypeNames
     :typecheck
+    :checkreach
     :walkLookupTyperefRo
     :valPartTids
     :valOpSource
@@ -8149,7 +8150,10 @@ resolveMethodFnLazy: function {
     isFnDef: false
     arm: rowArmAt :ast nid: opId
     if arm.functiondef then isFnDef = true
-    if lazyOk when st.typing.eagerAll.not when isFnDef then return (optionval.some ztypes.tid.zero)
+    if lazyOk when isFnDef when (eagerAt :st declId: unitDecl).not then return (
+        optionval.some
+        ztypes.tid.zero
+    )
     return (
         resolveMethodFn
         :st
@@ -18737,10 +18741,23 @@ demandAllUnitDefs: function {
     }
 }
 
-# demandAllDefs -- demand every top-level definition of EVERY unit. Without
-# it a definition nothing references is never resolved, so an error inside
-# it is reported by nothing.
+# demandAllDefs -- demand every top-level definition of EVERY unit, or of the
+# main unit alone under checkreach.mainUnit. Without it a definition nothing
+# references is never resolved, so an error inside it is reported by nothing.
 demandAllDefs: function {st: zenv.ZSymbolTable program: Ast.view} is {
+    if st.typing.mainUnitAll then {
+        dmN: program.units.length
+        dmI: u64
+        for dmI < dmN loop {
+            dmId: program.units.get i: dmI
+            dmI = dmI + 1
+            dmn: program.nodes.get i: dmId
+            if dmn.namedoperation when dmn.name == st.reg.regMainUnitId then {
+                demandAllUnitDefs :st ast: program unitNameId: dmn.name unitdefId: dmn.operation
+            }
+        }
+        return
+    }
     if st.typing.eagerAll.not then return
     {
         duN: program.units.length
@@ -19172,6 +19189,18 @@ unitHasObjectMethodBody: function {ast: Ast.view defId: zast.nodeid} out bool is
         ) then return true
     }
     return false
+}
+
+# demandChildDecls -- demand every declaration `declId` holds, as uses of each
+# would: a check of the main unit's own declarations reaching a namespace
+demandChildDecls: function {st: zenv.ZSymbolTable declId: ztypes.declid} is {
+    n: st.typing.declChildSlots :declId
+    i: u64
+    for i < n loop {
+        did: st.typing.declChildAt :declId index: i
+        i = i + 1
+        if did.isZero.not then demandDecl :st declId: did
+    }
 }
 
 # demandDecl -- a reference found this declaration: queue it for resolution
@@ -20444,7 +20473,8 @@ resolveOrdinaryMember: function {
     # use reaches it, and not before: following every one when the block
     # resolved demanded each unit a re-export names and minted every type in
     # it, for a program that names one of them
-    if isRx when st.typing.eagerAll.not when (declIsPublicBlock :st declId: ownerDeclId) then return
+    if isRx when (declIsPublicBlock :st declId: ownerDeclId) when (eagerAt :st declId: ownerDeclId
+    ).not then return
     # A re-export whose target is a DOTTED path is resolved by following it,
     # which is resolveAliasKey's job -- resolveDef has no leg for a dotted target
     # naming a NESTED unit, and marking the alias DEFINED after it did nothing is
@@ -20685,10 +20715,39 @@ resolveNamespaceUnit: function {
             }
         }
     }
-    # A namespace is a scope: its members resolve when a use names them, as a
-    # file unit's do. Only the scopes it declares -- nested namespaces and
-    # templates -- are properties of the declaration and resolve with it.
-    # `--eager` resolves every member.
+    (
+        resolveNamespaceMembers
+        :st
+        :ast
+        :unitDecl
+        :declId
+        :uid
+        :unitOpId
+        :parentDeclId
+    )
+    # A namespace's constants are NOT folded here. Each one declares itself
+    # when something reads it (probeScopeTyperef's constant leg), the way every
+    # other definition of this unit waits to be demanded. Folding them up front
+    # was the last eager tier left inside the lazy one.
+}
+
+# resolveNamespaceMembers -- the members of the namespace `declId` (type `uid`)
+# that resolve with it. A namespace is a scope: its members resolve when a use
+# names them, as a file unit's do; only the scopes it declares -- nested
+# namespaces and templates -- are properties of the declaration and resolve
+# with it. `--eager` resolves every member, and a check of the main unit's own
+# declarations demands every member of a namespace written in it, which
+# resolves each the way a use would.
+resolveNamespaceMembers: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    declId: ztypes.declid
+    uid: ztypes.tid
+    unitOpId: zast.nodeid
+    # the declaration the namespace is written in
+    parentDeclId: ztypes.declid
+} is {
     if st.typing.eagerAll then {
         (
             resolveUnitMembers
@@ -20711,11 +20770,12 @@ resolveNamespaceUnit: function {
             ownerTid: uid
             :unitOpId
         )
+        if declId.isZero.not when (eagerAt :st declId: parentDeclId) then (
+            demandChildDecls
+            :st
+            :declId
+        )
     }
-    # A namespace's constants are NOT folded here. Each one declares itself
-    # when something reads it (probeScopeTyperef's constant leg), the way every
-    # other definition of this unit waits to be demanded. Folding them up front
-    # was the last eager tier left inside the lazy one.
 }
 
 # resolveInlineGenericUnit -- resolve an inline generic unit (mathops: unit as { t:
@@ -42749,7 +42809,7 @@ checkIf: function {
     # everything, which is what keeps the editor alive inside a branch that is
     # dead only on this host; neither of those emits C, so no artifact differs.
     skipDead: false
-    if fbr.known when st.typing.eagerAll.not then skipDead = true
+    if fbr.known when (eagerAt :st declId: unitDecl).not then skipDead = true
     ifMarker: st.pushBlock node: ifnode.nid
     armEnds: st.openArmNarrowingEnds
     liveBefore: st.getLiveOwnedVars
@@ -55269,7 +55329,7 @@ checkCaseElse: function {
     # a match folded to one of its arms never runs its else (walkCaseClauses)
     fb: st.typing.foldedBranchIn mono: st.typing.curMonoStamp nid: casenode.nid
     et: neverId
-    if fb.known.not or st.typing.eagerAll or (fb.stmt == casenode.elseclause) then {
+    if fb.known.not or (eagerAt :st declId: unitDecl) or (fb.stmt == casenode.elseclause) then {
         walkBodyAt :st :unitDecl :ast bodyId: casenode.elseclause
         et = lastStmtType :st :ast block: (ast.nodes.get i: casenode.elseclause)
         armTypes.append et
@@ -55309,7 +55369,7 @@ walkCaseClauses: function {
     # a match folded to one arm walks that arm alone, as a folded `if` does
     # (checkIfClauses); `--eager` walks every arm
     fb: st.typing.foldedBranchIn mono: st.typing.curMonoStamp nid: casenode.nid
-    skipDead: fb.known and st.typing.eagerAll.not
+    skipDead: fb.known and (eagerAt :st declId: unitDecl).not
     kC: u64
     for kC < casenode.nclauses loop {
         clauseId: zast.caseClauseAt :ast nid: casenode.nid i: kC
@@ -57879,7 +57939,7 @@ bodiedMemberDeferred: function {
     ownerTid: ztypes.tid
     memberDecl: ztypes.declid
 } out bool is {
-    if st.typing.eagerAll then return false
+    if (eagerAt :st declId: memberDecl) then return false
     if memberDecl.isZero then return false
     if ownerTid.isZero then return false
     # a written `create` runs wherever the type is constructed, and a function
@@ -71652,6 +71712,32 @@ unitFileNote: function {
     }
 }
 
+# checkreach -- where a check's demand starts, besides what a use reaches
+checkreach: variant {
+    # a program: demand starts at the main unit's `main`
+    fromMain: null
+    # every declaration written in the main unit -- its nested units, its types'
+    # members, every branch of its bodies -- whether or not anything uses it, and
+    # the rest of the program as those reach it: a data file, a file being linted
+    mainUnit: null
+    # every declaration of every unit: `--eager`
+    everything: null
+} as { tag: u8.tag }
+
+# eagerAt -- whether the declaration `declId` is checked whether or not a use
+# reaches it: every one under checkreach.everything, the main unit's own
+# (nested units and members included) under checkreach.mainUnit
+eagerAt: function {st: zenv.ZSymbolTable.view declId: ztypes.declid} out bool is {
+    if st.typing.eagerAll then return true
+    if st.typing.mainUnitAll.not then return false
+    cur: declId
+    for cur.isZero.not loop {
+        if cur == st.typing.mainUnitRoot then return true
+        cur = st.typing.declParentOf declId: cur
+    }
+    return false
+}
+
 # typecheck -- entry point. Registers a UNIT type per unit and resolves the main
 # unit's definition signatures, then demand-resolves the cross-unit types those
 # signatures referenced. The registry is supplied by the caller, read by the dumper.
@@ -71661,7 +71747,8 @@ unitFileNote: function {
 typecheck: function {
     program: Ast
     reg: ztypes.ZTypeRegistry.take
-    eager: bool
+    # where demand starts besides what uses reach
+    reach: checkreach
     requireMain: bool
     dumpRows: bool
     # each loaded file's path as a location shows it (filePathsOf)
@@ -71671,7 +71758,8 @@ typecheck: function {
     nodeEstT = program.nodes.length
     ty: ztyping.newTyping nodeEst: nodeEstT
     ty.filePaths = filePaths.take
-    ty.eagerAll = eager
+    ty.eagerAll = reach.everything
+    ty.mainUnitAll = reach.mainUnit
     ty.requireMain = requireMain
     ty.dumpRows = dumpRows
     muNid: nameIdOf ast: program name: program.mainUnitName.stringView
