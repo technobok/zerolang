@@ -50,6 +50,7 @@ public: unit {
     :isOperatorName
     :instancesWithin
     :dataFieldIds
+    :knownFieldSpan
     :isNullTid
     :dataFieldNames
     :isBareGenericParam
@@ -66015,25 +66016,21 @@ constOfStaticFields: function {
     ln: u32
     co: u32
 } out ztypes.cval is {
-    forceAllMembers :st :ast :tid
-    ftids: ListVal ztypes.tid
-    fnames: ListVal zast.nameid
-    dataFieldIds :st :tid ids: ftids nameIds: fnames
+    span: dataFieldsOf :st :ast :tid
     argOf: ListVal zast.nodeid
-    ok: matchStaticArgs :st :ast :tid :args :fnames :argOf
+    ok: matchStaticArgs :st :ast :tid :args :span :argOf
     items: ListVal ztypes.cval
-    fi: u64
-    for fi < fnames.length loop {
+    fi: u32
+    for fi < span.count loop {
         v: (
-            staticFieldValue
+            staticFieldRowValue
             :st
             :scope
             :ast
             :unitDecl
             ownerTid: tid
-            ftid: (ftids.get i: fi)
-            name: (fnames.get i: fi)
-            argNid: (argOf.get i: fi)
+            row: span.from + fi
+            argNid: (argOf.get i: fi.u64)
             :at
             :ln
             :co
@@ -66062,34 +66059,36 @@ constOfStaticFields: function {
 }
 
 # matchStaticArgs -- the argument each field of a data construction is given,
-# row for row with `fnames` in `argOf` (0 for none): by label, or the one
-# unlabelled argument the first field. False when a label names no field, which
-# is reported.
+# row for row with the type's fields `span` in `argOf` (0 for none): by label,
+# or the one unlabelled argument the first field. False when a label names no
+# field, which is reported.
 matchStaticArgs: function {
     st: zenv.ZSymbolTable
     ast: Ast
     tid: ztypes.tid
     args: (ListVal zast.nodeid).view
-    fnames: (ListVal zast.nameid).view
+    span: ztyping.fieldspan
     argOf: ListVal zast.nodeid
 } out bool is {
-    for argOf.length < fnames.length loop argOf.append zast.nodeid.zero
+    nf: span.count.u64
+    for argOf.length < nf loop argOf.append zast.nodeid.zero
     ok: true
     pos: u64
     for each aId: args loop {
         a: argRefAt :ast nid: aId
-        slot: fnames.length
+        slot: nf
         if a.name.isZero then {
             slot = pos
             pos = pos + 1
         }
         fi: u64
-        for fi < fnames.length loop {
-            if a.name.isZero.not when (fnames.get i: fi) == a.name then slot = fi
+        for fi < nf loop {
+            fname: (st.typing.fieldRows.get i: span.from.u64 + fi).name
+            if a.name.isZero.not when fname == a.name then slot = fi
             fi = fi + 1
         }
-        if slot < fnames.length then argOf.set i: slot val: aId
-        if slot == fnames.length then {
+        if slot < nf then argOf.set i: slot val: aId
+        if slot == nf then {
             reportUnknownArgument :st :ast ownerTid: tid label: a.name arg: a
             ok = false
         }
@@ -66118,7 +66117,90 @@ staticFieldValue: function {
     # a field of a type no data field may hold was refused where it is
     # declared (refuseNonStaticMember): that is the one error, not each value
     if (isStaticMemberTid :st :ast tid: ftid).not then return ztypes.noConst
-    if argNid.isZero.not then {
+    if argNid.isZero.not then return (staticArgValue :st :scope :ast :unitDecl :ftid :name :argNid)
+    dv: constOfFieldDefault :st :ast :ownerTid :ftid :name
+    if dv.kind.none.not then return (constFitToField :st :scope :ast v: dv :ftid :name :at :ln :co)
+    missingFieldError :st :ast :ftid :name :at :ln :co
+    return ztypes.noConst
+}
+
+# staticFieldRowValue -- staticFieldValue for the field row `row` of a data
+# type (dataFieldsOf), which answers the static verdict once per type. A
+# default that folded and fitted is kept on the row: a default is a constant,
+# the same value at every construction.
+staticFieldRowValue: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    ownerTid: ztypes.tid
+    row: u32
+    # the argument naming the field, 0 for none
+    argNid: zast.nodeid
+    # the construction the field belongs to, where its absence is reported
+    at: zast.nodeid
+    ln: u32
+    co: u32
+} out ztypes.cval is {
+    fr: st.typing.fieldRows.get i: row.u64
+    ftid: fr.tid
+    name: fr.name
+    # refused where it is declared (refuseNonStaticMember), as in staticFieldValue
+    if fr.isStatic.not then return ztypes.noConst
+    if argNid.isZero.not then return (staticArgValue :st :scope :ast :unitDecl :ftid :name :argNid)
+    if fr.defaultVal.kind.none.not then return fr.defaultVal
+    dv: constOfFieldDefault :st :ast :ownerTid :ftid :name
+    if dv.kind.none then {
+        missingFieldError :st :ast :ftid :name :at :ln :co
+        return ztypes.noConst
+    }
+    fv: constFitToField :st :scope :ast v: dv :ftid :name :at :ln :co
+    if fv.kind.none.not then {
+        (
+            st.typing.fieldRows.set
+            i: row.u64
+            val: (ztyping.datafield tid: ftid :name isStatic: true defaultVal: fv)
+        )
+    }
+    return fv
+}
+
+# missingFieldError -- a construction at `at` gives field `name` (of type
+# `ftid`) no value, and it has no default
+missingFieldError: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    ftid: ztypes.tid
+    name: zast.nameid
+    at: zast.nodeid
+    ln: u32
+    co: u32
+} is {
+    fn: zast.nameTextCopy :ast ref: name
+    tnm: specWrittenName :st :ast tid: ftid
+    (
+        addError
+        :st
+        nodeid: at
+        lineno: ln
+        colno: co
+        e: zast.err.callError
+        msg: "missing required argument '\{fn}' (type: \{tnm})"
+    )
+}
+
+# staticArgValue -- the argument at `argNid` given a data field (or a choice
+# arm's payload) of type `ftid`, folded and fitted to it
+staticArgValue: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    ftid: ztypes.tid
+    name: zast.nameid
+    argNid: zast.nodeid
+} out ztypes.cval is {
+    {
         a: argRefAt :ast nid: argNid
         errA: st.typing.errors.length
         av: ztypes.noConst
@@ -66146,20 +66228,6 @@ staticFieldValue: function {
             co: a.colno
         )
     }
-    dv: constOfFieldDefault :st :ast :ownerTid :ftid :name
-    if dv.kind.none.not then return (constFitToField :st :scope :ast v: dv :ftid :name :at :ln :co)
-    fn: zast.nameTextCopy :ast ref: name
-    tnm: specWrittenName :st :ast tid: ftid
-    (
-        addError
-        :st
-        nodeid: at
-        lineno: ln
-        colno: co
-        e: zast.err.callError
-        msg: "missing required argument '\{fn}' (type: \{tnm})"
-    )
-    return ztypes.noConst
 }
 
 # constOfFnRef -- a function's name, bare or through a unit, where a static
@@ -66343,15 +66411,63 @@ constAggField: function {
         if md.isZero or (st.typing.decls.get i: md).kind.armDecl.not then return ztypes.noConst
         return (boolConst :ast :st v: arm == nameId)
     }
-    ftids: ListVal ztypes.tid
-    fnames: ListVal zast.nameid
-    dataFieldIds :st :tid ids: ftids nameIds: fnames
-    fi: u64
-    for fi < fnames.length loop {
-        if (fnames.get i: fi) == nameId then return (st.typing.constAggItems.get i: start + fi)
+    span: dataFieldsOf :st :ast :tid
+    fi: u32
+    for fi < span.count loop {
+        if (st.typing.fieldRows.get i: (span.from + fi).u64).name == nameId then return (
+            st.typing.constAggItems.get
+            i: start + fi
+        )
         fi = fi + 1
     }
     return ztypes.noConst
+}
+
+# dataFieldsOf -- `tid`'s data fields as its constructions read them, a run of
+# st.typing.fieldRows in dataFieldIds' order: made on the first ask, with every
+# member forced, and kept. A resolved type's fields, their types and whether a
+# data value may hold them do not change, so each construction reads the row
+# rather than asking again.
+dataFieldsOf: function {st: zenv.ZSymbolTable ast: Ast tid: ztypes.tid} out ztyping.fieldspan is {
+    known: st.typing.fieldSpans.get key: tid
+    match (
+        known
+    ) case some then {
+        return known
+    } case none then null
+    forceAllMembers :st :ast :tid
+    ftids: ListVal ztypes.tid
+    fnames: ListVal zast.nameid
+    dataFieldIds :st :tid ids: ftids nameIds: fnames
+    from: st.typing.fieldRows.length
+    fi: u64
+    for fi < fnames.length loop {
+        ft: ftids.get i: fi
+        static9: isStaticMemberTid :st :ast tid: ft
+        (
+            st.typing.fieldRows.append
+            from: (
+                ztyping.datafield
+                tid: ft
+                name: (fnames.get i: fi)
+                isStatic: static9
+                defaultVal: ztypes.noConst
+            )
+        )
+        fi = fi + 1
+    }
+    span: ztyping.fieldspan from: from.u32.orPanic count: fnames.length.u32.orPanic
+    st.typing.fieldSpans.set key: tid value: span
+    return span
+}
+
+# knownFieldSpan -- `tid`'s run of st.typing.fieldRows when a construction made
+# one (dataFieldsOf), none otherwise: a reader holding the checked tree reads
+# a data value's fields there, without asking dataFieldIds again.
+knownFieldSpan: function {
+    st: zenv.ZSymbolTable.view tid: ztypes.tid
+} out optionval ztyping.fieldspan is {
+    return (st.typing.fieldSpans.get key: tid)
 }
 
 # constFitToField -- the constant `v` as the value of a data field of type
@@ -66371,7 +66487,6 @@ constFitToField: function {
     ln: u32
     co: u32
 } out ztypes.cval is {
-    fn: zast.nameTextCopy :ast ref: name
     if v.kind.none then {
         # the fold's own reason, when it recorded one (a cycle, an overflow)
         if st.typing.constFail.kind.none.not then {
@@ -66385,7 +66500,11 @@ constFitToField: function {
             lineno: ln
             colno: co
             e: zast.err.callError
-            msg: "argument '\{fn}' is not a constant: a data value is built from constants"
+            msg: "argument '\{(
+                zast.nameTextCopy
+                :ast
+                ref: name
+            )}' is not a constant: a data value is built from constants"
         )
         return ztypes.noConst
     }
@@ -66415,7 +66534,11 @@ constFitToField: function {
             lineno: ln
             colno: co
             e: zast.err.callError
-            msg: "argument '\{fn}' is a function of another signature: '\{fgn}' does not match '\{fen}'"
+            msg: "argument '\{(
+                zast.nameTextCopy
+                :ast
+                ref: name
+            )}' is a function of another signature: '\{fgn}' does not match '\{fen}'"
         )
         return ztypes.noConst
     }
@@ -66428,7 +66551,11 @@ constFitToField: function {
         lineno: ln
         colno: co
         e: zast.err.callError
-        msg: "argument '\{fn}' type mismatch: expected \{en}, got \{gn}"
+        msg: "argument '\{(
+            zast.nameTextCopy
+            :ast
+            ref: name
+        )}' type mismatch: expected \{en}, got \{gn}"
     )
     return ztypes.noConst
 }

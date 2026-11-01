@@ -142,9 +142,7 @@ fieldOf: function {f: DataFile.view v: ztypes.cval name: StringView} out ztypes.
         nid: zast.poolFind pool: f.check.prog.names text: name
         g: o.typing.constAggs.get i: v.aggId.u64
         if g.kind.staticData.not then return ztypes.noConst
-        ids: ListVal ztypes.tid
-        nameIds: ListVal zast.nameid
-        ztypecheck.dataFieldIds st: o tid: g.tid :ids :nameIds
+        nameIds: fieldNameIds st: o tid: g.tid
         k: u32
         for k < g.itemCount while k.u64 < nameIds.length loop {
             if (nameIds.get i: k.u64) == nid then return (
@@ -357,13 +355,32 @@ choiceText: function {st: zenv.ZSymbolTable.view ast: Ast.view row: u64} out Str
     return t
 }
 
+# fieldNameIds -- the field names of data type `tid`, in declared order: the
+# rows its constructions made (ztypecheck.knownFieldSpan), else asked of
+# ztypecheck.dataFieldIds
+fieldNameIds: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out ListVal zast.nameid is {
+    nameIds: ListVal zast.nameid
+    sp: ztypecheck.knownFieldSpan :st :tid
+    match (
+        sp
+    ) case some then {
+        k: u32
+        for k < sp.count loop {
+            nameIds.append (st.typing.fieldRows.get i: (sp.from + k).u64).name
+            k = k + 1
+        }
+    } case none then {
+        ids: ListVal ztypes.tid
+        ztypecheck.dataFieldIds :st :tid :ids :nameIds
+    }
+    return nameIds
+}
+
 # dataText -- a data value: `(type field: value ...)`, every field in declared
 # order, its default where the construction left it out
 dataText: function {st: zenv.ZSymbolTable.view ast: Ast.view row: u64} out String is {
     g: st.typing.constAggs.get i: row
-    ids: ListVal ztypes.tid
-    nameIds: ListVal zast.nameid
-    ztypecheck.dataFieldIds :st tid: g.tid :ids :nameIds
+    nameIds: fieldNameIds :st tid: g.tid
     t: "(".string
     t.append (st.reg.nameOf tid: g.tid)
     k: u64
