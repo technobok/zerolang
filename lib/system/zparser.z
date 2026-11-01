@@ -839,8 +839,8 @@ Parser: class {
     # newline and indentation rules: a blank first line goes; a blank last line
     # goes, and its indentation is the prefix taken off every line that begins
     # with text -- only when every such line carries it. A line beginning with
-    # an escape, an interpolation or only whitespace is neither checked nor
-    # stripped.
+    # an escape or an interpolation is neither checked nor stripped, and a line
+    # of only spaces and tabs is an empty line.
     stringParts: function {:this base: u64 src: StringView} out ListVal zast.nodeid is {
         n: this.segStack.length
         from: this.keptFrom :base :src
@@ -925,6 +925,15 @@ Parser: class {
         return base
     }
 
+    # blankLineAt -- token `i`, at a line start, is the whole line and holds only
+    # spaces and tabs: a line end follows it. That line is empty in the value,
+    # whatever its indent.
+    blankLineAt: function {this: this.view i: u64 src: StringView} out bool is {
+        if (i + 1) >= this.segStack.length then return false
+        if (this.segStack.get i: i + 1).kind != chunkkind.eol then return false
+        return (this.blankSeg seg: (this.segStack.get :i) :src)
+    }
+
     # blankSeg -- a text token holding only spaces and tabs
     blankSeg: function {this: this.view seg: strseg src: StringView} out bool is {
         if seg.kind != chunkkind.strmid then return false
@@ -994,7 +1003,16 @@ Parser: class {
             cut: false
             if atStart when strip when (carries.get i: i - base) then cut = true
             had: this.ast.literalBytes.length
-            this.ast.literalBytes.append (runPieceOf pool: this.ast.names seg: s :src :cut :p9)
+            blank: false
+            if atStart then blank = this.blankLineAt :i :src
+            if blank.not then this.ast.literalBytes.append (
+                runPieceOf
+                pool: this.ast.names
+                seg: s
+                :src
+                :cut
+                :p9
+            )
             if had == start when this.ast.literalBytes.length > had then {
                 runLine = s.lineno
                 runCol = s.colno
