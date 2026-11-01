@@ -2498,6 +2498,19 @@ memberHoleC: function {
     return (memberC :ast :symtab :ctx owner: tt kind: k nameId: mid)
 }
 
+# serveRuntime -- the runtime zc carries (znativec.generate) as the files under
+# `runtimeDir` the emitter reads: each file's text is in the cache before the
+# first read of it, so no file is opened
+serveRuntime: function {ctx: Ctx runtimeDir: StringView} is {
+    rf: znativec.generate
+    k: u64
+    for k < rf.paths.length loop {
+        p: "\{runtimeDir}/\{rf.paths.get i: k}"
+        ctx.tmplCache.set key: p.take value: (rf.texts.get i: k).copy
+        k = k + 1
+    }
+}
+
 # readTemplateCached -- the raw text of a runtime template file, read once
 # per emit and cached by path. A missing file is fatal and reported once (the
 # "" is cached so the read is not retried); no fragment on disk is empty, so a
@@ -39646,6 +39659,9 @@ emitC: function {
     program: Ast.view
     symtab: zenv.ZSymbolTable
     runtimeDir: StringView
+    # read the runtime from `runtimeDir` on disk rather than from the rows zc
+    # carries (znativec.generate), which are served under the same paths
+    runtimeFromDisk: false
     fastHash: bool
     readableNames: bool
     errs: List zast.ErrorData
@@ -39904,6 +39920,7 @@ emitC: function {
         :origins
     )
     ctx.runtimeDir = runtimeDir.string
+    if runtimeFromDisk.not then serveRuntime :ctx :runtimeDir
     loadNativeTbl :ctx ast: program :symtab :runtimeDir
     loadPieces :ctx :runtimeDir
     linkLibs: List String
@@ -43184,18 +43201,11 @@ loadIoFragment: function {
     ctx: Ctx
     path: StringView
 } out String is {
-    rd: io.readText :path
-    match (
-        rd
-    ) case ok then {
-        txt: rd.take
-        id: ctx.rt.parse text: txt.stringView
-        plan: RtPlan :id kept: ListVal bool conds: List Cond
-        return (rtFragmentText :ast :symtab :ctx :plan all: true :path)
-    } case err then {
-        emitFail :ctx what: "missing io fragment \{path}" line: 0
-        return "/* zemitterc: missing io fragment \{path} */\n"
-    }
+    txt: readTemplateCached :ctx :path
+    if txt.length == 0 then return "/* zemitterc: missing io fragment \{path} */\n"
+    id: ctx.rt.parse text: txt.stringView
+    plan: RtPlan :id kept: ListVal bool conds: List Cond
+    return (rtFragmentText :ast :symtab :ctx :plan all: true :path)
 }
 
 # ioFileId -- the io File class type id: the File io's own unit declares, by id

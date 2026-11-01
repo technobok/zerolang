@@ -1,10 +1,12 @@
-# znativec -- the C backend's implementation files: each unit's
+# znativec -- the C backend's implementation files. Each unit's
 # `<unit>/nativec.zd` under the system directory, a runtime.nativec value
-# (lib/system/runtime.zd), read with zdata and written out as the runtime
-# directory the emitter reads: natives.tbl, natives/<fragment>.inc, the
-# z_<name>.c.tmpl templates and the z_<name>.inc fixed files. A fragment's file
-# is named after its row (`_Z_<UNIT>_<KEY>`); a piece and a template section are
-# written between the markers the emitter cuts them at.
+# (lib/system/runtime.zd), is served to every build as the generated unit
+# `nativec` (servedText); zc's own build compiles it, so zc carries every unit's
+# rows as static data. `generate` writes those rows out as the runtime the
+# emitter reads: natives.tbl, natives/<fragment>.inc, the z_<name>.c.tmpl
+# templates and the z_<name>.inc fixed files. A fragment's file is named after
+# its row (`_Z_<UNIT>_<KEY>`); a piece and a template section are written
+# between the markers the emitter cuts them at.
 
 public: unit {
     :generate
@@ -13,15 +15,16 @@ public: unit {
     :servedText
 }
 
-Ast: zast.Ast
 ZVfsProvider: zvfs.ZVfsProvider
 
+# schema -- the implementation files' schema, as the served unit holds it
+schema: nativec.runtime.nativec
+
 # RuntimeFiles -- a generated runtime directory: each file's path relative to
-# the directory and its text, in step; `error` is the reason none could be made
+# the directory and its text, in step
 RuntimeFiles: class {
     paths: List String
     texts: List String
-    error: String
 }
 
 # Gen -- one generation: the files so far, the fragment names already given,
@@ -30,289 +33,333 @@ Gen: class {
     files: RuntimeFiles
     used: Set String
     tbl: String
-    # ncWord interned: the schema's arm names compared by slot
-    words: zast.Vocab
 } as {
     # row -- one row of natives.tbl, and the files of its fragments
-    row: function {:this f: zdata.DataFile.view v: ztypes.cval owner: StringView} is {
-        key: field :f :v name: "key"
-        h: "[\{fullKey :owner key: key.stringView}"
-        h.append (attr name: "needs" value: (joined :f :v name: "needs").stringView)
+    row: function {:this r: schema.row owner: StringView} is {
+        key: r.key.stringView
+        h: "[\{fullKey :owner :key}"
+        h.append (attr name: "needs" value: (joined xs: r.needs).stringView)
         frags: String
-        for each t: (zdata.textsOf :f v: (zdata.fieldOf :f :v name: "fragments")) loop {
-            nm: fragmentName g: this :owner key: key.stringView
+        for each t: r.fragments loop {
+            nm: fragmentName g: this :owner :key
             this.files.paths.append "natives/\{nm}.inc"
             this.files.texts.append "\{t}\n"
             if frags.length > 0 then frags.append ","
             frags.append nm
         }
-        pv: zdata.fieldOf :f :v name: "pieces"
-        if (zdata.itemsOf :f v: pv).length > 0 then {
-            nm: fragmentName g: this :owner key: key.stringView
+        if r.pieces.length > 0 then {
+            nm: fragmentName g: this :owner :key
             this.files.paths.append "natives/\{nm}.inc"
-            this.files.texts.append from: (piecesText :f v: pv :owner)
+            this.files.texts.append from: (piecesText ps: r.pieces :owner)
             frags = nm.copy
         }
         h.append (attr name: "frag" value: frags.stringView)
-        h.append (attr name: "demand" value: (joined :f :v name: "demand").stringView)
-        form: zdata.armOf :f v: (zdata.fieldOf :f :v name: "form")
-        if (
-            (this.words.slotOf text: form.stringView) == ncWord.slot.formValue
-        ) then h.append " form=value"
-        if (zdata.boolOf v: (zdata.fieldOf :f :v name: "byPointer")) then h.append " args=ptr"
-        if (zdata.boolOf v: (zdata.fieldOf :f :v name: "callsEquals")) then h.append " calls=eq"
-        call: zdata.armOf :f v: (zdata.fieldOf :f :v name: "call")
-        h.append (
-            attr
-            name: "call"
-            value: (callWord arm: (this.words.slotOf text: call.stringView)).stringView
-        )
+        h.append (attr name: "demand" value: (joined xs: r.demand).stringView)
+        if r.form.value then h.append " form=value"
+        if r.byPointer then h.append " args=ptr"
+        if r.callsEquals then h.append " calls=eq"
+        h.append (attr name: "call" value: (callWord c: r.call).stringView)
         cs: String
-        for each c: (zdata.itemsOf :f v: (zdata.fieldOf :f :v name: "constant")) loop {
+        for each c: r.constant loop {
             if cs.length > 0 then cs.append ","
-            cs.append "\{zdata.integerOf v: c}"
+            cs.append "\{c}"
         }
         h.append (attr name: "const" value: cs.stringView)
-        h.append (attr name: "when" value: (field :f :v name: "fact").stringView)
-        h.append (attr name: "pulls" value: (joined :f :v name: "pulls").stringView)
-        h.append (attr name: "members" value: (joined :f :v name: "members").stringView)
-        h.append (attr name: "via" value: (field :f :v name: "via").stringView)
-        tm: field :f :v name: "template"
-        if tm.length > 0 then h.append " tmpl=z_\{tm}.c.tmpl"
-        h.append (attr name: "live" value: (joined :f :v name: "live").stringView)
-        ds: field :f :v name: "destroy"
-        if ds.length > 0 then {
+        h.append (attr name: "when" value: r.fact.stringView)
+        h.append (attr name: "pulls" value: (joined xs: r.pulls).stringView)
+        h.append (attr name: "members" value: (joined xs: r.members).stringView)
+        h.append (attr name: "via" value: r.via.stringView)
+        if r.template.length > 0 then h.append " tmpl=z_\{r.template}.c.tmpl"
+        h.append (attr name: "live" value: (joined xs: r.live).stringView)
+        if r.destroy.length > 0 then {
             dkey: "\{key}_destroy"
             nm: fragmentName g: this :owner key: dkey.stringView
             this.files.paths.append "natives/\{nm}.inc"
-            this.files.texts.append "\{ds}\n"
+            this.files.texts.append "\{r.destroy}\n"
             h.append " destroy=\{nm}"
         }
         h.append "]"
-        body: field :f :v name: "body"
-        if body.length > 0 then h.append " \{body}"
+        if r.body.length > 0 then h.append " \{r.body}"
         this.tbl.append h
         this.tbl.append "\n"
     }
 
     # requirements -- a unit's links, sources and refusals as `@unit.` rows
-    requirements: function {:this f: zdata.DataFile.view v: ztypes.cval owner: StringView} is {
-        for each l: (zdata.itemsOf :f v: (zdata.fieldOf :f :v name: "links")) loop {
-            this.tbl.append "[@unit.\{subunitPath :f v: l :owner}"
-            this.tbl.append (attr name: "when" value: (field :f v: l name: "fact").stringView)
-            this.tbl.append (attr name: "os" value: (armsJoined :f v: l name: "os").stringView)
-            this.tbl.append " link=\{field :f v: l name: "library"}]\n"
+    requirements: function {:this im: schema.implementation owner: StringView} is {
+        for each l: im.links loop {
+            this.tbl.append "[@unit.\{subunitPath sub: l.subunit.stringView :owner}"
+            this.tbl.append (attr name: "when" value: l.fact.stringView)
+            this.tbl.append (attr name: "os" value: (osJoined xs: l.os).stringView)
+            this.tbl.append " link=\{l.library}]\n"
         }
-        for each s: (zdata.itemsOf :f v: (zdata.fieldOf :f :v name: "sources")) loop {
-            this.tbl.append "[@unit.\{subunitPath :f v: s :owner}"
-            this.tbl.append (attr name: "when" value: (field :f v: s name: "fact").stringView)
-            this.tbl.append (attr name: "os" value: (armsJoined :f v: s name: "os").stringView)
-            this.tbl.append " csrc=\{field :f v: s name: "path"}"
-            this.tbl.append (attr name: "cdefs" value: (joined :f v: s name: "defines").stringView)
+        for each s: im.sources loop {
+            this.tbl.append "[@unit.\{subunitPath sub: s.subunit.stringView :owner}"
+            this.tbl.append (attr name: "when" value: s.fact.stringView)
+            this.tbl.append (attr name: "os" value: (osJoined xs: s.os).stringView)
+            this.tbl.append " csrc=\{s.path}"
+            this.tbl.append (attr name: "cdefs" value: (joined xs: s.defines).stringView)
             this.tbl.append "]\n"
         }
-        for each r: (zdata.itemsOf :f v: (zdata.fieldOf :f :v name: "refusals")) loop {
-            this.tbl.append "[@unit.\{subunitPath :f v: r :owner}"
-            this.tbl.append (attr name: "cfeature" value: (field :f v: r name: "feature").stringView
-            )
-            this.tbl.append (
-                attr
-                name: "nocc"
-                value: (armsJoined :f v: r name: "compilers").stringView
-            )
+        for each f: im.refusals loop {
+            this.tbl.append "[@unit.\{subunitPath sub: f.subunit.stringView :owner}"
+            this.tbl.append (attr name: "cfeature" value: f.feature.stringView)
+            this.tbl.append (attr name: "nocc" value: (compilersJoined xs: f.compilers).stringView)
             this.tbl.append (
                 attr
                 name: "arch"
-                value: (armsJoined :f v: r name: "onlyArchitectures").stringView
+                value: (architecturesJoined xs: f.onlyArchitectures).stringView
             )
             this.tbl.append "]\n"
         }
     }
 
-    # headRows -- the rows above every unit's own: the conditions, the facts, the canons, the structural rows, the unit order and the foundation's groups
-    headRows: function {
-        :this
-        sys: zdata.DataFile.view
-        fd: ztypes.cval
-        dfs: (List zdata.DataFile).view
-        order: (List String).view
-    } is {
-        for each c: (zdata.itemsOf f: sys v: (zdata.fieldOf f: sys v: fd name: "conditions")) loop {
-            this.tbl.append "[@cond \{field f: sys v: c name: "name"} = \{(
-                field
-                f: sys
-                v: c
-                name: "expression"
-            )}]\n"
-        }
-        for each df: dfs loop {
-            im: zdata.definition f: df name: "implementation"
-            for each c: (zdata.itemsOf f: df v: (zdata.fieldOf f: df v: im name: "facts")) loop {
-                this.tbl.append "[@fact.\{field f: df v: c name: "name"} reach=\{(
-                    joined
-                    f: df
-                    v: c
-                    name: "reach"
-                )}]\n"
+    # headRows -- the rows above every unit's own: the conditions, the facts,
+    # the canons, the structural rows, the unit order and the foundation's groups
+    headRows: function {:this fd: schema.foundation order: (ListVal u64).view} is {
+        for each c: fd.conditions loop this.tbl.append "[@cond \{c.name} = \{c.expression}]\n"
+        for each k: order loop {
+            u: nativec.units.get i: k
+            for each f: u.implementation.facts loop {
+                this.tbl.append "[@fact.\{f.name} reach=\{joined xs: f.reach}]\n"
             }
         }
-        for each df: dfs loop {
-            im: zdata.definition f: df name: "implementation"
-            for each c: (zdata.itemsOf f: df v: (zdata.fieldOf f: df v: im name: "canons")) loop {
-                this.tbl.append "[@canon.\{field f: df v: c name: "stem"} spec=\{(
-                    joined
-                    f: df
-                    v: c
-                    name: "spec"
-                )}]\n"
+        for each k: order loop {
+            u: nativec.units.get i: k
+            for each c: u.implementation.canons loop {
+                this.tbl.append "[@canon.\{c.stem} spec=\{joined xs: c.spec}]\n"
             }
         }
-        for each r: (zdata.itemsOf f: sys v: (zdata.fieldOf f: sys v: fd name: "structural")) loop {
-            this.row f: sys v: r owner: ""
-        }
-        ordText: String
-        for each o: order loop {
-            if ordText.length > 0 then ordText.append ","
-            ordText.append o
-        }
-        this.tbl.append "[@units order=\{ordText}]\n"
-        for each gr: (zdata.itemsOf f: sys v: (zdata.fieldOf f: sys v: fd name: "groups")) loop {
-            gn: field f: sys v: gr name: "name"
-            for each r: (zdata.itemsOf f: sys v: (zdata.fieldOf f: sys v: gr name: "rows")) loop {
-                this.row f: sys v: r owner: gn.stringView
-            }
-        }
-    }
-
-    # unitRows -- each unit's rows, requirements and templates, in load order
-    unitRows: function {:this dfs: (List zdata.DataFile).view names: (List String).view} is {
-        k: u64
-        for k < dfs.length loop {
-            df: dfs.get i: k
-            nm: names.get i: k
-            k = k + 1
-            im: zdata.definition f: df name: "implementation"
-            for each r: (zdata.itemsOf f: df v: (zdata.fieldOf f: df v: im name: "rows")) loop {
-                this.row f: df v: r owner: nm.stringView
-            }
-            this.requirements f: df v: im owner: nm.stringView
-            for each t: (zdata.itemsOf f: df v: (zdata.fieldOf f: df v: im name: "templates")
-            ) loop {
-                this.template f: df v: t
-            }
-        }
-    }
-
-    # fixedFiles -- the fixed files the foundation holds, each its pieces
-    fixedFiles: function {:this sys: zdata.DataFile.view fd: ztypes.cval} is {
-        for each fl: (zdata.itemsOf f: sys v: (zdata.fieldOf f: sys v: fd name: "files")) loop {
-            fname: field f: sys v: fl name: "name"
-            txt: piecesText f: sys v: (zdata.fieldOf f: sys v: fl name: "pieces") owner: "prelude"
-            this.files.paths.append "z_\{fname}.inc"
-            this.files.texts.append from: txt.take
+        for each r: fd.structural loop this.row :r owner: ""
+        this.tbl.append "[@units order=\{joined xs: fd.order}]\n"
+        for each g: fd.groups loop {
+            for each r: g.rows loop this.row :r owner: g.name.stringView
         }
     }
 
     # template -- one template's file: its needs line, then its sections
-    template: function {:this f: zdata.DataFile.view v: ztypes.cval} is {
-        t: String
-        nd: joined :f :v name: "needs"
-        if nd.length > 0 then t.append "/*@@needs \{nd}@@*/\n"
-        for each s: (zdata.itemsOf :f v: (zdata.fieldOf :f :v name: "sections")) loop {
-            m: field :f v: s name: "member"
-            txt: field :f v: s name: "text"
-            if m.length == 0 then {
-                t.append "\{txt}\n"
+    template: function {:this t: schema.template} is {
+        x: String
+        nd: joined xs: t.needs
+        if nd.length > 0 then x.append "/*@@needs \{nd}@@*/\n"
+        for each s: t.sections loop {
+            if s.member.length == 0 then {
+                x.append "\{s.text}\n"
             } else {
-                snd: joined :f v: s name: "needs"
-                t.append "/*@@member \{m}\{(
+                snd: joined xs: s.needs
+                x.append "/*@@member \{s.member}\{(
                     attr
                     name: "needs"
                     value: snd.stringView
-                )}@@*/\n\{txt}\n/*@@end@@*/\n"
+                )}@@*/\n\{s.text}\n/*@@end@@*/\n"
             }
         }
-        this.files.paths.append "z_\{field :f :v name: "name"}.c.tmpl"
-        this.files.texts.append from: t.take
+        this.files.paths.append "z_\{t.name}.c.tmpl"
+        this.files.texts.append from: x.take
     }
 }
 
-# takeFiles -- the files a generation made, moved out of it
-takeFiles: function {g: Gen.borrow} out RuntimeFiles is {
-    r: RuntimeFiles paths: List String texts: List String error: String
-    r swap g.files
+# fullKey -- a row's key as natives.tbl spells it: `<unit>.<key>`, a helper
+# `@<unit>.<name>`, a structural case (no unit) `@<key>`
+fullKey: function {owner: StringView key: StringView} out String is {
+    if owner.length == 0 then return "@\{key}"
+    if key.startsWith "@" then return "@\{owner}.\{key.substring from: 1 to: key.length}"
+    return "\{owner}.\{key}"
+}
+
+# attr -- ` name=value` when the value is not empty
+attr: function {name: StringView value: StringView} out String is {
+    if value.length == 0 then return String
+    return " \{name}=\{value}"
+}
+
+# joined -- a list of texts, comma-separated
+joined: function {xs: staticlist text} out String is {
+    r: String
+    for each t: xs loop {
+        if r.length > 0 then r.append ","
+        r.append t.stringView
+    }
     return r
 }
 
 # subunitPath -- `<unit>` or `<unit>.<subunit>` for a requirement
-subunitPath: function {f: zdata.DataFile.view v: ztypes.cval owner: StringView} out String is {
-    sub: field :f :v name: "subunit"
+subunitPath: function {sub: StringView owner: StringView} out String is {
     if sub.length == 0 then return owner.string
     return "\{owner}.\{sub}"
 }
 
-# ncWord -- the arm names of the nativec schema's choices that the table spells
-# its own way, a vocabulary (ncWords) compared by slot
-ncWord: list {
-    formValue: "value"
-    callGeneral: "general"
-    callSimple: "simple"
-    callArgument: "argument"
-    callParse: "parse"
-    callNoArguments: "noArguments"
-} out staticlist StringView
-
-# callWord -- the call choice's arm, by its ncWord slot, as natives.tbl's
-# `call=` word; none for the general paths
-callWord: function {arm: u64} out String is {
-    if arm == ncWord.slot.callSimple then return "simple".string
-    if arm == ncWord.slot.callArgument then return "arg".string
-    if arm == ncWord.slot.callParse then return "parse".string
-    if arm == ncWord.slot.callNoArguments then return "noarg".string
-    return String
+# callWord -- the call choice as natives.tbl's `call=` word; none for the
+# general paths
+callWord: function {c: schema.call} out String is {
+    match (
+        c
+    ) case simple then {
+        return "simple".string
+    } case argument then {
+        return "arg".string
+    } case parse then {
+        return "parse".string
+    } case noArguments then {
+        return "noarg".string
+    } else return String
 }
 
-# generate -- the runtime directory the nativec files under `systemdir` stand
-# for. The units load in the order system's foundation gives, then the rest by
-# name.
-generate: function {systemdir: StringView} out RuntimeFiles is {
+# osJoined -- a list of operating systems by their arm names, comma-separated
+osJoined: function {xs: staticlist schema.os} out String is {
+    r: String
+    for each o: xs loop {
+        if r.length > 0 then r.append ","
+        match (
+            o
+        ) case linux then {
+            r.append "linux"
+        } case darwin then {
+            r.append "darwin"
+        } case windows then {
+            r.append "windows"
+        } case other then {
+            r.append "other"
+        }
+    }
+    return r
+}
+
+# compilersJoined -- a list of compilers by their arm names, comma-separated
+compilersJoined: function {xs: staticlist schema.compiler} out String is {
+    r: String
+    for each c: xs loop {
+        if r.length > 0 then r.append ","
+        match (
+            c
+        ) case gcc then {
+            r.append "gcc"
+        } case clang then {
+            r.append "clang"
+        } case tcc then {
+            r.append "tcc"
+        } case msvc then {
+            r.append "msvc"
+        }
+    }
+    return r
+}
+
+# architecturesJoined -- a list of architectures by their arm names
+architecturesJoined: function {xs: staticlist schema.architecture} out String is {
+    r: String
+    for each a: xs loop {
+        if r.length > 0 then r.append ","
+        match (
+            a
+        ) case x86_64 then {
+            r.append "x86_64"
+        } case aarch64 then {
+            r.append "aarch64"
+        } case other then {
+            r.append "other"
+        }
+    }
+    return r
+}
+
+# piecesText -- a list of pieces as the text the emitter cuts
+piecesText: function {ps: staticlist schema.piece owner: StringView} out String is {
+    r: String
+    for each p: ps loop {
+        if p.name.length == 0 then {
+            r.append "\{p.text}\n"
+        } else {
+            dem: joined xs: p.demand
+            nd: joined xs: p.needs
+            r.append "/*@@row @\{owner}.\{p.name}\{attr name: "demand" value: dem.stringView}\{(
+                attr
+                name: "needs"
+                value: nd.stringView
+            )}@@*/\n"
+            r.append "\{p.text}\n/*@@end@@*/\n"
+        }
+    }
+    return r
+}
+
+# fragmentName -- the file name of a row's fragment, `_Z_<UNIT>_<KEY>`
+fragmentName: function {g: Gen.borrow owner: StringView key: StringView} out String is {
+    base: "_Z_\{owner.toUpperAscii}_"
+    k: key
+    if k.startsWith "@" then k = k.substring from: 1 to: k.length
+    up: k.toUpperAscii
+    i: u64
+    for i < up.length loop {
+        b: (up.stringView.byteAt :i).or d: 0
+        alnum: (b >= 0cA) and (b <= 0cZ) or ((b >= 0c0) and (b <= 0c9))
+        if alnum then {
+            base.appendByte :b
+        } else {
+            base.appendByte 0c_.u8
+        }
+        i = i + 1
+    }
+    nm: base.copy
+    n: 2.u64
+    for (g.used.has item: nm) loop {
+        nm = "\{base}_\{n}"
+        n = n + 1
+    }
+    g.used.add item: nm.copy
+    return nm
+}
+
+# generate -- the runtime directory zc's own copy of the units' rows makes
+# (`nativec.units`): the units in the order system's foundation gives, then the
+# rest as served
+generate: function out RuntimeFiles is {
     g: (
         Gen
-        files: (RuntimeFiles paths: List String texts: List String error: String)
+        files: (RuntimeFiles paths: List String texts: List String)
         used: Set String
         tbl: String
-        words: (zast.Vocab.create block: ncWord)
     )
-    sysPath: "\{systemdir}/system/nativec.zd"
-    sys: openUnit file: sysPath.stringView :systemdir
-    if sys.ok.not then {
-        g.files.error = zdata.errorsText f: sys
-        return (takeFiles :g)
+    fd: nativec.systemc.foundation
+    order: unitOrder fd: nativec.systemc.foundation
+    g.headRows :fd :order
+    for each k: order loop {
+        u: nativec.units.get i: k
+        for each r: u.implementation.rows loop g.row :r owner: u.name.stringView
+        g.requirements im: u.implementation owner: u.name.stringView
+        for each t: u.implementation.templates loop g.template :t
     }
-    fd: zdata.definition f: sys name: "foundation"
-    order: zdata.textsOf f: sys v: (zdata.fieldOf f: sys v: fd name: "order")
-    names: unitsWithFiles :systemdir :order
-    dfs: List zdata.DataFile
-    for each nm: names loop {
-        p: "\{systemdir}/\{nm}/nativec.zd"
-        df: openUnit file: p.stringView :systemdir
-        if df.ok.not then {
-            g.files.error = zdata.errorsText f: df
-            return (takeFiles :g)
-        }
-        dfs.append from: df.take
+    for each fl: fd.files loop {
+        g.files.paths.append "z_\{fl.name}.inc"
+        g.files.texts.append from: (piecesText ps: fl.pieces owner: "prelude")
     }
-    g.headRows :sys :fd :dfs :order
-    g.unitRows :dfs :names
-    g.fixedFiles :sys :fd
     g.files.paths.append "natives.tbl".string
     g.files.texts.append from: g.tbl.copy
-    return (takeFiles :g)
+    r: RuntimeFiles paths: List String texts: List String
+    r swap g.files
+    return r
 }
 
-# openUnit -- a nativec file checked, its schema found under `systemdir`
-openUnit: function {file: StringView systemdir: StringView} out zdata.DataFile is {
-    return (zdata.open :file srcdirs: List String :systemdir)
+# unitOrder -- each served unit's place in `nativec.units`, in the order the
+# foundation names them, then the units it does not name, as served
+unitOrder: function {fd: schema.foundation} out ListVal u64 is {
+    order: ListVal u64
+    for each o: fd.order loop {
+        k: u64
+        for each u: nativec.units loop {
+            if u.name.stringView == o.stringView then order.append k
+            k = k + 1
+        }
+    }
+    k: u64
+    for each u: nativec.units loop {
+        named: false
+        for each o: fd.order loop {
+            if u.name.stringView == o.stringView then named = true
+        }
+        if named.not then order.append k
+        k = k + 1
+    }
+    return order
 }
 
 # unitsWithFiles -- the units under `systemdir` that carry a nativec file: those
@@ -340,96 +387,6 @@ unitsWithFiles: function {systemdir: StringView order: (List String).view} out L
     rest.sort
     for each e: rest loop r.append from: e.copy
     return r
-}
-
-# field -- a text field of a data value
-field: function {f: zdata.DataFile.view v: ztypes.cval name: StringView} out String is {
-    return (zdata.textOf :f v: (zdata.fieldOf :f :v :name))
-}
-
-# joined -- a list-of-text field, comma-separated
-joined: function {f: zdata.DataFile.view v: ztypes.cval name: StringView} out String is {
-    r: String
-    for each t: (zdata.textsOf :f v: (zdata.fieldOf :f :v :name)) loop {
-        if r.length > 0 then r.append ","
-        r.append t
-    }
-    return r
-}
-
-# armsJoined -- a list-of-choice field, its arms comma-separated
-armsJoined: function {f: zdata.DataFile.view v: ztypes.cval name: StringView} out String is {
-    r: String
-    for each a: (zdata.itemsOf :f v: (zdata.fieldOf :f :v :name)) loop {
-        if r.length > 0 then r.append ","
-        r.append (zdata.armOf :f v: a)
-    }
-    return r
-}
-
-# attr -- ` name=value` when the value is not empty
-attr: function {name: StringView value: StringView} out String is {
-    if value.length == 0 then return String
-    return " \{name}=\{value}"
-}
-
-# fullKey -- a row's key as natives.tbl spells it: `<unit>.<key>`, a helper
-# `@<unit>.<name>`, a structural case (no unit) `@<key>`
-fullKey: function {owner: StringView key: StringView} out String is {
-    if owner.length == 0 then return "@\{key}"
-    if key.startsWith "@" then return "@\{owner}.\{key.substring from: 1 to: key.length}"
-    return "\{owner}.\{key}"
-}
-
-# piecesText -- a list of pieces as the text the emitter cuts: a piece with no
-# demand as it stands, a demanded one between `/*@@row` and `/*@@end@@*/`
-piecesText: function {f: zdata.DataFile.view v: ztypes.cval owner: StringView} out String is {
-    r: String
-    for each p: (zdata.itemsOf :f :v) loop {
-        nm: field :f v: p name: "name"
-        txt: field :f v: p name: "text"
-        if nm.length == 0 then {
-            r.append "\{txt}\n"
-        } else {
-            dem: joined :f v: p name: "demand"
-            nd: joined :f v: p name: "needs"
-            r.append "/*@@row @\{owner}.\{nm}\{attr name: "demand" value: dem.stringView}\{(
-                attr
-                name: "needs"
-                value: nd.stringView
-            )}@@*/\n"
-            r.append "\{txt}\n/*@@end@@*/\n"
-        }
-    }
-    return r
-}
-
-# fragmentName -- the file name of a row's fragment, `_Z_<UNIT>_<KEY>`, each
-# byte that is no letter or digit `_`, suffixed until it is unused
-fragmentName: function {g: Gen.borrow owner: StringView key: StringView} out String is {
-    base: "_Z_\{owner.toUpperAscii}_"
-    k: key
-    if k.startsWith "@" then k = k.substring from: 1 to: k.length
-    up: k.toUpperAscii
-    i: u64
-    for i < up.length loop {
-        b: (up.stringView.byteAt :i).or d: 0
-        alnum: (b >= 0cA) and (b <= 0cZ) or ((b >= 0c0) and (b <= 0c9))
-        if alnum then {
-            base.appendByte :b
-        } else {
-            base.appendByte 0c_.u8
-        }
-        i = i + 1
-    }
-    nm: base.copy
-    n: 2.u64
-    for (g.used.has item: nm) loop {
-        nm = "\{base}_\{n}"
-        n = n + 1
-    }
-    g.used.add item: nm.copy
-    return nm
 }
 
 # servedFile -- the generated layer's file holding the standard library's C

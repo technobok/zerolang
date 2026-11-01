@@ -1259,7 +1259,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2429402
+ALLOC_BASELINE := 2689179
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1368,7 +1368,7 @@ emitter-guard:
 	chk "ztypecheck.walkLookupTyperef" "$$e2" 1; \
 	chk "regNameOf" "$$e6" 4; \
 	chk "mangleVarName (inside varCName)" "$$e7" 1; \
-	chk "io.readText" "$$e8" 2; \
+	chk "io.readText" "$$e8" 1; \
 	chk "literal arm members (.data.<arm>; memberC spells them)" "$$e10" 0; \
 	chk "poolFind (a re-intern of a name the emitter held as an id, or table text)" "$$e11" 14; \
 	chk "member-name TEXT (C spelling and natives.tbl keys only; look members up by aliasChildNameId)" "$$e12" 15; \
@@ -3403,7 +3403,7 @@ view-guard:
 # is not live), and the emitFail and marker-site counts in src/zemitterc.z are
 # ratchets. A new refusal leg may raise EMITFAIL_BASELINE (say so in the commit);
 # a new fallback leg may not.
-EMITFAIL_BASELINE := 56
+EMITFAIL_BASELINE := 55
 MARKER_BASELINE := 23
 EXCS := $(NAMES:%=$(EXDIR)/%.c)
 fallback-guard: $(EXCS) bin/zc bin/zl bin/zls

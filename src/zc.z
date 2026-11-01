@@ -195,7 +195,7 @@ printUsage: function is {
     io.eprintln "diagnostics:"
     io.eprintln "  dump  <src>          dump the typecheck model as SQL (--canon: id-normalized)"
     io.eprintln "  natives              print the generated conversion rows of natives.tbl;"
-    io.eprintln "                       --write-runtime DIR writes the runtime the nativec files make;"
+    io.eprintln "                       --write-runtime DIR writes the runtime zc carries;"
     io.eprintln "                       --write-source FILE writes the generated `nativec` unit"
     io.eprintln "  data <file.zd>       check a data file and print its values, defaults applied"
     io.eprintln "  explain <code>       explain an error code, e.g. zc explain E0200"
@@ -242,12 +242,12 @@ printCommandHelp: function {zv: zast.Vocab.view cmd: StringView} is {
         io.eprintln "Dump the typecheck model as SQL to -o FILE (or stdout)."
         io.eprintln "--canon emits the id-normalized model instead."
     } else if w == zcWord.slot.vNatives then {
-        io.eprintln "usage: zc natives [--write-runtime DIR | --write-source FILE] [--system DIR]"
+        io.eprintln "usage: zc natives [--write-runtime DIR | --write-source FILE [--system DIR]]"
         io.eprintln "Print the conversions section of src/runtime/natives.tbl, derived from"
         io.eprintln "the numeric rule. natives-tbl-guard diffs this against the checked-in"
         io.eprintln "file, so the table cannot drift from the rule it caches."
-        io.eprintln "--write-runtime DIR writes into DIR the runtime directory the units'"
-        io.eprintln "nativec.zd files under the system directory make: natives.tbl, natives/,"
+        io.eprintln "--write-runtime DIR writes into DIR the runtime directory zc carries, made"
+        io.eprintln "from the units' nativec.zd files as zc was built: natives.tbl, natives/,"
         io.eprintln "the templates and the fixed files."
         io.eprintln "--write-source FILE writes into FILE the generated unit `nativec` that"
         io.eprintln "every build serves beside z.z: the same files as static data."
@@ -832,9 +832,9 @@ dispatchToolVerb: function {argv: (List String).borrow n: u64 w: u64 zv: zast.Vo
 }
 
 # runNatives -- `zc natives`: the conversions section of natives.tbl; with
-# `--write-runtime DIR` the runtime directory the nativec files under the system
-# directory make (znativec.generate); with `--write-source FILE` the generated
-# unit those files make (znativec.servedText). Answers the exit code.
+# `--write-runtime DIR` the runtime directory zc carries (znativec.generate);
+# with `--write-source FILE` the generated unit the nativec files under the
+# system directory make (znativec.servedText). Answers the exit code.
 runNatives: function {argv: (List String).view n: u64 zv: zast.Vocab.view} out i32 is {
     if n <= 2 then {
         print zemitterc.nativeConvRows
@@ -871,22 +871,14 @@ runNatives: function {argv: (List String).view n: u64 zv: zast.Vocab.view} out i
         io.eprintln "zc natives: missing --write-runtime DIR or --write-source FILE"
         return 2
     }
-    return (
-        writeRuntime
-        dir: dir.stringView
-        systemdir: (zcheck.resolveSystemDir flagVal: sysFlag.stringView).stringView
-    )
+    return (writeRuntime dir: dir.stringView)
 }
 
 # writeRuntime -- `zc natives --write-runtime DIR`: the runtime directory the
-# nativec files under `systemdir` make (znativec.generate) written into `dir`.
-# Answers the exit code.
-writeRuntime: function {dir: StringView systemdir: StringView} out i32 is {
-    rf: znativec.generate :systemdir
-    if rf.error.length > 0 then {
-        io.eprintln rf.error.stringView.trimEnd
-        return 1
-    }
+# rows zc carries make (znativec.generate) written into `dir`. Answers the exit
+# code.
+writeRuntime: function {dir: StringView} out i32 is {
+    rf: znativec.generate
     nd: "\{dir}/natives"
     io.mkdirp path: nd
     k: u64
@@ -1843,6 +1835,7 @@ emitCSource: function {
         program: prog
         symtab: st
         :runtimeDir
+        runtimeFromDisk: (zcheck.runtimeDirGiven flagVal: cf.runtimeFlag.stringView)
         fastHash: cf.fastHash
         readableNames: cf.readableNames
         errs: emitErrs
