@@ -135,11 +135,15 @@ GenLayer: class {
     paths: List String
     # each file's text, parallel to `paths`
     texts: List String
+    # the system directory whose nativec files make the layer's
+    # znativec.servedFile, which is read only when a build names it; "" for no
+    # such file
+    served: String
 }
 
 # noLayer -- no generated layer: a build that mounts no `z` unit
 noLayer: function out GenLayer is {
-    return (GenLayer dir: String paths: List String texts: List String)
+    return (GenLayer dir: String paths: List String texts: List String served: String)
 }
 
 # bindOverlay -- mount the open buffers of one src root ahead of what is bound:
@@ -223,6 +227,13 @@ bindLayer: function {vfs: zvfs.ZVfs layer: GenLayer.view} out zvfs.fsno is {
         }
     }
     if layer.dir.length > 0 then vfs.providerRoot.set key: pidx.u32.orPanic value: layer.dir.copy
+    if layer.served.length > 0 then {
+        # made when read: a build that never names the unit reads no nativec file
+        shown: path.join a: layer.dir.stringView b: znativec.servedFile
+        sp: znativec.servedProvider systemdir: layer.served.stringView shown: shown.stringView
+        fid: vfs.registerFile p: sp.take
+        vfs.bind parentid: gid name: znativec.servedFile newid: fid kind: zvfs.bindkind.instead
+    }
     return (vfs.bindRoot newid: gid kind: zvfs.bindkind.before)
 }
 
