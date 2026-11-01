@@ -383,7 +383,55 @@ check: function {
 dataRefusals: function {prog: Ast.view vfs: zvfs.ZVfs.view st: zenv.ZSymbolTable} is {
     refusedErrs: List zast.ErrorData
     zdatafile.refused ast: prog :vfs errs: refusedErrs
+    if refusedErrs.length == 0 then functionRefusals :prog :vfs :st errs: refusedErrs
     if refusedErrs.length > 0 then refusedErrs swap st.typing.errors
+}
+
+# functionRefusals -- a data file's definition whose value names a function --
+# a prelude unit's, the one kind of unit beside data units a data file sees, for
+# its types -- holds a function, which a data file cannot: each such definition
+# of a `.zd` file is refused where its value is written, as a function written in
+# the file is (zdatafile)
+functionRefusals: function {
+    prog: Ast.view
+    vfs: zvfs.ZVfs.view
+    st: zenv.ZSymbolTable.view
+    errs: List zast.ErrorData
+} is {
+    k: ztypes.declid
+    k = k.next
+    for k.u64 < st.typing.decls.length loop {
+        vid: heldFunctionAt :prog :vfs :st declId: k
+        k = k.next
+        if vid.isZero.not then zdatafile.refuse ast: prog :errs nid: vid what: "a function"
+    }
+}
+
+# heldFunctionAt -- where a data file's declaration `declId` holds a function:
+# its value's node when the file wrote it as a value -- a definition naming
+# another, a constant, a data field's default, not a member a type is given --
+# and it is of a function type; 0 otherwise
+heldFunctionAt: function {
+    prog: Ast.view
+    vfs: zvfs.ZVfs.view
+    st: zenv.ZSymbolTable.view
+    declId: ztypes.declid
+} out zast.nodeid is {
+    d: st.typing.decls.get i: declId
+    if d.node.isZero or d.typeId.isZero then return zast.nodeid
+    written: d.kind.reexportDecl or d.kind.constDecl or d.kind.fieldDecl
+    if written.not then return zast.nodeid
+    if (st.reg.typetypeOf typeId: d.typeId) != ztypes.ztypetype.functionType then return zast.nodeid
+    f: prog.rowFile.get i: d.node
+    isData: (vfs.path dentryid: f).stringView.endsWith ".zd"
+    if isData.not then return zast.nodeid
+    dn: prog.nodes.get i: d.node
+    match (
+        dn
+    ) case namedoperation then {
+        if dn.operation.isZero.not then return dn.operation
+    } else null
+    return d.node
 }
 
 # ---- diagnostics flattening ----------------------------------------
