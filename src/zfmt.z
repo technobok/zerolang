@@ -2023,10 +2023,14 @@ Builder: class {
         return this.idLine
     }
 
-    # fillItem -- one element of a filled list: its trailing comment,
-    # a hard break when the author put it on a new row and a line otherwise,
-    # its lead comment, then the element. Answers the source line the
-    # element ended on, which is what the next element's row test reads.
+    # fillItem -- one element of a filled list, as the fill's next separator
+    # and content: the separator is the previous element's trailing comment
+    # and a hard break when the author put this one on a new row, a line
+    # otherwise; the content is its lead comment, then the element. A fill
+    # alternates content and separator, so a comment never takes a slot of
+    # its own: one that did put the element in a separator's place, printed
+    # flat however long it was. Answers the source line the element ended
+    # on, which is what the next element's row test reads.
     fillItem: function {
         :this
         g: gapdocs
@@ -2035,17 +2039,24 @@ Builder: class {
         prevEnd: u32
         dst: ListVal u32
     } out u32 is {
-        if g.trailing > 0 then dst.append g.trailing
-        if first.not then {
+        content: ListVal u32
+        if first then {
+            # nothing precedes the first content: its trailing comment leads it
+            if g.trailing > 0 then content.append g.trailing
+        } else {
+            sep: ListVal u32
+            if g.trailing > 0 then sep.append g.trailing
             startLine0: this.c.rawLine k: this.c.peekIndex
             if startLine0 > prevEnd then {
-                dst.append this.idHard
+                sep.append this.idHard
             } else {
-                dst.append this.idLine
+                sep.append this.idLine
             }
+            dst.append (this.d.concat sep.take)
         }
-        if g.lead > 0 then dst.append g.lead
-        dst.append (this.visitElement id: itemId)
+        if g.lead > 0 then content.append g.lead
+        content.append (this.visitElement id: itemId)
+        dst.append (this.d.concat content.take)
         return (this.c.rawLine k: this.c.prev)
     }
 

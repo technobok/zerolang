@@ -130,6 +130,10 @@ Printer: class {
     strict: bool
     # the commands still to print, the next on top
     cmds: ListVal cmd
+    # a hard line was printed in flat mode since a group was last measured:
+    # the line it started is a new one, so the next flat group is measured
+    # against it rather than taken as fitting with what enclosed it
+    remeasure: bool
     # the lineSuffix children held back for the next newline
     suffixes: ListVal cmd
 }
@@ -181,6 +185,7 @@ newPrinter: function {
         overflow: false
         strict: false
         cmds: ListVal cmd
+        remeasure: false
         suffixes: ListVal cmd
     )
 }
@@ -477,6 +482,7 @@ emitLine: function {p: Printer c: cmd hard: bool soft: bool} is {
     p.pendingIndent = true
     p.indentCols = c.ind
     p.pos = c.ind
+    if c.mode == printmode.flat then p.remeasure = true
 }
 
 # flushSuffixes -- the held suffixes onto the command stack, in order
@@ -493,10 +499,11 @@ flushSuffixes: function {p: Printer} is {
 # broken otherwise; a group already flat stays flat unless something below
 # forces a break
 printGroup: function {d: Doc.view p: Printer c: cmd row: docrow} is {
-    if c.mode == printmode.flat when row.breaks.not then {
+    if c.mode == printmode.flat when row.breaks.not when p.remeasure.not then {
         p.cmds.append (cmd ind: c.ind mode: printmode.flat id: row.child off: 0)
         return
     }
+    p.remeasure = false
     next: cmd ind: c.ind mode: printmode.flat id: row.child off: 0
     first: ListVal cmd
     first.append next
