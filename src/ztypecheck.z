@@ -17010,6 +17010,13 @@ resolveAliasKey: function {
     ast: Ast
     declId: ztypes.declid
 } out ztypes.tid is {
+    # a value whose head names the definition itself (`foo: foo`, `foo: foo.x`)
+    # can give it neither a value nor a type, and resolving it asks for itself
+    # without end: a cycle, reported where it is written
+    if (valueHeadIsSelf :st :ast :declId) then {
+        reportAliasCycle :st :ast :declId dnode: (st.typing.decls.get i: declId).node
+        return ztypes.tid.zero
+    }
     # an alias resolves in the scope it is written in
     ascope: st.typing.declParentOf :declId
     # THE VALUE DECIDES WHETHER THIS IS AN ALIAS AT ALL. `X: <something>` is
@@ -17029,6 +17036,31 @@ resolveAliasKey: function {
     if r.isZero then r = resolveDeepAlias :st :ast scope: ascope :declId
     refuseArmAliasPayload :st :ast :declId tid: r
     return r
+}
+
+# valueHeadIsSelf -- whether the value of the definition `declId` starts with
+# the definition's own name: its head (`foo` in `foo` and in `foo.x.y`) is no
+# unit, which a qualifier names first, and the scope the definition is written
+# in finds the definition itself for it
+valueHeadIsSelf: function {
+    st: zenv.ZSymbolTable.view ast: Ast.view declId: ztypes.declid
+} out bool is {
+    ar: argRefAt :ast nid: (st.typing.decls.get i: declId).node
+    nid: ar.operation
+    for nid.isZero.not loop {
+        n: ast.nodes.get i: nid
+        match (
+            n
+        ) case dottedpath then {
+            nid = n.parent
+        } else break
+    }
+    if nid.isZero then return false
+    head: atomNameId :ast n: (ast.nodes.get i: nid)
+    if head.isZero then return false
+    if (unitDeclOfName :st nameId: head).isZero.not then return false
+    hit: envLookup :st scope: (st.typing.declParentOf :declId) nameId: head
+    return hit.declId == declId
 }
 
 # resolveDeepAlias -- a unit-level alias whose target is reached through a path
@@ -64274,6 +64306,11 @@ checkConstantMethodShapeAt: function {
     if isIf then return (checkConstantIfBranchShape :st :scope :ast :unitDecl :nid)
     site: constMethodSiteAt :ast :nid
     if site.recvId.isZero then return (checkConstantFnCall :st :scope :ast :unitDecl :nid)
+    # a receiver naming a unit (`io.print`) qualifies that unit's member, as
+    # qualifierUnitDecl answers for every qualifier: it is no constant, and
+    # asking it for one finds a definition of the same name instead -- the one
+    # being folded, when that is `io: io.print`
+    if (qualifierUnitDecl :st :scope :ast nid: site.recvId).isZero.not then return false
     inner: checkConstantMethodShapeAt :st :scope :ast :unitDecl nid: site.recvId
     if inner then return true
     errs0: st.typing.errors.length
