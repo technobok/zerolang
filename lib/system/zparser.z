@@ -837,10 +837,10 @@ Parser: class {
     # stringParts -- a literal's tokens, segStack from `base` on, as its parts:
     # each run of text between interpolations one chunk, under the spec's
     # newline and indentation rules: a blank first line goes; a blank last line
-    # goes, and its indentation is the prefix taken off every line that begins
-    # with text -- only when every such line carries it. A line beginning with
-    # an escape or an interpolation is neither checked nor stripped, and a line
-    # of only spaces and tabs is an empty line.
+    # goes, and its indentation is the prefix taken off the front of every
+    # line -- only when every line carries it, whatever follows it there: text,
+    # an escape or an interpolation. A line of only spaces and tabs is an empty
+    # line, and neither carries the prefix nor needs to.
     stringParts: function {:this base: u64 src: StringView} out ListVal zast.nodeid is {
         n: this.segStack.length
         from: this.keptFrom :base :src
@@ -940,9 +940,11 @@ Parser: class {
         return (isWsOnlyView sv: (segTextOf pool: this.ast.names :seg :src))
     }
 
-    # lineStartsCarry -- whether every line of `from`..`to` that begins with text
-    # begins with `p9`; `carries` records, token by token from `base`, the line
-    # starts that do. Each line start is read once.
+    # lineStartsCarry -- whether every line of `from`..`to` begins with `p9`, a
+    # line of only spaces and tabs (blankLineAt) excepted; `carries` records,
+    # token by token from `base`, the line starts that do. A line opening with an
+    # escape or an interpolation has no indentation, so carries no prefix. Each
+    # line start is read once.
     lineStartsCarry: function {
         this: this.view
         base: u64
@@ -963,14 +965,16 @@ Parser: class {
         for i < to loop {
             s: this.segStack.get :i
             if lineStart when s.kind == chunkkind.strmid then {
-                t: segTextOf pool: this.ast.names seg: s :src
-                if (isWsOnlyView sv: t).not then {
+                if (this.blankLineAt :i :src).not then {
+                    t: segTextOf pool: this.ast.names seg: s :src
                     if t.startsWith p9 then {
                         carries.set i: i - base val: true
                     } else {
                         all = false
                     }
                 }
+            } else if lineStart when s.kind != chunkkind.eol then {
+                all = false
             }
             lineStart = s.kind == chunkkind.eol
             i = i + 1
