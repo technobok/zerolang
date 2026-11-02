@@ -1198,7 +1198,17 @@ Server: class {
         rows: ListVal zcheck.diagrow
         msgs: List String
         zcheck.diagsOf :r :rows :msgs
-        this.publishAll :r :rows :msgs mainUnit: mu.stringView mainPath: mp.stringView
+        sd: this.srcDir.copy
+        (
+            this.publishAll
+            :r
+            :rows
+            :msgs
+            mainUnit: mu.stringView
+            mainPath: mp.stringView
+            root: sd.stringView
+            dataCheck: false
+        )
         if r.parseOk then {
             # the check answers for every open document of the group, so an
             # edit to any of them refreshes navigation for all
@@ -1242,7 +1252,16 @@ Server: class {
         rows: ListVal zcheck.diagrow
         msgs: List String
         zcheck.diagsOf :r :rows :msgs
-        this.publishAll :r :rows :msgs mainUnit: mu.stringView mainPath: mp
+        (
+            this.publishAll
+            :r
+            :rows
+            :msgs
+            mainUnit: mu.stringView
+            mainPath: mp
+            root: dd.stringView
+            dataCheck: true
+        )
         if r.parseOk then {
             this.bindGroup :uri topRel: base.stringView key: mp
             this.snapshots.set key: mp.string value: r
@@ -1402,8 +1421,12 @@ Server: class {
         return used
     }
 
-    # publishAll -- one publishDiagnostics per open document: its
-    # matching rows (by provider path), or an empty list to clear.
+    # publishAll -- one publishDiagnostics per open document the check answers
+    # for: its matching rows (by provider path), or an empty list to clear. A
+    # check answers for the documents under its root `root` of its own kind:
+    # a data file's check (`dataCheck`) for the data files of that directory, a
+    # source check for the source files of the project's root, so neither
+    # clears what the other found.
     publishAll: function {
         :this
         r: zcheck.CheckResult
@@ -1411,6 +1434,8 @@ Server: class {
         msgs: List String
         mainUnit: StringView
         mainPath: StringView
+        root: StringView
+        dataCheck: bool
     } is {
         # resolve each row's provider path once (parallel to rows)
         paths: List String
@@ -1420,8 +1445,9 @@ Server: class {
             paths.append pp
         }
         for each e: this.docs.iterateItems loop {
-            # a document of another project is not this check's to clear
-            if e.value.srcDir.stringView != this.srcDir then continue
+            # a document of another root or kind is not this check's to clear
+            if e.value.srcDir.stringView != root then continue
+            if (zsource.isDataFile file: e.value.path.stringView) != dataCheck then continue
             drel: e.value.relpath
             dov: "/".string
             dov.append drel
