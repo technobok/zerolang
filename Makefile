@@ -609,18 +609,17 @@ docs-link-guard:
 	  printf '%s\n' "$$bad" | sed 's/^/    /'; exit 1; fi; \
 	echo "docs-link-guard OK: every docs link is bracketed"
 
-# math-asm-guard -- the committed asm fragments are what tools/asmgen writes.
-MATH_ASM_CHECK_DIR := $(BUILDDIR)/asmgen-check
-MATH_ASM_FRAGS := _Z_MATH_ARITH_AMD64.inc _Z_MATH_ARITH_ARM64.inc
+# math-asm-guard -- the committed asm kernels (MATH_ASM) are what tools/asmgen
+# writes.
+MATH_ASM := lib/system/math/nativec/asm.zd
+MATH_ASM_CHECK := $(BUILDDIR)/asmgen-check/asm.zd
 math-asm-guard: out/asmgen
-	@mkdir -p $(MATH_ASM_CHECK_DIR)
-	@$(BUILDDIR)/asmgen $(MATH_ASM_CHECK_DIR)
-	@for f in $(MATH_ASM_FRAGS); do \
-	  if ! cmp -s $(MATH_ASM_CHECK_DIR)/$$f src/runtime/natives/$$f; then \
-	    echo "math-asm-guard FAIL: src/runtime/natives/$$f is not what tools/asmgen writes -- make regen-math-asm"; \
-	    diff $(MATH_ASM_CHECK_DIR)/$$f src/runtime/natives/$$f | head -20; exit 1; fi; \
-	done
-	@echo "math-asm-guard OK: $(MATH_ASM_FRAGS) are tools/asmgen's"
+	@mkdir -p $(dir $(MATH_ASM_CHECK))
+	@$(BUILDDIR)/asmgen $(MATH_ASM_CHECK)
+	@if ! cmp -s $(MATH_ASM_CHECK) $(MATH_ASM); then \
+	  echo "math-asm-guard FAIL: $(MATH_ASM) is not what tools/asmgen writes -- make regen-math-asm"; \
+	  diff $(MATH_ASM_CHECK) $(MATH_ASM) | head -20; exit 1; fi
+	@echo "math-asm-guard OK: $(MATH_ASM) is tools/asmgen's"
 
 # bench-math -- math's operations timed per kernel tier (asm, builtins, portable,
 # tcc). Not in ci: wall time is no ratchet.
@@ -1048,7 +1047,7 @@ out/asmgen: bin/zc $(wildcard tools/asmgen/*.z) $(wildcard lib/system/*.z) $(wil
 	$(CC) $(CFLAGS) -o $(BUILDDIR)/asmgen $(BUILDDIR)/asmgen.c $(call ZLINKOF,$(BUILDDIR)/asmgen.c) -lm
 
 regen-math-asm: out/asmgen
-	$(BUILDDIR)/asmgen src/runtime/natives
+	$(BUILDDIR)/asmgen $(MATH_ASM)
 
 # fmt-raw-guard -- RAW mode replays every token and its trivia, so the output must
 # equal the input byte for byte; unlike the fmt goldens it survives layout changes.

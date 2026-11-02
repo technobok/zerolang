@@ -2,39 +2,57 @@
 # Use of this source code is governed by a BSD-style
 # license that can be found in lib/system/math/LICENSE-GO.
 #
-# asmgen -- writes math's word-vector kernels as GNU inline asm, one fragment
-# per architecture: src/runtime/natives/_Z_MATH_ARITH_<ARCH>.inc. A port of
+# asmgen -- writes math's word-vector kernels as GNU inline asm, one text per
+# architecture, into math's hidden data subunit lib/system/math/nativec/asm.zd
+# (`asm.amd64`, `asm.arm64`, which math's nativec.zd names). A port of
 # Go's src/math/big/internal/asmgen at 577b91f341, its kernels written once
 # (add.z, mul.z, shift.z) over a Pipe of unrolled loads and stores (pipe.z)
 # and an assembler (asm.z) that each architecture (amd64.z, arm64.z) fills in
 # with its registers and instructions.
 #
-# Usage: asmgen DIR -- write both fragments into DIR. `make regen-math-asm`
-# writes them into the tree; `make math-asm-guard` writes them into the build
-# directory and fails when they differ from the committed ones.
+# Usage: asmgen FILE -- write the data file FILE. `make regen-math-asm` writes
+# it into the tree; `make math-asm-guard` writes it into the build directory
+# and fails when it differs from the committed one.
 
 public: unit {
     :main
 }
 
-# main -- write the fragments into the directory named on the command line
+# main -- write the data file named on the command line
 main: function is {
     argv: os.args
     if argv.length != 2 then {
-        io.eprintln "usage: asmgen DIR"
+        io.eprintln "usage: asmgen FILE"
         os.exit code: 2
     }
-    dir: argv.get i: 1
+    d: String
+    d.append "# asm -- math's arithmetic kernels in assembly, one per architecture\n\n"
     (
-        write
-        path: "\{dir}/_Z_MATH_ARITH_AMD64.inc"
-        content: (generate target: amd64.table guard: amd64Guard keeps: keepAmd64)
+        appendText
+        :d
+        name: "amd64"
+        text: (generate target: amd64.table guard: amd64Guard keeps: keepAmd64).stringView
     )
+    d.append "\n"
     (
-        write
-        path: "\{dir}/_Z_MATH_ARITH_ARM64.inc"
-        content: (generate target: arm64.table guard: arm64Guard keeps: keepArm64)
+        appendText
+        :d
+        name: "arm64"
+        text: (generate target: arm64.table guard: arm64Guard keeps: keepArm64).stringView
     )
+    write path: (argv.get i: 1) content: d
+}
+
+# appendText -- the definition `name`, the kernels for that architecture: its
+# text a multi-line string, each line indented under it
+appendText: function {d: String.borrow name: StringView text: StringView} is {
+    d.append "# \{name} -- the kernels for \{name}\n"
+    d.append "\{name}: \"\"\"\n"
+    for each l: text.lines loop {
+        if l.length > 0 then d.append "    \{l}"
+        d.append "\n"
+    }
+    d.append "    \"\"\"\n"
 }
 
 # kernel -- a kernel the generator can write
@@ -104,7 +122,7 @@ write: function as { T: StringLike.generic U: StringLike.generic } in {
 
 # generate -- one architecture's fragment: each kept kernel, announced by a
 # macro Z_MATHASM_<NAME>(n), true when the kernel is to run on n words, which
-# _Z_MATH_ARITH.inc asks before its C loop
+# math's @arith row asks before its C loop
 generate: function as { T: StringLike.generic } in {
     target: arch.Arch.take
     guard: T.view
