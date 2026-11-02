@@ -3469,6 +3469,12 @@ registerImplementations: function {
     }
 }
 
+# recordImplementedUnits -- the user units whose implementation file was read,
+# for a refusal to say which unit has none (noNativeImplFailure)
+recordImplementedUnits: function {ctx: Ctx users: (List UserImplementation).view} is {
+    for each u: users loop ctx.implementedUnits.add item: u.name.copy
+}
+
 # newRowWalk -- a walk that has registered nothing yet
 newRowWalk: function out RowWalk is {
     return (
@@ -5865,6 +5871,9 @@ Ctx: class {
     opWords: zast.Vocab
     # the words natives.tbl and the fragments spell that the loader acts on
     nativeWords: zast.Vocab
+    # the user units whose C implementation file (`<unit>/nativec.zd`) was
+    # read (UserImplementation), by name
+    implementedUnits: Set String
     # the StringView natives' call kinds (natives.tbl `call=`), by member name id
     svCalls: (IdMapV zast.nameid v: svcall)
     # the paths a FRAGMENT implements: a native whose C the runtime supplies
@@ -37431,7 +37440,14 @@ checkNativeMembers: function {
             if mo.functiondef when mo.isNative then {
                 mk: "\{unitName}.\{typeName}.\{mn}"
                 if (nativeHasRow :ctx path: mk.stringView).not then {
-                    ctx.emitErrors.append (noNativeImplFailure :ast nid: am key: mk.stringView)
+                    ctx.emitErrors.append (
+                        noNativeImplFailure
+                        :ast
+                        :ctx
+                        nid: am
+                        key: mk.stringView
+                        :unitName
+                    )
                 }
             }
         }
@@ -37439,20 +37455,32 @@ checkNativeMembers: function {
 }
 
 # noNativeImplFailure -- E0501 at the declaration `nid` names: it says
-# `is native` and natives.tbl has no row `key`. The program's error, not an
-# emitter gap, so it is shown where it was written.
+# `is native` and its unit's C implementation has no row `key`. The program's
+# error, not an emitter gap, so it is shown where it was written. A unit outside
+# the standard library with no implementation file at all is told which file
+# it lacks.
 noNativeImplFailure: function {
     ast: Ast.view
+    ctx: Ctx.view
     # the declaration's labelled row
     nid: zast.nodeid
-    # the natives.tbl path it would have
+    # the row's key
     key: StringView
+    # the unit the declaration is keyed under
+    unitName: StringView
 } out zast.ErrorData is {
     dn: ast.nodes.get i: nid
     pos: zast.posOf n: dn
     # the declared name is what the caret marks
     width: u32
     if dn.namedoperation then width = (zast.nameTextAt :ast ref: dn.name).length.u32.orPanic
+    note: String
+    hint: "`is native` promises a body from the unit's C implementation: write the body, or add the row".string
+    if (isServedUnit name: unitName).not when (ctx.implementedUnits.has item: unitName.string
+    ).not then {
+        note = "unit '\{unitName}' has no C implementation file: \{unitName}/nativec.zd beside \{unitName}.z"
+        hint = "write its rows in \{unitName}/nativec.zd (a runtime.nativec value), or write the body"
+    }
     return (
         zast.ErrorData
         nodeid: nid
@@ -37462,8 +37490,8 @@ noNativeImplFailure: function {
         err: zast.err.noNativeImpl
         msg: "no native implementation for '\{key}'"
         fsno: zvfs.fsno
-        note: "".string
-        hint: "`is native` promises a body from natives.tbl: write the body, or add the row".string
+        :note
+        :hint
     )
 }
 
@@ -37499,7 +37527,14 @@ checkNativesResolve: function {
                 if op.isNative then {
                     pk: "\{unitName}.\{nm}"
                     if (nativeHasRow :ctx path: pk.stringView).not then {
-                        ctx.emitErrors.append (noNativeImplFailure :ast nid: bm key: pk.stringView)
+                        ctx.emitErrors.append (
+                            noNativeImplFailure
+                            :ast
+                            :ctx
+                            nid: bm
+                            key: pk.stringView
+                            :unitName
+                        )
                     }
                 }
             } case objectdef then {
@@ -40645,6 +40680,7 @@ emitC: function {
         cWords: (zast.Vocab.create block: cReserved)
         opWords: (zast.Vocab.create block: opSpelling)
         nativeWords: (zast.Vocab.create block: nativeWord)
+        implementedUnits: Set String
         svCalls: (IdMapV zast.nameid v: svcall)
         nativeFragPaths: (MapRV String v: u64)
         nativeVia: (MapRR String V: String)
@@ -40730,6 +40766,7 @@ emitC: function {
         :origins
     )
     ctx.runtimeDir = runtimeDir.string
+    recordImplementedUnits :ctx :users
     if runtimeFromDisk then {
         loadNativeTbl :ctx ast: program :symtab :runtimeDir
         registerUsers :ctx ast: program :symtab :users
