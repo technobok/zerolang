@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate tests/fixtures/emitc_corpus/math/math_kernel_shapes.z and its golden.
 
-The word-vector kernels (src/runtime/natives/_Z_MATH_ARITH.inc and the asm
+The word-vector kernels (math's @arith row and the asm
 fragments beside it) at the operand shapes they special-case: lengths 0 and 1,
 a carry or borrow through every word, a carry that dies early (the copy of the
 rest), shifts by 0/1/63 and by whole words, the in-place twins (BigInt's
