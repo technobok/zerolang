@@ -7,11 +7,15 @@
 
 public: unit {
     :servedFile
+    :showNative
     :servedProvider
     :servedText
 }
 
 ZVfsProvider: zvfs.ZVfsProvider
+
+# schema -- the implementation files' schema, as the served unit holds it
+schema: nativec.runtime.nativec
 
 # unitsWithFiles -- the units under `systemdir` that carry a nativec file: those
 # `order` names first, in its order, then the rest by name
@@ -221,4 +225,196 @@ ServedProvider: class {
 servedProvider: function {systemdir: StringView shown: StringView} out ZVfsProvider is {
     sp: ServedProvider systemdir: systemdir.string shown: shown.string
     return (ZVfsProvider.create from: sp.take)
+}
+
+# showNative -- `zc natives show WHAT`: what zc carries for WHAT, as the emitter
+# holds it -- a unit's rows by key, one row (`unit.key`, every variant of it)
+# with its fields and texts, or a template by name -- each with the line of the
+# unit's nativec.zd under `systemdir` it was written at. "" when WHAT names
+# none of them.
+showNative: function {what: StringView systemdir: StringView} out String is {
+    buf: String
+    for each u: nativec.units loop {
+        un: u.name.stringView
+        path: "\{systemdir}/\{un}/nativec.zd"
+        src: String
+        rd: io.readText :path
+        match (
+            rd
+        ) case ok then {
+            src = rd.copy
+        } case err then null
+        if what == un then showUnitRows :buf :u path: path.stringView src: src.stringView
+        seen: MapRV String v: u64
+        for each r: u.implementation.rows loop {
+            k: r.key.stringView
+            n: (seen.get key: k.string).or d: 0
+            seen.set key: k.string value: n + 1
+            if (namesRow :what unitName: un key: k) then (
+                showRow
+                :buf
+                :r
+                unitName: un
+                at: (
+                    fileLineOf
+                    path: path.stringView
+                    src: src.stringView
+                    needle: "key: \"\{k}\"".stringView
+                    nth: n
+                ).stringView
+            )
+        }
+        for each t: u.implementation.templates loop {
+            if what == t.name.stringView then (
+                showTemplate
+                :buf
+                :t
+                unitName: un
+                at: (
+                    fileLineOf
+                    path: path.stringView
+                    src: src.stringView
+                    needle: "name: \"\{t.name}\"".stringView
+                    nth: 0
+                ).stringView
+            )
+        }
+    }
+    return buf
+}
+
+# showUnitRows -- a unit's rows, one line each: its key and where it is written
+showUnitRows: function {
+    buf: String.borrow
+    u: nativec.servedUnit
+    path: StringView
+    src: StringView
+} is {
+    seen: MapRV String v: u64
+    for each r: u.implementation.rows loop {
+        k: r.key.stringView
+        n: (seen.get key: k.string).or d: 0
+        seen.set key: k.string value: n + 1
+        at: fileLineOf :path :src needle: "key: \"\{k}\"".stringView nth: n
+        buf.append u.name.stringView
+        buf.append "."
+        buf.append k
+        buf.append "  "
+        buf.append at
+        if r.fact.length > 0 then buf.append "  (when \{r.fact})"
+        buf.append "\n"
+    }
+    for each t: u.implementation.templates loop buf.append "template \{t.name}\n"
+}
+
+# showRow -- one row: where it is written, each field it sets, then its texts
+# with their holes as written
+showRow: function {buf: String.borrow r: schema.row unitName: StringView at: StringView} is {
+    buf.append unitName
+    buf.append "."
+    buf.append r.key.stringView
+    buf.append "  "
+    buf.append at
+    buf.append "\n"
+    showField :buf name: "fact" value: r.fact.stringView
+    showField :buf name: "body" value: r.body.stringView
+    showField :buf name: "needs" value: (zemitterc.servedList xs: r.needs).stringView
+    showField :buf name: "demand" value: (zemitterc.servedList xs: r.demand).stringView
+    showField :buf name: "pulls" value: (zemitterc.servedList xs: r.pulls).stringView
+    showField :buf name: "members" value: (zemitterc.servedList xs: r.members).stringView
+    showField :buf name: "live" value: (zemitterc.servedList xs: r.live).stringView
+    showField :buf name: "via" value: r.via.stringView
+    showField :buf name: "template" value: r.template.stringView
+    showField :buf name: "call" value: (zemitterc.servedCallWord c: r.call).stringView
+    if r.form.value then showField :buf name: "form" value: "value"
+    if r.byPointer then showField :buf name: "byPointer" value: "true"
+    if r.callsEquals then showField :buf name: "callsEquals" value: "true"
+    for each t: r.fragments loop showText :buf name: "fragment" text: t.stringView
+    for each p: r.pieces loop {
+        if p.name.length == 0 then {
+            showText :buf name: "piece" text: p.text.stringView
+        } else {
+            (
+                showText
+                :buf
+                name: "piece \{p.name} demand=\{zemitterc.servedList xs: p.demand} needs=\{(
+                    zemitterc.servedList
+                    xs: p.needs
+                )}".stringView
+                text: p.text.stringView
+            )
+        }
+    }
+    if r.destroy.length > 0 then showText :buf name: "destroy" text: r.destroy.stringView
+}
+
+# showTemplate -- a template: where it is written, its needs, then its sections
+showTemplate: function {
+    buf: String.borrow
+    t: schema.template
+    unitName: StringView
+    at: StringView
+} is {
+    buf.append "template \{t.name} (\{unitName})  \{at}\n"
+    showField :buf name: "needs" value: (zemitterc.servedList xs: t.needs).stringView
+    for each s: t.sections loop {
+        if s.member.length == 0 then {
+            showText :buf name: "section" text: s.text.stringView
+        } else {
+            (
+                showText
+                :buf
+                name: "section \{s.member} needs=\{zemitterc.servedList xs: s.needs}".stringView
+                text: s.text.stringView
+            )
+        }
+    }
+}
+
+# showField -- one field of a row as `show` lists it, left out when it is not set
+showField: function {buf: String.borrow name: StringView value: StringView} is {
+    if value.length > 0 then buf.append "  \{name}: \{value}\n"
+}
+
+# showText -- `  name:` then the text, each line indented under it
+showText: function {buf: String.borrow name: StringView text: StringView} is {
+    buf.append "  \{name}:\n"
+    t: text
+    if t.endsWith "\n" then t = t.substring from: 0 to: t.length - 1
+    for each l: t.lines loop {
+        if l.length == 0 then {
+            buf.append "\n"
+        } else {
+            buf.append "    \{l}\n"
+        }
+    }
+}
+
+# namesRow -- whether `what`, as written on the command line, is `<unit>.<key>`
+namesRow: function {what: StringView unitName: StringView key: StringView} out bool is {
+    n: unitName.length
+    if what.length != (n + 1 + key.length) then return false
+    if (what.startsWith unitName).not then return false
+    if ((what.byteAt i: n).or d: 0) != 46 then return false
+    return (what.substring from: n + 1 to: what.length) == key
+}
+
+# fileLineOf -- `path:line` of the `nth` (0-based) line of `src` holding
+# `needle`; `path` alone when there is none
+fileLineOf: function {path: StringView src: StringView needle: StringView nth: u64} out String is {
+    line: u64
+    seen: u64
+    for each l: src.lines loop {
+        line = line + 1
+        if (l.contains :needle) then {
+            if seen == nth then {
+                r: path.string
+                r.append ":"
+                r.append "\{line}"
+                return r
+            }
+            seen = seen + 1
+        }
+    }
+    return path.string
 }
