@@ -1,0 +1,270 @@
+# view_guard -- what `zc natives check view` reads beside the rows and the
+# declarations: what neither says about a native receiver. The check proves a
+# receiver marked `.view` is const in the C that receives it, and a const one is
+# marked; these registers place the receivers whose C it cannot read by name.
+
+# placeholder -- a template's placeholder, standing for a declared type: the
+# receiver type a function of the template takes
+placeholder: data {
+    # the template's name (`List`)
+    template: text
+    # the placeholder as the template spells it (`@@NAME@@`)
+    spelling: text
+    # the declared type it stands for (`ListRef`)
+    type: text
+}
+
+# emitted -- a C function the emitter builds from its own text, named by the
+# method its C name ends in, and the declarations it backs
+emitted: data {
+    # the method of `z_<instance>_<method>`, as the declaration spells it
+    method: text
+    # the declarations it backs, `<Type>.<method>`; none when it backs none
+    backs: list {} out staticlist text
+}
+
+# alias -- one C function backing several declarations of its type
+alias: data {
+    # the function, as `<Type>.<method>` of its C name (`StringView.cmp`)
+    backing: text
+    # the methods it backs
+    methods: list {} out staticlist text
+}
+
+# delegation -- a receiver no readable C function takes, whose native defers to
+# another declaration's
+delegation: data {
+    # `<Type>.<method>`
+    member: text
+    # the declaration it defers to, `<Type>.<method>`
+    to: text
+}
+
+# placeholders -- each template placeholder that stands for a declared type; one with
+# none names a user type or a valtype, where `.view` does not apply
+placeholders: list {
+    (placeholder template: "List" spelling: "@@NAME@@" type: "ListRef")
+    (placeholder template: "Map" spelling: "@@NAME@@" type: "MapRR")
+    (placeholder template: "MapIter" spelling: "@@NAME@@" type: "MapRR")
+    (placeholder template: "MapIter" spelling: "@@MAPKEYITER@@" type: "MapKeyIter")
+    (placeholder template: "MapIter" spelling: "@@MAPITEMITER@@" type: "MapItemIter")
+    (placeholder template: "Set" spelling: "@@NAME@@" type: "SetRef")
+    (placeholder template: "Set" spelling: "@@SETITER@@" type: "SetIter")
+    (placeholder template: "IdMap" spelling: "@@NAME@@" type: "IdMapR")
+    (placeholder template: "IdMapIter" spelling: "@@NAME@@" type: "IdMapR")
+    (placeholder template: "IdMapIter" spelling: "@@IDMAPITEMITER@@" type: "IdMapItemIterR")
+    (placeholder template: "IdMapMut" spelling: "@@NAME@@" type: "IdMapR")
+    (placeholder template: "MapMut" spelling: "@@NAME@@" type: "MapRR")
+    (placeholder template: "JoinHandle" spelling: "@@NAME@@" type: "JoinHandle")
+    (placeholder template: "Atomic" spelling: "@@NAME@@" type: "Atomic")
+    (placeholder template: "AtomicBool" spelling: "@@NAME@@" type: "AtomicBool")
+    (placeholder template: "Mutex" spelling: "@@NAME@@" type: "Mutex")
+    (placeholder template: "MutexGuard" spelling: "@@NAME@@" type: "MutexGuard")
+    (placeholder template: "RwLock" spelling: "@@NAME@@" type: "RwLock")
+    (placeholder template: "ReadGuard" spelling: "@@NAME@@" type: "ReadGuard")
+    (placeholder template: "WriteGuard" spelling: "@@NAME@@" type: "WriteGuard")
+    (placeholder template: "Condvar" spelling: "@@NAME@@" type: "Condvar")
+    (placeholder template: "Barrier" spelling: "@@NAME@@" type: "Barrier")
+    (placeholder template: "Receiver" spelling: "@@NAME@@" type: "Receiver")
+    (placeholder template: "Sender" spelling: "@@NAME@@" type: "Sender")
+    (placeholder template: "ReceiverIter" spelling: "@@NAME@@" type: "ReceiverIter")
+    (placeholder template: "IdSet" spelling: "@@NAME@@" type: "IdSet")
+    (placeholder template: "IdSet" spelling: "@@IDSETITER@@" type: "IdSetIter")
+} out staticlist placeholder
+
+# emitted -- the functions the emitter builds with a receiver
+emitters: list {
+    (emitted method: "get" backs: list { "ListRef.get" "ListView.get" "SpanVal.get" })
+    (emitted method: "getMut" backs: list { "ListRef.getMut" })
+    (emitted method: "slice" backs: list { "ListRef.slice" "ListView.slice" })
+    (emitted method: "contains" backs: list { "ListRef.contains" })
+    (emitted method: "listView" backs: list { "ListRef.listView" })
+    (emitted method: "sort" backs: list { "ListRef.sort" })
+    (emitted method: "iterate" backs: list { "ListRef.iterate" "ListView.iterate" "staticlist.iterate" })
+    (emitted method: "index" backs: list { "staticlist.get" })
+    (emitted method: "iterateReverse" backs: list { "ListRef.iterateReverse" "ListView.iterateReverse" })
+    (emitted method: "call" backs: list { "ListIter.call" "ListIterVal.call" "ListIterMut.call" "ListIterMutVal.call" "StaticIter.call" })
+    (emitted method: "iterateMut" backs: list { "ListRef.iterateMut" })
+    (emitted method: "getv" backs: list { "MapRR.get" })
+    (emitted method: "eq" backs: list {})
+    (emitted method: "extendView" backs: list { "ListVal.extendView" })
+    (emitted method: "destroy" backs: list {})
+    (emitted method: "hasv" backs: list { "MapRR.has" "SetRef.has" })
+    (emitted method: "deletev" backs: list { "SetRef.delete" })
+} out staticlist emitted
+
+# aliases -- the C functions that back several declarations
+aliases: list {
+    (alias backing: "StringView.eq" methods: list { "==" "!=" })
+    (alias backing: "StringView.cmp" methods: list { "compare" "<" "<=" ">" ">=" })
+} out staticlist alias
+
+# internal -- C helpers that take a receiver and back no declaration, `<Type>.<name>`
+internal: list {
+    "String.cat" "String.print" "String.free" "String.eq" "String.cmp"
+    "StringView.print" "StringView.indexOfRaw" "StringView.replaceImpl"
+    "ListRef.destroy" "ListRef.grow" "MapRR.destroy" "MapRR.grow" "MapRR.find"
+    "SetRef.destroy" "SetRef.grow" "SetRef.find" "IdMapR.destroy" "IdMapR.grow"
+    "IdMapR.find" "IdSet.destroy" "IdSet.grow" "IdSet.find" "File.destroy"
+    "Listener.destroy" "Conn.destroy" "Child.destroy" "Database.destroy"
+    "Statement.destroy" "Row.destroy" "Transaction.destroy" "JoinHandle.destroy"
+    "Atomic.destroy" "AtomicBool.destroy" "Mutex.destroy" "MutexGuard.destroy"
+    "RwLock.destroy" "ReadGuard.destroy" "WriteGuard.destroy" "Condvar.destroy"
+    "Barrier.destroy" "Receiver.destroy" "Sender.destroy" "ReceiverIter.destroy"
+    "thread.start" "thread.join" "thread.detach" "mutex.init" "mutex.destroy"
+    "mutex.lock" "mutex.trylock" "mutex.unlock" "rwlock.init" "rwlock.destroy"
+    "rwlock.rdlock" "rwlock.wrlock" "rwlock.rdunlock" "rwlock.wrunlock" "cond.init"
+    "cond.destroy" "cond.wait" "cond.timedwait" "cond.signal" "cond.broadcast"
+} out staticlist text
+
+# inline -- receivers the emitter reads in place, with no C function: `<Type>.<method>`,
+# `<Type>.*` for every method of a type
+inline: list {
+    "array.listView" "array.slice" "ListVal.span" "ListVal.spanSlice" "SpanVal.length"
+    "SpanVal.split" "SpanVal.listView" "SpanVal.copyFrom" "StringView.asString"
+    "ListViewVal.length" "ListVal.length" "ListVal.capacity" "SetVal.length"
+    "SetVal.capacity" "MapEntry.key" "MapEntry.value" "IdMapEntryR.key"
+    "IdMapEntryR.value" "MapRV.length" "MapRV.capacity" "MapVR.length" "MapVR.capacity"
+    "MapVV.length" "MapVV.capacity" "ListRef.length" "ListRef.capacity"
+    "ListView.length" "MapRR.length" "MapRR.capacity" "SetRef.length" "SetRef.capacity"
+    "IdMapR.length" "IdMapR.capacity" "IdMapV.length" "IdMapV.capacity" "IdSet.length"
+    "IdSet.capacity" "String.length" "String.capacity" "String.stringView"
+    "StringView.length" "array.get" "array.length" "str.length" "str.size"
+    "str.stringView" "str.substring" "text.isAscii" "text.startsWith" "text.endsWith"
+    "text.contains" "text.indexOf" "text.lastIndexOf" "text.byteAt" "text.splitOnce"
+    "text.count" "text.codepoints" "text.toLowerAscii" "text.toUpperAscii"
+    "text.replace" "text.replaceFirst" "text.repeated" "text.concat" "staticlist.length"
+    "staticlist.array" "staticlist.tag" "staticlist.slot"
+} out staticlist text
+
+# byvalue -- receivers the emitter hands on by value, a copy the C cannot write through
+byvalue: list {
+    "StringView.string" "str.string" "optionval.or" "resultval.orPanic" "resultval.or"
+    "intliteral.*" "floatliteral.*" "textliteral.*"
+} out staticlist text
+
+# writes -- valtype receivers the emitter-built C writes through
+writes: list {
+    "array.span" "array.spanSlice" "array.set"
+} out staticlist text
+
+# unemitted -- receivers no program's C receives
+unemitted: list {
+    "Bytes.byteView"
+} out staticlist text
+
+# ondemand -- receivers whose C the emitter writes on demand, per instance
+ondemand: list {
+    "ListVal.resize" "SpanVal.set" "SpanVal.slice" "SpanVal.fill" "SpanVal.clear"
+    "ListRef.insert" "ListRef.extend" "ListVal.copy" "SetVal.copy" "MapVV.copy"
+    "ListVal.==" "ListVal.!=" "IdMapV.copy" "IdSet.copy"
+} out staticlist text
+
+# delegations -- receivers whose native defers to another declaration's
+delegations: list {
+    (delegation member: "ReceiverVal.sender" to: "Receiver.sender")
+    (delegation member: "ReceiverVal.receive" to: "Receiver.receive")
+    (delegation member: "ReceiverVal.tryReceive" to: "Receiver.tryReceive")
+    (delegation member: "ReceiverVal.iterate" to: "Receiver.iterate")
+    (delegation member: "ReceiverVal.capacity" to: "Receiver.capacity")
+    (delegation member: "SenderVal.send" to: "Sender.send")
+    (delegation member: "SenderVal.copy" to: "Sender.copy")
+    (delegation member: "ReceiverIterVal.call" to: "ReceiverIter.call")
+    (delegation member: "JoinHandleVal.join" to: "JoinHandle.join")
+    (delegation member: "JoinHandleVal.isFinished" to: "JoinHandle.isFinished")
+    (delegation member: "JoinHandleVal.id" to: "JoinHandle.id")
+    (delegation member: "JoinHandleVal.detach" to: "JoinHandle.detach")
+    (delegation member: "MutexVal.share" to: "Mutex.share")
+    (delegation member: "MutexVal.lock" to: "Mutex.lock")
+    (delegation member: "MutexGuardVal.value" to: "MutexGuard.value")
+    (delegation member: "MutexGuardVal.set" to: "MutexGuard.set")
+    (delegation member: "MutexGuardVal.wait" to: "MutexGuard.wait")
+    (delegation member: "MutexGuardVal.waitTimeout" to: "MutexGuard.waitTimeout")
+    (delegation member: "RwLockVal.share" to: "RwLock.share")
+    (delegation member: "RwLockVal.read" to: "RwLock.read")
+    (delegation member: "RwLockVal.write" to: "RwLock.write")
+    (delegation member: "ReadGuardVal.value" to: "ReadGuard.value")
+    (delegation member: "WriteGuardVal.value" to: "WriteGuard.value")
+    (delegation member: "WriteGuardVal.set" to: "WriteGuard.set")
+    (delegation member: "ListVal.append" to: "ListRef.append")
+    (delegation member: "ListVal.insert" to: "ListRef.insert")
+    (delegation member: "ListVal.extend" to: "ListRef.extend")
+    (delegation member: "ListVal.get" to: "ListRef.get")
+    (delegation member: "ListVal.set" to: "ListRef.set")
+    (delegation member: "ListVal.pop" to: "ListRef.pop")
+    (delegation member: "ListVal.contains" to: "ListRef.contains")
+    (delegation member: "ListVal.getMut" to: "ListRef.getMut")
+    (delegation member: "ListViewVal.get" to: "ListView.get")
+    (delegation member: "ListViewVal.slice" to: "ListView.slice")
+    (delegation member: "ListViewVal.iterate" to: "ListView.iterate")
+    (delegation member: "ListViewVal.iterateReverse" to: "ListView.iterateReverse")
+    (delegation member: "ListVal.sort" to: "ListRef.sort")
+    (delegation member: "ListVal.listView" to: "ListRef.listView")
+    (delegation member: "ListVal.slice" to: "ListRef.slice")
+    (delegation member: "ListVal.iterate" to: "ListRef.iterate")
+    (delegation member: "ListVal.iterateMut" to: "ListRef.iterateMut")
+    (delegation member: "ListVal.iterateReverse" to: "ListRef.iterateReverse")
+    (delegation member: "SetVal.add" to: "SetRef.add")
+    (delegation member: "SetVal.has" to: "SetRef.has")
+    (delegation member: "SetVal.delete" to: "SetRef.delete")
+    (delegation member: "SetVal.iterate" to: "SetRef.iterate")
+    (delegation member: "SetIterVal.call" to: "SetIter.call")
+    (delegation member: "MapEntryRV.key" to: "MapEntry.key")
+    (delegation member: "MapEntryRV.value" to: "MapEntry.value")
+    (delegation member: "MapEntryVR.key" to: "MapEntry.key")
+    (delegation member: "MapEntryVR.value" to: "MapEntry.value")
+    (delegation member: "MapEntryVV.key" to: "MapEntry.key")
+    (delegation member: "MapEntryVV.value" to: "MapEntry.value")
+    (delegation member: "IdMapEntryV.key" to: "IdMapEntryR.key")
+    (delegation member: "IdMapEntryV.value" to: "IdMapEntryR.value")
+    (delegation member: "MapRV.get" to: "MapRR.get")
+    (delegation member: "MapRV.getMut" to: "MapRR.getMut")
+    (delegation member: "MapRV.set" to: "MapRR.set")
+    (delegation member: "MapRV.has" to: "MapRR.has")
+    (delegation member: "MapRV.remove" to: "MapRR.remove")
+    (delegation member: "MapRV.iterate" to: "MapRR.iterate")
+    (delegation member: "MapRV.iterateItems" to: "MapRR.iterateItems")
+    (delegation member: "MapVR.get" to: "MapRR.get")
+    (delegation member: "MapVR.getMut" to: "MapRR.getMut")
+    (delegation member: "MapVR.set" to: "MapRR.set")
+    (delegation member: "MapVR.has" to: "MapRR.has")
+    (delegation member: "MapVR.remove" to: "MapRR.remove")
+    (delegation member: "MapVR.iterate" to: "MapRR.iterate")
+    (delegation member: "MapVR.iterateItems" to: "MapRR.iterateItems")
+    (delegation member: "MapVV.get" to: "MapRR.get")
+    (delegation member: "MapVV.getMut" to: "MapRR.getMut")
+    (delegation member: "MapVV.set" to: "MapRR.set")
+    (delegation member: "MapVV.has" to: "MapRR.has")
+    (delegation member: "MapVV.remove" to: "MapRR.remove")
+    (delegation member: "MapVV.iterate" to: "MapRR.iterate")
+    (delegation member: "MapVV.iterateItems" to: "MapRR.iterateItems")
+    (delegation member: "MapKeyIterRV.call" to: "MapKeyIter.call")
+    (delegation member: "MapKeyIterVR.call" to: "MapKeyIter.call")
+    (delegation member: "MapKeyIterVV.call" to: "MapKeyIter.call")
+    (delegation member: "MapItemIterRV.call" to: "MapItemIter.call")
+    (delegation member: "MapItemIterVR.call" to: "MapItemIter.call")
+    (delegation member: "MapItemIterVV.call" to: "MapItemIter.call")
+    (delegation member: "IdMapV.get" to: "IdMapR.get")
+    (delegation member: "IdMapV.set" to: "IdMapR.set")
+    (delegation member: "IdMapV.has" to: "IdMapR.has")
+    (delegation member: "IdMapV.keyAt" to: "IdMapR.keyAt")
+    (delegation member: "IdMapV.valueAt" to: "IdMapR.valueAt")
+    (delegation member: "IdMapV.iterateItems" to: "IdMapR.iterateItems")
+    (delegation member: "IdMapV.getMut" to: "IdMapR.getMut")
+    (delegation member: "IdMapItemIterV.call" to: "IdMapItemIterR.call")
+    (delegation member: "String.contains" to: "StringView.contains")
+    (delegation member: "String.startsWith" to: "StringView.startsWith")
+    (delegation member: "String.endsWith" to: "StringView.endsWith")
+    (delegation member: "String.count" to: "StringView.count")
+    (delegation member: "String.hash" to: "StringView.hash")
+    (delegation member: "String.substring" to: "StringView.substring")
+    (delegation member: "String.==" to: "StringView.==")
+    (delegation member: "String.!=" to: "StringView.!=")
+    (delegation member: "String.<" to: "StringView.<")
+    (delegation member: "String.<=" to: "StringView.<=")
+    (delegation member: "String.>" to: "StringView.>")
+    (delegation member: "String.>=" to: "StringView.>=")
+    (delegation member: "String.compare" to: "StringView.compare")
+    (delegation member: "String.+" to: "StringView.concat")
+    (delegation member: "StringView.+" to: "StringView.concat")
+} out staticlist delegation

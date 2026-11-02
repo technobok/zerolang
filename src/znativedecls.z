@@ -1,0 +1,113 @@
+# znativedecls -- the standard library's declarations as the native checks
+# (znativecheck, znativeview) read them: each `.z` file directly under the system
+# directory and under its unit folders, parsed on its own; and the names the
+# checks meet, each interned once.
+
+public: unit {
+    :sourceFiles
+    :parseFile
+    :Words
+    :newWords
+}
+
+# Words -- the names a check meets, each interned once; id 0 is the sentinel ""
+Words: class {
+    ids: (MapRV String v: u32)
+    # by id
+    texts: List String
+} as {
+    # id -- the id of `text`, interned on first sight
+    id: function {:this text: StringView} out u32 is {
+        k: (this.ids.get key: text.string).or d: 0
+        if k > 0 then return k
+        n: this.texts.length.u32.orPanic
+        this.ids.set key: text.string value: n
+        this.texts.append from: text.string
+        return n
+    }
+
+    # textOf -- the text of id `k`
+    textOf: function {this: this.view k: u32} out String is {
+        return (this.texts.get i: k.u64).copy
+    }
+}
+
+# newWords -- words holding only the sentinel
+newWords: function out Words is {
+    w: Words ids: (MapRV String v: u32) texts: List String
+    w.texts.append from: "".string
+    return w
+}
+
+# SourceFile -- one `.z` file of the standard library, and its unit
+SourceFile: class {
+    # the unit: the file's stem, or the folder holding a subunit file
+    owner: String
+    path: String
+}
+
+# ParsedFile -- one file's parse, and the top-level definitions of its unit
+ParsedFile: class {
+    tree: zast.Ast
+    defs: ListVal zast.nodeid
+}
+
+# sourceFiles -- the `.z` files directly under `systemdir`, each followed by
+# those of its unit folder, by name
+sourceFiles: function {systemdir: StringView} out List SourceFile is {
+    r: List SourceFile
+    for each f: (zFilesIn dir: systemdir) loop {
+        u: f.stringView.substring from: 0 to: f.length - 2
+        r.append (SourceFile owner: u.string path: "\{systemdir}/\{f}")
+        sub: "\{systemdir}/\{u}"
+        for each g: (zFilesIn dir: sub.stringView) loop r.append (
+            SourceFile
+            owner: u.string
+            path: "\{sub}/\{g}"
+        )
+    }
+    return r
+}
+
+# zFilesIn -- the `.z` files directly under `dir`, by name
+zFilesIn: function {dir: StringView} out List String is {
+    r: List String
+    ents: io.listDir path: dir
+    match (
+        ents
+    ) case ok then {
+        for each e: ents loop {
+            if (e.stringView.endsWith suffix: ".z") then r.append from: e.copy
+        }
+    } case err then null
+    r.sort
+    return r
+}
+
+# parseFile -- the file at `path` parsed; no definition when it cannot be read
+# or holds no unit
+parseFile: function {path: StringView} out ParsedFile is {
+    src: String
+    rd: io.readText :path
+    match (
+        rd
+    ) case ok then {
+        src = rd.copy
+    } case err then null
+    tree: ast.parseSource source: src.take
+    defs: ListVal zast.nodeid
+    if tree.units.length > 0 then {
+        top: tree.nodes.get i: (tree.units.get i: 0)
+        match (
+            top
+        ) case namedoperation then {
+            un: tree.nodes.get i: top.operation
+            match (
+                un
+            ) case unitdef then {
+                for each k: (zast.kidIds ast: tree span: un.body) loop defs.append k
+            } else null
+        } else null
+    }
+    return (ParsedFile :tree :defs)
+}

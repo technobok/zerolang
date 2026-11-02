@@ -17,6 +17,8 @@ checkWord: list {
     cNative: "native"
     # the check of the pieces' needs (znativepieces)
     cPiece: "piece"
+    # the check of the native receivers' `.view` markers (znativeview)
+    cView: "view"
     # the units whose names every unit sees
     uSystem: "system"
     uCore: "core"
@@ -79,7 +81,9 @@ Decls: class {
 # the declarations under `systemdir`, `piece` against the emitter's source at
 # `emitter` too. Prints each finding once, then a summary. Answers the exit
 # code: 0 when nothing was found, 1 when something was, 2 for an unknown check.
-checkNatives: function {what: StringView systemdir: StringView emitter: StringView} out i32 is {
+checkNatives: function {
+    what: StringView systemdir: StringView emitter: StringView register: StringView
+} out i32 is {
     words: zast.Vocab.create block: checkWord
     w: words.slotOf text: what
     fails: List String
@@ -92,8 +96,13 @@ checkNatives: function {what: StringView systemdir: StringView emitter: StringVi
     } else if w == checkWord.slot.cPiece then {
         guard = "piece-guard"
         n = znativepieces.checkPieces :emitter :fails
+    } else if w == checkWord.slot.cView then {
+        guard = "view-guard"
+        files: List String
+        for each sf: (znativedecls.sourceFiles :systemdir) loop files.append from: sf.path.copy
+        n = znativeview.checkView :files :emitter :register :systemdir :fails
     } else {
-        io.eprintln "zc natives check: unknown check '\{what}' (native, piece)"
+        io.eprintln "zc natives check: unknown check '\{what}' (native, piece, view)"
         return 2
     }
     said: Set String
@@ -138,68 +147,20 @@ readDecls: function {systemdir: StringView words: zast.Vocab.view} out Decls is 
         arms: newNameSets
         members: newNameSets
     )
-    for each f: (zFilesIn dir: systemdir) loop {
-        u: f.stringView.substring from: 0 to: f.length - 2
-        sw: words.slotOf text: u
+    for each sf: (znativedecls.sourceFiles :systemdir) loop {
+        sw: words.slotOf text: sf.owner.stringView
         sys: (sw == checkWord.slot.uSystem) or (sw == checkWord.slot.uCore)
-        readFile :d unitName: u :sys path: "\{systemdir}/\{f}".stringView
-        sub: "\{systemdir}/\{u}"
-        for each g: (zFilesIn dir: sub.stringView) loop (
-            readFile
+        pf: znativedecls.parseFile path: sf.path.stringView
+        for each k: pf.defs loop (
+            readDef
             :d
-            unitName: u
+            unitName: sf.owner.stringView
             :sys
-            path: "\{sub}/\{g}".stringView
+            tree: pf.tree
+            id: k
         )
     }
     return d
-}
-
-# zFilesIn -- the `.z` files directly under `dir`, by name
-zFilesIn: function {dir: StringView} out List String is {
-    r: List String
-    ents: io.listDir path: dir
-    match (
-        ents
-    ) case ok then {
-        for each e: ents loop {
-            if (e.stringView.endsWith suffix: ".z") then r.append from: e.copy
-        }
-    } case err then null
-    r.sort
-    return r
-}
-
-# readFile -- one file's top-level definitions into `d`, as unit `unitName`'s;
-# `sys` when that unit is system or core
-readFile: function {d: Decls unitName: StringView sys: bool path: StringView} is {
-    rd: io.readText :path
-    src: String
-    match (
-        rd
-    ) case ok then {
-        src = rd.copy
-    } case err then return
-    tree: ast.parseSource source: src.take
-    if tree.units.length == 0 then return
-    top: tree.nodes.get i: (tree.units.get i: 0)
-    match (
-        top
-    ) case namedoperation then {
-        un: tree.nodes.get i: top.operation
-        match (
-            un
-        ) case unitdef then {
-            for each k: (zast.kidIds ast: tree span: un.body) loop (
-                readDef
-                :d
-                :unitName
-                :sys
-                :tree
-                id: k
-            )
-        } else null
-    } else null
 }
 
 # readDef -- one top-level definition `id` of unit `unitName` into `d`

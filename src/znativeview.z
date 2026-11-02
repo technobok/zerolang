@@ -1,0 +1,997 @@
+# znativeview -- `zc natives check view`: a native receiver marked `.view` is
+# const in the C function that takes it, and a const one is marked `.view`, so
+# the C compiler proves that a viewed receiver is never written. The receivers
+# are the standard library's native methods, parsed. The C is every function of
+# the rows, templates and fixed files zc carries whose first parameter is a
+# pointer to the function's own type, and those the emitter builds from its own
+# text. A valtype native with no such function is judged by its row's body,
+# which writes through the receiver or does not. The register
+# (tests/view_guard.zd) places the receivers that neither says enough about;
+# every receiver is accounted for by one of these.
+
+public: unit {
+    :checkView
+}
+
+schema: nativec.runtime.nativec
+
+# member -- a type's member, each part by its id in the check's words
+member: record {
+    owner: u32
+    name: u32
+}
+
+# recv -- how a C function takes its receiver
+recv: variant {
+    # through a pointer to const: the C cannot write through it
+    readOnly: null
+    # through a pointer it may write through
+    writable: null
+    # by value: a copy, which no write reaches
+    copied: null
+} as { tag: u8.tag }
+
+# reason -- why the register places a receiver that no C function the check
+# reads takes
+reason: variant {
+    # the emitter reads it in place
+    inPlace: null
+    # the emitter hands it on by value
+    byValue: null
+    # the emitter-built C writes through it
+    writes: null
+    # no program's C receives it
+    unemitted: null
+    # the emitter writes its C per instance, on demand
+    onDemand: null
+    # its native defers to another declaration's
+    delegates: null
+} as { tag: u8.tag }
+
+# Placeholder -- a template's placeholder, standing for a declared type
+Placeholder: class {
+    template: String
+    spelling: String
+    type: u32
+}
+
+# Backing -- a C function and the declarations it backs. An emitted function is
+# named by its method, an alias by its type and method
+Backing: class {
+    name: member
+    backs: ListVal member
+}
+
+# View -- what the check reads and joins
+View: class {
+    words: znativedecls.Words
+    placeholders: List Placeholder
+    emitters: List Backing
+    aliases: List Backing
+    # the C helpers that take a receiver and back no declaration
+    internal: SetVal member
+    # what the register says of each receiver it places
+    why: (MapVV member v: reason)
+    # the declaration each delegating receiver defers to
+    to: (MapVV member v: member)
+    # each declared native receiver in the order declared, and whether it is
+    # marked `.view`
+    declared: ListVal member
+    marked: (MapVV member v: bool)
+    # each declared type, and whether it is a valtype
+    valtype: (MapVV u32 v: bool)
+    # each C receiver in the order met, how its C takes it, and that C
+    # function's name in `texts`
+    received: ListVal member
+    kind: (MapVV member v: recv)
+    fn: (MapVV member v: u64)
+    # the valtype rows with a body, those whose body writes through the
+    # receiver, and each row's name in `texts`
+    bodied: SetVal member
+    writing: SetVal member
+    row: (MapVV member v: u64)
+    texts: List String
+    # the ids of the wildcard `*` and the emitter's placeholder `@@`
+    any: u32
+    hole: u32
+    # the register entries the check met, each by its name: a placeholder by
+    # its template and spelling
+    used: SetVal member
+    usedPlace: SetVal member
+    checked: u64
+    viewed: u64
+    byValue: u64
+    registered: u64
+    internals: u64
+    valtypes: u64
+    fails: List String
+}
+
+# checkView -- the view check over the declarations in `files`, the rows zc
+# carries, the emitter's source at `emitter` and the register at `register`
+# (checked against `systemdir`), findings into `fails`; answers the summary
+checkView: function {
+    files: (List String).view
+    emitter: StringView
+    register: StringView
+    systemdir: StringView
+    fails: List String
+} out String is {
+    vw: newView
+    if (readRegister :vw :register :systemdir) then {
+        for each f: files loop readDecls :vw path: f.stringView
+        readRows :vw
+        readEmitter :vw :emitter
+        judgeReceived :vw
+        judgeDeclared :vw
+        unusedEntries :vw
+    }
+    for each f: vw.fails loop fails.append from: f.copy
+    r: "\{vw.checked} native receivers const-checked in C (\{vw.viewed} '.view'), "
+    r.append "\{vw.byValue} by-value, \{vw.registered} registered, \{vw.internals} internal, "
+    r.append "\{vw.valtypes} valtype natives judged by their row or a register entry"
+    return r
+}
+
+# newView -- a view holding nothing yet
+newView: function out View is {
+    vw: (
+        View
+        words: znativedecls.newWords
+        placeholders: List Placeholder
+        emitters: List Backing
+        aliases: List Backing
+        internal: SetVal member
+        why: (MapVV member v: reason)
+        to: (MapVV member v: member)
+        declared: ListVal member
+        marked: (MapVV member v: bool)
+        valtype: (MapVV u32 v: bool)
+        received: ListVal member
+        kind: (MapVV member v: recv)
+        fn: (MapVV member v: u64)
+        bodied: SetVal member
+        writing: SetVal member
+        row: (MapVV member v: u64)
+        texts: List String
+        any: 0
+        hole: 0
+        used: SetVal member
+        usedPlace: SetVal member
+        checked: 0
+        viewed: 0
+        byValue: 0
+        registered: 0
+        internals: 0
+        valtypes: 0
+        fails: List String
+    )
+    vw.any = vw.words.id text: "*"
+    vw.hole = vw.words.id text: "@@"
+    return vw
+}
+
+# ---------------- the register ----------------
+
+# readRegister -- the register at `register` into `vw`; false, with the check's
+# errors as a finding, when it does not check
+readRegister: function {vw: View register: StringView systemdir: StringView} out bool is {
+    f: zdata.open file: register srcdirs: List String :systemdir
+    if f.ok.not then {
+        es: zdata.errorsText :f
+        vw.fails.append "\{register} does not check:\n\{es}"
+        return false
+    }
+    for each p: (items :f name: "placeholders") loop {
+        ty: textField :f v: p name: "type"
+        vw.placeholders.append (
+            Placeholder
+            template: (textField :f v: p name: "template")
+            spelling: (textField :f v: p name: "spelling")
+            type: (vw.words.id text: ty.stringView)
+        )
+    }
+    for each e: (items :f name: "emitters") loop (
+        vw.emitters.append
+        (backing :vw :f v: e name: (textField :f v: e name: "method") backs: "backs")
+    )
+    for each a: (items :f name: "aliases") loop {
+        nm: textField :f v: a name: "backing"
+        vw.aliases.append (backing :vw :f v: a name: nm backs: "methods")
+    }
+    for each t: (zdata.textsOf :f v: (zdata.definition :f name: "internal")) loop (
+        vw.internal.add
+        item: (memberOf :vw text: t.stringView)
+    )
+    reasons :vw :f name: "inline" why: reason.inPlace
+    reasons :vw :f name: "byvalue" why: reason.byValue
+    reasons :vw :f name: "writes" why: reason.writes
+    reasons :vw :f name: "unemitted" why: reason.unemitted
+    reasons :vw :f name: "ondemand" why: reason.onDemand
+    for each d: (items :f name: "delegations") loop {
+        m: memberOf :vw text: (textField :f v: d name: "member").stringView
+        vw.why.set key: m value: reason.delegates
+        vw.to.set key: m value: (memberOf :vw text: (textField :f v: d name: "to").stringView)
+    }
+    return true
+}
+
+# items -- the elements of the register's list `name`
+items: function {f: zdata.DataFile.view name: StringView} out ListVal ztypes.cval is {
+    return (zdata.itemsOf :f v: (zdata.definition :f :name))
+}
+
+# textField -- text field `name` of the register's value `v`
+textField: function {f: zdata.DataFile.view v: ztypes.cval name: StringView} out String is {
+    return (zdata.textOf :f v: (zdata.fieldOf :f :v :name))
+}
+
+# backing -- register value `v` as a Backing named `name`: an emitted method
+# when `name` is a bare method, backing `<Type>.<method>` of each of `backs`;
+# an alias when it is `<Type>.<method>`, backing that type's `methods`
+backing: function {
+    vw: View f: zdata.DataFile.view v: ztypes.cval name: String backs: StringView
+} out Backing is {
+    b: Backing name: (memberOf :vw text: name.stringView) backs: ListVal member
+    for each t: (zdata.textsOf :f v: (zdata.fieldOf :f :v name: backs)) loop {
+        m: member owner: b.name.owner name: (vw.words.id text: t.stringView)
+        if (t.stringView.contains needle: ".") then m = memberOf :vw text: t.stringView
+        b.backs.append m
+    }
+    return b
+}
+
+# reasons -- each receiver of the register's list `name`, placed for `why`
+reasons: function {vw: View f: zdata.DataFile.view name: StringView why: reason} is {
+    for each t: (zdata.textsOf :f v: (zdata.definition :f :name)) loop (
+        vw.why.set
+        key: (memberOf :vw text: t.stringView)
+        value: why
+    )
+}
+
+# memberOf -- `<Type>.<method>` as a member; a bare method has no owner
+memberOf: function {vw: View text: StringView} out member is {
+    d: (text.indexOf needle: ".").or d: text.length
+    if d == text.length then return (member owner: 0 name: (vw.words.id :text))
+    return (
+        member
+        owner: (vw.words.id text: (text.substring from: 0 to: d))
+        name: (vw.words.id text: (text.substring from: d + 1 to: text.length))
+    )
+}
+
+# memberText -- member `m` as `<Type>.<method>`
+memberText: function {vw: View.view m: member} out String is {
+    r: vw.words.textOf k: m.owner
+    r.append "."
+    r.append (vw.words.textOf k: m.name)
+    return r
+}
+
+# ---------------- the declarations ----------------
+
+# readDecls -- the types the file at `path` defines, and their native methods
+# that take a receiver
+readDecls: function {vw: View path: StringView} is {
+    pf: znativedecls.parseFile :path
+    for each k: pf.defs loop readType :vw tree: pf.tree id: k
+}
+
+# readType -- top-level definition `id`, when it is a type
+readType: function {vw: View tree: zast.Ast.view id: zast.nodeid} is {
+    nd: tree.nodes.get i: id
+    match (
+        nd
+    ) case namedoperation then {
+        op: tree.nodes.get i: nd.operation
+        match (
+            op
+        ) case objectdef then {
+            nm: zast.poolTextAt pool: tree.names ref: nd.name
+            k: op.kind
+            byRef: k.classDef or k.unionDef or k.protocolDef
+            byVal: k.recordDef or k.variantDef or k.facetDef
+            if k.typedefDef then byVal = isLower b: ((nm.stringView.byteAt i: 0).or d: 0)
+            if byRef or byVal or k.typedefDef then {
+                t: vw.words.id text: nm.stringView
+                vw.valtype.set key: t value: byVal
+                readMethods :vw owner: t :tree items: op.isItems
+                readMethods :vw owner: t :tree items: op.asItems
+            }
+        } else null
+    } else null
+}
+
+# readMethods -- each native method among `items` that takes a receiver, as a
+# member of type `owner`
+readMethods: function {vw: View owner: u32 tree: zast.Ast.view items: zast.kidspan} is {
+    for each k: (zast.kidIds ast: tree span: items) loop {
+        it: tree.nodes.get i: k
+        match (
+            it
+        ) case namedoperation then {
+            fd: tree.nodes.get i: it.operation
+            match (
+                fd
+            ) case functiondef then {
+                r: receiverOf :tree params: fd.parameters
+                if fd.isNative and r.absent.not then {
+                    nm: zast.poolTextAt pool: tree.names ref: it.name
+                    m: member :owner name: (vw.words.id text: nm.stringView)
+                    if (vw.marked.has key: m).not then vw.declared.append m
+                    vw.marked.set key: m value: r.viewed
+                }
+            } else null
+        } else null
+    }
+}
+
+# receiver -- whether a method takes a receiver, and how it is marked
+receiver: variant {
+    absent: null
+    plain: null
+    viewed: null
+} as { tag: u8.tag }
+
+# receiverOf -- the receiver among parameters `params`
+receiverOf: function {tree: zast.Ast.view params: zast.kidspan} out receiver is {
+    for each k: (zast.kidIds ast: tree span: params) loop {
+        p: tree.nodes.get i: k
+        match (
+            p
+        ) case labelvalue then {
+            if p.name == zast.wellKnown.slot.wkThis then return receiver.plain
+        } case namedoperation then {
+            r: typeReceiver :tree id: p.operation
+            if r.absent.not then return r
+        } else null
+    }
+    return receiver.absent
+}
+
+# typeReceiver -- whether parameter type `id` is the receiver: `this`, or
+# `this` with a marker
+typeReceiver: function {tree: zast.Ast.view id: zast.nodeid} out receiver is {
+    t: tree.nodes.get i: id
+    match (
+        t
+    ) case atomid then {
+        if t.name == zast.wellKnown.slot.wkThis then return receiver.plain
+    } case labelvalue then {
+        if t.name == zast.wellKnown.slot.wkThis then return receiver.plain
+    } case dottedpath then {
+        pa: tree.nodes.get i: t.parent
+        match (
+            pa
+        ) case atomid then {
+            if pa.name == zast.wellKnown.slot.wkThis then {
+                if (zast.markerKindOfLeaf ast: tree leaf: t.child
+                ).viewMarker then return receiver.viewed
+                return receiver.plain
+            }
+        } else null
+    } else null
+    return receiver.absent
+}
+
+# ---------------- the rows ----------------
+
+# readRows -- the valtype rows' bodies, and the C functions of every row,
+# template and fixed file zc carries
+readRows: function {vw: View} is {
+    for each u: nativec.units loop {
+        for each w: u.implementation.rows loop {
+            valtypeRow :vw owner: u.name.stringView :w
+            rowSigs :vw :w
+        }
+        for each t: u.implementation.templates loop {
+            for each s: t.sections loop (
+                scanText
+                :vw
+                text: s.text.stringView
+                template: t.name.stringView
+            )
+        }
+    }
+    fd: nativec.systemc.foundation
+    for each g: fd.groups loop {
+        for each w: g.rows loop rowSigs :vw :w
+    }
+    for each w: fd.structural loop rowSigs :vw :w
+    for each fl: fd.files loop {
+        for each p: fl.pieces loop scanText :vw text: p.text.stringView template: ""
+    }
+}
+
+# rowSigs -- the C functions of row `w`
+rowSigs: function {vw: View w: schema.row} is {
+    for each t: w.fragments loop scanText :vw text: t.stringView template: ""
+    for each p: w.pieces loop scanText :vw text: p.text.stringView template: ""
+    scanText :vw text: w.destroy.stringView template: ""
+}
+
+# valtypeRow -- row `w` of unit `owner`, when its key is a valtype's method:
+# whether it has a body, and whether that body writes through the receiver
+valtypeRow: function {vw: View owner: StringView w: schema.row} is {
+    key: w.key.stringView
+    d: (key.indexOf needle: ".").or d: key.length
+    if d == key.length then return
+    nm: key.substring from: d + 1 to: key.length
+    if (nm.contains needle: ".") or (nm.length == 0) then return
+    t: vw.words.id text: (key.substring from: 0 to: d)
+    if (isValtype :vw type: t).not then return
+    m: member owner: t name: (vw.words.id text: nm)
+    if w.body.length > 0 then vw.bodied.add item: m
+    if (writesReceiver body: w.body.stringView) then vw.writing.add item: m
+    r: "row ".string
+    r.append owner
+    r.append "."
+    r.append key
+    vw.row.set key: m value: vw.texts.length
+    vw.texts.append from: r.take
+}
+
+# writesReceiver -- body assigns, increments or decrements the receiver hole
+# (`@V@`, or `@L@` of an operator), or takes its address
+writesReceiver: function {body: StringView} out bool is {
+    i: u64
+    for (i + 3) <= body.length loop {
+        if (isReceiverHole text: body at: i) when (
+            (writtenAfter text: body from: i + 3) or (writtenBefore text: body at: i)
+        ) then return true
+        i = i + 1
+    }
+    return false
+}
+
+# isReceiverHole -- `@V@` or `@L@` stands at `at`
+isReceiverHole: function {text: StringView at: u64} out bool is {
+    if ((text.byteAt i: at).or d: 0) != 64 then return false
+    if ((text.byteAt i: at + 2).or d: 0) != 64 then return false
+    c: (text.byteAt i: at + 1).or d: 0
+    return (c == 86) or (c == 76)
+}
+
+# writtenAfter -- the hole ending at `from` is followed by `=` (not `==`),
+# `++` or `--`
+writtenAfter: function {text: StringView from: u64} out bool is {
+    j: skipBlanks :text :from
+    a: (text.byteAt i: j).or d: 0
+    b: (text.byteAt i: j + 1).or d: 0
+    if a == 61 then return (b != 61) and (b != 0)
+    return (a == 43) and (b == 43) or ((a == 45) and (b == 45))
+}
+
+# writtenBefore -- the hole at `at` follows `&`, `++` or `--`
+writtenBefore: function {text: StringView at: u64} out bool is {
+    if at == 0 then return false
+    if ((text.byteAt i: at - 1).or d: 0) == 38 then return true
+    j: at
+    for j > 0 while (isBlank b: ((text.byteAt i: j - 1).or d: 0)) loop j = j - 1
+    if j < 2 then return false
+    a: (text.byteAt i: j - 2).or d: 0
+    b: (text.byteAt i: j - 1).or d: 0
+    return (a == 43) and (b == 43) or ((a == 45) and (b == 45))
+}
+
+# ---------------- C signatures ----------------
+
+# scanText -- each C function signature in `text` that takes a receiver: a line
+# opening with `static` or `ZINLINE` and calling a `z_` name, read on to its
+# first `)`. `template` is the template the text belongs to, "" for none
+scanText: function {vw: View text: StringView template: StringView} is {
+    buf: String
+    open: false
+    for each l: text.lines loop {
+        if open then {
+            buf.append " "
+            buf.append l
+        } else if (opensSig line: l) then {
+            buf = l.string
+            open = true
+        }
+        if open when (buf.stringView.contains needle: ")") then {
+            open = false
+            readSig :vw sig: buf.stringView :template emitted: false
+        }
+    }
+}
+
+# opensSig -- `line` opens a signature: `static` or `ZINLINE`, a blank, and a
+# `z_` name followed by `(`
+opensSig: function {line: StringView} out bool is {
+    w: u64
+    if (line.startsWith prefix: "static") then w = 6
+    if (line.startsWith prefix: "ZINLINE") then w = 7
+    if w == 0 then return false
+    if (isBlank b: ((line.byteAt i: w).or d: 0)).not then return false
+    return (callAt text: line from: w) < line.length
+}
+
+# callAt -- where the first `z_` name followed by `(` (blanks between) starts in
+# `text` at or after `from`; the text's length when none does
+callAt: function {text: StringView from: u64} out u64 is {
+    i: from
+    for (i + 2) < text.length loop {
+        if (startsZ :text at: i) then {
+            e: nameEnd :text from: i + 2
+            if e > (i + 2) when (
+                ((text.byteAt i: (skipBlanks :text from: e)).or d: 0) == 40
+            ) then return i
+        }
+        i = i + 1
+    }
+    return text.length
+}
+
+# typeStart -- where the first `z_<name>_t` in `text` starts; the text's length
+# when there is none
+typeStart: function {text: StringView} out u64 is {
+    i: u64
+    for (i + 2) < text.length loop {
+        if (startsZ :text at: i) when (typeEnd :text at: i) > 0 then return i
+        i = i + 1
+    }
+    return text.length
+}
+
+# typeEnd -- where the longest `z_<name>_t` starting at `at` ends; 0 when none
+# does
+typeEnd: function {text: StringView at: u64} out u64 is {
+    j: nameEnd :text from: at + 2
+    for j >= (at + 5) loop {
+        if ((text.byteAt i: j - 2).or d: 0) == 95 when (
+            ((text.byteAt i: j - 1).or d: 0) == 116
+        ) then return j
+        j = j - 1
+    }
+    return 0
+}
+
+# readSig -- signature `sig`, when its first parameter is a pointer to or a value
+# of the function's own type: a C receiver of the declaration it backs
+readSig: function {vw: View sig: StringView template: StringView emitted: bool} is {
+    c: callAt text: sig from: 0
+    if c == sig.length then return
+    ne: nameEnd text: sig from: c + 2
+    ps: (skipBlanks text: sig from: ne) + 1
+    fname: sig.substring from: c to: ne
+    rest: sig.substring from: ps to: sig.length
+    pe: (rest.indexOf needle: ",").or d: rest.length
+    ce: (rest.indexOf needle: ")").or d: rest.length
+    if ce < pe then pe = ce
+    if pe == rest.length then return
+    p1: rest.substring from: 0 to: pe
+    ts: typeStart text: p1
+    if ts == p1.length then return
+    cty: p1.substring from: ts + 2 to: (typeEnd text: p1 at: ts) - 2
+    if fname.length <= (cty.length + 3) then return
+    if (fname.substring from: 2 to: cty.length + 2) != cty then return
+    if ((fname.byteAt i: cty.length + 2).or d: 0) != 95 then return
+    cm: camel s: (fname.substring from: cty.length + 3 to: fname.length)
+    if cm.length == 0 then return
+    k: recv.copied
+    if (p1.contains needle: "*") then {
+        k = recv.writable
+        if (p1.contains needle: "const") then k = recv.readOnly
+    }
+    if emitted then {
+        emittedSig :vw method: cm.stringView :k
+        return
+    }
+    placeSig :vw type: cty :template method: cm.stringView :k :fname
+}
+
+# emittedSig -- a function the emitter builds: the register says which
+# declarations a function ending in `method` backs
+emittedSig: function {vw: View method: StringView k: recv} is {
+    mid: vw.words.id text: method
+    backs: ListVal member
+    hit: false
+    for each b: vw.emitters loop {
+        if b.name.name == mid then {
+            backs = b.backs.copy
+            hit = true
+        }
+    }
+    if hit then {
+        vw.used.add item: (member owner: 0 name: mid)
+        f: "the emitter's z_..._".string
+        f.append method
+        for each d: backs loop received :vw m: d :k fname: f.stringView
+        return
+    }
+    vw.fails.append "the emitter builds a z_..._\{method} with a receiver but the register's emitters do not say which declaration it backs"
+}
+
+# placeSig -- a function of a row, a template or a fixed file whose receiver is
+# of C type `type`: a template placeholder stands for its declared type, a hole
+# `@Name@` for Name, and an alias expands to each method it backs
+placeSig: function {
+    vw: View type: StringView template: StringView method: StringView k: recv fname: StringView
+} is {
+    t: holeName text: type
+    owner: placeholderType :vw :template spelling: t
+    if owner == 0 then {
+        if (t.contains needle: "@@") then return
+        owner = vw.words.id text: t
+    }
+    m: member :owner name: (vw.words.id text: method)
+    backs: ListVal member
+    hit: false
+    for each a: vw.aliases loop {
+        if a.name == m then {
+            backs = a.backs.copy
+            hit = true
+        }
+    }
+    if hit then vw.used.add item: m
+    if hit.not then backs.append m
+    for each b: backs loop received :vw m: b :k :fname
+}
+
+# placeholderType -- the declared type the register says `spelling` of
+# `template` stands for; 0 for none
+placeholderType: function {vw: View template: StringView spelling: StringView} out u32 is {
+    if template.length == 0 then return 0
+    r: u32
+    for each p: vw.placeholders loop {
+        if (
+            (p.template.stringView == template) and (p.spelling.stringView == spelling)
+        ) then r = p.type
+    }
+    if r > 0 then (
+        vw.usedPlace.add
+        item: (member owner: (vw.words.id text: template) name: (vw.words.id text: spelling))
+    )
+    return r
+}
+
+# received -- C function `fname` takes member `m`'s receiver the way `k` says.
+# A prototype and its definition must agree
+received: function {vw: View m: member k: recv fname: StringView} is {
+    got: vw.kind.get key: m
+    match (
+        got
+    ) case some then {
+        if got.tag != k.tag then {
+            f: vw.texts.get i: ((vw.fn.get key: m).or d: 0)
+            vw.fails.append "\{memberText :vw :m} is backed by both a \{recvText k: got} and a \{(
+                recvText
+                :k
+            )} receiver (\{f}) -- a prototype and its definition disagree"
+            return
+        }
+    } case none then vw.received.append m
+    vw.kind.set key: m value: k
+    vw.fn.set key: m value: vw.texts.length
+    vw.texts.append from: fname.string
+}
+
+# recvText -- how `k` takes the receiver, as a finding says it
+recvText: function {k: recv} out String is {
+    match (
+        k
+    ) case readOnly then {
+        return "const".string
+    } case writable then {
+        return "ptr".string
+    } case copied then {
+        return "byvalue".string
+    }
+}
+
+# ---------------- the emitter ----------------
+
+# readEmitter -- each `"static ...` literal in the emitter's source at `emitter`,
+# every interpolation in it read as the placeholder `@@`
+readEmitter: function {vw: View emitter: StringView} is {
+    rd: io.readText path: emitter
+    src: String
+    match (
+        rd
+    ) case ok then {
+        src = rd.copy
+    } case err then {
+        vw.fails.append "cannot read the emitter's source \{emitter}"
+        return
+    }
+    for each l: src.stringView.lines loop {
+        at: l.indexOf needle: "\"static "
+        match (
+            at
+        ) case some then {
+            lit: folded text: (l.substring from: at + 1 to: l.length)
+            readSig :vw sig: lit.stringView template: "" emitted: true
+        } case none then null
+    }
+}
+
+# folded -- `text` with each `\{...}` replaced by `@@`
+folded: function {text: StringView} out String is {
+    r: String
+    i: u64
+    for i < text.length loop {
+        b: (text.byteAt :i).or d: 0
+        if b == 92 when ((text.byteAt i: i + 1).or d: 0) == 123 then {
+            close: (text.substring from: i to: text.length).indexOf needle: "}"
+            match (
+                close
+            ) case some then {
+                r.append "@@"
+                i = i + close + 1
+                continue
+            } case none then null
+        }
+        r.appendByte b
+        i = i + 1
+    }
+    return r
+}
+
+# ---------------- the judgement ----------------
+
+# judgeReceived -- each C receiver against its declaration: const exactly when
+# marked `.view`; a C helper with no declaration is in the register's internal
+judgeReceived: function {vw: View} is {
+    ms: vw.received.copy
+    for each m: ms loop {
+        k: (vw.kind.get key: m).or d: recv.copied
+        f: (vw.texts.get i: ((vw.fn.get key: m).or d: 0)).copy
+        mt: memberText :vw :m
+        marked: vw.marked.get key: m
+        match (
+            marked
+        ) case some then {
+            if k.copied then {
+                vw.byValue = vw.byValue + 1
+            } else {
+                judgeConst :vw mt: mt.stringView f: f.stringView isConst: k.readOnly isView: marked
+            }
+        } case none then {
+            if (vw.internal.has item: m) then {
+                vw.used.add item: m
+                vw.internals = vw.internals + 1
+                continue
+            }
+            vw.fails.append "\{f} carries a \{(
+                vw.words.textOf
+                k: m.owner
+            )} receiver but resolves to no \{mt} declaration -- back it with a declaration, or list \{mt} in the register's internal"
+        }
+    }
+}
+
+# judgeConst -- C function `f` takes `mt`'s receiver through a pointer: const
+# exactly when `mt` is marked `.view`
+judgeConst: function {vw: View mt: StringView f: StringView isConst: bool isView: bool} is {
+    vw.checked = vw.checked + 1
+    if isConst and isView then vw.viewed = vw.viewed + 1
+    if (
+        isConst and isView.not
+    ) then vw.fails.append "\{f} has a const receiver but \{mt} is not declared '.view' -- the marker is available and unused"
+    if (
+        isConst.not and isView
+    ) then vw.fails.append "\{mt} is declared '.view' but \{f} has a NON-const receiver -- the C may write through it"
+}
+
+# judgeDeclared -- each declared receiver is const-checked, judged by its
+# valtype row or the register, or placed by the register
+judgeDeclared: function {vw: View} is {
+    ms: vw.declared.copy
+    for each m: ms loop {
+        mt: memberText :vw :m
+        if (vw.kind.has key: m) then {
+            if (vw.why.has key: m) then {
+                f: vw.texts.get i: ((vw.fn.get key: m).or d: 0)
+                vw.fails.append "\{mt} is in the register but \{f} does receive it -- drop the entry, the const check covers it"
+            }
+        } else if (isValtype :vw type: m.owner) then {
+            judgeValtype :vw :m mt: mt.stringView
+        } else {
+            judgeRegistered :vw :m mt: mt.stringView
+        }
+    }
+}
+
+# judgeValtype -- valtype receiver `m`: its row's body, or the register, says
+# whether its C writes through the receiver; marked `.view` exactly when not
+judgeValtype: function {vw: View m: member mt: StringView} is {
+    writes: false
+    src: String
+    if (vw.bodied.has item: m) then {
+        writes = vw.writing.has item: m
+        src = (vw.texts.get i: ((vw.row.get key: m).or d: 0)).copy
+    } else {
+        w: valtypeWhy :vw :m
+        match (
+            w
+        ) case some then {
+            if (w.writes or w.inPlace or w.byValue).not then {
+                vw.fails.append "\{mt} is registered as \{(
+                    reasonText
+                    why: w
+                )}, but a valtype receiver is written (writes) or read in place (inline / byvalue)"
+                return
+            }
+            writes = w.writes
+            src = "the emitter-built C (\{reasonText why: w})"
+        } case none then {
+            vw.fails.append "\{mt} is a valtype native with no row body and no register entry -- say what the emitter-built C does with the receiver (writes / inline / byvalue)"
+            return
+        }
+    }
+    vw.valtypes = vw.valtypes + 1
+    isView: (vw.marked.get key: m).or d: false
+    if (
+        writes.not and isView.not
+    ) then vw.fails.append "\{src} never writes through the receiver but \{mt} is not declared '.view' -- the marker is available and unused"
+    if (
+        writes and isView
+    ) then vw.fails.append "\{mt} is declared '.view' but \{src} writes through the receiver"
+}
+
+# valtypeWhy -- what the register says of valtype receiver `m`: its own entry,
+# else its type's `<Type>.*`, else its method's `*.<method>`
+valtypeWhy: function {vw: View m: member} out optionval reason is {
+    k: m
+    if (vw.why.has key: k).not then k = member owner: m.owner name: vw.any
+    if (vw.why.has key: k).not then k = member owner: vw.any name: m.name
+    if (vw.why.has key: k) then vw.used.add item: k
+    return (vw.why.get key: k)
+}
+
+# judgeRegistered -- reftype receiver `m`, which no C function the check reads
+# takes: the register says why, and a delegation defers to a declared receiver
+# marked `.view` whenever `m` is
+judgeRegistered: function {vw: View m: member mt: StringView} is {
+    w: vw.why.get key: m
+    match (
+        w
+    ) case some then {
+        vw.used.add item: m
+        vw.registered = vw.registered + 1
+        if w.delegates.not then return
+        to: (vw.to.get key: m).or d: (member owner: 0 name: 0)
+        tt: memberText :vw m: to
+        tm: vw.marked.get key: to
+        match (
+            tm
+        ) case some then {
+            if (
+                ((vw.marked.get key: m).or d: false) and tm.not
+            ) then vw.fails.append "\{mt} is declared '.view' but delegates to \{tt}, which is not -- the reader it defers to must be one first"
+        } case none then vw.fails.append "\{mt} is registered as delegating to \{tt}, which is not a declared native receiver"
+    } case none then vw.fails.append "\{mt} declares a receiver that reaches no C function the check can read -- say why in the register (inline / byvalue / unemitted / ondemand / a delegation)"
+}
+
+# isValtype -- declared type `type` is a valtype
+isValtype: function {vw: View.view type: u32} out bool is {
+    return ((vw.valtype.get key: type).or d: false)
+}
+
+# unusedEntries -- each register entry the check never met: it places nothing,
+# and a later receiver of its name would pass unchecked
+unusedEntries: function {vw: View} is {
+    r: List String
+    for each p: vw.placeholders loop {
+        k: (
+            member
+            owner: (vw.words.id text: p.template.stringView)
+            name: (vw.words.id text: p.spelling.stringView)
+        )
+        if (vw.usedPlace.has item: k
+        ).not then r.append "the register's placeholder \{p.spelling} of template \{p.template} stands for no receiver -- drop it"
+    }
+    for each e: vw.emitters loop unusedEntry :vw m: e.name entries: "emitters" into: r
+    for each a: vw.aliases loop unusedEntry :vw m: a.name entries: "aliases" into: r
+    for each m: vw.internal loop unusedEntry :vw :m entries: "internal" into: r
+    for each m: vw.why loop {
+        w: (vw.why.get key: m).or d: reason.delegates
+        unusedEntry :vw :m entries: (reasonText why: w).stringView into: r
+    }
+    for each f: r loop vw.fails.append from: f.copy
+}
+
+# unusedEntry -- a finding into `into` when entry `m` of the register's list
+# `entries` was never met
+unusedEntry: function {vw: View.view m: member entries: StringView into: List String} is {
+    if (vw.used.has item: m) then return
+    into.append "the register's \{entries} entry \{(
+        memberText
+        :vw
+        :m
+    )} places no receiver the check meets -- drop it"
+}
+
+# reasonText -- `why` as the register's list for it names it
+reasonText: function {why: reason} out String is {
+    match (
+        why
+    ) case inPlace then {
+        return "inline".string
+    } case byValue then {
+        return "byvalue".string
+    } case writes then {
+        return "writes".string
+    } case unemitted then {
+        return "unemitted".string
+    } case onDemand then {
+        return "ondemand".string
+    } case delegates then {
+        return "a delegation".string
+    }
+}
+
+# ---------------- bytes ----------------
+
+# camel -- C name part `s` as zerolang spells it: each `_` dropped, the letter
+# after it upper-cased
+camel: function {s: StringView} out String is {
+    r: String
+    up: false
+    i: u64
+    for i < s.length loop {
+        b: (s.byteAt :i).or d: 0
+        i = i + 1
+        if b == 95 then {
+            up = true
+            continue
+        }
+        c: b
+        if up and (isLower :b) then c = b - 32
+        r.appendByte c
+        up = false
+    }
+    return r
+}
+
+# holeName -- the name of hole `@Name@` (an identifier between two `@`); any
+# other text as it is
+holeName: function {text: StringView} outx StringView is {
+    if text.length < 3 then return text
+    if ((text.byteAt i: 0).or d: 0) != 64 then return text
+    if ((text.byteAt i: text.length - 1).or d: 0) != 64 then return text
+    inner: text.substring from: 1 to: text.length - 1
+    if (inner.contains needle: "@") then return text
+    f: (inner.byteAt i: 0).or d: 0
+    if (f >= 48) and (f <= 57) then return text
+    return inner
+}
+
+# startsZ -- `z_` stands at `at`
+startsZ: function {text: StringView at: u64} out bool is {
+    return (((text.byteAt i: at).or d: 0) == 122) and (((text.byteAt i: at + 1).or d: 0) == 95)
+}
+
+# nameEnd -- where the run of name bytes (letters, digits, `_`, `@`) from
+# `from` ends
+nameEnd: function {text: StringView from: u64} out u64 is {
+    i: from
+    for i < text.length while (isNameByte b: ((text.byteAt :i).or d: 0)) loop i = i + 1
+    return i
+}
+
+# skipBlanks -- the first byte at or after `from` that is no space or tab
+skipBlanks: function {text: StringView from: u64} out u64 is {
+    i: from
+    for i < text.length while (isBlank b: ((text.byteAt :i).or d: 0)) loop i = i + 1
+    return i
+}
+
+# isNameByte -- a letter, a digit, `_` or `@`
+isNameByte: function {b: u8} out bool is {
+    if (isLower :b) or ((b >= 65) and (b <= 90)) then return true
+    return (b >= 48) and (b <= 57) or (b == 95) or (b == 64)
+}
+
+# isLower -- a lower-case ASCII letter
+isLower: function {b: u8} out bool is {
+    return (b >= 97) and (b <= 122)
+}
+
+# isBlank -- a space or a tab
+isBlank: function {b: u8} out bool is {
+    return (b == 32) or (b == 9)
+}

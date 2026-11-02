@@ -151,6 +151,7 @@ zcWord: list {
     fNativecFiles: "--nativec-files"
     fMarkNatives: "--mark-natives"
     fEmitter: "--emitter"
+    fRegister: "--register"
     fEager: "--eager"
     fSrc: "--src"
     fSystem: "--system"
@@ -249,7 +250,8 @@ printCommandHelp: function {zv: zast.Vocab.view cmd: StringView} is {
         io.eprintln "Dump the typecheck model as SQL to -o FILE (or stdout)."
         io.eprintln "--canon emits the id-normalized model instead."
     } else if w == zcWord.slot.vNatives then {
-        io.eprintln "usage: zc natives [show WHAT [--c] | check WHAT [--emitter FILE] | --write-source FILE]"
+        io.eprintln "usage: zc natives [show WHAT [--c] | check WHAT [--emitter FILE] [--register FILE]"
+        io.eprintln "       | --write-source FILE]"
         io.eprintln "       [--system DIR]"
         io.eprintln "Print the conversions section of src/runtime/natives.tbl, derived from"
         io.eprintln "the numeric rule. natives-tbl-guard diffs this against the checked-in"
@@ -266,7 +268,10 @@ printCommandHelp: function {zv: zast.Vocab.view cmd: StringView} is {
         io.eprintln "every native function has a row, every hole names a declared type, arm or"
         io.eprintln "member, and a value row's body calls nothing (make native-guard). check piece"
         io.eprintln "checks that every text calling what a piece defines needs it, the emitter's"
-        io.eprintln "source (--emitter FILE) among them (make piece-guard)."
+        io.eprintln "source (--emitter FILE) among them (make piece-guard). check view checks"
+        io.eprintln "that a native receiver marked .view is const in the C taking it, and a const"
+        io.eprintln "one is marked; the data file --register FILE places each receiver no C"
+        io.eprintln "function the check reads takes (make view-guard)."
     } else if w == zcWord.slot.vData then {
         io.eprintln "usage: zc data <file.zd> [--src DIR]... [--system DIR]"
         io.eprintln "Check a data file (docs/zdata.pdoc) and print every value it defines, one"
@@ -859,8 +864,11 @@ NativesArgs: class {
     onlyC: bool
     # --system DIR
     sysFlag: String
-    # --emitter FILE: the emitter's source, which `check piece` reads
+    # --emitter FILE: the emitter's source, which `check piece` and `check view`
+    # read
     emitter: String
+    # --register FILE: the register `check view` reads
+    register: String
     # an argument none of these is, already reported
     bad: bool
 }
@@ -875,6 +883,7 @@ nativesArgs: function {argv: (List String).view n: u64 zv: zast.Vocab.view} out 
         onlyC: false
         sysFlag: String
         emitter: String
+        register: String
         bad: false
     )
     i: 2.u64
@@ -903,6 +912,8 @@ nativesArgs: function {argv: (List String).view n: u64 zv: zast.Vocab.view} out 
             r.sysFlag = v.take
         } else if fw == zcWord.slot.fEmitter then {
             r.emitter = v.take
+        } else if fw == zcWord.slot.fRegister then {
+            r.register = v.take
         } else {
             io.eprintln "zc natives: unexpected argument '\{a}'"
             r.bad = true
@@ -928,6 +939,7 @@ runNatives: function {argv: (List String).view n: u64 zv: zast.Vocab.view} out i
         what: na.checkWhat.stringView
         systemdir: sysdir.stringView
         emitter: na.emitter.stringView
+        register: na.register.stringView
     )
     if na.showWhat.length > 0 then {
         t: znativec.showNative what: na.showWhat.stringView systemdir: sysdir.stringView c: na.onlyC
