@@ -5785,9 +5785,29 @@ peeledTyperef: function {
     leafId: zast.nameid
     thisName: StringView
 } out ztypes.tid is {
+    # a root that names nothing is the one report: it is deferred as a bare
+    # type-ref's is (stampOnePendingTyperef), and the shell the peel mints for
+    # it has no member to ask a leaf of
+    rootU: unknownPathRoot :st :ast :nid rf: scope origin: unitDecl
+    if rootU.isZero.not then (
+        recordNodeNameId
+        :st
+        nameId: (atomNameId :ast n: (ast.nodes.get i: rootU))
+        nid: rootU
+        :scope
+    )
     if (ast.nodes.get i: parentId).dottedpath then {
         pathTid: resolveTyperefShell :st :scope :ast :unitDecl nid: parentId :thisName
-        reportPathLeaf :st :scope :ast :unitDecl :nid :leafId parentTid: pathTid
+        if rootU.isZero then (
+            reportPathLeaf
+            :st
+            :scope
+            :ast
+            :unitDecl
+            :nid
+            :leafId
+            parentTid: pathTid
+        )
         return pathTid
     }
     reportPeeledLeaf :st :scope :ast :unitDecl :nid :leafId
@@ -22898,9 +22918,20 @@ typerefExcused: function {
             return true
         }
     }
-    if (nameClaimedByScopeId :ast :st unitDecl: origin scope: rf nameId: pval) then return true
-    # closure-wide: a bare name may resolve to a member of ANY loaded unit
-    # (the demand resolvers search the closure; the typeref walk does not)
+    return (nameKnownAt :st :ast :rf :origin nameId: pval)
+}
+
+# nameKnownAt -- a name a type-ref's lookup did not reach that is still known: one
+# a scope claims, or one any loaded unit resolves (the demand resolvers search
+# the closure; the typeref walk does not)
+nameKnownAt: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    rf: ztypes.declid
+    origin: ztypes.declid
+    nameId: zast.nameid
+} out bool is {
+    if (nameClaimedByScopeId :ast :st unitDecl: origin scope: rf :nameId) then return true
     puds: programUnitDecls :st
     for each ud: puds loop {
         uro2: (
@@ -22908,11 +22939,49 @@ typerefExcused: function {
             :st
             :ast
             unitDecl: ud
-            name: pval
+            name: nameId
         )
         if uro2.some then return true
     }
     return false
+}
+
+# unknownPathRoot -- the root atom of a dotted type-ref (`nosuch.os`) whose root
+# names nothing: no unit, no declaration in scope, no generic parameter, nothing
+# a scope claims or a loaded unit resolves. 0 for any other ref -- a bare name
+# under strip markers (`Crate.private.view`) is reported as the bare name it is.
+unknownPathRoot: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    # the dotted type-ref
+    nid: zast.nodeid
+    rf: ztypes.declid
+    origin: ztypes.declid
+} out zast.nodeid is {
+    none: zast.nodeid.zero
+    if (ast.nodes.get i: nid).dottedpath.not then return none
+    if (markedBareAtom :ast :nid).isZero.not then return none
+    cur: nid
+    rootN: zast.nodeid
+    for cur.isZero.not loop {
+        n: ast.nodes.get i: cur
+        if n.atomid then {
+            rootN = cur
+            cur = zast.nodeid.zero
+        } else if n.dottedpath then {
+            cur = n.parent
+        } else {
+            cur = zast.nodeid.zero
+        }
+    }
+    if rootN.isZero then return none
+    rid: atomNameId :ast n: (ast.nodes.get i: rootN)
+    if rid.isZero or (isNumericLiteralNameAt :ast ref: rid) then return none
+    if (st.typing.gpNames.has item: rid) then return none
+    if (rootNamesAnyUnit :st scope: rf nameId: rid) then return none
+    if (envLookup :st scope: rf nameId: rid).declId.isZero.not then return none
+    if (nameKnownAt :st :ast :rf :origin nameId: rid) then return none
+    return rootN
 }
 
 # stampOnePendingTyperef -- resolve one deferred type-ref and stamp it. The ref
