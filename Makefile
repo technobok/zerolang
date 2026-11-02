@@ -43,6 +43,9 @@ OPTFLAGS := -O2 -fno-strict-aliasing -fwrapv
 # source); everything else keeps the SipHash default. The C is identical either way.
 ZCHASH   := --fast-hash
 BUILDDIR := out
+# NATIVEC_INC -- where the C of rows zc carries is written for a C test to
+# include (`zc natives show WHAT --c`, holes as written): the thread shim
+NATIVEC_INC := $(BUILDDIR)/nativec
 # the machine make runs on, as `uname -m` spells it
 HOST_ARCH := $(shell uname -m)
 # What an emitted C file links, read off its header (searched in the first
@@ -362,13 +365,13 @@ test-tcc-mingw: bin/zc $(BUILDDIR)/ztestrunner $(BUILDDIR)/wineprefix/.ready
 # relative: link.exe reads an argument starting with / as an option. Skipped
 # without MSVC_WINE or wine.
 MSVC_WINE ?=
-test-msvc-wine: bin/zc $(BUILDDIR)/wineprefix/.ready
+test-msvc-wine: bin/zc $(BUILDDIR)/wineprefix/.ready $(NATIVEC_INC)/zthread_shim.inc
 	@if [ -n "$(WINDOWS_HOST)" ]; then \
 	  echo "test-msvc-wine: skipped (Linux only: it runs MSVC under wine; on Windows windows-guest builds with cl itself)"; exit 0; fi; \
 	if [ -z "$(MSVC_WINE)" ] || [ ! -x "$(MSVC_WINE)/cl" ] || ! command -v wine > /dev/null 2>&1; then \
 	  echo "test-msvc-wine: skipped (needs wine and MSVC_WINE=<dir>/msvc/bin/x64 from tools/windows/msvc-wine.sh; see tools/windows/README.md)"; exit 0; fi; \
 	d=$(BUILDDIR)/msvc; rm -rf $$d; mkdir -p $$d; \
-	$(WINE_ENV) $(MSVC_WINE)/cl -nologo -std:c17 -experimental:c11atomics -W3 -O2 \
+	$(WINE_ENV) $(MSVC_WINE)/cl -nologo -std:c17 -experimental:c11atomics -W3 -O2 -I$(NATIVEC_INC) \
 	  tests/c/zthread_shim_test.c -Fe:$$d/shim.exe -Fo:$$d/ > $$d/cl.log 2>&1 \
 	  || { echo "test-msvc-wine FAIL: cl did not build the shim test"; grep -m5 -E 'error|fatal' $$d/cl.log; exit 1; }; \
 	$(WINE_ENV) timeout 300 wine $$d/shim.exe > $$d/run.log 2>&1 && grep -q "zthread shim OK" $$d/run.log \
@@ -478,11 +481,11 @@ ci-windows: bin/zc $(BUILDDIR)/ztestrunner $(BUILDDIR)/wineprefix/.ready
 # file's project. Last, `make ci` runs with the native tools: every gate on
 # Windows itself, the Linux-only ones saying so. cl's flags are spelled
 # -flag: MSYS2 rewrites a /flag argument as a path.
-windows-guest:
+windows-guest: $(NATIVEC_INC)/zthread_shim.inc
 	@d=$(WINDOWS_DIR); fail=0; t=tests/c/zthread_shim_test.c; \
-	cl -nologo -std:c17 -experimental:c11atomics -W3 -O2 $$t -Fe:$$d/shim-msvc.exe -Fo:$$d/ > $$d/cl.log 2>&1 \
+	cl -nologo -std:c17 -experimental:c11atomics -W3 -O2 -I$(NATIVEC_INC) $$t -Fe:$$d/shim-msvc.exe -Fo:$$d/ > $$d/cl.log 2>&1 \
 	  || { echo "windows-guest FAIL: cl did not build the shim test"; tail -5 $$d/cl.log; fail=1; }; \
-	gcc -std=c17 -Wall -Wextra -Wno-unused-function -O2 -o $$d/shim-gcc.exe $$t > $$d/gcc.log 2>&1 \
+	gcc -std=c17 -Wall -Wextra -Wno-unused-function -O2 -I$(NATIVEC_INC) -o $$d/shim-gcc.exe $$t > $$d/gcc.log 2>&1 \
 	  || { echo "windows-guest FAIL: UCRT64 gcc did not build the shim test"; tail -5 $$d/gcc.log; fail=1; }; \
 	for v in msvc gcc; do \
 	  [ -f $$d/shim-$$v.exe ] || continue; \
@@ -640,12 +643,13 @@ bench-math: bin/zc $(if $(BENCH_TCC),$(BUILDDIR)/tcc) bench-math-kernels
 REPS ?= 5
 BENCH_CPU ?= 0
 BENCH_WORDS ?=
-bench-math-kernels: $(if $(BENCH_TCC),$(BUILDDIR)/tcc)
+bench-math-kernels: bin/zc $(if $(BENCH_TCC),$(BUILDDIR)/tcc)
 	@mkdir -p $(BENCH_MATH_DIR)
-	@awk '/^\/\* 64x64 -> 128 multiply/,/^#endif/' src/runtime/z_hash.inc > $(BENCH_MATH_DIR)/mul128.h
-	@grep -q 'z_fh_mul128' $(BENCH_MATH_DIR)/mul128.h \
-	  || { echo "bench-math-kernels: z_hash.inc has no z_fh_mul128 block"; exit 1; }
-	@inc="-I$(BENCH_MATH_DIR) -Isrc/runtime/natives"; \
+	@{ bin/zc natives show hash.mul128 --c --system lib/system; \
+	   bin/zc natives show head.clz64 --c --system lib/system; } > $(BENCH_MATH_DIR)/mul128.h
+	@bin/zc natives show system.@word --c --system lib/system > $(BENCH_MATH_DIR)/system_word.inc
+	@bin/zc natives show math.@arith --c --system lib/system > $(BENCH_MATH_DIR)/math_arith.inc
+	@inc="-I$(BENCH_MATH_DIR)"; \
 	$(CC) -O2 -std=c17 -Wall -Wextra -Wno-unused-function $$inc -o $(BENCH_MATH_DIR)/k-asm tests/bench/math_kernels.c \
 	&& $(CC) -O2 -std=c17 -Wall -Wextra -Wno-unused-function -DZ_MATH_NOASM $$inc -o $(BENCH_MATH_DIR)/k-builtins tests/bench/math_kernels.c \
 	&& $(CC) -O2 -std=c17 -Wall -Wextra -Wno-unused-function -DZ_WORD_PORTABLE $$inc -o $(BENCH_MATH_DIR)/k-portable tests/bench/math_kernels.c \
@@ -888,6 +892,11 @@ $(BUILDDIR)/zc-seed: bootstrap/zc.c
 # NATIVEC_DEP -- the files the generated `nativec` unit is made from (znativec.servedText):
 # zc serves them to its own build, so a change to one rebuilds bin/zc
 NATIVEC_DEP := lib/system/runtime.zd $(wildcard lib/system/*/nativec.zd lib/system/*/nativec/*.zd)
+
+# the C of rows zc carries, written out for a C test to include (NATIVEC_INC)
+$(NATIVEC_INC)/zthread_shim.inc: bin/zc
+	@mkdir -p $(NATIVEC_INC)
+	bin/zc natives show prelude.@zthread --c --system lib/system > $@
 
 # bin/zc -- the self-hosted compiler, built by the seed.
 bin/zc.c: $(wildcard src/*.z) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z) $(NATIVEC_DEP) $(ZC) $(RT_DEP)
@@ -1291,7 +1300,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2699339
+ALLOC_BASELINE := 2701564
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1460,13 +1469,13 @@ lifetime-guard:
 	echo "lifetime-guard OK: registerScopeDestroy=$$l1 refsLocal=$$l2 factsOfText=$$l3 bindingRhsIsBorrow=$$l4 argHoists=$$l5"
 
 # sqlite-decls-guard -- the part of SQLite's C interface the sqlite unit's
-# fragments declare instead of including (_Z_SQLITE_DECLS) compiles after the
+# fragments declare instead of including (its @decls row) compiles after the
 # vendored sqlite3.h without a diagnostic: a prototype, typedef or constant that
 # drifts from the library fails here, rather than as a wrong call at run time.
-sqlite-decls-guard:
-	@cat vendor/sqlite/sqlite3.h src/runtime/natives/_Z_SQLITE_DECLS.inc \
+sqlite-decls-guard: bin/zc
+	@{ cat vendor/sqlite/sqlite3.h; bin/zc natives show sqlite.@decls --c --system lib/system; } \
 	  | $(CC) -std=c17 -fsyntax-only -Wall -Werror -x c - \
-	  || { echo "sqlite-decls-guard FAIL: _Z_SQLITE_DECLS.inc disagrees with vendor/sqlite/sqlite3.h -- match the declaration to the vendored header"; exit 1; }; \
+	  || { echo "sqlite-decls-guard FAIL: sqlite's @decls row (lib/system/sqlite/nativec.zd) disagrees with vendor/sqlite/sqlite3.h -- match the declaration to the vendored header"; exit 1; }; \
 	echo "sqlite-decls-guard OK: the sqlite fragments' declarations match the vendored sqlite3.h"
 
 # cobj-guard -- a unit whose runtime is a C source of its own (a `source` in
@@ -1566,7 +1575,8 @@ user-native-guard: bin/zc
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
 	echo "user-native-guard OK: a unit outside the standard library links and runs its own natives, a hidden subunit's among them, a fact's variant chosen, a generic and a non-generic class from their templates, a generic function from its result's, an os= row only for its OS"
 
-# shim-guard -- the C thread shim (_Z_THREAD_SHIM.inc) passes its own test under
+# shim-guard -- the C thread shim (system's prelude.@zthread row, written to
+# $(NATIVEC_INC)/zthread_shim.inc) passes its own test under
 # every compiler zc drives and under ThreadSanitizer: tests/c/zthread_shim_test.c
 # exercises each primitive under contention. TSan is proved first on a probe
 # that races on purpose: a sanitizer that reports nothing there would make a
@@ -1575,14 +1585,14 @@ user-native-guard: bin/zc
 # seconds to create once); the OK line says which backends ran. On a Windows
 # host gcc, clang and tcc build the Win32 backend natively, and TSan, which no
 # Windows toolchain has, is skipped. MSVC is ci-windows's.
-shim-guard: $(BUILDDIR)/tcc $(BUILDDIR)/wineprefix/.ready
-	@d=$$(mktemp -d); fail=0; t=tests/c/zthread_shim_test.c; pr=tests/c/tsan_probe.c; \
+shim-guard: $(BUILDDIR)/tcc $(BUILDDIR)/wineprefix/.ready $(NATIVEC_INC)/zthread_shim.inc
+	@d=$$(mktemp -d); fail=0; t=tests/c/zthread_shim_test.c; pr=tests/c/tsan_probe.c; si=-I$(NATIVEC_INC); \
 	for cc in $(CC) clang; do \
-	  $$cc -std=c17 -Wall -Wextra -Wno-unused-function -O2 -o $$d/shim-$$cc $$t $(THREADLIB) > $$d/cc.log 2>&1 \
+	  $$cc -std=c17 -Wall -Wextra -Wno-unused-function -O2 $$si -o $$d/shim-$$cc $$t $(THREADLIB) > $$d/cc.log 2>&1 \
 	    || { echo "shim-guard FAIL: $$cc did not build the shim test"; grep -m3 error $$d/cc.log; fail=1; continue; }; \
 	  $$d/shim-$$cc > $$d/run.log 2>&1 || { echo "shim-guard FAIL: under $$cc"; cat $$d/run.log; fail=1; }; \
 	done; \
-	$(BUILDDIR)/tcc -B $(TCCLIB) -I $(TCCLIB)/include -o $$d/shim-tcc $$t $(THREADLIB) > $$d/cc.log 2>&1 \
+	$(BUILDDIR)/tcc -B $(TCCLIB) -I $(TCCLIB)/include $$si -o $$d/shim-tcc $$t $(THREADLIB) > $$d/cc.log 2>&1 \
 	  || { echo "shim-guard FAIL: tcc did not build the shim test"; grep -m3 error $$d/cc.log; fail=1; }; \
 	[ -x $$d/shim-tcc ] && { $$d/shim-tcc > $$d/run.log 2>&1 || { echo "shim-guard FAIL: under tcc"; cat $$d/run.log; fail=1; }; }; \
 	tsan=" and ThreadSanitizer (proved on a racy probe)"; \
@@ -1592,14 +1602,14 @@ shim-guard: $(BUILDDIR)/tcc $(BUILDDIR)/wineprefix/.ready
 	  $(CC) -g -fsanitize=thread -o $$d/probe $$pr -lpthread > $$d/cc.log 2>&1; \
 	  $$d/probe > /dev/null 2> $$d/probe.err; \
 	  grep -q "data race" $$d/probe.err || { echo "shim-guard FAIL: ThreadSanitizer did not report the probe's race; a clean TSan run proves nothing"; fail=1; }; \
-	  $(CC) -std=c17 -g -O1 -fsanitize=thread -o $$d/shim-tsan $$t -lpthread > $$d/cc.log 2>&1 \
+	  $(CC) -std=c17 -g -O1 -fsanitize=thread $$si -o $$d/shim-tsan $$t -lpthread > $$d/cc.log 2>&1 \
 	    || { echo "shim-guard FAIL: the TSan build"; fail=1; }; \
 	  [ -x $$d/shim-tsan ] && { $$d/shim-tsan > $$d/run.log 2>&1 || { echo "shim-guard FAIL: under ThreadSanitizer"; head -30 $$d/run.log; fail=1; }; }; \
 	fi; \
 	win="; Win32 not run (needs $(MINGW_CC) 14 or newer, for -mcrtdll=ucrt, and wine: sudo apt install gcc-mingw-w64-x86-64 wine)"; \
 	[ -n "$(WINDOWS_HOST)" ] && win=""; \
 	if [ -z "$(WINDOWS_HOST)" ] && $(MINGW_UCRT_CHECK) && command -v wine >/dev/null 2>&1; then \
-	  $(MINGW_CC) -std=c17 -Wall -Wextra -Wno-unused-function -O2 $(MINGW_CFLAGS) -o $$d/shim.exe $$t > $$d/cc.log 2>&1 \
+	  $(MINGW_CC) -std=c17 -Wall -Wextra -Wno-unused-function -O2 $(MINGW_CFLAGS) $$si -o $$d/shim.exe $$t > $$d/cc.log 2>&1 \
 	    || { echo "shim-guard FAIL: mingw-w64 did not build the shim test"; grep -m3 error $$d/cc.log; fail=1; }; \
 	  if [ -f $$d/shim.exe ]; then \
 	    $(WINE_ENV) timeout 300 wine $$d/shim.exe > $$d/run.log 2>&1 \

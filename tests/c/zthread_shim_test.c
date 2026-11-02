@@ -1,8 +1,10 @@
-/* zthread_shim_test.c -- the C thread shim (src/runtime/natives/_Z_THREAD_SHIM.inc)
-   on its own: every primitive, under contention, with the two runtime helpers
-   it calls stubbed. Built and run by `make shim-guard` under gcc, clang, tcc
-   and gcc -fsanitize=thread, and by the windows-shim workflow under MSVC and
-   mingw. Exit status 0 and "zthread shim OK" mean every check held. */
+/* zthread_shim_test.c -- the C thread shim on its own: every primitive, under
+   contention, with the two runtime helpers it calls stubbed. The shim is
+   system's prelude.@zthread row, which `zc natives show prelude.@zthread --c`
+   writes as zthread_shim.inc (make: $(NATIVEC_INC)/zthread_shim.inc). Built and
+   run by `make shim-guard` under gcc, clang, tcc and gcc -fsanitize=thread, and
+   on Windows by windows-guest under MSVC and mingw. Exit status 0 and
+   "zthread shim OK" mean every check held. */
 #if !defined(_WIN32)
 #define _POSIX_C_SOURCE 200809L
 #define _DEFAULT_SOURCE
@@ -29,7 +31,7 @@ static void* z_xmalloc(size_t n) {
     return p;
 }
 
-#include "../../src/runtime/natives/_Z_THREAD_SHIM.inc"
+#include "zthread_shim.inc"
 
 static int failures;
 #define CHECK(c, what) do { if (!(c)) { fprintf(stderr, "FAIL: %s\n", what); failures++; } } while (0)

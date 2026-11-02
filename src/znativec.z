@@ -230,11 +230,14 @@ servedProvider: function {systemdir: StringView shown: StringView} out ZVfsProvi
 # showNative -- `zc natives show WHAT`: what zc carries for WHAT, as the emitter
 # holds it -- a unit's rows by key, one row (`unit.key`, every variant of it;
 # a foundation group's as `group.key`, a structural row by its key alone) with
-# its fields and texts, or a template by name -- each with where the unit's
-# nativec.zd under `systemdir` writes it, as that file's check places it
-# (zdata.placeOf) and `zc emit --mark-natives` marks it. "" when WHAT names
-# none of them.
-showNative: function {what: StringView systemdir: StringView} out String is {
+# its fields and texts, a template by name, or a fixed file of the foundation by
+# its name (`hash`, one piece of it as `hash.mul128`) -- each with where the
+# unit's nativec.zd under `systemdir` writes it, as that file's check places it
+# (zdata.placeOf) and `zc emit --mark-natives` marks it. With `c`, only the C
+# of each, as written, holes and all: a row's fragments or pieces then its
+# destroy, a template's sections, a file's pieces. "" when WHAT names none of
+# them.
+showNative: function {what: StringView systemdir: StringView c: bool} out String is {
     buf: String
     for each u: nativec.units loop {
         un: u.name.stringView
@@ -243,8 +246,8 @@ showNative: function {what: StringView systemdir: StringView} out String is {
         f: zdata.open file: path.stringView srcdirs: List String :systemdir
         im: zdata.definition :f name: "implementation"
         places: itemsNamed :f v: im name: "rows"
-        if what == un then showUnitRows :buf :u :f :places
-        showRows :buf :what rows: u.implementation.rows unitName: un :f :places
+        if what == un when c.not then showUnitRows :buf :u :f :places
+        showRows :buf :what rows: u.implementation.rows unitName: un :f :places :c
         tps: itemsNamed :f v: im name: "templates"
         k: u64
         for each t: u.implementation.templates loop {
@@ -254,11 +257,13 @@ showNative: function {what: StringView systemdir: StringView} out String is {
                 :t
                 unitName: un
                 at: (placeAt :f places: tps :k).stringView
+                :c
             )
             k = k + 1
         }
     }
-    showFoundationRows :buf :what :systemdir
+    showFoundationRows :buf :what :systemdir :c
+    showFiles :buf :what :systemdir :c
     return buf
 }
 
@@ -277,7 +282,9 @@ namesInUnit: function {what: StringView u: nativec.servedUnit} out bool is {
 
 # showFoundationRows -- showNative over the foundation's rows, which system's
 # nativec.zd holds: each group's rows, then the structural rows
-showFoundationRows: function {buf: String.borrow what: StringView systemdir: StringView} is {
+showFoundationRows: function {
+    buf: String.borrow what: StringView systemdir: StringView c: bool
+} is {
     fd: nativec.systemc.foundation
     named: false
     for each g: fd.groups loop {
@@ -305,6 +312,7 @@ showFoundationRows: function {buf: String.borrow what: StringView systemdir: Str
             unitName: g.name.stringView
             :f
             places: (itemsNamed :f v: gv name: "rows")
+            :c
         )
         k = k + 1
     }
@@ -316,7 +324,68 @@ showFoundationRows: function {buf: String.borrow what: StringView systemdir: Str
         unitName: ""
         :f
         places: (itemsNamed :f v: fv name: "structural")
+        :c
     )
+}
+
+# showFiles -- showNative over the foundation's fixed files: a file by its name,
+# each of its pieces with it, or one piece as `<file>.<piece>`
+showFiles: function {buf: String.borrow what: StringView systemdir: StringView c: bool} is {
+    fd: nativec.systemc.foundation
+    if (namesFile :what :fd).not then return
+    path: "\{systemdir}/system/nativec.zd"
+    f: zdata.open file: path.stringView srcdirs: List String :systemdir
+    fs: itemsNamed :f v: (zdata.definition :f name: "foundation") name: "files"
+    k: u64
+    for each fl: fd.files loop {
+        whole: what == fl.name.stringView
+        if whole when c.not then buf.append "file \{fl.name}  \{placeAt :f places: fs :k}\n"
+        fv: ztypes.noConst
+        if k < fs.length then fv = fs.get i: k
+        showFilePieces :buf :what :fl :whole :f places: (itemsNamed :f v: fv name: "pieces") :c
+        k = k + 1
+    }
+}
+
+# namesFile -- whether `what` names a fixed file of `fd` or one of its pieces
+namesFile: function {what: StringView fd: schema.foundation} out bool is {
+    for each fl: fd.files loop {
+        if what == fl.name.stringView then return true
+        for each p: fl.pieces loop {
+            if (namesPiece :what file: fl.name.stringView piece: p.name.stringView) then return true
+        }
+    }
+    return false
+}
+
+# showFilePieces -- showPiece for each piece of file `fl` that `what` names,
+# every one when `whole`, placed by the same element of `places`
+showFilePieces: function {
+    buf: String.borrow
+    what: StringView
+    fl: schema.file
+    whole: bool
+    f: zdata.DataFile.view
+    places: (ListVal ztypes.cval).view
+    c: bool
+} is {
+    j: u64
+    for each p: fl.pieces loop {
+        if whole or (namesPiece :what file: fl.name.stringView piece: p.name.stringView) then (
+            showPiece
+            :buf
+            :p
+            at: (placeAt :f :places k: j).stringView
+            :c
+        )
+        j = j + 1
+    }
+}
+
+# namesPiece -- whether `what` is `<file>.<piece>` for a named piece
+namesPiece: function {what: StringView file: StringView piece: StringView} out bool is {
+    if piece.length == 0 then return false
+    return (namesRow :what unitName: file key: piece)
 }
 
 # showRows -- showRow for each of `rows` that `what` names, placed by the same
@@ -328,6 +397,7 @@ showRows: function {
     unitName: StringView
     f: zdata.DataFile.view
     places: (ListVal ztypes.cval).view
+    c: bool
 } is {
     k: u64
     for each r: rows loop {
@@ -337,6 +407,7 @@ showRows: function {
             :r
             :unitName
             at: (placeAt :f :places :k).stringView
+            :c
         )
         k = k + 1
     }
@@ -378,8 +449,16 @@ showUnitRows: function {
 }
 
 # showRow -- one row: where it is written, each field it sets, then its texts
-# with their holes as written
-showRow: function {buf: String.borrow r: schema.row unitName: StringView at: StringView} is {
+# with their holes as written; with `c`, its texts alone
+showRow: function {
+    buf: String.borrow r: schema.row unitName: StringView at: StringView c: bool
+} is {
+    if c then {
+        for each t: r.fragments loop buf.append "\{t}\n"
+        for each p: r.pieces loop buf.append "\{p.text}\n"
+        if r.destroy.length > 0 then buf.append "\{r.destroy}\n"
+        return
+    }
     if unitName.length > 0 then buf.append "\{unitName}."
     buf.append r.key.stringView
     buf.append "  "
@@ -399,21 +478,7 @@ showRow: function {buf: String.borrow r: schema.row unitName: StringView at: Str
     if r.byPointer then showField :buf name: "byPointer" value: "true"
     if r.callsEquals then showField :buf name: "callsEquals" value: "true"
     for each t: r.fragments loop showText :buf name: "fragment" text: t.stringView
-    for each p: r.pieces loop {
-        if p.name.length == 0 then {
-            showText :buf name: "piece" text: p.text.stringView
-        } else {
-            (
-                showText
-                :buf
-                name: "piece \{p.name} demand=\{zemitterc.servedList xs: p.demand} needs=\{(
-                    zemitterc.servedList
-                    xs: p.needs
-                )}".stringView
-                text: p.text.stringView
-            )
-        }
-    }
+    for each p: r.pieces loop showPiece :buf :p at: "" c: false
     if r.destroy.length > 0 then showText :buf name: "destroy" text: r.destroy.stringView
 }
 
@@ -423,7 +488,12 @@ showTemplate: function {
     t: schema.template
     unitName: StringView
     at: StringView
+    c: bool
 } is {
+    if c then {
+        for each s: t.sections loop buf.append "\{s.text}\n"
+        return
+    }
     buf.append "template \{t.name} (\{unitName})  \{at}\n"
     showField :buf name: "needs" value: (zemitterc.servedList xs: t.needs).stringView
     for each s: t.sections loop {
@@ -438,6 +508,23 @@ showTemplate: function {
             )
         }
     }
+}
+
+# showPiece -- one piece: its name, demand and needs, where it is written when
+# `at` says, then its text; with `c`, its text alone
+showPiece: function {buf: String.borrow p: schema.piece at: StringView c: bool} is {
+    if c then {
+        buf.append "\{p.text}\n"
+        return
+    }
+    if p.name.length == 0 then {
+        showText :buf name: "piece" text: p.text.stringView
+        return
+    }
+    hd: "piece \{p.name} demand=\{zemitterc.servedList xs: p.demand}"
+    hd.append " needs=\{zemitterc.servedList xs: p.needs}"
+    if at.length > 0 then hd.append "  \{at}"
+    showText :buf name: hd.stringView text: p.text.stringView
 }
 
 # showField -- one field of a row as `show` lists it, left out when it is not set

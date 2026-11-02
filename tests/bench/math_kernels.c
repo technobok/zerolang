@@ -4,9 +4,11 @@
    sizes; this harness calls the fragments' z_mathk_* functions directly on
    vectors allocated once.
 
-   make bench-math builds it once per kernel tier from the fragments
-   themselves: _Z_SYSTEM_WORD.inc, the wide multiply cut out of z_hash.inc into
-   mul128.h, the generated asm kernels and _Z_MATH_ARITH.inc. A row repeats its kernel until 20 ms have
+   make bench-math builds it once per kernel tier from the rows themselves, as
+   `zc natives show WHAT --c` writes them: system's @word row (system_word.inc),
+   the wide multiply piece of the hash file and the leading-zeros count of the
+   head file, which the portable tier calls (mul128.h), and math's @arith row
+   with the generated asm kernels (math_arith.inc). A row repeats its kernel until 20 ms have
    passed, R times (-r R, default 5), and prints the median time per call;
    tiers are compared on those medians. -n N,N,... times the given lengths in
    place of Go's series, to find where an asm kernel starts to win. */
@@ -23,10 +25,8 @@ static void z_panic(const char* msg) {
 }
 
 #include "mul128.h"
-#include "_Z_SYSTEM_WORD.inc"
-#include "_Z_MATH_ARITH_AMD64.inc"
-#include "_Z_MATH_ARITH_ARM64.inc"
-#include "_Z_MATH_ARITH.inc"
+#include "system_word.inc"
+#include "math_arith.inc"
 
 /* the lengths a row is timed at: Go's series unless -n names others */
 static uint64_t sizes[64] = {1, 10, 16, 100, 1000, 10000, 100000};
