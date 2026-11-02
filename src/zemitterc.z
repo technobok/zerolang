@@ -1274,23 +1274,41 @@ convRule: function {srcK: ztypes.numkind dstK: ztypes.numkind} out ConvRule is {
     )
 }
 
-# convRowHead -- a conversion row's head, `[system.<src>.<dst> ...]`: the
-# helpers the row calls, and whether it is a value, go inside the bracket.
-convRowHead: function {
+# convRowText -- the conversion from `srcK` to `dstK` as system's nativec.zd
+# writes its row: `(c.row key: "<src>.<dst>" ...)` with the rule's needs, form
+# and body
+convRowText: function {
     srcK: ztypes.numkind dstK: ztypes.numkind rule: ConvRule.view
 } out String is {
     sn: ztypes.numkindName k: srcK
     dn: ztypes.numkindName k: dstK
-    head: "[system.\{sn}.\{dn}"
-    sep: " needs="
-    for each n: rule.needs loop {
-        head.append sep
-        head.append n
-        sep = ","
+    r: "(c.row key: \"".string
+    r.append sn
+    r.append "."
+    r.append dn
+    r.append "\""
+    if rule.needs.length > 0 then {
+        r.append " needs: list {"
+        for each n: rule.needs loop r.append " \"\{n}\""
+        r.append " }"
     }
-    if rule.value then head.append " form=value"
-    head.append "]"
-    return head
+    if rule.value then r.append " form: c.form.value"
+    r.append " body: "
+    r.append (zdataQuoted text: rule.body.stringView)
+    r.append ")"
+    return r
+}
+
+# zdataQuoted -- `text` as a zdata string literal: in quotes, a quote or a
+# backslash in it escaped
+zdataQuoted: function {text: StringView} out String is {
+    r: "\"".string
+    for each b: text.byteView loop {
+        if (b == 34) or (b == 92) then r.appendByte 92
+        r.appendByte b
+    }
+    r.append "\""
+    return r
 }
 
 # convIsValue -- whether the conversion's row is a value (`form=value`): a
@@ -1346,38 +1364,23 @@ convNeedCall: function {needs: List String call: StringView} is {
     } case none then null
 }
 
-# nativeConvRows -- the conversions section of natives.tbl, generated from the
-# rule rather than written by hand: 256 pairs, and a bound written wrong on a
-# pair no program happens to use is not something the corpus can catch.
-# natives-tbl-guard regenerates this and diffs it against the checked-in file,
-# so the table is provably the rule's own output.
+# nativeConvRows -- the conversion rows the numeric rule gives, one line each
+# as system's nativec.zd writes them (convRowText), grouped by the kind they
+# convert from: 256 pairs, generated rather than written by hand, since a bound
+# written wrong on a pair no program happens to use is not something the corpus
+# can catch. `zc natives check native` requires the rows zc carries to be
+# these.
 nativeConvRows: function out String is {
     order: convKinds
     buf: String
-    si: u64
-    n: order.length
-    for si < n loop {
-        s: order.get i: si
-        si = si + 1
+    for each s: order loop {
         sn: ztypes.numkindName k: s
-        hdr: "\n# system.\{sn} conversions\n"
-        buf.append hdr
-        di: u64
-        for di < n loop {
-            d: order.get i: di
-            di = di + 1
-            r: convRule srcK: s dstK: d
-            pad: convRowHead srcK: s dstK: d rule: r
-            for pad.length < 30 loop pad.append " "
-            row: "\{pad} \{r.body}\n"
-            buf.append row
+        if buf.length > 0 then buf.append "\n"
+        buf.append "# \{sn} conversions"
+        for each d: order loop {
+            buf.append "\n"
+            buf.append (convRowText srcK: s dstK: d rule: (convRule srcK: s dstK: d))
         }
-    }
-    # `print` supplies the final newline, so the last row must not carry one:
-    # the guard diffs this output against the checked-in section byte for byte.
-    if buf.length > 0 then {
-        cut: buf.stringView.substring from: 0 to: buf.length - 1
-        return cut.string
     }
     return buf
 }
@@ -2325,9 +2328,10 @@ rtFragmentText: function {
     ctx: Ctx
     plan: RtPlan.view
     all: bool
-    # where the text came from, for the messages
-    path: StringView
+    # the text, for its mark and the messages
+    key: textkey
 } out String is {
+    path: textLabel :ctx :key
     bn: ListVal zast.nameid
     bv: List String
     rn: ListVal zast.nameid
@@ -2345,7 +2349,7 @@ rtFragmentText: function {
             id: plan.id
             hole: (hids.get i: k)
             name: (hnames.get i: k).stringView
-            :path
+            path: path.stringView
             :bn
             :bv
             :rn
@@ -2366,7 +2370,7 @@ rtFragmentText: function {
         rawIds: rn
         rawVals: rv
         holes: true
-        :path
+        :key
         fails: ferr
     )
     if (ctx.rt.infos.get i: plan.id).open then {
@@ -2533,34 +2537,88 @@ memberHoleC: function {
     return (memberC :ast :symtab :ctx owner: tt kind: k nameId: mid)
 }
 
-# readTemplateCached -- the raw text of a runtime template file, read once
-# per emit and cached by path. A missing file is fatal and reported once (the
-# "" is cached so the read is not retried); no fragment on disk is empty, so a
-# cached "" is unambiguously the missing-file path.
-readTemplateCached: function {ctx: Ctx path: StringView} out String is {
-    cached: String
-    hit: false
+# textkind -- what a native text zc carries is
+textkind: variant {
+    # no text: a body written for a row has no text of its own
+    none: null
+    # one of the files every program's C is written from (`head`, `alloc`)
+    fixedFile: null
+    # a row's fragment, by the name the row gives it
+    fragment: null
+    # a template a class or a container is written from (`List`)
+    template: null
+} as { tag: u8.tag }
+
+# textkey -- a native text by its kind (a textkind's tag) and its name (by id in
+# Ctx.textNames)
+textkey: record {
+    kind: u8
+    name: u32
+}
+
+# noText -- the key of no text
+noText: function out textkey is {
+    return (textkey kind: textkind.none.tag name: 0)
+}
+
+# textKey -- the key of the text of kind `kind` named `name`
+textKey: function {ctx: Ctx kind: textkind name: StringView} out textkey is {
+    if ctx.textNames.length == 0 then ctx.textNames.append "".string
+    id: (ctx.textIds.get key: name.string).or d: 0
+    if id == 0 then {
+        id = ctx.textNames.length.u32.orPanic
+        ctx.textIds.set key: name.string value: id
+        ctx.textNames.append from: name.string
+    }
+    return (textkey kind: kind.tag name: id)
+}
+
+# fileKey -- the key of fixed file `name`
+fileKey: function {ctx: Ctx name: StringView} out textkey is {
+    return (textKey :ctx kind: textkind.fixedFile :name)
+}
+
+# fragKey -- the key of fragment `name`
+fragKey: function {ctx: Ctx name: StringView} out textkey is {
+    return (textKey :ctx kind: textkind.fragment :name)
+}
+
+# tmplKey -- the key of template `name`
+tmplKey: function {ctx: Ctx name: StringView} out textkey is {
+    return (textKey :ctx kind: textkind.template :name)
+}
+
+# textLabel -- text `key` as a message names it: `fixed file head`, `fragment
+# _Z_F16`, `template List`; "" for no text
+textLabel: function {ctx: Ctx.view key: textkey} out String is {
+    if key.kind == textkind.none.tag then return String
+    r: "template ".string
+    if key.kind == textkind.fixedFile.tag then r = "fixed file ".string
+    if key.kind == textkind.fragment.tag then r = "fragment ".string
+    r.append (ctx.textNames.get i: key.name.u64)
+    return r
+}
+
+# textOf -- the native text `key` names. A text zc does not carry is fatal and
+# reported once (the "" is kept so it is not asked again); no text zc carries
+# is empty, so a kept "" is unambiguously the missing one.
+textOf: function {ctx: Ctx key: textkey} out String is {
     {
-        got: ctx.tmplCache.get key: path.asString
+        got: ctx.texts.get :key
         match (
             got
         ) case some then {
-            cached = got.copy
-            hit = true
+            return got.copy
         } case none then null
     }
-    if hit then return cached
-    txt: String
-    rd: io.readText :path
-    match (
-        rd
-    ) case ok then {
-        txt = rd.take
-    } case err then {
-        emitFail :ctx what: "missing runtime template \{path}" line: 0
-    }
-    ctx.tmplCache.set key: path.string value: txt.copy
-    return txt
+    emitFail :ctx what: "zc carries no \{textLabel :ctx :key}" line: 0
+    ctx.texts.set :key value: String
+    return String
+}
+
+# setText -- `text` as the native text `key` names
+setText: function {ctx: Ctx key: textkey text: String.take} is {
+    ctx.texts.set :key value: text.take
 }
 
 # tmplTextOf -- a runtime template's text, parsed once (RtTexts), for writing
@@ -2568,11 +2626,11 @@ readTemplateCached: function {ctx: Ctx path: StringView} out String is {
 # the runtime the template calls, registered at every instance as a row's
 # `needs=` is, and left out of the text (a compiler that knows no marker writes
 # it as a comment).
-tmplTextOf: function {ctx: Ctx path: StringView} out rtid is {
-    id: tmplParsed :ctx :path
+tmplTextOf: function {ctx: Ctx key: textkey} out rtid is {
+    id: tmplParsed :ctx :key
     nds: String
     {
-        got: ctx.tmplNeeds.get key: path.asString
+        got: ctx.tmplNeeds.get :key
         match (
             got
         ) case some then {
@@ -2585,12 +2643,12 @@ tmplTextOf: function {ctx: Ctx path: StringView} out rtid is {
     return id
 }
 
-# tmplParsed -- the runtime file at `path` parsed (RtTexts) on its first read and
-# kept by path, its `/*@@needs` line left out and kept apart (tmplTextOf)
-tmplParsed: function {ctx: Ctx path: StringView} out rtid is {
-    id: (ctx.tmplTexts.get key: path.asString).or d: rtid.zero
+# tmplParsed -- native text `key` parsed (RtTexts) on its first read and
+# kept by key, its `/*@@needs` line left out and kept apart (tmplTextOf)
+tmplParsed: function {ctx: Ctx key: textkey} out rtid is {
+    id: (ctx.tmplTexts.get :key).or d: rtid.zero
     if id.isZero then {
-        raw: readTemplateCached :ctx :path
+        raw: textOf :ctx :key
         needs: String
         from: u64
         if (raw.stringView.startsWith prefix: "/*@@needs ") then {
@@ -2599,8 +2657,8 @@ tmplParsed: function {ctx: Ctx path: StringView} out rtid is {
             from = lineAfter text: raw.stringView at: cl + 4
         }
         id = ctx.rt.parse text: (raw.stringView.substring :from to: raw.length)
-        ctx.tmplTexts.set key: path.string value: id
-        ctx.tmplNeeds.set key: path.string value: needs
+        ctx.tmplTexts.set :key value: id
+        ctx.tmplNeeds.set :key value: needs
     }
     return id
 }
@@ -2799,7 +2857,6 @@ nativeWord: list {
     argsPtr: "args=ptr"
     formValue: "form=value"
     callsEq: "calls=eq"
-    unitsRow: "@units"
     unitDemand: "@unit"
     unitIo: "io"
     unitPrelude: "prelude"
@@ -2831,8 +2888,6 @@ NativeHead: class {
     # `demand=`: the demand the fragment answers to; the path's last segment
     # when absent
     dem: String
-    # `order=`: on the `@units` row, the order the units' runtimes run in
-    ord: String
     # `const=`: the argument position a constant-operand variant of the row
     # applies to
     cst: String
@@ -2884,7 +2939,6 @@ NativeHead: class {
             need: String
             frag: String
             dem: String
-            ord: String
             cst: String
             spec: String
             ptr: false
@@ -2948,12 +3002,6 @@ NativeHead: class {
             so
         ) case some then {
             this.need = so.string
-        } case none then null
-        oo: f.stripPrefix p: "order="
-        match (
-            oo
-        ) case some then {
-            this.ord = oo.string
         } case none then null
         co: f.stripPrefix p: "const="
         match (
@@ -3402,53 +3450,6 @@ recordClassRow: function {ctx: Ctx path: StringView h: NativeHead.view} is {
     } case none then null
 }
 
-# loadNativeTbl -- parse natives.tbl into the three row tables. A row is
-# `[<path> attr=value ...] <body>`; `#` starts a comment and blank lines are
-# skipped, as is any line that does not open a row. Read through
-# readTemplateCached, which caches it and reports a missing file as an
-# emission failure -- the table is not optional, so a program that cannot
-# find it fails rather than falling back to something.
-#
-# One pass, in table order (RowFacts): a fact is settled where its `@fact.` row
-# stands, and a `when=` variant is placed above the plain row of its key, so
-# whether the plain row was replaced is known when it is reached.
-loadNativeTbl: function {
-    ctx: Ctx
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    runtimeDir: StringView
-} is {
-    p: "\{runtimeDir}/natives.tbl"
-    txt: readTemplateCached :ctx path: p.stringView
-    if txt.length == 0 then return
-    rf: RowFacts declared: Set String held: Set String replaced: Set String
-    for each ln: txt.stringView.lines loop {
-        t: ln.trim
-        if (t.startsWith prefix: "[@cond ") then {
-            recordCond :ctx head: (t.substring from: 1 to: ((t.indexOf needle: "]").or d: t.length))
-            continue
-        }
-        if (t.startsWith prefix: "[") then {
-            co: t.indexOf needle: "]"
-            match (
-                co
-            ) case some then {
-                head: t.substring from: 1 to: co
-                rest: t.substring from: co + 1 to: t.length
-                body: rest.trim
-                h: NativeHead.create :head words: ctx.nativeWords
-                if (
-                    (ctx.nativeWords.slotOf text: h.key.stringView) == nativeWord.slot.unitsRow
-                ) then {
-                    recordUnitOrder :ctx order: h.ord.stringView
-                } else if (rf.applies :ctx :ast :symtab :h) then {
-                    recordNativeRow :ctx :ast :h :body
-                }
-            } case none then null
-        }
-    }
-}
-
 # schema -- the implementation files' schema, as the served unit holds it
 schema: nativec.runtime.nativec
 
@@ -3499,8 +3500,12 @@ registerImplementations: function {
     }
     for each u: users loop checkedUnit :w :ctx :ast :symtab :u
     for each fl: fd.files loop {
-        p: "\{ctx.runtimeDir}/z_\{fl.name}.inc"
-        ctx.tmplCache.set key: p.take value: (servedPieces ps: fl.pieces owner: "prelude")
+        (
+            setText
+            :ctx
+            key: (fileKey :ctx name: fl.name.stringView)
+            text: (servedPieces ps: fl.pieces owner: "prelude")
+        )
     }
 }
 
@@ -3520,20 +3525,6 @@ newRowWalk: function out RowWalk is {
         destroy: String
         at: String
     )
-}
-
-# registerUsers -- each user unit's checked rows on their own, after a table
-# read from disk (loadNativeTbl, --runtime): their facts, canons, then rows
-registerUsers: function {
-    ctx: Ctx
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    users: (List UserImplementation).view
-} is {
-    w: newRowWalk
-    for each u: users loop checkedFacts :w :ctx :ast :symtab :u
-    for each u: users loop checkedCanons :w :ctx :ast :symtab :u
-    for each u: users loop checkedUnit :w :ctx :ast :symtab :u
 }
 
 # servedFactsAndCanons -- every served unit's facts, then every one's canons,
@@ -3710,17 +3701,16 @@ RowWalk: class {
     # when a mark is asked for
     markFragment: function {this: this.view ctx: Ctx name: StringView} is {
         if this.at.length == 0 then return
-        p: nativePath runtimeDir: ctx.runtimeDir.stringView frag: name
         (
             recordMark
             :ctx
-            path: p.stringView
+            key: (fragKey :ctx :name)
             m: (NativeMark mark: this.at.copy parts: (Map String V: String))
         )
     }
 
     # row -- the row a reader read onto `h`, with the texts it handed over
-    # since the last: its key, its fragments, its template's path, recorded
+    # since the last: its key, its fragments, its template's name, recorded
     row: function {
         :this
         ctx: Ctx
@@ -3735,7 +3725,7 @@ RowWalk: class {
         h.key = servedKey :owner :key
         h.frag swap this.frags
         h.destroy swap this.destroy
-        if template.length > 0 then h.tmpl = "z_\{template}.c.tmpl"
+        if template.length > 0 then h.tmpl = template.string
         this.place :ctx :ast :symtab :h :body
     }
 
@@ -3959,8 +3949,12 @@ checkedRow: function {
     if ps.length > 0 then {
         w.pieces :ctx :owner key: key.stringView text: (checkedPieces :u :ps :owner)
         if ctx.markNatives then {
-            p: nativePath runtimeDir: ctx.runtimeDir.stringView frag: w.frags.stringView
-            recordMark :ctx path: p.stringView m: (piecesMark :u :ps mark: w.at.copy)
+            (
+                recordMark
+                :ctx
+                key: (fragKey :ctx name: w.frags.stringView)
+                m: (piecesMark :u :ps mark: w.at.copy)
+            )
         }
     }
     h.dem = checkedTexts :u v: r name: "demand"
@@ -4095,18 +4089,18 @@ registerFromFiles: function {
     for each i: order loop checkedUnit :w :ctx :ast :symtab u: (users.get :i)
     for each fl: (checkedItems u: sys v: fd name: "files") loop {
         fn: checkedText u: sys v: fl name: "name"
-        p: "\{ctx.runtimeDir}/z_\{fn}.inc"
+        k: fileKey :ctx name: fn.stringView
         ps: checkedItems u: sys v: fl name: "pieces"
         if ctx.markNatives then {
             fm: "file \{fn}, \{zdata.placeOf f: sys.file v: fl}"
             (
                 recordMark
                 :ctx
-                path: p.stringView
+                key: k
                 m: (piecesMark u: sys :ps mark: fm.take)
             )
         }
-        ctx.tmplCache.set key: p.take value: (checkedPieces u: sys :ps owner: "prelude")
+        setText :ctx key: k text: (checkedPieces u: sys :ps owner: "prelude")
     }
 }
 
@@ -4120,14 +4114,14 @@ NativeMark: class {
     parts: (Map String V: String)
 }
 
-# recordMark -- `m` as the mark of the text cached under `path`
-recordMark: function {ctx: Ctx path: StringView m: NativeMark.take} is {
+# recordMark -- `m` as the mark of native text `key`
+recordMark: function {ctx: Ctx key: textkey m: NativeMark.take} is {
     if ctx.marks.length == 0 then ctx.marks.append (
         NativeMark
         mark: String
         parts: (Map String V: String)
     )
-    ctx.nativeMarks.set key: path.string value: ctx.marks.length
+    ctx.nativeMarks.set :key value: ctx.marks.length
     ctx.marks.append m.take
 }
 
@@ -4168,8 +4162,7 @@ markTemplate: function {ctx: Ctx u: UserImplementation.view t: ztypes.cval name:
         if mb.length == 0 then continue
         m.parts.set key: mb.copy value: "section \{mb}, \{zdata.placeOf f: u.file v: s}"
     }
-    p: "\{ctx.runtimeDir}/z_\{name}.c.tmpl"
-    recordMark :ctx path: p.stringView :m
+    recordMark :ctx key: (tmplKey :ctx :name) :m
 }
 
 # checkedUnitOrder -- each file's place in `users`, in the order the foundation
@@ -4287,15 +4280,13 @@ servedUnitOrder: function {fd: schema.foundation} out ListVal u64 is {
     return order
 }
 
-# servedFragment -- a fragment's text, cached under the path a fragment of
-# that name is read by (nativePath)
+# servedFragment -- a fragment's text, as fragment `name`
 servedFragment: function {ctx: Ctx name: StringView text: String.take} is {
-    p: nativePath runtimeDir: ctx.runtimeDir.stringView frag: name
-    ctx.tmplCache.set key: p.take value: text.take
+    setText :ctx key: (fragKey :ctx :name) text: text.take
 }
 
 # servedTemplate -- one template zc carries, read and written as templateHead
-# and appendSection write any, and cached under the path it is read by
+# and appendSection write any, kept as the template of its name
 servedTemplate: function {ctx: Ctx t: schema.template} is {
     x: templateHead needs: (servedList xs: t.needs).stringView
     for each s: t.sections loop {
@@ -4338,11 +4329,9 @@ appendSection: function {
     x.append "\{text}\n/*@@end@@*/\n"
 }
 
-# cacheTemplate -- a template's text, cached under the path the template of
-# that name is read by
+# cacheTemplate -- a template's text, as template `name`
 cacheTemplate: function {ctx: Ctx name: StringView text: String.take} is {
-    p: "\{ctx.runtimeDir}/z_\{name}.c.tmpl"
-    ctx.tmplCache.set key: p.take value: text.take
+    setText :ctx key: (tmplKey :ctx :name) text: text.take
 }
 
 # servedPieces -- a list of pieces zc carries as the text the emitter cuts
@@ -5855,8 +5844,6 @@ Ctx: class {
     rowCondKey: (IdMapR u64 V: String)
     # natives.tbl's `[@cond NAME = expr]` rows, by bit (Cond)
     condNames: List String
-    # the runtime directory, for a template a decision reads before it is written
-    runtimeDir: String
     # the Set and Map instances whose kept text spells their key's `==` /
     # `hash` (tmplKeptSpells): member uses only grow, so a yes is final
     keyEqKept: IdSet ztypes.tid
@@ -6084,8 +6071,12 @@ Ctx: class {
     # emitC writes them once the last body is out
     nativeBoxImpls: ListVal ztypes.tid
     nativeBoxProtos: ListVal ztypes.tid
-    # runtime templates already substituted, keyed by their instantiation
-    tmplCache: (Map String V: String)
+    # the native texts zc carries -- each fixed file, row fragment and
+    # template -- by kind and name (textkey), and the names by id (row 0 the
+    # sentinel "")
+    texts: (MapVR textkey V: String)
+    textIds: (MapRV String v: u32)
+    textNames: List String
     # each io canonical stem's C name
     ioCanonC: (Map String V: String)
     # natives.tbl's canonical-stem rows: stem -> the instance's template and
@@ -6095,10 +6086,10 @@ Ctx: class {
     unitReqs: List UnitReq
     # the runtime text the emitter fills, each parsed once (RtTexts)
     rt: RtTexts
-    # each runtime template's parsed text, by path (tmplTextOf), and the runtime
-    # its `/*@@needs` line names
-    tmplTexts: (MapRV String v: rtid)
-    tmplNeeds: (Map String V: String)
+    # each native text's parse (tmplTextOf), and the runtime its `/*@@needs`
+    # line names
+    tmplTexts: (MapVV textkey v: rtid)
+    tmplNeeds: (MapVR textkey V: String)
     # natives.tbl, read once at emit start: qualified path -> the C body, parsed
     # (rt), plus the two row attributes. Read eagerly rather than on first
     # lookup because the lookup site is inside emitExpr, which holds a Ctx but
@@ -6145,9 +6136,8 @@ Ctx: class {
     # zc emit --mark-natives: each native text written is marked with where
     # it is written (NativeMark)
     markNatives: bool
-    # the native texts' places, by the path each text is cached under: its row
-    # in `marks`, 0 for a text with none
-    nativeMarks: (MapRV String v: u64)
+    # each native text's place: its row in `marks`, 0 for a text with none
+    nativeMarks: (MapVV textkey v: u64)
     # row 0 is the sentinel, no place
     marks: List NativeMark
     # the StringView natives' call kinds (natives.tbl `call=`), by member name id
@@ -36724,7 +36714,6 @@ closeTmplDestroys: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    runtimeDir: StringView
 } is {
     seen: ctx.memberUses.length + 1
     for seen != ctx.memberUses.length loop {
@@ -36733,7 +36722,7 @@ closeTmplDestroys: function {
         for each r: ctx.reachedTypes loop {
             if (tmplClassRowOf :symtab :ctx tid: r) != 0 then monos.append r
         }
-        for each m: monos loop tmplSectionDestroys :ast :symtab :ctx :runtimeDir mono: m
+        for each m: monos loop tmplSectionDestroys :ast :symtab :ctx mono: m
     }
 }
 
@@ -36744,13 +36733,12 @@ tmplSectionDestroys: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    runtimeDir: StringView
     mono: ztypes.tid
 } is {
     row: tmplClassRowOf :symtab :ctx tid: mono
     tf: (ctx.classRows.get i: row - 1).tmpl.copy
-    p: "\{runtimeDir}/\{tf}"
-    ti: tmplTextOf :ctx path: p.stringView
+    p: tmplKey :ctx name: tf.stringView
+    ti: tmplTextOf :ctx key: p
     if (rtEmpty :ctx id: ti) then return
     pNames: List String
     pTids: ListVal ztypes.tid
@@ -36923,11 +36911,11 @@ keyEqSpelled: function {symtab: zenv.ZSymbolTable.view ctx: Ctx tid: ztypes.tid}
         tmplKeptSpells
         :ctx
         mono: tid
-        file: "z_Set.c.tmpl"
+        file: "Set"
         key: "EQ_BODY"
     )
     if (isMapOriginOf :symtab :ctx :tid) then {
-        sp = tmplKeptSpells :ctx mono: tid file: "z_Map.c.tmpl" key: "KEYS_EQUAL_BODY"
+        sp = tmplKeptSpells :ctx mono: tid file: "Map" key: "KEYS_EQUAL_BODY"
     }
     if sp then {
         ctx.keyEqKept.add item: tid
@@ -36946,11 +36934,11 @@ keyHashSpelled: function {symtab: zenv.ZSymbolTable.view ctx: Ctx tid: ztypes.ti
         tmplKeptSpells
         :ctx
         mono: tid
-        file: "z_Set.c.tmpl"
+        file: "Set"
         key: "HASH_BODY"
     )
     if (isMapOriginOf :symtab :ctx :tid) then {
-        sp = tmplKeptSpells :ctx mono: tid file: "z_Map.c.tmpl" key: "HASH_KEY_BODY"
+        sp = tmplKeptSpells :ctx mono: tid file: "Map" key: "HASH_KEY_BODY"
     }
     if sp then {
         ctx.keyHashKept.add item: tid
@@ -36964,8 +36952,8 @@ keyHashSpelled: function {symtab: zenv.ZSymbolTable.view ctx: Ctx tid: ztypes.ti
 # for the member uses so far, spells the key `key`: in the text outside every
 # section, or in a kept one
 tmplKeptSpells: function {ctx: Ctx mono: ztypes.tid file: StringView key: StringView} out bool is {
-    p: "\{ctx.runtimeDir}/\{file}"
-    plan: rtKeptPlan :ctx :mono id: (tmplParsed :ctx path: p.stringView)
+    p: tmplKey :ctx name: file
+    plan: rtKeptPlan :ctx :mono id: (tmplParsed :ctx key: p)
     return (rtPlanSpells :ctx :plan name: key)
 }
 
@@ -39745,7 +39733,6 @@ assembleEmitOutput: function {
     program: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    runtimeDir: StringView
     buf: String.borrow
     poolBuf: StringView
     codeBuf: StringView
@@ -39765,7 +39752,6 @@ assembleEmitOutput: function {
             ast: program
             :symtab
             :ctx
-            :runtimeDir
             uname: "prelude"
             :buf
         )
@@ -39787,8 +39773,8 @@ assembleEmitOutput: function {
     buf.append fnsBuf
     buf.append ctx.lateDefs
     buf.append hashDefs
-    ps: "\{runtimeDir}/z_start.inc"
-    buf.append (loadFixedFile :ctx path: ps.stringView)
+    ps: fileKey :ctx name: "start"
+    buf.append (loadFixedFile :ctx key: ps)
     buf.append "int main(int argc, char* argv[]) {\n"
     if (needsHasM :ctx uname: "os" memb: "args") then {
         buf.append "    z_os_args_init(argc, argv);\n"
@@ -39812,7 +39798,6 @@ emitCHeader: function {
     libs: (List String).view
     # the C sources to build and link, one `zcsrc:` line each (applyUnitReqs)
     csrcs: (List String).view
-    runtimeDir: StringView
     # the fragment z_panic is written from
     panicFrag: StringView
     ctx: Ctx
@@ -39837,12 +39822,12 @@ emitCHeader: function {
         buf.append " */\n"
     }
     buf.append "\n"
-    p0: "\{runtimeDir}/z_head.inc"
-    buf.append (loadFixedFile :ctx path: p0.stringView)
-    p1: nativePath :runtimeDir frag: panicFrag
-    buf.append (loadFixedFile :ctx path: p1.stringView)
-    p2: "\{runtimeDir}/z_alloc.inc"
-    buf.append (loadFixedFile :ctx path: p2.stringView)
+    p0: fileKey :ctx name: "head"
+    buf.append (loadFixedFile :ctx key: p0)
+    p1: fragKey :ctx name: panicFrag
+    buf.append (loadFixedFile :ctx key: p1)
+    p2: fileKey :ctx name: "alloc"
+    buf.append (loadFixedFile :ctx key: p2)
 }
 
 # loadPieces -- the pieces of the runtime's fixed files, registered as rows of
@@ -39853,21 +39838,21 @@ emitCHeader: function {
 # closeRowNeeds). It is written in place, by the file that holds it
 # (loadFixedFile), never by a unit walk. Both markers are C comments: a
 # compiler that knows no pieces writes the file whole, and the C compiles.
-loadPieces: function {ctx: Ctx runtimeDir: StringView} is {
-    loadFixedPieces :ctx :runtimeDir name: "z_head.inc"
-    loadFixedPieces :ctx :runtimeDir name: "z_alloc.inc"
-    loadFixedPieces :ctx :runtimeDir name: "z_String.inc"
-    loadFixedPieces :ctx :runtimeDir name: "z_StringView.inc"
-    loadFixedPieces :ctx :runtimeDir name: "z_hash.inc"
-    loadFixedPieces :ctx :runtimeDir name: "z_start.inc"
+loadPieces: function {ctx: Ctx} is {
+    loadFixedPieces :ctx name: "head"
+    loadFixedPieces :ctx name: "alloc"
+    loadFixedPieces :ctx name: "String"
+    loadFixedPieces :ctx name: "StringView"
+    loadFixedPieces :ctx name: "hash"
+    loadFixedPieces :ctx name: "start"
     # z_panic's fragment, the one the table chose (a threaded program's
     # differs): written in the header's slot, a piece at a time
     pr: nativeFragRow :ctx path: "@prelude.panic"
     if pr > 0 then {
         ctx.rowsInPlace.add item: pr - 1
         pf: (ctx.fragNames.get i: pr - 1).copy
-        pp: nativePath :runtimeDir frag: pf.stringView
-        loadPiecesOf :ctx path: pp.stringView
+        pp: fragKey :ctx name: pf.stringView
+        loadPiecesOf :ctx key: pp
     }
     # the prelude rows' fragments, and a unit's own (the rows answering its
     # `@unit`, which hold what every member of it shares): one holding pieces
@@ -39884,7 +39869,7 @@ loadPieces: function {ctx: Ctx runtimeDir: StringView} is {
         if hosts when (ctx.rowsInPlace.has item: i).not then {
             fl: (ctx.fragNames.get :i).copy
             for each fr: (fl.stringView.split sep: ",") loop {
-                if fr.length > 0 then loadFragPieces :ctx :runtimeDir frag: fr
+                if fr.length > 0 then loadFragPieces :ctx frag: fr
             }
         }
         i = i + 1
@@ -39906,26 +39891,26 @@ answersUnit: function {ctx: Ctx.view dem: StringView} out bool is {
 
 # loadFragPieces -- loadPiecesOf for the fragment `frag`, when it holds
 # pieces: it is marked to be written a piece at a time
-loadFragPieces: function {ctx: Ctx runtimeDir: StringView frag: StringView} is {
-    p: nativePath :runtimeDir :frag
-    inf: ctx.rt.infos.get i: (tmplParsed :ctx path: p.stringView)
+loadFragPieces: function {ctx: Ctx frag: StringView} is {
+    p: fragKey :ctx name: frag
+    inf: ctx.rt.infos.get i: (tmplParsed :ctx key: p)
     if inf.pieceFrom == inf.pieceTo then return
     if (ctx.piecedFrags.has item: frag.string) then return
     ctx.piecedFrags.add item: frag.string
-    loadPiecesOf :ctx path: p.stringView
+    loadPiecesOf :ctx key: p
 }
 
 # loadFixedPieces -- loadPiecesOf for the fixed file `name`
-loadFixedPieces: function {ctx: Ctx runtimeDir: StringView name: StringView} is {
-    p: "\{runtimeDir}/\{name}"
-    loadPiecesOf :ctx path: p.stringView
+loadFixedPieces: function {ctx: Ctx name: StringView} is {
+    p: fileKey :ctx :name
+    loadPiecesOf :ctx key: p
 }
 
-# loadPiecesOf -- loadPieces for the runtime file at `path`: each of its pieces
-# (rtpiece) recorded as a row, in place in the file
-loadPiecesOf: function {ctx: Ctx path: StringView} is {
-    p: path.string
-    id: tmplParsed :ctx path: p.stringView
+# loadPiecesOf -- loadPieces for native text `key`: each of its pieces (rtpiece)
+# recorded as a row, in place in the text
+loadPiecesOf: function {ctx: Ctx key: textkey} is {
+    p: textLabel :ctx :key
+    id: tmplParsed :ctx :key
     tt: (ctx.rt.texts.get i: id).copy
     inf: ctx.rt.infos.get i: id
     j: inf.pieceFrom
@@ -39936,7 +39921,7 @@ loadPiecesOf: function {ctx: Ctx path: StringView} is {
             (
                 emitFail
                 :ctx
-                what: "runtime file \{p}: the piece marker at byte \{pc.at} is not closed"
+                what: "\{p}: the piece marker at byte \{pc.at} is not closed"
                 line: 0
             )
             return
@@ -40261,7 +40246,7 @@ rtRender: function {ctx: Ctx.view plan: RtPlan.view keys: RtKeys.view} out Strin
         rawIds: ListVal zast.nameid
         rawVals: List String
         holes: false
-        path: ""
+        key: noText
         :fails
     )
 }
@@ -40277,15 +40262,17 @@ rtRenderWith: function {
     rawIds: (ListVal zast.nameid).view
     rawVals: (List String).view
     holes: bool
-    path: StringView
+    # the text written, for its mark and the messages; noText for a row's body
+    key: textkey
     fails: List String
 } out String is {
     res: String
+    path: textLabel :ctx :key
     rt: ctx.rt
     id: plan.id
     inf: rt.infos.get i: id
     total: (rt.texts.get i: id).length
-    mk: openMark :ctx :path buf: res
+    mk: openMark :ctx :key buf: res
     # a piece's mark was written last: the text's own is written again before
     # more of it
     pieceMarked: false
@@ -40308,7 +40295,7 @@ rtRenderWith: function {
             :rawIds
             :rawVals
             :holes
-            :path
+            path: path.stringView
             :fails
             buf: res
         )
@@ -40330,7 +40317,7 @@ rtRenderWith: function {
                 :rawIds
                 :rawVals
                 :holes
-                :path
+                path: path.stringView
                 :fails
                 buf: body
             )
@@ -40355,7 +40342,7 @@ rtRenderWith: function {
         :rawIds
         :rawVals
         :holes
-        :path
+        path: path.stringView
         :fails
         buf: res
     )
@@ -40385,11 +40372,11 @@ appendNativeMark: function {ctx: Ctx.view mk: u64 name: StringView buf: String.b
     buf.append "/* nativec: \{m.mark} */\n"
 }
 
-# openMark -- the mark of the native text cached under `path`, written first
-# (zc emit --mark-natives): its row in Ctx.marks, 0 for none
-openMark: function {ctx: Ctx.view path: StringView buf: String.borrow} out u64 is {
+# openMark -- the mark of native text `key`, written first (zc emit
+# --mark-natives): its row in Ctx.marks, 0 for none
+openMark: function {ctx: Ctx.view key: textkey buf: String.borrow} out u64 is {
     if ctx.markNatives.not then return 0
-    mk: (ctx.nativeMarks.get key: path.asString).or d: 0
+    mk: (ctx.nativeMarks.get :key).or d: 0
     if mk > 0 then appendNativeMark :ctx :mk name: "" :buf
     return mk
 }
@@ -40622,8 +40609,8 @@ sectionRowNeeds: function {ctx: Ctx text: StringView from: u64 to: u64 cond: Con
 
 # loadFixedFile -- one of the runtime's fixed files as this program writes it:
 # its pieces decided (rtRowPlan), its String and StringView holes filled
-loadFixedFile: function {ctx: Ctx path: StringView} out String is {
-    plan: rtRowPlan :ctx id: (tmplParsed :ctx :path)
+loadFixedFile: function {ctx: Ctx key: textkey} out String is {
+    plan: rtRowPlan :ctx id: (tmplParsed :ctx :key)
     bn: ListVal zast.nameid
     bv: List String
     bn.append (rtHoleId slot: rtHole.slot.holeStringView)
@@ -40641,11 +40628,11 @@ loadFixedFile: function {ctx: Ctx path: StringView} out String is {
         rawIds: ListVal zast.nameid
         rawVals: List String
         holes: true
-        :path
+        :key
         fails: ferr
     )
     if (ctx.rt.infos.get i: plan.id).open then {
-        ferr.append from: "fragment \{path}: unterminated hole"
+        ferr.append from: "\{textLabel :ctx :key}: unterminated hole"
     }
     for each m: ferr loop ctx.emitErrors.append (emitterFailure what: m.copy line: 0)
     return res
@@ -40739,13 +40726,13 @@ buildTypeCnames: function {
 
 # emitStringFragments -- the String, StringView and hash runtime fragments. A
 # String typedef (Path) shares the String struct and its free (destroyFnC).
-emitStringFragments: function {ctx: Ctx runtimeDir: StringView buf: String.borrow} is {
-    p1: "\{runtimeDir}/z_String.inc"
-    buf.append (loadFixedFile :ctx path: p1.stringView)
-    p2: "\{runtimeDir}/z_StringView.inc"
-    buf.append (loadFixedFile :ctx path: p2.stringView)
-    ph: "\{runtimeDir}/z_hash.inc"
-    buf.append (loadFixedFile :ctx path: ph.stringView)
+emitStringFragments: function {ctx: Ctx buf: String.borrow} is {
+    p1: fileKey :ctx name: "String"
+    buf.append (loadFixedFile :ctx key: p1)
+    p2: fileKey :ctx name: "StringView"
+    buf.append (loadFixedFile :ctx key: p2)
+    ph: fileKey :ctx name: "hash"
+    buf.append (loadFixedFile :ctx key: ph)
 }
 
 # emitCodeBody -- everything that references a `_zsN` literal goes into codeBuf
@@ -40757,7 +40744,6 @@ emitCodeBody: function {
     program: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    runtimeDir: StringView
     nodeEstE: u64
     codeBuf: String.borrow
 } out u64 is {
@@ -40781,23 +40767,22 @@ emitCodeBody: function {
         ast: program
         :symtab
         :ctx
-        :runtimeDir
         uname: "sviter"
         buf: svBuf
     )
     rtBuf: String
-    emitRuntimeUnits ast: program :symtab :ctx :runtimeDir buf: rtBuf late: false
+    emitRuntimeUnits ast: program :symtab :ctx buf: rtBuf late: false
     needsAt: ctx.needUnits.length
     closeReachedTypes ast: program :symtab :ctx
-    closeTmplDestroys ast: program :symtab :ctx :runtimeDir
-    emitMonos ast: program :symtab :ctx :runtimeDir buf: codeBuf
+    closeTmplDestroys ast: program :symtab :ctx
+    emitMonos ast: program :symtab :ctx buf: codeBuf
     codeBuf.append svBuf
     # ahead of the runtime fragments: those dereference the layouts of the
     # types they serve, so anything a fragment touches must already be
     # complete, and this is the pass that orders by-value embedding in both
     # directions (a user struct inside a mono, a mono inside a user struct)
     emitFnptrTypedefs ast: program :symtab :ctx buf: codeBuf
-    emitUserStructsOrdered ast: program :symtab :ctx :runtimeDir buf: codeBuf
+    emitUserStructsOrdered ast: program :symtab :ctx buf: codeBuf
     codeBuf.append rtBuf
     # the count of needs the runtime pass answered: one asked after it is late
     return needsAt
@@ -40813,7 +40798,6 @@ emitRuntimeUnits: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    runtimeDir: StringView
     buf: String.borrow
     late: bool
 } is {
@@ -40821,7 +40805,7 @@ emitRuntimeUnits: function {
     uos: List String
     for each uo0: ctx.unitOrder loop uos.append uo0.copy
     for each uo: uos loop {
-        emitRuntimeUnit :ast :symtab :ctx :runtimeDir uname: uo.stringView :buf
+        emitRuntimeUnit :ast :symtab :ctx uname: uo.stringView :buf
         if late.not when (
             (ctx.nativeWords.slotOf text: uo.stringView) == nativeWord.slot.unitIo
         ) then {
@@ -40829,7 +40813,7 @@ emitRuntimeUnits: function {
             emitIoStdStreams :ast :symtab :ctx :buf
         }
     }
-    emitUnorderedUnits :ast :symtab :ctx :runtimeDir :buf
+    emitUnorderedUnits :ast :symtab :ctx :buf
 }
 
 
@@ -40837,10 +40821,6 @@ emitRuntimeUnits: function {
 emitC: function {
     program: Ast.view
     symtab: zenv.ZSymbolTable
-    runtimeDir: StringView
-    # read the runtime from `runtimeDir` on disk rather than from the rows zc
-    # carries, which are served under the same paths
-    runtimeFromDisk: false
     # the user units' C implementation files, checked (UserImplementation)
     users: (List UserImplementation).view
     # the standard library's rows are the ones zc carries; false when its own
@@ -40928,7 +40908,6 @@ emitC: function {
         rowCondEpochAt: 0
         rowCondKey: (IdMapR u64 V: String)
         condNames: List String
-        runtimeDir: String
         keyEqKept: IdSet ztypes.tid
         keyHashKept: IdSet ztypes.tid
         keyEqNoAt: (IdMapV ztypes.tid v: u64)
@@ -41002,13 +40981,15 @@ emitC: function {
         fnSpelled: IdSet ztypes.tid
         nativeBoxImpls: ListVal ztypes.tid
         nativeBoxProtos: ListVal ztypes.tid
-        tmplCache: (Map String V: String)
+        texts: (MapVR textkey V: String)
+        textIds: (MapRV String v: u32)
+        textNames: List String
         ioCanonC: (Map String V: String)
         canonSpecs: (Map String V: String)
         unitReqs: List UnitReq
         rt: RtTexts.create
-        tmplTexts: (MapRV String v: rtid)
-        tmplNeeds: (Map String V: String)
+        tmplTexts: (MapVV textkey v: rtid)
+        tmplNeeds: (MapVR textkey V: String)
         nativeTbl: (MapRV String v: rtid)
         nativeConstBody: (MapRV String v: rtid)
         nativeConstPos: (Map String V: String)
@@ -41023,7 +41004,7 @@ emitC: function {
         nativeWords: (zast.Vocab.create block: nativeWord)
         implementedUnits: Set String
         :markNatives
-        nativeMarks: (MapRV String v: u64)
+        nativeMarks: (MapVV textkey v: u64)
         marks: List NativeMark
         svCalls: (IdMapV zast.nameid v: svcall)
         nativeFragPaths: (MapRV String v: u64)
@@ -41109,17 +41090,13 @@ emitC: function {
         boolTid: boolId
         :origins
     )
-    ctx.runtimeDir = runtimeDir.string
     recordImplementedUnits :ctx :users
-    if runtimeFromDisk then {
-        loadNativeTbl :ctx ast: program :symtab :runtimeDir
-        registerUsers :ctx ast: program :symtab :users
-    } else if servedRows then {
+    if servedRows then {
         registerImplementations :ctx ast: program :symtab :users
     } else {
         registerFromFiles :ctx ast: program :symtab :users
     }
-    loadPieces :ctx :runtimeDir
+    loadPieces :ctx
     linkLibs: List String
     csrcs: List String
     (
@@ -41197,7 +41174,7 @@ emitC: function {
     )
     fnProtosBuf.append "\n"
     codeBuf: String
-    needsAt: emitCodeBody :program :symtab :ctx :runtimeDir :nodeEstE :codeBuf
+    needsAt: emitCodeBody :program :symtab :ctx :nodeEstE :codeBuf
     # what is asked for after the runtime pass has run -- while a type or a
     # conformance helper is written -- goes in where that pass ended: ahead of
     # every method body, behind every struct and runtime unit it reads. That is
@@ -41210,7 +41187,7 @@ emitC: function {
     codeBuf.append bodiesBuf
     lateBuf: String
     if (needsOutsidePrelude :ctx from: needsAt) then {
-        emitRuntimeUnits ast: program :symtab :ctx :runtimeDir buf: lateBuf late: true
+        emitRuntimeUnits ast: program :symtab :ctx buf: lateBuf late: true
     }
     if ctx.nativeBoxImpls.length > 0 then {
         emitNativeConformanceImpls ast: program :symtab :ctx buf: lateBuf
@@ -41229,7 +41206,6 @@ emitC: function {
         :program
         :symtab
         :ctx
-        :runtimeDir
         :buf
         poolBuf: poolBuf.stringView
         codeBuf: codeBuf.stringView
@@ -41252,8 +41228,8 @@ emitC: function {
     # then the String, StringView and hash fragments the code follows
     closeRowNeeds :ctx
     head: String
-    emitCHeader libs: linkLibs :csrcs :runtimeDir panicFrag: pf.stringView :ctx buf: head
-    emitStringFragments :ctx :runtimeDir buf: head
+    emitCHeader libs: linkLibs :csrcs panicFrag: pf.stringView :ctx buf: head
+    emitStringFragments :ctx buf: head
     # the Ctx's failures follow assembly's own, in the order recorded: popped
     # twice, so each is moved rather than copied
     rev: List zast.ErrorData
@@ -41441,12 +41417,6 @@ unitHasMain: function {ast: Ast.view mainOpId: zast.nodeid} out bool is {
     return false
 }
 
-# the path to a native runtime fragment under `runtimeDir`.
-nativePath: function {runtimeDir: StringView frag: StringView} out String is {
-    p: "\{runtimeDir}/natives/\{frag}.inc"
-    return p
-}
-
 # cbaseNoPrefix -- the id-based cname without the leading "z_" (the runtime
 # templates spell z_@@NAME@@, so NAME omits the prefix).
 cbaseNoPrefix: function {ctx: Ctx.view tid: ztypes.tid} out String is {
@@ -41491,7 +41461,6 @@ emitArrayMono: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    runtimeDir: StringView
     monoId: ztypes.tid
     buf: String.borrow
 } is {
@@ -41512,8 +41481,8 @@ emitArrayMono: function {
         :lenStr
         dest: eqBody
     )
-    p: "\{runtimeDir}/z_array.c.tmpl"
-    ti: tmplTextOf :ctx path: p.stringView
+    p: tmplKey :ctx name: "array"
+    ti: tmplTextOf :ctx key: p
     if (rtEmpty :ctx id: ti).not then {
         kt: RtKeys.create
         rtKey :ctx keys: kt name: "NAME" val: nm.stringView
@@ -41597,7 +41566,6 @@ monoLengthText: function {symtab: zenv.ZSymbolTable.view monoId: ztypes.tid} out
 emitStrMono: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    runtimeDir: StringView
     monoId: ztypes.tid
     buf: String.borrow
 } is {
@@ -41615,8 +41583,8 @@ emitStrMono: function {
             eqBody = "static bool z_\{nm}_eq(z_\{nm}_t a, z_\{nm}_t b) {\n    return a.len == b.len && memcmp(a.data, b.data, a.len) == 0;\n}\n"
         }
     } case none then null
-    p: "\{runtimeDir}/z_str.c.tmpl"
-    ti: tmplTextOf :ctx path: p.stringView
+    p: tmplKey :ctx name: "str"
+    ti: tmplTextOf :ctx key: p
     # the template's String holes spell that type
     preludeNeed :ctx memb: "@String_t"
     kt: RtKeys.create
@@ -41642,7 +41610,7 @@ emitStrMono: function {
         rawIds: ListVal zast.nameid
         rawVals: List String
         holes: true
-        path: p.stringView
+        key: p
         fails: ferr
     )
     for each m: ferr loop ctx.emitErrors.append (emitterFailure what: m.copy line: 0)
@@ -41682,7 +41650,6 @@ emitBoxMono: function {
 # dead C function in every program that names the collection at all.
 emitColMethodOnDemand: function {
     ctx: Ctx
-    runtimeDir: StringView
     monoId: ztypes.tid
     # the member, a memberWord slot
     member: u64
@@ -41697,8 +41664,8 @@ emitColMethodOnDemand: function {
     buf: String.borrow
 } is {
     if (memberUsed :ctx mono: monoId :member).not then return
-    fp: "\{runtimeDir}/\{file}"
-    ti: tmplTextOf :ctx path: fp.stringView
+    fp: tmplKey :ctx name: file
+    ti: tmplTextOf :ctx key: fp
     if (rtEmpty :ctx id: ti) then return
     kt: RtKeys.create
     rtKey :ctx keys: kt name: "NAME" val: nm
@@ -41744,7 +41711,6 @@ emitListMono: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    runtimeDir: StringView
     monoId: ztypes.tid
     buf: String.borrow
 } is {
@@ -41755,8 +41721,8 @@ emitListMono: function {
     isSvEl: isViewLaid :ctx tid: eid
     ect0: slotCType :ast :symtab :ctx tid: eid
     ect: ctypeOrI64 s: ect0.stringView
-    p: "\{runtimeDir}/z_List.c.tmpl"
-    ti: tmplTextOf :ctx path: p.stringView
+    p: tmplKey :ctx name: "List"
+    ti: tmplTextOf :ctx key: p
     if (rtEmpty :ctx id: ti) then return
     {
         kt: RtKeys.create
@@ -41777,10 +41743,9 @@ emitListMono: function {
     (
         emitColMethodOnDemand
         :ctx
-        :runtimeDir
         :monoId
         member: memberWord.slot.insert
-        file: "z_List_insert.c.tmpl"
+        file: "List_insert"
         nm: nm.stringView
         hole: "ELEM_T"
         holeVal: ect.stringView
@@ -41789,10 +41754,9 @@ emitListMono: function {
     (
         emitColMethodOnDemand
         :ctx
-        :runtimeDir
         :monoId
         member: memberWord.slot.extend
-        file: "z_List_extend.c.tmpl"
+        file: "List_extend"
         nm: nm.stringView
         hole: "ELEM_T"
         holeVal: ect.stringView
@@ -41802,10 +41766,9 @@ emitListMono: function {
     (
         emitColMethodOnDemand
         :ctx
-        :runtimeDir
         :monoId
         member: memberWord.slot.resize
-        file: "z_List_resize.c.tmpl"
+        file: "List_resize"
         nm: nm.stringView
         hole: "ELEM_T"
         holeVal: ect.stringView
@@ -41817,10 +41780,9 @@ emitListMono: function {
     (
         emitColMethodOnDemand
         :ctx
-        :runtimeDir
         :monoId
         member: memberWord.slot.copy
-        file: "z_List_copy.c.tmpl"
+        file: "List_copy"
         nm: nm.stringView
         hole: "ELEM_T"
         holeVal: ect.stringView
@@ -42403,7 +42365,6 @@ emitListViewMono: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    runtimeDir: StringView
     monoId: ztypes.tid
     buf: String.borrow
 } is {
@@ -42411,8 +42372,8 @@ emitListViewMono: function {
     eid: listElemType :symtab :monoId
     ect0: slotCType :ast :symtab :ctx tid: eid
     ect: ctypeOrI64 s: ect0.stringView
-    p: "\{runtimeDir}/z_ListView.c.tmpl"
-    ti: tmplTextOf :ctx path: p.stringView
+    p: tmplKey :ctx name: "ListView"
+    ti: tmplTextOf :ctx key: p
     if (rtEmpty :ctx id: ti).not then {
         kt: RtKeys.create
         rtKey :ctx keys: kt name: "NAME" val: nm.stringView
@@ -42456,7 +42417,6 @@ emitStaticListMono: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    runtimeDir: StringView
     monoId: ztypes.tid
     buf: String.borrow
 } is {
@@ -42465,8 +42425,8 @@ emitStaticListMono: function {
     ect0: slotCType :ast :symtab :ctx tid: eid
     ect: ctypeOrI64 s: ect0.stringView
     est: staticListStoredC ect: ect.stringView
-    p: "\{runtimeDir}/z_data.c.tmpl"
-    ti: tmplTextOf :ctx path: p.stringView
+    p: tmplKey :ctx name: "data"
+    ti: tmplTextOf :ctx key: p
     if (rtEmpty :ctx id: ti).not then {
         kt: RtKeys.create
         rtKey :ctx keys: kt name: "NAME" val: nm.stringView
@@ -42509,7 +42469,6 @@ emitSpanMono: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    runtimeDir: StringView
     monoId: ztypes.tid
     buf: String.borrow
 } is {
@@ -42517,8 +42476,8 @@ emitSpanMono: function {
     eid: listElemType :symtab :monoId
     ect0: slotCType :ast :symtab :ctx tid: eid
     ect: ctypeOrI64 s: ect0.stringView
-    p: "\{runtimeDir}/z_ListView.c.tmpl"
-    ti: tmplTextOf :ctx path: p.stringView
+    p: tmplKey :ctx name: "ListView"
+    ti: tmplTextOf :ctx key: p
     if (rtEmpty :ctx id: ti).not then {
         kt: RtKeys.create
         rtKey :ctx keys: kt name: "NAME" val: nm.stringView
@@ -42541,10 +42500,9 @@ emitSpanMono: function {
     (
         emitSpanMemberOnDemand
         :ctx
-        :runtimeDir
         :monoId
         member: memberWord.slot.set
-        file: "z_SpanVal_set.c.tmpl"
+        file: "SpanVal_set"
         nm: nm.stringView
         ect: ect.stringView
         :buf
@@ -42552,10 +42510,9 @@ emitSpanMono: function {
     (
         emitSpanMemberOnDemand
         :ctx
-        :runtimeDir
         :monoId
         member: memberWord.slot.slice
-        file: "z_SpanVal_slice.c.tmpl"
+        file: "SpanVal_slice"
         nm: nm.stringView
         ect: ect.stringView
         :buf
@@ -42563,10 +42520,9 @@ emitSpanMono: function {
     (
         emitSpanMemberOnDemand
         :ctx
-        :runtimeDir
         :monoId
         member: memberWord.slot.fill
-        file: "z_SpanVal_fill.c.tmpl"
+        file: "SpanVal_fill"
         nm: nm.stringView
         ect: ect.stringView
         :buf
@@ -42574,10 +42530,9 @@ emitSpanMono: function {
     (
         emitSpanMemberOnDemand
         :ctx
-        :runtimeDir
         :monoId
         member: memberWord.slot.clear
-        file: "z_SpanVal_clear.c.tmpl"
+        file: "SpanVal_clear"
         nm: nm.stringView
         ect: ect.stringView
         :buf
@@ -42588,7 +42543,6 @@ emitSpanMono: function {
 # beyond NAME is the element type.
 emitSpanMemberOnDemand: function {
     ctx: Ctx
-    runtimeDir: StringView
     monoId: ztypes.tid
     # the member, a memberWord slot
     member: u64
@@ -42600,7 +42554,6 @@ emitSpanMemberOnDemand: function {
     (
         emitColMethodOnDemand
         :ctx
-        :runtimeDir
         :monoId
         :member
         :file
@@ -43199,7 +43152,6 @@ emitSetMono: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    runtimeDir: StringView
     monoId: ztypes.tid
     buf: String.borrow
 } is {
@@ -43232,8 +43184,8 @@ emitSetMono: function {
     if isStr then setViewProbes :ctx :monoId nm: nm.stringView buf: vp
     # the instance's text as this program writes it (rtSectionPlan), so the
     # item hash and `==` are spelled only where a written section holds them
-    p: "\{runtimeDir}/z_Set.c.tmpl"
-    ti: tmplTextOf :ctx path: p.stringView
+    p: tmplKey :ctx name: "Set"
+    ti: tmplTextOf :ctx key: p
     if (rtEmpty :ctx id: ti) then return
     plan: rtSectionPlan :ctx mono: monoId id: ti
     needHash: rtPlanSpells :ctx :plan name: "HASH_BODY"
@@ -43284,10 +43236,9 @@ emitSetMono: function {
     (
         emitColMethodOnDemand
         :ctx
-        :runtimeDir
         :monoId
         member: memberWord.slot.copy
-        file: "z_dict_copy.c.tmpl"
+        file: "dict_copy"
         nm: nm.stringView
         hole: ""
         holeVal: ""
@@ -43449,7 +43400,6 @@ emitMapIters: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     monoId: ztypes.tid
-    runtimeDir: StringView
     nm: StringView
     keyT: StringView
     valT: StringView
@@ -43495,8 +43445,8 @@ emitMapIters: function {
     me: cbaseNoPrefix :ctx tid: meId
     ovk: cbaseNoPrefix :ctx tid: ovkId
     ove: cbaseNoPrefix :ctx tid: oveId
-    pi: "\{runtimeDir}/z_MapIter.c.tmpl"
-    ti: tmplTextOf :ctx path: pi.stringView
+    pi: tmplKey :ctx name: "MapIter"
+    ti: tmplTextOf :ctx key: pi
     if (rtEmpty :ctx id: ti).not then {
         plan: rtSectionPlan :ctx mono: monoId id: ti
         kt: RtKeys.create
@@ -43668,7 +43618,6 @@ emitMapMono: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    runtimeDir: StringView
     monoId: ztypes.tid
     buf: String.borrow
 } is {
@@ -43712,8 +43661,7 @@ emitMapMono: function {
         :symtab
         :ctx
         :monoId
-        :runtimeDir
-        file: "z_MapMut.c.tmpl"
+        file: "MapMut"
         nm: nm.stringView
         keyHole: "KEY_ARG_T"
         keyT: keyArgT.stringView
@@ -43723,8 +43671,8 @@ emitMapMono: function {
     if kkind == 1 then mapViewProbes :ctx :monoId nm: nm.stringView ov: ov.stringView buf: vp
     # the instance's text as this program writes it (rtSectionPlan), so the
     # key hash and `==` are spelled only where a written section holds them
-    p: "\{runtimeDir}/z_Map.c.tmpl"
-    ti: tmplTextOf :ctx path: p.stringView
+    p: tmplKey :ctx name: "Map"
+    ti: tmplTextOf :ctx key: p
     if (rtEmpty :ctx id: ti) then return
     plan: rtSectionPlan :ctx mono: monoId id: ti
     needHash: rtPlanSpells :ctx :plan name: "HASH_KEY_BODY"
@@ -43907,7 +43855,6 @@ emitMapMono: function {
         :symtab
         :ctx
         :monoId
-        :runtimeDir
         nm: nm.stringView
         keyT: keyT.stringView
         valT: valT.stringView
@@ -43918,10 +43865,9 @@ emitMapMono: function {
     (
         emitColMethodOnDemand
         :ctx
-        :runtimeDir
         :monoId
         member: memberWord.slot.copy
-        file: "z_dict_copy.c.tmpl"
+        file: "dict_copy"
         nm: nm.stringView
         hole: ""
         holeVal: ""
@@ -43944,7 +43890,6 @@ emitIdMapMono: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    runtimeDir: StringView
     monoId: ztypes.tid
     buf: String.borrow
 } is {
@@ -44005,8 +43950,8 @@ emitIdMapMono: function {
         # is copied out of the entry storage
         getBody = "    z_\{ov}_t _r = {0};\n    if (idx >= 0) {\n        _r.tag = \{ovSome};\n        _r.data = (void*)&_this->entries[idx].value;\n    } else {\n        _r.tag = \{ovNone};\n        _r.data = NULL;\n    }\n    return _r;"
     }
-    p: "\{runtimeDir}/z_IdMap.c.tmpl"
-    ti: tmplTextOf :ctx path: p.stringView
+    p: tmplKey :ctx name: "IdMap"
+    ti: tmplTextOf :ctx key: p
     if (rtEmpty :ctx id: ti) then return
     kt: RtKeys.create
     rtKey :ctx keys: kt name: "NAME" val: nm.stringView
@@ -44027,8 +43972,7 @@ emitIdMapMono: function {
         :symtab
         :ctx
         :monoId
-        :runtimeDir
-        file: "z_IdMapMut.c.tmpl"
+        file: "IdMapMut"
         nm: nm.stringView
         keyHole: "KEY_T"
         keyT: keyT.stringView
@@ -44049,7 +43993,6 @@ emitIdMapMono: function {
         :symtab
         :ctx
         :monoId
-        :runtimeDir
         nm: nm.stringView
         keyT: keyT.stringView
         valT: valT.stringView
@@ -44059,10 +44002,9 @@ emitIdMapMono: function {
     (
         emitColMethodOnDemand
         :ctx
-        :runtimeDir
         :monoId
         member: memberWord.slot.copy
-        file: "z_IdMap_copy.c.tmpl"
+        file: "IdMap_copy"
         nm: nm.stringView
         hole: ""
         holeVal: ""
@@ -44082,7 +44024,6 @@ emitMapGetMut: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     monoId: ztypes.tid
-    runtimeDir: StringView
     file: StringView
     nm: StringView
     keyHole: StringView
@@ -44100,11 +44041,11 @@ emitMapGetMut: function {
     )
     if (typeReached :ctx tid: gmId).not then return
     gmv: cbaseNoPrefix :ctx tid: gmId
-    pm: "\{runtimeDir}/\{file}"
+    pm: tmplKey :ctx name: file
     # getMut probes through the instance's find (and a Map's hash_key)
     noteMemberUse :ctx mono: monoId member: memberWord.slot.find
     noteMemberUse :ctx mono: monoId member: memberWord.slot.hashKey
-    ti: tmplTextOf :ctx path: pm.stringView
+    ti: tmplTextOf :ctx key: pm
     if (rtEmpty :ctx id: ti) then return
     plan: rtSectionPlan :ctx mono: monoId id: ti
     kt: RtKeys.create
@@ -44127,7 +44068,6 @@ emitIdMapIters: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     monoId: ztypes.tid
-    runtimeDir: StringView
     nm: StringView
     keyT: StringView
     valT: StringView
@@ -44159,8 +44099,8 @@ emitIdMapIters: function {
     mii: cbaseNoPrefix :ctx tid: miiId
     me: cbaseNoPrefix :ctx tid: meId
     ove: cbaseNoPrefix :ctx tid: oveId
-    pi: "\{runtimeDir}/z_IdMapIter.c.tmpl"
-    ti: tmplTextOf :ctx path: pi.stringView
+    pi: tmplKey :ctx name: "IdMapIter"
+    ti: tmplTextOf :ctx key: pi
     if (rtEmpty :ctx id: ti) then return
     plan: rtSectionPlan :ctx mono: monoId id: ti
     kt: RtKeys.create
@@ -44183,7 +44123,6 @@ emitIdSetMono: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    runtimeDir: StringView
     monoId: ztypes.tid
     buf: String.borrow
 } is {
@@ -44208,8 +44147,8 @@ emitIdSetMono: function {
     if ovId.isZero then return
     ov: cbaseNoPrefix :ctx tid: ovId
     si: cbaseNoPrefix :ctx tid: siId
-    p: "\{runtimeDir}/z_IdSet.c.tmpl"
-    ti: tmplTextOf :ctx path: p.stringView
+    p: tmplKey :ctx name: "IdSet"
+    ti: tmplTextOf :ctx key: p
     if (rtEmpty :ctx id: ti) then return
     kt: RtKeys.create
     rtKey :ctx keys: kt name: "NAME" val: nm.stringView
@@ -44232,10 +44171,9 @@ emitIdSetMono: function {
     (
         emitColMethodOnDemand
         :ctx
-        :runtimeDir
         :monoId
         member: memberWord.slot.copy
-        file: "z_IdSet_copy.c.tmpl"
+        file: "IdSet_copy"
         nm: nm.stringView
         hole: "ITEM_T"
         holeVal: itemT.stringView
@@ -44389,19 +44327,19 @@ fragUnitChild: function {
     return (uo.or d: ztypes.tid.zero)
 }
 
-# loadIoFragment -- read an io/cli runtime `.inc` and fill its holes
+# loadIoFragment -- an io/cli fragment `key` with its holes filled
 # (rtFragmentText).
 loadIoFragment: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    path: StringView
+    key: textkey
 } out String is {
-    txt: readTemplateCached :ctx :path
-    if txt.length == 0 then return "/* zemitterc: missing io fragment \{path} */\n"
+    txt: textOf :ctx :key
+    if txt.length == 0 then return "/* zemitterc: missing io \{textLabel :ctx :key} */\n"
     id: ctx.rt.parse text: txt.stringView
     plan: RtPlan :id kept: ListVal bool conds: List Cond
-    return (rtFragmentText :ast :symtab :ctx :plan all: true :path)
+    return (rtFragmentText :ast :symtab :ctx :plan all: true :key)
 }
 
 # ioFileId -- the io File class type id: the File io's own unit declares, by id
@@ -44756,7 +44694,6 @@ emitRuntimeUnit: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    runtimeDir: StringView
     uname: StringView
     buf: String.borrow
 } is {
@@ -44773,7 +44710,7 @@ emitRuntimeUnit: function {
         # a piece is written in place by its file (loadPieces)
         if isU when (ctx.rowsInPlace.has item: i) then isU = false
         if isU when (ctx.rowsWritten.has item: i).not when (rowDemandFired :ctx :i) then {
-            writeRuntimeRow :ast :symtab :ctx :runtimeDir row: i :buf
+            writeRuntimeRow :ast :symtab :ctx row: i :buf
         }
         i = i + 1
     }
@@ -44785,7 +44722,6 @@ writeRuntimeRow: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    runtimeDir: StringView
     row: u64
     buf: String.borrow
 } is {
@@ -44795,13 +44731,13 @@ writeRuntimeRow: function {
     fl: (ctx.fragNames.get i: row).copy
     if (rowAlways :ctx i: row) then {
         for each fr: (fl.stringView.split sep: ",") loop {
-            if fr.length > 0 then ioFrag :ast :symtab :ctx :runtimeDir frag: fr :buf
+            if fr.length > 0 then ioFrag :ast :symtab :ctx frag: fr :buf
         }
         return
     }
     rb: String
     for each fr: (fl.stringView.split sep: ",") loop {
-        if fr.length > 0 then ioFrag :ast :symtab :ctx :runtimeDir frag: fr buf: rb
+        if fr.length > 0 then ioFrag :ast :symtab :ctx frag: fr buf: rb
     }
     wrapCond :ctx c: (rowCond :ctx i: row) body: rb.stringView :buf
 }
@@ -44952,7 +44888,6 @@ emitUnorderedUnits: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    runtimeDir: StringView
     buf: String.borrow
 } is {
     done: List String
@@ -44973,7 +44908,7 @@ emitUnorderedUnits: function {
         }
         if skip.not then {
             done.append from: u.copy
-            emitRuntimeUnit :ast :symtab :ctx :runtimeDir uname: u.stringView :buf
+            emitRuntimeUnit :ast :symtab :ctx uname: u.stringView :buf
         }
         i = i + 1
     }
@@ -44984,17 +44919,16 @@ ioFrag: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    runtimeDir: StringView
     frag: StringView
     buf: String.borrow
 } is {
-    p: nativePath :runtimeDir :frag
+    p: fragKey :ctx name: frag
     if (ctx.piecedFrags.has item: frag.string) then {
-        plan: rtRowPlan :ctx id: (tmplParsed :ctx path: p.stringView)
-        buf.append (rtFragmentText :ast :symtab :ctx :plan all: false path: p.stringView)
+        plan: rtRowPlan :ctx id: (tmplParsed :ctx key: p)
+        buf.append (rtFragmentText :ast :symtab :ctx :plan all: false key: p)
         return
     }
-    f: loadIoFragment :ast :symtab :ctx path: p.stringView
+    f: loadIoFragment :ast :symtab :ctx key: p
     buf.append f
 }
 
@@ -45167,7 +45101,6 @@ emitClassRowStructs: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    runtimeDir: StringView
     buf: String.borrow
 } is {
     i: u64
@@ -45183,7 +45116,7 @@ emitClassRowStructs: function {
             emitClassRowStruct :ast :symtab :ctx :cid :buf
             dfr: (ctx.classRows.get :i).destroy.copy
             if dfr.length > 0 when (destroyWritten :symtab :ctx tid: cid) then {
-                ioFrag :ast :symtab :ctx :runtimeDir frag: dfr.stringView :buf
+                ioFrag :ast :symtab :ctx frag: dfr.stringView :buf
             }
         }
         i = i + 1
@@ -45991,7 +45924,6 @@ emitMonoById: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    runtimeDir: StringView
     monoId: ztypes.tid
     buf: String.borrow
 } is {
@@ -46006,44 +45938,44 @@ emitMonoById: function {
         return
     }
     if (isListViewOriginOf :symtab :ctx tid: monoId) then {
-        emitListViewMono :ast :symtab :ctx :runtimeDir :monoId :buf
+        emitListViewMono :ast :symtab :ctx :monoId :buf
         return
     }
     if (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: family.slot.spanVal)) then {
-        emitSpanMono :ast :symtab :ctx :runtimeDir :monoId :buf
+        emitSpanMono :ast :symtab :ctx :monoId :buf
         return
     }
     if (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: family.slot.fixedArray)
     ) then {
-        emitArrayMono :ast :symtab :ctx :runtimeDir :monoId :buf
+        emitArrayMono :ast :symtab :ctx :monoId :buf
         return
     }
     if (isListOriginOf :symtab :ctx tid: monoId) then {
-        emitListMono :ast :symtab :ctx :runtimeDir :monoId :buf
+        emitListMono :ast :symtab :ctx :monoId :buf
         return
     }
     if (staticListValueFamilyOf :symtab :ctx tid: monoId).isZero.not then {
-        emitStaticListMono :ast :symtab :ctx :runtimeDir :monoId :buf
+        emitStaticListMono :ast :symtab :ctx :monoId :buf
         return
     }
     if (isSetOriginOf :symtab :ctx tid: monoId) then {
-        emitSetMono :ast :symtab :ctx :runtimeDir :monoId :buf
+        emitSetMono :ast :symtab :ctx :monoId :buf
         return
     }
     if (isMapOriginOf :symtab :ctx tid: monoId) then {
-        emitMapMono :ast :symtab :ctx :runtimeDir :monoId :buf
+        emitMapMono :ast :symtab :ctx :monoId :buf
         return
     }
     if (isIdSetOriginOf :symtab :ctx tid: monoId) then {
-        emitIdSetMono :ast :symtab :ctx :runtimeDir :monoId :buf
+        emitIdSetMono :ast :symtab :ctx :monoId :buf
         return
     }
     if (isIdMapOriginOf :symtab :ctx tid: monoId) then {
-        emitIdMapMono :ast :symtab :ctx :runtimeDir :monoId :buf
+        emitIdMapMono :ast :symtab :ctx :monoId :buf
         return
     }
     tr: tmplClassRowOf :symtab :ctx tid: monoId
-    if tr > 0 then emitTmplClassMono :ast :symtab :ctx :runtimeDir :monoId row: tr - 1 :buf
+    if tr > 0 then emitTmplClassMono :ast :symtab :ctx :monoId row: tr - 1 :buf
 }
 
 # tmplClassRowOf -- the `.@class` row whose `tmpl=` writes `tid`: an instance
@@ -46435,15 +46367,14 @@ emitTmplClassMono: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    runtimeDir: StringView
     monoId: ztypes.tid
     # the class row, by index
     row: u64
     buf: String.borrow
 } is {
     tf: (ctx.classRows.get i: row).tmpl.copy
-    p: "\{runtimeDir}/\{tf}"
-    ti: tmplTextOf :ctx path: p.stringView
+    p: tmplKey :ctx name: tf.stringView
+    ti: tmplTextOf :ctx key: p
     if (rtEmpty :ctx id: ti) then return
     nm: cbaseNoPrefix :ctx tid: monoId
     kt: RtKeys.create
@@ -46502,7 +46433,7 @@ emitTmplClassMono: function {
     # fragment's own holes, every one bound: a type by canon, a tag constant, a
     # member
     plan: rtSectionPlan :ctx mono: monoId id: (ctx.rt.parse text: made.stringView)
-    kept: rtFragmentText :ast :symtab :ctx :plan all: true path: p.stringView
+    kept: rtFragmentText :ast :symtab :ctx :plan all: true key: p
     di: u64
     for di < dfns.length loop {
         dn: (dfns.get i: di).copy
@@ -47340,12 +47271,11 @@ emitLateMember: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    runtimeDir: StringView
     tid: ztypes.tid
     buf: String.borrow
 } is {
     if (lateMemberIsMono :symtab :ctx :tid) then {
-        emitMonoById :ast :symtab :ctx :runtimeDir monoId: tid :buf
+        emitMonoById :ast :symtab :ctx monoId: tid :buf
         return
     }
     if (isUserInstance :symtab :ctx tcl: tid) then {
@@ -47366,17 +47296,16 @@ emitLateGroupOrdered: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    runtimeDir: StringView
     lateGroup: (ListVal ztypes.tid).view
     lateSet: IdSet ztypes.tid
     buf: String.borrow
 } is {
     emittedSet: IdSet ztypes.tid
-    allOut: emitLateFixpoint :ast :symtab :ctx :runtimeDir :lateGroup :lateSet :emittedSet :buf
+    allOut: emitLateFixpoint :ast :symtab :ctx :lateGroup :lateSet :emittedSet :buf
     if allOut then return
     bodies: String
-    emitStuckContainerHeads :ast :symtab :ctx :runtimeDir :lateGroup :emittedSet :buf :bodies
-    allOut = emitLateFixpoint :ast :symtab :ctx :runtimeDir :lateGroup :lateSet :emittedSet :buf
+    emitStuckContainerHeads :ast :symtab :ctx :lateGroup :emittedSet :buf :bodies
+    allOut = emitLateFixpoint :ast :symtab :ctx :lateGroup :lateSet :emittedSet :buf
     if allOut.not then {
         f0: u64
         f1: lateGroup.length
@@ -47388,7 +47317,6 @@ emitLateGroupOrdered: function {
                     :ast
                     :symtab
                     :ctx
-                    :runtimeDir
                     tid: x2
                     :buf
                 )
@@ -47406,7 +47334,6 @@ emitLateFixpoint: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    runtimeDir: StringView
     lateGroup: (ListVal ztypes.tid).view
     lateSet: IdSet ztypes.tid
     emittedSet: IdSet ztypes.tid
@@ -47434,7 +47361,6 @@ emitLateFixpoint: function {
                     :ast
                     :symtab
                     :ctx
-                    :runtimeDir
                     tid: x
                     :buf
                 )
@@ -47457,7 +47383,6 @@ emitStuckContainerHeads: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    runtimeDir: StringView
     lateGroup: (ListVal ztypes.tid).view
     emittedSet: IdSet ztypes.tid
     buf: String.borrow
@@ -47472,7 +47397,7 @@ emitStuckContainerHeads: function {
         isList: isListOriginOf :symtab :ctx tid: xt
         if isList.not when (isListViewOriginOf :symtab :ctx tid: xt).not then continue
         whole: String
-        emitMonoById :ast :symtab :ctx :runtimeDir monoId: xt buf: whole
+        emitMonoById :ast :symtab :ctx monoId: xt buf: whole
         splitContainerText text: whole.stringView head: buf rest: bodies
         emittedSet.add item: x
     }
@@ -47514,7 +47439,6 @@ emitUserStructsOrdered: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    runtimeDir: StringView
     buf: String.borrow
 } is {
     last: symtab.reg.nextTid
@@ -47528,7 +47452,7 @@ emitUserStructsOrdered: function {
     lateSet: IdSet ztypes.tid
     closeLateGroup :symtab :ctx :userList :lateGroup :lateSet
     emitEarlyUserStructs :ast :symtab :ctx :userList :lateSet :buf
-    emitLateGroupOrdered :ast :symtab :ctx :runtimeDir :lateGroup :lateSet :buf
+    emitLateGroupOrdered :ast :symtab :ctx :lateGroup :lateSet :buf
 }
 
 # MonoWork -- the mono worklists that one classification sweep fills and the
@@ -47934,7 +47858,6 @@ emitCollectionMonos: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    runtimeDir: StringView
     buf: String.borrow
     work: MonoWork.view
 } is {
@@ -47943,7 +47866,7 @@ emitCollectionMonos: function {
     # list values first: each is a scalar view, and nothing it names comes later
     tdat: u64
     for tdat < work.wStaticList.length loop {
-        emitStaticListMono :ast :symtab :ctx :runtimeDir monoId: (work.wStaticList.get i: tdat) :buf
+        emitStaticListMono :ast :symtab :ctx monoId: (work.wStaticList.get i: tdat) :buf
         tdat = tdat + 1
     }
     tarr: u64
@@ -47954,7 +47877,6 @@ emitCollectionMonos: function {
             :ast
             :symtab
             :ctx
-            :runtimeDir
             monoId: arrId
             :buf
         )
@@ -47968,7 +47890,6 @@ emitCollectionMonos: function {
             :ast
             :symtab
             :ctx
-            :runtimeDir
             monoId: lvId
             :buf
         )
@@ -47979,13 +47900,13 @@ emitCollectionMonos: function {
     twin: u64
     for twin < work.wSpan.length loop {
         spId: work.wSpan.get i: twin
-        emitSpanMono :ast :symtab :ctx :runtimeDir monoId: spId :buf
+        emitSpanMono :ast :symtab :ctx monoId: spId :buf
         twin = twin + 1
     }
     tid2: u64
     for tid2 < work.wList.length loop {
         liId: work.wList.get i: tid2
-        emitListMono :ast :symtab :ctx :runtimeDir monoId: liId :buf
+        emitListMono :ast :symtab :ctx monoId: liId :buf
         tid2 = tid2 + 1
     }
     # Set monos last -- the compact-dict + SetIter; needs its element's
@@ -47993,7 +47914,7 @@ emitCollectionMonos: function {
     tset: u64
     for tset < work.wSet.length loop {
         seId: work.wSet.get i: tset
-        emitSetMono :ast :symtab :ctx :runtimeDir monoId: seId :buf
+        emitSetMono :ast :symtab :ctx monoId: seId :buf
         tset = tset + 1
     }
     # Map monos -- the compact-dict over key+value; get's return optionval
@@ -48001,7 +47922,7 @@ emitCollectionMonos: function {
     tmap: u64
     for tmap < work.wMap.length loop {
         maId: work.wMap.get i: tmap
-        emitMapMono :ast :symtab :ctx :runtimeDir monoId: maId :buf
+        emitMapMono :ast :symtab :ctx monoId: maId :buf
         tmap = tmap + 1
     }
     # the id-keyed pair, after the hashed ones for the same reason: an IdMap's
@@ -48014,7 +47935,6 @@ emitCollectionMonos: function {
             :ast
             :symtab
             :ctx
-            :runtimeDir
             monoId: isId
             :buf
         )
@@ -48028,7 +47948,6 @@ emitCollectionMonos: function {
             :ast
             :symtab
             :ctx
-            :runtimeDir
             monoId: imId
             :buf
         )
@@ -48217,7 +48136,6 @@ emitMonos: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    runtimeDir: StringView
     buf: String.borrow
 } is {
     userListM: ListVal ztypes.tid
@@ -48262,7 +48180,7 @@ emitMonos: function {
     tstr: u64
     for tstr < work.wStr.length loop {
         strId: work.wStr.get i: tstr
-        emitStrMono :symtab :ctx :runtimeDir monoId: strId :buf
+        emitStrMono :symtab :ctx monoId: strId :buf
         tstr = tstr + 1
     }
     # builtin Box monos (heap pointers): destructor-only, leaf -- emit early.
@@ -48272,7 +48190,7 @@ emitMonos: function {
         emitBoxMono :symtab :ctx monoId: boxId :buf
         tbox = tbox + 1
     }
-    emitClassRowStructs :ast :symtab :ctx :runtimeDir :buf
+    emitClassRowStructs :ast :symtab :ctx :buf
     # reachable non-mono system VARIANTs (parseerror, seekorigin, ...) --
     # payloads of the variant monos / used directly.
     tsv: u64
@@ -48295,7 +48213,6 @@ emitMonos: function {
         :ast
         :symtab
         :ctx
-        :runtimeDir
         :work
         :buf
     )

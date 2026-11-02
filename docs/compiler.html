@@ -658,24 +658,27 @@ triple parse and no read of the target.</p>
 <ul>
 <li>an implementation of every <code>is native</code> declaration, refusing at the
     declaration one it has none for -- the C
-    backend's are <code>src/runtime/natives.tbl</code> and its fragments;</li>
+    backend's are the rows of each unit's <code>nativec.zd</code>, which <code>zc</code>
+    carries in itself (see <a href="./native_units.html">Native Units</a>);</li>
 <li>its representation of each type, holding every value the language's
     rules admit -- the C backend gives a type the C compiler lacks (<code>i128</code>,
     <code>u128</code>, <code>f16</code>) a struct and helper functions, and the C preprocessor,
     not <code>zc</code>, picks between that and the compiler's own type;</li>
 <li>what a reached unit needs of its toolchain, and the refusal of a
     toolchain that lacks it, by name and before anything is compiled -- the C
-    backend's <code>@unit.</code> rows: <code>system.quadfloat</code> needs <code>__float128</code>,
-    which tcc and MSVC have none of and only x86-64 targets have, and links
-    libquadmath; <code>sqlite</code> needs its vendored C source compiled
-    (<code>csrc=</code>, <code>cdefs=</code>), which the driver builds into its object cache
-    with the compiler that links.</li>
+    backend's are a unit's links, sources and refusals in its
+    <code>nativec.zd</code>: <code>system.quadfloat</code> needs <code>__float128</code>, which tcc and
+    MSVC have none of and only x86-64 targets have, and links libquadmath;
+    <code>sqlite</code> needs its vendored C source compiled (a <code>source</code> with its
+    <code>defines</code>), which the driver builds into its object cache with the
+    compiler that links.</li>
 </ul>
 <h3 id="runtime-backed-stdlib-units"><a href="#runtime-backed-stdlib-units">8.2. Runtime-backed stdlib units</a></h3>
 <p>Six stdlib units -- <code>system</code>, <code>core</code>, <code>collections</code>, <code>io</code>,
 <code>os</code>, <code>cli</code> -- are <em><strong>runtime-backed</strong></em>: their types (String, File,
 the collections, the numerics) and their <code>is native</code> functions are
-implemented by the hand-written C runtime under <code>src/runtime</code>. The
+implemented in C by the rows of each unit's <code>nativec.zd</code>
+(<code>lib/system/&lt;unit&gt;/nativec.zd</code>), which <code>zc</code> carries in itself. The
 emitter never generates structs or type-method bodies for them
 (<code>isEmittableFileUnit</code> excludes the six from every type-emission
 pass); instead native FREE functions are <em><strong>declaration-driven</strong></em>: one
@@ -685,28 +688,26 @@ argument from the declared parameter types (StringView / StringLike
 params take a by-value view, class and borrowed-List params pass by
 pointer, <code>take</code> params pass the owned value, scalars pass
 verbatim) -- for both the dotted (<code>io.remove</code>) and bare same-unit
-call shapes. The C implementation lives in a conventionally-named
-fragment <code>_Z_&lt;UNIT&gt;_&lt;UPPER_SNAKE(name)&gt;.inc</code> under
-<code>src/runtime/natives</code>. Adding a native to a convention unit is a
-declaration plus a fragment -- no emitter edits; a new
-native-bearing unit is one entry in the <code>[@units order=...]</code> row of
-<code>natives.tbl</code>, which is the order <code>emitRuntimeUnit</code> walks
-(system/collections natives keep bespoke legacy symbols and their
-own legs). The <code>make native-guard</code> ratchet (run in <code>make ci</code>)
-reads the units it covers off <code>natives.tbl</code>, asserts that each
-<code>is native</code> declaration of theirs has a row and every fragment a
-row names is on disk and referenced, and that every hole a fragment
-spells names a declared type, arm or member.</p>
-<p>A class's <em><strong>native methods</strong></em> are rows of their own,
-<code>[&lt;unit&gt;.&lt;Class&gt;.&lt;method&gt; ...]</code>, whose fragment defines
+call shapes. The C implementation is the fragment of the function's row,
+keyed by its name, in its unit's <code>nativec.zd</code>. Adding a native to a
+convention unit is a declaration plus a row -- no emitter edits; a new
+native-bearing unit is a <code>nativec.zd</code> of its own and a place in the
+foundation's <code>order</code> (<code>system/nativec.zd</code>), which is the order
+<code>emitRuntimeUnit</code> walks. The <code>make native-guard</code> ratchet (run in
+<code>make ci</code>, <code>zc natives check native</code>) asserts that each <code>is native</code>
+declaration of a unit with rows has a row, that every hole a text spells
+names a declared type, arm or member, and that the numeric conversions'
+rows are the ones the numeric rule gives.</p>
+<p>A class's <em><strong>native methods</strong></em> are rows of their own, keyed
+<code>&lt;Class&gt;.&lt;method&gt;</code> in its unit's file, whose fragment defines
 <code>&lt;Class&gt;_&lt;method&gt;</code> called with the receiver's address and each
 argument by one rule decided by its type (a value view by value, an
 owned collection by address); a protocol slot takes the same, so a
-native method fills a vtable as it is. A <code>[&lt;unit&gt;.&lt;Class&gt;.@class
-live=... destroy=...]</code> row makes a class the runtime's: its struct is
-written ahead of the fragments that read it, once the class is live
-or used, and <code>destroy=</code> names the fragment that releases what the
-declaration cannot show (an fd, a database handle). <code>io.File</code>,
+native method fills a vtable as it is. A row keyed <code>&lt;Class&gt;.@class</code>
+(with <code>live</code> and <code>destroy</code>) makes a class the runtime's: its struct
+is written ahead of the fragments that read it, once the class is live
+or used, and <code>destroy</code> is the C that releases what the declaration
+cannot show (an fd, a database handle). <code>io.File</code>,
 <code>net.Listener</code> / <code>net.Conn</code> and <code>sqlite</code>'s classes are all this
 one mechanism. A row names its unit and type by spelling, and applies
 only to a declaration that is native or declares something native, so a
@@ -809,11 +810,11 @@ into its enclosing C block, so two sibling scopes binding <code>n</code> emit
 <code>n_5</code> and <code>n_9</code>. It also keeps a local clear of the macros system
 headers define -- <code>near</code> and <code>FAR</code> in <code>windows.h</code>, <code>errno</code> and
 <code>stdin</code> in the C runtime -- which no list of reserved words could cover.</p>
-<p>The hand-written runtime (<code>src/runtime/*.inc</code> / <code>*.c.tmpl</code> /
-<code>src/runtime/natives/</code>) is authored with the <strong>canonical</strong> type spelling
-<code>z_@Name@</code>: each <code>@Name@</code> is a hole, and each <code>@@KEY@@</code> in a template
-a key its writer binds. Every runtime text -- a <code>natives.tbl</code> row's body, a
-template, a fragment, a fixed file -- is parsed once, when it is first read
+<p>The native C (the rows, templates and fixed files of the <code>nativec.zd</code>
+files) is written with the <strong>canonical</strong> type spelling <code>z_@Name@</code>: each
+<code>@Name@</code> is a hole, and each <code>@@KEY@@</code> in a template a key its writer
+binds. Every native text -- a row's body, a template, a fragment, a fixed
+file -- is parsed once, when it is first read
 (<code>RtTexts</code>): cut into literal stretches, holes and keys, with its member
 sections or row pieces found. A fill walks the stretches once, binding every
 hole to the id-named cname the registry gives that canon (collection monos,

@@ -178,16 +178,13 @@ propagating the program's exit code.</li>
 <li><strong>dump</strong> <code>&lt;src&gt;</code> &#x2014; write the typecheck model as SQL (<code>-o</code> or
 stdout); <code>--canon</code> writes the id-normalized model instead. It reads no
 C runtime: type checking needs none.</li>
-<li><strong>natives</strong> &#x2014; print the conversions section of
-<code>src/runtime/natives.tbl</code>, derived from the numeric rule. The table holds
-the C for every <code>is native</code> declaration, keyed by qualified path, and the
-256 numeric conversions are generated rather than written by hand: a bound
-wrong on a pair no program happens to use is not something the test corpus
-can catch. <code>make natives-tbl-guard</code> regenerates and diffs, so the table
-is provably the rule's own output. A build reads the units'
-implementation files from <code>zc</code> itself, which carries them as they were
-when it was built, and reads a runtime directory only when one is named
-(<code>--runtime DIR</code> or <code>ZEROLANG_RUNTIME</code>). With
+<li><strong>natives</strong> &#x2014; print the 256 numeric conversion rows the numeric rule
+gives, one line each as <code>system/nativec.zd</code> writes them. The rows are
+generated rather than written by hand: a bound wrong on a pair no program
+happens to use is not something the test corpus can catch, and
+<code>check native</code> requires the rows <code>zc</code> carries to be these. A build
+reads the standard library's implementation files from <code>zc</code> itself,
+which carries them as they were when it was built. With
 <code>--write-source FILE</code> it writes into <code>FILE</code> the unit <code>nativec</code> that
 every build serves from memory beside <code>z.z</code>: <code>runtime.zd</code> as the unit
 <code>runtime</code>, each <code>&lt;unit&gt;/nativec.zd</code> as the unit <code>&lt;unit&gt;c</code> with its
@@ -288,7 +285,6 @@ file's value; a unit named by its file is its own source root.</p>
 one root. Unset is the project directory itself (<code>""</code> names it);
 an empty list (<code>list {} out staticlist text</code>) is no source root at all</li>
 <li><code>systemDir</code> -- the stdlib (<code>--system</code>)</li>
-<li><code>runtimeDir</code> -- the C runtime (<code>--runtime</code>)</li>
 <li><code>programs</code> -- the project's programs, each a unit declaring
 <code>main</code>: always a list, <code>list { "app" }</code>, even with one. A
 <code>build</code> that names no unit builds them all; <code>run</code> / <code>emit</code> /
@@ -350,7 +346,6 @@ under <code>run</code> do the arguments after the unit go to the program.</p>
 May be given more than once: every directory is a root, they are searched in
 the order written, and the first one that answers a unit name wins.</li>
 <li><code>--system DIR</code> &#x2014; system library directory (default: self-located).</li>
-<li><code>--runtime DIR</code> &#x2014; C runtime fragment directory (default: self-located).</li>
 <li><code>-o OUT</code> &#x2014; output path (the executable for <code>build</code>, the C file
 for <code>emit</code>, the model for <code>dump</code>).</li>
 <li><code>--release</code> &#x2014; optimize (<code>-O2</code>); the default is a debug build
@@ -413,21 +408,17 @@ on stderr.</li>
 <li><code>--canon</code> &#x2014; <code>dump</code> only: write the id-normalized model.</li>
 </ul>
 <h2 id="tree-resolution"><a href="#tree-resolution">7. Tree resolution</a></h2>
-<p><code>zc</code> locates its system library and runtime by this precedence, first
-match wins:</p>
+<p><code>zc</code> locates its system library by this precedence, first match wins:</p>
 <ul>
-<li>an explicit <code>--system</code> / <code>--runtime</code> flag;</li>
-<li><code>$ZEROLANG_SYSTEM</code> / <code>$ZEROLANG_RUNTIME</code>;</li>
-<li><code>$ZEROLANG_ROOT</code> (a whole tree: <code>$ZEROLANG_ROOT/lib/system</code> and
-<code>lib/runtime</code>);</li>
+<li>an explicit <code>--system</code> flag;</li>
+<li><code>$ZEROLANG_SYSTEM</code>;</li>
+<li><code>$ZEROLANG_ROOT</code> (a whole tree: <code>$ZEROLANG_ROOT/lib/system</code>);</li>
 <li>the executable's own location &#x2014; <code>os.exePath</code> gives the real binary
     path (resolving a <code>bin/zc</code> symlink) and the root is its grandparent;
-    <code>&lt;root&gt;/lib/system</code> plus <code>&lt;root&gt;/lib/runtime</code>, falling back to
-    <code>&lt;root&gt;/src/runtime</code> so a dev checkout works too;</li>
-<li>the current directory (<code>lib/system</code>, <code>src/runtime</code>) &#x2014; the final
-    fallback.</li>
+    <code>&lt;root&gt;/lib/system</code>;</li>
+<li>the current directory (<code>lib/system</code>) &#x2014; the final fallback.</li>
 </ul>
-<p>Inside a project, its <code>systemDir</code>, <code>runtimeDir</code> and <code>tccLibDir</code> come
+<p>Inside a project, its <code>systemDir</code> and <code>tccLibDir</code> come
 before the environment. <code>--src</code> (user code) defaults to the project's
 <code>sourceDirs</code>, else the current directory, never the install tree. Repeating it adds a root rather than replacing the previous one,
 which is how a program in one tree reaches units in another &#x2014; the smoke
@@ -505,9 +496,10 @@ for Linux, one reaching <code>os</code> lists <code>advapi32</code> and <code>sh
 Windows, and one reaching <code>thread</code> lists <code>pthread</code> only off Windows.</p>
 <h3 id="c-sources-a-unit-builds"><a href="#c-sources-a-unit-builds">9.1. C sources a unit builds</a></h3>
 <p>A unit may need a C library of its own built and linked -- <code>sqlite</code>
-needs SQLite. Its natives.tbl <code>@unit.</code> row names the source under the
-vendor directory and the defines it is compiled with
-(<code>csrc=sqlite/sqlite3.c cdefs=SQLITE_THREADSAFE=0,...</code>), and a program
+needs SQLite. Its <code>nativec.zd</code> names the source under the vendor
+directory and the defines it is compiled with
+(<code>(c.source path: "sqlite/sqlite3.c" defines: list { "SQLITE_THREADSAFE=0" ... })</code>),
+and a program
 that reaches the unit records each one on its own header line:</p>
 <pre><code>/* Generated by zerolang compiler */
 /* zlink: */
@@ -599,7 +591,7 @@ companions read it, and <code>--cflags</code> passes the define through. See
 <pre><code>zc build myprog --cflags '-DZC_BUILD_COMMIT="a1b2c3d4"'</code></pre>
 <h2 id="inspecting-the-environment"><a href="#inspecting-the-environment">12. Inspecting the environment</a></h2>
 <p><code>zc env</code> prints the resolved tool paths and settings as <code>KEY=VALUE</code>
-lines &#x2014; <code>ZEROLANG_ROOT</code>, <code>ZEROLANG_SYSTEM</code>, <code>ZEROLANG_RUNTIME</code>,
+lines &#x2014; <code>ZEROLANG_ROOT</code>, <code>ZEROLANG_SYSTEM</code>,
 <code>ZC_CC</code>, <code>ZC_CC_MODE</code>, <code>ZC_TCC</code>, <code>ZC_TCC_LIB</code>, <code>ZC_TARGET</code>,
 <code>ZEROLANG_VENDOR</code> and <code>ZC_OBJ_CACHE</code> (where a unit's C sources are
 found and their objects kept, see
@@ -625,7 +617,7 @@ self-contained, GOROOT-style tree to <code>ROOT</code> (default
 <pre><code>make install
 make install ROOT=/opt/zerolang BINDIR=/usr/local/bin</code></pre>
 <p>The tree contains <code>bin/{zc,zl,zls}</code>, <code>bin/tcc</code>, <code>lib/system</code>,
-<code>lib/runtime</code> (copied from <code>src/runtime</code>), <code>lib/tcc</code>,
+<code>lib/tcc</code>,
 <code>lib/vendor</code> (the C sources units build, from <code>vendor</code>), <code>docs</code>, and
 <code>src</code>. Because <code>os.exePath</code>
 resolves the symlink to the real binary, each installed tool finds its
@@ -697,7 +689,7 @@ named argument mismatches, type mismatches in function calls</li>
 arguments, failed type inference, invalid generic constraints</li>
 <li><code>E0500&#x2013;E0599</code>: Emitter errors &#x2014; reported after type checking
 succeeded: a construct the C emitter cannot emit (<code>E0500</code>, a compiler
-gap), or an <code>is native</code> declaration no natives.tbl row implements
+gap), or an <code>is native</code> declaration no row of its unit's <code>nativec.zd</code> implements
 (<code>E0501</code>, the program's error)</li>
 <li><code>E0600&#x2013;E0699</code>: Compile-time evaluation errors &#x2014; a value the
 compiler was asked for at compile time and could not produce: division by
@@ -755,7 +747,7 @@ itself, or an expression that is not statically evaluable</li>
 <tr><td><code>E0300</code></td><td>call error</td></tr>
 <tr><td><code>E0400</code></td><td>generic error</td></tr>
 <tr><td><code>E0500</code></td><td>emitter error: a construct the C emitter cannot emit</td></tr>
-<tr><td><code>E0501</code></td><td>no native implementation: an <code>is native</code> declaration with no natives.tbl row</td></tr>
+<tr><td><code>E0501</code></td><td>no native implementation: an <code>is native</code> declaration with no row in its unit's <code>nativec.zd</code></td></tr>
 <tr><td><code>E0600</code></td><td>compile-time evaluation error</td></tr>
 <tr><td><code>E0601</code></td><td>compile-time error</td></tr>
 </tbody>

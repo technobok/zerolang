@@ -250,8 +250,8 @@ shall be dual licensed as above, without any additional terms or conditions.
 
 ### Compiled output
 
-`zc` compiles the parts of the C runtime (`src/runtime/`) and of the standard
-library (`lib/system/`) that a program reaches into the C it emits, so they
+`zc` compiles the parts of the standard library (`lib/system/`, its units'
+C in each `nativec.zd` among them) that a program reaches into the C it emits, so they
 end up in the binary you build -- as Rust's standard library and Go's runtime
 end up in theirs. Those portions stay under their own licenses: this
 project's, and for a standard-library unit ported from third-party source,

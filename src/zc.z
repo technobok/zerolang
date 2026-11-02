@@ -159,7 +159,6 @@ zcWord: list {
     nShow: "show"
     nCheck: "check"
     fOnlyC: "--c"
-    fRuntime: "--runtime"
     fEmitC: "--emit-c"
     fDumpSql: "--dump-sql"
     fOut: "-o"
@@ -219,7 +218,7 @@ printUsage: function is {
     io.eprintln "  --target TRIPLE"
     io.eprintln "  --cflags STR  --ldflags STR  --save-temps  --time  --fast-hash"
     io.eprintln "  --readable-names  --mark-natives  --eager"
-    io.eprintln "  --system DIR  --runtime DIR  --tcc-lib DIR  -h/--help  -V/--version"
+    io.eprintln "  --system DIR  --tcc-lib DIR  -h/--help  -V/--version"
 }
 
 # printCommandHelp -- detailed help for one command (stderr).
@@ -253,9 +252,8 @@ printCommandHelp: function {zv: zast.Vocab.view cmd: StringView} is {
         io.eprintln "usage: zc natives [show WHAT [--c] | check WHAT [--emitter FILE] [--register FILE]"
         io.eprintln "       | --write-source FILE]"
         io.eprintln "       [--system DIR]"
-        io.eprintln "Print the conversions section of src/runtime/natives.tbl, derived from"
-        io.eprintln "the numeric rule. natives-tbl-guard diffs this against the checked-in"
-        io.eprintln "file, so the table cannot drift from the rule it caches."
+        io.eprintln "Print the conversion rows the numeric rule gives, as system's nativec.zd"
+        io.eprintln "writes them; check native requires the rows zc carries to be these."
         io.eprintln "--write-source FILE writes into FILE the generated unit `nativec` that"
         io.eprintln "every build serves beside z.z: the same files as static data."
         io.eprintln "show WHAT prints what zc carries for WHAT -- a unit's rows, one row"
@@ -283,7 +281,7 @@ printCommandHelp: function {zv: zast.Vocab.view cmd: StringView} is {
         io.eprintln "Explain a diagnostic error code, e.g. zc explain E0200."
     } else if w == zcWord.slot.vEnv then {
         io.eprintln "usage: zc env"
-        io.eprintln "Print resolved tool paths and settings: system, runtime and tcc dirs,"
+        io.eprintln "Print resolved tool paths and settings: the system and tcc dirs,"
         io.eprintln "the C compiler, the target triple, and the version."
     } else if w == zcWord.slot.vCobj then {
         io.eprintln "usage: zc cobj <file.c> [--cc CC] [--target TRIPLE] [--cc-mode MODE] [--tcc-lib DIR] [--cflags STR]"
@@ -345,14 +343,12 @@ stripDotZ: function {p: StringView} out String is {
 printEnv: function {
     project: StringView
     systemFlag: StringView
-    runtimeFlag: StringView
     ccFlag: StringView
     ccModeFlag: StringView
     targetTriple: StringView
     tccLibFlag: StringView
 } is {
     sysd: zcheck.resolveSystemDir flagVal: systemFlag
-    rund: zcheck.resolveRuntimeDir flagVal: runtimeFlag
     cc: zcheck.pickCc :ccFlag :targetTriple
     ccm: zcheck.pickCcMode modeFlag: ccModeFlag
     tccd: zcheck.resolveTccDir flagVal: tccLibFlag
@@ -374,8 +370,6 @@ printEnv: function {
     buf.append root
     buf.append "\nZEROLANG_SYSTEM="
     buf.append sysd
-    buf.append "\nZEROLANG_RUNTIME="
-    buf.append rund
     buf.append "\nZC_CC="
     buf.append cc
     buf.append "\nZC_CC_MODE="
@@ -924,9 +918,11 @@ nativesArgs: function {argv: (List String).view n: u64 zv: zast.Vocab.view} out 
     return r
 }
 
-# runNatives -- `zc natives`: the conversions section of natives.tbl; with
-# `--write-source FILE` the generated unit the nativec files under the system
-# directory make (znativec.servedText). Answers the exit code.
+# runNatives -- `zc natives`: the conversion rows the numeric rule gives
+# (zemitterc.nativeConvRows); with `show WHAT` what zc carries for WHAT, with
+# `check WHAT` a check of the rows, and with `--write-source FILE` the generated
+# unit the nativec files under the system directory make
+# (znativec.servedText). Answers the exit code.
 runNatives: function {argv: (List String).view n: u64 zv: zast.Vocab.view} out i32 is {
     if n <= 2 then {
         print zemitterc.nativeConvRows
@@ -1112,8 +1108,6 @@ ZcFlags: class {
     srcdirs: List String
     # --system: where the stdlib lives, "" for the resolved default
     systemFlag: String
-    # --runtime: where the C runtime and natives.tbl live, "" for the default
-    runtimeFlag: String
     # --emit-c: where the C goes, "" for -o or stdout
     emitTarget: String
     # --dump-sql: where the SQL dump goes, "" for -o or stdout
@@ -1233,10 +1227,6 @@ ZcFlags: class {
             this.systemFlag = flagValue :argv :i :n flagName: "--system"
             return (argstep taken: true at: i + 1)
         }
-        if w == zcWord.slot.fRuntime then {
-            this.runtimeFlag = flagValue :argv :i :n flagName: "--runtime"
-            return (argstep taken: true at: i + 1)
-        }
         if w == zcWord.slot.fEmitC then {
             this.emitTarget = flagValue :argv :i :n flagName: "--emit-c"
             return (argstep taken: true at: i + 1)
@@ -1354,8 +1344,6 @@ ZcFlags: class {
         d: pf.dir.stringView
         sys: zproject.inProject dir: d rel: pf.systemDir.stringView
         if this.systemFlag.length == 0 then this.systemFlag = sys.take
-        rt: zproject.inProject dir: d rel: pf.runtimeDir.stringView
-        if this.runtimeFlag.length == 0 then this.runtimeFlag = rt.take
         tl: zproject.inProject dir: d rel: pf.tccLibDir.stringView
         if this.tccLibFlag.length == 0 then this.tccLibFlag = tl.take
         # a project's executable goes to its own directory, as C's and Go's do,
@@ -1447,7 +1435,6 @@ parseZcArgs: function {
         unitname: unitname.copy
         srcdirs: List String
         systemFlag: String
-        runtimeFlag: String
         emitTarget: String
         dumpSqlTarget: String
         outPath: String
@@ -1973,7 +1960,6 @@ emitCSource: function {
     vfs: zvfs.ZVfs
     # the main unit's file, for a failure that carries no file of its own
     mainFsno: zvfs.fsno
-    runtimeDir: StringView
     # the user units' C implementation files, checked
     users: (List zemitterc.UserImplementation).view
     cf: ZcFlags.view
@@ -1987,8 +1973,6 @@ emitCSource: function {
         zemitterc.emitC
         program: prog
         symtab: st
-        :runtimeDir
-        runtimeFromDisk: (zcheck.runtimeDirGiven flagVal: cf.runtimeFlag.stringView)
         :users
         servedRows: (cf.nativecFiles or cf.markNatives).not
         markNatives: cf.markNatives
@@ -2023,7 +2007,6 @@ printEnvAndExit: function {cf: ZcFlags.view pf: zproject.ProjectFile.view} is {
         printEnv
         project: pf.dir.stringView
         systemFlag: cf.systemFlag.stringView
-        runtimeFlag: cf.runtimeFlag.stringView
         ccFlag: cf.ccFlag.stringView
         ccModeFlag: cf.ccModeFlag.stringView
         targetTriple: cf.targetTriple.stringView
@@ -2154,7 +2137,6 @@ compileUnit: function {
 } is {
     cf.resolveRoots
     systemdir: zcheck.resolveSystemDir flagVal: cf.systemFlag.stringView
-    runtimeDir: zcheck.resolveRuntimeDir flagVal: cf.runtimeFlag.stringView
     # resolved BEFORE the parse: the generated `z` unit records the toolchain
     # in its header, and is written before the build begins. The build branch
     # below reuses this rather than resolving a second time.
@@ -2245,7 +2227,6 @@ compileUnit: function {
         :st
         :vfs
         :mainFsno
-        runtimeDir: runtimeDir.stringView
         :users
         :cf
         ccFamily: (zcc.ccFamilyOf ccPath: ccReal0.stringView)

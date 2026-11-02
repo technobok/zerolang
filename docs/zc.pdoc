@@ -83,16 +83,13 @@ an error — use #~"zc build <src>".
   [#*: #b:"dump" #~"<src>" — write the typecheck model as SQL (#~"-o" or
     stdout); #~"--canon" writes the id-normalized model instead. It reads no
     C runtime: type checking needs none.]
-  [#*: #b:"natives" — print the conversions section of
-    #~"src/runtime/natives.tbl", derived from the numeric rule. The table holds
-    the C for every #~"is native" declaration, keyed by qualified path, and the
-    256 numeric conversions are generated rather than written by hand: a bound
-    wrong on a pair no program happens to use is not something the test corpus
-    can catch. #~"make natives-tbl-guard" regenerates and diffs, so the table
-    is provably the rule's own output. A build reads the units'
-    implementation files from #~"zc" itself, which carries them as they were
-    when it was built, and reads a runtime directory only when one is named
-    (#~"--runtime DIR" or #~"ZEROLANG_RUNTIME"). With
+  [#*: #b:"natives" — print the 256 numeric conversion rows the numeric rule
+    gives, one line each as #~"system/nativec.zd" writes them. The rows are
+    generated rather than written by hand: a bound wrong on a pair no program
+    happens to use is not something the test corpus can catch, and
+    #~"check native" requires the rows #~"zc" carries to be these. A build
+    reads the standard library's implementation files from #~"zc" itself,
+    which carries them as they were when it was built. With
     #~"--write-source FILE" it writes into #~"FILE" the unit #~"nativec" that
     every build serves from memory beside #~"z.z": #~"runtime.zd" as the unit
     #~"runtime", each #~"<unit>/nativec.zd" as the unit #~"<unit>c" with its
@@ -205,7 +202,6 @@ file's value; a unit named by its file is its own source root.
     one root. Unset is the project directory itself (#~"\"\"" names it);
     an empty list (#~"list {} out staticlist text") is no source root at all]
   [#*: #~"systemDir" -- the stdlib (#~"--system")]
-  [#*: #~"runtimeDir" -- the C runtime (#~"--runtime")]
   [#*: #~"programs" -- the project's programs, each a unit declaring
     #~"main": always a list, #~"list { \"app\" }", even with one. A
     #~"build" that names no unit builds them all; #~"run" / #~"emit" /
@@ -280,7 +276,6 @@ under #~"run" do the arguments after the unit go to the program.
     May be given more than once: every directory is a root, they are searched in
     the order written, and the first one that answers a unit name wins.]
   [#*: #~"--system DIR" — system library directory (default: self-located).]
-  [#*: #~"--runtime DIR" — C runtime fragment directory (default: self-located).]
   [#*: #~"-o OUT" — output path (the executable for #~"build", the C file
     for #~"emit", the model for #~"dump").]
   [#*: #~"--release" — optimize (#~"-O2"); the default is a debug build
@@ -345,22 +340,18 @@ under #~"run" do the arguments after the unit go to the program.
 
 #--: Tree resolution
 
-#~"zc" locates its system library and runtime by this precedence, first
-match wins:
+#~"zc" locates its system library by this precedence, first match wins:
 
 #ul:
-  [#*: an explicit #~"--system" / #~"--runtime" flag;]
-  [#*: #~"$ZEROLANG_SYSTEM" / #~"$ZEROLANG_RUNTIME";]
-  [#*: #~"$ZEROLANG_ROOT" (a whole tree: #~"$ZEROLANG_ROOT/lib/system" and
-    #~"lib/runtime");]
+  [#*: an explicit #~"--system" flag;]
+  [#*: #~"$ZEROLANG_SYSTEM";]
+  [#*: #~"$ZEROLANG_ROOT" (a whole tree: #~"$ZEROLANG_ROOT/lib/system");]
   [#*: the executable's own location — #~"os.exePath" gives the real binary
     path (resolving a #~"bin/zc" symlink) and the root is its grandparent;
-    #~"<root>/lib/system" plus #~"<root>/lib/runtime", falling back to
-    #~"<root>/src/runtime" so a dev checkout works too;]
-  [#*: the current directory (#~"lib/system", #~"src/runtime") — the final
-    fallback.]
+    #~"<root>/lib/system";]
+  [#*: the current directory (#~"lib/system") — the final fallback.]
 
-Inside a project, its #~"systemDir", #~"runtimeDir" and #~"tccLibDir" come
+Inside a project, its #~"systemDir" and #~"tccLibDir" come
 before the environment. #~"--src" (user code) defaults to the project's
 #~"sourceDirs", else the current directory, never the install tree. Repeating it adds a root rather than replacing the previous one,
 which is how a program in one tree reaches units in another — the smoke
@@ -457,9 +448,10 @@ Windows, and one reaching #~"thread" lists #~"pthread" only off Windows.
 #---: C sources a unit builds
 
 A unit may need a C library of its own built and linked -- #~"sqlite"
-needs SQLite. Its natives.tbl #~"@unit." row names the source under the
-vendor directory and the defines it is compiled with
-(#~"csrc=sqlite/sqlite3.c cdefs=SQLITE_THREADSAFE=0,..."), and a program
+needs SQLite. Its #~"nativec.zd" names the source under the vendor
+directory and the defines it is compiled with
+(#~"(c.source path: \"sqlite/sqlite3.c\" defines: list { \"SQLITE_THREADSAFE=0\" ... })"),
+and a program
 that reaches the unit records each one on its own header line:
 
 #code: """
@@ -579,7 +571,7 @@ companions read it, and #~"--cflags" passes the define through. See
 #--: Inspecting the environment
 
 #~"zc env" prints the resolved tool paths and settings as #~"KEY=VALUE"
-lines — #~"ZEROLANG_ROOT", #~"ZEROLANG_SYSTEM", #~"ZEROLANG_RUNTIME",
+lines — #~"ZEROLANG_ROOT", #~"ZEROLANG_SYSTEM",
 #~"ZC_CC", #~"ZC_CC_MODE", #~"ZC_TCC", #~"ZC_TCC_LIB", #~"ZC_TARGET",
 #~"ZEROLANG_VENDOR" and #~"ZC_OBJ_CACHE" (where a unit's C sources are
 found and their objects kept, see
@@ -616,7 +608,7 @@ self-contained, GOROOT-style tree to #~"ROOT" (default
   """
 
 The tree contains #~"bin/{zc,zl,zls}", #~"bin/tcc", #~"lib/system",
-#~"lib/runtime" (copied from #~"src/runtime"), #~"lib/tcc",
+#~"lib/tcc",
 #~"lib/vendor" (the C sources units build, from #~"vendor"), #~"docs", and
 #~"src". Because #~"os.exePath"
 resolves the symlink to the real binary, each installed tool finds its
@@ -709,7 +701,7 @@ Error codes are grouped by category:
     arguments, failed type inference, invalid generic constraints]
   [#*: #~"E0500–E0599": Emitter errors — reported after type checking
     succeeded: a construct the C emitter cannot emit (#~"E0500", a compiler
-    gap), or an #~"is native" declaration no natives.tbl row implements
+    gap), or an #~"is native" declaration no row of its unit's #~"nativec.zd" implements
     (#~"E0501", the program's error)]
   [#*: #~"E0600–E0699": Compile-time evaluation errors — a value the
     compiler was asked for at compile time and could not produce: division by
@@ -765,7 +757,7 @@ Every code the compiler reports:
   [#tr: [#td: #~"E0300"] [#td: call error]]
   [#tr: [#td: #~"E0400"] [#td: generic error]]
   [#tr: [#td: #~"E0500"] [#td: emitter error: a construct the C emitter cannot emit]]
-  [#tr: [#td: #~"E0501"] [#td: no native implementation: an #~"is native" declaration with no natives.tbl row]]
+  [#tr: [#td: #~"E0501"] [#td: no native implementation: an #~"is native" declaration with no row in its unit's #~"nativec.zd"]]
   [#tr: [#td: #~"E0600"] [#td: compile-time evaluation error]]
   [#tr: [#td: #~"E0601"] [#td: compile-time error]]
 

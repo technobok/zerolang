@@ -92,7 +92,6 @@ BUILDDATE := $(if $(BUILDID),$(shell git show -s --format=%cs HEAD 2>/dev/null))
 # The bootstrap compiler, built from the committed seed (bootstrap/README.md).
 ZC      := $(BUILDDIR)/zc-seed
 # The runtime the emitter inlines: an edit here changes emitted C as a source edit does.
-RT_DEP  := $(wildcard src/runtime/*.inc) $(wildcard src/runtime/*.c.tmpl) $(wildcard src/runtime/natives/*.inc) src/runtime/natives.tbl
 
 # install tree. Override e.g. ROOT=/opt/zerolang BINDIR=/usr/local/bin.
 ROOT     ?= $(HOME)/.local/lib/zerolang
@@ -113,7 +112,7 @@ NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 	refusal-guard static-tcc-guard zlink-guard emit-set ident-set const-row-guard \
 	deadcode-guard cdead-guard cc-unused-guard piece-guard static-value-guard alias-label-guard fwd-shape-guard eager-guard eager-lib-guard \
 	highlight-guard view-guard fallback-guard clean native-guard generic-param-guard \
-	zl-full-guard natives-tbl-guard
+	zl-full-guard
 
 # Keep the per-example .c intermediates.
 .SECONDARY:
@@ -226,7 +225,7 @@ ci:
 	@$(MAKE) --no-print-directory windows-due
 
 # ci-gates -- the gates ci runs in parallel, after perf-strict.
-ci-gates: style-lint zl-full-guard complexity-report warn-check pedantic-check emitter-guard typename-guard frontend-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard highlight-guard any-guard deadcode-guard cdead-guard cc-unused-guard piece-guard static-value-guard eager-guard eager-lib-guard case-guard user-native-guard shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard nativec-agree-guard natives-show-guard readable-check test-tcc-heavy test-clang test-signed-ub test-math-arm64 test-sqlite-arm64 test-math-noasm test-portable-scalars test-mingw test-tcc-mingw test-msvc-wine test-msvc-corpus math-asm-guard matrix-guard constparity-guard docs-link-guard mode-parity ci-corpus
+ci-gates: style-lint zl-full-guard complexity-report warn-check pedantic-check emitter-guard typename-guard frontend-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard const-row-guard view-guard fallback-guard highlight-guard any-guard deadcode-guard cdead-guard cc-unused-guard piece-guard static-value-guard eager-guard eager-lib-guard case-guard user-native-guard shim-guard thread-tsan-guard cobj-guard sqlite-decls-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard nativec-agree-guard natives-show-guard readable-check test-tcc-heavy test-clang test-signed-ub test-math-arm64 test-sqlite-arm64 test-math-noasm test-portable-scalars test-mingw test-tcc-mingw test-msvc-wine test-msvc-corpus math-asm-guard matrix-guard constparity-guard docs-link-guard mode-parity ci-corpus
 
 ci-corpus: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --heavy --jobs $(NPROC)
@@ -360,8 +359,8 @@ test-tcc-mingw: bin/zc $(BUILDDIR)/ztestrunner $(BUILDDIR)/wineprefix/.ready
 	echo "test-tcc-mingw OK: $$(sed -n 's/^pass=\([0-9]*\).*/\1/p' $(BUILDDIR)/tcc-mingw-run.log) RUN cases pass on Windows (tcc, wine), $$(grep -c . $(BUILDDIR)/tcc-mingw-fails.txt) known failures, none new"
 
 # test-msvc-wine -- MSVC itself, cl.exe run under wine (msvc-wine; MSVC_WINE
-# names its bin/x64 directory), builds the thread shim's test with the
-# windows-shim workflow's flags, and the result runs under wine. Paths stay
+# names its bin/x64 directory), builds the thread shim's test with the flags
+# windows-guest gives cl on Windows, and the result runs under wine. Paths stay
 # relative: link.exe reads an argument starting with / as an option. Skipped
 # without MSVC_WINE or wine.
 MSVC_WINE ?=
@@ -549,7 +548,7 @@ windows-guest: $(NATIVEC_INC)/zthread_shim.inc
 WINDOWS_VERIFIED := tests/windows-verified.txt
 WINDOWS_DUE_DAYS := 14
 WINDOWS_DUE_TOUCHED_DAYS := 2
-WINDOWS_PATHS := src/runtime src/zemitterc.z src/zc.z src/zcobj.z src/zcheck.z src/ztestrunner.z \
+WINDOWS_PATHS := src/zemitterc.z src/zc.z src/zcobj.z src/zcheck.z src/ztestrunner.z \
 	lib/system bootstrap/zc.c Makefile tests/c
 windows-due:
 	@if [ ! -f $(WINDOWS_VERIFIED) ]; then echo "windows-due: make ci-windows has never passed (tools/windows/README.md)"; exit 0; fi; \
@@ -898,7 +897,7 @@ $(NATIVEC_INC)/zthread_shim.inc: bin/zc
 	bin/zc natives show prelude.@zthread --c --system lib/system > $@
 
 # bin/zc -- the self-hosted compiler, built by the seed.
-bin/zc.c: $(wildcard src/*.z) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z) $(NATIVEC_DEP) $(ZC) $(RT_DEP)
+bin/zc.c: $(wildcard src/*.z) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z) $(NATIVEC_DEP) $(ZC)
 	@mkdir -p bin
 	$(ZC) zc --src src --system lib/system $(ZCHASH) --emit-c bin/zc.c
 
@@ -913,7 +912,7 @@ bin/zc: $(BUILDDIR)/zc.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ)
 zc: bin/zc
 
 # bin/zl -- the linter and formatter (src/zl.z); no emitter.
-out/zl.c: $(BUILDDIR)/zc.o $(wildcard src/zl.z) $(wildcard src/zsource.z) $(wildcard src/zcheck.z) $(wildcard src/ztarget.z) $(wildcard src/zproject.z) $(wildcard src/zdiag.z) $(wildcard src/zrule.z) $(wildcard src/zfix.z) $(wildcard src/ztypecheck.z) $(wildcard src/ztypes.z) $(wildcard src/zenv.z) $(wildcard src/ztyping.z) $(wildcard src/zgenerator.z) $(wildcard src/zfmt.z) $(wildcard src/zfmtcursor.z) $(wildcard src/zdoc.z) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z) $(RT_DEP) | bin/zc
+out/zl.c: $(BUILDDIR)/zc.o $(wildcard src/zl.z) $(wildcard src/zsource.z) $(wildcard src/zcheck.z) $(wildcard src/ztarget.z) $(wildcard src/zproject.z) $(wildcard src/zdiag.z) $(wildcard src/zrule.z) $(wildcard src/zfix.z) $(wildcard src/ztypecheck.z) $(wildcard src/ztypes.z) $(wildcard src/zenv.z) $(wildcard src/ztyping.z) $(wildcard src/zgenerator.z) $(wildcard src/zfmt.z) $(wildcard src/zfmtcursor.z) $(wildcard src/zdoc.z) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z) | bin/zc
 	@mkdir -p out
 	bin/zc zl --src src --system lib/system $(ZCHASH) --emit-c out/zl.c
 
@@ -925,7 +924,7 @@ bin/zl: $(BUILDDIR)/zl.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ)
 	$(CC) $(DRIVERLINK) -o bin/zl $(BUILDDIR)/zl.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ) $(call ZLINKOF,$(BUILDDIR)/zl.c) $(THREADLIB) -lm
 
 # bin/zls -- the language server (src/zls.z); no emitter.
-out/zls.c: $(BUILDDIR)/zc.o $(wildcard src/zls.z) $(wildcard src/zcheck.z) $(wildcard src/ztarget.z) $(wildcard src/zproject.z) $(wildcard src/zsource.z) $(wildcard src/zdiag.z) $(wildcard src/zrule.z) $(wildcard src/zfix.z) $(wildcard src/ztypecheck.z) $(wildcard src/ztypes.z) $(wildcard src/zenv.z) $(wildcard src/ztyping.z) $(wildcard src/zgenerator.z) $(wildcard src/zfmt.z) $(wildcard src/zfmtcursor.z) $(wildcard src/zdoc.z) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z) $(RT_DEP) | bin/zc
+out/zls.c: $(BUILDDIR)/zc.o $(wildcard src/zls.z) $(wildcard src/zcheck.z) $(wildcard src/ztarget.z) $(wildcard src/zproject.z) $(wildcard src/zsource.z) $(wildcard src/zdiag.z) $(wildcard src/zrule.z) $(wildcard src/zfix.z) $(wildcard src/ztypecheck.z) $(wildcard src/ztypes.z) $(wildcard src/zenv.z) $(wildcard src/ztyping.z) $(wildcard src/zgenerator.z) $(wildcard src/zfmt.z) $(wildcard src/zfmtcursor.z) $(wildcard src/zdoc.z) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z lib/system/math/*.z) | bin/zc
 	@mkdir -p out
 	bin/zc zls --src src --system lib/system $(ZCHASH) --emit-c out/zls.c
 
@@ -1149,9 +1148,8 @@ install: bin/zc bin/zl bin/zls $(BUILDDIR)/tcc
 	cp bin/zc $(ROOT)/bin/zc
 	cp bin/zl $(ROOT)/bin/zl
 	cp bin/zls $(ROOT)/bin/zls
-	rm -rf $(ROOT)/lib/system $(ROOT)/lib/runtime $(ROOT)/lib/tcc $(ROOT)/lib/vendor $(ROOT)/docs $(ROOT)/src
+	rm -rf $(ROOT)/lib/system $(ROOT)/lib/tcc $(ROOT)/lib/vendor $(ROOT)/docs $(ROOT)/src
 	cp -r lib/system $(ROOT)/lib/system
-	cp -r src/runtime $(ROOT)/lib/runtime
 	mkdir -p $(ROOT)/lib/vendor
 	cp -r vendor/sqlite $(ROOT)/lib/vendor/sqlite
 	cp $(BUILDDIR)/tcc $(ROOT)/bin/tcc
@@ -1299,7 +1297,7 @@ perf: $(PERFBIN)
 # deletes write-only allocations; perf-elision measures that), a failed run and
 # allocs != frees. Above ALLOC_BASELINE fails; a commit raising it says why in
 # its message, and one lowering the count lowers it here.
-ALLOC_BASELINE := 2796005
+ALLOC_BASELINE := 2795027
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1408,10 +1406,10 @@ emitter-guard:
 	chk "ztypecheck.walkLookupTyperef" "$$e2" 1; \
 	chk "regNameOf" "$$e6" 4; \
 	chk "mangleVarName (inside varCName)" "$$e7" 1; \
-	chk "io.readText" "$$e8" 1; \
+	chk "io.readText (the emitter reads no file: zc carries its texts)" "$$e8" 0; \
 	chk "literal arm members (.data.<arm>; memberC spells them)" "$$e10" 0; \
 	chk "poolFind (a re-intern of a name the emitter held as an id, or table text)" "$$e11" 14; \
-	chk "member-name TEXT (C spelling and natives.tbl keys only; look members up by aliasChildNameId)" "$$e12" 15; \
+	chk "member-name TEXT (C spelling and row keys only; look members up by aliasChildNameId)" "$$e12" 15; \
 	if [ "$$fail" = "1" ]; then \
 	  echo "  A new name-resolution site was added to the emitter. Read the typechecker"; \
 	  echo "  stamp (atomVariableId/atomUnitDefId/callKind), the canonical child id, or"; \
@@ -1819,7 +1817,7 @@ refusal-guard: bin/zc $(BUILDDIR)/tcc
 	  echo "refusal-guard FAIL: a HOST --target must still build and fold to the host (exit $$rc)"; \
 	  cat $$d/g.log; bad=1; \
 	fi; \
-	for fl in --src --system --runtime --emit-c --dump-sql -o --cc --cc-mode --tcc-lib --target --cflags --ldflags; do \
+	for fl in --src --system --emit-c --dump-sql -o --cc --cc-mode --tcc-lib --target --cflags --ldflags; do \
 	  bin/zc build hello --src examples --system lib/system $$fl > $$d/m.log 2>&1; rc=$$?; \
 	  if [ $$rc -ne 2 ] || ! grep -q -- "zc: $$fl needs a value" $$d/m.log; then \
 	    echo "refusal-guard FAIL: a trailing $$fl must exit 2 naming the flag, got $$rc"; \
@@ -2709,8 +2707,7 @@ generic-param-guard: bin/zl
 	echo "generic-param-guard OK: examples + corpus + error fixtures clean (baseline 0)"
 
 # zl-full-guard -- `zl lint --full` never passes a file it did not check: it runs
-# with no flags from a foreign cwd and with no runtime dir, says why when it
-# cannot, reports a dependency's error at that file, reports a generic body once,
+# with no flags from a foreign cwd, says why when it cannot, reports a dependency's error at that file, reports a generic body once,
 # lints a subunit as itself, places L003/L011 only in the --full tier, and
 # reports A012 for a file unit with no public block, never for a subunit.
 ZLFULL_FIX := tests/fixtures/zl_full/tiered.z
@@ -2730,10 +2727,6 @@ zl-full-guard: bin/zl
 	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full --system $$d/none $(CURDIR)/$(ZLFULL_FIX) 2>&1); rc=$$?; \
 	if [ $$rc -eq 0 ] || ! printf '%s\n' "$$out" | grep -q 'did not run: the system directory'; then \
 	  echo "zl-full-guard FAIL: a missing --system was not reported (rc=$$rc):"; \
-	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
-	out=$$(cd $$d && ZEROLANG_RUNTIME=$$d/none $(CURDIR)/bin/zl lint --full $(CURDIR)/$(ZLFULL_FIX) 2>&1); \
-	if ! printf '%s\n' "$$out" | grep -q 'L030'; then \
-	  echo "zl-full-guard FAIL: with no runtime directory the typecheck tier did not run:"; \
 	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
 	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full --src $$d $(CURDIR)/$(ZLFULL_FIX) 2>&1); rc=$$?; \
 	if [ $$rc -eq 0 ] || ! printf '%s\n' "$$out" | grep -q "did not run: unit 'tiered' is under none"; then \
@@ -2789,37 +2782,5 @@ zl-full-guard: bin/zl
 	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
 	rm -rf $$d; \
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
-	echo "zl-full-guard OK: --full runs without flags from a foreign cwd and without a runtime, says why when it cannot, places a dependency's error in its own file, and lints a subunit as itself"
+	echo "zl-full-guard OK: --full runs without flags from a foreign cwd, says why when it cannot, places a dependency's error in its own file, and lints a subunit as itself"
 
-# natives-tbl-guard -- src/runtime/natives.tbl, which `--runtime` still reads, agrees
-# with what zc carries: its generated conversions section is `zc natives` output, and
-# every frag= names a fragment on disk. (The rows zc carries are checked by
-# native-guard: operators, and conversions against the rule.)
-natives-tbl-guard: bin/zc
-	@d2=$$(mktemp -d); \
-	sed -n '/BEGIN GENERATED CONVERSIONS/,/END GENERATED CONVERSIONS/p' src/runtime/natives.tbl \
-	  | sed '1,5d;$$d' > $$d2/section 2>/dev/null || true; \
-	bin/zc natives > $$d2/gen; \
-	if ! diff -q $$d2/section $$d2/gen >/dev/null; then \
-	  echo "natives-tbl-guard FAIL: the conversions section is not the rule's output"; \
-	  diff $$d2/section $$d2/gen | head -8; \
-	  echo "  Run 'bin/zc natives' and replace the generated section -- or the rule moved"; \
-	  echo "  and the table did not, which is the drift this check exists to catch."; \
-	  exit 1; \
-	fi; \
-	cn=$$(grep -c "^\[" $$d2/gen); rm -rf $$d2; \
-	echo "natives-tbl-guard OK: $$cn generated conversion rows, as zc natives prints them"; \
-	d3=$$(mktemp -d); fail=0; \
-	{ grep -oE '^\[[^]]*frag=[A-Z0-9_,]+' src/runtime/natives.tbl \
-	  | sed -E 's/^\[([^ ]+).*frag=([A-Z0-9_,]+)/\1 \2/'; \
-	  grep -oE '^\[[^]]*destroy=[A-Z0-9_]+' src/runtime/natives.tbl \
-	  | sed -E 's/^\[([^ ]+).*destroy=([A-Z0-9_]+)/\1 \2/'; } > $$d3/fr; \
-	while read path frags; do \
-	  for f in $$(echo "$$frags" | tr ',' ' '); do \
-	    test -f src/runtime/natives/$$f.inc || { \
-	      echo "natives-tbl-guard FAIL: $$path names $$f, which is not on disk"; fail=1; }; \
-	  done; \
-	done < $$d3/fr; \
-	nf=$$(wc -l < $$d3/fr); rm -rf $$d3; \
-	if [ $$fail -ne 0 ]; then exit 1; fi; \
-	echo "natives-tbl-guard OK: $$nf fragment-backed rows, every named fragment on disk"
